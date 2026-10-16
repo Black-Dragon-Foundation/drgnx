@@ -72,6 +72,15 @@
     (pcase-dolist (`(,buf . ,name) b) (puthash buf name old))
     (seq-every-p (lambda (p) (equal (gethash (car p) old) (cdr p))) a)))
 
+(defvar drgnx-signal--posted nil "Events posted since the last flush (`drgnx-signal-post').")
+
+(defun drgnx-signal-post (event)
+  "Emit EVENT at the next flush, once however often it is posted (a tab set changed, …)."
+  (cl-pushnew event drgnx-signal--posted)
+  (drgnx-signal--schedule))
+
+(defun drgnx-signal--frame () (selected-frame))
+
 (defun drgnx-signal--flush ()
   "Compare the state with the last flush and emit the edges."
   (setq drgnx-signal--timer nil)
@@ -82,9 +91,15 @@
          (modified (mapcar (lambda (b) (cons b (buffer-modified-p b))) set))
          (names (mapcar (lambda (b) (cons b (buffer-name b))) set))
          (old drgnx-signal--state))
-    (setq drgnx-signal--state (list :editor editor :set set :modified modified :names names))
+    (setq drgnx-signal--state (list :editor editor :set set :modified modified :names names
+                                    :frame (drgnx-signal--frame)))
     (unless (eq editor (plist-get old :editor))
       (drgnx-signal--emit 'editor-changed editor))
+    (when (and old (not (eq (plist-get old :frame) (plist-get drgnx-signal--state :frame))))
+      (drgnx-signal--emit 'frame-changed (plist-get drgnx-signal--state :frame)))
+    (let ((posted (reverse drgnx-signal--posted)))
+      (setq drgnx-signal--posted nil)
+      (dolist (e posted) (drgnx-signal--emit e nil)))
     (unless (and (drgnx-signal--same-set-p set (plist-get old :set))
                  (drgnx-signal--same-names-p names (plist-get old :names)))
       (drgnx-signal--emit 'buffer-set-changed set))

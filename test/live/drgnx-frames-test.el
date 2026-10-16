@@ -86,7 +86,8 @@
     (should-not (member "a.txt" (drgnx-frames-test--eval sess "(mapcar #'buffer-name (drgnx-frame-buffers kx-f1))")))
     (should (member "README.md" (drgnx-frames-test--eval sess "(mapcar #'buffer-name (drgnx-frame-buffers kx-f1))")))
     ;; The Buffers panel lists the selected window's buffers; the toggle lists all.
-    (drgnx-frames-test--eval sess "(progn (select-frame-set-input-focus kx-f2) (drgnx-wb-show-sidebar) (drgnx-buffers--refresh) t)")
+    (drgnx-frames-test--eval sess "(progn (select-frame-set-input-focus kx-f2) (drgnx-wb-show-sidebar) t)")
+    (drgnx-ui-measure sess nil)                     ; the bus re-renders the panel for this window
     (should-not (member "README.md" (drgnx-frames-test--eval sess "(mapcar #'buffer-name (drgnx-buffers--shown))")))
     (drgnx-frames-test--eval sess "(progn (drgnx-buffers-toggle-all-windows) t)")
     (should (member "README.md" (drgnx-frames-test--eval sess "(mapcar #'buffer-name (drgnx-buffers--shown))")))))
@@ -116,6 +117,8 @@
                   (drgnx-ui-call sess2 (format "(progn (setq drgnx-persist-file %S) (drgnx-persist-restore) (drgnx-uitest--json (list :ok t)))" file))
                   (drgnx-ui-measure sess2 nil)
                   (should (equal (drgnx-frames-test--eval sess2 "(length (seq-remove #'frame-parent (frame-list)))") 2))
+                  (should (eq (drgnx-frames-test--eval sess2 "(drgnx-frame-role (selected-frame))") 'main))
+                  (should (equal (drgnx-frames-test--eval sess2 "(mapcar #'buffer-name (drgnx-chrome-tabs (frame-first-window (selected-frame))))") '("README.md")))
                   (should (member "a.txt" (drgnx-frames-test--eval
                                            sess2 "(mapcar #'buffer-name (seq-mapcat (lambda (f) (drgnx-chrome-tabs (frame-first-window f))) (seq-remove (lambda (f) (eq f (selected-frame))) (frame-list))))"))))
               (drgnx-ui-stop (plist-get s2 :name)))))

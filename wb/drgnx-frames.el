@@ -16,17 +16,17 @@
 (require 'drgnx-groups)
 
 (defun drgnx-frames--workbench-p (f)
-  "F is a frame the workbench works in (not a child frame, not a daemon's terminal frame)."
-  (and (frame-live-p f) (not (frame-parent f)) (or (display-graphic-p f) (not (daemonp)))))
+  "F is a frame the workbench works in: live, visible, not a child frame, not a daemon's terminal frame."
+  (and (frame-live-p f) (frame-visible-p f) (not (frame-parent f)) (or (display-graphic-p f) (not (daemonp)))))
 
 (defun drgnx-frames--main ()
   (seq-find (lambda (f) (and (frame-live-p f) (eq (frame-parameter f 'drgnx-frame-role) 'main))) (frame-list)))
 
 (defun drgnx-frames-mark-main (&optional frame)
-  "Make FRAME (default: the first graphical frame) the main window unless one exists."
+  "Make FRAME — default: the oldest workbench frame (`frame-list' is newest first; a daemon's first
+client frame; never a child frame) — the main window unless one exists."
   (unless (drgnx-frames--main)
-    (when-let* ((f (or frame (seq-find #'display-graphic-p (frame-list))
-                       (seq-find #'drgnx-frames--workbench-p (frame-list)))))
+    (when-let* ((f (or frame (seq-find #'drgnx-frames--workbench-p (reverse (frame-list))))))
       (set-frame-parameter f 'drgnx-frame-role 'main))))
 
 (defun drgnx-frame-role (&optional frame)
@@ -38,8 +38,9 @@
 (defun drgnx-frames--deleted (frame)
   "The main window closes: the next workbench window becomes main."
   (when (eq (frame-parameter frame 'drgnx-frame-role) 'main)
-    (when-let* ((next (seq-find (lambda (f) (and (not (eq f frame)) (drgnx-frames--workbench-p f))) (frame-list))))
-      (set-frame-parameter next 'drgnx-frame-role 'main))))
+    (when-let* ((next (seq-find (lambda (f) (and (not (eq f frame)) (drgnx-frames--workbench-p f))) (reverse (frame-list)))))
+      (set-frame-parameter next 'drgnx-frame-role 'main)))
+  (drgnx-signal-post 'tabs-changed))
 
 (defun drgnx-frames-count ()
   "How many workbench windows are open."
@@ -73,6 +74,7 @@ tab in no window."
       (set-window-parameter w 'drgnx-tabs tabs))
     (select-frame-set-input-focus f)
     (drgnx-chrome-apply f t)
+    (drgnx-signal-post 'tabs-changed)
     f))
 
 (defun drgnx-frames-move-editor ()
@@ -103,7 +105,8 @@ tab in no window."
   :global t :group 'drgnx
   (if drgnx-frames-mode
       (progn (add-hook 'delete-frame-functions #'drgnx-frames--deleted)
-             (add-hook 'drgnx-first-gui-frame-hook #'drgnx-frames-mark-main))
+             (add-hook 'drgnx-first-gui-frame-hook #'drgnx-frames-mark-main -10)   ; before the restore
+             (drgnx-frames-mark-main))                ; a frame that exists already (not a daemon's terminal)
     (remove-hook 'delete-frame-functions #'drgnx-frames--deleted)
     (remove-hook 'drgnx-first-gui-frame-hook #'drgnx-frames-mark-main)))
 

@@ -51,12 +51,12 @@
   "Add W's buffer to its tabs (at the end; never reordered); drop transient tabs not shown.
 Called on the bus's edges and by commands — never while drawing, so a buffer shown for a moment
 (a preview) does not become a tab."
-  (let ((b (window-buffer w)))
-    (set-window-parameter
-     w 'drgnx-tabs
-     (let ((tabs (seq-remove (lambda (x) (and (not (eq x b)) (string-match-p drgnx-chrome-transient-tabs (buffer-name x))))
-                             (drgnx-chrome-tabs w))))
-       (if (and (drgnx-chrome--tab-buffer-p b) (not (memq b tabs))) (append tabs (list b)) tabs)))))
+  (let* ((b (window-buffer w)) (before (drgnx-chrome-tabs w))
+         (after (let ((tabs (seq-remove (lambda (x) (and (not (eq x b)) (string-match-p drgnx-chrome-transient-tabs (buffer-name x))))
+                                        before)))
+                  (if (and (drgnx-chrome--tab-buffer-p b) (not (memq b tabs))) (append tabs (list b)) tabs))))
+    (set-window-parameter w 'drgnx-tabs after)
+    (unless (equal before after) (drgnx-signal-post 'tabs-changed))))
 
 (defun drgnx-chrome--text (s)
   "S shown as is in a tab or header line (% would be a format directive)."
@@ -101,6 +101,7 @@ Called on the bus's edges and by commands — never while drawing, so a buffer s
   "Take B out of W's tabs; if W shows it, show the tab to its right, else its left, else *scratch*."
   (let* ((tabs (drgnx-chrome-tabs w)) (rest (cdr (memq b tabs))) (before (seq-take-while (lambda (x) (not (eq x b))) tabs)))
     (set-window-parameter w 'drgnx-tabs (remq b tabs))
+    (drgnx-signal-post 'tabs-changed)
     (when (eq (window-buffer w) b)
       (set-window-buffer w (or (car rest) (car (last before)) (get-scratch-buffer-create))))
     (drgnx-chrome-apply (window-frame w) t)))

@@ -54,10 +54,10 @@
 
 (defun drgnx-persist--frames ()
   "The windows to save: the main (or selected graphical) one first, then the other graphical ones."
-  (let* ((main (or (seq-find (lambda (f) (eq (frame-parameter f 'drgnx-frame-role) 'main)) (frame-list))
+  (let* ((ok (lambda (f) (and (frame-live-p f) (frame-visible-p f) (not (frame-parent f)) (display-graphic-p f))))
+         (main (or (seq-find (lambda (f) (and (funcall ok f) (eq (frame-parameter f 'drgnx-frame-role) 'main))) (frame-list))
                    (drgnx-persist--gui-frame) (selected-frame)))
-         (others (seq-filter (lambda (f) (and (not (eq f main)) (not (frame-parent f)) (display-graphic-p f)))
-                             (frame-list))))
+         (others (seq-filter (lambda (f) (and (not (eq f main)) (funcall ok f))) (reverse (frame-list)))))
     (cons main others)))
 
 (defun drgnx-persist-save (&optional file frames)
@@ -130,12 +130,17 @@ visited now, its other tabs at idle (never a question at start)."
       nil)
      (t
       (setq drgnx-persist--pending nil)
+      ;; The selected frame gets the main window's layout — and is the main window.
+      (dolist (f (frame-list)) (when (eq (frame-parameter f 'drgnx-frame-role) 'main) (set-frame-parameter f 'drgnx-frame-role nil)))
+      (set-frame-parameter nil 'drgnx-frame-role 'main)
       (drgnx-persist--restore-frame (car frames))
       (let ((home (selected-frame)))
-        (dolist (st (cdr frames))                ; the window manager places them
-          (when-let* ((f (ignore-errors (make-frame '((drgnx-frame-role . aux))))))
-            (with-selected-frame f (drgnx-persist--restore-frame st))))
-        (when (frame-live-p home) (select-frame-set-input-focus home)))
+        (unwind-protect
+            (dolist (st (cdr frames))            ; the window manager places them; one failing is skipped
+              (when-let* ((f (ignore-errors (make-frame '((drgnx-frame-role . aux))))))
+                (condition-case err (with-selected-frame f (drgnx-persist--restore-frame st))
+                  (error (message "drgnx: a window's layout was not restored: %s" (error-message-string err))))))
+          (when (frame-live-p home) (select-frame-set-input-focus home))))
       t))))
 
 (defun drgnx-persist--restore-frame (state)
@@ -191,11 +196,26 @@ visited now, its other tabs at idle (never a question at start)."
   (when-let* ((f (drgnx-persist--gui-frame)))
     (ignore-errors (with-selected-frame f (drgnx-persist-save)))))
 
+(defvar drgnx-persist--saved-at-exit nil
+  "Non-nil when a closing client already saved every window (its frames are being deleted).")
+
+(defun drgnx-persist--before-client-delete (proc &optional noframe)
+  "Before `server-delete-client' deletes PROC's frames one by one: if they are all the graphical
+windows left (\[save-buffers-kill-terminal] in the last client), save every one of them now."
+  (unless noframe
+    (let ((gui (seq-filter (lambda (f) (and (frame-live-p f) (display-graphic-p f) (not (frame-parent f)))) (frame-list))))
+      (when (and gui (seq-every-p (lambda (f) (eq (frame-parameter f 'client) proc)) gui))
+        (ignore-errors (drgnx-persist-save))
+        (setq drgnx-persist--saved-at-exit t)))))
+
 (defun drgnx-persist--on-delete-frame (frame)
-  "Closing the last graphical frame (a daemon's client): save it — the daemon may never exit cleanly."
+  "Closing the last graphical frame (a daemon's client): save it — the daemon may never exit cleanly
+— unless the closing client saved every window already."
   (when (and (display-graphic-p frame)
              (not (seq-some (lambda (f) (and (not (eq f frame)) (display-graphic-p f))) (frame-list))))
-    (ignore-errors (drgnx-persist-save nil (list frame)))))
+    (if drgnx-persist--saved-at-exit
+        (setq drgnx-persist--saved-at-exit nil)
+      (ignore-errors (drgnx-persist-save nil (list frame))))))
 
 (defun drgnx-persist--on-start ()
   "At the first graphical frame — which a daemon makes before selecting it."
@@ -208,9 +228,11 @@ visited now, its other tabs at idle (never a question at start)."
   (if drgnx-persist-mode
       (progn (add-hook 'kill-emacs-hook #'drgnx-persist--on-exit)
              (add-hook 'delete-frame-functions #'drgnx-persist--on-delete-frame)
+             (advice-add 'server-delete-client :before #'drgnx-persist--before-client-delete)
              (add-hook 'drgnx-first-gui-frame-hook #'drgnx-persist--on-start))
     (remove-hook 'kill-emacs-hook #'drgnx-persist--on-exit)
     (remove-hook 'delete-frame-functions #'drgnx-persist--on-delete-frame)
+    (advice-remove 'server-delete-client #'drgnx-persist--before-client-delete)
     (remove-hook 'drgnx-first-gui-frame-hook #'drgnx-persist--on-start)))
 
 (provide 'drgnx-persist)
