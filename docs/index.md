@@ -7,6 +7,7 @@
 - [Workbench](workbench.md): the sidebar — Explorer and Buffers panel — the change bus, performance vs treemacs/ibuffer.
 - [Keys](keys.md): VS Code, Emacs and Vim key profiles, layers, keys.eld, conflicts.
 - [Core](core.md): paths, staged hooks, no-prompt guard, command registry, surfaces, palette, modules.
+- [Modules](modules.md): stages, packages, flags, modules.eld, Preferences: Modules, writing a module.
 - [Scenarios](scenarios.md): behaviour scenarios and the evidence behind the workbench design.
 - [Harness](harness.md): headless GUI test sessions, test tiers, CLI and MCP tools for agents.
 

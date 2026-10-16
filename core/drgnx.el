@@ -27,6 +27,11 @@
     :command #'drgnx-surfaces-cheatsheet :menu '("Help") :doc "Every command, its key and where to click")
   (drgnx-command-define 'modules-report :category "Help" :title "Module Report"
     :command #'drgnx-modules-show-report :menu '("Help") :doc "Which modules loaded, how long they took, what failed")
+  (drgnx-command-define 'preferences-modules :category "Preferences" :title "Modules"
+    :command #'drgnx-modules-list :menu '("Options") :doc "Every module, its status; turn modules on and off")
+  (drgnx-command-define 'modules-toggle :category "Modules" :title "Turn On / Off" :command #'drgnx-modules-list-toggle
+    :map 'drgnx-modules-list-mode-map :when (lambda () (derived-mode-p 'drgnx-modules-list-mode))
+    :doc "Turn the module on this row off at the next start, or back on")
   (drgnx-command-define 'keyboard-profile :category "Preferences" :title "Keyboard Profile…"
     :command #'drgnx-keys-choose-profile :menu '("Options")
     :doc "VS Code, Emacs or Vim keys, or Emacs/Vim editing with VS Code app keys"))

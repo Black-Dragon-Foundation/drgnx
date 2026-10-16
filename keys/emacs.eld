@@ -12,6 +12,8 @@
         (modules-report :none "drgnx-only; in the palette")
         (toggle-sidebar "<f8>")
         (wb-unrouted :none "in the palette")
+        (preferences-modules :none "in the palette and the Options menu")
+        (modules-toggle "RET")
         (move-editor-to-new-window :none "in the palette; C-x 5 2 makes a frame (stock)")
         (open-editor-in-new-window :none "C-x 5 2 (stock)")
         (move-group-to-new-window :none "in the palette")

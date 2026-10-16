@@ -60,7 +60,14 @@ DEV non-nil: only run for `drgnx doctor --dev' (tools for developing drgnx)."
           :dbus-run-session (and (executable-find "dbus-run-session") t)
           :magick (and (executable-find "magick") t)
           :pgtk-emacs (or (featurep 'pgtk) (and (executable-find "emacs-pgtk") t))
-          :keys-report (drgnx-doctor--keys-report))))
+          :keys-report (drgnx-doctor--keys-report)
+          :modules-report (drgnx-doctor--state-file "modules-report.eld"))))
+
+(defun drgnx-doctor--state-file (name)
+  "The .eld file NAME the last drgnx session wrote in the state dir, read, or nil."
+  (let ((file (expand-file-name (concat "drgnx/" name) (or (getenv "XDG_STATE_HOME") "~/.local/state"))))
+    (when (file-readable-p file)
+      (ignore-errors (with-temp-buffer (insert-file-contents file) (read (current-buffer)))))))
 
 (defun drgnx-doctor--keys-report ()
   "The key report the last drgnx session wrote (keys-report.eld in the state dir), or nil."
@@ -110,6 +117,21 @@ DEV non-nil: only run for `drgnx doctor --dev' (tools for developing drgnx)."
   :check (lambda (f)
            (if (plist-get f :git) (list 'ok "git found" nil)
              (list 'warn "git not found" "install git with your package manager"))))
+
+(drgnx-doctor-define 'modules :group "drgnx" :doc "Modules that failed or wait for packages (from the last session)"
+  :check (lambda (f)
+           (let* ((r (plist-get f :modules-report))
+                  (failed (seq-filter (lambda (m) (eq (plist-get (cdr m) :status) 'failed)) r))
+                  (waiting (seq-filter (lambda (m) (eq (plist-get (cdr m) :status) 'missing-packages)) r)))
+             (cond ((null r) (list 'info "no module report yet — start drgnx once" nil))
+                   (failed (list 'fail (mapconcat (lambda (m) (format "%s: %s" (car m) (plist-get (cdr m) :error))) failed "; ")
+                                 "see Preferences: Modules; turn the module off there or report the error"))
+                   (waiting (list 'warn (format "waiting for packages: %s"
+                                                (mapconcat (lambda (m) (format "%s (%s)" (car m)
+                                                                              (mapconcat #'symbol-name (plist-get (cdr m) :missing) " ")))
+                                                           waiting ", "))
+                                  "drgnx sync installs them (M5); until then these modules stay off"))
+                   (t (list 'ok (format "%d modules ok" (length r)) nil))))))
 
 (drgnx-doctor-define 'key-conflicts :group "drgnx" :doc "Key profile conflicts and keys.eld problems (from the last session)"
   :check (lambda (f)

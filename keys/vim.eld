@@ -13,6 +13,8 @@
         (modules-report "SPC h m")
         (toggle-sidebar "SPC e")
         (wb-unrouted :none "in the palette")
+        (preferences-modules :none "in the palette and the Options menu")
+        (modules-toggle "RET")
         (move-editor-to-new-window "SPC w n")
         (open-editor-in-new-window "SPC w o")
         (move-group-to-new-window "SPC w g")

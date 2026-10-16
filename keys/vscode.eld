@@ -11,6 +11,8 @@
         (modules-report :none "drgnx-only; in the palette")
         (toggle-sidebar "C-b")
         (wb-unrouted :none "in the palette")
+        (preferences-modules :none "in the palette and the Options menu")
+        (modules-toggle "RET")
         (move-editor-to-new-window :none "in the palette")
         (open-editor-in-new-window "C-k o")
         (move-group-to-new-window :none "in the palette")
