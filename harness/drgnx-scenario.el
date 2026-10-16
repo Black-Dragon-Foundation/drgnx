@@ -103,6 +103,37 @@ KIND `second': another small project, for cross-project scenarios."
              (kill-buffer b))))
        (delete-directory ,(car spec) t))))
 
+;;;; Timing and evidence
+
+(defvar drgnx-scenario-quiet 1.0
+  "Quiet period (s) before a scenario counts as settled.  Longer than `drgnx-uitest-quiet':
+configurations under test may follow up to ~600 ms later (idle timers, re-armed debounces),
+and a scenario must not end before they do.")
+
+(defmacro drgnx-scenario-settling (&rest body)
+  "Run BODY with the scenario quiet period."
+  `(let ((drgnx-uitest-quiet drgnx-scenario-quiet)) ,@body))
+
+(defun drgnx-scenario-callers (&optional n)
+  "The N (default 5) innermost named Lisp functions on the stack, outside the harness."
+  (let (names)
+    (dolist (frame (backtrace-frames))
+      (let ((f (cadr frame)))
+        (when (and (symbolp f) (fboundp f) (not (special-form-p f))
+                   (not (string-match-p "\\`\\(drgnx-\\|ert-\\|backtrace\\|apply\\|funcall\\|eval\\|run-hook\\|timer-event-handler\\|command-execute\\|call-interactively\\)" (symbol-name f))))
+          (push f names))))
+    (seq-take (nreverse names) (or n 5))))
+
+(defmacro drgnx-scenario-watch-nil (var pred log &rest body)
+  "Run BODY recording, into the list LOG (a symbol), who sets VAR to nil in buffers satisfying PRED."
+  (declare (indent 3))
+  (let ((watcher (make-symbol "watcher")))
+    `(let ((,watcher (lambda (_sym new op where)
+                       (when (and (null new) (eq op 'set) (buffer-live-p where) (funcall ,pred where))
+                         (push (drgnx-scenario-callers) ,log)))))
+       (add-variable-watcher ',var ,watcher)
+       (unwind-protect (progn ,@body) (remove-variable-watcher ',var ,watcher)))))
+
 ;;;; Drivers
 
 (defun drgnx-scenario-load-driver ()

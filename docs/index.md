@@ -3,6 +3,7 @@
 - [Design and roadmap](roadmap.md): architecture, workbench window manager, harness, AI, search,
   onboarding, milestones with exit criteria.
 - [Architecture overview](architecture.md)
+- [Scenarios](scenarios.md): behaviour scenarios and the evidence behind the workbench design.
 - [Harness](harness.md): headless GUI test sessions, test tiers, CLI and MCP tools for agents.
 - Decisions (ADRs): [decisions/](decisions/)
 

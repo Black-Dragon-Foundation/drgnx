@@ -102,7 +102,8 @@ every root-frame window — buffer, `window-start`, point, pixel edges, header-l
 selected — plus the minibuffer height, and also records `window-scroll-functions` calls, redisplays and GC.
 It snapshots the signatures **right after every command** (`post-command-hook`) and **right after every timer**
 (advice on `timer-event-handler`), and polls once per tick for everything else, so each change is attributed
-to its cause: `command:NAME`, `timer:FUNCTION` or `redisplay`. A timer that moves point with `goto-char` inside
+to its cause: `command:NAME`, `timer:FUNCTION` or `other` (process output — filters and sentinels are called
+from C and cannot be intercepted — or redisplay). A timer that moves point with `goto-char` inside
 `with-selected-window` (no window function called) is still caught and named.
 The report:
 

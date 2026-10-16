@@ -50,29 +50,32 @@ Falls back to the selected frame (a daemon's terminal frame, or batch)."
   "Position object for root-frame pixel X, Y."
   (posn-at-x-y x y (drgnx-uitest-root-frame)))
 
+(defun drgnx-uitest-pos-xy (window pos)
+  "Root-frame pixel (X . Y) in the middle of the character at POS in WINDOW, or nil if a
+click there would not land on POS (invisible, scrolled away, cut off at the right edge)."
+  (let* ((f (window-frame window))
+         (body (window-body-pixel-edges window))
+         (posn (and (not (with-current-buffer (window-buffer window) (invisible-p pos)))
+                    (posn-at-point pos window)))
+         (xy (and posn (posn-x-y posn)))
+         (x (and xy (+ (nth 0 body) (car xy) (/ (frame-char-width f) 2))))
+         (y (and xy (+ (nth 1 body) (cdr xy) (/ (frame-char-height f) 2))))
+         (back (and xy (posn-at-x-y x y f))))
+    (and back (eq (posn-window back) window) (eql (posn-point back) pos) (cons x y))))
+
 (defun drgnx-uitest-target-xy (buffer text)
   "Root-frame pixel (X . Y) inside the first fully visible TEXT in the window showing BUFFER.
-BUFFER is a buffer name or a major mode name.  An occurrence counts only if it is not
-invisible and a click at the computed pixel lands on it (same window, same position) —
-so text cut off at the right edge or hidden by folding is never clicked.  Signals if
-there is no such occurrence."
-  (let* ((win (or (drgnx-uitest-find-window buffer)
-                  (error "drgnx-uitest: no window shows %s" buffer)))
-         (f (window-frame win))
-         (body (window-body-pixel-edges win)))
+BUFFER is a buffer name or a major mode name.  An occurrence counts only if a click at its
+pixel lands on it (`drgnx-uitest-pos-xy') — so text cut off at the right edge or hidden by
+folding is never clicked.  Signals if there is no such occurrence."
+  (let ((win (or (drgnx-uitest-find-window buffer)
+                 (error "drgnx-uitest: no window shows %s" buffer))))
     (with-current-buffer (window-buffer win)
       (save-excursion
         (goto-char (window-start win))
         (let ((limit (window-end win t)) found)
           (while (and (not found) (search-forward text limit t))
-            (let* ((pos (match-beginning 0))
-                   (posn (and (not (invisible-p pos)) (posn-at-point pos win)))
-                   (xy (and posn (posn-x-y posn)))
-                   (x (and xy (+ (nth 0 body) (car xy) (/ (frame-char-width f) 2))))
-                   (y (and xy (+ (nth 1 body) (cdr xy) (/ (frame-char-height f) 2))))
-                   (back (and xy (posn-at-x-y x y f))))
-              (when (and back (eq (posn-window back) win) (eql (posn-point back) pos))
-                (setq found (cons x y)))))
+            (setq found (drgnx-uitest-pos-xy win (match-beginning 0))))
           (or found (error "drgnx-uitest: %S is not visible in %s" text buffer)))))))
 
 ;;;; Events (pure)
@@ -144,9 +147,12 @@ Like Emacs for real input: if the buffer position under that pixel is no longer 
   (or drgnx-uitest--queue unread-command-events))
 
 (defun drgnx-uitest-settled-p (&optional quiet)
-  "Non-nil when no input is pending and nothing changed for QUIET seconds."
+  "Non-nil when no input is pending and nothing changed for QUIET seconds — counted from the
+last input, the last change, and the start of the current measurement (so a measurement
+without input still gives followers and timers their chance)."
   (and (not (drgnx-uitest-busy-p))
-       (>= (- (float-time) (max drgnx-uitest--last-delivery drgnx-uitest-record--last-change))
+       (>= (- (float-time) (max drgnx-uitest--last-delivery drgnx-uitest-record--last-change
+                                drgnx-uitest-record--t0))
            (or quiet drgnx-uitest-quiet))))
 
 ;;;; Recorder
@@ -194,8 +200,8 @@ Like Emacs for real input: if the buffer position under that pixel is no longer 
         (setcdr old nil)))))
 
 (defun drgnx-uitest-record--poll ()
-  "Tick poll: changes no command or timer claimed (redisplay, process output, …)."
-  (drgnx-uitest-record--snapshot "redisplay"))
+  "Tick poll: changes no command or timer claimed (process output, redisplay, …)."
+  (drgnx-uitest-record--snapshot "other"))
 
 (defun drgnx-uitest-record--after-command ()
   (drgnx-uitest-record--snapshot (format "command:%s" this-command)))
@@ -234,7 +240,7 @@ aimed at (their changes are not collateral), LAST-INPUT the time of the last eve
       (pcase e
         (`(,_ scroll . ,_) (cl-incf scrolls))
         (`(,time change ,id ,old ,new . ,rest)
-         (let ((cause (or (car rest) "redisplay")))
+         (let ((cause (or (car rest) "other")))
            (if (assoc cause causes) (cl-incf (cdr (assoc cause causes))) (push (cons cause 1) causes))
            (when (and (string-prefix-p "timer:" cause) (not (equal id "mini"))) (cl-incf timer-moves))
            (when (< (length trace) 50)

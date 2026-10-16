@@ -61,8 +61,8 @@
       (should (equal (plist-get step :from) '(:point 9)))
       (should (equal (plist-get step :to) '(:point 1))))))
 
-(ert-deftest drgnx-uitest/report-uncaused-changes-are-redisplay ()
+(ert-deftest drgnx-uitest/report-uncaused-changes-are-other ()
   (let* ((a (drgnx-test--sig)) (b (drgnx-test--sig :start 5))
          (r (drgnx-uitest-jank-report (list (list 1.1 'change "w1" a b)) 1.0 (list (cons "w1" a)) '("w1") 1.0)))
-    (should (equal (plist-get (aref (plist-get r :trace) 0) :cause) "redisplay"))
+    (should (equal (plist-get (aref (plist-get r :trace) 0) :cause) "other"))
     (should (= (plist-get r :timer_moves) 0))))

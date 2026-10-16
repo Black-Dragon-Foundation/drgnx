@@ -34,3 +34,13 @@
     (should (equal unread-command-events '(?a ?b)))
     (should (null drgnx-uitest--queue))
     (setq unread-command-events nil)))
+
+(ert-deftest drgnx-uitest/settled-waits-from-the-start-of-a-measurement ()
+  ;; A measurement with no input must still give followers (timers) the quiet period.
+  (let ((drgnx-uitest--queue nil) (unread-command-events nil)
+        (drgnx-uitest--last-delivery 0.0)
+        (drgnx-uitest-record--last-change 0.0)
+        (drgnx-uitest-record--t0 (float-time)))
+    (should-not (drgnx-uitest-settled-p 0.3))
+    (let ((drgnx-uitest-record--t0 (- (float-time) 1)))
+      (should (drgnx-uitest-settled-p 0.3)))))
