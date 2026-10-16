@@ -120,3 +120,16 @@
    (delete-other-windows)
    (should (drgnx-wb-section-window 'top))
    (should (drgnx-wb-section-window 'bottom))))
+
+(ert-deftest drgnx-rules/files-and-lists-go-to-the-editor-unlogged ()
+  (drgnx-rules-test--with
+   (let ((editor (car (drgnx-rules-test--editors))) (f (drgnx-rules-test--file "notes.md")))
+     (setq drgnx-signal--editor-window editor)
+     (should (eq (display-buffer f) editor))
+     (dolist (name '("*Ibuffer*" "*Buffer List*" "*Customize Group: Editing*" "*Abbrevs*"))
+       (let ((b (get-buffer-create name)))               ; fundamental-mode when first displayed
+         (should (eq (display-buffer b) editor))
+         (kill-buffer b)))
+     (should-not drgnx-wb-unrouted)
+     (kill-buffer f))))
+

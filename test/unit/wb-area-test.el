@@ -134,3 +134,31 @@
      (should-not (drgnx-wb-area-window 'panel))
      (should (= h (window-pixel-height (drgnx-wb-area-show 'panel))))
      (should (eq (drgnx-wb-area-tab 'panel) 'output)))))
+
+(ert-deftest drgnx-area/more-help-and-output-buffers ()
+  (drgnx-area-test--with
+   (pcase-dolist (`(,name ,tab) '(("*Shortdoc string*" help) ("*Finder*" help) ("*Holidays*" help)
+                                  ("*timer-list*" output) ("*Process List*" output)))
+     (let ((b (get-buffer-create name)))
+       (display-buffer b)
+       (should (eq (window-buffer (drgnx-wb-area-window 'panel)) b))
+       (should (eq (drgnx-wb-area-tab 'panel) tab))
+       (kill-buffer b)))
+   (should-not drgnx-wb-unrouted)))
+
+(ert-deftest drgnx-area/balancing-touches-only-the-editors ()
+  ;; finder (and others) call `balance-windows' on the whole frame: docks and panel keep their size.
+  (drgnx-area-test--with
+   (drgnx-wb-define-tab 'right 'notes :title "Notes")
+   (let* ((drgnx-wb--sections nil)
+          (_ (drgnx-wb-define-section 'top :slot 0 :title "TOP" :buffer (lambda () (get-buffer-create "*drgnx-test-top*"))))
+          (_ (drgnx-wb-show-sidebar))
+          (panel (drgnx-wb-area-show 'panel 'output)) (right (drgnx-wb-area-show 'right 'notes))
+          (dock (drgnx-wb-section-window 'top))
+          (sizes (list (window-pixel-width dock) (window-pixel-height panel) (window-pixel-width right))))
+     (unwind-protect
+         (progn
+           (balance-windows)
+           (should (equal sizes (list (window-pixel-width dock) (window-pixel-height panel) (window-pixel-width right)))))
+       (drgnx-wb-hide-sidebar)
+       (kill-buffer "*drgnx-test-top*")))))

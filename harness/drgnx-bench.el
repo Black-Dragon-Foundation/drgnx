@@ -20,7 +20,7 @@
 (defconst drgnx-bench-budgets
   '(:explorer-first 30 :explorer-expand 80 :explorer-reveal 20 :explorer-key-p95 8 :explorer-refresh 150
     :buffers-render 30 :buffers-update 15 :buffers-key-p95 8)
-  "drgnx's budgets in ms (GUI session, median of 3; key metrics are the p95 of 50 presses).")
+  "drgnx's budgets in ms (GUI session, median of 3; key metrics are the p95 of 300 presses).")
 
 (defconst drgnx-bench-pairs
   '((:explorer-first . :treemacs) (:explorer-expand . :treemacs) (:explorer-reveal . :treemacs)

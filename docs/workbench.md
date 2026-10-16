@@ -8,7 +8,8 @@ trace. Editor groups and several windows arrive in the next milestones (see [roa
 
 Everything here is built on plain Emacs — no treemacs, no ibuffer — does what people use those for (and VS
 Code's Explorer and Open Editors; see [Compared](#compared-with-treemacs-ibuffer-and-vs-code)), and does every
-heavy operation 2–75× faster than they do; key presses are sub-millisecond in all three (see
+heavy operation 2–150× faster than they do; key presses are under a millisecond (as fast as ibuffer, faster than
+treemacs; see
 [Performance](#performance)).
 
 ## Using it
@@ -141,7 +142,7 @@ area stays one line (`resize-mini-windows` is off), so a tall message never take
 | Multi-select | marks | marks | Ctrl/Shift | Ctrl/Shift click, Shift+arrows, mark |
 | Open files order | — | by recency (rows move) | open order | open order (rows never move) |
 | Bulk save/close | — | marked ops | Save All, Close Saved/All | Save All, Close Saved/Others/All |
-| Speed | 49–668 ms | 45–74 ms | — | 0.6–88 ms |
+| Speed | 50–636 ms | 74–78 ms | — | 0.5–89 ms |
 
 Not yet: compact folders (`src/app` on one row — a cheap way to know a folder's only child is needed first),
 file nesting, icons (an icon theme is a module, M4), problems decorations (with diagnostics, M5).
@@ -172,7 +173,7 @@ file nesting, icons (an icon theme is a module, M4), problems decorations (with 
 
 `bin/drgnx test --bench` builds drgnx, makes a 25,000-file project (200 folders × 100 files, one 5,000-file
 folder, a depth-8 file), and times the same operations with drgnx, treemacs and ibuffer in a GUI session — each
-including a full redisplay; one-off operations are the median of 3, key presses the 95th percentile of 50.
+including a full redisplay; one-off operations are the median of 3, key presses the 95th percentile of 300 (50 left the result to the third-slowest press).
 Like for like: folder listings are read from disk in every run, the refreshed folder is open and the new files must
 appear, the Buffers update includes drgnx's change bus, and the Buffers render creates the panel and its window as
 ibuffer does.
@@ -182,21 +183,43 @@ The fixture is a git repository (everything committed, 50 files changed). Both r
 
 | Operation (ms) | drgnx | treemacs / ibuffer |
 |---|---|---|
-| First render of the project | 5.1 | 138.9 |
-| … with git decorations (drgnx: the whole repository's status read and shown) | 88.0 | 152.6 |
-| Expand the 5,000-file folder (read from disk) | 41.4 | 373.1 |
-| … with git decorations | 41.6 | 397.0 |
-| Reveal the depth-8 file | 1.8 | 49.0 |
-| Refresh after 100 new files (shown) | 20.0 | 667.8 |
-| Git status of the whole 25k-file repository (background) | 35.0 | — |
-| Buffers panel, 500 buffers | 7.7 | 74.4 (ibuffer) |
-| Buffers panel, one buffer added | 0.6 | 45.3 (ibuffer) |
-| Key press (p95) | 0.6 / 0.8 | 0.2 / 2.1 |
+| First render of the project | 5.1 | 146.5 |
+| … with git decorations (drgnx: the whole repository's status read and shown) | 88.8 | 151.3 |
+| Expand the 5,000-file folder (read from disk) | 36.3 | 317.3 |
+| … with git decorations | 39.4 | 388.8 |
+| Reveal the depth-8 file | 1.9 | 50.1 |
+| Refresh after 100 new files (shown) | 19.7 | 636.4 |
+| Git status of the whole 25k-file repository (background) | 32.1 | — |
+| Buffers panel, 500 buffers | 9.1 | 78.0 (ibuffer) |
+| Buffers panel, one buffer added | 0.5 | 74.0 (ibuffer) |
+| Key press (p95: Explorer / Buffers) | 0.5 / 0.9 | 3.5 / 0.8 |
 
 (One machine, 2026-10; numbers vary, ratios hold.) The run fails if drgnx misses a budget (first render 30 ms,
 expand 80, reveal 20, refresh 150, Buffers 30 / 15, keys 8) or is slower than the other tool by more than 0.5 ms
-(the noise floor of sub-millisecond key timings). Batch tests also keep allocation in check: expanding 5,000 rows
+(the noise floor of sub-millisecond key timings); key presses run in the same frame for each tool. Batch tests also keep allocation in check: expanding 5,000 rows
 must allocate under 3 MB — garbage is what makes a GUI session pause.
+
+## Invariants
+
+What "nothing moves on its own" means, each pinned by a test in a GUI session with the jank guard on
+(`bin/drgnx test --ui`; `test/live/drgnx-invariants-test.el` unless named):
+
+| | Invariant | Test |
+|---|---|---|
+| I1 | No collateral move: a step changes only the windows it aims at | `drgnx-inv/i1-i9-i10-explorer-and-buffers-flows`, the scenarios |
+| I2 | Docks and panel keep their pixel size across hide/show, tab switches and popups | `drgnx-inv/i2-every-area-keeps-its-size` |
+| I3 | Chrome height depends on the window's role only | (M3d, with the chrome) |
+| I4 | Frame rows constant; the echo area stays one line | `drgnx-inv/i4-buffer-switches-and-messages-keep-the-rows` |
+| I5 | Popups leave no trace | `drgnx-inv/i5-which-key-leaves-no-trace`, `test/live/drgnx-popup-test.el` |
+| I6 | Followers react to edges, never to focus alone | `test/unit/wb-signal-test.el` |
+| I7 | Panels refresh only when their rows changed and keep the view by identity | `test/unit/wb-buffers-test.el` |
+| I8 | 50 commands that display buffers: no split, no resize, no frame, nothing unrouted | `drgnx-inv/i8-fuzz-of-fifty-commands` (`test/fixtures/fuzz-commands.eld`) |
+| I9 | No window moved from a timer except the caller's own | every report's `guard_violations` = 0 |
+| I10 | Each step settles within 250 ms, without oscillation | `drgnx-inv/i1-i9-i10-explorer-and-buffers-flows` |
+
+Two Emacs behaviours the workbench corrects so that these hold: `balance-windows` on a whole frame (finder calls
+it) balances only the editors, and a package calling `display-buffer-in-side-window` directly still gets the place
+its buffer's rule names.
 
 ## Tests
 

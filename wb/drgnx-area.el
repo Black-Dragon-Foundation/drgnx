@@ -195,13 +195,13 @@ area, so its size and tabs are kept."
 (dolist (tab '(problems output results terminal help)) (drgnx-wb-define-tab 'panel tab))
 
 (pcase-dolist (`(,matcher ,tab)
-               '(((help-mode apropos-mode Info-mode Man-mode) help)
-                 ("\\`\\*\\(Help\\|info\\|eldoc.*\\|Apropos\\)\\*\\'" help)
+               '(((help-mode apropos-mode Info-mode Man-mode shortdoc-mode finder-mode) help)
+                 ("\\`\\*\\(Help\\|info\\|eldoc.*\\|Apropos\\|Shortdoc .*\\|Finder.*\\|Holidays\\)\\*\\'" help)
                  ((compilation-mode occur-mode xref--xref-buffer-mode) results)
                  ((flymake-diagnostics-buffer-mode flymake-project-diagnostics-mode) problems)
                  ("\\`\\*Flycheck errors\\*\\'" problems)
-                 ((messages-buffer-mode debugger-mode ert-results-mode) output)
-                 ("\\`\\*\\(Warnings\\|Backtrace\\|Messages\\)\\*\\'" output)
+                 ((messages-buffer-mode debugger-mode ert-results-mode process-menu-mode timer-list-mode) output)
+                 ("\\`\\*\\(Warnings\\|Backtrace\\|Messages\\|timer-list\\|Process List\\)\\*\\'" output)
                  ((shell-mode eshell-mode term-mode vterm-mode inferior-emacs-lisp-mode comint-mode) terminal)))
   (drgnx-wb-place matcher 'panel :tab tab))
 

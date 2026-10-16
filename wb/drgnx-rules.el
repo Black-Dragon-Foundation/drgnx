@@ -73,6 +73,14 @@ Later rules are tried first; a rule with the same MATCHER is replaced where it s
       (funcall (or (alist-get place drgnx-rules--places) (error "drgnx: no place %s" place))
                buffer alist (cdr rule)))))
 
+(defun drgnx-rules--balance (orig &optional window-or-frame)
+  "Around `balance-windows': balancing the whole frame balances the editors only — the docks and
+the panel keep their size (finder balances the frame)."
+  (let ((target (if (or (null window-or-frame) (framep window-or-frame))
+                    (window-main-window (window-normalize-frame window-or-frame))
+                  window-or-frame)))
+    (unless (window-live-p target) (funcall orig target))))
+
 (defun drgnx-rules--side-window (orig buffer alist)
   "Around `display-buffer-in-side-window': a package calling it directly (which-key does) for a
 buffer a rule places goes to that place — it would otherwise take over the panel's slot."
@@ -125,8 +133,10 @@ left and right docks run the frame's full height, the panel sits under the edito
           (setq drgnx-rules--saved (mapcar (lambda (d) (cons (car d) (symbol-value (car d)))) drgnx-rules--defaults)))
         (pcase-dolist (`(,var . ,val) drgnx-rules--defaults) (set var val))
         (setq display-buffer-alist (append (remove drgnx-rules--entry display-buffer-alist) (list drgnx-rules--entry)))
-        (advice-add 'display-buffer-in-side-window :around #'drgnx-rules--side-window))
+        (advice-add 'display-buffer-in-side-window :around #'drgnx-rules--side-window)
+        (advice-add 'balance-windows :around #'drgnx-rules--balance))
     (advice-remove 'display-buffer-in-side-window #'drgnx-rules--side-window)
+    (advice-remove 'balance-windows #'drgnx-rules--balance)
     (setq display-buffer-alist (remove drgnx-rules--entry display-buffer-alist))
     (pcase-dolist (`(,var . ,val) drgnx-rules--saved) (set var val))
     (setq drgnx-rules--saved nil)))
@@ -145,6 +155,13 @@ left and right docks run the frame's full height, the panel sits under the edito
     (pop-to-buffer (current-buffer))))
 
 (drgnx-wb-place "\\`\\*drgnx unrouted\\*\\'" 'editor)
+;; Files, and buffers that are worked in like files (lists, settings, dired), go to the editor.
+;; Names too: several are displayed before their mode is set.
+(drgnx-wb-place (lambda (name _action) (buffer-file-name (get-buffer name))) 'editor)
+(drgnx-wb-place '(dired-mode Buffer-menu-mode ibuffer-mode Custom-mode proced-mode edit-abbrevs-mode
+                  bookmark-bmenu-mode tabulated-list-mode)
+                'editor)
+(drgnx-wb-place "\\`\\*\\(Ibuffer\\|Buffer List\\|Customize.*\\|Proced\\|Abbrevs\\|Bookmark List\\)\\*\\'" 'editor)
 
 (provide 'drgnx-rules)
 ;;; drgnx-rules.el ends here

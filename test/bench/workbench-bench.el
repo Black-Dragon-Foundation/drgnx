@@ -2,7 +2,7 @@
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 ;; Loaded into a GUI session of config=drgnx by harness/drgnx-bench.el.  Every measurement
 ;; includes a full redisplay; one-off operations are the median of 3 runs, key presses the p95
-;; of 50.  treemacs runs like-for-like: no file watching, no follow, git off (on for both tools
+;; of 300.  treemacs runs like-for-like: no file watching, no follow, git off (on for both tools
 ;; in the two git rows).
 
 (require 'cl-lib)
@@ -115,7 +115,7 @@
                          (drgnx-explorer-toggle-at (funcall row big))
                          (with-selected-window (funcall win)
                            (goto-char (funcall row big))
-                           (drgnx-bench--p95 #'drgnx-explorer-next 50)))))
+                           (drgnx-bench--p95 #'drgnx-explorer-next 300)))))
     (setq r (plist-put r :explorer-refresh
                        (drgnx-bench--try "drgnx" "refresh"
                          ;; d001 expanded: the 100 new files must appear (checked).  Live updates held back
@@ -184,7 +184,7 @@
                              (with-selected-window (funcall tw)
                                (treemacs-goto-file-node big)
                                (unless (treemacs-is-node-expanded? (treemacs-current-button)) (treemacs-toggle-node))
-                               (drgnx-bench--p95 (lambda () (treemacs-next-line 1)) 50)))))
+                               (drgnx-bench--p95 (lambda () (treemacs-next-line 1)) 300)))))
         (setq r (plist-put r :explorer-refresh
                            (drgnx-bench--try "treemacs" "refresh"
                              (let ((d001 (expand-file-name "d001" root)))
@@ -239,8 +239,8 @@
                           (drgnx-bench--try "drgnx" "buffers keys"
                             (with-selected-window (drgnx-wb-section-window 'buffers)
                               (goto-char (point-min))
-                              (drgnx-bench--p95 #'drgnx-buffers-next 50)))))
-    (drgnx-wb-hide-sidebar)
+                              (drgnx-bench--p95 #'drgnx-buffers-next 300)))))
+    ;; ibuffer in the same frame (the sidebar stays): a key press redisplays the same windows.
     (require 'ibuffer)
     (setq theirs (plist-put theirs :buffers-render
                             (drgnx-bench--try "ibuffer" "render"
@@ -253,7 +253,8 @@
                             (drgnx-bench--try "ibuffer" "keys"
                               (with-selected-window (get-buffer-window "*Ibuffer*")
                                 (goto-char (point-min))
-                                (drgnx-bench--p95 #'ibuffer-forward-line 50)))))
+                                (drgnx-bench--p95 #'ibuffer-forward-line 300)))))
+    (drgnx-wb-hide-sidebar)
     (cons mine theirs)))
 
 (defun drgnx-bench-session (root elpa)
