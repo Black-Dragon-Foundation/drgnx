@@ -128,6 +128,16 @@ usage: drgnx build              byte-compile drgnx (core, wb, modules); native c
        drgnx test --install [NAME…]
                                install.sh end to end in fresh distribution containers (slow;
                                names: fedora-44 debian-trixie ubuntu-26.04 fedora-45 archlinux)
+       drgnx sync [--offline] [--seed DIR]
+                               install the packages drgnx needs (the only thing that installs);
+                               --offline: from the lock and the cache; --seed: copy another elpa first
+       drgnx upgrade           newest packages; the previous generation comes back if they break
+       drgnx rollback [N]      the packages of generation N (default: the one before)
+       drgnx generations | lock
+       drgnx safe              Emacs with drgnx's core only: no modules, no packages
+       drgnx bisect [-- CMD…]  find the module that breaks (CMD fails, or you say so)
+       drgnx service-unit [DIR]
+                               the systemd user unit (printed, or written to DIR; never installed)
        drgnx ui COMMAND        headless GUI Emacs sessions: start, stop, ls, reap, state, shot,
                                click, keys, type, measure (drgnx ui --help; docs/harness.md)
 USAGE
@@ -138,6 +148,10 @@ case "${1:-help}" in
   build) cmd_build ;;
   test) shift; cmd_test "$@" ;;
   ui) shift; ui "$@" ;;
+  sync|upgrade|rollback|generations|lock|bisect|service-unit)
+        "${DRGNX_EMACS:-emacs}" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
+              -l drgnx-pkg -f drgnx-pkg-cli -- "$@" ;;
+  safe) shift; DRGNX_SAFE=1 exec "${DRGNX_EMACS:-emacs}" --init-directory="$here/init" "$@" ;;
   keys) shift; [[ "${1:-}" == diff ]] && shift
         emacs --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/harness" -L "$here/core" -L "$here/wb" \
               -l drgnx-keys-diff -f drgnx-keys-diff-cli -- "$@" ;;

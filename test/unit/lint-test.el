@@ -89,6 +89,19 @@
         (`(defface ,name ,_spec ,_doc . ,args)
          (unless (plist-member args :group) (format "defface %s has no :group" name))))))))
 
+(ert-deftest drgnx-lint/modules-never-install ()
+  ;; Packages come only from drgnx sync (core/drgnx-pkg.el): no use-package :vc / :ensure, no
+  ;; package-install in modules.
+  (should (equal (drgnx-lint--violations (drgnx-lint--files "modules")
+                                         (lambda (form)
+                                           (pcase form
+                                             (`(use-package ,name . ,args)
+                                              (seq-some (lambda (k) (and (plist-member args k) (format "use-package %s %s" name k)))
+                                                        '(:vc :ensure)))
+                                             (`(,(and f (or 'package-install 'package-vc-install 'package-refresh-contents)) . ,_)
+                                              (format "calls %s" f)))))
+                 nil)))
+
 (ert-deftest drgnx-lint/no-macros-obsolete-in-emacs-31 ()
   ;; `if-let' and `when-let' are obsolete as of 31.1 (warnings in every batch run); use the starred forms.
   (should (equal (drgnx-lint--violations (drgnx-lint--files "core" "wb" "harness" "init" "modules" "test")

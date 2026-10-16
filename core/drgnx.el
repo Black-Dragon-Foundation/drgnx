@@ -16,6 +16,7 @@
 (require 'drgnx-palette)
 (require 'drgnx-keys)
 (require 'drgnx-modules)
+(require 'drgnx-pkg-activate)
 
 (defgroup drgnx nil "drgnx, a workbench-first Emacs framework." :group 'convenience)
 
@@ -40,12 +41,19 @@
   "Boot drgnx: guard, staged hooks, core commands, modules, keys, then the generated surfaces."
   (drgnx-guard-mode 1)
   (drgnx-hooks-install)
-  (drgnx--core-commands)
-  ;; Modules that run later (idle, first frame, …) register commands after the keys were applied.
-  (add-hook 'drgnx-modules-after-stage-functions
-            (lambda (stage) (unless (eq stage 'startup) (drgnx-keys-apply) (drgnx-surfaces-refresh))))
-  (condition-case err (drgnx-modules-start (expand-file-name "modules" drgnx-dir))   ; never stops the rest
-    (error (message "drgnx: modules did not start: %s" (error-message-string err))))
+  (let ((safe (getenv "DRGNX_SAFE")))                ; drgnx safe: the core only
+    (unless safe
+      (condition-case err (drgnx-pkg-activate)
+        (error (message "drgnx: packages not activated: %s" (error-message-string err))))
+      (drgnx-pkg-guard-mode 1))
+    (drgnx--core-commands)
+    ;; Modules that run later (idle, first frame, …) register commands after the keys were applied.
+    (add-hook 'drgnx-modules-after-stage-functions
+              (lambda (stage) (unless (eq stage 'startup) (drgnx-keys-apply) (drgnx-surfaces-refresh))))
+    (if safe
+        (message "drgnx safe mode: the core only — no modules, no packages (drgnx bisect finds a module that breaks)")
+      (condition-case err (drgnx-modules-start (expand-file-name "modules" drgnx-dir))   ; never stops the rest
+        (error (message "drgnx: modules did not start: %s" (error-message-string err))))))
   (drgnx-keys-apply)
   (drgnx-surfaces-refresh))
 

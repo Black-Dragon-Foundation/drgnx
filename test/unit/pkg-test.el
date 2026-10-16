@@ -183,6 +183,26 @@
           (should (plist-get r :ok))
           (should (equal (drgnx-pkg-test--installed) '("fa-1.0"))))))))
 
+(ert-deftest drgnx-pkg/native-code-goes-to-drgnx-own-cache ()
+  ;; Never into the user's other Emacs (~/.config/emacs/eln-cache): sync compiles into the data dir,
+  ;; where sessions look first.
+  (drgnx-pkg-test--with root
+    (let ((arch (drgnx-pkg-test--archive (concat root "arch") '((fa "1.0")))) (dirs nil)
+          (drgnx-pkg-native-compile t))
+      (drgnx-pkg-test--want root 'fa)
+      (cl-letf (((symbol-function 'native-compile) (lambda (&rest _) (push (car native-comp-eln-load-path) dirs))))
+        (drgnx-pkg-test--sync root :archives `(("fx" . ,arch))))
+      (should dirs)
+      (should (seq-every-p (lambda (d) (equal (file-name-as-directory d) (concat root "data/eln-cache/"))) dirs)))))
+
+(ert-deftest drgnx-pkg/archives-in-packages-eld-even-none ()
+  (drgnx-pkg-test--with root
+    (should (equal (drgnx-pkg-archives) drgnx-pkg-default-archives))
+    (drgnx-pkg-test--write (concat root "config/packages.eld") '(:archives ()))
+    (should-not (drgnx-pkg-archives))
+    (drgnx-pkg-test--write (concat root "config/packages.eld") '(:archives (("local" . "/srv/elpa/"))))
+    (should (equal (drgnx-pkg-archives) '(("local" . "/srv/elpa/"))))))
+
 ;;;; Task 3: generations, rollback, upgrade
 
 (ert-deftest drgnx-pkg/rollback-restores-the-files-byte-for-byte-at-the-same-path ()
@@ -222,5 +242,122 @@
     (drgnx-pkg-test--want root)
     (dotimes (_ 7) (drgnx-pkg-snapshot))
     (should (equal (mapcar #'car (drgnx-pkg-generations)) '(7 6 5 4 3)))))
+
+;;;; Task 4: the guard, use-package :ensure, bisect, the CLI, the doctor, safe mode
+
+(require 'drgnx-pkg-activate)
+(require 'drgnx-doctor)
+
+(ert-deftest drgnx-pkg/the-guard-refuses-installs-from-automatic-code ()
+  (let ((orig (lambda (&rest _) 'installed)) (after-init-time (current-time)))
+    (let ((this-command nil))                                      ; a timer, a hook at startup, …
+      (should-error (drgnx-pkg--guard orig 'foo) :type 'drgnx-pkg-error))
+    (let ((this-command 'package-install))                         ; the user asked
+      (should (eq (drgnx-pkg--guard orig 'foo) 'installed)))
+    (let ((this-command 'package-install) (after-init-time nil))   ; still starting up
+      (should-error (drgnx-pkg--guard orig 'foo) :type 'drgnx-pkg-error)))
+  (unwind-protect
+      (progn (drgnx-pkg-guard-mode 1)
+             (dolist (f '(package-install package-refresh-contents package-vc-install package-upgrade package-upgrade-all))
+               (should (advice-member-p #'drgnx-pkg--guard f))))
+    (drgnx-pkg-guard-mode -1))
+  (should-not (advice-member-p #'drgnx-pkg--guard 'package-install)))
+
+(ert-deftest drgnx-pkg/use-package-ensure-only-records ()
+  (drgnx-pkg-test--with root
+    (should-not (drgnx-pkg-ensure 'drgnx-no-such-package-x '(t) nil))
+    (should-not (drgnx-pkg-ensure 'seq '(t) nil))                 ; there already: nothing to record
+    (should-not (drgnx-pkg-ensure 'drgnx-no-such-package-x '(t) nil))
+    (should (equal (drgnx-pkg--read-file (drgnx-pkg-wanted-file)) '(drgnx-no-such-package-x)))
+    (should (memq 'drgnx-no-such-package-x (drgnx-pkg-manifest (progn (make-directory (concat root "mods") t) (concat root "mods")))))))
+
+(ert-deftest drgnx-pkg/sessions-activate-the-packages-directory ()
+  (drgnx-pkg-test--with root
+    (drgnx-pkg-test--want root 'fa)
+    (drgnx-pkg-test--sync root :archives `(("fx" . ,(drgnx-pkg-test--archive (concat root "arch") '((fa "1.0"))))))
+    (setq package-alist nil package-activated-list nil)
+    (drgnx-pkg-activate)
+    (should (equal package-user-dir (drgnx-elpa-dir)))
+    (should (string-prefix-p (drgnx-elpa-dir) (locate-library "fa")))
+    (should (equal (progn (require 'fa) (fa-hello)) "1.0"))))
+
+(ert-deftest drgnx-pkg/bisect-pins-the-failing-module ()
+  (drgnx-pkg-test--with root
+    (let ((mods (concat root "mods/x/")))
+      (make-directory mods t)
+      (dotimes (i 6)
+        (write-region (format "(drgnx-module-define 'x/m%d :doc \"m\")\n" i) nil (format "%sdrgnx-m%d.el" mods i) nil 'silent))
+      (drgnx-pkg-test--write (concat root "config/modules.eld") '(:version 1 :disabled (x/m0) :theme tango))
+      (let* ((runs 0)
+             (fails-with (lambda (culprit)
+                           (lambda (config-dir)
+                             (setq runs (1+ runs))
+                             (let ((m (with-temp-buffer (insert-file-contents (expand-file-name "modules.eld" config-dir))
+                                                        (read (current-buffer)))))
+                               (should (eq (plist-get m :theme) 'tango))       ; the rest of the file is kept
+                               (not (memq culprit (plist-get m :disabled))))))))
+        (should (eq (drgnx-pkg-bisect (funcall fails-with 'x/m4) :modules-dir (concat root "mods")) 'x/m4))
+        (should (<= runs 6))                                           ; halving, not one by one
+        (should (eq (drgnx-pkg-bisect (lambda (_) t) :modules-dir (concat root "mods")) :not-a-module))
+        (should-error (drgnx-pkg-bisect (lambda (_) nil) :modules-dir (concat root "mods")) :type 'drgnx-pkg-error)
+        ;; the user's modules.eld is untouched
+        (should (equal (drgnx-pkg--read-file (concat root "config/modules.eld")) '(:version 1 :disabled (x/m0) :theme tango)))))))
+
+(ert-deftest drgnx-pkg/the-service-unit-is-written-never-installed ()
+  (drgnx-pkg-test--with root
+    (let ((unit (drgnx-pkg-service-unit)))
+      (should (string-match-p "^Type=notify$" unit))
+      (should (string-match-p (regexp-quote (concat "--fg-daemon=drgnx --init-directory=" (expand-file-name "init" drgnx-dir))) unit))
+      (should-not (file-exists-p (expand-file-name "~/.config/systemd/user/drgnx.service.drgnx-test"))))
+    (drgnx-pkg-service-unit (concat root "units"))
+    (should (file-exists-p (concat root "units/drgnx.service")))))
+
+(ert-deftest drgnx-pkg/the-cli-parses-its-commands ()
+  (let (calls)
+    (cl-letf (((symbol-function 'drgnx-pkg-sync) (lambda (&rest a) (push (cons 'sync a) calls) '(:ok t)))
+              ((symbol-function 'drgnx-pkg-rollback) (lambda (&optional n) (push (list 'rollback n) calls) 1))
+              ((symbol-function 'drgnx-pkg-upgrade) (lambda (&rest a) (push (cons 'upgrade a) calls) '(:ok nil :restored 2))))
+      (should (eql (drgnx-pkg-cli-run '("sync" "--offline" "--seed" "/x")) 0))
+      (should (equal (car calls) '(sync :offline t :seed "/x")))
+      (should (eql (drgnx-pkg-cli-run '("rollback" "3")) 0))
+      (should (equal (car calls) '(rollback 3)))
+      (should (eql (drgnx-pkg-cli-run '("upgrade")) 1))
+      (should (eql (drgnx-pkg-cli-run '("frobnicate")) 2)))))
+
+(ert-deftest drgnx-pkg/the-doctor-reports-packages ()
+  (let ((check (lambda (p) (drgnx-doctor-check 'packages (list :packages p)))))
+    (should (eq (car (funcall check '(:manifest nil :installed nil :lock nil :generations 0))) 'ok))
+    (let ((r (funcall check '(:manifest (fa fb) :installed (fa) :lock t :generations 1))))
+      (should (eq (car r) 'warn))
+      (should (string-search "fb" (nth 1 r)))
+      (should (string-search "drgnx sync" (nth 2 r))))
+    (should (eq (car (funcall check '(:manifest (fa) :installed (fa) :lock nil :generations 0))) 'warn))
+    (should (eq (car (funcall check '(:manifest (fa) :installed (fa) :lock t :generations 2))) 'ok))
+    (should (eq (car (funcall check '(:error "drgnx.lock.eld is unreadable"))) 'fail))))
+
+(ert-deftest drgnx-pkg/the-doctor-fact-is-the-real-state ()
+  (drgnx-pkg-test--with root
+    (drgnx-pkg-test--want root 'fa)
+    (drgnx-pkg-test--sync root :archives `(("fx" . ,(drgnx-pkg-test--archive (concat root "arch") '((fa "1.0"))))))
+    (let ((s (drgnx-pkg-status (concat root "mods"))))
+      (should (equal (plist-get s :installed) '(fa)))
+      (should (equal (plist-get s :manifest) '(fa)))
+      (should (plist-get s :lock))
+      (should (eql (plist-get s :generations) 1)))))
+
+(ert-deftest drgnx-pkg/safe-mode-runs-no-modules-and-no-packages ()
+  (require 'drgnx)
+  (let (calls (process-environment (cons "DRGNX_SAFE=1" process-environment)))
+    (cl-letf (((symbol-function 'drgnx-modules-start) (lambda (&rest _) (push 'modules calls)))
+              ((symbol-function 'drgnx-pkg-activate) (lambda (&rest _) (push 'packages calls)))
+              ((symbol-function 'drgnx-pkg-guard-mode) #'ignore)
+              ((symbol-function 'drgnx-guard-mode) #'ignore) ((symbol-function 'drgnx-hooks-install) #'ignore)
+              ((symbol-function 'drgnx--core-commands) #'ignore) ((symbol-function 'drgnx-keys-apply) #'ignore)
+              ((symbol-function 'drgnx-surfaces-refresh) #'ignore))
+      (drgnx-init)
+      (should-not calls)
+      (setenv "DRGNX_SAFE" nil)
+      (drgnx-init)
+      (should (equal (sort calls (lambda (a b) (string< a b))) '(modules packages))))))
 
 ;;; pkg-test.el ends here

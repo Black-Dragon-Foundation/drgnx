@@ -19,8 +19,10 @@
 (require 'package)
 (require 'drgnx-paths)
 (require 'drgnx-modules)
+(require 'drgnx-pkg-activate)
 
-(define-error 'drgnx-pkg-error "drgnx packages")
+(defvar native-comp-eln-load-path)
+(defvar byte-compile-warnings)
 
 (defvar drgnx-pkg-native-compile (and (fboundp 'native-comp-available-p) (native-comp-available-p))
   "Non-nil: sync compiles the packages it installs to native code ahead of time.")
@@ -74,8 +76,6 @@
 
 (defun drgnx-pkg--packages-eld () (drgnx-pkg--read-file (expand-file-name "packages.eld" (drgnx-user-dir))))
 
-(defun drgnx-pkg-wanted-file () (expand-file-name "packages-wanted.eld" (drgnx-state-dir)))
-
 (defun drgnx-pkg-manifest (&optional modules-dir)
   "The packages drgnx needs, sorted: every enabled module's :packages (MODULES-DIR, default drgnx's
 modules/), packages.eld's :packages and those use-package :ensure asked for in a session."
@@ -88,7 +88,8 @@ modules/), packages.eld's :packages and those use-package :ensure asked for in a
 
 (defun drgnx-pkg-archives ()
   "The archives: packages.eld's :archives, else `drgnx-pkg-default-archives'."
-  (or (plist-get (drgnx-pkg--packages-eld) :archives) drgnx-pkg-default-archives))
+  (let ((p (drgnx-pkg--packages-eld)))
+    (if (plist-member p :archives) (plist-get p :archives) drgnx-pkg-default-archives)))
 
 ;;;; Lock
 
@@ -224,7 +225,8 @@ Files come back at the same path, so their native code stays valid.  Returns N."
   (with-temp-buffer
     (set-buffer-multibyte nil)
     (insert-file-contents-literally file)
-    (let ((save-silently t) (package-native-compile nil)) (package-unpack desc))))
+    ;; Third-party compiler warnings are not the user's to fix: kept out of the sync's output.
+    (let ((save-silently t) (package-native-compile nil) (byte-compile-warnings nil)) (package-unpack desc))))
 
 (defun drgnx-pkg--install (desc lock-entry missing)
   "Install DESC — from the cache when the file is there, else from its archive — checking the
@@ -269,13 +271,18 @@ cell whose car is the list).  A hash that differs from the lock is a `drgnx-pkg-
                (not (file-exists-p (expand-file-name (file-name-nondirectory d) package-user-dir))))
       (drgnx-pkg--copy-dir d (expand-file-name (file-name-nondirectory d) package-user-dir)))))
 
+
+(defun drgnx-pkg-eln-dir () (expand-file-name "eln-cache/" (drgnx-data-dir)))
+
 (defun drgnx-pkg--native-compile (dirs)
-  "Compile every Lisp file of DIRS to native code, one at a time (memory stays bounded)."
+  "Compile every Lisp file of DIRS to native code, one at a time (memory stays bounded), into drgnx's
+own eln cache — the first place sessions look (drgnx-pkg-activate), never another Emacs's."
   (when (and drgnx-pkg-native-compile (fboundp 'native-compile))
     (dolist (dir dirs)
       (dolist (f (directory-files dir t "\\`[^.].*\\.el\\'"))
         (unless (string-match-p "-\\(pkg\\|autoloads\\)\\.el\\'" f)
-          (condition-case err (native-compile f)
+          (condition-case err (let ((native-comp-eln-load-path (cons (drgnx-pkg-eln-dir) native-comp-eln-load-path)))
+                                (native-compile f))
             (error (message "drgnx sync: native compilation of %s failed: %s" f (error-message-string err)))))))))
 
 (defun drgnx-pkg-quickstart-file () (expand-file-name "drgnx-quickstart.el" (drgnx-elpa-dir)))
@@ -387,6 +394,138 @@ Returns (:ok :generation :restored :smoke :missing)."
            (when-let* ((g (plist-get r :generation))) (delete-directory (drgnx-pkg--generation-dir g) t))
            (list :ok nil :smoke failure :restored before))
           (t (list :ok t :generation (plist-get r :generation))))))
+
+;;;; Bisect
+
+(cl-defun drgnx-pkg-bisect (fails &key modules-dir)
+  "Find the module that makes FAILS true: FAILS is called with a configuration directory (a copy of
+the user's, whose modules.eld turns some modules off) and returns non-nil when the problem shows.
+Halves the enabled modules each round.  Returns the module, or `:not-a-module' when the problem shows
+with every module off.  The user's own files are never changed."
+  (let* ((user (drgnx-user-dir))
+         (state (or (drgnx-pkg--read-file (expand-file-name "modules.eld" user)) (list :version 1)))
+         (off (plist-get state :disabled))
+         (candidates (seq-remove (lambda (m) (memq m off))
+                                 (mapcar #'car (drgnx-pkg--module-packages
+                                                (or modules-dir (expand-file-name "modules" drgnx-dir))))))
+         (tmp (make-temp-file "drgnx-bisect" t)))
+    (cl-flet ((try (on)
+                (delete-directory tmp t)
+                (if (file-directory-p user) (copy-directory user tmp nil t t) (make-directory tmp t))
+                (drgnx-pkg--write-file (expand-file-name "modules.eld" tmp) "drgnx bisect"
+                                       (plist-put (copy-sequence state) :disabled
+                                                  (append off (seq-difference candidates on))))
+                (funcall fails tmp)))
+      (unwind-protect
+          (progn
+            (unless (try candidates) (drgnx-pkg--error "the problem does not show with your modules on; nothing to bisect"))
+            (if (try nil) :not-a-module
+              (let ((set candidates))
+                (while (cdr set)
+                  (let ((half (seq-take set (/ (length set) 2))))
+                    (setq set (if (try half) half (seq-drop set (length half))))))
+                (car set))))
+        (delete-directory tmp t)))))
+
+;;;; The service unit
+
+(defun drgnx-pkg-service-unit (&optional dir)
+  "The systemd user unit that runs drgnx as a daemon; written to DIR/drgnx.service when DIR is given.
+Never installed or enabled: that is the user's step (docs/packages.md)."
+  (let* ((emacs (expand-file-name invocation-name invocation-directory))
+         (unit (concat "[Unit]\nDescription=drgnx (Emacs daemon)\nDocumentation=https://github.com/Black-Dragon-Foundation/drgnx\n\n"
+                       "[Service]\nType=notify\n"
+                       (format "ExecStart=%s --fg-daemon=drgnx --init-directory=%s\n" emacs (expand-file-name "init" drgnx-dir))
+                       "Restart=on-failure\n\n[Install]\nWantedBy=default.target\n")))
+    (when dir
+      (make-directory dir t)
+      (write-region unit nil (expand-file-name "drgnx.service" dir) nil 'silent))
+    unit))
+
+;;;; Status (for the doctor)
+
+(defun drgnx-pkg-status (&optional modules-dir)
+  "(:manifest :installed :lock :generations), or (:error MESSAGE)."
+  (condition-case err
+      (list :manifest (drgnx-pkg-manifest modules-dir)
+            :installed (let ((package-user-dir (drgnx-elpa-dir)) (package-alist nil) (package-directory-list nil))
+                         (when (file-directory-p package-user-dir) (package-load-all-descriptors))
+                         (sort (mapcar #'car package-alist) (lambda (a b) (string< a b))))
+            :lock (progn (drgnx-pkg-read-lock) (file-exists-p (drgnx-pkg-lock-file)))
+            :generations (length (drgnx-pkg-generations)))
+    (drgnx-pkg-error (list :error (cadr err)))))
+
+;;;; CLI (bin/drgnx sync | upgrade | rollback | generations | lock | bisect | service-unit)
+
+(defun drgnx-pkg--print (fmt &rest args) (princ (apply #'format fmt args)) (terpri))
+
+(defun drgnx-pkg--report (r)
+  (when (plist-get r :installed)
+    (drgnx-pkg--print "installed: %s" (mapconcat #'symbol-name (plist-get r :installed) " ")))
+  (pcase-dolist (`(,name . ,why) (plist-get r :missing)) (drgnx-pkg--print "MISSING %s: %s" name why))
+  (when (plist-get r :generation) (drgnx-pkg--print "generation %d" (plist-get r :generation))))
+
+(defun drgnx-pkg-cli-run (args)
+  "Run the package command ARGS (strings); the exit code."
+  (condition-case err
+      (pcase args
+        (`("sync" . ,flags)
+         (let (opts)
+           (while flags
+             (pcase (pop flags)
+               ("--offline" (setq opts (append opts (list :offline t))))
+               ("--seed" (setq opts (append opts (list :seed (pop flags)))))
+               (f (drgnx-pkg--error "unknown sync option %s (--offline, --seed DIR)" f))))
+           (let ((r (apply #'drgnx-pkg-sync opts)))
+             (drgnx-pkg--report r)
+             (if (plist-get r :ok) 0 1))))
+        (`("upgrade")
+         (let ((r (drgnx-pkg-upgrade)))
+           (drgnx-pkg--report r)
+           (when (plist-get r :smoke) (drgnx-pkg--print "the smoke test failed:\n%s" (plist-get r :smoke)))
+           (when (plist-get r :restored) (drgnx-pkg--print "restored generation %d" (plist-get r :restored)))
+           (if (plist-get r :ok) 0 1)))
+        (`("rollback" . ,n)
+         (drgnx-pkg--print "generation %d restored" (drgnx-pkg-rollback (and n (string-to-number (car n)))))
+         0)
+        (`("generations")
+         (pcase-dolist (`(,n . ,info) (drgnx-pkg-generations))
+           (drgnx-pkg--print "%3d  %s  %s" n (plist-get info :time) (or (plist-get info :note) "")))
+         0)
+        (`("lock")
+         (drgnx-pkg--print ";; %s" (drgnx-pkg-lock-file))
+         (pcase-dolist (`(,name . ,e) (drgnx-pkg-read-lock))
+           (drgnx-pkg--print "%-28s %-16s %s" name (plist-get e :version) (or (plist-get e :archive) "(seeded)")))
+         0)
+        (`("bisect" . ,rest)
+         (let* ((cmd (cdr (member "--" rest)))
+                (fails (if cmd
+                           (lambda (dir)
+                             (let ((process-environment (cons (concat "DRGNX_CONFIG_DIR=" dir) process-environment)))
+                               (not (eql 0 (apply #'call-process (car cmd) nil nil nil (cdr cmd))))))
+                         (lambda (dir)
+                           (let ((process-environment (cons (concat "DRGNX_CONFIG_DIR=" dir) process-environment)))
+                             (call-process (expand-file-name invocation-name invocation-directory) nil nil nil
+                                           (concat "--init-directory=" (expand-file-name "init" drgnx-dir))))
+                           (y-or-n-p "Did the problem show? "))))
+                (m (drgnx-pkg-bisect fails)))
+           (drgnx-pkg--print (if (eq m :not-a-module) "the problem shows with every module off: not a module (try drgnx safe)"
+                               (format "the problem comes with module %s (turn it off in Preferences: Modules)" m)))
+           0))
+        (`("service-unit" . ,dir)
+         (let ((unit (drgnx-pkg-service-unit (car dir))))
+           (if dir (drgnx-pkg--print "wrote %s (not installed: see docs/packages.md)" (expand-file-name "drgnx.service" (car dir)))
+             (princ unit)))
+         0)
+        (_ (drgnx-pkg--print "usage: drgnx sync [--offline] [--seed DIR] | upgrade | rollback [N] | generations | lock | bisect [-- CMD…] | service-unit [DIR]")
+           2))
+    (drgnx-pkg-error (drgnx-pkg--print "drgnx: %s" (cadr err)) 1)))
+
+(defun drgnx-pkg-cli ()
+  "bin/drgnx's package commands: the arguments after --."
+  (let ((args (cdr (member "--" command-line-args-left))))
+    (setq command-line-args-left nil)
+    (kill-emacs (drgnx-pkg-cli-run args))))
 
 (provide 'drgnx-pkg)
 ;;; drgnx-pkg.el ends here

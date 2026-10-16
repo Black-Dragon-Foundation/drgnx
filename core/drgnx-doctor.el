@@ -45,6 +45,8 @@ DEV non-nil: only run for `drgnx doctor --dev' (tools for developing drgnx)."
       (progn (native-compile '(lambda () 1)) t)
     (error (error-message-string err))))
 
+(declare-function drgnx-pkg-status "drgnx-pkg")
+
 (defun drgnx-doctor-facts ()
   "Facts about the running Emacs and this machine."
   (let ((native (and (fboundp 'native-comp-available-p) (native-comp-available-p))))
@@ -61,7 +63,9 @@ DEV non-nil: only run for `drgnx doctor --dev' (tools for developing drgnx)."
           :magick (and (executable-find "magick") t)
           :pgtk-emacs (or (featurep 'pgtk) (and (executable-find "emacs-pgtk") t))
           :keys-report (drgnx-doctor--keys-report)
-          :modules-report (drgnx-doctor--state-file "modules-report.eld"))))
+          :modules-report (drgnx-doctor--state-file "modules-report.eld")
+          :packages (condition-case err (progn (require 'drgnx-pkg) (drgnx-pkg-status))
+                      (error (list :error (error-message-string err)))))))
 
 (defun drgnx-doctor--state-file (name)
   "The .eld file NAME the last drgnx session wrote in the state dir, read, or nil."
@@ -136,6 +140,20 @@ DEV non-nil: only run for `drgnx doctor --dev' (tools for developing drgnx)."
                                                     problems "; ")
                                    "see the module's documentation"))
                    (t (list 'ok (format "%d modules ok" (length r)) nil))))))
+
+(drgnx-doctor-define 'packages :group "drgnx" :doc "The packages drgnx needs are installed (drgnx sync), with a lock"
+  :check (lambda (f)
+           (let* ((p (plist-get f :packages))
+                  (missing (seq-difference (plist-get p :manifest) (plist-get p :installed))))
+             (cond ((plist-get p :error) (list 'fail (plist-get p :error) "fix or remove the file named; drgnx sync rewrites the lock"))
+                   (missing (list 'warn (format "not installed: %s" (mapconcat #'symbol-name missing " "))
+                                  "drgnx sync installs them (their modules wait until then)"))
+                   ((and (plist-get p :manifest) (not (plist-get p :lock)))
+                    (list 'warn "no lock (drgnx.lock.eld)" "drgnx sync writes it; commit it with your configuration"))
+                   ((null (plist-get p :manifest)) (list 'ok "no packages needed" nil))
+                   (t (list 'ok (format "%d packages installed, locked; %d generations"
+                                        (length (plist-get p :installed)) (plist-get p :generations))
+                            nil))))))
 
 (drgnx-doctor-define 'key-conflicts :group "drgnx" :doc "Key profile conflicts and keys.eld problems (from the last session)"
   :check (lambda (f)
