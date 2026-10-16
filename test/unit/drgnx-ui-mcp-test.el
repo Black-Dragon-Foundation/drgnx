@@ -3,7 +3,7 @@
 (require 'drgnx-ui-mcp)
 
 (defconst drgnx-ui-mcp-test--tools
-  '("ui_start" "ui_frame" "ui_stop" "ui_list" "ui_state" "ui_screenshot" "ui_click" "ui_keys" "ui_type" "ui_wait" "ui_measure"))
+  '("ui_start" "ui_frame" "ui_stop" "ui_list" "ui_state" "ui_screenshot" "ui_click" "ui_keys" "ui_type" "ui_wait" "ui_measure" "ui_diff" "ui_record"))
 
 (defmacro drgnx-ui-mcp-test--with-state (&rest body)
   (declare (indent 0))

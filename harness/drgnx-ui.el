@@ -517,6 +517,26 @@ with optional :button, :count, :hold_ms.  Returns the API's reply."
          (report (drgnx-ui-call sess "(drgnx-uitest-api-measure-end)")))
     (append (list :settled (if settled t :false) :actions (vconcat replies)) report)))
 
+(defun drgnx-ui-state-diff (a b)
+  "Changes from state A to state B (both as `drgnx-ui-state' returns them):
+plists (:window ID :field F :old O :new N); frame-level fields have :window nil; a window only
+in A is (:field \"removed\" :old BUFFER), only in B (:field \"added\" :new BUFFER)."
+  (let ((wa (append (plist-get a :windows) nil)) (wb (append (plist-get b :windows) nil)) changes)
+    (dolist (k '(:frame :minibuffer_h :children))
+      (unless (equal (plist-get a k) (plist-get b k))
+        (push (list :window nil :field (substring (symbol-name k) 1) :old (plist-get a k) :new (plist-get b k)) changes)))
+    (dolist (w wa)
+      (let ((other (seq-find (lambda (x) (equal (plist-get x :id) (plist-get w :id))) wb)))
+        (if (not other)
+            (push (list :window (plist-get w :id) :field "removed" :old (plist-get w :buffer) :new nil) changes)
+          (cl-loop for (k v) on w by #'cddr
+                   unless (equal v (plist-get other k))
+                   do (push (list :window (plist-get w :id) :field (substring (symbol-name k) 1) :old v :new (plist-get other k)) changes)))))
+    (dolist (w wb)
+      (unless (seq-find (lambda (x) (equal (plist-get x :id) (plist-get w :id))) wa)
+        (push (list :window (plist-get w :id) :field "added" :old nil :new (plist-get w :buffer)) changes)))
+    (nreverse changes)))
+
 (defun drgnx-ui-state (sess)
   (drgnx-ui-call sess "(drgnx-uitest-api-state)"))
 

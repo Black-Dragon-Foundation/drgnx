@@ -73,6 +73,14 @@ guard_violations (window moves from timers).")
          :inputSchema (drgnx-ui-mcp--schema (append drgnx-ui-mcp--session
                                                     '(:quiet_ms (:type "integer") :timeout_ms (:type "integer")))
                                             '("session")))
+   (list :name "ui_diff"
+         :description "What changed between two states: give a and b (ui_state results), or only the session to compare its state now with the state the previous ui_state/ui_diff call saw. Returns changes: {window, field, old, new}; added/removed windows."
+         :inputSchema (drgnx-ui-mcp--schema (append drgnx-ui-mcp--session '(:a (:type "object") :b (:type "object")))))
+   (list :name "ui_record"
+         :description (concat "Record everything that changes between action start and action stop (input you send in between, timers, redisplays); stop returns the report with its trace. "
+                              drgnx-ui-mcp--report)
+         :inputSchema (drgnx-ui-mcp--schema (append drgnx-ui-mcp--session '(:action (:type "string" :enum ["start" "stop"])))
+                                            '("session" "action")))
    (list :name "ui_measure"
          :description (concat "Run several actions as one measurement. Each action is one of {keys}, {type}, {x,y} or {buffer,text}, with optional button/count/hold_ms. "
                               drgnx-ui-mcp--report)
@@ -101,6 +109,21 @@ guard_violations (window moves from timers).")
     (list :content (vector (list :type "image" :data data :mimeType "image/png")
                            (list :type "text" :text (drgnx-ui--json r))))))
 
+(defvar drgnx-ui-mcp--states (make-hash-table :test #'equal) "Session → the last state a tool saw.")
+
+(defun drgnx-ui-mcp--remember (args state)
+  (puthash (plist-get args :session) state drgnx-ui-mcp--states)
+  state)
+
+(defun drgnx-ui-mcp--diff (args)
+  "ui_diff: A against B, or the session's previous state against its state now."
+  (drgnx-ui-mcp--text
+   (if (and (plist-get args :a) (plist-get args :b))
+       (list :changes (vconcat (drgnx-ui-state-diff (plist-get args :a) (plist-get args :b))))
+     (let* ((before (gethash (plist-get args :session) drgnx-ui-mcp--states))
+            (now (drgnx-ui-mcp--remember args (drgnx-ui-state (drgnx-ui-mcp--own args)))))
+       (list :changes (vconcat (and before (drgnx-ui-state-diff before now))) :baseline (if before t :false))))))
+
 (defun drgnx-ui-mcp--click-action (args)
   (cl-loop for k in '(:x :y :buffer :text :button :count :hold_ms)
            when (plist-member args k) append (list k (plist-get args k))))
@@ -111,7 +134,13 @@ guard_violations (window moves from timers).")
     ("ui_frame" . ,(lambda (a) (drgnx-ui-mcp--text (drgnx-ui-new-frame (drgnx-ui-mcp--own a)))))
     ("ui_stop" . ,(lambda (a) (drgnx-ui-mcp--text (drgnx-ui-stop (plist-get a :session)))))
     ("ui_list" . ,(lambda (_) (drgnx-ui-mcp--text (drgnx-ui-ls))))
-    ("ui_state" . ,(lambda (a) (drgnx-ui-mcp--text (drgnx-ui-state (drgnx-ui-mcp--own a)))))
+    ("ui_state" . ,(lambda (a) (drgnx-ui-mcp--text (drgnx-ui-mcp--remember a (drgnx-ui-state (drgnx-ui-mcp--own a))))))
+    ("ui_diff" . drgnx-ui-mcp--diff)
+    ("ui_record" . ,(lambda (a) (drgnx-ui-mcp--text
+                                 (let ((sess (drgnx-ui-mcp--own a)))
+                                   (if (equal (plist-get a :action) "start")
+                                       (progn (drgnx-ui-call sess "(drgnx-uitest-api-measure-begin)") (list :recording t))
+                                     (drgnx-ui-call sess "(drgnx-uitest-api-measure-end)"))))))
     ("ui_screenshot" . drgnx-ui-mcp--screenshot)
     ("ui_click" . ,(lambda (a) (drgnx-ui-mcp--text
                                 (drgnx-ui-measure (drgnx-ui-mcp--own a) (list (drgnx-ui-mcp--click-action a))))))

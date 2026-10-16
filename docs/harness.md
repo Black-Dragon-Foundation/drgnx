@@ -288,6 +288,8 @@ claude mcp add -s user drgnx-ui -- /path/to/drgnx/bin/drgnx ui mcp
 | `ui_type` | `session`, `text` | jank report |
 | `ui_wait` | `session`, `quiet_ms`?, `timeout_ms`? | `{settled}` |
 | `ui_measure` | `session`, `actions` (list of `{keys}`, `{type}`, `{x,y}`, `{buffer,text}`) | one jank report |
+| `ui_diff` | `session` (diffs against the state the previous `ui_state`/`ui_diff` saw), or `a` and `b` | `changes`: `{window, field, old, new}`, windows `added`/`removed` |
+| `ui_record` | `session`, `action` (`start` / `stop`) | `stop`: the jank report of everything between (input, timers, redisplays) |
 
 A typical agent loop: `ui_start` → `ui_screenshot` (look) → `ui_click`/`ui_keys` (act; read the jank report) →
 `ui_screenshot` (check) → `ui_stop`. Every tool resolves its session through the ownership rules above, so a
