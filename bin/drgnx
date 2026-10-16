@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# drgnx — command-line entry point (pre-release stub).
+set -euo pipefail
+
+check() { # NAME CMD FIX
+  if bash -c "$2" >/dev/null 2>&1; then printf '%-24s ok\n' "$1"; else printf '%-24s FAIL  %s\n' "$1" "$3"; return 1; fi
+}
+
+cmd_doctor() {
+  local rc=0
+  check "emacs >= 30.2" \
+    "emacs --batch -Q --eval '(kill-emacs (if (version<= \"30.2\" emacs-version) 0 1))'" \
+    "install GNU Emacs 31.1+ (30.2 works until every platform ships 31.1)" || rc=1
+  return "$rc"
+}
+
+case "${1:-help}" in
+  doctor) shift; cmd_doctor "$@" ;;
+  help|-h|--help) echo "usage: drgnx doctor   (more commands arrive with each milestone)" ;;
+  *) echo "drgnx: unknown command '$1' (try: drgnx doctor)" >&2; exit 2 ;;
+esac

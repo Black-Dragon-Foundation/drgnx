@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# drgnx pre-commit: this repository is public. Refuse commits that add secrets or personal
+# machine details. Scans only the lines being added. Bypass is not allowed (no --no-verify).
+set -euo pipefail
+
+patterns=(
+  'sk-or-v1-[A-Za-z0-9]{20,}'          # OpenRouter keys
+  'sk-ant-[A-Za-z0-9_-]{20,}'          # Anthropic keys
+  'sk-[A-Za-z0-9]{32,}'                # OpenAI-style keys
+  'gh[pousr]_[A-Za-z0-9]{30,}'         # GitHub tokens
+  'AKIA[0-9A-Z]{16}'                   # AWS access keys
+  '-----BEGIN [A-Z ]*PRIVATE KEY-----'
+  '/home/[a-z][a-z0-9_-]*/'            # absolute home paths
+  '/Users/[A-Za-z][A-Za-z0-9_-]*/'
+  '\.claude/projects/'                 # agent session paths
+)
+pattern="$(IFS='|'; echo "${patterns[*]}")"
+
+# Added lines only, excluding this hook itself.
+hits="$(git diff --cached -U0 --no-color -- . ':(exclude).githooks/pre-commit' \
+          | grep -E '^\+[^+]' | grep -nE -- "$pattern" || true)"
+if [ -n "$hits" ]; then
+  echo "pre-commit: refusing to commit secrets or personal paths into a public repo:" >&2
+  echo "$hits" | sed 's/^/  /' >&2
+  exit 1
+fi
+
+# Never commit environment or secrets files.
+if git diff --cached --name-only | grep -qE '(^|/)(\.env(\..*)?|secrets\.env|.*\.pem|.*\.key)$'; then
+  echo "pre-commit: refusing to commit an env/secrets/key file." >&2
+  exit 1
+fi

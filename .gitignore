@@ -1,0 +1,8 @@
+.claude/worktrees/
+.claude/tmp/
+.claude/settings.local.json
+*.elc
+*.eln
+.env
+.env.*
+secrets.env
