@@ -301,7 +301,10 @@ offset (parent-relative native edges) for compositing."
 
 ;;;; JSON API (for emacsclient; see harness/drgnx_ui.py)
 
-(defun drgnx-uitest--json (plist) (json-serialize plist))
+(defun drgnx-uitest--json (plist)
+  "PLIST as JSON text.  Emacs 30's `json-serialize' returns unibyte UTF-8, which
+prints as raw bytes; decode it so non-ASCII text survives emacsclient."
+  (decode-coding-string (json-serialize plist) 'utf-8))
 
 (defun drgnx-uitest--window-info (w)
   (with-current-buffer (window-buffer w)
