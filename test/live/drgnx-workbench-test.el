@@ -20,7 +20,7 @@
         (progn
           (drgnx-ui-measure sess (list (list :keys "C-b")))
           (let ((first (drgnx-ui-call sess probe)))
-            (should (= (plist-get first :n) 2))
+            (should (= (plist-get first :n) 3))                       ; Buffers, Explorer, Outline
             (should (eq (plist-get first :selected-dock) :false))
             (should (seq-every-p (lambda (h) (> h 0)) (plist-get first :headers)))
             (should (seq-every-p (lambda (v) (eq v :false)) (plist-get first :scrollbars)))

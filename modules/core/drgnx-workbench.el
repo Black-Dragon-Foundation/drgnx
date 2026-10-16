@@ -6,6 +6,8 @@
 (declare-function drgnx-explorer-setup "drgnx-explorer")
 (declare-function drgnx-rules-mode "drgnx-rules")
 (declare-function drgnx-chrome-mode "drgnx-chrome")
+(declare-function drgnx-outline-setup "drgnx-outline")
+(declare-function drgnx-outline-focus "drgnx-outline")
 (declare-function drgnx-persist-mode "drgnx-persist")
 (declare-function drgnx-persist-save "drgnx-persist")
 (declare-function drgnx-persist-restore "drgnx-persist")
@@ -121,6 +123,11 @@
                        (explorer-reveal-externally "Reveal in File Manager" drgnx-explorer-reveal-externally "Open the folder in the system's file manager")))
         (drgnx-command-define id :category "Explorer" :title title :command fn :doc doc
           :map 'drgnx-explorer-mode-map :when in-explorer :context 'explorer)))
+    ;; The Outline, below the Explorer.
+    (require 'drgnx-outline)
+    (drgnx-outline-setup)
+    (drgnx-command-define 'focus-outline :category "View" :title "Focus Outline" :scope 'window
+      :command #'drgnx-outline-focus :doc "Show the sidebar and move focus to the editor's definitions")
     ;; The Buffers panel (open editors), above the Explorer.
     (require 'drgnx-buffers)
     (drgnx-buffers-setup)

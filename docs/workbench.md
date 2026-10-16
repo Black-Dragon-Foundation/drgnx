@@ -1,7 +1,7 @@
 # The workbench
 
 drgnx's window model, VS Code style: editor windows in the middle, a left dock with the **Buffers** panel (open
-files) above the **Explorer** (file tree), a **right dock** and a bottom **panel** (Terminal, Problems, Output,
+files) above the **Explorer** (file tree) and the **Outline**, a **right dock** and a bottom **panel** (Terminal, Problems, Output,
 Results, Help) and a popup lane — every buffer goes to its place by one rules table. Nothing moves on its own: a
 click lands where you clicked, a row you selected stays selected, docks and panel keep their size, popups leave no
 trace. Editor groups and several windows arrive in the next milestones (see [roadmap.md](roadmap.md), M3).
@@ -37,6 +37,13 @@ file you are editing.
 The **Buffers** panel lists open files in the order you opened them — switching never re-sorts it, so a row never
 moves under the pointer. Each row: `×` closes, `●` marks unsaved changes, then the name and its folder; the file
 in the active editor is in bold. Click a row to show it; `RET` too; `Delete` (`d`/`k` in Emacs, `x` in Vim) closes.
+
+### Outline
+
+Below the Explorer, the **Outline** lists the definitions of the file in the editor (as imenu finds them, nested the
+same way). A click shows the definition in the editor and keeps you in the Outline; `RET` goes there. It follows the
+editor, and half a second after you stop typing, your edits. Files without an index, remote files and buffers over
+2 MB get a one-line notice instead. Focus Outline: palette · `SPC o`.
 
 ### Files
 
