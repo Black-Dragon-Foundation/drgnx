@@ -9,6 +9,8 @@
          (drgnx-signal--editor-window nil) (display-buffer-alist nil))
      (delete-other-windows)
      (set-window-parameter (selected-window) 'drgnx-tabs nil)
+     (set-window-parameter (selected-window) 'drgnx-closed nil)
+     (set-window-prev-buffers (selected-window) nil)
      (drgnx-rules-mode 1)
      (drgnx-chrome-mode 1)
      (unwind-protect (progn ,@body)

@@ -6,6 +6,13 @@
 (declare-function drgnx-explorer-setup "drgnx-explorer")
 (declare-function drgnx-rules-mode "drgnx-rules")
 (declare-function drgnx-chrome-mode "drgnx-chrome")
+(declare-function drgnx-groups-split-right "drgnx-groups")
+(declare-function drgnx-groups-split-down "drgnx-groups")
+(declare-function drgnx-groups-close "drgnx-groups")
+(declare-function drgnx-groups-focus-1 "drgnx-groups")
+(declare-function drgnx-groups-focus-2 "drgnx-groups")
+(declare-function drgnx-groups-focus-3 "drgnx-groups")
+(declare-function drgnx-groups-move-to-next "drgnx-groups")
 (declare-function drgnx-chrome-close-tab "drgnx-chrome")
 (declare-function drgnx-chrome-next-tab "drgnx-chrome")
 (declare-function drgnx-chrome-previous-tab "drgnx-chrome")
@@ -42,6 +49,17 @@
     ;; Chrome by role: tab lines and breadcrumbs in editor windows.
     (require 'drgnx-chrome)
     (drgnx-chrome-mode 1)
+    ;; Editor groups (made only by these commands).
+    (require 'drgnx-groups)
+    (pcase-dolist (`(,id ,title ,fn ,doc)
+                   '((split-editor-right "Split Editor Right" drgnx-groups-split-right "A new editor group to the right, same file")
+                     (split-editor-down "Split Editor Down" drgnx-groups-split-down "A new editor group below, same file")
+                     (close-group "Close Editor Group" drgnx-groups-close "Close this group (its files stay open); the last one stays")
+                     (focus-group-1 "Focus First Editor Group" drgnx-groups-focus-1 "Focus group 1")
+                     (focus-group-2 "Focus Second Editor Group" drgnx-groups-focus-2 "Focus group 2 (made if there is one group)")
+                     (focus-group-3 "Focus Third Editor Group" drgnx-groups-focus-3 "Focus group 3 (made if there are two)")
+                     (move-editor-to-next-group "Move Editor into Next Group" drgnx-groups-move-to-next "Move the shown file to the next group")))
+      (drgnx-command-define id :category "View" :title title :scope 'window :command fn :doc doc))
     (drgnx-command-define 'close-tab :category "View" :title "Close Tab" :scope 'window
       :command #'drgnx-chrome-close-tab :doc "Close the shown tab (the buffer stays open)")
     (drgnx-command-define 'next-tab :category "View" :title "Next Tab" :scope 'window

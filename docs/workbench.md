@@ -20,7 +20,7 @@ treemacs; see
 | Focus the Explorer | `C-S-e` | `C-x M-e` | `SPC E` |
 | Focus the Buffers panel | `C-k e` | `C-x C-b` | `SPC ,` |
 | Back to the editor (in the sidebar) | `Escape` | `q` | `Escape` |
-| Focus the editor | `C-1` | `C-x o` | `C-w` |
+| Focus the editor (group 1) | `C-1` | `C-x o` | `C-w` |
 
 In the **Explorer**: a click on a folder opens or closes it; a click on a file opens it and keeps the Explorer
 focused (so you can keep browsing); a double click on a file moves to the editor. Keys: up/down (`n`/`p` in the
@@ -109,6 +109,7 @@ alone unless a rule names them.
 | `panel` Help | help, apropos, Info, man, eldoc documentation |
 | `right` | agents, chat, viewers — tabs come with their modules (M7) |
 | `popup` | transient, which-key, `*Completions*`, `*Calendar*` |
+| `other-group` | diffs and logs: another editor group (the one used last), else this one |
 
 ### Chrome
 
@@ -122,6 +123,15 @@ mode line (ibuffer, Info) cannot change a window's height — text never jumps (
   Close Tab `C-<f4>` · palette · `SPC b d`; Next / Previous Tab `C-<next>` / `C-<prior>` · Emacs' `C-x <right>` /
   `C-x <left>` · `SPC b n` / `SPC b p`. `*scratch*` is a tab only while it is shown.
 - **Breadcrumb**: project › folders › file, `●` while unsaved.
+
+### Editor groups
+
+Split the editor into **groups** — each an editor window with its own tabs — only by command: Split Editor Right /
+Down (``C-\`` / ``C-k C-\`` · Emacs' own `C-x 3` / `C-x 2` · `SPC w v` / `SPC w s`; the new group shows the same file),
+Close Editor Group (`C-k w` · `C-x 0` · `SPC w c`; the last group stays), Focus Group 1–3 (`C-1`–`C-3` · `C-x o` ·
+`SPC 1`–`SPC 3`; one past the last makes a group to the right), Move Editor into Next Group (`C-M-<right>` · palette ·
+`SPC w m`). Groups are numbered left to right, top to bottom. Diffs and logs (`diff-mode`, `log-view-mode`, magit's
+diff and log) open in the **other group** — the one you used last besides this one — never in a new split.
 
 ### Popups
 
