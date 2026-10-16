@@ -90,7 +90,7 @@
 (ert-deftest drgnx-rules/defaults-are-set-and-restored ()
   (let ((split-height-threshold 80) (split-width-threshold 160) (even-window-sizes 'width-only)
         (window-combination-resize nil) (switch-to-buffer-obey-display-actions nil)
-        (display-buffer-alist nil))
+        (resize-mini-windows 'grow-only) (window-sides-vertical nil) (display-buffer-alist nil))
     (drgnx-rules-mode 1)
     (unwind-protect
         (progn
@@ -99,12 +99,15 @@
           (should-not even-window-sizes)
           (should-not window-combination-resize)
           (should switch-to-buffer-obey-display-actions)
+          (should-not resize-mini-windows)
+          (should window-sides-vertical)
           (should (= 1 (length display-buffer-alist))))
       (drgnx-rules-mode -1))
     (should (= split-height-threshold 80))
     (should (= split-width-threshold 160))
     (should (eq even-window-sizes 'width-only))
     (should-not switch-to-buffer-obey-display-actions)
+    (should (eq resize-mini-windows 'grow-only))
     (should-not display-buffer-alist)))
 
 (ert-deftest drgnx-rules/delete-other-windows-keeps-the-dock ()

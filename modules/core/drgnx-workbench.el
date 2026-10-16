@@ -5,6 +5,9 @@
 ;;; Code:
 (declare-function drgnx-explorer-setup "drgnx-explorer")
 (declare-function drgnx-rules-mode "drgnx-rules")
+(declare-function drgnx-wb-toggle-panel "drgnx-area")
+(declare-function drgnx-wb-focus-panel "drgnx-area")
+(declare-function drgnx-wb-toggle-right-dock "drgnx-area")
 (declare-function drgnx-wb-show-unrouted "drgnx-rules")
 (declare-function drgnx-explorer-focus "drgnx-explorer")
 (declare-function drgnx-buffers-setup "drgnx-buffers")
@@ -23,6 +26,14 @@
     ;; Where buffers go.
     (require 'drgnx-rules)
     (drgnx-rules-mode 1)
+    ;; The bottom panel and the right dock.
+    (require 'drgnx-area)
+    (drgnx-command-define 'toggle-panel :category "View" :title "Toggle Panel" :scope 'window
+      :command #'drgnx-wb-toggle-panel :menu '("View") :doc "Show or hide the bottom panel (Terminal, Problems, Output, Results, Help)")
+    (drgnx-command-define 'focus-panel :category "View" :title "Focus Panel" :scope 'window
+      :command #'drgnx-wb-focus-panel :doc "Show the bottom panel and move focus to it")
+    (drgnx-command-define 'toggle-right-dock :category "View" :title "Toggle Right Dock" :scope 'window
+      :command #'drgnx-wb-toggle-right-dock :menu '("View") :doc "Show or hide the right dock")
     (drgnx-command-define 'wb-unrouted :category "View" :title "Show Unrouted Buffers" :scope 'window
       :command #'drgnx-wb-show-unrouted :doc "Buffers no placement rule matched (each one is a rule to add)")
     (drgnx-command-define 'toggle-sidebar :category "View" :title "Toggle Sidebar" :scope 'window

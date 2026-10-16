@@ -1,9 +1,10 @@
 # The workbench
 
 drgnx's window model, VS Code style: editor windows in the middle, a left dock with the **Buffers** panel (open
-files) above the **Explorer** (file tree). Nothing moves on its own: a click lands where you clicked, a row you
-selected stays selected, the dock keeps its width. The rest of the workbench (right dock, bottom panel, popups,
-editor groups, several windows) arrives in the next milestones (see [roadmap.md](roadmap.md), M3).
+files) above the **Explorer** (file tree), a **right dock** and a bottom **panel** (Terminal, Problems, Output,
+Results, Help) — every buffer goes to its place by one rules table. Nothing moves on its own: a click lands where
+you clicked, a row you selected stays selected, docks and panel keep their size. Popups, editor groups and several
+windows arrive in the next milestones (see [roadmap.md](roadmap.md), M3).
 
 Everything here is built on plain Emacs — no treemacs, no ibuffer — does what people use those for (and VS
 Code's Explorer and Open Editors; see [Compared](#compared-with-treemacs-ibuffer-and-vs-code)), and does every
@@ -98,6 +99,22 @@ alone unless a rule names them.
 |---|---|
 | `editor` | files, dired, unmatched buffers (logged) |
 | `current` | the selected window, unless it is a dock (then the editor) |
+| `panel` Problems | flymake / flycheck lists |
+| `panel` Output | `*Messages*`, `*Warnings*`, `*Backtrace*`, ert results |
+| `panel` Results | compilation, grep, occur, xref |
+| `panel` Terminal | shell, eshell, term, vterm, ielm, other comint buffers |
+| `panel` Help | help, apropos, Info, man, eldoc documentation |
+| `right` | agents, chat, viewers — tabs come with their modules (M7) |
+
+### The panel and the right dock
+
+The **panel** (Toggle Panel: ``C-` `` · palette · `SPC j`) sits under the editors; the **right dock** (Toggle
+Right Dock: `C-M-b` · palette · `SPC R`) runs the frame's full height, like the left one. Each is one window with a
+**tab row** at the top (click a tab to show it). Showing a buffer there never takes focus (Focus Panel does), and
+switching tabs swaps the buffer *in place*: the window stays, nothing around it moves, and each tab comes back
+scrolled where you left it. Both keep their pixel size across hiding and showing. Killing the buffer a tab shows
+leaves the tab empty — another buffer never slips into the panel. `C-x 1` keeps the docks and the panel. The echo
+area stays one line (`resize-mini-windows` is off), so a tall message never takes pixels from the panel.
 
 ## Compared with treemacs, ibuffer and VS Code
 

@@ -97,8 +97,11 @@ Later rules are tried first; a rule with the same MATCHER is replaced where it s
 
 (defconst drgnx-rules--defaults
   '((split-height-threshold . nil) (split-width-threshold . nil) (even-window-sizes . nil)
-    (window-combination-resize . nil) (switch-to-buffer-obey-display-actions . t))
-  "Window defaults: nothing splits or resizes on its own; `switch-to-buffer' follows the rules.")
+    (window-combination-resize . nil) (switch-to-buffer-obey-display-actions . t) (resize-mini-windows . nil)
+    (window-sides-vertical . t))
+  "Window defaults: nothing splits or resizes on its own (the echo area stays one line, so a tall
+message never takes pixels from the panel); `switch-to-buffer' follows the rules; the left and
+right docks run the frame's full height, the panel sits under the editors.")
 
 (defvar drgnx-rules--saved nil "The values `drgnx-rules-mode' replaced.")
 (defconst drgnx-rules--entry '(drgnx-rules--condition (drgnx-rules--display)))
