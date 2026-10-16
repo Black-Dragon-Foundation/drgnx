@@ -117,17 +117,24 @@ Returns the tip, or nil when CMD has no key."
 
 ;;;; which-key labels
 
+(defvar drgnx-surfaces--which-key-entries nil
+  "The `which-key-replacement-alist' entries drgnx added, removed again on the next refresh.")
+
 (defun drgnx-surfaces-apply-which-key ()
-  "Label every active key in which-key with its command's title."
+  "Label every active global key in which-key with its command's title, replacing the labels of
+the previous key setup.  Keys in mode keymaps are not labelled: which-key's keymap-based labels
+write into the keymap, which would make an unbound key a prefix (which-key shows the command)."
   (when (require 'which-key nil t)
+    (setq which-key-replacement-alist
+          (seq-remove (lambda (e) (memq e drgnx-surfaces--which-key-entries)) which-key-replacement-alist)
+          drgnx-surfaces--which-key-entries nil)
     (dolist (cmd (drgnx-commands-all))
       (pcase-dolist (`(,key . ,map) (drgnx-cmd-bound cmd))
-        (pcase-let ((`(,feature . ,mapsym) (drgnx-commands--keymap-spec map)))
-          (if (eq mapsym 'global-map)
-              (which-key-add-key-based-replacements key (drgnx-cmd-title cmd))
-            (let ((label (lambda () (which-key-add-keymap-based-replacements
-                                     (symbol-value mapsym) key (drgnx-cmd-title cmd)))))
-              (if feature (with-eval-after-load feature (funcall label)) (funcall label)))))))))
+        (when (eq (cdr (drgnx-commands--keymap-spec map)) 'global-map)
+          (let ((before which-key-replacement-alist))
+            (which-key-add-key-based-replacements key (drgnx-cmd-title cmd))
+            (dolist (e which-key-replacement-alist)
+              (unless (memq e before) (push e drgnx-surfaces--which-key-entries)))))))))
 
 ;;;; Cheat sheet (F1) and kb markdown
 

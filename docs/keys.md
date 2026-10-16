@@ -54,8 +54,9 @@ A conflict is one of:
 - **same key** — two commands want one key in one keymap;
 - **claim** — a layer binds a key another layer uses natively (e.g. VS Code's `C-o` Open File over Emacs'
   open-line, or over Vim's jump back);
-- **prefix** — a key turns a prefix into a command or the other way round (VS Code's `F1` replaces Emacs' `F1`
-  help prefix — `C-h` still works — and its `C-k` chords replace `kill-line`).
+- **prefix** — a key turns a prefix into a command or the other way round: against Emacs' own bindings (VS Code's
+  `F1` replaces Emacs' `F1` help prefix — `C-h` still works — and its `C-k` chords replace `kill-line`), against a
+  loaded mode keymap, or between two drgnx keys (`C-k` for one command, `C-k C-s` for another).
 
 The later layer wins (your `keys.eld` wins over all). Conflicts and problems are listed at the end of the key sheet
 (**Keyboard Shortcuts**), written to `~/.local/state/drgnx/keys-report.eld` on every start, and summarised by

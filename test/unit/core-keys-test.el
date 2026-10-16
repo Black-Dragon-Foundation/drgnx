@@ -251,3 +251,131 @@
            (should (string-search "keys.eld: no command nope" (buffer-string))))
          (kill-buffer "*drgnx keys*"))
       (delete-directory state t))))
+
+;;;; Review fixes
+
+(ert-deftest drgnx-keys/no-keys-eld-mistake-breaks-apply ()
+  ;; Startup (drgnx-init → drgnx-keys-apply) must survive any keys.eld; each mistake is a problem.
+  (dolist (form '((:bind (palette "C-c p")) (:layers foo) (:layers ((vscode . app))) (:bind foo)
+                  (:bind ((palette . "C-c p"))) (:bind ((palette "C-c p" :map "org-mode-map")))
+                  (:bind ((palette "C-c p" :map 5))) (:unbind palette) (:layers ((vscode apps))) (:layers ((vscode)))
+                  (:bind ((palette C-c))) (:bind ((palette))) (:bind ((palette "C-c p" :map (org-mode-map))))
+                  (:bind ((palette "C-c p" :mac 7)))))
+    (drgnx-keys-test--live
+     (drgnx-keys-test--write-user form)
+     (should (equal (list form :ok) (list form (and (drgnx-keys-apply) :ok))))
+     (should (equal (list form t) (list form (and (seq-find (lambda (p) (string-search "keys.eld" p))
+                                                             (plist-get drgnx-keys-last :problems))
+                                                   t))))
+     ;; The default stack still applies.
+     (should (equal (list form #'find-file) (list form (keymap-lookup global-map "C-o" nil t)))))))
+
+(ert-deftest drgnx-keys/an-internal-error-is-a-problem-not-a-crash ()
+  (drgnx-keys-test--live
+   (cl-letf (((symbol-function 'drgnx-keys-resolve) (lambda (&rest _) (error "Boom"))))
+     (should (drgnx-keys-apply))
+     (should (seq-find (lambda (p) (string-search "Boom" p)) (plist-get drgnx-keys-last :problems))))))
+
+(defun drgnx-keys-test--other () (interactive))
+
+(ert-deftest drgnx-keys/remapped-commands-do-not-confuse-switching ()
+  ;; A global remap of find-file (helm, counsel, ido setups) and a buffer-local remap of open-line.
+  (keymap-set global-map "<remap> <find-file>" #'drgnx-keys-test--other)
+  (unwind-protect
+      (drgnx-keys-test--live
+       (with-temp-buffer
+         (let ((local (make-sparse-keymap)))
+           (keymap-set local "<remap> <open-line>" #'drgnx-keys-test--other)
+           (keymap-set local "<remap> <kill-line>" #'drgnx-keys-test--other)
+           (use-local-map local)
+           (drgnx-keys-use '((vscode app editing window)))
+           (drgnx-keys-use '((emacs app editing window)))))
+       (should (eq (keymap-lookup global-map "C-o" nil t) #'open-line))
+       (should (eq (keymap-lookup global-map "C-k" nil t) #'kill-line)))
+    (keymap-unset global-map "<remap> <find-file>" t)))
+
+(ert-deftest drgnx-keys/modules-add-to-the-shipped-profiles ()
+  (drgnx-keys-test--live
+   (drgnx-command-define 'test-git :title "Git" :category "Test" :command #'drgnx-keys-test--other)
+   (drgnx-keys-define 'vscode '((test-git "C-c g")))
+   (drgnx-keys-define 'vim '((test-git "SPC g g")))
+   (drgnx-keys-apply)
+   (should (eq (keymap-lookup global-map "C-S-p" nil t) #'drgnx-palette))
+   (should (eq (keymap-lookup global-map "C-c g" nil t) #'drgnx-keys-test--other))
+   (let ((r (drgnx-keys-resolve :commands (drgnx-commands-all) :profiles drgnx-keys-profiles
+                                :layers '((vim app editing window)) :defaults drgnx-keys-test--defaults)))
+     (should (equal (plist-get (seq-find (lambda (b) (eq (plist-get b :id) 'test-git)) (plist-get r :bindings)) :map)
+                    '(evil . evil-normal-state-map))))))
+
+(ert-deftest drgnx-keys/prefix-clashes-between-drgnx-bindings ()
+  (let ((r (drgnx-keys-test--resolve '((vscode app editing window)) :user '(:bind ((line-numbers "C-k"))))))
+    (should (eq (plist-get (drgnx-keys-test--conflict r "C-k") :kind) 'prefix))
+    (should (equal (drgnx-keys-test--keys r 'line-numbers) '("C-k")))
+    (should (null (drgnx-keys-test--keys r 'keys-sheet)))
+    (should (null (drgnx-keys-test--keys r 'keyboard-profile))))
+  (let ((r (drgnx-keys-test--resolve '((vscode app editing window)) :user '(:bind ((line-numbers "C-o C-l"))))))
+    (should (eq (plist-get (drgnx-keys-test--conflict r "C-o C-l") :kind) 'prefix))
+    (should (null (drgnx-keys-test--keys r 'open-file)))))
+
+(defvar drgnx-keys-test-rv-map (let ((m (make-sparse-keymap))) (keymap-set m "C-c C-c" #'ignore) m))
+
+(ert-deftest drgnx-keys/prefix-checks-in-mode-keymaps ()
+  (drgnx-keys-test--live
+   (drgnx-keys-test--write-user '(:bind ((palette "C-c C-c x" :map drgnx-keys-test-rv-map))))
+   (unwind-protect
+       (progn
+         (drgnx-keys-apply)
+         (let ((c (drgnx-keys-test--conflict drgnx-keys-last "C-c C-c x")))
+           (should (eq (plist-get c :kind) 'prefix))
+           (should (eq (plist-get c :map) 'drgnx-keys-test-rv-map))))
+     (drgnx-keys--restore)
+     (should (eq (keymap-lookup drgnx-keys-test-rv-map "C-c C-c") #'ignore)))))
+
+(ert-deftest drgnx-keys/which-key-labels-follow-switches ()
+  (skip-unless (require 'which-key nil t))
+  (let ((which-key-replacement-alist which-key-replacement-alist)
+        (after-load-alist after-load-alist) (features features))
+    (defvar evil-normal-state-map)
+    (let ((evil-normal-state-map (make-sparse-keymap)))
+      (drgnx-keys-test--live
+       (drgnx-keys-use '((vim app editing window)))
+       (drgnx-keys-use '((vscode app editing window)))
+       (drgnx-keys-use '((emacs app editing window)))
+       (let ((titles (mapcar (lambda (e) (cdr-safe (cdr e))) which-key-replacement-alist)))
+         ;; Exactly the active labels: Open File… for C-x C-f, once, none left from VS Code's C-o.
+         (should (= 1 (seq-count (lambda (tt) (equal tt "Open File…")) titles)))
+         (should-not (seq-find (lambda (e) (and (equal (cdr-safe (cdr e)) "Open File…")
+                                                (string-match-p (or (car-safe (car e)) "\\`\\'") "C-o")))
+                               which-key-replacement-alist)))
+       ;; evil arriving later gets neither stale bindings nor stale labels.
+       (provide 'evil)
+       (should (null (keymap-lookup evil-normal-state-map "SPC")))))))
+
+(ert-deftest drgnx-keys/claims-are-against-emacs-not-drgnx ()
+  (drgnx-keys-test--live
+   (drgnx-keys-use '((emacs app editing window)))
+   (drgnx-keys-test--write-user '(:bind ((line-numbers "C-h C-k"))))
+   (drgnx-keys-apply)
+   (should-not (seq-find (lambda (c) (and (equal (plist-get c :key) "C-h C-k") (eq (plist-get c :kind) 'claim)))
+                         (plist-get drgnx-keys-last :conflicts)))))
+
+(ert-deftest drgnx-keys/an-empty-keys-eld-is-fine ()
+  (drgnx-keys-test--live
+   (make-directory (drgnx-user-dir) t)
+   (with-temp-file (drgnx-keys-file) (insert ";; my keys, later\n"))
+   (drgnx-keys-apply)
+   (should (null (plist-get drgnx-keys-last :problems)))
+   (drgnx-keys-choose-profile "Emacs")
+   (should (string-search ";; my keys, later" (with-temp-buffer (insert-file-contents (drgnx-keys-file)) (buffer-string))))
+   (should (equal (plist-get (drgnx-keys-read-user) :layers) '((emacs app editing window))))))
+
+(ert-deftest drgnx-keys/keyboard-profile-keeps-comments ()
+  (drgnx-keys-test--live
+   (make-directory (drgnx-user-dir) t)
+   (with-temp-file (drgnx-keys-file)
+     (insert ";; my keys\n(:layers ((vscode app editing window)) ; was VS Code\n :bind ((palette \"C-c p\")) ; palette on C-c p\n)\n"))
+   (drgnx-keys-choose-profile "Emacs")
+   (let ((text (with-temp-buffer (insert-file-contents (drgnx-keys-file)) (buffer-string))))
+     (should (string-search ";; my keys" text))
+     (should (string-search "; palette on C-c p" text)))
+   (should (equal (drgnx-keys-read-user) '(:layers ((emacs app editing window)) :bind ((palette "C-c p")))))))

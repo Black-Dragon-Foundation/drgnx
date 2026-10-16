@@ -26,13 +26,51 @@
 ;;;; Profiles
 
 (defun drgnx-keys--read-file (file)
-  "The first form in FILE, or nil with a problem recorded (never an error or a prompt)."
+  "The first form in FILE; nil if it holds only comments, or nil with a problem recorded if it
+cannot be read (never an error or a prompt)."
   (condition-case err
       (with-temp-buffer
         (insert-file-contents file)
-        (read (current-buffer)))
+        (set-syntax-table emacs-lisp-mode-syntax-table)   ; so `;' starts a comment
+        (goto-char (point-min))
+        (forward-comment (buffer-size))
+        (unless (eobp) (read (current-buffer))))
+    (end-of-file (push (format "%s: incomplete (a missing closing parenthesis?)" (abbreviate-file-name file))
+                       drgnx-keys-problems)
+                 nil)
     (error (push (format "%s: %s" (abbreviate-file-name file) (error-message-string err)) drgnx-keys-problems)
            nil)))
+
+(defun drgnx-keys--map-spec-p (m)
+  "Non-nil if M is a keymap spec: a keymap symbol or (FEATURE . KEYMAP-SYMBOL)."
+  (or (and (symbolp m) m (not (keywordp m)))
+      (and (consp m) (symbolp (car m)) (car m) (symbolp (cdr m)) (cdr m))))
+
+(defun drgnx-keys--entry-error (entry)
+  "Why ENTRY is not (ID KEY… [:map M] [:mac K…]) or (ID :none [REASON]); nil if it is."
+  (cond ((not (and (consp entry) (symbolp (car entry)) (proper-list-p entry))) "not a list (ID KEY…)")
+        ((eq (cadr entry) :none) nil)
+        (t (let ((rest (cdr entry)))
+             (while (stringp (car rest)) (pop rest))
+             (cond ((eq rest (cdr entry)) "no keys (write (ID :none \"reason\") for none)")
+                   ((or (cl-oddp (length rest))
+                        (not (seq-every-p (lambda (k) (memq k '(:map :mac))) (cl-loop for k in rest by #'cddr collect k))))
+                    (format "%S is not a key (keys are strings; only :map and :mac may follow them)" (car rest)))
+                   ((and (plist-member rest :map) (not (drgnx-keys--map-spec-p (plist-get rest :map))))
+                    (format ":map %S is not a keymap symbol or (FEATURE . KEYMAP)" (plist-get rest :map)))
+                   ((and (plist-member rest :mac)
+                         (not (seq-every-p #'stringp (ensure-list (plist-get rest :mac)))))
+                    (format ":mac %S is not a key or a list of keys" (plist-get rest :mac))))))))
+
+(defun drgnx-keys--layers-error (layers)
+  "Why LAYERS is not a list of (PROFILE SCOPE…) with known scopes; nil if it is."
+  (cond ((not (proper-list-p layers)) "must be a list of (PROFILE SCOPE…)")
+        ((seq-find (lambda (l) (not (and (consp l) (symbolp (car l)) (proper-list-p (cdr l)) (cdr l)))) layers)
+         (format "%S is not (PROFILE SCOPE…)" (seq-find (lambda (l) (not (and (consp l) (proper-list-p (cdr l)) (cdr l)))) layers)))
+        ((seq-find (lambda (s) (not (memq s drgnx-command-scopes))) (apply #'append (mapcar #'cdr layers)))
+         (format "unknown scope %s (scopes: %s)" (seq-find (lambda (s) (not (memq s drgnx-command-scopes)))
+                                                           (apply #'append (mapcar #'cdr layers)))
+                 (mapconcat #'symbol-name drgnx-command-scopes " ")))))
 
 (defun drgnx-keys-load-profiles (dir)
   "Profiles from DIR/*.eld, as an alist PROFILE → plist, in file-name order."
@@ -44,6 +82,7 @@
 
 (defun drgnx-keys-define (profile entries)
   "Add ENTRIES, in profile :bind form, to PROFILE (for modules); later entries for an id win."
+  (drgnx-keys--ensure-profiles)          ; modules run before the first apply
   (let ((spec (alist-get profile drgnx-keys-profiles)))
     (setf (alist-get profile drgnx-keys-profiles)
           (plist-put spec :bind (append (seq-remove (lambda (e) (assq (car e) entries)) (plist-get spec :bind))
@@ -68,51 +107,65 @@
                          (t keys))))
       (list :keys keys :map (or (plist-get rest :map) (plist-get spec :map))))))
 
-(defun drgnx-keys--default (defaults key)
-  "What KEY does in the DEFAULTS keymap: (claim . DESCRIPTION), (prefix . DESCRIPTION) or nil."
-  (let ((def (ignore-errors (keymap-lookup defaults key))))
+(defun drgnx-keys--lookup (map key)
+  "KEY in MAP, ignoring command remapping (which depends on the current buffer)."
+  (ignore-errors (keymap-lookup map key nil t)))
+
+(defun drgnx-keys--existing (map key)
+  "What KEY does in MAP: (claim . DESCRIPTION), (prefix . DESCRIPTION) or nil."
+  (let ((def (drgnx-keys--lookup map key)))
     (cond ((keymapp def) (cons 'prefix (format "the %s prefix" key)))
           ((numberp def)
-           (let* ((prefix (key-description (seq-take (key-parse key) def)))
-                  (cmd (keymap-lookup defaults prefix)))
-             (cons 'prefix (format "%s (%s)" cmd prefix))))
+           (let ((prefix (key-description (seq-take (key-parse key) def))))
+             (cons 'prefix (format "%s (%s)" (drgnx-keys--lookup map prefix) prefix))))
           ((and (symbolp def) def (commandp def) (not (memq def '(self-insert-command undefined ignore))))
            (cons 'claim (symbol-name def))))))
 
-(defun drgnx-keys--global-p (map)
-  (eq (cdr (drgnx-commands--keymap-spec map)) 'global-map))
+(defun drgnx-keys--prefix-of-p (a b)
+  "Non-nil if key A is a strict prefix of key B."
+  (let ((a (key-parse a)) (b (key-parse b)))
+    (and (< (length a) (length b)) (equal a (seq-take b (length a))))))
 
-(cl-defun drgnx-keys-resolve (&key commands profiles layers user platform defaults)
+(cl-defun drgnx-keys-resolve (&key commands profiles layers user platform defaults maps)
   "Resolve keys for COMMANDS (registry structs) → plist (:bindings :conflicts :problems).
 PROFILES: alist PROFILE → plist.  LAYERS: list of (PROFILE SCOPE…), later wins.  USER: the
 keys.eld plist (:bind :unbind), which wins over every layer.  PLATFORM: `macos' turns VS Code's
 C- into s-.  DEFAULTS: Emacs' own global keymap, for the emacs layer's claims and prefix checks.
+MAPS: a function MAPSYM → the loaded keymap or nil, for prefix checks in mode keymaps.
 A binding is a plist (:id :key :map :layer); a conflict is (:key :map :kind :winner :losers),
 KIND `same-key', `claim' (a key another layer uses natively) or `prefix'."
   (let ((cmds (make-hash-table :test #'eq)) (assign (make-hash-table :test #'eq))
         (rank 0) claims defaults-claim problems bindings conflicts)
     (dolist (c commands) (puthash (drgnx-cmd-id c) c cmds))
-    ;; Each command takes its keys from the last layer covering its scope.
-    (pcase-dolist (`(,profile . ,scopes) layers)
+    (cl-flet ((take (entry spec layer where)
+                (if-let* ((why (drgnx-keys--entry-error entry)))
+                    (push (format "%s: %S: %s" where entry why) problems)
+                  (let ((c (gethash (car entry) cmds)))
+                    (cond ((null c) (when (eq layer 'user)
+                                      (push (format "%s: no command %s (in :bind)" where (car entry)) problems)))
+                          (t (puthash (car entry) (append (list :layer layer :rank rank)
+                                                          (drgnx-keys--entry entry spec platform))
+                                      assign)))))))
+      ;; Each command takes its keys from the last layer covering its scope.
+      (if-let* ((why (drgnx-keys--layers-error layers)))
+          (push (format "key layers %S: %s" layers why) problems)
+        (pcase-dolist (`(,profile . ,scopes) layers)
+          (cl-incf rank)
+          (if-let* ((spec (alist-get profile profiles)))
+              (progn
+                (dolist (entry (plist-get spec :bind))
+                  (when (or (not (consp entry)) (not (gethash (car entry) cmds))
+                            (memq (drgnx-cmd-scope (gethash (car entry) cmds)) scopes))
+                    (take entry spec profile (format "key profile %s" profile))))
+                (pcase-dolist (`(,scope ,key ,desc) (plist-get spec :claims))
+                  (when (memq scope scopes) (push (list :key key :claim desc :layer profile :rank rank) claims)))
+                (when (and (plist-get spec :claims-defaults) (memq 'editing scopes))
+                  (setq defaults-claim (list :layer profile :rank rank))))
+            (push (format "key layer %s: no such profile (known: %s)" profile
+                          (mapconcat #'symbol-name (mapcar #'car profiles) ", "))
+                  problems))))
       (cl-incf rank)
-      (if-let* ((spec (alist-get profile profiles)))
-          (progn
-            (dolist (entry (plist-get spec :bind))
-              (when-let* ((c (gethash (car entry) cmds)))
-                (when (memq (drgnx-cmd-scope c) scopes)
-                  (puthash (car entry) (append (list :layer profile :rank rank) (drgnx-keys--entry entry spec platform))
-                           assign))))
-            (pcase-dolist (`(,scope ,key ,desc) (plist-get spec :claims))
-              (when (memq scope scopes) (push (list :key key :claim desc :layer profile :rank rank) claims)))
-            (when (and (plist-get spec :claims-defaults) (memq 'editing scopes))
-              (setq defaults-claim (list :layer profile :rank rank))))
-        (push (format "key layer %s: no such profile (known: %s)" profile (mapconcat #'symbol-name (mapcar #'car profiles) ", "))
-              problems)))
-    (cl-incf rank)
-    (dolist (entry (plist-get user :bind))
-      (if (gethash (car entry) cmds)
-          (puthash (car entry) (append (list :layer 'user :rank rank) (drgnx-keys--entry entry nil platform)) assign)
-        (push (format "keys.eld: no command %s (in :bind)" (car entry)) problems)))
+      (dolist (entry (plist-get user :bind)) (take entry nil 'user "keys.eld")))
     (dolist (id (plist-get user :unbind))
       (if (gethash id cmds) (puthash id (list :layer 'user :rank rank :keys nil) assign)
         (push (format "keys.eld: no command %s (in :unbind)" id) problems)))
@@ -126,49 +179,64 @@ KIND `same-key', `claim' (a key another layer uses natively) or `prefix'."
                     bindings)
             (push (format "%s: \"%s\" is not a valid key" (drgnx-cmd-id c) k) problems)))))
     (setq bindings (nreverse bindings))
-    ;; Two commands on one key in one keymap: the higher layer keeps it.
-    (let ((groups nil))
-      (dolist (b bindings)
-        (push b (alist-get (cons (plist-get b :key) (cdr (drgnx-commands--keymap-spec (plist-get b :map)))) groups
-                           nil nil #'equal)))
-      (pcase-dolist (`((,key . ,mapsym) . ,group) (reverse groups))
-        (when (cdr (delete-dups (mapcar (lambda (b) (plist-get b :id)) group)))
-          (let* ((group (reverse group))
-                 (winner (seq-reduce (lambda (w b) (if (> (plist-get b :rank) (plist-get w :rank)) b w)) group (car group)))
-                 (losers (remq winner group)))
-            (push (list :key key :map mapsym :kind 'same-key
-                        :winner (list :id (plist-get winner :id) :layer (plist-get winner :layer))
-                        :losers (mapcar (lambda (b) (list :id (plist-get b :id) :layer (plist-get b :layer))) losers))
-                  conflicts)
-            (setq bindings (seq-remove (lambda (b) (memq b losers)) bindings))))))
-    ;; Keys other layers use natively (claims), Emacs' defaults, and prefixes.
-    (dolist (b (copy-sequence bindings))
-      (let* ((key (plist-get b :key)) (rank (plist-get b :rank))
-             (rivals (seq-filter (lambda (cl) (and (equal (plist-get cl :key) key)
-                                                   (not (eq (plist-get cl :layer) (plist-get b :layer)))))
-                                 claims))
-             (kind (and rivals 'claim)))
-        (when (and (drgnx-keys--global-p (plist-get b :map)) defaults)
-          (pcase (drgnx-keys--default defaults key)
-            (`(prefix . ,desc)
-             (setq kind 'prefix)
-             (push (list :claim desc :layer (plist-get defaults-claim :layer) :rank (or (plist-get defaults-claim :rank) 0))
-                   rivals))
-            (`(claim . ,desc)
-             (when (and defaults-claim (not (equal desc (format "%s" (drgnx-cmd-command (gethash (plist-get b :id) cmds))))))
-               (setq kind (or kind 'claim))
-               (push (list :claim desc :layer (plist-get defaults-claim :layer) :rank (plist-get defaults-claim :rank))
-                     rivals)))))
-        (when rivals
-          (let* ((top (seq-reduce (lambda (w r) (if (> (plist-get r :rank) (plist-get w :rank)) r w)) rivals (car rivals)))
-                 (b-wins (>= rank (plist-get top :rank)))
-                 (me (list :id (plist-get b :id) :layer (plist-get b :layer)))
-                 (them (mapcar (lambda (r) (list :claim (plist-get r :claim) :layer (plist-get r :layer))) rivals)))
-            (push (list :key key :map (cdr (drgnx-commands--keymap-spec (plist-get b :map))) :kind kind
-                        :winner (if b-wins me (car (seq-filter (lambda (x) (equal (plist-get x :claim) (plist-get top :claim))) them)))
-                        :losers (if b-wins them (cons me (seq-remove (lambda (x) (equal (plist-get x :claim) (plist-get top :claim))) them))))
-                  conflicts)
-            (unless b-wins (setq bindings (remq b bindings)))))))
+    (cl-flet ((mapsym (b) (cdr (drgnx-commands--keymap-spec (plist-get b :map))))
+              (party (b) (list :id (plist-get b :id) :layer (plist-get b :layer))))
+      ;; Two commands on one key in one keymap: the higher layer keeps it.
+      (let ((groups nil))
+        (dolist (b bindings)
+          (push b (alist-get (cons (plist-get b :key) (mapsym b)) groups nil nil #'equal)))
+        (pcase-dolist (`((,key . ,map) . ,group) (reverse groups))
+          (when (cdr (delete-dups (mapcar (lambda (b) (plist-get b :id)) group)))
+            (let* ((group (reverse group))
+                   (winner (seq-reduce (lambda (w b) (if (> (plist-get b :rank) (plist-get w :rank)) b w)) group (car group)))
+                   (losers (remq winner group)))
+              (push (list :key key :map map :kind 'same-key :winner (party winner) :losers (mapcar #'party losers))
+                    conflicts)
+              (setq bindings (seq-remove (lambda (b) (memq b losers)) bindings))))))
+      ;; One drgnx key a prefix of another in the same keymap: the higher layer keeps its key.
+      (dolist (w (sort (copy-sequence bindings) (lambda (a b) (> (plist-get a :rank) (plist-get b :rank)))))
+        (when (memq w bindings)
+          (let ((losers (seq-filter (lambda (b) (and (not (eq b w)) (eq (mapsym b) (mapsym w))
+                                                     (or (drgnx-keys--prefix-of-p (plist-get b :key) (plist-get w :key))
+                                                         (drgnx-keys--prefix-of-p (plist-get w :key) (plist-get b :key)))))
+                                    bindings)))
+            (when losers
+              (push (list :key (plist-get w :key) :map (mapsym w) :kind 'prefix :winner (party w)
+                          :losers (mapcar #'party losers))
+                    conflicts)
+              (setq bindings (seq-remove (lambda (b) (memq b losers)) bindings))))))
+      ;; Keys other layers use natively (claims), Emacs' defaults, and prefixes in the target keymap.
+      (dolist (b (copy-sequence bindings))
+        (let* ((key (plist-get b :key)) (rank (plist-get b :rank))
+               (rivals (seq-filter (lambda (cl) (and (equal (plist-get cl :key) key)
+                                                     (not (eq (plist-get cl :layer) (plist-get b :layer)))))
+                                   claims))
+               (kind (and rivals 'claim))
+               (global (eq (mapsym b) 'global-map))
+               (target (if global defaults (and maps (funcall maps (mapsym b))))))
+          (when target
+            (pcase (drgnx-keys--existing target key)
+              (`(prefix . ,desc)
+               (setq kind 'prefix)
+               (push (list :claim desc :layer (and global (plist-get defaults-claim :layer))
+                           :rank (or (and global (plist-get defaults-claim :rank)) 0))
+                     rivals))
+              (`(claim . ,desc)
+               (when (and global defaults-claim
+                          (not (equal desc (format "%s" (drgnx-cmd-command (gethash (plist-get b :id) cmds))))))
+                 (setq kind (or kind 'claim))
+                 (push (list :claim desc :layer (plist-get defaults-claim :layer) :rank (plist-get defaults-claim :rank))
+                       rivals)))))
+          (when rivals
+            (let* ((top (seq-reduce (lambda (w r) (if (> (plist-get r :rank) (plist-get w :rank)) r w)) rivals (car rivals)))
+                   (b-wins (>= rank (plist-get top :rank)))
+                   (them (mapcar (lambda (r) (list :claim (plist-get r :claim) :layer (plist-get r :layer))) rivals))
+                   (top-party (seq-find (lambda (x) (equal (plist-get x :claim) (plist-get top :claim))) them)))
+              (push (list :key key :map (mapsym b) :kind kind
+                          :winner (if b-wins (party b) top-party)
+                          :losers (if b-wins them (cons (party b) (remq top-party them))))
+                    conflicts)
+              (unless b-wins (setq bindings (remq b bindings))))))))
     (list :bindings (mapcar (lambda (b) (list :id (plist-get b :id) :key (plist-get b :key)
                                               :map (plist-get b :map) :layer (plist-get b :layer)))
                             bindings)
@@ -207,18 +275,23 @@ KIND `same-key', `claim' (a key another layer uses natively) or `prefix'."
   "The user's keys.eld plist (:layers :bind :unbind), nil if absent; problems, never errors."
   (let ((file (drgnx-keys-file)))
     (when (file-exists-p file)
-      (let ((form (drgnx-keys--read-file file)))
+      (let ((form (drgnx-keys--read-file file)) (name (abbreviate-file-name file)))
         (cond ((null form) nil)
-              ((not (and (listp form) (keywordp (car form))))
-               (push (format "%s: not a plist like (:layers … :bind … :unbind …)" (abbreviate-file-name file))
-                     drgnx-keys-problems)
+              ((not (and (proper-list-p form) (cl-evenp (length form)) (keywordp (car form))))
+               (push (format "%s: not a plist like (:layers … :bind … :unbind …)" name) drgnx-keys-problems)
                nil)
-              ((not (seq-every-p (lambda (l) (and (consp l) (symbolp (car l)) (seq-every-p #'symbolp (cdr l))))
-                                 (plist-get form :layers)))
-               (push (format "%s: :layers must be a list of (PROFILE SCOPE…)" (abbreviate-file-name file))
-                     drgnx-keys-problems)
-               (plist-put (copy-sequence form) :layers nil))
-              (t form))))))
+              (t
+               (setq form (copy-sequence form))
+               (when-let* ((why (and (plist-member form :layers) (drgnx-keys--layers-error (plist-get form :layers)))))
+                 (push (format "%s: :layers %s — using the default stack" name why) drgnx-keys-problems)
+                 (setq form (plist-put form :layers nil)))
+               (unless (proper-list-p (plist-get form :bind))
+                 (push (format "%s: :bind must be a list of (ID KEY…)" name) drgnx-keys-problems)
+                 (setq form (plist-put form :bind nil)))
+               (unless (and (proper-list-p (plist-get form :unbind)) (seq-every-p #'symbolp (plist-get form :unbind)))
+                 (push (format "%s: :unbind must be a list of command ids" name) drgnx-keys-problems)
+                 (setq form (plist-put form :unbind nil)))
+               form))))))
 
 (defun drgnx-keys-platform () (if (eq system-type 'darwin) 'macos 'linux))
 
@@ -229,10 +302,10 @@ KIND `same-key', `claim' (a key another layer uses natively) or `prefix'."
 (defun drgnx-keys--bind (mapsym key def)
   "Bind KEY in MAPSYM's keymap, remembering what was there; a command blocking KEY as a prefix
 is lifted first (and remembered)."
-  (let* ((map (symbol-value mapsym)) (prev (keymap-lookup map key)))
+  (let* ((map (symbol-value mapsym)) (prev (drgnx-keys--lookup map key)))
     (when (numberp prev)
       (let ((prefix (key-description (seq-take (key-parse key) prev))))
-        (push (list mapsym prefix (keymap-lookup map prefix) :prefix) drgnx-keys--applied)
+        (push (list mapsym prefix (drgnx-keys--lookup map prefix) :prefix) drgnx-keys--applied)
         (keymap-unset map prefix t)
         (setq prev nil)))
     (push (list mapsym key prev def) drgnx-keys--applied)
@@ -242,7 +315,7 @@ is lifted first (and remembered)."
   "Undo every binding drgnx made, newest first — except one someone else changed since."
   (pcase-dolist (`(,mapsym ,key ,prev ,ours) drgnx-keys--applied)
     (when (and (boundp mapsym) (keymapp (symbol-value mapsym)))
-      (let* ((map (symbol-value mapsym)) (now (keymap-lookup map key)))
+      (let* ((map (symbol-value mapsym)) (now (drgnx-keys--lookup map key)))
         (when (if (eq ours :prefix) (or (null now) (equal now '(keymap))) (equal now ours))
           (drgnx-keys--set map key prev)))))
   (setq drgnx-keys--applied nil))
@@ -265,23 +338,32 @@ is lifted first (and remembered)."
   "Bind the keys of the active stack and keys.eld, replacing what drgnx bound before.
 Never prompts: problems are collected in `drgnx-keys-last'.  Returns the resolution."
   (setq drgnx-keys-problems nil)
-  (drgnx-keys--ensure-profiles)
-  (let* ((user (drgnx-keys-read-user))
-         (layers (or drgnx-keys--session-layers (plist-get user :layers) drgnx-keys-layers))
-         (r (drgnx-keys-resolve :commands (drgnx-commands-all) :profiles drgnx-keys-profiles :layers layers
-                                :user user :platform (drgnx-keys-platform) :defaults drgnx-keys--defaults)))
-    (drgnx-keys--restore)
-    (cl-incf drgnx-keys--generation)
-    (dolist (c (drgnx-commands-all)) (setf (drgnx-cmd-bound c) nil))
-    (dolist (b (plist-get r :bindings))
-      (let ((cmd (drgnx-commands-get (plist-get b :id))))
-        (setf (drgnx-cmd-bound cmd) (append (drgnx-cmd-bound cmd) (list (cons (plist-get b :key) (plist-get b :map)))))
-        (drgnx-keys--apply-binding b cmd drgnx-keys--generation)))
-    (setq drgnx-keys-last (append (list :layers layers
-                                        :problems (append (reverse drgnx-keys-problems) (plist-get r :problems)))
-                                  r))
-    (drgnx-keys--write-report)
-    drgnx-keys-last))
+  (condition-case err
+      (progn
+        (drgnx-keys--ensure-profiles)
+        ;; Restore first: resolution then sees Emacs' own bindings, not drgnx's previous ones.
+        (drgnx-keys--restore)
+        (cl-incf drgnx-keys--generation)
+        (let* ((user (drgnx-keys-read-user))
+               (layers (or drgnx-keys--session-layers (plist-get user :layers) drgnx-keys-layers))
+               (r (drgnx-keys-resolve :commands (drgnx-commands-all) :profiles drgnx-keys-profiles :layers layers
+                                      :user user :platform (drgnx-keys-platform) :defaults drgnx-keys--defaults
+                                      :maps (lambda (m) (and (boundp m) (keymapp (symbol-value m)) (symbol-value m))))))
+          (dolist (c (drgnx-commands-all)) (setf (drgnx-cmd-bound c) nil))
+          (dolist (b (plist-get r :bindings))
+            (let ((cmd (drgnx-commands-get (plist-get b :id))))
+              (setf (drgnx-cmd-bound cmd) (append (drgnx-cmd-bound cmd) (list (cons (plist-get b :key) (plist-get b :map)))))
+              (drgnx-keys--apply-binding b cmd drgnx-keys--generation)))
+          (setq drgnx-keys-last (append (list :layers layers
+                                              :problems (append (reverse drgnx-keys-problems) (plist-get r :problems)))
+                                        r))))
+    ;; Startup must go on whatever happens here (drgnx-init, a daemon): record it.
+    (error (setq drgnx-keys-last (list :layers nil :bindings nil :conflicts nil
+                                       :problems (append (reverse drgnx-keys-problems)
+                                                         (list (format "keys could not be applied: %s"
+                                                                       (error-message-string err))))))))
+  (drgnx-keys--write-report)
+  drgnx-keys-last)
 
 ;;;; Reporting
 
@@ -324,18 +406,41 @@ Never prompts: problems are collected in `drgnx-keys-last'.  Returns the resolut
     (when (fboundp 'drgnx-surfaces-refresh) (drgnx-surfaces-refresh))))
 
 (defun drgnx-keys--save-layers (layers)
-  "Write LAYERS into keys.eld, keeping everything else in it."
+  "Write LAYERS into keys.eld: only the :layers value changes; comments and layout stay."
   (let* ((file (drgnx-keys-file))
-         (old (and (file-exists-p file)
-                   (or (drgnx-keys--read-file file)
-                       (user-error "%s cannot be read — fix it first (it was not changed)" (abbreviate-file-name file)))))
-         (new (plist-put (copy-sequence old) :layers layers))
+         (value (prin1-to-string layers))
+         (text (with-temp-buffer
+                 (if (file-exists-p file)
+                     (insert-file-contents file)
+                   (insert ";; drgnx keys (docs/keys.md): :layers — profile stack, :bind — (ID KEY… [:map M]),\n"
+                           ";; :unbind — (ID…)\n"))
+                 (set-syntax-table emacs-lisp-mode-syntax-table)
+                 (goto-char (point-min))
+                 (forward-comment (buffer-size))
+                 (if (eobp)
+                     (insert "(:layers " value ")\n")
+                   (let ((start (point)) found)
+                     (unless (and (eq (char-after) ?\() (ignore-errors (scan-sexps start 1)))
+                       (user-error "%s cannot be read — fix it first (it was not changed)" (abbreviate-file-name file)))
+                     (down-list 1)
+                     (while (and (not found) (progn (forward-comment (buffer-size)) (not (eq (char-after) ?\)))))
+                       (let ((key (read (current-buffer))))
+                         (forward-comment (buffer-size))
+                         (let ((vbeg (point)))
+                           (forward-sexp 1)
+                           (when (eq key :layers)
+                             (delete-region vbeg (point))
+                             (goto-char vbeg)
+                             (insert value)
+                             (setq found t)))))
+                     (unless found
+                       (goto-char (1+ start))
+                       (insert ":layers " value "\n "))))
+                 (buffer-string)))
          (tmp (progn (make-directory (file-name-directory file) t)
                      (make-temp-file (expand-file-name ".keys-" (file-name-directory file))))))
     ;; A temp file renamed over keys.eld: writing it directly could ask about a stale buffer.
-    (with-temp-file tmp
-      (insert ";; drgnx keys (docs/keys.md): :layers — profile stack, :bind — (ID KEY… [:map M]), :unbind — (ID…)\n")
-      (pp new (current-buffer)))
+    (with-temp-file tmp (insert text))
     (set-file-modes tmp #o644)
     (rename-file tmp file t)))
 
