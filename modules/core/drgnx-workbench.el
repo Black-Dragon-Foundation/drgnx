@@ -7,6 +7,9 @@
 (declare-function drgnx-explorer-focus "drgnx-explorer")
 (declare-function drgnx-buffers-setup "drgnx-buffers")
 (declare-function drgnx-buffers-focus "drgnx-buffers")
+(declare-function drgnx-buffers-save-all "drgnx-buffers")
+(declare-function drgnx-buffers-close-saved "drgnx-buffers")
+(declare-function drgnx-buffers-close-all "drgnx-buffers")
 
 (drgnx-module-define 'core/workbench
   :doc "The workbench: the change bus, the left dock (Buffers, Explorer) and editor windows."
@@ -61,6 +64,12 @@
     ;; The Buffers panel (open editors), above the Explorer.
     (require 'drgnx-buffers)
     (drgnx-buffers-setup)
+    (drgnx-command-define 'save-all :category "File" :title "Save All" :command #'drgnx-buffers-save-all
+      :menu '("File") :doc "Save every buffer with unsaved changes")
+    (drgnx-command-define 'close-saved :category "View" :title "Close Saved Editors" :command #'drgnx-buffers-close-saved
+      :doc "Close every buffer without unsaved changes")
+    (drgnx-command-define 'close-all :category "View" :title "Close All Editors" :command #'drgnx-buffers-close-all
+      :doc "Close every open file (unsaved ones ask first)")
     (drgnx-command-define 'focus-buffers :category "View" :title "Focus Buffers" :scope 'window
       :command #'drgnx-buffers-focus :menu '("View") :doc "Show the sidebar and move focus to the open files")
     (let ((in-buffers (lambda () (derived-mode-p 'drgnx-buffers-mode))))
@@ -68,7 +77,9 @@
                      '((buffers-next "Next Row" drgnx-buffers-next "Move the selection down")
                        (buffers-previous "Previous Row" drgnx-buffers-previous "Move the selection up")
                        (buffers-open "Open" drgnx-buffers-open "Show the buffer in the editor")
-                       (buffers-close "Close" drgnx-buffers-close "Close the buffer")))
+                       (buffers-close "Close" drgnx-buffers-close "Close the buffer")
+                       (buffers-close-others "Close Others" drgnx-buffers-close-others "Close every buffer but this one")
+                       (buffers-filter "Filter…" drgnx-buffers-filter "Show only buffers whose names contain the text")))
         (drgnx-command-define id :category "Buffers" :title title :command fn :doc doc
           :map 'drgnx-buffers-mode-map :when in-buffers)))))
 

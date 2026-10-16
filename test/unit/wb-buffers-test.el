@@ -182,3 +182,42 @@
                (run-hooks 'post-command-hook)
                (should (timerp drgnx-signal--timer)))
       (when (timerp drgnx-signal--timer) (cancel-timer drgnx-signal--timer)))))
+
+;;;; Actions (M3b)
+
+(ert-deftest drgnx-buffers/save-all-and-close-saved ()
+  (drgnx-buffers-test--with dir
+    (let ((a (drgnx-buffers-test--open dir "a.txt")) (b (drgnx-buffers-test--open dir "b.txt"))
+          (c (drgnx-buffers-test--open dir "c.txt")))
+      (with-current-buffer a (insert "A"))
+      (with-current-buffer b (insert "B"))
+      (drgnx-buffers-close-saved)                    ; c only: a and b have unsaved changes
+      (should-not (buffer-live-p c))
+      (should (and (buffer-live-p a) (buffer-live-p b)))
+      (drgnx-buffers-save-all)
+      (should-not (buffer-modified-p a))
+      (should (string-prefix-p "A" (with-temp-buffer (insert-file-contents (expand-file-name "a.txt" dir)) (buffer-string)))))))
+
+(ert-deftest drgnx-buffers/close-others-and-close-all ()
+  (drgnx-buffers-test--with dir
+    (let ((a (drgnx-buffers-test--open dir "a.txt")) (b (drgnx-buffers-test--open dir "b.txt"))
+          (c (drgnx-buffers-test--open dir "c.txt")))
+      (with-current-buffer drgnx-buffers-buffer-name
+        (goto-char (drgnx-buffers--row-pos b))
+        (drgnx-buffers-close-others))
+      (should (buffer-live-p b))
+      (should-not (or (buffer-live-p a) (buffer-live-p c)))
+      (drgnx-buffers-close-all)
+      (should-not (buffer-live-p b)))))
+
+(ert-deftest drgnx-buffers/filter-by-name ()
+  (drgnx-buffers-test--with dir
+    (drgnx-buffers-test--open dir "alpha.txt")
+    (drgnx-buffers-test--open dir "beta.txt")
+    (drgnx-buffers-test--open dir "alphabet.md")
+    (drgnx-buffers--filter-apply "ALPHA")
+    (should (equal (drgnx-buffers-test--rows dir) '("alpha.txt" "alphabet.md")))
+    (drgnx-buffers-test--open dir "gamma.txt")       ; a new buffer while filtered: still filtered
+    (should (equal (drgnx-buffers-test--rows dir) '("alpha.txt" "alphabet.md")))
+    (drgnx-buffers-filter-clear)
+    (should (equal (drgnx-buffers-test--rows dir) '("alpha.txt" "beta.txt" "alphabet.md" "gamma.txt")))))

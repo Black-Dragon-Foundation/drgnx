@@ -30,6 +30,15 @@
 (defvar drgnx-buffers--signature nil "What the panel shows now; a refresh with the same one does nothing.")
 (defvar drgnx-buffers--renders 0 "How many times the panel was rendered (tests read it).")
 (defvar drgnx-buffers--active nil "Overlay on the active editor's row.")
+(defvar drgnx-buffers--filter nil "Show only buffers whose names contain this text (any case), or nil.")
+(defvar drgnx-buffers--title)          ; defined below, with its buttons
+
+(defun drgnx-buffers--shown ()
+  "The buffers on rows: all, in open order, or those the filter lets through."
+  (if drgnx-buffers--filter
+      (let ((q (downcase drgnx-buffers--filter)))
+        (seq-filter (lambda (b) (string-search q (downcase (buffer-name b)))) drgnx-buffers--order))
+    drgnx-buffers--order))
 
 (defun drgnx-buffers--update-order ()
   (let* ((live (seq-filter (lambda (b) (and (buffer-live-p b) (drgnx-signal-user-buffer-p b))) drgnx-buffers--order))
@@ -120,7 +129,8 @@ While a button is held in the panel, wait for the release: rows never move under
 
 (defun drgnx-buffers--render ()
   (drgnx-buffers--update-order)
-  (let ((sig (mapcar (lambda (b) (list b (buffer-name b) (buffer-modified-p b))) drgnx-buffers--order)))
+  (let ((sig (cons drgnx-buffers--filter
+                   (mapcar (lambda (b) (list b (buffer-name b) (buffer-modified-p b))) (drgnx-buffers--shown)))))
     (unless (equal sig drgnx-buffers--signature)
       (setq drgnx-buffers--signature sig)
       (cl-incf drgnx-buffers--renders)
@@ -135,8 +145,8 @@ While a button is held in the panel, wait for the release: rows never move under
           (erase-buffer)
           (let ((drgnx-buffers--dirs (make-hash-table :test #'equal)))
             ;; One insertion of plain text (faces: jit-lock, for the visible rows only).
-            (insert (mapconcat #'drgnx-buffers--row drgnx-buffers--order "")))
-          (setq drgnx-buffers--rows (vconcat drgnx-buffers--order))
+            (insert (mapconcat #'drgnx-buffers--row (drgnx-buffers--shown) "")))
+          (setq drgnx-buffers--rows (vconcat (drgnx-buffers--shown)))
           (goto-char (or (and at (drgnx-buffers--row-pos at)) (point-min)))
           (pcase-dolist (`(,w ,top ,pt) kept)
             (when-let* ((p (and top (drgnx-buffers--row-pos top)))) (set-window-start w p t))
@@ -173,6 +183,54 @@ While a button is held in the panel, wait for the release: rows never move under
 (defun drgnx-buffers-previous () "Previous row." (interactive) (forward-line -1))
 (defun drgnx-buffers-open () "Open the row's buffer in the editor." (interactive) (drgnx-buffers-open-at (point)))
 (defun drgnx-buffers-close () "Close the row's buffer." (interactive) (drgnx-buffers-close-at (pos-bol)))
+(defun drgnx-buffers--user-buffers () (seq-filter #'buffer-live-p drgnx-buffers--order))
+
+(defun drgnx-buffers-save-all () "Save every buffer with unsaved changes (no questions)."
+  (interactive) (save-some-buffers t) (drgnx-buffers--refresh))
+
+(defun drgnx-buffers-close-saved () "Close every buffer without unsaved changes."
+  (interactive)
+  (dolist (b (drgnx-buffers--user-buffers)) (unless (buffer-modified-p b) (kill-buffer b)))
+  (drgnx-buffers--refresh))
+
+(defun drgnx-buffers-close-others () "Close every buffer but the one of the row here."
+  (interactive)
+  (let ((keep (or (drgnx-buffers-buffer-at (point)) (user-error "No buffer here"))))
+    (dolist (b (drgnx-buffers--user-buffers)) (unless (eq b keep) (kill-buffer b))))
+  (drgnx-buffers--refresh))
+
+(defun drgnx-buffers-close-all () "Close every buffer in the panel (unsaved ones ask first)."
+  (interactive)
+  (dolist (b (drgnx-buffers--user-buffers)) (kill-buffer b))
+  (drgnx-buffers--refresh))
+
+(defun drgnx-buffers--filter-apply (text)
+  "Show only buffers whose names contain TEXT."
+  (setq drgnx-buffers--filter (and text (not (string-empty-p text)) text))
+  (drgnx-buffers--refresh)
+  (when-let* ((w (drgnx-wb-section-window 'buffers)))
+    (set-window-parameter w 'header-line-format
+                          (if drgnx-buffers--filter (format " BUFFERS — %s" drgnx-buffers--filter) drgnx-buffers--title))))
+
+(defun drgnx-buffers-filter-clear () "Show every buffer again." (interactive) (drgnx-buffers--filter-apply nil))
+
+(defun drgnx-buffers-filter ()
+  "Show only buffers whose names contain what you type (live); empty input shows all."
+  (interactive)
+  (minibuffer-with-setup-hook
+      (lambda () (add-hook 'after-change-functions
+                           (lambda (&rest _) (drgnx-buffers--filter-apply (minibuffer-contents-no-properties))) nil t))
+    (condition-case nil
+        (drgnx-buffers--filter-apply (read-string "Filter buffers: " drgnx-buffers--filter))
+      (quit (drgnx-buffers--filter-apply nil)))))
+
+(defun drgnx-buffers-mouse-close (event)
+  "Middle click: close that row's buffer (as VS Code)."
+  (interactive "e")
+  (let ((pos (posn-point (event-end event))))
+    (when (integer-or-marker-p pos)
+      (with-current-buffer (window-buffer (posn-window (event-end event))) (drgnx-buffers-close-at pos)))))
+
 (defun drgnx-buffers-focus () "Show the sidebar and focus the Buffers panel."
   (interactive) (drgnx-wb-focus-section 'buffers))
 
@@ -204,6 +262,7 @@ While a button is held in the panel, wait for the release: rows never move under
     (keymap-set map "<double-down-mouse-1>" #'ignore)
     (keymap-set map "<double-mouse-1>" #'drgnx-buffers-mouse-ignore)
     (keymap-set map "<drag-mouse-1>" #'drgnx-buffers-mouse-ignore)
+    (keymap-set map "<mouse-2>" #'drgnx-buffers-mouse-close)
     map)
   "Keys of the Buffers panel; keyboard keys come from the key profiles.")
 
@@ -216,9 +275,20 @@ While a button is held in the panel, wait for the release: rows never move under
   (hl-line-mode 1)
   (jit-lock-register #'drgnx-buffers--fontify))
 
+(defun drgnx-buffers--button (label command)
+  "LABEL as a header-line button running COMMAND."
+  (let ((map (make-sparse-keymap)))
+    (keymap-set map "<header-line> <mouse-1>" (lambda (_e) (interactive "e") (call-interactively command)))
+    (propertize label 'mouse-face 'highlight 'help-echo (documentation command) 'local-map map)))
+
+(defvar drgnx-buffers--title
+  (concat " BUFFERS   " (drgnx-buffers--button "save all" #'drgnx-buffers-save-all)
+          " · " (drgnx-buffers--button "close saved" #'drgnx-buffers-close-saved))
+  "The panel's title, with buttons.")
+
 (defun drgnx-buffers-setup ()
   "Put the Buffers panel in the dock (above the Explorer) and keep it current."
-  (drgnx-wb-define-section 'buffers :slot -1 :title " BUFFERS" :height 0.3 :buffer #'drgnx-buffers--buffer)
+  (drgnx-wb-define-section 'buffers :slot -1 :title drgnx-buffers--title :height 0.3 :buffer #'drgnx-buffers--buffer)
   (drgnx-signal-subscribe 'buffer-set-changed #'drgnx-buffers--refresh)
   (drgnx-signal-subscribe 'modified-changed #'drgnx-buffers--refresh)
   (drgnx-signal-subscribe 'editor-changed #'drgnx-buffers--mark-active)
