@@ -54,3 +54,13 @@
    (drgnx-command-define 'free :title "Free" :category "Able" :command #'drgnx-test--surf-cmd)
    (should (equal (drgnx-surfaces-key (drgnx-commands-get 'free)) ""))
    (should (string-search "|  | Free |" (drgnx-surfaces-markdown)))))
+
+(ert-deftest drgnx-surfaces/a-key-event-is-not-a-click ()
+  ;; C-h m describes context-menu-mode-map, which runs the menu's filter with the last key as the
+  ;; "click": point and the current buffer must stay (it errored in the buffer of the selected window).
+  (with-temp-buffer
+    (insert "some text")
+    (let ((here (current-buffer)) (pt (point)))
+      (drgnx-surfaces-context-menu (make-sparse-keymap) 'f11)
+      (should (eq (current-buffer) here))
+      (should (= (point) pt)))))

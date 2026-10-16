@@ -56,3 +56,20 @@ BORROWED: while open, no window moved either (the popup is in the panel's window
       (should (equal (plist-get r :panel) "*Help*"))
       (should (eq (plist-get r :minibuffer) t)))
     (drgnx-ui-measure sess (list (list :keys "C-g")))))
+
+(ert-deftest drgnx-live/completions-in-the-panel-are-filled-and-given-back ()
+  ;; The panel open: *Completions* borrows it, has candidates (its body-function ran), and leaving
+  ;; the minibuffer (which restores the window configuration) gives the panel back with its tab row.
+  (drgnx-live-popup--with sess
+    (drgnx-ui-measure sess (list (list :keys "C-`")))
+    (let ((before (plist-get (drgnx-ui-call sess drgnx-live-popup--edges) :edges))
+          (q "(drgnx-uitest--json (list :size (if (get-buffer \"*Completions*\") (buffer-size (get-buffer \"*Completions*\")) 0)
+                                         :active (if (drgnx-popup-active-p) t :false)
+                                         :tabs (if (window-parameter (drgnx-wb-area-window 'panel) 'header-line-format) t :false)))"))
+      (drgnx-ui-measure sess (list (list :keys "M-x") (list :type "describe-") (list :keys "TAB")))
+      (should (> (plist-get (drgnx-ui-call sess q) :size) 0))
+      (drgnx-ui-measure sess (list (list :keys "C-g")))
+      (let ((r (drgnx-ui-call sess q)))
+        (should (eq (plist-get r :active) :false))
+        (should (eq (plist-get r :tabs) t)))
+      (should (equal before (plist-get (drgnx-ui-call sess drgnx-live-popup--edges) :edges))))))

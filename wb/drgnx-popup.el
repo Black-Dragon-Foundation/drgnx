@@ -28,20 +28,28 @@
   "A `window-height' function: fit the buffer, at most FRACTION of the frame."
   (lambda (w) (fit-window-to-buffer w (max 1 (floor (* (or fraction 0.33) (frame-height (window-frame w))))) 1)))
 
-(defun drgnx-popup--show (buffer _alist props)
-  "The `popup' place: borrow the panel's window, else a temporary one; mark it as the lane."
-  (let ((lane (drgnx-popup--window)))
+(defun drgnx-popup--show (buffer alist props)
+  "The `popup' place: borrow the panel's window — unless you are typing in it — else a temporary
+one; mark it as the lane."
+  (let ((lane (drgnx-popup--window)) (panel (drgnx-wb-area-window 'panel)))
     (cond
-     (lane (set-window-buffer lane buffer))                       ; a popup replaces a popup
-     ((setq lane (drgnx-wb-area-window 'panel))
+     (lane (drgnx-wb-set-area-buffer lane buffer)                   ; a popup replaces a popup
+           (set-window-parameter lane 'drgnx-popup
+                                 (plist-put (window-parameter lane 'drgnx-popup) :popup buffer)))
+     ((and panel (not (eq panel (selected-window))))
+      (setq lane panel)
       (set-window-parameter lane 'drgnx-popup
-                            (list :borrowed t :buffer (window-buffer lane) :start (window-start lane)
+                            (list :borrowed t :popup buffer :buffer (window-buffer lane) :start (window-start lane)
                                   :point (window-point lane) :height (window-pixel-height lane)
                                   :header (window-parameter lane 'header-line-format)
                                   :delete (window-parameter lane 'delete-window)
                                   :prev (window-prev-buffers lane)))
+      ;; A restored window configuration (leaving the minibuffer) puts the panel's buffer back
+      ;; without ending the popup: its buffer tells us.
+      (with-current-buffer (window-buffer lane)
+        (add-hook 'window-buffer-change-functions #'drgnx-popup--check-window nil t))
       (set-window-parameter lane 'header-line-format nil)
-      (set-window-buffer lane buffer))
+      (drgnx-wb-set-area-buffer lane buffer))
      (t
       (setq lane (let ((drgnx-rules--placing t))
                    (display-buffer-in-side-window
@@ -49,23 +57,29 @@
                              (window-height . ,(drgnx-popup--height (plist-get props :height)))
                              (window-parameters . ((drgnx-role . popup) (no-delete-other-windows . t)
                                                    (no-other-window . t)))))))
-      (set-window-parameter lane 'drgnx-popup (list :borrowed nil))))
+      (set-window-parameter lane 'drgnx-popup (list :borrowed nil :popup buffer))))
     ;; However the package ends it, it comes here: `delete-window' calls our function, and
     ;; `quit-window' / `bury-buffer' delete the window (no earlier buffers to go back to).
     (set-window-prev-buffers lane nil)
     (set-window-parameter lane 'delete-window #'drgnx-popup--end)
     (set-window-parameter lane 'quit-restore (list 'window 'window (selected-window) buffer))
     (with-current-buffer buffer (add-hook 'kill-buffer-hook #'drgnx-popup--killed nil t))
+    (drgnx-wb-run-body-function lane alist)
     lane))
 
 (defun drgnx-popup--end (lane)
   "End the popup in LANE: give the panel back exactly, or delete the temporary window."
   (let ((saved (window-parameter lane 'drgnx-popup)))
     (dolist (p '(drgnx-popup delete-window quit-restore)) (set-window-parameter lane p nil))
+    (when (buffer-live-p (plist-get saved :buffer))
+      (with-current-buffer (plist-get saved :buffer)
+        (remove-hook 'window-buffer-change-functions #'drgnx-popup--check-window t)))
     (if (not (plist-get saved :borrowed))
         (delete-window lane)
       (let ((b (plist-get saved :buffer)))
-        (set-window-buffer lane (if (buffer-live-p b) b (drgnx-area--placeholder 'panel (drgnx-wb-area-tab 'panel))))
+        (drgnx-wb-set-area-buffer
+         lane (if (buffer-live-p b) b
+                (with-selected-frame (window-frame lane) (drgnx-area--placeholder 'panel (drgnx-wb-area-tab 'panel)))))
         (when (buffer-live-p b)
           (set-window-start lane (plist-get saved :start) t)
           (set-window-point lane (plist-get saved :point))))
@@ -76,6 +90,18 @@
         (unless (zerop delta)
           (let ((window-resize-pixelwise t)) (ignore-errors (window-resize lane delta nil nil t))))))
     nil))
+
+(defun drgnx-popup--check-window (window)
+  "WINDOW's buffer changed: if it is a lane no longer showing its popup, the popup is over (a
+restored window configuration put the panel back) — finish ending it."
+  (let ((saved (window-parameter window 'drgnx-popup)))
+    (when (and saved (not (eq (window-buffer window) (plist-get saved :popup))))
+      (drgnx-popup--end window))))
+
+(defun drgnx-popup-check ()
+  "End every popup whose lane no longer shows it."
+  (dolist (f (frame-list))
+    (dolist (w (window-list f 'nomini)) (drgnx-popup--check-window w))))
 
 (defun drgnx-popup--killed ()
   "The current buffer is being killed: end the popup showing it."

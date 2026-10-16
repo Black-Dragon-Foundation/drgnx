@@ -31,11 +31,11 @@
   "Names the Explorer never shows (a regexp)."
   :type 'regexp)
 
-(defface drgnx-explorer-root '((t :inherit bold)) "The root rows.")
-(defface drgnx-explorer-directory '((t :inherit default)) "Folder names.")
-(defface drgnx-explorer-file '((t :inherit default)) "File names.")
-(defface drgnx-explorer-guide '((t :inherit shadow)) "Indent guides and chevrons.")
-(defface drgnx-explorer-selected '((t :inherit region)) "Rows selected together (multi-select).")
+(defface drgnx-explorer-root '((t :inherit bold)) "The root rows." :group 'drgnx)
+(defface drgnx-explorer-directory '((t :inherit default)) "Folder names." :group 'drgnx)
+(defface drgnx-explorer-file '((t :inherit default)) "File names." :group 'drgnx)
+(defface drgnx-explorer-guide '((t :inherit shadow)) "Indent guides and chevrons." :group 'drgnx)
+(defface drgnx-explorer-selected '((t :inherit region)) "Rows selected together (multi-select)." :group 'drgnx)
 
 (defconst drgnx-explorer-buffer-name "*drgnx explorer*")
 

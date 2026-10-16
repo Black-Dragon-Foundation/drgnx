@@ -126,10 +126,50 @@
    (let ((editor (car (drgnx-rules-test--editors))) (f (drgnx-rules-test--file "notes.md")))
      (setq drgnx-signal--editor-window editor)
      (should (eq (display-buffer f) editor))
-     (dolist (name '("*Ibuffer*" "*Buffer List*" "*Customize Group: Editing*" "*Abbrevs*"))
+     (dolist (name (quote ("*Ibuffer*" "*Buffer List*" "*Customize Group: Editing*" "*Abbrevs*")))
        (let ((b (get-buffer-create name)))               ; fundamental-mode when first displayed
          (should (eq (display-buffer b) editor))
          (kill-buffer b)))
      (should-not drgnx-wb-unrouted)
      (kill-buffer f))))
 
+
+(ert-deftest drgnx-rules/explicit-frame-and-no-window-actions-win ()
+  ;; I3: C-x 5 b, `display-buffer-no-window': the caller's action is honoured.
+  (drgnx-rules-test--with
+   (let ((n (length (window-list nil 'nomini))))
+     (should-not (display-buffer (get-buffer-create "*t1*") '(display-buffer-no-window (allow-no-window . t))))
+     (should (= n (length (window-list nil 'nomini)))))
+   (should-not (drgnx-rules--condition "*t1*" '(display-buffer-pop-up-frame)))
+   (should-not (drgnx-rules--condition "*t1*" '((display-buffer-use-some-frame))))
+   (should (drgnx-rules--condition "*t1*" '(display-buffer-same-window)))))
+
+(ert-deftest drgnx-rules/inhibit-same-window-picks-another-editor ()
+  ;; I3: C-x 4 b with two editors shows in the other one; with one editor, in it (never a split).
+  (drgnx-rules-test--with
+   (let* ((e1 (car (drgnx-rules-test--editors))) (e2 (split-window e1 nil 'right)))
+     (select-window e1)
+     (should (eq (display-buffer (get-buffer-create "*t1*") '(nil (inhibit-same-window . t))) e2))
+     (delete-window e2)
+     (should (eq (display-buffer (get-buffer-create "*t2*") '(nil (inhibit-same-window . t))) e1)))))
+
+(ert-deftest drgnx-rules/a-dedicated-editor-is-left-alone ()
+  ;; I8: C-x w d locks a window.
+  (drgnx-rules-test--with
+   (let* ((e1 (car (drgnx-rules-test--editors))) (e2 (split-window e1 nil 'right)) (b (drgnx-rules-test--file "d.txt")))
+     (set-window-dedicated-p e1 t)
+     (select-window e1)
+     (should (eq (display-buffer b) e2))
+     (should (eq (window-dedicated-p e1) t))
+     (set-window-dedicated-p e1 nil)
+     (kill-buffer b))))
+
+(ert-deftest drgnx-rules/the-minibuffer-may-grow-while-reading ()
+  ;; I12: the echo area stays one line, but icomplete-vertical / fido-vertical need room.
+  (drgnx-rules-test--with
+   (should (memq #'drgnx-rules--minibuffer-setup minibuffer-setup-hook))
+   (with-temp-buffer
+     (run-hooks 'minibuffer-setup-hook)
+     (should (eq resize-mini-windows 'grow-only)))
+   (should-not resize-mini-windows))
+  (should-not (memq #'drgnx-rules--minibuffer-setup minibuffer-setup-hook)))

@@ -19,10 +19,10 @@
 (require 'drgnx-wb)
 (require 'drgnx-git)
 
-(defface drgnx-buffers-close '((t :inherit shadow)) "The × of each row.")
-(defface drgnx-buffers-modified '((t :inherit warning)) "The ● of a modified buffer.")
-(defface drgnx-buffers-dir '((t :inherit shadow)) "The folder after each name.")
-(defface drgnx-buffers-active '((t :inherit bold)) "The row of the buffer shown in the active editor.")
+(defface drgnx-buffers-close '((t :inherit shadow)) "The × of each row." :group 'drgnx)
+(defface drgnx-buffers-modified '((t :inherit warning)) "The ● of a modified buffer." :group 'drgnx)
+(defface drgnx-buffers-dir '((t :inherit shadow)) "The folder after each name." :group 'drgnx)
+(defface drgnx-buffers-active '((t :inherit bold)) "The row of the buffer shown in the active editor." :group 'drgnx)
 
 (defconst drgnx-buffers-buffer-name "*drgnx buffers*")
 

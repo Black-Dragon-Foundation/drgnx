@@ -52,15 +52,31 @@ Later rules are tried first; a rule with the same MATCHER is replaced where it s
          (buffer (get-buffer name)))
     (cdr (seq-find (lambda (r) (drgnx-rules--match-p (car r) name buffer action)) drgnx-rules--table))))
 
+(defconst drgnx-rules--explicit-actions
+  '(display-buffer-pop-up-frame display-buffer-use-some-frame display-buffer-no-window
+    display-buffer-in-child-frame)
+  "Actions a caller only names on purpose (C-x 5 b, no window wanted): they win over the rules.")
+
+(defun drgnx-rules--explicit-p (action)
+  (seq-some (lambda (f) (memq f drgnx-rules--explicit-actions)) (ensure-list (car-safe action))))
+
 (defun drgnx-rules--condition (name action)
-  "Our `display-buffer-alist' condition: a rule matches, or the buffer is not internal."
-  (or (not (drgnx-rules--internal-p name)) (drgnx-wb-rule-for name action)))
+  "Our `display-buffer-alist' condition: a rule matches, or the buffer is not internal — unless
+the caller asked for a frame or for no window."
+  (and (not (drgnx-rules--explicit-p action))
+       (or (not (drgnx-rules--internal-p name)) (drgnx-wb-rule-for name action))))
 
 (defun drgnx-rules--log (buffer)
   (push (list :buffer (buffer-name buffer) :mode (buffer-local-value 'major-mode buffer) :time (float-time))
         drgnx-wb-unrouted)
   (when (> (length drgnx-wb-unrouted) drgnx-rules--unrouted-max)
     (setq drgnx-wb-unrouted (seq-take drgnx-wb-unrouted drgnx-rules--unrouted-max))))
+
+(defun drgnx-wb-run-body-function (window alist)
+  "Run ALIST's `body-function' on WINDOW, as `window--display-buffer' does — a place that shows a
+buffer itself calls this (*Completions* and *Process List* are filled by it)."
+  (when-let* ((fn (cdr (assq 'body-function alist))) ((functionp fn)))
+    (let ((inhibit-read-only t) (inhibit-modification-hooks t)) (funcall fn window))))
 
 (defvar drgnx-rules--placing nil
   "Non-nil while a place shows a buffer: its own `display-buffer-in-side-window' calls are meant.")
@@ -83,28 +99,49 @@ the panel keep their size (finder balances the frame)."
 
 (defun drgnx-rules--side-window (orig buffer alist)
   "Around `display-buffer-in-side-window': a package calling it directly (which-key does) for a
-buffer a rule places goes to that place — it would otherwise take over the panel's slot."
-  (if (and (not drgnx-rules--placing) (drgnx-wb-rule-for buffer (cons nil alist)))
-      (drgnx-rules--display buffer alist)
-    (funcall orig buffer alist)))
+buffer a rule places goes to that place; any other buffer gets a slot of its own, so it never
+takes over a dock's or the panel's window (Emacs reuses a same-slot side window)."
+  (cond
+   (drgnx-rules--placing (funcall orig buffer alist))
+   ((drgnx-wb-rule-for buffer (cons nil alist)) (drgnx-rules--display buffer alist))
+   (t
+    (let* ((side (or (cdr (assq 'side alist)) 'bottom))
+           (ours (seq-filter (lambda (w) (and (eq (window-parameter w 'window-side) side)
+                                              (window-parameter w 'drgnx-role)))
+                             (window-list nil 'nomini)))
+           (slot (or (cdr (assq 'slot alist)) 0)))
+      (when (seq-some (lambda (w) (eql (window-parameter w 'window-slot) slot)) ours)
+        (setq alist (cons (cons 'slot (1+ (apply #'max (mapcar (lambda (w) (or (window-parameter w 'window-slot) 0)) ours))))
+                          alist)))
+      (funcall orig buffer alist)))))
 
 ;;;; Places: editor, current
 
-(defun drgnx-rules--editor-window ()
-  "The selected window if it is an editor, else the editor used last."
-  (if (drgnx-signal-editor-window-p (selected-window)) (selected-window) (drgnx-wb-editor-window)))
+(defun drgnx-rules--free-p (w)
+  "W is an editor window a buffer may be shown in (not one the user locked with C-x w d)."
+  (and (drgnx-signal-editor-window-p w) (not (window-dedicated-p w))))
+
+(defun drgnx-rules--editor-window (alist)
+  "The selected window if it is a free editor, else the editor used last, else any free editor —
+not the selected one when ALIST says `inhibit-same-window' and another exists."
+  (let* ((avoid (and (cdr (assq 'inhibit-same-window alist)) (selected-window)))
+         (ok (lambda (w) (and w (drgnx-rules--free-p w) (not (eq w avoid))))))
+    (or (seq-find ok (list (selected-window) (drgnx-wb-editor-window)))
+        (seq-find ok (window-list nil 'nomini))
+        (and avoid (drgnx-rules--free-p avoid) avoid))))     ; one editor: it (never a split)
 
 (defun drgnx-rules--editor (buffer alist _props)
-  "A window already showing BUFFER in the editor area, else the editor used last; never a split."
+  "A window already showing BUFFER in the editor area, else the editor used last; never a split.
+Nil when every editor is locked (C-x w d): Emacs' own actions decide then."
   (let ((w (or (seq-find (lambda (w) (and (eq (window-buffer w) buffer) (drgnx-signal-editor-window-p w)))
                          (window-list nil 'nomini))
-               (drgnx-rules--editor-window))))
+               (drgnx-rules--editor-window alist))))
     (when w (window--display-buffer buffer w 'reuse alist))))
 
 (defun drgnx-rules--current (buffer alist props)
   "The selected window, unless it is a dock or dedicated (then the editor)."
   (let ((w (selected-window)))
-    (if (and (drgnx-signal-editor-window-p w) (not (window-dedicated-p w)))
+    (if (drgnx-rules--free-p w)
         (window--display-buffer buffer w 'reuse alist)
       (drgnx-rules--editor buffer alist props))))
 
@@ -122,6 +159,10 @@ line (a tall message never takes pixels from the panel); `switch-to-buffer' foll
 left and right docks run the frame's full height, the panel sits under the editors.")
 
 (defvar drgnx-rules--saved nil "The values `drgnx-rules-mode' replaced.")
+
+(defun drgnx-rules--minibuffer-setup ()
+  "While reading, the minibuffer may grow (icomplete-vertical, fido-vertical); the echo area may not."
+  (setq-local resize-mini-windows 'grow-only))
 (defconst drgnx-rules--entry '(drgnx-rules--condition (drgnx-rules--display)))
 
 (define-minor-mode drgnx-rules-mode
@@ -134,9 +175,11 @@ left and right docks run the frame's full height, the panel sits under the edito
         (pcase-dolist (`(,var . ,val) drgnx-rules--defaults) (set var val))
         (setq display-buffer-alist (append (remove drgnx-rules--entry display-buffer-alist) (list drgnx-rules--entry)))
         (advice-add 'display-buffer-in-side-window :around #'drgnx-rules--side-window)
-        (advice-add 'balance-windows :around #'drgnx-rules--balance))
+        (advice-add 'balance-windows :around #'drgnx-rules--balance)
+        (add-hook 'minibuffer-setup-hook #'drgnx-rules--minibuffer-setup))
     (advice-remove 'display-buffer-in-side-window #'drgnx-rules--side-window)
     (advice-remove 'balance-windows #'drgnx-rules--balance)
+    (remove-hook 'minibuffer-setup-hook #'drgnx-rules--minibuffer-setup)
     (setq display-buffer-alist (remove drgnx-rules--entry display-buffer-alist))
     (pcase-dolist (`(,var . ,val) drgnx-rules--saved) (set var val))
     (setq drgnx-rules--saved nil)))
@@ -159,7 +202,7 @@ left and right docks run the frame's full height, the panel sits under the edito
 ;; Names too: several are displayed before their mode is set.
 (drgnx-wb-place (lambda (name _action) (buffer-file-name (get-buffer name))) 'editor)
 (drgnx-wb-place '(dired-mode Buffer-menu-mode ibuffer-mode Custom-mode proced-mode edit-abbrevs-mode
-                  bookmark-bmenu-mode tabulated-list-mode)
+                  bookmark-bmenu-mode tabulated-list-mode command-history-mode)
                 'editor)
 (drgnx-wb-place "\\`\\*\\(Ibuffer\\|Buffer List\\|Customize.*\\|Proced\\|Abbrevs\\|Bookmark List\\)\\*\\'" 'editor)
 

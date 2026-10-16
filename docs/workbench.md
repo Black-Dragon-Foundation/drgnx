@@ -84,8 +84,10 @@ used last; never a new split, never a dock. Emacs' own window defaults are set s
 its own (`split-height-threshold` and `split-width-threshold` nil, `even-window-sizes` nil,
 `window-combination-resize` nil, `switch-to-buffer-obey-display-actions` t); `C-x 1` keeps the docks.
 
-The table is one entry at the **end** of `display-buffer-alist`, so your own entries — and explicit actions such as
-`display-buffer-overriding-action` — still win. Add or change a rule with `drgnx-wb-place`:
+The table is one entry at the **end** of `display-buffer-alist`, so your own entries and
+`display-buffer-overriding-action` still win, and so does a caller that asks for a frame or for no window (`C-x 5 b`,
+`display-buffer-no-window`). `C-x 4 b` shows the buffer in another editor when there is one; a window you locked with
+`C-x w d` is left alone. Add or change a rule with `drgnx-wb-place`:
 
 ```elisp
 (drgnx-wb-place 'my-log-mode 'editor)                 ; a major mode (derived modes too)
@@ -112,7 +114,8 @@ alone unless a rule names them.
 
 Short-lived buffers — a transient menu, which-key's hints, `*Completions*`, the calendar — show in one **popup
 lane** and leave no trace. With the panel open, the popup borrows the panel's window: nothing around it moves, the
-popup is not resized (longer content scrolls), and when it ends the panel's buffer, scroll, point, tab row and pixel
+popup is not resized (longer content scrolls) — unless you are typing in the panel (a terminal): then the popup gets
+a window beside it, so your input stays where it is. When it ends the panel's buffer, scroll, point, tab row and pixel
 height come back exactly. With the panel hidden, the popup gets a window under the editors that is deleted when it
 ends, giving every pixel back. However a package ends its popup — `delete-window`, `quit-window`, `bury-buffer`,
 killing the buffer — the lane notices. A package that calls `display-buffer-in-side-window` directly (which-key does)
@@ -127,7 +130,8 @@ switching tabs swaps the buffer *in place*: the window stays, nothing around it 
 scrolled where you left it. Both keep their pixel size across hiding and showing. Killing the buffer a tab shows
 leaves the tab empty — another buffer never slips into the panel. `C-x 1` keeps the docks and the panel; `C-x 0` in
 the panel hides it (size and tabs kept). The echo
-area stays one line (`resize-mini-windows` is off), so a tall message never takes pixels from the panel.
+area stays one line (`resize-mini-windows` is off), so a tall message never takes pixels from the panel; while you
+type in the minibuffer it may grow (icomplete-vertical, fido-vertical).
 
 ## Compared with treemacs, ibuffer and VS Code
 

@@ -17,7 +17,12 @@
              :root (window-pixel-height (frame-root-window))
              :body (window-body-height (drgnx-wb-editor-window) t)
              :unrouted (vconcat (mapcar (lambda (u) (format \"%s (%s)\" (plist-get u :buffer) (plist-get u :mode))) drgnx-wb-unrouted))
-             :guard (length drgnx-jank-guard-log))))"
+             :guard (length drgnx-jank-guard-log)
+             :editor-ok (with-current-buffer (window-buffer (drgnx-wb-editor-window))
+                          (if (or buffer-file-name
+                                  (derived-mode-p 'dired-mode 'Buffer-menu-mode 'ibuffer-mode 'Custom-mode 'proced-mode
+                                                  'edit-abbrevs-mode 'bookmark-bmenu-mode 'command-history-mode 'lisp-interaction-mode))
+                              t (format \"%s (%s)\" (buffer-name) major-mode))))))"
   "The layout facts the invariants are about.")
 
 (defmacro drgnx-inv--with (sess &rest body)
@@ -130,18 +135,32 @@ settled within 250 ms."
     (drgnx-inv--with sess
       (drgnx-ui-measure sess (list (list :keys "C-b") (list :keys "C-`") (list :keys "C-M-b")))
       (drgnx-ui-call sess (format "(progn (setq drgnx-inv--forms '%S)
-                                          (keymap-global-set \"<f11>\" (lambda () (interactive) (eval (pop drgnx-inv--forms) t)))
+                                          (setq drgnx-inv--errors nil)
+                                          (keymap-global-set \"<f11>\" (lambda () (interactive)
+                                            (let ((form (pop drgnx-inv--forms)))
+                                              (condition-case err (eval form t)
+                                                (error (push (format \"%%S: %%S\" form err) drgnx-inv--errors))))))
                                           (drgnx-uitest--json (list :ok t)))"
                                   forms))
       (let ((first (drgnx-inv--probe sess)) bad)
         (dolist (form forms)
           (let* ((r (drgnx-ui-measure sess (list (list :keys "<f11>"))))
-                 (after (drgnx-inv--probe sess)))
+                 (after (progn
+                          ;; A popup (the calendar) stays until dismissed: dismiss it, as a user would;
+                          ;; it must leave no trace (I5).
+                          (drgnx-ui-call sess "(progn (when (drgnx-popup-active-p) (delete-window (drgnx-popup--window)))
+                                                      (drgnx-uitest--json (list :ok t)))")
+                          (drgnx-inv--probe sess))))
             (unless (and (equal (plist-get after :geometry) (plist-get first :geometry))
                          (= (plist-get after :frames) (plist-get first :frames))
                          (= (plist-get after :editors) 1)
+                         (eq (plist-get after :editor-ok) t)        ; only files and their kind in the editor
                          (= 0 (plist-get r :guard_violations)))
-              (push (list form :geometry (plist-get after :geometry) :guard (plist-get r :guard)) bad))))
+              (push (list form :geometry (plist-get after :geometry) :editor (plist-get after :editor-ok)
+                          :guard (plist-get r :guard))
+                    bad))))
         (should-not bad)
+        (should (equal (plist-get (drgnx-ui-call sess "(drgnx-uitest--json (list :errors (vconcat drgnx-inv--errors)))") :errors)
+                       []))                                      ; every form ran
         (should (equal (plist-get (drgnx-inv--probe sess) :unrouted) []))
         (should (= 0 (plist-get (drgnx-inv--probe sess) :guard)))))))

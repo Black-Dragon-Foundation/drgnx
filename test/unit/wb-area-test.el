@@ -162,3 +162,51 @@
            (should (equal sizes (list (window-pixel-width dock) (window-pixel-height panel) (window-pixel-width right)))))
        (drgnx-wb-hide-sidebar)
        (kill-buffer "*drgnx-test-top*")))))
+
+(ert-deftest drgnx-area/the-callers-body-function-runs ()
+  ;; C1: Emacs fills *Completions*, *Process List* … through `body-function'.
+  (drgnx-area-test--with
+   (let ((b (get-buffer-create "*Help*")))
+     (display-buffer b `(nil (body-function . ,(lambda (w) (with-current-buffer (window-buffer w) (insert "filled"))))))
+     (should (equal (with-current-buffer b (buffer-string)) "filled")))))
+
+(ert-deftest drgnx-area/the-window-stays-dedicated ()
+  ;; I4: `set-window-buffer' drops weak dedication; nothing else may land in the panel.
+  (drgnx-area-test--with
+   (let ((w (drgnx-wb-area-show 'panel 'output)))
+     (describe-function 'car)
+     (should (eq (window-dedicated-p w) 'drgnx))
+     (should-not (eq (display-buffer (get-buffer-create " *internal*") '(display-buffer-use-some-window)) w))
+     (kill-buffer " *internal*"))))
+
+(ert-deftest drgnx-area/q-in-the-panel-never-focuses-a-stale-window ()
+  ;; I9 (review): the area window must not keep the quit-restore of its creation.
+  (drgnx-area-test--with
+   (should-not (window-parameter (drgnx-wb-area-show 'panel 'output) 'quit-restore))))
+
+(ert-deftest drgnx-area/terminals-by-name ()
+  ;; I7: shell and eshell show their buffer before setting its mode.
+  (drgnx-area-test--with
+   (dolist (name '("*shell*" "*eshell*" "*ielm*" "*terminal*" "*ansi-term*" "*vterm*"))
+     (let ((b (get-buffer-create name)))
+       (display-buffer b)
+       (should (eq (window-buffer (drgnx-wb-area-window 'panel)) b))
+       (kill-buffer b)))
+   (should-not drgnx-wb-unrouted)))
+
+(ert-deftest drgnx-area/a-package-side-window-never-takes-the-panel ()
+  ;; I6: a direct `display-buffer-in-side-window' on the panel's side and slot.
+  (drgnx-area-test--with
+   (let* ((panel (drgnx-wb-area-show 'panel 'output)) (b (get-buffer-create "*pkg*"))
+          (w (display-buffer-in-side-window b '((side . bottom)))))
+     (should-not (eq w panel))
+     (should (eq (window-buffer panel) (drgnx-area--placeholder 'panel 'output)))
+     (delete-window w)
+     (kill-buffer b))))
+
+(ert-deftest drgnx-area/faces-are-in-the-drgnx-group ()
+  ;; I10: Emacs 31 warns about a defface without a group (the build must have 0 warnings).
+  (require 'drgnx-explorer) (require 'drgnx-buffers) (require 'drgnx-git)
+  (dolist (f (face-list))
+    (when (string-prefix-p "drgnx-" (symbol-name f))
+      (should (assq f (get 'drgnx 'custom-group))))))

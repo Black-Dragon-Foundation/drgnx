@@ -32,7 +32,7 @@
  (list-character-sets nil)
  (list-colors-display)
  (list-faces-display)
- (list-command-history)
+ (progn (push (quote (ignore)) command-history) (list-command-history))
  (list-holidays 2026)
  (bookmark-bmenu-list)
  (finder-by-keyword)

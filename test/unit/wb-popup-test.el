@@ -129,3 +129,45 @@
      (fit-window-to-buffer w nil 1)
      (should (= (nth 4 saved) (window-pixel-height w)))
      (delete-window w))))
+
+(ert-deftest drgnx-popup/the-callers-body-function-runs ()
+  ;; C1: *Completions* is filled by its `body-function'.
+  (drgnx-popup-test--with
+   (dolist (panel '(nil t))
+     (when panel (drgnx-popup-test--panel-on-results))
+     (let ((b (get-buffer-create "*Completions*")))
+       (with-current-buffer b (erase-buffer))
+       (display-buffer b `(nil (body-function . ,(lambda (w) (with-current-buffer (window-buffer w) (insert "cands"))))))
+       (should (equal (with-current-buffer b (buffer-string)) "cands"))
+       (kill-buffer b)))))
+
+(ert-deftest drgnx-popup/never-borrows-the-window-you-type-in ()
+  ;; C2: ielm in the panel, TAB: the panel keeps showing ielm.
+  (drgnx-popup-test--with
+   (let* ((saved (drgnx-popup-test--panel-on-results)) (w (car saved)))
+     (select-window w)
+     (let ((lane (display-buffer (get-buffer-create "*Completions*"))))
+       (should-not (eq lane w))
+       (should (eq (window-buffer w) (nth 1 saved)))
+       (should (eq (selected-window) w))
+       (delete-window lane))
+     (should (drgnx-popup-test--panel-back-p saved)))))
+
+(ert-deftest drgnx-popup/burying-ends-a-borrowed-popup ()
+  ;; I4: `minibuffer-hide-completions' buries; the lane must still be dedicated for that to end it.
+  (drgnx-popup-test--with
+   (let ((saved (drgnx-popup-test--panel-on-results)))
+     (describe-function 'car)
+     (setq saved (drgnx-popup-test--panel-on-results))    ; after a tab switch
+     (let ((w (display-buffer (get-buffer-create "*Completions*"))))
+       (with-selected-window w (bury-buffer)))
+     (should (drgnx-popup-test--panel-back-p saved)))))
+
+(ert-deftest drgnx-popup/a-restored-configuration-ends-the-popup ()
+  ;; I5: leaving the minibuffer restores the window configuration under the popup's feet.
+  (drgnx-popup-test--with
+   (let* ((saved (drgnx-popup-test--panel-on-results)) (conf (current-window-configuration)))
+     (display-buffer (get-buffer-create "*Completions*"))
+     (set-window-configuration conf)
+     (drgnx-popup-check)
+     (should (drgnx-popup-test--panel-back-p saved)))))

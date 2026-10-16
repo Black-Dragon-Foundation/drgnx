@@ -15,11 +15,11 @@
 (require 'seq)
 (require 'subr-x)
 
-(defface drgnx-git-modified '((t :inherit vc-edited-state)) "A modified file, or a folder with changes.")
-(defface drgnx-git-added '((t :inherit vc-locally-added-state)) "An added or untracked file.")
-(defface drgnx-git-deleted '((t :inherit vc-removed-state)) "A deleted file.")
-(defface drgnx-git-conflict '((t :inherit vc-conflict-state)) "A file with merge conflicts.")
-(defface drgnx-git-ignored '((t :inherit shadow)) "An ignored file or folder.")
+(defface drgnx-git-modified '((t :inherit vc-edited-state)) "A modified file, or a folder with changes." :group 'drgnx)
+(defface drgnx-git-added '((t :inherit vc-locally-added-state)) "An added or untracked file." :group 'drgnx)
+(defface drgnx-git-deleted '((t :inherit vc-removed-state)) "A deleted file." :group 'drgnx)
+(defface drgnx-git-conflict '((t :inherit vc-conflict-state)) "A file with merge conflicts." :group 'drgnx)
+(defface drgnx-git-ignored '((t :inherit shadow)) "An ignored file or folder." :group 'drgnx)
 
 (defconst drgnx-git--looks
   '((conflict "C" drgnx-git-conflict 6) (deleted "D" drgnx-git-deleted 5) (modified "M" drgnx-git-modified 4)

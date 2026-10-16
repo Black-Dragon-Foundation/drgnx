@@ -95,7 +95,7 @@ Returns the tip, or nil when CMD has no key."
 
 (defun drgnx-surfaces--move-point (click)
   "Move point to CLICK in a text area, as VS Code does — unless it lands inside the region."
-  (when-let* ((posn (and click (event-start click)))
+  (when-let* ((posn (and (mouse-event-p click) (event-start click)))   ; a key is no click (C-h m runs the filter)
              (pos (and (null (posn-area posn)) (posn-point posn))))
     (unless (and (use-region-p) (<= (region-beginning) pos (region-end)))
       (mouse-set-point click))))

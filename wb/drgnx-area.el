@@ -16,8 +16,8 @@
 (require 'seq)
 (require 'drgnx-rules)
 
-(defface drgnx-wb-tab '((t :inherit tab-line-tab-inactive)) "A tab in an area's tab row.")
-(defface drgnx-wb-tab-current '((t :inherit tab-line-tab-current)) "The shown tab in an area's tab row.")
+(defface drgnx-wb-tab '((t :inherit tab-line-tab-inactive)) "A tab in an area's tab row." :group 'drgnx)
+(defface drgnx-wb-tab-current '((t :inherit tab-line-tab-current)) "The shown tab in an area's tab row." :group 'drgnx)
 
 (defvar drgnx-wb--areas nil "Alist AREA → plist (:side SIDE :size N :tabs ((TAB . PLIST) …)).")
 
@@ -113,6 +113,7 @@
       (let ((window-resize-pixelwise t))             ; or the size is rounded to whole lines
         (ignore-errors (window-resize w (- px (if horizontal (window-pixel-width w) (window-pixel-height w)))
                                       horizontal nil t))))
+    (set-window-parameter w 'quit-restore nil)  ; `q' there must not go back to the window of its birth
     (window-preserve-size w horizontal t)
     (set-window-scroll-bars w nil nil nil nil t)
     w))
@@ -123,6 +124,11 @@
   "A popup borrowing W ends before the area changes (the tab must not remember the popup)."
   (when (and w (window-parameter w 'drgnx-popup)) (drgnx-popup--end w)))
 
+(defun drgnx-wb-set-area-buffer (window buffer)
+  "Show BUFFER in the area or lane WINDOW, which stays dedicated (`set-window-buffer' would undo it)."
+  (unless (eq (window-buffer window) buffer) (set-window-buffer window buffer))
+  (set-window-dedicated-p window 'drgnx))
+
 (defun drgnx-wb-area-show (area &optional tab buffer)
   "Show AREA's TAB (default: the shown one) with BUFFER (default: the tab's last); never select it.
 Returns the window — the same one across tab switches."
@@ -131,7 +137,7 @@ Returns the window — the same one across tab switches."
     (when w (drgnx-area--remember area w))
     (let* ((saved (alist-get tab (plist-get (drgnx-area--state area) :tabs)))
            (buffer (or buffer (and (buffer-live-p (car saved)) (car saved)) (drgnx-area--placeholder area tab))))
-      (if w (unless (eq (window-buffer w) buffer) (set-window-buffer w buffer))
+      (if w (drgnx-wb-set-area-buffer w buffer)
         (setq w (drgnx-area--create area buffer)))
       (when (eq (car saved) buffer)
         (set-window-start w (nth 1 saved) t)
@@ -151,7 +157,7 @@ Returns the window — the same one across tab switches."
                     ((eq (window-buffer w) dying)))
           (with-selected-frame f
             (let ((tab (drgnx-wb-area-tab area)))
-              (set-window-buffer w (drgnx-area--placeholder area tab))
+              (drgnx-wb-set-area-buffer w (drgnx-area--placeholder area tab))
               (drgnx-area--remember area w))))))))
 
 (defun drgnx-wb-area-hide (area)
@@ -168,7 +174,8 @@ Returns the window — the same one across tab switches."
 (defun drgnx-area--delete-window (window)
   "`delete-window' on an area's window (C-x 0, or a package deleting a window it once had): hide the
 area, so its size and tabs are kept."
-  (drgnx-wb-area-hide (window-parameter window 'drgnx-role)))
+  (with-selected-frame (window-frame window)     ; the frame it is on, not the selected one
+    (drgnx-wb-area-hide (window-parameter window 'drgnx-role))))
 
 (defun drgnx-wb-area-toggle (area)
   "Show or hide AREA."
@@ -185,7 +192,10 @@ area, so its size and tabs are kept."
 ;;;; Places and the default areas
 
 (defun drgnx-area--place (area)
-  (lambda (buffer _alist props) (drgnx-wb-area-show area (plist-get props :tab) buffer)))
+  (lambda (buffer alist props)
+    (let ((w (drgnx-wb-area-show area (plist-get props :tab) buffer)))
+      (drgnx-wb-run-body-function w alist)
+      w)))
 
 (drgnx-wb-define-place 'panel (drgnx-area--place 'panel))
 (drgnx-wb-define-place 'right (drgnx-area--place 'right))
@@ -202,7 +212,9 @@ area, so its size and tabs are kept."
                  ("\\`\\*Flycheck errors\\*\\'" problems)
                  ((messages-buffer-mode debugger-mode ert-results-mode process-menu-mode timer-list-mode) output)
                  ("\\`\\*\\(Warnings\\|Backtrace\\|Messages\\|timer-list\\|Process List\\)\\*\\'" output)
-                 ((shell-mode eshell-mode term-mode vterm-mode inferior-emacs-lisp-mode comint-mode) terminal)))
+                 ((shell-mode eshell-mode term-mode vterm-mode inferior-emacs-lisp-mode comint-mode) terminal)
+                 ;; shell and eshell show their buffer before setting its mode.
+                 ("\\`\\*\\(shell\\|eshell\\|ielm\\|terminal\\|ansi-term\\|vterm\\)\\*\\'" terminal)))
   (drgnx-wb-place matcher 'panel :tab tab))
 
 (provide 'drgnx-area)
