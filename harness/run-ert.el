@@ -14,7 +14,7 @@
   "Load every *-test.el under DIR, run all tests, write a JSON summary to RESULTS-FILE.
 Return t if every test passed."
   (let* ((load-failures
-          (cl-loop for file in (directory-files-recursively dir "-test\\.el\\'")
+          (cl-loop for file in (directory-files-recursively (expand-file-name dir) "-test\\.el\\'")
                    for err = (condition-case err (progn (load file nil t) nil) (error err))
                    when err collect (list :name (concat "load " (file-name-nondirectory file))
                                           :condition (format "%S" err))))

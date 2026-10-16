@@ -52,7 +52,7 @@
 (with-eval-after-load 'treemacs (setq treemacs-move-files-by-mouse-dragging nil))
 
 ;;;; Server: set before the config runs, so any `server-start' in it uses our socket
-(setq server-socket-dir (expand-file-name "sock" drgnx-ui-run)
+(setq server-socket-dir (getenv "DRGNX_UI_SOCKET_DIR")
       server-name (getenv "DRGNX_UI_NAME")
       server-use-tcp nil)
 
@@ -64,6 +64,7 @@ Without an external configuration, init.el is the harness's minimal one."
 
 ;;;; After init: harness agent, guard, server, ready file, test mode
 (defvar drgnx-ui--ready-timer nil)
+(defvar drgnx-ui--server-error nil "Why the session's server did not start, or nil.")
 
 (defun drgnx-ui--late ()
   "Finish session setup after the configuration has run."
@@ -73,8 +74,14 @@ Without an external configuration, init.el is the harness's minimal one."
   (require 'drgnx-uitest)
   (require 'drgnx-jank-guard)
   (drgnx-jank-guard-enable)
-  (unless (and (boundp 'server-process) (process-live-p server-process))
-    (server-start))
+  (setq drgnx-ui--server-error
+        (condition-case err
+            (progn (unless (and (boundp 'server-process) (process-live-p server-process))
+                     (server-start))
+                   (unless (and (boundp 'server-process) (process-live-p server-process))
+                     (error "server-start created no server (socket dir %s)" server-socket-dir))
+                   nil)
+          (error (error-message-string err))))
   (setq drgnx-ui--ready-timer (run-with-timer 0 0.05 #'drgnx-ui--when-visible)))
 
 (defun drgnx-ui--when-visible ()
@@ -87,7 +94,8 @@ Without an external configuration, init.el is the harness's minimal one."
                  (list :pid (emacs-pid)
                        :socket (expand-file-name server-name server-socket-dir)
                        :emacs emacs-version
-                       :init_error (if init-file-had-error t :false)))))
+                       :init_error (if init-file-had-error t :false)
+                       :server_error (or drgnx-ui--server-error :false)))))
       (rename-file tmp (expand-file-name "ready.json" drgnx-ui-run) t))
     (when (getenv "DRGNX_UI_TEST")
       (run-with-timer 0.2 nil #'drgnx-ui--run-tests))))

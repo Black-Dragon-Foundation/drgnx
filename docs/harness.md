@@ -9,9 +9,9 @@ and [ADR 0004](decisions/0004-headless-ui-harness.md)).
 
 | Command | What runs | Where |
 |---|---|---|
-| `bin/drgnx test` | ERT suites in `test/unit/` (batch Emacs) and Python unit tests in `test/py/` | the host |
+| `bin/drgnx test` | ERT suites in `test/unit/` (batch Emacs) | the host |
 | `bin/drgnx test --podman` | the same, in a `fedora:45` container (Emacs 31.1, drgnx's baseline) | podman |
-| `bin/drgnx test --ui` | GUI ERT suites in `test/ui/*-test.el` inside a headless session, then live session tests `test/ui/test_*.py` | the host (needs mutter) |
+| `bin/drgnx test --ui` | GUI ERT suites in `test/ui/` inside a headless session, then live ERT suites in `test/live/` (batch Emacs starting real sessions) | the host (needs mutter) |
 
 `harness/run-ert.el` runs a suite and writes a JSON summary
 (`{"total","passed","failed","failures":[{"name","condition"}]}`) to `$DRGNX_TEST_RESULTS` when set; the
@@ -33,10 +33,13 @@ and nothing talks to your own Emacs.
 ```
 session.json   name, socket, size, config
 init/          generated early-init.el + init.el (the session's user-emacs-directory)
-sock/          the session's server socket (mode 0700, or server-start silently refuses)
 out/           screenshots in progress
-ready.json     written once the frame is mapped: pid, socket, emacs version, init_error
+ready.json     written once the frame is mapped: pid, socket, emacs version, init_error, server_error
 ```
+
+The **server socket** lives in `$XDG_RUNTIME_DIR/drgnx-ui/<hash of the state root>/<name>/<name>`, every
+directory mode 0700 (`server-start` silently refuses anything else). It is not under the state root because
+Unix socket paths are limited to ~108 bytes; the hash keeps two state roots (say, two checkouts) apart.
 
 **Isolation**, set up by `harness/init/prelude.el` before any configuration runs:
 
@@ -50,8 +53,9 @@ ready.json     written once the frame is mapped: pid, socket, emacs version, ini
   XDG_RUNTIME_DIR GRYPHN_EMACS_DIR` + `DRGNX_UI_*`), `auth-sources` is nil.
 - Deterministic look: no startup screen, no blinking cursor, no bell, no dialog boxes.
 - Safety: treemacs drag-to-move is off.
-- Its own server: `server-name` = the session name, `server-socket-dir` = `sock/`, set before the
-  configuration runs so any `server-start` in it uses the session's socket.
+- Its own server: `server-name` = the session name, `server-socket-dir` = the session's socket directory,
+  set before the configuration runs so any `server-start` in it uses the session's socket. If the server
+  cannot start, `ready.json` says why (`server_error`) and `drgnx ui start` fails at once.
 
 **Configurations:** `minimal` (stock Emacs, menu/tool/scroll bars off — `harness/init/minimal.el`), `gryphn`
 (the gryphn layer's config directory, `$DRGNX_GRYPHN_CONFIG` or `~/.config/emacs`), or any directory with an
@@ -137,3 +141,38 @@ Functions the CLI and MCP server call through `emacsclient -s <session socket> -
 
 Window ids (`w1`, `w2`, …; `mini` for the minibuffer) are stable for a window's lifetime. Input functions
 only queue; callers poll `status` until settled.
+
+## CLI
+
+`bin/drgnx ui COMMAND` runs the controller (`harness/drgnx-ui.el`) in batch Emacs — no other runtime needed.
+Output is JSON on stdout; errors go to stderr with exit status 1.
+
+```sh
+bin/drgnx ui start [--config minimal|gryphn|DIR] [--size 1600x900]   # → {"name":"drgnx-ui-1", …, "ready":{…}}
+bin/drgnx ui ls                                  # sessions of this state root
+bin/drgnx ui state drgnx-ui-1                    # frame, windows, child frames
+bin/drgnx ui shot drgnx-ui-1 [out.png]           # screenshot, child frames composited
+bin/drgnx ui click drgnx-ui-1 300 200 [--button 1] [--count 2] [--hold-ms 300]
+bin/drgnx ui click drgnx-ui-1 --buffer treemacs-mode --text README.md
+bin/drgnx ui keys drgnx-ui-1 "C-x b"             # kbd syntax
+bin/drgnx ui type drgnx-ui-1 "hello"
+bin/drgnx ui measure drgnx-ui-1 '[{"keys":"C-x 2"},{"x":10,"y":10}]'
+bin/drgnx ui stop drgnx-ui-1 | bin/drgnx ui reap
+```
+
+Input commands wait until the session settles and print the jank report. `bin/drgnx` passes arguments after
+`--`, so options Emacs itself knows (`--title`, `-nw`, …) cannot be swallowed by Emacs.
+
+## Ownership and cleanup
+
+Only sessions this harness created can be addressed. A name must match `drgnx-ui-N`, its run directory must
+exist under the state root (`$DRGNX_UI_STATE`, default `$XDG_STATE_HOME/drgnx/ui`), and its socket must be the
+one the harness assigned. Anything else — `server`, another Emacs's socket path, `../…` — is refused, so the
+user's own Emacs can never be driven. `emacsclient` is always called with `-a false`, so a missing socket can
+never make it start a new Emacs daemon (as `ALTERNATE_EDITOR=""` would).
+
+`stop` ends the unit and removes the run and socket directories. `reap` does that for every session of the
+current state root — run directories, plus live units whose command line points into it — and leaves sessions
+of other state roots alone. Units also end on their own after 30 minutes (`RuntimeMaxSec=1800`) and are
+capped at 3 GB (`MemoryMax`). A failed `drgnx test --ui` run keeps its run directory (with `session.log`) for
+debugging.

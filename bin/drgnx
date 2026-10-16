@@ -23,23 +23,24 @@ cmd_doctor() {
   return "$rc"
 }
 
+ui() { # the harness controller, in batch Emacs (harness/drgnx-ui.el)
+  emacs --batch -Q -L "$here/harness" -l drgnx-ui -f drgnx-ui-cli -- "$@"
+}
+
 test_batch() {
-  local rc=0
   emacs --batch -Q -L "$here/harness" -l "$here/harness/run-ert.el" \
-        -f drgnx-run-ert-batch "$here/test/unit" || rc=1
-  (cd "$here" && PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s test/py) || rc=1
-  return "$rc"
+        -f drgnx-run-ert-batch "$here/test/unit"
 }
 
 test_podman() {
   podman build -q -t drgnx-test:f45 "$here/test/podman" >/dev/null
-  podman run --rm -e PYTHONDONTWRITEBYTECODE=1 -v "$here:/src:ro,Z" -w /src drgnx-test:f45 bin/drgnx test
+  podman run --rm -v "$here:/src:ro,Z" -w /src drgnx-test:f45 bin/drgnx test
 }
 
 cmd_test() {
   case "${1:-}" in
     "") test_batch ;;
-    --ui) python3 "$here/harness/drgnx_ui.py" test-ui ;;
+    --ui) ui test-ui ;;
     --podman) test_podman ;;
     *) echo "usage: drgnx test [--ui|--podman]" >&2; exit 2 ;;
   esac
@@ -58,7 +59,7 @@ USAGE
 case "${1:-help}" in
   doctor) shift; cmd_doctor "$@" ;;
   test) shift; cmd_test "$@" ;;
-  ui) shift; exec python3 "$here/harness/drgnx_ui.py" "$@" ;;
+  ui) shift; ui "$@" ;;
   help|-h|--help) usage ;;
   *) echo "drgnx: unknown command '$1' (try: drgnx help)" >&2; exit 2 ;;
 esac
