@@ -5,7 +5,8 @@
 ;;; Code:
 (let ((checkout (file-name-directory
                  (directory-file-name (file-name-directory (or load-file-name buffer-file-name))))))
-  (add-to-list 'load-path (expand-file-name "core" checkout)))
+  (add-to-list 'load-path (expand-file-name "core" checkout))
+  (add-to-list 'load-path (expand-file-name "wb" checkout)))
 (require 'drgnx)
 (drgnx-init)
 

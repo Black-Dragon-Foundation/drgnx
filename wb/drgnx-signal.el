@@ -1,0 +1,99 @@
+;;; drgnx-signal.el --- The workbench change bus -*- lexical-binding: t -*-
+
+;; SPDX-License-Identifier: GPL-3.0-or-later
+
+;;; Commentary:
+;; The only subscriber to Emacs' raw window and buffer hooks.  A raw hook does no work: it arms
+;; one idle flush.  The flush compares the state with the last one and emits edges only —
+;; `editor-changed' (the buffer of the most recently used editor window), `buffer-set-changed'
+;; (the set of user buffers: files and directories) and `modified-changed' (buffers whose
+;; modified flag flipped).  Internal buffers (names starting with a space) never count.
+;; Followers (the Explorer's reveal, the Buffers panel) subscribe here and never to hooks, so a
+;; focus change, a background buffer or a burst of events cannot make them fire.
+;; See docs/workbench.md.
+
+;;; Code:
+(require 'cl-lib)
+(require 'seq)
+
+(defvar drgnx-signal-delay 0.05 "Idle seconds before raw events are flushed as edges.")
+(defvar drgnx-signal--subscribers nil "Alist EVENT → list of functions, in subscription order.")
+(defvar drgnx-signal--state nil "The state at the last flush: (:editor :set :modified).")
+(defvar drgnx-signal--timer nil "The armed idle flush, or nil.")
+(defvar drgnx-signal--editor-window nil "The most recently selected editor window.")
+(defvar drgnx-signal-errors nil "Recent subscriber errors (newest first).")
+
+(defun drgnx-signal-subscribe (event fn)
+  "Call FN with the event's data whenever EVENT is emitted (once per FN)."
+  (unless (memq fn (alist-get event drgnx-signal--subscribers))
+    (setf (alist-get event drgnx-signal--subscribers)
+          (append (alist-get event drgnx-signal--subscribers) (list fn)))))
+
+(defun drgnx-signal-unsubscribe (event fn)
+  (setf (alist-get event drgnx-signal--subscribers) (remq fn (alist-get event drgnx-signal--subscribers))))
+
+(defun drgnx-signal-user-buffer-p (buffer)
+  "Non-nil for buffers the user works with: files and directories, never internal buffers."
+  (and (buffer-live-p buffer)
+       (not (string-prefix-p " " (buffer-name buffer)))
+       (or (buffer-local-value 'buffer-file-name buffer)
+           (eq (buffer-local-value 'major-mode buffer) 'dired-mode))))
+
+(defun drgnx-signal-editor-window-p (window)
+  "Non-nil if WINDOW is an editor window: not the minibuffer, a side window or a dock."
+  (and (window-live-p window)
+       (not (window-minibuffer-p window))
+       (not (window-parameter window 'window-side))
+       (not (memq (window-parameter window 'drgnx-role) '(dock panel)))))
+
+(defun drgnx-signal-editor-window ()
+  "The most recently used editor window (falls back to any editor window of the selected frame)."
+  (if (and (window-live-p drgnx-signal--editor-window)
+           (eq (window-frame drgnx-signal--editor-window) (selected-frame)))
+      drgnx-signal--editor-window
+    (seq-find #'drgnx-signal-editor-window-p (window-list nil 'nomini))))
+
+(defun drgnx-signal--emit (event data)
+  (dolist (fn (alist-get event drgnx-signal--subscribers))
+    (condition-case err (funcall fn data)
+      (error (push (format "%s %s: %s" event fn (error-message-string err)) drgnx-signal-errors)
+             (setq drgnx-signal-errors (seq-take drgnx-signal-errors 20))))))
+
+(defun drgnx-signal--flush ()
+  "Compare the state with the last flush and emit the edges."
+  (setq drgnx-signal--timer nil)
+  (when (drgnx-signal-editor-window-p (selected-window))
+    (setq drgnx-signal--editor-window (selected-window)))
+  (let* ((editor (when-let* ((w (drgnx-signal-editor-window))) (window-buffer w)))
+         (set (seq-filter #'drgnx-signal-user-buffer-p (buffer-list)))
+         (modified (mapcar (lambda (b) (cons b (buffer-modified-p b))) set))
+         (old drgnx-signal--state))
+    (setq drgnx-signal--state (list :editor editor :set set :modified modified))
+    (unless (eq editor (plist-get old :editor))
+      (drgnx-signal--emit 'editor-changed editor))
+    (unless (seq-set-equal-p set (plist-get old :set))
+      (drgnx-signal--emit 'buffer-set-changed set))
+    (when-let* ((flipped (seq-filter (lambda (b) (when-let* ((was (assq b (plist-get old :modified))))
+                                                  (not (eq (and (cdr was) t) (and (buffer-modified-p b) t)))))
+                                     set)))
+      (drgnx-signal--emit 'modified-changed flipped))))
+
+(defun drgnx-signal--schedule (&rest _)
+  "Raw hooks land here: arm one idle flush, nothing else."
+  (unless (timerp drgnx-signal--timer)
+    (setq drgnx-signal--timer (run-with-idle-timer drgnx-signal-delay nil #'drgnx-signal--flush))))
+
+(defconst drgnx-signal--hooks
+  '(window-buffer-change-functions window-selection-change-functions buffer-list-update-hook
+    first-change-hook after-save-hook after-revert-hook kill-buffer-hook)
+  "The raw hooks the bus listens to.")
+
+(define-minor-mode drgnx-signal-mode
+  "The workbench change bus: raw window and buffer hooks become deduplicated edges."
+  :global t :group 'drgnx
+  (dolist (h drgnx-signal--hooks)
+    (if drgnx-signal-mode (add-hook h #'drgnx-signal--schedule) (remove-hook h #'drgnx-signal--schedule)))
+  (when drgnx-signal-mode (drgnx-signal--schedule)))
+
+(provide 'drgnx-signal)
+;;; drgnx-signal.el ends here
