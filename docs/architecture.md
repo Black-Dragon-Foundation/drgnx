@@ -7,8 +7,9 @@ drgnx is an Emacs Lisp framework with two core primitives that every module plug
    terminal, problems, output, results, help). A change bus (`drgnx-signal`) is the only subscriber to raw
    Emacs window/buffer hooks and emits deduplicated events, which makes "the layout never jumps" a structural
    property. Layout invariants I1–I10 are tested in headless sessions.
-2. **The command registry** (`core/`): one `drgnx-command-define` entry generates keys (per platform
-   profile), menus, context menus, which-key labels, the palette, the F1 sheet, docs and the Settings page.
+2. **The command registry** (`core/`): one `drgnx-command-define` entry (no keys) generates menus, context menus,
+   which-key labels, the palette, the key sheet, docs and the Settings page; key profiles (VS Code, Emacs, Vim,
+   stacked as layers, plus `keys.eld`) give the commands their keys ([keys.md](keys.md)).
 
 Around them: a module system (`drgnx-module-define`, staged loading, per-module error isolation, doctor
 checks, settings), reproducible package management on package.el (lockfile, generations, rollback, network
