@@ -45,11 +45,10 @@ manual install and uninstall: [docs/install.md](docs/install.md). Check a machin
 - [Install](docs/install.md)
 - [Roadmap and design](docs/roadmap.md)
 - [Architecture](docs/architecture.md)
-- [Decisions](docs/decisions/)
 
 ## License
 
 drgnx is free software under the **GNU General Public License v3.0 or later** (see `LICENSE`).
 Code derived from [Emacs Bedrock](https://codeberg.org/ashton314/emacs-bedrock) keeps its MIT notice.
 A separate `drgnx-pro` add-on may follow later under a source-available license that stays free for
-individuals, open-source developers and small businesses (see ADR 0001).
+individuals, open-source developers and small businesses.

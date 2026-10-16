@@ -2,8 +2,7 @@
 
 The harness lets people and agents run drgnx (or any Emacs configuration) in an **isolated, invisible GUI
 Emacs session**, see it, drive it and measure it — without ever touching the Emacs you are working in. It is
-how every drgnx UI change is developed and verified (see [roadmap.md](roadmap.md), "Test & control harness",
-and [ADR 0004](decisions/0004-headless-ui-harness.md)).
+how every drgnx UI change is developed and verified (see [roadmap.md](roadmap.md), "Test & control harness").
 
 ## Test tiers
 
