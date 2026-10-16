@@ -47,3 +47,19 @@
     (drgnx-ui-measure sess (list (list :keys "C-S-f") (list :type "list") (list :keys "RET")))
     (should (eq (drgnx-live-mod--q sess "(drgnx-wb-area-tab 'panel)") 'results))
     (should (equal (drgnx-live-mod--q sess "drgnx-wb-unrouted") nil))))
+
+(ert-deftest drgnx-live/package-modules-with-the-users-elpa ()
+  ;; The user's ELPA, read-only, on the load path: the waiting modules run, their keys are bound, and
+  ;; vertico's growing minibuffer gives the layout back.
+  (skip-unless (file-directory-p (expand-file-name "~/.config/emacs/elpa")))
+  (drgnx-live-mod--with sess
+    (drgnx-ui-call sess "(progn (dolist (d (directory-files (expand-file-name \"~/.config/emacs/elpa\") t \"\\\\`[^.]\"))
+                                   (when (file-directory-p d) (add-to-list 'load-path d t)))
+                                 (drgnx-modules-run 'idle) (drgnx-uitest--json (list :ok t)))")
+    (drgnx-ui-measure sess (list (list :keys "C-b") (list :keys "C-`")))
+    (should (equal (drgnx-live-mod--q sess "(list (plist-get (alist-get 'extra/jump (drgnx-modules-report)) :status) (key-binding (kbd \"C-;\")) (and (boundp 'vertico-mode) vertico-mode))")
+                   '(ok avy-goto-char-timer t)))
+    (let ((before (drgnx-live-mod--q sess "(sort (mapcar #'window-pixel-edges (window-list nil 'nomini)) (lambda (a b) (or (< (car a) (car b)) (and (= (car a) (car b)) (< (cadr a) (cadr b))))))")))
+      (drgnx-ui-measure sess (list (list :keys "M-x") (list :type "describe")))
+      (drgnx-ui-measure sess (list (list :keys "C-g")))
+      (should (equal before (drgnx-live-mod--q sess "(sort (mapcar #'window-pixel-edges (window-list nil 'nomini)) (lambda (a b) (or (< (car a) (car b)) (and (= (car a) (car b)) (< (cadr a) (cadr b))))))"))))))

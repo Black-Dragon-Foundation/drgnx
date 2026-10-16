@@ -87,6 +87,9 @@ DOCTOR: a function returning problem strings.  SETTINGS: alist VARIABLE → doc.
 
 (defun drgnx-modules--ok-p (name) (eq (plist-get (alist-get name drgnx-modules--report) :status) 'ok))
 
+(defvar drgnx-modules-after-stage-functions nil
+  "Called with the stage after its modules ran (core re-applies keys and menus after later stages).")
+
 (defun drgnx-modules-run (stage)
   "Run the setup of every module of STAGE, each isolated and timed."
   (dolist (m drgnx-modules--table)
@@ -103,7 +106,8 @@ DOCTOR: a function returning problem strings.  SETTINGS: alist VARIABLE → doc.
                      (err (condition-case e (progn (funcall (plist-get spec :setup)) nil)
                             (error (error-message-string e)))))
                 (drgnx-modules--record name stage (round (* 1000 (- (float-time) t0)))
-                                       (if err 'failed 'ok) err)))))))))
+                                       (if err 'failed 'ok) err))))))))
+  (run-hook-with-args 'drgnx-modules-after-stage-functions stage))
 
 (defun drgnx-modules-load-directory (dir)
   "Load every module file under DIR (modules/<category>/drgnx-*.el); a file that fails to

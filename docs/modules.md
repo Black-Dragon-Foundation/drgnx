@@ -68,3 +68,13 @@ key profile ([keys.md](keys.md)); faces inherit theme faces (no colours). See [c
 | `tools/terminal` | startup | New Terminal (eshell, in the panel's Terminal tab), Open Terminal Here (Explorer) |
 | `tools/search` | startup | Quick Open (project files), Search in Project (results in the panel), Go to Symbol |
 | `org/org` | startup | Capture `C-c c`, Agenda `C-c a` |
+| `extra/jump` | idle | Jump to Text (needs avy) |
+| `extra/undo` | idle | Undo Tree (needs vundo) |
+| `extra/wgrep` | idle | Edit Results / Apply Edited Results in search results (needs wgrep) |
+| `extra/hunks` | idle | changed lines in the gutter; Show / Revert / Stage Change (needs diff-hl) |
+| `extra/keycast` | idle | Show Keys As I Type (needs keycast) |
+| `extra/llm` | idle | LLM Menu, Send to LLM (needs gptel; its model and key are gptel's configuration) |
+| `extra/magit` | idle | Source Control opens magit (needs magit) |
+| `extra/completion` | idle | vertical minibuffer lists, any-order matching, completion popups as you type (needs vertico, orderless, marginalia, corfu) |
+
+The `extra/` modules wait until their packages are installed; Preferences: Modules says which.

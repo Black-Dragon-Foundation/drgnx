@@ -41,6 +41,9 @@
   (drgnx-guard-mode 1)
   (drgnx-hooks-install)
   (drgnx--core-commands)
+  ;; Modules that run later (idle, first frame, …) register commands after the keys were applied.
+  (add-hook 'drgnx-modules-after-stage-functions
+            (lambda (stage) (unless (eq stage 'startup) (drgnx-keys-apply) (drgnx-surfaces-refresh))))
   (drgnx-modules-start (expand-file-name "modules" drgnx-dir))
   (drgnx-keys-apply)
   (drgnx-surfaces-refresh))
