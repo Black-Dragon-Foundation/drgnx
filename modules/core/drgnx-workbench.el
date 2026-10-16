@@ -4,6 +4,8 @@
 
 ;;; Code:
 (declare-function drgnx-explorer-setup "drgnx-explorer")
+(declare-function drgnx-rules-mode "drgnx-rules")
+(declare-function drgnx-wb-show-unrouted "drgnx-rules")
 (declare-function drgnx-explorer-focus "drgnx-explorer")
 (declare-function drgnx-buffers-setup "drgnx-buffers")
 (declare-function drgnx-buffers-focus "drgnx-buffers")
@@ -18,6 +20,11 @@
   (lambda ()
     (require 'drgnx-wb)
     (drgnx-signal-mode 1)
+    ;; Where buffers go.
+    (require 'drgnx-rules)
+    (drgnx-rules-mode 1)
+    (drgnx-command-define 'wb-unrouted :category "View" :title "Show Unrouted Buffers" :scope 'window
+      :command #'drgnx-wb-show-unrouted :doc "Buffers no placement rule matched (each one is a rule to add)")
     (drgnx-command-define 'toggle-sidebar :category "View" :title "Toggle Sidebar" :scope 'window
       :command #'drgnx-wb-toggle-sidebar :menu '("View") :doc "Show or hide the Buffers panel and the Explorer")
     (drgnx-command-define 'focus-editor :category "View" :title "Focus Editor" :scope 'window

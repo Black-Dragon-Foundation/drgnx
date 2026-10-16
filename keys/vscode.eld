@@ -10,6 +10,7 @@
         (line-numbers :none "VS Code has no default key for line numbers")
         (modules-report :none "drgnx-only; in the palette")
         (toggle-sidebar "C-b")
+        (wb-unrouted :none "in the palette")
         (focus-editor "C-1")
         (dock-back "<escape>")
         (focus-explorer "C-S-e")

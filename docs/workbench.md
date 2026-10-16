@@ -74,6 +74,31 @@ Open, Close, Close Others and Save All.
 
 All of these are commands in the palette and keys in every profile ([keys.md](keys.md)).
 
+## Where buffers go
+
+Every buffer Emacs shows goes to a **place** chosen by one rules table: files, dired and anything a rule sends
+there go to the **editor** — a window already showing the buffer, else the selected editor, else the editor you
+used last; never a new split, never a dock. Emacs' own window defaults are set so nothing splits or resizes on
+its own (`split-height-threshold` and `split-width-threshold` nil, `even-window-sizes` nil,
+`window-combination-resize` nil, `switch-to-buffer-obey-display-actions` t); `C-x 1` keeps the docks.
+
+The table is one entry at the **end** of `display-buffer-alist`, so your own entries — and explicit actions such as
+`display-buffer-overriding-action` — still win. Add or change a rule with `drgnx-wb-place`:
+
+```elisp
+(drgnx-wb-place 'my-log-mode 'editor)                 ; a major mode (derived modes too)
+(drgnx-wb-place "\\`\\*my-tool\\*" 'current)         ; a buffer-name regexp
+```
+
+Later rules are tried first. A buffer no rule matches still goes to the editor, and is listed by **Show Unrouted
+Buffers** (palette) — each one is a rule to add. Buffers whose names start with a space are internal and left
+alone unless a rule names them.
+
+| Place | What goes there |
+|---|---|
+| `editor` | files, dired, unmatched buffers (logged) |
+| `current` | the selected window, unless it is a dock (then the editor) |
+
 ## Compared with treemacs, ibuffer and VS Code
 
 | | treemacs | ibuffer | VS Code | drgnx |

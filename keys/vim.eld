@@ -12,6 +12,7 @@
         (line-numbers "SPC u l")
         (modules-report "SPC h m")
         (toggle-sidebar "SPC e")
+        (wb-unrouted :none "in the palette")
         (focus-editor :none "C-w moves between windows")
         (dock-back "<escape>" :map drgnx-wb-dock-map)
         (focus-explorer "SPC E")

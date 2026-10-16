@@ -11,6 +11,7 @@
         (line-numbers :none "Emacs has no default key for line numbers")
         (modules-report :none "drgnx-only; in the palette")
         (toggle-sidebar "<f8>")
+        (wb-unrouted :none "in the palette")
         (focus-editor :none "C-x o moves between windows")
         (dock-back "q")
         (focus-explorer "C-x M-e")

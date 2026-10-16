@@ -1,0 +1,115 @@
+;;; wb-rules-test.el --- batch tests: where buffers go (the rules table) -*- lexical-binding: t -*-
+(require 'ert)
+(require 'drgnx-rules)
+
+(defmacro drgnx-rules-test--with (&rest body)
+  "BODY with the rules mode on, a two-section dock shown, one editor window and an empty unrouted log."
+  `(let ((drgnx-wb--sections nil) (drgnx-signal--editor-window nil) (drgnx-wb-unrouted nil)
+         (display-buffer-alist nil) (display-buffer-overriding-action '(nil)))
+     (delete-other-windows)
+     (drgnx-wb-define-section 'top :slot -1 :title "TOP" :buffer (lambda () (get-buffer-create "*drgnx-test-top*")))
+     (drgnx-wb-define-section 'bottom :slot 0 :title "BOTTOM" :buffer (lambda () (get-buffer-create "*drgnx-test-bottom*")))
+     (drgnx-rules-mode 1)
+     (unwind-protect (progn (drgnx-wb-show-sidebar) ,@body)
+       (drgnx-rules-mode -1)
+       (drgnx-wb-hide-sidebar)
+       (delete-other-windows)
+       (dolist (b '("*drgnx-test-top*" "*drgnx-test-bottom*" "zz-unrouted" " *x*" "*t1*" "*t2*" "*t3*"))
+         (when (get-buffer b) (kill-buffer b))))))
+
+(defun drgnx-rules-test--file (name)
+  (let ((f (expand-file-name name (make-temp-file "drgnx-rules" t))))
+    (write-region "x\n" nil f nil 'silent)
+    (find-file-noselect f)))
+
+(defun drgnx-rules-test--editors ()
+  (seq-filter #'drgnx-signal-editor-window-p (window-list nil 'nomini)))
+
+(ert-deftest drgnx-rules/a-file-goes-to-the-mru-editor-without-splitting ()
+  (drgnx-rules-test--with
+   ;; From a dock: the editor used last.  From an editor: that editor (the bus may not have seen it yet).
+   (let* ((e1 (selected-window)) (e2 (split-window e1 nil 'right)) (b (drgnx-rules-test--file "a.txt")))
+     (setq drgnx-signal--editor-window e2)
+     (select-window (drgnx-wb-section-window 'top))
+     (let ((n (length (window-list nil 'nomini))))
+       (should (eq (display-buffer b) e2))
+       (should (= n (length (window-list nil 'nomini)))))
+     (select-window e1)
+     (set-window-buffer e2 (get-buffer-create "*t1*"))
+     (should (eq (display-buffer b) e1))
+     (kill-buffer b))))
+
+(ert-deftest drgnx-rules/a-shown-buffer-is-reused ()
+  (drgnx-rules-test--with
+   (let* ((e1 (selected-window)) (e2 (split-window e1 nil 'right)) (b (drgnx-rules-test--file "b.txt")))
+     (set-window-buffer e1 b)
+     (setq drgnx-signal--editor-window e2)
+     (should (eq (display-buffer b) e1))
+     (kill-buffer b))))
+
+(ert-deftest drgnx-rules/never-into-a-dock ()
+  (drgnx-rules-test--with
+   (let ((editor (car (drgnx-rules-test--editors))) (b (drgnx-rules-test--file "c.txt"))
+         (dock (drgnx-wb-section-window 'bottom)))
+     (setq drgnx-signal--editor-window editor)
+     (select-window dock)
+     (pop-to-buffer b)
+     (should (eq (window-buffer editor) b))
+     (should (equal (buffer-name (window-buffer dock)) "*drgnx-test-bottom*"))
+     (kill-buffer b))))
+
+(ert-deftest drgnx-rules/unmatched-is-logged ()
+  (drgnx-rules-test--with
+   (let ((editor (car (drgnx-rules-test--editors))))
+     (setq drgnx-signal--editor-window editor)
+     (should (eq (display-buffer (get-buffer-create "zz-unrouted")) editor))
+     (should (equal (plist-get (car drgnx-wb-unrouted) :buffer) "zz-unrouted"))
+     (display-buffer (get-buffer-create " *x*"))
+     (should (= 1 (length drgnx-wb-unrouted))))))
+
+(ert-deftest drgnx-rules/later-rules-win-and-replace ()
+  (let ((drgnx-rules--table nil))
+    (drgnx-wb-place "\\`\\*t1\\*" 'current)
+    (drgnx-wb-place "\\`\\*t1\\*" 'editor :x 1)
+    (should (= 1 (length drgnx-rules--table)))
+    (should (equal (drgnx-wb-rule-for "*t1*") '(editor :x 1)))
+    (drgnx-wb-place "\\`\\*t" 'current)
+    (should (eq (car (drgnx-wb-rule-for "*t1*")) 'current))))
+
+(ert-deftest drgnx-rules/user-entries-win ()
+  (drgnx-rules-test--with
+   (push '("\\`\\*t2\\*" (display-buffer-in-side-window) (side . top)) display-buffer-alist)
+   (let ((n (length (window-list nil 'nomini))))
+     (display-buffer (get-buffer-create "*t2*"))
+     (should (= (1+ n) (length (window-list nil 'nomini)))))
+   (let ((n (length (window-list nil 'nomini)))
+         (display-buffer-overriding-action '((display-buffer-in-side-window) (side . top) (slot . 1))))
+     (display-buffer (get-buffer-create "*t3*"))
+     (should (= (1+ n) (length (window-list nil 'nomini)))))))
+
+(ert-deftest drgnx-rules/defaults-are-set-and-restored ()
+  (let ((split-height-threshold 80) (split-width-threshold 160) (even-window-sizes 'width-only)
+        (window-combination-resize nil) (switch-to-buffer-obey-display-actions nil)
+        (display-buffer-alist nil))
+    (drgnx-rules-mode 1)
+    (unwind-protect
+        (progn
+          (should-not split-height-threshold)
+          (should-not split-width-threshold)
+          (should-not even-window-sizes)
+          (should-not window-combination-resize)
+          (should switch-to-buffer-obey-display-actions)
+          (should (= 1 (length display-buffer-alist))))
+      (drgnx-rules-mode -1))
+    (should (= split-height-threshold 80))
+    (should (= split-width-threshold 160))
+    (should (eq even-window-sizes 'width-only))
+    (should-not switch-to-buffer-obey-display-actions)
+    (should-not display-buffer-alist)))
+
+(ert-deftest drgnx-rules/delete-other-windows-keeps-the-dock ()
+  (drgnx-rules-test--with
+   (split-window (selected-window) nil 'right)
+   (delete-other-windows)
+   (should (drgnx-wb-section-window 'top))
+   (should (drgnx-wb-section-window 'bottom))))
