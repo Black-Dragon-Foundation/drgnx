@@ -138,6 +138,9 @@ case "${1:-help}" in
   build) cmd_build ;;
   test) shift; cmd_test "$@" ;;
   ui) shift; ui "$@" ;;
+  keys) shift; [[ "${1:-}" == diff ]] && shift
+        emacs --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/harness" -L "$here/core" -L "$here/wb" \
+              -l drgnx-keys-diff -f drgnx-keys-diff-cli -- "$@" ;;
   help|-h|--help) usage ;;
   *) echo "drgnx: unknown command '$1' (try: drgnx help)" >&2; exit 2 ;;
 esac

@@ -126,3 +126,20 @@ remembers what each binding replaced, so the next switch restores Emacs' own bin
 binding someone else changed since). The active keys of each command are in its `bound` slot, which every surface
 reads. Tests: `test/unit/core-keys-test.el` (resolution, switching, keys.eld, surfaces) and
 `test/live/drgnx-keys-test.el` (real key presses in a headless session).
+
+## Against gryphn
+
+`bin/drgnx keys diff --against gryphn [DIR]` compares gryphn's key sheet (its registry, read from DIR — default
+`~/workspace/gryphn/emacs` — never run) with drgnx's VS Code profile, with every module and gryphn's board, runs,
+agents, search, LLM and IDE files as an external module ([modules.md](modules.md)). Every gryphn command is in drgnx
+with gryphn's key among its keys — `M-j` toggles the panel, `C-S-b` focuses the Buffers panel, `C-M-o` the Outline,
+`<f11>` is zen mode, next to drgnx's own keys — or the line is explained:
+
+| gryphn | Why it is not in drgnx |
+|---|---|
+| Workspaces (next, previous, switch, save, restore, close) | deferred; several windows and editor groups cover their use, and the layout survives restarts |
+| Toggle Minimap | minimap is not installed; a minimap module is deferred |
+| Dashboard | a start dashboard competes with the restored workbench; deferred |
+| Trust / Reload mise | gryphn's mise file needs its bundle loader; a drgnx mise module is planned with the editor amenities (M11) |
+
+Unexplained lines make the command exit non-zero (a test runs it when the gryphn checkout is there).
