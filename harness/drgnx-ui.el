@@ -13,12 +13,13 @@
 (require 'cl-lib)
 (require 'json)
 (require 'subr-x)
+(require 'drgnx-env)
 
 (defconst drgnx-ui-harness-dir (file-name-directory (or load-file-name buffer-file-name)))
 (defconst drgnx-ui-repo-dir (file-name-directory (directory-file-name drgnx-ui-harness-dir)))
 (defconst drgnx-ui-name-regexp "\\`drgnx-ui-[0-9]+\\'")
 (defconst drgnx-ui-keep-env
-  '("HOME" "USER" "LOGNAME" "LANG" "LC_ALL" "PATH" "XDG_RUNTIME_DIR" "GRYPHN_EMACS_DIR")
+  '("HOME" "USER" "LOGNAME" "LANG" "LC_ALL" "PATH" "GRYPHN_EMACS_DIR")
   "The only variables a session inherits; everything else (keys, tokens) stays out.")
 (defconst drgnx-ui-link '("extras" "lisp" "site-lisp" "tree-sitter" "snippets" "themes")
   "Code directories of an external config, linked read-only into the session.")
@@ -123,11 +124,20 @@ EXIT is the symbol `timeout' when the process had to be killed."
         (drgnx-ui--fail "config %S: no init.el in %s" config dir))
       (directory-file-name (file-truename dir)))))
 
+(defun drgnx-ui-runtime-dir ()
+  "$XDG_RUNTIME_DIR, or a private fallback where it is unset (containers): the sessions'
+Wayland displays and server sockets live here."
+  (let ((xdg (getenv "XDG_RUNTIME_DIR")))
+    (if (and xdg (not (string-empty-p xdg)))
+        (directory-file-name xdg)
+      (let ((dir (expand-file-name (format "drgnx-ui-%d" (user-uid)) temporary-file-directory)))
+        (drgnx-ui--make-private-dir dir)
+        dir))))
+
 (defun drgnx-ui-socket-dir (name &optional root)
   "Directory for session NAME's server socket: short, private, keyed by the state ROOT.
 Unix socket paths are limited to ~108 bytes, so sockets never live under ROOT itself."
-  (let* ((runtime (or (getenv "XDG_RUNTIME_DIR")
-                      (expand-file-name (format "drgnx-ui-%d" (user-uid)) temporary-file-directory)))
+  (let* ((runtime (drgnx-ui-runtime-dir))
          (root (directory-file-name (expand-file-name (or root (drgnx-ui-state-root))))))
     (expand-file-name name (expand-file-name (substring (md5 root) 0 8)
                                              (expand-file-name "drgnx-ui" runtime)))))
@@ -181,6 +191,7 @@ Unix socket paths are limited to ~108 bytes, so sockets never live under ROOT it
                 (concat "DRGNX_UI_RUN=" (plist-get sess :run))
                 (concat "DRGNX_UI_HARNESS=" (directory-file-name drgnx-ui-harness-dir))
                 (concat "DRGNX_UI_CONFIG=" (plist-get sess :config_dir))
+                (concat "XDG_RUNTIME_DIR=" (drgnx-ui-runtime-dir))
                 (concat "DRGNX_UI_SOCKET_DIR=" (directory-file-name (file-name-directory (plist-get sess :socket))))
                 (concat "EMACS_SOCKET_NAME=" (plist-get sess :socket)))
           extra))
@@ -206,9 +217,12 @@ Unix socket paths are limited to ~108 bytes, so sockets never live under ROOT it
   (eq 0 (car (drgnx-ui--run "systemctl" "--user" "is-active" "--quiet" name))))
 
 (defun drgnx-ui-next-name (root)
+  "The first drgnx-ui-N free in ROOT, as a unit, and as a Wayland display."
   (let ((n 1))
-    (while (or (file-exists-p (expand-file-name (format "drgnx-ui-%d" n) root))
-               (drgnx-ui-unit-active-p (format "drgnx-ui-%d" n)))
+    (while (let ((name (format "drgnx-ui-%d" n)))
+             (or (file-exists-p (expand-file-name name root))
+                 (file-exists-p (expand-file-name name (drgnx-ui-runtime-dir)))
+                 (drgnx-ui-unit-active-p name)))
       (cl-incf n))
     (format "drgnx-ui-%d" n)))
 
@@ -221,6 +235,59 @@ Unix socket paths are limited to ~108 bytes, so sockets never live under ROOT it
                                        "\n" t))
              "\n"))
 
+(defun drgnx-ui--choose-launcher (container systemd-p override)
+  "\"systemd\" (a transient user unit) on a host with a systemd user session, else \"detached\".
+OVERRIDE (from $DRGNX_UI_LAUNCHER) wins."
+  (cond ((member override '("systemd" "detached")) override)
+        ((and (not container) systemd-p) "systemd")
+        (t "detached")))
+
+(defun drgnx-ui-launcher ()
+  (drgnx-ui--choose-launcher (drgnx-env-container) (drgnx-env-systemd-user-p)
+                             (getenv "DRGNX_UI_LAUNCHER")))
+
+(defun drgnx-ui--read-pgid (run)
+  (let ((file (expand-file-name "pgid" run)))
+    (and (file-exists-p file)
+         (let ((pgid (string-trim (with-temp-buffer (insert-file-contents file) (buffer-string)))))
+           (and (string-match-p "\\`[0-9]+\\'" pgid) pgid)))))
+
+(defun drgnx-ui--launch-detached (sess)
+  "Start SESS as its own process group (no systemd); return the group id."
+  (let* ((run (plist-get sess :run))
+         (cmd (mapconcat #'shell-quote-argument
+                         (append (drgnx-ui-env-argv (drgnx-ui-session-env sess))
+                                 (drgnx-ui-compositor-argv sess))
+                         " "))
+         (deadline (+ (float-time) 5)))
+    (call-process "setsid" nil 0 nil "-f" "sh" "-c"
+                  (format "echo $$ > %s; exec %s > %s 2>&1"
+                          (shell-quote-argument (expand-file-name "pgid" run)) cmd
+                          (shell-quote-argument (expand-file-name "session.log" run))))
+    (while (and (not (drgnx-ui--read-pgid run)) (< (float-time) deadline))
+      (sleep-for 0.02))
+    (or (drgnx-ui--read-pgid run) (drgnx-ui--fail "setsid did not start %s" (plist-get sess :name)))))
+
+(defun drgnx-ui--group-alive-p (pgid)
+  (and pgid (eq 0 (car (drgnx-ui--run "kill" "-0" "--" (concat "-" pgid))))))
+
+(defun drgnx-ui-alive-p (sess)
+  "Non-nil while SESS's unit or process group is running."
+  (if (equal (plist-get sess :launcher) "detached")
+      (drgnx-ui--group-alive-p (plist-get sess :pgid))
+    (drgnx-ui-unit-active-p (plist-get sess :name))))
+
+(defun drgnx-ui--log-tail (sess)
+  (if (equal (plist-get sess :launcher) "detached")
+      (let ((log (expand-file-name "session.log" (plist-get sess :run))))
+        (if (file-exists-p log)
+            (with-temp-buffer
+              (insert-file-contents log)
+              (buffer-substring (save-excursion (goto-char (point-max)) (forward-line -30) (point))
+                                (point-max)))
+          ""))
+    (drgnx-ui-journal-tail (plist-get sess :name))))
+
 (defun drgnx-ui-start (&optional config size timeout)
   "Start a session (CONFIG minimal, gryphn or a directory); return its plist once ready."
   (let* ((root (drgnx-ui-state-root))
@@ -228,15 +295,20 @@ Unix socket paths are limited to ~108 bytes, so sockets never live under ROOT it
          (sess (drgnx-ui-prepare-run (drgnx-ui-next-name root) config size root))
          (name (plist-get sess :name))
          (run (plist-get sess :run))
-         (r (apply #'drgnx-ui--run (drgnx-ui-launch-argv sess))))
-    (unless (eq (car r) 0)
-      (delete-directory run t)
-      (drgnx-ui--fail "systemd-run failed: %s" (string-trim (cdr r))))
+         (launcher (drgnx-ui-launcher)))
+    (setq sess (plist-put sess :launcher launcher))
+    (if (equal launcher "detached")
+        (setq sess (plist-put sess :pgid (drgnx-ui--launch-detached sess)))
+      (let ((r (apply #'drgnx-ui--run (drgnx-ui-launch-argv sess))))
+        (unless (eq (car r) 0)
+          (drgnx-ui-stop name)
+          (drgnx-ui--fail "systemd-run failed: %s" (string-trim (cdr r))))))
+    (drgnx-ui--save sess)                 ; stop needs :launcher/:pgid from here on
     (let ((ready (expand-file-name "ready.json" run))
           (deadline (+ (float-time) (or timeout 60))))
       (while (not (file-exists-p ready))
-        (when (or (> (float-time) deadline) (not (drgnx-ui-unit-active-p name)))
-          (let ((log (drgnx-ui-journal-tail name)))
+        (when (or (> (float-time) deadline) (not (drgnx-ui-alive-p sess)))
+          (let ((log (drgnx-ui--log-tail sess)))
             (drgnx-ui-stop name)
             (drgnx-ui--fail "%s did not become ready:\n%s" name log)))
         (sleep-for 0.1))
@@ -252,12 +324,26 @@ Unix socket paths are limited to ~108 bytes, so sockets never live under ROOT it
   (unless (and (stringp name) (string-match-p drgnx-ui-name-regexp name))
     (drgnx-ui--refuse "%S is not a drgnx harness session (drgnx-ui-N)" name)))
 
+(defun drgnx-ui--stop-group (pgid)
+  "TERM the process group PGID, KILL it if it is still there after 2 s."
+  (when (drgnx-ui--group-alive-p pgid)
+    (drgnx-ui--run "kill" "-TERM" "--" (concat "-" pgid))
+    (let ((deadline (+ (float-time) 2)))
+      (while (and (drgnx-ui--group-alive-p pgid) (< (float-time) deadline))
+        (sleep-for 0.05)))
+    (when (drgnx-ui--group-alive-p pgid)
+      (drgnx-ui--run "kill" "-KILL" "--" (concat "-" pgid)))))
+
 (defun drgnx-ui-stop (name)
-  "Stop session NAME and remove its run directory."
+  "Stop session NAME and remove its run and socket directories."
   (drgnx-ui--check-name name)
-  (drgnx-ui--run "systemctl" "--user" "stop" name)
-  (let ((run (expand-file-name name (drgnx-ui-state-root)))
-        (sock (drgnx-ui-socket-dir name)))
+  (let* ((run (expand-file-name name (drgnx-ui-state-root)))
+         (sock (drgnx-ui-socket-dir name))
+         (file (expand-file-name "session.json" run))
+         (sess (and (file-exists-p file) (ignore-errors (drgnx-ui--read-json file)))))
+    (if (equal (plist-get sess :launcher) "detached")
+        (drgnx-ui--stop-group (or (plist-get sess :pgid) (drgnx-ui--read-pgid run)))
+      (drgnx-ui--run "systemctl" "--user" "stop" name))
     (when (file-directory-p run) (delete-directory run t))
     (when (file-directory-p sock) (delete-directory sock t))
     (ignore-errors (delete-directory (file-name-directory sock))))   ; the per-root dir, once empty
@@ -271,7 +357,8 @@ Unix socket paths are limited to ~108 bytes, so sockets never live under ROOT it
               for file = (expand-file-name "session.json" (expand-file-name name root))
               when (file-exists-p file)
               collect (let ((s (drgnx-ui--read-json file)))
-                        (list :name name :active (if (drgnx-ui-unit-active-p name) t :false)
+                        (list :name name :active (if (drgnx-ui-alive-p s) t :false)
+                              :launcher (or (plist-get s :launcher) "systemd")
                               :config (plist-get s :config) :size (plist-get s :size)))))))
 
 (defun drgnx-ui--unit-cmdline (name)
@@ -450,6 +537,7 @@ with optional :button, :count, :hold_ms.  Returns the API's reply."
   click NAME X Y | click NAME --buffer B --text T     [--button N] [--count N] [--hold-ms N]
   keys NAME KEYS | type NAME TEXT                     kbd syntax / literal text
   measure NAME ACTIONS-JSON                           several actions, one jank report
+  mcp                                                 serve the drgnx-ui MCP tools on stdio
   test-ui                                             the --ui test tier
 See docs/harness.md.")
 
@@ -490,6 +578,7 @@ See docs/harness.md.")
       ("measure" (drgnx-ui-measure (drgnx-ui-own-session name)
                                    (append (drgnx-ui--parse-json (or (nth 1 pos) "[]")) nil)))
       ("test-ui" (drgnx-ui-run-ui-tests))
+      ("mcp" (require 'drgnx-ui-mcp) (drgnx-ui-mcp-main))
       (_ (drgnx-ui--fail "unknown command %S\n%s" cmd drgnx-ui-usage)))))
 
 (defun drgnx-ui-batch-setup ()

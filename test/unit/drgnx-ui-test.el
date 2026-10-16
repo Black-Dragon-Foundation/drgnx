@@ -160,3 +160,25 @@
 (ert-deftest drgnx-ui/cli-args ()
   (should (equal (drgnx-ui--parse-args '("drgnx-ui-1" "--buffer" "*scratch*" "--hold-ms" "300"))
                  '(("drgnx-ui-1") :buffer "*scratch*" :hold_ms "300"))))
+
+(ert-deftest drgnx-ui/launcher-choice ()
+  (should (equal (drgnx-ui--choose-launcher nil t nil) "systemd"))
+  (should (equal (drgnx-ui--choose-launcher "podman" t nil) "detached"))
+  (should (equal (drgnx-ui--choose-launcher nil nil nil) "detached"))
+  (should (equal (drgnx-ui--choose-launcher "docker" nil "systemd") "systemd"))
+  (should (equal (drgnx-ui--choose-launcher nil t "detached") "detached")))
+
+(ert-deftest drgnx-ui/runtime-dir-fallback-without-xdg ()
+  (drgnx-ui-test--with-state
+    (let* ((process-environment (cons "XDG_RUNTIME_DIR" process-environment))   ; unset
+           (s (drgnx-ui-prepare-run "drgnx-ui-1")))
+      (should (equal (drgnx-ui-runtime-dir)
+                     (expand-file-name (format "drgnx-ui-%d" (user-uid)) temporary-file-directory)))
+      (should (= (file-modes (drgnx-ui-runtime-dir)) #o700))
+      (should (member (concat "XDG_RUNTIME_DIR=" (drgnx-ui-runtime-dir)) (drgnx-ui-session-env s)))
+      (drgnx-ui-stop "drgnx-ui-1"))))
+
+(ert-deftest drgnx-ui/next-name-skips-taken-wayland-displays ()
+  (drgnx-ui-test--with-state
+    (write-region "" nil (expand-file-name "drgnx-ui-1" runtime))
+    (should (equal (drgnx-ui-next-name root) "drgnx-ui-2"))))

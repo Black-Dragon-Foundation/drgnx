@@ -15,11 +15,15 @@ cmd_doctor() {
   check "ui: mutter" "command -v mutter" "install mutter (headless compositor for drgnx test --ui)" || rc=1
   check "ui: dbus-run-session" "command -v dbus-run-session" "install dbus-daemon" || rc=1
   check "ui: magick" "command -v magick" "install ImageMagick 7 (screenshot compositing)" || rc=1
-  check "ui: systemd --user" "systemctl --user list-units --no-legend" \
-    "a systemd user session is needed for drgnx ui start" || rc=1
   check "ui: pgtk emacs" \
     "${DRGNX_EMACS:-emacs-pgtk} --batch -Q --eval '(kill-emacs (if (featurep (quote pgtk)) 0 1))'" \
     "install emacs-pgtk (or set DRGNX_EMACS to a pgtk build)" || rc=1
+  local env rt launcher
+  env="$(env_eval '(drgnx-env-container)')"
+  rt="$(env_eval '(drgnx-env-container-runtime)')"
+  launcher="$(emacs --batch -Q -L "$here/harness" -l drgnx-ui --eval '(princ (drgnx-ui-launcher))')"
+  printf '%-24s %s\n' "environment" "${env:-host}" "container runtime" "${rt:-none}" \
+    "session launcher" "$launcher$([ "$launcher" = detached ] && echo ' (process group, no systemd unit)')"
   return "$rc"
 }
 
@@ -32,25 +36,44 @@ test_batch() {
         -f drgnx-run-ert-batch "$here/test/unit"
 }
 
-test_podman() {
-  podman build -q -t drgnx-test:f45 "$here/test/podman" >/dev/null
-  podman run --rm -v "$here:/src:ro,Z" -w /src drgnx-test:f45 bin/drgnx test
+env_eval() { # FORM — evaluate with harness/drgnx-env.el loaded, print the result
+  emacs --batch -Q -L "$here/harness" -l drgnx-env --eval "(princ (or $1 \"\"))"
+}
+
+test_container() { # [--ui] — the batch (or GUI) tier inside a fedora:45 / Emacs 31.1 container
+  local rt mount image file args=() cmd=(bin/drgnx test)
+  rt="$(env_eval '(drgnx-env-container-runtime)')"
+  [ -n "$rt" ] || { echo "drgnx: no container runtime found (podman, docker, nerdctl); set DRGNX_CONTAINER" >&2; return 1; }
+  mount="$here:/src:ro"; [ "$rt" = podman ] && mount="$mount,Z"
+  image=drgnx-test:f45; file=Containerfile
+  if [ "${1:-}" = --ui ]; then
+    image=drgnx-test-gui:f45; file=Containerfile.gui; cmd=(bin/drgnx test --ui)
+    args=(--security-opt seccomp=unconfined --security-opt label=disable)
+    mount="$here:/src:ro"
+  fi
+  echo "container runtime: $rt" >&2
+  "$rt" build -q -t "$image" -f "$here/test/container/$file" "$here/test/container" >/dev/null
+  "$rt" run --rm "${args[@]}" -v "$mount" -w /src "$image" "${cmd[@]}"
 }
 
 cmd_test() {
   case "${1:-}" in
     "") test_batch ;;
     --ui) ui test-ui ;;
-    --podman) test_podman ;;
-    *) echo "usage: drgnx test [--ui|--podman]" >&2; exit 2 ;;
+    --container) shift; test_container "$@" ;;
+    --podman) shift; DRGNX_CONTAINER=podman test_container "$@" ;;
+    *) echo "usage: drgnx test [--ui | --container [--ui]]" >&2; exit 2 ;;
   esac
 }
 
 usage() {
   cat <<'USAGE'
 usage: drgnx doctor            check this machine
-       drgnx test [--podman]   batch tests (on the host, or in a fedora:45 / Emacs 31.1 container)
+       drgnx test              batch tests
        drgnx test --ui         GUI tests in a headless session (mutter)
+       drgnx test --container [--ui]
+                               the same inside a fedora:45 / Emacs 31.1 container
+                               (podman, else docker, else nerdctl; DRGNX_CONTAINER overrides)
        drgnx ui COMMAND        headless GUI Emacs sessions: start, stop, ls, reap, state, shot,
                                click, keys, type, measure (drgnx ui --help; docs/harness.md)
 USAGE

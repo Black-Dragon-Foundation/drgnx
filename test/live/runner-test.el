@@ -20,7 +20,8 @@
       (delete-directory tmp t))))
 
 (ert-deftest drgnx-live/relative-suite-path-and-load-error-fail-fast ()
-  (let* ((tmp (make-temp-file (expand-file-name "drgnx-rel" default-directory) t))
+  (let* ((default-directory temporary-file-directory)   ; the checkout may be read-only (containers)
+         (tmp (make-temp-file (expand-file-name "drgnx-rel" default-directory) t))
          (t0 (float-time)))
     (unwind-protect
         (progn

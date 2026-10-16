@@ -59,3 +59,15 @@
            (s (drgnx-ui-start "minimal" nil 20)))
       (should (plist-get (drgnx-ui-state (drgnx-ui-own-session (plist-get s :name))) :windows))
       (drgnx-ui-stop (plist-get s :name)))))
+
+(ert-deftest drgnx-live/detached-launcher-without-systemd ()
+  (drgnx-live--with-state
+    (let* ((process-environment (cons "DRGNX_UI_LAUNCHER=detached" process-environment))
+           (s (drgnx-ui-start "minimal" nil 20))
+           (name (plist-get s :name)))
+      (should (equal (plist-get s :launcher) "detached"))
+      (should-not (drgnx-ui-unit-active-p name))
+      (should (drgnx-ui-alive-p (drgnx-ui-own-session name)))
+      (should (eq (plist-get (drgnx-ui-measure (drgnx-ui-own-session name) (list (list :type "x"))) :settled) t))
+      (drgnx-ui-stop name)
+      (should (equal (drgnx-live--processes (concat "--wayland-display " name)) "")))))

@@ -10,7 +10,8 @@ and [ADR 0004](decisions/0004-headless-ui-harness.md)).
 | Command | What runs | Where |
 |---|---|---|
 | `bin/drgnx test` | ERT suites in `test/unit/` (batch Emacs) | the host |
-| `bin/drgnx test --podman` | the same, in a `fedora:45` container (Emacs 31.1, drgnx's baseline) | podman |
+| `bin/drgnx test --container` | the batch tier in a `fedora:45` container (Emacs 31.1, drgnx's baseline) | podman, docker or nerdctl |
+| `bin/drgnx test --container --ui` | the GUI tier in a container (mutter renders without a GPU) | podman, docker or nerdctl |
 | `bin/drgnx test --ui` | GUI ERT suites in `test/ui/` inside a headless session, then live ERT suites in `test/live/` (batch Emacs starting real sessions) | the host (needs mutter) |
 
 `harness/run-ert.el` runs a suite and writes a JSON summary
@@ -176,3 +177,28 @@ current state root — run directories, plus live units whose command line point
 of other state roots alone. Units also end on their own after 30 minutes (`RuntimeMaxSec=1800`) and are
 capped at 3 GB (`MemoryMax`). A failed `drgnx test --ui` run keeps its run directory (with `session.log`) for
 debugging.
+
+## Containers
+
+`harness/drgnx-env.el` tells where drgnx runs; `bin/drgnx doctor` prints it:
+
+```
+environment              host            # or podman, docker, kubernetes, containerd, lxc, …
+container runtime        podman          # for --container test runs
+session launcher         systemd         # or detached (process group, no systemd unit)
+```
+
+- **Inside a container** (detected from `KUBERNETES_SERVICE_HOST`, `/run/.containerenv`, `/.dockerenv`,
+  `$container`, or `/proc/1/cgroup` mentioning kubepods/libpod/docker/containerd) there is usually no systemd
+  user session, so sessions are launched **detached**: `setsid` makes a new process group whose id is kept in
+  `RUN/pgid`; `stop` sends it TERM, then KILL after 2 s. Liveness is `kill -0 -PGID`. On a host without a
+  systemd user session the same happens. `DRGNX_UI_LAUNCHER=systemd|detached` overrides the choice.
+- Where `XDG_RUNTIME_DIR` is unset (typical in containers) sessions use a private `/tmp/drgnx-ui-<uid>`
+  (mode 0700) for their Wayland displays and sockets.
+- **Container runtime on the host:** `--container` uses `$DRGNX_CONTAINER` if set, else the first of
+  `podman`, `docker`, `nerdctl` on `PATH` (Rancher Desktop provides `docker` in moby mode and `nerdctl` in
+  containerd mode). `--podman` is short for `DRGNX_CONTAINER=podman … --container`.
+- **GUI tier in a container:** `test/container/Containerfile.gui` (fedora:45 + `emacs-pgtk mutter dbus-daemon
+  mesa-dri-drivers ImageMagick`, ~1.8 GB). mutter falls back to a surfaceless software renderer, so no GPU is
+  needed. The container needs `--security-opt seccomp=unconfined --security-opt label=disable`: GTK loads icons
+  through glycin, whose `bwrap` sandbox cannot create namespaces under the default policy, and Emacs aborts.
