@@ -20,7 +20,7 @@
   (interactive)
   (let* ((cands (drgnx-palette-candidates))
          (annotate (lambda (label)
-                     (when-let ((c (drgnx-commands-get (cdr (assoc label cands)))))
+                     (when-let* ((c (drgnx-commands-get (cdr (assoc label cands)))))
                        (let ((key (drgnx-surfaces-key c)))
                          (concat (if (string-empty-p key) "" (concat "  " key))
                                  (if (drgnx-cmd-doc c) (concat "  — " (drgnx-cmd-doc c)) ""))))))
@@ -29,7 +29,7 @@
                       `(metadata (annotation-function . ,annotate) (category . drgnx-command))
                     (complete-with-action action cands string pred))))
          (choice (completing-read "Command: " table nil t)))
-    (when-let ((id (cdr (assoc choice cands))))
+    (when-let* ((id (cdr (assoc choice cands))))
       (drgnx-surfaces-run id))))
 
 (provide 'drgnx-palette)

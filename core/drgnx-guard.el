@@ -38,7 +38,7 @@
         ((drgnx-guard--daemon-starting-p) "daemon startup")))
 
 (defun drgnx-guard--check (fn args)
-  (when-let ((why (drgnx-guard--context)))
+  (when-let* ((why (drgnx-guard--context)))
     (signal 'drgnx-prompt-in-automatic-path
             (list (format "%s %S asked from %s" fn (car args) why)))))
 

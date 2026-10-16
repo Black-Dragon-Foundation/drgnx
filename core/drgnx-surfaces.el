@@ -31,12 +31,12 @@ their keymap; \"\" if none."
   "CMD's registry key, else whatever key currently runs its command."
   (or (drgnx-cmd-key cmd)
       (let ((c (drgnx-cmd-command cmd)))
-        (when-let ((k (and (symbolp c) (where-is-internal c nil t)))) (key-description k)))))
+        (when-let* ((k (and (symbolp c) (where-is-internal c nil t)))) (key-description k)))))
 
 (defun drgnx-surfaces-tip (cmd)
   "Echo how CMD could have been run with a key, keeping any message the command printed.
 Returns the tip, or nil when CMD has no key."
-  (when-let ((key (and (not (drgnx-cmd-native cmd)) (drgnx-surfaces--any-key cmd))))
+  (when-let* ((key (and (not (drgnx-cmd-native cmd)) (drgnx-surfaces--any-key cmd))))
     (let ((prev (current-message))
           (tip (format "%s — next time: %s" (drgnx-commands-label cmd) key)))
       (message "%s" (if (and prev (not (string-empty-p prev))) (concat prev "   ·   " tip) tip))
@@ -91,7 +91,7 @@ Returns the tip, or nil when CMD has no key."
 
 (defun drgnx-surfaces--move-point (click)
   "Move point to CLICK in a text area, as VS Code does — unless it lands inside the region."
-  (when-let ((posn (and click (event-start click)))
+  (when-let* ((posn (and click (event-start click)))
              (pos (and (null (posn-area posn)) (posn-point posn))))
     (unless (and (use-region-p) (<= (region-beginning) pos (region-end)))
       (mouse-set-point click))))

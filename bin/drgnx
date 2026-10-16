@@ -3,27 +3,22 @@
 set -euo pipefail
 here="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
 
-check() { # NAME CMD FIX
-  if bash -c "$2" >/dev/null 2>&1; then printf '%-24s ok\n' "$1"; else printf '%-24s FAIL  %s\n' "$1" "$3"; return 1; fi
-}
-
-cmd_doctor() {
-  local rc=0
-  check "emacs >= 30.2" \
-    "emacs --batch -Q --eval '(kill-emacs (if (version<= \"30.2\" emacs-version) 0 1))'" \
-    "install GNU Emacs 31.1+ (30.2 works until every platform ships 31.1)" || rc=1
-  check "ui: mutter" "command -v mutter" "install mutter (headless compositor for drgnx test --ui)" || rc=1
-  check "ui: dbus-run-session" "command -v dbus-run-session" "install dbus-daemon" || rc=1
-  check "ui: magick" "command -v magick" "install ImageMagick 7 (screenshot compositing)" || rc=1
-  check "ui: pgtk emacs" \
-    "${DRGNX_EMACS:-emacs-pgtk} --batch -Q --eval '(kill-emacs (if (featurep (quote pgtk)) 0 1))'" \
-    "install emacs-pgtk (or set DRGNX_EMACS to a pgtk build)" || rc=1
-  local env rt launcher
-  env="$(env_eval '(drgnx-env-container)')"
-  rt="$(env_eval '(drgnx-env-container-runtime)')"
-  launcher="$(emacs --batch -Q -L "$here/harness" -l drgnx-ui --eval '(princ (drgnx-ui-launcher))')"
-  printf '%-24s %s\n' "environment" "${env:-host}" "container runtime" "${rt:-none}" \
-    "session launcher" "$launcher$([ "$launcher" = detached ] && echo ' (process group, no systemd unit)')"
+cmd_doctor() { # [--json] [--dev] — checks run inside the Emacs drgnx uses (core/drgnx-doctor.el)
+  local emacs="${DRGNX_EMACS:-emacs}" rc=0
+  if ! command -v "$emacs" >/dev/null 2>&1; then
+    printf 'FAIL  %-20s %s\n      fix: %s\n' "emacs" "no Emacs found ($emacs)" \
+      "run the installer: curl -fsSL https://raw.githubusercontent.com/Black-Dragon-Foundation/drgnx/main/install.sh | bash  (see docs/install.md)"
+    return 1
+  fi
+  "$emacs" --batch -Q -L "$here/core" -l drgnx-doctor -f drgnx-doctor-cli "$@" || rc=1
+  if [[ " $* " == *" --dev "* && " $* " != *" --json "* ]]; then
+    local env rt launcher
+    env="$(env_eval '(drgnx-env-container)')"
+    rt="$(env_eval '(drgnx-env-container-runtime)')"
+    launcher="$(emacs --batch -Q -L "$here/harness" -l drgnx-ui --eval '(princ (drgnx-ui-launcher))')"
+    printf 'INFO  %-20s %s\n' "environment" "${env:-host}" "container-runtime" "${rt:-none}" \
+      "session-launcher" "$launcher$([ "$launcher" = detached ] && echo ' (process group, no systemd unit)')"
+  fi
   return "$rc"
 }
 
@@ -69,7 +64,8 @@ cmd_test() {
 
 usage() {
   cat <<'USAGE'
-usage: drgnx doctor            check this machine
+usage: drgnx doctor [--json] [--dev]
+                               is this machine ready for drgnx? (--dev: also the tools to develop it)
        drgnx test              batch tests
        drgnx test --ui         GUI tests in a headless session (mutter)
        drgnx test --scenario [--config drgnx|gryphn|DIR]

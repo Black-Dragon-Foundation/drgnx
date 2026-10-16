@@ -1,0 +1,157 @@
+;;; drgnx-doctor.el --- Is this machine ready for drgnx? -*- lexical-binding: t -*-
+
+;; SPDX-License-Identifier: GPL-3.0-or-later
+
+;;; Commentary:
+;; `drgnx doctor' runs these checks in batch, inside the Emacs drgnx will use, so every
+;; answer is about that Emacs.  A check is a function of a facts plist (gathered once by
+;; `drgnx-doctor-facts', injected in tests) returning (STATUS DETAIL FIX), STATUS one of
+;; `ok', `warn', `fail' or `info'.  Any `fail' makes the doctor exit 1.  Modules will add
+;; their own checks with `drgnx-doctor-define' (M4).  See docs/install.md.
+
+;;; Code:
+(require 'cl-lib)
+(require 'json)
+(require 'subr-x)
+
+(defconst drgnx-doctor-install-hint
+  "run the installer: curl -fsSL https://raw.githubusercontent.com/Black-Dragon-Foundation/drgnx/main/install.sh | bash  (see docs/install.md)"
+  "How to get a suitable Emacs.")
+
+(defconst drgnx-doctor-cves-fixed-in-31.2
+  "TRAMP command injection via crafted file names, Flymake running code from edited files, read-symbol-shorthands code execution on opening a file"
+  "Known security issues in Emacs up to 31.1, fixed in 31.2 (not released as of 2026-10-16).")
+
+(defvar drgnx-doctor--checks nil "Alist NAME → plist (:group :doc :check :dev), in definition order.")
+
+(cl-defun drgnx-doctor-define (name &key group doc check dev)
+  "Define check NAME in GROUP with DOC; CHECK maps facts to (STATUS DETAIL FIX).
+DEV non-nil: only run for `drgnx doctor --dev' (tools for developing drgnx)."
+  (let ((entry (list :group group :doc doc :check check :dev dev)))
+    (if (assq name drgnx-doctor--checks)
+        (setf (alist-get name drgnx-doctor--checks) entry)
+      (setq drgnx-doctor--checks (append drgnx-doctor--checks (list (cons name entry))))))
+  name)
+
+(defun drgnx-doctor-check (name facts)
+  "Run check NAME on FACTS; return (STATUS DETAIL FIX)."
+  (funcall (plist-get (alist-get name drgnx-doctor--checks) :check) facts))
+
+;;;; Facts
+
+(defun drgnx-doctor--native-compiles ()
+  "t if this Emacs can natively compile a function, else the error as a string."
+  (condition-case err
+      (progn (native-compile '(lambda () 1)) t)
+    (error (error-message-string err))))
+
+(defun drgnx-doctor-facts ()
+  "Facts about the running Emacs and this machine."
+  (let ((native (and (fboundp 'native-comp-available-p) (native-comp-available-p))))
+    (list :version emacs-version
+          :native-available native
+          :native-compiles (if native (drgnx-doctor--native-compiles) "not built with native compilation")
+          :treesit (and (fboundp 'treesit-available-p) (treesit-available-p))
+          :gui (cond ((featurep 'pgtk) 'pgtk) ((featurep 'ns) 'ns) ((featurep 'x) 'x)
+                     ((string-match-p "\\(PGTK\\|X11\\|NS\\)" system-configuration-features)
+                      (intern (downcase (match-string 1 system-configuration-features)))))
+          :git (and (executable-find "git") t)
+          :mutter (and (executable-find "mutter") t)
+          :dbus-run-session (and (executable-find "dbus-run-session") t)
+          :magick (and (executable-find "magick") t)
+          :pgtk-emacs (or (featurep 'pgtk) (and (executable-find "emacs-pgtk") t)))))
+
+;;;; Checks
+
+(defun drgnx-doctor--version< (a b) (version< a b))
+
+(drgnx-doctor-define 'emacs-version :group "Emacs" :doc "GNU Emacs 31.1 or newer (30.2 still works)"
+  :check (lambda (f)
+           (let ((v (plist-get f :version)))
+             (cond ((not (drgnx-doctor--version< v "31.1")) (list 'ok (format "Emacs %s" v) nil))
+                   ((not (drgnx-doctor--version< v "30.2"))
+                    (list 'warn (format "Emacs %s works, 31.1 is recommended" v) drgnx-doctor-install-hint))
+                   (t (list 'fail (format "Emacs %s is too old (30.2 or newer needed)" v) drgnx-doctor-install-hint))))))
+
+(drgnx-doctor-define 'native-compilation :group "Emacs" :doc "Native compilation works (drgnx's speed depends on it)"
+  :check (lambda (f)
+           (let ((c (plist-get f :native-compiles)))
+             (cond ((not (plist-get f :native-available))
+                    (list 'fail "this Emacs was built without native compilation" drgnx-doctor-install-hint))
+                   ((eq c t) (list 'ok "native compilation works" nil))
+                   (t (list 'fail (format "native compilation is built in but fails: %s" c)
+                            (concat "install your distribution's libgccjit, or " drgnx-doctor-install-hint)))))))
+
+(drgnx-doctor-define 'tree-sitter :group "Emacs" :doc "Tree-sitter support (syntax-aware editing)"
+  :check (lambda (f)
+           (if (plist-get f :treesit) (list 'ok "tree-sitter available" nil)
+             (list 'warn "this Emacs has no tree-sitter support" drgnx-doctor-install-hint))))
+
+(drgnx-doctor-define 'gui :group "Emacs" :doc "A graphical build (pgtk on Wayland, X11 or macOS)"
+  :check (lambda (f)
+           (if-let* ((g (plist-get f :gui))) (list 'ok (format "graphical build (%s)" g) nil)
+             (list 'warn "terminal-only Emacs: drgnx's workbench needs a graphical build" drgnx-doctor-install-hint))))
+
+(drgnx-doctor-define 'security :group "Emacs" :doc "Known security issues of this Emacs version"
+  :check (lambda (f)
+           (if (drgnx-doctor--version< (plist-get f :version) "31.2")
+               (list 'warn (format "Emacs up to 31.1 has known issues fixed in 31.2: %s" drgnx-doctor-cves-fixed-in-31.2)
+                     "update to 31.2 when it is released; until then avoid opening untrusted files and remote paths")
+             (list 'ok "no known issues for this version" nil))))
+
+(drgnx-doctor-define 'git :group "Tools" :doc "git (installing and updating drgnx)"
+  :check (lambda (f)
+           (if (plist-get f :git) (list 'ok "git found" nil)
+             (list 'warn "git not found" "install git with your package manager"))))
+
+(dolist (tool '((ui-mutter :mutter "mutter" "the headless compositor of drgnx test --ui")
+                (ui-dbus :dbus-run-session "dbus-run-session" "a private D-Bus per test session")
+                (ui-magick :magick "magick" "ImageMagick 7: screenshot compositing")
+                (ui-pgtk :pgtk-emacs "a pgtk Emacs (emacs-pgtk)" "the GUI Emacs of harness sessions")))
+  (pcase-let ((`(,name ,key ,bin ,why) tool))
+    (drgnx-doctor-define name :group "Development" :dev t :doc (format "%s (%s)" bin why)
+      :check (lambda (f)
+               (if (plist-get f key) (list 'ok (format "%s found" bin) nil)
+                 (list 'warn (format "%s not found (%s)" bin why) (format "install %s" bin)))))))
+
+;;;; Running and reporting
+
+(defun drgnx-doctor-run (facts &optional dev)
+  "Results (plists :name :group :status :detail :fix) of every check on FACTS; DEV adds dev checks."
+  (cl-loop for (name . spec) in drgnx-doctor--checks
+           when (or dev (not (plist-get spec :dev)))
+           collect (pcase-let ((`(,status ,detail ,fix)
+                                (condition-case err (funcall (plist-get spec :check) facts)
+                                  (error (list 'fail (format "the check itself failed: %s" (error-message-string err)) nil)))))
+                     (list :name name :group (plist-get spec :group) :status status :detail detail :fix fix))))
+
+(defun drgnx-doctor-format (results)
+  "RESULTS as text: one line per check, the fix indented below anything not ok."
+  (mapconcat (lambda (r)
+               (concat (format "%-5s %-20s %s" (upcase (if (eq (plist-get r :status) 'ok) "ok" (symbol-name (plist-get r :status))))
+                               (plist-get r :name) (plist-get r :detail))
+                       (if (and (plist-get r :fix) (not (eq (plist-get r :status) 'ok)))
+                           (format "\n      fix: %s" (plist-get r :fix)) "")))
+             results "\n"))
+
+(defun drgnx-doctor-json (results)
+  (decode-coding-string
+   (json-serialize (vconcat (mapcar (lambda (r) (list :name (symbol-name (plist-get r :name)) :group (plist-get r :group)
+                                                      :status (symbol-name (plist-get r :status))
+                                                      :detail (plist-get r :detail) :fix (or (plist-get r :fix) :null)))
+                                    results)))
+   'utf-8))
+
+(defun drgnx-doctor-exit-code (results)
+  (if (seq-some (lambda (r) (eq (plist-get r :status) 'fail)) results) 1 0))
+
+(defun drgnx-doctor-cli ()
+  "Batch entry: `drgnx doctor [--json] [--dev]'."
+  (let* ((args (prog1 command-line-args-left (setq command-line-args-left nil)))
+         (results (drgnx-doctor-run (drgnx-doctor-facts) (member "--dev" args))))
+    (princ (if (member "--json" args) (drgnx-doctor-json results) (drgnx-doctor-format results)))
+    (terpri)
+    (kill-emacs (drgnx-doctor-exit-code results))))
+
+(provide 'drgnx-doctor)
+;;; drgnx-doctor.el ends here

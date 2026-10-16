@@ -78,6 +78,25 @@ Emacs is idle). Each setup runs under its own error guard and is timed; a file t
 a module too. "Help: Module Report" (`drgnx-modules-show-report`) lists stage, milliseconds and errors. Flags,
 settings, doctor checks, more stages and the modules index come with M4.
 
+## Doctor (`drgnx-doctor.el`)
+
+`bin/drgnx doctor [--json] [--dev]` asks the Emacs drgnx will use (`$DRGNX_EMACS`, else `emacs`) whether this
+machine is ready, and gives a fix for anything that is not:
+
+```
+OK    emacs-version        Emacs 31.1                 (30.2: WARN — works, 31.1 recommended; older: FAIL)
+OK    native-compilation   native compilation works   (built without it, or libgccjit broken: FAIL)
+OK    tree-sitter          tree-sitter available
+OK    gui                  graphical build (pgtk)     (terminal-only: WARN)
+WARN  security             known issues up to 31.1, fixed in 31.2 (TRAMP, Flymake, read-symbol-shorthands)
+OK    git                  git found
+```
+
+Native compilation is checked by actually compiling a function, not only by asking whether it is built in. Any
+FAIL makes the exit status 1. `--dev` adds the tools for developing drgnx (mutter, dbus-run-session, ImageMagick, a
+pgtk Emacs) and the environment, container runtime and session launcher. Without any Emacs, the doctor prints the
+installer command. Checks are defined with `drgnx-doctor-define`; modules will add their own (M4).
+
 ## Tests
 
 Batch: `test/unit/core-*-test.el`. In a session: `test/live/drgnx-boot-test.el` boots `config=drgnx` and checks
