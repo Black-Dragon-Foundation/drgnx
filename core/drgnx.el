@@ -20,9 +20,9 @@
 
 (defun drgnx--core-commands ()
   "The commands the core itself provides."
-  (drgnx-command-define 'palette :category "View" :title "Command Palette" :key "C-S-p"
+  (drgnx-command-define 'palette :category "View" :title "Command Palette"
     :command #'drgnx-palette :menu '("View") :doc "Every command by name, with its key")
-  (drgnx-command-define 'keys-sheet :category "Help" :title "Keyboard Shortcuts" :key "<f1>"
+  (drgnx-command-define 'keys-sheet :category "Help" :title "Keyboard Shortcuts"
     :command #'drgnx-surfaces-cheatsheet :menu '("Help") :doc "Every command, its key and where to click")
   (drgnx-command-define 'modules-report :category "Help" :title "Module Report"
     :command #'drgnx-modules-show-report :menu '("Help") :doc "Which modules loaded, how long they took, what failed"))

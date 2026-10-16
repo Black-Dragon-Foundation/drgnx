@@ -41,27 +41,28 @@ where it was asked from — when called:
 
 ## Command registry (`drgnx-registry.el`)
 
-Every command is registered once:
+Every command is registered once, without keys:
 
 ```elisp
 (drgnx-command-define 'palette
-  :category "View" :title "Command Palette" :key "C-S-p"
+  :category "View" :title "Command Palette"
   :command #'drgnx-palette :menu '("View") :doc "Every command by name, with its key")
 ```
 
-Keys: `:title`, `:category` (required), `:command` (required unless `:native`), `:key`, `:map` (nil for global,
-a keymap symbol, or `(FEATURE . KEYMAP)` to bind once FEATURE loads), `:menu` (menu-bar path), `:context` (right-
-click contexts), `:context-first`, `:doc`, `:native` (an Emacs key documented everywhere but never rebound), and
-`:when` (a predicate: the command is offered only while it holds). Redefining an id replaces it; a key that
-cannot be bound is recorded in `drgnx-commands-problems`, never fatal; `drgnx-commands-conflicts` lists keys
-claimed twice in one keymap. The entries keep the ids of the gryphn layer's registry, which this is ported from.
+Keys: `:title`, `:category`, `:command` (required), `:scope` (`app` default, `editing` or `window` — which key-profile
+layers key it), `:map` (the keymap its keys go into by default: nil for global, a keymap symbol, or
+`(FEATURE . KEYMAP)` for a keymap that exists once FEATURE loads), `:menu` (menu-bar path), `:context` (right-click
+contexts), `:context-first`, `:doc` and `:when` (a predicate: the command is offered only while it holds).
+Redefining an id replaces it. **Keys come from key profiles** ([keys.md](keys.md)); the active keys of a command
+are in its `bound` slot, which every surface reads. The entries keep the ids of the gryphn layer's registry, which
+this is ported from.
 
 ## Surfaces (`drgnx-surfaces.el`, `drgnx-palette.el`)
 
-Generated from the registry, never written by hand: keybindings (by `drgnx-command-define`), the menu bar,
+Generated from the registry, never written by hand, showing the keys of the active key profiles: the menu bar,
 right-click menus (contexts via `drgnx-surfaces-define-context`), which-key labels (when which-key is present),
-the **F1** key sheet (`*drgnx keys*`), a markdown cheat sheet (`drgnx-surfaces-export-markdown`), "next time:
-KEY" tips after a command run from a menu or the palette, and the **command palette** (`C-S-p`): every available
+the **key sheet** ("Keyboard Shortcuts", `*drgnx keys*`), a markdown cheat sheet (`drgnx-surfaces-export-markdown`), "next time:
+KEY" tips after a command run from a menu or the palette, and the **command palette** (`C-S-p` in every profile): every available
 command as "Category: Title" with its key and description beside it, through the normal completion UI.
 
 ## Modules (`drgnx-modules.el`)

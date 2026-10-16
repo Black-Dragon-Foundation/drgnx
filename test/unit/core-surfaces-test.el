@@ -9,12 +9,15 @@
 (defmacro drgnx-test--with-commands (&rest body)
   `(let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
          (drgnx-commands-problems nil) (drgnx-surfaces-contexts nil))
-     (drgnx-command-define 'b-cmd :title "Beta" :category "Zed" :command #'drgnx-test--surf-cmd :key "C-c b"
+     (drgnx-command-define 'b-cmd :title "Beta" :category "Zed" :command #'drgnx-test--surf-cmd
                            :map 'drgnx-test-surf-map :menu '("Tools" "Test") :doc "Beta does b")
-     (drgnx-command-define 'a-cmd :title "Alpha" :category "Able" :command #'drgnx-test--surf-cmd :key "<f19>"
+     (drgnx-command-define 'a-cmd :title "Alpha" :category "Able" :command #'drgnx-test--surf-cmd
                            :context 'always :doc "Alpha | pipes")
      (drgnx-command-define 'gone :title "Gone" :category "Able" :command 'drgnx-test--missing)
      (drgnx-surfaces-define-context 'always (lambda (_) t))
+     ;; Keys come from profiles (drgnx-keys); here they are set directly.
+     (setf (drgnx-cmd-bound (drgnx-commands-get 'b-cmd)) (list (cons "C-c b" 'drgnx-test-surf-map)))
+     (setf (drgnx-cmd-bound (drgnx-commands-get 'a-cmd)) (list (cons "<f19>" nil) (cons "C-c a" nil)))
      ,@body))
 
 (ert-deftest drgnx-surfaces/key-display ()
@@ -46,8 +49,8 @@
    (should drgnx-test--ran)
    (should (string-search "Able: Alpha — next time: <f19>" (drgnx-surfaces-tip (drgnx-commands-get 'a-cmd))))))
 
-(ert-deftest drgnx-surfaces/native-keys-are-documented ()
+(ert-deftest drgnx-surfaces/unbound-commands-show-no-key ()
   (drgnx-test--with-commands
-   (drgnx-command-define 'nat :title "Save" :category "File" :native "C-x C-s" :doc "Save this buffer")
-   (should (equal (drgnx-surfaces-key (drgnx-commands-get 'nat)) "C-x C-s"))
-   (should (string-search "| `C-x C-s` | Save |" (drgnx-surfaces-markdown)))))
+   (drgnx-command-define 'free :title "Free" :category "Able" :command #'drgnx-test--surf-cmd)
+   (should (equal (drgnx-surfaces-key (drgnx-commands-get 'free)) ""))
+   (should (string-search "|  | Free |" (drgnx-surfaces-markdown)))))

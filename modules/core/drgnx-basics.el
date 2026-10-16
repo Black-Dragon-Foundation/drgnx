@@ -12,9 +12,9 @@
           use-dialog-box nil
           use-short-answers t
           inhibit-startup-screen t)
-    (drgnx-command-define 'open-file :category "File" :title "Open File…" :native "C-x C-f"
+    (drgnx-command-define 'open-file :category "File" :title "Open File…" :command #'find-file
       :doc "Open a file")
-    (drgnx-command-define 'save-file :category "File" :title "Save" :native "C-x C-s"
+    (drgnx-command-define 'save-file :category "File" :title "Save" :command #'save-buffer
       :doc "Save this buffer")
     (drgnx-command-define 'line-numbers :category "View" :title "Toggle Line Numbers"
       :command #'display-line-numbers-mode :menu '("View") :doc "Line numbers in this buffer")))

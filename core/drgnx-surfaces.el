@@ -4,8 +4,9 @@
 
 ;;; Commentary:
 ;; The registry's outputs: menu bar, right-click menus, which-key labels, the F1 sheet, the
-;; markdown cheat sheet, "next time" tips.  Keybindings are applied by
-;; `drgnx-command-define' itself.  Ported from the gryphn layer.  See docs/core.md.
+;; markdown cheat sheet, "next time" tips.  Keys are whatever the active key profiles bound
+;; (each command's `bound' slot, set by `drgnx-keys').  Ported from the gryphn layer.  See
+;; docs/core.md and docs/keys.md.
 
 ;;; Code:
 
@@ -19,24 +20,25 @@
 ;;;; Keys and running
 
 (defun drgnx-surfaces-key (cmd)
-  "Display string for CMD's key (or its documented `:native' key), scoped keys suffixed with
-their keymap; \"\" if none."
-  (let ((key (or (drgnx-cmd-key cmd) (and (stringp (drgnx-cmd-native cmd)) (drgnx-cmd-native cmd)))))
-    (if (not key) ""
-      (let ((mapsym (cdr (drgnx-commands--keymap-spec (drgnx-cmd-map cmd)))))
-        (if (eq mapsym 'global-map) key
-          (format "%s (in %s)" key (string-remove-suffix "-mode-map" (string-remove-suffix "-map" (symbol-name mapsym)))))))))
+  "Display string for CMD's first active key, a key in a mode's keymap suffixed with that
+keymap; \"\" if none."
+  (pcase (car (drgnx-cmd-bound cmd))
+    ('nil "")
+    (`(,key . ,map)
+     (let ((mapsym (cdr (drgnx-commands--keymap-spec map))))
+       (if (eq mapsym 'global-map) key
+         (format "%s (in %s)" key (string-remove-suffix "-mode-map" (string-remove-suffix "-map" (symbol-name mapsym)))))))))
 
 (defun drgnx-surfaces--any-key (cmd)
-  "CMD's registry key, else whatever key currently runs its command."
-  (or (drgnx-cmd-key cmd)
+  "CMD's active key, else whatever key currently runs its command."
+  (or (car (car (drgnx-cmd-bound cmd)))
       (let ((c (drgnx-cmd-command cmd)))
         (when-let* ((k (and (symbolp c) (where-is-internal c nil t)))) (key-description k)))))
 
 (defun drgnx-surfaces-tip (cmd)
   "Echo how CMD could have been run with a key, keeping any message the command printed.
 Returns the tip, or nil when CMD has no key."
-  (when-let* ((key (and (not (drgnx-cmd-native cmd)) (drgnx-surfaces--any-key cmd))))
+  (when-let* ((key (drgnx-surfaces--any-key cmd)))
     (let ((prev (current-message))
           (tip (format "%s — next time: %s" (drgnx-commands-label cmd) key)))
       (message "%s" (if (and prev (not (string-empty-p prev))) (concat prev "   ·   " tip) tip))
@@ -54,8 +56,7 @@ Returns the tip, or nil when CMD has no key."
     (lambda () (interactive) (drgnx-surfaces-run id))))
 
 (defun drgnx-surfaces--showable-p (cmd)
-  (and (not (drgnx-cmd-native cmd)) (drgnx-commands-available-p cmd)
-       (not (keymapp (drgnx-cmd-command cmd)))))
+  (and (drgnx-commands-available-p cmd) (not (keymapp (drgnx-cmd-command cmd)))))
 
 ;;;; Menu bar
 
@@ -117,16 +118,16 @@ Returns the tip, or nil when CMD has no key."
 ;;;; which-key labels
 
 (defun drgnx-surfaces-apply-which-key ()
-  "Label every registry key in which-key with its title."
+  "Label every active key in which-key with its command's title."
   (when (require 'which-key nil t)
-  (dolist (cmd (drgnx-commands-all))
-    (when (and (drgnx-cmd-key cmd) (not (drgnx-cmd-native cmd)))
-      (pcase-let ((`(,feature . ,mapsym) (drgnx-commands--keymap-spec (drgnx-cmd-map cmd))))
-        (if (eq mapsym 'global-map)
-            (which-key-add-key-based-replacements (drgnx-cmd-key cmd) (drgnx-cmd-title cmd))
-          (let ((label (lambda () (which-key-add-keymap-based-replacements
-                                   (symbol-value mapsym) (drgnx-cmd-key cmd) (drgnx-cmd-title cmd)))))
-            (if feature (with-eval-after-load feature (funcall label)) (funcall label)))))))))
+    (dolist (cmd (drgnx-commands-all))
+      (pcase-dolist (`(,key . ,map) (drgnx-cmd-bound cmd))
+        (pcase-let ((`(,feature . ,mapsym) (drgnx-commands--keymap-spec map)))
+          (if (eq mapsym 'global-map)
+              (which-key-add-key-based-replacements key (drgnx-cmd-title cmd))
+            (let ((label (lambda () (which-key-add-keymap-based-replacements
+                                     (symbol-value mapsym) key (drgnx-cmd-title cmd)))))
+              (if feature (with-eval-after-load feature (funcall label)) (funcall label)))))))))
 
 ;;;; Cheat sheet (F1) and kb markdown
 
