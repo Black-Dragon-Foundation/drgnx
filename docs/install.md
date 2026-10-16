@@ -90,7 +90,9 @@ Used where the distribution has no 31.1 yet. Everything happens in `~/.cache/drg
    with gcc 14 but defaults to gcc 15).
 3. `./configure --prefix=~/.local --with-native-compilation=aot --with-tree-sitter --with-pgtk` (X11:
    `--with-x-toolkit=gtk3`). The installer stops if configure did not enable native compilation.
-4. `make`, then `make install` into your prefix — no root, and only after the build succeeded.
+4. `make -jN`, then `make install` into your prefix — no root, and only after the build succeeded. N is one job
+   per CPU but at most one per 1.5 GiB of available memory (or of the container's memory limit): every job is an
+   Emacs compiling Lisp natively, and one per CPU can exhaust the memory of a many-core machine.
 
 Expect 10–40 minutes depending on the machine (most of it is compiling the Lisp natively ahead of time).
 
@@ -132,5 +134,5 @@ with your package manager. The PATH line, if you let the installer add it, is ma
 `bin/drgnx test` runs install.sh's plans for every platform fixture (fast). `bin/drgnx test --install
 [NAME…]` runs it for real in fresh containers — source builds on Fedora 44, Debian 13 and Ubuntu 26.04,
 packages on Fedora 45 and Arch — then checks the doctor, that a second run changes nothing, and that
-`--dry-run` touches nothing. Slow (about 10–15 minutes per source build); logs in
-`~/.local/state/drgnx/install-tests/`.
+`--dry-run` touches nothing. Each container is limited to 6 GiB of memory. Slow (about 10–20 minutes per source
+build); logs in `~/.local/state/drgnx/install-tests/`.

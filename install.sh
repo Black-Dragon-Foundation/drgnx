@@ -163,6 +163,25 @@ choose_method() {
   esac
   BUILD_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/drgnx/build"
   CONFIGURE=(./configure "--prefix=$PREFIX" --with-native-compilation=aot --with-tree-sitter "$GUI_FLAG")
+  JOBS="$(build_jobs)"
+}
+
+build_jobs() {
+  # Parallel make jobs. Native compilation runs one Emacs per job, so: one per CPU, but at most one per
+  # 1.5 GiB of available memory — one per CPU on a 16-thread machine starved a desktop into the OOM killer.
+  local cpus kb max
+  cpus="${DRGNX_INSTALL_NPROC:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)}"
+  kb="${DRGNX_INSTALL_MEMORY_KB:-}"
+  if [[ -z "$kb" ]]; then
+    kb="$(awk '/^MemAvailable:/ {print $2}' /proc/meminfo 2>/dev/null || true)"
+    [[ -n "$kb" ]] || kb=$((4 * 1024 * 1024))
+    max="$(cat /sys/fs/cgroup/memory.max 2>/dev/null || true)"     # a container's limit is below MemAvailable
+    if [[ "$max" =~ ^[0-9]+$ ]] && ((max / 1024 < kb)); then kb=$((max / 1024)); fi
+  fi
+  local jobs=$((kb / (1536 * 1024)))
+  ((jobs <= cpus)) || jobs=$cpus
+  ((jobs >= 1)) || jobs=1
+  printf '%s' "$jobs"
 }
 
 print_plan() {
@@ -183,7 +202,7 @@ print_plan() {
       [[ "$FAMILY" == debian ]] && note "enable Debian source packages for build dependencies (a drgnx-owned apt list, removed afterwards)"
       note "build dependencies: sudo ${DEPS[*]}"
       [[ "$FAMILY" == debian ]] && note "then libgccjit for the default gcc (libgccjit-N-dev, N = gcc's major version)"
-      note "${CONFIGURE[*]} && make && make install   (in $BUILD_DIR, logs kept there)" ;;
+      note "${CONFIGURE[*]} && make -j$JOBS && make install   (in $BUILD_DIR, logs kept there; jobs limited by memory)" ;;
   esac
   say "2. drgnx:"
   if [[ -n "$SOURCE_DIR" ]]; then note "use the checkout in $DIR"
@@ -323,7 +342,7 @@ install_emacs_source() {
   grep -q 'Does Emacs have native lisp compiler? *yes' "$BUILD_DIR/configure.log" ||
     die 1 "configure did not enable native compilation (libgccjit missing?) — see $BUILD_DIR/configure.log"
   say "Building, this takes a while (log: $BUILD_DIR/make.log)…"
-  make -j"$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)" >"$BUILD_DIR/make.log" 2>&1 ||
+  make -j"$JOBS" >"$BUILD_DIR/make.log" 2>&1 ||
     die 1 "the build failed — see $BUILD_DIR/make.log (nothing was installed)"
   make install >"$BUILD_DIR/install.log" 2>&1 || die 1 "make install failed — see $BUILD_DIR/install.log"
   EMACS_BIN="$PREFIX/bin/emacs"

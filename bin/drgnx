@@ -82,7 +82,8 @@ test_install() { # [NAME…] — install.sh end to end in fresh containers (slow
     for entry in "${INSTALL_IMAGES[@]}"; do [[ "${entry%%=*}" == "$name" ]] && image="${entry#*=}"; done
     log="$logs/$name.log"
     printf '%-14s %s … ' "$name" "$image" >&2
-    if timeout 3600 "$rt" run --rm -v "$snap:/src:ro$([ "$rt" = podman ] && echo ,Z)" "$image" \
+    # --memory: a test must never push the host into the OOM killer (install.sh sizes make -j from the limit)
+    if timeout 3600 "$rt" run --rm --memory 6g -v "$snap:/src:ro$([ "$rt" = podman ] && echo ,Z)" "$image" \
          bash /src/test/install/in-container.sh >"$log" 2>&1; then
       echo "ok" >&2
     else

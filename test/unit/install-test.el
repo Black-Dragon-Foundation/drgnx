@@ -267,3 +267,14 @@
             (should-not (directory-files (expand-file-name "sources.list.d" apt) nil "\\`drgnx-deb-src"))
             (should-not (file-exists-p (expand-file-name "prefix/bin/emacs" tmp)))))
       (delete-directory tmp t))))
+
+(ert-deftest drgnx-install/build-jobs-fit-in-memory ()
+  ;; Native compilation runs one Emacs per make job: one job per CPU on a big machine starved the host of
+  ;; memory (systemd-oomd killed the desktop session).  At most one job per 1.5 GiB of available memory.
+  (cl-flet ((plan (cpus mem-kb)
+              (drgnx-install-test--plan "fedora-44" (format "DRGNX_INSTALL_NPROC=%d" cpus)
+                                        (format "DRGNX_INSTALL_MEMORY_KB=%d" mem-kb))))
+    (drgnx-install-test--expect (plan 16 (* 6 1024 1024)) "make -j4 ")
+    (drgnx-install-test--expect (plan 16 (* 64 1024 1024)) "make -j16 ")
+    (drgnx-install-test--expect (plan 4 (* 64 1024 1024)) "make -j4 ")
+    (drgnx-install-test--expect (plan 16 (* 1 1024 1024)) "make -j1 ")))
