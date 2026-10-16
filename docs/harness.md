@@ -93,9 +93,13 @@ command loop (`recursive-edit`), so the events execute as real commands while th
 
 ## Jank report
 
-Every input action is measured. Between `measure-begin` and `measure-end` the recorder polls a signature of
-every root-frame window at each tick — buffer, `window-start`, point, pixel edges, header-line and mode-line
-heights — plus the minibuffer height, and also records `window-scroll-functions` calls, redisplays and GC.
+Every input action is measured. Between `measure-begin` and `measure-end` the recorder keeps a signature of
+every root-frame window — buffer, `window-start`, point, pixel edges, header-line and mode-line heights,
+selected — plus the minibuffer height, and also records `window-scroll-functions` calls, redisplays and GC.
+It snapshots the signatures **right after every command** (`post-command-hook`) and **right after every timer**
+(advice on `timer-event-handler`), and polls once per tick for everything else, so each change is attributed
+to its cause: `command:NAME`, `timer:FUNCTION` or `redisplay`. A timer that moves point with `goto-char` inside
+`with-selected-window` (no window function called) is still caught and named.
 The report:
 
 | Field | Meaning |
@@ -109,7 +113,18 @@ The report:
 | `scrolls`, `redisplays` | `window-scroll-functions` calls, window redisplays |
 | `gc_count`, `gc_ms` | garbage collections during the measurement |
 | `guard_violations`, `guard` | window-moving calls made from timers (see Guard) |
+| `timer_moves` | window changes made by timers (any window) |
+| `causes` | `[{cause, count}]` — every command and timer that changed something |
+| `trace` | `[{t_ms, cause, window, fields, from, to}]` in order (≤ 50): what changed, when, and why |
 | `settled` | false if the session did not settle before the timeout |
+
+Reading a trace — one click on an Explorer folder in the gryphn layer:
+
+```
++  14 ms  command:treemacs-leftclick-action   w3 (:point 36) → (:point 11)   the click selects the folder
++  44 ms  command:mouse-set-point             w3 (:point 11) → (:point 17)
++ 196 ms  timer:gryphn-workspace--on-change   w3 (:point 17) → (:point 36)   the follow snaps back
+```
 
 Start measurements from a quiet state: a leftover echo-area message that disappears on the first keystroke
 shrinks the echo area and resizes every window — the report rightly counts that as layout and collateral.

@@ -153,25 +153,44 @@ BUTTON is 1-3 (default 1), COUNT 1 or 2, HOLD seconds between press and release.
                                 :start (window-start w) :point (window-point w)
                                 :edges (window-pixel-edges w)
                                 :header (window-header-line-height w)
-                                :modeline (window-mode-line-height w))))
+                                :modeline (window-mode-line-height w)
+                                :selected (eq w (frame-selected-window f)))))
                   (window-list f 'nomini)))))
 
-(defun drgnx-uitest-record--change (id old new)
-  (push (list (float-time) 'change id old new) drgnx-uitest-record--log)
+(defun drgnx-uitest-record--change (id old new cause)
+  (push (list (float-time) 'change id old new cause) drgnx-uitest-record--log)
   (setq drgnx-uitest-record--last-change (float-time)))
 
-(defun drgnx-uitest-record--poll ()
-  "Record every window whose signature changed since the last poll."
+(defun drgnx-uitest-record--snapshot (cause)
+  "Record every window whose signature changed since the last snapshot, as caused by CAUSE."
   (let ((now (drgnx-uitest-record--signatures)))
     (dolist (cell now)
       (let ((old (assoc (car cell) drgnx-uitest-record--sigs)))
         (unless (equal (cdr old) (cdr cell))
-          (drgnx-uitest-record--change (car cell) (cdr old) (cdr cell))
+          (drgnx-uitest-record--change (car cell) (cdr old) (cdr cell) cause)
           (if old (setcdr old (cdr cell)) (push (copy-tree cell) drgnx-uitest-record--sigs)))))
     (dolist (old drgnx-uitest-record--sigs)
       (when (and (cdr old) (not (assoc (car old) now)))
-        (drgnx-uitest-record--change (car old) (cdr old) nil)
+        (drgnx-uitest-record--change (car old) (cdr old) nil cause)
         (setcdr old nil)))))
+
+(defun drgnx-uitest-record--poll ()
+  "Tick poll: changes no command or timer claimed (redisplay, process output, …)."
+  (drgnx-uitest-record--snapshot "redisplay"))
+
+(defun drgnx-uitest-record--after-command ()
+  (drgnx-uitest-record--snapshot (format "command:%s" this-command)))
+
+(defconst drgnx-uitest-record--harness-timers '(drgnx-uitest--tick drgnx-uitest-record--poll)
+  "The harness's own timers: never a cause.")
+
+(defun drgnx-uitest-record--after-timer (orig timer)
+  "Snapshot right after each timer runs, so what it changed is attributed to it — even a
+point moved with `goto-char' inside `with-selected-window', which calls no window function."
+  (prog1 (funcall orig timer)
+    (let ((fn (and (timerp timer) (timer--function timer))))
+      (unless (memq fn drgnx-uitest-record--harness-timers)
+        (drgnx-uitest-record--snapshot (concat "timer:" (drgnx-jank-guard--describe fn)))))))
 
 (defun drgnx-uitest-record--on-scroll (window start)
   (push (list (float-time) 'scroll (drgnx-uitest-window-id window) start) drgnx-uitest-record--log)
@@ -181,19 +200,26 @@ BUTTON is 1-3 (default 1), COUNT 1 or 2, HOLD seconds between press and release.
   (cl-incf drgnx-uitest-record--redisplays))
 
 (defun drgnx-uitest--plist-keys (plist)
-  (cl-loop for (k _v) on plist by #'cddr collect k))
+  "PLIST's keys, each once (the first occurrence is the one `plist-get' sees)."
+  (delete-dups (cl-loop for (k _v) on plist by #'cddr collect k)))
 
 (defun drgnx-uitest-jank-report (log t0 initial targets last-input)
   "Summarise recorder LOG (oldest first) of a measurement started at T0.
 INITIAL is the signature alist at T0, TARGETS the ids of windows the input was
 aimed at (their changes are not collateral), LAST-INPUT the time of the last event."
   (let ((last-change t0) (layout 0) (chrome 0) (echo 0) (scrolls 0) (osc 0) (collateral nil)
+        (timer-moves 0) (causes nil) (trace nil)
         (history (mapcar (lambda (c) (list (car c) (cdr c))) initial)))
     (dolist (e log)
       (setq last-change (max last-change (car e)))
       (pcase e
         (`(,_ scroll . ,_) (cl-incf scrolls))
-        (`(,_ change ,id ,old ,new)
+        (`(,time change ,id ,old ,new . ,rest)
+         (let ((cause (or (car rest) "redisplay")))
+           (if (assoc cause causes) (cl-incf (cdr (assoc cause causes))) (push (cons cause 1) causes))
+           (when (and (string-prefix-p "timer:" cause) (not (equal id "mini"))) (cl-incf timer-moves))
+           (when (< (length trace) 50)
+             (push (drgnx-uitest--trace-step (round (* 1000 (- time t0))) cause id old new) trace)))
          (if (equal id "mini")
              (cl-incf echo)
            (when (or (null old) (null new)
@@ -219,7 +245,26 @@ aimed at (their changes are not collateral), LAST-INPUT the time of the last eve
           :layout_changes layout
           :collateral_moves (length collateral)
           :collateral (vconcat (reverse collateral))
-          :oscillations osc :chrome_changes chrome :echo_changes echo :scrolls scrolls)))
+          :oscillations osc :chrome_changes chrome :echo_changes echo :scrolls scrolls
+          :timer_moves timer-moves
+          :causes (vconcat (mapcar (lambda (c) (list :cause (car c) :count (cdr c))) (reverse causes)))
+          :trace (vconcat (reverse trace)))))
+
+(defun drgnx-uitest--json-value (v)
+  (cond ((null v) :false) ((consp v) (vconcat v)) (t v)))
+
+(defun drgnx-uitest--trace-step (t-ms cause id old new)
+  "One trace entry: when, why, which window, and the fields that changed (from → to)."
+  (let ((step (list :t_ms t-ms :cause cause :window id)))
+    (cond
+     ((null old) (append step (list :fields ["created"])))
+     ((null new) (append step (list :fields ["deleted"])))
+     (t (let ((fields (seq-remove (lambda (k) (equal (plist-get old k) (plist-get new k)))
+                                  (drgnx-uitest--plist-keys new))))
+          (append step
+                  (list :fields (vconcat (mapcar (lambda (k) (substring (symbol-name k) 1)) fields))
+                        :from (cl-mapcan (lambda (k) (list k (drgnx-uitest--json-value (plist-get old k)))) fields)
+                        :to (cl-mapcan (lambda (k) (list k (drgnx-uitest--json-value (plist-get new k)))) fields))))))))
 
 (defun drgnx-uitest--note-target (window)
   "Count WINDOW as a target of the measured input."
@@ -240,6 +285,8 @@ aimed at (their changes are not collateral), LAST-INPUT the time of the last eve
   (drgnx-uitest--note-target (frame-selected-window (drgnx-uitest-root-frame)))
   (add-hook 'window-scroll-functions #'drgnx-uitest-record--on-scroll)
   (add-hook 'pre-redisplay-functions #'drgnx-uitest-record--on-redisplay)
+  (add-hook 'post-command-hook #'drgnx-uitest-record--after-command 99)
+  (advice-add 'timer-event-handler :around #'drgnx-uitest-record--after-timer)
   (when (timerp drgnx-uitest-record--timer) (cancel-timer drgnx-uitest-record--timer))
   (setq drgnx-uitest-record--timer
         (run-with-timer drgnx-uitest-tick drgnx-uitest-tick #'drgnx-uitest-record--poll)))
@@ -251,6 +298,8 @@ aimed at (their changes are not collateral), LAST-INPUT the time of the last eve
   (setq drgnx-uitest-record--timer nil)
   (remove-hook 'window-scroll-functions #'drgnx-uitest-record--on-scroll)
   (remove-hook 'pre-redisplay-functions #'drgnx-uitest-record--on-redisplay)
+  (remove-hook 'post-command-hook #'drgnx-uitest-record--after-command)
+  (advice-remove 'timer-event-handler #'drgnx-uitest-record--after-timer)
   (drgnx-uitest--note-target (frame-selected-window (drgnx-uitest-root-frame)))
   (let ((new (- (length drgnx-jank-guard-log) drgnx-uitest-record--guard0)))
     (append (drgnx-uitest-jank-report (reverse drgnx-uitest-record--log) drgnx-uitest-record--t0
