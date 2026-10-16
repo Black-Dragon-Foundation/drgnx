@@ -12,6 +12,8 @@
         (modules-report :none "drgnx-only; in the palette")
         (toggle-sidebar "<f8>")
         (wb-unrouted :none "in the palette")
+        (wb-save-layout :none "in the palette (also on exit)")
+        (wb-restore-layout :none "in the palette (also at start)")
         (split-editor-right :none "C-x 3 splits (stock)")
         (split-editor-down :none "C-x 2 splits (stock)")
         (close-group :none "C-x 0 (stock)")

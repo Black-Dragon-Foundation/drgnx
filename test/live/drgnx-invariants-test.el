@@ -179,3 +179,35 @@ settled within 250 ms."
         (drgnx-ui-call sess (format "(progn (select-window (drgnx-wb-editor-window)) %s (drgnx-uitest--json (list :ok t)))" form))
         (drgnx-ui-measure sess nil)
         (should (equal (drgnx-ui-call sess q) first))))))
+
+(ert-deftest drgnx-inv/i2-sizes-survive-a-restart ()
+  ;; Session A: dock, panel and right dock shown and resized; it exits (the exit hook saves).
+  ;; Session B restores the same file: identical pixel sizes, the panel on the same tab.
+  (let* ((root (make-temp-file "drgnx-restart" t))
+         (file (expand-file-name "workbench.eld" root))
+         (process-environment (cons (concat "DRGNX_UI_STATE=" root) process-environment))
+         (q "(drgnx-uitest--json (let ((d (car (drgnx-wb--dock-windows))) (p (drgnx-wb-area-window 'panel)) (r (drgnx-wb-area-window 'right)))
+               (list :left (if d (window-pixel-width d) 0) :panel (if p (window-pixel-height p) 0) :right (if r (window-pixel-width r) 0)
+                     :tab (format \"%s\" (drgnx-wb-area-tab 'panel)))))")
+         first)
+    (unwind-protect
+        (let* ((s (drgnx-ui-start "drgnx" "1400x800" 30)) (sess (drgnx-ui-own-session (plist-get s :name))))
+          (drgnx-ui-measure sess (list (list :keys "C-b") (list :keys "C-`") (list :keys "C-M-b")))
+          (drgnx-ui-call sess (format "(let ((window-resize-pixelwise t))
+                                         (setq drgnx-persist-file %S)
+                                         (window-resize (car (drgnx-wb--dock-windows)) 37 t nil t)
+                                         (window-resize (drgnx-wb-area-window 'panel) 23 nil nil t)
+                                         (drgnx-wb-area-show 'panel 'results)
+                                         (drgnx-uitest--json (list :ok t)))" file))
+          (drgnx-ui-measure sess nil)
+          (setq first (drgnx-ui-call sess q))
+          (drgnx-ui-stop (plist-get s :name))
+          (should (file-exists-p file))
+          (let* ((s2 (drgnx-ui-start "drgnx" "1400x800" 30)) (sess2 (drgnx-ui-own-session (plist-get s2 :name))))
+            (unwind-protect
+                (progn
+                  (drgnx-ui-call sess2 (format "(progn (setq drgnx-persist-file %S) (drgnx-persist-restore) (drgnx-uitest--json (list :ok t)))" file))
+                  (drgnx-ui-measure sess2 nil)
+                  (should (equal (drgnx-ui-call sess2 q) first)))
+              (drgnx-ui-stop (plist-get s2 :name)))))
+      (delete-directory root t))))

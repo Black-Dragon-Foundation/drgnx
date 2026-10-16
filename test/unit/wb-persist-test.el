@@ -1,0 +1,92 @@
+;;; wb-persist-test.el --- batch tests: the workbench survives a restart -*- lexical-binding: t -*-
+(require 'ert)
+(require 'drgnx-persist)
+
+(defmacro drgnx-persist-test--with (dir &rest body)
+  "BODY with rules and chrome on, a dock section, one editor window, files in DIR, a state file."
+  (declare (indent 1))
+  `(let* ((,dir (file-name-as-directory (make-temp-file "drgnx-persist" t)))
+          (drgnx-persist-file (expand-file-name "state.eld" ,dir))
+          (drgnx-wb--sections nil) (drgnx-signal--editor-window nil) (display-buffer-alist nil))
+     (delete-other-windows)
+     (dolist (p '(drgnx-tabs drgnx-closed)) (set-window-parameter (selected-window) p nil))
+     (set-window-prev-buffers (selected-window) nil)
+     (dolist (p '(drgnx-wb-areas drgnx-wb-panel-px drgnx-wb-right-px drgnx-wb-dock-px)) (set-frame-parameter nil p nil))
+     (drgnx-wb-define-section 'top :slot 0 :title "TOP" :buffer (lambda () (get-buffer-create "*drgnx-test-top*")))
+     (drgnx-rules-mode 1)
+     (drgnx-chrome-mode 1)
+     (unwind-protect (progn ,@body)
+       (drgnx-chrome-mode -1)
+       (drgnx-rules-mode -1)
+       (drgnx-wb-area-hide 'panel)
+       (drgnx-wb-hide-sidebar)
+       (delete-other-windows)
+       (dolist (b (buffer-list))
+         (when (and (buffer-file-name b) (string-prefix-p ,dir (buffer-file-name b))) (kill-buffer b)))
+       (when (get-buffer "*drgnx-test-top*") (kill-buffer "*drgnx-test-top*"))
+       (delete-directory ,dir t))))
+
+(defun drgnx-persist-test--file (dir name)
+  (let ((f (expand-file-name name dir))) (write-region "x\n" nil f nil 'silent) (find-file-noselect f)))
+
+(defun drgnx-persist-test--layout ()
+  "What a restore must bring back: per group its tab files and shown file; dock and panel."
+  (list (mapcar (lambda (g) (list (mapcar #'buffer-file-name (drgnx-chrome-tabs g)) (buffer-file-name (window-buffer g))))
+                (drgnx-groups-list))
+        (drgnx-wb-sidebar-showing-p)
+        (and (drgnx-wb-area-window 'panel) (drgnx-wb-area-tab 'panel))))
+
+(defun drgnx-persist-test--reset ()
+  (drgnx-wb-area-hide 'panel)
+  (drgnx-wb-hide-sidebar)
+  (delete-other-windows)
+  (switch-to-buffer "*scratch*")
+  (dolist (p '(drgnx-tabs drgnx-closed)) (set-window-parameter (selected-window) p nil))
+  (set-window-prev-buffers (selected-window) nil))
+
+(ert-deftest drgnx-persist/a-round-trip-brings-the-layout-back ()
+  (drgnx-persist-test--with dir
+    (switch-to-buffer (drgnx-persist-test--file dir "a.txt"))
+    (switch-to-buffer (drgnx-persist-test--file dir "b.txt"))
+    (drgnx-chrome-apply)
+    (drgnx-groups-split-right)
+    (switch-to-buffer (drgnx-persist-test--file dir "c.txt"))
+    (drgnx-chrome-apply)
+    (drgnx-wb-show-sidebar)
+    (drgnx-wb-area-show 'panel 'results)
+    (let ((before (drgnx-persist-test--layout)))
+      (drgnx-persist-save)
+      (drgnx-persist-test--reset)
+      (should-not (equal before (drgnx-persist-test--layout)))
+      (drgnx-persist-restore)
+      (should (equal before (drgnx-persist-test--layout))))))
+
+(ert-deftest drgnx-persist/missing-files-are-skipped ()
+  (drgnx-persist-test--with dir
+    (let ((a (drgnx-persist-test--file dir "a.txt")) (gone (drgnx-persist-test--file dir "gone.txt")))
+      (switch-to-buffer a) (switch-to-buffer gone) (drgnx-chrome-apply)
+      (drgnx-persist-save)
+      (drgnx-persist-test--reset)
+      (kill-buffer gone)
+      (delete-file (expand-file-name "gone.txt" dir))
+      (drgnx-persist-restore)
+      (should (equal (mapcar #'buffer-file-name (drgnx-chrome-tabs (car (drgnx-groups-list))))
+                     (list (expand-file-name "a.txt" dir)))))))
+
+(ert-deftest drgnx-persist/an-unknown-version-is-ignored ()
+  (drgnx-persist-test--with dir
+    (with-temp-file drgnx-persist-file (prin1 '(:version 99 :left (:shown t)) (current-buffer)))
+    (should-not (drgnx-persist-restore))
+    (should-not (drgnx-wb-sidebar-showing-p))))
+
+(ert-deftest drgnx-persist/sizes-are-clamped-to-the-frame ()
+  (drgnx-persist-test--with dir
+    (with-temp-file drgnx-persist-file
+      (prin1 `(:version 1 :left (:shown t :px 100000) :panel (:shown t :px 100000 :tab output) :right (:shown nil)
+                        :groups nil :main nil)
+             (current-buffer)))
+    (drgnx-persist-restore)
+    (let ((w (window-pixel-width (drgnx-wb-section-window 'top))))
+      (should (< w (frame-pixel-width)))
+      (should (>= w (* 0.45 (frame-pixel-width)))))      ; clamped to half the frame, not left at the default
+    (should (< (window-pixel-height (drgnx-wb-area-window 'panel)) (frame-pixel-height)))))

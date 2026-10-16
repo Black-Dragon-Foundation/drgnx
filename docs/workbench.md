@@ -133,6 +133,15 @@ Close Editor Group (`C-k w` · `C-x 0` · `SPC w c`; the last group stays), Focu
 `SPC w m`). Groups are numbered left to right, top to bottom. Diffs and logs (`diff-mode`, `log-view-mode`, magit's
 diff and log) open in the **other group** — the one you used last besides this one — never in a new split.
 
+### The layout survives a restart
+
+When Emacs exits, the workbench is saved to `$XDG_STATE_HOME/drgnx/workbench.eld` (`~/.local/state/…`): the left
+dock, the panel and its tab, the right dock — each with its pixel size — the editor groups with their sizes, tabs and
+shown files, and the Explorer's folders. At the first graphical frame it comes back as it was
+(`drgnx-persist-restore-on-start`). Files that no longer exist are skipped, sizes are clamped to the frame, and a
+state in another format is ignored. Save / Restore Workbench Layout are in the palette. Only a graphical session saves —
+a batch run never writes your state.
+
 ### Popups
 
 Short-lived buffers — a transient menu, which-key's hints, `*Completions*`, the calendar — show in one **popup
@@ -234,8 +243,8 @@ What "nothing moves on its own" means, each pinned by a test in a GUI session wi
 | | Invariant | Test |
 |---|---|---|
 | I1 | No collateral move: a step changes only the windows it aims at | `drgnx-inv/i1-i9-i10-explorer-and-buffers-flows`, the scenarios |
-| I2 | Docks and panel keep their pixel size across hide/show, tab switches and popups | `drgnx-inv/i2-every-area-keeps-its-size` |
-| I3 | Chrome height depends on the window's role only | (M3d, with the chrome) |
+| I2 | Docks and panel keep their pixel size across hide/show, tab switches, popups and a restart | `drgnx-inv/i2-every-area-keeps-its-size`, `drgnx-inv/i2-sizes-survive-a-restart` |
+| I3 | Chrome height depends on the window's role only | `drgnx-inv/i3-chrome-height-depends-on-the-role-only`, `test/unit/wb-chrome-test.el` |
 | I4 | Frame rows constant; the echo area stays one line | `drgnx-inv/i4-buffer-switches-and-messages-keep-the-rows` |
 | I5 | Popups leave no trace | `drgnx-inv/i5-which-key-leaves-no-trace`, `test/live/drgnx-popup-test.el` |
 | I6 | Followers react to edges, never to focus alone | `test/unit/wb-signal-test.el` |

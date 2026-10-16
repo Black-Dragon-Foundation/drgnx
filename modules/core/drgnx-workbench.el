@@ -6,6 +6,9 @@
 (declare-function drgnx-explorer-setup "drgnx-explorer")
 (declare-function drgnx-rules-mode "drgnx-rules")
 (declare-function drgnx-chrome-mode "drgnx-chrome")
+(declare-function drgnx-persist-mode "drgnx-persist")
+(declare-function drgnx-persist-save "drgnx-persist")
+(declare-function drgnx-persist-restore "drgnx-persist")
 (declare-function drgnx-groups-split-right "drgnx-groups")
 (declare-function drgnx-groups-split-down "drgnx-groups")
 (declare-function drgnx-groups-close "drgnx-groups")
@@ -60,6 +63,13 @@
                      (focus-group-3 "Focus Third Editor Group" drgnx-groups-focus-3 "Focus group 3 (made if there are two)")
                      (move-editor-to-next-group "Move Editor into Next Group" drgnx-groups-move-to-next "Move the shown file to the next group")))
       (drgnx-command-define id :category "View" :title title :scope 'window :command fn :doc doc))
+    ;; The layout survives a restart.
+    (require 'drgnx-persist)
+    (drgnx-persist-mode 1)
+    (drgnx-command-define 'wb-save-layout :category "View" :title "Save Workbench Layout" :scope 'window
+      :command #'drgnx-persist-save :doc "Save docks, panel, editor groups and tabs now (also done on exit)")
+    (drgnx-command-define 'wb-restore-layout :category "View" :title "Restore Workbench Layout" :scope 'window
+      :command #'drgnx-persist-restore :doc "Bring back the last saved layout (also done at start)")
     (drgnx-command-define 'close-tab :category "View" :title "Close Tab" :scope 'window
       :command #'drgnx-chrome-close-tab :doc "Close the shown tab (the buffer stays open)")
     (drgnx-command-define 'next-tab :category "View" :title "Next Tab" :scope 'window

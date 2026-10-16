@@ -71,7 +71,8 @@ follower is not a jank-guard violation (invariant I9).")
            (window-parameters . ((drgnx-role . dock) (drgnx-section . ,name) (no-delete-other-windows . t)
                                  (no-other-window . t) (header-line-format . ,(plist-get spec :title)))))))
       (when-let* ((px (frame-parameter nil 'drgnx-wb-dock-px)) (w (car (drgnx-wb--dock-windows))))
-        (ignore-errors (window-resize w (- px (window-pixel-width w)) t nil t)))
+        (let ((window-resize-pixelwise t))              ; or the width is rounded to whole columns
+          (ignore-errors (window-resize w (- px (window-pixel-width w)) t nil t))))
       (dolist (w (drgnx-wb--dock-windows))
         (window-preserve-size w t t)
         (set-window-scroll-bars w nil nil nil nil t))       ; a clean sidebar, like VS Code's

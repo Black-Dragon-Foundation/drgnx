@@ -11,6 +11,8 @@
         (modules-report :none "drgnx-only; in the palette")
         (toggle-sidebar "C-b")
         (wb-unrouted :none "in the palette")
+        (wb-save-layout :none "in the palette (also on exit)")
+        (wb-restore-layout :none "in the palette (also at start)")
         (split-editor-right "C-\\")
         (split-editor-down "C-k C-\\")
         (close-group "C-k w")
