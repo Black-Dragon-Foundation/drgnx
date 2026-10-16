@@ -24,6 +24,8 @@
         (explorer-select-down "S-<down>")
         (explorer-select-up "S-<up>")
         (explorer-mark "C-SPC")
+        (explorer-find "C-M-f")
+        (explorer-find-clear :none "Find with an empty text; the palette")
         (explorer-new-file :none "the Explorer's right-click menu and the palette")
         (explorer-rename "<f2>")
         (explorer-delete "<delete>")

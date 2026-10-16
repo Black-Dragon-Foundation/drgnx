@@ -44,6 +44,8 @@
 (defvar drgnx-explorer--cache (make-hash-table :test #'equal) "Folder → (MTIME . CHILDREN).")
 (defvar drgnx-explorer--pressed nil "Non-nil while a mouse button pressed in the Explorer is held.")
 (defvar drgnx-explorer--selection nil "Paths selected together (multi-select), or nil: the row at point.")
+(defvar drgnx-explorer--find nil
+  "While Find filters the tree: (:query Q :files ALL-FILES :expanded SAVED :views SAVED).")
 
 ;;;; The model
 
@@ -161,6 +163,11 @@ name's face, the hover highlight, the git status."
           (setq i (1+ i))))))
   `(jit-lock-bounds ,beg . ,end))
 
+(defvar drgnx-explorer--children-function #'drgnx-explorer-children
+  "Where rows come from: the disk, or (during Find) the matches.")
+(defvar drgnx-explorer--expanded-function #'drgnx-explorer--expanded-p
+  "Which folders are open: the user's, or (during Find) every folder shown.")
+
 (defun drgnx-explorer--insert-subtree (dir depth)
   "Insert, at point, the rows of DIR's children at DEPTH, recursing into expanded folders; return
 their data vectors in order (for `drgnx-explorer--rows').
@@ -171,8 +178,8 @@ faces come later, from jit-lock, for the rows on screen."
    (let (parts data)
      (cl-labels ((walk (dir depth)
                    (let ((parent (directory-file-name dir)))
-                     (pcase-dolist (`(,name . ,dirp) (drgnx-explorer-children dir))
-                       (let ((open (and dirp (drgnx-explorer--expanded-p (concat parent "/" name)))))
+                     (pcase-dolist (`(,name . ,dirp) (funcall drgnx-explorer--children-function dir))
+                       (let ((open (and dirp (funcall drgnx-explorer--expanded-function (concat parent "/" name)))))
                          (push (drgnx-explorer--prefix depth (if dirp (if open 'open 'closed) 'file)) parts)
                          (push (drgnx-wb-display-name name) parts)
                          (push "\n" parts)
@@ -286,7 +293,7 @@ faces come later, from jit-lock, for the rows on screen."
 (defun drgnx-explorer--apply-file-events ()
   "Show the changed folders again — each once, in place; wait while a button is held."
   (setq drgnx-explorer--event-timer nil)
-  (if drgnx-explorer--pressed
+  (if (or drgnx-explorer--pressed drgnx-explorer--find)
       (setq drgnx-explorer--event-timer
             (run-with-timer drgnx-explorer-event-delay nil #'drgnx-explorer--apply-file-events))
     (let ((dirs drgnx-explorer--dirty))
@@ -391,6 +398,7 @@ Returns non-nil if FILE is under a root."
 
 (defun drgnx-explorer-set-roots (roots)
   "Show ROOTS (directories) in the Explorer."
+  (setq drgnx-explorer--find nil)
   (setq drgnx-explorer--roots (mapcar (lambda (r) (file-name-as-directory (expand-file-name r))) roots))
   (drgnx-explorer--buffer)
   (drgnx-explorer--render))
@@ -485,6 +493,110 @@ Returns non-nil if FILE is under a root."
 
 (defun drgnx-explorer-focus () "Show the sidebar and focus the Explorer."
   (interactive) (drgnx-wb-focus-section 'explorer))
+
+;;;; Find
+
+(defvar-local drgnx-explorer--typed nil "Type-to-navigate: (TIME . PREFIX).")
+
+(defun drgnx-explorer--navigate-type (char)
+  "Jump to the next row whose name starts with what was typed (within a second) plus CHAR."
+  (let* ((now (float-time))
+         (prefix (concat (if (and drgnx-explorer--typed (< (- now (car drgnx-explorer--typed)) 1.0))
+                             (cdr drgnx-explorer--typed) "")
+                         (string char)))
+         (rows drgnx-explorer--rows) (n (length rows)) (here (drgnx-explorer--index (point)))
+         (from (if (> (length prefix) 1) here (1+ here))) found)
+    (setq drgnx-explorer--typed (cons now prefix))
+    (dotimes (k n)
+      (let ((i (mod (+ from k) n)))
+        (when (and (not found)
+                   (string-prefix-p prefix (file-name-nondirectory (drgnx-explorer--path (aref rows i))) t))
+          (setq found i))))
+    (when found
+      (goto-char (drgnx-explorer--line-pos found))
+      (when hl-line-mode (hl-line-highlight)))))
+
+(defun drgnx-explorer-type ()
+  "Typing in the Explorer jumps to the next row starting with what you typed (as VS Code)."
+  (interactive)
+  (drgnx-explorer--navigate-type last-command-event))
+
+(defun drgnx-explorer--all-files ()
+  "Every file under the roots (the project's files when there is a project; excluded names left out)."
+  (seq-mapcat (lambda (root)
+                (let ((default-directory root))
+                  (seq-remove (lambda (f) (seq-some (lambda (part) (string-match-p drgnx-explorer-exclude part))
+                                                    (split-string (file-relative-name f root) "/" t)))
+                              (if-let* ((p (project-current nil root)))
+                                  (project-files p)
+                                (directory-files-recursively
+                                 root "" nil (lambda (d) (not (string-match-p drgnx-explorer-exclude (file-name-nondirectory d)))))))))
+              drgnx-explorer--roots))
+
+(defun drgnx-explorer--find-apply (query)
+  "Show only the files whose name contains QUERY (any case), with their folders — collapsed or not."
+  (with-current-buffer (drgnx-explorer--buffer)
+    (unless drgnx-explorer--find
+      (setq drgnx-explorer--find (list :files (drgnx-explorer--all-files)
+                                       :expanded (copy-hash-table drgnx-explorer--expanded)
+                                       :views (drgnx-explorer--save-views))))
+    (setq drgnx-explorer--find (plist-put drgnx-explorer--find :query query))
+    (let ((tree (make-hash-table :test #'equal)) (q (downcase query)))
+      (dolist (file (plist-get drgnx-explorer--find :files))
+        (when (string-search q (downcase (file-name-nondirectory file)))
+          (let ((path (directory-file-name file)))
+            (while (let ((parent (directory-file-name (file-name-directory path))))
+                     (unless (member (cons (file-name-nondirectory path) (not (equal path (directory-file-name file))))
+                                     (gethash parent tree))
+                       (push (cons (file-name-nondirectory path) (not (equal path (directory-file-name file)))) (gethash parent tree)))
+                     (setq path parent)
+                     (not (member (file-name-as-directory path) drgnx-explorer--roots)))))))
+      (let ((drgnx-explorer--children-function
+             (lambda (dir) (sort (copy-sequence (gethash (directory-file-name dir) tree)) #'drgnx-explorer--before)))
+            (drgnx-explorer--expanded-function (lambda (_) t))
+            (inhibit-read-only t) data)
+        (erase-buffer)
+        (dolist (root drgnx-explorer--roots)
+          (let ((path (directory-file-name (expand-file-name root))))
+            (insert (drgnx-explorer--prefix 0 'open) (drgnx-wb-display-name (upcase (file-name-nondirectory path))) "\n")
+            (push (list (vector path 0 t nil)) data)
+            (push (drgnx-explorer--insert-subtree path 1) data)))
+        (setq drgnx-explorer--rows (apply #'vconcat (nreverse data)))
+        (goto-char (point-min))
+        (when-let* ((w (drgnx-wb-section-window 'explorer)))
+          (set-window-parameter w 'header-line-format (format " EXPLORER — %s" query)))))))
+
+(defun drgnx-explorer-find-clear ()
+  "Leave Find: the tree, its open folders, the view and the selection come back as they were."
+  (interactive)
+  (when-let* ((state drgnx-explorer--find))
+    (setq drgnx-explorer--find nil drgnx-explorer--expanded (plist-get state :expanded))
+    (with-current-buffer (drgnx-explorer--buffer)
+      (drgnx-explorer--render)
+      (drgnx-explorer--restore-views (plist-get state :views)))
+    (when-let* ((w (drgnx-wb-section-window 'explorer)))
+      (set-window-parameter w 'header-line-format " EXPLORER"))
+    (when drgnx-explorer--dirty (drgnx-explorer--apply-file-events))))
+
+(defun drgnx-explorer-find ()
+  "Filter the Explorer to files whose names contain what you type (live); empty input clears it."
+  (interactive)
+  (let ((timer nil))
+    (condition-case nil
+        (let ((query (minibuffer-with-setup-hook
+                         (lambda ()
+                           (add-hook 'after-change-functions
+                                     (lambda (&rest _)
+                                       (let ((q (minibuffer-contents-no-properties)))
+                                         (when (timerp timer) (cancel-timer timer))
+                                         (setq timer (run-with-idle-timer
+                                                      0.1 nil (lambda () (if (string-empty-p q) (drgnx-explorer-find-clear)
+                                                                           (drgnx-explorer--find-apply q)))))))
+                                     nil t))
+                       (read-string "Find in Explorer: " (plist-get drgnx-explorer--find :query)))))
+          (when (timerp timer) (cancel-timer timer))
+          (if (string-empty-p query) (drgnx-explorer-find-clear) (drgnx-explorer--find-apply query)))
+      (quit (when (timerp timer) (cancel-timer timer)) (drgnx-explorer-find-clear)))))
 
 ;;;; File operations
 ;; Each command takes its target paths when it starts — before any question — so a refresh while
@@ -701,6 +813,8 @@ Returns non-nil if FILE is under a root."
     (keymap-set map "<triple-down-mouse-1>" #'ignore)
     (keymap-set map "<triple-mouse-1>" #'drgnx-explorer-mouse-ignore)
     (keymap-set map "<drag-mouse-1>" #'drgnx-explorer-mouse-ignore)
+    ;; Printable keys that no profile binds here jump by name (type-to-navigate).
+    (keymap-set map "<remap> <self-insert-command>" #'drgnx-explorer-type)
     (keymap-set map "C-<down-mouse-1>" #'drgnx-explorer-mouse-press)   ; (globally: the buffer menu)
     (keymap-set map "C-<mouse-1>" #'drgnx-explorer-mouse-toggle)
     (keymap-set map "S-<down-mouse-1>" #'drgnx-explorer-mouse-press)   ; (globally: the font menu)

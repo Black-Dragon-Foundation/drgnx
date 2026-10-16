@@ -25,6 +25,8 @@
         (explorer-select-down "S-<down>")
         (explorer-select-up "S-<up>")
         (explorer-mark "m")
+        (explorer-find "/")
+        (explorer-find-clear :none "/ with an empty text; the palette")
         (explorer-new-file "+")
         (explorer-rename "R")
         (explorer-delete "D")

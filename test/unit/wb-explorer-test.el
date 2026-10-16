@@ -413,3 +413,31 @@
         (should-not (file-exists-p (expand-file-name "docs" root)))
         (should (file-exists-p (expand-file-name "tests" root)))
         (should (null drgnx-explorer--selection))))))
+
+;;;; Find (M3b)
+
+(ert-deftest drgnx-explorer/type-to-navigate ()
+  (drgnx-explorer-test--with root
+    (with-current-buffer (drgnx-explorer-test--at "docs")
+      (drgnx-explorer--navigate-type ?t)
+      (should (equal (file-name-nondirectory (drgnx-explorer--node)) "tests"))
+      (drgnx-explorer--navigate-type ?r)                ; "tr" matches nothing: stay
+      (should (equal (file-name-nondirectory (drgnx-explorer--node)) "tests"))
+      (setq drgnx-explorer--typed nil)
+      (drgnx-explorer--navigate-type ?R)                ; case-insensitive
+      (should (equal (file-name-nondirectory (drgnx-explorer--node)) "README.md")))))
+
+(ert-deftest drgnx-explorer/find-filters-across-collapsed-folders-and-restores ()
+  (drgnx-explorer-test--with root
+    (drgnx-wb-show-sidebar)
+    (let ((before (drgnx-explorer-test--rows)) (w (drgnx-wb-section-window 'explorer)))
+      (with-current-buffer drgnx-explorer-buffer-name (set-window-point w (drgnx-explorer-test--goto "tests")))
+      (drgnx-explorer--find-apply "util")
+      (should (equal (cdr (drgnx-explorer-test--rows)) '((1 "src") (2 "app") (3 "util.py"))))
+      (drgnx-explorer--find-apply "MAIN")                ; case-insensitive, matches in two folders
+      (should (equal (mapcar #'cadr (cdr (drgnx-explorer-test--rows))) '("src" "app" "main.py" "tests" "test_main.py")))
+      (drgnx-explorer-find-clear)
+      (should (equal (drgnx-explorer-test--rows) before))
+      (should-not (drgnx-explorer--expanded-p (expand-file-name "src" root)))
+      (with-current-buffer drgnx-explorer-buffer-name
+        (should (equal (drgnx-explorer-node-at (window-point w)) (expand-file-name "tests" root)))))))

@@ -38,7 +38,9 @@
                        (explorer-refresh "Refresh" drgnx-explorer-refresh "Re-read changed folders")
                        (explorer-select-down "Select Down" drgnx-explorer-select-down "Extend the selection down")
                        (explorer-select-up "Select Up" drgnx-explorer-select-up "Extend the selection up")
-                       (explorer-mark "Mark" drgnx-explorer-mark "Add to the selection (or take out), go on")))
+                       (explorer-mark "Mark" drgnx-explorer-mark "Add to the selection (or take out), go on")
+                       (explorer-find "Find…" drgnx-explorer-find "Show only files whose names contain the text (empty: all again)")
+                       (explorer-find-clear "Clear Find" drgnx-explorer-find-clear "Show the whole tree again")))
         (drgnx-command-define id :category "Explorer" :title title :command fn :doc doc
           :map 'drgnx-explorer-mode-map :when in-explorer))
       ;; File operations: also on the Explorer's right-click menu.
