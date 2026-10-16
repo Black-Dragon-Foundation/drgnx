@@ -5,7 +5,7 @@ editor groups, a command palette, mouse-first discoverability, AI completion and
 on top of everything that makes Emacs worth it: org, deep programmability, a persistent daemon and the
 whole Emacs package ecosystem. Light on memory: the target is a daemon under 400 MB with all modules on.
 
-> **Status: pre-release.** drgnx is being built in the open. Nothing here is installable yet, there is no
+> **Status: pre-release.** drgnx is being built in the open. You can install it to follow along, but there is no
 > support, and contributions are not being accepted yet. Watch the repo or read the roadmap.
 
 ## What makes it different
@@ -23,13 +23,26 @@ whole Emacs package ecosystem. Light on memory: the target is a daemon under 400
 - **Guided onboarding**: environment checks, keys and theme, importing your projects into an org board,
   AI providers, indexing, agents, the daemon — every step re-runnable and checked by `drgnx doctor`.
 
-## Requirements (planned)
+## Requirements
 
-- GNU Emacs **31.1+** (stock distribution builds; pgtk on Wayland, X11 and macOS builds supported)
+- GNU Emacs **31.1+** with native compilation (30.2 still works); pgtk on Wayland, X11 and macOS builds
 - Linux (GNOME, KDE, XFCE, Cinnamon, tiling window managers) and macOS
+
+## Install
+
+Pre-release: this installs the work in progress.
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/Black-Dragon-Foundation/drgnx/main/install.sh | bash
+```
+
+It prints a plan first, asks before every root step, and gets Emacs 31.1 from your distribution where it
+is good or builds the signed GNU release with native compilation. `--dry-run` shows the plan only. Details,
+manual install and uninstall: [docs/install.md](docs/install.md). Check a machine with `drgnx doctor`.
 
 ## Documentation
 
+- [Install](docs/install.md)
 - [Roadmap and design](docs/roadmap.md)
 - [Architecture](docs/architecture.md)
 - [Decisions](docs/decisions/)
