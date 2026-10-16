@@ -154,3 +154,31 @@
       (drgnx-buffers-mouse-ignore nil)               ; the release
       (should (= (1+ n) drgnx-buffers--renders))
       (should (member "b.txt" (drgnx-buffers-test--rows dir))))))
+
+(ert-deftest drgnx-buffers/renames-and-saved-flags-show-up ()
+  ;; M3a-2: a rename, or a buffer marked unmodified without saving, is reflected after the next flush.
+  (drgnx-buffers-test--with dir
+    (let ((a (drgnx-buffers-test--open dir "a.txt")))
+      (drgnx-signal--flush)
+      (with-current-buffer a (rename-buffer "renamed.txt"))     ; a rename alone
+      (drgnx-signal--flush)
+      (with-current-buffer drgnx-buffers-buffer-name
+        (should (string-search "renamed.txt" (buffer-string))))
+      (with-current-buffer a (insert "x"))
+      (drgnx-signal--flush)
+      (with-current-buffer a (set-buffer-modified-p nil))        ; unmodified without a save
+      (drgnx-signal--flush)
+      (with-current-buffer drgnx-buffers-buffer-name
+        (let ((row (buffer-substring (drgnx-buffers--row-pos a) (save-excursion (goto-char (drgnx-buffers--row-pos a)) (pos-eol)))))
+          (should (string-search "renamed.txt" row))
+          (should-not (string-search "●" row)))))))
+
+(ert-deftest drgnx-signal/every-command-arms-a-flush ()
+  ;; Undo back to the saved state flips the modified flag without any buffer hook.
+  (let ((drgnx-signal--timer nil))
+    (unwind-protect
+        (progn (drgnx-signal-mode 1)
+               (cancel-timer drgnx-signal--timer) (setq drgnx-signal--timer nil)   ; enabling arms one itself
+               (run-hooks 'post-command-hook)
+               (should (timerp drgnx-signal--timer)))
+      (when (timerp drgnx-signal--timer) (cancel-timer drgnx-signal--timer)))))

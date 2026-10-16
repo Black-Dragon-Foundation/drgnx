@@ -228,3 +228,62 @@
     (with-current-buffer drgnx-explorer-buffer-name
       (should (= scroll-margin 0))
       (should-not make-cursor-line-fully-visible))))
+
+;;;; Live updates (M3b)
+
+(ert-deftest drgnx-explorer/an-external-change-appears-in-place ()
+  (drgnx-explorer-test--with root
+    (drgnx-wb-show-sidebar)
+    (drgnx-explorer-toggle-at (drgnx-explorer-test--goto "src"))
+    (let ((w (drgnx-wb-section-window 'explorer)) (src (expand-file-name "src" root)))
+      (with-current-buffer drgnx-explorer-buffer-name
+        (set-window-point w (drgnx-explorer-test--goto "tests")))
+      (write-region "" nil (expand-file-name "src/new.txt" root) nil 'silent)
+      (delete-directory (expand-file-name "docs" root) t)
+      (drgnx-explorer--file-event (list 'desc 'created (expand-file-name "src/new.txt" root)) src)
+      (drgnx-explorer--file-event (list 'desc 'deleted (expand-file-name "docs" root)) (directory-file-name root))
+      (drgnx-explorer--apply-file-events)
+      (should (member '(2 "new.txt") (drgnx-explorer-test--rows)))
+      (should-not (member '(1 "docs") (drgnx-explorer-test--rows)))
+      (with-current-buffer drgnx-explorer-buffer-name
+        (should (= (count-lines (point-min) (point-max)) (length drgnx-explorer--rows)))
+        (should (equal (drgnx-explorer-node-at (window-point w)) (expand-file-name "tests" root)))))))
+
+(ert-deftest drgnx-explorer/an-event-storm-relists-each-folder-once ()
+  (drgnx-explorer-test--with root
+    (let ((root-dir (directory-file-name root)) (drgnx-explorer--relists 0))
+      (dotimes (i 1000)
+        (drgnx-explorer--file-event (list 'desc 'created (expand-file-name (format "f%d" i) root)) root-dir))
+      (drgnx-explorer--apply-file-events)
+      (should (= drgnx-explorer--relists 1)))))
+
+(ert-deftest drgnx-explorer/watches-follow-what-is-shown ()
+  (drgnx-explorer-test--with root
+    (let ((src (expand-file-name "src" root)))
+      (should (gethash (directory-file-name root) drgnx-explorer--watches))
+      (should-not (gethash src drgnx-explorer--watches))
+      (drgnx-explorer-toggle-at (drgnx-explorer-test--goto "src"))
+      (should (gethash src drgnx-explorer--watches))
+      (drgnx-explorer-toggle-at (drgnx-explorer-test--goto "src"))
+      (should-not (gethash src drgnx-explorer--watches)))))
+
+(ert-deftest drgnx-explorer/a-real-file-event-updates-the-tree ()
+  (skip-unless (and (featurep 'filenotify) file-notify--library))
+  (drgnx-explorer-test--with root
+    (write-region "" nil (expand-file-name "watched.txt" root) nil 'silent)
+    (let ((deadline (+ (float-time) 3)))
+      (while (and (< (float-time) deadline) (not (member '(1 "watched.txt") (drgnx-explorer-test--rows))))
+        (read-event nil nil 0.05)))
+    (should (member '(1 "watched.txt") (drgnx-explorer-test--rows)))))
+
+(ert-deftest drgnx-explorer/no-update-while-a-button-is-held ()
+  (drgnx-explorer-test--with root
+    (let ((root-dir (directory-file-name root)))
+      (write-region "" nil (expand-file-name "held.txt" root) nil 'silent)
+      (setq drgnx-explorer--pressed t)
+      (drgnx-explorer--file-event (list 'desc 'created (expand-file-name "held.txt" root)) root-dir)
+      (drgnx-explorer--apply-file-events)
+      (should-not (member '(1 "held.txt") (drgnx-explorer-test--rows)))
+      (setq drgnx-explorer--pressed nil)
+      (drgnx-explorer--apply-file-events)
+      (should (member '(1 "held.txt") (drgnx-explorer-test--rows))))))

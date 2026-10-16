@@ -20,6 +20,7 @@
 (require 'text-property-search)
 (require 'hl-line)
 (require 'project)
+(require 'filenotify)
 (require 'drgnx-wb)
 
 (defgroup drgnx-explorer nil "The drgnx Explorer." :group 'drgnx)
@@ -176,9 +177,7 @@ faces come later, from jit-lock, for the rows on screen."
 (defun drgnx-explorer--render ()
   "Render every root from scratch, keeping the row at point by its path."
   (with-current-buffer (get-buffer-create drgnx-explorer-buffer-name)
-    (let* ((inhibit-read-only t) (at (drgnx-explorer-node-at (point))) data
-           (kept (mapcar (lambda (w) (list w (drgnx-explorer-node-at (window-start w)) (drgnx-explorer-node-at (window-point w))))
-                         (get-buffer-window-list (current-buffer) nil t))))
+    (let* ((inhibit-read-only t) (views (drgnx-explorer--save-views)) data)
       (erase-buffer)
       (dolist (root drgnx-explorer--roots)
         (let ((path (directory-file-name (expand-file-name root))))
@@ -186,11 +185,98 @@ faces come later, from jit-lock, for the rows on screen."
           (push (list (vector path 0 t nil)) data)
           (push (drgnx-explorer--insert-subtree path 1) data)))
       (setq drgnx-explorer--rows (apply #'vconcat (nreverse data)))
-      (goto-char (or (and at (drgnx-explorer--row-pos at)) (point-min)))
-      (pcase-dolist (`(,w ,top ,pt) kept)
-        (when-let* ((p (and top (drgnx-explorer--row-pos top)))) (set-window-start w p t))
-        (when-let* ((p (and pt (drgnx-explorer--row-pos pt)))) (set-window-point w p)))
-      (when hl-line-mode (hl-line-highlight)))))
+      (drgnx-explorer--restore-views views)
+      (drgnx-explorer--sync-watches))))
+
+(defun drgnx-explorer--save-views ()
+  "The row (path) at point, and each window's first row and selected row."
+  (cons (drgnx-explorer-node-at (point))
+        (mapcar (lambda (w) (list w (drgnx-explorer-node-at (window-start w)) (drgnx-explorer-node-at (window-point w))))
+                (get-buffer-window-list (current-buffer) nil t))))
+
+(defun drgnx-explorer--restore-views (views)
+  "Put point and every window back on the rows (paths) VIEWS recorded."
+  (goto-char (or (and (car views) (drgnx-explorer--row-pos (car views))) (point-min)))
+  (pcase-dolist (`(,w ,top ,pt) (cdr views))
+    (when (window-live-p w)
+      (when-let* ((p (and top (drgnx-explorer--row-pos top)))) (set-window-start w p t))
+      (when-let* ((p (and pt (drgnx-explorer--row-pos pt)))) (set-window-point w p))))
+  (when hl-line-mode (hl-line-highlight)))
+
+;;;; Live updates
+
+(defcustom drgnx-explorer-event-delay 0.15
+  "Seconds to gather file events before the changed folders are shown again."
+  :type 'number)
+
+(defvar drgnx-explorer--watches (make-hash-table :test #'equal) "Shown folder → watch descriptor (or `none').")
+(defvar drgnx-explorer--dirty nil "Folders with file events not shown yet.")
+(defvar drgnx-explorer--event-timer nil)
+(defvar drgnx-explorer--relists 0 "How many folders were refreshed from events (tests read it).")
+
+(defun drgnx-explorer--shown-folders ()
+  "Every folder whose contents are on screen: the roots and the expanded, displayed folders."
+  (let (out)
+    (seq-doseq (v drgnx-explorer--rows)
+      (when (and (aref v 2) (or (= (aref v 1) 0) (drgnx-explorer--expanded-p (drgnx-explorer--path v))))
+        (push (drgnx-explorer--path v) out)))
+    out))
+
+(defun drgnx-explorer--sync-watches ()
+  "Watch exactly the shown folders (a collapsed folder stops being watched)."
+  (let ((want (make-hash-table :test #'equal)) gone)
+    (dolist (d (drgnx-explorer--shown-folders)) (puthash d t want))
+    (maphash (lambda (d desc) (unless (gethash d want) (push (cons d desc) gone))) drgnx-explorer--watches)
+    (pcase-dolist (`(,d . ,desc) gone)
+      (unless (eq desc 'none) (ignore-errors (file-notify-rm-watch desc)))
+      (remhash d drgnx-explorer--watches))
+    (maphash (lambda (d _)
+               (unless (gethash d drgnx-explorer--watches)
+                 (puthash d (or (ignore-errors
+                                  (file-notify-add-watch d '(change) (lambda (event) (drgnx-explorer--file-event event d))))
+                                'none)
+                          drgnx-explorer--watches)))
+             want)))
+
+(defun drgnx-explorer--unwatch-all ()
+  (maphash (lambda (_ desc) (unless (eq desc 'none) (ignore-errors (file-notify-rm-watch desc)))) drgnx-explorer--watches)
+  (clrhash drgnx-explorer--watches))
+
+(defun drgnx-explorer--file-event (event dir)
+  "A watch on DIR saw EVENT: remember DIR and arm one delayed refresh (no work here)."
+  (when (memq (nth 1 event) '(created deleted renamed))
+    (cl-pushnew dir drgnx-explorer--dirty :test #'equal)
+    (unless (timerp drgnx-explorer--event-timer)
+      (setq drgnx-explorer--event-timer
+            (run-with-timer drgnx-explorer-event-delay nil #'drgnx-explorer--apply-file-events)))))
+
+(defun drgnx-explorer--apply-file-events ()
+  "Show the changed folders again — each once, in place; wait while a button is held."
+  (setq drgnx-explorer--event-timer nil)
+  (if drgnx-explorer--pressed
+      (setq drgnx-explorer--event-timer
+            (run-with-timer drgnx-explorer-event-delay nil #'drgnx-explorer--apply-file-events))
+    (let ((dirs drgnx-explorer--dirty))
+      (setq drgnx-explorer--dirty nil)
+      (when-let* ((buf (get-buffer drgnx-explorer-buffer-name)))
+        (with-current-buffer buf
+          (dolist (d dirs) (drgnx-explorer--refresh-dir d)))))))
+
+(defun drgnx-explorer--refresh-dir (dir)
+  "Re-list DIR (shown and expanded) and replace its rows in place, keeping views and selection."
+  (when-let* ((pos (drgnx-explorer--row-pos dir))
+              (v (drgnx-explorer--row-data pos))
+              ((or (= (aref v 1) 0) (drgnx-explorer--expanded-p dir))))
+    (cl-incf drgnx-explorer--relists)
+    (remhash (file-name-as-directory dir) drgnx-explorer--cache)
+    (let* ((inhibit-read-only t) (views (drgnx-explorer--save-views))
+           (i (drgnx-explorer--index pos)) (j (drgnx-explorer--subtree-last i)) (rows drgnx-explorer--rows)
+           (next (save-excursion (goto-char pos) (forward-line 1) (point))))
+      (delete-region next (save-excursion (goto-char next) (forward-line (- j i 1)) (point)))
+      (let ((new (save-excursion (goto-char next) (drgnx-explorer--insert-subtree dir (1+ (aref v 1))))))
+        (setq drgnx-explorer--rows (vconcat (seq-subseq rows 0 (1+ i)) new (seq-subseq rows j))))
+      (drgnx-explorer--restore-views views)
+      (drgnx-explorer--sync-watches))))
 
 (defun drgnx-explorer--row-pos (path)
   "Start of PATH's row, or nil."
@@ -230,7 +316,8 @@ faces come later, from jit-lock, for the rows on screen."
             (puthash path t drgnx-explorer--expanded)
             (let ((new (save-excursion (goto-char next) (drgnx-explorer--insert-subtree path (1+ depth)))))
               (setq drgnx-explorer--rows (vconcat (seq-subseq rows 0 (1+ i)) new (seq-subseq rows (1+ i)))))
-            (drgnx-explorer--set-chevron bol depth t)))
+            (drgnx-explorer--set-chevron bol depth t))
+          (drgnx-explorer--sync-watches))
         t))))
 
 (defun drgnx-explorer--root-of (file)
@@ -378,7 +465,8 @@ Returns non-nil if FILE is under a root."
   ;; A press on a partly visible row must not scroll: the row would move under the pointer.
   (setq-local scroll-margin 0 make-cursor-line-fully-visible nil)
   (hl-line-mode 1)
-  (jit-lock-register #'drgnx-explorer--fontify))
+  (jit-lock-register #'drgnx-explorer--fontify)
+  (add-hook 'kill-buffer-hook #'drgnx-explorer--unwatch-all nil t))
 
 (defun drgnx-explorer-setup ()
   "Put the Explorer in the dock and let it follow the editor."

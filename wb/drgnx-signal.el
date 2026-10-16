@@ -66,6 +66,12 @@
          (dolist (x a) (puthash x t seen))
          (seq-every-p (lambda (x) (gethash x seen)) b))))
 
+(defun drgnx-signal--same-names-p (a b)
+  "Non-nil if the alists A and B (buffer . name) give every buffer the same name (order ignored)."
+  (let ((old (make-hash-table :test #'eq :size (length b))))
+    (pcase-dolist (`(,buf . ,name) b) (puthash buf name old))
+    (seq-every-p (lambda (p) (equal (gethash (car p) old) (cdr p))) a)))
+
 (defun drgnx-signal--flush ()
   "Compare the state with the last flush and emit the edges."
   (setq drgnx-signal--timer nil)
@@ -74,11 +80,13 @@
   (let* ((editor (when-let* ((w (drgnx-signal-editor-window))) (window-buffer w)))
          (set (seq-filter #'drgnx-signal-user-buffer-p (buffer-list)))
          (modified (mapcar (lambda (b) (cons b (buffer-modified-p b))) set))
+         (names (mapcar (lambda (b) (cons b (buffer-name b))) set))
          (old drgnx-signal--state))
-    (setq drgnx-signal--state (list :editor editor :set set :modified modified))
+    (setq drgnx-signal--state (list :editor editor :set set :modified modified :names names))
     (unless (eq editor (plist-get old :editor))
       (drgnx-signal--emit 'editor-changed editor))
-    (unless (drgnx-signal--same-set-p set (plist-get old :set))
+    (unless (and (drgnx-signal--same-set-p set (plist-get old :set))
+                 (drgnx-signal--same-names-p names (plist-get old :names)))
       (drgnx-signal--emit 'buffer-set-changed set))
     (when-let* ((was (let ((h (make-hash-table :test #'eq :size (length set))))
                        (pcase-dolist (`(,b . ,m) (plist-get old :modified)) (puthash b (if m 'yes 'no) h))
@@ -95,7 +103,10 @@
 
 (defconst drgnx-signal--hooks
   '(window-buffer-change-functions window-selection-change-functions buffer-list-update-hook
-    first-change-hook after-save-hook after-revert-hook kill-buffer-hook)
+    first-change-hook after-save-hook after-revert-hook kill-buffer-hook
+    ;; Undo back to the saved state, `set-buffer-modified-p' and `rename-buffer' run no buffer
+    ;; hook: every command arms the (cheap, idle) flush too.
+    post-command-hook)
   "The raw hooks the bus listens to.")
 
 (define-minor-mode drgnx-signal-mode
