@@ -1,0 +1,5 @@
+NAME="Linux Mint"
+VERSION_ID="23"
+ID=linuxmint
+ID_LIKE="ubuntu debian"
+PRETTY_NAME="Linux Mint 23"
