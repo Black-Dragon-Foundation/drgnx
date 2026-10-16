@@ -12,7 +12,7 @@ The last results of each configuration are kept in `$XDG_STATE_HOME/drgnx/ui/sce
 
 ## Explorer (file tree)
 
-| Scenario | Expected (VS Code) | gryphn | Why (trace) |
+| Scenario | Expected (VS Code) | gryphn | Why (trace) — **drgnx: all green since M3a** ([workbench.md](workbench.md)) |
 |---|---|---|---|
 | `explorer-click-stays` | a single click on a folder keeps the selection on it | **red** | `treemacs-leftclick-action` selects the folder (point 55 → 30), `mouse-set-point` (30 → 36); at +196 ms `timer:gryphn-workspace--on-change` — the Explorer follow — moves it back to the editor's file (36 → 55) |
 | `explorer-follow-override` | with the follow switched off, `explorer-click-stays` passes | green | **confirms H1**: the follow is the cause |

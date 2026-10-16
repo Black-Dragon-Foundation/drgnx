@@ -13,6 +13,7 @@ how every drgnx UI change is developed and verified (see [roadmap.md](roadmap.md
 | `bin/drgnx test --container` | the batch tier in a `fedora:45` container (Emacs 31.1, drgnx's baseline) | podman, docker or nerdctl |
 | `bin/drgnx test --container --ui` | the GUI tier in a container (mutter renders without a GPU) | podman, docker or nerdctl |
 | `bin/drgnx test --ui` | GUI ERT suites in `test/ui/` inside a headless session, then live ERT suites in `test/live/` (batch Emacs starting real sessions) | the host (needs mutter) |
+| `bin/drgnx test --bench` | the workbench timed against treemacs and ibuffer in a GUI session on a 25k-file project — see [workbench.md](workbench.md#performance) | the host (needs mutter); treemacs from `$DRGNX_BENCH_ELPA` |
 | `bin/drgnx test --install [NAME…]` | `install.sh` end to end in fresh distribution containers: source builds on Fedora 44, Debian 13, Ubuntu 26.04, packages on Fedora 45 and Arch; then the doctor, a second run (no-op) and `--dry-run` (no changes) — see [install.md](install.md) | podman, docker or nerdctl; slow, network |
 
 `harness/run-ert.el` runs a suite and writes a JSON summary

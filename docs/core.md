@@ -79,6 +79,13 @@ Emacs is idle). Each setup runs under its own error guard and is timed; a file t
 a module too. "Help: Module Report" (`drgnx-modules-show-report`) lists stage, milliseconds and errors. Flags,
 settings, doctor checks, more stages and the modules index come with M4.
 
+## Build (`drgnx-build.el`)
+
+`bin/drgnx build` byte-compiles `core/`, `wb/` and `modules/` in place (`.elc` files are not tracked); with native
+compilation available, Emacs then compiles them natively in the background as they load. Compiled drgnx is several
+times faster and makes far less garbage. `install.sh` runs it; drgnx sets `load-prefer-newer`, so a stale `.elc`
+never shadows newer source. The build must stay warning-free (`test/unit/build-test.el`).
+
 ## Doctor (`drgnx-doctor.el`)
 
 `bin/drgnx doctor [--json] [--dev]` asks the Emacs drgnx will use (`$DRGNX_EMACS`, else `emacs`) whether this

@@ -31,6 +31,12 @@ The onboarding flow will ask which one you want (VS Code preselected).
 | Save | `C-s` | `C-x C-s` | `SPC f s` |
 | Toggle Line Numbers | — | — | `SPC u l` |
 | Module Report | — | — | `SPC h m` |
+| Toggle Sidebar | `C-b` | `<f8>` | `SPC e` |
+| Focus Explorer / Buffers | `C-S-e` / `C-k e` | `C-x M-e` / `C-x C-b` | `SPC E` / `SPC ,` |
+
+The Explorer's and the Buffers panel's own keys (rows, expand, open, close) are in [workbench.md](workbench.md).
+A command that lives in a mode's keymap (like those) keeps its keymap in every profile: an entry's `:map` wins,
+else the command's own, else the profile's.
 
 "—" means the profile has no key for it; every command is always in the palette. Vim's keys are leader keys in
 evil's normal state. On **macOS** the VS Code profile uses Cmd: `C-` becomes `s-` (`s-o`, `s-k s-s`, `s-S-p`).

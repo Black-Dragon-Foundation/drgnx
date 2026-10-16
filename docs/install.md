@@ -34,7 +34,7 @@ Afterwards, start drgnx with the command the installer prints
    otherwise installs one (table below).
 5. **drgnx:** clones it into `~/.local/share/drgnx/drgnx` (or fast-forwards an existing checkout, never
    discarding local changes), installing git first if it is missing, and links `~/.local/bin/drgnx`.
-6. **Checks:** runs `drgnx doctor` with the Emacs it found or installed.
+6. **Compiles drgnx** (`drgnx build`) and **checks** it: runs `drgnx doctor` with the Emacs it found or installed.
 7. **PATH:** if `~/.local/bin` is not on your `PATH`, it offers to add one line to `~/.profile` — only when you
    answer yes; with `--yes` it only prints the line.
 

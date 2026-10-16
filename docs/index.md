@@ -4,6 +4,7 @@
   onboarding, milestones with exit criteria.
 - [Architecture overview](architecture.md)
 - [Install](install.md): install.sh, per-platform guide, source build, `drgnx doctor`, uninstall.
+- [Workbench](workbench.md): the sidebar — Explorer and Buffers panel — the change bus, performance vs treemacs/ibuffer.
 - [Keys](keys.md): VS Code, Emacs and Vim key profiles, layers, keys.eld, conflicts.
 - [Core](core.md): paths, staged hooks, no-prompt guard, command registry, surfaces, palette, modules.
 - [Scenarios](scenarios.md): behaviour scenarios and the evidence behind the workbench design.
