@@ -5,8 +5,10 @@ files) above the **Explorer** (file tree). Nothing moves on its own: a click lan
 selected stays selected, the dock keeps its width. The rest of the workbench (right dock, bottom panel, popups,
 editor groups, several windows) arrives in the next milestones (see [roadmap.md](roadmap.md), M3).
 
-Everything here is built on plain Emacs — no treemacs, no ibuffer — and does every heavy operation 9–180×
-faster than they do; key presses are sub-millisecond in all three (see [Performance](#performance)).
+Everything here is built on plain Emacs — no treemacs, no ibuffer — does what people use those for (and VS
+Code's Explorer and Open Editors; see [Compared](#compared-with-treemacs-ibuffer-and-vs-code)), and does every
+heavy operation 7–80× faster than they do; key presses are sub-millisecond in all three (see
+[Performance](#performance)).
 
 ## Using it
 
@@ -34,7 +36,60 @@ The **Buffers** panel lists open files in the order you opened them — switchin
 moves under the pointer. Each row: `×` closes, `●` marks unsaved changes, then the name and its folder; the file
 in the active editor is in bold. Click a row to show it; `RET` too; `Delete` (`d`/`k` in Emacs, `x` in Vim) closes.
 
+### Files
+
+| | VS Code keys | Emacs keys | Vim keys |
+|---|---|---|---|
+| New file or folder (`a/b/c.txt` makes folders; end with `/` for a folder) | right-click | `+` | `a` |
+| Rename (open buffers follow) | `F2` | `R` | `r` |
+| Delete — to the trash, asks first | `Delete` | `D` | `d` |
+| Delete permanently | `Shift+Delete` | `C-u D` | `D` |
+| Copy / Cut / Paste (a taken name gets " copy" — never overwritten) | `C-c` / `C-x` / `C-v` | `M-w` / `C-w` / `C-y` | `y` / `x` / `p` |
+| Copy path / relative path | `M-S-c` / `C-M-S-c` | `w` / `W` | `g y` / `Y` |
+| Reveal in the file manager | `M-S-r` | `o x` | `s` |
+| Select several: extend down / up, mark | `S-<down>` / `S-<up>`, `C-SPC` | `S-<down>` / `S-<up>`, `m` | `J` / `K`, `m` |
+| Find (filter the tree) | `C-M-f` | `/` | `/` |
+
+Ctrl-click adds a row to the selection, Shift-click selects a range; moving without Shift ends it. Delete, Copy,
+Cut and Rename act on the selection. Every operation takes its targets before it asks anything, so nothing that
+happens while you answer can make it act on another file. The right-click menu has the same entries.
+
+**Typing** in the Explorer jumps to the next row starting with what you typed (letters a profile does not use).
+**Find** filters the tree live to the files whose names contain the text — also inside collapsed folders — and the
+title shows it; an empty text (or `C-g`) brings back the tree, its open folders, the view and the selection.
+
+**Live**: files created, deleted or renamed outside Emacs appear within ~150 ms (only the changed folder is read
+again; the view and selection stay; nothing changes while a mouse button is held).
+
+**Git**: `M` modified, `A` added, `U` untracked, `R` renamed, `D` deleted, `C` conflict, in the colours of your
+theme's version-control faces; a folder with changes inside shows `●`; ignored files are dimmed. One background
+`git status` per repository (never holding your git lock); `drgnx-explorer-git` turns it off.
+
+### Buffers panel
+
+Save All (`C-k s` · `C-x s` · `SPC f S`), Close Saved (`C-k u` · palette · `SPC b u`), Close All (`C-k C-w` · palette ·
+`SPC b A`), Close Others (right-click · `o` · `O`), a live name filter (`C-M-f` · `/` · `/`), middle-click closes a
+row, and "save all · close saved" buttons in the title. Git letters show after the names.
+
 All of these are commands in the palette and keys in every profile ([keys.md](keys.md)).
+
+## Compared with treemacs, ibuffer and VS Code
+
+| | treemacs | ibuffer | VS Code | drgnx |
+|---|---|---|---|---|
+| Click model | double click opens | — | single click | single click; the tree never moves under the pointer |
+| Drag | moves files, **no confirmation** | — | moves, confirms | never moves files |
+| Git | colours, one process per folder | — | letters + colours | letters + colours, one background process per repository |
+| Live updates | after 2 s | auto mode | yes | ~150 ms, view kept |
+| Find | — | filters | filter in tree | live filter across collapsed folders, exact restore |
+| File operations | yes (trash) | — | yes | yes (trash, never overwrites, targets fixed at start) |
+| Multi-select | marks | marks | Ctrl/Shift | Ctrl/Shift click, Shift+arrows, mark |
+| Open files order | — | by recency (rows move) | open order | open order (rows never move) |
+| Bulk save/close | — | marked ops | Save All, Close Saved/All | Save All, Close Saved/Others/All |
+| Speed | 118–706 ms | 43–73 ms | — | 0.5–47 ms |
+
+Not yet: compact folders (`src/app` on one row — a cheap way to know a folder's only child is needed first),
+file nesting, icons (an icon theme is a module, M4), problems decorations (with diagnostics, M5).
 
 ## How it works
 
@@ -63,18 +118,22 @@ including a full redisplay; one-off operations are the median of 3, key presses 
 Like for like: folder listings are read from disk in every run, the refreshed folder is open and the new files must
 appear, the Buffers update includes drgnx's change bus, and the Buffers render creates the panel and its window as
 ibuffer does.
-treemacs runs like-for-like (no git status, no file watching, no follow) and is loaded only in that session,
-from `$DRGNX_BENCH_ELPA` (default `~/.config/emacs/elpa`); without it only drgnx and ibuffer are compared.
+The fixture is a git repository (everything committed, 50 files changed). treemacs runs like-for-like (no file
+watching, no follow; git off, then on for the two git rows) and is loaded only in that session, from
+`$DRGNX_BENCH_ELPA` (default `~/.config/emacs/elpa`); without it only drgnx and ibuffer are compared.
 
 | Operation (ms) | drgnx | treemacs / ibuffer |
 |---|---|---|
-| First render of the project | 5.4 | 121.3 |
-| Expand the 5,000-file folder (read from disk) | 41.3 | 382.3 |
-| Reveal the depth-8 file | 1.6 | 51.0 |
-| Refresh after 100 new files (shown) | 23.6 | 721.6 |
-| Buffers panel, 500 buffers | 6.5 | 76.1 (ibuffer) |
-| Buffers panel, one buffer added | 0.4 | 70.9 (ibuffer) |
-| Key press (p95) | 0.5 / 0.8 | 0.2 / 2.2 |
+| First render of the project | 7.3 | 118.1 |
+| … with git decorations | 7.3 | 159.4 |
+| Expand the 5,000-file folder (read from disk) | 46.9 | 317.9 |
+| … with git decorations | 46.9 | 384.7 |
+| Reveal the depth-8 file | 2.4 | 59.0 |
+| Refresh after 100 new files (shown) | 25.4 | 705.7 |
+| Git status of the whole 25k-file repository (background) | 46.3 | — |
+| Buffers panel, 500 buffers | 7.8 | 73.0 (ibuffer) |
+| Buffers panel, one buffer added | 0.5 | 42.8 (ibuffer) |
+| Key press (p95) | 0.5 / 0.8 | 0.3 / 2.3 |
 
 (One machine, 2026-10; numbers vary, ratios hold.) The run fails if drgnx misses a budget (first render 30 ms,
 expand 80, reveal 20, refresh 150, Buffers 30 / 15, keys 8) or is slower than the other tool by more than 0.5 ms
@@ -85,5 +144,6 @@ must allocate under 3 MB — garbage is what makes a GUI session pause.
 
 Batch: `test/unit/wb-*-test.el` (bus, dock, Explorer, Buffers). GUI: `test/live/drgnx-workbench-test.el` (the dock
 by real key presses: no focus taken, width identical over 10 hide/show cycles, titles, no scroll bars). Behaviour:
-the ten Explorer and Buffers scenarios of [scenarios.md](scenarios.md) are green on drgnx (`bin/drgnx test
+the ten Explorer and Buffers scenarios of [scenarios.md](scenarios.md), plus two for live updates (a folder
+appearing during a held click; a folder appearing while browsing), are green on drgnx (`bin/drgnx test
 --scenario --config drgnx`; driver `test/scenario/drivers/drgnx.el`).
