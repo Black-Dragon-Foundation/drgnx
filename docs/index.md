@@ -6,6 +6,5 @@
 - [Core](core.md): paths, staged hooks, no-prompt guard, command registry, surfaces, palette, modules.
 - [Scenarios](scenarios.md): behaviour scenarios and the evidence behind the workbench design.
 - [Harness](harness.md): headless GUI test sessions, test tiers, CLI and MCP tools for agents.
-- Decisions (ADRs): [decisions/](decisions/)
 
 Docs are updated in the same commit as the code they describe.
