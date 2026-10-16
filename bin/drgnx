@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# drgnx — command-line entry point (pre-release stub).
+# drgnx — command-line entry point (pre-release; see docs/roadmap.md).
 set -euo pipefail
+here="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
 
 check() { # NAME CMD FIX
   if bash -c "$2" >/dev/null 2>&1; then printf '%-24s ok\n' "$1"; else printf '%-24s FAIL  %s\n' "$1" "$3"; return 1; fi
@@ -14,8 +15,37 @@ cmd_doctor() {
   return "$rc"
 }
 
+test_batch() {
+  local rc=0
+  emacs --batch -Q -L "$here/harness" -l "$here/harness/run-ert.el" \
+        -f drgnx-run-ert-batch "$here/test/unit" || rc=1
+  (cd "$here" && PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s test/py) || rc=1
+  return "$rc"
+}
+
+test_podman() {
+  podman build -q -t drgnx-test:f45 "$here/test/podman" >/dev/null
+  podman run --rm -e PYTHONDONTWRITEBYTECODE=1 -v "$here:/src:ro,Z" -w /src drgnx-test:f45 bin/drgnx test
+}
+
+cmd_test() {
+  case "${1:-}" in
+    "") test_batch ;;
+    --podman) test_podman ;;
+    *) echo "usage: drgnx test [--ui|--podman]" >&2; exit 2 ;;
+  esac
+}
+
+usage() {
+  cat <<'USAGE'
+usage: drgnx doctor            check this machine
+       drgnx test [--podman]   batch tests (on the host, or in a fedora:45 / Emacs 31.1 container)
+USAGE
+}
+
 case "${1:-help}" in
   doctor) shift; cmd_doctor "$@" ;;
-  help|-h|--help) echo "usage: drgnx doctor   (more commands arrive with each milestone)" ;;
-  *) echo "drgnx: unknown command '$1' (try: drgnx doctor)" >&2; exit 2 ;;
+  test) shift; cmd_test "$@" ;;
+  help|-h|--help) usage ;;
+  *) echo "drgnx: unknown command '$1' (try: drgnx help)" >&2; exit 2 ;;
 esac

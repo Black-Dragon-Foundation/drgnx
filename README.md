@@ -6,7 +6,7 @@ on top of everything that makes Emacs worth it: org, deep programmability, a per
 whole Emacs package ecosystem. Light on memory: the target is a daemon under 400 MB with all modules on.
 
 > **Status: pre-release.** drgnx is being built in the open. Nothing here is installable yet, there is no
-> support, and contributions are not being accepted yet. Watch the repo for updates.
+> support, and contributions are not being accepted yet. Watch the repo or read the roadmap.
 
 ## What makes it different
 
@@ -30,11 +30,13 @@ whole Emacs package ecosystem. Light on memory: the target is a daemon under 400
 
 ## Documentation
 
+- [Roadmap and design](docs/roadmap.md)
 - [Architecture](docs/architecture.md)
+- [Decisions](docs/decisions/)
 
 ## License
 
 drgnx is free software under the **GNU General Public License v3.0 or later** (see `LICENSE`).
 Code derived from [Emacs Bedrock](https://codeberg.org/ashton314/emacs-bedrock) keeps its MIT notice.
 A separate `drgnx-pro` add-on may follow later under a source-available license that stays free for
-individuals, open-source developers and small businesses.
+individuals, open-source developers and small businesses (see ADR 0001).

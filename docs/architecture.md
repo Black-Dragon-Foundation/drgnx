@@ -17,3 +17,5 @@ registry for AI features, and the semantic search module.
 
 Layers, lowest to highest: Emacs built-ins → core → workbench → modules → external modules → user config
 (`~/.config/drgnx`, never inside the checkout).
+
+Details: [roadmap.md](roadmap.md).

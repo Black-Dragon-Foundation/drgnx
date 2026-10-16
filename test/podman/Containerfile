@@ -1,0 +1,3 @@
+# Batch test tier: Fedora 45 ships Emacs 31.1, drgnx's baseline.
+FROM registry.fedoraproject.org/fedora:45
+RUN dnf -y install emacs-nw python3 && dnf clean all
