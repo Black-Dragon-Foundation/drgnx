@@ -49,21 +49,29 @@
   (posn-at-x-y x y (drgnx-uitest-root-frame)))
 
 (defun drgnx-uitest-target-xy (buffer text)
-  "Root-frame pixel (X . Y) inside the first visible TEXT in the window showing BUFFER.
-BUFFER is a buffer name or a major mode name.  Signals if either is not on screen."
+  "Root-frame pixel (X . Y) inside the first fully visible TEXT in the window showing BUFFER.
+BUFFER is a buffer name or a major mode name.  An occurrence counts only if it is not
+invisible and a click at the computed pixel lands on it (same window, same position) —
+so text cut off at the right edge or hidden by folding is never clicked.  Signals if
+there is no such occurrence."
   (let* ((win (or (drgnx-uitest-find-window buffer)
                   (error "drgnx-uitest: no window shows %s" buffer)))
-         (pos (with-current-buffer (window-buffer win)
-                (save-excursion
-                  (goto-char (window-start win))
-                  (unless (search-forward text (window-end win t) t)
-                    (error "drgnx-uitest: %S is not visible in %s" text buffer))
-                  (match-beginning 0))))
-         (xy (posn-x-y (posn-at-point pos win)))
-         (body (window-body-pixel-edges win))
-         (f (window-frame win)))
-    (cons (+ (nth 0 body) (car xy) (/ (frame-char-width f) 2))
-          (+ (nth 1 body) (cdr xy) (/ (frame-char-height f) 2)))))
+         (f (window-frame win))
+         (body (window-body-pixel-edges win)))
+    (with-current-buffer (window-buffer win)
+      (save-excursion
+        (goto-char (window-start win))
+        (let ((limit (window-end win t)) found)
+          (while (and (not found) (search-forward text limit t))
+            (let* ((pos (match-beginning 0))
+                   (posn (and (not (invisible-p pos)) (posn-at-point pos win)))
+                   (xy (and posn (posn-x-y posn)))
+                   (x (and xy (+ (nth 0 body) (car xy) (/ (frame-char-width f) 2))))
+                   (y (and xy (+ (nth 1 body) (cdr xy) (/ (frame-char-height f) 2))))
+                   (back (and xy (posn-at-x-y x y f))))
+              (when (and back (eq (posn-window back) win) (eql (posn-point back) pos))
+                (setq found (cons x y)))))
+          (or found (error "drgnx-uitest: %S is not visible in %s" text buffer)))))))
 
 ;;;; Events (pure)
 
@@ -299,7 +307,7 @@ offset (parent-relative native edges) for compositing."
                                  (list :path file :x (nth 0 e) :y (nth 1 e))))
                              (drgnx-uitest-child-frames f))))))
 
-;;;; JSON API (for emacsclient; see harness/drgnx_ui.py)
+;;;; JSON API (for emacsclient; see harness/drgnx-ui.el)
 
 (defun drgnx-uitest--json (plist)
   "PLIST as JSON text.  Emacs 30's `json-serialize' returns unibyte UTF-8, which
@@ -354,6 +362,12 @@ prints as raw bytes; decode it so non-ASCII text survives emacsclient."
 (defun drgnx-uitest-api-type (text)
   "Queue typing TEXT."
   (drgnx-uitest--json (list :queued (drgnx-uitest-enqueue (drgnx-uitest-type-events text)))))
+
+(defun drgnx-uitest-api-boot-status ()
+  "While init runs: the active minibuffer prompt (a config asking something), or null."
+  (drgnx-uitest--json
+   (list :prompt (let ((w (active-minibuffer-window)))
+                   (if w (with-current-buffer (window-buffer w) (or (minibuffer-prompt) "")) :null)))))
 
 (defun drgnx-uitest-api-status (&optional quiet-ms)
   "Busy and settled flags, as JSON."

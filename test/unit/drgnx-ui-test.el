@@ -190,3 +190,9 @@
     (drgnx-ui-stop "drgnx-ui-4")
     (should-not (file-exists-p (expand-file-name "drgnx-ui-4" runtime)))
     (should-not (file-exists-p (expand-file-name "drgnx-ui-4.lock" runtime)))))
+
+(ert-deftest drgnx-ui/process-groups-are-verified-before-signalling ()
+  (should-not (drgnx-ui--group-ours-p "1" "/any/run"))
+  (should-not (drgnx-ui--group-ours-p "0" "/any/run"))
+  (should-not (drgnx-ui--group-ours-p nil "/any/run"))
+  (should-not (drgnx-ui--group-ours-p (number-to-string (emacs-pid)) "/not/this/run/drgnx-ui-1")))

@@ -72,3 +72,55 @@
       (should (eq (plist-get (drgnx-ui-measure (drgnx-ui-own-session name) (list (list :type "x"))) :settled) t))
       (drgnx-ui-stop name)
       (should (equal (drgnx-live--processes (concat "--wayland-display " name)) "")))))
+
+(ert-deftest drgnx-live/stop-leaves-other-state-roots-alone ()
+  (drgnx-live--with-state
+    (let* ((s (drgnx-ui-start "minimal" nil 20))
+           (name (plist-get s :name))
+           (other (make-temp-file "drgnx-ui-other" t)))
+      (unwind-protect
+          (let ((process-environment (cons (concat "DRGNX_UI_STATE=" other) process-environment)))
+            (drgnx-ui-prepare-run name)                  ; a stale dir with the same name elsewhere
+            (should (eq (plist-get (aref (drgnx-ui-ls) 0) :active) :false))
+            (drgnx-ui-stop name))
+        (delete-directory other t))
+      (should (drgnx-ui-alive-p s))
+      (should (file-exists-p (expand-file-name name (drgnx-ui-runtime-dir))))
+      (should (drgnx-ui-state (drgnx-ui-own-session name))))))
+
+(ert-deftest drgnx-live/measure-resolves-each-action-after-the-previous-one ()
+  (drgnx-live--with-state
+    (let* ((s (drgnx-ui-start "minimal" nil 20))
+           (sess (drgnx-ui-own-session (plist-get s :name))))
+      (drgnx-ui-measure sess (list (list :keys "C-x 3") (list :x 1200 :y 40)))
+      (let ((win (seq-find (lambda (w) (eq (plist-get w :selected) t)) (plist-get (drgnx-ui-state sess) :windows))))
+        (should (> (aref (plist-get win :edges) 0) 700))))))
+
+(ert-deftest drgnx-live/prompt-during-init-returns-and-can-be-answered ()
+  (drgnx-live--with-state
+    (let ((cfg (expand-file-name "prompting" root)) (t0 (float-time)))
+      (make-directory cfg)
+      (write-region "(setq drgnx-test-answer (read-string \"Name? \"))\n" nil (expand-file-name "init.el" cfg))
+      (let* ((s (drgnx-ui-start cfg))
+             (ready (plist-get s :ready))
+             (sess (drgnx-ui-own-session (plist-get s :name))))
+        (should (< (- (float-time) t0) 20))
+        (should (eq (plist-get ready :init_running) t))
+        (should (equal (plist-get ready :prompt) "Name? "))
+        (drgnx-ui-measure sess (list (list :type "drgnx") (list :keys "RET")))
+        (let ((deadline (+ (float-time) 10)))
+          (while (and (not (file-exists-p (expand-file-name "ready.json" (plist-get s :run))))
+                      (< (float-time) deadline))
+            (sleep-for 0.1)))
+        (should (file-exists-p (expand-file-name "ready.json" (plist-get s :run))))
+        (should (equal (plist-get (drgnx-ui-call sess "(drgnx-uitest--json (list :a drgnx-test-answer))") :a)
+                       "drgnx"))))))
+
+(ert-deftest drgnx-live/config-that-moves-the-server-is-refused ()
+  (drgnx-live--with-state
+    (let ((cfg (expand-file-name "mover" root)))
+      (make-directory cfg)
+      (write-region "(setq server-name \"not-the-harness\")\n(server-start)\n" nil (expand-file-name "init.el" cfg))
+      (let ((err (should-error (drgnx-ui-start cfg nil 20) :type 'drgnx-ui-error)))
+        (should (string-search "moved" (error-message-string err))))
+      (should (= (length (drgnx-ui-ls)) 0)))))

@@ -47,3 +47,30 @@
                             (drgnx-uitest-key-events "C-a C-k")))
   (should (equal (buffer-string) ""))
   (should (equal (current-kill 0) "he said \"hi\" ✓")))
+
+(ert-deftest drgnx-ui-input/target-beyond-the-right-edge-errors ()
+  (let ((buf (get-buffer-create "*drgnx-wide*")))
+    (with-current-buffer buf
+      (erase-buffer) (setq truncate-lines t)
+      (insert (make-string 400 ?x) "FARAWAY\n") (goto-char (point-min)))
+    (delete-other-windows)
+    (switch-to-buffer buf)
+    (redisplay t)
+    (should-error (drgnx-uitest-target-xy "*drgnx-wide*" "FARAWAY"))))
+
+(ert-deftest drgnx-ui-input/target-skips-invisible-text ()
+  (let ((buf (get-buffer-create "*drgnx-invisible*")))
+    (with-current-buffer buf
+      (erase-buffer)
+      (insert "aaa HIDDEN bbb HIDDEN ccc\n")
+      (overlay-put (make-overlay 5 11) 'invisible t)
+      (goto-char (point-min)))
+    (delete-other-windows)
+    (switch-to-buffer buf)
+    (redisplay t)
+    (let ((xy (drgnx-uitest-target-xy "*drgnx-invisible*" "HIDDEN")))
+      (drgnx-uitest-run (drgnx-uitest-click-events (drgnx-uitest-posn (car xy) (cdr xy))))
+      (should (= (point) 16)))                       ; the second, visible HIDDEN
+    (with-current-buffer buf (overlay-put (make-overlay 16 22) 'invisible t))
+    (redisplay t)
+    (should-error (drgnx-uitest-target-xy "*drgnx-invisible*" "HIDDEN"))))

@@ -54,9 +54,15 @@ Unix socket paths are limited to ~108 bytes; the hash keeps two state roots (say
   XDG_RUNTIME_DIR GRYPHN_EMACS_DIR` + `DRGNX_UI_*`), `auth-sources` is nil.
 - Deterministic look: no startup screen, no blinking cursor, no bell, no dialog boxes.
 - Safety: treemacs drag-to-move is off.
-- Its own server: `server-name` = the session name, `server-socket-dir` = the session's socket directory,
-  set before the configuration runs so any `server-start` in it uses the session's socket. If the server
-  cannot start, `ready.json` says why (`server_error`) and `drgnx ui start` fails at once.
+- Its own server, started (with the harness agent) by the generated `init.el` *before* the configuration's
+  `init.el`, on `server-name` = the session name and `server-socket-dir` = the session's socket directory. If
+  the server cannot start, `ready.json` says why (`server_error`) and `drgnx ui start` fails at once. If the
+  configuration moves the server elsewhere (another name or directory — it could even take the name of your
+  own Emacs server), start stops the session and fails: the harness only drives sessions it owns.
+- **A configuration that asks something during init** (a minibuffer prompt) does not block `start`: after 2 s
+  without `ready.json`, start asks the session whether a prompt is active and, if so, returns at once with
+  `ready: {init_running: true, prompt: "…"}`. The session stays up: take a screenshot, answer with
+  `ui_type`/`ui_keys`, and init continues (`ready.json` appears when it finishes).
 
 **Configurations:** `minimal` (stock Emacs, menu/tool/scroll bars off — `harness/init/minimal.el`), `gryphn`
 (the gryphn layer's config directory, `$DRGNX_GRYPHN_CONFIG` or `~/.config/emacs`), or any directory with an
@@ -74,7 +80,9 @@ skip redisplay and hide the very jank we want to see.
   `(posn-at-x-y x y root-frame)` turns them into the click position.
 - **Targets:** instead of pixels, name a window by its buffer name or major mode (e.g. `treemacs-mode`) and
   some visible text; the click lands in the middle of the first character of the first visible occurrence.
-  A buffer that is not shown, or text that is not visible, is an error — never a click somewhere else.
+  An occurrence counts only if it is not invisible (folded) and a click at the computed pixel lands on it
+  (same window, same position) — text cut off at the right edge of a truncated line is skipped. A buffer that
+  is not shown, or text with no such occurrence, is an error — never a click somewhere else.
 - **Clicks** are `down-mouse-N` + `mouse-N`; `count 2` adds `double-down-mouse-N` + `double-mouse-N`;
   `hold` waits between press and release (e.g. to reproduce an accidental drag).
 - **Keys** use `kbd` syntax (`"C-x b"`, `"M-x"`, `"RET"`); typed text is one event per character.
@@ -161,7 +169,8 @@ bin/drgnx ui measure drgnx-ui-1 '[{"keys":"C-x 2"},{"x":10,"y":10}]'
 bin/drgnx ui stop drgnx-ui-1 | bin/drgnx ui reap
 ```
 
-Input commands wait until the session settles and print the jank report. `bin/drgnx` passes arguments after
+Input commands wait until the session settles and print the jank report. In `measure`, each action is
+delivered before the next one is resolved, so a click after `C-x 3` is aimed at the layout the keys produced. `bin/drgnx` passes arguments after
 `--`, so options Emacs itself knows (`--title`, `-nw`, …) cannot be swallowed by Emacs.
 
 ## Ownership and cleanup
@@ -172,7 +181,11 @@ one the harness assigned. Anything else — `server`, another Emacs's socket pat
 user's own Emacs can never be driven. `emacsclient` is always called with `-a false`, so a missing socket can
 never make it start a new Emacs daemon (as `ALTERNATE_EDITOR=""` would).
 
-`stop` ends the unit and removes the run and socket directories. `reap` does that for every session of the
+`stop` ends the session and removes its run and socket directories and mutter's Wayland socket. It only ever
+stops what belongs to the current state root: a systemd unit only if its command line names this root's run
+directory (unit names are global — another checkout may run `drgnx-ui-1` too), a detached process group only if
+one of its members names the run directory (a stale `pgid` file may point at a reused id; ids 0 and 1 are never
+signalled), and a Wayland display only when no process serves it any more. `reap` does that for every session of the
 current state root — run directories, plus live units whose command line points into it — and leaves sessions
 of other state roots alone. Units also end on their own after 30 minutes (`RuntimeMaxSec=1800`) and are
 capped at 3 GB (`MemoryMax`). A failed `drgnx test --ui` run keeps its run directory (with `session.log`) for

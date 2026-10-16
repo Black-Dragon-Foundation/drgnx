@@ -53,7 +53,7 @@ test_container() { # [--ui] — the batch (or GUI) tier inside a fedora:45 / Ema
   fi
   echo "container runtime: $rt" >&2
   "$rt" build -q -t "$image" -f "$here/test/container/$file" "$here/test/container" >/dev/null
-  "$rt" run --rm "${args[@]}" -v "$mount" -w /src "$image" "${cmd[@]}"
+  "$rt" run --rm ${args[@]+"${args[@]}"} -v "$mount" -w /src "$image" "${cmd[@]}"
 }
 
 cmd_test() {

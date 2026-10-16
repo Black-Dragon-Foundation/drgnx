@@ -66,14 +66,8 @@ Without an external configuration, init.el is the harness's minimal one."
 (defvar drgnx-ui--ready-timer nil)
 (defvar drgnx-ui--server-error nil "Why the session's server did not start, or nil.")
 
-(defun drgnx-ui--late ()
-  "Finish session setup after the configuration has run."
-  (blink-cursor-mode -1)
-  (setq treemacs-move-files-by-mouse-dragging nil)
-  (add-to-list 'load-path drgnx-ui-harness)
-  (require 'drgnx-uitest)
-  (require 'drgnx-jank-guard)
-  (drgnx-jank-guard-enable)
+(defun drgnx-ui--start-server ()
+  "Start the session's server unless one runs; record why it failed, never signal."
   (setq drgnx-ui--server-error
         (condition-case err
             (progn (unless (and (boundp 'server-process) (process-live-p server-process))
@@ -81,7 +75,23 @@ Without an external configuration, init.el is the harness's minimal one."
                    (unless (and (boundp 'server-process) (process-live-p server-process))
                      (error "server-start created no server (socket dir %s)" server-socket-dir))
                    nil)
-          (error (error-message-string err))))
+          (error (error-message-string err)))))
+
+(defun drgnx-ui-early-server ()
+  "Called by the generated init.el before the configuration's: load the harness agent and
+start the session's server, so a configuration that prompts or hangs can still be seen
+and driven (the initial frame exists by now)."
+  (add-to-list 'load-path drgnx-ui-harness)
+  (require 'drgnx-uitest)
+  (require 'drgnx-jank-guard)
+  (drgnx-jank-guard-enable)
+  (drgnx-ui--start-server))
+
+(defun drgnx-ui--late ()
+  "Finish session setup after the configuration has run."
+  (blink-cursor-mode -1)
+  (setq treemacs-move-files-by-mouse-dragging nil)
+  (drgnx-ui--start-server)              ; again, in case the configuration stopped it
   (setq drgnx-ui--ready-timer (run-with-timer 0 0.05 #'drgnx-ui--when-visible)))
 
 (defun drgnx-ui--when-visible ()
@@ -92,6 +102,7 @@ Without an external configuration, init.el is the harness's minimal one."
       (with-temp-file tmp
         (insert (json-serialize
                  (list :pid (emacs-pid)
+                       ;; Where the server actually is: a configuration may have moved it.
                        :socket (expand-file-name server-name server-socket-dir)
                        :emacs emacs-version
                        :init_error (if init-file-had-error t :false)
