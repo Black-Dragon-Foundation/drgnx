@@ -23,7 +23,7 @@ cmd_doctor() { # [--json] [--dev] — checks run inside the Emacs drgnx uses (co
 }
 
 cmd_build() { # byte-compile core/, wb/, modules/ in place (core/drgnx-build.el)
-  "${DRGNX_EMACS:-emacs}" --batch -Q -L "$here/core" -l drgnx-build -f drgnx-build-cli
+  "${DRGNX_EMACS:-emacs}" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" -l drgnx-build -f drgnx-build-cli
 }
 
 ui() { # the harness controller, in batch Emacs (harness/drgnx-ui.el)

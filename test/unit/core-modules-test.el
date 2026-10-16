@@ -41,3 +41,14 @@
            (should (string-search "does not load"
                                   (plist-get (alist-get 'test/drgnx-bad (drgnx-modules-report)) :error))))
        (delete-directory dir t)))))
+
+(ert-deftest drgnx-modules/a-built-module-runs-compiled ()
+  (let ((dir (make-temp-file "drgnx-modules" t)) (drgnx-modules--table nil) (drgnx-modules--report nil))
+    (unwind-protect
+        (let ((f (expand-file-name "drgnx-test-compiled.el" dir)))
+          (with-temp-file f
+            (insert ";;; -*- lexical-binding: t -*-\n(defun drgnx-test-compiled-fn () 1)\n"))
+          (byte-compile-file f)
+          (let ((load-prefer-newer t)) (drgnx-modules-load-directory dir))
+          (should (byte-code-function-p (symbol-function 'drgnx-test-compiled-fn))))
+      (delete-directory dir t))))

@@ -119,3 +119,38 @@
              (bytes (+ (* 16 (- (nth 0 m1) (nth 0 m0))) (* 8 (- (nth 2 m1) (nth 2 m0))) (- (nth 4 m1) (nth 4 m0))
                        (* 56 (- (nth 5 m1) (nth 5 m0))))))
         (should (< bytes (* 400 1024)))))))
+
+(ert-deftest drgnx-buffers/a-newline-in-a-name-keeps-rows-in-step ()
+  (drgnx-buffers-test--with dir
+    (let ((a (drgnx-buffers-test--open dir "a.txt")) (b (drgnx-buffers-test--open dir "b.txt"))
+          (c (drgnx-buffers-test--open dir "c.txt")))
+      (with-current-buffer b (rename-buffer "b\nodd"))
+      (setq drgnx-buffers--signature nil)
+      (drgnx-buffers--refresh)
+      (with-current-buffer drgnx-buffers-buffer-name
+        (should (= (count-lines (point-min) (point-max)) (length drgnx-buffers--rows)))
+        (goto-char (point-min)) (search-forward "c.txt")
+        (should (eq (drgnx-buffers-buffer-at (point)) c))
+        (ignore a)))))
+
+(ert-deftest drgnx-buffers/the-selection-highlight-survives-a-re-render ()
+  (drgnx-buffers-test--with dir
+    (let ((a (drgnx-buffers-test--open dir "a.txt")) (b (drgnx-buffers-test--open dir "b.txt")))
+      (with-current-buffer drgnx-buffers-buffer-name
+        (goto-char (drgnx-buffers--row-pos b))
+        (hl-line-highlight))
+      (with-current-buffer a (insert "x"))           ; ● on a: a re-render
+      (drgnx-signal--flush)
+      (with-current-buffer drgnx-buffers-buffer-name
+        (should (= (overlay-start hl-line-overlay) (drgnx-buffers--row-pos b)))))))
+
+(ert-deftest drgnx-buffers/no-re-render-while-a-button-is-held ()
+  (drgnx-buffers-test--with dir
+    (drgnx-buffers-test--open dir "a.txt")
+    (let ((n drgnx-buffers--renders))
+      (setq drgnx-buffers--pressed t)
+      (drgnx-buffers-test--open dir "b.txt")
+      (should (= n drgnx-buffers--renders))          ; deferred: rows stay under the pointer
+      (drgnx-buffers-mouse-ignore nil)               ; the release
+      (should (= (1+ n) drgnx-buffers--renders))
+      (should (member "b.txt" (drgnx-buffers-test--rows dir))))))

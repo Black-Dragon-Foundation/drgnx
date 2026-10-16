@@ -391,3 +391,14 @@
                  'drgnx-keys-test-rv-map))
      (should (equal (plist-get (seq-find (lambda (b) (eq (plist-get b :id) 'open-file)) (plist-get r :bindings)) :map)
                     '(evil . evil-normal-state-map))))))
+
+(defvar drgnx-keys-test-mode-map (make-sparse-keymap))
+
+(ert-deftest drgnx-keys/an-unbound-prefix-is-no-conflict ()
+  ;; Vim's "g o" in a mode keymap where g is unbound: nothing is replaced, nothing to report.
+  (drgnx-keys-test--with-core-commands
+   (drgnx-command-define 'test-go :title "Go" :category "Test" :command #'ignore :map 'drgnx-keys-test-mode-map)
+   (let ((r (drgnx-keys-resolve :commands (drgnx-commands-all) :profiles '((vim :bind ((test-go "g o"))))
+                                :layers '((vim app editing window)) :defaults drgnx-keys-test--defaults
+                                :maps (lambda (m) (symbol-value m)))))
+     (should-not (drgnx-keys-test--conflict r "g o")))))

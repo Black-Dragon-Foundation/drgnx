@@ -65,7 +65,8 @@
     (setq r (plist-put r :explorer-expand
                        (drgnx-bench--try "drgnx" "expand"
                          (drgnx-bench--ms (lambda () (when (drgnx-explorer--expanded-p big)
-                                                       (drgnx-explorer-toggle-at (funcall row big))))
+                                                       (drgnx-explorer-toggle-at (funcall row big)))
+                                            (clrhash drgnx-explorer--cache))     ; read the disk, like treemacs
                                           (lambda () (drgnx-explorer-toggle-at (funcall row big)))))))
     (setq r (plist-put r :explorer-reveal
                        (drgnx-bench--try "drgnx" "reveal"
@@ -79,8 +80,16 @@
                            (drgnx-bench--p95 #'drgnx-explorer-next 50)))))
     (setq r (plist-put r :explorer-refresh
                        (drgnx-bench--try "drgnx" "refresh"
-                         (drgnx-bench--ms (lambda () (drgnx-bench--new-files (expand-file-name "d001" root) 100))
-                                          #'drgnx-explorer-refresh))))
+                         ;; d001 expanded: the 100 new files must appear (checked).
+                         (let ((d001 (expand-file-name "d001" root)))
+                           (unless (drgnx-explorer--expanded-p d001) (drgnx-explorer-toggle-at (funcall row d001)))
+                           (drgnx-bench--ms (lambda () (drgnx-bench--new-files d001 100))
+                                            (lambda ()
+                                              (let ((n (with-current-buffer drgnx-explorer-buffer-name (count-lines (point-min) (point-max)))))
+                                                (drgnx-explorer-refresh)
+                                                (unless (= (+ n 100) (with-current-buffer drgnx-explorer-buffer-name
+                                                                       (count-lines (point-min) (point-max))))
+                                                  (error "refresh did not show the 100 new files")))))))))
     r))
 
 ;;;; treemacs
@@ -136,8 +145,17 @@
                                (drgnx-bench--p95 (lambda () (treemacs-next-line 1)) 50)))))
         (setq r (plist-put r :explorer-refresh
                            (drgnx-bench--try "treemacs" "refresh"
-                             (drgnx-bench--ms (lambda () (drgnx-bench--new-files (expand-file-name "d001" root) 100))
-                                              (lambda () (with-selected-window (funcall tw) (treemacs-refresh)))))))
+                             (let ((d001 (expand-file-name "d001" root)))
+                               (with-selected-window (funcall tw)
+                                 (treemacs-goto-file-node d001)
+                                 (unless (treemacs-is-node-expanded? (treemacs-current-button)) (treemacs-toggle-node)))
+                               (drgnx-bench--ms (lambda () (drgnx-bench--new-files d001 100))
+                                                (lambda ()
+                                                  (with-selected-window (funcall tw)
+                                                    (let ((n (count-lines (point-min) (point-max))))
+                                                      (treemacs-refresh)
+                                                      (unless (= (+ n 100) (count-lines (point-min) (point-max)))
+                                                        (error "refresh did not show the 100 new files"))))))))))
         (funcall kill)
         r))))
 
@@ -153,10 +171,13 @@
     (drgnx-wb-show-sidebar)
     (setq mine (plist-put mine :buffers-render
                           (drgnx-bench--try "drgnx" "buffers render"
-                            (drgnx-bench--ms (lambda () (setq drgnx-buffers--signature nil)) #'drgnx-buffers--refresh))))
+                            ;; Like ibuffer: a fresh panel buffer, its window and the render.
+                            (drgnx-bench--ms (lambda () (drgnx-wb-hide-sidebar) (setq drgnx-buffers--signature nil)
+                                               (kill-buffer drgnx-buffers-buffer-name))
+                                             #'drgnx-wb-show-sidebar))))
     (setq mine (plist-put mine :buffers-update
                           (drgnx-bench--try "drgnx" "buffers update"
-                            (drgnx-bench--ms new #'drgnx-buffers--refresh))))
+                            (drgnx-bench--ms new #'drgnx-signal--flush))))      ; the change bus included
     (setq mine (plist-put mine :buffers-key-p95
                           (drgnx-bench--try "drgnx" "buffers keys"
                             (with-selected-window (drgnx-wb-section-window 'buffers)

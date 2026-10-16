@@ -24,6 +24,14 @@
 
 (defvar drgnx-wb--sections nil "Alist NAME → plist (:slot :title :buffer), the left dock's sections.")
 
+(defun drgnx-wb-display-name (name)
+  "NAME as it can be shown on one row: control characters (a newline in a file name) as ^X."
+  (if (string-match-p "[\0-\37\177]" name)
+      (replace-regexp-in-string "[\0-\37\177]"
+                                (lambda (c) (if (equal c "\177") "^?" (string ?^ (+ 64 (aref c 0)))))
+                                name t t)
+    name))
+
 (defun drgnx-wb-define-section (name &rest spec)
   "Define dock section NAME: SPEC is (:slot N :title STRING :buffer FUNCTION-RETURNING-A-BUFFER
 :height FRACTION-OF-THE-DOCK :on-show FUNCTION-OF-THE-WINDOW)."

@@ -26,6 +26,7 @@
   (let* ((files (drgnx-build-files root))
          (load-path (append (mapcar (lambda (d) (expand-file-name d root)) '("core" "wb")) load-path))
          (byte-compile-docstring-max-column 120)        ; the project's line length
+         (load-prefer-newer t)                           ; a changed dependency, not its old .elc
          (warnings nil) (errors nil) (compiled 0))
     (dolist (f files)
       (let ((byte-compile-log-warning-function

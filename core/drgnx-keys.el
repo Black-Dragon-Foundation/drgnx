@@ -116,9 +116,9 @@ The keymap used is the entry's, else the command's, else the profile's."
   "What KEY does in MAP: (claim . DESCRIPTION), (prefix . DESCRIPTION) or nil."
   (let ((def (drgnx-keys--lookup map key)))
     (cond ((keymapp def) (cons 'prefix (format "the %s prefix" key)))
-          ((numberp def)
-           (let ((prefix (key-description (seq-take (key-parse key) def))))
-             (cons 'prefix (format "%s (%s)" (drgnx-keys--lookup map prefix) prefix))))
+          ((numberp def)                 ; KEY's prefix is bound to a command (unbound: nothing replaced)
+           (let* ((prefix (key-description (seq-take (key-parse key) def))) (cmd (drgnx-keys--lookup map prefix)))
+             (and cmd (cons 'prefix (format "%s (%s)" cmd prefix)))))
           ((and (symbolp def) def (commandp def) (not (memq def '(self-insert-command undefined ignore))))
            (cons 'claim (symbol-name def))))))
 

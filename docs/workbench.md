@@ -5,8 +5,8 @@ files) above the **Explorer** (file tree). Nothing moves on its own: a click lan
 selected stays selected, the dock keeps its width. The rest of the workbench (right dock, bottom panel, popups,
 editor groups, several windows) arrives in the next milestones (see [roadmap.md](roadmap.md), M3).
 
-Everything here is built on plain Emacs — no treemacs, no ibuffer — and is faster than both (see
-[Performance](#performance)).
+Everything here is built on plain Emacs — no treemacs, no ibuffer — and does every heavy operation 9–180×
+faster than they do; key presses are sub-millisecond in all three (see [Performance](#performance)).
 
 ## Using it
 
@@ -60,18 +60,21 @@ All of these are commands in the palette and keys in every profile ([keys.md](ke
 `bin/drgnx test --bench` builds drgnx, makes a 25,000-file project (200 folders × 100 files, one 5,000-file
 folder, a depth-8 file), and times the same operations with drgnx, treemacs and ibuffer in a GUI session — each
 including a full redisplay; one-off operations are the median of 3, key presses the 95th percentile of 50.
+Like for like: folder listings are read from disk in every run, the refreshed folder is open and the new files must
+appear, the Buffers update includes drgnx's change bus, and the Buffers render creates the panel and its window as
+ibuffer does.
 treemacs runs like-for-like (no git status, no file watching, no follow) and is loaded only in that session,
 from `$DRGNX_BENCH_ELPA` (default `~/.config/emacs/elpa`); without it only drgnx and ibuffer are compared.
 
 | Operation (ms) | drgnx | treemacs / ibuffer |
 |---|---|---|
-| First render of the project | 6.7 | 125.0 |
-| Expand the 5,000-file folder | 5.2 | 419.2 |
-| Reveal the depth-8 file | 1.3 | 44.5 |
-| Refresh after 100 new files | 3.1 | 609.5 |
-| Buffers panel, 500 buffers | 2.7 | 106.3 (ibuffer) |
-| Buffers panel, one buffer added | 0.4 | 72.1 (ibuffer) |
-| Key press (p95) | 0.6 / 0.9 | 0.2 / 2.4 |
+| First render of the project | 5.4 | 121.3 |
+| Expand the 5,000-file folder (read from disk) | 41.3 | 382.3 |
+| Reveal the depth-8 file | 1.6 | 51.0 |
+| Refresh after 100 new files (shown) | 23.6 | 721.6 |
+| Buffers panel, 500 buffers | 6.5 | 76.1 (ibuffer) |
+| Buffers panel, one buffer added | 0.4 | 70.9 (ibuffer) |
+| Key press (p95) | 0.5 / 0.8 | 0.2 / 2.2 |
 
 (One machine, 2026-10; numbers vary, ratios hold.) The run fails if drgnx misses a budget (first render 30 ms,
 expand 80, reveal 20, refresh 150, Buffers 30 / 15, keys 8) or is slower than the other tool by more than 0.5 ms

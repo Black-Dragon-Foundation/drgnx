@@ -150,7 +150,7 @@ faces come later, from jit-lock, for the rows on screen."
                      (pcase-dolist (`(,name . ,dirp) (drgnx-explorer-children dir))
                        (let ((open (and dirp (drgnx-explorer--expanded-p (concat parent "/" name)))))
                          (push (drgnx-explorer--prefix depth (if dirp (if open 'open 'closed) 'file)) parts)
-                         (push name parts)
+                         (push (drgnx-wb-display-name name) parts)
                          (push "\n" parts)
                          (push (vector name depth dirp parent) data)
                          (when open (walk (concat parent "/" name) (1+ depth))))))))
@@ -176,15 +176,21 @@ faces come later, from jit-lock, for the rows on screen."
 (defun drgnx-explorer--render ()
   "Render every root from scratch, keeping the row at point by its path."
   (with-current-buffer (get-buffer-create drgnx-explorer-buffer-name)
-    (let ((inhibit-read-only t) (at (drgnx-explorer-node-at (point))) data)
+    (let* ((inhibit-read-only t) (at (drgnx-explorer-node-at (point))) data
+           (kept (mapcar (lambda (w) (list w (drgnx-explorer-node-at (window-start w)) (drgnx-explorer-node-at (window-point w))))
+                         (get-buffer-window-list (current-buffer) nil t))))
       (erase-buffer)
       (dolist (root drgnx-explorer--roots)
         (let ((path (directory-file-name (expand-file-name root))))
-          (insert (drgnx-explorer--prefix 0 'open) (upcase (file-name-nondirectory path)) "\n")
+          (insert (drgnx-explorer--prefix 0 'open) (drgnx-wb-display-name (upcase (file-name-nondirectory path))) "\n")
           (push (list (vector path 0 t nil)) data)
           (push (drgnx-explorer--insert-subtree path 1) data)))
       (setq drgnx-explorer--rows (apply #'vconcat (nreverse data)))
-      (goto-char (or (and at (drgnx-explorer--row-pos at)) (point-min))))))
+      (goto-char (or (and at (drgnx-explorer--row-pos at)) (point-min)))
+      (pcase-dolist (`(,w ,top ,pt) kept)
+        (when-let* ((p (and top (drgnx-explorer--row-pos top)))) (set-window-start w p t))
+        (when-let* ((p (and pt (drgnx-explorer--row-pos pt)))) (set-window-point w p)))
+      (when hl-line-mode (hl-line-highlight)))))
 
 (defun drgnx-explorer--row-pos (path)
   "Start of PATH's row, or nil."
@@ -304,9 +310,10 @@ Returns non-nil if FILE is under a root."
   (if (and (drgnx-explorer-dir-at (point)) (drgnx-explorer--expanded-p (drgnx-explorer--node))
            (> (drgnx-explorer-depth-at (point)) 0))
       (drgnx-explorer-toggle-at (point))
-    (let ((depth (drgnx-explorer-depth-at (point))))
-      (while (and (not (bobp)) (>= (drgnx-explorer-depth-at (point)) depth) (> depth 0))
-        (forward-line -1)))))
+    (let* ((i (drgnx-explorer--index (point))) (depth (drgnx-explorer-depth-at (point))) (j i))
+      (when (and depth (> depth 0))
+        (while (and (> j 0) (>= (aref (aref drgnx-explorer--rows j) 1) depth)) (setq j (1- j)))
+        (forward-line (- j i))))))
 
 (defun drgnx-explorer-open () "Open the file (focus the editor) or toggle the folder at point."
   (interactive) (drgnx-explorer-activate (point)))
@@ -368,6 +375,8 @@ Returns non-nil if FILE is under a root."
   "The drgnx Explorer (file tree)."
   (setq buffer-read-only t buffer-undo-list t truncate-lines t cursor-type nil mode-line-format nil)
   (setq-local hl-line-sticky-flag t)
+  ;; A press on a partly visible row must not scroll: the row would move under the pointer.
+  (setq-local scroll-margin 0 make-cursor-line-fully-visible nil)
   (hl-line-mode 1)
   (jit-lock-register #'drgnx-explorer--fontify))
 

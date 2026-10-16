@@ -59,6 +59,13 @@
       (error (push (format "%s %s: %s" event fn (error-message-string err)) drgnx-signal-errors)
              (setq drgnx-signal-errors (seq-take drgnx-signal-errors 20))))))
 
+(defun drgnx-signal--same-set-p (a b)
+  "Non-nil if the lists A and B hold the same objects (linear time: a flush runs on every switch)."
+  (and (= (length a) (length b))
+       (let ((seen (make-hash-table :test #'eq :size (length a))))
+         (dolist (x a) (puthash x t seen))
+         (seq-every-p (lambda (x) (gethash x seen)) b))))
+
 (defun drgnx-signal--flush ()
   "Compare the state with the last flush and emit the edges."
   (setq drgnx-signal--timer nil)
@@ -71,10 +78,13 @@
     (setq drgnx-signal--state (list :editor editor :set set :modified modified))
     (unless (eq editor (plist-get old :editor))
       (drgnx-signal--emit 'editor-changed editor))
-    (unless (seq-set-equal-p set (plist-get old :set))
+    (unless (drgnx-signal--same-set-p set (plist-get old :set))
       (drgnx-signal--emit 'buffer-set-changed set))
-    (when-let* ((flipped (seq-filter (lambda (b) (when-let* ((was (assq b (plist-get old :modified))))
-                                                  (not (eq (and (cdr was) t) (and (buffer-modified-p b) t)))))
+    (when-let* ((was (let ((h (make-hash-table :test #'eq :size (length set))))
+                       (pcase-dolist (`(,b . ,m) (plist-get old :modified)) (puthash b (if m 'yes 'no) h))
+                       h))
+                (flipped (seq-filter (lambda (b) (when-let* ((m (gethash b was)))
+                                                  (not (eq (eq m 'yes) (and (buffer-modified-p b) t)))))
                                      set)))
       (drgnx-signal--emit 'modified-changed flipped))))
 

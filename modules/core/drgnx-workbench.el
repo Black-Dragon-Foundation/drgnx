@@ -33,7 +33,7 @@
                        (explorer-expand "Expand" drgnx-explorer-expand "Expand the folder, or go to its first entry")
                        (explorer-collapse "Collapse" drgnx-explorer-collapse "Collapse the folder, or go to its parent")
                        (explorer-open "Open" drgnx-explorer-open "Open the file (and focus it), or toggle the folder")
-                       (explorer-preview "Open to the Side" drgnx-explorer-preview "Open the file, keep the Explorer focused")
+                       (explorer-preview "Open, Keep Focus" drgnx-explorer-preview "Open the file, keep the Explorer focused")
                        (explorer-toggle "Toggle Folder" drgnx-explorer-toggle "Expand or collapse the folder")
                        (explorer-refresh "Refresh" drgnx-explorer-refresh "Re-read changed folders")))
         (drgnx-command-define id :category "Explorer" :title title :command fn :doc doc

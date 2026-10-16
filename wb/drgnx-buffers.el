@@ -50,7 +50,8 @@
 
 (defun drgnx-buffers--row (b)
   "Buffer B's row as plain text: × ● name  folder (faces come from jit-lock, for visible rows)."
-  (concat "× " (if (buffer-modified-p b) "●" " ") " " (buffer-name b) "  " (drgnx-buffers--dir b) "\n"))
+  (concat "× " (if (buffer-modified-p b) "●" " ") " " (drgnx-wb-display-name (buffer-name b)) "  "
+          (drgnx-wb-display-name (drgnx-buffers--dir b)) "\n"))
 
 (defun drgnx-buffers--index (pos) (1- (line-number-at-pos pos t)))
 
@@ -94,8 +95,20 @@
         (drgnx-buffers--refresh)
         (current-buffer))))
 
+(defvar drgnx-buffers--pressed nil "Non-nil while a mouse button pressed in the panel is held.")
+(defvar drgnx-buffers--pending nil "A refresh that waits for the button's release.")
+
 (defun drgnx-buffers--refresh (&rest _)
-  "Re-render if the rows changed; keep every window's view and selection on the same buffers."
+  "Re-render if the rows changed; keep every window's view and selection on the same buffers.
+While a button is held in the panel, wait for the release: rows never move under the pointer."
+  (if drgnx-buffers--pressed (setq drgnx-buffers--pending t) (drgnx-buffers--render)))
+
+(defun drgnx-buffers--release ()
+  "The button came up: run a refresh that waited for it."
+  (setq drgnx-buffers--pressed nil)
+  (when drgnx-buffers--pending (setq drgnx-buffers--pending nil) (drgnx-buffers--render)))
+
+(defun drgnx-buffers--render ()
   (drgnx-buffers--update-order)
   (let ((sig (mapcar (lambda (b) (list b (buffer-name b) (buffer-modified-p b))) drgnx-buffers--order)))
     (unless (equal sig drgnx-buffers--signature)
@@ -118,6 +131,7 @@
           (pcase-dolist (`(,w ,top ,pt) kept)
             (when-let* ((p (and top (drgnx-buffers--row-pos top)))) (set-window-start w p t))
             (when-let* ((p (and pt (drgnx-buffers--row-pos pt)))) (set-window-point w p)))
+          (when hl-line-mode (hl-line-highlight))
           (drgnx-buffers--mark-active))))))
 
 (defun drgnx-buffers--mark-active (&rest _)
@@ -152,8 +166,6 @@
 (defun drgnx-buffers-focus () "Show the sidebar and focus the Buffers panel."
   (interactive) (drgnx-wb-focus-section 'buffers))
 
-(defvar drgnx-buffers--pressed nil)
-
 (defun drgnx-buffers-mouse-press (event)
   "Press: select the row; the action happens on release."
   (interactive "e")
@@ -166,12 +178,13 @@
 (defun drgnx-buffers-mouse-click (event)
   "Release: × closes that row's buffer; elsewhere on the row, show it in the editor."
   (interactive "e")
-  (setq drgnx-buffers--pressed nil)
   (let ((pos (posn-point (event-end event))))
+    ;; Act on the rows the user saw, then run a refresh that waited for the release.
     (when (integer-or-marker-p pos)
-      (if (drgnx-buffers--close-p pos) (drgnx-buffers-close-at pos) (drgnx-buffers-open-at pos)))))
+      (if (drgnx-buffers--close-p pos) (drgnx-buffers-close-at pos) (drgnx-buffers-open-at pos))))
+  (drgnx-buffers--release))
 
-(defun drgnx-buffers-mouse-ignore (_event) (interactive "e") (setq drgnx-buffers--pressed nil))
+(defun drgnx-buffers-mouse-ignore (_event) (interactive "e") (drgnx-buffers--release))
 
 (defvar drgnx-buffers-mode-map
   (let ((map (make-sparse-keymap)))
@@ -188,6 +201,8 @@
   "The drgnx Buffers panel (open editors)."
   (setq buffer-read-only t buffer-undo-list t truncate-lines t cursor-type nil mode-line-format nil)
   (setq-local hl-line-sticky-flag t)
+  ;; A press on a partly visible row must not scroll: the row would move under the pointer.
+  (setq-local scroll-margin 0 make-cursor-line-fully-visible nil)
   (hl-line-mode 1)
   (jit-lock-register #'drgnx-buffers--fontify))
 

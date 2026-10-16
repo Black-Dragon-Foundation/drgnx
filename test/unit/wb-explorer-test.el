@@ -173,3 +173,58 @@
       (drgnx-explorer-children big)                         ; listing cached: measure the rows
       (let ((bytes (drgnx-test--allocated (lambda () (drgnx-explorer-toggle-at (drgnx-explorer-test--goto "big"))))))
         (should (< bytes (* 3 1024 1024)))))))
+
+;;;; Review fixes
+
+(ert-deftest drgnx-explorer/a-newline-in-a-name-keeps-rows-in-step ()
+  (drgnx-explorer-test--with root
+    (let ((odd (expand-file-name "zz" root)))
+      (make-directory odd)
+      (dolist (n '("a.txt" "b\nevil.txt" "c.txt" "d.txt")) (write-region "" nil (expand-file-name n odd) nil 'silent))
+      (drgnx-explorer-refresh)
+      (drgnx-explorer-toggle-at (drgnx-explorer-test--goto "zz"))
+      (with-current-buffer drgnx-explorer-buffer-name
+        (should (= (count-lines (point-min) (point-max)) (length drgnx-explorer--rows)))
+        (goto-char (point-min))
+        (search-forward "c.txt")
+        (should (equal (drgnx-explorer-node-at (point)) (expand-file-name "c.txt" odd)))
+        (search-forward "d.txt")
+        (should (equal (drgnx-explorer-node-at (point)) (expand-file-name "d.txt" odd)))))))
+
+(ert-deftest drgnx-explorer/going-to-the-parent-is-fast ()
+  (drgnx-explorer-test--with root
+    (let ((big (expand-file-name "big" root)))
+      (make-directory big)
+      (dotimes (i 5000) (write-region "" nil (expand-file-name (format "f%04d.txt" i) big) nil 'silent))
+      (drgnx-explorer-refresh)
+      (drgnx-explorer-toggle-at (drgnx-explorer-test--goto "big"))
+      (with-current-buffer drgnx-explorer-buffer-name
+        (goto-char (drgnx-explorer-test--goto "f4999.txt"))
+        (let ((t0 (float-time)))
+          (drgnx-explorer-collapse)
+          (should (< (- (float-time) t0) 0.015)))
+        (should (equal (drgnx-explorer-node-at (point)) big))))))
+
+(ert-deftest drgnx-explorer/refresh-keeps-every-windows-view ()
+  (drgnx-explorer-test--with root
+    (let ((big (expand-file-name "big" root)))
+      (make-directory big)
+      (dotimes (i 300) (write-region "" nil (expand-file-name (format "f%03d.txt" i) big) nil 'silent))
+      (drgnx-explorer-refresh)
+      (drgnx-explorer-toggle-at (drgnx-explorer-test--goto "big"))
+      (drgnx-wb-show-sidebar)
+      (let ((w (drgnx-wb-section-window 'explorer)))
+        (with-current-buffer drgnx-explorer-buffer-name
+          (set-window-start w (drgnx-explorer-test--goto "f200.txt"))
+          (set-window-point w (drgnx-explorer-test--goto "f205.txt")))
+        (drgnx-explorer-refresh)
+        (with-current-buffer drgnx-explorer-buffer-name
+          (should (equal (drgnx-explorer-node-at (window-start w)) (expand-file-name "f200.txt" big)))
+          (should (equal (drgnx-explorer-node-at (window-point w)) (expand-file-name "f205.txt" big))))))))
+
+(ert-deftest drgnx-explorer/a-click-never-scrolls-the-dock ()
+  ;; Pressing a partly visible bottom row must not scroll (the row would move under the pointer).
+  (drgnx-explorer-test--with root
+    (with-current-buffer drgnx-explorer-buffer-name
+      (should (= scroll-margin 0))
+      (should-not make-cursor-line-fully-visible))))

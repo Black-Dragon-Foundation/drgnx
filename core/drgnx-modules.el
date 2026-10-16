@@ -40,7 +40,7 @@ load is reported as module <category>/<file name>."
   (dolist (file (directory-files-recursively dir "\\`drgnx-.*\\.el\\'"))
     (let ((t0 (float-time)))
       (condition-case e
-          (load file nil t)
+          (load (file-name-sans-extension file) nil t)   ; the .elc when `drgnx build' made one
         (error (drgnx-modules--record
                 (intern (format "%s/%s" (file-name-nondirectory (directory-file-name (file-name-directory file)))
                                 (file-name-base file)))
