@@ -53,6 +53,9 @@ Unix socket paths are limited to ~108 bytes; the hash keeps two state roots (say
   and `treesit-install-language-grammar` signal an error.
 - No secrets: the environment is rebuilt from an allowlist (`HOME USER LOGNAME LANG LC_ALL PATH
   XDG_RUNTIME_DIR GRYPHN_EMACS_DIR` + `DRGNX_UI_*`), `auth-sources` is nil.
+- Your drgnx files are never touched: a session gets its own `DRGNX_CONFIG_DIR` (`RUN/drgnx-config`) and
+  `XDG_STATE_HOME` (`RUN/state`), so it neither reads `~/.config/drgnx` (keys.eld, …) nor writes
+  `~/.local/state` (the key report). `XDG_CACHE_HOME` is kept: font and shader caches would be rebuilt every start.
 - Deterministic look: no startup screen, no blinking cursor, no bell, no dialog boxes.
 - Safety: treemacs drag-to-move is off.
 - Its own server, started (with the harness agent) by the generated `init.el` *before* the configuration's

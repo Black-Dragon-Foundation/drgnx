@@ -23,8 +23,11 @@
           (drgnx-ui-measure sess (list (list :keys "C-S-p")))
           (should (equal (plist-get (drgnx-ui-call sess "(drgnx-uitest-api-boot-status)") :prompt) "Command: "))
           (drgnx-ui-measure sess (list (list :keys "C-g")))
-          ;; F1 shows the key sheet.
+          ;; VS Code keys by default: F1 is the palette too, C-k C-s the key sheet.
           (drgnx-ui-measure sess (list (list :keys "<f1>")))
+          (should (equal (plist-get (drgnx-ui-call sess "(drgnx-uitest-api-boot-status)") :prompt) "Command: "))
+          (drgnx-ui-measure sess (list (list :keys "C-g")))
+          (drgnx-ui-measure sess (list (list :keys "C-k C-s")))
           (should (seq-find (lambda (w) (equal (plist-get w :buffer) "*drgnx keys*"))
                             (plist-get (drgnx-ui-state sess) :windows)))
           ;; A prompt from a timer signals instead of freezing the session.

@@ -228,3 +228,13 @@
 (ert-deftest drgnx-ui/missing-gryphn-config-skips ()
   (let ((process-environment (cons "DRGNX_GRYPHN_CONFIG=/no/such/gryphn" process-environment)))
     (should (= (drgnx-ui-run-scenarios "gryphn") 0))))
+
+(ert-deftest drgnx-ui/sessions-never-touch-the-users-drgnx-files ()
+  ;; A session's drgnx config and state live in its run dir, not in ~/.config/drgnx and
+  ;; ~/.local/state (a drgnx session writes keys-report.eld on every boot).
+  (drgnx-ui-test--with-state
+    (let* ((s (drgnx-ui-prepare-run "drgnx-ui-1"))
+           (env (drgnx-ui-session-env s)))
+      (should (member (concat "DRGNX_CONFIG_DIR=" (expand-file-name "drgnx-config" (plist-get s :run))) env))
+      (should (member (concat "XDG_STATE_HOME=" (expand-file-name "state" (plist-get s :run))) env))
+      (drgnx-ui-stop "drgnx-ui-1"))))

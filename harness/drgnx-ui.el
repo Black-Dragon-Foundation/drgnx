@@ -197,7 +197,12 @@ DAEMON non-nil: Emacs runs as a daemon (no frame until `drgnx-ui-new-frame')."
                 (concat "DRGNX_UI_CONFIG=" (plist-get sess :config_dir))
                 (concat "XDG_RUNTIME_DIR=" (drgnx-ui-runtime-dir))
                 (concat "DRGNX_UI_SOCKET_DIR=" (directory-file-name (file-name-directory (plist-get sess :socket))))
-                (concat "EMACS_SOCKET_NAME=" (plist-get sess :socket)))
+                (concat "EMACS_SOCKET_NAME=" (plist-get sess :socket))
+                ;; drgnx's own config and state stay in the run dir: a session never reads the
+                ;; user's ~/.config/drgnx or writes ~/.local/state (XDG_CACHE_HOME stays: font and
+                ;; shader caches would be rebuilt on every start).
+                (concat "DRGNX_CONFIG_DIR=" (expand-file-name "drgnx-config" (plist-get sess :run)))
+                (concat "XDG_STATE_HOME=" (expand-file-name "state" (plist-get sess :run))))
           extra))
 
 (defun drgnx-ui-env-argv (env)
