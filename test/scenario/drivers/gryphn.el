@@ -6,6 +6,7 @@
 (require 'drgnx-uitest)
 
 (defconst drgnx-driver-focus-explorer-keys "C-S-e" "Keys that focus the Explorer.")
+(defconst drgnx-driver-explorer-down-key "n" "Moves the Explorer selection down (treemacs).")
 (defconst drgnx-driver-explorer-target "treemacs-mode"
   "How `drgnx-uitest-target-xy' finds the Explorer window (buffer name or major mode).")
 

@@ -113,14 +113,14 @@ the keys move the selection."
            (line0 (with-current-buffer (window-buffer w) (line-number-at-pos (window-point w))))
            (churn (run-with-timer 0 0.1 (lambda () (kill-buffer (generate-new-buffer "drgnx-churn"))))))
       (drgnx-scenario-require (timerp churn) "a churn timer")
-      (drgnx-uitest-run (drgnx-uitest-key-events "n n"))
+      (drgnx-uitest-run (drgnx-uitest-key-events (format "%s %s" drgnx-driver-explorer-down-key drgnx-driver-explorer-down-key)))
       ;; Look again after the churn stops: a follower starved during it may fire then.
       (cancel-timer churn)
       (let* ((r (drgnx-uitest-run nil))
              (line (with-current-buffer (window-buffer w) (line-number-at-pos (window-point w)))))
         (drgnx-scenario-check
          (= line (+ line0 2))
-         (format "two `n' during background churn must leave the selection two rows down (%d → %d); after the churn it is on row %d (%S)"
+         (format "two %s during background churn must leave the selection two rows down (%d → %d); after the churn it is on row %d (%S)" drgnx-driver-explorer-down-key
                  line0 (+ line0 2) line (drgnx-scn--explorer-line))
          r)))))
 
@@ -148,11 +148,11 @@ the keys move the selection."
   (drgnx-scn--with-explorer root
     (let* ((w (drgnx-driver-explorer-window))
            (line0 (with-current-buffer (window-buffer w) (line-number-at-pos (window-point w))))
-           (r (drgnx-uitest-run (drgnx-uitest-key-events "n n")))
+           (r (drgnx-uitest-run (drgnx-uitest-key-events (format "%s %s" drgnx-driver-explorer-down-key drgnx-driver-explorer-down-key))))
            (line (with-current-buffer (window-buffer w) (line-number-at-pos (window-point w)))))
       (drgnx-scenario-check
        (= line (+ line0 2))
-       (format "after `n n' the selection must be two rows down (row %d); it is on row %d (%S)"
+       (format "after two %s the selection must be two rows down (row %d); it is on row %d (%S)" drgnx-driver-explorer-down-key
                (+ line0 2) line (drgnx-scn--explorer-line))
        r))))
 

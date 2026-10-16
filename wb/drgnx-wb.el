@@ -26,7 +26,7 @@
 
 (defun drgnx-wb-define-section (name &rest spec)
   "Define dock section NAME: SPEC is (:slot N :title STRING :buffer FUNCTION-RETURNING-A-BUFFER
-:height FRACTION-OF-THE-DOCK)."
+:height FRACTION-OF-THE-DOCK :on-show FUNCTION-OF-THE-WINDOW)."
   (setf (alist-get name drgnx-wb--sections) spec)
   name)
 
@@ -55,8 +55,13 @@
                                  (no-other-window . t) (header-line-format . ,(plist-get spec :title)))))))
       (when-let* ((px (frame-parameter nil 'drgnx-wb-dock-px)) (w (car (drgnx-wb--dock-windows))))
         (ignore-errors (window-resize w (- px (window-pixel-width w)) t nil t)))
-      (dolist (w (drgnx-wb--dock-windows)) (window-preserve-size w t t))
-      (unless (eq (selected-window) selected) (select-window selected 'norecord)))))
+      (dolist (w (drgnx-wb--dock-windows))
+        (window-preserve-size w t t)
+        (set-window-scroll-bars w nil nil nil nil t))       ; a clean sidebar, like VS Code's
+      (unless (eq (selected-window) selected) (select-window selected 'norecord))
+      (pcase-dolist (`(,name . ,spec) drgnx-wb--sections)
+        (when-let* ((fn (plist-get spec :on-show)) (w (drgnx-wb-section-window name)))
+          (funcall fn w))))))
 
 (defun drgnx-wb-hide-sidebar ()
   "Hide the left dock, remembering its pixel width for the next show."

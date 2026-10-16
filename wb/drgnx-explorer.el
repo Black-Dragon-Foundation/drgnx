@@ -301,7 +301,9 @@ Returns non-nil if FILE is under a root."
 
 (defun drgnx-explorer-setup ()
   "Put the Explorer in the dock and let it follow the editor."
-  (drgnx-wb-define-section 'explorer :slot 0 :title " EXPLORER" :buffer #'drgnx-explorer--buffer)
+  (drgnx-wb-define-section 'explorer :slot 0 :title " EXPLORER" :buffer #'drgnx-explorer--buffer
+                           ;; Like VS Code: showing the Explorer reveals the active editor's file.
+                           :on-show (lambda (_w) (drgnx-explorer--follow (window-buffer (drgnx-wb-editor-window)))))
   (drgnx-signal-subscribe 'editor-changed #'drgnx-explorer--follow))
 
 (provide 'drgnx-explorer)

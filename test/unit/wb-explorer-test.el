@@ -140,3 +140,16 @@
         (drgnx-explorer-toggle-at (drgnx-explorer-test--goto "big"))
         (should (< (- (float-time) t0) 0.5)))     ; batch, generous; the GUI budget is in test/bench
       (should (= 5000 (seq-count (lambda (r) (= (car r) 2)) (drgnx-explorer-test--rows)))))))
+
+(ert-deftest drgnx-explorer/showing-the-sidebar-reveals-the-editors-file ()
+  (drgnx-explorer-test--with root
+    (let ((main (find-file-noselect (expand-file-name "src/app/main.py" root))))
+      (unwind-protect
+          (progn
+            (switch-to-buffer main)
+            (drgnx-wb-show-sidebar)
+            (let ((w (drgnx-wb-section-window 'explorer)))
+              (should (equal (with-current-buffer drgnx-explorer-buffer-name (get-text-property (window-point w) 'drgnx-node))
+                             (buffer-file-name main)))
+              (should-not (eq (selected-window) w))))
+        (kill-buffer main)))))
