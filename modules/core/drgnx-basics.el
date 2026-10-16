@@ -5,6 +5,8 @@
 ;;; Code:
 (require 'seq)
 (defvar native-comp-async-report-warnings-errors)
+(defvar project-list-file)
+(require 'drgnx-paths)
 
 (defvar drgnx-basics--closed nil "Files of the buffers closed, newest first (Reopen Closed Tab).")
 
@@ -53,6 +55,9 @@
     (drgnx-command-define 'line-numbers :category "View" :title "Toggle Line Numbers"
       :command #'display-line-numbers-mode :menu '("View") :doc "Line numbers in this buffer")
     (add-hook 'kill-buffer-hook #'drgnx-basics--note-closed)
+    ;; project.el's list of known projects in drgnx's state dir, not in the checkout (--init-directory)
+    (setq project-list-file (expand-file-name "projects" (drgnx-state-dir)))
+    (make-directory (drgnx-state-dir) t)
     (pcase-dolist (`(,id ,title ,fn ,doc)
                    '((file-save-as "Save As…" write-file "Save under a new name")
                      (file-new "New Untitled" drgnx-basics-new-untitled "An empty buffer; Save asks for a name")

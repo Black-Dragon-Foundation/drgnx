@@ -17,11 +17,13 @@
 (require 'drgnx-keys)
 (require 'drgnx-modules)
 (require 'drgnx-pkg-activate)
+(require 'drgnx-onboard)
 
 (defgroup drgnx nil "drgnx, a workbench-first Emacs framework." :group 'convenience)
 
 (defun drgnx--core-commands ()
   "The commands the core itself provides."
+  (drgnx-onboard-register-commands)
   (drgnx-command-define 'palette :category "View" :title "Command Palette"
     :command #'drgnx-palette :menu '("View") :doc "Every command by name, with its key")
   (drgnx-command-define 'keys-sheet :category "Help" :title "Keyboard Shortcuts"

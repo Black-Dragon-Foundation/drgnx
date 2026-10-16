@@ -64,6 +64,7 @@ DEV non-nil: only run for `drgnx doctor --dev' (tools for developing drgnx)."
           :pgtk-emacs (or (featurep 'pgtk) (and (executable-find "emacs-pgtk") t))
           :keys-report (drgnx-doctor--keys-report)
           :modules-report (drgnx-doctor--state-file "modules-report.eld")
+          :onboarding (drgnx-doctor--state-file "onboarding.eld")
           :packages (condition-case err (progn (require 'drgnx-pkg) (drgnx-pkg-status))
                       (error (list :error (error-message-string err)))))))
 
@@ -154,6 +155,15 @@ DEV non-nil: only run for `drgnx doctor --dev' (tools for developing drgnx)."
                    (t (list 'ok (format "%d packages installed, locked; %d generations"
                                         (length (plist-get p :installed)) (plist-get p :generations))
                             nil))))))
+
+(drgnx-doctor-define 'onboarding :group "drgnx" :doc "The onboarding steps (drgnx onboard, Help → Welcome)"
+  :check (lambda (f)
+           (let* ((s (plist-get f :onboarding))
+                  (failed (seq-filter (lambda (e) (eq (plist-get (cdr e) :status) 'fail)) s)))
+             (cond ((null s) (list 'info "not run yet" "drgnx onboard (or Help → Welcome in drgnx)"))
+                   (failed (list 'warn (format "steps that failed: %s" (mapconcat (lambda (e) (symbol-name (car e))) failed " "))
+                                 "run them again from Help → Welcome, or drgnx onboard --step ID"))
+                   (t (list 'ok (format "%d steps done" (length s)) nil))))))
 
 (drgnx-doctor-define 'key-conflicts :group "drgnx" :doc "Key profile conflicts and keys.eld problems (from the last session)"
   :check (lambda (f)

@@ -69,6 +69,8 @@ Return t if every test passed."
          nil results-file nil 'silent)))
     (null failures)))
 
+(defvar project-list-file)
+
 (defun drgnx-run-ert-batch ()
   "Batch entry point: run the suite in the first remaining argument, exit 0 or 1."
   (let* ((dir (pop command-line-args-left))
@@ -80,6 +82,8 @@ Return t if every test passed."
                             ("XDG_STATE_HOME" . "state") ("XDG_CACHE_HOME" . "cache")))
                   (list "DRGNX_TEST_ISOLATED=1")
                   process-environment))
+         ;; project.el remembers projects it sees: never in the user's own Emacs's list
+         (project-list-file (expand-file-name "projects" tmp))
          (ok (drgnx-run-ert dir (getenv "DRGNX_TEST_RESULTS"))))
     (delete-directory tmp t)
     (kill-emacs (if ok 0 1))))
