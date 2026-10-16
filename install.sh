@@ -171,6 +171,7 @@ print_plan() {
       note "download $GNU_MIRROR/emacs-$EMACS_VERSION.tar.xz and verify its signature (gnu-keyring.gpg) before installing anything"
       [[ "$FAMILY" == debian ]] && note "enable Debian source packages for build dependencies (a drgnx-owned apt list, removed afterwards)"
       note "build dependencies: sudo ${DEPS[*]}"
+      [[ "$FAMILY" == debian ]] && note "then libgccjit for the default gcc (libgccjit-N-dev, N = gcc's major version)"
       note "${CONFIGURE[*]} && make && make install   (in $BUILD_DIR, logs kept there)" ;;
   esac
   say "2. drgnx:"
@@ -291,7 +292,9 @@ install_emacs_source() {
       as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq git build-essential
       enable_deb_src
       as_root env DEBIAN_FRONTEND=noninteractive "${DEPS[@]}" -qq
-      disable_deb_src ;;
+      disable_deb_src
+      # The distro may build its emacs with an older gcc (Ubuntu 26.04: gcc-14, default 15).
+      as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "libgccjit-$(gcc -dumpversion | cut -d. -f1)-dev" ;;
     *) die 2 "no source-build recipe for $PRETTY — see $DOCS_URL" ;;
   esac
   cd "$BUILD_DIR/emacs-$EMACS_VERSION"

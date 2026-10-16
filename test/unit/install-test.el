@@ -63,6 +63,9 @@
   (dolist (os '("debian-13" "ubuntu-26.04" "linuxmint"))
     (drgnx-install-test--expect (drgnx-install-test--plan os "DRGNX_INSTALL_SESSION=x11")
                                 "build GNU Emacs 31.1 from source" "apt-get build-dep -y emacs"
+                                ;; Ubuntu 26.04 builds its emacs with gcc-14 but defaults to gcc 15:
+                                ;; build-dep alone leaves the default gcc without libgccjit.
+                                "libgccjit for the default gcc"
                                 "--with-x-toolkit=gtk3")))
 
 (ert-deftest drgnx-install/macos ()
