@@ -32,6 +32,19 @@
                        (explorer-toggle "Toggle Folder" drgnx-explorer-toggle "Expand or collapse the folder")
                        (explorer-refresh "Refresh" drgnx-explorer-refresh "Re-read changed folders")))
         (drgnx-command-define id :category "Explorer" :title title :command fn :doc doc
-          :map 'drgnx-explorer-mode-map :when in-explorer)))))
+          :map 'drgnx-explorer-mode-map :when in-explorer)))
+    ;; The Buffers panel (open editors), above the Explorer.
+    (require 'drgnx-buffers)
+    (drgnx-buffers-setup)
+    (drgnx-command-define 'focus-buffers :category "View" :title "Focus Buffers" :scope 'window
+      :command #'drgnx-buffers-focus :menu '("View") :doc "Show the sidebar and move focus to the open files")
+    (let ((in-buffers (lambda () (derived-mode-p 'drgnx-buffers-mode))))
+      (pcase-dolist (`(,id ,title ,fn ,doc)
+                     '((buffers-next "Next Row" drgnx-buffers-next "Move the selection down")
+                       (buffers-previous "Previous Row" drgnx-buffers-previous "Move the selection up")
+                       (buffers-open "Open" drgnx-buffers-open "Show the buffer in the editor")
+                       (buffers-close "Close" drgnx-buffers-close "Close the buffer")))
+        (drgnx-command-define id :category "Buffers" :title title :command fn :doc doc
+          :map 'drgnx-buffers-mode-map :when in-buffers)))))
 
 ;;; drgnx-workbench.el ends here

@@ -25,7 +25,8 @@
 (defvar drgnx-wb--sections nil "Alist NAME → plist (:slot :title :buffer), the left dock's sections.")
 
 (defun drgnx-wb-define-section (name &rest spec)
-  "Define dock section NAME: SPEC is (:slot N :title STRING :buffer FUNCTION-RETURNING-A-BUFFER)."
+  "Define dock section NAME: SPEC is (:slot N :title STRING :buffer FUNCTION-RETURNING-A-BUFFER
+:height FRACTION-OF-THE-DOCK)."
   (setf (alist-get name drgnx-wb--sections) spec)
   name)
 
@@ -48,6 +49,7 @@
         (display-buffer-in-side-window
          (funcall (plist-get spec :buffer))
          `((side . left) (slot . ,(plist-get spec :slot)) (window-width . ,drgnx-wb-dock-columns)
+           ,@(when (plist-get spec :height) `((window-height . ,(plist-get spec :height))))
            (dedicated . t)
            (window-parameters . ((drgnx-role . dock) (drgnx-section . ,name) (no-delete-other-windows . t)
                                  (no-other-window . t) (header-line-format . ,(plist-get spec :title)))))))
