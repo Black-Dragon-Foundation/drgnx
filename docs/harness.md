@@ -202,3 +202,31 @@ session launcher         systemd         # or detached (process group, no system
   mesa-dri-drivers ImageMagick`, ~1.8 GB). mutter falls back to a surfaceless software renderer, so no GPU is
   needed. The container needs `--security-opt seccomp=unconfined --security-opt label=disable`: GTK loads icons
   through glycin, whose `bwrap` sandbox cannot create namespaces under the default policy, and Emacs aborts.
+
+## MCP server
+
+`bin/drgnx ui mcp` serves the harness as MCP tools over stdio (`harness/drgnx-ui-mcp.el`, batch Emacs — no
+other runtime). Register it with an agent, e.g. Claude Code:
+
+```sh
+claude mcp add -s user drgnx-ui -- /path/to/drgnx/bin/drgnx ui mcp
+```
+
+| Tool | Arguments | Returns |
+|---|---|---|
+| `ui_start` | `config` (minimal, gryphn, a directory), `size` | the session (name, socket, ready) |
+| `ui_stop` | `session` | `{stopped}` |
+| `ui_list` | — | sessions of the state root |
+| `ui_state` | `session` | frame, windows, minibuffer, child frames, busy |
+| `ui_screenshot` | `session`, `path`? | an image block (PNG, child frames composited) + path and window map |
+| `ui_click` | `session`, `x`+`y` or `buffer`+`text`, `button`?, `count`?, `hold_ms`? | jank report |
+| `ui_keys` | `session`, `keys` (kbd syntax) | jank report |
+| `ui_type` | `session`, `text` | jank report |
+| `ui_wait` | `session`, `quiet_ms`?, `timeout_ms`? | `{settled}` |
+| `ui_measure` | `session`, `actions` (list of `{keys}`, `{type}`, `{x,y}`, `{buffer,text}`) | one jank report |
+
+A typical agent loop: `ui_start` → `ui_screenshot` (look) → `ui_click`/`ui_keys` (act; read the jank report) →
+`ui_screenshot` (check) → `ui_stop`. Every tool resolves its session through the ownership rules above, so a
+call naming `server` or another Emacs's socket returns an error starting with `refused`. Failures are tool
+results with `isError`, never a crashed server. `harness/drgnx-ui-mcp.el` also has a small client
+(`drgnx-ui-mcp-client-start/-request/-tool/-stop`) used by the tests and handy for scripts.
