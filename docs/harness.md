@@ -231,7 +231,9 @@ one the harness assigned. Anything else — `server`, another Emacs's socket pat
 user's own Emacs can never be driven. `emacsclient` is always called with `-a false`, so a missing socket can
 never make it start a new Emacs daemon (as `ALTERNATE_EDITOR=""` would).
 
-`stop` ends the session and removes its run and socket directories and mutter's Wayland socket. It only ever
+`stop` first asks the session's Emacs to exit (`emacsclient --eval (kill-emacs)`, up to 5 s — its exit hooks run, so
+the layout is saved as on a real exit), then ends the session and removes its run and socket directories and mutter's
+Wayland socket. It only ever
 stops what belongs to the current state root: a systemd unit only if its command line names this root's run
 directory (unit names are global — another checkout may run `drgnx-ui-1` too), a detached process group only if
 one of its members names the run directory (a stale `pgid` file may point at a reused id; ids 0 and 1 are never
