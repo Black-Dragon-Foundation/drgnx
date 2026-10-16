@@ -1,0 +1,12 @@
+;;; init.el --- drgnx: boot from the checkout -*- lexical-binding: t -*-
+
+;; SPDX-License-Identifier: GPL-3.0-or-later
+
+;;; Code:
+(let ((checkout (file-name-directory
+                 (directory-file-name (file-name-directory (or load-file-name buffer-file-name))))))
+  (add-to-list 'load-path (expand-file-name "core" checkout)))
+(require 'drgnx)
+(drgnx-init)
+
+;;; init.el ends here

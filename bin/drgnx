@@ -28,11 +28,11 @@ cmd_doctor() {
 }
 
 ui() { # the harness controller, in batch Emacs (harness/drgnx-ui.el)
-  emacs --batch -Q -L "$here/harness" -l drgnx-ui -f drgnx-ui-cli -- "$@"
+  emacs --batch -Q -L "$here/harness" -L "$here/core" -l drgnx-ui -f drgnx-ui-cli -- "$@"
 }
 
 test_batch() {
-  emacs --batch -Q -L "$here/harness" -l "$here/harness/run-ert.el" \
+  emacs --batch -Q -L "$here/harness" -L "$here/core" -l "$here/harness/run-ert.el" \
         -f drgnx-run-ert-batch "$here/test/unit"
 }
 

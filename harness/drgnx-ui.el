@@ -118,9 +118,10 @@ EXIT is the symbol `timeout' when the process had to be killed."
 (defun drgnx-ui-resolve-config (config)
   "nil for the minimal config, else the external config directory (must hold init.el)."
   (unless (member config '(nil "" "minimal"))
-    (let ((dir (expand-file-name (if (equal config "gryphn")
-                                     (or (getenv "DRGNX_GRYPHN_CONFIG") "~/.config/emacs")
-                                   config))))
+    (let ((dir (expand-file-name (pcase config
+                                   ("gryphn" (or (getenv "DRGNX_GRYPHN_CONFIG") "~/.config/emacs"))
+                                   ("drgnx" (expand-file-name "init" drgnx-ui-repo-dir))
+                                   (_ config)))))
       (unless (file-regular-p (expand-file-name "init.el" dir))
         (drgnx-ui--fail "config %S: no init.el in %s" config dir))
       (directory-file-name (file-truename dir)))))
@@ -698,7 +699,7 @@ CONFIG (default drgnx) and print each scenario: green, red (known) with its trac
 ;;;; Command line
 
 (defconst drgnx-ui-usage "usage: drgnx ui COMMAND
-  start [--config minimal|gryphn|DIR] [--size WxH] [--daemon]
+  start [--config minimal|drgnx|gryphn|DIR] [--size WxH] [--daemon]
                                                       start a session (--daemon: no frame yet)
   frame NAME                                          open a frame in a daemon session (emacsclient -c)
   stop NAME | ls | reap                               stop one / list / stop all of this state root

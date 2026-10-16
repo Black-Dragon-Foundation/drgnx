@@ -15,6 +15,8 @@ checks, settings), reproducible package management on package.el (lockfile, gene
 access only in batch), the `drgnx` CLI, the headless UI harness with MCP tools for agents ([harness.md](harness.md); all tooling is batch Emacs Lisp), a provider
 registry for AI features, and the semantic search module.
 
+The core as it exists today is described in [core.md](core.md).
+
 Layers, lowest to highest: Emacs built-ins → core → workbench → modules → external modules → user config
 (`~/.config/drgnx`, never inside the checkout).
 

@@ -208,3 +208,6 @@
 (ert-deftest drgnx-ui/cli-boolean-flags ()
   (should (equal (drgnx-ui--parse-args '("--daemon" "--config" "gryphn"))
                  '(nil :daemon t :config "gryphn"))))
+
+(ert-deftest drgnx-ui/config-drgnx-is-the-checkouts-init ()
+  (should (equal (drgnx-ui-resolve-config "drgnx") (expand-file-name "init" drgnx-ui-repo-dir))))
