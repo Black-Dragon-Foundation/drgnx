@@ -135,7 +135,8 @@ A refresh asked for while one runs is done once afterwards."
   "PROC (git status for ROOT) ended: keep its result, tell the panels, run a waiting refresh."
   (let ((buf (process-buffer proc)))
     (when (and (memq (process-status proc) '(exit signal)) (buffer-live-p buf))
-      (let ((repo (gethash root drgnx-git--repos)))
+      (let ((repo (plist-put (gethash root drgnx-git--repos) :result      ; how the last run ended
+                             (list (process-status proc) (process-exit-status proc)))))
         (when (and (eq (process-status proc) 'exit) (= (process-exit-status proc) 0))
           (let ((files (drgnx-git-parse (with-current-buffer buf (buffer-string)))))
             (setq repo (plist-put (plist-put repo :files files) :folders (drgnx-git--folders files)))))

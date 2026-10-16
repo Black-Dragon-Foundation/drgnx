@@ -79,7 +79,7 @@
                                               (lambda () (drgnx-explorer-set-roots (list root)) (drgnx-wb-show-sidebar)
                                                 (drgnx-git-refresh (file-name-as-directory root) t)
                                                 (unless (drgnx-git-status (expand-file-name "d000/f000.txt" root))
-                                                  (error "no git status was read"))))
+                                                  (error "no git status was read: %S %s" (gethash (file-name-as-directory root) drgnx-git--repos) (with-current-buffer (get-buffer-create " *drgnx git errors*") (buffer-substring-no-properties (max 1 (- (point-max) 300)) (point-max)))))))
                            (drgnx-bench--no-git-timer) (setq drgnx-explorer-git nil)))))
     (setq r (plist-put r :git-status
                        (drgnx-bench--try "drgnx" "git status"
@@ -87,7 +87,7 @@
                                           (lambda ()
                                             (drgnx-git-refresh (file-name-as-directory root) t)
                                             (unless (drgnx-git-status (expand-file-name "d000/f000.txt" root))
-                                              (error "no git status was read")))))))
+                                              (error "no git status was read: %S %s" (gethash (file-name-as-directory root) drgnx-git--repos) (with-current-buffer (get-buffer-create " *drgnx git errors*") (buffer-substring-no-properties (max 1 (- (point-max) 300)) (point-max))))))))))
     (setq r (plist-put r :explorer-expand
                        (drgnx-bench--try "drgnx" "expand"
                          (drgnx-bench--ms (lambda () (when (drgnx-explorer--expanded-p big)
