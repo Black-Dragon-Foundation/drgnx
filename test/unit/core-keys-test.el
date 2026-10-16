@@ -126,7 +126,8 @@
   "BODY with the core commands, fresh drgnx-keys state and a temp config dir; every binding is undone after."
   `(drgnx-keys-test--with-core-commands
     (let* ((dir (make-temp-file "drgnx-keys" t))
-           (process-environment (cons (concat "DRGNX_CONFIG_DIR=" dir) process-environment))
+           (process-environment (append (list (concat "DRGNX_CONFIG_DIR=" dir) (concat "XDG_STATE_HOME=" dir "/state"))
+                                        process-environment))
            (drgnx-keys--applied nil) (drgnx-keys--session-layers nil) (drgnx-keys-profiles nil)
            (drgnx-keys-problems nil) (drgnx-keys-last nil))
       (unwind-protect (progn ,@body)
@@ -227,3 +228,26 @@
      (should (equal (plist-get saved :bind) '((line-numbers "C-c l")))))
    (should (equal (plist-get drgnx-keys-last :layers) '((emacs editing) (vscode app window))))
    (should (drgnx-keys-test--conflict drgnx-keys-last "C-o"))))
+
+;;;; The report
+
+(ert-deftest drgnx-keys/conflicts-on-the-sheet-and-in-the-report-file ()
+  (let* ((state (make-temp-file "drgnx-state" t))
+         (process-environment (cons (concat "XDG_STATE_HOME=" state) process-environment)))
+    (unwind-protect
+        (drgnx-keys-test--live
+         (drgnx-keys-test--write-user '(:layers ((emacs editing) (vscode app window)) :bind ((nope "C-c n"))))
+         (drgnx-keys-apply)
+         (let ((report (with-temp-buffer (insert-file-contents (expand-file-name "keys-report.eld" (drgnx-state-dir)))
+                                         (read (current-buffer)))))
+           (should (equal (plist-get report :layers) '((emacs editing) (vscode app window))))
+           (should (seq-find (lambda (s) (string-match-p "\\`C-o .*Open File.*vscode.*open-line.*emacs" s))
+                             (plist-get report :conflicts)))
+           (should (seq-find (lambda (s) (string-search "nope" s)) (plist-get report :problems))))
+         (drgnx-surfaces-cheatsheet)
+         (with-current-buffer "*drgnx keys*"
+           (should (string-search "Key conflicts" (buffer-string)))
+           (should (string-match-p "C-o .*Open File" (buffer-string)))
+           (should (string-search "keys.eld: no command nope" (buffer-string))))
+         (kill-buffer "*drgnx keys*"))
+      (delete-directory state t))))

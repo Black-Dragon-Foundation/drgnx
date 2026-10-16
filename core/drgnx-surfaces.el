@@ -158,7 +158,14 @@ Uses registry keys only (no `where-is'), so the output is the same in every Emac
           (unless (equal cat (car r))
             (setq cat (car r))
             (insert "\n" (propertize cat 'face 'drgnx-sheet-heading) "\n"))
-          (insert (format "  %-24s %-36s %s\n" (nth 1 r) (nth 2 r) (nth 3 r))))))))
+          (insert (format "  %-24s %-36s %s\n" (nth 1 r) (nth 2 r) (nth 3 r)))))
+      ;; The active key profiles' conflicts and problems (drgnx-keys, docs/keys.md).
+      (when (fboundp 'drgnx-keys-conflict-lines)
+        (pcase-dolist (`(,title . ,lines) `(("Key conflicts (the later layer won)" . ,(drgnx-keys-conflict-lines))
+                                            ("Key problems" . ,(plist-get drgnx-keys-last :problems))))
+          (when lines
+            (insert "\n" (propertize title 'face 'drgnx-sheet-heading) "\n")
+            (dolist (l lines) (insert "  " l "\n"))))))))
 
 (defun drgnx-surfaces--md (s) (replace-regexp-in-string "|" "\\\\|" s))
 

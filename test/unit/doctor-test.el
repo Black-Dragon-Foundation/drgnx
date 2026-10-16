@@ -79,3 +79,28 @@
 (ert-deftest drgnx-doctor/dev-needs-a-pgtk-emacs ()
   (should (eq (drgnx-doctor-test--status 'ui-pgtk (drgnx-doctor-test--facts :pgtk-emacs t)) 'ok))
   (should (eq (drgnx-doctor-test--status 'ui-pgtk (drgnx-doctor-test--facts :pgtk-emacs nil)) 'warn)))
+
+(ert-deftest drgnx-doctor/key-conflicts ()
+  ;; The doctor reads the report the last drgnx session wrote (batch Emacs loads no modules).
+  (let ((check (lambda (report) (drgnx-doctor-check 'key-conflicts (drgnx-doctor-test--facts :keys-report report)))))
+    (should (eq (car (funcall check nil)) 'info))
+    (should (eq (car (funcall check '(:layers ((vscode app)) :conflicts nil :problems nil))) 'ok))
+    (let ((r (funcall check '(:layers ((emacs editing) (vscode app)) :conflicts ("C-o: a" "C-s: b") :problems nil))))
+      (should (eq (car r) 'info))
+      (should (string-search "2 key conflicts" (nth 1 r)))
+      (should (string-search "Keyboard Shortcuts" (nth 2 r))))
+    (let ((r (funcall check '(:layers ((vscode app)) :conflicts nil :problems ("keys.eld: no command nope (in :bind)")))))
+      (should (eq (car r) 'warn))
+      (should (string-search "no command nope" (nth 1 r))))))
+
+(ert-deftest drgnx-doctor/keys-report-fact ()
+  (let* ((state (make-temp-file "drgnx-state" t))
+         (process-environment (cons (concat "XDG_STATE_HOME=" state) process-environment)))
+    (unwind-protect
+        (progn
+          (should (null (plist-get (drgnx-doctor-facts) :keys-report)))
+          (make-directory (expand-file-name "drgnx" state))
+          (with-temp-file (expand-file-name "drgnx/keys-report.eld" state)
+            (prin1 '(:layers ((vscode app)) :conflicts ("x") :problems nil) (current-buffer)))
+          (should (equal (plist-get (plist-get (drgnx-doctor-facts) :keys-report) :conflicts) '("x"))))
+      (delete-directory state t))))

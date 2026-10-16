@@ -16,6 +16,7 @@
 (require 'seq)
 (require 'subr-x)
 (require 'drgnx-registry)
+(require 'drgnx-paths)
 
 (defvar drgnx-keys-profiles nil
   "Alist PROFILE → plist (:name :doc :bind :claims :map :mac-cmd :claims-defaults).")
@@ -198,7 +199,6 @@ KIND `same-key', `claim' (a key another layer uses natively) or `prefix'."
 
 (defun drgnx-keys--ensure-profiles ()
   (unless drgnx-keys-profiles
-    (require 'drgnx-paths)
     (setq drgnx-keys-profiles (drgnx-keys-load-profiles (expand-file-name "keys" drgnx-dir)))))
 
 (defun drgnx-keys-file () (expand-file-name "keys.eld" (drgnx-user-dir)))
@@ -279,7 +279,42 @@ Never prompts: problems are collected in `drgnx-keys-last'.  Returns the resolut
         (drgnx-keys--apply-binding b cmd drgnx-keys--generation)))
     (setq drgnx-keys-last (append (list :layers layers
                                         :problems (append (reverse drgnx-keys-problems) (plist-get r :problems)))
-                                  r))))
+                                  r))
+    (drgnx-keys--write-report)
+    drgnx-keys-last))
+
+;;;; Reporting
+
+(defun drgnx-keys--party (p)
+  "A conflict party P, (:id ID :layer L) or (:claim DESCRIPTION :layer L), as text."
+  (format "%s (%s)"
+          (if-let* ((id (plist-get p :id))) (if-let* ((c (drgnx-commands-get id))) (drgnx-cmd-title c) id)
+            (plist-get p :claim))
+          (or (plist-get p :layer) "Emacs")))
+
+(defun drgnx-keys-conflict-text (c)
+  "Conflict C as one line: KEY WINNER over LOSERS [KIND]."
+  (format "%s %s over %s [%s%s]" (plist-get c :key) (drgnx-keys--party (plist-get c :winner))
+          (mapconcat #'drgnx-keys--party (plist-get c :losers) ", ") (plist-get c :kind)
+          (if (memq (plist-get c :map) '(nil global-map)) "" (format ", in %s" (plist-get c :map)))))
+
+(defun drgnx-keys-conflict-lines ()
+  "The last apply's conflicts as text lines."
+  (mapcar #'drgnx-keys-conflict-text (plist-get drgnx-keys-last :conflicts)))
+
+(defun drgnx-keys--write-report ()
+  "Write the conflicts and problems to the state dir for `drgnx doctor' (never prompts)."
+  (condition-case err
+      (let* ((file (expand-file-name "keys-report.eld" (drgnx-state-dir)))
+             (tmp (progn (make-directory (file-name-directory file) t)
+                         (make-temp-file (expand-file-name ".keys-report-" (file-name-directory file))))))
+        (with-temp-file tmp
+          (prin1 (list :time (format-time-string "%FT%T%z") :layers (plist-get drgnx-keys-last :layers)
+                       :conflicts (drgnx-keys-conflict-lines) :problems (plist-get drgnx-keys-last :problems))
+                 (current-buffer)))
+        (rename-file tmp file t))
+    (error (push (format "cannot write the key report: %s" (error-message-string err))
+                 (plist-get drgnx-keys-last :problems)))))
 
 (defun drgnx-keys-use (layers &optional save)
   "Switch to the key stack LAYERS now (no restart); with SAVE, also write it to keys.eld."

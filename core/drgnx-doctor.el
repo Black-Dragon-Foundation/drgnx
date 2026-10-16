@@ -59,7 +59,14 @@ DEV non-nil: only run for `drgnx doctor --dev' (tools for developing drgnx)."
           :mutter (and (executable-find "mutter") t)
           :dbus-run-session (and (executable-find "dbus-run-session") t)
           :magick (and (executable-find "magick") t)
-          :pgtk-emacs (or (featurep 'pgtk) (and (executable-find "emacs-pgtk") t)))))
+          :pgtk-emacs (or (featurep 'pgtk) (and (executable-find "emacs-pgtk") t))
+          :keys-report (drgnx-doctor--keys-report))))
+
+(defun drgnx-doctor--keys-report ()
+  "The key report the last drgnx session wrote (keys-report.eld in the state dir), or nil."
+  (let ((file (expand-file-name "drgnx/keys-report.eld" (or (getenv "XDG_STATE_HOME") "~/.local/state"))))
+    (when (file-readable-p file)
+      (ignore-errors (with-temp-buffer (insert-file-contents file) (read (current-buffer)))))))
 
 ;;;; Checks
 
@@ -103,6 +110,21 @@ DEV non-nil: only run for `drgnx doctor --dev' (tools for developing drgnx)."
   :check (lambda (f)
            (if (plist-get f :git) (list 'ok "git found" nil)
              (list 'warn "git not found" "install git with your package manager"))))
+
+(drgnx-doctor-define 'key-conflicts :group "drgnx" :doc "Key profile conflicts and keys.eld problems (from the last session)"
+  :check (lambda (f)
+           (let* ((r (plist-get f :keys-report)) (conflicts (plist-get r :conflicts)) (problems (plist-get r :problems)))
+             (cond ((null r) (list 'info "no key report yet — start drgnx once" nil))
+                   (problems (list 'warn (format "%d key problem%s: %s" (length problems) (if (cdr problems) "s" "")
+                                                 (string-join problems "; "))
+                                   "fix ~/.config/drgnx/keys.eld (docs/keys.md)"))
+                   (conflicts (list 'info (format "%d key conflicts, resolved by layer order (%s): %s" (length conflicts)
+                                                  (mapconcat (lambda (l) (symbol-name (car l))) (plist-get r :layers) " < ")
+                                                  (string-join (seq-take conflicts 3) "; "))
+                                    "see Keyboard Shortcuts › Key conflicts; change them in keys.eld (docs/keys.md)"))
+                   (t (list 'ok (format "no key conflicts (%s)"
+                                        (mapconcat (lambda (l) (symbol-name (car l))) (plist-get r :layers) " < "))
+                            nil))))))
 
 (dolist (tool '((ui-mutter :mutter "mutter" "the headless compositor of drgnx test --ui")
                 (ui-dbus :dbus-run-session "dbus-run-session" "a private D-Bus per test session")
