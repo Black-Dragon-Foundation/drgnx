@@ -136,11 +136,30 @@ load is reported as module <category>/<file name>."
                          drgnx-modules--report)
                  (current-buffer)))))))
 
+(defun drgnx-modules-load-external ()
+  "Load the external modules listed in modules.eld (:external): each feature is reported as
+module external/NAME/FEATURE; a missing directory or a failing feature never stops Emacs."
+  (dolist (ext (plist-get (drgnx-modules-read-state) :external))
+    (let* ((name (plist-get ext :name)) (path (expand-file-name (or (plist-get ext :path) ""))))
+      (if (not (file-directory-p path))
+          (drgnx-modules--record (intern (format "external/%s" name)) 'idle 0 'failed
+                                 (format "no such directory: %s" path))
+        (require 'drgnx-compat-gryphn)          ; gryphn's command and context definitions
+        (add-to-list 'load-path path t)
+        (dolist (f (plist-get ext :features))
+          (let* ((t0 (float-time))
+                 (err (condition-case e (progn (require f) nil) (error (error-message-string e)))))
+            (drgnx-modules--record (intern (format "external/%s/%s" name f)) 'idle
+                                   (round (* 1000 (- (float-time) t0))) (if err 'failed 'ok) err)))))))
+
 (defun drgnx-modules-start (dir)
   "Load the modules in DIR, run the startup stage now and the others when their moment comes."
   (drgnx-modules-load-directory dir)
   (drgnx-modules-run 'startup)
-  (run-with-idle-timer 1 nil (lambda () (drgnx-modules-run 'idle) (drgnx-modules-write-report)))
+  (run-with-idle-timer 1 nil (lambda ()
+                               (drgnx-modules-load-external)        ; before: the idle stage re-applies keys
+                               (drgnx-modules-run 'idle)
+                               (drgnx-modules-write-report)))
   (pcase-dolist (`(,hook . ,stage) '((drgnx-first-gui-frame-hook . first-frame) (drgnx-first-file-hook . first-file)
                                      (drgnx-first-input-hook . first-input)))
     (add-hook hook (lambda () (drgnx-modules-run stage))))

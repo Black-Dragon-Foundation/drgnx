@@ -83,14 +83,14 @@ settled within 250 ms."
     (drgnx-ui-measure sess (list (list :keys "C-b") (list :keys "C-`") (list :keys "C-M-b")))
     (drgnx-ui-call sess "(progn (require 'transient)
                                 (transient-define-prefix drgnx-inv-tr () [(\"a\" \"Do A\" ignore)])
-                                (keymap-global-set \"<f12>\" #'drgnx-inv-tr) (drgnx-uitest--json (list :ok t)))")
+                                (keymap-global-set \"<f19>\" #'drgnx-inv-tr) (drgnx-uitest--json (list :ok t)))")
     (let ((first (drgnx-inv--probe sess)))
       (should (> (plist-get first :panel) 0))
       (dotimes (_ 10)
         (drgnx-ui-measure sess (list (list :keys "C-b") (list :keys "C-b") (list :keys "C-`") (list :keys "C-`")
                                      (list :keys "C-M-b") (list :keys "C-M-b"))))
       (drgnx-ui-measure sess (list (list :keys "C-h f") (list :type "car") (list :keys "RET")))   ; a tab switch
-      (drgnx-ui-measure sess (list (list :keys "<f12>")))                                       ; a popup
+      (drgnx-ui-measure sess (list (list :keys "<f19>")))                                       ; a popup
       (let ((open (drgnx-inv--probe sess)))
         (should (equal (plist-get open :geometry) (plist-get first :geometry))))
       (drgnx-ui-measure sess (list (list :keys "C-g")))

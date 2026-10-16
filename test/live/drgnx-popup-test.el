@@ -19,7 +19,7 @@
          (progn
            (drgnx-ui-call ,sess "(progn (require 'transient)
                                         (transient-define-prefix drgnx-live-tr () [(\"a\" \"Do A\" ignore)])
-                                        (keymap-global-set \"<f12>\" #'drgnx-live-tr)
+                                        (keymap-global-set \"<f19>\" #'drgnx-live-tr)
                                         (drgnx-uitest--json (list :ok t)))")
            ,@body)
        (drgnx-ui-stop (plist-get s :name))
@@ -38,9 +38,9 @@ BORROWED: while open, no window moved either (the popup is in the panel's window
 
 (ert-deftest drgnx-live/transient-leaves-no-trace-with-and-without-the-panel ()
   (drgnx-live-popup--with sess
-    (drgnx-live-popup--no-trace sess "<f12>" "C-g")
+    (drgnx-live-popup--no-trace sess "<f19>" "C-g")
     (drgnx-ui-measure sess (list (list :keys "C-`")))           ; the panel open: borrowed and given back
-    (drgnx-live-popup--no-trace sess "<f12>" "C-g" t)))
+    (drgnx-live-popup--no-trace sess "<f19>" "C-g" t)))
 
 (ert-deftest drgnx-live/completions-leave-no-trace ()
   (drgnx-live-popup--with sess

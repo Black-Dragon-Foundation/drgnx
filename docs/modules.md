@@ -35,6 +35,22 @@ Your choices live in `~/.config/drgnx/modules.eld` (`$DRGNX_CONFIG_DIR`):
 An older format is migrated when it is read; an unreadable file is reported in `*Messages*` and ignored (modules use
 their defaults) — never an error at start.
 
+## External modules (gryphn)
+
+Code that lives elsewhere loads as an **external module**, listed in modules.eld:
+
+```elisp
+(:version 1
+ :external ((:name gryphn :path "~/workspace/gryphn/emacs"
+             :features (gryphn-org gryphn-run gryphn-board gryphn-board-ui gryphn-agents gryphn-search gryphn-llm))))
+```
+
+At idle each feature is loaded and reported as module `external/<name>/<feature>` (Preferences: Modules); a missing
+directory or a feature that fails to load is reported, never fatal. gryphn's files load unchanged: drgnx provides
+`gryphn-command-define` and `gryphn-surfaces-define-context` on its own registry and surfaces
+(`core/drgnx-compat-gryphn.el`), so the board, runs, agents and search commands appear in the palette and menus and
+their keys join the VS Code key profile. drgnx never changes the gryphn checkout.
+
 ## Writing a module
 
 ```elisp
