@@ -69,12 +69,13 @@
   ;; search and LLM commands in the registry, gryphn's keys in the VS Code profile; nothing installed.
   (skip-unless (and (getenv "DRGNX_GRYPHN_DIR") (file-directory-p (getenv "DRGNX_GRYPHN_DIR"))))
   (drgnx-live-mod--with sess
-    (drgnx-ui-call sess "(progn (when (file-directory-p (expand-file-name \"~/.config/emacs/elpa\"))
+    (drgnx-ui-call sess (format "(progn (when (file-directory-p (expand-file-name \"~/.config/emacs/elpa\"))
                                    (dolist (d (directory-files (expand-file-name \"~/.config/emacs/elpa\") t \"\\\\`[^.]\"))
                                      (when (file-directory-p d) (add-to-list 'load-path d t))))
-                                 (drgnx-modules-write-state (list :version 1 :external (list (list :name 'gryphn :path (getenv \"DRGNX_GRYPHN_DIR\")
+                                 (drgnx-modules-write-state (list :version 1 :external (list (list :name 'gryphn :path %S
                                                                      :features '(gryphn-org gryphn-run gryphn-board gryphn-board-ui gryphn-agents gryphn-search gryphn-llm)))))
                                  (drgnx-modules-load-external) (drgnx-modules-run 'idle)
-                                 (drgnx-uitest--json (list :ok t)))")
+                                 (drgnx-uitest--json (list :ok t)))" (getenv "DRGNX_GRYPHN_DIR")))
+    (should (drgnx-live-mod--q sess "(assq 'external/gryphn/gryphn-board (drgnx-modules-report))"))
     (should (equal (drgnx-live-mod--q sess "(seq-filter (lambda (m) (and (string-prefix-p \"external/\" (symbol-name (car m))) (not (memq (plist-get (cdr m) :status) '(ok missing-packages))))) (drgnx-modules-report))") nil))
     (should (equal (drgnx-live-mod--q sess "(list (key-binding (kbd \"<f5>\")) (and (drgnx-commands-get 'agents-map) t))") '(gryphn-org-board-view t)))))
