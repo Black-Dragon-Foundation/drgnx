@@ -45,3 +45,9 @@
    (drgnx-surfaces-run 'a-cmd)
    (should drgnx-test--ran)
    (should (string-search "Able: Alpha — next time: <f19>" (drgnx-surfaces-tip (drgnx-commands-get 'a-cmd))))))
+
+(ert-deftest drgnx-surfaces/native-keys-are-documented ()
+  (drgnx-test--with-commands
+   (drgnx-command-define 'nat :title "Save" :category "File" :native "C-x C-s" :doc "Save this buffer")
+   (should (equal (drgnx-surfaces-key (drgnx-commands-get 'nat)) "C-x C-s"))
+   (should (string-search "| `C-x C-s` | Save |" (drgnx-surfaces-markdown)))))

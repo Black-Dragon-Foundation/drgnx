@@ -40,13 +40,19 @@ Return t if every test passed."
       ((ert-test-failed-p result)
        ;; An expected failure (a known red) counts only if it failed an assertion; an error
        ;; (missing fixture, broken driver, timeout) is never acceptable.
-       (if (eq (car condition) 'ert-test-failed)
-           (let ((data (cadr condition)))
-             (push (list :name name
-                         :summary (or (ignore-errors (plist-get data :scenario)) (format "%S" data))
-                         :trace (or (ignore-errors (plist-get data :trace)) []))
-                   known-red))
-         (push (list :name name :condition (format "known red, but it errored: %S" condition)) failures)))))
+       ;; It must also be a `drgnx-scenario-check' failure (carrying its explanation and
+       ;; trace), not a bare `should' that could fail for any reason.
+       (let* ((data (and (eq (car condition) 'ert-test-failed) (cadr condition)))
+              (summary (ignore-errors (plist-get data :scenario))))
+         (cond
+          (summary (push (list :name name :summary summary
+                               :trace (or (ignore-errors (plist-get data :trace)) []))
+                         known-red))
+          (data (push (list :name name :condition
+                            (format "known red, but it failed outside drgnx-scenario-check: %S" condition))
+                      failures))
+          (t (push (list :name name :condition (format "known red, but it errored: %S" condition))
+                   failures)))))))
     (setq failures (append load-failures (nreverse failures)))
     (when results-file
       (let ((coding-system-for-write 'utf-8-unix))

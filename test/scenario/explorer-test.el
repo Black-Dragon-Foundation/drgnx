@@ -29,7 +29,7 @@
 
 (defun drgnx-scn--click (text &optional count hold)
   "Click the Explorer row showing TEXT; return the jank report."
-  (let ((xy (drgnx-uitest-target-xy "treemacs-mode" text)))
+  (let ((xy (drgnx-uitest-target-xy drgnx-driver-explorer-target text)))
     (drgnx-uitest-run (drgnx-uitest-click-events (drgnx-uitest-posn (car xy) (cdr xy)) 1 count hold))))
 
 (defun drgnx-scn--click-folder-stays ()
@@ -87,23 +87,21 @@ the release into a drag; with drag-to-move on, that moves files.)"
   (drgnx-scn--with-explorer root
     (let ((w (drgnx-driver-explorer-window)))
       ;; Collapse src/app (above `tests'): revealing main.py would expand it again.
-      (with-selected-window w
-        (goto-char (point-min)) (search-forward "src/app") (treemacs-TAB-action))
+      (drgnx-driver-explorer-collapse "src/app")
       (drgnx-uitest-run nil)
-      (let* ((collapsed (not (drgnx-scn--explorer-has "util.py")))
-             (events nil)
+      (drgnx-scenario-require (not (drgnx-scn--explorer-has "util.py")) "src/app collapsed")
+      (let* ((events nil)
              (record (lambda () (when (mouse-event-p last-input-event)
                                   (push (car last-input-event) events))))
              (r (progn (add-hook 'pre-command-hook record)
                        (unwind-protect (drgnx-scn--click "tests" 1 0.3)
                          (remove-hook 'pre-command-hook record))))
              (line (drgnx-scn--explorer-line))
-             (files-ok (and (file-directory-p (expand-file-name "tests" root))
-                            (file-exists-p (expand-file-name "src/app/util.py" root)))))
+             (drag (seq-find (lambda (e) (string-prefix-p "drag-" (symbol-name e))) events)))
         (drgnx-scenario-check
-         (and collapsed files-ok (string-search "tests" line) (= (plist-get r :oscillations) 0))
-         (format "press-hold-release on a row must act on that row: setup collapsed %s, files intact %s, selection on %S, %d snap-back(s); input arrived as %s"
-                 collapsed files-ok line (plist-get r :oscillations) (reverse events))
+         (and (not drag) (string-search "tests" line) (= (plist-get r :oscillations) 0))
+         (format "press-hold-release on a row must be a click on that row: input arrived as %s, selection on %S, %d snap-back(s)"
+                 (reverse events) line (plist-get r :oscillations))
          r)))))
 
 (ert-deftest drgnx-scenario/explorer-keys-during-churn ()
@@ -114,15 +112,17 @@ the keys move the selection."
     (let* ((w (drgnx-driver-explorer-window))
            (line0 (with-current-buffer (window-buffer w) (line-number-at-pos (window-point w))))
            (churn (run-with-timer 0 0.1 (lambda () (kill-buffer (generate-new-buffer "drgnx-churn"))))))
-      (unwind-protect
-          (let* ((r (drgnx-uitest-run (drgnx-uitest-key-events "n n")))
-                 (line (with-current-buffer (window-buffer w) (line-number-at-pos (window-point w)))))
-            (drgnx-scenario-check
-             (and (= line (+ line0 2)) (= (plist-get r :oscillations) 0))
-             (format "two `n' must move the selection two rows (%d → %d), it is on row %d (%S) after %d snap-back(s)"
-                     line0 (+ line0 2) line (drgnx-scn--explorer-line) (plist-get r :oscillations))
-             r))
-        (cancel-timer churn)))))
+      (drgnx-scenario-require (timerp churn) "a churn timer")
+      (drgnx-uitest-run (drgnx-uitest-key-events "n n"))
+      ;; Look again after the churn stops: a follower starved during it may fire then.
+      (cancel-timer churn)
+      (let* ((r (drgnx-uitest-run nil))
+             (line (with-current-buffer (window-buffer w) (line-number-at-pos (window-point w)))))
+        (drgnx-scenario-check
+         (= line (+ line0 2))
+         (format "two `n' during background churn must leave the selection two rows down (%d → %d); after the churn it is on row %d (%S)"
+                 line0 (+ line0 2) line (drgnx-scn--explorer-line))
+         r)))))
 
 (ert-deftest drgnx-scenario/explorer-cross-project-keeps-root ()
   "Opening a file of another project keeps the Explorer's root (VS Code keeps its workspace)."
@@ -130,6 +130,8 @@ the keys move the selection."
   (drgnx-scn--with-explorer root
     (drgnx-scenario-with-fixture (other 'second)
       (let* ((roots0 (drgnx-driver-explorer-roots))
+             (_ (drgnx-scenario-require (member (file-name-as-directory root) roots0)
+                                        "the Explorer showing the fixture before the other project's file opens"))
              (_ (drgnx-driver-open-file (expand-file-name "lib/other.py" other)))
              (r (drgnx-uitest-run nil))
              (roots (drgnx-driver-explorer-roots)))

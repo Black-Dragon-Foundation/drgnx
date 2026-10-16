@@ -635,26 +635,39 @@ Prints the outcome; returns non-nil if it was as expected."
          (known (memq name (cdr (assq (intern (drgnx-ui--config-name config))
                                       (drgnx-ui--read-eld (expand-file-name "known-red.eld" dir))))))
          (s (drgnx-ui-start config nil 60 t))
-         times hooks)
+         times exits hooks)
     (unwind-protect
         (dotimes (_ n)
           (let ((f (drgnx-ui-new-frame (drgnx-ui-own-session (plist-get s :name)))))
             (push (plist-get f :visible_ms) times)
+            (push (plist-get f :exit) exits)
             (unless hooks (setq hooks (plist-get f :hooks)))))   ; the first frame's
       (drgnx-ui-stop (plist-get s :name)))
-    (let* ((ms (sort (seq-filter #'numberp times) #'<))
-           (median (and ms (nth (/ (length ms) 2) ms)))
-           (within (and median (<= median budget)))
-           (detail (format "median %s ms %s budget %d ms (frames: %s)" (or median "?") (if within "<=" ">") budget
-                           (mapconcat (lambda (v) (format "%s" v)) (reverse times) ", "))))
-      (cond
-       ((and within (not known)) (princ (format "  green        %s (%s)\n" name detail)) t)
-       ((and (not within) known) (princ (format "  red (known)  %s: %s\n" name detail)))
-       (within (princ (format "  RED          %s: known red, but %s\n" name detail)) nil)
-       (t (princ (format "  RED          %s: %s\n" name detail)) nil))
-      (unless within
+    (pcase-let ((`(,outcome . ,detail) (drgnx-ui--frame-outcome (reverse times) (reverse exits) budget known)))
+      (princ (pcase outcome
+               ('green (format "  green        %s (%s)\n" name detail))
+               ('known (format "  red (known)  %s: %s\n" name detail))
+               (_ (format "  RED          %s: %s\n" name detail))))
+      (unless (eq outcome 'green)
         (seq-doseq (h hooks) (princ (format "                 first frame: %s %d ms\n" (plist-get h :name) (plist-get h :ms)))))
-      (eq (and within t) (not known)))))
+      (memq outcome '(green known)))))
+
+(defun drgnx-ui--frame-outcome (times exits budget known)
+  "Judge frame TIMES (ms, :null when never visible) with emacsclient EXITS against BUDGET.
+Returns (OUTCOME . DETAIL): `green', `known' (a known red, over budget), `red' (over budget,
+or a known red that is now within it) or `error' (a frame never appeared or emacsclient
+failed — never a known red)."
+  (let* ((ms (sort (seq-filter #'numberp times) #'<))
+         (median (and ms (= (length ms) (length times)) (nth (/ (length ms) 2) ms)))
+         (frames (mapconcat (lambda (v) (format "%s" v)) times ", ")))
+    (cond
+     ((or (null median) (seq-some (lambda (e) (not (eql e 0))) exits))
+      (cons 'error (format "a frame did not appear or emacsclient failed (frames: %s; exits: %s)"
+                           frames (mapconcat (lambda (v) (format "%s" v)) exits ", "))))
+     ((<= median budget)
+      (cons (if known 'red 'green)
+            (format "%smedian %d ms <= budget %d ms (frames: %s)" (if known "known red, but " "") median budget frames)))
+     (t (cons (if known 'known 'red) (format "median %d ms > budget %d ms (frames: %s)" median budget frames))))))
 
 (defun drgnx-ui-run-scenarios (&optional config dir)
   "`drgnx test --scenario': run the scenario suite DIR (default test/scenario) in a session of
@@ -664,8 +677,15 @@ CONFIG (default drgnx) and print each scenario: green, red (known) with its trac
   (let ((config (or config "drgnx"))
         (dir (expand-file-name (or dir "test/scenario") drgnx-ui-repo-dir))
         (t0 (float-time)))
-    (if (not (ignore-errors (or (member config '("minimal")) (drgnx-ui-resolve-config config))))
-        (progn (princ (format "scenarios: configuration %s is not available here; skipped\n" config)) 0)
+    (cond
+     ((and (equal config "gryphn") (not (ignore-errors (drgnx-ui-resolve-config "gryphn"))))
+      (princ "scenarios: the gryphn configuration is not on this machine; skipped\n")
+      0)
+     ((and (not (equal config "minimal"))
+           (condition-case err (progn (drgnx-ui-resolve-config config) nil)
+             (drgnx-ui-error (princ (format "scenarios: %s\n" (error-message-string err))) t)))
+      2)
+     (t
       (pcase-let ((`(,rc ,results ,run)
                    (drgnx-ui-run-ert-session
                     dir (string-to-number (or (getenv "DRGNX_SCENARIO_TIMEOUT") "300")) config
@@ -688,13 +708,19 @@ CONFIG (default drgnx) and print each scenario: green, red (known) with its trac
             (dolist (f fails)                    ; load failures have no test entry
               (when (string-prefix-p "load " (plist-get f :name))
                 (princ (format "  RED          %s: %s\n" (plist-get f :name) (plist-get f :condition)))))
-            (let ((ok (and (eq rc 0) (null fails))))
+            (let ((ok (and (eq rc 0) (null fails)))
+                  (kept (expand-file-name (format "scenarios/%s.json" (drgnx-ui--config-name config))
+                                          (drgnx-ui-state-root))))
+              ;; The last results per configuration stay, for docs and comparisons.
+              (make-directory (file-name-directory kept) t)
+              (copy-file (expand-file-name "results.json" run) kept t)
+              (princ (format "results: %s\n" kept))
               (when ok (delete-directory run t))
               (when (file-exists-p (expand-file-name "frames.eld" dir))
                 (setq ok (and (drgnx-ui--frame-scenario config dir) ok)))
               (princ (format "scenario tier: %s in %.1fs\n" (if ok "as expected" "UNEXPECTED RESULTS")
                              (- (float-time) t0)))
-              (if ok 0 1))))))))
+              (if ok 0 1)))))))))
 
 ;;;; Command line
 

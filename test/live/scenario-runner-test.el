@@ -26,3 +26,16 @@
   (let ((out (with-output-to-string
                (should (= (drgnx-ui-run-scenarios "minimal" (expand-file-name "scenario-frames-tight" drgnx-live--fixtures)) 1)))))
     (should (string-match-p "RED +drgnx-scenario/frame-from-daemon-fast: median [0-9]+ ms > budget 1 ms" out))))
+
+(ert-deftest drgnx-live/scenario-results-are-kept ()
+  (let* ((root (make-temp-file "drgnx-scn-state" t))
+         (process-environment (cons (concat "DRGNX_UI_STATE=" root) process-environment)))
+    (unwind-protect
+        (progn
+          (with-output-to-string
+            (drgnx-ui-run-scenarios "minimal" (expand-file-name "scenario-ok" drgnx-live--fixtures)))
+          (let ((kept (expand-file-name "scenarios/minimal.json" root)))
+            (should (file-exists-p kept))
+            (should (string-search "the Explorer snapped back"
+                                   (with-temp-buffer (insert-file-contents kept) (buffer-string))))))
+      (delete-directory root t))))

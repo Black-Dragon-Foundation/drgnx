@@ -100,10 +100,12 @@ command loop (`recursive-edit`), so the events execute as real commands while th
 Every input action is measured. Between `measure-begin` and `measure-end` the recorder keeps a signature of
 every root-frame window — buffer, `window-start`, point, pixel edges, header-line and mode-line heights,
 selected — plus the minibuffer height, and also records `window-scroll-functions` calls, redisplays and GC.
-It snapshots the signatures **right after every command** (`post-command-hook`) and **right after every timer**
-(advice on `timer-event-handler`), and polls once per tick for everything else, so each change is attributed
-to its cause: `command:NAME`, `timer:FUNCTION` or `other` (process output — filters and sentinels are called
-from C and cannot be intercepted — or redisplay). A timer that moves point with `goto-char` inside
+It snapshots the signatures **just before and right after every command** (`pre-`/`post-command-hook`) and
+**every timer** (advice on `timer-event-handler`), and polls once per tick, so each change is attributed to its
+cause: the innermost command or timer running when it happened (`command:NAME`, `timer:FUNCTION` — a timer
+that runs inside another timer's or a command's `sit-for` keeps its own changes), or `other` when neither ran
+(process output — filters and sentinels are called from C and cannot be intercepted — or redisplay). A scroll
+counts only when a window's start really changes. A timer that moves point with `goto-char` inside
 `with-selected-window` (no window function called) is still caught and named.
 The report:
 
@@ -152,7 +154,10 @@ runs that hook. Without care, the harness's own polling (every 50 ms while waiti
 re-arming such debounces and the measurement would end before the follower ever ran: exactly the snap-back the
 report should show would be hidden. So the session evaluates harness requests with
 `inhibit-modification-hooks` bound to t (advice on `server-process-filter`, installed before the configuration
-loads). Hooks a request installs are kept; temp buffers already skip the buffer-list and kill hooks. A live test
+loads). Hooks a request installs are kept; temp buffers already skip the buffer-list and kill hooks. One
+consequence: a buffer edited *through a harness request* gets no change hooks (no `after-change-functions`, so
+no syntax-cache flush or jit-lock notice) — set up buffers through requests if you like, but drive the behaviour
+under test with input events. A live test
 installs a gryphn-shaped follower and checks that `measure` reports its snap-back.
 
 ## Guard
@@ -312,12 +317,23 @@ tier fail. Output:
 
 ```
 scenarios on gryphn:
-  red (known)  drgnx-scenario/explorer-click-stays: the Explorer snapped back
-                 +14 ms  command:treemacs-leftclick-action  w3 point 36 → 11
-                 +196 ms  timer:gryphn-workspace--on-change  w3 point 17 → 36
-  green        drgnx-scenario/explorer-hold-no-drag
-scenario tier: as expected in 41.2s
+  red (known)  drgnx-scenario/explorer-click-stays: a single click on a folder must keep the selection on it; …
+                 +13 ms  command:treemacs-leftclick-action  w9 point 55 → 30
+                 +44 ms  command:mouse-set-point  w9 point 30 → 36
+                 +196 ms  timer:gryphn-workspace--on-change  w9 point 36 → 55
+  green        drgnx-scenario/explorer-follow-override
+  green        drgnx-scenario/frame-from-daemon-fast (median 431 ms <= budget 500 ms …)
+results: …/drgnx/ui/scenarios/gryphn.json
+scenario tier: as expected in 64.9s
 ```
+
+What can never pass as a known red: a measurement that did not settle within its timeout (an error that lists
+the last changes), a failed setup precondition (`drgnx-scenario-require`), an error of any kind, a failure of a
+bare `should` (only `drgnx-scenario-check` failures carry an explanation and trace), and for the frame scenario
+a frame that never appeared. Scenarios wait for 1 s of quiet (`drgnx-scenario-quiet`): configurations under test
+may follow up to ~0.7 s later. The last results of each configuration are kept in
+`$XDG_STATE_HOME/drgnx/ui/scenarios/<config>.json`. A configuration directory that does not exist fails the tier
+(exit 2); only a missing `gryphn` configuration is skipped.
 
 A suite with a `frames.eld` (`((budget-ms . 500) (frames . 3))`) also gets `drgnx-scenario/frame-from-daemon-fast`,
 run by the controller after the in-session suite: frames are opened in a daemon session of the configuration with
@@ -325,6 +341,7 @@ run by the controller after the in-session suite: frames are opened in a daemon 
 other scenario; when red, the first frame's slowest hooks are listed).
 
 Helpers (`harness/drgnx-scenario.el`): `drgnx-scenario-check OK EXPLANATION REPORT`,
+`drgnx-scenario-require OK WHAT`,
 `drgnx-scenario-expected 'NAME` (for `:expected-result`), `drgnx-scenario-with-fixture (ROOT [KIND])` (a fresh
 git repo, removed afterwards), `drgnx-scenario-load-driver`. The results file adds `tests` (every test with its
 result) and `known_red` (name, summary, trace) — see [scenarios.md](scenarios.md) for the scenarios themselves.

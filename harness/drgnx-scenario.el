@@ -57,10 +57,20 @@
            (append (plist-get report :trace) nil))))
 
 (defun drgnx-scenario-check (ok explanation report)
-  "Unless OK, fail the scenario with EXPLANATION and REPORT's trace.  Returns t."
+  "Unless OK, fail the scenario with EXPLANATION and REPORT's trace.  Returns t.
+A REPORT whose measurement did not settle is an error, never a (known) red: the scenario
+could not observe what it claims."
+  (when (eq (plist-get report :settled) :false)
+    (error "scenario did not settle within its timeout — cannot judge: %s; last changes: %s"
+           explanation (mapconcat #'identity (last (append (drgnx-scenario-trace-lines report) nil) 6) " | ")))
   (or (and ok t)
       (signal 'ert-test-failed
               (list (list :scenario explanation :trace (drgnx-scenario-trace-lines report))))))
+
+(defun drgnx-scenario-require (ok what)
+  "Unless OK, stop the scenario with an error: its setup did not produce WHAT.
+Setup failures are never (known) reds.  Returns t."
+  (or (and ok t) (error "scenario setup failed: expected %s" what)))
 
 ;;;; Fixtures
 

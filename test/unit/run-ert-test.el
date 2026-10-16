@@ -74,3 +74,12 @@
                      1))
           (should (= (plist-get (drgnx-run-ert-test--json results) :failed) 1)))
       (delete-directory tmp t))))
+
+(ert-deftest drgnx-run-ert/known-red-needs-a-scenario-check ()
+  (let* ((tmp (make-temp-file "drgnx-ert" t)) (results (expand-file-name "results.json" tmp))
+         (dir (expand-file-name "scenario-bare" drgnx-run-ert-test--fixtures)))
+    (unwind-protect
+        (should (= (drgnx-run-ert-test--batch dir results "DRGNX_SCENARIO_CONFIG=minimal"
+                                              (concat "DRGNX_UI_TEST=" dir))
+                   1))
+      (delete-directory tmp t))))

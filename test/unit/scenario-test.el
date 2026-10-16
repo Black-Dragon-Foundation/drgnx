@@ -34,3 +34,20 @@
       (should (file-exists-p (expand-file-name "src/app/main.py" root)))
       (should (file-directory-p (expand-file-name ".git" root))))
     (should-not (file-exists-p dir))))
+
+(ert-deftest drgnx-scenario/unsettled-measurement-is-an-error-not-a-red ()
+  (let ((err (should-error (drgnx-scenario-check nil "x" '(:settled :false :trace [])))))
+    (should-not (eq (car err) 'ert-test-failed))))
+
+(ert-deftest drgnx-scenario/require-is-an-error-not-a-red ()
+  (should (eq (drgnx-scenario-require t "fine") t))
+  (let ((err (should-error (drgnx-scenario-require nil "the Explorer shows the fixture"))))
+    (should-not (eq (car err) 'ert-test-failed))
+    (should (string-search "the Explorer shows the fixture" (error-message-string err)))))
+
+(ert-deftest drgnx-scenario/unsettled-error-shows-what-kept-changing ()
+  (let ((err (should-error (drgnx-scenario-check
+                            nil "x" '(:settled :false
+                                      :trace [(:t_ms 4900 :cause "timer:busy" :window "w1" :fields ["point"]
+                                               :from (:point 1) :to (:point 2))])))))
+    (should (string-search "+4900 ms  timer:busy  w1 point 1 → 2" (error-message-string err)))))

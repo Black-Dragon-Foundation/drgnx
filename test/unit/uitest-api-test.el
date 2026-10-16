@@ -19,3 +19,10 @@
   (let ((r (json-parse-string (drgnx-uitest-api-measure-end) :object-type 'plist)))
     (should (integerp (plist-get r :settle_ms)))
     (should (vectorp (plist-get r :guard)))))
+
+(ert-deftest drgnx-uitest/frame-hook-timing-is-removed-after-reading ()
+  (drgnx-uitest-api-time-frame-hooks)
+  (should (advice-member-p #'drgnx-uitest--time-run-hooks 'run-hooks))
+  (drgnx-uitest-api-frame-hook-times)
+  (should-not (advice-member-p #'drgnx-uitest--time-run-hooks 'run-hooks))
+  (should-not (advice-member-p 'drgnx-uitest-frame-time 'make-frame)))

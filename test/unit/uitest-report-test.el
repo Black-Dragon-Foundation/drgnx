@@ -66,3 +66,13 @@
          (r (drgnx-uitest-jank-report (list (list 1.1 'change "w1" a b)) 1.0 (list (cons "w1" a)) '("w1") 1.0)))
     (should (equal (plist-get (aref (plist-get r :trace) 0) :cause) "other"))
     (should (= (plist-get r :timer_moves) 0))))
+
+(ert-deftest drgnx-uitest/scroll-without-a-new-start-is-not-a-change ()
+  ;; window-scroll-functions also run when redisplay re-uses the same start; that must not
+  ;; count as a change (it kept busy configurations from ever settling).
+  (let ((drgnx-uitest-record--log nil) (drgnx-uitest-record--scroll-starts nil)
+        (drgnx-uitest-record--last-change 0.0) (w (selected-window)))
+    (drgnx-uitest-record--on-scroll w 1)
+    (drgnx-uitest-record--on-scroll w 1)
+    (drgnx-uitest-record--on-scroll w 9)
+    (should (= (length drgnx-uitest-record--log) 2))))

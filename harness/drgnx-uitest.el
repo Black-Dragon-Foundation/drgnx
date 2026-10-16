@@ -222,11 +222,11 @@ without input still gives followers and timers their chance)."
         (setcdr old nil)))))
 
 (defvar drgnx-uitest-record--command nil
-  "Cause string of the command running now (between pre- and post-command), or nil.")
+  "Cause string of the innermost command or timer running now, or nil.")
 
 (defun drgnx-uitest-record--ambient-cause ()
-  "Who changed things since the last snapshot when no timer claims it: the running
-command, else `other' (process output, redisplay, …)."
+  "Who changed things since the last snapshot: the innermost running command or timer,
+else `other' (process output, redisplay, …)."
   (or drgnx-uitest-record--command "other"))
 
 (defun drgnx-uitest-record--poll ()
@@ -254,12 +254,23 @@ is not."
     (if (memq fn drgnx-uitest-record--harness-timers)
         (funcall orig timer)
       (drgnx-uitest-record--snapshot (drgnx-uitest-record--ambient-cause))
-      (prog1 (let ((drgnx-uitest-record--command nil)) (funcall orig timer))
-        (drgnx-uitest-record--snapshot (concat "timer:" (drgnx-jank-guard--describe fn)))))))
+      (let ((cause (concat "timer:" (drgnx-jank-guard--describe fn))))
+        ;; While it runs, this timer is the ambient cause — timers nested inside it (during its
+        ;; sit-for) snapshot its changes under its name before running.
+        (prog1 (let ((drgnx-uitest-record--command cause)) (funcall orig timer))
+          (drgnx-uitest-record--snapshot cause))))))
+
+(defvar drgnx-uitest-record--scroll-starts nil "Alist window id → last start seen by the scroll hook.")
 
 (defun drgnx-uitest-record--on-scroll (window start)
-  (push (list (float-time) 'scroll (drgnx-uitest-window-id window) start) drgnx-uitest-record--log)
-  (setq drgnx-uitest-record--last-change (float-time)))
+  "Record a scroll — only if WINDOW's start really changed: redisplay also runs
+`window-scroll-functions' with an unchanged start, which must not count as a change."
+  (let* ((id (drgnx-uitest-window-id window))
+         (seen (assoc id drgnx-uitest-record--scroll-starts)))
+    (unless (and seen (eql (cdr seen) start))
+      (if seen (setcdr seen start) (push (cons id start) drgnx-uitest-record--scroll-starts))
+      (push (list (float-time) 'scroll id start) drgnx-uitest-record--log)
+      (setq drgnx-uitest-record--last-change (float-time)))))
 
 (defun drgnx-uitest-record--on-redisplay (_window)
   (cl-incf drgnx-uitest-record--redisplays))
@@ -340,6 +351,7 @@ aimed at (their changes are not collateral), LAST-INPUT the time of the last eve
   "Start recording visible changes for a jank report."
   (setq drgnx-uitest--targets nil
         drgnx-uitest-record--log nil
+        drgnx-uitest-record--scroll-starts nil
         drgnx-uitest-record--t0 (float-time)
         drgnx-uitest-record--last-change 0.0
         drgnx-uitest-record--redisplays 0
@@ -541,8 +553,19 @@ and `make-frame' itself.  Resets earlier times."
     (advice-add runner :around #'drgnx-uitest--time-run-hooks))
   (drgnx-uitest--json (list :ok t)))
 
+(defun drgnx-uitest--untime-frame-hooks ()
+  "Remove every timing advice `drgnx-uitest-api-time-frame-hooks' added."
+  (dolist (hook drgnx-uitest--frame-hooks)
+    (dolist (fn (and (boundp hook) (ensure-list (default-value hook))))
+      (when (and (symbolp fn) (fboundp fn)) (advice-remove fn 'drgnx-uitest-frame-time))))
+  (advice-remove 'make-frame 'drgnx-uitest-frame-time)
+  (dolist (runner '(run-hooks run-hook-with-args))
+    (advice-remove runner #'drgnx-uitest--time-run-hooks)))
+
 (defun drgnx-uitest-api-frame-hook-times ()
-  "The slowest timed items since `drgnx-uitest-api-time-frame-hooks' (≤ 10), as JSON."
+  "The slowest timed items since `drgnx-uitest-api-time-frame-hooks' (≤ 10), as JSON.
+Removes the timing advice: it must not stay and slow down what is measured later."
+  (drgnx-uitest--untime-frame-hooks)
   (let ((top (seq-take (sort (copy-sequence drgnx-uitest--frame-times) (lambda (a b) (> (cdr a) (cdr b)))) 10)))
     (drgnx-uitest--json
      (list :hooks (vconcat (mapcar (lambda (c) (list :name (car c) :ms (cdr c))) top))))))

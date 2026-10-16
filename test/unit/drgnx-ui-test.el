@@ -211,3 +211,20 @@
 
 (ert-deftest drgnx-ui/config-drgnx-is-the-checkouts-init ()
   (should (equal (drgnx-ui-resolve-config "drgnx") (expand-file-name "init" drgnx-ui-repo-dir))))
+
+(ert-deftest drgnx-ui/frame-outcome ()
+  (should (eq (car (drgnx-ui--frame-outcome '(100 200 300) '(0 0 0) 500 nil)) 'green))
+  (should (eq (car (drgnx-ui--frame-outcome '(600 700 800) '(0 0 0) 500 t)) 'known))
+  (should (eq (car (drgnx-ui--frame-outcome '(600 700 800) '(0 0 0) 500 nil)) 'red))
+  (should (eq (car (drgnx-ui--frame-outcome '(100 200 300) '(0 0 0) 500 t)) 'red))        ; known red that passes
+  (should (eq (car (drgnx-ui--frame-outcome '(:null :null :null) '(0 0 0) 500 t)) 'error)) ; never visible
+  (should (eq (car (drgnx-ui--frame-outcome '(100 200 300) '(0 1 0) 500 nil)) 'error))) ; emacsclient failed
+
+(ert-deftest drgnx-ui/mistyped-scenario-config-fails ()
+  (let ((out (with-output-to-string
+               (should (= (drgnx-ui-run-scenarios "/no/such/config/dir") 2)))))
+    (should (string-search "no init.el" out))))
+
+(ert-deftest drgnx-ui/missing-gryphn-config-skips ()
+  (let ((process-environment (cons "DRGNX_GRYPHN_CONFIG=/no/such/gryphn" process-environment)))
+    (should (= (drgnx-ui-run-scenarios "gryphn") 0))))

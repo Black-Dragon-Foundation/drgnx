@@ -18,17 +18,6 @@
        (drgnx-uitest-run nil)
        ,@body)))
 
-(defun drgnx-scn--panel-top-buffer (w)
-  "The buffer of the first Buffers-panel row at or after WINDOW-START of W."
-  (with-current-buffer (window-buffer w)
-    (save-excursion
-      (goto-char (window-start w))
-      (let (b)
-        (while (and (not b) (not (eobp)))
-          (setq b (car (get-text-property (point) 'ibuffer-properties)))
-          (forward-line 1))
-        b))))
-
 (ert-deftest drgnx-scenario/buffers-header-survives-refresh ()
   "The Buffers panel shows its header line, and keeps it while buffers come and go."
   :expected-result (drgnx-scenario-expected 'drgnx-scenario/buffers-header-survives-refresh)
@@ -68,10 +57,11 @@
       (with-current-buffer (window-buffer w)
         (set-window-start w (save-excursion (goto-char (point-min)) (forward-line 15) (point))))
       (redisplay t)
-      (let ((top0 (drgnx-scn--panel-top-buffer w)))
+      (let ((top0 (drgnx-driver-buffers-top-row)))
+        (drgnx-scenario-require (buffer-live-p top0) "a buffer on the scrolled panel's top row")
         (drgnx-driver-open-file (expand-file-name "README.md" root))
         (let* ((r (drgnx-uitest-run nil))
-               (top (drgnx-scn--panel-top-buffer (drgnx-driver-buffers-window))))
+               (top (drgnx-driver-buffers-top-row)))
           (drgnx-scenario-check (eq top top0)
                                 (format "the panel's view must stay where the user scrolled it: top row was %s, now %s"
                                         (and top0 (buffer-name top0)) (and top (buffer-name top)))

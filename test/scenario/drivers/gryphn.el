@@ -6,6 +6,25 @@
 (require 'drgnx-uitest)
 
 (defconst drgnx-driver-focus-explorer-keys "C-S-e" "Keys that focus the Explorer.")
+(defconst drgnx-driver-explorer-target "treemacs-mode"
+  "How `drgnx-uitest-target-xy' finds the Explorer window (buffer name or major mode).")
+
+(defun drgnx-driver-explorer-collapse (text)
+  "Collapse the Explorer folder whose row shows TEXT (setup, not under test)."
+  (with-selected-window (drgnx-driver-explorer-window)
+    (goto-char (point-min)) (search-forward text) (treemacs-TAB-action)))
+
+(defun drgnx-driver-buffers-top-row ()
+  "The buffer listed on the first visible row of the Buffers panel, or nil."
+  (let ((w (drgnx-driver-buffers-window)))
+    (with-current-buffer (window-buffer w)
+      (save-excursion
+        (goto-char (window-start w))
+        (let (b)
+          (while (and (not b) (not (eobp)))
+            (setq b (car (get-text-property (point) 'ibuffer-properties)))
+            (forward-line 1))
+          b)))))
 
 (defun drgnx-driver-reset ()
   "A clean layout: sidebar hidden, one editor window."

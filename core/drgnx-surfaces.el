@@ -19,8 +19,9 @@
 ;;;; Keys and running
 
 (defun drgnx-surfaces-key (cmd)
-  "Display string for CMD's key, scoped keys suffixed with their keymap; \"\" if none."
-  (let ((key (drgnx-cmd-key cmd)))
+  "Display string for CMD's key (or its documented `:native' key), scoped keys suffixed with
+their keymap; \"\" if none."
+  (let ((key (or (drgnx-cmd-key cmd) (and (stringp (drgnx-cmd-native cmd)) (drgnx-cmd-native cmd)))))
     (if (not key) ""
       (let ((mapsym (cdr (drgnx-commands--keymap-spec (drgnx-cmd-map cmd)))))
         (if (eq mapsym 'global-map) key

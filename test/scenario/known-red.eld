@@ -5,6 +5,7 @@
   drgnx-scenario/explorer-expand-stays
   drgnx-scenario/explorer-hold-is-a-click
   drgnx-scenario/explorer-keys-stay
+  drgnx-scenario/explorer-keys-during-churn
   drgnx-scenario/explorer-keys-then-background-event
   drgnx-scenario/explorer-cross-project-keeps-root
   drgnx-scenario/buffers-header-survives-refresh
