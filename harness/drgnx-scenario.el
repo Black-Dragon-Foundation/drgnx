@@ -1,0 +1,116 @@
+;;; drgnx-scenario.el --- Scenario tests: known reds, traces, fixtures, drivers -*- lexical-binding: t -*-
+
+;; SPDX-License-Identifier: GPL-3.0-or-later
+
+;;; Commentary:
+;; Scenarios are ERT tests (named drgnx-scenario/…) that state how the UI should behave and
+;; run inside a harness session of some configuration (`drgnx test --scenario --config C').
+;; A scenario known to fail on a configuration is listed in the suite's known-red.eld; it is
+;; then an expected failure — but only if it fails an assertion made with
+;; `drgnx-scenario-check', which carries the jank report's trace, so every known red explains
+;; itself.  Configuration specifics (how to open the Explorer, …) live in drivers/<config>.el.
+;; See docs/scenarios.md.
+
+;;; Code:
+(require 'cl-lib)
+(require 'ert)
+(require 'subr-x)
+
+(defun drgnx-scenario-config ()
+  "Name of the configuration the scenarios run against (a symbol)."
+  (intern (or (getenv "DRGNX_SCENARIO_CONFIG") "minimal")))
+
+(defun drgnx-scenario-suite-dir ()
+  (file-name-as-directory (or (getenv "DRGNX_UI_TEST") default-directory)))
+
+(defun drgnx-scenario--known-red-table ()
+  (let ((file (expand-file-name "known-red.eld" (drgnx-scenario-suite-dir))))
+    (and (file-exists-p file)
+         (with-temp-buffer (insert-file-contents file) (read (current-buffer))))))
+
+(defun drgnx-scenario-known-red-p (test &optional config)
+  "Non-nil if TEST (a symbol) is listed as known red for CONFIG (default: the current one)."
+  (memq test (cdr (assq (or config (drgnx-scenario-config)) (drgnx-scenario--known-red-table)))))
+
+(defun drgnx-scenario-expected (test)
+  "The ERT expected result for TEST on the current configuration: `:failed' if known red."
+  (if (drgnx-scenario-known-red-p test) :failed :passed))
+
+;;;; Assertions with traces
+
+(defun drgnx-scenario--value (v)
+  (if (vectorp v) (mapconcat (lambda (x) (format "%s" x)) v ",") (format "%s" v)))
+
+(defun drgnx-scenario-trace-lines (report)
+  "REPORT's trace as readable lines: \"+196 ms  timer:follow  w3 point 17 → 36\"."
+  (vconcat
+   (mapcar (lambda (step)
+             (let ((from (plist-get step :from)) (to (plist-get step :to)))
+               (format "+%d ms  %s  %s %s" (plist-get step :t_ms) (plist-get step :cause) (plist-get step :window)
+                       (if from
+                           (mapconcat (lambda (f)
+                                        (let ((k (intern (concat ":" f))))
+                                          (format "%s %s → %s" f (drgnx-scenario--value (plist-get from k))
+                                                  (drgnx-scenario--value (plist-get to k)))))
+                                      (append (plist-get step :fields) nil) ", ")
+                         (mapconcat #'identity (append (plist-get step :fields) nil) ",")))))
+           (append (plist-get report :trace) nil))))
+
+(defun drgnx-scenario-check (ok explanation report)
+  "Unless OK, fail the scenario with EXPLANATION and REPORT's trace.  Returns t."
+  (or (and ok t)
+      (signal 'ert-test-failed
+              (list (list :scenario explanation :trace (drgnx-scenario-trace-lines report))))))
+
+;;;; Fixtures
+
+(defun drgnx-scenario--write (root file text)
+  (let ((path (expand-file-name file root)))
+    (make-directory (file-name-directory path) t)
+    (write-region text nil path nil 'silent)))
+
+(defun drgnx-scenario-fixture (&optional kind)
+  "A fresh git repository in a temp directory; return its root (no trailing slash).
+KIND `basic' (default): README.md, docs/guide.md, src/app/{main,util}.py, tests/test_main.py.
+KIND `second': another small project, for cross-project scenarios."
+  (let ((root (make-temp-file (format "drgnx-fixture-%s-" (or kind 'basic)) t)))
+    (pcase (or kind 'basic)
+      ('basic
+       (drgnx-scenario--write root "README.md" "# Fixture\n")
+       (drgnx-scenario--write root "docs/guide.md" "notes\n")
+       (drgnx-scenario--write root "src/app/main.py" "print(\"hi\")\n")
+       (drgnx-scenario--write root "src/app/util.py" "x = 1\n")
+       (drgnx-scenario--write root "tests/test_main.py" "def test(): pass\n"))
+      ('second
+       (drgnx-scenario--write root "README.md" "# Second\n")
+       (drgnx-scenario--write root "lib/other.py" "y = 2\n")))
+    (let ((default-directory (file-name-as-directory root)))
+      (call-process "git" nil nil nil "init" "-q")
+      (call-process "git" nil nil nil "add" "-A")
+      (call-process "git" nil nil nil "-c" "user.email=fixture@drgnx" "-c" "user.name=fixture"
+                    "commit" "-qm" "fixture"))
+    root))
+
+(defmacro drgnx-scenario-with-fixture (spec &rest body)
+  "SPEC is (VAR [KIND]): bind VAR to a fresh fixture repo for BODY, then delete it."
+  (declare (indent 1))
+  `(let ((,(car spec) (drgnx-scenario-fixture ,(cadr spec))))
+     (unwind-protect (progn ,@body)
+       (dolist (b (buffer-list))
+         (let ((f (buffer-file-name b)))
+           (when (and f (string-prefix-p (file-name-as-directory ,(car spec)) f))
+             (with-current-buffer b (set-buffer-modified-p nil))
+             (kill-buffer b))))
+       (delete-directory ,(car spec) t))))
+
+;;;; Drivers
+
+(defun drgnx-scenario-load-driver ()
+  "Load drivers/<config>.el of the suite; skip the scenario if the configuration has none."
+  (let ((file (expand-file-name (format "drivers/%s.el" (drgnx-scenario-config)) (drgnx-scenario-suite-dir))))
+    (if (file-exists-p file)
+        (load file nil t)
+      (ert-skip (format "no scenario driver for configuration %s" (drgnx-scenario-config))))))
+
+(provide 'drgnx-scenario)
+;;; drgnx-scenario.el ends here

@@ -6,11 +6,12 @@
 (defconst drgnx-run-ert-test--fixtures
   (expand-file-name "../fixtures/" (file-name-directory (or load-file-name buffer-file-name))))
 
-(defun drgnx-run-ert-test--batch (dir results)
-  "Run the suite in DIR in a fresh batch Emacs; return its exit code."
-  (let ((process-environment (cons (concat "DRGNX_TEST_RESULTS=" results) process-environment)))
+(defun drgnx-run-ert-test--batch (dir results &rest env)
+  "Run the suite in DIR in a fresh batch Emacs (harness on the load path); return its exit code."
+  (let ((process-environment (append (cons (concat "DRGNX_TEST_RESULTS=" results) env) process-environment)))
     (call-process (expand-file-name invocation-name invocation-directory) nil nil nil
-                  "--batch" "-Q" "-l" (locate-library "run-ert.el") "-f" "drgnx-run-ert-batch" dir)))
+                  "--batch" "-Q" "-L" (file-name-directory (locate-library "run-ert.el"))
+                  "-l" (locate-library "run-ert.el") "-f" "drgnx-run-ert-batch" dir)))
 
 (defun drgnx-run-ert-test--json (file)
   (json-parse-string (with-temp-buffer (insert-file-contents file) (buffer-string)) :object-type 'plist))
@@ -44,4 +45,32 @@
         (progn
           (drgnx-run-ert-test--batch "ert-mixed" results)
           (should (= (plist-get (drgnx-run-ert-test--json results) :total) 2)))
+      (delete-directory tmp t))))
+
+(ert-deftest drgnx-run-ert/known-red-assertion-is-expected-with-its-trace ()
+  (let* ((tmp (make-temp-file "drgnx-ert" t)) (results (expand-file-name "results.json" tmp))
+         (dir (expand-file-name "scenario-ok" drgnx-run-ert-test--fixtures)))
+    (unwind-protect
+        (progn
+          (should (= (drgnx-run-ert-test--batch dir results "DRGNX_SCENARIO_CONFIG=minimal"
+                                                (concat "DRGNX_UI_TEST=" dir))
+                     0))
+          (let* ((r (drgnx-run-ert-test--json results))
+                 (red (aref (plist-get r :known_red) 0)))
+            (should (= (plist-get r :failed) 0))
+            (should (equal (plist-get red :name) "drgnx-fixture/known-red-assertion"))
+            (should (equal (plist-get red :summary) "the Explorer snapped back"))
+            (should (equal (aref (plist-get red :trace) 0) "+196 ms  timer:follow  w3 point 17 → 36"))
+            (should (= (length (plist-get r :tests)) 2))))
+      (delete-directory tmp t))))
+
+(ert-deftest drgnx-run-ert/known-red-error-is-unexpected ()
+  (let* ((tmp (make-temp-file "drgnx-ert" t)) (results (expand-file-name "results.json" tmp))
+         (dir (expand-file-name "scenario-error" drgnx-run-ert-test--fixtures)))
+    (unwind-protect
+        (progn
+          (should (= (drgnx-run-ert-test--batch dir results "DRGNX_SCENARIO_CONFIG=minimal"
+                                                (concat "DRGNX_UI_TEST=" dir))
+                     1))
+          (should (= (plist-get (drgnx-run-ert-test--json results) :failed) 1)))
       (delete-directory tmp t))))

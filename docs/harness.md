@@ -10,6 +10,7 @@ and [ADR 0004](decisions/0004-headless-ui-harness.md)).
 | Command | What runs | Where |
 |---|---|---|
 | `bin/drgnx test` | ERT suites in `test/unit/` (batch Emacs) | the host |
+| `bin/drgnx test --scenario [--config C]` | behaviour scenarios in `test/scenario/` inside a session of configuration C (default `drgnx`; `gryphn` is skipped where that config is absent) | the host (needs mutter) |
 | `bin/drgnx test --container` | the batch tier in a `fedora:45` container (Emacs 31.1, drgnx's baseline) | podman, docker or nerdctl |
 | `bin/drgnx test --container --ui` | the GUI tier in a container (mutter renders without a GPU) | podman, docker or nerdctl |
 | `bin/drgnx test --ui` | GUI ERT suites in `test/ui/` inside a headless session, then live ERT suites in `test/live/` (batch Emacs starting real sessions) | the host (needs mutter) |
@@ -291,3 +292,30 @@ results with `isError`, never a crashed server. `harness/drgnx-ui-mcp.el` also h
 - Wayland via mutter only; X11 (Xvfb) and tiling WMs (sway headless) come later. macOS needs a different capture
   backend (`x-export-frames` exists only on Cairo builds).
 - A GUI run's exit status is only pass/fail (mutter); `results.json` has the details.
+
+## Scenario tier
+
+Scenarios are ERT tests named `drgnx-scenario/…` in `test/scenario/` that state how the UI should behave (VS
+Code's behaviour is the reference) and run inside a session of the configuration under test. They use only the
+harness API and a per-configuration **driver** (`test/scenario/drivers/<config>.el`: how to open the Explorer,
+open a file, find a row, …); a configuration without a driver skips them.
+
+**Known reds.** `test/scenario/known-red.eld` lists, per configuration, scenarios expected to fail
+(`((gryphn drgnx-scenario/explorer-click-stays …))`). Such a scenario counts as expected only if it fails an
+assertion made with `drgnx-scenario-check`, which carries the jank report's trace — so every known red explains
+itself. A known red that *errors* (missing fixture, broken driver, timeout) or unexpectedly *passes* makes the
+tier fail. Output:
+
+```
+scenarios on gryphn:
+  red (known)  drgnx-scenario/explorer-click-stays: the Explorer snapped back
+                 +14 ms  command:treemacs-leftclick-action  w3 point 36 → 11
+                 +196 ms  timer:gryphn-workspace--on-change  w3 point 17 → 36
+  green        drgnx-scenario/explorer-hold-no-drag
+scenario tier: as expected in 41.2s
+```
+
+Helpers (`harness/drgnx-scenario.el`): `drgnx-scenario-check OK EXPLANATION REPORT`,
+`drgnx-scenario-expected 'NAME` (for `:expected-result`), `drgnx-scenario-with-fixture (ROOT [KIND])` (a fresh
+git repo, removed afterwards), `drgnx-scenario-load-driver`. The results file adds `tests` (every test with its
+result) and `known_red` (name, summary, trace) — see [scenarios.md](scenarios.md) for the scenarios themselves.

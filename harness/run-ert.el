@@ -19,23 +19,48 @@ Return t if every test passed."
                    when err collect (list :name (concat "load " (file-name-nondirectory file))
                                           :condition (format "%S" err))))
          (stats (ert-run-tests-batch t))
-         (failures
-          (cl-loop for test across (ert--stats-tests stats)
-                   for result = (ert-test-most-recent-result test)
-                   unless (ert-test-result-expected-p test result)
-                   collect (list :name (symbol-name (ert-test-name test))
-                                 :condition
-                                 (if (ert-test-result-with-condition-p result)
-                                     (format "%S" (ert-test-result-with-condition-condition result))
-                                   "unexpected result"))))
-         (failures (append load-failures failures)))
+         (tests nil) (known-red nil) (failures nil))
+    (cl-loop
+     for test across (ert--stats-tests stats)
+     for name = (symbol-name (ert-test-name test))
+     for result = (ert-test-most-recent-result test)
+     for expected = (ert-test-result-expected-p test result)
+     for condition = (and (ert-test-result-with-condition-p result)
+                          (ert-test-result-with-condition-condition result))
+     do
+     (push (list :name name
+                 :result (cond ((ert-test-passed-p result) "passed")
+                               ((ert-test-skipped-p result) "skipped")
+                               (t "failed"))
+                 :expected (if expected t :false))
+           tests)
+     (cond
+      ((not expected)
+       (push (list :name name :condition (if condition (format "%S" condition) "unexpected result")) failures))
+      ((ert-test-failed-p result)
+       ;; An expected failure (a known red) counts only if it failed an assertion; an error
+       ;; (missing fixture, broken driver, timeout) is never acceptable.
+       (if (eq (car condition) 'ert-test-failed)
+           (let ((data (cadr condition)))
+             (push (list :name name
+                         :summary (or (ignore-errors (plist-get data :scenario)) (format "%S" data))
+                         :trace (or (ignore-errors (plist-get data :trace)) []))
+                   known-red))
+         (push (list :name name :condition (format "known red, but it errored: %S" condition)) failures)))))
+    (setq failures (append load-failures (nreverse failures)))
     (when results-file
-      (with-temp-file results-file
-        (insert (json-serialize
-                 (list :total (+ (ert-stats-total stats) (length load-failures))
-                       :passed (ert-stats-completed-expected stats)
-                       :failed (length failures)
-                       :failures (vconcat failures))))))
+      (let ((coding-system-for-write 'utf-8-unix))
+        (write-region
+         (decode-coding-string
+          (json-serialize
+           (list :total (+ (ert-stats-total stats) (length load-failures))
+                 :passed (ert-stats-completed-expected stats)
+                 :failed (length failures)
+                 :failures (vconcat failures)
+                 :known_red (vconcat (nreverse known-red))
+                 :tests (vconcat (nreverse tests))))
+          'utf-8)
+         nil results-file nil 'silent)))
     (null failures)))
 
 (defun drgnx-run-ert-batch ()

@@ -570,15 +570,17 @@ functions and hook totals measured in the session."
     (when (drgnx-ui--group-ours-p pgid run)
       (drgnx-ui--run "kill" "-KILL" "--" (concat "-" pgid)))))
 
-(defun drgnx-ui-run-ert-session (tests-dir &optional timeout)
-  "Run the ERT suite in TESTS-DIR inside a foreground session.  Return (RC RESULTS RUN)."
+(defun drgnx-ui-run-ert-session (tests-dir &optional timeout config extra-env)
+  "Run the ERT suite in TESTS-DIR inside a foreground session of CONFIG (default minimal),
+with EXTRA-ENV (\"K=V\" strings).  Return (RC RESULTS RUN)."
   (let* ((name (format "drgnx-ui-test-%d-%d" (emacs-pid) (random 100000)))
-         (sess (drgnx-ui-prepare-run name nil "1600x900"))
+         (sess (drgnx-ui-prepare-run name config "1600x900"))
          (run (plist-get sess :run))
          (results (expand-file-name "results.json" run))
          (pgid-file (expand-file-name "pgid" run))
-         (env (drgnx-ui-session-env sess (list (concat "DRGNX_UI_TEST=" (expand-file-name tests-dir))
-                                               (concat "DRGNX_UI_RESULTS=" results))))
+         (env (drgnx-ui-session-env sess (append (list (concat "DRGNX_UI_TEST=" (expand-file-name tests-dir))
+                                                       (concat "DRGNX_UI_RESULTS=" results))
+                                                 extra-env)))
          (cmd (mapconcat #'shell-quote-argument
                          (append (drgnx-ui-env-argv env) (drgnx-ui-compositor-argv sess)) " "))
          (r (drgnx-ui--run-with-timeout
@@ -612,6 +614,49 @@ functions and hook totals measured in the session."
     (setq ok (and (drgnx-run-ert (expand-file-name "test/live" drgnx-ui-repo-dir)) ok))
     (princ (format "ui tier: %s in %.1fs\n" (if ok "green" "RED") (- (float-time) t0)))
     (if ok 0 1)))
+
+(defun drgnx-ui--config-name (config)
+  "Scenario name of CONFIG: minimal, gryphn, drgnx, or a directory's base name."
+  (if (member config '("minimal" "gryphn" "drgnx")) config
+    (file-name-nondirectory (directory-file-name config))))
+
+(defun drgnx-ui-run-scenarios (&optional config dir)
+  "`drgnx test --scenario': run the scenario suite DIR (default test/scenario) in a session of
+CONFIG (default drgnx) and print each scenario: green, red (known) with its trace, RED
+(unexpected) or skipped.  Return an exit code: 0 unless a result was unexpected."
+  (require 'drgnx-run-ert (expand-file-name "run-ert.el" drgnx-ui-harness-dir))
+  (let ((config (or config "drgnx"))
+        (dir (expand-file-name (or dir "test/scenario") drgnx-ui-repo-dir))
+        (t0 (float-time)))
+    (if (not (ignore-errors (or (member config '("minimal")) (drgnx-ui-resolve-config config))))
+        (progn (princ (format "scenarios: configuration %s is not available here; skipped\n" config)) 0)
+      (pcase-let ((`(,rc ,results ,run)
+                   (drgnx-ui-run-ert-session
+                    dir (string-to-number (or (getenv "DRGNX_SCENARIO_TIMEOUT") "300")) config
+                    (list (concat "DRGNX_SCENARIO_CONFIG=" (drgnx-ui--config-name config))))))
+        (if (not results)
+            (progn (princ (format "scenarios (%s): no results (exit %s); log kept in %s\n" config rc run)) 1)
+          (let ((reds (append (plist-get results :known_red) nil))
+                (fails (append (plist-get results :failures) nil)))
+            (princ (format "scenarios on %s:\n" config))
+            (seq-doseq (test (plist-get results :tests))
+              (let* ((name (plist-get test :name))
+                     (red (seq-find (lambda (r) (equal (plist-get r :name) name)) reds))
+                     (fail (seq-find (lambda (f) (equal (plist-get f :name) name)) fails)))
+                (cond
+                 (fail (princ (format "  RED          %s: %s\n" name (plist-get fail :condition))))
+                 (red (princ (format "  red (known)  %s: %s\n" name (plist-get red :summary)))
+                      (seq-doseq (line (plist-get red :trace)) (princ (format "                 %s\n" line))))
+                 ((equal (plist-get test :result) "skipped") (princ (format "  skipped      %s\n" name)))
+                 (t (princ (format "  green        %s\n" name))))))
+            (dolist (f fails)                    ; load failures have no test entry
+              (when (string-prefix-p "load " (plist-get f :name))
+                (princ (format "  RED          %s: %s\n" (plist-get f :name) (plist-get f :condition)))))
+            (let ((ok (and (eq rc 0) (null fails))))
+              (when ok (delete-directory run t))
+              (princ (format "scenario tier: %s in %.1fs\n" (if ok "as expected" "UNEXPECTED RESULTS")
+                             (- (float-time) t0)))
+              (if ok 0 1))))))))
 
 ;;;; Command line
 
@@ -671,6 +716,7 @@ a boolean flag (`drgnx-ui--boolean-flags') becomes :name t."
       ("measure" (drgnx-ui-measure (drgnx-ui-own-session name)
                                    (append (drgnx-ui--parse-json (or (nth 1 pos) "[]")) nil)))
       ("test-ui" (drgnx-ui-run-ui-tests))
+      ("test-scenario" (drgnx-ui-run-scenarios (plist-get opts :config) (plist-get opts :dir)))
       ("mcp" (require 'drgnx-ui-mcp) (drgnx-ui-mcp-main))
       (_ (drgnx-ui--fail "unknown command %S\n%s" cmd drgnx-ui-usage)))))
 
