@@ -266,5 +266,113 @@ with redisplay between them, while the test waits.  The plist has :settled."
       (cancel-timer watch))
     (append (list :settled (if settled t :false)) (drgnx-uitest-measure-end))))
 
+;;;; Capture
+
+(defun drgnx-uitest-child-frames (frame)
+  "Visible child frames of FRAME (posframes, popups)."
+  (cl-remove-if-not (lambda (c) (and (eq (frame-parent c) frame) (frame-visible-p c))) (frame-list)))
+
+(defun drgnx-uitest--export (frame file)
+  "Write FRAME as a PNG to FILE without touching the echo area."
+  (let ((coding-system-for-write 'binary))
+    (with-temp-buffer
+      (set-buffer-multibyte nil)
+      (insert (x-export-frames frame 'png))
+      (write-region nil nil file nil 'silent))))
+
+(defun drgnx-uitest-capture (dir)
+  "Export the root frame and its visible child frames as PNGs into DIR.
+`x-export-frames' cannot put several frames in one PNG, so each child comes with its
+offset (parent-relative native edges) for compositing."
+  (redisplay t)
+  (make-directory dir t)
+  (let* ((f (drgnx-uitest-root-frame))
+         (root (expand-file-name "root.png" dir))
+         (i -1))
+    (drgnx-uitest--export f root)
+    (list :root root :width (frame-pixel-width f) :height (frame-pixel-height f)
+          :children (vconcat
+                     (mapcar (lambda (c)
+                               (let ((file (expand-file-name (format "child-%d.png" (cl-incf i)) dir))
+                                     (e (frame-edges c 'native-edges)))
+                                 (drgnx-uitest--export c file)
+                                 (list :path file :x (nth 0 e) :y (nth 1 e))))
+                             (drgnx-uitest-child-frames f))))))
+
+;;;; JSON API (for emacsclient; see harness/drgnx_ui.py)
+
+(defun drgnx-uitest--json (plist) (json-serialize plist))
+
+(defun drgnx-uitest--window-info (w)
+  (with-current-buffer (window-buffer w)
+    (list :id (drgnx-uitest-window-id w) :buffer (buffer-name) :mode (symbol-name major-mode)
+          :edges (vconcat (window-pixel-edges w)) :body (vconcat (window-body-pixel-edges w))
+          :start (window-start w) :point (window-point w)
+          :line (line-number-at-pos (window-point w))
+          :header_h (window-header-line-height w) :mode_line_h (window-mode-line-height w)
+          :selected (if (eq w (frame-selected-window (window-frame w))) t :false))))
+
+(defun drgnx-uitest--windows ()
+  (vconcat (mapcar #'drgnx-uitest--window-info (window-list (drgnx-uitest-root-frame) 'nomini))))
+
+(defun drgnx-uitest-api-state ()
+  "Frame, windows, minibuffer, child frames and busy flag, as JSON."
+  (let ((f (drgnx-uitest-root-frame)))
+    (drgnx-uitest--json
+     (list :frame (list :width (frame-pixel-width f) :height (frame-pixel-height f))
+           :windows (drgnx-uitest--windows)
+           :minibuffer_h (window-pixel-height (minibuffer-window f))
+           :children (vconcat (mapcar (lambda (c) (vconcat (frame-edges c 'native-edges)))
+                                      (drgnx-uitest-child-frames f)))
+           :busy (if (drgnx-uitest-busy-p) t :false)))))
+
+(defun drgnx-uitest-api-screenshot (dir)
+  "Capture into DIR; JSON with file paths, child offsets and the window map."
+  (drgnx-uitest--json (append (drgnx-uitest-capture dir) (list :windows (drgnx-uitest--windows)))))
+
+(defun drgnx-uitest-api-click (x y &optional button count hold-ms)
+  "Queue a click at root-frame pixel X, Y."
+  (let* ((posn (drgnx-uitest-posn x y))
+         (w (posn-window posn)))
+    (drgnx-uitest--note-target w)
+    (drgnx-uitest-enqueue (drgnx-uitest-click-events posn (or button 1) (or count 1)
+                                                     (and hold-ms (/ hold-ms 1000.0))))
+    (drgnx-uitest--json (list :x x :y y :window (if (windowp w) (drgnx-uitest-window-id w) :null)))))
+
+(defun drgnx-uitest-api-click-target (buffer text &optional button count hold-ms)
+  "Queue a click on the first visible TEXT in the window showing BUFFER."
+  (let ((xy (drgnx-uitest-target-xy buffer text)))
+    (drgnx-uitest-api-click (car xy) (cdr xy) button count hold-ms)))
+
+(defun drgnx-uitest-api-keys (keys)
+  "Queue KEYS (`kbd' syntax)."
+  (drgnx-uitest--json (list :queued (drgnx-uitest-enqueue (drgnx-uitest-key-events keys)))))
+
+(defun drgnx-uitest-api-type (text)
+  "Queue typing TEXT."
+  (drgnx-uitest--json (list :queued (drgnx-uitest-enqueue (drgnx-uitest-type-events text)))))
+
+(defun drgnx-uitest-api-status (&optional quiet-ms)
+  "Busy and settled flags, as JSON."
+  (drgnx-uitest--json
+   (list :busy (if (drgnx-uitest-busy-p) t :false)
+         :settled (if (drgnx-uitest-settled-p (and quiet-ms (/ quiet-ms 1000.0))) t :false))))
+
+(defun drgnx-uitest-api-measure-begin ()
+  "Start a measurement."
+  (drgnx-uitest-measure-begin)
+  (drgnx-uitest--json (list :ok t)))
+
+(defun drgnx-uitest-api-measure-end ()
+  "End the measurement; the jank report as JSON."
+  (let ((r (drgnx-uitest-measure-end)))
+    (drgnx-uitest--json
+     (plist-put r :guard
+                (vconcat (mapcar (lambda (g) (list :time (plist-get g :time)
+                                                   :fn (symbol-name (plist-get g :fn))
+                                                   :window (plist-get g :window)
+                                                   :timer (plist-get g :timer)))
+                                 (plist-get r :guard)))))))
+
 (provide 'drgnx-uitest)
 ;;; drgnx-uitest.el ends here

@@ -111,3 +111,29 @@ timer, a test's `drgnx-uitest-run`) are not timer code, so `command-execute` cle
 `select-window` with NORECORD (what `with-selected-window` does) is a temporary selection and is not
 recorded. Each entry names the function, the window and the timer's function. Hook context (e.g.
 `buffer-list-update-hook`) is covered by the workbench change bus in M3.
+
+## Capture
+
+`(drgnx-uitest-capture DIR)` exports the root frame with `x-export-frames` (~30 ms for 1600×900) and each
+visible child frame (posframes, popups) separately — `x-export-frames` cannot put several frames in one PNG —
+together with each child's parent-relative `native-edges` offset. The CLI/MCP layer composites them with
+ImageMagick (`magick root.png child.png -geometry +X+Y -composite out.png`), which is pixel-exact. Capture
+writes with `write-region … 'silent`, so it never puts a message into the screenshot's echo area. The PNG
+covers Emacs' drawing area only (no GTK menu or tool bar).
+
+## Emacs-side API
+
+Functions the CLI and MCP server call through `emacsclient -s <session socket> -e`; each returns JSON text:
+
+| Function | Returns |
+|---|---|
+| `(drgnx-uitest-api-state)` | `frame {width,height}`, `windows [{id,buffer,mode,edges,body,start,point,line,header_h,mode_line_h,selected}]`, `minibuffer_h`, `children [[l,t,r,b]]`, `busy` |
+| `(drgnx-uitest-api-screenshot DIR)` | `root`, `width`, `height`, `children [{path,x,y}]`, `windows` |
+| `(drgnx-uitest-api-click X Y &optional BUTTON COUNT HOLD-MS)` | `x`, `y`, `window` (id, or null when the pixel is on no window) |
+| `(drgnx-uitest-api-click-target BUFFER TEXT &optional BUTTON COUNT HOLD-MS)` | same; errors if not on screen |
+| `(drgnx-uitest-api-keys KEYS)`, `(drgnx-uitest-api-type TEXT)` | `queued` |
+| `(drgnx-uitest-api-status &optional QUIET-MS)` | `busy`, `settled` |
+| `(drgnx-uitest-api-measure-begin)` / `(drgnx-uitest-api-measure-end)` | `ok` / the jank report |
+
+Window ids (`w1`, `w2`, …; `mini` for the minibuffer) are stable for a window's lifetime. Input functions
+only queue; callers poll `status` until settled.
