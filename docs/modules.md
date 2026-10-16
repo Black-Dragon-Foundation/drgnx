@@ -54,3 +54,12 @@ their defaults) — never an error at start.
 
 Every command goes through the registry (`drgnx-command-define`) and gets a key — or `:none` with a reason — in each
 key profile ([keys.md](keys.md)); faces inherit theme faces (no colours). See [core.md](core.md) for the registry.
+
+## Shipped modules
+
+| Module | Stage | What it gives you |
+|---|---|---|
+| `core/basics` | startup | quiet defaults (no bell, no dialogs, y/n, background compiler warnings only in the log), Open File, Save, line numbers |
+| `core/workbench` | startup | the workbench: docks, panel, popups, chrome, groups, several windows, the layout across restarts ([workbench.md](workbench.md)) |
+| `editor/editing` | startup | Fold / Unfold, Change Case (camelCase, snake_case, kebab-case, cycle), Expand / Shrink Selection (tree-sitter nodes when the buffer has a parser), Go to Line |
+| `ui/look` | startup | Color Theme (remembered in modules.eld), Zen Mode (only the text; again to give the sidebar and panel back) |

@@ -3,6 +3,7 @@
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 
 ;;; Code:
+(defvar native-comp-async-report-warnings-errors)
 (drgnx-module-define 'core/basics
   :doc "Quiet, predictable defaults and the basic file and view commands."
   :stage 'startup
@@ -11,7 +12,9 @@
     (setq ring-bell-function #'ignore
           use-dialog-box nil
           use-short-answers t
-          inhibit-startup-screen t)
+          inhibit-startup-screen t
+          ;; Background native compilation: warnings go to the log, never a window popping up.
+          native-comp-async-report-warnings-errors 'silent)
     (drgnx-command-define 'open-file :category "File" :title "Open File…" :command #'find-file
       :doc "Open a file")
     (drgnx-command-define 'save-file :category "File" :title "Save" :command #'save-buffer

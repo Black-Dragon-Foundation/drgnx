@@ -38,6 +38,10 @@ The onboarding flow will ask which one you want (VS Code preselected).
 | Split Editor Right / Down | ``C-\`` / ``C-k C-\`` | Emacs' `C-x 3` / `C-x 2` | `SPC w v` / `SPC w s` |
 | Focus Group 1–3 / Move Editor to Next Group | `C-1`–`C-3` / `C-M-<right>` | `C-x o` / — | `SPC 1`–`SPC 3` / `SPC w m` |
 | Open Editor in New Window | `C-k o` | Emacs' `C-x 5 2` | `SPC w o` |
+| Fold / Unfold | `C-{` / `C-}` | — | `SPC z c` / `SPC z o` |
+| Expand / Shrink Selection | `M-S-<right>` / `M-S-<left>` | — | `SPC v` / `SPC V` |
+| Zen Mode | `C-k z` | — | `SPC u z` |
+| Go to Line | Emacs' `M-g g` | `M-g g` | `SPC g l` |
 
 The Explorer's and the Buffers panel's own keys (rows, expand, open, close) are in [workbench.md](workbench.md).
 A command that lives in a mode's keymap (like those) keeps its keymap in every profile: an entry's `:map` wins,
