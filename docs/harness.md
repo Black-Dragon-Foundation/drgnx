@@ -57,3 +57,23 @@ ready.json     written once the frame is mapped: pid, socket, emacs version, ini
 (the gryphn layer's config directory, `$DRGNX_GRYPHN_CONFIG` or `~/.config/emacs`), or any directory with an
 `init.el`. Emacs is launched with `--init-directory` and without `-Q` (which would skip the init file).
 The Emacs binary is `$DRGNX_EMACS`, else `emacs-pgtk`, else `emacs`.
+
+## Driving a session
+
+Input is synthetic but goes through Emacs' normal command loop: `harness/drgnx-uitest.el` queues events and
+delivers **one per 40 ms timer tick** (`drgnx-uitest-tick`) onto `unread-command-events`. Redisplay runs
+between events exactly as it does for a person typing or clicking; dumping a whole sequence at once would
+skip redisplay and hide the very jank we want to see.
+
+- **Pixels:** clicks take root-frame pixel coordinates — the same pixels as a screenshot (top-left = 0,0).
+  `(posn-at-x-y x y root-frame)` turns them into the click position.
+- **Targets:** instead of pixels, name a window by its buffer name or major mode (e.g. `treemacs-mode`) and
+  some visible text; the click lands in the middle of the first character of the first visible occurrence.
+  A buffer that is not shown, or text that is not visible, is an error — never a click somewhere else.
+- **Clicks** are `down-mouse-N` + `mouse-N`; `count 2` adds `double-down-mouse-N` + `double-mouse-N`;
+  `hold` waits between press and release (e.g. to reproduce an accidental drag).
+- **Keys** use `kbd` syntax (`"C-x b"`, `"M-x"`, `"RET"`); typed text is one event per character.
+- **Settled** = no queued or unread input and nothing visibly changed for 300 ms (`drgnx-uitest-quiet`).
+
+In GUI ERT tests, `(drgnx-uitest-run EVENTS)` delivers the events and waits until settled: it runs a nested
+command loop (`recursive-edit`), so the events execute as real commands while the test waits.
