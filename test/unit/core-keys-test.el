@@ -119,3 +119,111 @@
   (let ((r (drgnx-keys-test--resolve '((sublime app) (vscode app editing window)))))
     (should (seq-find (lambda (p) (string-search "sublime" p)) (plist-get r :problems)))
     (should (equal (drgnx-keys-test--keys r 'open-file) '("C-o")))))
+
+;;;; Applying, switching, keys.eld
+
+(defmacro drgnx-keys-test--live (&rest body)
+  "BODY with the core commands, fresh drgnx-keys state and a temp config dir; every binding is undone after."
+  `(drgnx-keys-test--with-core-commands
+    (let* ((dir (make-temp-file "drgnx-keys" t))
+           (process-environment (cons (concat "DRGNX_CONFIG_DIR=" dir) process-environment))
+           (drgnx-keys--applied nil) (drgnx-keys--session-layers nil) (drgnx-keys-profiles nil)
+           (drgnx-keys-problems nil) (drgnx-keys-last nil))
+      (unwind-protect (progn ,@body)
+        (drgnx-keys--restore)
+        (delete-directory dir t)))))
+
+(defun drgnx-keys-test--write-user (form)
+  (make-directory (drgnx-user-dir) t)
+  (with-temp-file (expand-file-name "keys.eld" (drgnx-user-dir)) (prin1 form (current-buffer))))
+
+(ert-deftest drgnx-keys/switching-rebinds-and-restores-emacs ()
+  (let ((before (copy-keymap global-map)))
+    (drgnx-keys-test--live
+     (drgnx-keys-use '((vscode app editing window)))
+     (should (eq (keymap-lookup global-map "C-o") #'find-file))
+     (should (eq (keymap-lookup global-map "C-k C-s") #'drgnx-surfaces-cheatsheet))
+     (should (eq (keymap-lookup global-map "<f1>") #'drgnx-palette))
+     (drgnx-keys-use '((emacs app editing window)))
+     (should (eq (keymap-lookup global-map "C-o") #'open-line))
+     (should (eq (keymap-lookup global-map "C-k") #'kill-line))
+     (should (keymapp (keymap-lookup global-map "<f1>")))
+     (should (eq (keymap-lookup global-map "C-h C-k") #'drgnx-surfaces-cheatsheet))
+     (drgnx-keys-use '((vscode app editing window)))
+     (should (eq (keymap-lookup global-map "C-o") #'find-file)))
+    ;; Everything drgnx bound is gone again (the menu bar keeps the generated menus).
+    (cl-flet ((strip (m) (let ((c (copy-keymap m))) (define-key c [menu-bar] nil) c)))
+      (should (equal (strip global-map) (strip before))))))
+
+(ert-deftest drgnx-keys/a-binding-changed-by-someone-else-is-kept ()
+  (drgnx-keys-test--live
+   (drgnx-keys-use '((vscode app editing window)))
+   (keymap-set global-map "C-o" #'ignore)
+   (unwind-protect
+       (progn (drgnx-keys-use '((emacs app editing window)))
+              (should (eq (keymap-lookup global-map "C-o") #'ignore)))
+     (keymap-set global-map "C-o" #'open-line))))
+
+(defvar drgnx-keys-test-late-map (make-sparse-keymap))
+
+(ert-deftest drgnx-keys/deferred-bindings-of-an-old-setup-never-apply ()
+  (drgnx-keys-test--live
+   (drgnx-keys-test--write-user '(:bind ((open-file "C-c f" :map (drgnx-keys-test-feature-a . drgnx-keys-test-late-map)))))
+   (drgnx-keys-apply)
+   (should-not (eq (keymap-lookup drgnx-keys-test-late-map "C-c f") #'find-file))
+   (drgnx-keys-test--write-user '(:bind ((save-file "C-c s" :map (drgnx-keys-test-feature-b . drgnx-keys-test-late-map)))))
+   (drgnx-keys-apply)
+   (provide 'drgnx-keys-test-feature-a)
+   (should-not (eq (keymap-lookup drgnx-keys-test-late-map "C-c f") #'find-file))
+   (provide 'drgnx-keys-test-feature-b)
+   (should (eq (keymap-lookup drgnx-keys-test-late-map "C-c s") #'save-buffer))))
+
+(defun drgnx-keys-test--menu-keys (title)
+  "The :keys shown for the menu-bar item TITLE under View."
+  (let (found)
+    (map-keymap (lambda (_ item)
+                  (when (and (eq (car-safe item) 'menu-item) (equal (nth 1 item) title))
+                    (setq found (plist-get (nthcdr 3 item) :keys))))
+                (keymap-lookup global-map "<menu-bar> <View>"))
+    found))
+
+(ert-deftest drgnx-keys/a-keys-eld-override-shows-on-every-surface ()
+  (drgnx-keys-test--live
+   (drgnx-keys-test--write-user '(:bind ((palette "C-c p"))))
+   (drgnx-keys-apply)
+   (should (eq (keymap-lookup global-map "C-c p") #'drgnx-palette))
+   (should (null (keymap-lookup global-map "C-S-p")))
+   (should (equal (drgnx-surfaces-key (drgnx-commands-get 'palette)) "C-c p"))
+   (should (seq-find (lambda (r) (and (equal (nth 2 r) "Command Palette") (equal (nth 1 r) "C-c p")))
+                     (drgnx-surfaces-sheet-rows)))
+   (drgnx-surfaces-build-menus)
+   (should (equal (drgnx-keys-test--menu-keys "Command Palette") "C-c p"))
+   (let (annotation)
+     (cl-letf (((symbol-function 'completing-read)
+                (lambda (_prompt table &rest _)
+                  (setq annotation (funcall (alist-get 'annotation-function (cdr (funcall table "" nil 'metadata)))
+                                            "View: Command Palette"))
+                  "")))
+       (drgnx-palette))
+     (should (string-search "C-c p" annotation)))))
+
+(ert-deftest drgnx-keys/a-broken-keys-eld-is-a-problem-not-an-error ()
+  (drgnx-keys-test--live
+   (make-directory (drgnx-user-dir) t)
+   (with-temp-file (expand-file-name "keys.eld" (drgnx-user-dir)) (insert "(:bind ((palette \"C-c p\")"))
+   (drgnx-keys-apply)
+   (should (seq-find (lambda (p) (string-search "keys.eld" p)) (plist-get drgnx-keys-last :problems)))
+   (should (eq (keymap-lookup global-map "C-o") #'find-file))))
+
+(ert-deftest drgnx-keys/keyboard-profile-command-switches-and-saves ()
+  (drgnx-keys-test--live
+   (drgnx-keys-test--write-user '(:bind ((line-numbers "C-c l"))))
+   (drgnx-keys-apply)
+   (cl-letf (((symbol-function 'completing-read) (lambda (&rest _) "Emacs editing + VS Code app keys")))
+     (call-interactively #'drgnx-keys-choose-profile))
+   (let ((saved (with-temp-buffer (insert-file-contents (expand-file-name "keys.eld" (drgnx-user-dir)))
+                                  (read (current-buffer)))))
+     (should (equal (plist-get saved :layers) '((emacs editing) (vscode app window))))
+     (should (equal (plist-get saved :bind) '((line-numbers "C-c l")))))
+   (should (equal (plist-get drgnx-keys-last :layers) '((emacs editing) (vscode app window))))
+   (should (drgnx-keys-test--conflict drgnx-keys-last "C-o"))))

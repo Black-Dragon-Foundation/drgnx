@@ -3,9 +3,9 @@
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 
 ;;; Commentary:
-;; The core: paths, staged hooks, the no-prompt guard, the command registry and everything
-;; generated from it (keys, menus, context menus, palette, F1 sheet), and a minimal module
-;; system.  `drgnx-init' boots it; the checkout's init/ calls it.  See docs/core.md.
+;; The core: paths, staged hooks, the no-prompt guard, the command registry, key profiles,
+;; everything generated from them (menus, context menus, palette, key sheet), and a minimal
+;; module system.  `drgnx-init' boots it; the checkout's init/ calls it.  See docs/core.md.
 
 ;;; Code:
 (require 'drgnx-paths)
@@ -26,14 +26,18 @@
   (drgnx-command-define 'keys-sheet :category "Help" :title "Keyboard Shortcuts"
     :command #'drgnx-surfaces-cheatsheet :menu '("Help") :doc "Every command, its key and where to click")
   (drgnx-command-define 'modules-report :category "Help" :title "Module Report"
-    :command #'drgnx-modules-show-report :menu '("Help") :doc "Which modules loaded, how long they took, what failed"))
+    :command #'drgnx-modules-show-report :menu '("Help") :doc "Which modules loaded, how long they took, what failed")
+  (drgnx-command-define 'keyboard-profile :category "Preferences" :title "Keyboard Profile…"
+    :command #'drgnx-keys-choose-profile :menu '("Options")
+    :doc "VS Code, Emacs or Vim keys, or Emacs/Vim editing with VS Code app keys"))
 
 (defun drgnx-init ()
-  "Boot drgnx: guard, staged hooks, core commands, modules, then the generated surfaces."
+  "Boot drgnx: guard, staged hooks, core commands, modules, keys, then the generated surfaces."
   (drgnx-guard-mode 1)
   (drgnx-hooks-install)
   (drgnx--core-commands)
   (drgnx-modules-start (expand-file-name "modules" drgnx-dir))
+  (drgnx-keys-apply)
   (drgnx-surfaces-refresh))
 
 (provide 'drgnx)
