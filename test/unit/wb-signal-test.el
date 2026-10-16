@@ -82,7 +82,10 @@
   ;; Raw hooks do no work: they arm one idle flush.
   (let ((drgnx-signal--timer nil))
     (unwind-protect
-        (progn (drgnx-signal--schedule) (drgnx-signal--schedule)
-               (should (timerp drgnx-signal--timer))
-               (should (= 1 (seq-count (lambda (tm) (eq (timer--function tm) #'drgnx-signal--flush)) timer-idle-list))))
+        (progn (drgnx-signal--schedule)
+               (let ((armed drgnx-signal--timer))
+                 (should (timerp armed))
+                 (should (memq armed timer-idle-list))
+                 (drgnx-signal--schedule)
+                 (should (eq drgnx-signal--timer armed))))
       (when (timerp drgnx-signal--timer) (cancel-timer drgnx-signal--timer)))))

@@ -8,4 +8,7 @@
         (open-file "C-o")
         (save-file "C-s")
         (line-numbers :none "VS Code has no default key for line numbers")
-        (modules-report :none "drgnx-only; in the palette")))
+        (modules-report :none "drgnx-only; in the palette")
+        (toggle-sidebar "C-b")
+        (focus-editor "C-1")
+        (dock-back "<escape>")))

@@ -9,4 +9,7 @@
         (open-file "C-x C-f")
         (save-file "C-x C-s")
         (line-numbers :none "Emacs has no default key for line numbers")
-        (modules-report :none "drgnx-only; in the palette")))
+        (modules-report :none "drgnx-only; in the palette")
+        (toggle-sidebar "<f8>")
+        (focus-editor :none "C-x o moves between windows")
+        (dock-back "q")))
