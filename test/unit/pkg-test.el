@@ -38,6 +38,7 @@
           (package-check-signature nil)
           (package-alist nil) (package-archive-contents nil) (package-activated-list nil)
           (package--initialized nil) (package-user-dir (expand-file-name "unused-elpa" ,root))
+          (package-quickstart nil) (package-quickstart-file (expand-file-name "other-emacs/package-quickstart.el" ,root))
           (load-path load-path) (features features))
      (make-directory (concat ,root "config") t)
      (unwind-protect (progn ,@body)
@@ -190,10 +191,13 @@
     (let ((arch (drgnx-pkg-test--archive (concat root "arch") '((fa "1.0")))) (dirs nil)
           (drgnx-pkg-native-compile t))
       (drgnx-pkg-test--want root 'fa)
-      (cl-letf (((symbol-function 'native-compile) (lambda (&rest _) (push (car native-comp-eln-load-path) dirs))))
+      (cl-letf (((symbol-function 'native-compile)
+                 (lambda (f &rest _) (push (cons (car native-comp-eln-load-path) f) dirs))))
         (drgnx-pkg-test--sync root :archives `(("fx" . ,arch))))
       (should dirs)
-      (should (seq-every-p (lambda (d) (equal (file-name-as-directory d) (concat root "data/eln-cache/"))) dirs)))))
+      (should (seq-every-p (lambda (d) (equal (file-name-as-directory (car d)) (concat root "data/eln-cache/"))) dirs))
+      ;; .eln names hash the source's path: compile the files where sessions load them, not in staging
+      (should (seq-every-p (lambda (d) (string-prefix-p (drgnx-elpa-dir) (cdr d))) dirs)))))
 
 (ert-deftest drgnx-pkg/archives-in-packages-eld-even-none ()
   (drgnx-pkg-test--with root
@@ -215,8 +219,8 @@
         (drgnx-pkg-test--archive arch '((fa "2.0")))
         (should (plist-get (drgnx-pkg-upgrade :archives `(("fx" . ,arch)) :modules-dir (concat root "mods") :smoke #'ignore) :ok))
         (should (equal (drgnx-pkg-test--installed) '("fa-2.0")))
-        (should (equal (mapcar #'car (drgnx-pkg-generations)) '(2 1)))
-        (should (eql (drgnx-pkg-rollback) 1))
+        (should (equal (mapcar #'car (drgnx-pkg-generations)) '(3 2 1)))   ; 2: the snapshot before the upgrade
+        (should (eql (drgnx-pkg-rollback) 2))
         (should (equal (drgnx-pkg-test--installed) '("fa-1.0")))
         (should (equal (drgnx-pkg-test--bytes (expand-file-name "fa-1.0/fa.elc" (drgnx-elpa-dir))) v1))
         (should (equal (plist-get (alist-get 'fa (drgnx-pkg-read-lock)) :version) "1.0"))))))
@@ -232,10 +236,10 @@
       (let ((r (drgnx-pkg-upgrade :archives `(("fx" . ,arch)) :modules-dir (concat root "mods"))))
         (should-not (plist-get r :ok))
         (should (string-match-p "fa 2.0 is broken" (plist-get r :smoke)))
-        (should (eql (plist-get r :restored) 1))
+        (should (eql (plist-get r :restored) 2))
         (should (equal (drgnx-pkg-test--installed) '("fa-1.0")))
         (should (equal (plist-get (alist-get 'fa (drgnx-pkg-read-lock)) :version) "1.0"))
-        (should (equal (mapcar #'car (drgnx-pkg-generations)) '(1)))))))
+        (should (equal (mapcar #'car (drgnx-pkg-generations)) '(2 1)))))))
 
 (ert-deftest drgnx-pkg/five-generations-are-kept ()
   (drgnx-pkg-test--with root
@@ -359,5 +363,185 @@
       (setenv "DRGNX_SAFE" nil)
       (drgnx-init)
       (should (equal (sort calls (lambda (a b) (string< a b))) '(modules packages))))))
+
+;;;; Review fixes (M5 final review)
+
+(ert-deftest drgnx-pkg/a-failed-download-changes-nothing ()
+  ;; C1: an archive that lists a file it cannot serve — elpa, lock and staging as before.
+  (drgnx-pkg-test--with root
+    (let ((arch (drgnx-pkg-test--archive (concat root "arch") '((fa "1.0") (fb "1.0" ((fa "1.0")))))))
+      (delete-file (concat arch "fa-1.0.el"))
+      (drgnx-pkg-test--want root 'fb)
+      (should-error (drgnx-pkg-test--sync root :archives `(("fx" . ,arch))) :type 'drgnx-pkg-error)
+      (should-not (file-exists-p (drgnx-elpa-dir)))
+      (should-not (file-exists-p (drgnx-pkg-lock-file)))
+      (should-not (file-exists-p (expand-file-name "elpa.staging" (drgnx-data-dir))))
+      (should-not (file-exists-p (expand-file-name "sync.lock" (drgnx-data-dir)))))))
+
+(ert-deftest drgnx-pkg/an-upgrade-whose-download-fails-leaves-the-packages-as-they-were ()
+  (drgnx-pkg-test--with root
+    (let ((arch (concat root "arch")))
+      (drgnx-pkg-test--archive arch '((fa "1.0") (fb "1.0" ((fa "1.0")))))
+      (drgnx-pkg-test--want root 'fb)
+      (drgnx-pkg-test--sync root :archives `(("fx" . ,arch)))
+      (drgnx-pkg-test--archive arch '((fa "2.0") (fb "2.0" ((fa "2.0")))))
+      (delete-file (expand-file-name "fa-2.0.el" arch))
+      (let ((r (drgnx-pkg-upgrade :archives `(("fx" . ,arch)) :modules-dir (concat root "mods") :smoke #'ignore)))
+        (should-not (plist-get r :ok))
+        (should (equal (drgnx-pkg-test--installed) '("fa-1.0" "fb-1.0")))
+        (should (equal (plist-get (alist-get 'fb (drgnx-pkg-read-lock)) :version) "1.0"))))))
+
+(ert-deftest drgnx-pkg/upgrade-never-touches-another-emacs-quickstart ()
+  ;; I1: package-delete refreshes (or deletes) `package-quickstart-file' — another Emacs's.
+  (drgnx-pkg-test--with root
+    (let ((arch (concat root "arch")))
+      (make-directory (file-name-directory package-quickstart-file) t)
+      (write-region ";; theirs\n" nil package-quickstart-file nil 'silent)
+      (drgnx-pkg-test--archive arch '((fa "1.0")))
+      (drgnx-pkg-test--want root 'fa)
+      (drgnx-pkg-test--sync root :archives `(("fx" . ,arch)))
+      (drgnx-pkg-test--archive arch '((fa "2.0")))
+      (should (plist-get (drgnx-pkg-upgrade :archives `(("fx" . ,arch)) :modules-dir (concat root "mods") :smoke #'ignore) :ok))
+      (should (equal (drgnx-pkg-test--bytes package-quickstart-file) ";; theirs\n")))))
+
+(ert-deftest drgnx-pkg/the-lock-decides-the-version ()
+  ;; I3: an installed version the lock does not name is replaced by the locked one (online and offline).
+  (dolist (offline '(nil t))
+    (drgnx-pkg-test--with root
+      (let ((arch (concat root "arch")))
+        (drgnx-pkg-test--archive arch '((fa "1.0")))
+        (drgnx-pkg-test--want root 'fa)
+        (drgnx-pkg-test--sync root :archives `(("fx" . ,arch)))
+        (let ((lock1 (drgnx-pkg-test--bytes (drgnx-pkg-lock-file))))
+          (drgnx-pkg-test--archive arch '((fa "2.0")))
+          (drgnx-pkg-upgrade :archives `(("fx" . ,arch)) :modules-dir (concat root "mods") :smoke #'ignore)
+          (write-region lock1 nil (drgnx-pkg-lock-file) nil 'silent)          ; the lock from git: fa 1.0
+          (should (plist-get (if offline (drgnx-pkg-test--sync root :offline t)
+                               (drgnx-pkg-test--sync root :archives `(("fx" . ,arch))))
+                             :ok))
+          (should (equal (drgnx-pkg-test--installed) '("fa-1.0")))
+          (should (equal (drgnx-pkg-test--bytes (drgnx-pkg-lock-file)) lock1)))))))
+
+(ert-deftest drgnx-pkg/a-pin-older-than-a-package-needs-is-a-conflict ()
+  ;; I4: the lock pins fa 1.0; a new package needs fa 2.0 — reported, never "ok".
+  (drgnx-pkg-test--with root
+    (let ((arch (concat root "arch")))
+      (drgnx-pkg-test--archive arch '((fa "1.0")))
+      (drgnx-pkg-test--want root 'fa)
+      (drgnx-pkg-test--sync root :archives `(("fx" . ,arch)))
+      (drgnx-pkg-test--archive arch '((fa "2.0") (fb "1.0" ((fa "2.0")))))
+      (drgnx-pkg-test--want root 'fa 'fb)
+      (let ((r (drgnx-pkg-test--sync root :archives `(("fx" . ,arch)))))
+        (should-not (plist-get r :ok))
+        (should (assq 'fa (plist-get r :missing)))
+        (should (string-match-p "upgrade" (alist-get 'fa (plist-get r :missing))))
+        (should (equal (drgnx-pkg-test--installed) '("fa-1.0")))))))
+
+(ert-deftest drgnx-pkg/one-unknown-package-does-not-block-the-rest ()
+  ;; I5
+  (drgnx-pkg-test--with root
+    (drgnx-pkg-test--want root 'fa 'zz-not-anywhere)
+    (let ((r (drgnx-pkg-test--sync root :archives `(("fx" . ,(drgnx-pkg-test--archive (concat root "arch") '((fa "1.0"))))))))
+      (should-not (plist-get r :ok))
+      (should (equal (mapcar #'car (plist-get r :missing)) '(zz-not-anywhere)))
+      (should (equal (drgnx-pkg-test--installed) '("fa-1.0"))))))
+
+(ert-deftest drgnx-pkg/ensure-records-what-use-package-would-install ()
+  ;; I5: the :ensure value decides — nil nothing, a symbol that package, (PKG :pin …) PKG.
+  (drgnx-pkg-test--with root
+    (drgnx-pkg-ensure 'mylib '(nil) nil)
+    (drgnx-pkg-ensure 'thing '(other-pkg-x) nil)
+    (drgnx-pkg-ensure 'thing2 '((pinned-pkg-x :pin "gnu")) nil)
+    (drgnx-pkg-ensure 'plain-pkg-x '(t) nil)
+    (should (equal (drgnx-pkg--read-file (drgnx-pkg-wanted-file)) '(other-pkg-x pinned-pkg-x plain-pkg-x)))))
+
+(ert-deftest drgnx-pkg/installed-wants-are-forgotten ()
+  (drgnx-pkg-test--with root
+    (drgnx-pkg-ensure 'fa '(t) nil)
+    (drgnx-pkg-test--want root)
+    (should (plist-get (drgnx-pkg-test--sync root :archives `(("fx" . ,(drgnx-pkg-test--archive (concat root "arch") '((fa "1.0"))))))
+                       :ok))
+    (should (equal (drgnx-pkg-test--installed) '("fa-1.0")))
+    (should-not (drgnx-pkg--read-file (drgnx-pkg-wanted-file)))))
+
+(ert-deftest drgnx-pkg/rollback-waits-for-no-sync ()
+  ;; I7: rollback takes the sync lock too.
+  (drgnx-pkg-test--with root
+    (drgnx-pkg-test--want root)
+    (drgnx-pkg-snapshot) (drgnx-pkg-snapshot)
+    (write-region (format "%d" (emacs-pid)) nil (expand-file-name "sync.lock" (drgnx-data-dir)) nil 'silent)
+    (should-error (drgnx-pkg-rollback 1) :type 'drgnx-pkg-error)))
+
+(ert-deftest drgnx-pkg/a-file-that-does-not-install-leaves-the-cache ()
+  ;; I8: a bad file is never kept to poison later (offline) syncs.
+  (drgnx-pkg-test--with root
+    (let ((arch (drgnx-pkg-test--archive (concat root "arch") '((fa "1.0")))))
+      (drgnx-pkg-test--want root 'fa)
+      (cl-letf (((symbol-function 'drgnx-pkg--unpack) (lambda (&rest _) (error "does not untar cleanly"))))
+        (should-error (drgnx-pkg-test--sync root :archives `(("fx" . ,arch))) :type 'drgnx-pkg-error))
+      (should-not (file-exists-p (expand-file-name "fa-1.0.el" (drgnx-package-cache-dir))))
+      (should-not (file-exists-p (drgnx-elpa-dir))))))
+
+(ert-deftest drgnx-pkg/the-cli-reports-any-error-as-a-failure ()
+  (cl-letf (((symbol-function 'drgnx-pkg-sync) (lambda (&rest _) (error "Something unexpected"))))
+    (should (eql (drgnx-pkg-cli-run '("sync")) 1))))
+
+(ert-deftest drgnx-pkg/the-cli-says-to-restart-after-a-change ()
+  ;; I11: a running daemon keeps the packages it loaded.
+  (cl-letf (((symbol-function 'drgnx-pkg-rollback) (lambda (&optional _) 1)))
+    (should (string-match-p "restart" (with-output-to-string (drgnx-pkg-cli-run '("rollback")))))))
+
+(ert-deftest drgnx-pkg/the-smoke-test-loads-only-real-features ()
+  ;; I10: a package name is not always a feature of the package.
+  (drgnx-pkg-test--with root
+    (drgnx-pkg-test--want root 'fa)
+    (drgnx-pkg-test--sync root :archives `(("fx" . ,(drgnx-pkg-test--archive (concat root "arch") '((fa "1.0"))))))
+    (should (equal (drgnx-pkg--smoke-features '(fa built-in-only-x)) '(fa)))
+    (should-not (drgnx-pkg-smoke '(fa built-in-only-x)))))
+
+(ert-deftest drgnx-pkg/an-interrupted-swap-is-recovered ()
+  ;; M5: a crash between the two renames leaves elpa.old and no elpa.
+  (drgnx-pkg-test--with root
+    (drgnx-pkg-test--want root 'fa)
+    (drgnx-pkg-test--sync root :archives `(("fx" . ,(drgnx-pkg-test--archive (concat root "arch") '((fa "1.0"))))))
+    (rename-file (directory-file-name (drgnx-elpa-dir)) (concat (directory-file-name (drgnx-elpa-dir)) ".old"))
+    (should (plist-get (drgnx-pkg-test--sync root :offline t) :ok))
+    (should (equal (drgnx-pkg-test--installed) '("fa-1.0")))))
+
+(ert-deftest drgnx-pkg/offline-reports-what-the-lock-does-not-have ()
+  ;; M2, M3
+  (drgnx-pkg-test--with root
+    (drgnx-pkg-test--want root 'fa)
+    (drgnx-pkg-write-lock '((fc :version "1.0" :archive "fx" :kind single :file "fc-1.0.el" :sha256 "x")))
+    (let ((r (drgnx-pkg-test--sync root :offline t)))
+      (should-not (plist-get r :ok))
+      (should (string-match-p "not in the lock" (alist-get 'fa (plist-get r :missing))))
+      (should (string-match-p "not in the cache" (alist-get 'fc (plist-get r :missing)))))))
+
+(ert-deftest drgnx-pkg/generations-and-rollback-track-the-current-one ()
+  ;; M6 (a half-written snapshot is not a generation), M8 (rollback steps back from the current one)
+  (drgnx-pkg-test--with root
+    (drgnx-pkg-test--want root)
+    (dotimes (_ 3) (drgnx-pkg-snapshot))
+    (make-directory (expand-file-name "4.tmp" (drgnx-generations-dir)) t)
+    (should (equal (mapcar #'car (drgnx-pkg-generations)) '(3 2 1)))
+    (should (eql (drgnx-pkg-rollback) 2))
+    (should (eql (drgnx-pkg-rollback) 1))
+    (should-error (drgnx-pkg-rollback) :type 'drgnx-pkg-error)))
+
+(ert-deftest drgnx-pkg/sessions-keep-hand-installed-packages ()
+  ;; M9: the quickstart file is the session's for good (package.el refreshes it after M-x package-install).
+  (drgnx-pkg-test--with root
+    (drgnx-pkg-activate)
+    (should package-quickstart)
+    (should (equal package-quickstart-file (expand-file-name "drgnx-quickstart.el" (drgnx-elpa-dir))))))
+
+(ert-deftest drgnx-pkg/the-guard-covers-vc-upgrades ()
+  ;; M10
+  (unwind-protect
+      (progn (drgnx-pkg-guard-mode 1)
+             (should (advice-member-p #'drgnx-pkg--guard 'package-vc-upgrade))
+             (should (advice-member-p #'drgnx-pkg--guard 'package-vc-upgrade-all)))
+    (drgnx-pkg-guard-mode -1)))
 
 ;;; pkg-test.el ends here

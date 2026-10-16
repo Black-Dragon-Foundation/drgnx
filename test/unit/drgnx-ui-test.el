@@ -237,6 +237,7 @@
            (env (drgnx-ui-session-env s)))
       (should (member (concat "DRGNX_CONFIG_DIR=" (expand-file-name "drgnx-config" (plist-get s :run))) env))
       (should (member (concat "XDG_STATE_HOME=" (expand-file-name "state" (plist-get s :run))) env))
+      (should (member (concat "DRGNX_DATA_DIR=" (expand-file-name "drgnx-data" (plist-get s :run))) env))
       (drgnx-ui-stop "drgnx-ui-1"))))
 
 (ert-deftest drgnx-ui/two-monitors ()

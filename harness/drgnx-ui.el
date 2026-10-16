@@ -204,7 +204,9 @@ MONITORS: how many virtual monitors of SIZE (default 1)."
                 ;; user's ~/.config/drgnx or writes ~/.local/state (XDG_CACHE_HOME stays: font and
                 ;; shader caches would be rebuilt on every start).
                 (concat "DRGNX_CONFIG_DIR=" (expand-file-name "drgnx-config" (plist-get sess :run)))
-                (concat "XDG_STATE_HOME=" (expand-file-name "state" (plist-get sess :run))))
+                (concat "XDG_STATE_HOME=" (expand-file-name "state" (plist-get sess :run)))
+                ;; …and its packages: never the user's ~/.local/share/drgnx (M5 review I9)
+                (concat "DRGNX_DATA_DIR=" (expand-file-name "drgnx-data" (plist-get sess :run))))
           extra))
 
 (defun drgnx-ui-env-argv (env)

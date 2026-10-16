@@ -83,3 +83,10 @@
                                               (concat "DRGNX_UI_TEST=" dir))
                    1))
       (delete-directory tmp t))))
+
+(ert-deftest drgnx-run-ert/unit-tests-never-see-the-users-drgnx-dirs ()
+  ;; M5 review I9: the batch runner gives the whole suite temp config, data, state and cache dirs.
+  (skip-unless (getenv "DRGNX_TEST_ISOLATED"))
+  (dolist (v '("DRGNX_CONFIG_DIR" "DRGNX_DATA_DIR" "XDG_STATE_HOME" "XDG_CACHE_HOME"))
+    (should (string-prefix-p (file-truename temporary-file-directory) (file-truename (getenv v))))))
+

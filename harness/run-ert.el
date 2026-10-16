@@ -71,8 +71,18 @@ Return t if every test passed."
 
 (defun drgnx-run-ert-batch ()
   "Batch entry point: run the suite in the first remaining argument, exit 0 or 1."
-  (let ((dir (pop command-line-args-left)))
-    (kill-emacs (if (drgnx-run-ert dir (getenv "DRGNX_TEST_RESULTS")) 0 1))))
+  (let* ((dir (pop command-line-args-left))
+         ;; The suite never sees the user's drgnx config, packages, state or cache.
+         (tmp (make-temp-file "drgnx-unit" t))
+         (process-environment
+          (append (mapcar (lambda (v) (format "%s=%s" (car v) (expand-file-name (cdr v) tmp)))
+                          '(("DRGNX_CONFIG_DIR" . "config") ("DRGNX_DATA_DIR" . "data")
+                            ("XDG_STATE_HOME" . "state") ("XDG_CACHE_HOME" . "cache")))
+                  (list "DRGNX_TEST_ISOLATED=1")
+                  process-environment))
+         (ok (drgnx-run-ert dir (getenv "DRGNX_TEST_RESULTS"))))
+    (delete-directory tmp t)
+    (kill-emacs (if ok 0 1))))
 
 (provide 'drgnx-run-ert)
 ;;; run-ert.el ends here

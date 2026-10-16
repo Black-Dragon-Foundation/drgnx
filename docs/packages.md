@@ -9,7 +9,7 @@ drgnx sync                  install what drgnx needs (from the archives, the cac
 drgnx sync --offline        only the lock and the cache — no network
 drgnx sync --seed DIR       first copy the packages of another Emacs (e.g. ~/.config/emacs/elpa), then sync
 drgnx upgrade               the newest versions; if they break, the previous generation comes back
-drgnx rollback [N]          the packages of generation N (default: the one before the newest)
+drgnx rollback [N]          the packages of generation N (default: the one before the current one)
 drgnx generations           the generations kept (five)
 drgnx lock                  what the lock pins
 drgnx safe                  Emacs with drgnx's core only: no modules, no packages
@@ -33,41 +33,49 @@ The **manifest** is:
 
   `:archives` is optional (default: GNU ELPA, NonGNU ELPA, MELPA); a local directory works as an archive;
   `:archives ()` means none (sync then works from the cache only);
-- what `use-package … :ensure t` asked for in a session. In drgnx `:ensure` installs nothing: it records the
-  package (`~/.local/state/drgnx/packages-wanted.eld`) and says so in `*Messages*`; the next `drgnx sync`
-  installs it.
+- what `use-package … :ensure` asked for in a session, or an external module's files (gryphn) would have
+  installed. In drgnx `:ensure` installs nothing: it records the package use-package would have installed
+  (`:ensure t` the package itself, `:ensure other` that one, `:ensure nil` none) in
+  `~/.local/state/drgnx/packages-wanted.eld` and says so in `*Messages*`; the next `drgnx sync` installs it and
+  forgets the want.
 
-`drgnx sync` resolves the manifest with its dependencies (package.el), downloads what is missing into
-`~/.cache/drgnx/packages/` (signatures checked where the archive signs), byte-compiles, compiles to native code
-ahead of time (when your Emacs has native compilation; into `~/.local/share/drgnx/eln-cache/`), and writes the
-activation file sessions load at startup. Sync never removes a package: one installed by hand stays and is
-locked too.
+`drgnx sync` resolves each package of the manifest with its dependencies (package.el — one that no archive has
+is reported and does not stop the others), downloads what is missing into `~/.cache/drgnx/packages/` (an HTTP
+error is never saved; hash and signature are checked, where the archive signs, before a file enters the cache),
+byte-compiles, compiles to native code ahead of time (when your Emacs has native compilation; into
+`~/.local/share/drgnx/eln-cache/`, for the files at their final path), and writes the activation file sessions load
+at startup. A download or an install that fails stops the sync with nothing changed, and a file that did not
+install is removed from the cache. Sync never removes a package: one installed by hand stays and is locked too.
 
 ## The lock
 
 `~/.config/drgnx/drgnx.lock.eld` pins every installed package: version, archive, file and its sha256 (commit it
-with your configuration). A sync installs the locked version — from the cache when the archive moved on — and
-refuses a file whose hash differs from the lock (a changed file, or a tampered cache): nothing changes then. A
-locked version that no archive and no cache has any more is reported, the rest is installed, the command exits
-non-zero and the lock stays as it was (`drgnx upgrade` moves to the archive's version). An unreadable lock is an
-error, never silently replaced.
+with your configuration). A sync installs the locked version — from the cache when the archive moved on, replacing
+another installed version — and refuses a file whose hash differs from the lock (a changed file, or a tampered
+cache; the file is dropped from the cache): nothing changes then. A locked version that no archive and no cache has
+any more, or one older than another package needs, is reported (with what needs it), the packages that do not
+depend on it are installed, the command exits non-zero and the lock stays as it was — `drgnx upgrade` moves the
+lock to the archives' versions. An unreadable lock is an error, never silently replaced.
 
 `drgnx sync --offline` installs exactly the lock from the cache: on a new machine, copy the cache and the lock and
-sync without network.
+sync without network. A manifest package the lock does not have is reported ("sync online once").
 
 ## Generations, rollback, upgrade
 
 Packages live at one fixed path, `~/.local/share/drgnx/elpa` (`$DRGNX_DATA_DIR`). A sync installs into a copy and
 swaps it in with two renames only when everything arrived, so an interrupted sync leaves the old directory as it
-was, and a running session never sees half of one. Each successful sync snapshots the directory and the lock as a
-generation (`~/.local/share/drgnx/generations/N`, reflink copies where the file system has them; five kept).
+was (a crash between the two renames is repaired by the next sync). Each successful sync snapshots the directory
+and the lock as a generation (`~/.local/share/drgnx/generations/N`, reflink copies where the file system has them —
+on a file system without them, every sync copies the packages twice; five kept).
 
 `drgnx rollback` copies a generation back into the same path, so natively compiled files stay valid — nothing
-is recompiled. `drgnx upgrade` takes every package to the archive's newest version, then runs a smoke test (a
-fresh Emacs that activates the packages and loads each one of the manifest); if it fails, the previous generation
-and its lock come back and the output says why.
+is recompiled. `drgnx upgrade` snapshots the packages first, takes every package to the archive's newest version,
+then runs a smoke test (a fresh Emacs that activates drgnx's packages and loads each package of the manifest that
+has a file of its name); if the upgrade or the smoke test fails, the snapshot and its lock come back and the output
+says why.
 
-One sync at a time: a second `drgnx sync` (or upgrade) refuses while one runs; a lock left by a sync that died is
+A running drgnx keeps the packages it loaded: **restart it** after a sync, upgrade or rollback (the command says
+so). One writer at a time: a sync, upgrade or rollback refuses while another runs; a lock left by one that died is
 taken over.
 
 ## When something breaks

@@ -173,6 +173,19 @@
    (drgnx-modules-load-external)
    (should (eq (plist-get (alist-get 'external/gone (drgnx-modules-report)) :status) 'disabled))))
 
+(ert-deftest drgnx-modules/what-external-code-wants-reaches-the-manifest ()
+  ;; I6 (M5 review): the packages an external module would have installed are recorded for drgnx sync.
+  (drgnx-modules-test--with-config
+   (let ((dir (make-temp-file "drgnx-ext" t)))
+     (unwind-protect
+         (progn
+           (write-region "(require 'use-package)\n(use-package kx-wanted-pkg :ensure t :defer t)\n(provide 'kx-wants)\n" nil (expand-file-name "kx-wants.el" dir) nil 'silent)
+           (drgnx-modules-write-state `(:version 1 :external ((:name kx :path ,dir :features (kx-wants)))))
+           (drgnx-modules-load-external)
+           (require 'drgnx-pkg-activate)
+           (should (memq 'kx-wanted-pkg (with-temp-buffer (insert-file-contents (drgnx-pkg-wanted-file)) (read (current-buffer))))))
+       (delete-directory dir t)))))
+
 (ert-deftest drgnx-modules/external-code-never-installs ()
   ;; C1: gryphn's files say `use-package … :ensure t' (and :vc); loading them must not refresh
   ;; archives or install — the module waits, reported, like any module missing a package.

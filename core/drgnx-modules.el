@@ -18,6 +18,7 @@
 (require 'tabulated-list)
 (require 'drgnx-paths)
 (require 'drgnx-hooks)
+(require 'drgnx-pkg-activate)
 
 (defvar drgnx-modules--table nil "Alist NAME → plist (:doc :stage … :file), in definition order.")
 (defvar drgnx-modules--report nil "Alist NAME → plist (:stage :ms :status :error :missing).")
@@ -189,7 +190,8 @@ direct installs are recorded instead.  Returns (ERROR-or-nil . WANTED-PACKAGES).
                                    ((stringp p) (intern (file-name-base p)))
                                    (t p))))
                    (unless (and (symbolp name) (locate-library (symbol-name name)))   ; already there: nothing to do
-                     (push name wanted)))
+                     (push name wanted)
+                     (when (symbolp name) (drgnx-pkg-ensure name))))   ; for the next drgnx sync
                  nil)))
     (cl-letf (((symbol-function 'package-refresh-contents) #'ignore)
               ((symbol-function 'package-install) (lambda (p &rest _) (funcall want p)))
