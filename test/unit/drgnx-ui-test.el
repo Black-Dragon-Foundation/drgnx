@@ -183,6 +183,21 @@
     (write-region "" nil (expand-file-name "drgnx-ui-1" runtime))
     (should (equal (drgnx-ui-next-name root) "drgnx-ui-2"))))
 
+(ert-deftest drgnx-ui/stop-asks-emacs-to-exit-before-stopping-the-unit ()
+  ;; SIGTERM to the whole unit can take the compositor first: Emacs loses its display and exits
+  ;; without its kill-emacs-hook (no layout saved).  Emacs is asked to exit first.
+  (drgnx-ui-test--with-state
+    (let* ((s (drgnx-ui-prepare-run "drgnx-ui-5")) (calls nil))
+      (make-directory (file-name-directory (plist-get s :socket)) t)
+      (write-region "" nil (plist-get s :socket))
+      (cl-letf (((symbol-function 'drgnx-ui--ask-to-exit) (lambda (sock &rest _) (push (list 'ask sock) calls)))
+                ((symbol-function 'drgnx-ui--unit-owned-p) (lambda (&rest _) t))
+                ((symbol-function 'drgnx-ui--run) (lambda (&rest a) (push (cons 'run a) calls))))
+        (drgnx-ui-stop "drgnx-ui-5"))
+      (setq calls (nreverse calls))
+      (should (equal (car calls) (list 'ask (plist-get s :socket))))
+      (should (equal (car (cadr calls)) 'run)))))
+
 (ert-deftest drgnx-ui/stop-removes-the-wayland-display-socket ()
   (drgnx-ui-test--with-state
     (drgnx-ui-prepare-run "drgnx-ui-4")

@@ -393,13 +393,26 @@ behind — unless a live session (perhaps of another state root) still serves it
       (let ((path (expand-file-name f (drgnx-ui-runtime-dir))))
         (when (file-exists-p path) (delete-file path))))))
 
+(defun drgnx-ui--ask-to-exit (socket &optional wait)
+  "Ask the Emacs listening on SOCKET to exit (its kill-emacs-hook runs: the layout is saved), and wait
+up to WAIT seconds (default 5) for its socket to go.  Never blocks longer; errors are ignored."
+  (when-let* ((client (executable-find "emacsclient")))
+    (ignore-errors (call-process "timeout" nil nil nil "3" client "-s" socket "--eval" "(kill-emacs)"))
+    (let ((deadline (+ (float-time) (or wait 5))))
+      (while (and (file-exists-p socket) (< (float-time) deadline)) (sleep-for 0.05)))))
+
 (defun drgnx-ui-stop (name)
-  "Stop session NAME and remove its run and socket directories."
+  "Stop session NAME — Emacs asked to exit first, then the session's processes — and remove its run
+and socket directories."
   (drgnx-ui--check-name name)
   (let* ((run (expand-file-name name (drgnx-ui-state-root)))
          (sock (drgnx-ui-socket-dir name))
          (file (expand-file-name "session.json" run))
-         (sess (and (file-exists-p file) (ignore-errors (drgnx-ui--read-json file)))))
+         (sess (and (file-exists-p file) (ignore-errors (drgnx-ui--read-json file))))
+         (socket (expand-file-name name sock)))
+    ;; SIGTERM to the whole session can take the compositor first; Emacs then loses its display
+    ;; and exits without its kill-emacs-hook.
+    (when (file-exists-p socket) (drgnx-ui--ask-to-exit socket))
     (if (equal (plist-get sess :launcher) "detached")
         (drgnx-ui--stop-group (or (plist-get sess :pgid) (drgnx-ui--read-pgid run)) run)
       ;; Only our own unit: another state root may run a session with the same name.
