@@ -105,3 +105,27 @@
     (drgnx-uitest-run (drgnx-uitest-click-events (drgnx-uitest-posn (car xy) (cdr xy)) 1 1 0.3))
     (use-local-map nil)
     (should (equal (car log) '(click)))))
+
+(ert-deftest drgnx-ui-input/release-in-a-header-line-window-is-a-click ()
+  ;; Regression: the release was resolved in window coordinates (header line included)
+  ;; while the press was in text-area coordinates, so every click became a drag.
+  (drgnx-test--lines-buffer)
+  (setq header-line-format "HEADER")
+  (unwind-protect
+      (let ((log (drgnx-test--record-clicks))
+            (xy (progn (redisplay t) (drgnx-uitest-target-xy "*drgnx-lines*" "line 05"))))
+        (drgnx-uitest-run (drgnx-uitest-click-events (drgnx-uitest-posn (car xy) (cdr xy))))
+        (use-local-map nil)
+        (should (equal (car log) '(click))))
+    (setq header-line-format nil)))
+
+(ert-deftest drgnx-ui-input/release-in-a-tab-line-window-is-a-click ()
+  (drgnx-test--lines-buffer)
+  (setq tab-line-format "TABS")
+  (unwind-protect
+      (let ((log (drgnx-test--record-clicks))
+            (xy (progn (redisplay t) (drgnx-uitest-target-xy "*drgnx-lines*" "line 05"))))
+        (drgnx-uitest-run (drgnx-uitest-click-events (drgnx-uitest-posn (car xy) (cdr xy)) 1 1 0.2))
+        (use-local-map nil)
+        (should (equal (car log) '(click))))
+    (setq tab-line-format nil)))

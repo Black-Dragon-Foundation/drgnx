@@ -50,16 +50,32 @@ Falls back to the selected frame (a daemon's terminal frame, or batch)."
   "Position object for root-frame pixel X, Y."
   (posn-at-x-y x y (drgnx-uitest-root-frame)))
 
+(defun drgnx-uitest--text-origin (window)
+  "Frame pixel (X . Y) of the top-left corner of WINDOW's text area — the origin of
+`posn-x-y' for text-area positions.  Computed from the window's outer edges plus its tab
+line and header line: `window-body-pixel-edges' counts a tab line as body (Emacs 30)."
+  (let ((edges (window-pixel-edges window)))
+    (cons (nth 0 (window-body-pixel-edges window))
+          (+ (nth 1 edges) (window-tab-line-height window) (window-header-line-height window)))))
+
+(defun drgnx-uitest--text-box (window)
+  "WINDOW's text area as frame pixels [LEFT TOP RIGHT BOTTOM]."
+  (let ((origin (drgnx-uitest--text-origin window))
+        (edges (window-pixel-edges window))
+        (body (window-body-pixel-edges window)))
+    (vector (car origin) (cdr origin) (nth 2 body)
+            (- (nth 3 edges) (window-mode-line-height window) (window-scroll-bar-height window)))))
+
 (defun drgnx-uitest-pos-xy (window pos)
   "Root-frame pixel (X . Y) in the middle of the character at POS in WINDOW, or nil if a
 click there would not land on POS (invisible, scrolled away, cut off at the right edge)."
   (let* ((f (window-frame window))
-         (body (window-body-pixel-edges window))
+         (origin (drgnx-uitest--text-origin window))
          (posn (and (not (with-current-buffer (window-buffer window) (invisible-p pos)))
                     (posn-at-point pos window)))
          (xy (and posn (posn-x-y posn)))
-         (x (and xy (+ (nth 0 body) (car xy) (/ (frame-char-width f) 2))))
-         (y (and xy (+ (nth 1 body) (cdr xy) (/ (frame-char-height f) 2))))
+         (x (and xy (+ (car origin) (car xy) (/ (frame-char-width f) 2))))
+         (y (and xy (+ (cdr origin) (cdr xy) (/ (frame-char-height f) 2))))
          (back (and xy (posn-at-x-y x y f))))
     (and back (eq (posn-window back) window) (eql (posn-point back) pos) (cons x y))))
 
@@ -105,15 +121,21 @@ the text under the pointer changed meanwhile, as Emacs does for real input."
 ;;;; Paced delivery
 
 (defun drgnx-uitest--release-event (button start)
-  "The event for releasing BUTTON at the pixel where START was pressed.
-Like Emacs for real input: if the buffer position under that pixel is no longer START's
-(the text moved under a held button), the release is a drag from START, else a click."
+  "The event for releasing BUTTON at the frame pixel where START was pressed.
+Like Emacs for real input: if what lies under that pixel changed since the press — another
+buffer position, or another window (the text or the layout moved under a held button) —
+the release is a drag from START, else a click."
   (let* ((win (posn-window start))
-         (end (if (and (windowp win) (window-live-p win) (posn-x-y start))
-                  (posn-at-x-y (car (posn-x-y start)) (cdr (posn-x-y start)) win)
+         (end (if (and (windowp win) (window-live-p win) (null (posn-area start)) (posn-x-y start))
+                  ;; Text area: back to the frame pixel, then resolve it as Emacs would now.
+                  (let ((origin (drgnx-uitest--text-origin win)))
+                    (posn-at-x-y (+ (car origin) (car (posn-x-y start)))
+                                 (+ (cdr origin) (cdr (posn-x-y start)))
+                                 (window-frame win)))
                 start)))
-    (if (and (windowp win) (eq (posn-window end) win)
-             (not (eql (posn-point end) (posn-point start))))
+    (if (and (windowp win) (null (posn-area start))
+             (or (not (eq (posn-window end) win))
+                 (not (eql (posn-point end) (posn-point start)))))
         (list (intern (format "drag-mouse-%d" button)) start end)
       (list (intern (format "mouse-%d" button)) end))))
 
@@ -403,7 +425,7 @@ prints as raw bytes; decode it so non-ASCII text survives emacsclient."
 (defun drgnx-uitest--window-info (w)
   (with-current-buffer (window-buffer w)
     (list :id (drgnx-uitest-window-id w) :buffer (buffer-name) :mode (symbol-name major-mode)
-          :edges (vconcat (window-pixel-edges w)) :body (vconcat (window-body-pixel-edges w))
+          :edges (vconcat (window-pixel-edges w)) :body (drgnx-uitest--text-box w)
           :start (window-start w) :point (window-point w)
           :line (line-number-at-pos (window-point w))
           :header_h (window-header-line-height w) :mode_line_h (window-mode-line-height w)
