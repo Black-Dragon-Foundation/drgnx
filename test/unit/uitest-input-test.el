@@ -10,11 +10,12 @@
   (should (equal (drgnx-uitest-type-events "a\"✓") (list ?a ?\" ?✓))))
 
 (ert-deftest drgnx-uitest/click-events ()
-  (should (equal (drgnx-uitest-click-events 'P) '((down-mouse-1 P) (mouse-1 P))))
+  ;; The release is resolved when it is delivered (a click, or a drag if the text moved).
+  (should (equal (drgnx-uitest-click-events 'P) '((down-mouse-1 P) (drgnx-uitest-release 1 P))))
   (should (equal (drgnx-uitest-click-events 'P 3 1 0.3)
-                 '((down-mouse-3 P) (drgnx-uitest-pause . 0.3) (mouse-3 P))))
+                 '((down-mouse-3 P) (drgnx-uitest-pause . 0.3) (drgnx-uitest-release 3 P))))
   (should (equal (drgnx-uitest-click-events 'P 1 2)
-                 '((down-mouse-1 P) (mouse-1 P) (double-down-mouse-1 P 2) (double-mouse-1 P 2)))))
+                 '((down-mouse-1 P) (drgnx-uitest-release 1 P) (double-down-mouse-1 P 2) (double-mouse-1 P 2)))))
 
 (ert-deftest drgnx-uitest/window-ids-are-stable ()
   (let ((w (selected-window)))

@@ -84,8 +84,11 @@ skip redisplay and hide the very jank we want to see.
   An occurrence counts only if it is not invisible (folded) and a click at the computed pixel lands on it
   (same window, same position) — text cut off at the right edge of a truncated line is skipped. A buffer that
   is not shown, or text with no such occurrence, is an error — never a click somewhere else.
-- **Clicks** are `down-mouse-N` + `mouse-N`; `count 2` adds `double-down-mouse-N` + `double-mouse-N`;
-  `hold` waits between press and release (e.g. to reproduce an accidental drag).
+- **Clicks** are `down-mouse-N` + a release; `count 2` adds `double-down-mouse-N` + `double-mouse-N`;
+  `hold` waits between press and release. The release is resolved when it is delivered, the way Emacs treats
+  real input: if the buffer position under the pressed pixel changed meanwhile (the text moved under a held
+  button), it becomes `drag-mouse-N` from the press, else `mouse-N` — which is how a click on a moving file tree
+  can turn into a drag.
 - **Keys** use `kbd` syntax (`"C-x b"`, `"M-x"`, `"RET"`); typed text is one event per character.
 - **Settled** = no queued or unread input and nothing visibly changed for 300 ms (`drgnx-uitest-quiet`).
 

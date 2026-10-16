@@ -74,3 +74,34 @@
     (with-current-buffer buf (overlay-put (make-overlay 16 22) 'invisible t))
     (redisplay t)
     (should-error (drgnx-uitest-target-xy "*drgnx-invisible*" "HIDDEN"))))
+
+(defun drgnx-test--record-clicks ()
+  "In the current buffer, record clicks and drags into the returned list cell."
+  (let ((log (list nil)) (map (make-sparse-keymap)))
+    (define-key map [down-mouse-1] #'ignore)
+    (define-key map [mouse-1] (lambda (_e) (interactive "e") (push 'click (car log))))
+    (define-key map [drag-mouse-1] (lambda (_e) (interactive "e") (push 'drag (car log))))
+    (use-local-map map)
+    log))
+
+(ert-deftest drgnx-ui-input/release-on-moved-content-is-a-drag ()
+  ;; Emacs makes a release a drag when the text under the pointer changed since the press —
+  ;; the Explorer moving under a held button (how a click once moved a file).
+  (drgnx-test--lines-buffer)
+  (let ((log (drgnx-test--record-clicks))
+        (xy (drgnx-uitest-target-xy "*drgnx-lines*" "line 05"))
+        (win (selected-window)))
+    (run-with-timer 0.1 nil (lambda () (set-window-start win (with-current-buffer (window-buffer win)
+                                                                (save-excursion (goto-char (point-min))
+                                                                                (forward-line 3) (point))))))
+    (drgnx-uitest-run (drgnx-uitest-click-events (drgnx-uitest-posn (car xy) (cdr xy)) 1 1 0.3))
+    (use-local-map nil)
+    (should (equal (car log) '(drag)))))
+
+(ert-deftest drgnx-ui-input/release-on-same-content-is-a-click ()
+  (drgnx-test--lines-buffer)
+  (let ((log (drgnx-test--record-clicks))
+        (xy (drgnx-uitest-target-xy "*drgnx-lines*" "line 05")))
+    (drgnx-uitest-run (drgnx-uitest-click-events (drgnx-uitest-posn (car xy) (cdr xy)) 1 1 0.3))
+    (use-local-map nil)
+    (should (equal (car log) '(click)))))

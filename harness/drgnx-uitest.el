@@ -87,17 +87,32 @@ there is no such occurrence."
 
 (defun drgnx-uitest-click-events (posn &optional button count hold)
   "Input events for clicking at POSN.
-BUTTON is 1-3 (default 1), COUNT 1 or 2, HOLD seconds between press and release."
+BUTTON is 1-3 (default 1), COUNT 1 or 2, HOLD seconds between press and release.  The
+release is resolved when delivered (`drgnx-uitest--release-event'): a click, or a drag if
+the text under the pointer changed meanwhile, as Emacs does for real input."
   (let* ((b (or button 1))
          (single (append (list (list (intern (format "down-mouse-%d" b)) posn))
                          (and hold (> hold 0) (list (cons 'drgnx-uitest-pause hold)))
-                         (list (list (intern (format "mouse-%d" b)) posn)))))
+                         (list (list 'drgnx-uitest-release b posn)))))
     (if (eql count 2)
         (append single (list (list (intern (format "double-down-mouse-%d" b)) posn 2)
                              (list (intern (format "double-mouse-%d" b)) posn 2)))
       single)))
 
 ;;;; Paced delivery
+
+(defun drgnx-uitest--release-event (button start)
+  "The event for releasing BUTTON at the pixel where START was pressed.
+Like Emacs for real input: if the buffer position under that pixel is no longer START's
+(the text moved under a held button), the release is a drag from START, else a click."
+  (let* ((win (posn-window start))
+         (end (if (and (windowp win) (window-live-p win) (posn-x-y start))
+                  (posn-at-x-y (car (posn-x-y start)) (cdr (posn-x-y start)) win)
+                start)))
+    (if (and (windowp win) (eq (posn-window end) win)
+             (not (eql (posn-point end) (posn-point start))))
+        (list (intern (format "drag-mouse-%d" button)) start end)
+      (list (intern (format "mouse-%d" button)) end))))
 
 (defun drgnx-uitest-enqueue (events)
   "Queue EVENTS for paced delivery; return the queue length."
@@ -119,6 +134,8 @@ BUTTON is 1-3 (default 1), COUNT 1 or 2, HOLD seconds between press and release.
       (when (>= (float-time) (cdr ev)) (pop drgnx-uitest--queue)))
      (t
       (pop drgnx-uitest--queue)
+      (when (eq (car-safe ev) 'drgnx-uitest-release)
+        (setq ev (drgnx-uitest--release-event (nth 1 ev) (nth 2 ev))))
       (setq unread-command-events (append unread-command-events (list ev))
             drgnx-uitest--last-delivery (float-time))))))
 
