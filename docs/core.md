@@ -6,9 +6,10 @@ no third-party packages. Boot it with `emacs --init-directory <checkout>/init` �
 `bin/drgnx ui start --config drgnx`.
 
 ```
-init/early-init.el   packages not activated (drgnx manages them, M5); no tool bar
+init/early-init.el   packages not activated by Emacs (drgnx-init activates drgnx's own — packages.md); no tool bar
 init/init.el         core/ on the load path, (require 'drgnx), (drgnx-init)
-core/drgnx.el        drgnx-init: guard on, staged hooks armed, core commands, modules, surfaces
+core/drgnx.el        drgnx-init: guard on, staged hooks armed, packages activated, core commands, modules, surfaces
+                     (DRGNX_SAFE — drgnx safe — skips packages and modules)
 modules/<category>/drgnx-<name>.el   one drgnx-module-define per file
 ```
 
@@ -16,7 +17,9 @@ modules/<category>/drgnx-<name>.el   one drgnx-module-define per file
 
 `drgnx-dir` is the checkout (code only, never written to). User configuration: `(drgnx-user-dir)` —
 `$DRGNX_CONFIG_DIR` or `~/.config/drgnx/`. State and caches: `(drgnx-state-dir)` and `(drgnx-cache-dir)` under
-the XDG directories.
+the XDG directories. Packages: `(drgnx-data-dir)` — `$DRGNX_DATA_DIR` or `~/.local/share/drgnx/` — holds `elpa/`
+(the packages every session uses) and `generations/`; `(drgnx-package-cache-dir)` keeps downloaded package files
+([packages.md](packages.md)).
 
 ## Staged hooks (`drgnx-hooks.el`)
 

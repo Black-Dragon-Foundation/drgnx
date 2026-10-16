@@ -20,7 +20,8 @@ waiting for packages, from the last session.
 ## Packages
 
 A module that needs a package says so (`:packages '(magit)`). Until the package is installed the module does not run
-and is reported as waiting for it — Emacs never installs anything on its own (`drgnx sync` will, M5). External code
+and is reported as waiting for it — Emacs never installs anything on its own; `drgnx sync` does
+([packages.md](packages.md)). External code
 gets the same treatment: a `use-package … :ensure t`, `:vc` or `package-install` in an external module installs
 nothing — the package is recorded and the module reported as waiting for it.
 
