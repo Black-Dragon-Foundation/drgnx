@@ -141,3 +141,14 @@
   ;; Minor 2 (re-graded): the faces we inherit exist without loading tab-line by hand.
   (should (facep 'tab-line-tab-current))
   (should (facep 'tab-line-tab-inactive)))
+
+(ert-deftest drgnx-chrome/unchanged-chrome-is-not-set-again ()
+  ;; Setting a window parameter redraws the window: an unchanged tab line or header must not be set.
+  (drgnx-chrome-test--with dir
+    (drgnx-chrome-test--open dir "a.txt")
+    (let ((sets 0))
+      (cl-letf* ((orig (symbol-function 'set-window-parameter))
+                 ((symbol-function 'set-window-parameter) (lambda (&rest a) (setq sets (1+ sets)) (apply orig a))))
+        (drgnx-chrome-apply nil t)
+        (drgnx-chrome--refresh)
+        (should (= sets 0))))))

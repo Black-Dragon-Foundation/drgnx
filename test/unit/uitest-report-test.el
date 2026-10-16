@@ -76,3 +76,14 @@
     (drgnx-uitest-record--on-scroll w 1)
     (drgnx-uitest-record--on-scroll w 9)
     (should (= (length drgnx-uitest-record--log) 2))))
+
+(ert-deftest drgnx-uitest/a-redraw-with-an-unchanged-start-is-not-a-scroll ()
+  ;; The first `window-scroll-functions' call of a measurement for a window whose start did not
+  ;; change (any redisplay, e.g. a timer's) must not count as a change: it inflated settle times.
+  (require 'drgnx-uitest)
+  (drgnx-uitest-measure-begin)
+  (unwind-protect
+      (progn
+        (drgnx-uitest-record--on-scroll (selected-window) (window-start))
+        (should-not (seq-find (lambda (e) (eq (nth 1 e) 'scroll)) drgnx-uitest-record--log)))
+    (drgnx-uitest-measure-end)))

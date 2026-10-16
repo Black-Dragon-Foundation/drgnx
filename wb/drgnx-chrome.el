@@ -55,8 +55,9 @@ Called on the bus's edges and by commands — never while drawing, so a buffer s
          (after (let ((tabs (seq-remove (lambda (x) (and (not (eq x b)) (string-match-p drgnx-chrome-transient-tabs (buffer-name x))))
                                         before)))
                   (if (and (drgnx-chrome--tab-buffer-p b) (not (memq b tabs))) (append tabs (list b)) tabs))))
-    (set-window-parameter w 'drgnx-tabs after)
-    (unless (equal before after) (drgnx-signal-post 'tabs-changed))))
+    (unless (equal before after)
+      (set-window-parameter w 'drgnx-tabs after)
+      (drgnx-signal-post 'tabs-changed))))
 
 (defun drgnx-chrome--text (s)
   "S shown as is in a tab or header line (% would be a format directive)."
@@ -159,22 +160,27 @@ Called on the bus's edges and by commands — never while drawing, so a buffer s
 (defconst drgnx-chrome--own-header '(:eval header-line-format)
   "The header of a buffer that has its own (tabulated-list column headings, clicked to sort).")
 
+(defun drgnx-chrome--set (w param value)
+  "Set W's PARAM to VALUE only if it changed: setting a window parameter redraws the window."
+  (unless (equal-including-properties (window-parameter w param) value)
+    (set-window-parameter w param value)))
+
 (defun drgnx-chrome--apply-window (w note)
   (pcase (drgnx-chrome--role w)
     ('editor
      (when note (drgnx-chrome--note w))
-     (set-window-parameter w 'tab-line-format (let ((s (drgnx-chrome--tab-line w))) (if (equal s "") " " s)))
-     (set-window-parameter w 'header-line-format
+     (drgnx-chrome--set w 'tab-line-format (let ((s (drgnx-chrome--tab-line w))) (if (equal s "") " " s)))
+     (drgnx-chrome--set w 'header-line-format
                            (with-current-buffer (window-buffer w)
                              (if (and (local-variable-p 'header-line-format) header-line-format)
                                  drgnx-chrome--own-header
                                (drgnx-chrome-breadcrumb w))))
-     (set-window-parameter w 'mode-line-format drgnx-chrome--mode-line))
+     (drgnx-chrome--set w 'mode-line-format drgnx-chrome--mode-line))
     ((or 'dock 'area)
-     (set-window-parameter w 'tab-line-format 'none)
-     (set-window-parameter w 'mode-line-format 'none))
+     (drgnx-chrome--set w 'tab-line-format 'none)
+     (drgnx-chrome--set w 'mode-line-format 'none))
     ('lane
-     (dolist (p '(tab-line-format mode-line-format)) (set-window-parameter w p 'none)))))
+     (dolist (p '(tab-line-format mode-line-format)) (drgnx-chrome--set w p 'none)))))
 
 (defun drgnx-chrome-apply (&optional frame note)
   "Set every window's chrome on FRAME (default: the selected one) by its role; NOTE: also add the

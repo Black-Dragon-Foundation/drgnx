@@ -352,7 +352,9 @@ aimed at (their changes are not collateral), LAST-INPUT the time of the last eve
   "Start recording visible changes for a jank report."
   (setq drgnx-uitest--targets nil
         drgnx-uitest-record--log nil
-        drgnx-uitest-record--scroll-starts nil
+        drgnx-uitest-record--scroll-starts      ; the starts now: a redraw that keeps them is no scroll
+        (mapcar (lambda (w) (cons (drgnx-uitest-window-id w) (window-start w)))
+                (seq-mapcat (lambda (f) (window-list f 'nomini)) (frame-list)))
         drgnx-uitest-record--t0 (float-time)
         drgnx-uitest-record--last-change 0.0
         drgnx-uitest-record--redisplays 0
