@@ -100,3 +100,63 @@
 (ert-deftest drgnx-install/plan-names-the-drgnx-steps ()
   (drgnx-install-test--expect (drgnx-install-test--plan "fedora-45")
                               "git clone" ".local/share/drgnx/drgnx" "bin/drgnx" "drgnx doctor"))
+
+(ert-deftest drgnx-install/rerun-updates-the-existing-checkout ()
+  (let ((dir (make-temp-file "drgnx-checkout" t)))
+    (unwind-protect
+        (progn
+          (make-directory (expand-file-name ".git" dir))
+          (drgnx-install-test--expect
+           (drgnx-install-test--run (list (concat "DRGNX_INSTALL_OS_RELEASE=" (drgnx-install-test--os "fedora-45"))
+                                          "DRGNX_INSTALL_UNAME=Linux")
+                                    "--dry-run" "--dir" dir)
+           (format "update %s (git pull --ff-only)" dir)))
+      (delete-directory dir t))))
+
+(ert-deftest drgnx-install/bad-signature-installs-nothing ()
+  ;; The tarball is verified before anything is installed (build dependencies included).  A fake
+  ;; sudo on PATH: a regression must fail here, never escalate on the developer's machine.
+  (let* ((tmp (make-temp-file "drgnx-install" t))
+         (mirror (expand-file-name "mirror" tmp))
+         (bin (expand-file-name "bin" tmp))
+         (prefix (expand-file-name "prefix" tmp)))
+    (unwind-protect
+        (progn
+          (make-directory mirror)
+          (make-directory bin)
+          (dolist (f '("emacs-31.1.tar.xz" "emacs-31.1.tar.xz.sig" "keyring")) ; not *.gpg: EasyPG would encrypt it
+            (write-region "not what it claims to be\n" nil (expand-file-name f mirror)))
+          (write-region "#!/bin/sh\necho \"FAKE-SUDO $*\"\nexit 1\n" nil (expand-file-name "sudo" bin))
+          (set-file-modes (expand-file-name "sudo" bin) #o755)
+          (let ((r (drgnx-install-test--run
+                    (list (concat "DRGNX_INSTALL_OS_RELEASE=" (drgnx-install-test--os "fedora-44"))
+                          "DRGNX_INSTALL_UNAME=Linux"
+                          (concat "DRGNX_INSTALL_MIRROR=file://" mirror)
+                          (concat "DRGNX_INSTALL_KEYRING=file://" mirror "/keyring")
+                          (concat "XDG_CACHE_HOME=" tmp "/cache")
+                          (concat "PATH=" bin ":" (getenv "PATH")))
+                    "--yes" "--method" "source" "--prefix" prefix "--source-dir" drgnx-install-test--root)))
+            (should (= (car r) 1))
+            (should (string-search "does not verify" (cdr r)))
+            (should-not (string-search "As root:" (cdr r)))     ; no dependency step ran
+            (should-not (string-search "FAKE-SUDO" (cdr r)))
+            (should-not (file-exists-p (expand-file-name "bin/emacs" prefix)))))
+      (delete-directory tmp t))))
+
+(ert-deftest drgnx-install/root-steps-are-announced-even-with-yes ()
+  (let* ((tmp (make-temp-file "drgnx-install" t))
+         (bin (expand-file-name "bin" tmp)))
+    (unwind-protect
+        (progn
+          (make-directory bin)
+          (write-region "#!/bin/sh\necho \"FAKE-SUDO $*\"\nexit 1\n" nil (expand-file-name "sudo" bin))
+          (set-file-modes (expand-file-name "sudo" bin) #o755)
+          (let ((r (drgnx-install-test--run
+                    (list (concat "DRGNX_INSTALL_OS_RELEASE=" (drgnx-install-test--os "fedora-45"))
+                          "DRGNX_INSTALL_UNAME=Linux" "DRGNX_INSTALL_SESSION=wayland"
+                          (concat "PATH=" bin ":" (getenv "PATH")))
+                    "--yes" "--source-dir" drgnx-install-test--root)))
+            (should (= (car r) 1))
+            (should (string-search "As root: dnf install -y emacs-pgtk" (cdr r)))
+            (should (string-search "FAKE-SUDO dnf install -y emacs-pgtk" (cdr r)))))
+      (delete-directory tmp t))))

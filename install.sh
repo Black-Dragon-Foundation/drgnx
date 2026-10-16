@@ -19,8 +19,8 @@ set -euo pipefail
 EMACS_VERSION=31.1
 DRGNX_REPO=https://github.com/Black-Dragon-Foundation/drgnx.git
 DOCS_URL=https://github.com/Black-Dragon-Foundation/drgnx/blob/main/docs/install.md
-GNU_MIRROR=https://ftpmirror.gnu.org/emacs
-GNU_KEYRING=https://ftp.gnu.org/gnu/gnu-keyring.gpg
+GNU_MIRROR="${DRGNX_INSTALL_MIRROR:-https://ftpmirror.gnu.org/emacs}"         # overridable for tests
+GNU_KEYRING="${DRGNX_INSTALL_KEYRING:-https://ftp.gnu.org/gnu/gnu-keyring.gpg}"
 
 say()  { printf '%s\n' "$*"; }
 note() { printf '  %s\n' "$*"; }
@@ -168,9 +168,9 @@ print_plan() {
              note "brew install emacs-plus@31   (built from source, ~30 minutes)" ;;
     source)
       note "build GNU Emacs $EMACS_VERSION from source into $PREFIX (about 20-40 minutes)"
+      note "download $GNU_MIRROR/emacs-$EMACS_VERSION.tar.xz and verify its signature (gnu-keyring.gpg) before installing anything"
       [[ "$FAMILY" == debian ]] && note "enable Debian source packages for build dependencies (a drgnx-owned apt list, removed afterwards)"
       note "build dependencies: sudo ${DEPS[*]}"
-      note "download $GNU_MIRROR/emacs-$EMACS_VERSION.tar.xz and verify its signature (gnu-keyring.gpg)"
       note "${CONFIGURE[*]} && make && make install   (in $BUILD_DIR, logs kept there)" ;;
   esac
   say "2. drgnx:"
@@ -196,7 +196,8 @@ confirm() { # QUESTION → true if yes
 as_root() { # CMD… — announced, confirmed, then run as root
   if ((EUID == 0)); then "$@"; return; fi
   command -v sudo >/dev/null 2>&1 || die 1 "this step needs root and sudo is not available: $*"
-  confirm "Run as root: $*?" || die 1 "stopped before: $*"
+  say "As root: $*"
+  confirm "Run it?" || die 1 "stopped before: $*"
   sudo "$@"
 }
 
@@ -243,35 +244,57 @@ disable_deb_src() {
   as_root apt-get update -qq || true
 }
 
+download_tools() { # curl, gpg and xz — installed as root only when one is missing
+  local t
+  for t in curl gpg xz; do
+    command -v "$t" >/dev/null 2>&1 && continue
+    case "$FAMILY" in
+      fedora) as_root dnf install -y curl gnupg2 xz ;;
+      debian)
+        as_root apt-get update -qq
+        as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq curl ca-certificates gnupg xz-utils ;;
+    esac
+    return
+  done
+}
+
+fetch_emacs_source() { # download, verify and unpack into $BUILD_DIR/emacs-VERSION (kept across runs)
+  local src="emacs-$EMACS_VERSION"
+  mkdir -p "$BUILD_DIR"
+  cd "$BUILD_DIR"
+  [[ -d "$src" ]] && return
+  say "Downloading $src and its signature…"
+  curl -fsSLO "$GNU_MIRROR/$src.tar.xz"
+  curl -fsSLO "$GNU_MIRROR/$src.tar.xz.sig"
+  curl -fsSLo gnu-keyring.gpg "$GNU_KEYRING"
+  if ! gpg --batch --no-default-keyring --keyring "./gnu-keyring.gpg" --verify "$src.tar.xz.sig" "$src.tar.xz" 2>"$BUILD_DIR/gpg.log"; then
+    rm -f "$src.tar.xz" "$src.tar.xz.sig"
+    die 1 "the signature of $src.tar.xz does not verify — nothing was installed (details: $BUILD_DIR/gpg.log)"
+  fi
+  grep -E 'Good signature' "$BUILD_DIR/gpg.log" | sed 's/^/  /' || true
+  rm -rf "$src.partial"      # unpacked aside: an interrupted unpack is never taken for a verified tree
+  mkdir "$src.partial"
+  tar xf "$src.tar.xz" -C "$src.partial"
+  mv "$src.partial/$src" "$src"
+  rmdir "$src.partial"
+}
+
 install_emacs_source() {
+  download_tools
+  fetch_emacs_source         # verified before anything is installed
   case "$FAMILY" in
     fedora)
-      as_root dnf install -y dnf-plugins-core curl gnupg2 xz git make gcc
+      as_root dnf install -y dnf-plugins-core git make gcc
       as_root "${DEPS[@]}" ;;
     debian)
       as_root apt-get update -qq
-      as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq curl ca-certificates gnupg xz-utils git build-essential
+      as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq git build-essential
       enable_deb_src
       as_root env DEBIAN_FRONTEND=noninteractive "${DEPS[@]}" -qq
       disable_deb_src ;;
     *) die 2 "no source-build recipe for $PRETTY — see $DOCS_URL" ;;
   esac
-  local src="emacs-$EMACS_VERSION"
-  mkdir -p "$BUILD_DIR"
-  cd "$BUILD_DIR"
-  if [[ ! -d "$src" ]]; then
-    say "Downloading $src and its signature…"
-    curl -fsSLO "$GNU_MIRROR/$src.tar.xz"
-    curl -fsSLO "$GNU_MIRROR/$src.tar.xz.sig"
-    curl -fsSLo gnu-keyring.gpg "$GNU_KEYRING"
-    if ! gpg --batch --no-default-keyring --keyring "./gnu-keyring.gpg" --verify "$src.tar.xz.sig" "$src.tar.xz" 2>"$BUILD_DIR/gpg.log"; then
-      rm -f "$src.tar.xz" "$src.tar.xz.sig"
-      die 1 "the signature of $src.tar.xz does not verify — nothing was installed (details: $BUILD_DIR/gpg.log)"
-    fi
-    grep -E 'Good signature' "$BUILD_DIR/gpg.log" | sed 's/^/  /' || true
-    tar xf "$src.tar.xz"
-  fi
-  cd "$src"
+  cd "$BUILD_DIR/emacs-$EMACS_VERSION"
   say "Configuring (log: $BUILD_DIR/configure.log)…"
   "${CONFIGURE[@]}" >"$BUILD_DIR/configure.log" 2>&1 || die 1 "configure failed — see $BUILD_DIR/configure.log"
   grep -q 'Does Emacs have native lisp compiler? *yes' "$BUILD_DIR/configure.log" ||
