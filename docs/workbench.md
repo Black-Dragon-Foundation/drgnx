@@ -158,6 +158,9 @@ file nesting, icons (an icon theme is a module, M4), problems decorations (with 
   `header-line-format` *window parameter*, where no mode can erase them. Showing the dock never takes focus; files
   chosen in it go to the most recently used editor window, never splitting it. Sections are registered with
   `drgnx-wb-define-section` (slot, title, height, buffer, `:on-show`).
+- **Owned windows.** Code running from a timer or a follower may move only windows that show its own buffer, and
+  says so with `drgnx-wb-with-owned-windows`; the harness's jank guard records any other window move made from a
+  timer (invariant I9).
 - **Explorer** (`wb/drgnx-explorer.el`) and **Buffers** (`wb/drgnx-buffers.el`) are **virtual lists**: the buffer
   holds plain text, inserted in one go; a vector holds what each line is (path, depth, folder or file — or the
   buffer); faces are painted by jit-lock for the rows on screen only. Expanding a folder inserts its rows after the

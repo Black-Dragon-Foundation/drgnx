@@ -90,7 +90,8 @@
 (ert-deftest drgnx-rules/defaults-are-set-and-restored ()
   (let ((split-height-threshold 80) (split-width-threshold 160) (even-window-sizes 'width-only)
         (window-combination-resize nil) (switch-to-buffer-obey-display-actions nil)
-        (resize-mini-windows 'grow-only) (window-sides-vertical nil) (display-buffer-alist nil))
+        (resize-mini-windows 'grow-only) (window-sides-vertical nil) (message-truncate-lines nil)
+        (eldoc-echo-area-use-multiline-p t) (display-buffer-alist nil))
     (drgnx-rules-mode 1)
     (unwind-protect
         (progn
@@ -101,6 +102,8 @@
           (should switch-to-buffer-obey-display-actions)
           (should-not resize-mini-windows)
           (should window-sides-vertical)
+          (should message-truncate-lines)                ; the echo area stays one line (I4)
+          (should-not eldoc-echo-area-use-multiline-p)
           (should (= 1 (length display-buffer-alist))))
       (drgnx-rules-mode -1))
     (should (= split-height-threshold 80))
@@ -108,6 +111,7 @@
     (should (eq even-window-sizes 'width-only))
     (should-not switch-to-buffer-obey-display-actions)
     (should (eq resize-mini-windows 'grow-only))
+    (should (eq eldoc-echo-area-use-multiline-p t))
     (should-not display-buffer-alist)))
 
 (ert-deftest drgnx-rules/delete-other-windows-keeps-the-dock ()

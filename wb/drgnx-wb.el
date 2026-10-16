@@ -22,6 +22,15 @@
 (defvar drgnx-wb-dock-map (make-sparse-keymap)
   "Parent keymap of every dock section's mode (keys come from the key profiles).")
 
+(defvar drgnx-wb--owned nil
+  "Windows the running code owns (it shows its own buffer there): moving them from a timer or a
+follower is not a jank-guard violation (invariant I9).")
+
+(defmacro drgnx-wb-with-owned-windows (windows &rest body)
+  "Run BODY with WINDOWS declared as the caller's own (see `drgnx-wb--owned')."
+  (declare (indent 1))
+  `(let ((drgnx-wb--owned (append ,windows drgnx-wb--owned))) ,@body))
+
 (defvar drgnx-wb--sections nil "Alist NAME → plist (:slot :title :buffer), the left dock's sections.")
 
 (defun drgnx-wb-display-name (name)

@@ -149,8 +149,9 @@ While a button is held in the panel, wait for the release: rows never move under
           (setq drgnx-buffers--rows (vconcat (drgnx-buffers--shown)))
           (goto-char (or (and at (drgnx-buffers--row-pos at)) (point-min)))
           (pcase-dolist (`(,w ,top ,pt) kept)
-            (when-let* ((p (and top (drgnx-buffers--row-pos top)))) (set-window-start w p t))
-            (when-let* ((p (and pt (drgnx-buffers--row-pos pt)))) (set-window-point w p)))
+            (drgnx-wb-with-owned-windows (list w)           ; the panel's own windows
+              (when-let* ((p (and top (drgnx-buffers--row-pos top)))) (set-window-start w p t))
+              (when-let* ((p (and pt (drgnx-buffers--row-pos pt)))) (set-window-point w p))))
           (when hl-line-mode (hl-line-highlight))
           (drgnx-buffers--mark-active))))))
 

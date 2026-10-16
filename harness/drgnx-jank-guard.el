@@ -32,9 +32,21 @@
   (let ((drgnx-jank-guard--timer-fn nil))
     (apply orig args)))
 
+(defvar drgnx-wb--owned)
+
+(defun drgnx-jank-guard--owned-p (fn args)
+  "Non-nil if the window FN moves is one the running code owns (`drgnx-wb-with-owned-windows')."
+  (and (boundp 'drgnx-wb--owned) drgnx-wb--owned
+       (let ((w (if (and (memq fn '(set-window-start set-window-point select-window delete-window split-window))
+                         (windowp (car args)))
+                    (car args)
+                  (selected-window))))
+         (memq w drgnx-wb--owned))))
+
 (defun drgnx-jank-guard--check (fn args)
   (when (and drgnx-jank-guard--timer-fn
-             (not (and (eq fn 'select-window) (nth 1 args))))   ; NORECORD: temporary selection
+             (not (and (eq fn 'select-window) (nth 1 args)))    ; NORECORD: temporary selection
+             (not (drgnx-jank-guard--owned-p fn args)))
     (push (list :time (float-time) :fn fn
                 :window (let ((w (car args))) (if (windowp w) (format "%s" w) "selected"))
                 :timer (drgnx-jank-guard--describe drgnx-jank-guard--timer-fn))

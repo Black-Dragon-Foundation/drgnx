@@ -108,10 +108,10 @@ buffer a rule places goes to that place — it would otherwise take over the pan
 (defconst drgnx-rules--defaults
   '((split-height-threshold . nil) (split-width-threshold . nil) (even-window-sizes . nil)
     (window-combination-resize . nil) (switch-to-buffer-obey-display-actions . t) (resize-mini-windows . nil)
-    (window-sides-vertical . t))
-  "Window defaults: nothing splits or resizes on its own (the echo area stays one line, so a tall
-message never takes pixels from the panel); `switch-to-buffer' follows the rules; the left and
-right docks run the frame's full height, the panel sits under the editors.")
+    (window-sides-vertical . t) (message-truncate-lines . t) (eldoc-echo-area-use-multiline-p . nil))
+  "Window defaults: nothing splits or resizes on its own; the echo area, messages and eldoc stay one
+line (a tall message never takes pixels from the panel); `switch-to-buffer' follows the rules; the
+left and right docks run the frame's full height, the panel sits under the editors.")
 
 (defvar drgnx-rules--saved nil "The values `drgnx-rules-mode' replaced.")
 (defconst drgnx-rules--entry '(drgnx-rules--condition (drgnx-rules--display)))

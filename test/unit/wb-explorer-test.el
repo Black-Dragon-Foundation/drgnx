@@ -592,3 +592,23 @@
       (let ((deadline (+ (float-time) 0.5))) (while (< (float-time) deadline) (read-event nil nil 0.05)))
       (should (= drgnx-explorer--relists 0))
       (should (= drgnx-explorer--renders 0)))))
+
+(ert-deftest drgnx-explorer/the-follower-moves-only-its-own-window ()
+  ;; I9: the follower runs from the bus's timer and moves the Explorer's window — its own — only.
+  (require 'drgnx-jank-guard)
+  (drgnx-explorer-test--with root
+    (drgnx-wb-show-sidebar)
+    (let* ((w (drgnx-wb-section-window 'explorer))
+           (main (find-file-noselect (expand-file-name "src/app/main.py" root)))
+           (drgnx-jank-guard-log nil) (done nil))
+      (drgnx-jank-guard-enable)
+      (unwind-protect
+          (progn
+            (drgnx-wb-focus-editor)
+            (run-with-timer 0 nil (lambda () (unwind-protect (drgnx-explorer--follow main) (setq done t))))
+            (while (not done) (accept-process-output nil 0.01))
+            (should (equal (with-current-buffer drgnx-explorer-buffer-name (drgnx-explorer-node-at (window-point w)))
+                           (buffer-file-name main)))          ; it did move the Explorer
+            (should-not drgnx-jank-guard-log))
+        (drgnx-jank-guard-disable)
+        (kill-buffer main)))))

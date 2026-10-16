@@ -255,8 +255,9 @@ faces come later, from jit-lock, for the rows on screen."
   (goto-char (drgnx-explorer--place (car views)))
   (pcase-dolist (`(,w ,top ,pt) (cdr views))
     (when (window-live-p w)
-      (set-window-start w (drgnx-explorer--place top) t)
-      (set-window-point w (drgnx-explorer--place pt))))
+      (drgnx-wb-with-owned-windows (list w)               ; the Explorer's own windows
+        (set-window-start w (drgnx-explorer--place top) t)
+        (set-window-point w (drgnx-explorer--place pt)))))
   (when hl-line-mode (hl-line-highlight)))
 
 ;;;; Live updates
@@ -406,7 +407,7 @@ Returns non-nil if FILE is under a root."
               (when-let* ((pos (drgnx-explorer--row-pos dir))) (drgnx-explorer-toggle-at pos)))))
         (when-let* ((pos (drgnx-explorer--row-pos file)))
           (if (window-live-p window)
-              (progn
+              (drgnx-wb-with-owned-windows (list window)
                 (set-window-point window pos)
                 (unless (pos-visible-in-window-p pos window)
                   (set-window-start window (save-excursion (goto-char pos)
