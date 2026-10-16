@@ -1,0 +1,7 @@
+NAME="Nobara Linux"
+VERSION="42 (KDE Plasma)"
+ID=nobara
+ID_LIKE="rhel centos fedora"
+VERSION_ID=42
+PLATFORM_ID="platform:f42"
+PRETTY_NAME="Nobara Linux 42 (KDE Plasma)"

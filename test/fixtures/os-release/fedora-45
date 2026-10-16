@@ -1,4 +1,5 @@
 NAME="Fedora Linux"
 VERSION_ID=45
+PLATFORM_ID="platform:f45"
 ID=fedora
 PRETTY_NAME="Fedora Linux 45 (Workstation Edition)"

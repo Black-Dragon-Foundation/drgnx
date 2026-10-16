@@ -21,8 +21,10 @@ Afterwards, start drgnx with the command the installer prints
 
 ## What install.sh does
 
-1. **Detects** the platform (`/etc/os-release`, derivatives through `ID_LIKE`; macOS version and CPU) and the
-   session (Wayland or X11; no display counts as Wayland).
+1. **Detects** the platform (`/etc/os-release`, derivatives through `ID_LIKE`; Fedora and its remixes by
+   `PLATFORM_ID`, so RHEL clones and Amazon Linux are not taken for Fedora; macOS version and CPU) and the
+   session (Wayland or X11; no display counts as Wayland). Relative `--prefix`, `--dir` and `--source-dir`
+   are taken relative to the current directory.
 2. **Prints a plan** — every step, every command that will run as root — before doing anything.
    `--dry-run` stops here and changes nothing.
 3. **Asks** "Go ahead?" and before **every** root step (`As root: …`). Questions are read from the terminal
@@ -60,13 +62,13 @@ option, 3 no terminal to ask on and no `--yes`.
 
 | Platform | Emacs comes from | Notes |
 |---|---|---|
-| Arch, EndeavourOS, Manjaro, … | `pacman -S emacs-wayland` (Wayland) / `emacs` (X11) | 31.1, native compilation |
+| Arch, EndeavourOS, Manjaro, … | `pacman -Syu emacs-wayland` (Wayland) / `emacs` (X11) | 31.1, native compilation; `-Syu` because Arch supports no partial upgrades |
 | Fedora 45+ | `dnf install emacs-pgtk` (Wayland) / `emacs-gtk+x11` (X11) | 31.1, native compilation, tree-sitter |
-| Fedora 44 | source build (`dnf builddep emacs`) | |
+| Fedora 44, Fedora remixes (Nobara, …) below 45 | source build (`dnf builddep emacs`) | |
 | Debian 13, Ubuntu 26.04, Linux Mint, Pop!_OS, … | source build (`apt-get build-dep emacs`) | see below |
 | macOS, Apple silicon, 15+ | Homebrew `brew install --cask emacs-plus-app` (prebuilt) | needs [Homebrew](https://brew.sh); `brew trust d12frosted/emacs-plus` first |
 | macOS, Intel or older | Homebrew `brew install emacs-plus@31` (builds, ~30 min) | |
-| anything else | — (exit 2) | install Emacs 31.1 yourself (below), then `bash install.sh --method keep` |
+| anything else, including RHEL, Rocky, Alma and Amazon Linux | — (exit 2) | install Emacs 31.1 yourself (below), then `bash install.sh --method keep` |
 
 Not used, on purpose: Flathub's Emacs (still 30.2) and the Snap (native compilation unverified; the sandbox
 gets in the way of language servers and tools).
@@ -78,11 +80,13 @@ Used where the distribution has no 31.1 yet. Everything happens in `~/.cache/drg
 1. Download `emacs-31.1.tar.xz` and its signature from the GNU mirrors and verify it against the GNU keyring
    (`gnu-keyring.gpg`; the 31.1 release is signed by Sean Whitton, key
    `8DC2 487E 51AB DD90 B5C4 753F 0F56 D055 3B6D 411B`). **This happens before anything is installed** — if the
-   signature does not verify, the installer stops and nothing has changed. Only `curl`, `gpg` and `xz` are
+   signature does not verify, the installer stops and nothing has changed. gpg runs with a private home in the
+   build directory; your `~/.gnupg` is not used. Only `curl`, `gpg` and `xz` are
    installed first, and only if missing.
 2. Build dependencies, as root: Fedora `dnf builddep emacs`; Debian/Ubuntu `apt-get build-dep emacs` with
-   source packages enabled through a drgnx-owned list (`/etc/apt/sources.list.d/drgnx-deb-src.sources`,
-   removed again afterwards), then `libgccjit-N-dev` for the default `gcc` (Ubuntu 26.04 builds its own Emacs
+   source packages enabled through drgnx-owned lists (`/etc/apt/sources.list.d/drgnx-deb-src.sources` and
+   `.list`, mirroring every `deb` source of the system, including Linux Mint's one-line lists), removed again
+   afterwards — also when a step fails or the run is interrupted, then `libgccjit-N-dev` for the default `gcc` (Ubuntu 26.04 builds its own Emacs
    with gcc 14 but defaults to gcc 15).
 3. `./configure --prefix=~/.local --with-native-compilation=aot --with-tree-sitter --with-pgtk` (X11:
    `--with-x-toolkit=gtk3`). The installer stops if configure did not enable native compilation.

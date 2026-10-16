@@ -21,6 +21,7 @@ DRGNX_REPO="${DRGNX_INSTALL_REPO:-https://github.com/Black-Dragon-Foundation/drg
 DOCS_URL=https://github.com/Black-Dragon-Foundation/drgnx/blob/main/docs/install.md
 GNU_MIRROR="${DRGNX_INSTALL_MIRROR:-https://ftpmirror.gnu.org/emacs}"         # overridable for tests
 GNU_KEYRING="${DRGNX_INSTALL_KEYRING:-https://ftp.gnu.org/gnu/gnu-keyring.gpg}"
+APT_DIR="${DRGNX_INSTALL_APT_DIR:-/etc/apt}"
 
 say()  { printf '%s\n' "$*"; }
 note() { printf '  %s\n' "$*"; }
@@ -59,7 +60,10 @@ parse_args() {
   done
   case "$METHOD" in auto|package|source|keep) ;; *) die 2 "--method must be auto, package, source or keep" ;; esac
   if [[ -n "$SOURCE_DIR" ]]; then DIR="$SOURCE_DIR"; fi
+  PREFIX="$(abs_path "$PREFIX")" DIR="$(abs_path "$DIR")"   # links and the build tree need absolute paths
 }
+
+abs_path() { case "$1" in /*) printf '%s' "$1" ;; *) printf '%s/%s' "$PWD" "$1" ;; esac; }
 
 # --- Detection --------------------------------------------------------------------------------------
 
@@ -94,6 +98,13 @@ detect() {
       debian|ubuntu) FAMILY=debian; break ;;
     esac
   done
+  FEDORA_VERSION=""
+  if [[ "$FAMILY" == fedora ]]; then   # RHEL clones and Amazon Linux list fedora in ID_LIKE but are not Fedora
+    local platform; platform="$(os_field "$f" PLATFORM_ID)"
+    if [[ "$platform" =~ ^platform:f([0-9]+)$ ]]; then FEDORA_VERSION="${BASH_REMATCH[1]}"
+    elif [[ "$ID" == fedora && -z "$platform" ]]; then FEDORA_VERSION="$VERSION_ID"
+    else FAMILY=unknown; fi
+  fi
 }
 
 version_ge() { # A B → true if A >= B
@@ -130,7 +141,7 @@ choose_method() {
   else
     case "$FAMILY" in
       macos) if [[ "$ARCH" == arm64 ]] && version_ge "$VERSION_ID" 15; then CHOSEN=cask; else CHOSEN=formula; fi ;;
-      fedora) if version_ge "${VERSION_ID:-0}" 45; then CHOSEN=package; else CHOSEN=source; fi ;;
+      fedora) if version_ge "${FEDORA_VERSION:-0}" 45; then CHOSEN=package; else CHOSEN=source; fi ;;
       arch) CHOSEN=package ;;
       debian) CHOSEN=source ;;
       *) die 2 "no automatic install for ${PRETTY:-this system} yet. Install GNU Emacs $EMACS_VERSION with native compilation (see $DOCS_URL), then run: bash install.sh --method keep" ;;
@@ -140,8 +151,8 @@ choose_method() {
   case "$FAMILY:$SESSION" in
     fedora:x11) PKG=(dnf install -y emacs-gtk+x11) ;;
     fedora:*)   PKG=(dnf install -y emacs-pgtk) ;;
-    arch:x11)   PKG=(pacman -S --needed --noconfirm emacs) ;;
-    arch:*)     PKG=(pacman -S --needed --noconfirm emacs-wayland) ;;
+    arch:x11)   PKG=(pacman -Syu --needed --noconfirm emacs) ;;          # -yu: Arch supports no partial upgrades
+    arch:*)     PKG=(pacman -Syu --needed --noconfirm emacs-wayland) ;;
     *)          PKG=() ;;
   esac
   if [[ "$SESSION" == x11 ]]; then GUI_FLAG=--with-x-toolkit=gtk3; else GUI_FLAG=--with-pgtk; fi
@@ -194,11 +205,13 @@ confirm() { # QUESTION → true if yes
   [[ "$ans" == y || "$ans" == Y || "$ans" == yes ]]
 }
 
-as_root() { # CMD… — announced, confirmed, then run as root
+as_root() { # [--no-ask] CMD… — announced, confirmed (unless --no-ask: cleanup), then run as root
+  local ask=1
+  if [[ "$1" == --no-ask ]]; then ask=0; shift; fi
+  say "As root: $*"
   if ((EUID == 0)); then "$@"; return; fi
   command -v sudo >/dev/null 2>&1 || die 1 "this step needs root and sudo is not available: $*"
-  say "As root: $*"
-  confirm "Run it?" || die 1 "stopped before: $*"
+  if ((ask)); then confirm "Run it?" || die 1 "stopped before: $*"; fi
   sudo "$@"
 }
 
@@ -223,26 +236,31 @@ install_emacs_brew() {
 }
 
 enable_deb_src() {
-  # A drgnx-owned list mirroring the system's sources as deb-src, so `apt-get build-dep` works; removed afterwards.
-  local f out=/etc/apt/sources.list.d/drgnx-deb-src.sources tmp
-  tmp="$(mktemp)"
-  for f in /etc/apt/sources.list.d/*.sources; do
-    [[ -e "$f" ]] || continue
-    sed 's/^Types:.*/Types: deb-src/' "$f" >>"$tmp"; printf '\n' >>"$tmp"
+  # drgnx-owned lists mirroring every system source as deb-src (deb822 .sources, one-line .list files and
+  # sources.list — Linux Mint uses the .list form), so `apt-get build-dep` works. Removed afterwards, also
+  # when a step fails or the run is interrupted.
+  local d="$APT_DIR/sources.list.d" f sources list
+  sources="$(mktemp)" list="$(mktemp)"
+  for f in "$d"/*.sources; do
+    [[ -e "$f" && "$f" != "$d"/drgnx-deb-src.* ]] || continue
+    sed 's/^Types:.*/Types: deb-src/' "$f" >>"$sources"; printf '\n' >>"$sources"
   done
-  if [[ -s "$tmp" ]]; then
-    as_root install -m 644 "$tmp" "$out"
-  elif [[ -r /etc/apt/sources.list ]]; then
-    grep -E '^deb ' /etc/apt/sources.list | sed 's/^deb /deb-src /' >"$tmp" || true
-    as_root install -m 644 "$tmp" /etc/apt/sources.list.d/drgnx-deb-src.list
-  fi
-  rm -f "$tmp"
+  for f in "$APT_DIR/sources.list" "$d"/*.list; do
+    [[ -r "$f" && "$f" != "$d"/drgnx-deb-src.* ]] || continue
+    { grep -E '^deb ' "$f" || true; } | sed 's/^deb /deb-src /' >>"$list"
+  done
+  trap disable_deb_src EXIT
+  trap 'exit 130' INT TERM HUP     # so the EXIT trap runs on an interrupt too
+  if [[ -s "$sources" ]]; then as_root install -m 644 "$sources" "$d/drgnx-deb-src.sources"; fi
+  if [[ -s "$list" ]]; then as_root install -m 644 "$list" "$d/drgnx-deb-src.list"; fi
+  rm -f "$sources" "$list"
   as_root apt-get update -qq
 }
 
-disable_deb_src() {
-  as_root rm -f /etc/apt/sources.list.d/drgnx-deb-src.sources /etc/apt/sources.list.d/drgnx-deb-src.list
-  as_root apt-get update -qq || true
+disable_deb_src() { # no question: the user already agreed to these files
+  trap - EXIT INT TERM HUP
+  as_root --no-ask rm -f "$APT_DIR/sources.list.d/drgnx-deb-src.sources" "$APT_DIR/sources.list.d/drgnx-deb-src.list"
+  as_root --no-ask apt-get update -qq || true
 }
 
 download_tools() { # curl, gpg and xz — installed as root only when one is missing
@@ -268,7 +286,9 @@ fetch_emacs_source() { # download, verify and unpack into $BUILD_DIR/emacs-VERSI
   curl -fsSLO "$GNU_MIRROR/$src.tar.xz"
   curl -fsSLO "$GNU_MIRROR/$src.tar.xz.sig"
   curl -fsSLo gnu-keyring.gpg "$GNU_KEYRING"
-  if ! gpg --batch --no-default-keyring --keyring "./gnu-keyring.gpg" --verify "$src.tar.xz.sig" "$src.tar.xz" 2>"$BUILD_DIR/gpg.log"; then
+  rm -rf gnupg && mkdir -m 700 gnupg   # a private gpg home: the user's ~/.gnupg is neither needed nor touched
+  if ! gpg --homedir ./gnupg --batch --no-default-keyring --keyring "./gnu-keyring.gpg" \
+       --verify "$src.tar.xz.sig" "$src.tar.xz" 2>"$BUILD_DIR/gpg.log"; then
     rm -f "$src.tar.xz" "$src.tar.xz.sig"
     die 1 "the signature of $src.tar.xz does not verify — nothing was installed (details: $BUILD_DIR/gpg.log)"
   fi

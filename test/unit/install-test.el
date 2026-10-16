@@ -55,9 +55,9 @@
 
 (ert-deftest drgnx-install/arch-family-uses-the-package ()
   (drgnx-install-test--expect (drgnx-install-test--plan "arch" "DRGNX_INSTALL_SESSION=wayland")
-                              "pacman -S --needed --noconfirm emacs-wayland")
+                              "pacman -Syu --needed --noconfirm emacs-wayland")
   (drgnx-install-test--expect (drgnx-install-test--plan "endeavouros" "DRGNX_INSTALL_SESSION=x11")
-                              "pacman -S --needed --noconfirm emacs"))
+                              "pacman -Syu --needed --noconfirm emacs"))
 
 (ert-deftest drgnx-install/debian-family-builds-from-source ()
   (dolist (os '("debian-13" "ubuntu-26.04" "linuxmint"))
@@ -117,6 +117,7 @@
       (delete-directory dir t))))
 
 (ert-deftest drgnx-install/bad-signature-installs-nothing ()
+  (skip-unless (/= 0 (user-uid)))     ; as root, as_root runs commands without sudo: they would really run
   ;; The tarball is verified before anything is installed (build dependencies included).  A fake
   ;; sudo on PATH: a regression must fail here, never escalate on the developer's machine.
   (let* ((tmp (make-temp-file "drgnx-install" t))
@@ -147,6 +148,7 @@
       (delete-directory tmp t))))
 
 (ert-deftest drgnx-install/root-steps-are-announced-even-with-yes ()
+  (skip-unless (/= 0 (user-uid)))     ; as root, as_root runs commands without sudo: they would really run
   (let* ((tmp (make-temp-file "drgnx-install" t))
          (bin (expand-file-name "bin" tmp)))
     (unwind-protect
@@ -174,6 +176,7 @@
         (should (string-search name (buffer-string)))))))
 
 (ert-deftest drgnx-install/git-is-installed-when-missing ()
+  (skip-unless (/= 0 (user-uid)))     ; as root, as_root runs commands without sudo: they would really run
   ;; Cloning drgnx needs git; a package install (Arch, Fedora 45) does not bring it.  PATH: /usr/bin
   ;; without git, plus a fake sudo.
   (let* ((tmp (make-temp-file "drgnx-install" t))
@@ -198,4 +201,69 @@
                     "--yes" "--dir" (expand-file-name "checkout" tmp))))
             (should (= (car r) 1))
             (should (string-search "As root: dnf install -y git" (cdr r)))))
+      (delete-directory tmp t))))
+
+(ert-deftest drgnx-install/fedora-family-is-fedora-itself ()
+  ;; RHEL clones and Amazon Linux carry `fedora' in ID_LIKE but have no Fedora packages: the guide.
+  ;; Fedora remixes (Nobara) have a Fedora PLATFORM_ID.
+  (dolist (os '("rocky-9" "amazon-2023"))
+    (let ((r (drgnx-install-test--plan os)))
+      (should (= (car r) 2))
+      (should (string-search "docs/install.md" (cdr r)))))
+  (drgnx-install-test--expect (drgnx-install-test--plan "nobara-42") "build GNU Emacs 31.1 from source" "dnf builddep -y emacs"))
+
+(ert-deftest drgnx-install/relative-paths-become-absolute ()
+  ;; `--source-dir .' from a clone: the drgnx link must not dangle.
+  (let ((r (drgnx-install-test--run (list (concat "DRGNX_INSTALL_OS_RELEASE=" (drgnx-install-test--os "fedora-45"))
+                                          "DRGNX_INSTALL_UNAME=Linux")
+                                    "--dry-run" "--source-dir" "." "--prefix" "rel-prefix")))
+    (should (= (car r) 0))
+    (should (string-search (concat "→ " (directory-file-name drgnx-install-test--root)) (cdr r)))
+    (should (string-search (concat "Link " (directory-file-name drgnx-install-test--root)) (cdr r)))))
+
+(ert-deftest drgnx-install/debian-source-lists-are-mirrored-and-always-removed ()
+  ;; Linux Mint keeps its archives in a one-line .list; build-dep needs deb-src for them.  When a step
+  ;; fails, drgnx's deb-src list is removed anyway.  A tarball signed by a throwaway key gets past the
+  ;; signature check; fake sudo runs the command, fake apt-get records what build-dep would see, then fails.
+  (skip-unless (/= 0 (user-uid)))
+  (skip-unless (executable-find "gpg"))
+  (let* ((tmp (make-temp-file "drgnx-install" t))
+         (gnupg (expand-file-name "g" tmp)) (mirror (expand-file-name "mirror" tmp))
+         (apt (expand-file-name "apt" tmp)) (bin (expand-file-name "bin" tmp))
+         (log (expand-file-name "apt-get.log" tmp))
+         (sh (lambda (&rest args) (should (= 0 (apply #'call-process "sh" nil nil nil "-c" args))))))
+    (unwind-protect
+        (progn
+          (dolist (d (list gnupg mirror bin (expand-file-name "src/emacs-31.1" tmp) (expand-file-name "sources.list.d" apt)))
+            (make-directory d t))
+          (set-file-modes gnupg #o700)
+          (write-region "" nil (expand-file-name "sources.list" apt))
+          (write-region "deb http://packages.linuxmint.com zena main upstream\ndeb http://archive.ubuntu.com/ubuntu noble main\n"
+                        nil (expand-file-name "sources.list.d/official-package-repositories.list" apt))
+          (write-region "#!/bin/sh\nexec \"$@\"\n" nil (expand-file-name "sudo" bin))
+          (write-region (format "#!/bin/sh\necho \"apt-get $*\" >>%s\ncase \"$*\" in *build-dep*) cat %s/sources.list.d/drgnx-deb-src.* >>%s; exit 100 ;; esac\nexit 0\n"
+                                log apt log)
+                        nil (expand-file-name "apt-get" bin))
+          (dolist (f '("sudo" "apt-get")) (set-file-modes (expand-file-name f bin) #o755))
+          (funcall sh (format "tar -C %s/src -cJf %s/emacs-31.1.tar.xz emacs-31.1" tmp mirror))
+          (funcall sh (format "gpg --homedir %s --batch --passphrase '' --quick-gen-key 'drgnx test <test@drgnx.invalid>' default default never 2>/dev/null" gnupg))
+          (funcall sh (format "gpg --homedir %s --batch --pinentry-mode loopback --passphrase '' --detach-sign -o %s/emacs-31.1.tar.xz.sig %s/emacs-31.1.tar.xz 2>/dev/null" gnupg mirror mirror))
+          (funcall sh (format "gpg --homedir %s --export >%s/keyring 2>/dev/null; gpgconf --homedir %s --kill all" gnupg mirror gnupg))
+          (let ((r (drgnx-install-test--run
+                    (list (concat "DRGNX_INSTALL_OS_RELEASE=" (drgnx-install-test--os "linuxmint"))
+                          "DRGNX_INSTALL_UNAME=Linux"
+                          (concat "DRGNX_INSTALL_MIRROR=file://" mirror)
+                          (concat "DRGNX_INSTALL_KEYRING=file://" mirror "/keyring")
+                          (concat "DRGNX_INSTALL_APT_DIR=" apt)
+                          (concat "XDG_CACHE_HOME=" tmp "/cache")
+                          (concat "PATH=" bin ":" (getenv "PATH")))
+                    "--yes" "--method" "source" "--prefix" (expand-file-name "prefix" tmp)
+                    "--source-dir" drgnx-install-test--root)))
+            (should (/= (car r) 0))
+            (should (string-search "Good signature" (cdr r)))
+            (let ((seen (with-temp-buffer (insert-file-contents log) (buffer-string))))
+              (should (string-search "deb-src http://packages.linuxmint.com zena main upstream" seen))
+              (should (string-search "deb-src http://archive.ubuntu.com/ubuntu noble main" seen)))
+            (should-not (directory-files (expand-file-name "sources.list.d" apt) nil "\\`drgnx-deb-src"))
+            (should-not (file-exists-p (expand-file-name "prefix/bin/emacs" tmp)))))
       (delete-directory tmp t))))
