@@ -62,12 +62,21 @@
                                             (clrhash drgnx-explorer--expanded)
                                             (when (get-buffer drgnx-explorer-buffer-name) (kill-buffer drgnx-explorer-buffer-name)))
                                           (lambda () (drgnx-explorer-set-roots (list root)) (drgnx-wb-show-sidebar))))))
+    (setq r (plist-put r :explorer-first-git (plist-get r :explorer-first)))   ; git is on: render does not wait for it
+    (setq r (plist-put r :git-status
+                       (drgnx-bench--try "drgnx" "git status"
+                         (drgnx-bench--ms (lambda () (clrhash drgnx-git--repos))
+                                          (lambda ()
+                                            (drgnx-git-refresh (file-name-as-directory root) t)
+                                            (unless (drgnx-git-status (expand-file-name "d000/f000.txt" root))
+                                              (error "no git status was read")))))))
     (setq r (plist-put r :explorer-expand
                        (drgnx-bench--try "drgnx" "expand"
                          (drgnx-bench--ms (lambda () (when (drgnx-explorer--expanded-p big)
                                                        (drgnx-explorer-toggle-at (funcall row big)))
                                             (clrhash drgnx-explorer--cache))     ; read the disk, like treemacs
                                           (lambda () (drgnx-explorer-toggle-at (funcall row big)))))))
+    (setq r (plist-put r :explorer-expand-git (plist-get r :explorer-expand)))
     (setq r (plist-put r :explorer-reveal
                        (drgnx-bench--try "drgnx" "reveal"
                          (drgnx-bench--ms (lambda () (clrhash drgnx-explorer--expanded) (drgnx-explorer--render))
@@ -156,6 +165,21 @@
                                                       (treemacs-refresh)
                                                       (unless (= (+ n 100) (count-lines (point-min) (point-max)))
                                                         (error "refresh did not show the 100 new files"))))))))))
+        (when (executable-find "git")
+          (treemacs-git-mode 'simple)
+          (setq r (plist-put r :explorer-first-git
+                             (drgnx-bench--try "treemacs" "first with git"
+                               (drgnx-bench--ms (lambda () (funcall kill) (select-window (get-buffer-window (get-file-buffer file))))
+                                                (lambda () (treemacs-display-current-project-exclusively))))))
+          (setq r (plist-put r :explorer-expand-git
+                             (drgnx-bench--try "treemacs" "expand with git"
+                               (drgnx-bench--ms (lambda () (with-selected-window (funcall tw)
+                                                             (treemacs-goto-file-node big)
+                                                             (when (treemacs-is-node-expanded? (treemacs-current-button))
+                                                               (treemacs-toggle-node))))
+                                                (lambda () (with-selected-window (funcall tw)
+                                                             (treemacs-goto-file-node big) (treemacs-toggle-node)))))))
+          (treemacs-git-mode -1))
         (funcall kill)
         r))))
 

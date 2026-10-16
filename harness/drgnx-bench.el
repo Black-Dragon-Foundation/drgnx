@@ -25,6 +25,7 @@
 (defconst drgnx-bench-pairs
   '((:explorer-first . :treemacs) (:explorer-expand . :treemacs) (:explorer-reveal . :treemacs)
     (:explorer-key-p95 . :treemacs) (:explorer-refresh . :treemacs)
+    (:explorer-first-git . :treemacs) (:explorer-expand-git . :treemacs) (:git-status . :treemacs)
     (:buffers-render . :ibuffer) (:buffers-update . :ibuffer) (:buffers-key-p95 . :ibuffer))
   "Each metric and the tool drgnx is compared with.")
 
@@ -62,7 +63,6 @@
 (defun drgnx-bench-fixture ()
   "A project of ~25k files: 200 folders × 100 files, big/ with 5000, a depth-8 file."
   (let ((root (make-temp-file "drgnx-bench" t)))
-    (make-directory (expand-file-name ".git" root))       ; a project for project.el
     (dotimes (d 200)
       (let ((dir (expand-file-name (format "d%03d" d) root)))
         (make-directory dir)
@@ -73,6 +73,15 @@
     (let ((leaf (expand-file-name "deep/a/b/c/d/e/f/leaf.txt" root)))
       (make-directory (file-name-directory leaf) t)
       (write-region "" nil leaf nil 'silent))
+    ;; A real repository: everything committed, then 50 files changed (git decorations to compute).
+    (let ((default-directory (file-name-as-directory root)))
+      (if (executable-find "git")
+          (progn
+            (call-process "git" nil nil nil "init" "-q")
+            (call-process "git" nil nil nil "add" "-A")
+            (call-process "git" nil nil nil "-c" "user.email=bench@drgnx" "-c" "user.name=bench" "commit" "-qm" "bench")
+            (dotimes (i 50) (write-region "changed\n" nil (expand-file-name (format "d%03d/f000.txt" i) root) nil 'silent)))
+        (make-directory (expand-file-name ".git" root))))   ; still a project for project.el
     root))
 
 (defun drgnx-bench-run ()

@@ -219,9 +219,16 @@ faces come later, from jit-lock, for the rows on screen."
       (drgnx-explorer--sync-watches)
       (drgnx-explorer--git-refresh))))
 
+(defvar drgnx-explorer--git-timer nil)
+
 (defun drgnx-explorer--git-refresh ()
-  "Read the git status of every root (in the background)."
-  (when drgnx-explorer-git (dolist (r drgnx-explorer--roots) (drgnx-git-refresh r))))
+  "Read the git status of every root in the background — started once the tree is on screen
+(starting a process costs milliseconds the render should not wait for)."
+  (when (and drgnx-explorer-git (not (timerp drgnx-explorer--git-timer)))
+    (setq drgnx-explorer--git-timer
+          (run-with-idle-timer 0.05 nil (lambda ()
+                                          (setq drgnx-explorer--git-timer nil)
+                                          (dolist (r drgnx-explorer--roots) (drgnx-git-refresh r)))))))
 
 (defun drgnx-explorer--git-changed (_root)
   "A git status arrived: repaint the visible rows."

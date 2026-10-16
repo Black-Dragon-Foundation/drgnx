@@ -173,3 +173,37 @@ agent or status poll): the selection stays where it is."
            (format "a background buffer event must not move the Explorer selection: row %d became row %d (%S)"
                    line0 line (drgnx-scn--explorer-line))
            r))))))
+
+(ert-deftest drgnx-scenario/explorer-change-during-hold-is-still-a-click ()
+  "A folder appears above the row while its button is held (a build, git, another program): the
+release is still a click on the row pressed — the tree does not change under a held button."
+  :expected-result (drgnx-scenario-expected 'drgnx-scenario/explorer-change-during-hold-is-still-a-click)
+  (drgnx-scn--with-explorer root
+    (let* ((events nil)
+           (record (lambda () (when (mouse-event-p last-input-event) (push (car last-input-event) events))))
+           (_ (run-with-timer 0.1 nil (lambda () (make-directory (expand-file-name "aaa-new" root)))))
+           (r (progn (add-hook 'pre-command-hook record)
+                     (unwind-protect (drgnx-scn--click "tests" 1 0.4)
+                       (remove-hook 'pre-command-hook record))))
+           (line (drgnx-scn--explorer-line))
+           (drag (seq-find (lambda (e) (string-prefix-p "drag-" (symbol-name e))) events)))
+      (drgnx-scenario-check
+       (and (not drag) (string-search "tests" line))
+       (format "a change during the hold must not turn the click into a drag or move the selection: input %s, selection on %S"
+               (reverse events) line)
+       r))))
+
+(ert-deftest drgnx-scenario/explorer-external-change-keeps-the-selection ()
+  "Browsing with keys, a new folder appears above the selected row: the selection stays on its entry."
+  :expected-result (drgnx-scenario-expected 'drgnx-scenario/explorer-external-change-keeps-the-selection)
+  (drgnx-scn--with-explorer root
+    (drgnx-uitest-run (drgnx-uitest-key-events (format "%s %s" drgnx-driver-explorer-down-key drgnx-driver-explorer-down-key)))
+    (let ((line0 (drgnx-scn--explorer-line)))
+      (make-directory (expand-file-name "aaa-new" root))
+      (let* ((r (drgnx-uitest-run nil))
+             (line (drgnx-scn--explorer-line)))
+        (drgnx-scenario-check
+         (and (equal line line0) (drgnx-scn--explorer-has "aaa-new"))
+         (format "a new folder must appear without moving the selection: shown %s; selection was on %S, now on %S"
+                 (drgnx-scn--explorer-has "aaa-new") line0 line)
+         r)))))
