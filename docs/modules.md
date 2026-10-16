@@ -63,3 +63,8 @@ key profile ([keys.md](keys.md)); faces inherit theme faces (no colours). See [c
 | `core/workbench` | startup | the workbench: docks, panel, popups, chrome, groups, several windows, the layout across restarts ([workbench.md](workbench.md)) |
 | `editor/editing` | startup | Fold / Unfold, Change Case (camelCase, snake_case, kebab-case, cycle), Expand / Shrink Selection (tree-sitter nodes when the buffer has a parser), Go to Line |
 | `ui/look` | startup | Color Theme (remembered in modules.eld), Zen Mode (only the text; again to give the sidebar and panel back) |
+| `lang/eglot` | startup | a language server (eglot) for code files whose server is installed — never a question; tree-sitter modes where the grammar is installed; Go to Definition, Find References, Rename Symbol, Show Hover (in the panel) |
+| `tools/vc` | startup | Source Control (the project's changes), Diff with File, Blame — on Emacs' VC |
+| `tools/terminal` | startup | New Terminal (eshell, in the panel's Terminal tab), Open Terminal Here (Explorer) |
+| `tools/search` | startup | Quick Open (project files), Search in Project (results in the panel), Go to Symbol |
+| `org/org` | startup | Capture `C-c c`, Agenda `C-c a` |

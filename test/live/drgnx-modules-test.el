@@ -37,3 +37,13 @@
       (should (= 1 (drgnx-live-mod--q sess "(length (window-list nil 'nomini))")))
       (drgnx-ui-measure sess (list (list :keys "C-k z")))
       (should (equal before (drgnx-live-mod--q sess "(sort (mapcar #'window-pixel-edges (window-list nil 'nomini)) (lambda (a b) (or (< (car a) (car b)) (and (= (car a) (car b)) (< (cadr a) (cadr b))))))"))))))
+
+(ert-deftest drgnx-live/new-terminal-and-project-search-by-keys ()
+  (drgnx-live-mod--with sess
+    (drgnx-ui-measure sess (list (list :keys "C-S-`")))
+    (should (equal (drgnx-live-mod--q sess "(list (eq (selected-window) (drgnx-wb-area-window 'panel)) (drgnx-wb-area-tab 'panel) (with-current-buffer (window-buffer (selected-window)) major-mode))")
+                   '(t terminal eshell-mode)))
+    (drgnx-live-mod--q sess "(progn (call-process \"git\" nil nil nil \"-C\" (file-name-directory (buffer-file-name (window-buffer (drgnx-wb-editor-window)))) \"init\" \"-q\") (select-window (drgnx-wb-editor-window)) t)")
+    (drgnx-ui-measure sess (list (list :keys "C-S-f") (list :type "list") (list :keys "RET")))
+    (should (eq (drgnx-live-mod--q sess "(drgnx-wb-area-tab 'panel)") 'results))
+    (should (equal (drgnx-live-mod--q sess "drgnx-wb-unrouted") nil))))

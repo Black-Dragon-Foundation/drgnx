@@ -126,7 +126,7 @@
    (let ((editor (car (drgnx-rules-test--editors))) (f (drgnx-rules-test--file "notes.md")))
      (setq drgnx-signal--editor-window editor)
      (should (eq (display-buffer f) editor))
-     (dolist (name (quote ("*Ibuffer*" "*Buffer List*" "*Customize Group: Editing*" "*Abbrevs*")))
+     (dolist (name (quote ("*Ibuffer*" "*Buffer List*" "*Customize Group: Editing*" "*Abbrevs*" "*scratch*")))
        (let ((b (get-buffer-create name)))               ; fundamental-mode when first displayed
          (should (eq (display-buffer b) editor))
          (kill-buffer b)))

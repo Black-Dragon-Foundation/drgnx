@@ -42,6 +42,11 @@ The onboarding flow will ask which one you want (VS Code preselected).
 | Expand / Shrink Selection | `M-S-<right>` / `M-S-<left>` | — | `SPC v` / `SPC V` |
 | Zen Mode | `C-k z` | — | `SPC u z` |
 | Go to Line | Emacs' `M-g g` | `M-g g` | `SPC g l` |
+| Go to Definition / References / Rename Symbol / Hover | `F12` / `S-F12` / `F2` / `C-S-SPC` | Emacs' `M-.` / `M-?` / — / `C-h .` | `SPC c d` / `SPC c r` / `SPC c R` / `SPC c h` |
+| Source Control / Blame | `C-S-g` / — | Emacs' `C-x v d` / `C-x v g` | `SPC g s` / `SPC g b` |
+| New Terminal | ``C-S-` `` | — | `SPC t n` |
+| Quick Open / Search in Project / Go to Symbol | `C-p` / `C-S-f` / `C-S-o` | Emacs' `C-x p f` / `C-x p g` / `M-g i` | `SPC f p` / `SPC s p` / `SPC s s` |
+| Org Capture / Agenda | `C-c c` / `C-c a` | `C-c c` / `C-c a` | `SPC n c` / `SPC n a` |
 
 The Explorer's and the Buffers panel's own keys (rows, expand, open, close) are in [workbench.md](workbench.md).
 A command that lives in a mode's keymap (like those) keeps its keymap in every profile: an entry's `:map` wins,

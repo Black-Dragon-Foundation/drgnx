@@ -204,7 +204,7 @@ left and right docks run the frame's full height, the panel sits under the edito
 (drgnx-wb-place '(dired-mode Buffer-menu-mode ibuffer-mode Custom-mode proced-mode edit-abbrevs-mode
                   bookmark-bmenu-mode tabulated-list-mode command-history-mode)
                 'editor)
-(drgnx-wb-place "\\`\\*\\(Ibuffer\\|Buffer List\\|Customize.*\\|Proced\\|Abbrevs\\|Bookmark List\\)\\*\\'" 'editor)
+(drgnx-wb-place "\\`\\*\\(scratch\\|Ibuffer\\|Buffer List\\|Customize.*\\|Proced\\|Abbrevs\\|Bookmark List\\)\\*\\'" 'editor)
 
 (provide 'drgnx-rules)
 ;;; drgnx-rules.el ends here
