@@ -77,3 +77,26 @@ skip redisplay and hide the very jank we want to see.
 
 In GUI ERT tests, `(drgnx-uitest-run EVENTS)` delivers the events and waits until settled: it runs a nested
 command loop (`recursive-edit`), so the events execute as real commands while the test waits.
+
+## Jank report
+
+Every input action is measured. Between `measure-begin` and `measure-end` the recorder polls a signature of
+every root-frame window at each tick — buffer, `window-start`, point, pixel edges, header-line and mode-line
+heights — plus the minibuffer height, and also records `window-scroll-functions` calls, redisplays and GC.
+The report:
+
+| Field | Meaning |
+|---|---|
+| `settle_ms` | time from the last delivered input to the last visible change (0 if nothing changed after it) |
+| `layout_changes` | window edge changes, windows created or deleted |
+| `collateral_moves` / `collateral` | windows that changed although the input was not aimed at them (targets = the window clicked, the selected window before and after) — invariant I1 wants 0 |
+| `oscillations` | a window returning to an earlier signature within one measurement (A→B→A: snap-backs) |
+| `chrome_changes` | header-line or mode-line height changes (I3) |
+| `echo_changes` | minibuffer/echo-area height changes (I4) |
+| `scrolls`, `redisplays` | `window-scroll-functions` calls, window redisplays |
+| `gc_count`, `gc_ms` | garbage collections during the measurement |
+| `guard_violations`, `guard` | window-moving calls made from timers (see Guard) |
+| `settled` | false if the session did not settle before the timeout |
+
+Start measurements from a quiet state: a leftover echo-area message that disappears on the first keystroke
+shrinks the echo area and resizes every window — the report rightly counts that as layout and collateral.

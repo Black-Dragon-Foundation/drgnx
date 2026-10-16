@@ -104,7 +104,7 @@ def run_ert_session(tests_dir, timeout=110):
     sess = prepare_run(name, None, "1600x900")
     run = Path(sess["run"])
     results = run / "results.json"
-    env = session_env(sess, {"DRGNX_UI_TEST": str(tests_dir), "DRGNX_UI_RESULTS": str(results)})
+    env = session_env(sess, {"DRGNX_UI_TEST": str(Path(tests_dir).resolve()), "DRGNX_UI_RESULTS": str(results)})
     with open(run / "session.log", "w") as log:
         p = subprocess.Popen([*env_argv(env), *compositor_argv(sess)], stdout=log,
                              stderr=subprocess.STDOUT, start_new_session=True)

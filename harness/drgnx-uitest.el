@@ -20,7 +20,6 @@
 (defvar drgnx-uitest--queue nil "Input events waiting to be delivered, one per tick.")
 (defvar drgnx-uitest--timer nil)
 (defvar drgnx-uitest--last-delivery 0.0 "`float-time' of the last delivered event.")
-(defvar drgnx-uitest-record--last-change 0.0 "`float-time' of the last recorded visible change.")
 (defvar drgnx-uitest--next-id 0)
 
 ;;;; Frames and windows
@@ -123,12 +122,137 @@ BUTTON is 1-3 (default 1), COUNT 1 or 2, HOLD seconds between press and release.
        (>= (- (float-time) (max drgnx-uitest--last-delivery drgnx-uitest-record--last-change))
            (or quiet drgnx-uitest-quiet))))
 
+;;;; Recorder
+
+(defvar drgnx-uitest-record--last-change 0.0 "`float-time' of the last recorded visible change.")
+(defvar drgnx-uitest-record--log nil "Recorded events, newest first.")
+(defvar drgnx-uitest-record--sigs nil "Alist of window id to its last signature.")
+(defvar drgnx-uitest-record--initial nil)
+(defvar drgnx-uitest-record--t0 0.0)
+(defvar drgnx-uitest-record--timer nil)
+(defvar drgnx-uitest-record--redisplays 0)
+(defvar drgnx-uitest-record--gc0 nil)
+(defvar drgnx-uitest-record--guard0 0)
+(defvar drgnx-uitest--targets nil "Ids of windows the measured input was aimed at.")
+
+(defun drgnx-uitest-record--signatures ()
+  "Alist of (ID . SIGNATURE) for the root frame's windows and its minibuffer."
+  (let ((f (drgnx-uitest-root-frame)))
+    (cons (cons "mini" (list :height (window-pixel-height (minibuffer-window f))))
+          (mapcar (lambda (w)
+                    (cons (drgnx-uitest-window-id w)
+                          (list :buffer (buffer-name (window-buffer w))
+                                :start (window-start w) :point (window-point w)
+                                :edges (window-pixel-edges w)
+                                :header (window-header-line-height w)
+                                :modeline (window-mode-line-height w))))
+                  (window-list f 'nomini)))))
+
+(defun drgnx-uitest-record--change (id old new)
+  (push (list (float-time) 'change id old new) drgnx-uitest-record--log)
+  (setq drgnx-uitest-record--last-change (float-time)))
+
+(defun drgnx-uitest-record--poll ()
+  "Record every window whose signature changed since the last poll."
+  (let ((now (drgnx-uitest-record--signatures)))
+    (dolist (cell now)
+      (let ((old (assoc (car cell) drgnx-uitest-record--sigs)))
+        (unless (equal (cdr old) (cdr cell))
+          (drgnx-uitest-record--change (car cell) (cdr old) (cdr cell))
+          (if old (setcdr old (cdr cell)) (push (copy-tree cell) drgnx-uitest-record--sigs)))))
+    (dolist (old drgnx-uitest-record--sigs)
+      (when (and (cdr old) (not (assoc (car old) now)))
+        (drgnx-uitest-record--change (car old) (cdr old) nil)
+        (setcdr old nil)))))
+
+(defun drgnx-uitest-record--on-scroll (window start)
+  (push (list (float-time) 'scroll (drgnx-uitest-window-id window) start) drgnx-uitest-record--log)
+  (setq drgnx-uitest-record--last-change (float-time)))
+
+(defun drgnx-uitest-record--on-redisplay (_window)
+  (cl-incf drgnx-uitest-record--redisplays))
+
+(defun drgnx-uitest-jank-report (log t0 initial targets last-input)
+  "Summarise recorder LOG (oldest first) of a measurement started at T0.
+INITIAL is the signature alist at T0, TARGETS the ids of windows the input was
+aimed at (their changes are not collateral), LAST-INPUT the time of the last event."
+  (let ((last-change t0) (layout 0) (chrome 0) (echo 0) (scrolls 0) (osc 0) (collateral nil)
+        (history (mapcar (lambda (c) (list (car c) (cdr c))) initial)))
+    (dolist (e log)
+      (setq last-change (max last-change (car e)))
+      (pcase e
+        (`(,_ scroll . ,_) (cl-incf scrolls))
+        (`(,_ change ,id ,old ,new)
+         (if (equal id "mini")
+             (cl-incf echo)
+           (when (or (null old) (null new)
+                     (not (equal (plist-get old :edges) (plist-get new :edges))))
+             (cl-incf layout))
+           (when (and old new (not (and (equal (plist-get old :header) (plist-get new :header))
+                                        (equal (plist-get old :modeline) (plist-get new :modeline)))))
+             (cl-incf chrome))
+           (unless (member id targets) (cl-pushnew id collateral :test #'equal)))
+         (let ((h (assoc id history)))
+           (if (null h)
+               (push (list id new) history)
+             (when (member new (cddr h)) (cl-incf osc))   ; back to an earlier value
+             (setcdr h (cons new (cdr h))))))))
+    (list :settle_ms (max 0 (round (* 1000 (- last-change (max t0 last-input)))))
+          :layout_changes layout
+          :collateral_moves (length collateral)
+          :collateral (vconcat (reverse collateral))
+          :oscillations osc :chrome_changes chrome :echo_changes echo :scrolls scrolls)))
+
+(defun drgnx-uitest--note-target (window)
+  "Count WINDOW as a target of the measured input."
+  (when (windowp window)
+    (cl-pushnew (drgnx-uitest-window-id window) drgnx-uitest--targets :test #'equal)))
+
+(defun drgnx-uitest-measure-begin ()
+  "Start recording visible changes for a jank report."
+  (setq drgnx-uitest--targets nil
+        drgnx-uitest-record--log nil
+        drgnx-uitest-record--t0 (float-time)
+        drgnx-uitest-record--last-change 0.0
+        drgnx-uitest-record--redisplays 0
+        drgnx-uitest-record--gc0 (cons gcs-done gc-elapsed)
+        drgnx-uitest-record--guard0 (length drgnx-jank-guard-log)
+        drgnx-uitest-record--sigs (copy-tree (drgnx-uitest-record--signatures))
+        drgnx-uitest-record--initial (copy-tree drgnx-uitest-record--sigs))
+  (drgnx-uitest--note-target (frame-selected-window (drgnx-uitest-root-frame)))
+  (add-hook 'window-scroll-functions #'drgnx-uitest-record--on-scroll)
+  (add-hook 'pre-redisplay-functions #'drgnx-uitest-record--on-redisplay)
+  (when (timerp drgnx-uitest-record--timer) (cancel-timer drgnx-uitest-record--timer))
+  (setq drgnx-uitest-record--timer
+        (run-with-timer drgnx-uitest-tick drgnx-uitest-tick #'drgnx-uitest-record--poll)))
+
+(defun drgnx-uitest-measure-end ()
+  "Stop recording and return the jank report plist."
+  (drgnx-uitest-record--poll)
+  (when (timerp drgnx-uitest-record--timer) (cancel-timer drgnx-uitest-record--timer))
+  (setq drgnx-uitest-record--timer nil)
+  (remove-hook 'window-scroll-functions #'drgnx-uitest-record--on-scroll)
+  (remove-hook 'pre-redisplay-functions #'drgnx-uitest-record--on-redisplay)
+  (drgnx-uitest--note-target (frame-selected-window (drgnx-uitest-root-frame)))
+  (let ((new (- (length drgnx-jank-guard-log) drgnx-uitest-record--guard0)))
+    (append (drgnx-uitest-jank-report (reverse drgnx-uitest-record--log) drgnx-uitest-record--t0
+                                      drgnx-uitest-record--initial drgnx-uitest--targets
+                                      drgnx-uitest--last-delivery)
+            (list :redisplays drgnx-uitest-record--redisplays
+                  :gc_count (- gcs-done (car drgnx-uitest-record--gc0))
+                  :gc_ms (round (* 1000 (- gc-elapsed (cdr drgnx-uitest-record--gc0))))
+                  :guard_violations new
+                  :guard (vconcat (seq-take drgnx-jank-guard-log new))))))
+
 ;;;; Running input from a test
 
 (defun drgnx-uitest-run (events &optional timeout)
-  "Deliver EVENTS paced and return when settled or after TIMEOUT seconds (default 5).
+  "Deliver EVENTS paced, wait until settled or TIMEOUT seconds (default 5), return the jank report.
 For ERT tests inside a session: a nested command loop runs the events as commands,
-with redisplay between them, while the test waits.  Returns a plist with :settled."
+with redisplay between them, while the test waits.  The plist has :settled."
+  (drgnx-uitest-measure-begin)
+  (dolist (ev events)
+    (when (mouse-event-p ev) (drgnx-uitest--note-target (posn-window (event-start ev)))))
   (drgnx-uitest-enqueue events)
   (let* ((deadline (+ (float-time) (or timeout 5)))
          (settled nil)
@@ -140,7 +264,7 @@ with redisplay between them, while the test waits.  Returns a plist with :settle
     (unwind-protect
         (let ((drgnx-jank-guard--timer-fn nil)) (recursive-edit))
       (cancel-timer watch))
-    (list :settled (if settled t :false))))
+    (append (list :settled (if settled t :false)) (drgnx-uitest-measure-end))))
 
 (provide 'drgnx-uitest)
 ;;; drgnx-uitest.el ends here

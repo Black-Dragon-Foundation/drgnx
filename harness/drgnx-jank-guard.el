@@ -3,6 +3,9 @@
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 
 ;;; Code:
+(defvar drgnx-jank-guard-log nil
+  "Recorded violations, newest first: plists (:time :fn :window :timer).")
+
 (defvar drgnx-jank-guard--timer-fn nil
   "Function of the timer running now (dynamically bound), or nil.")
 

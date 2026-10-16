@@ -1,4 +1,4 @@
-import subprocess, sys, tempfile, time, unittest
+import os, subprocess, sys, tempfile, time, unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "harness"))
@@ -21,3 +21,12 @@ class RunnerTest(unittest.TestCase):
             self.assertLess(time.time() - t0, 20)
             left = subprocess.run(["pgrep", "-f", run.name], capture_output=True, text=True).stdout
             self.assertEqual(left.strip(), "")
+
+    def test_relative_suite_path_and_load_error_fail_fast(self):
+        with tempfile.TemporaryDirectory(dir=".") as tmp:
+            (Path(tmp) / "broken-test.el").write_text('(error "boom")\n')
+            t0 = time.time()
+            rc, results, run = ui.run_ert_session(Path(os.path.relpath(tmp)), timeout=30)
+            self.assertNotEqual(rc, 0)
+            self.assertLess(time.time() - t0, 20)
+            self.assertEqual(results["failed"], 1)

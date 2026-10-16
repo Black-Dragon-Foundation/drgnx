@@ -13,9 +13,12 @@
 (defun drgnx-run-ert (dir &optional results-file)
   "Load every *-test.el under DIR, run all tests, write a JSON summary to RESULTS-FILE.
 Return t if every test passed."
-  (dolist (file (directory-files-recursively dir "-test\\.el\\'"))
-    (load file nil t))
-  (let* ((stats (ert-run-tests-batch t))
+  (let* ((load-failures
+          (cl-loop for file in (directory-files-recursively dir "-test\\.el\\'")
+                   for err = (condition-case err (progn (load file nil t) nil) (error err))
+                   when err collect (list :name (concat "load " (file-name-nondirectory file))
+                                          :condition (format "%S" err))))
+         (stats (ert-run-tests-batch t))
          (failures
           (cl-loop for test across (ert--stats-tests stats)
                    for result = (ert-test-most-recent-result test)
@@ -24,11 +27,12 @@ Return t if every test passed."
                                  :condition
                                  (if (ert-test-result-with-condition-p result)
                                      (format "%S" (ert-test-result-with-condition-condition result))
-                                   "unexpected result")))))
+                                   "unexpected result"))))
+         (failures (append load-failures failures)))
     (when results-file
       (with-temp-file results-file
         (insert (json-serialize
-                 (list :total (ert-stats-total stats)
+                 (list :total (+ (ert-stats-total stats) (length load-failures))
                        :passed (ert-stats-completed-expected stats)
                        :failed (length failures)
                        :failures (vconcat failures))))))
