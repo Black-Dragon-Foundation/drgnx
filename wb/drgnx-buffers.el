@@ -33,12 +33,31 @@
 (defvar drgnx-buffers--filter nil "Show only buffers whose names contain this text (any case), or nil.")
 (defvar drgnx-buffers--title)          ; defined below, with its buttons
 
-(defun drgnx-buffers--shown ()
-  "The buffers on rows: all, in open order, or those the filter lets through."
-  (if drgnx-buffers--filter
-      (let ((q (downcase drgnx-buffers--filter)))
-        (seq-filter (lambda (b) (string-search q (downcase (buffer-name b)))) drgnx-buffers--order))
+(defvar drgnx-buffers-all-windows nil
+  "With several windows open: nil lists the buffers of the window you work in, t all of them.")
+(declare-function drgnx-frame-buffers "drgnx-frames")
+(declare-function drgnx-frames-count "drgnx-frames")
+
+(defun drgnx-buffers--in-window ()
+  "The buffers in open order: all, or with several windows those of the selected one."
+  (if (and (not drgnx-buffers-all-windows) (fboundp 'drgnx-frame-buffers) (> (drgnx-frames-count) 1))
+      (let ((mine (drgnx-frame-buffers))) (seq-filter (lambda (b) (memq b mine)) drgnx-buffers--order))
     drgnx-buffers--order))
+
+(defun drgnx-buffers--shown ()
+  "The buffers on rows: the window's (see `drgnx-buffers--in-window'), those the filter lets through."
+  (let ((rows (drgnx-buffers--in-window)))
+    (if drgnx-buffers--filter
+        (let ((q (downcase drgnx-buffers--filter)))
+          (seq-filter (lambda (b) (string-search q (downcase (buffer-name b)))) rows))
+      rows)))
+
+(defun drgnx-buffers-toggle-all-windows ()
+  "List the buffers of every window, or of the window you work in."
+  (interactive)
+  (setq drgnx-buffers-all-windows (not drgnx-buffers-all-windows))
+  (drgnx-buffers--refresh)
+  (message "Buffers: %s" (if drgnx-buffers-all-windows "all windows" "this window")))
 
 (defun drgnx-buffers--update-order ()
   (let* ((live (seq-filter (lambda (b) (and (buffer-live-p b) (drgnx-signal-user-buffer-p b))) drgnx-buffers--order))
@@ -293,6 +312,7 @@ While a button is held in the panel, wait for the release: rows never move under
   (drgnx-signal-subscribe 'buffer-set-changed #'drgnx-buffers--refresh)
   (drgnx-signal-subscribe 'modified-changed #'drgnx-buffers--refresh)
   (drgnx-signal-subscribe 'editor-changed #'drgnx-buffers--mark-active)
+  (drgnx-signal-subscribe 'editor-changed #'drgnx-buffers--refresh)          ; another window: its buffers
   (add-hook 'drgnx-git-changed-functions
             (lambda (_root) (when-let* ((b (get-buffer drgnx-buffers-buffer-name)))
                               (with-current-buffer b (jit-lock-refontify))))))

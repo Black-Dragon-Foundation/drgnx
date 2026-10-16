@@ -4,7 +4,8 @@ drgnx's window model, VS Code style: editor windows in the middle, a left dock w
 files) above the **Explorer** (file tree) and the **Outline**, a **right dock** and a bottom **panel** (Terminal, Problems, Output,
 Results, Help) and a popup lane — every buffer goes to its place by one rules table. Nothing moves on its own: a
 click lands where you clicked, a row you selected stays selected, docks and panel keep their size, popups leave no
-trace. Editor groups and several windows arrive in the next milestones (see [roadmap.md](roadmap.md), M3).
+trace. Editor groups split the editor, several windows each keep their own workbench, and the layout survives a
+restart.
 
 Everything here is built on plain Emacs — no treemacs, no ibuffer — does what people use those for (and VS
 Code's Explorer and Open Editors; see [Compared](#compared-with-treemacs-ibuffer-and-vs-code)), and does every
@@ -154,6 +155,16 @@ frame saves too. Each group's shown file opens at once and its other tabs open w
 anything at start (no remote files are touched, only safe local variables, no large-file question). Files that no
 longer exist are skipped, sizes are clamped to the frame, and a state in another format is ignored. Save / Restore
 Workbench Layout are in the palette. Only a graphical session saves — a batch run never writes your state.
+
+### Several windows
+
+Every frame (OS window) is its own workbench. The first one is the **main** window; windows opened later are
+**editor-only** (no sidebar until you toggle one there). Move Editor into New Window, Open Editor in New Window
+(``C-k o`` · palette · `SPC w o`; the file shows in both) and Move Editor Group into New Window (its tabs too) are in
+the palette (Vim `SPC w n` / `SPC w g`). Each window has its **own buffers** — the tabs of its groups; the main window
+also has the open files that are a tab nowhere — and the Buffers panel lists those of the window you work in;
+Buffers: Show All Windows (palette · `SPC b a`) lists all. A help or results buffer shown from a window opens that
+window's panel; nothing moves in the other window. drgnx never places or sizes a window: your window manager does.
 
 ### Popups
 
