@@ -64,6 +64,7 @@ Without an external configuration, init.el is the harness's minimal one."
 
 ;;;; After init: harness agent, guard, server, ready file, test mode
 (defvar drgnx-ui--ready-timer nil)
+(defvar drgnx-guard--timer-fn)          ; drgnx's no-prompt guard, when loaded
 (defvar drgnx-ui--server-error nil "Why the session's server did not start, or nil.")
 
 (defun drgnx-ui--start-server ()
@@ -124,8 +125,9 @@ and driven (the initial frame exists by now)."
 (defun drgnx-ui--run-tests ()
   "Run the GUI suite in DRGNX_UI_TEST and exit 0 (all passed) or 1."
   (load (expand-file-name "run-ert.el" drgnx-ui-harness) nil t)
-  ;; Started from a timer, but the tests are not timer code: don't let the guard count them.
-  (let ((drgnx-jank-guard--timer-fn nil))
+  ;; Started from a timer, but the tests are not timer code: neither the jank guard nor
+  ;; drgnx's no-prompt guard may count them as such.
+  (let ((drgnx-jank-guard--timer-fn nil) (drgnx-guard--timer-fn nil))
     (kill-emacs (if (drgnx-run-ert (getenv "DRGNX_UI_TEST") (getenv "DRGNX_UI_RESULTS")) 0 1))))
 
 (add-hook 'window-setup-hook #'drgnx-ui--late 90)

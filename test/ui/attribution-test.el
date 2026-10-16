@@ -55,3 +55,21 @@
             (should moved)
             (should (string-prefix-p "timer:" (plist-get moved :cause)))))
       (keymap-global-unset "C-c z"))))
+
+(defun drgnx-attr--move-then-wait ()
+  (interactive)
+  (forward-line 3)
+  (sit-for 0.3))
+
+(ert-deftest drgnx-ui-attribution/command-change-before-its-sit-for ()
+  ;; The poll and other timers run inside the command's sit-for; the command's own change
+  ;; must still be attributed to the command.
+  (drgnx-attr--two-windows)
+  (keymap-global-set "C-c y" #'drgnx-attr--move-then-wait)
+  (unwind-protect
+      (let* ((r (drgnx-uitest-run (drgnx-uitest-key-events "C-c y")))
+             (mine (seq-find (lambda (s) (equal (plist-get s :window) (drgnx-uitest-window-id (selected-window))))
+                             (append (plist-get r :trace) nil))))
+        (should mine)
+        (should (equal (plist-get mine :cause) "command:drgnx-attr--move-then-wait")))
+    (keymap-global-unset "C-c y")))

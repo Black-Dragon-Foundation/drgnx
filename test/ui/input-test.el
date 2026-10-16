@@ -129,3 +129,19 @@
         (use-local-map nil)
         (should (equal (car log) '(click))))
     (setq tab-line-format nil)))
+
+(defvar drgnx-guard--timer-fn)
+(defvar drgnx-test--seen-guard-context 'unset)
+(defun drgnx-test--record-guard-context ()
+  (interactive)
+  (setq drgnx-test--seen-guard-context drgnx-guard--timer-fn))
+
+(ert-deftest drgnx-ui-input/driven-commands-are-not-timer-code-for-the-guard ()
+  ;; GUI suites start from a timer; commands driven by drgnx-uitest-run must not inherit
+  ;; that timer context (drgnx's no-prompt guard would refuse their prompts).
+  (keymap-global-set "C-c g" #'drgnx-test--record-guard-context)
+  (unwind-protect
+      (let ((drgnx-guard--timer-fn 'outer-timer))
+        (drgnx-uitest-run (drgnx-uitest-key-events "C-c g"))
+        (should (null drgnx-test--seen-guard-context)))
+    (keymap-global-unset "C-c g")))

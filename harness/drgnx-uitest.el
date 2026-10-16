@@ -221,22 +221,40 @@ without input still gives followers and timers their chance)."
         (drgnx-uitest-record--change (car old) (cdr old) nil cause)
         (setcdr old nil)))))
 
+(defvar drgnx-uitest-record--command nil
+  "Cause string of the command running now (between pre- and post-command), or nil.")
+
+(defun drgnx-uitest-record--ambient-cause ()
+  "Who changed things since the last snapshot when no timer claims it: the running
+command, else `other' (process output, redisplay, …)."
+  (or drgnx-uitest-record--command "other"))
+
 (defun drgnx-uitest-record--poll ()
-  "Tick poll: changes no command or timer claimed (process output, redisplay, …)."
-  (drgnx-uitest-record--snapshot "other"))
+  "Tick poll: changes no timer claimed — the running command's, or `other'."
+  (drgnx-uitest-record--snapshot (drgnx-uitest-record--ambient-cause)))
+
+(defun drgnx-uitest-record--before-command ()
+  (drgnx-uitest-record--snapshot "other")      ; whatever happened between commands
+  (setq drgnx-uitest-record--command (format "command:%s" this-command)))
 
 (defun drgnx-uitest-record--after-command ()
-  (drgnx-uitest-record--snapshot (format "command:%s" this-command)))
+  (drgnx-uitest-record--snapshot (or drgnx-uitest-record--command (format "command:%s" this-command)))
+  (setq drgnx-uitest-record--command nil))
 
-(defconst drgnx-uitest-record--harness-timers '(drgnx-uitest--tick drgnx-uitest-record--poll)
+(defconst drgnx-uitest-record--harness-timers
+  '(drgnx-uitest--tick drgnx-uitest-record--poll drgnx-uitest--run-watch)
   "The harness's own timers: never a cause.")
 
 (defun drgnx-uitest-record--after-timer (orig timer)
-  "Snapshot right after each timer runs, so what it changed is attributed to it — even a
-point moved with `goto-char' inside `with-selected-window', which calls no window function."
-  (prog1 (funcall orig timer)
-    (let ((fn (and (timerp timer) (timer--function timer))))
-      (unless (memq fn drgnx-uitest-record--harness-timers)
+  "Snapshot just before and right after each timer, so what it changed is attributed to it
+— even a point moved with `goto-char' inside `with-selected-window', which calls no
+window function — and what changed before it (the running command's work, process output)
+is not."
+  (let ((fn (and (timerp timer) (timer--function timer))))
+    (if (memq fn drgnx-uitest-record--harness-timers)
+        (funcall orig timer)
+      (drgnx-uitest-record--snapshot (drgnx-uitest-record--ambient-cause))
+      (prog1 (let ((drgnx-uitest-record--command nil)) (funcall orig timer))
         (drgnx-uitest-record--snapshot (concat "timer:" (drgnx-jank-guard--describe fn)))))))
 
 (defun drgnx-uitest-record--on-scroll (window start)
@@ -332,6 +350,8 @@ aimed at (their changes are not collateral), LAST-INPUT the time of the last eve
   (drgnx-uitest--note-target (frame-selected-window (drgnx-uitest-root-frame)))
   (add-hook 'window-scroll-functions #'drgnx-uitest-record--on-scroll)
   (add-hook 'pre-redisplay-functions #'drgnx-uitest-record--on-redisplay)
+  (setq drgnx-uitest-record--command nil)
+  (add-hook 'pre-command-hook #'drgnx-uitest-record--before-command -99)
   (add-hook 'post-command-hook #'drgnx-uitest-record--after-command 99)
   (advice-add 'timer-event-handler :around #'drgnx-uitest-record--after-timer)
   (when (timerp drgnx-uitest-record--timer) (cancel-timer drgnx-uitest-record--timer))
@@ -345,7 +365,9 @@ aimed at (their changes are not collateral), LAST-INPUT the time of the last eve
   (setq drgnx-uitest-record--timer nil)
   (remove-hook 'window-scroll-functions #'drgnx-uitest-record--on-scroll)
   (remove-hook 'pre-redisplay-functions #'drgnx-uitest-record--on-redisplay)
+  (remove-hook 'pre-command-hook #'drgnx-uitest-record--before-command)
   (remove-hook 'post-command-hook #'drgnx-uitest-record--after-command)
+  (setq drgnx-uitest-record--command nil)
   (advice-remove 'timer-event-handler #'drgnx-uitest-record--after-timer)
   (drgnx-uitest--note-target (frame-selected-window (drgnx-uitest-root-frame)))
   (let ((new (- (length drgnx-jank-guard-log) drgnx-uitest-record--guard0)))
@@ -360,6 +382,12 @@ aimed at (their changes are not collateral), LAST-INPUT the time of the last eve
 
 ;;;; Running input from a test
 
+;; Declared before use so the bindings in `drgnx-uitest-run' are dynamic.
+(defvar drgnx-uitest--run-deadline 0.0)
+(defvar drgnx-uitest--run-settled nil)
+(defvar drgnx-guard--timer-fn)          ; drgnx's no-prompt guard, when loaded
+
+
 (defun drgnx-uitest-run (events &optional timeout)
   "Deliver EVENTS paced, wait until settled or TIMEOUT seconds (default 5), return the jank report.
 For ERT tests inside a session: a nested command loop runs the events as commands,
@@ -368,17 +396,20 @@ with redisplay between them, while the test waits.  The plist has :settled."
   (dolist (ev events)
     (when (mouse-event-p ev) (drgnx-uitest--note-target (posn-window (event-start ev)))))
   (drgnx-uitest-enqueue events)
-  (let* ((deadline (+ (float-time) (or timeout 5)))
-         (settled nil)
-         (watch (run-with-timer drgnx-uitest-tick drgnx-uitest-tick
-                                (lambda ()
-                                  (when (or (setq settled (drgnx-uitest-settled-p))
-                                            (> (float-time) deadline))
-                                    (exit-recursive-edit))))))
+  (setq drgnx-uitest--run-deadline (+ (float-time) (or timeout 5))
+        drgnx-uitest--run-settled nil)
+  (let ((watch (run-with-timer drgnx-uitest-tick drgnx-uitest-tick #'drgnx-uitest--run-watch)))
     (unwind-protect
-        (let ((drgnx-jank-guard--timer-fn nil)) (recursive-edit))
+        ;; The test may run inside a timer; the commands it drives are not timer code.
+        (let ((drgnx-jank-guard--timer-fn nil) (drgnx-guard--timer-fn nil)) (recursive-edit))
       (cancel-timer watch))
-    (append (list :settled (if settled t :false)) (drgnx-uitest-measure-end))))
+    (append (list :settled (if drgnx-uitest--run-settled t :false)) (drgnx-uitest-measure-end))))
+
+(defun drgnx-uitest--run-watch ()
+  "Leave `drgnx-uitest-run''s nested command loop once settled or past the deadline."
+  (when (or (setq drgnx-uitest--run-settled (drgnx-uitest-settled-p))
+            (> (float-time) drgnx-uitest--run-deadline))
+    (exit-recursive-edit)))
 
 ;;;; Capture
 
