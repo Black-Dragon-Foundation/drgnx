@@ -442,6 +442,158 @@ Returns non-nil if FILE is under a root."
 (defun drgnx-explorer-focus () "Show the sidebar and focus the Explorer."
   (interactive) (drgnx-wb-focus-section 'explorer))
 
+;;;; File operations
+;; Each command takes its target paths when it starts — before any question — so a refresh while
+;; you answer can never make it act on another row.  Nothing is ever overwritten; deletes go to
+;; the trash unless asked otherwise.
+
+(defvar drgnx-explorer--selection nil "Paths selected together (multi-select), or nil: the row at point.")
+(defvar drgnx-explorer--clipboard nil "(copy|cut PATHS) from Copy or Cut, for Paste.")
+
+(defun drgnx-explorer--targets ()
+  "The paths an operation acts on: the selection, else the row at point (never a root)."
+  (let ((paths (or drgnx-explorer--selection (and (drgnx-explorer--node) (list (drgnx-explorer--node))))))
+    (unless paths (user-error "No file or folder here"))
+    (when (seq-find (lambda (p) (member (file-name-as-directory p) drgnx-explorer--roots)) paths)
+      (user-error "Not on a root folder"))
+    paths))
+
+(defun drgnx-explorer--folder-here ()
+  "The folder at point, or the folder of the file at point."
+  (let ((p (or (drgnx-explorer--node) (user-error "Nothing here"))))
+    (if (drgnx-explorer-dir-at (point)) p (directory-file-name (file-name-directory p)))))
+
+(defun drgnx-explorer--show-folder (dir)
+  "Expand DIR (if collapsed) and show its current contents."
+  (with-current-buffer (drgnx-explorer--buffer)
+    (let ((pos (drgnx-explorer--row-pos dir)))
+      (when (and pos (> (drgnx-explorer-depth-at pos) 0) (not (drgnx-explorer--expanded-p dir)))
+        (drgnx-explorer-toggle-at pos)))
+    (drgnx-explorer--refresh-dir dir)
+    (drgnx-explorer--git-refresh)))
+
+(defun drgnx-explorer--select (path)
+  (with-current-buffer (drgnx-explorer--buffer)
+    (when-let* ((pos (drgnx-explorer--row-pos path)))
+      (goto-char pos)
+      (when-let* ((w (get-buffer-window (current-buffer)))) (set-window-point w pos))
+      (when hl-line-mode (hl-line-highlight)))))
+
+(defun drgnx-explorer--parent (path) (directory-file-name (file-name-directory (directory-file-name path))))
+
+(defun drgnx-explorer--free-name (path)
+  "PATH, or \"NAME copy.EXT\", \"NAME copy 2.EXT\", … — the first that does not exist."
+  (if (not (file-exists-p path)) path
+    (let* ((dir (file-name-directory path)) (file (file-name-nondirectory path))
+           (ext (file-name-extension file t)) (base (file-name-sans-extension file)) (n 1) new)
+      (while (file-exists-p (setq new (expand-file-name (format "%s copy%s%s" base (if (= n 1) "" (format " %d" n)) ext) dir)))
+        (setq n (1+ n)))
+      new)))
+
+(defun drgnx-explorer-new-file ()
+  "Create a file in the folder here — a path like a/b/c.txt makes the folders; a trailing / makes a folder."
+  (interactive)
+  (let* ((dir (drgnx-explorer--folder-here))
+         (name (string-trim (read-string (format "New file (end with / for a folder) in %s: "
+                                                 (abbreviate-file-name (file-name-as-directory dir))))))
+         (path (progn (when (string-empty-p name) (user-error "No name given")) (expand-file-name name dir))))
+    (when (file-exists-p path) (user-error "%s already exists" (abbreviate-file-name path)))
+    (if (directory-name-p name)
+        (make-directory path t)
+      (make-directory (file-name-directory path) t)
+      (write-region "" nil path nil 'silent nil 'excl))
+    (drgnx-explorer--show-folder dir)
+    (drgnx-explorer--select (directory-file-name path))
+    (unless (directory-name-p name) (drgnx-wb-show-in-editor (find-file-noselect path)))))
+
+(defun drgnx-explorer-rename ()
+  "Rename the file or folder here; buffers visiting it (or files inside it) follow."
+  (interactive)
+  (let* ((old (car (drgnx-explorer--targets)))
+         (name (string-trim (read-string "Rename to: " (file-name-nondirectory old))))
+         (new (expand-file-name name (file-name-directory old))))
+    (when (string-empty-p name) (user-error "No name given"))
+    (unless (equal new old)
+      (when (file-exists-p new) (user-error "%s already exists" (abbreviate-file-name new)))
+      (rename-file old new)
+      (let ((prefix (file-name-as-directory old)))
+        (dolist (b (buffer-list))
+          (when-let* ((f (buffer-file-name b)))
+            (when (or (equal f old) (string-prefix-p prefix f))
+              (with-current-buffer b (set-visited-file-name (concat new (substring f (length old))) t t)))))
+        (let (moved)
+          (maphash (lambda (k _) (when (or (equal k old) (string-prefix-p prefix k)) (push k moved))) drgnx-explorer--expanded)
+          (dolist (k moved)
+            (remhash k drgnx-explorer--expanded)
+            (puthash (concat new (substring k (length old))) t drgnx-explorer--expanded))))
+      (drgnx-explorer--show-folder (drgnx-explorer--parent new))
+      (drgnx-explorer--select new))))
+
+(defun drgnx-explorer--describe (paths)
+  (if (cdr paths) (format "%d items" (length paths)) (file-name-nondirectory (directory-file-name (car paths)))))
+
+(defun drgnx-explorer-delete (&optional permanently)
+  "Move the file(s) here to the trash (with PERMANENTLY — a prefix argument — delete them)."
+  (interactive "P")
+  (let ((paths (drgnx-explorer--targets)))
+    (when (if permanently
+              (yes-or-no-p (format "Delete %s permanently? " (drgnx-explorer--describe paths)))
+            (y-or-n-p (format "Move %s to the trash? " (drgnx-explorer--describe paths))))
+      (let ((delete-by-moving-to-trash (and (not permanently) delete-by-moving-to-trash)))
+        (dolist (p paths)
+          (if (file-directory-p p) (delete-directory p t (not permanently)) (delete-file p (not permanently)))))
+      (setq drgnx-explorer--selection nil)
+      (dolist (d (delete-dups (mapcar #'drgnx-explorer--parent paths))) (drgnx-explorer--show-folder d)))))
+
+(defun drgnx-explorer-delete-permanently () "Delete the file(s) here permanently (no trash)."
+  (interactive) (drgnx-explorer-delete t))
+
+(defun drgnx-explorer-copy () "Copy the file(s) here, for Paste."
+  (interactive)
+  (setq drgnx-explorer--clipboard (list 'copy (drgnx-explorer--targets)))
+  (message "Copied %s" (drgnx-explorer--describe (cadr drgnx-explorer--clipboard))))
+
+(defun drgnx-explorer-cut () "Cut the file(s) here, for Paste (they move)."
+  (interactive)
+  (setq drgnx-explorer--clipboard (list 'cut (drgnx-explorer--targets)))
+  (message "Cut %s" (drgnx-explorer--describe (cadr drgnx-explorer--clipboard))))
+
+(defun drgnx-explorer-paste ()
+  "Paste copied or cut files into the folder here; a name that exists gets \" copy\" (never overwritten)."
+  (interactive)
+  (pcase-let ((`(,op ,paths) (or drgnx-explorer--clipboard (user-error "Nothing copied or cut")))
+              (dir (drgnx-explorer--folder-here)))
+    (dolist (p paths)
+      (when (and (eq op 'cut) (string-prefix-p (file-name-as-directory p) (file-name-as-directory dir)))
+        (user-error "Cannot move %s into itself" (file-name-nondirectory p)))
+      (unless (and (eq op 'cut) (equal (drgnx-explorer--parent p) dir))
+        (let ((target (drgnx-explorer--free-name (expand-file-name (file-name-nondirectory (directory-file-name p)) dir))))
+          (cond ((eq op 'cut) (rename-file p target))
+                ((file-directory-p p) (copy-directory p target t t))
+                (t (copy-file p target nil t))))))
+    (when (eq op 'cut)
+      (setq drgnx-explorer--clipboard nil)
+      (dolist (d (delete-dups (mapcar #'drgnx-explorer--parent paths))) (drgnx-explorer--show-folder d)))
+    (drgnx-explorer--show-folder dir)))
+
+(defun drgnx-explorer-copy-path () "Copy the absolute path of the file here."
+  (interactive)
+  (kill-new (car (drgnx-explorer--targets)))
+  (message "%s" (current-kill 0)))
+
+(defun drgnx-explorer-copy-relative-path () "Copy the path of the file here, relative to its root."
+  (interactive)
+  (let ((p (car (drgnx-explorer--targets))))
+    (kill-new (file-relative-name p (drgnx-explorer--root-of p)))
+    (message "%s" (current-kill 0))))
+
+(defun drgnx-explorer-reveal-externally () "Show the folder here in the system's file manager."
+  (interactive)
+  (let ((p (or (drgnx-explorer--node) (user-error "Nothing here"))))
+    (if (eq system-type 'darwin)
+        (call-process "open" nil 0 nil "-R" p)
+      (call-process "xdg-open" nil 0 nil (drgnx-explorer--folder-here)))))
+
 ;;;; Mouse (the click model)
 
 (defun drgnx-explorer-mouse-press (event)

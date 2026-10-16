@@ -37,7 +37,22 @@
                        (explorer-toggle "Toggle Folder" drgnx-explorer-toggle "Expand or collapse the folder")
                        (explorer-refresh "Refresh" drgnx-explorer-refresh "Re-read changed folders")))
         (drgnx-command-define id :category "Explorer" :title title :command fn :doc doc
-          :map 'drgnx-explorer-mode-map :when in-explorer)))
+          :map 'drgnx-explorer-mode-map :when in-explorer))
+      ;; File operations: also on the Explorer's right-click menu.
+      (drgnx-surfaces-define-context 'explorer (lambda (_) (derived-mode-p 'drgnx-explorer-mode)))
+      (pcase-dolist (`(,id ,title ,fn ,doc)
+                     '((explorer-new-file "New File…" drgnx-explorer-new-file "A file (a/b/c.txt makes folders) or a folder (end with /)")
+                       (explorer-rename "Rename…" drgnx-explorer-rename "Rename; open buffers follow")
+                       (explorer-delete "Delete" drgnx-explorer-delete "Move to the trash (asks first)")
+                       (explorer-delete-permanently "Delete Permanently" drgnx-explorer-delete-permanently "Delete without the trash (asks first)")
+                       (explorer-copy "Copy" drgnx-explorer-copy "Copy, for Paste")
+                       (explorer-cut "Cut" drgnx-explorer-cut "Cut, for Paste (moves)")
+                       (explorer-paste "Paste" drgnx-explorer-paste "Paste into this folder (never overwrites)")
+                       (explorer-copy-path "Copy Path" drgnx-explorer-copy-path "The absolute path, to the clipboard")
+                       (explorer-copy-relative-path "Copy Relative Path" drgnx-explorer-copy-relative-path "The path from the root, to the clipboard")
+                       (explorer-reveal-externally "Reveal in File Manager" drgnx-explorer-reveal-externally "Open the folder in the system's file manager")))
+        (drgnx-command-define id :category "Explorer" :title title :command fn :doc doc
+          :map 'drgnx-explorer-mode-map :when in-explorer :context 'explorer)))
     ;; The Buffers panel (open editors), above the Explorer.
     (require 'drgnx-buffers)
     (drgnx-buffers-setup)

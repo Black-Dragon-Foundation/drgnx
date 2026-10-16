@@ -287,3 +287,99 @@
       (setq drgnx-explorer--pressed nil)
       (drgnx-explorer--apply-file-events)
       (should (member '(1 "held.txt") (drgnx-explorer-test--rows))))))
+
+;;;; File operations (M3b)
+
+(defmacro drgnx-explorer-test--answering (answers &rest body)
+  "BODY with prompts answered from ANSWERS (strings for names, t/nil for yes-or-no); the trash in a temp dir."
+  (declare (indent 1))
+  `(let* ((queue ,answers) (trash (make-temp-file "drgnx-trash" t))
+          (trash-directory trash) (delete-by-moving-to-trash t))
+     (unwind-protect
+         (cl-letf (((symbol-function 'read-string) (lambda (&rest _) (pop queue)))
+                   ((symbol-function 'read-from-minibuffer) (lambda (&rest _) (pop queue)))
+                   ((symbol-function 'y-or-n-p) (lambda (&rest _) (pop queue)))
+                   ((symbol-function 'yes-or-no-p) (lambda (&rest _) (pop queue))))
+           ,@body)
+       (delete-directory trash t))))
+
+(defun drgnx-explorer-test--at (name)
+  (with-current-buffer drgnx-explorer-buffer-name (goto-char (drgnx-explorer-test--goto name)) (current-buffer)))
+
+(ert-deftest drgnx-explorer/new-file-and-folder ()
+  (drgnx-explorer-test--with root
+    (drgnx-explorer-test--answering '("x/y/z.txt" "fresh/")
+      (with-current-buffer (drgnx-explorer-test--at "src")
+        (drgnx-explorer-new-file)
+        (should (file-exists-p (expand-file-name "src/x/y/z.txt" root)))
+        (goto-char (drgnx-explorer-test--goto "docs"))
+        (drgnx-explorer-new-file)
+        (should (file-directory-p (expand-file-name "docs/fresh" root)))
+        (should (member '(2 "fresh") (drgnx-explorer-test--rows)))))
+    (when-let* ((b (get-file-buffer (expand-file-name "src/x/y/z.txt" root)))) (kill-buffer b))))
+
+(ert-deftest drgnx-explorer/an-existing-name-is-never-overwritten ()
+  (drgnx-explorer-test--with root
+    (drgnx-explorer-test--answering '("README.md" "guide.md")
+      (with-current-buffer (drgnx-explorer-test--at "README.md")
+        (should-error (drgnx-explorer-new-file) :type 'user-error)
+        (goto-char (drgnx-explorer-test--goto "docs"))
+        (drgnx-explorer-toggle-at (point))
+        (goto-char (drgnx-explorer-test--goto "guide.md"))
+        (write-region "keep\n" nil (expand-file-name "docs/other.md" root) nil 'silent)
+        (should-error (progn (setq queue '("other.md")) (drgnx-explorer-rename)) :type 'user-error)
+        (should (equal (with-temp-buffer (insert-file-contents (expand-file-name "docs/other.md" root)) (buffer-string)) "keep\n"))))))
+
+(ert-deftest drgnx-explorer/rename-follows-open-buffers ()
+  (drgnx-explorer-test--with root
+    (let ((b (find-file-noselect (expand-file-name "src/app/main.py" root))))
+      (unwind-protect
+          (drgnx-explorer-test--answering '("core")
+            (drgnx-explorer-toggle-at (drgnx-explorer-test--goto "src"))
+            (with-current-buffer (drgnx-explorer-test--at "app")
+              (drgnx-explorer-rename))
+            (should (file-exists-p (expand-file-name "src/core/main.py" root)))
+            (should (equal (buffer-file-name b) (expand-file-name "src/core/main.py" root)))
+            (should (member '(2 "core") (drgnx-explorer-test--rows))))
+        (kill-buffer b)))))
+
+(ert-deftest drgnx-explorer/delete-goes-to-the-trash-and-hits-the-captured-row ()
+  (drgnx-explorer-test--with root
+    (drgnx-explorer-test--answering '(t)
+      (with-current-buffer (drgnx-explorer-test--at "README.md")
+        ;; While the user answers, a background refresh puts new rows above the selected one.
+        (cl-letf* ((real-y (symbol-function 'y-or-n-p))
+                   ((symbol-function 'y-or-n-p)
+                    (lambda (&rest args)
+                      (write-region "" nil (expand-file-name "AAA-first.txt" root) nil 'silent)
+                      (drgnx-explorer--refresh-dir (directory-file-name root))
+                      (apply real-y args))))
+          (drgnx-explorer-delete))
+        (should-not (file-exists-p (expand-file-name "README.md" root)))
+        (should (file-exists-p (expand-file-name "AAA-first.txt" root)))
+        (should (directory-files trash nil "README" t))
+        (should-not (member '(1 "README.md") (drgnx-explorer-test--rows)))))))
+
+(ert-deftest drgnx-explorer/copy-cut-paste ()
+  (drgnx-explorer-test--with root
+    (drgnx-explorer-test--answering nil
+      (with-current-buffer (drgnx-explorer-test--at "README.md")
+        (drgnx-explorer-copy)
+        (drgnx-explorer-paste)                      ; into the same folder: a copy, never an overwrite
+        (drgnx-explorer-paste)
+        (should (file-exists-p (expand-file-name "README copy.md" root)))
+        (should (file-exists-p (expand-file-name "README copy 2.md" root)))
+        (goto-char (drgnx-explorer-test--goto "README copy.md"))
+        (drgnx-explorer-cut)
+        (goto-char (drgnx-explorer-test--goto "docs"))
+        (drgnx-explorer-paste)
+        (should (file-exists-p (expand-file-name "docs/README copy.md" root)))
+        (should-not (file-exists-p (expand-file-name "README copy.md" root)))))))
+
+(ert-deftest drgnx-explorer/copy-path ()
+  (drgnx-explorer-test--with root
+    (with-current-buffer (drgnx-explorer-test--at "README.md")
+      (drgnx-explorer-copy-path)
+      (should (equal (current-kill 0) (expand-file-name "README.md" root)))
+      (drgnx-explorer-copy-relative-path)
+      (should (equal (current-kill 0) "README.md")))))
