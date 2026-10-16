@@ -5,6 +5,10 @@
 ;;; Code:
 (declare-function drgnx-explorer-setup "drgnx-explorer")
 (declare-function drgnx-rules-mode "drgnx-rules")
+(declare-function drgnx-chrome-mode "drgnx-chrome")
+(declare-function drgnx-chrome-close-tab "drgnx-chrome")
+(declare-function drgnx-chrome-next-tab "drgnx-chrome")
+(declare-function drgnx-chrome-previous-tab "drgnx-chrome")
 (declare-function drgnx-wb-toggle-panel "drgnx-area")
 (declare-function drgnx-wb-focus-panel "drgnx-area")
 (declare-function drgnx-wb-toggle-right-dock "drgnx-area")
@@ -35,6 +39,15 @@
       :command #'drgnx-wb-focus-panel :doc "Show the bottom panel and move focus to it")
     (drgnx-command-define 'toggle-right-dock :category "View" :title "Toggle Right Dock" :scope 'window
       :command #'drgnx-wb-toggle-right-dock :menu '("View") :doc "Show or hide the right dock")
+    ;; Chrome by role: tab lines and breadcrumbs in editor windows.
+    (require 'drgnx-chrome)
+    (drgnx-chrome-mode 1)
+    (drgnx-command-define 'close-tab :category "View" :title "Close Tab" :scope 'window
+      :command #'drgnx-chrome-close-tab :doc "Close the shown tab (the buffer stays open)")
+    (drgnx-command-define 'next-tab :category "View" :title "Next Tab" :scope 'window
+      :command #'drgnx-chrome-next-tab :doc "Show the next tab of this editor group")
+    (drgnx-command-define 'previous-tab :category "View" :title "Previous Tab" :scope 'window
+      :command #'drgnx-chrome-previous-tab :doc "Show the previous tab of this editor group")
     (drgnx-command-define 'wb-unrouted :category "View" :title "Show Unrouted Buffers" :scope 'window
       :command #'drgnx-wb-show-unrouted :doc "Buffers no placement rule matched (each one is a rule to add)")
     (drgnx-command-define 'toggle-sidebar :category "View" :title "Toggle Sidebar" :scope 'window

@@ -96,13 +96,24 @@
                                      set)))
       (drgnx-signal--emit 'modified-changed flipped))))
 
+(defvar drgnx-signal-window-functions nil
+  "Called with a frame, synchronously, when its windows or their buffers changed — before they are
+drawn.  For window *setup* only (chrome: a new window must not be drawn once without it); anything
+that follows the user's work subscribes to the edges instead.")
+
+(defun drgnx-signal--windows (frame-or-window)
+  "From `window-buffer-change-functions': set up the windows now, flush the edges later."
+  (when (framep frame-or-window)
+    (run-hook-with-args 'drgnx-signal-window-functions frame-or-window))
+  (drgnx-signal--schedule))
+
 (defun drgnx-signal--schedule (&rest _)
   "Raw hooks land here: arm one idle flush, nothing else."
   (unless (timerp drgnx-signal--timer)
     (setq drgnx-signal--timer (run-with-idle-timer drgnx-signal-delay nil #'drgnx-signal--flush))))
 
 (defconst drgnx-signal--hooks
-  '(window-buffer-change-functions window-selection-change-functions buffer-list-update-hook
+  '(window-selection-change-functions buffer-list-update-hook
     first-change-hook after-save-hook after-revert-hook kill-buffer-hook
     ;; Undo back to the saved state, `set-buffer-modified-p' and `rename-buffer' run no buffer
     ;; hook: every command arms the (cheap, idle) flush too.
@@ -114,6 +125,8 @@
   :global t :group 'drgnx
   (dolist (h drgnx-signal--hooks)
     (if drgnx-signal-mode (add-hook h #'drgnx-signal--schedule) (remove-hook h #'drgnx-signal--schedule)))
+  (if drgnx-signal-mode (add-hook 'window-buffer-change-functions #'drgnx-signal--windows)
+    (remove-hook 'window-buffer-change-functions #'drgnx-signal--windows))
   (when drgnx-signal-mode (drgnx-signal--schedule)))
 
 (provide 'drgnx-signal)

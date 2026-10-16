@@ -34,6 +34,7 @@ The onboarding flow will ask which one you want (VS Code preselected).
 | Toggle Sidebar | `C-b` | `<f8>` | `SPC e` |
 | Focus Explorer / Buffers | `C-S-e` / `C-k e` | `C-x M-e` / `C-x C-b` | `SPC E` / `SPC ,` |
 | Toggle Panel / Right Dock | ``C-` `` / `C-M-b` | — / — | `SPC j` / `SPC R` |
+| Close Tab / Next / Previous | `C-<f4>` / `C-<next>` / `C-<prior>` | — / Emacs' `C-x <right>` / `C-x <left>` | `SPC b d` / `SPC b n` / `SPC b p` |
 
 The Explorer's and the Buffers panel's own keys (rows, expand, open, close) are in [workbench.md](workbench.md).
 A command that lives in a mode's keymap (like those) keeps its keymap in every profile: an entry's `:map` wins,

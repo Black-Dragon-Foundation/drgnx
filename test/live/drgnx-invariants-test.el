@@ -164,3 +164,18 @@ settled within 250 ms."
                        []))                                      ; every form ran
         (should (equal (plist-get (drgnx-inv--probe sess) :unrouted) []))
         (should (= 0 (plist-get (drgnx-inv--probe sess) :guard)))))))
+
+(ert-deftest drgnx-inv/i3-chrome-height-depends-on-the-role-only ()
+  ;; The editor shows a file, then ibuffer (its own header line), then *scratch*: same chrome heights.
+  (drgnx-inv--with sess
+    (drgnx-ui-measure sess (list (list :keys "C-b") (list :keys "C-`")))
+    (let* ((q "(drgnx-uitest--json (let ((e (drgnx-wb-editor-window)) (p (drgnx-wb-area-window 'panel)))
+                 (list :editor (vector (window-tab-line-height e) (window-header-line-height e) (window-mode-line-height e))
+                       :panel (vector (window-tab-line-height p) (window-header-line-height p) (window-mode-line-height p)))))")
+           (first (drgnx-ui-call sess q)))
+      (should (seq-every-p #'cl-plusp (plist-get first :editor)))
+      (should (= 0 (aref (plist-get first :panel) 2)))                  ; no mode line in the panel
+      (dolist (form '("(ibuffer)" "(switch-to-buffer \"*scratch*\")"))
+        (drgnx-ui-call sess (format "(progn (select-window (drgnx-wb-editor-window)) %s (drgnx-uitest--json (list :ok t)))" form))
+        (drgnx-ui-measure sess nil)
+        (should (equal (drgnx-ui-call sess q) first))))))

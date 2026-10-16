@@ -48,7 +48,7 @@ one; mark it as the lane."
       ;; without ending the popup: its buffer tells us.
       (with-current-buffer (window-buffer lane)
         (add-hook 'window-buffer-change-functions #'drgnx-popup--check-window nil t))
-      (set-window-parameter lane 'header-line-format nil)
+      (set-window-parameter lane 'header-line-format 'none)  ; the lane has no chrome (I3)
       (drgnx-wb-set-area-buffer lane buffer))
      (t
       (setq lane (let ((drgnx-rules--placing t))

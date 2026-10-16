@@ -110,6 +110,19 @@ alone unless a rule names them.
 | `right` | agents, chat, viewers — tabs come with their modules (M7) |
 | `popup` | transient, which-key, `*Completions*`, `*Calendar*` |
 
+### Chrome
+
+Every window's chrome is decided by its **role**, never by its buffer: an **editor** window has a tab line, a
+breadcrumb header and a mode line; a **dock** section has its title only; the **panel** and the **right dock** have
+their tab row only; a popup has none. The chrome lives in window parameters, so a mode that sets its own header or
+mode line (ibuffer, Info) cannot change a window's height — text never jumps (invariant I3).
+
+- **Tabs**: the buffers an editor window has shown, in the order they were opened; switching never reorders them.
+  Click a tab to show it, `×` or middle-click closes it (the buffer stays open — close it in the Buffers panel).
+  Close Tab `C-<f4>` · palette · `SPC b d`; Next / Previous Tab `C-<next>` / `C-<prior>` · Emacs' `C-x <right>` /
+  `C-x <left>` · `SPC b n` / `SPC b p`. `*scratch*` is a tab only while it is shown.
+- **Breadcrumb**: project › folders › file, `●` while unsaved.
+
 ### Popups
 
 Short-lived buffers — a transient menu, which-key's hints, `*Completions*`, the calendar — show in one **popup
