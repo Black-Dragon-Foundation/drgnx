@@ -379,3 +379,15 @@
      (should (string-search ";; my keys" text))
      (should (string-search "; palette on C-c p" text)))
    (should (equal (drgnx-keys-read-user) '(:layers ((emacs app editing window)) :bind ((palette "C-c p")))))))
+
+(ert-deftest drgnx-keys/a-commands-own-keymap-beats-the-profiles ()
+  ;; Mode-local commands (the Explorer's) stay in their mode's keymap in the Vim profile too.
+  (drgnx-keys-test--with-core-commands
+   (drgnx-command-define 'test-local :title "Local" :category "Test" :command #'ignore :map 'drgnx-keys-test-rv-map)
+   (let ((r (drgnx-keys-resolve :commands (drgnx-commands-all)
+                                :profiles '((vim :map (evil . evil-normal-state-map) :bind ((test-local "j") (open-file "SPC f f"))))
+                                :layers '((vim app editing window)) :defaults drgnx-keys-test--defaults)))
+     (should (eq (plist-get (seq-find (lambda (b) (eq (plist-get b :id) 'test-local)) (plist-get r :bindings)) :map)
+                 'drgnx-keys-test-rv-map))
+     (should (equal (plist-get (seq-find (lambda (b) (eq (plist-get b :id) 'open-file)) (plist-get r :bindings)) :map)
+                    '(evil . evil-normal-state-map))))))

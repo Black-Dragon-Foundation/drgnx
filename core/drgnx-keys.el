@@ -95,7 +95,7 @@ cannot be read (never an error or a prompt)."
   (replace-regexp-in-string "\\(\\`\\| \\)C-" "\\1s-" key t))
 
 (defun drgnx-keys--entry (entry spec platform)
-  "ENTRY (ID KEY… [:map M] [:mac K]) or (ID :none REASON) of profile SPEC → plist (:keys :map)."
+  "ENTRY (ID KEY… [:map M] [:mac K]) or (ID :none REASON) of profile SPEC → plist (:keys :map :profile-map); the keymap is the entry's, else the command's, else the profile's."
   (let ((rest (cdr entry)) keys)
     (if (eq (car rest) :none)
         (list :keys nil)
@@ -105,7 +105,7 @@ cannot be read (never an error or a prompt)."
         (setq keys (cond ((plist-get rest :mac) (ensure-list (plist-get rest :mac)))
                          ((plist-get spec :mac-cmd) (mapcar #'drgnx-keys--mac-cmd keys))
                          (t keys))))
-      (list :keys keys :map (or (plist-get rest :map) (plist-get spec :map))))))
+      (list :keys keys :map (plist-get rest :map) :profile-map (plist-get spec :map)))))
 
 (defun drgnx-keys--lookup (map key)
   "KEY in MAP, ignoring command remapping (which depends on the current buffer)."
@@ -174,7 +174,7 @@ KIND `same-key', `claim' (a key another layer uses natively) or `prefix'."
       (when-let* ((a (gethash (drgnx-cmd-id c) assign)))
         (dolist (k (plist-get a :keys))
           (if (key-valid-p k)
-              (push (list :id (drgnx-cmd-id c) :key k :map (or (plist-get a :map) (drgnx-cmd-map c))
+              (push (list :id (drgnx-cmd-id c) :key k :map (or (plist-get a :map) (drgnx-cmd-map c) (plist-get a :profile-map))
                           :layer (plist-get a :layer) :rank (plist-get a :rank))
                     bindings)
             (push (format "%s: \"%s\" is not a valid key" (drgnx-cmd-id c) k) problems)))))
