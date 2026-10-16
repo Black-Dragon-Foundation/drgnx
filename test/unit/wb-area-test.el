@@ -123,3 +123,14 @@
            (should (>= (nth 0 (window-pixel-edges panel)) (nth 2 (window-pixel-edges dock)))))
        (drgnx-wb-hide-sidebar)
        (kill-buffer "*drgnx-test-top*")))))
+
+(ert-deftest drgnx-area/deleting-the-area-window-hides-the-area ()
+  ;; C-x 0 in the panel, or a package deleting "its" window that is the panel: the panel hides,
+  ;; keeping its size and tabs.
+  (drgnx-area-test--with
+   (let* ((w (drgnx-wb-area-show 'panel 'output))
+          (h (progn (window-resize w 3) (window-pixel-height w))))    ; the user dragged it taller
+     (delete-window w)
+     (should-not (drgnx-wb-area-window 'panel))
+     (should (= h (window-pixel-height (drgnx-wb-area-show 'panel))))
+     (should (eq (drgnx-wb-area-tab 'panel) 'output)))))

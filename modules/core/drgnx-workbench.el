@@ -26,8 +26,9 @@
     ;; Where buffers go.
     (require 'drgnx-rules)
     (drgnx-rules-mode 1)
-    ;; The bottom panel and the right dock.
+    ;; The bottom panel and the right dock; popups borrow the panel.
     (require 'drgnx-area)
+    (require 'drgnx-popup)
     (drgnx-command-define 'toggle-panel :category "View" :title "Toggle Panel" :scope 'window
       :command #'drgnx-wb-toggle-panel :menu '("View") :doc "Show or hide the bottom panel (Terminal, Problems, Output, Results, Help)")
     (drgnx-command-define 'focus-panel :category "View" :title "Focus Panel" :scope 'window

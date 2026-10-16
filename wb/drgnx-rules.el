@@ -62,13 +62,23 @@ Later rules are tried first; a rule with the same MATCHER is replaced where it s
   (when (> (length drgnx-wb-unrouted) drgnx-rules--unrouted-max)
     (setq drgnx-wb-unrouted (seq-take drgnx-wb-unrouted drgnx-rules--unrouted-max))))
 
+(defvar drgnx-rules--placing nil
+  "Non-nil while a place shows a buffer: its own `display-buffer-in-side-window' calls are meant.")
+
 (defun drgnx-rules--display (buffer alist)
   "Our `display-buffer-alist' action: show BUFFER where its rule says (unmatched: the editor, logged)."
   (let ((rule (drgnx-wb-rule-for buffer (cons nil alist))))
     (unless rule (drgnx-rules--log buffer))
-    (let ((place (or (car rule) 'editor)))
+    (let ((place (or (car rule) 'editor)) (drgnx-rules--placing t))
       (funcall (or (alist-get place drgnx-rules--places) (error "drgnx: no place %s" place))
                buffer alist (cdr rule)))))
+
+(defun drgnx-rules--side-window (orig buffer alist)
+  "Around `display-buffer-in-side-window': a package calling it directly (which-key does) for a
+buffer a rule places goes to that place — it would otherwise take over the panel's slot."
+  (if (and (not drgnx-rules--placing) (drgnx-wb-rule-for buffer (cons nil alist)))
+      (drgnx-rules--display buffer alist)
+    (funcall orig buffer alist)))
 
 ;;;; Places: editor, current
 
@@ -114,7 +124,9 @@ right docks run the frame's full height, the panel sits under the editors.")
         (unless drgnx-rules--saved
           (setq drgnx-rules--saved (mapcar (lambda (d) (cons (car d) (symbol-value (car d)))) drgnx-rules--defaults)))
         (pcase-dolist (`(,var . ,val) drgnx-rules--defaults) (set var val))
-        (setq display-buffer-alist (append (remove drgnx-rules--entry display-buffer-alist) (list drgnx-rules--entry))))
+        (setq display-buffer-alist (append (remove drgnx-rules--entry display-buffer-alist) (list drgnx-rules--entry)))
+        (advice-add 'display-buffer-in-side-window :around #'drgnx-rules--side-window))
+    (advice-remove 'display-buffer-in-side-window #'drgnx-rules--side-window)
     (setq display-buffer-alist (remove drgnx-rules--entry display-buffer-alist))
     (pcase-dolist (`(,var . ,val) drgnx-rules--saved) (set var val))
     (setq drgnx-rules--saved nil)))

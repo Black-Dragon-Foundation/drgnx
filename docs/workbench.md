@@ -2,9 +2,9 @@
 
 drgnx's window model, VS Code style: editor windows in the middle, a left dock with the **Buffers** panel (open
 files) above the **Explorer** (file tree), a **right dock** and a bottom **panel** (Terminal, Problems, Output,
-Results, Help) — every buffer goes to its place by one rules table. Nothing moves on its own: a click lands where
-you clicked, a row you selected stays selected, docks and panel keep their size. Popups, editor groups and several
-windows arrive in the next milestones (see [roadmap.md](roadmap.md), M3).
+Results, Help) and a popup lane — every buffer goes to its place by one rules table. Nothing moves on its own: a
+click lands where you clicked, a row you selected stays selected, docks and panel keep their size, popups leave no
+trace. Editor groups and several windows arrive in the next milestones (see [roadmap.md](roadmap.md), M3).
 
 Everything here is built on plain Emacs — no treemacs, no ibuffer — does what people use those for (and VS
 Code's Explorer and Open Editors; see [Compared](#compared-with-treemacs-ibuffer-and-vs-code)), and does every
@@ -105,6 +105,17 @@ alone unless a rule names them.
 | `panel` Terminal | shell, eshell, term, vterm, ielm, other comint buffers |
 | `panel` Help | help, apropos, Info, man, eldoc documentation |
 | `right` | agents, chat, viewers — tabs come with their modules (M7) |
+| `popup` | transient, which-key, `*Completions*`, `*Calendar*` |
+
+### Popups
+
+Short-lived buffers — a transient menu, which-key's hints, `*Completions*`, the calendar — show in one **popup
+lane** and leave no trace. With the panel open, the popup borrows the panel's window: nothing around it moves, the
+popup is not resized (longer content scrolls), and when it ends the panel's buffer, scroll, point, tab row and pixel
+height come back exactly. With the panel hidden, the popup gets a window under the editors that is deleted when it
+ends, giving every pixel back. However a package ends its popup — `delete-window`, `quit-window`, `bury-buffer`,
+killing the buffer — the lane notices. A package that calls `display-buffer-in-side-window` directly (which-key does)
+still goes where the rules say.
 
 ### The panel and the right dock
 
@@ -113,7 +124,8 @@ Right Dock: `C-M-b` · palette · `SPC R`) runs the frame's full height, like th
 **tab row** at the top (click a tab to show it). Showing a buffer there never takes focus (Focus Panel does), and
 switching tabs swaps the buffer *in place*: the window stays, nothing around it moves, and each tab comes back
 scrolled where you left it. Both keep their pixel size across hiding and showing. Killing the buffer a tab shows
-leaves the tab empty — another buffer never slips into the panel. `C-x 1` keeps the docks and the panel. The echo
+leaves the tab empty — another buffer never slips into the panel. `C-x 1` keeps the docks and the panel; `C-x 0` in
+the panel hides it (size and tabs kept). The echo
 area stays one line (`resize-mini-windows` is off), so a tall message never takes pixels from the panel.
 
 ## Compared with treemacs, ibuffer and VS Code

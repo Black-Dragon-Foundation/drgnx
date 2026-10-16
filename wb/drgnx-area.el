@@ -101,12 +101,14 @@
 (defun drgnx-area--create (area buffer)
   (let* ((spec (alist-get area drgnx-wb--areas)) (side (plist-get spec :side))
          (horizontal (drgnx-area--horizontal-p area))
-         (w (display-buffer-in-side-window
-             buffer `((side . ,side) (slot . 0)
-                      (,(if horizontal 'window-width 'window-height) . ,(plist-get spec :size))
-                      (dedicated . drgnx)
-                      (window-parameters . ((drgnx-role . ,area) (no-delete-other-windows . t)
-                                            (no-other-window . t)))))))
+         (w (let ((drgnx-rules--placing t))           ; ours: not redirected by the rules
+              (display-buffer-in-side-window
+               buffer `((side . ,side) (slot . 0)
+                        (,(if horizontal 'window-width 'window-height) . ,(plist-get spec :size))
+                        (dedicated . drgnx)
+                        (window-parameters . ((drgnx-role . ,area) (no-delete-other-windows . t)
+                                              (no-other-window . t)
+                                              (delete-window . drgnx-area--delete-window))))))))
     (when-let* ((px (frame-parameter nil (drgnx-area--px-param area))))
       (let ((window-resize-pixelwise t))             ; or the size is rounded to whole lines
         (ignore-errors (window-resize w (- px (if horizontal (window-pixel-width w) (window-pixel-height w)))
@@ -115,9 +117,16 @@
     (set-window-scroll-bars w nil nil nil nil t)
     w))
 
+(declare-function drgnx-popup--end "drgnx-popup")
+
+(defun drgnx-area--end-popup (w)
+  "A popup borrowing W ends before the area changes (the tab must not remember the popup)."
+  (when (and w (window-parameter w 'drgnx-popup)) (drgnx-popup--end w)))
+
 (defun drgnx-wb-area-show (area &optional tab buffer)
   "Show AREA's TAB (default: the shown one) with BUFFER (default: the tab's last); never select it.
 Returns the window — the same one across tab switches."
+  (drgnx-area--end-popup (drgnx-wb-area-window area))
   (let* ((w (drgnx-wb-area-window area)) (tab (or tab (drgnx-wb-area-tab area))))
     (when w (drgnx-area--remember area w))
     (let* ((saved (alist-get tab (plist-get (drgnx-area--state area) :tabs)))
@@ -148,11 +157,18 @@ Returns the window — the same one across tab switches."
 (defun drgnx-wb-area-hide (area)
   "Hide AREA, remembering its pixel size and its tabs."
   (when-let* ((w (drgnx-wb-area-window area)))
+    (drgnx-area--end-popup w)
     (drgnx-area--remember area w)
     (set-frame-parameter nil (drgnx-area--px-param area)
                          (if (drgnx-area--horizontal-p area) (window-pixel-width w) (window-pixel-height w)))
     (when (eq (selected-window) w) (drgnx-wb-focus-editor))
+    (set-window-parameter w 'delete-window nil)
     (delete-window w)))
+
+(defun drgnx-area--delete-window (window)
+  "`delete-window' on an area's window (C-x 0, or a package deleting a window it once had): hide the
+area, so its size and tabs are kept."
+  (drgnx-wb-area-hide (window-parameter window 'drgnx-role)))
 
 (defun drgnx-wb-area-toggle (area)
   "Show or hide AREA."
