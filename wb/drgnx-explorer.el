@@ -35,6 +35,7 @@
 (defface drgnx-explorer-directory '((t :inherit default)) "Folder names.")
 (defface drgnx-explorer-file '((t :inherit default)) "File names.")
 (defface drgnx-explorer-guide '((t :inherit shadow)) "Indent guides and chevrons.")
+(defface drgnx-explorer-selected '((t :inherit region)) "Rows selected together (multi-select).")
 
 (defconst drgnx-explorer-buffer-name "*drgnx explorer*")
 
@@ -42,6 +43,7 @@
 (defvar drgnx-explorer--expanded (make-hash-table :test #'equal) "Expanded folders (paths without trailing /).")
 (defvar drgnx-explorer--cache (make-hash-table :test #'equal) "Folder → (MTIME . CHILDREN).")
 (defvar drgnx-explorer--pressed nil "Non-nil while a mouse button pressed in the Explorer is held.")
+(defvar drgnx-explorer--selection nil "Paths selected together (multi-select), or nil: the row at point.")
 
 ;;;; The model
 
@@ -152,7 +154,9 @@ name's face, the hover highlight, the git status."
                                  (list 'face (cond ((= depth 0) 'drgnx-explorer-root) ((aref v 2) 'drgnx-explorer-directory)
                                                    (t 'drgnx-explorer-file))
                                        'mouse-face 'highlight))
-            (drgnx-explorer--git-decorate (point) (pos-eol) (drgnx-explorer--path v) (aref v 2) name-start))
+            (drgnx-explorer--git-decorate (point) (pos-eol) (drgnx-explorer--path v) (aref v 2) name-start)
+            (when (and drgnx-explorer--selection (member (drgnx-explorer--path v) drgnx-explorer--selection))
+              (add-face-text-property name-start (pos-eol) 'drgnx-explorer-selected)))
           (forward-line 1)
           (setq i (1+ i))))))
   `(jit-lock-bounds ,beg . ,end))
@@ -410,8 +414,48 @@ Returns non-nil if FILE is under a root."
         (drgnx-explorer-toggle-at pos)
       (drgnx-wb-show-in-editor (find-file-noselect path) (not keep-focus)))))
 
-(defun drgnx-explorer-next () "Next row." (interactive) (forward-line 1) (when (eobp) (forward-line -1)))
-(defun drgnx-explorer-previous () "Previous row." (interactive) (forward-line -1))
+(defun drgnx-explorer-next () "Next row (ends a multi-select)."
+  (interactive) (drgnx-explorer--clear-selection) (forward-line 1) (when (eobp) (forward-line -1)))
+(defun drgnx-explorer-previous () "Previous row (ends a multi-select)."
+  (interactive) (drgnx-explorer--clear-selection) (forward-line -1))
+
+;;;; Multi-select
+
+(defvar drgnx-explorer--anchor nil "Where a Shift-selection started (a path).")
+
+(defun drgnx-explorer--set-selection (paths)
+  (setq drgnx-explorer--selection paths)
+  (when-let* ((b (get-buffer drgnx-explorer-buffer-name))) (with-current-buffer b (jit-lock-refontify))))
+
+(defun drgnx-explorer--clear-selection ()
+  (setq drgnx-explorer--anchor nil)
+  (when drgnx-explorer--selection (drgnx-explorer--set-selection nil)))
+
+(defun drgnx-explorer--select-range-to (pos)
+  "Select every row from the anchor to the row at POS."
+  (unless drgnx-explorer--anchor (setq drgnx-explorer--anchor (drgnx-explorer--node)))
+  (let* ((a (drgnx-explorer--index (or (drgnx-explorer--row-pos drgnx-explorer--anchor) (point))))
+         (b (drgnx-explorer--index pos)))
+    (drgnx-explorer--set-selection
+     (cl-loop for i from (min a b) to (max a b) collect (drgnx-explorer--path (aref drgnx-explorer--rows i))))))
+
+(defun drgnx-explorer--select-move (n)
+  (unless drgnx-explorer--anchor (setq drgnx-explorer--anchor (drgnx-explorer--node)))
+  (forward-line n)
+  (when (eobp) (forward-line -1))
+  (drgnx-explorer--select-range-to (point)))
+
+(defun drgnx-explorer-select-down () "Extend the selection one row down." (interactive) (drgnx-explorer--select-move 1))
+(defun drgnx-explorer-select-up () "Extend the selection one row up." (interactive) (drgnx-explorer--select-move -1))
+
+(defun drgnx-explorer-mark ()
+  "Add the row here to the selection (or take it out), then go to the next row."
+  (interactive)
+  (let ((p (or (drgnx-explorer--node) (user-error "Nothing here"))))
+    (drgnx-explorer--set-selection (if (member p drgnx-explorer--selection) (remove p drgnx-explorer--selection)
+                                     (append drgnx-explorer--selection (list p))))
+    (forward-line 1)
+    (when (eobp) (forward-line -1))))
 
 (defun drgnx-explorer-expand ()
   "Expand the folder at point; on an expanded folder, go to its first child."
@@ -447,7 +491,6 @@ Returns non-nil if FILE is under a root."
 ;; you answer can never make it act on another row.  Nothing is ever overwritten; deletes go to
 ;; the trash unless asked otherwise.
 
-(defvar drgnx-explorer--selection nil "Paths selected together (multi-select), or nil: the row at point.")
 (defvar drgnx-explorer--clipboard nil "(copy|cut PATHS) from Copy or Cut, for Paste.")
 
 (defun drgnx-explorer--targets ()
@@ -605,10 +648,31 @@ Returns non-nil if FILE is under a root."
       (unless (eq w (selected-window)) (select-window w))
       (when (integer-or-marker-p pos) (goto-char pos)))))
 
+(defun drgnx-explorer-mouse-toggle (event)
+  "Ctrl-click: add the row to the selection, or take it out."
+  (interactive "e")
+  (setq drgnx-explorer--pressed nil)
+  (when-let* ((pos (posn-point (event-end event))) ((integer-or-marker-p pos)) (p (drgnx-explorer-node-at pos)))
+    (unless (or drgnx-explorer--selection (null (drgnx-explorer--node)) (equal (drgnx-explorer--node) p))
+      (setq drgnx-explorer--selection (list (drgnx-explorer--node))))
+    (goto-char pos)
+    (setq drgnx-explorer--anchor p)
+    (drgnx-explorer--set-selection (if (member p drgnx-explorer--selection) (remove p drgnx-explorer--selection)
+                                     (append drgnx-explorer--selection (list p))))))
+
+(defun drgnx-explorer-mouse-range (event)
+  "Shift-click: select every row from the last one to this one."
+  (interactive "e")
+  (setq drgnx-explorer--pressed nil)
+  (when-let* ((pos (posn-point (event-end event))) ((integer-or-marker-p pos)))
+    (drgnx-explorer--select-range-to pos)
+    (goto-char pos)))
+
 (defun drgnx-explorer-mouse-click (event)
   "Release without moving: a folder toggles, a file opens keeping the Explorer focused."
   (interactive "e")
   (setq drgnx-explorer--pressed nil)
+  (drgnx-explorer--clear-selection)
   (let ((pos (posn-point (event-end event))))
     (when (integer-or-marker-p pos) (goto-char pos) (drgnx-explorer-activate pos t))))
 
@@ -637,6 +701,10 @@ Returns non-nil if FILE is under a root."
     (keymap-set map "<triple-down-mouse-1>" #'ignore)
     (keymap-set map "<triple-mouse-1>" #'drgnx-explorer-mouse-ignore)
     (keymap-set map "<drag-mouse-1>" #'drgnx-explorer-mouse-ignore)
+    (keymap-set map "C-<down-mouse-1>" #'drgnx-explorer-mouse-press)   ; (globally: the buffer menu)
+    (keymap-set map "C-<mouse-1>" #'drgnx-explorer-mouse-toggle)
+    (keymap-set map "S-<down-mouse-1>" #'drgnx-explorer-mouse-press)   ; (globally: the font menu)
+    (keymap-set map "S-<mouse-1>" #'drgnx-explorer-mouse-range)
     map)
   "Keys of the Explorer; keyboard keys come from the key profiles.")
 

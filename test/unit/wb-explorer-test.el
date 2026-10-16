@@ -383,3 +383,33 @@
       (should (equal (current-kill 0) (expand-file-name "README.md" root)))
       (drgnx-explorer-copy-relative-path)
       (should (equal (current-kill 0) "README.md")))))
+
+;;;; Multi-select (M3b)
+
+(ert-deftest drgnx-explorer/a-selection-of-several-rows ()
+  (drgnx-explorer-test--with root
+    (with-current-buffer (drgnx-explorer-test--at "docs")
+      (drgnx-explorer-select-down)
+      (drgnx-explorer-select-down)
+      (should (equal (sort (mapcar #'file-name-nondirectory (drgnx-explorer--targets)) #'string<) '("docs" "src" "tests")))
+      (drgnx-explorer-select-up)
+      (should (equal (sort (mapcar #'file-name-nondirectory (drgnx-explorer--targets)) #'string<) '("docs" "src")))
+      ;; Moving without Shift ends the multi-select.
+      (drgnx-explorer-next)
+      (should (equal (mapcar #'file-name-nondirectory (drgnx-explorer--targets)) '("tests"))))))
+
+(ert-deftest drgnx-explorer/marking-rows-and-deleting-them-together ()
+  (drgnx-explorer-test--with root
+    (drgnx-explorer-test--answering '(t)
+      (with-current-buffer (drgnx-explorer-test--at "README.md")
+        (drgnx-explorer-mark)
+        (goto-char (drgnx-explorer-test--goto "docs"))
+        (drgnx-explorer-mark)
+        (drgnx-explorer--fontify (point-min) (point-max))
+        (goto-char (drgnx-explorer-test--goto "docs"))
+        (should (memq 'drgnx-explorer-selected (ensure-list (get-text-property (+ (point) 2) 'face))))
+        (drgnx-explorer-delete)
+        (should-not (file-exists-p (expand-file-name "README.md" root)))
+        (should-not (file-exists-p (expand-file-name "docs" root)))
+        (should (file-exists-p (expand-file-name "tests" root)))
+        (should (null drgnx-explorer--selection))))))
