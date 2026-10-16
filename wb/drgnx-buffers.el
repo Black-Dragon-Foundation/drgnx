@@ -17,6 +17,7 @@
 (require 'text-property-search)
 (require 'hl-line)
 (require 'drgnx-wb)
+(require 'drgnx-git)
 
 (defface drgnx-buffers-close '((t :inherit shadow)) "The × of each row.")
 (defface drgnx-buffers-modified '((t :inherit warning)) "The ● of a modified buffer.")
@@ -71,11 +72,13 @@
     (save-excursion (goto-char (point-min)) (forward-line i) (point))))
 
 (defun drgnx-buffers--fontify (beg end)
-  "Paint the rows between BEG and END (jit-lock): ×, ●, the name's hover highlight, the folder."
+  "Paint the rows between BEG and END (jit-lock): ×, ●, the name's hover highlight, the folder, the
+git status (the name's colour and its letter at the right edge)."
   (save-excursion
     (goto-char beg)
     (forward-line 0)
     (let ((inhibit-read-only t) (end (save-excursion (goto-char end) (pos-eol))))
+      (remove-overlays (point) end 'drgnx-git t)
       (with-silent-modifications
         (while (< (point) end)
           (let* ((bol (point)) (eol (pos-eol))
@@ -84,7 +87,14 @@
               (add-text-properties bol (1+ bol) '(face drgnx-buffers-close mouse-face highlight help-echo "Close"))
               (put-text-property (+ bol 2) (+ bol 3) 'face 'drgnx-buffers-modified)
               (put-text-property (+ bol 4) (- name-end 2) 'mouse-face 'highlight)
-              (put-text-property (- name-end 2) eol 'face 'drgnx-buffers-dir)))
+              (put-text-property (- name-end 2) eol 'face 'drgnx-buffers-dir)
+              (when-let* ((b (drgnx-buffers-buffer-at bol)) (file (buffer-file-name b))
+                          (status (drgnx-git-status file)) (letter (car (drgnx-git-look status))))
+                ;; The letter right after the name: the folder hint after it is cut at the panel's edge.
+                (let ((face (cadr (drgnx-git-look status))) (o (make-overlay (- name-end 2) (- name-end 2))))
+                  (add-face-text-property (+ bol 4) (- name-end 2) face)
+                  (overlay-put o 'drgnx-git t)
+                  (overlay-put o 'after-string (concat " " (propertize letter 'face face)))))))
           (forward-line 1)))))
   `(jit-lock-bounds ,beg . ,end))
 
@@ -211,7 +221,10 @@ While a button is held in the panel, wait for the release: rows never move under
   (drgnx-wb-define-section 'buffers :slot -1 :title " BUFFERS" :height 0.3 :buffer #'drgnx-buffers--buffer)
   (drgnx-signal-subscribe 'buffer-set-changed #'drgnx-buffers--refresh)
   (drgnx-signal-subscribe 'modified-changed #'drgnx-buffers--refresh)
-  (drgnx-signal-subscribe 'editor-changed #'drgnx-buffers--mark-active))
+  (drgnx-signal-subscribe 'editor-changed #'drgnx-buffers--mark-active)
+  (add-hook 'drgnx-git-changed-functions
+            (lambda (_root) (when-let* ((b (get-buffer drgnx-buffers-buffer-name)))
+                              (with-current-buffer b (jit-lock-refontify))))))
 
 (provide 'drgnx-buffers)
 ;;; drgnx-buffers.el ends here

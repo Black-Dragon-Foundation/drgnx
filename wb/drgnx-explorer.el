@@ -22,6 +22,7 @@
 (require 'project)
 (require 'filenotify)
 (require 'drgnx-wb)
+(require 'drgnx-git)
 
 (defgroup drgnx-explorer nil "The drgnx Explorer." :group 'drgnx)
 
@@ -117,14 +118,31 @@ buffer, and they keep both in step.")
 (defun drgnx-explorer-dir-at (pos) "Non-nil if the row at POS is a folder."
   (when-let* ((v (drgnx-explorer--row-data pos))) (aref v 2)))
 
+(defcustom drgnx-explorer-git t "Show git status in the Explorer (letters, colours, dimmed ignored files)."
+  :type 'boolean)
+
+(defun drgnx-explorer--git-decorate (bol eol path dirp name-start)
+  "Colour the name and put the status letter (● for a folder with changes) at the right edge."
+  (when-let* ((status (and drgnx-explorer-git (drgnx-git-status path))))
+    (pcase-let ((`(,letter ,face) (drgnx-git-look status)))
+      (add-face-text-property name-start eol face)
+      (let ((mark (if (and dirp (not (memq status '(ignored untracked)))) "●" letter)))
+        (when mark
+          (let ((o (make-overlay eol eol)))
+            (overlay-put o 'drgnx-git t)
+            (overlay-put o 'after-string (concat (propertize " " 'display '(space :align-to (- right 2)))
+                                                 (propertize mark 'face face)))))))
+    (ignore bol)))
+
 (defun drgnx-explorer--fontify (beg end)
   "Paint the rows between BEG and END (jit-lock: only what is displayed): guides and chevron, the
-name's face, the hover highlight."
+name's face, the hover highlight, the git status."
   (save-excursion
     (goto-char beg)
     (forward-line 0)
     (let ((inhibit-read-only t) (end (save-excursion (goto-char end) (pos-eol)))
           (i (drgnx-explorer--index (point))) (rows drgnx-explorer--rows))
+      (remove-overlays (point) end 'drgnx-git t)
       (with-silent-modifications
         (while (and (< (point) end) (< i (length rows)))
           (let* ((v (aref rows i)) (depth (aref v 1))
@@ -133,7 +151,8 @@ name's face, the hover highlight."
             (add-text-properties name-start (pos-eol)
                                  (list 'face (cond ((= depth 0) 'drgnx-explorer-root) ((aref v 2) 'drgnx-explorer-directory)
                                                    (t 'drgnx-explorer-file))
-                                       'mouse-face 'highlight)))
+                                       'mouse-face 'highlight))
+            (drgnx-explorer--git-decorate (point) (pos-eol) (drgnx-explorer--path v) (aref v 2) name-start))
           (forward-line 1)
           (setq i (1+ i))))))
   `(jit-lock-bounds ,beg . ,end))
@@ -186,7 +205,17 @@ faces come later, from jit-lock, for the rows on screen."
           (push (drgnx-explorer--insert-subtree path 1) data)))
       (setq drgnx-explorer--rows (apply #'vconcat (nreverse data)))
       (drgnx-explorer--restore-views views)
-      (drgnx-explorer--sync-watches))))
+      (drgnx-explorer--sync-watches)
+      (drgnx-explorer--git-refresh))))
+
+(defun drgnx-explorer--git-refresh ()
+  "Read the git status of every root (in the background)."
+  (when drgnx-explorer-git (dolist (r drgnx-explorer--roots) (drgnx-git-refresh r))))
+
+(defun drgnx-explorer--git-changed (_root)
+  "A git status arrived: repaint the visible rows."
+  (when-let* ((buf (get-buffer drgnx-explorer-buffer-name)))
+    (with-current-buffer buf (jit-lock-refontify))))
 
 (defun drgnx-explorer--save-views ()
   "The row (path) at point, and each window's first row and selected row."
@@ -260,7 +289,8 @@ faces come later, from jit-lock, for the rows on screen."
       (setq drgnx-explorer--dirty nil)
       (when-let* ((buf (get-buffer drgnx-explorer-buffer-name)))
         (with-current-buffer buf
-          (dolist (d dirs) (drgnx-explorer--refresh-dir d)))))))
+          (dolist (d dirs) (drgnx-explorer--refresh-dir d))
+          (drgnx-explorer--git-refresh))))))
 
 (defun drgnx-explorer--refresh-dir (dir)
   "Re-list DIR (shown and expanded) and replace its rows in place, keeping views and selection."
@@ -473,7 +503,11 @@ Returns non-nil if FILE is under a root."
   (drgnx-wb-define-section 'explorer :slot 0 :title " EXPLORER" :buffer #'drgnx-explorer--buffer
                            ;; Like VS Code: showing the Explorer reveals the active editor's file.
                            :on-show (lambda (_w) (drgnx-explorer--follow (window-buffer (drgnx-wb-editor-window)))))
-  (drgnx-signal-subscribe 'editor-changed #'drgnx-explorer--follow))
+  (drgnx-signal-subscribe 'editor-changed #'drgnx-explorer--follow)
+  ;; A save changes git status; so does git itself (another window, a terminal): check on focus.
+  (drgnx-signal-subscribe 'modified-changed (lambda (_) (drgnx-explorer--git-refresh)))
+  (add-function :after after-focus-change-function #'drgnx-explorer--git-refresh '((name . drgnx-explorer)))
+  (add-hook 'drgnx-git-changed-functions #'drgnx-explorer--git-changed))
 
 (provide 'drgnx-explorer)
 ;;; drgnx-explorer.el ends here
