@@ -103,3 +103,12 @@ build/ ignored (with build/out.o)."
         (drgnx-wb-hide-sidebar)
         (kill-buffer b)
         (when (get-buffer drgnx-buffers-buffer-name) (kill-buffer drgnx-buffers-buffer-name))))))
+
+(ert-deftest drgnx-git/huge-ignored-lists-are-skipped ()
+  ;; Ignored files only dim rows; past the limit they are not parsed (a build tree inside tracked folders).
+  (let ((drgnx-git-ignored-limit 3))
+    (let ((h (drgnx-git-parse "? a\0! b.o\0! c.o\0! d.o\0! e.o\0")))
+      (should (eq (gethash "a" h) 'untracked))
+      (should-not (gethash "b.o" h))))
+  (let ((h (drgnx-git-parse "? a\0! b.o\0")))
+    (should (eq (gethash "b.o" h) 'ignored))))

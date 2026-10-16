@@ -7,7 +7,7 @@ editor groups, several windows) arrives in the next milestones (see [roadmap.md]
 
 Everything here is built on plain Emacs — no treemacs, no ibuffer — does what people use those for (and VS
 Code's Explorer and Open Editors; see [Compared](#compared-with-treemacs-ibuffer-and-vs-code)), and does every
-heavy operation 7–80× faster than they do; key presses are sub-millisecond in all three (see
+heavy operation 2–75× faster than they do; key presses are sub-millisecond in all three (see
 [Performance](#performance)).
 
 ## Using it
@@ -67,9 +67,10 @@ theme's version-control faces; a folder with changes inside shows `●`; ignored
 
 ### Buffers panel
 
-Save All (`C-k s` · `C-x s` · `SPC f S`), Close Saved (`C-k u` · palette · `SPC b u`), Close All (`C-k C-w` · palette ·
+Save All (`C-k s` · palette — `C-x s` stays Emacs' asking save · `SPC f S`), Close Saved (`C-k u` · palette · `SPC b u`), Close All (`C-k C-w` · palette ·
 `SPC b A`), Close Others (right-click · `o` · `O`), a live name filter (`C-M-f` · `/` · `/`), middle-click closes a
-row, and "save all · close saved" buttons in the title. Git letters show after the names.
+row, and "save all · close saved" buttons in the title. Git letters show after the names. The right-click menu has
+Open, Close, Close Others and Save All.
 
 All of these are commands in the palette and keys in every profile ([keys.md](keys.md)).
 
@@ -86,7 +87,7 @@ All of these are commands in the palette and keys in every profile ([keys.md](ke
 | Multi-select | marks | marks | Ctrl/Shift | Ctrl/Shift click, Shift+arrows, mark |
 | Open files order | — | by recency (rows move) | open order | open order (rows never move) |
 | Bulk save/close | — | marked ops | Save All, Close Saved/All | Save All, Close Saved/Others/All |
-| Speed | 118–706 ms | 43–73 ms | — | 0.5–47 ms |
+| Speed | 49–668 ms | 45–74 ms | — | 0.6–88 ms |
 
 Not yet: compact folders (`src/app` on one row — a cheap way to know a folder's only child is needed first),
 file nesting, icons (an icon theme is a module, M4), problems decorations (with diagnostics, M5).
@@ -118,22 +119,22 @@ including a full redisplay; one-off operations are the median of 3, key presses 
 Like for like: folder listings are read from disk in every run, the refreshed folder is open and the new files must
 appear, the Buffers update includes drgnx's change bus, and the Buffers render creates the panel and its window as
 ibuffer does.
-The fixture is a git repository (everything committed, 50 files changed). treemacs runs like-for-like (no file
-watching, no follow; git off, then on for the two git rows) and is loaded only in that session, from
+The fixture is a git repository (everything committed, 50 files changed). Both run like-for-like: no file watching
+(drgnx's live updates are held back), no follow, git off — then on for the two git rows and is loaded only in that session, from
 `$DRGNX_BENCH_ELPA` (default `~/.config/emacs/elpa`); without it only drgnx and ibuffer are compared.
 
 | Operation (ms) | drgnx | treemacs / ibuffer |
 |---|---|---|
-| First render of the project | 7.3 | 118.1 |
-| … with git decorations | 7.3 | 159.4 |
-| Expand the 5,000-file folder (read from disk) | 46.9 | 317.9 |
-| … with git decorations | 46.9 | 384.7 |
-| Reveal the depth-8 file | 2.4 | 59.0 |
-| Refresh after 100 new files (shown) | 25.4 | 705.7 |
-| Git status of the whole 25k-file repository (background) | 46.3 | — |
-| Buffers panel, 500 buffers | 7.8 | 73.0 (ibuffer) |
-| Buffers panel, one buffer added | 0.5 | 42.8 (ibuffer) |
-| Key press (p95) | 0.5 / 0.8 | 0.3 / 2.3 |
+| First render of the project | 5.1 | 138.9 |
+| … with git decorations (drgnx: the whole repository's status read and shown) | 88.0 | 152.6 |
+| Expand the 5,000-file folder (read from disk) | 41.4 | 373.1 |
+| … with git decorations | 41.6 | 397.0 |
+| Reveal the depth-8 file | 1.8 | 49.0 |
+| Refresh after 100 new files (shown) | 20.0 | 667.8 |
+| Git status of the whole 25k-file repository (background) | 35.0 | — |
+| Buffers panel, 500 buffers | 7.7 | 74.4 (ibuffer) |
+| Buffers panel, one buffer added | 0.6 | 45.3 (ibuffer) |
+| Key press (p95) | 0.6 / 0.8 | 0.2 / 2.1 |
 
 (One machine, 2026-10; numbers vary, ratios hold.) The run fails if drgnx misses a budget (first render 30 ms,
 expand 80, reveal 20, refresh 150, Buffers 30 / 15, keys 8) or is slower than the other tool by more than 0.5 ms

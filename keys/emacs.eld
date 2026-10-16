@@ -44,6 +44,6 @@
         (buffers-close "d" "k")
         (buffers-close-others "o")
         (buffers-filter "/")
-        (save-all "C-x s")
+        (save-all :none "C-x s stays Emacs' save-some-buffers, which asks per buffer")
         (close-saved :none "in the palette")
         (close-all :none "in the palette")))

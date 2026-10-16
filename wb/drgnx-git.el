@@ -31,6 +31,9 @@
   "Repository root → plist (:files HASH :folders HASH :proc PROCESS :again BOOL).")
 (defvar drgnx-git--roots (make-hash-table :test #'equal) "Folder → its repository root, or `none'.")
 (defvar drgnx-git-changed-functions nil "Called with a repository root after its status was read.")
+(defcustom drgnx-git-ignored-limit 20000
+  "Past this many ignored entries, ignored files are not dimmed (parsing them would pause Emacs)."
+  :type 'integer :group 'drgnx)
 
 (defun drgnx-git-root (path)
   "The repository root (with a trailing /) holding PATH, or nil (also for remote paths)."
@@ -53,7 +56,7 @@
 
 (defun drgnx-git-parse (output)
   "Parse `git status --porcelain=v2 -z' OUTPUT into a hash: path (relative, no trailing /) → status."
-  (let ((h (make-hash-table :test #'equal)) (entries (split-string output "\0" t)))
+  (let ((h (make-hash-table :test #'equal)) (entries (split-string output "\0" t)) ignored (n 0))
     (while entries
       (let ((e (pop entries)))
         (pcase (aref e 0)
@@ -65,7 +68,9 @@
           (?u (when (string-match "\\`u .. \\(?:[^ ]+ \\)\\{8\\}\\(.*\\)\\'" e)
                 (puthash (match-string 1 e) 'conflict h)))
           (?? (puthash (string-remove-suffix "/" (substring e 2)) 'untracked h))
-          (?! (puthash (string-remove-suffix "/" (substring e 2)) 'ignored h)))))
+          (?! (when (<= (setq n (1+ n)) drgnx-git-ignored-limit) (push e ignored))))))
+    (when (<= n drgnx-git-ignored-limit)
+      (dolist (e ignored) (puthash (string-remove-suffix "/" (substring e 2)) 'ignored h)))
     h))
 
 (defun drgnx-git--rank (status) (nth 2 (alist-get status drgnx-git--looks)))

@@ -402,3 +402,15 @@
                                 :layers '((vim app editing window)) :defaults drgnx-keys-test--defaults
                                 :maps (lambda (m) (symbol-value m)))))
      (should-not (drgnx-keys-test--conflict r "g o")))))
+
+(ert-deftest drgnx-keys/buffers-panel-has-a-right-click-menu ()
+  ;; The keys tables say "right-click" for these; the menu must exist.
+  (drgnx-keys-test--with-core-commands
+   (should (assq 'buffers drgnx-surfaces-contexts))
+   (dolist (id '(buffers-open buffers-close buffers-close-others save-all))
+     (should (memq 'buffers (ensure-list (drgnx-cmd-context (drgnx-commands-get id))))))))
+
+(ert-deftest drgnx-keys/emacs-profile-keeps-stock-save-some-buffers ()
+  ;; Save All saves without asking; C-x s is Emacs' asking save — not rebound in the Emacs profile.
+  (let ((r (drgnx-keys-test--resolve '((emacs app editing window)))))
+    (should-not (drgnx-keys-test--keys r 'save-all))))

@@ -64,8 +64,9 @@
     ;; The Buffers panel (open editors), above the Explorer.
     (require 'drgnx-buffers)
     (drgnx-buffers-setup)
+    (drgnx-surfaces-define-context 'buffers (lambda (_) (derived-mode-p 'drgnx-buffers-mode)))
     (drgnx-command-define 'save-all :category "File" :title "Save All" :command #'drgnx-buffers-save-all
-      :menu '("File") :doc "Save every buffer with unsaved changes")
+      :menu '("File") :context 'buffers :doc "Save every buffer with unsaved changes")
     (drgnx-command-define 'close-saved :category "View" :title "Close Saved Editors" :command #'drgnx-buffers-close-saved
       :doc "Close every buffer without unsaved changes")
     (drgnx-command-define 'close-all :category "View" :title "Close All Editors" :command #'drgnx-buffers-close-all
@@ -81,6 +82,7 @@
                        (buffers-close-others "Close Others" drgnx-buffers-close-others "Close every buffer but this one")
                        (buffers-filter "Filter…" drgnx-buffers-filter "Show only buffers whose names contain the text")))
         (drgnx-command-define id :category "Buffers" :title title :command fn :doc doc
-          :map 'drgnx-buffers-mode-map :when in-buffers)))))
+          :map 'drgnx-buffers-mode-map :when in-buffers
+          :context (and (memq id '(buffers-open buffers-close buffers-close-others)) 'buffers))))))
 
 ;;; drgnx-workbench.el ends here

@@ -2,8 +2,8 @@
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 ;; Loaded into a GUI session of config=drgnx by harness/drgnx-bench.el.  Every measurement
 ;; includes a full redisplay; one-off operations are the median of 3 runs, key presses the p95
-;; of 50.  treemacs runs like-for-like with drgnx's current features: no git decorations, no
-;; file watching, no follow.
+;; of 50.  treemacs runs like-for-like: no file watching, no follow, git off (on for both tools
+;; in the two git rows).
 
 (require 'cl-lib)
 (require 'seq)
@@ -48,6 +48,11 @@
 
 ;;;; drgnx
 
+(defun drgnx-bench--no-git-timer ()
+  "Cancel a pending background git refresh (it would run inside a later measurement)."
+  (when (timerp drgnx-explorer--git-timer) (cancel-timer drgnx-explorer--git-timer))
+  (setq drgnx-explorer--git-timer nil))
+
 (defun drgnx-bench--drgnx (root)
   (let* ((big (expand-file-name "big" root))
          (leaf (expand-file-name "deep/a/b/c/d/e/f/leaf.txt" root))
@@ -56,13 +61,26 @@
          r)
     (delete-other-windows)
     (switch-to-buffer "*scratch*")              ; no file in the editor: no reveal on show
+    (setq drgnx-explorer-git nil)               ; like treemacs: git off, then on for the git rows
     (setq r (plist-put r :explorer-first
                        (drgnx-bench--try "drgnx" "first"
                          (drgnx-bench--ms (lambda () (drgnx-wb-hide-sidebar) (clrhash drgnx-explorer--cache)
                                             (clrhash drgnx-explorer--expanded)
                                             (when (get-buffer drgnx-explorer-buffer-name) (kill-buffer drgnx-explorer-buffer-name)))
                                           (lambda () (drgnx-explorer-set-roots (list root)) (drgnx-wb-show-sidebar))))))
-    (setq r (plist-put r :explorer-first-git (plist-get r :explorer-first)))   ; git is on: render does not wait for it
+    ;; With git: the render, the whole repository's status, and the visible rows repainted with it.
+    (setq r (plist-put r :explorer-first-git
+                       (drgnx-bench--try "drgnx" "first with git"
+                         (unwind-protect
+                             (drgnx-bench--ms (lambda () (drgnx-wb-hide-sidebar) (clrhash drgnx-explorer--cache)
+                                                (clrhash drgnx-explorer--expanded) (clrhash drgnx-git--repos)
+                                                (drgnx-bench--no-git-timer) (setq drgnx-explorer-git t)
+                                                (when (get-buffer drgnx-explorer-buffer-name) (kill-buffer drgnx-explorer-buffer-name)))
+                                              (lambda () (drgnx-explorer-set-roots (list root)) (drgnx-wb-show-sidebar)
+                                                (drgnx-git-refresh (file-name-as-directory root) t)
+                                                (unless (drgnx-git-status (expand-file-name "d000/f000.txt" root))
+                                                  (error "no git status was read"))))
+                           (drgnx-bench--no-git-timer) (setq drgnx-explorer-git nil)))))
     (setq r (plist-put r :git-status
                        (drgnx-bench--try "drgnx" "git status"
                          (drgnx-bench--ms (lambda () (clrhash drgnx-git--repos))
@@ -76,7 +94,18 @@
                                                        (drgnx-explorer-toggle-at (funcall row big)))
                                             (clrhash drgnx-explorer--cache))     ; read the disk, like treemacs
                                           (lambda () (drgnx-explorer-toggle-at (funcall row big)))))))
-    (setq r (plist-put r :explorer-expand-git (plist-get r :explorer-expand)))
+    ;; With git: the status is known (read in the background); the new rows are painted with it.
+    (setq r (plist-put r :explorer-expand-git
+                       (drgnx-bench--try "drgnx" "expand with git"
+                         (unwind-protect
+                             (progn
+                               (setq drgnx-explorer-git t)
+                               (drgnx-git-refresh (file-name-as-directory root) t)
+                               (drgnx-bench--ms (lambda () (when (drgnx-explorer--expanded-p big)
+                                                             (drgnx-explorer-toggle-at (funcall row big)))
+                                                  (clrhash drgnx-explorer--cache))
+                                                (lambda () (drgnx-explorer-toggle-at (funcall row big)))))
+                           (drgnx-bench--no-git-timer) (setq drgnx-explorer-git nil)))))
     (setq r (plist-put r :explorer-reveal
                        (drgnx-bench--try "drgnx" "reveal"
                          (drgnx-bench--ms (lambda () (clrhash drgnx-explorer--expanded) (drgnx-explorer--render))
@@ -89,8 +118,10 @@
                            (drgnx-bench--p95 #'drgnx-explorer-next 50)))))
     (setq r (plist-put r :explorer-refresh
                        (drgnx-bench--try "drgnx" "refresh"
-                         ;; d001 expanded: the 100 new files must appear (checked).
-                         (let ((d001 (expand-file-name "d001" root)))
+                         ;; d001 expanded: the 100 new files must appear (checked).  Live updates held back
+                         ;; (like treemacs, no file watching): `redisplay' runs due timers, and the watch's
+                         ;; would show the files before the measured refresh.
+                         (let ((d001 (expand-file-name "d001" root)) (drgnx-explorer-event-delay 3600))
                            (unless (drgnx-explorer--expanded-p d001) (drgnx-explorer-toggle-at (funcall row d001)))
                            (drgnx-bench--ms (lambda () (drgnx-bench--new-files d001 100))
                                             (lambda ()
@@ -99,6 +130,8 @@
                                                 (unless (= (+ n 100) (with-current-buffer drgnx-explorer-buffer-name
                                                                        (count-lines (point-min) (point-max))))
                                                   (error "refresh did not show the 100 new files")))))))))
+    (when (timerp drgnx-explorer--event-timer) (cancel-timer drgnx-explorer--event-timer))
+    (setq drgnx-explorer--event-timer nil drgnx-explorer--dirty nil)
     r))
 
 ;;;; treemacs

@@ -14,7 +14,8 @@
   "BODY with a fixture ROOT, the Explorer rooted there, shown in the dock of a one-editor layout."
   (declare (indent 1))
   `(let* ((,root (file-name-as-directory (make-temp-file "drgnx-explorer" t)))
-          (drgnx-wb--sections nil) (drgnx-signal--editor-window nil) (drgnx-explorer--pressed nil))
+          (drgnx-wb--sections nil) (drgnx-signal--editor-window nil) (drgnx-explorer--pressed nil)
+          (drgnx-explorer--selection nil) (drgnx-explorer--anchor nil) (drgnx-explorer--focused-before nil))
      (unwind-protect
          (progn
            (drgnx-explorer-test--tree ,root '("README.md" "docs/guide.md" "src/app/main.py" "src/app/util.py"
@@ -294,7 +295,7 @@
   "BODY with prompts answered from ANSWERS (strings for names, t/nil for yes-or-no); the trash in a temp dir."
   (declare (indent 1))
   `(let* ((queue ,answers) (trash (make-temp-file "drgnx-trash" t))
-          (trash-directory trash) (delete-by-moving-to-trash t))
+          (trash-directory trash))       ; delete-by-moving-to-trash keeps its default (nil): the trash must not depend on it
      (unwind-protect
          (cl-letf (((symbol-function 'read-string) (lambda (&rest _) (pop queue)))
                    ((symbol-function 'read-from-minibuffer) (lambda (&rest _) (pop queue)))
@@ -441,3 +442,153 @@
       (should-not (drgnx-explorer--expanded-p (expand-file-name "src" root)))
       (with-current-buffer drgnx-explorer-buffer-name
         (should (equal (drgnx-explorer-node-at (window-point w)) (expand-file-name "tests" root)))))))
+
+;;;; Review fixes (M3b)
+
+(ert-deftest drgnx-explorer/find-with-a-root-inside-a-project-terminates ()
+  (skip-unless (executable-find "git"))
+  (let* ((proj (file-name-as-directory (make-temp-file "drgnx-proj" t)))
+         (drgnx-wb--sections nil) (drgnx-signal--editor-window nil))
+    (unwind-protect
+        (let ((default-directory proj))
+          (call-process "git" nil nil nil "init" "-q")
+          (make-directory "sub") (make-directory "other")
+          (write-region "" nil "sub/xmatch-in.txt" nil 'silent)
+          (write-region "" nil "other/xmatch-out.txt" nil 'silent)
+          (call-process "git" nil nil nil "add" "-A")
+          (delete-other-windows)
+          (drgnx-explorer-setup)
+          (drgnx-explorer-set-roots (list (expand-file-name "sub" proj)))
+          (with-timeout (5 (ert-fail "Find did not return"))
+            (drgnx-explorer--find-apply "xmatch"))
+          (should (equal (mapcar #'cadr (cdr (drgnx-explorer-test--rows))) '("xmatch-in.txt"))))
+      (setq drgnx-explorer--find nil)
+      (when (get-buffer drgnx-explorer-buffer-name) (kill-buffer drgnx-explorer-buffer-name))
+      (delete-directory proj t))))
+
+(ert-deftest drgnx-explorer/a-stale-selection-never-retargets-an-operation ()
+  ;; Operations act on the selection only while the focused row is part of it (as VS Code).
+  (drgnx-explorer-test--with root
+    (with-current-buffer (drgnx-explorer-test--at "docs")
+      (drgnx-explorer-select-down)                    ; docs + src
+      (goto-char (drgnx-explorer-test--goto "README.md"))   ; e.g. a reveal or a right-click moved point
+      (should (equal (drgnx-explorer--targets) (list (expand-file-name "README.md" root))))
+      (should (null drgnx-explorer--selection)))))
+
+(ert-deftest drgnx-explorer/the-question-names-the-files ()
+  (drgnx-explorer-test--with root
+    (let (asked)
+      (drgnx-explorer-test--answering nil
+        (cl-letf (((symbol-function 'y-or-n-p) (lambda (q) (setq asked q) nil)))
+          (with-current-buffer (drgnx-explorer-test--at "docs")
+            (drgnx-explorer-select-down)
+            (drgnx-explorer-delete))))
+      (should (string-search "docs" asked))
+      (should (string-search "src" asked)))))
+
+(ert-deftest drgnx-explorer/deleting-the-row-at-point-keeps-the-place ()
+  (drgnx-explorer-test--with root
+    (drgnx-explorer-test--answering '(t)
+      (drgnx-explorer-toggle-at (drgnx-explorer-test--goto "src"))
+      (drgnx-explorer-toggle-at (drgnx-explorer-test--goto "app"))
+      (with-current-buffer (drgnx-explorer-test--at "util.py")
+        (let ((line (line-number-at-pos)))
+          (drgnx-explorer-delete)
+          (should (>= (line-number-at-pos) (1- line))))))))
+
+(ert-deftest drgnx-explorer/cut-and-paste-moves-open-buffers-too ()
+  (drgnx-explorer-test--with root
+    (let ((b (find-file-noselect (expand-file-name "README.md" root))))
+      (unwind-protect
+          (drgnx-explorer-test--answering nil
+            (with-current-buffer (drgnx-explorer-test--at "README.md")
+              (drgnx-explorer-cut)
+              (goto-char (drgnx-explorer-test--goto "docs"))
+              (drgnx-explorer-paste))
+            (should (equal (buffer-file-name b) (expand-file-name "docs/README.md" root))))
+        (with-current-buffer b (set-buffer-modified-p nil)) (kill-buffer b)))))
+
+(ert-deftest drgnx-explorer/find-mode-keeps-the-filtered-tree ()
+  ;; While Find shows a filtered tree, folder clicks, the follower and new files keep it filtered.
+  (drgnx-explorer-test--with root
+    (drgnx-wb-show-sidebar)
+    (drgnx-explorer--find-apply "main")
+    (let ((rows (drgnx-explorer-test--rows)))
+      (drgnx-explorer-toggle-at (drgnx-explorer-test--goto "app"))
+      (should (equal (drgnx-explorer-test--rows) rows))
+      (let ((m (find-file-noselect (expand-file-name "src/app/util.py" root))))
+        (unwind-protect (progn (drgnx-explorer--follow m) (should (equal (drgnx-explorer-test--rows) rows)))
+          (kill-buffer m)))
+      (drgnx-explorer-test--answering '("main2.py")
+        (with-current-buffer (drgnx-explorer-test--at "app")
+          (drgnx-explorer-new-file)))
+      (should (member '(3 "main2.py") (drgnx-explorer-test--rows)))
+      (should-not (member '(3 "util.py") (drgnx-explorer-test--rows))))
+    (drgnx-explorer-find-clear)
+    (when-let* ((b (get-file-buffer (expand-file-name "src/app/main2.py" root)))) (kill-buffer b))))
+
+(ert-deftest drgnx-explorer/a-recreated-folder-is-watched-again ()
+  (skip-unless (and (featurep 'filenotify) file-notify--library))
+  (drgnx-explorer-test--with root
+    (let ((docs (expand-file-name "docs" root)))
+      (drgnx-explorer-toggle-at (drgnx-explorer-test--goto "docs"))
+      (delete-directory docs t)
+      (make-directory docs)                            ; rm -rf docs && mkdir docs
+      (let ((deadline (+ (float-time) 2))) (while (< (float-time) deadline) (read-event nil nil 0.05)))
+      (write-region "" nil (expand-file-name "fresh.txt" docs) nil 'silent)
+      (let ((deadline (+ (float-time) 3)))
+        (while (and (< (float-time) deadline) (not (member '(2 "fresh.txt") (drgnx-explorer-test--rows))))
+          (read-event nil nil 0.05)))
+      (should (member '(2 "fresh.txt") (drgnx-explorer-test--rows))))))
+
+(ert-deftest drgnx-explorer/a-storm-across-many-folders-renders-once ()
+  (drgnx-explorer-test--with root
+    (dotimes (i 60) (make-directory (expand-file-name (format "m%02d" i) root)))
+    (drgnx-explorer-refresh)
+    (dotimes (i 60) (drgnx-explorer-toggle-at (drgnx-explorer-test--goto (format "m%02d" i))))
+    (let ((drgnx-explorer--relists 0) (drgnx-explorer--renders 0))
+      (dotimes (i 60)
+        (drgnx-explorer--file-event (list 'desc 'created "x") (expand-file-name (format "m%02d" i) root)))
+      (drgnx-explorer--apply-file-events)
+      (should (= drgnx-explorer--relists 0))
+      (should (= drgnx-explorer--renders 1)))))
+
+(ert-deftest drgnx-explorer/shift-click-and-ctrl-click-select-from-the-focused-row ()
+  (drgnx-explorer-test--with root
+    (drgnx-wb-show-sidebar)
+    (let ((w (drgnx-wb-section-window 'explorer)))
+      (cl-flet ((click (kind name)
+                  (let* ((pos (with-current-buffer drgnx-explorer-buffer-name (drgnx-explorer-test--goto name)))
+                         (posn (list w pos (cons 0 0) 0)))      ; window, position, pixel, time
+                    (with-selected-window w
+                      (drgnx-explorer-mouse-press (list (intern (format "%sdown-mouse-1" kind)) posn))
+                      (pcase kind
+                        ("" (drgnx-explorer-mouse-click (list 'mouse-1 posn)))
+                        ("S-" (drgnx-explorer-mouse-range (list 'S-mouse-1 posn)))
+                        ("C-" (drgnx-explorer-mouse-toggle (list 'C-mouse-1 posn))))))))
+        (click "" "README.md")
+        (click "S-" "tests")                       ; tests (above) .. README.md
+        (should (equal (sort (mapcar #'file-name-nondirectory drgnx-explorer--selection) #'string<) '("README.md" "tests")))
+        (click "" "docs")
+        (click "C-" "README.md")                   ; docs + README.md
+        (should (equal (sort (mapcar #'file-name-nondirectory drgnx-explorer--selection) #'string<) '("README.md" "docs")))))))
+
+(ert-deftest drgnx-explorer/a-stale-anchor-starts-a-new-range ()
+  ;; The anchor's row is gone (deleted, another root): Shift+down starts from the row at point.
+  (drgnx-explorer-test--with root
+    (setq drgnx-explorer--anchor (expand-file-name "gone.txt" root))
+    (with-current-buffer (drgnx-explorer-test--at "docs")
+      (drgnx-explorer-select-down)
+      (should (equal (mapcar #'file-name-nondirectory drgnx-explorer--selection) '("docs" "src"))))
+    (drgnx-explorer--clear-selection)))
+
+(ert-deftest drgnx-explorer/collapsing-a-folder-re-lists-nothing ()
+  ;; Removing our own watch sends `stopped'; that is not the folder going away.
+  (skip-unless (and (featurep 'filenotify) file-notify--library))
+  (drgnx-explorer-test--with root
+    (let ((drgnx-explorer--relists 0) (drgnx-explorer--renders 0))
+      (drgnx-explorer-toggle-at (drgnx-explorer-test--goto "docs"))
+      (drgnx-explorer-toggle-at (drgnx-explorer-test--goto "docs"))
+      (let ((deadline (+ (float-time) 0.5))) (while (< (float-time) deadline) (read-event nil nil 0.05)))
+      (should (= drgnx-explorer--relists 0))
+      (should (= drgnx-explorer--renders 0)))))

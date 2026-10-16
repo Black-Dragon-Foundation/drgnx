@@ -44,6 +44,8 @@
 (defvar drgnx-explorer--cache (make-hash-table :test #'equal) "Folder → (MTIME . CHILDREN).")
 (defvar drgnx-explorer--pressed nil "Non-nil while a mouse button pressed in the Explorer is held.")
 (defvar drgnx-explorer--selection nil "Paths selected together (multi-select), or nil: the row at point.")
+(defvar drgnx-explorer--focused-before nil "The focused row before the current press.")
+(defvar drgnx-explorer--renders 0 "How many full renders (tests read it).")
 (defvar drgnx-explorer--find nil
   "While Find filters the tree: (:query Q :files ALL-FILES :expanded SAVED :views SAVED).")
 
@@ -207,6 +209,7 @@ faces come later, from jit-lock, for the rows on screen."
 (defun drgnx-explorer--render ()
   "Render every root from scratch, keeping the row at point by its path."
   (with-current-buffer (get-buffer-create drgnx-explorer-buffer-name)
+    (cl-incf drgnx-explorer--renders)
     (let* ((inhibit-read-only t) (views (drgnx-explorer--save-views)) data)
       (erase-buffer)
       (dolist (root drgnx-explorer--roots)
@@ -237,17 +240,23 @@ faces come later, from jit-lock, for the rows on screen."
 
 (defun drgnx-explorer--save-views ()
   "The row (path) at point, and each window's first row and selected row."
-  (cons (drgnx-explorer-node-at (point))
-        (mapcar (lambda (w) (list w (drgnx-explorer-node-at (window-start w)) (drgnx-explorer-node-at (window-point w))))
+  (cons (cons (drgnx-explorer-node-at (point)) (drgnx-explorer--index (point)))
+        (mapcar (lambda (w) (list w (cons (drgnx-explorer-node-at (window-start w)) (drgnx-explorer--index (window-start w)))
+                                  (cons (drgnx-explorer-node-at (window-point w)) (drgnx-explorer--index (window-point w)))))
                 (get-buffer-window-list (current-buffer) nil t))))
+
+(defun drgnx-explorer--place (spot)
+  "Where SPOT (PATH . LINE) is now: PATH's row, else the same line (a deleted row's neighbour)."
+  (or (and (car spot) (drgnx-explorer--row-pos (car spot)))
+      (drgnx-explorer--line-pos (max 0 (min (cdr spot) (1- (length drgnx-explorer--rows)))))))
 
 (defun drgnx-explorer--restore-views (views)
   "Put point and every window back on the rows (paths) VIEWS recorded."
-  (goto-char (or (and (car views) (drgnx-explorer--row-pos (car views))) (point-min)))
+  (goto-char (drgnx-explorer--place (car views)))
   (pcase-dolist (`(,w ,top ,pt) (cdr views))
     (when (window-live-p w)
-      (when-let* ((p (and top (drgnx-explorer--row-pos top)))) (set-window-start w p t))
-      (when-let* ((p (and pt (drgnx-explorer--row-pos pt)))) (set-window-point w p))))
+      (set-window-start w (drgnx-explorer--place top) t)
+      (set-window-point w (drgnx-explorer--place pt))))
   (when hl-line-mode (hl-line-highlight)))
 
 ;;;; Live updates
@@ -260,6 +269,7 @@ faces come later, from jit-lock, for the rows on screen."
 (defvar drgnx-explorer--dirty nil "Folders with file events not shown yet.")
 (defvar drgnx-explorer--event-timer nil)
 (defvar drgnx-explorer--relists 0 "How many folders were refreshed from events (tests read it).")
+(defconst drgnx-explorer--splice-limit 20 "More changed folders than this at once: one full render instead.")
 
 (defun drgnx-explorer--shown-folders ()
   "Every folder whose contents are on screen: the roots and the expanded, displayed folders."
@@ -273,10 +283,13 @@ faces come later, from jit-lock, for the rows on screen."
   "Watch exactly the shown folders (a collapsed folder stops being watched)."
   (let ((want (make-hash-table :test #'equal)) gone)
     (dolist (d (drgnx-explorer--shown-folders)) (puthash d t want))
-    (maphash (lambda (d desc) (unless (gethash d want) (push (cons d desc) gone))) drgnx-explorer--watches)
+    (maphash (lambda (d desc)
+               (unless (and (gethash d want) (or (eq desc 'none) (file-notify-valid-p desc)))
+                 (push (cons d desc) gone)))
+             drgnx-explorer--watches)
     (pcase-dolist (`(,d . ,desc) gone)
-      (unless (eq desc 'none) (ignore-errors (file-notify-rm-watch desc)))
-      (remhash d drgnx-explorer--watches))
+      (remhash d drgnx-explorer--watches)            ; first: the `stopped' this sends is ours (ignored)
+      (unless (eq desc 'none) (ignore-errors (file-notify-rm-watch desc))))
     (maphash (lambda (d _)
                (unless (gethash d drgnx-explorer--watches)
                  (puthash d (or (ignore-errors
@@ -286,12 +299,19 @@ faces come later, from jit-lock, for the rows on screen."
              want)))
 
 (defun drgnx-explorer--unwatch-all ()
-  (maphash (lambda (_ desc) (unless (eq desc 'none) (ignore-errors (file-notify-rm-watch desc)))) drgnx-explorer--watches)
-  (clrhash drgnx-explorer--watches))
+  (let (descs)
+    (maphash (lambda (_ desc) (unless (eq desc 'none) (push desc descs))) drgnx-explorer--watches)
+    (clrhash drgnx-explorer--watches)               ; first: the `stopped' events this sends are ours
+    (dolist (desc descs) (ignore-errors (file-notify-rm-watch desc)))))
 
 (defun drgnx-explorer--file-event (event dir)
   "A watch on DIR saw EVENT: remember DIR and arm one delayed refresh (no work here)."
-  (when (memq (nth 1 event) '(created deleted renamed))
+  (when (eq (nth 1 event) 'stopped)
+    (if (not (equal (gethash dir drgnx-explorer--watches) (car event)))
+        (setq event nil)                            ; we removed it (collapse, re-render): nothing changed
+      (remhash dir drgnx-explorer--watches)         ; the folder went (rm -rf …): watch it again if it comes back
+      (setq dir (drgnx-explorer--parent dir))))
+  (when (memq (nth 1 event) '(created deleted renamed stopped))
     (cl-pushnew dir drgnx-explorer--dirty :test #'equal)
     (unless (timerp drgnx-explorer--event-timer)
       (setq drgnx-explorer--event-timer
@@ -307,7 +327,9 @@ faces come later, from jit-lock, for the rows on screen."
       (setq drgnx-explorer--dirty nil)
       (when-let* ((buf (get-buffer drgnx-explorer-buffer-name)))
         (with-current-buffer buf
-          (dolist (d dirs) (drgnx-explorer--refresh-dir d))
+          (if (> (length dirs) drgnx-explorer--splice-limit)
+              (progn (clrhash drgnx-explorer--cache) (drgnx-explorer--render))   ; a checkout: one pass
+            (dolist (d dirs) (drgnx-explorer--refresh-dir d)))
           (drgnx-explorer--git-refresh))))))
 
 (defun drgnx-explorer--refresh-dir (dir)
@@ -353,7 +375,7 @@ faces come later, from jit-lock, for the rows on screen."
            (inhibit-read-only t)
            (bol (save-excursion (goto-char pos) (pos-bol)))
            (next (save-excursion (goto-char bol) (forward-line 1) (point))))
-      (when (and v (aref v 2) (> (aref v 1) 0))
+      (when (and v (aref v 2) (> (aref v 1) 0) (not drgnx-explorer--find))   ; Find shows its own folders
         (let ((path (drgnx-explorer--path v)) (depth (aref v 1)) (rows drgnx-explorer--rows))
           (if (drgnx-explorer--expanded-p path)
               (let ((j (drgnx-explorer--subtree-last i)))
@@ -399,6 +421,7 @@ Returns non-nil if FILE is under a root."
   (let ((w (drgnx-wb-section-window 'explorer))
         (file (and (buffer-live-p buffer) (buffer-local-value 'buffer-file-name buffer))))
     (when (and (window-live-p w) file (not (eq (selected-window) w)) (not drgnx-explorer--pressed)
+               (not drgnx-explorer--find)
                (not (equal (with-current-buffer (window-buffer w) (drgnx-explorer-node-at (window-point w)))
                            file)))
       (drgnx-explorer-reveal file w))))
@@ -413,10 +436,10 @@ Returns non-nil if FILE is under a root."
 (defun drgnx-explorer-roots () drgnx-explorer--roots)
 
 (defun drgnx-explorer-refresh ()
-  "Re-read changed folders and render again, keeping expansion and the selected row."
+  "Re-read changed folders and render again, keeping expansion and the selected row (during Find: filter again)."
   (interactive)
   (drgnx-explorer--buffer)
-  (drgnx-explorer--render))
+  (if drgnx-explorer--find (drgnx-explorer--find-again) (drgnx-explorer--render)))
 
 ;;;; Commands
 
@@ -446,16 +469,21 @@ Returns non-nil if FILE is under a root."
   (setq drgnx-explorer--anchor nil)
   (when drgnx-explorer--selection (drgnx-explorer--set-selection nil)))
 
+(defun drgnx-explorer--ensure-anchor ()
+  "Start a range at the row here unless the anchor is a row on screen (not deleted, not from another root)."
+  (unless (and drgnx-explorer--anchor (drgnx-explorer--row-pos drgnx-explorer--anchor))
+    (setq drgnx-explorer--anchor (drgnx-explorer--node))))
+
 (defun drgnx-explorer--select-range-to (pos)
   "Select every row from the anchor to the row at POS."
-  (unless drgnx-explorer--anchor (setq drgnx-explorer--anchor (drgnx-explorer--node)))
+  (drgnx-explorer--ensure-anchor)
   (let* ((a (drgnx-explorer--index (or (drgnx-explorer--row-pos drgnx-explorer--anchor) (point))))
          (b (drgnx-explorer--index pos)))
     (drgnx-explorer--set-selection
      (cl-loop for i from (min a b) to (max a b) collect (drgnx-explorer--path (aref drgnx-explorer--rows i))))))
 
 (defun drgnx-explorer--select-move (n)
-  (unless drgnx-explorer--anchor (setq drgnx-explorer--anchor (drgnx-explorer--node)))
+  (drgnx-explorer--ensure-anchor)
   (forward-line n)
   (when (eobp) (forward-line -1))
   (drgnx-explorer--select-range-to (point)))
@@ -529,16 +557,22 @@ Returns non-nil if FILE is under a root."
   (drgnx-explorer--navigate-type last-command-event))
 
 (defun drgnx-explorer--all-files ()
-  "Every file under the roots (the project's files when there is a project; excluded names left out)."
+  "Every file under the roots — the project's files (only those under the root) when there is a project;
+excluded names left out.  A root that is your home or / and not a project is refused (far too many files)."
   (seq-mapcat (lambda (root)
                 (let ((default-directory root))
                   (seq-remove (lambda (f) (seq-some (lambda (part) (string-match-p drgnx-explorer-exclude part))
-                                                    (split-string (file-relative-name f root) "/" t)))
+                                                    (split-string (string-remove-prefix root f) "/" t)))
                               (if-let* ((p (project-current nil root)))
-                                  (project-files p)
+                                  (seq-filter (lambda (f) (string-prefix-p root f)) (project-files p))
+                                (when (member (directory-file-name root)
+                                              (list (directory-file-name (expand-file-name "~")) "" "/"))
+                                  (user-error "Find needs a project folder here, not %s" (abbreviate-file-name root)))
                                 (directory-files-recursively
                                  root "" nil (lambda (d) (not (string-match-p drgnx-explorer-exclude (file-name-nondirectory d)))))))))
               drgnx-explorer--roots))
+
+(defconst drgnx-explorer--find-limit 5000 "Find shows at most this many matching files.")
 
 (defun drgnx-explorer--find-apply (query)
   "Show only the files whose name contains QUERY (any case), with their folders — collapsed or not."
@@ -549,15 +583,18 @@ Returns non-nil if FILE is under a root."
                                        :views (drgnx-explorer--save-views))))
     (setq drgnx-explorer--find (plist-put drgnx-explorer--find :query query))
     (let ((tree (make-hash-table :test #'equal)) (q (downcase query)))
-      (dolist (file (plist-get drgnx-explorer--find :files))
-        (when (string-search q (downcase (file-name-nondirectory file)))
+      (dolist (file (seq-take (seq-filter (lambda (file) (string-search q (downcase (file-name-nondirectory file))))
+                                         (plist-get drgnx-explorer--find :files))
+                              drgnx-explorer--find-limit))
+        (progn
           (let ((path (directory-file-name file)))
             (while (let ((parent (directory-file-name (file-name-directory path))))
                      (unless (member (cons (file-name-nondirectory path) (not (equal path (directory-file-name file))))
                                      (gethash parent tree))
                        (push (cons (file-name-nondirectory path) (not (equal path (directory-file-name file)))) (gethash parent tree)))
-                     (setq path parent)
-                     (not (member (file-name-as-directory path) drgnx-explorer--roots)))))))
+                     (prog1 (not (or (member (file-name-as-directory parent) drgnx-explorer--roots)
+                                     (equal parent path)))           ; at a root, or at / : stop
+                       (setq path parent)))))))
       (let ((drgnx-explorer--children-function
              (lambda (dir) (sort (copy-sequence (gethash (directory-file-name dir) tree)) #'drgnx-explorer--before)))
             (drgnx-explorer--expanded-function (lambda (_) t))
@@ -614,7 +651,13 @@ Returns non-nil if FILE is under a root."
 
 (defun drgnx-explorer--targets ()
   "The paths an operation acts on: the selection, else the row at point (never a root)."
-  (let ((paths (or drgnx-explorer--selection (and (drgnx-explorer--node) (list (drgnx-explorer--node))))))
+  (let* ((here (drgnx-explorer--node))
+         (paths (if (and drgnx-explorer--selection here (member here drgnx-explorer--selection))
+                    (seq-filter #'file-exists-p drgnx-explorer--selection)
+                  ;; The focused row is not in the selection (a reveal, a right-click, typing): it is
+                  ;; what the user means, as in VS Code.
+                  (drgnx-explorer--clear-selection)
+                  (and here (list here)))))
     (unless paths (user-error "No file or folder here"))
     (when (seq-find (lambda (p) (member (file-name-as-directory p) drgnx-explorer--roots)) paths)
       (user-error "Not on a root folder"))
@@ -626,7 +669,17 @@ Returns non-nil if FILE is under a root."
     (if (drgnx-explorer-dir-at (point)) p (directory-file-name (file-name-directory p)))))
 
 (defun drgnx-explorer--show-folder (dir)
-  "Expand DIR (if collapsed) and show its current contents."
+  "Expand DIR (if collapsed) and show its current contents (during Find: filter again)."
+  (if drgnx-explorer--find
+      (drgnx-explorer--find-again)
+    (drgnx-explorer--show-folder-1 dir)))
+
+(defun drgnx-explorer--find-again ()
+  "Filter again with fresh files (a file operation or a refresh during Find)."
+  (setq drgnx-explorer--find (plist-put drgnx-explorer--find :files (drgnx-explorer--all-files)))
+  (drgnx-explorer--find-apply (plist-get drgnx-explorer--find :query)))
+
+(defun drgnx-explorer--show-folder-1 (dir)
   (with-current-buffer (drgnx-explorer--buffer)
     (let ((pos (drgnx-explorer--row-pos dir)))
       (when (and pos (> (drgnx-explorer-depth-at pos) 0) (not (drgnx-explorer--expanded-p dir)))
@@ -678,11 +731,8 @@ Returns non-nil if FILE is under a root."
     (unless (equal new old)
       (when (file-exists-p new) (user-error "%s already exists" (abbreviate-file-name new)))
       (rename-file old new)
+      (drgnx-explorer--move-buffers old new)
       (let ((prefix (file-name-as-directory old)))
-        (dolist (b (buffer-list))
-          (when-let* ((f (buffer-file-name b)))
-            (when (or (equal f old) (string-prefix-p prefix f))
-              (with-current-buffer b (set-visited-file-name (concat new (substring f (length old))) t t)))))
         (let (moved)
           (maphash (lambda (k _) (when (or (equal k old) (string-prefix-p prefix k)) (push k moved))) drgnx-explorer--expanded)
           (dolist (k moved)
@@ -691,8 +741,21 @@ Returns non-nil if FILE is under a root."
       (drgnx-explorer--show-folder (drgnx-explorer--parent new))
       (drgnx-explorer--select new))))
 
+(defun drgnx-explorer--move-buffers (old new)
+  "Buffers visiting OLD (or files inside the folder OLD) now visit the same files under NEW."
+  (let ((prefix (file-name-as-directory old)))
+    (dolist (b (buffer-list))
+      (when-let* ((f (buffer-file-name b)))
+        (when (or (equal f old) (string-prefix-p prefix f))
+          (with-current-buffer b (set-visited-file-name (concat new (substring f (length old))) t t)))))))
+
 (defun drgnx-explorer--describe (paths)
-  (if (cdr paths) (format "%d items" (length paths)) (file-name-nondirectory (directory-file-name (car paths)))))
+  "PATHS named in a question: up to three names, then how many more."
+  (let ((names (mapcar (lambda (p) (file-name-nondirectory (directory-file-name p))) paths)))
+    (if (cdr names)
+        (format "%d items (%s%s)" (length names) (string-join (seq-take names 3) ", ")
+                (if (> (length names) 3) ", …" ""))
+      (car names))))
 
 (defun drgnx-explorer-delete (&optional permanently)
   "Move the file(s) here to the trash (with PERMANENTLY — a prefix argument — delete them)."
@@ -701,7 +764,7 @@ Returns non-nil if FILE is under a root."
     (when (if permanently
               (yes-or-no-p (format "Delete %s permanently? " (drgnx-explorer--describe paths)))
             (y-or-n-p (format "Move %s to the trash? " (drgnx-explorer--describe paths))))
-      (let ((delete-by-moving-to-trash (and (not permanently) delete-by-moving-to-trash)))
+      (let ((delete-by-moving-to-trash (not permanently)))     ; the trash unless asked otherwise — not Emacs' default (nil)
         (dolist (p paths)
           (if (file-directory-p p) (delete-directory p t (not permanently)) (delete-file p (not permanently)))))
       (setq drgnx-explorer--selection nil)
@@ -730,7 +793,7 @@ Returns non-nil if FILE is under a root."
         (user-error "Cannot move %s into itself" (file-name-nondirectory p)))
       (unless (and (eq op 'cut) (equal (drgnx-explorer--parent p) dir))
         (let ((target (drgnx-explorer--free-name (expand-file-name (file-name-nondirectory (directory-file-name p)) dir))))
-          (cond ((eq op 'cut) (rename-file p target))
+          (cond ((eq op 'cut) (rename-file p target) (drgnx-explorer--move-buffers p target))
                 ((file-directory-p p) (copy-directory p target t t))
                 (t (copy-file p target nil t))))))
     (when (eq op 'cut)
@@ -765,15 +828,17 @@ Returns non-nil if FILE is under a root."
   (let* ((posn (event-start event)) (w (posn-window posn)) (pos (posn-point posn)))
     (when (window-live-p w)
       (unless (eq w (selected-window)) (select-window w))
+      (setq drgnx-explorer--focused-before (drgnx-explorer--node))   ; Ctrl/Shift-click start from it
       (when (integer-or-marker-p pos) (goto-char pos)))))
+
 
 (defun drgnx-explorer-mouse-toggle (event)
   "Ctrl-click: add the row to the selection, or take it out."
   (interactive "e")
   (setq drgnx-explorer--pressed nil)
   (when-let* ((pos (posn-point (event-end event))) ((integer-or-marker-p pos)) (p (drgnx-explorer-node-at pos)))
-    (unless (or drgnx-explorer--selection (null (drgnx-explorer--node)) (equal (drgnx-explorer--node) p))
-      (setq drgnx-explorer--selection (list (drgnx-explorer--node))))
+    (unless (or drgnx-explorer--selection (null drgnx-explorer--focused-before) (equal drgnx-explorer--focused-before p))
+      (setq drgnx-explorer--selection (list drgnx-explorer--focused-before)))
     (goto-char pos)
     (setq drgnx-explorer--anchor p)
     (drgnx-explorer--set-selection (if (member p drgnx-explorer--selection) (remove p drgnx-explorer--selection)
@@ -784,6 +849,8 @@ Returns non-nil if FILE is under a root."
   (interactive "e")
   (setq drgnx-explorer--pressed nil)
   (when-let* ((pos (posn-point (event-end event))) ((integer-or-marker-p pos)))
+    (unless (and drgnx-explorer--anchor (drgnx-explorer--row-pos drgnx-explorer--anchor))
+      (setq drgnx-explorer--anchor drgnx-explorer--focused-before))
     (drgnx-explorer--select-range-to pos)
     (goto-char pos)))
 
