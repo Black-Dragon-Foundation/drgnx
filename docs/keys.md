@@ -129,11 +129,20 @@ reads. Tests: `test/unit/core-keys-test.el` (resolution, switching, keys.eld, su
 
 ## Against gryphn
 
-`bin/drgnx keys diff --against gryphn [DIR]` compares gryphn's key sheet (its registry, read from DIR — default
-`~/workspace/gryphn/emacs` — never run) with drgnx's VS Code profile, with every module and gryphn's board, runs,
-agents, search, LLM and IDE files as an external module ([modules.md](modules.md)). Every gryphn command is in drgnx
-with gryphn's key among its keys — `M-j` toggles the panel, `C-S-b` focuses the Buffers panel, `C-M-o` the Outline,
-`<f11>` is zen mode, next to drgnx's own keys — or the line is explained:
+`bin/drgnx keys diff --against gryphn DIR` (or `$DRGNX_GRYPHN_DIR`) compares gryphn's key sheet — every
+`gryphn-command-define`, the rows of its VS Code key table, its numbered window keys, read from gryphn's `emacs/`
+directory DIR and never run — with drgnx's VS Code profile, with every module and gryphn's board, runs, agents,
+search, LLM and IDE files as an external module ([modules.md](modules.md)). Every gryphn command is in drgnx with
+gryphn's key among its keys — `C-s` saves, `C-w` closes the tab, `C-d` adds the next occurrence, `M-<up>` moves the
+line, `C-.` is Quick Fix, `M-j` toggles the panel, `C-S-b` focuses the Buffers panel, `<f11>` is zen mode, next to
+drgnx's own keys — or the line is explained. The Emacs keys gryphn leaves alone (`C-a`, `C-e`, `C-y`, `M-f`, `C-SPC`,
+`M-x`, …) must stay Emacs' in drgnx too (outside panels with their own keys):
+
+| gryphn | Why it is not in drgnx, or differs |
+|---|---|
+| `C-k` (kill line) | starts VS Code's chords in drgnx (`C-k C-s` key sheet, `C-k z` zen, `C-k s` save all, …); `C-S-k` deletes the line |
+| `<f1>` key sheet | `<f1>` is the palette, as in VS Code; the key sheet is `C-k C-s` (VS Code's Keyboard Shortcuts) |
+| Window 4 … 9 (`M-4` … `M-9`) | drgnx numbers editor groups (`M-1` … `M-3`, `C-1` … `C-3`), not every window; `M-o` picks any window |
 
 | gryphn | Why it is not in drgnx |
 |---|---|
@@ -142,4 +151,4 @@ with gryphn's key among its keys — `M-j` toggles the panel, `C-S-b` focuses th
 | Dashboard | a start dashboard competes with the restored workbench; deferred |
 | Trust / Reload mise | gryphn's mise file needs its bundle loader; a drgnx mise module is planned with the editor amenities (M11) |
 
-Unexplained lines make the command exit non-zero (a test runs it when the gryphn checkout is there).
+Unexplained lines make the command exit non-zero (a test runs it when `DRGNX_GRYPHN_DIR` names a gryphn checkout).

@@ -29,6 +29,16 @@
   (interactive (list (intern (completing-read "Color theme: " (mapcar #'symbol-name (custom-available-themes)) nil t))))
   (drgnx-look-load-theme theme))
 
+;;;; Zoom
+
+(defun drgnx-look--zoom (key)
+  "Zoom every frame's text as the key KEY (+, - or 0) of global-text-scale-adjust; then +, - or 0 repeat."
+  (let ((last-command-event key)) (global-text-scale-adjust 1)))
+
+(defun drgnx-look-zoom-in () "Bigger text everywhere; then +, - or 0." (interactive) (drgnx-look--zoom ?=))
+(defun drgnx-look-zoom-out () "Smaller text everywhere; then +, - or 0." (interactive) (drgnx-look--zoom ?-))
+(defun drgnx-look-zoom-reset () "The text size back to normal." (interactive) (drgnx-look--zoom ?0))
+
 ;;;; Zen
 
 (defvar drgnx-look-zen-width 100 "Text width in zen mode, in columns.")
@@ -72,7 +82,10 @@
     (drgnx-command-define 'preferences-theme :category "Preferences" :title "Color Theme"
       :command #'drgnx-look-choose-theme :menu '("Options") :doc "Pick the colour theme (remembered)")
     (drgnx-command-define 'view-zen :category "View" :title "Zen Mode" :scope 'window
-      :command #'drgnx-look-zen :doc "Only the text; again to give the sidebar and panel back")))
+      :command #'drgnx-look-zen :doc "Only the text; again to give the sidebar and panel back")
+    (pcase-dolist (`(,id ,title ,fn) '((view-zoom-in "Zoom In" drgnx-look-zoom-in) (view-zoom-out "Zoom Out" drgnx-look-zoom-out)
+                                       (view-zoom-reset "Reset Zoom" drgnx-look-zoom-reset)))
+      (drgnx-command-define id :category "View" :title title :command fn :doc "The text size in every window; then +, - or 0"))))
 
 (provide 'drgnx-look)
 ;;; drgnx-look.el ends here

@@ -85,7 +85,8 @@
      (dolist (stage '(first-frame first-file first-input))
        (drgnx-module-define (intern (format "test/%s" stage)) :doc "s" :stage stage
                             :setup (let ((s stage)) (lambda () (push s ran)))))
-     (drgnx-modules-start (make-temp-file "drgnx-empty" t))
+     (cl-letf (((symbol-function 'run-with-idle-timer) #'ignore))   ; no timer left to fire later
+       (drgnx-modules-start (make-temp-file "drgnx-empty" t)))
      (run-hooks 'drgnx-first-file-hook)
      (should (equal ran '(first-file)))
      (run-hooks 'drgnx-first-gui-frame-hook 'drgnx-first-input-hook)
@@ -130,3 +131,81 @@
    (let ((r (drgnx-doctor-check 'modules (drgnx-doctor-facts))))
      (should (eq (car r) 'fail))
      (should (string-search "test/broken" (nth 1 r))))))
+
+;;;; M4 review fixes
+
+(ert-deftest drgnx-modules/hand-edited-fields-are-dropped-not-fatal ()
+  ;; I1: a typo in modules.eld never stops startup.
+  (drgnx-modules-test--with-config
+   (with-temp-file (expand-file-name "modules.eld" (drgnx-user-dir))
+     (prin1 '(:version 1 :disabled lang/eglot :flags oops :external (gryphn (:name x))) (current-buffer)))
+   (let ((st (drgnx-modules-read-state)))
+     (should (listp (plist-get st :disabled)))
+     (should-not (plist-get st :flags))
+     (should-not (plist-get st :external)))
+   (drgnx-module-define 'test/ok :doc "ok" :setup #'ignore)
+   (drgnx-modules-run 'startup)
+   (should (eq (drgnx-modules-test--status 'test/ok) 'ok))
+   (should-not (drgnx-module-flag-p 'x '+y))
+   (drgnx-modules-load-external)))
+
+(ert-deftest drgnx-modules/an-unreadable-file-is-backed-up-before-writing ()
+  ;; I2: the user's unreadable (or newer) modules.eld is never silently replaced.
+  (drgnx-modules-test--with-config
+   (let ((file (expand-file-name "modules.eld" (drgnx-user-dir))))
+     (with-temp-file file (insert "(:version 1 :external ((:name kept :path \"/x\" :features (a)))   ; typo: no closing paren"))
+     (drgnx-module-define 'test/a :doc "a" :setup #'ignore)
+     (drgnx-modules-toggle 'test/a)
+     (should (seq-find (lambda (f) (string-match-p "\\`modules\\.eld\\.bak" f)) (directory-files (drgnx-user-dir))))
+     (let ((bak (car (directory-files (drgnx-user-dir) t "\\`modules\\.eld\\.bak"))))
+       (should (string-search ":name kept" (with-temp-buffer (insert-file-contents bak) (buffer-string))))))))
+
+(ert-deftest drgnx-modules/the-list-shows-external-and-broken-modules ()
+  ;; I3: what the report knows — external features, files that failed to load — is in the list too.
+  (drgnx-modules-test--with-config
+   (drgnx-modules-write-state '(:version 1 :external ((:name gone :path "/nonexistent/drgnx" :features (x)))))
+   (drgnx-modules-load-external)
+   (with-current-buffer (drgnx-modules-list)
+     (should (string-search "external/gone" (buffer-string))))
+   ;; …and an external module can be turned off.
+   (drgnx-modules-toggle 'external/gone)
+   (setq drgnx-modules--report nil)
+   (drgnx-modules-load-external)
+   (should (eq (plist-get (alist-get 'external/gone (drgnx-modules-report)) :status) 'disabled))))
+
+(ert-deftest drgnx-modules/external-code-never-installs ()
+  ;; C1: gryphn's files say `use-package … :ensure t' (and :vc); loading them must not refresh
+  ;; archives or install — the module waits, reported, like any module missing a package.
+  (drgnx-modules-test--with-config
+   (let ((dir (make-temp-file "drgnx-ext" t)) (calls nil))
+     (unwind-protect
+         (cl-letf (((symbol-function 'package-refresh-contents) (lambda (&rest _) (push 'refresh calls)))
+                   ((symbol-function 'package-install) (lambda (&rest a) (push (cons 'install a) calls)))
+                   ((symbol-function 'package-vc-install) (lambda (&rest a) (push (cons 'vc a) calls))))
+           (write-region "(require 'use-package)\n(use-package kx-not-installed :ensure t :config (kx-not-installed-mode 1))\n(package-vc-install \"https://example.invalid/kx.git\")\n(provide 'kx-ensure)\n"
+                         nil (expand-file-name "kx-ensure.el" dir) nil 'silent)
+           (drgnx-modules-write-state `(:version 1 :external ((:name kx :path ,dir :features (kx-ensure)))))
+           (drgnx-modules-load-external)
+           (should-not calls)
+           (let ((r (alist-get 'external/kx/kx-ensure (drgnx-modules-report))))
+             (should (eq (plist-get r :status) 'missing-packages))
+             (should (memq 'kx-not-installed (plist-get r :missing)))))
+       (delete-directory dir t)))))
+
+(ert-deftest drgnx-modules/module-doctor-checks-reach-the-doctor ()
+  ;; I5: a module's :doctor problems are in the report the doctor reads.
+  (drgnx-modules-test--with-config
+   (drgnx-module-define 'test/doc :doc "d" :setup #'ignore :doctor (lambda () '("the example program is missing")))
+   (drgnx-modules-run 'startup)
+   (drgnx-modules-write-report)
+   (require 'drgnx-doctor)
+   (let ((r (drgnx-doctor-check 'modules (drgnx-doctor-facts))))
+     (should (eq (car r) 'warn))
+     (should (string-search "the example program is missing" (nth 1 r))))))
+
+(ert-deftest drgnx-modules/keys-are-re-applied-only-after-a-stage-that-ran ()
+  ;; Minor 1 (re-graded): re-applying keys costs ~30 ms; a stage with no module must not pay it.
+  (let* ((drgnx-modules--table nil) (drgnx-modules--report nil) (seen nil)
+         (drgnx-modules-after-stage-functions (list (lambda (stage) (push stage seen)))))
+    (drgnx-modules-run 'first-input)
+    (should-not seen)))

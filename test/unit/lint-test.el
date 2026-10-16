@@ -88,3 +88,11 @@
       (pcase form
         (`(defface ,name ,_spec ,_doc . ,args)
          (unless (plist-member args :group) (format "defface %s has no :group" name))))))))
+
+(ert-deftest drgnx-lint/no-macros-obsolete-in-emacs-31 ()
+  ;; `if-let' and `when-let' are obsolete as of 31.1 (warnings in every batch run); use the starred forms.
+  (should (equal (drgnx-lint--violations (drgnx-lint--files "core" "wb" "harness" "init" "modules" "test")
+                                         (lambda (form) (and (consp form) (memq (car form) '(if-let when-let)) (consp (cadr form))
+                                                             (format "%s (use %s*)" (car form) (car form)))))
+                 nil)))
+

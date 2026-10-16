@@ -63,3 +63,24 @@
     (funcall (plist-get (alist-get 'org/org drgnx-modules--table) :setup))
     (should (drgnx-commands-get 'org-capture))
     (should (drgnx-commands-get 'org-agenda))))
+
+(ert-deftest drgnx-lang/server-alternatives-count-and-never-prompt ()
+  ;; eglot's own entries are often (eglot-alternatives …) functions: the first installed one counts;
+  ;; a function contact that would ask a question counts as no server, and never asks.
+  (let* ((dir (make-temp-file "drgnx-bin" t)) (prog (expand-file-name "drgnx-fake-ls2" dir))
+         (exec-path (cons dir exec-path))
+         (eglot-server-programs `((python-mode . ,(eglot-alternatives (list "drgnx-no-such-ls" prog)))
+                                  (js-mode . ,(lambda (&rest _) (read-string "Server: "))))))
+    (unwind-protect
+        (progn
+          (write-region "#!/bin/sh\n" nil prog nil 'silent)
+          (set-file-modes prog #o755)
+          (with-temp-buffer (python-mode) (should (drgnx-lang-server-available-p)))
+          (with-temp-buffer (js-mode) (should-not (drgnx-lang-server-available-p))))
+      (delete-directory dir t))))
+
+(ert-deftest drgnx-lang/eglot-connects-in-the-background ()
+  (let ((eglot-sync-connect 3) (prog-mode-hook nil) (major-mode-remap-alist nil) (xref-prompt-for-identifier t)
+        (drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil))
+    (funcall (plist-get (alist-get 'lang/eglot drgnx-modules--table) :setup))
+    (should-not eglot-sync-connect)))

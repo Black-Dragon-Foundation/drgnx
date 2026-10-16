@@ -122,7 +122,8 @@ DEV non-nil: only run for `drgnx doctor --dev' (tools for developing drgnx)."
   :check (lambda (f)
            (let* ((r (plist-get f :modules-report))
                   (failed (seq-filter (lambda (m) (eq (plist-get (cdr m) :status) 'failed)) r))
-                  (waiting (seq-filter (lambda (m) (eq (plist-get (cdr m) :status) 'missing-packages)) r)))
+                  (waiting (seq-filter (lambda (m) (eq (plist-get (cdr m) :status) 'missing-packages)) r))
+                  (problems (seq-filter (lambda (m) (plist-get (cdr m) :problems)) r)))
              (cond ((null r) (list 'info "no module report yet — start drgnx once" nil))
                    (failed (list 'fail (mapconcat (lambda (m) (format "%s: %s" (car m) (plist-get (cdr m) :error))) failed "; ")
                                  "see Preferences: Modules; turn the module off there or report the error"))
@@ -131,6 +132,9 @@ DEV non-nil: only run for `drgnx doctor --dev' (tools for developing drgnx)."
                                                                               (mapconcat #'symbol-name (plist-get (cdr m) :missing) " ")))
                                                            waiting ", "))
                                   "drgnx sync installs them (M5); until then these modules stay off"))
+                   (problems (list 'warn (mapconcat (lambda (m) (format "%s: %s" (car m) (string-join (plist-get (cdr m) :problems) "; ")))
+                                                    problems "; ")
+                                   "see the module's documentation"))
                    (t (list 'ok (format "%d modules ok" (length r)) nil))))))
 
 (drgnx-doctor-define 'key-conflicts :group "drgnx" :doc "Key profile conflicts and keys.eld problems (from the last session)"

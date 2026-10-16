@@ -36,14 +36,16 @@
     (should (eq (plist-get (alist-get 'external/gone (drgnx-modules-report)) :status) 'failed))))
 
 (ert-deftest drgnx-compat/the-real-gryphn-board-loads ()
-  ;; Read-only: the user's gryphn checkout, when present.
-  (let ((path (expand-file-name "~/workspace/gryphn/emacs")))
-    (skip-unless (file-directory-p path))
+  ;; Read-only: a gryphn checkout named by $DRGNX_GRYPHN_DIR.
+  (let ((path (getenv "DRGNX_GRYPHN_DIR")))
+    (skip-unless (and path (file-directory-p path)))
     (drgnx-ext-test--with dir
       (drgnx-modules-write-state `(:version 1 :external ((:name gryphn :path ,path :features (gryphn-org gryphn-run gryphn-agents gryphn-search)))))
       (drgnx-modules-load-external)
       (dolist (f '(gryphn-org gryphn-run gryphn-agents gryphn-search))
-        (should (equal (list f (plist-get (alist-get (intern (format "external/gryphn/%s" f)) (drgnx-modules-report)) :status))
-                       (list f 'ok))))
+        (let ((r (alist-get (intern (format "external/gryphn/%s" f)) (drgnx-modules-report))))
+          ;; ok, or waiting for a package it would otherwise have installed (never installed)
+          (should (memq (plist-get r :status) '(ok missing-packages)))
+          (should (eq (eq (plist-get r :status) 'missing-packages) (and (plist-get r :missing) t)))))
       (should (drgnx-commands-get 'board-view))
       (should (drgnx-commands-get 'board-dispatch)))))

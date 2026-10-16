@@ -6,7 +6,8 @@
 ;; Editing commands people expect from VS Code, on built-ins: fold and unfold (hideshow in code,
 ;; outline elsewhere), change case (camelCase, snake_case, kebab-case, cycle), expand and shrink
 ;; the selection (tree-sitter nodes when the buffer has a parser, else words and balanced
-;; expressions), go to line.  See docs/modules.md.
+;; expressions), go to line; the VS Code line commands (move, select, duplicate, delete, new line
+;; above/below), redo, comment, back/forward.  See docs/modules.md.
 
 ;;; Code:
 (require 'cl-lib)
@@ -113,6 +114,63 @@
     (if (= (car prev) (cdr prev)) (progn (deactivate-mark) (goto-char (car prev)))
       (drgnx-editing--select (car prev) (cdr prev)))))
 
+;;;; Lines
+
+(defun drgnx-editing--move-lines (n)
+  "Move the current line, or the selected lines, N lines down (up when N is negative)."
+  (let ((added (and (> (buffer-size) 0) (/= (char-before (point-max)) ?\n)
+                    (save-excursion (goto-char (point-max)) (insert "\n") t))))
+    (let* ((region (use-region-p))
+           (beg (save-excursion (goto-char (if region (region-beginning) (point))) (line-beginning-position)))
+           (end (if region
+                    (save-excursion (goto-char (region-end))
+                                    (if (and (bolp) (> (point) (region-beginning))) (point) (line-beginning-position 2)))
+                  (line-beginning-position 2)))
+           (pt (- (point) beg)) (mk (and region (- (mark) beg))))
+      (unless (if (> n 0) (= end (point-max)) (= beg (point-min)))    ; nothing to move past
+        (let ((text (delete-and-extract-region beg end)))
+          (goto-char beg)
+          (forward-line n)
+          (let ((at (point)))
+            (insert text)
+            (goto-char (+ at pt))
+            (when region (set-mark (+ at mk)) (activate-mark) (setq deactivate-mark nil))))))
+    (when added
+      (save-excursion (goto-char (point-max)) (when (eq (char-before) ?\n) (delete-char -1))))))
+
+(defun drgnx-editing-move-line-up ()
+  "Move the line (or the selected lines) up."
+  (interactive)
+  (drgnx-editing--move-lines -1))
+
+(defun drgnx-editing-move-line-down ()
+  "Move the line (or the selected lines) down."
+  (interactive)
+  (drgnx-editing--move-lines 1))
+
+(defun drgnx-editing-select-line ()
+  "Select the line; again to add the next line."
+  (interactive)
+  (if (use-region-p)
+      (progn (goto-char (region-end)) (forward-line 1))
+    (push-mark (line-beginning-position) t t)
+    (forward-line 1)))
+
+(defun drgnx-editing-line-below ()
+  "Start a new line below this one."
+  (interactive)
+  (end-of-line)
+  (newline)
+  (indent-according-to-mode))
+
+(defun drgnx-editing-line-above ()
+  "Start a new line above this one."
+  (interactive)
+  (beginning-of-line)
+  (newline)
+  (forward-line -1)
+  (indent-according-to-mode))
+
 (drgnx-module-define 'editor/editing
   :doc "Fold, change case, expand and shrink the selection, go to line."
   :stage 'startup
@@ -127,8 +185,21 @@
                      (edit-case-kebab "Change Case: kebab-case" drgnx-editing-case-kebab "The word or selection in kebab-case")
                      (edit-expand "Expand Selection" drgnx-editing-expand "Select the enclosing word, then expression, …")
                      (edit-shrink "Shrink Selection" drgnx-editing-shrink "Back to the previous selection")
-                     (go-line "Go to Line…" goto-line "Go to a line number")))
-      (drgnx-command-define id :category "Edit" :title title :command fn :scope 'editing :doc doc))))
+                     (go-line "Go to Line…" goto-line "Go to a line number")
+                     (edit-select-all "Select All" mark-whole-buffer "Select the whole buffer")
+                     (edit-select-line "Select Line" drgnx-editing-select-line "Select the line; again for the next")
+                     (edit-redo "Redo" undo-redo "Redo the last undone change")
+                     (edit-comment "Toggle Comment" comment-line "Comment or uncomment the line or the selection")
+                     (edit-delete-line "Delete Line" kill-whole-line "Delete the whole line")
+                     (edit-move-up "Move Line Up" drgnx-editing-move-line-up "Move the line or the selected lines up")
+                     (edit-move-down "Move Line Down" drgnx-editing-move-line-down "Move the line or the selected lines down")
+                     (edit-duplicate "Duplicate Line" duplicate-dwim "Copy the line (or the selection) below")
+                     (edit-line-below "New Line Below" drgnx-editing-line-below "Start a new line below this one")
+                     (edit-line-above "New Line Above" drgnx-editing-line-above "Start a new line above this one")
+                     (go-back "Back" xref-go-back "Return to where you jumped from")
+                     (go-forward "Forward" xref-go-forward "Undo a Back")))
+      (drgnx-command-define id :category (if (string-prefix-p "go-" (symbol-name id)) "Go" "Edit") :title title
+        :command fn :scope 'editing :doc doc))))
 
 (provide 'drgnx-editing)
 ;;; drgnx-editing.el ends here

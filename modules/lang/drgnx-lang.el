@@ -18,6 +18,8 @@
 (declare-function eglot-ensure "eglot")
 (declare-function eglot-rename "eglot")
 (declare-function eglot-current-server "eglot")
+(declare-function eglot-code-actions "eglot")
+(declare-function eglot-format-buffer "eglot")
 (declare-function eldoc-doc-buffer "eldoc")
 
 (defconst drgnx-lang-tree-sitter-modes
@@ -27,6 +29,8 @@
     (rust rust-mode rust-ts-mode) (go go-mode go-ts-mode) (typescript typescript-mode typescript-ts-mode))
   "LANGUAGE MODE TS-MODE: MODE becomes TS-MODE when LANGUAGE's grammar is installed.")
 
+(defvar eglot-sync-connect)
+
 (defun drgnx-lang-remap-modes ()
   "Use the tree-sitter mode of every language whose grammar is installed."
   (when (fboundp 'treesit-language-available-p)
@@ -35,10 +39,15 @@
         (setf (alist-get mode major-mode-remap-alist) ts)))))
 
 (defun drgnx-lang--program (contact)
-  "The program CONTACT (an `eglot-server-programs' value) runs, or nil (a function: unknown)."
+  "The program CONTACT (an `eglot-server-programs' value) runs, or nil.  A function (such as
+`eglot-alternatives') is asked non-interactively; one that would prompt or fails counts as none."
   (pcase contact
     (`(,(and prog (pred stringp)) . ,_) prog)
-    ((pred stringp) contact)))
+    ((pred stringp) contact)
+    ((pred functionp)
+     (let ((inhibit-interaction t))
+       (drgnx-lang--program (ignore-errors (if (eql (cdr (func-arity contact)) 1) (funcall contact nil)
+                                             (funcall contact nil nil))))))))
 
 (defun drgnx-lang-server-available-p ()
   "Non-nil if a language server for the current major mode is installed (on `exec-path')."
@@ -60,6 +69,20 @@
   (if (and (fboundp 'eglot-current-server) (eglot-current-server)) (call-interactively #'eglot-rename)
     (user-error "Rename Symbol needs a language server for this file (none is installed)")))
 
+(defun drgnx-lang--server-p () (and (fboundp 'eglot-current-server) (eglot-current-server)))
+
+(defun drgnx-lang-quick-fix ()
+  "The language server's fixes and actions here."
+  (interactive)
+  (unless (drgnx-lang--server-p) (user-error "Quick Fix needs a language server for this file (none is installed)"))
+  (call-interactively #'eglot-code-actions))
+
+(defun drgnx-lang-format ()
+  "Format the buffer with the language server; without one, re-indent it."
+  (interactive)
+  (if (drgnx-lang--server-p) (call-interactively #'eglot-format-buffer)
+    (indent-region (point-min) (point-max))))
+
 (defun drgnx-lang-hover ()
   "Show the documentation of the symbol at point (in the panel's Help tab)."
   (interactive)
@@ -72,12 +95,16 @@
   (lambda ()
     (drgnx-lang-remap-modes)
     (add-hook 'prog-mode-hook #'drgnx-lang--maybe-eglot)
-    (setq xref-prompt-for-identifier nil)
+    (setq xref-prompt-for-identifier nil
+          eglot-sync-connect nil)                ; a slow server never blocks opening the file
     (pcase-dolist (`(,id ,title ,fn ,doc)
                    '((code-definition "Go to Definition" xref-find-definitions "Jump to where the symbol is defined")
                      (code-references "Find References" xref-find-references "Every use of the symbol (in the panel)")
                      (code-rename "Rename Symbol" drgnx-lang-rename "Rename the symbol everywhere (language server)")
-                     (code-hover "Show Hover" drgnx-lang-hover "The symbol's documentation, in the panel")))
+                     (code-hover "Show Hover" drgnx-lang-hover "The symbol's documentation, in the panel")
+                     (code-quick-fix "Quick Fix" drgnx-lang-quick-fix "The language server's fixes and actions here")
+                     (code-problems "Problems" flymake-show-project-diagnostics "Errors and warnings of the project (in the panel)")
+                     (code-format "Format Document" drgnx-lang-format "Format with the language server (else re-indent)")))
       (drgnx-command-define id :category "Code" :title title :command fn :scope 'editing :doc doc))))
 
 (provide 'drgnx-lang)

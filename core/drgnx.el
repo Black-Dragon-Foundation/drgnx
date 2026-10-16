@@ -44,7 +44,8 @@
   ;; Modules that run later (idle, first frame, …) register commands after the keys were applied.
   (add-hook 'drgnx-modules-after-stage-functions
             (lambda (stage) (unless (eq stage 'startup) (drgnx-keys-apply) (drgnx-surfaces-refresh))))
-  (drgnx-modules-start (expand-file-name "modules" drgnx-dir))
+  (condition-case err (drgnx-modules-start (expand-file-name "modules" drgnx-dir))   ; never stops the rest
+    (error (message "drgnx: modules did not start: %s" (error-message-string err))))
   (drgnx-keys-apply)
   (drgnx-surfaces-refresh))
 

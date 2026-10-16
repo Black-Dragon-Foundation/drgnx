@@ -42,9 +42,35 @@ DOCTOR: a function returning problem strings.  SETTINGS: alist VARIABLE → doc.
 
 (defun drgnx-modules--state-file () (expand-file-name "modules.eld" (drgnx-user-dir)))
 
+(defvar drgnx-modules--state-foreign nil
+  "Non-nil when modules.eld could not be read as ours (unreadable, another format, newer): it is
+backed up before drgnx writes it.")
+
+(defun drgnx-modules--valid (state)
+  "STATE with every malformed field dropped (a message each) — a typo never stops startup."
+  (let ((out (list :version drgnx-modules-state-version))
+        (d (plist-get state :disabled)) (f (plist-get state :flags)) (x (plist-get state :external))
+        (theme (plist-get state :theme)))
+    (if (and (listp d) (seq-every-p #'symbolp d)) (setq out (plist-put out :disabled d))
+      (message "drgnx: modules.eld :disabled must be a list of modules; ignored"))
+    (if (and (listp f) (seq-every-p (lambda (e) (and (consp e) (symbolp (car e)) (listp (cdr e)))) f))
+        (setq out (plist-put out :flags f))
+      (message "drgnx: modules.eld :flags must be ((MODULE FLAG …) …); ignored"))
+    (when (listp x)
+      (setq out (plist-put out :external
+                           (seq-filter (lambda (e)
+                                         (or (and (consp e) (keywordp (car e)) (symbolp (plist-get e :name))
+                                                  (stringp (plist-get e :path)) (listp (plist-get e :features)))
+                                             (progn (message "drgnx: modules.eld :external entry %S needs :name, :path and :features; ignored" e)
+                                                    nil)))
+                                       x))))
+    (when (and theme (symbolp theme)) (setq out (plist-put out :theme theme)))
+    out))
+
 (defun drgnx-modules--migrate (data)
-  "DATA from any format → the current one, or nil if it is not a modules.eld."
-  (cond ((and (listp data) (keywordp (car data)) (eql (plist-get data :version) drgnx-modules-state-version)) data)
+  "DATA from any format → the current one, or nil if it is not a modules.eld (or a newer one)."
+  (cond ((and (listp data) (keywordp (car data)) (eql (plist-get data :version) drgnx-modules-state-version))
+         (drgnx-modules--valid data))
         ((and (listp data) (seq-every-p #'symbolp data))         ; version 0: the disabled modules
          (list :version drgnx-modules-state-version :disabled data))))
 
@@ -55,18 +81,26 @@ DOCTOR: a function returning problem strings.  SETTINGS: alist VARIABLE → doc.
             (let* ((file (drgnx-modules--state-file))
                    (data (and (file-readable-p file)
                               (condition-case err (with-temp-buffer (insert-file-contents file) (read (current-buffer)))
-                                (error (message "drgnx: %s is unreadable (%s); modules use their defaults"
-                                                file (error-message-string err))
+                                (error (message "drgnx: modules.eld is unreadable (%s); modules use their defaults"
+                                                (error-message-string err))
                                        :unreadable)))))
+              (setq drgnx-modules--state-foreign nil)
               (or (and data (not (eq data :unreadable))
                        (or (drgnx-modules--migrate data)
-                           (progn (message "drgnx: %s is not a modules file; modules use their defaults" file) nil)))
-                  (list :version drgnx-modules-state-version))))))
+                           (progn (message "drgnx: %s is not a modules file of this drgnx; modules use their defaults" file)
+                                  nil)))
+                  (progn (when data (setq drgnx-modules--state-foreign t))
+                         (list :version drgnx-modules-state-version)))))))
 
 (defun drgnx-modules-write-state (state)
   "Write STATE as the user's modules.eld."
   (let ((file (drgnx-modules--state-file)))
     (make-directory (file-name-directory file) t)
+    (when (and drgnx-modules--state-foreign (file-exists-p file))   ; never lose what we could not read
+      (let ((bak (format "%s.bak-%s" file (format-time-string "%Y%m%d-%H%M%S"))))
+        (copy-file file bak t)
+        (message "drgnx: kept your previous modules.eld as %s" bak))
+      (setq drgnx-modules--state-foreign nil))
     (with-temp-file file
       (insert ";; drgnx modules: what you turned off, module flags, external modules (docs/modules.md).\n")
       (let ((print-length nil) (print-level nil)) (pp (plist-put state :version drgnx-modules-state-version) (current-buffer))))
@@ -81,9 +115,9 @@ DOCTOR: a function returning problem strings.  SETTINGS: alist VARIABLE → doc.
 
 ;;;; Running
 
-(defun drgnx-modules--record (name stage ms status &optional err missing)
+(defun drgnx-modules--record (name stage ms status &optional err missing problems)
   (setf (alist-get name drgnx-modules--report)
-        (list :stage stage :ms ms :status status :error err :missing missing)))
+        (list :stage stage :ms ms :status status :error err :missing missing :problems problems)))
 
 (defun drgnx-modules--ok-p (name) (eq (plist-get (alist-get name drgnx-modules--report) :status) 'ok))
 
@@ -91,7 +125,8 @@ DOCTOR: a function returning problem strings.  SETTINGS: alist VARIABLE → doc.
   "Called with the stage after its modules ran (core re-applies keys and menus after later stages).")
 
 (defun drgnx-modules-run (stage)
-  "Run the setup of every module of STAGE, each isolated and timed."
+  "Run the setup of every module of STAGE, each isolated and timed; then (if one ran) the hooks."
+  (let ((ran nil))
   (dolist (m drgnx-modules--table)
     (let ((name (car m)) (spec (cdr m)))
       (when (eq (plist-get spec :stage) stage)
@@ -102,12 +137,16 @@ DOCTOR: a function returning problem strings.  SETTINGS: alist VARIABLE → doc.
            ((drgnx-module-disabled-p name) (drgnx-modules--record name stage 0 'disabled))
            (missing (drgnx-modules--record name stage 0 'missing-packages nil missing))
            (unmet (drgnx-modules--record name stage 0 'missing-requires nil unmet))
-           (t (let* ((t0 (float-time))
+           (t (setq ran t)
+              (let* ((t0 (float-time))
                      (err (condition-case e (progn (funcall (plist-get spec :setup)) nil)
-                            (error (error-message-string e)))))
-                (drgnx-modules--record name stage (round (* 1000 (- (float-time) t0)))
-                                       (if err 'failed 'ok) err))))))))
-  (run-hook-with-args 'drgnx-modules-after-stage-functions stage))
+                            (error (error-message-string e))))
+                     (ms (round (* 1000 (- (float-time) t0))))
+                     (problems (and (not err) (plist-get spec :doctor)
+                                    (condition-case e (funcall (plist-get spec :doctor))
+                                      (error (list (format "its doctor check failed: %s" (error-message-string e))))))))
+                (drgnx-modules--record name stage ms (if err 'failed 'ok) err nil problems))))))))
+  (when ran (run-hook-with-args 'drgnx-modules-after-stage-functions stage))))
 
 (defun drgnx-modules-load-directory (dir)
   "Load every module file under DIR (modules/<category>/drgnx-*.el); a file that fails to
@@ -132,25 +171,52 @@ load is reported as module <category>/<file name>."
         (let ((print-length nil) (print-level nil))
           (prin1 (mapcar (lambda (m) (cons (car m) (list :status (plist-get (cdr m) :status)
                                                            :error (plist-get (cdr m) :error)
-                                                           :missing (plist-get (cdr m) :missing))))
+                                                           :missing (plist-get (cdr m) :missing)
+                                                           :problems (plist-get (cdr m) :problems))))
                          drgnx-modules--report)
                  (current-buffer)))))))
 
+(defvar use-package-ensure-function)
+(declare-function package-desc-name "package")
+
+(defun drgnx-modules--require-external (feature)
+  "Require FEATURE without letting it install or refresh anything: `use-package :ensure', :vc and
+direct installs are recorded instead.  Returns (ERROR-or-nil . WANTED-PACKAGES)."
+  (let* ((wanted nil)
+         (want (lambda (p)
+                 (let ((name (cond ((and (fboundp 'package-desc-p) (package-desc-p p)) (package-desc-name p))
+                                   ((consp p) (car p))
+                                   ((stringp p) (intern (file-name-base p)))
+                                   (t p))))
+                   (unless (and (symbolp name) (locate-library (symbol-name name)))   ; already there: nothing to do
+                     (push name wanted)))
+                 nil)))
+    (cl-letf (((symbol-function 'package-refresh-contents) #'ignore)
+              ((symbol-function 'package-install) (lambda (p &rest _) (funcall want p)))
+              ((symbol-function 'package-vc-install) (lambda (p &rest _) (funcall want p)))
+              ((symbol-function 'package-vc-install-from-checkout) (lambda (_dir name &rest _) (funcall want name))))
+      (let* ((use-package-ensure-function (lambda (name &rest _) (funcall want name)))
+             (err (condition-case e (progn (require feature) nil) (error (error-message-string e)))))
+        (cons err (delete-dups (nreverse wanted)))))))
+
 (defun drgnx-modules-load-external ()
   "Load the external modules listed in modules.eld (:external): each feature is reported as
-module external/NAME/FEATURE; a missing directory or a failing feature never stops Emacs."
+module external/NAME/FEATURE; a missing directory, a failing feature or a package it would install
+never stops Emacs — nothing is installed (the module waits for the package, as any module does)."
   (dolist (ext (plist-get (drgnx-modules-read-state) :external))
-    (let* ((name (plist-get ext :name)) (path (expand-file-name (or (plist-get ext :path) ""))))
-      (if (not (file-directory-p path))
-          (drgnx-modules--record (intern (format "external/%s" name)) 'idle 0 'failed
-                                 (format "no such directory: %s" path))
+    (let* ((name (plist-get ext :name)) (id (intern (format "external/%s" name)))
+           (path (expand-file-name (plist-get ext :path))))
+      (cond
+       ((drgnx-module-disabled-p id) (drgnx-modules--record id 'idle 0 'disabled))
+       ((not (file-directory-p path)) (drgnx-modules--record id 'idle 0 'failed (format "no such directory: %s" path)))
+       (t
         (require 'drgnx-compat-gryphn)          ; gryphn's command and context definitions
         (add-to-list 'load-path path t)
         (dolist (f (plist-get ext :features))
-          (let* ((t0 (float-time))
-                 (err (condition-case e (progn (require f) nil) (error (error-message-string e)))))
+          (pcase-let* ((t0 (float-time)) (`(,err . ,wanted) (drgnx-modules--require-external f)))
             (drgnx-modules--record (intern (format "external/%s/%s" name f)) 'idle
-                                   (round (* 1000 (- (float-time) t0))) (if err 'failed 'ok) err)))))))
+                                   (round (* 1000 (- (float-time) t0)))
+                                   (cond (wanted 'missing-packages) (err 'failed) (t 'ok)) err wanted))))))))
 
 (defun drgnx-modules-start (dir)
   "Load the modules in DIR, run the startup stage now and the others when their moment comes."
@@ -185,11 +251,14 @@ module external/NAME/FEATURE; a missing directory or a failing feature never sto
                                        ('missing-requires (format "needs %s" (mapconcat #'symbol-name (plist-get r :missing) " ")))
                                        ('failed (format "failed: %s" (plist-get r :error)))
                                        ('nil "not run yet") (_ (symbol-name st)))
-                                 (symbol-name (plist-get (cdr m) :stage))
+                                 (symbol-name (or (plist-get (cdr m) :stage) (plist-get r :stage) 'load))
                                  (format "%s" (or (plist-get r :ms) ""))
                                  (if (drgnx-module-disabled-p name) "off at next start" "on")
-                                 (or (plist-get (cdr m) :doc) "")))))
-          drgnx-modules--table))
+                                 (or (plist-get (cdr m) :doc)
+                                     (if (string-prefix-p "external/" (symbol-name name)) "external module" ""))))))
+          ;; The table, and what only the report knows: external modules, files that failed to load.
+          (append drgnx-modules--table
+                  (seq-remove (lambda (r) (assq (car r) drgnx-modules--table)) (reverse drgnx-modules--report)))))
 
 (defun drgnx-modules-list ()
   "Show every module, its status and whether it runs at the next start (\\[drgnx-modules-list-toggle] turns it on or off)."
