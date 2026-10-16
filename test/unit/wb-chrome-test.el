@@ -9,7 +9,6 @@
          (drgnx-signal--editor-window nil) (display-buffer-alist nil))
      (delete-other-windows)
      (set-window-parameter (selected-window) 'drgnx-tabs nil)
-     (set-window-parameter (selected-window) 'drgnx-closed nil)
      (set-window-prev-buffers (selected-window) nil)
      (drgnx-rules-mode 1)
      (drgnx-chrome-mode 1)
@@ -29,7 +28,7 @@
     (make-directory (file-name-directory f) t)
     (write-region "x\n" nil f nil 'silent)
     (switch-to-buffer (find-file-noselect f))
-    (drgnx-chrome-apply)
+    (drgnx-chrome-apply nil t)
     (current-buffer)))
 
 (defun drgnx-chrome-test--heights (w)
@@ -39,7 +38,7 @@
   (drgnx-chrome-test--with dir
     (drgnx-chrome-test--open dir "a.txt")
     (let ((editor (selected-window)) (panel (drgnx-wb-area-show 'panel 'output)))
-      (drgnx-chrome-apply)
+      (drgnx-chrome-apply nil t)
       (should (seq-every-p #'cl-plusp (drgnx-chrome-test--heights editor)))      ; tab line, header, mode line
       (should (equal (mapcar #'cl-plusp (drgnx-chrome-test--heights panel)) '(nil t nil))))))  ; tab row only
 
@@ -49,7 +48,7 @@
     (let ((before (drgnx-chrome-test--heights (selected-window))))
       (switch-to-buffer (get-buffer-create "*drgnx-odd*"))
       (setq-local header-line-format nil tab-line-format nil mode-line-format nil)
-      (drgnx-chrome-apply)
+      (drgnx-chrome-apply nil t)
       (should (equal before (drgnx-chrome-test--heights (selected-window))))
       (kill-buffer "*drgnx-odd*"))))
 
@@ -58,14 +57,14 @@
     (let ((a (drgnx-chrome-test--open dir "a.txt")) (b (drgnx-chrome-test--open dir "b.txt"))
           (c (drgnx-chrome-test--open dir "c.txt")))
       (switch-to-buffer a)
-      (drgnx-chrome-apply)
+      (drgnx-chrome-apply nil t)
       (should (equal (drgnx-chrome-tabs (selected-window)) (list a b c))))))
 
 (ert-deftest drgnx-chrome/killing-a-buffer-drops-its-tab-everywhere ()
   (drgnx-chrome-test--with dir
     (let* ((a (drgnx-chrome-test--open dir "a.txt")) (b (drgnx-chrome-test--open dir "b.txt"))
            (w1 (selected-window)) (w2 (split-window w1 nil 'right)))
-      (with-selected-window w2 (switch-to-buffer a) (switch-to-buffer b) (drgnx-chrome-apply))
+      (with-selected-window w2 (switch-to-buffer a) (drgnx-chrome-apply nil t) (switch-to-buffer b) (drgnx-chrome-apply nil t))
       (kill-buffer b)
       (should (equal (drgnx-chrome-tabs w1) (list a)))
       (should (equal (drgnx-chrome-tabs w2) (list a)))
@@ -92,14 +91,53 @@
       (insert "y")
       (should (string-match-p "●" (drgnx-chrome-breadcrumb (selected-window)))))))
 
-(ert-deftest drgnx-chrome/buffers-shown-within-one-command-are-tabs ()
-  ;; A command that visits two files in a row: both are tabs (the window was drawn once).
+(ert-deftest drgnx-chrome/child-frames-get-no-chrome ()
+  ;; C1: posframe, vertico-posframe, corfu, eldoc-box windows live in child frames.
+  (cl-letf (((symbol-function 'frame-parent) (lambda (&optional _f) (selected-frame))))
+    (should-not (drgnx-chrome--role (selected-window)))))
+
+(ert-deftest drgnx-chrome/the-project-root-is-looked-up-once ()
+  ;; I7: outside a repository `project-current' walks the tree every time.
   (drgnx-chrome-test--with dir
-    (let ((a (drgnx-chrome-test--open dir "a.txt")))
-      (let ((f1 (find-file-noselect (expand-file-name "b.txt" dir))) (f2 (find-file-noselect (expand-file-name "c.txt" dir))))
-        (switch-to-buffer f1) (switch-to-buffer f2)
-        (drgnx-chrome-apply)
-        (should (equal (drgnx-chrome-tabs (selected-window)) (list a f1 f2)))
-        (drgnx-chrome--close (selected-window) f1)        ; a closed tab does not come back
-        (drgnx-chrome-apply)
-        (should (equal (drgnx-chrome-tabs (selected-window)) (list a f2)))))))
+    (drgnx-chrome-test--open dir "a.txt")
+    (let ((n 0))
+      (cl-letf* ((orig (symbol-function 'project-current))
+                 ((symbol-function 'project-current) (lambda (&rest a) (setq n (1+ n)) (apply orig a))))
+        (drgnx-chrome-breadcrumb (selected-window))
+        (drgnx-chrome-breadcrumb (selected-window))
+        (should (<= n 1))))))
+
+(ert-deftest drgnx-chrome/a-buffer-with-its-own-header-keeps-it ()
+  ;; I8: tabulated-list column headings (click to sort) are the header line.  (`format-mode-line'
+  ;; returns "" in batch: the window parameter is checked.)
+  (drgnx-chrome-test--with dir
+    (switch-to-buffer (get-buffer-create "*drgnx-table*"))
+    (unwind-protect
+        (progn
+          (setq-local header-line-format " Name   Size")
+          (drgnx-chrome-apply nil t)
+          (should (equal (window-parameter (selected-window) 'header-line-format) '(:eval header-line-format)))
+          (setq-local header-line-format nil)
+          (drgnx-chrome-apply nil t)
+          (should (stringp (window-parameter (selected-window) 'header-line-format))))
+      (kill-buffer "*drgnx-table*"))))
+
+(ert-deftest drgnx-chrome/previews-leave-no-tabs ()
+  ;; I9: consult/xref previews show buffers for a moment, inside a minibuffer or a restored excursion.
+  (drgnx-chrome-test--with dir
+    (let ((a (drgnx-chrome-test--open dir "a.txt")) (p (find-file-noselect (expand-file-name "p.txt" dir))))
+      (save-window-excursion (switch-to-buffer p) (drgnx-chrome-apply))  ; drawn, not noted
+      (drgnx-chrome--refresh)
+      (should (equal (drgnx-chrome-tabs (selected-window)) (list a))))))
+
+(ert-deftest drgnx-chrome/percent-signs-are-shown-as-is ()
+  ;; Minor 1 (re-graded): %b in a name must reach the formatter as %%b (shown as %b).
+  (drgnx-chrome-test--with dir
+    (drgnx-chrome-test--open dir "rate%b-50%.txt")
+    (should (string-search "rate%%b-50%%.txt" (window-parameter (selected-window) 'header-line-format)))
+    (should (string-search "rate%%b-50%%.txt" (window-parameter (selected-window) 'tab-line-format)))))
+
+(ert-deftest drgnx-chrome/tab-faces-are-defined ()
+  ;; Minor 2 (re-graded): the faces we inherit exist without loading tab-line by hand.
+  (should (facep 'tab-line-tab-current))
+  (should (facep 'tab-line-tab-inactive)))

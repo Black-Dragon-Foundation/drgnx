@@ -14,6 +14,7 @@
         (toggle-sidebar "SPC e")
         (wb-unrouted :none "in the palette")
         (focus-outline "SPC o")
+        (outline-open "RET" "o")
         (wb-save-layout :none "in the palette (also on exit)")
         (wb-restore-layout :none "in the palette (also at start)")
         (split-editor-right "SPC w v")

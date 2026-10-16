@@ -70,3 +70,19 @@
   (drgnx-outline-test--with src
     (let ((imenu-auto-rescan nil))
       (should-not (member "*Rescan*" (drgnx-outline-test--names))))))
+
+(ert-deftest drgnx-outline/a-hidden-outline-computes-nothing ()
+  ;; I6: building an index can take most of a second (python-mode, 114 KB); hidden, it is not built.
+  (drgnx-outline-test--with src
+    (drgnx-wb-hide-sidebar)
+    (let ((n 0))
+      (cl-letf* ((orig (symbol-function 'imenu--make-index-alist))
+                 ((symbol-function 'imenu--make-index-alist) (lambda (&rest a) (setq n (1+ n)) (apply orig a))))
+        (drgnx-outline-refresh)
+        (should (= n 0))
+        (drgnx-wb-show-sidebar)                    ; :on-show builds it
+        (should (= n 1))))))
+
+(ert-deftest drgnx-outline/ret-is-a-registry-command ()
+  ;; I10: keys come from the profiles, never a direct `define-key'.
+  (should-not (lookup-key (let ((m (copy-keymap drgnx-outline-mode-map))) (set-keymap-parent m nil) m) (kbd "RET"))))

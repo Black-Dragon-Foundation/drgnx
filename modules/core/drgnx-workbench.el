@@ -8,6 +8,7 @@
 (declare-function drgnx-chrome-mode "drgnx-chrome")
 (declare-function drgnx-outline-setup "drgnx-outline")
 (declare-function drgnx-outline-focus "drgnx-outline")
+(declare-function drgnx-outline-open "drgnx-outline")
 (declare-function drgnx-persist-mode "drgnx-persist")
 (declare-function drgnx-persist-save "drgnx-persist")
 (declare-function drgnx-persist-restore "drgnx-persist")
@@ -128,6 +129,9 @@
     (drgnx-outline-setup)
     (drgnx-command-define 'focus-outline :category "View" :title "Focus Outline" :scope 'window
       :command #'drgnx-outline-focus :doc "Show the sidebar and move focus to the editor's definitions")
+    (drgnx-command-define 'outline-open :category "Outline" :title "Go to Definition" :command #'drgnx-outline-open
+      :map 'drgnx-outline-mode-map :when (lambda () (derived-mode-p 'drgnx-outline-mode))
+      :doc "Go to the definition of the row (focuses the editor)")
     ;; The Buffers panel (open editors), above the Explorer.
     (require 'drgnx-buffers)
     (drgnx-buffers-setup)

@@ -18,7 +18,7 @@
 
 (defface drgnx-outline-group '((t :inherit shadow)) "A group of definitions (imenu submenu)." :group 'drgnx)
 
-(defcustom drgnx-outline-max-size (* 2 1024 1024)
+(defcustom drgnx-outline-max-size (* 1024 1024)
   "Buffers larger than this (characters) get no outline." :type 'integer :group 'drgnx)
 (defcustom drgnx-outline-delay 0.5 "Idle seconds after an edit before the Outline follows it."
   :type 'number :group 'drgnx)
@@ -32,7 +32,6 @@
   (let ((m (make-sparse-keymap)))
     (set-keymap-parent m drgnx-wb-dock-map)
     (define-key m [mouse-1] #'drgnx-outline-mouse-jump)
-    (define-key m (kbd "RET") #'drgnx-outline-open)
     m))
 
 (define-derived-mode drgnx-outline-mode special-mode "Outline"
@@ -60,10 +59,13 @@
   (with-current-buffer src
     (cond ((and buffer-file-name (file-remote-p buffer-file-name)) "Outline is off for remote files")
           ((> (buffer-size) drgnx-outline-max-size) "This file is too large for an outline")
-          (t (let ((rows (ignore-errors
-                           (let ((imenu-auto-rescan t) (imenu--index-alist nil))
-                             (drgnx-outline--flatten (imenu--make-index-alist t) 0)))))
-               (or rows "No outline for this file"))))))
+          (t (let ((rows (while-no-input            ; a key pressed meanwhile wins: try again later
+                           (ignore-errors
+                             (let ((imenu-auto-rescan t) (imenu--index-alist nil) (non-essential t))
+                               (drgnx-outline--flatten (imenu--make-index-alist t) 0))))))
+               (cond ((eq rows t) 'interrupted)
+                     (rows)
+                     (t "No outline for this file")))))))
 
 (defun drgnx-outline--watch (src)
   "Follow SRC's edits (and stop following the previous source)."
@@ -84,22 +86,29 @@
   (when (get-buffer-window drgnx-outline-buffer-name t) (drgnx-outline-refresh)))
 
 (defun drgnx-outline-refresh (&rest _)
-  "Show the definitions of the file in the editor."
-  (let* ((editor (drgnx-wb-editor-window)) (src (and editor (window-buffer editor))))
+  "Show the definitions of the file in the editor — only while the Outline is shown (showing it
+refreshes it): an index can take most of a second to build."
+  (when (get-buffer-window drgnx-outline-buffer-name t)
+    (drgnx-outline--refresh-1)))
+
+(defun drgnx-outline--refresh-1 ()
+  (let* ((editor (drgnx-wb-editor-window)) (src (and editor (window-buffer editor)))
+         (rows (and src (drgnx-outline--index src))))
     (drgnx-outline--watch src)
-    (with-current-buffer (drgnx-outline--buffer)
-      (let* ((rows (if src (drgnx-outline--index src) "")) (inhibit-read-only t)
-             (line (line-number-at-pos)))
-        (erase-buffer)
-        (if (stringp rows)
-            (progn (setq drgnx-outline--rows []) (insert (propertize (concat " " rows) 'face 'shadow)))
-          (setq drgnx-outline--rows (vconcat rows))
-          (insert (mapconcat (lambda (r)
-                               (let ((text (concat (make-string (1+ (* 2 (aref r 1))) ?\s) (drgnx-wb-display-name (aref r 0)))))
-                                 (if (aref r 2) text (propertize text 'face 'drgnx-outline-group))))
-                             rows "\n")))
-        (goto-char (point-min))
-        (forward-line (1- line))))))
+    (if (eq rows 'interrupted)
+        (drgnx-outline--changed)                     ; you typed meanwhile: at the next pause
+      (with-current-buffer (drgnx-outline--buffer)
+        (let ((rows (or rows "")) (inhibit-read-only t) (line (line-number-at-pos)))
+          (erase-buffer)
+          (if (stringp rows)
+              (progn (setq drgnx-outline--rows []) (insert (propertize (concat " " rows) 'face 'shadow)))
+            (setq drgnx-outline--rows (vconcat rows))
+            (insert (mapconcat (lambda (r)
+                                 (let ((text (concat (make-string (1+ (* 2 (aref r 1))) ?\s) (drgnx-wb-display-name (aref r 0)))))
+                                   (if (aref r 2) text (propertize text 'face 'drgnx-outline-group))))
+                               rows "\n")))
+          (goto-char (point-min))
+          (forward-line (1- line)))))))
 
 (defun drgnx-outline-jump (i &optional select)
   "Show row I's definition in the editor (SELECT: and go there)."

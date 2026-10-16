@@ -12,6 +12,7 @@
         (toggle-sidebar "C-b")
         (wb-unrouted :none "in the palette")
         (focus-outline :none "in the palette")
+        (outline-open "RET")
         (wb-save-layout :none "in the palette (also on exit)")
         (wb-restore-layout :none "in the palette (also at start)")
         (split-editor-right "C-\\")

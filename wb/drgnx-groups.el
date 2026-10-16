@@ -27,10 +27,9 @@
   (let* ((g (drgnx-groups--current)) (b (window-buffer g))
          (new (split-window g nil side)))
     (set-window-parameter new 'drgnx-tabs nil)
-    (set-window-parameter new 'drgnx-closed nil)
     (set-window-buffer new b)
     (select-window new)
-    (drgnx-chrome-apply)
+    (drgnx-chrome-apply nil t)
     new))
 
 (defun drgnx-groups-split-right () "Split the editor: a new group to the right, same file." (interactive) (drgnx-groups--split 'right))
@@ -62,12 +61,11 @@
          (next (cadr (memq g groups))))
     (unless next
       (setq next (split-window g nil 'right))
-      (set-window-parameter next 'drgnx-tabs nil)
-      (set-window-parameter next 'drgnx-closed nil))
+      (set-window-parameter next 'drgnx-tabs nil))
     (drgnx-chrome--close g b)
     (set-window-buffer next b)
     (select-window next)
-    (drgnx-chrome-apply)))
+    (drgnx-chrome-apply nil t)))
 
 (defun drgnx-groups--other-group (buffer alist _props)
   "The `other-group' place: the group used last other than the one you are in, else that one."

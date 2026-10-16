@@ -9,12 +9,11 @@
          (drgnx-signal--editor-window nil) (display-buffer-alist nil))
      (delete-other-windows)
      (set-window-parameter (selected-window) 'drgnx-tabs nil)
-     (set-window-parameter (selected-window) 'drgnx-closed nil)
      (set-window-prev-buffers (selected-window) nil)
      (drgnx-rules-mode 1)
      (drgnx-chrome-mode 1)
      (unwind-protect
-         (progn (switch-to-buffer (drgnx-groups-test--file ,dir "a.txt")) (drgnx-chrome-apply) ,@body)
+         (progn (switch-to-buffer (drgnx-groups-test--file ,dir "a.txt")) (drgnx-chrome-apply nil t) ,@body)
        (drgnx-chrome-mode -1)
        (drgnx-rules-mode -1)
        (delete-other-windows)
@@ -59,7 +58,7 @@
 (ert-deftest drgnx-groups/move-to-next-moves-the-tab ()
   (drgnx-groups-test--with dir
     (let* ((g1 (selected-window)) (a (window-buffer)) (b (drgnx-groups-test--file dir "b.txt")))
-      (switch-to-buffer b) (drgnx-chrome-apply)
+      (switch-to-buffer b) (drgnx-chrome-apply nil t)
       (drgnx-groups-move-to-next)                 ; no next group: one is made
       (let ((g2 (selected-window)))
         (should-not (eq g1 g2))

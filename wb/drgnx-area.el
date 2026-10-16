@@ -15,6 +15,7 @@
 (require 'cl-lib)
 (require 'seq)
 (require 'drgnx-rules)
+(require 'tab-line)                     ; the tab faces we inherit
 
 (defface drgnx-wb-tab '((t :inherit tab-line-tab-inactive)) "A tab in an area's tab row." :group 'drgnx)
 (defface drgnx-wb-tab-current '((t :inherit tab-line-tab-current)) "The shown tab in an area's tab row." :group 'drgnx)

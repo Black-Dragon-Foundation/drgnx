@@ -42,8 +42,9 @@ in the active editor is in bold. Click a row to show it; `RET` too; `Delete` (`d
 
 Below the Explorer, the **Outline** lists the definitions of the file in the editor (as imenu finds them, nested the
 same way). A click shows the definition in the editor and keeps you in the Outline; `RET` goes there. It follows the
-editor, and half a second after you stop typing, your edits. Files without an index, remote files and buffers over
-2 MB get a one-line notice instead. Focus Outline: palette · `SPC o`.
+editor, and half a second after you stop typing, your edits — only while it is shown, and a key you press while it
+works wins (it tries again at the next pause). Files without an index, remote files and buffers over 1 MB get a
+one-line notice instead. Focus Outline: palette · `SPC o`.
 
 ### Files
 
@@ -129,7 +130,10 @@ mode line (ibuffer, Info) cannot change a window's height — text never jumps (
   Click a tab to show it, `×` or middle-click closes it (the buffer stays open — close it in the Buffers panel).
   Close Tab `C-<f4>` · palette · `SPC b d`; Next / Previous Tab `C-<next>` / `C-<prior>` · Emacs' `C-x <right>` /
   `C-x <left>` · `SPC b n` / `SPC b p`. `*scratch*` is a tab only while it is shown.
-- **Breadcrumb**: project › folders › file, `●` while unsaved.
+- **Breadcrumb**: project › folders › file, `●` while unsaved. A buffer with a header line of its own (the column
+  headings of a list, clicked to sort) keeps it.
+- A buffer shown only for a moment — a preview while you choose in the minibuffer — does not become a tab.
+- Popups in child frames (posframe, corfu, eldoc-box) keep their own look: they get no chrome.
 
 ### Editor groups
 
@@ -145,9 +149,11 @@ diff and log) open in the **other group** — the one you used last besides this
 When Emacs exits, the workbench is saved to `$XDG_STATE_HOME/drgnx/workbench.eld` (`~/.local/state/…`): the left
 dock, the panel and its tab, the right dock — each with its pixel size — the editor groups with their sizes, tabs and
 shown files, and the Explorer's folders. At the first graphical frame it comes back as it was
-(`drgnx-persist-restore-on-start`). Files that no longer exist are skipped, sizes are clamped to the frame, and a
-state in another format is ignored. Save / Restore Workbench Layout are in the palette. Only a graphical session saves —
-a batch run never writes your state.
+(`drgnx-persist-restore-on-start`) — with a daemon, in the first `emacsclient -c` frame; closing the last graphical
+frame saves too. Each group's shown file opens at once and its other tabs open while you are idle; nothing asks
+anything at start (no remote files are touched, only safe local variables, no large-file question). Files that no
+longer exist are skipped, sizes are clamped to the frame, and a state in another format is ignored. Save / Restore
+Workbench Layout are in the palette. Only a graphical session saves — a batch run never writes your state.
 
 ### Popups
 
