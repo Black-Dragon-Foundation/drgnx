@@ -12,7 +12,7 @@
     (should (equal (plist-get r :layout_changes) 0))))
 
 (ert-deftest drgnx-uitest/report-collateral-oscillation-chrome-echo ()
-  (let* ((a (drgnx-test--sig)) (b (drgnx-test--sig :point 9)) (c (drgnx-test--sig :header 22))
+  (let* ((a (drgnx-test--sig)) (b (drgnx-test--sig :point 9)) (c (drgnx-test--sig :point 9 :header 22))
          (initial (list (cons "w1" a) (cons "w2" a) (cons "mini" '(:height 20))))
          (log (list (list 100.10 'change "w1" a b)        ; target: not collateral
                     (list 100.20 'change "w2" a b)        ; collateral
@@ -35,3 +35,12 @@
          (r (drgnx-uitest-jank-report log 1.0 (list (cons "w1" a)) '("w1" "w3") 1.0)))
     (should (equal (plist-get r :layout_changes) 2))
     (should (equal (plist-get r :collateral_moves) 0))))
+
+(ert-deftest drgnx-uitest/report-oscillation-is-per-field ()
+  ;; Point snaps back to where it was while the window's edges changed meanwhile: still a snap-back.
+  (let* ((a (drgnx-test--sig))
+         (b (drgnx-test--sig :point 73 :edges '(0 0 10 12)))
+         (c (drgnx-test--sig :point 1 :edges '(0 0 10 12)))
+         (r (drgnx-uitest-jank-report (list (list 1.1 'change "w1" a b) (list 1.3 'change "w1" b c))
+                                      1.0 (list (cons "w1" a)) '("w1") 1.0)))
+    (should (= (plist-get r :oscillations) 1))))

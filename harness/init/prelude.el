@@ -77,6 +77,15 @@ Without an external configuration, init.el is the harness's minimal one."
                    nil)
           (error (error-message-string err)))))
 
+(defun drgnx-ui--quiet-server (orig &rest args)
+  "Evaluate harness requests without running the session's change hooks.
+Code under test hangs followers and debounces on them (gryphn re-arms its Explorer follow
+on `first-change-hook'), and every emacsclient reply is printed through a temp buffer — so
+harness polling would re-arm them and hide exactly what it measures.  Binding
+`inhibit-modification-hooks' (not the hook variables) keeps hooks a request installs."
+  (let ((inhibit-modification-hooks t))
+    (apply orig args)))
+
 (defun drgnx-ui-early-server ()
   "Called by the generated init.el before the configuration's: load the harness agent and
 start the session's server, so a configuration that prompts or hangs can still be seen
@@ -85,6 +94,7 @@ and driven (the initial frame exists by now)."
   (require 'drgnx-uitest)
   (require 'drgnx-jank-guard)
   (drgnx-jank-guard-enable)
+  (advice-add 'server-process-filter :around #'drgnx-ui--quiet-server)
   (drgnx-ui--start-server))
 
 (defun drgnx-ui--late ()

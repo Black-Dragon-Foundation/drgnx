@@ -180,6 +180,9 @@ BUTTON is 1-3 (default 1), COUNT 1 or 2, HOLD seconds between press and release.
 (defun drgnx-uitest-record--on-redisplay (_window)
   (cl-incf drgnx-uitest-record--redisplays))
 
+(defun drgnx-uitest--plist-keys (plist)
+  (cl-loop for (k _v) on plist by #'cddr collect k))
+
 (defun drgnx-uitest-jank-report (log t0 initial targets last-input)
   "Summarise recorder LOG (oldest first) of a measurement started at T0.
 INITIAL is the signature alist at T0, TARGETS the ids of windows the input was
@@ -200,10 +203,17 @@ aimed at (their changes are not collateral), LAST-INPUT the time of the last eve
                                         (equal (plist-get old :modeline) (plist-get new :modeline)))))
              (cl-incf chrome))
            (unless (member id targets) (cl-pushnew id collateral :test #'equal)))
-         (let ((h (assoc id history)))
+         ;; Snap-backs are per field: point returning to where it was is one even if the
+         ;; window's edges changed in between.
+         (let ((h (assoc id history)) (snapped nil))
            (if (null h)
                (push (list id new) history)
-             (when (member new (cddr h)) (cl-incf osc))   ; back to an earlier value
+             (dolist (field (drgnx-uitest--plist-keys new))
+               (let ((now (plist-get new field))
+                     (seen (mapcar (lambda (sig) (plist-get sig field)) (cdr h))))
+                 (when (and (not (equal now (car seen))) (member now (cdr seen)))
+                   (setq snapped t))))
+             (when snapped (cl-incf osc))
              (setcdr h (cons new (cdr h))))))))
     (list :settle_ms (max 0 (round (* 1000 (- last-change (max t0 last-input)))))
           :layout_changes layout

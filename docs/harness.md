@@ -103,7 +103,7 @@ The report:
 | `settle_ms` | time from the last delivered input to the last visible change (0 if nothing changed after it) |
 | `layout_changes` | window edge changes, windows created or deleted |
 | `collateral_moves` / `collateral` | windows that changed although the input was not aimed at them (targets = the window clicked, the selected window before and after) — invariant I1 wants 0 |
-| `oscillations` | a window returning to an earlier signature within one measurement (A→B→A: snap-backs) |
+| `oscillations` | snap-backs: a change that returns one of a window's fields (point, start, buffer, edges, header/mode-line height) to an earlier value within the measurement, even if other fields changed meanwhile |
 | `chrome_changes` | header-line or mode-line height changes (I3) |
 | `echo_changes` | minibuffer/echo-area height changes (I4) |
 | `scrolls`, `redisplays` | `window-scroll-functions` calls, window redisplays |
@@ -113,6 +113,17 @@ The report:
 
 Start measurements from a quiet state: a leftover echo-area message that disappears on the first keystroke
 shrinks the echo area and resizes every window — the report rightly counts that as layout and collateral.
+
+## The harness does not perturb the session
+
+Code under test often hangs followers and debounces on change hooks — gryphn's Explorer follow is re-armed by
+`first-change-hook` — and every `emacsclient -e` reply is printed through a temp buffer, whose first insertion
+runs that hook. Without care, the harness's own polling (every 50 ms while waiting to settle) would keep
+re-arming such debounces and the measurement would end before the follower ever ran: exactly the snap-back the
+report should show would be hidden. So the session evaluates harness requests with
+`inhibit-modification-hooks` bound to t (advice on `server-process-filter`, installed before the configuration
+loads). Hooks a request installs are kept; temp buffers already skip the buffer-list and kill hooks. A live test
+installs a gryphn-shaped follower and checks that `measure` reports its snap-back.
 
 ## Guard
 
