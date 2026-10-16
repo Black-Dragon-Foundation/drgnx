@@ -163,3 +163,39 @@
             (should (string-search "As root: dnf install -y emacs-pgtk" (cdr r)))
             (should (string-search "FAKE-SUDO dnf install -y emacs-pgtk" (cdr r)))))
       (delete-directory tmp t))))
+
+(ert-deftest drgnx-install/e2e-tier-names-its-images ()
+  ;; `drgnx test --install IMAGE…' runs install.sh in fresh containers; an unknown name lists the known ones.
+  (should (= 0 (call-process "bash" nil nil nil "-n" (expand-file-name "test/install/in-container.sh" drgnx-install-test--root))))
+  (with-temp-buffer
+    (let ((default-directory drgnx-install-test--root))
+      (should (= 2 (call-process (expand-file-name "bin/drgnx" drgnx-install-test--root) nil t nil "test" "--install" "plan9")))
+      (dolist (name '("fedora-44" "fedora-45" "debian-trixie" "ubuntu-26.04" "archlinux"))
+        (should (string-search name (buffer-string)))))))
+
+(ert-deftest drgnx-install/git-is-installed-when-missing ()
+  ;; Cloning drgnx needs git; a package install (Arch, Fedora 45) does not bring it.  PATH: /usr/bin
+  ;; without git, plus a fake sudo.
+  (let* ((tmp (make-temp-file "drgnx-install" t))
+         (bin (expand-file-name "bin" tmp))
+         (fake-emacs (expand-file-name "emacs" tmp)))
+    (unwind-protect
+        (progn
+          (make-directory bin)
+          (dolist (f (directory-files "/usr/bin" t directory-files-no-dot-files-regexp))
+            (unless (string-match-p "\\`git" (file-name-nondirectory f))
+              (make-symbolic-link f (expand-file-name (file-name-nondirectory f) bin))))
+          (delete-file (expand-file-name "sudo" bin))
+          (write-region "#!/bin/sh\necho \"FAKE-SUDO $*\"\nexit 1\n" nil (expand-file-name "sudo" bin))
+          (set-file-modes (expand-file-name "sudo" bin) #o755)
+          (write-region "#!/bin/sh\necho '31.1 t pgtk'\n" nil fake-emacs)
+          (set-file-modes fake-emacs #o755)
+          (let ((r (drgnx-install-test--run
+                    (list (concat "DRGNX_INSTALL_OS_RELEASE=" (drgnx-install-test--os "fedora-45"))
+                          "DRGNX_INSTALL_UNAME=Linux"
+                          (concat "DRGNX_INSTALL_EMACS=" fake-emacs)
+                          (concat "PATH=" bin))
+                    "--yes" "--dir" (expand-file-name "checkout" tmp))))
+            (should (= (car r) 1))
+            (should (string-search "As root: dnf install -y git" (cdr r)))))
+      (delete-directory tmp t))))

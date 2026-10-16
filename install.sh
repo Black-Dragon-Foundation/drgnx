@@ -17,7 +17,7 @@
 set -euo pipefail
 
 EMACS_VERSION=31.1
-DRGNX_REPO=https://github.com/Black-Dragon-Foundation/drgnx.git
+DRGNX_REPO="${DRGNX_INSTALL_REPO:-https://github.com/Black-Dragon-Foundation/drgnx.git}"
 DOCS_URL=https://github.com/Black-Dragon-Foundation/drgnx/blob/main/docs/install.md
 GNU_MIRROR="${DRGNX_INSTALL_MIRROR:-https://ftpmirror.gnu.org/emacs}"         # overridable for tests
 GNU_KEYRING="${DRGNX_INSTALL_KEYRING:-https://ftp.gnu.org/gnu/gnu-keyring.gpg}"
@@ -177,7 +177,7 @@ print_plan() {
   say "2. drgnx:"
   if [[ -n "$SOURCE_DIR" ]]; then note "use the checkout in $DIR"
   elif [[ -d "$DIR/.git" ]]; then note "update $DIR (git pull --ff-only)"
-  else note "git clone $DRGNX_REPO (branch $BRANCH) into $DIR"; fi
+  else note "git clone $DRGNX_REPO (branch $BRANCH) into $DIR (git is installed first if missing)"; fi
   say "3. Link $PREFIX/bin/drgnx → $DIR/bin/drgnx"
   say "4. Run drgnx doctor"
 }
@@ -309,8 +309,20 @@ install_emacs_source() {
   EMACS_BIN="$PREFIX/bin/emacs"
 }
 
+need_git() { # a package install (Arch, Fedora 45) does not bring git
+  command -v git >/dev/null 2>&1 && return
+  case "$FAMILY" in
+    fedora) as_root dnf install -y git ;;
+    debian) as_root apt-get update -qq
+            as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq git ;;
+    arch)   as_root pacman -S --needed --noconfirm git ;;
+    *)      die 1 "git is needed to fetch drgnx: install it (macOS: xcode-select --install), then run this again" ;;
+  esac
+}
+
 fetch_drgnx() {
   if [[ -n "$SOURCE_DIR" ]]; then return; fi
+  need_git
   if [[ -d "$DIR/.git" ]]; then
     git -C "$DIR" pull --ff-only --quiet || warn "could not update $DIR (local changes?) — keeping it as it is"
   else
