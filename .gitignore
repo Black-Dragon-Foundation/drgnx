@@ -1,5 +1,17 @@
+# Compiled Emacs Lisp
 *.elc
 *.eln
+eln-cache/
+
+# Emacs and editor leftovers
+*~
+\#*\#
+.#*
+.DS_Store
+
+# Secrets — never committed (the pre-commit hook refuses them too)
 .env
 .env.*
 secrets.env
+*.pem
+*.key
