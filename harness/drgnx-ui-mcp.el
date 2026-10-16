@@ -40,7 +40,11 @@ guard_violations (window moves from timers).")
    (list :name "ui_start"
          :description "Start a headless GUI Emacs session for testing (never the user's Emacs). config: minimal (stock Emacs), gryphn, or a config directory (read-only; state stays in the session)."
          :inputSchema (drgnx-ui-mcp--schema '(:config (:type "string")
-                                              :size (:type "string" :description "WxH, default 1600x900"))))
+                                              :size (:type "string" :description "WxH, default 1600x900")
+                                              :daemon (:type "boolean" :description "Run Emacs as a daemon: no frame until ui_frame"))))
+   (list :name "ui_frame"
+         :description "Open a frame in a daemon session the way a user does (emacsclient -c); returns exit status, client_ms, visible_ms and the slowest frame hooks."
+         :inputSchema (drgnx-ui-mcp--schema drgnx-ui-mcp--session '("session")))
    (list :name "ui_stop" :description "Stop a session and remove its files."
          :inputSchema (drgnx-ui-mcp--schema drgnx-ui-mcp--session '("session")))
    (list :name "ui_list" :description "List harness sessions." :inputSchema (drgnx-ui-mcp--schema nil))
@@ -102,7 +106,9 @@ guard_violations (window moves from timers).")
            when (plist-member args k) append (list k (plist-get args k))))
 
 (defconst drgnx-ui-mcp--calls
-  `(("ui_start" . ,(lambda (a) (drgnx-ui-mcp--text (drgnx-ui-start (plist-get a :config) (plist-get a :size)))))
+  `(("ui_start" . ,(lambda (a) (drgnx-ui-mcp--text (drgnx-ui-start (plist-get a :config) (plist-get a :size) nil
+                                                                    (eq (plist-get a :daemon) t)))))
+    ("ui_frame" . ,(lambda (a) (drgnx-ui-mcp--text (drgnx-ui-new-frame (drgnx-ui-mcp--own a)))))
     ("ui_stop" . ,(lambda (a) (drgnx-ui-mcp--text (drgnx-ui-stop (plist-get a :session)))))
     ("ui_list" . ,(lambda (_) (drgnx-ui-mcp--text (drgnx-ui-ls))))
     ("ui_state" . ,(lambda (a) (drgnx-ui-mcp--text (drgnx-ui-state (drgnx-ui-mcp--own a)))))

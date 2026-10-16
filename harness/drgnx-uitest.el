@@ -25,8 +25,10 @@
 ;;;; Frames and windows
 
 (defun drgnx-uitest-root-frame ()
-  "The session's root frame: the first visible frame that is not a child frame."
-  (or (cl-find-if (lambda (f) (and (null (frame-parent f)) (frame-visible-p f))) (frame-list))
+  "The session's root frame: the first visible graphical frame that is not a child frame.
+Falls back to the selected frame (a daemon's terminal frame, or batch)."
+  (or (cl-find-if (lambda (f) (and (null (frame-parent f)) (frame-visible-p f) (display-graphic-p f)))
+                  (frame-list))
       (selected-frame)))
 
 (defun drgnx-uitest-window-id (window)
@@ -351,6 +353,8 @@ with redisplay between them, while the test waits.  The plist has :settled."
   "Export the root frame and its visible child frames as PNGs into DIR.
 `x-export-frames' cannot put several frames in one PNG, so each child comes with its
 offset (parent-relative native edges) for compositing."
+  (unless (display-graphic-p (drgnx-uitest-root-frame))
+    (error "drgnx-uitest: no graphical frame to capture (a daemon session without a client frame? open one with ui_frame)"))
   (redisplay t)
   (make-directory dir t)
   (let* ((f (drgnx-uitest-root-frame))
@@ -421,6 +425,51 @@ prints as raw bytes; decode it so non-ASCII text survives emacsclient."
 (defun drgnx-uitest-api-type (text)
   "Queue typing TEXT."
   (drgnx-uitest--json (list :queued (drgnx-uitest-enqueue (drgnx-uitest-type-events text)))))
+
+(defun drgnx-uitest-api-gui-frames ()
+  "Number of graphical root frames, and how many are visible, as JSON."
+  (let ((gui (cl-remove-if-not (lambda (f) (and (display-graphic-p f) (null (frame-parent f)))) (frame-list))))
+    (drgnx-uitest--json (list :count (length gui) :visible (cl-count-if #'frame-visible-p gui)))))
+
+(defconst drgnx-uitest--frame-hooks
+  '(before-make-frame-hook after-make-frame-functions server-after-make-frame-hook
+    window-setup-hook window-size-change-functions window-configuration-change-hook
+    after-setting-font-hook server-switch-hook)
+  "Hooks timed by `drgnx-uitest-api-time-frame-hooks'.")
+
+(defvar drgnx-uitest--frame-times nil "Alist (NAME . ms), newest first.")
+
+(defun drgnx-uitest--timed (name)
+  (lambda (orig &rest args)
+    (let ((t0 (float-time)))
+      (prog1 (apply orig args)
+        (push (cons name (round (* 1000 (- (float-time) t0)))) drgnx-uitest--frame-times)))))
+
+(defun drgnx-uitest--time-run-hooks (orig &rest args)
+  "Time whole runs of the frame hooks (catches lambdas too)."
+  (let ((hook (car args)) (t0 (float-time)))
+    (prog1 (apply orig args)
+      (when (memq hook drgnx-uitest--frame-hooks)
+        (push (cons (format "total %s" hook) (round (* 1000 (- (float-time) t0)))) drgnx-uitest--frame-times)))))
+
+(defun drgnx-uitest-api-time-frame-hooks ()
+  "Start timing frame creation: each named function on the frame hooks, each hook run,
+and `make-frame' itself.  Resets earlier times."
+  (setq drgnx-uitest--frame-times nil)
+  (dolist (hook drgnx-uitest--frame-hooks)
+    (dolist (fn (and (boundp hook) (ensure-list (default-value hook))))
+      (when (and (symbolp fn) (fboundp fn))
+        (advice-add fn :around (drgnx-uitest--timed (symbol-name fn)) '((name . drgnx-uitest-frame-time))))))
+  (advice-add 'make-frame :around (drgnx-uitest--timed "make-frame") '((name . drgnx-uitest-frame-time)))
+  (dolist (runner '(run-hooks run-hook-with-args))
+    (advice-add runner :around #'drgnx-uitest--time-run-hooks))
+  (drgnx-uitest--json (list :ok t)))
+
+(defun drgnx-uitest-api-frame-hook-times ()
+  "The slowest timed items since `drgnx-uitest-api-time-frame-hooks' (≤ 10), as JSON."
+  (let ((top (seq-take (sort (copy-sequence drgnx-uitest--frame-times) (lambda (a b) (> (cdr a) (cdr b)))) 10)))
+    (drgnx-uitest--json
+     (list :hooks (vconcat (mapcar (lambda (c) (list :name (car c) :ms (cdr c))) top))))))
 
 (defun drgnx-uitest-api-boot-status ()
   "While init runs: the active minibuffer prompt (a config asking something), or null."

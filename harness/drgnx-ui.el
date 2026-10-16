@@ -153,8 +153,9 @@ Unix socket paths are limited to ~108 bytes, so sockets never live under ROOT it
 (defun drgnx-ui--save (sess)
   (drgnx-ui--write (expand-file-name "session.json" (plist-get sess :run)) (drgnx-ui--json sess)))
 
-(defun drgnx-ui-prepare-run (name &optional config size root)
-  "Create the run directory for session NAME under ROOT; return the session plist."
+(defun drgnx-ui-prepare-run (name &optional config size root daemon)
+  "Create the run directory for session NAME under ROOT; return the session plist.
+DAEMON non-nil: Emacs runs as a daemon (no frame until `drgnx-ui-new-frame')."
   (let ((size (or size "1600x900")))
     (unless (string-match-p "\\`[0-9]+x[0-9]+\\'" size)
       (drgnx-ui--fail "size must be WxH, got %S" size))
@@ -181,6 +182,7 @@ Unix socket paths are limited to ~108 bytes, so sockets never live under ROOT it
       (let ((sess (list :name name :run run :socket (expand-file-name name sock) :size size
                         :config (if (member config '(nil "")) "minimal" config)
                         :config_dir (or cfg "") :created (float-time))))
+        (when daemon (setq sess (plist-put sess :daemon t)))
         (drgnx-ui--save sess)
         sess))))
 
@@ -201,10 +203,11 @@ Unix socket paths are limited to ~108 bytes, so sockets never live under ROOT it
   (append '("env" "-i") env))
 
 (defun drgnx-ui-compositor-argv (sess)
-  (list "dbus-run-session" "--" "mutter" "--headless" "--wayland" "--no-x11"
-        "--wayland-display" (plist-get sess :name) "--virtual-monitor" (plist-get sess :size) "--"
-        (drgnx-ui-emacs-bin) "--init-directory" (expand-file-name "init" (plist-get sess :run))
-        "--fullscreen"))
+  (append (list "dbus-run-session" "--" "mutter" "--headless" "--wayland" "--no-x11"
+                "--wayland-display" (plist-get sess :name) "--virtual-monitor" (plist-get sess :size) "--"
+                (drgnx-ui-emacs-bin) "--init-directory" (expand-file-name "init" (plist-get sess :run)))
+          ;; A daemon has no frame until a client asks for one (`drgnx-ui-new-frame').
+          (if (eq (plist-get sess :daemon) t) '("--fg-daemon") '("--fullscreen"))))
 
 (defun drgnx-ui-launch-argv (sess)
   (append (list "systemd-run" "--user" "--quiet" "--collect" "--unit" (plist-get sess :name)
@@ -301,11 +304,12 @@ Unit names are global; another state root may run a session with the same name."
           ""))
     (drgnx-ui-journal-tail (plist-get sess :name))))
 
-(defun drgnx-ui-start (&optional config size timeout)
-  "Start a session (CONFIG minimal, gryphn or a directory); return its plist once ready."
+(defun drgnx-ui-start (&optional config size timeout daemon)
+  "Start a session (CONFIG minimal, gryphn or a directory); return its plist once ready.
+DAEMON non-nil: run Emacs as a daemon; open frames with `drgnx-ui-new-frame'."
   (let* ((root (drgnx-ui-state-root))
          (_ (make-directory root t))
-         (sess (drgnx-ui-prepare-run (drgnx-ui-next-name root) config size root))
+         (sess (drgnx-ui-prepare-run (drgnx-ui-next-name root) config size root daemon))
          (name (plist-get sess :name))
          (run (plist-get sess :run))
          (launcher (drgnx-ui-launcher)))
@@ -510,6 +514,30 @@ with optional :button, :count, :hold_ms.  Returns the API's reply."
 (defun drgnx-ui-state (sess)
   (drgnx-ui-call sess "(drgnx-uitest-api-state)"))
 
+(defun drgnx-ui-new-frame (sess &optional timeout)
+  "Open a frame in daemon session SESS the way a user does: `emacsclient -c'.
+Returns (:exit :output :client_ms :visible_ms :hooks) — HOOKS are the slowest frame-hook
+functions and hook totals measured in the session."
+  (drgnx-ui-call sess "(drgnx-uitest-api-time-frame-hooks)")
+  (let* ((before (plist-get (drgnx-ui-call sess "(drgnx-uitest-api-gui-frames)") :visible))
+         (process-environment (append (list (concat "WAYLAND_DISPLAY=" (plist-get sess :name))
+                                            (concat "XDG_RUNTIME_DIR=" (drgnx-ui-runtime-dir)))
+                                      process-environment))
+         (t0 (float-time))
+         (r (drgnx-ui--run-with-timeout (or timeout 30) (drgnx-ui--emacsclient) "-a" "false"
+                                        "-s" (plist-get sess :socket) "-c" "-n"))
+         (client-ms (round (* 1000 (- (float-time) t0))))
+         (deadline (+ t0 (or timeout 30)))
+         visible-ms)
+    (while (and (not visible-ms) (< (float-time) deadline))
+      (if (> (or (ignore-errors (plist-get (drgnx-ui-call sess "(drgnx-uitest-api-gui-frames)" 5) :visible)) 0)
+             before)
+          (setq visible-ms (round (* 1000 (- (float-time) t0))))
+        (sleep-for 0.02)))
+    (list :exit (if (eq (car r) 'timeout) :null (car r)) :output (string-trim (cadr r))
+          :client_ms client-ms :visible_ms (or visible-ms :null)
+          :hooks (plist-get (drgnx-ui-call sess "(drgnx-uitest-api-frame-hook-times)") :hooks))))
+
 (defun drgnx-ui-composite-argv (cap out)
   (append (list "magick" (plist-get cap :root))
           (cl-mapcan (lambda (c) (list (plist-get c :path) "-geometry"
@@ -588,7 +616,9 @@ with optional :button, :count, :hold_ms.  Returns the API's reply."
 ;;;; Command line
 
 (defconst drgnx-ui-usage "usage: drgnx ui COMMAND
-  start [--config minimal|gryphn|DIR] [--size WxH]   start a session, print it as JSON
+  start [--config minimal|gryphn|DIR] [--size WxH] [--daemon]
+                                                      start a session (--daemon: no frame yet)
+  frame NAME                                          open a frame in a daemon session (emacsclient -c)
   stop NAME | ls | reap                               stop one / list / stop all of this state root
   state NAME                                          frame, windows, child frames
   shot NAME [PATH]                                    screenshot (child frames composited)
@@ -599,16 +629,20 @@ with optional :button, :count, :hold_ms.  Returns the API's reply."
   test-ui                                             the --ui test tier
 See docs/harness.md.")
 
+(defconst drgnx-ui--boolean-flags '("--daemon") "CLI options that take no value.")
+
 (defun drgnx-ui--parse-args (args)
-  "Split ARGS into (POSITIONAL . OPTIONS); `--some-name VALUE' becomes :some_name VALUE."
+  "Split ARGS into (POSITIONAL . OPTIONS); `--some-name VALUE' becomes :some_name VALUE,
+a boolean flag (`drgnx-ui--boolean-flags') becomes :name t."
   (let (pos opts)
     (while args
       (let ((a (pop args)))
         (if (string-prefix-p "--" a)
-            (progn
-              (unless args (drgnx-ui--fail "%s needs a value" a))
-              (setq opts (plist-put opts (intern (concat ":" (string-replace "-" "_" (substring a 2))))
-                                    (pop args))))
+            (let ((key (intern (concat ":" (string-replace "-" "_" (substring a 2))))))
+              (if (member a drgnx-ui--boolean-flags)
+                  (setq opts (plist-put opts key t))
+                (unless args (drgnx-ui--fail "%s needs a value" a))
+                (setq opts (plist-put opts key (pop args)))))
           (push a pos))))
     (cons (nreverse pos) opts)))
 
@@ -624,7 +658,8 @@ See docs/harness.md.")
   (pcase-let* ((`(,pos . ,opts) (drgnx-ui--parse-args args))
                (name (car pos)))
     (pcase cmd
-      ("start" (drgnx-ui-start (plist-get opts :config) (plist-get opts :size)))
+      ("start" (drgnx-ui-start (plist-get opts :config) (plist-get opts :size) nil (plist-get opts :daemon)))
+      ("frame" (drgnx-ui-new-frame (drgnx-ui-own-session name)))
       ("stop" (drgnx-ui-stop name))
       ("ls" (drgnx-ui-ls))
       ("reap" (drgnx-ui-reap))

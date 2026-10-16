@@ -129,6 +129,16 @@ Reading a trace — one click on an Explorer folder in the gryphn layer:
 Start measurements from a quiet state: a leftover echo-area message that disappears on the first keystroke
 shrinks the echo area and resizes every window — the report rightly counts that as layout and collateral.
 
+## Daemon sessions and new frames
+
+`drgnx ui start --daemon` (MCP `ui_start {daemon: true}`) runs Emacs as `--fg-daemon` under the session's
+compositor: it is ready once its server is up, with no frame. `drgnx ui frame NAME` (MCP `ui_frame`) opens a
+frame the way a user does — `emacsclient -c -n` with the session's Wayland display — and reports `exit`,
+`output`, `client_ms` (until emacsclient returned), `visible_ms` (until the frame was mapped) and `hooks`: the
+slowest of `make-frame` itself, each named function on the frame hooks (`after-make-frame-functions`,
+`server-after-make-frame-hook`, …) and each hook's total run. Screenshots and state use the first visible
+graphical frame; without one, capture fails with a clear message.
+
 ## The harness does not perturb the session
 
 Code under test often hangs followers and debounces on change hooks — gryphn's Explorer follow is re-armed by
@@ -253,7 +263,8 @@ claude mcp add -s user drgnx-ui -- /path/to/drgnx/bin/drgnx ui mcp
 
 | Tool | Arguments | Returns |
 |---|---|---|
-| `ui_start` | `config` (minimal, gryphn, a directory), `size` | the session (name, socket, ready) |
+| `ui_start` | `config` (minimal, gryphn, a directory), `size`, `daemon` | the session (name, socket, ready) |
+| `ui_frame` | `session` (a daemon session) | `{exit, output, client_ms, visible_ms, hooks}` |
 | `ui_stop` | `session` | `{stopped}` |
 | `ui_list` | — | sessions of the state root |
 | `ui_state` | `session` | frame, windows, minibuffer, child frames, busy |

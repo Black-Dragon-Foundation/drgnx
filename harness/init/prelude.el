@@ -106,7 +106,7 @@ and driven (the initial frame exists by now)."
 
 (defun drgnx-ui--when-visible ()
   "Once the root frame is mapped: write ready.json; in test mode, run the suite."
-  (when (frame-visible-p (drgnx-uitest-root-frame))
+  (when (or (daemonp) (frame-visible-p (drgnx-uitest-root-frame)))   ; a daemon has no frame yet
     (cancel-timer drgnx-ui--ready-timer)
     (let ((tmp (expand-file-name "ready.json.tmp" drgnx-ui-run)))
       (with-temp-file tmp

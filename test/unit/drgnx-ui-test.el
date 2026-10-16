@@ -196,3 +196,15 @@
   (should-not (drgnx-ui--group-ours-p "0" "/any/run"))
   (should-not (drgnx-ui--group-ours-p nil "/any/run"))
   (should-not (drgnx-ui--group-ours-p (number-to-string (emacs-pid)) "/not/this/run/drgnx-ui-1")))
+
+(ert-deftest drgnx-ui/daemon-session-argv ()
+  (drgnx-ui-test--with-state
+    (let* ((s (drgnx-ui-prepare-run "drgnx-ui-8" nil "1600x900" root t))
+           (argv (drgnx-ui-compositor-argv s)))
+      (should (eq (plist-get s :daemon) t))
+      (should (member "--fg-daemon" argv))
+      (should-not (member "--fullscreen" argv)))))
+
+(ert-deftest drgnx-ui/cli-boolean-flags ()
+  (should (equal (drgnx-ui--parse-args '("--daemon" "--config" "gryphn"))
+                 '(nil :daemon t :config "gryphn"))))
