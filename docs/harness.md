@@ -100,3 +100,14 @@ The report:
 
 Start measurements from a quiet state: a leftover echo-area message that disappears on the first keystroke
 shrinks the echo area and resizes every window — the report rightly counts that as layout and collateral.
+
+## Guard
+
+`harness/drgnx-jank-guard.el` is on in every session. It records (never blocks) calls to `select-window`,
+`set-window-start`, `set-window-point`, `recenter`, `split-window` and `delete-window` made **from a timer** —
+the pattern behind "the layout jumps on its own" (invariant I9). Timer context is detected by wrapping
+`timer-event-handler`; commands executed by a command loop nested inside a timer (a minibuffer opened from a
+timer, a test's `drgnx-uitest-run`) are not timer code, so `command-execute` clears the flag.
+`select-window` with NORECORD (what `with-selected-window` does) is a temporary selection and is not
+recorded. Each entry names the function, the window and the timer's function. Hook context (e.g.
+`buffer-list-update-hook`) is covered by the workbench change bus in M3.
