@@ -238,3 +238,11 @@
       (should (member (concat "DRGNX_CONFIG_DIR=" (expand-file-name "drgnx-config" (plist-get s :run))) env))
       (should (member (concat "XDG_STATE_HOME=" (expand-file-name "state" (plist-get s :run))) env))
       (drgnx-ui-stop "drgnx-ui-1"))))
+
+(ert-deftest drgnx-ui/two-monitors ()
+  ;; mutter gets one --virtual-monitor per monitor (multi-window tests).
+  (drgnx-ui-test--with-state
+    (let* ((s (drgnx-ui-prepare-run "drgnx-ui-7" nil "1024x768" root nil 2))
+           (argv (drgnx-ui-compositor-argv s)))
+      (should (= 2 (seq-count (lambda (a) (equal a "--virtual-monitor")) argv)))
+      (should (= 2 (plist-get (drgnx-ui--parse-json (with-temp-buffer (insert-file-contents (expand-file-name "session.json" (plist-get s :run))) (buffer-string))) :monitors))))))

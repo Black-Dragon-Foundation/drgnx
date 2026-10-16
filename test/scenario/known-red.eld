@@ -10,4 +10,8 @@
   drgnx-scenario/explorer-cross-project-keeps-root
   drgnx-scenario/buffers-header-survives-refresh
   drgnx-scenario/buffers-scroll-kept
-  drgnx-scenario/buffers-close-hits-row))
+  drgnx-scenario/buffers-close-hits-row
+  ;; M3b: the change during a held click snaps the selection back; treemacs shows no new folder
+  ;; until it refreshes (file watching off, as gryphn runs it).
+  drgnx-scenario/explorer-change-during-hold-is-still-a-click
+  drgnx-scenario/explorer-external-change-keeps-the-selection))

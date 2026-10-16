@@ -154,9 +154,10 @@ Unix socket paths are limited to ~108 bytes, so sockets never live under ROOT it
 (defun drgnx-ui--save (sess)
   (drgnx-ui--write (expand-file-name "session.json" (plist-get sess :run)) (drgnx-ui--json sess)))
 
-(defun drgnx-ui-prepare-run (name &optional config size root daemon)
+(defun drgnx-ui-prepare-run (name &optional config size root daemon monitors)
   "Create the run directory for session NAME under ROOT; return the session plist.
-DAEMON non-nil: Emacs runs as a daemon (no frame until `drgnx-ui-new-frame')."
+DAEMON non-nil: Emacs runs as a daemon (no frame until `drgnx-ui-new-frame').
+MONITORS: how many virtual monitors of SIZE (default 1)."
   (let ((size (or size "1600x900")))
     (unless (string-match-p "\\`[0-9]+x[0-9]+\\'" size)
       (drgnx-ui--fail "size must be WxH, got %S" size))
@@ -184,6 +185,7 @@ DAEMON non-nil: Emacs runs as a daemon (no frame until `drgnx-ui-new-frame')."
                         :config (if (member config '(nil "")) "minimal" config)
                         :config_dir (or cfg "") :created (float-time))))
         (when daemon (setq sess (plist-put sess :daemon t)))
+        (when (and (integerp monitors) (> monitors 1)) (setq sess (plist-put sess :monitors monitors)))
         (drgnx-ui--save sess)
         sess))))
 
@@ -210,8 +212,9 @@ DAEMON non-nil: Emacs runs as a daemon (no frame until `drgnx-ui-new-frame')."
 
 (defun drgnx-ui-compositor-argv (sess)
   (append (list "dbus-run-session" "--" "mutter" "--headless" "--wayland" "--no-x11"
-                "--wayland-display" (plist-get sess :name) "--virtual-monitor" (plist-get sess :size) "--"
-                (drgnx-ui-emacs-bin) "--init-directory" (expand-file-name "init" (plist-get sess :run)))
+                "--wayland-display" (plist-get sess :name))
+          (cl-loop repeat (or (plist-get sess :monitors) 1) append (list "--virtual-monitor" (plist-get sess :size)))
+          (list "--" (drgnx-ui-emacs-bin) "--init-directory" (expand-file-name "init" (plist-get sess :run)))
           ;; A daemon has no frame until a client asks for one (`drgnx-ui-new-frame').
           (if (eq (plist-get sess :daemon) t) '("--fg-daemon") '("--fullscreen"))))
 
@@ -310,12 +313,13 @@ Unit names are global; another state root may run a session with the same name."
           ""))
     (drgnx-ui-journal-tail (plist-get sess :name))))
 
-(defun drgnx-ui-start (&optional config size timeout daemon)
+(defun drgnx-ui-start (&optional config size timeout daemon monitors)
   "Start a session (CONFIG minimal, gryphn or a directory); return its plist once ready.
-DAEMON non-nil: run Emacs as a daemon; open frames with `drgnx-ui-new-frame'."
+DAEMON non-nil: run Emacs as a daemon; open frames with `drgnx-ui-new-frame'.  MONITORS: how
+many virtual monitors (default 1)."
   (let* ((root (drgnx-ui-state-root))
          (_ (make-directory root t))
-         (sess (drgnx-ui-prepare-run (drgnx-ui-next-name root) config size root daemon))
+         (sess (drgnx-ui-prepare-run (drgnx-ui-next-name root) config size root daemon monitors))
          (name (plist-get sess :name))
          (run (plist-get sess :run))
          (launcher (drgnx-ui-launcher)))

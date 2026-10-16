@@ -211,3 +211,32 @@ settled within 250 ms."
                   (should (equal (drgnx-ui-call sess2 q) first)))
               (drgnx-ui-stop (plist-get s2 :name)))))
       (delete-directory root t))))
+
+(ert-deftest drgnx-inv/two-monitors ()
+  ;; A two-monitor session, a window on each frame: chrome by role (I3), the sidebar ±0 px over five
+  ;; toggles (I2), keys with no collateral move and no guard violation (I1, I9), on both windows.
+  (let* ((root (make-temp-file "drgnx-2mon" t))
+         (process-environment (cons (concat "DRGNX_UI_STATE=" root) process-environment))
+         (s (drgnx-ui-start "drgnx" "1280x800" 30 nil 2))
+         (sess (drgnx-ui-own-session (plist-get s :name))))
+    (unwind-protect
+        (progn
+          (should (= 2 (plist-get (drgnx-ui-call sess "(drgnx-uitest--json (list :n (length (display-monitor-attributes-list))))") :n)))
+          (drgnx-ui-call sess "(progn (defvar kx-frames (list (selected-frame) (make-frame))) (drgnx-uitest--json (list :ok t)))")
+          (drgnx-ui-measure sess nil)
+          (dotimes (i 2)
+            (drgnx-ui-call sess (format "(progn (select-frame-set-input-focus (nth %d kx-frames)) (drgnx-uitest--json (list :ok t)))" i))
+            (drgnx-ui-measure sess (list (list :keys "C-b")))
+            (let* ((q "(drgnx-uitest--json (let* ((f (selected-frame)) (e (car (drgnx-groups-list f))) (d (car (drgnx-wb--dock-windows f))))
+                         (list :editor (vector (window-tab-line-height e) (window-header-line-height e) (window-mode-line-height e))
+                               :dock (if d (window-pixel-width d) 0))))")
+                   (first (drgnx-ui-call sess q)))
+              (should (seq-every-p #'cl-plusp (plist-get first :editor)))
+              (should (> (plist-get first :dock) 0))
+              (dotimes (_ 5) (drgnx-ui-measure sess (list (list :keys "C-b") (list :keys "C-b"))))
+              (should (equal (drgnx-ui-call sess q) first))
+              (let ((r (drgnx-ui-measure sess (list (list :keys "C-S-e") (list :keys "<down>") (list :keys "<escape>")))))
+                (should (equal (list i (plist-get r :collateral)) (list i [])))
+                (should (= 0 (plist-get r :guard_violations)))))))
+      (drgnx-ui-stop (plist-get s :name))
+      (delete-directory root t))))

@@ -41,7 +41,8 @@ guard_violations (window moves from timers).")
          :description "Start a headless GUI Emacs session for testing (never the user's Emacs). config: minimal (stock Emacs), gryphn, or a config directory (read-only; state stays in the session)."
          :inputSchema (drgnx-ui-mcp--schema '(:config (:type "string")
                                               :size (:type "string" :description "WxH, default 1600x900")
-                                              :daemon (:type "boolean" :description "Run Emacs as a daemon: no frame until ui_frame"))))
+                                              :daemon (:type "boolean" :description "Run Emacs as a daemon: no frame until ui_frame")
+                                              :monitors (:type "integer" :description "Virtual monitors of that size (default 1)"))))
    (list :name "ui_frame"
          :description "Open a frame in a daemon session the way a user does (emacsclient -c); returns exit status, client_ms, visible_ms and the slowest frame hooks."
          :inputSchema (drgnx-ui-mcp--schema drgnx-ui-mcp--session '("session")))
@@ -130,7 +131,7 @@ guard_violations (window moves from timers).")
 
 (defconst drgnx-ui-mcp--calls
   `(("ui_start" . ,(lambda (a) (drgnx-ui-mcp--text (drgnx-ui-start (plist-get a :config) (plist-get a :size) nil
-                                                                    (eq (plist-get a :daemon) t)))))
+                                                                    (eq (plist-get a :daemon) t) (plist-get a :monitors)))))
     ("ui_frame" . ,(lambda (a) (drgnx-ui-mcp--text (drgnx-ui-new-frame (drgnx-ui-mcp--own a)))))
     ("ui_stop" . ,(lambda (a) (drgnx-ui-mcp--text (drgnx-ui-stop (plist-get a :session)))))
     ("ui_list" . ,(lambda (_) (drgnx-ui-mcp--text (drgnx-ui-ls))))

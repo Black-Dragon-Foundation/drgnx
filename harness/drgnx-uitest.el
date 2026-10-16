@@ -239,6 +239,7 @@ else `other' (process output, redisplay, …)."
 
 (defun drgnx-uitest-record--after-command ()
   (drgnx-uitest-record--snapshot (or drgnx-uitest-record--command (format "command:%s" this-command)))
+  (drgnx-uitest--note-target (selected-window))      ; a window the input moved focus to is aimed at
   (setq drgnx-uitest-record--command nil))
 
 (defconst drgnx-uitest-record--harness-timers
@@ -360,6 +361,7 @@ aimed at (their changes are not collateral), LAST-INPUT the time of the last eve
         drgnx-uitest-record--sigs (copy-tree (drgnx-uitest-record--signatures))
         drgnx-uitest-record--initial (copy-tree drgnx-uitest-record--sigs))
   (drgnx-uitest--note-target (frame-selected-window (drgnx-uitest-root-frame)))
+  (drgnx-uitest--note-target (selected-window))      ; the window with focus (a second frame's too)
   (add-hook 'window-scroll-functions #'drgnx-uitest-record--on-scroll)
   (add-hook 'pre-redisplay-functions #'drgnx-uitest-record--on-redisplay)
   (setq drgnx-uitest-record--command nil)
@@ -382,6 +384,7 @@ aimed at (their changes are not collateral), LAST-INPUT the time of the last eve
   (setq drgnx-uitest-record--command nil)
   (advice-remove 'timer-event-handler #'drgnx-uitest-record--after-timer)
   (drgnx-uitest--note-target (frame-selected-window (drgnx-uitest-root-frame)))
+  (drgnx-uitest--note-target (selected-window))      ; the window with focus (a second frame's too)
   (let ((new (- (length drgnx-jank-guard-log) drgnx-uitest-record--guard0)))
     (append (drgnx-uitest-jank-report (reverse drgnx-uitest-record--log) drgnx-uitest-record--t0
                                       drgnx-uitest-record--initial drgnx-uitest--targets
