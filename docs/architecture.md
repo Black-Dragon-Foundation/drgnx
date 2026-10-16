@@ -12,7 +12,7 @@ drgnx is an Emacs Lisp framework with two core primitives that every module plug
 
 Around them: a module system (`drgnx-module-define`, staged loading, per-module error isolation, doctor
 checks, settings), reproducible package management on package.el (lockfile, generations, rollback, network
-access only in batch), the `drgnx` CLI, the headless UI harness with MCP tools for agents, a provider
+access only in batch), the `drgnx` CLI, the headless UI harness with MCP tools for agents ([harness.md](harness.md); all tooling is batch Emacs Lisp), a provider
 registry for AI features, and the semantic search module.
 
 Layers, lowest to highest: Emacs built-ins → core → workbench → modules → external modules → user config

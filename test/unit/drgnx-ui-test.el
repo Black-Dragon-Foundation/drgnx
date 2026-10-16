@@ -182,3 +182,11 @@
   (drgnx-ui-test--with-state
     (write-region "" nil (expand-file-name "drgnx-ui-1" runtime))
     (should (equal (drgnx-ui-next-name root) "drgnx-ui-2"))))
+
+(ert-deftest drgnx-ui/stop-removes-the-wayland-display-socket ()
+  (drgnx-ui-test--with-state
+    (drgnx-ui-prepare-run "drgnx-ui-4")
+    (dolist (f '("drgnx-ui-4" "drgnx-ui-4.lock")) (write-region "" nil (expand-file-name f runtime)))
+    (drgnx-ui-stop "drgnx-ui-4")
+    (should-not (file-exists-p (expand-file-name "drgnx-ui-4" runtime)))
+    (should-not (file-exists-p (expand-file-name "drgnx-ui-4.lock" runtime)))))

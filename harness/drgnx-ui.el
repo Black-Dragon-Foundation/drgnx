@@ -334,6 +334,12 @@ OVERRIDE (from $DRGNX_UI_LAUNCHER) wins."
     (when (drgnx-ui--group-alive-p pgid)
       (drgnx-ui--run "kill" "-KILL" "--" (concat "-" pgid)))))
 
+(defun drgnx-ui--remove-wayland-display (name)
+  "Remove mutter's Wayland socket and lock for display NAME; a killed mutter leaves them behind."
+  (dolist (f (list name (concat name ".lock")))
+    (let ((path (expand-file-name f (drgnx-ui-runtime-dir))))
+      (when (file-exists-p path) (delete-file path)))))
+
 (defun drgnx-ui-stop (name)
   "Stop session NAME and remove its run and socket directories."
   (drgnx-ui--check-name name)
@@ -344,6 +350,7 @@ OVERRIDE (from $DRGNX_UI_LAUNCHER) wins."
     (if (equal (plist-get sess :launcher) "detached")
         (drgnx-ui--stop-group (or (plist-get sess :pgid) (drgnx-ui--read-pgid run)))
       (drgnx-ui--run "systemctl" "--user" "stop" name))
+    (drgnx-ui--remove-wayland-display name)
     (when (file-directory-p run) (delete-directory run t))
     (when (file-directory-p sock) (delete-directory sock t))
     (ignore-errors (delete-directory (file-name-directory sock))))   ; the per-root dir, once empty
@@ -502,6 +509,7 @@ with optional :button, :count, :hold_ms.  Returns the API's reply."
                      (shell-quote-argument (expand-file-name "session.log" run))))))
     (when (eq (car r) 'timeout) (drgnx-ui--kill-group pgid-file))
     (drgnx-ui--run "pkill" "-KILL" "-f" name)          ; belt and braces
+    (drgnx-ui--remove-wayland-display name)
     (delete-directory (drgnx-ui-socket-dir name) t)
     (ignore-errors (delete-directory (drgnx-ui-socket-dir "")))
     (list (if (eq (car r) 'timeout) 124 (car r))

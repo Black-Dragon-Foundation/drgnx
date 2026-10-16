@@ -16,6 +16,7 @@
                              (call-process "pgrep" nil t nil "-f" "--" (file-name-nondirectory run))
                              (string-trim (buffer-string)))
                            ""))
+            (should-not (file-exists-p (expand-file-name (file-name-nondirectory run) (drgnx-ui-runtime-dir))))
             (delete-directory run t)))
       (delete-directory tmp t))))
 

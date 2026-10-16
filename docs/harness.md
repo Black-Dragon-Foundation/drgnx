@@ -230,3 +230,14 @@ A typical agent loop: `ui_start` → `ui_screenshot` (look) → `ui_click`/`ui_k
 call naming `server` or another Emacs's socket returns an error starting with `refused`. Failures are tool
 results with `isError`, never a crashed server. `harness/drgnx-ui-mcp.el` also has a small client
 (`drgnx-ui-mcp-client-start/-request/-tool/-stop`) used by the tests and handy for scripts.
+
+## Known limits
+
+- The recorder polls window signatures once per 40 ms tick: a move and its snap-back within one tick are not
+  seen (M2 adds hooks for that). Scrolls are also caught by `window-scroll-functions`.
+- The guard sees window moves from timers, not from hooks (`buffer-list-update-hook`, …) — the workbench change
+  bus in M3 covers those.
+- Input is synthetic (no real pointer hover or OS-level drag yet); clicks target the root frame.
+- Wayland via mutter only; X11 (Xvfb) and tiling WMs (sway headless) come later. macOS needs a different capture
+  backend (`x-export-frames` exists only on Cairo builds).
+- A GUI run's exit status is only pass/fail (mutter); `results.json` has the details.

@@ -41,6 +41,7 @@
         (should (drgnx-live--nonblank-p (plist-get shot :path))))
       (drgnx-ui-stop name)
       (should-not (drgnx-ui-unit-active-p name))
+      (should-not (file-exists-p (expand-file-name name (drgnx-ui-runtime-dir))))   ; mutter's Wayland socket
       (should (equal (drgnx-live--processes (concat "--wayland-display " name)) "")))))
 
 (ert-deftest drgnx-live/init-error-still-ready ()
