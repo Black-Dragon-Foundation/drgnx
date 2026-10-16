@@ -288,8 +288,8 @@ results with `isError`, never a crashed server. `harness/drgnx-ui-mcp.el` also h
 
 ## Known limits
 
-- The recorder polls window signatures once per 40 ms tick: a move and its snap-back within one tick are not
-  seen (M2 adds hooks for that). Scrolls are also caught by `window-scroll-functions`.
+- Changes made by process filters and sentinels (e.g. asynchronous git status in a file tree) are attributed to
+  `other`: Emacs calls those from C, so they cannot be wrapped. Commands and timers are always named.
 - The guard sees window moves from timers, not from hooks (`buffer-list-update-hook`, …) — the workbench change
   bus in M3 covers those.
 - Input is synthetic (no real pointer hover or OS-level drag yet); clicks target the root frame.
