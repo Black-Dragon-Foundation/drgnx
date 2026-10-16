@@ -51,14 +51,56 @@ test_container() { # [--ui] — the batch (or GUI) tier inside a fedora:45 / Ema
   "$rt" run --rm ${args[@]+"${args[@]}"} -v "$mount" -w /src "$image" "${cmd[@]}"
 }
 
+INSTALL_IMAGES=( # name=image; source builds first (slow), then distribution packages
+  fedora-44=registry.fedoraproject.org/fedora:44
+  debian-trixie=docker.io/library/debian:trixie
+  ubuntu-26.04=docker.io/library/ubuntu:26.04
+  fedora-45=registry.fedoraproject.org/fedora:45
+  archlinux=docker.io/library/archlinux:latest
+)
+
+test_install() { # [NAME…] — install.sh end to end in fresh containers (slow: source builds take ~10 min each)
+  local rt names=("$@") entry name image log logs failed=() known=()
+  for entry in "${INSTALL_IMAGES[@]}"; do known+=("${entry%%=*}"); done
+  ((${#names[@]})) || names=("${known[@]}")
+  for name in "${names[@]}"; do
+    [[ " ${known[*]} " == *" $name "* ]] || { echo "drgnx: unknown image $name (known: ${known[*]})" >&2; return 2; }
+  done
+  rt="$(env_eval '(drgnx-env-container-runtime)')"
+  [ -n "$rt" ] || { echo "drgnx: no container runtime found (podman, docker, nerdctl); set DRGNX_CONTAINER" >&2; return 1; }
+  logs="${XDG_STATE_HOME:-$HOME/.local/state}/drgnx/install-tests"
+  # A snapshot of the working tree (edits during a run cannot reach it), committed and bundled so the
+  # containers clone and update drgnx the way users do: DRGNX_INSTALL_REPO=/src/drgnx.bundle.
+  local snap="$logs/src"
+  rm -rf "$snap" && mkdir -p "$snap"
+  (cd "$here" && git ls-files -z -co --exclude-standard | tar --null -T - -cf -) | tar -C "$snap" -xf -
+  git -C "$snap" init -q -b main
+  git -C "$snap" add -A
+  git -C "$snap" -c user.name=drgnx-test -c user.email=test@drgnx.invalid commit -q -m snapshot
+  git -C "$snap" bundle create -q "$snap/drgnx.bundle" main
+  for name in "${names[@]}"; do
+    for entry in "${INSTALL_IMAGES[@]}"; do [[ "${entry%%=*}" == "$name" ]] && image="${entry#*=}"; done
+    log="$logs/$name.log"
+    printf '%-14s %s … ' "$name" "$image" >&2
+    if timeout 3600 "$rt" run --rm -v "$snap:/src:ro$([ "$rt" = podman ] && echo ,Z)" "$image" \
+         bash /src/test/install/in-container.sh >"$log" 2>&1; then
+      echo "ok" >&2
+    else
+      echo "FAILED (log: $log)" >&2; failed+=("$name")
+    fi
+  done
+  ((${#failed[@]} == 0)) || { echo "install tests failed: ${failed[*]}" >&2; return 1; }
+}
+
 cmd_test() {
   case "${1:-}" in
     "") test_batch ;;
+    --install) shift; test_install "$@" ;;
     --ui) ui test-ui ;;
     --scenario) shift; ui test-scenario "$@" ;;
     --container) shift; test_container "$@" ;;
     --podman) shift; DRGNX_CONTAINER=podman test_container "$@" ;;
-    *) echo "usage: drgnx test [--ui | --scenario [--config C] | --container [--ui]]" >&2; exit 2 ;;
+    *) echo "usage: drgnx test [--ui | --scenario [--config C] | --container [--ui] | --install [NAME…]]" >&2; exit 2 ;;
   esac
 }
 
@@ -73,6 +115,9 @@ usage: drgnx doctor [--json] [--dev]
        drgnx test --container [--ui]
                                the same inside a fedora:45 / Emacs 31.1 container
                                (podman, else docker, else nerdctl; DRGNX_CONTAINER overrides)
+       drgnx test --install [NAME…]
+                               install.sh end to end in fresh distribution containers (slow;
+                               names: fedora-44 debian-trixie ubuntu-26.04 fedora-45 archlinux)
        drgnx ui COMMAND        headless GUI Emacs sessions: start, stop, ls, reap, state, shot,
                                click, keys, type, measure (drgnx ui --help; docs/harness.md)
 USAGE
