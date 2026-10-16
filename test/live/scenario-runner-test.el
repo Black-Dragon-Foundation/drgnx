@@ -16,3 +16,13 @@
   (let ((out (with-output-to-string
                (should (= (drgnx-ui-run-scenarios "minimal" (expand-file-name "scenario-error" drgnx-live--fixtures)) 1)))))
     (should (string-search "RED" out))))
+
+(ert-deftest drgnx-live/frame-scenario-within-budget ()
+  (let ((out (with-output-to-string
+               (should (= (drgnx-ui-run-scenarios "minimal" (expand-file-name "scenario-frames-ok" drgnx-live--fixtures)) 0)))))
+    (should (string-match-p "green +drgnx-scenario/frame-from-daemon-fast (median [0-9]+ ms" out))))
+
+(ert-deftest drgnx-live/frame-scenario-over-budget-is-red ()
+  (let ((out (with-output-to-string
+               (should (= (drgnx-ui-run-scenarios "minimal" (expand-file-name "scenario-frames-tight" drgnx-live--fixtures)) 1)))))
+    (should (string-match-p "RED +drgnx-scenario/frame-from-daemon-fast: median [0-9]+ ms > budget 1 ms" out))))

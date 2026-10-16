@@ -620,6 +620,41 @@ with EXTRA-ENV (\"K=V\" strings).  Return (RC RESULTS RUN)."
   (if (member config '("minimal" "gryphn" "drgnx")) config
     (file-name-nondirectory (directory-file-name config))))
 
+(defun drgnx-ui--read-eld (file)
+  (and (file-exists-p file) (with-temp-buffer (insert-file-contents file) (read (current-buffer)))))
+
+(defun drgnx-ui--frame-scenario (config dir)
+  "The new-frame budget of suite DIR (its frames.eld) on CONFIG: open frames in a daemon
+session with emacsclient -c and compare the median time-to-visible with the budget.
+Prints the outcome; returns non-nil if it was as expected."
+  (let* ((spec (drgnx-ui--read-eld (expand-file-name "frames.eld" dir)))
+         (budget (alist-get 'budget-ms spec 500))
+         (n (alist-get 'frames spec 3))
+         (name 'drgnx-scenario/frame-from-daemon-fast)
+         (known (memq name (cdr (assq (intern (drgnx-ui--config-name config))
+                                      (drgnx-ui--read-eld (expand-file-name "known-red.eld" dir))))))
+         (s (drgnx-ui-start config nil 60 t))
+         times hooks)
+    (unwind-protect
+        (dotimes (_ n)
+          (let ((f (drgnx-ui-new-frame (drgnx-ui-own-session (plist-get s :name)))))
+            (push (plist-get f :visible_ms) times)
+            (unless hooks (setq hooks (plist-get f :hooks)))))   ; the first frame's
+      (drgnx-ui-stop (plist-get s :name)))
+    (let* ((ms (sort (seq-filter #'numberp times) #'<))
+           (median (and ms (nth (/ (length ms) 2) ms)))
+           (within (and median (<= median budget)))
+           (detail (format "median %s ms %s budget %d ms (frames: %s)" (or median "?") (if within "<=" ">") budget
+                           (mapconcat (lambda (v) (format "%s" v)) (reverse times) ", "))))
+      (cond
+       ((and within (not known)) (princ (format "  green        %s (%s)\n" name detail)) t)
+       ((and (not within) known) (princ (format "  red (known)  %s: %s\n" name detail)))
+       (within (princ (format "  RED          %s: known red, but %s\n" name detail)) nil)
+       (t (princ (format "  RED          %s: %s\n" name detail)) nil))
+      (unless within
+        (seq-doseq (h hooks) (princ (format "                 first frame: %s %d ms\n" (plist-get h :name) (plist-get h :ms)))))
+      (eq (and within t) (not known)))))
+
 (defun drgnx-ui-run-scenarios (&optional config dir)
   "`drgnx test --scenario': run the scenario suite DIR (default test/scenario) in a session of
 CONFIG (default drgnx) and print each scenario: green, red (known) with its trace, RED
@@ -654,6 +689,8 @@ CONFIG (default drgnx) and print each scenario: green, red (known) with its trac
                 (princ (format "  RED          %s: %s\n" (plist-get f :name) (plist-get f :condition)))))
             (let ((ok (and (eq rc 0) (null fails))))
               (when ok (delete-directory run t))
+              (when (file-exists-p (expand-file-name "frames.eld" dir))
+                (setq ok (and (drgnx-ui--frame-scenario config dir) ok)))
               (princ (format "scenario tier: %s in %.1fs\n" (if ok "as expected" "UNEXPECTED RESULTS")
                              (- (float-time) t0)))
               (if ok 0 1))))))))

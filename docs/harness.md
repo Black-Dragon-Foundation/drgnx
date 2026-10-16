@@ -319,6 +319,11 @@ scenarios on gryphn:
 scenario tier: as expected in 41.2s
 ```
 
+A suite with a `frames.eld` (`((budget-ms . 500) (frames . 3))`) also gets `drgnx-scenario/frame-from-daemon-fast`,
+run by the controller after the in-session suite: frames are opened in a daemon session of the configuration with
+`emacsclient -c`, and the median time-to-visible must stay within the budget (it can be a known red like any
+other scenario; when red, the first frame's slowest hooks are listed).
+
 Helpers (`harness/drgnx-scenario.el`): `drgnx-scenario-check OK EXPLANATION REPORT`,
 `drgnx-scenario-expected 'NAME` (for `:expected-result`), `drgnx-scenario-with-fixture (ROOT [KIND])` (a fresh
 git repo, removed afterwards), `drgnx-scenario-load-driver`. The results file adds `tests` (every test with its

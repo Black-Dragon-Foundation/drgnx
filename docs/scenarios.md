@@ -32,6 +32,11 @@ Each red below is quoted from its trace (times from the start of the measurement
 
 ## New frames
 
+`frame-from-daemon-fast` runs in the controller after the in-session suite (because it starts a daemon
+session itself) when the suite has a `frames.eld` budget: it opens three frames with `emacsclient -c` and
+compares the median time-to-visible with the budget (500 ms, from the roadmap). On gryphn it is **green**:
+466, 202 and 400 ms (median 400 ms).
+
 The reported 2.1 s for a new frame does **not** reproduce in an isolated session: in a gryphn daemon session,
 `emacsclient -c` makes the first frame visible after 519 ms (`make-frame` 324 ms, mostly first-GUI-frame setup)
 and later ones after 360–400 ms (`spacious-padding` up to 55 ms). The gryphn configuration alone is therefore
