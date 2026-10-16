@@ -1,0 +1,30 @@
+;; Vim key profile — command id → keys (docs/keys.md).  Commands are on the leader key (SPC) in
+;; evil's normal state, bound once evil loads (the evil module, M4).  :claims are Vim's own
+;; normal-mode keys, so a layer that rebinds one of them is reported.
+(:name "Vim"
+ :doc "Vim / Neovim keys (evil), commands on the SPC leader"
+ :map (evil . evil-normal-state-map)
+ :bind ((palette "SPC SPC")
+        (keys-sheet "SPC ?")
+        (keyboard-profile "SPC h k")
+        (open-file "SPC f f")
+        (save-file "SPC f s")
+        (line-numbers "SPC u l")
+        (modules-report "SPC h m"))
+ :claims ((editing "C-o" "jump back")
+          (editing "C-w" "window commands (prefix)")
+          (editing "C-v" "visual block")
+          (editing "C-a" "increment number")
+          (editing "C-x" "decrement number")
+          (editing "C-u" "scroll up")
+          (editing "C-d" "scroll down")
+          (editing "C-r" "redo")
+          (editing "C-e" "scroll line down")
+          (editing "C-y" "scroll line up")
+          (editing "C-f" "page down")
+          (editing "C-b" "page up")
+          (editing "C-n" "next line")
+          (editing "C-p" "previous line")
+          (editing "C-t" "tag stack back")
+          (editing "C-z" "emacs state")
+          (editing "C-]" "jump to tag")))

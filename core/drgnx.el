@@ -14,6 +14,7 @@
 (require 'drgnx-registry)
 (require 'drgnx-surfaces)
 (require 'drgnx-palette)
+(require 'drgnx-keys)
 (require 'drgnx-modules)
 
 (defgroup drgnx nil "drgnx, a workbench-first Emacs framework." :group 'convenience)
