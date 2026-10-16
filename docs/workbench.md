@@ -147,7 +147,8 @@ diff and log) open in the **other group** — the one you used last besides this
 
 ### The layout survives a restart
 
-When Emacs exits, the workbench is saved to `$XDG_STATE_HOME/drgnx/workbench.eld` (`~/.local/state/…`): the left
+When Emacs exits, the workbench of every window is saved to `$XDG_STATE_HOME/drgnx/workbench.eld`
+(`~/.local/state/…`) and the other windows are opened again at start (your window manager places them): the left
 dock, the panel and its tab, the right dock — each with its pixel size — the editor groups with their sizes, tabs and
 shown files, and the Explorer's folders. At the first graphical frame it comes back as it was
 (`drgnx-persist-restore-on-start`) — with a daemon, in the first `emacsclient -c` frame; closing the last graphical

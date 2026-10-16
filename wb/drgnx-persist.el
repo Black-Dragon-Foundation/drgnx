@@ -20,7 +20,8 @@
   :type 'boolean :group 'drgnx)
 
 (defvar drgnx-persist-file nil "The state file; nil means $XDG_STATE_HOME/drgnx/workbench.eld.")
-(defconst drgnx-persist-version 1 "Format of the state file.")
+(defconst drgnx-persist-version 2 "Format of the state file (1: one window; 2: :frames, one per window).")
+(declare-function drgnx-frame-role "drgnx-frames")
 (defvar drgnx-persist--pending)
 (defvar drgnx-explorer--roots)
 (declare-function drgnx-explorer-set-roots "drgnx-explorer")
@@ -39,7 +40,7 @@
   "FRAME's workbench as a plist (see the commentary)."
   (with-selected-frame (or frame (selected-frame))
     (let ((dock (car (drgnx-wb--dock-windows))))
-      (list :version drgnx-persist-version
+      (list :role (if (fboundp 'drgnx-frame-role) (drgnx-frame-role) 'main)
             :left (list :shown (and dock t)
                         :px (if dock (window-pixel-width dock) (frame-parameter nil 'drgnx-wb-dock-px)))
             :panel (drgnx-persist--area 'panel)
@@ -51,11 +52,21 @@
                                               :shown (buffer-file-name (window-buffer g))))
                             (drgnx-groups-list))))))
 
-(defun drgnx-persist-save (&optional file)
-  "Write the selected frame's workbench to FILE (default: `drgnx-persist-file').
-Tabs not visited yet (restored at idle) are kept."
+(defun drgnx-persist--frames ()
+  "The windows to save: the main (or selected graphical) one first, then the other graphical ones."
+  (let* ((main (or (seq-find (lambda (f) (eq (frame-parameter f 'drgnx-frame-role) 'main)) (frame-list))
+                   (drgnx-persist--gui-frame) (selected-frame)))
+         (others (seq-filter (lambda (f) (and (not (eq f main)) (not (frame-parent f)) (display-graphic-p f)))
+                             (frame-list))))
+    (cons main others)))
+
+(defun drgnx-persist-save (&optional file frames)
+  "Write the workbench of FRAMES (default: every window, the main one first) to FILE (default:
+`drgnx-persist-file').  Tabs not visited yet (restored at idle) are kept."
   (interactive)
-  (let ((file (or file (drgnx-persist--file))) (state (drgnx-persist-state)))
+  (let ((file (or file (drgnx-persist--file)))
+        (state (list :version drgnx-persist-version
+                     :frames (mapcar #'drgnx-persist-state (or frames (drgnx-persist--frames))))))
     (make-directory (file-name-directory file) t)
     (with-temp-file file
       (let ((print-length nil) (print-level nil)) (prin1 state (current-buffer))))
@@ -104,57 +115,71 @@ no remote files, only safe local variables, no large-file question; nil if it ca
       t))))
 
 (defun drgnx-persist-restore (&optional file)
-  "Bring back the workbench saved in FILE; non-nil if a state was restored.
-Each group's shown file is visited now, its other tabs at idle (never a question at start)."
+  "Bring back the workbench saved in FILE — the selected frame gets the main window's layout,
+every other window is made again; non-nil if a state was restored.  Each group's shown file is
+visited now, its other tabs at idle (never a question at start)."
   (interactive)
-  (let* ((file (or file (drgnx-persist--file))) (state (drgnx-persist--read file)))
+  (let* ((file (or file (drgnx-persist--file))) (state (drgnx-persist--read file))
+         (frames (pcase (plist-get state :version)
+                   (1 (list state))
+                   (2 (plist-get state :frames)))))
     (cond
      ((null state) nil)
-     ((not (eql (plist-get state :version) drgnx-persist-version))
+     ((null frames)
       (message "drgnx: %s has format %S, not %d; not restored" file (plist-get state :version) drgnx-persist-version)
       nil)
      (t
-      (drgnx-wb-area-hide 'panel)
-      (drgnx-wb-area-hide 'right)
-      (drgnx-wb-hide-sidebar)
-      (unwind-protect
-          (progn
-            (when-let* ((roots (seq-filter (lambda (d) (and (not (file-remote-p d)) (file-directory-p d)))
-                                           (plist-get state :roots)))
-                        ((fboundp 'drgnx-explorer-set-roots)))
-              (drgnx-explorer-set-roots roots))
-            ;; Editor groups: their tree and sizes (windows whose buffer is gone are kept — no file
-            ;; is visited yet after a restart), then each one's shown file and tabs.
-            (let ((groups (plist-get state :groups)))
-              (when-let* ((main (plist-get state :main)))
-                (let ((window-restore-killed-buffer-windows #'ignore))
-                  (ignore-errors (window-state-put main (window-main-window) 'safe))))
-              (catch 'full                                    ; the tree did not fit: side by side, while it fits
-                (while (< (length (drgnx-groups-list)) (length groups))
-                  (unless (ignore-errors (split-window (car (last (drgnx-groups-list))) nil 'right))
-                    (throw 'full nil))))
-              (setq drgnx-persist--pending nil)
-              (cl-loop for g in (drgnx-groups-list) for spec in groups
-                       do (let* ((files (plist-get spec :tabs))
-                                 (shown (drgnx-persist--visit (plist-get spec :shown))))
-                            (set-window-buffer g (or shown (get-scratch-buffer-create)))
-                            (set-window-prev-buffers g nil)
-                            (drgnx-persist--set-tabs g files)
-                            (push (list g (seq-remove (lambda (f) (equal f (plist-get spec :shown))) files) files)
-                                  drgnx-persist--pending)))
-              (setq drgnx-persist--pending (nreverse drgnx-persist--pending))
-              (when (and drgnx-persist--pending (not (timerp drgnx-persist--timer)))
-                (setq drgnx-persist--timer (run-with-idle-timer 0.2 t #'drgnx-persist--visit-pending)))))
-        ;; Docks and panel come back whatever happened above: sizes first (clamped), then shown.
-        (let ((left (plist-get state :left)) (panel (plist-get state :panel)) (right (plist-get state :right)))
-          (set-frame-parameter nil 'drgnx-wb-dock-px (drgnx-persist--clamp (plist-get left :px) (* 0.5 (frame-pixel-width))))
-          (set-frame-parameter nil 'drgnx-wb-panel-px (drgnx-persist--clamp (plist-get panel :px) (* 0.7 (frame-pixel-height))))
-          (set-frame-parameter nil 'drgnx-wb-right-px (drgnx-persist--clamp (plist-get right :px) (* 0.5 (frame-pixel-width))))
-          (when (plist-get left :shown) (drgnx-wb-show-sidebar))
-          (when (plist-get panel :shown) (drgnx-wb-area-show 'panel (plist-get panel :tab)))
-          (when (plist-get right :shown) (drgnx-wb-area-show 'right (plist-get right :tab))))
-        (drgnx-chrome-apply))
+      (setq drgnx-persist--pending nil)
+      (drgnx-persist--restore-frame (car frames))
+      (let ((home (selected-frame)))
+        (dolist (st (cdr frames))                ; the window manager places them
+          (when-let* ((f (ignore-errors (make-frame '((drgnx-frame-role . aux))))))
+            (with-selected-frame f (drgnx-persist--restore-frame st))))
+        (when (frame-live-p home) (select-frame-set-input-focus home)))
       t))))
+
+(defun drgnx-persist--restore-frame (state)
+  "Bring back one window's workbench STATE in the selected frame."
+  (drgnx-wb-area-hide 'panel)
+  (drgnx-wb-area-hide 'right)
+  (drgnx-wb-hide-sidebar)
+  (unwind-protect
+      (progn
+        (when-let* ((roots (seq-filter (lambda (d) (and (not (file-remote-p d)) (file-directory-p d)))
+                                       (plist-get state :roots)))
+                    ((fboundp 'drgnx-explorer-set-roots)))
+          (drgnx-explorer-set-roots roots))
+        ;; Editor groups: their tree and sizes (windows whose buffer is gone are kept — no file
+        ;; is visited yet after a restart), then each one's shown file and tabs.
+        (let ((groups (plist-get state :groups)))
+          (when-let* ((main (plist-get state :main)))
+            (let ((window-restore-killed-buffer-windows #'ignore))
+              (ignore-errors (window-state-put main (window-main-window) 'safe))))
+          (catch 'full                                    ; the tree did not fit: side by side, while it fits
+            (while (< (length (drgnx-groups-list)) (length groups))
+              (unless (ignore-errors (split-window (car (last (drgnx-groups-list))) nil 'right))
+                (throw 'full nil))))
+          (cl-loop for g in (drgnx-groups-list) for spec in groups
+                   do (let* ((files (plist-get spec :tabs))
+                             (shown (drgnx-persist--visit (plist-get spec :shown))))
+                        (set-window-buffer g (or shown (get-scratch-buffer-create)))
+                        (set-window-prev-buffers g nil)
+                        (drgnx-persist--set-tabs g files)
+                        (push (list g (seq-remove (lambda (f) (equal f (plist-get spec :shown))) files) files)
+                              drgnx-persist--pending)))
+          (setq drgnx-persist--pending (nreverse drgnx-persist--pending))   ; a frame's groups in order
+          (when (and drgnx-persist--pending (not (timerp drgnx-persist--timer)))
+            (setq drgnx-persist--timer (run-with-idle-timer 0.2 t #'drgnx-persist--visit-pending)))))
+    ;; Docks and panel come back whatever happened above: sizes first (clamped), then shown.
+    (let ((left (plist-get state :left)) (panel (plist-get state :panel)) (right (plist-get state :right)))
+      (set-frame-parameter nil 'drgnx-wb-dock-px (drgnx-persist--clamp (plist-get left :px) (* 0.5 (frame-pixel-width))))
+      (set-frame-parameter nil 'drgnx-wb-panel-px (drgnx-persist--clamp (plist-get panel :px) (* 0.7 (frame-pixel-height))))
+      (set-frame-parameter nil 'drgnx-wb-right-px (drgnx-persist--clamp (plist-get right :px) (* 0.5 (frame-pixel-width))))
+      (when (plist-get left :shown) (drgnx-wb-show-sidebar))
+      (when (plist-get panel :shown) (drgnx-wb-area-show 'panel (plist-get panel :tab)))
+      (when (plist-get right :shown) (drgnx-wb-area-show 'right (plist-get right :tab))))
+    (drgnx-chrome-apply))
+  t)
 
 (defun drgnx-persist--gui-frame ()
   "The graphical frame to restore into or save from (a daemon's F1 is not one)."
@@ -170,7 +195,7 @@ Each group's shown file is visited now, its other tabs at idle (never a question
   "Closing the last graphical frame (a daemon's client): save it — the daemon may never exit cleanly."
   (when (and (display-graphic-p frame)
              (not (seq-some (lambda (f) (and (not (eq f frame)) (display-graphic-p f))) (frame-list))))
-    (ignore-errors (with-selected-frame frame (drgnx-persist-save)))))
+    (ignore-errors (drgnx-persist-save nil (list frame)))))
 
 (defun drgnx-persist--on-start ()
   "At the first graphical frame — which a daemon makes before selecting it."

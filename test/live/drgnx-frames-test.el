@@ -90,3 +90,33 @@
     (should-not (member "README.md" (drgnx-frames-test--eval sess "(mapcar #'buffer-name (drgnx-buffers--shown))")))
     (drgnx-frames-test--eval sess "(progn (drgnx-buffers-toggle-all-windows) t)")
     (should (member "README.md" (drgnx-frames-test--eval sess "(mapcar #'buffer-name (drgnx-buffers--shown))")))))
+
+(ert-deftest drgnx-frames/every-window-survives-a-restart ()
+  ;; Session A: a second window with a.txt; it exits (saved). Session B restores both windows.
+  (let* ((root (make-temp-file "drgnx-frames-restart" t))
+         (file (expand-file-name "workbench.eld" root))
+         (project (file-name-as-directory (expand-file-name "project" root)))
+         (process-environment (cons (concat "DRGNX_UI_STATE=" root) process-environment)))
+    (dolist (f '("README.md" "a.txt")) (make-directory project t)
+            (write-region "x\n" nil (expand-file-name f project) nil 'silent))
+    (unwind-protect
+        (let* ((s (drgnx-ui-start "drgnx" "1400x800" 30)) (sess (drgnx-ui-own-session (plist-get s :name))))
+          (drgnx-ui-call sess (format "(progn (setq drgnx-persist-file %S)
+                                         (find-file %S) (drgnx-chrome-apply nil t)
+                                         (find-file %S) (drgnx-chrome-apply nil t)
+                                         (drgnx-frames-move-editor)
+                                         (drgnx-uitest--json (list :ok t)))"
+                                      file (expand-file-name "README.md" project) (expand-file-name "a.txt" project)))
+          (drgnx-ui-measure sess nil)
+          (drgnx-ui-stop (plist-get s :name))
+          (should (= 2 (length (plist-get (with-temp-buffer (insert-file-contents file) (read (current-buffer))) :frames))))
+          (let* ((s2 (drgnx-ui-start "drgnx" "1400x800" 30)) (sess2 (drgnx-ui-own-session (plist-get s2 :name))))
+            (unwind-protect
+                (progn
+                  (drgnx-ui-call sess2 (format "(progn (setq drgnx-persist-file %S) (drgnx-persist-restore) (drgnx-uitest--json (list :ok t)))" file))
+                  (drgnx-ui-measure sess2 nil)
+                  (should (equal (drgnx-frames-test--eval sess2 "(length (seq-remove #'frame-parent (frame-list)))") 2))
+                  (should (member "a.txt" (drgnx-frames-test--eval
+                                           sess2 "(mapcar #'buffer-name (seq-mapcat (lambda (f) (drgnx-chrome-tabs (frame-first-window f))) (seq-remove (lambda (f) (eq f (selected-frame))) (frame-list))))"))))
+              (drgnx-ui-stop (plist-get s2 :name)))))
+      (delete-directory root t))))

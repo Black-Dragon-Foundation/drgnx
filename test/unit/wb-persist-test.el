@@ -146,7 +146,17 @@
       (should (equal (mapcar #'buffer-file-name (drgnx-chrome-tabs (car (drgnx-groups-list))))
                      (list (expand-file-name "b.txt" dir))))
       (drgnx-persist-save)                              ; saved before the tabs were visited: none lost
-      (should (= 4 (length (plist-get (car (plist-get (drgnx-persist--read drgnx-persist-file) :groups)) :tabs))))
+      (should (= 4 (length (plist-get (car (plist-get (car (plist-get (drgnx-persist--read drgnx-persist-file) :frames)) :groups)) :tabs))))
       (while (drgnx-persist--visit-pending))
       (should (equal (mapcar #'buffer-file-name (drgnx-chrome-tabs (car (drgnx-groups-list))))
                      (mapcar (lambda (n) (expand-file-name n dir)) '("a.txt" "b.txt" "c.txt")))))))
+
+(ert-deftest drgnx-persist/the-file-lists-every-window ()
+  ;; Format 2: one entry per window (the main one first); format 1 files (one window) still restore.
+  (drgnx-persist-test--with dir
+    (switch-to-buffer (drgnx-persist-test--file dir "a.txt")) (drgnx-chrome-apply nil t)
+    (drgnx-persist-save)
+    (let ((state (drgnx-persist--read drgnx-persist-file)))
+      (should (eql 2 (plist-get state :version)))
+      (should (= 1 (length (plist-get state :frames))))
+      (should (plist-get (car (plist-get state :frames)) :groups)))))
