@@ -31,6 +31,7 @@ test_podman() {
 cmd_test() {
   case "${1:-}" in
     "") test_batch ;;
+    --ui) python3 "$here/harness/drgnx_ui.py" test-ui ;;
     --podman) test_podman ;;
     *) echo "usage: drgnx test [--ui|--podman]" >&2; exit 2 ;;
   esac
@@ -40,6 +41,7 @@ usage() {
   cat <<'USAGE'
 usage: drgnx doctor            check this machine
        drgnx test [--podman]   batch tests (on the host, or in a fedora:45 / Emacs 31.1 container)
+       drgnx test --ui         GUI tests in a headless session (mutter)
 USAGE
 }
 
