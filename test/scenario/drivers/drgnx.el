@@ -45,13 +45,13 @@
   (with-current-buffer drgnx-explorer-buffer-name
     (let ((pos (drgnx-explorer--row-pos (directory-file-name (expand-file-name text (car (drgnx-explorer-roots)))))))
       (unless pos (error "driver: no Explorer row for %s" text))
-      (when (drgnx-explorer--expanded-p (get-text-property pos 'drgnx-node))
+      (when (drgnx-explorer--expanded-p (drgnx-explorer-node-at pos))
         (drgnx-explorer-toggle-at pos)))))
 
 (defun drgnx-driver-buffers-top-row ()
   "The buffer listed on the first visible row of the Buffers panel, or nil."
   (let ((w (drgnx-driver-buffers-window)))
-    (with-current-buffer (window-buffer w) (get-text-property (window-start w) 'drgnx-buffer))))
+    (with-current-buffer (window-buffer w) (drgnx-buffers-buffer-at (window-start w)))))
 
 (defun drgnx-driver-buffers-row-xy (buffer &optional column-text)
   "Pixel of BUFFER's row in the Buffers panel — on COLUMN-TEXT (e.g. \"×\") if given."

@@ -7,7 +7,8 @@
 ;; Packages are not activated: drgnx manages them itself (M5).
 
 ;;; Code:
-(setq package-enable-at-startup nil
+(setq load-prefer-newer t              ; a stale .elc (drgnx build) never shadows newer source
+      package-enable-at-startup nil
       inhibit-startup-screen t
       frame-resize-pixelwise t)
 (push '(tool-bar-lines . 0) default-frame-alist)

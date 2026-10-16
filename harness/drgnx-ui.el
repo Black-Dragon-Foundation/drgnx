@@ -786,6 +786,7 @@ a boolean flag (`drgnx-ui--boolean-flags') becomes :name t."
                                    (append (drgnx-ui--parse-json (or (nth 1 pos) "[]")) nil)))
       ("test-ui" (drgnx-ui-run-ui-tests))
       ("test-scenario" (drgnx-ui-run-scenarios (plist-get opts :config) (plist-get opts :dir)))
+      ("test-bench" (require 'drgnx-bench) (drgnx-bench-run))
       ("mcp" (require 'drgnx-ui-mcp) (drgnx-ui-mcp-main))
       (_ (drgnx-ui--fail "unknown command %S\n%s" cmd drgnx-ui-usage)))))
 

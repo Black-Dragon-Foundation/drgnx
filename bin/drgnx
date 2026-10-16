@@ -22,12 +22,18 @@ cmd_doctor() { # [--json] [--dev] — checks run inside the Emacs drgnx uses (co
   return "$rc"
 }
 
+cmd_build() { # byte-compile core/, wb/, modules/ in place (core/drgnx-build.el)
+  "${DRGNX_EMACS:-emacs}" --batch -Q -L "$here/core" -l drgnx-build -f drgnx-build-cli
+}
+
 ui() { # the harness controller, in batch Emacs (harness/drgnx-ui.el)
-  emacs --batch -Q -L "$here/harness" -L "$here/core" -L "$here/wb" -l drgnx-ui -f drgnx-ui-cli -- "$@"
+  emacs --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/harness" -L "$here/core" -L "$here/wb" \
+        -l drgnx-ui -f drgnx-ui-cli -- "$@"
 }
 
 test_batch() {
-  emacs --batch -Q -L "$here/harness" -L "$here/core" -L "$here/wb" -l "$here/harness/run-ert.el" \
+  emacs --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/harness" -L "$here/core" -L "$here/wb" \
+        -l "$here/harness/run-ert.el" \
         -f drgnx-run-ert-batch "$here/test/unit"
 }
 
@@ -99,6 +105,7 @@ cmd_test() {
     --install) shift; test_install "$@" ;;
     --ui) ui test-ui ;;
     --scenario) shift; ui test-scenario "$@" ;;
+    --bench) ui test-bench ;;
     --container) shift; test_container "$@" ;;
     --podman) shift; DRGNX_CONTAINER=podman test_container "$@" ;;
     *) echo "usage: drgnx test [--ui | --scenario [--config C] | --container [--ui] | --install [NAME…]]" >&2; exit 2 ;;
@@ -107,10 +114,12 @@ cmd_test() {
 
 usage() {
   cat <<'USAGE'
-usage: drgnx doctor [--json] [--dev]
+usage: drgnx build              byte-compile drgnx (core, wb, modules); native compilation follows on load
+       drgnx doctor [--json] [--dev]
                                is this machine ready for drgnx? (--dev: also the tools to develop it)
        drgnx test              batch tests
        drgnx test --ui         GUI tests in a headless session (mutter)
+       drgnx test --bench      the workbench vs treemacs and ibuffer, timed in a GUI session
        drgnx test --scenario [--config drgnx|gryphn|DIR]
                                behaviour scenarios in a session of that configuration
        drgnx test --container [--ui]
@@ -126,6 +135,7 @@ USAGE
 
 case "${1:-help}" in
   doctor) shift; cmd_doctor "$@" ;;
+  build) cmd_build ;;
   test) shift; cmd_test "$@" ;;
   ui) shift; ui "$@" ;;
   help|-h|--help) usage ;;

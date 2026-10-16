@@ -209,7 +209,8 @@ print_plan() {
   elif [[ -d "$DIR/.git" ]]; then note "update $DIR (git pull --ff-only)"
   else note "git clone $DRGNX_REPO (branch $BRANCH) into $DIR (git is installed first if missing)"; fi
   say "3. Link $PREFIX/bin/drgnx → $DIR/bin/drgnx"
-  say "4. Run drgnx doctor"
+  say "4. Compile drgnx (drgnx build: byte-compiled, natively compiled as it loads)"
+  say "5. Run drgnx doctor"
 }
 
 # --- Doing it -----------------------------------------------------------------------------------------
@@ -411,6 +412,7 @@ main() {
   fetch_drgnx
   link_drgnx
   say ""
+  DRGNX_EMACS="$EMACS_BIN" "$DIR/bin/drgnx" build >/dev/null || warn "drgnx build failed: run $DIR/bin/drgnx build to see why (drgnx still runs, uncompiled)"
   DRGNX_EMACS="$EMACS_BIN" "$DIR/bin/drgnx" doctor || warn "the doctor found problems (above)"
   path_hint
   say ""

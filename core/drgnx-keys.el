@@ -95,7 +95,8 @@ cannot be read (never an error or a prompt)."
   (replace-regexp-in-string "\\(\\`\\| \\)C-" "\\1s-" key t))
 
 (defun drgnx-keys--entry (entry spec platform)
-  "ENTRY (ID KEY… [:map M] [:mac K]) or (ID :none REASON) of profile SPEC → plist (:keys :map :profile-map); the keymap is the entry's, else the command's, else the profile's."
+  "ENTRY (ID KEY… [:map M] [:mac K]) or (ID :none REASON) of SPEC → plist (:keys :map :profile-map).
+The keymap used is the entry's, else the command's, else the profile's."
   (let ((rest (cdr entry)) keys)
     (if (eq (car rest) :none)
         (list :keys nil)

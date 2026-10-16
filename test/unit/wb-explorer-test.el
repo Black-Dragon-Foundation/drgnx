@@ -35,8 +35,8 @@
       (goto-char (point-min))
       (let (rows)
         (while (not (eobp))
-          (when-let* ((node (get-text-property (point) 'drgnx-node)))
-            (push (list (get-text-property (point) 'drgnx-depth)
+          (when-let* ((node (drgnx-explorer-node-at (point))))
+            (push (list (drgnx-explorer-depth-at (point))
                         (file-name-nondirectory (directory-file-name node)))
                   rows))
           (forward-line 1))
@@ -47,7 +47,7 @@
   (with-current-buffer drgnx-explorer-buffer-name
     (goto-char (point-min))
     (while (and (not (eobp))
-                (not (equal name (file-name-nondirectory (directory-file-name (or (get-text-property (point) 'drgnx-node) ""))))))
+                (not (equal name (file-name-nondirectory (directory-file-name (or (drgnx-explorer-node-at (point)) ""))))))
       (forward-line 1))
     (point)))
 
@@ -90,7 +90,7 @@
     (let ((w (drgnx-wb-section-window 'explorer)))
       (should (drgnx-explorer-reveal (expand-file-name "src/app/deep/a/b/c/leaf.txt" root) w))
       (should (member '(7 "leaf.txt") (drgnx-explorer-test--rows)))
-      (should (equal (with-current-buffer drgnx-explorer-buffer-name (get-text-property (window-point w) 'drgnx-node))
+      (should (equal (with-current-buffer drgnx-explorer-buffer-name (drgnx-explorer-node-at (window-point w)))
                      (expand-file-name "src/app/deep/a/b/c/leaf.txt" root)))
       ;; Outside the roots: nothing changes.
       (let ((rows (drgnx-explorer-test--rows)))
@@ -103,7 +103,7 @@
     (let* ((w (drgnx-wb-section-window 'explorer))
            (main (find-file-noselect (expand-file-name "src/app/main.py" root)))
            (on-main (lambda () (equal (with-current-buffer drgnx-explorer-buffer-name
-                                        (get-text-property (window-point w) 'drgnx-node))
+                                        (drgnx-explorer-node-at (window-point w)))
                                       (buffer-file-name main)))))
       (unwind-protect
           (progn
@@ -149,7 +149,27 @@
             (switch-to-buffer main)
             (drgnx-wb-show-sidebar)
             (let ((w (drgnx-wb-section-window 'explorer)))
-              (should (equal (with-current-buffer drgnx-explorer-buffer-name (get-text-property (window-point w) 'drgnx-node))
+              (should (equal (with-current-buffer drgnx-explorer-buffer-name (drgnx-explorer-node-at (window-point w)))
                              (buffer-file-name main)))
               (should-not (eq (selected-window) w))))
         (kill-buffer main)))))
+
+(defun drgnx-test--allocated (fn)
+  "Bytes FN allocates (conses, vectors, strings, intervals), from `memory-use-counts'."
+  (let ((m0 (memory-use-counts)))
+    (funcall fn)
+    (let ((m1 (memory-use-counts)))
+      (+ (* 16 (- (nth 0 m1) (nth 0 m0))) (* 8 (- (nth 2 m1) (nth 2 m0))) (- (nth 4 m1) (nth 4 m0))
+         (* 56 (- (nth 5 m1) (nth 5 m0)))))))
+
+(ert-deftest drgnx-explorer/expanding-allocates-little ()
+  ;; Garbage is what makes a GUI session pause (a full GC there takes ~15 ms): 5000 rows must
+  ;; allocate under 3 MB (a row: its text, a face for the name, one vector of row data).
+  (drgnx-explorer-test--with root
+    (let ((big (expand-file-name "big" root)))
+      (make-directory big)
+      (dotimes (i 5000) (write-region "" nil (expand-file-name (format "f%04d.txt" i) big) nil 'silent))
+      (drgnx-explorer-refresh)
+      (drgnx-explorer-children big)                         ; listing cached: measure the rows
+      (let ((bytes (drgnx-test--allocated (lambda () (drgnx-explorer-toggle-at (drgnx-explorer-test--goto "big"))))))
+        (should (< bytes (* 3 1024 1024)))))))

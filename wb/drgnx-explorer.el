@@ -71,28 +71,93 @@
 
 ;;;; Rows
 
-(defun drgnx-explorer--row (path depth dirp expanded)
-  "One row: indent guides, chevron, name; text properties carry PATH, DEPTH and DIRP."
-  (let ((name (file-name-nondirectory (directory-file-name path))))
-    (propertize
-     (concat (propertize (apply #'concat (make-list (max 0 (1- depth)) "│ ")) 'face 'drgnx-explorer-guide)
-             (propertize (cond ((not dirp) "  ") (expanded "▾ ") (t "▸ ")) 'face 'drgnx-explorer-guide)
-             (propertize (if (= depth 0) (upcase name) name)
-                         'face (cond ((= depth 0) 'drgnx-explorer-root) (dirp 'drgnx-explorer-directory)
-                                     (t 'drgnx-explorer-file)))
-             "\n")
-     'drgnx-node path 'drgnx-depth depth 'drgnx-dir dirp 'mouse-face 'highlight)))
+(defvar drgnx-explorer--prefixes (make-hash-table :test #'equal)
+  "(DEPTH . KIND) → the row prefix (indent guides and chevron), built once.")
 
-(defun drgnx-explorer--subtree-rows (dir depth)
-  "Rows for DIR's children at DEPTH, recursing into expanded folders, as one string."
-  (let (rows)
-    (cl-labels ((walk (dir depth)
-                  (pcase-dolist (`(,name . ,dirp) (drgnx-explorer-children dir))
-                    (let* ((path (expand-file-name name dir)) (open (and dirp (drgnx-explorer--expanded-p path))))
-                      (push (drgnx-explorer--row path depth dirp open) rows)
-                      (when open (walk path (1+ depth)))))))
-      (walk dir depth))
-    (apply #'concat (nreverse rows))))
+(defun drgnx-explorer--prefix (depth kind)
+  "Guides for DEPTH and the chevron for KIND (`file', `open', `closed') — plain text, built once
+and shared by every row (faces are painted by `drgnx-explorer--fontify', for visible rows only)."
+  (let ((key (cons depth kind)))
+    (or (gethash key drgnx-explorer--prefixes)
+        (puthash key (concat (apply #'concat (make-list (max 0 (1- depth)) "│ "))
+                             (pcase kind ('file "  ") ('open "▾ ") (_ "▸ ")))
+                 drgnx-explorer--prefixes))))
+
+(defmacro drgnx-explorer--bulk (&rest body)
+  "Run BODY, which builds many rows, without a garbage collection in the middle of it; the
+garbage is collected afterwards, outside the interaction being measured by the user's eye."
+  `(let ((gc-cons-threshold (max gc-cons-threshold (* 64 1024 1024)))) ,@body))
+
+(defvar-local drgnx-explorer--rows []
+  "The rows' data, one vector [NAME DEPTH DIRP PARENT] per line, in order (a virtual list: the
+buffer holds plain text, this holds what each line is).  PARENT is the folder's path, shared by
+its children; nil for a root, whose NAME is its path.  Only the functions below change the
+buffer, and they keep both in step.")
+
+(defun drgnx-explorer--index (pos) (1- (line-number-at-pos pos t)))
+
+(defun drgnx-explorer--row-data (pos)
+  "The data vector of the row at POS, or nil."
+  (when pos
+    (let ((i (drgnx-explorer--index pos)))
+      (and (< -1 i (length drgnx-explorer--rows)) (aref drgnx-explorer--rows i)))))
+
+(defun drgnx-explorer--line-pos (i)
+  "Start of line I (0-based)."
+  (save-excursion (goto-char (point-min)) (forward-line i) (point)))
+
+(defun drgnx-explorer--path (v)
+  (if (aref v 3) (concat (aref v 3) "/" (aref v 0)) (aref v 0)))
+
+(defun drgnx-explorer-node-at (pos) "Path of the row at POS."
+  (when-let* ((v (drgnx-explorer--row-data pos))) (drgnx-explorer--path v)))
+(defun drgnx-explorer-depth-at (pos) "Depth of the row at POS (0 for a root)."
+  (when-let* ((v (drgnx-explorer--row-data pos))) (aref v 1)))
+(defun drgnx-explorer-dir-at (pos) "Non-nil if the row at POS is a folder."
+  (when-let* ((v (drgnx-explorer--row-data pos))) (aref v 2)))
+
+(defun drgnx-explorer--fontify (beg end)
+  "Paint the rows between BEG and END (jit-lock: only what is displayed): guides and chevron, the
+name's face, the hover highlight."
+  (save-excursion
+    (goto-char beg)
+    (forward-line 0)
+    (let ((inhibit-read-only t) (end (save-excursion (goto-char end) (pos-eol)))
+          (i (drgnx-explorer--index (point))) (rows drgnx-explorer--rows))
+      (with-silent-modifications
+        (while (and (< (point) end) (< i (length rows)))
+          (let* ((v (aref rows i)) (depth (aref v 1))
+                 (name-start (+ (point) (* 2 (max 0 (1- depth))) (if (= depth 0) 0 2))))
+            (put-text-property (point) name-start 'face 'drgnx-explorer-guide)
+            (add-text-properties name-start (pos-eol)
+                                 (list 'face (cond ((= depth 0) 'drgnx-explorer-root) ((aref v 2) 'drgnx-explorer-directory)
+                                                   (t 'drgnx-explorer-file))
+                                       'mouse-face 'highlight)))
+          (forward-line 1)
+          (setq i (1+ i))))))
+  `(jit-lock-bounds ,beg . ,end))
+
+(defun drgnx-explorer--insert-subtree (dir depth)
+  "Insert, at point, the rows of DIR's children at DEPTH, recursing into expanded folders; return
+their data vectors in order (for `drgnx-explorer--rows').
+Hot path (thousands of rows per expand): garbage is what makes a GUI session pause, so a row
+allocates only its small data vector; the text is shared strings (prefix, name, newline) and
+faces come later, from jit-lock, for the rows on screen."
+  (drgnx-explorer--bulk
+   (let (parts data)
+     (cl-labels ((walk (dir depth)
+                   (let ((parent (directory-file-name dir)))
+                     (pcase-dolist (`(,name . ,dirp) (drgnx-explorer-children dir))
+                       (let ((open (and dirp (drgnx-explorer--expanded-p (concat parent "/" name)))))
+                         (push (drgnx-explorer--prefix depth (if dirp (if open 'open 'closed) 'file)) parts)
+                         (push name parts)
+                         (push "\n" parts)
+                         (push (vector name depth dirp parent) data)
+                         (when open (walk (concat parent "/" name) (1+ depth))))))))
+       (walk dir depth))
+     ;; One insertion: inserting each part separately runs the change hooks (jit-lock) per part.
+     (insert (apply #'concat (nreverse parts)))
+     (nreverse data))))
 
 (defun drgnx-explorer--buffer ()
   "The Explorer buffer, created and rendered on first use."
@@ -111,49 +176,55 @@
 (defun drgnx-explorer--render ()
   "Render every root from scratch, keeping the row at point by its path."
   (with-current-buffer (get-buffer-create drgnx-explorer-buffer-name)
-    (let ((inhibit-read-only t) (at (get-text-property (point) 'drgnx-node)))
+    (let ((inhibit-read-only t) (at (drgnx-explorer-node-at (point))) data)
       (erase-buffer)
       (dolist (root drgnx-explorer--roots)
         (let ((path (directory-file-name (expand-file-name root))))
-          (insert (drgnx-explorer--row path 0 t t))
-          (insert (drgnx-explorer--subtree-rows path 1))))
+          (insert (drgnx-explorer--prefix 0 'open) (upcase (file-name-nondirectory path)) "\n")
+          (push (list (vector path 0 t nil)) data)
+          (push (drgnx-explorer--insert-subtree path 1) data)))
+      (setq drgnx-explorer--rows (apply #'vconcat (nreverse data)))
       (goto-char (or (and at (drgnx-explorer--row-pos at)) (point-min))))))
 
 (defun drgnx-explorer--row-pos (path)
   "Start of PATH's row, or nil."
-  (save-excursion
-    (goto-char (point-min))
-    (when-let* ((m (text-property-search-forward 'drgnx-node path t))) (prop-match-beginning m))))
+  (let* ((parent (directory-file-name (file-name-directory path))) (name (file-name-nondirectory path))
+         (i (cl-position-if (lambda (v) (if (aref v 3)
+                                            (and (equal (aref v 0) name) (equal (aref v 3) parent))
+                                          (equal (aref v 0) path)))
+                            drgnx-explorer--rows)))
+    (and i (drgnx-explorer--line-pos i))))
 
-(defun drgnx-explorer--subtree-end (bol depth)
-  "End of the rows below the row at BOL that are deeper than DEPTH."
-  (save-excursion
-    (goto-char bol)
-    (forward-line 1)
-    (while (and (not (eobp)) (> (or (get-text-property (point) 'drgnx-depth) 0) depth))
-      (forward-line 1))
-    (point)))
+(defun drgnx-explorer--subtree-last (i)
+  "Index just after the rows below row I that are deeper than it."
+  (let ((depth (aref (aref drgnx-explorer--rows i) 1)) (j (1+ i)) (n (length drgnx-explorer--rows)))
+    (while (and (< j n) (> (aref (aref drgnx-explorer--rows j) 1) depth)) (setq j (1+ j)))
+    j))
 
 (defun drgnx-explorer--set-chevron (bol depth expanded)
-  (let* ((p (+ bol (* 2 (max 0 (1- depth))))) (props (text-properties-at p)))
+  (let ((p (+ bol (* 2 (max 0 (1- depth))))))
     (delete-region p (1+ p))
-    (save-excursion (goto-char p) (insert (apply #'propertize (if expanded "▾" "▸") props)))))
+    (save-excursion (goto-char p) (insert (if expanded "▾" "▸")))))
 
 (defun drgnx-explorer-toggle-at (pos)
   "Expand or collapse the folder whose row is at POS (roots stay expanded)."
   (with-current-buffer (drgnx-explorer--buffer)
-    (let ((path (get-text-property pos 'drgnx-node)) (depth (get-text-property pos 'drgnx-depth))
-          (inhibit-read-only t)
-          (bol (save-excursion (goto-char pos) (pos-bol))))
-      (when (and path (get-text-property pos 'drgnx-dir) (> depth 0))
-        (if (drgnx-explorer--expanded-p path)
-            (progn (remhash path drgnx-explorer--expanded)
-                   (delete-region (save-excursion (goto-char bol) (forward-line 1) (point))
-                                  (drgnx-explorer--subtree-end bol depth))
-                   (drgnx-explorer--set-chevron bol depth nil))
-          (puthash path t drgnx-explorer--expanded)
-          (save-excursion (goto-char bol) (forward-line 1) (insert (drgnx-explorer--subtree-rows path (1+ depth))))
-          (drgnx-explorer--set-chevron bol depth t))
+    (let* ((i (drgnx-explorer--index pos)) (v (drgnx-explorer--row-data pos))
+           (inhibit-read-only t)
+           (bol (save-excursion (goto-char pos) (pos-bol)))
+           (next (save-excursion (goto-char bol) (forward-line 1) (point))))
+      (when (and v (aref v 2) (> (aref v 1) 0))
+        (let ((path (drgnx-explorer--path v)) (depth (aref v 1)) (rows drgnx-explorer--rows))
+          (if (drgnx-explorer--expanded-p path)
+              (let ((j (drgnx-explorer--subtree-last i)))
+                (remhash path drgnx-explorer--expanded)
+                (delete-region next (save-excursion (goto-char next) (forward-line (- j i 1)) (point)))
+                (setq drgnx-explorer--rows (vconcat (seq-subseq rows 0 (1+ i)) (seq-subseq rows j)))
+                (drgnx-explorer--set-chevron bol depth nil))
+            (puthash path t drgnx-explorer--expanded)
+            (let ((new (save-excursion (goto-char next) (drgnx-explorer--insert-subtree path (1+ depth)))))
+              (setq drgnx-explorer--rows (vconcat (seq-subseq rows 0 (1+ i)) new (seq-subseq rows (1+ i)))))
+            (drgnx-explorer--set-chevron bol depth t)))
         t))))
 
 (defun drgnx-explorer--root-of (file)
@@ -187,7 +258,7 @@ Returns non-nil if FILE is under a root."
   (let ((w (drgnx-wb-section-window 'explorer))
         (file (and (buffer-live-p buffer) (buffer-local-value 'buffer-file-name buffer))))
     (when (and (window-live-p w) file (not (eq (selected-window) w)) (not drgnx-explorer--pressed)
-               (not (equal (with-current-buffer (window-buffer w) (get-text-property (window-point w) 'drgnx-node))
+               (not (equal (with-current-buffer (window-buffer w) (drgnx-explorer-node-at (window-point w)))
                            file)))
       (drgnx-explorer-reveal file w))))
 
@@ -207,12 +278,12 @@ Returns non-nil if FILE is under a root."
 
 ;;;; Commands
 
-(defun drgnx-explorer--node () (get-text-property (point) 'drgnx-node))
+(defun drgnx-explorer--node () (drgnx-explorer-node-at (point)))
 
 (defun drgnx-explorer-activate (pos &optional keep-focus)
   "A folder toggles; a file opens in the editor (KEEP-FOCUS keeps the Explorer selected)."
-  (when-let* ((path (get-text-property pos 'drgnx-node)))
-    (if (get-text-property pos 'drgnx-dir)
+  (when-let* ((path (drgnx-explorer-node-at pos)))
+    (if (drgnx-explorer-dir-at pos)
         (drgnx-explorer-toggle-at pos)
       (drgnx-wb-show-in-editor (find-file-noselect path) (not keep-focus)))))
 
@@ -222,19 +293,19 @@ Returns non-nil if FILE is under a root."
 (defun drgnx-explorer-expand ()
   "Expand the folder at point; on an expanded folder, go to its first child."
   (interactive)
-  (when (get-text-property (point) 'drgnx-dir)
-    (if (and (drgnx-explorer--expanded-p (drgnx-explorer--node)) (> (get-text-property (point) 'drgnx-depth) 0))
+  (when (drgnx-explorer-dir-at (point))
+    (if (and (drgnx-explorer--expanded-p (drgnx-explorer--node)) (> (drgnx-explorer-depth-at (point)) 0))
         (drgnx-explorer-next)
       (drgnx-explorer-toggle-at (point)))))
 
 (defun drgnx-explorer-collapse ()
   "Collapse the folder at point; otherwise go to the parent folder."
   (interactive)
-  (if (and (get-text-property (point) 'drgnx-dir) (drgnx-explorer--expanded-p (drgnx-explorer--node))
-           (> (get-text-property (point) 'drgnx-depth) 0))
+  (if (and (drgnx-explorer-dir-at (point)) (drgnx-explorer--expanded-p (drgnx-explorer--node))
+           (> (drgnx-explorer-depth-at (point)) 0))
       (drgnx-explorer-toggle-at (point))
-    (let ((depth (get-text-property (point) 'drgnx-depth)))
-      (while (and (not (bobp)) (>= (get-text-property (point) 'drgnx-depth) depth) (> depth 0))
+    (let ((depth (drgnx-explorer-depth-at (point))))
+      (while (and (not (bobp)) (>= (drgnx-explorer-depth-at (point)) depth) (> depth 0))
         (forward-line -1)))))
 
 (defun drgnx-explorer-open () "Open the file (focus the editor) or toggle the folder at point."
@@ -271,7 +342,7 @@ Returns non-nil if FILE is under a root."
   (interactive "e")
   (setq drgnx-explorer--pressed nil)
   (let ((pos (posn-point (event-end event))))
-    (when (and (integer-or-marker-p pos) (not (get-text-property pos 'drgnx-dir)) (get-text-property pos 'drgnx-node))
+    (when (and (integer-or-marker-p pos) (not (drgnx-explorer-dir-at pos)) (drgnx-explorer-node-at pos))
       (drgnx-wb-focus-editor))))
 
 (defun drgnx-explorer-mouse-ignore (_event)
@@ -297,7 +368,8 @@ Returns non-nil if FILE is under a root."
   "The drgnx Explorer (file tree)."
   (setq buffer-read-only t buffer-undo-list t truncate-lines t cursor-type nil mode-line-format nil)
   (setq-local hl-line-sticky-flag t)
-  (hl-line-mode 1))
+  (hl-line-mode 1)
+  (jit-lock-register #'drgnx-explorer--fontify))
 
 (defun drgnx-explorer-setup ()
   "Put the Explorer in the dock and let it follow the editor."

@@ -37,7 +37,7 @@
       (goto-char (point-min))
       (let (rows)
         (while (not (eobp))
-          (when-let* ((b (get-text-property (point) 'drgnx-buffer)))
+          (when-let* ((b (drgnx-buffers-buffer-at (point))))
             (when (and (buffer-live-p b) (string-prefix-p dir (or (buffer-file-name b) "")))
               (push (buffer-name b) rows)))
           (forward-line 1))
@@ -84,8 +84,8 @@
         (set-window-point w (drgnx-buffers--row-pos (nth 20 bufs))))
       (drgnx-buffers-test--open dir "zz-new.txt")
       (with-current-buffer drgnx-buffers-buffer-name
-        (should (eq (get-text-property (window-start w) 'drgnx-buffer) (nth 15 bufs)))
-        (should (eq (get-text-property (window-point w) 'drgnx-buffer) (nth 20 bufs)))))))
+        (should (eq (drgnx-buffers-buffer-at (window-start w)) (nth 15 bufs)))
+        (should (eq (drgnx-buffers-buffer-at (window-point w)) (nth 20 bufs)))))))
 
 (ert-deftest drgnx-buffers/close-kills-exactly-the-rows-buffer ()
   (drgnx-buffers-test--with dir
@@ -93,7 +93,7 @@
           (c (drgnx-buffers-test--open dir "c.txt")))
       (with-current-buffer drgnx-buffers-buffer-name
         (let ((x (save-excursion (goto-char (drgnx-buffers--row-pos b)) (search-forward "×" (pos-eol)) (match-beginning 0))))
-          (should (get-text-property x 'drgnx-close))
+          (should (drgnx-buffers--close-p x))
           (drgnx-buffers-close-at x)))
       (should (buffer-live-p a))
       (should-not (buffer-live-p b))
@@ -104,3 +104,18 @@
     (let ((w (drgnx-wb-section-window 'buffers)))
       (with-current-buffer drgnx-buffers-buffer-name (setq header-line-format nil))
       (should (stringp (window-parameter w 'header-line-format))))))
+
+(ert-deftest drgnx-buffers/rendering-allocates-little ()
+  ;; 500 rows under 400 KB (a GUI session's full GC takes ~15 ms; a refresh must not cause one).
+  (drgnx-buffers-test--with dir
+    (dotimes (i 500)
+      (let ((f (expand-file-name (format "d%d/f%03d.txt" (/ i 100) i) dir)))
+        (make-directory (file-name-directory f) t) (write-region "" nil f nil 'silent) (find-file-noselect f)))
+    (drgnx-buffers--refresh)
+    (let ((m0 (memory-use-counts)))
+      (setq drgnx-buffers--signature nil)
+      (drgnx-buffers--refresh)
+      (let* ((m1 (memory-use-counts))
+             (bytes (+ (* 16 (- (nth 0 m1) (nth 0 m0))) (* 8 (- (nth 2 m1) (nth 2 m0))) (- (nth 4 m1) (nth 4 m0))
+                       (* 56 (- (nth 5 m1) (nth 5 m0))))))
+        (should (< bytes (* 400 1024)))))))

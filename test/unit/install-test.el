@@ -102,7 +102,7 @@
 
 (ert-deftest drgnx-install/plan-names-the-drgnx-steps ()
   (drgnx-install-test--expect (drgnx-install-test--plan "fedora-45")
-                              "git clone" ".local/share/drgnx/drgnx" "bin/drgnx" "drgnx doctor"))
+                              "git clone" ".local/share/drgnx/drgnx" "bin/drgnx" "drgnx build" "drgnx doctor"))
 
 (ert-deftest drgnx-install/rerun-updates-the-existing-checkout ()
   (let ((dir (make-temp-file "drgnx-checkout" t)))

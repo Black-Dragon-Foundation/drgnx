@@ -3,6 +3,11 @@
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 
 ;;; Code:
+(declare-function drgnx-explorer-setup "drgnx-explorer")
+(declare-function drgnx-explorer-focus "drgnx-explorer")
+(declare-function drgnx-buffers-setup "drgnx-buffers")
+(declare-function drgnx-buffers-focus "drgnx-buffers")
+
 (drgnx-module-define 'core/workbench
   :doc "The workbench: the change bus, the left dock (Buffers, Explorer) and editor windows."
   :stage 'startup

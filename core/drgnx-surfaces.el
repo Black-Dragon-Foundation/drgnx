@@ -13,6 +13,9 @@
 (require 'drgnx-registry)
 (require 'easymenu)
 
+(defvar which-key-replacement-alist)   ; which-key, when present
+(defvar drgnx-keys-last)               ; drgnx-keys (loaded after this file)
+
 (defface drgnx-sheet-heading '((t :inherit (bold font-lock-keyword-face)))
   "Category headings in the key sheet (inherits theme faces only)."
   :group 'drgnx)

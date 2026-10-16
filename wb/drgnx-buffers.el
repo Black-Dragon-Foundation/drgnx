@@ -35,21 +35,57 @@
          (new (seq-remove (lambda (b) (memq b live)) (seq-filter #'drgnx-signal-user-buffer-p (buffer-list)))))
     (setq drgnx-buffers--order (append live new))))
 
+(defvar-local drgnx-buffers--rows []
+  "The buffer of each line, in order (a virtual list: the panel holds plain text).")
+
+(defvar drgnx-buffers--dirs nil
+  "During a render: folder → its abbreviated text (computed once per folder).")
+
+(defun drgnx-buffers--dir (b)
+  (let ((dir (file-name-directory (or (buffer-file-name b) (buffer-local-value 'default-directory b)))))
+    (or (and drgnx-buffers--dirs (gethash dir drgnx-buffers--dirs))
+        (let ((text (abbreviate-file-name (directory-file-name dir))))
+          (when drgnx-buffers--dirs (puthash dir text drgnx-buffers--dirs))
+          text))))
+
 (defun drgnx-buffers--row (b)
-  (let* ((file (buffer-file-name b))
-         (dir (abbreviate-file-name (directory-file-name (file-name-directory (or file (buffer-local-value 'default-directory b)))))))
-    (propertize
-     (concat (propertize "×" 'drgnx-close t 'face 'drgnx-buffers-close 'mouse-face 'highlight 'help-echo "Close")
-             " " (if (buffer-modified-p b) (propertize "●" 'face 'drgnx-buffers-modified) " ") " "
-             (propertize (buffer-name b) 'mouse-face 'highlight)
-             "  " (propertize dir 'face 'drgnx-buffers-dir) "\n")
-     'drgnx-buffer b)))
+  "Buffer B's row as plain text: × ● name  folder (faces come from jit-lock, for visible rows)."
+  (concat "× " (if (buffer-modified-p b) "●" " ") " " (buffer-name b) "  " (drgnx-buffers--dir b) "\n"))
+
+(defun drgnx-buffers--index (pos) (1- (line-number-at-pos pos t)))
+
+(defun drgnx-buffers-buffer-at (pos)
+  "The buffer of the row at POS, or nil."
+  (when pos
+    (let ((i (drgnx-buffers--index pos)))
+      (and (< -1 i (length drgnx-buffers--rows)) (aref drgnx-buffers--rows i)))))
+
+(defun drgnx-buffers--close-p (pos)
+  "Non-nil if POS is on a row's × (its first character)."
+  (and (drgnx-buffers-buffer-at pos) (save-excursion (goto-char pos) (bolp))))
 
 (defun drgnx-buffers--row-pos (b)
   "Start of buffer B's row, or nil."
+  (when-let* ((i (seq-position drgnx-buffers--rows b #'eq)))
+    (save-excursion (goto-char (point-min)) (forward-line i) (point))))
+
+(defun drgnx-buffers--fontify (beg end)
+  "Paint the rows between BEG and END (jit-lock): ×, ●, the name's hover highlight, the folder."
   (save-excursion
-    (goto-char (point-min))
-    (when-let* ((m (text-property-search-forward 'drgnx-buffer b #'eq))) (prop-match-beginning m))))
+    (goto-char beg)
+    (forward-line 0)
+    (let ((inhibit-read-only t) (end (save-excursion (goto-char end) (pos-eol))))
+      (with-silent-modifications
+        (while (< (point) end)
+          (let* ((bol (point)) (eol (pos-eol))
+                 (name-end (or (save-excursion (goto-char (+ bol 4)) (search-forward "  " eol t)) eol)))
+            (when (< (+ bol 4) eol)
+              (add-text-properties bol (1+ bol) '(face drgnx-buffers-close mouse-face highlight help-echo "Close"))
+              (put-text-property (+ bol 2) (+ bol 3) 'face 'drgnx-buffers-modified)
+              (put-text-property (+ bol 4) (- name-end 2) 'mouse-face 'highlight)
+              (put-text-property (- name-end 2) eol 'face 'drgnx-buffers-dir)))
+          (forward-line 1)))))
+  `(jit-lock-bounds ,beg . ,end))
 
 (defun drgnx-buffers--buffer ()
   (or (get-buffer drgnx-buffers-buffer-name)
@@ -68,13 +104,16 @@
       (with-current-buffer (get-buffer-create drgnx-buffers-buffer-name)
         (unless (derived-mode-p 'drgnx-buffers-mode) (drgnx-buffers-mode))
         (let* ((windows (get-buffer-window-list (current-buffer) nil t))
-               (kept (mapcar (lambda (w) (list w (get-text-property (window-start w) 'drgnx-buffer)
-                                              (get-text-property (window-point w) 'drgnx-buffer)))
+               (kept (mapcar (lambda (w) (list w (drgnx-buffers-buffer-at (window-start w))
+                                              (drgnx-buffers-buffer-at (window-point w))))
                              windows))
-               (at (get-text-property (point) 'drgnx-buffer))
+               (at (drgnx-buffers-buffer-at (point)))
                (inhibit-read-only t))
           (erase-buffer)
-          (insert (mapconcat #'drgnx-buffers--row drgnx-buffers--order ""))
+          (let ((drgnx-buffers--dirs (make-hash-table :test #'equal)))
+            ;; One insertion of plain text (faces: jit-lock, for the visible rows only).
+            (insert (mapconcat #'drgnx-buffers--row drgnx-buffers--order "")))
+          (setq drgnx-buffers--rows (vconcat drgnx-buffers--order))
           (goto-char (or (and at (drgnx-buffers--row-pos at)) (point-min)))
           (pcase-dolist (`(,w ,top ,pt) kept)
             (when-let* ((p (and top (drgnx-buffers--row-pos top)))) (set-window-start w p t))
@@ -97,13 +136,13 @@
 
 (defun drgnx-buffers-close-at (pos)
   "Close (kill) the buffer of the row at POS."
-  (when-let* ((b (get-text-property pos 'drgnx-buffer)))
+  (when-let* ((b (drgnx-buffers-buffer-at pos)))
     (when (buffer-live-p b) (kill-buffer b))
     (drgnx-buffers--refresh)))
 
 (defun drgnx-buffers-open-at (pos)
   "Show the buffer of the row at POS in the editor and focus it."
-  (when-let* ((b (get-text-property pos 'drgnx-buffer)))
+  (when-let* ((b (drgnx-buffers-buffer-at pos)))
     (when (buffer-live-p b) (drgnx-wb-show-in-editor b t))))
 
 (defun drgnx-buffers-next () "Next row." (interactive) (forward-line 1) (when (eobp) (forward-line -1)))
@@ -130,7 +169,7 @@
   (setq drgnx-buffers--pressed nil)
   (let ((pos (posn-point (event-end event))))
     (when (integer-or-marker-p pos)
-      (if (get-text-property pos 'drgnx-close) (drgnx-buffers-close-at pos) (drgnx-buffers-open-at pos)))))
+      (if (drgnx-buffers--close-p pos) (drgnx-buffers-close-at pos) (drgnx-buffers-open-at pos)))))
 
 (defun drgnx-buffers-mouse-ignore (_event) (interactive "e") (setq drgnx-buffers--pressed nil))
 
@@ -149,7 +188,8 @@
   "The drgnx Buffers panel (open editors)."
   (setq buffer-read-only t buffer-undo-list t truncate-lines t cursor-type nil mode-line-format nil)
   (setq-local hl-line-sticky-flag t)
-  (hl-line-mode 1))
+  (hl-line-mode 1)
+  (jit-lock-register #'drgnx-buffers--fontify))
 
 (defun drgnx-buffers-setup ()
   "Put the Buffers panel in the dock (above the Explorer) and keep it current."
