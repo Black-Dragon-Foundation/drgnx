@@ -20,6 +20,9 @@ modules/<category>/drgnx-<name>.el   one drgnx-module-define per file
 the XDG directories. Packages: `(drgnx-data-dir)` — `$DRGNX_DATA_DIR` or `~/.local/share/drgnx/` — holds `elpa/`
 (the packages every session uses) and `generations/`; `(drgnx-package-cache-dir)` keeps downloaded package files
 ([packages.md](../guide/packages.md)).
+Started with `--init-directory <checkout>/init`, Emacs keeps its own state (`user-emacs-directory`: auto-save list,
+histories) in `(drgnx-state-dir)emacs/` and native code in `(drgnx-cache-dir)eln-cache/` (`init/early-init.el`), so
+nothing is written into the checkout; a harness session keeps both in its run directory.
 
 ## Staged hooks (`drgnx-hooks.el`)
 

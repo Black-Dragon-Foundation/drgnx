@@ -16,6 +16,15 @@
       inhibit-startup-screen t
       frame-resize-pixelwise t)
 (push '(tool-bar-lines . 0) default-frame-alist)
+;; Emacs's own state (auto-save list, histories, …) in drgnx's state dir and native code in its cache dir —
+;; never in the checkout's init/.  A harness session keeps both in its run directory (its prelude).
+(unless (getenv "DRGNX_UI_RUN")
+  (load (expand-file-name "../core/drgnx-paths" (file-name-directory (or load-file-name buffer-file-name))) nil t)
+  (setq user-emacs-directory (expand-file-name "emacs/" (drgnx-state-dir))
+        auto-save-list-file-prefix (expand-file-name "auto-save-list/.saves-" user-emacs-directory))
+  (ignore-errors (make-directory user-emacs-directory t))   ; Emacs and packages expect it to exist
+  (when (featurep 'native-compile)
+    (startup-redirect-eln-cache (expand-file-name "eln-cache/" (drgnx-cache-dir)))))
 (when (getenv "DRGNX_STARTUP_TRACE")      ; where startup time goes (docs/develop/perf.md)
   (load (expand-file-name "../core/drgnx-startup-trace" (file-name-directory (or load-file-name buffer-file-name))) nil t))
 
