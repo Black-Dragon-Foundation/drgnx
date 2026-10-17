@@ -96,27 +96,38 @@ A task's prompt asks for `read_decisions` first.
 ## Jobs
 
 `core/drgnx-job.el` runs in the hub (user docs: [jobs.md](../guide/jobs.md)). `drgnx-job-propose` reads the plan
-(snapshot and SHA-1 in the job's data) and makes the job and its tasks; `drgnx-job-approve` adds the job's worktree
+(snapshot and SHA-1 in the job's data) and makes the job and its tasks (a plan that numbers a task twice is refused;
+with `drgnx-job-auto-start` the job is approved first and the proposal card is made only if it is still proposed — the
+hub's `--auto` path still makes and settles the card); `drgnx-job-approve` adds the job's worktree
 and runs `drgnx-job-step`, which the hub's tick repeats for every running job: tasks whose agent is not live are
-released, `in-review` tasks get a reviewer, ready tasks get agents (`drgnx-job--start-task`: a worktree, a session
+released, `in-review` tasks get a reviewer once their agent's turn is over (idle, free or held by a Stop) or the agent
+is gone — the agent is then ended; a task with no commits on its branch (`git rev-list --count job/ID..HEAD` is 0)
+gets a `review` card, "finished with no commits", instead — ready tasks get agents (`drgnx-job--start-task`: a worktree, a session
 with `DRGNX_JOB` and `DRGNX_TASK`, the task prompt given once the session is free), and a job whose tasks are all
-done is done. The hub wires it to sessions with hooks:
+done is done, and every session of it still running ends (a clash reviewer too, even one the user is discussing with:
+the clash is moot by then). Prompts of sessions that ended before they were free are dropped. The hub wires it to sessions with hooks:
 
 | Hook | drgnx-job |
 |---|---|
-| `drgnx-agents-changed-functions` | `drgnx-job--session-changed`: prompts out, a reviewer's verdict in, a step after a session ends |
-| `drgnx-agents-request-functions` | `drgnx-job--request`: permissions by `drgnx-job-policy`, writes inside the worktree, else a card |
+| `drgnx-agents-changed-functions` | `drgnx-job--session-changed`: prompts out, a reviewer's verdict in (the last non-empty line of its last answer, starting `VERDICT:`, Markdown emphasis round it ignored), a step after a session ends or a finished task's agent's turn is over |
+| `drgnx-agents-request-functions` | `drgnx-job--request`: permissions by `drgnx-job-policy` (allowed but with no `allow_once` option: a card), writes inside the worktree (missing directories are made), else a card |
 | `drgnx-agents-error-functions` | `drgnx-job--agent-error`: a provider at its limit → `drgnx-job--fall-back` to the next profile |
 | `drgnx-gateway-event-functions` | `drgnx-job--gateway-event`: `budget` → the job pauses, its agents stop |
 
 `complete_task` from an agent of a job (`DRGNX_JOB` set) puts the task `in-review`, not `done`, and `update_task`
-there takes only `running`, `needs-input` and `in-review`; the reviewer's verdict decides (`drgnx-job--reviewed`, `drgnx-job--merge`). A card (`drgnx-job--card`) is a `card` row — one open per task and kind, actions by
+there takes only `running`, `needs-input` and `in-review`; the reviewer's verdict decides (`drgnx-job--reviewed`, `drgnx-job--merge`: a merge that fails with no unmerged files
+gets a `merge-conflict` card titled `merge failed: <git output>`; `drgnx-job--git` returns stderr after stdout when
+git fails). A card (`drgnx-job--card`) is a `card` row — one open per task and kind, actions by
 kind (`drgnx-job-card-actions`), acted on once through `job/card` (`drgnx-job-card-act`: settled first, so a second
 action is refused; reopened if the action fails) — plus a message from `drgnx` to `user` with the job and task (one line, `acted` once settled), the task `needs-input`, and a `card` event (job, task, kind, title); a
 card for an agent's pending request records it in the job's data (`:waiting`: the session, and the status to go back
-to — `in-review` for a reviewer's), so an answer, or the agent's end, puts the task back; `fallback`
-events carry job, task, agent, from, to, why. The hub's `job/propose`, `job/approve`, `job/status`, `job/stop`,
-`job/resume` ([hub.md](hub.md)) answer `drgnx-job-summary`; `bin/drgnx job` and the Plan Job commands use them.
+to — `in-review` for a reviewer's, and for an agent of a task already in review whose turn went on), so an answer, or
+the agent's end, puts the task back; the job's data also keeps, per task, how often its agent ended (`:exits`) and was
+nudged (`:nudged`; cleared on review and on retry), so a hub restart does not reset them; `fallback` events carry job,
+task, agent, from, to, why, and the successor's handover names the decision log's version. The hub's `job/propose`, `job/approve`, `job/status`, `job/stop`,
+`job/resume` ([hub.md](hub.md)) answer `drgnx-job-summary` (a task's `:profile` is its current agent's, else the route's first); `job/resume`
+refuses a job with no job worktree (a rejected proposal); `bin/drgnx job` and the Plan Job commands use them
+(`--json` gives empty list fields as `[]`, `drgnx-job--json-lists`; `--budget` must be a number).
 A notification to the hub (`coord/notify`) carries no id and gets no answer: the sender has hung up by then.
 
 ## Clashes (`core/drgnx-job-clash.el`)
@@ -139,7 +150,8 @@ A clash card gets a **reviewer** (role `review`, or `review-long` for a long cla
 worktree under the review policy: `[drgnx clash CARD]`, both sides with their reasons (a long review also the last
 4000 characters each side's agent said), answered with a last line `RECOMMEND: A`, `B` or `neither: why`
 (`drgnx-job-clash--recommendation`, onto the card's data as `(:side :why)`). It stays for **Discuss** (the user's
-text, quoted, goes to it; a gone one is started again with it) and ends when the card is settled. A clash without a
+text, quoted, goes to it; a gone one is started again with it) and ends when the card is settled, or when the job is
+done (even mid-discussion). A clash without a
 recommendation whose reviewer is gone gets one more (at most two per hub run). The user's choice is a decision of
 the user's — a `replaces` of the other side for a contradiction; the proposal recorded (or replaced) for a proposed
 decision; for work against a decision, the task back to an agent told which files to revert (A), or the decision
