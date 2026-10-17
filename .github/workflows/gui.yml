@@ -15,10 +15,21 @@ jobs:
     name: GUI tests (Emacs 31.1 pgtk, headless mutter)
     runs-on: ubuntu-24.04
     timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Prebuilt image for this Containerfile (else the tier builds it)
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          image="ghcr.io/black-dragon-foundation/drgnx-test-gui:$(sha256sum test/container/Containerfile.gui | cut -c1-16)"
+          printf '%s' "$TOKEN" | podman login ghcr.io -u "$ACTOR" --password-stdin || true
+          if podman pull -q "$image"; then echo "DRGNX_TEST_GUI_IMAGE=$image" >> "$GITHUB_ENV"; else echo "no $image yet: building"; fi
       - name: GUI tier in test/container/Containerfile.gui
         env:
           DRGNX_CONTAINER: podman

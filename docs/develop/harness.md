@@ -10,7 +10,7 @@ how every drgnx UI change is developed and verified.
 |---|---|---|
 | `bin/drgnx test` | ERT suites in `test/unit/` (batch Emacs) | the host |
 | `bin/drgnx test --scenario [--config C]` | behaviour scenarios in `test/scenario/` inside a session of configuration C (default `drgnx`; `gryphn` is skipped where that config is absent) | the host (needs mutter) |
-| `bin/drgnx test --container` | the batch tier in a `fedora:45` container (Emacs 31.1, drgnx's baseline) | podman, docker or nerdctl |
+| `bin/drgnx test --container` | the batch tier in a `fedora:45` container (Emacs 31.1, drgnx's baseline); `DRGNX_TEST_IMAGE` / `DRGNX_TEST_GUI_IMAGE` use a prebuilt image ([ci.md](ci.md)) | podman, docker or nerdctl |
 | `bin/drgnx test --container --ui` | the GUI tier in a container (mutter renders without a GPU) | podman, docker or nerdctl |
 | `bin/drgnx test --ui` | GUI ERT suites in `test/ui/` inside a headless session, then live ERT suites in `test/live/` (batch Emacs starting real sessions) | the host (needs mutter) |
 | `bin/drgnx test --bench` | the workbench timed against treemacs and ibuffer in a GUI session on a 25k-file project — see [workbench.md](../guide/workbench.md#performance) | the host (needs mutter); treemacs from `$DRGNX_BENCH_ELPA` |

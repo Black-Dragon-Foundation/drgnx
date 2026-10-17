@@ -42,18 +42,23 @@ env_eval() { # FORM — evaluate with harness/drgnx-env.el loaded, print the res
 }
 
 test_container() { # [--ui] — the batch (or GUI) tier inside a fedora:45 / Emacs 31.1 container
-  local rt mount image file args=() cmd=(bin/drgnx test)
+  # DRGNX_TEST_IMAGE / DRGNX_TEST_GUI_IMAGE: use that image (CI pulls a prebuilt one) instead of building it
+  local rt mount image file prebuilt="${DRGNX_TEST_IMAGE:-}" args=() cmd=(bin/drgnx test)
   rt="${DRGNX_CONTAINER:-$(env_eval '(drgnx-env-container-runtime)')}"   # set: no host Emacs needed (CI)
   [ -n "$rt" ] || { echo "drgnx: no container runtime found (podman, docker, nerdctl); set DRGNX_CONTAINER" >&2; return 1; }
   mount="$here:/src:ro"; [ "$rt" = podman ] && mount="$mount,Z"
   image=drgnx-test:f45; file=Containerfile
   if [ "${1:-}" = --ui ]; then
-    image=drgnx-test-gui:f45; file=Containerfile.gui; cmd=(bin/drgnx test --ui)
+    image=drgnx-test-gui:f45; file=Containerfile.gui; cmd=(bin/drgnx test --ui); prebuilt="${DRGNX_TEST_GUI_IMAGE:-}"
     args=(--security-opt seccomp=unconfined --security-opt label=disable)
     mount="$here:/src:ro"
   fi
   echo "container runtime: $rt" >&2
-  "$rt" build -q -t "$image" -f "$here/test/container/$file" "$here/test/container" >/dev/null
+  if [ -n "$prebuilt" ]; then
+    image="$prebuilt"; echo "image: $image (prebuilt)" >&2
+  else
+    "$rt" build -q -t "$image" -f "$here/test/container/$file" "$here/test/container" >/dev/null
+  fi
   "$rt" run --rm ${args[@]+"${args[@]}"} -v "$mount" -w /src "$image" "${cmd[@]}"
 }
 
