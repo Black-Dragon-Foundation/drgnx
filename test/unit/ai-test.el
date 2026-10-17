@@ -104,7 +104,7 @@ Keychain and keyring are never reached."
            (dolist (name '("security" "secret-tool"))
              (let ((script (concat ,bin name)))
                (with-temp-file script
-                 (insert "#!/bin/sh\nPATH=/usr/bin:/bin\nprintf '%s\\n' \"$@\" > " ,log name ".argv\ncat > " ,log name ".stdin\nexit ${FAKE_EXIT:-0}\n"))
+                 (insert "#!/bin/sh\nPATH=/usr/bin:/bin\nprintf '%s\\n' \"$@\" > " ,log name ".argv\nreadlink /proc/self/fd/0 > " ,log name ".fd0 2>/dev/null\n${FAKE_SLEEP:+sleep $FAKE_SLEEP}\ncat > " ,log name ".stdin\nexit ${FAKE_EXIT:-0}\n"))
                (set-file-modes script #o755)))
            (let ((system-type ,system) (exec-path (list ,bin))
                  (process-environment (append (list (concat "PATH=" ,bin) "DBUS_SESSION_BUS_ADDRESS=unix:path=/nonexistent/drgnx-test-bus")
@@ -126,13 +126,15 @@ Keychain and keyring are never reached."
         (let ((argv (drgnx-ai-test--slurp (concat log (nth 1 case) ".argv")))
               (stdin (drgnx-ai-test--slurp (concat log (nth 1 case) ".stdin"))))
           (should-not (string-search "sk-or-test-123" argv))
+          (when (file-exists-p "/proc/self/fd/0")                ; stdin is a pipe, never a file on disk
+            (should (string-prefix-p "pipe:" (drgnx-ai-test--slurp (concat log (nth 1 case) ".fd0")))))
           (should (string-search "openrouter.ai" (if (eq (nth 0 case) 'darwin) stdin argv)))
           (should (= 1 (drgnx-ai-test--count "sk-or-test-123" stdin))))))))
 
 (ert-deftest drgnx-ai/the-keychain-command-quotes-a-key-with-spaces-and-quotes ()
   (drgnx-ai-test--with root
     (drgnx-ai-test--with-fake-store 'darwin bin log
-      (cl-letf (((symbol-function 'auth-source-search) (lambda (&rest _) (list (list :secret "x")))))
+      (cl-letf (((symbol-function 'auth-source-search) (lambda (&rest _) (list (list :secret "a b\"c\\d")))))
         (drgnx-ai-store-key 'openrouter "a b\"c\\d"))
       (should (equal (drgnx-ai-test--slurp (concat log "security.stdin"))
                      "add-internet-password -U -a drgnx -s \"openrouter.ai\" -r htps -w \"a b\\\"c\\\\d\"\n"))
@@ -146,7 +148,7 @@ Keychain and keyring are never reached."
   (drgnx-ai-test--with root
     (dolist (case '((darwin macos-keychain-internet) (gnu/linux default)))
       (drgnx-ai-test--with-fake-store (nth 0 case) bin log
-        (let ((stored nil) (seen nil))
+        (let ((stored nil) (seen nil) (noninteractive nil))
           (puthash 'openrouter "stale" drgnx-ai--keys)
           (cl-letf (((symbol-function 'auth-source-search)       ; the secret store: answers only to its own source and host
                      (lambda (&rest spec)
@@ -158,6 +160,72 @@ Keychain and keyring are never reached."
             (clrhash drgnx-ai--keys)
             (should (equal stored "sk-or-test-123"))
             (should (equal (drgnx-ai-key 'openrouter t) "sk-or-test-123"))))))))
+
+(ert-deftest drgnx-ai/a-store-that-does-not-hold-this-key-is-an-error ()
+  ;; the environment, or an older key in another source, must not make a failed store look like success
+  (drgnx-ai-test--with root
+    (let ((plain (concat root "authinfo")) (noninteractive nil))
+      (with-temp-file plain (insert "machine openrouter.ai password from-authinfo\n"))
+      (dolist (system '(darwin gnu/linux))
+        (drgnx-ai-test--with-fake-store system bin log
+          (let ((auth-sources (list plain))
+                (process-environment (cons "OPENROUTER_API_KEY=from-env" process-environment)))
+            (cl-letf (((symbol-function 'auth-source-search)    ; the store answers with an older key, or nothing
+                       (lambda (&rest _) (and (member (drgnx-ai--secret-source) auth-sources)
+                                              (list (list :secret "sk-or-old-456"))))))
+              (let ((err (should-error (drgnx-ai-store-key 'openrouter "sk-or-test-123") :type 'user-error)))
+                (should (string-match-p "did not give it back" (cadr err)))
+                (should-not (string-search "sk-or-test-123" (cadr err)))
+                (should-not (string-search "sk-or-old-456" (cadr err))))
+              (should-not (gethash 'openrouter drgnx-ai--keys)))
+            (cl-letf (((symbol-function 'auth-source-search) (lambda (&rest _) nil)))
+              (should-error (drgnx-ai-store-key 'openrouter "sk-or-test-123") :type 'user-error))
+            (cl-letf (((symbol-function 'auth-source-search)
+                       (lambda (&rest _) (and (equal auth-sources (list (drgnx-ai--secret-source)))   ; the store alone is asked
+                                              (list (list :secret "sk-or-test-123"))))))
+              (should (memq (drgnx-ai-store-key 'openrouter "sk-or-test-123") '(keychain keyring))))))))))
+
+(ert-deftest drgnx-ai/a-store-that-never-answers-times-out ()
+  (drgnx-ai-test--with root
+    (drgnx-ai-test--with-fake-store 'gnu/linux bin log
+      (let ((drgnx-ai--store-timeout 0.5) (process-environment (cons "FAKE_SLEEP=30" process-environment)))
+        (let ((err (should-error (drgnx-ai-store-key 'openrouter "sk-or-test-123") :type 'user-error)))
+          (should (string-match-p "did not answer" (cadr err)))
+          (should-not (string-search "sk-or-test-123" (cadr err))))
+        (should-not (gethash 'openrouter drgnx-ai--keys))))))
+
+(ert-deftest drgnx-ai/an-earlier-miss-in-auth-source-does-not-hide-a-key-added-later ()
+  ;; auth-source caches by the search alone (misses too): drgnx's own reads must not be fooled, nor fool others
+  (drgnx-ai-test--with root
+    (let ((plain (concat root "authinfo")) (auth-source-do-cache t))
+      (with-temp-file plain (insert ""))
+      (let ((auth-sources (list plain)))
+        (should-not (drgnx-ai-key 'openrouter))
+        (should-not (auth-source-search :host "openrouter.ai" :max 1 :create nil)))   ; another caller's miss: cached
+      (with-temp-file plain (insert "machine openrouter.ai password sk-or-test-123\n"))
+      (setq auth-source-netrc-cache nil)                         ; the file's parse cache (not the search cache, which stays)
+      (let ((auth-sources (list plain)))
+        (should (equal (drgnx-ai-key 'openrouter) "sk-or-test-123"))
+        (clrhash drgnx-ai--keys)
+        (with-temp-file plain (insert "machine openrouter.ai password sk-or-new-789\n"))   ; replaced: the old one is not served
+        (setq auth-source-netrc-cache nil)
+        (should (equal (drgnx-ai-key 'openrouter) "sk-or-new-789"))))))
+
+(ert-deftest drgnx-ai/a-batch-emacs-never-searches-the-keychain-even-when-asked ()
+  (drgnx-ai-test--with root
+    (dolist (system '(darwin gnu/linux))
+      (let ((system-type system) (searched nil) (noninteractive t)
+            (auth-sources (list "/tmp/drgnx-plain-authinfo" 'macos-keychain-internet 'default "secrets:Login")))
+        (cl-letf (((symbol-function 'auth-source-search)
+                   (lambda (&rest _) (push auth-sources searched) nil)))
+          (should-not (drgnx-ai-key 'openrouter t))
+          (should (equal searched '(("/tmp/drgnx-plain-authinfo")))))
+        ;; …while an interactive Emacs does add it
+        (setq searched nil noninteractive nil auth-sources (list "/tmp/drgnx-plain-authinfo"))
+        (cl-letf (((symbol-function 'auth-source-search)
+                   (lambda (&rest _) (push auth-sources searched) nil)))
+          (should-not (drgnx-ai-key 'openrouter t))
+          (should (equal searched (list (list "/tmp/drgnx-plain-authinfo" (drgnx-ai--secret-source))))))))))
 
 (ert-deftest drgnx-ai/background-reads-never-open-the-keychain ()
   (drgnx-ai-test--with root
