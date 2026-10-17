@@ -237,7 +237,7 @@ faces come later, from jit-lock, for the rows on screen."
     (setq drgnx-explorer--git-timer
           (run-with-idle-timer 0.05 nil (lambda ()
                                           (setq drgnx-explorer--git-timer nil)
-                                          (dolist (r drgnx-explorer--roots) (drgnx-git-refresh r)))))))
+                                          (drgnx-git-refresh-tree drgnx-explorer--roots))))))
 
 (defun drgnx-explorer--git-changed (_root)
   "A git status arrived: repaint the visible rows."
