@@ -872,7 +872,11 @@ a boolean flag (`drgnx-ui--boolean-flags') becomes :name t."
 (defun drgnx-ui--click-action (pos opts)
   (append (if (plist-get opts :buffer)
               (list :buffer (plist-get opts :buffer) :text (plist-get opts :text))
-            (list :x (string-to-number (or (nth 1 pos) "0")) :y (string-to-number (or (nth 2 pos) "0"))))
+            (unless (and (stringp (nth 1 pos)) (stringp (nth 2 pos))
+                         (string-match-p "\\`[0-9]+\\'" (nth 1 pos)) (string-match-p "\\`[0-9]+\\'" (nth 2 pos)))
+              (drgnx-ui--fail "click needs X Y in pixels (non-negative integers) or --buffer B --text T, got %S"
+                              (cdr pos)))
+            (list :x (string-to-number (nth 1 pos)) :y (string-to-number (nth 2 pos))))
           (cl-loop for k in '(:button :count :hold_ms)
                    when (plist-get opts k) append (list k (string-to-number (plist-get opts k))))))
 

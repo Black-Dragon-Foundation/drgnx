@@ -225,7 +225,8 @@ bin/drgnx ui measure drgnx-ui-1 '[{"keys":"C-x 2"},{"x":10,"y":10}]'
 bin/drgnx ui stop drgnx-ui-1 | bin/drgnx ui reap
 ```
 
-Input commands wait until the session settles and print the jank report. In `measure`, each action is
+Input commands wait until the session settles and print the jank report. `click` takes X and Y as non-negative
+integers (pixels) and fails on anything else, never clicking at 0,0 instead. In `measure`, each action is
 delivered before the next one is resolved, so a click after `C-x 3` is aimed at the layout the keys produced. An
 action that fails (a bad key, a target not on screen) ends the measurement — the session's recorder stops — and
 the error names it: `action 2 (:keys "bad"): …`; later actions are not sent. `bin/drgnx` passes arguments after

@@ -164,6 +164,13 @@ the real ones belong to sessions running next to the tests (bin/drgnx check's li
   (should (equal (drgnx-ui--parse-args '("drgnx-ui-1" "--buffer" "*scratch*" "--hold-ms" "300"))
                  '(("drgnx-ui-1") :buffer "*scratch*" :hold_ms "300"))))
 
+(ert-deftest drgnx-ui/cli-click-needs-pixel-coordinates ()
+  ;; DEFERRED M1-3: a missing or non-numeric X/Y used to click at (0,0)
+  (should (equal (drgnx-ui--click-action '("drgnx-ui-1" "10" "20") '(:count "2")) '(:x 10 :y 20 :count 2)))
+  (dolist (pos '(("drgnx-ui-1") ("drgnx-ui-1" "10") ("drgnx-ui-1" "a" "3") ("drgnx-ui-1" "-1" "3")
+                 ("drgnx-ui-1" "1.5" "3") ("drgnx-ui-1" "10" "20px")))
+    (should-error (drgnx-ui--click-action pos nil) :type 'drgnx-ui-error)))
+
 (ert-deftest drgnx-ui/launcher-choice ()
   (should (equal (drgnx-ui--choose-launcher nil t nil) "systemd"))
   (should (equal (drgnx-ui--choose-launcher "podman" t nil) "detached"))
