@@ -130,6 +130,22 @@ the real ones belong to sessions running next to the tests (bin/drgnx check's li
     (should (member "drgnx-ui-7" (append (drgnx-ui-reap) nil)))
     (should-not (file-exists-p (expand-file-name "drgnx-ui-7" root)))))
 
+(ert-deftest drgnx-ui/reap-removes-old-kept-test-runs ()
+  ;; DEFERRED M2-5: a failed --ui/--scenario run keeps its run dir for debugging, but not for ever
+  (drgnx-ui-test--with-state
+    (let ((old (expand-file-name "drgnx-ui-test-111-222" root))
+          (new (expand-file-name "drgnx-ui-test-333-444" root))
+          (other (expand-file-name "drgnx-ui-test-notes" root)))
+      (dolist (d (list old new other)) (make-directory d))
+      (write-region "log" nil (expand-file-name "session.log" old))
+      (dolist (d (list old other))
+        (set-file-times d (time-subtract nil (* 86400 (1+ drgnx-ui-test-run-max-days)))))
+      (cl-letf (((symbol-function 'drgnx-ui--run) (lambda (&rest _) (cons 0 ""))))
+        (drgnx-ui-reap))
+      (should-not (file-exists-p old))
+      (should (file-directory-p new))
+      (should (file-directory-p other)))))
+
 (ert-deftest drgnx-ui/reap-leaves-other-state-roots-alone ()
   (drgnx-ui-test--with-state
     (let ((units "drgnx-ui-41.service loaded active running x\ndrgnx-ui-42.service loaded active running y\n")

@@ -515,8 +515,24 @@ Units of other state roots (another checkout, a test run) are left alone."
           (push name names))))
     (sort (delete-dups names) #'string<)))
 
+(defconst drgnx-ui-test-run-max-days 7
+  "Days a failed test run's directory (drgnx-ui-test-*, kept for debugging) is kept.")
+
+(defun drgnx-ui--remove-old-test-runs (root)
+  "Delete ROOT's test run directories (drgnx-ui-test-PID-N) last changed more than
+`drgnx-ui-test-run-max-days' ago.  A test run lasts minutes, so none of them is live."
+  (let ((cutoff (- (float-time) (* 86400 drgnx-ui-test-run-max-days))))
+    (dolist (name (and (file-directory-p root) (directory-files root nil "\\`drgnx-ui-test-[0-9]+-[0-9]+\\'")))
+      (let* ((dir (expand-file-name name root))
+             (attrs (file-attributes dir)))
+        (when (and (eq (file-attribute-type attrs) t)
+                   (< (float-time (file-attribute-modification-time attrs)) cutoff))
+          (delete-directory dir t))))))
+
 (defun drgnx-ui-reap ()
-  "Stop every session of this state root, live or stale; return their names."
+  "Stop every session of this state root, live or stale; return their names.
+Old kept test runs go too (`drgnx-ui--remove-old-test-runs')."
+  (drgnx-ui--remove-old-test-runs (drgnx-ui-state-root))
   (let* ((units (cdr (drgnx-ui--run "systemctl" "--user" "list-units" "drgnx-ui-*" "--all"
                                     "--plain" "--no-legend")))
          (names (drgnx-ui-reap-targets (drgnx-ui-state-root) units #'drgnx-ui--unit-cmdline)))
@@ -696,6 +712,7 @@ functions and hook totals measured in the session."
   "Run the ERT suite in TESTS-DIR inside a foreground session of CONFIG (default minimal),
 with EXTRA-ENV (\"K=V\" strings).  Return (RC RESULTS RUN)."
   (let* ((name (format "drgnx-ui-test-%d-%d" (emacs-pid) (random 100000)))
+         (_ (drgnx-ui--remove-old-test-runs (drgnx-ui-state-root)))   ; failed runs kept long enough
          (sess (drgnx-ui-prepare-run name config "1600x900"))
          (run (plist-get sess :run))
          (results (expand-file-name "results.json" run))

@@ -249,8 +249,9 @@ one of its members names the run directory (a stale `pgid` file may point at a r
 signalled), and a Wayland display only when no process serves it any more. `reap` does that for every session of the
 current state root — run directories, plus live units whose command line points into it — and leaves sessions
 of other state roots alone. Units also end on their own after 30 minutes (`RuntimeMaxSec=1800`) and are
-capped at 3 GB (`MemoryMax`). A failed `drgnx test --ui` run keeps its run directory (with `session.log`) for
-debugging.
+capped at 3 GB (`MemoryMax`). A failed `drgnx test --ui` or `--scenario` run keeps its run directory
+(`drgnx-ui-test-PID-N`, with `session.log`) for debugging, for 7 days: `reap` and the next test run delete older
+ones.
 
 ## Containers
 
