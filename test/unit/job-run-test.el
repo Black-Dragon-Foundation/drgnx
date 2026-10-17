@@ -31,6 +31,14 @@
       (should (equal (plist-get (drgnx-coord-job id) :status) "running"))
       (should (drgnx-job-run-test--wait (lambda () (drgnx-job-run-test--sessions id)))))))
 
+(ert-deftest drgnx-job/auto-start-makes-no-proposal-card ()
+  ;; nobody is asked to approve what starts at once: no card, no message
+  (drgnx-job-run-test--with drgnx-job-run-test--two
+    (let* ((drgnx-job-auto-start t) (drgnx-job-max-agents 0) (id (drgnx-job-propose plan)))
+      (should (equal (plist-get (drgnx-coord-job id) :status) "running"))
+      (should-not (drgnx-coord-cards id))
+      (should-not (seq-find (lambda (m) (string-prefix-p "[proposal]" (plist-get m :text))) (drgnx-coord-inbox "user"))))))
+
 (ert-deftest drgnx-job/a-finished-task-goes-to-review-not-done ()
   (drgnx-job-run-test--with drgnx-job-run-test--two
     (let ((drgnx-job-review nil) (id (drgnx-job-propose plan)))   ; no reviewer: it waits in review

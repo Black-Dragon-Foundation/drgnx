@@ -141,10 +141,12 @@ own repository).  Returns its id; nothing starts (unless `drgnx-job-auto-start')
     (dolist (d (plist-get plan :decisions))
       (drgnx-coord-decide :kind (plist-get d :kind) :subject (plist-get d :subject) :job id :author "user"
                           :reason "the plan says so" :seen (drgnx-coord-version)))
-    (drgnx-job--card id nil "proposal"
-                     (format "%d tasks, about %.2f USD%s: approve to start" (length tasks) (plist-get (plist-get proposal :estimate) :usd)
-                             (if (plist-get (plist-get proposal :estimate) :unpriced) " (some unpriced)" "")))
-    (when (and drgnx-job-auto-start (fboundp 'drgnx-job-approve)) (drgnx-job-approve id))
+    ;; with automatic start the job is approved first: the proposal card is only for a job that still waits
+    (unwind-protect (when (and drgnx-job-auto-start (fboundp 'drgnx-job-approve)) (drgnx-job-approve id))
+      (when (equal (plist-get (drgnx-coord-job id) :status) "proposed")
+        (drgnx-job--card id nil "proposal"
+                         (format "%d tasks, about %.2f USD%s: approve to start" (length tasks) (plist-get (plist-get proposal :estimate) :usd)
+                                 (if (plist-get (plist-get proposal :estimate) :unpriced) " (some unpriced)" "")))))
     id))
 
 (defun drgnx-job-get (id)
