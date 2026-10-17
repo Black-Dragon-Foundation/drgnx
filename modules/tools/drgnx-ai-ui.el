@@ -18,6 +18,8 @@
 (require 'drgnx-ai)
 (require 'drgnx-ai-client)
 (require 'drgnx-ai-probe)
+(require 'diff)
+(require 'diff-mode)
 
 (defface drgnx-ai-ghost '((t :inherit shadow)) "A suggestion not yet accepted." :group 'drgnx)
 
@@ -192,6 +194,102 @@ field; cycle the heading; indent."
     (setq this-command cmd)
     (call-interactively cmd)))
 
+;;;; Inline edit, reviewed hunk by hunk
+
+(defconst drgnx-ai-edit-system
+  "You edit code.  Rewrite the code you are given as the instruction says.  Answer with the complete replacement code
+only: no explanation, no Markdown fence."
+  "What the `edit' role is told.")
+
+(defvar-local drgnx-ai--edit nil
+  "In a review: (:buffer :start :end :old :prefix :suffix :copy :dir) — the region's markers, its text when the
+answer came, how much of the copy is before and after it, the copy that takes the hunks you apply.")
+
+(defvar drgnx-ai-edit-review-mode-map (make-sparse-keymap)
+  "Keys come from the key profiles (commands `ai-edit-done', `ai-edit-reject').")
+
+(define-minor-mode drgnx-ai-edit-review-mode
+  "An AI edit: apply the hunks you want (C-c C-a), then Done puts them in the buffer; Reject drops it."
+  :lighter " AI-Review")
+
+(defun drgnx-ai--strip-fence (text)
+  "TEXT without the Markdown fence (and the words around it) a model may wrap code in."
+  (if (string-match "```[^\n]*\n\\(\\(?:.\\|\n\\)*?\\)\n?```" text) (match-string 1 text) text))
+
+(defun drgnx-ai-edit (instruction start end)
+  "Edit the region START..END (the defun at point without a region) as INSTRUCTION says; review the answer
+hunk by hunk before anything changes."
+  (interactive
+   (let ((b (if (use-region-p) (cons (region-beginning) (region-end))
+              (or (bounds-of-thing-at-point 'defun) (cons (line-beginning-position) (line-end-position))))))
+     (list (read-string "Edit with AI: ") (car b) (cdr b))))
+  (let* ((buf (current-buffer))
+         (s (copy-marker start)) (e (copy-marker end t))
+         (text (buffer-substring-no-properties start end)))
+    (message "AI edit: asking…")
+    (drgnx-ai-request 'edit 'chat
+                      (list :messages (vector (list :role "system" :content drgnx-ai-edit-system)
+                                              (list :role "user" :content (format "Instruction: %s\n\nCode:\n%s" instruction text))))
+                      (lambda (answer info)
+                        (if (not answer)
+                            (message "AI edit: no answer (%s)" (plist-get info :error))
+                          (let ((new (drgnx-ai--strip-fence answer)))
+                            (when (and (string-suffix-p "\n" text) (not (string-suffix-p "\n" new))) (setq new (concat new "\n")))
+                            (when (buffer-live-p buf) (drgnx-ai--edit-review buf s e new))))))))
+
+(defun drgnx-ai--edit-review (buf start end new)
+  "Show NEW for BUF's region START..END (markers) as a diff against a copy of BUF as it is now."
+  (let* ((cur (with-current-buffer buf (buffer-substring-no-properties (point-min) (point-max))))
+         (s (with-current-buffer buf (- start (point-min)))) (e (with-current-buffer buf (- end (point-min))))
+         (dir (make-temp-file "drgnx-ai-edit" t))
+         (copy (expand-file-name (concat "now-" (file-name-nondirectory (or (buffer-file-name buf) "buffer"))) dir))
+         (proposed (expand-file-name "proposed" dir)))
+    (let ((coding-system-for-write 'utf-8-unix))
+      (write-region cur nil copy nil 'silent)
+      (write-region (concat (substring cur 0 s) new (substring cur e)) nil proposed nil 'silent))
+    (let ((review (diff-no-select copy proposed "-u" t (get-buffer-create (format "*AI edit: %s*" (buffer-name buf))))))
+      (delete-file proposed)
+      (with-current-buffer review
+        (drgnx-ai-edit-review-mode 1)
+        (setq drgnx-ai--edit (list :buffer buf :start start :end end :old (substring cur s e)
+                                   :prefix s :suffix (- (length cur) e) :copy copy :dir dir))
+        (setq header-line-format " AI edit of %s  (C-c C-a apply a hunk · C-c C-c done · C-c C-k reject)")
+        (setq header-line-format (format header-line-format (buffer-name buf)))
+        (add-hook 'kill-buffer-hook #'drgnx-ai--edit-cleanup nil t))
+      (pop-to-buffer review)
+      review)))
+
+(defun drgnx-ai--edit-cleanup ()
+  "The review goes: its copy and temporary files too (nothing reaches the buffer)."
+  (when drgnx-ai--edit
+    (let ((copy (plist-get drgnx-ai--edit :copy)) (dir (plist-get drgnx-ai--edit :dir)))
+      (setq drgnx-ai--edit nil)
+      (when-let* ((cb (find-buffer-visiting copy))) (with-current-buffer cb (set-buffer-modified-p nil)) (kill-buffer cb))
+      (ignore-errors (delete-directory dir t)))))
+
+(defun drgnx-ai-edit-done ()
+  "Put the hunks you applied into the buffer's region; edits made elsewhere meanwhile stay.  Refuses when the
+region itself changed since the answer came."
+  (interactive)
+  (let* ((ed (or drgnx-ai--edit (user-error "Not an AI edit")))
+         (buf (plist-get ed :buffer)) (start (plist-get ed :start)) (end (plist-get ed :end))
+         (copy (plist-get ed :copy)) (cb (find-buffer-visiting copy))
+         (text (if cb (with-current-buffer cb (buffer-substring-no-properties (point-min) (point-max)))
+                 (with-temp-buffer (insert-file-contents copy) (buffer-string))))
+         (middle (substring text (plist-get ed :prefix) (- (length text) (plist-get ed :suffix)))))
+    (unless (buffer-live-p buf) (user-error "The buffer is gone"))
+    (with-current-buffer buf
+      (unless (equal (buffer-substring-no-properties start end) (plist-get ed :old))
+        (user-error "The region changed since the answer: run Edit with AI again"))
+      (save-excursion (goto-char start) (delete-region start end) (insert middle)))
+    (kill-buffer (current-buffer))))
+
+(defun drgnx-ai-edit-reject ()
+  "Drop the AI edit: the buffer stays as it is."
+  (interactive)
+  (unless drgnx-ai--edit (user-error "Not an AI edit"))
+  (kill-buffer (current-buffer)))
+
 ;;;; The module
 
 (drgnx-module-define 'tools/ai
@@ -210,7 +308,12 @@ field; cycle the heading; indent."
                                         (ai-dismiss "Dismiss Suggestion" drgnx-ai-dismiss "Drop the suggestion" drgnx-ai-ghost-showing-map)
                                         (ai-tab "Tab (Suggestion, Completion, Snippet, Heading, Indent)" drgnx-ai-tab
                                                 "Accept a suggestion, else the popup's, snippet's, heading's or indent Tab" drgnx-ai-ghost-mode-map)
-                                        (ai-complete-toggle "Toggle AI Completion" drgnx-ai-complete-toggle "Ghost text on or off" nil)))
+                                        (ai-complete-toggle "Toggle AI Completion" drgnx-ai-complete-toggle "Ghost text on or off" nil)
+                                        (ai-edit "Edit with AI…" drgnx-ai-edit "Rewrite the region (or defun) as you say; review hunk by hunk" nil)
+                                        (ai-edit-done "Done Reviewing AI Edit" drgnx-ai-edit-done "Put the hunks you applied in the buffer"
+                                                      drgnx-ai-edit-review-mode-map)
+                                        (ai-edit-reject "Reject AI Edit" drgnx-ai-edit-reject "Drop the edit; the buffer stays"
+                                                        drgnx-ai-edit-review-mode-map)))
                          (apply #'drgnx-command-define id :category "AI" :title title :command fn :doc doc (and map (list :map map))))))
 
 (provide 'drgnx-ai-ui)

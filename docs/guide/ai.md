@@ -66,6 +66,20 @@ nothing is asked, and drgnx says so once.
 4. cycle an org or outline heading;
 5. indent.
 
+## Inline edit
+
+**Edit with AI…** rewrites the selected region, or the defun at point when nothing is selected, as you say. Keys:
+VS Code `C-k C-e`, Emacs `C-c e`, Vim `SPC a e`; never `C-i`, which is Tab in a terminal. It asks the `edit` role.
+The answer opens as a diff against the buffer as it is now (a code fence the model adds is dropped), and nothing
+changes until you decide:
+
+- `C-c C-a` applies a hunk (to a copy);
+- `C-c C-c` (Done) puts the hunks you applied into the buffer's region;
+- `C-c C-k` (Reject), or closing the diff, drops it all.
+
+Edits you make elsewhere in the buffer meanwhile stay. If the region itself changed since the answer came, Done
+refuses rather than overwrite it.
+
 ## Detection, fallback and the doctor
 
 drgnx asks the local providers whether they run — every address at once, one second each, in the background,
