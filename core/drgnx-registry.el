@@ -33,7 +33,7 @@
         (t map)))
 
 (cl-defun drgnx-command-define (id &key title category command map menu context context-first doc when scope
-                                      (key nil key-p) (native nil native-p))
+                                   (key nil key-p) (native nil native-p))
   "Register command ID (a symbol).  Returns ID.
 TITLE, CATEGORY and COMMAND are required.  MAP: the keymap its keys belong in by default — nil
 (global), a keymap symbol, or (FEATURE . KEYMAP-SYMBOL).  MENU: menu-bar path, e.g.

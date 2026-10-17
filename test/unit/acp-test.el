@@ -44,7 +44,7 @@
       (drgnx-acp-test--call c "session/new" '(:cwd "/tmp" :mcpServers []))
       (should (drgnx-acp-test--wait
                (lambda () (seq-find (lambda (n) (equal (plist-get (plist-get (cdr n) :update) :sessionUpdate)
-                                                        "available_commands_update"))
+                                                       "available_commands_update"))
                                     seen)))))))
 
 (ert-deftest drgnx-acp/agent-requests-are-answered-by-the-handler ()

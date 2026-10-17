@@ -136,7 +136,7 @@
       (prin1 `(:version 1 :left (:shown nil) :panel (:shown nil) :right (:shown nil) :main nil
                         :groups ((:tabs (,(expand-file-name "a.txt" dir) "/ssh:nobody@example.invalid:/x"
                                          ,(expand-file-name "b.txt" dir) ,(expand-file-name "c.txt" dir))
-                                  :shown ,(expand-file-name "b.txt" dir))))
+                                        :shown ,(expand-file-name "b.txt" dir))))
              (current-buffer)))
     (dolist (n '("a.txt" "b.txt" "c.txt")) (write-region "x\n" nil (expand-file-name n dir) nil 'silent))
     (cl-letf (((symbol-function 'file-remote-p) (lambda (f &rest _) (and (stringp f) (string-prefix-p "/ssh:" f))))

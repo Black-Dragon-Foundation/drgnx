@@ -74,8 +74,8 @@ build/ ignored (with build/out.o)."
             (with-current-buffer drgnx-explorer-buffer-name
               (drgnx-explorer--fontify (point-min) (point-max))
               (cl-flet ((deco (name) (goto-char (point-min)) (search-forward name)
-                              (mapconcat (lambda (o) (or (overlay-get o 'after-string) ""))
-                                         (overlays-in (pos-bol) (1+ (pos-eol))) "")))
+                          (mapconcat (lambda (o) (or (overlay-get o 'after-string) ""))
+                                     (overlays-in (pos-bol) (1+ (pos-eol))) "")))
                 (should (string-search "U" (deco "c.txt")))
                 (should (string-search "●" (deco "src")))     ; a folder with changes inside
                 (should (string= "" (deco "a.txt"))))))

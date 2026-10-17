@@ -42,7 +42,7 @@
           (with-temp-file a (insert ";;; -*- lexical-binding: t -*-\n(defsubst drgnx-test-a-val () 2)\n(provide 'drgnx-test-2a)\n"))
           (drgnx-build-test--emacs `(load ,(expand-file-name "core/drgnx-build.el" drgnx-dir) nil t) `(drgnx-build ,root))
           (should (string-search "value=2" (drgnx-build-test--emacs
-                                             `(add-to-list 'load-path ,core)
-                                             `(load ,(expand-file-name "drgnx-test-1b.elc" core) nil t)
-                                             '(princ (format "value=%s" (drgnx-test-b)))))))
+                                            `(add-to-list 'load-path ,core)
+                                            `(load ,(expand-file-name "drgnx-test-1b.elc" core) nil t)
+                                            '(princ (format "value=%s" (drgnx-test-b)))))))
       (delete-directory root t))))

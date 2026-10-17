@@ -6,10 +6,10 @@
   (let ((budgets '(:explorer-first 30 :explorer-expand 80)))
     ;; Within budget and faster than the competitor: no failures.
     (should (null (drgnx-bench-verdict '(:drgnx (:explorer-first 10 :explorer-expand 50)
-                                         :treemacs (:explorer-first 40 :explorer-expand 900))
+                                                :treemacs (:explorer-first 40 :explorer-expand 900))
                                        budgets '((:explorer-first . :treemacs) (:explorer-expand . :treemacs)))))
     (let ((fails (drgnx-bench-verdict '(:drgnx (:explorer-first 35 :explorer-expand 50)
-                                        :treemacs (:explorer-first 40 :explorer-expand 20))
+                                               :treemacs (:explorer-first 40 :explorer-expand 20))
                                       budgets '((:explorer-first . :treemacs) (:explorer-expand . :treemacs)))))
       (should (seq-find (lambda (f) (string-match-p "explorer-first.*35.*budget 30" f)) fails))
       (should (seq-find (lambda (f) (string-match-p "explorer-expand.*50.*treemacs.*20" f)) fails)))

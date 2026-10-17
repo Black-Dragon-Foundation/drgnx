@@ -255,7 +255,7 @@
 (defun drgnx-agents-ui-job-stop (id)
   "Stop durable job ID."
   (interactive (list (completing-read "Stop job: " (mapcar (lambda (j) (plist-get j :id))
-                                                         (seq-filter (lambda (j) (eq (plist-get j :status) 'running)) (drgnx-jobs-list)))
+                                                           (seq-filter (lambda (j) (eq (plist-get j :status) 'running)) (drgnx-jobs-list)))
                                       nil t)))
   (drgnx-jobs-stop id))
 
@@ -343,36 +343,36 @@ the copy), then Done writes the copy to the file (Reject, or closing the diff, w
 ;;;; The module
 
 (drgnx-module-define 'tools/agents
-  :doc "Agents: sessions over ACP in the right dock's Agents tab, durable jobs, edit review."
-  :stage 'startup :requires '(core/workbench)
-  :setup
-  (lambda ()
-    (add-hook 'drgnx-agents-changed-functions #'drgnx-agents-ui--changed)
-    (when (fboundp 'drgnx-wb-define-tab) (drgnx-wb-define-tab 'right 'agents :title "Agents"))
-    (when (fboundp 'drgnx-wb-place)
-      (drgnx-wb-place 'drgnx-agents-list-mode 'right :tab 'agents)
-      (drgnx-wb-place '(drgnx-agents-transcript-mode) 'editor)
-      (drgnx-wb-place "\\`\\*\\(review\\|job\\): " 'editor))
-    (pcase-dolist (`(,id ,title ,fn ,doc)
-                   '((agents-view "Show Agents" drgnx-agents-ui-view "Agent sessions and durable jobs, in the right dock")
-                     (agents-new "New Agent Session…" drgnx-agents-ui-new "Start an agent (a profile) in this project")
-                     (agents-send "Send to Agent…" drgnx-agents-ui-send "Queued while the agent works; never cancels")
-                     (agents-stop "Stop Agent" drgnx-agents-ui-stop "Cancel the running turn (the only thing that does)")
-                     (agents-deliver "Deliver Queued Messages" drgnx-agents-ui-deliver "Send what a Stop held back")
-                     (agents-edit-queued "Edit Queued Message…" drgnx-agents-ui-edit-queued "Change or remove a message before it is sent")
-                     (agents-take-over "Take Over Agent Session…" drgnx-agents-ui-take-over "Resume a session by its id")
-                     (agents-answer "Answer Agent…" drgnx-agents-ui-answer "Allow or reject what the agent asks")
-                     (jobs-log "Show Job Log…" drgnx-agents-ui-job-log "A durable job's output")
-                     (jobs-stop "Stop Job…" drgnx-agents-ui-job-stop "Stop a durable job")))
-      (drgnx-command-define id :category "Agents" :title title :command fn :doc doc))
-    (drgnx-command-define 'agents-open :category "Agents" :title "Open" :command #'drgnx-agents-ui-open-at-point
-      :map 'drgnx-agents-list-mode-map :doc "The session's transcript, or the job's log")
-    (drgnx-command-define 'agents-reply :category "Agents" :title "Reply" :command #'drgnx-agents-ui-send
-      :map 'drgnx-agents-transcript-mode-map :doc "Send to this agent (queued while it works)")
-    (drgnx-command-define 'agents-review-done :category "Agents" :title "Done Reviewing" :command #'drgnx-agents-ui-review-done
-      :map 'drgnx-agents-review-mode-map :doc "Keep the hunks you applied; tell the agent")
-    (drgnx-command-define 'agents-review-reject :category "Agents" :title "Reject Edit" :command #'drgnx-agents-ui-review-reject
-      :map 'drgnx-agents-review-mode-map :doc "Tell the agent the edit was rejected")))
+                     :doc "Agents: sessions over ACP in the right dock's Agents tab, durable jobs, edit review."
+                     :stage 'startup :requires '(core/workbench)
+                     :setup
+                     (lambda ()
+                       (add-hook 'drgnx-agents-changed-functions #'drgnx-agents-ui--changed)
+                       (when (fboundp 'drgnx-wb-define-tab) (drgnx-wb-define-tab 'right 'agents :title "Agents"))
+                       (when (fboundp 'drgnx-wb-place)
+                         (drgnx-wb-place 'drgnx-agents-list-mode 'right :tab 'agents)
+                         (drgnx-wb-place '(drgnx-agents-transcript-mode) 'editor)
+                         (drgnx-wb-place "\\`\\*\\(review\\|job\\): " 'editor))
+                       (pcase-dolist (`(,id ,title ,fn ,doc)
+                                      '((agents-view "Show Agents" drgnx-agents-ui-view "Agent sessions and durable jobs, in the right dock")
+                                        (agents-new "New Agent Session…" drgnx-agents-ui-new "Start an agent (a profile) in this project")
+                                        (agents-send "Send to Agent…" drgnx-agents-ui-send "Queued while the agent works; never cancels")
+                                        (agents-stop "Stop Agent" drgnx-agents-ui-stop "Cancel the running turn (the only thing that does)")
+                                        (agents-deliver "Deliver Queued Messages" drgnx-agents-ui-deliver "Send what a Stop held back")
+                                        (agents-edit-queued "Edit Queued Message…" drgnx-agents-ui-edit-queued "Change or remove a message before it is sent")
+                                        (agents-take-over "Take Over Agent Session…" drgnx-agents-ui-take-over "Resume a session by its id")
+                                        (agents-answer "Answer Agent…" drgnx-agents-ui-answer "Allow or reject what the agent asks")
+                                        (jobs-log "Show Job Log…" drgnx-agents-ui-job-log "A durable job's output")
+                                        (jobs-stop "Stop Job…" drgnx-agents-ui-job-stop "Stop a durable job")))
+                         (drgnx-command-define id :category "Agents" :title title :command fn :doc doc))
+                       (drgnx-command-define 'agents-open :category "Agents" :title "Open" :command #'drgnx-agents-ui-open-at-point
+                                             :map 'drgnx-agents-list-mode-map :doc "The session's transcript, or the job's log")
+                       (drgnx-command-define 'agents-reply :category "Agents" :title "Reply" :command #'drgnx-agents-ui-send
+                                             :map 'drgnx-agents-transcript-mode-map :doc "Send to this agent (queued while it works)")
+                       (drgnx-command-define 'agents-review-done :category "Agents" :title "Done Reviewing" :command #'drgnx-agents-ui-review-done
+                                             :map 'drgnx-agents-review-mode-map :doc "Keep the hunks you applied; tell the agent")
+                       (drgnx-command-define 'agents-review-reject :category "Agents" :title "Reject Edit" :command #'drgnx-agents-ui-review-reject
+                                             :map 'drgnx-agents-review-mode-map :doc "Tell the agent the edit was rejected")))
 
 (provide 'drgnx-agents-ui)
 ;;; drgnx-agents-ui.el ends here

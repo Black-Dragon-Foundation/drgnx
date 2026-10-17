@@ -10,13 +10,13 @@
   "Fresh fixture ROOT, its main.py open in the editor, the sidebar shown, then BODY."
   (declare (indent 1))
   `(drgnx-scenario-settling
-     (drgnx-scenario-load-driver)
-     (drgnx-scenario-with-fixture (,root 'basic)
-       (drgnx-driver-reset)
-       (drgnx-driver-open-file (expand-file-name "src/app/main.py" ,root))
-       (drgnx-driver-show-sidebar)
-       (drgnx-uitest-run nil)
-       ,@body)))
+    (drgnx-scenario-load-driver)
+    (drgnx-scenario-with-fixture (,root 'basic)
+      (drgnx-driver-reset)
+      (drgnx-driver-open-file (expand-file-name "src/app/main.py" ,root))
+      (drgnx-driver-show-sidebar)
+      (drgnx-uitest-run nil)
+      ,@body)))
 
 (ert-deftest drgnx-scenario/buffers-header-survives-refresh ()
   "The Buffers panel shows its header line, and keeps it while buffers come and go."

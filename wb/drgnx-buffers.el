@@ -157,7 +157,7 @@ While a button is held in the panel, wait for the release: rows never move under
         (unless (derived-mode-p 'drgnx-buffers-mode) (drgnx-buffers-mode))
         (let* ((windows (get-buffer-window-list (current-buffer) nil t))
                (kept (mapcar (lambda (w) (list w (drgnx-buffers-buffer-at (window-start w))
-                                              (drgnx-buffers-buffer-at (window-point w))))
+                                               (drgnx-buffers-buffer-at (window-point w))))
                              windows))
                (at (drgnx-buffers-buffer-at (point)))
                (inhibit-read-only t))
@@ -206,23 +206,23 @@ While a button is held in the panel, wait for the release: rows never move under
 (defun drgnx-buffers--user-buffers () (seq-filter #'buffer-live-p drgnx-buffers--order))
 
 (defun drgnx-buffers-save-all () "Save every buffer with unsaved changes (no questions)."
-  (interactive) (save-some-buffers t) (drgnx-buffers--refresh))
+       (interactive) (save-some-buffers t) (drgnx-buffers--refresh))
 
 (defun drgnx-buffers-close-saved () "Close every buffer without unsaved changes."
-  (interactive)
-  (dolist (b (drgnx-buffers--user-buffers)) (unless (buffer-modified-p b) (kill-buffer b)))
-  (drgnx-buffers--refresh))
+       (interactive)
+       (dolist (b (drgnx-buffers--user-buffers)) (unless (buffer-modified-p b) (kill-buffer b)))
+       (drgnx-buffers--refresh))
 
 (defun drgnx-buffers-close-others () "Close every buffer but the one of the row here."
-  (interactive)
-  (let ((keep (or (drgnx-buffers-buffer-at (point)) (user-error "No buffer here"))))
-    (dolist (b (drgnx-buffers--user-buffers)) (unless (eq b keep) (kill-buffer b))))
-  (drgnx-buffers--refresh))
+       (interactive)
+       (let ((keep (or (drgnx-buffers-buffer-at (point)) (user-error "No buffer here"))))
+         (dolist (b (drgnx-buffers--user-buffers)) (unless (eq b keep) (kill-buffer b))))
+       (drgnx-buffers--refresh))
 
 (defun drgnx-buffers-close-all () "Close every buffer in the panel (unsaved ones ask first)."
-  (interactive)
-  (dolist (b (drgnx-buffers--user-buffers)) (kill-buffer b))
-  (drgnx-buffers--refresh))
+       (interactive)
+       (dolist (b (drgnx-buffers--user-buffers)) (kill-buffer b))
+       (drgnx-buffers--refresh))
 
 (defun drgnx-buffers--filter-apply (text)
   "Show only buffers whose names contain TEXT."
@@ -252,7 +252,7 @@ While a button is held in the panel, wait for the release: rows never move under
       (with-current-buffer (window-buffer (posn-window (event-end event))) (drgnx-buffers-close-at pos)))))
 
 (defun drgnx-buffers-focus () "Show the sidebar and focus the Buffers panel."
-  (interactive) (drgnx-wb-focus-section 'buffers))
+       (interactive) (drgnx-wb-focus-section 'buffers))
 
 (defun drgnx-buffers-mouse-press (event)
   "Press: select the row; the action happens on release."

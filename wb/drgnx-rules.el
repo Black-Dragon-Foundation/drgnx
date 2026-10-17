@@ -54,7 +54,7 @@ Later rules are tried first; a rule with the same MATCHER is replaced where it s
 
 (defconst drgnx-rules--explicit-actions
   '(display-buffer-pop-up-frame display-buffer-use-some-frame display-buffer-no-window
-    display-buffer-in-child-frame)
+                                display-buffer-in-child-frame)
   "Actions a caller only names on purpose (C-x 5 b, no window wanted): they win over the rules.")
 
 (defun drgnx-rules--explicit-p (action)
@@ -202,7 +202,7 @@ left and right docks run the frame's full height, the panel sits under the edito
 ;; Names too: several are displayed before their mode is set.
 (drgnx-wb-place (lambda (name _action) (buffer-file-name (get-buffer name))) 'editor)
 (drgnx-wb-place '(dired-mode Buffer-menu-mode ibuffer-mode Custom-mode proced-mode edit-abbrevs-mode
-                  bookmark-bmenu-mode tabulated-list-mode command-history-mode)
+                             bookmark-bmenu-mode tabulated-list-mode command-history-mode)
                 'editor)
 (drgnx-wb-place "\\`\\*\\(scratch\\|Ibuffer\\|Buffer List\\|Customize.*\\|Proced\\|Abbrevs\\|Bookmark List\\)\\*\\'" 'editor)
 

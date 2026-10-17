@@ -81,38 +81,38 @@ them), or nil."
   "Nodes of plan FILE: the plan, its tasks, their steps; its spec (and the edge to it)."
   (let* ((text (drgnx-work--text file)) (plan (concat "plan:" file)))
     (when (string-match-p "^### Task [0-9]" text)     ; a markdown without tasks is not a plan
-    (drgnx-work-put-node plan :kind 'plan :title (drgnx-work--title text (file-name-base file)) :path file :line 1
-                         :status "open" :source file)
-    (when (string-match "^\\*\\*Spec:\\*\\* *`\\([^`]+\\)`" text)
-      (when-let* ((spec (drgnx-work--resolve (match-string 1 text) file roots)))
-        (unless (drgnx-work-node (concat "spec:" spec)) (drgnx-work--parse-spec spec))
-        (drgnx-work-put-edge plan (concat "spec:" spec) 'derives 'parsed file)))
-    (with-temp-buffer
-      (insert text)
-      (goto-char (point-min))
-      (let (task)
-        (while (not (eobp))
-          (cond
-           ((looking-at "^### Task \\([0-9]+\\)[:.]? *\\(.*\\)$")
-            (setq task (list (concat "task:" file "#" (match-string 1)) (string-to-number (match-string 1)) 0))
-            (drgnx-work-put-node (car task) :kind 'task :title (string-trim (match-string 2)) :path file
-                                 :line (line-number-at-pos) :status "open" :parent plan :ord (cadr task) :source file))
-           ((looking-at "^##\\{1,2\\} ") (setq task nil))
-           ((and task (looking-at "^[ \t]*[-*] \\[\\([ xX]\\)\\] \\(.+\\)$"))
-            (setf (nth 2 task) (1+ (nth 2 task)))
-            (drgnx-work-put-node (format "step:%s#%d.%d" file (cadr task) (nth 2 task)) :kind 'step
-                                 :title (string-trim (replace-regexp-in-string "\\*\\*" "" (match-string 2)))
-                                 :path file :line (line-number-at-pos)
-                                 :status (if (equal (match-string 1) " ") "open" "done")
-                                 :parent (car task) :ord (nth 2 task) :source file)))
-          (forward-line 1))))
-    ;; a task whose steps are all done is done
-    (dolist (tk (drgnx-work-children plan))
-      (when (eq (plist-get tk :kind) 'task)
-        (let ((steps (seq-filter (lambda (n) (eq (plist-get n :kind) 'step)) (drgnx-work-children (plist-get tk :id)))))
-          (when (and steps (seq-every-p (lambda (s) (equal (plist-get s :status) "done")) steps))
-            (drgnx-work-update-node (plist-get tk :id) :status "done")))))
-    plan)))
+      (drgnx-work-put-node plan :kind 'plan :title (drgnx-work--title text (file-name-base file)) :path file :line 1
+                           :status "open" :source file)
+      (when (string-match "^\\*\\*Spec:\\*\\* *`\\([^`]+\\)`" text)
+        (when-let* ((spec (drgnx-work--resolve (match-string 1 text) file roots)))
+          (unless (drgnx-work-node (concat "spec:" spec)) (drgnx-work--parse-spec spec))
+          (drgnx-work-put-edge plan (concat "spec:" spec) 'derives 'parsed file)))
+      (with-temp-buffer
+        (insert text)
+        (goto-char (point-min))
+        (let (task)
+          (while (not (eobp))
+            (cond
+             ((looking-at "^### Task \\([0-9]+\\)[:.]? *\\(.*\\)$")
+              (setq task (list (concat "task:" file "#" (match-string 1)) (string-to-number (match-string 1)) 0))
+              (drgnx-work-put-node (car task) :kind 'task :title (string-trim (match-string 2)) :path file
+                                   :line (line-number-at-pos) :status "open" :parent plan :ord (cadr task) :source file))
+             ((looking-at "^##\\{1,2\\} ") (setq task nil))
+             ((and task (looking-at "^[ \t]*[-*] \\[\\([ xX]\\)\\] \\(.+\\)$"))
+              (setf (nth 2 task) (1+ (nth 2 task)))
+              (drgnx-work-put-node (format "step:%s#%d.%d" file (cadr task) (nth 2 task)) :kind 'step
+                                   :title (string-trim (replace-regexp-in-string "\\*\\*" "" (match-string 2)))
+                                   :path file :line (line-number-at-pos)
+                                   :status (if (equal (match-string 1) " ") "open" "done")
+                                   :parent (car task) :ord (nth 2 task) :source file)))
+            (forward-line 1))))
+      ;; a task whose steps are all done is done
+      (dolist (tk (drgnx-work-children plan))
+        (when (eq (plist-get tk :kind) 'task)
+          (let ((steps (seq-filter (lambda (n) (eq (plist-get n :kind) 'step)) (drgnx-work-children (plist-get tk :id)))))
+            (when (and steps (seq-every-p (lambda (s) (equal (plist-get s :status) "done")) steps))
+              (drgnx-work-update-node (plist-get tk :id) :status "done")))))
+      plan)))
 
 ;;;; Ledgers and commits
 

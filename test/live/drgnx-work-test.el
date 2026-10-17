@@ -42,9 +42,9 @@
           ;; (the window shows the graph from its top: the image's top-left is the text area's)
           (let ((xy (drgnx-live-wk--q sess (concat (format "(progn (kill-buffer (get-file-buffer %S))      ; the plan closed again
                                                    (drgnx-work-ui-graph) (redisplay t)" (concat root "docs/plans/alpha.md"))
-                                           "
+                                                   "
                                                    (let* ((w (get-buffer-window \"*work graph*\")) (o (drgnx-uitest--text-origin w))
-                                                         
+
                                                           (b (seq-find (lambda (b) (string-prefix-p \"Plan Alpha\" (car (plist-get b :lines))))
                                                                        (plist-get (drgnx-work-ui-graph-layout) :boxes))))
                                                      (and (drgnx-signal-editor-window-p w)

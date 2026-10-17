@@ -120,7 +120,7 @@ refreshes it): an index can take most of a second to build."
     (when select (select-window editor))))
 
 (defun drgnx-outline-open () "Go to the definition at point." (interactive)
-  (drgnx-outline-jump (1- (line-number-at-pos)) t))
+       (drgnx-outline-jump (1- (line-number-at-pos)) t))
 
 (defun drgnx-outline-mouse-jump (event)
   "Show the clicked definition; stay in the Outline."

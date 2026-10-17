@@ -246,17 +246,17 @@ its history is replayed into the transcript.  Needs an agent that can load sessi
     (setf (drgnx-agent-session-acp-id s) session-id)
     (drgnx-agents--start-safely
      s (lambda ()
-    (drgnx-agents--connect
-     s (lambda ()
-         (if (memq (plist-get (drgnx-agent-session-capabilities s) :loadSession) '(nil :false))
-             (drgnx-agents--failed s "this agent cannot resume sessions (no session/load)")
-           (drgnx-acp-request (drgnx-agent-session-conn s) "session/load"
-                              (list :sessionId session-id :cwd (drgnx-agent-session-cwd s) :mcpServers [])
-                              (lambda (r)
-                                (if (cdr r) (drgnx-agents--failed s (cdr r))
-                                  (setf (drgnx-agent-session-status s) 'idle)
-                                  (drgnx-agents--changed s)
-                                  (drgnx-agents--next s)))))))))
+         (drgnx-agents--connect
+          s (lambda ()
+              (if (memq (plist-get (drgnx-agent-session-capabilities s) :loadSession) '(nil :false))
+                  (drgnx-agents--failed s "this agent cannot resume sessions (no session/load)")
+                (drgnx-acp-request (drgnx-agent-session-conn s) "session/load"
+                                   (list :sessionId session-id :cwd (drgnx-agent-session-cwd s) :mcpServers [])
+                                   (lambda (r)
+                                     (if (cdr r) (drgnx-agents--failed s (cdr r))
+                                       (setf (drgnx-agent-session-status s) 'idle)
+                                       (drgnx-agents--changed s)
+                                       (drgnx-agents--next s)))))))))
     s))
 
 (defun drgnx-agents--prompt (s text)

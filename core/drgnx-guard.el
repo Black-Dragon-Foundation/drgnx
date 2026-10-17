@@ -13,11 +13,11 @@
 
 ;;; Code:
 (define-error 'drgnx-prompt-in-automatic-path
-  "drgnx: a prompt in an automatic path would freeze Emacs")
+              "drgnx: a prompt in an automatic path would freeze Emacs")
 
 (defvar drgnx-guard-prompt-functions
   '(y-or-n-p yes-or-no-p read-string read-from-minibuffer completing-read read-passwd
-    read-number read-file-name read-directory-name read-buffer)
+             read-number read-file-name read-directory-name read-buffer)
   "Functions that wait for an answer from the user.")
 
 (defvar drgnx-guard--timer-fn nil "Function of the timer running now (dynamically bound), or nil.")

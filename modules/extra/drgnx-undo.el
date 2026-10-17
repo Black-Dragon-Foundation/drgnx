@@ -7,12 +7,12 @@
 (require 'drgnx-registry)
 
 (drgnx-module-define 'extra/undo
-  :doc "Undo Tree: every state of the buffer, browsable (vundo)."
-  :stage 'idle :packages '(vundo)
-  :setup (lambda ()
-           (require 'vundo)
-           (drgnx-command-define 'edit-undo-tree :category "Edit" :title "Undo Tree…" :command 'vundo
-             :scope 'editing :doc "Browse every state of the buffer")))
+                     :doc "Undo Tree: every state of the buffer, browsable (vundo)."
+                     :stage 'idle :packages '(vundo)
+                     :setup (lambda ()
+                              (require 'vundo)
+                              (drgnx-command-define 'edit-undo-tree :category "Edit" :title "Undo Tree…" :command 'vundo
+                                                    :scope 'editing :doc "Browse every state of the buffer")))
 
 (provide 'drgnx-undo)
 ;;; drgnx-undo.el ends here

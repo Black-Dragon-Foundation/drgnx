@@ -7,11 +7,11 @@
 (require 'drgnx-registry)
 
 (drgnx-module-define 'extra/magit
-  :doc "Source Control opens magit (instead of Emacs' VC) when magit is installed."
-  :stage 'idle :packages '(magit)
-  :setup (lambda ()
-           (drgnx-command-define 'scm-view :category "Source Control" :title "Source Control"
-             :command 'magit-status :doc "The repository's status (magit)")))
+                     :doc "Source Control opens magit (instead of Emacs' VC) when magit is installed."
+                     :stage 'idle :packages '(magit)
+                     :setup (lambda ()
+                              (drgnx-command-define 'scm-view :category "Source Control" :title "Source Control"
+                                                    :command 'magit-status :doc "The repository's status (magit)")))
 
 (provide 'drgnx-magit)
 ;;; drgnx-magit.el ends here

@@ -19,7 +19,7 @@
      (unwind-protect
          (progn
            (drgnx-explorer-test--tree ,root '("README.md" "docs/guide.md" "src/app/main.py" "src/app/util.py"
-                                               "src/app/deep/a/b/c/leaf.txt" "tests/test_main.py"))
+                                              "src/app/deep/a/b/c/leaf.txt" "tests/test_main.py"))
            (delete-other-windows)
            (drgnx-explorer-setup)
            (drgnx-explorer-set-roots (list ,root))

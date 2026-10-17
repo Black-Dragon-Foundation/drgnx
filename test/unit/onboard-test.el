@@ -119,8 +119,8 @@
 (ert-deftest drgnx-projects/import-puts-projects-and-todos-on-the-board-once ()
   (drgnx-onboard-test--with root
     (let* ((alpha (drgnx-onboard-test--repo (concat root "ws/alpha")
-                                           '("TODO.md" . "# Todo\n- [ ] write the parser\n- [x] done already\n")
-                                           '("docs/plans/p.md" . "### Task 1\n- [ ] **Step 1: test first**\n")))
+                                            '("TODO.md" . "# Todo\n- [ ] write the parser\n- [x] done already\n")
+                                            '("docs/plans/p.md" . "### Task 1\n- [ ] **Step 1: test first**\n")))
            (beta (drgnx-onboard-test--repo (concat root "ws/beta") '("TODO.org" . "* TODO ship it\n* DONE old\n"))))
       (let ((r (drgnx-projects-import (list alpha beta))))
         (should (equal (plist-get r :added) '("alpha" "beta")))

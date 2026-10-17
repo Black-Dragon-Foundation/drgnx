@@ -71,21 +71,21 @@
     (drgnx-look--margins t)))
 
 (drgnx-module-define 'ui/look
-  :doc "Colour theme (remembered) and zen mode."
-  :stage 'startup
-  :setup
-  (lambda ()
-    (when-let* ((theme (drgnx-look--saved-theme)))
-      (when (memq theme (custom-available-themes))
-        (mapc #'disable-theme custom-enabled-themes)
-        (load-theme theme t)))
-    (drgnx-command-define 'preferences-theme :category "Preferences" :title "Color Theme"
-      :command #'drgnx-look-choose-theme :menu '("Options") :doc "Pick the colour theme (remembered)")
-    (drgnx-command-define 'view-zen :category "View" :title "Zen Mode" :scope 'window
-      :command #'drgnx-look-zen :doc "Only the text; again to give the sidebar and panel back")
-    (pcase-dolist (`(,id ,title ,fn) '((view-zoom-in "Zoom In" drgnx-look-zoom-in) (view-zoom-out "Zoom Out" drgnx-look-zoom-out)
-                                       (view-zoom-reset "Reset Zoom" drgnx-look-zoom-reset)))
-      (drgnx-command-define id :category "View" :title title :command fn :doc "The text size in every window; then +, - or 0"))))
+                     :doc "Colour theme (remembered) and zen mode."
+                     :stage 'startup
+                     :setup
+                     (lambda ()
+                       (when-let* ((theme (drgnx-look--saved-theme)))
+                         (when (memq theme (custom-available-themes))
+                           (mapc #'disable-theme custom-enabled-themes)
+                           (load-theme theme t)))
+                       (drgnx-command-define 'preferences-theme :category "Preferences" :title "Color Theme"
+                                             :command #'drgnx-look-choose-theme :menu '("Options") :doc "Pick the colour theme (remembered)")
+                       (drgnx-command-define 'view-zen :category "View" :title "Zen Mode" :scope 'window
+                                             :command #'drgnx-look-zen :doc "Only the text; again to give the sidebar and panel back")
+                       (pcase-dolist (`(,id ,title ,fn) '((view-zoom-in "Zoom In" drgnx-look-zoom-in) (view-zoom-out "Zoom Out" drgnx-look-zoom-out)
+                                                          (view-zoom-reset "Reset Zoom" drgnx-look-zoom-reset)))
+                         (drgnx-command-define id :category "View" :title title :command fn :doc "The text size in every window; then +, - or 0"))))
 
 (provide 'drgnx-look)
 ;;; drgnx-look.el ends here

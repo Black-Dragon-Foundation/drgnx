@@ -39,7 +39,7 @@
   "Signal: harness sessions never use the network or install anything."
   (error "drgnx harness: network access and package installs are disabled in test sessions"))
 (dolist (fn '(url-retrieve url-retrieve-synchronously package-refresh-contents package-install
-              package-vc-install package-upgrade package-upgrade-all treesit-install-language-grammar))
+                           package-vc-install package-upgrade package-upgrade-all treesit-install-language-grammar))
   (advice-add fn :override #'drgnx-ui--refuse))
 
 ;;;; No secrets (the launcher also passes an allowlisted environment)

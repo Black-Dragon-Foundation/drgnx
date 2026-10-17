@@ -77,9 +77,9 @@ commits it made are recorded for the task (docs/guide/work.md)."
         ('systemd
          (with-temp-buffer
            (unless (eql 0 (apply #'call-process "systemd-run" nil t nil "--user" "--quiet" "--collect"
-                                        (concat "--unit=drgnx-job-" id) (concat "--working-directory=" cwd)
-                                        (concat "--setenv=PATH=" (or (getenv "PATH") "")) (concat "--setenv=HOME=" (or (getenv "HOME") ""))
-                                        (append (and task (list (concat "--setenv=DRGNX_TASK=" task))) (list "sh" "-c" line))))
+                                 (concat "--unit=drgnx-job-" id) (concat "--working-directory=" cwd)
+                                 (concat "--setenv=PATH=" (or (getenv "PATH") "")) (concat "--setenv=HOME=" (or (getenv "HOME") ""))
+                                 (append (and task (list (concat "--setenv=DRGNX_TASK=" task))) (list "sh" "-c" line))))
              (error "The job %s did not start: %s" name (string-trim (buffer-string))))))
         (_ (call-process "setsid" nil 0 nil "-f" "sh" "-c" line))))
     ;; the pid file appears once the job's shell runs; the boot and the process's start time make

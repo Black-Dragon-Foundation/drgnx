@@ -25,10 +25,10 @@
 
 (defconst drgnx-ui-mcp--click
   '(:x (:type "integer") :y (:type "integer")
-    :buffer (:type "string" :description "Buffer name or major mode of the target window")
-    :text (:type "string" :description "Visible text to click on (first occurrence)")
-    :button (:type "integer" :enum [1 2 3]) :count (:type "integer" :enum [1 2])
-    :hold_ms (:type "integer" :description "Hold the button this long before releasing")))
+       :buffer (:type "string" :description "Buffer name or major mode of the target window")
+       :text (:type "string" :description "Visible text to click on (first occurrence)")
+       :button (:type "integer" :enum [1 2 3]) :count (:type "integer" :enum [1 2])
+       :hold_ms (:type "integer" :description "Hold the button this long before releasing")))
 
 (defconst drgnx-ui-mcp--report
   "Returns a jank report: settle_ms, layout_changes, collateral_moves (windows that changed without being \
@@ -40,9 +40,9 @@ guard_violations (window moves from timers).")
    (list :name "ui_start"
          :description "Start a headless GUI Emacs session for testing (never the user's Emacs). config: minimal (stock Emacs), gryphn, or a config directory (read-only; state stays in the session)."
          :inputSchema (drgnx-ui-mcp--schema '(:config (:type "string")
-                                              :size (:type "string" :description "WxH, default 1600x900")
-                                              :daemon (:type "boolean" :description "Run Emacs as a daemon: no frame until ui_frame")
-                                              :monitors (:type "integer" :description "Virtual monitors of that size (default 1)"))))
+                                                      :size (:type "string" :description "WxH, default 1600x900")
+                                                      :daemon (:type "boolean" :description "Run Emacs as a daemon: no frame until ui_frame")
+                                                      :monitors (:type "integer" :description "Virtual monitors of that size (default 1)"))))
    (list :name "ui_frame"
          :description "Open a frame in a daemon session the way a user does (emacsclient -c); returns exit status, client_ms, visible_ms and the slowest frame hooks."
          :inputSchema (drgnx-ui-mcp--schema drgnx-ui-mcp--session '("session")))
@@ -135,7 +135,7 @@ guard_violations (window moves from timers).")
 
 (defconst drgnx-ui-mcp--calls
   `(("ui_start" . ,(lambda (a) (drgnx-ui-mcp--text (drgnx-ui-start (plist-get a :config) (plist-get a :size) nil
-                                                                    (eq (plist-get a :daemon) t) (plist-get a :monitors)))))
+                                                                   (eq (plist-get a :daemon) t) (plist-get a :monitors)))))
     ("ui_frame" . ,(lambda (a) (drgnx-ui-mcp--text (drgnx-ui-new-frame (drgnx-ui-mcp--own a)))))
     ("ui_stop" . ,(lambda (a) (drgnx-ui-mcp--text (drgnx-ui-stop (plist-get a :session)))))
     ("ui_list" . ,(lambda (_) (drgnx-ui-mcp--text (drgnx-ui-ls))))

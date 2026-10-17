@@ -90,4 +90,3 @@
   (dolist (v '("DRGNX_CONFIG_DIR" "DRGNX_DATA_DIR" "XDG_STATE_HOME" "XDG_CACHE_HOME" "HOME"))
     (should (string-prefix-p (file-truename temporary-file-directory) (file-truename (getenv v)))))
   (should (string-prefix-p (file-truename temporary-file-directory) (file-truename project-list-file))))
-

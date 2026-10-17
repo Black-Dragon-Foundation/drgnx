@@ -19,10 +19,10 @@
     (dolist (m '(core/basics editor/editing tools/search lang/eglot ui/look))
       (funcall (plist-get (alist-get m drgnx-modules--table) :setup)))
     (dolist (id '(file-save-as file-new file-reopen-tab file-new-window file-close-window
-                  go-recent go-symbol-project go-back go-forward search-file search-replace
-                  edit-select-all edit-select-line edit-redo edit-comment edit-delete-line edit-move-up edit-move-down
-                  edit-duplicate edit-line-below edit-line-above code-quick-fix code-problems code-format
-                  view-zoom-in view-zoom-out view-zoom-reset view-escape))
+                               go-recent go-symbol-project go-back go-forward search-file search-replace
+                               edit-select-all edit-select-line edit-redo edit-comment edit-delete-line edit-move-up edit-move-down
+                               edit-duplicate edit-line-below edit-line-above code-quick-fix code-problems code-format
+                               view-zoom-in view-zoom-out view-zoom-reset view-escape))
       (should (drgnx-commands-get id)))))
 
 (ert-deftest drgnx-vsc/move-line-up-and-down ()

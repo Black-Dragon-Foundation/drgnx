@@ -38,34 +38,34 @@
   (interactive)
   (if (cdr (visible-frame-list)) (delete-frame) (save-buffers-kill-terminal)))
 (drgnx-module-define 'core/basics
-  :doc "Quiet, predictable defaults and the basic file and view commands."
-  :stage 'startup
-  :setup
-  (lambda ()
-    (setq ring-bell-function #'ignore
-          use-dialog-box nil
-          use-short-answers t
-          inhibit-startup-screen t
-          ;; Background native compilation: warnings go to the log, never a window popping up.
-          native-comp-async-report-warnings-errors 'silent)
-    (drgnx-command-define 'open-file :category "File" :title "Open File…" :command #'find-file
-      :doc "Open a file")
-    (drgnx-command-define 'save-file :category "File" :title "Save" :command #'save-buffer
-      :doc "Save this buffer")
-    (drgnx-command-define 'line-numbers :category "View" :title "Toggle Line Numbers"
-      :command #'display-line-numbers-mode :menu '("View") :doc "Line numbers in this buffer")
-    (add-hook 'kill-buffer-hook #'drgnx-basics--note-closed)
-    ;; project.el's list of known projects in drgnx's state dir, not in the checkout (--init-directory)
-    (setq project-list-file (expand-file-name "projects" (drgnx-state-dir)))
-    (make-directory (drgnx-state-dir) t)
-    (pcase-dolist (`(,id ,title ,fn ,doc)
-                   '((file-save-as "Save As…" write-file "Save under a new name")
-                     (file-new "New Untitled" drgnx-basics-new-untitled "An empty buffer; Save asks for a name")
-                     (file-reopen-tab "Reopen Closed Tab" drgnx-basics-reopen-tab "Open the file closed last")
-                     (file-new-window "New Window" make-frame-command "Open another Emacs window")
-                     (file-close-window "Close Window" drgnx-basics-close-window "Close this window; the last one quits")))
-      (drgnx-command-define id :category "File" :title title :command fn :doc doc))
-    (drgnx-command-define 'view-escape :category "View" :title "Cancel / Close Popup" :command #'keyboard-escape-quit
-      :doc "Like Escape in VS Code: cancel, leave the selection, close a popup")))
+                     :doc "Quiet, predictable defaults and the basic file and view commands."
+                     :stage 'startup
+                     :setup
+                     (lambda ()
+                       (setq ring-bell-function #'ignore
+                             use-dialog-box nil
+                             use-short-answers t
+                             inhibit-startup-screen t
+                             ;; Background native compilation: warnings go to the log, never a window popping up.
+                             native-comp-async-report-warnings-errors 'silent)
+                       (drgnx-command-define 'open-file :category "File" :title "Open File…" :command #'find-file
+                                             :doc "Open a file")
+                       (drgnx-command-define 'save-file :category "File" :title "Save" :command #'save-buffer
+                                             :doc "Save this buffer")
+                       (drgnx-command-define 'line-numbers :category "View" :title "Toggle Line Numbers"
+                                             :command #'display-line-numbers-mode :menu '("View") :doc "Line numbers in this buffer")
+                       (add-hook 'kill-buffer-hook #'drgnx-basics--note-closed)
+                       ;; project.el's list of known projects in drgnx's state dir, not in the checkout (--init-directory)
+                       (setq project-list-file (expand-file-name "projects" (drgnx-state-dir)))
+                       (make-directory (drgnx-state-dir) t)
+                       (pcase-dolist (`(,id ,title ,fn ,doc)
+                                      '((file-save-as "Save As…" write-file "Save under a new name")
+                                        (file-new "New Untitled" drgnx-basics-new-untitled "An empty buffer; Save asks for a name")
+                                        (file-reopen-tab "Reopen Closed Tab" drgnx-basics-reopen-tab "Open the file closed last")
+                                        (file-new-window "New Window" make-frame-command "Open another Emacs window")
+                                        (file-close-window "Close Window" drgnx-basics-close-window "Close this window; the last one quits")))
+                         (drgnx-command-define id :category "File" :title title :command fn :doc doc))
+                       (drgnx-command-define 'view-escape :category "View" :title "Cancel / Close Popup" :command #'keyboard-escape-quit
+                                             :doc "Like Escape in VS Code: cancel, leave the selection, close a popup")))
 
 ;;; drgnx-basics.el ends here

@@ -19,7 +19,7 @@
 (ert-deftest drgnx-scenario/check-signals-an-assertion-with-the-trace ()
   (let ((err (should-error (drgnx-scenario-check nil "snapped back"
                                                  '(:trace [(:t_ms 196 :cause "timer:follow" :window "w3"
-                                                            :fields ["point"] :from (:point 17) :to (:point 36))]))
+                                                                  :fields ["point"] :from (:point 17) :to (:point 36))]))
                            :type 'ert-test-failed)))
     (should (equal (plist-get (cadr err) :scenario) "snapped back"))
     (should (equal (plist-get (cadr err) :trace) ["+196 ms  timer:follow  w3 point 17 → 36"]))))
@@ -48,6 +48,6 @@
 (ert-deftest drgnx-scenario/unsettled-error-shows-what-kept-changing ()
   (let ((err (should-error (drgnx-scenario-check
                             nil "x" '(:settled :false
-                                      :trace [(:t_ms 4900 :cause "timer:busy" :window "w1" :fields ["point"]
-                                               :from (:point 1) :to (:point 2))])))))
+                                               :trace [(:t_ms 4900 :cause "timer:busy" :window "w1" :fields ["point"]
+                                                              :from (:point 1) :to (:point 2))])))))
     (should (string-search "+4900 ms  timer:busy  w1 point 1 → 2" (error-message-string err)))))

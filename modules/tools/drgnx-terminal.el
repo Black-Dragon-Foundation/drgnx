@@ -32,14 +32,14 @@
                           (if path (file-name-directory path) default-directory)))))
 
 (drgnx-module-define 'tools/terminal
-  :doc "New Terminal and Open Terminal Here, in the panel."
-  :stage 'startup
-  :setup
-  (lambda ()
-    (drgnx-command-define 'terminal-new :category "Terminal" :title "New Terminal" :scope 'window
-      :command #'drgnx-terminal-new :doc "A new terminal in the panel")
-    (drgnx-command-define 'explorer-terminal-here :category "Terminal" :title "Open Terminal Here" :scope 'window
-      :command #'drgnx-terminal-here :context 'explorer :doc "A new terminal in this folder")))
+                     :doc "New Terminal and Open Terminal Here, in the panel."
+                     :stage 'startup
+                     :setup
+                     (lambda ()
+                       (drgnx-command-define 'terminal-new :category "Terminal" :title "New Terminal" :scope 'window
+                                             :command #'drgnx-terminal-new :doc "A new terminal in the panel")
+                       (drgnx-command-define 'explorer-terminal-here :category "Terminal" :title "Open Terminal Here" :scope 'window
+                                             :command #'drgnx-terminal-here :context 'explorer :doc "A new terminal in this folder")))
 
 (provide 'drgnx-terminal)
 ;;; drgnx-terminal.el ends here

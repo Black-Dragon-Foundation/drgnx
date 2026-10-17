@@ -5,13 +5,13 @@
 
 (defconst ui-diff-test--a
   '(:frame (:width 1400 :height 800) :minibuffer_h 20 :children []
-    :windows [(:id "w1" :buffer "a.txt" :edges [0 0 700 780] :start 1 :point 5 :selected t)
-              (:id "w2" :buffer "*Help*" :edges [700 0 1400 780] :start 1 :point 1 :selected :false)]))
+           :windows [(:id "w1" :buffer "a.txt" :edges [0 0 700 780] :start 1 :point 5 :selected t)
+                     (:id "w2" :buffer "*Help*" :edges [700 0 1400 780] :start 1 :point 1 :selected :false)]))
 
 (defconst ui-diff-test--b
   '(:frame (:width 1400 :height 800) :minibuffer_h 22 :children []
-    :windows [(:id "w1" :buffer "a.txt" :edges [0 0 700 780] :start 1 :point 9 :selected t)
-              (:id "w3" :buffer "b.txt" :edges [700 0 1400 780] :start 1 :point 1 :selected :false)]))
+           :windows [(:id "w1" :buffer "a.txt" :edges [0 0 700 780] :start 1 :point 9 :selected t)
+                     (:id "w3" :buffer "b.txt" :edges [700 0 1400 780] :start 1 :point 1 :selected :false)]))
 
 (ert-deftest ui-diff/changed-added-and-removed ()
   (let ((d (drgnx-ui-state-diff ui-diff-test--a ui-diff-test--b)))

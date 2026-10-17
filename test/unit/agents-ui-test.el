@@ -101,7 +101,7 @@ answers recorded in ANSWERS)."
   ;; I2: hunks applied while reviewing are applied to a copy; Reject writes nothing.
   (let* ((dir (make-temp-file "drgnx-rev" t)) (f (expand-file-name "f.txt" dir)) (orig (drgnx-agents-ui-test--lines 12)))
     (write-region orig nil f nil 'silent)
-    (drgnx-agents-ui-test--reviewing f (concat "CHANGED " (substring orig 0)) 
+    (drgnx-agents-ui-test--reviewing f (concat "CHANGED " (substring orig 0))
       (with-current-buffer review (goto-char (point-min)) (diff-hunk-next) (diff-apply-hunk) (drgnx-agents-ui-review-reject))
       (should (equal (with-temp-buffer (insert-file-contents f) (buffer-string)) orig))
       (should (nth 2 (car answers))))                                   ; the agent hears it was rejected

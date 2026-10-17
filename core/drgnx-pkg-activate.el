@@ -67,7 +67,7 @@ ARGS are the :ensure values, read as use-package does: nil nothing, t NAME, a sy
 
 (defconst drgnx-pkg--guarded
   '(package-install package-refresh-contents package-vc-install package-upgrade package-upgrade-all
-    package-vc-upgrade package-vc-upgrade-all package-reinstall package-install-selected-packages)
+                    package-vc-upgrade package-vc-upgrade-all package-reinstall package-install-selected-packages)
   "What reaches the network or installs: only a command the user runs may call these.")
 
 (defun drgnx-pkg--in-timer-p ()

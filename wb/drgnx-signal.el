@@ -107,7 +107,7 @@
                        (pcase-dolist (`(,b . ,m) (plist-get old :modified)) (puthash b (if m 'yes 'no) h))
                        h))
                 (flipped (seq-filter (lambda (b) (when-let* ((m (gethash b was)))
-                                                  (not (eq (eq m 'yes) (and (buffer-modified-p b) t)))))
+                                                   (not (eq (eq m 'yes) (and (buffer-modified-p b) t)))))
                                      set)))
       (drgnx-signal--emit 'modified-changed flipped))))
 
@@ -129,10 +129,10 @@ that follows the user's work subscribes to the edges instead.")
 
 (defconst drgnx-signal--hooks
   '(window-selection-change-functions buffer-list-update-hook
-    first-change-hook after-save-hook after-revert-hook kill-buffer-hook
-    ;; Undo back to the saved state, `set-buffer-modified-p' and `rename-buffer' run no buffer
-    ;; hook: every command arms the (cheap, idle) flush too.
-    post-command-hook)
+                                      first-change-hook after-save-hook after-revert-hook kill-buffer-hook
+                                      ;; Undo back to the saved state, `set-buffer-modified-p' and `rename-buffer' run no buffer
+                                      ;; hook: every command arms the (cheap, idle) flush too.
+                                      post-command-hook)
   "The raw hooks the bus listens to.")
 
 (define-minor-mode drgnx-signal-mode

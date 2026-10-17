@@ -171,10 +171,10 @@ Called on the bus's edges and by commands — never while drawing, so a buffer s
      (when note (drgnx-chrome--note w))
      (drgnx-chrome--set w 'tab-line-format (let ((s (drgnx-chrome--tab-line w))) (if (equal s "") " " s)))
      (drgnx-chrome--set w 'header-line-format
-                           (with-current-buffer (window-buffer w)
-                             (if (and (local-variable-p 'header-line-format) header-line-format)
-                                 drgnx-chrome--own-header
-                               (drgnx-chrome-breadcrumb w))))
+                        (with-current-buffer (window-buffer w)
+                          (if (and (local-variable-p 'header-line-format) header-line-format)
+                              drgnx-chrome--own-header
+                            (drgnx-chrome-breadcrumb w))))
      (drgnx-chrome--set w 'mode-line-format drgnx-chrome--mode-line))
     ((or 'dock 'area)
      (drgnx-chrome--set w 'tab-line-format 'none)

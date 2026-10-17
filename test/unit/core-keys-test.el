@@ -91,7 +91,7 @@
   (let ((r (drgnx-keys-test--resolve '((vscode app editing window))
                                      :user '(:bind ((open-file "C-c o") (save-file "C-o") (no-such-command "C-c n")
                                                     (palette "C-c <oops"))
-                                             :unbind (line-numbers keys-sheet)))))
+                                                   :unbind (line-numbers keys-sheet)))))
     (should (equal (drgnx-keys-test--keys r 'open-file) '("C-c o")))
     (should (null (drgnx-keys-test--keys r 'keys-sheet)))
     ;; The user's C-o for save-file meets nothing: open-file moved away.
@@ -265,8 +265,8 @@
      (drgnx-keys-test--write-user form)
      (should (equal (list form :ok) (list form (and (drgnx-keys-apply) :ok))))
      (should (equal (list form t) (list form (and (seq-find (lambda (p) (string-search "keys.eld" p))
-                                                             (plist-get drgnx-keys-last :problems))
-                                                   t))))
+                                                            (plist-get drgnx-keys-last :problems))
+                                                  t))))
      ;; The default stack still applies.
      (should (equal (list form #'find-file) (list form (keymap-lookup global-map "C-o" nil t)))))))
 

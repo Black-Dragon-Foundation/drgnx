@@ -172,34 +172,34 @@
   (indent-according-to-mode))
 
 (drgnx-module-define 'editor/editing
-  :doc "Fold, change case, expand and shrink the selection, go to line."
-  :stage 'startup
-  :setup
-  (lambda ()
-    (pcase-dolist (`(,id ,title ,fn ,doc)
-                   '((edit-fold "Fold" drgnx-editing-fold "Fold the block at point")
-                     (edit-unfold "Unfold" drgnx-editing-unfold "Unfold the block at point")
-                     (edit-case-cycle "Change Case: Cycle" drgnx-editing-case-cycle "camelCase → snake_case → kebab-case")
-                     (edit-case-camel "Change Case: camelCase" drgnx-editing-case-camel "The word or selection in camelCase")
-                     (edit-case-snake "Change Case: snake_case" drgnx-editing-case-snake "The word or selection in snake_case")
-                     (edit-case-kebab "Change Case: kebab-case" drgnx-editing-case-kebab "The word or selection in kebab-case")
-                     (edit-expand "Expand Selection" drgnx-editing-expand "Select the enclosing word, then expression, …")
-                     (edit-shrink "Shrink Selection" drgnx-editing-shrink "Back to the previous selection")
-                     (go-line "Go to Line…" goto-line "Go to a line number")
-                     (edit-select-all "Select All" mark-whole-buffer "Select the whole buffer")
-                     (edit-select-line "Select Line" drgnx-editing-select-line "Select the line; again for the next")
-                     (edit-redo "Redo" undo-redo "Redo the last undone change")
-                     (edit-comment "Toggle Comment" comment-line "Comment or uncomment the line or the selection")
-                     (edit-delete-line "Delete Line" kill-whole-line "Delete the whole line")
-                     (edit-move-up "Move Line Up" drgnx-editing-move-line-up "Move the line or the selected lines up")
-                     (edit-move-down "Move Line Down" drgnx-editing-move-line-down "Move the line or the selected lines down")
-                     (edit-duplicate "Duplicate Line" duplicate-dwim "Copy the line (or the selection) below")
-                     (edit-line-below "New Line Below" drgnx-editing-line-below "Start a new line below this one")
-                     (edit-line-above "New Line Above" drgnx-editing-line-above "Start a new line above this one")
-                     (go-back "Back" xref-go-back "Return to where you jumped from")
-                     (go-forward "Forward" xref-go-forward "Undo a Back")))
-      (drgnx-command-define id :category (if (string-prefix-p "go-" (symbol-name id)) "Go" "Edit") :title title
-        :command fn :scope 'editing :doc doc))))
+                     :doc "Fold, change case, expand and shrink the selection, go to line."
+                     :stage 'startup
+                     :setup
+                     (lambda ()
+                       (pcase-dolist (`(,id ,title ,fn ,doc)
+                                      '((edit-fold "Fold" drgnx-editing-fold "Fold the block at point")
+                                        (edit-unfold "Unfold" drgnx-editing-unfold "Unfold the block at point")
+                                        (edit-case-cycle "Change Case: Cycle" drgnx-editing-case-cycle "camelCase → snake_case → kebab-case")
+                                        (edit-case-camel "Change Case: camelCase" drgnx-editing-case-camel "The word or selection in camelCase")
+                                        (edit-case-snake "Change Case: snake_case" drgnx-editing-case-snake "The word or selection in snake_case")
+                                        (edit-case-kebab "Change Case: kebab-case" drgnx-editing-case-kebab "The word or selection in kebab-case")
+                                        (edit-expand "Expand Selection" drgnx-editing-expand "Select the enclosing word, then expression, …")
+                                        (edit-shrink "Shrink Selection" drgnx-editing-shrink "Back to the previous selection")
+                                        (go-line "Go to Line…" goto-line "Go to a line number")
+                                        (edit-select-all "Select All" mark-whole-buffer "Select the whole buffer")
+                                        (edit-select-line "Select Line" drgnx-editing-select-line "Select the line; again for the next")
+                                        (edit-redo "Redo" undo-redo "Redo the last undone change")
+                                        (edit-comment "Toggle Comment" comment-line "Comment or uncomment the line or the selection")
+                                        (edit-delete-line "Delete Line" kill-whole-line "Delete the whole line")
+                                        (edit-move-up "Move Line Up" drgnx-editing-move-line-up "Move the line or the selected lines up")
+                                        (edit-move-down "Move Line Down" drgnx-editing-move-line-down "Move the line or the selected lines down")
+                                        (edit-duplicate "Duplicate Line" duplicate-dwim "Copy the line (or the selection) below")
+                                        (edit-line-below "New Line Below" drgnx-editing-line-below "Start a new line below this one")
+                                        (edit-line-above "New Line Above" drgnx-editing-line-above "Start a new line above this one")
+                                        (go-back "Back" xref-go-back "Return to where you jumped from")
+                                        (go-forward "Forward" xref-go-forward "Undo a Back")))
+                         (drgnx-command-define id :category (if (string-prefix-p "go-" (symbol-name id)) "Go" "Edit") :title title
+                                               :command fn :scope 'editing :doc doc))))
 
 (provide 'drgnx-editing)
 ;;; drgnx-editing.el ends here

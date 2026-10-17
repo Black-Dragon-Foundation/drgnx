@@ -526,8 +526,8 @@ prints as raw bytes; decode it so non-ASCII text survives emacsclient."
 
 (defconst drgnx-uitest--frame-hooks
   '(before-make-frame-hook after-make-frame-functions server-after-make-frame-hook
-    window-setup-hook window-size-change-functions window-configuration-change-hook
-    after-setting-font-hook server-switch-hook)
+                           window-setup-hook window-size-change-functions window-configuration-change-hook
+                           after-setting-font-hook server-switch-hook)
   "Hooks timed by `drgnx-uitest-api-time-frame-hooks'.")
 
 (defvar drgnx-uitest--frame-times nil "Alist (NAME . ms), newest first.")

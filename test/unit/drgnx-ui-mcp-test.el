@@ -23,7 +23,7 @@
 
 (ert-deftest drgnx-ui-mcp/initialize-and-list ()
   (let ((init (drgnx-ui-mcp-handle '(:jsonrpc "2.0" :id 1 :method "initialize"
-                                     :params (:protocolVersion "2025-06-18")))))
+                                              :params (:protocolVersion "2025-06-18")))))
     (should (equal (plist-get (plist-get (plist-get init :result) :serverInfo) :name) "drgnx-ui"))
     (should (equal (plist-get (plist-get init :result) :protocolVersion) "2025-06-18")))
   (should-not (drgnx-ui-mcp-handle '(:jsonrpc "2.0" :method "notifications/initialized")))
@@ -60,7 +60,7 @@
       (unwind-protect
           (progn
             (should (equal (plist-get (plist-get (drgnx-ui-mcp-client-request client "initialize"
-                                                                            '(:protocolVersion "2025-06-18"))
+                                                                              '(:protocolVersion "2025-06-18"))
                                                  :serverInfo)
                                       :name)
                            "drgnx-ui"))

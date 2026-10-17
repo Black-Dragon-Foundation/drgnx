@@ -455,28 +455,28 @@ Returns the buffer."
 ;;;; The module
 
 (drgnx-module-define 'tools/work
-  :doc "Work: specs › plans › tasks › TODOs › commits in the right dock's Work tab; the graph."
-  :stage 'startup :requires '(core/workbench)
-  :setup
-  (lambda ()
-    (add-hook 'drgnx-agents-task-functions #'drgnx-work-ui--agent-turn 90)
-    (when (fboundp 'drgnx-wb-define-tab) (drgnx-wb-define-tab 'right 'work :title "Work"))
-    (when (fboundp 'drgnx-wb-place)
-      (drgnx-wb-place 'drgnx-work-mode 'right :tab 'work)
-      (drgnx-wb-place "\\`\\*\\(commit: \\|work graph\\*\\)" 'editor))
-    (pcase-dolist (`(,id ,title ,fn ,doc)
-                   '((work-view "Show Work" drgnx-work-ui-view "Specs, plans, tasks, TODOs and commits, in the right dock")
-                     (work-graph "Show Work as Graph" drgnx-work-ui-graph "Specs, plans and branches as a graph; click a box to open it")
-                     (work-start-agent "Start Agent on Task…" drgnx-work-ui-start-agent "An agent on this task; its commits are recorded for it")
-                     (work-open-worktree "Open Plan's Worktree" drgnx-work-ui-open-worktree "The worktree of this plan, in the Explorer")))
-      (drgnx-command-define id :category "Work" :title title :command fn :doc doc))
-    (pcase-dolist (`(,id ,title ,fn ,doc)
-                   '((work-open "Open" drgnx-work-ui-open "The file at this line, or the commit's diff")
-                     (work-toggle "Fold" drgnx-work-ui-toggle "Fold or unfold this spec, plan or task")
-                     (work-refresh "Scan Again" drgnx-work-ui-refresh "Read the projects again (in the background)")
-                     (work-filter "Filter Plans…" drgnx-work-ui-filter "Only the plans whose title or path contain a text")
-                     (work-hide-merged "Hide Merged Plans" drgnx-work-ui-toggle-merged "Hide or show the plans already merged")))
-      (drgnx-command-define id :category "Work" :title title :command fn :doc doc :map 'drgnx-work-mode-map))))
+                     :doc "Work: specs › plans › tasks › TODOs › commits in the right dock's Work tab; the graph."
+                     :stage 'startup :requires '(core/workbench)
+                     :setup
+                     (lambda ()
+                       (add-hook 'drgnx-agents-task-functions #'drgnx-work-ui--agent-turn 90)
+                       (when (fboundp 'drgnx-wb-define-tab) (drgnx-wb-define-tab 'right 'work :title "Work"))
+                       (when (fboundp 'drgnx-wb-place)
+                         (drgnx-wb-place 'drgnx-work-mode 'right :tab 'work)
+                         (drgnx-wb-place "\\`\\*\\(commit: \\|work graph\\*\\)" 'editor))
+                       (pcase-dolist (`(,id ,title ,fn ,doc)
+                                      '((work-view "Show Work" drgnx-work-ui-view "Specs, plans, tasks, TODOs and commits, in the right dock")
+                                        (work-graph "Show Work as Graph" drgnx-work-ui-graph "Specs, plans and branches as a graph; click a box to open it")
+                                        (work-start-agent "Start Agent on Task…" drgnx-work-ui-start-agent "An agent on this task; its commits are recorded for it")
+                                        (work-open-worktree "Open Plan's Worktree" drgnx-work-ui-open-worktree "The worktree of this plan, in the Explorer")))
+                         (drgnx-command-define id :category "Work" :title title :command fn :doc doc))
+                       (pcase-dolist (`(,id ,title ,fn ,doc)
+                                      '((work-open "Open" drgnx-work-ui-open "The file at this line, or the commit's diff")
+                                        (work-toggle "Fold" drgnx-work-ui-toggle "Fold or unfold this spec, plan or task")
+                                        (work-refresh "Scan Again" drgnx-work-ui-refresh "Read the projects again (in the background)")
+                                        (work-filter "Filter Plans…" drgnx-work-ui-filter "Only the plans whose title or path contain a text")
+                                        (work-hide-merged "Hide Merged Plans" drgnx-work-ui-toggle-merged "Hide or show the plans already merged")))
+                         (drgnx-command-define id :category "Work" :title title :command fn :doc doc :map 'drgnx-work-mode-map))))
 
 (provide 'drgnx-work-ui)
 ;;; drgnx-work-ui.el ends here

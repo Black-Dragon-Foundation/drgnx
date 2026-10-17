@@ -10,15 +10,15 @@
   "Fresh fixture ROOT, its main.py open, the sidebar shown and the Explorer focused, then BODY."
   (declare (indent 1))
   `(drgnx-scenario-settling
-     (drgnx-scenario-load-driver)
-     (drgnx-scenario-with-fixture (,root 'basic)
-       (drgnx-driver-reset)
-       (drgnx-driver-open-file (expand-file-name "src/app/main.py" ,root))
-       (drgnx-driver-show-sidebar)
-       (drgnx-uitest-run nil)
-       (drgnx-uitest-run (drgnx-uitest-key-events drgnx-driver-focus-explorer-keys))
-       (drgnx-uitest-run nil)
-       ,@body)))
+    (drgnx-scenario-load-driver)
+    (drgnx-scenario-with-fixture (,root 'basic)
+      (drgnx-driver-reset)
+      (drgnx-driver-open-file (expand-file-name "src/app/main.py" ,root))
+      (drgnx-driver-show-sidebar)
+      (drgnx-uitest-run nil)
+      (drgnx-uitest-run (drgnx-uitest-key-events drgnx-driver-focus-explorer-keys))
+      (drgnx-uitest-run nil)
+      ,@body)))
 
 (defun drgnx-scn--explorer-line ()
   "Text of the Explorer row at point."
@@ -56,9 +56,9 @@ click-stays scenario passes — so the follow is what breaks it."
   (drgnx-driver-disable-follow)
   (drgnx-scenario-settling
    (unwind-protect
-      (drgnx-scn--with-explorer root
-        (drgnx-scn--click-folder-stays))
-    (drgnx-driver-enable-follow))))
+       (drgnx-scn--with-explorer root
+         (drgnx-scn--click-folder-stays))
+     (drgnx-driver-enable-follow))))
 
 (defun drgnx-scn--explorer-has (text)
   (with-current-buffer (window-buffer (drgnx-driver-explorer-window))

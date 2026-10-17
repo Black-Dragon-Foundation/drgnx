@@ -285,32 +285,32 @@ current choice as the default) — with no option and no question, the current c
 ;;;; The steps
 
 (drgnx-onboard-define-step 'environment :order 10 :title "Check the Environment"
-  :doc "Emacs, git, ripgrep, fd, podman, mise, GPU, the icon font: what is there and how to get the rest"
-  :run #'drgnx-onboard--environment-step)
+                           :doc "Emacs, git, ripgrep, fd, podman, mise, GPU, the icon font: what is there and how to get the rest"
+                           :run #'drgnx-onboard--environment-step)
 (drgnx-onboard-define-step 'look-and-keys :order 20 :title "Look and Keys"
-  :doc "Key profile, colour theme and module preset (minimal, IDE, full AI)"
-  :run #'drgnx-onboard--look-step)
+                           :doc "Key profile, colour theme and module preset (minimal, IDE, full AI)"
+                           :run #'drgnx-onboard--look-step)
 (drgnx-onboard-define-step 'projects :order 30 :title "Import Projects"
-  :doc "Find your git repositories and put them, with their TODOs, on the org board"
-  :run #'drgnx-onboard--projects-step)
+                           :doc "Find your git repositories and put them, with their TODOs, on the org board"
+                           :run #'drgnx-onboard--projects-step)
 (drgnx-onboard-define-step 'ai :order 40 :title "AI Providers"
-  :doc "Local model runners found; providers, keys and models per role come with the AI milestone"
-  :run (drgnx-onboard--detect '("ollama" "llama-server" "lms") "providers and models are set up by the AI step (M9)"))
+                           :doc "Local model runners found; providers, keys and models per role come with the AI milestone"
+                           :run (drgnx-onboard--detect '("ollama" "llama-server" "lms") "providers and models are set up by the AI step (M9)"))
 (drgnx-onboard-define-step 'search :order 50 :title "Semantic Search"
-  :doc "Embedding servers found; indexing your projects comes with the search milestone"
-  :run (drgnx-onboard--detect '("text-embeddings-router" "ollama") "indexing is set up by the search step (M10)"))
+                           :doc "Embedding servers found; indexing your projects comes with the search milestone"
+                           :run (drgnx-onboard--detect '("text-embeddings-router" "ollama") "indexing is set up by the search step (M10)"))
 (drgnx-onboard-define-step 'agents :order 60 :title "Agents"
-  :doc "Agent CLIs found (Claude, gryphn); profiles and MCP servers come with the agents milestone"
-  :run (drgnx-onboard--detect '("claude" "gry") "agent profiles and MCP servers are set up by the agents step (M7)"))
+                           :doc "Agent CLIs found (Claude, gryphn); profiles and MCP servers come with the agents milestone"
+                           :run (drgnx-onboard--detect '("claude" "gry") "agent profiles and MCP servers are set up by the agents step (M7)"))
 (drgnx-onboard-define-step 'daemon :order 70 :title "Daemon and Desktop"
-  :doc "The systemd user service, the desktop entry and EDITOR — written, installed only if you say so"
-  :run #'drgnx-onboard--daemon-step)
+                           :doc "The systemd user service, the desktop entry and EDITOR — written, installed only if you say so"
+                           :run #'drgnx-onboard--daemon-step)
 (drgnx-onboard-define-step 'portability :order 80 :title "Portability"
-  :doc "chezmoi and age for your configuration and secrets on a second machine"
-  :run (drgnx-onboard--detect '("chezmoi" "age") "setting up a second machine is documented with the platforms milestone (M12)"))
+                           :doc "chezmoi and age for your configuration and secrets on a second machine"
+                           :run (drgnx-onboard--detect '("chezmoi" "age") "setting up a second machine is documented with the platforms milestone (M12)"))
 (drgnx-onboard-define-step 'finish :order 90 :title "Finish"
-  :doc "drgnx doctor: what is left to fix"
-  :run #'drgnx-onboard--finish-step)
+                           :doc "drgnx doctor: what is left to fix"
+                           :run #'drgnx-onboard--finish-step)
 
 ;;;; Welcome (the steps in Emacs)
 
@@ -357,15 +357,15 @@ current choice as the default) — with no option and no question, the current c
 (defun drgnx-onboard-register-commands ()
   "Welcome and one command per step (Onboarding: …), in the registry."
   (drgnx-command-define 'projects-sync-plans :category "Projects" :title "Sync Plans and Board TODOs"
-    :command #'drgnx-projects-sync-plans
-    :doc "A DONE TODO ticks its plan checkbox; a ticked checkbox makes its TODO DONE")
+                        :command #'drgnx-projects-sync-plans
+                        :doc "A DONE TODO ticks its plan checkbox; a ticked checkbox makes its TODO DONE")
   (drgnx-command-define 'onboarding :category "Help" :title "Welcome (Onboarding)" :command #'drgnx-onboard-welcome
-    :menu '("Help") :doc "The onboarding steps: environment, keys, projects, daemon …; run any of them again")
+                        :menu '("Help") :doc "The onboarding steps: environment, keys, projects, daemon …; run any of them again")
   (dolist (id (drgnx-onboard-steps))
     (let ((spec (alist-get id drgnx-onboard--steps)))
       (drgnx-command-define (intern (format "onboarding-%s" id)) :category "Onboarding" :title (plist-get spec :title)
-        :command (let ((id id)) (lambda () (interactive) (drgnx-onboard-run-step id)))
-        :doc (plist-get spec :doc)))))
+                            :command (let ((id id)) (lambda () (interactive) (drgnx-onboard-run-step id)))
+                            :doc (plist-get spec :doc)))))
 
 (with-eval-after-load 'drgnx-rules
   (when (fboundp 'drgnx-wb-place) (drgnx-wb-place 'drgnx-onboard-mode 'editor)))

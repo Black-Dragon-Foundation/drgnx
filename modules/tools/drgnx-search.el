@@ -29,19 +29,19 @@
   (call-interactively (if (fboundp 'consult-buffer) #'consult-buffer #'switch-to-buffer)))
 
 (drgnx-module-define 'tools/search
-  :doc "Quick Open, Search in Project, Go to Symbol."
-  :stage 'startup
-  :setup
-  (lambda ()
-    (pcase-dolist (`(,id ,title ,fn ,doc)
-                   '((go-quick-open "Quick Open" project-find-file "Open a file of the project by name")
-                     (search-project "Search in Project" drgnx-search-project "Every match in the project (in the panel)")
-                     (go-symbol "Go to Symbol" imenu "Jump to a definition of this file")
-                     (go-symbol-project "Go to Symbol in Project" xref-find-apropos "Search symbols across the project")
-                     (go-recent "Recent Buffers" drgnx-search-recent "Switch buffer or recent file")
-                     (search-file "Find in File" drgnx-search-file "Search this buffer")
-                     (search-replace "Replace in Project" project-query-replace-regexp "Replace a regexp in the project's files")))
-      (drgnx-command-define id :category "Go" :title title :command fn :doc doc))))
+                     :doc "Quick Open, Search in Project, Go to Symbol."
+                     :stage 'startup
+                     :setup
+                     (lambda ()
+                       (pcase-dolist (`(,id ,title ,fn ,doc)
+                                      '((go-quick-open "Quick Open" project-find-file "Open a file of the project by name")
+                                        (search-project "Search in Project" drgnx-search-project "Every match in the project (in the panel)")
+                                        (go-symbol "Go to Symbol" imenu "Jump to a definition of this file")
+                                        (go-symbol-project "Go to Symbol in Project" xref-find-apropos "Search symbols across the project")
+                                        (go-recent "Recent Buffers" drgnx-search-recent "Switch buffer or recent file")
+                                        (search-file "Find in File" drgnx-search-file "Search this buffer")
+                                        (search-replace "Replace in Project" project-query-replace-regexp "Replace a regexp in the project's files")))
+                         (drgnx-command-define id :category "Go" :title title :command fn :doc doc))))
 
 (provide 'drgnx-search)
 ;;; drgnx-search.el ends here

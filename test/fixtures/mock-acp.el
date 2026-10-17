@@ -91,8 +91,8 @@
                  (lambda (res)
                    (let ((o (plist-get (car res) :outcome)))
                      (mock--steps sid (list (cons 0 (lambda () (mock--say sid (format "permission: %s"
-                                                                                       (if (equal (plist-get o :outcome) "cancelled") "cancelled"
-                                                                                         (plist-get o :optionId))))))))))))
+                                                                                      (if (equal (plist-get o :outcome) "cancelled") "cancelled"
+                                                                                        (plist-get o :optionId))))))))))))
      ((string-match "write \\([^ ]+\\)" text)
       (let ((path (match-string 1 text)))
         (mock--ask "fs/read_text_file" (list :sessionId sid :path path)
@@ -109,7 +109,7 @@
         (when (string-match-p "tool" text)
           (list (cons 0 (lambda () (mock--update sid '(:sessionUpdate "tool_call" :toolCallId "t1" :title "Read file" :kind "read" :status "pending"))))
                 (cons 0.05 (lambda () (mock--update sid '(:sessionUpdate "tool_call_update" :toolCallId "t1" :status "completed"
-                                                                          :content [(:type "content" :content (:type "text" :text "file contents"))]))))))
+                                                                         :content [(:type "content" :content (:type "text" :text "file contents"))]))))))
         (when (string-match-p "plan" text)
           (list (cons 0 (lambda () (mock--update sid '(:sessionUpdate "plan" :entries [(:content "Read" :priority "high" :status "completed")
                                                                                        (:content "Write" :priority "medium" :status "in_progress")
@@ -139,9 +139,9 @@
       (let ((sid (format "mock-%d-%d" (emacs-pid) (cl-incf mock--sessions))))
         (mock--respond id (list :sessionId sid))
         (run-at-time 0.01 nil (lambda () (mock--update sid '(:sessionUpdate "available_commands_update"
-                                                              :availableCommands [(:name "compact" :description "Compact the context")
-                                                                                  (:name "review" :description "Review the changes")])
-                                                        t)))))
+                                                                            :availableCommands [(:name "compact" :description "Compact the context")
+                                                                                                (:name "review" :description "Review the changes")])
+                                                       t)))))
      ((equal method "session/load")
       (if (getenv "MOCK_ACP_NO_LOAD") (mock--error id -32601 "session/load is not supported")
         (let* ((sid (plist-get params :sessionId))

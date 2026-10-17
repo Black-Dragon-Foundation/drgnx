@@ -89,23 +89,23 @@
   (eldoc-doc-buffer t))
 
 (drgnx-module-define 'lang/eglot
-  :doc "Language servers when installed, tree-sitter modes when the grammar is, definitions, references, rename, hover."
-  :stage 'startup
-  :setup
-  (lambda ()
-    (drgnx-lang-remap-modes)
-    (add-hook 'prog-mode-hook #'drgnx-lang--maybe-eglot)
-    (setq xref-prompt-for-identifier nil
-          eglot-sync-connect nil)                ; a slow server never blocks opening the file
-    (pcase-dolist (`(,id ,title ,fn ,doc)
-                   '((code-definition "Go to Definition" xref-find-definitions "Jump to where the symbol is defined")
-                     (code-references "Find References" xref-find-references "Every use of the symbol (in the panel)")
-                     (code-rename "Rename Symbol" drgnx-lang-rename "Rename the symbol everywhere (language server)")
-                     (code-hover "Show Hover" drgnx-lang-hover "The symbol's documentation, in the panel")
-                     (code-quick-fix "Quick Fix" drgnx-lang-quick-fix "The language server's fixes and actions here")
-                     (code-problems "Problems" flymake-show-project-diagnostics "Errors and warnings of the project (in the panel)")
-                     (code-format "Format Document" drgnx-lang-format "Format with the language server (else re-indent)")))
-      (drgnx-command-define id :category "Code" :title title :command fn :scope 'editing :doc doc))))
+                     :doc "Language servers when installed, tree-sitter modes when the grammar is, definitions, references, rename, hover."
+                     :stage 'startup
+                     :setup
+                     (lambda ()
+                       (drgnx-lang-remap-modes)
+                       (add-hook 'prog-mode-hook #'drgnx-lang--maybe-eglot)
+                       (setq xref-prompt-for-identifier nil
+                             eglot-sync-connect nil)                ; a slow server never blocks opening the file
+                       (pcase-dolist (`(,id ,title ,fn ,doc)
+                                      '((code-definition "Go to Definition" xref-find-definitions "Jump to where the symbol is defined")
+                                        (code-references "Find References" xref-find-references "Every use of the symbol (in the panel)")
+                                        (code-rename "Rename Symbol" drgnx-lang-rename "Rename the symbol everywhere (language server)")
+                                        (code-hover "Show Hover" drgnx-lang-hover "The symbol's documentation, in the panel")
+                                        (code-quick-fix "Quick Fix" drgnx-lang-quick-fix "The language server's fixes and actions here")
+                                        (code-problems "Problems" flymake-show-project-diagnostics "Errors and warnings of the project (in the panel)")
+                                        (code-format "Format Document" drgnx-lang-format "Format with the language server (else re-indent)")))
+                         (drgnx-command-define id :category "Code" :title title :command fn :scope 'editing :doc doc))))
 
 (provide 'drgnx-lang)
 ;;; drgnx-lang.el ends here

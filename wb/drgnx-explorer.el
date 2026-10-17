@@ -118,11 +118,11 @@ buffer, and they keep both in step.")
   (if (aref v 3) (concat (aref v 3) "/" (aref v 0)) (aref v 0)))
 
 (defun drgnx-explorer-node-at (pos) "Path of the row at POS."
-  (when-let* ((v (drgnx-explorer--row-data pos))) (drgnx-explorer--path v)))
+       (when-let* ((v (drgnx-explorer--row-data pos))) (drgnx-explorer--path v)))
 (defun drgnx-explorer-depth-at (pos) "Depth of the row at POS (0 for a root)."
-  (when-let* ((v (drgnx-explorer--row-data pos))) (aref v 1)))
+       (when-let* ((v (drgnx-explorer--row-data pos))) (aref v 1)))
 (defun drgnx-explorer-dir-at (pos) "Non-nil if the row at POS is a folder."
-  (when-let* ((v (drgnx-explorer--row-data pos))) (aref v 2)))
+       (when-let* ((v (drgnx-explorer--row-data pos))) (aref v 2)))
 
 (defcustom drgnx-explorer-git t "Show git status in the Explorer (letters, colours, dimmed ignored files)."
   :type 'boolean)
@@ -454,9 +454,9 @@ Returns non-nil if FILE is under a root."
       (drgnx-wb-show-in-editor (find-file-noselect path) (not keep-focus)))))
 
 (defun drgnx-explorer-next () "Next row (ends a multi-select)."
-  (interactive) (drgnx-explorer--clear-selection) (forward-line 1) (when (eobp) (forward-line -1)))
+       (interactive) (drgnx-explorer--clear-selection) (forward-line 1) (when (eobp) (forward-line -1)))
 (defun drgnx-explorer-previous () "Previous row (ends a multi-select)."
-  (interactive) (drgnx-explorer--clear-selection) (forward-line -1))
+       (interactive) (drgnx-explorer--clear-selection) (forward-line -1))
 
 ;;;; Multi-select
 
@@ -521,14 +521,14 @@ Returns non-nil if FILE is under a root."
         (forward-line (- j i))))))
 
 (defun drgnx-explorer-open () "Open the file (focus the editor) or toggle the folder at point."
-  (interactive) (drgnx-explorer-activate (point)))
+       (interactive) (drgnx-explorer-activate (point)))
 (defun drgnx-explorer-preview () "Open the file at point, keeping the Explorer focused."
-  (interactive) (drgnx-explorer-activate (point) t))
+       (interactive) (drgnx-explorer-activate (point) t))
 (defun drgnx-explorer-toggle () "Expand or collapse the folder at point."
-  (interactive) (drgnx-explorer-toggle-at (point)))
+       (interactive) (drgnx-explorer-toggle-at (point)))
 
 (defun drgnx-explorer-focus () "Show the sidebar and focus the Explorer."
-  (interactive) (drgnx-wb-focus-section 'explorer))
+       (interactive) (drgnx-wb-focus-section 'explorer))
 
 ;;;; Find
 
@@ -585,7 +585,7 @@ excluded names left out.  A root that is your home or / and not a project is ref
     (setq drgnx-explorer--find (plist-put drgnx-explorer--find :query query))
     (let ((tree (make-hash-table :test #'equal)) (q (downcase query)))
       (dolist (file (seq-take (seq-filter (lambda (file) (string-search q (downcase (file-name-nondirectory file))))
-                                         (plist-get drgnx-explorer--find :files))
+                                          (plist-get drgnx-explorer--find :files))
                               drgnx-explorer--find-limit))
         (progn
           (let ((path (directory-file-name file)))
@@ -772,17 +772,17 @@ excluded names left out.  A root that is your home or / and not a project is ref
       (dolist (d (delete-dups (mapcar #'drgnx-explorer--parent paths))) (drgnx-explorer--show-folder d)))))
 
 (defun drgnx-explorer-delete-permanently () "Delete the file(s) here permanently (no trash)."
-  (interactive) (drgnx-explorer-delete t))
+       (interactive) (drgnx-explorer-delete t))
 
 (defun drgnx-explorer-copy () "Copy the file(s) here, for Paste."
-  (interactive)
-  (setq drgnx-explorer--clipboard (list 'copy (drgnx-explorer--targets)))
-  (message "Copied %s" (drgnx-explorer--describe (cadr drgnx-explorer--clipboard))))
+       (interactive)
+       (setq drgnx-explorer--clipboard (list 'copy (drgnx-explorer--targets)))
+       (message "Copied %s" (drgnx-explorer--describe (cadr drgnx-explorer--clipboard))))
 
 (defun drgnx-explorer-cut () "Cut the file(s) here, for Paste (they move)."
-  (interactive)
-  (setq drgnx-explorer--clipboard (list 'cut (drgnx-explorer--targets)))
-  (message "Cut %s" (drgnx-explorer--describe (cadr drgnx-explorer--clipboard))))
+       (interactive)
+       (setq drgnx-explorer--clipboard (list 'cut (drgnx-explorer--targets)))
+       (message "Cut %s" (drgnx-explorer--describe (cadr drgnx-explorer--clipboard))))
 
 (defun drgnx-explorer-paste ()
   "Paste copied or cut files into the folder here; a name that exists gets \" copy\" (never overwritten)."
@@ -803,22 +803,22 @@ excluded names left out.  A root that is your home or / and not a project is ref
     (drgnx-explorer--show-folder dir)))
 
 (defun drgnx-explorer-copy-path () "Copy the absolute path of the file here."
-  (interactive)
-  (kill-new (car (drgnx-explorer--targets)))
-  (message "%s" (current-kill 0)))
+       (interactive)
+       (kill-new (car (drgnx-explorer--targets)))
+       (message "%s" (current-kill 0)))
 
 (defun drgnx-explorer-copy-relative-path () "Copy the path of the file here, relative to its root."
-  (interactive)
-  (let ((p (car (drgnx-explorer--targets))))
-    (kill-new (file-relative-name p (drgnx-explorer--root-of p)))
-    (message "%s" (current-kill 0))))
+       (interactive)
+       (let ((p (car (drgnx-explorer--targets))))
+         (kill-new (file-relative-name p (drgnx-explorer--root-of p)))
+         (message "%s" (current-kill 0))))
 
 (defun drgnx-explorer-reveal-externally () "Show the folder here in the system's file manager."
-  (interactive)
-  (let ((p (or (drgnx-explorer--node) (user-error "Nothing here"))))
-    (if (eq system-type 'darwin)
-        (call-process "open" nil 0 nil "-R" p)
-      (call-process "xdg-open" nil 0 nil (drgnx-explorer--folder-here)))))
+       (interactive)
+       (let ((p (or (drgnx-explorer--node) (user-error "Nothing here"))))
+         (if (eq system-type 'darwin)
+             (call-process "open" nil 0 nil "-R" p)
+           (call-process "xdg-open" nil 0 nil (drgnx-explorer--folder-here)))))
 
 ;;;; Mouse (the click model)
 

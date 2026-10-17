@@ -64,72 +64,72 @@
     (setq drgnx-explorer-git nil)               ; like treemacs: git off, then on for the git rows
     (setq r (plist-put r :explorer-first
                        (drgnx-bench--try "drgnx" "first"
-                         (drgnx-bench--ms (lambda () (drgnx-wb-hide-sidebar) (clrhash drgnx-explorer--cache)
-                                            (clrhash drgnx-explorer--expanded)
-                                            (when (get-buffer drgnx-explorer-buffer-name) (kill-buffer drgnx-explorer-buffer-name)))
-                                          (lambda () (drgnx-explorer-set-roots (list root)) (drgnx-wb-show-sidebar))))))
+                                         (drgnx-bench--ms (lambda () (drgnx-wb-hide-sidebar) (clrhash drgnx-explorer--cache)
+                                                            (clrhash drgnx-explorer--expanded)
+                                                            (when (get-buffer drgnx-explorer-buffer-name) (kill-buffer drgnx-explorer-buffer-name)))
+                                                          (lambda () (drgnx-explorer-set-roots (list root)) (drgnx-wb-show-sidebar))))))
     ;; With git: the render, the whole repository's status, and the visible rows repainted with it.
     (setq r (plist-put r :explorer-first-git
                        (drgnx-bench--try "drgnx" "first with git"
-                         (unwind-protect
-                             (drgnx-bench--ms (lambda () (drgnx-wb-hide-sidebar) (clrhash drgnx-explorer--cache)
-                                                (clrhash drgnx-explorer--expanded) (clrhash drgnx-git--repos)
-                                                (drgnx-bench--no-git-timer) (setq drgnx-explorer-git t)
-                                                (when (get-buffer drgnx-explorer-buffer-name) (kill-buffer drgnx-explorer-buffer-name)))
-                                              (lambda () (drgnx-explorer-set-roots (list root)) (drgnx-wb-show-sidebar)
-                                                (drgnx-git-refresh (file-name-as-directory root) t)
-                                                (unless (drgnx-git-status (expand-file-name "d000/f000.txt" root))
-                                                  (error "no git status was read: %S %s" (gethash (file-name-as-directory root) drgnx-git--repos) (with-current-buffer (get-buffer-create " *drgnx git errors*") (buffer-substring-no-properties (max 1 (- (point-max) 300)) (point-max)))))))
-                           (drgnx-bench--no-git-timer) (setq drgnx-explorer-git nil)))))
+                                         (unwind-protect
+                                             (drgnx-bench--ms (lambda () (drgnx-wb-hide-sidebar) (clrhash drgnx-explorer--cache)
+                                                                (clrhash drgnx-explorer--expanded) (clrhash drgnx-git--repos)
+                                                                (drgnx-bench--no-git-timer) (setq drgnx-explorer-git t)
+                                                                (when (get-buffer drgnx-explorer-buffer-name) (kill-buffer drgnx-explorer-buffer-name)))
+                                                              (lambda () (drgnx-explorer-set-roots (list root)) (drgnx-wb-show-sidebar)
+                                                                (drgnx-git-refresh (file-name-as-directory root) t)
+                                                                (unless (drgnx-git-status (expand-file-name "d000/f000.txt" root))
+                                                                  (error "no git status was read: %S %s" (gethash (file-name-as-directory root) drgnx-git--repos) (with-current-buffer (get-buffer-create " *drgnx git errors*") (buffer-substring-no-properties (max 1 (- (point-max) 300)) (point-max)))))))
+                                           (drgnx-bench--no-git-timer) (setq drgnx-explorer-git nil)))))
     (setq r (plist-put r :git-status
                        (drgnx-bench--try "drgnx" "git status"
-                         (drgnx-bench--ms (lambda () (clrhash drgnx-git--repos))
-                                          (lambda ()
-                                            (drgnx-git-refresh (file-name-as-directory root) t)
-                                            (unless (drgnx-git-status (expand-file-name "d000/f000.txt" root))
-                                              (error "no git status was read: %S %s" (gethash (file-name-as-directory root) drgnx-git--repos) (with-current-buffer (get-buffer-create " *drgnx git errors*") (buffer-substring-no-properties (max 1 (- (point-max) 300)) (point-max))))))))))
+                                         (drgnx-bench--ms (lambda () (clrhash drgnx-git--repos))
+                                                          (lambda ()
+                                                            (drgnx-git-refresh (file-name-as-directory root) t)
+                                                            (unless (drgnx-git-status (expand-file-name "d000/f000.txt" root))
+                                                              (error "no git status was read: %S %s" (gethash (file-name-as-directory root) drgnx-git--repos) (with-current-buffer (get-buffer-create " *drgnx git errors*") (buffer-substring-no-properties (max 1 (- (point-max) 300)) (point-max))))))))))
     (setq r (plist-put r :explorer-expand
                        (drgnx-bench--try "drgnx" "expand"
-                         (drgnx-bench--ms (lambda () (when (drgnx-explorer--expanded-p big)
-                                                       (drgnx-explorer-toggle-at (funcall row big)))
-                                            (clrhash drgnx-explorer--cache))     ; read the disk, like treemacs
-                                          (lambda () (drgnx-explorer-toggle-at (funcall row big)))))))
+                                         (drgnx-bench--ms (lambda () (when (drgnx-explorer--expanded-p big)
+                                                                       (drgnx-explorer-toggle-at (funcall row big)))
+                                                            (clrhash drgnx-explorer--cache))     ; read the disk, like treemacs
+                                                          (lambda () (drgnx-explorer-toggle-at (funcall row big)))))))
     ;; With git: the status is known (read in the background); the new rows are painted with it.
     (setq r (plist-put r :explorer-expand-git
                        (drgnx-bench--try "drgnx" "expand with git"
-                         (unwind-protect
-                             (progn
-                               (setq drgnx-explorer-git t)
-                               (drgnx-git-refresh (file-name-as-directory root) t)
-                               (drgnx-bench--ms (lambda () (when (drgnx-explorer--expanded-p big)
-                                                             (drgnx-explorer-toggle-at (funcall row big)))
-                                                  (clrhash drgnx-explorer--cache))
-                                                (lambda () (drgnx-explorer-toggle-at (funcall row big)))))
-                           (drgnx-bench--no-git-timer) (setq drgnx-explorer-git nil)))))
+                                         (unwind-protect
+                                             (progn
+                                               (setq drgnx-explorer-git t)
+                                               (drgnx-git-refresh (file-name-as-directory root) t)
+                                               (drgnx-bench--ms (lambda () (when (drgnx-explorer--expanded-p big)
+                                                                             (drgnx-explorer-toggle-at (funcall row big)))
+                                                                  (clrhash drgnx-explorer--cache))
+                                                                (lambda () (drgnx-explorer-toggle-at (funcall row big)))))
+                                           (drgnx-bench--no-git-timer) (setq drgnx-explorer-git nil)))))
     (setq r (plist-put r :explorer-reveal
                        (drgnx-bench--try "drgnx" "reveal"
-                         (drgnx-bench--ms (lambda () (clrhash drgnx-explorer--expanded) (drgnx-explorer--render))
-                                          (lambda () (drgnx-explorer-reveal leaf (funcall win)))))))
+                                         (drgnx-bench--ms (lambda () (clrhash drgnx-explorer--expanded) (drgnx-explorer--render))
+                                                          (lambda () (drgnx-explorer-reveal leaf (funcall win)))))))
     (setq r (plist-put r :explorer-key-p95
                        (drgnx-bench--try "drgnx" "keys"
-                         (drgnx-explorer-toggle-at (funcall row big))
-                         (with-selected-window (funcall win)
-                           (goto-char (funcall row big))
-                           (drgnx-bench--p95 #'drgnx-explorer-next 300)))))
+                                         (drgnx-explorer-toggle-at (funcall row big))
+                                         (with-selected-window (funcall win)
+                                           (goto-char (funcall row big))
+                                           (drgnx-bench--p95 #'drgnx-explorer-next 300)))))
     (setq r (plist-put r :explorer-refresh
                        (drgnx-bench--try "drgnx" "refresh"
-                         ;; d001 expanded: the 100 new files must appear (checked).  Live updates held back
-                         ;; (like treemacs, no file watching): `redisplay' runs due timers, and the watch's
-                         ;; would show the files before the measured refresh.
-                         (let ((d001 (expand-file-name "d001" root)) (drgnx-explorer-event-delay 3600))
-                           (unless (drgnx-explorer--expanded-p d001) (drgnx-explorer-toggle-at (funcall row d001)))
-                           (drgnx-bench--ms (lambda () (drgnx-bench--new-files d001 100))
-                                            (lambda ()
-                                              (let ((n (with-current-buffer drgnx-explorer-buffer-name (count-lines (point-min) (point-max)))))
-                                                (drgnx-explorer-refresh)
-                                                (unless (= (+ n 100) (with-current-buffer drgnx-explorer-buffer-name
-                                                                       (count-lines (point-min) (point-max))))
-                                                  (error "refresh did not show the 100 new files")))))))))
+                                         ;; d001 expanded: the 100 new files must appear (checked).  Live updates held back
+                                         ;; (like treemacs, no file watching): `redisplay' runs due timers, and the watch's
+                                         ;; would show the files before the measured refresh.
+                                         (let ((d001 (expand-file-name "d001" root)) (drgnx-explorer-event-delay 3600))
+                                           (unless (drgnx-explorer--expanded-p d001) (drgnx-explorer-toggle-at (funcall row d001)))
+                                           (drgnx-bench--ms (lambda () (drgnx-bench--new-files d001 100))
+                                                            (lambda ()
+                                                              (let ((n (with-current-buffer drgnx-explorer-buffer-name (count-lines (point-min) (point-max)))))
+                                                                (drgnx-explorer-refresh)
+                                                                (unless (= (+ n 100) (with-current-buffer drgnx-explorer-buffer-name
+                                                                                       (count-lines (point-min) (point-max))))
+                                                                  (error "refresh did not show the 100 new files")))))))))
     (when (timerp drgnx-explorer--event-timer) (cancel-timer drgnx-explorer--event-timer))
     (setq drgnx-explorer--event-timer nil drgnx-explorer--dirty nil)
     r))
@@ -159,59 +159,59 @@
         (find-file file)
         (setq r (plist-put r :explorer-first
                            (drgnx-bench--try "treemacs" "first"
-                             (drgnx-bench--ms (lambda () (funcall kill) (select-window (get-buffer-window (get-file-buffer file))))
-                                              (lambda () (treemacs-display-current-project-exclusively))))))
+                                             (drgnx-bench--ms (lambda () (funcall kill) (select-window (get-buffer-window (get-file-buffer file))))
+                                                              (lambda () (treemacs-display-current-project-exclusively))))))
         (setq r (plist-put r :explorer-expand
                            (drgnx-bench--try "treemacs" "expand"
-                             (drgnx-bench--ms (lambda () (with-selected-window (funcall tw)
-                                                           (treemacs-goto-file-node big)
-                                                           (when (treemacs-is-node-expanded? (treemacs-current-button))
-                                                             (treemacs-toggle-node))))
-                                              (lambda () (with-selected-window (funcall tw)
-                                                           (treemacs-goto-file-node big) (treemacs-toggle-node)))))))
+                                             (drgnx-bench--ms (lambda () (with-selected-window (funcall tw)
+                                                                           (treemacs-goto-file-node big)
+                                                                           (when (treemacs-is-node-expanded? (treemacs-current-button))
+                                                                             (treemacs-toggle-node))))
+                                                              (lambda () (with-selected-window (funcall tw)
+                                                                           (treemacs-goto-file-node big) (treemacs-toggle-node)))))))
         (setq r (plist-put r :explorer-reveal
                            (drgnx-bench--try "treemacs" "reveal"
-                             (drgnx-bench--ms (lambda () (with-selected-window (funcall tw)
-                                                           (treemacs-goto-file-node big)
-                                                           (when (treemacs-is-node-expanded? (treemacs-current-button))
-                                                             (treemacs-toggle-node))
-                                                           (treemacs-goto-file-node (expand-file-name "deep" root))
-                                                           (when (treemacs-is-node-expanded? (treemacs-current-button))
-                                                             (treemacs-toggle-node t))))
-                                              (lambda () (with-selected-window (funcall tw) (treemacs-goto-file-node leaf)))))))
+                                             (drgnx-bench--ms (lambda () (with-selected-window (funcall tw)
+                                                                           (treemacs-goto-file-node big)
+                                                                           (when (treemacs-is-node-expanded? (treemacs-current-button))
+                                                                             (treemacs-toggle-node))
+                                                                           (treemacs-goto-file-node (expand-file-name "deep" root))
+                                                                           (when (treemacs-is-node-expanded? (treemacs-current-button))
+                                                                             (treemacs-toggle-node t))))
+                                                              (lambda () (with-selected-window (funcall tw) (treemacs-goto-file-node leaf)))))))
         (setq r (plist-put r :explorer-key-p95
                            (drgnx-bench--try "treemacs" "keys"
-                             (with-selected-window (funcall tw)
-                               (treemacs-goto-file-node big)
-                               (unless (treemacs-is-node-expanded? (treemacs-current-button)) (treemacs-toggle-node))
-                               (drgnx-bench--p95 (lambda () (treemacs-next-line 1)) 300)))))
+                                             (with-selected-window (funcall tw)
+                                               (treemacs-goto-file-node big)
+                                               (unless (treemacs-is-node-expanded? (treemacs-current-button)) (treemacs-toggle-node))
+                                               (drgnx-bench--p95 (lambda () (treemacs-next-line 1)) 300)))))
         (setq r (plist-put r :explorer-refresh
                            (drgnx-bench--try "treemacs" "refresh"
-                             (let ((d001 (expand-file-name "d001" root)))
-                               (with-selected-window (funcall tw)
-                                 (treemacs-goto-file-node d001)
-                                 (unless (treemacs-is-node-expanded? (treemacs-current-button)) (treemacs-toggle-node)))
-                               (drgnx-bench--ms (lambda () (drgnx-bench--new-files d001 100))
-                                                (lambda ()
-                                                  (with-selected-window (funcall tw)
-                                                    (let ((n (count-lines (point-min) (point-max))))
-                                                      (treemacs-refresh)
-                                                      (unless (= (+ n 100) (count-lines (point-min) (point-max)))
-                                                        (error "refresh did not show the 100 new files"))))))))))
+                                             (let ((d001 (expand-file-name "d001" root)))
+                                               (with-selected-window (funcall tw)
+                                                 (treemacs-goto-file-node d001)
+                                                 (unless (treemacs-is-node-expanded? (treemacs-current-button)) (treemacs-toggle-node)))
+                                               (drgnx-bench--ms (lambda () (drgnx-bench--new-files d001 100))
+                                                                (lambda ()
+                                                                  (with-selected-window (funcall tw)
+                                                                    (let ((n (count-lines (point-min) (point-max))))
+                                                                      (treemacs-refresh)
+                                                                      (unless (= (+ n 100) (count-lines (point-min) (point-max)))
+                                                                        (error "refresh did not show the 100 new files"))))))))))
         (when (executable-find "git")
           (treemacs-git-mode 'simple)
           (setq r (plist-put r :explorer-first-git
                              (drgnx-bench--try "treemacs" "first with git"
-                               (drgnx-bench--ms (lambda () (funcall kill) (select-window (get-buffer-window (get-file-buffer file))))
-                                                (lambda () (treemacs-display-current-project-exclusively))))))
+                                               (drgnx-bench--ms (lambda () (funcall kill) (select-window (get-buffer-window (get-file-buffer file))))
+                                                                (lambda () (treemacs-display-current-project-exclusively))))))
           (setq r (plist-put r :explorer-expand-git
                              (drgnx-bench--try "treemacs" "expand with git"
-                               (drgnx-bench--ms (lambda () (with-selected-window (funcall tw)
-                                                             (treemacs-goto-file-node big)
-                                                             (when (treemacs-is-node-expanded? (treemacs-current-button))
-                                                               (treemacs-toggle-node))))
-                                                (lambda () (with-selected-window (funcall tw)
-                                                             (treemacs-goto-file-node big) (treemacs-toggle-node)))))))
+                                               (drgnx-bench--ms (lambda () (with-selected-window (funcall tw)
+                                                                             (treemacs-goto-file-node big)
+                                                                             (when (treemacs-is-node-expanded? (treemacs-current-button))
+                                                                               (treemacs-toggle-node))))
+                                                                (lambda () (with-selected-window (funcall tw)
+                                                                             (treemacs-goto-file-node big) (treemacs-toggle-node)))))))
           (treemacs-git-mode -1))
         (funcall kill)
         r))))
@@ -228,32 +228,32 @@
     (drgnx-wb-show-sidebar)
     (setq mine (plist-put mine :buffers-render
                           (drgnx-bench--try "drgnx" "buffers render"
-                            ;; Like ibuffer: a fresh panel buffer, its window and the render.
-                            (drgnx-bench--ms (lambda () (drgnx-wb-hide-sidebar) (setq drgnx-buffers--signature nil)
-                                               (kill-buffer drgnx-buffers-buffer-name))
-                                             #'drgnx-wb-show-sidebar))))
+                                            ;; Like ibuffer: a fresh panel buffer, its window and the render.
+                                            (drgnx-bench--ms (lambda () (drgnx-wb-hide-sidebar) (setq drgnx-buffers--signature nil)
+                                                               (kill-buffer drgnx-buffers-buffer-name))
+                                                             #'drgnx-wb-show-sidebar))))
     (setq mine (plist-put mine :buffers-update
                           (drgnx-bench--try "drgnx" "buffers update"
-                            (drgnx-bench--ms new #'drgnx-signal--flush))))      ; the change bus included
+                                            (drgnx-bench--ms new #'drgnx-signal--flush))))      ; the change bus included
     (setq mine (plist-put mine :buffers-key-p95
                           (drgnx-bench--try "drgnx" "buffers keys"
-                            (with-selected-window (drgnx-wb-section-window 'buffers)
-                              (goto-char (point-min))
-                              (drgnx-bench--p95 #'drgnx-buffers-next 300)))))
+                                            (with-selected-window (drgnx-wb-section-window 'buffers)
+                                              (goto-char (point-min))
+                                              (drgnx-bench--p95 #'drgnx-buffers-next 300)))))
     ;; ibuffer in the same frame (the sidebar stays): a key press redisplays the same windows.
     (require 'ibuffer)
     (setq theirs (plist-put theirs :buffers-render
                             (drgnx-bench--try "ibuffer" "render"
-                              (drgnx-bench--ms (lambda () (when (get-buffer "*Ibuffer*") (kill-buffer "*Ibuffer*")))
-                                               (lambda () (ibuffer t "*Ibuffer*" nil t))))))
+                                              (drgnx-bench--ms (lambda () (when (get-buffer "*Ibuffer*") (kill-buffer "*Ibuffer*")))
+                                                               (lambda () (ibuffer t "*Ibuffer*" nil t))))))
     (setq theirs (plist-put theirs :buffers-update
                             (drgnx-bench--try "ibuffer" "update"
-                              (drgnx-bench--ms new (lambda () (with-current-buffer "*Ibuffer*" (ibuffer-update nil t)))))))
+                                              (drgnx-bench--ms new (lambda () (with-current-buffer "*Ibuffer*" (ibuffer-update nil t)))))))
     (setq theirs (plist-put theirs :buffers-key-p95
                             (drgnx-bench--try "ibuffer" "keys"
-                              (with-selected-window (get-buffer-window "*Ibuffer*")
-                                (goto-char (point-min))
-                                (drgnx-bench--p95 #'ibuffer-forward-line 300)))))
+                                              (with-selected-window (get-buffer-window "*Ibuffer*")
+                                                (goto-char (point-min))
+                                                (drgnx-bench--p95 #'ibuffer-forward-line 300)))))
     (drgnx-wb-hide-sidebar)
     (cons mine theirs)))
 

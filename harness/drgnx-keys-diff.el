@@ -98,8 +98,8 @@ lists as :native (KIND `native': documented, never rebound).  Nothing is evaluat
     (dolist (stage drgnx-modules-stages) (ignore-errors (drgnx-modules-run stage)))
     (drgnx-modules-write-state
      `(:version 1 :external ((:name gryphn :path ,gryphn-dir
-                              :features (gryphn-org gryphn-run gryphn-board gryphn-board-ui gryphn-org-ui gryphn-agents
-                                         gryphn-search gryphn-llm gryphn-acp gryphn-ide)))))
+                                    :features (gryphn-org gryphn-run gryphn-board gryphn-board-ui gryphn-org-ui gryphn-agents
+                                                          gryphn-search gryphn-llm gryphn-acp gryphn-ide)))))
     (drgnx-modules-load-external)
     (delete-directory cfg t)
     (let ((r (drgnx-keys-resolve :commands (drgnx-commands-all) :profiles drgnx-keys-profiles
@@ -120,10 +120,10 @@ lists as :native (KIND `native': documented, never rebound).  Nothing is evaluat
             (why (alist-get id drgnx-keys-diff-explained)))
         (cond ((eq kind 'native)          ; gryphn leaves the key to Emacs: drgnx must not take it
                (when-let* ((taken (seq-some (lambda (b)
-                                               (seq-some (lambda (k) (and (or (equal k key) (string-prefix-p (concat key " ") k))
-                                                                          (format "%s (%s)" (car b) k)))
-                                                         (cdr b)))
-                                             global)))   ; a key in a mode's own map leaves Emacs' key alone
+                                              (seq-some (lambda (k) (and (or (equal k key) (string-prefix-p (concat key " ") k))
+                                                                         (format "%s (%s)" (car b) k)))
+                                                        (cdr b)))
+                                            global)))   ; a key in a mode's own map leaves Emacs' key alone
                  (push (list 'native id (format "%s: gryphn leaves %s to Emacs, drgnx binds %s" title key taken) why)
                        lines)))
               ((not (memq target ids))

@@ -10,14 +10,14 @@
 (require 'drgnx-registry)
 
 (drgnx-module-define 'org/org
-  :doc "Org capture and agenda."
-  :stage 'startup
-  :setup
-  (lambda ()
-    (drgnx-command-define 'org-capture :category "Org" :title "Capture" :command #'org-capture
-      :doc "Capture a note or task")
-    (drgnx-command-define 'org-agenda :category "Org" :title "Agenda Menu" :command #'org-agenda
-      :doc "The agenda views")))
+                     :doc "Org capture and agenda."
+                     :stage 'startup
+                     :setup
+                     (lambda ()
+                       (drgnx-command-define 'org-capture :category "Org" :title "Capture" :command #'org-capture
+                                             :doc "Capture a note or task")
+                       (drgnx-command-define 'org-agenda :category "Org" :title "Agenda Menu" :command #'org-agenda
+                                             :doc "The agenda views")))
 
 (provide 'drgnx-org)
 ;;; drgnx-org.el ends here

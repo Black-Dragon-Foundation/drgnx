@@ -123,9 +123,9 @@
 
 (defconst drgnx-perf-busy-hooks
   '(pre-command-hook post-command-hook after-change-functions before-change-functions
-    window-configuration-change-hook window-buffer-change-functions window-selection-change-functions
-    window-size-change-functions buffer-list-update-hook find-file-hook after-make-frame-functions
-    server-after-make-frame-hook pre-redisplay-functions window-scroll-functions)
+                     window-configuration-change-hook window-buffer-change-functions window-selection-change-functions
+                     window-size-change-functions buffer-list-update-hook find-file-hook after-make-frame-functions
+                     server-after-make-frame-hook pre-redisplay-functions window-scroll-functions)
   "Hooks the audit times by default.")
 
 (defvar drgnx-perf--audit nil
