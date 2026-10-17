@@ -132,4 +132,17 @@
         (drgnx-explorer-toggle-at (point)))
       (should (eq seen t)))))
 
+;;;; M3a-11: remote files
+
+(ert-deftest drgnx-explorer-edge/the-follower-skips-remote-files ()
+  (drgnx-explorer-edge--with root
+    (drgnx-wb-show-sidebar)
+    (let ((revealed nil))
+      (with-temp-buffer
+        (setq buffer-file-name "/ssh:nohost.invalid:/srv/x.txt")
+        (cl-letf (((symbol-function 'drgnx-explorer-reveal) (lambda (&rest _) (setq revealed t))))
+          (drgnx-explorer--follow (current-buffer)))
+        (setq buffer-file-name nil))
+      (should-not revealed))))
+
 ;;; wb-explorer-edge-test.el ends here

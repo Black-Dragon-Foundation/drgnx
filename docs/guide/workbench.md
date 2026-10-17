@@ -32,7 +32,7 @@ clutter is hidden (`drgnx-explorer-exclude`). Dragging does nothing — the Expl
 
 When you switch files, the Explorer shows the new one — but never while you are using the Explorer (it is
 selected, or a mouse button is down), never for a file outside its folder (opening another project's file does
-not replace the tree), and without scrolling when the row is already visible. Showing the sidebar reveals the
+not replace the tree), never for a remote (TRAMP) file, and without scrolling when the row is already visible. Showing the sidebar reveals the
 file you are editing.
 
 The **Buffers** panel lists open files in the order you opened them — switching never re-sorts it, so a row never

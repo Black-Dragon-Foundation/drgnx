@@ -423,9 +423,11 @@ Returns non-nil if FILE is under a root."
           t)))))
 
 (defun drgnx-explorer--follow (buffer)
-  "On `editor-changed': reveal BUFFER's file — unless the user is in the Explorer or holds a button."
+  "On `editor-changed': reveal BUFFER's file — unless the user is in the Explorer or holds a button.
+A remote file is never revealed: this runs from the change bus, where remote I/O could prompt."
   (let ((w (drgnx-wb-section-window 'explorer))
         (file (and (buffer-live-p buffer) (buffer-local-value 'buffer-file-name buffer))))
+    (when (and file (file-remote-p file)) (setq file nil))
     (when (and (window-live-p w) file (not (eq (selected-window) w)) (not drgnx-explorer--pressed)
                (not drgnx-explorer--find)
                (not (equal (with-current-buffer (window-buffer w) (drgnx-explorer-node-at (window-point w)))
