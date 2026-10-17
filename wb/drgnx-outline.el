@@ -83,13 +83,14 @@
 
 (defun drgnx-outline--idle ()
   (setq drgnx-outline--timer nil)
-  (when (get-buffer-window drgnx-outline-buffer-name t) (drgnx-outline-refresh)))
+  (drgnx-outline-refresh))
 
 (defun drgnx-outline-refresh (&rest _)
   "Show the definitions of the file in the editor — only while the Outline is shown (showing it
-refreshes it): an index can take most of a second to build."
-  (when (get-buffer-window drgnx-outline-buffer-name t)
-    (drgnx-outline--refresh-1)))
+refreshes it): an index can take most of a second to build.  Hidden, it stops following edits."
+  (if (get-buffer-window drgnx-outline-buffer-name t)
+      (drgnx-outline--refresh-1)
+    (drgnx-outline--watch nil)))
 
 (defun drgnx-outline--refresh-1 ()
   (let* ((editor (drgnx-wb-editor-window)) (src (and editor (window-buffer editor)))

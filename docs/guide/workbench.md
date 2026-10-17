@@ -43,8 +43,8 @@ in the active editor is in bold. Click a row to show it; `RET` too; `Delete` (`d
 
 Below the Explorer, the **Outline** lists the definitions of the file in the editor (as imenu finds them, nested the
 same way). A click shows the definition in the editor and keeps you in the Outline; `RET` goes there. It follows the
-editor, and half a second after you stop typing, your edits — only while it is shown, and a key you press while it
-works wins (it tries again at the next pause). Files without an index, remote files and buffers over 1 MB get a
+editor, and half a second after you stop typing, your edits — only while it is shown (hidden, it lets go of the file
+at the next pause or editor change), and a key you press while it works wins (it tries again at the next pause). Files without an index, remote files and buffers over 1 MB get a
 one-line notice instead. Focus Outline: palette · `SPC o`.
 
 ### Files
