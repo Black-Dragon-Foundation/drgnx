@@ -212,6 +212,37 @@ HOME is a new empty directory, deleted afterwards (ENV may name another)."
             (should-not (file-exists-p (expand-file-name "bin/emacs" prefix)))))
       (delete-directory tmp t))))
 
+(ert-deftest drgnx-install/a-failed-download-installs-nothing ()
+  ;; M2.5-4: a mirror without the tarball (not synced yet, no network) — a clear message, exit 1, nothing
+  ;; installed, no half file kept.
+  (skip-unless (/= 0 (user-uid)))     ; as root, as_root runs commands without sudo: they would really run
+  (let* ((tmp (make-temp-file "drgnx-install" t))
+         (mirror (expand-file-name "mirror" tmp))
+         (bin (expand-file-name "bin" tmp))
+         (prefix (expand-file-name "prefix" tmp)))
+    (unwind-protect
+        (progn
+          (make-directory mirror)
+          (make-directory bin)
+          (write-region "#!/bin/sh\necho \"FAKE-SUDO $*\"\nexit 1\n" nil (expand-file-name "sudo" bin))
+          (set-file-modes (expand-file-name "sudo" bin) #o755)
+          (let ((r (drgnx-install-test--run
+                    (list (concat "DRGNX_INSTALL_OS_RELEASE=" (drgnx-install-test--os "fedora-44"))
+                          "DRGNX_INSTALL_UNAME=Linux"
+                          (concat "DRGNX_INSTALL_MIRROR=file://" mirror)
+                          (concat "DRGNX_INSTALL_KEYRING=file://" mirror "/keyring")
+                          (concat "XDG_CACHE_HOME=" tmp "/cache")
+                          (concat "PATH=" bin ":" (getenv "PATH")))
+                    "--yes" "--method" "source" "--prefix" prefix "--source-dir" drgnx-install-test--root)))
+            (should (= (car r) 1))
+            (should (string-search (concat "could not download file://" mirror "/emacs-31.1.tar.xz") (cdr r)))
+            (should (string-search "nothing was installed" (cdr r)))
+            (should-not (string-search "As root:" (cdr r)))
+            (should-not (string-search "FAKE-SUDO" (cdr r)))
+            (should-not (directory-files (expand-file-name "cache/drgnx/build" tmp) nil "\\.tar\\.xz"))
+            (should-not (file-exists-p (expand-file-name "bin/emacs" prefix)))))
+      (delete-directory tmp t))))
+
 (ert-deftest drgnx-install/root-steps-are-announced-even-with-yes ()
   (skip-unless (/= 0 (user-uid)))     ; as root, as_root runs commands without sudo: they would really run
   (let* ((tmp (make-temp-file "drgnx-install" t))

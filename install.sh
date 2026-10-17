@@ -307,15 +307,21 @@ download_tools() { # curl, gpg and xz — installed as root only when one is mis
   done
 }
 
+download() { # URL FILE — no half file is kept
+  curl -fsSL -o "$2" "$1" && return
+  rm -f "$2"
+  die 1 "could not download $1 — nothing was installed (no network, or the mirror has not synced the release yet: try again later)"
+}
+
 fetch_emacs_source() { # download, verify and unpack into $BUILD_DIR/emacs-VERSION (kept across runs)
   local src="emacs-$EMACS_VERSION"
   mkdir -p "$BUILD_DIR"
   cd "$BUILD_DIR"
   [[ -d "$src" ]] && return
   say "Downloading $src and its signature…"
-  curl -fsSLO "$GNU_MIRROR/$src.tar.xz"
-  curl -fsSLO "$GNU_MIRROR/$src.tar.xz.sig"
-  curl -fsSLo gnu-keyring.gpg "$GNU_KEYRING"
+  download "$GNU_MIRROR/$src.tar.xz" "$src.tar.xz"
+  download "$GNU_MIRROR/$src.tar.xz.sig" "$src.tar.xz.sig"
+  download "$GNU_KEYRING" gnu-keyring.gpg
   rm -rf gnupg && mkdir -m 700 gnupg   # a private gpg home: the user's ~/.gnupg is neither needed nor touched
   if ! gpg --homedir ./gnupg --batch --no-default-keyring --keyring "./gnu-keyring.gpg" \
        --verify "$src.tar.xz.sig" "$src.tar.xz" 2>"$BUILD_DIR/gpg.log"; then

@@ -81,8 +81,9 @@ Used where the distribution has no 31.1 yet. Everything happens in `$XDG_CACHE_H
 
 1. Download `emacs-31.1.tar.xz` and its signature from the GNU mirrors and verify it against the GNU keyring
    (`gnu-keyring.gpg`; the 31.1 release is signed by Sean Whitton, key
-   `8DC2 487E 51AB DD90 B5C4 753F 0F56 D055 3B6D 411B`). **This happens before anything is installed** — if the
-   signature does not verify, the installer stops and nothing has changed. gpg runs with a private home in the
+   `8DC2 487E 51AB DD90 B5C4 753F 0F56 D055 3B6D 411B`). **This happens before anything is installed** — if a
+   download fails (no network, a mirror that has not synced the release yet) or the signature does not verify,
+   the installer says so and stops (exit 1), and nothing has changed. gpg runs with a private home in the
    build directory; your `~/.gnupg` is not used. Only `curl`, `gpg` and `xz` are
    installed first, and only if missing.
 2. Build dependencies, as root: Fedora `dnf builddep emacs`; Debian/Ubuntu `apt-get build-dep emacs` with
