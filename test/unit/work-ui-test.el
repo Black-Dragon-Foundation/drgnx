@@ -107,6 +107,13 @@ git repository ROOT/code), a lone plan, and the tracker's database in a temp dat
       (should-not (string-search "Plan Beta" (buffer-string)))
       (should (string-search "Plan Alpha" (buffer-string))))))
 
+(defun drgnx-work-ui-test--graph ()
+  "Show Work as Graph as on a graphical frame (batch has none); its buffer."
+  (cl-letf (((symbol-function 'display-images-p) #'always)) (save-window-excursion (drgnx-work-ui-graph))))
+
+(defun drgnx-work-ui-test--edge-ids (layout)
+  (mapcar (lambda (e) (mapcar (lambda (b) (plist-get b :id)) e)) (plist-get layout :edges)))
+
 (defun drgnx-work-ui-test--box (layout id) (seq-find (lambda (b) (equal (plist-get b :id) id)) (plist-get layout :boxes)))
 
 (ert-deftest drgnx-work-ui/the-graph-lays-out-specs-plans-and-branches-in-columns ()
@@ -124,8 +131,8 @@ git repository ROOT/code), a lone plan, and the tracker's database in a temp dat
         (should (equal (plist-get a :lines) '("Plan Alpha" "0/2 tasks · 1 commit")))
         (should (= (length (car (plist-get b :lines))) 48))                      ; a long title is cut…
         (should (string-suffix-p "…" (car (plist-get b :lines))))
-        (should (member (list (plist-get spec :id) alpha) (plist-get l :edges)))
-        (should (member (list alpha "branch feature") (plist-get l :edges)))
+        (should (member (list (plist-get spec :id) alpha) (drgnx-work-ui-test--edge-ids l)))
+        (should (member (list alpha "branch feature") (drgnx-work-ui-test--edge-ids l)))
         (let ((boxes (plist-get l :boxes)))                                     ; …and no two boxes overlap
           (dolist (p boxes)
             (dolist (q boxes)
@@ -134,6 +141,59 @@ git repository ROOT/code), a lone plan, and the tracker's database in a temp dat
                                  (< (plist-get q :x) (+ (plist-get p :x) (plist-get p :w)))
                                  (< (plist-get p :y) (+ (plist-get q :y) (plist-get q :h)))
                                  (< (plist-get q :y) (+ (plist-get p :y) (plist-get p :h)))))))))))))
+
+(ert-deftest drgnx-work-ui/plans-on-one-branch-each-link-their-own-branch-box ()
+  (drgnx-work-ui-test--with root
+    (dolist (p '("alpha" "beta"))
+      (let ((id (concat "plan:" root "docs/plans/" p ".md")))
+        (drgnx-work-update-node id :branch "main")
+        (drgnx-work-put-edge id "branch:/repo/.git:main" 'on-branch 'inferred "branch")))
+    (let ((l (drgnx-work-ui-graph-layout)))
+      (dolist (e (plist-get l :edges))
+        (when (eq (plist-get (cadr e) :kind) 'branch)
+          (should (= (plist-get (car e) :y) (plist-get (cadr e) :y))))))))   ; beside its own plan
+
+(ert-deftest drgnx-work-ui/a-big-graph-is-drawn-in-bands-emacs-can-show ()
+  (drgnx-work-ui-test--with root
+    (dotimes (i 60)
+      (write-region (format "# Plan %02d
+
+### Task 1: x
+" i) nil (format "%sdocs/plans/many-%02d.md" root i) nil 'silent))
+    (drgnx-work-scan (list root))
+    (let* ((g (drgnx-work-ui-test--graph))
+           (images (with-current-buffer g
+                     (delete-dups (cl-loop for p from (point-min) below (point-max)
+                                           for d = (get-text-property p 'display)
+                                           when d collect (if (eq (car d) 'image) d (cadr d))))))
+           (covered (make-hash-table :test #'equal)))
+      (unwind-protect
+          (progn
+            (should (> (length images) 1))
+            (dolist (img images)
+              (should (string-match "<svg width=\"[0-9]+\" height=\"\\([0-9]+\\)\"" (image-property img :data)))
+              (should (<= (string-to-number (match-string 1 (image-property img :data))) drgnx-work-ui-graph-band))
+              (pcase-dolist (`((rect . ((,_ . ,y0) . (,_ . ,y1))) ,area . ,_) (image-property img :map))
+                (cl-incf (gethash area covered 0) (- y1 y0))))
+            ;; every box clickable all over, across the bands it spans
+            (pcase-dolist (`(,area . ,box) drgnx-work-ui--graph-spots)
+              (should (= (gethash area covered 0) (plist-get box :h)))))
+        (kill-buffer g)))))
+
+(ert-deftest drgnx-work-ui/the-graph-on-a-text-frame-says-it-cannot-be-shown ()
+  (drgnx-work-ui-test--with root
+    (cl-letf (((symbol-function 'display-images-p) #'ignore))
+      (should-error (drgnx-work-ui-graph) :type 'user-error))))
+
+(ert-deftest drgnx-work-ui/g-draws-the-graph-again-and-wide-graphs-scroll-sideways ()
+  (drgnx-work-ui-test--with root
+    (let ((g (drgnx-work-ui-test--graph)))
+      (unwind-protect
+          (with-current-buffer g
+            (should truncate-lines)                                              ; sideways, not wrapped
+            (cl-letf (((symbol-function 'display-images-p) #'always)) (revert-buffer))
+            (should (get-text-property (point-min) 'display)))
+        (kill-buffer g)))))
 
 (ert-deftest drgnx-work-ui/the-graph-takes-its-colours-from-the-theme ()
   (drgnx-work-ui-test--with root
@@ -153,7 +213,7 @@ git repository ROOT/code), a lone plan, and the tracker's database in a temp dat
 
 (ert-deftest drgnx-work-ui/a-tall-graph-scrolls-line-by-line ()
   (drgnx-work-ui-test--with root
-    (let ((g (save-window-excursion (drgnx-work-ui-graph))))
+    (let ((g (drgnx-work-ui-test--graph)))
       (unwind-protect
           (with-current-buffer g
             (should (> (count-lines (point-min) (point-max)) 1))              ; slices, one per line
@@ -163,7 +223,7 @@ git repository ROOT/code), a lone plan, and the tracker's database in a temp dat
 
 (ert-deftest drgnx-work-ui/the-graph-shows-no-cursor-and-a-press-moves-nothing ()
   (drgnx-work-ui-test--with root
-    (let ((g (save-window-excursion (drgnx-work-ui-graph))))
+    (let ((g (drgnx-work-ui-test--graph)))
       (unwind-protect
           (with-current-buffer g
             (should (null cursor-type))                                          ; no box drawn round the image
@@ -173,7 +233,7 @@ git repository ROOT/code), a lone plan, and the tracker's database in a temp dat
 (ert-deftest drgnx-work-ui/a-click-on-a-box-opens-what-it-shows ()
   (drgnx-work-ui-test--with root
     (drgnx-work-update-node (concat "plan:" root "docs/plans/alpha.md") :branch "feature")
-    (let* ((g (save-window-excursion (drgnx-work-ui-graph)))
+    (let* ((g (drgnx-work-ui-test--graph))
            (img (with-current-buffer g (let ((d (get-text-property (point-min) 'display))) (if (eq (car d) 'image) d (cadr d)))))
            (keymap (with-current-buffer g (get-text-property (point-min) 'keymap)))
            (area (lambda (title) (seq-find (lambda (a) (string-prefix-p title (plist-get (nth 2 a) 'help-echo))) (image-property img :map)))))

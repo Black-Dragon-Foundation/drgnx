@@ -85,8 +85,10 @@ Emacs never waits, and the tab redraws when the scan is done — and after each 
   program. Every box is a hot spot: click a spec or plan to open its file, a branch to add its worktree to the
   Explorer; hovering shows the full title and counts. Its colours come from your theme through the faces
   `drgnx-work-ui-graph-spec`, `-plan`, `-merged`, `-branch` and `-edge` (customise them, or let the theme), so the
-  next graph follows a theme switch. A graph taller than the window scrolls like text. It needs an Emacs with SVG support (librsvg; every graphical build drgnx
-  installs has it). 300 plans draw in about 0.4 s.
+  next graph follows a theme switch (`g` in the graph draws it again). The graph scrolls like text, down and
+  sideways; a big one is drawn as bands of images one below the other (Emacs refuses a single image taller than
+  `max-image-size`), which you do not see. It needs a graphical frame of an Emacs with SVG support (librsvg; every
+  graphical build drgnx installs has it) — in a terminal frame it says so. 300 plans: 0.8 s to draw on screen.
 
 `drgnx doctor` checks `work`: Emacs has SQLite (else the tracker is off), how many plans are tracked, and whether
 this Emacs can show SVG (else there is no graph; the tab shows the same tree).

@@ -278,7 +278,7 @@ Returns the process."
   (cons (max 7 (default-font-width)) (max 14 (default-font-height))))
 
 (defun drgnx-work-ui-graph-layout ()
-  "The graph's boxes and edges: (:boxes (BOX…) :edges ((FROM TO)…) :w W :h H).  A BOX is (:id :kind
+  "The graph's boxes and edges: (:boxes (BOX…) :edges ((FROM-BOX TO-BOX)…) :w W :h H).  A BOX is (:id :kind
 :node :lines :tip :x :y :w :h :merged).  Columns: specs | plans | branches; a spec sits beside its plans."
   (let* ((m (drgnx-work-ui--metrics)) (cw (car m)) (lh (cdr m)) (pad (/ lh 2)) (vgap (/ lh 2)) (hgap (* 6 cw))
          (box (lambda (id kind node lines tip)
@@ -295,17 +295,17 @@ Returns the process."
     (dolist (r (drgnx-work-ui--roots))
       (let* ((spec (and (eq (plist-get r :kind) 'spec) r))
              (plans (if spec (seq-filter (lambda (n) (eq (plist-get n :kind) 'plan)) (drgnx-work-ui--kids r)) (list r)))
-             (top y))
+             (top y) (pbs nil))
         (dolist (p plans)
           (let ((pb (funcall plan-box p)))
             (setq pb (plist-put pb :y y) pb (plist-put pb :col 1))
-            (push pb boxes)
+            (push pb boxes) (push pb pbs)
             (when-let* ((name (plist-get p :branch)))
               (let* ((bid (or (car (car (drgnx-work-edges-from (plist-get p :id) 'on-branch))) (concat "branch " name)))
                      (bb (funcall box bid 'branch p (list name) (format "branch %s%s" name (if (plist-get p :worktree) (concat "\n" (plist-get p :worktree)) "")))))
                 (setq bb (plist-put bb :y y) bb (plist-put bb :col 2))
                 (push bb boxes)
-                (push (list (plist-get p :id) bid) edges)))
+                (push (list pb bb) edges)))
             (setq y (+ y (plist-get pb :h) vgap))))
         (when spec
           (let* ((sb (funcall box (plist-get spec :id) 'spec spec (list (drgnx-work-ui--cut (plist-get spec :title))) (plist-get spec :title)))
@@ -314,7 +314,7 @@ Returns the process."
             (setq sb (plist-put sb :y (max top (- (/ (+ top y (- vgap)) 2) (/ h 2)))) sb (plist-put sb :col 0))
             (setq y (max y (+ (plist-get sb :y) h vgap)))
             (push sb boxes)
-            (dolist (p plans) (push (list (plist-get spec :id) (plist-get p :id)) edges))))))
+            (dolist (pb (reverse pbs)) (push (list sb pb) edges))))))
     (dotimes (c 3) (push (apply #'max 0 (mapcar (lambda (b) (if (eql (plist-get b :col) c) (plist-get b :w) 0)) boxes)) cols))
     (setq cols (nreverse cols))
     (let ((xs (list hgap (+ hgap (nth 0 cols) hgap) (+ hgap (nth 0 cols) hgap (nth 1 cols) hgap))))
@@ -342,15 +342,32 @@ Returns the process."
   (pcase (plist-get b :kind) ('spec 'drgnx-work-ui-graph-spec) ('branch 'drgnx-work-ui-graph-branch)
          (_ (if (plist-get b :merged) 'drgnx-work-ui-graph-merged 'drgnx-work-ui-graph-plan))))
 
+(defconst drgnx-work-ui-graph-band 1000
+  "The tallest image the graph is drawn in (pixels): Emacs refuses images over `max-image-size' (ten frame
+heights, scaled on high-DPI screens), so a big graph is several images, one below the other.")
+
 (defun drgnx-work-ui-graph-svg (layout)
   "The SVG text of LAYOUT (`drgnx-work-ui-graph-layout'), in the theme's colours."
+  (with-temp-buffer (svg-print (drgnx-work-ui--graph-dom layout)) (buffer-string)))
+
+(defun drgnx-work-ui-graph-bands (layout)
+  "LAYOUT drawn as bands no taller than `drgnx-work-ui-graph-band': ((Y0 HEIGHT SVG-TEXT)…), each a
+window (viewBox) on the same drawing, so lines cross from one band into the next."
+  (let ((dom (drgnx-work-ui--graph-dom layout)) (w (plist-get layout :w)) (h (plist-get layout :h)))
+    (cl-loop for y0 from 0 below h by drgnx-work-ui-graph-band
+             collect (let* ((hb (min drgnx-work-ui-graph-band (- h y0)))
+                            (band (svg-create w hb :viewBox (format "0 %d %d %d" y0 w hb))))
+                       (dolist (c (dom-children dom)) (dom-append-child band c))
+                       (list y0 hb (with-temp-buffer (svg-print band) (buffer-string)))))))
+
+(defun drgnx-work-ui--graph-dom (layout)
+  "The SVG of LAYOUT as a DOM, in the theme's colours."
   (let* ((m (drgnx-work-ui--metrics)) (lh (cdr m)) (pad (/ lh 2))
          (svg (svg-create (plist-get layout :w) (plist-get layout :h)))
          (bg (let ((c (drgnx-work-ui--colour 'default :background))) (if (equal c "currentColor") "none" c)))
-         (by-id (lambda (id) (seq-find (lambda (b) (equal (plist-get b :id) id)) (plist-get layout :boxes))))
          (edge (drgnx-work-ui--colour 'drgnx-work-ui-graph-edge :foreground)))
     (pcase-dolist (`(,from ,to) (plist-get layout :edges))
-      (let* ((a (funcall by-id from)) (b (funcall by-id to))
+      (let* ((a from) (b to)
              (x1 (+ (plist-get a :x) (plist-get a :w))) (y1 (+ (plist-get a :y) (/ (plist-get a :h) 2)))
              (x2 (plist-get b :x)) (y2 (+ (plist-get b :y) (/ (plist-get b :h) 2))) (mx (/ (+ x1 x2) 2)))
         (svg-node svg 'path :d (format "M%d,%d C%d,%d %d,%d %d,%d" x1 y1 mx y1 mx y2 x2 y2)
@@ -366,7 +383,7 @@ Returns the process."
                                     :font-size (round (* lh 0.75))
                                     :font-weight (if (eq (plist-get b :kind) 'spec) "bold" "normal")))
                         (plist-get b :lines))))
-    (with-temp-buffer (svg-print svg) (buffer-string))))
+    svg))
 
 (defun drgnx-work-ui--graph-open (b)
   "Open what box B shows: a spec's or plan's file, a branch's worktree.  Says why when it cannot."
@@ -389,21 +406,20 @@ Returns the process."
     (message "Work: click a box to open it")))
 
 (defun drgnx-work-ui-graph ()
-  "Show specs, plans and branches as a graph (svg.el): click a box to open it.  Returns the buffer."
+  "Show specs, plans and branches as a graph (svg.el): click a box to open it, g to draw it again.
+Returns the buffer."
   (interactive)
-  (unless (image-type-available-p 'svg)
-    (user-error "Show Work as Graph needs an Emacs with SVG support (librsvg); the Work tab shows the same tree"))
-  (let* ((layout (drgnx-work-ui-graph-layout)) (map (make-sparse-keymap)) (areas nil) (spots nil) (i 0)
+  (unless (and (display-images-p) (image-type-available-p 'svg))
+    (user-error "Show Work as Graph needs a graphical frame of an Emacs with SVG support (librsvg); the Work tab shows the same tree"))
+  (let* ((layout (drgnx-work-ui-graph-layout)) (map (make-sparse-keymap)) (spots nil) (i 0)
+         (lh (cdr (drgnx-work-ui--metrics)))
          (b (get-buffer-create "*work graph*")))
     (dolist (box (plist-get layout :boxes))
       (let ((area (intern (format "drgnx-work-box-%d" (cl-incf i)))))
-        (push (list (cons 'rect (cons (cons (plist-get box :x) (plist-get box :y))
-                                      (cons (+ (plist-get box :x) (plist-get box :w)) (+ (plist-get box :y) (plist-get box :h)))))
-                    area (list 'help-echo (plist-get box :tip) 'pointer 'hand))
-              areas)
         (push (cons area box) spots)
         ;; a click comes as mouse-1 with the hot spot in its position, or prefixed by it: both open
         (define-key map (vector area 'mouse-1) #'drgnx-work-ui-graph-click)))
+    (setq spots (nreverse spots))
     (define-key map [mouse-1] #'drgnx-work-ui-graph-click)
     (define-key map [down-mouse-1] #'ignore)            ; a press neither moves point nor selects
     (setq drgnx-work-ui--graph-spots spots)
@@ -411,16 +427,27 @@ Returns the process."
       (let ((inhibit-read-only t))
         (erase-buffer)
         (special-mode)
-        (setq-local cursor-type nil)                     ; no cursor box drawn round the image
-        (let ((img (create-image (drgnx-work-ui-graph-svg layout) 'svg t :scale 1.0
-                                 :foreground (drgnx-work-ui--colour 'default :foreground))))
-          ;; the hot spots in the image's own pixels (it is never scaled); set after `create-image', which
-          ;; would measure the image for them — impossible without a window system
-          (setf (image-property img :map) (nreverse areas))
-          ;; in slices, one per line: a graph taller than the window scrolls like text (hot spots follow)
-          (insert-sliced-image img nil nil (max 1 (/ (plist-get layout :h) (* 2 (cdr (drgnx-work-ui--metrics))))))
-          (put-text-property (point-min) (point-max) 'keymap map)
-          (put-text-property (point-min) (point-max) 'pointer 'hand))
+        (setq-local cursor-type nil                      ; no cursor box drawn round the image
+                    truncate-lines t                     ; a wide graph scrolls sideways
+                    revert-buffer-function (lambda (&rest _) (drgnx-work-ui-graph)))
+        (pcase-dolist (`(,y0 ,hb ,svg) (drgnx-work-ui-graph-bands layout))
+          (let ((img (create-image svg 'svg t :scale 1.0 :foreground (drgnx-work-ui--colour 'default :foreground))))
+            ;; each band's hot spots in its own pixels (never scaled): the boxes it shows, cut to it — a box
+            ;; across two bands is one hot spot in each.  Set after `create-image', which would measure the
+            ;; image for them (impossible without a window system).
+            (setf (image-property img :map)
+                  (delq nil (mapcar (lambda (s)
+                                      (let* ((box (cdr s)) (top (max y0 (plist-get box :y)))
+                                             (bot (min (+ y0 hb) (+ (plist-get box :y) (plist-get box :h)))))
+                                        (when (< top bot)
+                                          (list (cons 'rect (cons (cons (plist-get box :x) (- top y0))
+                                                                  (cons (+ (plist-get box :x) (plist-get box :w)) (- bot y0))))
+                                                (car s) (list 'help-echo (plist-get box :tip) 'pointer 'hand)))))
+                                    spots)))
+            ;; in slices — lines of rows, columns across: it scrolls like text both ways (hot spots follow)
+            (insert-sliced-image img nil nil (max 1 (/ hb (* 2 lh))) (max 1 (ceiling (plist-get layout :w) 400)))))
+        (put-text-property (point-min) (point-max) 'keymap map)
+        (put-text-property (point-min) (point-max) 'pointer 'hand)
         (goto-char (point-min))))
     (pop-to-buffer b)
     b))
