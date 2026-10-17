@@ -150,3 +150,23 @@
                                   (search-forward (format "(%s " id) nil t)))))))
 
 ;;; job-ui-test.el ends here
+
+;; From the old UI list ("stale status values after gry failures"): a status that cannot be read says nothing
+;; instead of keeping the last count.
+(ert-deftest drgnx-job-ui/the-badge-clears-when-the-hub-cannot-answer ()
+  (let ((drgnx-job-ui--badge " ⚑3") (drgnx-job-ui--badge-job "j1"))
+    (cl-letf (((symbol-function 'drgnx-hub-call) (lambda (_m _p &optional cb) (funcall cb nil "hub: connection lost"))))
+      (drgnx-job-ui--recount))
+    (should (equal drgnx-job-ui--badge ""))
+    (should-not drgnx-job-ui--badge-job))
+  (let ((drgnx-job-ui--badge " ⚑3") (drgnx-job-ui--badge-job "j1"))
+    (cl-letf (((symbol-function 'drgnx-hub-call) (lambda (&rest _) (error "No drgnx hub runs"))))
+      (drgnx-job-ui--recount))
+    (should (equal drgnx-job-ui--badge ""))))
+
+(ert-deftest drgnx-job-ui/the-badge-clears-when-the-hub-goes-away ()
+  (let ((drgnx-job-ui--badge " ⚑2") (drgnx-job-ui--badge-job "j1"))
+    (cl-letf (((symbol-function 'drgnx-job-ui--jobs) (lambda () nil)))
+      (drgnx-job-ui--hub-gone))
+    (should (equal drgnx-job-ui--badge ""))
+    (should-not drgnx-job-ui--badge-job)))

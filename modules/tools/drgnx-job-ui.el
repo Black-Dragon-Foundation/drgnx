@@ -196,6 +196,7 @@
 
 (defun drgnx-job-ui--hub-gone ()
   "`drgnx-hub-disconnect-functions': every open job window says the hub is gone (and looks for it again)."
+  (drgnx-job-ui--badge-clear)
   (dolist (j (drgnx-job-ui--jobs)) (drgnx-job-ui--no-hub j "the hub went away")))
 
 (defun drgnx-job-ui--schedule (job)
@@ -335,17 +336,22 @@ jobs only — and the job with the newest card."
         (setq n (+ n (seq-count (lambda (m) (not (equal (plist-get m :state) "acted"))) (drgnx-job-ui--v (plist-get j :messages)))))))
     (cons n newest)))
 
+(defun drgnx-job-ui--badge-clear ()
+  "Say nothing: a count that cannot be read again must not stay on screen as if it were current."
+  (setq drgnx-job-ui--badge "" drgnx-job-ui--badge-job nil)
+  (force-mode-line-update t))
+
 (defun drgnx-job-ui--recount ()
-  "Count again what needs the user (asynchronously): the badge."
+  "Count again what needs the user (asynchronously): the badge.  A hub that does not answer clears it."
   (condition-case nil
       (progn (drgnx-job-ui--hub)
              (drgnx-hub-call "job/status" nil
                              (lambda (r e)
-                               (unless e
+                               (if e (drgnx-job-ui--badge-clear)
                                  (pcase-let ((`(,n . ,job) (drgnx-job-ui--count (drgnx-job-ui--v (plist-get r :jobs)))))
                                    (setq drgnx-job-ui--badge (if (> n 0) (format " ⚑%d" n) "") drgnx-job-ui--badge-job job)
                                    (force-mode-line-update t))))))
-    (error nil)))
+    (error (drgnx-job-ui--badge-clear))))
 
 (defun drgnx-job-ui--schedule-recount ()
   "Count again within a second (once, however many events)."
@@ -378,9 +384,11 @@ jobs only — and the job with the newest card."
   (if drgnx-job-ui-badge-mode
       (progn (add-to-list 'global-mode-string '(:eval (drgnx-job-ui--badge-segment)) t)
              (add-hook 'drgnx-hub-event-functions #'drgnx-job-ui--event)
+             (add-hook 'drgnx-hub-disconnect-functions #'drgnx-job-ui--badge-clear)
              (when (featurep 'drgnx-hub) (drgnx-job-ui--schedule-recount)))   ; never loads the hub by itself
     (setq global-mode-string (delete '(:eval (drgnx-job-ui--badge-segment)) global-mode-string))
-    (remove-hook 'drgnx-hub-event-functions #'drgnx-job-ui--event)))
+    (remove-hook 'drgnx-hub-event-functions #'drgnx-job-ui--event)
+    (remove-hook 'drgnx-hub-disconnect-functions #'drgnx-job-ui--badge-clear)))
 
 ;;;; The Plan Job commands (they may wait for the hub: the user asked)
 
