@@ -28,7 +28,18 @@
     ;; M9b: what the gateway carried, one row per request
     (2 "create table if not exists spend (at real, job text, task text, agent text, provider text, model text,
         input integer, output integer, cost real, status integer)"
-       "create index if not exists spend_job on spend(job)"))
+       "create index if not exists spend_job on spend(job)")
+    ;; M9b.2: agent coordination (core/drgnx-coord.el)
+    (3 "create table if not exists job (id text primary key, title text, plan text, repo text, status text, created real, data text)"
+       "create table if not exists jtask (id text primary key, job text, n integer, title text, role text, status text,
+        agent text, lease_until real, data text)"
+       "create index if not exists jtask_job on jtask(job)"
+       "create table if not exists jdep (task text, dep text, primary key (task, dep))"
+       "create table if not exists decision (n integer primary key, kind text, subject text, task text, paths text,
+        reason text, author text, status text, replaces integer, at real, ver integer)"
+       "create table if not exists message (id integer primary key, job text, sender text, recipient text, text text,
+        state text, reason text, at real, delivered real, read real, acted real)"
+       "create index if not exists message_to on message(recipient, state)"))
   "Migrations: (VERSION SQL…), applied in order to a database below VERSION.")
 
 (defconst drgnx-work-db-schema-version (car (car (last drgnx-work-db--steps))))

@@ -23,13 +23,13 @@
       (sqlite-execute db "insert into node (id, kind, title) values ('plan:p', 'plan', 'P')")
       (sqlite-execute db "insert into meta values ('schema', '1')")
       (sqlite-close db))
-    (should (= (drgnx-work-db-version) 2))
+    (should (= (drgnx-work-db-version) drgnx-work-db-schema-version))
     (should (equal (plist-get (drgnx-work-node "plan:p") :title) "P"))
     (should (sqlite-select (drgnx-work-db) "select name from sqlite_master where name = 'spend'"))))
 
 (ert-deftest drgnx-work-db/a-fresh-db-is-version-2 ()
   (drgnx-work-db-migrate-test--with
-    (should (= (drgnx-work-db-version) 2))
+    (should (= (drgnx-work-db-version) drgnx-work-db-schema-version))
     (should (sqlite-select (drgnx-work-db) "select name from sqlite_master where name = 'node'"))))
 
 (ert-deftest drgnx-work-db/a-db-newer-than-the-code-is-left-alone ()

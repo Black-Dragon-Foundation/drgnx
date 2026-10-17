@@ -1,0 +1,240 @@
+;;; drgnx-coord.el --- Agent coordination: jobs, tasks and leases, the decision log, messages -*- lexical-binding: t -*-
+
+;; SPDX-License-Identifier: GPL-3.0-or-later
+
+;;; Commentary:
+;; What several agents working on one project share, kept in work.db (schema 3) so every process sees the same:
+;; - jobs and their tasks: statuses (pending ready claimed running needs-input in-review done failed dropped),
+;;   dependencies, claims that are leases (atomic, renewed by a heartbeat, released when silent);
+;; - the decision log: build / wait / wont-build / replaces, numbered, with one version that every change raises;
+;; - messages between agents and the user, with states queued → delivered → read → acted (or held, with why).
+;; Freshness is enforced, not advised: every write carries the log version its author last read; when the log
+;; moved on, nothing is written and the answer lists what changed.  Used by the coordination MCP server
+;; (drgnx-coord-mcp.el), the hub and the CLI.  See docs/develop/coordination.md.
+
+;;; Code:
+(require 'cl-lib)
+(require 'seq)
+(require 'subr-x)
+(require 'drgnx-work-db)
+
+(defvar drgnx-coord-lease-minutes 15 "A claim not renewed for this long is released.")
+(defvar drgnx-coord-queue-limit 20 "Undelivered messages an agent may have waiting; more are held.")
+(defvar drgnx-coord-pair-rate 6 "Messages from one agent to another per minute; more are held (no chatty loops).")
+
+(defconst drgnx-coord--states '("queued" "delivered" "read" "acted") "Message states, in order (held stands apart).")
+(defconst drgnx-coord--active '("claimed" "running" "needs-input" "in-review") "Task statuses that belong to an agent.")
+
+(defun drgnx-coord--tx (fn)
+  "FN in one immediate transaction (the write lock first: read-check-write never interleaves)."
+  (let ((db (drgnx-work-db)))
+    (sqlite-execute db "begin immediate")
+    (condition-case err (prog1 (funcall fn db) (sqlite-execute db "commit"))
+      (error (ignore-errors (sqlite-execute db "rollback")) (signal (car err) (cdr err))))))
+
+(defun drgnx-coord--meta (db key) (caar (sqlite-select db "select value from meta where key = ?" (list key))))
+
+(defun drgnx-coord-version ()
+  "The decision log's version."
+  (string-to-number (or (drgnx-coord--meta (drgnx-work-db) "log-version") "0")))
+
+(defun drgnx-coord--bump (db)
+  (let ((v (1+ (string-to-number (or (drgnx-coord--meta db "log-version") "0")))))
+    (sqlite-execute db "insert or replace into meta values ('log-version', ?)" (list (number-to-string v)))
+    v))
+
+(defun drgnx-coord--held (db seen)
+  "nil when SEEN is the current version; else (:held t :version V :changes DECISIONS)."
+  (let ((v (string-to-number (or (drgnx-coord--meta db "log-version") "0"))))
+    (when (and seen (> v seen))
+      (list :held t :version v :changes (drgnx-coord--decisions-since db seen)))))
+
+;;;; Jobs and tasks
+
+(cl-defun drgnx-coord-job-create (&key id title plan repo tasks)
+  "Make job ID with TASKS ((:n :title :role :deps (N…))…): those without dependencies ready, the rest pending."
+  (drgnx-coord--tx
+   (lambda (db)
+     (sqlite-execute db "insert into job values (?, ?, ?, ?, 'proposed', ?, null)" (list id title plan repo (float-time)))
+     (dolist (task tasks)
+       (let ((tid (format "%s#%d" id (plist-get task :n))))
+         (sqlite-execute db "insert into jtask (id, job, n, title, role, status) values (?, ?, ?, ?, ?, ?)"
+                         (list tid id (plist-get task :n) (plist-get task :title) (plist-get task :role)
+                               (if (plist-get task :deps) "pending" "ready")))
+         (dolist (d (plist-get task :deps))
+           (sqlite-execute db "insert into jdep values (?, ?)" (list tid (format "%s#%d" id d))))))
+     id)))
+
+(defun drgnx-coord--deps (db task)
+  (mapcar #'car (sqlite-select db "select dep from jdep where task = ? order by dep" (list task))))
+
+(defun drgnx-coord--task-row (db task)
+  (car (sqlite-select db "select id, n, title, role, status, agent, lease_until from jtask where id = ?" (list task))))
+
+(defun drgnx-coord--task-plist (db row)
+  (pcase-let ((`(,id ,n ,title ,role ,status ,agent ,lease) row))
+    (list :id id :n n :title title :role role :status status :agent agent :lease_until lease
+          :deps (drgnx-coord--deps db id))))
+
+(defun drgnx-coord-tasks (job)
+  "JOB's tasks, in order: (:id :n :title :role :status :agent :lease_until :deps)."
+  (let ((db (drgnx-work-db)))
+    (mapcar (lambda (row) (drgnx-coord--task-plist db row))
+            (sqlite-select db "select id, n, title, role, status, agent, lease_until from jtask where job = ? order by n"
+                           (list job)))))
+
+(defun drgnx-coord-task (task)
+  (let ((db (drgnx-work-db))) (when-let* ((row (drgnx-coord--task-row db task))) (drgnx-coord--task-plist db row))))
+
+(defun drgnx-coord--lease () (+ (float-time) (* 60 drgnx-coord-lease-minutes)))
+
+(defun drgnx-coord-claim (task agent seen)
+  "AGENT claims TASK, having read the log at version SEEN: (:ok t), (:held …), (:taken AGENT2), (:not-ready DEPS)
+or (:error MESSAGE)."
+  (drgnx-coord--tx
+   (lambda (db)
+     (or (drgnx-coord--held db seen)
+         (pcase (drgnx-coord--task-row db task)
+           ('nil (list :error (format "no task %s" task)))
+           (`(,_ ,_ ,_ ,_ ,status ,holder . ,_)
+            (cond
+             ((and holder (member status drgnx-coord--active) (not (equal holder agent))) (list :taken holder))
+             ((equal status "pending")
+              (list :not-ready (seq-remove (lambda (d) (equal (nth 4 (drgnx-coord--task-row db d)) "done"))
+                                           (drgnx-coord--deps db task))))
+             ((or (equal status "ready") (equal holder agent))
+              (sqlite-execute db "update jtask set status = (case when status = 'ready' then 'claimed' else status end),
+                                    agent = ?, lease_until = ? where id = ?"
+                              (list agent (drgnx-coord--lease) task))
+              (list :ok t))
+             (t (list :error (format "task %s is %s" task status))))))))))
+
+(defun drgnx-coord-heartbeat (task agent)
+  "AGENT still works on TASK: its lease is renewed."
+  (sqlite-execute (drgnx-work-db) "update jtask set lease_until = ? where id = ? and agent = ?"
+                  (list (drgnx-coord--lease) task agent)))
+
+(defun drgnx-coord-release-stale ()
+  "Release the claims whose lease ran out: ((:task :agent)…)."
+  (drgnx-coord--tx
+   (lambda (db)
+     (let ((rows (sqlite-select db (concat "select id, agent from jtask where lease_until < ? and status in ('"
+                                           (string-join drgnx-coord--active "','") "')")
+                                (list (float-time)))))
+       (dolist (r rows)
+         (sqlite-execute db "update jtask set status = 'ready', agent = null, lease_until = null where id = ?" (list (car r))))
+       (mapcar (lambda (r) (list :task (car r) :agent (cadr r))) rows)))))
+
+(defun drgnx-coord-set-status (task agent status seen)
+  "AGENT (TASK's holder) sets TASK's STATUS, having read the log at SEEN.  Done readies the tasks that waited only on
+it.  Answers as `drgnx-coord-claim'."
+  (drgnx-coord--tx
+   (lambda (db)
+     (or (drgnx-coord--held db seen)
+         (pcase (drgnx-coord--task-row db task)
+           ('nil (list :error (format "no task %s" task)))
+           (`(,_ ,_ ,_ ,_ ,_ ,holder . ,_)
+            (cond
+             ((null holder) (list :error (format "task %s is not claimed (claim it first)" task)))
+             ((not (equal holder agent)) (list :taken holder))
+             (t
+              (sqlite-execute db "update jtask set status = ?, lease_until = ? where id = ?"
+                              (list status (and (member status drgnx-coord--active) (drgnx-coord--lease)) task))
+              (when (equal status "done")
+                (dolist (waiting (mapcar #'car (sqlite-select db "select task from jdep where dep = ?" (list task))))
+                  (when (and (equal (nth 4 (drgnx-coord--task-row db waiting)) "pending")
+                             (seq-every-p (lambda (d) (equal (nth 4 (drgnx-coord--task-row db d)) "done"))
+                                          (drgnx-coord--deps db waiting)))
+                    (sqlite-execute db "update jtask set status = 'ready' where id = ?" (list waiting)))))
+              (list :ok t)))))))))
+
+;;;; The decision log
+
+(defconst drgnx-coord--decision-cols "n, kind, subject, task, paths, reason, author, status, replaces, at, ver")
+
+(defun drgnx-coord--decision-plist (row)
+  (pcase-let ((`(,n ,kind ,subject ,task ,paths ,reason ,author ,status ,replaces ,at ,ver) row))
+    (list :n n :kind kind :subject subject :task task :paths paths :reason reason :author author :status status
+          :replaces replaces :at at :ver ver)))
+
+(defun drgnx-coord--decisions-since (db n)
+  (mapcar #'drgnx-coord--decision-plist
+          (sqlite-select db (format "select %s from decision where ver > ? order by n desc" drgnx-coord--decision-cols)
+                         (list n))))
+
+(defun drgnx-coord-decisions-since (n)
+  "Decisions recorded, or whose status changed, after version N (newest first)."
+  (drgnx-coord--decisions-since (drgnx-work-db) n))
+
+(cl-defun drgnx-coord-decide (&key kind subject task paths reason author seen replaces)
+  "Record a decision (KIND build, wait, wont-build or replaces) by AUTHOR, who read the log at SEEN.  The user's is
+current; an agent's is current inside its own claimed TASK, else proposed (for the reviewer and the user).
+REPLACES (a decision's number) is marked replaced.  (:ok t :n N :status S :version V) or (:held …)."
+  (drgnx-coord--tx
+   (lambda (db)
+     (or (drgnx-coord--held db seen)
+         (let* ((own (and task (not (equal author "user"))
+                          (pcase (drgnx-coord--task-row db task)
+                            (`(,_ ,_ ,_ ,_ ,status ,holder . ,_) (and (equal holder author) (member status drgnx-coord--active))))))
+                (status (if (or (equal author "user") own) "current" "proposed"))
+                (v (drgnx-coord--bump db)))
+           (sqlite-execute db "insert into decision (kind, subject, task, paths, reason, author, status, replaces, at, ver)
+                               values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                           (list kind subject task paths reason author status replaces (float-time) v))
+           (when (and replaces (equal status "current"))
+             (sqlite-execute db "update decision set status = 'replaced', ver = ? where n = ?" (list v replaces)))
+           (list :ok t :n (caar (sqlite-select db "select last_insert_rowid()")) :status status :version v))))))
+
+;;;; Messages
+
+(defconst drgnx-coord--message-cols "id, job, sender, recipient, text, state, reason, at, delivered, read, acted")
+
+(defun drgnx-coord--message-plist (row)
+  (pcase-let ((`(,id ,job ,sender ,recipient ,text ,state ,reason ,at ,delivered ,read ,acted) row))
+    (list :id id :job job :sender sender :recipient recipient :text text :state state :reason reason :at at
+          :delivered delivered :read read :acted acted)))
+
+(cl-defun drgnx-coord-send (&key job sender recipient text seen)
+  "SENDER (who read the log at SEEN; nil: the user's own Emacs) sends TEXT to RECIPIENT.  (:ok t :id ID :state S) —
+held when RECIPIENT's queue is full or the two exchange too much — or (:held …) when SEEN is behind."
+  (drgnx-coord--tx
+   (lambda (db)
+     (or (drgnx-coord--held db seen)
+         (let* ((waiting (caar (sqlite-select db "select count(*) from message where recipient = ? and state = 'queued'"
+                                              (list recipient))))
+                (recent (caar (sqlite-select db "select count(*) from message where sender = ? and recipient = ? and at > ?"
+                                             (list sender recipient (- (float-time) 60)))))
+                (reason (cond ((>= waiting drgnx-coord-queue-limit) "queue full")
+                              ((>= recent drgnx-coord-pair-rate) "too many between these two")))
+                (state (if reason "held" "queued")))
+           (sqlite-execute db "insert into message (job, sender, recipient, text, state, reason, at) values (?, ?, ?, ?, ?, ?, ?)"
+                           (list job sender recipient text state reason (float-time)))
+           (list :ok t :id (caar (sqlite-select db "select last_insert_rowid()")) :state state))))))
+
+(defun drgnx-coord-inbox (recipient &optional states)
+  "RECIPIENT's messages (in STATES when given), oldest first."
+  (mapcar #'drgnx-coord--message-plist
+          (sqlite-select (drgnx-work-db)
+                         (format "select %s from message where recipient = ?%s order by id" drgnx-coord--message-cols
+                                 (if states (format " and state in (%s)" (mapconcat (lambda (_) "?") states ", ")) ""))
+                         (cons recipient states))))
+
+(defun drgnx-coord-message (id)
+  (when-let* ((row (car (sqlite-select (drgnx-work-db) (format "select %s from message where id = ?" drgnx-coord--message-cols)
+                                       (list id)))))
+    (drgnx-coord--message-plist row)))
+
+(defun drgnx-coord-mark (id state)
+  "Move message ID on to STATE (delivered, read or acted), stamping when; never back, never a held one."
+  (let ((col (pcase state ("delivered" "delivered") ("read" "read") ("acted" "acted")
+                    (_ (error "Not a message state: %s" state)))))
+    (drgnx-coord--tx
+     (lambda (db)
+       (let* ((cur (caar (sqlite-select db "select state from message where id = ?" (list id))))
+              (pos (seq-position drgnx-coord--states cur)))
+         (when (and pos (> (seq-position drgnx-coord--states state) pos))
+           (sqlite-execute db (format "update message set state = ?, %s = ? where id = ?" col) (list state (float-time) id))
+           t))))))
+
+(provide 'drgnx-coord)
+;;; drgnx-coord.el ends here
