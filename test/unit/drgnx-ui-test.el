@@ -198,6 +198,13 @@
       (should (equal (car calls) (list 'ask (plist-get s :socket))))
       (should (equal (car (cadr calls)) 'run)))))
 
+(ert-deftest drgnx-ui/a-session-runs-at-most-its-budget ()
+  (let ((sess (list :name "drgnx-ui-9" :run "/tmp/x" :size "800x600" :socket "/tmp/s")))
+    (should (member "RuntimeMaxSec=1800" (let ((process-environment (cons "DRGNX_UI_MAX_RUNTIME" process-environment)))
+                                           (drgnx-ui-launch-argv sess))))
+    (should (member "RuntimeMaxSec=2700" (let ((process-environment (cons "DRGNX_UI_MAX_RUNTIME=2700" process-environment)))
+                                           (drgnx-ui-launch-argv sess))))))
+
 (ert-deftest drgnx-ui/stop-removes-the-wayland-display-socket ()
   (drgnx-ui-test--with-state
     (drgnx-ui-prepare-run "drgnx-ui-4")

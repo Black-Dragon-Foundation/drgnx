@@ -210,7 +210,7 @@ KIND `same-key', `claim' (a key another layer uses natively) or `prefix'."
             (let ((losers (seq-filter (lambda (b) (and (not (eq b w)) (not (gethash b gone))
                                                        (or (drgnx-keys--prefix-of-p (plist-get b :key) (plist-get w :key))
                                                            (drgnx-keys--prefix-of-p (plist-get w :key) (plist-get b :key)))))
-                                      (gethash (cons (mapsym w) (aref (drgnx-keys--parse (plist-get w :key)) 0)) groups))))
+                                      (reverse (gethash (cons (mapsym w) (aref (drgnx-keys--parse (plist-get w :key)) 0)) groups)))))
               (when losers
                 (push (list :key (plist-get w :key) :map (mapsym w) :kind 'prefix :winner (party w)
                             :losers (mapcar #'party losers))

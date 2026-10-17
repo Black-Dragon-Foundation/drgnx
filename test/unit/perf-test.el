@@ -39,7 +39,7 @@
       (let ((audit (drgnx-perf-audit-end)))
         (should (equal drgnx-perf-test-hook before))
         (let ((top (car audit)))
-          (should (equal (plist-get top :hook) "drgnx-perf-test-hook"))
+          (should (equal (plist-get top :hooks) "drgnx-perf-test-hook"))
           (should (eql (plist-get top :calls) 2))
           (should (>= (plist-get top :ms) 40)))))))
 
@@ -87,5 +87,64 @@
       (should (= drgnx-perf-test--calls 1))
       (should (eql (plist-get (car audit) :calls) 1))
       (should-not (advice--p (symbol-function 'drgnx-perf-test--once))))))
+
+;;;; Review fixes (M8 final review)
+
+(ert-deftest drgnx-perf/latency-includes-the-redisplay ()
+  ;; C1: timers can run before read_char's redisplay; the probe redisplays before reading the clock.
+  (cl-letf (((symbol-function 'redisplay) (lambda (&optional _) (sleep-for 0.03))))
+    (drgnx-perf-begin)
+    (unwind-protect
+        (progn (run-hooks 'pre-command-hook) (run-hooks 'post-command-hook) (sit-for 0.1))
+      (let ((r (drgnx-perf-end)))
+        (should (>= (plist-get (plist-get r :input) :max) 30))))))
+
+(ert-deftest drgnx-perf/every-gc-pause-is-recorded ()
+  (drgnx-perf-begin)
+  (unwind-protect (progn (garbage-collect) (garbage-collect))
+    (let ((r (drgnx-perf-end)))
+      (should (>= (plist-get (plist-get r :gc_pause) :n) 2))
+      (should (numberp (plist-get (plist-get r :gc_pause) :p95)))))
+  (should-not (memq #'drgnx-perf--gc post-gc-hook)))
+
+(defvar drgnx-perf-test-hook3 nil)
+(defvar drgnx-perf-test-hook4 nil)
+(defun drgnx-perf-test--once3 () (remove-hook 'drgnx-perf-test-hook3 #'drgnx-perf-test--once3))
+(defun drgnx-perf-test--both () nil)
+
+(ert-deftest drgnx-perf/the-audit-restores-only-what-it-changed ()
+  ;; I5: with a lambda on the hook, a function that removed itself stays removed, one added stays.
+  (let ((drgnx-perf-test-hook3 nil) (lam (lambda () nil)))
+    (add-hook 'drgnx-perf-test-hook3 lam)
+    (add-hook 'drgnx-perf-test-hook3 #'drgnx-perf-test--once3)
+    (drgnx-perf-audit-begin '(drgnx-perf-test-hook3))
+    (should-error (drgnx-perf-audit-begin '(drgnx-perf-test-hook3)))       ; never twice
+    (run-hooks 'drgnx-perf-test-hook3)
+    (add-hook 'drgnx-perf-test-hook3 #'ignore)
+    (drgnx-perf-audit-end)
+    (should (memq lam drgnx-perf-test-hook3))
+    (should (memq #'ignore drgnx-perf-test-hook3))
+    (should-not (memq #'drgnx-perf-test--once3 drgnx-perf-test-hook3))))
+
+(ert-deftest drgnx-perf/the-audit-counts-a-call-once-and-gates-p95 ()
+  (let ((drgnx-perf-test-hook3 nil) (drgnx-perf-test-hook4 nil))
+    (add-hook 'drgnx-perf-test-hook3 #'drgnx-perf-test--both)
+    (add-hook 'drgnx-perf-test-hook4 #'drgnx-perf-test--both)
+    (drgnx-perf-audit-begin '(drgnx-perf-test-hook3 drgnx-perf-test-hook4))
+    (run-hooks 'drgnx-perf-test-hook3)
+    (let ((row (car (drgnx-perf-audit-end))))
+      (should (eql (plist-get row :calls) 1))
+      (should (numberp (plist-get row :p95)))))
+  (should (equal (drgnx-perf-audit-verdict '((:fn "slow" :hooks "post-command-hook" :p95 3.1) (:fn "fast" :p95 0.1)) 2)
+                 '("hook function slow (post-command-hook) p95 3.1 > 2 ms"))))
+
+(ert-deftest drgnx-perf/a-regression-is-fifteen-percent-and-five-ms ()
+  (let* ((dir (make-temp-file "drgnx-perf-hist" t)) (file (expand-file-name "history.jsonl" dir)))
+    (unwind-protect
+        (progn
+          (dotimes (i 3) (drgnx-perf-history-append file (format "c%d" i) '((typing :input (:p95 30)))))
+          (should-not (drgnx-perf-regressions file '((typing :input (:p95 34)))))     ; 13%
+          (should (drgnx-perf-regressions file '((typing :input (:p95 36))))))        ; 20% and 6 ms
+      (delete-directory dir t))))
 
 ;;; perf-test.el ends here

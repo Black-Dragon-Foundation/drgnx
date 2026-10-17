@@ -3,8 +3,9 @@
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 
 ;;; Commentary:
-;; Probes run inside a harness session: input latency (a command's start to the next idle point,
-;; which comes after the redisplay that follows it — a 0 s timer set in post-command-hook), forced
+;; Probes run inside a harness session: input latency (a command's start until the screen shows it:
+;; a 0 s timer set in post-command-hook, which redisplays before reading the clock — timers can run
+;; before the command loop's own redisplay, so without it the redisplay would be left out), forced
 ;; redisplay time, frame creation, GC (count and time), memory (RSS), a CPU profile of a thunk, and a
 ;; hook audit (every function on the busy hooks timed, the hooks restored after).  The controller
 ;; (drgnx-perf-run.el) runs workloads in a session, judges them against budgets
@@ -40,6 +41,8 @@
 (defvar drgnx-perf--t0 nil)
 (defvar drgnx-perf--latencies nil)
 (defvar drgnx-perf--start nil "(gcs-done gc-elapsed rss) at the start.")
+(defvar drgnx-perf--gc-pauses nil "Each collection's time (ms) while recording.")
+(defvar drgnx-perf--gc-last 0.0 "`gc-elapsed' after the last collection seen.")
 
 (defun drgnx-perf--pre () (setq drgnx-perf--t0 (float-time)))
 
@@ -47,22 +50,32 @@
   (when drgnx-perf--t0
     (let ((t0 drgnx-perf--t0))
       (setq drgnx-perf--t0 nil)
-      (run-at-time 0 nil (lambda () (push (* 1000 (- (float-time) t0)) drgnx-perf--latencies))))))
+      (run-at-time 0 nil (lambda ()
+                           (redisplay)           ; the screen showing the command is part of its latency
+                           (push (* 1000 (- (float-time) t0)) drgnx-perf--latencies))))))
+
+(defun drgnx-perf--gc ()
+  "After each collection: its own time (`gc-elapsed' grows by it)."
+  (push (* 1000 (- gc-elapsed drgnx-perf--gc-last)) drgnx-perf--gc-pauses)
+  (setq drgnx-perf--gc-last gc-elapsed))
 
 (defun drgnx-perf-begin ()
-  "Start recording: every command's latency, GC, memory."
-  (setq drgnx-perf--latencies nil drgnx-perf--t0 nil
+  "Start recording: every command's latency, every GC pause, memory."
+  (setq drgnx-perf--latencies nil drgnx-perf--t0 nil drgnx-perf--gc-pauses nil drgnx-perf--gc-last gc-elapsed
         drgnx-perf--start (list gcs-done gc-elapsed (drgnx-perf-rss-kb)))
   (add-hook 'pre-command-hook #'drgnx-perf--pre -100)
-  (add-hook 'post-command-hook #'drgnx-perf--post 100))
+  (add-hook 'post-command-hook #'drgnx-perf--post 100)
+  (add-hook 'post-gc-hook #'drgnx-perf--gc))
 
 (defun drgnx-perf-end ()
-  "Stop recording: (:input STATS :gc_count N :gc_ms MS :rss_kb KB :rss_start_kb KB)."
+  "Stop recording: (:input STATS :gc_count N :gc_ms MS :gc_pause STATS :rss_kb KB :rss_start_kb KB)."
   (remove-hook 'pre-command-hook #'drgnx-perf--pre)
   (remove-hook 'post-command-hook #'drgnx-perf--post)
+  (remove-hook 'post-gc-hook #'drgnx-perf--gc)
   (pcase-let ((`(,gcs ,elapsed ,rss) drgnx-perf--start))
     (list :input (mapcar #'drgnx-perf--round (drgnx-perf-stats drgnx-perf--latencies))
           :gc_count (- gcs-done gcs) :gc_ms (drgnx-perf--round (* 1000 (- gc-elapsed elapsed)))
+          :gc_pause (mapcar #'drgnx-perf--round (drgnx-perf-stats drgnx-perf--gc-pauses))
           :rss_kb (drgnx-perf-rss-kb) :rss_start_kb rss)))
 
 ;;;; Redisplay and frames
@@ -116,65 +129,78 @@
   "Hooks the audit times by default.")
 
 (defvar drgnx-perf--audit nil
-  "While auditing: (TABLE ADVISED WRAPPED): TABLE \"hook fn\" → (calls . ms); ADVISED: named functions
-timed by advice (their hooks untouched, so a function can still remove itself); WRAPPED: (HOOK . ORIGINAL)
-for hooks whose lambdas had to be wrapped.")
+  "While auditing: (TABLE ADVISED WRAPPED).  TABLE: function name → (HOOKS . DURATIONS).  ADVISED:
+(FN . ADVICE) — named functions timed by advice, their hooks untouched (a function can still remove
+itself).  WRAPPED: (HOOK . ((WRAPPER . LAMBDA)…)) — lambdas, wrapped in place; on the way out only
+the wrappers are swapped back, so whatever else changed on the hook stays.")
 
 (defun drgnx-perf--name (fn) (if (symbolp fn) (symbol-name fn) (format "lambda@%s" (sxhash-eq fn))))
 
-(defun drgnx-perf--note (table key t0)
-  (let ((cell (or (gethash key table) (puthash key (cons 0 0.0) table))))
-    (setcar cell (1+ (car cell)))
-    (setcdr cell (+ (cdr cell) (* 1000 (- (float-time) t0))))))
+(defun drgnx-perf--note (table name hook t0)
+  (let ((cell (or (gethash name table) (puthash name (cons nil nil) table))))
+    (cl-pushnew (symbol-name hook) (car cell) :test #'equal)
+    (push (* 1000 (- (float-time) t0)) (cdr cell))))
 
 (defun drgnx-perf--timer-for (fn table)
-  "An :around advice timing FN under every audited hook it is on."
+  "An :around advice timing FN (one sample per call, whichever hook ran it)."
   (lambda (orig &rest args)
     (let ((t0 (float-time)))
       (unwind-protect (apply orig args)
-        (dolist (key (get fn 'drgnx-perf--keys)) (drgnx-perf--note table key t0))))))
+        (let ((cell (or (gethash (symbol-name fn) table) (puthash (symbol-name fn) (cons nil nil) table))))
+          (push (* 1000 (- (float-time) t0)) (cdr cell)))))))
 
 (defun drgnx-perf-audit-begin (&optional hooks)
-  "Time every function on HOOKS (default `drgnx-perf-busy-hooks'; their global values): named
-functions by advice (the hooks stay as they are), lambdas by a wrapper in the hook."
+  "Time every function on HOOKS (default `drgnx-perf-busy-hooks'; their global values).  An error
+if an audit is already running."
+  (when drgnx-perf--audit (error "A hook audit is already running (drgnx-perf-audit-end first)"))
   (let ((table (make-hash-table :test #'equal)) advised wrapped)
     (dolist (hook (or hooks drgnx-perf-busy-hooks))
       (when (boundp hook)
-        (let* ((orig (default-value hook)) (fns (if (listp orig) orig (list orig))))
+        (let* ((orig (default-value hook)) (fns (if (listp orig) orig (list orig))) pairs)
           (dolist (fn fns)
-            (when (and (symbolp fn) (not (eq fn t)) (fboundp fn))
-              (let ((key (format "%s %s" hook fn)))
-                (put fn 'drgnx-perf--keys (cons key (get fn 'drgnx-perf--keys)))
-                (unless (assq fn advised)
-                  (let ((ad (drgnx-perf--timer-for fn table)))
-                    (advice-add fn :around ad)
-                    (push (cons fn ad) advised))))))
-          (when (seq-find (lambda (fn) (and fn (not (symbolp fn)))) fns)
-            (push (cons hook orig) wrapped)
-            (set-default hook
-                         (mapcar (lambda (fn)
-                                   (if (symbolp fn) fn
-                                     (let ((key (format "%s %s" hook (drgnx-perf--name fn))))
-                                       (lambda (&rest args)
-                                         (let ((t0 (float-time)))
-                                           (unwind-protect (apply fn args) (drgnx-perf--note table key t0)))))))
-                                 fns))))))
+            (cond
+             ((and (symbolp fn) (not (eq fn t)) (fboundp fn))
+              (let ((cell (or (gethash (symbol-name fn) table) (puthash (symbol-name fn) (cons nil nil) table))))
+                (cl-pushnew (symbol-name hook) (car cell) :test #'equal))
+              (unless (assq fn advised)
+                (let ((ad (drgnx-perf--timer-for fn table)))
+                  (advice-add fn :around ad)
+                  (push (cons fn ad) advised))))
+             ((and fn (not (symbolp fn)))
+              (let* ((name (drgnx-perf--name fn)) (hook hook)
+                     (w (lambda (&rest args)
+                          (let ((t0 (float-time))) (unwind-protect (apply fn args) (drgnx-perf--note table name hook t0))))))
+                (push (cons w fn) pairs)))))
+          (when pairs
+            (push (cons hook pairs) wrapped)
+            (set-default hook (mapcar (lambda (fn) (or (car (rassq fn pairs)) fn)) fns))))))
     (setq drgnx-perf--audit (list table advised wrapped))))
 
 (defun drgnx-perf-audit-end ()
-  "Undo the audit; its rows, costliest first: ((:hook :fn :calls :ms)…)."
+  "Undo the audit; its rows, costliest first: ((:fn :hooks :calls :ms :p95 :max)…)."
   (pcase-let ((`(,table ,advised ,wrapped) drgnx-perf--audit) (rows nil))
     (setq drgnx-perf--audit nil)
-    (pcase-dolist (`(,fn . ,ad) advised)
-      (advice-remove fn ad)
-      (put fn 'drgnx-perf--keys nil))
-    (pcase-dolist (`(,hook . ,orig) wrapped) (set-default hook orig))
+    (pcase-dolist (`(,fn . ,ad) advised) (advice-remove fn ad))
+    (pcase-dolist (`(,hook . ,pairs) wrapped)
+      (let ((now (default-value hook)))
+        (set-default hook (mapcar (lambda (f) (or (cdr (assq f pairs)) f)) (if (listp now) now (list now))))))
     (when table
-      (maphash (lambda (key cell)
-                 (let ((parts (split-string key " ")))
-                   (push (list :hook (car parts) :fn (cadr parts) :calls (car cell) :ms (drgnx-perf--round (cdr cell))) rows)))
+      (maphash (lambda (name cell)
+                 (when (cdr cell)
+                   (let ((s (drgnx-perf-stats (cdr cell))))
+                     (push (list :fn name :hooks (string-join (reverse (car cell)) " ") :calls (plist-get s :n)
+                                 :ms (drgnx-perf--round (apply #'+ (cdr cell)))
+                                 :p95 (drgnx-perf--round (plist-get s :p95)) :max (drgnx-perf--round (plist-get s :max)))
+                           rows))))
                table))
     (sort rows (lambda (a b) (> (plist-get a :ms) (plist-get b :ms))))))
+
+(defun drgnx-perf-audit-verdict (rows limit)
+  "Lines for the hook functions of ROWS whose p95 passes LIMIT ms."
+  (delq nil (mapcar (lambda (r) (when (> (or (plist-get r :p95) 0) limit)
+                                  (format "hook function %s (%s) p95 %s > %s ms" (plist-get r :fn) (plist-get r :hooks)
+                                          (plist-get r :p95) limit)))
+                    rows)))
 
 ;;;; Budgets and history (the controller's side)
 
@@ -212,8 +238,8 @@ functions by advice (the hooks stay as they are), lambdas by a wrapper in the ho
 (defconst drgnx-perf-regression-floor 5 "Milliseconds a metric must also worsen by to count (noise below).")
 
 (defun drgnx-perf-regressions (file results &optional paths)
-  "Metrics of RESULTS more than 25% (and `drgnx-perf-regression-floor' ms) worse than the median of
-the last five runs in FILE.
+  "Metrics of RESULTS more than 15% (and `drgnx-perf-regression-floor' ms) worse than the median of
+the last five runs in FILE — the spec's regression gate.
 PATHS: the metrics compared (default the p95s: input, redisplay, frame)."
   (let ((past (last (drgnx-perf--history file) 5)) out)
     (when past
@@ -223,7 +249,7 @@ PATHS: the metrics compared (default the p95s: input, redisplay, frame)."
                 (old (delq nil (mapcar (lambda (r) (let ((v (drgnx-perf--get r w path))) (and (numberp v) v))) past))))
             (when (and (numberp now) old)
               (let ((median (plist-get (drgnx-perf-stats old) :p50)))
-                (when (and (> now (* 1.25 median)) (> (- now median) drgnx-perf-regression-floor))
+                (when (and (> now (* 1.15 median)) (> (- now median) drgnx-perf-regression-floor))
                   (push (format "%s %s %s vs %s (median of the last %d)" w
                                 (mapconcat (lambda (k) (substring (symbol-name k) 1)) path " ")
                                 (drgnx-perf--round now) (drgnx-perf--round median) (length old))

@@ -222,7 +222,8 @@ MONITORS: how many virtual monitors of SIZE (default 1)."
 
 (defun drgnx-ui-launch-argv (sess)
   (append (list "systemd-run" "--user" "--quiet" "--collect" "--unit" (plist-get sess :name)
-                "-p" "RuntimeMaxSec=1800" "-p" "MemoryMax=3G" "--")
+                ;; a session never outlives its budget: 30 min, or $DRGNX_UI_MAX_RUNTIME s (the soak)
+                "-p" (format "RuntimeMaxSec=%s" (or (getenv "DRGNX_UI_MAX_RUNTIME") "1800")) "-p" "MemoryMax=3G" "--")
           (drgnx-ui-env-argv (drgnx-ui-session-env sess))
           (drgnx-ui-compositor-argv sess)))
 
@@ -827,7 +828,7 @@ a boolean flag (`drgnx-ui--boolean-flags') becomes :name t."
       ("test-scenario" (drgnx-ui-run-scenarios (plist-get opts :config) (plist-get opts :dir)))
       ("test-bench" (require 'drgnx-bench) (drgnx-bench-run))
       ("test-perf" (require 'drgnx-perf-run) (drgnx-perf-run (getenv "DRGNX_PERF_AUDIT")))
-      ("test-soak" (require 'drgnx-perf-run) (drgnx-perf-soak (and (nth 1 pos) (string-to-number (nth 1 pos)))))
+      ("test-soak" (require 'drgnx-perf-run) (drgnx-perf-soak (and (car pos) (string-to-number (car pos)))))
       ("mcp" (require 'drgnx-ui-mcp) (drgnx-ui-mcp-main))
       (_ (drgnx-ui--fail "unknown command %S\n%s" cmd drgnx-ui-usage)))))
 

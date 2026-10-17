@@ -7,8 +7,10 @@
 ;; Packages are not activated: drgnx manages them itself (M5).
 
 ;;; Code:
-(setq gc-cons-threshold most-positive-fixnum   ; no collection while starting (drgnx-gc.el sets the steady one)
+(setq gc-cons-threshold (* 512 1024 1024)       ; hardly any collection while starting (drgnx-gc.el sets the steady one)
       gc-cons-percentage 0.6)
+(add-hook 'emacs-startup-hook                  ; and never left there, even if drgnx did not start
+          (lambda () (when (> gc-cons-threshold (* 256 1024 1024)) (setq gc-cons-threshold (* 64 1024 1024) gc-cons-percentage 0.1))))
 (setq load-prefer-newer t              ; a stale .elc (drgnx build) never shadows newer source
       package-enable-at-startup nil
       inhibit-startup-screen t
