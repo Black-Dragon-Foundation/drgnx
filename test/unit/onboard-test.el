@@ -95,6 +95,51 @@
       (should (eq (plist-get (alist-get 'fd env) :status) 'missing))
       (should (plist-get (alist-get 'fd env) :fix)))))
 
+(ert-deftest drgnx-onboard/macos-fixes-say-brew ()
+  ;; Nothing is installed: every tool and the Command Line Tools are missing, and each fix is a Homebrew
+  ;; or xcode-select command (the GPU row is ok on a Mac: Apple silicon shares its memory).
+  (cl-letf (((symbol-function 'drgnx-platform) (lambda () 'macos))
+            ((symbol-function 'executable-find) (lambda (&rest _) nil))
+            ((symbol-function 'call-process) (lambda (&rest _) 2))
+            ((symbol-function 'drgnx-onboard--font-p) (lambda (_) nil)))
+    (let ((env (drgnx-onboard-environment)))
+      (should (alist-get 'xcode-clt env))
+      (should (eq (plist-get (alist-get 'xcode-clt env) :status) 'missing))
+      (should (eq (plist-get (alist-get 'gpu env) :status) 'ok))
+      (should (string-search "shared memory" (plist-get (alist-get 'gpu env) :fix)))
+      (dolist (id '(git ripgrep fd podman mise xcode-clt icon-font))
+        (let ((fix (plist-get (alist-get id env) :fix)))
+          (should (eq (plist-get (alist-get id env) :status) 'missing))
+          (should (or (string-prefix-p "brew install" fix) (string-prefix-p "xcode-select" fix))))))
+    (should (string-search "xcode-select --install" (plist-get (alist-get 'git (drgnx-onboard-environment)) :fix)))
+    (should (string-search "podman machine init" (plist-get (alist-get 'podman (drgnx-onboard-environment)) :fix)))))
+
+(ert-deftest drgnx-onboard/linux-has-no-command-line-tools-row-and-keeps-its-fixes ()
+  (cl-letf (((symbol-function 'drgnx-platform) (lambda () 'linux))
+            ((symbol-function 'executable-find) (lambda (&rest _) nil))
+            ((symbol-function 'drgnx-onboard--font-p) (lambda (_) t)))
+    (let ((env (drgnx-onboard-environment)))
+      (should-not (assq 'xcode-clt env))
+      (should (eq (plist-get (alist-get 'gpu env) :status) 'missing))
+      (should (string-search "dnf install ripgrep" (plist-get (alist-get 'ripgrep env) :fix))))))
+
+(ert-deftest drgnx-onboard/no-fc-list-is-not-a-missing-font ()
+  (cl-letf (((symbol-function 'display-graphic-p) (lambda (&rest _) nil))
+            ((symbol-function 'executable-find) (lambda (p &rest _) (and (not (equal p "fc-list")) (concat "/usr/bin/" p)))))
+    (should (eq (drgnx-onboard--font-p "Symbols Nerd Font") 'unknown))
+    (let ((env (drgnx-onboard-environment)))
+      (should (eq (plist-get (alist-get 'icon-font env) :status) 'unknown))
+      (let ((r (drgnx-onboard--environment-step nil)))
+        (should-not (eq (car r) 'warn))
+        (should (string-search "could not check" (cadr r)))
+        (should-not (string-search "missing" (cadr r)))))))
+
+(ert-deftest drgnx-onboard/the-font-is-asked-of-emacs-in-a-graphical-session ()
+  (cl-letf (((symbol-function 'display-graphic-p) (lambda (&rest _) t))
+            ((symbol-function 'font-family-list) (lambda (&rest _) '("Menlo" "Symbols Nerd Font"))))
+    (should (drgnx-onboard--font-p "Symbols Nerd Font"))
+    (should-not (drgnx-onboard--font-p "Nope Font"))))
+
 (ert-deftest drgnx-onboard/look-and-keys-writes-the-choices ()
   (drgnx-onboard-test--with root
     (let ((r (drgnx-onboard-run :only '(look-and-keys) :non-interactive t

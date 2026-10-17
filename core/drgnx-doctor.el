@@ -7,12 +7,14 @@
 ;; answer is about that Emacs.  A check is a function of a facts plist (gathered once by
 ;; `drgnx-doctor-facts', injected in tests) returning (STATUS DETAIL FIX), STATUS one of
 ;; `ok', `warn', `fail' or `info'.  Any `fail' makes the doctor exit 1.  Modules will add
-;; their own checks with `drgnx-doctor-define' (M4).  See docs/guide/install.md.
+;; their own checks with `drgnx-doctor-define' (M4).  A check may be for one platform (:platform `linux' or
+;; `macos'): on the other it is absent from the results.  See docs/guide/install.md.
 
 ;;; Code:
 (require 'cl-lib)
 (require 'json)
 (require 'subr-x)
+(require 'drgnx-paths)
 
 (defconst drgnx-doctor-install-hint
   "run the installer: curl -fsSL https://raw.githubusercontent.com/Black-Dragon-Foundation/drgnx/main/install.sh | bash  (see docs/guide/install.md)"
@@ -22,12 +24,13 @@
   "TRAMP command injection via crafted file names, Flymake running code from edited files, read-symbol-shorthands code execution on opening a file"
   "Known security issues in Emacs up to 31.1, fixed in 31.2 (not released as of 2026-10-16).")
 
-(defvar drgnx-doctor--checks nil "Alist NAME → plist (:group :doc :check :dev), in definition order.")
+(defvar drgnx-doctor--checks nil "Alist NAME → plist (:group :doc :check :dev :platform), in definition order.")
 
-(cl-defun drgnx-doctor-define (name &key group doc check dev)
+(cl-defun drgnx-doctor-define (name &key group doc check dev platform)
   "Define check NAME in GROUP with DOC; CHECK maps facts to (STATUS DETAIL FIX).
-DEV non-nil: only run for `drgnx doctor --dev' (tools for developing drgnx)."
-  (let ((entry (list :group group :doc doc :check check :dev dev)))
+DEV non-nil: only run for `drgnx doctor --dev' (tools for developing drgnx).
+PLATFORM (`linux' or `macos'): only run on that platform, as `drgnx-platform' says."
+  (let ((entry (list :group group :doc doc :check check :dev dev :platform platform)))
     (if (assq name drgnx-doctor--checks)
         (setf (alist-get name drgnx-doctor--checks) entry)
       (setq drgnx-doctor--checks (append drgnx-doctor--checks (list (cons name entry))))))
@@ -78,35 +81,49 @@ DEV non-nil: only run for `drgnx doctor --dev' (tools for developing drgnx)."
       (progn (require 'drgnx-search-setup) (drgnx-search-doctor-facts (drgnx-search-setup--roots)))
     (error (list :error (error-message-string err)))))
 
+(defvar drgnx-macos-app-dir)
+
+(defconst drgnx-doctor--brew-programs '("/opt/homebrew/bin/brew" "/usr/local/bin/brew")
+  "Where Homebrew lives on Apple silicon and on Intel, for a doctor that runs without it on PATH.")
+
+(defun drgnx-doctor--macos-facts ()
+  "The facts of the macOS checks: the drgnx app, Homebrew, drgnx on PATH."
+  (require 'drgnx-macos)
+  (list :macos-app (file-directory-p (expand-file-name "drgnx.app" drgnx-macos-app-dir))
+        :brew (and (or (executable-find "brew") (seq-some #'file-executable-p drgnx-doctor--brew-programs)) t)
+        :drgnx-on-path (and (executable-find "drgnx") t)))
+
 (defun drgnx-doctor-facts ()
   "Facts about the running Emacs and this machine."
   (let ((native (and (fboundp 'native-comp-available-p) (native-comp-available-p))))
-    (list :version emacs-version
-          :native-available native
-          :native-compiles (if native (drgnx-doctor--native-compiles) "not built with native compilation")
-          :treesit (and (fboundp 'treesit-available-p) (treesit-available-p))
-          :gui (cond ((featurep 'pgtk) 'pgtk) ((featurep 'ns) 'ns) ((featurep 'x) 'x)
-                     ((string-match-p "\\(PGTK\\|X11\\|NS\\)" system-configuration-features)
-                      (intern (downcase (match-string 1 system-configuration-features)))))
-          :git (and (executable-find "git") t)
-          :mutter (and (executable-find "mutter") t)
-          :dbus-run-session (and (executable-find "dbus-run-session") t)
-          :magick (and (executable-find "magick") t)
-          :pgtk-emacs (or (featurep 'pgtk) (and (executable-find "emacs-pgtk") t))
-          :keys-report (drgnx-doctor--keys-report)
-          :modules-report (drgnx-doctor--state-file "modules-report.eld")
-          :onboarding (drgnx-doctor--state-file "onboarding.eld")
-          :packages (condition-case err (progn (require 'drgnx-pkg) (drgnx-pkg-status))
-                      (error (list :error (error-message-string err))))
-          :sqlite (and (fboundp 'sqlite-available-p) (sqlite-available-p))
-          :svg (image-type-available-p 'svg)
-          :work-plans (drgnx-doctor--work-plans)
-          :ai-up (drgnx-doctor--ai-up)
-          :search (drgnx-doctor--search)
-          ;; whether a key is set, from the environment only: the doctor never opens auth-source (it may prompt)
-          :ai-keys (let ((k (getenv "OPENROUTER_API_KEY"))) (and k (not (string-empty-p k)) '(openrouter)))
-          :ai-complete (ignore-errors (require 'drgnx-ai) (cdr (car (drgnx-ai-role 'complete))))
-          :vram (ignore-errors (require 'drgnx-ai-probe) (drgnx-ai-vram)))))
+    (append
+     (list :version emacs-version
+           :native-available native
+           :native-compiles (if native (drgnx-doctor--native-compiles) "not built with native compilation")
+           :treesit (and (fboundp 'treesit-available-p) (treesit-available-p))
+           :gui (cond ((featurep 'pgtk) 'pgtk) ((featurep 'ns) 'ns) ((featurep 'x) 'x)
+                      ((string-match-p "\\(PGTK\\|X11\\|NS\\)" system-configuration-features)
+                       (intern (downcase (match-string 1 system-configuration-features)))))
+           :git (and (executable-find "git") t)
+           :mutter (and (executable-find "mutter") t)
+           :dbus-run-session (and (executable-find "dbus-run-session") t)
+           :magick (and (executable-find "magick") t)
+           :pgtk-emacs (or (featurep 'pgtk) (and (executable-find "emacs-pgtk") t))
+           :keys-report (drgnx-doctor--keys-report)
+           :modules-report (drgnx-doctor--state-file "modules-report.eld")
+           :onboarding (drgnx-doctor--state-file "onboarding.eld")
+           :packages (condition-case err (progn (require 'drgnx-pkg) (drgnx-pkg-status))
+                       (error (list :error (error-message-string err))))
+           :sqlite (and (fboundp 'sqlite-available-p) (sqlite-available-p))
+           :svg (image-type-available-p 'svg)
+           :work-plans (drgnx-doctor--work-plans)
+           :ai-up (drgnx-doctor--ai-up)
+           :search (drgnx-doctor--search)
+           ;; whether a key is set, from the environment only: the doctor never opens auth-source (it may prompt)
+           :ai-keys (let ((k (getenv "OPENROUTER_API_KEY"))) (and k (not (string-empty-p k)) '(openrouter)))
+           :ai-complete (ignore-errors (require 'drgnx-ai) (cdr (car (drgnx-ai-role 'complete))))
+           :vram (ignore-errors (require 'drgnx-ai-probe) (drgnx-ai-vram)))
+     (and (eq (drgnx-platform) 'macos) (drgnx-doctor--macos-facts)))))
 
 (defun drgnx-doctor--state-file (name)
   "The .eld file NAME the last drgnx session wrote in the state dir, read, or nil."
@@ -287,12 +304,28 @@ MODEL), as a sentence, or nil."
                                                            (mapconcat (lambda (l) (symbol-name (car l))) (plist-get r :layers) " < "))
                                                nil))))))
 
-(dolist (tool '((ui-mutter :mutter "mutter" "the headless compositor of drgnx test --ui")
-                (ui-dbus :dbus-run-session "dbus-run-session" "a private D-Bus per test session")
-                (ui-magick :magick "magick" "ImageMagick 7: screenshot compositing")
-                (ui-pgtk :pgtk-emacs "a pgtk Emacs (emacs-pgtk)" "the GUI Emacs of harness sessions")))
-  (pcase-let ((`(,name ,key ,bin ,why) tool))
-    (drgnx-doctor-define name :group "Development" :dev t :doc (format "%s (%s)" bin why)
+(drgnx-doctor-define 'macos-app :group "drgnx" :platform 'macos :doc "The drgnx app in ~/Applications (Finder, Spotlight, the Dock)"
+                     :check (lambda (f)
+                              (if (plist-get f :macos-app) (list 'ok "the drgnx app is installed" nil)
+                                (list 'warn "the drgnx app is not installed: no drgnx in Finder, Spotlight or the Dock" "drgnx macos-app"))))
+
+(drgnx-doctor-define 'brew :group "Tools" :platform 'macos :doc "Homebrew (ripgrep, fd, podman and mise come from it)"
+                     :check (lambda (f)
+                              (if (plist-get f :brew) (list 'ok "Homebrew found" nil)
+                                (list 'warn "Homebrew not found" "install Homebrew (https://brew.sh), or run the installer again"))))
+
+(drgnx-doctor-define 'drgnx-on-path :group "drgnx" :platform 'macos :doc "The drgnx command is on PATH (for Terminal)"
+                     :check (lambda (f)
+                              (if (plist-get f :drgnx-on-path) (list 'ok "drgnx is on PATH" nil)
+                                (list 'warn "drgnx is not on PATH: Terminal does not find the command"
+                                      "add ~/.local/bin to PATH: echo 'export PATH=\"$HOME/.local/bin:$PATH\"' >> ~/.zprofile  (then open a new Terminal)"))))
+
+(dolist (tool '((ui-mutter :mutter "mutter" "the headless compositor of drgnx test --ui" linux)
+                (ui-dbus :dbus-run-session "dbus-run-session" "a private D-Bus per test session" linux)
+                (ui-magick :magick "magick" "ImageMagick 7: screenshot compositing" nil)
+                (ui-pgtk :pgtk-emacs "a pgtk Emacs (emacs-pgtk)" "the GUI Emacs of harness sessions" linux)))
+  (pcase-let ((`(,name ,key ,bin ,why ,platform) tool))
+    (drgnx-doctor-define name :group "Development" :dev t :platform platform :doc (format "%s (%s)" bin why)
                          :check (lambda (f)
                                   (if (plist-get f key) (list 'ok (format "%s found" bin) nil)
                                     (list 'warn (format "%s not found (%s)" bin why) (format "install %s" bin)))))))
@@ -302,7 +335,8 @@ MODEL), as a sentence, or nil."
 (defun drgnx-doctor-run (facts &optional dev)
   "Results (plists :name :group :status :detail :fix) of every check on FACTS; DEV adds dev checks."
   (cl-loop for (name . spec) in drgnx-doctor--checks
-           when (or dev (not (plist-get spec :dev)))
+           when (and (or dev (not (plist-get spec :dev)))
+                     (memq (plist-get spec :platform) (list nil (drgnx-platform))))
            collect (pcase-let ((`(,status ,detail ,fix)
                                 (condition-case err (funcall (plist-get spec :check) facts)
                                   (error (list 'fail (format "the check itself failed: %s" (error-message-string err)) nil)))))

@@ -128,6 +128,12 @@ FAIL makes the exit status 1. `--dev` adds the tools for developing drgnx (mutte
 pgtk Emacs) and the environment, container runtime and session launcher. Without any Emacs, the doctor prints the
 installer command. Checks are defined with `drgnx-doctor-define`; modules will add their own (M4).
 
+A check may be for one platform (`:platform 'linux` or `'macos`, as `drgnx-platform` says); on the other it is absent
+from the results. The dev checks for mutter, dbus-run-session and a pgtk Emacs are Linux-only. macOS adds three
+warnings with their facts: `macos-app` (`~/Applications/drgnx.app` exists; fix `drgnx macos-app`), `brew` (`brew` on
+PATH, `/opt/homebrew/bin/brew` or `/usr/local/bin/brew`; the doctor may run without Homebrew on PATH) and
+`drgnx-on-path` (fix: `~/.local/bin` in `~/.zprofile`).
+
 ## Tests
 
 Batch: `test/unit/core-*-test.el`. The batch runner (`harness/run-ert.el`) gives the suite a temp HOME and drgnx

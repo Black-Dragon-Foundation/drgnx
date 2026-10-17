@@ -161,7 +161,10 @@ longer an executable file, drgnx falls back to PATH's `emacs`. Edit the file, or
 `drgnx doctor` runs its checks inside the Emacs drgnx will use (see above) and prints
 one line per check, `OK`, `WARN` or `FAIL`, with a fix under anything that is not ok. It exits 1 on any failure.
 `--json` for tools, `--dev` adds the tools needed to develop drgnx (mutter, dbus-run-session, ImageMagick, a
-pgtk Emacs). Details: [core.md](../develop/core.md#doctor-drgnx-doctorel).
+pgtk Emacs; on a Mac, which has no mutter, D-Bus or pgtk, only ImageMagick). On a Mac the doctor also checks that the
+drgnx app is installed (fix: `drgnx macos-app`), that Homebrew is there (also looked for in `/opt/homebrew/bin` and
+`/usr/local/bin`, in case it is not on PATH) and that the `drgnx` command is on PATH (fix: add `~/.local/bin` to PATH in
+`~/.zprofile`) — each only a warning. Details: [core.md](../develop/core.md#doctor-drgnx-doctorel).
 
 ## Uninstall
 

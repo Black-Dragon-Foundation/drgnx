@@ -81,36 +81,67 @@ NON-INTERACTIVE: never read input (`inhibit-interaction').  OPTIONS: plist for t
 ;;;; Step 1: environment
 
 (defconst drgnx-onboard-tools
-  '((git ("git") t "install git with your package manager (e.g. dnf install git)")
-    (ripgrep ("rg") nil "fast project search: install ripgrep (dnf install ripgrep)")
-    (fd ("fd" "fdfind") nil "fast file listing: install fd (dnf install fd-find)")
-    (podman ("podman") nil "containers for tests and local AI servers: install podman")
-    (mise ("mise") nil "language servers and tools per project: https://mise.jdx.dev")
-    (gpu ("nvidia-smi" "rocm-smi") nil "no GPU tool found: local AI models will run on the CPU"))
-  "(ID PROGRAMS REQUIRED FIX): what drgnx looks for.")
+  '((git ("git") t (:linux "install git with your package manager (e.g. dnf install git)"
+                           :macos "xcode-select --install (git comes with the Command Line Tools)"))
+    (ripgrep ("rg") nil (:linux "fast project search: install ripgrep (dnf install ripgrep)"
+                                :macos "brew install ripgrep (fast project search)"))
+    (fd ("fd" "fdfind") nil (:linux "fast file listing: install fd (dnf install fd-find)"
+                                    :macos "brew install fd (fast file listing)"))
+    (podman ("podman") nil (:linux "containers for tests and local AI servers: install podman"
+                                   :macos "brew install podman, then podman machine init (containers for tests and local AI servers)"))
+    (mise ("mise") nil (:linux "language servers and tools per project: https://mise.jdx.dev"
+                               :macos "brew install mise (language servers and tools per project)"))
+    (gpu ("nvidia-smi" "rocm-smi") nil (:linux "no GPU tool found: local AI models will run on the CPU"
+                                               :macos "Apple silicon: models use the shared memory")))
+  "(ID PROGRAMS REQUIRED FIX): what drgnx looks for.  FIX is a plist (:linux TEXT :macos TEXT): how to get it.
+On macOS the GPU row is always ok (no nvidia-smi or rocm-smi is expected).")
 
 (defun drgnx-onboard--font-p (family)
-  (with-temp-buffer
-    (and (eql 0 (ignore-errors (call-process "fc-list" nil t nil (concat ":family=" family))))
-         (> (buffer-size) 0))))
+  "Is the font FAMILY installed?  t or nil; `unknown' when this cannot be told (no graphical frame to ask
+Emacs, and no fc-list to ask fontconfig): never nil then, so a missing tool is not read as a missing font."
+  (cond ((display-graphic-p) (and (member family (font-family-list)) t))
+        ((executable-find "fc-list")
+         (with-temp-buffer
+           (and (eql 0 (ignore-errors (call-process "fc-list" nil t nil (concat ":family=" family))))
+                (> (buffer-size) 0))))
+        (t 'unknown)))
+
+(defun drgnx-onboard--command-line-tools-p ()
+  "Are the Xcode Command Line Tools installed (`xcode-select -p' succeeds)?"
+  (and (executable-find "xcode-select")
+       (eql 0 (ignore-errors (call-process "xcode-select" nil nil nil "-p")))))
 
 (defun drgnx-onboard-environment ()
-  "Alist ID → (:status ok|missing :required :fix) for the tools and the icon font."
-  (append
-   (mapcar (lambda (tool)
-             (pcase-let ((`(,id ,programs ,required ,fix) tool))
-               (cons id (list :status (if (seq-some #'executable-find programs) 'ok 'missing) :required required :fix fix))))
-           drgnx-onboard-tools)
-   (list (cons 'icon-font (list :status (if (drgnx-onboard--font-p "Symbols Nerd Font") 'ok 'missing) :required nil
-                                :fix "icons in the Explorer: install the Symbols Nerd Font (https://www.nerdfonts.com)")))))
+  "Alist ID → (:status ok|missing|unknown :required :fix) for the tools and the icon font; on macOS also
+the Xcode Command Line Tools.  :fix is the one for this platform."
+  (let ((platform (drgnx-platform)))
+    (append
+     (mapcar (lambda (tool)
+               (pcase-let ((`(,id ,programs ,required ,fix) tool))
+                 (cons id (list :status (if (or (and (eq id 'gpu) (eq platform 'macos)) (seq-some #'executable-find programs)) 'ok 'missing)
+                                :required required :fix (plist-get fix (if (eq platform 'macos) :macos :linux))))))
+             drgnx-onboard-tools)
+     (and (eq platform 'macos)
+          (list (cons 'xcode-clt (list :status (if (drgnx-onboard--command-line-tools-p) 'ok 'missing) :required nil
+                                       :fix "xcode-select --install (git, and the C compiler that builds tree-sitter grammars)"))))
+     (list (cons 'icon-font (list :status (pcase (drgnx-onboard--font-p "Symbols Nerd Font") ('unknown 'unknown) ('nil 'missing) (_ 'ok))
+                                  :required nil
+                                  :fix (if (eq platform 'macos)
+                                           "brew install --cask font-symbols-only-nerd-font (icons in the Explorer)"
+                                         "icons in the Explorer: install the Symbols Nerd Font (https://www.nerdfonts.com)")))))))
 
 (defun drgnx-onboard--environment-step (_ctx)
   (let* ((env (drgnx-onboard-environment))
-         (missing (seq-filter (lambda (e) (eq (plist-get (cdr e) :status) 'missing)) env)))
+         (missing (seq-filter (lambda (e) (eq (plist-get (cdr e) :status) 'missing)) env))
+         (unknown (seq-filter (lambda (e) (eq (plist-get (cdr e) :status) 'unknown)) env))
+         (unchecked (and unknown (format "%s: could not check" (mapconcat (lambda (e) (symbol-name (car e))) unknown ", ")))))
     (list (cond ((seq-some (lambda (e) (plist-get (cdr e) :required)) missing) 'fail) (missing 'warn) (t 'ok))
-          (if missing
-              (mapconcat (lambda (e) (format "%s missing — %s" (car e) (plist-get (cdr e) :fix))) missing "; ")
-            "every tool drgnx uses is here"))))
+          (string-join
+           (delq nil (list (if missing
+                               (mapconcat (lambda (e) (format "%s missing — %s" (car e) (plist-get (cdr e) :fix))) missing "; ")
+                             "every tool drgnx uses is here")
+                           unchecked))
+           "; "))))
 
 ;;;; Step 2: look and keys
 
