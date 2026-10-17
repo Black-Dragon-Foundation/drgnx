@@ -30,8 +30,26 @@ Its directory is mode 0700 and must be the user's own. One JSON object per line:
 | `spend` `{job?, task?, agent?}` | `{input, output, cost, requests}` |
 | `shutdown` | `true`, then the hub exits |
 
-Errors: `{"id", "error": {"message"}}`. Events (from the gateway): `request` (job, task, agent, provider, model, status,
-input, output, cost), `fallback` (agent, from, to, why), `budget` (job, spent, budget).
+| `agents/start` `{profile, cwd, task?, job?}` | `{id, name}`: a session held by the hub |
+| `agents/list` | `{sessions: [LISP…]}` (snapshots) |
+| `agents/get` `{id}` | `{lisp, entries, seq}` (snapshot, the whole transcript, the change number) |
+| `agents/send` `{id, text}`, `agents/stop` `{id}`, `agents/kill` `{id}` | `true` |
+| `agents/permission` `{id, request, option}` | `true` — the user's answer: the only way a permission is answered |
+| `agents/do` `{id, op, n?, text?, item?, reject?}` | `true`: `deliver-queue`, `unqueue`, `requeue`, `review` |
+| `coord/notify` | `true`; delivery runs now ([coordination.md](coordination.md)) |
+
+Errors: `{"id", "error": {"message"}}`. Snapshots and transcript entries travel as **printed Lisp** (`lisp`,
+`entries`): JSON would lose the difference between a symbol and a string in an entry; both ends are Emacs. Events: from the gateway `request` (job, task, agent, provider, model, status, input, output, cost), `fallback`
+(agent, from, to, why), `budget` (job, spent, budget); from sessions `agent` (id, seq, lisp — the snapshot) and
+`agent-entries` (id, seq, entries: [[index, lisp]…], the entries new or changed since the last time — entries change
+in place: chunks appended, tool calls updated), at most one of each per session per 50 ms; `lease-released` (task,
+agent).
+
+**Mirrors** (`core/drgnx-agents-mirror.el`): the editing Emacs keeps a `drgnx-agent-session` per hub session (`remote`
+= its id) filled from these events; an action on a mirror goes to the hub (`drgnx-agents--remote`, never waiting).
+A new Emacs fetches each transcript once (`agents/get`, which answers the session's change number `seq`) and keeps
+the events that arrive meanwhile, then applies only those numbered after it — events and answers come on different
+connections, so their order is not given.
 
 One hub per socket: a second finds the first answering `ping`, or holding the lock — `SOCKET.lock/`, a directory
 made atomically with the hub's pid — and exits with status 3 (a hub too busy to answer a ping keeps its socket). A

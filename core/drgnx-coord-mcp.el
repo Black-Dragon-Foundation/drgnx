@@ -81,8 +81,10 @@
                 (drgnx-coord-mark (plist-get a :id) "acted") (drgnx-coord-mcp--notify-hub) "acted"))
       ("read_decisions" :description "The decision log since a version (0: all), and the current version"
        :schema ,(funcall s '(("since" "integer" "The last version you read (0 for all)")))
-       :call ,(lambda (a) (drgnx-coord-mcp--jsonable (list :version (drgnx-coord-version)
-                                                           :decisions (drgnx-coord-decisions-since (or (plist-get a :since) 0))))))
+       :call ,(lambda (a)
+                (let ((v (drgnx-coord-version)) (me (getenv "DRGNX_AGENT")))
+                  (when (and me (not (string-empty-p me))) (drgnx-coord-set-seen me v))   ; the hub stops telling it
+                  (drgnx-coord-mcp--jsonable (list :version v :decisions (drgnx-coord-decisions-since (or (plist-get a :since) 0)))))))
       ("record_decision"
        :description "Record a decision: build, wait, wont-build or replaces.  Inside your own task it is current; about anything else it is proposed (the reviewer and the user decide)"
        :schema ,(funcall s `(("kind" "string" "build, wait, wont-build or replaces") ("subject" "string" "What it is about")

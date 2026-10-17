@@ -351,7 +351,11 @@ its history is replayed into the transcript.  Needs an agent that can load sessi
                                        (drgnx-agents--next s)))))))))
     s))
 
+(defvar drgnx-agents-prompt-functions nil
+  "Called with (SESSION TEXT) when TEXT goes to the agent as a prompt (the hub marks delivered messages read).")
+
 (defun drgnx-agents--prompt (s text)
+  (run-hook-with-args 'drgnx-agents-prompt-functions s text)
   (drgnx-agents--add s (list :type 'user :text text))
   (setf (drgnx-agent-session-status s) 'busy (drgnx-agent-session-stopping s) nil (drgnx-agent-session-paused s) nil)
   (when (drgnx-agent-session-task s) (with-demoted-errors "drgnx work: %S" (run-hook-with-args 'drgnx-agents-task-functions s 'turn-start)))

@@ -209,7 +209,25 @@ held when RECIPIENT's queue is full or the two exchange too much â€” or (:held â
                 (state (if reason "held" "queued")))
            (sqlite-execute db "insert into message (job, sender, recipient, text, state, reason, at) values (?, ?, ?, ?, ?, ?, ?)"
                            (list job sender recipient text state reason (float-time)))
+           ;; a reply: what the other side sent this sender is acted on
+           (sqlite-execute db "update message set state = 'acted', acted = ? where sender = ? and recipient = ?
+                               and state in ('delivered', 'read')"
+                           (list (float-time) recipient sender))
            (list :ok t :id (caar (sqlite-select db "select last_insert_rowid()")) :state state))))))
+
+(defun drgnx-coord-queued ()
+  "Every message waiting to be delivered, oldest first."
+  (mapcar #'drgnx-coord--message-plist
+          (sqlite-select (drgnx-work-db) (format "select %s from message where state = 'queued' order by id" drgnx-coord--message-cols))))
+
+(defun drgnx-coord-set-seen (agent version)
+  "AGENT has read the decision log up to VERSION."
+  (sqlite-execute (drgnx-work-db) "insert or replace into meta values (?, ?)"
+                  (list (concat "seen:" agent) (number-to-string version))))
+
+(defun drgnx-coord-seen (agent)
+  "The decision-log version AGENT last read (0 when never)."
+  (string-to-number (or (drgnx-coord--meta (drgnx-work-db) (concat "seen:" agent)) "0")))
 
 (defun drgnx-coord-inbox (recipient &optional states)
   "RECIPIENT's messages (in STATES when given), oldest first."

@@ -16,6 +16,7 @@
 (require 'drgnx-gateway)
 (require 'drgnx-jobs)
 (require 'drgnx-agents)
+(require 'drgnx-coord)
 
 (defvar drgnx-hub-event-functions nil
   "Functions called with (EVENT DATA) for each event the hub sends this Emacs (after `drgnx-hub-connect'); EVENT a
@@ -142,6 +143,7 @@ answer a ping.  A lock whose process is gone is taken over.  Signals when anothe
                     :registrations (length (drgnx-gateway-registrations)) :started drgnx-hub--started))
     ("gateway/register" (drgnx-hub-register params))
     ("gateway/unregister" (drgnx-gateway-unregister (plist-get params :token)) (drgnx-hub--save-registrations) t)
+    ("coord/notify" (run-at-time 0 nil #'drgnx-hub--deliver) t)   ; a coordination server wrote: deliver now
     ("spend" (drgnx-work-db-spend :job (plist-get params :job) :task (plist-get params :task) :agent (plist-get params :agent)))
     ("agents/start"
      (let ((s (drgnx-agents-start (plist-get params :profile) (plist-get params :cwd) (plist-get params :task) (plist-get params :job))))
@@ -212,7 +214,10 @@ KEY…)), keys held in memory.  (:token :url)."
         :usage (drgnx-agent-session-usage s) :commands (drgnx-agent-session-commands s)
         :capabilities (drgnx-agent-session-capabilities s) :exit (drgnx-agent-session-exit s)
         :stderr (let ((e (drgnx-agent-session-stderr s))) (and e (substring e (max 0 (- (length e) 2000)))))
-        :entries-count (length (drgnx-agent-session-entries s))))
+        :entries-count (length (drgnx-agent-session-entries s))
+        ;; no agent offers a gate yet (a hook before each tool): messages wait for the turn's end, its own edits are
+        ;; not held while it is behind the decision log — only its coordination writes are
+        :enforced nil))
 
 (defun drgnx-hub--snapshot-lisp (s) (drgnx-hub--lisp (drgnx-hub--snapshot s)))
 
@@ -228,6 +233,52 @@ fetched a transcript keeps only the events after it.")
     (unless (gethash id drgnx-hub--flush-timers)
       (puthash id (run-at-time 0.05 nil (lambda () (remhash id drgnx-hub--flush-timers) (drgnx-hub--flush s)))
                drgnx-hub--flush-timers))))
+
+;;;; Delivery: messages and decisions reach agents without interrupting them
+
+(defvar drgnx-hub--told (make-hash-table :test #'equal) "Session name → the decision-log version it was last told of.")
+(defvar drgnx-hub--tick-timer nil)
+(defvar drgnx-hub--ticks 0)
+
+(defun drgnx-hub--live-sessions ()
+  (seq-remove (lambda (s) (or (eq (drgnx-agent-session-status s) 'exited) (drgnx-agent-session-remote s)))
+              (drgnx-agents-sessions)))
+
+(defun drgnx-hub--deliver ()
+  "Hand each queued message to the hub session it is for (an idle agent: a new turn; a busy one: its turn's end —
+never interrupting), and tell agents behind the decision log what changed.  A message for an agent that is not here
+(or exited) stays queued."
+  (let ((sessions (drgnx-hub--live-sessions)))
+    (dolist (m (drgnx-coord-queued))
+      (when-let* ((s (seq-find (lambda (s) (equal (drgnx-agent-session-name s) (plist-get m :recipient))) sessions)))
+        (drgnx-coord-mark (plist-get m :id) "delivered")
+        (drgnx-agents-send s (format "[message from %s #%d] %s" (plist-get m :sender) (plist-get m :id) (plist-get m :text)))))
+    (let ((v (drgnx-coord-version)))
+      (when (> v 0)
+        (dolist (s sessions)
+          (let* ((name (drgnx-agent-session-name s)) (seen (drgnx-coord-seen name)))
+            (when (and (< seen v) (< (gethash name drgnx-hub--told 0) v))
+              (puthash name v drgnx-hub--told)
+              (drgnx-agents-send
+               s (format "[decision log v%d] %s — call read_decisions (since %d) before you go on."
+                         v (mapconcat (lambda (d) (format "#%s %s: %s (%s)" (plist-get d :n) (plist-get d :kind)
+                                                          (plist-get d :subject) (plist-get d :status)))
+                                      (seq-take (drgnx-coord-decisions-since seen) 5) "; ")
+                         seen)))))))))
+
+(defun drgnx-hub--prompted (_s text)
+  "A prompt went to an agent: a message in it is now read."
+  (when (string-match "\\`\\[message from [^]#]* #\\([0-9]+\\)\\]" text)
+    (drgnx-coord-mark (string-to-number (match-string 1 text)) "read")))
+
+(defun drgnx-hub--housekeeping ()
+  "Release claims whose lease ran out, and say so."
+  (dolist (r (drgnx-coord-release-stale)) (drgnx-hub--broadcast 'lease-released r)))
+
+(defun drgnx-hub--tick ()
+  (with-demoted-errors "drgnx hub: %S"
+    (drgnx-hub--deliver)
+    (when (zerop (% (cl-incf drgnx-hub--ticks) 30)) (drgnx-hub--housekeeping))))
 
 (defun drgnx-hub--flush (s)
   "Send S's snapshot, and the entries that are new or changed since the last time, as `agent' / `agent-entries'."
@@ -291,6 +342,8 @@ Signals an error when a hub already serves there."
   (drgnx-hub--load-registrations)
   (add-hook 'drgnx-gateway-event-functions #'drgnx-hub--broadcast)
   (add-hook 'drgnx-agents-changed-functions #'drgnx-hub--agent-changed)
+  (add-hook 'drgnx-agents-prompt-functions #'drgnx-hub--prompted)
+  (setq drgnx-hub--tick-timer (run-at-time 2 2 #'drgnx-hub--tick))
   (setq drgnx-hub--started (format-time-string "%FT%T%z")
         drgnx-hub--server
         (make-network-process :name "drgnx-hub" :family 'local :server t :service socket :noquery t
@@ -310,6 +363,10 @@ Signals an error when a hub already serves there."
   (setq drgnx-hub--server nil drgnx-hub--subscribers nil)
   (remove-hook 'drgnx-gateway-event-functions #'drgnx-hub--broadcast)
   (remove-hook 'drgnx-agents-changed-functions #'drgnx-hub--agent-changed)
+  (remove-hook 'drgnx-agents-prompt-functions #'drgnx-hub--prompted)
+  (when (timerp drgnx-hub--tick-timer) (cancel-timer drgnx-hub--tick-timer))
+  (setq drgnx-hub--tick-timer nil)
+  (clrhash drgnx-hub--told)
   (clrhash drgnx-hub--sent)
   (drgnx-gateway-stop)
   (clrhash drgnx-gateway--registrations))

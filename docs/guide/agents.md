@@ -85,6 +85,28 @@ reach it from its environment, from auth-source files that never ask, or from th
 takes them; an agent's token is revoked when it exits. With no hub to be had, an agent goes to its provider directly and says so. The Agents list's **Via**
 column shows which.
 
+## Durable sessions
+
+**New Durable Agent Session…** (palette) starts an agent in the **hub** instead of this Emacs: it keeps working when
+you close Emacs, and the next Emacs shows it again in the Agents tab — its whole transcript, pending permission
+requests and edits to review — and drives it the same way (send, Stop, answer, review). Emacs mirrors the hub's
+sessions once it is idle whenever a hub is running; it never starts a hub for that.
+
+## Working together
+
+Every agent drgnx starts — durable or not — gets drgnx's **coordination tools** (an MCP server): the job's tasks
+and agents, messages to other agents or to you, and the **decision log** (what is being built, what waits on what,
+what will not be built, what replaced what). The log has a version; an agent that acts — claims a task, finishes
+it, records a decision, sends a message — says which version it last read, and when the log moved on since, drgnx
+**holds the action** and shows it what changed. An agent's decision about its own task counts at once; one about
+anything else is only proposed, for you (and, with jobs, a reviewer) to decide.
+
+Messages never interrupt: an idle agent gets one as a new turn, a busy one when its turn ends, and you can see each
+go queued → delivered → read → acted on. A message is only text to the agent that gets it: it never answers a
+permission request, never approves anything, never changes a setting. Two agents writing to each other too fast,
+or a full queue, holds the rest. A task an agent claimed is a lease: if the agent goes quiet for 15 minutes the
+task is free again, and you are told. Developer details: [coordination.md](../develop/coordination.md).
+
 ## Plans and the board
 
 Imported plan checklists (Onboarding: Import Projects, with TODOs) remember where they came from (`:PLAN_FILE:`,
@@ -95,6 +117,8 @@ run it, with the plan's own encoding and line endings — and leaves alone a pla
 
 ## Tests
 
+- `test/unit/coord-test.el`, `coord-mcp-test.el`, `hub-agents-test.el`, `agents-mirror-test.el`, `coord-delivery-test.el`
+  — coordination: the store, the tools, durable sessions, mirrors, delivery ([coordination.md](../develop/coordination.md)).
 - `test/unit/gateway-test.el`, `test/unit/hub-test.el`, `test/unit/http-test.el`, `test/unit/agents-gateway-test.el`
   — the gateway against mock providers (streaming, tokens, keys, spend, budget, fallback, a hang-up, a 1 MB body),
   the hub (socket, events, restart, one hub, outliving its starter, the CLI), agents' environments.
