@@ -1,0 +1,130 @@
+;;; drgnx-grammars.el --- Module lang/grammars: tree-sitter grammars on request -*- lexical-binding: t -*-
+
+;; SPDX-License-Identifier: GPL-3.0-or-later
+
+;;; Commentary:
+;; A file whose language has a tree-sitter mode but no grammar opens as usual; the echo area says once per language
+;; which command installs it (never a prompt).  Install Language Support builds the grammars in a durable job (a
+;; batch Emacs: git and a C compiler), into drgnx's data dir; when it ends, open buffers of those languages switch to
+;; their tree-sitter mode.  See docs/guide/editing.md.
+
+;;; Code:
+(require 'cl-lib)
+(require 'seq)
+(require 'subr-x)
+(require 'drgnx-paths)
+(require 'drgnx-modules)
+(require 'drgnx-registry)
+(require 'drgnx-jobs)
+
+(defvar treesit-extra-load-path)
+(declare-function treesit-language-available-p "treesit.c")
+
+(defconst drgnx-grammars-modes
+  '((python python-mode python-ts-mode) (javascript js-mode js-ts-mode) (json js-json-mode json-ts-mode)
+    (css css-mode css-ts-mode) (html mhtml-mode html-ts-mode "\\.html?\\'") (bash sh-mode bash-ts-mode)
+    (c c-mode c-ts-mode) (cpp c++-mode c++-ts-mode) (java java-mode java-ts-mode) (ruby ruby-mode ruby-ts-mode)
+    (yaml yaml-mode yaml-ts-mode "\\.ya?ml\\'") (rust rust-mode rust-ts-mode "\\.rs\\'") (go go-mode go-ts-mode "\\.go\\'")
+    (typescript nil typescript-ts-mode "\\.ts\\'") (tsx nil tsx-ts-mode "\\.tsx\\'") (toml conf-toml-mode toml-ts-mode "\\.toml\\'")
+    (lua lua-mode lua-ts-mode "\\.lua\\'"))
+  "LANGUAGE MODE TS-MODE [FILE-REGEXP]: files in MODE (or matching FILE-REGEXP) want LANGUAGE's grammar for TS-MODE.")
+
+(defconst drgnx-grammars-sources
+  '((bash "https://github.com/tree-sitter/tree-sitter-bash") (c "https://github.com/tree-sitter/tree-sitter-c")
+    (cpp "https://github.com/tree-sitter/tree-sitter-cpp") (css "https://github.com/tree-sitter/tree-sitter-css")
+    (go "https://github.com/tree-sitter/tree-sitter-go") (html "https://github.com/tree-sitter/tree-sitter-html")
+    (java "https://github.com/tree-sitter/tree-sitter-java") (javascript "https://github.com/tree-sitter/tree-sitter-javascript" nil "src")
+    (json "https://github.com/tree-sitter/tree-sitter-json") (lua "https://github.com/tree-sitter-grammars/tree-sitter-lua")
+    (python "https://github.com/tree-sitter/tree-sitter-python") (ruby "https://github.com/tree-sitter/tree-sitter-ruby")
+    (rust "https://github.com/tree-sitter/tree-sitter-rust") (toml "https://github.com/tree-sitter-grammars/tree-sitter-toml")
+    (tsx "https://github.com/tree-sitter/tree-sitter-typescript" nil "tsx/src")
+    (typescript "https://github.com/tree-sitter/tree-sitter-typescript" nil "typescript/src")
+    (yaml "https://github.com/tree-sitter-grammars/tree-sitter-yaml"))
+  "LANGUAGE URL [REVISION SOURCE-DIR]: where a grammar comes from (`treesit-language-source-alist' entries).")
+
+(defvar drgnx-grammars--hinted nil "Languages whose missing grammar was mentioned this session.")
+
+(defun drgnx-grammars-dir () (expand-file-name "tree-sitter/" (drgnx-data-dir)))
+
+(defun drgnx-grammars-language (&optional buffer)
+  "The language BUFFER's file wants a grammar for, or nil."
+  (with-current-buffer (or buffer (current-buffer))
+    (car (or (seq-find (lambda (e) (and (nth 1 e) (derived-mode-p (nth 1 e)))) drgnx-grammars-modes)
+             (and buffer-file-name
+                  (seq-find (lambda (e) (and (nth 3 e) (string-match-p (nth 3 e) buffer-file-name))) drgnx-grammars-modes))))))
+
+(defun drgnx-grammars-missing-p (lang)
+  (and lang (assq lang drgnx-grammars-sources) (fboundp 'treesit-language-available-p) (not (treesit-language-available-p lang))))
+
+(defun drgnx-grammars--hint ()
+  "`find-file-hook': a file whose grammar is missing — said once per language, never asked."
+  (let ((lang (drgnx-grammars-language)))
+    (when (and (drgnx-grammars-missing-p lang) (not (memq lang drgnx-grammars--hinted)))
+      (push lang drgnx-grammars--hinted)
+      (message "Tree-sitter support for %s is not installed: Install Language Support (in the palette) adds it" lang))))
+
+(defun drgnx-grammars--job-command (langs)
+  "The command line of the job that builds LANGS's grammars into `drgnx-grammars-dir'."
+  (let ((recipes (mapcar (lambda (l) (assq l drgnx-grammars-sources)) langs)))
+    (list (expand-file-name invocation-name invocation-directory) "--batch" "-Q" "--eval"
+          (prin1-to-string
+           `(let ((failed nil))
+              (require 'treesit)                     ; its variable is special only once loaded (--eval is lexical)
+              (setq treesit-language-source-alist ',recipes)
+              (dolist (l ',langs)
+                (condition-case e (progn (treesit-install-language-grammar l ,(drgnx-grammars-dir)) (message "installed %s" l))
+                  (error (setq failed t) (message "FAILED %s: %s" l (error-message-string e)))))
+              (kill-emacs (if failed 1 0)))))))
+
+(defun drgnx-grammars-install (langs)
+  "Install the tree-sitter grammars of LANGS (default: this buffer's language) in the background — a durable job; the
+buffers of those languages switch to their tree-sitter modes when it is done."
+  (interactive
+   (list (let ((here (drgnx-grammars-language)))
+           (if (drgnx-grammars-missing-p here) (list here)
+             (list (intern (completing-read "Install language support for: "
+                                            (mapcar (lambda (e) (symbol-name (car e))) drgnx-grammars-sources) nil t)))))))
+  (make-directory (drgnx-grammars-dir) t)
+  (let ((id (drgnx-jobs-start "grammars" (drgnx-grammars--job-command langs))))
+    (message "Installing language support for %s in the background (Show Job Log: grammars)" (mapconcat #'symbol-name langs ", "))
+    (drgnx-grammars--watch id langs)
+    id))
+
+(defun drgnx-grammars--watch (id langs)
+  "When job ID ends: LANGS's buffers switch (looked at every 2 s; never waits)."
+  (let ((timer nil))
+    (setq timer (run-with-timer 2 2 (lambda ()
+                                      (let ((job (drgnx-jobs-get id)))
+                                        (unless (eq (plist-get job :status) 'running)
+                                          (cancel-timer timer)
+                                          (drgnx-grammars--installed langs)
+                                          (message (if (eql (plist-get job :exit) 0) "Language support installed: %s"
+                                                     "Language support: some did not install (%s) — Show Job Log: grammars")
+                                                   (mapconcat #'symbol-name langs ", ")))))))))
+
+(defun drgnx-grammars--installed (langs)
+  "LANGS's grammars may be there now: their files use the tree-sitter modes, open buffers switch."
+  (dolist (e drgnx-grammars-modes)
+    (pcase-let ((`(,lang ,mode ,ts ,re) e))
+      (when (and (memq lang langs) (fboundp ts) (treesit-language-available-p lang))
+        (when mode (setf (alist-get mode major-mode-remap-alist) ts))
+        (when re (add-to-list 'auto-mode-alist (cons re ts)))
+        (dolist (b (buffer-list))
+          (with-current-buffer b
+            (when (and buffer-file-name (eq (drgnx-grammars-language) lang) (not (eq major-mode ts)))
+              (funcall ts))))))))
+
+(drgnx-module-define 'lang/grammars
+                     :doc "Tree-sitter grammars on request: a hint when one is missing, installed in the background."
+                     :stage 'startup
+                     :setup
+                     (lambda ()
+                       (when (boundp 'treesit-extra-load-path) (add-to-list 'treesit-extra-load-path (drgnx-grammars-dir)))
+                       (when (fboundp 'treesit-language-available-p) (drgnx-grammars--installed (mapcar #'car drgnx-grammars-modes)))
+                       (add-hook 'find-file-hook #'drgnx-grammars--hint)
+                       (drgnx-command-define 'grammars-install :category "Code" :title "Install Language Support…"
+                                             :command #'drgnx-grammars-install
+                                             :doc "Tree-sitter grammars for this language (built in the background)")))
+
+(provide 'drgnx-grammars)
+;;; drgnx-grammars.el ends here

@@ -14,6 +14,7 @@ Using drgnx.
 - [AI](guide/ai.md): one provider registry (OpenRouter and local runners), roles with fallback, keys never written, agent profiles.
 - [Jobs](guide/jobs.md): agents through a plan — proposal, approval, worktrees, a policy, review and merge, budget, fallback; `drgnx job`.
 - [Semantic Search](guide/search.md): find code by meaning — `#` in the palette, the index, what is never indexed, `.drgnx/search.eld`, privacy.
+- [Editing](guide/editing.md): language support (tree-sitter grammars), and the editor's amenities.
 - [Work tracker](guide/work.md): specs › plans › tasks › TODOs › commits, branches and worktrees; `drgnx work`.
 
 ## Reference
