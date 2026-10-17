@@ -11,7 +11,7 @@ working from the old one. So the shared state is explicit, versioned, and **enfo
 
 | Table | What |
 |---|---|
-| `job` | id, title, plan, repo, status, created |
+| `job` | id, title, plan, repo, status (`proposed` `running` `paused` `stopped` `done`), created, data (the proposal, budget, review notes: a printed plist) |
 | `jtask` | id (`JOB#N`), job, n, title, role, status, agent, lease_until |
 | `jdep` | task → the task it depends on |
 | `decision` | n, kind (`build` `wait` `wont-build` `replaces`), subject, task, paths, reason, author, status (`current` `proposed` `replaced`), replaces, at, ver |
@@ -86,9 +86,34 @@ A peer message is text for the agent and nothing else: permission requests are a
 so an agent's own edits are not held while it is behind — only its coordination writes are; its snapshot says
 `:enforced nil`, and the job window (M9b.4) shows it.
 
+## Jobs
+
+`core/drgnx-job.el` runs in the hub (user docs: [jobs.md](../guide/jobs.md)). `drgnx-job-propose` reads the plan
+(snapshot and SHA-1 in the job's data) and makes the job and its tasks; `drgnx-job-approve` adds the job's worktree
+and runs `drgnx-job-step`, which the hub's tick repeats for every running job: tasks whose agent is not live are
+released, `in-review` tasks get a reviewer, ready tasks get agents (`drgnx-job--start-task`: a worktree, a session
+with `DRGNX_JOB` and `DRGNX_TASK`, the task prompt given once the session is free), and a job whose tasks are all
+done is done. The hub wires it to sessions with hooks:
+
+| Hook | drgnx-job |
+|---|---|
+| `drgnx-agents-changed-functions` | `drgnx-job--session-changed`: prompts out, a reviewer's verdict in, a step after a session ends |
+| `drgnx-agents-request-functions` | `drgnx-job--request`: permissions by `drgnx-job-policy`, writes inside the worktree, else a card |
+| `drgnx-agents-error-functions` | `drgnx-job--agent-error`: a provider at its limit → `drgnx-job--fall-back` to the next profile |
+| `drgnx-gateway-event-functions` | `drgnx-job--gateway-event`: `budget` → the job pauses, its agents stop |
+
+`complete_task` from an agent of a job (`DRGNX_JOB` set) puts the task `in-review`, not `done`; the reviewer's
+verdict decides (`drgnx-job--reviewed`, `drgnx-job--merge`). A card (`drgnx-job--card`) is a message from `drgnx`
+to `user` with the job and task, the task `needs-input`, and a `card` event (job, task, kind, title); `fallback`
+events carry job, task, agent, from, to, why. The hub's `job/propose`, `job/approve`, `job/status`, `job/stop`,
+`job/resume` ([hub.md](hub.md)) answer `drgnx-job-summary`; `bin/drgnx job` and the Plan Job commands use them.
+A notification to the hub (`coord/notify`) carries no id and gets no answer: the sender has hung up by then.
+
 ## Tests
 
 `test/unit/coord-test.el` (the store; the claim race), `coord-mcp-test.el` (the server over stdio),
 `hub-agents-test.el` (sessions in the hub; a mock agent calling a tool through its `mcpServers`),
 `agents-mirror-test.el` (mirrors, reattaching), `coord-delivery-test.el` (idle, busy, exited, peer messages,
-decisions, leases). The mock agent's `coord TOOL JSON` prompt calls a tool of the server it was given.
+decisions, leases); the job tests are listed in [jobs.md](../guide/jobs.md#tests). The mock agent's `coord TOOL JSON` prompt
+calls a tool of the server it was given; `[drgnx task ID]` does a task, `[drgnx review ID]` reviews one
+(`MOCK_ACP_VERDICT=fail`), `MOCK_ACP_RATE_LIMIT` answers every prompt with a 429.

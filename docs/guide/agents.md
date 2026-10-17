@@ -110,7 +110,8 @@ never changes a setting. Two agents writing to each other too fast, or a full qu
 hear about that job's new decisions (once per change); a plain chat session is never woken for them. A task an
 agent claimed is a lease, kept while the agent runs and while the task waits on you; if the agent is gone for 15
 minutes the task is free again (the job window, M9b.4, will show it; messages and escalations to you wait there
-too). Developer details: [coordination.md](../develop/coordination.md).
+too). **Jobs** put several agents to work through a plan you approve, each task in its own worktree, reviewed and
+merged into the job's branch: [jobs.md](jobs.md). Developer details: [coordination.md](../develop/coordination.md).
 
 ## Plans and the board
 

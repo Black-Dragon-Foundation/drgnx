@@ -171,6 +171,7 @@ own repository).  Returns its id; nothing starts (unless `drgnx-job-auto-start')
 (cl-defun drgnx-job-approve (id &key budget)
   "Start job ID: its branch job/ID from the repository's HEAD (in a worktree of its own), then its ready tasks."
   (let ((job (drgnx-coord-job id)))
+    (unless job (user-error "No job %s" id))
     (unless (equal (plist-get job :status) "proposed") (user-error "Job %s is %s, not proposed" id (plist-get job :status)))
     (let ((tree (drgnx-job--job-tree id)))
       (unless (file-directory-p tree)
@@ -178,7 +179,7 @@ own repository).  Returns its id; nothing starts (unless `drgnx-job-auto-start')
         (pcase (drgnx-job--git (plist-get job :repo) "worktree" "add" "-q" "-b" (concat "job/" id) tree "HEAD")
           (`(0 . ,_))
           (`(,_ . ,err) (user-error "Job %s: no job branch: %s" id err)))))
-    (drgnx-coord-job-set id :status "running" :data (plist-put (plist-get job :data) :budget budget))
+    (drgnx-coord-job-set id :status "running" :data (plist-put (plist-get job :data) :budget (or budget (plist-get (plist-get job :data) :budget))))
     (drgnx-job-step id)
     id))
 
@@ -344,9 +345,10 @@ goes to the user."
     (drgnx-job--card id nil "budget" (format "spent %s of %s USD: paused" (plist-get data :spent) (plist-get data :budget)))))
 
 (cl-defun drgnx-job-resume (id &key budget)
-  "Go on with paused job ID — with BUDGET USD for the whole job, if given: its stopped agents continue."
+  "Go on with paused or stopped job ID — with BUDGET USD for the whole job, if given: its stopped agents continue."
   (let ((job (drgnx-coord-job id)))
-    (unless (equal (plist-get job :status) "paused") (user-error "Job %s is %s, not paused" id (plist-get job :status)))
+    (unless job (user-error "No job %s" id))
+    (unless (member (plist-get job :status) '("paused" "stopped")) (user-error "Job %s is %s, not paused" id (plist-get job :status)))
     (when budget
       (drgnx-coord-job-set id :data (plist-put (plist-get job :data) :budget budget))
       (drgnx-gateway-set-budget id budget))
@@ -463,6 +465,109 @@ its worktree done at once; anything else waits for the user as a card (nil: the 
   (when (and (drgnx-agent-session-job s) (null (drgnx-agent-session-permissions s)) (null (drgnx-agent-session-reviews s))
              (equal (plist-get (drgnx-coord-task (drgnx-agent-session-task s)) :status) "needs-input"))
     (drgnx-coord-force-status (drgnx-agent-session-task s) "running" (drgnx-agent-session-id s))))
+
+;;;; Stopping, what a job looks like, `drgnx job'
+
+(defun drgnx-job-stop (id)
+  "Stop job ID: its agents end (their worktrees stay); `drgnx-job-resume' starts its open tasks again."
+  (unless (drgnx-coord-job id) (user-error "No job %s" id))
+  (drgnx-coord-job-set id :status "stopped")
+  (dolist (s (drgnx-agents-sessions))
+    (when (and (equal (drgnx-agent-session-job s) id) (not (eq (drgnx-agent-session-status s) 'exited)))
+      (drgnx-agents-kill s)))
+  id)
+
+(defun drgnx-job-summary (id)
+  "Job ID for the user (and JSON): status, budget and spend, tasks with their profiles, agents, cards, pending
+permissions."
+  (when-let* ((job (drgnx-coord-job id)))
+    (let* ((data (plist-get job :data))
+           (sessions (seq-filter (lambda (s) (and (equal (drgnx-agent-session-job s) id) (not (eq (drgnx-agent-session-status s) 'exited))))
+                                 (drgnx-agents-sessions))))
+      (list :id id :title (plist-get job :title) :status (plist-get job :status) :repo (plist-get job :repo)
+            :plan (plist-get job :plan) :budget (plist-get data :budget)
+            :spent (plist-get (drgnx-work-db-spend :job id) :cost) :estimate (plist-get data :estimate)
+            :tasks (mapcar (lambda (task)
+                             (list :n (plist-get task :n) :title (plist-get task :title) :role (plist-get task :role)
+                                   :profile (car (drgnx-job-route (intern (or (plist-get task :role) "implement"))))
+                                   :status (plist-get task :status) :agent (plist-get task :agent) :deps (plist-get task :deps)))
+                           (drgnx-coord-tasks id))
+            :agents (mapcar (lambda (s) (list :id (drgnx-agent-session-id s) :profile (drgnx-agent-session-profile s)
+                                              :task (drgnx-agent-session-task s) :status (drgnx-agent-session-status s)
+                                              :review (and (gethash (drgnx-agent-session-id s) drgnx-job--reviewers) t)))
+                            sessions)
+            :cards (mapcar (lambda (m) (list :text (plist-get m :text) :state (plist-get m :state)))
+                           (seq-filter (lambda (m) (equal (plist-get m :job) id)) (drgnx-coord-inbox "user")))
+            :permissions (mapcan (lambda (s) (mapcar (lambda (p) (list :agent (drgnx-agent-session-id s) :title (plist-get p :title)))
+                                                     (drgnx-agent-session-permissions s)))
+                                 sessions)))))
+
+(defun drgnx-job-format (job)
+  "JOB (a `drgnx-job-summary', also as JSON gives it back) as text."
+  (let ((v (lambda (x) (and x (not (eq x :null)) x))))
+    (concat
+     (format "%s  %s  [%s]\n" (plist-get job :id) (plist-get job :title) (plist-get job :status))
+     (format "  repository %s\n" (plist-get job :repo))
+     (mapconcat (lambda (task)
+                  (format "  Task %s: %s  — %s on %s, %s%s\n" (plist-get task :n) (plist-get task :title) (plist-get task :role)
+                          (plist-get task :profile) (plist-get task :status)
+                          (if-let* ((deps (funcall v (plist-get task :deps))))
+                              (format ", after %s" (mapconcat (lambda (d) (format "Task %s" d)) deps ", "))
+                            "")))
+                (funcall v (plist-get job :tasks)) "")
+     (let ((e (plist-get job :estimate)))
+       (format "  estimate ~%.2f USD, %s tokens%s\n" (or (funcall v (plist-get e :usd)) 0) (plist-get e :tokens)
+               (if-let* ((u (funcall v (plist-get e :unpriced)))) (format " (unpriced: %s)" (string-join u ", ")) "")))
+     (format "  budget %s, spent %.2f USD\n" (if-let* ((b (funcall v (plist-get job :budget)))) (format "%s USD" b) "none")
+             (or (funcall v (plist-get job :spent)) 0))
+     (mapconcat (lambda (a) (format "  agent %s (%s) %s on %s\n" (plist-get a :id) (plist-get a :profile) (plist-get a :status)
+                                    (plist-get a :task)))
+                (funcall v (plist-get job :agents)) "")
+     (mapconcat (lambda (p) (format "  asks: %s (%s)\n" (plist-get p :title) (plist-get p :agent))) (funcall v (plist-get job :permissions)) "")
+     (mapconcat (lambda (c) (format "  card: %s\n" (plist-get c :text))) (funcall v (plist-get job :cards)) ""))))
+
+(declare-function drgnx-hub-ensure "drgnx-hub")
+(declare-function drgnx-hub-call-sync "drgnx-hub")
+(declare-function drgnx-hub--jsonable "drgnx-hub")
+
+(defun drgnx-job-cli ()
+  "`drgnx job propose PLAN [--repo DIR] [--budget USD] [--auto] | approve ID [--budget USD] | status [ID] [--json] |
+stop ID | resume ID [--budget USD]', through the hub."
+  (require 'drgnx-hub)
+  (let* ((args (prog1 (cdr (member "--" command-line-args-left)) (setq command-line-args-left nil)))
+         (opt (lambda (name) (cadr (member name args))))
+         (budget (and (funcall opt "--budget") (string-to-number (funcall opt "--budget"))))
+         (json (member "--json" args))
+         (pos (let (out skip) (dolist (a (cdr args) (nreverse out))
+                                (cond (skip (setq skip nil)) ((member a '("--repo" "--budget")) (setq skip t))
+                                      ((not (string-prefix-p "--" a)) (push a out))))))
+         (call (lambda (method params) (drgnx-hub-ensure) (drgnx-hub-call-sync method params 30)))
+         (show (lambda (job) (princ (if json (concat (json-serialize (drgnx-hub--jsonable job)) "\n") (drgnx-job-format job))) 0)))
+    (kill-emacs
+     (condition-case err
+         (pcase (car args)
+           ("propose"
+            (unless (car pos) (user-error "Which plan?"))
+            (let ((job (funcall call "job/propose" (list :plan (expand-file-name (car pos))
+                                                         :repo (and (funcall opt "--repo") (expand-file-name (funcall opt "--repo")))
+                                                         :budget budget :auto (and (member "--auto" args) t)))))
+              (funcall show job)
+              (unless (or json (not (equal (plist-get job :status) "proposed")))
+                (princ (format "Approve with: drgnx job approve %s\n" (plist-get job :id))))
+              0))
+           ((and cmd (or "approve" "stop" "resume"))
+            (unless (car pos) (user-error "Which job?"))
+            (funcall show (funcall call (concat "job/" cmd) (list :id (car pos) :budget budget))))
+           ("status"
+            (let ((r (funcall call "job/status" (list :id (car pos)))))
+              (cond ((car pos) (funcall show r))
+                    (json (princ (concat (json-serialize (drgnx-hub--jsonable r)) "\n")) 0)
+                    ((null (plist-get r :jobs)) (princ "No jobs.\n") 0)
+                    (t (dolist (job (plist-get r :jobs)) (princ (drgnx-job-format job))) 0))))
+           (_ (princ "usage: drgnx job propose PLAN [--repo DIR] [--budget USD] [--auto] | approve ID [--budget USD]\n                 | status [ID] [--json] | stop ID | resume ID [--budget USD]\n"
+                     #'external-debugging-output)
+              2))
+       (error (princ (format "drgnx job: %s\n" (error-message-string err)) #'external-debugging-output) 1)))))
 
 (provide 'drgnx-job)
 ;;; drgnx-job.el ends here

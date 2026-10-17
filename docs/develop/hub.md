@@ -38,11 +38,14 @@ Its directory is mode 0700 and must be the user's own. One JSON object per line:
 | `agents/send` `{id, text}`, `agents/stop` `{id}`, `agents/kill` `{id}` | `true` |
 | `agents/permission` `{id, request, option}` | `true` — the user's answer: the only way a permission is answered |
 | `agents/do` `{id, op, n?, text?, item?, reject?}` | `true`: `deliver-queue`, `unqueue`, `requeue`, `review` |
-| `coord/notify` | `true`; delivery runs now ([coordination.md](coordination.md)) |
+| `coord/notify` (a notification: no id, no answer) | delivery runs now ([coordination.md](coordination.md)) |
+| `job/propose` `{plan, repo?, budget?, auto?}`, `job/approve` `{id, budget?}`, `job/stop` `{id}`, `job/resume` `{id, budget?}` | the job (`drgnx-job-summary`) |
+| `job/status` `{id?}` | the job, or `{jobs: [...]}` |
 
 Errors: `{"id", "error": {"message"}}`. Snapshots and transcript entries travel as **printed Lisp** (`lisp`,
 `entries`): JSON would lose the difference between a symbol and a string in an entry; both ends are Emacs. Events: from the gateway `request` (job, task, agent, provider, model, status, input, output, cost), `fallback`
-(agent, from, to, why), `budget` (job, spent, budget); from sessions `agent` (id, seq, lisp — the snapshot) and
+(agent, from, to, why), `budget` (job, spent, budget); from jobs `card` (job, task, kind, title) and `fallback` (job, task,
+agent, from, to, why); from sessions `agent` (id, seq, lisp — the snapshot) and
 `agent-entries` (id, seq, entries: [[index, lisp]…], the entries new or changed since the last time — entries change
 in place: chunks appended, tool calls updated), at most one of each per session per 50 ms; `lease-released` (task,
 agent).

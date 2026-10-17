@@ -161,6 +161,10 @@ usage: drgnx build              byte-compile drgnx (core, wb, modules); native c
                                every plan: tasks, steps, TODOs and commits done, branch, merged
        drgnx hub start|stop|status [--json]
                                the hub: the durable process behind agents and their gateway (docs/guide/agents.md)
+       drgnx job propose PLAN [--repo DIR] [--budget USD] [--auto]
+                               a job from a plan: tasks, routes, estimate; nothing starts before approve
+       drgnx job approve|resume ID [--budget USD] | stop ID | status [ID] [--json]
+                               run, pause and inspect jobs in the hub (docs/guide/jobs.md)
        drgnx safe              Emacs with drgnx's core only: no modules, no packages
        drgnx bisect [-- CMD…]  find the module that breaks (CMD fails, or you say so)
        drgnx service-unit [DIR]
@@ -185,6 +189,9 @@ case "${1:-help}" in
   hub) shift
         "${DRGNX_EMACS:-emacs}" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
               -l drgnx-hub -f drgnx-hub-cli -- "$@" ;;
+  job) shift
+        "${DRGNX_EMACS:-emacs}" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
+              -l drgnx-hub -f drgnx-job-cli -- "$@" ;;
   work) shift
         "${DRGNX_EMACS:-emacs}" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
               -l drgnx-work -f drgnx-work-cli -- "$@" ;;

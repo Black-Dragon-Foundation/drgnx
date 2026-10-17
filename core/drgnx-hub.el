@@ -187,7 +187,26 @@ debugs errors, and without SIGPIPE ignored the write itself would)."
                     (plist-get params :reject)))
          (op (error "No action %s" op)))
        t))
+    ;; jobs (drgnx-job.el): every answer is the job as `drgnx-job-summary' has it
+    ("job/propose"
+     (let ((id (drgnx-job-propose (plist-get params :plan) :repo (drgnx-hub--value (plist-get params :repo))
+                                  :budget (drgnx-hub--value (plist-get params :budget)))))
+       (when (and (eq (plist-get params :auto) t) (equal (plist-get (drgnx-coord-job id) :status) "proposed"))
+         (drgnx-job-approve id))
+       (drgnx-job-summary id)))
+    ("job/approve" (drgnx-job-approve (plist-get params :id) :budget (drgnx-hub--value (plist-get params :budget)))
+     (drgnx-job-summary (plist-get params :id)))
+    ("job/stop" (drgnx-job-stop (plist-get params :id)) (drgnx-job-summary (plist-get params :id)))
+    ("job/resume" (drgnx-job-resume (plist-get params :id) :budget (drgnx-hub--value (plist-get params :budget)))
+     (drgnx-hub--save-registrations)
+     (drgnx-job-summary (plist-get params :id)))
+    ("job/status"
+     (if-let* ((id (drgnx-hub--value (plist-get params :id))))
+         (or (drgnx-job-summary id) (error "No job %s" id))
+       (list :jobs (mapcar #'drgnx-job-summary (drgnx-coord-jobs)))))
     (_ (list :error (format "no method %s" method)))))
+
+(defun drgnx-hub--value (v) "V from JSON, null as nil." (unless (eq v :null) v))
 
 (defun drgnx-hub-serving-p () "Is this Emacs the hub?" (and drgnx-hub--server (process-live-p drgnx-hub--server) t))
 
@@ -472,7 +491,7 @@ an error saying why not."
         ;; SIGPIPE ignored (the editing Emacs does not): an agent that hangs up must never end the hub
         (drgnx-jobs-start "drgnx-hub" (list "sh" "-c" "trap '' PIPE; exec \"$0\" \"$@\""
                                             (expand-file-name invocation-name invocation-directory) "--batch" "-Q"
-                                            "-L" (expand-file-name "core" drgnx-dir) "-l" "drgnx-hub" "-f" "drgnx-hub-main")
+                                            "--eval" "(setq load-prefer-newer t)" "-L" (expand-file-name "core" drgnx-dir) "-l" "drgnx-hub" "-f" "drgnx-hub-main")
                           :cwd (expand-file-name "~") :env env)
         (let ((deadline (+ (float-time) 5)))
           (while (and (not (drgnx-hub-running-p)) (< (float-time) deadline)) (sleep-for 0.1)))
