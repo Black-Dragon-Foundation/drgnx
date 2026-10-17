@@ -58,21 +58,24 @@ A function title is asked each time the dock shows (a panel's filter stays in it
 (defun drgnx-wb-sidebar-showing-p (&optional frame)
   (and (drgnx-wb--dock-windows frame) t))
 
+(defvar drgnx-rules--placing)           ; drgnx-rules.el: the dock's side windows are meant, not rerouted
+
 (defun drgnx-wb-show-sidebar ()
   "Show the left dock (all sections) without selecting it; keep the width it had."
   (unless (drgnx-wb-sidebar-showing-p)
     (let ((selected (selected-window)))
       (pcase-dolist (`(,name . ,spec) (sort (copy-sequence drgnx-wb--sections)
                                             (lambda (a b) (< (plist-get (cdr a) :slot) (plist-get (cdr b) :slot)))))
-        (display-buffer-in-side-window
-         (funcall (plist-get spec :buffer))
-         `((side . left) (slot . ,(plist-get spec :slot)) (window-width . ,drgnx-wb-dock-columns)
-           ,@(when (plist-get spec :height) `((window-height . ,(plist-get spec :height))))
-           (dedicated . t)
-           (window-parameters . ((drgnx-role . dock) (drgnx-section . ,name) (no-delete-other-windows . t)
-                                 (no-other-window . t)
-                                 (header-line-format . ,(let ((title (plist-get spec :title)))
-                                                          (if (functionp title) (funcall title) title))))))))
+        (let ((drgnx-rules--placing t))
+          (display-buffer-in-side-window
+           (funcall (plist-get spec :buffer))
+           `((side . left) (slot . ,(plist-get spec :slot)) (window-width . ,drgnx-wb-dock-columns)
+             ,@(when (plist-get spec :height) `((window-height . ,(plist-get spec :height))))
+             (dedicated . t)
+             (window-parameters . ((drgnx-role . dock) (drgnx-section . ,name) (no-delete-other-windows . t)
+                                   (no-other-window . t)
+                                   (header-line-format . ,(let ((title (plist-get spec :title)))
+                                                            (if (functionp title) (funcall title) title)))))))))
       (when-let* ((px (frame-parameter nil 'drgnx-wb-dock-px)) (w (car (drgnx-wb--dock-windows))))
         (let ((window-resize-pixelwise t))              ; or the width is rounded to whole columns
           (ignore-errors (window-resize w (- px (window-pixel-width w)) t nil t))))

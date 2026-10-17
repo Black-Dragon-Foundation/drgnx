@@ -164,6 +164,8 @@ left and right docks run the frame's full height, the panel sits under the edito
   "While reading, the minibuffer may grow (icomplete-vertical, fido-vertical); the echo area may not."
   (setq-local resize-mini-windows 'grow-only))
 (defconst drgnx-rules--entry '(drgnx-rules--condition (drgnx-rules--display)))
+(defconst drgnx-rules--persistent '(drgnx-role drgnx-section)
+  "Window parameters a saved window state keeps (`window-toggle-side-windows', `window-state-put').")
 
 (define-minor-mode drgnx-rules-mode
   "Show every buffer where the rules table says; set window defaults that never split or resize."
@@ -174,6 +176,8 @@ left and right docks run the frame's full height, the panel sits under the edito
           (setq drgnx-rules--saved (mapcar (lambda (d) (cons (car d) (symbol-value (car d)))) drgnx-rules--defaults)))
         (pcase-dolist (`(,var . ,val) drgnx-rules--defaults) (set var val))
         (setq display-buffer-alist (append (remove drgnx-rules--entry display-buffer-alist) (list drgnx-rules--entry)))
+        (dolist (p drgnx-rules--persistent)
+          (unless (assq p window-persistent-parameters) (push (cons p t) window-persistent-parameters)))
         (advice-add 'display-buffer-in-side-window :around #'drgnx-rules--side-window)
         (advice-add 'balance-windows :around #'drgnx-rules--balance)
         (add-hook 'minibuffer-setup-hook #'drgnx-rules--minibuffer-setup))
@@ -181,6 +185,8 @@ left and right docks run the frame's full height, the panel sits under the edito
     (advice-remove 'balance-windows #'drgnx-rules--balance)
     (remove-hook 'minibuffer-setup-hook #'drgnx-rules--minibuffer-setup)
     (setq display-buffer-alist (remove drgnx-rules--entry display-buffer-alist))
+    (setq window-persistent-parameters
+          (seq-remove (lambda (c) (memq (car c) drgnx-rules--persistent)) window-persistent-parameters))
     (pcase-dolist (`(,var . ,val) drgnx-rules--saved) (set var val))
     (setq drgnx-rules--saved nil)))
 
@@ -200,7 +206,7 @@ left and right docks run the frame's full height, the panel sits under the edito
 (drgnx-wb-place "\\`\\*drgnx unrouted\\*\\'" 'editor)
 ;; Files, and buffers that are worked in like files (lists, settings, dired), go to the editor.
 ;; Names too: several are displayed before their mode is set.
-(drgnx-wb-place (lambda (name _action) (buffer-file-name (get-buffer name))) 'editor)
+(drgnx-wb-place (lambda (name _action) (when-let* ((b (get-buffer name))) (buffer-file-name b))) 'editor)
 (drgnx-wb-place '(dired-mode Buffer-menu-mode ibuffer-mode Custom-mode proced-mode edit-abbrevs-mode
                              bookmark-bmenu-mode tabulated-list-mode command-history-mode)
                 'editor)
