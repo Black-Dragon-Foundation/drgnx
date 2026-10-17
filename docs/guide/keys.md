@@ -8,7 +8,7 @@ palette, the key sheet, which-key, the markdown cheat sheet — shows the keys t
 ## Choosing a profile
 
 **Preferences: Keyboard Profile…** (in the command palette and the Options menu) switches at once, without a
-restart, and remembers the choice in `keys.eld`:
+restart, and remembers the choice in `keys.eld` (`RET` with nothing typed keeps the current profile):
 
 | Preset | Stack (later layers win) |
 |---|---|

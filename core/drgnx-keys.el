@@ -473,7 +473,12 @@ Never prompts: problems are collected in `drgnx-keys-last'.  Returns the resolut
 
 (defun drgnx-keys-choose-profile (name)
   "Switch the key profile to the preset NAME and save it in keys.eld."
-  (interactive (list (completing-read "Keyboard profile: " drgnx-keys-presets nil t)))
+  (interactive (list (completing-read "Keyboard profile: " drgnx-keys-presets nil t nil nil
+                                      ;; RET at once: the current profile (else the default), never none
+                                      (or (car (rassoc (plist-get drgnx-keys-last :layers) drgnx-keys-presets))
+                                          (car (rassoc drgnx-keys-layers drgnx-keys-presets))))))
+  (unless (assoc name drgnx-keys-presets)
+    (user-error "No keyboard profile %S (profiles: %s)" name (mapconcat #'car drgnx-keys-presets ", ")))
   (let ((r (drgnx-keys-use (cdr (assoc name drgnx-keys-presets)) t)))
     (message "Keys: %s%s" name
              (if-let* ((n (length (plist-get r :conflicts))) ((> n 0)))

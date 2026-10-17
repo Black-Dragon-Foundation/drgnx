@@ -435,3 +435,16 @@
        (should (seq-find (lambda (p) (string-search "drgnx-keys-test-no-such-map" p)) problems)))
      (should (eq (plist-get (drgnx-keys-test--conflict drgnx-keys-last "C-c s") :kind) 'prefix))
      (should (seq-find (lambda (s) (string-match-p "\\`C-c s .*drgnx-keys-test--other" s)) (plist-get report :conflicts))))))
+
+(ert-deftest drgnx-keys/keyboard-profile-empty-answer-keeps-the-current-one ()
+  ;; M2.6-2: RET on an empty answer is the current profile, not `:layers nil'; an unknown name is an error.
+  (drgnx-keys-test--live
+   (drgnx-keys-test--write-user '(:layers ((emacs app editing window))))
+   (drgnx-keys-apply)
+   (cl-letf (((symbol-function 'completing-read)      ; RET at once: the default, as completing-read does
+              (lambda (_prompt _coll &optional _pred _req _init _hist def &rest _) (or (car (ensure-list def)) ""))))
+     (call-interactively #'drgnx-keys-choose-profile))
+   (should (equal (plist-get (drgnx-keys-read-user) :layers) '((emacs app editing window))))
+   (should-error (drgnx-keys-choose-profile "") :type 'user-error)
+   (should-error (drgnx-keys-choose-profile "Sublime") :type 'user-error)
+   (should (equal (plist-get (drgnx-keys-read-user) :layers) '((emacs app editing window))))))
