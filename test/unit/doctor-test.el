@@ -128,6 +128,31 @@
             (should-not (plist-member (drgnx-doctor-facts) :brew))))
       (delete-directory dir t))))
 
+(ert-deftest drgnx-doctor/drgnx-on-path-also-counts-the-zprofile-line ()
+  ;; A daemon the app started has no ~/.local/bin on its PATH: ~/.local/bin/drgnx there and ~/.zprofile putting
+  ;; ~/.local/bin on PATH is what Terminal sees — ok, not a warning.
+  (let* ((home (file-name-as-directory (make-temp-file "drgnx-doctor-home" t)))
+         (process-environment (cons (concat "HOME=" home) process-environment))
+         (zprofile (concat home ".zprofile")))
+    (unwind-protect
+        (cl-letf (((symbol-function 'executable-find) (lambda (&rest _) nil)))
+          (should-not (drgnx-doctor--drgnx-on-path))
+          (make-directory (concat home ".local/bin") t)
+          (write-region "" nil (concat home ".local/bin/drgnx"))
+          (should-not (drgnx-doctor--drgnx-on-path))                         ; there, but no PATH line
+          (write-region "# export PATH=\"$HOME/.local/bin:$PATH\"\n" nil zprofile)
+          (should-not (drgnx-doctor--drgnx-on-path))                         ; a comment is not a PATH line
+          (dolist (line (list "export PATH=\"$HOME/.local/bin:$PATH\"" "export PATH=\"${HOME}/.local/bin:$PATH\""
+                              "export PATH=~/.local/bin:$PATH" (format "export PATH=\"%s.local/bin:$PATH\"" home)))
+            (write-region (concat "eval \"$(/opt/homebrew/bin/brew shellenv)\"\n\n# added by the drgnx installer\n" line "\n")
+                          nil zprofile)
+            (should (drgnx-doctor--drgnx-on-path)))
+          (delete-file (concat home ".local/bin/drgnx"))
+          (should-not (drgnx-doctor--drgnx-on-path)))                        ; the line alone: no command
+      (delete-directory home t)))
+  (cl-letf (((symbol-function 'executable-find) (lambda (p &rest _) (and (equal p "drgnx") "/x/drgnx"))))
+    (should (drgnx-doctor--drgnx-on-path))))
+
 (ert-deftest drgnx-doctor/key-conflicts ()
   ;; The doctor reads the report the last drgnx session wrote (batch Emacs loads no modules).
   (let ((check (lambda (report) (drgnx-doctor-check 'key-conflicts (drgnx-doctor-test--facts :keys-report report)))))

@@ -281,9 +281,12 @@ print_plan() {
   say "3. Link $PREFIX/bin/drgnx → $DIR/bin/drgnx"
   note "Remember Emacs: $(planned_emacs)"
   say "4. Compile drgnx (drgnx build: byte-compiled, natively compiled as it loads)"
-  say "5. Run drgnx doctor"
   if [[ "$OS" == macos ]]; then
-    say "6. Install the drgnx app into $HOME/Applications/drgnx.app (Finder, Spotlight, the Dock, Open With), then open it"
+    say "5. Install the drgnx app into $HOME/Applications/drgnx.app (Finder, Spotlight, the Dock, Open With)"
+    say "6. Run drgnx doctor"
+    say "7. Open the drgnx app"
+  else
+    say "5. Run drgnx doctor"
   fi
 }
 
@@ -563,10 +566,11 @@ main() {
   remember_emacs
   say ""
   DRGNX_EMACS="$EMACS_BIN" "$DIR/bin/drgnx" build >/dev/null || warn "drgnx build failed: run $DIR/bin/drgnx build to see why (drgnx still runs, uncompiled)"
-  DRGNX_EMACS="$EMACS_BIN" "$DIR/bin/drgnx" doctor || warn "the doctor found problems (above)"
-  local app=""
+  local app=""   # the app and the PATH line first: the doctor checks them
   if [[ "$OS" == macos ]] && install_app; then app="$HOME/Applications/drgnx.app"; fi
   path_hint
+  say ""
+  DRGNX_EMACS="$EMACS_BIN" "$DIR/bin/drgnx" doctor || warn "the doctor found problems (above)"
   say ""
   if [[ "$OS" == macos ]]; then   # the app opens drgnx; the Dock shows Emacs while it runs
     say "Done."

@@ -40,12 +40,15 @@ machine at any time.
    otherwise installs one (table below).
 5. **drgnx:** clones it into `~/.local/share/drgnx/drgnx` (or fast-forwards an existing checkout, never
    discarding local changes), installing git first if it is missing, and links `~/.local/bin/drgnx`.
-6. **Compiles drgnx** (`drgnx build`) and **checks** it: runs `drgnx doctor` with the Emacs it found or installed.
+6. **Compiles drgnx** (`drgnx build`).
 7. **macOS: the drgnx app.** Installs `~/Applications/drgnx.app` (`drgnx macos-app`: Finder, Spotlight, the Dock,
    Open With — [opening.md](opening.md#on-macos-the-drgnx-app)); if that fails it warns and goes on.
 8. **PATH:** if `~/.local/bin` is not on your `PATH`, it offers to add one line to `~/.profile` (`~/.zprofile`
    when your shell is zsh) — only when you answer yes; with `--yes` it only prints the line and that file.
-9. **macOS: opens drgnx** (the app just installed), so the first start's Welcome takes over — only in a desktop
+9. **Checks** it all: runs `drgnx doctor` with the Emacs it found or installed — after the app and the PATH line, so
+   it checks what is there. On a Mac `drgnx` counts as on PATH when `~/.local/bin/drgnx` exists and `~/.zprofile`
+   puts `~/.local/bin` on PATH (what a new Terminal sees), also in a drgnx the app started, whose own PATH lacks it.
+10. **macOS: opens drgnx** (the app just installed), so the first start's Welcome takes over — only in a desktop
    session: not over SSH, and not under `--yes` without a terminal.
 
 Running it again is safe: a good Emacs is kept, the checkout is fast-forwarded.
@@ -97,7 +100,7 @@ What you see, step by step:
    installed, it asks **Add it to ~/.zprofile?** for Homebrew's line: answer `y`.
 3. Emacs comes from Homebrew: a download on Apple silicon with macOS 15 or newer, a build of about 30 minutes on Intel
    or an older macOS.
-4. After the doctor's check and the drgnx app, if `~/.local/bin` (where the `drgnx` command is) is not on your PATH yet,
+4. After the drgnx app, before the doctor's check, if `~/.local/bin` (where the `drgnx` command is) is not on your PATH yet,
    it asks **Add it to ~/.zprofile?** again: answer `y`. Lines added there work in every **new** Terminal window, not
    in the one already open.
 5. The drgnx app opens, and with it the Welcome: go on with [onboarding.md](onboarding.md).
@@ -122,7 +125,7 @@ The details:
   plan warns about it.
 - **Your Emacs configuration is never touched.** `~/.emacs.d` and `~/.config/emacs` are neither read nor written;
   drgnx starts with its own `--init-directory`.
-- **The drgnx app.** After the doctor it installs `~/Applications/drgnx.app` — drgnx in Finder, Spotlight and the
+- **The drgnx app.** Before the doctor it installs `~/Applications/drgnx.app` — drgnx in Finder, Spotlight and the
   Dock, and in Open With for folders and almost any file ([opening.md](opening.md#on-macos-the-drgnx-app)). A failure
   only warns (run `drgnx macos-app` later). It is never put in `/Applications` and never starts at login.
 - The last lines are "Done." and how to open drgnx next time — Spotlight (⌘Space, type "drgnx") or Launchpad, or

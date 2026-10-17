@@ -92,7 +92,23 @@ PLATFORM (`linux' or `macos'): only run on that platform, as `drgnx-platform' sa
   (require 'drgnx-macos)
   (list :macos-app (file-directory-p (expand-file-name "drgnx.app" drgnx-macos-app-dir))
         :brew (and (or (executable-find "brew") (seq-some #'file-executable-p drgnx-doctor--brew-programs)) t)
-        :drgnx-on-path (and (executable-find "drgnx") t)))
+        :drgnx-on-path (drgnx-doctor--drgnx-on-path)))
+
+(defun drgnx-doctor--drgnx-on-path ()
+  "Does Terminal find the drgnx command?  It is on this Emacs's PATH; or — a daemon the app started lacks
+~/.local/bin on its PATH — ~/.local/bin/drgnx is there and a line of ~/.zprofile (not a comment) puts ~/.local/bin
+on PATH."
+  (or (and (executable-find "drgnx") t)
+      (let ((zprofile (expand-file-name "~/.zprofile")))
+        (and (file-exists-p (expand-file-name "~/.local/bin/drgnx"))
+             (file-readable-p zprofile)
+             (with-temp-buffer
+               (insert-file-contents zprofile)
+               (re-search-forward (rx bol (* (not (any "#\n"))) "PATH=" (* nonl)
+                                      (or "$HOME" "${HOME}" "~" (literal (directory-file-name (expand-file-name "~"))))
+                                      "/.local/bin")
+                                  nil t))
+             t))))
 
 (defun drgnx-doctor-facts ()
   "Facts about the running Emacs and this machine."
@@ -315,7 +331,8 @@ MODEL), as a sentence, or nil."
                               (if (plist-get f :brew) (list 'ok "Homebrew found" nil)
                                 (list 'warn "Homebrew not found" "install Homebrew (https://brew.sh), or run the installer again"))))
 
-(drgnx-doctor-define 'drgnx-on-path :group "drgnx" :platform 'macos :doc "The drgnx command is on PATH (for Terminal)"
+(drgnx-doctor-define 'drgnx-on-path :group "drgnx" :platform 'macos
+                     :doc "The drgnx command is on PATH (for Terminal): on this PATH, or ~/.local/bin/drgnx with ~/.zprofile's PATH line"
                      :check (lambda (f)
                               (if (plist-get f :drgnx-on-path) (list 'ok "drgnx is on PATH" nil)
                                 (list 'warn "drgnx is not on PATH: Terminal does not find the command"

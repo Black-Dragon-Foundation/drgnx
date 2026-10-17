@@ -275,7 +275,9 @@
 
 (ert-deftest drgnx-install/the-macos-plan-names-the-app-and-linux-does-not ()
   (drgnx-install-test--expect (drgnx-install-test--run (cons "DRGNX_INSTALL_BREW=none" drgnx-install-test--macos) "--dry-run")
-                              "6. Install the drgnx app into " "/Applications/drgnx.app" "Finder, Spotlight, the Dock, Open With")
+                              "5. Install the drgnx app into " "/Applications/drgnx.app" "Finder, Spotlight, the Dock, Open With"
+                              "6. Run drgnx doctor" "7. Open the drgnx app")
+  (drgnx-install-test--expect (drgnx-install-test--plan "fedora-45") "5. Run drgnx doctor")
   (should-not (string-search "drgnx app" (cdr (drgnx-install-test--plan "fedora-45")))))
 
 (ert-deftest drgnx-install/macos-installs-the-app-and-opens-it-only-in-a-desktop-session ()
@@ -307,6 +309,8 @@
           (let ((r (funcall run "DRGNX_INSTALL_TTY=yes" "SSH_CONNECTION")))
             (should (= (car r) 0))
             (should (string-match-p "/Applications/drgnx\\.app\n" (cdr r)))
+            ;; the app first, then the doctor (which checks it): never "the app is missing" just before installing it
+            (should (< (string-search "Installing the drgnx app" (cdr r)) (string-search "31.1 t ns" (cdr r))))
             (should (string-search "Opening drgnx…" (cdr r)))
             (should (string-search "Next time: open drgnx with Spotlight" (cdr r)))
             (should (string-match-p "\\`open -a .*/Applications/drgnx\\.app\n\\'" (funcall opened))))
