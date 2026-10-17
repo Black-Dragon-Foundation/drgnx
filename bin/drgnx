@@ -143,6 +143,9 @@ usage: drgnx build              byte-compile drgnx (core, wb, modules); native c
        drgnx onboard [--non-interactive] [--again] [--preset minimal|ide|full-ai] [--keys NAME] [--theme THEME]
                      [--roots DIR…] [--todos] [--step ID]
                                set drgnx up: environment, keys, projects onto the board, daemon unit (docs/guide/onboarding.md)
+       drgnx check [--no-perf] [--no-gui] [--jobs N] [--shards N]
+                               build, then every test tier at once where it is safe (unit and live tests
+                               sharded; GUI jobs as memory allows; bench, then perf, alone); one summary
        drgnx fmt [--check] [FILE…]
                                format drgnx's Emacs Lisp (all of it, or FILEs); --check: only report
        drgnx work record [--task ID] [SHA…]
@@ -178,6 +181,9 @@ case "${1:-help}" in
   keys) shift; [[ "${1:-}" == diff ]] && shift
         emacs --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/harness" -L "$here/core" -L "$here/wb" \
               -l drgnx-keys-diff -f drgnx-keys-diff-cli -- "$@" ;;
+  check) shift
+        "${DRGNX_EMACS:-emacs}" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
+              -l drgnx-check -f drgnx-check-cli -- "$@" ;;
   fmt) shift
         "${DRGNX_EMACS:-emacs}" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
               -l drgnx-fmt -f drgnx-fmt-cli -- "$@" ;;

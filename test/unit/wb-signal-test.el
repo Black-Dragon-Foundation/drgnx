@@ -91,6 +91,7 @@
       (when (timerp drgnx-signal--timer) (cancel-timer drgnx-signal--timer)))))
 
 (ert-deftest drgnx-signal/a-flush-with-many-buffers-is-cheap ()
+  :tags '(:timing)                                      ; a quiet machine: bin/drgnx check runs it alone
   (drgnx-signal-test--with events
     (dotimes (i 1500) (drgnx-signal-test--file dir (format "f%04d.txt" i)))
     (drgnx-signal--flush)

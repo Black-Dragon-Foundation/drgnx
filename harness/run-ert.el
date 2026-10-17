@@ -31,7 +31,9 @@ summary to RESULTS-FILE.  Return t if every test passed."
                    for err = (condition-case err (progn (load file nil t) nil) (error err))
                    when err collect (list :name (concat "load " (file-name-nondirectory file))
                                           :condition (format "%S" err))))
-         (stats (ert-run-tests-batch t))
+         ;; which tests: all, or DRGNX_TEST_SELECTOR (an ERT selector; bin/drgnx check runs :timing ones alone)
+         (stats (ert-run-tests-batch (let ((s (getenv "DRGNX_TEST_SELECTOR")))
+                                       (if (and s (not (string-empty-p s))) (car (read-from-string s)) t))))
          (tests nil) (known-red nil) (failures nil))
     (cl-loop
      for test across (ert--stats-tests stats)

@@ -655,9 +655,17 @@ with EXTRA-ENV (\"K=V\" strings).  Return (RC RESULTS RUN)."
 
 (defun drgnx-ui-run-ui-tests ()
   "`drgnx test --ui': the GUI suite in a session, then the live suite here.  Return an exit code."
-  (require 'drgnx-run-ert (expand-file-name "run-ert.el" drgnx-ui-harness-dir))
   (let* ((t0 (float-time))
-         (timeout (string-to-number (or (getenv "DRGNX_UI_TEST_TIMEOUT") "110")))
+         (ok (eq 0 (drgnx-ui-run-ui-session-tests))))
+    (setq ok (and (drgnx-run-ert (expand-file-name "test/live" drgnx-ui-repo-dir)) ok))
+    (princ (format "ui tier: %s in %.1fs\n" (if ok "green" "RED") (- (float-time) t0)))
+    (if ok 0 1)))
+
+(defun drgnx-ui-run-ui-session-tests ()
+  "The GUI suite (test/ui) in a session — the first half of `drgnx test --ui', alone for bin/drgnx check (which
+runs the live suite in shards).  Return an exit code."
+  (require 'drgnx-run-ert (expand-file-name "run-ert.el" drgnx-ui-harness-dir))
+  (let* ((timeout (string-to-number (or (getenv "DRGNX_UI_TEST_TIMEOUT") "110")))
          (res (drgnx-ui-run-ert-session (expand-file-name "test/ui" drgnx-ui-repo-dir) timeout))
          (rc (nth 0 res)) (results (nth 1 res)) (run (nth 2 res))
          (ok (and (eq rc 0) results (eq (plist-get results :failed) 0))))
@@ -668,8 +676,6 @@ with EXTRA-ENV (\"K=V\" strings).  Return (RC RESULTS RUN)."
             (princ (format "  FAIL %s: %s\n" (plist-get f :name) (plist-get f :condition)))))
       (princ (format "ui ERT: no results (exit %s); log kept in %s\n" rc run)))
     (when ok (delete-directory run t))
-    (setq ok (and (drgnx-run-ert (expand-file-name "test/live" drgnx-ui-repo-dir)) ok))
-    (princ (format "ui tier: %s in %.1fs\n" (if ok "green" "RED") (- (float-time) t0)))
     (if ok 0 1)))
 
 (defun drgnx-ui--config-name (config)
@@ -792,6 +798,7 @@ CONFIG (default drgnx) and print each scenario: green, red (known) with its trac
   measure NAME ACTIONS-JSON                           several actions, one jank report
   mcp                                                 serve the drgnx-ui MCP tools on stdio
   test-ui                                             the --ui test tier
+  test-ui-session                                     its test/ui half alone (bin/drgnx check)
 See docs/develop/harness.md.")
 
 (defconst drgnx-ui--boolean-flags '("--daemon") "CLI options that take no value.")
@@ -836,6 +843,7 @@ a boolean flag (`drgnx-ui--boolean-flags') becomes :name t."
       ("measure" (drgnx-ui-measure (drgnx-ui-own-session name)
                                    (append (drgnx-ui--parse-json (or (nth 1 pos) "[]")) nil)))
       ("test-ui" (drgnx-ui-run-ui-tests))
+      ("test-ui-session" (drgnx-ui-run-ui-session-tests))
       ("test-scenario" (drgnx-ui-run-scenarios (plist-get opts :config) (plist-get opts :dir)))
       ("test-bench" (require 'drgnx-bench) (drgnx-bench-run))
       ("test-perf" (require 'drgnx-perf-run) (drgnx-perf-run (getenv "DRGNX_PERF_AUDIT")))

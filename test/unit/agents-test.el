@@ -80,6 +80,7 @@
     (should (equal (drgnx-agent-session-queue s) '("go left")))))
 
 (ert-deftest drgnx-agents/stop-ends-the-turn-within-a-second-and-keeps-the-queue ()
+  :tags '(:timing)                                      ; a quiet machine: bin/drgnx check runs it alone
   (skip-unless (file-readable-p "/proc/self/fd/0"))
   (drgnx-agents-test--with s nil
     (drgnx-agents-send s "slow one")

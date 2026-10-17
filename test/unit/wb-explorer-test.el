@@ -194,6 +194,7 @@
         (should (equal (drgnx-explorer-node-at (point)) (expand-file-name "d.txt" odd)))))))
 
 (ert-deftest drgnx-explorer/going-to-the-parent-is-fast ()
+  :tags '(:timing)                                      ; a quiet machine: bin/drgnx check runs it alone
   (drgnx-explorer-test--with root
     (let ((big (expand-file-name "big" root)))
       (make-directory big)

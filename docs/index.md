@@ -27,5 +27,6 @@ How drgnx is built, tested and measured.
 - [Performance](develop/perf.md): the perf lab — input latency, frames, GC, startup, memory, budgets, the soak, tuning.
 - [Scenarios](develop/scenarios.md): behaviour scenarios and the evidence behind the workbench design.
 - [Formatting](develop/formatting.md): `bin/drgnx fmt` — the Emacs Lisp formatter, and where it is enforced.
+- [bin/drgnx check](develop/check.md): build and every test tier in one parallel run; shards, GUI slots, phases.
 
 Docs are updated in the same commit as the code they describe.

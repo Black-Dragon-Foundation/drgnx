@@ -128,3 +128,19 @@
             (should (equal (file-name-nondirectory (plist-get (aref tests 0) :file)) "one-test.el"))
             (should (numberp (plist-get (aref tests 0) :seconds)))))
       (delete-directory tmp t))))
+
+(ert-deftest drgnx-run-ert/a-selector-picks-the-tests-a-run-takes ()
+  ;; bin/drgnx check runs the :timing tests alone, after the parallel phase: DRGNX_TEST_SELECTOR
+  (let* ((tmp (file-name-as-directory (make-temp-file "drgnx-sel" t))) (results (expand-file-name "r.json" tmp)))
+    (unwind-protect
+        (progn
+          (with-temp-file (concat tmp "sel-test.el")
+            (insert "(require 'ert)\n(ert-deftest sel-fast () :tags '(:timing) (should t))\n(ert-deftest sel-plain () (should t))\n"))
+          (let ((process-environment (append (list (concat "DRGNX_TEST_RESULTS=" results) "DRGNX_TEST_SELECTOR=(tag :timing)")
+                                             process-environment)))
+            (call-process (expand-file-name invocation-name invocation-directory) nil nil nil
+                          "--batch" "-Q" "-L" (file-name-directory (locate-library "run-ert.el"))
+                          "-l" (locate-library "run-ert.el") "-f" "drgnx-run-ert-batch" (concat tmp "sel-test.el")))
+          (should (equal (mapcar (lambda (te) (plist-get te :name)) (plist-get (drgnx-run-ert-test--json results) :tests))
+                         '("sel-fast"))))
+      (delete-directory tmp t))))

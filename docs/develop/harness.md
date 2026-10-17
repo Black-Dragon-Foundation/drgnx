@@ -17,9 +17,13 @@ how every drgnx UI change is developed and verified.
 | `bin/drgnx test --perf` / `--soak [MIN]` | input latency, frames, GC, startup and memory against budgets; the memory soak — see [perf.md](perf.md) | the host (needs mutter) |
 | `bin/drgnx test --install [NAME…]` | `install.sh` end to end in fresh distribution containers: source builds on Fedora 44, Debian 13, Ubuntu 26.04, packages on Fedora 45 and Arch; then the doctor, a second run (no-op) and `--dry-run` (no changes) — see [install.md](../guide/install.md) | podman, docker or nerdctl; slow, network |
 
-`harness/run-ert.el` runs a suite and writes a JSON summary
-(`{"total","passed","failed","failures":[{"name","condition"}]}`) to `$DRGNX_TEST_RESULTS` when set; the
-summary is the source of truth for GUI runs, whose exit status is only pass/fail.
+`bin/drgnx check` runs the build and all of these host tiers in one go, in parallel where that is safe — see
+[check.md](check.md).
+
+`harness/run-ert.el` runs a suite — a directory, or test files (a shard) — and writes a JSON summary
+(`{"total","passed","failed","failures":[{"name","condition"}],"tests":[{"name","result","file","seconds"}]}`) to
+`$DRGNX_TEST_RESULTS` when set; the summary is the source of truth for GUI runs, whose exit status is only
+pass/fail. `$DRGNX_TEST_SELECTOR` (an ERT selector, e.g. `(tag :timing)`) picks the tests a run takes.
 
 A GUI run's ERT suite executes inside the session (`DRGNX_UI_TEST` names the suite directory), writes its
 summary to `DRGNX_UI_RESULTS` and exits. mutter turns any nonzero Emacs exit code into `1`, so the runner
