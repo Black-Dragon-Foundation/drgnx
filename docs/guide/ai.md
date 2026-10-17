@@ -22,8 +22,9 @@ a chain of providers and models tried in order, so a feature keeps working when 
 | `llamafile` | llamafile | `http://localhost:8081/v1` (start it with `--port 8081`) |
 | `tei` | Text Embeddings Inference | `http://localhost:8080` |
 
-Add your own, or move one, in `ai.eld` in drgnx's config directory (`~/.config/drgnx/ai.eld`); a project can do the
-same in `.drgnx/ai.eld` at its root, and wins:
+Add your own, or move one, in `ai.eld` in drgnx's config directory (`~/.config/drgnx/ai.eld`); a project's `.drgnx/ai.eld` at its
+root can choose **roles** (and wins), among the providers the presets and your `ai.eld` define — never a provider
+or a key variable of its own, so a cloned repository cannot send your code, or a key, somewhere you did not choose:
 
 ```elisp
 (:version 1
@@ -57,14 +58,14 @@ question. Anything else you do clears it and drops the question in flight.
 | `Escape` | dismiss it | the usual |
 
 **Accept Suggestion Line** and **Toggle AI Completion** are in the palette. With no `complete` provider running,
-nothing is asked, and drgnx says so once.
+nothing is asked, and drgnx says so once; it looks for running providers again at most once a minute.
 
 **Tab is one key for everything.** It does the first of these that applies:
 1. accept the suggestion;
 2. the completion popup's own Tab (corfu, company, built-in completion);
 3. the next snippet field (yasnippet, tempel);
 4. cycle an org or outline heading;
-5. indent.
+5. what Tab does in that mode without ghost text (a mode's own Tab — cperl, octave, ESS), else indent.
 
 ## Inline edit
 
@@ -77,13 +78,15 @@ changes until you decide:
 - `C-c C-c` (Done) puts the hunks you applied into the buffer's region;
 - `C-c C-k` (Reject), or closing the diff, drops it all.
 
-Edits you make elsewhere in the buffer meanwhile stay. If the region itself changed since the answer came, Done
-refuses rather than overwrite it.
+Edits you make elsewhere in the buffer meanwhile stay — text typed right before or after the region too. If the
+region itself changed while the model answered, no review opens; if it changed since, Done refuses rather than
+overwrite it.
 
 ## Ask the Codebase
 
 **Ask the Codebase…** (Vim `SPC a q`; the palette) answers a question about the project from its own code:
-1. Up to six of the question's words (four letters or more) are searched for with ripgrep (grep without it).
+1. Up to six of the question's words (four letters or more) are searched for with ripgrep (grep without it), never in dot files or directories (`.env`, `.git`) — what
+   is found goes to a model.
 2. The five files that hold the most of them each give a snippet around their first match.
 3. The snippets and the question go to the `chat` role.
 
@@ -93,7 +96,8 @@ in M10.
 
 ## Choosing a provider and model
 
-**Choose AI Provider/Model…** asks for a role, then a provider. Only providers that can be asked are offered: local
+**Choose AI Provider/Model…** first looks for what runs here now (a second at most), then asks for a role and a
+provider. Only providers that can be asked are offered: local
 ones the probe found running, remote ones with their key. Then it asks for a model, offering the ones the provider
 reported. It makes one test call. Only if that answers is the choice kept: at the head of the role's chain in
 `ai.eld`, with the previous providers behind it as fallbacks. A key is never written there.
@@ -108,7 +112,7 @@ asks for the key only when it sends.
 
 drgnx asks the local providers whether they run — every address at once, one second each, in the background,
 never holding up Emacs — and remembers which answered and which models they have (a probe updates the providers it
-asked; what it knows of the others stays). It probes once Emacs is first idle, and again in onboarding. Something
+asked; what it knows of the others stays). It probes once Emacs is first idle, again in onboarding and Choose, and while no `complete` provider runs. Something
 answering on TEI's
 port is taken for TEI only when its `/info` says so (LocalAI can answer there too).
 
@@ -126,7 +130,7 @@ drgnx reads a key when a feature needs it, from where you already keep it: the p
 (`OPENROUTER_API_KEY` for OpenRouter), else auth-source (`~/.authinfo`, `~/.authinfo.gpg`, your keyring) with the
 provider's host — e.g. `machine openrouter.ai password sk-or-…`. drgnx never writes a key anywhere, never puts one
 on a command line and never sends one to a model. Sources that may ask for a passphrase (`.gpg` files, keyrings)
-are only read from commands you run; background features use the environment or a key read earlier.
+are only read from commands you run (Edit with AI, Ask the Codebase, Choose, onboarding); background features use the environment or a key read earlier.
 
 ## Agents
 

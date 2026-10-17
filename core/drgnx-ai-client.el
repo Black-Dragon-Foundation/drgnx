@@ -16,7 +16,7 @@
 (require 'drgnx-ai)
 
 (cl-defstruct (drgnx-ai-request (:constructor drgnx-ai--make-request) (:copier nil))
-  process cancelled callback chain kind payload timeout fallbacks)
+  process cancelled callback chain kind payload timeout fallbacks interactive)
 
 ;;;; curl
 
@@ -27,8 +27,7 @@
 (cl-defun drgnx-ai--curl (url callback &key body key (timeout 30))
   "Request URL (POST BODY, a plist, when given) with KEY as a bearer token; CALLBACK gets (STATUS TEXT): the HTTP
 status (0 when no answer came) and the answer.  Returns the process."
-  (let* ((out (generate-new-buffer " *drgnx-ai*" t)) (err (generate-new-buffer " *drgnx-ai-err*" t))
-         (config (concat "url = " (drgnx-ai--config-string url) "\n"
+  (let* ((config (concat "url = " (drgnx-ai--config-string url) "\n"
                          (format "max-time = %s\n" timeout)
                          "silent\nshow-error\n"
                          "write-out = \"\\n%{http_code}\"\n"
@@ -36,20 +35,24 @@ status (0 when no answer came) and the answer.  Returns the process."
                                           "data-binary = " (drgnx-ai--config-string (json-serialize body)) "\n")
                            "")
                          (if key (concat "header = " (drgnx-ai--config-string (concat "Authorization: Bearer " key)) "\n") "")))
-         (proc (make-process :name "drgnx-ai" :buffer out :command '("curl" "-K" "-") :connection-type 'pipe
-                             :coding 'binary :noquery t :stderr err
-                             :sentinel
-                             (lambda (p _)
-                               (unless (process-live-p p)
-                                 (let* ((text (with-current-buffer (process-buffer p) (decode-coding-string (buffer-string) 'utf-8-unix)))   ; the answer exactly: no EOL conversion
-                                        (cut (string-match "\n\\([0-9]+\\)\\'" text))
-                                        (status (if cut (string-to-number (match-string 1 text)) 0)))
-                                   (kill-buffer (process-buffer p))
-                                   (when (buffer-live-p err) (kill-buffer err))
-                                   (unless (process-get p :cancelled)
-                                     (with-demoted-errors "drgnx ai: %S"
-                                       (funcall callback (if (eql 0 (process-exit-status p)) status 0)
-                                                (if cut (substring text 0 cut) text))))))))))
+         ;; the buffers after the config (it may not encode) and gone again if curl does not start
+         (out (generate-new-buffer " *drgnx-ai*" t)) (err (generate-new-buffer " *drgnx-ai-err*" t))
+         (proc (condition-case e
+                   (make-process :name "drgnx-ai" :buffer out :command '("curl" "-K" "-") :connection-type 'pipe
+                                 :coding 'binary :noquery t :stderr err
+                                 :sentinel
+                                 (lambda (p _)
+                                   (unless (process-live-p p)
+                                     (let* ((text (with-current-buffer (process-buffer p) (decode-coding-string (buffer-string) 'utf-8-unix)))   ; the answer exactly: no EOL conversion
+                                            (cut (string-match "\n\\([0-9]+\\)\\'" text))
+                                            (status (if cut (string-to-number (match-string 1 text)) 0)))
+                                       (kill-buffer (process-buffer p))
+                                       (when (buffer-live-p err) (kill-buffer err))
+                                       (unless (process-get p :cancelled)
+                                         (with-demoted-errors "drgnx ai: %S"
+                                           (funcall callback (if (eql 0 (process-exit-status p)) status 0)
+                                                    (if cut (substring text 0 cut) text))))))))
+                 (error (kill-buffer out) (kill-buffer err) (signal (car e) (cdr e))))))
     (process-send-string proc (encode-coding-string config 'utf-8))
     (process-send-eof proc)
     proc))
@@ -87,13 +90,14 @@ status (0 when no answer came) and the answer.  Returns the process."
 
 ;;;; Requests along a role
 
-(cl-defun drgnx-ai-request (role kind payload callback &key (timeout 30) chain)
+(cl-defun drgnx-ai-request (role kind payload callback &key (timeout 30) chain interactive)
   "Ask ROLE's providers (or CHAIN's: ((PROVIDER . MODEL)…)), in order, for a KIND answer (`chat': PAYLOAD
 (:messages [(:role :content)…]); `fim': (:prefix :suffix :max-tokens)).  CALLBACK gets (TEXT INFO): INFO
-(:provider :model :fallbacks ((PROVIDER . WHY)…)), and :error when no provider answered (TEXT nil).  Returns a
-handle for `drgnx-ai-cancel'."
+(:provider :model :fallbacks ((PROVIDER . WHY)…)), and :error when no provider answered (TEXT nil).  INTERACTIVE:
+a command the user ran (keys may come from sources that ask, see `drgnx-ai-key').  Returns a handle for
+`drgnx-ai-cancel'."
   (let ((h (drgnx-ai--make-request :callback callback :chain (or chain (drgnx-ai-role role)) :kind kind :payload payload
-                                   :timeout timeout)))
+                                   :timeout timeout :interactive interactive)))
     (drgnx-ai--next h)
     h))
 
@@ -107,28 +111,32 @@ handle for `drgnx-ai-cancel'."
                                   (mapconcat (lambda (f) (format "%s: %s" (car f) (cdr f))) (reverse (drgnx-ai-request-fallbacks h)) "; ")
                                 "no provider for this")))
       (let* ((id (car step)) (model (cdr step)) (p (drgnx-ai-provider id))
-             (key (and (plist-get p :key-env) (drgnx-ai-key id)))
+             (key (and p (plist-get p :key-env) (drgnx-ai-key id (drgnx-ai-request-interactive h))))
              (skip (cond ((null p) "not configured")
                          ((not (memq kind (plist-get p :caps))) (format "cannot %s" kind))
                          ((and (plist-get p :key-env) (not key)) "no key"))))
         (if skip
             (progn (push (cons id skip) (drgnx-ai-request-fallbacks h)) (drgnx-ai--next h))
           (pcase-let ((`(,url . ,body) (drgnx-ai--endpoint p kind model (drgnx-ai-request-payload h))))
-            (setf (drgnx-ai-request-process h)
-                  (drgnx-ai--curl url
-                                  (lambda (status text)
-                                    (let* ((json (and (<= 200 status 299)
-                                                      (ignore-errors (json-parse-string text :object-type 'plist :null-object nil :false-object nil))))
-                                           (out (and json (drgnx-ai--extract p kind json))))
-                                      (if (stringp out)
-                                          (funcall (drgnx-ai-request-callback h) out
-                                                   (list :provider id :model model :fallbacks (reverse (drgnx-ai-request-fallbacks h))))
-                                        (push (cons id (cond ((eql status 0) "no answer")
-                                                             ((not (<= 200 status 299)) (format "HTTP %d" status))
-                                                             (t "an answer that does not parse")))
-                                              (drgnx-ai-request-fallbacks h))
-                                        (unless (drgnx-ai-request-cancelled h) (drgnx-ai--next h)))))
-                                  :body body :key key :timeout (drgnx-ai-request-timeout h)))
+            (condition-case e
+                (setf (drgnx-ai-request-process h)
+                      (drgnx-ai--curl url
+                                      (lambda (status text)
+                                        (let* ((json (and (<= 200 status 299)
+                                                          (ignore-errors (json-parse-string text :object-type 'plist :null-object nil :false-object nil))))
+                                               (out (and json (drgnx-ai--extract p kind json))))
+                                          (if (stringp out)
+                                              (funcall (drgnx-ai-request-callback h) out
+                                                       (list :provider id :model model :fallbacks (reverse (drgnx-ai-request-fallbacks h))))
+                                            (push (cons id (cond ((eql status 0) "no answer")
+                                                                 ((not (<= 200 status 299)) (format "HTTP %d" status))
+                                                                 (t "an answer that does not parse")))
+                                                  (drgnx-ai-request-fallbacks h))
+                                            (unless (drgnx-ai-request-cancelled h) (drgnx-ai--next h)))))
+                                      :body body :key key :timeout (drgnx-ai-request-timeout h)))
+              ;; a body that does not encode (a raw byte), no curl: a reason, and the next provider
+              (error (push (cons id (format "cannot send (%s)" (error-message-string e))) (drgnx-ai-request-fallbacks h))
+                     (drgnx-ai--next h)))
             (when (drgnx-ai-request-cancelled h) (drgnx-ai-cancel h))))))))
 
 (defun drgnx-ai-cancel (h)

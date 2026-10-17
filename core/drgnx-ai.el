@@ -47,31 +47,46 @@
 
 (defun drgnx-ai-file () (expand-file-name "ai.eld" (drgnx-user-dir)))
 
+(defvar drgnx-ai--read-cache (make-hash-table :test #'equal)
+  "FILE → (MTIME . FORM): ai.eld files are read again only when they change (ghost text asks on every pause).")
+
 (defun drgnx-ai--read (file)
-  (and file (file-readable-p file)
-       (ignore-errors (with-temp-buffer (insert-file-contents file) (read (current-buffer))))))
+  "FILE's form, or nil when FILE is missing; `drgnx-ai-unreadable' when it exists but does not read."
+  (let* ((attrs (and file (file-attributes file)))
+         (mtime (and attrs (list (file-attribute-modification-time attrs) (file-attribute-size attrs)))))
+    (if (not mtime) (progn (remhash file drgnx-ai--read-cache) nil)
+      (let ((hit (gethash file drgnx-ai--read-cache)))
+        (if (and hit (equal (car hit) mtime)) (cdr hit)
+          (let ((form (condition-case nil
+                          (with-temp-buffer (insert-file-contents file) (read (current-buffer)))
+                        (error 'drgnx-ai-unreadable))))
+            (puthash file (cons mtime form) drgnx-ai--read-cache)
+            form))))))
+
+(defun drgnx-ai--config (file)
+  "FILE's configuration plist, nil when it is missing or does not read."
+  (let ((c (drgnx-ai--read file))) (and (consp c) c)))
 
 (defun drgnx-ai--project-file ()
-  (when-let* ((dir (locate-dominating-file default-directory ".drgnx/ai.eld")))
-    (expand-file-name ".drgnx/ai.eld" dir)))
-
-(defun drgnx-ai--configs ()
-  "The user's and the project's ai.eld (project last: it wins)."
-  (delq nil (list (drgnx-ai--read (drgnx-ai-file)) (drgnx-ai--read (drgnx-ai--project-file)))))
+  "The project's .drgnx/ai.eld; never looked for on a remote directory (a timer asks: no remote round-trips)."
+  (unless (file-remote-p default-directory)
+    (when-let* ((dir (locate-dominating-file default-directory ".drgnx/ai.eld")))
+      (expand-file-name ".drgnx/ai.eld" dir))))
 
 (defun drgnx-ai-providers ()
-  "Every provider: the presets, then the user's and the project's (a later entry replaces one with its id)."
+  "Every provider: the presets, then the user's ai.eld (an entry replaces a preset with its id).  A project's
+ai.eld never adds or changes one: a cloned repository must not choose where your code and keys go."
   (let ((ps (copy-sequence drgnx-ai-presets)))
-    (dolist (c (drgnx-ai--configs))
-      (dolist (p (plist-get c :providers))
-        (setq ps (cons p (assq-delete-all (car p) ps)))))
+    (dolist (p (plist-get (drgnx-ai--config (drgnx-ai-file)) :providers))
+      (setq ps (cons p (assq-delete-all (car p) ps))))
     ps))
 
 (defun drgnx-ai-provider (id) (alist-get id (drgnx-ai-providers)))
 
 (defun drgnx-ai-role (role)
   "ROLE's chain ((PROVIDER . MODEL)…): the project's, else the user's, else the default."
-  (or (seq-some (lambda (c) (alist-get role (plist-get c :roles))) (reverse (drgnx-ai--configs)))
+  (or (alist-get role (plist-get (drgnx-ai--config (drgnx-ai--project-file)) :roles))
+      (alist-get role (plist-get (drgnx-ai--config (drgnx-ai-file)) :roles))
       (alist-get role drgnx-ai-default-roles)))
 
 ;;;; Keys
@@ -116,9 +131,14 @@ CLI gets nothing: it uses its own login, which drgnx never reads."
 ;;;; Choosing (written to ai.eld: providers and models, never a key)
 
 (defun drgnx-ai-set-role (role chain)
-  "Make CHAIN ((PROVIDER . MODEL)…) ROLE's in the user's ai.eld; everything else in it stays."
+  "Make CHAIN ((PROVIDER . MODEL)…) ROLE's in the user's ai.eld; everything else in it stays.  An ai.eld that
+does not read is never replaced: the error says so."
   (let* ((file (drgnx-ai-file))
-         (conf (or (drgnx-ai--read file) (list :version 1)))
+         (read (drgnx-ai--read file))
+         (conf (cond ((eq read 'drgnx-ai-unreadable)
+                      (user-error "%s does not read: fix it first (nothing was written)" (abbreviate-file-name file)))
+                     ((consp read) read)
+                     (t (list :version 1))))
          (roles (plist-get conf :roles)))
     (setf (alist-get role roles) chain)
     (setq conf (plist-put conf :roles roles))

@@ -44,6 +44,32 @@
 
 (defvar drgnx-ai-client-test--roles nil)
 
+(ert-deftest drgnx-ai-client/a-command-may-read-keys-that-ask-a-timer-never ()
+  ;; a key only in ~/.authinfo.gpg: commands the user runs (Edit with AI, Ask, Choose) may read it
+  (drgnx-ai-client-test--with '((:path "/v1/chat/completions" :body "{\"choices\":[{\"message\":{\"content\":\"hi\"}}]}"))
+    (let ((process-environment (cons "A_KEY" process-environment)) (asked nil) result)
+      (cl-letf (((symbol-function 'drgnx-ai-key) (lambda (_id &optional interactive) (push interactive asked) (and interactive "sk-gpg"))))
+        (should (string-search "no key" (plist-get (cdr (drgnx-ai-client-test--call '((a . "m")) 'chat '(:messages [(:role "user" :content "x")]))) :error)))
+        (drgnx-ai-request 'test 'chat '(:messages [(:role "user" :content "x")]) (lambda (text _) (setq result text))
+                          :chain '((a . "m")) :interactive t)
+        (let ((deadline (+ (float-time) 5))) (while (and (not result) (< (float-time) deadline)) (accept-process-output nil 0.02)))
+        (should (equal result "hi"))
+        (should (equal asked '(t nil)))
+        (should (drgnx-ai-usable-p 'a 'chat t))
+        (should-not (drgnx-ai-usable-p 'a 'chat))))))
+
+(ert-deftest drgnx-ai-client/what-cannot-be-sent-falls-back-and-leaves-nothing-behind ()
+  ;; a raw byte in the buffer (json-serialize refuses it), no curl: a reason, never an error in a timer
+  (drgnx-ai-client-test--with '((:path "/api/generate" :body "{\"response\":\"ok\"}"))
+    (let ((buffers (length (buffer-list))))
+      (let ((r (drgnx-ai-client-test--call '((o . "m")) 'fim (list :prefix (string (unibyte-char-to-multibyte #xff)) :suffix ""))))
+        (should-not (car r))
+        (should (string-search "cannot send" (plist-get (cdr r) :error))))
+      (let* ((exec-path nil) (r (drgnx-ai-client-test--call '((o . "m")) 'fim '(:prefix "a" :suffix ""))))
+        (should-not (car r))
+        (should (string-search "cannot send" (plist-get (cdr r) :error))))
+      (should (= (length (buffer-list)) buffers)))))
+
 (defun drgnx-ai-client-test--log (log) (if (file-exists-p log) (with-temp-buffer (insert-file-contents log) (buffer-string)) ""))
 
 (ert-deftest drgnx-ai-client/chat-and-fill-in-the-middle-for-each-kind-of-provider ()

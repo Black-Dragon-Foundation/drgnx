@@ -35,6 +35,7 @@
 (defvar drgnx-ai-ghost--timer nil)
 (defvar drgnx-ai-ghost-mode)                            ; the minor mode, defined below
 (defvar drgnx-ai-ghost--said-unavailable nil "Told once this session that no provider completes.")
+(defvar drgnx-ai-ghost--last-probe 0 "When a pause with no provider last asked the probe to look again.")
 
 (defvar drgnx-ai-ghost-showing-map (make-sparse-keymap) "Keys active only while a suggestion shows.")
 (defvar drgnx-ai-ghost--emulation (list (cons 'drgnx-ai-ghost--showing drgnx-ai-ghost-showing-map)))
@@ -74,9 +75,14 @@
   "Ask for a suggestion at point (the pause has come).  Says once when no provider completes."
   (when (and drgnx-ai-ghost-mode (not buffer-read-only))
     (if (not (drgnx-ai-ghost--available-p))
-        (unless drgnx-ai-ghost--said-unavailable
-          (setq drgnx-ai-ghost--said-unavailable t)
-          (message "AI completion: no provider for `complete' is running (AI: Choose Provider/Model)"))
+        (progn
+          (unless drgnx-ai-ghost--said-unavailable
+            (setq drgnx-ai-ghost--said-unavailable t)
+            (message "AI completion: no provider for `complete' is running (AI: Choose Provider/Model)"))
+          ;; a runner started since: looked for at most once a minute (in the background)
+          (when (> (- (float-time) drgnx-ai-ghost--last-probe) 60)
+            (setq drgnx-ai-ghost--last-probe (float-time))
+            (drgnx-ai-probe nil)))
       (when drgnx-ai-ghost--request (drgnx-ai-cancel drgnx-ai-ghost--request))
       (let ((buf (current-buffer)) (tick (buffer-chars-modified-tick)) (pt (point)))
         (setq drgnx-ai-ghost--request
@@ -109,7 +115,8 @@
             (run-with-idle-timer drgnx-ai-ghost-delay nil
                                  ;; the buffer on screen, whatever is current (the timer may fire inside a wait)
                                  (lambda () (when (and (buffer-live-p buf) (eq buf (window-buffer (selected-window))))
-                                              (with-current-buffer buf (drgnx-ai-ghost--trigger)))))))))
+                                              (with-current-buffer buf
+                                                (with-demoted-errors "AI completion: %S" (drgnx-ai-ghost--trigger))))))))))
 
 (define-minor-mode drgnx-ai-ghost-mode
   "Ghost-text completion from the `complete' role; Tab is `drgnx-ai-tab'."
@@ -181,7 +188,13 @@ field; cycle the heading; indent."
         ((bound-and-true-p tempel--active) 'tempel-next)
         ((and (derived-mode-p 'org-mode) (org-at-heading-p)) 'org-cycle)
         ((and (bound-and-true-p outline-minor-mode) (outline-on-heading-p)) 'outline-cycle)
-        (t 'indent-for-tab-command)))
+        (t (drgnx-ai--own-tab))))
+
+(defun drgnx-ai--own-tab ()
+  "What Tab does here without ghost text's keys (a mode's own Tab: cperl, octave, ESS…), else indent."
+  (let* ((drgnx-ai-ghost-mode nil) (drgnx-ai-ghost--showing nil)
+         (cmd (or (key-binding [tab]) (key-binding (kbd "TAB")))))
+    (if (and cmd (symbolp cmd) (not (eq cmd 'drgnx-ai-tab))) cmd 'indent-for-tab-command)))
 
 (defun drgnx-ai-tab ()
   "Tab: accept a suggestion, else the popup's, the snippet's, the heading's or the indent Tab."
@@ -220,18 +233,25 @@ hunk by hunk before anything changes."
               (or (bounds-of-thing-at-point 'defun) (cons (line-beginning-position) (line-end-position))))))
      (list (read-string "Edit with AI: ") (car b) (cdr b))))
   (let* ((buf (current-buffer))
-         (s (copy-marker start)) (e (copy-marker end t))
+         ;; text typed right at either edge stays outside the region
+         (s (copy-marker start t)) (e (copy-marker end))
          (text (buffer-substring-no-properties start end)))
     (message "AI edit: asking…")
     (drgnx-ai-request 'edit 'chat
                       (list :messages (vector (list :role "system" :content drgnx-ai-edit-system)
                                               (list :role "user" :content (format "Instruction: %s\n\nCode:\n%s" instruction text))))
                       (lambda (answer info)
-                        (if (not answer)
-                            (message "AI edit: no answer (%s)" (plist-get info :error))
-                          (let ((new (drgnx-ai--strip-fence answer)))
-                            (when (and (string-suffix-p "\n" text) (not (string-suffix-p "\n" new))) (setq new (concat new "\n")))
-                            (when (buffer-live-p buf) (drgnx-ai--edit-review buf s e new))))))))
+                        (cond
+                         ((not answer) (message "AI edit: no answer (%s)" (plist-get info :error)))
+                         ((not (buffer-live-p buf)))
+                         ;; the answer rewrites the text that was sent: if that changed meanwhile, the review would
+                         ;; drop the newer edits
+                         ((not (equal (with-current-buffer buf (buffer-substring-no-properties s e)) text))
+                          (message "AI edit: the region changed while the model answered; run Edit with AI again"))
+                         (t (let ((new (drgnx-ai--strip-fence answer)))
+                              (when (and (string-suffix-p "\n" text) (not (string-suffix-p "\n" new))) (setq new (concat new "\n")))
+                              (drgnx-ai--edit-review buf s e new)))))
+                      :interactive t)))
 
 (defun drgnx-ai--edit-review (buf start end new)
   "Show NEW for BUF's region START..END (markers) as a diff against a copy of BUF as it is now."
@@ -320,7 +340,10 @@ region itself changed since the answer came."
          (cmd (if (executable-find "rg")
                   (append (list "rg" "--no-heading" "--line-number" "--ignore-case" "--max-count" "5" "--max-columns" "300")
                           (seq-mapcat (lambda (k) (list "-e" k)) kws) (list "."))
-                (append (list "grep" "-rIn" "-i" "-m" "5") (seq-mapcat (lambda (k) (list "-e" k)) kws) (list ".")))))
+                ;; as ripgrep does: never a dot file or directory (.env, .git, .authinfo) — what is found goes to a
+                ;; model (".?*": the starting "." itself is searched)
+                (append (list "grep" "-rIn" "-i" "-m" "5" "--exclude=.*" "--exclude-dir=.?*")
+                        (seq-mapcat (lambda (k) (list "-e" k)) kws) (list ".")))))
     (if (null kws) (progn (kill-buffer out) (funcall done nil))
       (let ((default-directory (file-name-as-directory root)))
         (make-process
@@ -388,7 +411,8 @@ best snippets go to the `chat' role with it, the answer cites the files."
                                                          (mapconcat (lambda (s) (format "--- %s:%d\n%s" (plist-get s :file) (plist-get s :line) (plist-get s :text)))
                                                                     snippets "\n")))))
                     (lambda (answer info)
-                      (drgnx-ai--answer-buffer question (or answer (format "No answer: %s" (plist-get info :error))) snippets root)))))))))
+                      (drgnx-ai--answer-buffer question (or answer (format "No answer: %s" (plist-get info :error))) snippets root))
+                    :interactive t)))))))
 
 ;;;; Choose Provider/Model
 
@@ -396,9 +420,13 @@ best snippets go to the `chat' role with it, the answer cites the files."
   "Choose the provider and model of a role (from what runs here and what has a key), test it with one call,
 and keep it in ai.eld (never a key)."
   (interactive)
+  ;; what runs here now (a runner started since the last probe counts): at most the probe's one second
+  (let ((done nil) (deadline (+ (float-time) 2)))
+    (drgnx-ai-probe (lambda () (setq done t)))
+    (while (and (not done) (< (float-time) deadline)) (accept-process-output nil 0.05)))
   (let* ((role (intern (completing-read "AI role: " '("complete" "edit" "chat" "embed") nil t)))
          (cap (pcase role ('complete 'fim) ('embed 'embed) (_ 'chat)))
-         (ids (mapcar #'car (seq-filter (lambda (e) (drgnx-ai-usable-p (car e) cap)) (drgnx-ai-providers))))
+         (ids (mapcar #'car (seq-filter (lambda (e) (drgnx-ai-usable-p (car e) cap t)) (drgnx-ai-providers))))
          (id (intern (completing-read (format "Provider for %s: " role) (mapcar #'symbol-name ids) nil t)))
          (model (completing-read "Model: " (plist-get (alist-get id drgnx-ai-detected) :models)))
          (keep (lambda ()
@@ -412,7 +440,7 @@ and keep it in ai.eld (never a key)."
                         (lambda (text info)
                           (if text (funcall keep)
                             (message "AI: %s/%s did not answer (%s); %s is unchanged" id model (plist-get info :error) role)))
-                        :chain (list (cons id model)) :timeout 20))))
+                        :chain (list (cons id model)) :timeout 20 :interactive t))))
 
 ;;;; The module
 

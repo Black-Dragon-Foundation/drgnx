@@ -58,6 +58,22 @@ provider `o' served by a mock answering ANSWER, its LOG."
       (should (string-search "(twist widget)" sent))
       (should-not (string-search "unrelated" sent)))))
 
+(ert-deftest drgnx-ai-ask/hidden-files-never-reach-the-model ()
+  ;; .env, .git and other dot files: never searched, with ripgrep or with grep
+  (dolist (rg (if (executable-find "rg") '(t nil) '(nil)))
+    (drgnx-ai-ask-test--with "ok"
+      (make-directory (concat root "proj/.git") t)
+      (write-region "FROBNICATE_TOKEN=hidden-env-value\n" nil (concat root "proj/.env") nil 'silent)
+      (write-region "frobnicate hidden-git-value\n" nil (concat root "proj/.git/notes") nil 'silent)
+      (let ((orig (symbol-function 'executable-find)))
+        (cl-letf (((symbol-function 'executable-find) (lambda (name &rest r) (and (or rg (not (equal name "rg"))) (apply orig name r)))))
+          (drgnx-ai-ask "where do we frobnicate?" (concat root "proj/"))))
+      (should (drgnx-ai-ask-test--answer))
+      (let ((sent (with-temp-buffer (insert-file-contents log) (buffer-string))))
+        (should (string-search "(twist widget)" sent))
+        (should-not (string-search "hidden-env-value" sent))
+        (should-not (string-search "hidden-git-value" sent))))))
+
 (ert-deftest drgnx-ai-ask/another-retriever-adds-its-snippets ()
   ;; M10's semantic index joins through `drgnx-ai-retrievers'
   (drgnx-ai-ask-test--with "ok"

@@ -268,14 +268,15 @@ current choice as the default) — with no option and no question, the current c
     (while (and (not (funcall pred)) (< (float-time) deadline)) (accept-process-output nil 0.05))
     (funcall pred)))
 
-(defun drgnx-onboard--ai-pick (role cap)
+(defun drgnx-onboard--ai-pick (role cap &optional interactive)
   "A (PROVIDER . MODEL) for ROLE among the providers that can do CAP, or nil: OpenRouter for edit and chat when
-its key is set; else a provider running here — for `complete' a coder model when it has one."
-  (if (and (memq role '(edit chat)) (drgnx-ai-usable-p 'openrouter cap))
+its key is set; else a provider running here — for `complete' a coder model when it has one.  INTERACTIVE: keys
+may come from sources that ask."
+  (if (and (memq role '(edit chat)) (drgnx-ai-usable-p 'openrouter cap interactive))
       (cons 'openrouter "openrouter/auto")
     (seq-some (lambda (e)
                 (let ((models (plist-get (cdr e) :models)))
-                  (when (and models (drgnx-ai-usable-p (car e) cap))
+                  (when (and models (drgnx-ai-usable-p (car e) cap interactive))
                     (cons (car e) (or (and (eq role 'complete) (seq-find (lambda (m) (string-match-p "code" m)) models))
                                       (car models))))))
               drgnx-ai-detected)))
@@ -290,8 +291,8 @@ one call, and say how to add an OpenRouter key (drgnx writes none)."
   (let ((key (drgnx-ai-key 'openrouter (plist-get ctx :interactive))) (lines nil) (answered 0) (asked 0))
     (dolist (role '(complete edit chat))
       (let* ((cap (if (eq role 'complete) 'fim 'chat))
-             (usable (seq-find (lambda (s) (drgnx-ai-usable-p (car s) cap)) (drgnx-ai-role role)))
-             (step (or usable (drgnx-onboard--ai-pick role cap))))
+             (usable (seq-find (lambda (s) (drgnx-ai-usable-p (car s) cap (plist-get ctx :interactive))) (drgnx-ai-role role)))
+             (step (or usable (drgnx-onboard--ai-pick role cap (plist-get ctx :interactive)))))
         (if (not step) (push (format "%s: no provider" role) lines)
           (unless usable (drgnx-ai-set-role role (cons step (drgnx-ai-role role))))
           (cl-incf asked)
@@ -300,7 +301,7 @@ one call, and say how to add an OpenRouter key (drgnx writes none)."
                               (if (eq cap 'fim) (list :prefix "(defun hello ()\n  " :suffix ")\n" :max-tokens 8)
                                 (list :messages (vector (list :role "user" :content "Say OK."))))
                               (lambda (text _info) (setq result (if text 'yes 'no)))
-                              :chain (list step) :timeout 15)
+                              :chain (list step) :timeout 15 :interactive (plist-get ctx :interactive))
             (drgnx-onboard--wait (lambda () result) 16)
             (when (eq result 'yes) (cl-incf answered))
             (push (format "%s: %s/%s %s" role (car step) (cdr step) (if (eq result 'yes) "answered" "did not answer")) lines)))))

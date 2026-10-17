@@ -83,6 +83,39 @@
         (set-window-buffer (selected-window) was)
         (kill-buffer src)))))
 
+(ert-deftest drgnx-ai-edit/text-typed-at-the-region-s-edges-while-it-answers-is-kept ()
+  (drgnx-ai-edit-test--with "(defun a ()\n  10)\n"
+    (with-temp-buffer
+      (emacs-lisp-mode)
+      (insert "(defun a ()\n  1)\n")
+      (let ((end (point-max)))
+        (drgnx-ai-edit "times ten" (point-min) end)
+        (goto-char end) (insert ";; typed after it\n")                         ; right at its end
+        (goto-char (point-min)) (insert ";; typed before it\n")               ; right at its start
+        (let ((review (drgnx-ai-edit-test--review)))
+          (should review)
+          (with-current-buffer review
+            (should-not (string-search "-;; typed" (buffer-string)))         ; never shown as deleted
+            (goto-char (point-min)) (diff-hunk-next) (let ((inhibit-message t)) (drgnx-ai-edit-apply-hunk))
+            (drgnx-ai-edit-done))
+          (should (equal (buffer-string) ";; typed before it\n(defun a ()\n  10)\n;; typed after it\n")))))))
+
+(ert-deftest drgnx-ai-edit/a-region-edited-while-it-answers-gets-no-review ()
+  (drgnx-ai-edit-test--with "(defun a ()\n  10)\n"
+    (with-temp-buffer
+      (emacs-lisp-mode)
+      (insert "(defun a ()\n  1)\n")
+      (let ((said nil))
+        (cl-letf (((symbol-function 'message) (lambda (fmt &rest args) (when fmt (push (apply #'format fmt args) said)))))
+          (drgnx-ai-edit "times ten" (point-min) (point-max))
+          (goto-char 3) (insert "X")                                          ; inside the region
+          (let ((deadline (+ (float-time) 5)))
+            (while (and (not (seq-find (lambda (m) (string-match-p "changed while" m)) said)) (< (float-time) deadline))
+              (accept-process-output nil 0.05))))
+        (should (seq-find (lambda (m) (string-match-p "changed while" m)) said))
+        (should-not (drgnx-ai-edit-test--review 0.2))
+        (should (equal (buffer-string) "(dXefun a ()\n  1)\n"))))))
+
 (ert-deftest drgnx-ai-edit/edits-elsewhere-meanwhile-are-kept-a-changed-region-is-not-overwritten ()
   (drgnx-ai-edit-test--with "(defun a ()\n  10)\n"
     (with-temp-buffer
@@ -103,11 +136,11 @@
       (erase-buffer) (insert "(defun a ()\n  1)\n")
       (drgnx-ai-edit "times ten" (point-min) (point-max))
       (let ((review (drgnx-ai-edit-test--review)))
-        (goto-char (point-min)) (insert ";; ")                                    ; inside the region
+        (goto-char (point-min)) (forward-line 1) (insert ";; ")                   ; inside the region
         (with-current-buffer review
           (goto-char (point-min)) (diff-hunk-next) (let ((inhibit-message t)) (diff-apply-hunk))
           (should-error (drgnx-ai-edit-done) :type 'user-error))
-        (should (equal (buffer-string) ";; (defun a ()\n  1)\n"))))))
+        (should (equal (buffer-string) "(defun a ()\n;;   1)\n"))))))
 
 (ert-deftest drgnx-ai-edit/the-model-s-code-fence-is-not-code ()
   (drgnx-ai-edit-test--with "Here it is:\n```elisp\n(defun a ()\n  10)\n```\n"

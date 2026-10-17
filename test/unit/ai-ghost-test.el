@@ -62,6 +62,18 @@ LLM answering SPEC; `o' found running."
     (funcall (timer--function drgnx-ai-ghost--timer))                  ; this buffer is not the selected window's
     (should-not drgnx-ai-ghost--request)))
 
+(ert-deftest drgnx-ai-ghost/with-no-provider-it-looks-again-now-and-then ()
+  ;; a runner started after Emacs (LM Studio, llama-server) is found without a restart
+  (drgnx-ai-ghost-test--with '()
+    (let ((drgnx-ai-detected nil) (probes 0) (drgnx-ai-ghost--last-probe 0) (inhibit-message t))
+      (cl-letf (((symbol-function 'drgnx-ai-probe) (lambda (&rest _) (cl-incf probes))))
+        (drgnx-ai-ghost--trigger)
+        (drgnx-ai-ghost--trigger)
+        (should (= probes 1))                                               ; not on every pause
+        (setq drgnx-ai-ghost--last-probe (- (float-time) 61))
+        (drgnx-ai-ghost--trigger)
+        (should (= probes 2))))))
+
 (ert-deftest drgnx-ai-ghost/an-answer-to-text-since-changed-never-shows ()
   (drgnx-ai-ghost-test--with '((:path "/api/generate" :delay 0.5 :body "{\"response\":\"stale\"}"))
     (drgnx-ai-ghost--trigger)
@@ -169,6 +181,20 @@ LLM answering SPEC; `o' found running."
     (insert "(foo\nbar)") (forward-line 0)
     (drgnx-ai-tab)
     (should (equal (buffer-substring (line-beginning-position) (line-end-position)) " bar)"))))
+
+(define-derived-mode drgnx-ai-ghost-test--own-tab-mode prog-mode "OwnTab")
+(define-key drgnx-ai-ghost-test--own-tab-mode-map (kbd "TAB") #'completion-at-point)
+
+(ert-deftest drgnx-ai-tab/otherwise-the-mode-s-own-tab ()
+  ;; cperl, octave, ESS…: a mode's own Tab, not a plain indent
+  (let ((was (lookup-key drgnx-ai-ghost-mode-map (kbd "TAB"))))
+    (unwind-protect
+        (with-temp-buffer
+          (define-key drgnx-ai-ghost-mode-map (kbd "TAB") #'drgnx-ai-tab)    ; as the key profiles bind it
+          (drgnx-ai-ghost-test--own-tab-mode) (drgnx-ai-ghost-mode 1)
+          (should (eq (key-binding (kbd "TAB")) 'drgnx-ai-tab))              ; ghost mode has Tab…
+          (should (eq (drgnx-ai-tab-command) 'completion-at-point)))        ; …and hands it on
+      (define-key drgnx-ai-ghost-mode-map (kbd "TAB") was))))
 
 (ert-deftest drgnx-ai/every-ai-command-is-registered ()
   (let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil))

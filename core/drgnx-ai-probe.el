@@ -64,12 +64,13 @@ Returns at once."
                         :timeout 1)))
     nil))
 
-(defun drgnx-ai-usable-p (id &optional cap)
+(defun drgnx-ai-usable-p (id &optional cap interactive)
   "Provider ID can be asked (for CAP, e.g. `fim'): with its key when it has one; a local one when the probe
-found it running; a remote one without a key as configured."
+found it running; a remote one without a key as configured.  INTERACTIVE: for a command the user ran (its key
+may come from a source that asks)."
   (let ((p (drgnx-ai-provider id)))
     (and p (or (null cap) (memq cap (plist-get p :caps)))
-         (cond ((plist-get p :key-env) (and (drgnx-ai-key id) t))
+         (cond ((plist-get p :key-env) (and (drgnx-ai-key id interactive) t))
                ((drgnx-ai--local-p p) (plist-get (alist-get id drgnx-ai-detected) :up))
                (t t)))))
 
