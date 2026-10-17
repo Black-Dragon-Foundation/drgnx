@@ -45,9 +45,10 @@ linked git worktree (its .git a file) only its ledgers count — its plans and s
                (drgnx-work--walk f (1- depth) fn (or ledgers-only (file-regular-p (expand-file-name ".git" f))))))
             (t (funcall fn f ledgers-only))))))
 
-(defun drgnx-work--classify (file)
-  "`plan', `spec', `ledger' or nil for FILE."
-  (let ((parts (split-string file "/" t)))
+(defun drgnx-work--classify (file root)
+  "`plan', `spec', `ledger' or nil for FILE under ROOT (only its path under ROOT counts: a root inside
+a directory named specs/ or plans/ makes nothing a spec or a plan)."
+  (let ((parts (split-string (file-relative-name file root) "/" t)))
     (cond ((string-suffix-p ".ledger.md" file) 'ledger)
           ((and (equal (file-name-nondirectory file) "progress.md") (member "sdd" parts) (member ".superpowers" parts)) 'ledger)
           ((not (string-suffix-p ".md" file)) nil)
@@ -260,7 +261,7 @@ its place: older commits have fewer ancestors (dates tie within a second) — on
          plans specs ledgers changed reread)
     (dolist (r roots)
       (drgnx-work--walk r 7 (lambda (f ledgers-only)
-                              (when-let* ((k (drgnx-work--classify f)) ((or (not ledgers-only) (eq k 'ledger))))
+                              (when-let* ((k (drgnx-work--classify f r)) ((or (not ledgers-only) (eq k 'ledger))))
                                 (puthash f k found)
                                 (pcase k ('plan (push f plans)) ('spec (push f specs)) ('ledger (push f ledgers)))))))
     (when (and board (file-readable-p board)) (puthash board 'board found))

@@ -319,3 +319,24 @@ code/ with three commits, p's ledger naming the first two, a board TODO from p."
       (drgnx-work-record plan code (drgnx-work-test--commit code "x" "x" "for the plan"))
       (drgnx-work-record todo code (drgnx-work-test--commit code "y" "y" "for the todo"))
       (should (= (plist-get (drgnx-work-counts plan) :commits) (+ before 2))))))
+
+;;;; Deferred fixes
+
+(ert-deftest drgnx-work/a-root-inside-a-specs-or-plans-directory-classifies-by-its-own-paths ()
+  ;; only the path under the root counts: …/specs/ above it makes nothing a spec, …/plans/ nothing a plan
+  (dolist (above '("specs/" "plans/"))
+    (let* ((top (file-name-as-directory (make-temp-file "drgnx-work" t)))
+           (root (concat top above "proj/"))
+           (process-environment (cons (concat "DRGNX_DATA_DIR=" top "data") process-environment))
+           (drgnx-work-db--handles nil))
+      (unwind-protect
+          (progn
+            (drgnx-work-test--write root "README.md" "# Read me\n\n### Task 1: not a plan of the root\n")
+            (drgnx-work-test--write root "docs/specs/s.md" "# The spec\n\n### Task 1: a spec, not a plan\n")
+            (drgnx-work-scan (list root))
+            (should-not (drgnx-work-node (concat "spec:" root "README.md")))
+            (should-not (drgnx-work-node (concat "plan:" root "README.md")))
+            (should (drgnx-work-node (concat "spec:" root "docs/specs/s.md")))
+            (should-not (drgnx-work-node (concat "plan:" root "docs/specs/s.md"))))
+        (drgnx-work-db-close-all)
+        (delete-directory top t)))))

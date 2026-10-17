@@ -10,8 +10,8 @@ commits of the work drgnx starts. Commit messages are never changed.
 `drgnx work scan [DIR…]` (no DIR: the roots in `projects.eld` and `drgnx-work-roots`) walks each root seven levels
 down (not into `.git`, `node_modules`, `eln-cache`, `elpa`, `target`, `dist`, `build`, `.claude/tmp`):
 
-- **specs:** Markdown under a `specs/` directory; the title is the first `# ` heading.
-- **plans:** Markdown under a `plans/` directory with `### Task N:` headings. Each task's `- [ ]` / `- [x]` lines
+- **specs:** Markdown under a `specs/` directory inside the root (directories above the root do not count); the title is the first `# ` heading.
+- **plans:** Markdown under a `plans/` directory inside the root, with `### Task N:` headings. Each task's `- [ ]` / `- [x]` lines
   are its steps; a task with every step ticked is done. A `**Spec:** \`path\`` line links the plan to its spec
   (resolved against the plan's directory, the roots, the repositories under them and the nearest `docs/`).
 - **ledgers:** `*.ledger.md` and `.superpowers/sdd/*/progress.md`, whose first line is `# SDD ledger — plan: PATH`.
