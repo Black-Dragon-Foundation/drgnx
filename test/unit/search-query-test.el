@@ -252,6 +252,52 @@
       (should (null got))
       (should (string-match-p "no index" drgnx-search-last-notice)))))
 
+;; The callback of an asynchronous search is called whatever is wrong with the index.
+(ert-deftest drgnx-search/async-always-calls-back-on-a-corrupt-meta ()
+  (drgnx-search-query-test--with
+    (drgnx-search-query-test--index db drgnx-search-query-test--texts)
+    (sqlite-execute db "update meta set value = '(' where key = 'dims'")
+    (let ((got 'none))
+      (cl-letf (((symbol-function 'drgnx-ai-request)
+                 (lambda (_r _k payload callback &rest _)
+                   (funcall callback (vector (drgnx-search-query-test--embed-text (aref (plist-get payload :inputs) 0)))
+                            '(:provider stub :model "stub-1")))))
+        (drgnx-search-async root "checksum" (lambda (r) (setq got r))))
+      (should (null got))                      ; called, with nothing (the meta cannot be read)
+      (should (string-match-p "cannot be read" drgnx-search-last-notice)))))
+
+(ert-deftest drgnx-search/async-always-calls-back-on-a-short-vector ()
+  (drgnx-search-query-test--with
+    (drgnx-search-query-test--index db drgnx-search-query-test--texts)
+    (sqlite-execute db "update chunk set vec = zeroblob(3)")
+    (let ((got 'none))
+      (cl-letf (((symbol-function 'drgnx-ai-request)
+                 (lambda (_r _k payload callback &rest _)
+                   (funcall callback (vector (drgnx-search-query-test--embed-text (aref (plist-get payload :inputs) 0)))
+                            '(:provider stub :model "stub-1")))))
+        (drgnx-search-async root "checksum" (lambda (r) (setq got r))))
+      (should (consp got))                     ; the keyword hit survives
+      (should (equal (mapcar (lambda (x) (plist-get x :why)) got) '(keyword)))
+      (should (string-match-p "keyword" drgnx-search-last-notice)))))
+
+(ert-deftest drgnx-search/async-calls-back-once-when-the-request-itself-fails ()
+  (drgnx-search-query-test--with
+    (drgnx-search-query-test--index db drgnx-search-query-test--texts)
+    (let ((calls 0))
+      (cl-letf (((symbol-function 'drgnx-ai-request) (lambda (&rest _) (error "no way to ask"))))
+        (drgnx-search-async root "checksum" (lambda (_r) (cl-incf calls))))
+      (should (= calls 1))
+      (should (stringp drgnx-search-last-notice)))))
+
+(ert-deftest drgnx-search/an-inconsistent-index-skips-the-vectors-and-says-so ()
+  (drgnx-search-query-test--with
+    (drgnx-search-query-test--index db drgnx-search-query-test--texts)
+    (sqlite-execute db "update chunk set bits = zeroblob(1) where id = 1")   ; a fingerprint of the wrong size
+    (let ((r (drgnx-search root "checksum" :embed (drgnx-search-query-test--embedder))))
+      (should (equal (mapcar (lambda (x) (plist-get x :why)) r) '(keyword)))
+      (should (string-match-p "keyword" drgnx-search-last-notice))
+      (should (string-match-p "inconsistent" drgnx-search-last-notice)))))
+
 ;;;; The scan
 
 (ert-deftest drgnx-search/nearest-picks-the-smallest-distances ()

@@ -129,14 +129,22 @@ for the chunks the vector ranking holds, else nil."
          (sims nil) (fused (make-hash-table)) (all nil))
     (when problem (drgnx-search--notice "%s" problem))
     (when (and vector (not problem))
-      (pcase-let* ((`(,ids . ,words) (drgnx-search--fingerprints db file))
-                   (q (vconcat (mapcar #'float vector)))
-                   (qwords (drgnx-search-bits-words (car (drgnx-search-quantize q)))))
-        (when (and (> (length ids) 0) (= (* (length ids) (length qwords)) (length words)))
-          (let* ((near (drgnx-search--nearest qwords words (length ids) (max drgnx-search--candidates-floor (* 50 k))))
-                 (stored (drgnx-search-store-vectors db (mapcar (lambda (i) (aref ids i)) near))))
-            (setq sims (sort (mapcar (lambda (e) (cons (car e) (drgnx-search--dot q (cadr e) (cddr e)))) stored)
-                             (lambda (a b) (> (cdr a) (cdr b)))))))))
+      (condition-case err
+          (pcase-let* ((`(,ids . ,words) (drgnx-search--fingerprints db file))
+                       (q (vconcat (mapcar #'float vector)))
+                       (qwords (drgnx-search-bits-words (car (drgnx-search-quantize q)))))
+            (cond
+             ((zerop (length ids)))
+             ((/= (* (length ids) (length qwords)) (length words))
+              (drgnx-search--notice "the index is inconsistent (re-index) — keyword results only"))
+             (t
+              (let* ((near (drgnx-search--nearest qwords words (length ids) (max drgnx-search--candidates-floor (* 50 k))))
+                     (stored (drgnx-search-store-vectors db (mapcar (lambda (i) (aref ids i)) near))))
+                (setq sims (sort (mapcar (lambda (e) (cons (car e) (drgnx-search--dot q (cadr e) (cddr e)))) stored)
+                                 (lambda (a b) (> (cdr a) (cdr b)))))))))
+        (error (setq sims nil)
+               (drgnx-search--notice "the index is inconsistent (%s; re-index) — keyword results only"
+                                     (error-message-string err)))))
     (let ((rank 0))
       (dolist (e (seq-take sims depth))
         (puthash (car e) (list (/ 1.0 (+ drgnx-search--rrf-k (cl-incf rank))) (cdr e) 'vector) fused)))
@@ -172,7 +180,7 @@ by score, then vector similarity, then path."
 
 (defun drgnx-search--finish (root query k vector info)
   "The results for QUERY in ROOT's index, given the question's embedding VECTOR (nil: none) made by INFO."
-  (let ((db (condition-case nil (drgnx-search-store-open-read root) (sqlite-error nil))))
+  (let ((db (condition-case nil (drgnx-search-store-open-read root) (error nil))))
     (if (null db)
         (progn (drgnx-search--notice "no index for this project — Search: Index Project") nil)
       (unwind-protect
@@ -181,8 +189,8 @@ by score, then vector similarity, then path."
                   (progn (drgnx-search--notice "the index is newer than this drgnx — update drgnx") nil)
                 (drgnx-search--results
                  db (drgnx-search--ranked-ids db (drgnx-search-store-file root) query k vector info)))
-            (sqlite-error (drgnx-search--notice "the index cannot be read yet (%s)" (error-message-string err))
-                          nil))
+            (error (drgnx-search--notice "the index cannot be read yet (%s)" (error-message-string err))
+                   nil))
         (ignore-errors (sqlite-close db))))))
 
 (defun drgnx-search--vector-of (vectors)
@@ -209,22 +217,32 @@ way `drgnx-search-last-notice' says why, in one line — and never an error, nev
             (progn (setq vector (drgnx-search--vector-of (funcall (or embed #'drgnx-ai-embed-sync) (vector query)))
                          info drgnx-ai-embed-last-info)
                    (unless vector (drgnx-search--no-embedding "an answer without a vector")))
-          (drgnx-ai-embed-error (drgnx-search--no-embedding (cadr err)))))
+          (error (drgnx-search--no-embedding (error-message-string err)))))
       (drgnx-search--finish root query (or k drgnx-search-default-k) vector info))))
 
 (cl-defun drgnx-search-async (root query callback &key k)
   "Like `drgnx-search', but the question is embedded without waiting: CALLBACK gets the result list
-\(`drgnx-search-last-notice' is set by then).  With no index or no SQLite CALLBACK is called at once with nil."
+\(`drgnx-search-last-notice' is set by then).  CALLBACK is always called, once: with no index or no SQLite at
+once with nil, and whatever goes wrong (the request, the index) with the keyword hits or nil and a notice."
   (setq drgnx-search-last-notice nil)
-  (if (not (drgnx-search--ready root))
-      (funcall callback nil)
-    (drgnx-ai-request
-     'embed 'embed (list :inputs (vector query))
-     (lambda (vectors info)
-       (let ((vector (drgnx-search--vector-of vectors)))
-         (setq drgnx-search-last-notice nil)
-         (unless vector (drgnx-search--no-embedding (plist-get info :error)))
-         (funcall callback (drgnx-search--finish root query (or k drgnx-search-default-k) vector info)))))))
+  (let ((called nil))
+    (cl-flet ((answer (results) (unless called (setq called t) (funcall callback results))))
+      (if (not (drgnx-search--ready root))
+          (answer nil)
+        (condition-case err
+            (drgnx-ai-request
+             'embed 'embed (list :inputs (vector query))
+             (lambda (vectors info)
+               (answer (condition-case err
+                           (let ((vector (drgnx-search--vector-of vectors)))
+                             (setq drgnx-search-last-notice nil)
+                             (unless vector (drgnx-search--no-embedding (plist-get info :error)))
+                             (drgnx-search--finish root query (or k drgnx-search-default-k) vector info))
+                         (error (drgnx-search--notice "the search failed (%s)" (error-message-string err))
+                                nil)))))
+          (error (unless called
+                   (drgnx-search--notice "the search failed (%s)" (error-message-string err))
+                   (answer nil))))))))
 
 (provide 'drgnx-search-query)
 ;;; drgnx-search-query.el ends here
