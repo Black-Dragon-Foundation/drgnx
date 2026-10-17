@@ -11,6 +11,9 @@ drgnx open                   # drgnx with the windows as you left them
 drgnx open -- -odd-name.txt  # anything after -- is a path, even when it starts with -
 ```
 
+`drgnx` lives in `~/.local/bin`; "command not found" means that is not on your PATH yet — open a new terminal window
+after the installer added it, or add it yourself ([install.md](install.md#what-installsh-does)).
+
 An argument is a path when it is `.` or `..`, contains a `/`, or exists; any other word that is not a drgnx command
 is an error (`drgnx frobnicate` says so). A file or folder named like a command (`build`, `test`, …) opens with
 `drgnx ./build` or `drgnx open build`. Paths are taken from the directory you are in and passed on as they are, so
@@ -28,7 +31,7 @@ What happens:
 - **A window is open:** the paths open there and the window comes to the front.
 
 A **folder** becomes the Explorer's first folder (the others stay) and the Explorer is selected, as in VS Code after
-`code .`, so quick open and project search (`C-p`, `C-S-f`) work in that folder's project right away; it does not
+`code .`, so quick open and project search (`C-p`, `C-S-f`; ⌘P, ⌘⇧F on a Mac) work in that folder's project right away; it does not
 open as a directory listing. A **file** opens in the editor. drgnx started by hand as a normal Emacs (not a daemon) answers
 `drgnx PATH` too, as long as no other drgnx does.
 
@@ -41,10 +44,15 @@ Finder and Spotlight find it, and you can keep it in the Dock. The installer put
 
 - **Open it** (Finder, Spotlight, the Dock): the same as `drgnx open` — drgnx with your windows, started in the
   background if it is not running. The very first time, the Welcome opens ([onboarding.md](onboarding.md)).
-- **Open folders and files with it:** drop them on its Dock icon, or choose drgnx in Finder's **Open With** for a
-  folder or a code or text file. They open as `drgnx PATH` would open them — a folder in the Explorer, a file in an
-  editor. drgnx is offered there, never made the default app for anything (set that yourself with Get Info → Open
-  with → Change All, if you like).
+- **Open folders and files with it:** drop them on its Dock icon, or choose drgnx in Finder's **Open With** (right-click
+  a folder or a file). Open With offers drgnx for folders and for almost every file, as it does code editors. They
+  open as `drgnx PATH` would open them — a folder in the Explorer, a file in an editor. drgnx is offered there, never
+  made the default app for anything (set that yourself with Get Info → Open with → Change All, if you like).
+- **Its windows are Emacs's.** drgnx runs in Emacs: while it runs, the Dock and ⌘Tab show it as **Emacs**, with the
+  same icon. Keep the drgnx app in the Dock and open drgnx from it.
+- **macOS may ask** whether Emacs may access your Documents, Desktop or Downloads folder the first time you open a
+  project there: choose Allow (drgnx cannot open the files otherwise; System Settings → Privacy & Security → Files
+  and Folders changes it later).
 
 The app is a small AppleScript applet: Finder hands an app the files it opens as an Apple Event, not as arguments.
 It runs `<checkout>/bin/drgnx open -- PATH…`, each path passed through `quoted form of`, so spaces, accents and
@@ -61,18 +69,18 @@ run `drgnx macos-app` again. To remove it, delete `~/Applications/drgnx.app`. Co
 
 ## Keep running or quit
 
-When you close drgnx's last window — its close button, or Close Window (`C-q` in the VS Code profile; the palette) —
-drgnx does one of two things, your choice:
+When you close drgnx's last window — its close button, or Close Window (`C-q` in the VS Code profile, ⌘⇧W on a Mac;
+the palette) — drgnx does one of two things, your choice:
 
 - **Keep running in the background** (the default, like VS Code on a Mac): drgnx stays running without a window, so
-  the next `drgnx PATH` or `drgnx open` is instant and brings your windows back. File → **Quit drgnx** (in the
-  palette too) stops it; it then stays stopped until you open drgnx again. It never starts at login: the first open
+  the next `drgnx PATH` or `drgnx open` is instant and brings your windows back. File → **Quit drgnx** (⌘Q on a Mac;
+  in the palette too) stops it; it then stays stopped until you open drgnx again. It never starts at login: the first open
   starts it, and after a reboot or logout the next open starts it fresh with your windows restored. (The one
   exception: on Linux, if you enabled the systemd user service `drgnx`, it starts at login, as enabled services do.)
 - **Quit when the last window closes:** closing the last window quits drgnx.
 
 Quitting — Quit drgnx, or closing the last window in quit mode — first offers to save each file with changes, and
-each New Untitled buffer you typed in (it asks for a file name). Press `C-g`, or keep one unsaved and then answer no to "quit and lose the changes?", and drgnx stays running with
+each New Untitled buffer (tab) you typed in (it asks for a file name). Press Ctrl+G (`C-g`, Emacs' cancel), or keep one unsaved and then answer no to "quit and lose the changes?", and drgnx stays running with
 everything open: nothing is lost. A drgnx that is not a daemon has nothing to keep running, so closing its last
 window always quits (asking the same way).
 

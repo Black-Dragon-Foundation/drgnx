@@ -1,7 +1,7 @@
 # Onboarding
 
 `drgnx onboard` takes a fresh machine to a working drgnx; in Emacs, **Help → Welcome** (palette: "Welcome") lists
-the same steps with their status — `RET` runs one. Every step is a command of its own ("Onboarding: Import
+the same steps with their status — Return (`RET`) on a step runs it. Every step is a command of its own ("Onboarding: Import
 Projects"…), can be run again at any time, and changes nothing the second time — with no option given, a step keeps
 your current choices. Progress is kept in `~/.local/state/drgnx/onboarding.eld`: `drgnx onboard` resumes at the
 first step not done (`--again` runs every step; `--step ID` runs that one), and a step that fails is shown failed
@@ -11,6 +11,22 @@ with how to fix it — it never stops the others.
 this machine (no `onboarding.eld`), the Welcome opens a moment later — from a timer, after your layout is back; it
 asks nothing until you run a step. It does this once: opening it leaves `onboarding.eld` behind (with no step done),
 so later starts open as you left them. Help → Welcome brings it back at any time.
+
+**New to Emacs? (coming from VS Code)**
+
+- **Run the steps from the top:** click a step (or move to it with ↑/↓) and press **Return**; when it is done, go to
+  the next. Each step's status and result show on its row.
+- **Questions appear on the line at the bottom of the window** (Emacs calls it the *minibuffer*): `y` or `n` for
+  yes/no; for a choice, type to narrow the list (↑/↓ to pick) and press Return — Return alone takes the default
+  shown.
+- **Ctrl+G** (written `C-g`) is Emacs' cancel: it closes a question, or stops what a step is doing. Escape closes a
+  question too.
+- **When the steps are done, quit drgnx and open it again** (⌘Q on a Mac, or File → Quit drgnx): the modules and
+  packages chosen in Look and Keys load at the next start.
+- Words you will meet: a *buffer* is the contents of a tab (a file, a terminal, a list like this one), a *frame* is a
+  window of the app, and a *window* is a pane inside it (a split). Keys are written the Emacs way: `C-` Ctrl, `M-`
+  Option (Alt on Linux), `s-` Cmd, `S-` Shift — so `s-P` is ⌘⇧P, and `M-x` (Option+X) runs a command by name, as the
+  palette does. The Mac keys: [keys.md](keys.md#on-a-mac).
 
 ```
 drgnx onboard                                   asks (in the terminal) where a step has a choice
@@ -25,7 +41,7 @@ The exit code is 1 when a step failed. `drgnx doctor` reports onboarding too.
 | Step | What it does |
 |---|---|
 | Check the Environment | git (required), ripgrep, fd, podman, mise, a GPU tool, the Symbols Nerd Font — each found or missing, with how to get it for your system. **On a Mac** the fixes are Homebrew commands (`brew install ripgrep`, `brew install fd`, `brew install podman` and then `podman machine init`, `brew install mise`, `brew install --cask font-symbols-only-nerd-font`); git comes with the Xcode Command Line Tools (`xcode-select --install`), which get a row of their own — they also bring the C compiler that builds tree-sitter grammars; the GPU row is always fine (Apple silicon: models use the shared memory). The font is looked up in Emacs itself when drgnx has a window, else with `fc-list`; when neither can tell (a Mac has no `fc-list`), the font shows as "could not check", not as missing |
-| Look and Keys | the key profile (VS Code, Emacs, Vim, combinations), a colour theme, and the module preset: **minimal** (the workbench and built-in modules), **ide** (plus the package-backed editing modules — not AI), **full-ai** (everything). Your own module choices outside `extra/` stay. Change any of it later: Preferences: Keyboard Profile, Color Theme, Modules. **Then the packages:** when the modules now on need packages that are not installed, run interactively it asks "Install the packages for full-ai now (about N MB)?" — the size is the sum of the downloads your lock (or, before your first sync, the [lock drgnx ships](packages.md#the-lock-drgnx-ships-your-first-sync)) records, left out when it does not know one; Git clones are not counted. Yes runs `drgnx sync` as a drgnx job with its own log, its row showing the package it is at ("installing magit-4.3.8… — C-g stops"); a sync that fails makes the step warn with why, the log, and to run `drgnx sync` again. With `--non-interactive`, or when you say no, nothing is installed and the result says to run `drgnx sync` |
+| Look and Keys | the key profile (VS Code, Emacs, Vim, combinations), a colour theme, and the module preset: **minimal** (the workbench and built-in modules), **ide** (plus the package-backed editing modules — not AI), **full-ai** (everything). Your own module choices outside `extra/` stay. Change any of it later: Preferences: Keyboard Profile, Color Theme, Modules. **Then the packages:** when the modules now on need packages that are not installed, run interactively it asks "Install the packages for full-ai now (about N MB)?" — the size is the sum of the downloads your lock (or, before your first sync, the [lock drgnx ships](packages.md#the-lock-drgnx-ships-your-first-sync)) records, left out when it does not know one; Git clones are not counted. Yes runs `drgnx sync` as a drgnx job with its own log, its row showing the package it is at ("installing magit-4.3.8… — C-g stops"); a sync that fails makes the step warn with why, the log, and to run `drgnx sync` again; `WARNING … no longer served; installed …` lines in its log are not failures (a shipped version the archives dropped, replaced by the current one — [packages.md](packages.md#the-lock-drgnx-ships-your-first-sync)). The modules and packages load at drgnx's next start (quit and reopen). With `--non-interactive`, or when you say no, nothing is installed and the result says to run `drgnx sync` |
 | Import Projects | finds git repositories under `~/workspace`, `~/code`, `~/src`, `~/projects`, `~/git` (or `--roots`) and in gryphn's `~/.config/gryphn/projects.tsv`; you pick (empty: all; `(none)`: none; several are separated by a comma, or by `;` or `|` when a path has a comma — the prompt says which). Each goes on the **board**; you choose which projects also bring their open TODOs (`--todos`: all of them; default: none) |
 | AI Providers | finds the model runners running here (Ollama, llama.cpp, LM Studio, vLLM, … — [ai.md](ai.md)) and the providers you have a key for, picks a model for each role (Inline Completion prefers a code model; Edit and Chat prefer OpenRouter when it has a key), makes one test call per role and keeps the roles that answered — a role you chose that still answers stays. It also reports the GPU's free memory (on a Mac: two thirds of the RAM, which Apple silicon shares with the GPU). **When nothing answers, it sets AI up** ([below](#setting-ai-up)); run again, it asks whether to keep what works or change it. With `--non-interactive` it installs, downloads and asks nothing: it reports what it found and the commands that would set AI up. Change a role later: AI: Choose Provider/Model |
 | Semantic Search | the same as **Set Up Semantic Search** ([search.md](search.md)). Run interactively (Help → Welcome) it finds an embedding model, tests it with one call and starts indexing the current project in the background — or, when that index is current, runs a test query. With `--non-interactive` it only reports: whether an embedding model is running (and how to start TEI or Ollama if not), and how many of the projects drgnx knows have an index; it starts nothing |
@@ -62,7 +78,7 @@ goes first in its role in `~/.config/drgnx/ai.eld`; what the role had stays behi
 
 Every command runs as a drgnx job with its own log. While the step works, its row in the Welcome says what it is
 doing — "Starting Ollama…", the download's last log line, "Testing every feature…" — always with "— C-g stops", and
-`C-g` stops it. A download that fails says which model, why (the log's last line), where the log is, and to run the
+Ctrl+G (`C-g`) stops it. A download that fails says which model, why (the log's last line), where the log is, and to run the
 step again — a new run starts from the top, skips what is installed and running, and `ollama pull` / `lms get` skip
 what is already downloaded.
 
@@ -102,13 +118,16 @@ The commands that need no password run as drgnx jobs with a log and progress in 
 one fails, the result says why (the log's last line), where the log is, and how to retry — run the step again, or
 the command in a terminal; a new run skips what is installed. Where the adapter or Node ends up outside your
 `PATH` (`~/.local/bin`, or beside Homebrew), drgnx adds that directory to the `PATH` of the running Emacs and says so;
-put it in your shell's `PATH` too for the next start.
+put it in your shell's `PATH` too for the next start. The agent panel's sessions run in drgnx itself and see it at
+once; the **hub** (durable sessions, [agents.md](agents.md#the-hub-and-the-gateway)) keeps the `PATH` it started with:
+if one ran before this step (`drgnx hub status`), run `drgnx hub stop` — it ends the hub's durable sessions — and the
+next durable session starts a hub that finds the new programs.
 
 **The login.** The step asks `claude auth status` (exit status and its `loggedIn` answer only). When Claude Code is
 not logged in — or this `claude` has no `auth status`, in which case drgnx cannot tell and offers the login anyway —
 it asks to open a terminal running `claude`. The terminal's header line says **Type /login, finish in the browser,
 then press Done in the Welcome**. The step does not wait for you: it ends as "info", and when you are logged in, press
-`RET` on its row in the Welcome (that is Done — it runs the step again) and it goes on. Declining the offer when
+Return on its row in the Welcome (that is Done — it runs the step again) and it goes on. Declining the offer when
 drgnx could not tell still checks the agent; the result says the login was not verified. It never fails the step on
 that alone.
 

@@ -57,6 +57,29 @@ evil's normal state. On **macOS** the VS Code profile uses Cmd (`s-`) as VS Code
 
 ## On a Mac
 
+Keys are written the Emacs way: `s-` is Cmd ⌘, `M-` Option ⌥, `C-` Ctrl ⌃, `S-` Shift ⇧; `s-k s-s` is ⌘K then ⌘S. The
+everyday keys of the VS Code profile on a Mac, as in VS Code:
+
+| Command | Mac |
+|---|---|
+| Command Palette / Quick Open (files) | ⌘⇧P (or F1) / ⌘P |
+| Search in Project / Replace in Project / Find in File | ⌘⇧F / ⌘⇧H / ⌘F |
+| Save / Save All / New Untitled / Close Tab / Reopen Closed Tab | ⌘S / ⌥⌘S / ⌘N / ⌘W / ⌘⇧T |
+| Toggle Sidebar / Explorer / Toggle Panel / New Terminal | ⌘B / ⌘⇧E / ⌃\` / ⌃⇧\` |
+| Source Control | ⌃⇧G |
+| Go to Definition / References / Rename Symbol / Quick Fix | F12 / ⇧F12 / F2 / ⌘. |
+| Toggle Comment / Select Line / Delete Line / Undo / Redo | ⌘/ / ⌘L / ⌘⇧K / ⌘Z / ⌘⇧Z |
+| Edit with AI / Show Agents / Semantic Search | ⌘K ⌘E / ⌘K A / ⌘K ⌘F |
+| Keyboard Shortcuts / Settings (All Preferences) | ⌘K ⌘S / ⌘, |
+| Close Window / Quit drgnx | ⌘⇧W / ⌘Q |
+| Cancel (a question, a running step) | ⌃G or Escape |
+
+The function keys (F1, F2, F12) need Fn on a Mac keyboard unless "Use F1, F2, etc. keys as standard function keys" is
+on (System Settings → Keyboard → Keyboard Shortcuts → Function Keys). Every command, with its key, is in the palette
+and on the key sheet (⌘K ⌘S). Two keys with Shift and punctuation, ⌃⇧\` (New Terminal) and
+⇧⌘Space (Show Hover), depend on the keyboard layout and are not yet confirmed on a real Mac: if one does nothing, run
+the command from the palette.
+
 The VS Code profile on macOS has **VS Code's own Mac keys**: `C-` becomes Cmd (`s-o`, `s-k s-s`), except where VS
 Code on a Mac uses another key — there it has that one (`:mac` in `keys/vscode.eld`). Cmd+Shift with a letter is
 written as Emacs on a Mac receives it, the capital letter: Shift+Cmd+P is `s-P` (the key sheet shows `s-P`), Shift+Cmd+Z
@@ -78,7 +101,7 @@ yours (`:mac "S-s-y"` in `keys.eld` binds `s-Y`).
 | All Preferences… / Preferences: Modules | — / `C-,` | `s-,` (the palette on every Preferences command) / — |
 | Explorer: Copy Path / Reveal in Finder | `M-S-c` / `M-S-r` | `M-s-c` / `M-s-r` (Option+Cmd+C / R) |
 | Explorer: Delete / Delete Permanently | `<delete>` / `S-<delete>` | `s-<backspace>` / `M-s-<backspace>` (and the Linux keys) |
-| Explorer: Select (mark) | `C-SPC` | `C-SPC` (Cmd+Space is Spotlight) |
+| Explorer: Select (mark) | `C-SPC` | `C-SPC` (Cmd+Space is Spotlight; with two input sources Ctrl+Space switches them — turn that shortcut off in System Settings → Keyboard → Keyboard Shortcuts → Input Sources) |
 | Org Capture / Agenda, `C-c` keys of transcripts, reviews and grep | `C-c …` | the same `C-c …` (Cmd+C copies) |
 
 And the Mac's text editing, as in every Mac app (Linux has VS Code's Linux keys for them):

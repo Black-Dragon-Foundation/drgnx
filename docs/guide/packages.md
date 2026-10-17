@@ -149,7 +149,9 @@ on a file system without them, every sync copies the packages twice; five kept).
 is recompiled. `drgnx upgrade` snapshots the packages first, takes every package to the archive's newest version,
 then runs a smoke test (a fresh Emacs that activates drgnx's packages and loads each package of the manifest that
 has a file of its name); if the upgrade or the smoke test fails, the snapshot and its lock come back and the output
-says why.
+says why. Without `:archive-priorities`, the newest version wins: a first `drgnx upgrade` after the shipped lock moves
+packages it took from GNU or NonGNU ELPA releases (magit, …) to MELPA's latest builds where MELPA has them — set
+priorities ([above](#what-gets-installed)) to stay on releases.
 
 A running drgnx keeps the packages it loaded: **restart it** after a sync, upgrade or rollback (the command says
 so). One writer at a time: a sync, upgrade or rollback refuses while another runs; a lock left by one that died is

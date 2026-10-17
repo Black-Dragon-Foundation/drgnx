@@ -16,9 +16,12 @@ bash install.sh --dry-run
 bash install.sh
 ```
 
-Afterwards, start drgnx with the command the installer prints
-(`emacs --init-directory ~/.local/share/drgnx/drgnx/init`), and run `drgnx doctor` at any time. Then `drgnx onboard` (or Help → Welcome in drgnx) checks the
-rest of your machine, sets keys and modules, and puts your projects on the board ([onboarding.md](onboarding.md)).
+Afterwards, **on a Mac** the installer opens the drgnx app, and its first start opens the Welcome, which sets up
+the rest — keys, packages, AI, Claude Code ([onboarding.md](onboarding.md)). Next time, open **drgnx** from
+Applications, Spotlight (⌘Space, type "drgnx") or the Dock, or run `drgnx .` in a project folder
+([opening.md](opening.md)). **On Linux** run `drgnx open` (or the Emacs command the installer prints); the first start
+opens the Welcome there too, and `drgnx onboard` runs the same steps in the terminal. `drgnx doctor` checks the
+machine at any time.
 
 ## What install.sh does
 
@@ -83,8 +86,23 @@ gets in the way of language servers and tools).
 
 The script runs under the `/bin/bash` that ships with macOS (3.2); nothing newer is needed. Run it in Terminal.
 
-- **A good Emacs is kept.** An Emacs.app (or any `emacs`) that is 31.1+, graphical (`ns`) and compiles natively is
-  used as it is; nothing is installed.
+What you see, step by step:
+
+1. Open Terminal (⌘Space, type "Terminal", Return), paste the install command and press Return.
+2. It prints its plan and asks **Go ahead? [y/N]**: type `y`, Return. Without Homebrew it then asks **Install
+   Homebrew?** — Homebrew asks for your Mac login password (nothing shows while you type; that is normal) and may
+   install Apple's Command Line Tools: a few minutes, longer on a slow network.
+3. Emacs comes from Homebrew: a download on Apple silicon with macOS 15 or newer, a build of about 30 minutes on Intel
+   or an older macOS.
+4. **Add it to ~/.zprofile?** is asked for Homebrew's line and for `~/.local/bin` (where the `drgnx` command is): answer
+   `y`. They work in every **new** Terminal window, not in the one already open.
+5. The drgnx app opens, and with it the Welcome: go on with [onboarding.md](onboarding.md).
+
+The details:
+
+- **A good Emacs is kept.** An `emacs` on your PATH (or in `--prefix`) that is 31.1+, graphical (`ns`) and compiles
+  natively is used as it is; nothing is installed. An Emacs.app whose `emacs` is not on PATH is not looked for: the
+  installer installs Homebrew's.
 - **Homebrew first, if it is missing.** The plan lists it as the first step. Before running anything the installer
   explains that Homebrew's own installer asks for your password, installs Apple's Command Line Tools when they are
   missing and takes a few minutes, and asks "Install Homebrew?" (`--yes` answers yes). It then runs Homebrew's official
@@ -98,7 +116,7 @@ The script runs under the `/bin/bash` that ships with macOS (3.2); nothing newer
 - **Your Emacs configuration is never touched.** `~/.emacs.d` and `~/.config/emacs` are neither read nor written;
   drgnx starts with its own `--init-directory`.
 - **The drgnx app.** After the doctor it installs `~/Applications/drgnx.app` — drgnx in Finder, Spotlight and the
-  Dock, and in Open With for folders and code files ([opening.md](opening.md#on-macos-the-drgnx-app)). A failure
+  Dock, and in Open With for folders and almost any file ([opening.md](opening.md#on-macos-the-drgnx-app)). A failure
   only warns (run `drgnx macos-app` later). It is never put in `/Applications` and never starts at login.
 - The last lines say how to open drgnx next time: from Applications, or `drgnx .` in a project. Then, in a desktop
   session (not over SSH, and not under `--yes` without a terminal), it says "Opening drgnx…" and opens the app: the
@@ -172,11 +190,20 @@ drgnx app is installed (fix: `drgnx macos-app`), that Homebrew is there (also lo
 rm -rf ~/.local/share/drgnx ~/.local/bin/drgnx "${XDG_CACHE_HOME:-$HOME/.cache}/drgnx" "${XDG_STATE_HOME:-$HOME/.local/state}/drgnx"
 ```
 
-On macOS, also `rm -rf ~/Applications/drgnx.app`.
+Your settings (`~/.config/drgnx`) stay unless you remove them too.
+
+On macOS, also `rm -rf ~/Applications/drgnx.app`, and if you want them gone:
+
+- Emacs: `brew uninstall --cask emacs-plus-app` (Apple silicon, macOS 15+) or `brew uninstall emacs-plus@31`;
+- an OpenRouter key onboarding stored: `security delete-internet-password -s openrouter.ai -a drgnx` (or delete
+  `openrouter.ai` in Keychain Access);
+- what onboarding installed, each only if it did: `brew uninstall ollama` (models: `ollama rm NAME` first, or
+  `~/.ollama`), `brew uninstall --cask lm-studio` (models in `~/.lmstudio`), `npm uninstall -g
+  @zed-industries/claude-agent-acp`, `brew uninstall node`, `brew uninstall --cask claude-code`.
 
 A source-built Emacs: `make uninstall` in the build directory (`~/.cache/drgnx/build/emacs-31.1`, or under `$XDG_CACHE_HOME` if you set it) before deleting the cache (or
 remove `~/.local/bin/emacs*`, `~/.local/share/emacs`, `~/.local/libexec/emacs`). A packaged Emacs: remove it
-with your package manager. The PATH line, if you let the installer add it, is marked
+with your package manager. The PATH line (on a Mac also Homebrew's), if you let the installer add it, is marked
 `# added by the drgnx installer` in `~/.profile` (zsh: `~/.zprofile`).
 
 ## Testing the installer

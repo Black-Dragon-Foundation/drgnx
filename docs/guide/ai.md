@@ -74,7 +74,7 @@ question. Anything else you do clears it and drops the question in flight.
 | Key | While a suggestion shows | Otherwise |
 |---|---|---|
 | `Tab` | accept it all | see below |
-| `C-<right>` | accept its next word | the usual (`right-word`) |
+| `C-<right>` (Mac: ⌘→) | accept its next word | the usual (`right-word`; Mac: line end) |
 | `Escape` | dismiss it | the usual |
 
 **Accept Suggestion Line** and **Toggle AI Completion** are in the palette. With no `complete` provider running,
@@ -90,7 +90,7 @@ nothing is asked, and drgnx says so once; it looks for running providers again a
 ## Inline edit
 
 **Edit with AI…** rewrites the selected region, or the defun at point when nothing is selected, as you say. Keys:
-VS Code `C-k C-e`, Emacs `C-c e`, Vim `SPC a e`; never `C-i`, which is Tab in a terminal. It asks the `edit` role.
+VS Code `C-k C-e` (⌘K ⌘E on a Mac), Emacs `C-c e`, Vim `SPC a e`; never `C-i`, which is Tab in a terminal. It asks the `edit` role.
 The answer opens as a diff against the buffer as it is now (a code fence the model adds is dropped), and nothing
 changes until you decide:
 
@@ -166,12 +166,14 @@ drgnx writes a key in exactly one place: the macOS Keychain, or the Linux keyrin
 step, in the drgnx app: the key is read with `read-passwd`, never shown) or a command you run —
 never into a drgnx file, and never on a command line (it goes to the store on stdin). A Keychain that is locked
 or denies access gives an error saying so; the environment variable always works instead. drgnx never sends a key to
-a model.
+a model. On a Mac the key is an internet password for `openrouter.ai`, account `drgnx`, in your login keychain:
+Keychain Access shows it, and `security delete-internet-password -s openrouter.ai -a drgnx` removes it.
 
 Sources that may ask for something (`.gpg` files, the Keychain, the keyring) are only read from commands you run in
 the drgnx app or an interactive Emacs (Edit with AI, Ask the Codebase, Choose); background features (ghost text, the
 hub, agents) use the environment or a key read earlier, and the `drgnx` command-line tool, which runs in batch Emacs,
-never reads the Keychain or keyring: set `OPENROUTER_API_KEY` for it.
+never reads the Keychain or keyring: set `OPENROUTER_API_KEY` for it. In short: the key you gave onboarding works in
+the drgnx app; in a terminal (`drgnx onboard`, `drgnx search`, …) use the environment variable.
 
 ## Agents
 

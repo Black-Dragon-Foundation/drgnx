@@ -10,7 +10,8 @@ when the profile asks for it and the agent supports it. Only **Stop** cancels.
 
 ## Sessions
 
-Agents: New Agent Session… (palette) starts a **profile** in the current project. Profiles live in
+Agents: New Agent Session… (palette) starts a **profile** in the current project; Show Agents (`C-k a`, ⌘K A on a
+Mac) opens the Agents tab. Profiles live in
 `~/.config/drgnx/agents.eld`:
 
 ```elisp
@@ -89,7 +90,10 @@ The **hub** is a background process (a durable job: it outlives the Emacs that s
 it again). The first agent that needs it starts it; `drgnx hub start|stop|status [--json]` manages it by hand. Keys
 reach it from its environment, from auth-source files that never ask, or from the command you ran (a key in
 `~/.authinfo.gpg` is read then) — and stay in its memory; tokens are kept only as hashes, so a restarted hub still
-takes them; an agent's token is revoked when it exits. With no hub to be had, an agent goes to its provider directly and says so. The Agents list's **Via**
+takes them; an agent's token is revoked when it exits. The hub keeps the environment, `PATH` included, of the Emacs
+that started it: when an agent's program was installed while a hub ran (onboarding's Agents step, say), run
+`drgnx hub stop` (its durable sessions end), so the hub the next durable session starts finds the program.
+With no hub to be had, an agent goes to its provider directly and says so. The Agents list's **Via**
 column shows which.
 
 ## Durable sessions

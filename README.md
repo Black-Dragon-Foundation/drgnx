@@ -37,7 +37,10 @@ curl -fsSL https://raw.githubusercontent.com/Black-Dragon-Foundation/drgnx/main/
 ```
 
 It prints a plan first, asks before every root step, and gets Emacs 31.1 from your distribution where it
-is good or builds the signed GNU release with native compilation. `--dry-run` shows the plan only. Details,
+is good or builds the signed GNU release with native compilation. On macOS, run it in Terminal: it installs Homebrew
+(after asking) and Emacs from it, adds a **drgnx** app to Applications and opens it, and the Welcome sets up keys,
+AI and Claude Code; afterwards open drgnx from the Dock or Spotlight, or run `drgnx .` in a project, like `code .`.
+`--dry-run` shows the plan only. Details,
 manual install and uninstall: [docs/guide/install.md](docs/guide/install.md). Check a machine with `drgnx doctor`.
 
 ## Documentation
