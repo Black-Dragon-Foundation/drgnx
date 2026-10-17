@@ -9,8 +9,10 @@ User docs: [Agents → The hub and the gateway](../guide/agents.md#the-hub-and-t
   `drgnx-jobs--detach`: `setsid -f`, or where there is no `setsid` (macOS) perl, which forks and calls setsid(2)
   itself — Emacs's child already leads its own process group, and setsid(2) refuses a group leader. Either way the
   hub leads its own session and process group and outlives the Emacs that started it. A job's pid is checked
-  against the boot it was started in: Linux's `boot_id`, macOS's `sysctl -n kern.boottime` seconds. It gets the starting Emacs's drgnx and XDG directories and provider keys (when set) as
-  its environment; under systemd only named variables pass (`--setenv=NAME`), so no value is ever in a command line.
+  against the boot it was started in: Linux's `boot_id`, macOS's `sysctl -n kern.bootsessionuuid` (not
+  `kern.boottime`, which moves when the clock is set). It gets the starting Emacs's drgnx and XDG directories and
+  provider keys (when set) as its environment; under systemd only named variables pass (`--setenv=NAME`), so no
+  value is ever in a command line.
   Its main loop is `accept-process-output` plus the event drain batch Emacs needs (queued events hold back
   sentinels). SIGTERM or `shutdown` removes its socket. It starts with SIGPIPE ignored (`trap '' PIPE`): the
   editing Emacs that launches it does not ignore it, and a write to a connection an agent closed must be an error,

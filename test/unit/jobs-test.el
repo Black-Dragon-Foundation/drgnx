@@ -70,17 +70,23 @@
   (let ((drgnx-jobs--setsid nil)) (drgnx-jobs-test--stop)))
 
 (ert-deftest drgnx-jobs/the-boot-id-on-macos ()
-  ;; macOS has no /proc: the boot time's seconds from `sysctl -n kern.boottime'
-  (let* ((bin (make-temp-file "drgnx-jobs-bin" t)) (sysctl (expand-file-name "sysctl" bin)))
+  ;; macOS has no /proc: the boot session's UUID from `sysctl -n kern.bootsessionuuid' (kern.boottime moves
+  ;; when the clock is set: a live job would look gone); nil when sysctl fails, says nothing or is missing
+  (let* ((bin (make-temp-file "drgnx-jobs-bin" t)) (sysctl (expand-file-name "sysctl" bin))
+         (fake (lambda (body)
+                 (with-temp-file sysctl (insert "#!/bin/sh\n[ \"$*\" = \"-n kern.bootsessionuuid\" ] || exit 1\n" body))
+                 (set-file-modes sysctl #o755))))
     (unwind-protect
-        (progn
-          (with-temp-file sysctl
-            (insert "#!/bin/sh\n[ \"$*\" = \"-n kern.boottime\" ] || exit 1\n"
-                    "echo '{ sec = 1760000000, usec = 1 } Fri Oct 17 10:00:00 2026'\n"))
-          (set-file-modes sysctl #o755)
-          (let ((exec-path (cons bin exec-path)) (system-type 'darwin)
-                (process-environment (cons (concat "PATH=" bin path-separator (getenv "PATH")) process-environment)))
-            (should (equal (drgnx-jobs--boot-id) "1760000000"))))
+        (let ((exec-path (list bin)) (system-type 'darwin)
+              (process-environment (cons (concat "PATH=" bin path-separator (getenv "PATH")) process-environment)))
+          (funcall fake "echo '  9D3B5C2E-1F4A-4B6C-8E7D-0A1B2C3D4E5F  '\n")
+          (should (equal (drgnx-jobs--boot-id) "9D3B5C2E-1F4A-4B6C-8E7D-0A1B2C3D4E5F"))
+          (funcall fake "exit 3\n")
+          (should-not (drgnx-jobs--boot-id))
+          (funcall fake "echo\n")
+          (should-not (drgnx-jobs--boot-id))
+          (delete-file sysctl)
+          (should-not (drgnx-jobs--boot-id)))
       (delete-directory bin t))))
 
 (ert-deftest drgnx-jobs/a-job-whose-process-vanished-is-gone ()

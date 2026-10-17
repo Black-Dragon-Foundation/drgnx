@@ -5,9 +5,9 @@
 ;;; Commentary:
 ;; A job is a command run detached from Emacs — a systemd user unit (`systemd-run --user') where
 ;; systemd runs the session, else its own session and process group (`drgnx-jobs--detach': `setsid',
-;; or perl on macOS) — so closing a frame, restarting Emacs or interrupting a chat cannot kill it.  Everything about a job lives in its directory under
-;; the state dir (jobs/ID: job.eld, log, pid, exit), so a new Emacs lists it, shows its log and stops
-;; it.  See docs/guide/agents.md.
+;; or perl on macOS) — so closing a frame, restarting Emacs or interrupting a chat cannot kill it.
+;; Everything about a job lives in its directory under the state dir (jobs/ID: job.eld, log, pid,
+;; exit), so a new Emacs lists it, shows its log and stops it.  See docs/guide/agents.md.
 
 ;;; Code:
 (require 'cl-lib)
@@ -49,14 +49,13 @@ code to DIR/exit (143 when stopped); with HEAD, the git HEAD it ended at to DIR/
             (mapconcat #'shell-quote-argument command " "))))
 
 (defun drgnx-jobs--boot-id ()
-  "This boot's id: Linux's boot_id; on macOS the boot time's seconds (`sysctl -n kern.boottime')."
+  "This boot's id: Linux's boot_id; on macOS the boot session's UUID (`sysctl -n kern.bootsessionuuid' — not
+kern.boottime, which moves when the clock is set); nil when there is none."
   (ignore-errors
     (if (eq system-type 'darwin)
         (with-temp-buffer
-          ;; "{ sec = 1760000000, usec = 123456 } Fri Oct 17 10:00:00 2026"
-          (and (eql 0 (call-process "sysctl" nil t nil "-n" "kern.boottime"))
-               (progn (goto-char (point-min)) (re-search-forward "\\bsec = \\([0-9]+\\)" nil t))
-               (match-string 1)))
+          (and (eql 0 (call-process "sysctl" nil t nil "-n" "kern.bootsessionuuid"))
+               (let ((id (string-trim (buffer-string)))) (and (not (string-empty-p id)) id))))
       (string-trim (with-temp-buffer (insert-file-contents "/proc/sys/kernel/random/boot_id") (buffer-string))))))
 
 (defvar drgnx-jobs--setsid (executable-find "setsid")
