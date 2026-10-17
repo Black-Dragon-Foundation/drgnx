@@ -33,6 +33,9 @@
 
 ;;;; The list (Agents tab)
 
+(defvar drgnx-agents-ui--jobs-cache nil "(TIME . JOBS): the list redraws often; jobs are read every 5 s at most.")
+
+
 (defvar drgnx-agents-list-mode-map
   (let ((m (make-sparse-keymap))) (set-keymap-parent m tabulated-list-mode-map) m)
   "Keys come from the key profiles (command `agents-open').")
@@ -40,6 +43,7 @@
 (define-derived-mode drgnx-agents-list-mode tabulated-list-mode "Agents"
   "Agent sessions and durable jobs: RET opens one."
   (setq tabulated-list-format [("Name" 26 nil) ("Status" 9 nil) ("Ctx" 5 nil) ("Waiting" 0 nil)])
+  (add-hook 'tabulated-list-revert-hook (lambda () (setq drgnx-agents-ui--jobs-cache nil)) nil t)   ; g reads jobs now
   (tabulated-list-init-header))
 
 (defun drgnx-agents-ui--waiting (s)
@@ -49,6 +53,11 @@
                                (and (drgnx-agent-session-permissions s) (format "%d to answer" (length (drgnx-agent-session-permissions s))))
                                (and (drgnx-agent-session-reviews s) (format "%d edit to review" (length (drgnx-agent-session-reviews s))))))
                ", "))
+
+(defun drgnx-agents-ui--jobs ()
+  (unless (and drgnx-agents-ui--jobs-cache (< (- (float-time) (car drgnx-agents-ui--jobs-cache)) 5))
+    (setq drgnx-agents-ui--jobs-cache (cons (float-time) (ignore-errors (drgnx-jobs-list)))))
+  (cdr drgnx-agents-ui--jobs-cache))
 
 (defun drgnx-agents-ui--entries ()
   (append
@@ -61,7 +70,7 @@
              (list (plist-get j :id)
                    (vector (concat "job: " (plist-get j :name)) (symbol-name (plist-get j :status)) ""
                            (if (plist-get j :exit) (format "exit %s" (plist-get j :exit)) ""))))
-           (ignore-errors (drgnx-jobs-list)))))
+           (drgnx-agents-ui--jobs))))
 
 (defun drgnx-agents-ui-list-buffer ()
   (let ((b (get-buffer-create "*drgnx Agents*")))
@@ -107,6 +116,9 @@
 
 (defun drgnx-agents-ui-render (s)
   "Insert session S's transcript (and what waits for an answer) at point."
+  (when-let* ((cmds (drgnx-agent-session-commands s)))
+    (insert (propertize (concat "Commands: " (mapconcat (lambda (c) (concat "/" (plist-get c :name))) cmds " ")) 'face 'drgnx-agents-ui-dim)
+            "\n\n"))
   (dolist (e (drgnx-agent-session-entries s))
     (pcase (plist-get e :type)
       ('user (insert (propertize (concat (if (plist-get e :steer) "↪ " "▸ ") (plist-get e :text)) 'face 'drgnx-agents-ui-user) "\n\n"))
@@ -132,15 +144,21 @@
       (drgnx-agents-ui--button "[Review]" (lambda () (drgnx-agents-ui-review s r)))
       (insert "\n")))
   (pcase (drgnx-agent-session-status s)
-    ('busy (insert (propertize "working…" 'face 'drgnx-agents-ui-dim)))
+    ('busy (insert (propertize "working…  " 'face 'drgnx-agents-ui-dim))
+           (drgnx-agents-ui--button "[Stop]" (lambda () (drgnx-agents-stop s))))
     ('exited (insert (propertize (format "the agent exited%s\n%s" (if (drgnx-agent-session-exit s) (format " (%s)" (drgnx-agent-session-exit s)) "")
                                          (or (drgnx-agent-session-stderr s) ""))
                                  'face 'error))))
   (when (drgnx-agent-session-queue s)
-    (insert (propertize (format "\n%d queued%s: %s" (length (drgnx-agent-session-queue s))
-                                (if (drgnx-agent-session-paused s) " (paused by Stop — Deliver Queued Messages sends them)" "")
-                                (string-join (drgnx-agent-session-queue s) " · "))
-                        'face 'drgnx-agents-ui-dim))))
+    (insert (propertize (format "\n%d queued%s:" (length (drgnx-agent-session-queue s))
+                                (if (drgnx-agent-session-paused s) " (held by Stop)" ""))
+                        'face 'drgnx-agents-ui-dim))
+    (when (drgnx-agent-session-paused s)
+      (insert " ") (drgnx-agents-ui--button "[Deliver]" (lambda () (drgnx-agents-deliver-queue s))))
+    (seq-do-indexed (lambda (text i)
+                      (insert "\n  " (propertize text 'face 'drgnx-agents-ui-dim) " ")
+                      (drgnx-agents-ui--button "[×]" (lambda () (drgnx-agents-unqueue s i))))
+                    (drgnx-agent-session-queue s))))
 
 (defun drgnx-agents-ui--buffer (s) (get-buffer-create (format "*agent: %s*" (drgnx-agent-session-name s))))
 
@@ -243,46 +261,84 @@
 
 ;;;; Edit review (the agent's fs/write_text_file)
 
-(defvar-local drgnx-agents-ui--review nil "(SESSION . ITEM) this diff answers.")
+(defvar-local drgnx-agents-ui--review nil "(SESSION ITEM COPY) this diff answers; COPY takes the hunks you apply.")
 
 (defvar drgnx-agents-review-mode-map (make-sparse-keymap)
   "Keys come from the key profiles (commands `agents-review-done', `agents-review-reject').")
 
 (define-minor-mode drgnx-agents-review-mode
-  "An edit an agent proposes: C-c C-a applies a hunk to your file, C-c C-c done, C-c C-k reject."
+  "An edit an agent proposes: C-c C-a applies a hunk (to a copy of the file), C-c C-c writes what you
+applied to the file, C-c C-k rejects — nothing touches the file before Done."
   :lighter " Review")
 
 (defun drgnx-agents-ui-review (s item)
-  "Show the change ITEM proposes to its file as a diff: apply the hunks you want, then Done."
+  "Show the change ITEM proposes as a diff against a copy of its file: apply the hunks you want (to
+the copy), then Done writes the copy to the file (Reject, or closing the diff, writes nothing)."
   (let* ((path (plist-get item :path))
+         (copy (make-temp-file "drgnx-review-" nil (concat "-" (file-name-nondirectory path))))
          (new (make-temp-file "drgnx-proposed-"))
-         (old (if (file-exists-p path) path (make-temp-file "drgnx-empty-"))))
+         (cwd (drgnx-agent-session-cwd s)))
+    (when (file-exists-p path) (copy-file path copy t))
     (with-temp-file new (insert (plist-get item :content)))
-    (let ((b (diff-no-select old new "-u" t (get-buffer-create (format "*review: %s*" (file-name-nondirectory path))))))
-      ;; the proposal is only in the diff now: hunks can apply to the user's file alone
-      (delete-file new)
+    (let ((b (diff-no-select copy new "-u" t (get-buffer-create (format "*review: %s*" (abbreviate-file-name path))))))
+      (delete-file new)                             ; hunks can apply to the copy alone
       (with-current-buffer b
         (drgnx-agents-review-mode 1)
-        (setq drgnx-agents-ui--review (cons s item)))
+        (setq drgnx-agents-ui--review (list s item copy))
+        (setq header-line-format
+              (concat (format " %s wants to change %s" (drgnx-agent-session-name s) (abbreviate-file-name path))
+                      (if (and cwd (not (file-in-directory-p path cwd))) "  — OUTSIDE the session's project" "")
+                      "  (C-c C-a apply a hunk · C-c C-c done · C-c C-k reject)"))
+        (add-hook 'kill-buffer-hook #'drgnx-agents-ui--review-killed nil t))
       (pop-to-buffer b)
       b)))
 
-(defun drgnx-agents-ui--review-finish (reject)
-  (pcase-let ((`(,s . ,item) (or drgnx-agents-ui--review (user-error "Not an agent's edit"))))
-    (when-let* ((b (find-buffer-visiting (plist-get item :path))))
-      (when (buffer-modified-p b) (with-current-buffer b (save-buffer))))
-    (drgnx-agents-finish-review s item reject)
-    (kill-buffer (current-buffer))))
+(defun drgnx-agents-ui--review-cleanup (copy)
+  (when-let* ((cb (find-buffer-visiting copy))) (with-current-buffer cb (set-buffer-modified-p nil)) (kill-buffer cb))
+  (when (file-exists-p copy) (delete-file copy)))
+
+(defun drgnx-agents-ui--review-killed ()
+  "A review closed without Done or Reject: the agent hears it was rejected."
+  (when drgnx-agents-ui--review
+    (pcase-let ((`(,s ,item ,copy) drgnx-agents-ui--review))
+      (setq drgnx-agents-ui--review nil)
+      (drgnx-agents-ui--review-cleanup copy)
+      (when (memq item (drgnx-agent-session-reviews s)) (drgnx-agents-finish-review s item t)))))
 
 (defun drgnx-agents-ui-review-done ()
-  "Done: the hunks applied stay; tell the agent."
+  "Write what you applied to the file; tell the agent."
   (interactive)
-  (drgnx-agents-ui--review-finish nil))
+  (pcase-let ((`(,s ,item ,copy) (or drgnx-agents-ui--review (user-error "Not an agent's edit"))))
+    (let* ((path (plist-get item :path)) (visiting (find-buffer-visiting path)) (cb (find-buffer-visiting copy)))
+      (when (and visiting (buffer-modified-p visiting))
+        (user-error "%s has unsaved changes: save or revert them first" (abbreviate-file-name path)))
+      (let ((text (if cb (with-current-buffer cb (buffer-substring-no-properties (point-min) (point-max)))
+                    (with-temp-buffer (insert-file-contents copy) (buffer-string))))
+            (coding (and cb (with-current-buffer cb buffer-file-coding-system))))
+        (make-directory (file-name-directory path) t)
+        (let ((coding-system-for-write (or coding 'utf-8-unix))) (write-region text nil path nil 'silent))
+        (when visiting (with-current-buffer visiting (revert-buffer t t t))))
+      (setq drgnx-agents-ui--review nil)
+      (drgnx-agents-ui--review-cleanup copy)
+      (drgnx-agents-finish-review s item)
+      (kill-buffer (current-buffer)))))
 
 (defun drgnx-agents-ui-review-reject ()
-  "Reject the agent's edit."
+  "Reject the agent's edit: the file stays as it is."
   (interactive)
-  (drgnx-agents-ui--review-finish t))
+  (pcase-let ((`(,s ,item ,copy) (or drgnx-agents-ui--review (user-error "Not an agent's edit"))))
+    (setq drgnx-agents-ui--review nil)
+    (drgnx-agents-ui--review-cleanup copy)
+    (drgnx-agents-finish-review s item t)
+    (kill-buffer (current-buffer))))
+
+(defun drgnx-agents-ui-edit-queued ()
+  "Change or remove (empty text) a queued message before it is sent."
+  (interactive)
+  (let* ((s (drgnx-agents-ui--session)) (q (or (drgnx-agent-session-queue s) (user-error "Nothing queued")))
+         (pick (completing-read "Queued message: " q nil t))
+         (n (seq-position q pick)))
+    (drgnx-agents-requeue s n (read-string "Text (empty: remove): " pick))))
 
 ;;;; The module
 
@@ -303,6 +359,7 @@
                      (agents-send "Send to Agent…" drgnx-agents-ui-send "Queued while the agent works; never cancels")
                      (agents-stop "Stop Agent" drgnx-agents-ui-stop "Cancel the running turn (the only thing that does)")
                      (agents-deliver "Deliver Queued Messages" drgnx-agents-ui-deliver "Send what a Stop held back")
+                     (agents-edit-queued "Edit Queued Message…" drgnx-agents-ui-edit-queued "Change or remove a message before it is sent")
                      (agents-take-over "Take Over Agent Session…" drgnx-agents-ui-take-over "Resume a session by its id")
                      (agents-answer "Answer Agent…" drgnx-agents-ui-answer "Allow or reject what the agent asks")
                      (jobs-log "Show Job Log…" drgnx-agents-ui-job-log "A durable job's output")

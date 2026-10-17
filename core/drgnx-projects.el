@@ -96,8 +96,9 @@
     (sort out #'string<)))
 
 (defun drgnx-projects--todos (root)
-  "Open TODOs of ROOT: (TEXT ID FILE)… (FILE relative to ROOT)  From TODO.md and plan checklists (`- [ ] …') and TODO.org
-\(`* TODO …').  The id hashes the file and the text (and which repeat of that text it is)."
+  "Open TODOs of ROOT: (TEXT ID FILE N)…, FILE relative to ROOT, N which repeat of TEXT in FILE (from 0).
+From TODO.md and plan checklists (`- [ ] …') and TODO.org (`* TODO …').  The id hashes the file and
+the text (and which repeat of that text it is)."
   (let ((files (append (seq-filter #'file-readable-p (mapcar (lambda (f) (expand-file-name f root)) '("TODO.md" "TODO.org")))
                        (drgnx-projects--plan-files root)))
         out)
@@ -112,7 +113,7 @@
               (puthash text (1+ n) seen)
               (push (list text (substring (secure-hash 'sha1 (if (zerop n) (concat rel "\0" text) (format "%s\0%s\0%d" rel text n)))
                                           0 12)
-                          rel)
+                          rel n)
                     out))))))
     (nreverse out)))
 
@@ -176,7 +177,7 @@ its encoding and line endings, its modes, through its symlink."
   (unless (bolp) (insert "\n"))
   (insert (format "* %s\n:PROPERTIES:\n:PROJECT_ROOT: %s\n%s:END:\n" name root (if url (format ":REPO_URL: %s\n" url) ""))))
 
-(defun drgnx-projects--add-todo (pos text id &optional file)
+(defun drgnx-projects--add-todo (pos text id &optional file n)
   "Add TEXT as a TODO at the end of the project at POS unless ID is in it; a checklist item from a
 markdown FILE remembers it (:PLAN_FILE:, :PLAN_TEXT:) for `drgnx-projects-sync-plans'.  Non-nil if added."
   (let ((end (drgnx-projects--subtree-end pos)))
@@ -187,7 +188,8 @@ markdown FILE remembers it (:PLAN_FILE:, :PLAN_TEXT:) for `drgnx-projects-sync-p
         (insert (format "%s TODO %s\n:PROPERTIES:\n:ONBOARD_ID: %s\n%s:END:\n"
                         (make-string (1+ level) ?*) (drgnx-projects--heading-text text) id
                         (if (and file (string-suffix-p ".md" file))
-                            (format ":PLAN_FILE: %s\n:PLAN_TEXT: %s\n" file (replace-regexp-in-string "\n" " " text))
+                            (format ":PLAN_FILE: %s\n:PLAN_TEXT: %s\n%s" file (replace-regexp-in-string "\n" " " text)
+                                    (if (and n (> n 0)) (format ":PLAN_N: %d\n" n) ""))
                           "")))
         t))))
 
@@ -261,12 +263,12 @@ board).  Returns (:added NAMES :todos N :capped NAMES)."
              (push (plist-get e :name) added))
            (when (member root todo-roots)
              (let ((n 0))
-               (pcase-dolist (`(,text ,id ,file) (drgnx-projects--todos root))
+               (pcase-dolist (`(,text ,id ,file ,rep) (drgnx-projects--todos root))
                  (let ((key (concat (drgnx-projects--norm root) "\0" id)))
                    (unless (gethash key imported)
                      (if (>= n drgnx-projects-todo-cap)
                          (cl-pushnew (plist-get e :name) capped :test #'equal)
-                       (when (drgnx-projects--add-todo (drgnx-projects--find root) text id file)
+                       (when (drgnx-projects--add-todo (drgnx-projects--find root) text id file rep)
                          (setq n (1+ n) count (1+ count)))
                        (puthash key t imported)))))))))))
     (drgnx-projects--save-imported imported)
@@ -276,12 +278,38 @@ board).  Returns (:added NAMES :todos N :capped NAMES)."
 ;;;; Plans ↔ board TODOs
 
 (defvar-local drgnx-projects--orig nil "A plan buffer's text as read (written back only if changed).")
+(defvar-local drgnx-projects--coding nil "The coding a plan file was read with (kept when writing).")
 
-(defun drgnx-projects--plan-line (text)
-  "In FILE's buffer text: the position of the checkbox line for TEXT and whether it is ticked, or nil."
+(defun drgnx-projects--plan-line (text &optional n)
+  "In a plan buffer: the position of the checkbox of the Nth (from 0) line for TEXT and whether it is
+ticked, or nil."
   (goto-char (point-min))
-  (when (re-search-forward (concat "^[ \t]*[-*] \\[\\([ xX]\\)\\] " (regexp-quote text) "[ \t]*$") nil t)
-    (list (match-beginning 1) (not (equal (match-string 1) " ")))))
+  (let ((re (concat "^[ \t]*[-*] \\[\\([ xX]\\)\\] " (regexp-quote text) "[ \t]*$")) found)
+    (dotimes (_ (1+ (or n 0))) (setq found (re-search-forward re nil t)))
+    (when found (list (match-beginning 1) (not (equal (match-string 1) " "))))))
+
+(defun drgnx-projects--plan-buffer (path)
+  "A buffer holding plan PATH's text (with its coding), or nil when it is unreadable or open in Emacs
+with unsaved edits (those win: the plan is left alone)."
+  (let ((visiting (find-buffer-visiting path)))
+    (unless (or (not (file-readable-p path)) (and visiting (buffer-modified-p visiting)))
+      (with-current-buffer (generate-new-buffer " *drgnx-plan*")
+        (insert-file-contents path)
+        (setq-local drgnx-projects--coding last-coding-system-used drgnx-projects--orig (buffer-string))
+        (current-buffer)))))
+
+(defun drgnx-projects--write-plan (path buf)
+  "Write BUF back to PATH (atomically, with its coding and modes) when it changed."
+  (with-current-buffer buf
+    (unless (equal (buffer-string) drgnx-projects--orig)
+      (let* ((target (file-truename path)) (modes (file-modes target))
+             (tmp (make-temp-file (expand-file-name ".plan-" (file-name-directory target)))))
+        (condition-case err
+            (progn (let ((coding-system-for-write (or drgnx-projects--coding 'utf-8-unix))) (write-region nil nil tmp nil 'silent))
+                   (when modes (set-file-modes tmp modes))
+                   (rename-file tmp target t))
+          (error (ignore-errors (delete-file tmp)) (signal (car err) (cdr err))))
+        (when-let* ((v (find-buffer-visiting path))) (with-current-buffer v (revert-buffer t t t)))))))
 
 (defun drgnx-projects-sync-plans ()
   "Keep plan checklists and their board TODOs in step: a DONE TODO ticks its checkbox; a ticked
@@ -302,20 +330,17 @@ Returns (:ticked N :done N)."
                                                                               t)
                                                        (match-string 1)))))
                 (file (funcall prop "PLAN_FILE")) (text (funcall prop "PLAN_TEXT"))
+                (n (string-to-number (or (funcall prop "PLAN_N") "0")))
                 (root (save-excursion (goto-char hpos)
                                       (let (r) (while (and (not r) (re-search-backward "^[ \t]*:PROJECT_ROOT:[ \t]*\\(.+?\\)[ \t]*$" nil t))
                                                  (setq r (match-string 1)))
                                            r))))
            (when (and file text root)
              (let* ((path (expand-file-name file root))
-                    (buf (or (gethash path plans)
-                             (and (file-readable-p path)
-                                  (puthash path (with-current-buffer (generate-new-buffer " *drgnx-plan*")
-                                                  (insert-file-contents path) (setq-local drgnx-projects--orig (buffer-string))
-                                                  (current-buffer))
-                                           plans)))))
+                    (buf (let ((v (gethash path plans 'absent)))
+                           (if (eq v 'absent) (puthash path (drgnx-projects--plan-buffer path) plans) v))))
                (when buf
-                 (pcase (with-current-buffer buf (drgnx-projects--plan-line text))
+                 (pcase (with-current-buffer buf (drgnx-projects--plan-line text n))
                    (`(,pos ,is-ticked)
                     (cond ((and (equal kw "DONE") (not is-ticked))
                            (with-current-buffer buf (goto-char pos) (delete-char 1) (insert "x"))
@@ -325,12 +350,9 @@ Returns (:ticked N :done N)."
                            (setq done (1+ done)))))))))
            (goto-char (min (point-max) (1+ hpos)))
            (end-of-line)))))
-    (maphash (lambda (path buf)
-               (with-current-buffer buf
-                 (unless (equal (buffer-string) drgnx-projects--orig)
-                   (let ((coding-system-for-write 'utf-8-unix)) (write-region nil nil path nil 'silent))))
-               (kill-buffer buf))
-             plans)
+    (unwind-protect
+        (maphash (lambda (path buf) (when (buffer-live-p buf) (drgnx-projects--write-plan path buf))) plans)
+      (maphash (lambda (_ buf) (when (buffer-live-p buf) (kill-buffer buf))) plans))
     (when (called-interactively-p 'any) (message "Plans: %d checkboxes ticked, %d TODOs done" ticked done))
     (list :ticked ticked :done done)))
 

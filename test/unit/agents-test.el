@@ -164,4 +164,110 @@
       (should (drgnx-agents-test--idle s))
       (should (< (drgnx-agents-context-percent s) before)))))
 
+;;;; Review fixes (M7 final review)
+
+(defun drgnx-agents-test--shape (s)
+  "The user/stop rhythm of S's transcript: (user stop user stop …)."
+  (delq nil (mapcar (lambda (e) (memq (plist-get e :type) '(user stop))) (drgnx-agent-session-entries s))))
+
+(ert-deftest drgnx-agents/a-late-answer-to-a-stopped-turn-never-ends-the-next ()
+  ;; C1: the agent answers the cancel after the 1 s deadline; the next turns stay in order, one at a time.
+  (skip-unless (file-readable-p "/proc/self/fd/0"))
+  (drgnx-agents-test--with s '(:env ("MOCK_ACP_LATE_CANCEL=2"))
+    (drgnx-agents-send s "slow one")
+    (sleep-for 0.3)
+    (drgnx-agents-stop s)
+    (should (drgnx-agents-test--idle s))                         ; the deadline ended it locally
+    (drgnx-agents-send s "second")
+    (drgnx-agents-send s "third")
+    (should (drgnx-agents-test--wait (lambda () (and (eq (drgnx-agent-session-status s) 'idle) (null (drgnx-agent-session-queue s))
+                                                     (= 3 (length (drgnx-agents-test--texts s 'user)))
+                                                     (= 3 (seq-count (lambda (e) (eq (plist-get e :type) 'stop)) (drgnx-agent-session-entries s)))))
+                                     15))
+    (should (equal (mapcar #'car (mapcar #'list (drgnx-agents-test--texts s 'user))) '("slow one" "second" "third")))
+    (should-not (seq-find (lambda (x) (string-search "OVERLAPPING" x)) (drgnx-agents-test--texts s 'agent)))
+    (should (equal (mapcar (lambda (e) (plist-get e :type))
+                           (seq-filter (lambda (e) (memq (plist-get e :type) '(user stop))) (drgnx-agent-session-entries s)))
+                   '(user stop user stop user stop)))))
+
+(ert-deftest drgnx-agents/interrupt-mode-sends-the-message-after-the-cancel ()
+  ;; I3
+  (skip-unless (file-readable-p "/proc/self/fd/0"))
+  (drgnx-agents-test--with s '(:mode interrupt)
+    (drgnx-agents-send s "slow one")
+    (drgnx-agents-send s "now this")
+    (should (drgnx-agents-test--wait (lambda () (member "now this" (drgnx-agents-test--texts s 'user))) 5))
+    (should (drgnx-agents-test--idle s))
+    (should-not (drgnx-agent-session-queue s))))
+
+(ert-deftest drgnx-agents/a-message-sent-while-starting-is-delivered ()
+  ;; I4
+  (skip-unless (file-readable-p "/proc/self/fd/0"))
+  (let* ((drgnx-agents-profiles
+          (list (list "mock" :command (list (expand-file-name invocation-name invocation-directory) "--batch" "-Q" "-l" drgnx-agents-test--mock))))
+         (drgnx-agents--sessions nil)
+         (s (drgnx-agents-start "mock" temporary-file-directory)))
+    (unwind-protect
+        (progn
+          (drgnx-agents-send s "early")
+          (should (drgnx-agents-test--wait (lambda () (and (eq (drgnx-agent-session-status s) 'idle)
+                                                           (member "You said: early" (drgnx-agents-test--texts s 'agent))))))
+          (should-not (drgnx-agent-session-queue s)))
+      (drgnx-agents-kill s))))
+
+(ert-deftest drgnx-agents/two-sessions-of-a-profile-have-their-own-names ()
+  ;; I13
+  (skip-unless (file-readable-p "/proc/self/fd/0"))
+  (drgnx-agents-test--with s nil
+    (let ((s2 (drgnx-agents-start "mock" temporary-file-directory)))
+      (should-not (equal (drgnx-agent-session-name s) (drgnx-agent-session-name s2))))))
+
+(ert-deftest drgnx-agents/a-missing-agent-program-is-an-exited-session ()
+  ;; I14: the first run without claude-agent-acp installed
+  (let ((drgnx-agents-profiles '(("nope" :command ("drgnx-no-such-agent-program-x"))))
+        (drgnx-agents--sessions nil)
+        (before (length (process-list))))
+    (let ((s (drgnx-agents-start "nope" temporary-file-directory)))
+      (should (eq (drgnx-agent-session-status s) 'exited))
+      (should (seq-find (lambda (e) (eq (plist-get e :type) 'error)) (drgnx-agent-session-entries s)))
+      (should (= (length (process-list)) before)))))
+
+(ert-deftest drgnx-agents/steering-that-fails-queues-the-message ()
+  ;; I12: a request (not a notification): an error puts the text in the queue
+  (skip-unless (file-readable-p "/proc/self/fd/0"))
+  (drgnx-agents-test--with s '(:mode steer :env ("MOCK_ACP_STEER_FAILS=1"))
+    (drgnx-agents-send s "slow one")
+    (drgnx-agents-send s "go left")
+    (should (drgnx-agents-test--wait (lambda () (equal (drgnx-agent-session-queue s) '("go left"))) 3))))
+
+(ert-deftest drgnx-agents/reads-honour-line-and-limit-and-need-absolute-paths ()
+  ;; I10 and the path checks
+  (let* ((f (make-temp-file "drgnx-read")) (s (drgnx-agents--make :cwd temporary-file-directory)))
+    (unwind-protect
+        (progn
+          (write-region (mapconcat (lambda (i) (format "l%d" i)) (number-sequence 1 10) "\n") nil f nil 'silent)
+          (should (equal (plist-get (plist-get (drgnx-agents--on-request s "fs/read_text_file" (list :path f :line 3 :limit 2) 1) :result) :content)
+                         "l3\nl4\n"))
+          (should (plist-get (drgnx-agents--on-request s "fs/read_text_file" (list :path "~/x") 2) :error))
+          (should (plist-get (drgnx-agents--on-request s "fs/read_text_file" (list :path "rel/x") 3) :error))
+          (should (plist-get (drgnx-agents--on-request s "fs/write_text_file" (list :path "rel/x" :content "a") 4) :error))
+          (should (plist-get (drgnx-agents--on-request s "fs/write_text_file" (list :path f) 5) :error)))
+      (delete-file f))))
+
+(ert-deftest drgnx-agents/stop-answers-pending-writes-too ()
+  (let* ((answers nil)
+         (s (drgnx-agents--make :status 'busy :acp-id "x" :reviews (list '(:id 9 :path "/tmp/x" :content "y")))))
+    (cl-letf (((symbol-function 'drgnx-acp-respond) (lambda (_c id _r &optional err) (push (list id err) answers)))
+              ((symbol-function 'drgnx-acp-notify) #'ignore))
+      (drgnx-agents-stop s)
+      (should-not (drgnx-agent-session-reviews s))
+      (should (equal (car answers) '(9 (:code -32003 :message "the turn was stopped")))))))
+
+(ert-deftest drgnx-agents/a-session-that-was-never-made-is-never-prompted ()
+  (let* ((sent nil) (s (drgnx-agents--make :status 'idle :acp-id nil)))
+    (cl-letf (((symbol-function 'drgnx-acp-request) (lambda (&rest a) (push a sent))))
+      (drgnx-agents-send s "hello")
+      (should-not sent)
+      (should (equal (drgnx-agent-session-queue s) '("hello"))))))
+
 ;;; agents-test.el ends here

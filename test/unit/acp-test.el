@@ -72,7 +72,10 @@
         (should (cdr r)))                                     ; the pending prompt fails, not hangs
       (should (drgnx-acp-test--wait (lambda () exit)))
       (should (eql (car exit) 3))
-      (should (string-match-p "mock crashed" (cadr exit))))))
+      (should (string-match-p "mock crashed" (cadr exit)))
+      ;; nothing left behind: the stderr pipe and the input buffer go with the agent
+      (should-not (process-live-p (drgnx-acp-conn-stderr-process c)))
+      (should-not (buffer-live-p (drgnx-acp-conn-input-buffer c))))))
 
 (ert-deftest drgnx-acp/lines-are-framed-whatever-the-chunks ()
   ;; No process: the framing alone.  A line split across outputs, a malformed line (logged,

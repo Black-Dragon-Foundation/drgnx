@@ -19,7 +19,8 @@ Agents: New Agent Session… (palette) starts a **profile** in the current proje
 ```
 
 `:command` is the agent program; `:mode` is what a message to a busy agent does: `queue` (default), `steer` (when
-the agent advertises steering; otherwise it queues) or `interrupt` (stop the turn, then send). Keys and tokens are
+the agent advertises steering — sent as `_session/steering`; if the agent refuses, the message is queued instead) or
+`interrupt` (stop the turn, then send). A profile whose program is not installed gives a session that says so. Keys and tokens are
 never written there — the agent reads them from its environment or its own login. The built-in `claude` profile
 runs the unmodified `claude-agent-acp` when it is installed.
 
@@ -29,14 +30,17 @@ A session's **transcript** (RET on its row; opens in the editor) shows:
 - tool calls with their status — a subagent's own tool calls indented under it;
 - the agent's plan (`☑` done, `◐` in progress, `☐` pending);
 - **what waits for you**: a permission request with its options as buttons; an edit to review;
-- "working…", the queued messages, and how the agent exited if it did (with the end of its error output).
+- the agent's slash commands (`/compact`, …) at the top;
+- "working…" with a **[Stop]** button, the queued messages (each with **[×]** to remove it; **[Deliver]** after a
+  Stop), and how the agent exited if it did (with the end of its error output).
 
-Agents: Send to Agent (RET in a transcript) sends; Stop Agent cancels the running turn — it ends within a second,
-pending permission requests are answered "cancelled", and queued messages wait (Deliver Queued Messages sends
-them). Answer Agent picks an option for a pending permission. Take Over Agent Session resumes a session by its id
+Agents: Send to Agent (RET in a transcript) sends; Stop Agent (`C-c C-c` in a transcript, or [Stop]) cancels the
+running turn — it ends within a second, pending permission requests are answered "cancelled", pending edits
+rejected, and queued messages wait (Deliver Queued Messages, `C-c C-d`, sends them; Edit Queued Message changes or
+removes one before it is sent). If the agent answers the cancel late, its last words are dropped and nothing new
+is sent until that answer came — never two turns at once. Answer Agent picks an option for a pending permission. Take Over Agent Session resumes a session by its id
 (the agent replays it), when the agent can load sessions. The **context** column shows how full the agent's
-context is (from the usage the agent reports); `/compact` and the agent's other slash commands are listed in the
-session.
+context is (from the agent's `usage_update`, or usage in its answer).
 
 Nothing an agent asks is ever a question in the minibuffer: the agent waits, the Agents tab says "1 to answer",
 and you answer when you look.
@@ -44,23 +48,28 @@ and you answer when you look.
 ## Reviewing an agent's edits
 
 When an agent writes a file (ACP `fs/write_text_file`), the file is not changed: the transcript offers **Review**,
-which opens the proposed change as a diff. Apply the hunks you want (`C-c C-a` on a hunk — diff-mode), then
-**Done** (`C-c C-c`): the hunks you applied are saved and the agent hears the edit was made; **Reject** (`C-c C-k`)
-tells the agent it was refused. Reads (`fs/read_text_file`) get the file as it is in Emacs, unsaved edits included.
+which opens the proposed change as a diff against a copy of the file (the header says if the file is outside the
+session's project). Apply the hunks you want (`C-c C-a` on a hunk — diff-mode; they go to the copy), then **Done**
+(`C-c C-c`) writes the copy to the file — a new file is created — and the agent hears the edit was made. **Reject**
+(`C-c C-k`), or closing the diff, writes nothing and tells the agent it was refused. Done refuses while the file has
+unsaved changes in Emacs. Reads (`fs/read_text_file`, also a range of lines) get the file as it is in Emacs, unsaved
+edits included; both need absolute paths.
 
 ## Durable jobs
 
 Background work that must survive a closed frame, a restart of Emacs or an interrupted chat runs as a **job**: a
 systemd user unit (`systemd-run --user`) where systemd runs your session, else its own process group. Each job has
 a directory under `~/.local/state/drgnx/jobs/` (its command, log, pid and exit code), so any Emacs lists it in the
-Agents tab (running, exited N, stopped, gone), shows its log (Show Job Log) and stops it (Stop Job).
+Agents tab (running, exited N, stopped, gone), shows its log (Show Job Log) and stops it (Stop Job). A job's pid is
+trusted only within the boot that started it and for the process it started (a pid reused after a reboot is "gone",
+never signalled).
 
 ## Plans and the board
 
 Imported plan checklists (Onboarding: Import Projects, with TODOs) remember where they came from (`:PLAN_FILE:`,
-`:PLAN_TEXT:`). Projects: Sync Plans and Board TODOs makes them agree: a TODO marked DONE on the board ticks its
-checkbox (`- [x]`) in the plan; a ticked checkbox marks its TODO DONE. It writes only what changed, and only when
-you run it.
+`:PLAN_TEXT:`, and `:PLAN_N:` for a repeated line). Projects: Sync Plans and Board TODOs makes them agree: a TODO marked DONE on the board ticks its
+checkbox (`- [x]`) in the plan; a ticked checkbox marks its TODO DONE. It writes only what changed, only when you
+run it, with the plan's own encoding and line endings — and leaves alone a plan open in Emacs with unsaved edits.
 
 ## Tests
 

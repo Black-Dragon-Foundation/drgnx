@@ -11,8 +11,9 @@
 ;;   crash       exits 3, "mock crashed" on stderr
 ;;   /compact    the context shrinks
 ;;   anything else: "You said: …" in two chunks
-;; Usage comes in the prompt result (:usage :inputTokens :outputTokens :contextWindow 1000).
-;; MOCK_ACP_NO_LOAD / MOCK_ACP_NO_STEER turn off session/load and steering.
+;; Usage comes as a usage_update (:used :size 1000) at the end of each turn (claude-agent-acp's shape).
+;; MOCK_ACP_NO_LOAD / MOCK_ACP_NO_STEER turn off session/load and steering; MOCK_ACP_STEER_FAILS
+;; answers steering with an error; MOCK_ACP_LATE_CANCEL=SECS answers a cancel that late ("end_turn").
 (require 'cl-lib)
 (require 'subr-x)
 
@@ -49,9 +50,8 @@
   (when-let* ((turn (alist-get sid mock--turns nil nil #'equal)))
     (mapc #'cancel-timer (plist-get turn :timers))
     (setf (alist-get sid mock--turns nil 'remove #'equal) nil)
-    (mock--respond (plist-get turn :id)
-                   (list :stopReason reason
-                         :usage (list :inputTokens (alist-get sid mock--tokens 0 nil #'equal) :outputTokens 10 :contextWindow 1000)))))
+    (mock--update sid (list :sessionUpdate "usage_update" :used (alist-get sid mock--tokens 0 nil #'equal) :size 1000) t)
+    (mock--respond (plist-get turn :id) (list :stopReason reason))))
 
 (defun mock--steps (sid steps)
   "Run STEPS: (DELAY . THUNK)…, delays cumulative; then end the turn."
@@ -63,6 +63,8 @@
     (plist-put (alist-get sid mock--turns nil nil #'equal) :timers timers)))
 
 (defun mock--prompt (id params)
+  (when (alist-get (plist-get params :sessionId) mock--turns nil nil #'equal)   ; a prompt while one runs
+    (mock--say (plist-get params :sessionId) "OVERLAPPING PROMPT "))
   (let* ((sid (plist-get params :sessionId))
          (text (string-join (delq nil (mapcar (lambda (b) (plist-get b :text)) (plist-get params :prompt))) " ")))
     (setf (alist-get sid mock--turns nil nil #'equal) (list :id id))
@@ -147,13 +149,19 @@
           (mock--respond id nil))))
      ((equal method "session/prompt") (mock--prompt id params))
      ((equal method "session/cancel")
-      (let ((sid (plist-get params :sessionId)))
-        (mock--finish sid "cancelled")))
-     ((equal method "_session/steer")
-      (let ((sid (plist-get params :sessionId))
-            (text (string-join (delq nil (mapcar (lambda (b) (plist-get b :text)) (plist-get params :prompt))) " ")))
-        (mock--say sid (format "steered: %s " text))
-        (when id (mock--respond id nil))))
+      (let ((sid (plist-get params :sessionId)) (late (getenv "MOCK_ACP_LATE_CANCEL")))
+        (if late
+            (let ((turn (alist-get sid mock--turns nil nil #'equal)))
+              (when turn
+                (mapc #'cancel-timer (plist-get turn :timers))
+                (plist-put turn :timers (list (run-at-time (string-to-number late) nil (lambda () (mock--finish sid "end_turn")))))))
+          (mock--finish sid "cancelled"))))
+     ((equal method "_session/steering")
+      (if (getenv "MOCK_ACP_STEER_FAILS") (when id (mock--error id -32601 "steering is not supported"))
+        (let ((sid (plist-get params :sessionId))
+              (text (string-join (delq nil (mapcar (lambda (b) (plist-get b :text)) (plist-get params :prompt))) " ")))
+          (mock--say sid (format "steered: %s " text))
+          (when id (mock--respond id nil)))))
      (id (mock--error id -32601 (format "%s: no such method" method))))))
 
 (defvar mock--buf "")

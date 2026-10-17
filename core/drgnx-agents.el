@@ -21,7 +21,7 @@
 
 (cl-defstruct (drgnx-agent-session (:constructor drgnx-agents--make) (:copier nil))
   name profile cwd conn acp-id (status 'starting) entries queue (mode 'queue) capabilities usage commands
-  permissions reviews stderr exit stopping paused)
+  permissions reviews stderr exit stopping paused turn draining)
 
 (defvar drgnx-agents-profiles nil
   "Alist NAME → plist (:command LIST :env (\"NAME=value\"…) :mode queue|steer|interrupt).  Read from
@@ -73,8 +73,12 @@ agents.eld (config dir) and the built-in ones; never holds secrets (keys come fr
 
 (defun drgnx-agents--update (s u)
   (pcase (plist-get u :sessionUpdate)
+    ;; chunks of a turn that Stop's deadline already ended are dropped
+    ((and (or "agent_message_chunk" "agent_thought_chunk") (guard (drgnx-agent-session-draining s))) nil)
     ("agent_message_chunk" (drgnx-agents--append-text s 'agent (or (plist-get (plist-get u :content) :text) "")))
     ("agent_thought_chunk" (drgnx-agents--append-text s 'thought (or (plist-get (plist-get u :content) :text) "")))
+    ("usage_update" (setf (drgnx-agent-session-usage s) (list :used (plist-get u :used) :size (plist-get u :size)
+                                                              :cost (plist-get u :cost))))
     ("user_message_chunk"
      ;; during a turn: our own prompt echoed (already in the transcript); otherwise a replayed session
      (unless (eq (drgnx-agent-session-status s) 'busy)
@@ -99,11 +103,23 @@ agents.eld (config dir) and the built-in ones; never holds secrets (keys come fr
 (defun drgnx-agents-context-percent (s)
   "How full the agent's context is, in percent (from the last turn's usage), or nil."
   (let* ((u (drgnx-agent-session-usage s))
-         (used (or (plist-get u :inputTokens) (plist-get u :totalTokens)))
-         (window (plist-get u :contextWindow)))
+         (used (or (plist-get u :used) (plist-get u :inputTokens) (plist-get u :totalTokens)))
+         (window (or (plist-get u :size) (plist-get u :contextWindow))))
     (and (numberp used) (numberp window) (> window 0) (min 100 (round (* 100.0 used) window)))))
 
 ;;;; The agent's requests
+
+(defun drgnx-agents--path-ok-p (path)
+  "PATH is a real absolute path (not ~, not relative)."
+  (and (stringp path) (file-name-absolute-p path) (not (string-prefix-p "~" path))))
+
+(defun drgnx-agents--lines (text line limit)
+  "TEXT from LINE (1-based) for LIMIT lines (both optional: ACP's ranged read)."
+  (if (not (or line limit)) text
+    (let* ((lines (split-string text "\n"))
+           (from (max 0 (1- (or line 1))))
+           (part (seq-take (nthcdr from lines) (or limit (length lines)))))
+      (concat (string-join part "\n") (if (and part (< (+ from (length part)) (length lines))) "\n" "")))))
 
 (defun drgnx-agents--on-request (s method params id)
   (pcase method
@@ -115,11 +131,15 @@ agents.eld (config dir) and the built-in ones; never holds secrets (keys come fr
      (drgnx-agents--changed s)
      :deferred)
     ("fs/read_text_file"
-     (let* ((path (plist-get params :path)) (buf (and path (find-buffer-visiting path))))
-       (cond ((not (and path (file-name-absolute-p path))) (list :error '(:code -32602 :message "an absolute path is needed")))
-             (buf (list :result (list :content (with-current-buffer buf (buffer-substring-no-properties (point-min) (point-max))))))
-             ((file-readable-p path) (list :result (list :content (with-temp-buffer (insert-file-contents path) (buffer-string)))))
+     (let* ((path (plist-get params :path)) (buf (and (drgnx-agents--path-ok-p path) (find-buffer-visiting path))))
+       (cond ((not (drgnx-agents--path-ok-p path)) (list :error '(:code -32602 :message "an absolute path is needed")))
+             ((or buf (file-readable-p path))
+              (list :result (list :content (drgnx-agents--lines (if buf (with-current-buffer buf (buffer-substring-no-properties (point-min) (point-max)))
+                                                                  (with-temp-buffer (insert-file-contents path) (buffer-string)))
+                                                                (plist-get params :line) (plist-get params :limit)))))
              (t (list :error (list :code -32002 :message (format "%s is not readable" path)))))))
+    ((and "fs/write_text_file" (guard (not (and (drgnx-agents--path-ok-p (plist-get params :path)) (stringp (plist-get params :content))))))
+     (list :error '(:code -32602 :message "an absolute path and the content are needed")))
     ("fs/write_text_file"
      ;; never written behind the user's back: a review item (accept hunks, then Done answers)
      (setf (drgnx-agent-session-reviews s)
@@ -173,22 +193,35 @@ agents.eld (config dir) and the built-in ones; never holds secrets (keys come fr
   (drgnx-agents--changed s))
 
 (defun drgnx-agents--new (profile cwd)
-  (let ((s (drgnx-agents--make :name (format "%s · %s" profile (file-name-nondirectory (directory-file-name (expand-file-name cwd))))
-                               :profile profile :cwd (expand-file-name cwd))))
-    (push s drgnx-agents--sessions)
-    s))
+  (let* ((base (format "%s · %s" profile (file-name-nondirectory (directory-file-name (expand-file-name cwd)))))
+         (name base) (n 1))
+    (while (seq-find (lambda (x) (equal (drgnx-agent-session-name x) name)) drgnx-agents--sessions)
+      (setq n (1+ n) name (format "%s <%d>" base n)))
+    (let ((s (drgnx-agents--make :name name :profile profile :cwd (expand-file-name cwd))))
+      (push s drgnx-agents--sessions)
+      s)))
+
+(defun drgnx-agents--start-safely (s fn)
+  "Run FN (starting S's agent); an agent that cannot start makes S an exited session that says why."
+  (condition-case err (funcall fn)
+    (error (setf (drgnx-agent-session-status s) 'exited)
+           (drgnx-agents--add s (list :type 'error :text (format "the agent did not start: %s" (error-message-string err))))
+           (drgnx-agents--changed s))))
 
 (defun drgnx-agents-start (profile cwd)
   "Start a session of PROFILE in CWD; it is idle once the agent made it.  Returns the session."
   (let ((s (drgnx-agents--new profile cwd)))
-    (drgnx-agents--connect
+    (drgnx-agents--start-safely
      s (lambda ()
-         (drgnx-acp-request (drgnx-agent-session-conn s) "session/new" (list :cwd (drgnx-agent-session-cwd s) :mcpServers [])
-                            (lambda (r)
-                              (if (cdr r) (drgnx-agents--failed s (cdr r))
-                                (setf (drgnx-agent-session-acp-id s) (plist-get (car r) :sessionId)
-                                      (drgnx-agent-session-status s) 'idle)
-                                (drgnx-agents--changed s))))))
+         (drgnx-agents--connect
+          s (lambda ()
+              (drgnx-acp-request (drgnx-agent-session-conn s) "session/new" (list :cwd (drgnx-agent-session-cwd s) :mcpServers [])
+                                 (lambda (r)
+                                   (if (cdr r) (drgnx-agents--failed s (cdr r))
+                                     (setf (drgnx-agent-session-acp-id s) (plist-get (car r) :sessionId)
+                                           (drgnx-agent-session-status s) 'idle)
+                                     (drgnx-agents--changed s)
+                                     (drgnx-agents--next s))))))))
     s))
 
 (defun drgnx-agents-take-over (profile cwd session-id)
@@ -196,6 +229,8 @@ agents.eld (config dir) and the built-in ones; never holds secrets (keys come fr
 its history is replayed into the transcript.  Needs an agent that can load sessions."
   (let ((s (drgnx-agents--new profile cwd)))
     (setf (drgnx-agent-session-acp-id s) session-id)
+    (drgnx-agents--start-safely
+     s (lambda ()
     (drgnx-agents--connect
      s (lambda ()
          (if (memq (plist-get (drgnx-agent-session-capabilities s) :loadSession) '(nil :false))
@@ -205,62 +240,87 @@ its history is replayed into the transcript.  Needs an agent that can load sessi
                               (lambda (r)
                                 (if (cdr r) (drgnx-agents--failed s (cdr r))
                                   (setf (drgnx-agent-session-status s) 'idle)
-                                  (drgnx-agents--changed s)))))))
+                                  (drgnx-agents--changed s)
+                                  (drgnx-agents--next s)))))))))
     s))
 
 (defun drgnx-agents--prompt (s text)
   (drgnx-agents--add s (list :type 'user :text text))
   (setf (drgnx-agent-session-status s) 'busy (drgnx-agent-session-stopping s) nil (drgnx-agent-session-paused s) nil)
   (drgnx-agents--changed s)
-  (drgnx-acp-request (drgnx-agent-session-conn s) "session/prompt"
-                     (list :sessionId (drgnx-agent-session-acp-id s) :prompt (vector (list :type "text" :text text)))
-                     (lambda (r) (drgnx-agents--turn-ended s r))))
+  (let (id)
+    (setq id (drgnx-acp-request (drgnx-agent-session-conn s) "session/prompt"
+                                (list :sessionId (drgnx-agent-session-acp-id s) :prompt (vector (list :type "text" :text text)))
+                                (lambda (r) (drgnx-agents--turn-ended s r id))))
+    (setf (drgnx-agent-session-turn s) id)))
 
-(defun drgnx-agents--turn-ended (s r)
-  (when (eq (drgnx-agent-session-status s) 'busy)       ; not already ended by Stop's deadline
-    (let ((reason (or (plist-get (car r) :stopReason) (and (cdr r) "error"))))
+(defun drgnx-agents--turn-ended (s r id)
+  "The answer R to prompt ID: it ends the turn only if ID is the turn running.  The late answer of a
+turn Stop's deadline ended lets the held messages go."
+  (cond
+   ((and id (eql id (drgnx-agent-session-draining s)))
+    (setf (drgnx-agent-session-draining s) nil)
+    (drgnx-agents--changed s)
+    (drgnx-agents--next s))
+   ((and (eq (drgnx-agent-session-status s) 'busy) (eql id (drgnx-agent-session-turn s)))
+    (let ((reason (or (plist-get (car r) :stopReason) (and (cdr r) "error")))
+          (interrupt (eq (drgnx-agent-session-stopping s) 'interrupt)))
       (when-let* ((u (or (plist-get (car r) :usage) (plist-get (plist-get (car r) :_meta) :usage))))
         (setf (drgnx-agent-session-usage s) u))
       (dolist (e (drgnx-agent-session-entries s)) (plist-put e :done t))
       (when (cdr r) (drgnx-agents--add s (list :type 'error :text (format "%s" (plist-get (cdr r) :message)))))
       (drgnx-agents--add s (list :type 'stop :stop reason :done t))
+      (setf (drgnx-agent-session-turn s) nil (drgnx-agent-session-stopping s) nil)
       (unless (eq (drgnx-agent-session-status s) 'exited) (setf (drgnx-agent-session-status s) 'idle))
-      (when (equal reason "cancelled") (setf (drgnx-agent-session-paused s) t))
+      (when (and (equal reason "cancelled") (not interrupt)) (setf (drgnx-agent-session-paused s) t))
       (unless (drgnx-acp-live-p (drgnx-agent-session-conn s))   ; the agent died: the queue waits
         (setf (drgnx-agent-session-status s) 'exited
               (drgnx-agent-session-stderr s) (drgnx-acp-conn-stderr (drgnx-agent-session-conn s))))
       (drgnx-agents--changed s)
-      (drgnx-agents--next s))))
+      (drgnx-agents--next s)))))
+
+(defun drgnx-agents--ready-p (s)
+  "S can take a prompt: idle, made by the agent, not waiting for a stopped turn's last answer."
+  (and (eq (drgnx-agent-session-status s) 'idle) (drgnx-agent-session-acp-id s) (not (drgnx-agent-session-draining s))))
 
 (defun drgnx-agents--next (s)
-  "Deliver the next queued message when S is idle and its queue is not paused by a Stop."
-  (when (and (eq (drgnx-agent-session-status s) 'idle) (drgnx-agent-session-queue s) (not (drgnx-agent-session-paused s)))
+  "Deliver the next queued message when S is ready and its queue is not paused by a Stop."
+  (when (and (drgnx-agents--ready-p s) (drgnx-agent-session-queue s) (not (drgnx-agent-session-paused s)))
     (drgnx-agents--prompt s (pop (drgnx-agent-session-queue s)))))
 
 (defun drgnx-agents--steerable-p (s)
   (let ((m (plist-get (drgnx-agent-session-capabilities s) :_meta)))
     (and (plist-get m :steering) (not (eq (plist-get m :steering) :false)))))
 
+(defun drgnx-agents--enqueue (s text) (setf (drgnx-agent-session-queue s) (append (drgnx-agent-session-queue s) (list text))))
+
 (defun drgnx-agents-send (s text)
-  "Send TEXT to session S: now when idle; when busy, queued (default), steering the turn (mode `steer',
-when the agent can), or — only in mode `interrupt' — after cancelling the turn."
+  "Send TEXT to session S: now when ready; when busy, queued (default), steering the turn (mode
+`steer', when the agent can; queued if it refuses), or — only in mode `interrupt' — after cancelling
+the turn."
   (pcase (drgnx-agent-session-status s)
-    ('idle (if (drgnx-agent-session-queue s)
-               (progn (setf (drgnx-agent-session-queue s) (append (drgnx-agent-session-queue s) (list text))
-                            (drgnx-agent-session-paused s) nil)
-                      (drgnx-agents--next s))
-             (drgnx-agents--prompt s text)))
+    ((guard (drgnx-agents--ready-p s))
+     (if (drgnx-agent-session-queue s)
+         (progn (drgnx-agents--enqueue s text) (setf (drgnx-agent-session-paused s) nil) (drgnx-agents--next s))
+       (drgnx-agents--prompt s text)))
     ('busy
      (cond ((and (eq (drgnx-agent-session-mode s) 'steer) (drgnx-agents--steerable-p s))
-            (drgnx-agents--add s (list :type 'user :text text :steer t))
-            (drgnx-acp-notify (drgnx-agent-session-conn s) "_session/steer"
-                              (list :sessionId (drgnx-agent-session-acp-id s) :prompt (vector (list :type "text" :text text)))))
+            (let ((entry (list :type 'user :text text :steer t)))
+              (drgnx-agents--add s entry)
+              (drgnx-acp-request (drgnx-agent-session-conn s) "_session/steering"
+                                 (list :sessionId (drgnx-agent-session-acp-id s) :prompt (vector (list :type "text" :text text)))
+                                 (lambda (r)
+                                   (when (cdr r)            ; refused: the message waits for the turn instead
+                                     (setf (drgnx-agent-session-entries s) (delq entry (drgnx-agent-session-entries s)))
+                                     (drgnx-agents--enqueue s text)
+                                     (drgnx-agents--changed s))))))
            ((eq (drgnx-agent-session-mode s) 'interrupt)
             (setf (drgnx-agent-session-queue s) (cons text (drgnx-agent-session-queue s)))
-            (drgnx-agents-stop s)
-            (setf (drgnx-agent-session-paused s) nil))
-           (t (setf (drgnx-agent-session-queue s) (append (drgnx-agent-session-queue s) (list text))))))
-    (_ (setf (drgnx-agent-session-queue s) (append (drgnx-agent-session-queue s) (list text)))))
+            (drgnx-agents-stop s 'interrupt))
+           (t (drgnx-agents--enqueue s text))))
+    ('idle (drgnx-agents--enqueue s text)              ; not ready yet (a stopped turn drains): it goes next
+           (setf (drgnx-agent-session-paused s) nil))
+    (_ (drgnx-agents--enqueue s text)))
   (drgnx-agents--changed s))
 
 (defun drgnx-agents-deliver-queue (s)
@@ -268,17 +328,40 @@ when the agent can), or — only in mode `interrupt' — after cancelling the tu
   (setf (drgnx-agent-session-paused s) nil)
   (drgnx-agents--next s))
 
-(defun drgnx-agents-stop (s)
+(defun drgnx-agents-unqueue (s n)
+  "Remove the Nth queued message of S (before it is sent)."
+  (setf (drgnx-agent-session-queue s) (append (seq-take (drgnx-agent-session-queue s) n) (nthcdr (1+ n) (drgnx-agent-session-queue s))))
+  (drgnx-agents--changed s))
+
+(defun drgnx-agents-requeue (s n text)
+  "Replace the Nth queued message of S with TEXT (empty: remove it)."
+  (if (string-empty-p (string-trim text)) (drgnx-agents-unqueue s n)
+    (setf (nth n (drgnx-agent-session-queue s)) text)
+    (drgnx-agents--changed s)))
+
+(defun drgnx-agents-stop (s &optional why)
   "Cancel S's running turn: it ends within a second; pending permission requests are answered
-cancelled; queued messages wait (`drgnx-agents-deliver-queue')."
+cancelled and pending edits rejected; queued messages wait (`drgnx-agents-deliver-queue') unless WHY
+is `interrupt'."
   (when (eq (drgnx-agent-session-status s) 'busy)
     (dolist (p (drgnx-agent-session-permissions s)) (drgnx-agents-answer-permission s p nil))
-    (setf (drgnx-agent-session-stopping s) t)
+    (dolist (r (drgnx-agent-session-reviews s))
+      (setf (drgnx-agent-session-reviews s) (delq r (drgnx-agent-session-reviews s)))
+      (drgnx-acp-respond (drgnx-agent-session-conn s) (plist-get r :id) nil '(:code -32003 :message "the turn was stopped")))
+    (setf (drgnx-agent-session-stopping s) (or why t))
     (drgnx-acp-notify (drgnx-agent-session-conn s) "session/cancel" (list :sessionId (drgnx-agent-session-acp-id s)))
-    ;; an agent that does not answer the cancel in time: the turn ends here anyway
-    (run-at-time 0.9 nil (lambda ()
-                           (when (and (eq (drgnx-agent-session-status s) 'busy) (drgnx-agent-session-stopping s))
-                             (drgnx-agents--turn-ended s '((:stopReason "cancelled"))))))))
+    ;; an agent that does not answer the cancel in time: this turn ends here anyway; its late answer
+    ;; (and chunks) are then dropped, and nothing new is sent until it came (or 10 s passed)
+    (let ((turn (drgnx-agent-session-turn s)))
+      (run-at-time 0.9 nil
+                   (lambda ()
+                     (when (and (eq (drgnx-agent-session-status s) 'busy) (eql (drgnx-agent-session-turn s) turn))
+                       (drgnx-agents--turn-ended s '((:stopReason "cancelled")) turn)
+                       (setf (drgnx-agent-session-draining s) turn)
+                       (run-at-time 10 nil (lambda ()
+                                             (when (eql (drgnx-agent-session-draining s) turn)
+                                               (setf (drgnx-agent-session-draining s) nil)
+                                               (drgnx-agents--next s))))))))))
 
 (defun drgnx-agents-kill (s)
   "End session S's agent process."

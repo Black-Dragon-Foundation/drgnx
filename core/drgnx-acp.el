@@ -95,11 +95,13 @@ ON-NOTIFICATION: (CONN METHOD PARAMS); ON-REQUEST: (CONN METHOD PARAMS ID) → (
                                                 (setf (drgnx-acp-conn-stderr conn)
                                                       (substring all (max 0 (- (length all) drgnx-acp--stderr-max))))))
                                     :sentinel #'ignore))
-         (proc (make-process :name "drgnx-acp" :command command :connection-type 'pipe :noquery t
-                             :coding 'utf-8-unix :stderr stderr
-                             :filter (lambda (_p s) (drgnx-acp--input conn s))
-                             :sentinel (lambda (p _event)
-                                         (unless (process-live-p p) (drgnx-acp--exited conn p))))))
+         (proc (condition-case err
+                   (make-process :name "drgnx-acp" :command command :connection-type 'pipe :noquery t
+                                 :coding 'utf-8-unix :stderr stderr
+                                 :filter (lambda (_p s) (drgnx-acp--input conn s))
+                                 :sentinel (lambda (p _event)
+                                             (unless (process-live-p p) (drgnx-acp--exited conn p))))
+                 (error (delete-process stderr) (signal (car err) (cdr err))))))
     (setf (drgnx-acp-conn-process conn) proc (drgnx-acp-conn-stderr-process conn) stderr)
     ;; A sentinel can go uncalled (seen in the unit suite after the Explorer's tests): a watchdog
     ;; reports a dead agent within half a second anyway.
@@ -119,14 +121,17 @@ last of its stderr has arrived (never waiting here: this runs in a sentinel).  O
     (dolist (cb cbs)
       (condition-case err (funcall cb (cons nil (list :code -32000 :message "the agent exited")))
         (error (drgnx-acp--note conn "callback error: %s" (error-message-string err))))))
-  (when-let* ((h (drgnx-acp-conn-on-exit conn)))
-    (let ((status (process-exit-status proc)))
-      (run-at-time 0.05 nil
-                   (lambda ()
-                     ;; in a timer (not the sentinel): read what is left on the stderr pipe, briefly
-                     (when-let* ((e (drgnx-acp-conn-stderr-process conn)))
-                       (when (process-live-p e) (ignore-errors (accept-process-output e 0.2 nil t))))
-                     (funcall h conn status (drgnx-acp-conn-stderr conn))))))))
+  (let ((status (process-exit-status proc)))
+    (run-at-time 0.05 nil
+                 (lambda ()
+                   ;; in a timer (not the sentinel): read what is left on the stderr pipe, briefly
+                   (when-let* ((e (drgnx-acp-conn-stderr-process conn)))
+                     (when (process-live-p e) (ignore-errors (accept-process-output e 0.1 nil t))))
+                   (unwind-protect
+                       (when-let* ((h (drgnx-acp-conn-on-exit conn))) (funcall h conn status (drgnx-acp-conn-stderr conn)))
+                     ;; nothing left behind
+                     (when-let* ((e (drgnx-acp-conn-stderr-process conn))) (when (process-live-p e) (delete-process e)))
+                     (when (buffer-live-p (drgnx-acp-conn-input-buffer conn)) (kill-buffer (drgnx-acp-conn-input-buffer conn)))))))))
 
 (defun drgnx-acp-request (conn method params callback)
   "Send request METHOD with PARAMS; CALLBACK gets (RESULT . ERROR) when the agent answers.  Returns the id."

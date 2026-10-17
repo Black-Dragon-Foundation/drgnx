@@ -58,10 +58,7 @@ NON-INTERACTIVE: never read input (`inhibit-interaction').  OPTIONS: plist for t
   (let ((ctx (list :interactive (not non-interactive) :options options))
         (done (drgnx-onboard-state))
         (out nil))
-    (drgnx-command-define 'projects-sync-plans :category "Projects" :title "Sync Plans and Board TODOs"
-    :command #'drgnx-projects-sync-plans
-    :doc "A DONE TODO ticks its plan checkbox; a ticked checkbox makes its TODO DONE")
-  (dolist (id (drgnx-onboard-steps))
+    (dolist (id (drgnx-onboard-steps))
       (when (and (or (null only) (memq id only))
                  (not (and resume (memq (plist-get (alist-get id done) :status) '(ok info)))))
         (let* ((spec (alist-get id drgnx-onboard--steps))
@@ -359,6 +356,9 @@ current choice as the default) — with no option and no question, the current c
 
 (defun drgnx-onboard-register-commands ()
   "Welcome and one command per step (Onboarding: …), in the registry."
+  (drgnx-command-define 'projects-sync-plans :category "Projects" :title "Sync Plans and Board TODOs"
+    :command #'drgnx-projects-sync-plans
+    :doc "A DONE TODO ticks its plan checkbox; a ticked checkbox makes its TODO DONE")
   (drgnx-command-define 'onboarding :category "Help" :title "Welcome (Onboarding)" :command #'drgnx-onboard-welcome
     :menu '("Help") :doc "The onboarding steps: environment, keys, projects, daemon …; run any of them again")
   (dolist (id (drgnx-onboard-steps))

@@ -60,4 +60,30 @@
      (should (eq (drgnx-jobs-test--status "20261017-000000-1") 'gone))
      (should (equal (mapcar (lambda (j) (plist-get j :name)) (drgnx-jobs-list)) '("old"))))))
 
+;;;; Review fixes (M7 final review)
+
+(ert-deftest drgnx-jobs/a-pid-from-before-a-reboot-is-never-trusted ()
+  ;; I8: after a reboot the pid may belong to another process: gone, and never signalled.
+  (drgnx-jobs-test--with
+   (let* ((id "20261017-000000-2") (dir (expand-file-name (concat "drgnx/jobs/" id) (getenv "XDG_STATE_HOME"))) (signalled nil))
+     (make-directory dir t)
+     (with-temp-file (expand-file-name "job.eld" dir)
+       (prin1 (list :id id :name "old" :launcher 'detached :boot "another-boot" :start '(0 0 0 0)) (current-buffer)))
+     (write-region (number-to-string (emacs-pid)) nil (expand-file-name "pid" dir) nil 'silent)   ; alive, but not the job
+     (should (eq (drgnx-jobs-test--status id) 'gone))
+     (cl-letf (((symbol-function 'signal-process) (lambda (&rest a) (push a signalled))))
+       (drgnx-jobs-stop id))
+     (should-not signalled))))
+
+(ert-deftest drgnx-jobs/a-state-path-with-a-quote-still-runs ()
+  (skip-unless (executable-find "setsid"))
+  (let* ((root (concat (make-temp-file "drgnx-jobs" t) "/o'brien"))
+         (process-environment (append (list (concat "XDG_STATE_HOME=" root) "DRGNX_JOBS_LAUNCHER=detached") process-environment)))
+    (make-directory root t)
+    (unwind-protect
+        (let ((id (drgnx-jobs-start "q" '("sh" "-c" "echo fine"))))
+          (should (drgnx-jobs-test--wait (lambda () (eq (drgnx-jobs-test--status id) 'exited))))
+          (should (string-match-p "fine" (drgnx-jobs-log id))))
+      (delete-directory (file-name-directory root) t))))
+
 ;;; jobs-test.el ends here

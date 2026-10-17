@@ -239,6 +239,7 @@
   (let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil))
     (drgnx-onboard-register-commands)
     (should (drgnx-commands-get 'onboarding))
+    (should (drgnx-commands-get 'projects-sync-plans))
     (dolist (id (drgnx-onboard-steps))
       (should (drgnx-commands-get (intern (format "onboarding-%s" id)))))))
 

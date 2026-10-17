@@ -81,4 +81,78 @@
     (dolist (id '(agents-view agents-new agents-send agents-stop agents-deliver agents-take-over agents-answer jobs-log jobs-stop agents-open agents-reply agents-review-done agents-review-reject))
       (should (drgnx-commands-get id)))))
 
+;;;; Review fixes (M7 final review)
+
+(defmacro drgnx-agents-ui-test--reviewing (file content &rest body)
+  "BODY with REVIEW the review buffer of an agent's proposed CONTENT for FILE (a fake session;
+answers recorded in ANSWERS)."
+  (declare (indent 2))
+  `(let* ((answers nil)
+          (s (drgnx-agents--make :name "fake" :cwd (file-name-directory ,file)))
+          (item (list :id 5 :path ,file :content ,content)))
+     (setf (drgnx-agent-session-reviews s) (list item))
+     (cl-letf (((symbol-function 'drgnx-acp-respond) (lambda (_c id r &optional err) (push (list id r err) answers))))
+       (let ((review (drgnx-agents-ui-review s item)))
+         ,@body))))
+
+(defun drgnx-agents-ui-test--lines (n) (concat (mapconcat (lambda (i) (format "line %d" i)) (number-sequence 1 n) "\n") "\n"))
+
+(ert-deftest drgnx-agents-ui/reject-leaves-the-file-as-it-was ()
+  ;; I2: hunks applied while reviewing are applied to a copy; Reject writes nothing.
+  (let* ((dir (make-temp-file "drgnx-rev" t)) (f (expand-file-name "f.txt" dir)) (orig (drgnx-agents-ui-test--lines 12)))
+    (write-region orig nil f nil 'silent)
+    (drgnx-agents-ui-test--reviewing f (concat "CHANGED " (substring orig 0)) 
+      (with-current-buffer review (goto-char (point-min)) (diff-hunk-next) (diff-apply-hunk) (drgnx-agents-ui-review-reject))
+      (should (equal (with-temp-buffer (insert-file-contents f) (buffer-string)) orig))
+      (should (nth 2 (car answers))))                                   ; the agent hears it was rejected
+    (delete-directory dir t)))
+
+(ert-deftest drgnx-agents-ui/an-agent-can-create-a-file-through-review ()
+  ;; I1: a new file is written where the agent asked, not to a temp file.
+  (let* ((dir (make-temp-file "drgnx-rev" t)) (f (expand-file-name "new/made.txt" dir)))
+    (drgnx-agents-ui-test--reviewing f "hello\n"
+      (with-current-buffer review (goto-char (point-min)) (diff-hunk-next) (diff-apply-hunk) (drgnx-agents-ui-review-done))
+      (should (equal (with-temp-buffer (insert-file-contents f) (buffer-string)) "hello\n"))
+      (should (equal (car answers) '(5 nil nil))))
+    (delete-directory dir t)))
+
+(ert-deftest drgnx-agents-ui/unsaved-edits-of-the-file-are-never-mixed-in ()
+  (let* ((dir (make-temp-file "drgnx-rev" t)) (f (expand-file-name "f.txt" dir)))
+    (write-region "a\n" nil f nil 'silent)
+    (let ((b (find-file-noselect f)))
+      (unwind-protect
+          (progn
+            (with-current-buffer b (goto-char (point-max)) (insert "mine\n"))
+            (drgnx-agents-ui-test--reviewing f "b\n"
+              (with-current-buffer review (should-error (drgnx-agents-ui-review-done) :type 'user-error))
+              (should (equal (with-temp-buffer (insert-file-contents f) (buffer-string)) "a\n"))))
+        (with-current-buffer b (set-buffer-modified-p nil)) (kill-buffer b)))
+    (delete-directory dir t)))
+
+(ert-deftest drgnx-agents-ui/closing-a-review-rejects-it ()
+  (let* ((dir (make-temp-file "drgnx-rev" t)) (f (expand-file-name "f.txt" dir)))
+    (write-region "a\n" nil f nil 'silent)
+    (drgnx-agents-ui-test--reviewing f "b\n"
+      (kill-buffer review)
+      (should (nth 2 (car answers)))
+      (should-not (drgnx-agent-session-reviews s)))
+    (delete-directory dir t)))
+
+(ert-deftest drgnx-agents-ui/a-transcript-has-stop-deliver-commands-and-queue-controls ()
+  (let ((s (drgnx-agents--make :name "x" :status 'busy :queue '("one" "two") :paused nil
+                               :commands '((:name "compact" :description "c") (:name "review" :description "r")))))
+    (with-temp-buffer
+      (drgnx-agents-ui-render s)
+      (let ((text (buffer-string)))
+        (dolist (want '("[Stop]" "/compact" "/review" "one [×]" "two [×]")) (should (string-search want text)))))
+    (setf (drgnx-agent-session-status s) 'idle (drgnx-agent-session-paused s) t)
+    (with-temp-buffer (drgnx-agents-ui-render s) (should (string-search "[Deliver]" (buffer-string))))))
+
+(ert-deftest drgnx-agents-ui/the-list-reads-jobs-at-most-every-few-seconds ()
+  ;; I9: the list redraws often while an agent streams; jobs are read on a slower cadence.
+  (let ((calls 0) (drgnx-agents-ui--jobs-cache nil) (drgnx-agents--sessions nil))
+    (cl-letf (((symbol-function 'drgnx-jobs-list) (lambda () (setq calls (1+ calls)) nil)))
+      (drgnx-agents-ui--entries) (drgnx-agents-ui--entries) (drgnx-agents-ui--entries)
+      (should (= calls 1)))))
+
 ;;; agents-ui-test.el ends here
