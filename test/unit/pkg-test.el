@@ -563,4 +563,44 @@
           (should-not (seq-find (lambda (w) (string-match-p "\\_<fa\\.el does not byte-compile" w)) (plist-get r :warnings)))
           (should (string-match-p "^WARNING .*fbad\\.el" (with-output-to-string (drgnx-pkg--report r)))))))))
 
+(ert-deftest drgnx-pkg/the-sync-lock-knows-its-process-by-pid-and-start ()
+  ;; M5-10: a pid reused (after a reboot) by another process is not the sync that wrote the lock.
+  (drgnx-pkg-test--with root
+    (drgnx-pkg-test--want root)
+    (make-directory (drgnx-data-dir) t)
+    (let* ((file (expand-file-name "sync.lock" (drgnx-data-dir)))
+           (attrs (symbol-function 'process-attributes))
+           (stamp (drgnx-pkg--take-sync-lock)))
+      (should (string-match-p (format "\\`%d [0-9.]+\\'" (emacs-pid)) stamp))
+      (should (equal (with-temp-buffer (insert-file-contents file) (buffer-string)) stamp))
+      (drgnx-pkg--release-sync-lock stamp)
+      (should-not (file-exists-p file))
+      (cl-letf (((symbol-function 'process-attributes)
+                 (lambda (pid) (if (eql pid 4242) `((start . ,(seconds-to-time 5000))) (funcall attrs pid)))))
+        (write-region "4242 5000.10" nil file nil 'silent)          ; alive, the same start: running
+        (should-error (drgnx-pkg-test--sync root :archives nil) :type 'drgnx-pkg-error)
+        (write-region "4242 1234.00" nil file nil 'silent)          ; alive, another start: a reused pid
+        (should (plist-get (drgnx-pkg-test--sync root :archives nil) :ok))
+        (should-not (file-exists-p file))))))
+
+(ert-deftest drgnx-pkg/a-stale-lock-is-taken-over-once ()
+  ;; M5-10: two processes taking over the same stale lock — the second finds the first's lock, not the
+  ;; stale one it judged, and leaves it in place.
+  (drgnx-pkg-test--with root
+    (make-directory (drgnx-data-dir) t)
+    (let ((file (expand-file-name "sync.lock" (drgnx-data-dir))))
+      (write-region "999999999 1.00" nil file nil 'silent)
+      (let ((seen "999999999 1.00"))
+        (write-region "4242 77.00" nil file nil 'silent)             ; the other one got there first
+        (should-error (drgnx-pkg--clear-stale-lock file seen) :type 'drgnx-pkg-error)
+        (should (equal (with-temp-buffer (insert-file-contents file) (buffer-string)) "4242 77.00"))
+        (should (equal (directory-files (drgnx-data-dir) nil "\\`[^.]") '("sync.lock")))
+        (write-region seen nil file nil 'silent)
+        (drgnx-pkg--clear-stale-lock file seen)
+        (should-not (directory-files (drgnx-data-dir) nil "\\`[^.]"))
+        (drgnx-pkg--release-sync-lock "4242 77.00")                 ; not ours: never deleted
+        (write-region "4242 77.00" nil file nil 'silent)
+        (drgnx-pkg--release-sync-lock (format "%d 1.00" (emacs-pid)))
+        (should (file-exists-p file))))))
+
 ;;; pkg-test.el ends here

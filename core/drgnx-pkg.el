@@ -114,25 +114,58 @@ there is none.  An unreadable lock is a `drgnx-pkg-error' (never silently replac
 
 (defvar drgnx-pkg--holding-lock nil "Non-nil while this process holds the sync lock (nested calls reuse it).")
 
+(defun drgnx-pkg--file-string (file) (with-temp-buffer (insert-file-contents file) (buffer-string)))
+
+(defun drgnx-pkg--lock-live-p (stamp)
+  "Non-nil when the sync lock's STAMP (\"PID START\") names a running process: PID is alive and
+started at START (another start: the pid was reused, e.g. after a reboot).  The start is compared
+to half a second — Emacs's reading of it jitters by a clock tick."
+  (pcase-let ((`(,pid ,start) (mapcar #'string-to-number (split-string stamp))))
+    (when-let* ((attrs (and pid (> pid 0) (process-attributes pid))))
+      (or (null start) (null (alist-get 'start attrs))                   ; a lock without a start: the pid decides
+          (< (abs (- start (float-time (alist-get 'start attrs)))) 0.5)))))
+
+(defun drgnx-pkg--clear-stale-lock (file seen)
+  "Remove the stale lock FILE, whose content was SEEN.  It is renamed aside first (atomic), so of two
+processes taking over the same lock only one does; when what was renamed is not SEEN, another
+process took the lock meanwhile: it is put back and this is a `drgnx-pkg-error'."
+  (let ((aside (make-temp-name (concat file ".stale-"))))
+    (when (ignore-errors (rename-file file aside) t)   ; nil: another process moved it first
+      (unless (equal (drgnx-pkg--file-string aside) seen)
+        (ignore-errors (rename-file aside file))       ; never over a lock that appeared meanwhile
+        (ignore-errors (delete-file aside))
+        (drgnx-pkg--error "another drgnx sync just started (%s); wait for it" file))
+      (delete-file aside))))
+
 (defun drgnx-pkg--take-sync-lock ()
-  (let ((file (drgnx-pkg--sync-lock-file)))
+  "Take the sync lock: its file holds \"PID START\" of this process.  Returns that stamp."
+  (let ((file (drgnx-pkg--sync-lock-file))
+        (stamp (format "%d %.2f" (emacs-pid) (float-time (or (alist-get 'start (process-attributes (emacs-pid))) 0)))))
     (make-directory (file-name-directory file) t)
-    (when-let* ((pid (and (file-exists-p file)
-                          (string-to-number (with-temp-buffer (insert-file-contents file) (buffer-string))))))
-      (if (and (> pid 0) (process-attributes pid))
-          (drgnx-pkg--error "another drgnx sync, upgrade or rollback is running (process %d, %s); wait for it" pid file)
-        (delete-file file)))                            ; left by a process that is gone
+    (when-let* ((seen (and (file-exists-p file) (drgnx-pkg--file-string file))))
+      (if (drgnx-pkg--lock-live-p seen)
+          (drgnx-pkg--error "another drgnx sync, upgrade or rollback is running (process %s, %s); wait for it"
+                            (car (split-string seen)) file)
+        (drgnx-pkg--clear-stale-lock file seen)))     ; left by a process that is gone
     (condition-case nil
-        (write-region (number-to-string (emacs-pid)) nil file nil 'silent nil 'excl)
-      (file-already-exists (drgnx-pkg--error "another drgnx sync just started (%s); wait for it" file)))))
+        (write-region stamp nil file nil 'silent nil 'excl)
+      (file-already-exists (drgnx-pkg--error "another drgnx sync just started (%s); wait for it" file)))
+    stamp))
+
+(defun drgnx-pkg--release-sync-lock (stamp)
+  "Remove the sync lock if it is still the one STAMP took (never another process's)."
+  (let ((file (drgnx-pkg--sync-lock-file)))
+    (when (equal (ignore-errors (drgnx-pkg--file-string file)) stamp)
+      (ignore-errors (delete-file file)))))
 
 (defmacro drgnx-pkg--with-sync-lock (&rest body)
   "BODY holding the sync lock — taken here unless an outer call holds it already."
   (declare (indent 0))
-  `(if drgnx-pkg--holding-lock (progn ,@body)
-     (drgnx-pkg--take-sync-lock)
-     (unwind-protect (let ((drgnx-pkg--holding-lock t)) ,@body)
-       (ignore-errors (delete-file (drgnx-pkg--sync-lock-file))))))
+  (let ((stamp (make-symbol "stamp")))
+    `(if drgnx-pkg--holding-lock (progn ,@body)
+       (let ((,stamp (drgnx-pkg--take-sync-lock)))
+         (unwind-protect (let ((drgnx-pkg--holding-lock t)) ,@body)
+           (drgnx-pkg--release-sync-lock ,stamp))))))
 
 ;;;; Directories: staging, swap, generations
 
