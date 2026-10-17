@@ -57,10 +57,12 @@ tab in no window."
   (let* ((f (or frame (selected-frame))) (mine (drgnx-frames--tabs f)))
     (if (not (eq (drgnx-frame-role f) 'main))
         mine
-      (let ((elsewhere (seq-mapcat #'drgnx-frames--tabs
-                                   (seq-filter (lambda (g) (and (not (eq g f)) (drgnx-frames--workbench-p g))) (frame-list)))))
-        (append mine (seq-filter (lambda (b) (and (drgnx-signal-user-buffer-p b) (not (memq b mine))
-                                                  (not (memq b elsewhere))))
+      (let ((tabbed (make-hash-table :test #'eq)))   ; a tab in any window (a set: thousands stay linear)
+        (dolist (b mine) (puthash b t tabbed))
+        (dolist (g (frame-list))
+          (when (and (not (eq g f)) (drgnx-frames--workbench-p g))
+            (dolist (b (drgnx-frames--tabs g)) (puthash b t tabbed))))
+        (append mine (seq-filter (lambda (b) (and (not (gethash b tabbed)) (drgnx-signal-user-buffer-p b)))
                                  (buffer-list)))))))
 
 ;;;; New windows

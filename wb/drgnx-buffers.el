@@ -41,7 +41,9 @@
 (defun drgnx-buffers--in-window ()
   "The buffers in open order: all, or with several windows those of the selected one."
   (if (and (not drgnx-buffers-all-windows) (fboundp 'drgnx-frame-buffers) (> (drgnx-frames-count) 1))
-      (let ((mine (drgnx-frame-buffers))) (seq-filter (lambda (b) (memq b mine)) drgnx-buffers--order))
+      (let ((mine (make-hash-table :test #'eq)))      ; a set: thousands of buffers stay linear
+        (dolist (b (drgnx-frame-buffers)) (puthash b t mine))
+        (seq-filter (lambda (b) (gethash b mine)) drgnx-buffers--order))
     drgnx-buffers--order))
 
 (defun drgnx-buffers--shown ()
@@ -61,7 +63,9 @@
 
 (defun drgnx-buffers--update-order ()
   (let* ((live (seq-filter (lambda (b) (and (buffer-live-p b) (drgnx-signal-user-buffer-p b))) drgnx-buffers--order))
-         (new (seq-remove (lambda (b) (memq b live)) (seq-filter #'drgnx-signal-user-buffer-p (buffer-list)))))
+         (seen (make-hash-table :test #'eq))           ; a set: thousands of buffers stay linear
+         (new (progn (dolist (b live) (puthash b t seen))
+                     (seq-filter (lambda (b) (and (not (gethash b seen)) (drgnx-signal-user-buffer-p b))) (buffer-list)))))
     (setq drgnx-buffers--order (append live new))))
 
 (defvar-local drgnx-buffers--rows []
