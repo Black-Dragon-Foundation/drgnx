@@ -11,7 +11,7 @@
         (progn
           (dolist (d '("core" "wb" "modules"))
             (copy-directory (expand-file-name d drgnx-dir) (expand-file-name d root)))
-          (let ((r (drgnx-build root)))
+          (let ((r (drgnx-build-test--build root)))
             (should (null (plist-get r :errors)))
             (should (equal (plist-get r :warnings) nil))
             (should (= (plist-get r :compiled) (length (drgnx-build-files root))))
@@ -45,4 +45,28 @@
                                             `(add-to-list 'load-path ,core)
                                             `(load ,(expand-file-name "drgnx-test-1b.elc" core) nil t)
                                             '(princ (format "value=%s" (drgnx-test-b)))))))
+      (delete-directory root t))))
+
+(defun drgnx-build-test--build (root)
+  "`drgnx-build' of ROOT in a fresh batch Emacs (as `drgnx build' runs): what the suite already loaded
+never hides a warning.  Returns its result."
+  (let ((out (drgnx-build-test--emacs `(load ,(expand-file-name "core/drgnx-build.el" drgnx-dir) nil t)
+                                      `(let ((print-length nil) (print-level nil))
+                                         (princ "\ndrgnx-build-result: ") (prin1 (drgnx-build ,root))))))
+    (if-let* ((at (string-search "\ndrgnx-build-result: " out)))
+        (car (read-from-string out (+ at (length "\ndrgnx-build-result: "))))
+      (error "No build result from the fresh Emacs: %s" out))))
+
+(ert-deftest drgnx-build/the-build-test-never-sees-what-the-suite-loaded ()
+  ;; M4-15: a function an earlier test defined (a package it loaded) must not hide a warning.
+  (let* ((root (make-temp-file "drgnx-build" t)) (core (expand-file-name "core" root)))
+    (fset 'drgnx-build-test--preloaded (lambda () 1))
+    (unwind-protect
+        (progn
+          (make-directory core)
+          (with-temp-file (expand-file-name "drgnx-test-uses.el" core)
+            (insert ";;; -*- lexical-binding: t -*-\n(defun drgnx-test-uses () (drgnx-build-test--preloaded))\n(provide 'drgnx-test-uses)\n"))
+          (should (seq-find (lambda (w) (string-search "drgnx-build-test--preloaded" w))
+                            (plist-get (drgnx-build-test--build root) :warnings))))
+      (fmakunbound 'drgnx-build-test--preloaded)
       (delete-directory root t))))
