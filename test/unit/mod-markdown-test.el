@@ -1,0 +1,84 @@
+;;; mod-markdown-test.el --- batch tests: Markdown — GFM for READMEs, a preview, Mermaid through mmdc as a job -*- lexical-binding: t -*-
+(require 'ert)
+(require 'drgnx)
+
+(defconst drgnx-markdown-test--elpa (expand-file-name (or (getenv "DRGNX_USER_ELPA") "~/.config/emacs/elpa")))
+
+(defun drgnx-markdown-test--available-p ()
+  (and (file-directory-p drgnx-markdown-test--elpa) (directory-files drgnx-markdown-test--elpa nil "\\`markdown-mode-[0-9]")))
+
+(defmacro drgnx-markdown-test--with (&rest body)
+  "BODY with markdown-mode from the user's ELPA, the module loaded and set up, drgnx's cache in a temp dir."
+  (declare (indent 0))
+  `(progn
+     (skip-unless (drgnx-markdown-test--available-p))
+     (let* ((load-path (append load-path (seq-filter #'file-directory-p (directory-files drgnx-markdown-test--elpa t "\\`markdown-mode-"))))
+            (tmp (file-name-as-directory (make-temp-file "drgnx-md" t)))
+            (process-environment (cons (concat "XDG_CACHE_HOME=" tmp "cache") process-environment))
+            (auto-mode-alist auto-mode-alist))
+       (load (expand-file-name "modules/lang/drgnx-markdown" drgnx-dir) nil t)
+       (drgnx-markdown--setup)
+       (unwind-protect (progn ,@body)
+         (dolist (b (buffer-list))
+           (when (or (string-prefix-p "*markdown preview" (buffer-name b))
+                     (and (buffer-file-name b) (string-prefix-p tmp (buffer-file-name b))))
+             (with-current-buffer b (set-buffer-modified-p nil)) (kill-buffer b)))
+         (delete-directory tmp t)))))
+
+(defconst drgnx-markdown-test--doc "# Title\n\nSome *text*.\n\n```mermaid\ngraph TD; A-->B\n```\n")
+
+(ert-deftest drgnx-markdown/readme-is-gfm ()
+  (drgnx-markdown-test--with
+    (let ((f (concat tmp "README.md")) (g (concat tmp "notes.md")))
+      (write-region "# R\n" nil f nil 'silent) (write-region "# N\n" nil g nil 'silent)
+      (with-current-buffer (find-file-noselect f) (should (eq major-mode 'gfm-mode)))
+      (with-current-buffer (find-file-noselect g) (should (eq major-mode 'markdown-mode))
+                           (should markdown-fontify-code-blocks-natively) (should markdown-enable-math)))))
+
+(ert-deftest drgnx-markdown/preview-without-a-program-uses-view-mode ()
+  (drgnx-markdown-test--with
+    (cl-letf (((symbol-function 'drgnx-markdown--program) (lambda () nil)))
+      (with-temp-buffer
+        (markdown-mode) (insert "# Hello\n")
+        (let ((p (drgnx-markdown-preview)))
+          (should (eq (buffer-local-value 'major-mode p) 'markdown-view-mode))
+          (should (string-search "Hello" (with-current-buffer p (buffer-string)))))))))
+
+(ert-deftest drgnx-markdown/mermaid-is-a-job-when-mmdc-is-there ()
+  (drgnx-markdown-test--with
+    (let ((jobs nil))
+      (cl-letf (((symbol-function 'executable-find) (lambda (p &rest _) (and (equal p "mmdc") "/usr/bin/mmdc")))
+                ((symbol-function 'drgnx-jobs-start) (lambda (name cmd &rest _) (push (cons name cmd) jobs) "J"))
+                ((symbol-function 'drgnx-markdown--watch) #'ignore))
+        (let* ((src (drgnx-markdown--with-diagrams drgnx-markdown-test--doc))
+               (job (car jobs)) (png (nth (1+ (seq-position (cdr job) "-o")) (cdr job))))
+          (should (equal (car job) "mermaid"))
+          (should (member "-i" (cdr job)))
+          (should (string-prefix-p (drgnx-markdown--diagram-dir) png))
+          (should (string-search "```mermaid" src))                       ; not drawn yet: the block as it is
+          ;; drawn: the next preview shows the picture and starts nothing
+          (make-directory (file-name-directory png) t)
+          (write-region "png" nil png nil 'silent)
+          (let ((again (drgnx-markdown--with-diagrams drgnx-markdown-test--doc)))
+            (should (= 1 (length jobs)))
+            (should (string-search (concat "![diagram](" png ")") again))
+            (should-not (string-search "```mermaid" again))))))))
+
+(ert-deftest drgnx-markdown/without-mmdc-diagrams-stay-code ()
+  (drgnx-markdown-test--with
+    (cl-letf (((symbol-function 'executable-find) (lambda (&rest _) nil))
+              ((symbol-function 'drgnx-jobs-start) (lambda (&rest _) (error "No job without mmdc"))))
+      (should (equal (drgnx-markdown--with-diagrams drgnx-markdown-test--doc) drgnx-markdown-test--doc)))))
+
+(ert-deftest drgnx-markdown/preview-through-pandoc ()
+  (skip-unless (and (executable-find "pandoc") (fboundp 'libxml-parse-html-region)))
+  (drgnx-markdown-test--with
+    (with-temp-buffer
+      (markdown-mode) (insert "# Title\n\n| a | b |\n|---|---|\n| 1 | 2 |\n")
+      (let ((p (drgnx-markdown-preview)))
+        (with-current-buffer p
+          (should (string-search "Title" (buffer-string)))
+          (should-not (string-search "# Title" (buffer-string)))       ; rendered, not the source
+          (should (eq major-mode 'special-mode)))))))
+
+;;; mod-markdown-test.el ends here

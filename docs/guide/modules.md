@@ -99,6 +99,7 @@ key profile ([keys.md](keys.md)); faces inherit theme faces (no colours). See [c
 | `extra/guides` | first-frame | indent guides in code and YAML on graphical frames (indent-bars, the theme's colours); Toggle Indent Guides ([editing.md](editing.md)) |
 | `ui/smooth` | first-frame | smooth, pixel-precise scrolling on graphical frames (ultra-scroll when installed, else Emacs's own); Toggle Smooth Scrolling ([editing.md](editing.md)) |
 | `editor/sticky` | startup | sticky scroll: the function, class or block you are in, when its start has scrolled off, after the breadcrumb (tree-sitter or indentation; drgnx's own); Toggle Sticky Scroll ([editing.md](editing.md)) |
+| `lang/markdown` | startup | Markdown (READMEs as GitHub Flavored Markdown): code blocks in their language, math; Markdown: Open Preview (pandoc, cmark or markdown when installed), Mermaid diagrams through mmdc ([editing.md](editing.md)) |
 | `tools/vc` | startup | Source Control (the project's changes), Diff with File, Blame — on Emacs' VC |
 | `tools/terminal` | startup | New Terminal (eshell, in the panel's Terminal tab), Open Terminal Here (Explorer) |
 | `tools/search` | startup | Quick Open (project files), Search in Project (results in the panel), Go to Symbol (file, project), Find in File, Replace in Project, Recent Buffers (consult when installed); Semantic Search, Index Project, Index Status, Set Up Semantic Search, and a re-index 30 s after a file of an indexed project is saved ([search.md](search.md)) |

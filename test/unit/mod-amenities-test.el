@@ -6,7 +6,8 @@
   '(("extra/drgnx-booster" extra/booster (eglot-booster) ())
     ("extra/drgnx-format" extra/format (apheleia) (format-on-save))
     ("extra/drgnx-debug" extra/debug (dape) (debug-start debug-breakpoint debug-step-over debug-step-in debug-step-out debug-stop))
-    ("extra/drgnx-guides" extra/guides (indent-bars) (toggle-indent-guides)))
+    ("extra/drgnx-guides" extra/guides (indent-bars) (toggle-indent-guides))
+    ("lang/drgnx-markdown" lang/markdown (markdown-mode) (markdown-preview)))
   "FILE MODULE PACKAGES COMMANDS.")
 
 (defconst drgnx-amenities-test--elpa (expand-file-name (or (getenv "DRGNX_USER_ELPA") "~/.config/emacs/elpa"))
@@ -36,7 +37,7 @@
      (let ((pkgs (seq-mapcat (lambda (m) (nth 2 m)) drgnx-amenities-test--modules)) (orig (symbol-function 'featurep)))
        (cl-letf (((symbol-function 'locate-library) (lambda (&rest _) nil))
                  ((symbol-function 'featurep) (lambda (f &rest r) (and (not (memq f pkgs)) (apply orig f r)))))
-         (drgnx-modules-run 'idle)
+         (drgnx-modules-run 'startup) (drgnx-modules-run 'idle)
          (drgnx-modules-run 'first-frame)))
      (pcase-dolist (`(,_ ,mod ,_ ,cmds) drgnx-amenities-test--modules)
        (should (eq (plist-get (alist-get mod (drgnx-modules-report)) :status) 'missing-packages))
@@ -50,7 +51,7 @@
       (drgnx-amenities-test--fresh
        (unwind-protect
            (progn
-             (drgnx-modules-run 'idle)
+             (drgnx-modules-run 'startup) (drgnx-modules-run 'idle)
              (drgnx-modules-run 'first-frame)
              (pcase-dolist (`(,_ ,mod ,pkgs ,cmds) drgnx-amenities-test--modules)
                (when (seq-every-p #'drgnx-amenities-test--installed-p pkgs)

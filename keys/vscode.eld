@@ -38,6 +38,7 @@
         (toggle-indent-guides :none "the palette")
         (toggle-smooth-scrolling :none "the palette")
         (toggle-sticky-scroll :none "the palette")
+        (markdown-preview "C-S-v")
         (agents-open "RET")
         (projects-sync-plans :none "in the palette")
         (work-view "C-k t")

@@ -63,8 +63,21 @@ tree-sitter when the buffer has a parser (functions, methods, classes, structs, 
 position is worked out once. **Toggle Sticky Scroll** for this buffer. Module `editor/sticky` (drgnx's own; a buffer
 can add to the header the same way: `drgnx-chrome-header-tail`).
 
+## Markdown
+
+Markdown files open in markdown-mode — READMEs as GitHub Flavored Markdown — with code blocks highlighted in their
+own language, math marked, headings scaled, and remote pictures not fetched. **Markdown: Open Preview** (C-S-v in the
+VS Code profile) renders the file beside it and again after each save: through `pandoc` (or `cmark-gfm`, `cmark`,
+`markdown` — the first installed; tables, task lists and links as GitHub shows them), else markdown-mode's own view.
+
+` ```mermaid ` blocks become pictures when [`mmdc`](https://github.com/mermaid-js/mermaid-cli) is installed: each is
+drawn in the background (a durable job, Show Job Log → `mermaid`) into `~/.cache/drgnx/mermaid/`, by its text's hash,
+so a diagram is drawn once; until it is, it shows as code. Module `lang/markdown`, package `markdown-mode`.
+
 ## Tests
 
 `test/unit/mod-grammars-test.el` (the language of a buffer, the hint once and never a prompt, the install as a job
 and its command, buffers switching after it); `test/unit/mod-amenities-test.el` (the modules wait without their
-package and run with it; the booster only with its program; a missing formatter still saves).
+package and run with it; the booster only with its program; a missing formatter still saves); `mod-sticky-test.el` (the scopes, outermost first, at most three, one line, the
+cost of a scroll step); `mod-markdown-test.el` (GFM for READMEs, the preview through pandoc or without a program,
+Mermaid as a job once, without mmdc nothing).
