@@ -114,7 +114,9 @@
         (should (equal (sort (mapcar (lambda (m) (file-name-nondirectory (plist-get m :file))) skipped) #'string<)
                        '("a.txt" "b.txt" "c.txt" "d.txt" "e.txt")))
         (should (cl-every (lambda (m) (stringp (plist-get m :reason))) skipped))
-        (should (equal (drgnx-replace-test--read (funcall file "a.txt")) "bar 1\nqux 2\n"))
+        ;; a.txt held unsaved edits: it gets the replacement, unsaved
+        (should (equal (drgnx-replace-test--read (funcall file "a.txt")) "foo 1\nfoo 2\n"))
+        (should (equal (with-current-buffer (get-file-buffer (funcall file "a.txt")) (buffer-string)) "bar 1\nqux 2\n"))
         (should (equal (drgnx-replace-test--read (funcall file "b.txt")) "xx foo 3\n"))
         (should (equal (drgnx-replace-test--read (funcall file "c.txt")) "nope\n"))
         (should (equal (drgnx-replace-test--read (funcall file "d.txt")) "foo 5\ndisk\n"))
@@ -138,6 +140,7 @@
                       (goto-char 9)                ; inside the first foo
                       (cl-letf (((symbol-function 'eglot-current-server) (lambda () 'fake-server))
                                 ((symbol-function 'eglot-server-capable) (lambda (&rest f) (equal f '(:renameProvider))))
+                                ((symbol-function 'eglot--signal-textDocument/didChange) #'ignore)
                                 ((symbol-function 'jsonrpc-request)
                                  (lambda (server method params &rest _) (push (list server method params) calls) reply)))
                         (drgnx-replace-symbol-edits (lambda (x) (push x got)))))
@@ -196,6 +199,7 @@
         (let ((got nil))
           (cl-letf (((symbol-function 'eglot-current-server) (lambda () server))
                     ((symbol-function 'eglot-server-capable) (lambda (&rest _) capable))
+                    ((symbol-function 'eglot--signal-textDocument/didChange) #'ignore)
                     ((symbol-function 'jsonrpc-request)
                      (lambda (&rest _) (if refuse (signal 'jsonrpc-error '("request id=3 failed:" (jsonrpc-error-code . -32602)
                                                                            (jsonrpc-error-message . "Cannot rename this element"))) '(:changes nil)))))
@@ -208,6 +212,80 @@
           (push (cadr (car got)) reasons)))
       (should (= (length (delete-dups reasons)) 3))
       (should (string-match-p "Cannot rename" (car reasons))))))
+
+(ert-deftest drgnx-replace/symbol-edits-read-the-current-text ()
+  ;; the buffer's pending edits reach the server before the rename; an edit whose text is not the name renamed (a
+  ;; server that read older text) is left out, and the callback says so
+  (drgnx-git-test-with-repo
+    (drgnx-git-test-write repo "a.el" "(defun foo () (foo))\n")
+    (let* ((a (expand-file-name "a.el" repo)) (ua (eglot-path-to-uri a)) (sent nil) (got nil)
+           (reply (lambda (&rest cols)
+                    (list :changes (list (intern (concat ":" ua))
+                                         (apply #'vector (mapcar (lambda (c) (drgnx-replace-test--edit 0 c 3 "foo_drgnx_rename"))
+                                                                 cols)))))))
+      (with-current-buffer (find-file-noselect a)
+        (goto-char (point-min))
+        (insert "xx")                                   ; typed just now: foo is at 9 and 17
+        (goto-char 12)
+        (cl-letf (((symbol-function 'eglot-current-server) (lambda () 'fake-server))
+                  ((symbol-function 'eglot-server-capable) (lambda (&rest _) t))
+                  ((symbol-function 'eglot--signal-textDocument/didChange) (lambda () (setq sent t)))
+                  ((symbol-function 'jsonrpc-request) (lambda (&rest _) (if sent (funcall reply 9 17) (funcall reply 7 15)))))
+          (drgnx-replace-symbol-edits (lambda (x) (push x got)))
+          (setq got (nreverse got))
+          (should sent)
+          (should (equal (mapcar (lambda (m) (plist-get m :col)) (car got)) '(9 17)))
+          (should (eq (cadr got) :done))
+          (setq got nil)
+          (cl-letf (((symbol-function 'jsonrpc-request) (lambda (&rest _) (funcall reply 9 15))))
+            (drgnx-replace-symbol-edits (lambda (x) (push x got))))
+          (setq got (nreverse got))
+          (should (equal (mapcar (lambda (m) (plist-get m :col)) (car got)) '(9)))
+          (should (eq (car (nth 1 got)) :error))
+          (should (eq (nth 2 got) :done)))))))
+
+(ert-deftest drgnx-replace/unsaved-buffers-stay-unsaved ()
+  ;; a buffer with unsaved edits gets the replacement but is not saved (as in VS Code); Undo still works for it
+  (drgnx-git-test-with-repo
+    (drgnx-git-test-write repo "a.txt" "foo\nmine\n")
+    (drgnx-git-test-write repo "b.txt" "foo\n")
+    (let* ((ms (car (drgnx-replace-test--run (drgnx-replace-test--q repo "foo"))))
+           (a (expand-file-name "a.txt" repo)) (b (expand-file-name "b.txt" repo))
+           (abuf (find-file-noselect a)))
+      (with-current-buffer abuf (goto-char (point-max)) (insert "unsaved\n"))
+      (let ((res (drgnx-replace-apply ms "bar")))
+        (should (= (plist-get res :written) 2))
+        (should (equal (with-current-buffer abuf (buffer-string)) "bar\nmine\nunsaved\n"))
+        (should (buffer-modified-p abuf))
+        (should (equal (drgnx-replace-test--read a) "foo\nmine\n"))
+        (should (equal (drgnx-replace-test--read b) "bar\n"))
+        (should (= (plist-get (drgnx-replace-undo (plist-get res :undo)) :undone) 2))
+        (should (equal (with-current-buffer abuf (buffer-string)) "foo\nmine\nunsaved\n"))
+        (should (buffer-modified-p abuf))
+        (should (equal (drgnx-replace-test--read a) "foo\nmine\n"))
+        (should (equal (drgnx-replace-test--read b) "foo\n"))))))
+
+(defvar apheleia-format-after-save-in-progress)
+
+(ert-deftest drgnx-replace/format-on-save-keeps-undo ()
+  ;; a formatter on save (apheleia, extra/format) would rewrite the file after apply saves it, and Undo would then
+  ;; skip the file: apply's and undo's saves run without it
+  (drgnx-git-test-with-repo
+    (drgnx-git-test-write repo "a.txt" "foo\n")
+    (let* ((ms (car (drgnx-replace-test--run (drgnx-replace-test--q repo "foo"))))
+           (a (expand-file-name "a.txt" repo)))
+      (with-current-buffer (find-file-noselect a)
+        (add-hook 'after-save-hook
+                  (lambda ()
+                    (unless (bound-and-true-p apheleia-format-after-save-in-progress)
+                      (goto-char (point-max))
+                      (insert ";; formatted\n")
+                      (let ((apheleia-format-after-save-in-progress t)) (save-buffer))))
+                  nil t))
+      (let ((res (drgnx-replace-apply ms "bar")))
+        (should (equal (drgnx-replace-test--read a) "bar\n"))
+        (should (= (plist-get (drgnx-replace-undo (plist-get res :undo)) :undone) 1))
+        (should (equal (drgnx-replace-test--read a) "foo\n"))))))
 
 (ert-deftest drgnx-replace/no-rg-falls-back ()
   (let ((real (symbol-function 'executable-find)))
@@ -232,6 +310,8 @@
           (let ((h nil) (done nil))
             (setq h (drgnx-replace-search (drgnx-replace-test--q dir "foo") (lambda (x) (when (eq x :done) (setq done t)))))
             (should (equal (car (process-command h)) "grep"))
+            (should (member "--null" (process-command h))) ; -Z is --decompress in BSD/macOS grep
+            (should-not (member "-Z" (process-command h)))
             (while (not done) (accept-process-output nil 0.05)))
           (let ((ms (car (drgnx-replace-test--run (drgnx-replace-test--q dir "foo" :exclude "*.md")))))
             (should (equal (drgnx-replace-test--files ms dir) '("p.txt")))

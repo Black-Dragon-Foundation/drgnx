@@ -21,8 +21,10 @@
 (declare-function eglot-server-capable "eglot")
 (declare-function eglot--TextDocumentPositionParams "eglot")
 (declare-function eglot-move-to-utf-16-linepos "eglot")
+(declare-function eglot--signal-textDocument/didChange "eglot")
 (declare-function jsonrpc-request "jsonrpc")
 (defvar eglot-move-to-linepos-function)
+(defvar apheleia-format-after-save-in-progress) ; bound around our saves: no format on save (extra/format)
 
 (defvar drgnx-replace-context-chars 80 "Characters of the line kept before and after a match (:before, :after).")
 
@@ -118,7 +120,7 @@ MATCH's text).  A symbol match: the server's edit with NEW in place of the place
               (plist-get d :submatches)))))
 
 (defun drgnx-replace--grep-line (line root re case extra)
-  "The matches in LINE of `git grep -z -n' or `grep -Z -n' output: each of RE (Emacs syntax) in the line's text."
+  "The matches in LINE of `git grep -z -n' or `grep --null -n' output: each of RE (Emacs syntax) in the line's text."
   (when (string-match "\\`\\([^\0]+\\)\0\\([0-9]+\\)[\0:]" line)
     (let ((file (expand-file-name (match-string 1 line) root))
           (n (string-to-number (match-string 2 line)))
@@ -156,7 +158,7 @@ MATCH's text).  A symbol match: the server's edit with NEW in place of the place
               ,@(if file (list file)
                   (append (mapcar (lambda (g) (concat ":(glob)" (drgnx-replace--git-glob g))) inc)
                           (mapcar (lambda (g) (concat ":(exclude,glob)" (drgnx-replace--git-glob g))) exc)))))
-      ('grep `("grep" ,(if file "-H" "-r") "-n" "-Z" "-I" "--color=never" ,(if re "-E" "-F")
+      ('grep `("grep" ,(if file "-H" "-r") "-n" "--null" "-I" "--color=never" ,(if re "-E" "-F")
                ,@(unless case '("-i")) ,@(when word '("-w")) "--exclude-dir=.git"
                ,@(mapcar (lambda (g) (concat "--include=" g)) inc) ,@(mapcar (lambda (g) (concat "--exclude=" g)) exc)
                "-e" ,text "--" ,(or file "."))))))
@@ -306,25 +308,46 @@ Resource operations (create, rename, delete a file) are not text edits and are l
   (or (and (eq (car e) 'jsonrpc-error) (alist-get 'jsonrpc-error-message (seq-filter #'consp (cdr e))))
       (error-message-string e)))
 
+(defun drgnx-replace--stale-edits (ms placeholder file line col)
+  "The plain renames among MS (:new just PLACEHOLDER) whose text is not the name renamed: the text of the one at
+point (FILE's LINE and COL), else the symbol PLACEHOLDER was made from.  A server that read older text gives these."
+  (let* ((plain (seq-filter (lambda (m) (equal (plist-get m :new) placeholder)) ms))
+         (at (seq-find (lambda (m) (and (equal (plist-get m :file) file) (= (plist-get m :line) line)
+                                        (<= (plist-get m :col) col (plist-get m :end))))
+                       plain))
+         (name (if at (plist-get at :text) (string-remove-suffix drgnx-replace--rename-suffix placeholder))))
+    (seq-remove (lambda (m) (equal (plist-get m :text) name)) plain)))
+
 (defun drgnx-replace-symbol-edits (callback)
   "Ask this buffer's language server how to rename the symbol at point; never apply it.
 CALLBACK gets the edits as one batch of matches (as `drgnx-replace-search' sends, with :new, the server's text
 holding :placeholder for the new name; see `drgnx-replace-new-text'), then :done.  Without a server, with one
-that cannot rename, or when it refuses, CALLBACK gets (:error REASON), then :done."
+that cannot rename, or when it refuses, CALLBACK gets (:error REASON), then :done.  Edits whose text is not the
+name renamed (the server read older text) are left out, and (:error REASON) after the batch says so."
   (let* ((server (and (featurep 'eglot) (eglot-current-server)))
          (placeholder (concat (or (thing-at-point 'symbol t) "x") drgnx-replace--rename-suffix))
-         (result
+         (results
           (cond
-           ((not server) '(:error "No language server for this buffer"))
-           ((not (eglot-server-capable :renameProvider)) '(:error "The language server cannot rename"))
-           ((not buffer-file-name) '(:error "This buffer has no file"))
+           ((not server) '((:error "No language server for this buffer")))
+           ((not (eglot-server-capable :renameProvider)) '((:error "The language server cannot rename")))
+           ((not buffer-file-name) '((:error "This buffer has no file")))
            (t (condition-case e
-                  (drgnx-replace--workspace-edit
-                   (jsonrpc-request server :textDocument/rename
-                                    (append (eglot--TextDocumentPositionParams) (list :newName placeholder)))
-                   placeholder)
-                (error (list :error (drgnx-replace--error-message e))))))))
-    (when result (funcall callback result))
+                  (let* ((file (file-truename buffer-file-name))
+                         (line (line-number-at-pos nil t)) (col (- (point) (line-beginning-position)))
+                         (ms (progn
+                               (eglot--signal-textDocument/didChange) ; the server reads the text as it is now
+                               (drgnx-replace--workspace-edit
+                                (jsonrpc-request server :textDocument/rename
+                                                 (append (eglot--TextDocumentPositionParams)
+                                                         (list :newName placeholder)))
+                                placeholder)))
+                         (stale (drgnx-replace--stale-edits ms placeholder file line col))
+                         (ms (seq-difference ms stale #'eq)))
+                    (delq nil (list ms (when stale
+                                         (list :error (format "%d edits left out: their text is not the name renamed (the server read older text)"
+                                                              (length stale)))))))
+                (error (list (list :error (drgnx-replace--error-message e)))))))))
+    (dolist (r results) (funcall callback r))
     (funcall callback :done)
     nil))
 
@@ -344,8 +367,14 @@ that cannot rename, or when it refuses, CALLBACK gets (:error REASON), then :don
                    (string= text (buffer-substring-no-properties pos (+ pos (length text)))))
           pos)))))
 
+(defun drgnx-replace--save ()
+  "Save this buffer quietly and without format on save (a formatter's rewrite would make Undo skip the file)."
+  (let ((save-silently t) (apheleia-format-after-save-in-progress t))
+    (save-buffer)))
+
 (defun drgnx-replace--apply-file (file ms new)
-  "Replace FILE's matches MS by NEW in one change group, saved: (WRITTEN SKIPPED UNDO-ENTRY-or-nil)."
+  "Replace FILE's matches MS by NEW in one change group: (WRITTEN SKIPPED UNDO-ENTRY-or-nil).
+The buffer is saved unless it held unsaved edits before."
   (let ((buf (find-buffer-visiting file)))
     (cond
      ((not (file-exists-p file))
@@ -375,15 +404,17 @@ that cannot rename, or when it refuses, CALLBACK gets (:error REASON), then :don
             (setq ok (nreverse ok))
             (if (null ok)
                 (list 0 bad nil)
-              (let ((g (prepare-change-group)))
+              (let ((g (prepare-change-group))
+                    (save (not (buffer-modified-p)))) ; the user's unsaved edits stay unsaved, as in VS Code
                 (condition-case e
                     (progn
                       (activate-change-group g)
                       (dolist (x ok) (goto-char (car x)) (delete-region (car x) (nth 1 x)) (insert (nth 2 x)))
                       (undo-amalgamate-change-group g)
                       (accept-change-group g)
-                      (let ((save-silently t)) (save-buffer))
-                      (list (length ok) bad (list :buffer buf :group g :file file :tick (buffer-chars-modified-tick))))
+                      (when save (drgnx-replace--save))
+                      (list (length ok) bad
+                            (list :buffer buf :group g :file file :saved save :tick (buffer-chars-modified-tick))))
                   (error (cancel-change-group g)
                          (list 0 (append bad (mapcar (lambda (x) (drgnx-replace--skip (nth 3 x) (error-message-string e))) ok))
                                nil))))))))))))
@@ -392,8 +423,9 @@ that cannot rename, or when it refuses, CALLBACK gets (:error REASON), then :don
   "Replace MATCHES (from `drgnx-replace-search' or `drgnx-replace-symbol-edits') by NEW, file by file.
 Each match is checked against its file as it is now (its buffer when visited; an unedited buffer whose file
 changed on disk is reverted first) and skipped when its text is no longer there.  A file's replacements are one
-change group, and the file is saved.  Returns (:written N :files F :skipped MATCHES :undo UNDO-DATA): N matches
-written in F files; each skipped match carries :reason; UNDO-DATA is for `drgnx-replace-undo'."
+change group; the file is saved unless its buffer held unsaved edits before (they stay unsaved).
+Returns (:written N :files F :skipped MATCHES :undo UNDO-DATA): N matches written in F files; each skipped match
+carries :reason; UNDO-DATA is for `drgnx-replace-undo'."
   (let ((by-file nil) (written 0) (files 0) (skipped nil) (undo nil))
     (dolist (m matches) (push m (alist-get (plist-get m :file) by-file nil nil #'equal)))
     (pcase-dolist (`(,file . ,ms) (nreverse by-file))
@@ -403,7 +435,7 @@ written in F files; each skipped match carries :reason; UNDO-DATA is for `drgnx-
     (list :written written :files files :skipped skipped :undo (nreverse undo))))
 
 (defun drgnx-replace-undo (undo-data)
-  "Undo a `drgnx-replace-apply' (its UNDO-DATA): every file's change group, saved.
+  "Undo a `drgnx-replace-apply' (its UNDO-DATA): every file's change group, saved when apply saved it.
 A file edited, killed or changed on disk since is left alone.  Returns (:undone N :skipped FILES)."
   (let ((n 0) (skipped nil))
     (dolist (u undo-data)
@@ -412,9 +444,9 @@ A file edited, killed or changed on disk since is left alone.  Returns (:undone 
                       (verify-visited-file-modtime b)
                       (with-current-buffer b
                         (condition-case nil
-                            (let ((create-lockfiles nil) (save-silently t))
+                            (let ((create-lockfiles nil))
                               (cancel-change-group (plist-get u :group))
-                              (save-buffer)
+                              (when (plist-get u :saved) (drgnx-replace--save))
                               t)
                           (error nil)))))
             (push (plist-get u :file) skipped)
