@@ -282,13 +282,28 @@ archive signs) before it enters the cache; the cached path.  Any failure is a `d
       (error (ignore-errors (delete-file tmp))
              (drgnx-pkg--error "%s: download failed (%s) — nothing was changed" file (error-message-string err))))))
 
+(defvar drgnx-pkg--warnings nil
+  "What a sync reports without failing (files that did not compile): strings, newest first.")
+
+(defun drgnx-pkg--warn (fmt &rest args) (push (apply #'format fmt args) drgnx-pkg--warnings))
+
 (defun drgnx-pkg--unpack (desc file)
-  "Install DESC from the package FILE into `package-user-dir' (byte-compiled; no native code yet)."
+  "Install DESC from the package FILE into `package-user-dir' (byte-compiled; no native code yet).  A
+file that does not byte-compile is a warning (the package runs it uncompiled)."
   (with-temp-buffer
     (set-buffer-multibyte nil)
     (insert-file-contents-literally file)
     ;; Third-party compiler warnings are not the user's to fix: kept out of the sync's output.
-    (let ((save-silently t) (package-native-compile nil) (byte-compile-warnings nil)) (package-unpack desc))))
+    (let ((save-silently t) (package-native-compile nil) (byte-compile-warnings nil)
+          (compile (symbol-function 'byte-compile-file)))
+      (cl-letf (((symbol-function 'byte-compile-file)
+                 (lambda (f &rest args)
+                   (let ((r (apply compile f args)))
+                     (unless r                        ; nil: it did not compile
+                       (drgnx-pkg--warn "%s: %s does not byte-compile (it runs uncompiled)"
+                                        (package-desc-full-name desc) (file-name-nondirectory f)))
+                     r))))
+        (package-unpack desc)))))
 
 (defun drgnx-pkg--install (desc lock-entry)
   "Install DESC from the cache, else from its archive, checking the lock's hash.  Returns its new lock
@@ -353,7 +368,9 @@ in the packages directory itself: an .eln's name hashes its source's path."
         (unless (string-match-p "-\\(pkg\\|autoloads\\)\\.el\\'" f)
           (condition-case err (let ((native-comp-eln-load-path (cons (drgnx-pkg-eln-dir) native-comp-eln-load-path)))
                                 (native-compile f))
-            (error (message "drgnx sync: native compilation of %s failed: %s" f (error-message-string err)))))))))
+            (error (drgnx-pkg--warn "%s: %s does not compile to native code (%s; it runs byte-compiled)"
+                                    (file-name-nondirectory (directory-file-name dir)) (file-name-nondirectory f)
+                                    (error-message-string err)))))))))
 
 (defun drgnx-pkg-quickstart-file () (expand-file-name "drgnx-quickstart.el" (drgnx-elpa-dir)))
 
@@ -460,13 +477,13 @@ whose car is the alist NAME → reason)."
   "Install the manifest into the packages directory.  ARCHIVES: alist (NAME . URL-or-DIR) — when not
 given, `drgnx-pkg-archives'; nil: none; OFFLINE: only the lock and the cache; UPGRADE: the archives'
 newest versions, not the lock's; SEED: a directory of installed packages to copy first (another
-Emacs's elpa); MODULES-DIR: where modules live.  Returns (:ok :installed :missing :generation).
+Emacs's elpa); MODULES-DIR: where modules live.  Returns (:ok :installed :missing :generation :warnings).
 A failed download or install, a hash mismatch, a busy or unreadable lock is a `drgnx-pkg-error' and
 changes nothing; packages that cannot be had are reported (the rest is installed, the lock kept)."
   (let* ((lock (drgnx-pkg-read-lock))               ; unreadable → error before anything changes
          (manifest (drgnx-pkg-manifest modules-dir))
          (staging (drgnx-pkg--staging))
-         (missing (list nil)) installed new-entries generation)
+         (missing (list nil)) (drgnx-pkg--warnings nil) installed new-entries generation)
     (drgnx-pkg--with-sync-lock
       (drgnx-pkg--recover)
       (unwind-protect
@@ -510,7 +527,7 @@ changes nothing; packages that cannot be had are reported (the rest is installed
                    package-alist))
           (setq generation (drgnx-pkg-snapshot (if upgrade "upgrade" "sync"))))))
     (list :ok (null (car missing)) :installed (nreverse installed) :missing (nreverse (car missing))
-          :generation generation)))
+          :generation generation :warnings (reverse drgnx-pkg--warnings))))
 
 ;;;; Upgrade with a smoke test
 
@@ -549,7 +566,7 @@ comes back.  One lock held throughout.  Returns (:ok :generation :restored :smok
                          (condition-case err (funcall (or smoke #'drgnx-pkg-smoke) (drgnx-pkg-manifest modules-dir))
                            (error (error-message-string err))))))
       (if (and (plist-get r :ok) (not failure))
-          (list :ok t :generation (plist-get r :generation))
+          (list :ok t :generation (plist-get r :generation) :warnings (plist-get r :warnings))
         (drgnx-pkg-rollback before)
         (when-let* ((g (plist-get r :generation))) (delete-directory (drgnx-pkg--generation-dir g) t))
         (list :ok nil :smoke failure :missing (plist-get r :missing) :error (plist-get r :error) :restored before)))))
@@ -625,6 +642,7 @@ Never installed or enabled: that is the user's step (docs/guide/packages.md)."
   (when (plist-get r :installed)
     (drgnx-pkg--print "installed: %s" (mapconcat #'symbol-name (plist-get r :installed) " ")))
   (pcase-dolist (`(,name . ,why) (plist-get r :missing)) (drgnx-pkg--print "MISSING %s: %s" name why))
+  (dolist (w (plist-get r :warnings)) (drgnx-pkg--print "WARNING %s" w))
   (when (plist-get r :generation) (drgnx-pkg--print "generation %d" (plist-get r :generation)))
   (when (plist-get r :error) (drgnx-pkg--print "drgnx: %s" (plist-get r :error)))
   (when (or (plist-get r :installed) (plist-get r :restored)) (drgnx-pkg--print "%s" drgnx-pkg--restart-note)))

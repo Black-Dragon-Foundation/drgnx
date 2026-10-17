@@ -544,4 +544,23 @@
              (should (advice-member-p #'drgnx-pkg--guard 'package-vc-upgrade-all)))
     (drgnx-pkg-guard-mode -1)))
 
+;;;; Deferred review items
+
+(ert-deftest drgnx-pkg/compile-failures-are-reported ()
+  ;; M5-9: a package that does not byte-compile (or natively compile) still installs, and the sync says so.
+  (drgnx-pkg-test--with root
+    (let ((arch (drgnx-pkg-test--archive (concat root "arch")
+                                         '((fa "1.0") (fbad "1.0" nil "(eval-when-compile (error \"fixture fails to compile\"))"))))
+          (drgnx-pkg-native-compile t))
+      (drgnx-pkg-test--want root 'fa 'fbad)
+      (cl-letf (((symbol-function 'native-compile)
+                 (lambda (f &rest _) (when (string-match-p "/fa\\.el\\'" f) (error "no libgccjit")))))
+        (let ((r (drgnx-pkg-test--sync root :archives `(("fx" . ,arch)))))
+          (should (plist-get r :ok))
+          (should (equal (drgnx-pkg-test--installed) '("fa-1.0" "fbad-1.0")))
+          (should (seq-find (lambda (w) (string-match-p "fbad\\.el does not byte-compile" w)) (plist-get r :warnings)))
+          (should (seq-find (lambda (w) (string-match-p "fa\\.el .*native.*no libgccjit" w)) (plist-get r :warnings)))
+          (should-not (seq-find (lambda (w) (string-match-p "\\_<fa\\.el does not byte-compile" w)) (plist-get r :warnings)))
+          (should (string-match-p "^WARNING .*fbad\\.el" (with-output-to-string (drgnx-pkg--report r)))))))))
+
 ;;; pkg-test.el ends here
