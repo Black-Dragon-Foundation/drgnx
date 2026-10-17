@@ -39,6 +39,7 @@ usage: install.sh [options]
   --dir DIR          where drgnx is checked out (default ~/.local/share/drgnx/drgnx)
   --source-dir DIR   use this existing drgnx checkout instead of cloning
   --method M         auto (default) | package | source | keep (do not install Emacs)
+                     | formula (macOS: Homebrew's emacs-plus@31, built from source)
   --branch B         drgnx branch to check out (default main)
   -h, --help         this help
 EOF
@@ -60,7 +61,7 @@ parse_args() {
     esac
     shift
   done
-  case "$METHOD" in auto|package|source|keep) ;; *) die 2 "--method must be auto, package, source or keep" ;; esac
+  case "$METHOD" in auto|package|source|keep|formula) ;; *) die 2 "--method must be auto, package, source, keep or formula" ;; esac
   if [[ -n "$SOURCE_DIR" ]]; then DIR="$SOURCE_DIR"; fi
   PREFIX="$(abs_path "$PREFIX")" DIR="$(abs_path "$DIR")"   # links and the build tree need absolute paths
 }
@@ -119,10 +120,16 @@ version_ge() { # A B → true if A >= B
 
 probe_emacs() {
   # Is there already an Emacs that is good for drgnx (>= 31.1, native compilation that compiles, graphical)?
-  EMACS_FOUND="" EMACS_INFO=""
-  local candidates=()
+  # On macOS also /Applications/Emacs.app, which is usually not on PATH (DRGNX_INSTALL_MACOS_APP=none|PATH overrides
+  # it: tests). APP_OLD: that app is there but not good enough — what it is ("Emacs 30.2", or "unknown").
+  EMACS_FOUND="" EMACS_INFO="" APP_OLD=""
+  local candidates=() app=""
   if [[ -n "${DRGNX_INSTALL_EMACS:-}" ]]; then candidates=("$DRGNX_INSTALL_EMACS")
   else candidates=("$PREFIX/bin/emacs" emacs); fi
+  if [[ "$FAMILY" == macos ]]; then
+    app="${DRGNX_INSTALL_MACOS_APP:-/Applications/Emacs.app/Contents/MacOS/Emacs}"
+    if [[ "$app" == none ]]; then app=""; else candidates+=("$app"); fi
+  fi
   local e info
   for e in "${candidates[@]}"; do
     [[ "$e" == none ]] && continue
@@ -131,13 +138,17 @@ probe_emacs() {
              (and (fboundp (quote native-comp-available-p)) (native-comp-available-p)
                   (condition-case nil (progn (native-compile (quote (lambda () 1))) t) (error nil)))
              (cond ((featurep (quote pgtk)) "pgtk") ((featurep (quote ns)) "ns") ((featurep (quote x)) "x") (t "nil"))))' 2>/dev/null || true)"
-    [[ -n "$info" ]] || continue
+    if [[ -z "$info" ]]; then
+      if [[ -n "$app" && "$e" == "$app" ]]; then APP_OLD=unknown; fi
+      continue
+    fi
     EMACS_INFO="$info"
     local v native gui
     read -r v native gui <<<"$info"
     if version_ge "$v" "$EMACS_VERSION" && [[ "$native" == t && "$gui" != nil ]]; then
-      EMACS_FOUND="$(command -v "$e")"; return
+      EMACS_FOUND="$(command -v "$e")" APP_OLD=""; return
     fi
+    if [[ -n "$app" && "$e" == "$app" ]]; then APP_OLD="Emacs $v"; fi
   done
 }
 
@@ -152,6 +163,10 @@ choose_method() {
       debian) CHOSEN=source ;;
       *) die 2 "no automatic install for ${PRETTY:-this system} yet. Install GNU Emacs $EMACS_VERSION with native compilation (see $DOCS_URL), then run: bash install.sh --method keep" ;;
     esac
+  fi
+  if [[ "$CHOSEN" == formula && "$FAMILY" != macos ]]; then die 2 "--method formula is for macOS (Homebrew's emacs-plus@31)"; fi
+  if [[ "$CHOSEN" == cask && -n "$APP_OLD" ]]; then   # the cask installs /Applications/Emacs.app: never over yours
+    die 2 "an older Emacs.app is in /Applications ($APP_OLD): move it aside, or run with --method formula (emacs-plus@31, built from source beside it) — see $DOCS_URL"
   fi
   if [[ "$CHOSEN" == package && "$FAMILY" == debian ]]; then CHOSEN=source; fi   # no 31.1 packages there yet
   if ((OSTREE)) && [[ "$FAMILY" == fedora && ( "$CHOSEN" == package || "$CHOSEN" == source ) ]]; then

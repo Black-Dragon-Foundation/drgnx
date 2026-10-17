@@ -14,6 +14,7 @@
 \(EXIT . OUTPUT).  HOME is a new empty directory, deleted afterwards (ENV may name another)."
   (let* ((home (make-temp-file "drgnx-install-home" t))
          (process-environment (append env (list "DRGNX_INSTALL_EMACS=none" "DRGNX_INSTALL_TTY=none"
+                                                "DRGNX_INSTALL_MACOS_APP=none"   ; never this Mac's /Applications/Emacs.app
                                                 (concat "HOME=" home)
                                                 ;; never this machine's /run/ostree-booted
                                                 (concat "DRGNX_INSTALL_OSTREE_BOOTED=" home "/no-ostree"))
@@ -134,6 +135,52 @@
           (should (string-search "keep the installed Emacs 31.1" (cdr r)))
           (should-not (string-search "brew install" (cdr r)))
           (should-not (string-search "Install Homebrew" (cdr r))))
+      (delete-directory tmp t))))
+
+(ert-deftest drgnx-install/macos-probes-emacs-app-in-applications ()
+  ;; Emacs.app is not on PATH: /Applications/Emacs.app/Contents/MacOS/Emacs is probed too (DRGNX_INSTALL_MACOS_APP
+  ;; stands for it). Good enough: kept and remembered. Older: the cask would install over it — stopped before
+  ;; Homebrew, with the two ways on; --method formula (emacs-plus@31, beside it) goes on.
+  (let ((tmp (make-temp-file "drgnx-install" t)))
+    (unwind-protect
+        (let* ((good (let ((d (expand-file-name "good" tmp))) (make-directory d) (drgnx-install-test--fake-emacs d "31.1 t ns")))
+               (old (let ((d (expand-file-name "old" tmp))) (make-directory d) (drgnx-install-test--fake-emacs d "30.2 t ns")))
+               (run (lambda (app &rest args)
+                      (apply #'drgnx-install-test--run
+                             (append (list (concat "DRGNX_INSTALL_MACOS_APP=" app) "DRGNX_INSTALL_BREW=none") drgnx-install-test--macos)
+                             "--dry-run" args))))
+          (let ((r (funcall run good)))
+            (should (= (car r) 0))
+            (should (string-search (concat "keep the installed Emacs 31.1 (" good ")") (cdr r)))
+            (should (string-search (concat "Remember Emacs: " good) (cdr r)))
+            (should-not (string-search "brew install" (cdr r)))
+            (should-not (string-search "Install Homebrew" (cdr r))))
+          (let ((r (funcall run old)))
+            (should (= (car r) 2))
+            (should (string-search "an older Emacs.app is in /Applications (Emacs 30.2): move it aside, or run with --method formula" (cdr r)))
+            (should-not (string-search "1. Emacs" (cdr r)))
+            (should-not (string-search "Homebrew" (cdr r))))
+          (let ((r (funcall run old "--method" "formula")))
+            (should (= (car r) 0))
+            (should (string-search "install emacs-plus@31" (cdr r)))
+            (should-not (string-search "--cask emacs-plus-app" (cdr r))))
+          ;; none there: as before
+          (let ((r (funcall run (expand-file-name "missing/Emacs" tmp))))
+            (should (= (car r) 0))
+            (should (string-search "install --cask emacs-plus-app" (cdr r))))
+          ;; DRGNX_INSTALL_EMACS still comes first
+          (let ((r (drgnx-install-test--run (append (list (concat "DRGNX_INSTALL_EMACS=" good) (concat "DRGNX_INSTALL_MACOS_APP=" old)
+                                                          "DRGNX_INSTALL_BREW=none")
+                                                    drgnx-install-test--macos)
+                                            "--dry-run")))
+            (should (= (car r) 0))
+            (should (string-search (concat "keep the installed Emacs 31.1 (" good ")") (cdr r))))
+          ;; formula is a macOS method
+          (let ((r (drgnx-install-test--run (list (concat "DRGNX_INSTALL_OS_RELEASE=" (drgnx-install-test--os "fedora-45"))
+                                                  "DRGNX_INSTALL_UNAME=Linux")
+                                            "--dry-run" "--method" "formula")))
+            (should (= (car r) 2))
+            (should (string-search "--method formula is for macOS" (cdr r)))))
       (delete-directory tmp t))))
 
 (ert-deftest drgnx-install/homebrew-installer-runs-noninteractive-and-its-failure-stops-the-run ()

@@ -62,7 +62,7 @@ runs nothing.
 | `--prefix DIR` | where a source-built Emacs and the `drgnx` command go (default `~/.local`) |
 | `--dir DIR` | where drgnx is checked out (default `~/.local/share/drgnx/drgnx`) |
 | `--source-dir DIR` | use an existing drgnx checkout instead of cloning |
-| `--method M` | `auto` (default), `package`, `source`, or `keep` (do not touch Emacs); `package` and `source` only where the platform has that recipe (Fedora and Arch packages; Fedora and Debian-family source builds) — elsewhere it stops before the plan (exit 2) |
+| `--method M` | `auto` (default), `package`, `source`, `keep` (do not touch Emacs), or `formula` (macOS only: Homebrew's `emacs-plus@31`, built from source — also on Apple silicon, beside an older `/Applications/Emacs.app`); `package` and `source` only where the platform has that recipe (Fedora and Arch packages; Fedora and Debian-family source builds) — elsewhere it stops before the plan (exit 2) |
 | `--branch B` | drgnx branch to clone (default `main`) |
 
 Exit codes: 0 done, 1 a step failed (the message names it and its log), 2 unsupported platform or bad
@@ -105,8 +105,11 @@ What you see, step by step:
 The details:
 
 - **A good Emacs is kept.** An `emacs` on your PATH (or in `--prefix`) that is 31.1+, graphical (`ns`) and compiles
-  natively is used as it is; nothing is installed. An Emacs.app whose `emacs` is not on PATH is not looked for: the
-  installer installs Homebrew's.
+  natively is used as it is; nothing is installed. `/Applications/Emacs.app/Contents/MacOS/Emacs` is looked at too
+  (it is usually not on PATH): good enough, it is kept and remembered. **An older Emacs.app there stops the installer
+  before Homebrew** (exit 2) — the cask would install over it: "an older Emacs.app is in /Applications (Emacs 30.2):
+  move it aside, or run with --method formula". `--method formula` builds `emacs-plus@31`, which lives in Homebrew's
+  prefix beside your Emacs.app.
 - **Homebrew first, if it is missing.** The plan lists it as the first step. Before running anything the installer
   explains that Homebrew's own installer asks for your password, installs Apple's Command Line Tools when they are
   missing and takes a few minutes, and asks "Install Homebrew?" (`--yes` answers yes). It then runs Homebrew's official
