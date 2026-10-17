@@ -435,8 +435,7 @@ Returns non-nil if FILE is under a root."
   "Show ROOTS (directories) in the Explorer."
   (setq drgnx-explorer--find nil)
   (setq drgnx-explorer--roots (mapcar (lambda (r) (file-name-as-directory (expand-file-name r))) roots))
-  (drgnx-explorer--buffer)
-  (drgnx-explorer--render))
+  (if (get-buffer drgnx-explorer-buffer-name) (drgnx-explorer--render) (drgnx-explorer--buffer)))   ; a new one renders itself
 
 (defun drgnx-explorer-roots () drgnx-explorer--roots)
 

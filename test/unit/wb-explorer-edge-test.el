@@ -90,4 +90,13 @@
         (drgnx-explorer-set-roots nil)
         (kill-buffer drgnx-explorer-buffer-name)))))
 
+;;;; M3a-4: set-roots renders once
+
+(ert-deftest drgnx-explorer-edge/set-roots-renders-once ()
+  (drgnx-explorer-edge--with root
+    (kill-buffer drgnx-explorer-buffer-name)
+    (let ((n drgnx-explorer--renders))
+      (drgnx-explorer-set-roots (list root))
+      (should (= (1+ n) drgnx-explorer--renders)))))
+
 ;;; wb-explorer-edge-test.el ends here
