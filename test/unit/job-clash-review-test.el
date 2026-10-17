@@ -140,4 +140,16 @@ decided build / won't build on one subject (decisions A-N and B-N), the clash sc
         (should-not (string-match-p "\n" (mapconcat (lambda (s) (plist-get s :text)) (plist-get (plist-get (drgnx-coord-card card) :data) :sides) "")))
         (should-not (let ((case-fold-search nil)) (string-match-p "^RECOMMEND" (drgnx-job-clash--prompt card))))))))
 
+(ert-deftest drgnx-job-clash/clash-reviewer-ends-when-the-job-is-done ()
+  (drgnx-job-run-test--with "# One\n\n### Task 1: one\n"
+    (let* ((drgnx-job-max-agents 0) (drgnx-job-review nil) (id (drgnx-job-propose plan)))
+      (drgnx-job-approve id)
+      (let ((rev (drgnx-agents-start "mock" repo nil id)))                  ; a clash reviewer: no task
+        (puthash (drgnx-agent-session-id rev) (list :clash 1) drgnx-job--reviewers)
+        (drgnx-job-run-test--wait (lambda () (eq (drgnx-agent-session-status rev) 'idle)))
+        (drgnx-coord-force-status (concat id "#1") "done" "s-x")
+        (drgnx-job-step id)
+        (should (equal (plist-get (drgnx-coord-job id) :status) "done"))
+        (should (drgnx-job-run-test--wait (lambda () (eq (drgnx-agent-session-status rev) 'exited)) 5))))))
+
 ;;; job-clash-review-test.el ends here

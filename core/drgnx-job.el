@@ -287,7 +287,10 @@ what the agent before it left (`drgnx-job--fall-back')."
           (when (and (member (plist-get c :task) finished) (drgnx-coord-card-settle (plist-get c :id) "resolved"))
             (when-let* ((m (plist-get (plist-get c :data) :message))) (drgnx-coord-mark m "acted")))))
       (when (seq-every-p (lambda (task) (member (plist-get task :status) '("done" "dropped"))) (drgnx-coord-tasks id))
-        (drgnx-coord-job-set id :status "done"))
+        (drgnx-coord-job-set id :status "done")
+        (dolist (s (drgnx-agents-sessions))                ; nothing of a finished job stays: a clash reviewer neither
+          (when (and (equal (drgnx-agent-session-job s) id) (not (eq (drgnx-agent-session-status s) 'exited)))
+            (drgnx-agents-kill s))))
       (drgnx-job--changed id))))
 
 (defun drgnx-job--alive-p (sid)
