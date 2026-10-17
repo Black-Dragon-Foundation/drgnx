@@ -256,3 +256,21 @@
        (should (apply #'< (mapcar #'car timers)))
        (pcase-dolist (`(,_ ,fn ,args) timers) (apply fn args) (push '| log))
        (should (equal (reverse log) '(external | i1 | i2 | (after idle) report |)))))))
+
+(ert-deftest drgnx-modules/a-load-error-names-the-file-that-failed ()
+  ;; M4-9: an error inside a library the module file loads names that library, not only the module.
+  (drgnx-test--fresh-modules
+   (let ((dir (make-temp-file "drgnx-mods" t)) (lib (make-temp-file "drgnx-lib" t)))
+     (unwind-protect
+         (let ((load-path (cons lib load-path)))
+           (make-directory (expand-file-name "test" dir))
+           (write-region "(error \"inner kaputt\")\n" nil (expand-file-name "drgnx-test-inner-lib.el" lib))
+           (write-region "(require 'drgnx-test-inner-lib)\n" nil (expand-file-name "test/drgnx-outer.el" dir))
+           (write-region "(error \"direct kaputt\")\n" nil (expand-file-name "test/drgnx-direct.el" dir))
+           (drgnx-modules-load-directory dir)
+           (let ((outer (plist-get (alist-get 'test/drgnx-outer (drgnx-modules-report)) :error))
+                 (direct (plist-get (alist-get 'test/drgnx-direct (drgnx-modules-report)) :error)))
+             (should (string-search "inner kaputt" outer))
+             (should (string-search "drgnx-test-inner-lib" outer))
+             (should (equal direct "direct kaputt"))))
+       (delete-directory dir t) (delete-directory lib t)))))

@@ -166,15 +166,20 @@ order (a cycle keeps it, and is reported waiting)."
 
 (defun drgnx-modules-load-directory (dir)
   "Load every module file under DIR (modules/<category>/drgnx-*.el); a file that fails to
-load is reported as module <category>/<file name>."
+load is reported as module <category>/<file name>, naming the library it loaded that failed."
   (dolist (file (directory-files-recursively dir "\\`drgnx-.*\\.el\\'"))
-    (let ((t0 (float-time)))
+    (let ((t0 (float-time)) (inner nil))
       (condition-case e
-          (load (file-name-sans-extension file) nil t)   ; the .elc when `drgnx build' made one
+          ;; the innermost file being loaded when the error was signalled (Emacs 30's handler-bind)
+          (handler-bind ((error (lambda (_) (setq inner load-file-name))))
+            (load (file-name-sans-extension file) nil t))   ; the .elc when `drgnx build' made one
         (error (drgnx-modules--record
                 (intern (format "%s/%s" (file-name-nondirectory (directory-file-name (file-name-directory file)))
                                 (file-name-base file)))
-                'load (round (* 1000 (- (float-time) t0))) 'failed (error-message-string e)))))))
+                'load (round (* 1000 (- (float-time) t0))) 'failed
+                (if (and inner (not (equal (file-name-base inner) (file-name-base file))))
+                    (format "%s (in %s)" (error-message-string e) (file-name-nondirectory inner))
+                  (error-message-string e))))))))
 
 (defun drgnx-modules-report () drgnx-modules--report)
 

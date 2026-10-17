@@ -12,8 +12,9 @@ never stops Emacs from starting:
 | `first-file` | when the first file is visited |
 | `first-input` | before the first command you give |
 
-**Preferences: Modules** (palette, Options menu) lists every module with its status — `ok`, `failed: …`, `needs
-<package>`, `needs <module>`, `disabled` — its stage, how long it took, and whether it runs at the next start; `RET`
+**Preferences: Modules** (palette, Options menu) lists every module with its status — `ok`, `failed: …` (a module
+file that does not load says `(in <library>)` when the error came from a library it loads), `needs <package>`,
+`needs <module>`, `disabled` — its stage, how long it took, and whether it runs at the next start; `RET`
 turns the module on that row off (or back on) from the next start. `drgnx doctor` reports failed modules and modules
 waiting for packages, from the last session.
 
