@@ -132,4 +132,18 @@
       (should (equal (drgnx-job-run-test--status id 1) "needs-input"))
       (should-not (seq-find (lambda (s) (gethash (drgnx-agent-session-id s) drgnx-job--reviewers)) drgnx-agents--sessions)))))
 
+(ert-deftest drgnx-job/a-stopped-tail-turn-does-not-hold-the-review ()
+  ;; the user Stops the agent after complete_task: its turn is over (held by the Stop), the review goes on
+  (drgnx-job-run-test--with "# One\n\n### Task 1: first\n"
+    (let* ((drgnx-job-max-agents 0) (id (drgnx-job-propose plan)) (tid (concat id "#1")) (reviews 0))
+      (cl-letf (((symbol-function 'drgnx-job--start-review) (lambda (&rest _) (setq reviews (1+ reviews)))))
+        (drgnx-job-approve id)
+        (let ((s (drgnx-job-review-test--agent id 1)))
+          (drgnx-agents-send s "slow")
+          (should (drgnx-job-run-test--wait (lambda () (eq (drgnx-agent-session-status s) 'busy))))
+          (drgnx-coord-force-status tid "in-review" (drgnx-agent-session-id s))
+          (drgnx-agents-stop s)
+          (should (drgnx-job-run-test--wait (lambda () (eq (drgnx-agent-session-status s) 'exited)) 20))
+          (should (> reviews 0)))))))
+
 ;;; job-review-test.el ends here

@@ -166,4 +166,27 @@
       (should (string-search "never approved" (cadr (should-error (drgnx-job-resume id) :type 'user-error))))
       (should (equal (plist-get (drgnx-coord-job id) :status) "stopped")))))
 
+(ert-deftest drgnx-job-cards/a-request-after-complete-task-keeps-the-task-in-review ()
+  ;; the agent finished (in review) but its turn goes on and it asks the user for something
+  (drgnx-job-cards-test--running
+    (let ((s (drgnx-agents-start "mock" repo tid id)))
+      (drgnx-coord-force-status tid "running" (drgnx-agent-session-id s))
+      (drgnx-job-run-test--wait (lambda () (eq (drgnx-agent-session-status s) 'idle)))
+      (drgnx-coord-force-status tid "in-review" (drgnx-agent-session-id s))
+      (drgnx-agents-send s "permission execute :: npm install left-pad")
+      (should (drgnx-job-run-test--wait (lambda () (drgnx-job-cards-test--open id "permission"))))
+      (should (equal (drgnx-job-run-test--status id 1) "needs-input"))
+      (drgnx-job-card-act (plist-get (car (drgnx-job-cards-test--open id "permission")) :id) "allow")
+      (should (equal (drgnx-job-run-test--status id 1) "in-review"))
+      (should (equal (plist-get (drgnx-coord-task tid) :agent) (drgnx-agent-session-id s))))))
+
+(ert-deftest drgnx-job-cards/an-agent-gone-while-its-task-is-in-review-leaves-it-in-review ()
+  (drgnx-job-cards-test--running
+    (let ((gone (drgnx-agents--make :id "s-gone" :name "g" :profile "mock" :cwd repo :task tid :job id)))
+      (drgnx-coord-force-status tid "in-review" "s-gone")
+      (drgnx-job--card id tid "permission" "curl x" gone)
+      (should (equal (drgnx-job-run-test--status id 1) "needs-input"))
+      (drgnx-job-step id)
+      (should (equal (drgnx-job-run-test--status id 1) "in-review")))))
+
 ;;; job-cards-test.el ends here

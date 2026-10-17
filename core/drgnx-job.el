@@ -182,6 +182,10 @@ own repository).  Returns its id; nothing starts (unless `drgnx-job-auto-start')
       (setf (alist-get task (plist-get data key) nil (null n) #'equal) n)
       (drgnx-coord-job-set id :data data))))
 
+(defun drgnx-job--turn-over-p (s)
+  "Is S's turn over — it is idle and free, or idle and held by a Stop (a Stop ends the turn, not the work)?"
+  (and s (eq (drgnx-agent-session-status s) 'idle) (or (drgnx-agents-free-p s) (drgnx-agent-session-paused s)) t))
+
 (defun drgnx-job--step-later (id)
   "Step job ID soon, outside the process filter — once, however many ask."
   (unless (gethash id drgnx-job--step-pending)
@@ -284,7 +288,7 @@ what the agent before it left (`drgnx-job--fall-back')."
            ;; finished: its agent's work is done; a reviewer looks at it — once the agent's turn is over (complete_task
            ;; comes mid-turn; `drgnx-job--session-changed' steps again when it is free)
            ((and (equal status "in-review")
-                 (or (not (member agent live)) (drgnx-agents-free-p (drgnx-job--session agent))))
+                 (or (not (member agent live)) (drgnx-job--turn-over-p (drgnx-job--session agent))))
             (drgnx-job--set-count id :exits (plist-get task :id) nil) (drgnx-job--set-count id :nudged (plist-get task :id) nil)
             (when (member agent live) (drgnx-agents-kill (drgnx-job--session agent)))
             (when (and (not (run-hook-with-args-until-success 'drgnx-job-before-review-functions id task))
@@ -369,7 +373,7 @@ job on."
           (drgnx-agents-kill s)
           (drgnx-job--reviewed job reviewer verdict)))))
     (when (or (eq (drgnx-agent-session-status s) 'exited)
-              (and (drgnx-agents-free-p s)
+              (and (drgnx-job--turn-over-p s)
                    (equal (plist-get (drgnx-coord-task (drgnx-agent-session-task s)) :status) "in-review")))
       (drgnx-job--step-later job))))
 
@@ -615,7 +619,10 @@ S: the session whose request waits (it goes back to work once answered, or, gone
   (when task
     (when s
       (drgnx-job--set-waiting job task (list :sid (drgnx-agent-session-id s)
-                                             :back (if (gethash (drgnx-agent-session-id s) drgnx-job--reviewers) "in-review" "ready"))))
+                                             ;; a reviewer's request, or an agent's that finished (its turn goes on): back to review
+                                             :back (if (or (gethash (drgnx-agent-session-id s) drgnx-job--reviewers)
+                                                           (equal (plist-get (drgnx-coord-task task) :status) "in-review"))
+                                                       "in-review" "ready"))))
     (unless (member kind drgnx-job--advisory-kinds)
       (drgnx-coord-force-status task "needs-input" (plist-get (drgnx-coord-task task) :agent))))
   (let* ((data (append (and s (list :sid (drgnx-agent-session-id s))) data))
@@ -789,17 +796,18 @@ its worktree done at once; anything else waits for the user as a card (nil: the 
              nil)))))))
 
 (defun drgnx-job--answered (s)
-  "The user answered S's request: its task goes on (when nothing else waits) — a reviewer's back in review, with the
-work of the agent that did it."
+  "The user answered S's request: its task goes on (when nothing else waits) — a reviewer's, or a finished agent's,
+back in review, with the work of the agent that did it."
   (let ((task (drgnx-coord-task (drgnx-agent-session-task s))))
     (when (and (drgnx-agent-session-job s) (null (drgnx-agent-session-permissions s)) (null (drgnx-agent-session-reviews s)))
       (drgnx-job--settle-requests (drgnx-agent-session-job s) s))
     (when (and (drgnx-agent-session-job s) (null (drgnx-agent-session-permissions s)) (null (drgnx-agent-session-reviews s))
                (equal (plist-get task :status) "needs-input"))
-      (drgnx-job--set-waiting (drgnx-agent-session-job s) (plist-get task :id) nil)
-      (if (gethash (drgnx-agent-session-id s) drgnx-job--reviewers)
-          (drgnx-coord-force-status (plist-get task :id) "in-review" (plist-get task :agent))
-        (drgnx-coord-force-status (plist-get task :id) "running" (drgnx-agent-session-id s))))))
+      (let ((back (plist-get (drgnx-job--waiting (drgnx-agent-session-job s) (plist-get task :id)) :back)))
+        (drgnx-job--set-waiting (drgnx-agent-session-job s) (plist-get task :id) nil)
+        (if (or (equal back "in-review") (gethash (drgnx-agent-session-id s) drgnx-job--reviewers))
+            (drgnx-coord-force-status (plist-get task :id) "in-review" (plist-get task :agent))
+          (drgnx-coord-force-status (plist-get task :id) "running" (drgnx-agent-session-id s)))))))
 
 ;;;; Stopping, what a job looks like, `drgnx job'
 
