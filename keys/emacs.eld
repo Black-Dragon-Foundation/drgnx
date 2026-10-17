@@ -29,6 +29,7 @@
         (job-stop :none "the palette")
         (job-show :none "the palette")
         (grammars-install :none "the palette")
+        (format-on-save :none "the palette")
         (agents-open "RET")
         (projects-sync-plans :none "in the palette")
         (work-view :none "in the palette")
