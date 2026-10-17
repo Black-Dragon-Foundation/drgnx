@@ -256,7 +256,7 @@
         (view-explorer :none "SPC e toggles the sidebar; the palette")
         (view-search "SPC /")
         (replace-in-files :none "SPC s r is still Replace in Project (search-replace); the palette")
-        (rename-symbol :none "SPC c r is Find References (code-references); the palette")
+        (rename-symbol :none "SPC c R is still Rename Symbol (code-rename) and SPC c r Find References; the palette")
         (replace-in-file :none "the palette")
         (replace-all "C-c C-c" "C-<return>" :map (drgnx-replace . drgnx-replace-keys-map))
         (replace-this "C-c C-r" :map (drgnx-replace . drgnx-replace-keys-map))

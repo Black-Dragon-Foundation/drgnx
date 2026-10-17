@@ -383,4 +383,176 @@ bar's keymaps), one editor window, no view or bar left over."
         (should (= (funcall drawn) 10000))
         (should (< worst 0.016))))))
 
+
+;; fix round 1
+
+(defun drgnx-replace-view-test--reply (a b)
+  "A rename reply for foo: two uses in A's first line, one in B's (never A's comment)."
+  (let ((edit (lambda (line char) (list :range (list :start (list :line line :character char)
+                                                     :end (list :line line :character (+ char 3)))
+                                        :newText "foo_drgnx_rename"))))
+    (list :changes (list (intern (concat ":" (eglot-path-to-uri a))) (vector (funcall edit 0 7) (funcall edit 0 15))
+                         (intern (concat ":" (eglot-path-to-uri b))) (vector (funcall edit 0 1))))))
+
+(defmacro drgnx-replace-view-test--with-server (server requests reply &rest body)
+  "BODY with a fake language server while SERVER (a variable) is non-nil, counting REQUESTS, answering REPLY."
+  (declare (indent 3))
+  `(cl-letf (((symbol-function 'eglot-current-server) (lambda () ,server))
+             ((symbol-function 'eglot-server-capable) (lambda (&rest f) (equal f '(:renameProvider))))
+             ((symbol-function 'eglot--signal-textDocument/didChange) #'ignore)
+             ((symbol-function 'jsonrpc-request) (lambda (&rest _) (cl-incf ,requests) ,reply)))
+     ,@body))
+
+(defun drgnx-replace-view-test--highlights (buf)
+  "Where the find bar's highlights start in BUF."
+  (with-current-buffer buf
+    (sort (mapcar #'overlay-start
+                  (seq-filter (lambda (o) (memq (overlay-get o 'face) '(drgnx-replace-match drgnx-replace-current)))
+                              (overlays-in (point-min) (point-max))))
+          #'<)))
+
+(ert-deftest drgnx-replace/bar-renames-the-symbol-in-its-file ()
+  (drgnx-replace-view-test--with
+    (drgnx-git-test-with-repo
+      (drgnx-git-test-write repo "a.el" "(defun foo () (foo))\n;; foo in a comment\n")
+      (drgnx-git-test-write repo "b.el" "(foo)\n")
+      (let* ((a (expand-file-name "a.el" repo)) (b (expand-file-name "b.el" repo))
+             (reply (drgnx-replace-view-test--reply a b)) (server 'fake) (requests 0)
+             (buf (find-file-noselect a)))
+        (find-file-noselect b)            ; visited before the fake server exists
+        (drgnx-replace-view-test--with-server server requests reply
+          (drgnx-replace-view-test--visit repo "a.el" 9)
+          (drgnx-replace-in-file)
+          (with-current-buffer (drgnx-replace-view-test--bar)
+            (should (drgnx-replace--opt :symbol))
+            (should (equal (widget-value (drgnx-replace--widget 'find)) "foo")))
+          ;; the server's edits in this file are highlighted: not the comment's foo
+          (should (equal (drgnx-replace-view-test--highlights buf) '(8 16)))
+          (with-current-buffer (drgnx-replace-view-test--bar)
+            (widget-value-set (drgnx-replace--widget 'replace) "bar"))
+          (drgnx-replace-view-test--key "C-<return>")
+          (should (equal (with-current-buffer buf (buffer-string)) "(defun bar () (bar))\n;; foo in a comment\n"))
+          (should (equal (drgnx-replace-view-test--read b) "(foo)\n")))))))
+
+(ert-deftest drgnx-replace/an-edited-buffer-refreshes-its-rows ()
+  (drgnx-replace-view-test--with
+    (drgnx-git-test-with-repo
+      (drgnx-git-test-write repo "a.txt" "foo 1\nfoo 2\n")
+      (drgnx-git-test-write repo "b.txt" "foo 3\n")
+      (let* ((a (expand-file-name "a.txt" repo)) (buf (drgnx-replace-view-test--visit repo "a.txt" 1))
+             (row (lambda (after) (lambda (v) (and (consp v) (equal (plist-get v :file) a) (equal (plist-get v :after) after)))))
+             (view nil))
+        (drgnx-replace-in-files)
+        (setq view (drgnx-replace-view-test--view))
+        (drgnx-replace-view-test--wait)
+        (should (= (drgnx-replace-view-test--count) 3))
+        (drgnx-replace-view-test--press-box (funcall row " 2"))
+        ;; an unsaved edit above: after a pause the file's rows follow the buffer; the unticked match stays unticked
+        (with-current-buffer buf (goto-char (point-min)) (insert "foo 0\nfoo 0b\n"))
+        (with-current-buffer view (should (timerp drgnx-replace--refresh-timer)))
+        (drgnx-replace-view-test--wait)
+        (should (= (drgnx-replace-view-test--count) 5))
+        (should (equal (drgnx-replace-view-test--box-at (funcall row " 2")) "[ ]"))
+        (should (equal (drgnx-replace-view-test--box-at (funcall row " 1")) "[x]"))
+        (should (= 4 (plist-get (with-current-buffer view (seq-find (funcall row " 2") drgnx-replace--matches)) :line)))
+        ;; Replace All writes the buffer as it is now (left unsaved: it held the user's edits)
+        (drgnx-replace-view-test--set 'replace "bar")
+        (drgnx-replace-view-test--wait)
+        (with-current-buffer view (drgnx-replace-all))
+        (should (equal (with-current-buffer buf (buffer-string)) "bar 0\nbar 0b\nbar 1\nfoo 2\n"))
+        (should (equal (drgnx-replace-view-test--read (expand-file-name "b.txt" repo)) "bar 3\n"))))))
+
+(ert-deftest drgnx-replace/a-file-changed-on-disk-refreshes-its-rows ()
+  (let ((watches nil) (removed nil) (n 0))
+    ;; file-notify events do not reach a batch Emacs: the watches are recorded, their callbacks called by hand
+    (cl-letf (((symbol-function 'file-notify-add-watch) (lambda (dir _flags cb) (push (list (cl-incf n) dir cb) watches) n))
+              ((symbol-function 'file-notify-rm-watch) (lambda (d) (push d removed))))
+      (drgnx-replace-view-test--with
+        (drgnx-git-test-with-repo
+          (drgnx-git-test-write repo "a.txt" "foo 1\n")
+          (drgnx-git-test-write repo "sub/b.txt" "foo 2\n")
+          (drgnx-replace-view-test--visit repo "a.txt" 1)
+          (drgnx-replace-in-files)
+          (drgnx-replace-view-test--wait)
+          (should (= (drgnx-replace-view-test--count) 2))
+          ;; the listed files' folders are watched
+          (should (equal (sort (mapcar (lambda (w) (file-relative-name (nth 1 w) repo)) watches) #'string<) '("./" "sub/")))
+          ;; an agent writes sub/b.txt
+          (let ((b (expand-file-name "sub/b.txt" repo)))
+            (write-region "foo 2\nfoo 3 foo\n" nil b nil 'silent)
+            (dolist (w watches) (funcall (nth 2 w) (list (car w) 'changed b))))
+          (drgnx-replace-view-test--wait)
+          (should (= (drgnx-replace-view-test--count) 4))
+          ;; a new search drops the watches (and watches again)
+          (let ((ids (mapcar #'car watches)))
+            (drgnx-replace-view-test--set 'find "fo")
+            (drgnx-replace-view-test--wait)
+            (should (cl-subsetp ids removed)))
+          ;; so does killing the view, with the edit hook
+          (let* ((view (drgnx-replace-view-test--view)) (ids (with-current-buffer view drgnx-replace--watches)))
+            (should ids)
+            (kill-buffer view)
+            (should (cl-subsetp ids removed))
+            (should-not (memq #'drgnx-replace--buffer-changed (default-value 'after-change-functions)))))))))
+
+(ert-deftest drgnx-replace/symbol-falls-back-to-text ()
+  (drgnx-replace-view-test--with
+    (drgnx-git-test-with-repo
+      (drgnx-git-test-write repo "a.el" "(defun foo () (foo))\n;; foo in a comment\n")
+      (drgnx-git-test-write repo "b.el" "(foo)\n")
+      (let* ((a (expand-file-name "a.el" repo)) (b (expand-file-name "b.el" repo))
+             (reply (drgnx-replace-view-test--reply a b)) (server nil) (requests 0)
+             (abuf (find-file-noselect a)))
+        (find-file-noselect b)
+        (drgnx-replace-view-test--with-server server requests reply
+          ;; no server: pressing Symbol says why, and the text is searched
+          (drgnx-replace-view-test--visit repo "a.el" 9)
+          (drgnx-replace-in-files)
+          (drgnx-replace-view-test--wait)
+          (with-current-buffer (drgnx-replace-view-test--view)
+            (should-not (drgnx-replace--opt :symbol))
+            (drgnx-replace--toggle :symbol)
+            (should-not (drgnx-replace--opt :symbol))
+            (should (string-match-p "No language server" drgnx-replace--status)))
+          (drgnx-replace-view-test--wait)
+          (should (= (drgnx-replace-view-test--count) 4))
+          (with-current-buffer (drgnx-replace-view-test--view)
+            (should (string-match-p "No language server" drgnx-replace--status)))
+          ;; a server: Rename Symbol lists its edits
+          (setq server 'fake)
+          (drgnx-replace-view-test--visit repo "a.el" 9)
+          (drgnx-replace-rename-symbol)
+          (drgnx-replace-view-test--wait)
+          (should (= (drgnx-replace-view-test--count) 3))
+          (should (= requests 1))
+          ;; the code changes under it: the list says so and the server is not asked
+          (with-current-buffer abuf (goto-char (point-max)) (insert ";; more\n"))
+          (drgnx-replace-view-test--wait)
+          (with-current-buffer (drgnx-replace-view-test--view)
+            (should drgnx-replace--stale)
+            (should (string-match-p "The code changed" drgnx-replace--status)))
+          (should (= requests 1))
+          ;; other text in Find: Symbol off, a text search
+          (drgnx-replace-view-test--set 'find "foo in")
+          (with-current-buffer (drgnx-replace-view-test--view)
+            (should-not (drgnx-replace--opt :symbol))
+            (should (widget-apply (drgnx-replace--widget :case) :active)))
+          (drgnx-replace-view-test--wait)
+          (should (= (drgnx-replace-view-test--count) 1))
+          (should (= requests 1)))))))
+
+(ert-deftest drgnx-replace/the-find-bar-is-never-saved-with-the-workbench ()
+  ;; wb/drgnx-persist.el saves the main area with `window-state-get': the bar must not be in it
+  (require 'drgnx-persist)
+  (drgnx-replace-view-test--with
+    (drgnx-git-test-with-repo
+      (drgnx-git-test-write repo "f.txt" "foo\n")
+      (let ((drgnx-persist-file (expand-file-name "state.eld" tmp)))
+        (drgnx-replace-view-test--visit repo "f.txt" 1)
+        (drgnx-replace-in-file)
+        (should (get-buffer-window (drgnx-replace-view-test--bar)))
+        (drgnx-persist-save)
+        (should-not (get-buffer-window (drgnx-replace-view-test--bar)))
+        (should-not (string-search drgnx-replace-bar-buffer-name (drgnx-replace-view-test--read drgnx-persist-file)))))))
+
 ;;; mod-replace-view-test.el ends here

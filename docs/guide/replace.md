@@ -38,6 +38,15 @@ with the reason, never written blind. A file's replacements are one change; file
 buffer held unsaved edits: it gets the replacement and stays unsaved, as in VS Code. **Undo Replace** (the view's
 Undo button) puts every file of the last replacement back in one step; a file edited since is left alone.
 
+## The list stays current
+
+When a listed file changes — you edit its buffer (saved or not), or something writes it on disk (an agent, a
+checkout) — its rows are searched again half a second later, from the buffer when it is open, so unsaved edits count.
+A match that was unticked stays unticked when the text around it is the same. Changes on disk are noticed for the
+first 200 listed files (`drgnx-replace-watch-limit`); with more, the view searches again when it is shown. A symbol
+list is never re-asked of the server by itself: when the code changes, the status line says so; run Rename Symbol
+again.
+
 ## The find bar
 
 **Replace in File** opens a two-line bar above the editor with Find, Replace and the same toggles, for that buffer.
