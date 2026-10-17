@@ -15,6 +15,18 @@ patterns=(
   '\.claude/projects/'                 # agent session paths
 )
 pattern="$(IFS='|'; echo "${patterns[*]}")"
+secret_files='(^|/)(\.env(\..*)?|secrets\.env|.*\.pem|.*\.key)$'
+
+# --all (CI): the same checks over every tracked file instead of the staged lines.
+if [ "${1:-}" = --all ]; then
+  hits="$(git grep -nIE -e "$pattern" -- . ':(exclude).githooks/pre-commit' || true)"
+  files="$(git ls-files | grep -E "$secret_files" || true)"
+  [ -z "$hits" ] || { echo "leak scan: secrets or personal paths in tracked files:" >&2; echo "$hits" | sed 's/^/  /' >&2; }
+  [ -z "$files" ] || { echo "leak scan: env/secrets/key files are tracked:" >&2; echo "$files" | sed 's/^/  /' >&2; }
+  [ -z "$hits$files" ] || exit 1
+  echo "leak scan: clean"
+  exit 0
+fi
 
 # Added lines only, excluding this hook itself.
 hits="$(git diff --cached -U0 --no-color -- . ':(exclude).githooks/pre-commit' \
@@ -26,7 +38,7 @@ if [ -n "$hits" ]; then
 fi
 
 # Never commit environment or secrets files.
-if git diff --cached --name-only | grep -qE '(^|/)(\.env(\..*)?|secrets\.env|.*\.pem|.*\.key)$'; then
+if git diff --cached --name-only | grep -qE "$secret_files"; then
   echo "pre-commit: refusing to commit an env/secrets/key file." >&2
   exit 1
 fi
