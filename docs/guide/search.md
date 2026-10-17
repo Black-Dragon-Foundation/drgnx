@@ -151,7 +151,7 @@ Whatever the configuration says:
 - dot files and everything under a dot directory (`.env`, `.git`, `.github`, …);
 - files whose names look like keys or secrets (`*.pem`, `*.key`, `*.p12`, `*.pfx`, `*.kdbx`, `*.keystore`, `*.jks`,
   `*.asc`, `*.gpg`, `*.env`, `id_rsa*`, `id_dsa*`, `id_ecdsa*`, `id_ed25519*`, any name containing `secret` or `credential`, and
-  the credential files `netrc` and `authinfo` (also with a leading `.` or `_`, or a `.gpg`, `.asc`, `.enc`, `.txt`, `.bak`, `.old`, `.orig` or `.json` ending; `netrc-parser.el` is code and is indexed);
+  any name with `netrc` or `authinfo` as a whole component — at the start or after `.`, `_` or `-`, followed by the end, `~` or a `.`: `.netrc`, `work.netrc`, `prod.authinfo`, `authinfo.gpg.bak` (code is not caught: `netrc-parser.el`, `netrc.el` and `authinfo-helper.py` are indexed);
 - binary files, files over 1 MiB, symbolic links, submodules, and files in a directory whose real path is outside the
   project (a directory replaced by a symbolic link to elsewhere);
 - files that `.gitignore` excludes (the index lists the project's tracked files and the untracked ones that git does
@@ -170,11 +170,11 @@ A project can narrow what is indexed with `.drgnx/search.eld` at its root (a pli
 `*` and `?` stay within one path component, `**/` stands for any number of directories, a glob without `/` matches at any
 depth, and a trailing `/` means everything below that directory.
 
-`:include` and `:exclude` must be lists of strings and `:off` `t` or `nil`. A file that is there but cannot be read (a `.drgnx` directory you cannot enter, or `search.eld` a symlink to nothing, count too), is
+`:include` and `:exclude` must be lists of strings and `:off` `t` or `nil`. A file that is there but cannot be read (a `.drgnx` directory you cannot enter, a `search.eld` that is a symlink to nothing, or one that is not a regular file, count too), is
 not a plist or gives a key another type (`:exclude "vendor/"` instead of `:exclude ("vendor/")`) never falls back to
 the defaults — that could send files you meant to exclude to the provider. Instead nothing is indexed for the project:
 the indexer stops with ".drgnx/search.eld cannot be read: …", a search of an index made earlier refuses with the same message (in the editor, from the command line and for agents), saving a file does not schedule a re-index, and Index
-Project, Index Status and `drgnx doctor` say what is wrong. Without the file, the defaults apply.
+Project, Index Status and `drgnx doctor` say what is wrong. Without the file, the defaults apply. A `.drgnx` or `search.eld` that is a symlink to a readable config (dotfile managers do that) works like the file itself.
 
 ## How fast
 

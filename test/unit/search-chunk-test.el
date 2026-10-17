@@ -231,9 +231,10 @@
 
 (ert-deftest drgnx-search-files/netrc-and-authinfo-are-whole-names ()
   "The credential files are excluded; code that merely has netrc or authinfo in its name is not."
-  (dolist (bad '("netrc" ".netrc" "_netrc" "NETRC" "authinfo" ".authinfo" "authinfo.gpg" ".authinfo.gpg" "d/netrc.bak"))
+  (dolist (bad '("netrc" ".netrc" "_netrc" "NETRC" "authinfo" ".authinfo" "authinfo.gpg" ".authinfo.gpg" "d/netrc.bak"
+                 "work.netrc" "github.netrc" "prod.authinfo" "netrc~" "authinfo.gpg.bak" "my_netrc" "work-authinfo.txt"))
     (should (drgnx-search--sensitive-name-p bad)))
-  (dolist (ok '("netrc-parser.el" "netrc.el" "my-netrc.el" "authinfo-helper.py" "auth-source-authinfo.el" "netrc/readme.md"))
+  (dolist (ok '("netrc-parser.el" "netrc.el" "my-netrc.el" "authinfo-helper.py" "auth-source-authinfo.el" "authinfo.py" "netrc/readme.md"))
     (should-not (drgnx-search--sensitive-name-p ok))))
 
 (ert-deftest drgnx-search-files/only-regular-files ()
@@ -331,10 +332,39 @@ open: the config is an error and the listing signals it (nothing is indexed).  A
     (let ((dir (expand-file-name ".drgnx" root)))
       (set-file-modes dir 0)
       (unwind-protect
-          (unless (file-accessible-directory-p dir) ; root reads it anyway
+          (progn
+            (skip-unless (not (file-accessible-directory-p dir))) ; root reads it anyway
             (should (string-match-p "\\`\\.drgnx/search\\.eld cannot be read: ." (plist-get (drgnx-search-config root) :error)))
             (should-error (drgnx-search-files root) :type 'drgnx-search-files-error))
         (set-file-modes dir #o755)))))
+
+(ert-deftest drgnx-search-files/config-fails-closed-fifo ()
+  "A search.eld that is a FIFO would block every reader: it is an error."
+  (skip-unless (executable-find "mkfifo"))
+  (drgnx-search-chunk-test--repo '(("a.el" . "a\n"))
+    (make-directory (expand-file-name ".drgnx" root))
+    (should (zerop (call-process "mkfifo" nil nil nil (expand-file-name ".drgnx/search.eld" root))))
+    (should (string-match-p "not a regular file" (plist-get (drgnx-search-config root) :error)))
+    (should-error (drgnx-search-files root) :type 'drgnx-search-files-error)))
+
+(ert-deftest drgnx-search-files/a-symlink-to-a-valid-config-is-applied ()
+  "A search.eld (or .drgnx) that is a symlink to a readable config works, as dotfile managers need."
+  (let ((outside (file-name-as-directory (make-temp-file "drgnx-search-outside" t))))
+    (unwind-protect
+        (drgnx-search-chunk-test--repo '(("a.el" . "a\n") ("vendor/v.js" . "v\n"))
+          (drgnx-search-chunk-test--write outside "search.eld" "(:exclude (\"vendor/\"))")
+          (make-directory (expand-file-name ".drgnx" root))
+          (make-symbolic-link (concat outside "search.eld") (expand-file-name ".drgnx/search.eld" root))
+          (should-not (plist-get (drgnx-search-config root) :error))
+          (should (equal (drgnx-search-chunk-test--paths root) '("a.el")))
+          ;; the whole directory a link
+          (delete-directory (expand-file-name ".drgnx" root) t)
+          (make-directory (concat outside "cfg"))
+          (drgnx-search-chunk-test--write outside "cfg/search.eld" "(:exclude (\"vendor/\"))")
+          (make-symbolic-link (concat outside "cfg") (expand-file-name ".drgnx" root))
+          (should-not (plist-get (drgnx-search-config root) :error))
+          (should (equal (drgnx-search-chunk-test--paths root) '("a.el"))))
+      (delete-directory outside t))))
 
 (ert-deftest drgnx-search-files/a-symlinked-directory-out-of-the-project-is-never-followed ()
   "A tracked file under a directory that was replaced by a symlink to elsewhere is not listed: its text is not the
@@ -399,8 +429,6 @@ project's."
     (let ((drgnx-search-git-timeout 30))              ; plenty: the timed path lists the same files
       (should (equal (mapcar #'car (drgnx-search-files root)) '("a.txt"))))))
 
-;;; search-chunk-test.el ends here
-
 (ert-deftest drgnx-search-toplevel/through-a-symlink-below-the-top ()
   "The top keeps DIR's spelling and is right when DIR is reached through a symlink to a directory deeper down."
   (drgnx-search-chunk-test--repo '(("sub/deep/a.el" . "a\n"))
@@ -419,3 +447,5 @@ project's."
             (make-symbolic-link (concat root "/sub") (expand-file-name "below" outside))
             (should (equal (drgnx-search-toplevel (concat outside "/below")) root)))
         (delete-directory outside t)))))
+
+;;; search-chunk-test.el ends here

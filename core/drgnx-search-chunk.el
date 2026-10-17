@@ -117,6 +117,9 @@ directory (\"vendor/\")."
       (list :error ".drgnx/search.eld cannot be read: .drgnx is not an accessible directory"))
      ((and (not (file-exists-p file)) (file-symlink-p file))
       (list :error ".drgnx/search.eld cannot be read: it is a symbolic link to nothing"))
+     ;; a FIFO or device would block the reader (and every query reads the config)
+     ((and (file-exists-p file) (not (file-regular-p file)))
+      (list :error ".drgnx/search.eld cannot be read: it is not a regular file"))
      (t
       (if (not (file-exists-p file))
           (list :include nil :exclude nil :off nil)
@@ -258,10 +261,9 @@ directory below its top (no ancestor of DIR is then the top)."
       (pcase (drgnx-search--git-run (file-name-as-directory dir) nil '("rev-parse" "--show-toplevel"))
         (`(0 ,out ,_)
          (let* ((top (directory-file-name (string-trim-right out "\n")))
-                (true-top (directory-file-name (file-truename top)))
                 (d dir) found)
            (while (and d (not found))
-             (if (equal (directory-file-name (file-truename d)) true-top)
+             (if (file-equal-p d top)          ; by identity: also right on a case-insensitive file system
                  (setq found d)
                (let ((parent (directory-file-name (file-name-directory d))))
                  (setq d (unless (equal parent d) parent)))))
@@ -308,16 +310,25 @@ One `git hash-object --stdin-paths' call over the PATHS that are still regular f
 (defconst drgnx-search--sensitive-name-regexp
   (concat "\\(?:\\.\\(?:pem\\|key\\|p12\\|pfx\\|kdbx\\|keystore\\|jks\\|asc\\|gpg\\|env\\)\\'"
           "\\|\\`id_\\(?:rsa\\|dsa\\|ecdsa\\|ed25519\\)"
-          "\\|secret\\|credential"
-          ;; the credential files of netrc and auth-source, not code that merely has the word in its name
-          "\\|\\`[._]?\\(?:netrc\\|authinfo\\)\\(?:\\.\\(?:gpg\\|asc\\|enc\\|txt\\|bak\\|old\\|orig\\|json\\)\\)?\\'\\)")
+          "\\|secret\\|credential\\)")
   "File names (basename, case-insensitive) that look like keys or secrets.")
+
+(defconst drgnx-search--credential-file-regexp
+  "\\(?:\\`\\|[._-]\\)\\(?:netrc\\|authinfo\\)\\([.~].*\\)?\\'"
+  "A basename with netrc or authinfo as a whole component (at the start or after `.', `_' or `-'), followed by
+the end, `~' or `.' and more: .netrc, work.netrc, prod.authinfo, authinfo.gpg.bak.  Group 1 is what follows.")
+
+(defconst drgnx-search--credential-code-extensions '("el" "elc" "py" "js" "ts" "rb" "rs" "go" "c" "h" "md" "org")
+  "Extensions of source files that merely have netrc or authinfo in their name (netrc.el).")
 
 (defun drgnx-search--sensitive-name-p (path)
   "Non-nil when the basename of PATH looks like a key, certificate or secret.
 These are never indexed, whatever the configuration says."
-  (let ((case-fold-search t))
-    (string-match-p drgnx-search--sensitive-name-regexp (file-name-nondirectory path))))
+  (let ((case-fold-search t) (name (file-name-nondirectory path)))
+    (or (string-match-p drgnx-search--sensitive-name-regexp name)
+        (and (string-match drgnx-search--credential-file-regexp name)
+             (not (member (downcase (or (match-string 1 name) ""))
+                          (mapcar (lambda (e) (concat "." e)) drgnx-search--credential-code-extensions)))))))
 
 (defun drgnx-search--binary-p (file)
   "Non-nil when FILE has a NUL byte among its first 8000 bytes (or cannot be read)."
@@ -347,8 +358,9 @@ deleted on disk is not listed, nor is one in a merge conflict (index stages 1-3 
 included, whatever `drgnx-search-config' says: anything but a regular file (symlink, FIFO,
 submodule), a dot file or a file under a dot directory, a key or secret by name (*.pem, *.key, *.p12,
 *.pfx, *.kdbx, *.keystore, *.jks, *.asc, *.gpg, *.env, id_rsa*, id_dsa*, id_ecdsa*, id_ed25519*,
-anything containing secret or credential, netrc and authinfo files — those names, with an optional leading dot or
-underscore and an optional .gpg, .asc, .enc, .txt, .bak, .old, .orig or .json —, all case-insensitively), a file over 1 MiB,
+anything containing secret or credential, and any name with netrc or authinfo as a whole component — at the start
+or after `.', `_' or `-', followed by the end, `~' or a `.' — such as .netrc, work.netrc, prod.authinfo,
+authinfo.gpg.bak, but not netrc-parser.el or a source file like netrc.el; all case-insensitively), a file over 1 MiB,
 a binary, a file in a directory whose real path (symlinks resolved) is outside the project.  A modified or
 untracked file whose path contains a newline or starts with a double quote cannot be hashed and is left out
 too.  The configuration then narrows the list.

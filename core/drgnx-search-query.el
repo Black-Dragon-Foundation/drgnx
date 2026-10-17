@@ -39,7 +39,8 @@ twice as many chunks.")
 
 (defvar drgnx-search-last-notice nil
   "Why the last search could not do everything, as one line (nil when it did): no index, no SQLite, no
-embedding provider, or an index built with another model.  Reset by every search.")
+embedding provider, an index built with another model, or a .drgnx/search.eld that cannot be read.  Reset by every
+search.")
 
 ;;;; The scan
 
@@ -228,8 +229,8 @@ the chunk — `vector', `keyword' or `both'.
 EMBED (default `drgnx-ai-embed-sync') takes a vector of texts and returns a vector of vectors, setting
 `drgnx-ai-embed-last-info' to who answered.  It waits for the provider: call this from a command the user ran.
 The question is embedded with ROOT's `embed' role (its .drgnx/ai.eld counts, not the current buffer's).
-No provider or another model than the index's: only the keyword hits; no index, no SQLite or search turned off
-for the project: nil.  Either way `drgnx-search-last-notice' says why, in one line — and never an error, never a
+No provider or another model than the index's: only the keyword hits; no index, no SQLite, search turned off
+for the project or a .drgnx/search.eld that cannot be read: nil.  Either way `drgnx-search-last-notice' says why, in one line — and never an error, never a
 prompt."
   (setq drgnx-search-last-notice nil)
   (when (drgnx-search--ready root)
@@ -244,8 +245,8 @@ prompt."
 
 (cl-defun drgnx-search-async (root query callback &key k)
   "Like `drgnx-search', but the question is embedded without waiting: CALLBACK gets the result list
-\(`drgnx-search-last-notice' is set by then).  CALLBACK is always called, once: with no index, no SQLite or search
-off at once with nil, and whatever goes wrong (the request, the index) with the keyword hits or nil and a notice.
+\(`drgnx-search-last-notice' is set by then).  CALLBACK is always called, once: with no index, no SQLite, search
+off or an unreadable .drgnx/search.eld at once with nil, and whatever goes wrong (the request, the index) with the keyword hits or nil and a notice.
 As there, the `embed' role is ROOT's."
   (setq drgnx-search-last-notice nil)
   (let ((called nil))
