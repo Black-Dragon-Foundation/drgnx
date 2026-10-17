@@ -227,7 +227,8 @@ its history is replayed into the transcript.  Needs an agent that can load sessi
       (unless (eq (drgnx-agent-session-status s) 'exited) (setf (drgnx-agent-session-status s) 'idle))
       (when (equal reason "cancelled") (setf (drgnx-agent-session-paused s) t))
       (unless (drgnx-acp-live-p (drgnx-agent-session-conn s))   ; the agent died: the queue waits
-        (setf (drgnx-agent-session-status s) 'exited))
+        (setf (drgnx-agent-session-status s) 'exited
+              (drgnx-agent-session-stderr s) (drgnx-acp-conn-stderr (drgnx-agent-session-conn s))))
       (drgnx-agents--changed s)
       (drgnx-agents--next s))))
 
