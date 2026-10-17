@@ -262,7 +262,8 @@ what the agent before it left (`drgnx-job--fall-back')."
            ((equal status "in-review")
             (remhash (plist-get task :id) drgnx-job--exits) (remhash (plist-get task :id) drgnx-job--nudged)
             (when (member agent live) (drgnx-agents-kill (drgnx-job--session agent)))
-            (when (and drgnx-job-review (not (drgnx-job--reviewer-of (plist-get task :id))))
+            (when (and (not (run-hook-with-args-until-success 'drgnx-job-before-review-functions id task))
+                       drgnx-job-review (not (drgnx-job--reviewer-of (plist-get task :id))))
               (drgnx-job--start-review id task))))))
       (let ((count (length (drgnx-job--live id))))
         (dolist (task (drgnx-coord-tasks id))
@@ -300,9 +301,17 @@ what the agent before it left (`drgnx-job--fall-back')."
                                              (plist-get task :id))))
     (drgnx-job--card id (plist-get task :id) "stalled" "its agent's turns end without complete_task")))
 
+(defvar drgnx-job-before-review-functions nil
+  "Called with (JOB TASK) before TASK (a store plist) in review gets a reviewer: the first non-nil holds it (a clash
+about it is open: drgnx-job-clash.el).")
+
+(defvar drgnx-job-tick-functions nil "Called with each running JOB on the hub's tick, after its step (clash rules).")
+
 (defun drgnx-job-tick ()
   "Move every running job on (the hub's tick)."
-  (dolist (id (drgnx-coord-jobs "running")) (with-demoted-errors "drgnx job: %S" (drgnx-job-step id))))
+  (dolist (id (drgnx-coord-jobs "running"))
+    (with-demoted-errors "drgnx job: %S" (drgnx-job-step id))
+    (with-demoted-errors "drgnx job: %S" (run-hook-with-args 'drgnx-job-tick-functions id))))
 
 (defun drgnx-job--session-changed (s)
   "A job session changed (`drgnx-agents-changed-functions'): a free one gets its task prompt; an ended one moves its
@@ -561,7 +570,9 @@ S: the session whose request waits (it goes back to work once answered, or, gone
     (unless (member kind drgnx-job--advisory-kinds)
       (drgnx-coord-force-status task "needs-input" (plist-get (drgnx-coord-task task) :agent))))
   (let* ((data (append (and s (list :sid (drgnx-agent-session-id s))) data))
-         (old (seq-find (lambda (c) (and (equal (plist-get c :task) task) (equal (plist-get c :kind) kind))) (drgnx-coord-cards job "open")))
+         (old (seq-find (lambda (c) (and (equal (plist-get c :task) task) (equal (plist-get c :kind) kind)
+                                         (equal (plist-get (plist-get c :data) :key) (plist-get data :key))))   ; clashes: one per key
+                        (drgnx-coord-cards job "open")))
          (cid (if old
                   (progn (drgnx-coord-card-set (plist-get old :id) :title title :data (append data (plist-get old :data)))
                          (plist-get old :id))

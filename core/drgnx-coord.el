@@ -281,6 +281,15 @@ held when RECIPIENT's queue is full or the two exchange too much â€” or (:held â
   (sqlite-execute (drgnx-work-db) "insert or replace into meta values (?, ?)"
                   (list (concat "seen:" agent) (number-to-string version))))
 
+(defun drgnx-coord-note-held (agent held)
+  "AGENT's coordination write was HELD (behind the log) or went through: the count of held writes in a row."
+  (sqlite-execute (drgnx-work-db) "insert or replace into meta values (?, ?)"
+                  (list (concat "held:" agent) (number-to-string (if held (1+ (drgnx-coord-held agent)) 0)))))
+
+(defun drgnx-coord-held (agent)
+  "AGENT's coordination writes held in a row (0 when its last went through)."
+  (string-to-number (or (drgnx-coord--meta (drgnx-work-db) (concat "held:" agent)) "0")))
+
 (defun drgnx-coord-seen (agent)
   "The decision-log version AGENT last read (0 when never)."
   (string-to-number (or (drgnx-coord--meta (drgnx-work-db) (concat "seen:" agent)) "0")))

@@ -11,7 +11,8 @@
 ;;   crash       exits 3, "mock crashed" on stderr
 ;;   commit      commits in its directory: "agent work for $DRGNX_TASK"
 ;;   /compact    the context shrinks
-;;   [drgnx task ID]  commits task.txt, then read_decisions and complete_task through its MCP server
+;;   [drgnx task ID]  commits task.txt (legacy/a.txt when the prompt says legacy), then read_decisions and
+;;               complete_task through its MCP server
 ;;   [drgnx review ID]  says "VERDICT: pass" (or "VERDICT: fail: …" with MOCK_ACP_VERDICT=fail)
 ;;   crash-once  crashes when .mock-crashed is not in its directory (then makes it): the next agent works
 ;;   coord TOOL JSON  starts the first server of its mcpServers (session/new) and calls TOOL with the JSON arguments;
@@ -53,10 +54,13 @@
       (delete-process p)
       done)))
 
-(defun mock--task (sid task)
-  "A job's task: commit a file for it, read the decision log, complete the task; say what happened."
-  (call-process "sh" nil nil nil "-c" (format "echo %s >> task.txt && git add task.txt && git commit -q -m %s"
-                                              (shell-quote-argument task) (shell-quote-argument (concat "work for " task))))
+(defun mock--task (sid task &optional text)
+  "A job's task: commit a file for it (legacy/a.txt when TEXT, its prompt, says legacy; else task.txt), read the
+decision log, complete the task; say what happened."
+  (let ((file (if (and text (string-match-p "legacy" text)) "legacy/a.txt" "task.txt")))
+    (call-process "sh" nil nil nil "-c" (format "mkdir -p %s && echo %s >> %s && git add %s && git commit -q -m %s"
+                                                (shell-quote-argument (or (file-name-directory file) "."))
+                                                (shell-quote-argument task) file file (shell-quote-argument (concat "work for " task)))))
   (let* ((d (mock--mcp-call sid "read_decisions" "{\"since\":0}"))
          (v (or (ignore-errors (plist-get (json-parse-string d :object-type 'plist) :version)) 0))
          (r (mock--mcp-call sid "complete_task" (format "{\"task\":%S,\"seen_version\":%d}" task v))))
@@ -144,7 +148,7 @@
                                                                    "Looked at it.\nVERDICT: fail: rename foo to bar"
                                                                  "Looked at it.\nVERDICT: pass")))))))
      ((string-match "\\[drgnx task \\([^] ]+\\)" text)
-      (mock--task sid (match-string 1 text)))
+      (mock--task sid (match-string 1 text) text))
      ((string-match "\\`coord \\([a-z_]+\\) ?\\(.*\\)\\'" text)
       (mock--coord sid (match-string 1 text) (match-string 2 text)))
      ((string-match-p "crash" text)

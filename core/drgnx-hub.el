@@ -18,6 +18,7 @@
 (require 'drgnx-agents)
 (require 'drgnx-coord)
 (require 'drgnx-job)
+(require 'drgnx-job-clash)
 
 (defvar drgnx-hub-event-functions nil
   "Functions called with (EVENT DATA) for each event the hub sends this Emacs (after `drgnx-hub-connect'); EVENT a
@@ -152,7 +153,9 @@ debugs errors, and without SIGPIPE ignored the write itself would)."
                     :registrations (length (drgnx-gateway-registrations)) :started drgnx-hub--started))
     ("gateway/register" (drgnx-hub-register params))
     ("gateway/unregister" (drgnx-gateway-unregister (plist-get params :token)) (drgnx-hub--save-registrations) t)
-    ("coord/notify" (run-at-time 0 nil #'drgnx-hub--deliver) t)   ; a coordination server wrote: deliver now
+    ("coord/notify" (run-at-time 0 nil #'drgnx-hub--deliver)   ; a coordination server wrote: deliver now, look for clashes
+     (run-at-time 0 nil (lambda () (dolist (j (drgnx-coord-jobs "running")) (with-demoted-errors "drgnx job: %S" (drgnx-job-clash-scan j)))))
+     t)   ; a coordination server wrote: deliver now
     ("spend" (drgnx-work-db-spend :job (plist-get params :job) :task (plist-get params :task) :agent (plist-get params :agent)))
     ("agents/start"
      (let ((s (drgnx-agents-start (plist-get params :profile) (plist-get params :cwd) (plist-get params :task) (plist-get params :job))))

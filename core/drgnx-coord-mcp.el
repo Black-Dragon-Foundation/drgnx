@@ -50,7 +50,9 @@
 
 (defmacro drgnx-coord-mcp--write (&rest body)
   "BODY (a store write): its answer as text, the hub told."
-  `(prog1 (drgnx-coord-mcp--answer (progn ,@body)) (drgnx-coord-mcp--notify-hub)))
+  `(let ((r (progn ,@body)))
+     (ignore-errors (drgnx-coord-note-held (drgnx-coord-mcp--me) (and (consp r) (plist-get r :held))))   ; stale twice: a card
+     (prog1 (drgnx-coord-mcp--answer r) (drgnx-coord-mcp--notify-hub))))
 
 (defun drgnx-coord-mcp--seen (args)
   (or (plist-get args :seen_version) (error "seen_version is required: call read_decisions first")))
