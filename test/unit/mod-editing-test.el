@@ -101,3 +101,12 @@
             (funcall (plist-get (alist-get 'ui/look drgnx-modules--table) :setup)))
           (should (drgnx-commands-get 'preferences-theme)))
       (delete-directory cfg t))))
+
+(ert-deftest drgnx-editing/case-cycle-on-one-word-says-so ()
+  ;; M4-12: a one-word symbol has nothing to cycle: said, not silent.
+  (drgnx-editing-test--in "(setq fo|o 1)" #'emacs-lisp-mode
+    (let ((said nil))
+      (cl-letf (((symbol-function 'message) (lambda (fmt &rest args) (setq said (apply #'format fmt args)))))
+        (drgnx-editing-case-cycle))
+      (should (equal (buffer-string) "(setq foo 1)"))
+      (should (string-search "nothing to cycle" (or said ""))))))

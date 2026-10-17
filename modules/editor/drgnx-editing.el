@@ -70,11 +70,13 @@
 (defun drgnx-editing-case-kebab () "Change the word to kebab-case." (interactive) (drgnx-editing--case 'kebab))
 
 (defun drgnx-editing-case-cycle ()
-  "Cycle the word through camelCase → snake_case → kebab-case."
+  "Cycle the word through camelCase → snake_case → kebab-case (a single word has nothing to cycle)."
   (interactive)
   (when-let* ((b (drgnx-editing--bounds)))
     (let ((s (buffer-substring-no-properties (car b) (cdr b))))
-      (drgnx-editing--case (cond ((string-search "_" s) 'kebab) ((string-search "-" s) 'camel) (t 'snake))))))
+      (if (cdr (drgnx-editing--words s))
+          (drgnx-editing--case (cond ((string-search "_" s) 'kebab) ((string-search "-" s) 'camel) (t 'snake)))
+        (message "One word: nothing to cycle")))))
 
 ;;;; Expand / shrink the selection
 
