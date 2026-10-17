@@ -49,10 +49,27 @@ install is removed from the cache. A download or a lock write that stops half wa
 partial file; what a killed sync left (`*.part` in the cache, `.drgnx.lock.eld.tmp-*`) the next sync removes. A file that does not compile (byte or native) is not a failure: the package is
 installed, runs that file less compiled, and the sync prints a `WARNING` line naming the package and the file. Sync never removes a package: one installed by hand stays and is locked too.
 
+### Packages from Git
+
+A package no archive has comes from its repository, pinned to a commit. Name it in `packages.eld`:
+
+```elisp
+(:git ((eglot-booster :url "https://github.com/jdtsmith/eglot-booster" :rev "main")
+       (my-tool :url "https://codeberg.org/me/my-tool" :rev "v1.2" :lisp-dir "lisp")))
+```
+
+`:rev` is a branch, a tag or a commit (default: the repository's default branch); `:lisp-dir`, where the package's
+files are when not at the top. drgnx's own modules name a few such packages themselves (`drgnx-pkg-git-sources`;
+`packages.eld` comes first). `drgnx sync` clones the repository into `~/.cache/drgnx/packages/git/NAME/` (never asking
+for a password: a private repository needs credentials git already has without asking), takes the commit, installs
+the package from `NAME.el`'s headers (its `Version:`, or `0.0.0.DATE` of the commit when it has none) and its
+`Package-Requires` from the archives. The lock records the commit; a sync keeps it until `drgnx upgrade` takes the
+newest commit of `:rev`, and `drgnx sync --offline` installs it from the cached clone.
+
 ## The lock
 
 `~/.config/drgnx/drgnx.lock.eld` pins every installed package: version, archive, file and its sha256 (commit it
-with your configuration). A sync installs the locked version — from the cache when the archive moved on, replacing
+with your configuration) — or, for a package from Git, its URL, `:rev` and the commit. A sync installs the locked version — from the cache when the archive moved on, replacing
 another installed version — and refuses a file whose hash differs from the lock (a changed file, or a tampered
 cache; the file is dropped from the cache): nothing changes then. A locked version that no archive and no cache has
 any more, or one older than another package needs, is reported (with what needs it), the packages that do not
@@ -123,4 +140,6 @@ Preferences: Modules) until `drgnx sync` has run. A lint fails on `use-package :
 the network): sync with dependencies, offline sync into an empty directory, a wrong hash, a missing locked
 version, concurrent syncs, seeding, rollback byte for byte, a broken upgrade restored, the guard, use-package
 `:ensure`, bisect, the CLI, the doctor and safe mode. HTTP downloads run against a loopback server in the test
-Emacs itself (a 200 is saved byte for byte; a 404 saves nothing).
+Emacs itself (a 200 is saved byte for byte; a 404 saves nothing). `test/unit/pkg-git-test.el`: packages from local Git
+repositories — the commit and dependencies, the lock holding the commit until upgrade, offline from the cached clone,
+a missing `:rev`, no version header, a module's package with drgnx's Git source.

@@ -81,11 +81,12 @@ A write that stops half way leaves no temp file."
 
 (defun drgnx-pkg-manifest (&optional modules-dir)
   "The packages drgnx needs, sorted: every enabled module's :packages (MODULES-DIR, default drgnx's
-modules/), packages.eld's :packages and those use-package :ensure asked for in a session."
+modules/), packages.eld's :packages and :git, and those use-package :ensure asked for in a session."
   (let ((names (append (seq-mapcat #'cdr (seq-remove (lambda (m) (drgnx-module-disabled-p (car m)))
                                                      (drgnx-pkg--module-packages
                                                       (or modules-dir (expand-file-name "modules" drgnx-dir)))))
                        (plist-get (drgnx-pkg--packages-eld) :packages)
+                       (mapcar #'car (plist-get (drgnx-pkg--packages-eld) :git))
                        (ignore-errors (drgnx-pkg--read-file (drgnx-pkg-wanted-file))))))
     (sort (delete-dups (seq-filter #'symbolp names)) (lambda (a b) (string< a b)))))
 
@@ -427,6 +428,114 @@ in the packages directory itself: an .eln's name hashes its source's path."
     (package-load-all-descriptors)
     (package-quickstart-refresh)))
 
+;;;; Git sources: a package from a repository, pinned to a commit
+
+(defvar drgnx-pkg-git-sources
+  '((eglot-booster :url "https://github.com/jdtsmith/eglot-booster" :rev "main"))
+  "Packages drgnx's modules use that no archive has: alist NAME → (:url URL :rev REF [:lisp-dir DIR]).  packages.eld's
+:git entries (the same shape) come first.")
+
+(defun drgnx-pkg-git-source (name)
+  "Where NAME comes from when it comes from Git: (:url :rev [:lisp-dir]), or nil."
+  (or (alist-get name (plist-get (drgnx-pkg--packages-eld) :git)) (alist-get name drgnx-pkg-git-sources)))
+
+(defun drgnx-pkg--git (dir &rest args)
+  "git ARGS in DIR, never asking for anything (no terminal, no credential helper): (EXIT . OUTPUT)."
+  (with-temp-buffer
+    (let ((default-directory (file-name-as-directory dir))
+          (process-environment (append '("GIT_TERMINAL_PROMPT=0" "GIT_ASKPASS=true" "SSH_ASKPASS=true") process-environment)))
+      (cons (apply #'call-process "git" nil t nil "-c" "credential.helper=" args) (string-trim (buffer-string))))))
+
+(defun drgnx-pkg--git-cache (name) (expand-file-name (format "git/%s/" name) (drgnx-package-cache-dir)))
+
+(defun drgnx-pkg--git-fetch (name src)
+  "NAME's clone in the package cache, up to date with SRC's :url (cloned the first time): its directory."
+  (let* ((dir (drgnx-pkg--git-cache name)) (url (plist-get src :url)))
+    (if (file-directory-p (expand-file-name ".git" dir))
+        (progn (drgnx-pkg--git dir "remote" "set-url" "origin" url)
+               (pcase (drgnx-pkg--git dir "fetch" "--quiet" "--tags" "--force" "origin" "+refs/heads/*:refs/remotes/origin/*")
+                 (`(0 . ,_))
+                 (`(,_ . ,err) (drgnx-pkg--error "%s: fetching %s failed: %s" name url err))))
+      (make-directory (file-name-directory (directory-file-name dir)) t)
+      (pcase (drgnx-pkg--git (file-name-directory (directory-file-name dir)) "clone" "--quiet" "--no-checkout" url
+                             (directory-file-name dir))
+        (`(0 . ,_))
+        (`(,_ . ,err) (drgnx-pkg--error "%s: cloning %s failed: %s" name url err))))
+    dir))
+
+(defun drgnx-pkg--git-resolve (dir rev)
+  "REV (a branch, a tag or a commit) as a commit of the clone DIR, or nil."
+  (seq-some (lambda (r) (pcase (drgnx-pkg--git dir "rev-parse" "--verify" "--quiet" (concat r "^{commit}")) (`(0 . ,sha) sha)))
+            (list (concat "origin/" rev) rev)))
+
+(defun drgnx-pkg--git-has-p (dir commit)
+  (and (file-directory-p dir) (eql 0 (car (drgnx-pkg--git dir "cat-file" "-e" (concat commit "^{commit}"))))))
+
+(defun drgnx-pkg--git-export (name dir commit)
+  "COMMIT of the clone DIR as files in a fresh temporary directory: its path."
+  (let ((out (make-temp-file (format "drgnx-git-%s" name) t)))
+    (unless (eql 0 (call-process "sh" nil nil nil "-c" (format "git -C %s archive --format=tar %s | tar -x -C %s"
+                                                               (shell-quote-argument dir) (shell-quote-argument commit)
+                                                               (shell-quote-argument out))))
+      (delete-directory out t)
+      (drgnx-pkg--error "%s: commit %s could not be read from its clone" name commit))
+    (file-name-as-directory out)))
+
+(defun drgnx-pkg--git-desc (name tree dir commit)
+  "NAME's package from TREE's NAME.el (version: its header, else 0.0.0.DATE of the commit), a directory package."
+  (let ((main (expand-file-name (format "%s.el" name) tree)))
+    (unless (file-exists-p main) (drgnx-pkg--error "%s: its source has no %s.el" name name))
+    (with-temp-buffer
+      (insert-file-contents main)
+      (setq buffer-file-name main)
+      (goto-char (point-min))
+      (unless (re-search-forward "^;+ *\\(Package-\\)?Version *:" nil t)   ; no version: the commit's date (read here only)
+        (goto-char (point-min)) (forward-line 1)
+        (insert (format ";; Version: 0.0.0.%s\n" (cdr (drgnx-pkg--git dir "log" "-1" "--format=%cd" "--date=format:%Y%m%d" commit)))))
+      (let ((d (package-buffer-info)))
+        (set-buffer-modified-p nil)
+        (setq buffer-file-name nil)
+        (setf (package-desc-kind d) 'dir)
+        d))))
+
+(defun drgnx-pkg--git-prepare (names lock offline upgrade missing)
+  "The Git packages among NAMES to install: ((NAME DESC TREE COMMIT SRC ROOT)…) — the lock's commit (the newest of
+:rev when upgrading or not locked), skipped when installed at it.  What cannot be had goes on MISSING."
+  (let (out)
+    (dolist (name names)
+      (condition-case err
+          (let* ((src (drgnx-pkg-git-source name)) (pin (alist-get name lock)) (dir (drgnx-pkg--git-cache name))
+                 (pinned (and (not upgrade) (eq (plist-get pin :kind) 'git) (equal (plist-get pin :url) (plist-get src :url))
+                              (plist-get pin :commit))))
+            (cond (offline (unless (and pinned (drgnx-pkg--git-has-p dir pinned))
+                             (drgnx-pkg--error "%s: its locked commit is not in the cache — sync online once" name)))
+                  ((not (and pinned (drgnx-pkg--git-has-p dir pinned))) (drgnx-pkg--git-fetch name src)))
+            (let ((commit (or pinned (drgnx-pkg--git-resolve dir (or (plist-get src :rev) "HEAD"))
+                              (drgnx-pkg--error "%s: %s has no %s" name (plist-get src :url) (or (plist-get src :rev) "HEAD")))))
+              (unless (and (equal (plist-get pin :commit) commit) (drgnx-pkg--installed-version name)
+                           (equal (drgnx-pkg--installed-version name) (plist-get pin :version)))
+                (let* ((root (drgnx-pkg--git-export name dir commit))
+                       (tree (if (plist-get src :lisp-dir) (file-name-as-directory (expand-file-name (plist-get src :lisp-dir) root)) root)))
+                  (condition-case e (push (list name (drgnx-pkg--git-desc name tree dir commit) tree commit src root) out)
+                    (error (delete-directory root t) (signal (car e) (cdr e))))))))
+        (error (unless (assq name (car missing)) (push (cons name (error-message-string err)) (car missing))))))
+    (nreverse out)))
+
+(defun drgnx-pkg--git-install (prep)
+  "Install the prepared Git package PREP (from `drgnx-pkg--git-prepare'): its lock entry."
+  (pcase-let ((`(,name ,desc ,tree ,commit ,src ,root) prep))
+    (unwind-protect
+        (condition-case err (let ((default-directory tree)) (drgnx-pkg--unpack desc (expand-file-name (format "%s.el" name) tree)))
+          (error (drgnx-pkg--error "%s at %s does not install (%s) — nothing was changed" name (substring commit 0 12)
+                                   (error-message-string err))))
+      (delete-directory root t))
+    (drgnx-pkg--drop-other-versions desc)
+    (cons name (list :kind 'git :url (plist-get src :url) :rev (plist-get src :rev) :commit commit
+                     :version (package-version-join (package-desc-version desc))
+                     :requires (mapcar (lambda (r) (list (car r) (package-version-join (cadr r))))
+                                       (seq-remove (lambda (r) (eq (car r) 'emacs)) (package-desc-reqs desc)))
+                     :summary (package-desc-summary desc)))))
+
 (defun drgnx-pkg--required-version (name descs)
   "The highest version of NAME that DESCS or the installed packages require, or nil."
   (let (v)
@@ -481,7 +590,8 @@ whose car is the alist NAME → reason)."
               (error (miss name (error-message-string err))))))
         (when upgrade                                   ; installed packages outside the manifest too
           (pcase-dolist (`(,name . ,descs) package-alist)
-            (when-let* ((newest (car (alist-get name package-archive-contents))))
+            (when-let* (((not (drgnx-pkg-git-source name)))   ; a Git package moves by its source
+                        (newest (car (alist-get name package-archive-contents))))
               (when (version-list-< (package-desc-version (car descs)) (package-desc-version newest))
                 (condition-case err
                     (dolist (desc (package-compute-transaction nil (list (list name (package-desc-version newest)))))
@@ -546,10 +656,22 @@ changes nothing; packages that cannot be had are reported (the rest is installed
             (when seed (drgnx-pkg--seed (expand-file-name seed)))
             (package-load-all-descriptors)
             (when package-archives (package-refresh-contents))
-            (dolist (desc (drgnx-pkg--plan manifest lock offline upgrade missing))
-              (let ((entry (drgnx-pkg--install desc (alist-get (package-desc-name desc) lock))))
-                (drgnx-pkg--drop-other-versions desc)
-                (push entry new-entries) (push (package-desc-name desc) installed)))
+            (let* ((git-names (seq-filter #'drgnx-pkg-git-source manifest))
+                   (git (drgnx-pkg--git-prepare git-names lock offline upgrade missing))
+                   (needs (seq-difference (delete-dups (mapcar #'car (seq-mapcat (lambda (p) (package-desc-reqs (nth 1 p))) git)))
+                                          (cons 'emacs git-names))))
+              (dolist (desc (drgnx-pkg--plan (sort (delete-dups (append (seq-difference manifest git-names) needs))
+                                                   (lambda (a b) (string< a b)))
+                                             (seq-remove (lambda (e) (eq (plist-get (cdr e) :kind) 'git)) lock)
+                                             offline upgrade missing))
+                (let ((entry (drgnx-pkg--install desc (alist-get (package-desc-name desc) lock))))
+                  (drgnx-pkg--drop-other-versions desc)
+                  (push entry new-entries) (push (package-desc-name desc) installed)))
+              ;; then the Git packages, their dependencies in place
+              (dolist (p git)
+                (if-let* ((dep (seq-find (lambda (r) (assq (car r) (car missing))) (package-desc-reqs (nth 1 p)))))
+                    (push (cons (car p) (format "needs %s, which cannot be installed" (car dep))) (car missing))
+                  (push (drgnx-pkg--git-install p) new-entries) (push (car p) installed))))
             ;; Everything arrived: the new directory goes in, without package.el's copy of the
             ;; archives' contents (fetched again by the next sync).
             (dolist (f '("archives" "unused-quickstart.el" "unused-quickstart.elc"))
