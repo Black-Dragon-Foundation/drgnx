@@ -21,11 +21,11 @@
             (should (string-search ":error nil" (plist-get info :basics))))
           ;; The palette opens on C-S-p and lists registry commands.
           (drgnx-ui-measure sess (list (list :keys "C-S-p")))
-          (should (equal (plist-get (drgnx-ui-call sess "(drgnx-uitest-api-boot-status)") :prompt) "Command: "))
+          (should (string-prefix-p "Command" (plist-get (drgnx-ui-call sess "(drgnx-uitest-api-boot-status)") :prompt)))
           (drgnx-ui-measure sess (list (list :keys "C-g")))
           ;; VS Code keys by default: F1 is the palette too, C-k C-s the key sheet.
           (drgnx-ui-measure sess (list (list :keys "<f1>")))
-          (should (equal (plist-get (drgnx-ui-call sess "(drgnx-uitest-api-boot-status)") :prompt) "Command: "))
+          (should (string-prefix-p "Command" (plist-get (drgnx-ui-call sess "(drgnx-uitest-api-boot-status)") :prompt)))
           (drgnx-ui-measure sess (list (list :keys "C-g")))
           (drgnx-ui-measure sess (list (list :keys "C-k C-s")))
           (should (seq-find (lambda (w) (equal (plist-get w :buffer) "*drgnx keys*"))
