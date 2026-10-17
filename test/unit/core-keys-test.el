@@ -414,3 +414,24 @@
   ;; Save All saves without asking; C-x s is Emacs' asking save — not rebound in the Emacs profile.
   (let ((r (drgnx-keys-test--resolve '((emacs app editing window)))))
     (should-not (drgnx-keys-test--keys r 'save-all))))
+
+;;;; Deferred fixes
+
+(defvar drgnx-keys-test-late-prefix-map (let ((m (make-sparse-keymap))) (keymap-set m "C-c" #'drgnx-keys-test--other) m))
+
+(ert-deftest drgnx-keys/a-late-binding-reaches-the-sheet-and-the-report ()
+  ;; M2.6-1: a binding made when its keymap's feature loads later — failing, or lifting a prefix —
+  ;; is in drgnx-keys-last (the key sheet) and in keys-report.eld, not only in drgnx-keys-problems.
+  (drgnx-keys-test--live
+   (drgnx-keys-test--write-user '(:bind ((open-file "C-c f" :map (drgnx-keys-test-feature-c . drgnx-keys-test-no-such-map))
+                                         (save-file "C-c s" :map (drgnx-keys-test-feature-d . drgnx-keys-test-late-prefix-map)))))
+   (drgnx-keys-apply)
+   (should-not (seq-find (lambda (p) (string-search "drgnx-keys-test-no-such-map" p)) (plist-get drgnx-keys-last :problems)))
+   (provide 'drgnx-keys-test-feature-c)
+   (provide 'drgnx-keys-test-feature-d)
+   (let ((report (with-temp-buffer (insert-file-contents (expand-file-name "keys-report.eld" (drgnx-state-dir)))
+                                   (read (current-buffer)))))
+     (dolist (problems (list (plist-get drgnx-keys-last :problems) (plist-get report :problems)))
+       (should (seq-find (lambda (p) (string-search "drgnx-keys-test-no-such-map" p)) problems)))
+     (should (eq (plist-get (drgnx-keys-test--conflict drgnx-keys-last "C-c s") :kind) 'prefix))
+     (should (seq-find (lambda (s) (string-match-p "\\`C-c s .*drgnx-keys-test--other" s)) (plist-get report :conflicts))))))

@@ -313,15 +313,16 @@ KIND `same-key', `claim' (a key another layer uses natively) or `prefix'."
 
 (defun drgnx-keys--bind (mapsym key def)
   "Bind KEY in MAPSYM's keymap, remembering what was there; a command blocking KEY as a prefix
-is lifted first (and remembered)."
-  (let* ((map (symbol-value mapsym)) (prev (drgnx-keys--lookup map key)))
+is lifted first (and remembered).  Returns what was lifted, \"COMMAND (PREFIX)\", or nil."
+  (let* ((map (symbol-value mapsym)) (prev (drgnx-keys--lookup map key)) (lifted nil))
     (when (numberp prev)
-      (let ((prefix (key-description (seq-take (key-parse key) prev))))
-        (push (list mapsym prefix (drgnx-keys--lookup map prefix) :prefix) drgnx-keys--applied)
+      (let* ((prefix (key-description (seq-take (key-parse key) prev))) (cmd (drgnx-keys--lookup map prefix)))
+        (push (list mapsym prefix cmd :prefix) drgnx-keys--applied)
         (keymap-unset map prefix t)
-        (setq prev nil)))
+        (setq prev nil lifted (format "%s (%s)" cmd prefix))))
     (push (list mapsym key prev def) drgnx-keys--applied)
-    (define-key map (key-parse key) def)))
+    (define-key map (key-parse key) def)
+    lifted))
 
 (defun drgnx-keys--restore ()
   "Undo every binding drgnx made, newest first — except one someone else changed since."
@@ -333,16 +334,30 @@ is lifted first (and remembered)."
   (setq drgnx-keys--applied nil))
 
 (defun drgnx-keys--apply-binding (b cmd generation)
-  "Bind resolution binding B (command CMD) now, or when its keymap's feature loads."
+  "Bind resolution binding B (command CMD) now, or when its keymap's feature loads.  A late binding
+adds what it finds (a failure, a lifted prefix) to `drgnx-keys-last' and rewrites the report."
   (pcase-let* ((`(,feature . ,mapsym) (drgnx-commands--keymap-spec (plist-get b :map)))
-               (bind (lambda ()
+               (key (plist-get b :key))
+               (bind (lambda (&optional late)
                        (when (= generation drgnx-keys--generation)
                          (condition-case err
-                             (drgnx-keys--bind mapsym (plist-get b :key) (drgnx-cmd-command cmd))
-                           (error (push (format "%s: cannot bind %s in %s: %s" (plist-get b :id) (plist-get b :key)
-                                                mapsym (error-message-string err))
-                                        drgnx-keys-problems)))))))
-    (cond ((and feature (not (featurep feature))) (with-eval-after-load feature (funcall bind)))
+                             (let ((lifted (drgnx-keys--bind mapsym key (drgnx-cmd-command cmd))))
+                               (when (and late lifted)   ; at apply time the resolver saw this prefix
+                                 (setq drgnx-keys-last
+                                       (plist-put drgnx-keys-last :conflicts
+                                                  (append (plist-get drgnx-keys-last :conflicts)
+                                                          (list (list :key key :map mapsym :kind 'prefix
+                                                                      :winner (list :id (plist-get b :id) :layer (plist-get b :layer))
+                                                                      :losers (list (list :claim lifted :layer nil)))))))
+                                 (drgnx-keys--write-report)))
+                           (error (let ((p (format "%s: cannot bind %s in %s: %s" (plist-get b :id) key
+                                                   mapsym (error-message-string err))))
+                                    (push p drgnx-keys-problems)
+                                    (when late
+                                      (setq drgnx-keys-last (plist-put drgnx-keys-last :problems
+                                                                       (append (plist-get drgnx-keys-last :problems) (list p))))
+                                      (drgnx-keys--write-report)))))))))
+    (cond ((and feature (not (featurep feature))) (with-eval-after-load feature (funcall bind t)))
           ((and (boundp mapsym) (keymapp (symbol-value mapsym))) (funcall bind))
           (t (push (format "%s: no keymap %s for %s" (plist-get b :id) mapsym (plist-get b :key)) drgnx-keys-problems)))))
 

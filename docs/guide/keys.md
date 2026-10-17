@@ -81,7 +81,8 @@ A conflict is one of:
 The later layer wins (your `keys.eld` wins over all). Conflicts and problems are listed at the end of the key sheet
 (**Keyboard Shortcuts**), written to `~/.local/state/drgnx/keys-report.eld` on every start, and summarised by
 `drgnx doctor` (`key-conflicts`: info for conflicts, a warning for problems such as an unknown command in
-`keys.eld`).
+`keys.eld`). A key in the keymap of a package that loads later is bound when it loads; what that finds (a key that
+cannot be bound, a prefix it replaces) joins the list and the report then.
 
 ## keys.eld
 
