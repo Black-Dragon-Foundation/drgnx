@@ -864,22 +864,41 @@ permissions — and, with DECISIONS, its decision log (newest first)."
 (declare-function drgnx-hub-call-sync "drgnx-hub")
 (declare-function drgnx-hub--jsonable "drgnx-hub")
 
+(defconst drgnx-job--json-lists '(:tasks :agents :cards :messages :permissions :decisions :deps :jobs :unpriced)
+  "Keys of a job's JSON that are lists: with nothing in them they are `[]', not null.")
+
+(defun drgnx-job--json (v)
+  "V as `drgnx-hub--jsonable' has it, with an empty list under `drgnx-job--json-lists' an empty array, not null."
+  (let ((fix nil))
+    (setq fix (lambda (x)
+                (cond ((and (consp x) (keywordp (car x)))
+                       (cl-loop for (k y) on x by #'cddr
+                                append (list k (if (and (eq y :null) (memq k drgnx-job--json-lists)) [] (funcall fix y)))))
+                      ((vectorp x) (vconcat (mapcar fix x)))
+                      (t x))))
+    (funcall fix (drgnx-hub--jsonable v))))
+
+(defun drgnx-job--number (text)
+  "TEXT (a `--budget') as a number; a user-error when it is none."
+  (if (string-match-p "\\`[0-9]+\\(?:\\.[0-9]+\\)?\\'" text) (string-to-number text)
+    (user-error "--budget wants a number of USD, not %s" text)))
+
 (defun drgnx-job-cli ()
   "`drgnx job propose PLAN [--repo DIR] [--budget USD] [--auto] | approve ID [--budget USD] | status [ID] [--json] |
 stop ID | resume ID [--budget USD]', through the hub."
   (require 'drgnx-hub)
   (let* ((args (prog1 (cdr (member "--" command-line-args-left)) (setq command-line-args-left nil)))
          (opt (lambda (name) (cadr (member name args))))
-         (budget (and (funcall opt "--budget") (string-to-number (funcall opt "--budget"))))
+         (budget nil)                                      ; --budget, checked in the condition-case
          (json (member "--json" args))
          (pos (let (out skip) (dolist (a (cdr args) (nreverse out))
                                 (cond (skip (setq skip nil)) ((member a '("--repo" "--budget")) (setq skip t))
                                       ((not (string-prefix-p "--" a)) (push a out))))))
          (call (lambda (method params) (drgnx-hub-ensure) (drgnx-hub-call-sync method params 30)))
-         (show (lambda (job) (princ (if json (concat (json-serialize (drgnx-hub--jsonable job)) "\n") (drgnx-job-format job))) 0)))
+         (show (lambda (job) (princ (if json (concat (json-serialize (drgnx-job--json job)) "\n") (drgnx-job-format job))) 0)))
     (kill-emacs
      (condition-case err
-         (pcase (car args)
+         (pcase (progn (setq budget (and (funcall opt "--budget") (drgnx-job--number (funcall opt "--budget")))) (car args))
            ("propose"
             (unless (car pos) (user-error "Which plan?"))
             (let ((job (funcall call "job/propose" (list :plan (expand-file-name (car pos))
@@ -895,7 +914,7 @@ stop ID | resume ID [--budget USD]', through the hub."
            ("status"
             (let ((r (funcall call "job/status" (list :id (car pos)))))
               (cond ((car pos) (funcall show r))
-                    (json (princ (concat (json-serialize (drgnx-hub--jsonable r)) "\n")) 0)
+                    (json (princ (concat (json-serialize (drgnx-job--json r)) "\n")) 0)
                     ((null (plist-get r :jobs)) (princ "No jobs.\n") 0)
                     (t (dolist (job (plist-get r :jobs)) (princ (drgnx-job-format job))) 0))))
            (_ (princ "usage: drgnx job propose PLAN [--repo DIR] [--budget USD] [--auto] | approve ID [--budget USD]\n                 | status [ID] [--json] | stop ID | resume ID [--budget USD]\n"

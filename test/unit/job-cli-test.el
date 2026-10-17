@@ -50,6 +50,43 @@
       (let ((deadline (+ (float-time) 5))) (while (and (drgnx-hub-running-p) (< (float-time) deadline)) (sleep-for 0.1)))
       (delete-directory root t))))
 
+;; the job window needs a hub; here it is stubbed: what `drgnx job' prints and when it refuses
+(defun drgnx-job-cli-test--run (reply &rest args)
+  "`drgnx-job-cli' with ARGS and the hub answering REPLY: (EXIT STDOUT CALLS)."
+  (let ((command-line-args-left (cons "--" args)) (code nil) (calls nil) (out (generate-new-buffer " *job-cli*")))
+    (unwind-protect
+        (progn
+          (cl-letf (((symbol-function 'kill-emacs) (lambda (c) (setq code c) (throw 'drgnx-job-cli-test--done nil)))
+                    ((symbol-function 'drgnx-hub-ensure) #'ignore)
+                    ((symbol-function 'drgnx-hub-call-sync) (lambda (method params &rest _) (push (cons method params) calls) reply)))
+            (catch 'drgnx-job-cli-test--done (let ((standard-output out)) (drgnx-job-cli))))
+          (list code (with-current-buffer out (buffer-string)) calls))
+      (kill-buffer out))))
+
+(ert-deftest drgnx-job-cli/cli-json-empty-lists-and-bad-budget ()
+  (let* ((summary '(:id "j" :title "T" :status "proposed" :repo "/r" :budget nil :spent nil
+                        :estimate (:usd 1.0 :tokens 10 :unpriced nil)
+                        :tasks ((:n 1 :title "a" :role "implement" :profile "mock" :status "ready" :deps nil))
+                        :agents nil :cards nil :messages nil :decisions nil :permissions nil))
+         (parse (lambda (text) (json-parse-string text :object-type 'plist :array-type 'list)))
+         (r (drgnx-job-cli-test--run summary "status" "j" "--json"))
+         (job (funcall parse (nth 1 r))))
+    (should (eql (car r) 0))
+    ;; a list with nothing in it is an empty array, not null
+    (dolist (k '(:agents :cards :messages :decisions :permissions))
+      (should (member k job))
+      (should-not (plist-get job k)))
+    (should (null (plist-get (car (plist-get job :tasks)) :deps)))
+    (should (null (plist-get (plist-get job :estimate) :unpriced)))
+    (should (eq (plist-get job :budget) :null))                         ; a number that is missing stays null
+    (should (string-search "\"agents\":[]" (nth 1 (drgnx-job-cli-test--run summary "status" "j" "--json"))))
+    (should (string-search "\"jobs\":[]" (nth 1 (drgnx-job-cli-test--run '(:jobs nil) "status" "--json"))))
+    ;; a budget that is no number is refused before the hub hears of it
+    (let ((bad (drgnx-job-cli-test--run summary "propose" "/p.md" "--budget" "ten")))
+      (should (eql (car bad) 1))
+      (should-not (nth 2 bad)))
+    (should (eql (car (drgnx-job-cli-test--run summary "approve" "j" "--budget" "2.5")) 0))))
+
 ;; the commands: job-ui-test.el (module tools/jobs)
 
 ;;; job-cli-test.el ends here
