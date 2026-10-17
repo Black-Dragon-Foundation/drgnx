@@ -813,6 +813,71 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
           (should-not jobs)
           (should (eq (car r) 'ok)))))))
 
+(ert-deftest drgnx-onboard/a-fresh-install-is-full-ai ()
+  ;; Nothing turned off is the full-ai preset — the Modules question's default — so Return keeps Chat on.
+  (drgnx-onboard-test--with root
+    (should (eq (drgnx-onboard--current-preset) 'full-ai))
+    (let ((asked nil))
+      (cl-letf (((symbol-function 'completing-read)
+                 (lambda (prompt _c &optional _p _r _i _h def &rest _) (push (cons prompt def) asked) (or (car (ensure-list def)) "")))
+                ((symbol-function 'drgnx-onboard--packages-to-install) #'ignore))
+        (drgnx-onboard--look-step '(:interactive t :options (:keys "Emacs" :theme modus-vivendi))))
+      (should (string-prefix-p "Modules" (car (car (last asked)))))
+      (should (equal (cdr (car (last asked))) "full-ai"))
+      (should-not (drgnx-module-disabled-p 'extra/llm)))
+    ;; a mix of your own: Return keeps it
+    (drgnx-modules-write-state '(:version 1 :disabled (extra/magit)))
+    (should-not (drgnx-onboard--current-preset))
+    (cl-letf (((symbol-function 'completing-read)
+               (lambda (_prompt _c &optional _p _r _i _h def &rest _) (or (car (ensure-list def)) "")))
+              ((symbol-function 'drgnx-onboard--packages-to-install) #'ignore))
+      (drgnx-onboard--look-step '(:interactive t :options (:keys "Emacs" :theme modus-vivendi))))
+    (should (equal (plist-get (drgnx-modules-read-state) :disabled) '(extra/magit)))))
+
+(require 'drgnx-doctor)
+
+(ert-deftest drgnx-onboard/new-modules-need-a-restart-and-finish-offers-it ()
+  ;; Packages installed into a running drgnx load at its next start: Look and Keys says so, and Finish (in the
+  ;; app) offers the restart — drgnx open, detached, then quit — or says how to do it yourself.
+  (drgnx-onboard-test--with root
+    (let ((drgnx-onboard--restart-needed nil) (asked nil) (lines nil) (quit 0) (answer t))
+      (cl-letf (((symbol-function 'drgnx-onboard--packages-to-install) (lambda () '(:names (gptel))))
+                ((symbol-function 'drgnx-onboard--job) (lambda (&rest _) 'ok))
+                ((symbol-function 'y-or-n-p) (lambda (p) (push p asked) answer))
+                ((symbol-function 'drgnx-doctor-run) (lambda (&rest _) nil))
+                ((symbol-function 'drgnx-doctor-facts) #'ignore)
+                ((symbol-function 'drgnx-jobs--detach) (lambda (line) (push line lines)))
+                ((symbol-function 'drgnx-session-quit) (lambda () (cl-incf quit))))
+        (let ((r (drgnx-onboard--look-step '(:interactive t :options (:preset full-ai :keys "Emacs" :theme modus-vivendi)))))
+          (should (string-match-p "restart drgnx to load the new modules" (cadr r))))
+        (should drgnx-onboard--restart-needed)
+        ;; Finish, in the app: asked; yes — drgnx open after this Emacs is gone, then quit
+        (setq asked nil)
+        (let ((noninteractive nil)) (drgnx-onboard--finish-step '(:interactive t)))
+        (should (equal asked '("Restart drgnx now? Your windows come back. ")))
+        (should (= quit 1))
+        (should (string-prefix-p "sleep 1;" (car lines)))
+        (should (string-search (concat "kill -0 " (number-to-string (emacs-pid))) (car lines)))
+        (should (string-suffix-p (concat "exec " (shell-quote-argument (expand-file-name "bin/drgnx" drgnx-dir)) " open") (car lines)))
+        (should (eq (plist-get (alist-get 'finish (drgnx-onboard-state)) :status) 'ok))   ; recorded before it quits
+        ;; no: nothing runs; the result says how
+        (setq asked nil answer nil lines nil quit 0)
+        (let ((r (let ((noninteractive nil)) (drgnx-onboard--finish-step '(:interactive t)))))
+          (should (= 1 (length asked)))
+          (should-not lines)
+          (should (= quit 0))
+          (should (string-search "Quit drgnx (⌘Q on a Mac) and open it again to load your modules" (cadr r))))
+        ;; batch (drgnx onboard) or without interaction: never asked
+        (setq asked nil)
+        (drgnx-onboard--finish-step '(:interactive t))
+        (drgnx-onboard--finish-step '(:interactive nil))
+        (should-not asked)
+        ;; nothing new to load: not asked
+        (setq drgnx-onboard--restart-needed nil)
+        (let ((noninteractive nil)) (drgnx-onboard--finish-step '(:interactive t)))
+        (should-not asked)
+        (should-not lines)))))
+
 (ert-deftest drgnx-onboard/the-agents-step-and-its-docs ()
   (should (string-match-p "Claude" (plist-get (alist-get 'agents drgnx-onboard--steps) :doc)))
   (should (eq (plist-get (alist-get 'agents drgnx-onboard--steps) :run) #'drgnx-onboard--agents-step)))
