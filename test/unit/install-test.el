@@ -184,6 +184,7 @@
             (write-region (format "(message \"mine: %s\")\n" (file-name-nondirectory f)) nil f))
           (let ((before (mapcar (lambda (f) (with-temp-buffer (insert-file-contents-literally f) (buffer-string))) files))
                 (env (append (list (concat "HOME=" home) "SHELL=/bin/zsh"
+                                   (concat "DRGNX_CONFIG_DIR=" home "/.config/drgnx")
                                    (concat "DRGNX_INSTALL_EMACS=" (drgnx-install-test--fake-emacs tmp "31.1 t ns")))
                              drgnx-install-test--macos)))
             (let ((plan (drgnx-install-test--run env "--dry-run")))
@@ -196,6 +197,10 @@
               (should (string-search "Next time: open drgnx from Applications, or run \"drgnx .\" in a project" (cdr run))))
             (should (equal before (mapcar (lambda (f) (with-temp-buffer (insert-file-contents-literally f) (buffer-string)))
                                           files)))
+            ;; the real run remembers the Emacs it kept, in drgnx's own config directory
+            (should (equal (with-temp-buffer (insert-file-contents (expand-file-name ".config/drgnx/emacs" home))
+                                             (buffer-string))
+                           (concat (expand-file-name "emacs" tmp) "\n")))
             (should-not (file-exists-p (expand-file-name ".zprofile" home)))
             (should-not (file-exists-p (expand-file-name ".profile" home)))))
       (delete-directory home t)
@@ -230,6 +235,23 @@
            (drgnx-install-test--plan "fedora-44" (concat "DRGNX_INSTALL_EMACS=" fake))
            "keep the installed Emacs 31.1"))
       (delete-file fake))))
+
+(ert-deftest drgnx-install/the-plan-remembers-the-emacs ()
+  (drgnx-install-test--expect
+   (drgnx-install-test--run (append '("DRGNX_INSTALL_UNAME=Darwin" "DRGNX_INSTALL_ARCH=arm64" "DRGNX_INSTALL_MACOS=15.4"
+                                      "DRGNX_INSTALL_BREW=none")
+                                    nil)
+                            "--dry-run")
+   "Remember Emacs: /Applications/Emacs.app/Contents/MacOS/Emacs")
+  (let ((tmp (make-temp-file "drgnx-install" t)))
+    (unwind-protect
+        (let ((fake (drgnx-install-test--fake-emacs tmp "31.1 t ns")))
+          (drgnx-install-test--expect
+           (drgnx-install-test--run
+            (append (list (concat "DRGNX_INSTALL_EMACS=" fake) "DRGNX_INSTALL_BREW=none") drgnx-install-test--macos)
+            "--dry-run")
+           (concat "Remember Emacs: " fake)))
+      (delete-directory tmp t))))
 
 (ert-deftest drgnx-install/no-terminal-without-yes-refuses-before-acting ()
   (let ((home (make-temp-file "drgnx-install-home" t)))

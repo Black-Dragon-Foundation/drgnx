@@ -94,9 +94,18 @@ compilation available, Emacs then compiles them natively in the background as th
 times faster and makes far less garbage. `install.sh` runs it; drgnx sets `load-prefer-newer`, so a stale `.elc`
 never shadows newer source. The build must stay warning-free (`test/unit/build-test.el`).
 
+## The Emacs `bin/drgnx` runs in
+
+The shell function `emacs_bin` picks the one Emacs every subcommand uses: `$DRGNX_EMACS`, else the first line of
+`$DRGNX_CONFIG_DIR/emacs` (default `~/.config/drgnx/emacs`, written by `install.sh`'s `remember_emacs`) when it
+names an executable file, else `emacs`. The file is read as a path, never evaluated. A new subcommand calls
+`"$(emacs_bin)"`, never a bare `emacs`. All of them run with `load-prefer-newer`, so a stale `.elc` after a pull
+never prints before the output. `test --install` limits each image to an hour with `timeout`, else `gtimeout`.
+`test/unit/bin-test.el` covers it with fake Emacs scripts.
+
 ## Doctor (`drgnx-doctor.el`)
 
-`bin/drgnx doctor [--json] [--dev]` asks the Emacs drgnx will use (`$DRGNX_EMACS`, else `emacs`) whether this
+`bin/drgnx doctor [--json] [--dev]` asks the Emacs drgnx will use (see above) whether this
 machine is ready, and gives a fix for anything that is not:
 
 ```

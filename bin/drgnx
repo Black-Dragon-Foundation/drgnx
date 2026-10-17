@@ -3,19 +3,31 @@
 set -euo pipefail
 here="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
 
+emacs_bin() { # the one Emacs every subcommand runs in: $DRGNX_EMACS, else the one install.sh recorded, else PATH's
+  if [[ -n "${DRGNX_EMACS:-}" ]]; then printf '%s\n' "$DRGNX_EMACS"; return; fi
+  local file="${DRGNX_CONFIG_DIR:-$HOME/.config/drgnx}/emacs" line=""
+  if [[ -f "$file" ]]; then   # first line only, as a path: never evaluated
+    IFS= read -r line <"$file" || true
+    line="${line#"${line%%[![:space:]]*}"}"; line="${line%"${line##*[![:space:]]}"}"
+    if [[ -n "$line" && -f "$line" && -x "$line" ]]; then printf '%s\n' "$line"; return; fi
+  fi
+  echo emacs
+}
+
 cmd_doctor() { # [--json] [--dev] — checks run inside the Emacs drgnx uses (core/drgnx-doctor.el)
-  local emacs="${DRGNX_EMACS:-emacs}" rc=0
+  local emacs rc=0
+  emacs="$(emacs_bin)"
   if ! command -v "$emacs" >/dev/null 2>&1; then
     printf 'FAIL  %-20s %s\n      fix: %s\n' "emacs" "no Emacs found ($emacs)" \
       "run the installer: curl -fsSL https://raw.githubusercontent.com/Black-Dragon-Foundation/drgnx/main/install.sh | bash  (see docs/guide/install.md)"
     return 1
   fi
-  "$emacs" --batch -Q -L "$here/core" -l drgnx-doctor -f drgnx-doctor-cli "$@" || rc=1
+  "$emacs" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" -l drgnx-doctor -f drgnx-doctor-cli "$@" || rc=1
   if [[ " $* " == *" --dev "* && " $* " != *" --json "* ]]; then
     local env rt launcher
     env="$(env_eval '(drgnx-env-container)')"
     rt="${DRGNX_CONTAINER:-$(env_eval '(drgnx-env-container-runtime)')}"   # set: no host Emacs needed (CI)
-    launcher="$(emacs --batch -Q -L "$here/harness" -l drgnx-ui --eval '(princ (drgnx-ui-launcher))')"
+    launcher="$("$(emacs_bin)" --batch -Q -L "$here/harness" -l drgnx-ui --eval '(princ (drgnx-ui-launcher))')"
     printf 'INFO  %-20s %s\n' "environment" "${env:-host}" "container-runtime" "${rt:-none}" \
       "session-launcher" "$launcher$([ "$launcher" = detached ] && echo ' (process group, no systemd unit)')"
   fi
@@ -23,23 +35,23 @@ cmd_doctor() { # [--json] [--dev] — checks run inside the Emacs drgnx uses (co
 }
 
 cmd_build() { # byte-compile core/, wb/, modules/ in place (core/drgnx-build.el)
-  "${DRGNX_EMACS:-emacs}" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" -l drgnx-build -f drgnx-build-cli
+  "$(emacs_bin)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" -l drgnx-build -f drgnx-build-cli
 }
 
 ui() { # the harness controller, in batch Emacs (harness/drgnx-ui.el)
-  emacs --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/harness" -L "$here/core" -L "$here/wb" \
+  "$(emacs_bin)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/harness" -L "$here/core" -L "$here/wb" \
         -l drgnx-ui -f drgnx-ui-cli -- "$@"
 }
 
 test_batch() { # SIGPIPE ignored, as the hub runs (tests serve one in-process): a test may fail, never end the run
   ( trap '' PIPE
-    exec emacs --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/harness" -L "$here/core" -L "$here/wb" \
+    exec "$(emacs_bin)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/harness" -L "$here/core" -L "$here/wb" \
          -l "$here/harness/run-ert.el" \
          -f drgnx-run-ert-batch "$here/test/unit" )
 }
 
 env_eval() { # FORM — evaluate with harness/drgnx-env.el loaded, print the result
-  emacs --batch -Q -L "$here/harness" -l drgnx-env --eval "(princ (or $1 \"\"))"
+  "$(emacs_bin)" --batch -Q -L "$here/harness" -l drgnx-env --eval "(princ (or $1 \"\"))"
 }
 
 test_container() { # [--ui] — the batch (or GUI) tier inside a fedora:45 / Emacs 31.1 container
@@ -90,12 +102,16 @@ test_install() { # [NAME…] — install.sh end to end in fresh containers (slow
   git -C "$snap" add -A
   git -C "$snap" -c user.name=drgnx-test -c user.email=test@drgnx.invalid commit -q -m snapshot
   git -C "$snap" bundle create -q "$snap/drgnx.bundle" main
+  local limit=()   # an hour per image: timeout (GNU coreutils), gtimeout (Homebrew's coreutils on macOS), else none
+  if command -v timeout >/dev/null 2>&1; then limit=(timeout 3600)
+  elif command -v gtimeout >/dev/null 2>&1; then limit=(gtimeout 3600)
+  else echo "drgnx: neither timeout nor gtimeout found (macOS: brew install coreutils): running without a time limit" >&2; fi
   for name in "${names[@]}"; do
     for entry in "${INSTALL_IMAGES[@]}"; do [[ "${entry%%=*}" == "$name" ]] && image="${entry#*=}"; done
     log="$logs/$name.log"
     printf '%-14s %s … ' "$name" "$image" >&2
     # --memory: a test must never push the host into the OOM killer (install.sh sizes make -j from the limit)
-    if timeout 3600 "$rt" run --rm --memory 6g -v "$snap:/src:ro$([ "$rt" = podman ] && echo ,Z)" "$image" \
+    if ${limit[@]+"${limit[@]}"} "$rt" run --rm --memory 6g -v "$snap:/src:ro$([ "$rt" = podman ] && echo ,Z)" "$image" \
          bash /src/test/install/in-container.sh >"$log" 2>&1; then
       echo "ok" >&2
     else
@@ -186,20 +202,20 @@ case "${1:-help}" in
   test) shift; cmd_test "$@" ;;
   ui) shift; ui "$@" ;;
   sync|upgrade|rollback|generations|lock|bisect|service-unit)
-        "${DRGNX_EMACS:-emacs}" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
+        "$(emacs_bin)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
               -l drgnx-pkg -f drgnx-pkg-cli -- "$@" ;;
   onboard) shift
-        "${DRGNX_EMACS:-emacs}" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" -L "$here/wb" \
+        "$(emacs_bin)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" -L "$here/wb" \
               -l drgnx-onboard -f drgnx-onboard-cli -- "$@" ;;
-  safe) shift; DRGNX_SAFE=1 exec "${DRGNX_EMACS:-emacs}" --init-directory="$here/init" "$@" ;;
+  safe) shift; DRGNX_SAFE=1 exec "$(emacs_bin)" --init-directory="$here/init" "$@" ;;
   hub) shift
-        "${DRGNX_EMACS:-emacs}" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
+        "$(emacs_bin)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
               -l drgnx-hub -f drgnx-hub-cli -- "$@" ;;
   job) shift
-        "${DRGNX_EMACS:-emacs}" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
+        "$(emacs_bin)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
               -l drgnx-hub -f drgnx-job-cli -- "$@" ;;
   work) shift
-        "${DRGNX_EMACS:-emacs}" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
+        "$(emacs_bin)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
               -l drgnx-work -f drgnx-work-cli -- "$@" ;;
   search) shift
         sub="${1:-}"; [ "$#" -gt 0 ] && shift
@@ -218,13 +234,13 @@ case "${1:-help}" in
           exit 2
         fi
         shift
-        emacs --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/harness" -L "$here/core" -L "$here/wb" \
+        "$(emacs_bin)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/harness" -L "$here/core" -L "$here/wb" \
               -l drgnx-keys-diff -f drgnx-keys-diff-cli -- "$@" ;;
   check) shift
-        "${DRGNX_EMACS:-emacs}" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
+        "$(emacs_bin)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
               -l drgnx-check -f drgnx-check-cli -- "$@" ;;
   fmt) shift
-        "${DRGNX_EMACS:-emacs}" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
+        "$(emacs_bin)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
               -l drgnx-fmt -f drgnx-fmt-cli -- "$@" ;;
   help|-h|--help) usage ;;
   *) echo "drgnx: unknown command '$1' (try: drgnx help)" >&2; exit 2 ;;

@@ -138,9 +138,17 @@ drgnx keeps working on 30.2 until every target platform ships 31.1. `drgnx docto
 - The installer verifies the Emacs tarball's signature, prints every root command before running it, and never
   edits shell startup files without asking.
 
+## Which Emacs drgnx runs in
+
+Every `drgnx` subcommand (build, doctor, test, sync, …) runs in one Emacs: `$DRGNX_EMACS` if set, else the one the
+installer recorded, else `emacs` on your PATH. The installer writes the path of the Emacs it installed or kept to
+the first line of `~/.config/drgnx/emacs` (`$DRGNX_CONFIG_DIR/emacs`); this matters on macOS, where
+`/Applications/Emacs.app/Contents/MacOS/Emacs` is usually not on PATH. If that file names something that is no
+longer an executable file, drgnx falls back to PATH's `emacs`. Edit the file, or set `DRGNX_EMACS`, to use another.
+
 ## drgnx doctor
 
-`drgnx doctor` runs its checks inside the Emacs drgnx will use (`$DRGNX_EMACS`, default `emacs`) and prints
+`drgnx doctor` runs its checks inside the Emacs drgnx will use (see above) and prints
 one line per check, `OK`, `WARN` or `FAIL`, with a fix under anything that is not ok. It exits 1 on any failure.
 `--json` for tools, `--dev` adds the tools needed to develop drgnx (mutter, dbus-run-session, ImageMagick, a
 pgtk Emacs). Details: [core.md](../develop/core.md#doctor-drgnx-doctorel).

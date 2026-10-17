@@ -226,6 +226,17 @@ plan_homebrew() { # the Homebrew lines of the plan (macOS)
   fi
 }
 
+planned_emacs() { # the Emacs this run leaves behind, as far as the plan can tell
+  case "$CHOSEN" in
+    keep) echo "${EMACS_FOUND:-emacs}" ;;
+    cask) echo /Applications/Emacs.app/Contents/MacOS/Emacs ;;
+    formula) if [[ -n "$BREW" ]]; then echo "$(dirname "$(dirname "$BREW")")/opt/emacs-plus@31/bin/emacs"
+             else echo "emacs-plus@31's bin/emacs"; fi ;;
+    source) echo "$PREFIX/bin/emacs" ;;
+    *) echo emacs ;;
+  esac
+}
+
 print_plan() {
   say "drgnx install — ${PRETTY:-$OS}"
   say ""
@@ -253,6 +264,7 @@ print_plan() {
   elif [[ -d "$DIR/.git" ]]; then note "update $DIR (git pull --ff-only)"
   else note "git clone $DRGNX_REPO (branch $BRANCH) into $DIR (git is installed first if missing)"; fi
   say "3. Link $PREFIX/bin/drgnx → $DIR/bin/drgnx"
+  note "Remember Emacs: $(planned_emacs)"
   say "4. Compile drgnx (drgnx build: byte-compiled, natively compiled as it loads)"
   say "5. Run drgnx doctor"
 }
@@ -466,6 +478,13 @@ link_drgnx() {
   ln -sfn "$DIR/bin/drgnx" "$PREFIX/bin/drgnx"
 }
 
+remember_emacs() { # drgnx commands run in the Emacs just installed, even when it is not `emacs' on PATH (macOS)
+  local cfg="${DRGNX_CONFIG_DIR:-$HOME/.config/drgnx}" e
+  e="$(command -v "$EMACS_BIN" 2>/dev/null || true)"
+  { mkdir -p "$cfg" && printf '%s\n' "${e:-$EMACS_BIN}" >"$cfg/emacs"; } ||
+    warn "could not record the Emacs in $cfg/emacs: drgnx will use the emacs on your PATH (or set DRGNX_EMACS)"
+}
+
 offer_rc_line() { # RC LINE — add LINE to the startup file RC only if the user says yes (--yes does not count)
   local rc="$1" line="$2"
   if ((YES)) || ! have_tty; then note "add this to $rc: $line"; return; fi
@@ -508,6 +527,7 @@ main() {
   esac
   fetch_drgnx
   link_drgnx
+  remember_emacs
   say ""
   DRGNX_EMACS="$EMACS_BIN" "$DIR/bin/drgnx" build >/dev/null || warn "drgnx build failed: run $DIR/bin/drgnx build to see why (drgnx still runs, uncompiled)"
   DRGNX_EMACS="$EMACS_BIN" "$DIR/bin/drgnx" doctor || warn "the doctor found problems (above)"
