@@ -12,7 +12,9 @@ language, per session, that **Install Language Support** (in the palette) adds i
 
 The command builds the grammar in the background (a durable job: Show Job Log → `grammars`; it needs `git` and a C
 compiler) into `~/.local/share/drgnx/tree-sitter/`; when it is done, open files of that language switch to its
-tree-sitter mode, and new ones open in it. Languages: bash, c, cpp, css, go, html, java, javascript, json, lua,
+tree-sitter mode, and new ones open in it. A grammar counts as installed only when it was built and this Emacs can
+load it — otherwise the job says it failed (its log tells why: no `git`, no compiler, a grammar newer than this
+Emacs's tree-sitter). On Emacs 31 a tree-sitter mode that names its own grammar version is built at that version. Languages: bash, c, cpp, css, go, html, java, javascript, json, lua,
 python, ruby, rust, toml, tsx, typescript, yaml (module `lang/grammars`, sources in `drgnx-grammars-sources`).
 
 ## Faster language servers
@@ -25,10 +27,15 @@ answer (completions, diagnostics of a large file) no longer stalls typing (modul
 ## Format on save
 
 Saving formats the buffer with its language's formatter — black or ruff for Python, prettier for JavaScript,
-TypeScript, CSS and Markdown, gofmt, rustfmt, shfmt, clang-format, … (apheleia's list) — when that formatter is
-installed: in the background, after the save, keeping the point and the view where they were. A formatter that is not
-installed, or fails, leaves the file as you saved it; nothing asks. **Toggle Format on Save** turns it off or on in
-this buffer (with `C-u`, everywhere). Module `extra/format`, package `apheleia`.
+TypeScript and CSS, gofmt, rustfmt, clang-format, … (apheleia's list) — when that formatter is installed: in the
+background, after the save, keeping the point and the view where they were. It formats only code whose project
+formats it: Go, Rust, Zig, Elixir, Terraform and Dart always (their formatter is their standard); other languages
+only under a formatter's config — `.prettierrc*`, `prettier.config.*`, `.clang-format`, `ruff.toml`, a
+`pyproject.toml` with `[tool.black]` or `[tool.ruff]`, `biome.json`, `deno.json`, `stylua.toml`, … — so saving a file
+in someone else's repository never rewrites it in a style it does not use. Lisp and BibTeX files are never
+re-indented on save. A formatter that is not installed, or fails, leaves the file as you saved it; nothing asks.
+**Toggle Format on Save** turns it off or on in this buffer (with `C-u`, everywhere). Module `extra/format`, package
+`apheleia`.
 
 ## Debugging
 
@@ -60,7 +67,7 @@ When the start of the function, class or block you are in has scrolled off the t
 header, after the breadcrumb — up to three enclosing scopes, outermost first: `src › shape.py › class Shape: › def
 area(self):`. The header line is always there (the breadcrumb), so nothing moves as you scroll. Scopes come from
 tree-sitter when the buffer has a parser (functions, methods, classes, structs, …), else from indentation; each
-position is worked out once. **Toggle Sticky Scroll** for this buffer. Module `editor/sticky` (drgnx's own; a buffer
+position is worked out once, and again only when the text above the window's top changes. **Toggle Sticky Scroll** for this buffer. Module `editor/sticky` (drgnx's own; a buffer
 can add to the header the same way: `drgnx-chrome-header-tail`).
 
 ## Markdown
@@ -69,10 +76,13 @@ Markdown files open in markdown-mode — READMEs as GitHub Flavored Markdown —
 own language, math marked, headings scaled, and remote pictures not fetched. **Markdown: Open Preview** (C-S-v in the
 VS Code profile) renders the file beside it and again after each save: through `pandoc` (or `cmark-gfm`, `cmark`,
 `markdown` — the first installed; tables, task lists and links as GitHub shows them), else markdown-mode's own view.
+The conversion runs in the background (typing never waits for it); local pictures show, pictures on the network do
+not (the preview fetches nothing).
 
 ` ```mermaid ` blocks become pictures when [`mmdc`](https://github.com/mermaid-js/mermaid-cli) is installed: each is
 drawn in the background (a durable job, Show Job Log → `mermaid`) into `~/.cache/drgnx/mermaid/`, by its text's hash,
-so a diagram is drawn once; until it is, it shows as code. Module `lang/markdown`, package `markdown-mode`.
+so a diagram is drawn once (in mmdc's dark theme under a dark one); until it is, it shows as code — and one mmdc
+cannot draw (a typo) stays code, said once, until its text changes. Module `lang/markdown`, package `markdown-mode`.
 
 ## Tests
 

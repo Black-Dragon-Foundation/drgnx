@@ -11,11 +11,13 @@
 (require 'drgnx-modules)
 (declare-function eglot-booster-mode "eglot-booster")
 (defvar eglot-booster-mode)
+(defvar eglot-booster-no-remote-boost)
 
 (defun drgnx-booster--setup ()
   "eglot through the booster when `emacs-lsp-booster' is installed; else eglot as it is."
   (when (executable-find "emacs-lsp-booster")
     (require 'eglot-booster)
+    (setq eglot-booster-no-remote-boost t)               ; a remote host (TRAMP) seldom has the program
     (eglot-booster-mode 1)))
 
 (drgnx-module-define 'extra/booster

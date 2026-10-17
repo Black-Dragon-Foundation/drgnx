@@ -22,7 +22,7 @@ DRGNX_PERF_WAIT=S           how long --perf waits for a quiet machine before giv
 | explorer | focus the Explorer, 10 rows down (each one moves), back | input latency |
 | agent-typing | typing while an agent (the mock) streams a reply into the Agents tab (checked: still streaming at the end) | input latency |
 | job-window | typing while a job's window is open in its own frame (tasks, four cards, twenty decisions) and three mock agents stream, the window following their changes (checked: still streaming at the end) | input latency |
-| code-scrolling | `<next>`×30 then `<prior>`×30 through a long code file with sticky scroll, indent guides (when installed) and smooth scrolling on | input latency |
+| code-scrolling | `<next>`×30 then `<prior>`×30 through the 12k-line fixture with sticky scroll and indent guides (when installed) on — smooth scrolling is on but pixel scrolling is a wheel's, not `<next>`'s | input latency |
 | typing-with-ghost | the typing workload with ghost text on: a mock model answers every pause at once, the pause shortened to 10 ms so each key asks and the next cancels (checked: it asked) | input latency |
 | frames | 5 new frames until drawn | frame time |
 | redisplay | 30 forced redisplays of the fixture | redisplay time |

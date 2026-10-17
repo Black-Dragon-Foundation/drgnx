@@ -22,6 +22,7 @@
 (defvar markdown-enable-math)
 (defvar markdown-header-scaling)
 (defvar markdown-display-remote-images)
+(defvar shr-blocked-images)
 (declare-function markdown-view-mode "markdown-mode")
 (declare-function shr-insert-document "shr")
 
@@ -36,60 +37,91 @@
 
 (defun drgnx-markdown--diagram-dir () (expand-file-name "mermaid/" (drgnx-cache-dir)))
 
+(defvar drgnx-markdown--failed (make-hash-table :test #'equal) "Diagram hashes mmdc could not draw (not tried again).")
+
+(defun drgnx-markdown--theme () (if (eq (frame-parameter nil 'background-mode) 'dark) "dark" "default"))
+
 (defun drgnx-markdown--draw (code hash)
   "Draw the Mermaid CODE (its HASH) into the cache in the background (once)."
-  (unless (gethash hash drgnx-markdown--drawing)
+  (unless (or (gethash hash drgnx-markdown--drawing) (gethash hash drgnx-markdown--failed))
     (puthash hash t drgnx-markdown--drawing)
     (let* ((dir (drgnx-markdown--diagram-dir)) (mmd (expand-file-name (concat hash ".mmd") dir))
            (png (expand-file-name (concat hash ".png") dir)))
       (make-directory dir t)
       (write-region code nil mmd nil 'silent)
-      (drgnx-markdown--watch (drgnx-jobs-start "mermaid" (list "mmdc" "-i" mmd "-o" png "-b" "transparent")) hash))))
+      (drgnx-markdown--watch (drgnx-jobs-start "mermaid" (list "mmdc" "-i" mmd "-o" png "-b" "transparent" "-t" (drgnx-markdown--theme)))
+                             hash))))
+
+(defun drgnx-markdown--drawn (hash exit)
+  "The drawing of HASH ended with EXIT: the previews show it — or, when mmdc failed, it stays code and is not tried again."
+  (remhash hash drgnx-markdown--drawing)
+  (if (eql exit 0) (drgnx-markdown--rerender-all)
+    (puthash hash t drgnx-markdown--failed)
+    (message "drgnx: a Mermaid diagram did not draw (Show Job Log: mermaid); it shows as code")))
 
 (defun drgnx-markdown--watch (id hash)
-  "When job ID ends, the previews are rendered again (looked at every 2 s; never waits)."
+  "When job ID ends: `drgnx-markdown--drawn' (looked at every 2 s; never waits)."
   (let ((timer nil))
     (setq timer (run-with-timer 2 2 (lambda ()
-                                      (unless (eq (plist-get (drgnx-jobs-get id) :status) 'running)
-                                        (cancel-timer timer)
-                                        (remhash hash drgnx-markdown--drawing)
-                                        (drgnx-markdown--rerender-all)))))))
+                                      (let ((job (drgnx-jobs-get id)))
+                                        (unless (eq (plist-get job :status) 'running)
+                                          (cancel-timer timer)
+                                          (drgnx-markdown--drawn hash (plist-get job :exit)))))))))
 
 (defun drgnx-markdown--with-diagrams (text)
-  "TEXT with each ```mermaid block whose picture is cached replaced by that picture; the others are drawn in the
-background when mmdc is installed, and stay as code meanwhile."
+  "TEXT with each ```mermaid block whose picture is cached replaced by that picture (a file: URL); the others are drawn
+in the background when mmdc is installed, and stay as code meanwhile (or for good when mmdc cannot draw them)."
   (if (not (executable-find "mmdc")) text
-    (let ((re "^```mermaid[ \t]*\n\\(\\(?:.*\n\\)*?\\)```[ \t]*$") (out "") (start 0))
+    (let ((re "^```mermaid[ \t]*\n\\(\\(?:.*\n\\)*?\\)```[ \t]*$") (out "") (start 0) (theme (drgnx-markdown--theme)))
       (while (string-match re text start)
         (let* ((code (match-string 1 text)) (whole (match-string 0 text)) (beg (match-beginning 0)) (end (match-end 0))
-               (hash (secure-hash 'sha1 code)) (png (expand-file-name (concat hash ".png") (drgnx-markdown--diagram-dir))))
+               (hash (secure-hash 'sha1 (concat theme "\n" code)))          ; drawn per theme
+               (png (expand-file-name (concat hash ".png") (drgnx-markdown--diagram-dir))))
           (setq out (concat out (substring text start beg)
-                            (if (file-exists-p png) (format "![diagram](%s)" png) (drgnx-markdown--draw code hash) whole))
+                            (if (file-exists-p png) (format "![diagram](file://%s)" png) (drgnx-markdown--draw code hash) whole))
                 start end)))
       (concat out (substring text start)))))
 
+(defvar-local drgnx-markdown--proc nil "A preview's conversion still running.")
+
+(defun drgnx-markdown--insert-html (buf html dir)
+  "HTML into the preview BUF: relative pictures from DIR, local files only (no picture from the network)."
+  (with-current-buffer buf
+    (let ((inhibit-read-only t) (pt (point)) (shr-blocked-images "\\`https?:"))
+      (erase-buffer)
+      (unless (derived-mode-p 'special-mode) (special-mode))
+      (require 'shr)
+      (shr-insert-document (with-temp-buffer
+                             (insert (format "<html><head><base href=\"file://%s\"></head><body>" (file-name-as-directory dir)) html "</body></html>")
+                             (libxml-parse-html-region (point-min) (point-max))))
+      (goto-char (min pt (point-max))))))
+
 (defun drgnx-markdown--render (src buf)
-  "Render the Markdown buffer SRC into the preview buffer BUF."
+  "Render the Markdown buffer SRC into the preview buffer BUF — through the program in the background (a newer render
+replaces one still running), never waiting for it."
   (let ((text (with-current-buffer src (drgnx-markdown--with-diagrams (buffer-substring-no-properties (point-min) (point-max)))))
         (prog (and (fboundp 'libxml-parse-html-region) (drgnx-markdown--program)))
         (dir (buffer-local-value 'default-directory src)))
     (with-current-buffer buf
-      (let ((inhibit-read-only t) (pt (point)))
-        (erase-buffer)
-        (setq default-directory dir)                   ; relative pictures and links
-        (if (not prog)
-            (progn (insert text) (markdown-view-mode))
-          (let ((html (with-temp-buffer
-                        (insert text)
-                        (let ((coding-system-for-read 'utf-8) (coding-system-for-write 'utf-8))
-                          (apply #'call-process-region (point-min) (point-max) (car prog) t t nil (cdr prog)))
-                        (buffer-string))))
-            (special-mode)
-            (require 'shr)
-            (let ((inhibit-read-only t))
-              (shr-insert-document (with-temp-buffer (insert html) (libxml-parse-html-region (point-min) (point-max)))))))
-        (setq drgnx-markdown--source src)
-        (goto-char (min pt (point-max)))))
+      (setq default-directory dir)
+      (when (process-live-p drgnx-markdown--proc) (delete-process drgnx-markdown--proc))
+      (if (not prog)
+          (let ((inhibit-read-only t)) (erase-buffer) (insert text) (markdown-view-mode))
+        (let* ((out (generate-new-buffer " *markdown html*" t))
+               (err (generate-new-buffer " *markdown errors*" t))
+               (p (make-process :name "markdown-preview" :buffer out :stderr err :command prog :noquery t
+                                :connection-type 'pipe :coding 'utf-8
+                                :sentinel (lambda (p _event)
+                                            (unless (process-live-p p)
+                                              (when (and (eql (process-exit-status p) 0) (buffer-live-p buf))
+                                                (drgnx-markdown--insert-html buf (with-current-buffer out (buffer-string)) dir))
+                                              (kill-buffer out)
+                                              (when-let* ((ep (get-buffer-process err))) (delete-process ep))
+                                              (kill-buffer err))))))
+          (setq drgnx-markdown--proc p)
+          (process-send-string p text)
+          (process-send-eof p)))
+      (setq drgnx-markdown--source src))
     buf))
 
 (defun drgnx-markdown--rerender-all ()
@@ -97,13 +129,18 @@ background when mmdc is installed, and stay as code meanwhile."
     (let ((src (buffer-local-value 'drgnx-markdown--source b)))
       (when (buffer-live-p src) (drgnx-markdown--render src b)))))
 
+(defvar drgnx-markdown--pending nil "Sources saved since the previews were last rendered.")
+
 (defun drgnx-markdown--after-save ()
-  "The preview follows the saved file (just after the save, never in it)."
-  (let ((src (current-buffer)))
+  "The preview follows the saved file: just after the save, never in it; saves in a row render once."
+  (unless drgnx-markdown--pending
     (run-with-idle-timer 0.2 nil (lambda ()
-                                   (dolist (b (buffer-list))
-                                     (when (eq (buffer-local-value 'drgnx-markdown--source b) src)
-                                       (drgnx-markdown--render src b)))))))
+                                   (let ((sources drgnx-markdown--pending))
+                                     (setq drgnx-markdown--pending nil)
+                                     (dolist (b (buffer-list))
+                                       (when (memq (buffer-local-value 'drgnx-markdown--source b) sources)
+                                         (drgnx-markdown--render (buffer-local-value 'drgnx-markdown--source b) b)))))))
+  (cl-pushnew (current-buffer) drgnx-markdown--pending))
 
 (defun drgnx-markdown-preview ()
   "Markdown: Open Preview — this buffer rendered beside it; again after each save.  The preview buffer."

@@ -82,4 +82,59 @@
       (should (string-search "(defun drgnx-sticky-test-doc" s))
       (should-not (string-search "The job is done" s)))))
 
+(ert-deftest drgnx-sticky/tree-sitter-scopes-without-the-root ()
+  ;; python's root node is `module': never a scope (the file's first line is not)
+  (skip-unless (and (fboundp 'treesit-language-available-p) (treesit-language-available-p 'python)))
+  (drgnx-sticky-test--in (concat "import os\n\nclass Shape:\n    def area(self):\n"
+                                 (mapconcat (lambda (i) (format "        y%d = %d" i i)) (number-sequence 1 30) "\n") "\n")
+      #'python-ts-mode
+    (drgnx-sticky-test--start-at-line 20)
+    (should (equal (substring-no-properties (drgnx-sticky--segment (selected-window))) " › class Shape: › def area(self):"))))
+
+(ert-deftest drgnx-sticky/comments-and-preprocessor-lines-are-no-scopes ()
+  (drgnx-sticky-test--in (concat "def f():\n    x = 1\n# TODO remove\n"
+                                 (mapconcat (lambda (i) (format "    y%d = %d" i i)) (number-sequence 1 30) "\n") "\n")
+      #'python-mode
+    (drgnx-sticky-test--start-at-line 20)
+    (should (equal (substring-no-properties (drgnx-sticky--segment (selected-window))) " › def f():")))
+  (drgnx-sticky-test--in (concat "int main(void) {\n  int x;\n#ifdef FOO\n  y();\n#endif\n"
+                                 (mapconcat (lambda (_) "  z();") (number-sequence 1 30) "\n") "\n}\n")
+      #'c-mode
+    (drgnx-sticky-test--start-at-line 20)
+    (should (equal (substring-no-properties (drgnx-sticky--segment (selected-window))) " › int main(void) {"))))
+
+(ert-deftest drgnx-sticky/the-scopes-keep-their-colours-and-percent-signs ()
+  (drgnx-sticky-test--in (concat "(defun drgnx-sticky-test-pct (x) (format \"%s\" x)\n"
+                                 (mapconcat (lambda (i) (format "  (message \"%d\")" i)) (number-sequence 1 30) "\n") ")\n")
+      #'emacs-lisp-mode
+    (drgnx-sticky-test--start-at-line 20)
+    (let ((s (drgnx-sticky--segment (selected-window))))
+      (should (string-search "%%s" s))                                        ; the mode line expands a single %
+      (should (seq-some (lambda (i) (memq 'font-lock-keyword-face (ensure-list (get-text-property i 'face s))))
+                        (number-sequence 0 (1- (length s))))))))
+
+(ert-deftest drgnx-sticky/typing-below-the-top-costs-nothing ()
+  (drgnx-sticky-test--in (drgnx-sticky-test--elisp 60) #'emacs-lisp-mode
+    (drgnx-sticky-mode 1)
+    (drgnx-sticky-test--start-at-line 20)
+    (let ((n 0))
+      (cl-letf* ((orig (symbol-function 'drgnx-sticky-scopes))
+                 ((symbol-function 'drgnx-sticky-scopes) (lambda (p) (cl-incf n) (funcall orig p))))
+        (drgnx-sticky--segment (selected-window))
+        (goto-char (point-max)) (insert ";; typed\n")              ; below the window's start
+        (drgnx-sticky--segment (selected-window))
+        (should (= n 1))
+        (goto-char (point-min)) (insert ";; above\n")              ; above it: the scopes may have moved
+        (drgnx-sticky--segment (selected-window))
+        (should (= n 2))))))
+
+(ert-deftest drgnx-sticky/a-long-class-without-tree-sitter-stays-cheap ()
+  (drgnx-sticky-test--in (concat "class Big:\n" (mapconcat (lambda (i) (format "    x%d = %d" i i)) (number-sequence 1 10000) "\n") "\n")
+      #'python-mode
+    (let ((t0 (float-time)))
+      (dotimes (i 100)
+        (drgnx-sticky-test--start-at-line (+ 5000 (* i 40)))
+        (drgnx-sticky--segment (selected-window)))
+      (should (< (/ (- (float-time) t0) 100) 0.002)))))
+
 ;;; mod-sticky-test.el ends here

@@ -160,4 +160,49 @@
         (drgnx-smooth--setup))
       (should (equal used '(ultra pixel))))))
 
+(ert-deftest drgnx-smooth/a-daemon-s-first-frame-gets-it ()
+  ;; the first-frame stage runs before the new graphical frame is selected (a daemon's terminal frame still is)
+  (load (expand-file-name "modules/ui/drgnx-smooth" drgnx-dir) nil t)
+  (let ((used nil))
+    (cl-letf (((symbol-function 'pixel-scroll-precision-mode) (lambda (&rest _) (push 'pixel used)))
+              ((symbol-function 'drgnx-smooth--ultra-p) (lambda () nil))
+              ((symbol-function 'display-graphic-p) (lambda (&optional f) (and f t))))   ; only a frame other than the selected one
+      (drgnx-smooth--setup))
+    (should (equal used '(pixel)))))
+
+(ert-deftest drgnx-format/only-where-the-project-formats ()
+  ;; prettier, black, clang-format…: only in a project that uses them (a config file); never Lisp re-indentation
+  (skip-unless (drgnx-amenities-test--installed-p 'apheleia))
+  (let* ((load-path (append load-path (drgnx-amenities-test--elpa-path)))
+         (dir (file-name-as-directory (make-temp-file "drgnx-fmt" t))) (py (concat dir "a.py")))
+    (load (expand-file-name "modules/extra/drgnx-format" drgnx-dir) nil t)
+    (unwind-protect
+        (progn
+          (drgnx-format--setup)
+          (should-not (rassq 'lisp-indent apheleia-mode-alist))
+          (should-not (rassq 'bibtex apheleia-mode-alist))
+          (write-region "x = 1\n" nil py nil 'silent)
+          (with-current-buffer (find-file-noselect py)
+            (python-mode)
+            (should (drgnx-format--inhibit-p))                              ; no formatter configured here
+            (kill-buffer))
+          (write-region "[tool.black]\nline-length = 100\n" nil (concat dir "pyproject.toml") nil 'silent)
+          (with-current-buffer (find-file-noselect py)
+            (python-mode)
+            (should-not (drgnx-format--inhibit-p))
+            (kill-buffer)))
+      (when (bound-and-true-p apheleia-global-mode) (apheleia-global-mode -1))
+      (delete-directory dir t))))
+
+(ert-deftest drgnx-booster/never-for-remote-servers ()
+  (skip-unless (drgnx-amenities-test--installed-p 'eglot-booster))
+  (let ((load-path (append load-path (drgnx-amenities-test--elpa-path))))
+    (load (expand-file-name "modules/extra/drgnx-booster" drgnx-dir) nil t)
+    (unwind-protect
+        (progn
+          (cl-letf (((symbol-function 'executable-find) (lambda (p &rest _) (and (equal p "emacs-lsp-booster") "/usr/bin/emacs-lsp-booster"))))
+            (drgnx-booster--setup))
+          (should eglot-booster-no-remote-boost))                         ; a remote host seldom has the program
+      (when (bound-and-true-p eglot-booster-mode) (eglot-booster-mode -1)))))
+
 ;;; mod-amenities-test.el ends here

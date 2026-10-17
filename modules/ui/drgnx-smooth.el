@@ -8,6 +8,7 @@
 ;; See docs/guide/editing.md.
 
 ;;; Code:
+(require 'seq)
 (require 'drgnx-modules)
 (require 'drgnx-registry)
 (declare-function ultra-scroll-mode "ultra-scroll")
@@ -17,8 +18,9 @@
 (defun drgnx-smooth--ultra-p () (and (require 'ultra-scroll nil t) (fboundp 'ultra-scroll-mode)))
 
 (defun drgnx-smooth--setup ()
-  "Smooth scrolling, on a graphical display only."
-  (when (display-graphic-p)
+  "Smooth scrolling, when there is a graphical frame (a daemon's first-frame stage runs before the new frame is
+selected: the terminal frame still is)."
+  (when (seq-some #'display-graphic-p (frame-list))
     (if (drgnx-smooth--ultra-p) (ultra-scroll-mode 1) (pixel-scroll-precision-mode 1))))
 
 (defun drgnx-smooth-toggle ()

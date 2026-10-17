@@ -103,11 +103,11 @@ error if it does not hold)."
       (code-scrolling
        :setup ,(format "(progn (dolist (m '(\"editor/drgnx-sticky\" \"ui/drgnx-smooth\" \"extra/drgnx-guides\")) (load (expand-file-name (concat \"modules/\" m) %S) nil t)) (drgnx-smooth--setup) t)"
                        drgnx-ui-repo-dir)
-       :each ,(format "(progn (find-file %S) (goto-char (point-min)) (drgnx-sticky-mode 1) (when (require 'indent-bars nil t) (drgnx-guides--maybe)) t)"
-                      (expand-file-name "core/drgnx-job.el" drgnx-ui-repo-dir))
+       ;; the 12k-line fixture: 30 pages down and up never reach its end
+       :each ,(concat "(progn " (drgnx-perf-run--visit-fixture-form)
+                      " (goto-char (point-min)) (drgnx-sticky-mode 1) (when (require 'indent-bars nil t) (drgnx-guides--maybe)) t)")
        :actions ,(append (funcall keys "<next>" 30) (funcall keys "<prior>" 30))
-       :teardown ,(format "(progn (when-let* ((b (find-buffer-visiting %S))) (kill-buffer b)) t)"
-                          (expand-file-name "core/drgnx-job.el" drgnx-ui-repo-dir)))
+       :teardown ,kill-fixture)
       ;; ghost text on: a mock model answers every pause at once (the pause shortened so each key asks and the
       ;; next one cancels — the most work a keystroke can bring)
       (typing-with-ghost

@@ -24,10 +24,16 @@
 
 (defvar drgnx-sticky-max 3 "Scopes shown at most (the outermost).")
 
-(defvar drgnx-sticky-node-regexp
-  (concat "\\`\\(?:function\\|method\\|class\\|struct\\|impl\\|module\\|namespace\\|interface\\|object\\|enum\\|trait\\)"
-          "\\(?:_definition\\|_declaration\\|_item\\|_specifier\\)?\\'\\|\\`\\(?:function\\|method\\|class\\|arrow_function\\)\\'")
-  "Tree-sitter node types that are scopes.")
+(defvar drgnx-sticky-node-types
+  '("function_definition" "function_declaration" "function_item" "function_expression" "function" "arrow_function"
+    "generator_function_declaration" "method_definition" "method_declaration" "method" "singleton_method"
+    "constructor_declaration" "class_definition" "class_declaration" "abstract_class_declaration" "class_specifier"
+    "class" "struct_specifier" "struct_item" "impl_item" "trait_item" "mod_item" "module" "namespace_definition"
+    "internal_module" "interface_declaration" "enum_declaration" "enum_item" "enum_specifier" "object_declaration"
+    "type_declaration")
+  "Tree-sitter node types that are scopes (never the root node: python's is `module').")
+
+(defvar drgnx-sticky-scan-chars 300000 "How far back (characters) the indentation fallback looks for a scope.")
 
 (defface drgnx-sticky '((t :inherit header-line)) "Sticky scroll's scopes in the header line." :group 'drgnx)
 
@@ -36,28 +42,39 @@
   (save-excursion (back-to-indentation) (unless (eolp) (current-indentation))))
 
 (defun drgnx-sticky--treesit-scopes (pos)
-  (let ((node (treesit-node-at (save-excursion (goto-char pos) (back-to-indentation) (point)))) (line (line-number-at-pos pos)) out)
+  (let ((node (treesit-node-at (save-excursion (goto-char pos) (back-to-indentation) (point)))) (bol (save-excursion (goto-char pos) (line-beginning-position))) out)
     (while node
-      (when (and (string-match-p drgnx-sticky-node-regexp (treesit-node-type node))
-                 (< (line-number-at-pos (treesit-node-start node)) line))
+      (when (and (treesit-node-parent node)                        ; the root is the file, not a scope
+                 (member (treesit-node-type node) drgnx-sticky-node-types)
+                 (< (treesit-node-start node) bol))
         (push (save-excursion (goto-char (treesit-node-start node)) (line-beginning-position)) out))
       (setq node (treesit-node-parent node)))
     out))
 
+(defun drgnx-sticky--skip-line-p ()
+  "Is this line no scope: a comment, a preprocessor line (`#'), or a line inside a string or comment?"
+  (save-excursion
+    (back-to-indentation)
+    (or (eq (char-after) ?#)
+        (let ((s (syntax-ppss))) (or (nth 3 s) (nth 4 s)))
+        (let ((p (point))) (forward-comment 1) (> (point) p)))))
+
 (defun drgnx-sticky--indent-scopes (pos)
-  "Line starts of the lines above POS's that open its indentation levels, outermost first."
+  "Line starts of the lines above POS's that open its indentation levels, outermost first.  One regexp search per
+level (not a walk over every line), at most `drgnx-sticky-scan-chars' back."
   (save-excursion
     (goto-char pos)
     (beginning-of-line)
     (let ((indent (or (drgnx-sticky--line-indent)                 ; a blank line: the next line's level
                       (save-excursion (and (zerop (forward-line 1)) (drgnx-sticky--line-indent)))
                       0))
+          (limit (max (point-min) (- pos drgnx-sticky-scan-chars)))
           out)
-      (while (and (> indent 0) (zerop (forward-line -1)))
-        (when-let* ((i (drgnx-sticky--line-indent)))
-          (when (and (< i indent)
-                     ;; not a line inside a string (a docstring at column 0) or a comment
-                     (let ((s (syntax-ppss (save-excursion (back-to-indentation) (point))))) (not (or (nth 3 s) (nth 4 s)))))
+      (while (and (> indent 0) (not (bobp))
+                  (progn (backward-char)                         ; the line above
+                         (re-search-backward (format "^[ \t]\\{0,%d\\}[^ \t\n]" (1- indent)) limit t)))
+        (let ((i (current-indentation)))                         ; a tab counts as its width: checked again here
+          (when (and (< i indent) (not (drgnx-sticky--skip-line-p)))
             (push (line-beginning-position) out)
             (setq indent i))))
       out)))
@@ -76,15 +93,27 @@
       (when (fboundp 'font-lock-ensure) (ignore-errors (font-lock-ensure start end)))
       (string-trim (buffer-substring (progn (back-to-indentation) (point)) end)))))
 
+(defvar-local drgnx-sticky--epoch 0 "Raised by an edit at or above a window's start (scopes may have changed).")
+
+(defun drgnx-sticky--after-change (beg _end _len)
+  "`after-change-functions': an edit above the top of a window showing this buffer changes its scopes."
+  (when (seq-some (lambda (w) (<= beg (window-start w))) (get-buffer-window-list nil nil t))
+    (setq drgnx-sticky--epoch (1+ drgnx-sticky--epoch))))
+
 (defun drgnx-sticky--segment (w)
-  "Window W's sticky part of the header: \" › SCOPE › …\" for its start, or \"\" (cached per start and buffer change)."
+  "Window W's sticky part of the header: \" › SCOPE › …\" for its start, or \"\" (cached until the start moves or the
+text above it changes)."
   (with-current-buffer (window-buffer w)
-    (let ((start (window-start w)) (tick (buffer-chars-modified-tick)) (cache (window-parameter w 'drgnx-sticky)))
-      (if (and cache (eql (nth 0 cache) start) (eql (nth 1 cache) tick) (eq (nth 2 cache) (current-buffer)))
+    (let ((start (window-start w)) (cache (window-parameter w 'drgnx-sticky)))
+      (if (and cache (eql (nth 0 cache) start) (eql (nth 1 cache) drgnx-sticky--epoch) (eq (nth 2 cache) (current-buffer)))
           (nth 3 cache)
         (let* ((scopes (seq-take (drgnx-sticky-scopes start) drgnx-sticky-max))
-               (s (if scopes (concat " › " (propertize (mapconcat #'drgnx-sticky--text scopes " › ") 'face 'drgnx-sticky)) "")))
-          (set-window-parameter w 'drgnx-sticky (list start tick (current-buffer) s))
+               (s (if scopes
+                      (let ((text (string-replace "%" "%%" (mapconcat #'drgnx-sticky--text scopes " › "))))  ; the mode line's %
+                        (add-face-text-property 0 (length text) 'drgnx-sticky t text)          ; the buffer's colours stay
+                        (concat " › " text))
+                    "")))
+          (set-window-parameter w 'drgnx-sticky (list start drgnx-sticky--epoch (current-buffer) s))
           s)))))
 
 (defconst drgnx-sticky--tail '(:eval (drgnx-sticky--segment (selected-window)))
@@ -94,8 +123,10 @@
   "Sticky scroll: the scopes scrolled off the top, in the header after the breadcrumb."
   :lighter nil
   (if drgnx-sticky-mode
-      (setq-local drgnx-chrome-header-tail drgnx-sticky--tail)
-    (kill-local-variable 'drgnx-chrome-header-tail))
+      (progn (setq-local drgnx-chrome-header-tail drgnx-sticky--tail)
+             (add-hook 'after-change-functions #'drgnx-sticky--after-change nil t))
+    (kill-local-variable 'drgnx-chrome-header-tail)
+    (remove-hook 'after-change-functions #'drgnx-sticky--after-change t))
   (when (and (fboundp 'drgnx-chrome-apply) (get-buffer-window)) (drgnx-chrome-apply)))   ; the header shows it now
 
 (defun drgnx-sticky--maybe ()

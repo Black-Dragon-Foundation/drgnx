@@ -59,21 +59,37 @@
 (defun drgnx-grammars--hint ()
   "`find-file-hook': a file whose grammar is missing — said once per language, never asked."
   (let ((lang (drgnx-grammars-language)))
-    (when (and (drgnx-grammars-missing-p lang) (not (memq lang drgnx-grammars--hinted)))
+    (when (and lang (not (memq lang drgnx-grammars--hinted)) (drgnx-grammars-missing-p lang))
       (push lang drgnx-grammars--hinted)
       (message "Tree-sitter support for %s is not installed: Install Language Support (in the palette) adds it" lang))))
 
 (defun drgnx-grammars--job-command (langs)
-  "The command line of the job that builds LANGS's grammars into `drgnx-grammars-dir'."
-  (let ((recipes (mapcar (lambda (l) (assq l drgnx-grammars-sources)) langs)))
+  "The command line of the job that builds LANGS's grammars into `drgnx-grammars-dir'.  A tree-sitter mode that pins
+its grammar (Emacs 31) keeps its recipe; drgnx's is the fallback.  A grammar counts as installed only when its library
+is in the directory and loads (`treesit-install-language-grammar' reports its own failures as warnings)."
+  (let ((dir (drgnx-grammars-dir))
+        (recipes (mapcar (lambda (l) (assq l drgnx-grammars-sources)) langs))
+        (modes (delq nil (mapcar (lambda (e) (and (memq (car e) langs) (cons (car e) (nth 2 e)))) drgnx-grammars-modes))))
     (list (expand-file-name invocation-name invocation-directory) "--batch" "-Q" "--eval"
           (prin1-to-string
            `(let ((failed nil))
-              (require 'treesit)                     ; its variable is special only once loaded (--eval is lexical)
-              (setq treesit-language-source-alist ',recipes)
+              (require 'treesit)                     ; its variables are special only once loaded (--eval is lexical)
+              (add-to-list 'treesit-extra-load-path ,dir)
               (dolist (l ',langs)
-                (condition-case e (progn (treesit-install-language-grammar l ,(drgnx-grammars-dir)) (message "installed %s" l))
-                  (error (setq failed t) (message "FAILED %s: %s" l (error-message-string e)))))
+                (let ((mode (cdr (assq l ',modes))))   ; its library may pin the grammar (Emacs 31)
+                  (when (and mode (autoloadp (symbol-function mode)))
+                    (ignore-errors (autoload-do-load (symbol-function mode) mode))))
+                (unless (assq l treesit-language-source-alist)
+                  (push (assq l ',recipes) treesit-language-source-alist))
+                (condition-case e (treesit-install-language-grammar l ,dir)
+                  (error (message "%s" (error-message-string e))))
+                (if (and (let ((built nil))           ; (no seq in a -Q batch Emacs)
+                           (dolist (suffix dynamic-library-suffixes built)
+                             (when (file-exists-p (expand-file-name (format "libtree-sitter-%s%s" l suffix) ,dir)) (setq built t))))
+                         (treesit-language-available-p l))
+                    (message "installed %s" l)
+                  (setq failed t)
+                  (message "FAILED %s: not built, or built for another tree-sitter than this Emacs's (see above)" l)))
               (kill-emacs (if failed 1 0)))))))
 
 (defun drgnx-grammars-install (langs)
@@ -112,7 +128,7 @@ buffers of those languages switch to their tree-sitter modes when it is done."
         (dolist (b (buffer-list))
           (with-current-buffer b
             (when (and buffer-file-name (eq (drgnx-grammars-language) lang) (not (eq major-mode ts)))
-              (funcall ts))))))))
+              (with-demoted-errors "drgnx grammars: %S" (funcall ts)))))))))
 
 (drgnx-module-define 'lang/grammars
                      :doc "Tree-sitter grammars on request: a hint when one is missing, installed in the background."

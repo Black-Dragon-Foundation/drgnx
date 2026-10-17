@@ -50,7 +50,8 @@
         (should (string-search "tsx/src" line))
         (should (string-search (drgnx-grammars-dir) line))
         ;; --eval code is lexical: the recipes are set after treesit is loaded, never let-bound
-        (should (string-match-p "(require 'treesit).*(setq treesit-language-source-alist" line))))))
+        (should (string-match-p "(require 'treesit).*treesit-language-source-alist" line))
+        (should-not (string-search "(let ((treesit-language-source-alist" line))))))
 
 (ert-deftest drgnx-grammars/after-the-job-buffers-switch ()
   (drgnx-grammars-test--with
@@ -59,5 +60,34 @@
                 ((symbol-function 'python-ts-mode) (lambda () (setq switched (current-buffer)))))
         (drgnx-grammars--installed '(python)))
       (should (eq switched b)))))
+
+(ert-deftest drgnx-grammars/a-build-that-fails-is-a-failure ()
+  ;; treesit-install-language-grammar turns its errors into warnings: the job checks the grammar loads
+  (let* ((tmp (file-name-as-directory (make-temp-file "drgnx-gram" t))) (bin (concat tmp "bin/"))
+         (process-environment (append (list (concat "DRGNX_DATA_DIR=" tmp "data") (concat "PATH=" bin ":" (getenv "PATH")))
+                                      process-environment)))
+    (unwind-protect
+        (progn
+          (make-directory bin t)
+          (write-region "#!/bin/sh\necho fake git fails >&2\nexit 1\n" nil (concat bin "git") nil 'silent)
+          (set-file-modes (concat bin "git") #o755)
+          (let ((cmd (drgnx-grammars--job-command '(toml))))
+            (should (= 1 (apply #'call-process (car cmd) nil nil nil (cdr cmd))))))
+      (delete-directory tmp t))))
+
+(ert-deftest drgnx-grammars/emacs-own-recipes-come-first ()
+  ;; Emacs 31's tree-sitter modes pin their grammars: the job loads the mode and keeps its recipe
+  (let ((form (format "%S" (drgnx-grammars--job-command '(python)))))
+    (should (string-search "python-ts-mode" form))
+    (should (string-match-p "(unless (assq l treesit-language-source-alist)" form))))
+
+(ert-deftest drgnx-grammars/one-buffer-that-fails-to-switch-stops-no-other ()
+  (drgnx-grammars-test--with
+    (let ((a (car (push (drgnx-grammars-test--buffer "x1.py" #'python-mode) made)))
+          (b (car (push (drgnx-grammars-test--buffer "x2.py" #'python-mode) made))) (switched nil))
+      (cl-letf (((symbol-function 'treesit-language-available-p) (lambda (lang &rest _) (eq lang 'python)))
+                ((symbol-function 'python-ts-mode) (lambda () (if (eq (current-buffer) a) (error "Broken") (push (current-buffer) switched)))))
+        (drgnx-grammars--installed '(python)))
+      (should (memq b switched)))))
 
 ;;; mod-grammars-test.el ends here

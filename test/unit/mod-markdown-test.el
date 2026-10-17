@@ -18,12 +18,17 @@
             (auto-mode-alist auto-mode-alist))
        (load (expand-file-name "modules/lang/drgnx-markdown" drgnx-dir) nil t)
        (drgnx-markdown--setup)
+       (clrhash drgnx-markdown--drawing) (clrhash drgnx-markdown--failed)   ; each test's diagrams its own
        (unwind-protect (progn ,@body)
          (dolist (b (buffer-list))
            (when (or (string-prefix-p "*markdown preview" (buffer-name b))
                      (and (buffer-file-name b) (string-prefix-p tmp (buffer-file-name b))))
              (with-current-buffer b (set-buffer-modified-p nil)) (kill-buffer b)))
          (delete-directory tmp t)))))
+
+(defun drgnx-markdown-test--wait (pred &optional secs)
+  (let ((deadline (+ (float-time) (or secs 5)))) (while (and (not (funcall pred)) (< (float-time) deadline)) (accept-process-output nil 0.05)))
+  (funcall pred))
 
 (defconst drgnx-markdown-test--doc "# Title\n\nSome *text*.\n\n```mermaid\ngraph TD; A-->B\n```\n")
 
@@ -61,7 +66,7 @@
           (write-region "png" nil png nil 'silent)
           (let ((again (drgnx-markdown--with-diagrams drgnx-markdown-test--doc)))
             (should (= 1 (length jobs)))
-            (should (string-search (concat "![diagram](" png ")") again))
+            (should (string-search (concat "![diagram](file://" png ")") again))   ; a URL shr can fetch
             (should-not (string-search "```mermaid" again))))))))
 
 (ert-deftest drgnx-markdown/without-mmdc-diagrams-stay-code ()
@@ -76,9 +81,31 @@
     (with-temp-buffer
       (markdown-mode) (insert "# Title\n\n| a | b |\n|---|---|\n| 1 | 2 |\n")
       (let ((p (drgnx-markdown-preview)))
+        (should (drgnx-markdown-test--wait (lambda () (string-search "Title" (with-current-buffer p (buffer-string))))))   ; in the background
         (with-current-buffer p
-          (should (string-search "Title" (buffer-string)))
           (should-not (string-search "# Title" (buffer-string)))       ; rendered, not the source
           (should (eq major-mode 'special-mode)))))))
+
+(ert-deftest drgnx-markdown/a-diagram-that-fails-is-not-drawn-again ()
+  (drgnx-markdown-test--with
+    (let ((jobs 0))
+      (cl-letf (((symbol-function 'executable-find) (lambda (p &rest _) (and (equal p "mmdc") "/usr/bin/mmdc")))
+                ((symbol-function 'drgnx-jobs-start) (lambda (&rest _) (cl-incf jobs) "J"))
+                ((symbol-function 'drgnx-markdown--watch) #'ignore))
+        (drgnx-markdown--with-diagrams drgnx-markdown-test--doc)
+        (should (= jobs 1))
+        (drgnx-markdown--drawn (car (hash-table-keys drgnx-markdown--drawing)) 1)   ; mmdc failed
+        (should (equal (drgnx-markdown--with-diagrams drgnx-markdown-test--doc) drgnx-markdown-test--doc))
+        (should (= jobs 1))))))
+
+(ert-deftest drgnx-markdown/the-preview-is-made-in-the-background-without-stderr ()
+  (drgnx-markdown-test--with
+    (let ((drgnx-markdown-programs '(("sh" "-c" "cat >/dev/null; sleep 0.3; echo '<p>made</p>'; echo WARNING >&2"))))
+      (with-temp-buffer
+        (markdown-mode) (insert "# Hello\n")
+        (let* ((t0 (float-time)) (p (drgnx-markdown-preview)))
+          (should (< (- (float-time) t0) 0.25))                           ; it did not wait for the program
+          (should (drgnx-markdown-test--wait (lambda () (string-search "made" (with-current-buffer p (buffer-string))))))
+          (should-not (string-search "WARNING" (with-current-buffer p (buffer-string)))))))))
 
 ;;; mod-markdown-test.el ends here

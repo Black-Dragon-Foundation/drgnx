@@ -40,6 +40,7 @@
             (message "code editing screenshot: %s" (expand-file-name "code-editing.png" temporary-file-directory))))
       (when (buffer-live-p buf) (kill-buffer buf))
       (when (bound-and-true-p pixel-scroll-precision-mode) (pixel-scroll-precision-mode -1))
+      (when (bound-and-true-p ultra-scroll-mode) (ultra-scroll-mode -1))
       (delete-directory dir t))))
 
 ;;; code-editing-test.el ends here
