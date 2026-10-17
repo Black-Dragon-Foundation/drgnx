@@ -265,7 +265,9 @@ session launcher         systemd         # or detached (process group, no system
 - **Inside a container** (detected from `KUBERNETES_SERVICE_HOST`, `/run/.containerenv`, `/.dockerenv`,
   `$container`, or `/proc/1/cgroup` mentioning kubepods/libpod/docker/containerd) there is usually no systemd
   user session, so sessions are launched **detached**: `setsid` makes a new process group whose id is kept in
-  `RUN/pgid`; `stop` sends it TERM, then KILL after 2 s. Liveness is `kill -0 -PGID`. On a host without a
+  `RUN/pgid`; `stop` sends it TERM, then KILL after 2 s. Liveness is `kill -0 -PGID`. A launch that fails stops
+  its group at once, and `stop` treats a run directory with a `pgid` file but no recorded launcher (a start that
+  failed before saving it) as detached. On a host without a
   systemd user session the same happens. `DRGNX_UI_LAUNCHER=systemd|detached` overrides the choice.
 - Where `XDG_RUNTIME_DIR` is unset (typical in containers) sessions use a private `/tmp/drgnx-ui-<uid>`
   (mode 0700) for their Wayland displays and sockets.

@@ -287,7 +287,10 @@ and the next name tried."
                  (launcher (drgnx-ui-launcher)))
             (setq s (plist-put s :launcher launcher))
             (if (equal launcher "detached")
-                (setq sess (plist-put s :pgid (drgnx-ui--launch-detached s)))
+                (setq sess (plist-put s :pgid (condition-case err (drgnx-ui--launch-detached s)
+                                                ;; its group may have started: stop finds it by the pgid file
+                                                (error (drgnx-ui-stop (plist-get s :name))
+                                                       (signal (car err) (cdr err))))))
               (let ((r (apply #'drgnx-ui--run (drgnx-ui-launch-argv s))))
                 (cond ((eq (car r) 0) (setq sess s))
                       ;; kept claimed while we look further, so the next choice is another name
@@ -465,7 +468,9 @@ and socket directories."
     ;; SIGTERM to the whole session can take the compositor first; Emacs then loses its display
     ;; and exits without its kill-emacs-hook.
     (when (file-exists-p socket) (drgnx-ui--ask-to-exit socket))
-    (if (equal (plist-get sess :launcher) "detached")
+    ;; No :launcher saved yet (a start that failed early) but a pgid file: a detached session.
+    (if (or (equal (plist-get sess :launcher) "detached")
+            (and (not (plist-get sess :launcher)) (drgnx-ui--read-pgid run)))
         (drgnx-ui--stop-group (or (plist-get sess :pgid) (drgnx-ui--read-pgid run)) run)
       ;; Only our own unit: another state root may run a session with the same name.
       (when (drgnx-ui--unit-owned-p name run)

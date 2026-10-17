@@ -231,6 +231,33 @@ the real ones belong to sessions running next to the tests (bin/drgnx check's li
   (should-not (drgnx-ui--group-ours-p nil "/any/run"))
   (should-not (drgnx-ui--group-ours-p (number-to-string (emacs-pid)) "/not/this/run/drgnx-ui-1")))
 
+(ert-deftest drgnx-ui/stop-ends-the-group-of-a-partly-started-detached-session ()
+  ;; DEFERRED M1-7: a run dir whose session.json has no :launcher yet (start failed before saving it)
+  ;; but holds a pgid file is a detached session: stop ends its group, not a systemd unit
+  (drgnx-ui-test--with-state
+    (let ((run (expand-file-name "drgnx-ui-3" root)) (groups nil))
+      (make-directory run)
+      (write-region "12345\n" nil (expand-file-name "pgid" run))
+      (cl-letf (((symbol-function 'drgnx-ui--stop-group) (lambda (pgid r) (push (list pgid r) groups)))
+                ((symbol-function 'drgnx-ui--unit-owned-p) (lambda (&rest _) (error "not a unit"))))
+        (drgnx-ui-stop "drgnx-ui-3"))
+      (should (equal groups (list (list "12345" run))))
+      (should-not (file-exists-p run)))))
+
+(ert-deftest drgnx-ui/a-failed-detached-launch-stops-its-group ()
+  ;; DEFERRED M1-7: setsid wrote its pgid but the start failed — the group is stopped, the run removed
+  (drgnx-ui-test--with-state
+    (let ((groups nil))
+      (cl-letf (((symbol-function 'drgnx-ui-launcher) (lambda () "detached"))
+                ((symbol-function 'drgnx-ui--launch-detached)
+                 (lambda (s)
+                   (write-region "12345\n" nil (expand-file-name "pgid" (plist-get s :run)))
+                   (drgnx-ui--fail "setsid did not start %s" (plist-get s :name))))
+                ((symbol-function 'drgnx-ui--stop-group) (lambda (pgid r) (push (list pgid r) groups))))
+        (should-error (drgnx-ui--claim-and-launch nil "1600x900" root) :type 'drgnx-ui-error))
+      (should (equal groups (list (list "12345" (expand-file-name "drgnx-ui-1" root)))))
+      (should-not (file-exists-p (expand-file-name "drgnx-ui-1" root))))))
+
 (ert-deftest drgnx-ui/daemon-session-argv ()
   (drgnx-ui-test--with-state
     (let* ((s (drgnx-ui-prepare-run "drgnx-ui-8" nil "1600x900" root t))
