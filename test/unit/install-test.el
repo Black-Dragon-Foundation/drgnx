@@ -10,17 +10,18 @@
   (expand-file-name (concat "test/fixtures/os-release/" name) drgnx-install-test--root))
 
 (defun drgnx-install-test--run (env &rest args)
-  "Run install.sh ARGS with ENV (\"K=V\" strings) in a new session (no terminal); return (EXIT . OUTPUT).
-HOME is a new empty directory, deleted afterwards (ENV may name another)."
+  "Run install.sh ARGS with ENV (\"K=V\" strings), without a terminal (DRGNX_INSTALL_TTY=none); return
+\(EXIT . OUTPUT).  HOME is a new empty directory, deleted afterwards (ENV may name another)."
   (let* ((home (make-temp-file "drgnx-install-home" t))
-         (process-environment (append env (list "DRGNX_INSTALL_EMACS=none" (concat "HOME=" home)
+         (process-environment (append env (list "DRGNX_INSTALL_EMACS=none" "DRGNX_INSTALL_TTY=none"
+                                                (concat "HOME=" home)
                                                 ;; never this machine's /run/ostree-booted
                                                 (concat "DRGNX_INSTALL_OSTREE_BOOTED=" home "/no-ostree"))
                                       process-environment))
          (default-directory drgnx-install-test--root))    ; not "~/…": HOME is changed above
     (unwind-protect
         (with-temp-buffer
-          (cons (apply #'call-process "setsid" nil t nil "-w" "bash"
+          (cons (apply #'call-process "bash" nil t nil
                        (expand-file-name "install.sh" drgnx-install-test--root) args)
                 (buffer-string)))
       (delete-directory home t))))
@@ -81,6 +82,137 @@ HOME is a new empty directory, deleted afterwards (ENV may name another)."
   (drgnx-install-test--expect
    (drgnx-install-test--run '("DRGNX_INSTALL_UNAME=Darwin" "DRGNX_INSTALL_ARCH=x86_64" "DRGNX_INSTALL_MACOS=14.6") "--dry-run")
    "brew install emacs-plus@31"))
+
+(defconst drgnx-install-test--macos
+  '("DRGNX_INSTALL_UNAME=Darwin" "DRGNX_INSTALL_ARCH=arm64" "DRGNX_INSTALL_MACOS=15.4")
+  "Pretend this is macOS 15.4 on Apple silicon.")
+
+(defun drgnx-install-test--fake-emacs (dir info)
+  "A script in DIR that answers like an Emacs probe printing INFO; return its file name."
+  (let ((fake (expand-file-name "emacs" dir)))
+    (write-region (format "#!/bin/sh\necho '%s'\n" info) nil fake)
+    (set-file-modes fake #o755)
+    fake))
+
+(ert-deftest drgnx-install/macos-without-homebrew-offers-it ()
+  ;; Homebrew is installed (asked) before the brew commands; without a terminal and without --yes: exit 3.
+  (let* ((r (drgnx-install-test--run (cons "DRGNX_INSTALL_BREW=none" drgnx-install-test--macos) "--dry-run"))
+         (out (cdr r)))
+    (should (= (car r) 0))
+    (should (string-search "Install Homebrew" out))
+    (should (string-search "Homebrew/install/HEAD/install.sh" out))
+    (should (< (string-search "Install Homebrew" out) (string-search "brew install --cask emacs-plus-app" out))))
+  (let ((r (drgnx-install-test--run (cons "DRGNX_INSTALL_BREW=none" drgnx-install-test--macos))))
+    (should (= (car r) 3))
+    (should (string-search "--yes" (cdr r)))))
+
+(ert-deftest drgnx-install/macos-with-homebrew-does-not-offer-it ()
+  (let ((out (cdr (drgnx-install-test--run (cons "DRGNX_INSTALL_BREW=/opt/homebrew/bin/brew" drgnx-install-test--macos)
+                                           "--dry-run"))))
+    (should (string-search "/opt/homebrew/bin/brew install --cask emacs-plus-app" out))
+    (should-not (string-search "Install Homebrew" out))
+    (should-not (string-search "Rosetta" out))))
+
+(ert-deftest drgnx-install/macos-with-intel-homebrew-on-apple-silicon ()
+  ;; Homebrew for Intel in /usr/local on an arm64 Mac runs under Rosetta: used, but the plan says so.
+  (let ((r (drgnx-install-test--run (cons "DRGNX_INSTALL_BREW=/usr/local/bin/brew" drgnx-install-test--macos)
+                                    "--dry-run")))
+    (should (= (car r) 0))
+    (should (string-search "/usr/local/bin/brew install --cask emacs-plus-app" (cdr r)))
+    (should (string-search "Rosetta" (cdr r)))
+    (should-not (string-search "Install Homebrew" (cdr r)))))
+
+(ert-deftest drgnx-install/macos-keeps-an-emacs-app-that-is-good-enough ()
+  (let ((tmp (make-temp-file "drgnx-install" t)))
+    (unwind-protect
+        (let ((r (drgnx-install-test--run
+                  (append (list (concat "DRGNX_INSTALL_EMACS=" (drgnx-install-test--fake-emacs tmp "31.1 t ns"))
+                                "DRGNX_INSTALL_BREW=none")
+                          drgnx-install-test--macos)
+                  "--dry-run")))
+          (should (= (car r) 0))
+          (should (string-search "keep the installed Emacs 31.1" (cdr r)))
+          (should-not (string-search "brew install" (cdr r)))
+          (should-not (string-search "Install Homebrew" (cdr r))))
+      (delete-directory tmp t))))
+
+(ert-deftest drgnx-install/homebrew-installer-runs-noninteractive-and-its-failure-stops-the-run ()
+  ;; A fake curl hands out a Homebrew "installer" that reports its environment and fails; nothing after it
+  ;; (tap, install) runs.  A download that fails is its own message.
+  (let* ((tmp (make-temp-file "drgnx-install" t)) (bin (expand-file-name "bin" tmp)))
+    (unwind-protect
+        (progn
+          (make-directory bin)
+          (dolist (curl '("echo 'echo HB-INSTALLER NONINTERACTIVE=$NONINTERACTIVE; exit 1'" "exit 22"))
+            (write-region (format "#!/bin/sh\n%s\n" curl) nil (expand-file-name "curl" bin))
+            (set-file-modes (expand-file-name "curl" bin) #o755)
+            (let ((r (drgnx-install-test--run
+                      (append (list "DRGNX_INSTALL_BREW=none" (concat "PATH=" bin ":" (getenv "PATH")))
+                              drgnx-install-test--macos)
+                      "--yes" "--source-dir" drgnx-install-test--root "--prefix" (expand-file-name "prefix" tmp))))
+              (should (= (car r) 1))
+              ;; the plan names brew; once Homebrew's installer failed, no brew command ran
+              (should-not (string-search "Tapped" (cdr r)))
+              (should-not (string-search "emacs-plus" (substring (cdr r) (string-search "Emacs comes from Homebrew" (cdr r)))))
+              (if (string-search "exit 1" curl)
+                  (progn (should (string-search "HB-INSTALLER NONINTERACTIVE=1" (cdr r)))
+                         (should (string-search "Homebrew's installer failed" (cdr r))))
+                (should (string-search "could not download Homebrew's installer" (cdr r)))))))
+      (delete-directory tmp t))))
+
+(ert-deftest drgnx-install/no-bash-4-constructs ()
+  ;; macOS ships bash 3.2: it must run there.
+  (let ((code (with-temp-buffer
+                (insert-file-contents (expand-file-name "install.sh" drgnx-install-test--root))
+                (goto-char (point-min))
+                (while (re-search-forward "^[ \t]*#.*$\\|[ \t]#[ \t].*$" nil t) (replace-match ""))
+                (buffer-string))))
+    (dolist (re '("\\bmapfile\\b" "\\breadarray\\b" "declare -A" "local -n" "\\${[a-zA-Z_]*,,}" "\\${[a-zA-Z_]*\\^\\^}"
+                  ";&" "|&" "\\[-[0-9]+\\]"))
+      (should-not (string-match-p re code)))))
+
+(ert-deftest drgnx-install/never-touches-the-users-emacs-config ()
+  ;; The plan names neither ~/.emacs.d nor ~/.config/emacs; a real run (a kept fake Emacs, --source-dir)
+  ;; leaves both byte for byte as they were and writes no shell startup file.
+  (let* ((home (make-temp-file "drgnx-install-home" t))
+         (files (mapcar (lambda (f) (expand-file-name f home)) '(".emacs.d/init.el" ".config/emacs/init.el")))
+         (tmp (make-temp-file "drgnx-install" t)))
+    (unwind-protect
+        (progn
+          (dolist (f files)
+            (make-directory (file-name-directory f) t)
+            (write-region (format "(message \"mine: %s\")\n" (file-name-nondirectory f)) nil f))
+          (let ((before (mapcar (lambda (f) (with-temp-buffer (insert-file-contents-literally f) (buffer-string))) files))
+                (env (append (list (concat "HOME=" home) "SHELL=/bin/zsh"
+                                   (concat "DRGNX_INSTALL_EMACS=" (drgnx-install-test--fake-emacs tmp "31.1 t ns")))
+                             drgnx-install-test--macos)))
+            (let ((plan (drgnx-install-test--run env "--dry-run")))
+              (should (= (car plan) 0))
+              (should-not (string-search ".emacs.d" (cdr plan)))
+              (should-not (string-search ".config/emacs" (cdr plan))))
+            (let ((run (drgnx-install-test--run env "--yes" "--prefix" (expand-file-name "prefix" tmp)
+                                                "--source-dir" drgnx-install-test--root)))
+              (should (= (car run) 0))
+              (should (string-search "Next time: open drgnx from Applications, or run \"drgnx .\" in a project" (cdr run))))
+            (should (equal before (mapcar (lambda (f) (with-temp-buffer (insert-file-contents-literally f) (buffer-string)))
+                                          files)))
+            (should-not (file-exists-p (expand-file-name ".zprofile" home)))
+            (should-not (file-exists-p (expand-file-name ".profile" home)))))
+      (delete-directory home t)
+      (delete-directory tmp t))))
+
+(ert-deftest drgnx-install/linux-final-message-stays ()
+  (let ((tmp (make-temp-file "drgnx-install" t)))
+    (unwind-protect
+        (let ((r (drgnx-install-test--run
+                  (list (concat "DRGNX_INSTALL_OS_RELEASE=" (drgnx-install-test--os "fedora-45"))
+                        "DRGNX_INSTALL_UNAME=Linux"
+                        (concat "DRGNX_INSTALL_EMACS=" (drgnx-install-test--fake-emacs tmp "31.1 t pgtk")))
+                  "--yes" "--prefix" (expand-file-name "prefix" tmp) "--source-dir" drgnx-install-test--root)))
+          (should (= (car r) 0))
+          (should (string-search "Done. Start drgnx with:" (cdr r)))
+          (should-not (string-search "Next time" (cdr r))))
+      (delete-directory tmp t))))
 
 (ert-deftest drgnx-install/unknown-distribution-gets-the-guide ()
   (let ((r (drgnx-install-test--plan "unknown")))

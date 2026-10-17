@@ -23,6 +23,7 @@ GNU_MIRROR="${DRGNX_INSTALL_MIRROR:-https://ftpmirror.gnu.org/emacs}"         # 
 GNU_KEYRING="${DRGNX_INSTALL_KEYRING:-https://ftp.gnu.org/gnu/gnu-keyring.gpg}"
 EMACS_SIGNER="${DRGNX_INSTALL_SIGNER:-8DC2487E51ABDD90B5C4753F0F56D0553B6D411B}"   # who signs $EMACS_VERSION (docs/guide/install.md)
 APT_DIR="${DRGNX_INSTALL_APT_DIR:-/etc/apt}"
+HOMEBREW_INSTALLER_URL=https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh
 
 say()  { printf '%s\n' "$*"; }
 note() { printf '  %s\n' "$*"; }
@@ -177,6 +178,24 @@ choose_method() {
   JOBS="$(build_jobs)"
 }
 
+find_brew() {
+  # BREW = the Homebrew to use ("" if there is none; macOS only). DRGNX_INSTALL_BREW=none|PATH overrides
+  # the search (tests): the brew on PATH first, then Apple silicon's, then Intel's prefix.
+  BREW=""
+  [[ "$FAMILY" == macos ]] || return 0
+  if [[ -n "${DRGNX_INSTALL_BREW:-}" ]]; then
+    [[ "$DRGNX_INSTALL_BREW" == none ]] || BREW="$DRGNX_INSTALL_BREW"
+    return 0
+  fi
+  BREW="$(command -v brew 2>/dev/null || true)"
+  local b
+  if [[ -z "$BREW" ]]; then
+    for b in /opt/homebrew/bin/brew /usr/local/bin/brew; do
+      if [[ -x "$b" ]]; then BREW="$b"; break; fi
+    done
+  fi
+}
+
 build_jobs() {
   # Parallel make jobs. Native compilation runs one Emacs per job, so: one per CPU, but at most one per
   # 1.5 GiB of available memory — one per CPU on a 16-thread machine starved a desktop into the OOM killer.
@@ -195,6 +214,18 @@ build_jobs() {
   printf '%s' "$jobs"
 }
 
+brew_is_rosetta() { [[ "$BREW" == /usr/local/bin/brew && "$ARCH" == arm64 ]]; }   # Intel's Homebrew on Apple silicon
+
+plan_homebrew() { # the Homebrew lines of the plan (macOS)
+  if [[ -z "$BREW" ]]; then
+    note "Install Homebrew first (asked): it asks for your password, installs Apple's Command Line Tools if they are missing, and takes a few minutes:"
+    note "  /bin/bash -c \"\$(curl -fsSL $HOMEBREW_INSTALLER_URL)\""
+    note "then add its shellenv line to ~/.zprofile (asked)"
+  elif brew_is_rosetta; then
+    note "warning: $BREW is Homebrew for Intel, running under Rosetta on this Apple silicon Mac. It works, but a native one (/opt/homebrew) is better: see https://brew.sh"
+  fi
+}
+
 print_plan() {
   say "drgnx install — ${PRETTY:-$OS}"
   say ""
@@ -203,10 +234,12 @@ print_plan() {
     keep) if [[ -n "$EMACS_FOUND" ]]; then note "keep the installed Emacs ${EMACS_INFO%% *} ($EMACS_FOUND): native compilation works"
           else note "keep the installed Emacs (--method keep)${EMACS_INFO:+: $EMACS_INFO}"; fi ;;
     package) note "install with: sudo ${PKG[*]}" ;;
-    cask) note "brew trust d12frosted/emacs-plus && brew tap d12frosted/emacs-plus"
-          note "brew install --cask emacs-plus-app   (prebuilt, native compilation)" ;;
-    formula) note "brew trust d12frosted/emacs-plus && brew tap d12frosted/emacs-plus"
-             note "brew install emacs-plus@31   (built from source, ~30 minutes)" ;;
+    cask) plan_homebrew
+          note "${BREW:-brew} trust d12frosted/emacs-plus && ${BREW:-brew} tap d12frosted/emacs-plus"
+          note "${BREW:-brew} install --cask emacs-plus-app   (prebuilt, native compilation)" ;;
+    formula) plan_homebrew
+             note "${BREW:-brew} trust d12frosted/emacs-plus && ${BREW:-brew} tap d12frosted/emacs-plus"
+             note "${BREW:-brew} install emacs-plus@31   (built from source, ~30 minutes)" ;;
     source)
       note "build GNU Emacs $EMACS_VERSION from source into $PREFIX (about 20-40 minutes)"
       note "download $GNU_MIRROR/emacs-$EMACS_VERSION.tar.xz and verify its signature (gnu-keyring.gpg) before installing anything"
@@ -226,7 +259,10 @@ print_plan() {
 
 # --- Doing it -----------------------------------------------------------------------------------------
 
-have_tty() { (exec </dev/tty) 2>/dev/null; }
+have_tty() { # DRGNX_INSTALL_TTY=none|yes overrides the check (tests: no setsid needed to lose the terminal)
+  case "${DRGNX_INSTALL_TTY:-}" in none) return 1 ;; yes) return 0 ;; esac
+  (exec </dev/tty) 2>/dev/null
+}
 
 confirm() { # QUESTION → true if yes
   ((YES)) && return 0
@@ -253,16 +289,46 @@ install_emacs_package() {
   EMACS_BIN=emacs
 }
 
+install_homebrew() { # macOS without Homebrew: explained, asked, then Homebrew's own installer
+  [[ -z "$BREW" ]] || return 0
+  say ""
+  say "Emacs comes from Homebrew, which is not installed. Its installer asks for your password,"
+  say "installs Apple's Command Line Tools if they are missing, and takes a few minutes."
+  confirm "Install Homebrew?" || die 1 "Homebrew is needed on macOS: install it from https://brew.sh, then run this again"
+  local script
+  script="$(curl -fsSL "$HOMEBREW_INSTALLER_URL")" || die 1 "could not download Homebrew's installer ($HOMEBREW_INSTALLER_URL) — nothing was installed (no network?)"
+  if ((YES)); then   # nobody to answer its questions; it needs sudo to work without a password prompt
+    NONINTERACTIVE=1 /bin/bash -c "$script" || die 1 "Homebrew's installer failed (above). With --yes it cannot ask for your password: run sudo -v first, or run without --yes"
+  else
+    /bin/bash -c "$script" </dev/tty || die 1 "Homebrew's installer failed (above) — nothing else was installed"
+  fi
+  local b
+  for b in /opt/homebrew/bin/brew /usr/local/bin/brew; do
+    if [[ -x "$b" ]]; then BREW="$b"; break; fi
+  done
+  [[ -n "$BREW" ]] || die 1 "Homebrew was installed but brew was not found in /opt/homebrew/bin or /usr/local/bin — open a new terminal and run this again"
+  eval "$("$BREW" shellenv)"
+  brew_profile_hint
+}
+
+brew_profile_hint() { # Homebrew's own installer asks you to put this in ~/.zprofile; so do we, but ask
+  local line="eval \"\$($BREW shellenv)\""
+  grep -qxF "$line" "$HOME/.zprofile" 2>/dev/null && return
+  say ""
+  say "Homebrew must be on your PATH in new terminals."
+  offer_rc_line "$HOME/.zprofile" "$line"
+}
+
 install_emacs_brew() {
-  command -v brew >/dev/null 2>&1 || die 1 "Homebrew is needed on macOS: install it from https://brew.sh, then run this again"
-  brew trust d12frosted/emacs-plus 2>/dev/null || true
-  brew tap d12frosted/emacs-plus
+  [[ -n "$BREW" ]] || die 1 "Homebrew is needed on macOS: install it from https://brew.sh, then run this again"
+  "$BREW" trust d12frosted/emacs-plus 2>/dev/null || true
+  "$BREW" tap d12frosted/emacs-plus
   if [[ "$CHOSEN" == cask ]]; then
-    brew install --cask emacs-plus-app
+    "$BREW" install --cask emacs-plus-app
     EMACS_BIN=/Applications/Emacs.app/Contents/MacOS/Emacs
   else
-    brew install emacs-plus@31
-    EMACS_BIN="$(brew --prefix emacs-plus@31)/bin/emacs"
+    "$BREW" install emacs-plus@31
+    EMACS_BIN="$("$BREW" --prefix emacs-plus@31)/bin/emacs"
   fi
 }
 
@@ -400,12 +466,8 @@ link_drgnx() {
   ln -sfn "$DIR/bin/drgnx" "$PREFIX/bin/drgnx"
 }
 
-path_hint() {
-  case ":$PATH:" in *":$PREFIX/bin:"*) return ;; esac
-  local rc="$HOME/.profile" line="export PATH=\"$PREFIX/bin:\$PATH\""
-  case "${SHELL:-}" in */zsh) rc="$HOME/.zprofile" ;; esac    # zsh (macOS's default) never reads ~/.profile
-  say ""
-  say "$PREFIX/bin is not on your PATH."
+offer_rc_line() { # RC LINE — add LINE to the startup file RC only if the user says yes (--yes does not count)
+  local rc="$1" line="$2"
   if ((YES)) || ! have_tty; then note "add this to $rc: $line"; return; fi
   if confirm "Add it to $rc?"; then
     grep -qxF "$line" "$rc" 2>/dev/null || printf '\n# added by the drgnx installer\n%s\n' "$line" >>"$rc"
@@ -415,11 +477,21 @@ path_hint() {
   fi
 }
 
+path_hint() {
+  case ":$PATH:" in *":$PREFIX/bin:"*) return ;; esac
+  local rc="$HOME/.profile" line="export PATH=\"$PREFIX/bin:\$PATH\""
+  case "${SHELL:-}" in */zsh) rc="$HOME/.zprofile" ;; esac    # zsh (macOS's default) never reads ~/.profile
+  say ""
+  say "$PREFIX/bin is not on your PATH."
+  offer_rc_line "$rc" "$line"
+}
+
 main() {
   parse_args "$@"
   detect
   probe_emacs
   choose_method
+  find_brew
   print_plan
   if ((DRY_RUN)); then exit 0; fi
   if ((!YES)) && ! have_tty; then
@@ -431,7 +503,7 @@ main() {
   case "$CHOSEN" in
     keep) ;;
     package) install_emacs_package ;;
-    cask|formula) install_emacs_brew ;;
+    cask|formula) install_homebrew; install_emacs_brew ;;
     source) install_emacs_source ;;
   esac
   fetch_drgnx
@@ -442,6 +514,7 @@ main() {
   path_hint
   say ""
   say "Done. Start drgnx with:  $EMACS_BIN --init-directory $DIR/init"
+  if [[ "$OS" == macos ]]; then say "Next time: open drgnx from Applications, or run \"drgnx .\" in a project"; fi
 }
 
 main "$@"

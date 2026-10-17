@@ -68,12 +68,35 @@ option (an option without its value too), 3 no terminal to ask on and no `--yes`
 | Fedora 44, Fedora remixes (Nobara, …) below 45 | source build (`dnf builddep emacs`) | |
 | Image-based Fedora (Silverblue, Kinoite, Bazzite, …; `/run/ostree-booted`) | — (exit 2, unless a good Emacs is already there) | dnf cannot install on them: run the installer inside a toolbox (`toolbox create`, `toolbox enter`), or layer Emacs (`rpm-ostree install emacs-pgtk`, reboot) and run `bash install.sh --method keep` |
 | Debian 13, Ubuntu 26.04, Linux Mint, Pop!_OS, … | source build (`apt-get build-dep emacs`) | see below |
-| macOS, Apple silicon, 15+ | Homebrew `brew install --cask emacs-plus-app` (prebuilt) | needs [Homebrew](https://brew.sh); `brew trust d12frosted/emacs-plus` first |
-| macOS, Intel or older | Homebrew `brew install emacs-plus@31` (builds, ~30 min) | |
+| macOS, Apple silicon, 15+ | Homebrew `brew install --cask emacs-plus-app` (prebuilt) | [Homebrew](https://brew.sh) is installed first if missing, after asking (below); `brew trust d12frosted/emacs-plus` first |
+| macOS, Intel or older | Homebrew `brew install emacs-plus@31` (builds, ~30 min) | same |
 | anything else, including RHEL, Rocky, Alma and Amazon Linux | — (exit 2) | install Emacs 31.1 yourself (below), then `bash install.sh --method keep` |
 
 Not used, on purpose: Flathub's Emacs (still 30.2) and the Snap (native compilation unverified; the sandbox
 gets in the way of language servers and tools).
+
+### macOS
+
+The script runs under the `/bin/bash` that ships with macOS (3.2); nothing newer is needed. Run it in Terminal.
+
+- **A good Emacs is kept.** An Emacs.app (or any `emacs`) that is 31.1+, graphical (`ns`) and compiles natively is
+  used as it is; nothing is installed.
+- **Homebrew first, if it is missing.** The plan lists it as the first step. Before running anything the installer
+  explains that Homebrew's own installer asks for your password, installs Apple's Command Line Tools when they are
+  missing and takes a few minutes, and asks "Install Homebrew?" (`--yes` answers yes). It then runs Homebrew's official
+  installer (`/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"`).
+  Under `--yes` that installer runs with `NONINTERACTIVE=1` and cannot ask for your password: run `sudo -v`
+  first, or leave `--yes` out. Afterwards the installer evaluates `brew shellenv` for itself and offers to add the
+  line `eval "$(/opt/homebrew/bin/brew shellenv)"` (`/usr/local/bin/brew` on Intel) to `~/.zprofile` — only when you answer yes;
+  with `--yes` it only prints the line.
+- **Intel Homebrew on Apple silicon** (`/usr/local/bin/brew` on an arm64 Mac) runs under Rosetta. It is used, and the
+  plan warns about it.
+- **Your Emacs configuration is never touched.** `~/.emacs.d` and `~/.config/emacs` are neither read nor written;
+  drgnx starts with its own `--init-directory`.
+- The last lines say how to open drgnx next time: from Applications, or `drgnx .` in a project.
+
+For tests, `DRGNX_INSTALL_BREW=none|PATH` overrides the Homebrew detection and `DRGNX_INSTALL_TTY=none|yes` overrides
+the check for a terminal (so the tests need no `setsid`).
 
 ### The source build
 
