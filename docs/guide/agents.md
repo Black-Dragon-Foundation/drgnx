@@ -22,7 +22,10 @@ Agents: New Agent Session… (palette) starts a **profile** in the current proje
 the agent advertises steering — sent as `_session/steering`; if the agent refuses, the message is queued instead) or
 `interrupt` (stop the turn, then send). A profile whose program is not installed gives a session that says so. Keys and tokens are
 never written there — the agent reads them from its environment or its own login. The built-in `claude` profile
-runs the unmodified `claude-agent-acp` when it is installed.
+runs the unmodified `claude-agent-acp` (npm package `@zed-industries/claude-agent-acp`) when it is installed, with
+your own Claude login. Onboarding's Agents step installs Claude Code, Node and that adapter if they are missing
+(asked first), opens a terminal for the login and checks that the profile starts
+([onboarding.md](onboarding.md#setting-claude-code-up)); to check it again later, run Onboarding: Agents.
 
 A session's **transcript** (RET on its row; opens in the editor) shows:
 

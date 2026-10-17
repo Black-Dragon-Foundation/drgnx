@@ -373,8 +373,11 @@ one call: (STATUS MESSAGE ANSWERED), ANSWERED how many of the three roles answer
 
 ;;;; Step 4: setting AI up — Ollama, LM Studio or OpenRouter
 
+(defconst drgnx-onboard-claude-package "@zed-industries/claude-agent-acp"
+  "The npm package of the Claude Code adapter (binary `claude-agent-acp') drgnx's `claude' agent profile runs.")
+
 (defconst drgnx-onboard-install-recipes
-  '((ollama :name "Ollama" :provider ollama
+  `((ollama :name "Ollama" :provider ollama
             :check (:program "ollama" :provider ollama)
             :macos (:install ("brew" "install" "ollama"))
             :linux (:shell "curl -fsSL https://ollama.com/install.sh | sh" :sudo t)
@@ -385,13 +388,26 @@ one call: (STATUS MESSAGE ANSWERED), ANSWERED how many of the three roles answer
               :macos (:install ("brew" "install" "--cask" "lm-studio") :launch ("open" "-a" "LM Studio"))
               :linux (:page "https://lmstudio.ai/download")
               :start ("lms" "server" "start")
-              :pull ("lms" "get" "-y")))
+              :pull ("lms" "get" "-y"))
+    (claude :name "Claude Code" :check (:program "claude" :dirs ("~/.local/bin"))
+            :macos (:install ("brew" "install" "--cask" "claude-code"))
+            :linux (:job ("bash" "-c" "curl -fsSL https://claude.ai/install.sh | bash")))
+    (node :name "Node.js" :check (:program "npm")
+          :macos (:install ("brew" "install" "node"))
+          :linux (:by-program (("dnf" . "sudo dnf install nodejs npm") ("apt-get" . "sudo apt-get install nodejs npm")
+                               ("pacman" . "sudo pacman -S nodejs npm"))
+                              :page "https://nodejs.org/en/download"))
+    (claude-agent-acp :name "the Claude Code adapter" :check (:program "claude-agent-acp" :dirs ("~/.local/bin"))
+                      :macos (:job ("npm" "install" "-g" ,drgnx-onboard-claude-package))
+                      :linux (:job ("npm" "install" "-g" "--prefix" "~/.local" ,drgnx-onboard-claude-package))))
   "How onboarding sets up a local model runner: ID → plist.  :check — it is there when its :program is found (lms
-also in ~/.lmstudio/bin, where LM Studio puts it) or its :provider's address answers.  :macos :install — the
-Homebrew command, a drgnx job; :launch — LM Studio's first start, which puts lms in place.  :linux :shell — Ollama's
-official installer, which uses sudo: shown, for you to run in a terminal (a job has no terminal to ask your
-password in); :page — LM Studio's download page.  :start — the server, a drgnx job (never at login); :pull — the
-download, the model's name after it.")
+also in ~/.lmstudio/bin, where LM Studio puts it; :dirs: more directories) or its :provider's address answers.
+:macos :install — the Homebrew command, a drgnx job; :launch — LM Studio's first start, which puts lms in place.
+:linux :shell — Ollama's official installer, which uses sudo: shown, for you to run in a terminal (a job has no
+terminal to ask your password in); :by-program — the same for the first package manager found; :page — LM Studio's
+download page.  :job (either platform) — a command that needs no sudo, a drgnx job.  :start — the server, a drgnx
+job (never at login); :pull — the download, the model's name after it.  claude, node and claude-agent-acp are
+Claude Code's parts (`drgnx-onboard--agents-step').")
 
 (defconst drgnx-onboard-embed-model "nomic-embed-text"
   "The embedding model a local runner set up here downloads (Ollama's name; LM Studio's: `drgnx-ai-lmstudio-models').")
@@ -428,12 +444,14 @@ download, the model's name after it.")
 
 (defun drgnx-onboard--program (tool)
   "TOOL's program, a path — on the path, in ~/.lmstudio/bin or beside brew — or nil."
-  (let ((name (plist-get (plist-get (alist-get tool drgnx-onboard-install-recipes) :check) :program))
-        (brew (drgnx-onboard--brew)))
+  (let* ((check (plist-get (alist-get tool drgnx-onboard-install-recipes) :check))
+         (name (plist-get check :program))
+         (brew (drgnx-onboard--brew)))
     (or (executable-find name)
         (seq-find #'file-executable-p
-                  (delq nil (list (and (eq tool 'lmstudio) (expand-file-name name "~/.lmstudio/bin"))
-                                  (and brew (expand-file-name name (file-name-directory brew)))))))))
+                  (delq nil (append (list (and (eq tool 'lmstudio) (expand-file-name name "~/.lmstudio/bin"))
+                                          (and brew (expand-file-name name (file-name-directory brew))))
+                                    (mapcar (lambda (d) (expand-file-name name d)) (plist-get check :dirs))))))))
 
 (defun drgnx-onboard--up-p (provider)
   "Does PROVIDER's address answer now?  One probe of it (a second at most); `drgnx-ai-detected' has what it found."
@@ -506,13 +524,17 @@ job, then quits."
 server answers, else (fail REASON LOG), LOG nil when nothing ran.  Only when CTX is interactive (the step asked
 first).  macOS: the Homebrew command as a drgnx job — LM Studio: then its first start, which puts lms in place.
 Linux: Ollama's installer for you to run in a terminal (it uses sudo), or LM Studio's download page; then a wait
-for its server (C-g stops it).  Every run starts from the top: nothing is resumed from a run that failed."
+for its server (C-g stops it).  A recipe with a :job (Claude Code's installer, the npm package) runs it as a drgnx
+job on either platform.  Every run starts from the top: nothing is resumed from a run that failed."
   (let* ((r (alist-get tool drgnx-onboard-install-recipes))
          (name (plist-get r :name))
-         (there (lambda () (or (drgnx-onboard--program tool) (drgnx-onboard--up-p (plist-get r :provider))))))
+         (there (lambda () (or (drgnx-onboard--program tool)
+                               (and (plist-get r :provider) (drgnx-onboard--up-p (plist-get r :provider))))))
+         (job (plist-get (plist-get r (if (eq (drgnx-platform) 'macos) :macos :linux)) :job)))
     (cond
      ((not (plist-get ctx :interactive)) (list 'fail (format "%s is not installed (nothing is installed without asking)" name) nil))
      ((funcall there) 'ok)
+     (job (drgnx-onboard--install-job tool job))
      ((eq (drgnx-platform) 'macos)
       (let ((m (plist-get r :macos)) (brew (drgnx-onboard--brew)))
         (if (not brew)
@@ -529,17 +551,46 @@ for its server (C-g stops it).  Every run starts from the top: nothing is resume
                                          name (plist-get (plist-get r :check) :program))
                            nil)))))))
      (t
-      (let ((l (plist-get r :linux)))
-        (if (plist-get l :page)
-            (progn (browse-url (plist-get l :page))
-                   (drgnx-onboard--say (format "Install %s from %s and open it (Developer → Start Server); waiting for it…" name (plist-get l :page))))
-          (kill-new (plist-get l :shell))
-          (drgnx-onboard--say (format "Run in a terminal (copied): %s — it asks for your password (sudo); waiting for %s…" (plist-get l :shell) name)))
+      (let* ((l (plist-get r :linux)) (shell (drgnx-onboard--linux-shell l))
+             (open (if (eq tool 'lmstudio) " and open it" "")))
+        (if shell
+            (progn (kill-new shell)
+                   (drgnx-onboard--say (format "Run in a terminal (copied): %s — it asks for your password (sudo); waiting for %s…" shell name)))
+          (browse-url (plist-get l :page))
+          (drgnx-onboard--say (format "Install %s from %s%s%s; waiting for it…" name (plist-get l :page) open
+                                      (if (eq tool 'lmstudio) " (Developer → Start Server)" ""))))
         (if (drgnx-onboard--until there drgnx-onboard-app-wait) 'ok
           (list 'fail (format "%s did not show up within %d minutes: %s, then run this step again" name (/ drgnx-onboard-app-wait 60)
-                              (if (plist-get l :page) (format "install it from %s and open it" (plist-get l :page))
-                                (format "run %s in a terminal" (plist-get l :shell))))
+                              (if shell (format "run %s in a terminal" shell) (format "install it from %s%s" (plist-get l :page) open)))
                 nil)))))))
+
+(defun drgnx-onboard--linux-shell (l)
+  "The shell command a Linux recipe plist L asks the user to run in a terminal: its :shell, else the :by-program
+entry of the first package manager found; nil when it has neither."
+  (or (plist-get l :shell)
+      (cdr (seq-find (lambda (e) (executable-find (car e))) (plist-get l :by-program)))))
+
+(defun drgnx-onboard--beside-brew (name)
+  "NAME's path beside brew (where an app's PATH lacks it), or nil."
+  (when-let* ((brew (drgnx-onboard--brew))) (let ((f (expand-file-name name (file-name-directory brew)))) (and (file-executable-p f) f))))
+
+(defun drgnx-onboard--install-job (tool job)
+  "Run JOB (a command list: no sudo, no terminal) as a drgnx job to install TOOL: `ok' when TOOL's program is
+there after it, else (fail REASON LOG).  JOB's program is found on the path or beside brew (then its directory goes
+first on the job's PATH: npm's `node' is there); a `~/' argument is the home directory."
+  (let* ((name (plist-get (alist-get tool drgnx-onboard-install-recipes) :name))
+         (program (or (executable-find (car job)) (drgnx-onboard--beside-brew (car job)))))
+    (if (not program)
+        (list 'fail (format "%s is needed to install %s: install it first, then run this step again" (car job) name) nil)
+      (let* ((args (mapcar (lambda (a) (if (string-prefix-p "~/" a) (expand-file-name a) a)) (cdr job)))
+             (command (if (executable-find (car job)) (cons program args)
+                        (append (list "env" (concat "PATH=" (file-name-directory program) ":" (getenv "PATH"))) (list program) args)))
+             (done (drgnx-onboard--job (format "Installing %s" name) command)))
+        (cond ((not (eq done 'ok)) done)
+              ((drgnx-onboard--program tool) 'ok)
+              (t (list 'fail (format "%s was installed, but %s cannot be found: check your PATH, then run this step again"
+                                     name (plist-get (plist-get (alist-get tool drgnx-onboard-install-recipes) :check) :program))
+                       nil)))))))
 
 (defun drgnx-onboard--start (tool)
   "TOOL's server: `ok' when its address answers — at once, or after its :start command as a drgnx job (`ollama
@@ -778,6 +829,172 @@ step ran before: keep it or change it.  Without interaction: what was found, and
       (drgnx-search-setup (drgnx-search-setup--current-root) :interactive t)
     (drgnx-search-setup-detect)))
 
+;;;; Step 6: Agents — Claude Code
+
+(defvar drgnx-onboard-agent-wait 10 "Seconds the claude profile's agent has to answer the ACP initialize.")
+(defvar drgnx-onboard-login-wait 15 "Seconds `claude auth status' has to answer.")
+
+(defconst drgnx-onboard-login-header "Type /login, finish in the browser, then press Done in the Welcome"
+  "The header line of the terminal Claude Code's login happens in.")
+
+(declare-function drgnx-agents-profile "drgnx-agents")
+(declare-function drgnx-acp-start "drgnx-acp")
+(declare-function drgnx-acp-request "drgnx-acp")
+(declare-function drgnx-acp-stop "drgnx-acp")
+(declare-function make-term "term")
+(declare-function term-char-mode "term")
+
+(defun drgnx-onboard--claude-missing ()
+  "What of Claude Code is not here, in the order to install it: `claude' (on the path or in ~/.local/bin — a VS
+Code extension's own copy does not count), Node (only when the adapter is missing too) and the adapter."
+  (let ((adapter (drgnx-onboard--program 'claude-agent-acp)))
+    (delq nil (list (and (not (drgnx-onboard--program 'claude)) 'claude)
+                    (and (not adapter) (not (drgnx-onboard--program 'node)) 'node)
+                    (and (not adapter) 'claude-agent-acp)))))
+
+(defun drgnx-onboard--install-text (tool)
+  "The command that installs TOOL here, as text: Homebrew's, the installer's, npm's, the one to run in a terminal."
+  (let* ((r (alist-get tool drgnx-onboard-install-recipes))
+         (p (plist-get r (if (eq (drgnx-platform) 'macos) :macos :linux)))
+         (job (plist-get p :job)))
+    (cond ((plist-get p :install) (string-join (plist-get p :install) " "))
+          ((equal (seq-take job 2) '("bash" "-c")) (nth 2 job))
+          (job (string-join job " "))
+          ((drgnx-onboard--linux-shell p))
+          (t (format "install %s from %s" (plist-get r :name) (plist-get p :page))))))
+
+(defun drgnx-onboard--on-path (tool)
+  "When TOOL is installed where this Emacs's PATH does not reach (~/.local/bin, beside brew), put its directory on
+the PATH of this Emacs (the agent's `#!/usr/bin/env node' needs it): the directory added, else nil."
+  (when-let* ((program (drgnx-onboard--program tool))
+              (dir (directory-file-name (file-name-directory program)))
+              ((not (executable-find (file-name-nondirectory program)))))
+    (add-to-list 'exec-path dir)
+    (setenv "PATH" (concat dir path-separator (getenv "PATH")))
+    dir))
+
+(defun drgnx-onboard--claude-login-state (claude)
+  "Is CLAUDE logged in: `yes', `no' or `unknown' (a CLI without `auth status', or one that does not answer)?  Asks
+`claude auth status' and reads only its loggedIn answer — never Claude's credentials."
+  (let* ((out "")
+         (p (make-process :name "drgnx-claude-auth" :command (list claude "auth" "status") :connection-type 'pipe :noquery t
+                          :filter (lambda (_p s) (setq out (concat out s))))))
+    (unless (drgnx-onboard--wait (lambda () (not (process-live-p p))) drgnx-onboard-login-wait)
+      (delete-process p))
+    (cond ((string-match "\"loggedIn\"[ \t]*:[ \t]*\\(true\\|false\\)" out)
+           (if (equal (match-string 1 out) "true") 'yes 'no))
+          ((and (not (process-live-p p)) (eql (process-exit-status p) 0)) 'yes)
+          (t 'unknown))))
+
+(defun drgnx-onboard--claude-login-terminal (claude)
+  "A terminal (`term') running CLAUDE, with the header telling what to do: its own login happens there."
+  (require 'term)
+  (let ((buf (make-term "Claude login" claude)))
+    (with-current-buffer buf
+      (term-char-mode)
+      (setq header-line-format drgnx-onboard-login-header))
+    (pop-to-buffer buf)
+    buf))
+
+(defun drgnx-onboard--claude-profile ()
+  "Start the `claude' agent profile's program, ask it ACP initialize and stop it: (t . TEXT) when it answers within
+`drgnx-onboard-agent-wait' seconds, else (nil . WHY)."
+  (require 'drgnx-agents)
+  (make-directory (drgnx-state-dir) t)
+  (let* ((command (plist-get (cdr (drgnx-agents-profile "claude")) :command))
+         (answer nil) (ended nil) (conn nil))
+    (drgnx-onboard--say "Starting the claude profile's agent…")
+    (condition-case err
+        (setq conn (drgnx-acp-start command :cwd (drgnx-state-dir)
+                                    :on-exit (lambda (_c status stderr) (setq ended (cons status stderr)))))
+      (error (setq answer (cons nil (list :message (error-message-string err))))))
+    (unwind-protect
+        (progn
+          (when conn
+            (drgnx-acp-request conn "initialize"
+                               '(:protocolVersion 1 :clientCapabilities (:fs (:readTextFile t :writeTextFile t) :terminal :false))
+                               (lambda (r) (setq answer r)))
+            (drgnx-onboard--wait (lambda () answer) drgnx-onboard-agent-wait)
+            (when answer (drgnx-onboard--wait (lambda () (or ended (not (cdr answer)))) 1)))
+          (cond ((null answer)
+                 (cons nil (format "%s did not answer within %d second%s" (string-join command " ") drgnx-onboard-agent-wait
+                                   (if (= drgnx-onboard-agent-wait 1) "" "s"))))
+                ((cdr answer)
+                 (cons nil (if ended
+                               (format "%s ended at once (exit %s)%s" (string-join command " ") (car ended)
+                                       (if-let* ((line (car (last (split-string (or (cdr ended) "") "[\r\n]+" t "[ \t]+")))))
+                                           (concat ": " line) ""))
+                             (format "%s: %s" (string-join command " ") (plist-get (cdr answer) :message)))))
+                (t (let ((info (plist-get (car answer) :agentInfo)))
+                     (cons t (format "the claude profile answered%s"
+                                     (if (plist-get info :name)
+                                         (format " (%s)" (string-trim (format "%s %s" (plist-get info :name) (or (plist-get info :version) ""))))
+                                       "")))))))
+      (when conn (drgnx-acp-stop conn)))))
+
+(defun drgnx-onboard--agents-failed (tool result)
+  "(fail MESSAGE) of TOOL's failed install RESULT (fail REASON LOG): why, how to retry, where the log is."
+  (pcase-let ((`(,_ ,reason ,log) result))
+    (list 'fail (concat reason
+                        (unless (string-search "step again" reason) " — run this step again to retry (what is installed stays)")
+                        (when (eq tool 'claude-agent-acp) (format ", or in a terminal: %s" (drgnx-onboard--install-text tool)))
+                        (if log (format " (log: %s)" (abbreviate-file-name log)) "")))))
+
+(defun drgnx-onboard--claude-check (ctx)
+  "Claude Code is installed: its login (`claude auth status'), then the claude profile's agent (ACP initialize).  A
+login that is missing — or that the CLI cannot tell — is offered a terminal running `claude' (interactive); the step
+then ends `info', waiting for you to run it again (Done).  A login that cannot be told never fails the step."
+  (let* ((interactive (plist-get ctx :interactive))
+         (added (delq nil (list (drgnx-onboard--on-path 'node) (drgnx-onboard--on-path 'claude-agent-acp))))
+         (claude (drgnx-onboard--program 'claude))
+         (login (progn (drgnx-onboard--say "Checking Claude Code's login…") (drgnx-onboard--claude-login-state claude)))
+         (unknown (eq login 'unknown))
+         (open (and interactive (not (eq login 'yes))
+                    (y-or-n-p (if unknown
+                                  "drgnx could not tell whether Claude Code is logged in (this claude has no `auth status'): open a terminal to log in with claude? "
+                                "Claude Code is not logged in: open a terminal to log in with claude? ")))))
+    (cond
+     (open
+      (drgnx-onboard--claude-login-terminal claude)
+      (list 'info "Claude Code is installed; a terminal with claude is open — type /login, finish in the browser, then press RET on this row in the Welcome (Done) or run this step again"))
+     ((eq login 'no)
+      (list 'info "Claude Code is installed but not logged in — run claude in a terminal and type /login (or run this step in the drgnx app, which opens that terminal), then this step again"))
+     (t
+      (pcase-let ((`(,ok . ,text) (drgnx-onboard--claude-profile)))
+        (if (not ok)
+            (list 'fail (format "Claude Code is installed, but %s — run claude-agent-acp in a terminal to see why, then this step again" text))
+          (list (if unknown 'info 'ok)
+                (format "Claude Code is installed%s; %s — Agents: New Agent Session… starts it%s"
+                        (if unknown ", but drgnx could not tell whether it is logged in (run claude and type /login if it is not)" ", logged in")
+                        text
+                        (if added (format " (added %s to this Emacs's PATH: add it to your shell's PATH too)" (string-join added ", ")) "")))))))))
+
+(defun drgnx-onboard--agents-step (ctx)
+  "Claude Code for the agent panel: `claude' (a VS Code extension's bundled copy does not count), Node and the
+adapter `claude-agent-acp' that drgnx's `claude' profile runs, installed after asking (Homebrew on macOS; Claude's
+installer, your distro's Node in a terminal and npm on Linux); its login (a terminal running `claude'); the profile
+started and asked ACP initialize.  Without interaction nothing is installed: the step says what would."
+  (unwind-protect
+      (condition-case nil
+          (let ((missing (drgnx-onboard--claude-missing)))
+            (if (not missing) (drgnx-onboard--claude-check ctx)
+              (let* ((commands (string-join (mapcar #'drgnx-onboard--install-text missing) "; "))
+                     (sudo (if (seq-some (lambda (tool) (string-prefix-p "sudo " (drgnx-onboard--install-text tool))) missing)
+                               " (the sudo one is for you to run in a terminal: it asks for your password)" "")))
+                (if (not (and (plist-get ctx :interactive)
+                              (y-or-n-p (format "Set up Claude Code: %s%s? " commands sudo))))
+                    (list 'info (format "Claude Code is not set up%s — to set it up: %s%s%s"
+                                        (if (plist-get ctx :interactive) "" " (nothing is installed without asking)") commands sudo
+                                        (if (memq 'claude missing) "; then log in: run claude and type /login" "")))
+                  (catch 'stop
+                    (dolist (tool missing)
+                      (let ((result (drgnx-onboard--install tool ctx)))
+                        (unless (eq result 'ok) (throw 'stop (drgnx-onboard--agents-failed tool result)))))
+                    (drgnx-onboard--claude-check ctx))))))
+        (quit (list 'fail "stopped (C-g) — run this step again to go on")))
+    (setq drgnx-onboard--progress nil)
+    (drgnx-onboard--refresh-welcome)))
+
 ;;;; Step 7: daemon and desktop
 
 (declare-function drgnx-pkg-service-unit "drgnx-pkg")
@@ -880,8 +1097,8 @@ keep running.  Saved (session.eld); returns the sentence for the step's result."
                            :doc "An embedding model found and tested, the current project indexed in the background (the same as Set Up Semantic Search); without interaction it only reports what is there"
                            :run #'drgnx-onboard--search-step)
 (drgnx-onboard-define-step 'agents :order 60 :title "Agents"
-                           :doc "Agent CLIs found (Claude, gryphn); profiles and MCP servers come with the agents milestone"
-                           :run (drgnx-onboard--detect '("claude" "gry") "agent profiles and MCP servers are set up by the agents step (M7)"))
+                           :doc "Claude Code for the agent panel: installed if missing (asked), your own login in a terminal, the claude profile started and checked; without interaction it only says what would set it up"
+                           :run #'drgnx-onboard--agents-step)
 (drgnx-onboard-define-step 'daemon :order 70 :title "Daemon and Desktop"
                            :doc "Keep running in the background or quit when the last window closes; macOS: the drgnx app; Linux: the systemd user service, the desktop entry and EDITOR — installed only if you say so"
                            :run #'drgnx-onboard--daemon-step)

@@ -29,7 +29,7 @@ The exit code is 1 when a step failed. `drgnx doctor` reports onboarding too.
 | Import Projects | finds git repositories under `~/workspace`, `~/code`, `~/src`, `~/projects`, `~/git` (or `--roots`) and in gryphn's `~/.config/gryphn/projects.tsv`; you pick (empty: all; `(none)`: none; several are separated by a comma, or by `;` or `|` when a path has a comma — the prompt says which). Each goes on the **board**; you choose which projects also bring their open TODOs (`--todos`: all of them; default: none) |
 | AI Providers | finds the model runners running here (Ollama, llama.cpp, LM Studio, vLLM, … — [ai.md](ai.md)) and the providers you have a key for, picks a model for each role (Inline Completion prefers a code model; Edit and Chat prefer OpenRouter when it has a key), makes one test call per role and keeps the roles that answered — a role you chose that still answers stays. It also reports the GPU's free memory (on a Mac: two thirds of the RAM, which Apple silicon shares with the GPU). **When nothing answers, it sets AI up** ([below](#setting-ai-up)); run again, it asks whether to keep what works or change it. With `--non-interactive` it installs, downloads and asks nothing: it reports what it found and the commands that would set AI up. Change a role later: AI: Choose Provider/Model |
 | Semantic Search | the same as **Set Up Semantic Search** ([search.md](search.md)). Run interactively (Help → Welcome) it finds an embedding model, tests it with one call and starts indexing the current project in the background — or, when that index is current, runs a test query. With `--non-interactive` it only reports: whether an embedding model is running (and how to start TEI or Ollama if not), and how many of the projects drgnx knows have an index; it starts nothing |
-| Agents | lists agent CLIs found (Claude, gryphn's `gry`); profiles and MCP servers arrive with the agents milestone |
+| Agents | sets up **Claude Code** for the agent panel ([below](#setting-claude-code-up)): `claude`, Node and the `claude-agent-acp` adapter installed if missing (asked first), your own login in a terminal, the `claude` agent profile started and checked. With `--non-interactive` it installs nothing and lists the commands that would set it up |
 | Daemon and Desktop | first asks once: "Keep drgnx running in the background when you close its last window? (recommended, like VS Code)" — yes keeps it running (reopening is instant), no quits it with its last window ([opening.md](opening.md#keep-running-or-quit)); saved in `~/.config/drgnx/session.eld`, changed later with Preferences: Keep drgnx Running in the Background. With `--non-interactive` nothing is asked: the choice made before stays, else drgnx keeps running. Then, **on macOS:** the drgnx app — if `~/Applications/drgnx.app` is missing, it offers to install it ([opening.md](opening.md#on-macos-the-drgnx-app)); with `--non-interactive` it installs nothing and says how (`drgnx macos-app`). No systemd, no desktop entry, nothing starts at login. **On Linux:** writes `~/.config/drgnx/systemd/drgnx.service` and `~/.config/drgnx/applications/drgnx.desktop` and prints how to install them (and `EDITOR`/`VISUAL`); run interactively, it installs them into `~/.config/systemd/user/` and `~/.local/share/applications/` if you say yes. The result says the choice and where to change it |
 | Portability | lists chezmoi and age; setting up a second machine is documented with the platforms milestone |
 | Finish | runs `drgnx doctor` and says what is left |
@@ -85,6 +85,42 @@ search needs a local model or TEI, and the Semantic Search step says how. `drgnx
 never reads the Keychain or keyring, so there it asks for no key: set `OPENROUTER_API_KEY` for the CLI, or run the
 step in the drgnx app.
 
+## Setting Claude Code up
+
+The Agents step makes the built-in `claude` agent profile work: Claude Code through `claude-agent-acp`, signed in
+with **your own Claude login** (subscription or API key) — drgnx never reads Claude's tokens or credentials files.
+Only a `claude` on your `PATH` (or in `~/.local/bin`) counts: the copy bundled in a VS Code extension is not used.
+When something is missing it asks once, listing every command, and runs nothing until you say yes:
+
+| | macOS | Linux |
+|---|---|---|
+| Claude Code (`claude`) | `brew install --cask claude-code` | Claude's official installer, `curl -fsSL https://claude.ai/install.sh \| bash` (into `~/.local/bin`, no `sudo`) |
+| Node.js, for the adapter (only when `claude-agent-acp` is missing too) | `brew install node` | your distro's package — `sudo dnf install nodejs npm`, `sudo apt-get install nodejs npm` or `sudo pacman -S nodejs npm` — which needs `sudo`: drgnx copies the command for you to run in a terminal and waits for `npm` to show up (up to ten minutes; `C-g` stops) |
+| The adapter (`claude-agent-acp`) | `npm install -g @zed-industries/claude-agent-acp` | `npm install -g --prefix ~/.local @zed-industries/claude-agent-acp` (no `sudo`: a system Node's global directory is not yours) |
+
+The commands that need no password run as drgnx jobs with a log and progress in the Welcome (`C-g` stops them). If
+one fails, the result says why (the log's last line), where the log is, and how to retry — run the step again, or
+the command in a terminal; a new run skips what is installed. Where the adapter or Node ends up outside your
+`PATH` (`~/.local/bin`, or beside Homebrew), drgnx adds that directory to the `PATH` of the running Emacs and says so;
+put it in your shell's `PATH` too for the next start.
+
+**The login.** The step asks `claude auth status` (exit status and its `loggedIn` answer only). When Claude Code is
+not logged in — or this `claude` has no `auth status`, in which case drgnx cannot tell and offers the login anyway —
+it asks to open a terminal running `claude`. The terminal's header line says **Type /login, finish in the browser,
+then press Done in the Welcome**. The step does not wait for you: it ends as "info", and when you are logged in, press
+`RET` on its row in the Welcome (that is Done — it runs the step again) and it goes on. Declining the offer when
+drgnx could not tell still checks the agent; the result says the login was not verified. It never fails the step on
+that alone.
+
+**The check.** With Claude Code logged in, it starts the `claude` profile's program (`claude-agent-acp`, or what
+your `agents.eld` says), sends the ACP `initialize` request, waits up to ten seconds for the answer and stops it
+again — `ok` when it answers; otherwise the step fails, saying whether the program ended at once (with the end of
+its error output) or did not answer. Then Agents: New Agent Session… starts it in the agent panel
+([agents.md](agents.md)).
+
+With `--non-interactive` nothing is installed, no terminal opens, no question is asked: the step is "info" and lists
+exactly the commands that would set it up; when everything is installed it only checks the login and the agent.
+
 ## The board
 
 Projects go on an org file, `board.org` in your `org-directory` (`drgnx-projects-board-file` to change it), one
@@ -121,7 +157,11 @@ The scan goes at most three levels below each root, never into a repository, a h
 `test/unit/onboard-test.el` (fixture repositories and boards in temp dirs: order and resume, failures, never
 asking when non-interactive, presets, the scan's bounds, importing twice, an existing gryphn board, an unsaved
 board, the daemon files, step 7 on macOS and on Linux with its question, the first window's Welcome, the whole flow
-twice, the CLI), `test/unit/macos-test.el` (the applet's quoting, the document types, the app built with fake
+twice, the CLI; the Agents step on a pretend Mac and a pretend Linux with fake `brew`, `npm`, `curl`, `claude` and the
+mock ACP agent as `claude-agent-acp`, on a PATH of fakes only: the commands in order and asked once, nothing run
+without interaction or a yes, Linux's installer and the `sudo` Node left to you, a VS Code extension's `claude` not
+counting, the login terminal and its header, a `claude` with no `auth status`, the profile answering, dying and
+silent, an npm failure and its retry), `test/unit/macos-test.el` (the applet's quoting, the document types, the app built with fake
 `osacompile`/`plutil`/`codesign`/`lsregister`), `test/unit/ai-onboard-test.el` (the AI step against a mock model server: roles set and tested, a working choice kept, nothing running; setting AI up on a pretend Mac with fake `brew`, `ollama`, `lms`, `open`, `sysctl` and `security`, the fake servers being the mock: the room and the models for it, Ollama and LM Studio installed, started, downloaded, every feature tested, LM Studio without `lms`, the OpenRouter key into the Keychain and none asked in the CLI, a failed download and the run after it, nothing installed without interaction, the progress row, Chat's module asked for or reported, the runner started again when it is down or refuses — not when it answers or a job runs it, at most once a minute, never in batch) and `test/live/drgnx-onboard-test.el` (a fresh GUI
 session onboards non-interactively; the board has the projects and TODOs, no step or doctor check fails, Welcome
 opens in the editor, a second run changes nothing).

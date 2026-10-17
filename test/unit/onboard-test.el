@@ -532,4 +532,235 @@ Returns (RESULT PROMPTS)."
         (should (string-match-p "\\`1 projects on the board" (nth 2 r)))
         (should (string-search (concat ":PROJECT_ROOT: " odd) (drgnx-onboard-test--board)))))))
 
+;;;; Step 6: Claude Code — installed with permission, its own login, the agent checked
+
+(require 'drgnx-jobs)
+(require 'drgnx-acp)
+(require 'drgnx-agents)
+
+(defun drgnx-onboard-test--script (file text)
+  (make-directory (file-name-directory file) t)
+  (write-region (concat "#!/bin/sh\n" text) nil file nil 'silent)
+  (set-file-modes file #o755))
+
+(defun drgnx-onboard-test--slurp (file)
+  (if (file-exists-p file) (with-temp-buffer (insert-file-contents file) (buffer-string)) ""))
+
+(defmacro drgnx-onboard-test--claude (platform &rest body)
+  "BODY on PLATFORM (`macos' or `linux') with a temp HOME and a PATH of fakes only (the basic tools linked in): nothing
+is installed — `brew install --cask claude-code', `curl … | bash' (the Linux installer: a fake script), `brew install
+node' and `npm install -g PKG' put the fakes in TPL into BIN (`npm … --prefix P' into P/bin).  `claude auth status'
+says logged in when HOME has .logged-in (FAKE_OLD_CLAUDE: an old CLI that has no auth); `claude' alone waits.
+`claude-agent-acp' is the mock ACP agent (FAKE_ACP: a script for it).  Every call is logged to CALLS."
+  (declare (indent 1))
+  `(let* ((root (file-name-as-directory (make-temp-file "drgnx-claude" t)))
+          (bin (concat root "bin/")) (tpl (concat root "tpl/")) (home (concat root "home/")) (calls (concat root "calls"))
+          (real-path (getenv "PATH"))
+          (basics (mapcar #'executable-find '("sh" "bash" "env" "cat" "cp" "mkdir" "sleep" "setsid" "date")))
+          (log-line (lambda (name) (format "printf '%%s\\n' \"%s $*\" >> %s\n" name calls)))
+          (process-environment (append (list (concat "HOME=" home) (concat "DRGNX_CONFIG_DIR=" root "config")
+                                             (concat "XDG_STATE_HOME=" root "state") "DRGNX_JOBS_LAUNCHER=detached"
+                                             (concat "PATH=" bin))
+                                       process-environment))
+          (exec-path (list bin))
+          (drgnx-onboard--progress nil) (drgnx-agents-profiles nil) (drgnx-onboard--current nil))
+     (unwind-protect
+         (progn
+           (make-directory bin t) (make-directory home t) (make-directory (concat root "config") t)
+           (dolist (tool basics) (make-symbolic-link tool (concat bin (file-name-nondirectory tool))))
+           (drgnx-onboard-test--script
+            (concat tpl "claude")
+            (concat (funcall log-line "claude")
+                    "case \"$1 $2\" in\n"
+                    " 'auth status') [ -n \"$FAKE_OLD_CLAUDE\" ] && { echo \"error: unknown command 'auth'\"; exit 1; }\n"
+                    "   if [ -e \"$HOME/.logged-in\" ]; then echo '{\"loggedIn\": true}'; exit 0; fi; echo '{\"loggedIn\": false}'; exit 1;;\n"
+                    " *) exec sleep 30;;\nesac\n"))
+           (drgnx-onboard-test--script
+            (concat tpl "claude-agent-acp")
+            (format "if [ -n \"$FAKE_ACP\" ]; then eval \"$FAKE_ACP\"; fi\nPATH=%s; exec %s --batch -Q -l %s\n"
+                    (shell-quote-argument real-path)     ; the emacs launcher script needs the real one
+                    (shell-quote-argument (expand-file-name invocation-name invocation-directory))
+                    (shell-quote-argument (expand-file-name "test/fixtures/mock-acp.el" drgnx-dir))))
+           (drgnx-onboard-test--script (concat tpl "node") "exit 0\n")
+           (drgnx-onboard-test--script
+            (concat bin "brew")
+            (concat (funcall log-line "brew")
+                    "case \"$*\" in\n 'install --cask claude-code') echo Pouring claude-code; cp " tpl "claude " bin "claude;;\n"
+                    " 'install node') cp " tpl "node " bin "node; cp " tpl "npm " bin "npm;;\nesac\n"))
+           (drgnx-onboard-test--script
+            (concat tpl "npm")
+            (concat (funcall log-line "npm")
+                    "[ \"$1 $2\" = 'install -g' ] || exit 0\nshift 2; d=" bin "\n"
+                    "if [ \"$1\" = --prefix ]; then d=\"$2/bin\"; mkdir -p \"$d\"; shift 2; fi\n"
+                    "[ -n \"$FAKE_NPM_FAIL\" ] && { echo 'npm ERR! code EACCES'; exit 243; }\n"
+                    "cp " tpl "claude-agent-acp \"$d/claude-agent-acp\"\n"))
+           (drgnx-onboard-test--script
+            (concat bin "curl")
+            (concat (funcall log-line "curl")
+                    "echo 'mkdir -p $HOME/.local/bin; cp " tpl "claude $HOME/.local/bin/claude; echo Installed'\n"))
+           (drgnx-onboard-test--script (concat bin "dnf") "exit 0\n")
+           (cl-letf (((symbol-function 'drgnx-platform) (lambda () ,platform)))
+             ,@body))
+       (dolist (j (drgnx-jobs-list)) (drgnx-jobs-stop (plist-get j :id)))
+       (when-let* ((b (get-buffer "*Claude login*")))
+         (let ((kill-buffer-query-functions nil)) (kill-buffer b)))
+       (delete-directory root t))))
+
+(defun drgnx-onboard-test--have (bin &rest tools)
+  "Put the fakes TOOLS (names under BIN's sibling tpl/) in place, as an installation would."
+  (dolist (tool tools)
+    (copy-file (concat (file-name-directory (directory-file-name bin)) "tpl/" tool) (concat bin tool) t)))
+
+(defun drgnx-onboard-test--asked (answers)
+  "A `y-or-n-p' answering from ANSWERS ((REGEXP . ANSWER)…) and recording the prompts in the variable it returns
+as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an error."
+  (let ((cell (list nil)))
+    (cons (lambda (prompt)
+            (push prompt (car cell))
+            (let ((a (seq-find (lambda (p) (string-match-p (car p) prompt)) answers)))
+              (unless a (error "Unexpected question: %s" prompt))
+              (cdr a)))
+          cell)))
+
+(ert-deftest drgnx-onboard/claude-missing-is-installed-with-permission ()
+  (drgnx-onboard-test--claude 'macos
+    (let ((asked (drgnx-onboard-test--asked '(("\\`Set up Claude Code" . t)))))
+      ;; without interaction: nothing installed, the commands said, no job
+      (let ((r (drgnx-onboard--agents-step '(:interactive nil))))
+        (should (eq (car r) 'info))
+        (should (string-match-p "brew install --cask claude-code; brew install node; npm install -g @zed-industries/claude-agent-acp"
+                                (cadr r)))
+        (should-not (string-match-p "gry" (cadr r))))
+      (should (equal (split-string (drgnx-onboard-test--slurp calls) "\n" t) nil))
+      (should-not (drgnx-jobs-list))
+      ;; interactive: asked once with the commands, then installed in order, logged in, the agent checked
+      (write-region "" nil (concat home ".logged-in"))
+      (let ((r (cl-letf (((symbol-function 'y-or-n-p) (car asked))) (drgnx-onboard--agents-step '(:interactive t)))))
+        (should (equal (length (car (cdr asked))) 1))
+        (should (string-match-p "brew install --cask claude-code; brew install node; npm install -g @zed-industries/claude-agent-acp"
+                                (car (car (cdr asked)))))
+        (should (equal r (list 'ok (cadr r))))
+        (should (string-match-p "claude profile" (cadr r))))
+      (should (equal (seq-take (split-string (drgnx-onboard-test--slurp calls) "\n" t) 3)
+                     '("brew install --cask claude-code" "brew install node"
+                       "npm install -g @zed-industries/claude-agent-acp"))))))
+
+(ert-deftest drgnx-onboard/claude-missing-says-no-and-nothing-is-installed ()
+  (drgnx-onboard-test--claude 'macos
+    (let ((asked (drgnx-onboard-test--asked '(("\\`Set up Claude Code" . nil)))))
+      (let ((r (cl-letf (((symbol-function 'y-or-n-p) (car asked))) (drgnx-onboard--agents-step '(:interactive t)))))
+        (should (eq (car r) 'info))
+        (should (string-match-p "brew install --cask claude-code" (cadr r))))
+      (should (equal (drgnx-onboard-test--slurp calls) "")))))
+
+(ert-deftest drgnx-onboard/claude-on-linux-uses-its-installer-and-your-terminal-for-sudo ()
+  (drgnx-onboard-test--claude 'linux
+    (let* ((asked (drgnx-onboard-test--asked '(("\\`Set up Claude Code" . t))))
+           (drgnx-onboard-app-wait 10)
+           (r0 (drgnx-onboard--agents-step '(:interactive nil))))
+      (should (string-match-p "curl -fsSL https://claude.ai/install.sh | bash; sudo dnf install nodejs npm; npm install -g --prefix ~/.local @zed-industries/claude-agent-acp"
+                              (cadr r0)))
+      (write-region "" nil (concat home ".logged-in"))
+      ;; Node needs sudo: shown and copied, then the step waits for npm to appear — here a moment later
+      (run-at-time 0.6 nil (lambda () (drgnx-onboard-test--have bin "npm")))
+      (let ((r (cl-letf (((symbol-function 'y-or-n-p) (car asked))) (drgnx-onboard--agents-step '(:interactive t)))))
+        (should (equal (car kill-ring) "sudo dnf install nodejs npm"))
+        (should (equal r (list 'ok (cadr r)))))
+      (should (file-executable-p (concat home ".local/bin/claude")))           ; the official installer's place
+      (should (file-executable-p (concat home ".local/bin/claude-agent-acp")))  ; npm --prefix ~/.local: no sudo
+      (should (string-match-p (format "npm install -g --prefix %s.local @zed-industries/claude-agent-acp" home)
+                              (drgnx-onboard-test--slurp calls))))))
+
+(ert-deftest drgnx-onboard/a-vs-code-extensions-claude-does-not-count ()
+  (drgnx-onboard-test--claude 'macos
+    (drgnx-onboard-test--script (concat home ".vscode/extensions/anthropic.claude-code-2/resources/native-binary/claude") "exit 0\n")
+    (drgnx-onboard-test--have bin "npm" "claude-agent-acp")
+    (let ((r (drgnx-onboard--agents-step '(:interactive nil))))
+      (should (eq (car r) 'info))
+      (should (string-match-p "brew install --cask claude-code" (cadr r)))
+      (should-not (string-match-p "brew install node" (cadr r))))))
+
+(defmacro drgnx-onboard-test--installed (&rest body)
+  "BODY with Claude Code, npm and the adapter in place (inside `drgnx-onboard-test--claude')."
+  `(progn (drgnx-onboard-test--have bin "claude" "claude-agent-acp" "npm") ,@body))
+
+(ert-deftest drgnx-onboard/claude-not-logged-in-opens-its-login ()
+  (drgnx-onboard-test--claude 'macos
+    (drgnx-onboard-test--installed
+     (let ((asked (drgnx-onboard-test--asked '(("log in" . t)))))
+       ;; without interaction: no terminal, only what to do
+       (let ((r (drgnx-onboard--agents-step '(:interactive nil))))
+         (should (eq (car r) 'info))
+         (should (string-match-p "/login" (cadr r)))
+         (should-not (get-buffer "*Claude login*")))
+       (let ((r (cl-letf (((symbol-function 'y-or-n-p) (car asked))) (drgnx-onboard--agents-step '(:interactive t)))))
+         (should (eq (car r) 'info))
+         (should (string-match-p "Done" (cadr r)))
+         (should (string-match-p "/login" (cadr r))))
+       (let ((b (get-buffer "*Claude login*")))
+         (should b)
+         (should (process-live-p (get-buffer-process b)))
+         (should (equal (car (last (process-command (get-buffer-process b)))) (concat bin "claude")))   ; term runs it through a shell
+         (should (equal (buffer-local-value 'header-line-format b)
+                        "Type /login, finish in the browser, then press Done in the Welcome")))
+       ;; the user logged in and presses Done (runs the step again): the agent is checked, no second terminal
+       (write-region "" nil (concat home ".logged-in"))
+       (let ((r (drgnx-onboard--agents-step '(:interactive t))))
+         (should (equal r (list 'ok (cadr r)))))
+       (should (= 1 (length (car (cdr asked)))))))))
+
+(ert-deftest drgnx-onboard/a-claude-that-cannot-say-is-offered-the-login-and-never-fails-the-step ()
+  (drgnx-onboard-test--claude 'macos
+    (drgnx-onboard-test--installed
+     (let ((process-environment (cons "FAKE_OLD_CLAUDE=1" process-environment))
+           (asked (drgnx-onboard-test--asked '(("log in" . nil)))))
+       (let ((r (cl-letf (((symbol-function 'y-or-n-p) (car asked))) (drgnx-onboard--agents-step '(:interactive t)))))
+         (should (= 1 (length (car (cdr asked)))))                   ; the login was offered
+         (should (eq (car r) 'info))                                 ; not a failure
+         (should (string-match-p "could not tell" (cadr r)))
+         (should (string-match-p "claude profile" (cadr r))))))))    ; and the agent was still checked
+
+(ert-deftest drgnx-onboard/the-claude-profile-is-checked ()
+  (drgnx-onboard-test--claude 'macos
+    (drgnx-onboard-test--installed
+     (write-region "" nil (concat home ".logged-in"))
+     ;; the mock agent answers initialize: ok (without interaction too), and nothing is left running
+     (let ((r (drgnx-onboard--agents-step '(:interactive nil))))
+       (should (equal r (list 'ok (cadr r))))
+       (should (string-match-p "claude profile answered" (cadr r))))
+     (should-not (seq-find (lambda (p) (string-prefix-p "drgnx-acp" (process-name p))) (process-list)))
+     ;; an agent that dies at once: a failure that says why
+     (let* ((process-environment (cons "FAKE_ACP=echo 'cannot find module' >&2; exit 1" process-environment))
+            (r (drgnx-onboard--agents-step '(:interactive nil))))
+       (should (eq (car r) 'fail))
+       (should (string-match-p "claude-agent-acp" (cadr r))))
+     ;; one that never answers: after the wait
+     (let* ((process-environment (cons "FAKE_ACP=exec sleep 30" process-environment))
+            (drgnx-onboard-agent-wait 1)
+            (r (drgnx-onboard--agents-step '(:interactive nil))))
+       (should (eq (car r) 'fail))
+       (should (string-match-p "did not answer within 1 second" (cadr r)))))))
+
+(ert-deftest drgnx-onboard/an-npm-failure-says-how-to-retry ()
+  (drgnx-onboard-test--claude 'macos
+    (let ((asked (drgnx-onboard-test--asked '(("\\`Set up Claude Code" . t))))
+          (process-environment (cons "FAKE_NPM_FAIL=1" process-environment)))
+      (let ((r (cl-letf (((symbol-function 'y-or-n-p) (car asked))) (drgnx-onboard--agents-step '(:interactive t)))))
+        (should (eq (car r) 'fail))
+        (should (string-match-p "EACCES" (cadr r)))                  ; why: the log's last line
+        (should (string-match-p "run this step again" (cadr r)))      ; how to retry
+        (should (string-match-p "in a terminal: npm install -g @zed-industries/claude-agent-acp" (cadr r)))
+        (should (string-match-p "log: " (cadr r))))
+      ;; Claude Code and Node were installed; the retry installs only the adapter
+      (should (file-executable-p (concat bin "claude")))
+      (let* ((process-environment (cons "FAKE_NPM_FAIL=" process-environment))
+             (asked (drgnx-onboard-test--asked '(("\\`Set up Claude Code: npm install -g" . t)))))
+        (write-region "" nil (concat home ".logged-in"))
+        (let ((r (cl-letf (((symbol-function 'y-or-n-p) (car asked))) (drgnx-onboard--agents-step '(:interactive t)))))
+          (should (equal r (list 'ok (cadr r)))))))))
+
+(ert-deftest drgnx-onboard/the-agents-step-and-its-docs ()
+  (should (string-match-p "Claude" (plist-get (alist-get 'agents drgnx-onboard--steps) :doc)))
+  (should (eq (plist-get (alist-get 'agents drgnx-onboard--steps) :run) #'drgnx-onboard--agents-step)))
+
 ;;; onboard-test.el ends here
