@@ -14,6 +14,21 @@ emacs_bin() { # the one Emacs every subcommand runs in: $DRGNX_EMACS, else the o
   echo emacs
 }
 
+emacsclient_bin() { # the emacsclient of emacs_bin's Emacs: beside it (Emacs.app: Contents/MacOS/bin/), else PATH's
+  local emacs real dir
+  emacs="$(emacs_bin)"
+  [[ "$emacs" == */* ]] || emacs="$(command -v "$emacs" 2>/dev/null || true)"
+  if [[ -n "$emacs" ]]; then
+    real="$(readlink -f "$emacs" 2>/dev/null || true)"
+    for dir in "${emacs%/*}" "${real%/*}"; do
+      [[ -n "$dir" ]] || continue
+      if [[ -x "$dir/emacsclient" ]]; then printf '%s\n' "$dir/emacsclient"; return; fi
+      if [[ -x "$dir/bin/emacsclient" ]]; then printf '%s\n' "$dir/bin/emacsclient"; return; fi
+    done
+  fi
+  echo emacsclient
+}
+
 cmd_doctor() { # [--json] [--dev] — checks run inside the Emacs drgnx uses (core/drgnx-doctor.el)
   local emacs rc=0
   emacs="$(emacs_bin)"
@@ -136,9 +151,86 @@ cmd_test() {
   esac
 }
 
+## drgnx open / drgnx PATH — one drgnx, a daemon started on the first open (core/drgnx-session.el)
+
+client() { # emacsclient to drgnx's server ($DRGNX_SERVER_NAME, default drgnx); -a false: never starts an Emacs itself
+  "$(emacsclient_bin)" -a false -s "${DRGNX_SERVER_NAME:-drgnx}" "$@"
+}
+
+open_start() { # start drgnx's daemon (the systemd unit when it is enabled), wait ≤ 10 s for its server
+  local name="${DRGNX_SERVER_NAME:-drgnx}" log i
+  if [[ "$name" == drgnx ]] && command -v systemctl >/dev/null 2>&1 && systemctl --user is-enabled --quiet drgnx 2>/dev/null; then
+    systemctl --user start drgnx || return 1
+  else
+    log="${XDG_STATE_HOME:-$HOME/.local/state}/drgnx/daemon.log"
+    mkdir -p "${log%/*}"
+    # in its own session, outliving this shell: setsid, else perl (macOS), as core/drgnx-jobs.el does
+    if command -v setsid >/dev/null 2>&1; then
+      setsid -f "$(emacs_bin)" --bg-daemon="$name" --init-directory="$here/init" </dev/null >"$log" 2>&1
+    else
+      perl -MPOSIX -e 'fork and exit; POSIX::setsid(); exec @ARGV' \
+           "$(emacs_bin)" --bg-daemon="$name" --init-directory="$here/init" </dev/null >"$log" 2>&1
+    fi
+  fi
+  for ((i = 0; i < 100; i++)); do
+    client -e t >/dev/null 2>&1 && return 0
+    sleep 0.1
+  done
+  echo "drgnx: drgnx did not start within 10 s (its messages: ${log:-journalctl --user -u drgnx}; try: drgnx doctor)" >&2
+  return 1
+}
+
+elisp_string() { # $1 as the inside of an Emacs Lisp string literal
+  local s="${1//\\/\\\\}"
+  printf '%s' "${s//\"/\\\"}"
+}
+
+open_check() { # CI: start the daemon if needed, print its Emacs version, stop it again if this started it
+  local started="" out i
+  if ! client -e t >/dev/null 2>&1; then open_start || return 1; started=1; fi
+  if ! out="$(client -e '(emacs-version)' 2>&1)"; then
+    echo "drgnx: drgnx's server did not answer: $out" >&2
+    [[ -n "$started" ]] && client -e '(kill-emacs)' >/dev/null 2>&1
+    return 1
+  fi
+  out="${out#\"}"; printf '%s\n' "${out%\"}"
+  if [[ -n "$started" ]]; then
+    client -e '(kill-emacs)' >/dev/null 2>&1 || true
+    for ((i = 0; i < 50; i++)); do client -e t >/dev/null 2>&1 || return 0; sleep 0.1; done
+    echo "drgnx: the daemon this started did not stop" >&2; return 1
+  fi
+}
+
+cmd_open() { # [--check] [PATH…] — open PATHs (none: the windows as you left them) in drgnx, like code .
+  if [[ "${1:-}" == --check ]]; then open_check; return; fi
+  [[ "${1:-}" == -- ]] && shift
+  local p dir files=() dirs=()
+  for p in "$@"; do   # absolute, from here; a folder is the Explorer's, a file (new or not) an editor's
+    if [[ -d "$p" ]]; then
+      dirs+=("$(CDPATH='' cd -- "$p" && pwd)")
+    else
+      dir="$(dirname -- "$p")"
+      if [[ -d "$dir" ]]; then dir="$(CDPATH='' cd -- "$dir" && pwd)"; elif [[ "$dir" != /* ]]; then dir="$PWD/$dir"; fi
+      files+=("${dir%/}/$(basename -- "$p")")
+    fi
+  done
+  client -e t >/dev/null 2>&1 || open_start || return 1
+  if [[ "$(client -e '(drgnx-session-gui-frame-p)' 2>/dev/null)" != t ]]; then
+    client -n -c >/dev/null || return 1
+  fi
+  client -n -e '(drgnx-session-raise)' >/dev/null 2>&1 || true
+  if ((${#files[@]})); then client -n -- "${files[@]}" >/dev/null || return 1; fi
+  for p in ${dirs[@]+"${dirs[@]}"}; do
+    client -n -e "(drgnx-session-open-folder \"$(elisp_string "$p")\")" >/dev/null || return 1
+  done
+}
+
 usage() {
   cat <<'USAGE'
-usage: drgnx build              byte-compile drgnx (core, wb, modules); native compilation follows on load
+usage: drgnx PATH…             open folders and files in drgnx, like code . (docs/guide/opening.md)
+       drgnx open [PATH…]      the same; no PATH: drgnx with your windows (started in the background if needed)
+       drgnx open --check      start drgnx's daemon if needed, print its Emacs version, stop it if this started it
+       drgnx build             byte-compile drgnx (core, wb, modules); native compilation follows on load
        drgnx doctor [--json] [--dev]
                                is this machine ready for drgnx? (--dev: also the tools to develop it)
        drgnx test              batch tests
@@ -242,6 +334,8 @@ case "${1:-help}" in
   fmt) shift
         "$(emacs_bin)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
               -l drgnx-fmt -f drgnx-fmt-cli -- "$@" ;;
+  open) shift; cmd_open "$@" ;;
   help|-h|--help) usage ;;
-  *) echo "drgnx: unknown command '$1' (try: drgnx help)" >&2; exit 2 ;;
+  *) if [[ "$1" == . || "$1" == .. || "$1" == */* || -e "$1" ]]; then cmd_open "$@"; exit; fi   # drgnx PATH…
+     echo "drgnx: unknown command '$1' (try: drgnx help)" >&2; exit 2 ;;
 esac

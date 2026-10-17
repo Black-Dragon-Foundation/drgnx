@@ -7,6 +7,8 @@
  :bind ((palette "SPC SPC")
         (keys-sheet "SPC ?")
         (keyboard-profile "SPC h k")
+        (quit :none "File → Quit drgnx; the palette")
+        (preferences-keep-running :none "in the palette and the Options menu")
         (open-file "SPC f f")
         (save-file "SPC f s")
         (line-numbers "SPC u l")

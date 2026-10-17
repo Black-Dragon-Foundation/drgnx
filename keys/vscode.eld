@@ -5,6 +5,8 @@
  :bind ((palette "C-S-p" "<f1>")
         (keys-sheet "C-k C-s")
         (keyboard-profile "C-k C-p")
+        (quit :none "File → Quit drgnx; the palette (VS Code's C-q is Close Window here)")
+        (preferences-keep-running :none "in the palette and the Options menu")
         (open-file "C-o")
         (save-file "C-s")
         (line-numbers :none "VS Code has no default key for line numbers")

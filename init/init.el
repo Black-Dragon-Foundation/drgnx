@@ -9,5 +9,6 @@
   (add-to-list 'load-path (expand-file-name "wb" checkout)))
 (require 'drgnx)
 (drgnx-init)
+(drgnx-session-start-server)    ; not a daemon (whose --daemon=drgnx names its server): `drgnx PATH' still opens here
 
 ;;; init.el ends here

@@ -7,6 +7,7 @@
 (defvar native-comp-async-report-warnings-errors)
 (defvar project-list-file)
 (require 'drgnx-paths)
+(require 'drgnx-session)
 
 (defvar drgnx-basics--closed nil "Files of the buffers closed, newest first (Reopen Closed Tab).")
 
@@ -33,10 +34,6 @@
       (funcall (default-value 'major-mode))
       b)))
 
-(defun drgnx-basics-close-window ()
-  "Close this window (frame); closing the last one quits (a daemon keeps running)."
-  (interactive)
-  (if (cdr (visible-frame-list)) (delete-frame) (save-buffers-kill-terminal)))
 (drgnx-module-define 'core/basics
                      :doc "Quiet, predictable defaults and the basic file and view commands."
                      :stage 'startup
@@ -63,7 +60,8 @@
                                         (file-new "New Untitled" drgnx-basics-new-untitled "An empty buffer; Save asks for a name")
                                         (file-reopen-tab "Reopen Closed Tab" drgnx-basics-reopen-tab "Open the file closed last")
                                         (file-new-window "New Window" make-frame-command "Open another Emacs window")
-                                        (file-close-window "Close Window" drgnx-basics-close-window "Close this window; the last one quits")))
+                                        (file-close-window "Close Window" drgnx-session-close-frame
+                                                           "Close this window; the last one quits, unless drgnx keeps running in the background")))
                          (drgnx-command-define id :category "File" :title title :command fn :doc doc))
                        (drgnx-command-define 'view-escape :category "View" :title "Cancel / Close Popup" :command #'keyboard-escape-quit
                                              :doc "Like Escape in VS Code: cancel, leave the selection, close a popup")))

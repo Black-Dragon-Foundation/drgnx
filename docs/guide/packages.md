@@ -125,6 +125,7 @@ systemctl --user daemon-reload
 systemctl --user start drgnx                     # emacsclient -s drgnx -c
 ```
 
+Once the unit is enabled, `drgnx open` and `drgnx PATH` start it when drgnx is not running ([opening.md](opening.md)).
 Give the unit the same `Environment=`/`PATH` as your current daemon's unit if it has some. Switching for good is
 a systemd drop-in on your old daemon's unit; going back is deleting the drop-in.
 

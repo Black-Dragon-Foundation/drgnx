@@ -7,9 +7,11 @@ no third-party packages. Boot it with `emacs --init-directory <checkout>/init` �
 
 ```
 init/early-init.el   packages not activated by Emacs (drgnx-init activates drgnx's own — packages.md); no tool bar
-init/init.el         core/ on the load path, (require 'drgnx), (drgnx-init)
-core/drgnx.el        drgnx-init: guard on, staged hooks armed, packages activated, core commands, modules, surfaces
-                     (DRGNX_SAFE — drgnx safe — skips packages and modules)
+init/init.el         core/ on the load path, (require 'drgnx), (drgnx-init); a plain GUI start (not a daemon,
+                     not drgnx safe) serves `drgnx PATH' under the name drgnx unless another drgnx does
+core/drgnx.el        drgnx-init: guard on, staged hooks armed, keep-running choice read, packages activated, core
+                     commands, modules, surfaces (DRGNX_SAFE — drgnx safe — skips packages and modules)
+core/drgnx-session.el  drgnx PATH's Emacs side, keep running or quit, Quit drgnx (../guide/opening.md)
 modules/<category>/drgnx-<name>.el   one drgnx-module-define per file
 ```
 
@@ -100,7 +102,9 @@ The shell function `emacs_bin` picks the one Emacs every subcommand uses: `$DRGN
 `$DRGNX_CONFIG_DIR/emacs` (default `~/.config/drgnx/emacs`, written by `install.sh`'s `remember_emacs`) when it
 names an executable file, else `emacs`. The file is read as a path, never evaluated. A new subcommand calls
 `"$(emacs_bin)"`, never a bare `emacs`. All of them run with `load-prefer-newer`, so a stale `.elc` after a pull
-never prints before the output. `test --install` limits each image to an hour with `timeout`, else `gtimeout`.
+never prints before the output. `emacsclient_bin` is that Emacs's `emacsclient` (beside it, or in an Emacs.app's
+`Contents/MacOS/bin/`; else PATH's) — what `drgnx open` and `drgnx PATH` talk to the daemon with
+([opening.md](../guide/opening.md)). `test --install` limits each image to an hour with `timeout`, else `gtimeout`.
 `test/unit/bin-test.el` covers it with fake Emacs scripts.
 
 ## Doctor (`drgnx-doctor.el`)

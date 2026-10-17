@@ -6,6 +6,7 @@ Using drgnx.
 
 - [Install](guide/install.md): install.sh, per-platform guide, source build, `drgnx doctor`, uninstall.
 - [Onboarding](guide/onboarding.md): `drgnx onboard` and Help → Welcome — environment, keys, projects onto the board, the daemon.
+- [Opening drgnx](guide/opening.md): `drgnx .`, `drgnx PATH`, `drgnx open` (like `code .`, one drgnx); keep running in the background or quit when the last window closes.
 - [Workbench](guide/workbench.md): the sidebar — Explorer and Buffers panel — the change bus, performance vs treemacs/ibuffer.
 - [Keys](guide/keys.md): VS Code, Emacs and Vim key profiles, layers, keys.eld, conflicts.
 - [Modules](guide/modules.md): stages, packages, flags, modules.eld, Preferences: Modules, writing a module.

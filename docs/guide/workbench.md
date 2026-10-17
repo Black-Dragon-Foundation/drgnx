@@ -172,7 +172,7 @@ left dock, the panel and its tab, the right dock — each with its pixel size �
 shown files, and the Explorer's folders. At the first graphical frame it comes back as it was
 (`drgnx-persist-restore-on-start`) — with a daemon, in the first `emacsclient -c` frame; closing the last graphical
 frame saves too. It also comes back **whenever a window opens after none**: a daemon that keeps running after its
-last window closed gives the next `emacsclient -c` the saved layout again (a second window opened while one is
+last window closed ([opening.md](opening.md#keep-running-or-quit)) gives the next `drgnx open` or `emacsclient -c` the saved layout again (a second window opened while one is
 already open is never restored over; a frame is restored once). A file that client asked for is shown in
 front afterwards (the server switches to it after the restore); add a function to `drgnx-persist-after-restore-functions` (called with the restored frame, after
 every restore, never prompting) to do something of your own at that moment. Each group's shown file opens at once and its other tabs open while you are idle; nothing asks

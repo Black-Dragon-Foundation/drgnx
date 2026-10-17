@@ -19,6 +19,7 @@
 (require 'drgnx-pkg-activate)
 (require 'drgnx-onboard)
 (require 'drgnx-gc)
+(require 'drgnx-session)
 
 (defgroup drgnx nil "drgnx, a workbench-first Emacs framework." :group 'convenience)
 
@@ -49,6 +50,7 @@
 (defun drgnx--core-commands ()
   "The commands the core itself provides."
   (drgnx-onboard-register-commands)
+  (drgnx-session-register-commands)
   (drgnx-command-define 'palette :category "View" :title "Command Palette"
                         :command #'drgnx-palette :menu '("View") :doc "Every command by name, with its key")
   (drgnx-command-define 'keys-sheet :category "Help" :title "Keyboard Shortcuts"
@@ -74,6 +76,7 @@ The steady GC threshold is set at the end, also when a step fails (early-init de
       (progn
         (drgnx-guard-mode 1)
         (drgnx-hooks-install)
+        (drgnx-session-setup)                          ; keep running or quit; the close button
         (let ((safe (getenv "DRGNX_SAFE")))            ; drgnx safe: the core only
           (unless safe
             (condition-case err (drgnx-pkg-activate)
