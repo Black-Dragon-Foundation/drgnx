@@ -62,6 +62,7 @@
     (should-not (local-variable-p 'drgnx-chrome-header-tail))))
 
 (ert-deftest drgnx-sticky/a-scroll-step-is-cheap ()
+  :tags '(:timing)                                      ; wall-clock: a quiet machine
   ;; a 10k-line file: each new window start costs < 2 ms on average
   (drgnx-sticky-test--in (mapconcat (lambda (i) (drgnx-sticky-test--elisp 48)) (number-sequence 1 200) "") #'emacs-lisp-mode
     (let ((t0 (float-time)))
@@ -129,6 +130,7 @@
         (should (= n 2))))))
 
 (ert-deftest drgnx-sticky/a-long-class-without-tree-sitter-stays-cheap ()
+  :tags '(:timing)                                      ; wall-clock: a quiet machine
   (drgnx-sticky-test--in (concat "class Big:\n" (mapconcat (lambda (i) (format "    x%d = %d" i i)) (number-sequence 1 10000) "\n") "\n")
       #'python-mode
     (let ((t0 (float-time)))

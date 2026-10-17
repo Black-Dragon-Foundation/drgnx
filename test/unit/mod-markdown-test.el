@@ -99,6 +99,7 @@
         (should (= jobs 1))))))
 
 (ert-deftest drgnx-markdown/the-preview-is-made-in-the-background-without-stderr ()
+  :tags '(:timing)                                      ; wall-clock: a quiet machine
   (drgnx-markdown-test--with
     (let ((drgnx-markdown-programs '(("sh" "-c" "cat >/dev/null; sleep 0.3; echo '<p>made</p>'; echo WARNING >&2"))))
       (with-temp-buffer
