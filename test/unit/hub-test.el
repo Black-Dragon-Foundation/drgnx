@@ -137,9 +137,19 @@ to OR-LOG, OPENROUTER_API_KEY unset."
       ;; judged by its socket: where PID 1 never reaps (a CI container) the stopped hub lingers as a zombie
       (should (drgnx-hub-test--wait (lambda () (not (drgnx-hub-running-p))) 5)))))
 
+(defun drgnx-hub-test--sigpipe-ignored-p ()
+  "Does this Emacs ignore SIGPIPE, as every hub does (Linux: SigIgn in /proc/self/status)?"
+  (with-temp-buffer
+    (and (ignore-errors (insert-file-contents "/proc/self/status") t)
+         (re-search-forward "^SigIgn:[ \t]+\\([0-9a-f]+\\)" nil t)
+         (/= 0 (logand (string-to-number (match-string 1) 16) (ash 1 12))))))   ; SIGPIPE is 13
+
 (ert-deftest drgnx-hub/a-client-that-leaves-before-the-answer-is-no-error ()
   ;; a coordination server's notify, a probe: they write and go; the hub's answer must not raise an error (under
-  ;; ERT, or with debug-on-error, a filter error ends a batch Emacs)
+  ;; ERT, or with debug-on-error, a filter error ends a batch Emacs).  The hub here is this Emacs: a hub always
+  ;; runs with SIGPIPE ignored (`drgnx-hub-ensure'), so this one must too — the runners (bin/drgnx test, check)
+  ;; ignore it; a plain `emacs --batch' would be killed by the write instead of seeing its error
+  (skip-unless (drgnx-hub-test--sigpipe-ignored-p))
   (drgnx-hub-test--with
     (drgnx-hub-serve (drgnx-hub-socket))
     (dotimes (_ 5)

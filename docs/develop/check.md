@@ -27,8 +27,9 @@ It runs in phases:
 6. **Perf, alone.** It measures input latency. When the machine stays too busy to measure, `--perf` exits 3: the
    summary says NOT JUDGED (busy). That is not a pass.
 
-Every job runs with SIGPIPE ignored (`trap '' PIPE`): under the parallel GUI tiers a unit shard was killed by a
-write to a closed pipe (exit 141). At most `--jobs` (8) jobs run at once; a value that is not a whole number above 0 is refused (exit 2). Each job writes
+Every job runs with SIGPIPE ignored (`trap '' PIPE`), as `bin/drgnx test` and the hub do: a hub served inside a
+test Emacs that does not ignore it is killed (exit 141) by a write to a client that left. A test that needs it
+skips where it is not ignored (`drgnx-hub-test--sigpipe-ignored-p`). At most `--jobs` (8) jobs run at once; a value that is not a whole number above 0 is refused (exit 2). Each job writes
 its log to `~/.local/state/drgnx/check/<time>/<job>.log`. Its stdin is empty, so a stray prompt reads end-of-file
 instead of waiting.
 

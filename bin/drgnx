@@ -31,10 +31,11 @@ ui() { # the harness controller, in batch Emacs (harness/drgnx-ui.el)
         -l drgnx-ui -f drgnx-ui-cli -- "$@"
 }
 
-test_batch() {
-  emacs --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/harness" -L "$here/core" -L "$here/wb" \
-        -l "$here/harness/run-ert.el" \
-        -f drgnx-run-ert-batch "$here/test/unit"
+test_batch() { # SIGPIPE ignored, as the hub runs (tests serve one in-process): a test may fail, never end the run
+  ( trap '' PIPE
+    exec emacs --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/harness" -L "$here/core" -L "$here/wb" \
+         -l "$here/harness/run-ert.el" \
+         -f drgnx-run-ert-batch "$here/test/unit" )
 }
 
 env_eval() { # FORM — evaluate with harness/drgnx-env.el loaded, print the result
