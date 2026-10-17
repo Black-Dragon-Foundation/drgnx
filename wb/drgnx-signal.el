@@ -53,11 +53,15 @@
       drgnx-signal--editor-window
     (seq-find #'drgnx-signal-editor-window-p (window-list nil 'nomini))))
 
+(defun drgnx-signal--call (event fn data)
+  "Call FN with DATA; an error is recorded in `drgnx-signal-errors' (under EVENT), never raised."
+  (condition-case err (funcall fn data)
+    (error (push (format "%s %s: %s" event fn (error-message-string err)) drgnx-signal-errors)
+           (setq drgnx-signal-errors (seq-take drgnx-signal-errors 20)))))
+
 (defun drgnx-signal--emit (event data)
   (dolist (fn (alist-get event drgnx-signal--subscribers))
-    (condition-case err (funcall fn data)
-      (error (push (format "%s %s: %s" event fn (error-message-string err)) drgnx-signal-errors)
-             (setq drgnx-signal-errors (seq-take drgnx-signal-errors 20))))))
+    (drgnx-signal--call event fn data)))
 
 (defun drgnx-signal--same-set-p (a b)
   "Non-nil if the lists A and B hold the same objects (linear time: a flush runs on every switch)."
@@ -117,9 +121,11 @@ drawn.  For window *setup* only (chrome: a new window must not be drawn once wit
 that follows the user's work subscribes to the edges instead.")
 
 (defun drgnx-signal--windows (frame-or-window)
-  "From `window-buffer-change-functions': set up the windows now, flush the edges later."
+  "From `window-buffer-change-functions': set up the windows now, flush the edges later (a function
+that fails is recorded, like a subscriber)."
   (when (framep frame-or-window)
-    (run-hook-with-args 'drgnx-signal-window-functions frame-or-window))
+    (run-hook-wrapped 'drgnx-signal-window-functions
+                      (lambda (fn) (drgnx-signal--call 'window-functions fn frame-or-window) nil)))
   (drgnx-signal--schedule))
 
 (defun drgnx-signal--schedule (&rest _)
