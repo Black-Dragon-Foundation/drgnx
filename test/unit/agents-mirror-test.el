@@ -103,3 +103,28 @@
                  5))))))
 
 ;;; agents-mirror-test.el ends here
+
+;; From the old UI list ("a malformed RUN_STARTED aborting the board refresh"): one unreadable record from the
+;; hub must not stop the others from being mirrored.
+(ert-deftest drgnx-agents-mirror/a-malformed-session-record-does-not-abort-the-sync ()
+  (let ((drgnx-agents--sessions nil) (drgnx-hub-event-functions nil) (drgnx-hub-disconnect-functions nil))
+    (unwind-protect
+        (cl-letf (((symbol-function 'drgnx-hub-connect) #'ignore)
+                  ((symbol-function 'drgnx-hub-call)
+                   (lambda (method _params &optional cb)
+                     (when (equal method "agents/list")
+                       (funcall cb (list :sessions '("(:id \"bad\" :name \"cut off"
+                                                     "(:id \"s-good\" :name \"Good\" :status idle)"
+                                                     ")")) nil))))
+                  ((symbol-function 'drgnx-agents-mirror--fetch) #'ignore))
+          (let ((inhibit-message t)) (drgnx-agents-mirror-sync))
+          (should (drgnx-agents-mirror-test--mirror "s-good"))
+          (should-not (drgnx-agents-mirror-test--mirror "bad")))
+      (drgnx-agents-mirror-stop))))
+
+(ert-deftest drgnx-agents-mirror/a-malformed-transcript-entry-does-not-lose-the-others ()
+  (let ((m (drgnx-agents--make :remote "s-x" :id "s-x")))
+    (let ((inhibit-message t))
+      (drgnx-agents-mirror--apply-entries m '((0 "(:text \"one\")") (1 "(:text \"cut off") (2 "(:text \"three\")"))))
+    (should (equal (plist-get (nth 0 (drgnx-agent-session-entries m)) :text) "one"))
+    (should (equal (plist-get (nth 2 (drgnx-agent-session-entries m)) :text) "three"))))

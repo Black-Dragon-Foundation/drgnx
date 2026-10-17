@@ -28,6 +28,12 @@
 
 (defun drgnx-agents-mirror--fetching-p (id) (not (eq (gethash id drgnx-agents-mirror--fetching :none) :none)))
 
+(defun drgnx-agents-mirror--read (text)
+  "The Lisp object TEXT holds, as a one-element list; nil if TEXT is unreadable.  One damaged record from the
+hub is skipped (and said so), never allowed to stop the records after it."
+  (condition-case err (list (car (read-from-string text)))
+    (error (message "drgnx: skipped an unreadable record from the hub (%s)" (error-message-string err)) nil)))
+
 (defun drgnx-agents-mirror--apply-snapshot (snap)
   "Make (or update) the mirror of SNAP (a hub snapshot); returns (MIRROR . NEW-P)."
   (let* ((id (plist-get snap :id)) (m (drgnx-agents-mirror--find id)) (new (not m)))
@@ -42,9 +48,9 @@
   "Put ENTRIES ((INDEX LISP)…, as the hub's JSON arrays arrive) into mirror M's transcript."
   (let ((v (vconcat (drgnx-agent-session-entries m))))
     (mapc (lambda (pair)
-            (let ((i (elt pair 0)) (e (car (read-from-string (elt pair 1)))))
+            (when-let* ((read (drgnx-agents-mirror--read (elt pair 1))) (i (elt pair 0)))
               (when (>= i (length v)) (setq v (vconcat v (make-vector (- (1+ i) (length v)) nil))))
-              (aset v i e)))
+              (aset v i (car read))))
           entries)
     (setf (drgnx-agent-session-entries m) (append v nil))))
 
@@ -57,8 +63,10 @@
                       (let ((waiting (gethash id drgnx-agents-mirror--fetching)) (seq (or (plist-get r :seq) 0)))
                         (remhash id drgnx-agents-mirror--fetching)
                         (when r
-                          (drgnx-agents-mirror--apply-snapshot (car (read-from-string (plist-get r :lisp))))
-                          (setf (drgnx-agent-session-entries m) (car (read-from-string (plist-get r :entries))))
+                          (when-let* ((snap (drgnx-agents-mirror--read (plist-get r :lisp))))
+                            (drgnx-agents-mirror--apply-snapshot (car snap)))
+                          (when-let* ((entries (drgnx-agents-mirror--read (plist-get r :entries))))
+                            (setf (drgnx-agent-session-entries m) (car entries)))
                           (puthash id seq drgnx-agents-mirror--seq))
                         (dolist (ev (reverse waiting)) (drgnx-agents-mirror--event (car ev) (cdr ev)))
                         (drgnx-agents--changed m))))))
@@ -75,9 +83,10 @@
        ((and (gethash id drgnx-agents-mirror--seq) (<= seq (gethash id drgnx-agents-mirror--seq))
              (equal event "agent-entries")))
        ((equal event "agent")
-        (pcase-let ((`(,m . ,new) (drgnx-agents-mirror--apply-snapshot (car (read-from-string (plist-get data :lisp))))))
-          (if new (drgnx-agents-mirror--fetch m)
-            (drgnx-agents--changed m))))
+        (when-let* ((snap (drgnx-agents-mirror--read (plist-get data :lisp))))
+          (pcase-let ((`(,m . ,new) (drgnx-agents-mirror--apply-snapshot (car snap))))
+            (if new (drgnx-agents-mirror--fetch m)
+              (drgnx-agents--changed m)))))
        ((equal event "agent-entries")
         (when-let* ((m (drgnx-agents-mirror--find id)))
           (drgnx-agents-mirror--apply-entries m (plist-get data :entries))
@@ -100,8 +109,9 @@
   (drgnx-hub-call "agents/list" nil
                   (lambda (r _err)
                     (mapc (lambda (lisp)
-                            (pcase-let ((`(,m . ,_) (drgnx-agents-mirror--apply-snapshot (car (read-from-string lisp)))))
-                              (drgnx-agents-mirror--fetch m)))
+                            (when-let* ((snap (drgnx-agents-mirror--read lisp)))
+                              (pcase-let ((`(,m . ,_) (drgnx-agents-mirror--apply-snapshot (car snap))))
+                                (drgnx-agents-mirror--fetch m))))
                           (plist-get r :sessions)))))
 
 (defun drgnx-agents-mirror-stop ()
