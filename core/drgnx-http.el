@@ -54,7 +54,11 @@ NAME in lower case, REST the bytes after it.  nil while it is incomplete; (:erro
   "COUNTS (:input :output :cost) updated from one parsed JSON object."
   (let* ((usage (or (plist-get json :usage)
                     (plist-get (plist-get json :message) :usage)))
-         (in (or (plist-get usage :input_tokens) (plist-get usage :prompt_tokens)))
+         ;; Anthropic counts cached input apart: written at 1.25× an input token's price, read at 0.1×
+         (cache-w (or (plist-get usage :cache_creation_input_tokens) 0))
+         (cache-r (or (plist-get usage :cache_read_input_tokens) 0))
+         (in (let ((i (or (plist-get usage :input_tokens) (plist-get usage :prompt_tokens))))
+               (and (numberp i) (round (+ i (* 1.25 cache-w) (* 0.1 cache-r))))))
          (out (or (plist-get usage :output_tokens) (plist-get usage :completion_tokens)))
          (cost (plist-get usage :cost)))
     (when (numberp in) (setq counts (plist-put counts :input in)))

@@ -39,6 +39,13 @@
       (setq last (funcall scan (substring s 0 (min 5 (length s)))) s (substring s (min 5 (length s)))))
     (should (equal last '(:input 12 :output 7 :cost nil)))))
 
+(ert-deftest drgnx-http/cache-tokens-count-as-what-they-cost ()
+  ;; Claude Code's input is mostly cache: written at 1.25× an input token, read at 0.1×
+  (let ((scan (drgnx-http-usage-scanner)))
+    (should (equal (funcall scan (concat "data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":10,"
+                                         "\"cache_creation_input_tokens\":100,\"cache_read_input_tokens\":1000,\"output_tokens\":1}}}\n"))
+                   '(:input 235 :output 1 :cost nil)))))
+
 (ert-deftest drgnx-http/usage-from-a-plain-json-answer ()
   (let ((scan (drgnx-http-usage-scanner)))
     (funcall scan "{\"choices\":[],\"usage\":{\"prompt_tokens\":4,")

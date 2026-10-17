@@ -21,7 +21,7 @@
 
 (cl-defstruct (drgnx-agent-session (:constructor drgnx-agents--make) (:copier nil))
   name profile cwd conn acp-id (status 'starting) entries queue (mode 'queue) capabilities usage commands
-  permissions reviews stderr exit stopping paused turn draining task via)
+  permissions reviews stderr exit stopping paused turn draining task via gateway)
 
 (defvar drgnx-agents-profiles nil
   "Alist NAME → plist (:command LIST :env (\"NAME=value\"…) :mode queue|steer|interrupt).  Read from
@@ -187,6 +187,7 @@ agents.eld (config dir) and the built-in ones; never holds secrets (keys come fr
                                            (setf (drgnx-agent-session-status s) 'exited
                                                  (drgnx-agent-session-exit s) status
                                                  (drgnx-agent-session-stderr s) stderr)
+                                           (drgnx-agents--release-gateway s)
                                            (drgnx-agents--changed s)))))
     (setf (drgnx-agent-session-conn s) conn (drgnx-agent-session-mode s) (or (plist-get profile :mode) 'queue))
     (drgnx-acp-request conn "initialize"
@@ -229,12 +230,20 @@ goes direct, and says so)."
                                        (list :task (drgnx-agent-session-task s) :agent (drgnx-agent-session-name s)
                                              :chain (vconcat (mapcar (lambda (st) (vector (symbol-name (car st)) (cdr st))) chain))
                                              :keys (or keys (make-hash-table))))))
-          (setf (drgnx-agent-session-via s) 'gateway)
+          (setf (drgnx-agent-session-via s) 'gateway (drgnx-agent-session-gateway s) (plist-get r :token))
           r))
     (error (setf (drgnx-agent-session-via s) 'direct)
            (message "drgnx: no agent hub (%s); %s goes to its provider directly" (error-message-string err)
                     (drgnx-agent-session-name s))
            nil)))
+
+(declare-function drgnx-hub-call "drgnx-hub")
+
+(defun drgnx-agents--release-gateway (s)
+  "S's agent is gone: its gateway token goes too (asynchronously; never waits — an exit runs from a timer)."
+  (when-let* ((token (drgnx-agent-session-gateway s)))
+    (setf (drgnx-agent-session-gateway s) nil)
+    (ignore-errors (drgnx-hub-call "gateway/unregister" (list :token token) #'ignore))))
 
 (defun drgnx-agents--env (s)
   "The environment S's agent gets: its profile's, its provider's — the gateway's address and a token when the hub
@@ -429,6 +438,7 @@ is `interrupt'."
 (defun drgnx-agents-kill (s)
   "End session S's agent process."
   (when-let* ((c (drgnx-agent-session-conn s))) (drgnx-acp-stop c))
+  (drgnx-agents--release-gateway s)
   (setf (drgnx-agent-session-status s) 'exited)
   (drgnx-agents--changed s))
 

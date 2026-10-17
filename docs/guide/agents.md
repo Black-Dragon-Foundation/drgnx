@@ -82,7 +82,7 @@ The **hub** is a background process (a durable job: it outlives the Emacs that s
 it again). The first agent that needs it starts it; `drgnx hub start|stop|status [--json]` manages it by hand. Keys
 reach it from its environment, from auth-source files that never ask, or from the command you ran (a key in
 `~/.authinfo.gpg` is read then) — and stay in its memory; tokens are kept only as hashes, so a restarted hub still
-takes them. With no hub to be had, an agent goes to its provider directly and says so. The Agents list's **Via**
+takes them; an agent's token is revoked when it exits. With no hub to be had, an agent goes to its provider directly and says so. The Agents list's **Via**
 column shows which.
 
 ## Plans and the board

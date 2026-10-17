@@ -17,7 +17,8 @@ User docs: [Agents → The hub and the gateway](../guide/agents.md#the-hub-and-t
 ## The control socket
 
 `drgnx-hub-socket`: `$XDG_RUNTIME_DIR/drgnx/hub-HASH.sock` (HASH: the first 8 hex digits of the SHA-1 of the data
-dir), else `<state>/hub/hub.sock`; its directory is mode 0700. One JSON object per line:
+dir), else `<state>/hub/hub-HASH.sock`; a path over 104 bytes (a deep state dir) moves to `/tmp/drgnx-hub-UID/`.
+Its directory is mode 0700 and must be the user's own. One JSON object per line:
 
 | Request (`{"id", "method", "params"}`) | Result |
 |---|---|
@@ -32,8 +33,10 @@ dir), else `<state>/hub/hub.sock`; its directory is mode 0700. One JSON object p
 Errors: `{"id", "error": {"message"}}`. Events (from the gateway): `request` (job, task, agent, provider, model, status,
 input, output, cost), `fallback` (agent, from, to, why), `budget` (job, spent, budget).
 
-A second hub on the same socket finds the first answering `ping` and exits with status 3; a socket file nobody
-answers on is replaced. Client side: `drgnx-hub-ensure` (start if needed; commands and the CLI only — it waits),
+One hub per socket: a second finds the first answering `ping`, or holding the lock — `SOCKET.lock/`, a directory
+made atomically with the hub's pid — and exits with status 3 (a hub too busy to answer a ping keeps its socket). A
+lock whose process is gone (or a zombie) is taken over. A hub removes its socket and lock when it stops, and only if
+the lock is still its own. Client side: `drgnx-hub-ensure` (start if needed; commands and the CLI only — it waits),
 `drgnx-hub-call` (asynchronous), `drgnx-hub-call-sync`, `drgnx-hub-connect` + `drgnx-hub-event-functions`. The unit
 runner sets `DRGNX_NO_HUB_START=1`: a test never starts a hub that would outlive the suite unless it unsets it (the
 hub's own tests do, and stop what they start).
@@ -42,21 +45,29 @@ hub's own tests do, and stop what they start).
 
 `gateway/register` returns a token of 64 hex digits (32 bytes of `/dev/urandom`). The hub keeps
 `<state>/hub/registrations.eld` (mode 0600): `((SHA256-OF-TOKEN . REGISTRATION)…)` — never a token, never a key — and
-reads it back when it starts, so agents keep working across a hub restart. Keys sent in `keys` live in the hub's
+reads it back when it starts; it also keeps the gateway's port (`<state>/hub/port`) and binds it again, so agents
+keep working across a hub restart (when the port is taken meanwhile, a new one is used and the log says so). A
+session's token is unregistered when its agent exits or is killed. Keys sent in `keys` live in the hub's
 memory only (`drgnx-gateway-set-key`); after a restart they come again from the environment, quiet auth-source files,
 or the next command that registers.
 
 ## Forwarding
 
-A provider can be carried when it has `:messages t` (it serves Anthropic's Messages API at its URL without `/v1`
+Only Anthropic Messages paths are forwarded — `/v1/messages`, `/v1/messages/count_tokens`, `/v1/models[/ID]`, with
+a query, never `..` — and the URL built must keep the provider's host: a path cannot send the key elsewhere (404
+otherwise). A provider can be carried when it has `:messages t` (it serves Anthropic's Messages API at its URL without `/v1`
 plus the agent's path): the `openrouter`, `ollama` and `anthropic` presets. Its key goes as `Authorization: Bearer`,
 or `x-api-key` with `:auth x-api-key`. The request's `content-type`, `accept`, `anthropic-version` and
-`anthropic-beta` headers pass; the body's top-level `model` is replaced when the chain step names one. Nothing goes
+`anthropic-beta` headers pass; the body's top-level `model` is replaced when the chain step names one. The body goes to curl as a file
+(`<state>/hub/bodies/`, 0700, each 0600, deleted when the request ends): curl takes no config line over about 10 MB.
+Any error on the way answers the agent 500 `api_error` and closes the connection; one before curl starts (no curl, a
+file that cannot be written) moves to the next provider. Nothing goes
 to the agent until the upstream's head is whole: 1xx heads are skipped; 401, 402, 408, 409, 429, 5xx, or curl ending
 first, try the next step (a `fallback` event). Once the head went out there is no fallback: the rest streams through
 (`Connection: close`, no length) and the connection closes when curl ends. An agent that hangs up kills its curl.
 
 Spend: `drgnx-http-usage-scanner` follows the answer — SSE `message_start`/`message_delta` usage, or one JSON body's
-`usage` (Anthropic or OpenAI names, `cost` when given); without a cost, a provider's `:price (IN . OUT)` (USD per
+`usage` (Anthropic or OpenAI names, `cost` when given); Anthropic's cache tokens count as what they cost — written
+1.25×, read 0.1× an input token; without a cost, a provider's `:price (IN . OUT)` (USD per
 million tokens) prices it. One `spend` row per request in `work.db` (schema 2). The budget is checked before
 forwarding: a job whose spend reached its budget gets 429 `budget_exceeded` and a `budget` event.

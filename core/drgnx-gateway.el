@@ -14,6 +14,7 @@
 ;;; Code:
 (require 'cl-lib)
 (require 'subr-x)
+(require 'url-parse)
 (require 'drgnx-http)
 (require 'drgnx-ai)
 (require 'drgnx-work-db)
@@ -110,7 +111,19 @@ its token (shown once: only its hash is kept)."
              (process-put conn :request req)
              (drgnx-gateway--respond conn (plist-get req :error) "invalid_request_error" "the request cannot be taken"))
             (t (process-put conn :request req) (process-put conn :buf nil)
-               (drgnx-gateway--handle conn req))))))
+               (drgnx-gateway--guarded conn (lambda () (drgnx-gateway--handle conn req))))))))
+
+(defun drgnx-gateway--guarded (conn fn)
+  "Run FN; an error answers CONN 500 and closes it (never an agent left waiting)."
+  (condition-case err (funcall fn)
+    (error (drgnx-gateway--respond conn 500 "api_error" (format "the gateway failed: %s" (error-message-string err))))))
+
+(defconst drgnx-gateway--paths
+  "\\`/v1/\\(?:messages\\(?:/count_tokens\\)?\\|models\\(?:/[A-Za-z0-9._:-]+\\)?\\)\\(?:\\?[^#]*\\)?\\'"
+  "The request paths the gateway forwards: Anthropic's Messages API (and its token count and model list).")
+
+(defun drgnx-gateway--path-ok-p (path)
+  (and (string-match-p drgnx-gateway--paths path) (not (string-search ".." path))))
 
 (defun drgnx-gateway--client-sentinel (conn _event)
   ;; the agent hung up: its upstream request goes too
@@ -128,6 +141,9 @@ its token (shown once: only its hash is kept)."
          (reg (and token (gethash (drgnx-gateway--hash token) drgnx-gateway--registrations))))
     (cond
      ((not reg) (drgnx-gateway--respond conn 401 "authentication_error" "not a drgnx gateway token"))
+     ;; the path is appended to the provider's URL: nothing that could change where the key goes
+     ((not (drgnx-gateway--path-ok-p (plist-get req :path)))
+      (drgnx-gateway--respond conn 404 "not_found_error" "the gateway forwards Anthropic's Messages API only"))
      ((and (plist-get reg :budget) (plist-get reg :job)
            (>= (plist-get (drgnx-work-db-spend :job (plist-get reg :job)) :cost) (plist-get reg :budget)))
       (drgnx-gateway--emit 'budget :job (plist-get reg :job)
@@ -172,7 +188,23 @@ its token (shown once: only its hash is kept)."
                        ((and (plist-get p :key-env) (not key)) "no key"))))
       (if skip
           (drgnx-gateway--next conn req reg steps reasons id skip)
-        (drgnx-gateway--forward conn req reg steps reasons id model p key))))))
+        (condition-case err (drgnx-gateway--forward conn req reg steps reasons id model p key)
+          ;; no curl, a body that cannot be written: a reason, and the next provider
+          (error (drgnx-gateway--next conn req reg steps reasons id (format "cannot send (%s)" (error-message-string err))))))))))
+
+(defun drgnx-gateway--body-dir ()
+  "Where request bodies wait for curl (mode 0700; each file 0600, gone when its request ends)."
+  (let ((dir (expand-file-name "hub/bodies" (drgnx-state-dir))))
+    (unless (file-directory-p dir) (make-directory dir t))
+    (set-file-modes dir #o700)
+    dir))
+
+(defun drgnx-gateway--write-body (body)
+  "BODY in a fresh private file (curl takes no config line over ~10 MB); its name."
+  (let* ((dir (drgnx-gateway--body-dir))             ; outside 0600: directories need their x bit
+         (file (with-file-modes #o600 (make-temp-file (expand-file-name "b" dir)))))
+    (let ((coding-system-for-write 'binary)) (write-region body nil file nil 'silent))
+    file))
 
 (defun drgnx-gateway--next (conn req reg steps reasons id why)
   (when (cdr steps)
@@ -181,7 +213,10 @@ its token (shown once: only its hash is kept)."
 
 (defun drgnx-gateway--forward (conn req reg steps reasons id model p key)
   (let* ((url (concat (replace-regexp-in-string "/v1/?\\'" "" (plist-get p :url)) (plist-get req :path)))
+         (_ (unless (equal (url-host (url-generic-parse-url url)) (url-host (url-generic-parse-url (plist-get p :url))))
+              (error "the request would leave %s" (plist-get p :url))))
          (body (drgnx-gateway--body req model))
+         (body-file (and (not (string-empty-p body)) (drgnx-gateway--write-body body)))
          (header (lambda (name value) (concat "header = " (drgnx-gateway--quote (concat name ": " value)) "\n")))
          (config (concat "url = " (drgnx-gateway--quote url) "\n"
                          "request = " (drgnx-gateway--quote (plist-get req :method)) "\n"
@@ -191,20 +226,24 @@ its token (shown once: only its hash is kept)."
                          (cond ((null key) "")
                                ((eq (plist-get p :auth) 'x-api-key) (funcall header "x-api-key" key))
                                (t (funcall header "Authorization" (concat "Bearer " key))))
-                         (if (string-empty-p body) "" (concat "data-binary = " (drgnx-gateway--quote body) "\n"))))
+                         (if body-file (concat "data-binary = " (drgnx-gateway--quote (concat "@" body-file)) "\n") "")))
          (scan (drgnx-http-usage-scanner))
          (err (generate-new-buffer " *drgnx-gw-err*" t))
-         (curl (make-process
-                :name "drgnx-gw-curl" :command '("curl" "-K" "-") :connection-type 'pipe :coding 'binary :noquery t
-                :buffer nil :stderr err
-                :filter (lambda (proc bytes) (drgnx-gateway--upstream-bytes proc conn bytes scan))
-                :sentinel (lambda (proc _e)
-                            (unless (process-live-p proc)
-                              (when (buffer-live-p err) (kill-buffer err))
-                              (drgnx-gateway--upstream-done proc conn req reg steps reasons id model p scan))))))
+         (curl (condition-case e
+                   (make-process
+                    :name "drgnx-gw-curl" :command '("curl" "-K" "-") :connection-type 'pipe :coding 'binary :noquery t
+                    :buffer nil :stderr err
+                    :filter (lambda (proc bytes) (drgnx-gateway--upstream-bytes proc conn bytes scan))
+                    :sentinel (lambda (proc _e)
+                                (unless (process-live-p proc)
+                                  (when (buffer-live-p err) (kill-buffer err))
+                                  (when body-file (ignore-errors (delete-file body-file)))
+                                  (drgnx-gateway--guarded
+                                   conn (lambda () (drgnx-gateway--upstream-done proc conn req reg steps reasons id model p scan))))))
+                 (error (kill-buffer err) (when body-file (ignore-errors (delete-file body-file)))
+                        (signal (car e) (cdr e))))))
     (process-put conn :curl curl)
-    (process-send-string curl config)
-    (process-send-eof curl)))
+    (ignore-errors (process-send-string curl config) (process-send-eof curl))))
 
 (defun drgnx-gateway--upstream-bytes (curl conn bytes scan)
   "CURL's output so far: hold it until the head is whole, then (unless it calls for the next provider) pass the
@@ -249,7 +288,7 @@ head and every later byte to CONN."
          (cost (or (plist-get u :cost) (drgnx-gateway--price-cost p input output)))
          (row (list :job (plist-get reg :job) :task (plist-get reg :task) :agent (plist-get reg :agent)
                     :provider (symbol-name id) :model model :input input :output output :cost cost :status status)))
-    (apply #'drgnx-work-db-add-spend row)
+    (with-demoted-errors "drgnx gateway: spend not recorded: %S" (apply #'drgnx-work-db-add-spend row))
     (apply #'drgnx-gateway--emit 'request row)))
 
 (provide 'drgnx-gateway)

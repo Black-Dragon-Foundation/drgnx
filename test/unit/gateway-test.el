@@ -194,6 +194,36 @@ the gateway told."
       (should (= (plist-get r :status) 200))
       (should (string-search text (drgnx-gw-test--log or-log))))))
 
+(ert-deftest drgnx-gateway/only-the-messages-api-paths-reach-a-provider ()
+  ;; a path that would change the provider's host (".evil/…", "@evil/…") must never carry the key anywhere
+  (drgnx-gw-test--with '((:path "/api/v1/messages" :body "{}")) '()
+    (let ((token (drgnx-gateway-register '(:chain ((openrouter . nil))))))
+      (dolist (path '(".attacker.example/v1/messages" "@attacker.example/v1/messages" "/v1/../x" "/v2/messages"
+                      "/v1/messages/../../admin" "//attacker.example/v1/messages" "/v1/models/../messages"))
+        (should (memq (plist-get (drgnx-gw-test--request port :token token :path path) :status) '(400 404))))
+      (should (equal (drgnx-gw-test--log or-log) ""))
+      (dolist (path '("/v1/messages" "/v1/messages?beta=true" "/v1/messages/count_tokens"))
+        (should (= (plist-get (drgnx-gw-test--request port :token token :path path) :status) 200))))))
+
+(ert-deftest drgnx-gateway/a-body-over-curl-s-config-limit-passes ()
+  ;; curl refuses a config line over ~10 MB: the body goes in a private file instead
+  (drgnx-gw-test--with '((:path "/api/v1/messages" :body "{}")) '()
+    (let* ((token (drgnx-gateway-register '(:chain ((openrouter . nil)))))
+           (text (concat "{\"x\":\"" (make-string (* 12 1024 1024) ?a) "\"}"))
+           (r (drgnx-gw-test--request port :token token :body text :wait 30)))
+      (should (= (plist-get r :status) 200))
+      (should (> (file-attribute-size (file-attributes or-log)) (* 12 1024 1024)))
+      (should-not (directory-files (drgnx-gateway--body-dir) nil "\\`[^.]")))))      ; the body file is gone
+
+(ert-deftest drgnx-gateway/an-error-on-the-way-answers-and-closes ()
+  (drgnx-gw-test--with '((:path "/api/v1/messages" :body "{}")) '()
+    (let ((token (drgnx-gateway-register '(:job "j" :chain ((openrouter . nil)) :budget 1.0))))
+      (cl-letf (((symbol-function 'drgnx-work-db-spend) (lambda (&rest _) (error "database is locked"))))
+        (let ((r (drgnx-gw-test--request port :token token :wait 3)))
+          (should (= (plist-get r :status) 500))
+          (should (string-search "api_error" (plist-get r :body)))
+          (should (plist-get r :closed)))))))
+
 (ert-deftest drgnx-gateway/a-key-from-the-socket-wins-and-is-never-written ()
   (drgnx-gw-test--with '((:path "/api/v1/messages" :body "{}")) '()
     (let ((token (drgnx-gateway-register '(:job "j" :chain ((openrouter . nil))))))

@@ -35,14 +35,18 @@ to OR-LOG, OPENROUTER_API_KEY unset."
        (when mock (delete-process mock))
        (drgnx-work-db-close-all)
        (ignore-errors (delete-file (drgnx-hub-socket)))
+       (ignore-errors (delete-directory (concat (drgnx-hub-socket) ".lock") t))
        (delete-directory root t))))
 
 (defun drgnx-hub-test--post (url token)
-  "POST a small request to the gateway at URL with TOKEN; the status."
-  (with-temp-buffer
-    (call-process "curl" nil t nil "-s" "-o" "/dev/null" "-w" "%{http_code}" "-H" (concat "Authorization: Bearer " token)
-                  "-H" "Content-Type: application/json" "--data" "{\"model\":\"x\"}" (concat url "/v1/messages"))
-    (string-to-number (buffer-string))))
+  "POST a small request to the gateway at URL with TOKEN; the status.  Asynchronous: the gateway may be this Emacs."
+  (let* ((out (generate-new-buffer " *post*" t))
+         (p (make-process :name "post" :buffer out :noquery t
+                          :command (list "curl" "-s" "--max-time" "10" "-o" "/dev/null" "-w" "%{http_code}"
+                                         "-H" (concat "Authorization: Bearer " token) "-H" "Content-Type: application/json"
+                                         "--data" "{\"model\":\"x\"}" (concat url "/v1/messages")))))
+    (drgnx-hub-test--wait (lambda () (not (process-live-p p))) 12)
+    (prog1 (string-to-number (with-current-buffer out (buffer-string))) (kill-buffer out))))
 
 (defun drgnx-hub-test--wait (pred &optional secs)
   (let ((deadline (+ (float-time) (or secs 5)))) (while (and (not (funcall pred)) (< (float-time) deadline)) (accept-process-output nil 0.02)))
@@ -130,7 +134,59 @@ to OR-LOG, OPENROUTER_API_KEY unset."
         (unless (equal (file-name-nondirectory f) "or.log")
           (should-not (string-search "sk-sock-only" (with-temp-buffer (set-buffer-multibyte nil) (insert-file-contents-literally f) (buffer-string))))))
       (drgnx-hub-call-sync "shutdown" nil)
-      (should (drgnx-hub-test--wait (lambda () (not (process-attributes pid))) 5)))))
+      ;; judged by its socket: where PID 1 never reaps (a CI container) the stopped hub lingers as a zombie
+      (should (drgnx-hub-test--wait (lambda () (not (drgnx-hub-running-p))) 5)))))
+
+(ert-deftest drgnx-hub/agents-keep-their-address-across-a-restart ()
+  ;; a running agent keeps the URL it started with: a restarted hub's gateway must be there
+  (drgnx-hub-test--with
+    (drgnx-hub-serve (drgnx-hub-socket))
+    (let* ((r (drgnx-hub-call-sync "gateway/register" (list :chain [["openrouter" nil]] :keys '(:openrouter "sk-k"))))
+           (url (plist-get r :url)))
+      (drgnx-hub-disconnect)
+      (drgnx-hub-stop)
+      (drgnx-hub-serve (drgnx-hub-socket))
+      (should (equal (format "http://127.0.0.1:%d" (drgnx-gateway-port)) url))
+      (drgnx-gateway-set-key 'openrouter "sk-k")      ; (a key from the socket lives in memory: sent again)
+      (should (= (drgnx-hub-test--post url (plist-get r :token)) 200)))))
+
+(ert-deftest drgnx-hub/a-hub-that-holds-the-lock-is-never-replaced ()
+  ;; a live hub too busy to answer a ping within a second keeps its socket
+  (drgnx-hub-test--with
+    (let ((socket (drgnx-hub-socket)) (other (start-process "busy-hub" nil "sleep" "30")))   ; a live process
+      (make-directory (concat socket ".lock") t)
+      (write-region (number-to-string (process-id other)) nil (concat socket ".lock/pid") nil 'silent)
+      (write-region "" nil socket nil 'silent)                          ; its socket (not answering just now)
+      (should-error (drgnx-hub-serve socket))
+      (should (file-exists-p socket))
+      (delete-process other)
+      ;; a lock left by a process that is gone is taken over
+      (write-region "999999999" nil (concat socket ".lock/pid") nil 'silent)
+      (drgnx-hub-serve socket)
+      (should (drgnx-hub-call-sync "ping" nil))
+      (should (equal (string-to-number (with-temp-buffer (insert-file-contents (concat socket ".lock/pid")) (buffer-string)))
+                     (emacs-pid)))
+      ;; stopping removes only what is its own
+      (drgnx-hub-disconnect)
+      (drgnx-hub-stop)
+      (should-not (file-exists-p socket))
+      (should-not (file-exists-p (concat socket ".lock"))))))
+
+(ert-deftest drgnx-hub/without-a-runtime-dir-the-socket-is-short-and-private ()
+  (drgnx-hub-test--with
+    (let ((process-environment (cons "XDG_RUNTIME_DIR" process-environment)))
+      (should (string-prefix-p (drgnx-state-dir) (drgnx-hub-socket)))
+      (drgnx-hub-serve (drgnx-hub-socket))
+      (should (drgnx-hub-call-sync "ping" nil))
+      (drgnx-hub-disconnect) (drgnx-hub-stop))
+    ;; a state dir so deep the socket path would pass the system's limit (about 108 bytes)
+    (let* ((deep (concat root (make-string 120 ?d) "/"))
+           (process-environment (append (list "XDG_RUNTIME_DIR" (concat "XDG_STATE_HOME=" deep)) process-environment)))
+      (should (<= (string-bytes (drgnx-hub-socket)) 104))
+      (drgnx-hub-serve (drgnx-hub-socket))
+      (should (drgnx-hub-call-sync "ping" nil))
+      (should (equal (file-modes (file-name-directory (drgnx-hub-socket))) #o700))
+      (drgnx-hub-disconnect) (drgnx-hub-stop))))
 
 (ert-deftest drgnx-hub/no-hub-is-started-where-starting-is-off ()
   (drgnx-hub-test--with

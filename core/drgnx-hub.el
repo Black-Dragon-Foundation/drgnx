@@ -40,11 +40,47 @@ string (\"request\", \"fallback\", \"budget\"), DATA a plist.")
 (defun drgnx-hub-socket ()
   "The hub's socket: $XDG_RUNTIME_DIR/drgnx/hub-HASH.sock (HASH of the data dir: one hub per data dir), else under
 the state dir."
-  (let ((name (format "hub-%s.sock" (substring (secure-hash 'sha1 (drgnx-data-dir)) 0 8)))
-        (run (getenv "XDG_RUNTIME_DIR")))
-    (if (and run (file-directory-p run))
-        (expand-file-name name (expand-file-name "drgnx" run))
-      (expand-file-name name (expand-file-name "hub" (drgnx-state-dir))))))
+  (let* ((name (format "hub-%s.sock" (substring (secure-hash 'sha1 (drgnx-data-dir)) 0 8)))
+         (run (getenv "XDG_RUNTIME_DIR"))
+         (path (if (and run (file-directory-p run))
+                   (expand-file-name name (expand-file-name "drgnx" run))
+                 (expand-file-name name (expand-file-name "hub" (drgnx-state-dir))))))
+    ;; a Unix socket's path has about 108 bytes; a deep state dir gets a short private one instead
+    (if (<= (string-bytes path) 104) path
+      (expand-file-name name (expand-file-name (format "drgnx-hub-%d" (user-uid)) temporary-file-directory)))))
+
+(defun drgnx-hub--private-dir (dir)
+  "Make DIR (mode 0700) and make sure it is this user's own (a shared /tmp: never another's directory)."
+  (make-directory dir t)
+  (unless (eql (file-attribute-user-id (file-attributes dir)) (user-uid))
+    (error "%s belongs to another user" dir))
+  (set-file-modes dir #o700))
+
+(defun drgnx-hub--lock (socket) (concat socket ".lock"))
+
+(defun drgnx-hub--lock-pid (socket)
+  (ignore-errors (string-to-number (with-temp-buffer (insert-file-contents (expand-file-name "pid" (drgnx-hub--lock socket)))
+                                                     (buffer-string)))))
+
+(defun drgnx-hub--alive-p (pid)
+  "Is PID a running process (a zombie is not)?"
+  (let ((attrs (and pid (> pid 0) (process-attributes pid))))
+    (and attrs (not (member (alist-get 'state attrs) '("Z" "X"))))))
+
+(defun drgnx-hub--take-lock (socket)
+  "Hold SOCKET's lock (a directory made atomically, with our pid): one hub at a time, even when one is too busy to
+answer a ping.  A lock whose process is gone is taken over.  Signals when another hub holds it."
+  (let ((lock (drgnx-hub--lock socket)))
+    (condition-case nil (make-directory lock)
+      (file-already-exists
+       (let ((pid (drgnx-hub--lock-pid socket)))
+         (when (and (drgnx-hub--alive-p pid) (/= pid (emacs-pid)))
+           (error "a hub already serves on %s (pid %d)" socket pid))
+         (delete-directory lock t)
+         (make-directory lock))))
+    (write-region (number-to-string (emacs-pid)) nil (expand-file-name "pid" lock) nil 'silent)))
+
+(defun drgnx-hub--port-file () (expand-file-name "hub/port" (drgnx-state-dir)))
 
 (defun drgnx-hub--registrations-file () (expand-file-name "hub/registrations.eld" (drgnx-state-dir)))
 
@@ -152,11 +188,17 @@ the state dir."
   "Be the hub on SOCKET: the gateway started, the registrations a previous hub kept taken back.  Returns the server.
 Signals an error when a hub already serves there."
   (when (drgnx-hub--ping-socket socket) (error "a hub already serves on %s" socket))
+  (drgnx-hub--private-dir (file-name-directory socket))
+  (drgnx-hub--take-lock socket)
   (ignore-errors (delete-file socket))
-  (let ((dir (file-name-directory socket)))
-    (make-directory dir t)
-    (set-file-modes dir #o700))
-  (drgnx-gateway-start)
+  ;; the port agents were given, again (running agents keep the address they started with)
+  (let* ((file (drgnx-hub--port-file))
+         (old (ignore-errors (string-to-number (with-temp-buffer (insert-file-contents file) (buffer-string))))))
+    (unless (and old (> old 0) (ignore-errors (drgnx-gateway-start old)))
+      (when (and old (> old 0)) (message "drgnx hub: port %d is taken; agents started before must start again" old))
+      (drgnx-gateway-start))
+    (make-directory (file-name-directory file) t)
+    (write-region (number-to-string (drgnx-gateway-port)) nil file nil 'silent))
   (drgnx-hub--load-registrations)
   (add-hook 'drgnx-gateway-event-functions #'drgnx-hub--broadcast)
   (setq drgnx-hub--started (format-time-string "%FT%T%z")
@@ -170,7 +212,10 @@ Signals an error when a hub already serves there."
   (when drgnx-hub--server
     (let ((socket (process-contact drgnx-hub--server :service)))
       (delete-process drgnx-hub--server)
-      (ignore-errors (delete-file socket))))
+      ;; only what is still ours: a hub that took over meanwhile keeps its socket
+      (when (eql (drgnx-hub--lock-pid socket) (emacs-pid))
+        (ignore-errors (delete-file socket))
+        (ignore-errors (delete-directory (drgnx-hub--lock socket) t)))))
   (dolist (c drgnx-hub--subscribers) (when (process-live-p c) (delete-process c)))
   (setq drgnx-hub--server nil drgnx-hub--subscribers nil)
   (remove-hook 'drgnx-gateway-event-functions #'drgnx-hub--broadcast)

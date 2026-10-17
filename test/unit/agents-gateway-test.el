@@ -49,6 +49,19 @@
                            (lambda (a b) (string< (symbol-name (caar a)) (symbol-name (caar b)))))
                      '(((anthropic)) ((ollama))))))))
 
+(ert-deftest drgnx-agents/an-agent-s-token-goes-when-the-agent-does ()
+  ;; a token left in an exited agent's environment must not keep spending
+  (drgnx-agents-gw-test--with
+    (drgnx-hub-serve (drgnx-hub-socket))
+    (let ((s (drgnx-agents-gw-test--session "claude (OpenRouter)")))
+      (drgnx-agents--env s)
+      (should (= (length (drgnx-gateway-registrations)) 1))
+      (drgnx-agents--release-gateway s)                   ; what the session's exit runs (asynchronously)
+      (should (let ((deadline (+ (float-time) 3)))
+                (while (and (drgnx-gateway-registrations) (< (float-time) deadline)) (accept-process-output nil 0.02))
+                (null (drgnx-gateway-registrations))))
+      (should-not (drgnx-agent-session-gateway s)))))
+
 (ert-deftest drgnx-agents/a-subscription-agent-never-gets-the-gateway ()
   (drgnx-agents-gw-test--with
     (drgnx-hub-serve (drgnx-hub-socket))
