@@ -99,6 +99,15 @@ error if it does not hold)."
                           " (fset 'drgnx-hub-call drgnx-perf--hub-call)"
                           " (dolist (s drgnx-perf--agents) (ignore-errors (drgnx-agents-kill s)))"
                           " (dolist (f (frame-list)) (when (equal (frame-parameter f 'drgnx-job) \"perf\") (delete-frame f))) " kill-fixture ")"))
+      ;; a long code file with sticky scroll, indent guides (when installed) and smooth scrolling on
+      (code-scrolling
+       :setup ,(format "(progn (dolist (m '(\"editor/drgnx-sticky\" \"ui/drgnx-smooth\" \"extra/drgnx-guides\")) (load (expand-file-name (concat \"modules/\" m) %S) nil t)) (drgnx-smooth--setup) t)"
+                       drgnx-ui-repo-dir)
+       :each ,(format "(progn (find-file %S) (goto-char (point-min)) (drgnx-sticky-mode 1) (when (require 'indent-bars nil t) (drgnx-guides--maybe)) t)"
+                      (expand-file-name "core/drgnx-job.el" drgnx-ui-repo-dir))
+       :actions ,(append (funcall keys "<next>" 30) (funcall keys "<prior>" 30))
+       :teardown ,(format "(progn (when-let* ((b (find-buffer-visiting %S))) (kill-buffer b)) t)"
+                          (expand-file-name "core/drgnx-job.el" drgnx-ui-repo-dir)))
       ;; ghost text on: a mock model answers every pause at once (the pause shortened so each key asks and the
       ;; next one cancels — the most work a keystroke can bring)
       (typing-with-ghost

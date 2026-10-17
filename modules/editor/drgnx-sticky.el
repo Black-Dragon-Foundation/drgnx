@@ -55,7 +55,9 @@
           out)
       (while (and (> indent 0) (zerop (forward-line -1)))
         (when-let* ((i (drgnx-sticky--line-indent)))
-          (when (and (< i indent) (not (nth 4 (syntax-ppss (save-excursion (back-to-indentation) (point))))))
+          (when (and (< i indent)
+                     ;; not a line inside a string (a docstring at column 0) or a comment
+                     (let ((s (syntax-ppss (save-excursion (back-to-indentation) (point))))) (not (or (nth 3 s) (nth 4 s)))))
             (push (line-beginning-position) out)
             (setq indent i))))
       out)))

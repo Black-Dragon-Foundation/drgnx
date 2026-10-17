@@ -80,4 +80,6 @@ so a diagram is drawn once; until it is, it shows as code. Module `lang/markdown
 and its command, buffers switching after it); `test/unit/mod-amenities-test.el` (the modules wait without their
 package and run with it; the booster only with its program; a missing formatter still saves); `mod-sticky-test.el` (the scopes, outermost first, at most three, one line, the
 cost of a scroll step); `mod-markdown-test.el` (GFM for READMEs, the preview through pandoc or without a program,
-Mermaid as a job once, without mmdc nothing).
+Mermaid as a job once, without mmdc nothing); `test/ui/code-editing-test.el` (on a graphical frame: the sticky
+scopes of a long function, indent guides, smooth scrolling, a screenshot); the perf workload `code-scrolling`
+([perf.md](../develop/perf.md)).

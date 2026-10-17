@@ -13,5 +13,6 @@
  (explorer (:input :p95) 16) (explorer (:input :max) 50)
  (agent-typing (:input :p95) 16) (agent-typing (:input :max) 50)
  (job-window (:input :p95) 16) (job-window (:input :max) 50)
+ (code-scrolling (:input :p95) 16) (code-scrolling (:input :max) 50)
  (typing-with-ghost (:input :p95) 16) (typing-with-ghost (:input :max) 50)
  (redisplay (:redisplay :p95) 16))

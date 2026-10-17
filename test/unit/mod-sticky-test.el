@@ -70,4 +70,16 @@
         (drgnx-sticky--segment (selected-window)))
       (should (< (/ (- (float-time) t0) 200) 0.002)))))
 
+(ert-deftest drgnx-sticky/string-lines-are-no-scopes ()
+  ;; a docstring's second line starts at column 0: not a scope (the GUI test found it)
+  (drgnx-sticky-test--in (concat "(defun drgnx-sticky-test-doc (id)\n  \"Move job ID on: tasks are free again.\nThe job is done when every task is.\"\n"
+                                 "  (when id\n    (let ((x 1))\n"
+                                 (mapconcat (lambda (i) (format "      (message \"%d\")" i)) (number-sequence 1 30) "\n")
+                                 ")))\n")
+      #'emacs-lisp-mode
+    (drgnx-sticky-test--start-at-line 20)
+    (let ((s (drgnx-sticky--segment (selected-window))))
+      (should (string-search "(defun drgnx-sticky-test-doc" s))
+      (should-not (string-search "The job is done" s)))))
+
 ;;; mod-sticky-test.el ends here
