@@ -7,7 +7,7 @@ never stops Emacs from starting:
 | Stage | When |
 |---|---|
 | `startup` | while drgnx starts |
-| `idle` | the first time Emacs is idle (one second) |
+| `idle` | the first time Emacs is idle (one second), one module per idle moment — what you type in between is handled first |
 | `first-frame` | when the first graphical window opens (a daemon's first `emacsclient -c`) |
 | `first-file` | when the first file is visited |
 | `first-input` | before the first command you give |

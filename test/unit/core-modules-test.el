@@ -237,3 +237,22 @@
      (should (equal (reverse ran) '(base mid top)))
      (should (eq (drgnx-modules-test--status 'test/top) 'ok))
      (should (eq (drgnx-modules-test--status 'test/loop) 'missing-requires)))))
+
+(ert-deftest drgnx-modules/each-idle-module-has-its-own-idle-tick ()
+  ;; M4-1: idle modules run one per idle timer, staggered, so input between them is handled; the
+  ;; external modules load first, the last re-applies keys and writes the report.
+  (drgnx-modules-test--with-config
+   (let* ((log nil) (timers nil)
+          (drgnx-modules-after-stage-functions (list (lambda (stage) (push (list 'after stage) log)))))
+     (drgnx-module-define 'test/i1 :doc "1" :stage 'idle :setup (lambda () (push 'i1 log)))
+     (drgnx-module-define 'test/i2 :doc "2" :stage 'idle :setup (lambda () (push 'i2 log)))
+     (cl-letf (((symbol-function 'run-with-idle-timer)
+                (lambda (secs repeat fn &rest args) (should-not repeat) (push (list secs fn args) timers)))
+               ((symbol-function 'drgnx-modules-load-external) (lambda () (push 'external log)))
+               ((symbol-function 'drgnx-modules-write-report) (lambda () (push 'report log))))
+       (drgnx-modules-start (make-temp-file "drgnx-empty" t))
+       (setq log nil timers (sort timers (lambda (a b) (< (car a) (car b)))))
+       (should (= (length timers) 4))
+       (should (apply #'< (mapcar #'car timers)))
+       (pcase-dolist (`(,_ ,fn ,args) timers) (apply fn args) (push '| log))
+       (should (equal (reverse log) '(external | i1 | i2 | (after idle) report |)))))))

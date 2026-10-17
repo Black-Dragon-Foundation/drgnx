@@ -239,10 +239,16 @@ never stops Emacs — nothing is installed (the module waits for the package, as
   "Load the modules in DIR, run the startup stage now and the others when their moment comes."
   (drgnx-modules-load-directory dir)
   (drgnx-modules-run 'startup)
-  (run-with-idle-timer 1 nil (lambda ()
-                               (drgnx-modules-load-external)        ; before: the idle stage re-applies keys
-                               (drgnx-modules-run 'idle)
-                               (drgnx-modules-write-report)))
+  ;; The idle stage: one idle timer per module, staggered, so input between them is handled first.  The
+  ;; external modules load before them (the end of the stage re-applies keys), the last writes the report.
+  (let* ((ran nil)
+         (steps (append (list #'drgnx-modules-load-external)
+                        (mapcar (lambda (m) (lambda () (when (drgnx-modules--run-one (car m) (cdr m) 'idle) (setq ran t))))
+                                (drgnx-modules--in-order 'idle))
+                        (list (lambda ()
+                                (when ran (run-hook-with-args 'drgnx-modules-after-stage-functions 'idle))
+                                (drgnx-modules-write-report))))))
+    (seq-do-indexed (lambda (step i) (run-with-idle-timer (+ 1 (* 0.05 i)) nil step)) steps))
   (pcase-dolist (`(,hook . ,stage) '((drgnx-first-gui-frame-hook . first-frame) (drgnx-first-file-hook . first-file)
                                      (drgnx-first-input-hook . first-input)))
     (add-hook hook (lambda () (drgnx-modules-run stage))))
