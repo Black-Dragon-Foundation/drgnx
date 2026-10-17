@@ -248,4 +248,17 @@
         (dotimes (_ 3) (drgnx-explorer--fontify (pos-bol) (pos-eol)))
         (should (= 1 (seq-count (lambda (o) (overlay-get o 'drgnx-git)) (overlays-in (point-min) (point-max)))))))))
 
+;;;; M3b-10: a watch that failed
+
+(ert-deftest drgnx-explorer-edge/a-failed-watch-is-tried-again ()
+  (skip-unless (and (featurep 'filenotify) file-notify--library))
+  (drgnx-explorer-edge--with root
+    (with-current-buffer drgnx-explorer-buffer-name
+      (drgnx-explorer--unwatch-all)
+      (cl-letf (((symbol-function 'file-notify-add-watch) (lambda (&rest _) (error "Too many watches"))))
+        (drgnx-explorer--sync-watches))
+      (should (eq (gethash (directory-file-name root) drgnx-explorer--watches) 'none))
+      (drgnx-explorer--sync-watches)                    ; the limit was raised, or watches freed
+      (should (file-notify-valid-p (gethash (directory-file-name root) drgnx-explorer--watches))))))
+
 ;;; wb-explorer-edge-test.el ends here

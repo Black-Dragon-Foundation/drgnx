@@ -285,11 +285,12 @@ faces come later, from jit-lock, for the rows on screen."
     out))
 
 (defun drgnx-explorer--sync-watches ()
-  "Watch exactly the shown folders (a collapsed folder stops being watched)."
+  "Watch exactly the shown folders (a collapsed folder stops being watched; one that could not be
+watched — the inotify limit — is tried again)."
   (let ((want (make-hash-table :test #'equal)) gone)
     (dolist (d (drgnx-explorer--shown-folders)) (puthash d t want))
     (maphash (lambda (d desc)
-               (unless (and (gethash d want) (or (eq desc 'none) (file-notify-valid-p desc)))
+               (unless (and (gethash d want) (not (eq desc 'none)) (file-notify-valid-p desc))
                  (push (cons d desc) gone)))
              drgnx-explorer--watches)
     (pcase-dolist (`(,d . ,desc) gone)
