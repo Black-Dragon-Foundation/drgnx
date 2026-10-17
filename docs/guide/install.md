@@ -91,11 +91,13 @@ What you see, step by step:
 1. Open Terminal (⌘Space, type "Terminal", Return), paste the install command and press Return.
 2. It prints its plan and asks **Go ahead? [y/N]**: type `y`, Return. Without Homebrew it then asks **Install
    Homebrew?** — Homebrew asks for your Mac login password (nothing shows while you type; that is normal) and may
-   install Apple's Command Line Tools: a few minutes, longer on a slow network.
+   install Apple's Command Line Tools: a few minutes, longer on a slow network. Right after a Homebrew it just
+   installed, it asks **Add it to ~/.zprofile?** for Homebrew's line: answer `y`.
 3. Emacs comes from Homebrew: a download on Apple silicon with macOS 15 or newer, a build of about 30 minutes on Intel
    or an older macOS.
-4. **Add it to ~/.zprofile?** is asked for Homebrew's line and for `~/.local/bin` (where the `drgnx` command is): answer
-   `y`. They work in every **new** Terminal window, not in the one already open.
+4. After the doctor's check and the drgnx app, if `~/.local/bin` (where the `drgnx` command is) is not on your PATH yet,
+   it asks **Add it to ~/.zprofile?** again: answer `y`. Lines added there work in every **new** Terminal window, not
+   in the one already open.
 5. The drgnx app opens, and with it the Welcome: go on with [onboarding.md](onboarding.md).
 
 The details:
