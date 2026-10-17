@@ -4,7 +4,8 @@
 
 (defconst drgnx-amenities-test--modules
   '(("extra/drgnx-booster" extra/booster (eglot-booster) ())
-    ("extra/drgnx-format" extra/format (apheleia) (format-on-save)))
+    ("extra/drgnx-format" extra/format (apheleia) (format-on-save))
+    ("extra/drgnx-debug" extra/debug (dape) (debug-start debug-breakpoint debug-step-over debug-step-in debug-step-out debug-stop)))
   "FILE MODULE PACKAGES COMMANDS.")
 
 (defconst drgnx-amenities-test--elpa (expand-file-name (or (getenv "DRGNX_USER_ELPA") "~/.config/emacs/elpa"))
@@ -89,5 +90,39 @@
             (set-buffer-modified-p nil) (kill-buffer)))
       (apheleia-global-mode -1)
       (delete-file file))))
+
+(ert-deftest drgnx-debug/start-or-continue ()
+  (load (expand-file-name "modules/extra/drgnx-debug" drgnx-dir) nil t)
+  (let ((called nil))
+    (cl-letf (((symbol-function 'call-interactively) (lambda (f &rest _) (push f called)))
+              ((symbol-function 'dape--live-connection) (lambda (&rest _) nil)))
+      (drgnx-debug-start-or-continue))
+    (cl-letf (((symbol-function 'call-interactively) (lambda (f &rest _) (push f called)))
+              ((symbol-function 'dape--live-connection) (lambda (&rest _) 'a-stopped-session)))
+      (drgnx-debug-start-or-continue))
+    (should (equal called '(dape-continue dape)))))
+
+(defvar dape-active-mode)                               ; dape's: special, as in the module
+
+(ert-deftest drgnx-debug/session-keys-only-while-debugging ()
+  ;; F11 is Zen Mode in the VS Code profile, Step Into while a session runs (as in VS Code)
+  (load (expand-file-name "modules/extra/drgnx-debug" drgnx-dir) nil t)
+  (unwind-protect
+      (let ((dape-active-mode t))
+        (drgnx-debug--follow-session)
+        (should drgnx-debug-session-mode)
+        (setq dape-active-mode nil)
+        (drgnx-debug--follow-session)
+        (should-not drgnx-debug-session-mode))
+    (drgnx-debug-session-mode -1)))
+
+(ert-deftest drgnx-debug/keys-in-every-profile ()
+  (dolist (profile '("vscode" "emacs" "vim"))
+    (let ((text (with-temp-buffer (insert-file-contents (expand-file-name (format "keys/%s.eld" profile) drgnx-dir)) (buffer-string))))
+      (dolist (c '(debug-start debug-breakpoint debug-step-over debug-step-in debug-step-out debug-stop))
+        (should (string-search (format "(%s " c) text)))))
+  (let ((vs (with-temp-buffer (insert-file-contents (expand-file-name "keys/vscode.eld" drgnx-dir)) (buffer-string))))
+    (should (string-search "(debug-start \"<f5>\")" vs))
+    (should (string-search "(debug-step-in \"<f11>\" :map drgnx-debug-session-map)" vs))))
 
 ;;; mod-amenities-test.el ends here

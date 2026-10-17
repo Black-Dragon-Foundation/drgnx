@@ -30,6 +30,16 @@ installed: in the background, after the save, keeping the point and the view whe
 installed, or fails, leaves the file as you saved it; nothing asks. **Toggle Format on Save** turns it off or on in
 this buffer (with `C-u`, everywhere). Module `extra/format`, package `apheleia`.
 
+## Debugging
+
+**Start Debugging…** runs a debug session through dape, which speaks the Debug Adapter Protocol: the adapters VS
+Code uses — debugpy for Python, the JavaScript/TypeScript debugger, delve for Go, codelldb for C, C++ and Rust — work
+here once installed (dape's documentation lists how to get each). While the session is stopped the same command
+continues; **Toggle Breakpoint**, **Step Over**, **Step Into**, **Step Out** and **Stop Debugging** do what they say.
+In the VS Code key profile: F5, F9, F10, F11 (Step Into while a session runs — Zen Mode otherwise), S-F11, S-F5; the
+Emacs and Vim profiles reach them in the palette. dape's windows (scopes, stack, breakpoints, the REPL) open on the
+right, so the panel stays the workbench's. Module `extra/debug`, package `dape`.
+
 ## Tests
 
 `test/unit/mod-grammars-test.el` (the language of a buffer, the hint once and never a prompt, the install as a job
