@@ -114,8 +114,12 @@ buffer, and they keep both in step.")
   "Start of line I (0-based)."
   (save-excursion (goto-char (point-min)) (forward-line i) (point)))
 
+(defun drgnx-explorer--join (dir name)
+  "DIR (no trailing /, except a root like / or C:/) and NAME as one path."
+  (concat (file-name-as-directory dir) name))
+
 (defun drgnx-explorer--path (v)
-  (if (aref v 3) (concat (aref v 3) "/" (aref v 0)) (aref v 0)))
+  (if (aref v 3) (drgnx-explorer--join (aref v 3) (aref v 0)) (aref v 0)))
 
 (defun drgnx-explorer-node-at (pos) "Path of the row at POS."
        (when-let* ((v (drgnx-explorer--row-data pos))) (drgnx-explorer--path v)))
@@ -181,12 +185,12 @@ faces come later, from jit-lock, for the rows on screen."
      (cl-labels ((walk (dir depth)
                    (let ((parent (directory-file-name dir)))
                      (pcase-dolist (`(,name . ,dirp) (funcall drgnx-explorer--children-function dir))
-                       (let ((open (and dirp (funcall drgnx-explorer--expanded-function (concat parent "/" name)))))
+                       (let ((open (and dirp (funcall drgnx-explorer--expanded-function (drgnx-explorer--join parent name)))))
                          (push (drgnx-explorer--prefix depth (if dirp (if open 'open 'closed) 'file)) parts)
                          (push (drgnx-wb-display-name name) parts)
                          (push "\n" parts)
                          (push (vector name depth dirp parent) data)
-                         (when open (walk (concat parent "/" name) (1+ depth))))))))
+                         (when open (walk (drgnx-explorer--join parent name) (1+ depth))))))))
        (walk dir depth))
      ;; One insertion: inserting each part separately runs the change hooks (jit-lock) per part.
      (insert (apply #'concat (nreverse parts)))
