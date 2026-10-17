@@ -369,5 +369,6 @@ other scenario; when red, the first frame's slowest hooks are listed).
 Helpers (`harness/drgnx-scenario.el`): `drgnx-scenario-check OK EXPLANATION REPORT`,
 `drgnx-scenario-require OK WHAT`,
 `drgnx-scenario-expected 'NAME` (for `:expected-result`), `drgnx-scenario-with-fixture (ROOT [KIND])` (a fresh
-git repo, removed afterwards), `drgnx-scenario-load-driver`. The results file adds `tests` (every test with its
+git repo, removed afterwards with its file and dired buffers and the Explorer roots in it; fixtures of yours older than a
+day — a run killed at its timeout — are deleted when the next is made), `drgnx-scenario-load-driver`. The results file adds `tests` (every test with its
 result) and `known_red` (name, summary, trace) — see [scenarios.md](scenarios.md) for the scenarios themselves.

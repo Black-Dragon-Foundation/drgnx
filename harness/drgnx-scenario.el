@@ -14,6 +14,7 @@
 ;;; Code:
 (require 'cl-lib)
 (require 'ert)
+(require 'seq)
 (require 'subr-x)
 
 (defun drgnx-scenario-config ()
@@ -83,6 +84,7 @@ Setup failures are never (known) reds.  Returns t."
   "A fresh git repository in a temp directory; return its root (no trailing slash).
 KIND `basic' (default): README.md, docs/guide.md, src/app/{main,util}.py, tests/test_main.py.
 KIND `second': another small project, for cross-project scenarios."
+  (drgnx-scenario--delete-stale-fixtures)
   (let ((root (make-temp-file (format "drgnx-fixture-%s-" (or kind 'basic)) t)))
     (pcase (or kind 'basic)
       ('basic
@@ -101,17 +103,40 @@ KIND `second': another small project, for cross-project scenarios."
                     "commit" "-qm" "fixture"))
     root))
 
+(defun drgnx-scenario--delete-stale-fixtures ()
+  "Delete this user's fixtures older than a day: left behind by runs killed at their timeout."
+  (dolist (d (directory-files temporary-file-directory t "\\`drgnx-fixture-"))
+    (let ((a (file-attributes d)))
+      (when (and (eq t (file-attribute-type a)) (eql (file-attribute-user-id a) (user-uid))
+                 (> (float-time (time-since (file-attribute-modification-time a))) 86400))
+        (ignore-errors (delete-directory d t))))))
+
+(declare-function drgnx-explorer-roots "drgnx-explorer")
+(declare-function drgnx-explorer-set-roots "drgnx-explorer")
+
+(defun drgnx-scenario--fixture-done (root)
+  "Leave nothing of the fixture ROOT for the next scenario: its buffers (files and dired; never asking —
+the configuration's own panels stay, whatever their directory), the Explorer roots in it, ROOT itself."
+  (let ((in (lambda (d) (and d (string-prefix-p (file-name-as-directory root) (file-name-as-directory (expand-file-name d))))))
+        (kill-buffer-query-functions nil))
+    (dolist (b (buffer-list))
+      (when (or (funcall in (buffer-file-name b))
+                (and (provided-mode-derived-p (buffer-local-value 'major-mode b) 'dired-mode)
+                     (funcall in (buffer-local-value 'default-directory b))))
+        (with-current-buffer b (set-buffer-modified-p nil))
+        (kill-buffer b)))
+    (when (fboundp 'drgnx-explorer-roots)
+      (let ((keep (seq-remove in (drgnx-explorer-roots))))
+        (unless (equal keep (drgnx-explorer-roots)) (drgnx-explorer-set-roots keep))))
+    (delete-directory root t)))
+
 (defmacro drgnx-scenario-with-fixture (spec &rest body)
-  "SPEC is (VAR [KIND]): bind VAR to a fresh fixture repo for BODY, then delete it."
+  "SPEC is (VAR [KIND]): bind VAR to a fresh fixture repo for BODY, then delete it and everything that
+showed it (`drgnx-scenario--fixture-done')."
   (declare (indent 1))
   `(let ((,(car spec) (drgnx-scenario-fixture ,(cadr spec))))
      (unwind-protect (progn ,@body)
-       (dolist (b (buffer-list))
-         (let ((f (buffer-file-name b)))
-           (when (and f (string-prefix-p (file-name-as-directory ,(car spec)) f))
-             (with-current-buffer b (set-buffer-modified-p nil))
-             (kill-buffer b))))
-       (delete-directory ,(car spec) t))))
+       (drgnx-scenario--fixture-done ,(car spec)))))
 
 ;;;; Timing and evidence
 

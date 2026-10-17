@@ -51,3 +51,28 @@
                                                :trace [(:t_ms 4900 :cause "timer:busy" :window "w1" :fields ["point"]
                                                               :from (:point 1) :to (:point 2))])))))
     (should (string-search "+4900 ms  timer:busy  w1 point 1 → 2" (error-message-string err)))))
+
+(ert-deftest drgnx-scenario/a-fixture-leaves-no-buffers-roots-or-stale-fixtures ()
+  ;; buffers in the fixture (dired too) go with it, Explorer roots in it are dropped, and fixtures this user
+  ;; left behind (a run killed at its timeout) a day ago are deleted when the next is made
+  (let* ((temporary-file-directory (file-name-as-directory (make-temp-file "drgnx-scenario-tmp" t)))
+         (old (expand-file-name "drgnx-fixture-basic-old" temporary-file-directory))
+         (recent (expand-file-name "drgnx-fixture-basic-recent" temporary-file-directory))
+         (roots nil) dir buffers)
+    (unwind-protect
+        (cl-letf (((symbol-function 'drgnx-explorer-roots) (lambda () roots))
+                  ((symbol-function 'drgnx-explorer-set-roots) (lambda (r) (setq roots r))))
+          (make-directory old) (make-directory recent)
+          (set-file-times old (time-subtract (current-time) (* 2 86400)))
+          (drgnx-scenario-with-fixture (root 'basic)
+            (setq dir root roots (list "/elsewhere/" (file-name-as-directory root)))
+            (push (dired root) buffers)
+            (push (find-file-noselect (expand-file-name "README.md" root)) buffers)
+            (push (dired (expand-file-name "src" root)) buffers))
+          (should-not (file-exists-p dir))
+          (should-not (seq-some #'buffer-live-p buffers))
+          (should (equal roots '("/elsewhere/")))
+          (should-not (file-exists-p old))
+          (should (file-exists-p recent)))
+      (mapc (lambda (b) (when (buffer-live-p b) (kill-buffer b))) buffers)
+      (delete-directory temporary-file-directory t))))
