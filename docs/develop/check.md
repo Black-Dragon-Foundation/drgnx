@@ -27,7 +27,8 @@ It runs in phases:
 6. **Perf, alone.** It measures input latency. When the machine stays too busy to measure, `--perf` exits 3: the
    summary says NOT JUDGED (busy). That is not a pass.
 
-At most `--jobs` (8) jobs run at once; a value that is not a whole number above 0 is refused (exit 2). Each job writes
+Every job runs with SIGPIPE ignored (`trap '' PIPE`): under the parallel GUI tiers a unit shard was killed by a
+write to a closed pipe (exit 141). At most `--jobs` (8) jobs run at once; a value that is not a whole number above 0 is refused (exit 2). Each job writes
 its log to `~/.local/state/drgnx/check/<time>/<job>.log`. Its stdin is empty, so a stray prompt reads end-of-file
 instead of waiting.
 

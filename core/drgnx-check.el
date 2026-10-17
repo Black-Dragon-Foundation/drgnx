@@ -199,7 +199,9 @@ reaps (GitHub's job containers), an ended job's processes stay as zombies and si
                              ;; no `exec': its pipe to Emacs must stay open until it ends — a job whose pipe is
                              ;; at end-of-file while it runs hides every other job's end from Emacs until it ends
                              ;; stdin empty: a stray prompt in a test reads end-of-file, never waits
-                             :command (list "sh" "-c" (format "%s < /dev/null > %s 2>&1"
+                             ;; SIGPIPE ignored: a write to a closed pipe or socket is an error a test can see, never
+                             ;; the end of the shard (exit 141 under the parallel GUI tiers)
+                             :command (list "sh" "-c" (format "trap '' PIPE; %s < /dev/null > %s 2>&1"
                                                               (mapconcat #'shell-quote-argument (plist-get job :command) " ")
                                                               (shell-quote-argument log)))))))
 

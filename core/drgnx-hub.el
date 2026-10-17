@@ -452,7 +452,9 @@ an error saying why not."
            (error "No drgnx hub runs, and starting one is off here (DRGNX_NO_HUB_START)"))
       (let ((env (delq nil (mapcar (lambda (n) (let ((v (getenv n))) (and v (not (string-empty-p v)) (concat n "=" v))))
                                    drgnx-hub--env-names))))
-        (drgnx-jobs-start "drgnx-hub" (list (expand-file-name invocation-name invocation-directory) "--batch" "-Q"
+        ;; SIGPIPE ignored (the editing Emacs does not): an agent that hangs up must never end the hub
+        (drgnx-jobs-start "drgnx-hub" (list "sh" "-c" "trap '' PIPE; exec \"$0\" \"$@\""
+                                            (expand-file-name invocation-name invocation-directory) "--batch" "-Q"
                                             "-L" (expand-file-name "core" drgnx-dir) "-l" "drgnx-hub" "-f" "drgnx-hub-main")
                           :cwd (expand-file-name "~") :env env)
         (let ((deadline (+ (float-time) 5)))

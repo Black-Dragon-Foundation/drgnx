@@ -8,7 +8,9 @@ User docs: [Agents → The hub and the gateway](../guide/agents.md#the-hub-and-t
   per drgnx data directory. It gets the starting Emacs's drgnx and XDG directories and provider keys (when set) as
   its environment; under systemd only named variables pass (`--setenv=NAME`), so no value is ever in a command line.
   Its main loop is `accept-process-output` plus the event drain batch Emacs needs (queued events hold back
-  sentinels). SIGTERM or `shutdown` removes its socket.
+  sentinels). SIGTERM or `shutdown` removes its socket. It starts with SIGPIPE ignored (`trap '' PIPE`): the
+  editing Emacs that launches it does not ignore it, and a write to a connection an agent closed must be an error,
+  never the hub's end.
 - **The gateway** (`core/drgnx-gateway.el`) runs inside the hub: never in the editing Emacs, so streaming cannot
   touch the keystroke budget.
 - **curl**, one per forwarded request, reads its config on stdin (`-K -`): the URL, the provider's key header and the
