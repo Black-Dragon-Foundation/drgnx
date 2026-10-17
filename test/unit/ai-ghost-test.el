@@ -43,6 +43,25 @@ LLM answering SPEC; `o' found running."
     (should (eq (get-text-property 0 'face (drgnx-ai-ghost-text-shown)) 'drgnx-ai-ghost))
     (should (equal (buffer-substring-no-properties (point) (min (point-max) (+ (point) 6))) "\n  nam"))))   ; not inserted
 
+(ert-deftest drgnx-ai-ghost/the-pause-asks-for-the-buffer-on-screen-whatever-buffer-is-current ()
+  ;; the idle timer may fire inside other code's wait (a server request, a sync call) with another buffer current
+  (drgnx-ai-ghost-test--with '((:path "/api/generate" :body "{\"response\":\"(message name)\"}"))
+    (let ((buf (current-buffer)) (win-buf (window-buffer (selected-window))))
+      (unwind-protect
+          (progn
+            (set-window-buffer (selected-window) buf)
+            (let ((this-command 'self-insert-command)) (drgnx-ai-ghost--post-command))
+            (with-temp-buffer (funcall (timer--function drgnx-ai-ghost--timer)))   ; the pause, elsewhere
+            (should (drgnx-ai-ghost-test--wait (lambda () (with-current-buffer buf (drgnx-ai-ghost-text)))))
+            (should (equal (with-current-buffer buf (drgnx-ai-ghost-text)) "(message name)")))
+        (set-window-buffer (selected-window) win-buf)))))
+
+(ert-deftest drgnx-ai-ghost/the-pause-asks-nothing-for-a-buffer-no-longer-on-screen ()
+  (drgnx-ai-ghost-test--with '((:path "/api/generate" :body "{\"response\":\"(message name)\"}"))
+    (let ((this-command 'self-insert-command)) (drgnx-ai-ghost--post-command))
+    (funcall (timer--function drgnx-ai-ghost--timer))                  ; this buffer is not the selected window's
+    (should-not drgnx-ai-ghost--request)))
+
 (ert-deftest drgnx-ai-ghost/an-answer-to-text-since-changed-never-shows ()
   (drgnx-ai-ghost-test--with '((:path "/api/generate" :delay 0.5 :body "{\"response\":\"stale\"}"))
     (drgnx-ai-ghost--trigger)
@@ -154,7 +173,8 @@ LLM answering SPEC; `o' found running."
 (ert-deftest drgnx-ai/every-ai-command-is-registered ()
   (let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil))
     (funcall (plist-get (alist-get 'tools/ai drgnx-modules--table) :setup))
-    (dolist (id '(ai-accept ai-accept-word ai-accept-line ai-dismiss ai-tab ai-complete-toggle))
+    (dolist (id '(ai-accept ai-accept-word ai-accept-line ai-dismiss ai-tab ai-complete-toggle
+                            ai-edit ai-edit-apply-hunk ai-edit-done ai-edit-reject))
       (should (drgnx-commands-get id)))))
 
 ;;; ai-ghost-test.el ends here

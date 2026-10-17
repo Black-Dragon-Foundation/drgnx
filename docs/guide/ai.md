@@ -73,7 +73,7 @@ VS Code `C-k C-e`, Emacs `C-c e`, Vim `SPC a e`; never `C-i`, which is Tab in a 
 The answer opens as a diff against the buffer as it is now (a code fence the model adds is dropped), and nothing
 changes until you decide:
 
-- `C-c C-a` applies a hunk (to a copy);
+- `C-c C-a` applies the hunk at point (to a copy; the diff stays on screen), `n`/`p` move between hunks;
 - `C-c C-c` (Done) puts the hunks you applied into the buffer's region;
 - `C-c C-k` (Reject), or closing the diff, drops it all.
 
@@ -107,7 +107,9 @@ asks for the key only when it sends.
 ## Detection, fallback and the doctor
 
 drgnx asks the local providers whether they run — every address at once, one second each, in the background,
-never holding up Emacs — and remembers which answered and which models they have. Something answering on TEI's
+never holding up Emacs — and remembers which answered and which models they have (a probe updates the providers it
+asked; what it knows of the others stays). It probes once Emacs is first idle, and again in onboarding. Something
+answering on TEI's
 port is taken for TEI only when its `/info` says so (LocalAI can answer there too).
 
 A request walks its role's chain: a provider without its key or the capability (chat, fill in the middle) is

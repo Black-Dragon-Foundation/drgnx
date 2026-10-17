@@ -12,4 +12,5 @@
  (tabs (:input :p95) 16) (tabs (:input :max) 50)
  (explorer (:input :p95) 16) (explorer (:input :max) 50)
  (agent-typing (:input :p95) 16) (agent-typing (:input :max) 50)
+ (typing-with-ghost (:input :p95) 16) (typing-with-ghost (:input :max) 50)
  (redisplay (:redisplay :p95) 16))

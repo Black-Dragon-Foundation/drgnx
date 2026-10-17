@@ -63,6 +63,36 @@ error if it does not hold)."
                     :actions ,(make-list 2 (funcall type "(setq y 2) "))
                     :check "(eq (drgnx-agent-session-status drgnx-perf--agent) 'busy)"   ; typed while it streamed
                     :teardown ,(concat "(progn (ignore-errors (drgnx-agents-kill drgnx-perf--agent)) " kill-fixture ")"))
+      ;; ghost text on: a mock model answers every pause at once (the pause shortened so each key asks and the
+      ;; next one cancels — the most work a keystroke can bring)
+      (typing-with-ghost
+       :setup ,(format "(progn (load %S nil t)
+                         (when (file-exists-p (drgnx-ai-file)) (error \"An ai.eld exists (%%s): never overwritten\" (drgnx-ai-file)))
+                         (let* ((port (+ 20000 (random 20000))) (dir (make-temp-file \"drgnx-perf-llm\" t))
+                                (script (expand-file-name \"llm.eld\" dir)) (log (expand-file-name \"llm.log\" dir)))
+                           ;; /api/tags: the probe (drgnx runs one once idle) finds it running
+                           (with-temp-file script (prin1 '((:path \"/api/tags\" :body \"{\\\"models\\\":[{\\\"name\\\":\\\"coder\\\"}]}\")
+                                                           (:path \"/api/generate\" :body \"{\\\"response\\\":\\\"(message \\\\\\\"%%s\\\\\\\" x)\\\"}\"))
+                                                         (current-buffer)))
+                           (make-directory (file-name-directory (drgnx-ai-file)) t)
+                           (with-temp-file (drgnx-ai-file)
+                             (prin1 (list :version 1 :providers (list (list 'perf-llm :name \"Perf\" :kind 'ollama :url (format \"http://127.0.0.1:%%d\" port) :caps '(fim)))
+                                          :roles '((complete (perf-llm . \"coder\"))))
+                                    (current-buffer)))
+                           (setq drgnx-perf--llm (list :proc (drgnx-ai-test-mock-llm port script log) :dir dir :log log :delay drgnx-ai-ghost-delay)
+                                 drgnx-ai-ghost-delay 0.01)
+                           (push '(perf-llm :up t) drgnx-ai-detected))
+                         t)"
+                       (expand-file-name "test/fixtures/mock-llm.el" drgnx-ui-repo-dir))
+       :each ,(drgnx-perf-run--visit-fixture-form)
+       :actions ,(make-list 6 (funcall type "(let ((x 1)) (message \"%s\" x)) "))
+       :check "(with-temp-buffer (insert-file-contents (plist-get drgnx-perf--llm :log)) (> (how-many \"POST /api/generate\") 0))"   ; it asked
+       :teardown ,(concat "(progn (ignore-errors (delete-process (plist-get drgnx-perf--llm :proc)))
+                                  (ignore-errors (delete-directory (plist-get drgnx-perf--llm :dir) t))
+                                  (when drgnx-perf--llm (ignore-errors (delete-file (drgnx-ai-file))))   ; the one setup wrote
+                                  (setq drgnx-ai-ghost-delay (plist-get drgnx-perf--llm :delay)
+                                        drgnx-ai-detected (assq-delete-all 'perf-llm drgnx-ai-detected)) "
+                          kill-fixture ")"))
       (frames :measure "(list :frame (drgnx-perf-frame-ms 5))")
       (redisplay :each ,(drgnx-perf-run--visit-fixture-form) :measure "(list :redisplay (drgnx-perf-redisplay-ms 30))" :teardown ,kill-fixture)
       (startup :daemon t)

@@ -89,7 +89,7 @@ guard_violations (window moves from timers).")
                                                     '(:actions (:type "array" :items (:type "object"))))
                                             '("session" "actions")))
    (list :name "ui_perf"
-         :description "Run a perf workload in the session (typing, scrolling, tabs, explorer, agent-typing, frames, redisplay, memory): input latency p50/p95/max, GC, redisplay or frame times — the numbers `drgnx test --perf' judges (docs/develop/perf.md)."
+         :description "Run a perf workload in the session (typing, scrolling, tabs, explorer, agent-typing, typing-with-ghost, frames, redisplay, memory): input latency p50/p95/max, GC, redisplay or frame times — the numbers `drgnx test --perf' judges (docs/develop/perf.md)."
          :inputSchema (drgnx-ui-mcp--schema (append drgnx-ui-mcp--session '(:workload (:type "string") :audit (:type "boolean")))
                                             '("session" "workload")))))
 

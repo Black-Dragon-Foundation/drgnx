@@ -50,8 +50,11 @@
   (let* ((process-environment (append (list "MOCK_LLM_SERVE=1" (format "MOCK_LLM_PORT=%d" port) (concat "MOCK_LLM_SCRIPT=" script))
                                       (and log (list (concat "MOCK_LLM_LOG=" log)))
                                       process-environment))
+         ;; SIGPIPE ignored, as a server does: a client that went away (a cancelled request) must not kill it —
+         ;; started from a GUI session it would (signal 13)
          (p (make-process :name "mock-llm" :noquery t :buffer nil :connection-type 'pipe
-                          :command (list (expand-file-name invocation-name invocation-directory) "--batch" "-Q" "-l"
+                          :command (list "sh" "-c" "trap '' PIPE; exec \"$0\" \"$@\""
+                                         (expand-file-name invocation-name invocation-directory) "--batch" "-Q" "-l"
                                          mock-llm--file)))
          (deadline (+ (float-time) 10)))
     (while (and (< (float-time) deadline)

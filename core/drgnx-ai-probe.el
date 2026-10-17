@@ -48,10 +48,11 @@ Returns at once."
   (let* ((ps (seq-filter (lambda (e) (if ids (memq (car e) ids) (drgnx-ai--local-p (cdr e)))) (drgnx-ai-providers)))
          (left (length ps)) (found nil)
          (finish (lambda ()
-                   (setq drgnx-ai-detected found)
+                   ;; only the providers asked: the others (or one added while this probe ran) stay as known
+                   (dolist (e found) (setf (alist-get (car e) drgnx-ai-detected) (cdr e)))
                    (ignore-errors
                      (make-directory (file-name-directory (drgnx-ai-detected-file)) t)
-                     (with-temp-file (drgnx-ai-detected-file) (prin1 found (current-buffer))))
+                     (with-temp-file (drgnx-ai-detected-file) (prin1 drgnx-ai-detected (current-buffer))))
                    (run-hooks 'drgnx-ai-probe-done-hook)
                    (when callback (funcall callback)))))
     (if (null ps) (funcall finish)

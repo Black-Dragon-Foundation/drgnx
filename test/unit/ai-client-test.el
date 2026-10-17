@@ -138,6 +138,17 @@
       (should-not (plist-get (alist-get 't1 drgnx-ai-detected) :up))
       (should (string-match-p "not TEI" (plist-get (alist-get 't1 drgnx-ai-detected) :note))))))
 
+(ert-deftest drgnx-ai-probe/a-probe-updates-the-providers-it-asked-and-keeps-the-rest ()
+  ;; probing some providers (or a probe begun before a provider was added) never forgets the others
+  (drgnx-ai-client-test--with '((:path "/api/tags" :body "{\"models\":[]}"))
+    (setq drgnx-ai-detected '((other :up t :models ("m")) (o :up nil)))
+    (let (done)
+      (drgnx-ai-probe (lambda () (setq done t)) '(o))
+      (let ((deadline (+ (float-time) 10))) (while (and (not done) (< (float-time) deadline)) (accept-process-output nil 0.02)))
+      (should (plist-get (alist-get 'o drgnx-ai-detected) :up))
+      (should (equal (alist-get 'other drgnx-ai-detected) '(:up t :models ("m"))))
+      (should (= (length drgnx-ai-detected) 2)))))
+
 (ert-deftest drgnx-ai-probe/fill-in-the-middle-capability ()
   (drgnx-ai-client-test--with
       '((:path "/api/show" :match "coder" :body "{\"capabilities\":[\"completion\",\"insert\"]}")

@@ -61,6 +61,28 @@
             (should (equal (buffer-string)
                            (concat ";; header\n(defun a ()\n  1)\n" drgnx-ai-edit-test--gap "(defun b ()\n  20)\n;; footer\n")))))))))
 
+(ert-deftest drgnx-ai-edit/applying-a-hunk-keeps-the-review-on-screen ()
+  ;; diff's own apply shows the file it patches — here the review's temporary copy, in the review's window
+  (drgnx-ai-edit-test--with (concat "(defun a ()\n  10)\n" drgnx-ai-edit-test--gap "(defun b ()\n  20)\n")
+    (let ((src (generate-new-buffer "src.el")) (was (window-buffer (selected-window))))
+      (unwind-protect
+          (with-current-buffer src
+            (emacs-lisp-mode)
+            (insert drgnx-ai-edit-test--code)
+            (set-window-buffer (selected-window) src)
+            (drgnx-ai-edit "times ten" (point-min) (point-max))
+            (let ((review (drgnx-ai-edit-test--review)))
+              (select-window (get-buffer-window review))
+              (goto-char (point-min)) (diff-hunk-next) (diff-hunk-next)
+              (let ((inhibit-message t)) (drgnx-ai-edit-apply-hunk))
+              (should (eq (window-buffer (selected-window)) review))
+              (should-not (seq-find (lambda (w) (string-prefix-p "now-" (buffer-name (window-buffer w)))) (window-list)))
+              (with-current-buffer review (drgnx-ai-edit-done))
+              (should (equal (with-current-buffer src (buffer-string))
+                             (concat "(defun a ()\n  1)\n" drgnx-ai-edit-test--gap "(defun b ()\n  20)\n")))))
+        (set-window-buffer (selected-window) was)
+        (kill-buffer src)))))
+
 (ert-deftest drgnx-ai-edit/edits-elsewhere-meanwhile-are-kept-a-changed-region-is-not-overwritten ()
   (drgnx-ai-edit-test--with "(defun a ()\n  10)\n"
     (with-temp-buffer

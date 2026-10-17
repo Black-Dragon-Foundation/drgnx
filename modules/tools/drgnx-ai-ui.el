@@ -107,8 +107,9 @@
     (let ((buf (current-buffer)))
       (setq drgnx-ai-ghost--timer
             (run-with-idle-timer drgnx-ai-ghost-delay nil
-                                 (lambda () (when (and (buffer-live-p buf) (eq buf (current-buffer)))
-                                              (drgnx-ai-ghost--trigger))))))))
+                                 ;; the buffer on screen, whatever is current (the timer may fire inside a wait)
+                                 (lambda () (when (and (buffer-live-p buf) (eq buf (window-buffer (selected-window))))
+                                              (with-current-buffer buf (drgnx-ai-ghost--trigger)))))))))
 
 (define-minor-mode drgnx-ai-ghost-mode
   "Ghost-text completion from the `complete' role; Tab is `drgnx-ai-tab'."
@@ -201,7 +202,7 @@ only: no explanation, no Markdown fence."
 answer came, how much of the copy is before and after it, the copy that takes the hunks you apply.")
 
 (defvar drgnx-ai-edit-review-mode-map (make-sparse-keymap)
-  "Keys come from the key profiles (commands `ai-edit-done', `ai-edit-reject').")
+  "Keys come from the key profiles (commands `ai-edit-apply-hunk', `ai-edit-done', `ai-edit-reject').")
 
 (define-minor-mode drgnx-ai-edit-review-mode
   "An AI edit: apply the hunks you want (C-c C-a), then Done puts them in the buffer; Reject drops it."
@@ -261,6 +262,14 @@ hunk by hunk before anything changes."
       (setq drgnx-ai--edit nil)
       (when-let* ((cb (find-buffer-visiting copy))) (with-current-buffer cb (set-buffer-modified-p nil)) (kill-buffer cb))
       (ignore-errors (delete-directory dir t)))))
+
+(defun drgnx-ai-edit-apply-hunk ()
+  "Apply the hunk at point to the review's copy; the review stays on screen (diff's own apply shows the copy)."
+  (interactive)
+  (unless drgnx-ai--edit (user-error "Not an AI edit"))
+  (let ((pt (point)))
+    (save-window-excursion (diff-apply-hunk))
+    (goto-char pt)))
 
 (defun drgnx-ai-edit-done ()
   "Put the hunks you applied into the buffer's region; edits made elsewhere meanwhile stay.  Refuses when the
@@ -425,6 +434,8 @@ and keep it in ai.eld (never a key)."
                                                 "Accept a suggestion, else the popup's, snippet's, heading's or indent Tab" drgnx-ai-ghost-mode-map)
                                         (ai-complete-toggle "Toggle AI Completion" drgnx-ai-complete-toggle "Ghost text on or off" nil)
                                         (ai-edit "Edit with AI…" drgnx-ai-edit "Rewrite the region (or defun) as you say; review hunk by hunk" nil)
+                                        (ai-edit-apply-hunk "Apply AI Edit Hunk" drgnx-ai-edit-apply-hunk
+                                                            "Take the hunk at point; the review stays" drgnx-ai-edit-review-mode-map)
                                         (ai-edit-done "Done Reviewing AI Edit" drgnx-ai-edit-done "Put the hunks you applied in the buffer"
                                                       drgnx-ai-edit-review-mode-map)
                                         (ai-edit-reject "Reject AI Edit" drgnx-ai-edit-reject "Drop the edit; the buffer stays"

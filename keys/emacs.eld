@@ -40,6 +40,7 @@
         (ai-dismiss "<escape>" :map drgnx-ai-ghost-showing-map)
         (ai-complete-toggle :none "in the palette")
         (ai-edit "C-c e")
+        (ai-edit-apply-hunk "C-c C-a" :map drgnx-ai-edit-review-mode-map)
         (ai-edit-done "C-c C-c" :map drgnx-ai-edit-review-mode-map)
         (ai-edit-reject "C-c C-k" :map drgnx-ai-edit-review-mode-map)
         (ai-ask :none "in the palette")
