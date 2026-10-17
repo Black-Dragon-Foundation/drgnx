@@ -33,4 +33,23 @@
       (should-error (drgnx-init))
       (should (= gc-cons-threshold drgnx-gc-cons-threshold)))))
 
+(ert-deftest drgnx-gc/the-users-own-threshold-is-kept ()
+  ;; M8-5: a threshold the user set (no longer early-init's startup value) is left alone.
+  (let ((gc-cons-threshold (* 16 1024 1024)) (gc-cons-percentage 0.2) (timer-idle-list nil))
+    (drgnx-gc-setup)
+    (should (= gc-cons-threshold (* 16 1024 1024)))
+    (should (= gc-cons-percentage 0.2))
+    (should (seq-find (lambda (tm) (eq (timer--function tm) #'drgnx-gc--idle)) timer-idle-list))))
+
+(ert-deftest drgnx-gc/gcmh-is-left-to-do-its-work ()
+  ;; M8-5: gcmh-mode collects at idle and sets the threshold itself: no idle timer, no threshold.
+  (skip-unless (not (boundp 'gcmh-mode)))   ; never shadow a loaded gcmh
+  (let ((gc-cons-threshold (* 1024 1024 1024)) (timer-idle-list nil))
+    (set 'gcmh-mode t)
+    (unwind-protect
+        (progn (drgnx-gc-setup)
+               (should (= gc-cons-threshold (* 1024 1024 1024)))
+               (should-not (seq-find (lambda (tm) (eq (timer--function tm) #'drgnx-gc--idle)) timer-idle-list)))
+      (makunbound 'gcmh-mode))))
+
 ;;; core-gc-test.el ends here

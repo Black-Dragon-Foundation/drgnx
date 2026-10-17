@@ -16,11 +16,17 @@
 
 (defun drgnx-gc--idle () (garbage-collect))
 
+(defconst drgnx-gc--starting-above (* 256 1024 1024)
+  "early-init.el's startup threshold is above this (its emacs-startup-hook tests the same).")
+
 (defun drgnx-gc-setup ()
-  "The steady threshold and the idle collection (once)."
-  (setq gc-cons-threshold drgnx-gc-cons-threshold gc-cons-percentage 0.1)
-  (unless (seq-find (lambda (tm) (eq (timer--function tm) #'drgnx-gc--idle)) timer-idle-list)
-    (run-with-idle-timer drgnx-gc-idle-seconds t #'drgnx-gc--idle)))
+  "The steady threshold and the idle collection (once) — unless gcmh-mode does both, and the threshold
+only while it is early-init's startup value (a user's own is kept)."
+  (unless (bound-and-true-p gcmh-mode)
+    (when (> gc-cons-threshold drgnx-gc--starting-above)
+      (setq gc-cons-threshold drgnx-gc-cons-threshold gc-cons-percentage 0.1))
+    (unless (seq-find (lambda (tm) (eq (timer--function tm) #'drgnx-gc--idle)) timer-idle-list)
+      (run-with-idle-timer drgnx-gc-idle-seconds t #'drgnx-gc--idle))))
 
 (provide 'drgnx-gc)
 ;;; drgnx-gc.el ends here
