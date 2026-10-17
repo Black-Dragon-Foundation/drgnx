@@ -20,6 +20,9 @@
 (defun drgnx-mcp--content (value)
   (list :content (vector (list :type "text" :text (if (stringp value) value (drgnx-mcp--json value))))))
 
+(define-error 'drgnx-mcp-no-method "No such MCP method")
+(define-error 'drgnx-mcp-invalid-params "Invalid params")
+
 (defun drgnx-mcp-handle (name tools msg)
   "The reply to MSG (a parsed JSON-RPC plist) for server NAME with TOOLS, or nil for a notification."
   (let ((id (plist-get msg :id)) (method (plist-get msg :method)) (params (plist-get msg :params)))
@@ -40,12 +43,13 @@
                    (let ((tool (assoc (plist-get params :name) tools)))
                      (if (not tool) (append (drgnx-mcp--content (format "no tool %s" (plist-get params :name))) (list :isError t))
                        (condition-case e (drgnx-mcp--content (funcall (plist-get (cdr tool) :call) (plist-get params :arguments)))
+                         ;; a malformed request is the protocol's error, not a tool result
+                         (drgnx-mcp-invalid-params (signal (car e) (cdr e)))
                          (error (append (drgnx-mcp--content (error-message-string e)) (list :isError t)))))))
                   (_ (signal 'drgnx-mcp-no-method (list method)))))
         (drgnx-mcp-no-method (list :jsonrpc "2.0" :id id :error (list :code -32601 :message (format "method not found: %s" method))))
+        (drgnx-mcp-invalid-params (list :jsonrpc "2.0" :id id :error (list :code -32602 :message (error-message-string err))))
         (error (list :jsonrpc "2.0" :id id :error (list :code -32603 :message (error-message-string err))))))))
-
-(define-error 'drgnx-mcp-no-method "No such MCP method")
 
 (defun drgnx-mcp-serve (name tools)
   "Serve TOOLS as MCP server NAME on stdin/stdout until end of input, then exit."

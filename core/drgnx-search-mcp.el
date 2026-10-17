@@ -38,6 +38,8 @@ level, so a sub-directory never makes an index of its own; an error when PATH is
 
 (defun drgnx-search-mcp--search (root query k)
   "Search the project at ROOT for QUERY: (LINES . NOTICE).  An error when there is no index."
+  (when-let* ((problem (plist-get (drgnx-search-config root) :error)))
+    (signal 'error (list problem)))
   (unless (file-exists-p (drgnx-search-store-file root))
     ;; `signal', not `error': `error' would turn the backquote into a curly quote
     (signal 'error (list (format "no index for %s — run `drgnx search index %s` or Search: Index Project" root root))))
@@ -51,7 +53,9 @@ level, so a sub-directory never makes an index of its own; an error when PATH is
          (root (drgnx-search-mcp--project (if (and (stringp path) (not (string-empty-p path))) path default-root)))
          (k (plist-get args :k)))
     (when (string-empty-p query) (error "query is required: ask in words what the code does"))
-    (let ((answer (drgnx-search-mcp--search root query (and (integerp k) k))))
+    (when (and k (not (integerp k)))
+      (signal 'drgnx-mcp-invalid-params (list "k must be an integer, 1 to 50")))
+    (let ((answer (drgnx-search-mcp--search root query k)))
       (mapconcat #'identity
                  (append (or (car answer) (list "no matches"))
                          (and (cdr answer) (list (concat "note: " (cdr answer)))))

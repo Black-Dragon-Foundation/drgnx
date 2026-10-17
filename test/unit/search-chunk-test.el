@@ -229,6 +229,13 @@
       (drgnx-search-chunk-test--write root ".drgnx/search.eld" "(:include (\"**\" \"*.pem\" \"id_rsa*\" \"*secret*\"))")
       (should (equal (drgnx-search-chunk-test--paths root) '("monkey.el" "ok.txt" "src/keyboard.el"))))))
 
+(ert-deftest drgnx-search-files/netrc-and-authinfo-are-whole-names ()
+  "The credential files are excluded; code that merely has netrc or authinfo in its name is not."
+  (dolist (bad '("netrc" ".netrc" "_netrc" "NETRC" "authinfo" ".authinfo" "authinfo.gpg" ".authinfo.gpg" "d/netrc.bak"))
+    (should (drgnx-search--sensitive-name-p bad)))
+  (dolist (ok '("netrc-parser.el" "netrc.el" "my-netrc.el" "authinfo-helper.py" "auth-source-authinfo.el" "netrc/readme.md"))
+    (should-not (drgnx-search--sensitive-name-p ok))))
+
 (ert-deftest drgnx-search-files/only-regular-files ()
   "A tracked file replaced by a FIFO is never opened (it would block)."
   (skip-unless (executable-find "mkfifo"))

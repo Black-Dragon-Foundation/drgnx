@@ -308,7 +308,9 @@ One `git hash-object --stdin-paths' call over the PATHS that are still regular f
 (defconst drgnx-search--sensitive-name-regexp
   (concat "\\(?:\\.\\(?:pem\\|key\\|p12\\|pfx\\|kdbx\\|keystore\\|jks\\|asc\\|gpg\\|env\\)\\'"
           "\\|\\`id_\\(?:rsa\\|dsa\\|ecdsa\\|ed25519\\)"
-          "\\|secret\\|credential\\|authinfo\\|netrc\\)")
+          "\\|secret\\|credential"
+          ;; the credential files of netrc and auth-source, not code that merely has the word in its name
+          "\\|\\`[._]?\\(?:netrc\\|authinfo\\)\\(?:\\.\\(?:gpg\\|asc\\|enc\\|txt\\|bak\\|old\\|orig\\|json\\)\\)?\\'\\)")
   "File names (basename, case-insensitive) that look like keys or secrets.")
 
 (defun drgnx-search--sensitive-name-p (path)
@@ -345,7 +347,8 @@ deleted on disk is not listed, nor is one in a merge conflict (index stages 1-3 
 included, whatever `drgnx-search-config' says: anything but a regular file (symlink, FIFO,
 submodule), a dot file or a file under a dot directory, a key or secret by name (*.pem, *.key, *.p12,
 *.pfx, *.kdbx, *.keystore, *.jks, *.asc, *.gpg, *.env, id_rsa*, id_dsa*, id_ecdsa*, id_ed25519*,
-anything containing secret, credential, authinfo or netrc, case-insensitively), a file over 1 MiB,
+anything containing secret or credential, netrc and authinfo files — those names, with an optional leading dot or
+underscore and an optional .gpg, .asc, .enc, .txt, .bak, .old, .orig or .json —, all case-insensitively), a file over 1 MiB,
 a binary, a file in a directory whose real path (symlinks resolved) is outside the project.  A modified or
 untracked file whose path contains a newline or starts with a double quote cannot be hashed and is left out
 too.  The configuration then narrows the list.

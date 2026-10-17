@@ -123,6 +123,29 @@
       (should (string-match-p "no index for .* — run `drgnx search index .*` or Search: Index Project" (car r)))
       (should (string-search root (car r))))))
 
+(ert-deftest drgnx-search-mcp/a-broken-config-is-an-error-even-with-an-index ()
+  (drgnx-search-mcp-test--project
+    (drgnx-search-mcp-test--build-index root)
+    (make-directory (expand-file-name ".drgnx" root))
+    (write-region "(:include " nil (expand-file-name ".drgnx/search.eld" root) nil 'silent)
+    (let ((r (drgnx-search-mcp-test--call root '(:query "database"))))
+      (should (cdr r))
+      (should (string-match-p "\\.drgnx/search\\.eld cannot be read" (car r))))))
+
+(ert-deftest drgnx-search-mcp/a-k-that-is-not-an-integer-is-invalid-params ()
+  (drgnx-search-mcp-test--project
+    (drgnx-search-mcp-test--build-index root)
+    (dolist (k (quote ("5" 2.5 t)))
+      (let* ((reply (drgnx-mcp-handle "drgnx-search" (drgnx-search-mcp-tools root)
+                                      (list :jsonrpc "2.0" :id 1 :method "tools/call"
+                                            :params (list :name "search" :arguments (list :query "database" :k k)))))
+             (err (plist-get reply :error)))
+        (should (equal (plist-get err :code) -32602))
+        (should (string-match-p "\\bk\\b" (plist-get err :message)))))
+    ;; absent, or an integer: fine
+    (should-not (cdr (drgnx-search-mcp-test--call root '(:query "database"))))
+    (should-not (cdr (drgnx-search-mcp-test--call root '(:query "database" :k 2))))))
+
 (ert-deftest drgnx-search-mcp/an-empty-query-is-an-error ()
   (drgnx-search-mcp-test--project
     (drgnx-search-mcp-test--build-index root)

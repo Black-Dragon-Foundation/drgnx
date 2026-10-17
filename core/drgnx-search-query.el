@@ -115,13 +115,16 @@ index described by META, or nil.  Mirrors the indexer's own check."
   (setq drgnx-search-last-notice (replace-regexp-in-string "[ \t\n]+" " " (string-trim (apply #'format format args)))))
 
 (defun drgnx-search--ready (root)
-  "Non-nil when ROOT's index can be searched; else nil, and the notice says why."
-  (cond ((not (sqlite-available-p)) (drgnx-search--notice "this Emacs has no SQLite") nil)
-        ((eq t (plist-get (drgnx-search-config root) :off))
-         (drgnx-search--notice "search is off for this project (.drgnx/search.eld)") nil)
-        ((not (file-exists-p (drgnx-search-store-file root)))
-         (drgnx-search--notice "no index for this project — Search: Index Project") nil)
-        (t t)))
+  "Non-nil when ROOT's index can be searched; else nil, and the notice says why.
+A search.eld that cannot be read refuses the query, as it stops the indexer."
+  (let ((config (and (sqlite-available-p) (drgnx-search-config root))))
+    (cond ((not (sqlite-available-p)) (drgnx-search--notice "this Emacs has no SQLite") nil)
+          ((plist-get config :error) (drgnx-search--notice "%s" (plist-get config :error)) nil)
+          ((eq t (plist-get config :off))
+           (drgnx-search--notice "search is off for this project (.drgnx/search.eld)") nil)
+          ((not (file-exists-p (drgnx-search-store-file root)))
+           (drgnx-search--notice "no index for this project — Search: Index Project") nil)
+          (t t))))
 
 (defun drgnx-search-hit-line (hit)
   "(LINE . TEXT) for HIT (a result of `drgnx-search'): its chunk's first non-blank line, trimmed, and that line's

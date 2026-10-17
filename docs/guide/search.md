@@ -102,7 +102,7 @@ memory cap, no lower priority) — wrap it yourself if you need that, for exampl
 | Argument | |
 |---|---|
 | `query` (required) | what you look for, in words |
-| `k` | how many hits, 1 to 50 (default 10) |
+| `k` | how many hits, 1 to 50 (default 10); a value that is not an integer is an invalid-params error |
 | `path` | the project, or any directory inside it; default: the server's project. A path in no git project is an error |
 
 `path` is not limited to the server's own project: the agent can search **any git project of yours that already has an
@@ -150,8 +150,8 @@ Whatever the configuration says:
 
 - dot files and everything under a dot directory (`.env`, `.git`, `.github`, …);
 - files whose names look like keys or secrets (`*.pem`, `*.key`, `*.p12`, `*.pfx`, `*.kdbx`, `*.keystore`, `*.jks`,
-  `*.asc`, `*.gpg`, `*.env`, `id_rsa*`, `id_dsa*`, `id_ecdsa*`, `id_ed25519*`, and any name containing `secret`, `credential`, `authinfo` or
-  `netrc`);
+  `*.asc`, `*.gpg`, `*.env`, `id_rsa*`, `id_dsa*`, `id_ecdsa*`, `id_ed25519*`, any name containing `secret` or `credential`, and
+  the credential files `netrc` and `authinfo` (also with a leading `.` or `_`, or a `.gpg`, `.asc`, `.enc`, `.txt`, `.bak`, `.old`, `.orig` or `.json` ending; `netrc-parser.el` is code and is indexed);
 - binary files, files over 1 MiB, symbolic links, submodules, and files in a directory whose real path is outside the
   project (a directory replaced by a symbolic link to elsewhere);
 - files that `.gitignore` excludes (the index lists the project's tracked files and the untracked ones that git does
@@ -173,7 +173,7 @@ depth, and a trailing `/` means everything below that directory.
 `:include` and `:exclude` must be lists of strings and `:off` `t` or `nil`. A file that is there but cannot be read (a `.drgnx` directory you cannot enter, or `search.eld` a symlink to nothing, count too), is
 not a plist or gives a key another type (`:exclude "vendor/"` instead of `:exclude ("vendor/")`) never falls back to
 the defaults — that could send files you meant to exclude to the provider. Instead nothing is indexed for the project:
-the indexer stops with ".drgnx/search.eld cannot be read: …", saving a file does not schedule a re-index, and Index
+the indexer stops with ".drgnx/search.eld cannot be read: …", a search of an index made earlier refuses with the same message (in the editor, from the command line and for agents), saving a file does not schedule a re-index, and Index
 Project, Index Status and `drgnx doctor` say what is wrong. Without the file, the defaults apply.
 
 ## How fast

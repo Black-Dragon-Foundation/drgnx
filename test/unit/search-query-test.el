@@ -388,6 +388,22 @@
       (should (equal drgnx-search-last-notice "search is off for this project (.drgnx/search.eld)"))
       (should-not asked))))
 
+(ert-deftest drgnx-search/a-broken-config-refuses-queries-of-an-existing-index ()
+  "A search.eld that cannot be read is no licence to search: the index exists, but the query refuses with the
+config error, as the indexer does."
+  (drgnx-search-query-test--with-dir
+    (make-directory (expand-file-name ".drgnx" root))
+    (write-region "(:include " nil (expand-file-name ".drgnx/search.eld" root) nil 'silent)
+    (let ((asked nil) (got 'none))
+      (should-not (drgnx-search root "database" :embed (lambda (_) (setq asked t) (error "asked"))))
+      (should (string-match-p "\\`\\.drgnx/search\\.eld cannot be read: ." drgnx-search-last-notice))
+      (setq drgnx-search-last-notice nil)
+      (cl-letf (((symbol-function 'drgnx-ai-request) (lambda (&rest _) (setq asked t) (error "asked"))))
+        (drgnx-search-async root "database" (lambda (r) (setq got r))))
+      (should (null got))
+      (should (string-match-p "cannot be read" drgnx-search-last-notice))
+      (should-not asked))))
+
 (ert-deftest drgnx-search/the-embed-role-is-the-searched-projects ()
   "The question is embedded with the `embed' role of ROOT (its .drgnx/ai.eld), not of the current buffer."
   (drgnx-search-query-test--with-dir
