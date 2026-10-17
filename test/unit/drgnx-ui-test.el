@@ -146,6 +146,33 @@ the real ones belong to sessions running next to the tests (bin/drgnx check's li
       (should (file-directory-p new))
       (should (file-directory-p other)))))
 
+(ert-deftest drgnx-ui/the-shared-eln-cache-is-pruned ()
+  ;; DEFERRED M8-4: the sessions' shared eln cache (ROOT/eln-cache) keeps only what was used lately; the
+  ;; cache of an Emacs no longer run goes with its last file
+  (drgnx-ui-test--with-state
+    (let* ((cache (expand-file-name "eln-cache" root))
+           (old (time-subtract nil (* 86400 (1+ drgnx-ui-eln-max-days))))
+           (file (lambda (rel &optional time)
+                   (let ((f (expand-file-name rel cache)))
+                     (make-directory (file-name-directory f) t)
+                     (write-region "" nil f)
+                     (when time (set-file-times f time))
+                     f))))
+      (let ((stale (funcall file "30.2-aaaa/subr--trampoline-x.eln" old))
+            (used (funcall file "30.2-aaaa/subr--trampoline-y.eln"))
+            (preloaded (funcall file "30.2-aaaa/preloaded/z.eln" old))
+            (gone (funcall file "29.4-bbbb/w.eln" old))
+            (other (funcall file "30.2-aaaa/notes.txt" old)))
+        (cl-letf (((symbol-function 'drgnx-ui--run) (lambda (&rest _) (cons 0 ""))))
+          (drgnx-ui-reap))
+        (should-not (file-exists-p stale))
+        (should-not (file-exists-p preloaded))
+        (should (file-exists-p used))
+        (should (file-exists-p other))
+        (should-not (file-exists-p (file-name-directory preloaded)))
+        (should-not (file-exists-p (file-name-directory gone)))
+        (should (file-directory-p cache))))))
+
 (ert-deftest drgnx-ui/reap-leaves-other-state-roots-alone ()
   (drgnx-ui-test--with-state
     (let ((units "drgnx-ui-41.service loaded active running x\ndrgnx-ui-42.service loaded active running y\n")

@@ -23,6 +23,7 @@
 (when (fboundp 'startup-redirect-eln-cache)
   ;; One cache for every session of this state root (still never the user's): native code and
   ;; advice trampolines are compiled once, not by every session (that cost ~150 ms per start).
+  ;; The controller prunes what no session used for a month (`drgnx-ui--prune-eln-cache').
   (startup-redirect-eln-cache (expand-file-name "eln-cache" (file-name-directory (directory-file-name drgnx-ui-run)))))
 (when (and drgnx-ui-config (boundp 'native-comp-eln-load-path))
   ;; Reuse the config's compiled code; the last entry must stay the system directory.

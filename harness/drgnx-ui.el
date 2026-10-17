@@ -389,6 +389,7 @@ DAEMON non-nil: run Emacs as a daemon; open frames with `drgnx-ui-new-frame'.  M
 many virtual monitors (default 1)."
   (let* ((root (drgnx-ui-state-root))
          (_ (make-directory root t))
+         (_ (drgnx-ui--prune-eln-cache root))
          (sess (drgnx-ui--claim-and-launch config size root daemon monitors))
          (name (plist-get sess :name))
          (run (plist-get sess :run)))
@@ -529,10 +530,34 @@ Units of other state roots (another checkout, a test run) are left alone."
                    (< (float-time (file-attribute-modification-time attrs)) cutoff))
           (delete-directory dir t))))))
 
+(defconst drgnx-ui-eln-max-days 30
+  "Days a native-compiled file in the sessions' shared eln cache is kept after its last use.")
+
+(defun drgnx-ui--prune-eln-cache (root)
+  "Delete .eln files in ROOT's shared eln cache (harness/init/prelude.el) unused for
+`drgnx-ui-eln-max-days' — last use is the later of access and modification time — then the
+directories left empty: the cache of an Emacs no longer run goes with its last file.  Emacs
+recreates a directory it compiles into."
+  (let ((cache (expand-file-name "eln-cache" root))
+        (cutoff (- (float-time) (* 86400 drgnx-ui-eln-max-days))))
+    (when (file-directory-p cache)
+      (dolist (f (directory-files-recursively cache "\\.eln\\'"))
+        (let ((a (file-attributes f)))
+          (when (and (eq (file-attribute-type a) nil)
+                     (< (max (float-time (file-attribute-access-time a))
+                             (float-time (file-attribute-modification-time a)))
+                        cutoff))
+            (ignore-errors (delete-file f)))))
+      ;; deepest first: a directory comes after its contents
+      (dolist (d (directory-files-recursively cache "" t))
+        (when (eq (file-attribute-type (file-attributes d)) t)
+          (ignore-errors (delete-directory d)))))))   ; only if empty
+
 (defun drgnx-ui-reap ()
   "Stop every session of this state root, live or stale; return their names.
-Old kept test runs go too (`drgnx-ui--remove-old-test-runs')."
+Old kept test runs go too (`drgnx-ui--remove-old-test-runs'), and the eln cache is pruned."
   (drgnx-ui--remove-old-test-runs (drgnx-ui-state-root))
+  (drgnx-ui--prune-eln-cache (drgnx-ui-state-root))
   (let* ((units (cdr (drgnx-ui--run "systemctl" "--user" "list-units" "drgnx-ui-*" "--all"
                                     "--plain" "--no-legend")))
          (names (drgnx-ui-reap-targets (drgnx-ui-state-root) units #'drgnx-ui--unit-cmdline)))
@@ -713,6 +738,7 @@ functions and hook totals measured in the session."
 with EXTRA-ENV (\"K=V\" strings).  Return (RC RESULTS RUN)."
   (let* ((name (format "drgnx-ui-test-%d-%d" (emacs-pid) (random 100000)))
          (_ (drgnx-ui--remove-old-test-runs (drgnx-ui-state-root)))   ; failed runs kept long enough
+         (_ (drgnx-ui--prune-eln-cache (drgnx-ui-state-root)))
          (sess (drgnx-ui-prepare-run name config "1600x900"))
          (run (plist-get sess :run))
          (results (expand-file-name "results.json" run))
