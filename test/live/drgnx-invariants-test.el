@@ -1,6 +1,6 @@
 ;;; drgnx-invariants-test.el --- live: the workbench invariants I1–I10 (config=drgnx) -*- lexical-binding: t -*-
 ;; Each test drives a GUI session with real input (VS Code key profile), the jank guard on.
-;; The invariants are listed in docs/workbench.md.
+;; The invariants are listed in docs/guide/workbench.md.
 (require 'ert)
 (require 'seq)
 (require 'drgnx-ui)

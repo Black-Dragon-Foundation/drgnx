@@ -10,7 +10,7 @@
 ;; only.  The chrome lives in window parameters, which win over any mode's own
 ;; `header-line-format', `tab-line-format' or `mode-line-format', so no buffer can make a
 ;; window's text jump.  New windows get their chrome before they are first drawn (the change
-;; bus's window setup); tabs and breadcrumbs follow the bus's edges.  See docs/workbench.md.
+;; bus's window setup); tabs and breadcrumbs follow the bus's edges.  See docs/guide/workbench.md.
 
 ;;; Code:
 (require 'cl-lib)

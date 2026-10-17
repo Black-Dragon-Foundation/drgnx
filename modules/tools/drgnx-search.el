@@ -5,7 +5,7 @@
 ;;; Commentary:
 ;; Quick Open (a project file by name), Search in Project (results in the panel's Results tab),
 ;; Go to Symbol in the file and in the project, Find in File, Replace in Project, Recent Buffers.
-;; Built on project.el, xref and imenu (consult when installed).  See docs/modules.md.
+;; Built on project.el, xref and imenu (consult when installed).  See docs/guide/modules.md.
 
 ;;; Code:
 (require 'drgnx-modules)

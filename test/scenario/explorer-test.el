@@ -1,6 +1,6 @@
 ;;; explorer-test.el --- Scenarios: the Explorer (file tree) -*- lexical-binding: t -*-
 ;; SPDX-License-Identifier: GPL-3.0-or-later
-;; The reference is VS Code's Explorer.  See docs/scenarios.md.
+;; The reference is VS Code's Explorer.  See docs/develop/scenarios.md.
 
 (require 'ert)
 (require 'drgnx-scenario)

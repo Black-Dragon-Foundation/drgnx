@@ -4,7 +4,7 @@
 
 ;;; Commentary:
 ;; The checkout is read-only code; user configuration lives in `drgnx-user-dir', state and
-;; caches in XDG directories — never inside the checkout (docs/core.md).
+;; caches in XDG directories — never inside the checkout (docs/develop/core.md).
 
 ;;; Code:
 (defconst drgnx-dir

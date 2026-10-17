@@ -7,7 +7,7 @@
 ;; plan) get it as DRGNX_TASK; drgnx notes the git HEAD they start at and records the commits made
 ;; since — after each agent turn, and once a job ended.  Commit messages stay untouched; the links
 ;; live in the tracker's database (and, when `drgnx-work-git-notes' is on, in git notes too).
-;; `drgnx work record|scan|status' is the command line.  See docs/work.md.
+;; `drgnx work record|scan|status' is the command line.  See docs/guide/work.md.
 
 ;;; Code:
 (require 'cl-lib)

@@ -3,7 +3,7 @@
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 
 ;;; Commentary:
-;; Loaded only inside harness sessions (docs/harness.md).  Input is queued and delivered
+;; Loaded only inside harness sessions (docs/develop/harness.md).  Input is queued and delivered
 ;; one event per `drgnx-uitest-tick', so redisplay runs between events as it does for a
 ;; person; queued input would skip redisplay and hide jank.  Positions are root-frame
 ;; pixels, the same pixels as a screenshot.  APIs called through emacsclient run in

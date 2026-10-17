@@ -9,7 +9,7 @@
 ;; prints the comparison.  treemacs is loaded only in that session, read-only, from
 ;; $DRGNX_BENCH_ELPA (default ~/.config/emacs/elpa when present); without it only drgnx and
 ;; ibuffer are measured.  Fails when drgnx misses a budget or is slower than the competitor.
-;; See docs/workbench.md.
+;; See docs/guide/workbench.md.
 
 ;;; Code:
 (require 'cl-lib)

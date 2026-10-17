@@ -80,7 +80,7 @@
   (let ((r (drgnx-install-test--plan "unknown")))
     (should (= (car r) 2))
     (should (string-search "Plan 9 from Bell Labs" (cdr r)))
-    (should (string-search "docs/install.md" (cdr r)))))
+    (should (string-search "docs/guide/install.md" (cdr r)))))
 
 (ert-deftest drgnx-install/a-good-emacs-is-kept ()
   (let ((fake (make-temp-file "fake-emacs")))
@@ -209,7 +209,7 @@
   (dolist (os '("rocky-9" "amazon-2023"))
     (let ((r (drgnx-install-test--plan os)))
       (should (= (car r) 2))
-      (should (string-search "docs/install.md" (cdr r)))))
+      (should (string-search "docs/guide/install.md" (cdr r)))))
   (drgnx-install-test--expect (drgnx-install-test--plan "nobara-42") "build GNU Emacs 31.1 from source" "dnf builddep -y emacs"))
 
 (ert-deftest drgnx-install/relative-paths-become-absolute ()

@@ -7,7 +7,7 @@
 ;; answer is about that Emacs.  A check is a function of a facts plist (gathered once by
 ;; `drgnx-doctor-facts', injected in tests) returning (STATUS DETAIL FIX), STATUS one of
 ;; `ok', `warn', `fail' or `info'.  Any `fail' makes the doctor exit 1.  Modules will add
-;; their own checks with `drgnx-doctor-define' (M4).  See docs/install.md.
+;; their own checks with `drgnx-doctor-define' (M4).  See docs/guide/install.md.
 
 ;;; Code:
 (require 'cl-lib)
@@ -15,7 +15,7 @@
 (require 'subr-x)
 
 (defconst drgnx-doctor-install-hint
-  "run the installer: curl -fsSL https://raw.githubusercontent.com/Black-Dragon-Foundation/drgnx/main/install.sh | bash  (see docs/install.md)"
+  "run the installer: curl -fsSL https://raw.githubusercontent.com/Black-Dragon-Foundation/drgnx/main/install.sh | bash  (see docs/guide/install.md)"
   "How to get a suitable Emacs.")
 
 (defconst drgnx-doctor-cves-fixed-in-31.2
@@ -191,11 +191,11 @@ DEV non-nil: only run for `drgnx doctor --dev' (tools for developing drgnx)."
              (cond ((null r) (list 'info "no key report yet — start drgnx once" nil))
                    (problems (list 'warn (format "%d key problem%s: %s" (length problems) (if (cdr problems) "s" "")
                                                  (string-join problems "; "))
-                                   "fix ~/.config/drgnx/keys.eld (docs/keys.md)"))
+                                   "fix ~/.config/drgnx/keys.eld (docs/guide/keys.md)"))
                    (conflicts (list 'info (format "%d key conflicts, resolved by layer order (%s): %s" (length conflicts)
                                                   (mapconcat (lambda (l) (symbol-name (car l))) (plist-get r :layers) " < ")
                                                   (string-join (seq-take conflicts 3) "; "))
-                                    "see Keyboard Shortcuts › Key conflicts; change them in keys.eld (docs/keys.md)"))
+                                    "see Keyboard Shortcuts › Key conflicts; change them in keys.eld (docs/guide/keys.md)"))
                    (t (list 'ok (format "no key conflicts (%s)"
                                         (mapconcat (lambda (l) (symbol-name (car l))) (plist-get r :layers) " < "))
                             nil))))))

@@ -5,7 +5,7 @@
 ;;; Commentary:
 ;; New Terminal opens a new shell (eshell: works everywhere, also on Windows and remote) in the
 ;; panel's Terminal tab and focuses it; Open Terminal Here does so in the folder of the Explorer
-;; row.  See docs/modules.md.
+;; row.  See docs/guide/modules.md.
 
 ;;; Code:
 (require 'drgnx-modules)

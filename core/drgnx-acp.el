@@ -8,7 +8,7 @@
 ;; requests to us (permissions, file reads and writes) answered by a handler — immediately, or later
 ;; with `drgnx-acp-respond'.  Everything runs from process filters and sentinels: nothing here ever
 ;; waits or asks.  A malformed line is logged and skipped; when the agent exits, pending requests
-;; fail and the handler hears the exit status with the end of its stderr.  See docs/agents.md.
+;; fail and the handler hears the exit status with the end of its stderr.  See docs/guide/agents.md.
 
 ;;; Code:
 (require 'cl-lib)

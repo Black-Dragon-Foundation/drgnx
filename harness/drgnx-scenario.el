@@ -9,7 +9,7 @@
 ;; then an expected failure — but only if it fails an assertion made with
 ;; `drgnx-scenario-check', which carries the jank report's trace, so every known red explains
 ;; itself.  Configuration specifics (how to open the Explorer, …) live in drivers/<config>.el.
-;; See docs/scenarios.md.
+;; See docs/develop/scenarios.md.
 
 ;;; Code:
 (require 'cl-lib)

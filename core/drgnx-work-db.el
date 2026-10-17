@@ -7,7 +7,7 @@
 ;; todo, ruling, commit, branch — and the edges between them.  Every node and edge carries the
 ;; source it came from (a file path, or "recorded"/"branch" for what drgnx noted itself): a rescan
 ;; of a file forgets exactly what that file gave, while recorded links stay.  Emacs's own SQLite (29+).
-;; See docs/work.md.
+;; See docs/guide/work.md.
 
 ;;; Code:
 (require 'cl-lib)

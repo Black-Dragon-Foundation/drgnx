@@ -1,4 +1,4 @@
-;; The I8 fuzz (docs/workbench.md): 50 built-in commands that display a buffer, each a form with
+;; The I8 fuzz (docs/guide/workbench.md): 50 built-in commands that display a buffer, each a form with
 ;; explicit arguments — never prompting, never touching the network.  Run one by one in a GUI
 ;; session with the left dock, the panel and the right dock open: no window may split or resize,
 ;; and every buffer must be routed by a rule.

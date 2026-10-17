@@ -10,7 +10,7 @@
 ;; `steer' and the agent supports it; only Stop cancels (the turn ends within a second; pending
 ;; permission requests are answered "cancelled"; the queue waits).  An agent's questions — may I run
 ;; this? may I write that file? — become pending items for the viewer: nothing here ever asks.
-;; See docs/agents.md.
+;; See docs/guide/agents.md.
 
 ;;; Code:
 (require 'cl-lib)
@@ -34,7 +34,7 @@ agents.eld (config dir) and the built-in ones; never holds secrets (keys come fr
 
 (defvar drgnx-agents-task-functions nil
   "Called with a session working on a task (see `drgnx-agents-start's TASK) and `start', `turn-start' or
-`turn-end': the work tracker records the commits each turn made (docs/work.md).")
+`turn-end': the work tracker records the commits each turn made (docs/guide/work.md).")
 
 (defconst drgnx-agents-builtin-profiles
   '(("claude" :command ("claude-agent-acp") :mode queue :doc "Claude through the unmodified agent (subscription or API key)")))

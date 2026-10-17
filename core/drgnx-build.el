@@ -7,7 +7,7 @@
 ;; tracked).  Compiled drgnx is several times faster and makes far less garbage than
 ;; interpreted drgnx; when Emacs has native compilation, it compiles the .elc files natively
 ;; in the background as they load.  drgnx's init sets `load-prefer-newer', so a stale .elc
-;; never shadows newer source.  install.sh runs the build.  See docs/core.md.
+;; never shadows newer source.  install.sh runs the build.  See docs/develop/core.md.
 
 ;;; Code:
 (require 'bytecomp)

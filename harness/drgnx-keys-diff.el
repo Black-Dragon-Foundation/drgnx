@@ -9,7 +9,7 @@
 ;; runs, agents, search and LLM files as the external module).  A gryphn command must exist in
 ;; drgnx (under its id or its drgnx name, `drgnx-keys-diff-aliases') with gryphn's key among its
 ;; keys, or be explained (`drgnx-keys-diff-explained').  Unexplained lines make the exit non-zero.
-;; See docs/keys.md.
+;; See docs/guide/keys.md.
 
 ;;; Code:
 (require 'cl-lib)

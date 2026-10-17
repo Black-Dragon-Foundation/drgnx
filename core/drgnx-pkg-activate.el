@@ -8,7 +8,7 @@
 ;; and package-install, package-refresh-contents and friends called from automatic code (startup,
 ;; timers, hooks with no command running) signal instead of reaching the network.  A package the
 ;; user installs with M-x package-install still installs (into the same directory).  See
-;; docs/packages.md.
+;; docs/guide/packages.md.
 
 ;;; Code:
 (require 'seq)

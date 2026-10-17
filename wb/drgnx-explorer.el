@@ -11,7 +11,7 @@
 ;; keeps the Explorer focused; a double click on a file focuses the editor; drags do nothing.
 ;; The follower reveals the editor's file only on the change bus's `editor-changed' edge, never
 ;; while the Explorer is selected or a button is held, never outside the roots, and never
-;; recentres a visible row.  See docs/workbench.md.
+;; recentres a visible row.  See docs/guide/workbench.md.
 
 ;;; Code:
 (require 'cl-lib)

@@ -78,7 +78,7 @@ their keys join the VS Code key profile. drgnx never changes the gryphn checkout
 `drgnx doctor` reports them as a warning. `:settings` is reserved for the Settings screen (M6) and not used yet.
 
 Every command goes through the registry (`drgnx-command-define`) and gets a key — or `:none` with a reason — in each
-key profile ([keys.md](keys.md)); faces inherit theme faces (no colours). See [core.md](core.md) for the registry.
+key profile ([keys.md](keys.md)); faces inherit theme faces (no colours). See [core.md](../develop/core.md) for the registry.
 
 ## Shipped modules
 

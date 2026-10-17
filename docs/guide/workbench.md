@@ -291,6 +291,6 @@ its buffer's rule names.
 
 Batch: `test/unit/wb-*-test.el` (bus, dock, Explorer, Buffers). GUI: `test/live/drgnx-workbench-test.el` (the dock
 by real key presses: no focus taken, width identical over 10 hide/show cycles, titles, no scroll bars). Behaviour:
-the ten Explorer and Buffers scenarios of [scenarios.md](scenarios.md), plus two for live updates (a folder
+the ten Explorer and Buffers scenarios of [scenarios.md](../develop/scenarios.md), plus two for live updates (a folder
 appearing during a held click; a folder appearing while browsing), are green on drgnx (`bin/drgnx test
 --scenario --config drgnx`; driver `test/scenario/drivers/drgnx.el`).

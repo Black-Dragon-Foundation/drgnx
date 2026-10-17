@@ -9,7 +9,7 @@
 ;; around it moves) and puts back the tab's buffer, start and point as they were left.  The tab
 ;; row lives in the `header-line-format' window parameter, so no mode can erase it; the area's
 ;; pixel size is kept across hiding and showing.  Killing the buffer an area shows puts the tab's
-;; placeholder there — another buffer never slips into the area.  See docs/workbench.md.
+;; placeholder there — another buffer never slips into the area.  See docs/guide/workbench.md.
 
 ;;; Code:
 (require 'cl-lib)

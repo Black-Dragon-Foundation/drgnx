@@ -4,7 +4,7 @@
 
 ;;; Commentary:
 ;; Loaded first by the generated early-init.el of every harness session (see
-;; docs/harness.md).  The session's `user-emacs-directory' is RUN/init (via
+;; docs/develop/harness.md).  The session's `user-emacs-directory' is RUN/init (via
 ;; --init-directory), so everything it writes stays in the run directory; an external
 ;; configuration (DRGNX_UI_CONFIG) is only read.  No network, no package installs, no
 ;; secrets, no blinking cursor, treemacs drag-to-move off, its own server socket.

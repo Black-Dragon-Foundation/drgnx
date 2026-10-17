@@ -19,7 +19,7 @@ modules/<category>/drgnx-<name>.el   one drgnx-module-define per file
 `$DRGNX_CONFIG_DIR` or `~/.config/drgnx/`. State and caches: `(drgnx-state-dir)` and `(drgnx-cache-dir)` under
 the XDG directories. Packages: `(drgnx-data-dir)` — `$DRGNX_DATA_DIR` or `~/.local/share/drgnx/` — holds `elpa/`
 (the packages every session uses) and `generations/`; `(drgnx-package-cache-dir)` keeps downloaded package files
-([packages.md](packages.md)).
+([packages.md](../guide/packages.md)).
 
 ## Staged hooks (`drgnx-hooks.el`)
 
@@ -56,7 +56,7 @@ Keys: `:title`, `:category`, `:command` (required), `:scope` (`app` default, `ed
 layers key it), `:map` (the keymap its keys go into by default: nil for global, a keymap symbol, or
 `(FEATURE . KEYMAP)` for a keymap that exists once FEATURE loads), `:menu` (menu-bar path), `:context` (right-click
 contexts), `:context-first`, `:doc` and `:when` (a predicate: the command is offered only while it holds).
-Redefining an id replaces it. **Keys come from key profiles** ([keys.md](keys.md)); the active keys of a command
+Redefining an id replaces it. **Keys come from key profiles** ([keys.md](../guide/keys.md)); the active keys of a command
 are in its `bound` slot, which every surface reads. The entries keep the ids of the gryphn layer's registry, which
 this is ported from.
 

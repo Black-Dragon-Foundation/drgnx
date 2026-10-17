@@ -5,7 +5,7 @@
 ;;; Commentary:
 ;; Color Theme picks one of the installed themes (one at a time) and remembers it in modules.eld;
 ;; Zen mode hides the sidebar, the panel and the right dock and centres the text, and gives every
-;; one of them back as it was.  See docs/modules.md.
+;; one of them back as it was.  See docs/guide/modules.md.
 
 ;;; Code:
 (require 'cl-lib)

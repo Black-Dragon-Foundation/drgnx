@@ -8,7 +8,7 @@
 ;; The panel listens to the change bus and re-renders only when its signature (the rows and
 ;; their modified flags) changed; the view and the selection are restored by buffer identity,
 ;; and the title lives in the window, where no mode can erase it.  The active editor's row is
-;; marked with an overlay, without re-rendering.  See docs/workbench.md.
+;; marked with an overlay, without re-rendering.  See docs/guide/workbench.md.
 
 ;;; Code:
 (require 'cl-lib)

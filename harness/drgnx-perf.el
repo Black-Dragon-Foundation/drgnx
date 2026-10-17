@@ -9,7 +9,7 @@
 ;; redisplay time, frame creation, GC (count and time), memory (RSS), a CPU profile of a thunk, and a
 ;; hook audit (every function on the busy hooks timed, the hooks restored after).  The controller
 ;; (drgnx-perf-run.el) runs workloads in a session, judges them against budgets
-;; (test/perf/budgets.eld) and keeps a history.  See docs/perf.md.
+;; (test/perf/budgets.eld) and keeps a history.  See docs/develop/perf.md.
 
 ;;; Code:
 (require 'cl-lib)

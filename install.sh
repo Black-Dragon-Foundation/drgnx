@@ -10,7 +10,7 @@
 # What it does is printed as a plan before anything happens. Every step that needs root is announced
 # and confirmed (unless --yes). It never edits your shell startup files without asking. Running it again
 # is safe. Everything is a function; nothing runs until `main` on the last line, so a truncated download
-# does nothing. Details: docs/install.md.
+# does nothing. Details: docs/guide/install.md.
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -18,7 +18,7 @@ set -euo pipefail
 
 EMACS_VERSION=31.1
 DRGNX_REPO="${DRGNX_INSTALL_REPO:-https://github.com/Black-Dragon-Foundation/drgnx.git}"
-DOCS_URL=https://github.com/Black-Dragon-Foundation/drgnx/blob/main/docs/install.md
+DOCS_URL=https://github.com/Black-Dragon-Foundation/drgnx/blob/main/docs/guide/install.md
 GNU_MIRROR="${DRGNX_INSTALL_MIRROR:-https://ftpmirror.gnu.org/emacs}"         # overridable for tests
 GNU_KEYRING="${DRGNX_INSTALL_KEYRING:-https://ftp.gnu.org/gnu/gnu-keyring.gpg}"
 APT_DIR="${DRGNX_INSTALL_APT_DIR:-/etc/apt}"

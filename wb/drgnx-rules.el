@@ -9,7 +9,7 @@
 ;; rule matches goes to the editor and is logged in `drgnx-wb-unrouted' (a rule is missing).
 ;; Internal buffers (names starting with a space) are left alone unless a rule names them.
 ;; `drgnx-rules-mode' also sets the window defaults that keep Emacs from splitting or resizing
-;; on its own.  See docs/workbench.md.
+;; on its own.  See docs/guide/workbench.md.
 
 ;;; Code:
 (require 'cl-lib)

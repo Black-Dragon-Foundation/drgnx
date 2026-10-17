@@ -16,7 +16,7 @@
       inhibit-startup-screen t
       frame-resize-pixelwise t)
 (push '(tool-bar-lines . 0) default-frame-alist)
-(when (getenv "DRGNX_STARTUP_TRACE")      ; where startup time goes (docs/perf.md)
+(when (getenv "DRGNX_STARTUP_TRACE")      ; where startup time goes (docs/develop/perf.md)
   (load (expand-file-name "../core/drgnx-startup-trace" (file-name-directory (or load-file-name buffer-file-name))) nil t))
 
 ;;; early-init.el ends here

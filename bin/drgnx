@@ -7,7 +7,7 @@ cmd_doctor() { # [--json] [--dev] — checks run inside the Emacs drgnx uses (co
   local emacs="${DRGNX_EMACS:-emacs}" rc=0
   if ! command -v "$emacs" >/dev/null 2>&1; then
     printf 'FAIL  %-20s %s\n      fix: %s\n' "emacs" "no Emacs found ($emacs)" \
-      "run the installer: curl -fsSL https://raw.githubusercontent.com/Black-Dragon-Foundation/drgnx/main/install.sh | bash  (see docs/install.md)"
+      "run the installer: curl -fsSL https://raw.githubusercontent.com/Black-Dragon-Foundation/drgnx/main/install.sh | bash  (see docs/guide/install.md)"
     return 1
   fi
   "$emacs" --batch -Q -L "$here/core" -l drgnx-doctor -f drgnx-doctor-cli "$@" || rc=1
@@ -142,11 +142,11 @@ usage: drgnx build              byte-compile drgnx (core, wb, modules); native c
        drgnx generations | lock
        drgnx onboard [--non-interactive] [--again] [--preset minimal|ide|full-ai] [--keys NAME] [--theme THEME]
                      [--roots DIR…] [--todos] [--step ID]
-                               set drgnx up: environment, keys, projects onto the board, daemon unit (docs/onboarding.md)
+                               set drgnx up: environment, keys, projects onto the board, daemon unit (docs/guide/onboarding.md)
        drgnx work record [--task ID] [SHA…]
                                link commits (default HEAD) to a task (default $DRGNX_TASK); no commit message changes
        drgnx work scan [--board FILE] [DIR…]
-                               read specs, plans, ledgers and the board into the work tracker (docs/work.md)
+                               read specs, plans, ledgers and the board into the work tracker (docs/guide/work.md)
        drgnx work status [--json]
                                every plan: tasks, steps, TODOs and commits done, branch, merged
        drgnx safe              Emacs with drgnx's core only: no modules, no packages
@@ -154,7 +154,7 @@ usage: drgnx build              byte-compile drgnx (core, wb, modules); native c
        drgnx service-unit [DIR]
                                the systemd user unit (printed, or written to DIR; never installed)
        drgnx ui COMMAND        headless GUI Emacs sessions: start, stop, ls, reap, state, shot,
-                               click, keys, type, measure (drgnx ui --help; docs/harness.md)
+                               click, keys, type, measure (drgnx ui --help; docs/develop/harness.md)
 USAGE
 }
 

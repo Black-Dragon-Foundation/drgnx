@@ -8,7 +8,7 @@
 ;; the Explorer's folders.  Saved when Emacs exits (only from a graphical session: a batch run
 ;; never writes your state) to $XDG_STATE_HOME/drgnx/workbench.eld; restored at the first
 ;; graphical frame.  Files that no longer exist are skipped; sizes are clamped to the frame; a
-;; state written by another format version is ignored.  See docs/workbench.md.
+;; state written by another format version is ignored.  See docs/guide/workbench.md.
 
 ;;; Code:
 (require 'cl-lib)

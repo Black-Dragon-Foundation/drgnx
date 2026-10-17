@@ -10,7 +10,7 @@
 ;; flags, doctor checks and settings.  The user's choices live in modules.eld in the user dir
 ;; (`drgnx-user-dir'): disabled modules, flags, external modules; older formats are migrated, an
 ;; unreadable file is reported and ignored.  Preferences: Modules lists every module with its
-;; status and turns modules on and off.  See docs/modules.md.
+;; status and turns modules on and off.  See docs/guide/modules.md.
 
 ;;; Code:
 (require 'cl-lib)
@@ -103,7 +103,7 @@ backed up before drgnx writes it.")
         (message "drgnx: kept your previous modules.eld as %s" bak))
       (setq drgnx-modules--state-foreign nil))
     (with-temp-file file
-      (insert ";; drgnx modules: what you turned off, module flags, external modules (docs/modules.md).\n")
+      (insert ";; drgnx modules: what you turned off, module flags, external modules (docs/guide/modules.md).\n")
       (let ((print-length nil) (print-level nil)) (pp (plist-put state :version drgnx-modules-state-version) (current-buffer))))
     (setq drgnx-modules--state nil)
     state))

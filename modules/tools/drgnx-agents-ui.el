@@ -6,7 +6,7 @@
 ;; The right dock's Agents tab lists agent sessions and durable jobs (status, queued messages,
 ;; context %, what waits for you).  RET opens a session's transcript in the editor: turns, thinking,
 ;; tool calls with their subagents, plans, and what the agent asks — permissions to answer, edits to
-;; review hunk by hunk.  Typing to a busy agent queues; only Stop cancels.  See docs/agents.md.
+;; review hunk by hunk.  Typing to a busy agent queues; only Stop cancels.  See docs/guide/agents.md.
 
 ;;; Code:
 (require 'cl-lib)

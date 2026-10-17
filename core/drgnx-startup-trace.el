@@ -6,7 +6,7 @@
 ;; Loaded by early-init.el when $DRGNX_STARTUP_TRACE names a file: until the first frame is set up
 ;; (window-setup-hook), every `require' is timed and a CPU profile is taken; then the report — the
 ;; slowest features, the functions most often on the stack, the phases — is written to that file.
-;; Costs nothing unless asked for.  See docs/perf.md.
+;; Costs nothing unless asked for.  See docs/develop/perf.md.
 
 ;;; Code:
 (defvar drgnx-startup-trace--t0 (float-time))

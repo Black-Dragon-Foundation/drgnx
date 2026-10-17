@@ -1,5 +1,5 @@
 ;; Scenarios expected to fail, per configuration.  Each entry is explained by its trace in
-;; docs/scenarios.md; the drgnx workbench (M3) must turn them green.
+;; docs/develop/scenarios.md; the drgnx workbench (M3) must turn them green.
 ((gryphn
   drgnx-scenario/explorer-click-stays
   drgnx-scenario/explorer-expand-stays

@@ -7,7 +7,7 @@
 ;; systemd runs the session, else its own process group (`setsid') — so closing a frame, restarting
 ;; Emacs or interrupting a chat cannot kill it.  Everything about a job lives in its directory under
 ;; the state dir (jobs/ID: job.eld, log, pid, exit), so a new Emacs lists it, shows its log and stops
-;; it.  See docs/agents.md.
+;; it.  See docs/guide/agents.md.
 
 ;;; Code:
 (require 'cl-lib)
@@ -54,7 +54,7 @@ code to DIR/exit (143 when stopped); with HEAD, the git HEAD it ended at to DIR/
 (cl-defun drgnx-jobs-start (name command &key cwd task)
   "Run COMMAND (a list) as the durable job NAME in CWD.  Returns the job's id.  TASK (a work-tracker
 node id): the job gets it as DRGNX_TASK, and the git HEADs it started and ended at are kept, so the
-commits it made are recorded for the task (docs/work.md)."
+commits it made are recorded for the task (docs/guide/work.md)."
   (let* ((id (drgnx-jobs--new-id)) (dir (drgnx-jobs--dir id))
          (cwd (expand-file-name (or cwd default-directory)))
          (launcher (drgnx-jobs-launcher))

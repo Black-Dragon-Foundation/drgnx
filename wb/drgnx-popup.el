@@ -9,7 +9,7 @@
 ;; point, tab row and pixel height are put back exactly.  When the panel is hidden, the popup gets
 ;; a temporary window under the editors, deleted when it ends, giving every pixel back.  A popup
 ;; ends however its package ends it: `delete-window', `quit-window', `bury-buffer' or killing its
-;; buffer.  See docs/workbench.md.
+;; buffer.  See docs/guide/workbench.md.
 
 ;;; Code:
 (require 'cl-lib)

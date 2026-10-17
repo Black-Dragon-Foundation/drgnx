@@ -1,4 +1,4 @@
-;; Vim key profile — command id → keys (docs/keys.md).  Commands are on the leader key (SPC) in
+;; Vim key profile — command id → keys (docs/guide/keys.md).  Commands are on the leader key (SPC) in
 ;; evil's normal state, bound once evil loads (the evil module, M4).  :claims are Vim's own
 ;; normal-mode keys, so a layer that rebinds one of them is reported.
 (:name "Vim"

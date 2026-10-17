@@ -8,7 +8,7 @@
 ;; cannot (frames, redisplay, startup, memory).  Each input workload runs three times and the median
 ;; of its p95 and max is kept, so one noisy run never decides.  Results are judged against
 ;; test/perf/budgets.eld, appended to the history (perf-history.jsonl in the harness state root) and
-;; compared with the median of the last five runs.  See docs/perf.md.
+;; compared with the median of the last five runs.  See docs/develop/perf.md.
 
 ;;; Code:
 (require 'cl-lib)

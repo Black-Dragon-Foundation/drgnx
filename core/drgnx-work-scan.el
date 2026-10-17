@@ -13,7 +13,7 @@
 ;;   worktree gives the plan its worktree and branch (kept after the worktree is gone);
 ;; - board TODOs with :PLAN_FILE: (onboarding's import).
 ;; Files are read again only when their modification time changed; git facts (worktrees, merged
-;; branches) are looked at on every scan.  See docs/work.md.
+;; branches) are looked at on every scan.  See docs/guide/work.md.
 
 ;;; Code:
 (require 'cl-lib)

@@ -9,7 +9,7 @@
 ;; `timer-event-handler' (commands run by a nested command loop are not timer code);
 ;; other automatic code declares itself with `drgnx-automatic'.  Process filters and
 ;; sentinels are called from C and cannot be detected — wrap their bodies in
-;; `drgnx-automatic'.  See docs/core.md.
+;; `drgnx-automatic'.  See docs/develop/core.md.
 
 ;;; Code:
 (define-error 'drgnx-prompt-in-automatic-path

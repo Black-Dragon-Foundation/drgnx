@@ -10,7 +10,7 @@
 ;; modified flag flipped).  Internal buffers (names starting with a space) never count.
 ;; Followers (the Explorer's reveal, the Buffers panel) subscribe here and never to hooks, so a
 ;; focus change, a background buffer or a burst of events cannot make them fire.
-;; See docs/workbench.md.
+;; See docs/guide/workbench.md.
 
 ;;; Code:
 (require 'cl-lib)

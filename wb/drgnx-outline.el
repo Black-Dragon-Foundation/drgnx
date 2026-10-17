@@ -8,7 +8,7 @@
 ;; Outline (browse on); RET goes there.  It follows the editor (the bus's `editor-changed' edge)
 ;; and, half a second after you stop typing, the file's changes.  Files without an index, remote
 ;; files and very large buffers get a one-line notice instead — computing an index never blocks
-;; typing.  See docs/workbench.md.
+;; typing.  See docs/guide/workbench.md.
 
 ;;; Code:
 (require 'cl-lib)

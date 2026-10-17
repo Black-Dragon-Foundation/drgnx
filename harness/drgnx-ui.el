@@ -7,7 +7,7 @@
 ;; MCP server.  A session `drgnx-ui-N' is GUI Emacs under `mutter --headless' in its own
 ;; dbus session, launched as a transient systemd user unit.  It is reached only through
 ;; its own server socket inside its run directory; nothing here talks to any other
-;; Emacs.  See docs/harness.md.
+;; Emacs.  See docs/develop/harness.md.
 
 ;;; Code:
 (require 'cl-lib)
@@ -781,7 +781,7 @@ CONFIG (default drgnx) and print each scenario: green, red (known) with its trac
   measure NAME ACTIONS-JSON                           several actions, one jank report
   mcp                                                 serve the drgnx-ui MCP tools on stdio
   test-ui                                             the --ui test tier
-See docs/harness.md.")
+See docs/develop/harness.md.")
 
 (defconst drgnx-ui--boolean-flags '("--daemon") "CLI options that take no value.")
 

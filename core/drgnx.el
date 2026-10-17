@@ -5,7 +5,7 @@
 ;;; Commentary:
 ;; The core: paths, staged hooks, the no-prompt guard, the command registry, key profiles,
 ;; everything generated from them (menus, context menus, palette, key sheet), and a minimal
-;; module system.  `drgnx-init' boots it; the checkout's init/ calls it.  See docs/core.md.
+;; module system.  `drgnx-init' boots it; the checkout's init/ calls it.  See docs/develop/core.md.
 
 ;;; Code:
 (require 'drgnx-paths)

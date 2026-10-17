@@ -8,7 +8,7 @@
 ;; maps paths to a status (modified, added, deleted, renamed, untracked, conflict, ignored);
 ;; folders get the strongest status inside them, computed once per run.  Lookups are hash
 ;; lookups, made only for the rows on screen (the panels paint with jit-lock).  No git, a
-;; remote folder or a failing git: nothing, silently.  See docs/workbench.md.
+;; remote folder or a failing git: nothing, silently.  See docs/guide/workbench.md.
 
 ;;; Code:
 (require 'cl-lib)

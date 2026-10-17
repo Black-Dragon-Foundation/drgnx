@@ -8,7 +8,7 @@
 ;; with a fixed pixel width that survives hiding and showing; its titles live in the
 ;; `header-line-format' window parameter, so no mode can erase them.  Showing the dock never
 ;; focuses it, and files chosen in the dock go to the most recently used editor window without
-;; splitting.  See docs/workbench.md.
+;; splitting.  See docs/guide/workbench.md.
 
 ;;; Code:
 (require 'cl-lib)

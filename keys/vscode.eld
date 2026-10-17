@@ -1,4 +1,4 @@
-;; VS Code key profile — command id → keys (docs/keys.md).  On macOS, C- becomes s- (Cmd).
+;; VS Code key profile — command id → keys (docs/guide/keys.md).  On macOS, C- becomes s- (Cmd).
 (:name "VS Code"
  :doc "Visual Studio Code's default keys"
  :mac-cmd t

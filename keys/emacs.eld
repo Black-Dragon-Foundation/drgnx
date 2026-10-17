@@ -1,4 +1,4 @@
-;; Emacs key profile — command id → keys (docs/keys.md).  The emacs layer also claims Emacs' own
+;; Emacs key profile — command id → keys (docs/guide/keys.md).  The emacs layer also claims Emacs' own
 ;; default bindings (:claims-defaults): a later layer that rebinds one of them is reported.
 (:name "Emacs"
  :doc "GNU Emacs' default keys"

@@ -9,7 +9,7 @@
 ;; step returns (STATUS MESSAGE); an error is a failed step, never fatal.  `drgnx onboard' runs them
 ;; from the command line (--non-interactive never reads input); "Welcome" lists them in Emacs.
 ;; Nothing is installed outside drgnx's own directories unless the user, running a step
-;; interactively, says yes.  See docs/onboarding.md.
+;; interactively, says yes.  See docs/guide/onboarding.md.
 
 ;;; Code:
 (require 'cl-lib)
@@ -278,7 +278,7 @@ current choice as the default) — with no option and no question, the current c
          (count (lambda (s) (seq-count (lambda (r) (eq (plist-get r :status) s)) results)))
          (fails (seq-filter (lambda (r) (eq (plist-get r :status) 'fail)) results)))
     (list (if fails 'fail 'ok)
-          (format "doctor: %d ok, %d warnings, %d failed%s — every command and its key: Keyboard Shortcuts (in the palette); docs/onboarding.md"
+          (format "doctor: %d ok, %d warnings, %d failed%s — every command and its key: Keyboard Shortcuts (in the palette); docs/guide/onboarding.md"
                   (funcall count 'ok) (funcall count 'warn) (length fails)
                   (if fails (concat " (" (mapconcat (lambda (r) (symbol-name (plist-get r :name))) fails ", ") ")") "")))))
 

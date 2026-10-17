@@ -6,7 +6,7 @@
 ;; Code buffers get a language server (eglot) when the server for their mode is installed — never a
 ;; question about which server to run — and the tree-sitter mode when its grammar is installed.
 ;; Go to Definition, Find References, Rename Symbol and Show Hover work with or without a server
-;; (xref and eldoc fall back on what the mode knows).  See docs/modules.md.
+;; (xref and eldoc fall back on what the mode knows).  See docs/guide/modules.md.
 
 ;;; Code:
 (require 'cl-lib)

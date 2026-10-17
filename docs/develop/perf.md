@@ -78,7 +78,7 @@ compositor, the first frame, fonts); drgnx's own init is ~220 ms in batch and ~2
 ## Slow frames in another configuration
 
 A new frame under drgnx takes ~66 ms (in a session) and ~190 ms from a daemon (`emacsclient -c`). The 2.1 s
-frames seen with the gryphn configuration do not reproduce in an isolated session ([scenarios.md](scenarios.md)):
+frames seen with an earlier reference configuration do not reproduce in an isolated session ([scenarios.md](scenarios.md)):
 they depend on live state — restored workspace layouts, many buffers, language servers. To see what a slow frame
 spends in your own daemon — this changes it while it runs (advice and wrapped hook entries, undone at the end:
 only what the audit added is taken out), so do it only when you choose to:

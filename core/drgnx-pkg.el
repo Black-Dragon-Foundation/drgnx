@@ -10,7 +10,7 @@
 ;; directory; only when every file arrived with the right hash is the copy swapped in, the lock
 ;; (drgnx.lock.eld) written and a generation (a snapshot of the directory) made.  Rollback copies a
 ;; generation back into the same real path, so natively compiled files stay valid.  This file runs
-;; in batch Emacs (bin/drgnx); sessions only activate (drgnx-pkg-activate.el).  See docs/packages.md.
+;; in batch Emacs (bin/drgnx); sessions only activate (drgnx-pkg-activate.el).  See docs/guide/packages.md.
 
 ;;; Code:
 (require 'cl-lib)
@@ -590,7 +590,7 @@ with every module off.  The user's own files are never changed."
 
 (defun drgnx-pkg-service-unit (&optional dir)
   "The systemd user unit that runs drgnx as a daemon; written to DIR/drgnx.service when DIR is given.
-Never installed or enabled: that is the user's step (docs/packages.md)."
+Never installed or enabled: that is the user's step (docs/guide/packages.md)."
   (let* ((emacs (expand-file-name invocation-name invocation-directory))
          (unit (concat "[Unit]\nDescription=drgnx (Emacs daemon)\nDocumentation=https://github.com/Black-Dragon-Foundation/drgnx\n\n"
                        "[Service]\nType=notify\n"
@@ -679,7 +679,7 @@ Never installed or enabled: that is the user's step (docs/packages.md)."
            0))
         (`("service-unit" . ,dir)
          (let ((unit (drgnx-pkg-service-unit (car dir))))
-           (if dir (drgnx-pkg--print "wrote %s (not installed: see docs/packages.md)" (expand-file-name "drgnx.service" (car dir)))
+           (if dir (drgnx-pkg--print "wrote %s (not installed: see docs/guide/packages.md)" (expand-file-name "drgnx.service" (car dir)))
              (princ unit)))
          0)
         (_ (drgnx-pkg--print "usage: drgnx sync [--offline] [--seed DIR] | upgrade | rollback [N] | generations | lock | bisect [-- CMD…] | service-unit [DIR]")

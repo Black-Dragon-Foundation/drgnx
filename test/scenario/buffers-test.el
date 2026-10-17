@@ -1,6 +1,6 @@
 ;;; buffers-test.el --- Scenarios: the Buffers panel (open editors) -*- lexical-binding: t -*-
 ;; SPDX-License-Identifier: GPL-3.0-or-later
-;; The reference is VS Code's Open Editors list.  See docs/scenarios.md.
+;; The reference is VS Code's Open Editors list.  See docs/develop/scenarios.md.
 
 (require 'ert)
 (require 'drgnx-scenario)

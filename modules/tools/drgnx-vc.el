@@ -4,7 +4,7 @@
 
 ;;; Commentary:
 ;; Source Control (the project's changes, in the editor), Diff with File (unsaved changes), Blame
-;; (who changed each line).  Built on Emacs' VC — any backend it knows.  See docs/modules.md.
+;; (who changed each line).  Built on Emacs' VC — any backend it knows.  See docs/guide/modules.md.
 
 ;;; Code:
 (require 'drgnx-modules)

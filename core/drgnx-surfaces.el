@@ -6,7 +6,7 @@
 ;; The registry's outputs: menu bar, right-click menus, which-key labels, the F1 sheet, the
 ;; markdown cheat sheet, "next time" tips.  Keys are whatever the active key profiles bound
 ;; (each command's `bound' slot, set by `drgnx-keys').  Ported from the gryphn layer.  See
-;; docs/core.md and docs/keys.md.
+;; docs/develop/core.md and docs/guide/keys.md.
 
 ;;; Code:
 
@@ -169,7 +169,7 @@ Uses registry keys only (no `where-is'), so the output is the same in every Emac
             (setq cat (car r))
             (insert "\n" (propertize cat 'face 'drgnx-sheet-heading) "\n"))
           (insert (format "  %-24s %-36s %s\n" (nth 1 r) (nth 2 r) (nth 3 r)))))
-      ;; The active key profiles' conflicts and problems (drgnx-keys, docs/keys.md).
+      ;; The active key profiles' conflicts and problems (drgnx-keys, docs/guide/keys.md).
       (when (fboundp 'drgnx-keys-conflict-lines)
         (pcase-dolist (`(,title . ,lines) `(("Key conflicts (the later layer won)" . ,(drgnx-keys-conflict-lines))
                                             ("Key problems" . ,(plist-get drgnx-keys-last :problems))))

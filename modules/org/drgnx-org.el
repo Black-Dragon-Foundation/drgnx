@@ -3,7 +3,7 @@
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 
 ;;; Commentary:
-;; Org's capture and agenda, on the keys people know (C-c c, C-c a).  See docs/modules.md.
+;; Org's capture and agenda, on the keys people know (C-c c, C-c a).  See docs/guide/modules.md.
 
 ;;; Code:
 (require 'drgnx-modules)

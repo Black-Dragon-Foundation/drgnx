@@ -7,7 +7,7 @@
 ;; commands — Split Editor Right / Down, Focus Group N one past the last, Move Editor to Next
 ;; Group — never by Emacs on its own (drgnx-rules).  Groups are numbered in visual order, left to
 ;; right and top to bottom.  The `other-group' place shows a buffer next to the one you work in
-;; (diffs, logs).  See docs/workbench.md.
+;; (diffs, logs).  See docs/guide/workbench.md.
 
 ;;; Code:
 (require 'cl-lib)

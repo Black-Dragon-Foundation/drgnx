@@ -9,7 +9,7 @@
 ;; its line (a commit: its diff), g scans again in another Emacs (this one never waits), f filters the
 ;; plans, m hides merged ones.  "Show Work as Graph" draws specs, plans and branches with svg.el:
 ;; every box opens what it shows, every colour comes from the theme.
-;; See docs/work.md.
+;; See docs/guide/work.md.
 
 ;;; Code:
 (require 'cl-lib)
@@ -46,7 +46,7 @@
 (defvar drgnx-work-mode-map (let ((m (make-sparse-keymap))) (set-keymap-parent m special-mode-map) m))
 
 (define-derived-mode drgnx-work-mode special-mode "Work"
-  "The work tracker's tree (docs/work.md)."
+  "The work tracker's tree (docs/guide/work.md)."
   (setq truncate-lines t buffer-read-only t))
 
 ;;;; The tree

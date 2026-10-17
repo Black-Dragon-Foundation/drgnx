@@ -9,7 +9,7 @@
 ;; with the command scopes it covers (editing, app, window); later layers win, the user's
 ;; keys.eld wins over all, and every conflict is reported, never silently resolved.
 ;; `drgnx-keys-resolve' is the pure part: inputs in, (bindings conflicts problems) out.
-;; See docs/keys.md.
+;; See docs/guide/keys.md.
 
 ;;; Code:
 (require 'cl-lib)
@@ -424,7 +424,7 @@ Never prompts: problems are collected in `drgnx-keys-last'.  Returns the resolut
          (text (with-temp-buffer
                  (if (file-exists-p file)
                      (insert-file-contents file)
-                   (insert ";; drgnx keys (docs/keys.md): :layers — profile stack, :bind — (ID KEY… [:map M]),\n"
+                   (insert ";; drgnx keys (docs/guide/keys.md): :layers — profile stack, :bind — (ID KEY… [:map M]),\n"
                            ";; :unbind — (ID…)\n"))
                  (set-syntax-table emacs-lisp-mode-syntax-table)
                  (goto-char (point-min))

@@ -8,7 +8,7 @@
 ;; Commands move or open the shown file — or a whole editor group — in a new window.  Each window
 ;; has its own buffers: the tabs of its groups (the main window also has the open files that are a
 ;; tab nowhere); the Buffers panel lists the window you work in, or all of them.  drgnx never
-;; positions or sizes a window: the window manager places it.  See docs/workbench.md.
+;; positions or sizes a window: the window manager places it.  See docs/guide/workbench.md.
 
 ;;; Code:
 (require 'cl-lib)

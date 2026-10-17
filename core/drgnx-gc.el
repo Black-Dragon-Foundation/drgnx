@@ -6,7 +6,7 @@
 ;; early-init.el defers collection while Emacs starts (startup allocates a lot and keeps most of
 ;; it).  After startup the threshold is `drgnx-gc-cons-threshold' — measured in the perf lab: Emacs'
 ;; default (800 kB) collected 28 times in 186 keystrokes (595 ms) — and Emacs collects when it has
-;; been idle `drgnx-gc-idle-seconds', so the pauses fall where nobody waits.  See docs/perf.md.
+;; been idle `drgnx-gc-idle-seconds', so the pauses fall where nobody waits.  See docs/develop/perf.md.
 
 ;;; Code:
 (require 'seq)

@@ -6,7 +6,7 @@
 ;; What you do with a row: in the Buffers panel save it, copy its path, reveal it in the Explorer;
 ;; in the Explorer reveal the file in the Buffers panel, open the folder in dired, open the file in
 ;; the other editor group.  Next Panel Tab cycles the panel's tabs; Menu for This Mode pops up the
-;; major mode's menu at point (no mouse needed).  See docs/workbench.md.
+;; major mode's menu at point (no mouse needed).  See docs/guide/workbench.md.
 
 ;;; Code:
 (require 'drgnx-explorer)

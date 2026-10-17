@@ -22,7 +22,7 @@
    (should-error (drgnx-command-define 'bad2 :title "x" :category "Test"))))
 
 (ert-deftest drgnx-registry/keys-come-from-profiles ()
-  ;; Commands are registered without keys (docs/keys.md); the old :key and :native say so.
+  ;; Commands are registered without keys (docs/guide/keys.md); the old :key and :native say so.
   (drgnx-test--fresh-registry
    (should (string-search "profiles"
                           (cadr (should-error (drgnx-command-define 'k :title "K" :category "Test"

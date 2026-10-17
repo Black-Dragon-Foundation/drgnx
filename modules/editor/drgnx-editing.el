@@ -7,7 +7,7 @@
 ;; outline elsewhere), change case (camelCase, snake_case, kebab-case, cycle), expand and shrink
 ;; the selection (tree-sitter nodes when the buffer has a parser, else words and balanced
 ;; expressions), go to line; the VS Code line commands (move, select, duplicate, delete, new line
-;; above/below), redo, comment, back/forward.  See docs/modules.md.
+;; above/below), redo, comment, back/forward.  See docs/guide/modules.md.
 
 ;;; Code:
 (require 'cl-lib)

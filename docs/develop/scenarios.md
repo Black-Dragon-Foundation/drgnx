@@ -1,20 +1,20 @@
 # Scenarios
 
 Behaviour scenarios state how drgnx's UI must behave — VS Code is the reference — and run inside a harness
-session of a configuration: `bin/drgnx test --scenario [--config drgnx|gryphn|DIR]` (see
-[harness.md](harness.md#scenario-tier)). They were first run against **gryphn**, the Emacs layer drgnx grows out
-of, to turn its known UI problems into evidence. Those that fail there are listed as known reds in
+session of a configuration: `bin/drgnx test --scenario [--config drgnx|DIR]` (see
+[harness.md](harness.md#scenario-tier)). They were first run against a **reference configuration** — an earlier
+treemacs- and ibuffer-based Emacs setup that drgnx grows out of — to turn its known UI problems into evidence. Those that fail there are listed as known reds in
 `test/scenario/known-red.eld`; the workbench (M3) must make every one of them pass on drgnx. No fixes go into
-the gryphn layer.
+the reference configuration.
 
 Each red below is quoted from its trace (time from the start of the measurement, cause, window, what changed).
 The last results of each configuration are kept in `$XDG_STATE_HOME/drgnx/ui/scenarios/<config>.json`.
 
 ## Explorer (file tree)
 
-| Scenario | Expected (VS Code) | gryphn | Why (trace) — **drgnx: all green since M3a** ([workbench.md](workbench.md)) |
+| Scenario | Expected (VS Code) | Reference | Why (trace) — **drgnx: all green since M3a** ([workbench.md](../guide/workbench.md)) |
 |---|---|---|---|
-| `explorer-click-stays` | a single click on a folder keeps the selection on it | **red** | `treemacs-leftclick-action` selects the folder (point 55 → 30), `mouse-set-point` (30 → 36); at +196 ms `timer:gryphn-workspace--on-change` — the Explorer follow — moves it back to the editor's file (36 → 55) |
+| `explorer-click-stays` | a single click on a folder keeps the selection on it | **red** | `treemacs-leftclick-action` selects the folder (point 55 → 30), `mouse-set-point` (30 → 36); at +196 ms the configuration's workspace timer — the Explorer follow — moves it back to the editor's file (36 → 55) |
 | `explorer-follow-override` | with the follow switched off, `explorer-click-stays` passes | green | **confirms H1**: the follow is the cause |
 | `explorer-expand-stays` | a double click expands the folder; selection and view stay | **red** | the click and `treemacs-doubleclick-action` expand the folder (+139 ms); at +308 ms the follow moves the selection to the editor's file (30 → 72) |
 | `explorer-hold-is-a-click` | press, hold 300 ms, release without moving: a click on that row | **red** | the press selects `tests` (41 → 55); at +160 ms the follow reveals the editor's file, re-expanding the collapsed folder above, so the rows move under the held button; the release arrives as **`drag-mouse-1`** — the mechanism by which a click once moved a folder (with drag-to-move on, a drag moves files) |
@@ -25,20 +25,20 @@ The last results of each configuration are kept in `$XDG_STATE_HOME/drgnx/ui/sce
 
 ## Buffers panel (open editors)
 
-| Scenario | Expected (VS Code) | gryphn | Why (trace) |
+| Scenario | Expected (VS Code) | Reference | Why (trace) |
 |---|---|---|---|
-| `buffers-header-survives-refresh` | the panel shows its header line and keeps it | **red** | the header is 0 px: `header-line-format` is set to nil by `ibuffer-update ← gryphn-workspace-refresh-now ← gryphn-workspace--on-change` (a variable watcher caught the call chain) |
-| `buffers-scroll-kept` | a scrolled panel stays scrolled when another file is opened | **red** | `timer:gryphn-workspace--on-change` resets the panel's start (392 → 1) on each refresh (+193 ms, again at +1232 ms); the top row goes from `file09.txt` to `main.py` |
-| `buffers-close-hits-row` | × on a row closes that row's buffer, even if another file was opened just before | **red** | opening another file re-sorts the rows by recency, so the × aimed at `README.md` now belongs to `guide.md`, and `gryphn-workspace-buffers-close-at-mouse` closes that |
+| `buffers-header-survives-refresh` | the panel shows its header line and keeps it | **red** | the header is 0 px: `header-line-format` is set to nil by `ibuffer-update` ← the workspace refresh ← the workspace timer (a variable watcher caught the call chain) |
+| `buffers-scroll-kept` | a scrolled panel stays scrolled when another file is opened | **red** | the workspace timer resets the panel's start (392 → 1) on each refresh (+193 ms, again at +1232 ms); the top row goes from `file09.txt` to `main.py` |
+| `buffers-close-hits-row` | × on a row closes that row's buffer, even if another file was opened just before | **red** | opening another file re-sorts the rows by recency, so the × aimed at `README.md` now belongs to `guide.md`, and the panel's close-at-mouse command closes that |
 
 ## New frames
 
 `frame-from-daemon-fast` runs in the controller after the in-session suite (because it starts a daemon
 session itself) when the suite has a `frames.eld` budget: it opens three frames with `emacsclient -c` and
-compares the median time-to-visible with the budget (500 ms). On gryphn it is **green**
+compares the median time-to-visible with the budget (500 ms). On the reference configuration it is **green**
 (median ~400–430 ms over runs; the first frame of a daemon takes 500–870 ms).
 
-The reported 2.1 s for a new frame does **not** reproduce in an isolated session. The gryphn configuration alone is
+The reported 2.1 s for a new frame does **not** reproduce in an isolated session. The reference configuration alone is
 therefore not what makes frames slow; the cause is state the harness leaves out on purpose (saved workspace
 layouts restored per frame, many open buffers, language servers, the real display's scale). Measuring it needs
 the live session and is left for the user to authorise.
@@ -51,8 +51,8 @@ the live session and is left for the user to authorise.
   selection back; during continuous churn the debounce is starved and the follow fires as soon as it stops; and
   the follow undoes keyboard browsing even with no background activity.
 - **H3** (root switching) — confirmed: the follow replaces the Explorer's root with the other project's (an
-  earlier draft blamed treemacs' own follow mode too; with nested timers attributed correctly, gryphn's follow
-  alone does it), with echo-area jank on the way.
+  earlier draft blamed treemacs' own follow mode too; with nested timers attributed correctly, the configuration's
+  follow alone does it), with echo-area jank on the way.
 - **H4** (the Buffers panel is rebuilt on every signal) — confirmed: header wiped, scroll reset, rows re-sorted
   under the pointer.
 - **Step 0** (a click turned into a drag that moved files) — the mechanism is reproduced: the follow changes the

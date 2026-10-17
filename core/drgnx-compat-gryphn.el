@@ -6,7 +6,7 @@
 ;; gryphn (the configuration drgnx grew out of) defines its commands with `gryphn-command-define'
 ;; and its right-click contexts with `gryphn-surfaces-define-context'.  This shim provides both on
 ;; top of drgnx's registry and surfaces, so gryphn's board, run, agents and search files load
-;; unchanged as an external module (modules.eld :external, docs/modules.md): their commands are in
+;; unchanged as an external module (modules.eld :external, docs/guide/modules.md): their commands are in
 ;; the palette and menus, and their keys join the VS Code key profile.
 
 ;;; Code:

@@ -11,7 +11,7 @@
 ;; imported again).  The board is edited as text — no org-mode, no #+SETUPFILE — and written back
 ;; with its encoding, line endings, modes and symlink kept; nothing on it is moved or rewritten.  A
 ;; board with unsaved changes (in this Emacs, or locked by another) is left alone.  Projects are also
-;; listed in projects.eld (config dir) and remembered by project.el.  See docs/onboarding.md.
+;; listed in projects.eld (config dir) and remembered by project.el.  See docs/guide/onboarding.md.
 
 ;;; Code:
 (require 'cl-lib)
