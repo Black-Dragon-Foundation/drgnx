@@ -23,7 +23,8 @@
 (require 'drgnx-ai-client)
 (require 'drgnx-jobs)
 
-(defconst drgnx-search-index-default-batch 16 "Chunks per embedding request.")
+(defconst drgnx-search-index-default-batch 32
+  "Chunks per embedding request: TEI's default max-client-batch-size (a 413 halves it for the rest of the run).")
 
 (defconst drgnx-search-index--core-dir (file-name-directory (or load-file-name buffer-file-name))
   "Where drgnx's core libraries are: the indexer's batch Emacs loads them from here.")

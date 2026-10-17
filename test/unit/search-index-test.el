@@ -137,6 +137,13 @@
       (should (equal (car seen) '(5 . 5)))
       (should (equal (reverse (mapcar #'car seen)) '(1 2 3 4 5))))))
 
+(ert-deftest drgnx-search-index/the-default-batch-is-tei-max-client-batch-size ()
+  "100 one-chunk files go out in requests of 32 (TEI's default max-client-batch-size): 32 + 32 + 32 + 4."
+  (should (= drgnx-search-index-default-batch 32))
+  (drgnx-search-index-test--with (drgnx-search-index-test--named 100)
+    (drgnx-search-index root :embed (drgnx-search-index-test--stub))
+    (should (equal (mapcar #'length (reverse drgnx-search-index-test--calls)) '(32 32 32 4)))))
+
 (ert-deftest drgnx-search-index/a-file-with-many-chunks-is-written-whole ()
   (let ((big (mapconcat (lambda (n) (format "row %d" n)) (number-sequence 1 400) "\n")))
     (drgnx-search-index-test--with `(("big.txt" . ,big) ("small.txt" . "tiny\n"))
