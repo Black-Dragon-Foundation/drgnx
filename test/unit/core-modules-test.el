@@ -222,3 +222,18 @@
          (drgnx-modules-after-stage-functions (list (lambda (stage) (push stage seen)))))
     (drgnx-modules-run 'first-input)
     (should-not seen)))
+
+;;;; Deferred fixes
+
+(ert-deftest drgnx-modules/requires-orders-a-stage ()
+  ;; M4-3: a module listed before the module it requires runs after it, in the same stage.
+  (drgnx-modules-test--with-config
+   (let (ran)
+     (drgnx-module-define 'test/top :doc "t" :requires '(test/mid) :setup (lambda () (push 'top ran)))
+     (drgnx-module-define 'test/mid :doc "m" :requires '(test/base) :setup (lambda () (push 'mid ran)))
+     (drgnx-module-define 'test/base :doc "b" :setup (lambda () (push 'base ran)))
+     (drgnx-module-define 'test/loop :doc "l" :requires '(test/loop) :setup (lambda () (push 'loop ran)))
+     (drgnx-modules-run 'startup)
+     (should (equal (reverse ran) '(base mid top)))
+     (should (eq (drgnx-modules-test--status 'test/top) 'ok))
+     (should (eq (drgnx-modules-test--status 'test/loop) 'missing-requires)))))

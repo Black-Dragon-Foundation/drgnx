@@ -125,28 +125,43 @@ backed up before drgnx writes it.")
 (defvar drgnx-modules-after-stage-functions nil
   "Called with the stage after its modules ran (core re-applies keys and menus after later stages).")
 
+(defun drgnx-modules--in-order (stage)
+  "The modules of STAGE, each after the modules of the stage it requires; otherwise in definition
+order (a cycle keeps it, and is reported waiting)."
+  (let ((todo (seq-filter (lambda (m) (eq (plist-get (cdr m) :stage) stage)) drgnx-modules--table))
+        (done nil))
+    (while todo
+      (let ((ready (or (seq-filter (lambda (m) (not (seq-some (lambda (r) (assq r todo)) (plist-get (cdr m) :requires))))
+                                   todo)
+                       todo)))
+        (setq done (append done ready)
+              todo (seq-remove (lambda (m) (memq m ready)) todo))))
+    done))
+
+(defun drgnx-modules--run-one (name spec stage)
+  "Run module NAME (SPEC) of STAGE, isolated and timed, and record it.  Non-nil if its setup ran."
+  (let ((missing (seq-remove (lambda (p) (or (featurep p) (locate-library (symbol-name p))))
+                             (plist-get spec :packages)))
+        (unmet (seq-remove #'drgnx-modules--ok-p (plist-get spec :requires))))
+    (cond
+     ((drgnx-module-disabled-p name) (drgnx-modules--record name stage 0 'disabled) nil)
+     (missing (drgnx-modules--record name stage 0 'missing-packages nil missing) nil)
+     (unmet (drgnx-modules--record name stage 0 'missing-requires nil unmet) nil)
+     (t (let* ((t0 (float-time))
+               (err (condition-case e (progn (funcall (plist-get spec :setup)) nil)
+                      (error (error-message-string e))))
+               (ms (round (* 1000 (- (float-time) t0))))
+               (problems (and (not err) (plist-get spec :doctor)
+                              (condition-case e (funcall (plist-get spec :doctor))
+                                (error (list (format "its doctor check failed: %s" (error-message-string e))))))))
+          (drgnx-modules--record name stage ms (if err 'failed 'ok) err nil problems))
+        t))))
+
 (defun drgnx-modules-run (stage)
   "Run the setup of every module of STAGE, each isolated and timed; then (if one ran) the hooks."
   (let ((ran nil))
-    (dolist (m drgnx-modules--table)
-      (let ((name (car m)) (spec (cdr m)))
-        (when (eq (plist-get spec :stage) stage)
-          (let ((missing (seq-remove (lambda (p) (or (featurep p) (locate-library (symbol-name p))))
-                                     (plist-get spec :packages)))
-                (unmet (seq-remove #'drgnx-modules--ok-p (plist-get spec :requires))))
-            (cond
-             ((drgnx-module-disabled-p name) (drgnx-modules--record name stage 0 'disabled))
-             (missing (drgnx-modules--record name stage 0 'missing-packages nil missing))
-             (unmet (drgnx-modules--record name stage 0 'missing-requires nil unmet))
-             (t (setq ran t)
-                (let* ((t0 (float-time))
-                       (err (condition-case e (progn (funcall (plist-get spec :setup)) nil)
-                              (error (error-message-string e))))
-                       (ms (round (* 1000 (- (float-time) t0))))
-                       (problems (and (not err) (plist-get spec :doctor)
-                                      (condition-case e (funcall (plist-get spec :doctor))
-                                        (error (list (format "its doctor check failed: %s" (error-message-string e))))))))
-                  (drgnx-modules--record name stage ms (if err 'failed 'ok) err nil problems))))))))
+    (dolist (m (drgnx-modules--in-order stage))
+      (when (drgnx-modules--run-one (car m) (cdr m) stage) (setq ran t)))
     (when ran (run-hook-with-args 'drgnx-modules-after-stage-functions stage))))
 
 (defun drgnx-modules-load-directory (dir)

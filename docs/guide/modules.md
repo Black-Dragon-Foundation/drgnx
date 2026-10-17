@@ -63,7 +63,7 @@ their keys join the VS Code key profile. drgnx never changes the gryphn checkout
 (drgnx-module-define 'tools/example
   :doc "One line: what it gives you."
   :stage 'idle
-  :requires '(core/workbench)            ; modules that must have run
+  :requires '(core/workbench)            ; modules that must have run (in the same stage: they run first)
   :packages '(example-mode)              ; features that must be loadable
   :flags '(+fancy)                       ; (drgnx-module-flag-p 'tools/example '+fancy)
   :doctor (lambda () (unless (executable-find "example") '("the example program is not installed")))
