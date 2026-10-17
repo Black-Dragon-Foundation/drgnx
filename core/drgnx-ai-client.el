@@ -171,9 +171,13 @@ a command the user ran (keys may come from sources that ask, see `drgnx-ai-key')
 
 (define-error 'drgnx-ai-embed-error "Embeddings failed")
 
+(defvar drgnx-ai-embed-last-info nil
+  "INFO (:provider :model :fallbacks) of the last answer `drgnx-ai-embed-sync' returned: who gave the vectors.")
+
 (cl-defun drgnx-ai-embed-sync (inputs &key (timeout 30) interactive)
   "The vectors (a vector of float vectors of length 1) of the vector INPUTS from the `embed' role, waiting for them.
-Each provider gets TIMEOUT seconds.  Signals `drgnx-ai-embed-error' with the providers' reasons when none answers.
+Each provider gets TIMEOUT seconds; `drgnx-ai-embed-last-info' tells who answered.  Signals
+`drgnx-ai-embed-error' with the providers' reasons when none answers.
 Only for batch processes and commands the user ran (INTERACTIVE as for `drgnx-ai-request'): it waits, so never
 from a timer, hook or sentinel."
   (if (zerop (length inputs)) []
@@ -186,7 +190,7 @@ from a timer, hook or sentinel."
         (let ((p (drgnx-ai-request-process h)))
           (accept-process-output (and p (process-live-p p) p) 0.05)))
       (unless result (drgnx-ai-cancel h))
-      (if (car result) (car result)
+      (if (car result) (progn (setq drgnx-ai-embed-last-info (cdr result)) (car result))
         (signal 'drgnx-ai-embed-error (list (or (plist-get (cdr result) :error) "timed out")))))))
 
 (defun drgnx-ai-cancel (h)

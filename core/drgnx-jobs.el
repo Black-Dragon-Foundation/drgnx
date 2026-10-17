@@ -51,20 +51,24 @@ code to DIR/exit (143 when stopped); with HEAD, the git HEAD it ended at to DIR/
 (defun drgnx-jobs--boot-id ()
   (ignore-errors (string-trim (with-temp-buffer (insert-file-contents "/proc/sys/kernel/random/boot_id") (buffer-string)))))
 
-(defun drgnx-jobs--systemd-args (id cwd line env &optional task)
+(defun drgnx-jobs--systemd-args (id cwd line env &optional task memory-max)
   "systemd-run's arguments for job ID running LINE in CWD.  ENV (\"NAME=value\"…) travels in systemd-run's own
-environment — `--setenv=NAME' copies it from there — so no value (a key) is ever in a command line."
+environment — `--setenv=NAME' copies it from there — so no value (a key) is ever in a command line.  MEMORY-MAX
+(\"1G\"): the unit may use no more memory, and no swap."
   (append (list "--user" "--quiet" "--collect" (concat "--unit=drgnx-job-" id) (concat "--working-directory=" cwd)
                 (concat "--setenv=PATH=" (or (getenv "PATH") "")) (concat "--setenv=HOME=" (or (getenv "HOME") "")))
           (and task (list (concat "--setenv=DRGNX_TASK=" task)))
           (mapcar (lambda (e) (concat "--setenv=" (car (split-string e "=")))) env)
+          (and memory-max (list "-p" (concat "MemoryMax=" memory-max) "-p" "MemorySwapMax=0"))
           (list "sh" "-c" line)))
 
-(cl-defun drgnx-jobs-start (name command &key cwd task env)
+(cl-defun drgnx-jobs-start (name command &key cwd task env memory-max)
   "Run COMMAND (a list) as the durable job NAME in CWD.  Returns the job's id.  TASK (a work-tracker
 node id): the job gets it as DRGNX_TASK, and the git HEADs it started and ended at are kept, so the
 commits it made are recorded for the task (docs/guide/work.md).  ENV (\"NAME=value\"…, e.g. an agent's
-keys) is the job's too, and is kept nowhere: not in its state files, not in a command line."
+keys) is the job's too, and is kept nowhere: not in its state files, not in a command line.  MEMORY-MAX
+(\"1G\"): the systemd launcher caps the job's memory (MemoryMax, no swap); the detached launcher cannot and
+ignores it."
   (let* ((id (drgnx-jobs--new-id)) (dir (drgnx-jobs--dir id))
          (cwd (expand-file-name (or cwd default-directory)))
          (launcher (drgnx-jobs-launcher))
@@ -86,7 +90,7 @@ keys) is the job's too, and is kept nowhere: not in its state files, not in a co
       (pcase launcher
         ('systemd
          (with-temp-buffer
-           (unless (eql 0 (apply #'call-process "systemd-run" nil t nil (drgnx-jobs--systemd-args id cwd line env task)))
+           (unless (eql 0 (apply #'call-process "systemd-run" nil t nil (drgnx-jobs--systemd-args id cwd line env task memory-max)))
              (error "The job %s did not start: %s" name (string-trim (buffer-string))))))
         (_ (call-process "setsid" nil 0 nil "-f" "sh" "-c" line))))
     ;; the pid file appears once the job's shell runs; the boot and the process's start time make

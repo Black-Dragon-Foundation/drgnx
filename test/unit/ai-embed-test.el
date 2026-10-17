@@ -107,7 +107,9 @@
 
 (ert-deftest drgnx-ai-embed/sync-returns-the-vectors ()
   (drgnx-ai-embed-test--with '((:path "/embed" :body "[[3,4,0],[0,0,2]]")) '((dead . "m") (tei))
-    (drgnx-ai-embed-test--check (cons (drgnx-ai-embed-sync ["one" "two"] :timeout 5) nil))))
+    (drgnx-ai-embed-test--check (cons (drgnx-ai-embed-sync ["one" "two"] :timeout 5) nil))
+    ;; who answered, for callers that record it (the search index)
+    (should (eq 'tei (plist-get drgnx-ai-embed-last-info :provider)))))
 
 (ert-deftest drgnx-ai-embed/sync-signals-when-none-answers ()
   (drgnx-ai-embed-test--with '((:path "/embed" :status 500 :body "boom")) '((tei) (dead . "m"))
