@@ -100,12 +100,16 @@
        :schema ,(funcall s `(("task" "string" "The task's id") ,seen) '("task" "seen_version"))
        :call ,(lambda (a) (drgnx-coord-mcp--write
                            (drgnx-coord-claim (plist-get a :task) (drgnx-coord-mcp--me) (drgnx-coord-mcp--seen a)))))
-      ("update_task" :description "Set your task's status: running, needs-input, in-review or failed"
+      ("update_task" :description "Set your task's status: running, needs-input, in-review or failed (in a job: running, needs-input or in-review)"
        :schema ,(funcall s `(("task" "string" "The task's id") ("status" "string" "The new status") ,seen)
                          '("task" "status" "seen_version"))
-       :call ,(lambda (a) (drgnx-coord-mcp--write
-                           (drgnx-coord-set-status (plist-get a :task) (drgnx-coord-mcp--me) (plist-get a :status)
-                                                   (drgnx-coord-mcp--seen a)))))
+       :call ,(lambda (a)
+                ;; in a job, a task is done when its review passed and it is merged: never by its agent's word
+                (when (and (getenv "DRGNX_JOB") (not (member (plist-get a :status) '("running" "needs-input" "in-review"))))
+                  (error "In a job, a task's status is running, needs-input or in-review (complete_task); review and merge make it done"))
+                (drgnx-coord-mcp--write
+                 (drgnx-coord-set-status (plist-get a :task) (drgnx-coord-mcp--me) (plist-get a :status)
+                                         (drgnx-coord-mcp--seen a)))))
       ("complete_task" :description "Your task is done (in a job: it goes to review, then is merged)"
        :schema ,(funcall s `(("task" "string" "The task's id") ,seen) '("task" "seen_version"))
        :call ,(lambda (a) (drgnx-coord-mcp--write

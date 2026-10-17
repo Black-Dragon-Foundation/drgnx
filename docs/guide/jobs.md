@@ -47,10 +47,11 @@ goes through the gateway; profiles drgnx cannot price (a subscription) are liste
   on `job/ID-N` in `.claude/worktrees/ID-N`, branched from the job's branch — so a task starts from the work of the
   tasks it depends on. At most `drgnx-job-max-agents` (3) agents work at once.
 - **Permissions:** a role's policy (`drgnx-job-policies`) allows routine tool calls inside the task's worktree —
-  reading, editing, running commands; a reviewer only reads. Anything else waits for you as a **card** (a message
+  reading, editing, running commands; a reviewer only reads (and runs `git diff`, `log`, `show`, `status`). Anything else waits for you as a **card** (a message
   to you; the task says `needs-input`): network access, a command that reaches out or installs (`curl`, `git
-  push`, `npm install`, `podman pull`, …), any path outside the worktree (`..` and symlinks resolved). Answer it in
-  the agent's transcript (Answer Agent).
+  push`, `npm install`, `podman pull`, …), any path outside the worktree (`..` and symlinks resolved), a write to a relative path. Answer it in
+  the agent's transcript (Answer Agent). The command check is best effort, not a sandbox: an interpreter
+  (`python -c`, `node -e`) can reach the network, and a command can write outside the worktree, unseen.
 - **Review:** an agent finishes a task with `complete_task`; it goes to `in-review`, and a reviewer (role `review`)
   reads the diff and answers `VERDICT: pass` or `VERDICT: fail: …`. Pass: the task's branch is merged (`--no-ff`)
   into the job's branch and its dependents may start. Fail: an agent gets the reasons and works again in the same
@@ -63,8 +64,12 @@ goes through the gateway; profiles drgnx cannot price (a subscription) are liste
 - **A provider at its limit** (429, rate limit, overloaded, quota): the task moves to the next profile on its role's
   route, in a new session in the same worktree, told what the agent before it committed and said last. With no
   profile left it is a card.
+- **An agent that ends without finishing** (it exited, or never started: a missing command, not logged in) frees
+  its task for a new agent — `drgnx-job-start-tries` (3) times, then it is a card with the agent's last error. A turn
+  that ends without `complete_task` gets one reminder; the next such turn is a card ("stalled").
 - **The hub restarts:** the job is in `work.db`; tasks whose agents are gone are free again and start anew in their
-  worktrees; nothing merges twice.
+  worktrees (a task waiting on a permission its agent asked goes back too: the request went with the agent); cards
+  for your decision (a conflict, a failed review) stay yours; nothing merges twice.
 
 The job is **done** when every task is done (or dropped). Review the job's branch and merge it yourself.
 
@@ -72,5 +77,6 @@ The job is **done** when every task is done (or dropped). Review the job's branc
 
 `test/unit/job-propose-test.el` (reading plans, proposals), `job-run-test.el` (worktrees, agents per task, the
 limit, a crashed agent), `job-policy-test.el` (the policy, writes in the worktree, cards), `job-review-test.el`
-(review, merge, conflicts), `job-budget-test.el` (the budget pause, fallback), `job-cli-test.el` (`drgnx job`
+(review, merge, conflicts), `job-budget-test.el` (the budget pause, fallback), `job-liveness-test.el` (an agent that will
+not start, a stalled turn, a reviewer's answered permission, a restart with a request waiting), `job-cli-test.el` (`drgnx job`
 against a hub in a child process, the commands). Developer details: [coordination.md](../develop/coordination.md#jobs).

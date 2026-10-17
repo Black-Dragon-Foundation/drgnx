@@ -158,10 +158,23 @@ own repository).  Returns its id; nothing starts (unless `drgnx-job-auto-start')
 (defvar drgnx-job--prompts (make-hash-table :test #'equal) "Session id → its task prompt, given once it is free.")
 (defvar drgnx-job--reviewers (make-hash-table :test #'equal) "Session id → the task it reviews.")
 
+(defvar drgnx-job-start-tries 3 "Times a task's agent may end without finishing it before the user decides.")
+(defvar drgnx-job--exits (make-hash-table :test #'equal) "Task → times its agent ended without finishing it.")
+(defvar drgnx-job--nudged (make-hash-table :test #'equal) "Task → nudges its agent got (a turn ended, the task not done).")
+(defvar drgnx-job--turns-seen (make-hash-table :test #'equal) "Session id → its ended turns already looked at.")
+(defvar drgnx-job--step-pending (make-hash-table :test #'equal) "Job → t while a step is scheduled.")
+
+(defun drgnx-job--step-later (id)
+  "Step job ID soon, outside the process filter — once, however many ask."
+  (unless (gethash id drgnx-job--step-pending)
+    (puthash id t drgnx-job--step-pending)
+    (run-at-time 0 nil (lambda () (remhash id drgnx-job--step-pending) (with-demoted-errors "drgnx job: %S" (drgnx-job-step id))))))
+
 (defun drgnx-job--git (dir &rest args)
   "Run git ARGS in DIR (short operations: worktrees, merges): (EXIT . OUTPUT)."
   (with-temp-buffer
-    (let ((default-directory (file-name-as-directory dir)))
+    (let ((default-directory (file-name-as-directory dir))
+          (process-environment (cons "GIT_TERMINAL_PROMPT=0" process-environment)))   ; never a prompt in the hub
       (cons (apply #'call-process "git" nil t nil args) (string-trim (buffer-string))))))
 
 (defun drgnx-job--repo (job) (plist-get (drgnx-coord-job job) :repo))
@@ -220,11 +233,30 @@ what the agent before it left (`drgnx-job--fall-back')."
       (dolist (task (drgnx-coord-tasks id))
         (let ((status (plist-get task :status)) (agent (plist-get task :agent)))
           (cond
-           ;; its agent died or the hub restarted: the task is free (its worktree stays)
+           ;; its agent died or the hub restarted: the task is free (its worktree stays) — a few times, then the user
            ((and (member status '("claimed" "running")) (not (member agent live)))
-            (drgnx-coord-force-status (plist-get task :id) "ready" nil))
+            (let ((n (1+ (gethash (plist-get task :id) drgnx-job--exits 0))))
+              (puthash (plist-get task :id) n drgnx-job--exits)
+              (if (< n drgnx-job-start-tries)
+                  (drgnx-coord-force-status (plist-get task :id) "ready" nil)
+                (let ((s (drgnx-job--session agent)))
+                  (drgnx-job--card id (plist-get task :id) "agent"
+                                   (format "its agent%s ended %d times without finishing it%s" (if s (format " (%s)" (drgnx-agent-session-profile s)) "")
+                                           n (if-let* ((err (and s (drgnx-agent-session-stderr s)) ) ((not (string-empty-p (string-trim err)))))
+                                                 (concat ": " (substring err (max 0 (- (length err) 300))))
+                                               "")))))))
+           ;; a request waited for the user, and its agent is gone (the hub restarted): the request went with it
+           ((and (equal status "needs-input") (drgnx-job--waiting id (plist-get task :id))
+                 (not (drgnx-job--alive-p (plist-get (drgnx-job--waiting id (plist-get task :id)) :sid))))
+            (let ((back (plist-get (drgnx-job--waiting id (plist-get task :id)) :back)))
+              (drgnx-job--set-waiting id (plist-get task :id) nil)
+              (drgnx-coord-force-status (plist-get task :id) back (and (equal back "in-review") agent))))
+           ;; its agent's turn ended and the task is not finished: a nudge, then the user
+           ((and (member status '("claimed" "running")) (drgnx-job--stalled-p (drgnx-job--session agent)))
+            (drgnx-job--nudge id task (drgnx-job--session agent)))
            ;; finished: its agent's work is done; a reviewer looks at it
            ((equal status "in-review")
+            (remhash (plist-get task :id) drgnx-job--exits) (remhash (plist-get task :id) drgnx-job--nudged)
             (when (member agent live) (drgnx-agents-kill (drgnx-job--session agent)))
             (when (and drgnx-job-review (not (drgnx-job--reviewer-of (plist-get task :id))))
               (drgnx-job--start-review id task))))))
@@ -235,6 +267,33 @@ what the agent before it left (`drgnx-job--fall-back')."
             (setq count (1+ count)))))
       (when (seq-every-p (lambda (task) (member (plist-get task :status) '("done" "dropped"))) (drgnx-coord-tasks id))
         (drgnx-coord-job-set id :status "done")))))
+
+(defun drgnx-job--alive-p (sid)
+  (when-let* ((s (and sid (drgnx-agents-get sid)))) (not (eq (drgnx-agent-session-status s) 'exited))))
+
+(defun drgnx-job--waiting (id task) (alist-get task (plist-get (plist-get (drgnx-coord-job id) :data) :waiting) nil nil #'equal))
+
+(defun drgnx-job--set-waiting (id task w)
+  "TASK of job ID waits on the user for the request of W (:sid SID :back STATUS), or no longer (W nil)."
+  (let ((data (plist-get (drgnx-coord-job id) :data)))
+    (setf (alist-get task (plist-get data :waiting) nil 'remove #'equal) w)
+    (drgnx-coord-job-set id :data data)))
+
+(defun drgnx-job--turns (s) (cl-count-if (lambda (e) (eq (plist-get e :type) 'stop)) (drgnx-agent-session-entries s)))
+
+(defun drgnx-job--stalled-p (s)
+  "Has S, free now, ended a turn not looked at yet (its task still open)?"
+  (and s (drgnx-agents-free-p s) (not (gethash (drgnx-agent-session-id s) drgnx-job--prompts))
+       (> (drgnx-job--turns s) (gethash (drgnx-agent-session-id s) drgnx-job--turns-seen 0))))
+
+(defun drgnx-job--nudge (id task s)
+  "S's turn ended with TASK of job ID open: once a reminder, then a card."
+  (puthash (drgnx-agent-session-id s) (drgnx-job--turns s) drgnx-job--turns-seen)
+  (if (zerop (gethash (plist-get task :id) drgnx-job--nudged 0))
+      (progn (puthash (plist-get task :id) 1 drgnx-job--nudged)
+             (drgnx-agents-deliver s (format "[drgnx] Your turn ended but task %s is not finished. Finish it and call complete_task; if something blocks you, say what and call update_task with needs-input."
+                                             (plist-get task :id))))
+    (drgnx-job--card id (plist-get task :id) "stalled" "its agent's turns end without complete_task")))
 
 (defun drgnx-job-tick ()
   "Move every running job on (the hub's tick)."
@@ -261,7 +320,7 @@ job on."
     (when (or (eq (drgnx-agent-session-status s) 'exited)
               (and (drgnx-agents-free-p s)
                    (equal (plist-get (drgnx-coord-task (drgnx-agent-session-task s)) :status) "in-review")))
-      (run-at-time 0 nil (lambda () (with-demoted-errors "drgnx job: %S" (drgnx-job-step job)))))))
+      (drgnx-job--step-later job))))
 
 ;;;; Review and merge
 
@@ -312,7 +371,7 @@ review for the user.")
              (drgnx-job--card id task-id "review" (format "failed review %d times: %s" fails reasons))
            (drgnx-coord-force-status task-id "ready" nil))))
       (_ (drgnx-job--card id task-id "review" "the reviewer gave no verdict")))
-    (run-at-time 0 nil (lambda () (with-demoted-errors "drgnx job: %S" (drgnx-job-step id))))))
+    (drgnx-job--step-later id)))
 
 (defun drgnx-job--merge (id task)
   "Merge TASK's branch into job ID's branch (once): done, and its dependents may start; a conflict is aborted and
@@ -357,17 +416,29 @@ goes to the user."
       (when (and (equal (drgnx-agent-session-job s) id) (eq (drgnx-agent-session-status s) 'idle) (drgnx-agent-session-paused s))
         (setf (drgnx-agent-session-paused s) nil)
         (drgnx-agents-deliver s "The job goes on: continue where you stopped.")))
+    ;; the others, free at the pause, may hold a prompt not given yet
+    (dolist (s (drgnx-agents-sessions))
+      (when (and (equal (drgnx-agent-session-job s) id) (not (eq (drgnx-agent-session-status s) 'exited)))
+        (drgnx-job--session-changed s)))
     (drgnx-job-step id)
     id))
 
-(defconst drgnx-job--provider-limit "\\_<429\\_>\\|rate.?limit\\|overloaded\\|quota\\|too many requests"
+(defconst drgnx-job--provider-limit "\\(?:^\\|[^0-9]\\)429\\(?:[^0-9]\\|$\\)\\|rate.?limit\\|overloaded\\|quota\\|too many requests"
   "What a provider at its limit says (case ignored).")
+
+(defun drgnx-job--provider-limit-p (s err)
+  "Does ERR (a turn's error) of S — or S's stderr, when the agent died of it — say its provider is at its limit?"
+  (or (eql (plist-get err :code) 429)
+      (let ((case-fold-search t))
+        (string-match-p drgnx-job--provider-limit
+                        (concat (format "%s" (plist-get err :message)) "\n"
+                                (and (eq (drgnx-agent-session-status s) 'exited) (or (drgnx-agent-session-stderr s) "")))))))
 
 (defun drgnx-job--agent-error (s err)
   "`drgnx-agents-error-functions': the task of a job agent whose provider is at its limit goes to the next profile."
   (when (and (drgnx-agent-session-job s) (not (gethash (drgnx-agent-session-id s) drgnx-job--reviewers))
-             (or (eql (plist-get err :code) 429)
-                 (let ((case-fold-search t)) (string-match-p drgnx-job--provider-limit (format "%s" (plist-get err :message))))))
+             (drgnx-job--provider-limit-p s err))
+    (puthash (drgnx-agent-session-id s) (drgnx-job--turns s) drgnx-job--turns-seen)   ; no nudge for this turn
     (let ((job (drgnx-agent-session-job s)))
       (run-at-time 0 nil (lambda () (with-demoted-errors "drgnx job: %S" (drgnx-job--fall-back job s err)))))))
 
@@ -401,10 +472,28 @@ none left, to the user."
 ;;;; Autonomy: the permission policy per role, writes in the worktree
 
 (defconst drgnx-job--outward-commands
-  (concat "\\_<\\(?:curl\\|wget\\|ssh\\|scp\\|rsync\\|git push\\|git fetch\\|git pull\\|npm \\(?:install\\|i\\|add\\)\\|pnpm \\(?:install\\|add\\)"
-          "\\|yarn \\(?:install\\|add\\)\\|pip3? install\\|uv \\(?:pip install\\|add\\)\\|cargo \\(?:install\\|add\\)\\|go get\\|gem install"
-          "\\|dnf\\|yum\\|apt\\(?:-get\\)?\\|brew\\|pacman\\|podman \\(?:pull\\|push\\)\\|docker\\)\\_>")
-  "Commands that reach the network or install something: a job agent asks the user for them.")
+  (let ((words '("curl" "wget" "ssh" "scp" "sftp" "rsync" "nc" "ncat" "telnet" "ftp" "gh" "npx" "bunx" "dnf" "yum" "apt"
+                 "apt-get" "brew" "pacman" "docker" "npm +\\(?:install\\|i\\|ci\\|add\\|exec\\)" "pnpm +\\(?:install\\|i\\|add\\|dlx\\)"
+                 "yarn +\\(?:install\\|add\\|dlx\\)" "bun +\\(?:install\\|i\\|add\\|x\\)" "pip3? +install" "pipx +\\(?:install\\|run\\)"
+                 "uv +\\(?:pip +install\\|add\\|tool\\)" "cargo +\\(?:install\\|add\\)" "go +\\(?:get\\|install\\)" "gem +install"
+                 "podman +\\(?:pull\\|push\\|run\\)"
+                 ;; git and its global options (-C DIR, -c K=V) before the command
+                 "git\\(?: +-[^[:space:]]+\\(?: +[^-[:space:]][^[:space:]]*\\)?\\)* +\\(?:push\\|fetch\\|pull\\|clone\\|ls-remote\\|submodule\\)")))
+    (concat "\\(?:^\\|[[:space:];&|(`'\"/=]\\)\\(?:"
+            (mapconcat (lambda (w) (replace-regexp-in-string " \\+" "[[:space:]]+" w t t)) words "\\|")
+            "\\)\\(?:[[:space:];&|)`'\"]\\|$\\)"))
+  "Commands that reach the network or install something, wherever they are in a command line (a path before them,
+a shell around them): a job agent asks the user for them.  Best effort, not a sandbox: an interpreter (`python -c')
+reaches the network unseen.")
+
+(defconst drgnx-job--read-only-git
+  "\\`git[[:space:]]+\\(?:diff\\|log\\|show\\|status\\)\\(?:[[:space:]]+[^;&|`$<>()\\\n]*\\)?\\'"
+  "A git command a reviewer runs without asking: it reads, nothing else on the line.")
+
+(defun drgnx-job--command (tool)
+  "The command line of the ACP TOOL call: its raw input's when it has one, else its title."
+  (let ((raw (plist-get (plist-get tool :rawInput) :command)))
+    (if (stringp raw) raw (or (plist-get tool :title) ""))))
 
 (defvar drgnx-job-policies
   '((review :allow (read search think))
@@ -421,20 +510,33 @@ role.  Everything else — network (fetch), outward commands, paths outside the 
 working in TREE."
   (let* ((kind (intern (or (plist-get tool :kind) "other")))
          (allowed (plist-get (cdr (or (assq (intern (or role "implement")) drgnx-job-policies) (assq t drgnx-job-policies))) :allow))
-         (paths (delq nil (mapcar (lambda (l) (plist-get l :path)) (append (plist-get tool :locations) nil)))))
-    (if (and (memq kind allowed)
-             (seq-every-p (lambda (p) (drgnx-job--inside-p p tree)) paths)
-             (not (and (eq kind 'execute) (string-match-p drgnx-job--outward-commands (or (plist-get tool :title) "")))))
-        'allow 'ask)))
+         (paths (delq nil (mapcar (lambda (l) (plist-get l :path)) (append (plist-get tool :locations) nil))))
+         (case-fold-search nil))
+    (cond
+     ((not (seq-every-p (lambda (p) (drgnx-job--inside-p p tree)) paths)) 'ask)
+     ((and (eq kind 'execute)
+           (string-match-p drgnx-job--outward-commands (concat (or (plist-get tool :title) "") "\n" (drgnx-job--command tool))))
+      'ask)
+     ((memq kind allowed) 'allow)
+     ;; a reviewer reads the diff
+     ((and (eq kind 'execute) (equal role "review") (string-match-p drgnx-job--read-only-git (drgnx-job--command tool))
+           (not (string-match-p "--output\\|--ext-diff" (drgnx-job--command tool))))
+      'allow)
+     (t 'ask))))
 
 (defun drgnx-job--role (s)
   (if (gethash (drgnx-agent-session-id s) drgnx-job--reviewers) "review"
     (plist-get (drgnx-coord-task (drgnx-agent-session-task s)) :role)))
 
-(defun drgnx-job--card (job task kind title)
+(defun drgnx-job--card (job task kind title &optional s)
   "Something of JOB's TASK needs the user: the task waits (needs-input), the user gets a message and the hub's
-subscribers a `card' event."
+subscribers a `card' event.  S: the session whose request waits (it goes back to work once answered, or, gone, the
+task is released)."
+  (setq title (replace-regexp-in-string "[\n\r]+" " " (format "%s" title)))   ; one line: no forged card lines
   (when task
+    (when s
+      (drgnx-job--set-waiting job task (list :sid (drgnx-agent-session-id s)
+                                             :back (if (gethash (drgnx-agent-session-id s) drgnx-job--reviewers) "in-review" "ready"))))
     (drgnx-coord-force-status task "needs-input" (plist-get (drgnx-coord-task task) :agent)))
   (drgnx-coord-send :job job :sender "drgnx" :recipient "user" :text (format "[%s] %s: %s" kind (or task job) title))
   (when (fboundp 'drgnx-hub--broadcast) (drgnx-hub--broadcast 'card (list :job job :task task :kind kind :title title))))
@@ -450,21 +552,28 @@ its worktree done at once; anything else waits for the user as a card (nil: the 
            (if (eq (drgnx-job-policy (drgnx-job--role s) tool tree) 'allow)
                (let ((opt (seq-find (lambda (o) (equal (plist-get o :kind) "allow_once")) (append (plist-get params :options) nil))))
                  (list :result (list :outcome (list :outcome "selected" :optionId (plist-get opt :optionId)))))
-             (drgnx-job--card job task "permission" (or (plist-get tool :title) "a permission"))
+             (drgnx-job--card job task "permission" (or (plist-get tool :title) "a permission") s)
              nil)))
         ("fs/write_text_file"
+         ;; an absolute path only: the check and the write must mean the same file
          (let ((path (plist-get params :path)) (content (plist-get params :content)))
-           (if (and (stringp content) (drgnx-job--inside-p path tree) (not (equal (drgnx-job--role s) "review")))
+           (if (and (stringp content) (drgnx-agents--path-ok-p path) (drgnx-job--inside-p path tree)
+                    (not (equal (drgnx-job--role s) "review")))
                (progn (let ((coding-system-for-write 'utf-8-unix)) (write-region content nil path nil 'silent))
                       (list :result nil))
-             (drgnx-job--card job task "write" (format "write %s" path))
+             (drgnx-job--card job task "write" (format "write %s" path) s)
              nil)))))))
 
 (defun drgnx-job--answered (s)
-  "The user answered S's request: its task works again (when nothing else waits)."
-  (when (and (drgnx-agent-session-job s) (null (drgnx-agent-session-permissions s)) (null (drgnx-agent-session-reviews s))
-             (equal (plist-get (drgnx-coord-task (drgnx-agent-session-task s)) :status) "needs-input"))
-    (drgnx-coord-force-status (drgnx-agent-session-task s) "running" (drgnx-agent-session-id s))))
+  "The user answered S's request: its task goes on (when nothing else waits) — a reviewer's back in review, with the
+work of the agent that did it."
+  (let ((task (drgnx-coord-task (drgnx-agent-session-task s))))
+    (when (and (drgnx-agent-session-job s) (null (drgnx-agent-session-permissions s)) (null (drgnx-agent-session-reviews s))
+               (equal (plist-get task :status) "needs-input"))
+      (drgnx-job--set-waiting (drgnx-agent-session-job s) (plist-get task :id) nil)
+      (if (gethash (drgnx-agent-session-id s) drgnx-job--reviewers)
+          (drgnx-coord-force-status (plist-get task :id) "in-review" (plist-get task :agent))
+        (drgnx-coord-force-status (plist-get task :id) "running" (drgnx-agent-session-id s))))))
 
 ;;;; Stopping, what a job looks like, `drgnx job'
 

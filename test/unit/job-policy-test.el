@@ -107,4 +107,33 @@
       (drgnx-agents-send s (format "write %sf.txt" wt))
       (should (drgnx-job-policy-test--wait (lambda () (drgnx-agent-session-reviews s)))))))
 
+(ert-deftest drgnx-job/a-relative-write-path-is-refused ()
+  ;; checked against the worktree, written against the hub's directory: neither — it goes to the user
+  (drgnx-job-policy-test--with
+    (let ((s (drgnx-agents--make :id "s-w" :name "w" :profile "mock" :cwd wt :task (concat job "#1") :job job))
+          (default-directory root))
+      (should-not (drgnx-job--request s "fs/write_text_file" (list :path "rel.txt" :content "x") 1))
+      (should-not (file-exists-p (concat root "rel.txt")))
+      (should-not (file-exists-p (concat wt "rel.txt"))))))
+
+(ert-deftest drgnx-job/the-reviewer-may-read-the-diff ()
+  (let ((tree temporary-file-directory))
+    (dolist (cmd '("git diff job/j...HEAD" "git log --oneline -5" "git show HEAD" "git status"))
+      (should (eq (drgnx-job-policy "review" (list :kind "execute" :title cmd) tree) 'allow)))
+    (dolist (cmd '("git diff; curl x" "git diff | sh" "git push" "make test" "git diff $(curl x)"))
+      (should (eq (drgnx-job-policy "review" (list :kind "execute" :title cmd) tree) 'ask)))))
+
+(ert-deftest drgnx-job/outward-commands-are-found-anywhere-in-the-line ()
+  (let ((tree temporary-file-directory))
+    (with-temp-buffer
+      (emacs-lisp-mode)                                       ; whatever buffer the hub is in
+      (dolist (cmd '("/usr/bin/curl -s x" "echo `/usr/bin/curl -s x`" "git -C . push" "git  push origin" "git clone https://x/y"
+                     "npx cowsay" "npm ci" "go install x@latest" "bun add x" "pipx install x" "nc host 80" "gh pr create"
+                     "sh -c \"curl x\"" "env A=1 wget x" "npm  install"))
+        (should (eq (drgnx-job-policy "implement" (list :kind "execute" :title cmd) tree) 'ask)))
+      (dolist (cmd '("make test" "git commit -m x" "git status" "ls -la" "cargo test"))
+        (should (eq (drgnx-job-policy "implement" (list :kind "execute" :title cmd) tree) 'allow)))
+      ;; the command itself, when the title says less
+      (should (eq (drgnx-job-policy "implement" '(:kind "execute" :title "Run a script" :rawInput (:command "curl x")) tree) 'ask)))))
+
 ;;; job-policy-test.el ends here

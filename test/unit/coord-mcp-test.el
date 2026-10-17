@@ -97,6 +97,16 @@
     (should (cdr (drgnx-coord-mcp-test--tool proc "send_message" (list :to "b" :text "x" :seen_version 0))))
     (should-not (cdr (drgnx-coord-mcp-test--tool proc "read_decisions" (list :since 0))))))   ; reading is fine
 
+(ert-deftest drgnx-coord-mcp/a-job-agent-cannot-skip-review ()
+  ;; in a job, done comes from the review and the merge — never from the agent's update_task
+  (drgnx-coord-mcp-test--with '("DRGNX_AGENT=a" "DRGNX_JOB=j")
+    (drgnx-coord-mcp-test--tool proc "claim_task" (list :task "j#1" :seen_version (drgnx-coord-version)))
+    (dolist (status '("done" "failed" "ready"))
+      (should (cdr (drgnx-coord-mcp-test--tool proc "update_task" (list :task "j#1" :status status :seen_version (drgnx-coord-version))))))
+    (drgnx-work-db-close-all)
+    (should (equal (plist-get (drgnx-coord-task "j#1") :status) "claimed"))
+    (should-not (cdr (drgnx-coord-mcp-test--tool proc "update_task" (list :task "j#1" :status "needs-input" :seen_version (drgnx-coord-version)))))))
+
 (ert-deftest drgnx-coord-mcp/the-server-spec-for-acp ()
   (let* ((process-environment (append '("DRGNX_DATA_DIR=/d" "XDG_STATE_HOME=/s") process-environment))
          (spec (drgnx-coord-mcp-server-spec "agent one" :job "j" :task "j#1"))

@@ -41,6 +41,19 @@
         (should (drgnx-job-run-test--wait
                  (lambda () (seq-every-p (lambda (s) (string-search "The job goes on" (format "%S" (drgnx-agent-session-entries s)))) (list a b)))))))))
 
+(ert-deftest drgnx-job/a-session-free-at-the-pause-gets-its-prompt-on-resume ()
+  ;; not busy when the budget ran out (its prompt not given yet): resuming gives it
+  (drgnx-job-run-test--with "# One\n\n### Task 1: one\n"
+    (let* ((drgnx-job-max-agents 0) (drgnx-job-review nil) (id (drgnx-job-propose plan :budget 1.0)))
+      (drgnx-job-approve id)
+      (let* ((a (drgnx-job-budget-test--agent id 1)) (sid (drgnx-agent-session-id a)))
+        (drgnx-job--gateway-event 'budget (list :job id :spent 1.2 :budget 1.0))
+        (puthash sid (format "[drgnx task %s#1] one" id) drgnx-job--prompts)    ; as a start leaves it
+        (drgnx-job--session-changed a)
+        (should (gethash sid drgnx-job--prompts))                                ; paused: not given
+        (drgnx-job-resume id :budget 5.0)
+        (should (drgnx-job-run-test--wait (lambda () (string-search (format "[drgnx task %s#1]" id) (format "%S" (drgnx-agent-session-entries a))))))))))
+
 (ert-deftest drgnx-job/a-rate-limit-moves-the-task-to-the-next-profile ()
   (drgnx-job-run-test--with "# One\n\n### Task 1: one\n"
     (let* ((mock (plist-get (cdr (assoc "mock" drgnx-agents-profiles)) :command))
@@ -69,5 +82,13 @@
       (drgnx-job-approve id)
       (should (drgnx-job-run-test--wait (lambda () (equal (drgnx-job-run-test--status id 1) "needs-input")) 20))
       (should (seq-find (lambda (m) (string-prefix-p "[fallback]" (plist-get m :text))) (drgnx-coord-inbox "user"))))))
+
+(ert-deftest drgnx-job/an-agent-that-died-of-a-rate-limit-counts-as-one ()
+  ;; it exited: the error says only that; its stderr says why
+  (let ((s (drgnx-agents--make :id "s-x" :status 'exited :stderr "Error: 429 Too Many Requests")))
+    (should (drgnx-job--provider-limit-p s '(:code -32000 :message "the agent exited")))
+    (should-not (drgnx-job--provider-limit-p (drgnx-agents--make :id "s-y" :status 'exited :stderr "segfault")
+                                             '(:code -32000 :message "the agent exited")))
+    (should (drgnx-job--provider-limit-p (drgnx-agents--make :id "s-z" :status 'idle) '(:code 429 :message "x")))))
 
 ;;; job-budget-test.el ends here

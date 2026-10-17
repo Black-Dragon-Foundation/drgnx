@@ -102,9 +102,11 @@ done is done. The hub wires it to sessions with hooks:
 | `drgnx-agents-error-functions` | `drgnx-job--agent-error`: a provider at its limit → `drgnx-job--fall-back` to the next profile |
 | `drgnx-gateway-event-functions` | `drgnx-job--gateway-event`: `budget` → the job pauses, its agents stop |
 
-`complete_task` from an agent of a job (`DRGNX_JOB` set) puts the task `in-review`, not `done`; the reviewer's
-verdict decides (`drgnx-job--reviewed`, `drgnx-job--merge`). A card (`drgnx-job--card`) is a message from `drgnx`
-to `user` with the job and task, the task `needs-input`, and a `card` event (job, task, kind, title); `fallback`
+`complete_task` from an agent of a job (`DRGNX_JOB` set) puts the task `in-review`, not `done`, and `update_task`
+there takes only `running`, `needs-input` and `in-review`; the reviewer's verdict decides (`drgnx-job--reviewed`, `drgnx-job--merge`). A card (`drgnx-job--card`) is a message from `drgnx`
+to `user` with the job and task (one line), the task `needs-input`, and a `card` event (job, task, kind, title); a
+card for an agent's pending request records it in the job's data (`:waiting`: the session, and the status to go back
+to — `in-review` for a reviewer's), so an answer, or the agent's end, puts the task back; `fallback`
 events carry job, task, agent, from, to, why. The hub's `job/propose`, `job/approve`, `job/status`, `job/stop`,
 `job/resume` ([hub.md](hub.md)) answer `drgnx-job-summary`; `bin/drgnx job` and the Plan Job commands use them.
 A notification to the hub (`coord/notify`) carries no id and gets no answer: the sender has hung up by then.
