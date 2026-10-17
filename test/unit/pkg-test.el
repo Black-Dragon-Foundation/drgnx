@@ -713,6 +713,10 @@ Returns the server process; its port is (process-contact SERVER :service)."
 (defun drgnx-pkg-test--versions ()
   (mapcar (lambda (e) (cons (car e) (plist-get (cdr e) :version))) (drgnx-pkg-read-lock)))
 
+(defun drgnx-pkg-test--from-shipped-p ()
+  "Does the user lock still carry the mark of the shipped lock it was copied from?"
+  (plist-get (drgnx-pkg--read-file (drgnx-pkg-lock-file)) :from-shipped))
+
 (ert-deftest drgnx-pkg/a-first-sync-uses-the-shipped-lock ()
   ;; The archive's newest fb needs the newest fa; the shipped lock pins the older pair, which installs as a pair.
   (drgnx-pkg-test--with root
@@ -792,8 +796,107 @@ Returns the server process; its port is (process-contact SERVER :service)."
       (should-not (file-exists-p (expand-file-name "sync.lock" (drgnx-data-dir))))
       (should-not (drgnx-pkg-generations))
       (should (equal (drgnx-pkg-test--versions) '((fa . "1.0") (fb . "1.0"))))      ; the shipped lock, copied
+      (should (drgnx-pkg-test--from-shipped-p))                                       ; still marked as the shipped one
       (let ((coding-system-for-write 'binary)) (write-region fb nil (concat arch "fb-1.0.el") nil 'silent))
       (should (plist-get (drgnx-pkg-test--sync root :archives `(("fx" . ,arch))) :ok))
       (should (equal (drgnx-pkg-test--installed) '("fa-1.0" "fb-1.0"))))))
+
+;;;; Task 12 review fixes: a soft first sync, --seed, requirements beyond the lock, an integral shipped lock
+
+(defun drgnx-pkg-test--stale-fa (root)
+  "The archive fx after fa 1.0 was replaced by 1.1 (fb 1.0, fc 1.0 and fd 1.0 need fa 1.0; fe needs nothing), and
+fy with a newer fa 2.0.  Returns (FX FY FA-1.0-ENTRY)."
+  (let* ((fx (drgnx-pkg-test--archive (concat root "fx") '((fa "1.0"))))
+         (old (drgnx-pkg-test--entry fx 'fa "1.0")))
+    (drgnx-pkg-test--archive fx '((fa "1.1") (fb "1.0" ((fa "1.0"))) (fc "1.0" ((fa "1.0"))) (fd "1.0" ((fa "1.0"))) (fe "1.0")))
+    (list fx (drgnx-pkg-test--archive (concat root "fy") '((fa "2.0"))) old)))
+
+(ert-deftest drgnx-pkg/a-shipped-pin-nobody-serves-falls-back-on-the-first-sync ()
+  ;; The shipped fa 1.0 is gone: its archive's current fa (1.1, not fy's newer 2.0) installs, with a warning.
+  (drgnx-pkg-test--with root
+    (pcase-let ((`(,fx ,fy ,old) (drgnx-pkg-test--stale-fa root)))
+      (drgnx-pkg-test--ship (list old (drgnx-pkg-test--entry fx 'fb "1.0" '((fa "1.0")))))
+      (drgnx-pkg-test--want root 'fb)
+      (let ((r (drgnx-pkg-test--sync root :archives `(("fx" . ,fx) ("fy" . ,fy)))))
+        (should (plist-get r :ok))
+        (should-not (plist-get r :missing))
+        (should (member "fa: shipped 1.0 no longer served; installed 1.1" (plist-get r :warnings))))
+      (should (equal (drgnx-pkg-test--installed) '("fa-1.1" "fb-1.0")))
+      (should (equal (drgnx-pkg-test--versions) '((fa . "1.1") (fb . "1.0"))))
+      (should-not (drgnx-pkg-test--from-shipped-p))                                   ; the first write drops the mark
+      (let ((r (drgnx-pkg-test--sync root :archives `(("fx" . ,fx) ("fy" . ,fy)))))   ; and the next sync is a plain one
+        (should (plist-get r :ok))
+        (should-not (plist-get r :warnings))))))
+
+(ert-deftest drgnx-pkg/a-stale-shared-dependency-does-not-take-its-dependents-along ()
+  (drgnx-pkg-test--with root
+    (pcase-let ((`(,fx ,_ ,old) (drgnx-pkg-test--stale-fa root)))
+      (drgnx-pkg-test--ship (cons old (mapcar (lambda (n) (drgnx-pkg-test--entry fx n "1.0" '((fa "1.0")))) '(fb fc fd))))
+      (drgnx-pkg-test--want root 'fb 'fc 'fd 'fe)
+      (let ((r (drgnx-pkg-test--sync root :archives `(("fx" . ,fx)))))
+        (should (plist-get r :ok))
+        (should (equal (seq-filter (lambda (w) (string-prefix-p "fa:" w)) (plist-get r :warnings))
+                       '("fa: shipped 1.0 no longer served; installed 1.1"))))
+      (should (equal (drgnx-pkg-test--installed) '("fa-1.1" "fb-1.0" "fc-1.0" "fd-1.0" "fe-1.0"))))))
+
+(ert-deftest drgnx-pkg/a-users-own-lock-keeps-its-missing-pins ()
+  ;; The same stale pin in a lock of the user's own (not the shipped one): reported, never replaced.
+  (drgnx-pkg-test--with root
+    (pcase-let ((`(,fx ,_ ,old) (drgnx-pkg-test--stale-fa root)))
+      (drgnx-pkg-write-lock (list old (drgnx-pkg-test--entry fx 'fb "1.0" '((fa "1.0")))))
+      (drgnx-pkg-test--want root 'fb)
+      (let ((r (drgnx-pkg-test--sync root :archives `(("fx" . ,fx)))))
+        (should-not (plist-get r :ok))
+        (should (equal (sort (mapcar #'car (plist-get r :missing)) (lambda (a b) (string< a b))) '(fa fb))))
+      (should (equal (drgnx-pkg-test--versions) '((fa . "1.0") (fb . "1.0")))))))
+
+(ert-deftest drgnx-pkg/a-seeded-first-sync-keeps-the-seeded-versions ()
+  ;; --seed brings another Emacs's packages: they are the user's choice, not the shipped lock's to replace.
+  (drgnx-pkg-test--with root
+    (let ((arch (drgnx-pkg-test--archive (concat root "arch") '((fa "1.1")))))
+      (drgnx-pkg-test--want root 'fa)
+      (let ((process-environment (cons (concat "DRGNX_DATA_DIR=" root "other") process-environment)))
+        (drgnx-pkg-test--sync root :archives `(("fx" . ,arch))))
+      (delete-file (drgnx-pkg-lock-file))
+      (drgnx-pkg-test--archive arch '((fa "1.0") (fa "1.1")))
+      (drgnx-pkg-test--ship (list (drgnx-pkg-test--entry arch 'fa "1.0")))
+      (should (plist-get (drgnx-pkg-test--sync root :archives `(("fx" . ,arch)) :seed (concat root "other/elpa")) :ok))
+      (should (equal (drgnx-pkg-test--installed) '("fa-1.1")))
+      (should (equal (drgnx-pkg-test--versions) '((fa . "1.1")))))))
+
+(ert-deftest drgnx-pkg/a-requirement-the-lock-lacks-is-installed ()
+  ;; fb's entry requires fq, which the lock does not have: package.el resolves it (installed first).
+  (drgnx-pkg-test--with root
+    (let ((arch (drgnx-pkg-test--archive (concat root "arch") '((fq "1.0") (fb "1.0" ((fq "1.0")))))))
+      (drgnx-pkg-test--ship (list (drgnx-pkg-test--entry arch 'fb "1.0" '((fq "1.0")))))
+      (drgnx-pkg-test--want root 'fb)
+      (should (plist-get (drgnx-pkg-test--sync root :archives `(("fx" . ,arch))) :ok))
+      (should (equal (drgnx-pkg-test--installed) '("fb-1.0" "fq-1.0"))))))
+
+(ert-deftest drgnx-pkg/a-locked-package-a-built-in-satisfies-is-not-installed ()
+  ;; fb needs seq 2.0, which this Emacs has built in: the lock's seq 99.0 is not forced on it.
+  (drgnx-pkg-test--with root
+    (let ((arch (drgnx-pkg-test--archive (concat root "arch") '((seq "99.0") (fb "1.0" ((seq "2.0")))))))
+      (should (package-built-in-p 'seq '(2 0)))
+      (drgnx-pkg-test--ship (list (drgnx-pkg-test--entry arch 'seq "99.0")
+                                  (drgnx-pkg-test--entry arch 'fb "1.0" '((seq "2.0")))))
+      (drgnx-pkg-test--want root 'fb)
+      (should (plist-get (drgnx-pkg-test--sync root :archives `(("fx" . ,arch))) :ok))
+      (should (equal (drgnx-pkg-test--installed) '("fb-1.0"))))))
+
+(ert-deftest drgnx-pkg/lock-ship-refuses-entries-without-a-hash-or-commit ()
+  ;; A new user would install them unchecked.
+  (drgnx-pkg-test--with root
+    (let ((mods (concat root "mods/extra/")))
+      (make-directory mods t)
+      (write-region "(drgnx-module-define 'extra/a :packages '(fa gp fz))\n" nil (concat mods "drgnx-x.el") nil 'silent)
+      (drgnx-pkg-write-lock '((fa :version "1.0" :archive nil :kind tar :file nil :sha256 nil)          ; seeded
+                              (gp :kind git :url "https://example.invalid/gp" :version "0.1")         ; no commit
+                              (fz :version "1.0" :archive "fx" :kind single :file "fz-1.0.el" :sha256 "ab")))
+      (let ((err (should-error (drgnx-pkg-ship-lock (concat root "mods")) :type 'drgnx-pkg-error)))
+        (should (string-match-p "\\bfa\\b" (cadr err)))
+        (should (string-match-p "\\bgp\\b" (cadr err)))
+        (should-not (string-match-p "\\bfz\\b" (cadr err))))
+      (should-not (file-exists-p (drgnx-pkg-shipped-lock-file))))))
 
 ;;; pkg-test.el ends here

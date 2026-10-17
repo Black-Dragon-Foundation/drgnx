@@ -112,9 +112,11 @@ modules/), packages.eld's :packages and :git, and those use-package :ensure aske
 there is none.  An unreadable lock is a `drgnx-pkg-error' (never silently replaced)."
   (drgnx-pkg--read-lock-file (drgnx-pkg-lock-file)))
 
-(defun drgnx-pkg--write-lock-file (file header entries)
-  (drgnx-pkg--write-file file header (list :version 1 :packages (sort (copy-sequence entries)
-                                                                      (lambda (a b) (string< (car a) (car b)))))))
+(defun drgnx-pkg--write-lock-file (file header entries &optional marks)
+  "ENTRIES as the lock FILE, after the comment HEADER; MARKS: more of its plist (:from-shipped t)."
+  (drgnx-pkg--write-file file header (append (list :version 1) marks
+                                             (list :packages (sort (copy-sequence entries)
+                                                                   (lambda (a b) (string< (car a) (car b))))))))
 
 (defun drgnx-pkg-write-lock (entries)
   (drgnx-pkg--write-lock-file (drgnx-pkg-lock-file) "drgnx package lock — written by drgnx sync; commit it with your config"
@@ -127,19 +129,40 @@ there is none.  An unreadable lock is a `drgnx-pkg-error' (never silently replac
   (or drgnx-pkg-shipped-lock (expand-file-name "etc/drgnx.lock.eld" drgnx-dir)))
 
 (defun drgnx-pkg--start-from-shipped-lock ()
-  "With no lock yet (a new user), the shipped lock becomes the user's (written whole, atomically)."
+  "With no lock yet (a new user), the shipped lock becomes the user's (written whole, atomically), marked
+:from-shipped until a sync writes it: its pins are soft then (`drgnx-pkg-sync')."
   (when (and (not (file-exists-p (drgnx-pkg-lock-file))) (file-exists-p (drgnx-pkg-shipped-lock-file)))
-    (drgnx-pkg-write-lock (drgnx-pkg--read-lock-file (drgnx-pkg-shipped-lock-file)))))
+    (drgnx-pkg--write-lock-file (drgnx-pkg-lock-file)
+                                "drgnx package lock — copied from the one drgnx ships; the first drgnx sync completes it"
+                                (drgnx-pkg--read-lock-file (drgnx-pkg-shipped-lock-file)) '(:from-shipped t))))
 
-(defun drgnx-pkg--lock-closure (names lock)
-  "NAMES that LOCK has, and every package their entries require that LOCK has too."
+(defun drgnx-pkg--lock-from-shipped-p ()
+  "Is the user lock still the shipped one, copied by a first sync that has not completed?"
+  (plist-get (ignore-errors (drgnx-pkg--read-file (drgnx-pkg-lock-file))) :from-shipped))
+
+(defun drgnx-pkg--lock-closure (names lock &optional with-built-ins)
+  "NAMES that LOCK has, and every package their entries require that LOCK has too — not one a built-in package
+satisfies at the version required (package.el would not install it either), unless WITH-BUILT-INS."
   (let (out)
-    (cl-labels ((visit (name)
-                  (when (and (assq name lock) (not (memq name out)))
+    (cl-labels ((visit (name &optional min)
+                  (when (and (assq name lock) (not (memq name out))
+                             (not (and min (not with-built-ins) (package-built-in-p name min))))
                     (push name out)
-                    (dolist (r (plist-get (alist-get name lock) :requires)) (visit (car r))))))
+                    (dolist (r (plist-get (alist-get name lock) :requires)) (visit (car r) (version-to-list (cadr r)))))))
       (mapc #'visit names))
     out))
+
+(defun drgnx-pkg--beyond-lock (names lock)
+  "What the LOCK entries of NAMES require that LOCK does not have and no built-in package satisfies: ((NAME .
+VERSION-LIST)…), the highest version required of each."
+  (let (out)
+    (dolist (name names)
+      (dolist (r (plist-get (alist-get name lock) :requires))
+        (let ((n (car r)) (v (version-to-list (cadr r))))
+          (unless (or (eq n 'emacs) (assq n lock) (package-built-in-p n v))
+            (when (or (not (assq n out)) (version-list-< (alist-get n out) v))
+              (setf (alist-get n out) v))))))
+    (nreverse out)))
 
 (defun drgnx-pkg-ship-lock (&optional modules-dir)
   "Write the shipped lock from the user lock (maintainers: `drgnx lock --ship'): the entries of every module's
@@ -152,7 +175,13 @@ that lacks one of them is a `drgnx-pkg-error' and nothing is written."
     (when lacking
       (drgnx-pkg--error "the lock lacks %s: turn every module on (drgnx onboard --non-interactive --preset full-ai), run drgnx sync, then ship"
                         (mapconcat #'symbol-name (sort lacking (lambda (a b) (string< a b))) " ")))
-    (let ((names (drgnx-pkg--lock-closure wanted lock)))
+    (let* ((names (drgnx-pkg--lock-closure wanted lock t))     ; built-ins too: a user's Emacs may be older
+           (unchecked (seq-filter (lambda (n) (let ((e (alist-get n lock)))
+                                                (not (plist-get e (if (eq (plist-get e :kind) 'git) :commit :sha256)))))
+                                  names)))
+      (when unchecked                                   ; a new user would install them unchecked
+        (drgnx-pkg--error "%s have no hash or commit in the lock (seeded or installed by hand): sync them from an archive or Git, then ship"
+                          (mapconcat #'symbol-name (sort unchecked (lambda (a b) (string< a b))) " ")))
       (drgnx-pkg--write-lock-file (drgnx-pkg-shipped-lock-file)
                                   "drgnx's known-good package lock — a first drgnx sync installs these; maintainers: drgnx lock --ship"
                                   (seq-filter (lambda (e) (memq (car e) names)) lock)))))
@@ -603,11 +632,21 @@ in the packages directory itself: an .eln's name hashes its source's path."
         (and (plist-get pin :file) (file-exists-p (expand-file-name (plist-get pin :file) (drgnx-package-cache-dir)))
              (drgnx-pkg--entry-desc name pin)))))
 
-(defun drgnx-pkg--plan (manifest lock offline upgrade missing)
+(defun drgnx-pkg--plan (manifest lock offline upgrade missing &optional pin-failed)
   "The packages to install, dependencies first: descs.  What cannot be had goes on MISSING (a cons
-whose car is the alist NAME → reason)."
-  (let ((locked (unless upgrade (drgnx-pkg--lock-closure manifest lock))) plan)
+whose car is the alist NAME → reason); a locked version that cannot be had, or one older than a package
+needs, goes on PIN-FAILED too (same shape; reason: \"shipped V no longer served\" or \"shipped V is older
+than V2 needs\")."
+  (let* ((locked (unless upgrade (drgnx-pkg--lock-closure manifest lock)))
+         ;; resolved by package.el: the manifest's packages outside the lock, and what locked ones need beyond it
+         (others (let ((o (mapcar #'list (seq-difference manifest locked))))
+                   (pcase-dolist (`(,n . ,v) (unless upgrade (drgnx-pkg--beyond-lock locked lock)))
+                     (setf (alist-get n o) v))
+                   o))
+         plan)
     (cl-flet ((miss (name why) (unless (assq name (car missing)) (push (cons name why) (car missing))))
+              (pin-fail (name why) (when (and pin-failed (not (assq name (car pin-failed))))
+                                     (push (cons name why) (car pin-failed))))
               (add (desc) (unless (seq-find (lambda (d) (eq (package-desc-name d) (package-desc-name desc))) plan)
                             (setq plan (append plan (list desc))))))
       (if offline
@@ -628,11 +667,12 @@ whose car is the alist NAME → reason)."
                       (not (equal (drgnx-pkg--installed-version (car e)) (plist-get (cdr e) :version)))
                     (memq (car e) locked))
               (if-let* ((d (drgnx-pkg--pinned-desc (car e) (cdr e)))) (add d)
+                (pin-fail (car e) (format "shipped %s no longer served" (plist-get (cdr e) :version)))
                 (miss (car e) (format "the lock pins %s; no archive or cache has it (drgnx upgrade takes the archives' version)"
                                       (plist-get (cdr e) :version)))))))
-        ;; Each other manifest package on its own: one that cannot be resolved does not stop the others.
-        (dolist (name (seq-difference manifest locked))
-          (let ((want (list name)))
+        ;; Each other package on its own: one that cannot be resolved does not stop the others.
+        (pcase-dolist (`(,name . ,min) others)
+          (let ((want (if min (list name min) (list name))))
             (when-let* ((newest (and upgrade (car (alist-get name package-archive-contents))))
                         (inst (drgnx-pkg--installed-desc name)))
               (when (version-list-< (package-desc-version inst) (package-desc-version newest))
@@ -659,22 +699,37 @@ whose car is the alist NAME → reason)."
                                        (need (and pin (drgnx-pkg--required-version name plan))))
                                   (cond ((null pin) desc)
                                         ((and need (version-list-< (version-to-list (plist-get pin :version)) need))
+                                         (pin-fail name (format "shipped %s is older than %s needs" (plist-get pin :version)
+                                                                (package-version-join need)))
                                          (miss name (format "the lock pins %s, but %s is needed — drgnx upgrade moves the lock"
                                                             (plist-get pin :version) (package-version-join need)))
                                          nil)
                                         ((equal (plist-get pin :version) (package-version-join (package-desc-version desc))) desc)
                                         ((drgnx-pkg--pinned-desc name pin))
-                                        (t (miss name (format "the lock pins %s; no archive or cache has it (drgnx upgrade takes the archives' version)"
+                                        (t (pin-fail name (format "shipped %s no longer served" (plist-get pin :version)))
+                                           (miss name (format "the lock pins %s; no archive or cache has it (drgnx upgrade takes the archives' version)"
                                                               (plist-get pin :version)))
                                            nil))))
                               plan)))))
-      ;; Nothing whose dependency cannot be had.
+      ;; Nothing whose dependency cannot be had; every package after the packages it requires.
       (let (out)
         (dolist (desc plan)
           (if-let* ((dep (seq-find (lambda (r) (assq (car r) (car missing))) (package-desc-reqs desc))))
               (miss (package-desc-name desc) (format "needs %s, which cannot be installed" (car dep)))
             (push desc out)))
-        (nreverse out)))))
+        (drgnx-pkg--deps-first (nreverse out))))))
+
+(defun drgnx-pkg--deps-first (descs)
+  "DESCS (keeping their order otherwise), each after those of DESCS it requires."
+  (let (done out)
+    (cl-labels ((visit (d)
+                  (unless (memq d done)
+                    (push d done)
+                    (dolist (r (package-desc-reqs d))
+                      (when-let* ((dep (seq-find (lambda (x) (eq (package-desc-name x) (car r))) descs))) (visit dep)))
+                    (push d out))))
+      (mapc #'visit descs))
+    (nreverse out)))
 
 (defun drgnx-pkg--forget-wants (installed)
   "Drop INSTALLED (names) from the packages use-package :ensure asked for."
@@ -689,12 +744,14 @@ newest versions, not the lock's; SEED: a directory of installed packages to copy
 Emacs's elpa); MODULES-DIR: where modules live.  Returns (:ok :installed :missing :generation :warnings).
 A failed download or install, a hash mismatch, a busy or unreadable lock is a `drgnx-pkg-error' and
 changes nothing; packages that cannot be had are reported (the rest is installed, the lock kept).  With no
-lock yet (a new user), the shipped lock (`drgnx-pkg-shipped-lock-file') is copied to the user's first."
+lock yet (a new user) and no SEED, the shipped lock (`drgnx-pkg-shipped-lock-file') is copied to the user's
+first; until a sync writes the lock, a shipped pin nobody serves falls back to the archives' version (a
+warning), never a missing package."
   (let* ((manifest (drgnx-pkg-manifest modules-dir))
          (staging (drgnx-pkg--staging))
          (missing (list nil)) (drgnx-pkg--warnings nil) lock installed new-entries generation)
     (drgnx-pkg--with-sync-lock
-      (unless upgrade (drgnx-pkg--start-from-shipped-lock))
+      (unless (or upgrade seed) (drgnx-pkg--start-from-shipped-lock))   ; seeded versions are the user's choice
       (setq lock (drgnx-pkg-read-lock))                 ; unreadable → error before anything changes
       (drgnx-pkg--recover)
       (drgnx-pkg--sweep)
@@ -716,14 +773,34 @@ lock yet (a new user), the shipped lock (`drgnx-pkg-shipped-lock-file') is copie
                    (git (drgnx-pkg--git-prepare git-names lock offline upgrade missing))
                    (needs (seq-difference (delete-dups (mapcar #'car (seq-mapcat (lambda (p) (package-desc-reqs (nth 1 p))) git)))
                                           (cons 'emacs git-names))))
-              (dolist (desc (drgnx-pkg--plan (sort (delete-dups (append (seq-difference manifest git-names) needs))
-                                                   (lambda (a b) (string< a b)))
-                                             (seq-remove (lambda (e) (eq (plist-get (cdr e) :kind) 'git)) lock)
-                                             offline upgrade missing))
-                (drgnx-pkg--progress "installing %s" (package-desc-full-name desc))
-                (let ((entry (drgnx-pkg--install desc (alist-get (package-desc-name desc) lock))))
-                  (drgnx-pkg--drop-other-versions desc)
-                  (push entry new-entries) (push (package-desc-name desc) installed)))
+              (let ((names (sort (delete-dups (append (seq-difference manifest git-names) needs)) (lambda (a b) (string< a b))))
+                    (pins (seq-remove (lambda (e) (eq (plist-get (cdr e) :kind) 'git)) lock))
+                    (soft (and (not upgrade) (not offline) (drgnx-pkg--lock-from-shipped-p)))
+                    (git-missing (car missing))
+                    dropped plan)
+                ;; A first sync's shipped pins are soft: one nobody serves (or too old for what needs it) is dropped
+                ;; and package.el resolves the name — from the entry's own archive when it still has the package —
+                ;; then the plan is made again.  Each round drops a pin: at most as many rounds as there are pins.
+                (while (let ((m (list (copy-sequence git-missing))) (failed (list nil)))
+                         (setq plan (drgnx-pkg--plan names pins offline upgrade m failed))
+                         (if (not (and soft (car failed)))
+                             (progn (setcar missing (car m)) nil)
+                           (pcase-dolist (`(,name . ,why) (car failed))
+                             (let* ((e (alist-get name pins))
+                                    (d (seq-find (lambda (d) (equal (package-desc-archive d) (plist-get e :archive)))
+                                                 (alist-get name package-archive-contents))))
+                               (push (list name why) dropped)
+                               (setq pins (assq-delete-all name pins))
+                               (when d (setf (alist-get name package-archive-contents) (list d)))))
+                           t)))
+                (dolist (desc plan)
+                  (drgnx-pkg--progress "installing %s" (package-desc-full-name desc))
+                  (let ((entry (drgnx-pkg--install desc (alist-get (package-desc-name desc) pins))))
+                    (drgnx-pkg--drop-other-versions desc)
+                    (push entry new-entries) (push (package-desc-name desc) installed)))
+                (pcase-dolist (`(,name ,why) (reverse dropped))
+                  (when-let* ((e (assq name new-entries)))
+                    (drgnx-pkg--warn "%s: %s; installed %s" name why (plist-get (cdr e) :version)))))
               ;; then the Git packages, their dependencies in place
               (dolist (p git)
                 (if-let* ((dep (seq-find (lambda (r) (assq (car r) (car missing))) (package-desc-reqs (nth 1 p)))))
