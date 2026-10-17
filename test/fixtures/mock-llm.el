@@ -58,11 +58,18 @@
   (setq mock-llm--script (with-temp-buffer (insert-file-contents (getenv "MOCK_LLM_SCRIPT")) (read (current-buffer))))
   (make-network-process :name "mock-llm" :server t :host "127.0.0.1" :family 'ipv4 :coding 'binary
                         :service (string-to-number (getenv "MOCK_LLM_PORT")) :filter #'mock-llm--filter)
-  (while t (accept-process-output nil 1)))
+  ;; it ends with the test Emacs that started it — even one killed by a signal, which cannot stop it
+  (let ((parent (and (getenv "MOCK_LLM_PARENT") (string-to-number (getenv "MOCK_LLM_PARENT")))))
+    (while t
+      (accept-process-output nil 1)
+      (when parent
+        (let ((a (process-attributes parent)))
+          (when (or (null a) (equal (alist-get 'state a) "Z")) (kill-emacs 0)))))))
 
 (defun drgnx-ai-test-mock-llm (port script &optional log)
   "Start the mock on PORT answering from SCRIPT (a file), logging to LOG; the process, once it listens."
-  (let* ((process-environment (append (list "MOCK_LLM_SERVE=1" (format "MOCK_LLM_PORT=%d" port) (concat "MOCK_LLM_SCRIPT=" script))
+  (let* ((process-environment (append (list "MOCK_LLM_SERVE=1" (format "MOCK_LLM_PORT=%d" port) (concat "MOCK_LLM_SCRIPT=" script)
+                                            (format "MOCK_LLM_PARENT=%d" (emacs-pid)))
                                       (and log (list (concat "MOCK_LLM_LOG=" log)))
                                       process-environment))
          ;; SIGPIPE ignored, as a server does: a client that went away (a cancelled request) must not kill it —
