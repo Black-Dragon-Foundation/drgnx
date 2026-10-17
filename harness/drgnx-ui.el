@@ -577,16 +577,25 @@ with optional :button, :count, :hold_ms.  Returns the API's reply."
       (sleep-for 0.04))))
 
 (defun drgnx-ui-measure (sess actions &optional quiet-ms timeout-s)
-  "Run ACTIONS (a list of action plists) as one measurement; return the jank report."
+  "Run ACTIONS (a list of action plists) as one measurement; return the jank report.
+An action that fails ends the measurement (the session's recorder stops) and the error names it."
   (drgnx-ui-call sess "(drgnx-uitest-api-measure-begin)")
-  (let* ((replies (cl-loop for (a . more) on actions
-                           collect (prog1 (drgnx-ui-act sess a)
-                                     ;; A later click is resolved against the layout the
-                                     ;; earlier actions produce, so let them run first.
-                                     (when more (drgnx-ui--wait-delivered sess)))))
-         (settled (drgnx-ui-wait sess quiet-ms timeout-s))
-         (report (drgnx-ui-call sess "(drgnx-uitest-api-measure-end)")))
-    (append (list :settled (if settled t :false) :actions (vconcat replies)) report)))
+  (let ((ended nil))
+    (unwind-protect
+        (let* ((replies (cl-loop for (a . more) on actions
+                                 for i from 1
+                                 collect (condition-case err
+                                             (prog1 (drgnx-ui-act sess a)
+                                               ;; A later click is resolved against the layout the
+                                               ;; earlier actions produce, so let them run first.
+                                               (when more (drgnx-ui--wait-delivered sess)))
+                                           (error (drgnx-ui--fail "action %d %S: %s" i a
+                                                                  (if (stringp (cadr err)) (cadr err)
+                                                                    (error-message-string err)))))))
+               (settled (drgnx-ui-wait sess quiet-ms timeout-s))
+               (report (progn (setq ended t) (drgnx-ui-call sess "(drgnx-uitest-api-measure-end)"))))
+          (append (list :settled (if settled t :false) :actions (vconcat replies)) report))
+      (unless ended (ignore-errors (drgnx-ui-call sess "(drgnx-uitest-api-measure-end)" 5))))))
 
 (defun drgnx-ui-state-diff (a b)
   "Changes from state A to state B (both as `drgnx-ui-state' returns them):

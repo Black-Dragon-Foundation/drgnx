@@ -225,7 +225,9 @@ bin/drgnx ui stop drgnx-ui-1 | bin/drgnx ui reap
 ```
 
 Input commands wait until the session settles and print the jank report. In `measure`, each action is
-delivered before the next one is resolved, so a click after `C-x 3` is aimed at the layout the keys produced. `bin/drgnx` passes arguments after
+delivered before the next one is resolved, so a click after `C-x 3` is aimed at the layout the keys produced. An
+action that fails (a bad key, a target not on screen) ends the measurement — the session's recorder stops — and
+the error names it: `action 2 (:keys "bad"): …`; later actions are not sent. `bin/drgnx` passes arguments after
 `--`, so options Emacs itself knows (`--title`, `-nw`, …) cannot be swallowed by Emacs.
 
 ## Ownership and cleanup

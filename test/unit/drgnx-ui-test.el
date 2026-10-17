@@ -321,3 +321,19 @@ the real ones belong to sessions running next to the tests (bin/drgnx check's li
     (drgnx-ui--own-add "drgnx-ui-8" "/tmp/r")
     (drgnx-ui--own-remove "drgnx-ui-8")                                   ; a session stopped normally is forgotten
     (should-not drgnx-ui--own)))
+
+(ert-deftest drgnx-ui/a-failed-action-ends-the-measurement-and-names-itself ()
+  ;; DEFERRED M1-1: an action that fails (a bad key, a target not on screen) must not leave the
+  ;; recorder's timer and hooks running in the session, and the error says which action it was
+  (let ((calls nil))
+    (cl-letf (((symbol-function 'drgnx-ui-call)
+               (lambda (_sess form &rest _)
+                 (push form calls)
+                 (cond ((string-search "api-keys \"bad\"" form) (drgnx-ui--fail "no such key"))
+                       ((string-search "api-status" form) '(:busy :false :settled t))
+                       (t '(:ok t))))))
+      (let ((err (should-error (drgnx-ui-measure '(:name "drgnx-ui-1") '((:keys "a") (:keys "bad") (:keys "c")))
+                               :type 'drgnx-ui-error)))
+        (should (string-match-p "action 2 (:keys .*bad.*): no such key" (error-message-string err))))
+      (should (equal (car calls) "(drgnx-uitest-api-measure-end)"))
+      (should-not (seq-find (lambda (f) (string-search "\"c\"" f)) calls)))))
