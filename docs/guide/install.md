@@ -36,8 +36,12 @@ rest of your machine, sets keys and modules, and puts your projects on the board
 5. **drgnx:** clones it into `~/.local/share/drgnx/drgnx` (or fast-forwards an existing checkout, never
    discarding local changes), installing git first if it is missing, and links `~/.local/bin/drgnx`.
 6. **Compiles drgnx** (`drgnx build`) and **checks** it: runs `drgnx doctor` with the Emacs it found or installed.
-7. **PATH:** if `~/.local/bin` is not on your `PATH`, it offers to add one line to `~/.profile` (`~/.zprofile`
+7. **macOS: the drgnx app.** Installs `~/Applications/drgnx.app` (`drgnx macos-app`: Finder, Spotlight, the Dock,
+   Open With — [opening.md](opening.md#on-macos-the-drgnx-app)); if that fails it warns and goes on.
+8. **PATH:** if `~/.local/bin` is not on your `PATH`, it offers to add one line to `~/.profile` (`~/.zprofile`
    when your shell is zsh) — only when you answer yes; with `--yes` it only prints the line and that file.
+9. **macOS: opens drgnx** (the app just installed), so the first start's Welcome takes over — only in a desktop
+   session: not over SSH, and not under `--yes` without a terminal.
 
 Running it again is safe: a good Emacs is kept, the checkout is fast-forwarded.
 
@@ -93,7 +97,13 @@ The script runs under the `/bin/bash` that ships with macOS (3.2); nothing newer
   plan warns about it.
 - **Your Emacs configuration is never touched.** `~/.emacs.d` and `~/.config/emacs` are neither read nor written;
   drgnx starts with its own `--init-directory`.
-- The last lines say how to open drgnx next time: from Applications, or `drgnx .` in a project.
+- **The drgnx app.** After the doctor it installs `~/Applications/drgnx.app` — drgnx in Finder, Spotlight and the
+  Dock, and in Open With for folders and code files ([opening.md](opening.md#on-macos-the-drgnx-app)). A failure
+  only warns (run `drgnx macos-app` later). It is never put in `/Applications` and never starts at login.
+- The last lines say how to open drgnx next time: from Applications, or `drgnx .` in a project. Then, in a desktop
+  session (not over SSH, and not under `--yes` without a terminal), it says "Opening drgnx…" and opens the app: the
+  first start opens the Welcome ([onboarding.md](onboarding.md)), which asks whether drgnx keeps running in the
+  background when you close its last window.
 
 For tests, `DRGNX_INSTALL_BREW=none|PATH` overrides the Homebrew detection and `DRGNX_INSTALL_TTY=none|yes` overrides
 the check for a terminal (so the tests need no `setsid`).
@@ -158,6 +168,8 @@ pgtk Emacs). Details: [core.md](../develop/core.md#doctor-drgnx-doctorel).
 ```sh
 rm -rf ~/.local/share/drgnx ~/.local/bin/drgnx "${XDG_CACHE_HOME:-$HOME/.cache}/drgnx" "${XDG_STATE_HOME:-$HOME/.local/state}/drgnx"
 ```
+
+On macOS, also `rm -rf ~/Applications/drgnx.app`.
 
 A source-built Emacs: `make uninstall` in the build directory (`~/.cache/drgnx/build/emacs-31.1`, or under `$XDG_CACHE_HOME` if you set it) before deleting the cache (or
 remove `~/.local/bin/emacs*`, `~/.local/share/emacs`, `~/.local/libexec/emacs`). A packaged Emacs: remove it

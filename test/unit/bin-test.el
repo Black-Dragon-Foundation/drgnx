@@ -52,7 +52,7 @@ logging to PATHLOG), CONFIG (a DRGNX_CONFIG_DIR) and ENV (the environment lists 
           (fake (expand-file-name "recorded-emacs" dir)))
       (drgnx-bin-test--fake fake log)
       (write-region (concat fake "\n") nil (expand-file-name "emacs" config))
-      (dolist (args '(("build") ("keys" "diff" "--help") ("ui" "--help")))
+      (dolist (args '(("build") ("keys" "diff" "--help") ("ui" "--help") ("search" "index" "--help") ("macos-app")))
         (delete-file log)
         (apply #'drgnx-bin-test--call drgnx-bin-test--bin env args)
         (should (string-search fake (drgnx-bin-test--slurp log))))

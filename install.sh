@@ -267,6 +267,9 @@ print_plan() {
   note "Remember Emacs: $(planned_emacs)"
   say "4. Compile drgnx (drgnx build: byte-compiled, natively compiled as it loads)"
   say "5. Run drgnx doctor"
+  if [[ "$OS" == macos ]]; then
+    say "6. Install the drgnx app into $HOME/Applications/drgnx.app (Finder, Spotlight, the Dock, Open With), then open it"
+  fi
 }
 
 # --- Doing it -----------------------------------------------------------------------------------------
@@ -496,6 +499,21 @@ offer_rc_line() { # RC LINE — add LINE to the startup file RC only if the user
   fi
 }
 
+install_app() { # macOS: drgnx.app in ~/Applications (core/drgnx-macos.el); a failure warns, the run goes on
+  say ""
+  say "Installing the drgnx app (Finder, Spotlight, the Dock, Open With)…"
+  if DRGNX_EMACS="$EMACS_BIN" "$DIR/bin/drgnx" macos-app && [[ -d "$HOME/Applications/drgnx.app" ]]; then return 0; fi
+  warn "the drgnx app was not installed (above): run drgnx macos-app later to try again"
+  return 1
+}
+
+open_app() { # APP — the first start opens the Welcome; only in a desktop session (not over SSH, not --yes without a terminal)
+  [[ -z "${SSH_CONNECTION:-}" ]] || return 0
+  if ((YES)) && ! have_tty; then return 0; fi
+  say "Opening drgnx…"
+  open -a "$1" || warn "could not open $1: open drgnx from Applications"
+}
+
 path_hint() {
   case ":$PATH:" in *":$PREFIX/bin:"*) return ;; esac
   local rc="$HOME/.profile" line="export PATH=\"$PREFIX/bin:\$PATH\""
@@ -531,10 +549,13 @@ main() {
   say ""
   DRGNX_EMACS="$EMACS_BIN" "$DIR/bin/drgnx" build >/dev/null || warn "drgnx build failed: run $DIR/bin/drgnx build to see why (drgnx still runs, uncompiled)"
   DRGNX_EMACS="$EMACS_BIN" "$DIR/bin/drgnx" doctor || warn "the doctor found problems (above)"
+  local app=""
+  if [[ "$OS" == macos ]] && install_app; then app="$HOME/Applications/drgnx.app"; fi
   path_hint
   say ""
   say "Done. Start drgnx with:  $EMACS_BIN --init-directory $DIR/init"
   if [[ "$OS" == macos ]]; then say "Next time: open drgnx from Applications, or run \"drgnx .\" in a project"; fi
+  if [[ -n "$app" ]]; then open_app "$app"; fi
 }
 
 main "$@"

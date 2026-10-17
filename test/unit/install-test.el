@@ -216,7 +216,60 @@
                   "--yes" "--prefix" (expand-file-name "prefix" tmp) "--source-dir" drgnx-install-test--root)))
           (should (= (car r) 0))
           (should (string-search "Done. Start drgnx with:" (cdr r)))
-          (should-not (string-search "Next time" (cdr r))))
+          (should-not (string-search "Next time" (cdr r)))
+          (should-not (string-search "drgnx app" (cdr r)))
+          (should-not (string-search "Opening drgnx" (cdr r))))
+      (delete-directory tmp t))))
+
+(ert-deftest drgnx-install/the-macos-plan-names-the-app-and-linux-does-not ()
+  (drgnx-install-test--expect (drgnx-install-test--run (cons "DRGNX_INSTALL_BREW=none" drgnx-install-test--macos) "--dry-run")
+                              "6. Install the drgnx app into " "/Applications/drgnx.app" "Finder, Spotlight, the Dock, Open With")
+  (should-not (string-search "drgnx app" (cdr (drgnx-install-test--plan "fedora-45")))))
+
+(ert-deftest drgnx-install/macos-installs-the-app-and-opens-it-only-in-a-desktop-session ()
+  ;; A fake Emacs answers the probe and, for `drgnx macos-app', makes the app; a fake `open' logs its argv.
+  ;; The app opens only with a terminal and not over SSH; a failed app step warns and the run goes on.
+  (let* ((tmp (make-temp-file "drgnx-install" t))
+         (bin (expand-file-name "bin" tmp))
+         (log (expand-file-name "open.log" tmp))
+         (fake (expand-file-name "emacs" tmp))
+         (run (lambda (&rest env)
+                (when (file-exists-p log) (delete-file log))
+                (drgnx-install-test--run
+                 (append env (list (concat "DRGNX_INSTALL_EMACS=" fake) (concat "PATH=" bin ":" (getenv "PATH")))
+                         drgnx-install-test--macos)
+                 "--yes" "--prefix" (expand-file-name "prefix" tmp) "--source-dir" drgnx-install-test--root)))
+         (opened (lambda () (and (file-exists-p log) (with-temp-buffer (insert-file-contents log) (buffer-string))))))
+    (unwind-protect
+        (progn
+          (make-directory bin)
+          (write-region (format "#!/bin/sh\necho \"open $*\" >> '%s'\n" log) nil (expand-file-name "open" bin))
+          (set-file-modes (expand-file-name "open" bin) #o755)
+          (write-region (concat "#!/bin/sh\ncase \"$*\" in\n"
+                                "  *drgnx-macos-cli*) [ -n \"$FAIL_APP\" ] && exit 1\n"
+                                "    mkdir -p \"$HOME/Applications/drgnx.app\" && echo \"$HOME/Applications/drgnx.app\" ;;\n"
+                                "  *) echo '31.1 t ns' ;;\nesac\n")
+                        nil fake)
+          (set-file-modes fake #o755)
+          ;; a terminal, no SSH: installed, then opened
+          (let ((r (funcall run "DRGNX_INSTALL_TTY=yes" "SSH_CONNECTION")))
+            (should (= (car r) 0))
+            (should (string-match-p "/Applications/drgnx\\.app\n" (cdr r)))
+            (should (string-search "Opening drgnx…" (cdr r)))
+            (should (string-search "Next time: open drgnx from Applications" (cdr r)))
+            (should (string-match-p "\\`open -a .*/Applications/drgnx\\.app\n\\'" (funcall opened))))
+          ;; --yes without a terminal, or over SSH: installed, not opened
+          (dolist (env '(("DRGNX_INSTALL_TTY=none" "SSH_CONNECTION") ("DRGNX_INSTALL_TTY=yes" "SSH_CONNECTION=10.0.0.1 22 10.0.0.2 22")))
+            (let ((r (apply run env)))
+              (should (= (car r) 0))
+              (should-not (string-search "Opening drgnx" (cdr r)))
+              (should-not (funcall opened))))
+          ;; the app step fails: a warning, the rest of the run as before, nothing opened
+          (let ((r (funcall run "DRGNX_INSTALL_TTY=yes" "SSH_CONNECTION" "FAIL_APP=1")))
+            (should (= (car r) 0))
+            (should (string-search "the drgnx app was not installed" (cdr r)))
+            (should (string-search "Next time: open drgnx from Applications" (cdr r)))
+            (should-not (funcall opened))))
       (delete-directory tmp t))))
 
 (ert-deftest drgnx-install/unknown-distribution-gets-the-guide ()

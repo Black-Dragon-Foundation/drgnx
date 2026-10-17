@@ -32,6 +32,33 @@ A **folder** becomes the Explorer's first folder (the others stay) and the Explo
 open as a directory listing. A **file** opens in the editor. drgnx started by hand as a normal Emacs (not a daemon) answers
 `drgnx PATH` too, as long as no other drgnx does.
 
+## On macOS: the drgnx app
+
+On a Mac, drgnx is also an app: **drgnx** in `~/Applications` (the Applications folder in your home folder), so
+Finder and Spotlight find it, and you can keep it in the Dock. The installer puts it there and opens it once
+([install.md](install.md#macos)); onboarding's Daemon and Desktop step offers it when it is missing; `drgnx macos-app`
+(re)installs it at any time and prints where.
+
+- **Open it** (Finder, Spotlight, the Dock): the same as `drgnx open` — drgnx with your windows, started in the
+  background if it is not running. The very first time, the Welcome opens ([onboarding.md](onboarding.md)).
+- **Open folders and files with it:** drop them on its Dock icon, or choose drgnx in Finder's **Open With** for a
+  folder or a code or text file. They open as `drgnx PATH` would open them — a folder in the Explorer, a file in an
+  editor. drgnx is offered there, never made the default app for anything (set that yourself with Get Info → Open
+  with → Change All, if you like).
+
+The app is a small AppleScript applet: Finder hands an app the files it opens as an Apple Event, not as arguments.
+It runs `<checkout>/bin/drgnx open -- PATH…`, each path passed through `quoted form of`, so spaces, accents and
+quotes stay one argument, with Homebrew's `/opt/homebrew/bin` and `/usr/local/bin` first on PATH (an app gets only
+`/usr/bin:/bin:/usr/sbin:/sbin`; drgnx itself runs the Emacs the installer recorded). Its Info.plist names it `drgnx`
+(`org.drgnx.app`), lists folders (`public.folder`) and text and source files (`public.text`, `public.source-code`,
+`public.script`, `public.data`) as documents it can edit, as an alternate, and it carries Emacs's icon (from the
+Emacs.app drgnx runs in, else `/Applications/Emacs.app`). `drgnx macos-app` builds it with `osacompile`, edits the
+Info.plist with `plutil`, signs it again (ad hoc, `codesign --sign -`: the edits break osacompile's signature, and
+Apple silicon runs no app with a broken one), replaces the drgnx.app that was there (no other app is touched), and
+registers it with Launch Services (`lsregister -f`) so Finder and Spotlight know it at once. If the checkout moves,
+run `drgnx macos-app` again. To remove it, delete `~/Applications/drgnx.app`. Code: `core/drgnx-macos.el`; tests:
+`test/unit/macos-test.el`.
+
 ## Keep running or quit
 
 When you close drgnx's last window — its close button, or Close Window (`C-q` in the VS Code profile; the palette) —
@@ -49,6 +76,7 @@ each New Untitled buffer you typed in (it asks for a file name). Press `C-g`, or
 everything open: nothing is lost. A drgnx that is not a daemon has nothing to keep running, so closing its last
 window always quits (asking the same way).
 
+Onboarding's Daemon and Desktop step asks it once ([onboarding.md](onboarding.md#the-steps)).
 Change the choice with **Preferences: Keep drgnx Running in the Background** (palette, Options menu): it switches
 between the two and says which one is on. The choice is kept in `~/.config/drgnx/session.eld` as
 `(:keep-running t)` or `(:keep-running nil)` and read at every start. drgnx never asks it when a window closes.

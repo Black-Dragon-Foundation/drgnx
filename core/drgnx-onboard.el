@@ -19,6 +19,7 @@
 (require 'drgnx-paths)
 (require 'drgnx-modules)
 (require 'drgnx-registry)
+(require 'drgnx-session)
 
 (defvar drgnx-onboard--steps nil "Alist ID → plist (:title :doc :order :run :check).")
 
@@ -43,13 +44,16 @@ a plist (:interactive BOOL :options PLIST).  STATUS: ok, info, warn or fail."
   (and (file-readable-p (drgnx-onboard-state-file))
        (ignore-errors (with-temp-buffer (insert-file-contents (drgnx-onboard-state-file)) (read (current-buffer))))))
 
+(defun drgnx-onboard--write-state (state)
+  (make-directory (file-name-directory (drgnx-onboard-state-file)) t)
+  (let ((tmp (make-temp-file (expand-file-name ".onboarding-" (file-name-directory (drgnx-onboard-state-file))))))
+    (with-temp-file tmp (let ((print-length nil)) (prin1 state (current-buffer))))
+    (rename-file tmp (drgnx-onboard-state-file) t)))
+
 (defun drgnx-onboard--record (id status message)
   (let ((state (drgnx-onboard-state)))
     (setf (alist-get id state) (list :status status :message message :time (format-time-string "%FT%T%z")))
-    (make-directory (file-name-directory (drgnx-onboard-state-file)) t)
-    (let ((tmp (make-temp-file (expand-file-name ".onboarding-" (file-name-directory (drgnx-onboard-state-file))))))
-      (with-temp-file tmp (let ((print-length nil)) (prin1 state (current-buffer))))
-      (rename-file tmp (drgnx-onboard-state-file) t))))
+    (drgnx-onboard--write-state state)))
 
 (cl-defun drgnx-onboard-run (&key only non-interactive resume options)
   "Run the steps (ONLY: a list of ids) in order; RESUME skips steps done (ok or info) before.
@@ -338,7 +342,43 @@ one call, and say how to add an OpenRouter key (drgnx writes none)."
 (defconst drgnx-onboard-desktop-entry
   "[Desktop Entry]\nName=drgnx\nGenericName=Text Editor\nComment=Edit text (drgnx, an Emacs workbench)\nExec=emacsclient -s drgnx -c %F\nIcon=emacs\nType=Application\nTerminal=false\nCategories=Development;TextEditor;\nMimeType=text/plain;\n")
 
+(defconst drgnx-onboard-keep-running-question
+  "Keep drgnx running in the background when you close its last window? (recommended, like VS Code) ")
+
+(defun drgnx-onboard--keep-running (ctx)
+  "Keep running or quit when the last window closes: asked when interactive; else the choice made before, or
+keep running.  Saved (session.eld); returns the sentence for the step's result."
+  (let ((keep (if (plist-get ctx :interactive)
+                  (y-or-n-p drgnx-onboard-keep-running-question)
+                (drgnx-session-load)
+                drgnx-keep-running)))
+    (drgnx-session-set-keep-running keep)
+    (format "%s when its last window closes (change it: Preferences: Keep drgnx Running in the Background)"
+            (if keep "drgnx keeps running in the background" "drgnx quits"))))
+
+(defvar drgnx-macos-app-dir)
+(declare-function drgnx-macos-install-app "drgnx-macos")
+
+(defun drgnx-onboard--macos-app (ctx)
+  "The drgnx app in ~/Applications: there already, or installed when the user says yes.  Nothing at login."
+  (require 'drgnx-macos)
+  (let* ((app (expand-file-name "drgnx.app" drgnx-macos-app-dir))
+         (where (abbreviate-file-name (file-name-directory app))))
+    (cond ((file-directory-p app) (list 'ok (format "the drgnx app is in %s" where)))
+          ((and (plist-get ctx :interactive)
+                (y-or-n-p (format "Install the drgnx app into %s (Finder, Spotlight, the Dock, Open With)? " where)))
+           (list 'ok (format "installed the drgnx app: %s — open drgnx from Applications or Spotlight, and folders and code files with Open With"
+                             (abbreviate-file-name (drgnx-macos-install-app)))))
+          (t (list 'info (format "the drgnx app is not installed — to install it into %s: drgnx macos-app" where))))))
+
 (defun drgnx-onboard--daemon-step (ctx)
+  "Keep running or quit (asked once), then macOS: the drgnx app; Linux: the systemd unit and desktop entry."
+  (let ((keep (drgnx-onboard--keep-running ctx)))
+    (pcase-let ((`(,status ,message) (if (eq (drgnx-platform) 'macos) (drgnx-onboard--macos-app ctx)
+                                       (drgnx-onboard--linux-desktop ctx))))
+      (list status (concat message "; " keep)))))
+
+(defun drgnx-onboard--linux-desktop (ctx)
   (require 'drgnx-pkg)
   (let* ((dir (drgnx-user-dir))
          (unit (expand-file-name "systemd/drgnx.service" dir))
@@ -400,7 +440,7 @@ one call, and say how to add an OpenRouter key (drgnx writes none)."
                            :doc "Agent CLIs found (Claude, gryphn); profiles and MCP servers come with the agents milestone"
                            :run (drgnx-onboard--detect '("claude" "gry") "agent profiles and MCP servers are set up by the agents step (M7)"))
 (drgnx-onboard-define-step 'daemon :order 70 :title "Daemon and Desktop"
-                           :doc "The systemd user service, the desktop entry and EDITOR — written, installed only if you say so"
+                           :doc "Keep running in the background or quit when the last window closes; macOS: the drgnx app; Linux: the systemd user service, the desktop entry and EDITOR — installed only if you say so"
                            :run #'drgnx-onboard--daemon-step)
 (drgnx-onboard-define-step 'portability :order 80 :title "Portability"
                            :doc "chezmoi and age for your configuration and secrets on a second machine"
@@ -436,6 +476,29 @@ one call, and say how to add an OpenRouter key (drgnx writes none)."
     (setq tabulated-list-entries #'drgnx-onboard--entries)
     (tabulated-list-print)
     (pop-to-buffer-same-window (current-buffer))))
+
+(defun drgnx-onboard--welcome-due-p ()
+  "Non-nil when the Welcome should open by itself: onboarding never ran here (no onboarding.eld), in a drgnx
+with windows (not batch, not a harness session)."
+  (not (or noninteractive (getenv "DRGNX_UI_RUN") (file-exists-p (drgnx-onboard-state-file)))))
+
+(defun drgnx-onboard-maybe-welcome ()
+  "Open the Welcome in the graphical window when onboarding never ran here — once: the state file it leaves
+\(no step done) keeps it from opening by itself again.  Asks nothing.  From a timer: see
+`drgnx-onboard--on-first-window'."
+  (when (drgnx-onboard--welcome-due-p)
+    (drgnx-onboard--write-state nil)
+    (with-demoted-errors "drgnx: the Welcome did not open: %S"
+      (with-selected-frame (or (and (display-graphic-p) (selected-frame))
+                               (seq-find #'display-graphic-p (frame-list))
+                               (selected-frame))
+        (drgnx-onboard-welcome)))))
+
+(defun drgnx-onboard--on-first-window ()
+  "`drgnx-first-gui-frame-hook': the Welcome a moment after the first window shows, from an idle timer —
+never inside the hook (the window and the restored layout come first)."
+  (when (drgnx-onboard--welcome-due-p)
+    (run-with-idle-timer 0.5 nil #'drgnx-onboard-maybe-welcome)))
 
 (defun drgnx-onboard-run-step (id)
   "Run onboarding step ID now (it may ask), then show the steps."

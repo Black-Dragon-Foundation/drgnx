@@ -3,6 +3,7 @@
 (require 'ert)
 (require 'drgnx-onboard)
 (require 'drgnx-projects)
+(require 'drgnx-macos)
 
 (defmacro drgnx-onboard-test--with (root &rest body)
   "BODY with ROOT a temp dir holding config, state, data and org dirs."
@@ -31,6 +32,8 @@
   (file-name-as-directory dir))
 
 (defun drgnx-onboard-test--board () (with-temp-buffer (insert-file-contents (drgnx-projects-board-file)) (buffer-string)))
+
+(defun drgnx-onboard-test--read (file) (with-temp-buffer (insert-file-contents file) (read (current-buffer))))
 
 ;;;; Task 1: steps, progress, runner
 
@@ -182,11 +185,111 @@
 
 (ert-deftest drgnx-onboard/the-daemon-step-writes-files-and-installs-nothing ()
   (drgnx-onboard-test--with root
-    (let ((r (car (drgnx-onboard-run :only '(daemon) :non-interactive t))))
+    (let ((r (cl-letf (((symbol-function 'drgnx-platform) (lambda () 'linux)))
+               (car (drgnx-onboard-run :only '(daemon) :non-interactive t)))))
       (should (eq (cadr r) 'info))
       (should (file-exists-p (expand-file-name "systemd/drgnx.service" (drgnx-user-dir))))
       (should (file-exists-p (expand-file-name "applications/drgnx.desktop" (drgnx-user-dir))))
       (should (string-match-p "systemctl --user" (nth 2 r))))))
+
+(defun drgnx-onboard-test--step-7 (platform keep install)
+  "Run step 7 interactively on PLATFORM, answering KEEP to the keep-running question and INSTALL to the install
+one.  Returns (RESULT PROMPTS PROGRAMS INSTALLED): the questions asked, the programs run, the app installs."
+  (let (prompts programs installed (call-process (symbol-function 'call-process)))
+    (cl-letf (((symbol-function 'drgnx-platform) (lambda () platform))
+              ((symbol-function 'y-or-n-p)
+               (lambda (p) (push p prompts) (if (string-match-p "\\`Keep drgnx running" p) keep install)))
+              ((symbol-function 'call-process)
+               (lambda (program &rest args) (push program programs) (apply call-process program args)))
+              ((symbol-function 'drgnx-macos-install-app)
+               (lambda (&optional _) (push t installed) (expand-file-name "drgnx.app" drgnx-macos-app-dir))))
+      (list (car (drgnx-onboard-run :only '(daemon))) (nreverse prompts) programs installed))))
+
+(ert-deftest drgnx-onboard/step-7-on-macos-asks-once-and-installs-the-app ()
+  (drgnx-onboard-test--with root
+    (let ((drgnx-macos-app-dir (concat root "Applications/")) (drgnx-keep-running t))
+      (pcase-let ((`(,r ,prompts ,programs ,installed) (drgnx-onboard-test--step-7 'macos nil t)))
+        (should (eq (cadr r) 'ok))
+        (should (equal (car prompts)
+                       "Keep drgnx running in the background when you close its last window? (recommended, like VS Code) "))
+        (should (= 1 (seq-count (lambda (p) (string-match-p "\\`Keep drgnx running" p)) prompts)))
+        (should (equal installed '(t)))
+        (should-not (member "systemctl" programs))
+        (should (equal (drgnx-onboard-test--read (drgnx-session-file)) '(:keep-running nil)))
+        (should-not drgnx-keep-running)
+        (should (string-search "drgnx quits when its last window closes" (nth 2 r)))
+        (should (string-search "Preferences: Keep drgnx Running in the Background" (nth 2 r)))
+        ;; no systemd unit, no desktop entry, nothing at login
+        (should-not (file-exists-p (expand-file-name "systemd" (drgnx-user-dir))))
+        (should-not (file-exists-p (expand-file-name "applications" (drgnx-user-dir)))))
+      ;; the app is there: not asked again, not installed again
+      (make-directory (concat root "Applications/drgnx.app") t)
+      (pcase-let ((`(,r ,prompts ,_ ,installed) (drgnx-onboard-test--step-7 'macos t t)))
+        (should (eq (cadr r) 'ok))
+        (should (= 1 (length prompts)))
+        (should-not installed)
+        (should (equal (drgnx-onboard-test--read (drgnx-session-file)) '(:keep-running t)))))))
+
+(ert-deftest drgnx-onboard/step-7-on-macos-without-interaction-installs-nothing ()
+  (drgnx-onboard-test--with root
+    (let ((drgnx-macos-app-dir (concat root "Applications/")) (drgnx-keep-running t) (installed nil))
+      (cl-letf (((symbol-function 'drgnx-platform) (lambda () 'macos))
+                ((symbol-function 'drgnx-macos-install-app) (lambda (&rest _) (setq installed t))))
+        (let ((r (car (drgnx-onboard-run :only '(daemon) :non-interactive t))))
+          (should (eq (cadr r) 'info))
+          (should (string-search "drgnx macos-app" (nth 2 r)))
+          (should (string-search "keeps running in the background" (nth 2 r))))
+        (should-not installed)
+        (should-not (file-exists-p (concat root "Applications")))
+        (should (equal (drgnx-onboard-test--read (drgnx-session-file)) '(:keep-running t)))
+        ;; a choice made before stays
+        (drgnx-session-set-keep-running nil)
+        (drgnx-onboard-run :only '(daemon) :non-interactive t)
+        (should (equal (drgnx-onboard-test--read (drgnx-session-file)) '(:keep-running nil)))))))
+
+(ert-deftest drgnx-onboard/step-7-on-linux-is-unchanged-plus-the-question ()
+  (drgnx-onboard-test--with root
+    (let ((drgnx-keep-running t))
+      (pcase-let ((`(,r ,prompts ,programs ,installed) (drgnx-onboard-test--step-7 'linux t nil)))
+        (should (eq (cadr r) 'info))
+        (should (string-match-p "\\`Keep drgnx running" (car prompts)))
+        (should (string-match-p "\\`Install the drgnx service and desktop entry" (cadr prompts)))
+        (should (= 2 (length prompts)))
+        (should-not installed)
+        (should-not (member "systemctl" programs))                       ; said no: nothing installed
+        (should (file-exists-p (expand-file-name "systemd/drgnx.service" (drgnx-user-dir))))
+        (should (file-exists-p (expand-file-name "applications/drgnx.desktop" (drgnx-user-dir))))
+        (should (string-match-p "systemctl --user" (nth 2 r)))
+        (should (string-search "drgnx keeps running in the background" (nth 2 r)))
+        (should (equal (drgnx-onboard-test--read (drgnx-session-file)) '(:keep-running t)))))))
+
+(ert-deftest drgnx-onboard/the-first-window-opens-the-welcome-once ()
+  ;; The first graphical frame schedules the Welcome (a timer: never inside the hook); it opens when onboarding
+  ;; never ran here, and marks it so it never opens by itself again.
+  (drgnx-onboard-test--with root
+    (let ((timers nil) (opened 0) (noninteractive nil)
+          (process-environment (cons "DRGNX_UI_RUN" process-environment)))
+      (cl-letf (((symbol-function 'run-with-idle-timer) (lambda (_secs _repeat fn &rest _) (push fn timers)))
+                ((symbol-function 'drgnx-onboard-welcome) (lambda () (cl-incf opened))))
+        (drgnx-onboard--on-first-window)
+        (should (equal timers '(drgnx-onboard-maybe-welcome)))
+        (should (= opened 0))                                            ; nothing inside the hook
+        (funcall (car timers))
+        (should (= opened 1))
+        (should (file-exists-p (drgnx-onboard-state-file)))
+        (should-not (drgnx-onboard-state))                               ; no step is marked done
+        (setq timers nil)
+        (drgnx-onboard--on-first-window)
+        (should-not timers)
+        (drgnx-onboard-maybe-welcome)
+        (should (= opened 1))
+        ;; never in batch, never in a harness session
+        (delete-file (drgnx-onboard-state-file))
+        (let ((noninteractive t)) (drgnx-onboard--on-first-window) (drgnx-onboard-maybe-welcome))
+        (let ((process-environment (cons "DRGNX_UI_RUN=/tmp/x" process-environment)))
+          (drgnx-onboard--on-first-window) (drgnx-onboard-maybe-welcome))
+        (should-not timers)
+        (should (= opened 1))))))
 
 (ert-deftest drgnx-onboard/the-whole-flow-twice ()
   ;; The M6 exit, in batch: a fresh config onboarded non-interactively with fixture repos; the board

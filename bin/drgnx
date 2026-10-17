@@ -230,6 +230,7 @@ usage() {
 usage: drgnx PATH…             open folders and files in drgnx, like code . (docs/guide/opening.md)
        drgnx open [PATH…]      the same; no PATH: drgnx with your windows (started in the background if needed)
        drgnx open --check      start drgnx's daemon if needed, print its Emacs version, stop it if this started it
+       drgnx macos-app         macOS: install drgnx.app into ~/Applications (Finder, Spotlight, Dock, Open With)
        drgnx build             byte-compile drgnx (core, wb, modules); native compilation follows on load
        drgnx doctor [--json] [--dev]
                                is this machine ready for drgnx? (--dev: also the tools to develop it)
@@ -312,11 +313,11 @@ case "${1:-help}" in
   search) shift
         sub="${1:-}"; [ "$#" -gt 0 ] && shift
         case "$sub" in
-          index) "${DRGNX_EMACS:-emacs}" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
+          index) "$(emacs_bin)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
                        -l drgnx-search-index -f drgnx-search-index-cli "$@" ;;
-          query) "${DRGNX_EMACS:-emacs}" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
+          query) "$(emacs_bin)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
                        -l drgnx-search-mcp -f drgnx-search-mcp-query-cli -- "$@" ;;
-          mcp) "${DRGNX_EMACS:-emacs}" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
+          mcp) "$(emacs_bin)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
                      -l drgnx-search-mcp -f drgnx-search-mcp-main -- "$@" ;;
           *) echo "usage: drgnx search index ROOT [--rebuild] | query ROOT QUESTION… [-k N] | mcp [ROOT]" >&2; exit 2 ;;
         esac ;;
@@ -335,6 +336,7 @@ case "${1:-help}" in
         "$(emacs_bin)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
               -l drgnx-fmt -f drgnx-fmt-cli -- "$@" ;;
   open) shift; cmd_open "$@" ;;
+  macos-app) "$(emacs_bin)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" -l drgnx-macos -f drgnx-macos-cli ;;
   help|-h|--help) usage ;;
   *) if [[ "$1" == . || "$1" == .. || "$1" == */* || -e "$1" ]]; then cmd_open "$@"; exit; fi   # drgnx PATH…
      echo "drgnx: unknown command '$1' (try: drgnx help)" >&2; exit 2 ;;
