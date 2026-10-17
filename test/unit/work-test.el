@@ -358,3 +358,21 @@ code/ with three commits, p's ledger naming the first two, a board TODO from p."
       (let ((default-directory root)) (drgnx-work-test--scan root))         ; the cwd is no root either
       (should (equal (mapcar (lambda (n) (plist-get n :title)) (drgnx-work-test--kids (concat "plan:" root "docs/plans/p.md") 'todo))
                      '("refiled"))))))
+
+(ert-deftest drgnx-work/a-spec-outside-specs-is-read-again-and-goes-with-its-last-plan ()
+  (drgnx-work-test--with root
+    (let ((spec (concat "spec:" root "docs/roadmap.md")) (q (concat root "docs/plans/q.md")))
+      (drgnx-work-test--write root "docs/roadmap.md" "# Roadmap\n")
+      (drgnx-work-test--write root "docs/plans/q.md" "# Plan Q\n\n**Spec:** `docs/roadmap.md`\n\n### Task 1: One\n")
+      (drgnx-work-test--scan root)
+      (should (equal (plist-get (drgnx-work-node spec) :title) "Roadmap"))
+      (drgnx-work-test--write root "docs/roadmap.md" "# Roadmap, renamed\n")
+      (set-file-times (concat root "docs/roadmap.md") (time-add (current-time) 5))
+      (drgnx-work-test--scan root)
+      (should (equal (plist-get (drgnx-work-node spec) :title) "Roadmap, renamed"))
+      ;; the plan names it no more: it goes
+      (drgnx-work-test--write root "docs/plans/q.md" "# Plan Q\n\n### Task 1: One\n")
+      (set-file-times q (time-add (current-time) 10))
+      (drgnx-work-test--scan root)
+      (should-not (drgnx-work-node spec))
+      (should (drgnx-work-node (concat "spec:" root "docs/specs/s.md"))))))       ; one under specs/ stays

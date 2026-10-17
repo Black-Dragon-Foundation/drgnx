@@ -13,7 +13,8 @@ down (not into `.git`, `node_modules`, `eln-cache`, `elpa`, `target`, `dist`, `b
 - **specs:** Markdown under a `specs/` directory inside the root (directories above the root do not count); the title is the first `# ` heading.
 - **plans:** Markdown under a `plans/` directory inside the root, with `### Task N:` headings. Each task's `- [ ]` / `- [x]` lines
   are its steps; a task with every step ticked is done. A `**Spec:** \`path\`` line links the plan to its spec
-  (resolved against the plan's directory, the roots, the repositories under them and the nearest `docs/`).
+  (resolved against the plan's directory, the roots, the repositories under them and the nearest `docs/`); a spec
+  outside `specs/` is read again when it changes and is kept only while a plan names it.
 - **ledgers:** `*.ledger.md` and `.superpowers/sdd/*/progress.md`, whose first line is `# SDD ledger — plan: PATH`
   (PATH absolute, or relative to a root, a repository under it or the ledger's directory).
   `Task N: complete (commits A..B …)` or `(commit SHA …)` marks the task done and links those commits

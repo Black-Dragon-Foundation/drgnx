@@ -6,7 +6,7 @@
 ;; Reads what agents and people already leave behind and fills the store (drgnx-work-db.el):
 ;; - plans: markdown under a plans/ directory with `### Task N:' headings; their spec from the
 ;;   `**Spec:**' line; each task's `- [ ]' / `- [x]' steps;
-;; - specs: markdown under a specs/ directory, and every file a plan names;
+;; - specs: markdown under a specs/ directory, and every file a plan names (kept while one names it);
 ;; - ledgers (`.superpowers/sdd/<plan>/progress.md', copied `*.ledger.md'): `Task N: complete
 ;;   (commits A..B …)' marks a task done and links the commits of that range (inferred; a range git
 ;;   no longer has marks the task stale, never wrong), `Ruling:' lines; a ledger inside a linked git
@@ -280,6 +280,11 @@ exists) — never to the scanning process's directory.  Nil when it names none."
                                 (puthash f k found)
                                 (pcase k ('plan (push f plans)) ('spec (push f specs)) ('ledger (push f ledgers)))))))
     (when (and board (file-readable-p board)) (puthash board 'board found))
+    ;; a spec a plan names outside specs/: its time is kept too (read again when it changes, forgotten
+    ;; when it goes)
+    (dolist (s (drgnx-work-nodes 'spec))
+      (let ((f (plist-get s :path)))
+        (when (and f (not (gethash f found)) (file-readable-p f)) (puthash f 'spec found))))
     ;; what changed, what left; the time seen now is the one kept (a file written while it is read
     ;; is read again next time)
     (maphash (lambda (f _) (let ((m (float-time (file-attribute-modification-time (file-attributes f)))))
@@ -312,6 +317,12 @@ exists) — never to the scanning process's directory.  Nil when it names none."
         (when (and board (file-readable-p board) (or (member board changed) (seq-intersection changed plans)))
           (drgnx-work-forget-source board)
           (drgnx-work--parse-board board))))
+    ;; …and lives as long as a plan names it (one first read: its time is kept from the next scan on)
+    (dolist (s (drgnx-work-nodes 'spec))
+      (let ((f (plist-get s :path)))
+        (unless (or (member f specs) (drgnx-work-edges-to (plist-get s :id) 'derives))
+          (drgnx-work-forget-source (drgnx-work--spec-source f))
+          (when (eq (gethash f found) 'spec) (remhash f found) (drgnx-work-drop-file f)))))
     (dolist (f changed) (when (gethash f found) (drgnx-work-set-file f (gethash f seen))))
     (drgnx-work-forget-orphan-commits)
     (dolist (p (drgnx-work-nodes 'plan)) (drgnx-work--git-facts (plist-get p :id)))
