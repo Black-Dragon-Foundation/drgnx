@@ -87,7 +87,7 @@ lists as :native (KIND `native': documented, never rebound).  Nothing is evaluat
 (defun drgnx-keys-diff--drgnx-bindings (gryphn-dir)
   "drgnx's VS Code bindings with every module run: (ALL IDS GLOBAL), ALL and GLOBAL alists ID → keys
 (GLOBAL: only the keys of the global map), IDS every command id."
-  (let ((elpa (expand-file-name "~/.config/emacs/elpa")))
+  (let ((elpa (expand-file-name (or (getenv "DRGNX_USER_ELPA") "~/.config/emacs/elpa"))))
     (when (file-directory-p elpa)
       (dolist (d (directory-files elpa t "\\`[^.]")) (when (file-directory-p d) (add-to-list 'load-path d t)))))
   (require 'drgnx)

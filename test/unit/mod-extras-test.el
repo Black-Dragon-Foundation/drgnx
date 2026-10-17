@@ -13,7 +13,7 @@
     ("extra/drgnx-completion" extra/completion (vertico orderless marginalia corfu) ()))
   "FILE MODULE PACKAGES COMMANDS.")
 
-(defconst drgnx-extras-test--elpa (expand-file-name "~/.config/emacs/elpa")
+(defconst drgnx-extras-test--elpa (expand-file-name (or (getenv "DRGNX_USER_ELPA") "~/.config/emacs/elpa"))
   "The user's ELPA, used read-only when present (as the benchmark does for treemacs).")
 
 (defmacro drgnx-extras-test--fresh (&rest body)

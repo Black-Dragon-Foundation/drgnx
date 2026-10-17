@@ -73,15 +73,25 @@ Return t if every test passed."
 
 (defun drgnx-run-ert-batch ()
   "Batch entry point: run the suite in the first remaining argument, exit 0 or 1."
-  (let* ((dir (pop command-line-args-left))
+  ;; Absolute paths before HOME changes: "~/…" would then mean the temp home.
+  (setq default-directory (expand-file-name default-directory)
+        load-path (mapcar (lambda (d) (if (stringp d) (expand-file-name d) d)) load-path))
+  (let* ((dir (expand-file-name (pop command-line-args-left)))
          ;; The suite never sees the user's drgnx config, packages, state or cache.
          (tmp (make-temp-file "drgnx-unit" t))
+         ;; …nor anything else under ~ (HOME is a temp dir; the user's ELPA stays readable for the
+         ;; tests that load packages from it, read-only, through DRGNX_USER_ELPA)
+         (elpa (expand-file-name "~/.config/emacs/elpa"))
          (process-environment
           (append (mapcar (lambda (v) (format "%s=%s" (car v) (expand-file-name (cdr v) tmp)))
                           '(("DRGNX_CONFIG_DIR" . "config") ("DRGNX_DATA_DIR" . "data")
-                            ("XDG_STATE_HOME" . "state") ("XDG_CACHE_HOME" . "cache")))
+                            ("XDG_STATE_HOME" . "state") ("XDG_CACHE_HOME" . "cache") ("HOME" . "home")))
                   (list "DRGNX_TEST_ISOLATED=1")
+                  (and (getenv "DRGNX_USER_ELPA") (list (concat "DRGNX_USER_ELPA=" (getenv "DRGNX_USER_ELPA"))))
+                  (and (not (getenv "DRGNX_USER_ELPA")) (file-directory-p elpa) (list (concat "DRGNX_USER_ELPA=" elpa)))
                   process-environment))
+         (_ (make-directory (expand-file-name "home" tmp) t))
+         (abbreviated-home-dir nil)                     ; recomputed for the temp home
          ;; project.el remembers projects it sees: never in the user's own Emacs's list
          (project-list-file (expand-file-name "projects" tmp))
          (ok (drgnx-run-ert dir (getenv "DRGNX_TEST_RESULTS"))))

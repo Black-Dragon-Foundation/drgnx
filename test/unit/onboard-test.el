@@ -12,8 +12,8 @@
                                              (concat "XDG_STATE_HOME=" ,root "state")
                                              (concat "DRGNX_DATA_DIR=" ,root "data"))
                                        process-environment))
-          (org-directory (concat ,root "org/"))
-          (drgnx-projects-board-file nil)
+          ;; the board path itself — never through `org-directory' (not special unless org is loaded)
+          (drgnx-projects-board-file (concat ,root "org/board.org"))
           (drgnx-projects-gryphn-file (concat ,root "gryphn/projects.tsv"))
           (drgnx-modules--state nil))
      (make-directory (concat ,root "config") t)
@@ -151,6 +151,8 @@
         (should (string-prefix-p existing board))
         (should (string-match-p "^\\* alpha" board)))
       ;; a project already on the board (same root) gets its new TODOs under its own heading
+      ;; (a fresh machine: nothing imported before)
+      (delete-file (expand-file-name "projects-imported.eld" (drgnx-state-dir)))
       (write-region (concat existing "* alpha\n:PROPERTIES:\n:PROJECT_ROOT: " (directory-file-name alpha) "\n:END:\n** TODO mine\n")
                     nil (drgnx-projects-board-file) nil 'silent)
       (let ((r (drgnx-projects-import (list alpha))))
@@ -193,14 +195,14 @@
     (let ((ws (concat root "ws/")))
       (drgnx-onboard-test--repo (concat ws "alpha") '("TODO.md" . "- [ ] one\n- [ ] two\n"))
       (drgnx-onboard-test--repo (concat ws "beta"))
-      (let ((r (drgnx-onboard-run :non-interactive t :options `(:preset ide :roots (,ws)))))
+      (let ((r (drgnx-onboard-run :non-interactive t :options `(:preset ide :roots (,ws) :todos t))))
         (should-not (seq-find (lambda (s) (eq (cadr s) 'fail)) r))
         (should (equal (mapcar #'car r) (drgnx-onboard-steps))))
       (let ((board (drgnx-onboard-test--board)))
         (should (string-match-p "^\\* alpha" board))
         (should (string-match-p "^\\* beta" board))
         (should (string-match-p "^\\*\\* TODO two" board))
-        (drgnx-onboard-run :non-interactive t :options `(:preset ide :roots (,ws)))
+        (drgnx-onboard-run :non-interactive t :options `(:preset ide :roots (,ws) :todos t))
         (should (equal (drgnx-onboard-test--board) board))))))
 
 (ert-deftest drgnx-onboard/the-cli ()
@@ -210,10 +212,18 @@
       (should (plist-get got :non-interactive))
       (should (equal (plist-get (plist-get got :options) :preset) 'minimal))
       (should (equal (plist-get (plist-get got :options) :roots) '("/x" "/y")))
-      (should (equal (plist-get got :only) '(projects))))
+      (should (equal (plist-get got :only) '(projects)))
+      (should-not (plist-get got :resume))                            ; a step named runs again
+      (drgnx-onboard-cli-run '("--non-interactive"))
+      (should (plist-get got :resume))                                ; a stopped run resumes by default
+      (drgnx-onboard-cli-run '("--non-interactive" "--again" "--todos"))
+      (should-not (plist-get got :resume))
+      (should (plist-get (plist-get got :options) :todos)))
     (cl-letf (((symbol-function 'drgnx-onboard-run) (lambda (&rest _) '((a fail "no")))))
       (should (eql (drgnx-onboard-cli-run '("--non-interactive")) 1)))
-    (should (eql (drgnx-onboard-cli-run '("--frob")) 2))))
+    (should (eql (drgnx-onboard-cli-run '("--frob")) 2))
+    (should (eql (drgnx-onboard-cli-run '("--step" "bogus")) 2))          ; never silently nothing
+    (should (eql (drgnx-onboard-cli-run '("--roots")) 2))))                ; never the default roots by accident
 
 ;;;; The doctor and the registry
 
@@ -231,5 +241,118 @@
     (should (drgnx-commands-get 'onboarding))
     (dolist (id (drgnx-onboard-steps))
       (should (drgnx-commands-get (intern (format "onboarding-%s" id)))))))
+
+;;;; Review fixes (M6 final review)
+
+(ert-deftest drgnx-projects/the-same-todo-text-in-two-projects-and-twice-in-a-plan ()
+  ;; I1: ids are per project, and a repeated line in one file is a TODO each time.
+  (drgnx-onboard-test--with root
+    (let ((alpha (drgnx-onboard-test--repo (concat root "ws/alpha") '("TODO.md" . "- [ ] write the README\n")))
+          (beta (drgnx-onboard-test--repo (concat root "ws/beta")
+                                          '("TODO.md" . "- [ ] write the README\n")
+                                          '("docs/plans/p.md" . "### Task 1\n- [ ] Step 1: test\n### Task 2\n- [ ] Step 1: test\n"))))
+      (should (eql (plist-get (drgnx-projects-import (list alpha beta)) :todos) 4))
+      (should (eql (plist-get (drgnx-projects-import (list alpha beta)) :todos) 0)))))
+
+(ert-deftest drgnx-onboard/running-look-and-keys-again-keeps-the-users-choices ()
+  ;; I2: with no option given, the current keys and modules stay.
+  (drgnx-onboard-test--with root
+    (drgnx-onboard-run :only '(look-and-keys) :non-interactive t :options '(:preset minimal :keys "Emacs"))
+    (let ((keys (with-temp-buffer (insert-file-contents (expand-file-name "keys.eld" (drgnx-user-dir))) (buffer-string)))
+          (mods (drgnx-modules-read-state)))
+      (should (eq (cadr (car (drgnx-onboard-run :only '(look-and-keys) :non-interactive t))) 'ok))
+      (should (equal (with-temp-buffer (insert-file-contents (expand-file-name "keys.eld" (drgnx-user-dir))) (buffer-string)) keys))
+      (setq drgnx-modules--state nil)
+      (should (equal (drgnx-modules-read-state) mods)))))
+
+(ert-deftest drgnx-projects/imported-projects-stay-in-the-sessions-project-list ()
+  ;; I4: the session's own project.el list (already pointing at drgnx's file) learns them too.
+  (drgnx-onboard-test--with root
+    (let* ((alpha (drgnx-onboard-test--repo (concat root "ws/alpha")))
+           (project-list-file (expand-file-name "projects" (drgnx-state-dir)))
+           (project--list 'unset))
+      (drgnx-projects-import (list alpha) :todos nil)
+      (should (member (abbreviate-file-name alpha) (project-known-project-roots))))))
+
+(ert-deftest drgnx-projects/the-board-keeps-its-modes-link-and-line-endings ()
+  ;; I5
+  (drgnx-onboard-test--with root
+    (let ((alpha (drgnx-onboard-test--repo (concat root "ws/alpha")))
+          (real (concat root "dotfiles/board.org")))
+      (make-directory (file-name-directory real) t)
+      (make-directory (file-name-directory (drgnx-projects-board-file)) t)
+      (let ((coding-system-for-write 'utf-8-dos)) (write-region "* x\n" nil real nil 'silent))
+      (set-file-modes real #o644)
+      (make-symbolic-link real (drgnx-projects-board-file))
+      (drgnx-projects-import (list alpha) :todos nil)
+      (should (file-symlink-p (drgnx-projects-board-file)))
+      (should (eql (file-modes real) #o644))
+      (let ((bytes (with-temp-buffer (set-buffer-multibyte nil) (insert-file-contents-literally real) (buffer-string))))
+        (should (string-match-p "\\* alpha\r\n" bytes))
+        (should-not (string-match-p "[^\r]\n" bytes))))))
+
+(ert-deftest drgnx-projects/a-board-another-emacs-is-editing-is-left-alone ()
+  ;; I6: its lock file names another Emacs.
+  (drgnx-onboard-test--with root
+    (let ((alpha (drgnx-onboard-test--repo (concat root "ws/alpha"))))
+      (make-directory (file-name-directory (drgnx-projects-board-file)) t)
+      (write-region "* x\n" nil (drgnx-projects-board-file) nil 'silent)
+      (make-symbolic-link "someone@elsewhere.invalid.4242:1" (expand-file-name ".#board.org" (file-name-directory (drgnx-projects-board-file))))
+      (should-error (drgnx-projects-import (list alpha)) :type 'user-error)
+      (should (equal (drgnx-onboard-test--board) "* x\n")))))
+
+(ert-deftest drgnx-onboard/a-scan-that-runs-out-of-time-says-so ()
+  ;; I7
+  (drgnx-onboard-test--with root
+    (drgnx-onboard-test--repo (concat root "ws/alpha"))
+    (let ((drgnx-projects-scan-budget 0))
+      (let ((r (car (drgnx-onboard-run :only '(projects) :non-interactive t :options `(:roots (,(concat root "ws/")))))))
+        (should (eq (cadr r) 'warn))
+        (should (string-match-p "stopped" (nth 2 r)))))))
+
+(ert-deftest drgnx-onboard/todos-are-imported-only-when-asked ()
+  ;; I8
+  (drgnx-onboard-test--with root
+    (drgnx-onboard-test--repo (concat root "ws/alpha") '("TODO.md" . "- [ ] a thing\n"))
+    (drgnx-onboard-run :only '(projects) :non-interactive t :options `(:roots (,(concat root "ws/"))))
+    (should-not (string-match-p "TODO a thing" (drgnx-onboard-test--board)))
+    (drgnx-onboard-run :only '(projects) :non-interactive t :options `(:roots (,(concat root "ws/")) :todos t))
+    (should (string-match-p "TODO a thing" (drgnx-onboard-test--board)))))
+
+(ert-deftest drgnx-projects/a-todo-removed-from-the-board-stays-removed ()
+  ;; I9: archived or deleted, it is not imported again.
+  (drgnx-onboard-test--with root
+    (let ((alpha (drgnx-onboard-test--repo (concat root "ws/alpha") '("TODO.md" . "- [ ] once\n"))))
+      (drgnx-projects-import (list alpha))
+      (let ((b (drgnx-onboard-test--board)))
+        (write-region (replace-regexp-in-string "\\*\\* TODO once\n:PROPERTIES:\n:ONBOARD_ID: [0-9a-f]+\n:END:\n" "" b)
+                      nil (drgnx-projects-board-file) nil 'silent))
+      (should-not (string-match-p "once" (drgnx-onboard-test--board)))
+      (should (eql (plist-get (drgnx-projects-import (list alpha)) :todos) 0)))))
+
+(ert-deftest drgnx-projects/projects-nested-or-through-a-link-are-found ()
+  ;; M3
+  (drgnx-onboard-test--with root
+    (let* ((alpha (drgnx-onboard-test--repo (concat root "ws/alpha")))
+           (link (concat root "link-to-ws")))
+      (make-symbolic-link (concat root "ws") link)
+      (make-directory (file-name-directory (drgnx-projects-board-file)) t)
+      (write-region (format "* Projects\n** alpha\n:PROPERTIES:\n:PROJECT_ROOT: %s\n:END:\n" (concat link "/alpha")) nil (drgnx-projects-board-file) nil 'silent)
+      (should-not (plist-get (drgnx-projects-import (list alpha) :todos nil) :added)))))
+
+(ert-deftest drgnx-projects/todo-text-never-becomes-org-syntax ()
+  ;; M5
+  (drgnx-onboard-test--with root
+    (let ((alpha (drgnx-onboard-test--repo (concat root "ws/alpha") '("TODO.md" . "- [ ] fix this :urgent:\n- [ ] :PROPERTIES:\n- [ ] COMMENT out\n"))))
+      (drgnx-projects-import (list alpha))
+      (let ((board (drgnx-onboard-test--board)))
+        (should-not (string-match-p "^\\*\\* TODO .*:urgent:$" board))
+        (should-not (string-match-p "^\\*\\* TODO :PROPERTIES:" board))
+        (should-not (string-match-p "^\\*\\* TODO COMMENT" board))
+        (should (string-match-p "urgent" board))))))
+
+(ert-deftest drgnx-onboard/the-desktop-entry-never-starts-another-config ()
+  ;; M1: emacsclient -a "" would start a daemon with the default init (not drgnx's) on drgnx's socket.
+  (should-not (string-match-p " -a " drgnx-onboard-desktop-entry)))
 
 ;;; onboard-test.el ends here

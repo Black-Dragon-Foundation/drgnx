@@ -17,7 +17,8 @@ bash install.sh
 ```
 
 Afterwards, start drgnx with the command the installer prints
-(`emacs --init-directory ~/.local/share/drgnx/drgnx/init`), and run `drgnx doctor` at any time.
+(`emacs --init-directory ~/.local/share/drgnx/drgnx/init`), and run `drgnx doctor` at any time. Then `drgnx onboard` (or Help → Welcome in drgnx) checks the
+rest of your machine, sets keys and modules, and puts your projects on the board ([onboarding.md](onboarding.md)).
 
 ## What install.sh does
 

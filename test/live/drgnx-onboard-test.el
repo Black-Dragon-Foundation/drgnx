@@ -21,7 +21,7 @@
     (drgnx-live-ob--repo (concat ws "alpha") "- [ ] first thing\n- [ ] second thing\n")
     (drgnx-live-ob--repo (concat ws "beta") nil)
     (let* ((s (drgnx-ui-start "drgnx" "1400x800" 30)) (sess (drgnx-ui-own-session (plist-get s :name)))
-           (run (format "(drgnx-onboard-run :non-interactive t :options '(:preset ide :roots (%S)))" ws)))
+           (run (format "(drgnx-onboard-run :non-interactive t :options '(:preset ide :roots (%S) :todos t))" ws)))
       (unwind-protect
           (progn
             (drgnx-live-ob--q sess (format "(setq org-directory %S drgnx-projects-gryphn-file %S)"

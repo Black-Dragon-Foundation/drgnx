@@ -18,6 +18,7 @@
 (require 'tabulated-list)
 (require 'drgnx-paths)
 (require 'drgnx-modules)
+(require 'drgnx-registry)
 
 (defvar drgnx-onboard--steps nil "Alist ID → plist (:title :doc :order :run :check).")
 
@@ -46,7 +47,9 @@ a plist (:interactive BOOL :options PLIST).  STATUS: ok, info, warn or fail."
   (let ((state (drgnx-onboard-state)))
     (setf (alist-get id state) (list :status status :message message :time (format-time-string "%FT%T%z")))
     (make-directory (file-name-directory (drgnx-onboard-state-file)) t)
-    (with-temp-file (drgnx-onboard-state-file) (let ((print-length nil)) (prin1 state (current-buffer))))))
+    (let ((tmp (make-temp-file (expand-file-name ".onboarding-" (file-name-directory (drgnx-onboard-state-file))))))
+      (with-temp-file tmp (let ((print-length nil)) (prin1 state (current-buffer))))
+      (rename-file tmp (drgnx-onboard-state-file) t))))
 
 (cl-defun drgnx-onboard-run (&key only non-interactive resume options)
   "Run the steps (ONLY: a list of ids) in order; RESUME skips steps done (ok or info) before.
@@ -138,24 +141,48 @@ NON-INTERACTIVE: never read input (`inhibit-interaction').  OPTIONS: plist for t
 (declare-function drgnx-keys-use "drgnx-keys")
 (declare-function drgnx-look-load-theme "drgnx-look")
 
+(defvar drgnx-keys-file)
+(declare-function drgnx-keys-file "drgnx-keys")
+(declare-function drgnx-keys--user "drgnx-keys")
+
+(defun drgnx-onboard--current-keys ()
+  "The name of the key preset keys.eld uses now, or nil."
+  (let ((layers (ignore-errors
+                  (plist-get (with-temp-buffer (insert-file-contents (drgnx-keys-file)) (read (current-buffer))) :layers))))
+    (car (rassoc layers drgnx-keys-presets))))
+
+(defun drgnx-onboard--current-preset ()
+  "The preset the extra/ modules match now, or nil."
+  (let* ((extras (drgnx-onboard--extras))
+         (off (seq-filter (lambda (m) (memq m extras)) (plist-get (drgnx-modules-read-state) :disabled))))
+    (cond ((null off) (and (plist-member (drgnx-modules-read-state) :disabled) 'full-ai))
+          ((seq-set-equal-p off extras) 'minimal)
+          ((equal off '(extra/llm)) 'ide))))
+
 (defun drgnx-onboard--look-step (ctx)
+  "Key profile, theme and module preset: the options given, else (asking, when interactive, with the
+current choice as the default) — with no option and no question, the current choices stay."
   (require 'drgnx-keys)
   (let* ((o (plist-get ctx :options)) (ask (plist-get ctx :interactive))
+         (cur-preset (drgnx-onboard--current-preset)) (cur-keys (drgnx-onboard--current-keys))
          (preset (or (plist-get o :preset)
-                     (if ask (intern (completing-read "Modules (minimal, ide, full-ai): " (mapcar #'car drgnx-onboard-presets) nil t nil nil "ide"))
-                       'ide)))
+                     (and ask (intern (completing-read "Modules (minimal, ide, full-ai): " (mapcar #'car drgnx-onboard-presets)
+                                                       nil t nil nil (symbol-name (or cur-preset 'ide)))))))
          (keys (or (plist-get o :keys)
-                   (if ask (completing-read "Keys: " drgnx-keys-presets nil t nil nil "VS Code") "VS Code")))
+                   (and ask (completing-read "Keys: " drgnx-keys-presets nil t nil nil (or cur-keys "VS Code")))))
          (theme (or (plist-get o :theme)
                     (and ask (let ((s (completing-read "Color theme (empty: keep): " (mapcar #'symbol-name (custom-available-themes)))))
                                (unless (string-empty-p s) (intern s))))))
-         (layers (or (cdr (assoc keys drgnx-keys-presets)) (user-error "Unknown key profile %s" keys))))
-    (drgnx-onboard-apply-preset preset)
-    (if (and (not noninteractive) (fboundp 'drgnx-keys-apply)) (drgnx-keys-use layers t) (drgnx-keys--save-layers layers))
+         (layers (and keys (or (cdr (assoc keys drgnx-keys-presets)) (user-error "Unknown key profile %s" keys)))))
+    (when (and preset (not (eq preset cur-preset))) (drgnx-onboard-apply-preset preset))
+    (when (and layers (not (equal keys cur-keys)))
+      (if (and (not noninteractive) (fboundp 'drgnx-keys-apply)) (drgnx-keys-use layers t) (drgnx-keys--save-layers layers)))
     (when theme
       (if (and (not noninteractive) (fboundp 'drgnx-look-load-theme)) (drgnx-look-load-theme theme)
         (drgnx-modules-write-state (plist-put (copy-sequence (drgnx-modules-read-state)) :theme theme))))
-    (list 'ok (format "modules: %s; keys: %s%s" preset keys (if theme (format "; theme: %s" theme) "")))))
+    (list 'ok (format "modules: %s; keys: %s%s (modules take effect at the next start)"
+                      (or preset cur-preset "as they are") (or keys cur-keys "as they are")
+                      (if theme (format "; theme: %s" theme) "")))))
 
 ;;;; Step 3: projects
 
@@ -163,6 +190,9 @@ NON-INTERACTIVE: never read input (`inhibit-interaction').  OPTIONS: plist for t
 (declare-function drgnx-projects-gryphn-roots "drgnx-projects")
 (declare-function drgnx-projects-import "drgnx-projects")
 (declare-function drgnx-projects-board-file "drgnx-projects")
+(defvar drgnx-projects-scan-truncated)
+(defvar drgnx-projects-scan-budget)
+(defvar drgnx-projects-todo-cap)
 
 (defconst drgnx-onboard-default-roots '("~/workspace" "~/code" "~/src" "~/projects" "~/git"))
 
@@ -173,16 +203,28 @@ NON-INTERACTIVE: never read input (`inhibit-interaction').  OPTIONS: plist for t
          (found (delete-dups (mapcar #'directory-file-name
                                      (append (drgnx-projects-scan roots)
                                              (seq-filter #'file-directory-p (drgnx-projects-gryphn-roots))))))
-         (picked (if (and (plist-get ctx :interactive) found)
-                     (completing-read-multiple (format "Projects to import (%d found; comma-separated, empty: all): " (length found))
-                                               found)
+         (truncated drgnx-projects-scan-truncated)
+         (ask (and (plist-get ctx :interactive) found))
+         (picked (if ask
+                     (or (completing-read-multiple (format "Projects to import (%d found; empty: all): " (length found)) found)
+                         found)
                    found))
-         (picked (or picked found)))
+         (todos (cond ((plist-member o :todos) (plist-get o :todos))
+                      ((and ask picked)
+                       (completing-read-multiple "Import TODOs (TODO.md, TODO.org, plan checklists) from (empty: none): " picked))))
+         (stopped (and truncated (format " — the scan stopped after %ss at %s; pass the directories with --roots"
+                                         drgnx-projects-scan-budget truncated))))
     (if (null picked)
-        (list 'info (format "no git repositories under %s" (string-join roots ", ")))
-      (let ((r (drgnx-projects-import picked)))
-        (list 'ok (format "%d projects on the board (%d new), %d TODOs added — %s"
-                          (length picked) (length (plist-get r :added)) (plist-get r :todos) (drgnx-projects-board-file)))))))
+        (list (if truncated 'warn 'info) (concat (format "no git repositories found under %s" (string-join roots ", ")) stopped))
+      (let ((r (drgnx-projects-import picked :todos todos)))
+        (list (if truncated 'warn 'ok)
+              (concat (format "%d projects on the board (%d new), %d TODOs added%s — %s"
+                              (length picked) (length (plist-get r :added)) (plist-get r :todos)
+                              (if (plist-get r :capped) (format " (first %d only for %s)" drgnx-projects-todo-cap
+                                                                (string-join (plist-get r :capped) ", "))
+                                "")
+                              (drgnx-projects-board-file))
+                      stopped))))))
 
 ;;;; Steps 4–6, 8: what is there (completed by later milestones)
 
@@ -196,7 +238,7 @@ NON-INTERACTIVE: never read input (`inhibit-interaction').  OPTIONS: plist for t
 (declare-function drgnx-pkg-service-unit "drgnx-pkg")
 
 (defconst drgnx-onboard-desktop-entry
-  "[Desktop Entry]\nName=drgnx\nGenericName=Text Editor\nComment=Edit text (drgnx, an Emacs workbench)\nExec=emacsclient -s drgnx -c -a \"\" %F\nIcon=emacs\nType=Application\nTerminal=false\nCategories=Development;TextEditor;\nMimeType=text/plain;\n")
+  "[Desktop Entry]\nName=drgnx\nGenericName=Text Editor\nComment=Edit text (drgnx, an Emacs workbench)\nExec=emacsclient -s drgnx -c %F\nIcon=emacs\nType=Application\nTerminal=false\nCategories=Development;TextEditor;\nMimeType=text/plain;\n")
 
 (defun drgnx-onboard--daemon-step (ctx)
   (require 'drgnx-pkg)
@@ -205,14 +247,17 @@ NON-INTERACTIVE: never read input (`inhibit-interaction').  OPTIONS: plist for t
          (desktop (expand-file-name "applications/drgnx.desktop" dir))
          (unit-target (expand-file-name "~/.config/systemd/user/drgnx.service"))
          (desktop-target (expand-file-name "~/.local/share/applications/drgnx.desktop"))
-         (how (format "cp %s %s && systemctl --user daemon-reload && systemctl --user enable --now drgnx; cp %s %s; export EDITOR='emacsclient -s drgnx -t' VISUAL='emacsclient -s drgnx -c'"
-                      unit unit-target desktop desktop-target)))
+         (how (format "mkdir -p %s %s && cp %s %s && cp %s %s && systemctl --user daemon-reload && systemctl --user enable --now drgnx; and in your shell's rc file: export EDITOR='emacsclient -s drgnx -t' VISUAL='emacsclient -s drgnx -c'"
+                      (shell-quote-argument (file-name-directory unit-target)) (shell-quote-argument (file-name-directory desktop-target))
+                      (shell-quote-argument unit) (shell-quote-argument unit-target)
+                      (shell-quote-argument desktop) (shell-quote-argument desktop-target))))
     (drgnx-pkg-service-unit (file-name-directory unit))
     (make-directory (file-name-directory desktop) t)
     (write-region drgnx-onboard-desktop-entry nil desktop nil 'silent)
     (if (and (plist-get ctx :interactive)
-             (y-or-n-p (format "Install the drgnx service and desktop entry into %s and %s? "
-                               (file-name-directory unit-target) (file-name-directory desktop-target))))
+             (y-or-n-p (format "Install the drgnx service and desktop entry into %s and %s%s? "
+                               (file-name-directory unit-target) (file-name-directory desktop-target)
+                               (if (or (file-exists-p unit-target) (file-exists-p desktop-target)) " (replacing the ones there)" ""))))
         (progn
           (dolist (p (list (cons unit unit-target) (cons desktop desktop-target)))
             (make-directory (file-name-directory (cdr p)) t)
@@ -232,7 +277,7 @@ NON-INTERACTIVE: never read input (`inhibit-interaction').  OPTIONS: plist for t
          (count (lambda (s) (seq-count (lambda (r) (eq (plist-get r :status) s)) results)))
          (fails (seq-filter (lambda (r) (eq (plist-get r :status) 'fail)) results)))
     (list (if fails 'fail 'ok)
-          (format "doctor: %d ok, %d warnings, %d failed%s — the key sheet: C-k C-s (VS Code keys); docs/onboarding.md"
+          (format "doctor: %d ok, %d warnings, %d failed%s — every command and its key: Keyboard Shortcuts (in the palette); docs/onboarding.md"
                   (funcall count 'ok) (funcall count 'warn) (length fails)
                   (if fails (concat " (" (mapconcat (lambda (r) (symbol-name (plist-get r :name))) fails ", ") ")") "")))))
 
@@ -325,21 +370,28 @@ NON-INTERACTIVE: never read input (`inhibit-interaction').  OPTIONS: plist for t
 
 (defun drgnx-onboard-cli-run (args)
   "Run `drgnx onboard' with ARGS (strings); the exit code."
-  (let (non-interactive only options)
+  (let (non-interactive only options (resume t))
     (catch 'usage
       (while args
         (pcase (pop args)
           ("--non-interactive" (setq non-interactive t))
+          ("--again" (setq resume nil))
+          ("--todos" (setq options (plist-put options :todos t)))
           ("--preset" (setq options (plist-put options :preset (intern (or (pop args) "")))))
           ("--keys" (setq options (plist-put options :keys (pop args))))
           ("--theme" (setq options (plist-put options :theme (intern (or (pop args) "")))))
-          ("--step" (setq only (append only (list (intern (or (pop args) ""))))))
+          ("--step" (let ((id (intern (or (pop args) ""))))
+                      (unless (memq id (drgnx-onboard-steps))
+                        (princ (format "drgnx onboard: no step %s (steps: %s)\n" id (mapconcat #'symbol-name (drgnx-onboard-steps) " ")))
+                        (throw 'usage 2))
+                      (setq only (append only (list id)) resume nil)))
           ("--roots" (let (roots)
                        (while (and args (not (string-prefix-p "--" (car args)))) (push (pop args) roots))
+                       (unless roots (princ "drgnx onboard: --roots needs at least one directory\n") (throw 'usage 2))
                        (setq options (plist-put options :roots (nreverse roots)))))
-          (a (princ (format "drgnx onboard: unknown argument %s\nusage: drgnx onboard [--non-interactive] [--preset minimal|ide|full-ai] [--keys NAME] [--theme THEME] [--roots DIR…] [--step ID]…\n" a))
+          (a (princ (format "drgnx onboard: unknown argument %s\nusage: drgnx onboard [--non-interactive] [--again] [--preset minimal|ide|full-ai] [--keys NAME] [--theme THEME] [--roots DIR…] [--todos] [--step ID]…\n" a))
              (throw 'usage 2))))
-      (let ((r (drgnx-onboard-run :only only :non-interactive non-interactive :options options)))
+      (let ((r (drgnx-onboard-run :only only :non-interactive non-interactive :options options :resume resume)))
         (pcase-dolist (`(,id ,status ,msg) r)
           (princ (format "%-5s %-14s %s\n" (upcase (symbol-name status)) id msg)))
         (if (seq-some (lambda (s) (eq (cadr s) 'fail)) r) 1 0)))))

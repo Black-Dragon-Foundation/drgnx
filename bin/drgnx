@@ -134,7 +134,8 @@ usage: drgnx build              byte-compile drgnx (core, wb, modules); native c
        drgnx upgrade           newest packages; the previous generation comes back if they break
        drgnx rollback [N]      the packages of generation N (default: the one before)
        drgnx generations | lock
-       drgnx onboard [--non-interactive] [--preset minimal|ide|full-ai] [--keys NAME] [--roots DIR…] [--step ID]
+       drgnx onboard [--non-interactive] [--again] [--preset minimal|ide|full-ai] [--keys NAME] [--theme THEME]
+                     [--roots DIR…] [--todos] [--step ID]
                                set drgnx up: environment, keys, projects onto the board, daemon unit (docs/onboarding.md)
        drgnx safe              Emacs with drgnx's core only: no modules, no packages
        drgnx bisect [-- CMD…]  find the module that breaks (CMD fails, or you say so)
