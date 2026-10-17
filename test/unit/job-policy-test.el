@@ -136,4 +136,21 @@
       ;; the command itself, when the title says less
       (should (eq (drgnx-job-policy "implement" '(:kind "execute" :title "Run a script" :rawInput (:command "curl x")) tree) 'ask)))))
 
+(ert-deftest drgnx-job/allow-without-allow-once-option-is-a-card ()
+  ;; the policy allows it, but the agent offered no allow_once option to answer with: it goes to the user
+  (drgnx-job-policy-test--with
+    (let ((s (drgnx-agents--make :id "s-w" :name "w" :profile "mock" :cwd wt :task (concat job "#1") :job job)))
+      (should-not (drgnx-job--request s "session/request_permission"
+                                      (list :toolCall (list :kind "read" :title "Read a.txt")
+                                            :options (vector (list :optionId "no" :kind "reject_once")))
+                                      7))
+      (should (seq-find (lambda (c) (equal (plist-get c :kind) "permission")) (drgnx-coord-cards job "open"))))))
+
+(ert-deftest drgnx-job/a-write-into-a-new-directory-makes-it ()
+  (drgnx-job-policy-test--with
+    (let ((s (drgnx-agents--make :id "s-w" :name "w" :profile "mock" :cwd wt :task (concat job "#1") :job job))
+          (path (concat wt "new/sub/f.txt")))
+      (should (equal (drgnx-job--request s "fs/write_text_file" (list :path path :content "x\n") 1) '(:result nil)))
+      (should (equal (with-temp-buffer (insert-file-contents path) (buffer-string)) "x\n")))))
+
 ;;; job-policy-test.el ends here

@@ -747,12 +747,12 @@ its worktree done at once; anything else waits for the user as a card (nil: the 
     (let ((tree (drgnx-agent-session-cwd s)) (task (drgnx-agent-session-task s)))
       (pcase method
         ("session/request_permission"
-         (let ((tool (plist-get params :toolCall)))
+         (let ((tool (plist-get params :toolCall))
+               (opt (seq-find (lambda (o) (equal (plist-get o :kind) "allow_once")) (append (plist-get params :options) nil))))
            (cond
             ((drgnx-job--gate s job params))                        ; behind the decision log: refused, told
-            ((eq (drgnx-job-policy (drgnx-job--role s) tool tree) 'allow)
-             (let ((opt (seq-find (lambda (o) (equal (plist-get o :kind) "allow_once")) (append (plist-get params :options) nil))))
-               (list :result (list :outcome (list :outcome "selected" :optionId (plist-get opt :optionId))))))
+            ((and opt (eq (drgnx-job-policy (drgnx-job--role s) tool tree) 'allow))   ; no allow_once option: the user
+             (list :result (list :outcome (list :outcome "selected" :optionId (plist-get opt :optionId)))))
             (t (drgnx-job--card job task "permission" (or (plist-get tool :title) "a permission") s (list :request id))
                nil))))
         ("fs/write_text_file"
@@ -760,7 +760,8 @@ its worktree done at once; anything else waits for the user as a card (nil: the 
          (let ((path (plist-get params :path)) (content (plist-get params :content)))
            (if (and (stringp content) (drgnx-agents--path-ok-p path) (drgnx-job--inside-p path tree)
                     (not (equal (drgnx-job--role s) "review")))
-               (progn (let ((coding-system-for-write 'utf-8-unix)) (write-region content nil path nil 'silent))
+               (progn (make-directory (file-name-directory path) t)
+                      (let ((coding-system-for-write 'utf-8-unix)) (write-region content nil path nil 'silent))
                       (list :result nil))
              (drgnx-job--card job task "write" (format "write %s" path) s (list :request id))
              nil)))))))
