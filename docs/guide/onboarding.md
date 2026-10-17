@@ -14,11 +14,13 @@ so later starts open as you left them. Help → Welcome brings it back at any ti
 
 **New to Emacs? (coming from VS Code)**
 
-- **Run the steps from the top:** click a step (or move to it with ↑/↓) and press **Return**; when it is done, go to
-  the next. Each step's status and result show on its row.
+- **Run the steps from the top** (the Welcome's header line says so): the cursor starts on the first step; press
+  **Return** to run the step under it, and when it is done the cursor moves to the next one. Each step's status and
+  result show on its row.
 - **Questions appear on the line at the bottom of the window** (Emacs calls it the *minibuffer*): `y` or `n` for
-  yes/no; for a choice, type to narrow the list (↑/↓ to pick) and press Return — Return alone takes the default
-  shown.
+  yes/no; a choice lists its answers and its default in the question itself — e.g. `Set up AI with (ollama,
+  lmstudio, openrouter, skip) (default ollama):` — type one (Tab completes it) and press Return; Return alone takes
+  the default. An answer that is not one of them is refused, never taken for one.
 - **Ctrl+G** (written `C-g`) is Emacs' cancel: it closes a question, or stops what a step is doing. Escape closes a
   question too.
 - **When the steps are done, restart drgnx:** the modules and packages a step turned on or installed load at the
@@ -54,7 +56,9 @@ The exit code is 1 when a step failed. `drgnx doctor` reports onboarding too.
 ## Setting AI up
 
 When no role has a provider that answers (or you run the step again and choose **Change**), the AI step asks:
-**Set up AI with: Ollama (local) / LM Studio (local) / OpenRouter (cloud key) / Skip**. Whatever you choose, it ends
+**Set up AI with (ollama, lmstudio, openrouter, skip)** — Ollama or LM Studio run models on this machine, OpenRouter
+in the cloud with a key. Return alone takes the default: `ollama` when models get at least 10 GB of room here (the
+GPU's memory; on a Mac two thirds of the RAM), else `openrouter`; never `skip`. Whatever you choose, it ends
 by testing every AI feature against what it just set up — one call each for Inline Completion (`complete`), Edit with
 AI (`edit`) and Chat (`chat`), one embedding when it set the `embed` role, and Ask the Codebase over a small temporary
 project (its own retrievers, then the chat model) — and says which answered.

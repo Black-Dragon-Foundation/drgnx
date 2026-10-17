@@ -81,6 +81,22 @@ NON-INTERACTIVE: never read input (`inhibit-interaction').  OPTIONS: plist for t
           (push (list id (car r) (cadr r)) out))))
     (nreverse out)))
 
+;;;; Questions
+
+(defconst drgnx-onboard--listed-choices 6 "A question with at most this many choices lists them in its prompt.")
+
+(defun drgnx-onboard--choose (question choices default)
+  "Ask QUESTION: one of CHOICES (strings), DEFAULT on Return alone.  A first start has no completion UI, so the
+prompt lists the choices when they are few, and the default (`format-prompt').  An answer that is not a choice is a
+`user-error', never taken for one."
+  (let ((answer (completing-read (format-prompt (if (<= (length choices) drgnx-onboard--listed-choices)
+                                                    (format "%s (%s)" question (string-join choices ", "))
+                                                  question)
+                                                default)
+                                 choices nil t nil nil default)))
+    (or (car (member answer choices))
+        (user-error "%s: %S is not one of %s" question answer (string-join choices ", ")))))
+
 ;;;; Step 1: environment
 
 (defconst drgnx-onboard-tools
@@ -221,15 +237,16 @@ current choice as the default) — with no option and no question, the current c
   (let* ((o (plist-get ctx :options)) (ask (plist-get ctx :interactive))
          (cur-preset (drgnx-onboard--current-preset)) (cur-keys (drgnx-onboard--current-keys))
          (preset (or (plist-get o :preset)
-                     (and ask (let ((s (completing-read "Modules (minimal, ide, full-ai): "
-                                                        (append (mapcar #'car drgnx-onboard-presets) (and (not cur-preset) '("keep")))
-                                                        nil t nil nil (if cur-preset (symbol-name cur-preset) "keep"))))
+                     (and ask (let ((s (drgnx-onboard--choose "Modules" (append (mapcar (lambda (p) (symbol-name (car p))) drgnx-onboard-presets)
+                                                                                (and (not cur-preset) '("keep")))
+                                                              (if cur-preset (symbol-name cur-preset) "keep"))))
                                 (unless (equal s "keep") (intern s))))))
          (keys (or (plist-get o :keys)
-                   (and ask (completing-read "Keys: " drgnx-keys-presets nil t nil nil (or cur-keys "VS Code")))))
+                   (and ask (drgnx-onboard--choose "Keys" (mapcar #'car drgnx-keys-presets) (or cur-keys "VS Code")))))
          (theme (or (plist-get o :theme)
-                    (and ask (let ((s (completing-read "Color theme (empty: keep): " (mapcar #'symbol-name (custom-available-themes)))))
-                               (unless (string-empty-p s) (intern s))))))
+                    (and ask (let ((s (drgnx-onboard--choose "Color theme" (append (mapcar #'symbol-name (custom-available-themes)) '("keep"))
+                                                             "keep")))
+                               (unless (equal s "keep") (intern s))))))
          (layers (and keys (or (cdr (assoc keys drgnx-keys-presets)) (user-error "Unknown key profile %s" keys)))))
     (when (and preset (not (eq preset cur-preset))) (drgnx-onboard-apply-preset preset))
     (when (and layers (not (equal keys cur-keys)))
@@ -486,8 +503,23 @@ Claude Code's parts (`drgnx-onboard--agents-step').")
   "The OpenRouter model onboarding gives each role.")
 
 (defconst drgnx-onboard-ai-choices
-  '(("Ollama (local)" . ollama) ("LM Studio (local)" . lmstudio) ("OpenRouter (cloud key)" . openrouter) ("Skip" . skip))
-  "The answers to \"Set up AI with\".")
+  '(("ollama" . ollama) ("lmstudio" . lmstudio) ("openrouter" . openrouter) ("skip" . skip))
+  "The answers to \"Set up AI with\": Ollama and LM Studio run models here, OpenRouter in the cloud (a key).")
+
+(defconst drgnx-onboard-ai-local-room 10000
+  "MiB of room for models (`drgnx-ai-vram' total) from which \"Set up AI with\" defaults to Ollama, not OpenRouter.")
+
+(defun drgnx-onboard--ai-default ()
+  "The answer Return gives \"Set up AI with\": ollama on a Mac or Linux machine with room for the models
+\(`drgnx-onboard-ai-local-room'), else openrouter."
+  (let ((v (drgnx-ai-vram)))
+    (if (and (memq (drgnx-platform) '(macos linux)) v (>= (or (plist-get v :total) 0) drgnx-onboard-ai-local-room))
+        "ollama" "openrouter")))
+
+(defun drgnx-onboard--ai-ask ()
+  "Ask \"Set up AI with\": `ollama', `lmstudio', `openrouter' or `skip' (only when typed: never the default)."
+  (cdr (assoc (drgnx-onboard--choose "Set up AI with" (mapcar #'car drgnx-onboard-ai-choices) (drgnx-onboard--ai-default))
+              drgnx-onboard-ai-choices)))
 
 (defvar drgnx-onboard-lms-wait 120 "Seconds LM Studio's first start may take to put lms in place.")
 (defvar drgnx-onboard-server-wait 60 "Seconds a model server started here may take to answer.")
@@ -879,14 +911,13 @@ step ran before: keep it or change it.  Without interaction: what was found, and
   (let* ((again (alist-get 'ai (drgnx-onboard-state)))
          (found (drgnx-onboard--ai-found ctx))
          (working (nth 2 found))
-         (ask (lambda () (cdr (assoc (completing-read "Set up AI with: " drgnx-onboard-ai-choices nil t) drgnx-onboard-ai-choices))))
          (choice (and (plist-get ctx :interactive)
-                      (if (zerop working) (funcall ask)
+                      (if (zerop working) (drgnx-onboard--ai-ask)
                         (and (or again (< working 3))
-                             (equal (completing-read (format "AI answers for %d of 3 roles (complete, edit, chat): keep it or change it? " working)
-                                                     '("Keep" "Change") nil t nil nil (if (< working 3) "Change" "Keep"))
+                             (equal (drgnx-onboard--choose (format "AI answers for %d of 3 roles (complete, edit, chat): keep it or change it" working)
+                                                           '("Keep" "Change") (if (< working 3) "Change" "Keep"))
                                     "Change")
-                             (funcall ask))))))
+                             (drgnx-onboard--ai-ask))))))
     (cond ((and choice (not (and (eq choice 'skip) (> working 0)))) (drgnx-onboard--ai-setup choice ctx))
           ((zerop working)
            (if (plist-get ctx :interactive) (list (car found) (cadr found))
@@ -1214,10 +1245,15 @@ here, in the drgnx app (CTX interactive): asked whether to restart drgnx now (th
 (defvar drgnx-onboard-mode-map
   (let ((m (make-sparse-keymap))) (keymap-set m "RET" #'drgnx-onboard-run-step-at-point) m))
 
+(defconst drgnx-onboard-welcome-header "Return runs the step under the cursor — start at the top"
+  "The Welcome's header line (its column names are the buffer's first line).")
+
 (define-derived-mode drgnx-onboard-mode tabulated-list-mode "Welcome"
-  "The onboarding steps: RET runs the step on the line."
-  (setq tabulated-list-format [("Step" 22 nil) ("Status" 7 nil) ("" 0 nil)])
-  (tabulated-list-init-header))
+  "The onboarding steps: RET runs the step on the line, then the cursor moves to the next one."
+  (setq tabulated-list-format [("Step" 22 nil) ("Status" 7 nil) ("" 0 nil)]
+        tabulated-list-use-header-line nil)   ; the column names in the buffer: the header line says what to do
+  (tabulated-list-init-header)
+  (setq header-line-format drgnx-onboard-welcome-header))
 
 (defun drgnx-onboard--entries ()
   (let ((state (drgnx-onboard-state)))
@@ -1236,6 +1272,7 @@ here, in the drgnx app (CTX interactive): asked whether to restart drgnx now (th
     (drgnx-onboard-mode)
     (setq tabulated-list-entries #'drgnx-onboard--entries)
     (tabulated-list-print)
+    (unless (tabulated-list-get-id) (drgnx-onboard--goto-step (car (drgnx-onboard-steps))))   ; on the first step
     (pop-to-buffer-same-window (current-buffer))))
 
 (defun drgnx-onboard--welcome-due-p ()
@@ -1268,10 +1305,24 @@ never inside the hook (the window and the restored layout come first)."
     (drgnx-onboard--refresh-welcome)
     r))
 
+(defun drgnx-onboard--goto-step (id)
+  "Point (and the Welcome's window's) on step ID's row of the Welcome, when it has one."
+  (when-let* ((b (get-buffer "*drgnx Welcome*")))
+    (with-current-buffer b
+      (let ((pos (save-excursion
+                   (goto-char (point-min))
+                   (while (and (not (eq (tabulated-list-get-id) id)) (zerop (forward-line 1))))
+                   (and (eq (tabulated-list-get-id) id) (point)))))
+        (when pos
+          (goto-char pos)
+          (when-let* ((w (get-buffer-window b t))) (set-window-point w pos)))))))
+
 (defun drgnx-onboard-run-step-at-point ()
-  "Run the step on this line."
+  "Run the step on this line, then move to the next step."
   (interactive)
-  (when-let* ((id (tabulated-list-get-id))) (drgnx-onboard-run-step id)))
+  (when-let* ((id (tabulated-list-get-id)))
+    (drgnx-onboard-run-step id)
+    (when-let* ((next (cadr (memq id (drgnx-onboard-steps))))) (drgnx-onboard--goto-step next))))
 
 (declare-function drgnx-command-define "drgnx-registry")
 

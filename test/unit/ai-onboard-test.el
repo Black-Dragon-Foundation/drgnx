@@ -212,7 +212,7 @@ with BODY."
   (drgnx-ai-onboard-test--with-mac drgnx-ai-onboard-test--ollama-answers
     (cl-letf* ((shown nil)
                ((symbol-function 'completing-read)
-                (drgnx-ai-onboard-test--answer '(("Set up AI with" . "Ollama (local)"))))
+                (drgnx-ai-onboard-test--answer '(("Set up AI with" . "ollama"))))
                ((symbol-function 'y-or-n-p) (lambda (&rest _) t))
                ((symbol-function 'drgnx-onboard--refresh-welcome)   ; what the Welcome's row says, each time it changes
                 (lambda () (push (cdr drgnx-onboard--progress) shown))))
@@ -247,7 +247,7 @@ with BODY."
 (ert-deftest drgnx-onboard/lm-studio-is-set-up-the-same-way ()
   (drgnx-ai-onboard-test--with-mac drgnx-ai-onboard-test--openai-answers
     (cl-letf (((symbol-function 'completing-read)
-               (drgnx-ai-onboard-test--answer '(("Set up AI with" . "LM Studio (local)"))))
+               (drgnx-ai-onboard-test--answer '(("Set up AI with" . "lmstudio"))))
               ((symbol-function 'y-or-n-p) (lambda (&rest _) t)))
       (let ((r (drgnx-onboard--ai-step '(:interactive t))))
         ;; lms comes with the app's first start: drgnx opens LM Studio once
@@ -277,7 +277,7 @@ with BODY."
       (unwind-protect
           (let ((system-type 'darwin) (noninteractive nil))          ; the drgnx app: the Keychain may be used
             (cl-letf (((symbol-function 'completing-read)
-                       (drgnx-ai-onboard-test--answer '(("Set up AI with" . "OpenRouter (cloud key)"))))
+                       (drgnx-ai-onboard-test--answer '(("Set up AI with" . "openrouter"))))
                       ((symbol-function 'read-passwd) (lambda (&rest _) (cl-incf prompted) "sk-or-test-123"))
                       ((symbol-function 'auth-source-search)        ; the Keychain gives the key back, once stored
                        (lambda (&rest _) (and (file-exists-p (concat root "security.stdin"))
@@ -305,7 +305,7 @@ with BODY."
 (ert-deftest drgnx-onboard/a-failed-download-says-how-to-retry ()
   (drgnx-ai-onboard-test--with-mac drgnx-ai-onboard-test--ollama-answers
     (cl-letf (((symbol-function 'completing-read)
-               (drgnx-ai-onboard-test--answer '(("Keep" . "Change") ("Set up AI with" . "Ollama (local)"))))
+               (drgnx-ai-onboard-test--answer '(("Keep" . "Change") ("Set up AI with" . "ollama"))))
               ((symbol-function 'y-or-n-p) (lambda (&rest _) t)))
       (let ((r (let ((process-environment (cons "FAKE_PULL_FAIL=qwen2.5-coder:7b" process-environment)))
                  (car (drgnx-onboard-run :only '(ai))))))

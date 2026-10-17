@@ -834,7 +834,61 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
       (drgnx-onboard--look-step '(:interactive t :options (:keys "Emacs" :theme modus-vivendi))))
     (should (equal (plist-get (drgnx-modules-read-state) :disabled) '(extra/magit)))))
 
-(require 'drgnx-doctor)
+(defun drgnx-onboard-test--return (asked)
+  "A `completing-read' that pushes its prompt on the list in symbol ASKED and answers Return alone (the default)."
+  (lambda (prompt _c &optional _p _r _i _h def &rest _) (set asked (cons prompt (symbol-value asked))) (or (car (ensure-list def)) "")))
+
+(defvar drgnx-onboard-test--asked nil)
+
+(ert-deftest drgnx-onboard/every-question-shows-its-choices-and-default ()
+  ;; A first start has no completion UI: the prompt itself lists the few choices and the default Return takes.
+  (drgnx-onboard-test--with root
+    (setq drgnx-onboard-test--asked nil)
+    (cl-letf (((symbol-function 'completing-read) (drgnx-onboard-test--return 'drgnx-onboard-test--asked))
+              ((symbol-function 'drgnx-onboard--packages-to-install) #'ignore)
+              ((symbol-function 'custom-available-themes) (lambda () '(modus-vivendi tango))))
+      (drgnx-onboard--look-step '(:interactive t)))
+    (pcase-let ((`(,theme ,keys ,modules) drgnx-onboard-test--asked))
+      (should (equal modules (format-prompt "Modules (minimal, ide, full-ai)" "full-ai")))
+      (should (equal keys (format-prompt (concat "Keys (" (mapconcat #'car drgnx-keys-presets ", ") ")") "VS Code")))
+      (should (equal theme (format-prompt "Color theme (modus-vivendi, tango, keep)" "keep"))))
+    (should (eq (drgnx-onboard--current-preset) 'full-ai))
+    ;; an answer that is not a choice is an error, never taken as one
+    (cl-letf (((symbol-function 'completing-read) (lambda (&rest _) "nonsense")))
+      (should-error (drgnx-onboard--choose "Pick" '("a" "b") "a") :type 'user-error))))
+
+(ert-deftest drgnx-onboard/set-up-ai-with-defaults-to-the-machine ()
+  ;; Return alone: Ollama when models get 10 GB of room here, else OpenRouter; never Skip.
+  (require 'drgnx-ai-probe)
+  (dolist (c '((16000 macos "ollama") (10000 linux "ollama") (8000 macos "openrouter") (nil linux "openrouter")))
+    (pcase-let ((`(,total ,platform ,want) c))
+      (cl-letf (((symbol-function 'drgnx-ai-vram) (lambda () (and total (list :total total :used 0))))
+                ((symbol-function 'drgnx-platform) (lambda () platform)))
+        (should (equal (drgnx-onboard--ai-default) want)))))
+  (setq drgnx-onboard-test--asked nil)
+  (cl-letf (((symbol-function 'drgnx-ai-vram) (lambda () '(:total 16000 :used 0)))
+            ((symbol-function 'completing-read) (drgnx-onboard-test--return 'drgnx-onboard-test--asked)))
+    (should (eq (drgnx-onboard--ai-ask) 'ollama))
+    (should (equal (car drgnx-onboard-test--asked)
+                   (format-prompt "Set up AI with (ollama, lmstudio, openrouter, skip)" "ollama")))))
+
+(ert-deftest drgnx-onboard/the-welcome-says-where-to-start-and-moves-on ()
+  (drgnx-onboard-test--with root
+    (let ((drgnx-onboard--steps nil) (ran nil))
+      (drgnx-onboard-define-step 'a :title "A" :order 10 :doc "a" :run (lambda (_) (push 'a ran) '(ok "a done")))
+      (drgnx-onboard-define-step 'b :title "B" :order 20 :doc "b" :run (lambda (_) (push 'b ran) '(ok "b done")))
+      (save-window-excursion
+        (drgnx-onboard-welcome)
+        (with-current-buffer "*drgnx Welcome*"
+          (should (equal header-line-format "Return runs the step under the cursor — start at the top"))
+          (should (eq (tabulated-list-get-id) 'a))       ; it opens on the first step
+          (drgnx-onboard-run-step-at-point)
+          (should (equal ran '(a)))
+          (should (eq (tabulated-list-get-id) 'b))       ; on to the next step
+          (drgnx-onboard-run-step-at-point)
+          (should (equal ran '(b a)))
+          (should (eq (tabulated-list-get-id) 'b))))     ; the last one: point stays
+      (kill-buffer "*drgnx Welcome*"))))
 
 (ert-deftest drgnx-onboard/new-modules-need-a-restart-and-finish-offers-it ()
   ;; Packages installed into a running drgnx load at its next start: Look and Keys says so, and Finish (in the
