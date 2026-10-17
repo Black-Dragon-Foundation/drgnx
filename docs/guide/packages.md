@@ -84,7 +84,8 @@ after a reboot does not hold it, and of two commands taking over the same stale 
 
 - `drgnx safe` starts Emacs with drgnx's core only — no packages, no modules — to tell drgnx problems from module
   or package problems.
-- `drgnx bisect` finds the module: it turns half of the enabled modules off (in a copy of your configuration;
+- `drgnx bisect` finds the module: it turns half of the enabled modules off — external ones (`:external` in
+  `modules.eld`, e.g. gryphn) included, as `external/NAME` — (in a copy of your configuration;
   your files are untouched), starts drgnx and asks whether the problem showed, and halves again — about log2(N)
   rounds. `drgnx bisect -- CMD ARGS…` runs CMD instead of asking (a non-zero exit means "the problem showed";
   `DRGNX_CONFIG_DIR` points at the copy).

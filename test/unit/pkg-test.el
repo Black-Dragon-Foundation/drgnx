@@ -603,4 +603,26 @@
         (drgnx-pkg--release-sync-lock (format "%d 1.00" (emacs-pid)))
         (should (file-exists-p file))))))
 
+(ert-deftest drgnx-pkg/bisect-covers-external-modules ()
+  ;; M5-11: an external module (modules.eld :external) can be the culprit too.
+  (drgnx-pkg-test--with root
+    (make-directory (concat root "mods/x/") t)
+    (dotimes (i 3)
+      (write-region (format "(drgnx-module-define 'x/m%d :doc \"m\")\n" i) nil (format "%smods/x/drgnx-m%d.el" root i) nil 'silent))
+    (drgnx-pkg-test--write (concat root "config/modules.eld")
+                           '(:version 1 :disabled (external/off)
+                                      :external ((:name "gry" :path "/nowhere" :features (gry)) (:name "off" :path "/nowhere"))))
+    (let ((fails (lambda (culprit)
+                   (lambda (config-dir)
+                     (not (memq culprit (plist-get (drgnx-pkg--read-file (expand-file-name "modules.eld" config-dir)) :disabled)))))))
+      (should (eq (drgnx-pkg-bisect (funcall fails 'external/gry) :modules-dir (concat root "mods")) 'external/gry))
+      (should (eq (drgnx-pkg-bisect (funcall fails 'x/m1) :modules-dir (concat root "mods")) 'x/m1))
+      ;; an external module already off is no candidate: it stays off in every round
+      (should (eq (drgnx-pkg-bisect (lambda (config-dir)
+                                      (should (memq 'external/off (plist-get (drgnx-pkg--read-file (expand-file-name "modules.eld" config-dir))
+                                                                             :disabled)))
+                                      t)
+                                    :modules-dir (concat root "mods"))
+                  :not-a-module)))))
+
 ;;; pkg-test.el ends here

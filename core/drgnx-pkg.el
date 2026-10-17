@@ -615,8 +615,11 @@ with every module off.  The user's own files are never changed."
          (state (or (drgnx-pkg--read-file (expand-file-name "modules.eld" user)) (list :version 1)))
          (off (plist-get state :disabled))
          (candidates (seq-remove (lambda (m) (memq m off))
-                                 (mapcar #'car (drgnx-pkg--module-packages
-                                                (or modules-dir (expand-file-name "modules" drgnx-dir))))))
+                                 (append (mapcar #'car (drgnx-pkg--module-packages
+                                                        (or modules-dir (expand-file-name "modules" drgnx-dir))))
+                                         ;; external modules (modules.eld :external): turned off as external/NAME
+                                         (mapcar (lambda (e) (intern (format "external/%s" (plist-get e :name))))
+                                                 (plist-get state :external)))))
          (tmp (make-temp-file "drgnx-bisect" t)))
     (cl-flet ((try (on)
                 (delete-directory tmp t)
