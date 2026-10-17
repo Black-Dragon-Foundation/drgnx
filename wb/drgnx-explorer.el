@@ -42,7 +42,9 @@
 (defvar drgnx-explorer--roots nil "The Explorer's root directories (never changed by the follower).")
 (defvar drgnx-explorer--expanded (make-hash-table :test #'equal) "Expanded folders (paths without trailing /).")
 (defvar drgnx-explorer--cache (make-hash-table :test #'equal) "Folder → (MTIME . CHILDREN).")
-(defvar drgnx-explorer--pressed nil "Non-nil while a mouse button pressed in the Explorer is held.")
+(defvar drgnx-explorer--pressed nil
+  "Non-nil while a mouse button pressed in the Explorer is held: `num-input-keys' at the press (or t).
+Ask `drgnx-explorer--held-p', which knows when a release never came.")
 (defvar drgnx-explorer--selection nil "Paths selected together (multi-select), or nil: the row at point.")
 (defvar drgnx-explorer--focused-before nil "The focused row before the current press.")
 (defvar drgnx-explorer--renders 0 "How many full renders (tests read it).")
@@ -326,7 +328,7 @@ watched — the inotify limit — is tried again)."
 (defun drgnx-explorer--apply-file-events ()
   "Show the changed folders again — each once, in place; wait while a button is held."
   (setq drgnx-explorer--event-timer nil)
-  (if (or drgnx-explorer--pressed drgnx-explorer--find)
+  (if (or (drgnx-explorer--held-p) drgnx-explorer--find)
       (setq drgnx-explorer--event-timer
             (run-with-timer drgnx-explorer-event-delay nil #'drgnx-explorer--apply-file-events))
     (let ((dirs drgnx-explorer--dirty))
@@ -429,7 +431,7 @@ A remote file is never revealed: this runs from the change bus, where remote I/O
   (let ((w (drgnx-wb-section-window 'explorer))
         (file (and (buffer-live-p buffer) (buffer-local-value 'buffer-file-name buffer))))
     (when (and file (file-remote-p file)) (setq file nil))
-    (when (and (window-live-p w) file (not (eq (selected-window) w)) (not drgnx-explorer--pressed)
+    (when (and (window-live-p w) file (not (eq (selected-window) w)) (not (drgnx-explorer--held-p))
                (not drgnx-explorer--find)
                (not (equal (with-current-buffer (window-buffer w) (drgnx-explorer-node-at (window-point w)))
                            file)))
@@ -853,10 +855,18 @@ inside another one selected goes: the folder carries it."
 
 ;;;; Mouse (the click model)
 
+(defun drgnx-explorer--held-p ()
+  "Non-nil while the button pressed in the Explorer is held.  Its release may never reach the
+Explorer's handlers — it came with a modifier (M-<mouse-1>), in another window, or not at all (focus
+lost: see `drgnx-explorer--focus-changed') — so the press counts only until another key sequence
+is read.  File events and timers read none."
+  (and drgnx-explorer--pressed
+       (or (not (integerp drgnx-explorer--pressed)) (= drgnx-explorer--pressed num-input-keys))))
+
 (defun drgnx-explorer-mouse-press (event)
   "Press: select the row under EVENT (and the Explorer); nothing else happens until release."
   (interactive "e")
-  (setq drgnx-explorer--pressed t)
+  (setq drgnx-explorer--pressed num-input-keys)       ; the release is the next key sequence
   (let* ((posn (event-start event)) (w (posn-window posn)) (pos (posn-point posn)))
     (when (window-live-p w)
       (unless (eq w (selected-window)) (select-window w))
@@ -939,6 +949,12 @@ inside another one selected goes: the folder carries it."
   (add-hook 'kill-buffer-hook #'drgnx-explorer--unwatch-all nil t)
   (add-hook 'kill-buffer-hook #'drgnx-explorer--forget-find nil t))
 
+(defun drgnx-explorer--focus-changed ()
+  "Focus changed: read git status again (git may have run elsewhere).  Emacs lost focus: a press
+is over — its release will not come here (Wayland)."
+  (unless (seq-some #'frame-focus-state (frame-list)) (setq drgnx-explorer--pressed nil))
+  (drgnx-explorer--git-refresh))
+
 (defun drgnx-explorer-setup ()
   "Put the Explorer in the dock and let it follow the editor."
   (drgnx-wb-define-section 'explorer :slot 0 :title " EXPLORER" :buffer #'drgnx-explorer--buffer
@@ -947,7 +963,7 @@ inside another one selected goes: the folder carries it."
   (drgnx-signal-subscribe 'editor-changed #'drgnx-explorer--follow)
   ;; A save changes git status; so does git itself (another window, a terminal): check on focus.
   (drgnx-signal-subscribe 'modified-changed (lambda (_) (drgnx-explorer--git-refresh)))
-  (add-function :after after-focus-change-function #'drgnx-explorer--git-refresh '((name . drgnx-explorer)))
+  (add-function :after after-focus-change-function #'drgnx-explorer--focus-changed '((name . drgnx-explorer)))
   (add-hook 'drgnx-git-changed-functions #'drgnx-explorer--git-changed))
 
 (provide 'drgnx-explorer)

@@ -278,4 +278,39 @@
     (drgnx-explorer-set-roots (list root))
     (should (equal (window-parameter (drgnx-wb-section-window 'explorer) 'header-line-format) " EXPLORER"))))
 
+;;;; M3a-1, M3b-16: a held button
+
+(ert-deftest drgnx-explorer-edge/a-release-that-went-elsewhere-ends-the-hold ()
+  ;; M3a-1: the release came with a modifier (M-<mouse-1>) or in another window: another command
+  ;; read it, so the Explorer's press is over — live updates resume.
+  (drgnx-explorer-edge--with root
+    (drgnx-wb-show-sidebar)
+    (let ((num-input-keys 10))
+      (drgnx-explorer-edge--press (drgnx-wb-section-window 'explorer))
+      (write-region "" nil (expand-file-name "held.txt" root) nil 'silent)
+      (drgnx-explorer--file-event (list 'desc 'created (expand-file-name "held.txt" root)) (directory-file-name root))
+      (drgnx-explorer--apply-file-events)
+      (should-not (member '(1 "held.txt") (drgnx-explorer-edge--rows)))   ; still held: rows stay
+      (setq num-input-keys 11)                                           ; another key sequence was read
+      (drgnx-explorer--apply-file-events)
+      (should (member '(1 "held.txt") (drgnx-explorer-edge--rows))))))
+
+(ert-deftest drgnx-explorer-edge/losing-focus-ends-both-panels-presses ()
+  ;; M3b-16: focus lost mid-press (Wayland): the release never comes.
+  (drgnx-explorer-edge--with root
+    (let ((drgnx-signal--subscribers nil) (drgnx-buffers--pressed nil) (drgnx-buffers--pending nil))
+      (drgnx-buffers-setup)
+      (drgnx-wb-show-sidebar)
+      (drgnx-explorer-edge--press (drgnx-wb-section-window 'explorer))
+      (setq drgnx-buffers--pressed t)
+      (cl-letf (((symbol-function 'frame-focus-state) (lambda (&rest _) t)))
+        (funcall after-focus-change-function))                ; focus moved within Emacs: still held
+      (should drgnx-explorer--pressed)
+      (should drgnx-buffers--pressed)
+      (cl-letf (((symbol-function 'frame-focus-state) (lambda (&rest _) nil)))
+        (funcall after-focus-change-function))                ; Emacs lost focus
+      (should-not drgnx-explorer--pressed)
+      (should-not drgnx-buffers--pressed))
+    (when (get-buffer drgnx-buffers-buffer-name) (kill-buffer drgnx-buffers-buffer-name))))
+
 ;;; wb-explorer-edge-test.el ends here

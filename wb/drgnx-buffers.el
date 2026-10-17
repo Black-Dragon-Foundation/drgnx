@@ -146,6 +146,10 @@ While a button is held in the panel, wait for the release: rows never move under
   (setq drgnx-buffers--pressed nil)
   (when drgnx-buffers--pending (setq drgnx-buffers--pending nil) (drgnx-buffers--render)))
 
+(defun drgnx-buffers--focus-changed ()
+  "Emacs lost focus: a press is over — its release will not come here (Wayland)."
+  (when (and drgnx-buffers--pressed (not (seq-some #'frame-focus-state (frame-list)))) (drgnx-buffers--release)))
+
 (defun drgnx-buffers--render ()
   (drgnx-buffers--update-order)
   (let ((sig (cons drgnx-buffers--filter
@@ -315,6 +319,7 @@ While a button is held in the panel, wait for the release: rows never move under
   (drgnx-signal-subscribe 'editor-changed #'drgnx-buffers--refresh)
   (drgnx-signal-subscribe 'frame-changed #'drgnx-buffers--refresh)           ; another window: its buffers
   (drgnx-signal-subscribe 'tabs-changed #'drgnx-buffers--refresh)
+  (add-function :after after-focus-change-function #'drgnx-buffers--focus-changed '((name . drgnx-buffers)))
   (add-hook 'drgnx-git-changed-functions
             (lambda (_root) (when-let* ((b (get-buffer drgnx-buffers-buffer-name)))
                               (with-current-buffer b (jit-lock-refontify))))))

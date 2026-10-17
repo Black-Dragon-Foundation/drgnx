@@ -74,7 +74,9 @@ the case works on case-insensitive disks too. The right-click menu has the same 
 title shows it; an empty text (or `C-g`) brings back the tree, its open folders, the view and the selection.
 
 **Live**: files created, deleted or renamed outside Emacs appear within ~150 ms (only the changed folder is read
-again; the view and selection stay; nothing changes while a mouse button is held).
+again; the view and selection stay; nothing changes while a mouse button is held — a press whose release never
+reaches the Explorer, because Emacs lost focus or the release came with a modifier or in another window, ends
+there).
 
 **Git**: `M` modified, `A` added, `U` untracked, `R` renamed, `D` deleted, `C` conflict, in the colours of your
 theme's version-control faces; a folder with changes inside shows `●`; ignored files are dimmed. One background
