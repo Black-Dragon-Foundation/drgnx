@@ -30,3 +30,16 @@ if git diff --cached --name-only | grep -qE '(^|/)(\.env(\..*)?|secrets\.env|.*\
   echo "pre-commit: refusing to commit an env/secrets/key file." >&2
   exit 1
 fi
+
+# Emacs Lisp is formatted (bin/drgnx fmt): the staged content of every added or changed .el file.
+mapfile -t el < <(git diff --cached --name-only --diff-filter=ACMR -- '*.el')
+if [ "${#el[@]}" -gt 0 ]; then
+  tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
+  top="$(git rev-parse --show-toplevel)"
+  for f in "${el[@]}"; do mkdir -p "$tmp/$(dirname "$f")"; git show ":$f" > "$tmp/$f"; done
+  if ! out="$(cd "$tmp" && "$top/bin/drgnx" fmt --check "${el[@]}" 2>&1)"; then
+    echo "pre-commit: Emacs Lisp not formatted — run bin/drgnx fmt (or bin/drgnx fmt FILE…):" >&2
+    echo "$out" | sed "s/^/  /" >&2
+    exit 1
+  fi
+fi
