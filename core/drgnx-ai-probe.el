@@ -18,6 +18,8 @@
 
 (defvar drgnx-ai-detected nil "Alist provider → (:up BOOL :models (NAME…) :note TEXT) from the last probe.")
 
+(defvar drgnx-ai-probe-done-hook nil "Run when a probe has its answers (what uses providers looks again).")
+
 (defun drgnx-ai-detected-file () (expand-file-name "ai-detected.eld" (drgnx-state-dir)))
 
 (defun drgnx-ai--local-p (p)
@@ -50,6 +52,7 @@ Returns at once."
                    (ignore-errors
                      (make-directory (file-name-directory (drgnx-ai-detected-file)) t)
                      (with-temp-file (drgnx-ai-detected-file) (prin1 found (current-buffer))))
+                   (run-hooks 'drgnx-ai-probe-done-hook)
                    (when callback (funcall callback)))))
     (if (null ps) (funcall finish)
       (pcase-dolist (`(,id . ,p) ps)
@@ -59,6 +62,15 @@ Returns at once."
                           (when (zerop (setq left (1- left))) (funcall finish)))
                         :timeout 1)))
     nil))
+
+(defun drgnx-ai-usable-p (id &optional cap)
+  "Provider ID can be asked (for CAP, e.g. `fim'): with its key when it has one; a local one when the probe
+found it running; a remote one without a key as configured."
+  (let ((p (drgnx-ai-provider id)))
+    (and p (or (null cap) (memq cap (plist-get p :caps)))
+         (cond ((plist-get p :key-env) (and (drgnx-ai-key id) t))
+               ((drgnx-ai--local-p p) (plist-get (alist-get id drgnx-ai-detected) :up))
+               (t t)))))
 
 (defun drgnx-ai-detected-cached ()
   "The last probe's results as saved (the doctor runs in another Emacs)."

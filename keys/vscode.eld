@@ -41,6 +41,8 @@
         (ai-edit "C-k C-e")
         (ai-edit-done "C-c C-c" :map drgnx-ai-edit-review-mode-map)
         (ai-edit-reject "C-c C-k" :map drgnx-ai-edit-review-mode-map)
+        (ai-ask :none "in the palette")
+        (ai-choose :none "in the palette")
         (agents-reply "RET")
         (agents-review-done "C-c C-c")
         (agents-review-reject "C-c C-k")

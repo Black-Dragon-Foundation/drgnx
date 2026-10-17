@@ -113,5 +113,61 @@ CLI gets nothing: it uses its own login, which drgnx never reads."
      (list (concat "ANTHROPIC_BASE_URL=" (plist-get (drgnx-ai-provider 'ollama) :url)) "ANTHROPIC_AUTH_TOKEN=ollama" "ANTHROPIC_API_KEY="))
     (_ nil)))
 
+;;;; Choosing (written to ai.eld: providers and models, never a key)
+
+(defun drgnx-ai-set-role (role chain)
+  "Make CHAIN ((PROVIDER . MODEL)…) ROLE's in the user's ai.eld; everything else in it stays."
+  (let* ((file (drgnx-ai-file))
+         (conf (or (drgnx-ai--read file) (list :version 1)))
+         (roles (plist-get conf :roles)))
+    (setf (alist-get role roles) chain)
+    (setq conf (plist-put conf :roles roles))
+    (make-directory (file-name-directory file) t)
+    (with-temp-file file
+      (insert ";; drgnx AI providers and roles (docs/guide/ai.md) — never a key here\n")
+      (let ((print-length nil) (print-level nil)) (pp conf (current-buffer))))))
+
+;;;; gptel (the chat UI) from the registry
+
+(declare-function gptel-make-openai "gptel-openai")
+(declare-function gptel-make-ollama "gptel-ollama")
+(defvar gptel-backend)
+(defvar gptel-model)
+
+(defun drgnx-ai-gptel-spec (id model)
+  "How to make provider ID's gptel backend for MODEL: (FUNCTION NAME . ARGS).  A key is a function asked
+when gptel sends, never a stored string."
+  (let* ((p (drgnx-ai-provider id))
+         (u (url-generic-parse-url (plist-get p :url)))
+         (host (if (url-portspec u) (format "%s:%d" (url-host u) (url-portspec u)) (url-host u)))
+         (path (string-remove-suffix "/" (or (url-filename u) "")))
+         (name (or (plist-get p :name) (symbol-name id))))
+    (pcase (plist-get p :kind)
+      ('ollama (list 'gptel-make-ollama name :host host :protocol (url-type u) :models (list (intern model)) :stream t))
+      (kind (append (list 'gptel-make-openai name :host host :protocol (url-type u)
+                          :endpoint (concat (if (eq kind 'llamacpp) (concat path "/v1") path) "/chat/completions")
+                          :models (list (intern model)) :stream t)
+                    (and (plist-get p :key-env) (list :key (lambda () (drgnx-ai-key id t)))))))))
+
+(defvar drgnx-ai--gptel-ours nil "The gptel backend drgnx made last.")
+(defvar gptel--openai)
+
+(defun drgnx-ai-gptel-maybe-configure (usable-p)
+  "Point gptel at the `chat' role's first provider USABLE-P accepts — unless the user chose a backend of their
+own (only gptel's default, none, or the one drgnx made is replaced).  Returns the step, or nil."
+  (when (or (not (boundp 'gptel-backend)) (null gptel-backend) (eq gptel-backend drgnx-ai--gptel-ours)
+            (and (boundp 'gptel--openai) (eq gptel-backend gptel--openai)))
+    (when-let* ((step (drgnx-ai-gptel-configure usable-p)))
+      (setq drgnx-ai--gptel-ours gptel-backend)
+      step)))
+
+(defun drgnx-ai-gptel-configure (usable-p)
+  "Point gptel at the first provider of the `chat' role USABLE-P accepts.  Returns it, or nil."
+  (when-let* ((step (seq-find (lambda (s) (funcall usable-p (car s))) (drgnx-ai-role 'chat))))
+    (let ((spec (drgnx-ai-gptel-spec (car step) (cdr step))))
+      (setq gptel-backend (apply (car spec) (cdr spec))
+            gptel-model (intern (cdr step)))
+      step)))
+
 (provide 'drgnx-ai)
 ;;; drgnx-ai.el ends here

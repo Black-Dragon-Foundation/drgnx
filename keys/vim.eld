@@ -43,6 +43,8 @@
         (ai-edit "SPC a e")
         (ai-edit-done "C-c C-c" :map drgnx-ai-edit-review-mode-map)
         (ai-edit-reject "C-c C-k" :map drgnx-ai-edit-review-mode-map)
+        (ai-ask "SPC a q")
+        (ai-choose :none "in the palette")
         (agents-reply "RET")
         (agents-review-done "C-c C-c")
         (agents-review-reject "C-c C-k")

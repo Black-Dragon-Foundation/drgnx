@@ -87,11 +87,13 @@ status (0 when no answer came) and the answer.  Returns the process."
 
 ;;;; Requests along a role
 
-(cl-defun drgnx-ai-request (role kind payload callback &key (timeout 30))
-  "Ask ROLE's providers, in order, for a KIND answer (`chat': PAYLOAD (:messages [(:role :content)…]);
-`fim': (:prefix :suffix :max-tokens)).  CALLBACK gets (TEXT INFO): INFO (:provider :model :fallbacks
-((PROVIDER . WHY)…)), and :error when no provider answered (TEXT nil).  Returns a handle for `drgnx-ai-cancel'."
-  (let ((h (drgnx-ai--make-request :callback callback :chain (drgnx-ai-role role) :kind kind :payload payload :timeout timeout)))
+(cl-defun drgnx-ai-request (role kind payload callback &key (timeout 30) chain)
+  "Ask ROLE's providers (or CHAIN's: ((PROVIDER . MODEL)…)), in order, for a KIND answer (`chat': PAYLOAD
+(:messages [(:role :content)…]); `fim': (:prefix :suffix :max-tokens)).  CALLBACK gets (TEXT INFO): INFO
+(:provider :model :fallbacks ((PROVIDER . WHY)…)), and :error when no provider answered (TEXT nil).  Returns a
+handle for `drgnx-ai-cancel'."
+  (let ((h (drgnx-ai--make-request :callback callback :chain (or chain (drgnx-ai-role role)) :kind kind :payload payload
+                                   :timeout timeout)))
     (drgnx-ai--next h)
     h))
 

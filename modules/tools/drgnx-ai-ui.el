@@ -68,12 +68,7 @@
 
 (defun drgnx-ai-ghost--available-p ()
   "Some provider of the `complete' role can be asked: found running here, or remote with its key."
-  (seq-some (lambda (step)
-              (let ((p (drgnx-ai-provider (car step))))
-                (and p (memq 'fim (plist-get p :caps))
-                     (if (plist-get p :key-env) (drgnx-ai-key (car step))
-                       (plist-get (alist-get (car step) drgnx-ai-detected) :up)))))
-            (drgnx-ai-role 'complete)))
+  (seq-some (lambda (step) (drgnx-ai-usable-p (car step) 'fim)) (drgnx-ai-role 'complete)))
 
 (defun drgnx-ai-ghost--trigger ()
   "Ask for a suggestion at point (the pause has come).  Says once when no provider completes."
@@ -290,6 +285,126 @@ region itself changed since the answer came."
   (unless drgnx-ai--edit (user-error "Not an AI edit"))
   (kill-buffer (current-buffer)))
 
+;;;; Ask the Codebase
+
+(defvar drgnx-ai-retrievers (list #'drgnx-ai--grep-retriever)
+  "Functions (QUESTION ROOT DONE) that find what a question is about under ROOT and call DONE with snippets
+\((:file :line :text)…).  The text search is here; the semantic index joins in M10.")
+
+(defconst drgnx-ai--stopwords
+  '("where" "what" "which" "does" "this" "that" "with" "from" "have" "when" "there" "about" "into" "were" "they"
+    "their" "would" "should" "could" "code" "codebase" "file" "files" "work" "works" "used" "uses" "using"))
+
+(defun drgnx-ai--keywords (question)
+  "Up to six words of QUESTION worth searching for (four letters or more; a plural's s dropped)."
+  (seq-take (delete-dups
+             (mapcar (lambda (w) (if (and (> (length w) 4) (string-suffix-p "s" w)) (substring w 0 -1) w))
+                     (seq-remove (lambda (w) (member w drgnx-ai--stopwords))
+                                 (seq-filter (lambda (w) (>= (length w) 4))
+                                             (split-string (downcase question) "[^[:alnum:]_-]+" t)))))
+            6))
+
+(defun drgnx-ai--grep-retriever (question root done)
+  "Files under ROOT holding the most of QUESTION's keywords (ripgrep, else grep), a snippet of each, to DONE."
+  (let* ((kws (drgnx-ai--keywords question))
+         (out (generate-new-buffer " *drgnx-ai-grep*"))
+         (cmd (if (executable-find "rg")
+                  (append (list "rg" "--no-heading" "--line-number" "--ignore-case" "--max-count" "5" "--max-columns" "300")
+                          (seq-mapcat (lambda (k) (list "-e" k)) kws) (list "."))
+                (append (list "grep" "-rIn" "-i" "-m" "5") (seq-mapcat (lambda (k) (list "-e" k)) kws) (list ".")))))
+    (if (null kws) (progn (kill-buffer out) (funcall done nil))
+      (let ((default-directory (file-name-as-directory root)))
+        (make-process
+         :name "drgnx-ai-grep" :buffer out :command cmd :noquery t :connection-type 'pipe
+         :sentinel
+         (lambda (p _)
+           (unless (process-live-p p)
+             (let ((hits (make-hash-table :test #'equal)))
+               (with-current-buffer out
+                 (goto-char (point-min))
+                 (while (re-search-forward "^\\(?:\\./\\)?\\([^:\n]+\\):\\([0-9]+\\):\\(.*\\)$" nil t)
+                   (let* ((file (match-string 1)) (line (string-to-number (match-string 2))) (text (downcase (match-string 3)))
+                          (e (or (gethash file hits) (puthash file (list :line line :kws nil) hits))))
+                     (dolist (k kws) (when (string-search k text) (cl-pushnew k (plist-get e :kws) :test #'equal)))
+                     (puthash file (plist-put e :kws (plist-get e :kws)) hits))))
+               (kill-buffer out)
+               (let ((ranked (seq-take (sort (let (l) (maphash (lambda (f e) (push (cons f e) l)) hits) l)
+                                             (lambda (a b) (> (length (plist-get (cdr a) :kws)) (length (plist-get (cdr b) :kws)))))
+                                       5)))
+                 (funcall done
+                          (mapcar (lambda (fe)
+                                    (let ((line (plist-get (cdr fe) :line)))
+                                      (list :file (car fe) :line line
+                                            :text (with-temp-buffer
+                                                    (insert-file-contents (expand-file-name (car fe) root))
+                                                    (goto-char (point-min)) (forward-line (max 0 (- line 4)))
+                                                    (buffer-substring-no-properties (point) (progn (forward-line 10) (point)))))))
+                                  ranked)))))))))))
+
+(defun drgnx-ai--answer-buffer (question answer snippets root)
+  (with-current-buffer (get-buffer-create "*AI answer*")
+    (let ((inhibit-read-only t))
+      (erase-buffer)
+      (special-mode)
+      (insert (propertize (concat "Q: " question) 'face 'bold) "\n\n" (or answer "") "\n\nSources:\n")
+      (dolist (s snippets)
+        (insert "  ")
+        (insert-text-button (format "%s:%d" (plist-get s :file) (plist-get s :line))
+                            'action (let ((f (expand-file-name (plist-get s :file) root)) (l (plist-get s :line)))
+                                      (lambda (_) (pop-to-buffer (find-file-noselect f)) (goto-char (point-min)) (forward-line (1- l)))))
+        (insert "\n"))
+      (goto-char (point-min)))
+    (pop-to-buffer (current-buffer))
+    (current-buffer)))
+
+(defun drgnx-ai-ask (question &optional root)
+  "Ask QUESTION about the project at ROOT (default: this project): what it names is looked up in the code, the
+best snippets go to the `chat' role with it, the answer cites the files."
+  (interactive (list (read-string "Ask the codebase: ")
+                     (or (when-let* ((p (and (fboundp 'project-current) (project-current)))) (project-root p)) default-directory)))
+  (let* ((root (expand-file-name (or root default-directory)))
+         (left (length drgnx-ai-retrievers)) (snippets nil))
+    (message "Ask the Codebase: looking…")
+    (dolist (r drgnx-ai-retrievers)
+      (funcall r question root
+               (lambda (found)
+                 (setq snippets (append snippets found))
+                 (when (zerop (setq left (1- left)))
+                   (drgnx-ai-request
+                    'chat 'chat
+                    (list :messages
+                          (vector (list :role "system" :content "Answer the question about this codebase from the excerpts given.  Cite the files you use as path:line.  Say so when the excerpts do not answer it.")
+                                  (list :role "user"
+                                        :content (concat "Question: " question "\n\nExcerpts:\n"
+                                                         (mapconcat (lambda (s) (format "--- %s:%d\n%s" (plist-get s :file) (plist-get s :line) (plist-get s :text)))
+                                                                    snippets "\n")))))
+                    (lambda (answer info)
+                      (drgnx-ai--answer-buffer question (or answer (format "No answer: %s" (plist-get info :error))) snippets root)))))))))
+
+;;;; Choose Provider/Model
+
+(defun drgnx-ai-choose ()
+  "Choose the provider and model of a role (from what runs here and what has a key), test it with one call,
+and keep it in ai.eld (never a key)."
+  (interactive)
+  (let* ((role (intern (completing-read "AI role: " '("complete" "edit" "chat" "embed") nil t)))
+         (cap (pcase role ('complete 'fim) ('embed 'embed) (_ 'chat)))
+         (ids (mapcar #'car (seq-filter (lambda (e) (drgnx-ai-usable-p (car e) cap)) (drgnx-ai-providers))))
+         (id (intern (completing-read (format "Provider for %s: " role) (mapcar #'symbol-name ids) nil t)))
+         (model (completing-read "Model: " (plist-get (alist-get id drgnx-ai-detected) :models)))
+         (keep (lambda ()
+                 (drgnx-ai-set-role role (cons (cons id model) (seq-remove (lambda (s) (eq (car s) id)) (drgnx-ai-role role))))
+                 (message "AI: %s/%s answered; %s uses it now (ai.eld)" id model role))))
+    (if (eq cap 'embed) (funcall keep)
+      (message "AI: asking %s/%s…" id model)
+      (drgnx-ai-request role (if (eq cap 'fim) 'fim 'chat)
+                        (if (eq cap 'fim) (list :prefix "(defun hello ()\n  " :suffix ")\n" :max-tokens 8)
+                          (list :messages (vector (list :role "user" :content "Say OK."))))
+                        (lambda (text info)
+                          (if text (funcall keep)
+                            (message "AI: %s/%s did not answer (%s); %s is unchanged" id model (plist-get info :error) role)))
+                        :chain (list (cons id model)) :timeout 20))))
+
 ;;;; The module
 
 (drgnx-module-define 'tools/ai
@@ -313,7 +428,9 @@ region itself changed since the answer came."
                                         (ai-edit-done "Done Reviewing AI Edit" drgnx-ai-edit-done "Put the hunks you applied in the buffer"
                                                       drgnx-ai-edit-review-mode-map)
                                         (ai-edit-reject "Reject AI Edit" drgnx-ai-edit-reject "Drop the edit; the buffer stays"
-                                                        drgnx-ai-edit-review-mode-map)))
+                                                        drgnx-ai-edit-review-mode-map)
+                                        (ai-ask "Ask the Codebase…" drgnx-ai-ask "A question about this project, answered from its code" nil)
+                                        (ai-choose "Choose AI Provider/Model…" drgnx-ai-choose "A role's provider and model, tested first" nil)))
                          (apply #'drgnx-command-define id :category "AI" :title title :command fn :doc doc (and map (list :map map))))))
 
 (provide 'drgnx-ai-ui)

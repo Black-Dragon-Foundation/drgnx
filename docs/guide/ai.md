@@ -80,6 +80,30 @@ changes until you decide:
 Edits you make elsewhere in the buffer meanwhile stay. If the region itself changed since the answer came, Done
 refuses rather than overwrite it.
 
+## Ask the Codebase
+
+**Ask the Codebase…** (Vim `SPC a q`; the palette) answers a question about the project from its own code:
+1. Up to six of the question's words (four letters or more) are searched for with ripgrep (grep without it).
+2. The five files that hold the most of them each give a snippet around their first match.
+3. The snippets and the question go to the `chat` role.
+
+The answer opens in `*AI answer*` with the files it drew on as links. Other ways to find code join through
+`drgnx-ai-retrievers` (each a function of the question, the project root and a callback); the semantic index comes
+in M10.
+
+## Choosing a provider and model
+
+**Choose AI Provider/Model…** asks for a role, then a provider. Only providers that can be asked are offered: local
+ones the probe found running, remote ones with their key. Then it asks for a model, offering the ones the provider
+reported. It makes one test call. Only if that answers is the choice kept: at the head of the role's chain in
+`ai.eld`, with the previous providers behind it as fallbacks. A key is never written there.
+
+## Chat (gptel)
+
+With module `extra/llm` (gptel installed), gptel's backend comes from the `chat` role: its first provider that can
+be asked. drgnx sets it up again whenever a probe finishes. A backend you set yourself is never replaced, and gptel
+asks for the key only when it sends.
+
 ## Detection, fallback and the doctor
 
 drgnx asks the local providers whether they run — every address at once, one second each, in the background,
