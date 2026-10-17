@@ -250,4 +250,29 @@ new file mode 100644
         (drgnx-diff-test--in text layout (should (string-search "ctx 9999" (buffer-string))))
         (should (< (- (float-time) t0) 0.5))))))
 
+;; review fixes (M11b final review)
+(ert-deftest drgnx-diff/view-commands-never-touch-another-buffer ()
+  ;; C1: palette-only commands run from a file buffer: an error, the text kept
+  (with-temp-buffer
+    (emacs-lisp-mode) (insert "(keep me)")
+    (dolist (cmd '(drgnx-diff-toggle-layout drgnx-diff-collapse-all drgnx-diff-expand-all drgnx-diff-toggle-file
+                                            drgnx-diff-next-file drgnx-diff-prev-file drgnx-diff-visit))
+      (should-error (funcall cmd) :type 'user-error)
+      (should (equal (buffer-string) "(keep me)")))))
+
+(ert-deftest drgnx-diff/prefix-settings-never-change-the-paths ()
+  ;; I2: diff.mnemonicPrefix / diff.noprefix in the repository's config
+  (drgnx-git-test-with-repo
+    (drgnx-git-test-write repo "a.txt" "one\n")
+    (drgnx-git-test repo "add" "-A") (drgnx-git-test repo "commit" "-q" "-m" "a")
+    (drgnx-git-test-write repo "a.txt" "two\n")
+    (dolist (setting '(("diff.mnemonicPrefix" "true") ("diff.noprefix" "true")))
+      (apply #'drgnx-git-test repo "config" setting)
+      (let ((buf (drgnx-diff-show 'working repo)))
+        (unwind-protect
+            (progn (drgnx-diff-test--wait buf)
+                   (should (equal (plist-get (car (buffer-local-value 'drgnx-diff--files buf)) :new) "a.txt")))
+          (kill-buffer buf)))
+      (drgnx-git-test repo "config" "--unset" (car setting)))))
+
 ;;; mod-diff-test.el ends here

@@ -76,4 +76,23 @@
   (drgnx-git-test-with-repo
     (should (memq (drgnx-prs--pullreqs repo) '(:untracked nil)))))
 
+;; review fixes (M11b final review)
+(ert-deftest drgnx-prs/a-fork-s-main-is-no-stack ()
+  ;; I3: #10 comes from a fork's main; PRs into main stay at the top
+  (let ((s (drgnx-prs-stacks (list (append (drgnx-prs-test--pr 10 "main" "main") '(:cross t))
+                                   (drgnx-prs-test--pr 9 "main" "x") (drgnx-prs-test--pr 11 "main" "y") (drgnx-prs-test--pr 12 "main" "z")))))
+    (should (equal (mapcar #'cdr s) '(0 0 0 0)))))
+
+(ert-deftest drgnx-prs/show-closed-only-in-its-tab ()
+  ;; C1: run from another buffer it acts on the tab, never on that buffer
+  (drgnx-prs-test--with (list (drgnx-prs-test--pr 3 "main" "a") (drgnx-prs-test--pr 2 "main" "f" 'merged))
+    (drgnx-prs-view)
+    (with-temp-buffer
+      (insert "(keep me)")
+      (drgnx-prs-toggle-closed)
+      (should (equal (buffer-string) "(keep me)")))
+    (should (= 2 (length (drgnx-prs-test--rows)))))
+  (when (get-buffer "*drgnx pull requests*") (kill-buffer "*drgnx pull requests*"))
+  (with-temp-buffer (insert "x") (should-error (drgnx-prs-toggle-closed) :type 'user-error) (should (equal (buffer-string) "x"))))
+
 ;;; mod-prs-test.el ends here

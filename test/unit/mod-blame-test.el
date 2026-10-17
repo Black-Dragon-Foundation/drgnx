@@ -153,4 +153,36 @@ filename a.txt
         (goto-char (point-min)) (insert "new\n") (goto-char (point-min))
         (should-error (drgnx-blame-show-commit) :type 'user-error)))))
 
+;; review fixes (M11b final review)
+(ert-deftest drgnx-blame/never-switches-itself-off ()
+  ;; C2: the empty line after the last newline, a request replaced, the mode turned off mid-request: blame goes on
+  (drgnx-blame-test--with-history
+    (goto-char (point-max))
+    (drgnx-blame--update)
+    (drgnx-blame-test--wait-for (lambda () (= 0 (drgnx-blame-test--live))))
+    (should-not drgnx-blame--off)
+    (goto-char (point-min))
+    (drgnx-blame--update) (forward-line 1) (drgnx-blame--update)   ; the first is replaced
+    (should (drgnx-blame-test--wait-for (lambda () (string-search "Bob" (or (drgnx-blame-test--shown) "")))))
+    (should-not drgnx-blame--off)
+    (goto-char (point-min)) (drgnx-blame--forget)
+    (drgnx-blame--update) (drgnx-blame-mode -1) (drgnx-blame-mode 1)
+    (drgnx-blame--update)
+    (should (drgnx-blame-test--wait-for (lambda () (string-search "Ada" (or (drgnx-blame-test--shown) "")))))))
+
+(ert-deftest drgnx-blame/crlf-files-line-up ()
+  ;; I1: a committed CRLF file, unmodified and modified
+  (drgnx-git-test-with-repo
+    (let ((coding-system-for-write 'binary)) (drgnx-git-test-write repo "w.txt" "one\r\ntwo\r\n"))
+    (drgnx-git-test repo "add" "-A") (drgnx-git-test repo "commit" "-q" "-m" "Windows lines")
+    (with-current-buffer (find-file-noselect (expand-file-name "w.txt" repo))
+      (should (eq (coding-system-eol-type buffer-file-coding-system) 1))
+      (drgnx-blame-mode 1)
+      (goto-char (point-min)) (forward-line 1)
+      (drgnx-blame--update)
+      (should (drgnx-blame-test--wait-for (lambda () (string-search "Windows lines" (or (drgnx-blame-test--shown) "")))))
+      (goto-char (point-min)) (insert "new\n") (forward-line 1)
+      (drgnx-blame--update)
+      (should (drgnx-blame-test--wait-for (lambda () (string-search "Windows lines" (or (drgnx-blame-test--shown) ""))))))))
+
 ;;; mod-blame-test.el ends here

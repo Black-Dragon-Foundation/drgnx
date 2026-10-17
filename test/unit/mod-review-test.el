@@ -23,7 +23,8 @@
             (drgnx-review--current nil)
             (s (drgnx-agents--make :id "rev-1" :name "reviewer" :status 'idle :conn 'fake :cwd repo)))
        (cl-letf (((symbol-function 'drgnx-agents-start) (lambda (_profile _cwd &rest _) s))
-                 ((symbol-function 'drgnx-agents-deliver) (lambda (_s text) (push text delivered) t)))
+                 ((symbol-function 'drgnx-agents-deliver) (lambda (_s text) (push text delivered) t))
+                 ((symbol-function 'drgnx-agents-kill) #'ignore))
          (unwind-protect (progn ,@body)
            (when (get-buffer "*drgnx review*") (kill-buffer "*drgnx review*")))))))
 
@@ -106,5 +107,33 @@
       (drgnx-review-visit)
       (should (equal (buffer-file-name) (expand-file-name "src/a.el" repo)))
       (should (= (line-number-at-pos) 12)))))
+
+;; review fixes (M11b final review)
+(ert-deftest drgnx-review/findings-in-model-formatting ()
+  ;; I5: list markers, bold, backticks, capitals, line ranges
+  (let ((r (drgnx-review-parse "- FINDING: a.el:3: important: one\n1. FINDING: b.el:4: minor: two\n**FINDING:** c.el:5: Critical: three\n`FINDING: d.el:6-9: minor: four`\n**VERDICT: fail**")))
+    (should (equal (mapcar (lambda (f) (list (plist-get f :path) (plist-get f :line) (plist-get f :severity))) (plist-get r :findings))
+                   '(("c.el" 5 "critical") ("a.el" 3 "important") ("b.el" 4 "minor") ("d.el" 6 "minor"))))
+    (should (equal (plist-get (nth 3 (plist-get r :findings)) :text) "four"))
+    (should (eq (plist-get r :verdict) 'fail))))
+
+(ert-deftest drgnx-review/a-reviewer-that-stops-says-so ()
+  ;; I4: the agent exited (or was stopped) before answering: the tab says so instead of Reviewing… forever
+  (drgnx-review-test--branch
+    (drgnx-review-branch)
+    (drgnx-review--changed s)
+    (setf (drgnx-agent-session-status s) 'exited)
+    (drgnx-review--changed s)
+    (should (string-search "the reviewer stopped" (drgnx-review-test--tab)))))
+
+(ert-deftest drgnx-review/the-reviewer-goes-once-it-has-answered ()
+  ;; I6: no idle agent left behind per review
+  (drgnx-review-test--branch
+    (let ((killed nil))
+      (cl-letf (((symbol-function 'drgnx-agents-kill) (lambda (x) (push x killed))))
+        (drgnx-review-branch)
+        (drgnx-review--changed s)
+        (drgnx-review-test--answer s drgnx-review-test--answer)
+        (should (equal killed (list s)))))))
 
 ;;; mod-review-test.el ends here

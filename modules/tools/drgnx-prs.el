@@ -60,7 +60,8 @@
                   (list :number (drgnx-prs--slot pr 'number) :title (or (drgnx-prs--slot pr 'title) "")
                         :author (or (drgnx-prs--slot pr 'author) "(ghost)") :state (drgnx-prs--state pr)
                         :base (drgnx-prs--slot pr 'base-ref) :head (drgnx-prs--slot pr 'head-ref)
-                        :updated (or (drgnx-prs--slot pr 'updated) "")))
+                        :updated (or (drgnx-prs--slot pr 'updated) "")
+                        :cross (ignore-errors (drgnx-prs--slot pr 'cross-repo-p))))
                 (drgnx-prs--slot repo 'pullreqs))))))
 
 (defun drgnx-prs--remote (root)
@@ -70,17 +71,19 @@
 ;;;; Stacks
 
 (defun drgnx-prs-stacks (prs)
-  "PRS in display order as (PR . DEPTH): a PR whose base is another listed PR's head right after it, one deeper;
+  "PRS in display order as (PR . DEPTH): a PR whose base is another listed PR's head (a branch of this repository,
+not a fork's) right after it, one deeper;
 newest first at each level.  Every PR appears once, a cycle cut where it is found."
   (let ((seen (make-hash-table)) (out nil)
         (newest (lambda (l) (sort (copy-sequence l) (lambda (a b) (> (plist-get a :number) (plist-get b :number)))))))
-    (cl-labels ((children (p) (seq-filter (lambda (q) (and (not (eq q p)) (equal (plist-get q :base) (plist-get p :head)))) prs))
+    (cl-labels ((children (p) (and (not (plist-get p :cross))   ; a fork's branch (often its main) is no base here
+                                   (seq-filter (lambda (q) (and (not (eq q p)) (equal (plist-get q :base) (plist-get p :head)))) prs)))
                 (walk (p depth)
                   (unless (gethash (plist-get p :number) seen)
                     (puthash (plist-get p :number) t seen)
                     (push (cons p depth) out)
                     (dolist (c (funcall newest (children p))) (walk c (1+ depth))))))
-      (dolist (r (funcall newest (seq-remove (lambda (p) (seq-some (lambda (q) (and (not (eq q p)) (equal (plist-get p :base) (plist-get q :head))))
+      (dolist (r (funcall newest (seq-remove (lambda (p) (seq-some (lambda (q) (and (not (eq q p)) (not (plist-get q :cross)) (equal (plist-get p :base) (plist-get q :head))))
                                                                    prs))
                                              prs)))
         (walk r 0))
@@ -136,8 +139,10 @@ newest first at each level.  Every PR appears once, a cycle cut where it is foun
 (defun drgnx-prs-toggle-closed ()
   "Pull Requests: Show Closed — merged and closed ones too, or not."
   (interactive)
-  (setq drgnx-prs-show-closed (not drgnx-prs-show-closed))
-  (drgnx-prs--draw))
+  ;; the tab's list, wherever it is run from (the palette): never the buffer it is run in
+  (with-current-buffer (or (get-buffer "*drgnx pull requests*") (user-error "No Pull Requests tab: run Pull Requests first"))
+    (setq drgnx-prs-show-closed (not drgnx-prs-show-closed))
+    (drgnx-prs--draw)))
 
 (defun drgnx-prs--at-point () (or (tabulated-list-get-id) (user-error "No pull request here")))
 

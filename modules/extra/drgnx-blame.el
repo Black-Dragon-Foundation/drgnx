@@ -82,23 +82,35 @@
   (let ((e (and drgnx-blame--cache (gethash line drgnx-blame--cache))))
     (and e (< (- (float-time) (car e)) drgnx-blame-cache-seconds) (cdr e))))
 
-(defun drgnx-blame--command (line)
-  (list "git" "blame" "--porcelain" "-L" (format "%d,%d" line line) "--contents" "-" "--"
-        (file-name-nondirectory buffer-file-name)))
+(defun drgnx-blame--command (line contents)
+  "git blame of LINE; CONTENTS: the buffer's text comes on stdin (it has unsaved changes)."
+  (append (list "git" "blame" "--porcelain" "-L" (format "%d,%d" line line))
+          (and contents '("--contents" "-"))
+          (list "--" (file-name-nondirectory buffer-file-name))))
+
+(defun drgnx-blame--refused-p (stderr)
+  "Does git's STDERR say it will never blame this file (untracked, not a repository)?"
+  (string-match-p "no such path\\|not a git repository\\|does not exist\\|no such ref" stderr))
+
+(defun drgnx-blame--stop ()
+  "Stop the request still running, so its end is not taken for an answer."
+  (let ((p drgnx-blame--proc))
+    (setq drgnx-blame--proc nil)
+    (when (process-live-p p) (delete-process p))))
 
 (defun drgnx-blame--update ()
   "Show the blame of the current line: from the cache, else from git in the background (replacing a request that
-has not answered)."
-  (unless (or drgnx-blame--off (not buffer-file-name) (region-active-p))
-    (let ((line (line-number-at-pos)) (buf (current-buffer)) (bol (line-beginning-position)))
+has not answered).  The empty line after the last newline has none."
+  (unless (or drgnx-blame--off (not buffer-file-name) (region-active-p) (and (eobp) (bolp)))
+    (let ((line (line-number-at-pos)) (buf (current-buffer)) (bol (line-beginning-position)) (modified (buffer-modified-p)))
       (if-let* ((info (drgnx-blame--cached line)))
           (drgnx-blame--show info)
-        (when (process-live-p drgnx-blame--proc) (delete-process drgnx-blame--proc))
+        (drgnx-blame--stop)
         (let* ((out (generate-new-buffer " *drgnx-blame*" t)) (err (generate-new-buffer " *drgnx-blame err*" t))
                (default-directory (file-name-directory buffer-file-name))
                (p (make-process
                    :name "drgnx-blame" :buffer out :stderr err :noquery t :connection-type 'pipe :coding 'utf-8-unix
-                   :command (drgnx-blame--command line)
+                   :command (drgnx-blame--command line modified)
                    :sentinel
                    (lambda (proc _event)
                      (unless (process-live-p proc)
@@ -106,7 +118,9 @@ has not answered)."
                          (with-current-buffer buf
                            (setq drgnx-blame--proc nil)
                            (if (not (eql (process-exit-status proc) 0))
-                               (setq drgnx-blame--off t)         ; untracked, outside a repository…
+                               ;; untracked, outside a repository: never again; anything else may pass
+                               (when (drgnx-blame--refused-p (with-current-buffer err (buffer-string)))
+                                 (setq drgnx-blame--off t))
                              (when-let* ((info (drgnx-blame--parse (with-current-buffer out (buffer-string)))))
                                (unless drgnx-blame--cache (setq drgnx-blame--cache (make-hash-table)))
                                (puthash line (cons (float-time) info) drgnx-blame--cache)
@@ -114,7 +128,9 @@ has not answered)."
                        (when-let* ((ep (get-buffer-process err))) (delete-process ep))
                        (kill-buffer out) (kill-buffer err))))))
           (setq drgnx-blame--proc p)
-          (process-send-region p (point-min) (point-max))
+          (when modified                                     ; the text as the file has it: its coding, its line ends
+            (set-process-coding-system p 'utf-8-unix (or buffer-file-coding-system 'utf-8-unix))
+            (process-send-region p (point-min) (point-max)))
           (process-send-eof p))))))
 
 (defun drgnx-blame--tick ()
@@ -128,6 +144,7 @@ has not answered)."
   :lighter nil
   (if drgnx-blame-mode
       (progn
+        (setq drgnx-blame--off nil)                          ; turned on again: asked again
         (add-hook 'post-command-hook #'drgnx-blame--follow nil t)
         (add-hook 'after-change-functions #'drgnx-blame--forget nil t)
         (add-hook 'after-save-hook #'drgnx-blame--forget nil t)
@@ -138,7 +155,7 @@ has not answered)."
     (remove-hook 'after-change-functions #'drgnx-blame--forget t)
     (remove-hook 'after-save-hook #'drgnx-blame--forget t)
     (remove-hook 'after-revert-hook #'drgnx-blame--forget t)
-    (when (process-live-p drgnx-blame--proc) (delete-process drgnx-blame--proc))
+    (drgnx-blame--stop)
     (drgnx-blame--hide)))
 
 (defun drgnx-blame--maybe ()
@@ -154,7 +171,9 @@ has not answered)."
          (info (or (drgnx-blame--cached line)
                    (let ((text (buffer-substring-no-properties (point-min) (point-max)))
                          (default-directory (file-name-directory buffer-file-name))
-                         (cmd (drgnx-blame--command line)))
+                         (coding-system-for-write (or buffer-file-coding-system 'utf-8-unix))
+                         (coding-system-for-read 'utf-8-unix)
+                         (cmd (drgnx-blame--command line t)))
                      (with-temp-buffer
                        (insert text)
                        (and (eql 0 (apply #'call-process-region (point-min) (point-max) (car cmd) t '(t nil) nil (cdr cmd)))

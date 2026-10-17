@@ -191,13 +191,19 @@
     (drgnx-diff--render)
     (if loc (drgnx-diff--goto (nth 0 loc) (nth 2 loc)) (goto-char (point-min)))))
 
+(defun drgnx-diff--in-view ()
+  "Signal unless this is a diff view (a command run from the palette elsewhere must never redraw that buffer)."
+  (unless (derived-mode-p 'drgnx-diff-mode) (user-error "Not a diff view")))
+
 (defun drgnx-diff-toggle-layout ()
   "Diff: Toggle Split/Unified — the same place, in the other layout."
   (interactive)
+  (drgnx-diff--in-view)
   (setq drgnx-diff-layout (if (eq drgnx-diff-layout 'split) 'unified 'split))
   (drgnx-diff--rerender-keeping-place))
 
 (defun drgnx-diff--fold-all (state)
+  (drgnx-diff--in-view)
   (setq drgnx-diff--folded (make-vector (length drgnx-diff--files) state))
   (let ((i (nth 0 (get-text-property (point) 'drgnx-diff-loc))))
     (drgnx-diff--render)
@@ -209,6 +215,7 @@
 (defun drgnx-diff-toggle-file ()
   "Diff: Toggle File — fold or open the file at point (only it is drawn again)."
   (interactive)
+  (drgnx-diff--in-view)
   (let ((i (get-text-property (point) 'drgnx-diff-file)))
     (unless i (user-error "No file here"))
     (aset drgnx-diff--folded i (not (aref drgnx-diff--folded i)))
@@ -222,12 +229,14 @@
 (defun drgnx-diff-next-file ()
   "Diff: Next File."
   (interactive)
+  (drgnx-diff--in-view)
   (let ((i (get-text-property (point) 'drgnx-diff-file)))
     (unless (drgnx-diff--goto (if i (1+ i) 0) -1) (user-error "No next file"))))
 
 (defun drgnx-diff-prev-file ()
   "Diff: Previous File."
   (interactive)
+  (drgnx-diff--in-view)
   (let ((i (get-text-property (point) 'drgnx-diff-file)))
     (unless (and i (> i 0) (drgnx-diff--goto (1- i) -1)) (user-error "No previous file"))))
 
@@ -237,6 +246,7 @@
 (defun drgnx-diff-visit ()
   "Diff: Open File at Line — the file as it is now, at the line of point."
   (interactive)
+  (drgnx-diff--in-view)
   (let ((loc (get-text-property (point) 'drgnx-diff-loc)))
     (unless loc (user-error "No file here"))
     (unless (nth 1 loc) (user-error "This file is deleted in this change"))
@@ -267,7 +277,7 @@
     (file-name-as-directory top)))
 
 (defun drgnx-diff--args (source)
-  (let ((flags '("--no-color" "--no-ext-diff" "-M")))
+  (let ((flags '("--no-color" "--no-ext-diff" "-M" "--src-prefix=a/" "--dst-prefix=b/")))   ; whatever diff.noprefix / mnemonicPrefix say
     (pcase source
       ('working (append '("diff") flags '("HEAD")))
       ('staged (append '("diff" "--cached") flags))
@@ -371,7 +381,9 @@ the repository of ROOT (default: this one); point lands on FILE when given.  The
                                         (diff-next-file "Diff: Next File" drgnx-diff-next-file "The next file's header")
                                         (diff-prev-file "Diff: Previous File" drgnx-diff-prev-file "The previous file's header")
                                         (diff-visit "Diff: Open File at Line" drgnx-diff-visit "The file as it is now, at this line")))
-                         (drgnx-command-define id :category "Source Control" :title title :command fn :doc doc))))
+                         (drgnx-command-define id :category "Source Control" :title title :command fn :doc doc
+                                               :when (unless (memq id '(diff-working diff-staged diff-branch))
+                                                       (lambda () (derived-mode-p 'drgnx-diff-mode)))))))
 
 (provide 'drgnx-diff)
 ;;; drgnx-diff.el ends here
