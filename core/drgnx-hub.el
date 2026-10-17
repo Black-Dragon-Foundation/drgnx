@@ -200,6 +200,8 @@ debugs errors, and without SIGPIPE ignored the write itself would)."
     ("job/resume" (drgnx-job-resume (plist-get params :id) :budget (drgnx-hub--value (plist-get params :budget)))
      (drgnx-hub--save-registrations)
      (drgnx-job-summary (plist-get params :id)))
+    ("job/card" (drgnx-job-card-act (plist-get params :card) (plist-get params :action) (drgnx-hub--value (plist-get params :arg))))
+    ("job/reply" (drgnx-job-reply (plist-get params :message) (plist-get params :text)))
     ("job/status"
      (if-let* ((id (drgnx-hub--value (plist-get params :id))))
          (or (drgnx-job-summary id) (error "No job %s" id))

@@ -43,6 +43,18 @@
       (should (equal (caar (sqlite-select db "select value from meta where key = 'schema'")) "99"))
       (sqlite-close db))))
 
+(ert-deftest drgnx-work-db/a-version-3-db-migrates-to-4-keeping-its-jobs ()
+  (drgnx-work-db-migrate-test--with
+    (let ((db (sqlite-open (concat dir "work.db"))))          ; a work.db as M9b.2 wrote it
+      (sqlite-execute db "create table meta (key text primary key, value text)")
+      (pcase-dolist (`(,v . ,sqls) drgnx-work-db--steps) (when (<= v 3) (dolist (sql sqls) (sqlite-execute db sql))))
+      (sqlite-execute db "insert into job values ('j', 'J', 'p.md', '/r/', 'running', 1.0, null)")
+      (sqlite-execute db "insert into meta values ('schema', '3')")
+      (sqlite-close db))
+    (should (= (drgnx-work-db-version) 4))
+    (should (sqlite-select (drgnx-work-db) "select name from sqlite_master where name = 'card'"))
+    (should (equal (caar (sqlite-select (drgnx-work-db) "select status from job where id = 'j'")) "running"))))
+
 (ert-deftest drgnx-work-db/spend-adds-up-per-job-task-and-agent ()
   (drgnx-work-db-migrate-test--with
     (drgnx-work-db-add-spend :job "j" :task "a" :agent "x" :provider "openrouter" :model "m" :input 10 :output 5 :cost 0.5 :status 200)

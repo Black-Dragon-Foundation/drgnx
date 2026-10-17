@@ -16,6 +16,7 @@ working from the old one. So the shared state is explicit, versioned, and **enfo
 | `jdep` | task → the task it depends on |
 | `decision` | n, kind (`build` `wait` `wont-build` `replaces`), subject, task, paths, reason, author, status (`current` `proposed` `replaced`), replaces, at, ver |
 | `message` | id, job, sender, recipient, text, state (`queued` `delivered` `read` `acted` `held`), reason, at, delivered, read, acted |
+| `card` | id, job, task, kind, title, data (a printed plist: the waiting session, the request, …), state (`open` `settled`), at, settled_at, choice (schema 4) |
 | `meta` | `log-version` (the decision log's version), `seen:AGENT` (the version an agent last read) |
 
 - **Tasks:** statuses `pending ready claimed running needs-input in-review done failed dropped`. A task without
@@ -103,8 +104,9 @@ done is done. The hub wires it to sessions with hooks:
 | `drgnx-gateway-event-functions` | `drgnx-job--gateway-event`: `budget` → the job pauses, its agents stop |
 
 `complete_task` from an agent of a job (`DRGNX_JOB` set) puts the task `in-review`, not `done`, and `update_task`
-there takes only `running`, `needs-input` and `in-review`; the reviewer's verdict decides (`drgnx-job--reviewed`, `drgnx-job--merge`). A card (`drgnx-job--card`) is a message from `drgnx`
-to `user` with the job and task (one line), the task `needs-input`, and a `card` event (job, task, kind, title); a
+there takes only `running`, `needs-input` and `in-review`; the reviewer's verdict decides (`drgnx-job--reviewed`, `drgnx-job--merge`). A card (`drgnx-job--card`) is a `card` row — one open per task and kind, actions by
+kind (`drgnx-job-card-actions`), acted on once through `job/card` (`drgnx-job-card-act`: settled first, so a second
+action is refused; reopened if the action fails) — plus a message from `drgnx` to `user` with the job and task (one line, `acted` once settled), the task `needs-input`, and a `card` event (job, task, kind, title); a
 card for an agent's pending request records it in the job's data (`:waiting`: the session, and the status to go back
 to — `in-review` for a reviewer's), so an answer, or the agent's end, puts the task back; `fallback`
 events carry job, task, agent, from, to, why. The hub's `job/propose`, `job/approve`, `job/status`, `job/stop`,

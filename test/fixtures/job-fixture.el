@@ -42,7 +42,13 @@ profile \"mock\" on every route."
        (drgnx-hub-disconnect)
        (drgnx-hub-stop)
        (drgnx-work-db-close-all)
-       (delete-directory root t))))
+       ;; agents (and their MCP servers) may still be writing in the worktrees as they end: wait, then delete
+       (let ((deadline (+ (float-time) 3)))
+         (while (and (seq-some (lambda (p) (and (process-live-p p) (not (eq (process-type p) 'network)))) (process-list))
+                     (< (float-time) deadline))
+           (accept-process-output nil 0.05)))
+       (condition-case nil (delete-directory root t)
+         (file-error (accept-process-output nil 0.3) (delete-directory root t))))))
 
 (defun drgnx-job-run-test--wait (pred &optional secs)
   (let ((deadline (+ (float-time) (or secs 15))))

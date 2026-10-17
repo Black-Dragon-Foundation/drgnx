@@ -39,7 +39,11 @@
         reason text, author text, status text, replaces integer, at real, ver integer, job text)"
        "create table if not exists message (id integer primary key, job text, sender text, recipient text, text text,
         state text, reason text, at real, delivered real, read real, acted real)"
-       "create index if not exists message_to on message(recipient, state)"))
+       "create index if not exists message_to on message(recipient, state)")
+    ;; M9b.4: what needs the user, with its actions (core/drgnx-job.el)
+    (4 "create table if not exists card (id integer primary key, job text, task text, kind text, title text, data text,
+        state text, at real, settled_at real, choice text)"
+       "create index if not exists card_job on card(job, state)"))
   "Migrations: (VERSION SQL…), applied in order to a database below VERSION.")
 
 (defconst drgnx-work-db-schema-version (car (car (last drgnx-work-db--steps))))

@@ -139,6 +139,9 @@ own repository).  Returns its id; nothing starts (unless `drgnx-job-auto-start')
     (dolist (d (plist-get plan :decisions))
       (drgnx-coord-decide :kind (plist-get d :kind) :subject (plist-get d :subject) :job id :author "user"
                           :reason "the plan says so" :seen (drgnx-coord-version)))
+    (drgnx-job--card id nil "proposal"
+                     (format "%d tasks, about %.2f USD%s: approve to start" (length tasks) (plist-get (plist-get proposal :estimate) :usd)
+                             (if (plist-get (plist-get proposal :estimate) :unpriced) " (some unpriced)" "")))
     (when (and drgnx-job-auto-start (fboundp 'drgnx-job-approve)) (drgnx-job-approve id))
     id))
 
@@ -192,6 +195,7 @@ own repository).  Returns its id; nothing starts (unless `drgnx-job-auto-start')
         (pcase (drgnx-job--git (plist-get job :repo) "worktree" "add" "-q" "-b" (concat "job/" id) tree "HEAD")
           (`(0 . ,_))
           (`(,_ . ,err) (user-error "Job %s: no job branch: %s" id err)))))
+    (drgnx-job--settle-kind id "proposal" "approve")
     (drgnx-coord-job-set id :status "running" :data (plist-put (plist-get job :data) :budget (or budget (plist-get (plist-get job :data) :budget))))
     (drgnx-job-step id)
     id))
@@ -266,7 +270,8 @@ what the agent before it left (`drgnx-job--fall-back')."
             (drgnx-job--start-task id task)
             (setq count (1+ count)))))
       (when (seq-every-p (lambda (task) (member (plist-get task :status) '("done" "dropped"))) (drgnx-coord-tasks id))
-        (drgnx-coord-job-set id :status "done")))))
+        (drgnx-coord-job-set id :status "done"))
+      (drgnx-job--changed id))))
 
 (defun drgnx-job--alive-p (sid)
   (when-let* ((s (and sid (drgnx-agents-get sid)))) (not (eq (drgnx-agent-session-status s) 'exited))))
@@ -528,20 +533,130 @@ working in TREE."
   (if (gethash (drgnx-agent-session-id s) drgnx-job--reviewers) "review"
     (plist-get (drgnx-coord-task (drgnx-agent-session-task s)) :role)))
 
-(defun drgnx-job--card (job task kind title &optional s)
-  "Something of JOB's TASK needs the user: the task waits (needs-input), the user gets a message and the hub's
-subscribers a `card' event.  S: the session whose request waits (it goes back to work once answered, or, gone, the
-task is released)."
+(defconst drgnx-job--advisory-kinds '("proposal" "overlap" "clash")
+  "Card kinds that leave their task's status alone (the job decides when it waits).")
+
+(defun drgnx-job--broadcast (event data) (when (fboundp 'drgnx-hub--broadcast) (drgnx-hub--broadcast event data)))
+
+(defvar drgnx-job--signatures (make-hash-table :test #'equal) "Job → what its last `job' event showed.")
+
+(defun drgnx-job--changed (id)
+  "Tell the hub's subscribers (a `job' event) when job ID's status, its tasks or its open cards changed."
+  (let ((sig (list (plist-get (drgnx-coord-job id) :status)
+                   (mapcar (lambda (task) (cons (plist-get task :status) (plist-get task :agent))) (drgnx-coord-tasks id))
+                   (mapcar (lambda (c) (list (plist-get c :id) (plist-get c :title) (plist-get c :data))) (drgnx-coord-cards id "open")))))
+    (unless (equal sig (gethash id drgnx-job--signatures))
+      (puthash id sig drgnx-job--signatures)
+      (drgnx-job--broadcast 'job (list :id id)))))
+
+(defun drgnx-job--card (job task kind title &optional s data)
+  "Something of JOB's TASK needs the user: a card (one open per task and kind: a second updates it) with DATA; the
+task waits (needs-input, unless KIND is advisory), the user gets a message and the hub's subscribers a `card' event.
+S: the session whose request waits (it goes back to work once answered, or, gone, the task is released).  The card's id."
   (setq title (replace-regexp-in-string "[\n\r]+" " " (format "%s" title)))   ; one line: no forged card lines
   (when task
     (when s
       (drgnx-job--set-waiting job task (list :sid (drgnx-agent-session-id s)
                                              :back (if (gethash (drgnx-agent-session-id s) drgnx-job--reviewers) "in-review" "ready"))))
-    (drgnx-coord-force-status task "needs-input" (plist-get (drgnx-coord-task task) :agent)))
-  (drgnx-coord-send :job job :sender "drgnx" :recipient "user" :text (format "[%s] %s: %s" kind (or task job) title))
-  (when (fboundp 'drgnx-hub--broadcast) (drgnx-hub--broadcast 'card (list :job job :task task :kind kind :title title))))
+    (unless (member kind drgnx-job--advisory-kinds)
+      (drgnx-coord-force-status task "needs-input" (plist-get (drgnx-coord-task task) :agent))))
+  (let* ((data (append (and s (list :sid (drgnx-agent-session-id s))) data))
+         (old (seq-find (lambda (c) (and (equal (plist-get c :task) task) (equal (plist-get c :kind) kind))) (drgnx-coord-cards job "open")))
+         (cid (if old
+                  (progn (drgnx-coord-card-set (plist-get old :id) :title title :data (append data (plist-get old :data)))
+                         (plist-get old :id))
+                (let ((m (drgnx-coord-send :job job :sender "drgnx" :recipient "user" :text (format "[%s] %s: %s" kind (or task job) title))))
+                  (drgnx-coord-card-create :job job :task task :kind kind :title title :data (append data (list :message (plist-get m :id))))))))
+    (drgnx-job--broadcast 'card (list :id cid :job job :task task :kind kind :title title))
+    (drgnx-job--changed job)
+    cid))
 
-(defun drgnx-job--request (s method params _id)
+(defun drgnx-job-card-actions (card)
+  "CARD's actions: ((ACTION LABEL)…)."
+  (pcase (plist-get card :kind)
+    ("proposal" '(("approve" "Approve") ("reject" "Reject")))
+    ("permission" '(("allow" "Allow") ("reject" "Reject")))
+    ("write" '(("reject" "Reject")))
+    ("merge-conflict" '(("retry" "Let the agent resolve it") ("merge" "Merge again (I resolved it)") ("drop" "Drop the task")
+                        ("open" "Open the job's worktree")))
+    ("review" '(("accept" "Merge as it is") ("retry" "Back to an agent") ("drop" "Drop the task")))
+    ((or "fallback" "agent" "stalled") '(("retry" "Retry") ("drop" "Drop the task")))
+    ("budget" '(("resume" "Resume with a budget…") ("stop" "Stop the job")))
+    (_ '(("dismiss" "Dismiss")))))
+
+(defun drgnx-job--retry (job task &optional note)
+  "TASK of JOB goes back to a new agent, its counts reset (NOTE: what it is told)."
+  (let ((data (plist-get (drgnx-coord-job job) :data)))
+    (setf (alist-get task (plist-get data :fails) nil 'remove #'equal) nil)
+    (when note (setf (alist-get task (plist-get data :notes) nil nil #'equal) note))
+    (drgnx-coord-job-set job :data data))
+  (dolist (h (list drgnx-job--exits drgnx-job--nudged)) (remhash task h))
+  (drgnx-job--set-waiting job task nil)
+  (drgnx-coord-force-status task "ready" nil))
+
+(defun drgnx-job--answer-request (card allow)
+  "Answer the pending request CARD is about: ALLOW (its allow_once option) or reject."
+  (let* ((data (plist-get card :data)) (s (or (drgnx-agents-get (plist-get data :sid)) (user-error "The agent is gone")))
+         (req (plist-get data :request)))
+    (if-let* ((p (seq-find (lambda (p) (equal (plist-get p :id) req)) (drgnx-agent-session-permissions s))))
+        (drgnx-agents-answer-permission
+         s p (plist-get (seq-find (lambda (o) (equal (plist-get o :kind) (if allow "allow_once" "reject_once"))) (append (plist-get p :options) nil))
+                        :optionId))
+      (if-let* ((r (seq-find (lambda (r) (equal (plist-get r :id) req)) (drgnx-agent-session-reviews s))))
+          (drgnx-agents-finish-review s r t)
+        (user-error "The request was answered already")))
+    (drgnx-job--answered s)))
+
+(defun drgnx-job-card-act (cid action &optional arg)
+  "The user's ACTION (with ARG) on card CID: done once — a card acted on before signals.  The job's summary."
+  (let* ((card (or (drgnx-coord-card cid) (user-error "No card %s" cid)))
+         (job (plist-get card :job)) (task (plist-get card :task)))
+    (unless (assoc action (drgnx-job-card-actions card)) (user-error "Card %s has no action %s" cid action))
+    (unless (equal action "open")                                  ; open only shows: the card stays
+      (unless (drgnx-coord-card-settle cid action) (user-error "Card %s is already settled" cid))
+      (condition-case err
+          (pcase action
+            ("approve" (drgnx-job-approve job :budget arg))
+            ("reject" (if task (drgnx-job--answer-request card nil) (drgnx-job-stop job)))
+            ("allow" (drgnx-job--answer-request card t))
+            ("retry" (drgnx-job--retry job task (and (equal (plist-get card :kind) "merge-conflict")
+                                                     (format "Merging your branch into job/%s conflicted (%s). Merge job/%s into your branch, resolve the conflicts, commit, then call complete_task."
+                                                             job (plist-get card :title) job))))
+            ((or "merge" "accept") (drgnx-job--merge job (drgnx-coord-task task)))
+            ("drop" (when-let* ((s (drgnx-job--session (plist-get (drgnx-coord-task task) :agent)))) (drgnx-agents-kill s))
+             (drgnx-coord-force-status task "dropped" nil))
+            ("resume" (drgnx-job-resume job :budget (and arg (if (numberp arg) arg (string-to-number (format "%s" arg))))))
+            ("stop" (drgnx-job-stop job)))
+        (error (drgnx-coord-card-set cid :state "open")            ; it did not happen: still the user's
+               (signal (car err) (cdr err))))
+      (when-let* ((m (plist-get (plist-get card :data) :message))) (drgnx-coord-mark m "acted"))
+      (drgnx-job--step-later job))
+    (drgnx-job--changed job)
+    (drgnx-job-summary job)))
+
+(defun drgnx-job--settle-kind (job kind choice)
+  "JOB's open cards of KIND are settled with CHOICE (their question is answered elsewhere)."
+  (dolist (c (drgnx-coord-cards job "open"))
+    (when (and (equal (plist-get c :kind) kind) (drgnx-coord-card-settle (plist-get c :id) choice))
+      (when-let* ((m (plist-get (plist-get c :data) :message))) (drgnx-coord-mark m "acted")))))
+
+(defun drgnx-job--settle-requests (job task)
+  "TASK's permission and write cards are answered (in the transcript): settled."
+  (dolist (c (drgnx-coord-cards job "open"))
+    (when (and (equal (plist-get c :task) task) (member (plist-get c :kind) '("permission" "write"))
+               (drgnx-coord-card-settle (plist-get c :id) "answered"))
+      (when-let* ((m (plist-get (plist-get c :data) :message))) (drgnx-coord-mark m "acted"))))
+  (drgnx-job--changed job))
+
+(defun drgnx-job-reply (mid text)
+  "The user answers message MID (from an agent) with TEXT; MID is acted on."
+  (let ((m (or (drgnx-coord-message mid) (user-error "No message %s" mid))))
+    (drgnx-coord-send :job (plist-get m :job) :recipient (plist-get m :sender) :text text :seen (drgnx-coord-version))
+    (drgnx-coord-mark mid "acted")
+    (drgnx-job--changed (plist-get m :job))
+    t))
+
+(defun drgnx-job--request (s method params id)
   "A job agent's request (`drgnx-agents-request-functions'): routine ones answered by its role's policy, writes in
 its worktree done at once; anything else waits for the user as a card (nil: the session keeps it pending)."
   (when-let* ((job (drgnx-agent-session-job s)))
@@ -552,7 +667,7 @@ its worktree done at once; anything else waits for the user as a card (nil: the 
            (if (eq (drgnx-job-policy (drgnx-job--role s) tool tree) 'allow)
                (let ((opt (seq-find (lambda (o) (equal (plist-get o :kind) "allow_once")) (append (plist-get params :options) nil))))
                  (list :result (list :outcome (list :outcome "selected" :optionId (plist-get opt :optionId)))))
-             (drgnx-job--card job task "permission" (or (plist-get tool :title) "a permission") s)
+             (drgnx-job--card job task "permission" (or (plist-get tool :title) "a permission") s (list :request id))
              nil)))
         ("fs/write_text_file"
          ;; an absolute path only: the check and the write must mean the same file
@@ -561,7 +676,7 @@ its worktree done at once; anything else waits for the user as a card (nil: the 
                     (not (equal (drgnx-job--role s) "review")))
                (progn (let ((coding-system-for-write 'utf-8-unix)) (write-region content nil path nil 'silent))
                       (list :result nil))
-             (drgnx-job--card job task "write" (format "write %s" path) s)
+             (drgnx-job--card job task "write" (format "write %s" path) s (list :request id))
              nil)))))))
 
 (defun drgnx-job--answered (s)
@@ -571,6 +686,7 @@ work of the agent that did it."
     (when (and (drgnx-agent-session-job s) (null (drgnx-agent-session-permissions s)) (null (drgnx-agent-session-reviews s))
                (equal (plist-get task :status) "needs-input"))
       (drgnx-job--set-waiting (drgnx-agent-session-job s) (plist-get task :id) nil)
+      (drgnx-job--settle-requests (drgnx-agent-session-job s) (plist-get task :id))
       (if (gethash (drgnx-agent-session-id s) drgnx-job--reviewers)
           (drgnx-coord-force-status (plist-get task :id) "in-review" (plist-get task :agent))
         (drgnx-coord-force-status (plist-get task :id) "running" (drgnx-agent-session-id s))))))
@@ -580,7 +696,9 @@ work of the agent that did it."
 (defun drgnx-job-stop (id)
   "Stop job ID: its agents end (their worktrees stay); `drgnx-job-resume' starts its open tasks again."
   (unless (drgnx-coord-job id) (user-error "No job %s" id))
+  (drgnx-job--settle-kind id "proposal" "reject")
   (drgnx-coord-job-set id :status "stopped")
+  (drgnx-job--changed id)
   (dolist (s (drgnx-agents-sessions))
     (when (and (equal (drgnx-agent-session-job s) id) (not (eq (drgnx-agent-session-status s) 'exited)))
       (drgnx-agents-kill s)))
@@ -605,8 +723,13 @@ permissions."
                                               :task (drgnx-agent-session-task s) :status (drgnx-agent-session-status s)
                                               :review (and (gethash (drgnx-agent-session-id s) drgnx-job--reviewers) t)))
                             sessions)
-            :cards (mapcar (lambda (m) (list :text (plist-get m :text) :state (plist-get m :state)))
-                           (seq-filter (lambda (m) (equal (plist-get m :job) id)) (drgnx-coord-inbox "user")))
+            :cards (mapcar (lambda (c) (list :id (plist-get c :id) :kind (plist-get c :kind) :task (plist-get c :task)
+                                             :title (plist-get c :title) :actions (drgnx-job-card-actions c) :data (plist-get c :data)))
+                           (drgnx-coord-cards id "open"))
+            :messages (mapcar (lambda (m) (list :id (plist-get m :id) :sender (plist-get m :sender) :text (plist-get m :text)
+                                                :state (plist-get m :state)))
+                              (seq-filter (lambda (m) (and (equal (plist-get m :job) id) (not (equal (plist-get m :sender) "drgnx"))))
+                                          (drgnx-coord-inbox "user")))
             :permissions (mapcan (lambda (s) (mapcar (lambda (p) (list :agent (drgnx-agent-session-id s) :title (plist-get p :title)))
                                                      (drgnx-agent-session-permissions s)))
                                  sessions)))))
@@ -633,7 +756,11 @@ permissions."
                                     (plist-get a :task)))
                 (funcall v (plist-get job :agents)) "")
      (mapconcat (lambda (p) (format "  asks: %s (%s)\n" (plist-get p :title) (plist-get p :agent))) (funcall v (plist-get job :permissions)) "")
-     (mapconcat (lambda (c) (format "  card: %s\n" (plist-get c :text))) (funcall v (plist-get job :cards)) ""))))
+     (mapconcat (lambda (c) (format "  card #%s [%s] %s%s\n" (plist-get c :id) (plist-get c :kind) (if-let* ((task (funcall v (plist-get c :task)))) (concat task ": ") "")
+                                    (plist-get c :title)))
+                (funcall v (plist-get job :cards)) "")
+     (mapconcat (lambda (m) (format "  message #%s from %s: %s\n" (plist-get m :id) (plist-get m :sender) (plist-get m :text)))
+                (funcall v (plist-get job :messages)) ""))))
 
 (declare-function drgnx-hub-ensure "drgnx-hub")
 (declare-function drgnx-hub-call-sync "drgnx-hub")

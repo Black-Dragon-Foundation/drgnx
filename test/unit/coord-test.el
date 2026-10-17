@@ -166,7 +166,7 @@
     (let ((t1 (drgnx-coord-test--id 1)))
       (drgnx-coord-claim t1 "a" (drgnx-coord-version))
       (sqlite-execute (drgnx-work-db) "update jtask set lease_until = ? where id = ?" (list (- (float-time) 1) t1))
-      (should (equal (drgnx-coord-release-stale) (list (list :task t1 :agent "a"))))
+      (should (equal (drgnx-coord-release-stale) (list (list :task t1 :agent "a" :job "j"))))
       (should (equal (drgnx-coord-test--status 1) "ready"))
       (should-not (plist-get (seq-find (lambda (x) (= (plist-get x :n) 1)) (drgnx-coord-tasks "j")) :agent)))))
 

@@ -41,14 +41,16 @@ Its directory is mode 0700 and must be the user's own. One JSON object per line:
 | `coord/notify` (a notification: no id, no answer) | delivery runs now ([coordination.md](coordination.md)) |
 | `job/propose` `{plan, repo?, budget?, auto?}`, `job/approve` `{id, budget?}`, `job/stop` `{id}`, `job/resume` `{id, budget?}` | the job (`drgnx-job-summary`) |
 | `job/status` `{id?}` | the job, or `{jobs: [...]}` |
+| `job/card` `{card, action, arg?}` | the job, after the user's action on a card (once: a settled card is an error) |
+| `job/reply` `{message, text}` | `true`: the user's answer to an agent's message |
 
 Errors: `{"id", "error": {"message"}}`. Snapshots and transcript entries travel as **printed Lisp** (`lisp`,
 `entries`): JSON would lose the difference between a symbol and a string in an entry; both ends are Emacs. Events: from the gateway `request` (job, task, agent, provider, model, status, input, output, cost), `fallback`
-(agent, from, to, why), `budget` (job, spent, budget); from jobs `card` (job, task, kind, title) and `fallback` (job, task,
+(agent, from, to, why), `budget` (job, spent, budget); from jobs `card` (id, job, task, kind, title), `job` (id: its status, tasks or open cards changed) and `fallback` (job, task,
 agent, from, to, why); from sessions `agent` (id, seq, lisp — the snapshot) and
 `agent-entries` (id, seq, entries: [[index, lisp]…], the entries new or changed since the last time — entries change
 in place: chunks appended, tool calls updated), at most one of each per session per 50 ms; `lease-released` (task,
-agent).
+agent, job).
 
 **Mirrors** (`core/drgnx-agents-mirror.el`): the editing Emacs keeps a `drgnx-agent-session` per hub session (`remote`
 = its id) filled from these events; an action on a mirror goes to the hub (`drgnx-agents--remote`, never waiting).

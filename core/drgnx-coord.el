@@ -155,15 +155,15 @@ or (:error MESSAGE)."
                   (list (drgnx-coord--lease) agent)))
 
 (defun drgnx-coord-release-stale ()
-  "Release the claims whose lease ran out: ((:task :agent)…)."
+  "Release the claims whose lease ran out: ((:task :agent :job)…)."
   (drgnx-coord--tx
    (lambda (db)
      ;; a task waiting on the user (needs-input, in-review) keeps its claim: the wait is the user's, not the agent's
-     (let ((rows (sqlite-select db "select id, agent from jtask where lease_until < ? and status in ('claimed', 'running')"
+     (let ((rows (sqlite-select db "select id, agent, job from jtask where lease_until < ? and status in ('claimed', 'running')"
                                 (list (float-time)))))
        (dolist (r rows)
          (sqlite-execute db "update jtask set status = 'ready', agent = null, lease_until = null where id = ?" (list (car r))))
-       (mapcar (lambda (r) (list :task (car r) :agent (cadr r))) rows)))))
+       (mapcar (lambda (r) (list :task (car r) :agent (cadr r) :job (nth 2 r))) rows)))))
 
 (defun drgnx-coord-set-status (task agent status seen)
   "AGENT (TASK's holder) sets TASK's STATUS, having read the log at SEEN.  Done readies the tasks that waited only on
@@ -309,6 +309,49 @@ held when RECIPIENT's queue is full or the two exchange too much — or (:held �
          (when (and pos (> (seq-position drgnx-coord--states state) pos))
            (sqlite-execute db (format "update message set state = ?, %s = ? where id = ?" col) (list state (float-time) id))
            t))))))
+
+;;;; Cards: what needs the user, until they act on it
+
+(defconst drgnx-coord--card-cols "id, job, task, kind, title, data, state, at, settled_at, choice")
+
+(defun drgnx-coord--card-plist (row)
+  (pcase-let ((`(,id ,job ,task ,kind ,title ,data ,state ,at ,settled ,choice) row))
+    (list :id id :job job :task task :kind kind :title title :data (and data (car (read-from-string data)))
+          :state state :at at :settled settled :choice choice)))
+
+(defun drgnx-coord--print (v) (let ((print-length nil) (print-level nil)) (prin1-to-string v)))
+
+(cl-defun drgnx-coord-card-create (&key job task kind title data)
+  "A new open card of JOB (and TASK): its id."
+  (drgnx-coord--tx
+   (lambda (db)
+     (sqlite-execute db "insert into card (job, task, kind, title, data, state, at) values (?, ?, ?, ?, ?, 'open', ?)"
+                     (list job task kind title (and data (drgnx-coord--print data)) (float-time)))
+     (caar (sqlite-select db "select last_insert_rowid()")))))
+
+(defun drgnx-coord-cards (job &optional state)
+  "JOB's cards (in STATE when given), newest first."
+  (mapcar #'drgnx-coord--card-plist
+          (sqlite-select (drgnx-work-db) (format "select %s from card where job = ?%s order by id desc" drgnx-coord--card-cols
+                                                 (if state " and state = ?" ""))
+                         (if state (list job state) (list job)))))
+
+(defun drgnx-coord-card (id)
+  (when-let* ((row (car (sqlite-select (drgnx-work-db) (format "select %s from card where id = ?" drgnx-coord--card-cols) (list id)))))
+    (drgnx-coord--card-plist row)))
+
+(defun drgnx-coord-card-settle (id choice)
+  "Settle open card ID with CHOICE: t, or nil when it was not open (acted on already: nothing happens twice)."
+  (> (sqlite-execute (drgnx-work-db) "update card set state = 'settled', settled_at = ?, choice = ? where id = ? and state = 'open'"
+                     (list (float-time) choice id))
+     0))
+
+(cl-defun drgnx-coord-card-set (id &key title data state)
+  "Change card ID's TITLE, DATA (a plist) and/or STATE."
+  (let ((db (drgnx-work-db)))
+    (when title (sqlite-execute db "update card set title = ? where id = ?" (list title id)))
+    (when data (sqlite-execute db "update card set data = ? where id = ?" (list (drgnx-coord--print data) id)))
+    (when state (sqlite-execute db "update card set state = ? where id = ?" (list state id)))))
 
 (provide 'drgnx-coord)
 ;;; drgnx-coord.el ends here

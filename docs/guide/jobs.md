@@ -17,7 +17,10 @@ drgnx job resume job-20261017-101500 --budget 10      # go on (after a stop, or 
 `--json` on `status` gives the same as JSON; `status` without an id lists every job. `propose --auto` starts at
 once; `--repo DIR` names the repository when the plan is not inside it. In Emacs: **Start Job from Plan…** (the
 proposal in a buffer, with Approve and Reject), **Approve Plan Job…**, **Show Plan Jobs**, **Stop Plan Job…** — in
-the palette (no keys by default). Every command goes through the hub, starting it when needed
+the palette (no keys by default). What needs you is a **card** with its actions — the proposal (Approve, Reject), a permission (Allow, Reject),
+a merge conflict (let the agent resolve it, merge again after you resolved it, drop the task), a review that failed
+(merge as it is, back to an agent, drop), a stuck or failed agent (retry, drop), the budget (resume with more, stop);
+each acts once. Messages agents send you are listed with a Reply. Every command goes through the hub, starting it when needed
 ([agents.md](agents.md#the-hub-and-the-gateway)).
 
 ## The plan
