@@ -62,3 +62,11 @@
       (drgnx-palette))
     (should drgnx-test--palette-ran)
     (should-not asked)))
+
+(ert-deftest drgnx-palette/preferences-opens-it-on-the-preferences ()
+  ;; Cmd+, (VS Code's Settings): the palette with "Preferences: " typed, one Preferences command away.
+  (let (initial)
+    (cl-letf (((symbol-function 'completing-read)
+               (lambda (_prompt _table &optional _pred _req init &rest _) (setq initial init) "")))
+      (drgnx-palette-preferences))
+    (should (equal initial "Preferences: "))))

@@ -11,6 +11,10 @@
   (file-name-directory (directory-file-name (file-name-directory (or load-file-name buffer-file-name))))
   "The drgnx checkout.")
 
+(defun drgnx-platform ()
+  "The platform drgnx runs on: `macos', else `linux' (the BSDs and others count as Linux)."
+  (if (eq system-type 'darwin) 'macos 'linux))
+
 (defun drgnx-user-dir ()
   "The user's drgnx configuration: $DRGNX_CONFIG_DIR, else ~/.config/drgnx/."
   (file-name-as-directory (expand-file-name (or (getenv "DRGNX_CONFIG_DIR") "~/.config/drgnx"))))

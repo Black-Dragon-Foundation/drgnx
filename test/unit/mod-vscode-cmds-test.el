@@ -21,7 +21,9 @@
     (dolist (id '(file-save-as file-new file-reopen-tab file-new-window file-close-window
                                go-recent go-symbol-project go-back go-forward search-file search-replace
                                edit-select-all edit-select-line edit-redo edit-comment edit-delete-line edit-move-up edit-move-down
-                               edit-duplicate edit-line-below edit-line-above code-quick-fix code-problems code-format
+                               edit-duplicate edit-line-below edit-line-above edit-line-start edit-line-end
+                               edit-buffer-start edit-buffer-end edit-word-left edit-word-right edit-delete-word-back
+                               edit-delete-line-back code-quick-fix code-problems code-format
                                view-zoom-in view-zoom-out view-zoom-reset view-escape))
       (should (drgnx-commands-get id)))))
 
@@ -61,6 +63,36 @@
     (drgnx-editing-line-above)
     (insert "y")
     (should (equal (buffer-string) "foo\ny\nx\n"))))
+
+(ert-deftest drgnx-vsc/mac-text-editing ()
+  ;; Cmd+← / → / ↑ / ↓, Option+← / →, Option+⌫, Cmd+⌫ (and Home, End, Ctrl+← … on Linux).
+  (drgnx-vsc-test--in "one\n  two thr|ee\nfour"
+    (drgnx-editing-line-start)
+    (should (looking-at "two"))                   ; the first non-blank…
+    (drgnx-editing-line-start)
+    (should (bolp))                               ; …then the very start, as VS Code's Home
+    (drgnx-editing-line-start)
+    (should (looking-at "two"))
+    (drgnx-editing-line-end)
+    (should (eolp))
+    (drgnx-editing-word-left)
+    (should (looking-at "three"))
+    (drgnx-editing-word-right)
+    (should (eolp))
+    (drgnx-editing-delete-word-back)
+    (should (equal (buffer-string) "one\n  two \nfour"))
+    (drgnx-editing-delete-line-back)
+    (should (equal (buffer-string) "one\n\nfour"))
+    (drgnx-editing-delete-line-back)              ; at the line's start: joins it to the line above
+    (should (equal (buffer-string) "one\nfour"))
+    (let ((mark (mark t)))
+      (drgnx-editing-buffer-end)
+      (should (eobp))
+      (drgnx-editing-buffer-start)
+      (should (bobp))
+      (should (eq (mark t) mark)))                ; no mark set, no "Mark set"
+    (drgnx-editing-delete-line-back)              ; at the very start: nothing
+    (should (equal (buffer-string) "one\nfour"))))
 
 (ert-deftest drgnx-vsc/new-untitled-buffers-are-numbered ()
   (let ((a (drgnx-basics-new-untitled)) (b (drgnx-basics-new-untitled)))

@@ -62,6 +62,8 @@
   (drgnx-command-define 'preferences-user-config :category "Preferences" :title "Open User Config"
                         :command #'drgnx-open-user-config :menu '("Options")
                         :doc "Your own Emacs Lisp (config.el), loaded at the end of every start")
+  (drgnx-command-define 'preferences :category "Preferences" :title "All Preferences…"
+                        :command #'drgnx-palette-preferences :doc "The palette, on every Preferences command")
   (drgnx-command-define 'modules-toggle :category "Modules" :title "Turn On / Off" :command #'drgnx-modules-list-toggle
                         :map 'drgnx-modules-list-mode-map :when (lambda () (derived-mode-p 'drgnx-modules-list-mode))
                         :doc "Turn the module on this row off at the next start, or back on")

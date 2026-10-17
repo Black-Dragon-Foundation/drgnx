@@ -486,3 +486,186 @@
      (cl-letf (((symbol-function 'message) (lambda (fmt &rest args) (setq said (apply #'format fmt args)))))
        (drgnx-keys-choose-profile "VS Code"))
      (should (string-search (format "%d conflict" (length (drgnx-keys-conflict-lines))) said)))))
+
+;;;; macOS (M12a)
+
+(defun drgnx-keys-test--on (r key &optional global)
+  "The ids resolution R binds to KEY, in any keymap (with GLOBAL, in the global keymap)."
+  (mapcar (lambda (b) (plist-get b :id))
+          (seq-filter (lambda (b) (and (equal (drgnx-keys--parse (plist-get b :key)) (drgnx-keys--parse key))
+                                       (not (and global (plist-get b :map)))))
+                      (plist-get r :bindings))))
+
+(defconst drgnx-keys-test--ns-defaults
+  '(("s-," customize) ("s-'" next-window-any-frame) ("s-`" other-frame) ("s-~" ns-prev-frame) ("s-:" ispell)
+    ("s-?" info) ("s-^" kill-some-buffers) ("s-&" kill-current-buffer) ("s-C" ns-popup-color-panel) ("s-D" dired)
+    ("s-E" edit-abbrevs) ("s-L" shell-command) ("s-M" manual-entry) ("s-S" ns-write-file-using-panel)
+    ("s-a" mark-whole-buffer) ("s-c" ns-copy-including-secondary) ("s-d" isearch-repeat-backward)
+    ("s-e" isearch-yank-kill) ("s-f" isearch-forward) ("s-F" isearch-backward) ("s-g" isearch-repeat-forward)
+    ("s-h" ns-do-hide-emacs) ("s-H" ns-do-hide-others) ("s-j" exchange-point-and-mark) ("s-k" kill-current-buffer)
+    ("s-l" goto-line) ("s-m" iconify-frame) ("s-n" make-frame) ("s-o" ns-open-file-using-panel) ("s-p" ns-print-buffer)
+    ("s-q" save-buffers-kill-emacs) ("s-s" save-buffer) ("s-t" menu-set-font) ("s-u" revert-buffer) ("s-v" yank)
+    ("s-w" delete-frame) ("s-x" kill-region) ("s-y" ns-paste-secondary) ("s-z" undo) ("s-+" text-scale-adjust)
+    ("s-=" text-scale-adjust) ("s--" text-scale-adjust) ("s-0" text-scale-adjust) ("s-|" shell-command-on-region)
+    ("s-<right>" move-end-of-line) ("s-<left>" move-beginning-of-line) ("<home>" beginning-of-buffer)
+    ("<end>" end-of-buffer))
+  "The global keys Emacs' term/ns-win.el binds on macOS (Emacs 30), which a Linux test cannot load.")
+
+(defun drgnx-keys-test--ns-global ()
+  "Emacs' global keymap as it is on macOS: the Linux defaults plus ns-win's keys."
+  (let ((m (copy-keymap drgnx-keys-test--defaults)))
+    (pcase-dolist (`(,key ,cmd) drgnx-keys-test--ns-defaults) (keymap-set m key cmd))
+    m))
+
+(ert-deftest drgnx-keys/vscode-on-macos-matches-vscode ()
+  ;; VS Code's own macOS keys where they are not its Linux key with Ctrl → Cmd; every key valid.
+  (let ((r (drgnx-keys-test--resolve '((vscode app editing window)) :platform 'macos)))
+    (pcase-dolist (`(,id ,key) '((toggle-panel "C-`") (terminal-new "C-S-`") (go-recent "C-<tab>") (go-back "C--")
+                                 (go-forward "C-_") (next-tab "M-s-<right>") (previous-tab "M-s-<left>")
+                                 (file-close-window "S-s-w") (move-editor-to-next-group "C-s-<right>")
+                                 (edit-expand "C-S-s-<right>") (edit-shrink "C-S-s-<left>")
+                                 (explorer-copy-path "M-s-c") (explorer-reveal-externally "M-s-r") (quit "s-q")
+                                 (preferences "s-,") (palette "S-s-p") (edit-select-all "s-a") (save-all "M-s-s")
+                                 (scm-view "C-S-g") (edit-fold "M-s-[") (edit-unfold "M-s-]") (close-tab "s-w")
+                                 (org-capture "C-c c") (explorer-copy-relative-path "M-S-s-c")
+                                 (toggle-right-dock "M-s-b") (explorer-delete "s-<backspace>")))
+      (should (equal (list id key t) (list id key (and (member key (drgnx-keys-test--keys r id)) t)))))
+    (should-not (drgnx-keys-test--keys r 'preferences-modules))   ; s-, is Settings, as in VS Code
+    (should (null (plist-get r :problems)))))
+
+(ert-deftest drgnx-keys/vscode-on-macos-has-mac-text-editing ()
+  (let ((r (drgnx-keys-test--resolve '((vscode app editing window)) :platform 'macos)))
+    (pcase-dolist (`(,key ,id) '(("s-<left>" edit-line-start) ("s-<right>" edit-line-end) ("s-<up>" edit-buffer-start)
+                                 ("s-<down>" edit-buffer-end) ("M-<left>" edit-word-left) ("M-<right>" edit-word-right)
+                                 ("M-<backspace>" edit-delete-word-back) ("s-<backspace>" edit-delete-line-back)))
+      ;; In the global keymap (the Explorer's s-<backspace> deletes a file, Tab-accept's s-<right> a word)
+      (should (equal (list key (list id)) (list key (drgnx-keys-test--on r key t)))))))
+
+(ert-deftest drgnx-keys/vscode-on-macos-leaves-the-system-keys ()
+  ;; Hide, minimise, next window, Spotlight and the app switcher are macOS'.
+  (let ((r (drgnx-keys-test--resolve '((vscode app editing window)) :platform 'macos)))
+    (dolist (key '("s-h" "s-m" "s-`" "s-SPC" "s-<tab>"))
+      (should (equal (list key nil) (list key (drgnx-keys-test--on r key)))))))
+
+(ert-deftest drgnx-keys/vscode-on-macos-has-no-conflicts ()
+  ;; Against Emacs' macOS defaults (ns-win's s- keys): no two commands on one key, no problem, and the
+  ;; only conflicts are the deliberate prefixes Linux has too — VS Code's Cmd+K chords over s-k, F1, F2.
+  (let* ((r (drgnx-keys-test--with-core-commands
+             (drgnx-keys-resolve :commands (drgnx-commands-all) :profiles drgnx-keys-test--profiles
+                                 :layers '((vscode app editing window)) :platform 'macos
+                                 :defaults (drgnx-keys-test--ns-global))))
+         (drgnx-keys-last r))
+    (should (null (plist-get r :problems)))
+    (should-not (seq-find (lambda (c) (not (eq (plist-get c :kind) 'prefix))) (plist-get r :conflicts)))
+    (should (equal (sort (mapcar (lambda (l) (car (split-string l))) (drgnx-keys-conflict-lines)) #'string<)
+                   '("<f1>" "<f2>" "s-k")))
+    (should (string-search "kill-current-buffer (s-k)" (seq-find (lambda (l) (string-prefix-p "s-k " l))
+                                                                 (drgnx-keys-conflict-lines))))
+    ;; The ns-win keys VS Code takes over, on purpose; the others stay Emacs' (s-c, s-v, s-x, s-z …).
+    (should (equal (sort (seq-filter (lambda (key) (seq-find (lambda (b) (and (null (plist-get b :map))
+                                                                              (equal (plist-get b :key) key)))
+                                                             (plist-get r :bindings)))
+                                     (mapcar #'car drgnx-keys-test--ns-defaults))
+                         #'string<)
+                   (sort (list "<end>" "<home>" "s-'" "s-+" "s-," "s--" "s-0" "s-<left>" "s-<right>" "s-=" "s-a"
+                               "s-f" "s-l" "s-n" "s-o" "s-p" "s-q" "s-s" "s-t" "s-w")
+                         #'string<)))))
+
+(defconst drgnx-keys-test--linux-snapshot
+  '((palette "C-S-p" nil) (palette "<f1>" nil) (keys-sheet "C-k C-s" nil) (preferences-modules "C-," nil)
+    (modules-toggle "RET" drgnx-modules-list-mode-map) (keyboard-profile "C-k C-p" nil) (open-file "C-o" nil)
+    (save-file "C-s" nil) (file-save-as "C-S-s" nil) (file-new "C-n" nil) (file-reopen-tab "C-S-t" nil)
+    (file-new-window "C-S-n" nil) (file-close-window "C-q" nil) (view-escape "<escape>" nil)
+    (toggle-panel "C-`" nil) (toggle-panel "M-j" nil) (toggle-right-dock "C-M-b" nil)
+    (split-editor-right "C-\\" nil) (split-editor-down "C-k C-\\" nil) (close-group-editors "C-k w" nil)
+    (focus-group-1 "C-1" nil) (focus-group-1 "M-1" nil) (focus-group-2 "C-2" nil) (focus-group-2 "M-2" nil)
+    (focus-group-3 "C-3" nil) (focus-group-3 "M-3" nil) (move-editor-to-next-group "C-M-<right>" nil)
+    (open-editor-in-new-window "C-k o" nil) (view-panel-next "M-`" nil) (help-mode-menu "C-'" nil)
+    (close-tab "C-w" nil) (close-tab "C-<f4>" nil) (next-tab "C-<next>" nil) (previous-tab "C-<prior>" nil)
+    (toggle-sidebar "C-b" nil) (dock-back "<escape>" drgnx-wb-dock-map) (focus-explorer "C-S-e" nil)
+    (explorer-next "<down>" drgnx-explorer-mode-map) (explorer-previous "<up>" drgnx-explorer-mode-map)
+    (explorer-expand "<right>" drgnx-explorer-mode-map) (explorer-collapse "<left>" drgnx-explorer-mode-map)
+    (explorer-open "RET" drgnx-explorer-mode-map) (explorer-preview "SPC" drgnx-explorer-mode-map)
+    (explorer-select-down "S-<down>" drgnx-explorer-mode-map) (explorer-select-up "S-<up>" drgnx-explorer-mode-map)
+    (explorer-mark "C-SPC" drgnx-explorer-mode-map) (explorer-find "C-M-f" drgnx-explorer-mode-map)
+    (explorer-rename "<f2>" drgnx-explorer-mode-map) (explorer-delete "<delete>" drgnx-explorer-mode-map)
+    (explorer-delete-permanently "S-<delete>" drgnx-explorer-mode-map) (explorer-copy "C-c" drgnx-explorer-mode-map)
+    (explorer-cut "C-x" drgnx-explorer-mode-map) (explorer-paste "C-v" drgnx-explorer-mode-map)
+    (explorer-copy-path "M-S-c" drgnx-explorer-mode-map)
+    (explorer-copy-relative-path "C-M-S-c" drgnx-explorer-mode-map)
+    (explorer-reveal-externally "M-S-r" drgnx-explorer-mode-map) (focus-outline "C-M-o" nil)
+    (outline-open "RET" drgnx-outline-mode-map) (save-all "C-k s" nil) (close-saved "C-k u" nil)
+    (close-all "C-k C-w" nil) (focus-buffers "C-k e" nil) (focus-buffers "C-S-b" nil)
+    (buffers-next "<down>" drgnx-buffers-mode-map) (buffers-previous "<up>" drgnx-buffers-mode-map)
+    (buffers-open "RET" drgnx-buffers-mode-map) (buffers-close "<delete>" drgnx-buffers-mode-map)
+    (buffers-filter "C-M-f" drgnx-buffers-mode-map) (edit-fold "C-{" nil) (edit-unfold "C-}" nil)
+    (edit-expand "M-S-<right>" nil) (edit-shrink "M-S-<left>" nil) (edit-select-all "C-S-a" nil)
+    (edit-select-line "C-l" nil) (edit-redo "C-S-z" nil) (edit-comment "C-/" nil) (edit-delete-line "C-S-k" nil)
+    (edit-move-up "M-<up>" nil) (edit-move-down "M-<down>" nil) (edit-duplicate "M-S-<down>" nil)
+    (edit-line-below "C-<return>" nil) (edit-line-above "C-S-<return>" nil) (go-back "M-<left>" nil)
+    (go-forward "M-<right>" nil) (code-definition "<f12>" nil) (code-references "S-<f12>" nil)
+    (code-rename "<f2>" nil) (code-hover "C-S-SPC" nil) (code-quick-fix "C-." nil) (code-problems "C-S-m" nil)
+    (org-capture "C-c c" nil) (org-agenda "C-c a" nil) (go-quick-open "C-p" nil) (search-project "C-S-f" nil)
+    (go-symbol "C-S-o" nil) (go-symbol-project "C-t" nil) (go-recent "C-<tab>" nil) (search-file "C-f" nil)
+    (search-replace "C-S-h" nil) (terminal-new "C-S-`" nil) (scm-view "C-S-g" nil) (view-zen "C-k z" nil)
+    (view-zen "<f11>" nil) (view-zoom-in "C-=" nil) (view-zoom-in "C-+" nil) (view-zoom-out "C--" nil)
+    (view-zoom-reset "C-0" nil) (agents-view "C-k a" nil) (agents-stop "C-c C-c" drgnx-agents-transcript-mode-map)
+    (agents-deliver "C-c C-d" drgnx-agents-transcript-mode-map) (agents-open "RET" drgnx-agents-list-mode-map)
+    (agents-reply "RET" drgnx-agents-transcript-mode-map)
+    (agents-review-done "C-c C-c" drgnx-agents-review-mode-map)
+    (agents-review-reject "C-c C-k" drgnx-agents-review-mode-map)
+    (ai-accept-word "C-<right>" drgnx-ai-ghost-showing-map) (ai-dismiss "<escape>" drgnx-ai-ghost-showing-map)
+    (ai-tab "TAB" drgnx-ai-ghost-mode-map) (ai-edit "C-k C-e" nil)
+    (ai-edit-apply-hunk "C-c C-a" drgnx-ai-edit-review-mode-map)
+    (ai-edit-done "C-c C-c" drgnx-ai-edit-review-mode-map) (ai-edit-reject "C-c C-k" drgnx-ai-edit-review-mode-map)
+    (work-view "C-k t" nil) (work-open "RET" drgnx-work-mode-map) (work-toggle "TAB" drgnx-work-mode-map)
+    (work-refresh "g" drgnx-work-mode-map) (work-filter "f" drgnx-work-mode-map)
+    (work-hide-merged "m" drgnx-work-mode-map))
+  "The VS Code profile's resolved keys on Linux before M12a gave it its macOS keys: (ID KEY MAP).")
+
+(ert-deftest drgnx-keys/linux-is-unchanged ()
+  ;; The macOS work changes nothing on Linux but the keys of the commands it added.
+  (let* ((new '(quit preferences edit-line-start edit-line-end edit-buffer-start edit-buffer-end edit-word-left
+                     edit-word-right edit-delete-word-back edit-delete-line-back))
+         (r (drgnx-keys-test--resolve '((vscode app editing window)) :platform 'linux)))
+    (should (equal (mapcar (lambda (b) (list (plist-get b :id) (plist-get b :key) (plist-get b :map)))
+                           (seq-remove (lambda (b) (memq (plist-get b :id) new)) (plist-get r :bindings)))
+                   drgnx-keys-test--linux-snapshot))
+    (should (equal (drgnx-keys-test--keys r 'edit-line-start) '("<home>")))
+    (should (equal (drgnx-keys-test--keys r 'edit-word-left) '("C-<left>")))
+    (should-not (drgnx-keys-test--keys r 'quit))
+    (should-not (drgnx-keys-test--keys r 'preferences))))
+
+(defvar drgnx-keys-test--cmd-mod 'meta)
+(defvar drgnx-keys-test--alt-mod 'alt)
+(defvar drgnx-keys-test--right-alt-mod 'left)
+
+(ert-deftest drgnx-keys/vscode-on-macos-sets-the-modifiers ()
+  ;; Cmd is s-, left Option is Meta, right Option types characters — and another profile gets them back.
+  (let ((drgnx-keys--mac-modifiers '((drgnx-keys-test--cmd-mod . super) (drgnx-keys-test--alt-mod . meta)
+                                     (drgnx-keys-test--right-alt-mod . none) (drgnx-keys-test--unbound . none)))
+        (drgnx-keys--saved-modifiers nil)
+        (drgnx-keys-test--cmd-mod 'meta) (drgnx-keys-test--alt-mod 'alt) (drgnx-keys-test--right-alt-mod 'left))
+    (drgnx-keys-test--live
+     (cl-letf (((symbol-function 'drgnx-platform) (lambda () 'macos)))
+       (drgnx-keys-use '((vscode app editing window)))
+       (should (equal (list drgnx-keys-test--cmd-mod drgnx-keys-test--alt-mod drgnx-keys-test--right-alt-mod)
+                      '(super meta none)))
+       (should-not (boundp 'drgnx-keys-test--unbound))            ; only the variables this Emacs has
+       (drgnx-keys-use '((vscode app editing window)))           ; again: what it found first is kept
+       (drgnx-keys-use '((emacs app editing window)))
+       (should (equal (list drgnx-keys-test--cmd-mod drgnx-keys-test--alt-mod drgnx-keys-test--right-alt-mod)
+                      '(meta alt left)))
+       (drgnx-keys-use '((emacs editing) (vscode app window)))   ; VS Code's Cmd keys: Cmd is s- again
+       (should (eq drgnx-keys-test--cmd-mod 'super)))
+     (drgnx-keys-use '((emacs app editing window))))
+    ;; On Linux nothing changes.
+    (drgnx-keys-test--live
+     (cl-letf (((symbol-function 'drgnx-platform) (lambda () 'linux)))
+       (drgnx-keys-use '((vscode app editing window)))
+       (should (eq drgnx-keys-test--cmd-mod 'meta))))))
+
+(ert-deftest drgnx-keys/platform-names-the-system ()
+  (should (eq (let ((system-type 'darwin)) (drgnx-platform)) 'macos))
+  (should (eq (let ((system-type 'gnu/linux)) (drgnx-platform)) 'linux))
+  (should (eq (let ((system-type 'darwin)) (drgnx-keys-platform)) 'macos)))

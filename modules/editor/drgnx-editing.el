@@ -7,7 +7,8 @@
 ;; outline elsewhere), change case (camelCase, snake_case, kebab-case, cycle), expand and shrink
 ;; the selection (tree-sitter nodes when the buffer has a parser, else words and balanced
 ;; expressions), go to line; the VS Code line commands (move, select, duplicate, delete, new line
-;; above/below), redo, comment, back/forward.  See docs/guide/modules.md.
+;; above/below), redo, comment, back/forward; VS Code's cursor moves and deletes (Home, End, word,
+;; file start/end, delete word or line left — Cmd+←, Option+←, Cmd+⌫ on a Mac).  See docs/guide/modules.md.
 
 ;;; Code:
 (require 'cl-lib)
@@ -173,6 +174,28 @@
   (forward-line -1)
   (indent-according-to-mode))
 
+;;;; Moving and deleting, as VS Code (Home, End, Cmd+←, Option+←, Cmd+⌫ on a Mac)
+
+(defun drgnx-editing-line-start ()
+  "Move to the line's first non-blank character; there already, to the line's very start."
+  (interactive "^")
+  (let ((pt (point)))
+    (back-to-indentation)
+    (when (= pt (point)) (move-beginning-of-line 1))))
+
+(defun drgnx-editing-line-end () "Move to the end of the line." (interactive "^") (move-end-of-line 1))
+(defun drgnx-editing-buffer-start () "Move to the start of the file (no mark set)." (interactive "^") (goto-char (point-min)))
+(defun drgnx-editing-buffer-end () "Move to the end of the file (no mark set)." (interactive "^") (goto-char (point-max)))
+(defun drgnx-editing-word-left () "Move to the start of the word." (interactive "^") (backward-word 1))
+(defun drgnx-editing-word-right () "Move to the end of the word." (interactive "^") (forward-word 1))
+(defun drgnx-editing-delete-word-back () "Delete the word before the cursor." (interactive) (backward-kill-word 1))
+
+(defun drgnx-editing-delete-line-back ()
+  "Delete from the cursor to the line's start; at the start, join the line to the one above."
+  (interactive)
+  (cond ((not (bolp)) (kill-line 0))
+        ((not (bobp)) (delete-char -1))))
+
 (drgnx-module-define 'editor/editing
                      :doc "Fold, change case, expand and shrink the selection, go to line."
                      :stage 'startup
@@ -198,6 +221,14 @@
                                         (edit-duplicate "Duplicate Line" duplicate-dwim "Copy the line (or the selection) below")
                                         (edit-line-below "New Line Below" drgnx-editing-line-below "Start a new line below this one")
                                         (edit-line-above "New Line Above" drgnx-editing-line-above "Start a new line above this one")
+                                        (edit-line-start "Cursor to Line Start" drgnx-editing-line-start "The first non-blank character, then the line's start")
+                                        (edit-line-end "Cursor to Line End" drgnx-editing-line-end "The end of the line")
+                                        (edit-buffer-start "Cursor to File Start" drgnx-editing-buffer-start "The start of the file")
+                                        (edit-buffer-end "Cursor to File End" drgnx-editing-buffer-end "The end of the file")
+                                        (edit-word-left "Cursor Word Left" drgnx-editing-word-left "The start of the word")
+                                        (edit-word-right "Cursor Word Right" drgnx-editing-word-right "The end of the word")
+                                        (edit-delete-word-back "Delete Word Left" drgnx-editing-delete-word-back "Delete the word before the cursor")
+                                        (edit-delete-line-back "Delete to Line Start" drgnx-editing-delete-line-back "Delete from the cursor to the line's start")
                                         (go-back "Back" xref-go-back "Return to where you jumped from")
                                         (go-forward "Forward" xref-go-forward "Undo a Back")))
                          (drgnx-command-define id :category (if (string-prefix-p "go-" (symbol-name id)) "Go" "Edit") :title title

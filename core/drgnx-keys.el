@@ -8,8 +8,9 @@
 ;; modules add with `drgnx-keys-define'.  The active setup is a stack of layers, each a profile
 ;; with the command scopes it covers (editing, app, window); later layers win, the user's
 ;; keys.eld wins over all, and every conflict is reported, never silently resolved.
-;; `drgnx-keys-resolve' is the pure part: inputs in, (bindings conflicts problems) out.
-;; See docs/guide/keys.md.
+;; `drgnx-keys-resolve' is the pure part: inputs in, (bindings conflicts problems) out.  On macOS
+;; the VS Code profile's C- is Cmd (s-) unless an entry's :mac says otherwise, and applying it sets
+;; Cmd, left and right Option for it.  See docs/guide/keys.md.
 
 ;;; Code:
 (require 'cl-lib)
@@ -47,9 +48,13 @@ cannot be read (never an error or a prompt)."
       (and (consp m) (symbolp (car m)) (car m) (symbolp (cdr m)) (cdr m))))
 
 (defun drgnx-keys--entry-error (entry)
-  "Why ENTRY is not (ID KEY… [:map M] [:mac K…]) or (ID :none [REASON]); nil if it is."
+  "Why ENTRY is not (ID KEY… [:map M] [:mac K…]) or (ID :none [REASON] [:mac K…]); nil if it is."
   (cond ((not (and (consp entry) (symbolp (car entry)) (proper-list-p entry))) "not a list (ID KEY…)")
-        ((eq (cadr entry) :none) nil)
+        ((eq (cadr entry) :none)
+         (let ((rest (if (stringp (nth 2 entry)) (nthcdr 3 entry) (nthcdr 2 entry))))
+           (cond ((null rest) nil)
+                 ((not (and (eq (car rest) :mac) (= (length rest) 2) (seq-every-p #'stringp (ensure-list (cadr rest)))))
+                  (format "%S after :none (only a reason and :mac KEYS may follow it)" rest)))))
         (t (let ((rest (cdr entry)))
              (while (stringp (car rest)) (pop rest))
              (cond ((eq rest (cdr entry)) "no keys (write (ID :none \"reason\") for none)")
@@ -91,19 +96,33 @@ cannot be read (never an error or a prompt)."
 ;;;; Resolution
 
 (defun drgnx-keys--mac-cmd (key)
-  "KEY with every C- modifier turned into s- (Cmd), as VS Code does on macOS."
-  (replace-regexp-in-string "\\(\\`\\| \\)C-" "\\1s-" key t))
+  "KEY with every C- modifier turned into s- (Cmd), as VS Code does on macOS; the modifiers stay in
+the order keys are written in (A-C-H-M-S-s): C-S-p is S-s-p, C-M-b is M-s-b."
+  (mapconcat (lambda (event)
+               (if (string-match "\\`\\(\\(?:[ACHMSs]-\\)*\\)\\(.+\\)\\'" event)
+                   (let* ((base (match-string 2 event)) (mods (split-string (match-string 1 event) "-" t)))
+                     (if (member "C" mods)
+                         (concat (mapconcat (lambda (m) (concat m "-"))
+                                            (seq-filter (lambda (m) (member m (cons "s" (remove "C" mods))))
+                                                        '("A" "C" "H" "M" "S" "s"))
+                                            "")
+                                 base)
+                       event))
+                 event))
+             (split-string key " ") " "))
 
 (defun drgnx-keys--entry (entry spec platform)
-  "ENTRY (ID KEY… [:map M] [:mac K]) or (ID :none REASON) of SPEC → plist (:keys :map :profile-map).
-The keymap used is the entry's, else the command's, else the profile's."
+  "ENTRY (ID KEY… [:map M] [:mac K…]) or (ID :none [REASON] [:mac K…]) of SPEC → plist (:keys :map
+:profile-map).  On macOS, :mac's keys replace the others (`:mac ()': none there); without it a :mac-cmd
+profile's C- becomes s-.  The keymap used is the entry's, else the command's, else the profile's."
   (let ((rest (cdr entry)) keys)
     (if (eq (car rest) :none)
-        (list :keys nil)
+        (let ((opts (if (stringp (cadr rest)) (cddr rest) (cdr rest))))
+          (list :keys (and (eq platform 'macos) (ensure-list (plist-get opts :mac))) :profile-map (plist-get spec :map)))
       (while (stringp (car rest)) (push (pop rest) keys))
       (setq keys (nreverse keys))
       (when (eq platform 'macos)
-        (setq keys (cond ((plist-get rest :mac) (ensure-list (plist-get rest :mac)))
+        (setq keys (cond ((plist-member rest :mac) (ensure-list (plist-get rest :mac)))
                          ((plist-get spec :mac-cmd) (mapcar #'drgnx-keys--mac-cmd keys))
                          (t keys))))
       (list :keys keys :map (plist-get rest :map) :profile-map (plist-get spec :map)))))
@@ -306,7 +325,27 @@ KIND `same-key', `claim' (a key another layer uses natively) or `prefix'."
                  (setq form (plist-put form :unbind nil)))
                form))))))
 
-(defun drgnx-keys-platform () (if (eq system-type 'darwin) 'macos 'linux))
+(define-obsolete-function-alias 'drgnx-keys-platform #'drgnx-platform "drgnx M12a")
+
+(defvar drgnx-keys--mac-modifiers
+  '((ns-command-modifier . super) (ns-alternate-modifier . meta) (ns-right-alternate-modifier . none)
+    (mac-command-modifier . super) (mac-option-modifier . meta) (mac-right-option-modifier . none))
+  "On macOS with VS Code keys: Cmd is s-, left Option is Meta (Option+← moves by word), right Option
+types characters (@ # { [ on any layout).  The ns- variables are Emacs' own port's, the mac- ones the
+Mac port's; only those this Emacs has are set.")
+
+(defvar drgnx-keys--saved-modifiers nil "What `drgnx-keys--mac-modifiers' replaced: ((VARIABLE . VALUE)…).")
+
+(defun drgnx-keys--set-mac-modifiers (layers)
+  "On macOS, with the vscode profile in LAYERS: set the modifiers VS Code's keys need; otherwise put
+back what was there before."
+  (if (and (eq (drgnx-platform) 'macos) (assq 'vscode layers))
+      (pcase-dolist (`(,var . ,value) drgnx-keys--mac-modifiers)
+        (when (boundp var)
+          (unless (assq var drgnx-keys--saved-modifiers) (push (cons var (symbol-value var)) drgnx-keys--saved-modifiers))
+          (set var value)))
+    (pcase-dolist (`(,var . ,value) drgnx-keys--saved-modifiers) (set var value))
+    (setq drgnx-keys--saved-modifiers nil)))
 
 (defun drgnx-keys--set (map key def)
   "Bind KEY to DEF in MAP; nil DEF removes the entry."
@@ -375,8 +414,9 @@ Never prompts: problems are collected in `drgnx-keys-last'.  Returns the resolut
         (let* ((user (drgnx-keys-read-user))
                (layers (or drgnx-keys--session-layers (plist-get user :layers) drgnx-keys-layers))
                (r (drgnx-keys-resolve :commands (drgnx-commands-all) :profiles drgnx-keys-profiles :layers layers
-                                      :user user :platform (drgnx-keys-platform) :defaults drgnx-keys--defaults
+                                      :user user :platform (drgnx-platform) :defaults drgnx-keys--defaults
                                       :maps (lambda (m) (and (boundp m) (keymapp (symbol-value m)) (symbol-value m))))))
+          (drgnx-keys--set-mac-modifiers layers)
           (dolist (c (drgnx-commands-all)) (setf (drgnx-cmd-bound c) nil))
           (dolist (b (plist-get r :bindings))
             (let ((cmd (drgnx-commands-get (plist-get b :id))))

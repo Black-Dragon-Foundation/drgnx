@@ -36,8 +36,8 @@
     (when all (setcdr (last all) nil))     ; the last cdr holds the base size
     (mapcar #'substring-no-properties all)))
 
-(defun drgnx-palette ()
-  "Run any drgnx command by name; `#' followed by words is a Semantic Search.
+(defun drgnx-palette (&optional initial)
+  "Run any drgnx command by name; `#' followed by words is a Semantic Search; INITIAL is typed already.
 The answer is resolved here, not by the completion UI (`require-match' is nil): a command label runs it;
 text starting with `#' is a question; empty does nothing; a partial label that completes to one command
 runs it; several is an \"Ambiguous\" error naming up to three; none is \"No command\"."
@@ -52,7 +52,7 @@ runs it; several is an \"Ambiguous\" error naming up to three; none is \"No comm
                   (if (eq action 'metadata)
                       `(metadata (annotation-function . ,annotate) (category . drgnx-command))
                     (complete-with-action action cands string pred))))
-         (choice (string-trim (completing-read "Command (# for a code question): " table nil nil))))
+         (choice (string-trim (completing-read "Command (# for a code question): " table nil nil initial))))
     (cond ((string-empty-p choice))
           ((assoc choice cands) (drgnx-surfaces-run (cdr (assoc choice cands))))
           ((string-prefix-p "#" choice) (drgnx-palette--search (string-trim (substring choice 1))))
@@ -62,6 +62,11 @@ runs it; several is an \"Ambiguous\" error naming up to three; none is \"No comm
                  (1 (drgnx-surfaces-run (cdr (assoc (car labels) cands))))
                  (_ (user-error "Ambiguous: %s%s" (string-join (seq-take labels 3) ", ")
                                 (if (> (length labels) 3) ", …" "")))))))))
+
+(defun drgnx-palette-preferences ()
+  "The palette with \"Preferences: \" typed: every preference, one command away (VS Code's Cmd+,)."
+  (interactive)
+  (drgnx-palette "Preferences: "))
 
 (provide 'drgnx-palette)
 ;;; drgnx-palette.el ends here

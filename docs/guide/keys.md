@@ -53,7 +53,49 @@ A command that lives in a mode's keymap (like those) keeps its keymap in every p
 else the command's own, else the profile's.
 
 "—" means the profile has no key for it; every command is always in the palette. Vim's keys are leader keys in
-evil's normal state. On **macOS** the VS Code profile uses Cmd: `C-` becomes `s-` (`s-o`, `s-k s-s`, `s-S-p`).
+evil's normal state. On **macOS** the VS Code profile uses Cmd (`s-`) as VS Code does there — see below.
+
+## On a Mac
+
+The VS Code profile on macOS has **VS Code's own Mac keys**: `C-` becomes Cmd (`s-o`, `s-k s-s`, `S-s-p`), except
+where VS Code on a Mac uses another key — there it has that one (`:mac` in `keys/vscode.eld`):
+
+| Command | Linux | Mac |
+|---|---|---|
+| Toggle Panel / New Terminal | ``C-` `` / ``C-S-` `` | Ctrl: ``C-` `` / ``C-S-` `` (Cmd+` is macOS' next window) |
+| Go to Recent / Back / Forward | `C-<tab>` / `M-<left>` / `M-<right>` | Ctrl: `C-<tab>` / `C--` / `C-_` (Ctrl+Shift+-) |
+| Next / Previous Tab | `C-<next>` / `C-<prior>` | `M-s-<right>` / `M-s-<left>` (Option+Cmd+→ / ←) |
+| Close Tab / Close Window | `C-w` / `C-q` | `s-w` / `S-s-w` (Shift+Cmd+W) |
+| Quit drgnx | — (File → Quit; `C-q` closes the window as in VS Code) | `s-q` (offers to save, then stops drgnx) |
+| Move Editor to Next Group | `C-M-<right>` | `C-s-<right>` (Ctrl+Cmd+→) |
+| Expand / Shrink Selection | `M-S-<right>` / `M-S-<left>` | `C-S-s-<right>` / `C-S-s-<left>` (Ctrl+Shift+Cmd+→ / ←) |
+| Fold / Unfold | `C-{` / `C-}` | `M-s-[` / `M-s-]` (Option+Cmd+[ / ]) |
+| Select All / Save All | `C-S-a` / `C-k s` | `s-a` / `M-s-s` (Option+Cmd+S) |
+| Source Control | `C-S-g` | Ctrl: `C-S-g` |
+| All Preferences… / Preferences: Modules | — / `C-,` | `s-,` (the palette on every Preferences command) / — |
+| Explorer: Copy Path / Reveal in Finder | `M-S-c` / `M-S-r` | `M-s-c` / `M-s-r` (Option+Cmd+C / R) |
+| Explorer: Delete / Delete Permanently | `<delete>` / `S-<delete>` | `s-<backspace>` / `M-s-<backspace>` (and the Linux keys) |
+| Explorer: Select (mark) | `C-SPC` | `C-SPC` (Cmd+Space is Spotlight) |
+| Org Capture / Agenda, `C-c` keys of transcripts, reviews and grep | `C-c …` | the same `C-c …` (Cmd+C copies) |
+
+And the Mac's text editing, as in every Mac app (Linux has VS Code's Linux keys for them):
+
+| Command | Linux | Mac |
+|---|---|---|
+| Cursor to Line Start / End | `<home>` / `<end>` | `s-<left>` / `s-<right>` (and Home / End) |
+| Cursor to File Start / End | `C-<home>` / `C-<end>` | `s-<up>` / `s-<down>` |
+| Cursor Word Left / Right | `C-<left>` / `C-<right>` | `M-<left>` / `M-<right>` (Option+← / →) |
+| Delete Word Left / Delete to Line Start | `C-<backspace>` / — | `M-<backspace>` / `s-<backspace>` |
+
+Line Start goes to the first non-blank character, and from there to the very start, as VS Code's Home. With Shift
+they select. Cmd+H (hide), Cmd+M (minimise), Cmd+` (next window), Cmd+Space and Cmd+Tab stay macOS'; Cmd+C, Cmd+V,
+Cmd+X and Cmd+Z are Emacs' own Mac keys (copy, paste, cut, undo). The Emacs and Vim profiles keep their own keys
+(`C-a`, `M-f`, `0`, `w`, …).
+
+**Modifier keys.** With the VS Code profile (also as the app layer under Emacs or Vim editing) drgnx sets, on a Mac:
+Cmd is `s-` (super), the **left Option is Meta** (`M-`: Option+← moves by word, Option+Cmd+→ is next tab), and the
+**right Option types characters** — `@ # { [ €` on any layout, as in every other Mac app. Switching to the Emacs or
+Vim profile puts back what was there. (GNU Emacs' `ns-` variables and the Mac port's `mac-` ones are both handled.)
 
 ## Layers and scopes
 
@@ -99,7 +141,8 @@ cannot be bound, a prefix it replaces) joins the list and the report then.
 
 - Command ids are the registry ids (the palette shows the commands; `drgnx-commands-all` lists them).
 - `:map` is a keymap symbol or `(FEATURE . KEYMAP)` for a keymap that exists once FEATURE is loaded.
-- `:mac` gives a different key on macOS: `(palette "C-c p" :mac "s-p")`.
+- `:mac` gives a different key on macOS: `(palette "C-c p" :mac "s-p")`; `:mac ()` is no key there, and
+  `(quit :none "reason" :mac "s-q")` a key only there.
 - A mistake never breaks startup: an unreadable file, an unknown command or an invalid key is a problem on the key
   sheet and in the doctor, and everything else still applies.
 - Keyboard Profile… rewrites only `:layers` and keeps the rest of the file.
@@ -123,7 +166,9 @@ profile has no natural key for it. Profiles ship as data in `keys/<profile>.eld`
 ## How it works
 
 `core/drgnx-keys.el`: `drgnx-keys-resolve` is a pure function — commands, profiles, layers, `keys.eld`, platform and
-Emacs' default bindings in; winning bindings, conflicts and problems out. `drgnx-keys-apply` binds the result and
+Emacs' default bindings in; winning bindings, conflicts and problems out (`drgnx-platform` names the platform:
+`macos` or `linux`; on macOS Emacs' defaults include its Mac port's `s-` keys, so taking `s-k` for VS Code's
+Cmd+K chords is a reported prefix conflict, as `C-k` over `kill-line` is on Linux). `drgnx-keys-apply` binds the result and
 remembers what each binding replaced, so the next switch restores Emacs' own bindings first (and leaves alone a
 binding someone else changed since). The active keys of each command are in its `bound` slot, which every surface
 reads. Tests: `test/unit/core-keys-test.el` (resolution, switching, keys.eld, surfaces) and
