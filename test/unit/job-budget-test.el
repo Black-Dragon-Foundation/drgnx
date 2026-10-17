@@ -110,4 +110,14 @@
         (should (> (drgnx-coord-version) 0))
         (should (string-search (format "version %d" (drgnx-coord-version)) (drgnx-job--handover id s)))))))
 
+(ert-deftest drgnx-job/handover-never-quotes-a-git-failure ()
+  ;; git cannot log there (not a repository): the successor is told "none", not git's error
+  (drgnx-job-run-test--with "# One\n\n### Task 1: one\n"
+    (let* ((drgnx-job-max-agents 0) (id (drgnx-job-propose plan)))
+      (drgnx-job-approve id)
+      (let* ((s (drgnx-agents--make :id "s-h" :name "h" :profile "mock" :cwd root :task (concat id "#1") :job id))
+             (text (drgnx-job--handover id s)))
+        (should (string-search "Its last commit: none" text))
+        (should-not (string-search "fatal" text))))))
+
 ;;; job-budget-test.el ends here

@@ -513,7 +513,9 @@ goes to the user."
 
 (defun drgnx-job--handover (id s)
   "What agent S of job ID leaves its successor: its last commit and its last words."
-  (let* ((commit (cdr (drgnx-job--git (drgnx-agent-session-cwd s) "log" "-1" "--format=%h %s" (format "job/%s..HEAD" id))))
+  (let* ((commit (pcase (drgnx-job--git (drgnx-agent-session-cwd s) "log" "-1" "--format=%h %s" (format "job/%s..HEAD" id))
+                   (`(0 . ,out) out)
+                   (_ "")))                                  ; git failed: no commit to name, never its error
          (said (mapconcat (lambda (e) (or (plist-get e :text) ""))
                           (seq-filter (lambda (e) (eq (plist-get e :type) 'agent)) (drgnx-agent-session-entries s)) ""))
          (said (substring said (max 0 (- (length said) 2000)))))
