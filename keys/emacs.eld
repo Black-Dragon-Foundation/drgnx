@@ -134,6 +134,7 @@
         (split-editor-right :none "C-x 3 splits (stock)")
         (split-editor-down :none "C-x 2 splits (stock)")
         (close-group :none "C-x 0 (stock)")
+        (close-group-editors :none "in the palette")
         (focus-group-1 :none "C-x o moves between windows")
         (focus-group-2 :none "C-x o moves between windows")
         (focus-group-3 :none "C-x o moves between windows")

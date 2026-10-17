@@ -54,15 +54,28 @@
 (defun drgnx-groups-focus-2 () "Focus the second editor group (made if there is one group)." (interactive) (drgnx-groups-focus 2))
 (defun drgnx-groups-focus-3 () "Focus the third editor group (made if there are two)." (interactive) (drgnx-groups-focus 3))
 
+(defun drgnx-groups-close-all-editors ()
+  "Close every tab of this group (its files stay open): the group closes, or, the last one, shows
+*scratch*."
+  (interactive)
+  (let ((g (drgnx-groups--current)))
+    (if (cdr (drgnx-groups-list))
+        (progn (delete-window g) (select-window (drgnx-wb-editor-window)))
+      (set-window-parameter g 'drgnx-tabs nil)
+      (drgnx-signal-post 'tabs-changed)
+      (set-window-buffer g (get-scratch-buffer-create))
+      (drgnx-chrome-apply (window-frame g) t))))
+
 (defun drgnx-groups-move-to-next ()
-  "Move the shown file to the next group (made to the right if there is none)."
+  "Move the shown file to the next group (made to the right if there is none); a group it leaves
+without tabs closes."
   (interactive)
   (let* ((g (drgnx-groups--current)) (b (window-buffer g)) (groups (drgnx-groups-list))
          (next (cadr (memq g groups))))
     (unless next
       (setq next (split-window g nil 'right))
       (set-window-parameter next 'drgnx-tabs nil))
-    (drgnx-chrome--close g b)
+    (if (remq b (drgnx-chrome-tabs g)) (drgnx-chrome--close g b) (delete-window g))
     (set-window-buffer next b)
     (select-window next)
     (drgnx-chrome-apply nil t)))

@@ -135,6 +135,7 @@
         (split-editor-right "SPC w v")
         (split-editor-down "SPC w s")
         (close-group "SPC w c")
+        (close-group-editors :none "in the palette")
         (focus-group-1 "SPC 1")
         (focus-group-2 "SPC 2")
         (focus-group-3 "SPC 3")
