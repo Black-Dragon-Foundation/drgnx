@@ -46,7 +46,8 @@
     (drgnx-coord-job-set job :data (plist-put data :clashes (cons key (plist-get data :clashes))))))
 
 (defun drgnx-job-clash--side (label d &optional text)
-  (list :label label :text (or text (format "#%s %s: %s" (plist-get d :n) (plist-get d :kind) (plist-get d :subject)))
+  ;; one line: an agent's subject never reads as a line of the reviewer's prompt
+  (list :label label :text (replace-regexp-in-string "[\n\r]+" " " (or text (format "#%s %s: %s" (plist-get d :n) (plist-get d :kind) (plist-get d :subject))))
         :decision (plist-get d :n) :agent (plist-get d :author) :task (plist-get d :task) :reason (plist-get d :reason)))
 
 (defun drgnx-job-clash--card (job key rule subject title sides &optional task more)
@@ -138,8 +139,8 @@ advisory.  The diffs are looked at once per branch head."
          (files (unless (equal (gethash (plist-get task :id) drgnx-job-clash--checked) head)
                   (puthash (plist-get task :id) head drgnx-job-clash--checked)
                   (drgnx-job-clash--changed job n))))
-    ;; overlaps: advisory, once per pair
-    (dolist (other (drgnx-coord-tasks job))
+    ;; overlaps: advisory, once per pair (looked at once per branch head, like the rest)
+    (dolist (other (and files (drgnx-coord-tasks job)))
       (when (and (/= (plist-get other :n) n) (member (plist-get other :status) '("claimed" "running" "needs-input" "in-review")))
         (when-let* ((same (seq-intersection files (drgnx-job-clash--changed job (plist-get other :n)))))
           (let ((key (format "overlap:%d:%d" (min n (plist-get other :n)) (max n (plist-get other :n)))))
@@ -276,7 +277,8 @@ of the job hears; its reviewer ends."
     (let ((job (plist-get card :job)) (id (plist-get card :id)))
       (pcase action
         ("discuss" (if-let* ((r (drgnx-job-clash--reviewer id)))
-                       (drgnx-agents-send r (format "The user asks:\n%s" (drgnx-job--quote (format "%s" (or arg "")))))
+                       (progn (drgnx-agents-send r (format "The user asks:\n%s" (drgnx-job--quote (format "%s" (or arg "")))))
+                              (puthash (drgnx-agent-session-id r) t drgnx-job--reviewing))   ; its answer is read again
                      (drgnx-job-clash--start-reviewer job id (format "%s" (or arg ""))))
          t)
         ("accept" (let ((side (plist-get (plist-get (plist-get card :data) :recommendation) :side)))

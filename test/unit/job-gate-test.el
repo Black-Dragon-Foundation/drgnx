@@ -41,4 +41,15 @@ on since S read it."
       (drgnx-job-run-test--wait (lambda () (eq (drgnx-agent-session-status plain) 'idle)))
       (should-not (plist-get (drgnx-hub--snapshot plain) :enforced)))))
 
+
+(ert-deftest drgnx-job-gate/reading-the-log-is-never-gated ()
+  ;; Claude Code asks permission for MCP tools: the call that catches up (read_decisions) must go through
+  (drgnx-job-gate-test--with
+    (drgnx-agents-send s "permission other :: mcp__drgnx__read_decisions")
+    (should (drgnx-job-gate-test--said s "permission: allow"))
+    (drgnx-agents-send s "permission read :: Read README")
+    (should (drgnx-job-run-test--wait (lambda () (= 2 (cl-count-if (lambda (e) (string-search "permission: allow" (format "%s" (plist-get e :text))))
+                                                                   (drgnx-agent-session-entries s))))
+                                      10))))
+
 ;;; job-gate-test.el ends here

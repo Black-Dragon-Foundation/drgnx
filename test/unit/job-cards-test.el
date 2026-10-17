@@ -116,4 +116,45 @@
         (drgnx-job--card id tid "stalled" "x")
         (should (drgnx-job-run-test--wait (lambda () (seq-find (lambda (e) (and (equal (car e) "job") (equal (plist-get (cdr e) :id) id))) events))))))))
 
+
+(ert-deftest drgnx-job-cards/rejecting-a-task-less-request-answers-it-not-the-job ()
+  ;; a clash reviewer has no task: its permission card's Reject answers the request; the job goes on
+  (drgnx-job-cards-test--running
+    (let ((s (drgnx-agents-start "mock" repo nil id)))
+      (drgnx-job-run-test--wait (lambda () (eq (drgnx-agent-session-status s) 'idle)))
+      (drgnx-agents-send s "permission execute :: npm install left-pad")
+      (should (drgnx-job-run-test--wait (lambda () (drgnx-job-cards-test--open id "permission"))))
+      (drgnx-job-card-act (plist-get (car (drgnx-job-cards-test--open id "permission")) :id) "reject")
+      (should (drgnx-job-run-test--wait (lambda () (string-search "permission: reject" (format "%S" (drgnx-agent-session-entries s))))))
+      (should (equal (plist-get (drgnx-coord-job id) :status) "running"))
+      (should-not (eq (drgnx-agent-session-status s) 'exited)))))
+
+(ert-deftest drgnx-job-cards/a-task-less-request-answered-in-the-transcript-settles-its-card ()
+  (drgnx-job-cards-test--running
+    (let ((s (drgnx-agents-start "mock" repo nil id)))
+      (drgnx-job-run-test--wait (lambda () (eq (drgnx-agent-session-status s) 'idle)))
+      (drgnx-agents-send s "permission execute :: npm install left-pad")
+      (should (drgnx-job-run-test--wait (lambda () (drgnx-agent-session-permissions s))))
+      (drgnx-hub-call-sync "agents/permission" (list :id (drgnx-agent-session-id s) :request (plist-get (car (drgnx-agent-session-permissions s)) :id)
+                                                     :option "allow"))
+      (should-not (drgnx-job-cards-test--open id "permission")))))
+
+(ert-deftest drgnx-job-cards/retry-ends-the-task-s-agent ()
+  (drgnx-job-cards-test--running
+    (let ((s (drgnx-agents-start "mock" repo tid id)))
+      (drgnx-coord-force-status tid "running" (drgnx-agent-session-id s))
+      (drgnx-job-run-test--wait (lambda () (eq (drgnx-agent-session-status s) 'idle)))
+      (drgnx-job-card-act (drgnx-job--card id tid "stalled" "held twice") "retry")
+      (should (eq (drgnx-agent-session-status s) 'exited))
+      (should (equal (drgnx-job-run-test--status id 1) "ready")))))
+
+(ert-deftest drgnx-job-cards/a-finished-task-s-cards-settle-and-cannot-undo-it ()
+  (drgnx-job-cards-test--running
+    (let ((cid (drgnx-job--card id tid "stalled" "held twice")))
+      (drgnx-coord-force-status tid "done" "s-x")
+      (should-error (drgnx-job-card-act cid "drop"))                       ; merged work is not dropped
+      (should (equal (drgnx-job-run-test--status id 1) "done"))
+      (drgnx-job-step id)
+      (should (equal (plist-get (drgnx-coord-card cid) :state) "settled")))))
+
 ;;; job-cards-test.el ends here

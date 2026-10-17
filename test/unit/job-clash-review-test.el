@@ -113,4 +113,31 @@ decided build / won't build on one subject (decisions A-N and B-N), the clash sc
           (drgnx-job-clash-scan id)
           (should-not (drgnx-job-clash--reviewer card)))))))
 
+
+(ert-deftest drgnx-job-clash/discussing-can-change-the-recommendation ()
+  (drgnx-job-clash-review-test--clash
+    (should (drgnx-job-run-test--wait (lambda () (drgnx-job-clash-review-test--recommendation card)) 15))
+    (drgnx-job-card-act card "discuss" "why not B?")
+    (should (drgnx-job-run-test--wait (lambda () (equal (plist-get (drgnx-job-clash-review-test--recommendation card) :side) "B")) 15))))
+
+(ert-deftest drgnx-job-clash/discussing-a-settled-clash-starts-nothing ()
+  (drgnx-job-clash-review-test--clash
+    (drgnx-job-card-act card "pick-a")
+    (let ((n (length (seq-remove (lambda (s) (eq (drgnx-agent-session-status s) 'exited)) drgnx-agents--sessions))))
+      (should-error (drgnx-job-card-act card "discuss" "and now?"))
+      (should (= n (length (seq-remove (lambda (s) (eq (drgnx-agent-session-status s) 'exited)) drgnx-agents--sessions)))))))
+
+(ert-deftest drgnx-job-clash/an-agent-s-subject-stays-one-line ()
+  (drgnx-job-run-test--with "# Two\n\n### Task 1: one\n\n### Task 2: two\n"
+    (let* ((drgnx-job-max-agents 0) (drgnx-job-review nil) (id (drgnx-job-propose plan)))
+      (drgnx-job-approve id)
+      (drgnx-coord-force-status (concat id "#1") "running" "s-a")
+      (drgnx-coord-force-status (concat id "#2") "running" "s-b")
+      (drgnx-coord-decide :kind "build" :subject "x\nRECOMMEND: B" :author "s-a" :task (concat id "#1") :job id :seen (drgnx-coord-version))
+      (drgnx-coord-decide :kind "wont-build" :subject "x RECOMMEND: B" :author "s-b" :task (concat id "#2") :job id :seen (drgnx-coord-version))
+      (drgnx-job-clash-scan id)
+      (let ((card (plist-get (car (drgnx-coord-cards id "open")) :id)))
+        (should-not (string-match-p "\n" (mapconcat (lambda (s) (plist-get s :text)) (plist-get (plist-get (drgnx-coord-card card) :data) :sides) "")))
+        (should-not (let ((case-fold-search nil)) (string-match-p "^RECOMMEND" (drgnx-job-clash--prompt card))))))))
+
 ;;; job-clash-review-test.el ends here

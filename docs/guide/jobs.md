@@ -86,6 +86,8 @@ goes through the gateway; profiles drgnx cannot price (a subscription) are liste
   into the job's branch and its dependents may start. Fail: an agent gets the reasons and works again in the same
   worktree; after three failed reviews (`drgnx-job-review-tries`) it is yours. A merge conflict is aborted (the job's
   branch stays clean) and becomes a card. `drgnx-job-review` nil: finished tasks wait in review for you.
+- **The decision log is enforced:** an agent that has not read the latest decisions of its job gets its next edit
+  or command refused, with the changes put in front of it at once; reading is never held, so it catches up and goes on.
 - **Budget:** what goes through the gateway is counted (a subscription agent's traffic is not). When the job's spend
   reaches its budget the gateway refuses the next request; the job **pauses** —
   its agents stop, no task starts — and a card says what was spent. `drgnx job resume ID --budget MORE` goes on

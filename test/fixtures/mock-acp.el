@@ -150,6 +150,9 @@ decision log, complete the task; say what happened."
       (mock--steps sid (list (cons 0 (lambda () (mock--say sid (if (equal (getenv "MOCK_ACP_VERDICT") "fail")
                                                                    "Looked at it.\nVERDICT: fail: rename foo to bar"
                                                                  "Looked at it.\nVERDICT: pass")))))))
+     ;; the user discusses a clash with its reviewer: it changes its mind to B
+     ((string-prefix-p "The user asks:" text)
+      (mock--steps sid (list (cons 0 (lambda () (mock--say sid "Fair point.\nRECOMMEND: B after your question"))))))
      ;; a clash reviewer: RECOMMEND: A (or MOCK_ACP_RECOMMEND's side)
      ((string-match-p "\\[drgnx clash " text)
       (mock--steps sid (list (cons (if (getenv "MOCK_ACP_CLASH_SLOW") 5 0)

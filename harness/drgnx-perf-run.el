@@ -69,15 +69,24 @@ error if it does not hold)."
                               (setq drgnx-perf--agents (mapcar (lambda (n) (drgnx-agents-start \"mock\" temporary-file-directory (format \"perf#%%d\" n) \"perf\")) '(1 2 3)))
                               (let ((d (+ (float-time) 10))) (while (and (seq-some (lambda (s) (not (eq (drgnx-agent-session-status s) 'idle))) drgnx-perf--agents) (< (float-time) d)) (accept-process-output nil 0.05)))
                               (defun drgnx-perf--job-follow (_s) (drgnx-job-ui--event \"agent\" nil))
+                              (setq drgnx-perf--spent 0.0)
+                              (defun drgnx-perf--job-summary ()   ; what the hub would answer: spend and agents change
+                                (list :id \"perf\" :title \"Perf\" :status \"running\" :repo temporary-file-directory :budget 5.0 :spent drgnx-perf--spent
+                                      :tasks (mapcar (lambda (n) (list :n n :title (format \"task %%d\" n) :role \"implement\" :profile \"mock\" :status \"running\" :agent :null :deps :null)) '(1 2 3))
+                                      :agents (mapcar (lambda (s) (list :id (drgnx-agent-session-id s) :profile \"mock\" :task (drgnx-agent-session-task s) :status (symbol-name (drgnx-agent-session-status s)) :review :false)) drgnx-perf--agents)
+                                      :cards (mapcar (lambda (n) (list :id n :kind \"stalled\" :task (format \"perf#%%d\" n) :title \"waiting\" :actions '((\"retry\" \"Retry\") (\"drop\" \"Drop the task\")) :data :null)) '(1 2 3 4))
+                                      :messages :null
+                                      :decisions (mapcar (lambda (n) (list :n n :kind \"build\" :subject (format \"part %%d\" n) :author \"user\" :status \"current\")) (number-sequence 20 1 -1))))
+                              (require 'drgnx-hub)                ; loaded first: the stub below stays
+                              (setq drgnx-perf--hub-call (symbol-function 'drgnx-hub-call))
+                              (fset 'drgnx-hub-call (lambda (method _params &optional cb)
+                                                      (when (and cb (equal method \"job/status\"))
+                                                        (setq drgnx-perf--spent (+ drgnx-perf--spent 0.01))
+                                                        (funcall cb (drgnx-perf--job-summary) nil))))
                               (add-hook 'drgnx-agents-changed-functions #'drgnx-perf--job-follow)
                               (let ((home (selected-frame)) (f (drgnx-job-ui--frame \"perf\")))
                                 (with-selected-frame f (drgnx-job-ui--layout \"perf\"))
-                                (drgnx-job-ui--draw \"perf\" (list :id \"perf\" :title \"Perf\" :status \"running\" :repo temporary-file-directory :budget 5.0 :spent 1.0
-                                                                   :tasks (mapcar (lambda (n) (list :n n :title (format \"task %%d\" n) :role \"implement\" :profile \"mock\" :status \"running\" :agent :null :deps :null)) '(1 2 3))
-                                                                   :agents (mapcar (lambda (s) (list :id (drgnx-agent-session-id s) :profile \"mock\" :task (drgnx-agent-session-task s) :status \"busy\" :review :false)) drgnx-perf--agents)
-                                                                   :cards (mapcar (lambda (n) (list :id n :kind \"stalled\" :task (format \"perf#%%d\" n) :title \"waiting\" :actions '((\"retry\" \"Retry\") (\"drop\" \"Drop the task\")) :data :null)) '(1 2 3 4))
-                                                                   :messages :null
-                                                                   :decisions (mapcar (lambda (n) (list :n n :kind \"build\" :subject (format \"part %%d\" n) :author \"user\" :status \"current\")) (number-sequence 20 1 -1))))
+                                (drgnx-job-ui--draw \"perf\" (drgnx-perf--job-summary))
                                 (select-frame-set-input-focus home))
                               t)"
                        (expand-file-name "test/fixtures/mock-acp.el" drgnx-ui-repo-dir))
@@ -87,6 +96,7 @@ error if it does not hold)."
        :actions ,(make-list 2 (funcall type "(setq y 2) "))
        :check "(seq-some (lambda (s) (eq (drgnx-agent-session-status s) 'busy)) drgnx-perf--agents)"   ; typed while they streamed
        :teardown ,(concat "(progn (remove-hook 'drgnx-agents-changed-functions #'drgnx-perf--job-follow)"
+                          " (fset 'drgnx-hub-call drgnx-perf--hub-call)"
                           " (dolist (s drgnx-perf--agents) (ignore-errors (drgnx-agents-kill s)))"
                           " (dolist (f (frame-list)) (when (equal (frame-parameter f 'drgnx-job) \"perf\") (delete-frame f))) " kill-fixture ")"))
       ;; ghost text on: a mock model answers every pause at once (the pause shortened so each key asks and the

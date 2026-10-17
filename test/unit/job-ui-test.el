@@ -118,13 +118,27 @@
               ((symbol-function 'notifications-notify) (lambda (&rest args) (push args sent)))
               ((symbol-function 'drgnx-hub-call) #'ignore))
       (drgnx-job-ui--event "card" '(:id 11 :job "j1" :kind "budget" :title "spent 1.2 of 1.0 USD: paused"))
+      (should-not sent)                                     ; never inside the hub's event handler (D-Bus may hang)
       (drgnx-job-ui--event "card" '(:id 11 :job "j1" :kind "budget" :title "spent 1.2 of 1.0 USD: paused"))
+      (drgnx-job-ui--event "card" '(:id 13 :job "j1" :kind "overlap" :title "advisory"))   ; nothing to do: no notification
+      (let ((deadline (+ (float-time) 0.5))) (while (< (float-time) deadline) (accept-process-output nil 0.05)))
       (should (= 1 (length sent)))
       (should (equal (plist-get (car sent) :title) "drgnx: a job needs you"))
       (should (string-search "paused" (plist-get (car sent) :body)))
       (let ((drgnx-job-ui-notify nil))
         (drgnx-job-ui--event "card" '(:id 12 :job "j1" :kind "stalled" :title "x"))
+        (let ((deadline (+ (float-time) 0.3))) (while (< (float-time) deadline) (accept-process-output nil 0.05)))
         (should (= 1 (length sent)))))))
+
+(ert-deftest drgnx-job-ui/without-a-hub-it-looks-again-and-a-lost-hub-is-said ()
+  (drgnx-job-ui-test--with
+    (cl-letf (((symbol-function 'drgnx-hub-call) (lambda (&rest _) (error "No drgnx hub runs"))))
+      (drgnx-job-ui--refresh "j1"))
+    (should (member "j1" (drgnx-job-ui--jobs)))                     ; still open: the retry will look for it
+    ;; a hub that was there goes away: the open window says so
+    (drgnx-job-ui--draw "j1" drgnx-job-ui-test--summary)
+    (run-hooks 'drgnx-hub-disconnect-functions)
+    (should (string-search "No drgnx hub" (drgnx-job-ui-test--text 'cards)))))
 
 (ert-deftest drgnx-job-ui/the-commands-are-registered ()
   (let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil))

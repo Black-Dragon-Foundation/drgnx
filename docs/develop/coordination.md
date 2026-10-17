@@ -84,7 +84,8 @@ resuming them in a new hub (ACP `session/load`) is not built yet.
 
 A peer message is text for the agent and nothing else: permission requests are answered only by the user's
 `agents/permission`, and no message changes a setting. **The gate:** a job agent's permission request
-(edits and commands ask one) is checked against the log first (`drgnx-job--gate`): behind it — decisions of its job
+for an edit or a command (kinds `edit` `delete` `move` `execute`; reading — `read_decisions` included, which Claude
+Code asks for as an `other` tool — is never held) is checked against the log first (`drgnx-job--gate`): behind it — decisions of its job
 since its `seen` — the call is refused (its `reject_once` option) and, once per version, the changes go into the
 running turn (`drgnx-agents-steer`, the notice of delivery: `drgnx-coord-notice`) with "Your last tool call was
 refused because you had not read these." Its next request after `read_decisions` goes by the policy again. An agent

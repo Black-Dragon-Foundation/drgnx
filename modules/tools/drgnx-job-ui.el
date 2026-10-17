@@ -130,7 +130,8 @@
       (insert (propertize "Messages\n" 'face 'bold))
       (dolist (m messages)
         (let ((id (plist-get m :id)))
-          (insert (format "  from %s (%s): %s\n  " (plist-get m :sender) (plist-get m :state) (plist-get m :text)))
+          (insert (format "  from %s (%s): %s\n  " (plist-get m :sender) (plist-get m :state)
+                          (replace-regexp-in-string "[\n\r]+" " ⏎ " (format "%s" (plist-get m :text)))))
           (drgnx-job-ui--button "Reply…" (lambda () (drgnx-job-ui--reply job id)))
           (insert "\n"))))))
 
@@ -140,7 +141,8 @@
     (let ((ds (drgnx-job-ui--v (plist-get s :decisions))))
       (unless ds (insert "None yet.\n"))
       (dolist (d ds)
-        (insert (propertize (format "#%s %s: %s — %s [%s]%s\n" (plist-get d :n) (plist-get d :kind) (plist-get d :subject)
+        (insert (propertize (format "#%s %s: %s — %s [%s]%s\n" (plist-get d :n) (plist-get d :kind)
+                                    (replace-regexp-in-string "[\n\r]+" " " (format "%s" (plist-get d :subject)))
                                     (plist-get d :author) (plist-get d :status)
                                     (if (and (memql (plist-get d :n) disputed) (not (equal (plist-get d :status) "replaced"))) "  (disputed)" ""))
                             'face (cond ((equal (plist-get d :status) "replaced") 'shadow)   ; replaced, even if a clash names it
@@ -150,6 +152,8 @@
 
 (defun drgnx-job-ui--draw (job summary)
   "Draw JOB's SUMMARY (as `job/status' gives it): only the areas whose part changed."
+  (add-hook 'drgnx-hub-event-functions #'drgnx-job-ui--event)       ; an open window follows the hub
+  (add-hook 'drgnx-hub-disconnect-functions #'drgnx-job-ui--hub-gone)
   (dolist (part '(tasks cards log))
     (let ((p (drgnx-job-ui--part summary part)))
       (unless (equal p (gethash (cons job part) drgnx-job-ui--drawn :none))
@@ -176,7 +180,8 @@
 
 (defun drgnx-job-ui--jobs ()
   "The jobs whose window is open."
-  (seq-filter #'drgnx-job-ui--live-p (delete-dups (mapcar #'car (hash-table-keys drgnx-job-ui--drawn)))))
+  (delete-dups (delq nil (mapcar (lambda (b) (with-current-buffer b (and (derived-mode-p 'drgnx-job-ui-mode) drgnx-job-ui--job)))
+                                 (buffer-list)))))
 
 (defun drgnx-job-ui--refresh (job)
   "Ask the hub for JOB (asynchronously); draw what changed."
@@ -184,8 +189,14 @@
     (condition-case err
         (progn (drgnx-job-ui--hub)
                (drgnx-hub-call "job/status" (list :id job :decisions t)
-                               (lambda (r e) (if (or e (not r)) (drgnx-job-ui--no-hub job (or e "no answer")) (drgnx-job-ui--draw job r)))))
+                               (lambda (r e) (if (or e (not r)) (drgnx-job-ui--no-hub job (or e "no answer"))
+                                               (drgnx-job-ui--draw job r)
+                                               (ignore-errors (drgnx-hub-connect))))))   ; events again, after a hub came back
       (error (drgnx-job-ui--no-hub job (error-message-string err))))))
+
+(defun drgnx-job-ui--hub-gone ()
+  "`drgnx-hub-disconnect-functions': every open job window says the hub is gone (and looks for it again)."
+  (dolist (j (drgnx-job-ui--jobs)) (drgnx-job-ui--no-hub j "the hub went away")))
 
 (defun drgnx-job-ui--schedule (job)
   "Refresh JOB's window soon: at most one refresh per 0.5 s, however many events."
@@ -280,6 +291,7 @@
     (with-selected-frame frame (drgnx-job-ui--layout id))
     (when (frame-live-p frame) (select-frame-set-input-focus frame))
     (add-hook 'drgnx-hub-event-functions #'drgnx-job-ui--event)
+    (add-hook 'drgnx-hub-disconnect-functions #'drgnx-job-ui--hub-gone)
     (condition-case nil (progn (drgnx-job-ui--hub) (drgnx-hub-connect)) (error nil))
     (drgnx-job-ui--refresh id)
     frame))
@@ -349,12 +361,14 @@ jobs only — and the job with the newest card."
 (defun drgnx-job-ui--notify (data)
   "A new card (DATA of its event): a desktop notification, once per card — or a message.  Never a prompt."
   (let ((id (plist-get data :id)))
-    (when (and drgnx-job-ui-notify id (not (gethash id drgnx-job-ui--notified)))
+    (when (and drgnx-job-ui-notify id (not (gethash id drgnx-job-ui--notified)) (not (equal (plist-get data :kind) "overlap")))
       (puthash id t drgnx-job-ui--notified)
       (let ((body (format "%s — %s" (plist-get data :job) (plist-get data :title))))
-        (if (drgnx-job-ui--desktop-p)
-            (with-demoted-errors "drgnx: %S" (notifications-notify :title "drgnx: a job needs you" :body body))
-          (message "drgnx: a job needs you — %s" body))))))
+        ;; later, not in the hub's event handler: a D-Bus call that hangs must not hold the filter
+        (run-at-time 0 nil (lambda ()
+                             (if (drgnx-job-ui--desktop-p)
+                                 (with-demoted-errors "drgnx: %S" (notifications-notify :title "drgnx: a job needs you" :body body))
+                               (message "drgnx: a job needs you — %s" body))))))))
 
 (declare-function notifications-notify "notifications")
 
@@ -364,7 +378,7 @@ jobs only — and the job with the newest card."
   (if drgnx-job-ui-badge-mode
       (progn (add-to-list 'global-mode-string '(:eval (drgnx-job-ui--badge-segment)) t)
              (add-hook 'drgnx-hub-event-functions #'drgnx-job-ui--event)
-             (drgnx-job-ui--schedule-recount))
+             (when (featurep 'drgnx-hub) (drgnx-job-ui--schedule-recount)))   ; never loads the hub by itself
     (setq global-mode-string (delete '(:eval (drgnx-job-ui--badge-segment)) global-mode-string))
     (remove-hook 'drgnx-hub-event-functions #'drgnx-job-ui--event)))
 

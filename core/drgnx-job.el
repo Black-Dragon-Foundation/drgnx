@@ -270,6 +270,11 @@ what the agent before it left (`drgnx-job--fall-back')."
           (when (and (equal (plist-get task :status) "ready") (< count drgnx-job-max-agents))
             (drgnx-job--start-task id task)
             (setq count (1+ count)))))
+      (let ((finished (mapcar (lambda (task) (plist-get task :id))
+                              (seq-filter (lambda (task) (member (plist-get task :status) '("done" "dropped"))) (drgnx-coord-tasks id)))))
+        (dolist (c (drgnx-coord-cards id "open"))       ; their question went with the task
+          (when (and (member (plist-get c :task) finished) (drgnx-coord-card-settle (plist-get c :id) "resolved"))
+            (when-let* ((m (plist-get (plist-get c :data) :message))) (drgnx-coord-mark m "acted")))))
       (when (seq-every-p (lambda (task) (member (plist-get task :status) '("done" "dropped"))) (drgnx-coord-tasks id))
         (drgnx-coord-job-set id :status "done"))
       (drgnx-job--changed id))))
@@ -615,6 +620,8 @@ S: the session whose request waits (it goes back to work once answered, or, gone
     (when note (setf (alist-get task (plist-get data :notes) nil nil #'equal) note))
     (drgnx-coord-job-set job :data data))
   (dolist (h (list drgnx-job--exits drgnx-job--nudged)) (remhash task h))
+  (when-let* ((s (drgnx-job--session (plist-get (drgnx-coord-task task) :agent))))   ; a new agent: the old one ends
+    (unless (eq (drgnx-agent-session-status s) 'exited) (drgnx-agents-kill s)))
   (drgnx-job--set-waiting job task nil)
   (drgnx-coord-force-status task "ready" nil))
 
@@ -636,6 +643,10 @@ S: the session whose request waits (it goes back to work once answered, or, gone
   (let* ((card (or (drgnx-coord-card cid) (user-error "No card %s" cid)))
          (job (plist-get card :job)) (task (plist-get card :task)))
     (unless (assoc action (drgnx-job-card-actions card)) (user-error "Card %s has no action %s" cid action))
+    (unless (equal (plist-get card :state) "open") (user-error "Card %s is already settled" cid))
+    (when (and task (member action '("retry" "drop" "merge" "accept"))
+               (member (plist-get (drgnx-coord-task task) :status) '("done" "dropped")))
+      (user-error "Task %s is %s already" task (plist-get (drgnx-coord-task task) :status)))
     (when (member action drgnx-job--showing-actions)               ; these show or ask: the card stays
       (run-hook-with-args-until-success 'drgnx-job-card-action-functions card action arg))
     (unless (member action drgnx-job--showing-actions)
@@ -645,7 +656,8 @@ S: the session whose request waits (it goes back to work once answered, or, gone
             ('clash (unless (run-hook-with-args-until-success 'drgnx-job-card-action-functions card action arg)
                       (user-error "Nothing does %s" action)))
             ("approve" (drgnx-job-approve job :budget arg))
-            ("reject" (if task (drgnx-job--answer-request card nil) (drgnx-job-stop job)))
+            ("reject" (if (member (plist-get card :kind) '("permission" "write")) (drgnx-job--answer-request card nil)
+                        (drgnx-job-stop job)))                     ; the proposal
             ("allow" (drgnx-job--answer-request card t))
             ("retry" (drgnx-job--retry job task (and (equal (plist-get card :kind) "merge-conflict")
                                                      (format "Merging your branch into job/%s conflicted (%s). Merge job/%s into your branch, resolve the conflicts, commit, then call complete_task."
@@ -668,10 +680,10 @@ S: the session whose request waits (it goes back to work once answered, or, gone
     (when (and (equal (plist-get c :kind) kind) (drgnx-coord-card-settle (plist-get c :id) choice))
       (when-let* ((m (plist-get (plist-get c :data) :message))) (drgnx-coord-mark m "acted")))))
 
-(defun drgnx-job--settle-requests (job task)
-  "TASK's permission and write cards are answered (in the transcript): settled."
+(defun drgnx-job--settle-requests (job s)
+  "Session S's permission and write cards are answered (in the transcript): settled."
   (dolist (c (drgnx-coord-cards job "open"))
-    (when (and (equal (plist-get c :task) task) (member (plist-get c :kind) '("permission" "write"))
+    (when (and (equal (plist-get (plist-get c :data) :sid) (drgnx-agent-session-id s)) (member (plist-get c :kind) '("permission" "write"))
                (drgnx-coord-card-settle (plist-get c :id) "answered"))
       (when-let* ((m (plist-get (plist-get c :data) :message))) (drgnx-coord-mark m "acted"))))
   (drgnx-job--changed job))
@@ -693,10 +705,13 @@ S: the session whose request waits (it goes back to work once answered, or, gone
 
 (defun drgnx-job--gate (s job params)
   "The gate: job agent S asks a permission (PARAMS) while behind JOB's decision log — the call is refused (its
-reject_once option) and, once per version, the changes are put into its turn.  nil when S is not behind (or a
+reject_once option) and, once per version, the changes are put into its turn.  Edits and commands only: reading —
+`read_decisions' too, which an agent asks for as an `other' tool — is never held.  nil when S is not behind (or a
 reviewer, or the request has no reject option)."
   (let* ((sid (drgnx-agent-session-id s)) (seen (drgnx-coord-seen sid))
-         (changes (and (not (gethash sid drgnx-job--reviewers)) (drgnx-coord-decisions-since seen job)))
+         (changes (and (not (gethash sid drgnx-job--reviewers))
+                       (member (plist-get (plist-get params :toolCall) :kind) '("edit" "delete" "move" "execute"))
+                       (drgnx-coord-decisions-since seen job)))
          (reject (seq-find (lambda (o) (equal (plist-get o :kind) "reject_once")) (append (plist-get params :options) nil))))
     (when (and changes reject)
       (let ((v (drgnx-coord-version)))
@@ -735,10 +750,11 @@ its worktree done at once; anything else waits for the user as a card (nil: the 
   "The user answered S's request: its task goes on (when nothing else waits) — a reviewer's back in review, with the
 work of the agent that did it."
   (let ((task (drgnx-coord-task (drgnx-agent-session-task s))))
+    (when (and (drgnx-agent-session-job s) (null (drgnx-agent-session-permissions s)) (null (drgnx-agent-session-reviews s)))
+      (drgnx-job--settle-requests (drgnx-agent-session-job s) s))
     (when (and (drgnx-agent-session-job s) (null (drgnx-agent-session-permissions s)) (null (drgnx-agent-session-reviews s))
                (equal (plist-get task :status) "needs-input"))
       (drgnx-job--set-waiting (drgnx-agent-session-job s) (plist-get task :id) nil)
-      (drgnx-job--settle-requests (drgnx-agent-session-job s) (plist-get task :id))
       (if (gethash (drgnx-agent-session-id s) drgnx-job--reviewers)
           (drgnx-coord-force-status (plist-get task :id) "in-review" (plist-get task :agent))
         (drgnx-coord-force-status (plist-get task :id) "running" (drgnx-agent-session-id s))))))
