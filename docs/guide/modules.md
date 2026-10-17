@@ -92,6 +92,7 @@ key profile ([keys.md](keys.md)); faces inherit theme faces (no colours). See [c
 | `tools/vc` | startup | Source Control (the project's changes), Diff with File, Blame — on Emacs' VC |
 | `tools/terminal` | startup | New Terminal (eshell, in the panel's Terminal tab), Open Terminal Here (Explorer) |
 | `tools/search` | startup | Quick Open (project files), Search in Project (results in the panel), Go to Symbol (file, project), Find in File, Replace in Project, Recent Buffers (consult when installed) |
+| `tools/agents` | startup | Show Agents (the right dock's Agents tab: sessions and durable jobs), New Agent Session, Send to Agent (queued while it works), Stop Agent, Take Over Agent Session, Answer Agent, edit review hunk by hunk, Show Job Log, Stop Job ([agents.md](agents.md)) |
 | `tools/work` | startup | Show Work (the right dock's Work tab: specs › plans › tasks › steps, TODOs, commits, branches), Show Work as Graph (svg.el; click a box to open it), Start Agent on Task, Open Plan's Worktree ([work.md](work.md)) |
 | `org/org` | startup | Capture `C-c c`, Agenda `C-c a` |
 | `extra/jump` | idle | Jump to Text (needs avy) |
@@ -101,6 +102,7 @@ key profile ([keys.md](keys.md)); faces inherit theme faces (no colours). See [c
 | `extra/hunks` | idle | changed lines in the gutter; Show / Revert / Stage Change (needs diff-hl) |
 | `extra/keycast` | idle | Show Keys As I Type (needs keycast) |
 | `extra/llm` | idle | LLM Menu, Send to LLM (needs gptel; its model and key are gptel's configuration) |
+| `extra/windows` | idle | Pick Window: a letter on every window, type it to go there (needs ace-window) |
 | `extra/magit` | idle | Source Control opens magit (needs magit) |
 | `extra/completion` | idle | vertical minibuffer lists, any-order matching, completion popups as you type (needs vertico, orderless, marginalia, corfu) |
 

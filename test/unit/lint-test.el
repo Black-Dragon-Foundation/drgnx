@@ -108,3 +108,16 @@
                                          (lambda (form) (and (consp form) (memq (car form) '(if-let when-let)) (consp (cadr form))
                                                              (format "%s (use %s*)" (car form) (car form)))))
                  nil)))
+
+(ert-deftest drgnx-lint/every-shipped-module-has-a-row-in-the-guide ()
+  ;; docs/guide/modules.md's table lists every module with its stage
+  (let ((doc (with-temp-buffer (insert-file-contents (expand-file-name "docs/guide/modules.md" drgnx-dir)) (buffer-string))))
+    (should (equal (drgnx-lint--violations
+                    (drgnx-lint--files "modules")
+                    (lambda (form)
+                      (pcase form
+                        (`(drgnx-module-define (quote ,name) . ,args)
+                         (let ((stage (eval (plist-get args :stage) t)))
+                           (unless (string-match-p (format "^| `%s` | %s |" (regexp-quote (symbol-name name)) stage) doc)
+                             (format "%s (%s) has no row in docs/guide/modules.md" name stage)))))))
+                   nil))))
