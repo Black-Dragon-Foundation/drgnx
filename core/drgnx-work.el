@@ -197,7 +197,10 @@ the job started in (its worktree may be gone by now)."
         (`("status" . ,flags)
          (let ((rows (drgnx-work--status-rows)))
            (if (member "--json" flags)
-               (princ (json-serialize (vconcat (mapcar #'drgnx-work--json-row rows))))
+               ;; json-serialize gives UTF-8 bytes (unibyte); decode them so the locale's encoding of stdout is
+               ;; not applied on top, and write UTF-8 whatever the locale says.
+               (let ((coding-system-for-write 'utf-8-unix))
+                 (princ (decode-coding-string (json-serialize (vconcat (mapcar #'drgnx-work--json-row rows))) 'utf-8)))
              (if (null rows) (drgnx-work--print "no plans yet: drgnx work scan [DIR…]")
                (dolist (r rows)
                  (let ((c (lambda (k) (format "%d/%d" (car (plist-get r k)) (cdr (plist-get r k))))))

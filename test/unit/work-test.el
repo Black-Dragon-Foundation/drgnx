@@ -376,3 +376,32 @@ code/ with three commits, p's ledger naming the first two, a board TODO from p."
       (drgnx-work-test--scan root)
       (should-not (drgnx-work-node spec))
       (should (drgnx-work-node (concat "spec:" root "docs/specs/s.md"))))))       ; one under specs/ stays
+
+(ert-deftest drgnx-work/status-json-non-ascii-title ()
+  "`drgnx work status --json' is valid UTF-8 JSON whatever the locale: the title comes out as it went in."
+  (let* ((dir (make-temp-file "drgnx-work-db" t))
+         (core (file-name-directory (locate-library "drgnx-work")))
+         (title "Café → 計画")
+         (process-environment (cons (concat "DRGNX_DATA_DIR=" dir) process-environment))
+         (drgnx-work-db--handles nil))
+    (unwind-protect
+        (progn
+          (drgnx-work-put-node "plan:a" :kind 'plan :title title :path "/a.md" :line 1 :status "open" :source "/a.md")
+          (drgnx-work-db-close-all)
+          (dolist (locale '("C" "C.UTF-8"))
+            (let ((process-environment (append (list (concat "LC_ALL=" locale) (concat "LANG=" locale) "LANGUAGE=")
+                                               process-environment))
+                  (out (generate-new-buffer " *work-status*")))
+              (unwind-protect
+                  (progn
+                    (let ((coding-system-for-read 'no-conversion))
+                      (should (eql 0 (call-process (expand-file-name invocation-name invocation-directory) nil out nil
+                                                   "--batch" "-Q" "-L" core "-l" "drgnx-work" "-f" "drgnx-work-cli" "--" "status" "--json"))))
+                    (let* ((bytes (with-current-buffer out (string-to-unibyte (buffer-string))))
+                           (text (decode-coding-string bytes 'utf-8))
+                           (rows (json-parse-string text :object-type 'plist)))
+                      (should (equal (encode-coding-string text 'utf-8) bytes)) ; valid UTF-8, not re-encoded
+                      (should (equal (plist-get (aref rows 0) :title) title))))
+                (kill-buffer out)))))
+      (drgnx-work-db-close-all)
+      (delete-directory dir t))))
