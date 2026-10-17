@@ -17,9 +17,11 @@ bash install.sh
 ```
 
 Afterwards, **on a Mac** the installer opens the drgnx app, and its first start opens the Welcome, which sets up
-the rest — keys, packages, AI, Claude Code ([onboarding.md](onboarding.md)). Next time, open **drgnx** from
-Applications, Spotlight (⌘Space, type "drgnx") or the Dock, or run `drgnx .` in a project folder
-([opening.md](opening.md)). **On Linux** run `drgnx open` (or the Emacs command the installer prints); the first start
+the rest — keys, packages, AI, Claude Code ([onboarding.md](onboarding.md)). Next time, open **drgnx** with
+Spotlight (⌘Space, type "drgnx") or Launchpad, or run `drgnx .` in a project folder ([opening.md](opening.md)). The
+app is in `~/Applications` (your home folder's Applications, not the one in Finder's sidebar). To keep it in the
+Dock, drag `~/Applications/drgnx.app` there: while drgnx runs the Dock shows **Emacs**, and "Keep in Dock" on that
+icon pins Emacs, not drgnx. **On Linux** run `drgnx open` (or the Emacs command the installer prints); the first start
 opens the Welcome there too, and `drgnx onboard` runs the same steps in the terminal. `drgnx doctor` checks the
 machine at any time.
 
@@ -120,7 +122,9 @@ The details:
 - **The drgnx app.** After the doctor it installs `~/Applications/drgnx.app` — drgnx in Finder, Spotlight and the
   Dock, and in Open With for folders and almost any file ([opening.md](opening.md#on-macos-the-drgnx-app)). A failure
   only warns (run `drgnx macos-app` later). It is never put in `/Applications` and never starts at login.
-- The last lines say how to open drgnx next time: from Applications, or `drgnx .` in a project. Then, in a desktop
+- The last lines are "Done." and how to open drgnx next time — Spotlight (⌘Space, type "drgnx") or Launchpad, or
+  `drgnx .` in a project — and that to keep it in the Dock you drag `~/Applications/drgnx.app` there, not the Emacs
+  icon the Dock shows while drgnx runs (on Linux the last line is the Emacs command that starts drgnx). Then, in a desktop
   session (not over SSH, and not under `--yes` without a terminal), it says "Opening drgnx…" and opens the app: the
   first start opens the Welcome ([onboarding.md](onboarding.md)), which asks whether drgnx keeps running in the
   background when you close its last window.

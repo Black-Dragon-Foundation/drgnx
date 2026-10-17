@@ -194,7 +194,12 @@
             (let ((run (drgnx-install-test--run env "--yes" "--prefix" (expand-file-name "prefix" tmp)
                                                 "--source-dir" drgnx-install-test--root)))
               (should (= (car run) 0))
-              (should (string-search "Next time: open drgnx from Applications, or run \"drgnx .\" in a project" (cdr run))))
+              (should (string-search "Next time: open drgnx with Spotlight (⌘Space, type \"drgnx\") or Launchpad, or run \"drgnx .\" in a project" (cdr run)))
+              (should (string-search "drag ~/Applications/drgnx.app there" (cdr run)))
+              (should (string-match-p "^Done\\.$" (cdr run)))                 ; macOS: no Emacs command line to start it
+              (should-not (string-search "Start drgnx with" (cdr run)))
+              (should-not (string-search "--init-directory" (cdr run)))
+              (should-not (string-search "from Applications" (cdr run))))
             (should (equal before (mapcar (lambda (f) (with-temp-buffer (insert-file-contents-literally f) (buffer-string)))
                                           files)))
             ;; the real run remembers the Emacs it kept, in drgnx's own config directory
@@ -256,7 +261,7 @@
             (should (= (car r) 0))
             (should (string-match-p "/Applications/drgnx\\.app\n" (cdr r)))
             (should (string-search "Opening drgnx…" (cdr r)))
-            (should (string-search "Next time: open drgnx from Applications" (cdr r)))
+            (should (string-search "Next time: open drgnx with Spotlight" (cdr r)))
             (should (string-match-p "\\`open -a .*/Applications/drgnx\\.app\n\\'" (funcall opened))))
           ;; --yes without a terminal, or over SSH: installed, not opened
           (dolist (env '(("DRGNX_INSTALL_TTY=none" "SSH_CONNECTION") ("DRGNX_INSTALL_TTY=yes" "SSH_CONNECTION=10.0.0.1 22 10.0.0.2 22")))
@@ -268,7 +273,7 @@
           (let ((r (funcall run "DRGNX_INSTALL_TTY=yes" "SSH_CONNECTION" "FAIL_APP=1")))
             (should (= (car r) 0))
             (should (string-search "the drgnx app was not installed" (cdr r)))
-            (should (string-search "Next time: open drgnx from Applications" (cdr r)))
+            (should (string-search "Next time: open drgnx with Spotlight" (cdr r)))
             (should-not (funcall opened))))
       (delete-directory tmp t))))
 

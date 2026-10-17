@@ -264,6 +264,10 @@ one.  Returns (RESULT PROMPTS PROGRAMS INSTALLED): the questions asked, the prog
         (should-not drgnx-keep-running)
         (should (string-search "drgnx quits when its last window closes" (nth 2 r)))
         (should (string-search "Preferences: Keep drgnx Running in the Background" (nth 2 r)))
+        ;; how to open it: the app is in ~/Applications, and the Dock shows Emacs while it runs
+        (should (string-search "Spotlight (⌘Space, type \"drgnx\") or Launchpad" (nth 2 r)))
+        (should (string-search "drag ~/Applications/drgnx.app there, not the running Emacs icon" (nth 2 r)))
+        (should-not (string-search "from Applications" (nth 2 r)))
         ;; no systemd unit, no desktop entry, nothing at login
         (should-not (file-exists-p (expand-file-name "systemd" (drgnx-user-dir))))
         (should-not (file-exists-p (expand-file-name "applications" (drgnx-user-dir)))))
@@ -959,7 +963,12 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
         (setq drgnx-onboard--restart-needed nil)
         (let ((noninteractive nil)) (drgnx-onboard--finish-step '(:interactive t)))
         (should-not asked)
-        (should-not lines)))))
+        (should-not lines)
+        ;; on a Mac it says how to open drgnx next time (Linux: not)
+        (should-not (string-search "Spotlight" (cadr (drgnx-onboard--finish-step '(:interactive nil)))))
+        (cl-letf (((symbol-function 'drgnx-platform) (lambda () 'macos)))
+          (should (string-search "next time open drgnx with Spotlight (⌘Space, type \"drgnx\") or Launchpad"
+                                 (cadr (drgnx-onboard--finish-step '(:interactive nil))))))))))
 
 (ert-deftest drgnx-onboard/the-agents-step-and-its-docs ()
   (should (string-match-p "Claude" (plist-get (alist-get 'agents drgnx-onboard--steps) :doc)))

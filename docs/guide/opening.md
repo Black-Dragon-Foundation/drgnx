@@ -49,7 +49,9 @@ Finder and Spotlight find it, and you can keep it in the Dock. The installer put
   open as `drgnx PATH` would open them — a folder in the Explorer, a file in an editor. drgnx is offered there, never
   made the default app for anything (set that yourself with Get Info → Open with → Change All, if you like).
 - **Its windows are Emacs's.** drgnx runs in Emacs: while it runs, the Dock and ⌘Tab show it as **Emacs**, with the
-  same icon. Keep the drgnx app in the Dock and open drgnx from it.
+  same icon — "Keep in Dock" on that icon pins Emacs, not drgnx. To keep drgnx in the Dock, drag
+  `~/Applications/drgnx.app` there (Finder: Go → Home, then Applications) and open drgnx from it; or open it with
+  Spotlight (⌘Space, type "drgnx") or Launchpad.
 - **macOS may ask** whether Emacs may access your Documents, Desktop or Downloads folder the first time you open a
   project there: choose Allow (drgnx cannot open the files otherwise; System Settings → Privacy & Security → Files
   and Folders changes it later).

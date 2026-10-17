@@ -1145,16 +1145,20 @@ keep running.  Saved (session.eld); returns the sentence for the step's result."
 (defvar drgnx-macos-app-dir)
 (declare-function drgnx-macos-install-app "drgnx-macos")
 
+(defconst drgnx-onboard-macos-open-text
+  "open drgnx with Spotlight (⌘Space, type \"drgnx\") or Launchpad; to keep it in the Dock, drag ~/Applications/drgnx.app there, not the running Emacs icon (the Dock shows Emacs while drgnx runs)"
+  "How to open the drgnx app on a Mac: it is in ~/Applications, not the Applications folder Finder's sidebar shows.")
+
 (defun drgnx-onboard--macos-app (ctx)
   "The drgnx app in ~/Applications: there already, or installed when the user says yes.  Nothing at login."
   (require 'drgnx-macos)
   (let* ((app (expand-file-name "drgnx.app" drgnx-macos-app-dir))
          (where (abbreviate-file-name (file-name-directory app))))
-    (cond ((file-directory-p app) (list 'ok (format "the drgnx app is in %s" where)))
+    (cond ((file-directory-p app) (list 'ok (format "the drgnx app is in %s — %s" where drgnx-onboard-macos-open-text)))
           ((and (plist-get ctx :interactive)
                 (y-or-n-p (format "Install the drgnx app into %s (Finder, Spotlight, the Dock, Open With)? " where)))
-           (list 'ok (format "installed the drgnx app: %s — open drgnx from Applications or Spotlight, and folders and code files with Open With"
-                             (abbreviate-file-name (drgnx-macos-install-app)))))
+           (list 'ok (format "installed the drgnx app: %s — %s; open folders and code files with it from Open With"
+                             (abbreviate-file-name (drgnx-macos-install-app)) drgnx-onboard-macos-open-text)))
           (t (list 'info (format "the drgnx app is not installed — to install it into %s: drgnx macos-app" where))))))
 
 (defun drgnx-onboard--daemon-step (ctx)
@@ -1207,16 +1211,17 @@ nothing) — then quit (`drgnx-session-quit' offers to save first).  The layout 
   (drgnx-session-quit))
 
 (defun drgnx-onboard--finish-step (ctx)
-  "The doctor's results.  When a step turned modules on or installed packages
+  "The doctor's results; on macOS, how to open drgnx next time.  When a step turned modules on or installed packages
 here, in the drgnx app (CTX interactive): asked whether to restart drgnx now (the result is recorded first)."
   (require 'drgnx-doctor)
   (let* ((results (drgnx-doctor-run (drgnx-doctor-facts)))
          (count (lambda (s) (seq-count (lambda (r) (eq (plist-get r :status) s)) results)))
          (fails (seq-filter (lambda (r) (eq (plist-get r :status) 'fail)) results))
          (result (list (if fails 'fail 'ok)
-                       (format "doctor: %d ok, %d warnings, %d failed%s — every command and its key: Keyboard Shortcuts (in the palette); docs/guide/onboarding.md"
+                       (format "doctor: %d ok, %d warnings, %d failed%s — every command and its key: Keyboard Shortcuts (in the palette)%s; docs/guide/onboarding.md"
                                (funcall count 'ok) (funcall count 'warn) (length fails)
-                               (if fails (concat " (" (mapconcat (lambda (r) (symbol-name (plist-get r :name))) fails ", ") ")") "")))))
+                               (if fails (concat " (" (mapconcat (lambda (r) (symbol-name (plist-get r :name))) fails ", ") ")") "")
+                               (if (eq (drgnx-platform) 'macos) (concat "; next time " drgnx-onboard-macos-open-text) "")))))
     (cond ((not (and drgnx-onboard--restart-needed (plist-get ctx :interactive) (not noninteractive))) result)
           ((y-or-n-p "Restart drgnx now? Your windows come back. ")
            (drgnx-onboard--record 'finish (car result) (cadr result))

@@ -511,7 +511,7 @@ open_app() { # APP — the first start opens the Welcome; only in a desktop sess
   [[ -z "${SSH_CONNECTION:-}" ]] || return 0
   if ((YES)) && ! have_tty; then return 0; fi
   say "Opening drgnx…"
-  open -a "$1" || warn "could not open $1: open drgnx from Applications"
+  open -a "$1" || warn "could not open $1: open drgnx with Spotlight (⌘Space, type \"drgnx\")"
 }
 
 path_hint() {
@@ -553,8 +553,13 @@ main() {
   if [[ "$OS" == macos ]] && install_app; then app="$HOME/Applications/drgnx.app"; fi
   path_hint
   say ""
-  say "Done. Start drgnx with:  $EMACS_BIN --init-directory $DIR/init"
-  if [[ "$OS" == macos ]]; then say "Next time: open drgnx from Applications, or run \"drgnx .\" in a project"; fi
+  if [[ "$OS" == macos ]]; then   # the app opens drgnx; the Dock shows Emacs while it runs
+    say "Done."
+    say "Next time: open drgnx with Spotlight (⌘Space, type \"drgnx\") or Launchpad, or run \"drgnx .\" in a project."
+    say "To keep it in the Dock, drag ~/Applications/drgnx.app there — not the Emacs icon the Dock shows while drgnx runs."
+  else
+    say "Done. Start drgnx with:  $EMACS_BIN --init-directory $DIR/init"
+  fi
   if [[ -n "$app" ]]; then open_app "$app"; fi
 }
 
