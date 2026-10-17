@@ -448,3 +448,22 @@
    (should-error (drgnx-keys-choose-profile "") :type 'user-error)
    (should-error (drgnx-keys-choose-profile "Sublime") :type 'user-error)
    (should (equal (plist-get (drgnx-keys-read-user) :layers) '((emacs app editing window))))))
+
+(ert-deftest drgnx-keys/one-key-written-two-ways-is-one-key ()
+  ;; M2.6-7: "TAB" and "C-i" are the same key: two commands on them conflict, and a claim on one meets the other.
+  (drgnx-keys-test--with-core-commands
+   (let ((r (drgnx-keys-resolve :commands (drgnx-commands-all) :defaults drgnx-keys-test--defaults
+                                :profiles '((a :bind ((open-file "TAB"))) (b :bind ((save-file "C-i"))))
+                                :layers '((a app editing window) (b app editing window)))))
+     (should (eq (plist-get (seq-find (lambda (c) (member (plist-get c :key) '("TAB" "C-i"))) (plist-get r :conflicts)) :kind)
+                 'same-key))
+     (should (equal (drgnx-keys-test--keys r 'save-file) '("C-i")))
+     (should-not (drgnx-keys-test--keys r 'open-file))))
+  (drgnx-keys-test--with-core-commands
+   (let ((r (drgnx-keys-resolve :commands (drgnx-commands-all) :defaults drgnx-keys-test--defaults
+                                :profiles '((a :bind () :claims ((app "C-i" "indent the C-i way")))
+                                            (b :bind ((save-file "TAB"))))
+                                :layers '((a app editing window) (b app editing window)))))
+     (should (seq-find (lambda (c) (and (eq (plist-get c :kind) 'claim)
+                                        (equal (plist-get (car (plist-get c :losers)) :claim) "indent the C-i way")))
+                       (plist-get r :conflicts))))))

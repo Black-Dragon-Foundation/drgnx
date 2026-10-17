@@ -187,13 +187,14 @@ KIND `same-key', `claim' (a key another layer uses natively) or `prefix'."
     (setq bindings (nreverse bindings))
     (cl-flet ((mapsym (b) (cdr (drgnx-commands--keymap-spec (plist-get b :map))))
               (party (b) (list :id (plist-get b :id) :layer (plist-get b :layer))))
-      ;; Two commands on one key in one keymap: the higher layer keeps it.
+      ;; Two commands on one key in one keymap: the higher layer keeps it.  Keys are compared parsed
+      ;; ("TAB" and "C-i" are one key).
       (let ((groups nil))
         (dolist (b bindings)
-          (push b (alist-get (cons (plist-get b :key) (mapsym b)) groups nil nil #'equal)))
-        (pcase-dolist (`((,key . ,map) . ,group) (reverse groups))
+          (push b (alist-get (cons (drgnx-keys--parse (plist-get b :key)) (mapsym b)) groups nil nil #'equal)))
+        (pcase-dolist (`((,_ . ,map) . ,group) (reverse groups))
           (when (cdr (delete-dups (mapcar (lambda (b) (plist-get b :id)) group)))
-            (let* ((group (reverse group))
+            (let* ((group (reverse group)) (key (plist-get (car group) :key))
                    (winner (seq-reduce (lambda (w b) (if (> (plist-get b :rank) (plist-get w :rank)) b w)) group (car group)))
                    (losers (remq winner group)))
               (push (list :key key :map map :kind 'same-key :winner (party winner) :losers (mapcar #'party losers))
@@ -219,8 +220,8 @@ KIND `same-key', `claim' (a key another layer uses natively) or `prefix'."
         (setq bindings (seq-remove (lambda (b) (gethash b gone)) bindings)))
       ;; Keys other layers use natively (claims), Emacs' defaults, and prefixes in the target keymap.
       (dolist (b (copy-sequence bindings))
-        (let* ((key (plist-get b :key)) (rank (plist-get b :rank))
-               (rivals (seq-filter (lambda (cl) (and (equal (plist-get cl :key) key)
+        (let* ((key (plist-get b :key)) (rank (plist-get b :rank)) (parsed (drgnx-keys--parse key))
+               (rivals (seq-filter (lambda (cl) (and (equal (drgnx-keys--parse (plist-get cl :key)) parsed)
                                                      (not (eq (plist-get cl :layer) (plist-get b :layer)))))
                                    claims))
                (kind (and rivals 'claim))

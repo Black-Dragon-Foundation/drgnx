@@ -71,7 +71,7 @@ key, it wins — and the clash is reported.
 
 A conflict is one of:
 
-- **same key** — two commands want one key in one keymap;
+- **same key** — two commands want one key in one keymap (however it is written: `TAB` and `C-i` are one key);
 - **claim** — a layer binds a key another layer uses natively (e.g. VS Code's `C-o` Open File over Emacs'
   open-line, or over Vim's jump back);
 - **prefix** — a key turns a prefix into a command or the other way round: against Emacs' own bindings (VS Code's
