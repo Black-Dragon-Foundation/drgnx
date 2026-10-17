@@ -129,6 +129,17 @@ Each clash is carded once (its key in the job's data, `:clashes`); a card's data
 text, decision, agent, task), the subject and a size: `long` for work against a decision, a diff over
 `drgnx-job-clash-long-lines` (200) lines, or a subject that clashed before, else `short`.
 
+A clash card gets a **reviewer** (role `review`, or `review-long` for a long clash when it has a route) in the job's
+worktree under the review policy: `[drgnx clash CARD]`, both sides with their reasons (a long review also the last
+4000 characters each side's agent said), answered with a last line `RECOMMEND: A`, `B` or `neither: why`
+(`drgnx-job-clash--recommendation`, onto the card's data as `(:side :why)`). It stays for **Discuss** (the user's
+text, quoted, goes to it; a gone one is started again with it) and ends when the card is settled. A clash without a
+recommendation whose reviewer is gone gets one more (at most two per hub run). The user's choice is a decision of
+the user's — a `replaces` of the other side for a contradiction; the proposal recorded (or replaced) for a proposed
+decision; for work against a decision, the task back to an agent told which files to revert (A), or the decision
+replaced and the review going on (B) — and the log's delivery tells every agent of the job.
+`drgnx-job-clash-auto-accept` (nil): a short clash's recommendation accepted without the user.
+
 ## Tests
 
 `test/unit/coord-test.el` (the store; the claim race), `coord-mcp-test.el` (the server over stdio),

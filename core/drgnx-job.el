@@ -325,6 +325,10 @@ job on."
         (drgnx-agents-deliver s prompt)
         (if reviewer (puthash sid t drgnx-job--reviewing)
           (drgnx-coord-force-status (drgnx-agent-session-task s) "running" sid)))
+       ;; a clash reviewer's turn is over: its recommendation (it stays, for Discuss)
+       ((and (consp reviewer) (gethash sid drgnx-job--reviewing) (drgnx-agents-free-p s))
+        (remhash sid drgnx-job--reviewing)
+        (run-hook-with-args 'drgnx-job-clash-answer-functions job reviewer s))
        ;; a reviewer's turn is over: its verdict
        ((and reviewer (gethash sid drgnx-job--reviewing) (drgnx-agents-free-p s))
         (remhash sid drgnx-job--reviewing)
@@ -582,6 +586,14 @@ S: the session whose request waits (it goes back to work once answered, or, gone
     (drgnx-job--changed job)
     cid))
 
+(defvar drgnx-job-clash-answer-functions nil
+  "Called with (JOB REVIEWER SESSION) when a clash reviewer's turn ends (REVIEWER: (:clash CARD)): drgnx-job-clash.el.")
+
+(defvar drgnx-job-card-action-functions nil
+  "Called with (CARD ACTION ARG) for actions drgnx-job.el does not know (a clash's): the first non-nil did it.")
+
+(defconst drgnx-job--showing-actions '("open" "discuss") "Actions that leave their card open.")
+
 (defun drgnx-job-card-actions (card)
   "CARD's actions: ((ACTION LABEL)…)."
   (pcase (plist-get card :kind)
@@ -593,6 +605,7 @@ S: the session whose request waits (it goes back to work once answered, or, gone
     ("review" '(("accept" "Merge as it is") ("retry" "Back to an agent") ("drop" "Drop the task")))
     ((or "fallback" "agent" "stalled") '(("retry" "Retry") ("drop" "Drop the task")))
     ("budget" '(("resume" "Resume with a budget…") ("stop" "Stop the job")))
+    ("clash" '(("accept" "Accept the reviewer") ("pick-a" "Pick A") ("pick-b" "Pick B") ("discuss" "Discuss with the reviewer…")))
     (_ '(("dismiss" "Dismiss")))))
 
 (defun drgnx-job--retry (job task &optional note)
@@ -623,10 +636,14 @@ S: the session whose request waits (it goes back to work once answered, or, gone
   (let* ((card (or (drgnx-coord-card cid) (user-error "No card %s" cid)))
          (job (plist-get card :job)) (task (plist-get card :task)))
     (unless (assoc action (drgnx-job-card-actions card)) (user-error "Card %s has no action %s" cid action))
-    (unless (equal action "open")                                  ; open only shows: the card stays
+    (when (member action drgnx-job--showing-actions)               ; these show or ask: the card stays
+      (run-hook-with-args-until-success 'drgnx-job-card-action-functions card action arg))
+    (unless (member action drgnx-job--showing-actions)
       (unless (drgnx-coord-card-settle cid action) (user-error "Card %s is already settled" cid))
       (condition-case err
-          (pcase action
+          (pcase (if (equal (plist-get card :kind) "clash") 'clash action)   ; a clash's actions are drgnx-job-clash.el's
+            ('clash (unless (run-hook-with-args-until-success 'drgnx-job-card-action-functions card action arg)
+                      (user-error "Nothing does %s" action)))
             ("approve" (drgnx-job-approve job :budget arg))
             ("reject" (if task (drgnx-job--answer-request card nil) (drgnx-job-stop job)))
             ("allow" (drgnx-job--answer-request card t))

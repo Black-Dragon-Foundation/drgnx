@@ -14,6 +14,7 @@
 ;;   [drgnx task ID]  commits task.txt (legacy/a.txt when the prompt says legacy), then read_decisions and
 ;;               complete_task through its MCP server
 ;;   [drgnx review ID]  says "VERDICT: pass" (or "VERDICT: fail: …" with MOCK_ACP_VERDICT=fail)
+;;   [drgnx clash ID]  says "RECOMMEND: A because it was first" (MOCK_ACP_RECOMMEND=B: B; MOCK_ACP_CLASH_SLOW: 5 s later)
 ;;   crash-once  crashes when .mock-crashed is not in its directory (then makes it): the next agent works
 ;;   coord TOOL JSON  starts the first server of its mcpServers (session/new) and calls TOOL with the JSON arguments;
 ;;               says "coord: TEXT" (the tool's answer)
@@ -147,6 +148,11 @@ decision log, complete the task; say what happened."
       (mock--steps sid (list (cons 0 (lambda () (mock--say sid (if (equal (getenv "MOCK_ACP_VERDICT") "fail")
                                                                    "Looked at it.\nVERDICT: fail: rename foo to bar"
                                                                  "Looked at it.\nVERDICT: pass")))))))
+     ;; a clash reviewer: RECOMMEND: A (or MOCK_ACP_RECOMMEND's side)
+     ((string-match-p "\\[drgnx clash " text)
+      (mock--steps sid (list (cons (if (getenv "MOCK_ACP_CLASH_SLOW") 5 0)
+                                   (lambda () (mock--say sid (format "Read both sides.\nRECOMMEND: %s because it was first"
+                                                                     (or (getenv "MOCK_ACP_RECOMMEND") "A"))))))))
      ((string-match "\\[drgnx task \\([^] ]+\\)" text)
       (mock--task sid (match-string 1 text) text))
      ((string-match "\\`coord \\([a-z_]+\\) ?\\(.*\\)\\'" text)

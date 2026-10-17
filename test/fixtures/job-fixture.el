@@ -37,6 +37,11 @@ profile \"mock\" on every route."
            (drgnx-job-run-test--git repo "add" "-A")
            (drgnx-job-run-test--git repo "commit" "-q" "-m" "start")
            (drgnx-hub-serve (drgnx-hub-socket))
+           ;; the hub's memory of jobs is this test's: ids repeat across tests (fresh stores, second-based ids)
+           (dolist (h (list drgnx-job--prompts drgnx-job--reviewers drgnx-job--reviewing drgnx-job--exits drgnx-job--nudged
+                            drgnx-job--turns-seen drgnx-job--step-pending drgnx-job--signatures))
+             (clrhash h))
+           (when (featurep 'drgnx-job-clash) (clrhash drgnx-job-clash--starts) (clrhash drgnx-job-clash--checked))
            ,@body)
        (dolist (s drgnx-agents--sessions) (ignore-errors (drgnx-agents-kill s)))
        (drgnx-hub-disconnect)

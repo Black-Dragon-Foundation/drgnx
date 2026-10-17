@@ -20,7 +20,15 @@ proposal in a buffer, with Approve and Reject), **Approve Plan Job…**, **Show 
 the palette (no keys by default). What needs you is a **card** with its actions — the proposal (Approve, Reject), a permission (Allow, Reject),
 a merge conflict (let the agent resolve it, merge again after you resolved it, drop the task), a review that failed
 (merge as it is, back to an agent, drop), a stuck or failed agent (retry, drop), the budget (resume with more, stop);
-each acts once. Messages agents send you are listed with a Reply. Every command goes through the hub, starting it when needed
+each acts once. Messages agents send you are listed with a Reply.
+
+**Clashes** are found by rules, not guessed: two agents deciding opposite things about one subject (build it / don't),
+an agent deciding about another task, a task changing files a won't-build decision covers (its review waits), an
+agent that keeps acting on an old decision log, two tasks changing the same files (a note, nothing waits). A clash
+card shows both sides and the decisions each relies on; a reviewer agent recommends one, and you **Accept the
+reviewer**, **Pick A**, **Pick B** or **Discuss** (talk it through with the reviewer). Your choice becomes your
+decision, and every agent of the job is told. Your own decisions always win: an agent contradicting one is overruled
+at once, without a card. Every command goes through the hub, starting it when needed
 ([agents.md](agents.md#the-hub-and-the-gateway)).
 
 ## The plan
