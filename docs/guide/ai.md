@@ -170,10 +170,15 @@ a model. On a Mac the key is an internet password for `openrouter.ai`, account `
 Keychain Access shows it, and `security delete-internet-password -s openrouter.ai -a drgnx` removes it.
 
 Sources that may ask for something (`.gpg` files, the Keychain, the keyring) are only read from commands you run in
-the drgnx app or an interactive Emacs (Edit with AI, Ask the Codebase, Choose); background features (ghost text, the
-hub, agents) use the environment or a key read earlier, and the `drgnx` command-line tool, which runs in batch Emacs,
-never reads the Keychain or keyring: set `OPENROUTER_API_KEY` for it. In short: the key you gave onboarding works in
-the drgnx app; in a terminal (`drgnx onboard`, `drgnx search`, …) use the environment variable.
+the drgnx app or an interactive Emacs (Edit with AI, Ask the Codebase, Choose, AI: Load Keys); background features
+(ghost text, the hub, agents) never read them — they use the environment or a key this drgnx read earlier. So that
+they have it after a restart, `drgnx open` (which the drgnx app runs) has drgnx read the keys of the providers your
+roles name once per start, a moment after its window shows (macOS may ask whether Emacs may use the Keychain).
+**AI: Load Keys** does the same at any time — needed when drgnx was started some other way; ghost text says once
+"AI: Load Keys reads your key from the Keychain" when its provider's key is not loaded. The `drgnx` command-line
+tool, which runs in batch Emacs, never reads the Keychain or keyring: set `OPENROUTER_API_KEY` for it. In short: the
+key you gave onboarding works in the drgnx app; in a terminal (`drgnx onboard`, `drgnx search`, …) use the
+environment variable.
 
 ## Agents
 

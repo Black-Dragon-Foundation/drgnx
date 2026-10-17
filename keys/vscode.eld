@@ -87,6 +87,7 @@
         (ai-edit-reject "C-c C-k" :map drgnx-ai-edit-review-mode-map :mac "C-c C-k")
         (ai-ask :none "in the palette")
         (ai-choose :none "in the palette")
+        (ai-load-keys :none "drgnx open runs it once per start; the palette")
         (agents-reply "RET")
         (agents-review-done "C-c C-c" :mac "C-c C-c")
         (agents-review-reject "C-c C-k" :mac "C-c C-k")

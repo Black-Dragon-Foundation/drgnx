@@ -71,6 +71,12 @@
   "Some provider of the `complete' role can be asked: found running here, or remote with its key."
   (seq-some (lambda (step) (drgnx-ai-usable-p (car step) 'fim)) (drgnx-ai-role 'complete)))
 
+(defun drgnx-ai-ghost--keyless ()
+  "The first provider of the `complete' role that needs a key and has none loaded (the background never reads the
+Keychain or the keyring), or nil."
+  (car (seq-find (lambda (step) (and (plist-get (drgnx-ai-provider (car step)) :key-env) (not (drgnx-ai-key (car step)))))
+                 (drgnx-ai-role 'complete))))
+
 (defun drgnx-ai-ghost--trigger ()
   "Ask for a suggestion at point (the pause has come).  Says once when no provider completes."
   (when (and drgnx-ai-ghost-mode (not buffer-read-only))
@@ -78,7 +84,10 @@
         (progn
           (unless drgnx-ai-ghost--said-unavailable
             (setq drgnx-ai-ghost--said-unavailable t)
-            (message "AI completion: no provider for `complete' is running (AI: Choose Provider/Model)"))
+            (if-let* ((id (drgnx-ai-ghost--keyless)))
+                (message "AI completion: no key for %s loaded — AI: Load Keys reads your key from %s" id
+                         (if (eq (drgnx-platform) 'macos) "the Keychain" "your keyring"))
+              (message "AI completion: no provider for `complete' is running (AI: Choose Provider/Model)")))
           ;; a runner started since: looked for at most once a minute (in the background)
           (when (> (- (float-time) drgnx-ai-ghost--last-probe) 60)
             (setq drgnx-ai-ghost--last-probe (float-time))
@@ -478,7 +487,9 @@ and keep it in ai.eld (never a key)."
                                         (ai-edit-reject "Reject AI Edit" drgnx-ai-edit-reject "Drop the edit; the buffer stays"
                                                         drgnx-ai-edit-review-mode-map)
                                         (ai-ask "Ask the Codebase…" drgnx-ai-ask "A question about this project, answered from its code" nil)
-                                        (ai-choose "Choose AI Provider/Model…" drgnx-ai-choose "A role's provider and model, tested first" nil)))
+                                        (ai-choose "Choose AI Provider/Model…" drgnx-ai-choose "A role's provider and model, tested first" nil)
+                                        (ai-load-keys "Load Keys" drgnx-ai-load-keys
+                                                      "Read your providers' keys from the Keychain or keyring, for ghost text and the background" nil)))
                          (apply #'drgnx-command-define id :category "AI" :title title :command fn :doc doc (and map (list :map map))))))
 
 (provide 'drgnx-ai-ui)

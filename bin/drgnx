@@ -219,6 +219,7 @@ cmd_open() { # [--check] [PATH…] — open PATHs (none: the windows as you left
     client -n -c >/dev/null || return 1
   fi
   client -n -e '(drgnx-session-raise)' >/dev/null 2>&1 || true
+  client -n -e "(progn (require 'drgnx-ai) (drgnx-ai-load-keys-soon))" >/dev/null 2>&1 || true   # once per daemon, from a timer
   if ((${#files[@]})); then client -n -- "${files[@]}" >/dev/null || return 1; fi
   for p in ${dirs[@]+"${dirs[@]}"}; do
     client -n -e "(drgnx-session-open-folder \"$(elisp_string "$p")\")" >/dev/null || return 1

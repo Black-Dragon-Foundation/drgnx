@@ -101,7 +101,8 @@ their own, so they never reach your drgnx); a server named anything but `drgnx` 
 `bin/drgnx` talks to the daemon with the `emacsclient` of drgnx's Emacs (beside it; in an Emacs.app,
 `Contents/MacOS/bin/`), always with `-a false`, so it never starts some other Emacs by itself. It asks
 `(drgnx-session-gui-frame-p)` whether a window is open, opens one with `emacsclient -c` only when none is, brings it
-to the front with `(drgnx-session-raise)`, sends files as file arguments and each folder as
+to the front with `(drgnx-session-raise)`, has it read the AI keys once per start (`drgnx-ai-load-keys-soon`: from
+a timer, [ai.md](ai.md#keys)), sends files as file arguments and each folder as
 `(drgnx-session-open-folder "…")`. The daemon starts detached (`setsid`, else `perl` on macOS) as
 `emacs --bg-daemon=drgnx --init-directory=<checkout>/init`. The close button's `delete-frame` event and Close Window
 run `drgnx-session-close-frame`; Quit drgnx runs `drgnx-session-quit`. Code: `core/drgnx-session.el`; tests:

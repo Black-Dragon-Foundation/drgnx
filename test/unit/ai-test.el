@@ -331,4 +331,55 @@ Keychain and keyring are never reached."
               (should (string-search "Authorization: Bearer k1" (with-temp-buffer (insert-file-contents log) (buffer-string)))))
           (delete-process p))))))
 
+(ert-deftest drgnx-ai/load-keys-reads-the-roles-keys-as-a-command-and-keeps-them ()
+  ;; The keys of the providers the roles name, through the sources a command may use (the Keychain); then the
+  ;; background (ghost text: not interactive) has them.  Local runners have no key: nothing is read for them.
+  (drgnx-ai-test--with root
+    (drgnx-ai-test--write (concat root "config/ai.eld")
+                          '(:version 1 :roles ((complete (openrouter . "m") (ollama . "c")) (chat (openrouter . "m")))))
+    (let ((system-type 'darwin) (noninteractive nil) (asked nil) (auth-sources nil))
+      (cl-letf (((symbol-function 'auth-source-search)
+                 (lambda (&rest spec) (push (cons (plist-get spec :host) auth-sources) asked)
+                   (and (memq 'macos-keychain-internet auth-sources) (list (list :secret "sk-or-from-keychain"))))))
+        (should-not (drgnx-ai-key 'openrouter nil))                 ; before: the background has no key
+        (setq asked nil)
+        (should (equal (drgnx-ai-load-keys) '(openrouter)))
+        (should (equal asked '(("openrouter.ai" macos-keychain-internet))))   ; once, OpenRouter's host only
+        (setq asked nil)
+        (should (equal (drgnx-ai-key 'openrouter nil) "sk-or-from-keychain"))
+        (should-not asked)))))                                       ; from memory
+
+(ert-deftest drgnx-ai/drgnx-open-loads-the-keys-once-from-a-timer-never-in-batch ()
+  (drgnx-ai-test--with root
+    (let ((timers nil) (loaded 0) (drgnx-ai--keys-loading nil))
+      (cl-letf (((symbol-function 'run-at-time) (lambda (_secs _repeat fn &rest args) (push (cons fn args) timers)))
+                ((symbol-function 'drgnx-ai-load-keys) (lambda () (cl-incf loaded) nil)))
+        (let ((noninteractive t)) (drgnx-ai-load-keys-soon))      ; batch: never
+        (should-not timers)
+        (let ((noninteractive nil))
+          (drgnx-ai-load-keys-soon)
+          (should (= loaded 0))                                     ; nothing inside the emacsclient call
+          (should (= 1 (length timers)))
+          (apply (caar timers) (cdar timers))
+          (should (= loaded 1))
+          (drgnx-ai-load-keys-soon)                                 ; once per daemon
+          (should (= 1 (length timers))))))
+    ;; bin/drgnx open asks the daemon for it, after the window
+    (let ((bin (with-temp-buffer (insert-file-contents (expand-file-name "bin/drgnx" drgnx-dir)) (buffer-string))))
+      (should (string-match-p "client -n -e '(drgnx-session-raise)'.*\n.*drgnx-ai-load-keys-soon" bin)))))
+
+(require 'drgnx-keys)
+
+(ert-deftest drgnx-ai/load-keys-is-a-command-without-a-key-in-every-profile ()
+  (let ((src (with-temp-buffer (insert-file-contents (expand-file-name "modules/tools/drgnx-ai-ui.el" drgnx-dir)) (buffer-string))))
+    (should (string-match-p "(ai-load-keys \"Load Keys\" drgnx-ai-load-keys" src)))      ; registered with the AI commands
+  (should (commandp #'drgnx-ai-load-keys))
+  (let ((profiles (drgnx-keys-load-profiles (expand-file-name "keys" drgnx-dir))))
+    (should (= 3 (length profiles)))
+    (dolist (p profiles)
+      (let ((entry (assq 'ai-load-keys (plist-get (cdr p) :bind))))
+        (should entry)
+        (should (eq (cadr entry) :none))
+        (should (stringp (nth 2 entry)))))))                                            ; with its reason
+
 ;;; ai-test.el ends here

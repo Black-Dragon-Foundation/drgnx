@@ -441,7 +441,7 @@ one call: (STATUS MESSAGE ANSWERED), ANSWERED how many of the three roles answer
             (when yes (cl-incf answered))
             (push (format "%s: %s/%s %s" role (car step) (cdr step) (if yes "answered" "did not answer")) lines)))))
     (unless key
-      (push "OpenRouter: set OPENROUTER_API_KEY in your shell profile, or add \"machine openrouter.ai password <key>\" to ~/.authinfo.gpg" lines))
+      (push "OpenRouter: run this step again → Change → openrouter (keeps the key in your Keychain or keyring); for the command line: OPENROUTER_API_KEY" lines))
     (let* ((vram (drgnx-ai-vram)) (model (cdr (car (drgnx-ai-role 'complete))))
            (need (if model (drgnx-ai-model-vram model) 0))
            (free (and vram (- (plist-get vram :total) (plist-get vram :used)))))

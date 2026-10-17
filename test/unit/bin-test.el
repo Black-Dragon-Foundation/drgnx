@@ -161,6 +161,9 @@ case \"$*\" in *is-enabled*) [ -f %s ] ;; *start*) touch %s ;; esac"
   "An emacsclient call to the test's server with ARGS, as the fake logs it."
   (append (list "-a" "false" "-s" drgnx-bin-test--server) args))
 
+(defconst drgnx-bin-test--load-keys "(progn (require 'drgnx-ai) (drgnx-ai-load-keys-soon))"
+  "What `drgnx open' asks the daemon after raising its window: the AI keys, once per daemon (from a timer).")
+
 (defun drgnx-bin-test--folder (dir)
   (format "(drgnx-session-open-folder %S)" (directory-file-name (expand-file-name dir))))
 
@@ -175,6 +178,7 @@ case \"$*\" in *is-enabled*) [ -f %s ] ;; *start*) touch %s ;; esac"
                      (list (drgnx-bin-test--c "-e" "t")
                            (drgnx-bin-test--c "-e" "(drgnx-session-gui-frame-p)")
                            (drgnx-bin-test--c "-n" "-e" "(drgnx-session-raise)")
+                           (drgnx-bin-test--c "-n" "-e" drgnx-bin-test--load-keys)
                            (drgnx-bin-test--c "-n" "--" file)
                            (drgnx-bin-test--c "-n" "-e" (drgnx-bin-test--folder sub)))))
       (should (string-empty-p (drgnx-bin-test--slurp (expand-file-name "emacs.log" dir))))
@@ -188,6 +192,7 @@ case \"$*\" in *is-enabled*) [ -f %s ] ;; *start*) touch %s ;; esac"
                            (drgnx-bin-test--c "-e" "(drgnx-session-gui-frame-p)")
                            (drgnx-bin-test--c "-n" "-c")
                            (drgnx-bin-test--c "-n" "-e" "(drgnx-session-raise)")
+                           (drgnx-bin-test--c "-n" "-e" drgnx-bin-test--load-keys)
                            (drgnx-bin-test--c "-n" "--" file)))))))
 
 (ert-deftest drgnx-session/open-argv-when-not-running ()
@@ -204,7 +209,8 @@ case \"$*\" in *is-enabled*) [ -f %s ] ;; *start*) touch %s ;; esac"
       (should (equal (seq-remove (lambda (c) (equal c (drgnx-bin-test--c "-e" "t"))) calls)
                      (list (drgnx-bin-test--c "-e" "(drgnx-session-gui-frame-p)")
                            (drgnx-bin-test--c "-n" "-c")
-                           (drgnx-bin-test--c "-n" "-e" "(drgnx-session-raise)")))))))
+                           (drgnx-bin-test--c "-n" "-e" "(drgnx-session-raise)")
+                           (drgnx-bin-test--c "-n" "-e" drgnx-bin-test--load-keys)))))))
 
 (ert-deftest drgnx-session/the-systemd-unit-is-started-when-enabled ()
   (drgnx-bin-test--with-open

@@ -40,6 +40,8 @@ known: no preset, so nothing running on this machine counts; no OpenRouter key."
       (should (equal (car (drgnx-ai-role 'chat)) '(o . "llama3:8b")))
       (should (string-match-p "complete: o/qwen2.5-coder:1.5b answered" (cadr r)))
       (should (string-match-p "OPENROUTER_API_KEY" (cadr r)))                        ; how to add the key: said
+      (should (string-search "run this step again → Change → openrouter (keeps the key in your Keychain or keyring)" (cadr r)))
+      (should-not (string-search "authinfo" (cadr r)))
       (should-not (string-search "sk-" (with-temp-buffer (insert-file-contents (concat root "config/ai.eld")) (buffer-string)))))))
 
 (ert-deftest drgnx-onboard/the-ai-step-keeps-roles-that-work ()

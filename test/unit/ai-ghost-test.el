@@ -153,6 +153,20 @@ LLM answering SPEC; `o' found running."
       (should-not (drgnx-ai-ghost-text))
       (should (= 1 (seq-count (lambda (m) (string-match-p "no provider" m)) said))))))
 
+(ert-deftest drgnx-ai-ghost/a-provider-without-its-key-loaded-says-load-keys-once ()
+  ;; OpenRouter after a restart: its key is in the Keychain, which the background never reads.
+  (drgnx-ai-ghost-test--with '((:path "/api/generate" :body "{\"response\":\"never\"}"))
+    (with-temp-file (concat root "config/ai.eld")
+      (prin1 '(:version 1 :roles ((complete (openrouter . "qwen/qwen-2.5-coder-32b-instruct")))) (current-buffer)))
+    (let ((said nil) (process-environment (cons "OPENROUTER_API_KEY" process-environment))
+          (auth-sources nil) (drgnx-ai--keys (make-hash-table :test #'eq)))
+      (cl-letf (((symbol-function 'message) (lambda (fmt &rest args) (push (apply #'format fmt args) said)))
+                ((symbol-function 'drgnx-ai-probe) #'ignore)
+                ((symbol-function 'drgnx-platform) (lambda () 'macos)))
+        (drgnx-ai-ghost--trigger)
+        (drgnx-ai-ghost--trigger))
+      (should (equal said '("AI completion: no key for openrouter loaded — AI: Load Keys reads your key from the Keychain"))))))
+
 (ert-deftest drgnx-ai-tab/one-tab-in-five-states ()
   ;; 1: a suggestion shows → accept it
   (with-temp-buffer

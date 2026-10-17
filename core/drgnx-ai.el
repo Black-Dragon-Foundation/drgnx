@@ -162,6 +162,33 @@ would hide the key for hours."
             (when key (puthash id key drgnx-ai--keys))
             key)))))
 
+(defun drgnx-ai-load-keys ()
+  "Read the keys of the providers the roles name, as a command does — the Keychain or the keyring may be asked
+\(`drgnx-ai-key' with INTERACTIVE) — and keep them in memory, for the features that never ask: ghost text, the hub,
+agents.  Returns the ids that have a key."
+  (interactive)
+  (let* ((ids (delete-dups (mapcar #'car (apply #'append (mapcar (lambda (r) (drgnx-ai-role (car r))) drgnx-ai-default-roles)))))
+         (keyed (seq-filter (lambda (id) (plist-get (drgnx-ai-provider id) :key-env)) ids))
+         (found (seq-filter (lambda (id) (drgnx-ai-key id t)) keyed))
+         (missing (seq-difference keyed found)))
+    (when (called-interactively-p 'interactive)
+      (message "%s" (cond ((null keyed) "AI: no provider in your roles needs a key")
+                          (t (string-join (delq nil (list (and found (format "AI keys loaded: %s" (mapconcat #'symbol-name found ", ")))
+                                                          (and missing (format "no key found for %s (docs/guide/ai.md#keys)"
+                                                                               (mapconcat #'symbol-name missing ", ")))))
+                                          "; ")))))
+    found))
+
+(defvar drgnx-ai--keys-loading nil "Non-nil once `drgnx open' had this daemon load the keys (`drgnx-ai-load-keys-soon').")
+
+(defun drgnx-ai-load-keys-soon ()
+  "`drgnx open' (a command the user ran) calls this: `drgnx-ai-load-keys' once per daemon, from a timer a moment
+later — after the window it opened shows, never inside its emacsclient call.  Never in batch."
+  (unless (or noninteractive drgnx-ai--keys-loading)
+    (setq drgnx-ai--keys-loading t)
+    (run-at-time 0.5 nil (lambda () (with-demoted-errors "drgnx: AI keys not loaded: %S" (drgnx-ai-load-keys)))))
+  nil)
+
 (defun drgnx-ai--stored-key (host)
   "What the secret store alone holds for HOST (a string), or nil; auth-source's cache is forgotten and not used."
   (require 'auth-source)
