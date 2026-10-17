@@ -53,6 +53,7 @@
         (diff-expand-all :none "the palette")
         (toggle-inline-blame :none "the palette")
         (blame-show-commit "SPC g c")
+        (git-generate-commit-message :none "the palette")
         (agents-open "RET")
         (projects-sync-plans :none "in the palette")
         (work-view "SPC a w")
