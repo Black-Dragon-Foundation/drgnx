@@ -17,6 +17,8 @@
 (require 'drgnx-paths)
 (require 'sqlite)                       ; with-sqlite-transaction
 
+(defvar read-eval)                      ; `let'-bound in `-meta': must be dynamic once compiled
+
 (defconst drgnx-search-store-schema-version 1)
 
 (defconst drgnx-search-store--schema
@@ -116,13 +118,26 @@ word zero-padded — the form `drgnx-search-store-fingerprints' returns, for ran
         (error (ignore-errors (sqlite-close db))
                (signal (car err) (cdr err)))))))
 
+(defun drgnx-search-store-open-read (root)
+  "Open the index of the project at ROOT for reading, or nil when it has none.  For queries: it never
+creates the file or the schema, never takes the write lock and never writes the meta, so a search neither
+waits for the indexer nor disturbs it (the file is WAL: a reader sees a snapshot while a writer works).
+The caller closes it (`sqlite-close')."
+  (let ((file (drgnx-search-store-file root)))
+    (when (file-exists-p file)
+      (let ((db (sqlite-open file)))
+        (condition-case err
+            (progn (sqlite-pragma db "busy_timeout = 5000") db)
+          (error (ignore-errors (sqlite-close db))
+                 (signal (car err) (cdr err))))))))
+
 ;;;; Meta
 
 (defun drgnx-search-store-meta (db)
   "What the index records about itself: (:schema N :provider P :model M :dims N :indexed-at TIME), the
 keys that are set."
   (cl-loop for (key value) in (sqlite-select db "select key, value from meta order by key")
-           append (list (intern (concat ":" key)) (car (read-from-string value)))))
+           append (list (intern (concat ":" key)) (let ((read-eval nil)) (car (read-from-string value))))))
 
 (defun drgnx-search-store--put-meta (db plist)
   (cl-loop for (key value) on plist by #'cddr
@@ -164,6 +179,20 @@ keys that are set."
   (with-sqlite-transaction db (drgnx-search-store--delete db path)))
 
 ;;;; Reading
+
+(defun drgnx-search-store-stamp (db)
+  "What changes when the index does: (INDEXED-AT CHUNK-COUNT HIGHEST-CHUNK-ID).  Chunks arrive before the
+indexer advances `:indexed-at', so the count and the highest id tell a half-finished run's progress too."
+  (cons (plist-get (drgnx-search-store-meta db) :indexed-at)
+        (car (sqlite-select db "select count(*), coalesce(max(id), 0) from chunk"))))
+
+(defun drgnx-search-store-snapshot (db)
+  "The index as of one moment, read in one transaction: (:stamp STAMP :meta META :ids IDS :words WORDS) —
+`drgnx-search-store-stamp', `-meta' and `-fingerprints'.  A write between its pages does not show."
+  (with-sqlite-transaction db
+    (let ((fp (drgnx-search-store-fingerprints db)))
+      (list :stamp (drgnx-search-store-stamp db) :meta (drgnx-search-store-meta db)
+            :ids (car fp) :words (cdr fp)))))
 
 (defconst drgnx-search-store--page 5000 "Fingerprints read per query (bounds the transient rows).")
 

@@ -217,5 +217,81 @@
     (sqlite-execute db "update meta set value = '99' where key = 'schema'")
     (should-error (drgnx-search-store-open "/fake/project") :type 'user-error)))
 
+;; ---- the reader path: no write lock, one snapshot
+
+(ert-deftest drgnx-search-store/open-read-is-nil-without-an-index-and-creates-nothing ()
+  (skip-unless (sqlite-available-p))
+  (let* ((dir (make-temp-file "drgnx-search" t))
+         (process-environment (cons (concat "XDG_STATE_HOME=" dir) process-environment)))
+    (unwind-protect
+        (progn
+          (should-not (drgnx-search-store-open-read "/fake/project"))
+          (should-not (file-exists-p (drgnx-search-store-file "/fake/project"))))
+      (delete-directory dir t))))
+
+(ert-deftest drgnx-search-store/open-read-reads-while-a-writer-holds-the-lock ()
+  (drgnx-search-store-test--with
+    (drgnx-search-store-put-file db "a.el" "h" (list (drgnx-search-store-test--chunk "alpha words" 1)))
+    (drgnx-search-store-set-meta db '(:dims 1024 :indexed-at 5.0))
+    (sqlite-execute db "begin immediate")      ; an indexer in the middle of a write
+    (unwind-protect
+        (let ((t0 (float-time)) (r (drgnx-search-store-open-read "/fake/project")))
+          (should r)
+          (unwind-protect
+              (progn
+                (should (= (plist-get (drgnx-search-store-meta r) :dims) 1024))
+                (should (= (length (car (drgnx-search-store-fingerprints r))) 1))
+                (should (= (length (drgnx-search-store-fts r "alpha" 5)) 1)))
+            (sqlite-close r))
+          (should (< (- (float-time) t0) 2.0))) ; never waits for the write lock (busy_timeout is 5 s)
+      (sqlite-execute db "rollback"))))
+
+(defvar drgnx-search-store-test--evaled nil)
+
+(ert-deftest drgnx-search-store/meta-values-are-read-without-read-eval ()
+  (drgnx-search-store-test--with
+    (setq drgnx-search-store-test--evaled nil)
+    (sqlite-execute db "insert or replace into meta values ('model', '#.(setq drgnx-search-store-test--evaled t)')")
+    (ignore-errors (drgnx-search-store-meta db))
+    (should-not drgnx-search-store-test--evaled)
+    (sqlite-execute db "insert or replace into meta values ('model', '\"bge\"')")
+    (should (equal (plist-get (drgnx-search-store-meta db) :model) "bge"))))
+
+(ert-deftest drgnx-search-store/stamp-moves-with-the-index ()
+  (drgnx-search-store-test--with
+    (let ((empty (drgnx-search-store-stamp db)))
+      (drgnx-search-store-put-file db "a.el" "h" (list (drgnx-search-store-test--chunk "one" 1)))
+      (let ((one (drgnx-search-store-stamp db)))
+        (should-not (equal empty one))
+        (drgnx-search-store-set-meta db '(:indexed-at 7.0))
+        (should-not (equal one (drgnx-search-store-stamp db)))))))
+
+(ert-deftest drgnx-search-store/snapshot-is-one-consistent-read ()
+  (drgnx-search-store-test--with
+    (drgnx-search-store-put-file db "a.el" "h"
+                                 (cl-loop for i from 1 to 6 collect (drgnx-search-store-test--chunk (format "c%d" i) i 64)))
+    (drgnx-search-store-set-meta db '(:dims 64 :indexed-at 1.0))
+    (let* ((reader (drgnx-search-store-open-read "/fake/project")) (wrote nil)
+           (drgnx-search-store--page 2)
+           (hook (lambda (&rest _)             ; between two pages another Emacs replaces the file
+                   (unless wrote
+                     (setq wrote t)
+                     (drgnx-search-store-put-file db "a.el" "h2" (list (drgnx-search-store-test--chunk "new" 9 64)))
+                     (drgnx-search-store-set-meta db '(:indexed-at 2.0))))))
+      (unwind-protect
+          (progn
+            (advice-add 'drgnx-search-bits-words :before hook)
+            (let ((snap (drgnx-search-store-snapshot reader)))
+              (should wrote)
+              (should (= (length (plist-get snap :ids)) 6)) ; the six chunks of before, none of the new one
+              (should (= (plist-get (plist-get snap :meta) :indexed-at) 1.0))
+              (should (= (length (plist-get snap :words)) 12))
+              (should (equal (plist-get snap :stamp) (list 1.0 6 6))))
+            ;; the next read sees the replacement
+            (should (= (plist-get (drgnx-search-store-meta reader) :indexed-at) 2.0))
+            (should (= (length (car (drgnx-search-store-fingerprints reader))) 1)))
+        (advice-remove 'drgnx-search-bits-words hook)
+        (sqlite-close reader)))))
+
 (provide 'search-store-test)
 ;;; search-store-test.el ends here
