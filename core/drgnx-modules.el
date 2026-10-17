@@ -274,9 +274,26 @@ never stops Emacs — nothing is installed (the module waits for the package, as
 
 (define-derived-mode drgnx-modules-list-mode tabulated-list-mode "Modules"
   "Every module, its status, and whether it runs at the next start."
-  (setq tabulated-list-format [("Module" 26 t) ("Status" 18 t) ("Stage" 12 t) ("ms" 5 t) ("Next start" 18 t) ("About" 0 nil)]
+  (setq tabulated-list-format
+        `[("Module" 26 t) ("Status" 18 t)
+          ("Stage" 12 ,(drgnx-modules--sort-by 2 (lambda (s) (or (seq-position drgnx-modules-stages (intern s)) 99))))
+          ("ms" 5 ,(drgnx-modules--sort-by 3 (lambda (s) (if (string-empty-p s) -1 (string-to-number s)))))
+          ("Next start" 18 t) ("About" 0 nil)]
         tabulated-list-padding 1)
   (tabulated-list-init-header))
+
+(defun drgnx-modules--sort-by (column key)
+  "A sort predicate for the list: COLUMN's text through KEY (a number), compared."
+  (lambda (a b) (< (funcall key (aref (cadr a) column)) (funcall key (aref (cadr b) column)))))
+
+(defun drgnx-modules--external-about (name)
+  "Where external module NAME (external/X or external/X/FEATURE) comes from: its path and features."
+  (pcase-let* ((`(,_ ,x ,feature) (split-string (symbol-name name) "/"))
+               (ext (seq-find (lambda (e) (and (drgnx-modules--external-ok-p e) (equal (format "%s" (plist-get e :name)) x)))
+                              (plist-get (drgnx-modules-read-state) :external))))
+    (cond ((not ext) "")
+          (feature (format "%s from %s" feature (plist-get ext :path)))
+          (t (format "%s: %s" (plist-get ext :path) (mapconcat #'symbol-name (plist-get ext :features) " "))))))
 
 (defun drgnx-modules--entries ()
   (mapcar (lambda (m)
@@ -290,7 +307,7 @@ never stops Emacs — nothing is installed (the module waits for the package, as
                                  (format "%s" (or (plist-get r :ms) ""))
                                  (if (drgnx-module-disabled-p name) "off at next start" "on")
                                  (or (plist-get (cdr m) :doc)
-                                     (if (string-prefix-p "external/" (symbol-name name)) "external module" ""))))))
+                                     (if (string-prefix-p "external/" (symbol-name name)) (drgnx-modules--external-about name) ""))))))
           ;; The table, and what only the report knows: external modules, files that failed to load.
           (append drgnx-modules--table
                   (seq-remove (lambda (r) (assq (car r) drgnx-modules--table)) (reverse drgnx-modules--report)))))

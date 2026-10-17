@@ -288,3 +288,19 @@
      (drgnx-module-define 'test/a :doc "a" :setup #'ignore)
      (drgnx-modules-toggle 'test/a)
      (should (equal (plist-get (drgnx-modules-read-state) :external) '((:name nopath :features (a))))))))
+
+(ert-deftest drgnx-modules/the-list-sorts-numbers-and-stages-and-describes-externals ()
+  ;; M4-11: ms sorts as a number, Stage in stage order; an external row says where it comes from.
+  (drgnx-modules-test--with-config
+   (drgnx-modules-write-state '(:version 1 :external ((:name gone :path "/nonexistent/drgnx" :features (x y)))))
+   (drgnx-modules-load-external)
+   (with-current-buffer (drgnx-modules-list)
+     (let ((col (lambda (name) (nth 2 (seq-find (lambda (c) (equal (car c) name)) (append tabulated-list-format nil)))))
+           (row (lambda (stage ms) (list 'x (vector "m" "ok" stage ms "on" "")))))
+       (should (functionp (funcall col "ms")))
+       (should (funcall (funcall col "ms") (funcall row "idle" "9") (funcall row "idle" "10")))
+       (should-not (funcall (funcall col "ms") (funcall row "idle" "10") (funcall row "idle" "9")))
+       (should (funcall (funcall col "Stage") (funcall row "startup" "") (funcall row "idle" "")))
+       (should-not (funcall (funcall col "Stage") (funcall row "first-input" "") (funcall row "idle" ""))))
+     (should (string-search "/nonexistent/drgnx" (buffer-string)))
+     (should-not (string-search "external module" (buffer-string))))))
