@@ -145,10 +145,17 @@ never opens auth-source), and whether the GPU has room for the completion model 
 ## Keys
 
 drgnx reads a key when a feature needs it, from where you already keep it: the provider's environment variable
-(`OPENROUTER_API_KEY` for OpenRouter), else auth-source (`~/.authinfo`, `~/.authinfo.gpg`, your keyring) with the
-provider's host — e.g. `machine openrouter.ai password sk-or-…`. drgnx never writes a key anywhere, never puts one
-on a command line and never sends one to a model. Sources that may ask for a passphrase (`.gpg` files, keyrings)
-are only read from commands you run (Edit with AI, Ask the Codebase, Choose, onboarding); background features use the environment or a key read earlier.
+(`OPENROUTER_API_KEY` for OpenRouter), else auth-source (`~/.authinfo`, `~/.authinfo.gpg`, the macOS Keychain, your
+Linux keyring) with the provider's host — e.g. `machine openrouter.ai password sk-or-…`.
+
+drgnx writes a key in exactly one place: the macOS Keychain, or the Linux keyring (Secret Service; needs
+`secret-tool`, from `libsecret-tools` or `libsecret`). Only when you ask — in onboarding or a command you run —
+never into a drgnx file, and never on a command line (it goes to the store on stdin). A Keychain that is locked
+or denies access gives an error saying so; the environment variable always works instead. drgnx never sends a key to
+a model.
+
+Sources that may ask for something (`.gpg` files, the Keychain, the keyring) are only read from commands you run
+(Edit with AI, Ask the Codebase, Choose, onboarding); background features use the environment or a key read earlier.
 
 ## Agents
 

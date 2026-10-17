@@ -6,8 +6,9 @@
 ;; One registry for every AI feature — ghost text, inline edit, chat (gptel), embeddings, agents.  Providers are
 ;; presets for OpenRouter and the local runners, plus the user's (ai.eld in the config dir) and the project's
 ;; (.drgnx/ai.eld); roles (complete, edit, chat, embed, agent) are fallback chains of (PROVIDER . MODEL).
-;; Keys come from where the user keeps them — the environment, then auth-source — when they are needed; drgnx
-;; never writes one, never puts one in a command line, a log or a file.  Subscription CLIs (Claude Code, Codex)
+;; Keys come from where the user keeps them — the environment, then auth-source (the macOS Keychain and the Linux
+;; keyring included, for commands the user ran) — when they are needed.  drgnx writes a key in one place only, that
+;; Keychain or keyring, and only when the user asks (`drgnx-ai-store-key'); never in a command line, a log or a file.  Subscription CLIs (Claude Code, Codex)
 ;; are only launched: their logins are theirs.  See docs/guide/ai.md.
 
 ;;; Code:
@@ -48,7 +49,7 @@ it; :auth x-api-key — its key goes in that header (else `Authorization: Bearer
     (agent (openrouter)))                                ; the gateway's chain for agents; nil model: the agent's own
   "Each role's chain when neither the project nor the user names one.")
 
-(defvar drgnx-ai--keys (make-hash-table :test #'eq) "Keys found this session: provider → key (never written).")
+(defvar drgnx-ai--keys (make-hash-table :test #'eq) "Keys found this session: provider → key (kept in memory only).")
 
 ;;;; Configuration
 
@@ -98,28 +99,92 @@ ai.eld never adds or changes one: a cloned repository must not choose where your
 
 ;;;; Keys
 
+(defun drgnx-ai--secret-source ()
+  "The auth-source entry of the system's secret store: the macOS Keychain, else the Secret Service's default collection."
+  (if (eq system-type 'darwin) 'macos-keychain-internet 'default))
+
 (defun drgnx-ai--quiet-sources (sources)
-  "SOURCES that can be read without asking anything: plain files (a .gpg file or a keyring may prompt)."
-  (seq-filter (lambda (s) (and (stringp s) (not (string-suffix-p ".gpg" s)))) sources))
+  "SOURCES that can be read without asking anything: plain files (a .gpg file, the Keychain or a keyring may prompt)."
+  (seq-filter (lambda (s) (and (stringp s) (not (string-suffix-p ".gpg" s))
+                               (not (string-prefix-p "macos-keychain-" s)) (not (string-prefix-p "secrets:" s))))
+              sources))
 
 (defvar auth-sources)
 (declare-function auth-source-search "auth-source")
 
 (defun drgnx-ai-key (id &optional interactive)
   "The key of provider ID, or nil: its environment variable, else auth-source (host of its URL).  Only when
-INTERACTIVE (a command the user ran) are sources that may prompt (.gpg files, keyrings) consulted."
+INTERACTIVE (a command the user ran) are sources that may prompt (.gpg files, the Keychain, the keyring) consulted."
   (let ((p (drgnx-ai-provider id)))
     (or (and (plist-get p :key-env) (let ((v (getenv (plist-get p :key-env)))) (and v (not (string-empty-p v)) v)))
         (gethash id drgnx-ai--keys)
         (when-let* (((plist-get p :key-env))                    ; local runners have no key
                     (host (url-host (url-generic-parse-url (plist-get p :url)))))
           (require 'auth-source)
-          (let* ((auth-sources (if interactive auth-sources (drgnx-ai--quiet-sources auth-sources)))
+          (let* ((auth-sources (if interactive
+                                   (if (member (drgnx-ai--secret-source) auth-sources) auth-sources
+                                     (append auth-sources (list (drgnx-ai--secret-source))))
+                                 (drgnx-ai--quiet-sources auth-sources)))
                  (found (and auth-sources (car (auth-source-search :host host :max 1 :create nil))))
                  (secret (plist-get found :secret))
                  (key (if (functionp secret) (funcall secret) secret)))
             (when key (puthash id key drgnx-ai--keys))
             key)))))
+
+(defun drgnx-ai--dbus-session-p ()
+  "Non-nil when a D-Bus session bus can be reached (the Secret Service lives on it)."
+  (or (not (string-empty-p (or (getenv "DBUS_SESSION_BUS_ADDRESS") "")))
+      (let ((run (getenv "XDG_RUNTIME_DIR"))) (and run (file-exists-p (expand-file-name "bus" run))))))
+
+(defun drgnx-ai--run-with-stdin (program args input)
+  "Run PROGRAM with ARGS, INPUT on its stdin; its exit status.  Output is discarded; the temp buffer holding INPUT
+is erased and killed, so the key lives nowhere afterwards."
+  (let ((buf (generate-new-buffer " *drgnx-secret*" t)) (coding-system-for-write 'utf-8-unix))
+    (unwind-protect
+        (with-current-buffer buf
+          (insert input)
+          (apply #'call-process-region (point-min) (point-max) program nil nil nil args))
+      (with-current-buffer buf (erase-buffer))
+      (kill-buffer buf))))
+
+(defun drgnx-ai--security-quote (s)
+  "S as one word for `security -i' (it splits like a shell): in double quotes, \\ and \" escaped."
+  (concat "\"" (replace-regexp-in-string "[\\\"]" "\\\\\\&" s) "\""))
+
+(defun drgnx-ai-store-key (id key)
+  "Store KEY for provider ID in the system's secret store — the macOS Keychain or the Linux keyring — and return
+`keychain' or `keyring'.  Only for a command the user ran, after asking: nowhere else does drgnx write a key.
+The key travels on stdin, never in a command line.  Afterwards it is read back through `drgnx-ai-key'."
+  (let* ((p (drgnx-ai-provider id))
+         (env (plist-get p :key-env))
+         (host (and env (url-host (url-generic-parse-url (plist-get p :url)))))
+         (mac (eq system-type 'darwin))
+         (store (if mac "Keychain" "keyring"))
+         (advice (format "Unlock %s, or set %s instead." (if mac "it in Keychain Access" "your keyring") env)))
+    (unless host (user-error "Provider %s has no key to store" id))
+    (when (or (not (stringp key)) (string-empty-p key) (string-match-p "[\n\r]" key))
+      (user-error "The key is empty or has more than one line"))
+    (cond
+     (mac (unless (executable-find "security")
+            (user-error "No `security' program found: the macOS Keychain is needed to store a key")))
+     ((not (executable-find "secret-tool"))
+      (user-error "No `secret-tool' found: install libsecret-tools (Debian, Ubuntu), libsecret (Fedora, Arch) to store a key in your keyring"))
+     ((not (drgnx-ai--dbus-session-p))
+      (user-error "No D-Bus session: the keyring is unreachable here; set %s instead" env)))
+    (let ((status (if mac
+                      (drgnx-ai--run-with-stdin
+                       "security" '("-i")
+                       (format "add-internet-password -U -a drgnx -s %s -r htps -w %s\n"
+                               (drgnx-ai--security-quote host) (drgnx-ai--security-quote key)))
+                    (drgnx-ai--run-with-stdin
+                     "secret-tool" (list "store" (format "--label=drgnx: %s" host) "host" host "service" "drgnx") key))))
+      (unless (eql status 0)
+        (user-error "The %s refused the key (exit %s). %s" store status advice)))
+    (remhash id drgnx-ai--keys)
+    (let ((found (condition-case err (drgnx-ai-key id t)
+                   (error (user-error "The key was stored, but the %s could not be read (%s). %s" store (car err) advice)))))
+      (unless found (user-error "The key was stored, but the %s did not give it back. %s" store advice)))
+    (if mac 'keychain 'keyring)))
 
 ;;;; Agent environments (agent profiles; M9b adds more kinds)
 
