@@ -76,3 +76,12 @@
                                 "--batch" "-Q" "-L" (expand-file-name "harness" drgnx-dir)
                                 "-l" "drgnx-keys-diff" "-f" "drgnx-keys-diff-cli" args)))))
       (delete-directory dir t))))
+
+(ert-deftest drgnx-keys-diff/the-cli-needs-the-diff-subcommand ()
+  ;; M4-8: `drgnx keys --against gryphn DIR' (no `diff') is a usage error, not a diff.
+  (let ((dir (make-temp-file "drgnx-gryphn" t)))
+    (unwind-protect
+        (with-temp-buffer
+          (should (= 2 (call-process (expand-file-name "bin/drgnx" drgnx-dir) nil t nil "keys" "--against" "gryphn" dir)))
+          (should (string-match-p "usage: drgnx keys diff" (buffer-string))))
+      (delete-directory dir t))))

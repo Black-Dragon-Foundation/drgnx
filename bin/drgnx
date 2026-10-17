@@ -178,7 +178,12 @@ case "${1:-help}" in
   work) shift
         "${DRGNX_EMACS:-emacs}" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
               -l drgnx-work -f drgnx-work-cli -- "$@" ;;
-  keys) shift; [[ "${1:-}" == diff ]] && shift
+  keys) shift
+        if [[ "${1:-}" != diff ]]; then
+          echo "usage: drgnx keys diff --against gryphn DIR   (or set DRGNX_GRYPHN_DIR to gryphn's emacs/ directory)" >&2
+          exit 2
+        fi
+        shift
         emacs --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/harness" -L "$here/core" -L "$here/wb" \
               -l drgnx-keys-diff -f drgnx-keys-diff-cli -- "$@" ;;
   check) shift
