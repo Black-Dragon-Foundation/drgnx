@@ -111,8 +111,8 @@ buffer, and they keep both in step.")
       (and (< -1 i (length drgnx-explorer--rows)) (aref drgnx-explorer--rows i)))))
 
 (defun drgnx-explorer--line-pos (i)
-  "Start of line I (0-based)."
-  (save-excursion (goto-char (point-min)) (forward-line i) (point)))
+  "Start of line I (0-based, counted from the buffer's start, as `drgnx-explorer--index' counts)."
+  (save-excursion (save-restriction (widen) (goto-char (point-min)) (forward-line i) (point))))
 
 (defun drgnx-explorer--join (dir name)
   "DIR (no trailing /, except a root like / or C:/) and NAME as one path."
@@ -381,7 +381,8 @@ faces come later, from jit-lock, for the rows on screen."
            (bol (save-excursion (goto-char pos) (pos-bol)))
            (next (save-excursion (goto-char bol) (forward-line 1) (point))))
       (when (and v (aref v 2) (> (aref v 1) 0) (not drgnx-explorer--find))   ; Find shows its own folders
-        (let ((path (drgnx-explorer--path v)) (depth (aref v 1)) (rows drgnx-explorer--rows))
+        (let ((path (drgnx-explorer--path v)) (depth (aref v 1)) (rows drgnx-explorer--rows)
+              (inhibit-quit t))                     ; a quit between the text and the rows would desync them
           (if (drgnx-explorer--expanded-p path)
               (let ((j (drgnx-explorer--subtree-last i)))
                 (remhash path drgnx-explorer--expanded)

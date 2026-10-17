@@ -111,4 +111,25 @@
     (kill-buffer drgnx-explorer-buffer-name)
     (should (= (hash-table-count drgnx-explorer--watches) 0))))
 
+;;;; M3a-7: narrowing, quits
+
+(ert-deftest drgnx-explorer-edge/narrowing-keeps-rows-in-step ()
+  (drgnx-explorer-edge--with root
+    (with-current-buffer drgnx-explorer-buffer-name
+      (let ((tests (expand-file-name "tests" root)))
+        (goto-char (point-min))
+        (forward-line 2)
+        (narrow-to-region (point) (point-max))
+        (unwind-protect
+            (should (equal (drgnx-explorer-node-at (drgnx-explorer--row-pos tests)) tests))
+          (widen))))))
+
+(ert-deftest drgnx-explorer-edge/a-quit-never-splits-an-expand ()
+  (drgnx-explorer-edge--with root
+    (let* ((seen 'unset)
+           (drgnx-explorer--children-function (lambda (dir) (setq seen inhibit-quit) (drgnx-explorer-children dir))))
+      (with-current-buffer (drgnx-explorer-edge--at "src")
+        (drgnx-explorer-toggle-at (point)))
+      (should (eq seen t)))))
+
 ;;; wb-explorer-edge-test.el ends here
