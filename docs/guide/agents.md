@@ -64,7 +64,9 @@ a directory under `~/.local/state/drgnx/jobs/` (its command, log, pid and exit c
 Agents tab (running, exited N, stopped, gone), shows its log (Show Job Log) and stops it (Stop Job). A job's pid is
 trusted only within the boot that started it and for the process it started (a pid reused after a reboot is "gone",
 never signalled). A job can be memory-capped (`:memory-max "1G"` in `drgnx-jobs-start`: systemd's `MemoryMax`, no swap;
-`:nice 10` lowers its priority (`Nice=`); the detached launcher can do neither and ignores both). Sessions and jobs started on a task get it as `DRGNX_TASK`, and the commits they make are
+`:nice 10` lowers its priority (`Nice=`); the detached launcher can do neither and ignores both). `:no-wait t`
+returns without waiting for the job's pid (the boot and start time that make it trustworthy are stamped from a short
+timer): for callers in a timer that must not block, such as drgnx starting the local AI runner again. Sessions and jobs started on a task get it as `DRGNX_TASK`, and the commits they make are
 recorded for it ([Work tracker](work.md)).
 
 ## The hub and the gateway
