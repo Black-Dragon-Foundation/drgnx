@@ -121,5 +121,64 @@ hw.memsize'; Apple silicon shares it with the GPU); else the first GPU's when nv
       (round (+ 500 (* 700 (string-to-number (match-string 1 model)))))
     0))
 
+;;;; The local runner onboarding set up: started again when it is down (after a restart, a crash)
+
+(declare-function drgnx-jobs-start "drgnx-jobs")
+(declare-function drgnx-jobs-list "drgnx-jobs")
+
+(defvar drgnx-ai-ensure-interval 60 "Seconds between two looks of `drgnx-ai-ensure-local'.")
+(defvar drgnx-ai--ensure-time nil "When `drgnx-ai-ensure-local' last looked (`float-time').")
+
+(defun drgnx-ai-local-file () (expand-file-name "ai-local.eld" (drgnx-state-dir)))
+
+(defun drgnx-ai-managed ()
+  "The local runner onboarding set up and drgnx keeps running: (PROVIDER :start COMMAND :name NAME), or nil."
+  (plist-get (ignore-errors (with-temp-buffer (insert-file-contents (drgnx-ai-local-file)) (read (current-buffer)))) :managed))
+
+(defun drgnx-ai-set-managed (provider command name)
+  "Remember PROVIDER (NAME, for messages) as the local runner drgnx starts again with COMMAND (a list) when it is down."
+  (make-directory (file-name-directory (drgnx-ai-local-file)) t)
+  (with-temp-file (drgnx-ai-local-file)
+    (let ((print-length nil)) (prin1 (list :managed (list provider :start command :name name)) (current-buffer)))))
+
+(defun drgnx-ai--ensure-due-p ()
+  (and (not noninteractive)
+       (or (null drgnx-ai--ensure-time) (>= (- (float-time) drgnx-ai--ensure-time) drgnx-ai-ensure-interval))))
+
+(defun drgnx-ai-ensure-local ()
+  "Start the local runner onboarding set up (`drgnx-ai-managed') again when its address does not answer and no
+drgnx job runs it already: the address is asked in the background and this returns at once.  Never prompts; at
+most once a minute; never in batch.  One message says what happens.  LM Studio without its lms command: the
+message says to open LM Studio."
+  (when-let* (((drgnx-ai--ensure-due-p)) (m (drgnx-ai-managed)))
+    (setq drgnx-ai--ensure-time (float-time))
+    (let ((id (car m)) (command (plist-get (cdr m) :start)) (name (or (plist-get (cdr m) :name) (symbol-name (car m)))))
+      (drgnx-ai-probe
+       (lambda ()
+         (unless (plist-get (alist-get id drgnx-ai-detected) :up)
+           (require 'drgnx-jobs)
+           (cond ((seq-find (lambda (j) (and (eq (plist-get j :status) 'running) (equal (plist-get j :command) command)))
+                            (drgnx-jobs-list)))
+                 ((not (and (stringp (car command)) (file-executable-p (car command))))
+                  (message "drgnx: %s is not running — %s" name
+                           (if (eq id 'lmstudio) "open LM Studio (its server starts with it)"
+                             (format "start it: %s" (string-join command " ")))))
+                 (t (message "Starting %s…" name)
+                    (with-demoted-errors "drgnx: the local AI server did not start: %S"
+                      (make-directory (drgnx-state-dir) t)
+                      (drgnx-jobs-start (format "%s server" name) command :cwd (drgnx-state-dir)))))))
+       (list id)))))
+
+(defun drgnx-ai--refused (id)
+  "`drgnx-ai-refused-functions': nothing listened at ID — the runner drgnx keeps running is started again."
+  (when (and (drgnx-ai--ensure-due-p) (eq id (car (drgnx-ai-managed)))) (drgnx-ai-ensure-local)))
+
+(add-hook 'drgnx-ai-refused-functions #'drgnx-ai--refused)
+
+(defun drgnx-ai--on-first-window ()
+  "`drgnx-first-gui-frame-hook': the local runner looked at a moment after the first window shows, from an idle
+timer — never inside the hook, never at daemon start (a daemon has no window until one is opened)."
+  (run-with-idle-timer 1 nil #'drgnx-ai-ensure-local))
+
 (provide 'drgnx-ai-probe)
 ;;; drgnx-ai-probe.el ends here

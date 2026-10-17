@@ -121,6 +121,11 @@ or a number that is not finite."
 
 ;;;; Requests along a role
 
+(defvar drgnx-ai-refused-functions nil
+  "Run with a provider id when a request to it found nothing listening (curl could not connect): the local runner
+onboarding set up is started again from here (`drgnx-ai-ensure-local').  Called from a process sentinel: never
+prompt or wait.")
+
 (cl-defun drgnx-ai-request (role kind payload callback &key (timeout 30) chain interactive)
   "Ask ROLE's providers (or CHAIN's: ((PROVIDER . MODEL)…)), in order, for a KIND answer (`chat': PAYLOAD
 (:messages [(:role :content)…]); `fim': (:prefix :suffix :max-tokens); `embed': (:inputs [STRING…])).  CALLBACK
@@ -163,6 +168,9 @@ a command the user ran (keys may come from sources that ask, see `drgnx-ai-key')
                                                 (stringp out))
                                               (funcall (drgnx-ai-request-callback h) out
                                                        (list :provider id :model model :fallbacks (reverse (drgnx-ai-request-fallbacks h))))
+                                            (when (and (eql status 0) (drgnx-ai-request-process h)
+                                                       (eql 7 (process-exit-status (drgnx-ai-request-process h))))   ; curl: could not connect
+                                              (with-demoted-errors "drgnx ai: %S" (run-hook-with-args 'drgnx-ai-refused-functions id)))
                                             (push (cons id (cond ((eql status 0) "no answer")
                                                                  ((not (<= 200 status 299)) (format "HTTP %d" status))
                                                                  (t "an answer that does not parse")))

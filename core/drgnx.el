@@ -18,6 +18,7 @@
 (require 'drgnx-modules)
 (require 'drgnx-pkg-activate)
 (require 'drgnx-onboard)
+(autoload 'drgnx-ai--on-first-window "drgnx-ai-probe")
 (require 'drgnx-gc)
 (require 'drgnx-session)
 
@@ -80,6 +81,7 @@ The steady GC threshold is set at the end, also when a step fails (early-init de
         (drgnx-hooks-install)
         (drgnx-session-setup)                          ; keep running or quit; the close button
         (add-hook 'drgnx-first-gui-frame-hook #'drgnx-onboard--on-first-window)   ; a first start: the Welcome
+        (add-hook 'drgnx-first-gui-frame-hook #'drgnx-ai--on-first-window)        ; the local AI runner, started again
         (let ((safe (getenv "DRGNX_SAFE")))            ; drgnx safe: the core only
           (unless safe
             (condition-case err (drgnx-pkg-activate)

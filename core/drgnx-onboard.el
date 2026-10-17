@@ -417,6 +417,7 @@ download, the model's name after it.")
 (declare-function drgnx-ai-store-key "drgnx-ai")
 (declare-function drgnx-ai-embed-sync "drgnx-ai-client")
 (declare-function drgnx-ai-ask-request "drgnx-ai-ui")
+(declare-function drgnx-ai-set-managed "drgnx-ai-probe")
 (defvar drgnx-ai-lmstudio-models)
 
 (defconst drgnx-onboard--brew-programs '("/opt/homebrew/bin/brew" "/usr/local/bin/brew")
@@ -456,13 +457,18 @@ download, the model's name after it.")
   "The last line job ID wrote (a progress bar's last state), or nil."
   (car (last (split-string (drgnx-jobs-log id 2000) "[\r\n]+" t "[ \t]+"))))
 
-(defun drgnx-onboard--show-progress (step what id)
-  "The progress timer: WHAT and job ID's last log line, in STEP's row of the Welcome and the echo area.  Reads only."
-  (let ((text (format "%s… %s" what (or (drgnx-onboard--last-line id) ""))))
+(defun drgnx-onboard--say (text &optional step)
+  "TEXT, with \" — C-g stops\", as what STEP (default: the running step) is doing now: its Welcome row and the echo
+area.  Never asks anything (the progress timer calls it too)."
+  (let ((text (concat text " — C-g stops")))
     (unless (equal text (cdr drgnx-onboard--progress))
-      (setq drgnx-onboard--progress (cons step text))
+      (setq drgnx-onboard--progress (cons (or step drgnx-onboard--current) text))
       (drgnx-onboard--refresh-welcome)
       (message "%s" text))))
+
+(defun drgnx-onboard--show-progress (step what id)
+  "The progress timer: WHAT and job ID's last log line, in STEP's row of the Welcome and the echo area.  Reads only."
+  (drgnx-onboard--say (string-trim-right (format "%s… %s" what (or (drgnx-onboard--last-line id) ""))) step))
 
 (defun drgnx-onboard--job (what command &optional secs)
   "Run COMMAND (a list) as a drgnx job for WHAT and wait for it to end, at most SECS (default an hour); meanwhile the
@@ -491,9 +497,7 @@ job, then quits."
                                     (if-let* ((line (drgnx-onboard--last-line id))) (concat ": " line) ""))
                       log)))
           (quit (drgnx-jobs-stop id) (signal 'quit nil)))
-      (cancel-timer timer)
-      (setq drgnx-onboard--progress nil)
-      (drgnx-onboard--refresh-welcome))))
+      (cancel-timer timer))))
 
 (declare-function browse-url "browse-url")
 
@@ -528,9 +532,9 @@ for its server (C-g stops it).  Every run starts from the top: nothing is resume
       (let ((l (plist-get r :linux)))
         (if (plist-get l :page)
             (progn (browse-url (plist-get l :page))
-                   (message "Install %s from %s and open it (Developer → Start Server); waiting for it… (C-g stops)" name (plist-get l :page)))
+                   (drgnx-onboard--say (format "Install %s from %s and open it (Developer → Start Server); waiting for it…" name (plist-get l :page))))
           (kill-new (plist-get l :shell))
-          (message "Run in a terminal (copied): %s — it asks for your password (sudo); waiting for %s… (C-g stops)" (plist-get l :shell) name))
+          (drgnx-onboard--say (format "Run in a terminal (copied): %s — it asks for your password (sudo); waiting for %s…" (plist-get l :shell) name)))
         (if (drgnx-onboard--until there drgnx-onboard-app-wait) 'ok
           (list 'fail (format "%s did not show up within %d minutes: %s, then run this step again" name (/ drgnx-onboard-app-wait 60)
                               (if (plist-get l :page) (format "install it from %s and open it" (plist-get l :page))
@@ -548,6 +552,7 @@ serve' keeps running as one; `lms server start' starts LM Studio's and ends) —
      ((not program) (list 'fail (format "%s is not installed" name) nil))
      (t
       (make-directory (drgnx-state-dir) t)
+      (drgnx-onboard--say (format "Starting %s…" name))
       (let* ((id (drgnx-jobs-start (format "%s server" name) (cons program (cdr (plist-get r :start))) :cwd (drgnx-state-dir)))
              (log (expand-file-name "log" (drgnx-jobs--dir id)))
              (up (condition-case nil
@@ -622,16 +627,29 @@ came for the snippets found."
           (car result))
       (delete-directory root t))))
 
+(defun drgnx-onboard--chat-module (ctx)
+  "Chat (gptel) is module extra/llm, off in the minimal and ide presets: (ON . TEXT).  Interactive, when it is off:
+asked whether to turn it on (from the next start; its package comes with drgnx sync)."
+  (cond ((not (drgnx-module-disabled-p 'extra/llm))
+         (cons t (if (locate-library "gptel") "Chat (module extra/llm) is on" "Chat (module extra/llm) is on; packages: drgnx sync")))
+        ((and (plist-get ctx :interactive) (y-or-n-p "Turn on Chat (module extra/llm)? "))
+         (drgnx-modules-toggle 'extra/llm)
+         (cons t (concat "Chat (module extra/llm) turned on, from the next start" (if (locate-library "gptel") "" "; packages: drgnx sync"))))
+        (t (cons nil "Chat needs module extra/llm (Preferences: Modules)"))))
+
 (defun drgnx-onboard--ai-verify (head steps ctx &optional tail)
-  "Test each of STEPS ((ROLE PROVIDER . MODEL)…) with one call, then Ask the Codebase with the chat step:
-\(STATUS MESSAGE), the message HEAD, the results, TAIL."
+  "Test each of STEPS ((ROLE PROVIDER . MODEL)…) with one call, then Ask the Codebase with the chat step, then
+whether Chat's module is on: (STATUS MESSAGE), the message HEAD, the results, TAIL."
+  (drgnx-onboard--say "Testing every feature…")
   (let* ((results (mapcar (lambda (s) (cons s (drgnx-onboard--ai-test (car s) (cdr s) ctx))) steps))
-         (ask (drgnx-onboard--ask-test (cdr (assq 'chat steps)) ctx)))
-    (list (if (and ask (seq-every-p #'cdr results)) 'ok 'warn)
+         (ask (drgnx-onboard--ask-test (cdr (assq 'chat steps)) ctx))
+         (chat (drgnx-onboard--chat-module ctx)))
+    (list (if (and ask (car chat) (seq-every-p #'cdr results)) 'ok 'warn)
           (concat head "; "
                   (mapconcat (lambda (r) (format "%s: %s/%s %s" (caar r) (cadar r) (cddar r) (if (cdr r) "answered" "did not answer")))
                              results "; ")
                   "; Ask the Codebase " (if ask "answered" "did not answer")
+                  "; " (cdr chat)
                   (if tail (concat "; " tail) "")
                   " — change any: AI: Choose Provider/Model (docs/guide/ai.md)"))))
 
@@ -665,6 +683,8 @@ interactive): only says what it would run."
           (let ((steps (mapcar (lambda (rm) (cons (car rm) (cons provider (drgnx-onboard--served-name tool (cdr rm))))) models))
                 (v (drgnx-ai-vram)))
             (pcase-dolist (`(,role . ,step) steps) (drgnx-onboard--put-first role step))
+            ;; started again when it is down (after a restart): `drgnx-ai-ensure-local'
+            (drgnx-ai-set-managed provider (cons (drgnx-onboard--program tool) (cdr (plist-get r :start))) name)
             (drgnx-onboard--ai-verify
              (format "%s set up (models for %s)" name
                      (if v (format "%d MiB of %s" (- (plist-get v :total) (plist-get v :used)) (if (plist-get v :unified) "memory" "GPU memory"))
@@ -703,12 +723,15 @@ OpenRouter: the key into the Keychain or keyring, the roles.  Then one call per 
 temp project.  Without interaction nothing is installed, downloaded or asked: the message says what would run.
 C-g stops it (and any job it waits on)."
   (require 'drgnx-ai-probe)
-  (condition-case nil
-      (pcase choice
-        ('skip (list 'info "AI is not set up (skipped) — run this step again, or AI: Choose Provider/Model"))
-        ('openrouter (drgnx-onboard--openrouter-setup ctx))
-        (_ (drgnx-onboard--local-setup choice ctx)))
-    (quit (list 'fail "stopped (C-g) — run this step again to go on"))))
+  (unwind-protect
+      (condition-case nil
+          (pcase choice
+            ('skip (list 'info "AI is not set up (skipped) — run this step again, or AI: Choose Provider/Model"))
+            ('openrouter (drgnx-onboard--openrouter-setup ctx))
+            (_ (drgnx-onboard--local-setup choice ctx)))
+        (quit (list 'fail "stopped (C-g) — run this step again to go on")))
+    (setq drgnx-onboard--progress nil)
+    (drgnx-onboard--refresh-welcome)))
 
 (defun drgnx-onboard--ai-how ()
   "What would set AI up here, for the step's answer without interaction."

@@ -60,11 +60,23 @@ always gets `qwen2.5-coder:1.5b`; Edit and Chat get `qwen2.5-coder:7b` when both
 gets the same models as GGUF files from Hugging Face (`lmstudio-community/Qwen2.5-Coder-…-Instruct-GGUF`). Each model
 goes first in its role in `~/.config/drgnx/ai.eld`; what the role had stays behind it as a fallback.
 
-Every command runs as a drgnx job with its own log; the Welcome shows its last line while it runs, and `C-g` stops
-it. A download that fails says which model, why (the log's last line), where the log is, and to run the step again —
-a new run starts from the top, skips what is installed and running, and `ollama pull` / `lms get` skip what is
-already downloaded. The server keeps running as a drgnx job; after a restart of the machine, run the step again to
-start it (or `brew services start ollama` to have Ollama start at login).
+Every command runs as a drgnx job with its own log. While the step works, its row in the Welcome says what it is
+doing — "Starting Ollama…", the download's last log line, "Testing every feature…" — always with "— C-g stops", and
+`C-g` stops it. A download that fails says which model, why (the log's last line), where the log is, and to run the
+step again — a new run starts from the top, skips what is installed and running, and `ollama pull` / `lms get` skip
+what is already downloaded.
+
+**It keeps running.** The server is a drgnx job, and drgnx remembers the runner it set up (`ai-local.eld` in the
+state directory). After a restart, a moment after drgnx's first window opens, drgnx asks that runner's address in
+the background; if nothing answers and no drgnx job runs it, it starts it again (`ollama serve`, or `lms server
+start` — without `lms` it says to open LM Studio) and says so once: "Starting Ollama…". A request that finds nothing
+listening there (a crashed server) does the same, at most once a minute. Nothing starts at login or when the drgnx
+daemon starts — only once you open a window — and nothing is ever asked.
+
+**Chat needs its module.** Chat is gptel, module `extra/llm`, which the `minimal` and `ide` presets leave off. The
+step checks it: run interactively it asks "Turn on Chat (module extra/llm)?" and turns it on from the next start (its
+package comes with `drgnx sync`; the result says so when gptel is not installed yet); with `--non-interactive` the
+result says "Chat needs module extra/llm (Preferences: Modules)" and the step warns.
 
 **OpenRouter (cloud key).** In the drgnx app it asks for your key (`read-passwd`: never shown, never written to a file
 or log) and keeps it in the macOS Keychain or your Linux keyring ([ai.md](ai.md#keys)); then Inline Completion gets
@@ -110,6 +122,6 @@ The scan goes at most three levels below each root, never into a repository, a h
 asking when non-interactive, presets, the scan's bounds, importing twice, an existing gryphn board, an unsaved
 board, the daemon files, step 7 on macOS and on Linux with its question, the first window's Welcome, the whole flow
 twice, the CLI), `test/unit/macos-test.el` (the applet's quoting, the document types, the app built with fake
-`osacompile`/`plutil`/`codesign`/`lsregister`), `test/unit/ai-onboard-test.el` (the AI step against a mock model server: roles set and tested, a working choice kept, nothing running; setting AI up on a pretend Mac with fake `brew`, `ollama`, `lms`, `open`, `sysctl` and `security`, the fake servers being the mock: the room and the models for it, Ollama and LM Studio installed, started, downloaded, every feature tested, LM Studio without `lms`, the OpenRouter key into the Keychain and none asked in the CLI, a failed download and the run after it, nothing installed without interaction) and `test/live/drgnx-onboard-test.el` (a fresh GUI
+`osacompile`/`plutil`/`codesign`/`lsregister`), `test/unit/ai-onboard-test.el` (the AI step against a mock model server: roles set and tested, a working choice kept, nothing running; setting AI up on a pretend Mac with fake `brew`, `ollama`, `lms`, `open`, `sysctl` and `security`, the fake servers being the mock: the room and the models for it, Ollama and LM Studio installed, started, downloaded, every feature tested, LM Studio without `lms`, the OpenRouter key into the Keychain and none asked in the CLI, a failed download and the run after it, nothing installed without interaction, the progress row, Chat's module asked for or reported, the runner started again when it is down or refuses — not when it answers or a job runs it, at most once a minute, never in batch) and `test/live/drgnx-onboard-test.el` (a fresh GUI
 session onboards non-interactively; the board has the projects and TODOs, no step or doctor check fails, Welcome
 opens in the editor, a second run changes nothing).

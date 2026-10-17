@@ -103,6 +103,7 @@ with BODY."
                               (ollama :name "Ollama" :kind ollama :url ,url :caps (chat fim embed))
                               (lmstudio :name "LM Studio" :kind openai :url ,(concat url "/v1") :caps (chat fim embed))))
           (drgnx-ai-detected nil) (auth-sources nil) (drgnx-ai--keys (make-hash-table :test #'eq))
+          (drgnx-modules--state nil) (drgnx-ai--ensure-time nil) (drgnx-onboard--progress nil)
           (mock-cmd (format "env MOCK_LLM_SERVE=1 MOCK_LLM_PORT=%d MOCK_LLM_SCRIPT=%s MOCK_LLM_LOG=%s MOCK_LLM_PARENT=%d %s --batch -Q -l %s"
                             port script llm-log (emacs-pid)
                             (shell-quote-argument (expand-file-name invocation-name invocation-directory))
@@ -136,6 +137,7 @@ with BODY."
            (drgnx-ai-onboard-test--script
             (concat bin "security")
             (concat (funcall log-line "security") "cat > " root "security.stdin\n"))
+           (drgnx-ai-onboard-test--script (concat bin "fake-serve") (concat (funcall log-line "fake-serve") "exec sleep 30\n"))
            (cl-letf (((symbol-function 'drgnx-platform) (lambda () 'macos)))
              ,@body))
        (require 'drgnx-jobs)
@@ -183,13 +185,23 @@ with BODY."
 
 (ert-deftest drgnx-onboard/ollama-is-installed-started-pulled-and-tested ()
   (drgnx-ai-onboard-test--with-mac drgnx-ai-onboard-test--ollama-answers
-    (cl-letf (((symbol-function 'completing-read)
-               (drgnx-ai-onboard-test--answer '(("Set up AI with" . "Ollama (local)"))))
-              ((symbol-function 'y-or-n-p) (lambda (&rest _) t)))
+    (cl-letf* ((shown nil)
+               ((symbol-function 'completing-read)
+                (drgnx-ai-onboard-test--answer '(("Set up AI with" . "Ollama (local)"))))
+               ((symbol-function 'y-or-n-p) (lambda (&rest _) t))
+               ((symbol-function 'drgnx-onboard--refresh-welcome)   ; what the Welcome's row says, each time it changes
+                (lambda () (push (cdr drgnx-onboard--progress) shown))))
       (let ((r (drgnx-onboard--ai-step '(:interactive t))))
         (should (equal (drgnx-ai-onboard-test--calls calls)
                        '("brew install ollama" "ollama serve"
                          "ollama pull qwen2.5-coder:1.5b" "ollama pull qwen2.5-coder:7b" "ollama pull nomic-embed-text")))
+        ;; the row is never empty while it works, and always says how to stop
+        (should (member "Starting Ollama… — C-g stops" shown))
+        (should (member "Testing every feature… — C-g stops" shown))
+        (should (seq-every-p (lambda (s) (string-suffix-p " — C-g stops" s)) (delq nil shown)))
+        (should-not drgnx-onboard--progress)                            ; and cleared at the end
+        ;; the runner drgnx starts again after a restart
+        (should (equal (drgnx-ai-managed) `(ollama :start (,(concat bin "ollama") "serve") :name "Ollama")))
         (should (equal (car (drgnx-ai-role 'complete)) '(ollama . "qwen2.5-coder:1.5b")))
         (should (equal (car (drgnx-ai-role 'edit)) '(ollama . "qwen2.5-coder:7b")))
         (should (equal (car (drgnx-ai-role 'chat)) '(ollama . "qwen2.5-coder:7b")))
@@ -302,5 +314,94 @@ with BODY."
       (cl-letf (((symbol-function 'drgnx-platform) (lambda () 'linux)))
         (should (string-match-p "curl -fsSL https://ollama.com/install.sh | sh.*sudo"
                                 (cadr (drgnx-onboard--ai-setup 'ollama '(:interactive nil)))))))))
+
+(ert-deftest drgnx-onboard/chat-needs-its-module ()
+  ;; the ide preset leaves extra/llm (gptel) off: a chat model that answers is not Chat yet
+  (drgnx-ai-onboard-test--with-mac drgnx-ai-onboard-test--openai-answers
+    (let ((mock (drgnx-ai-test-mock-llm port script llm-log))
+          (process-environment (cons "OPENROUTER_API_KEY=sk-or-test-123" process-environment)))
+      (unwind-protect
+          (progn
+            (drgnx-modules-write-state (list :disabled '(extra/llm)))
+            (let ((r (drgnx-onboard--ai-setup 'openrouter '(:interactive nil))))
+              (should (eq (car r) 'warn))
+              (should (string-match-p "Chat needs module extra/llm (Preferences: Modules)" (cadr r)))
+              (should (drgnx-module-disabled-p 'extra/llm)))
+            (let* ((asked nil)
+                   (r (cl-letf (((symbol-function 'y-or-n-p) (lambda (prompt) (push prompt asked) t)))
+                        (drgnx-onboard--ai-setup 'openrouter '(:interactive t)))))
+              (should (equal asked '("Turn on Chat (module extra/llm)? ")))
+              (should-not (drgnx-module-disabled-p 'extra/llm))
+              (should (eq (car r) 'ok))
+              (should (string-match-p "Chat (module extra/llm) turned on" (cadr r)))
+              (unless (locate-library "gptel") (should (string-match-p "packages: drgnx sync" (cadr r))))))
+        (delete-process mock)))))
+
+(defun drgnx-ai-onboard-test--serving (command)
+  "Running jobs whose command is COMMAND."
+  (seq-filter (lambda (j) (and (eq (plist-get j :status) 'running) (equal (plist-get j :command) command))) (drgnx-jobs-list)))
+
+(defun drgnx-ai-onboard-test--settle (pred &optional secs)
+  "Wait until PRED, at most SECS (2): the probe and the start are asynchronous."
+  (let ((deadline (+ (float-time) (or secs 2))))
+    (while (and (not (funcall pred)) (< (float-time) deadline)) (accept-process-output nil 0.05))
+    (funcall pred)))
+
+(ert-deftest drgnx-ai/ensure-local-starts-the-runner-when-it-is-down ()
+  (drgnx-ai-onboard-test--with-mac drgnx-ai-onboard-test--ollama-answers
+    (let ((noninteractive nil) (serve (list (concat bin "fake-serve") "serve")))
+      (cl-letf (((symbol-function 'message) #'ignore))
+        (drgnx-ai-set-managed 'ollama serve "Ollama")
+        ;; down, no job: started
+        (drgnx-ai-ensure-local)
+        (should (drgnx-ai-onboard-test--settle (lambda () (drgnx-ai-onboard-test--serving serve)) 5))
+        ;; a job runs it already: not a second one
+        (setq drgnx-ai--ensure-time nil)
+        (drgnx-ai-ensure-local)
+        (drgnx-ai-onboard-test--settle #'ignore 1.5)
+        (should (= 1 (length (drgnx-ai-onboard-test--serving serve))))
+        ;; it answers: nothing started
+        (dolist (j (drgnx-jobs-list)) (drgnx-jobs-stop (plist-get j :id)))
+        (should (drgnx-ai-onboard-test--settle (lambda () (null (drgnx-ai-onboard-test--serving serve)))))
+        (let ((mock (drgnx-ai-test-mock-llm port script)))
+          (unwind-protect
+              (progn (setq drgnx-ai--ensure-time nil)
+                     (drgnx-ai-ensure-local)
+                     (drgnx-ai-onboard-test--settle #'ignore 1.5)
+                     (should-not (drgnx-ai-onboard-test--serving serve)))
+            (delete-process mock)))))))
+
+(ert-deftest drgnx-ai/a-refused-request-starts-the-runner-at-most-once-a-minute ()
+  (drgnx-ai-onboard-test--with-mac drgnx-ai-onboard-test--ollama-answers
+    (let ((noninteractive nil) (serve (list (concat bin "fake-serve") "serve"))
+          (ask (lambda () (let ((done nil))
+                            (drgnx-ai-request 'chat 'chat (list :messages (vector (list :role "user" :content "hi")))
+                                              (lambda (_ _) (setq done t)) :chain '((ollama . "m")))
+                            (drgnx-ai-onboard-test--settle (lambda () done) 5)))))
+      (cl-letf (((symbol-function 'message) #'ignore))
+        (drgnx-ai-set-managed 'ollama serve "Ollama")
+        (funcall ask)                                       ; nothing listens: connection refused
+        (should (drgnx-ai-onboard-test--settle (lambda () (drgnx-ai-onboard-test--serving serve)) 5))
+        (dolist (j (drgnx-jobs-list)) (drgnx-jobs-stop (plist-get j :id)))
+        (should (drgnx-ai-onboard-test--settle (lambda () (null (drgnx-ai-onboard-test--serving serve)))))
+        (funcall ask)                                       ; again within the minute: left alone
+        (drgnx-ai-onboard-test--settle #'ignore 1.5)
+        (should-not (drgnx-ai-onboard-test--serving serve))
+        ;; another provider refusing never starts it
+        (setq drgnx-ai--ensure-time nil)
+        (drgnx-ai--refused 'lmstudio)
+        (drgnx-ai-onboard-test--settle #'ignore 1.5)
+        (should-not (drgnx-ai-onboard-test--serving serve))))))
+
+(ert-deftest drgnx-ai/ensure-local-does-nothing-in-batch ()
+  (drgnx-ai-onboard-test--with-mac drgnx-ai-onboard-test--ollama-answers
+    (let ((probed nil))
+      (drgnx-ai-set-managed 'ollama (list (concat bin "fake-serve") "serve") "Ollama")
+      (cl-letf (((symbol-function 'drgnx-ai-probe) (lambda (&rest _) (setq probed t))))
+        (should-not (drgnx-ai-ensure-local))
+        (drgnx-ai--refused 'ollama))
+      (should-not probed)
+      (should-not drgnx-ai--ensure-time)
+      (should-not (drgnx-jobs-list)))))
 
 ;;; ai-onboard-test.el ends here
