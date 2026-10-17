@@ -37,7 +37,13 @@
                 (frame-parameter nil (intern (format "drgnx-wb-%s-px" area)))))))
 
 (defun drgnx-persist-state (&optional frame)
-  "FRAME's workbench as a plist (see the commentary)."
+  "FRAME's workbench as a plist (see the commentary).  A frame that rebuilds itself — its parameter
+`drgnx-persist-restore' is (FUNCTION . ARGS), e.g. a job window — is saved as (:role custom :restore …)."
+  (if-let* ((restore (frame-parameter frame 'drgnx-persist-restore)))
+      (list :role 'custom :restore restore)
+    (drgnx-persist--workbench-state frame)))
+
+(defun drgnx-persist--workbench-state (frame)
   (with-selected-frame (or frame (selected-frame))
     (let ((dock (car (drgnx-wb--dock-windows))))
       (list :role (if (fboundp 'drgnx-frame-role) (drgnx-frame-role) 'main)
@@ -145,9 +151,15 @@ visited now, its other tabs at idle (never a question at start)."
       (let ((home (selected-frame)))
         (unwind-protect
             (dolist (st (cdr frames))            ; the window manager places them; one failing is skipped
-              (when-let* ((f (ignore-errors (make-frame '((drgnx-frame-role . aux))))))
-                (condition-case err (with-selected-frame f (drgnx-persist--restore-frame st))
-                  (error (message "drgnx: a window's layout was not restored: %s" (error-message-string err))))))
+              (if (eq (plist-get st :role) 'custom)    ; it rebuilds itself (a job window), if its code is here
+                  (let ((restore (plist-get st :restore)))
+                    (if (and (consp restore) (fboundp (car restore)))
+                        (condition-case err (apply (car restore) (cdr restore))
+                          (error (message "drgnx: a window was not restored: %s" (error-message-string err))))
+                      (message "drgnx: a window was not restored: %S is not loaded" (car-safe restore))))
+                (when-let* ((f (ignore-errors (make-frame '((drgnx-frame-role . aux))))))
+                  (condition-case err (with-selected-frame f (drgnx-persist--restore-frame st))
+                    (error (message "drgnx: a window's layout was not restored: %s" (error-message-string err)))))))
           (when (frame-live-p home) (select-frame-set-input-focus home))))
       t))))
 

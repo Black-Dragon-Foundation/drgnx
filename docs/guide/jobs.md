@@ -16,8 +16,22 @@ drgnx job resume job-20261017-101500 --budget 10      # go on (after a stop, or 
 
 `--json` on `status` gives the same as JSON; `status` without an id lists every job. `propose --auto` starts at
 once; `--repo DIR` names the repository when the plan is not inside it. In Emacs: **Start Job from Plan…** (the
-proposal in a buffer, with Approve and Reject), **Approve Plan Job…**, **Show Plan Jobs**, **Stop Plan Job…** — in
-the palette (no keys by default). What needs you is a **card** with its actions — the proposal (Approve, Reject), a permission (Allow, Reject),
+proposal, in the job's window, with Approve and Reject), **Show Job Window…**, **Approve Plan Job…**, **Show Plan
+Jobs**, **Stop Plan Job…** — in the palette (no keys by default; module `tools/jobs`).
+
+## The job window
+
+A job's control room — its own window on a graphical display, so it can sit on a second monitor while you edit:
+
+- **left — tasks and agents:** each task's status, profile and what it waits on; the budget, spent against the limit;
+  the agents at work, each with **Transcript** and **Message…**;
+- **middle — what needs you:** the cards, each with its actions as buttons (a clash shows both sides and the
+  reviewer's recommendation), then the messages agents sent you, each with **Reply…**;
+- **right — the decision log,** newest first: replaced decisions dimmed, disputed ones (in an open clash) marked.
+
+It follows the hub's events and redraws only what changed (at most twice a second). Closing it stops nothing; it
+comes back when Emacs restarts (with the workbench's windows). Without a hub it says so, and fills in when the hub
+runs again. What needs you is a **card** with its actions — the proposal (Approve, Reject), a permission (Allow, Reject),
 a merge conflict (let the agent resolve it, merge again after you resolved it, drop the task), a review that failed
 (merge as it is, back to an agent, drop), a stuck or failed agent (retry, drop), the budget (resume with more, stop);
 each acts once. Messages agents send you are listed with a Reply.

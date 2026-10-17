@@ -207,7 +207,7 @@ debugs errors, and without SIGPIPE ignored the write itself would)."
     ("job/reply" (drgnx-job-reply (plist-get params :message) (plist-get params :text)))
     ("job/status"
      (if-let* ((id (drgnx-hub--value (plist-get params :id))))
-         (or (drgnx-job-summary id) (error "No job %s" id))
+         (or (drgnx-job-summary id (eq (plist-get params :decisions) t)) (error "No job %s" id))
        (list :jobs (mapcar #'drgnx-job-summary (drgnx-coord-jobs)))))
     (_ (list :error (format "no method %s" method)))))
 

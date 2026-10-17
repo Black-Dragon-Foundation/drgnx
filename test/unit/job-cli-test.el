@@ -2,8 +2,6 @@
 (require 'ert)
 (require 'drgnx-paths)
 (require 'drgnx-hub)
-(require 'drgnx)
-(load (expand-file-name "modules/tools/drgnx-agents-ui" drgnx-dir) nil t)
 
 (ert-deftest drgnx-job-cli/propose-then-approve-then-status ()
   (let* ((root (file-name-as-directory (make-temp-file "drgnx-job-cli" t)))
@@ -52,13 +50,6 @@
       (let ((deadline (+ (float-time) 5))) (while (and (drgnx-hub-running-p) (< (float-time) deadline)) (sleep-for 0.1)))
       (delete-directory root t))))
 
-(ert-deftest drgnx-job/the-commands-are-registered ()
-  (let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil))
-    (funcall (plist-get (alist-get 'tools/agents drgnx-modules--table) :setup))
-    (dolist (id '(job-start job-approve job-status job-stop))
-      (should (drgnx-commands-get id))
-      (dolist (profile '("vscode" "emacs" "vim"))                                   ; a line in every key profile
-        (should (with-temp-buffer (insert-file-contents (expand-file-name (format "keys/%s.eld" profile) drgnx-dir))
-                                  (search-forward (format "(%s " id) nil t)))))))
+;; the commands: job-ui-test.el (module tools/jobs)
 
 ;;; job-cli-test.el ends here

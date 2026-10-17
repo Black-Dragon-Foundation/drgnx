@@ -282,65 +282,6 @@ exists is connected to (asynchronously)."
                                       nil t)))
   (drgnx-jobs-stop id))
 
-;;;; Jobs from plans (drgnx-job.el; the hub runs them)
-
-(declare-function drgnx-hub-ensure "drgnx-hub")
-(declare-function drgnx-hub-call-sync "drgnx-hub")
-(declare-function drgnx-job-format "drgnx-job")
-
-(defun drgnx-agents-ui--plan-job-call (method params)
-  (require 'drgnx-hub)
-  (drgnx-hub-ensure)
-  (drgnx-hub-call-sync method params 30))
-
-(defun drgnx-agents-ui--plan-job-read (prompt statuses)
-  (completing-read prompt (mapcar (lambda (j) (plist-get j :id))
-                                  (seq-filter (lambda (j) (member (plist-get j :status) statuses))
-                                              (plist-get (drgnx-agents-ui--plan-job-call "job/status" nil) :jobs)))
-                   nil t))
-
-(defun drgnx-agents-ui--plan-job-show (job)
-  "JOB (as `drgnx-job-summary' has it) in its buffer; a proposed one with Approve and Reject buttons."
-  (with-current-buffer (get-buffer-create (format "*plan job: %s*" (plist-get job :id)))
-    (special-mode)
-    (let ((inhibit-read-only t) (id (plist-get job :id)))
-      (erase-buffer)
-      (insert (drgnx-job-format job))
-      (when (equal (plist-get job :status) "proposed")
-        (insert "\n")
-        (insert-text-button "Approve" 'action (lambda (_) (drgnx-agents-ui-plan-job-approve id)) 'follow-link t)
-        (insert "  ")
-        (insert-text-button "Reject" 'action (lambda (_) (drgnx-agents-ui-plan-job-stop id)) 'follow-link t)
-        (insert "\n")))
-    (pop-to-buffer (current-buffer))))
-
-(defun drgnx-agents-ui-plan-job-start (file)
-  "Propose a job from the plan FILE: its tasks, routes and estimate, to approve or reject."
-  (interactive (list (read-file-name "Plan: " nil nil t)))
-  (drgnx-agents-ui--plan-job-show (drgnx-agents-ui--plan-job-call "job/propose" (list :plan (expand-file-name file)))))
-
-(defun drgnx-agents-ui-plan-job-approve (id)
-  "Start the proposed job ID."
-  (interactive (list (drgnx-agents-ui--plan-job-read "Approve job: " '("proposed"))))
-  (drgnx-agents-ui--plan-job-show (drgnx-agents-ui--plan-job-call "job/approve" (list :id id))))
-
-(defun drgnx-agents-ui-plan-job-status ()
-  "Every job: its tasks, agents, spend and what waits for you."
-  (interactive)
-  (let ((jobs (plist-get (drgnx-agents-ui--plan-job-call "job/status" nil) :jobs)))
-    (with-current-buffer (get-buffer-create "*plan jobs*")
-      (special-mode)
-      (let ((inhibit-read-only t))
-        (erase-buffer)
-        (insert (if jobs (mapconcat #'drgnx-job-format jobs "\n") "No jobs.\n")))
-      (pop-to-buffer (current-buffer)))))
-
-(defun drgnx-agents-ui-plan-job-stop (id)
-  "Stop job ID (a proposed one is rejected): its agents end; `drgnx job resume' goes on."
-  (interactive (list (drgnx-agents-ui--plan-job-read "Stop job: " '("proposed" "running" "paused"))))
-  (drgnx-agents-ui--plan-job-call "job/stop" (list :id id))
-  (message "Job %s stopped" id))
-
 ;;;; Edit review (the agent's fs/write_text_file)
 
 (defvar-local drgnx-agents-ui--review nil "(SESSION ITEM COPY) this diff answers; COPY takes the hunks you apply.")
@@ -438,7 +379,7 @@ the copy), then Done writes the copy to the file (Reject, or closing the diff, w
                        (when (fboundp 'drgnx-wb-place)
                          (drgnx-wb-place 'drgnx-agents-list-mode 'right :tab 'agents)
                          (drgnx-wb-place '(drgnx-agents-transcript-mode) 'editor)
-                         (drgnx-wb-place "\\`\\*\\(review\\|job\\|plan job\\): " 'editor))
+                         (drgnx-wb-place "\\`\\*\\(review\\|job\\): " 'editor))
                        (pcase-dolist (`(,id ,title ,fn ,doc)
                                       '((agents-view "Show Agents" drgnx-agents-ui-view "Agent sessions and durable jobs, in the right dock")
                                         (agents-new "New Agent Session…" drgnx-agents-ui-new "Start an agent (a profile) in this project")
@@ -451,12 +392,7 @@ the copy), then Done writes the copy to the file (Reject, or closing the diff, w
                                         (agents-take-over "Take Over Agent Session…" drgnx-agents-ui-take-over "Resume a session by its id")
                                         (agents-answer "Answer Agent…" drgnx-agents-ui-answer "Allow or reject what the agent asks")
                                         (jobs-log "Show Job Log…" drgnx-agents-ui-job-log "A durable job's output")
-                                        (jobs-stop "Stop Job…" drgnx-agents-ui-job-stop "Stop a durable job")
-                                        (job-start "Start Job from Plan…" drgnx-agents-ui-plan-job-start
-                                                   "Agents work through a plan: its proposal first, to approve")
-                                        (job-approve "Approve Plan Job…" drgnx-agents-ui-plan-job-approve "Start a proposed job")
-                                        (job-status "Show Plan Jobs" drgnx-agents-ui-plan-job-status "Tasks, agents, spend and what waits for you")
-                                        (job-stop "Stop Plan Job…" drgnx-agents-ui-plan-job-stop "Its agents end; resume goes on")))
+                                        (jobs-stop "Stop Job…" drgnx-agents-ui-job-stop "Stop a durable job")))
                          (drgnx-command-define id :category "Agents" :title title :command fn :doc doc))
                        (drgnx-command-define 'agents-open :category "Agents" :title "Open" :command #'drgnx-agents-ui-open-at-point
                                              :map 'drgnx-agents-list-mode-map :doc "The session's transcript, or the job's log")

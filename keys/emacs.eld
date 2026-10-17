@@ -27,6 +27,7 @@
         (job-approve :none "the palette")
         (job-status :none "the palette")
         (job-stop :none "the palette")
+        (job-show :none "the palette")
         (agents-open "RET")
         (projects-sync-plans :none "in the palette")
         (work-view :none "in the palette")

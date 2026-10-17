@@ -756,9 +756,9 @@ work of the agent that did it."
       (drgnx-agents-kill s)))
   id)
 
-(defun drgnx-job-summary (id)
+(defun drgnx-job-summary (id &optional decisions)
   "Job ID for the user (and JSON): status, budget and spend, tasks with their profiles, agents, cards, pending
-permissions."
+permissions — and, with DECISIONS, its decision log (newest first)."
   (when-let* ((job (drgnx-coord-job id)))
     (let* ((data (plist-get job :data))
            (sessions (seq-filter (lambda (s) (and (equal (drgnx-agent-session-job s) id) (not (eq (drgnx-agent-session-status s) 'exited))))
@@ -782,6 +782,10 @@ permissions."
                                                 :state (plist-get m :state)))
                               (seq-filter (lambda (m) (and (equal (plist-get m :job) id) (not (equal (plist-get m :sender) "drgnx"))))
                                           (drgnx-coord-inbox "user")))
+            :decisions (and decisions
+                            (mapcar (lambda (d) (list :n (plist-get d :n) :kind (plist-get d :kind) :subject (plist-get d :subject)
+                                                      :author (plist-get d :author) :status (plist-get d :status)))
+                                    (drgnx-coord-decisions-since 0 id)))
             :permissions (mapcan (lambda (s) (mapcar (lambda (p) (list :agent (drgnx-agent-session-id s) :title (plist-get p :title)))
                                                      (drgnx-agent-session-permissions s)))
                                  sessions)))))

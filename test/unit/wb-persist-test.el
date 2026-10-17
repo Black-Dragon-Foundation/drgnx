@@ -151,6 +151,24 @@
       (should (equal (mapcar #'buffer-file-name (drgnx-chrome-tabs (car (drgnx-groups-list))))
                      (mapcar (lambda (n) (expand-file-name n dir)) '("a.txt" "b.txt" "c.txt")))))))
 
+(ert-deftest drgnx-persist/custom-frames-restore-by-their-function ()
+  ;; a window that rebuilds itself (a job window) is saved as its function and restored by calling it
+  (let ((called nil) (file (make-temp-file "drgnx-persist" nil ".eld")))
+    (unwind-protect
+        (progn
+          (set-frame-parameter nil 'drgnx-persist-restore '(drgnx-persist-test--rebuild "j1"))
+          (should (equal (drgnx-persist-state) '(:role custom :restore (drgnx-persist-test--rebuild "j1"))))
+          (set-frame-parameter nil 'drgnx-persist-restore nil)
+          (with-temp-file file
+            (prin1 (list :version 2 :frames (list (drgnx-persist-state) '(:role custom :restore (drgnx-persist-test--rebuild "j1"))
+                                                  '(:role custom :restore (drgnx-persist-test--gone 1))))
+                   (current-buffer)))
+          (cl-letf (((symbol-function 'drgnx-persist-test--rebuild) (lambda (&rest args) (push args called))))
+            (drgnx-persist-restore file))
+          (should (equal called '(("j1")))))
+      (set-frame-parameter nil 'drgnx-persist-restore nil)
+      (delete-file file))))
+
 (ert-deftest drgnx-persist/the-file-lists-every-window ()
   ;; Format 2: one entry per window (the main one first); format 1 files (one window) still restore.
   (drgnx-persist-test--with dir
