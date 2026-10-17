@@ -197,4 +197,46 @@
       (should-not (file-symlink-p (expand-file-name "link" root)))
       (should (file-exists-p (expand-file-name "src/app/main.py" root))))))
 
+;;;; M3b-6: Rename and New File
+
+(ert-deftest drgnx-explorer-edge/rename-and-new-file-stay-under-the-root ()
+  (drgnx-explorer-edge--with root
+    (let ((outside (expand-file-name "../drgnx-outside.txt" root))
+          (abs (expand-file-name "drgnx-abs.txt" temporary-file-directory)))
+      (unwind-protect
+          (drgnx-explorer-edge--answering (list "../drgnx-outside.txt" abs "../drgnx-outside.txt")
+            (with-current-buffer (drgnx-explorer-edge--at "README.md")
+              (should-error (drgnx-explorer-rename) :type 'user-error)
+              (should-error (drgnx-explorer-rename) :type 'user-error)
+              (should (file-exists-p (expand-file-name "README.md" root)))
+              (should-error (drgnx-explorer-new-file) :type 'user-error)
+              (should-not (file-exists-p outside))
+              (should-not (file-exists-p abs))))
+        (when (file-exists-p outside) (delete-file outside))
+        (when (file-exists-p abs) (delete-file abs))))))
+
+(ert-deftest drgnx-explorer-edge/a-case-only-rename-on-a-case-insensitive-disk ()
+  (drgnx-explorer-edge--with root
+    (let* ((old (expand-file-name "README.md" root)) (new (expand-file-name "readme.md" root))
+           (real-exists (symbol-function 'file-exists-p)))
+      (drgnx-explorer-edge--answering '("readme.md")
+        ;; A case-insensitive disk: readme.md "exists" — it is README.md.
+        (cl-letf (((symbol-function 'file-name-case-insensitive-p) (lambda (&rest _) t))
+                  ((symbol-function 'file-exists-p)
+                   (lambda (f) (funcall real-exists (if (equal (expand-file-name f) new) old f)))))
+          (with-current-buffer (drgnx-explorer-edge--at "README.md")
+            (drgnx-explorer-rename))))
+      (should (member "readme.md" (directory-files root))))))
+
+(ert-deftest drgnx-explorer-edge/new-file-in-new-folders-is-revealed ()
+  (drgnx-explorer-edge--with root
+    (let ((path (expand-file-name "src/x/y/z.txt" root)))
+      (unwind-protect
+          (drgnx-explorer-edge--answering '("x/y/z.txt")
+            (with-current-buffer (drgnx-explorer-edge--at "src")
+              (drgnx-explorer-new-file)
+              (should (member '(4 "z.txt") (drgnx-explorer-edge--rows)))
+              (should (equal (drgnx-explorer-node-at (point)) path))))
+        (when-let* ((b (get-file-buffer path))) (kill-buffer b))))))
+
 ;;; wb-explorer-edge-test.el ends here

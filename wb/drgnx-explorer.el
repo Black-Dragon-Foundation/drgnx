@@ -714,6 +714,11 @@ inside another one selected goes: the folder carries it."
         (setq n (1+ n)))
       new)))
 
+(defun drgnx-explorer--check-inside (path)
+  "Refuse PATH unless it is inside one of the Explorer's folders (`../x', `~/x' or /x leave them)."
+  (unless (drgnx-explorer--root-of path)
+    (user-error "%s is outside the Explorer's folders" (abbreviate-file-name path))))
+
 (defun drgnx-explorer-new-file ()
   "Create a file in the folder here — a path like a/b/c.txt makes the folders; a trailing / makes a folder."
   (interactive)
@@ -721,12 +726,14 @@ inside another one selected goes: the folder carries it."
          (name (string-trim (read-string (format "New file (end with / for a folder) in %s: "
                                                  (abbreviate-file-name (file-name-as-directory dir))))))
          (path (progn (when (string-empty-p name) (user-error "No name given")) (expand-file-name name dir))))
+    (drgnx-explorer--check-inside path)
     (when (file-exists-p path) (user-error "%s already exists" (abbreviate-file-name path)))
     (if (directory-name-p name)
         (make-directory path t)
       (make-directory (file-name-directory path) t)
       (write-region "" nil path nil 'silent nil 'excl))
     (drgnx-explorer--show-folder dir)
+    (drgnx-explorer-reveal (directory-file-name path))  ; a/b/c.txt: open a and b
     (drgnx-explorer--select (directory-file-name path))
     (unless (directory-name-p name) (drgnx-wb-show-in-editor (find-file-noselect path)))))
 
@@ -738,7 +745,11 @@ inside another one selected goes: the folder carries it."
          (new (expand-file-name name (file-name-directory old))))
     (when (string-empty-p name) (user-error "No name given"))
     (unless (equal new old)
-      (when (file-exists-p new) (user-error "%s already exists" (abbreviate-file-name new)))
+      (drgnx-explorer--check-inside new)
+      ;; A case-only rename on a case-insensitive disk: NEW "exists" — it is OLD (`rename-file' knows).
+      (when (and (file-exists-p new)
+                 (not (and (file-name-case-insensitive-p old) (string-equal-ignore-case old new))))
+        (user-error "%s already exists" (abbreviate-file-name new)))
       (rename-file old new)
       (drgnx-explorer--move-buffers old new)
       (let ((prefix (file-name-as-directory old)))

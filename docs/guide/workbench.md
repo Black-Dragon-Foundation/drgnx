@@ -65,7 +65,9 @@ Ctrl-click adds a row to the selection, Shift-click selects a range; moving with
 Cut and Rename act on the selection; a folder selected together with something inside it counts once (the folder
 carries it). Every operation takes its targets before it asks anything, so nothing that happens while you answer
 can make it act on another file, and Paste checks every item before it moves the first. Deleting a symbolic link
-removes the link, never what it points to. The right-click menu has the same entries.
+removes the link, never what it points to. New File and Rename stay inside the Explorer's folders (`../x`, `~/x`
+and absolute paths are refused); the new file's row is shown, its new folders opened. A rename that changes only
+the case works on case-insensitive disks too. The right-click menu has the same entries.
 
 **Typing** in the Explorer jumps to the next row starting with what you typed (letters a profile does not use).
 **Find** filters the tree live to the files whose names contain the text — also inside collapsed folders — and the
