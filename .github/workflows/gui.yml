@@ -1,0 +1,25 @@
+# Nightly and on demand: the GUI test tier — real Emacs 31.1 (pgtk) sessions under headless mutter,
+# in test/container/Containerfile.gui. docs/develop/ci.md
+name: GUI tier
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ui:
+    name: GUI tests (Emacs 31.1 pgtk, headless mutter)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: GUI tier in test/container/Containerfile.gui
+        env:
+          DRGNX_CONTAINER: podman
+        run: bin/drgnx test --container --ui

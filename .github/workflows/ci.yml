@@ -1,0 +1,63 @@
+# Every push to main and every pull request: the unit suite (formatting, byte-compile with no warnings
+# and the lints are tests in it) on Emacs 31.1 and 30.2, shellcheck, and the leak scan.
+# docs/develop/ci.md
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  emacs-31:
+    name: Emacs 31.1 (Fedora 45)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Unit suite in test/container/Containerfile
+        env:
+          DRGNX_CONTAINER: podman
+        run: bin/drgnx test --container
+
+  emacs-30:
+    name: Emacs 30.2 (Ubuntu 26.04)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    container: docker.io/library/ubuntu:26.04
+    steps:
+      - name: Emacs, git and curl (the AI client)
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          apt-get update -qq
+          apt-get install -y -qq --no-install-recommends emacs-nox git ca-certificates curl
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: emacs --version | head -1
+      - name: Unit suite
+        run: bin/drgnx test
+
+  scripts:
+    name: Shell scripts and leak scan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: shellcheck
+        run: shellcheck --severity=warning install.sh bin/drgnx .githooks/pre-commit
+      - name: Leak scan (the pre-commit hook's patterns over every tracked file)
+        run: .githooks/pre-commit --all

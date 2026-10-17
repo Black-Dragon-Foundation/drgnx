@@ -29,5 +29,6 @@ How drgnx is built, tested and measured.
 - [Scenarios](develop/scenarios.md): behaviour scenarios and the evidence behind the workbench design.
 - [Formatting](develop/formatting.md): `bin/drgnx fmt` — the Emacs Lisp formatter, and where it is enforced.
 - [bin/drgnx check](develop/check.md): build and every test tier in one parallel run; shards, GUI slots, phases.
+- [CI](develop/ci.md): the GitHub Actions workflows — Emacs 31.1 and 30.2 suites, shellcheck, leak scan, nightly GUI tier.
 
 Docs are updated in the same commit as the code they describe.

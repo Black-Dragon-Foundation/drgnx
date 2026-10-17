@@ -1,0 +1,10 @@
+# The workflows' actions, pinned by commit, kept current (drgnx itself has no package dependencies here).
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
