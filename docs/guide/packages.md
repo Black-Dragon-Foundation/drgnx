@@ -12,6 +12,7 @@ drgnx upgrade               the newest versions; if they break, the previous gen
 drgnx rollback [N]          the packages of generation N (default: the one before the current one)
 drgnx generations           the generations kept (five)
 drgnx lock                  what the lock pins
+drgnx lock --ship           (maintainers) write the known-good lock drgnx ships from yours
 drgnx safe                  Emacs with drgnx's core only: no modules, no packages
 drgnx bisect [-- CMD…]      find the module that breaks something
 drgnx service-unit [DIR]    the systemd user unit for a drgnx daemon (printed, or written to DIR)
@@ -32,7 +33,10 @@ The **manifest** is:
   ```
 
   `:archives` is optional (default: GNU ELPA, NonGNU ELPA, MELPA); a local directory works as an archive;
-  `:archives ()` means none (sync then works from the cache only);
+  `:archives ()` means none (sync then works from the cache only); `:archive-priorities` (e.g.
+  `(("gnu" . 3) ("nongnu" . 2) ("melpa" . 1))`, package.el's `package-archive-priorities`) makes a package come
+  from the highest priority archive that has it, even when another has a newer version (without it, the newest
+  version wins — usually MELPA's build of the latest commit);
 - what `use-package … :ensure` asked for in a session, or an external module's files (gryphn) would have
   installed. In drgnx `:ensure` installs nothing: it records the package use-package would have installed
   (`:ensure t` the package itself, `:ensure other` that one, `:ensure nil` none) in
@@ -76,8 +80,49 @@ any more, or one older than another package needs, is reported (with what needs 
 depend on it are installed, the command exits non-zero and the lock stays as it was — `drgnx upgrade` moves the
 lock to the archives' versions. An unreadable lock is an error, never silently replaced.
 
+The packages of the manifest that the lock has install at their locked versions, together with what their lock
+entries require — not with what the archives' newest versions would need — so a lock installs as the set it was
+made from even when an archive has moved on (MELPA builds every commit). Each archive entry also records its
+download's size (`:size`), which onboarding uses to say how much it would download.
+
 `drgnx sync --offline` installs exactly the lock from the cache: on a new machine, copy the cache and the lock and
 sync without network. A manifest package the lock does not have is reported ("sync online once").
+
+### The lock drgnx ships (your first sync)
+
+drgnx comes with a known-good lock, `etc/drgnx.lock.eld` in its checkout: the packages of **every** module (all
+presets) with what they need, at versions tested together — GNU ELPA and NonGNU ELPA releases where those archives
+have the package, MELPA's build otherwise (forge and its dependencies, apheleia), and eglot-booster from Git at a
+commit. When you have no lock yet, `drgnx sync` first copies it to `~/.config/drgnx/drgnx.lock.eld` and then
+installs exactly those versions (hashes checked as always) — only the packages of the modules you have on. From
+then on your lock is the one that counts: it always wins over the shipped one, a later sync keeps your versions,
+and `drgnx upgrade` moves them on. The first sync needs the network; offline (`--offline`, with the archives' files
+in the cache) it installs what the cache has and names the packages it could not get — a Git package always needs
+one online sync for its clone — and the next sync online completes it. An interrupted first sync leaves the
+packages directory as it was (the copied lock stays; a re-run uses it).
+
+The archives serve only their current release of a package in a form package.el installs (GNU ELPA and NonGNU
+ELPA keep older ones as `.tar.lz` only, MELPA none at all — its builds move with every commit), so a shipped
+version an archive has since replaced, and that your cache does not have, is reported like any locked version
+nobody has, with what needs it; the rest installs, and `drgnx upgrade` takes the archives' versions. drgnx's
+maintainers refresh the shipped lock for that reason:
+
+```sh
+# a full-ai sync in empty temporary drgnx directories: releases first, MELPA only for what they lack
+export DRGNX_CONFIG_DIR=$(mktemp -d) DRGNX_DATA_DIR=$(mktemp -d) XDG_CACHE_HOME=$(mktemp -d) XDG_STATE_HOME=$(mktemp -d)
+cat > "$DRGNX_CONFIG_DIR/packages.eld" <<'END'
+(:archives (("gnu" . "https://elpa.gnu.org/packages/") ("nongnu" . "https://elpa.nongnu.org/nongnu/")
+            ("melpa" . "https://melpa.org/packages/"))
+ :archive-priorities (("gnu" . 3) ("nongnu" . 2) ("melpa" . 1)))
+END
+drgnx onboard --non-interactive --preset full-ai --step look-and-keys
+drgnx sync
+drgnx lock --ship          # writes etc/drgnx.lock.eld; commit it
+```
+
+`drgnx lock --ship` writes the entries of every module's packages (on or off) and of what they need from the
+current lock — never your own packages — and refuses, writing nothing, when the lock lacks one of them (it names
+them: turn every module on and sync first).
 
 ## Generations, rollback, upgrade
 
@@ -140,7 +185,11 @@ Preferences: Modules) until `drgnx sync` has run. A lint fails on `use-package :
 `test/unit/pkg-test.el` runs everything against package archives that are local directories in temp dirs (never
 the network): sync with dependencies, offline sync into an empty directory, a wrong hash, a missing locked
 version, concurrent syncs, seeding, rollback byte for byte, a broken upgrade restored, the guard, use-package
-`:ensure`, bisect, the CLI, the doctor and safe mode. HTTP downloads run against a loopback server in the test
+`:ensure`, bisect, the CLI, the doctor and safe mode — and the shipped lock: a first sync installing exactly its
+versions (where the archives' newest would need others), a user lock winning over it, `lock --ship` covering every
+module, and an interrupted first sync leaving nothing half done (each test has its own shipped lock in a temp dir,
+never the checkout's). HTTP downloads run against a loopback server in the test
 Emacs itself (a 200 is saved byte for byte; a 404 saves nothing). `test/unit/pkg-git-test.el`: packages from local Git
 repositories — the commit and dependencies, the lock holding the commit until upgrade, offline from the cached clone,
-a missing `:rev`, no version header, a module's package with drgnx's Git source.
+a missing `:rev`, no version header, a module's package with drgnx's Git source, an offline first sync naming the Git
+package it could not get and installing the rest.

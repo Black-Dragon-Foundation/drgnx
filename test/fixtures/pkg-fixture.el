@@ -33,6 +33,7 @@
                                              (concat "XDG_STATE_HOME=" ,root "state"))
                                        process-environment))
           (drgnx-modules--state nil)
+          (drgnx-pkg-shipped-lock (concat ,root "shipped.lock.eld"))   ; never the checkout's etc/
           (drgnx-pkg-native-compile nil)
           (package-check-signature nil)
           (package-alist nil) (package-archive-contents nil) (package-activated-list nil)

@@ -759,6 +759,60 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
         (let ((r (cl-letf (((symbol-function 'y-or-n-p) (car asked))) (drgnx-onboard--agents-step '(:interactive t)))))
           (should (equal r (list 'ok (cadr r)))))))))
 
+(ert-deftest drgnx-onboard/the-preset-step-offers-the-packages ()
+  ;; After the preset: its packages (the lock's, with what they need), asked once with their size, then `drgnx sync'
+  ;; as a job; never without interaction; not again once they are installed.
+  (drgnx-onboard-test--with root
+    (require 'drgnx-pkg)
+    (let* ((jobs nil) (asked nil) (answer t) (done 'ok)
+           (opts '(:preset full-ai :keys "Emacs" :theme modus-vivendi))
+           (lock (lambda (fa-size)
+                   (drgnx-pkg-write-lock
+                    `((fa :version "1.0" :archive "gnu" :file "fa-1.0.tar" :sha256 "x" :size ,fa-size :requires ((fb "1.0")))
+                      (fb :version "1.0" :archive "gnu" :file "fb-1.0.tar" :sha256 "y" :size 600000)
+                      (gp :kind git :url "https://example.invalid/gp" :commit "abc" :version "0.1")
+                      (zz :version "2.0" :archive "gnu" :file "zz-2.0.tar" :sha256 "z" :size 99000000))))))   ; not needed
+      (funcall lock 1500000)
+      (cl-letf (((symbol-function 'drgnx-pkg-manifest) (lambda (&rest _) '(fa gp)))
+                ((symbol-function 'drgnx-onboard--job) (lambda (what command &rest _) (push (cons what command) jobs) done))
+                ((symbol-function 'y-or-n-p) (lambda (p) (push p asked) answer)))
+        ;; without interaction: nothing asked or run; the step says how
+        (let ((r (car (drgnx-onboard-run :only '(look-and-keys) :non-interactive t :options opts))))
+          (should (eq (nth 1 r) 'ok))
+          (should (string-match-p "drgnx sync" (nth 2 r))))
+        (should-not asked)
+        (should-not jobs)
+        ;; interactive: one question with the preset and the size, then drgnx sync as a drgnx job
+        (let ((r (drgnx-onboard--look-step `(:interactive t :options ,opts))))
+          (should (equal asked '("Install the packages for full-ai now (about 2 MB)? ")))
+          (should (equal (last (cdr (car jobs)) 2) (list (expand-file-name "bin/drgnx" drgnx-dir) "sync")))
+          (should (eq (car r) 'ok))
+          (should (string-match-p "packages installed" (cadr r))))
+        ;; no: nothing runs, the step says drgnx sync
+        (setq asked nil jobs nil answer nil)
+        (let ((r (drgnx-onboard--look-step `(:interactive t :options ,opts))))
+          (should (= 1 (length asked)))
+          (should-not jobs)
+          (should (string-match-p "drgnx sync" (cadr r))))
+        ;; a size the lock does not know: left out, never guessed
+        (setq asked nil answer t)
+        (funcall lock nil)
+        (drgnx-onboard--look-step `(:interactive t :options ,opts))
+        (should (equal asked '("Install the packages for full-ai now? ")))
+        ;; a sync that fails: a warning that says why and how to retry
+        (setq done '(fail "Installing the packages failed (exit 1): MISSING fa" "/tmp/log"))
+        (let ((r (drgnx-onboard--look-step `(:interactive t :options ,opts))))
+          (should (eq (car r) 'warn))
+          (should (string-match-p "MISSING fa" (cadr r)))
+          (should (string-match-p "drgnx sync" (cadr r))))
+        ;; installed: not asked again
+        (dolist (d '("fa-1.0" "fb-1.0" "gp-0.1")) (make-directory (expand-file-name d (drgnx-elpa-dir)) t))
+        (setq asked nil jobs nil)
+        (let ((r (drgnx-onboard--look-step `(:interactive t :options ,opts))))
+          (should-not asked)
+          (should-not jobs)
+          (should (eq (car r) 'ok)))))))
+
 (ert-deftest drgnx-onboard/the-agents-step-and-its-docs ()
   (should (string-match-p "Claude" (plist-get (alist-get 'agents drgnx-onboard--steps) :doc)))
   (should (eq (plist-get (alist-get 'agents drgnx-onboard--steps) :run) #'drgnx-onboard--agents-step)))

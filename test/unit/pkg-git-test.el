@@ -113,4 +113,22 @@
       (should (plist-get (drgnx-pkg-sync :modules-dir (concat root "mods") :archives nil) :ok))
       (should (member "gp-0.3" (drgnx-pkg-test--installed))))))
 
+(ert-deftest drgnx-pkg-git/an-offline-first-sync-names-the-git-packages-and-installs-the-rest ()
+  ;; The shipped lock holds a Git entry; a new machine has the archive files in its cache but no clone yet.
+  (drgnx-pkg-test--with root
+    (let* ((arch (drgnx-pkg-test--archive (concat root "arch") '((fa "1.0"))))
+           (repo (concat root "src/gp/")))
+      (drgnx-pkg-git-test--commit repo "gp" "0.3")
+      (drgnx-pkg-git-test--want-git root `((gp :url ,repo :rev "main")) 'fa)
+      (drgnx-pkg-test--sync root :archives `(("fx" . ,arch)))
+      (rename-file (drgnx-pkg-lock-file) (drgnx-pkg-shipped-lock-file))     ; that lock, shipped
+      (delete-directory (expand-file-name "git" (drgnx-package-cache-dir)) t)
+      (let ((process-environment (cons (concat "DRGNX_DATA_DIR=" root "data2") process-environment)))
+        (let ((r (drgnx-pkg-test--sync root :offline t)))
+          (should-not (plist-get r :ok))
+          (should (equal (mapcar #'car (plist-get r :missing)) '(gp)))
+          (should (string-match-p "sync online" (alist-get 'gp (plist-get r :missing))))
+          (should (equal (drgnx-pkg-test--installed) '("fa-1.0"))))
+        (should (eq (plist-get (alist-get 'gp (drgnx-pkg-read-lock)) :kind) 'git))))))   ; the copy stays for the next sync
+
 ;;; pkg-git-test.el ends here

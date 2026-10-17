@@ -34,6 +34,7 @@
                                              (concat "XDG_STATE_HOME=" ,root "state"))
                                        process-environment))
           (drgnx-modules--state nil)
+          (drgnx-pkg-shipped-lock (concat ,root "shipped.lock.eld"))   ; never the checkout's etc/
           (drgnx-pkg-native-compile nil)
           (package-check-signature nil)
           (package-alist nil) (package-archive-contents nil) (package-activated-list nil)
@@ -695,5 +696,104 @@ Returns the server process; its port is (process-contact SERVER :service)."
                              (expand-file-name "fa-1.0.el" (drgnx-package-cache-dir))))
               (should (equal (directory-files (drgnx-package-cache-dir) nil "\\`[^.]") '("fa-1.0.el")))))
         (delete-process server)))))
+
+;;;; M12a Task 12: the shipped lock (a new user's first sync)
+
+(defun drgnx-pkg-test--entry (arch name version &optional requires)
+  "The lock entry of the archive ARCH's file NAME-VERSION.el (REQUIRES: ((NAME VERSION)…))."
+  (let ((file (format "%s-%s.el" name version)))
+    (cons name (list :version version :archive "fx" :kind 'single :file file
+                     :sha256 (secure-hash 'sha256 (drgnx-pkg-test--bytes (concat arch file)))
+                     :requires requires :summary (format "fixture %s" name)))))
+
+(defun drgnx-pkg-test--ship (entries)
+  "ENTRIES as the shipped lock (the sandbox's, never the checkout's)."
+  (drgnx-pkg-test--write (drgnx-pkg-shipped-lock-file) (list :version 1 :packages entries)))
+
+(defun drgnx-pkg-test--versions ()
+  (mapcar (lambda (e) (cons (car e) (plist-get (cdr e) :version))) (drgnx-pkg-read-lock)))
+
+(ert-deftest drgnx-pkg/a-first-sync-uses-the-shipped-lock ()
+  ;; The archive's newest fb needs the newest fa; the shipped lock pins the older pair, which installs as a pair.
+  (drgnx-pkg-test--with root
+    (let ((arch (drgnx-pkg-test--archive (concat root "arch")
+                                         '((fa "1.0") (fa "1.1") (fb "1.0" ((fa "1.0"))) (fb "1.1" ((fa "1.1")))))))
+      (should (equal (drgnx-pkg-shipped-lock-file) (concat root "shipped.lock.eld")))
+      (drgnx-pkg-test--ship (list (drgnx-pkg-test--entry arch 'fa "1.0")
+                                  (drgnx-pkg-test--entry arch 'fb "1.0" '((fa "1.0")))))
+      (drgnx-pkg-test--want root 'fb)
+      (let ((shipped (drgnx-pkg-test--bytes (drgnx-pkg-shipped-lock-file)))
+            (r (drgnx-pkg-test--sync root :archives `(("fx" . ,arch)))))
+        (should (plist-get r :ok))
+        (should (equal (drgnx-pkg-test--installed) '("fa-1.0" "fb-1.0")))
+        (should (equal (drgnx-pkg-test--versions) '((fa . "1.0") (fb . "1.0"))))      ; the user lock, written
+        (should (plist-get (alist-get 'fb (drgnx-pkg-read-lock)) :size))              ; the download's size
+        (should (equal (drgnx-pkg-test--bytes (drgnx-pkg-shipped-lock-file)) shipped))))))
+
+(ert-deftest drgnx-pkg/archive-priorities-in-packages-eld ()
+  ;; How the shipped lock prefers releases: a higher priority archive's version wins over a newer one elsewhere.
+  (drgnx-pkg-test--with root
+    (let ((rel (drgnx-pkg-test--archive (concat root "rel") '((fa "1.0"))))
+          (snap (drgnx-pkg-test--archive (concat root "snap") '((fa "20261017.1200") (fz "20261017.1200")))))
+      (drgnx-pkg-test--write (concat root "config/packages.eld")
+                             `(:packages (fa fz) :archives (("rel" . ,rel) ("snap" . ,snap)) :archive-priorities (("rel" . 10))))
+      (should (plist-get (drgnx-pkg-test--sync root) :ok))
+      (should (equal (drgnx-pkg-test--installed) '("fa-1.0" "fz-20261017.1200"))))))
+
+(ert-deftest drgnx-pkg/a-user-lock-wins-over-the-shipped-one ()
+  (drgnx-pkg-test--with root
+    (let ((arch (drgnx-pkg-test--archive (concat root "arch") '((fa "1.0") (fa "1.1") (fa "1.2")))))
+      (drgnx-pkg-test--ship (list (drgnx-pkg-test--entry arch 'fa "1.0")))
+      (drgnx-pkg-write-lock (list (drgnx-pkg-test--entry arch 'fa "1.1")))
+      (drgnx-pkg-test--want root 'fa)
+      (should (plist-get (drgnx-pkg-test--sync root :archives `(("fx" . ,arch))) :ok))
+      (should (equal (drgnx-pkg-test--installed) '("fa-1.1")))
+      (should (equal (drgnx-pkg-test--versions) '((fa . "1.1")))))))
+
+(ert-deftest drgnx-pkg/lock-ship-covers-every-extra-module ()
+  ;; Every module's packages, whatever is turned off (all presets); the maintainer's own packages stay out.
+  (drgnx-pkg-test--with root
+    (let ((arch (drgnx-pkg-test--archive (concat root "arch") '((fd "1.0") (fa "1.0" ((fd "1.0"))) (fb "1.0") (pz "1.0"))))
+          (mods (concat root "mods/extra/")))
+      (make-directory mods t)
+      (write-region "(drgnx-module-define 'extra/a :packages '(fa))\n(drgnx-module-define 'extra/b :packages '(fb))\n"
+                    nil (concat mods "drgnx-x.el") nil 'silent)
+      (drgnx-pkg-test--write (concat root "config/modules.eld") '(:version 1 :disabled (extra/b)))
+      (drgnx-pkg-test--write (concat root "config/packages.eld") '(:packages (pz)))
+      (should-error (drgnx-pkg-ship-lock (concat root "mods")) :type 'drgnx-pkg-error)   ; no lock yet
+      (drgnx-pkg-sync :modules-dir (concat root "mods") :archives `(("fx" . ,arch)))       ; extra/b is off: no fb
+      (let ((err (should-error (drgnx-pkg-ship-lock (concat root "mods")) :type 'drgnx-pkg-error)))
+        (should (string-match-p "\\bfb\\b" (cadr err)))
+        (should (string-match-p "full-ai" (cadr err))))
+      (should-not (file-exists-p (drgnx-pkg-shipped-lock-file)))
+      (drgnx-pkg-test--write (concat root "config/modules.eld") '(:version 1))
+      (setq drgnx-modules--state nil)
+      (drgnx-pkg-sync :modules-dir (concat root "mods") :archives `(("fx" . ,arch)))
+      (drgnx-pkg-ship-lock (concat root "mods"))
+      (let ((shipped (plist-get (drgnx-pkg--read-file (drgnx-pkg-shipped-lock-file)) :packages)))
+        (should (equal (mapcar #'car shipped) '(fa fb fd)))                     ; the modules' and what they need
+        (should (equal (cdr (assq 'fa shipped)) (cdr (assq 'fa (drgnx-pkg-read-lock))))))
+      ;; the CLI checks drgnx's own modules, which this lock does not cover: refused, the shipped lock kept
+      (let ((before (drgnx-pkg-test--bytes (drgnx-pkg-shipped-lock-file))))
+        (should (eql (drgnx-pkg-cli-run '("lock" "--ship")) 1))
+        (should (equal (drgnx-pkg-test--bytes (drgnx-pkg-shipped-lock-file)) before))))))
+
+(ert-deftest drgnx-pkg/an-interrupted-first-sync-leaves-no-half-state ()
+  ;; The archive stops serving midway (fb's file): the packages directory as before; a re-run completes.
+  (drgnx-pkg-test--with root
+    (let* ((arch (drgnx-pkg-test--archive (concat root "arch") '((fa "1.0") (fb "1.0" ((fa "1.0"))))))
+           (fb (drgnx-pkg-test--bytes (concat arch "fb-1.0.el"))))
+      (drgnx-pkg-test--ship (list (drgnx-pkg-test--entry arch 'fa "1.0") (drgnx-pkg-test--entry arch 'fb "1.0" '((fa "1.0")))))
+      (drgnx-pkg-test--want root 'fb)
+      (delete-file (concat arch "fb-1.0.el"))
+      (should-error (drgnx-pkg-test--sync root :archives `(("fx" . ,arch))) :type 'drgnx-pkg-error)
+      (should-not (file-exists-p (drgnx-elpa-dir)))
+      (should-not (file-exists-p (expand-file-name "elpa.staging" (drgnx-data-dir))))
+      (should-not (file-exists-p (expand-file-name "sync.lock" (drgnx-data-dir))))
+      (should-not (drgnx-pkg-generations))
+      (should (equal (drgnx-pkg-test--versions) '((fa . "1.0") (fb . "1.0"))))      ; the shipped lock, copied
+      (let ((coding-system-for-write 'binary)) (write-region fb nil (concat arch "fb-1.0.el") nil 'silent))
+      (should (plist-get (drgnx-pkg-test--sync root :archives `(("fx" . ,arch))) :ok))
+      (should (equal (drgnx-pkg-test--installed) '("fa-1.0" "fb-1.0"))))))
 
 ;;; pkg-test.el ends here

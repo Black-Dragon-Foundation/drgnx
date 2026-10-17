@@ -255,6 +255,8 @@ usage: drgnx PATH…             open folders and files in drgnx, like code . (d
        drgnx upgrade           newest packages; the previous generation comes back if they break
        drgnx rollback [N]      the packages of generation N (default: the one before)
        drgnx generations | lock
+       drgnx lock --ship       (maintainers) write etc/drgnx.lock.eld, the known-good lock a first sync
+                               starts from, from your lock (it must cover every module's packages)
        drgnx onboard [--non-interactive] [--again] [--preset minimal|ide|full-ai] [--keys NAME] [--theme THEME]
                      [--roots DIR…] [--todos] [--step ID]
                                set drgnx up: environment, keys, projects onto the board, daemon unit (docs/guide/onboarding.md)

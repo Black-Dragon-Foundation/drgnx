@@ -218,9 +218,54 @@ current choice as the default) — with no option and no question, the current c
     (when theme
       (if (and (not noninteractive) (fboundp 'drgnx-look-load-theme)) (drgnx-look-load-theme theme)
         (drgnx-modules-write-state (plist-put (copy-sequence (drgnx-modules-read-state)) :theme theme))))
-    (list 'ok (format "modules: %s; keys: %s%s (modules take effect at the next start)"
-                      (or preset cur-preset "as they are") (or keys cur-keys "as they are")
-                      (if theme (format "; theme: %s" theme) "")))))
+    (let* ((pkgs (drgnx-onboard--packages-to-install))
+           (bytes (plist-get pkgs :bytes))
+           (done (cond ((null pkgs) 'none)
+                       ((and ask (y-or-n-p (format "Install the packages for %s now%s? " (or preset cur-preset "your modules")
+                                                   (if bytes (format " (about %d MB)" (max 1 (round bytes 1048576.0))) ""))))
+                        (drgnx-onboard--job "Installing the packages"
+                                            (list "env" (concat "DRGNX_EMACS=" (expand-file-name invocation-name invocation-directory))
+                                                  (expand-file-name "bin/drgnx" drgnx-dir) "sync")))
+                       (t 'later))))
+      (list (if (consp done) 'warn 'ok)
+            (format "modules: %s; keys: %s%s; %s (modules take effect at the next start)"
+                    (or preset cur-preset "as they are") (or keys cur-keys "as they are")
+                    (if theme (format "; theme: %s" theme) "")
+                    (pcase done
+                      ('none "packages: all installed")
+                      ('ok "packages installed (drgnx sync)")
+                      ('later "packages: not installed yet — run drgnx sync")
+                      (`(fail ,why ,log) (format "packages: %s — run drgnx sync in a terminal to retry%s" why
+                                                 (if log (format " (log: %s)" log) "")))))))))
+
+(declare-function drgnx-pkg-manifest "drgnx-pkg")
+(declare-function drgnx-pkg-read-lock "drgnx-pkg")
+(declare-function drgnx-pkg--read-lock-file "drgnx-pkg")
+(declare-function drgnx-pkg-shipped-lock-file "drgnx-pkg")
+(declare-function drgnx-pkg--lock-closure "drgnx-pkg")
+(declare-function drgnx-pkg-git-source "drgnx-pkg")
+(declare-function package-built-in-p "package")
+
+(defun drgnx-onboard--packages-to-install ()
+  "What `drgnx sync' would install for the modules on now, or nil when nothing: (:names NAMES :bytes BYTES) — the
+manifest's packages, with what their lock entries need (the user's lock, else the one drgnx ships), not installed at the
+locked version.  BYTES: the downloads' size from the lock, nil when it does not know one (Git clones are not counted)."
+  (require 'drgnx-pkg)
+  (let* ((lock (or (ignore-errors (drgnx-pkg-read-lock)) (ignore-errors (drgnx-pkg--read-lock-file (drgnx-pkg-shipped-lock-file)))))
+         (manifest (drgnx-pkg-manifest))
+         (installed-p (lambda (re) (and (file-directory-p (drgnx-elpa-dir)) (directory-files (drgnx-elpa-dir) nil re))))
+         (locked (seq-remove (lambda (n) (let ((e (alist-get n lock)))
+                                           (funcall installed-p (format "\\`%s\\'" (regexp-quote (format "%s-%s" n (plist-get e :version)))))))
+                             (drgnx-pkg--lock-closure manifest lock)))
+         (other (seq-remove (lambda (n) (or (assq n lock) (package-built-in-p n)
+                                            (funcall installed-p (format "\\`%s-[0-9]" (regexp-quote (symbol-name n))))))
+                            manifest))
+         (archive (seq-remove (lambda (n) (eq (plist-get (alist-get n lock) :kind) 'git)) locked)))
+    (when (or locked other)
+      (list :names (append locked other)
+            :bytes (and archive (not (seq-remove #'drgnx-pkg-git-source other))
+                        (seq-every-p (lambda (n) (plist-get (alist-get n lock) :size)) archive)
+                        (apply #'+ (mapcar (lambda (n) (plist-get (alist-get n lock) :size)) archive)))))))
 
 ;;;; Step 3: projects
 
