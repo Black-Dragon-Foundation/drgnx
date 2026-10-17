@@ -62,9 +62,13 @@ status (0 when no answer came) and the answer.  Returns the process."
 (defun drgnx-ai--fim-n (payload) (or (plist-get payload :max-tokens) 64))
 
 (defun drgnx-ai--endpoint (provider kind model payload)
-  "(URL . BODY) of a KIND (chat or fim) request to PROVIDER (its plist) for MODEL."
-  (let ((url (plist-get provider :url)) (msgs (plist-get payload :messages)))
+  "(URL . BODY) of a KIND (chat, fim or embed) request to PROVIDER (its plist) for MODEL."
+  (let ((url (plist-get provider :url)) (msgs (plist-get payload :messages)) (inputs (plist-get payload :inputs)))
     (pcase (list (plist-get provider :kind) kind)
+      (`(tei embed) (cons (concat url "/embed") (list :inputs inputs :truncate t)))   ; no model: the server has one
+      (`(ollama embed) (cons (concat url "/api/embed") (list :model model :input inputs)))
+      (`(llamacpp embed) (cons (concat url "/v1/embeddings") (append (and model (list :model model)) (list :input inputs))))
+      (`(,_ embed) (cons (concat url "/embeddings") (append (and model (list :model model)) (list :input inputs))))
       (`(ollama chat) (cons (concat url "/api/chat") (list :model model :messages msgs :stream :false)))
       (`(ollama fim) (cons (concat url "/api/generate")
                            (list :model model :prompt (plist-get payload :prefix) :suffix (plist-get payload :suffix) :stream :false
@@ -78,10 +82,32 @@ status (0 when no answer came) and the answer.  Returns the process."
                        (list :model model :prompt (plist-get payload :prefix) :suffix (plist-get payload :suffix)
                              :max_tokens (drgnx-ai--fim-n payload) :temperature 0 :stream :false))))))
 
+(defun drgnx-ai--unit (v)
+  "The vector V of numbers as a vector of floats of length 1 (zero stays zero), or nil if it holds anything else
+or a number that is not finite."
+  (when (and (vectorp v) (> (length v) 0) (cl-every #'numberp v))
+    (let* ((f (vconcat (mapcar #'float v)))
+           (norm (sqrt (cl-loop for x across f sum (* x x)))))
+      (when (cl-every (lambda (x) (< (abs x) 1.0e+INF)) f)
+        (cond ((zerop norm) f)
+              ((< norm 1.0e+INF) (vconcat (mapcar (lambda (x) (/ x norm)) f))))))))
+
+(defun drgnx-ai--embeddings (provider json)
+  "The vectors in a parsed embedding answer JSON from PROVIDER, each of length 1, or nil when it is not that."
+  (ignore-errors
+    (let ((raw (pcase (plist-get provider :kind)
+                 ('tei json)
+                 ('ollama (plist-get json :embeddings))
+                 (_ (and (vectorp (plist-get json :data)) (vconcat (mapcar (lambda (d) (plist-get d :embedding)) (plist-get json :data))))))))
+      (when (vectorp raw)
+        (let ((units (vconcat (mapcar #'drgnx-ai--unit raw))))
+          (and (cl-every #'identity units) units))))))
+
 (defun drgnx-ai--extract (provider kind json)
-  "The text in a parsed answer JSON from PROVIDER to a KIND request, or nil."
+  "The text (embed: the vector of unit float vectors) in a parsed answer JSON from PROVIDER to a KIND request, or nil."
   (let ((first (lambda (v) (and (vectorp v) (> (length v) 0) (aref v 0)))))
     (pcase (list (plist-get provider :kind) kind)
+      (`(,_ embed) (drgnx-ai--embeddings provider json))
       (`(ollama chat) (plist-get (plist-get json :message) :content))
       (`(ollama fim) (plist-get json :response))
       (`(llamacpp fim) (plist-get json :content))
@@ -92,8 +118,10 @@ status (0 when no answer came) and the answer.  Returns the process."
 
 (cl-defun drgnx-ai-request (role kind payload callback &key (timeout 30) chain interactive)
   "Ask ROLE's providers (or CHAIN's: ((PROVIDER . MODEL)…)), in order, for a KIND answer (`chat': PAYLOAD
-(:messages [(:role :content)…]); `fim': (:prefix :suffix :max-tokens)).  CALLBACK gets (TEXT INFO): INFO
-(:provider :model :fallbacks ((PROVIDER . WHY)…)), and :error when no provider answered (TEXT nil).  INTERACTIVE:
+(:messages [(:role :content)…]); `fim': (:prefix :suffix :max-tokens); `embed': (:inputs [STRING…])).  CALLBACK
+gets (TEXT INFO): INFO (:provider :model :fallbacks ((PROVIDER . WHY)…)), and :error when no provider answered
+(TEXT nil).  For `embed' TEXT is the vector of the inputs' vectors (float vectors of length 1; a zero vector stays
+zero), where an answer with other numbers or another count moves on to the next provider.  INTERACTIVE:
 a command the user ran (keys may come from sources that ask, see `drgnx-ai-key').  Returns a handle for
 `drgnx-ai-cancel'."
   (let ((h (drgnx-ai--make-request :callback callback :chain (or chain (drgnx-ai-role role)) :kind kind :payload payload
@@ -125,7 +153,9 @@ a command the user ran (keys may come from sources that ask, see `drgnx-ai-key')
                                         (let* ((json (and (<= 200 status 299)
                                                           (ignore-errors (json-parse-string text :object-type 'plist :null-object nil :false-object nil))))
                                                (out (and json (drgnx-ai--extract p kind json))))
-                                          (if (stringp out)
+                                          (if (if (eq kind 'embed)   ; one vector per input
+                                                  (and out (= (length out) (length (plist-get (drgnx-ai-request-payload h) :inputs))))
+                                                (stringp out))
                                               (funcall (drgnx-ai-request-callback h) out
                                                        (list :provider id :model model :fallbacks (reverse (drgnx-ai-request-fallbacks h))))
                                             (push (cons id (cond ((eql status 0) "no answer")
@@ -138,6 +168,26 @@ a command the user ran (keys may come from sources that ask, see `drgnx-ai-key')
               (error (push (cons id (format "cannot send (%s)" (error-message-string e))) (drgnx-ai-request-fallbacks h))
                      (drgnx-ai--next h)))
             (when (drgnx-ai-request-cancelled h) (drgnx-ai-cancel h))))))))
+
+(define-error 'drgnx-ai-embed-error "Embeddings failed")
+
+(cl-defun drgnx-ai-embed-sync (inputs &key (timeout 30) interactive)
+  "The vectors (a vector of float vectors of length 1) of the vector INPUTS from the `embed' role, waiting for them.
+Each provider gets TIMEOUT seconds.  Signals `drgnx-ai-embed-error' with the providers' reasons when none answers.
+Only for batch processes and commands the user ran (INTERACTIVE as for `drgnx-ai-request'): it waits, so never
+from a timer, hook or sentinel."
+  (if (zerop (length inputs)) []
+    (let* ((result nil)
+           (chain (drgnx-ai-role 'embed))
+           (h (drgnx-ai-request 'embed 'embed (list :inputs inputs) (lambda (v info) (setq result (cons v info)))
+                                :timeout timeout :chain chain :interactive interactive))
+           (deadline (+ (float-time) (* timeout (1+ (length chain))))))
+      (while (and (not result) (< (float-time) deadline))
+        (let ((p (drgnx-ai-request-process h)))
+          (accept-process-output (and p (process-live-p p) p) 0.05)))
+      (unless result (drgnx-ai-cancel h))
+      (if (car result) (car result)
+        (signal 'drgnx-ai-embed-error (list (or (plist-get (cdr result) :error) "timed out")))))))
 
 (defun drgnx-ai-cancel (h)
   "Cancel request H: its process ends, its callback never runs."

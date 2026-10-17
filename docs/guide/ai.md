@@ -43,12 +43,17 @@ or a key variable of its own, so a cloned repository cannot send your code, or a
 | `complete` | ghost-text completion (fill in the middle) | Ollama `qwen2.5-coder:1.5b` (fits next to TEI on a 6 GB GPU) |
 | `edit` | inline edit | OpenRouter `openrouter/auto`, then Ollama `qwen2.5-coder:7b` |
 | `chat` | chat (gptel), Ask the Codebase | as `edit` |
-| `embed` | semantic search | TEI |
+| `embed` | semantic search (embeddings: a vector per text, scaled to length 1) | TEI |
 | `agent` | Claude Code on OpenRouter, through the agent gateway ([agents.md](agents.md)) | OpenRouter, with the model the agent asks for |
 
 A provider in your `ai.eld` may carry `:price (IN . OUT)` — US dollars per million input and output tokens — so the
 agent gateway can count what agents spend when the provider does not report a cost; `:messages t` says it serves
 Anthropic's Messages API, so the gateway can carry agents to it (OpenRouter, Ollama and Anthropic do).
+
+The `embed` role works like the others: its chain is tried in order and the next provider answers when one is down, has
+no key, or sends something that is not a vector per text. TEI needs no model (`(tei)`); for Ollama, llama.cpp and the
+OpenAI-compatible runners the chain names one, for example `(ollama . "nomic-embed-text")`. Providers that can embed
+list `embed` in their `:caps`.
 
 ## Ghost text and Tab
 
