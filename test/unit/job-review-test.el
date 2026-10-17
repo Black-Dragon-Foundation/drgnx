@@ -62,4 +62,30 @@
       (should (drgnx-job-run-test--wait (lambda () (equal (plist-get (drgnx-coord-job id) :status) "done")) 60))
       (should (equal (drgnx-job-run-test--git repo "rev-parse" "main") main)))))          ; nothing reached main
 
+(defun drgnx-job-review-test--agent (id n)
+  "A mock session of job ID working on task N in its worktree (made like the engine makes it), idle."
+  (let* ((repo (drgnx-job--repo id)) (tree (drgnx-job--task-tree id n)))
+    (unless (file-directory-p tree) (drgnx-job--git repo "worktree" "add" "-q" "-b" (format "job/%s-%d" id n) tree (concat "job/" id)))
+    (let ((s (drgnx-agents-start "mock" tree (format "%s#%d" id n) id)))
+      (drgnx-coord-force-status (format "%s#%d" id n) "running" (drgnx-agent-session-id s))
+      (drgnx-job-run-test--wait (lambda () (eq (drgnx-agent-session-status s) 'idle)))
+      s)))
+
+(ert-deftest drgnx-job/in-review-agent-mid-turn-is-not-killed ()
+  ;; complete_task puts the task in review while the agent is still in its turn: the review waits for the turn's end
+  (drgnx-job-run-test--with "# One\n\n### Task 1: first\n"
+    (let* ((drgnx-job-max-agents 0) (id (drgnx-job-propose plan)) (tid (concat id "#1")) (reviews 0))
+      (cl-letf (((symbol-function 'drgnx-job--start-review) (lambda (&rest _) (setq reviews (1+ reviews)))))
+        (drgnx-job-approve id)
+        (let ((s (drgnx-job-review-test--agent id 1)))
+          (drgnx-agents-send s "slow")
+          (should (drgnx-job-run-test--wait (lambda () (eq (drgnx-agent-session-status s) 'busy))))
+          (drgnx-coord-force-status tid "in-review" (drgnx-agent-session-id s))
+          (drgnx-job-step id)
+          (should (eq (drgnx-agent-session-status s) 'busy))              ; not killed mid-turn
+          (should (= reviews 0))
+          ;; its turn ends: now it ends and the review starts
+          (should (drgnx-job-run-test--wait (lambda () (> reviews 0)) 20))
+          (should (eq (drgnx-agent-session-status s) 'exited)))))))
+
 ;;; job-review-test.el ends here

@@ -258,8 +258,10 @@ what the agent before it left (`drgnx-job--fall-back')."
            ;; its agent's turn ended and the task is not finished: a nudge, then the user
            ((and (member status '("claimed" "running")) (drgnx-job--stalled-p (drgnx-job--session agent)))
             (drgnx-job--nudge id task (drgnx-job--session agent)))
-           ;; finished: its agent's work is done; a reviewer looks at it
-           ((equal status "in-review")
+           ;; finished: its agent's work is done; a reviewer looks at it — once the agent's turn is over (complete_task
+           ;; comes mid-turn; `drgnx-job--session-changed' steps again when it is free)
+           ((and (equal status "in-review")
+                 (or (not (member agent live)) (drgnx-agents-free-p (drgnx-job--session agent))))
             (remhash (plist-get task :id) drgnx-job--exits) (remhash (plist-get task :id) drgnx-job--nudged)
             (when (member agent live) (drgnx-agents-kill (drgnx-job--session agent)))
             (when (and (not (run-hook-with-args-until-success 'drgnx-job-before-review-functions id task))
