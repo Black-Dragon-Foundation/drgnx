@@ -657,4 +657,43 @@
         (should-not (directory-files cache nil "\\.part\\'"))
         (should (equal (directory-files user nil "tmp") '(".tmp-not-drgnx")))))))
 
+(require 'url)
+
+(defun drgnx-pkg-test--http-server (routes)
+  "A loopback HTTP server: GET PATH answers (STATUS BODY) from the alist ROUTES (PATH STATUS BODY), else 404.
+Returns the server process; its port is (process-contact SERVER :service)."
+  (make-network-process
+   :name "drgnx-pkg-test-http" :server t :host "127.0.0.1" :service t :family 'ipv4 :noquery t :coding 'binary
+   :filter (lambda (proc string)
+             (process-put proc :request (concat (process-get proc :request) string))
+             (when (string-match "\\`GET \\([^ ]+\\) [^\r]*\r\n\\(?:.*\r\n\\)*?\r\n" (process-get proc :request))
+               (pcase-let ((`(,status ,body) (or (cdr (assoc (match-string 1 (process-get proc :request)) routes))
+                                                 '(404 "not here"))))
+                 (process-send-string proc (format "HTTP/1.1 %d X\r\nContent-Length: %d\r\nConnection: close\r\n\r\n"
+                                                   status (string-bytes body)))
+                 (process-send-string proc body))))))
+
+(ert-deftest drgnx-pkg/http-downloads-keep-only-a-200 ()
+  ;; M5-15: the status branch of drgnx-pkg--http-get against a real (loopback) server.
+  (url-do-setup)
+  (drgnx-pkg-test--with root
+    (let* ((body (unibyte-string ?\( ?a 233 0 ?\) ?\n))      ; bytes, not text
+           (server (drgnx-pkg-test--http-server `(("/fa-1.0.el" 200 ,body))))
+           (base (format "http://127.0.0.1:%d/" (process-contact server :service)))
+           (url-proxy-services nil) (url-show-status nil))
+      (unwind-protect
+          (progn
+            (drgnx-pkg--http-get (concat base "fa-1.0.el") (concat root "ok"))
+            (should (equal (drgnx-pkg-test--bytes (concat root "ok")) body))
+            (should-error (drgnx-pkg--http-get (concat base "fb-1.0.el") (concat root "missing")))
+            (should-not (file-exists-p (concat root "missing")))
+            ;; through the download: an error, nothing in the cache, no .part
+            (let ((package-archives `(("fx" . ,base))))
+              (should-error (drgnx-pkg--fetch (package-desc-create :name 'fb :version '(1 0) :kind 'single :archive "fx") nil)
+                            :type 'drgnx-pkg-error)
+              (should (equal (drgnx-pkg--fetch (package-desc-create :name 'fa :version '(1 0) :kind 'single :archive "fx") nil)
+                             (expand-file-name "fa-1.0.el" (drgnx-package-cache-dir))))
+              (should (equal (directory-files (drgnx-package-cache-dir) nil "\\`[^.]") '("fa-1.0.el")))))
+        (delete-process server)))))
+
 ;;; pkg-test.el ends here

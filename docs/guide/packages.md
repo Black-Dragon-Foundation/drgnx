@@ -122,4 +122,5 @@ Preferences: Modules) until `drgnx sync` has run. A lint fails on `use-package :
 `test/unit/pkg-test.el` runs everything against package archives that are local directories in temp dirs (never
 the network): sync with dependencies, offline sync into an empty directory, a wrong hash, a missing locked
 version, concurrent syncs, seeding, rollback byte for byte, a broken upgrade restored, the guard, use-package
-`:ensure`, bisect, the CLI, the doctor and safe mode.
+`:ensure`, bisect, the CLI, the doctor and safe mode. HTTP downloads run against a loopback server in the test
+Emacs itself (a 200 is saved byte for byte; a 404 saves nothing).
