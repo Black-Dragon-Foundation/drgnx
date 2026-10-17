@@ -496,11 +496,11 @@ Code's C-k chords over kill-line) are one line."
                                           (car (rassoc drgnx-keys-layers drgnx-keys-presets))))))
   (unless (assoc name drgnx-keys-presets)
     (user-error "No keyboard profile %S (profiles: %s)" name (mapconcat #'car drgnx-keys-presets ", ")))
-  (let ((r (drgnx-keys-use (cdr (assoc name drgnx-keys-presets)) t)))
-    (message "Keys: %s%s" name
-             (if-let* ((n (length (drgnx-keys-conflict-lines))) ((> n 0)))
-                 (format " — %d conflict%s, see Keyboard Shortcuts" n (if (= n 1) "" "s"))
-               ""))))
+  (drgnx-keys-use (cdr (assoc name drgnx-keys-presets)) t)
+  (message "Keys: %s%s" name
+           (if-let* ((n (length (drgnx-keys-conflict-lines))) ((> n 0)))
+               (format " — %d conflict%s, see Keyboard Shortcuts" n (if (= n 1) "" "s"))
+             "")))
 
 (provide 'drgnx-keys)
 ;;; drgnx-keys.el ends here
