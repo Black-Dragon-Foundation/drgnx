@@ -155,19 +155,26 @@ message says to open LM Studio."
     (let ((id (car m)) (command (plist-get (cdr m) :start)) (name (or (plist-get (cdr m) :name) (symbol-name (car m)))))
       (drgnx-ai-probe
        (lambda ()
+         ;; the probe's callback runs in a curl sentinel: the start is a timer's (the launcher's call-process
+         ;; never runs under the sentinel's inhibit-quit), and does not wait for the job's pid
          (unless (plist-get (alist-get id drgnx-ai-detected) :up)
-           (require 'drgnx-jobs)
-           (cond ((seq-find (lambda (j) (and (eq (plist-get j :status) 'running) (equal (plist-get j :command) command)))
-                            (drgnx-jobs-list)))
-                 ((not (and (stringp (car command)) (file-executable-p (car command))))
-                  (message "drgnx: %s is not running — %s" name
-                           (if (eq id 'lmstudio) "open LM Studio (its server starts with it)"
-                             (format "start it: %s" (string-join command " ")))))
-                 (t (message "Starting %s…" name)
-                    (with-demoted-errors "drgnx: the local AI server did not start: %S"
-                      (make-directory (drgnx-state-dir) t)
-                      (drgnx-jobs-start (format "%s server" name) command :cwd (drgnx-state-dir)))))))
+           (run-at-time 0 nil #'drgnx-ai--start-local id command name)))
        (list id)))))
+
+(defun drgnx-ai--start-local (id command name)
+  "Start COMMAND, provider ID's runner (NAME), as a drgnx job unless one runs it already; one message.  From a
+timer: never waits for the job (`:no-wait'), never asks."
+  (require 'drgnx-jobs)
+  (cond ((seq-find (lambda (j) (and (eq (plist-get j :status) 'running) (equal (plist-get j :command) command)))
+                   (drgnx-jobs-list)))
+        ((not (and (stringp (car command)) (file-executable-p (car command))))
+         (message "drgnx: %s is not running — %s" name
+                  (if (eq id 'lmstudio) "open LM Studio (its server starts with it)"
+                    (format "start it: %s" (string-join command " ")))))
+        (t (message "Starting %s…" name)
+           (with-demoted-errors "drgnx: the local AI server did not start: %S"
+             (make-directory (drgnx-state-dir) t)
+             (drgnx-jobs-start (format "%s server" name) command :cwd (drgnx-state-dir) :no-wait t)))))
 
 (defun drgnx-ai--refused (id)
   "`drgnx-ai-refused-functions': nothing listened at ID — the runner drgnx keeps running is started again."

@@ -145,3 +145,26 @@
            (should (eq (drgnx-jobs-test--status id) 'gone)))
        ;; the "job" is this Emacs: never left for the fixture's clean-up to stop
        (delete-directory dir t)))))
+
+(defun drgnx-jobs-test--slow-detach (line)
+  "A launcher whose job shell runs 0.7 s late (its pid file too), in its own session as `drgnx-jobs--detach' does."
+  (call-process "sh" nil 0 nil "-c" (concat "sleep 0.7; exec setsid -f sh -c " (shell-quote-argument line))))
+
+(ert-deftest drgnx-jobs/no-wait-returns-before-the-pid-and-stamps-it-later ()
+  (skip-unless (executable-find "setsid"))
+  (drgnx-jobs-test--with
+   (cl-letf (((symbol-function 'drgnx-jobs--detach) #'drgnx-jobs-test--slow-detach))
+     (let* ((t0 (float-time))
+            (id (drgnx-jobs-start "slow" '("sleep" "3") :no-wait t))
+            (took (- (float-time) t0))
+            (job-file (expand-file-name "job.eld" (drgnx-jobs--dir id))))
+       (should (< took 0.5))                                         ; no wait for the pid
+       (should-not (file-exists-p (expand-file-name "pid" (drgnx-jobs--dir id))))
+       (should-not (plist-get (drgnx-jobs--read job-file) :start))
+       ;; the boot and start time still come, from a timer, within two seconds
+       (let ((deadline (+ (float-time) 2.5)))
+         (while (and (not (plist-get (drgnx-jobs--read job-file) :start)) (< (float-time) deadline))
+           (accept-process-output nil 0.05)))
+       (should (plist-get (drgnx-jobs--read job-file) :start))
+       (should (equal (plist-get (drgnx-jobs--read job-file) :boot) (drgnx-jobs--boot-id)))
+       (should (eq (drgnx-jobs-test--status id) 'running))))))

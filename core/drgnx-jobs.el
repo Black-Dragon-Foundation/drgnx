@@ -81,13 +81,15 @@ environment — `--setenv=NAME' copies it from there — so no value (a key) is 
           (and nice (list "-p" (format "Nice=%d" nice)))
           (list "sh" "-c" line)))
 
-(cl-defun drgnx-jobs-start (name command &key cwd task env memory-max nice)
+(cl-defun drgnx-jobs-start (name command &key cwd task env memory-max nice no-wait)
   "Run COMMAND (a list) as the durable job NAME in CWD.  Returns the job's id.  TASK (a work-tracker
 node id): the job gets it as DRGNX_TASK, and the git HEADs it started and ended at are kept, so the
 commits it made are recorded for the task (docs/guide/work.md).  ENV (\"NAME=value\"…, e.g. an agent's
 keys) is the job's too, and is kept nowhere: not in its state files, not in a command line.  MEMORY-MAX
 (\"1G\"): the systemd launcher caps the job's memory (MemoryMax, no swap); NICE (10) lowers its priority
-(Nice=); the detached launcher can do neither and ignores both."
+(Nice=); the detached launcher can do neither and ignores both.  NO-WAIT: return without waiting (up to
+two seconds) for the job's pid — its boot and start time are stamped from a short timer once the pid file
+appears — for callers that must not block (a timer started from a sentinel)."
   (let* ((id (drgnx-jobs--new-id)) (dir (drgnx-jobs--dir id))
          (cwd (expand-file-name (or cwd default-directory)))
          (launcher (drgnx-jobs-launcher))
@@ -115,13 +117,24 @@ keys) is the job's too, and is kept nowhere: not in its state files, not in a co
     ;; the pid file appears once the job's shell runs; the boot and the process's start time make
     ;; the pid trustworthy later (a pid from before a reboot may be another process)
     (let ((deadline (+ (float-time) 2)) (pidf (expand-file-name "pid" dir)))
-      (while (and (not (file-exists-p pidf)) (< (float-time) deadline)) (sleep-for 0.02))
-      (when-let* ((pid (and (file-exists-p pidf) (string-to-number (or (drgnx-jobs--text pidf) "0"))))
-                  (attrs (and (> pid 0) (process-attributes pid))))
-        (let ((job (drgnx-jobs--read (expand-file-name "job.eld" dir))))
-          (with-temp-file (expand-file-name "job.eld" dir)
-            (prin1 (append job (list :boot (drgnx-jobs--boot-id) :start (alist-get 'start attrs))) (current-buffer))))))
+      (if no-wait
+          (let ((timer nil))
+            (setq timer (run-at-time 0.05 0.05 (lambda ()
+                                                 (when (or (file-exists-p pidf) (>= (float-time) deadline))
+                                                   (cancel-timer timer)
+                                                   (drgnx-jobs--stamp dir))))))
+        (while (and (not (file-exists-p pidf)) (< (float-time) deadline)) (sleep-for 0.02))
+        (drgnx-jobs--stamp dir)))
     id))
+
+(defun drgnx-jobs--stamp (dir)
+  "Add the boot and the start time of the job in DIR's process to its job.eld, once its pid file is there."
+  (let ((pidf (expand-file-name "pid" dir)))
+    (when-let* ((pid (and (file-exists-p pidf) (string-to-number (or (drgnx-jobs--text pidf) "0"))))
+                (attrs (and (> pid 0) (process-attributes pid))))
+      (let ((job (drgnx-jobs--read (expand-file-name "job.eld" dir))))
+        (with-temp-file (expand-file-name "job.eld" dir)
+          (prin1 (append job (list :boot (drgnx-jobs--boot-id) :start (alist-get 'start attrs))) (current-buffer)))))))
 
 (defun drgnx-jobs-get (id)
   "Job ID: its job.eld plus :status (running, exited, stopped or gone) and :exit."

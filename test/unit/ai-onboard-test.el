@@ -15,7 +15,7 @@ known: no preset, so nothing running on this machine counts; no OpenRouter key."
                                              "OPENROUTER_API_KEY")
                                        process-environment))
           (drgnx-ai-presets nil) (drgnx-ai-detected nil) (auth-sources nil) (drgnx-ai--keys (make-hash-table :test #'eq))
-          (mock nil))
+          (drgnx-modules--state nil) (mock nil))
      (unwind-protect
          (progn
            (make-directory (concat root "config") t)
@@ -54,6 +54,31 @@ known: no preset, so nothing running on this machine counts; no OpenRouter key."
     (let ((r (drgnx-onboard--ai-step '(:interactive nil))))
       (should (memq (car r) '(info warn)))
       (should (string-match-p "no provider" (cadr r))))))
+
+(ert-deftest drgnx-onboard/the-ai-step-checks-chats-module-when-providers-work ()
+  ;; a provider that answers is not Chat yet: the ide preset leaves extra/llm (gptel) off
+  (drgnx-ai-onboard-test--with
+    (drgnx-modules-write-state (list :disabled '(extra/llm)))
+    (let ((r (drgnx-onboard--ai-step '(:interactive nil))))
+      (should (eq (car r) 'warn))
+      (should (string-match-p "chat: o/llama3:8b answered" (cadr r)))
+      (should (string-match-p "Chat needs module extra/llm" (cadr r))))
+    ;; run again, interactively: Keep, then the offer (declined: still a warning)
+    (drgnx-onboard--record 'ai 'warn "before")
+    (let* ((asked nil)
+           (r (cl-letf (((symbol-function 'completing-read)
+                         (lambda (prompt &rest _) (push prompt asked) "Keep"))
+                        ((symbol-function 'y-or-n-p) (lambda (prompt) (push prompt asked) nil)))
+                (drgnx-onboard--ai-step '(:interactive t)))))
+      (should (string-match-p "keep it or change it" (cadr asked)))
+      (should (equal (car asked) "Turn on Chat (module extra/llm)? "))
+      (should (eq (car r) 'warn))
+      (should (drgnx-module-disabled-p 'extra/llm)))
+    ;; module on: ok as before
+    (drgnx-modules-write-state (list :disabled nil))
+    (let ((r (drgnx-onboard--ai-step '(:interactive nil))))
+      (should (eq (car r) 'ok))
+      (should (string-match-p "Chat (module extra/llm) is on" (cadr r))))))
 
 ;;;; Setting AI up: the room, the models, Ollama, LM Studio, OpenRouter
 
@@ -392,6 +417,26 @@ with BODY."
         (drgnx-ai--refused 'lmstudio)
         (drgnx-ai-onboard-test--settle #'ignore 1.5)
         (should-not (drgnx-ai-onboard-test--serving serve))))))
+
+(ert-deftest drgnx-ai/ensure-local-never-waits-for-the-job ()
+  ;; the probe's callback runs in a curl sentinel: it starts nothing itself, and the start does not wait for the pid
+  (skip-unless (executable-find "setsid"))
+  (drgnx-ai-onboard-test--with-mac drgnx-ai-onboard-test--ollama-answers
+    (let ((noninteractive nil) (serve (list (concat bin "fake-serve") "serve")) (in-callback 'unset))
+      (cl-letf (((symbol-function 'message) #'ignore)
+                ((symbol-function 'drgnx-ai-probe)            ; nothing answers; the callback at once
+                 (lambda (callback &optional _ids) (funcall callback) (setq in-callback (drgnx-jobs-list)) nil))
+                ((symbol-function 'drgnx-jobs--detach)        ; the job's shell, and so its pid file, 0.7 s late
+                 (lambda (line) (call-process "sh" nil 0 nil "-c" (concat "sleep 0.7; exec setsid -f sh -c " (shell-quote-argument line))))))
+        (drgnx-ai-set-managed 'ollama serve "Ollama")
+        (drgnx-ai-ensure-local)
+        (should (null in-callback))                           ; the callback returned before any job was started
+        (let* ((job (drgnx-ai-onboard-test--settle (lambda () (car (drgnx-jobs-list))) 1))
+               (dir (drgnx-jobs--dir (plist-get job :id))))
+          (should (equal (plist-get job :command) serve))
+          (should-not (file-exists-p (expand-file-name "pid" dir)))                     ; started without waiting
+          (should (drgnx-ai-onboard-test--settle
+                   (lambda () (plist-get (drgnx-jobs--read (expand-file-name "job.eld" dir)) :start)) 2.5)))))))   ; stamped
 
 (ert-deftest drgnx-ai/ensure-local-does-nothing-in-batch ()
   (drgnx-ai-onboard-test--with-mac drgnx-ai-onboard-test--ollama-answers

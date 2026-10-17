@@ -756,9 +756,13 @@ step ran before: keep it or change it.  Without interaction: what was found, and
                                     "Change")
                              (funcall ask))))))
     (cond ((and choice (not (and (eq choice 'skip) (> working 0)))) (drgnx-onboard--ai-setup choice ctx))
-          ((and (not (plist-get ctx :interactive)) (zerop working))
-           (list (car found) (concat (cadr found) "; " (drgnx-onboard--ai-how))))
-          (t (list (car found) (cadr found))))))
+          ((zerop working)
+           (if (plist-get ctx :interactive) (list (car found) (cadr found))
+             (list (car found) (concat (cadr found) "; " (drgnx-onboard--ai-how)))))
+          ;; what works stays: Chat still needs its module (offered when interactive)
+          (t (let ((chat (drgnx-onboard--chat-module ctx)))
+               (list (if (and (not (car chat)) (eq (car found) 'ok)) 'warn (car found))
+                     (concat (cadr found) "; " (cdr chat))))))))
 
 ;;;; Step 5: Semantic Search
 
