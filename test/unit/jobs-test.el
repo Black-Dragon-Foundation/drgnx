@@ -7,13 +7,22 @@
           (process-environment (append (list (concat "XDG_STATE_HOME=" root) "DRGNX_JOBS_LAUNCHER=detached")
                                        process-environment)))
      (unwind-protect (progn ,@body)
-       (dolist (j (drgnx-jobs-list)) (ignore-errors (drgnx-jobs-stop (plist-get j :id))))
+       (drgnx-jobs-test--stop-all)
        (delete-directory root t))))
 
 (defun drgnx-jobs-test--wait (pred &optional secs)
   (let ((deadline (+ (float-time) (or secs 10))) v)
     (while (and (not (setq v (funcall pred))) (< (float-time) deadline)) (sleep-for 0.05))
     v))
+
+(defun drgnx-jobs-test--stop-all ()
+  "Stop every running job and wait until each has written its exit file: a stopped job's shell is still writing
+(head, exit) when the signal returns, and the fixture's clean-up deleting its directory under it fails."
+  (let ((ids (delq nil (mapcar (lambda (j) (and (eq (plist-get j :status) 'running) (plist-get j :id)))
+                               (drgnx-jobs-list)))))
+    (dolist (id ids) (ignore-errors (drgnx-jobs-stop id)))
+    (dolist (id ids)
+      (drgnx-jobs-test--wait (lambda () (file-exists-p (expand-file-name "exit" (drgnx-jobs--dir id)))) 5))))
 
 (defun drgnx-jobs-test--status (id) (plist-get (drgnx-jobs-get id) :status))
 
