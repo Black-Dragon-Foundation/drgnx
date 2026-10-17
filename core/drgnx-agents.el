@@ -433,6 +433,22 @@ turn Stop's deadline ended lets the held messages go."
 
 (defun drgnx-agents--enqueue (s text) (setf (drgnx-agent-session-queue s) (append (drgnx-agent-session-queue s) (list text))))
 
+(defun drgnx-agents-steer (s text)
+  "Put TEXT into S's running turn when it can be steered (t); else queue it for the turn's end (nil).  A refused
+steer waits for the turn too."
+  (if (not (and (eq (drgnx-agent-session-status s) 'busy) (drgnx-agents--steerable-p s)))
+      (progn (drgnx-agents--enqueue s text) nil)
+    (let ((entry (list :type 'user :text text :steer t)))
+      (drgnx-agents--add s entry)
+      (drgnx-acp-request (drgnx-agent-session-conn s) "_session/steering"
+                         (list :sessionId (drgnx-agent-session-acp-id s) :prompt (vector (list :type "text" :text text)))
+                         (lambda (r)
+                           (when (cdr r)            ; refused: the message waits for the turn instead
+                             (setf (drgnx-agent-session-entries s) (delq entry (drgnx-agent-session-entries s)))
+                             (drgnx-agents--enqueue s text)
+                             (drgnx-agents--changed s))))
+      t)))
+
 (cl-defun drgnx-agents-send (s text)
   "Send TEXT to session S: now when ready; when busy, queued (default), steering the turn (mode
 `steer', when the agent can; queued if it refuses), or — only in mode `interrupt' — after cancelling
@@ -445,16 +461,7 @@ the turn."
          (progn (drgnx-agents--enqueue s text) (setf (drgnx-agent-session-paused s) nil) (drgnx-agents--next s))
        (drgnx-agents--prompt s text)))
     ('busy
-     (cond ((and (eq (drgnx-agent-session-mode s) 'steer) (drgnx-agents--steerable-p s))
-            (let ((entry (list :type 'user :text text :steer t)))
-              (drgnx-agents--add s entry)
-              (drgnx-acp-request (drgnx-agent-session-conn s) "_session/steering"
-                                 (list :sessionId (drgnx-agent-session-acp-id s) :prompt (vector (list :type "text" :text text)))
-                                 (lambda (r)
-                                   (when (cdr r)            ; refused: the message waits for the turn instead
-                                     (setf (drgnx-agent-session-entries s) (delq entry (drgnx-agent-session-entries s)))
-                                     (drgnx-agents--enqueue s text)
-                                     (drgnx-agents--changed s))))))
+     (cond ((eq (drgnx-agent-session-mode s) 'steer) (drgnx-agents-steer s text))
            ((eq (drgnx-agent-session-mode s) 'interrupt)
             (setf (drgnx-agent-session-queue s) (cons text (drgnx-agent-session-queue s)))
             (drgnx-agents-stop s 'interrupt))

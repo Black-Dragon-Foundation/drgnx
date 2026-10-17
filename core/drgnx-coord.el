@@ -281,6 +281,16 @@ held when RECIPIENT's queue is full or the two exchange too much — or (:held �
   (sqlite-execute (drgnx-work-db) "insert or replace into meta values (?, ?)"
                   (list (concat "seen:" agent) (number-to-string version))))
 
+(defun drgnx-coord-notice (v job changes seen)
+  "What an agent of JOB that read the log at SEEN is told of CHANGES (decisions, newest first) — the log at V: the
+first five, quoted (an agent's subject never reads as a line from drgnx)."
+  (format "[decision log v%d — job %s]\n%s\nCall read_decisions (since %d) before you go on."
+          v job (mapconcat (lambda (d) (concat "> " (replace-regexp-in-string "\n" "\n> "
+                                                                              (format "#%s %s: %s (%s)" (plist-get d :n) (plist-get d :kind)
+                                                                                      (plist-get d :subject) (plist-get d :status)))))
+                           (seq-take changes 5) "\n")
+          seen))
+
 (defun drgnx-coord-note-held (agent held)
   "AGENT's coordination write was HELD (behind the log) or went through: the count of held writes in a row."
   (sqlite-execute (drgnx-work-db) "insert or replace into meta values (?, ?)"

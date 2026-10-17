@@ -83,9 +83,14 @@ Hub sessions are the hub's children: when the hub ends, they end (the editor's m
 resuming them in a new hub (ACP `session/load`) is not built yet.
 
 A peer message is text for the agent and nothing else: permission requests are answered only by the user's
-`agents/permission`, and no message changes a setting. No agent offers a gate yet (a hook before each tool call),
-so an agent's own edits are not held while it is behind — only its coordination writes are; its snapshot says
-`:enforced nil`, and the job window (M9b.4) shows it.
+`agents/permission`, and no message changes a setting. **The gate:** a job agent's permission request
+(edits and commands ask one) is checked against the log first (`drgnx-job--gate`): behind it — decisions of its job
+since its `seen` — the call is refused (its `reject_once` option) and, once per version, the changes go into the
+running turn (`drgnx-agents-steer`, the notice of delivery: `drgnx-coord-notice`) with "Your last tool call was
+refused because you had not read these." Its next request after `read_decisions` goes by the policy again. An agent
+that can be steered is held this way (its snapshot says `:enforced t`); one that cannot gets the coordination-tool
+hold and turn-end delivery only (`:enforced nil`, which the job window shows). Reviewers are never gated (they read).
+A task's prompt asks for `read_decisions` first.
 
 ## Jobs
 

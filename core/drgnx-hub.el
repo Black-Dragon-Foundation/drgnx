@@ -251,7 +251,7 @@ KEY…)), keys held in memory.  (:token :url)."
         :entries-count (length (drgnx-agent-session-entries s))
         ;; no agent offers a gate yet (a hook before each tool): messages wait for the turn's end, its own edits are
         ;; not held while it is behind the decision log — only its coordination writes are
-        :enforced nil))
+        :enforced (drgnx-job-enforced-p s)))
 
 (defun drgnx-hub--snapshot-lisp (s) (drgnx-hub--lisp (drgnx-hub--snapshot s)))
 
@@ -307,12 +307,7 @@ for an agent that is not here (or exited) stays queued."
                    (changes (and (< seen v) (< (gethash id drgnx-hub--told 0) v) (drgnx-coord-decisions-since seen job))))
               (when (and changes (drgnx-agents-free-p s))
                 (puthash id v drgnx-hub--told)
-                (drgnx-agents-deliver
-                 s (format "[decision log v%d — job %s]\n%s\nCall read_decisions (since %d) before you go on."
-                           v job (drgnx-hub--quote (mapconcat (lambda (d) (format "#%s %s: %s (%s)" (plist-get d :n) (plist-get d :kind)
-                                                                                  (plist-get d :subject) (plist-get d :status)))
-                                                              (seq-take changes 5) "\n"))
-                           seen))))))))))
+                (drgnx-agents-deliver s (drgnx-coord-notice v job changes seen))))))))))
 
 (defun drgnx-hub--prompted (_s text)
   "A prompt went to an agent: a message in it is now read."

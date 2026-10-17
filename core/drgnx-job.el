@@ -221,7 +221,7 @@ what the agent before it left (`drgnx-job--fall-back')."
            (body (plist-get (seq-find (lambda (x) (= (plist-get x :n) n)) (plist-get (plist-get (drgnx-coord-job id) :data) :tasks)) :body)))
       (drgnx-coord-force-status (plist-get task :id) "claimed" (drgnx-agent-session-id s))
       (puthash (drgnx-agent-session-id s)
-               (format "[drgnx task %s] %s\n\n%s\n\n%s%sWork only in this directory (a git worktree of your own). Commit your work. Then call complete_task."
+               (format "[drgnx task %s] %s\n\n%s\n\n%s%sFirst call read_decisions (the job's decision log). Work only in this directory (a git worktree of your own). Commit your work. Then call complete_task."
                        (plist-get task :id) (plist-get task :title) (or body "") (or handover "")
                        (if-let* ((notes (alist-get (plist-get task :id) (plist-get (plist-get (drgnx-coord-job id) :data) :notes) nil nil #'equal)))
                            (format "The reviewer asked for changes:\n%s\n\n" (drgnx-job--quote notes))
@@ -684,6 +684,28 @@ S: the session whose request waits (it goes back to work once answered, or, gone
     (drgnx-job--changed (plist-get m :job))
     t))
 
+(defvar drgnx-job--gated (make-hash-table :test #'equal) "Session id → the log version it was last told of at the gate.")
+
+(defun drgnx-job-enforced-p (s)
+  "Does the gate hold S — a job's agent (not a reviewer) that can be steered — while it is behind the log?"
+  (and (drgnx-agent-session-job s) (not (gethash (drgnx-agent-session-id s) drgnx-job--reviewers))
+       (drgnx-agents--steerable-p s) t))
+
+(defun drgnx-job--gate (s job params)
+  "The gate: job agent S asks a permission (PARAMS) while behind JOB's decision log — the call is refused (its
+reject_once option) and, once per version, the changes are put into its turn.  nil when S is not behind (or a
+reviewer, or the request has no reject option)."
+  (let* ((sid (drgnx-agent-session-id s)) (seen (drgnx-coord-seen sid))
+         (changes (and (not (gethash sid drgnx-job--reviewers)) (drgnx-coord-decisions-since seen job)))
+         (reject (seq-find (lambda (o) (equal (plist-get o :kind) "reject_once")) (append (plist-get params :options) nil))))
+    (when (and changes reject)
+      (let ((v (drgnx-coord-version)))
+        (unless (eql (gethash sid drgnx-job--gated) v)
+          (puthash sid v drgnx-job--gated)
+          (drgnx-agents-steer s (concat (drgnx-coord-notice v job changes seen)
+                                        "\nYour last tool call was refused because you had not read these."))))
+      (list :result (list :outcome (list :outcome "selected" :optionId (plist-get reject :optionId)))))))
+
 (defun drgnx-job--request (s method params id)
   "A job agent's request (`drgnx-agents-request-functions'): routine ones answered by its role's policy, writes in
 its worktree done at once; anything else waits for the user as a card (nil: the session keeps it pending)."
@@ -692,11 +714,13 @@ its worktree done at once; anything else waits for the user as a card (nil: the 
       (pcase method
         ("session/request_permission"
          (let ((tool (plist-get params :toolCall)))
-           (if (eq (drgnx-job-policy (drgnx-job--role s) tool tree) 'allow)
-               (let ((opt (seq-find (lambda (o) (equal (plist-get o :kind) "allow_once")) (append (plist-get params :options) nil))))
-                 (list :result (list :outcome (list :outcome "selected" :optionId (plist-get opt :optionId)))))
-             (drgnx-job--card job task "permission" (or (plist-get tool :title) "a permission") s (list :request id))
-             nil)))
+           (cond
+            ((drgnx-job--gate s job params))                        ; behind the decision log: refused, told
+            ((eq (drgnx-job-policy (drgnx-job--role s) tool tree) 'allow)
+             (let ((opt (seq-find (lambda (o) (equal (plist-get o :kind) "allow_once")) (append (plist-get params :options) nil))))
+               (list :result (list :outcome (list :outcome "selected" :optionId (plist-get opt :optionId))))))
+            (t (drgnx-job--card job task "permission" (or (plist-get tool :title) "a permission") s (list :request id))
+               nil))))
         ("fs/write_text_file"
          ;; an absolute path only: the check and the write must mean the same file
          (let ((path (plist-get params :path)) (content (plist-get params :content)))
