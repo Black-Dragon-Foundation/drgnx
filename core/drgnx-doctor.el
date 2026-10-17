@@ -13,6 +13,7 @@
 ;;; Code:
 (require 'cl-lib)
 (require 'json)
+(require 'seq)
 (require 'subr-x)
 (require 'drgnx-paths)
 

@@ -1,6 +1,7 @@
 ;;; doctor-test.el --- batch tests: drgnx doctor -*- lexical-binding: t -*-
 (require 'ert)
 (require 'drgnx-doctor)
+(require 'drgnx-macos)   ; so `drgnx-macos-app-dir' is special before a test let-binds it
 
 (defun drgnx-doctor-test--facts (&rest kv)
   (append kv (list :version "31.1" :native-available t :native-compiles t :treesit t :gui 'pgtk :git t :sqlite t)))
