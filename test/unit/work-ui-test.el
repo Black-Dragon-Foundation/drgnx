@@ -107,18 +107,66 @@ git repository ROOT/code), a lone plan, and the tracker's database in a temp dat
       (should-not (string-search "Plan Beta" (buffer-string)))
       (should (string-search "Plan Alpha" (buffer-string))))))
 
-(ert-deftest drgnx-work-ui/the-graph-links-specs-plans-and-branches ()
+(defun drgnx-work-ui-test--box (layout id) (seq-find (lambda (b) (equal (plist-get b :id) id)) (plist-get layout :boxes)))
+
+(ert-deftest drgnx-work-ui/the-graph-lays-out-specs-plans-and-branches-in-columns ()
+  (drgnx-work-ui-test--with root
+    (let ((alpha (concat "plan:" root "docs/plans/alpha.md")) (beta (concat "plan:" root "docs/plans/beta.md")))
+      (drgnx-work-update-node alpha :branch "feature")
+      (drgnx-work-update-node beta :title (concat "Plan Beta " (make-string 80 ?x)))
+      (let* ((l (drgnx-work-ui-graph-layout))
+             (spec (drgnx-work-ui-test--box l (concat "spec:" root "docs/specs/s.md")))
+             (a (drgnx-work-ui-test--box l alpha)) (b (drgnx-work-ui-test--box l beta))
+             (br (drgnx-work-ui-test--box l "branch feature")))
+        (should (and spec a b br))
+        (should (< (plist-get spec :x) (plist-get a :x) (plist-get br :x)))      ; columns: spec | plan | branch
+        (should (= (plist-get a :x) (plist-get b :x)))
+        (should (equal (plist-get a :lines) '("Plan Alpha" "0/2 tasks · 1 commit")))
+        (should (= (length (car (plist-get b :lines))) 48))                      ; a long title is cut…
+        (should (string-suffix-p "…" (car (plist-get b :lines))))
+        (should (member (list (plist-get spec :id) alpha) (plist-get l :edges)))
+        (should (member (list alpha "branch feature") (plist-get l :edges)))
+        (let ((boxes (plist-get l :boxes)))                                     ; …and no two boxes overlap
+          (dolist (p boxes)
+            (dolist (q boxes)
+              (unless (eq p q)
+                (should-not (and (< (plist-get p :x) (+ (plist-get q :x) (plist-get q :w)))
+                                 (< (plist-get q :x) (+ (plist-get p :x) (plist-get p :w)))
+                                 (< (plist-get p :y) (+ (plist-get q :y) (plist-get q :h)))
+                                 (< (plist-get q :y) (+ (plist-get p :y) (plist-get p :h)))))))))))))
+
+(ert-deftest drgnx-work-ui/the-graph-takes-its-colours-from-the-theme ()
+  (drgnx-work-ui-test--with root
+    (let ((old (face-attribute 'drgnx-work-ui-graph-plan :foreground)))
+      (unwind-protect
+          (progn
+            (set-face-attribute 'drgnx-work-ui-graph-plan nil :foreground "#123456")   ; as a theme would
+            (let ((svg (drgnx-work-ui-graph-svg (drgnx-work-ui-graph-layout))))
+              (should (string-search "#123456" svg))
+              (should (string-search "currentColor" svg))))                      ; faces with no colour (batch)
+        (set-face-attribute 'drgnx-work-ui-graph-plan nil :foreground old)))))
+
+(ert-deftest drgnx-work-ui/a-click-on-a-box-opens-what-it-shows ()
   (drgnx-work-ui-test--with root
     (drgnx-work-update-node (concat "plan:" root "docs/plans/alpha.md") :branch "feature")
-    (let ((dot (drgnx-work-ui-dot)))
-      (should (string-prefix-p "digraph work {" dot))
-      (should (string-match-p "\"spec:[^\"]+s.md\" -> \"plan:[^\"]+alpha.md\"" dot))
-      (should (string-match-p "Plan Alpha\\\\n0/2 tasks · 1 commit" dot))
-      (should (string-match-p "\"plan:[^\"]+alpha.md\" -> \"branch feature\"" dot)))
-    (let ((exec-path nil))                                      ; no Graphviz: the DOT text, said so
-      (let ((b (save-window-excursion (drgnx-work-ui-graph))))
-        (unwind-protect (with-current-buffer b (should (string-prefix-p "digraph work {" (buffer-string))))
-          (kill-buffer b))))))
+    (let* ((g (save-window-excursion (drgnx-work-ui-graph)))
+           (img (with-current-buffer g (get-text-property (point-min) 'display)))
+           (keymap (with-current-buffer g (get-text-property (point-min) 'keymap)))
+           (area (lambda (title) (seq-find (lambda (a) (string-prefix-p title (plist-get (nth 2 a) 'help-echo))) (image-property img :map)))))
+      (unwind-protect
+          (let* ((a (funcall area "Plan Alpha")) (br (funcall area "branch feature"))
+                 ;; a click as Emacs delivers it: plain mouse-1, the hot spot in its position
+                 (click (lambda (spot) (funcall (lookup-key keymap [mouse-1]) (list 'mouse-1 (list nil (nth 1 spot) '(0 . 0) 0))))))
+            (should (eq (car (car a)) 'rect))
+            (should (eq (lookup-key keymap (vector (nth 1 a) 'mouse-1)) (lookup-key keymap [mouse-1])))   ; prefixed: the same
+            (let ((b (save-window-excursion (funcall click a) (current-buffer))))
+              (unwind-protect (should (equal (buffer-file-name b) (concat root "docs/plans/alpha.md")))
+                (kill-buffer b)))
+            ;; a branch without a worktree, a plan whose file went: said, never an error
+            (should (stringp (funcall click br)))
+            (delete-file (concat root "docs/plans/alpha.md"))
+            (should (stringp (funcall click a))))
+        (kill-buffer g)))))
 
 (ert-deftest drgnx-work-ui/refresh-scans-in-another-process-and-redraws ()
   (drgnx-work-ui-test--with root
@@ -155,9 +203,9 @@ git repository ROOT/code), a lone plan, and the tracker's database in a temp dat
 (ert-deftest drgnx-work-ui/doctor-says-whether-the-tracker-can-work ()
   (require 'drgnx-doctor)
   (should (eq 'fail (car (drgnx-doctor-check 'work '(:sqlite nil)))))
-  (should (eq 'info (car (drgnx-doctor-check 'work '(:sqlite t :dot t :work-plans nil)))))
-  (should (eq 'warn (car (drgnx-doctor-check 'work '(:sqlite t :dot nil :work-plans 3)))))
-  (should (equal '(ok "3 plans tracked") (seq-take (drgnx-doctor-check 'work '(:sqlite t :dot t :work-plans 3)) 2))))
+  (should (eq 'info (car (drgnx-doctor-check 'work '(:sqlite t :svg t :work-plans nil)))))
+  (should (eq 'warn (car (drgnx-doctor-check 'work '(:sqlite t :svg nil :work-plans 3)))))   ; no graph without SVG
+  (should (equal '(ok "3 plans tracked") (seq-take (drgnx-doctor-check 'work '(:sqlite t :svg t :work-plans 3)) 2))))
 
 (ert-deftest drgnx-work-ui/commits-recorded-for-a-todo-or-the-plan-show-and-count ()
   (drgnx-work-ui-test--with root

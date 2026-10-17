@@ -7,7 +7,8 @@
 ;; it (plans that name none are roots), each plan with its counts, branch and worktree, its tasks,
 ;; their steps, rulings and commits, and the board's TODOs.  TAB folds, RET opens the line's file at
 ;; its line (a commit: its diff), g scans again in another Emacs (this one never waits), f filters the
-;; plans, m hides merged ones.  "Work: Show as Graph" draws specs, plans and branches with Graphviz.
+;; plans, m hides merged ones.  "Show Work as Graph" draws specs, plans and branches with svg.el:
+;; every box opens what it shows, every colour comes from the theme.
 ;; See docs/work.md.
 
 ;;; Code:
@@ -19,6 +20,7 @@
 (require 'drgnx-registry)
 (require 'drgnx-work)
 (require 'drgnx-projects)
+(require 'svg)
 
 (declare-function drgnx-wb-area-show "drgnx-area")
 (declare-function drgnx-wb-define-tab "drgnx-area")
@@ -208,9 +210,13 @@
   (interactive)
   (let* ((plan (or (drgnx-work-ui--plan-of (drgnx-work-ui--node)) (user-error "Not inside a plan")))
          (wt (or (plist-get plan :worktree) (user-error "This plan has no worktree"))))
-    (if (not (fboundp 'drgnx-explorer-set-roots)) (dired wt)
-      (drgnx-explorer-set-roots (append (drgnx-explorer-roots) (unless (member wt (drgnx-explorer-roots)) (list wt))))
-      (unless (drgnx-wb-sidebar-showing-p) (drgnx-wb-toggle-sidebar)))))
+    (drgnx-work-ui--show-worktree wt)))
+
+(defun drgnx-work-ui--show-worktree (wt)
+  "Add the worktree WT to the Explorer and show it (dired without the workbench)."
+  (if (not (fboundp 'drgnx-explorer-set-roots)) (dired wt)
+    (drgnx-explorer-set-roots (append (drgnx-explorer-roots) (unless (member wt (drgnx-explorer-roots)) (list wt))))
+    (unless (drgnx-wb-sidebar-showing-p) (drgnx-wb-toggle-sidebar))))
 
 (defun drgnx-work-ui-start-agent (profile)
   "Start an agent (PROFILE) on this line's task (a TODO, a plan): it works in the plan's worktree
@@ -254,48 +260,152 @@ Returns the process."
 (defun drgnx-work-ui--agent-turn (_s event)
   (when (eq event 'turn-end) (drgnx-work-ui--redraw)))
 
-;;;; The graph
+;;;; The graph (svg.el: no external program; every box a hot spot; colours from the theme's faces)
 
-(defun drgnx-work-ui--q (s) (concat "\"" (replace-regexp-in-string "[\"\\]" "\\\\\\&" (or s "")) "\""))
+(defface drgnx-work-ui-graph-spec '((t :inherit (bold font-lock-keyword-face))) "A spec in the graph." :group 'drgnx)
+(defface drgnx-work-ui-graph-plan '((t :inherit default)) "A plan in the graph." :group 'drgnx)
+(defface drgnx-work-ui-graph-merged '((t :inherit shadow)) "A merged plan in the graph." :group 'drgnx)
+(defface drgnx-work-ui-graph-branch '((t :inherit font-lock-constant-face)) "A branch in the graph." :group 'drgnx)
+(defface drgnx-work-ui-graph-edge '((t :inherit shadow)) "The lines between boxes in the graph." :group 'drgnx)
 
-(defun drgnx-work-ui-dot ()
-  "The tracker as Graphviz DOT: specs, the plans shown, their branches."
-  (let ((out (list "  rankdir=LR; node [shape=box, fontname=\"sans\"];" "digraph work {")))   ; pushed: newest first
+(defconst drgnx-work-ui-graph-title-max 48 "Longer titles are cut (the full one shows on hover).")
+
+(defun drgnx-work-ui--cut (s)
+  (if (> (length s) drgnx-work-ui-graph-title-max) (concat (substring s 0 (1- drgnx-work-ui-graph-title-max)) "…") s))
+
+(defun drgnx-work-ui--metrics ()
+  "(CHAR-WIDTH . LINE-HEIGHT) in pixels of the default font (a sensible minimum without a frame)."
+  (cons (max 7 (default-font-width)) (max 14 (default-font-height))))
+
+(defun drgnx-work-ui-graph-layout ()
+  "The graph's boxes and edges: (:boxes (BOX…) :edges ((FROM TO)…) :w W :h H).  A BOX is (:id :kind
+:node :lines :tip :x :y :w :h :merged).  Columns: specs | plans | branches; a spec sits beside its plans."
+  (let* ((m (drgnx-work-ui--metrics)) (cw (car m)) (lh (cdr m)) (pad (/ lh 2)) (vgap (/ lh 2)) (hgap (* 6 cw))
+         (box (lambda (id kind node lines tip)
+                (list :id id :kind kind :node node :lines lines :tip tip :merged (plist-get node :merged)
+                      :w (+ (* 2 pad) (* cw (apply #'max (mapcar #'string-width lines))))
+                      :h (+ (* 2 pad) (* lh (length lines))))))
+         (plan-box (lambda (p)
+                     (let* ((c (drgnx-work-counts (plist-get p :id))) (n (plist-get c :commits))
+                            (counts (format "%d/%d tasks · %d commit%s" (car (plist-get c :tasks)) (cdr (plist-get c :tasks)) n (if (= n 1) "" "s"))))
+                       (funcall box (plist-get p :id) 'plan p (list (drgnx-work-ui--cut (plist-get p :title)) counts)
+                                (format "%s\n%s%s" (plist-get p :title) counts (if (plist-get p :merged) " · merged" ""))))))
+         (y vgap) cols boxes edges)
+    ;; rows first (x later, from each column's widest box)
     (dolist (r (drgnx-work-ui--roots))
-      (let ((plans (if (eq (plist-get r :kind) 'plan) (list r)
-                     (push (format "  %s [label=%s, shape=note];" (drgnx-work-ui--q (plist-get r :id)) (drgnx-work-ui--q (plist-get r :title))) out)
-                     (seq-filter (lambda (n) (eq (plist-get n :kind) 'plan)) (drgnx-work-ui--kids r)))))
+      (let* ((spec (and (eq (plist-get r :kind) 'spec) r))
+             (plans (if spec (seq-filter (lambda (n) (eq (plist-get n :kind) 'plan)) (drgnx-work-ui--kids r)) (list r)))
+             (top y))
         (dolist (p plans)
-          (let* ((c (drgnx-work-counts (plist-get p :id))) (n (plist-get c :commits)))
-            (push (format "  %s [label=%s%s];" (drgnx-work-ui--q (plist-get p :id))
-                          (concat "\"" (replace-regexp-in-string "[\"\\]" "\\\\\\&" (plist-get p :title))
-                                  (format "\\n%d/%d tasks · %d commit%s" (car (plist-get c :tasks)) (cdr (plist-get c :tasks)) n (if (= n 1) "" "s"))
-                                  "\"")
-                          (if (plist-get p :merged) ", style=dashed" ""))
-                  out)
-            (unless (eq r p) (push (format "  %s -> %s;" (drgnx-work-ui--q (plist-get r :id)) (drgnx-work-ui--q (plist-get p :id))) out))
-            (when-let* ((b (plist-get p :branch)))
-              (push (format "  %s [shape=ellipse];" (drgnx-work-ui--q (concat "branch " b))) out)
-              (push (format "  %s -> %s;" (drgnx-work-ui--q (plist-get p :id)) (drgnx-work-ui--q (concat "branch " b))) out))))))
-    (string-join (nreverse (cons "}" out)) "\n")))
+          (let ((pb (funcall plan-box p)))
+            (setq pb (plist-put pb :y y) pb (plist-put pb :col 1))
+            (push pb boxes)
+            (when-let* ((name (plist-get p :branch)))
+              (let* ((bid (or (car (car (drgnx-work-edges-from (plist-get p :id) 'on-branch))) (concat "branch " name)))
+                     (bb (funcall box bid 'branch p (list name) (format "branch %s%s" name (if (plist-get p :worktree) (concat "\n" (plist-get p :worktree)) "")))))
+                (setq bb (plist-put bb :y y) bb (plist-put bb :col 2))
+                (push bb boxes)
+                (push (list (plist-get p :id) bid) edges)))
+            (setq y (+ y (plist-get pb :h) vgap))))
+        (when spec
+          (let* ((sb (funcall box (plist-get spec :id) 'spec spec (list (drgnx-work-ui--cut (plist-get spec :title))) (plist-get spec :title)))
+                 (h (plist-get sb :h)))
+            ;; beside its plans, centred; a spec taller than its plans pushes the next rows down
+            (setq sb (plist-put sb :y (max top (- (/ (+ top y (- vgap)) 2) (/ h 2)))) sb (plist-put sb :col 0))
+            (setq y (max y (+ (plist-get sb :y) h vgap)))
+            (push sb boxes)
+            (dolist (p plans) (push (list (plist-get spec :id) (plist-get p :id)) edges))))))
+    (dotimes (c 3) (push (apply #'max 0 (mapcar (lambda (b) (if (eql (plist-get b :col) c) (plist-get b :w) 0)) boxes)) cols))
+    (setq cols (nreverse cols))
+    (let ((xs (list hgap (+ hgap (nth 0 cols) hgap) (+ hgap (nth 0 cols) hgap (nth 1 cols) hgap))))
+      (dolist (b boxes) (plist-put b :x (nth (plist-get b :col) xs)))
+      (list :boxes (nreverse boxes) :edges (nreverse edges)
+            :w (+ (nth 2 xs) (nth 2 cols) hgap) :h (+ y vgap)))))
+
+(defun drgnx-work-ui--colour (face attr)
+  "FACE's ATTR colour as the theme sets it, or currentColor (the image's foreground) when it has none."
+  (let ((c (face-attribute face attr nil t)))
+    (if (and (stringp c) (not (string-prefix-p "unspecified" c))) c "currentColor")))
+
+(defun drgnx-work-ui--box-face (b)
+  (pcase (plist-get b :kind) ('spec 'drgnx-work-ui-graph-spec) ('branch 'drgnx-work-ui-graph-branch)
+         (_ (if (plist-get b :merged) 'drgnx-work-ui-graph-merged 'drgnx-work-ui-graph-plan))))
+
+(defun drgnx-work-ui-graph-svg (layout)
+  "The SVG text of LAYOUT (`drgnx-work-ui-graph-layout'), in the theme's colours."
+  (let* ((m (drgnx-work-ui--metrics)) (lh (cdr m)) (pad (/ lh 2))
+         (svg (svg-create (plist-get layout :w) (plist-get layout :h)))
+         (bg (let ((c (drgnx-work-ui--colour 'default :background))) (if (equal c "currentColor") "none" c)))
+         (by-id (lambda (id) (seq-find (lambda (b) (equal (plist-get b :id) id)) (plist-get layout :boxes))))
+         (edge (drgnx-work-ui--colour 'drgnx-work-ui-graph-edge :foreground)))
+    (pcase-dolist (`(,from ,to) (plist-get layout :edges))
+      (let* ((a (funcall by-id from)) (b (funcall by-id to))
+             (x1 (+ (plist-get a :x) (plist-get a :w))) (y1 (+ (plist-get a :y) (/ (plist-get a :h) 2)))
+             (x2 (plist-get b :x)) (y2 (+ (plist-get b :y) (/ (plist-get b :h) 2))) (mx (/ (+ x1 x2) 2)))
+        (svg-node svg 'path :d (format "M%d,%d C%d,%d %d,%d %d,%d" x1 y1 mx y1 mx y2 x2 y2)
+                  :fill "none" :stroke edge :stroke-width 1.5)))
+    (dolist (b (plist-get layout :boxes))
+      (let* ((face (drgnx-work-ui--box-face b)) (fg (drgnx-work-ui--colour face :foreground)))
+        (svg-rectangle svg (plist-get b :x) (plist-get b :y) (plist-get b :w) (plist-get b :h)
+                       :rx (/ pad 2) :fill bg :stroke fg :stroke-width (if (eq (plist-get b :kind) 'spec) 2 1)
+                       :stroke-dasharray (if (plist-get b :merged) "4,3" "none"))
+        (seq-do-indexed (lambda (line i)
+                          (svg-text svg line :x (+ (plist-get b :x) pad) :y (+ (plist-get b :y) pad (* lh i) (round (* lh 0.8)))
+                                    :fill (if (> i 0) (drgnx-work-ui--colour 'drgnx-work-ui-graph-edge :foreground) fg)
+                                    :font-size (round (* lh 0.75))
+                                    :font-weight (if (eq (plist-get b :kind) 'spec) "bold" "normal")))
+                        (plist-get b :lines))))
+    (with-temp-buffer (svg-print svg) (buffer-string))))
+
+(defun drgnx-work-ui--graph-open (b)
+  "Open what box B shows: a spec's or plan's file, a branch's worktree.  Says why when it cannot."
+  (let ((node (plist-get b :node)))
+    (pcase (plist-get b :kind)
+      ('branch (if-let* ((wt (plist-get node :worktree)) ((file-directory-p wt)))
+                   (progn (drgnx-work-ui--show-worktree wt) wt)
+                 (message "Work: branch %s has no worktree" (car (plist-get b :lines)))))
+      (_ (let ((path (plist-get node :path)))
+           (if (and path (file-readable-p path)) (pop-to-buffer (find-file-noselect path))
+             (message "Work: %s is gone" (or path (plist-get node :title)))))))))
+
+(defvar drgnx-work-ui--graph-spots nil "Alist hot-spot id → the box it is (the graph shown last).")
+
+(defun drgnx-work-ui-graph-click (event)
+  "Open what the box under the click EVENT shows (its hot spot is in the click's position)."
+  (interactive "e")
+  (if-let* ((box (alist-get (posn-area (event-start event)) drgnx-work-ui--graph-spots)))
+      (drgnx-work-ui--graph-open box)
+    (message "Work: click a box to open it")))
 
 (defun drgnx-work-ui-graph ()
-  "Show the tracker as a graph (Graphviz; without it, the DOT text).  Returns the buffer."
+  "Show specs, plans and branches as a graph (svg.el): click a box to open it.  Returns the buffer."
   (interactive)
-  (let ((dot (drgnx-work-ui-dot)) (b (get-buffer-create "*work graph*")) (dot-bin (executable-find "dot")))
+  (unless (image-type-available-p 'svg)
+    (user-error "Show Work as Graph needs an Emacs with SVG support (librsvg); the Work tab shows the same tree"))
+  (let* ((layout (drgnx-work-ui-graph-layout)) (map (make-sparse-keymap)) (areas nil) (spots nil) (i 0)
+         (b (get-buffer-create "*work graph*")))
+    (dolist (box (plist-get layout :boxes))
+      (let ((area (intern (format "drgnx-work-box-%d" (cl-incf i)))))
+        (push (list (cons 'rect (cons (cons (plist-get box :x) (plist-get box :y))
+                                      (cons (+ (plist-get box :x) (plist-get box :w)) (+ (plist-get box :y) (plist-get box :h)))))
+                    area (list 'help-echo (plist-get box :tip) 'pointer 'hand))
+              areas)
+        (push (cons area box) spots)
+        ;; a click comes as mouse-1 with the hot spot in its position, or prefixed by it: both open
+        (define-key map (vector area 'mouse-1) #'drgnx-work-ui-graph-click)))
+    (define-key map [mouse-1] #'drgnx-work-ui-graph-click)
+    (setq drgnx-work-ui--graph-spots spots)
     (with-current-buffer b
       (let ((inhibit-read-only t))
         (erase-buffer)
-        (fundamental-mode)
-        (if (and dot-bin (display-images-p) (image-type-available-p 'svg))
-            (let ((svg (with-temp-buffer
-                         (insert dot)
-                         (and (eql 0 (call-process-region (point-min) (point-max) dot-bin t t nil "-Tsvg")) (buffer-string)))))
-              (if svg (insert-image (create-image svg 'svg t)) (insert dot)))
-          (insert dot)
-          (unless dot-bin (message "Work: install Graphviz (dot) to see this as a graph"))))
-      (goto-char (point-min))
-      (setq buffer-read-only t))
+        (special-mode)
+        (let ((img (create-image (drgnx-work-ui-graph-svg layout) 'svg t :scale 1.0
+                                 :foreground (drgnx-work-ui--colour 'default :foreground))))
+          ;; the hot spots in the image's own pixels (it is never scaled); set after `create-image', which
+          ;; would measure the image for them — impossible without a window system
+          (setf (image-property img :map) (nreverse areas))
+          (insert (propertize " " 'display img 'keymap map 'pointer 'hand)))
+        (goto-char (point-min))))
     (pop-to-buffer b)
     b))
 
@@ -313,7 +423,7 @@ Returns the process."
       (drgnx-wb-place "\\`\\*\\(commit: \\|work graph\\*\\)" 'editor))
     (pcase-dolist (`(,id ,title ,fn ,doc)
                    '((work-view "Show Work" drgnx-work-ui-view "Specs, plans, tasks, TODOs and commits, in the right dock")
-                     (work-graph "Show Work as Graph" drgnx-work-ui-graph "Specs, plans and branches drawn with Graphviz")
+                     (work-graph "Show Work as Graph" drgnx-work-ui-graph "Specs, plans and branches as a graph; click a box to open it")
                      (work-start-agent "Start Agent on Task…" drgnx-work-ui-start-agent "An agent on this task; its commits are recorded for it")
                      (work-open-worktree "Open Plan's Worktree" drgnx-work-ui-open-worktree "The worktree of this plan, in the Explorer")))
       (drgnx-command-define id :category "Work" :title title :command fn :doc doc))

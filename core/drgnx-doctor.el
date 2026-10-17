@@ -77,7 +77,7 @@ DEV non-nil: only run for `drgnx doctor --dev' (tools for developing drgnx)."
           :packages (condition-case err (progn (require 'drgnx-pkg) (drgnx-pkg-status))
                       (error (list :error (error-message-string err))))
           :sqlite (and (fboundp 'sqlite-available-p) (sqlite-available-p))
-          :dot (and (executable-find "dot") t)
+          :svg (image-type-available-p 'svg)
           :work-plans (drgnx-doctor--work-plans))))
 
 (defun drgnx-doctor--state-file (name)
@@ -177,12 +177,12 @@ DEV non-nil: only run for `drgnx doctor --dev' (tools for developing drgnx)."
                                  "run them again from Help → Welcome, or drgnx onboard --step ID"))
                    (t (list 'ok (format "%d steps done" (length s)) nil))))))
 
-(drgnx-doctor-define 'work :group "drgnx" :doc "The work tracker (SQLite in Emacs; Graphviz for its graph)"
+(drgnx-doctor-define 'work :group "drgnx" :doc "The work tracker (SQLite in Emacs; SVG for its graph)"
   :check (lambda (f)
            (cond ((not (plist-get f :sqlite)) (list 'fail "this Emacs has no SQLite: the work tracker is off" "use an Emacs built with SQLite (the installer's does)"))
                  ((null (plist-get f :work-plans)) (list 'info "nothing scanned yet" "drgnx work scan (or Show Work)"))
-                 ((not (plist-get f :dot)) (list 'warn (format "%d plans tracked; no Graphviz" (plist-get f :work-plans))
-                                                "install graphviz to see Show Work as Graph drawn (it shows the DOT text until then)"))
+                 ((not (plist-get f :svg)) (list 'warn (format "%d plans tracked; this Emacs cannot show SVG: no Work graph" (plist-get f :work-plans))
+                                                drgnx-doctor-install-hint))
                  (t (list 'ok (format "%d plans tracked" (plist-get f :work-plans)) nil)))))
 
 (drgnx-doctor-define 'key-conflicts :group "drgnx" :doc "Key profile conflicts and keys.eld problems (from the last session)"

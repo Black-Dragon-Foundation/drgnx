@@ -1,6 +1,6 @@
 ;;; drgnx-work-test.el --- live: the Work tab in a GUI session -*- lexical-binding: t -*-
 ;; The tab scans in another Emacs and fills in, sits in the right dock, a task opens its plan in the
-;; editor at its line, the graph opens in the editor, nothing unrouted.
+;; editor at its line, the graph opens in the editor and a click on a box opens its plan, nothing unrouted.
 (require 'ert)
 (require 'drgnx-ui)
 
@@ -38,8 +38,21 @@
                                                    (list (file-name-nondirectory (buffer-file-name)) (line-number-at-pos)
                                                          (and (drgnx-signal-editor-window-p (selected-window)) t)))")
                          '("alpha.md" 9 t)))
-          (should (drgnx-live-wk--q sess "(progn (drgnx-work-ui-graph)
-                                           (and (seq-find (lambda (w) (and (equal (buffer-name (window-buffer w)) \"*work graph*\") (drgnx-signal-editor-window-p w))) (window-list)) t))"))
+          ;; the graph opens in the editor; a click on the plan's box (by pixel, as a person would) opens the plan
+          (let ((xy (drgnx-live-wk--q sess (concat (format "(progn (kill-buffer (get-file-buffer %S))      ; the plan closed again
+                                                   (drgnx-work-ui-graph) (redisplay t)" (concat root "docs/plans/alpha.md"))
+                                           "
+                                                   (let* ((w (get-buffer-window \"*work graph*\")) (o (drgnx-uitest--text-origin w))
+                                                          (p (posn-x-y (posn-at-point 1 w)))
+                                                          (b (seq-find (lambda (b) (string-prefix-p \"Plan Alpha\" (car (plist-get b :lines))))
+                                                                       (plist-get (drgnx-work-ui-graph-layout) :boxes))))
+                                                     (and (drgnx-signal-editor-window-p w)
+                                                          (list (+ (car o) (car p) (plist-get b :x) (/ (plist-get b :w) 2))
+                                                                (+ (cdr o) (cdr p) (plist-get b :y) (/ (plist-get b :h) 2))))))"))))
+            (should xy)
+            (drgnx-ui-measure sess (list (list :x (car xy) :y (cadr xy))))
+            (should (equal (drgnx-live-wk--q sess "(and (buffer-file-name (window-buffer (selected-window))) (file-name-nondirectory (buffer-file-name (window-buffer (selected-window)))))")
+                           "alpha.md")))
           (drgnx-ui-measure sess nil)
           (should (equal (drgnx-live-wk--q sess "(length drgnx-wb-unrouted)") 0)))
       (when s (drgnx-ui-stop (plist-get s :name)))

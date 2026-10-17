@@ -80,11 +80,16 @@ Emacs never waits, and the tab redraws when the scan is done — and after each 
 - **Start Agent on Task…** starts an agent on the task (or TODO, or plan) at point, in the plan's worktree (else
   its repository, else the plan's folder); its commits are recorded for that task.
 - **Open Plan's Worktree** adds the plan's worktree to the Explorer.
-- **Show Work as Graph** draws the specs, the plans shown (with their task and commit counts; merged ones dashed)
-  and their branches with Graphviz (`dot`); without Graphviz it shows the DOT text.
+- **Show Work as Graph** draws the specs, the plans shown (the tab's filter and hide-merged apply; each with its tasks
+  done and commits; merged ones dashed) and their branches, in three columns, with Emacs's own `svg.el` — no other
+  program. Every box is a hot spot: click a spec or plan to open its file, a branch to add its worktree to the
+  Explorer; hovering shows the full title and counts. Its colours come from your theme through the faces
+  `drgnx-work-ui-graph-spec`, `-plan`, `-merged`, `-branch` and `-edge` (customise them, or let the theme), so the
+  next graph follows a theme switch. It needs an Emacs with SVG support (librsvg; every graphical build drgnx
+  installs has it). 300 plans draw in about 0.4 s.
 
 `drgnx doctor` checks `work`: Emacs has SQLite (else the tracker is off), how many plans are tracked, and whether
-Graphviz is there for the graph.
+this Emacs can show SVG (else there is no graph; the tab shows the same tree).
 
 ## Status
 
