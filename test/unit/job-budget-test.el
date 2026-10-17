@@ -91,4 +91,13 @@
                                              '(:code -32000 :message "the agent exited")))
     (should (drgnx-job--provider-limit-p (drgnx-agents--make :id "s-z" :status 'idle) '(:code 429 :message "x")))))
 
+(ert-deftest drgnx-job/after-a-fallback-the-summary-shows-the-new-profile ()
+  (drgnx-job-run-test--with "# One\n\n### Task 1: one\n"
+    (let* ((drgnx-job-max-agents 0) (id (drgnx-job-propose plan)) (tid (concat id "#1")))
+      (drgnx-job-approve id)
+      (should (equal (plist-get (car (plist-get (drgnx-job-summary id) :tasks)) :profile) "mock"))                                   ; no agent yet: the route's first
+      (push (drgnx-agents--make :id "s-b" :name "b" :profile "mock-b" :cwd repo :task tid :job id :status 'idle) drgnx-agents--sessions)
+      (drgnx-coord-force-status tid "running" "s-b")
+      (should (equal (plist-get (car (plist-get (drgnx-job-summary id) :tasks)) :profile) "mock-b")))))
+
 ;;; job-budget-test.el ends here

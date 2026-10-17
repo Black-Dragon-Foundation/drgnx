@@ -808,7 +808,9 @@ permissions — and, with DECISIONS, its decision log (newest first)."
             :spent (plist-get (drgnx-work-db-spend :job id) :cost) :estimate (plist-get data :estimate)
             :tasks (mapcar (lambda (task)
                              (list :n (plist-get task :n) :title (plist-get task :title) :role (plist-get task :role)
-                                   :profile (car (drgnx-job-route (intern (or (plist-get task :role) "implement"))))
+                                   :profile (if-let* ((s (drgnx-job--session (plist-get task :agent))))   ; after a fall-back: its agent's
+                                                (drgnx-agent-session-profile s)
+                                              (car (drgnx-job-route (intern (or (plist-get task :role) "implement")))))
                                    :status (plist-get task :status) :agent (plist-get task :agent) :deps (plist-get task :deps)))
                            (drgnx-coord-tasks id))
             :agents (mapcar (lambda (s) (list :id (drgnx-agent-session-id s) :profile (drgnx-agent-session-profile s)
