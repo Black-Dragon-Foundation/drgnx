@@ -15,6 +15,7 @@
 (require 'drgnx-paths)
 (require 'drgnx-gateway)
 (require 'drgnx-jobs)
+(require 'drgnx-agents)
 
 (defvar drgnx-hub-event-functions nil
   "Functions called with (EVENT DATA) for each event the hub sends this Emacs (after `drgnx-hub-connect'); EVENT a
@@ -139,18 +140,85 @@ answer a ping.  A lock whose process is gone is taken over.  Signals when anothe
     ("ping" (list :pid (emacs-pid)))
     ("status" (list :pid (emacs-pid) :socket (drgnx-hub-socket) :gateway_port (drgnx-gateway-port)
                     :registrations (length (drgnx-gateway-registrations)) :started drgnx-hub--started))
-    ("gateway/register"
-     (cl-loop for (k v) on (plist-get params :keys) by #'cddr
-              do (drgnx-gateway-set-key (intern (substring (symbol-name k) 1)) v))
-     (let ((token (drgnx-gateway-register (list :job (plist-get params :job) :task (plist-get params :task)
-                                                :agent (plist-get params :agent)
-                                                :chain (drgnx-hub--chain (plist-get params :chain))
-                                                :budget (plist-get params :budget)))))
-       (drgnx-hub--save-registrations)
-       (list :token token :url (format "http://127.0.0.1:%d" (drgnx-gateway-port)))))
+    ("gateway/register" (drgnx-hub-register params))
     ("gateway/unregister" (drgnx-gateway-unregister (plist-get params :token)) (drgnx-hub--save-registrations) t)
     ("spend" (drgnx-work-db-spend :job (plist-get params :job) :task (plist-get params :task) :agent (plist-get params :agent)))
+    ("agents/start"
+     (let ((s (drgnx-agents-start (plist-get params :profile) (plist-get params :cwd) (plist-get params :task) (plist-get params :job))))
+       (list :id (drgnx-agent-session-id s) :name (drgnx-agent-session-name s))))
+    ("agents/list" (list :sessions (vconcat (mapcar #'drgnx-hub--snapshot-lisp (drgnx-agents-sessions)))))
+    ("agents/get" (let ((s (drgnx-hub--session params)))
+                    (list :lisp (drgnx-hub--snapshot-lisp s) :entries (drgnx-hub--lisp (drgnx-agent-session-entries s)))))
+    ("agents/send" (drgnx-agents-send (drgnx-hub--session params) (plist-get params :text)) t)
+    ("agents/stop" (drgnx-agents-stop (drgnx-hub--session params)) t)
+    ("agents/kill" (drgnx-agents-kill (drgnx-hub--session params)) t)
+    ("agents/permission"
+     ;; the user's answer, from their own Emacs: the only way a permission request is answered
+     (let* ((s (drgnx-hub--session params))
+            (item (or (seq-find (lambda (p) (equal (format "%s" (plist-get p :id)) (format "%s" (plist-get params :request))))
+                                (drgnx-agent-session-permissions s))
+                      (error "No such permission request"))))
+       (drgnx-agents-answer-permission s item (plist-get params :option))
+       t))
     (_ (list :error (format "no method %s" method)))))
+
+(defun drgnx-hub-serving-p () "Is this Emacs the hub?" (and drgnx-hub--server (process-live-p drgnx-hub--server) t))
+
+(defun drgnx-hub-register (params)
+  "Register an agent with the gateway: PARAMS (:job :task :agent :chain ((PROVIDER MODEL)…) :budget :keys (:PROVIDER
+KEY…)), keys held in memory.  (:token :url)."
+  (cl-loop for (k v) on (plist-get params :keys) by #'cddr
+           do (drgnx-gateway-set-key (intern (substring (symbol-name k) 1)) v))
+  (let ((token (drgnx-gateway-register (list :job (plist-get params :job) :task (plist-get params :task)
+                                             :agent (plist-get params :agent)
+                                             :chain (drgnx-hub--chain (append (plist-get params :chain) nil))
+                                             :budget (plist-get params :budget)))))
+    (drgnx-hub--save-registrations)
+    (list :token token :url (format "http://127.0.0.1:%d" (drgnx-gateway-port)))))
+
+;;;; Agent sessions (held here; editors mirror them)
+
+(defun drgnx-hub--lisp (v) (let ((print-length nil) (print-level nil) (print-circle nil)) (prin1-to-string v)))
+
+(defun drgnx-hub--session (params)
+  (or (drgnx-agents-get (plist-get params :id)) (error "No agent session %s" (plist-get params :id))))
+
+(defun drgnx-hub--snapshot (s)
+  "What an editor mirrors of session S (everything but the transcript), as a plist."
+  (list :id (drgnx-agent-session-id s) :name (drgnx-agent-session-name s) :profile (drgnx-agent-session-profile s)
+        :cwd (drgnx-agent-session-cwd s) :task (drgnx-agent-session-task s) :job (drgnx-agent-session-job s)
+        :status (drgnx-agent-session-status s) :via (drgnx-agent-session-via s) :mode (drgnx-agent-session-mode s)
+        :queue (drgnx-agent-session-queue s) :paused (drgnx-agent-session-paused s)
+        :permissions (mapcar (lambda (p) (list :id (plist-get p :id) :title (plist-get p :title) :tool (plist-get p :tool)
+                                               :options (plist-get p :options)))
+                             (drgnx-agent-session-permissions s))
+        :usage (drgnx-agent-session-usage s) :commands (drgnx-agent-session-commands s)
+        :capabilities (drgnx-agent-session-capabilities s) :exit (drgnx-agent-session-exit s)
+        :stderr (let ((e (drgnx-agent-session-stderr s))) (and e (substring e (max 0 (- (length e) 2000)))))
+        :entries-count (length (drgnx-agent-session-entries s))))
+
+(defun drgnx-hub--snapshot-lisp (s) (drgnx-hub--lisp (drgnx-hub--snapshot s)))
+
+(defvar drgnx-hub--sent (make-hash-table :test #'equal) "Session id → the entries last sent to subscribers (copies).")
+(defvar drgnx-hub--flush-timers (make-hash-table :test #'equal))
+
+(defun drgnx-hub--agent-changed (s)
+  "Session S changed: tell subscribers soon (one message per burst of changes)."
+  (let ((id (drgnx-agent-session-id s)))
+    (unless (gethash id drgnx-hub--flush-timers)
+      (puthash id (run-at-time 0.05 nil (lambda () (remhash id drgnx-hub--flush-timers) (drgnx-hub--flush s)))
+               drgnx-hub--flush-timers))))
+
+(defun drgnx-hub--flush (s)
+  "Send S's snapshot, and the entries that are new or changed since the last time, as `agent' / `agent-entries'."
+  (let* ((id (drgnx-agent-session-id s)) (sent (gethash id drgnx-hub--sent)) (changed nil) (i 0))
+    (dolist (e (drgnx-agent-session-entries s))
+      (unless (equal e (and sent (< i (length sent)) (aref sent i)))
+        (push (vector i (drgnx-hub--lisp e)) changed))
+      (setq i (1+ i)))
+    (puthash id (vconcat (mapcar #'copy-tree (drgnx-agent-session-entries s))) drgnx-hub--sent)
+    (drgnx-hub--broadcast 'agent (list :id id :lisp (drgnx-hub--snapshot-lisp s)))
+    (when changed (drgnx-hub--broadcast 'agent-entries (list :id id :entries (vconcat (nreverse changed)))))))
 
 (defun drgnx-hub--serve-request (conn json)
   (let ((id (plist-get json :id)) (method (plist-get json :method)))
@@ -201,6 +269,7 @@ Signals an error when a hub already serves there."
     (write-region (number-to-string (drgnx-gateway-port)) nil file nil 'silent))
   (drgnx-hub--load-registrations)
   (add-hook 'drgnx-gateway-event-functions #'drgnx-hub--broadcast)
+  (add-hook 'drgnx-agents-changed-functions #'drgnx-hub--agent-changed)
   (setq drgnx-hub--started (format-time-string "%FT%T%z")
         drgnx-hub--server
         (make-network-process :name "drgnx-hub" :family 'local :server t :service socket :noquery t
@@ -219,6 +288,8 @@ Signals an error when a hub already serves there."
   (dolist (c drgnx-hub--subscribers) (when (process-live-p c) (delete-process c)))
   (setq drgnx-hub--server nil drgnx-hub--subscribers nil)
   (remove-hook 'drgnx-gateway-event-functions #'drgnx-hub--broadcast)
+  (remove-hook 'drgnx-agents-changed-functions #'drgnx-hub--agent-changed)
+  (clrhash drgnx-hub--sent)
   (drgnx-gateway-stop)
   (clrhash drgnx-gateway--registrations))
 

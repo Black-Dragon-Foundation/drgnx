@@ -11,6 +11,8 @@
 ;;   crash       exits 3, "mock crashed" on stderr
 ;;   commit      commits in its directory: "agent work for $DRGNX_TASK"
 ;;   /compact    the context shrinks
+;;   coord TOOL JSON  starts the first server of its mcpServers (session/new) and calls TOOL with the JSON arguments;
+;;               says "coord: TEXT" (the tool's answer)
 ;;   anything else: "You said: …" in two chunks
 ;; Usage comes as a usage_update (:used :size 1000) at the end of each turn (claude-agent-acp's shape).
 ;; MOCK_ACP_NO_LOAD / MOCK_ACP_NO_STEER turn off session/load and steering; MOCK_ACP_STEER_FAILS
@@ -24,6 +26,28 @@
 (defvar mock--history nil "Alist session → updates, oldest first (for session/load).")
 (defvar mock--tokens nil "Alist session → tokens in context.")
 (defvar mock--sessions 0)
+(defvar mock--mcp nil "Alist session → the mcpServers it was given.")
+
+(defun mock--coord (sid tool args)
+  "Start SID's first MCP server, call TOOL with ARGS (JSON text), say its answer; then end the turn."
+  (let* ((spec (car (alist-get sid mock--mcp nil nil #'equal))) (out "") (done nil)
+         (process-environment (append (mapcar (lambda (e) (concat (plist-get e :name) "=" (plist-get e :value))) (plist-get spec :env))
+                                      process-environment))
+         (p (and spec (make-process :name "mock-mcp" :command (cons (plist-get spec :command) (plist-get spec :args))
+                                    :connection-type 'pipe :coding 'utf-8-unix :noquery t
+                                    :filter (lambda (_p s) (setq out (concat out s)))))))
+    (if (not p) (mock--steps sid (list (cons 0 (lambda () (mock--say sid "coord: no mcpServers")))))
+      (process-send-string p "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}\n")
+      (process-send-string p (format "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":%S,\"arguments\":%s}}\n"
+                                     tool (if (string-empty-p args) "{}" args)))
+      (let ((deadline (+ (float-time) 10)))
+        (while (and (not done) (< (float-time) deadline))
+          (accept-process-output p 0.05)
+          (dolist (line (split-string out "\n" t))
+            (let ((j (ignore-errors (json-parse-string line :object-type 'plist :array-type 'list :null-object nil :false-object nil))))
+              (when (equal (plist-get j :id) 2) (setq done (plist-get (car (plist-get (plist-get j :result) :content)) :text)))))))
+      (delete-process p)
+      (mock--steps sid (list (cons 0 (lambda () (mock--say sid (concat "coord: " (or done "no answer"))))))))))
 
 (defun mock--send (obj) (send-string-to-terminal (concat (json-serialize obj) "\n")))   ; flushed (princ is buffered)
 (defun mock--respond (id result) (mock--send (list :jsonrpc "2.0" :id id :result (or result :null))))
@@ -72,6 +96,8 @@
     (setf (alist-get sid mock--tokens 0 nil #'equal) (+ (alist-get sid mock--tokens 0 nil #'equal) (length text)))
     (mock--update sid (list :sessionUpdate "user_message_chunk" :content (list :type "text" :text text)) )
     (cond
+     ((string-match "\\`coord \\([a-z_]+\\) ?\\(.*\\)\\'" text)
+      (mock--coord sid (match-string 1 text) (match-string 2 text)))
      ((string-match-p "crash" text)
       (message "mock crashed") (sleep-for 0.1)
       (kill-emacs 3))
@@ -137,6 +163,7 @@
                               :authMethods [])))
      ((equal method "session/new")
       (let ((sid (format "mock-%d-%d" (emacs-pid) (cl-incf mock--sessions))))
+        (setf (alist-get sid mock--mcp nil nil #'equal) (plist-get params :mcpServers))
         (mock--respond id (list :sessionId sid))
         (run-at-time 0.01 nil (lambda () (mock--update sid '(:sessionUpdate "available_commands_update"
                                                                             :availableCommands [(:name "compact" :description "Compact the context")

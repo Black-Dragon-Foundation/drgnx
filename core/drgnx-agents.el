@@ -21,7 +21,7 @@
 
 (cl-defstruct (drgnx-agent-session (:constructor drgnx-agents--make) (:copier nil))
   name profile cwd conn acp-id (status 'starting) entries queue (mode 'queue) capabilities usage commands
-  permissions reviews stderr exit stopping paused turn draining task via gateway)
+  permissions reviews stderr exit stopping paused turn draining task via gateway id job remote)
 
 (defvar drgnx-agents-profiles nil
   "Alist NAME → plist (:command LIST :env (\"NAME=value\"…) :mode queue|steer|interrupt).  Read from
@@ -208,6 +208,8 @@ agents.eld (config dir) and the built-in ones; never holds secrets (keys come fr
 (declare-function drgnx-ai-key "drgnx-ai")
 (declare-function drgnx-hub-ensure "drgnx-hub")
 (declare-function drgnx-hub-call-sync "drgnx-hub")
+(declare-function drgnx-hub-serving-p "drgnx-hub")
+(declare-function drgnx-hub-register "drgnx-hub")
 (defvar drgnx-ai-gateway-kinds)
 
 (defvar drgnx-agents-use-gateway t
@@ -220,16 +222,20 @@ goes direct, and says so)."
   (condition-case err
       (progn
         (require 'drgnx-hub)
-        (drgnx-hub-ensure)
+        (unless (drgnx-hub-serving-p) (drgnx-hub-ensure))
         (let* ((chain (drgnx-ai-agent-gateway-chain kind))
                ;; keys this command can read (also from sources that ask) travel to the hub's memory
                (keys (cl-loop for (id . _) in chain
                               for key = (and (plist-get (drgnx-ai-provider id) :key-env) (drgnx-ai-key id t))
                               when key append (list (intern (concat ":" (symbol-name id))) key)))
-               (r (drgnx-hub-call-sync "gateway/register"
-                                       (list :task (drgnx-agent-session-task s) :agent (drgnx-agent-session-name s)
-                                             :chain (vconcat (mapcar (lambda (st) (vector (symbol-name (car st)) (cdr st))) chain))
-                                             :keys (or keys (make-hash-table))))))
+               (params (list :task (drgnx-agent-session-task s) :job (drgnx-agent-session-job s)
+                             :agent (drgnx-agent-session-name s)
+                             :chain (mapcar (lambda (st) (list (symbol-name (car st)) (cdr st))) chain)
+                             :keys keys))
+               (r (if (drgnx-hub-serving-p) (drgnx-hub-register params)
+                    (drgnx-hub-call-sync "gateway/register"
+                                         (plist-put (plist-put (copy-sequence params) :chain (vconcat (mapcar #'vconcat (plist-get params :chain))))
+                                                    :keys (or keys (make-hash-table)))))))
           (setf (drgnx-agent-session-via s) 'gateway (drgnx-agent-session-gateway s) (plist-get r :token))
           r))
     (error (setf (drgnx-agent-session-via s) 'direct)
@@ -256,12 +262,27 @@ can carry it, else the provider's (keys resolved now, never kept) — and DRGNX_
                                      (drgnx-agents--gateway s kind))))
           (and (drgnx-agent-session-task s) (list (concat "DRGNX_TASK=" (drgnx-agent-session-task s))))))
 
-(defun drgnx-agents--new (profile cwd &optional task)
+(defvar drgnx-agents-coordination t
+  "Non-nil: every agent gets drgnx's coordination tools (an MCP server, docs/develop/coordination.md).")
+
+(declare-function drgnx-coord-mcp-server-spec "drgnx-coord-mcp")
+
+(defun drgnx-agents--mcp-servers (s)
+  "The `mcpServers' S's agent gets: the coordination tools, as S's name."
+  (if (not drgnx-agents-coordination) []
+    (require 'drgnx-coord-mcp)
+    (vector (drgnx-coord-mcp-server-spec (drgnx-agent-session-name s) :job (drgnx-agent-session-job s)
+                                         :task (drgnx-agent-session-task s)))))
+
+(defun drgnx-agents-get (id) (seq-find (lambda (s) (equal (drgnx-agent-session-id s) id)) drgnx-agents--sessions))
+
+(defun drgnx-agents--new (profile cwd &optional task job)
   (let* ((base (format "%s · %s" profile (file-name-nondirectory (directory-file-name (expand-file-name cwd)))))
          (name base) (n 1))
     (while (seq-find (lambda (x) (equal (drgnx-agent-session-name x) name)) drgnx-agents--sessions)
       (setq n (1+ n) name (format "%s <%d>" base n)))
-    (let ((s (drgnx-agents--make :name name :profile profile :cwd (expand-file-name cwd) :task task)))
+    (let ((s (drgnx-agents--make :name name :profile profile :cwd (expand-file-name cwd) :task task :job job
+                                 :id (concat "s-" (substring (secure-hash 'sha1 (format "%s %s %s %s" name (float-time) (random) (emacs-pid))) 0 8)))))
       (push s drgnx-agents--sessions)
       (when task
         (require 'drgnx-work)                    ; the tracker notes where the work starts
@@ -275,16 +296,16 @@ can carry it, else the provider's (keys resolved now, never kept) — and DRGNX_
            (drgnx-agents--add s (list :type 'error :text (format "the agent did not start: %s" (error-message-string err))))
            (drgnx-agents--changed s))))
 
-(defun drgnx-agents-start (profile cwd &optional task)
+(defun drgnx-agents-start (profile cwd &optional task job)
   "Start a session of PROFILE in CWD; it is idle once the agent made it.  Returns the session.
 TASK (a work-tracker node id) is what the session works on: the agent gets it as DRGNX_TASK, and
-the commits each turn makes are recorded for it."
-  (let ((s (drgnx-agents--new profile cwd task)))
+the commits each turn makes are recorded for it.  JOB: the coordination job it belongs to."
+  (let ((s (drgnx-agents--new profile cwd task job)))
     (drgnx-agents--start-safely
      s (lambda ()
          (drgnx-agents--connect
           s (lambda ()
-              (drgnx-acp-request (drgnx-agent-session-conn s) "session/new" (list :cwd (drgnx-agent-session-cwd s) :mcpServers [])
+              (drgnx-acp-request (drgnx-agent-session-conn s) "session/new" (list :cwd (drgnx-agent-session-cwd s) :mcpServers (drgnx-agents--mcp-servers s))
                                  (lambda (r)
                                    (if (cdr r) (drgnx-agents--failed s (cdr r))
                                      (setf (drgnx-agent-session-acp-id s) (plist-get (car r) :sessionId)
@@ -306,7 +327,7 @@ its history is replayed into the transcript.  Needs an agent that can load sessi
               (if (memq (plist-get (drgnx-agent-session-capabilities s) :loadSession) '(nil :false))
                   (drgnx-agents--failed s "this agent cannot resume sessions (no session/load)")
                 (drgnx-acp-request (drgnx-agent-session-conn s) "session/load"
-                                   (list :sessionId session-id :cwd (drgnx-agent-session-cwd s) :mcpServers [])
+                                   (list :sessionId session-id :cwd (drgnx-agent-session-cwd s) :mcpServers (drgnx-agents--mcp-servers s))
                                    (lambda (r)
                                      (if (cdr r) (drgnx-agents--failed s (cdr r))
                                        (setf (drgnx-agent-session-status s) 'idle)
