@@ -625,4 +625,13 @@
                                     :modules-dir (concat root "mods"))
                   :not-a-module)))))
 
+(ert-deftest drgnx-pkg/the-service-unit-quotes-its-paths ()
+  ;; M5-13: systemd splits ExecStart at spaces and expands % and $.
+  (let ((invocation-directory "/opt/my emacs/bin/") (invocation-name "emacs-pgtk")
+        (drgnx-dir "/src/100% \"drgnx\"/"))
+    (should (string-match-p (regexp-quote "\nExecStart=\"/opt/my emacs/bin/emacs-pgtk\" --fg-daemon=drgnx \"--init-directory=/src/100%% \\\"drgnx\\\"/init\"\n")
+                            (drgnx-pkg-service-unit))))
+  (let ((invocation-directory "/usr/bin/") (invocation-name "emacs") (drgnx-dir "/src/drgnx/"))
+    (should (string-match-p "\nExecStart=/usr/bin/emacs --fg-daemon=drgnx --init-directory=/src/drgnx/init\n" (drgnx-pkg-service-unit)))))
+
 ;;; pkg-test.el ends here

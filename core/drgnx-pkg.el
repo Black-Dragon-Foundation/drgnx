@@ -641,13 +641,23 @@ with every module off.  The user's own files are never changed."
 
 ;;;; The service unit
 
+(defun drgnx-pkg--systemd-word (s)
+  "S as one word of a systemd ExecStart= line: % and $ doubled (no specifiers, no variables), and in
+double quotes, with \\ and \" escaped, when it has spaces or quotes."
+  (let ((s (replace-regexp-in-string "[%$]" (lambda (m) (concat m m)) s t t)))
+    (if (string-match-p "[[:space:]\"'\\;]" s)
+        (concat "\"" (replace-regexp-in-string "[\"\\]" (lambda (m) (concat "\\" m)) s t t) "\"")
+      s)))
+
 (defun drgnx-pkg-service-unit (&optional dir)
-  "The systemd user unit that runs drgnx as a daemon; written to DIR/drgnx.service when DIR is given.
-Never installed or enabled: that is the user's step (docs/guide/packages.md)."
+  "The systemd user unit that runs drgnx as a daemon — with the Emacs running this (bin/drgnx:
+$DRGNX_EMACS); written to DIR/drgnx.service when DIR is given.  Never installed or enabled: that is the
+user's step (docs/guide/packages.md)."
   (let* ((emacs (expand-file-name invocation-name invocation-directory))
          (unit (concat "[Unit]\nDescription=drgnx (Emacs daemon)\nDocumentation=https://github.com/Black-Dragon-Foundation/drgnx\n\n"
                        "[Service]\nType=notify\n"
-                       (format "ExecStart=%s --fg-daemon=drgnx --init-directory=%s\n" emacs (expand-file-name "init" drgnx-dir))
+                       (format "ExecStart=%s --fg-daemon=drgnx %s\n" (drgnx-pkg--systemd-word emacs)
+                               (drgnx-pkg--systemd-word (concat "--init-directory=" (expand-file-name "init" drgnx-dir))))
                        "Restart=on-failure\n\n[Install]\nWantedBy=default.target\n")))
     (when dir
       (make-directory dir t)
