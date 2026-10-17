@@ -228,7 +228,8 @@
                    (setq asked (list role kind payload))
                    (funcall callback (vector (drgnx-search-query-test--embed-text (aref (plist-get payload :inputs) 0)))
                             '(:provider stub :model "stub-1")))))
-        (drgnx-search-async root "database connection rows" (lambda (r) (setq got r))))
+        (drgnx-search-async root "database connection rows" (lambda (r &optional _n) (setq got r)))
+        (drgnx-search-query-test--await (lambda () (not (eq got 'none)))))
       (should (equal (car asked) 'embed))
       (should (equal (cadr asked) 'embed))
       (should (equal (plist-get (caddr asked) :inputs) ["database connection rows"]))
@@ -240,7 +241,8 @@
     (let ((got 'none))
       (cl-letf (((symbol-function 'drgnx-ai-request)
                  (lambda (_r _k _p callback &rest _) (funcall callback nil '(:error "ollama: no answer")))))
-        (drgnx-search-async root "checksum" (lambda (r) (setq got r))))
+        (drgnx-search-async root "checksum" (lambda (r &optional _n) (setq got r)))
+        (drgnx-search-query-test--await (lambda () (not (eq got 'none)))))
       (should (equal (mapcar (lambda (x) (plist-get x :why)) got) '(keyword)))
       (should (string-match-p "ollama: no answer" drgnx-search-last-notice)))))
 
@@ -248,7 +250,7 @@
   (drgnx-search-query-test--with
     (let ((got 'none))
       (cl-letf (((symbol-function 'drgnx-ai-request) (lambda (&rest _) (error "asked"))))
-        (drgnx-search-async "/fake/never-indexed" "x" (lambda (r) (setq got r))))
+        (drgnx-search-async "/fake/never-indexed" "x" (lambda (r &optional _n) (setq got r))))
       (should (null got))
       (should (string-match-p "no index" drgnx-search-last-notice)))))
 
@@ -262,7 +264,8 @@
                  (lambda (_r _k payload callback &rest _)
                    (funcall callback (vector (drgnx-search-query-test--embed-text (aref (plist-get payload :inputs) 0)))
                             '(:provider stub :model "stub-1")))))
-        (drgnx-search-async root "checksum" (lambda (r) (setq got r))))
+        (drgnx-search-async root "checksum" (lambda (r &optional _n) (setq got r)))
+        (drgnx-search-query-test--await (lambda () (not (eq got 'none)))))
       (should (null got))                      ; called, with nothing (the meta cannot be read)
       (should (string-match-p "cannot be read" drgnx-search-last-notice)))))
 
@@ -275,7 +278,8 @@
                  (lambda (_r _k payload callback &rest _)
                    (funcall callback (vector (drgnx-search-query-test--embed-text (aref (plist-get payload :inputs) 0)))
                             '(:provider stub :model "stub-1")))))
-        (drgnx-search-async root "checksum" (lambda (r) (setq got r))))
+        (drgnx-search-async root "checksum" (lambda (r &optional _n) (setq got r)))
+        (drgnx-search-query-test--await (lambda () (not (eq got 'none)))))
       (should (consp got))                     ; the keyword hit survives
       (should (equal (mapcar (lambda (x) (plist-get x :why)) got) '(keyword)))
       (should (string-match-p "keyword" drgnx-search-last-notice)))))
@@ -285,7 +289,7 @@
     (drgnx-search-query-test--index db drgnx-search-query-test--texts)
     (let ((calls 0))
       (cl-letf (((symbol-function 'drgnx-ai-request) (lambda (&rest _) (error "no way to ask"))))
-        (drgnx-search-async root "checksum" (lambda (_r) (cl-incf calls))))
+        (drgnx-search-async root "checksum" (lambda (_r &optional _n) (cl-incf calls))))
       (should (= calls 1))
       (should (stringp drgnx-search-last-notice)))))
 
@@ -383,7 +387,7 @@
       (should (equal drgnx-search-last-notice "search is off for this project (.drgnx/search.eld)"))
       (setq drgnx-search-last-notice nil)
       (cl-letf (((symbol-function 'drgnx-ai-request) (lambda (&rest _) (setq asked t) (error "asked"))))
-        (drgnx-search-async root "database" (lambda (r) (setq got r))))
+        (drgnx-search-async root "database" (lambda (r &optional _n) (setq got r))))
       (should (null got))
       (should (equal drgnx-search-last-notice "search is off for this project (.drgnx/search.eld)"))
       (should-not asked))))
@@ -399,7 +403,7 @@ config error, as the indexer does."
       (should (string-match-p "\\`\\.drgnx/search\\.eld cannot be read: ." drgnx-search-last-notice))
       (setq drgnx-search-last-notice nil)
       (cl-letf (((symbol-function 'drgnx-ai-request) (lambda (&rest _) (setq asked t) (error "asked"))))
-        (drgnx-search-async root "database" (lambda (r) (setq got r))))
+        (drgnx-search-async root "database" (lambda (r &optional _n) (setq got r))))
       (should (null got))
       (should (string-match-p "cannot be read" drgnx-search-last-notice))
       (should-not asked))))
@@ -417,7 +421,8 @@ config error, as the indexer does."
                          (push default-directory seen)
                          (funcall callback (vector (drgnx-search-query-test--embed-text (aref (plist-get payload :inputs) 0)))
                                   '(:provider stub :model "stub-1")))))
-              (drgnx-search-async root "database" #'ignore))
+              (drgnx-search-async root "database" #'ignore)
+              (sleep-for 0.05))         ; the deferred search runs from a timer
             (should (equal seen (list root root))))
         (delete-directory elsewhere t)))))
 
@@ -432,6 +437,69 @@ config error, as the indexer does."
                  '(4 . "one")))
   (should (equal (drgnx-search-hit-line '(:start 7 :text "(defun f ()\n  1)"))
                  '(7 . "(defun f ()"))))
+
+(defun drgnx-search-query-test--await (pred)
+  "Let timers and processes run until PRED is non-nil (at most 2 s)."
+  (let ((until (+ (float-time) 2)))
+    (while (and (not (funcall pred)) (< (float-time) until)) (accept-process-output nil 0.01))))
+
+(ert-deftest drgnx-search/the-int8-rescore-matches-the-float-cosine ()
+  "On random unit vectors (the worst case for the fingerprints) the integer dot product ranks like the floats."
+  (random "drgnx-rescore")
+  (let* ((dims 128)
+         (unit (lambda () (drgnx-search-query-test--normalise
+                           (vconcat (cl-loop repeat dims collect (- (/ (random 2000) 1000.0) 1.0))))))
+         (q (funcall unit)) (qq (drgnx-search-quantize q)) (worst 0.0))
+    (dotimes (_ 50)
+      (let* ((v (funcall unit)) (vq (drgnx-search-quantize v))
+             (exact (cl-loop for a across q for b across v sum (* a b)))
+             (got (drgnx-search--dot (nth 1 qq) (nth 2 qq) (nth 1 vq) (nth 2 vq))))
+        (setq worst (max worst (abs (- exact got))))))
+    (should (< worst 0.02))))
+
+(ert-deftest drgnx-search/the-cache-keeps-one-entry ()
+  (drgnx-search-query-test--with
+    (drgnx-search-query-test--index db drgnx-search-query-test--texts)
+    (puthash "/some/other/project.db" (list '(1 1 nil) [] []) drgnx-search--cache)
+    (drgnx-search root "database" :embed (drgnx-search-query-test--embedder))
+    (should (= (hash-table-count drgnx-search--cache) 1))))
+
+(ert-deftest drgnx-search/new-chunks-extend-the-cached-fingerprints ()
+  "While an indexer adds files, a query reads only the new chunks; a removal makes it read everything."
+  (drgnx-search-query-test--with
+    (drgnx-search-query-test--index db drgnx-search-query-test--texts)
+    (let ((seen nil) (embed (drgnx-search-query-test--embedder)))
+      (advice-add 'drgnx-search-store-snapshot :filter-return
+                  (lambda (snap) (push (length (plist-get snap :ids)) seen) snap) '((name . spy)))
+      (unwind-protect
+          (progn
+            (drgnx-search root "database" :embed embed)
+            (drgnx-search-store-put-file
+             db "src/b.el" "h2" (list (list :start 1 :end 3 :text "zebra stripes pattern"
+                                            :vector (drgnx-search-query-test--embed-text "zebra stripes pattern"))))
+            (let ((r (drgnx-search root "zebra stripes pattern" :embed embed)))
+              (should (equal (plist-get (car r) :path) "src/b.el"))
+              (should (eq (plist-get (car r) :why) 'both)))
+            (should (equal seen '(1 4)))       ; first all four chunks, then the one new
+            (drgnx-search-store-delete-file db "src/b.el")
+            (drgnx-search root "database" :embed embed)
+            (should (equal seen '(4 1 4))))
+        (advice-remove 'drgnx-search-store-snapshot 'spy)))))
+
+(ert-deftest drgnx-search/async-loads-the-index-outside-the-request-callback ()
+  "The reply of the embedding request only schedules the search; the callback gets the notice itself."
+  (drgnx-search-query-test--with
+    (drgnx-search-query-test--index db drgnx-search-query-test--texts)
+    (let ((got 'none) (notice 'none) (inside nil))
+      (cl-letf (((symbol-function 'drgnx-ai-request)
+                 (lambda (_r _k _p callback &rest _)
+                   (funcall callback nil '(:error "ollama: no answer"))
+                   (setq inside got))))
+        (drgnx-search-async root "checksum" (lambda (r n) (setq got r notice n))))
+      (should (eq inside 'none))               ; nothing ran inside the sentinel
+      (drgnx-search-query-test--await (lambda () (not (eq got 'none))))
+      (should (consp got))
+      (should (string-match-p "ollama: no answer" notice)))))
 
 (provide 'search-query-test)
 ;;; search-query-test.el ends here

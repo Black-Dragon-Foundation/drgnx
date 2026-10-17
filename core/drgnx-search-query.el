@@ -72,26 +72,36 @@ Ties at the cut are taken in index order."
                 (setq taken (1+ taken)))))
           out)))))
 
-(defun drgnx-search--dot (query int8 scale)
-  "The float vector QUERY dotted with the int8 string INT8 (two's complement bytes) times SCALE."
-  (let ((sum 0.0) (i 0) (n (length query)))
+(defun drgnx-search--dot (qint8 qscale int8 scale)
+  "The cosine estimate of two quantized unit vectors: the int8 strings QINT8 (the question) and INT8 (a chunk),
+two's complement bytes, each times its SCALE.  The sum is in integers (fixnums, nothing boxed per
+dimension); only the result is a float."
+  (let ((sum 0) (i 0) (n (length qint8)))
     (while (< i n)
-      (let ((b (aref int8 i)))
-        (setq sum (+ sum (* (aref query i) (if (> b 127) (- b 256) b)))))
+      (let ((a (aref qint8 i)) (b (aref int8 i)))
+        (setq sum (+ sum (* (if (> a 127) (- a 256) a) (if (> b 127) (- b 256) b)))))
       (setq i (1+ i)))
-    (* sum scale)))
+    (* sum qscale scale)))
 
 ;;;; The cache
 
 (defvar drgnx-search--cache (make-hash-table :test #'equal)
-  "Index file → (STAMP IDS WORDS): the fingerprints as of the index's STAMP (`drgnx-search-store-stamp').")
+  "Index file → (STAMP IDS WORDS): the fingerprints as of the index's STAMP (`drgnx-search-store-stamp').
+Only the last project searched is kept.")
 
 (defun drgnx-search--fingerprints (db file)
-  "(IDS . WORDS) of the index DB (FILE): from the cache while its stamp is still the index's, else read."
+  "(IDS . WORDS) of the index DB (FILE): from the cache while its stamp is still the index's, else read —
+only the chunks added since, when none was removed (an indexer run adding files)."
   (let ((entry (gethash file drgnx-search--cache)) (stamp (drgnx-search-store-stamp db)))
     (unless (equal (car entry) stamp)
-      (let ((snap (drgnx-search-store-snapshot db)))
-        (setq entry (list (plist-get snap :stamp) (plist-get snap :ids) (plist-get snap :words)))
+      (let* ((ids (nth 1 entry))
+             (snap (drgnx-search-store-snapshot
+                    db (and entry (> (length ids) 0) (cons (nth 2 (car entry)) (aref ids (1- (length ids)))))))
+             (more (plist-get snap :append)))
+        (setq entry (list (plist-get snap :stamp)
+                          (if more (vconcat ids (plist-get snap :ids)) (plist-get snap :ids))
+                          (if more (vconcat (nth 2 entry) (plist-get snap :words)) (plist-get snap :words))))
+        (clrhash drgnx-search--cache)
         (puthash file entry drgnx-search--cache)))
     (cons (nth 1 entry) (nth 2 entry))))
 
@@ -151,8 +161,8 @@ for the chunks the vector ranking holds, else nil."
     (when (and vector (not problem))
       (condition-case err
           (pcase-let* ((`(,ids . ,words) (drgnx-search--fingerprints db file))
-                       (q (vconcat (mapcar #'float vector)))
-                       (qwords (drgnx-search-bits-words (car (drgnx-search-quantize q)))))
+                       (q (drgnx-search-quantize (vconcat (mapcar #'float vector))))
+                       (qwords (drgnx-search-bits-words (car q))))
             (cond
              ((zerop (length ids)))
              ((/= (* (length ids) (length qwords)) (length words))
@@ -160,7 +170,7 @@ for the chunks the vector ranking holds, else nil."
              (t
               (let* ((near (drgnx-search--nearest qwords words (length ids) (max drgnx-search--candidates-floor (* 50 k))))
                      (stored (drgnx-search-store-vectors db (mapcar (lambda (i) (aref ids i)) near))))
-                (setq sims (sort (mapcar (lambda (e) (cons (car e) (drgnx-search--dot q (cadr e) (cddr e)))) stored)
+                (setq sims (sort (mapcar (lambda (e) (cons (car e) (drgnx-search--dot (nth 1 q) (nth 2 q) (cadr e) (cddr e)))) stored)
                                  (lambda (a b) (> (cdr a) (cdr b)))))))))
         (error (setq sims nil)
                (drgnx-search--notice "the index is inconsistent (%s; re-index) — keyword results only"
@@ -249,13 +259,16 @@ prompt."
       (drgnx-search--finish root query (or k drgnx-search-default-k) vector info))))
 
 (cl-defun drgnx-search-async (root query callback &key k)
-  "Like `drgnx-search', but the question is embedded without waiting: CALLBACK gets the result list
-\(`drgnx-search-last-notice' is set by then).  CALLBACK is always called, once: with no index, no SQLite, search
-off or an unreadable .drgnx/search.eld at once with nil, and whatever goes wrong (the request, the index) with the keyword hits or nil and a notice.
+  "Like `drgnx-search', but the question is embedded without waiting: CALLBACK gets the result list and the
+notice (one line or nil — what `drgnx-search-last-notice' says for this search).  CALLBACK is always called,
+once: with no index, no SQLite, search off or an unreadable .drgnx/search.eld at once with nil, and whatever
+goes wrong (the request, the index) with the keyword hits or nil and a notice.  The index is read from a
+timer after the embedding answer, not inside the process sentinel that delivers it.
 As there, the `embed' role is ROOT's."
   (setq drgnx-search-last-notice nil)
   (let ((called nil))
-    (cl-flet ((answer (results) (unless called (setq called t) (funcall callback results))))
+    (cl-flet ((answer (results)
+                (unless called (setq called t) (funcall callback results drgnx-search-last-notice))))
       (if (not (drgnx-search--ready root))
           (answer nil)
         (condition-case err
@@ -263,13 +276,16 @@ As there, the `embed' role is ROOT's."
               (drgnx-ai-request
                'embed 'embed (list :inputs (vector query))
                (lambda (vectors info)
-                 (answer (condition-case err
-                             (let ((vector (drgnx-search--vector-of vectors)))
-                               (setq drgnx-search-last-notice nil)
-                               (unless vector (drgnx-search--no-embedding (plist-get info :error)))
-                               (drgnx-search--finish root query (or k drgnx-search-default-k) vector info))
-                           (error (drgnx-search--notice "the search failed (%s)" (error-message-string err))
-                                  nil))))))
+                 (run-at-time
+                  0 nil
+                  (lambda ()
+                    (answer (condition-case err
+                                (let ((vector (drgnx-search--vector-of vectors)))
+                                  (setq drgnx-search-last-notice nil)
+                                  (unless vector (drgnx-search--no-embedding (plist-get info :error)))
+                                  (drgnx-search--finish root query (or k drgnx-search-default-k) vector info))
+                              (error (drgnx-search--notice "the search failed (%s)" (error-message-string err))
+                                     nil))))))))
           (error (unless called
                    (drgnx-search--notice "the search failed (%s)" (error-message-string err))
                    (answer nil))))))))

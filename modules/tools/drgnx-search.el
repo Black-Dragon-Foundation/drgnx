@@ -116,8 +116,8 @@ and the echo area says why."
     (require 'drgnx-search-query)
     (message "Searching %s…" (abbreviate-file-name root))
     (drgnx-search-async root query
-                        (lambda (hits)
-                          (drgnx-search--show-safely buffer window root query hits drgnx-search-last-notice)))))
+                        (lambda (hits &optional notice)
+                          (drgnx-search--show-safely buffer window root query hits notice)))))
 
 (defconst drgnx-search--no-sqlite "this Emacs has no SQLite — semantic search needs Emacs built with SQLite"
   "What every search command says, and all it does, in an Emacs without SQLite.")
@@ -266,7 +266,7 @@ the project has no index or anything goes wrong.  Never asks anything."
             (require 'drgnx-search-query)
             (drgnx-search-async
              root question
-             (lambda (hits)
+             (lambda (hits &optional _notice)
                (finish (condition-case nil
                            (mapcar (lambda (h) (list :file (plist-get h :path) :line (max 1 (plist-get h :start))
                                                      :text (plist-get h :text)))

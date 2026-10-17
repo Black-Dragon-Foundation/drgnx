@@ -286,12 +286,67 @@
               (should (= (length (plist-get snap :ids)) 6)) ; the six chunks of before, none of the new one
               (should (= (plist-get (plist-get snap :meta) :indexed-at) 1.0))
               (should (= (length (plist-get snap :words)) 12))
-              (should (equal (plist-get snap :stamp) (list 1.0 6 6))))
+              (should (equal (plist-get snap :stamp) (list 1.0 1 nil))))   ; (indexed-at generation cut)
             ;; the next read sees the replacement
             (should (= (plist-get (drgnx-search-store-meta reader) :indexed-at) 2.0))
             (should (= (length (car (drgnx-search-store-fingerprints reader))) 1)))
         (advice-remove 'drgnx-search-bits-words hook)
         (sqlite-close reader)))))
+
+(ert-deftest drgnx-search-store/stamp-differs-when-a-replacement-reuses-the-ids ()
+  "Replacing a file's one chunk by another leaves count and highest id as they were: the generation moves."
+  (drgnx-search-store-test--with
+    (drgnx-search-store-put-file db "a.el" "h1" (list (drgnx-search-store-test--chunk "one" 1)))
+    (let ((before (drgnx-search-store-stamp db)) (id (caar (sqlite-select db "select id from chunk"))))
+      (drgnx-search-store-put-file db "a.el" "h2" (list (drgnx-search-store-test--chunk "two" 2)))
+      (should (= id (caar (sqlite-select db "select id from chunk"))))   ; the id was reused
+      (should-not (equal before (drgnx-search-store-stamp db)))
+      (let ((again (drgnx-search-store-stamp db)))
+        (drgnx-search-store-delete-file db "a.el")
+        (should-not (equal again (drgnx-search-store-stamp db)))))))
+
+(ert-deftest drgnx-search-store/a-failed-put-rolls-back-everything-including-the-stamp ()
+  (drgnx-search-store-test--with
+    (drgnx-search-store-put-file db "a.el" "h1" (list (drgnx-search-store-test--chunk "alpha one" 1)))
+    (let ((before (drgnx-search-store-stamp db)))
+      (should-error (drgnx-search-store-put-file
+                     db "a.el" "h2"
+                     (list (drgnx-search-store-test--chunk "beta two" 2)
+                           (list :start 1 :end 2 :text (make-hash-table) :vector (drgnx-search-store-test--vec 1024 3)))))
+      (should (equal (drgnx-search-store-stamp db) before))
+      (should (equal (gethash "a.el" (drgnx-search-store-files db)) "h1"))
+      (should (= (length (drgnx-search-store-fts db "alpha" 10)) 1))
+      (should-not (drgnx-search-store-fts db "beta" 10)))))
+
+(ert-deftest drgnx-search-store/fingerprints-and-vectors-are-stored-as-blobs ()
+  (drgnx-search-store-test--with
+    (drgnx-search-store-put-file db "a.el" "h" (list (drgnx-search-store-test--chunk "one" 1)))
+    (should (equal (car (sqlite-select db "select typeof(bits), typeof(vec), typeof(scale) from chunk"))
+                   '("blob" "blob" "real")))))
+
+(ert-deftest drgnx-search-store/a-snapshot-since-appends-unless-a-chunk-was-removed ()
+  (drgnx-search-store-test--with
+    (drgnx-search-store-put-file db "a.el" "h" (list (drgnx-search-store-test--chunk "one" 1 64)))
+    (let* ((snap (drgnx-search-store-snapshot db)) (ids (plist-get snap :ids))
+           (since (cons (nth 2 (plist-get snap :stamp)) (aref ids (1- (length ids))))))
+      (drgnx-search-store-put-file db "b.el" "h" (list (drgnx-search-store-test--chunk "two" 2 64)))
+      (let ((more (drgnx-search-store-snapshot db since)))      ; only appended: just the new chunk
+        (should (plist-get more :append))
+        (should (= (length (plist-get more :ids)) 1))
+        (should (= (length (plist-get more :words)) 2)))
+      (drgnx-search-store-put-file db "a.el" "h2" (list (drgnx-search-store-test--chunk "three" 3 64)))
+      (let ((full (drgnx-search-store-snapshot db since)))      ; a chunk went: everything again
+        (should-not (plist-get full :append))
+        (should (= (length (plist-get full :ids)) 2))))))
+
+(ert-deftest drgnx-search-store/opening-a-current-index-does-not-wait-for-the-write-lock ()
+  (drgnx-search-store-test--with
+    (sqlite-execute db "begin immediate")      ; an indexer in the middle of a write
+    (unwind-protect
+        (let* ((t0 (float-time)) (other (drgnx-search-store-open "/fake/project")))
+          (sqlite-close other)
+          (should (< (- (float-time) t0) 2.0)))   ; busy_timeout is 5 s
+      (sqlite-execute db "rollback"))))
 
 (provide 'search-store-test)
 ;;; search-store-test.el ends here

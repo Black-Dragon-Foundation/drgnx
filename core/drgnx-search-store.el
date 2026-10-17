@@ -86,23 +86,33 @@ word zero-padded — the form `drgnx-search-store-fingerprints' returns, for ran
   (expand-file-name (format "search/%s.db" (substring (sha1 (directory-file-name (expand-file-name root))) 0 16))
                     (drgnx-state-dir)))
 
+(defun drgnx-search-store--schema-of (db)
+  "The schema version DB records (0 when it has none yet), read without taking the write lock."
+  (or (ignore-errors (plist-get (drgnx-search-store-meta db) :schema)) 0))
+
+(defun drgnx-search-store--newer-error (have)
+  (user-error "Search index is schema %d, newer than this drgnx (%d): update drgnx"
+              have drgnx-search-store-schema-version))
+
 (defun drgnx-search-store--init (db)
-  "Create (or complete) the schema in DB; refuse a database newer than this drgnx."
-  ;; one writer at a time: the version is read again under the write lock, so two Emacsen opening a
-  ;; fresh index create it once
-  (sqlite-execute db "begin immediate")
-  (condition-case err
-      (progn
-        (sqlite-execute db "create table if not exists meta (key text primary key, value text)")
-        (let ((have (or (plist-get (drgnx-search-store-meta db) :schema) 0)))
-          (when (> have drgnx-search-store-schema-version)
-            (user-error "Search index is schema %d, newer than this drgnx (%d): update drgnx"
-                        have drgnx-search-store-schema-version))
-          (dolist (sql drgnx-search-store--schema) (sqlite-execute db sql))
-          (drgnx-search-store--put-meta db (list :schema drgnx-search-store-schema-version)))
-        (sqlite-execute db "commit"))
-    (error (ignore-errors (sqlite-execute db "rollback"))
-           (signal (car err) (cdr err)))))
+  "Create (or complete) the schema in DB; refuse a database newer than this drgnx.
+An index that is current is only read: the write lock is for creating or completing it."
+  (let ((have (drgnx-search-store--schema-of db)))
+    (when (> have drgnx-search-store-schema-version) (drgnx-search-store--newer-error have))
+    (unless (= have drgnx-search-store-schema-version)
+      ;; one writer at a time: the version is read again under the write lock, so two Emacsen opening a
+      ;; fresh index create it once
+      (sqlite-execute db "begin immediate")
+      (condition-case err
+          (progn
+            (sqlite-execute db "create table if not exists meta (key text primary key, value text)")
+            (let ((have (drgnx-search-store--schema-of db)))
+              (when (> have drgnx-search-store-schema-version) (drgnx-search-store--newer-error have))
+              (dolist (sql drgnx-search-store--schema) (sqlite-execute db sql))
+              (drgnx-search-store--put-meta db (list :schema drgnx-search-store-schema-version)))
+            (sqlite-execute db "commit"))
+        (error (ignore-errors (sqlite-execute db "rollback"))
+               (signal (car err) (cdr err)))))))
 
 (defun drgnx-search-store-open (root)
   "Open (creating it when new) the index of the project at ROOT.  The caller closes it (`sqlite-close')."
@@ -157,13 +167,23 @@ keys that are set."
       (puthash path hash table))
     table))
 
+(defun drgnx-search-store--bump (db key)
+  "Add one to the counter KEY of the meta (it starts at 1).  Called inside the write's transaction, so a
+rolled-back write leaves the counter as it was."
+  (sqlite-execute db "insert into meta values (?, '1')
+                      on conflict (key) do update set value = cast(value as integer) + 1"
+                  (list key)))
+
 (defun drgnx-search-store--delete (db path)
-  (sqlite-execute db "delete from chunk where path = ?" (list path))
+  "Remove PATH's chunks and record; when it had chunks, bump `cut' (the counter of removals)."
+  (when (> (caar (sqlite-select db "select count(*) from chunk where path = ?" (list path))) 0)
+    (sqlite-execute db "delete from chunk where path = ?" (list path))
+    (drgnx-search-store--bump db "cut"))
   (sqlite-execute db "delete from file where path = ?" (list path)))
 
 (defun drgnx-search-store-put-file (db path hash chunks)
   "Replace everything indexed for PATH, in one transaction: its blob HASH and CHUNKS, a list of
-\(:start LINE :end LINE :text STRING :vector FLOATS)."
+\(:start LINE :end LINE :text STRING :vector FLOATS).  Moves the index's generation (`-stamp')."
   (with-sqlite-transaction db
     (drgnx-search-store--delete db path)
     (dolist (chunk chunks)
@@ -172,35 +192,43 @@ keys that are set."
                             values (?, ?, ?, ?, ?, ?, ?)"
                         (list path (plist-get chunk :start) (plist-get chunk :end) (plist-get chunk :text)
                               (drgnx-search-store--blob bits) (drgnx-search-store--blob int8) scale))))
-    (sqlite-execute db "insert into file values (?, ?, ?)" (list path hash (length chunks)))))
+    (sqlite-execute db "insert into file values (?, ?, ?)" (list path hash (length chunks)))
+    (drgnx-search-store--bump db "gen")))
 
 (defun drgnx-search-store-delete-file (db path)
-  "Forget PATH: its chunks (and their text index) and its record."
-  (with-sqlite-transaction db (drgnx-search-store--delete db path)))
+  "Forget PATH: its chunks (and their text index) and its record.  Moves the index's generation."
+  (with-sqlite-transaction db
+    (drgnx-search-store--delete db path)
+    (drgnx-search-store--bump db "gen")))
 
 ;;;; Reading
 
 (defun drgnx-search-store-stamp (db)
-  "What changes when the index does: (INDEXED-AT CHUNK-COUNT HIGHEST-CHUNK-ID).  Chunks arrive before the
-indexer advances `:indexed-at', so the count and the highest id tell a half-finished run's progress too."
-  (cons (plist-get (drgnx-search-store-meta db) :indexed-at)
-        (car (sqlite-select db "select count(*), coalesce(max(id), 0) from chunk"))))
+  "What changes when the index does: (INDEXED-AT GENERATION CUT).  GENERATION counts the writes of files
+\(`put-file', `delete-file'), CUT the writes that removed chunks — both are bumped inside the write's
+transaction, so ids the database reuses cannot make two states look alike.  Chunks arrive before the
+indexer advances `:indexed-at', so the generation also tells a half-finished run's progress."
+  (let ((meta (drgnx-search-store-meta db)))
+    (list (plist-get meta :indexed-at) (plist-get meta :gen) (plist-get meta :cut))))
 
-(defun drgnx-search-store-snapshot (db)
-  "The index as of one moment, read in one transaction: (:stamp STAMP :meta META :ids IDS :words WORDS) —
-`drgnx-search-store-stamp', `-meta' and `-fingerprints'.  A write between its pages does not show."
+(defun drgnx-search-store-snapshot (db &optional since)
+  "The index as of one moment, read in one transaction: (:stamp STAMP :meta META :ids IDS :words WORDS
+:append APPEND) — `drgnx-search-store-stamp', `-meta' and `-fingerprints'.  A write between its pages does
+not show.  SINCE is (CUT . LAST-ID) of a copy the caller holds: when no chunk was removed since (the same
+CUT), only the chunks after LAST-ID are read and APPEND is t."
   (with-sqlite-transaction db
-    (let ((fp (drgnx-search-store-fingerprints db)))
-      (list :stamp (drgnx-search-store-stamp db) :meta (drgnx-search-store-meta db)
-            :ids (car fp) :words (cdr fp)))))
+    (let* ((stamp (drgnx-search-store-stamp db))
+           (append (and since (equal (car since) (nth 2 stamp))))
+           (fp (drgnx-search-store-fingerprints db (and append (cdr since)))))
+      (list :stamp stamp :meta (drgnx-search-store-meta db) :ids (car fp) :words (cdr fp) :append append))))
 
 (defconst drgnx-search-store--page 5000 "Fingerprints read per query (bounds the transient rows).")
 
-(defun drgnx-search-store-fingerprints (db)
-  "Every chunk's fingerprint: (IDS . WORDS).  IDS is a vector of chunk ids; WORDS one flat vector of
-fixnums, `ceiling(dims/56)' per chunk (19 for 1024 dims) — chunk i's words start at i times that.  No
-per-row objects: about 8 MB per 50 000 chunks."
-  (let ((ids nil) (words nil) (after -1) rows)
+(defun drgnx-search-store-fingerprints (db &optional after)
+  "Every chunk's fingerprint (those with an id above AFTER, when given): (IDS . WORDS).  IDS is a vector of
+chunk ids; WORDS one flat vector of fixnums, `ceiling(dims/56)' per chunk (19 for 1024 dims) — chunk i's
+words start at i times that.  No per-row objects: about 8 MB per 50 000 chunks."
+  (let ((ids nil) (words nil) (after (or after -1)) rows)
     (while (setq rows (sqlite-select db "select id, bits from chunk where id > ? order by id limit ?"
                                      (list after drgnx-search-store--page)))
       (let ((page (apply #'vconcat (mapcar (lambda (r) (drgnx-search-bits-words (cadr r))) rows))))

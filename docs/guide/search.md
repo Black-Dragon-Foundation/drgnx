@@ -193,7 +193,7 @@ differ. The project indexed is drgnx's own repository (289 files, 1,462 chunks):
 
 A question from the command line includes starting a batch Emacs and loading drgnx; embedding the question takes
 about 25 ms, and inside a running Emacs there is no start-up to pay. The index is searched as vectors of one bit and one
-byte per dimension: a Hamming scan of the one-bit fingerprints picks 500 candidates, which are re-ranked with the bytes.
+byte per dimension: a Hamming scan of the one-bit fingerprints picks 500 candidates, which are re-ranked with the bytes. The question is quantized the same way, so the re-rank is a sum of integers. The fingerprints are kept in memory for the last project searched; while an index run adds files a query reads only the new chunks, and the index is read after the embedding answer arrives, not inside the process that delivers it.
 The recall above was measured with the real model, not random vectors.
 
 ## Privacy

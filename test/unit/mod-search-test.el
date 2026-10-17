@@ -28,8 +28,7 @@
 (defun drgnx-search-ui-test--stub-search (results &optional notice)
   "A `drgnx-search-async' that answers RESULTS (and sets NOTICE) at once."
   (lambda (_root _query callback &rest _)
-    (setq drgnx-search-last-notice notice)
-    (funcall callback results)))
+    (funcall callback results notice)))
 
 (ert-deftest drgnx-search-ui/results-go-to-the-results-tab ()
   (skip-unless (executable-find "git"))
