@@ -85,9 +85,9 @@
         (error "git %S failed: %s" args (buffer-string))))))
 
 (defun drgnx-search-chunk-test--write (dir rel content)
-  (let ((file (expand-file-name rel dir)))
+  (let ((file (concat (file-name-as-directory dir) rel)))
     (make-directory (file-name-directory file) t)
-    (let ((coding-system-for-write 'no-conversion)) (write-region content nil file nil 'silent))))
+    (let ((coding-system-for-write 'no-conversion) (file-name-handler-alist nil)) (write-region content nil file nil 'silent))))
 
 (defmacro drgnx-search-chunk-test--repo (files &rest body)
   "BODY with ROOT a fresh git repo holding FILES, an alist (REL . CONTENT), all committed."
@@ -161,6 +161,87 @@
                (drgnx-search-chunk-test--write root "a.el" "a\n")
                (should (equal (drgnx-search-chunk-test--paths root) '("a.el"))))
       (delete-directory root t))))
+
+(defmacro drgnx-search-chunk-test--git-fails-on (word &rest body)
+  "BODY with the git runner made to fail (really, with a bad option) for commands containing WORD."
+  (declare (indent 1))
+  `(let ((orig (symbol-function 'drgnx-search--git)))
+     (cl-letf (((symbol-function 'drgnx-search--git)
+                (lambda (root input &rest args)
+                  (apply orig root input (if (member ,word args) (list (car args) "--no-such-option-xyz") args)))))
+       ,@body)))
+
+(ert-deftest drgnx-search-files/a-failing-git-signals-never-a-partial-list ()
+  (drgnx-search-chunk-test--repo '(("a.txt" . "a\n") ("b.txt" . "b\n"))
+    (drgnx-search-chunk-test--git root "commit" "-q" "-m" "init")
+    (drgnx-search-chunk-test--write root "a.txt" "changed\n")
+    (drgnx-search-chunk-test--write root "new.txt" "new\n")
+    (should (equal (drgnx-search-chunk-test--paths root) '("a.txt" "b.txt" "new.txt")))
+    (dolist (word '("hash-object" "-m" "--others"))
+      (let ((err (should-error (drgnx-search-chunk-test--git-fails-on word (drgnx-search-files root))
+                               :type 'drgnx-search-files-error)))
+        (should (string-match-p (if (equal word "hash-object") "hash-object" "ls-files") (cadr err)))
+        (should (string-match-p "no-such-option" (cadr err)))))
+    (should-error (drgnx-search-chunk-test--git-fails-on "-s" (drgnx-search-files root))
+                  :type 'drgnx-search-files-error)))
+
+(ert-deftest drgnx-search-files/a-file-deleted-before-hashing-is-absent ()
+  (drgnx-search-chunk-test--repo '(("a.txt" . "a\n"))
+    (drgnx-search-chunk-test--git root "commit" "-q" "-m" "init")
+    (drgnx-search-chunk-test--write root "new.txt" "new\n")
+    (drgnx-search-chunk-test--write root "other.txt" "other\n")
+    ;; new.txt vanishes after it passed the filters, before the hash call.
+    (cl-letf* ((orig (symbol-function 'drgnx-search--binary-p))
+               ((symbol-function 'drgnx-search--binary-p)
+                (lambda (file)
+                  (prog1 (funcall orig file)
+                    (when (string-suffix-p "new.txt" file) (delete-file file))))))
+      (should (equal (drgnx-search-chunk-test--paths root) '("a.txt" "other.txt"))))))
+
+(ert-deftest drgnx-search-files/unhashable-names-are-skipped ()
+  (drgnx-search-chunk-test--repo '(("a.txt" . "a\n"))
+    (drgnx-search-chunk-test--git root "commit" "-q" "-m" "init")
+    (drgnx-search-chunk-test--write root "\"quoted.txt" "q\n")
+    (drgnx-search-chunk-test--write root "new\nline.txt" "n\n")
+    (drgnx-search-chunk-test--write root "plain.txt" "p\n")
+    (should (equal (drgnx-search-chunk-test--paths root) '("a.txt" "plain.txt")))))
+
+(ert-deftest drgnx-search-files/paths-stay-under-root ()
+  (let* ((home (file-name-as-directory (make-temp-file "drgnx-search-home" t)))
+         (process-environment (cons (concat "HOME=" home) process-environment)))
+    (unwind-protect
+        (drgnx-search-chunk-test--repo '(("~/a.txt" . "tilde\n") ("b.txt" . "b\n"))
+          (should (equal (drgnx-search-chunk-test--paths root) '("b.txt" "~/a.txt")))
+          (drgnx-search-chunk-test--write root "~/a.txt" "edited\n")
+          (should (assoc "~/a.txt" (drgnx-search-files root))))
+      (delete-directory home t))))
+
+(ert-deftest drgnx-search-files/sensitive-names-are-never-listed ()
+  (let ((bad '("server.pem" "x.key" "a.p12" "b.pfx" "c.kdbx" "d.keystore" "e.jks" "f.asc" "g.gpg" "UP.PEM"
+               "id_rsa" "id_rsa.pub" "id_dsa" "id_ecdsa" "id_ed25519" "k/id_ed25519.bak"
+               "secrets.env" "prod.env" "my-Secret-notes.txt" "AWS_CREDENTIALS.json" "credentials"
+               "authinfo" "netrc" "authinfo.gpg")))
+    (drgnx-search-chunk-test--repo (append '(("ok.txt" . "ok\n") ("src/keyboard.el" . "k\n") ("monkey.el" . "m\n"))
+                                           (mapcar (lambda (f) (cons f "x\n")) (cl-subseq bad 0 12)))
+      ;; The rest untracked.
+      (dolist (f (nthcdr 12 bad)) (drgnx-search-chunk-test--write root f "x\n"))
+      (should (equal (drgnx-search-chunk-test--paths root) '("monkey.el" "ok.txt" "src/keyboard.el")))
+      (drgnx-search-chunk-test--write root ".drgnx/search.eld" "(:include (\"**\" \"*.pem\" \"id_rsa*\" \"*secret*\"))")
+      (should (equal (drgnx-search-chunk-test--paths root) '("monkey.el" "ok.txt" "src/keyboard.el"))))))
+
+(ert-deftest drgnx-search-files/only-regular-files ()
+  "A tracked file replaced by a FIFO is never opened (it would block)."
+  (skip-unless (executable-find "mkfifo"))
+  (drgnx-search-chunk-test--repo '(("a.txt" . "a\n") ("b.txt" . "b\n"))
+    (delete-file (expand-file-name "a.txt" root))
+    (should (zerop (call-process "mkfifo" nil nil nil (expand-file-name "a.txt" root))))
+    (should (equal (drgnx-search-chunk-test--paths root) '("b.txt")))))
+
+(ert-deftest drgnx-search-files/globs-are-case-sensitive ()
+  (drgnx-search-chunk-test--repo '(("x.md" . "x\n") ("y.MD" . "y\n"))
+    (drgnx-search-chunk-test--write root ".drgnx/search.eld" "(:exclude (\"*.MD\"))")
+    (let ((case-fold-search t))
+      (should (equal (drgnx-search-chunk-test--paths root) '("x.md"))))))
 
 (ert-deftest drgnx-search-files/skips-symlinks-and-submodules ()
   (let ((outside (make-temp-file "drgnx-search-outside" nil ".txt" "outside\n")))

@@ -6,8 +6,12 @@
 ;; The indexer asks `drgnx-search-files' for a project's files with their git blob hashes (a file whose
 ;; hash is unchanged is not embedded again) and splits the text of each into chunks with
 ;; `drgnx-search-chunks'.  The text of these files goes to an embedding provider, so the file list is
-;; strict: only tracked regular files, never a dot file or anything under a dot directory, never a file
-;; over 1 MiB, never a binary — whatever `.drgnx/search.eld' says.  That file can only narrow the list.
+;; strict: the tracked files and the untracked ones .gitignore does not exclude, regular files only (no
+;; symlink, FIFO or submodule), never a dot file or anything under a dot directory, never a key or secret
+;; by name (`drgnx-search--sensitive-name-p'), never a file over 1 MiB, never a binary — whatever
+;; `.drgnx/search.eld' says.  That file can only narrow the list.  A file in a merge conflict (index
+;; stages 1-3 only) is not listed until it is resolved.  If git fails the listing signals
+;; `drgnx-search-files-error' rather than return a partial list.
 ;; See docs/guide/search.md.
 
 ;;; Code:
@@ -123,27 +127,56 @@ directory (\"vendor/\")."
     (concat "\\`" (apply #'concat (nreverse out)) "\\'")))
 
 (defun drgnx-search--matches-p (path regexps)
-  (cl-some (lambda (re) (string-match-p re path)) regexps))
+  "Non-nil when PATH matches one of the glob REGEXPS (case-sensitively)."
+  (let ((case-fold-search nil))
+    (cl-some (lambda (re) (string-match-p re path)) regexps)))
 
 ;;;; Files
 
+(define-error 'drgnx-search-files-error "Listing the project's files failed")
+
+(defun drgnx-search--git-run (root input args)
+  "Run git ARGS in ROOT, feeding it the string INPUT (or nil); no shell.
+Returns (STATUS OUTPUT STDERR-FIRST-LINE), STATUS nil when git cannot be started."
+  (let ((default-directory (file-name-as-directory (expand-file-name root)))
+        (process-environment (cl-remove-if (lambda (e) (string-match-p "\\`GIT_\\(DIR\\|WORK_TREE\\|INDEX_FILE\\)=" e))
+                                           process-environment))
+        (coding-system-for-read 'utf-8-unix)
+        (coding-system-for-write 'utf-8-unix)
+        (errfile (make-temp-file "drgnx-search-git")))
+    (unwind-protect
+        (with-temp-buffer
+          (let ((status (condition-case err
+                            (if input
+                                (progn (insert input)
+                                       (apply #'call-process-region (point-min) (point-max) "git" t (list t errfile) nil args))
+                              (apply #'call-process "git" nil (list t errfile) nil args))
+                          (error (list 'error (error-message-string err))))))
+            (if (consp status)
+                (list nil nil (cadr status))
+              (list status (buffer-string)
+                    (with-temp-buffer
+                      (insert-file-contents errfile)
+                      (buffer-substring (point-min) (line-end-position)))))))
+      (delete-file errfile))))
+
 (defun drgnx-search--git (root input &rest args)
-  "Run git ARGS in ROOT feeding it the string INPUT (or nil): its output, or nil on failure.
-No shell; nil too when ROOT is no repository, git is missing or git fails."
-  (when (and (file-directory-p root) (executable-find "git"))
-    (let ((default-directory (file-name-as-directory (expand-file-name root)))
-          (process-environment (cl-remove-if (lambda (e) (string-match-p "\\`GIT_\\(DIR\\|WORK_TREE\\|INDEX_FILE\\)=" e))
-                                             process-environment))
-          (coding-system-for-read 'utf-8-unix)
-          (coding-system-for-write 'utf-8-unix))
-      (with-temp-buffer
-        (when (condition-case nil
-                  (zerop (if input
-                             (progn (insert input)
-                                    (apply #'call-process-region (point-min) (point-max) "git" t (list t nil) nil args))
-                           (apply #'call-process "git" nil (list t nil) nil args)))
-                (error nil))
-          (buffer-string))))))
+  "Run git ARGS in ROOT with INPUT on stdin (or nil): its output.
+Signals `drgnx-search-files-error', naming the command and the first line of git's stderr, when git
+fails."
+  (pcase (drgnx-search--git-run root input args)
+    (`(0 ,out ,_) out)
+    (`(,_ ,_ ,err)
+     (signal 'drgnx-search-files-error
+             (list (format "git %s: %s" (string-join args " ") err))))))
+
+(defun drgnx-search--repo-p (root)
+  "Non-nil when ROOT is a directory inside a git work tree and git can run."
+  (and (file-directory-p root) (executable-find "git")
+       (pcase (drgnx-search--git-run root nil '("rev-parse" "--is-inside-work-tree"))
+         (`(0 ,out ,_) (string-prefix-p "true" out))
+         (`(,_ ,_ ,err) (unless (string-match-p "not a git repository" err)
+                          (signal 'drgnx-search-files-error (list (format "git rev-parse: %s" err))))))))
 
 (defun drgnx-search--parse-index (out)
   "The stage 0 entries of `git ls-files -s -z' output OUT: (MODE BLOB PATH) each."
@@ -159,20 +192,40 @@ No shell; nil too when ROOT is no repository, git is missing or git fails."
   "The NUL-separated paths git ARGS print in ROOT (`ls-files -z' options), or nil."
   (split-string (or (apply #'drgnx-search--git root nil args) "") "\0" t))
 
+(defun drgnx-search--hashable-p (path file)
+  "Non-nil when PATH (at FILE) can go through `git hash-object --stdin-paths'.
+That reads one path per line and unquotes a leading double quote, so neither a newline nor a leading
+quote can be passed; the file must also still be a regular file."
+  (and (not (string-search "\n" path)) (not (string-prefix-p "\"" path)) (file-regular-p file)))
+
 (defun drgnx-search--hash-objects (root paths)
   "The git blob SHAs of the working-tree content of PATHS in ROOT: an alist (PATH . SHA).
-One `git hash-object --stdin-paths' call; it takes one path per line, so a path with a newline is
-left out, as is everything when git fails."
-  (let* ((paths (cl-remove-if (lambda (p) (string-search "\n" p)) paths))
-         (out (and paths (drgnx-search--git root (concat (string-join paths "\n") "\n")
-                                            "hash-object" "--stdin-paths")))
-         (shas (and out (split-string out "\n" t))))
-    (when (= (length shas) (length paths))
-      (cl-mapcar #'cons paths shas))))
+One `git hash-object --stdin-paths' call over the PATHS that are still regular files; signals
+`drgnx-search-files-error' when it fails."
+  (let ((paths (cl-remove-if-not (lambda (p) (drgnx-search--hashable-p p (concat root p))) paths)))
+    (when paths
+      (let ((shas (split-string (drgnx-search--git root (concat (string-join paths "\n") "\n")
+                                                   "hash-object" "--stdin-paths")
+                                "\n" t)))
+        (unless (= (length shas) (length paths))
+          (signal 'drgnx-search-files-error (list "git hash-object: unexpected output")))
+        (cl-mapcar #'cons paths shas)))))
 
 (defun drgnx-search--dot-path-p (path)
   "Non-nil when a component of the relative PATH starts with a dot."
   (string-match-p "\\(?:\\`\\|/\\)\\." path))
+
+(defconst drgnx-search--sensitive-name-regexp
+  (concat "\\(?:\\.\\(?:pem\\|key\\|p12\\|pfx\\|kdbx\\|keystore\\|jks\\|asc\\|gpg\\|env\\)\\'"
+          "\\|\\`id_\\(?:rsa\\|dsa\\|ecdsa\\|ed25519\\)"
+          "\\|secret\\|credential\\|authinfo\\|netrc\\)")
+  "File names (basename, case-insensitive) that look like keys or secrets.")
+
+(defun drgnx-search--sensitive-name-p (path)
+  "Non-nil when the basename of PATH looks like a key, certificate or secret.
+These are never indexed, whatever the configuration says."
+  (let ((case-fold-search t))
+    (string-match-p drgnx-search--sensitive-name-regexp (file-name-nondirectory path))))
 
 (defun drgnx-search--binary-p (file)
   "Non-nil when FILE has a NUL byte among its first 8000 bytes (or cannot be read)."
@@ -190,40 +243,47 @@ PATH is relative to ROOT; HASH is the working-tree content hash (git blob SHA), 
 file keeps its hash and an edit changes it, staged or not.  The files are the tracked ones
 (`git ls-files -s'; a clean file's hash comes from the index, a modified one is hashed with one
 `git hash-object' call) plus the untracked ones that .gitignore does not exclude; a tracked file
-deleted on disk is not listed.  Never included, whatever `drgnx-search-config' says: a dot file or a
-file under a dot directory, a symlink or a submodule, a file over 1 MiB, a binary.  The configuration
-then narrows the list.  nil when ROOT is no git repository, git is missing or the project's search is
-`:off'."
+deleted on disk is not listed, nor is one in a merge conflict (index stages 1-3 only).  Never
+included, whatever `drgnx-search-config' says: anything but a regular file (symlink, FIFO,
+submodule), a dot file or a file under a dot directory, a key or secret by name (*.pem, *.key, *.p12,
+*.pfx, *.kdbx, *.keystore, *.jks, *.asc, *.gpg, *.env, id_rsa*, id_dsa*, id_ecdsa*, id_ed25519*,
+anything containing secret, credential, authinfo or netrc, case-insensitively), a file over 1 MiB,
+a binary.  A modified or untracked file whose path contains a newline or starts with a double quote
+cannot be hashed and is left out too.  The configuration then narrows the list.
+
+nil when ROOT is no git repository, git is missing or the project's search is `:off'.  When git
+fails the listing signals `drgnx-search-files-error' (never a partial list)."
   (let* ((config (drgnx-search-config root))
          (include (mapcar #'drgnx-search--glob-regexp (plist-get config :include)))
          (exclude (mapcar #'drgnx-search--glob-regexp (plist-get config :exclude)))
          (root (file-name-as-directory (expand-file-name root)))
-         (staged (and (not (plist-get config :off))
-                      (drgnx-search--git root nil "ls-files" "-s" "-z")))
-         (dirty (make-hash-table :test #'equal))
          known pending)
-    (when staged
-      (dolist (p (drgnx-search--git-paths root "ls-files" "-m" "-z")) (puthash p t dirty))
-      ;; Candidates (PATH . BLOB), BLOB nil when the working-tree content has to be hashed.
-      (dolist (entry (append
-                      (cl-loop for (mode blob path) in (drgnx-search--parse-index staged)
-                               when (member mode '("100644" "100755")) ; no symlink, no submodule
-                               collect (cons path (unless (gethash path dirty) blob)))
-                      (mapcar #'list (drgnx-search--git-paths root "ls-files" "-z" "--others" "--exclude-standard"))))
-        (let ((path (car entry)))
-          (when (and (not (string-suffix-p "/" path)) ; a nested repository
-                     (not (drgnx-search--dot-path-p path))
-                     (or (null include) (drgnx-search--matches-p path include))
-                     (not (drgnx-search--matches-p path exclude)))
-            (let* ((file (expand-file-name path root))
-                   (attrs (file-attributes file 'integer)))
-              (when (and attrs (null (file-attribute-type attrs))
-                         (<= (file-attribute-size attrs) drgnx-search-chunk-max-file-bytes)
-                         (not (drgnx-search--binary-p file)))
-                (if (cdr entry) (push entry known) (push path pending)))))))
-      ;; One batched call for every modified or untracked file; order by path.
-      (sort (nconc known (drgnx-search--hash-objects root (nreverse pending)))
-            (lambda (a b) (string< (car a) (car b)))))))
+    (when (and (not (plist-get config :off)) (drgnx-search--repo-p root))
+      (let ((dirty (make-hash-table :test #'equal))
+            (staged (drgnx-search--git root nil "ls-files" "-s" "-z")))
+        (dolist (p (drgnx-search--git-paths root "ls-files" "-m" "-z")) (puthash p t dirty))
+        ;; Candidates (PATH . BLOB), BLOB nil when the working-tree content has to be hashed.
+        (dolist (entry (append
+                        (cl-loop for (mode blob path) in (drgnx-search--parse-index staged)
+                                 when (member mode '("100644" "100755")) ; no symlink, no submodule
+                                 collect (cons path (unless (gethash path dirty) blob)))
+                        (mapcar #'list (drgnx-search--git-paths root "ls-files" "-z" "--others" "--exclude-standard"))))
+          (let ((path (car entry)))
+            (when (and (not (string-suffix-p "/" path)) ; a nested repository
+                       (not (drgnx-search--dot-path-p path))
+                       (not (drgnx-search--sensitive-name-p path))
+                       (or (null include) (drgnx-search--matches-p path include))
+                       (not (drgnx-search--matches-p path exclude)))
+              ;; Never `expand-file-name': PATH is relative to ROOT, even when it starts with "~".
+              (let* ((file (concat root path))
+                     (attrs (file-attributes file 'integer)))
+                (when (and attrs (null (file-attribute-type attrs)) (file-regular-p file)
+                           (<= (file-attribute-size attrs) drgnx-search-chunk-max-file-bytes)
+                           (not (drgnx-search--binary-p file)))
+                  (if (cdr entry) (push entry known) (push path pending)))))))
+        ;; One batched call for every modified or untracked file; order by path.
+        (sort (nconc known (drgnx-search--hash-objects root (nreverse pending)))
+              (lambda (a b) (string< (car a) (car b))))))))
 
 (provide 'drgnx-search-chunk)
 ;;; drgnx-search-chunk.el ends here
