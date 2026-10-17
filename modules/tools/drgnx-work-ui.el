@@ -33,7 +33,7 @@
 
 (defface drgnx-work-ui-spec '((t :inherit bold)) "A spec's title." :group 'drgnx)
 (defface drgnx-work-ui-done '((t :inherit shadow)) "Done tasks, steps and TODOs; counts." :group 'drgnx)
-(defface drgnx-work-ui-stale '((t :inherit warning)) "A task whose recorded commits git no longer has." :group 'drgnx)
+(defface drgnx-work-ui-stale '((t :inherit warning)) "A task or commit no branch has any more (rebased, squashed)." :group 'drgnx)
 (defface drgnx-work-ui-branch '((t :inherit font-lock-constant-face)) "A plan's branch." :group 'drgnx)
 
 (defvar drgnx-work-ui--expanded (make-hash-table :test #'equal) "Node id → `open' or `closed' (specs start open).")
@@ -94,17 +94,18 @@
                        (propertize (drgnx-work-ui--counts c) 'face 'drgnx-work-ui-done)
                        (if (plist-get node :branch) (propertize (format "  [%s]" (plist-get node :branch)) 'face 'drgnx-work-ui-branch) "")
                        (if (plist-get node :merged) (propertize "  merged" 'face 'drgnx-work-ui-done) ""))))
-      ('task (cond ((plist-get node :stale) (propertize (concat "⚠ " title "  (its commits are gone)") 'face 'drgnx-work-ui-stale))
+      ('task (cond ((plist-get node :stale) (propertize (concat "⚠ " title "  (its commits are on no branch)") 'face 'drgnx-work-ui-stale))
                    (done (propertize (concat "☑ " title) 'face 'drgnx-work-ui-done))
                    (t (concat "☐ " title))))
       ('step (if done (propertize (concat "☑ " title) 'face 'drgnx-work-ui-done) (concat "☐ " title)))
       ('todo (if done (propertize (concat "✓ TODO " title) 'face 'drgnx-work-ui-done) (concat "○ TODO " title)))
       ('ruling (propertize (concat "§ " title) 'face 'drgnx-work-ui-done))
-      ('commit (concat "● " (substring (or (plist-get node :sha) "") 0 (min 7 (length (or (plist-get node :sha) "")))) " " title))
+      ('commit (concat (if (plist-get node :gone) (propertize "⚠ " 'face 'drgnx-work-ui-stale) "● ") (substring (or (plist-get node :sha) "") 0 (min 7 (length (or (plist-get node :sha) "")))) " " title))
       (_ title))))
 
 (defun drgnx-work-ui--insert (node depth)
-  (let* ((foldable (memq (plist-get node :kind) '(spec plan task)))
+  (let* ((foldable (or (memq (plist-get node :kind) '(spec plan task))
+                       (and (eq (plist-get node :kind) 'todo) (drgnx-work-edges-to (plist-get node :id) 'implements))))
          (open (and foldable (drgnx-work-ui--open-p node)))
          (start (point)))
     (insert (make-string (* 2 depth) ?\s) (cond (open "▾ ") (foldable "▸ ") (t "  ")) (drgnx-work-ui--line node) "\n")
@@ -150,7 +151,7 @@
 (defun drgnx-work-ui-toggle ()
   "Fold or unfold the spec, plan or task on this line."
   (interactive)
-  (when-let* ((n (drgnx-work-ui--node)) ((memq (plist-get n :kind) '(spec plan task))))
+  (when-let* ((n (drgnx-work-ui--node)) ((memq (plist-get n :kind) '(spec plan task todo))))
     (puthash (plist-get n :id) (if (drgnx-work-ui--open-p n) 'closed 'open) drgnx-work-ui--expanded)
     (drgnx-work-ui--render)))
 
@@ -171,6 +172,7 @@
 
 (defun drgnx-work-ui--show-commit (node)
   (let* ((sha (plist-get node :sha)) (repo (or (plist-get node :repo) (plist-get node :path)))
+         (_ (unless (file-directory-p repo) (user-error "The repository of %s is gone: %s" (substring sha 0 7) repo)))
          (b (get-buffer-create (format "*commit: %s*" (substring sha 0 7)))))
     (with-current-buffer b
       (let ((inhibit-read-only t) (default-directory (file-name-as-directory repo)))
@@ -234,7 +236,9 @@ and its commits are recorded for the task."
 Returns the process."
   (interactive)
   (if (process-live-p drgnx-work-ui--scan) drgnx-work-ui--scan
-    (let ((process-environment (cons (concat "DRGNX_EMACS=" (expand-file-name invocation-name invocation-directory)) process-environment)))
+    (let ((process-environment (append (list (concat "DRGNX_EMACS=" (expand-file-name invocation-name invocation-directory)))
+                                       (and drgnx-work-git-notes (list "DRGNX_WORK_GIT_NOTES=1"))   ; the scan collects jobs
+                                       process-environment)))
       (setq drgnx-work-ui--scan
             (make-process :name "drgnx-work-scan" :buffer (get-buffer-create " *drgnx work scan*") :noquery t
                           :connection-type 'pipe

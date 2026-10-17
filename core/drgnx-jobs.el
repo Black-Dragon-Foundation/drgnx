@@ -58,14 +58,17 @@ commits it made are recorded for the task (docs/work.md)."
   (let* ((id (drgnx-jobs--new-id)) (dir (drgnx-jobs--dir id))
          (cwd (expand-file-name (or cwd default-directory)))
          (launcher (drgnx-jobs-launcher))
-         (head (and task (with-temp-buffer
-                           (let ((default-directory (file-name-as-directory cwd)))
-                             (and (eql 0 (call-process "git" nil t nil "rev-parse" "HEAD")) (string-trim (buffer-string)))))))
+         (git (lambda (&rest args) (with-temp-buffer
+                                     (let ((default-directory (file-name-as-directory cwd)))
+                                       (and (eql 0 (apply #'call-process "git" nil t nil args)) (string-trim (buffer-string)))))))
+         (head (and task (funcall git "rev-parse" "HEAD")))
+         ;; the repository itself: the job's worktree may be gone when its commits are collected
+         (git-dir (and task (funcall git "rev-parse" "--path-format=absolute" "--git-common-dir")))
          (process-environment (if task (cons (concat "DRGNX_TASK=" task) process-environment) process-environment))
          (line (drgnx-jobs--wrapper dir command task)))
     (make-directory dir t)
     (with-temp-file (expand-file-name "job.eld" dir)
-      (prin1 (list :id id :name name :command command :cwd cwd :launcher launcher :task task :head head
+      (prin1 (list :id id :name name :command command :cwd cwd :launcher launcher :task task :head head :git-dir git-dir :start-time (float-time)
                    :unit (and (eq launcher 'systemd) (concat "drgnx-job-" id))
                    :started (format-time-string "%FT%T%z"))
              (current-buffer)))

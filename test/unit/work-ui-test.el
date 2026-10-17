@@ -159,4 +159,21 @@ git repository ROOT/code), a lone plan, and the tracker's database in a temp dat
   (should (eq 'warn (car (drgnx-doctor-check 'work '(:sqlite t :dot nil :work-plans 3)))))
   (should (equal '(ok "3 plans tracked") (seq-take (drgnx-doctor-check 'work '(:sqlite t :dot t :work-plans 3)) 2))))
 
+(ert-deftest drgnx-work-ui/commits-recorded-for-a-todo-or-the-plan-show-and-count ()
+  (drgnx-work-ui-test--with root
+    (let* ((plan (concat "plan:" root "docs/plans/alpha.md")) (code (concat root "code/"))
+           (commit (lambda (msg) (write-region msg nil (concat code msg) nil 'silent)
+                     (drgnx-work-ui-test--git code "add" "-A") (drgnx-work-ui-test--git code "commit" "-q" "-m" msg)
+                     (drgnx-work-ui-test--git code "rev-parse" "HEAD"))))
+      (drgnx-work-put-node "todo:/b.org#1" :kind 'todo :title "a todo" :path "/b.org" :line 1 :status "open" :parent plan :ord 1 :source "/b.org")
+      (drgnx-work-record "todo:/b.org#1" code (funcall commit "for-the-todo"))
+      (drgnx-work-record plan code (funcall commit "for-the-plan"))
+      (with-current-buffer (drgnx-work-ui-buffer)
+        (should (string-match-p "Plan Alpha  steps 1/3 · todos 0/1 · 3 commits" (buffer-string)))
+        (drgnx-work-ui-test--goto "Plan Alpha") (drgnx-work-ui-toggle)
+        (drgnx-work-ui-test--goto "TODO a todo")
+        (should (looking-at-p "    ▸ ○ TODO a todo"))
+        (drgnx-work-ui-toggle)
+        (should (string-search "for-the-todo" (buffer-string)))))))
+
 ;;; work-ui-test.el ends here

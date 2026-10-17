@@ -14,6 +14,7 @@
 (require 'seq)
 (require 'subr-x)
 (require 'drgnx-paths)
+(require 'sqlite)                   ; with-sqlite-transaction
 
 (defconst drgnx-work-db-schema-version 1)
 
@@ -89,7 +90,9 @@ any other keys, kept in its data)."
     (apply #'drgnx-work-put-node id (cl-loop for (k v) on n by #'cddr unless (eq k :id) append (list k v)))))
 
 (defun drgnx-work-put-edge (src dst kind origin &optional source)
-  (sqlite-execute (drgnx-work-db) "insert or replace into edge values (?, ?, ?, ?, ?)"
+  "The KIND edge SRC → DST, from ORIGIN (`parsed', `inferred', `recorded'): a recorded edge stays recorded."
+  (sqlite-execute (drgnx-work-db) "insert into edge values (?, ?, ?, ?, ?) on conflict (src, dst, kind)
+                                   do update set origin = excluded.origin, source = excluded.source where edge.origin <> 'recorded'"
                   (list src dst (symbol-name kind) (symbol-name origin) (or source (symbol-name origin)))))
 
 (defun drgnx-work-edges-to (dst kind)
@@ -126,11 +129,15 @@ and the commits that implement it (newest first)."
   (let ((specs (mapcar #'drgnx-work--row-node (sqlite-select (drgnx-work-db) (concat drgnx-work--select " where kind = 'spec' order by title"))))
         (lone (mapcar #'drgnx-work--row-node
                       (sqlite-select (drgnx-work-db)
-                                     (concat drgnx-work--select " where kind = 'plan' and id not in (select src from edge where kind = 'derives') order by title")))))
+                                     (concat drgnx-work--select " where kind = 'plan' and id not in (select e.src from edge e join node s on s.id = e.dst where e.kind = 'derives') order by title")))))
     (append specs lone)))
 
 (defun drgnx-work-nodes (kind)
   (mapcar #'drgnx-work--row-node (sqlite-select (drgnx-work-db) (concat drgnx-work--select " where kind = ?") (list (symbol-name kind)))))
+
+(defun drgnx-work-forget-orphan-commits ()
+  "Forget the commits no edge links any more (commits belong to no file: several ledgers may name one)."
+  (sqlite-execute (drgnx-work-db) "delete from node where kind = 'commit' and id not in (select src from edge)"))
 
 ;;;; Files seen
 

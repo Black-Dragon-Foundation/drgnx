@@ -17,33 +17,48 @@ down (not into `.git`, `node_modules`, `eln-cache`, `elpa`, `target`, `dist`, `b
 - **ledgers:** `*.ledger.md` and `.superpowers/sdd/*/progress.md`, whose first line is `# SDD ledger — plan: PATH`.
   `Task N: complete (commits A..B …)` or `(commit SHA …)` marks the task done and links those commits
   (a range git cannot resolve marks the task *stale*); `Ruling:` lines become rulings under their task.
-  A ledger inside a linked git worktree gives its plan that worktree and branch.
+  A ledger inside a linked git worktree gives its plan that worktree and branch. A worktree's other files are
+  copies of its repository's and are not read; when a worktree is removed its ledger goes with it and the plan is
+  read again from what is left — keep a copy (`docs/plans/<plan>.ledger.md`) to keep that history.
 - **the board:** TODOs with a `:PLAN_FILE:` property (onboarding's import) appear under their plan.
 
 A plan is *merged* when all its tasks are done and its branch is in `main`/`master` (or gone). Only files that
-changed since the last scan are read again (a rescan of 30 files takes well under a second).
+changed since the last scan are read again (a rescan of 30 files takes well under a second). Every scan also
+checks that each linked commit is still on a branch, tag or HEAD: commits a rebase, squash or amend left behind
+are marked ⚠ (and their task *stale*) until they are reachable again.
 
 ## Recording commits
 
 Agent sessions and jobs can work on a task — any tracker node id, such as `task:/path/plan.md#3`:
 
 - `drgnx-agents-start PROFILE CWD TASK`: the agent gets `DRGNX_TASK`, and after each turn the commits made in
-  CWD's repository since the last turn are recorded for the task.
+  CWD's repository during it are recorded for the task (just after the turn, never while Emacs handles the agent's
+  output).
 - `drgnx-jobs-start NAME COMMAND :cwd DIR :task TASK`: the job gets `DRGNX_TASK`; the git HEADs it started and
   ended at are kept with the job, and its commits are recorded once it ended (on the next scan or refresh) —
   commits made after it ended are not its.
 - By hand, or from any agent: `drgnx work record [--task ID] [SHA…]` links the commits (default `HEAD`) of the
   current repository to the task (default `$DRGNX_TASK`).
 
-Recorded links live in the tracker's database and survive every rescan. With `drgnx-work-git-notes` set, each
-link is also written as a git note (`refs/notes/drgnx`: `drgnx task: ID`) so it travels with the repository; it
-is off by default because notes are shared state.
+What counts as a turn's or a job's commits: those on HEAD's own line (first parents) since it began, committed
+after it began. A pull or merge brings no one else's commits in (only the merge commit itself); a checkout or
+rebase that leaves HEAD on another line records nothing; more than 100 new commits (`drgnx-work-collect-max`)
+record nothing; and while two task sessions are busy in one repository at the same time, whose commit is whose
+is unknown, so neither records automatically — the agents can say it with `drgnx work record`. A job's commits
+are collected in its repository even after its worktree was removed.
+
+Recorded links live in the tracker's database and survive every rescan (a ledger naming the same commit never
+turns them into guesses). With `DRGNX_WORK_GIT_NOTES=1` in the environment (or `drgnx-work-git-notes` set in
+Emacs, which passes it to the scans it starts), each link is also written as a git note (`refs/notes/drgnx`:
+`drgnx task: ID`, once per task) so it travels with the repository; it is off by default because notes are shared
+state.
 
 ## The Work tab
 
 **Show Work** (module `tools/work`; VS Code `C-k t`, Vim `SPC a w`, Emacs: the palette) opens the right dock's
 **Work** tab: each spec with the plans that came from it (plans that name no spec are roots of their own), and under
-a plan its tasks, their steps, rulings and commits, and the board's TODOs.
+a plan its tasks, their steps, rulings and commits, and the board's TODOs (with the commits recorded for them).
+A plan whose spec was deleted becomes a root.
 
 ```
 ▾ ◆ The Spec

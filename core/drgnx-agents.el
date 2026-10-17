@@ -33,8 +33,8 @@ agents.eld (config dir) and the built-in ones; never holds secrets (keys come fr
   "Called with a session whenever it changes (status, transcript, queue, pending items).")
 
 (defvar drgnx-agents-task-functions nil
-  "Called with a session working on a task (see `drgnx-agents-start's TASK) and `start' or `turn-end':
-the work tracker records the commits each turn made (docs/work.md).")
+  "Called with a session working on a task (see `drgnx-agents-start's TASK) and `start', `turn-start' or
+`turn-end': the work tracker records the commits each turn made (docs/work.md).")
 
 (defconst drgnx-agents-builtin-profiles
   '(("claude" :command ("claude-agent-acp") :mode queue :doc "Claude through the unmodified agent (subscription or API key)")))
@@ -262,6 +262,7 @@ its history is replayed into the transcript.  Needs an agent that can load sessi
 (defun drgnx-agents--prompt (s text)
   (drgnx-agents--add s (list :type 'user :text text))
   (setf (drgnx-agent-session-status s) 'busy (drgnx-agent-session-stopping s) nil (drgnx-agent-session-paused s) nil)
+  (when (drgnx-agent-session-task s) (with-demoted-errors "drgnx work: %S" (run-hook-with-args 'drgnx-agents-task-functions s 'turn-start)))
   (drgnx-agents--changed s)
   (let (id)
     (setq id (drgnx-acp-request (drgnx-agent-session-conn s) "session/prompt"

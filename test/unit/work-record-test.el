@@ -39,9 +39,10 @@
 
 (ert-deftest drgnx-work/the-commits-made-during-a-task-are-recorded-once ()
   (drgnx-work-rec--with repo
-    (let ((st (drgnx-work-task-begin "task:/p.md#1" repo))
-          ;; one second for all: git's order, not the date, puts them newest first
-          (process-environment (append '("GIT_COMMITTER_DATE=2026-01-01T00:00:00Z" "GIT_AUTHOR_DATE=2026-01-01T00:00:00Z") process-environment)))
+    (let* ((st (drgnx-work-task-begin "task:/p.md#1" repo))
+           ;; one second for all: git's order, not the date, puts them newest first
+           (date (format-time-string "%FT%TZ" (time-add nil 60) t))      ; after the task began
+           (process-environment (append (list (concat "GIT_COMMITTER_DATE=" date) (concat "GIT_AUTHOR_DATE=" date)) process-environment)))
       (dolist (m '("one" "two" "three" "four")) (drgnx-work-rec--commit repo m))
       (should (= 4 (length (drgnx-work-task-collect st))))
       (should-not (drgnx-work-task-collect st))                       ; nothing new: nothing twice
@@ -104,5 +105,110 @@
         (should (string-match-p "tasks 0/1 +steps 1/2 .*Plan P" out)))
       (let ((rows (json-parse-string (with-output-to-string (drgnx-work-cli-run (list "status" "--json"))) :object-type (quote plist))))
         (should (equal (plist-get (aref rows 0) :steps) [1 2]))))))
+
+;;;; Final review fixes
+
+(defun drgnx-work-rec--old-commit (repo msg)
+  "A commit of REPO dated 2020 (work done before any task began)."
+  (let ((process-environment (append '("GIT_COMMITTER_DATE=2020-01-01T00:00:00Z" "GIT_AUTHOR_DATE=2020-01-01T00:00:00Z") process-environment)))
+    (drgnx-work-rec--commit repo msg)))
+
+(ert-deftest drgnx-work/a-pull-or-merge-brings-in-no-one-else-s-commits ()
+  (drgnx-work-rec--with repo
+    (drgnx-work-rec--git repo "checkout" "-q" "-b" "upstream")
+    (drgnx-work-rec--old-commit repo "upstream work")
+    (drgnx-work-rec--git repo "checkout" "-q" "-b" "side" "main")
+    (drgnx-work-rec--old-commit repo "side work")
+    (drgnx-work-rec--git repo "checkout" "-q" "main")
+    (let ((st (drgnx-work-task-begin "task:/p.md#7" repo)))
+      (drgnx-work-rec--git repo "merge" "-q" "--ff-only" "upstream")    ; a pull: older commits arrive
+      (drgnx-work-rec--commit repo "mine")
+      (drgnx-work-rec--git repo "merge" "-q" "--no-ff" "-m" "merge side" "side")
+      (drgnx-work-task-collect st)
+      (should (equal (drgnx-work-rec--titles "task:/p.md#7") '("merge side" "mine"))))))
+
+(ert-deftest drgnx-work/a-checkout-or-rebase-records-nothing ()
+  (drgnx-work-rec--with repo
+    (drgnx-work-rec--git repo "checkout" "-q" "-b" "other")
+    (drgnx-work-rec--commit repo "other branch work")
+    (drgnx-work-rec--git repo "checkout" "-q" "main")
+    (drgnx-work-rec--commit repo "main moves on")
+    (let ((st (drgnx-work-task-begin "task:/p.md#8" repo)))
+      (drgnx-work-rec--git repo "checkout" "-q" "other")                  ; HEAD jumps to an unrelated line
+      (should-not (drgnx-work-task-collect st))
+      (drgnx-work-rec--commit repo "after the checkout")
+      (should (equal (length (drgnx-work-task-collect st)) 1)))))         ; from the new HEAD on
+
+(ert-deftest drgnx-work/no-start-head-records-nothing ()
+  (let* ((dir (file-name-as-directory (make-temp-file "drgnx-work-nohead" t))))
+    (drgnx-work-rec--with repo
+      (ignore repo)
+      (let ((st (drgnx-work-task-begin "task:/p.md#9" dir)))             ; not a repository yet
+        (drgnx-work-rec--git dir "init" "-q" "-b" "main")
+        (drgnx-work-rec--commit dir "a whole history")
+        (should-not (drgnx-work-task-collect st))))
+    (delete-directory dir t)))
+
+(ert-deftest drgnx-work/too-many-new-commits-for-one-turn-record-nothing ()
+  (drgnx-work-rec--with repo
+    (let ((st (drgnx-work-task-begin "task:/p.md#10" repo)) (drgnx-work-collect-max 2))
+      (dotimes (i 3) (drgnx-work-rec--commit repo (format "c%d" i)))
+      (should-not (drgnx-work-task-collect st))
+      (should-not (drgnx-work-rec--titles "task:/p.md#10")))))
+
+(defun drgnx-work-rec--session (task repo)
+  (drgnx-agents--make :name task :profile "mock" :cwd repo :task task))
+
+(defun drgnx-work-rec--pump () (dotimes (_ 5) (accept-process-output nil 0.02)))
+
+(ert-deftest drgnx-work/a-turn-s-commits-are-recorded-after-the-turn-not-inside-it ()
+  (drgnx-work-rec--with repo
+    (let ((a (drgnx-work-rec--session "task:/p.md#11" repo)))
+      (drgnx-work--agent-task a 'start)
+      (drgnx-work--agent-task a 'turn-start)
+      (drgnx-work-rec--commit repo "a's work")
+      (drgnx-work--agent-task a 'turn-end)
+      (should-not (drgnx-work-rec--titles "task:/p.md#11"))             ; not in the process filter
+      (drgnx-work-rec--pump)
+      (should (equal (drgnx-work-rec--titles "task:/p.md#11") '("a's work"))))))
+
+(ert-deftest drgnx-work/two-task-sessions-busy-in-one-repository-record-nothing-by-themselves ()
+  (drgnx-work-rec--with repo
+    (let ((a (drgnx-work-rec--session "task:/p.md#12" repo)) (b (drgnx-work-rec--session "task:/p.md#13" repo)))
+      (dolist (s (list a b)) (drgnx-work--agent-task s 'start))
+      (drgnx-work--agent-task a 'turn-start)
+      (drgnx-work--agent-task b 'turn-start)
+      (drgnx-work-rec--commit repo "whose?")
+      (drgnx-work--agent-task a 'turn-end)
+      (drgnx-work--agent-task b 'turn-end)
+      (drgnx-work-rec--pump)
+      (should-not (drgnx-work-rec--titles "task:/p.md#12"))
+      (should-not (drgnx-work-rec--titles "task:/p.md#13"))
+      (drgnx-work--agent-task a 'turn-start)                               ; alone again: recorded
+      (drgnx-work-rec--commit repo "a alone")
+      (drgnx-work--agent-task a 'turn-end)
+      (drgnx-work-rec--pump)
+      (should (equal (drgnx-work-rec--titles "task:/p.md#12") '("a alone"))))))
+
+(ert-deftest drgnx-work/a-job-whose-worktree-is-gone-still-gets-its-commits ()
+  (skip-unless (executable-find "setsid"))
+  (drgnx-work-rec--with repo
+    (let ((wt (concat repo ".wt/")))
+      (drgnx-work-rec--git repo "worktree" "add" "-q" wt "-b" "w")
+      (let ((id (drgnx-jobs-start "j" (list "sh" "-c" "echo x > j.txt && git add j.txt && git commit -q -m 'job in a worktree'")
+                                  :cwd wt :task "task:/p.md#14")))
+        (let ((d (+ (float-time) 10))) (while (and (not (eq (plist-get (drgnx-jobs-get id) :status) 'exited)) (< (float-time) d)) (sleep-for 0.05)))
+        (drgnx-work-rec--git repo "merge" "-q" "--ff-only" "w")
+        (drgnx-work-rec--git repo "worktree" "remove" "--force" wt)
+        (drgnx-work-collect-jobs)
+        (should (equal (drgnx-work-rec--titles "task:/p.md#14") '("job in a worktree")))))))
+
+(ert-deftest drgnx-work/git-notes-follow-the-environment ()
+  (drgnx-work-rec--with repo
+    (let ((sha (drgnx-work-rec--commit repo "noted by the cli")) (default-directory repo) (drgnx-work-git-notes nil)
+          (process-environment (append '("DRGNX_WORK_GIT_NOTES=1" "DRGNX_TASK=task:/p.md#15") process-environment)))
+      (drgnx-work-cli-run '("record"))
+      (drgnx-work-cli-run '("record"))                                    ; twice: one line
+      (should (equal (drgnx-work-rec--git repo "notes" "--ref=drgnx" "show" sha) "drgnx task: task:/p.md#15")))))
 
 ;;; work-record-test.el ends here
