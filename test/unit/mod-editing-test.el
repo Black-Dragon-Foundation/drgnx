@@ -89,3 +89,15 @@
           (drgnx-look-zen)
           (should (drgnx-wb-area-window 'panel)))
       (drgnx-wb-area-hide 'panel))))
+
+(ert-deftest drgnx-look/a-broken-saved-theme-leaves-color-theme ()
+  ;; M4-2: the saved theme errors at start: the module still defines Color Theme (to pick another).
+  (let* ((cfg (make-temp-file "drgnx-cfg" t)) (process-environment (cons (concat "DRGNX_CONFIG_DIR=" cfg) process-environment))
+         (drgnx-modules--state nil) (drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil))
+    (unwind-protect
+        (progn
+          (drgnx-modules-write-state '(:version 1 :theme modus-operandi))
+          (cl-letf (((symbol-function 'load-theme) (lambda (&rest _) (error "Theme kaputt"))))
+            (funcall (plist-get (alist-get 'ui/look drgnx-modules--table) :setup)))
+          (should (drgnx-commands-get 'preferences-theme)))
+      (delete-directory cfg t))))
