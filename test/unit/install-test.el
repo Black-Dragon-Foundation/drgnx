@@ -13,7 +13,9 @@
   "Run install.sh ARGS with ENV (\"K=V\" strings) in a new session (no terminal); return (EXIT . OUTPUT).
 HOME is a new empty directory, deleted afterwards (ENV may name another)."
   (let* ((home (make-temp-file "drgnx-install-home" t))
-         (process-environment (append env (list "DRGNX_INSTALL_EMACS=none" (concat "HOME=" home))
+         (process-environment (append env (list "DRGNX_INSTALL_EMACS=none" (concat "HOME=" home)
+                                                ;; never this machine's /run/ostree-booted
+                                                (concat "DRGNX_INSTALL_OSTREE_BOOTED=" home "/no-ostree"))
                                       process-environment))
          (default-directory drgnx-install-test--root))    ; not "~/…": HOME is changed above
     (unwind-protect
@@ -141,6 +143,27 @@ HOME is a new empty directory, deleted afterwards (ENV may name another)."
       (should (= (car r) 2))
       (should (string-match-p "no --method \\(package\\|source\\) recipe for" (cdr r)))
       (should-not (string-search "1. Emacs" (cdr r))))))
+
+(ert-deftest drgnx-install/image-based-fedora-gets-toolbox-or-layering ()
+  ;; M2.5-11: Silverblue, Kinoite, Bazzite (/run/ostree-booted): dnf cannot install there — refused before
+  ;; the plan with the two ways that work; an Emacs that is already good is kept.
+  (let ((booted (make-temp-file "ostree-booted")) (fake (make-temp-file "fake-emacs")))
+    (unwind-protect
+        (progn
+          (dolist (os '("fedora-45" "fedora-44"))
+            (let ((r (drgnx-install-test--plan os (concat "DRGNX_INSTALL_OSTREE_BOOTED=" booted))))
+              (should (= (car r) 2))
+              (should (string-search "toolbox" (cdr r)))
+              (should (string-search "rpm-ostree install emacs-pgtk" (cdr r)))
+              (should (string-search "--method keep" (cdr r)))
+              (should-not (string-search "dnf install" (cdr r)))))
+          (write-region "#!/bin/sh\necho '31.1 t pgtk'\n" nil fake)
+          (set-file-modes fake #o755)
+          (drgnx-install-test--expect (drgnx-install-test--plan "fedora-45" (concat "DRGNX_INSTALL_OSTREE_BOOTED=" booted)
+                                                                (concat "DRGNX_INSTALL_EMACS=" fake))
+                                      "keep the installed Emacs 31.1"))
+      (delete-file booted)
+      (delete-file fake))))
 
 (ert-deftest drgnx-install/plan-names-the-drgnx-steps ()
   (drgnx-install-test--expect (drgnx-install-test--plan "fedora-45")

@@ -77,6 +77,8 @@ detect() {
   UNAME="${DRGNX_INSTALL_UNAME:-$(uname -s)}"
   ARCH="${DRGNX_INSTALL_ARCH:-$(uname -m)}"
   SESSION="${DRGNX_INSTALL_SESSION:-${XDG_SESSION_TYPE:-}}"
+  OSTREE=0         # image-based (Silverblue, Kinoite, Bazzite, …): the system is read-only, dnf cannot install
+  if [[ -e "${DRGNX_INSTALL_OSTREE_BOOTED:-/run/ostree-booted}" ]]; then OSTREE=1; fi
   if [[ -z "$SESSION" || "$SESSION" == tty ]]; then
     if [[ -n "${WAYLAND_DISPLAY:-}" ]]; then SESSION=wayland
     elif [[ -n "${DISPLAY:-}" ]]; then SESSION=x11
@@ -150,6 +152,9 @@ choose_method() {
     esac
   fi
   if [[ "$CHOSEN" == package && "$FAMILY" == debian ]]; then CHOSEN=source; fi   # no 31.1 packages there yet
+  if ((OSTREE)) && [[ "$FAMILY" == fedora && ( "$CHOSEN" == package || "$CHOSEN" == source ) ]]; then
+    die 2 "${PRETTY:-this system} is image-based (rpm-ostree): dnf cannot install here. Either run this installer inside a toolbox (toolbox create, toolbox enter, then bash install.sh), or layer Emacs: rpm-ostree install emacs-pgtk, reboot, then run: bash install.sh --method keep (see $DOCS_URL)"
+  fi
   case "$FAMILY:$SESSION" in
     fedora:x11) PKG=(dnf install -y emacs-gtk+x11) ;;
     fedora:*)   PKG=(dnf install -y emacs-pgtk) ;;

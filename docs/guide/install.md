@@ -66,6 +66,7 @@ option (an option without its value too), 3 no terminal to ask on and no `--yes`
 | Arch, EndeavourOS, Manjaro, … | `pacman -Syu emacs-wayland` (Wayland) / `emacs` (X11) | 31.1, native compilation; `-Syu` because Arch supports no partial upgrades |
 | Fedora 45+ | `dnf install emacs-pgtk` (Wayland) / `emacs-gtk+x11` (X11) | 31.1, native compilation, tree-sitter |
 | Fedora 44, Fedora remixes (Nobara, …) below 45 | source build (`dnf builddep emacs`) | |
+| Image-based Fedora (Silverblue, Kinoite, Bazzite, …; `/run/ostree-booted`) | — (exit 2, unless a good Emacs is already there) | dnf cannot install on them: run the installer inside a toolbox (`toolbox create`, `toolbox enter`), or layer Emacs (`rpm-ostree install emacs-pgtk`, reboot) and run `bash install.sh --method keep` |
 | Debian 13, Ubuntu 26.04, Linux Mint, Pop!_OS, … | source build (`apt-get build-dep emacs`) | see below |
 | macOS, Apple silicon, 15+ | Homebrew `brew install --cask emacs-plus-app` (prebuilt) | needs [Homebrew](https://brew.sh); `brew trust d12frosted/emacs-plus` first |
 | macOS, Intel or older | Homebrew `brew install emacs-plus@31` (builds, ~30 min) | |
