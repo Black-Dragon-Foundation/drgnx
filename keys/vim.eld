@@ -51,6 +51,8 @@
         (diff-toggle-layout "s" :map drgnx-diff-mode-map)
         (diff-collapse-all :none "the palette")
         (diff-expand-all :none "the palette")
+        (toggle-inline-blame :none "the palette")
+        (blame-show-commit "SPC g c")
         (agents-open "RET")
         (projects-sync-plans :none "in the palette")
         (work-view "SPC a w")
