@@ -28,6 +28,10 @@
 (declare-function drgnx-search-store-open-read "drgnx-search-store")
 (declare-function drgnx-search-store-meta "drgnx-search-store")
 (declare-function drgnx-search-config "drgnx-search-chunk")
+(declare-function drgnx-search--dot-path-p "drgnx-search-chunk")
+(declare-function drgnx-search--sensitive-name-p "drgnx-search-chunk")
+(declare-function drgnx-search--glob-regexp "drgnx-search-chunk")
+(declare-function drgnx-search--matches-p "drgnx-search-chunk")
 (declare-function drgnx-search-index-start "drgnx-search-index")
 (declare-function drgnx-search-index--running-job "drgnx-search-index")
 (defvar drgnx-search-last-notice)
@@ -80,17 +84,32 @@
         (with-current-buffer buf (setq header-line-format (and notice (concat " " notice)))))
       (when notice (message "%s" notice)))))
 
+(defun drgnx-search--show-safely (buffer window root query hits notice)
+  "`drgnx-search--show' as the command had it: BUFFER current and WINDOW selected (when still live, else
+whatever is now), so xref's marker goes on the right buffer and the panel routing sees the right window.
+Called from a process sentinel: an error becomes one message, never a signal."
+  (condition-case err
+      (let ((show (lambda ()
+                    (if (buffer-live-p buffer)
+                        (with-current-buffer buffer (drgnx-search--show root query hits notice))
+                      (drgnx-search--show root query hits notice)))))
+        (if (window-live-p window) (with-selected-window window (funcall show)) (funcall show)))
+    (error (message "Semantic search could not show its results: %s" (error-message-string err)))))
+
 (defun drgnx-search-semantic (query)
   "Search the project by meaning: QUERY in words; the best chunks of code land in the panel's Results tab.
 Needs the project's index (Index Project); without an embedding provider only the keyword hits are shown,
 and the echo area says why."
-  (interactive (list (read-string "Semantic search: " (thing-at-point 'symbol t))))
-  (let ((root (drgnx-search--root-or-error)) (query (string-trim query)))
+  (interactive (progn (drgnx-search--root-or-error) ; a project first, then the question
+                      (list (read-string "Semantic search: " (thing-at-point 'symbol t)))))
+  (let ((root (drgnx-search--root-or-error)) (query (string-trim query))
+        (buffer (current-buffer)) (window (selected-window)))
     (when (string-empty-p query) (user-error "Semantic search needs a question"))
     (require 'drgnx-search-query)
     (message "Searching %s…" (abbreviate-file-name root))
     (drgnx-search-async root query
-                        (lambda (hits) (drgnx-search--show root query hits drgnx-search-last-notice)))))
+                        (lambda (hits)
+                          (drgnx-search--show-safely buffer window root query hits drgnx-search-last-notice)))))
 
 (defun drgnx-search-index-project (&optional rebuild)
   "Index (or bring up to date) this project for Semantic Search, in a background job.
@@ -111,7 +130,9 @@ With a prefix argument REBUILD, start from scratch — the way to change the emb
          (running (drgnx-search-index--running-job root)))
     (concat
      (if (null db)
-         "no index for this project — Search: Index Project"
+         (if (file-exists-p (drgnx-search-store-file root))
+             "the index cannot be read — Search: Index Project with C-u rebuilds it"
+           "no index for this project — Search: Index Project")
        (unwind-protect
            (condition-case nil
                (let* ((meta (drgnx-search-store-meta db))
@@ -122,7 +143,7 @@ With a prefix argument REBUILD, start from scratch — the way to change the emb
                          chunks (if (= chunks 1) "" "s") files (if (= files 1) "" "s")
                          (or (plist-get meta :model) (plist-get meta :provider) "unknown") (or (plist-get meta :dims) "?")
                          (if at (format-time-string "%Y-%m-%d %H:%M" at) "never")))
-             (error "the index cannot be read yet"))
+             (error "the index cannot be read — Search: Index Project with C-u rebuilds it"))
          (ignore-errors (sqlite-close db))))
      (if running "; indexing now" "; indexer not running")
      (if (plist-get (drgnx-search-config root) :off) "; search is off for this project" ""))))
@@ -137,11 +158,31 @@ With a prefix argument REBUILD, start from scratch — the way to change the emb
 (defvar drgnx-search--timers (make-hash-table :test #'equal)
   "Project root → the timer that will re-index it (one per project: a new save replaces it).")
 
+(defun drgnx-search--indexed-p (root)
+  "Non-nil when the project at ROOT has a search index and search is not turned off for it."
+  (require 'drgnx-search-store)
+  (require 'drgnx-search-chunk)
+  (and (file-exists-p (drgnx-search-store-file root))
+       (not (plist-get (drgnx-search-config root) :off))))
+
+(defun drgnx-search--indexable-p (root file)
+  "Non-nil when FILE could be indexed in the project at ROOT: not a dot file, not named like a secret, and
+passing the project's :include and :exclude (the size and binary tests are the indexer's)."
+  (let* ((rel (file-relative-name file root)) (config (drgnx-search-config root))
+         (include (mapcar #'drgnx-search--glob-regexp (plist-get config :include)))
+         (exclude (mapcar #'drgnx-search--glob-regexp (plist-get config :exclude))))
+    (and (not (string-prefix-p ".." rel))
+         (not (drgnx-search--dot-path-p rel))
+         (not (drgnx-search--sensitive-name-p rel))
+         (or (null include) (drgnx-search--matches-p rel include))
+         (not (drgnx-search--matches-p rel exclude)))))
+
 (defun drgnx-search--reindex (root)
-  "Start the incremental indexing of the project at ROOT; while a job already runs, wait again."
+  "Start the incremental indexing of the project at ROOT; while a job already runs, wait again.
+Does nothing when the index is gone or search was turned off since the save."
   (remhash root drgnx-search--timers)
   (condition-case nil
-      (progn
+      (when (drgnx-search--indexed-p root)
         (require 'drgnx-search-index)
         (if (drgnx-search-index--running-job (directory-file-name root))
             (drgnx-search--schedule root)   ; that job may have passed the saved file already
@@ -155,15 +196,13 @@ With a prefix argument REBUILD, start from scratch — the way to change the emb
 
 (defun drgnx-search--after-save ()
   "`after-save-hook': a saved file of a project that has a search index schedules that project's re-index.
-Never prompts and does nothing without an index file, with search off, or outside a project."
+Never prompts and does nothing without an index file, with search off, outside a project, or for a file the
+indexer would never index (dot files, secrets by name, the project's :exclude)."
   (when-let* ((file buffer-file-name)
               ((not (file-remote-p file)))
               (project (ignore-errors (project-current nil (file-name-directory file))))
               (root (expand-file-name (project-root project))))
-    (require 'drgnx-search-store)
-    (require 'drgnx-search-chunk)
-    (when (and (file-exists-p (drgnx-search-store-file root))
-               (not (plist-get (drgnx-search-config root) :off)))
+    (when (and (drgnx-search--indexed-p root) (drgnx-search--indexable-p root file))
       (drgnx-search--schedule root))))
 
 (drgnx-module-define 'tools/search

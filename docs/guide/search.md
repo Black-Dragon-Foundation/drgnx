@@ -6,8 +6,8 @@ chunks, each chunk turned into a vector by an embedding model, and your question
 of your question are searched too (SQLite's full-text index) and the two rankings are merged, so an identifier
 you remember and a paraphrase both find their place.
 
-Everything runs inside Emacs, in Emacs Lisp, with the SQLite that Emacs itself carries (`sqlite-available-p`). There is
-no server, no extra program and no Python.
+The search itself runs inside Emacs, in Emacs Lisp, with the SQLite that Emacs carries (`sqlite-available-p`) — no
+Python and no database server. Turning text into vectors is done by an embedding model server (through `curl`).
 
 ## Setting up
 
@@ -28,7 +28,7 @@ In the command palette, type `#` and your question — `#where do we parse the c
 command first; a bare `#` asks for the question.
 
 The results are the same kind of list as **Search in Project**: one line per chunk (its first line), `RET` or a click
-jumps to the file, and the preview follows the selection. The best hit is first. When an answer is partial the echo
+jumps to the file, and the preview follows the selection. The hits are grouped by file, the files in the order of their best hit (xref's grouping). When an answer is partial the echo
 area says why, in one line, and the list header repeats it:
 
 - **no index** — the project has not been indexed: run Index Project;
@@ -59,7 +59,7 @@ Whatever the configuration says:
 
 - dot files and everything under a dot directory (`.env`, `.git`, `.github`, …);
 - files whose names look like keys or secrets (`*.pem`, `*.key`, `*.p12`, `*.pfx`, `*.kdbx`, `*.keystore`, `*.jks`,
-  `*.asc`, `*.gpg`, `*.env`, `id_rsa*`, `id_ed25519*`, and any name containing `secret`, `credential`, `authinfo` or
+  `*.asc`, `*.gpg`, `*.env`, `id_rsa*`, `id_dsa*`, `id_ecdsa*`, `id_ed25519*`, and any name containing `secret`, `credential`, `authinfo` or
   `netrc`);
 - binary files, files over 1 MiB, symbolic links, submodules;
 - files that `.gitignore` excludes (the index lists the project's tracked files and the untracked ones that git does

@@ -5,8 +5,8 @@
 ;;; Commentary:
 ;; Every available registry command by "Category: Title", with its key shown beside it;
 ;; choosing one runs it as if typed and shows the key tip.  Works with any completion UI.
-;; Input starting with `#' (and not the start of a command label) is a Semantic Search question: the table
-;; accepts it as typed, so completion still requires a match for everything else.
+;; Input starting with `#' is a Semantic Search question.  The completion UI does not require a match (an
+;; orderless or other style may never offer `#words' as a candidate); the answer is resolved here.
 
 ;;; Code:
 (require 'drgnx-registry)
@@ -19,13 +19,6 @@
   (mapcar (lambda (c) (cons (drgnx-commands-label c) (drgnx-cmd-id c)))
           (seq-filter #'drgnx-surfaces--showable-p (drgnx-commands-all))))
 
-(defun drgnx-palette--question (string cands)
-  "The question in STRING when it is a `#' query — it starts with `#' and no command label does — else nil.
-The question is the text after the `#', trimmed (possibly empty)."
-  (and (string-prefix-p "#" string)
-       (not (cl-some (lambda (c) (string-prefix-p string (car c))) cands))
-       (string-trim (substring string 1))))
-
 (defun drgnx-palette--search (question)
   "Run Semantic Search for QUESTION; an empty one prompts for it."
   (let* ((cmd (drgnx-commands-get 'search-semantic))
@@ -37,7 +30,9 @@ The question is the text after the `#', trimmed (possibly empty)."
       (funcall fn question))))
 
 (defun drgnx-palette ()
-  "Run any drgnx command by name; `#' followed by words is a Semantic Search."
+  "Run any drgnx command by name; `#' followed by words is a Semantic Search.
+The answer is resolved here, not by the completion UI (`require-match' is nil): a command label runs it;
+text starting with `#' is a question; empty does nothing; anything else is an error."
   (interactive)
   (let* ((cands (drgnx-palette-candidates))
          (annotate (lambda (label)
@@ -46,16 +41,14 @@ The question is the text after the `#', trimmed (possibly empty)."
                          (concat (if (string-empty-p key) "" (concat "  " key))
                                  (if (drgnx-cmd-doc c) (concat "  — " (drgnx-cmd-doc c)) ""))))))
          (table (lambda (string pred action)
-                  (cond ((eq action 'metadata)
-                         `(metadata (annotation-function . ,annotate) (category . drgnx-command)))
-                        ((drgnx-palette--question string cands)
-                         (complete-with-action action (list string) string pred))
-                        (t (complete-with-action action cands string pred)))))
-         (choice (completing-read "Command: " table nil t)))
-    (if-let* ((id (cdr (assoc choice cands))))
-        (drgnx-surfaces-run id)
-      (when-let* ((question (drgnx-palette--question choice cands)))
-        (drgnx-palette--search question)))))
+                  (if (eq action 'metadata)
+                      `(metadata (annotation-function . ,annotate) (category . drgnx-command))
+                    (complete-with-action action cands string pred))))
+         (choice (string-trim (completing-read "Command (# for a code question): " table nil nil))))
+    (cond ((string-empty-p choice))
+          ((assoc choice cands) (drgnx-surfaces-run (cdr (assoc choice cands))))
+          ((string-prefix-p "#" choice) (drgnx-palette--search (string-trim (substring choice 1))))
+          (t (user-error "No command: %s" choice)))))
 
 (provide 'drgnx-palette)
 ;;; drgnx-palette.el ends here
