@@ -34,6 +34,7 @@
 (defvar drgnx-job-ui--timers (make-hash-table :test #'equal) "Job → its scheduled refresh.")
 (defvar drgnx-job-ui--retry nil "The timer that looks for a hub that was not there.")
 (defvar-local drgnx-job-ui--job nil "The job this buffer shows.")
+(defvar drgnx-job-ui-badge-mode)
 
 (define-derived-mode drgnx-job-ui-mode special-mode "Job"
   "A part of the job window."
@@ -195,6 +196,9 @@
 
 (defun drgnx-job-ui--event (event data)
   "`drgnx-hub-event-functions': a job, a card, an agent or a lease changed — the open windows it concerns refresh."
+  (when (member event '("job" "card"))                      ; the badge, and a notification for a new card
+    (when (equal event "card") (drgnx-job-ui--notify data))
+    (when drgnx-job-ui-badge-mode (drgnx-job-ui--schedule-recount)))
   (pcase event
     ("job" (when (drgnx-job-ui--live-p (plist-get data :id)) (drgnx-job-ui--schedule (plist-get data :id))))
     ((or "card" "lease-released") (when (drgnx-job-ui--live-p (plist-get data :job)) (drgnx-job-ui--schedule (plist-get data :job))))
@@ -287,6 +291,83 @@
       (when-let* ((b (get-buffer (drgnx-job-ui--buffer-name job part)))) (kill-buffer b))
       (remhash (cons job part) drgnx-job-ui--drawn))))
 
+;;;; The badge and notifications: nobody has to watch the window
+
+(defvar drgnx-job-ui-notify t "Non-nil: a new card is a desktop notification (else a message in the echo area).")
+(defvar drgnx-job-ui--badge "" "The mode line's badge: \" ⚑N\" while N things of jobs need you, else empty.")
+(defvar drgnx-job-ui--badge-job nil "The job with the newest card: the one the badge opens.")
+(defvar drgnx-job-ui--notified (make-hash-table :test #'equal) "Card ids already notified.")
+(defvar drgnx-job-ui--recount-timer nil)
+(defvar drgnx-job-ui--desktop :unknown "Whether desktop notifications can be sent (asked once).")
+
+(defvar drgnx-job-ui-badge-map
+  (let ((m (make-sparse-keymap)))
+    (define-key m [mode-line mouse-1] (lambda () (interactive) (when drgnx-job-ui--badge-job (drgnx-job-ui-show drgnx-job-ui--badge-job))))
+    m)
+  "A click on the badge opens the job with the newest card.")
+
+(defun drgnx-job-ui--badge-segment ()
+  (if (string-empty-p drgnx-job-ui--badge) ""
+    (propertize drgnx-job-ui--badge 'face 'warning 'mouse-face 'mode-line-highlight 'local-map drgnx-job-ui-badge-map
+                'help-echo "A job needs you: click to open its window")))
+
+(defun drgnx-job-ui--count (jobs)
+  "(N . JOB): what needs the user across JOBS (open cards, messages not acted on) — proposed, running and paused
+jobs only — and the job with the newest card."
+  (let ((n 0) (newest nil) (newest-id -1))
+    (dolist (j jobs)
+      (when (member (plist-get j :status) '("proposed" "running" "paused"))
+        (dolist (c (drgnx-job-ui--v (plist-get j :cards)))
+          (setq n (1+ n))
+          (when (> (plist-get c :id) newest-id) (setq newest-id (plist-get c :id) newest (plist-get j :id))))
+        (setq n (+ n (seq-count (lambda (m) (not (equal (plist-get m :state) "acted"))) (drgnx-job-ui--v (plist-get j :messages)))))))
+    (cons n newest)))
+
+(defun drgnx-job-ui--recount ()
+  "Count again what needs the user (asynchronously): the badge."
+  (condition-case nil
+      (progn (drgnx-job-ui--hub)
+             (drgnx-hub-call "job/status" nil
+                             (lambda (r e)
+                               (unless e
+                                 (pcase-let ((`(,n . ,job) (drgnx-job-ui--count (drgnx-job-ui--v (plist-get r :jobs)))))
+                                   (setq drgnx-job-ui--badge (if (> n 0) (format " ⚑%d" n) "") drgnx-job-ui--badge-job job)
+                                   (force-mode-line-update t))))))
+    (error nil)))
+
+(defun drgnx-job-ui--schedule-recount ()
+  "Count again within a second (once, however many events)."
+  (unless (timerp drgnx-job-ui--recount-timer)
+    (setq drgnx-job-ui--recount-timer (run-at-time 1 nil (lambda () (setq drgnx-job-ui--recount-timer nil) (drgnx-job-ui--recount))))))
+
+(defun drgnx-job-ui--desktop-p ()
+  "Can a desktop notification be sent?  (D-Bus with a session bus: asked once.)"
+  (when (eq drgnx-job-ui--desktop :unknown)
+    (setq drgnx-job-ui--desktop (and (featurep 'dbusbind) (require 'notifications nil t) (getenv "DBUS_SESSION_BUS_ADDRESS") t)))
+  drgnx-job-ui--desktop)
+
+(defun drgnx-job-ui--notify (data)
+  "A new card (DATA of its event): a desktop notification, once per card — or a message.  Never a prompt."
+  (let ((id (plist-get data :id)))
+    (when (and drgnx-job-ui-notify id (not (gethash id drgnx-job-ui--notified)))
+      (puthash id t drgnx-job-ui--notified)
+      (let ((body (format "%s — %s" (plist-get data :job) (plist-get data :title))))
+        (if (drgnx-job-ui--desktop-p)
+            (with-demoted-errors "drgnx: %S" (notifications-notify :title "drgnx: a job needs you" :body body))
+          (message "drgnx: a job needs you — %s" body))))))
+
+(declare-function notifications-notify "notifications")
+
+(define-minor-mode drgnx-job-ui-badge-mode
+  "A badge in the mode line while something of a job needs you (and a notification when it starts to)."
+  :global t :group 'drgnx
+  (if drgnx-job-ui-badge-mode
+      (progn (add-to-list 'global-mode-string '(:eval (drgnx-job-ui--badge-segment)) t)
+             (add-hook 'drgnx-hub-event-functions #'drgnx-job-ui--event)
+             (drgnx-job-ui--schedule-recount))
+    (setq global-mode-string (delete '(:eval (drgnx-job-ui--badge-segment)) global-mode-string))
+    (remove-hook 'drgnx-hub-event-functions #'drgnx-job-ui--event)))
+
 ;;;; The Plan Job commands (they may wait for the hub: the user asked)
 
 (defun drgnx-job-ui-start (file)
@@ -331,6 +412,9 @@
                      :setup
                      (lambda ()
                        (add-hook 'delete-frame-functions #'drgnx-job-ui--frame-deleted)
+                       (drgnx-job-ui-badge-mode 1)
+                       ;; counted again now and then once the hub's client is here (the Agents mirror loads it)
+                       (run-with-idle-timer 60 t (lambda () (when (featurep 'drgnx-hub) (drgnx-job-ui--recount))))
                        (when (fboundp 'drgnx-wb-place) (drgnx-wb-place "\\`\\*plan jobs\\*\\'" 'editor))
                        (pcase-dolist (`(,id ,title ,fn ,doc)
                                       '((job-show "Show Job Window…" drgnx-job-ui-show "Tasks and agents, what needs you, the decision log")

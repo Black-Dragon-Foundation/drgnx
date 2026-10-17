@@ -99,6 +99,33 @@
       (drgnx-job-ui--refresh "j1"))
     (should (string-search "No drgnx hub" (drgnx-job-ui-test--text 'cards)))))
 
+(ert-deftest drgnx-job-ui/the-badge-counts-what-needs-you ()
+  (let ((drgnx-job-ui--badge "") (answer nil))
+    (cl-letf (((symbol-function 'drgnx-hub-call) (lambda (_m _p &optional cb) (funcall cb answer nil))))
+      ;; two cards and a message of a running job; a done job's card does not count
+      (setq answer (list :jobs (list drgnx-job-ui-test--summary
+                                     (list :id "j2" :status "done" :cards '((:id 9 :kind "review")) :messages :null))))
+      (drgnx-job-ui--recount)
+      (should (equal (substring-no-properties drgnx-job-ui--badge) " ⚑3"))
+      (should (equal drgnx-job-ui--badge-job "j1"))
+      (setq answer (list :jobs :null))
+      (drgnx-job-ui--recount)
+      (should (equal drgnx-job-ui--badge "")))))
+
+(ert-deftest drgnx-job-ui/a-new-card-notifies-once ()
+  (let ((sent nil) (drgnx-job-ui-notify t) (drgnx-job-ui--notified (make-hash-table :test #'equal)))
+    (cl-letf (((symbol-function 'drgnx-job-ui--desktop-p) (lambda () t))
+              ((symbol-function 'notifications-notify) (lambda (&rest args) (push args sent)))
+              ((symbol-function 'drgnx-hub-call) #'ignore))
+      (drgnx-job-ui--event "card" '(:id 11 :job "j1" :kind "budget" :title "spent 1.2 of 1.0 USD: paused"))
+      (drgnx-job-ui--event "card" '(:id 11 :job "j1" :kind "budget" :title "spent 1.2 of 1.0 USD: paused"))
+      (should (= 1 (length sent)))
+      (should (equal (plist-get (car sent) :title) "drgnx: a job needs you"))
+      (should (string-search "paused" (plist-get (car sent) :body)))
+      (let ((drgnx-job-ui-notify nil))
+        (drgnx-job-ui--event "card" '(:id 12 :job "j1" :kind "stalled" :title "x"))
+        (should (= 1 (length sent)))))))
+
 (ert-deftest drgnx-job-ui/the-commands-are-registered ()
   (let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil))
     (funcall (plist-get (alist-get 'tools/jobs drgnx-modules--table) :setup))

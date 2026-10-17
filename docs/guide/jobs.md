@@ -31,7 +31,11 @@ A job's control room — its own window on a graphical display, so it can sit on
 
 It follows the hub's events and redraws only what changed (at most twice a second). Closing it stops nothing; it
 comes back when Emacs restarts (with the workbench's windows). Without a hub it says so, and fills in when the hub
-runs again. What needs you is a **card** with its actions — the proposal (Approve, Reject), a permission (Allow, Reject),
+runs again.
+
+You do not have to watch it: while something of a job needs you, the mode line shows **⚑N** (the cards and messages
+waiting; a click opens the job with the newest), and each new card is a desktop notification (D-Bus; else a message
+in the echo area — `drgnx-job-ui-notify` nil turns them off). Neither ever asks you anything. What needs you is a **card** with its actions — the proposal (Approve, Reject), a permission (Allow, Reject),
 a merge conflict (let the agent resolve it, merge again after you resolved it, drop the task), a review that failed
 (merge as it is, back to an agent, drop), a stuck or failed agent (retry, drop), the budget (resume with more, stop);
 each acts once. Messages agents send you are listed with a Reply.
