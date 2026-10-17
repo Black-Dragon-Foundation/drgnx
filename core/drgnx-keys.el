@@ -95,37 +95,42 @@ cannot be read (never an error or a prompt)."
 
 ;;;; Resolution
 
-(defun drgnx-keys--mac-cmd (key)
-  "KEY with every C- modifier turned into s- (Cmd), as VS Code does on macOS; the modifiers stay in
-the order keys are written in (A-C-H-M-S-s): C-S-p is S-s-p, C-M-b is M-s-b."
+(defun drgnx-keys--mac-cmd (key &optional keep-ctrl)
+  "KEY as macOS sends it: every C- turned into s- (Cmd), as VS Code does there (not with KEEP-CTRL),
+and Cmd+Shift+letter as the capital letter, as GNU Emacs' NS port sends it (S-s-p is s-P; Shift stays
+on named keys and other characters: C-S-s-<right>).  The modifiers stay in the order keys are written
+in (A-C-H-M-S-s): C-M-b is M-s-b, C-M-S-c is M-s-C."
   (mapconcat (lambda (event)
                (if (string-match "\\`\\(\\(?:[ACHMSs]-\\)*\\)\\(.+\\)\\'" event)
                    (let* ((base (match-string 2 event)) (mods (split-string (match-string 1 event) "-" t)))
-                     (if (member "C" mods)
-                         (concat (mapconcat (lambda (m) (concat m "-"))
-                                            (seq-filter (lambda (m) (member m (cons "s" (remove "C" mods))))
-                                                        '("A" "C" "H" "M" "S" "s"))
-                                            "")
-                                 base)
-                       event))
+                     (unless keep-ctrl
+                       (when (member "C" mods) (setq mods (cons "s" (remove "C" mods)))))
+                     (when (and (member "S" mods) (member "s" mods) (string-match-p "\\`[a-z]\\'" base))
+                       (setq mods (remove "S" mods) base (upcase base)))
+                     (concat (mapconcat (lambda (m) (concat m "-"))
+                                        (seq-filter (lambda (m) (member m mods)) '("A" "C" "H" "M" "S" "s"))
+                                        "")
+                             base))
                  event))
              (split-string key " ") " "))
 
 (defun drgnx-keys--entry (entry spec platform)
   "ENTRY (ID KEY… [:map M] [:mac K…]) or (ID :none [REASON] [:mac K…]) of SPEC → plist (:keys :map
 :profile-map).  On macOS, :mac's keys replace the others (`:mac ()': none there); without it a :mac-cmd
-profile's C- becomes s-.  The keymap used is the entry's, else the command's, else the profile's."
+profile's C- becomes s-.  Every macOS key has Cmd+Shift+letter as macOS sends it (`S-s-w' is s-W).
+The keymap used is the entry's, else the command's, else the profile's."
   (let ((rest (cdr entry)) keys)
-    (if (eq (car rest) :none)
-        (let ((opts (if (stringp (cadr rest)) (cddr rest) (cdr rest))))
-          (list :keys (and (eq platform 'macos) (ensure-list (plist-get opts :mac))) :profile-map (plist-get spec :map)))
-      (while (stringp (car rest)) (push (pop rest) keys))
-      (setq keys (nreverse keys))
-      (when (eq platform 'macos)
-        (setq keys (cond ((plist-member rest :mac) (ensure-list (plist-get rest :mac)))
-                         ((plist-get spec :mac-cmd) (mapcar #'drgnx-keys--mac-cmd keys))
-                         (t keys))))
-      (list :keys keys :map (plist-get rest :map) :profile-map (plist-get spec :map)))))
+    (cl-flet ((mac (opts) (mapcar (lambda (k) (drgnx-keys--mac-cmd k t)) (ensure-list (plist-get opts :mac)))))
+      (if (eq (car rest) :none)
+          (let ((opts (if (stringp (cadr rest)) (cddr rest) (cdr rest))))
+            (list :keys (and (eq platform 'macos) (mac opts)) :profile-map (plist-get spec :map)))
+        (while (stringp (car rest)) (push (pop rest) keys))
+        (setq keys (nreverse keys))
+        (when (eq platform 'macos)
+          (setq keys (cond ((plist-member rest :mac) (mac rest))
+                           ((plist-get spec :mac-cmd) (mapcar #'drgnx-keys--mac-cmd keys))
+                           (t (mapcar (lambda (k) (drgnx-keys--mac-cmd k t)) keys)))))
+        (list :keys keys :map (plist-get rest :map) :profile-map (plist-get spec :map))))))
 
 (defun drgnx-keys--lookup (map key)
   "KEY in MAP, ignoring command remapping (which depends on the current buffer)."

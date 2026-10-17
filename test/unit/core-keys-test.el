@@ -522,12 +522,12 @@
   (let ((r (drgnx-keys-test--resolve '((vscode app editing window)) :platform 'macos)))
     (pcase-dolist (`(,id ,key) '((toggle-panel "C-`") (terminal-new "C-S-`") (go-recent "C-<tab>") (go-back "C--")
                                  (go-forward "C-_") (next-tab "M-s-<right>") (previous-tab "M-s-<left>")
-                                 (file-close-window "S-s-w") (move-editor-to-next-group "C-s-<right>")
+                                 (file-close-window "s-W") (move-editor-to-next-group "C-s-<right>")
                                  (edit-expand "C-S-s-<right>") (edit-shrink "C-S-s-<left>")
                                  (explorer-copy-path "M-s-c") (explorer-reveal-externally "M-s-r") (quit "s-q")
-                                 (preferences "s-,") (palette "S-s-p") (edit-select-all "s-a") (save-all "M-s-s")
+                                 (preferences "s-,") (palette "s-P") (edit-select-all "s-a") (save-all "M-s-s")
                                  (scm-view "C-S-g") (edit-fold "M-s-[") (edit-unfold "M-s-]") (close-tab "s-w")
-                                 (org-capture "C-c c") (explorer-copy-relative-path "M-S-s-c")
+                                 (org-capture "C-c c") (explorer-copy-relative-path "M-s-C")
                                  (toggle-right-dock "M-s-b") (explorer-delete "s-<backspace>")))
       (should (equal (list id key t) (list id key (and (member key (drgnx-keys-test--keys r id)) t)))))
     (should-not (drgnx-keys-test--keys r 'preferences-modules))   ; s-, is Settings, as in VS Code
@@ -547,6 +547,24 @@
     (dolist (key '("s-h" "s-m" "s-`" "s-SPC" "s-<tab>"))
       (should (equal (list key nil) (list key (drgnx-keys-test--on r key)))))))
 
+(ert-deftest drgnx-keys/cmd-shift-letters-are-what-ns-sends ()
+  ;; GNU Emacs on macOS sends Cmd+Shift+P as s-P, never S-s-p (which no key press would reach: s-P unbound
+  ;; is read as s-p, Quick Open).  Shift stays on named keys.
+  (let ((r (drgnx-keys-test--resolve '((vscode app editing window)) :platform 'macos)))
+    (pcase-dolist (`(,id ,key) '((palette "s-P") (edit-redo "s-Z") (search-replace "s-H") (file-close-window "s-W")
+                                 (explorer-copy-relative-path "M-s-C") (file-save-as "s-S")
+                                 (edit-expand "C-S-s-<right>") (edit-line-above "S-s-<return>")))
+      (should (equal (list id key t) (list id key (and (member key (drgnx-keys-test--keys r id)) t)))))
+    (should-not (seq-find (lambda (b) (string-match-p "S-s-[a-z]\\(?: \\|\\'\\)" (plist-get b :key))) (plist-get r :bindings))))
+  ;; keys.eld's :mac keys too.
+  (let ((r (drgnx-keys-test--resolve '((vscode app editing window)) :platform 'macos
+                                     :user '(:bind ((line-numbers "C-c l" :mac "S-s-y"))))))
+    (should (equal (drgnx-keys-test--keys r 'line-numbers) '("s-Y"))))
+  (should (equal (drgnx-keys--mac-cmd "C-M-S-c") "M-s-C"))
+  (should (equal (drgnx-keys--mac-cmd "C-S-x" t) "C-S-x"))
+  (should (equal (drgnx-keys--mac-cmd "C-S-s-x" t) "C-s-X"))
+  (should (equal (drgnx-keys--mac-cmd "C-k C-S-p") "s-k s-P")))
+
 (ert-deftest drgnx-keys/vscode-on-macos-has-no-conflicts ()
   ;; Against Emacs' macOS defaults (ns-win's s- keys): no two commands on one key, no problem, and the
   ;; only conflicts are the deliberate prefixes Linux has too — VS Code's Cmd+K chords over s-k, F1, F2.
@@ -561,15 +579,21 @@
                    '("<f1>" "<f2>" "s-k")))
     (should (string-search "kill-current-buffer (s-k)" (seq-find (lambda (l) (string-prefix-p "s-k " l))
                                                                  (drgnx-keys-conflict-lines))))
-    ;; The ns-win keys VS Code takes over, on purpose; the others stay Emacs' (s-c, s-v, s-x, s-z …).
+    ;; The ns-win keys VS Code takes over, on purpose (Cmd+Shift+letter included: s-S Save As, s-H Replace
+    ;; in Project, …); the others stay Emacs' (s-c, s-v, s-x, s-z …).
     (should (equal (sort (seq-filter (lambda (key) (seq-find (lambda (b) (and (null (plist-get b :map))
                                                                               (equal (plist-get b :key) key)))
                                                              (plist-get r :bindings)))
                                      (mapcar #'car drgnx-keys-test--ns-defaults))
                          #'string<)
                    (sort (list "<end>" "<home>" "s-'" "s-+" "s-," "s--" "s-0" "s-<left>" "s-<right>" "s-=" "s-a"
-                               "s-f" "s-l" "s-n" "s-o" "s-p" "s-q" "s-s" "s-t" "s-w")
-                         #'string<)))))
+                               "s-f" "s-l" "s-n" "s-o" "s-p" "s-q" "s-s" "s-t" "s-w" "s-S" "s-H" "s-M" "s-F"
+                               "s-E")
+                         #'string<)))
+    ;; and s-L, Select All Occurrences — the extra/mc module's command, not in this registry
+    (let ((vscode (alist-get 'vscode drgnx-keys-test--profiles)))
+      (should (equal (plist-get (drgnx-keys--entry (assq 'edit-all-occurrences (plist-get vscode :bind)) vscode 'macos) :keys)
+                     '("s-L"))))))
 
 (defconst drgnx-keys-test--linux-snapshot
   '((palette "C-S-p" nil) (palette "<f1>" nil) (keys-sheet "C-k C-s" nil) (preferences-modules "C-," nil)

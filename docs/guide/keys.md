@@ -57,15 +57,18 @@ evil's normal state. On **macOS** the VS Code profile uses Cmd (`s-`) as VS Code
 
 ## On a Mac
 
-The VS Code profile on macOS has **VS Code's own Mac keys**: `C-` becomes Cmd (`s-o`, `s-k s-s`, `S-s-p`), except
-where VS Code on a Mac uses another key — there it has that one (`:mac` in `keys/vscode.eld`):
+The VS Code profile on macOS has **VS Code's own Mac keys**: `C-` becomes Cmd (`s-o`, `s-k s-s`), except where VS
+Code on a Mac uses another key — there it has that one (`:mac` in `keys/vscode.eld`). Cmd+Shift with a letter is
+written as Emacs on a Mac receives it, the capital letter: Shift+Cmd+P is `s-P` (the key sheet shows `s-P`), Shift+Cmd+Z
+`s-Z`; Shift stays with other keys (`S-s-<return>`, `C-S-s-<right>`). drgnx writes every macOS key that way, also
+yours (`:mac "S-s-y"` in `keys.eld` binds `s-Y`).
 
 | Command | Linux | Mac |
 |---|---|---|
 | Toggle Panel / New Terminal | ``C-` `` / ``C-S-` `` | Ctrl: ``C-` `` / ``C-S-` `` (Cmd+` is macOS' next window) |
 | Go to Recent / Back / Forward | `C-<tab>` / `M-<left>` / `M-<right>` | Ctrl: `C-<tab>` / `C--` / `C-_` (Ctrl+Shift+-) |
 | Next / Previous Tab | `C-<next>` / `C-<prior>` | `M-s-<right>` / `M-s-<left>` (Option+Cmd+→ / ←) |
-| Close Tab / Close Window | `C-w` / `C-q` | `s-w` / `S-s-w` (Shift+Cmd+W) |
+| Close Tab / Close Window | `C-w` / `C-q` | `s-w` / `s-W` (Shift+Cmd+W) |
 | Quit drgnx | — (File → Quit; `C-q` closes the window as in VS Code) | `s-q` (offers to save, then stops drgnx) |
 | Move Editor to Next Group | `C-M-<right>` | `C-s-<right>` (Ctrl+Cmd+→) |
 | Expand / Shrink Selection | `M-S-<right>` / `M-S-<left>` | `C-S-s-<right>` / `C-S-s-<left>` (Ctrl+Shift+Cmd+→ / ←) |

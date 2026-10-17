@@ -104,7 +104,7 @@
         (file-new "C-n")
         (file-reopen-tab "C-S-t")
         (file-new-window "C-S-n")
-        (file-close-window "C-q" :mac "S-s-w")
+        (file-close-window "C-q" :mac "s-W")
         (go-recent "C-<tab>" :mac "C-<tab>")
         (go-symbol-project "C-t")
         (go-back "M-<left>" :mac "C--")
