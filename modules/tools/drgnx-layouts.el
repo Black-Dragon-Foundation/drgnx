@@ -234,24 +234,36 @@ arranges as `one'.")
     (setf (alist-get name states) snap)
     (set-frame-parameter nil 'drgnx-layouts-state states)))
 
+(defun drgnx-layouts--put-main (state)
+  "Put the remembered editor-area STATE back (groups, tabs, points)."
+  (drgnx-layouts--with-kept-parameters (window-state-put state (window-main-window) 'safe)))
+
 (defun drgnx-layouts-apply (name)
   "Arrange the selected frame as layout NAME.
 The arrangement being left is remembered for its layout (frame parameter `drgnx-layouts-state'); NAME's
-remembered arrangement comes back, or NAME's definition builds one.  No buffer or process is killed."
-  (let* ((def (or (alist-get name (drgnx-layouts--all)) (user-error "No layout named %s" name)))
-         (from (drgnx-layouts-current)))
+remembered arrangement comes back, or NAME's definition builds one.  No buffer or process is killed.
+Entering Zen also keeps the arrangement it came from (frame parameter `drgnx-layouts-zen-return'):
+leaving Zen for a layout not used yet builds that layout from it, not from Zen's one window, and
+NAME nil (leaving Zen when no layout was picked before) puts it back as it was."
+  (let* ((from (drgnx-layouts-current))
+         (back (and (eq from 'zen) (not (eq name 'zen)) (frame-parameter nil 'drgnx-layouts-zen-return)))
+         (def (cond (name (or (alist-get name (drgnx-layouts--all)) (user-error "No layout named %s" name)))
+                    (back nil)
+                    (t (user-error "No layout named")))))
     (drgnx-layouts--close-bars)
     (let ((snap (drgnx-layouts--snapshot)))
       (when from (drgnx-layouts--remember from snap))
-      (let ((memory (alist-get name (frame-parameter nil 'drgnx-layouts-state))))
+      (when (and (eq name 'zen) (not (eq from 'zen))) (set-frame-parameter nil 'drgnx-layouts-zen-return snap))
+      (let ((memory (if name (alist-get name (frame-parameter nil 'drgnx-layouts-state)) back)))
         (drgnx-layouts--hide-all)
-        (if memory
-            (drgnx-layouts--with-kept-parameters (window-state-put (plist-get memory :main) (window-main-window) 'safe))
-          (drgnx-layouts--build-editor def))
-        (let ((target (or memory (drgnx-layouts--target def snap))))
+        (cond (memory (drgnx-layouts--put-main (plist-get memory :main)))
+              (t (when back (drgnx-layouts--put-main (plist-get back :main)))
+                 (drgnx-layouts--build-editor def)))
+        (let ((target (or memory (drgnx-layouts--target def (or back snap)))))
           (drgnx-layouts--show-left (plist-get target :left))
           (drgnx-layouts--show-area 'panel (plist-get target :panel))
           (drgnx-layouts--show-area 'right (plist-get target :right)))))
+    (when (and (eq from 'zen) (not (eq name 'zen))) (set-frame-parameter nil 'drgnx-layouts-zen-return nil))
     (unless (or (null from) (eq from name)) (set-frame-parameter nil 'drgnx-layouts-previous from))
     (set-frame-parameter nil 'drgnx-layouts-current name)
     (drgnx-layouts--zen-margins from name)
@@ -273,11 +285,14 @@ remembered arrangement comes back, or NAME's definition builds one.  No buffer o
   (drgnx-layouts-apply 'editor))
 
 (defun drgnx-layouts-zen ()
-  "Layout Zen: only the file, its text centred; again to go back to the layout before."
+  "Layout Zen: only the file, its text centred; again to go back to the layout before (or, when none
+was picked yet, to the arrangement you had)."
   (interactive)
   (if (eq (drgnx-layouts-current) 'zen)
       (let ((back (frame-parameter nil 'drgnx-layouts-previous)))
-        (drgnx-layouts-apply (if (and back (not (eq back 'zen)) (memq back (drgnx-layouts-names))) back 'editor)))
+        (drgnx-layouts-apply (cond ((and back (not (eq back 'zen)) (memq back (drgnx-layouts-names))) back)
+                                   ((frame-parameter nil 'drgnx-layouts-zen-return) nil)
+                                   (t 'editor))))
     (drgnx-layouts-apply 'zen)))
 
 (defun drgnx-layouts-browser ()

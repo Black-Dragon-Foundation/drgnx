@@ -45,8 +45,8 @@ removes one before it is sent). If the agent answers the cancel late, its last w
 is sent until that answer came — never two turns at once. Answer Agent picks an option for a pending permission. Take Over Agent Session resumes a session by its id
 (the agent replays it), when the agent can load sessions. The **context** column shows how full the agent's
 context is (from the agent's `usage_update`, or usage in its answer). The **Last** column shows how long ago the
-agent last did something (`30s`, `5m`, `2h`, `3d`), as this Emacs saw it. The column is updated whenever the list is
-redrawn. The Agent layout ([layouts.md](layouts.md)) puts this list on the right and the chat of the agent that
+agent last did something (`30s`, `5m`, `2h`, `3d`), as this Emacs saw it. While the list is on screen, it is redrawn every 30
+seconds so the ages stay current, and the cursor stays on its row. When the list is not shown, nothing runs. The Agent layout ([layouts.md](layouts.md)) puts this list on the right and the chat of the agent that
 acted last beside your file.
 
 Nothing an agent asks is ever a question in the minibuffer: the agent waits, the Agents tab says "1 to answer",

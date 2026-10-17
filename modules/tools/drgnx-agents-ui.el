@@ -96,6 +96,32 @@
       (tabulated-list-print t))
     b))
 
+(defvar drgnx-wb--owned)                ; drgnx-wb.el: windows the running code may move from a timer
+(defvar drgnx-agents-ui--tick-timer nil "Redraws the Agents list every 30 s while it is visible (its Last ages).")
+
+(defun drgnx-agents-ui--tick-update (&rest _)
+  "Run the 30 s redraw while the Agents list is visible in some window; cancel it when it is not.
+On `window-buffer-change-functions'; never asks anything."
+  (if (when-let* ((b (get-buffer "*drgnx Agents*"))) (get-buffer-window b t))
+      (unless (timerp drgnx-agents-ui--tick-timer)
+        (setq drgnx-agents-ui--tick-timer (run-with-timer 30 30 #'drgnx-agents-ui--tick)))
+    (when (timerp drgnx-agents-ui--tick-timer) (cancel-timer drgnx-agents-ui--tick-timer))
+    (setq drgnx-agents-ui--tick-timer nil)))
+
+(defun drgnx-agents-ui--tick ()
+  "Redraw the visible Agents list so its ages are current, each window's point on its row; stop when hidden."
+  (let* ((b (get-buffer "*drgnx Agents*")) (ws (and b (get-buffer-window-list b nil t))))
+    (if (not ws)
+        (drgnx-agents-ui--tick-update)
+      (with-current-buffer b
+        (let ((rows (mapcar (lambda (w) (list w (line-number-at-pos (window-point w)) (line-number-at-pos (window-start w))))
+                            ws))
+              (drgnx-wb--owned (append ws (and (boundp 'drgnx-wb--owned) drgnx-wb--owned))))  ; our own buffer's windows (jank guard, I9)
+          (tabulated-list-print t)
+          (pcase-dolist (`(,w ,pt ,start) rows)
+            (set-window-start w (save-excursion (goto-char (point-min)) (forward-line (1- start)) (point)) t)
+            (set-window-point w (save-excursion (goto-char (point-min)) (forward-line (1- pt)) (point)))))))))
+
 (defun drgnx-agents-ui-view ()
   "Show the Agents tab in the right dock."
   (interactive)
@@ -393,6 +419,8 @@ the copy), then Done writes the copy to the file (Reject, or closing the diff, w
                      :setup
                      (lambda ()
                        (add-hook 'drgnx-agents-changed-functions #'drgnx-agents-ui--changed)
+                       ;; the list's Last ages: redrawn every 30 s while it is on screen, nothing otherwise
+                       (add-hook 'window-buffer-change-functions #'drgnx-agents-ui--tick-update)
                        ;; the hub's sessions (they outlive this Emacs), once Emacs is idle
                        (run-with-idle-timer 3 nil #'drgnx-agents-ui--maybe-mirror)
                        ;; …and again later: a hub started (or restarted) since is picked up

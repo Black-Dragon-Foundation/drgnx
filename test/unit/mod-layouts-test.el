@@ -27,7 +27,7 @@ Agents tab, no agent session, no layout state and a temp config dir (layouts.eld
      (set-frame-size nil 200 60)
      (delete-other-windows)
      (dolist (p '(drgnx-wb-view drgnx-wb-areas drgnx-wb-panel-px drgnx-wb-right-px drgnx-wb-dock-px
-                                drgnx-layouts-state drgnx-layouts-current drgnx-layouts-previous))
+                                drgnx-layouts-state drgnx-layouts-current drgnx-layouts-previous drgnx-layouts-zen-return))
        (set-frame-parameter nil p nil))
      (drgnx-wb-define-section 'files :slot 0 :title "EXPLORER"
                               :buffer (lambda () (get-buffer-create "*drgnx-layouts-explorer*")))
@@ -46,7 +46,7 @@ Agents tab, no agent session, no layout state and a temp config dir (layouts.eld
        (set-window-parameter nil 'drgnx-tabs nil)
        (set-window-parameter nil 'drgnx-layouts-pane nil)
        (dolist (p '(drgnx-wb-view drgnx-wb-areas drgnx-wb-panel-px drgnx-wb-right-px drgnx-wb-dock-px
-                                  drgnx-layouts-state drgnx-layouts-current drgnx-layouts-previous))
+                                  drgnx-layouts-state drgnx-layouts-current drgnx-layouts-previous drgnx-layouts-zen-return))
          (set-frame-parameter nil p nil))
        (set-frame-size nil (car size) (cdr size))
        (switch-to-buffer "*scratch*")
@@ -198,6 +198,54 @@ Agents tab, no agent session, no layout state and a temp config dir (layouts.eld
     (should (window-live-p (drgnx-wb-area-window 'panel)))
     (dolist (w (drgnx-groups-list)) (should (equal (drgnx-layouts-test--margins w) '(0 0))))
     (should-not (memq #'drgnx-layouts--zen-resize window-size-change-functions))))
+
+(ert-deftest drgnx-layouts/zen-from-no-layout-gives-everything-back ()
+  ;; No layout applied yet: Zen and back brings the groups, their tabs and the panel back as they were.
+  (drgnx-layouts-test--with
+    (let ((a (get-buffer-create "*drgnx-layouts-a*")) (b (get-buffer-create "*drgnx-layouts-b*"))
+          (code (drgnx-layouts-test--code)))
+      (drgnx-groups-split-right)
+      (let ((groups (drgnx-groups-list)))
+        (set-window-parameter (car groups) 'drgnx-tabs (list a code))
+        (set-window-parameter (cadr groups) 'drgnx-tabs (list b code))
+        (set-window-buffer (cadr groups) b))
+      (drgnx-wb-area-show 'panel 'output (drgnx-layouts-test--output))
+      (should-not (drgnx-layouts-current))
+      (drgnx-layouts-zen)
+      (should (eq (drgnx-layouts-current) 'zen))
+      (should (= 1 (length (window-list nil 'nomini))))
+      (drgnx-layouts-zen)
+      (should-not (drgnx-layouts-current))
+      (let ((groups (drgnx-groups-list)))
+        (should (= 2 (length groups)))
+        (should (equal (window-parameter (car groups) 'drgnx-tabs) (list a code)))
+        (should (equal (window-parameter (cadr groups) 'drgnx-tabs) (list b code)))
+        (should (eq (window-buffer (cadr groups)) b))
+        (dolist (w groups) (should (equal (drgnx-layouts-test--margins w) '(0 0)))))
+      (should (window-live-p (drgnx-wb-area-window 'panel)))
+      (should (eq (drgnx-wb-area-tab 'panel) 'output))
+      (should-not (drgnx-wb-sidebar-showing-p))
+      (should-not (memq #'drgnx-layouts--zen-resize window-size-change-functions)))))
+
+(ert-deftest drgnx-layouts/agent-zen-editor-builds-editor-from-before-zen ()
+  ;; Editor's first visit, just out of Zen: built from the arrangement Zen was entered from, not Zen's one window.
+  (drgnx-layouts-test--with
+    (setq drgnx-agents--sessions (list (drgnx-agents--make :id "a1" :name "alpha" :status 'idle)))
+    (let ((a (get-buffer-create "*drgnx-layouts-a*")) (code (drgnx-layouts-test--code)))
+      (drgnx-layouts-apply 'agent)
+      (set-window-parameter (car (drgnx-groups-list)) 'drgnx-tabs (list a code))
+      (drgnx-groups-split-right)                              ; a group of the user's, besides the chat
+      (select-window (car (drgnx-groups-list)))
+      (should (= 3 (length (drgnx-groups-list))))
+      (drgnx-wb-area-show 'panel 'output (drgnx-layouts-test--output))
+      (drgnx-layouts-zen)
+      (drgnx-layouts-apply 'editor)
+      (let ((groups (drgnx-groups-list)))
+        (should (= 2 (length groups)))                        ; the chat pane gone, the user's group kept
+        (should (equal (window-parameter (car groups) 'drgnx-tabs) (list a code)))
+        (should-not (seq-some (lambda (w) (window-parameter w 'drgnx-layouts-pane)) groups)))
+      (should (window-live-p (drgnx-wb-area-window 'panel)))  ; Editor keeps the panel as it was before Zen
+      (should (drgnx-wb-sidebar-showing-p)))))
 
 (ert-deftest drgnx-layouts/user-layout-saved-and-applied ()
   (drgnx-layouts-test--with

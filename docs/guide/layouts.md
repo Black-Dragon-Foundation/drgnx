@@ -17,7 +17,8 @@ running, the right half says how to start one (Agents: New Agent Session…). Th
 bottom panel too: open the panel (Toggle Panel) and pick **Work**. The layout does not move tabs between areas.
 
 **Zen** keeps the text at a readable width when the window is resized. Its command run again (View: Layout Zen)
-goes back to the layout you came from. Zen Mode (module `ui/look`) still works on its own.
+goes back to where you came from: the layout you were in, or, if you had not picked a layout yet, the exact
+arrangement you had. Zen Mode (module `ui/look`) still works on its own.
 
 **Browser:** the web page pane comes with the next part of this work (the browser pane). Until then, Browser shows
 the editor alone with every area hidden.
@@ -36,7 +37,8 @@ and docks, the tabs they showed, your editor groups with their tabs, and the pla
 remembers this for itself, for as long as Emacs runs.
 
 A layout only moves, shows and hides things. It never closes a file, stops an agent or ends a process. Going to
-Zen hides your other editor groups, and going back brings them back.
+Zen hides your other editor groups, and going back brings them back. That includes leaving Zen for a layout you have
+not used yet: it is built from the arrangement you had before Zen, not from Zen's single window.
 
 The first time you use a layout, it is built from its definition. Editor keeps the editor groups you have and
 takes away the agent chat that Agent added.

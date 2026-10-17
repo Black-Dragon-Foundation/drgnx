@@ -67,6 +67,41 @@
       (unwind-protect (should (equal (car (aref tabulated-list-format 2)) "Last"))
         (kill-buffer)))))
 
+(ert-deftest drgnx-agents-ui/last-ticks-only-while-the-list-shows ()
+  ;; A 30 s redraw keeps the ages current while the list is visible; nothing runs while it is not.
+  (let* ((drgnx-agents--sessions (mapcar (lambda (n) (drgnx-agents--make :id n :name n :status 'idle)) '("a" "b" "c")))
+         (drgnx-agents-ui--last (make-hash-table :test #'eq :weakness 'key))
+         (drgnx-agents-ui--jobs-cache (cons 1.0e+INF nil))
+         (drgnx-agents-ui--tick-timer nil)
+         (w (selected-window)) (was (window-buffer w)))
+    (unwind-protect
+        (let ((list (drgnx-agents-ui-list-buffer)))
+          (drgnx-agents-ui--tick-update)
+          (should-not drgnx-agents-ui--tick-timer)                 ; not shown: no timer
+          (set-window-buffer w list)
+          (drgnx-agents-ui--tick-update)
+          (let ((timer drgnx-agents-ui--tick-timer))
+            (should (timerp timer))
+            (should (memq timer timer-list))
+            (should (= 30 (timer--repeat-delay timer)))
+            (drgnx-agents-ui--tick-update)
+            (should (eq timer drgnx-agents-ui--tick-timer))         ; one timer, however often asked
+            ;; a tick redraws the ages and keeps the window's point on its row
+            (puthash (nth 1 drgnx-agents--sessions) (- (float-time) 400) drgnx-agents-ui--last)
+            (set-window-point w (with-current-buffer list (goto-char (point-min)) (forward-line 1) (point)))
+            (drgnx-agents-ui--tick)
+            (with-current-buffer list
+              (should (string-search "6m" (buffer-string)))
+              (should (= 2 (line-number-at-pos (window-point w)))))
+            ;; hidden: the next tick stops the timer
+            (set-window-buffer w was)
+            (drgnx-agents-ui--tick)
+            (should-not drgnx-agents-ui--tick-timer)
+            (should-not (memq timer timer-list))))
+      (when (timerp drgnx-agents-ui--tick-timer) (cancel-timer drgnx-agents-ui--tick-timer))
+      (set-window-buffer w was)
+      (when (get-buffer "*drgnx Agents*") (kill-buffer "*drgnx Agents*")))))
+
 (ert-deftest drgnx-agents-ui/an-agent-edit-is-reviewed-hunk-by-hunk ()
   ;; The agent proposes two changes (first line, a new last line); the user takes the first only.
   (skip-unless (file-readable-p "/proc/self/fd/0"))
