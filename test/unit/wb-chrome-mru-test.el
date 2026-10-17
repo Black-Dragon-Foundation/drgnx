@@ -1,6 +1,7 @@
 ;;; wb-chrome-mru-test.el --- batch tests: closing a tab returns to the previously used tab -*- lexical-binding: t -*-
 (require 'ert)
 (require 'drgnx-chrome)
+(require 'drgnx-groups)
 
 (defmacro drgnx-chrome-test--with (dir &rest body)
   "BODY with chrome on, one editor window, a temp DIR for files."
@@ -68,8 +69,11 @@
   (drgnx-chrome-test--with dir
     (let ((a (drgnx-chrome-test--open dir "a.txt")) (b (drgnx-chrome-test--open dir "b.txt"))
           (c (drgnx-chrome-test--open dir "c.txt")))
+      (with-current-buffer b (goto-char 2))
+      (drgnx-chrome--record-closed-position (selected-window) b)
       (drgnx-chrome--close (selected-window) b)
-      (should (equal (cdr (assoc (buffer-file-name b) drgnx-chrome-closed-positions)) '(0 1)))
+      (should (equal (cdr (assoc (buffer-file-name b) drgnx-chrome-closed-positions)) '(0 1 2)))
+      (drgnx-chrome--record-closed-position (selected-window) a)
       (drgnx-chrome--close (selected-window) a)            ; most recent first, one entry per file
       (should (equal (mapcar #'car drgnx-chrome-closed-positions)
                      (list (buffer-file-name a) (buffer-file-name b))))
@@ -84,10 +88,22 @@
           (c (drgnx-chrome-test--open dir "c.txt")))
       (drgnx-chrome-test--show a)
       (drgnx-chrome-test--show c)
+      (goto-char 2)                                        ; point in c, shown
       (kill-buffer c)
       (should (eq (window-buffer) a))                      ; the previously used, not b
       (should (equal (drgnx-chrome-tabs (selected-window)) (list a b)))
-      (should (equal (cdr (assoc (buffer-file-name c) drgnx-chrome-closed-positions)) '(0 2))))))
+      (should (equal (cdr (assoc (buffer-file-name c) drgnx-chrome-closed-positions)) '(0 2 2))))))
+
+(ert-deftest drgnx-chrome/close-tab-records-and-a-moved-tab-does-not ()
+  (drgnx-chrome-test--with dir
+    (let ((a (drgnx-chrome-test--open dir "a.txt")) (b (drgnx-chrome-test--open dir "b.txt")))
+      (drgnx-groups-move-to-next)                          ; b moves to a new group: still open, not closed
+      (should (eq (window-buffer) b))
+      (should-not drgnx-chrome-closed-positions)
+      (goto-char 2)
+      (drgnx-chrome-close-tab)                             ; a real close records the file and where point was
+      (should (equal (cdr (assoc (buffer-file-name b) drgnx-chrome-closed-positions)) '(1 0 2)))
+      (should-not (assoc (buffer-file-name a) drgnx-chrome-closed-positions)))))
 
 (ert-deftest drgnx-chrome/history-is-per-group ()
   (drgnx-chrome-test--with dir
