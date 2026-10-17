@@ -27,8 +27,13 @@
 (defun mock--respond (id result) (mock--send (list :jsonrpc "2.0" :id id :result (or result :null))))
 (defun mock--error (id code msg) (mock--send (list :jsonrpc "2.0" :id id :error (list :code code :message msg))))
 
+(defun mock--state-file (sid) (and (getenv "MOCK_ACP_STATE") (expand-file-name (concat sid ".eld") (getenv "MOCK_ACP_STATE"))))
+
 (defun mock--update (sid update &optional no-history)
-  (unless no-history (setf (alist-get sid mock--history nil nil #'equal) (append (alist-get sid mock--history nil nil #'equal) (list update))))
+  (unless no-history
+    (setf (alist-get sid mock--history nil nil #'equal) (append (alist-get sid mock--history nil nil #'equal) (list update)))
+    (when-let* ((f (mock--state-file sid)))           ; for session/load from another process
+      (with-temp-file f (prin1 (alist-get sid mock--history nil nil #'equal) (current-buffer)))))
   (mock--send (list :jsonrpc "2.0" :method "session/update" :params (list :sessionId sid :update update))))
 
 (defun mock--say (sid text)
@@ -133,8 +138,12 @@
                                                         t)))))
      ((equal method "session/load")
       (if (getenv "MOCK_ACP_NO_LOAD") (mock--error id -32601 "session/load is not supported")
-        (let ((sid (plist-get params :sessionId)))
-          (dolist (u (alist-get sid mock--history nil nil #'equal)) (mock--update sid u t))
+        (let* ((sid (plist-get params :sessionId))
+               (f (mock--state-file sid))
+               (hist (or (alist-get sid mock--history nil nil #'equal)
+                         (and f (file-readable-p f) (with-temp-buffer (insert-file-contents f) (read (current-buffer)))))))
+          (setf (alist-get sid mock--history nil nil #'equal) hist)
+          (dolist (u hist) (mock--update sid u t))
           (mock--respond id nil))))
      ((equal method "session/prompt") (mock--prompt id params))
      ((equal method "session/cancel")
