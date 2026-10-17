@@ -9,6 +9,7 @@
 ;;   permission  asks session/request_permission, then says which option it got
 ;;   write PATH  reads PATH (fs/read_text_file), proposes an edit (fs/write_text_file), says the answer
 ;;   crash       exits 3, "mock crashed" on stderr
+;;   commit      commits in its directory: "agent work for $DRGNX_TASK"
 ;;   /compact    the context shrinks
 ;;   anything else: "You said: …" in two chunks
 ;; Usage comes as a usage_update (:used :size 1000) at the end of each turn (claude-agent-acp's shape).
@@ -74,6 +75,9 @@
      ((string-match-p "crash" text)
       (message "mock crashed") (sleep-for 0.1)
       (kill-emacs 3))
+     ((string-match-p "\\`commit" text)               ; a commit in its directory, naming the task it was given
+      (call-process "sh" nil nil nil "-c" "echo x >> agent.txt && git add agent.txt && git commit -q -m \"agent work for $DRGNX_TASK\"")
+      (mock--steps sid (list (cons 0 (lambda () (mock--say sid "committed"))))))
      ((string-match-p "slow" text)
       (mock--steps sid (cl-loop for i from 1 to 10 collect (cons 0.3 (let ((i i)) (lambda () (mock--say sid (format "part %d " i))))))))
      ((string-match-p "\\`/compact" text)

@@ -271,7 +271,7 @@ them), or nil."
             (drgnx-work--parse-plan p roots)
             (dolist (lp ledger-plan)
               (when (equal (cdr lp) p) (drgnx-work-forget-source (car lp)) (drgnx-work--parse-ledger (car lp) repos)))))
-        (when (and board (or (member board changed) (seq-intersection changed plans)))
+        (when (and board (file-readable-p board) (or (member board changed) (seq-intersection changed plans)))
           (drgnx-work-forget-source board)
           (drgnx-work--parse-board board))))
     (dolist (f changed) (when (gethash f found)
@@ -297,7 +297,8 @@ them), or nil."
 
 (defun drgnx-work-record (task repo sha)
   "Record that commit SHA of REPO did TASK (a node id) — kept across every rescan."
-  (let ((id (drgnx-work--commit-node repo sha "recorded")))
+  ;; its place: older commits have fewer ancestors (dates tie within a second)
+  (let ((id (drgnx-work--commit-node repo sha "recorded" (- (string-to-number (or (drgnx-work--git repo "rev-list" "--count" sha) "0"))))))
     (when id
       (drgnx-work-update-node id :source "recorded")
       (drgnx-work-put-edge id task 'implements 'recorded "recorded"))

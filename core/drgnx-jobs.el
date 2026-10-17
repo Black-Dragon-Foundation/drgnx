@@ -38,27 +38,34 @@
     (while (file-exists-p (drgnx-jobs--dir (format "%s-%d" base n))) (setq n (1+ n)))
     (format "%s-%d" base n)))
 
-(defun drgnx-jobs--wrapper (dir command)
+(defun drgnx-jobs--wrapper (dir command &optional head)
   "A shell line running COMMAND in its own group: output to DIR/log, its pid to DIR/pid, its exit
-code to DIR/exit (143 when stopped)."
+code to DIR/exit (143 when stopped); with HEAD, the git HEAD it ended at to DIR/head first."
   (let ((q (lambda (f) (shell-quote-argument (expand-file-name f dir)))))
     ;; the paths in shell variables: quoting stays right inside the trap's single quotes
-    (format "p=%s; e=%s; l=%s; echo $$ > \"$p\"; trap 'echo 143 > \"$e\"; exit 143' TERM; %s > \"$l\" 2>&1 & wait $!; echo $? > \"$e\""
-            (funcall q "pid") (funcall q "exit") (funcall q "log")
+    (format "p=%s; e=%s; l=%s; h=%s; _drgnx_head() { %s; }; echo $$ > \"$p\"; trap '_drgnx_head; echo 143 > \"$e\"; exit 143' TERM; %s > \"$l\" 2>&1 & wait $!; s=$?; _drgnx_head; echo $s > \"$e\""
+            (funcall q "pid") (funcall q "exit") (funcall q "log") (funcall q "head")
+            (if head "git rev-parse HEAD > \"$h\" 2>/dev/null" ":")
             (mapconcat #'shell-quote-argument command " "))))
 
 (defun drgnx-jobs--boot-id ()
   (ignore-errors (string-trim (with-temp-buffer (insert-file-contents "/proc/sys/kernel/random/boot_id") (buffer-string)))))
 
-(cl-defun drgnx-jobs-start (name command &key cwd)
-  "Run COMMAND (a list) as the durable job NAME in CWD.  Returns the job's id."
+(cl-defun drgnx-jobs-start (name command &key cwd task)
+  "Run COMMAND (a list) as the durable job NAME in CWD.  Returns the job's id.  TASK (a work-tracker
+node id): the job gets it as DRGNX_TASK, and the git HEADs it started and ended at are kept, so the
+commits it made are recorded for the task (docs/work.md)."
   (let* ((id (drgnx-jobs--new-id)) (dir (drgnx-jobs--dir id))
          (cwd (expand-file-name (or cwd default-directory)))
          (launcher (drgnx-jobs-launcher))
-         (line (drgnx-jobs--wrapper dir command)))
+         (head (and task (with-temp-buffer
+                           (let ((default-directory (file-name-as-directory cwd)))
+                             (and (eql 0 (call-process "git" nil t nil "rev-parse" "HEAD")) (string-trim (buffer-string)))))))
+         (process-environment (if task (cons (concat "DRGNX_TASK=" task) process-environment) process-environment))
+         (line (drgnx-jobs--wrapper dir command task)))
     (make-directory dir t)
     (with-temp-file (expand-file-name "job.eld" dir)
-      (prin1 (list :id id :name name :command command :cwd cwd :launcher launcher
+      (prin1 (list :id id :name name :command command :cwd cwd :launcher launcher :task task :head head
                    :unit (and (eq launcher 'systemd) (concat "drgnx-job-" id))
                    :started (format-time-string "%FT%T%z"))
              (current-buffer)))
@@ -66,10 +73,10 @@ code to DIR/exit (143 when stopped)."
       (pcase launcher
         ('systemd
          (with-temp-buffer
-           (unless (eql 0 (call-process "systemd-run" nil t nil "--user" "--quiet" "--collect"
+           (unless (eql 0 (apply #'call-process "systemd-run" nil t nil "--user" "--quiet" "--collect"
                                         (concat "--unit=drgnx-job-" id) (concat "--working-directory=" cwd)
                                         (concat "--setenv=PATH=" (or (getenv "PATH") "")) (concat "--setenv=HOME=" (or (getenv "HOME") ""))
-                                        "sh" "-c" line))
+                                        (append (and task (list (concat "--setenv=DRGNX_TASK=" task))) (list "sh" "-c" line))))
              (error "The job %s did not start: %s" name (string-trim (buffer-string))))))
         (_ (call-process "setsid" nil 0 nil "-f" "sh" "-c" line))))
     ;; the pid file appears once the job's shell runs; the boot and the process's start time make

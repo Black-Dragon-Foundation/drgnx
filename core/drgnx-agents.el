@@ -21,7 +21,7 @@
 
 (cl-defstruct (drgnx-agent-session (:constructor drgnx-agents--make) (:copier nil))
   name profile cwd conn acp-id (status 'starting) entries queue (mode 'queue) capabilities usage commands
-  permissions reviews stderr exit stopping paused turn draining)
+  permissions reviews stderr exit stopping paused turn draining task)
 
 (defvar drgnx-agents-profiles nil
   "Alist NAME → plist (:command LIST :env (\"NAME=value\"…) :mode queue|steer|interrupt).  Read from
@@ -31,6 +31,10 @@ agents.eld (config dir) and the built-in ones; never holds secrets (keys come fr
 
 (defvar drgnx-agents-changed-functions nil
   "Called with a session whenever it changes (status, transcript, queue, pending items).")
+
+(defvar drgnx-agents-task-functions nil
+  "Called with a session working on a task (see `drgnx-agents-start's TASK) and `start' or `turn-end':
+the work tracker records the commits each turn made (docs/work.md).")
 
 (defconst drgnx-agents-builtin-profiles
   '(("claude" :command ("claude-agent-acp") :mode queue :doc "Claude through the unmodified agent (subscription or API key)")))
@@ -169,7 +173,7 @@ agents.eld (config dir) and the built-in ones; never holds secrets (keys come fr
 (defun drgnx-agents--connect (s on-ready)
   "Start S's agent and initialize it; then ON-READY."
   (let* ((profile (cdr (drgnx-agents-profile (drgnx-agent-session-profile s))))
-         (conn (drgnx-acp-start (plist-get profile :command) :cwd (drgnx-agent-session-cwd s) :env (plist-get profile :env)
+         (conn (drgnx-acp-start (plist-get profile :command) :cwd (drgnx-agent-session-cwd s) :env (drgnx-agents--env s)
                                 :on-notification (lambda (_c method params)
                                                    (when (equal method "session/update")
                                                      (drgnx-agents--update s (plist-get params :update))))
@@ -192,13 +196,21 @@ agents.eld (config dir) and the built-in ones; never holds secrets (keys come fr
   (unless (eq (drgnx-agent-session-status s) 'exited) (setf (drgnx-agent-session-status s) 'idle))
   (drgnx-agents--changed s))
 
-(defun drgnx-agents--new (profile cwd)
+(defun drgnx-agents--env (s)
+  "The environment S's agent gets: its profile's, and DRGNX_TASK when S works on a task."
+  (append (plist-get (cdr (drgnx-agents-profile (drgnx-agent-session-profile s))) :env)
+          (and (drgnx-agent-session-task s) (list (concat "DRGNX_TASK=" (drgnx-agent-session-task s))))))
+
+(defun drgnx-agents--new (profile cwd &optional task)
   (let* ((base (format "%s · %s" profile (file-name-nondirectory (directory-file-name (expand-file-name cwd)))))
          (name base) (n 1))
     (while (seq-find (lambda (x) (equal (drgnx-agent-session-name x) name)) drgnx-agents--sessions)
       (setq n (1+ n) name (format "%s <%d>" base n)))
-    (let ((s (drgnx-agents--make :name name :profile profile :cwd (expand-file-name cwd))))
+    (let ((s (drgnx-agents--make :name name :profile profile :cwd (expand-file-name cwd) :task task)))
       (push s drgnx-agents--sessions)
+      (when task
+        (require 'drgnx-work)                    ; the tracker notes where the work starts
+        (run-hook-with-args 'drgnx-agents-task-functions s 'start))
       s)))
 
 (defun drgnx-agents--start-safely (s fn)
@@ -208,9 +220,11 @@ agents.eld (config dir) and the built-in ones; never holds secrets (keys come fr
            (drgnx-agents--add s (list :type 'error :text (format "the agent did not start: %s" (error-message-string err))))
            (drgnx-agents--changed s))))
 
-(defun drgnx-agents-start (profile cwd)
-  "Start a session of PROFILE in CWD; it is idle once the agent made it.  Returns the session."
-  (let ((s (drgnx-agents--new profile cwd)))
+(defun drgnx-agents-start (profile cwd &optional task)
+  "Start a session of PROFILE in CWD; it is idle once the agent made it.  Returns the session.
+TASK (a work-tracker node id) is what the session works on: the agent gets it as DRGNX_TASK, and
+the commits each turn makes are recorded for it."
+  (let ((s (drgnx-agents--new profile cwd task)))
     (drgnx-agents--start-safely
      s (lambda ()
          (drgnx-agents--connect
@@ -224,10 +238,11 @@ agents.eld (config dir) and the built-in ones; never holds secrets (keys come fr
                                      (drgnx-agents--next s))))))))
     s))
 
-(defun drgnx-agents-take-over (profile cwd session-id)
+(defun drgnx-agents-take-over (profile cwd session-id &optional task)
   "Resume the agent session SESSION-ID (from another client, or one that ended) with PROFILE in CWD:
-its history is replayed into the transcript.  Needs an agent that can load sessions."
-  (let ((s (drgnx-agents--new profile cwd)))
+its history is replayed into the transcript.  Needs an agent that can load sessions.  TASK as in
+`drgnx-agents-start'."
+  (let ((s (drgnx-agents--new profile cwd task)))
     (setf (drgnx-agent-session-acp-id s) session-id)
     (drgnx-agents--start-safely
      s (lambda ()
@@ -273,6 +288,7 @@ turn Stop's deadline ended lets the held messages go."
       (setf (drgnx-agent-session-turn s) nil (drgnx-agent-session-stopping s) nil)
       (unless (eq (drgnx-agent-session-status s) 'exited) (setf (drgnx-agent-session-status s) 'idle))
       (when (and (equal reason "cancelled") (not interrupt)) (setf (drgnx-agent-session-paused s) t))
+      (when (drgnx-agent-session-task s) (with-demoted-errors "drgnx work: %S" (run-hook-with-args 'drgnx-agents-task-functions s 'turn-end)))
       (unless (drgnx-acp-live-p (drgnx-agent-session-conn s))   ; the agent died: the queue waits
         (setf (drgnx-agent-session-status s) 'exited
               (drgnx-agent-session-stderr s) (drgnx-acp-conn-stderr (drgnx-agent-session-conn s))))
