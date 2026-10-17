@@ -406,6 +406,8 @@ window (viewBox) on the same drawing, so lines cross from one band into the next
 (defun drgnx-work-ui-graph-click (event)
   "Open what the box under the click EVENT shows (its hot spot is in the click's position)."
   (interactive "e")
+  ;; from the clicked window (the press selects nothing): what opens is placed beside the graph
+  (let ((w (posn-window (event-start event)))) (when (window-live-p w) (select-window w)))
   (if-let* ((box (alist-get (posn-area (event-start event)) drgnx-work-ui--graph-spots)))
       (drgnx-work-ui--graph-open box)
     (message "Work: click a box to open it")))
@@ -423,10 +425,12 @@ Returns the buffer."
       (let ((area (intern (format "drgnx-work-box-%d" (cl-incf i)))))
         (push (cons area box) spots)
         ;; a click comes as mouse-1 with the hot spot in its position, or prefixed by it: both open
-        (define-key map (vector area 'mouse-1) #'drgnx-work-ui-graph-click)))
+        (define-key map (vector area 'mouse-1) #'drgnx-work-ui-graph-click)
+        (define-key map (vector area 'double-mouse-1) #'ignore)))
     (setq spots (nreverse spots))
     (define-key map [mouse-1] #'drgnx-work-ui-graph-click)
     (define-key map [down-mouse-1] #'ignore)            ; a press neither moves point nor selects
+    (define-key map [double-mouse-1] #'ignore)          ; a double click opens once (its first click did)
     (setq drgnx-work-ui--graph-spots spots)
     (with-current-buffer b
       (let ((inhibit-read-only t))

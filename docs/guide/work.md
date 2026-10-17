@@ -86,7 +86,8 @@ Emacs never waits, and the tab redraws when the scan is done — and after each 
 - **Show Work as Graph** draws the specs, the plans shown (the tab's filter and hide-merged apply; each with its tasks
   done and commits; merged ones dashed) and their branches, in three columns, with Emacs's own `svg.el` — no other
   program. Every box is a hot spot: click a spec or plan to open its file, a branch to add its worktree to the
-  Explorer; hovering shows the full title and counts. Its colours come from your theme through the faces
+  Explorer (a double click opens it once; the file opens from the graph's window, even when another was selected);
+  hovering shows the full title and counts. Its colours come from your theme through the faces
   `drgnx-work-ui-graph-spec`, `-plan`, `-merged`, `-branch` and `-edge` (customise them, or let the theme), so the
   next graph follows a theme switch (`g` in the graph draws it again). The graph scrolls like text, down and
   sideways; a big one is drawn as bands of images one below the other (Emacs refuses a single image taller than

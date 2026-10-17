@@ -252,6 +252,26 @@ git repository ROOT/code), a lone plan, and the tracker's database in a temp dat
             (should (stringp (funcall click a))))
         (kill-buffer g)))))
 
+(ert-deftest drgnx-work-ui/a-click-opens-from-its-own-window-and-a-double-click-once ()
+  (drgnx-work-ui-test--with root
+    (let* ((g (drgnx-work-ui-test--graph))
+           (img (with-current-buffer g (let ((d (get-text-property (point-min) 'display))) (if (eq (car d) 'image) d (cadr d)))))
+           (keymap (with-current-buffer g (get-text-property (point-min) 'keymap)))
+           (spot (seq-find (lambda (a) (string-prefix-p "Plan Alpha" (plist-get (nth 2 a) 'help-echo))) (image-property img :map)))
+           (opened-in nil))
+      (unwind-protect
+          (save-window-excursion
+            (delete-other-windows)
+            (let ((other (split-window)))
+              (should-not (eq other (selected-window)))
+              (cl-letf (((symbol-function 'drgnx-work-ui--graph-open) (lambda (_) (setq opened-in (selected-window)))))
+                (funcall (lookup-key keymap [mouse-1]) (list 'mouse-1 (list other (nth 1 spot) '(0 . 0) 0))))
+              (should (eq opened-in other))))                           ; the clicked window, not the selected one
+        (kill-buffer g))
+      ;; the second click of a double click opens nothing more (the first already did)
+      (should (eq (lookup-key keymap [double-mouse-1]) #'ignore))
+      (should (eq (lookup-key keymap (vector (nth 1 spot) 'double-mouse-1)) #'ignore)))))
+
 (ert-deftest drgnx-work-ui/refresh-scans-in-another-process-and-redraws ()
   (drgnx-work-ui-test--with root
     (let ((drgnx-work-roots (list root)))
