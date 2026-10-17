@@ -96,6 +96,8 @@ key profile ([keys.md](keys.md)); faces inherit theme faces (no colours). See [c
 | `extra/booster` | idle | language servers through `emacs-lsp-booster` when it is installed (eglot-booster, from Git); else nothing changes ([editing.md](editing.md)) |
 | `extra/format` | idle | format on save with the language's formatter when installed (apheleia; in the background, never blocking the save); Toggle Format on Save ([editing.md](editing.md)) |
 | `extra/debug` | idle | a debugger (dape, the Debug Adapter Protocol): Start Debugging (or continue), Toggle Breakpoint, Step Over / Into / Out, Stop — VS Code's F5, F9, F10, F11 (while a session runs), S-F11, S-F5 in that profile ([editing.md](editing.md)) |
+| `extra/guides` | first-frame | indent guides in code and YAML on graphical frames (indent-bars, the theme's colours); Toggle Indent Guides ([editing.md](editing.md)) |
+| `ui/smooth` | first-frame | smooth, pixel-precise scrolling on graphical frames (ultra-scroll when installed, else Emacs's own); Toggle Smooth Scrolling ([editing.md](editing.md)) |
 | `tools/vc` | startup | Source Control (the project's changes), Diff with File, Blame — on Emacs' VC |
 | `tools/terminal` | startup | New Terminal (eshell, in the panel's Terminal tab), Open Terminal Here (Explorer) |
 | `tools/search` | startup | Quick Open (project files), Search in Project (results in the panel), Go to Symbol (file, project), Find in File, Replace in Project, Recent Buffers (consult when installed); Semantic Search, Index Project, Index Status, Set Up Semantic Search, and a re-index 30 s after a file of an indexed project is saved ([search.md](search.md)) |

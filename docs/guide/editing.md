@@ -40,6 +40,20 @@ In the VS Code key profile: F5, F9, F10, F11 (Step Into while a session runs —
 Emacs and Vim profiles reach them in the palette. dape's windows (scopes, stack, breakpoints, the REPL) open on the
 right, so the panel stays the workbench's. Module `extra/debug`, package `dape`.
 
+## Indent guides
+
+Thin vertical guides at each indentation level of code and YAML, on graphical frames, drawn by indent-bars (stipples,
+not characters: they cost little and the cursor never lands on them; with tree-sitter they follow the code's
+structure). Their colour comes from the theme — the `highlight` face, blended — so they follow theme changes.
+**Toggle Indent Guides** for this buffer. Module `extra/guides`, package `indent-bars`.
+
+## Smooth scrolling
+
+Touchpad and wheel scrolling move by pixels, not lines, on graphical frames: with
+[ultra-scroll](https://github.com/jdtsmith/ultra-scroll) when it is installed (faster on large buffers — add
+`ultra-scroll` to `:packages` in `packages.eld`), else Emacs's own `pixel-scroll-precision-mode`. Terminal frames
+scroll by lines as always. **Toggle Smooth Scrolling**. Module `ui/smooth`.
+
 ## Tests
 
 `test/unit/mod-grammars-test.el` (the language of a buffer, the hint once and never a prompt, the install as a job

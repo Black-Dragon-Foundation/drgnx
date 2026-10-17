@@ -5,7 +5,8 @@
 (defconst drgnx-amenities-test--modules
   '(("extra/drgnx-booster" extra/booster (eglot-booster) ())
     ("extra/drgnx-format" extra/format (apheleia) (format-on-save))
-    ("extra/drgnx-debug" extra/debug (dape) (debug-start debug-breakpoint debug-step-over debug-step-in debug-step-out debug-stop)))
+    ("extra/drgnx-debug" extra/debug (dape) (debug-start debug-breakpoint debug-step-over debug-step-in debug-step-out debug-stop))
+    ("extra/drgnx-guides" extra/guides (indent-bars) (toggle-indent-guides)))
   "FILE MODULE PACKAGES COMMANDS.")
 
 (defconst drgnx-amenities-test--elpa (expand-file-name (or (getenv "DRGNX_USER_ELPA") "~/.config/emacs/elpa"))
@@ -35,7 +36,8 @@
      (let ((pkgs (seq-mapcat (lambda (m) (nth 2 m)) drgnx-amenities-test--modules)) (orig (symbol-function 'featurep)))
        (cl-letf (((symbol-function 'locate-library) (lambda (&rest _) nil))
                  ((symbol-function 'featurep) (lambda (f &rest r) (and (not (memq f pkgs)) (apply orig f r)))))
-         (drgnx-modules-run 'idle)))
+         (drgnx-modules-run 'idle)
+         (drgnx-modules-run 'first-frame)))
      (pcase-dolist (`(,_ ,mod ,_ ,cmds) drgnx-amenities-test--modules)
        (should (eq (plist-get (alist-get mod (drgnx-modules-report)) :status) 'missing-packages))
        (dolist (c cmds) (should-not (drgnx-commands-get c)))))))
@@ -49,6 +51,7 @@
        (unwind-protect
            (progn
              (drgnx-modules-run 'idle)
+             (drgnx-modules-run 'first-frame)
              (pcase-dolist (`(,_ ,mod ,pkgs ,cmds) drgnx-amenities-test--modules)
                (when (seq-every-p #'drgnx-amenities-test--installed-p pkgs)
                  (setq ran (1+ ran))
@@ -124,5 +127,36 @@
   (let ((vs (with-temp-buffer (insert-file-contents (expand-file-name "keys/vscode.eld" drgnx-dir)) (buffer-string))))
     (should (string-search "(debug-start \"<f5>\")" vs))
     (should (string-search "(debug-step-in \"<f11>\" :map drgnx-debug-session-map)" vs))))
+
+(ert-deftest drgnx-guides/only-on-graphical-frames ()
+  (load (expand-file-name "modules/extra/drgnx-guides" drgnx-dir) nil t)
+  (let ((on nil))
+    (with-temp-buffer
+      (emacs-lisp-mode)
+      (cl-letf (((symbol-function 'indent-bars-mode) (lambda (&rest _) (setq on t)))
+                ((symbol-function 'display-graphic-p) (lambda (&rest _) nil)))
+        (drgnx-guides--maybe))
+      (should-not on)
+      (cl-letf (((symbol-function 'indent-bars-mode) (lambda (&rest _) (setq on t)))
+                ((symbol-function 'display-graphic-p) (lambda (&rest _) t)))
+        (drgnx-guides--maybe))
+      (should on))))
+
+(ert-deftest drgnx-smooth/terminal-frames-get-nothing-and-ultra-scroll-wins ()
+  (load (expand-file-name "modules/ui/drgnx-smooth" drgnx-dir) nil t)
+  (let ((used nil))
+    (cl-letf (((symbol-function 'pixel-scroll-precision-mode) (lambda (&rest _) (push 'pixel used)))
+              ((symbol-function 'ultra-scroll-mode) (lambda (&rest _) (push 'ultra used))))
+      (cl-letf (((symbol-function 'display-graphic-p) (lambda (&rest _) nil)))
+        (drgnx-smooth--setup))
+      (should-not used)
+      (cl-letf (((symbol-function 'display-graphic-p) (lambda (&rest _) t))
+                ((symbol-function 'drgnx-smooth--ultra-p) (lambda () nil)))
+        (drgnx-smooth--setup))
+      (should (equal used '(pixel)))
+      (cl-letf (((symbol-function 'display-graphic-p) (lambda (&rest _) t))
+                ((symbol-function 'drgnx-smooth--ultra-p) (lambda () t)))
+        (drgnx-smooth--setup))
+      (should (equal used '(ultra pixel))))))
 
 ;;; mod-amenities-test.el ends here

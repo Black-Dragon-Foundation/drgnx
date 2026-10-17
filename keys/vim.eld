@@ -37,6 +37,8 @@
         (debug-step-in :none "the palette")
         (debug-step-out :none "the palette")
         (debug-stop :none "the palette")
+        (toggle-indent-guides :none "the palette")
+        (toggle-smooth-scrolling :none "the palette")
         (agents-open "RET")
         (projects-sync-plans :none "in the palette")
         (work-view "SPC a w")
