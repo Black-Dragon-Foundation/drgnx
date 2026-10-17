@@ -27,7 +27,7 @@
 (cl-defun drgnx-ai--curl (url callback &key body key (timeout 30))
   "Request URL (POST BODY, a plist, when given) with KEY as a bearer token; CALLBACK gets (STATUS TEXT): the HTTP
 status (0 when no answer came) and the answer.  Returns the process."
-  (let* ((out (generate-new-buffer " *drgnx-ai*")) (err (generate-new-buffer " *drgnx-ai-err*"))
+  (let* ((out (generate-new-buffer " *drgnx-ai*" t)) (err (generate-new-buffer " *drgnx-ai-err*" t))
          (config (concat "url = " (drgnx-ai--config-string url) "\n"
                          (format "max-time = %s\n" timeout)
                          "silent\nshow-error\n"

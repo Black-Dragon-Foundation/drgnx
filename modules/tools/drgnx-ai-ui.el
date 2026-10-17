@@ -307,7 +307,7 @@ region itself changed since the answer came."
 (defun drgnx-ai--grep-retriever (question root done)
   "Files under ROOT holding the most of QUESTION's keywords (ripgrep, else grep), a snippet of each, to DONE."
   (let* ((kws (drgnx-ai--keywords question))
-         (out (generate-new-buffer " *drgnx-ai-grep*"))
+         (out (generate-new-buffer " *drgnx-ai-grep*" t))
          (cmd (if (executable-find "rg")
                   (append (list "rg" "--no-heading" "--line-number" "--ignore-case" "--max-count" "5" "--max-columns" "300")
                           (seq-mapcat (lambda (k) (list "-e" k)) kws) (list "."))
