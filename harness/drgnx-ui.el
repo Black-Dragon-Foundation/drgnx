@@ -623,7 +623,11 @@ in A is (:field \"removed\" :old BUFFER), only in B (:field \"added\" :new BUFFE
             (push (list :window (plist-get w :id) :field "removed" :old (plist-get w :buffer) :new nil) changes)
           (cl-loop for (k v) on w by #'cddr
                    unless (equal v (plist-get other k))
-                   do (push (list :window (plist-get w :id) :field (substring (symbol-name k) 1) :old v :new (plist-get other k)) changes)))))
+                   do (push (list :window (plist-get w :id) :field (substring (symbol-name k) 1) :old v :new (plist-get other k)) changes))
+          ;; fields only the newer state has
+          (cl-loop for (k v) on other by #'cddr
+                   unless (plist-member w k)
+                   do (push (list :window (plist-get w :id) :field (substring (symbol-name k) 1) :old nil :new v) changes)))))
     (dolist (w wb)
       (unless (seq-find (lambda (x) (equal (plist-get x :id) (plist-get w :id))) wa)
         (push (list :window (plist-get w :id) :field "added" :old nil :new (plist-get w :buffer)) changes)))

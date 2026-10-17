@@ -21,6 +21,13 @@
     (should (member '(:window nil :field "minibuffer_h" :old 20 :new 22) d))
     (should (= 4 (length d)))))
 
+(ert-deftest ui-diff/fields-only-in-the-newer-state-are-changes ()
+  ;; DEFERRED M3d-7: a window field the older state lacks (a newer harness, a field set only now)
+  (let ((a '(:windows [(:id "w1" :buffer "a.txt" :point 5)]))
+        (b '(:windows [(:id "w1" :buffer "a.txt" :point 5 :line 3)])))
+    (should (equal (drgnx-ui-state-diff a b) '((:window "w1" :field "line" :old nil :new 3))))
+    (should (equal (drgnx-ui-state-diff b a) '((:window "w1" :field "line" :old 3 :new nil))))))
+
 (ert-deftest ui-diff/identical-states-have-no-changes ()
   (should-not (drgnx-ui-state-diff ui-diff-test--a ui-diff-test--a)))
 
