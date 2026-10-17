@@ -62,8 +62,9 @@ one-line notice instead. Focus Outline: palette · `SPC o`.
 | Find (filter the tree) | `C-M-f` | `/` | `/` |
 
 Ctrl-click adds a row to the selection, Shift-click selects a range; moving without Shift ends it. Delete, Copy,
-Cut and Rename act on the selection. Every operation takes its targets before it asks anything, so nothing that
-happens while you answer can make it act on another file. The right-click menu has the same entries.
+Cut and Rename act on the selection; a folder selected together with something inside it counts once (the folder
+carries it). Every operation takes its targets before it asks anything, so nothing that happens while you answer
+can make it act on another file, and Paste checks every item before it moves the first. The right-click menu has the same entries.
 
 **Typing** in the Explorer jumps to the next row starting with what you typed (letters a profile does not use).
 **Find** filters the tree live to the files whose names contain the text — also inside collapsed folders — and the

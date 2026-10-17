@@ -145,4 +145,43 @@
         (setq buffer-file-name nil))
       (should-not revealed))))
 
+;;;; M3b-4: a parent and its child together
+
+(defun drgnx-explorer-edge--select (&rest names)
+  (with-current-buffer drgnx-explorer-buffer-name
+    (dolist (n names) (drgnx-explorer-edge--at n) (drgnx-explorer-mark))
+    (drgnx-explorer-edge--at (car names))))
+
+(ert-deftest drgnx-explorer-edge/deleting-a-folder-and-a-file-inside-it ()
+  (drgnx-explorer-edge--with root
+    (with-current-buffer (drgnx-explorer-edge--at "docs") (drgnx-explorer-toggle-at (point)))
+    (drgnx-explorer-edge--select "docs" "guide.md")
+    (drgnx-explorer-edge--answering '(t)
+      (with-current-buffer drgnx-explorer-buffer-name (drgnx-explorer-delete)))
+    (should-not (file-exists-p (expand-file-name "docs" root)))
+    (should-not (member '(1 "docs") (drgnx-explorer-edge--rows)))))
+
+(ert-deftest drgnx-explorer-edge/a-refused-move-moves-nothing ()
+  (drgnx-explorer-edge--with root
+    (drgnx-explorer-edge--select "README.md" "docs")
+    (with-current-buffer drgnx-explorer-buffer-name
+      (drgnx-explorer-cut)
+      (drgnx-explorer-edge--at "docs")
+      (drgnx-explorer-toggle-at (point))
+      (drgnx-explorer-edge--at "sub")
+      (should-error (drgnx-explorer-paste) :type 'user-error))
+    (should (file-exists-p (expand-file-name "README.md" root)))
+    (should-not (file-exists-p (expand-file-name "docs/sub/README.md" root)))))
+
+(ert-deftest drgnx-explorer-edge/copying-a-folder-and-a-file-inside-it-copies-once ()
+  (drgnx-explorer-edge--with root
+    (with-current-buffer (drgnx-explorer-edge--at "docs") (drgnx-explorer-toggle-at (point)))
+    (drgnx-explorer-edge--select "docs" "guide.md")
+    (with-current-buffer drgnx-explorer-buffer-name
+      (drgnx-explorer-copy)
+      (drgnx-explorer-edge--at "tests")
+      (drgnx-explorer-paste))
+    (should (file-exists-p (expand-file-name "tests/docs/guide.md" root)))
+    (should-not (file-exists-p (expand-file-name "tests/guide.md" root)))))
+
 ;;; wb-explorer-edge-test.el ends here

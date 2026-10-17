@@ -657,7 +657,8 @@ excluded names left out.  A root that is your home or / and not a project is ref
 (defvar drgnx-explorer--clipboard nil "(copy|cut PATHS) from Copy or Cut, for Paste.")
 
 (defun drgnx-explorer--targets ()
-  "The paths an operation acts on: the selection, else the row at point (never a root)."
+  "The paths an operation acts on: the selection, else the row at point (never a root).  A path
+inside another one selected goes: the folder carries it."
   (let* ((here (drgnx-explorer--node))
          (paths (if (and drgnx-explorer--selection here (member here drgnx-explorer--selection))
                     (seq-filter #'file-exists-p drgnx-explorer--selection)
@@ -668,7 +669,8 @@ excluded names left out.  A root that is your home or / and not a project is ref
     (unless paths (user-error "No file or folder here"))
     (when (seq-find (lambda (p) (member (file-name-as-directory p) drgnx-explorer--roots)) paths)
       (user-error "Not on a root folder"))
-    paths))
+    (seq-remove (lambda (p) (seq-some (lambda (q) (string-prefix-p (file-name-as-directory q) p)) paths))
+                (delete-dups (copy-sequence paths)))))
 
 (defun drgnx-explorer--folder-here ()
   "The folder at point, or the folder of the file at point."
@@ -795,9 +797,10 @@ excluded names left out.  A root that is your home or / and not a project is ref
   (interactive)
   (pcase-let ((`(,op ,paths) (or drgnx-explorer--clipboard (user-error "Nothing copied or cut")))
               (dir (drgnx-explorer--folder-here)))
-    (dolist (p paths)
+    (dolist (p paths)                                   ; every check before the first move
       (when (and (eq op 'cut) (string-prefix-p (file-name-as-directory p) (file-name-as-directory dir)))
-        (user-error "Cannot move %s into itself" (file-name-nondirectory p)))
+        (user-error "Cannot move %s into itself" (file-name-nondirectory p))))
+    (dolist (p paths)
       (unless (and (eq op 'cut) (equal (drgnx-explorer--parent p) dir))
         (let ((target (drgnx-explorer--free-name (expand-file-name (file-name-nondirectory (directory-file-name p)) dir))))
           (cond ((eq op 'cut) (rename-file p target) (drgnx-explorer--move-buffers p target))
