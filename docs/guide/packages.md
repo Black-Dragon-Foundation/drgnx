@@ -134,8 +134,10 @@ drgnx lock --ship          # writes etc/drgnx.lock.eld; commit it
 `drgnx lock --ship` writes the entries of every module's packages (on or off) and of what they need from the
 current lock — never your own packages — and refuses, writing nothing, when the lock lacks one of them (it names
 them: turn every module on and sync first), or when one of them has no hash (an archive entry without `:sha256`,
-e.g. a seeded package) or no commit (a Git entry): a new user would install it unchecked. It keeps packages a
-built-in one satisfies on the maintainer's Emacs, since a user's may be older.
+e.g. a seeded package) or no commit (a Git entry): a new user would install it unchecked. A package that a built-in
+one satisfies on the maintainer's Emacs is not installed there, so it is in neither the maintainer's lock nor the
+shipped one: a user whose Emacs is older gets it from the archive, unpinned (the newest version, as any package
+beyond the lock).
 
 ## Generations, rollback, upgrade
 
