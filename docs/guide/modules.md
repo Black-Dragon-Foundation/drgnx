@@ -101,6 +101,10 @@ key profile ([keys.md](keys.md)); faces inherit theme faces (no colours). See [c
 | `editor/sticky` | startup | sticky scroll: the function, class or block you are in, when its start has scrolled off, after the breadcrumb (tree-sitter or indentation; drgnx's own); Toggle Sticky Scroll ([editing.md](editing.md)) |
 | `lang/markdown` | startup | Markdown (READMEs as GitHub Flavored Markdown): code blocks in their language, math; Markdown: Open Preview (pandoc, cmark or markdown when installed), Mermaid diagrams through mmdc ([editing.md](editing.md)) |
 | `tools/vc` | startup | Source Control (the project's changes), Diff with File, Blame — on Emacs' VC |
+| `tools/diff` | idle | the diff view: working tree, staged or branch vs base; split or unified, files folded, open the file at the line ([git.md](git.md)) |
+| `tools/commit-message` | idle | Git: Generate Commit Message — the staged diff through the `chat` role, never a trailer ([git.md](git.md)) |
+| `tools/review` | idle | Review Branch: the `review` route's agent reads this branch's diff; findings in the panel's Review tab ([git.md](git.md)) |
+| `tools/prs` | idle | the Pull Requests tab: stacks, forge's review view, Changes in the diff view, `#` in commit messages (needs forge) ([git.md](git.md)) |
 | `tools/terminal` | startup | New Terminal (eshell, in the panel's Terminal tab), Open Terminal Here (Explorer) |
 | `tools/search` | startup | Quick Open (project files), Search in Project (results in the panel), Go to Symbol (file, project), Find in File, Replace in Project, Recent Buffers (consult when installed); Semantic Search, Index Project, Index Status, Set Up Semantic Search, and a re-index 30 s after a file of an indexed project is saved ([search.md](search.md)) |
 | `tools/agents` | startup | Show Agents (the right dock's Agents tab: sessions and durable jobs), New Agent Session, Send to Agent (queued while it works), Stop Agent, Take Over Agent Session, Answer Agent, edit review hunk by hunk, Show Job Log, Stop Job ([agents.md](agents.md)) |
@@ -113,6 +117,7 @@ key profile ([keys.md](keys.md)); faces inherit theme faces (no colours). See [c
 | `extra/undo` | idle | Undo Tree (needs vundo) |
 | `extra/wgrep` | idle | Edit Results / Apply Edited Results in search results (needs wgrep) |
 | `extra/hunks` | idle | changed lines in the gutter; Show / Revert / Stage Change (needs diff-hl) |
+| `extra/blame` | idle | inline blame: the current line's author, age and commit subject at its end; Blame: Show Commit of Line ([git.md](git.md)) |
 | `extra/keycast` | idle | Show Keys As I Type (needs keycast) |
 | `extra/llm` | idle | LLM Menu, Send to LLM (needs gptel; its model and key are gptel's configuration) |
 | `extra/windows` | idle | Pick Window: a letter on every window, type it to go there (needs ace-window) |

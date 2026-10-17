@@ -108,6 +108,17 @@ error if it does not hold)."
                       " (goto-char (point-min)) (drgnx-sticky-mode 1) (when (require 'indent-bars nil t) (drgnx-guides--maybe)) t)")
        :actions ,(append (funcall keys "<next>" 30) (funcall keys "<prior>" 30))
        :teardown ,kill-fixture)
+      ;; the diff view, split, on a 10k-line diff (built in the session: no git needed)
+      (diff-scrolling
+       :setup ,(format "(progn (load (expand-file-name \"modules/tools/drgnx-diff\" %S) nil t) t)" drgnx-ui-repo-dir)
+       :each ,(concat "(progn (switch-to-buffer (get-buffer-create \"*diff: perf*\")) (drgnx-diff-mode)"
+                      " (setq drgnx-diff-layout 'split drgnx-diff--folded nil"
+                      "       drgnx-diff--files (let ((drgnx-diff-fold-lines most-positive-fixnum))"
+                      "                          (drgnx-diff-parse (concat \"diff --git a/big.el b/big.el\\n--- a/big.el\\n+++ b/big.el\\n@@ -1,10000 +1,10000 @@\\n\""
+                      "                            (mapconcat (lambda (i) (if (zerop (% i 7)) (format \"-(old %d)\\n+(new %d)\\n\" i i) (format \" (ctx %d)\\n\" i))) (number-sequence 1 10000) \"\")))))"
+                      " (setq drgnx-diff--folded (make-vector 1 nil)) (drgnx-diff--render) (goto-char (point-min)) t)")
+       :actions ,(append (funcall keys "<next>" 30) (funcall keys "<prior>" 30))
+       :teardown "(progn (when (get-buffer \"*diff: perf*\") (kill-buffer \"*diff: perf*\")) t)")
       ;; ghost text on: a mock model answers every pause at once (the pause shortened so each key asks and the
       ;; next one cancels — the most work a keystroke can bring)
       (typing-with-ghost

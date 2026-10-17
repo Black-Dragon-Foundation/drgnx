@@ -15,4 +15,5 @@
  (job-window (:input :p95) 16) (job-window (:input :max) 50)
  (code-scrolling (:input :p95) 16) (code-scrolling (:input :max) 50)
  (typing-with-ghost (:input :p95) 16) (typing-with-ghost (:input :max) 50)
+ (diff-scrolling (:input :p95) 16) (diff-scrolling (:input :max) 50)
  (redisplay (:redisplay :p95) 16))
