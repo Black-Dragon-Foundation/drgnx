@@ -3,7 +3,9 @@
 ;;   MOCK_LLM_SERVE=1 MOCK_LLM_PORT=N MOCK_LLM_SCRIPT=FILE [MOCK_LLM_LOG=FILE] emacs --batch -Q -l mock-llm.el
 ;; FILE holds a list of answers (:path PREFIX [:match REGEXP] [:status 200] [:delay SECS] [:body STRING] [:once t]):
 ;; the first whose PREFIX starts the request path and whose REGEXP (if any) matches the body answers; :once answers
-;; once and goes; :status 0 never answers (a hanging provider); no match answers 404.  Every request (start line,
+;; once and goes; :status 0 never answers (a hanging provider); no match answers 404.  :chunks ((DELAY . TEXT)…)
+;; streams instead (the head at once, no length; each TEXT after its DELAY; then the close — or with :no-end, the
+;; connection dropped mid-answer).  Every request (start line,
 ;; headers, body) is appended to the log.  Loaded without MOCK_LLM_SERVE, it defines `drgnx-ai-test-mock-llm'.
 
 (defvar mock-llm--script nil)
@@ -19,14 +21,27 @@
     (when (plist-get entry :once) (setq mock-llm--script (delq entry mock-llm--script)))
     (let ((status (if entry (or (plist-get entry :status) 200) 404))
           (out (encode-coding-string (or (plist-get entry :body) "{}") 'utf-8)))
-      (unless (eql status 0)
-        (run-at-time (or (plist-get entry :delay) 0) nil
-                     (lambda ()
-                       (when (process-live-p proc)
-                         (process-send-string proc (format "HTTP/1.1 %d X\r\nContent-Type: application/json\r\nContent-Length: %d\r\nConnection: close\r\n\r\n"
-                                                           status (length out)))
-                         (process-send-string proc out)
-                         (process-send-eof proc))))))))
+      (if (plist-get entry :chunks)
+          ;; a stream: the head at once (no length, the end is the close), each chunk after its delay
+          (let ((t0 0))
+            (process-send-string proc (format "HTTP/1.1 %d X\r\nContent-Type: %s\r\nConnection: close\r\n\r\n"
+                                              status (or (plist-get entry :content-type) "text/event-stream")))
+            (pcase-dolist (`(,delay . ,text) (plist-get entry :chunks))
+              (setq t0 (+ t0 delay))
+              (run-at-time t0 nil (lambda () (when (process-live-p proc)
+                                               (process-send-string proc (encode-coding-string text 'utf-8))))))
+            (unless (plist-get entry :no-end)          ; :no-end: the stream stops without closing… then drops
+              (run-at-time (+ t0 0.01) nil (lambda () (when (process-live-p proc) (process-send-eof proc)))))
+            (when (plist-get entry :no-end)
+              (run-at-time (+ t0 0.05) nil (lambda () (when (process-live-p proc) (delete-process proc))))))
+        (unless (eql status 0)
+          (run-at-time (or (plist-get entry :delay) 0) nil
+                       (lambda ()
+                         (when (process-live-p proc)
+                           (process-send-string proc (format "HTTP/1.1 %d X\r\nContent-Type: application/json\r\nContent-Length: %d\r\nConnection: close\r\n\r\n"
+                                                             status (length out)))
+                           (process-send-string proc out)
+                           (process-send-eof proc)))))))))
 
 (defun mock-llm--filter (proc chunk)
   (let ((req (concat (or (process-get proc :req) "") chunk)))
