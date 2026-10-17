@@ -452,6 +452,8 @@ goes to the user."
   (let ((job (drgnx-coord-job id)))
     (unless job (user-error "No job %s" id))
     (unless (member (plist-get job :status) '("paused" "stopped")) (user-error "Job %s is %s, not paused" id (plist-get job :status)))
+    (unless (file-directory-p (drgnx-job--job-tree id))      ; a rejected proposal: it never got a job branch
+      (user-error "Job %s was never approved: propose the plan again" id))
     (when budget
       (drgnx-coord-job-set id :data (plist-put (plist-get job :data) :budget budget))
       (drgnx-gateway-set-budget id budget))

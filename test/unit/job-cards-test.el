@@ -157,4 +157,13 @@
       (drgnx-job-step id)
       (should (equal (plist-get (drgnx-coord-card cid) :state) "settled")))))
 
+(ert-deftest drgnx-job-cards/resume-after-reject-refuses ()
+  ;; a rejected proposal never started: there is no job branch to go on with
+  (drgnx-job-run-test--with drgnx-job-cards-test--one
+    (let* ((drgnx-job-max-agents 0) (id (drgnx-job-propose plan)) (card (car (drgnx-job-cards-test--open id "proposal"))))
+      (drgnx-job-card-act (plist-get card :id) "reject")
+      (should (equal (plist-get (drgnx-coord-job id) :status) "stopped"))
+      (should (string-search "never approved" (cadr (should-error (drgnx-job-resume id) :type 'user-error))))
+      (should (equal (plist-get (drgnx-coord-job id) :status) "stopped")))))
+
 ;;; job-cards-test.el ends here
