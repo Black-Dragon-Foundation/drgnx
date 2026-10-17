@@ -690,6 +690,32 @@
        (drgnx-keys-use '((vscode app editing window)))
        (should (eq drgnx-keys-test--cmd-mod 'meta))))))
 
+(ert-deftest drgnx-keys/option-that-types-characters-keeps-its-word-keys ()
+  ;; German, French … layouts type @ # { [ with Option: the left Option then types characters for ordinary keys
+  ;; and stays Meta for function keys (←/→) and the mouse — a key setting in keys.eld, applied with VS Code's keys.
+  (let ((drgnx-keys--mac-modifiers '((drgnx-keys-test--cmd-mod . super) (drgnx-keys-test--alt-mod . meta)
+                                     (drgnx-keys-test--right-alt-mod . none)))
+        (drgnx-keys--mac-option-variables '(drgnx-keys-test--alt-mod))
+        (drgnx-keys--saved-modifiers nil)
+        (drgnx-keys-test--cmd-mod 'meta) (drgnx-keys-test--alt-mod 'alt) (drgnx-keys-test--right-alt-mod 'left))
+    (drgnx-keys-test--live
+     (cl-letf (((symbol-function 'drgnx-platform) (lambda () 'macos)))
+       (drgnx-keys-use '((vscode app editing window)) t)
+       (should (eq drgnx-keys-test--alt-mod 'meta))                      ; not chosen: Meta, as before
+       (drgnx-keys-set-mac-option 'characters)
+       (should (equal drgnx-keys-test--alt-mod '(:ordinary none :function meta :mouse meta)))
+       (should (eq drgnx-keys-test--right-alt-mod 'none))
+       (let ((user (drgnx-keys-read-user)))                               ; saved beside the layers
+         (should (eq (plist-get user :mac-option) 'characters))
+         (should (equal (plist-get user :layers) '((vscode app editing window)))))
+       (drgnx-keys-use '((vscode app editing window)) t)                 ; the layers saved again: the setting stays
+       (should (eq (plist-get (drgnx-keys-read-user) :mac-option) 'characters))
+       (should (equal drgnx-keys-test--alt-mod '(:ordinary none :function meta :mouse meta)))
+       (drgnx-keys-set-mac-option 'meta)
+       (should (eq drgnx-keys-test--alt-mod 'meta))
+       (drgnx-keys-use '((emacs app editing window)))
+       (should (eq drgnx-keys-test--alt-mod 'alt))))))                   ; another profile: what was there
+
 (ert-deftest drgnx-keys/platform-names-the-system ()
   (should (eq (let ((system-type 'darwin)) (drgnx-platform)) 'macos))
   (should (eq (let ((system-type 'gnu/linux)) (drgnx-platform)) 'linux))

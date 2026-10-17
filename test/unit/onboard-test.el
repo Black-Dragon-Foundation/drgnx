@@ -890,6 +890,35 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
           (should (eq (tabulated-list-get-id) 'b))))     ; the last one: point stays
       (kill-buffer "*drgnx Welcome*"))))
 
+(ert-deftest drgnx-onboard/on-a-mac-look-and-keys-asks-about-option-once ()
+  (drgnx-onboard-test--with root
+    (let ((asked nil) (answer t) (opts '(:preset full-ai :keys "VS Code" :theme modus-vivendi)))
+      (cl-letf (((symbol-function 'y-or-n-p) (lambda (p) (push p asked) answer))
+                ((symbol-function 'drgnx-onboard--packages-to-install) #'ignore)
+                ((symbol-function 'drgnx-platform) (lambda () 'macos)))
+        (let ((r (drgnx-onboard--look-step `(:interactive t :options ,opts))))
+          (should (equal asked '("Do you type @ # { [ with Option? (German, French, … keyboards) ")))
+          (should (eq (plist-get (drgnx-keys-read-user) :mac-option) 'characters))
+          (should (string-match-p "Option types characters" (cadr r))))
+        (setq asked nil answer nil)
+        (let ((r (drgnx-onboard--look-step `(:interactive t :options ,opts))))
+          (should (= 1 (length asked)))
+          (should (eq (plist-get (drgnx-keys-read-user) :mac-option) 'meta))
+          (should (string-match-p "Option is Meta" (cadr r))))
+        ;; without interaction: nothing asked, the setting stays
+        (setq asked nil)
+        (drgnx-onboard-run :only '(look-and-keys) :non-interactive t :options opts)
+        (should-not asked)
+        (should (eq (plist-get (drgnx-keys-read-user) :mac-option) 'meta))
+        ;; Emacs keys: drgnx leaves Option alone, so it does not ask
+        (drgnx-onboard--look-step '(:interactive t :options (:preset full-ai :keys "Emacs" :theme modus-vivendi)))
+        (should-not asked))
+      ;; Linux: never asked
+      (cl-letf (((symbol-function 'y-or-n-p) (lambda (p) (push p asked) t))
+                ((symbol-function 'drgnx-onboard--packages-to-install) #'ignore))
+        (drgnx-onboard--look-step `(:interactive t :options ,opts))
+        (should-not asked)))))
+
 (ert-deftest drgnx-onboard/new-modules-need-a-restart-and-finish-offers-it ()
   ;; Packages installed into a running drgnx load at its next start: Look and Keys says so, and Finish (in the
   ;; app) offers the restart — drgnx open, detached, then quit — or says how to do it yourself.

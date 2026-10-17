@@ -341,14 +341,24 @@ Mac port's; only those this Emacs has are set.")
 
 (defvar drgnx-keys--saved-modifiers nil "What `drgnx-keys--mac-modifiers' replaced: ((VARIABLE . VALUE)…).")
 
-(defun drgnx-keys--set-mac-modifiers (layers)
-  "On macOS, with the vscode profile in LAYERS: set the modifiers VS Code's keys need; otherwise put
-back what was there before."
+(defvar drgnx-keys--mac-option-variables '(ns-alternate-modifier mac-option-modifier)
+  "The left Option's variables in `drgnx-keys--mac-modifiers' (GNU Emacs' ns- port, the Mac port).")
+
+(defconst drgnx-keys--option-types-characters '(:ordinary none :function meta :mouse meta)
+  "The left Option when it types characters (keys.eld :mac-option characters — German, French, … layouts type
+@ # { [ with it): no modifier for ordinary keys, so macOS makes the character; Meta for function keys and the mouse,
+so Option+← / → still move by word.  Both ports take such a plist (the ns- variables' custom type says so).")
+
+(defun drgnx-keys--set-mac-modifiers (layers &optional option)
+  "On macOS, with the vscode profile in LAYERS: set the modifiers VS Code's keys need — the left Option Meta, or,
+with OPTION `characters', `drgnx-keys--option-types-characters'; otherwise put back what was there before."
   (if (and (eq (drgnx-platform) 'macos) (assq 'vscode layers))
       (pcase-dolist (`(,var . ,value) drgnx-keys--mac-modifiers)
         (when (boundp var)
           (unless (assq var drgnx-keys--saved-modifiers) (push (cons var (symbol-value var)) drgnx-keys--saved-modifiers))
-          (set var value)))
+          (set var (if (and (eq option 'characters) (memq var drgnx-keys--mac-option-variables))
+                       drgnx-keys--option-types-characters
+                     value))))
     (pcase-dolist (`(,var . ,value) drgnx-keys--saved-modifiers) (set var value))
     (setq drgnx-keys--saved-modifiers nil)))
 
@@ -421,7 +431,7 @@ Never prompts: problems are collected in `drgnx-keys-last'.  Returns the resolut
                (r (drgnx-keys-resolve :commands (drgnx-commands-all) :profiles drgnx-keys-profiles :layers layers
                                       :user user :platform (drgnx-platform) :defaults drgnx-keys--defaults
                                       :maps (lambda (m) (and (boundp m) (keymapp (symbol-value m)) (symbol-value m))))))
-          (drgnx-keys--set-mac-modifiers layers)
+          (drgnx-keys--set-mac-modifiers layers (plist-get user :mac-option))
           (dolist (c (drgnx-commands-all)) (setf (drgnx-cmd-bound c) nil))
           (dolist (b (plist-get r :bindings))
             (let ((cmd (drgnx-commands-get (plist-get b :id))))
@@ -496,8 +506,18 @@ Code's C-k chords over kill-line) are one line."
 
 (defun drgnx-keys--save-layers (layers)
   "Write LAYERS into keys.eld: only the :layers value changes; comments and layout stay."
+  (drgnx-keys--save-key :layers layers))
+
+(defun drgnx-keys-set-mac-option (option)
+  "Save what the left Option does on a Mac with VS Code's keys — OPTION `characters' (it types @ # { [ on German,
+French, … layouts; Option+← / → still move by word) or `meta' — in keys.eld, and apply it when keys are applied here."
+  (drgnx-keys--save-key :mac-option option)
+  (when drgnx-keys-last (drgnx-keys-apply)))
+
+(defun drgnx-keys--save-key (key data)
+  "Write DATA as KEY's value into keys.eld: only that value changes; comments and layout stay."
   (let* ((file (drgnx-keys-file))
-         (value (prin1-to-string layers))
+         (value (prin1-to-string data))
          (text (with-temp-buffer
                  (if (file-exists-p file)
                      (insert-file-contents file)
@@ -507,24 +527,24 @@ Code's C-k chords over kill-line) are one line."
                  (goto-char (point-min))
                  (forward-comment (buffer-size))
                  (if (eobp)
-                     (insert "(:layers " value ")\n")
+                     (insert (format "(%s " key) value ")\n")
                    (let ((start (point)) found)
                      (unless (and (eq (char-after) ?\() (ignore-errors (scan-sexps start 1)))
                        (user-error "%s cannot be read — fix it first (it was not changed)" (abbreviate-file-name file)))
                      (down-list 1)
                      (while (and (not found) (progn (forward-comment (buffer-size)) (not (eq (char-after) ?\)))))
-                       (let ((key (read (current-buffer))))
+                       (let ((k (read (current-buffer))))
                          (forward-comment (buffer-size))
                          (let ((vbeg (point)))
                            (forward-sexp 1)
-                           (when (eq key :layers)
+                           (when (eq k key)
                              (delete-region vbeg (point))
                              (goto-char vbeg)
                              (insert value)
                              (setq found t)))))
                      (unless found
                        (goto-char (1+ start))
-                       (insert ":layers " value "\n "))))
+                       (insert (format "%s " key) value "\n "))))
                  (buffer-string)))
          (tmp (progn (make-directory (file-name-directory file) t)
                      (make-temp-file (expand-file-name ".keys-" (file-name-directory file))))))

@@ -120,8 +120,14 @@ Cmd+X and Cmd+Z are Emacs' own Mac keys (copy, paste, cut, undo). The Emacs and 
 
 **Modifier keys.** With the VS Code profile (also as the app layer under Emacs or Vim editing) drgnx sets, on a Mac:
 Cmd is `s-` (super), the **left Option is Meta** (`M-`: Option+← moves by word, Option+Cmd+→ is next tab), and the
-**right Option types characters** — `@ # { [ €` on any layout, as in every other Mac app. Switching to the Emacs or
-Vim profile puts back what was there. (GNU Emacs' `ns-` variables and the Mac port's `mac-` ones are both handled.)
+**right Option types characters** (`@ # { [ €`). Other Mac apps type characters with either Option, which on German,
+French and many other layouts is how you type `@ # { [`: so on a Mac, Look and Keys asks once "Do you type @ # { [
+with Option? (German, French, … keyboards)". **Yes:** the left Option types characters too, for ordinary keys, and
+stays Meta for the arrows and other function keys and the mouse — Option+← / → still move by word
+(`ns-alternate-modifier` is `(:ordinary none :function meta :mouse meta)`); **no:** the left Option is Meta, as above.
+The answer is saved in `keys.eld` as `:mac-option characters` or `:mac-option meta` (edit it there too); without
+interaction (`drgnx onboard --non-interactive`) nothing changes. Switching to the Emacs or Vim profile puts back what
+was there. (GNU Emacs' `ns-` variables and the Mac port's `mac-` ones are both handled.)
 
 ## Layers and scopes
 

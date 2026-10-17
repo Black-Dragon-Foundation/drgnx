@@ -196,7 +196,11 @@ the Xcode Command Line Tools.  :fix is the one for this platform."
 (declare-function drgnx-look-load-theme "drgnx-look")
 
 (defvar drgnx-keys-file)
+(defvar drgnx-keys-layers)
 (declare-function drgnx-keys-file "drgnx-keys")
+(declare-function drgnx-keys-read-user "drgnx-keys")
+(declare-function drgnx-keys-set-mac-option "drgnx-keys")
+(declare-function drgnx-keys--save-key "drgnx-keys")
 (declare-function drgnx-keys--user "drgnx-keys")
 
 (defun drgnx-onboard--current-keys ()
@@ -247,10 +251,16 @@ current choice as the default) — with no option and no question, the current c
                     (and ask (let ((s (drgnx-onboard--choose "Color theme" (append (mapcar #'symbol-name (custom-available-themes)) '("keep"))
                                                              "keep")))
                                (unless (equal s "keep") (intern s))))))
-         (layers (and keys (or (cdr (assoc keys drgnx-keys-presets)) (user-error "Unknown key profile %s" keys)))))
+         (layers (and keys (or (cdr (assoc keys drgnx-keys-presets)) (user-error "Unknown key profile %s" keys))))
+         ;; on a Mac with VS Code's keys drgnx sets the modifiers: the left Option is Meta unless it types characters
+         (option (and ask (eq (drgnx-platform) 'macos)
+                      (assq 'vscode (or layers (plist-get (drgnx-keys-read-user) :layers) drgnx-keys-layers))
+                      (if (y-or-n-p "Do you type @ # { [ with Option? (German, French, … keyboards) ") 'characters 'meta))))
     (when (and preset (not (eq preset cur-preset))) (drgnx-onboard-apply-preset preset))
     (when (and layers (not (equal keys cur-keys)))
       (if (and (not noninteractive) (fboundp 'drgnx-keys-apply)) (drgnx-keys-use layers t) (drgnx-keys--save-layers layers)))
+    (when option
+      (if (and (not noninteractive) (fboundp 'drgnx-keys-apply)) (drgnx-keys-set-mac-option option) (drgnx-keys--save-key :mac-option option)))
     (when theme
       (if (and (not noninteractive) (fboundp 'drgnx-look-load-theme)) (drgnx-look-load-theme theme)
         (drgnx-modules-write-state (plist-put (copy-sequence (drgnx-modules-read-state)) :theme theme))))
@@ -265,8 +275,12 @@ current choice as the default) — with no option and no question, the current c
            (restart (or (eq done 'ok) (and preset (not (eq preset cur-preset))))))
       (when restart (setq drgnx-onboard--restart-needed t))
       (list (if (consp done) 'warn 'ok)
-            (format "modules: %s; keys: %s%s; %s%s"
+            (format "modules: %s; keys: %s%s%s; %s%s"
                     (or preset cur-preset "as they are") (or keys cur-keys "as they are")
+                    (pcase option
+                      ('characters "; Option types characters (Option+←/→ still move by word)")
+                      ('meta "; Option is Meta (Option+←/→ move by word)")
+                      (_ ""))
                     (if theme (format "; theme: %s" theme) "")
                     (pcase done
                       ('none "packages: all installed")
