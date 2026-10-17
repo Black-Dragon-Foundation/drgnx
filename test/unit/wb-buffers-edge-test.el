@@ -69,5 +69,37 @@
       (when (get-buffer drgnx-explorer-buffer-name) (kill-buffer drgnx-explorer-buffer-name))
       (delete-directory dir t))))
 
+(defun drgnx-buffers-edge--alive (bufs) (seq-filter #'buffer-live-p bufs))
+
+(ert-deftest drgnx-buffers/close-commands-act-on-the-rows-shown ()
+  ;; Close Saved, Close Others and Close All never touch buffers the filter hides.
+  (drgnx-buffers-edge--with dir
+    (let ((alpha (drgnx-buffers-edge--open dir "alpha.txt")) (alps (drgnx-buffers-edge--open dir "alps.txt"))
+          (zzz (drgnx-buffers-edge--open dir "zzz.txt")))
+      (drgnx-buffers--filter-apply "alp")
+      (with-current-buffer drgnx-buffers-buffer-name
+        (goto-char (drgnx-buffers--row-pos alpha))
+        (drgnx-buffers-close-others))
+      (should (equal (drgnx-buffers-edge--alive (list alpha alps zzz)) (list alpha zzz)))
+      (drgnx-buffers-close-saved)
+      (should (equal (drgnx-buffers-edge--alive (list alpha zzz)) (list zzz)))
+      (let ((other (drgnx-buffers-edge--open dir "alpine.txt")))
+        (drgnx-buffers-close-all)
+        (should-not (buffer-live-p other))
+        (should (buffer-live-p zzz))))))
+
+(ert-deftest drgnx-buffers/a-name-with-two-spaces-is-painted-whole ()
+  ;; The name ends where its length says, not at the first two spaces.
+  (drgnx-buffers-edge--with dir
+    (let ((b (drgnx-buffers-edge--open dir "a  b.txt")))
+      (drgnx-buffers--refresh)
+      (with-current-buffer drgnx-buffers-buffer-name
+        (drgnx-buffers--fontify (point-min) (point-max))
+        (let* ((bol (drgnx-buffers--row-pos b)) (b-pos (+ bol 4 3)))     ; the "b" of "a  b.txt"
+          (should (equal (buffer-substring-no-properties b-pos (1+ b-pos)) "b"))
+          (should (eq (get-text-property b-pos 'mouse-face) 'highlight))
+          (should-not (eq (get-text-property b-pos 'face) 'drgnx-buffers-dir))
+          (should (eq (get-text-property (+ bol 4 (length "a  b.txt") 2) 'face) 'drgnx-buffers-dir)))))))
+
 (provide 'wb-buffers-edge-test)
 ;;; wb-buffers-edge-test.el ends here

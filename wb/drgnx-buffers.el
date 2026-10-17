@@ -109,14 +109,15 @@ git status (the name's colour and its letter at the right edge)."
       (remove-overlays (point) end 'drgnx-git t)
       (with-silent-modifications
         (while (< (point) end)
-          (let* ((bol (point)) (eol (pos-eol))
-                 (name-end (or (save-excursion (goto-char (+ bol 4)) (search-forward "  " eol t)) eol)))
+          (let* ((bol (point)) (eol (pos-eol)) (b (drgnx-buffers-buffer-at bol))
+                 ;; The name's end from its length (a name may hold two spaces), past the two after it.
+                 (name-end (if (buffer-live-p b) (min eol (+ bol 4 (length (drgnx-wb-display-name (buffer-name b))) 2)) eol)))
             (when (< (+ bol 4) eol)
               (add-text-properties bol (1+ bol) '(face drgnx-buffers-close mouse-face highlight help-echo "Close"))
               (put-text-property (+ bol 2) (+ bol 3) 'face 'drgnx-buffers-modified)
               (put-text-property (+ bol 4) (- name-end 2) 'mouse-face 'highlight)
               (put-text-property (- name-end 2) eol 'face 'drgnx-buffers-dir)
-              (when-let* ((b (drgnx-buffers-buffer-at bol)) (file (buffer-file-name b))
+              (when-let* (((buffer-live-p b)) (file (buffer-file-name b))
                           (status (drgnx-git-status file)) (letter (car (drgnx-git-look status))))
                 ;; The letter right after the name: the folder hint after it is cut at the panel's edge.
                 (let ((face (cadr (drgnx-git-look status))) (o (make-overlay (- name-end 2) (- name-end 2))))
@@ -207,7 +208,9 @@ While a button is held in the panel, wait for the release: rows never move under
 (defun drgnx-buffers-previous () "Previous row." (interactive) (forward-line -1))
 (defun drgnx-buffers-open () "Open the row's buffer in the editor." (interactive) (drgnx-buffers-open-at (point)))
 (defun drgnx-buffers-close () "Close the row's buffer." (interactive) (drgnx-buffers-close-at (pos-bol)))
-(defun drgnx-buffers--user-buffers () (seq-filter #'buffer-live-p drgnx-buffers--order))
+(defun drgnx-buffers--user-buffers ()
+  "The live buffers on rows: those the filter and the window let through (never ones hidden)."
+  (seq-filter #'buffer-live-p (drgnx-buffers--shown)))
 
 (defun drgnx-buffers-save-all () "Save every buffer with unsaved changes (no questions)."
        (interactive) (save-some-buffers t) (drgnx-buffers--refresh))

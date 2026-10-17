@@ -89,7 +89,8 @@ about is kept in the hidden buffer ` *drgnx git errors*` (its last `drgnx-git-er
 ### Buffers panel
 
 Save All (`C-k s` · palette — `C-x s` stays Emacs' asking save · `SPC f S`), Close Saved (`C-k u` · palette · `SPC b u`), Close All (`C-k C-w` · palette ·
-`SPC b A`), Close Others (right-click · `o` · `O`), a live name filter (`C-M-f` · `/` · `/`), middle-click closes a
+`SPC b A`), Close Others (right-click · `o` · `O`) — the three close only rows shown, never buffers the filter
+hides —, a live name filter (`C-M-f` · `/` · `/`), middle-click closes a
 row, and "save all · close saved" buttons in the title. Git letters show after the names. The right-click menu has
 Open, Close, Close Others, Save All, and for the row's buffer Save, Copy Path, Diff with File and Reveal in Explorer.
 The Explorer's right-click menu also has Reveal in Buffers, Open Folder in Dired and Open in Other Window.
