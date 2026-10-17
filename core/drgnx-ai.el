@@ -123,10 +123,28 @@ INTERACTIVE (a command the user ran) are sources that may prompt (.gpg files, ke
 
 ;;;; Agent environments (agent profiles; M9b adds more kinds)
 
-(defun drgnx-ai-agent-env (profile &optional interactive)
-  "The environment (\"NAME=value\"…) an agent of PROFILE (:kind …) starts with, resolved now.  A subscription
-CLI gets nothing: it uses its own login, which drgnx never reads."
+(defconst drgnx-ai-gateway-kinds '(claude-openrouter claude-ollama claude-anthropic)
+  "Agent profile kinds whose traffic the agent gateway may carry (drgnx-gateway.el).")
+
+(defun drgnx-ai-agent-gateway-chain (kind)
+  "The providers ((PROVIDER . MODEL)…) an agent of KIND may use through the gateway, in order."
+  (pcase kind
+    ('claude-openrouter (drgnx-ai-role 'agent))
+    ('claude-ollama '((ollama)))
+    ('claude-anthropic '((anthropic)))))
+
+(defun drgnx-ai-agent-env (profile &optional interactive gateway)
+  "The environment (\"NAME=value\"…) an agent of PROFILE (:kind …) starts with, resolved now.  GATEWAY (:url :token):
+the agent talks to the gateway with its token, and never sees a key.  A subscription CLI gets nothing: it uses its
+own login, which drgnx never reads."
   (pcase (plist-get profile :kind)
+    ((and kind (guard gateway) (guard (memq kind drgnx-ai-gateway-kinds)))
+     (list (concat "ANTHROPIC_BASE_URL=" (plist-get gateway :url)) (concat "ANTHROPIC_AUTH_TOKEN=" (plist-get gateway :token))
+           "ANTHROPIC_API_KEY="))
+    ('claude-anthropic
+     (list (concat "ANTHROPIC_API_KEY="
+                   (or (drgnx-ai-key 'anthropic interactive)
+                       (user-error "No Anthropic API key: set ANTHROPIC_API_KEY, or add one to auth-source for api.anthropic.com")))))
     ('claude-openrouter
      (let ((key (or (drgnx-ai-key 'openrouter interactive)
                     (user-error "No OpenRouter key: set OPENROUTER_API_KEY, or add one to auth-source for openrouter.ai"))))

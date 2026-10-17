@@ -65,6 +65,26 @@ trusted only within the boot that started it and for the process it started (a p
 never signalled). Sessions and jobs started on a task get it as `DRGNX_TASK`, and the commits they make are
 recorded for it ([Work tracker](work.md)).
 
+## The hub and the gateway
+
+Agents on **OpenRouter, Ollama or your own Anthropic key** (profiles with `:ai claude-openrouter`, `claude-ollama`,
+`claude-anthropic`) do not get your key: they talk to the **gateway**, a local HTTP server in drgnx's **hub**, with a
+token of their own. The gateway checks the token, adds the real key, forwards each request and streams the answer
+back as it comes (it adds well under 50 ms before the first token). For each answer it counts the tokens the
+provider reports — spend per job, task and agent, kept in the work tracker's database — and when a provider fails
+before answering (no answer, 429, 401/402, 5xx) it tries the next one the agent may use: role `agent`'s chain for
+OpenRouter agents ([AI](ai.md)). A job's budget, when it has one, stops new requests once it is spent.
+
+**Subscription CLIs never go through it**: the plain `claude` profile (and any profile without `:ai`) uses the CLI's
+own login, which drgnx only launches and never reads.
+
+The **hub** is a background process (a durable job: it outlives the Emacs that started it, and a later Emacs finds
+it again). The first agent that needs it starts it; `drgnx hub start|stop|status [--json]` manages it by hand. Keys
+reach it from its environment, from auth-source files that never ask, or from the command you ran (a key in
+`~/.authinfo.gpg` is read then) — and stay in its memory; tokens are kept only as hashes, so a restarted hub still
+takes them. With no hub to be had, an agent goes to its provider directly and says so. The Agents list's **Via**
+column shows which.
+
 ## Plans and the board
 
 Imported plan checklists (Onboarding: Import Projects, with TODOs) remember where they came from (`:PLAN_FILE:`,
@@ -75,6 +95,9 @@ run it, with the plan's own encoding and line endings — and leaves alone a pla
 
 ## Tests
 
+- `test/unit/gateway-test.el`, `test/unit/hub-test.el`, `test/unit/http-test.el`, `test/unit/agents-gateway-test.el`
+  — the gateway against mock providers (streaming, tokens, keys, spend, budget, fallback, a hang-up, a 1 MB body),
+  the hub (socket, events, restart, one hub, outliving its starter, the CLI), agents' environments.
 - `test/unit/acp-test.el` — the transport against a mock agent: requests, notifications, the agent's own requests,
   split / malformed / 1 MB lines, the agent exiting with its error output.
 - `test/unit/agents-test.el` — sessions: a turn's transcript, queueing during a turn (delivered in order, never

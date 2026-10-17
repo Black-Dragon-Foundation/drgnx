@@ -42,7 +42,7 @@
 
 (define-derived-mode drgnx-agents-list-mode tabulated-list-mode "Agents"
   "Agent sessions and durable jobs: RET opens one."
-  (setq tabulated-list-format [("Name" 26 nil) ("Status" 9 nil) ("Ctx" 5 nil) ("Waiting" 0 nil)])
+  (setq tabulated-list-format [("Name" 26 nil) ("Status" 9 nil) ("Ctx" 5 nil) ("Via" 8 nil) ("Waiting" 0 nil)])
   (add-hook 'tabulated-list-revert-hook (lambda () (setq drgnx-agents-ui--jobs-cache nil)) nil t)   ; g reads jobs now
   (tabulated-list-init-header))
 
@@ -64,11 +64,12 @@
    (mapcar (lambda (s)
              (list s (vector (drgnx-agent-session-name s) (symbol-name (drgnx-agent-session-status s))
                              (if-let* ((p (drgnx-agents-context-percent s))) (format "%d%%" p) "")
+                             (pcase (drgnx-agent-session-via s) ('gateway "gateway") ('direct "direct") (_ ""))
                              (drgnx-agents-ui--waiting s))))
            (drgnx-agents-sessions))
    (mapcar (lambda (j)
              (list (plist-get j :id)
-                   (vector (concat "job: " (plist-get j :name)) (symbol-name (plist-get j :status)) ""
+                   (vector (concat "job: " (plist-get j :name)) (symbol-name (plist-get j :status)) "" ""
                            (if (plist-get j :exit) (format "exit %s" (plist-get j :exit)) ""))))
            (drgnx-agents-ui--jobs))))
 

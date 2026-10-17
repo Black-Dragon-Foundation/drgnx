@@ -236,6 +236,8 @@ error, or when it does not answer."
   "Make sure the hub runs, starting it as a durable job if not (waits up to 5 s: commands and the CLI only).  t, or
 an error saying why not."
   (or (drgnx-hub-running-p)
+      (and (getenv "DRGNX_NO_HUB_START")
+           (error "No drgnx hub runs, and starting one is off here (DRGNX_NO_HUB_START)"))
       (let ((env (delq nil (mapcar (lambda (n) (let ((v (getenv n))) (and v (not (string-empty-p v)) (concat n "=" v))))
                                    drgnx-hub--env-names))))
         (drgnx-jobs-start "drgnx-hub" (list (expand-file-name invocation-name invocation-directory) "--batch" "-Q"

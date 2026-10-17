@@ -12,7 +12,8 @@ to OR-LOG, OPENROUTER_API_KEY unset."
           (or-port (+ 20000 (random 20000))) (or-log (concat root "or.log"))
           (process-environment (append (list (concat "DRGNX_CONFIG_DIR=" root "config") (concat "DRGNX_DATA_DIR=" root "data")
                                              (concat "XDG_STATE_HOME=" root "state") (concat "HOME=" root "home")
-                                             "OPENROUTER_API_KEY" "DRGNX_JOBS_LAUNCHER=detached")
+                                             "OPENROUTER_API_KEY" "DRGNX_JOBS_LAUNCHER=detached"
+                                             "DRGNX_NO_HUB_START")                ; these tests start hubs (and stop them)
                                        process-environment))
           (drgnx-ai--keys (make-hash-table :test #'eq)) (auth-sources nil) (drgnx-work-db--handles nil)
           (drgnx-gateway--keys (make-hash-table :test #'eq)) (drgnx-gateway--registrations (make-hash-table :test #'equal))
@@ -130,6 +131,15 @@ to OR-LOG, OPENROUTER_API_KEY unset."
           (should-not (string-search "sk-sock-only" (with-temp-buffer (set-buffer-multibyte nil) (insert-file-contents-literally f) (buffer-string))))))
       (drgnx-hub-call-sync "shutdown" nil)
       (should (drgnx-hub-test--wait (lambda () (not (process-attributes pid))) 5)))))
+
+(ert-deftest drgnx-hub/no-hub-is-started-where-starting-is-off ()
+  (drgnx-hub-test--with
+    (let ((process-environment (cons "DRGNX_NO_HUB_START=1" process-environment)) (started nil))
+      (cl-letf (((symbol-function 'drgnx-jobs-start) (lambda (&rest _) (setq started t))))
+        (should-error (drgnx-hub-ensure))
+        (should-not started))
+      (drgnx-hub-serve (drgnx-hub-socket))            ; one that runs is used
+      (should (drgnx-hub-ensure)))))
 
 (ert-deftest drgnx-hub/the-cli ()
   (drgnx-hub-test--with

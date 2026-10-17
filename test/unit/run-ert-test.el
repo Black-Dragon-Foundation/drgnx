@@ -150,3 +150,8 @@
   (skip-unless (getenv "DRGNX_TEST_ISOLATED"))
   (dolist (v '("OPENROUTER_API_KEY" "ANTHROPIC_API_KEY" "ANTHROPIC_AUTH_TOKEN" "OPENAI_API_KEY"))
     (should-not (getenv v))))
+
+(ert-deftest drgnx-run-ert/unit-tests-start-no-hub-unless-they-say-so ()
+  ;; an agent on an :ai profile in any test would start a durable hub that outlives the suite
+  (skip-unless (getenv "DRGNX_TEST_ISOLATED"))
+  (should (equal (getenv "DRGNX_NO_HUB_START") "1")))

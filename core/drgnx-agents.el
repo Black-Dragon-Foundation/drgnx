@@ -21,7 +21,7 @@
 
 (cl-defstruct (drgnx-agent-session (:constructor drgnx-agents--make) (:copier nil))
   name profile cwd conn acp-id (status 'starting) entries queue (mode 'queue) capabilities usage commands
-  permissions reviews stderr exit stopping paused turn draining task)
+  permissions reviews stderr exit stopping paused turn draining task via)
 
 (defvar drgnx-agents-profiles nil
   "Alist NAME → plist (:command LIST :env (\"NAME=value\"…) :mode queue|steer|interrupt).  Read from
@@ -202,14 +202,49 @@ agents.eld (config dir) and the built-in ones; never holds secrets (keys come fr
   (drgnx-agents--changed s))
 
 (declare-function drgnx-ai-agent-env "drgnx-ai")
+(declare-function drgnx-ai-agent-gateway-chain "drgnx-ai")
+(declare-function drgnx-ai-provider "drgnx-ai")
+(declare-function drgnx-ai-key "drgnx-ai")
+(declare-function drgnx-hub-ensure "drgnx-hub")
+(declare-function drgnx-hub-call-sync "drgnx-hub")
+(defvar drgnx-ai-gateway-kinds)
+
+(defvar drgnx-agents-use-gateway t
+  "Non-nil: agents on OpenRouter, Ollama or Anthropic profiles talk to the hub's gateway (a token, never a key);
+without a hub they go to the provider directly.")
+
+(defun drgnx-agents--gateway (s kind)
+  "Register S's agent (profile KIND) with the hub's gateway: (:url :token), or nil when no hub can be had (S then
+goes direct, and says so)."
+  (condition-case err
+      (progn
+        (require 'drgnx-hub)
+        (drgnx-hub-ensure)
+        (let* ((chain (drgnx-ai-agent-gateway-chain kind))
+               ;; keys this command can read (also from sources that ask) travel to the hub's memory
+               (keys (cl-loop for (id . _) in chain
+                              for key = (and (plist-get (drgnx-ai-provider id) :key-env) (drgnx-ai-key id t))
+                              when key append (list (intern (concat ":" (symbol-name id))) key)))
+               (r (drgnx-hub-call-sync "gateway/register"
+                                       (list :task (drgnx-agent-session-task s) :agent (drgnx-agent-session-name s)
+                                             :chain (vconcat (mapcar (lambda (st) (vector (symbol-name (car st)) (cdr st))) chain))
+                                             :keys (or keys (make-hash-table))))))
+          (setf (drgnx-agent-session-via s) 'gateway)
+          r))
+    (error (setf (drgnx-agent-session-via s) 'direct)
+           (message "drgnx: no agent hub (%s); %s goes to its provider directly" (error-message-string err)
+                    (drgnx-agent-session-name s))
+           nil)))
 
 (defun drgnx-agents--env (s)
-  "The environment S's agent gets: its profile's, its provider's (keys resolved now, never kept), and
-DRGNX_TASK when S works on a task."
+  "The environment S's agent gets: its profile's, its provider's — the gateway's address and a token when the hub
+can carry it, else the provider's (keys resolved now, never kept) — and DRGNX_TASK when S works on a task."
   (append (plist-get (cdr (drgnx-agents-profile (drgnx-agent-session-profile s))) :env)
           (when-let* ((kind (plist-get (cdr (drgnx-agents-profile (drgnx-agent-session-profile s))) :ai)))
             (require 'drgnx-ai)
-            (drgnx-ai-agent-env (list :kind kind) t))
+            (drgnx-ai-agent-env (list :kind kind) t
+                                (and drgnx-agents-use-gateway (memq kind drgnx-ai-gateway-kinds)
+                                     (drgnx-agents--gateway s kind))))
           (and (drgnx-agent-session-task s) (list (concat "DRGNX_TASK=" (drgnx-agent-session-task s))))))
 
 (defun drgnx-agents--new (profile cwd &optional task)

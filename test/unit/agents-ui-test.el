@@ -29,7 +29,7 @@
 (ert-deftest drgnx-agents-ui/the-list-has-sessions-and-jobs ()
   (let* ((root (make-temp-file "drgnx-ui-jobs" t))
          (process-environment (cons (concat "XDG_STATE_HOME=" root) process-environment))
-         (drgnx-agents--sessions (list (drgnx-agents--make :name "mock · p" :status 'idle :queue '("a" "b") :paused t))))
+         (drgnx-agents--sessions (list (drgnx-agents--make :name "mock · p" :status 'idle :queue '("a" "b") :paused t :via 'gateway))))
     (unwind-protect
         (progn
           (make-directory (expand-file-name "drgnx/jobs/20261017-000000-1" root) t)
@@ -37,7 +37,8 @@
             (prin1 '(:id "20261017-000000-1" :name "index" :launcher detached) (current-buffer)))
           (write-region "0" nil (expand-file-name "drgnx/jobs/20261017-000000-1/exit" root) nil 'silent)
           (let ((rows (mapcar #'cadr (drgnx-agents-ui--entries))))
-            (should (equal (aref (car rows) 3) "2 queued (paused)"))
+            (should (equal (aref (car rows) 3) "gateway"))                 ; how its traffic goes
+            (should (equal (aref (car rows) 4) "2 queued (paused)"))
             (should (equal (aref (cadr rows) 0) "job: index"))
             (should (equal (aref (cadr rows) 1) "exited"))))
       (delete-directory root t))))
