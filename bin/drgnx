@@ -145,7 +145,8 @@ usage: drgnx build              byte-compile drgnx (core, wb, modules); native c
                                set drgnx up: environment, keys, projects onto the board, daemon unit (docs/onboarding.md)
        drgnx work record [--task ID] [SHA…]
                                link commits (default HEAD) to a task (default $DRGNX_TASK); no commit message changes
-       drgnx work scan [DIR…]  read specs, plans, ledgers and the board into the work tracker (docs/work.md)
+       drgnx work scan [--board FILE] [DIR…]
+                               read specs, plans, ledgers and the board into the work tracker (docs/work.md)
        drgnx work status [--json]
                                every plan: tasks, steps, TODOs and commits done, branch, merged
        drgnx safe              Emacs with drgnx's core only: no modules, no packages

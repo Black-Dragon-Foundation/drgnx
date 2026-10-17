@@ -95,10 +95,10 @@ so it travels with the repository.  Off by default: notes are shared state of th
                                    (append drgnx-work-roots
                                            (delq nil (mapcar (lambda (p) (plist-get p :root)) (plist-get (drgnx-projects-read) :projects))))))))
 
-(defun drgnx-work-refresh (&optional roots)
-  "Scan ROOTS (default: `drgnx-work-default-roots') and the board, and collect ended jobs."
+(defun drgnx-work-refresh (&optional roots board)
+  "Scan ROOTS (default: `drgnx-work-default-roots') and BOARD (default: the board), and collect ended jobs."
   (require 'drgnx-projects)
-  (prog1 (drgnx-work-scan (or roots (drgnx-work-default-roots)) :board (drgnx-projects-board-file))
+  (prog1 (drgnx-work-scan (or roots (drgnx-work-default-roots)) :board (or board (drgnx-projects-board-file)))
     (drgnx-work-collect-jobs)))
 
 ;;;; Command line
@@ -142,8 +142,9 @@ so it travels with the repository.  Off by default: notes are shared state of th
                        (drgnx-work--print "drgnx work record: no commit %s here" sha)
                        (setq bad 1))))
                  bad)))))
-        (`("scan" . ,roots)
-         (let* ((t0 (float-time)) (r (drgnx-work-refresh (mapcar #'expand-file-name roots))))
+        (`("scan" . ,rest)
+         (let* ((board (when (equal (car rest) "--board") (pop rest) (expand-file-name (pop rest))))
+                (t0 (float-time)) (r (drgnx-work-refresh (mapcar #'expand-file-name rest) board)))
            (drgnx-work--print "%d files read in %.2f s; %d plans, %d specs (%s)" (plist-get r :files) (- (float-time) t0)
                               (length (drgnx-work-nodes 'plan)) (length (drgnx-work-nodes 'spec)) (drgnx-work-db-file))
            0))
@@ -159,7 +160,7 @@ so it travels with the repository.  Off by default: notes are shared state of th
                                       (funcall c :tasks) (funcall c :steps) (funcall c :todos) (plist-get r :commits)
                                       (plist-get r :title) (if (plist-get r :branch) (format "  [%s]" (plist-get r :branch)) ""))))))
            0))
-        (_ (drgnx-work--print "usage: drgnx work record [--task ID] [SHA…] | scan [DIR…] | status [--json]") 2))
+        (_ (drgnx-work--print "usage: drgnx work record [--task ID] [SHA…] | scan [--board FILE] [DIR…] | status [--json]") 2))
     (error (drgnx-work--print "drgnx work: %s" (error-message-string err)) 1)))
 
 (defun drgnx-work-cli ()

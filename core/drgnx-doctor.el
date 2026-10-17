@@ -47,6 +47,15 @@ DEV non-nil: only run for `drgnx doctor --dev' (tools for developing drgnx)."
 
 (declare-function drgnx-pkg-status "drgnx-pkg")
 
+(declare-function drgnx-work-db-file "drgnx-work-db")
+(declare-function drgnx-work-nodes "drgnx-work-db")
+
+(defun drgnx-doctor--work-plans ()
+  "How many plans the work tracker knows (nil: it has not scanned yet)."
+  (ignore-errors
+    (require 'drgnx-work-db)
+    (when (file-exists-p (drgnx-work-db-file)) (length (drgnx-work-nodes 'plan)))))
+
 (defun drgnx-doctor-facts ()
   "Facts about the running Emacs and this machine."
   (let ((native (and (fboundp 'native-comp-available-p) (native-comp-available-p))))
@@ -66,7 +75,10 @@ DEV non-nil: only run for `drgnx doctor --dev' (tools for developing drgnx)."
           :modules-report (drgnx-doctor--state-file "modules-report.eld")
           :onboarding (drgnx-doctor--state-file "onboarding.eld")
           :packages (condition-case err (progn (require 'drgnx-pkg) (drgnx-pkg-status))
-                      (error (list :error (error-message-string err)))))))
+                      (error (list :error (error-message-string err))))
+          :sqlite (and (fboundp 'sqlite-available-p) (sqlite-available-p))
+          :dot (and (executable-find "dot") t)
+          :work-plans (drgnx-doctor--work-plans))))
 
 (defun drgnx-doctor--state-file (name)
   "The .eld file NAME the last drgnx session wrote in the state dir, read, or nil."
@@ -164,6 +176,14 @@ DEV non-nil: only run for `drgnx doctor --dev' (tools for developing drgnx)."
                    (failed (list 'warn (format "steps that failed: %s" (mapconcat (lambda (e) (symbol-name (car e))) failed " "))
                                  "run them again from Help → Welcome, or drgnx onboard --step ID"))
                    (t (list 'ok (format "%d steps done" (length s)) nil))))))
+
+(drgnx-doctor-define 'work :group "drgnx" :doc "The work tracker (SQLite in Emacs; Graphviz for its graph)"
+  :check (lambda (f)
+           (cond ((not (plist-get f :sqlite)) (list 'fail "this Emacs has no SQLite: the work tracker is off" "use an Emacs built with SQLite (the installer's does)"))
+                 ((null (plist-get f :work-plans)) (list 'info "nothing scanned yet" "drgnx work scan (or Show Work)"))
+                 ((not (plist-get f :dot)) (list 'warn (format "%d plans tracked; no Graphviz" (plist-get f :work-plans))
+                                                "install graphviz to see Show Work as Graph drawn (it shows the DOT text until then)"))
+                 (t (list 'ok (format "%d plans tracked" (plist-get f :work-plans)) nil)))))
 
 (drgnx-doctor-define 'key-conflicts :group "drgnx" :doc "Key profile conflicts and keys.eld problems (from the last session)"
   :check (lambda (f)

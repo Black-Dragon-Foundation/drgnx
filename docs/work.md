@@ -39,6 +39,38 @@ Recorded links live in the tracker's database and survive every rescan. With `dr
 link is also written as a git note (`refs/notes/drgnx`: `drgnx task: ID`) so it travels with the repository; it
 is off by default because notes are shared state.
 
+## The Work tab
+
+**Show Work** (module `tools/work`; VS Code `C-k t`, Vim `SPC a w`, Emacs: the palette) opens the right dock's
+**Work** tab: each spec with the plans that came from it (plans that name no spec are roots of their own), and under
+a plan its tasks, their steps, rulings and commits, and the board's TODOs.
+
+```
+▾ ◆ The Spec
+  ▾ ▣ 1/2 Plan Alpha  steps 3/5 · todos 1/2 · 4 commits  [feature]
+    ▾ ☑ Task 1: first
+        ☑ Step 1: write the failing test
+        ● 1a2b3c4 the change that made it pass
+    ▸ ☐ Task 2: second
+▸ ▣ 0/1 Plan Beta  0 commits  merged
+```
+
+A plan line starts with its tasks done of all (a narrow dock cuts the end of long titles), then its steps and
+TODOs (when it has any), the commits linked, its branch and whether it is merged; a task whose recorded commits git
+no longer has (rebased, squashed) is marked ⚠. Keys in the tab: `TAB` folds, `RET` opens the line's file at its
+line (a commit: its diff in the editor), `g` scans again, `f` filters the plans by title or path, `m` hides the
+merged ones (Vim: `R`, `F`, `M`). Opening the tab, and `g`, scan in a separate batch Emacs (`drgnx work scan`): this
+Emacs never waits, and the tab redraws when the scan is done — and after each turn of an agent working on a task.
+
+- **Start Agent on Task…** starts an agent on the task (or TODO, or plan) at point, in the plan's worktree (else
+  its repository, else the plan's folder); its commits are recorded for that task.
+- **Open Plan's Worktree** adds the plan's worktree to the Explorer.
+- **Show Work as Graph** draws the specs, the plans shown (with their task and commit counts; merged ones dashed)
+  and their branches with Graphviz (`dot`); without Graphviz it shows the DOT text.
+
+`drgnx doctor` checks `work`: Emacs has SQLite (else the tracker is off), how many plans are tracked, and whether
+Graphviz is there for the graph.
+
 ## Status
 
 `drgnx work status` prints one line per plan: merged or on a branch, tasks, steps and TODOs done of all, commits
@@ -54,5 +86,6 @@ so reading a file again replaces exactly what that file gave.
 ## Tests
 
 `test/unit/work-test.el` (the scan: specs, plans, ledgers, branches, merges, renames, the board) and
-`test/unit/work-record-test.el` (recording for agents, jobs and the CLI; git notes; status), against temporary
-git repositories and the mock agent.
+`test/unit/work-record-test.el` (recording for agents, jobs and the CLI; git notes; status), `test/unit/work-ui-test.el`
+(the tab: tree, folding, opening, filter, refresh in another process, graph, agents on a task, doctor) — against
+temporary git repositories and the mock agent — and `test/live/drgnx-work-test.el` (the tab in a GUI session).

@@ -3,7 +3,7 @@
 (require 'drgnx-doctor)
 
 (defun drgnx-doctor-test--facts (&rest kv)
-  (append kv (list :version "31.1" :native-available t :native-compiles t :treesit t :gui 'pgtk :git t)))
+  (append kv (list :version "31.1" :native-available t :native-compiles t :treesit t :gui 'pgtk :git t :sqlite t)))
 
 (defun drgnx-doctor-test--status (name facts)
   (car (drgnx-doctor-check name facts)))
