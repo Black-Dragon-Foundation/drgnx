@@ -37,7 +37,12 @@ agents.eld (config dir) and the built-in ones; never holds secrets (keys come fr
 `turn-end': the work tracker records the commits each turn made (docs/guide/work.md).")
 
 (defconst drgnx-agents-builtin-profiles
-  '(("claude" :command ("claude-agent-acp") :mode queue :doc "Claude through the unmodified agent (subscription or API key)")))
+  '(("claude" :command ("claude-agent-acp") :mode queue :doc "Claude through the unmodified agent (subscription or API key)")
+    ("claude (OpenRouter)" :command ("claude-agent-acp") :mode queue :ai claude-openrouter
+     :doc "Claude Code on OpenRouter (your OpenRouter key, from the environment or auth-source)")
+    ("claude (Ollama)" :command ("claude-agent-acp") :mode queue :ai claude-ollama :doc "Claude Code on a local Ollama model"))
+  "Profiles drgnx offers without setup; :ai names the provider environment the agent gets when it starts
+(`drgnx-ai-agent-env').")
 
 (defun drgnx-agents-profile (name)
   (or (assoc name drgnx-agents-profiles)
@@ -196,9 +201,15 @@ agents.eld (config dir) and the built-in ones; never holds secrets (keys come fr
   (unless (eq (drgnx-agent-session-status s) 'exited) (setf (drgnx-agent-session-status s) 'idle))
   (drgnx-agents--changed s))
 
+(declare-function drgnx-ai-agent-env "drgnx-ai")
+
 (defun drgnx-agents--env (s)
-  "The environment S's agent gets: its profile's, and DRGNX_TASK when S works on a task."
+  "The environment S's agent gets: its profile's, its provider's (keys resolved now, never kept), and
+DRGNX_TASK when S works on a task."
   (append (plist-get (cdr (drgnx-agents-profile (drgnx-agent-session-profile s))) :env)
+          (when-let* ((kind (plist-get (cdr (drgnx-agents-profile (drgnx-agent-session-profile s))) :ai)))
+            (require 'drgnx-ai)
+            (drgnx-ai-agent-env (list :kind kind) t))
           (and (drgnx-agent-session-task s) (list (concat "DRGNX_TASK=" (drgnx-agent-session-task s))))))
 
 (defun drgnx-agents--new (profile cwd &optional task)

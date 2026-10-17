@@ -51,10 +51,20 @@ code to DIR/exit (143 when stopped); with HEAD, the git HEAD it ended at to DIR/
 (defun drgnx-jobs--boot-id ()
   (ignore-errors (string-trim (with-temp-buffer (insert-file-contents "/proc/sys/kernel/random/boot_id") (buffer-string)))))
 
-(cl-defun drgnx-jobs-start (name command &key cwd task)
+(defun drgnx-jobs--systemd-args (id cwd line env &optional task)
+  "systemd-run's arguments for job ID running LINE in CWD.  ENV (\"NAME=value\"…) travels in systemd-run's own
+environment — `--setenv=NAME' copies it from there — so no value (a key) is ever in a command line."
+  (append (list "--user" "--quiet" "--collect" (concat "--unit=drgnx-job-" id) (concat "--working-directory=" cwd)
+                (concat "--setenv=PATH=" (or (getenv "PATH") "")) (concat "--setenv=HOME=" (or (getenv "HOME") "")))
+          (and task (list (concat "--setenv=DRGNX_TASK=" task)))
+          (mapcar (lambda (e) (concat "--setenv=" (car (split-string e "=")))) env)
+          (list "sh" "-c" line)))
+
+(cl-defun drgnx-jobs-start (name command &key cwd task env)
   "Run COMMAND (a list) as the durable job NAME in CWD.  Returns the job's id.  TASK (a work-tracker
 node id): the job gets it as DRGNX_TASK, and the git HEADs it started and ended at are kept, so the
-commits it made are recorded for the task (docs/guide/work.md)."
+commits it made are recorded for the task (docs/guide/work.md).  ENV (\"NAME=value\"…, e.g. an agent's
+keys) is the job's too, and is kept nowhere: not in its state files, not in a command line."
   (let* ((id (drgnx-jobs--new-id)) (dir (drgnx-jobs--dir id))
          (cwd (expand-file-name (or cwd default-directory)))
          (launcher (drgnx-jobs-launcher))
@@ -64,7 +74,7 @@ commits it made are recorded for the task (docs/guide/work.md)."
          (head (and task (funcall git "rev-parse" "HEAD")))
          ;; the repository itself: the job's worktree may be gone when its commits are collected
          (git-dir (and task (funcall git "rev-parse" "--path-format=absolute" "--git-common-dir")))
-         (process-environment (if task (cons (concat "DRGNX_TASK=" task) process-environment) process-environment))
+         (process-environment (append env (and task (list (concat "DRGNX_TASK=" task))) process-environment))
          (line (drgnx-jobs--wrapper dir command task)))
     (make-directory dir t)
     (with-temp-file (expand-file-name "job.eld" dir)
@@ -76,10 +86,7 @@ commits it made are recorded for the task (docs/guide/work.md)."
       (pcase launcher
         ('systemd
          (with-temp-buffer
-           (unless (eql 0 (apply #'call-process "systemd-run" nil t nil "--user" "--quiet" "--collect"
-                                 (concat "--unit=drgnx-job-" id) (concat "--working-directory=" cwd)
-                                 (concat "--setenv=PATH=" (or (getenv "PATH") "")) (concat "--setenv=HOME=" (or (getenv "HOME") ""))
-                                 (append (and task (list (concat "--setenv=DRGNX_TASK=" task))) (list "sh" "-c" line))))
+           (unless (eql 0 (apply #'call-process "systemd-run" nil t nil (drgnx-jobs--systemd-args id cwd line env task)))
              (error "The job %s did not start: %s" name (string-trim (buffer-string))))))
         (_ (call-process "setsid" nil 0 nil "-f" "sh" "-c" line))))
     ;; the pid file appears once the job's shell runs; the boot and the process's start time make
