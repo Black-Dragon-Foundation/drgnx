@@ -142,7 +142,7 @@
    (let ((st (drgnx-modules-read-state)))
      (should (listp (plist-get st :disabled)))
      (should-not (plist-get st :flags))
-     (should-not (plist-get st :external)))
+     (should (equal (plist-get st :external) '(gryphn (:name x)))))   ; kept, listed as failed (M4-5)
    (drgnx-module-define 'test/ok :doc "ok" :setup #'ignore)
    (drgnx-modules-run 'startup)
    (should (eq (drgnx-modules-test--status 'test/ok) 'ok))
@@ -274,3 +274,17 @@
              (should (string-search "drgnx-test-inner-lib" outer))
              (should (equal direct "direct kaputt"))))
        (delete-directory dir t) (delete-directory lib t)))))
+
+(ert-deftest drgnx-modules/an-invalid-external-entry-is-listed-and-kept ()
+  ;; M4-5: an external entry without :path is listed as failed, and writing modules.eld keeps it.
+  (drgnx-modules-test--with-config
+   (let ((file (expand-file-name "modules.eld" (drgnx-user-dir))))
+     (with-temp-file file (prin1 '(:version 1 :external ((:name nopath :features (a)))) (current-buffer)))
+     (drgnx-modules-load-external)
+     (let ((r (alist-get 'external/nopath (drgnx-modules-report))))
+       (should (eq (plist-get r :status) 'failed))
+       (should (string-search ":path" (plist-get r :error))))
+     (with-current-buffer (drgnx-modules-list) (should (string-search "external/nopath" (buffer-string))))
+     (drgnx-module-define 'test/a :doc "a" :setup #'ignore)
+     (drgnx-modules-toggle 'test/a)
+     (should (equal (plist-get (drgnx-modules-read-state) :external) '((:name nopath :features (a))))))))

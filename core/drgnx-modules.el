@@ -47,8 +47,13 @@ DOCTOR: a function returning problem strings.  SETTINGS: alist VARIABLE → doc.
   "Non-nil when modules.eld could not be read as ours (unreadable, another format, newer): it is
 backed up before drgnx writes it.")
 
+(defun drgnx-modules--external-ok-p (e)
+  (and (consp e) (keywordp (car e)) (symbolp (plist-get e :name))
+       (stringp (plist-get e :path)) (listp (plist-get e :features))))
+
 (defun drgnx-modules--valid (state)
-  "STATE with every malformed field dropped (a message each) — a typo never stops startup."
+  "STATE with every malformed field dropped (a message each) — a typo never stops startup.  A
+malformed external entry is kept (written back unchanged) and listed as failed."
   (let ((out (list :version drgnx-modules-state-version))
         (d (plist-get state :disabled)) (f (plist-get state :flags)) (x (plist-get state :external))
         (theme (plist-get state :theme)))
@@ -58,13 +63,10 @@ backed up before drgnx writes it.")
         (setq out (plist-put out :flags f))
       (message "drgnx: modules.eld :flags must be ((MODULE FLAG …) …); ignored"))
     (when (listp x)
-      (setq out (plist-put out :external
-                           (seq-filter (lambda (e)
-                                         (or (and (consp e) (keywordp (car e)) (symbolp (plist-get e :name))
-                                                  (stringp (plist-get e :path)) (listp (plist-get e :features)))
-                                             (progn (message "drgnx: modules.eld :external entry %S needs :name, :path and :features; ignored" e)
-                                                    nil)))
-                                       x))))
+      (dolist (e x)
+        (unless (drgnx-modules--external-ok-p e)
+          (message "drgnx: modules.eld :external entry %S needs :name, :path and :features; not loaded" e)))
+      (setq out (plist-put out :external x)))
     (when (and theme (symbolp theme)) (setq out (plist-put out :theme theme)))
     out))
 
@@ -225,20 +227,25 @@ direct installs are recorded instead.  Returns (ERROR-or-nil . WANTED-PACKAGES).
   "Load the external modules listed in modules.eld (:external): each feature is reported as
 module external/NAME/FEATURE; a missing directory, a failing feature or a package it would install
 never stops Emacs — nothing is installed (the module waits for the package, as any module does)."
-  (dolist (ext (plist-get (drgnx-modules-read-state) :external))
-    (let* ((name (plist-get ext :name)) (id (intern (format "external/%s" name)))
-           (path (expand-file-name (plist-get ext :path))))
-      (cond
-       ((drgnx-module-disabled-p id) (drgnx-modules--record id 'idle 0 'disabled))
-       ((not (file-directory-p path)) (drgnx-modules--record id 'idle 0 'failed (format "no such directory: %s" path)))
-       (t
-        (require 'drgnx-compat-gryphn)          ; gryphn's command and context definitions
-        (add-to-list 'load-path path t)
-        (dolist (f (plist-get ext :features))
-          (pcase-let* ((t0 (float-time)) (`(,err . ,wanted) (drgnx-modules--require-external f)))
-            (drgnx-modules--record (intern (format "external/%s/%s" name f)) 'idle
-                                   (round (* 1000 (- (float-time) t0)))
-                                   (cond (wanted 'missing-packages) (err 'failed) (t 'ok)) err wanted))))))))
+  (seq-do-indexed
+   (lambda (ext i)
+     (let* ((ok (drgnx-modules--external-ok-p ext))
+            (name (or (and (consp ext) (keywordp (car ext)) (plist-get ext :name)) (format "entry-%d" (1+ i))))
+            (id (intern (format "external/%s" name)))
+            (path (and ok (expand-file-name (plist-get ext :path)))))
+       (cond
+        ((not ok) (drgnx-modules--record id 'idle 0 'failed (format "modules.eld entry %S needs :name, :path and :features" ext)))
+        ((drgnx-module-disabled-p id) (drgnx-modules--record id 'idle 0 'disabled))
+        ((not (file-directory-p path)) (drgnx-modules--record id 'idle 0 'failed (format "no such directory: %s" path)))
+        (t
+         (require 'drgnx-compat-gryphn)          ; gryphn's command and context definitions
+         (add-to-list 'load-path path t)
+         (dolist (f (plist-get ext :features))
+           (pcase-let* ((t0 (float-time)) (`(,err . ,wanted) (drgnx-modules--require-external f)))
+             (drgnx-modules--record (intern (format "external/%s/%s" name f)) 'idle
+                                    (round (* 1000 (- (float-time) t0)))
+                                    (cond (wanted 'missing-packages) (err 'failed) (t 'ok)) err wanted)))))))
+   (plist-get (drgnx-modules-read-state) :external)))
 
 (defun drgnx-modules-start (dir)
   "Load the modules in DIR, run the startup stage now and the others when their moment comes."

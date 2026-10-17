@@ -52,7 +52,8 @@ Code that lives elsewhere loads as an **external module**, listed in modules.eld
 ```
 
 At idle each feature is loaded and reported as module `external/<name>/<feature>` (Preferences: Modules); a missing
-directory or a feature that fails to load is reported, never fatal; `external/<name>` in `:disabled` (or `RET` on its
+directory or a feature that fails to load is reported, never fatal; an entry without `:name`, `:path` or `:features`
+is listed as failed (and kept in the file as you wrote it); `external/<name>` in `:disabled` (or `RET` on its
 row) keeps it from loading. gryphn's files load unchanged: drgnx provides
 `gryphn-command-define` and `gryphn-surfaces-define-context` on its own registry and surfaces
 (`core/drgnx-compat-gryphn.el`), so the board, runs, agents and search commands appear in the palette and menus and
