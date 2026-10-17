@@ -101,8 +101,8 @@ folding is never clicked.  Signals if there is no such occurrence."
   (listify-key-sequence (kbd keys)))
 
 (defun drgnx-uitest-type-events (text)
-  "Input events that type TEXT."
-  (append text nil))
+  "Input events that type TEXT (a newline is the Return key, as typed — not C-j)."
+  (mapcar (lambda (c) (if (eq c ?\n) 'return c)) text))
 
 (defun drgnx-uitest-click-events (posn &optional button count hold)
   "Input events for clicking at POSN.

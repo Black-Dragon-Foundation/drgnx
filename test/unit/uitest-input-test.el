@@ -7,7 +7,8 @@
   (should (equal (drgnx-uitest-key-events "M-x") (list (aref (kbd "M-x") 0)))))
 
 (ert-deftest drgnx-uitest/type-events ()
-  (should (equal (drgnx-uitest-type-events "a\"✓") (list ?a ?\" ?✓))))
+  (should (equal (drgnx-uitest-type-events "a\"✓") (list ?a ?\" ?✓)))
+  (should (equal (drgnx-uitest-type-events "a\nb") (list ?a 'return ?b))))     ; a newline is the Return key, not C-j
 
 (ert-deftest drgnx-uitest/click-events ()
   ;; The release is resolved when it is delivered (a click, or a drag if the text moved).

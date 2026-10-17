@@ -304,7 +304,7 @@ claude mcp add -s user drgnx-ui -- /path/to/drgnx/bin/drgnx ui mcp
 | `ui_screenshot` | `session`, `path`? | an image block (PNG, child frames composited) + path and window map |
 | `ui_click` | `session`, `x`+`y` or `buffer`+`text`, `button`?, `count`?, `hold_ms`? | jank report |
 | `ui_keys` | `session`, `keys` (kbd syntax) | jank report |
-| `ui_type` | `session`, `text` | jank report |
+| `ui_type` | `session`, `text` (a newline is the Return key) | jank report |
 | `ui_wait` | `session`, `quiet_ms`?, `timeout_ms`? | `{settled}` |
 | `ui_measure` | `session`, `actions` (list of `{keys}`, `{type}`, `{x,y}`, `{buffer,text}`) | one jank report |
 | `ui_diff` | `session` (diffs against the state the previous `ui_state`/`ui_diff` saw), or `a` and `b` | `changes`: `{window, field, old, new}` (also a field only one of the states has), windows `added`/`removed` |

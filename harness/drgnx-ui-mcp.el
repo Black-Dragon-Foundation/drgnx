@@ -66,7 +66,7 @@ guard_violations (window moves from timers).")
          :inputSchema (drgnx-ui-mcp--schema (append drgnx-ui-mcp--session '(:keys (:type "string")))
                                             '("session" "keys")))
    (list :name "ui_type"
-         :description (concat "Type text, one character per tick; waits until settled. " drgnx-ui-mcp--report)
+         :description (concat "Type text, one character per tick (a newline is the Return key); waits until settled. " drgnx-ui-mcp--report)
          :inputSchema (drgnx-ui-mcp--schema (append drgnx-ui-mcp--session '(:text (:type "string")))
                                             '("session" "text")))
    (list :name "ui_wait"
