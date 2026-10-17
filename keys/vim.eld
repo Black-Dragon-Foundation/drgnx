@@ -23,6 +23,7 @@
         (jobs-log :none "the Agents tab and transcripts; the palette")
         (jobs-stop :none "the Agents tab and transcripts; the palette")
         (agents-open "RET")
+        (projects-sync-plans :none "in the palette")
         (agents-reply "RET")
         (agents-review-done "C-c C-c")
         (agents-review-reject "C-c C-k")

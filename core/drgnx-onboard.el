@@ -58,7 +58,10 @@ NON-INTERACTIVE: never read input (`inhibit-interaction').  OPTIONS: plist for t
   (let ((ctx (list :interactive (not non-interactive) :options options))
         (done (drgnx-onboard-state))
         (out nil))
-    (dolist (id (drgnx-onboard-steps))
+    (drgnx-command-define 'projects-sync-plans :category "Projects" :title "Sync Plans and Board TODOs"
+    :command #'drgnx-projects-sync-plans
+    :doc "A DONE TODO ticks its plan checkbox; a ticked checkbox makes its TODO DONE")
+  (dolist (id (drgnx-onboard-steps))
       (when (and (or (null only) (memq id only))
                  (not (and resume (memq (plist-get (alist-get id done) :status) '(ok info)))))
         (let* ((spec (alist-get id drgnx-onboard--steps))
@@ -190,6 +193,7 @@ current choice as the default) — with no option and no question, the current c
 (declare-function drgnx-projects-gryphn-roots "drgnx-projects")
 (declare-function drgnx-projects-import "drgnx-projects")
 (declare-function drgnx-projects-board-file "drgnx-projects")
+(autoload 'drgnx-projects-sync-plans "drgnx-projects" nil t)
 (defvar drgnx-projects-scan-truncated)
 (defvar drgnx-projects-scan-budget)
 (defvar drgnx-projects-todo-cap)

@@ -47,6 +47,7 @@ top-level heading per project — the format gryphn's board uses, so it keeps wo
 ```
 
 Open TODOs come from `TODO.md` (`- [ ] …`), `TODO.org` (`* TODO …`) and plan checklists in `docs/**/plans/*.md`
+(checklist items remember their file, so Sync Plans and Board TODOs keeps them in step — [agents.md](agents.md))
 (at most 200 per project and import; the step says when it stopped there). A project already on the board — the
 same root, at any heading level, also through a symlink — is not added again; a TODO already imported is not added
 again, even after you archived or deleted it (drgnx remembers what it imported); text that would read as org

@@ -325,7 +325,7 @@
     (let ((alpha (drgnx-onboard-test--repo (concat root "ws/alpha") '("TODO.md" . "- [ ] once\n"))))
       (drgnx-projects-import (list alpha))
       (let ((b (drgnx-onboard-test--board)))
-        (write-region (replace-regexp-in-string "\\*\\* TODO once\n:PROPERTIES:\n:ONBOARD_ID: [0-9a-f]+\n:END:\n" "" b)
+        (write-region (replace-regexp-in-string "\\*\\* TODO once\n:PROPERTIES:\n\\(:[A-Z_]+: .*\n\\)*:END:\n" "" b)
                       nil (drgnx-projects-board-file) nil 'silent))
       (should-not (string-match-p "once" (drgnx-onboard-test--board)))
       (should (eql (plist-get (drgnx-projects-import (list alpha)) :todos) 0)))))
