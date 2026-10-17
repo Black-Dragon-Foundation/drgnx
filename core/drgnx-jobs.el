@@ -102,7 +102,9 @@ commits it made are recorded for the task (docs/guide/work.md)."
              (attrs (and (> pid 0) (process-attributes pid)))
              (alive (and attrs
                          (or (null (plist-get job :boot)) (equal (plist-get job :boot) (drgnx-jobs--boot-id)))
-                         (or (null (plist-get job :start)) (equal (plist-get job :start) (alist-get 'start attrs))))))
+                         ;; the same start, give or take the clock tick Emacs's reading of it jitters by
+                         (or (null (plist-get job :start))
+                             (< (abs (float-time (time-subtract (plist-get job :start) (alist-get 'start attrs)))) 0.5)))))
         (append job
                 (list :exit (and exit (string-to-number exit)) :pid (and (> pid 0) pid)
                       :status (cond (exit (if (equal exit "143") 'stopped 'exited))

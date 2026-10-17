@@ -43,11 +43,13 @@
 (ert-deftest drgnx-jobs/stop-ends-the-whole-job ()
   (skip-unless (executable-find "setsid"))
   (drgnx-jobs-test--with
-   (let ((id (drgnx-jobs-start "long" '("sh" "-c" "sleep 30"))))
+   ;; a length no other process uses (tests run in parallel shards): only this job's sleep can match
+   (let* ((marker (format "sleep %d" (+ 30000 (random 30000))))
+          (id (drgnx-jobs-start "long" (list "sh" "-c" marker))))
      (should (drgnx-jobs-test--wait (lambda () (eq (drgnx-jobs-test--status id) 'running))))
      (drgnx-jobs-stop id)
      (should (drgnx-jobs-test--wait (lambda () (memq (drgnx-jobs-test--status id) '(exited stopped))) 3))
-     (should-not (seq-find (lambda (p) (string-match-p "sleep 30" (or (cdr (assq 'args (process-attributes p))) "")))
+     (should-not (seq-find (lambda (p) (string-match-p (regexp-quote marker) (or (cdr (assq 'args (process-attributes p))) "")))
                            (list-system-processes))))))
 
 (ert-deftest drgnx-jobs/a-job-whose-process-vanished-is-gone ()
@@ -87,3 +89,23 @@
       (delete-directory (file-name-directory root) t))))
 
 ;;; jobs-test.el ends here
+
+(ert-deftest drgnx-jobs/a-start-time-read-a-tick-apart-is-the-same-process ()
+  ;; Emacs computes a process's start from the clock and the uptime read at slightly different moments: two
+  ;; reads of one process differ by a clock tick (10 ms).  The job stays its own; a pid of another start (a
+  ;; second or more apart) is still never trusted.
+  (drgnx-jobs-test--with
+   (let* ((id "20261017-000000-3") (dir (expand-file-name (concat "drgnx/jobs/" id) (getenv "XDG_STATE_HOME")))
+          (start (alist-get 'start (process-attributes (emacs-pid))))
+          (write (lambda (s) (with-temp-file (expand-file-name "job.eld" dir)
+                               (prin1 (list :id id :name "me" :launcher 'detached :boot (drgnx-jobs--boot-id) :start s) (current-buffer))))))
+     (make-directory dir t)
+     (unwind-protect
+         (progn
+           (write-region (number-to-string (emacs-pid)) nil (expand-file-name "pid" dir) nil 'silent)
+           (funcall write (time-add start 0.01))
+           (should (eq (drgnx-jobs-test--status id) 'running))
+           (funcall write (time-add start 5))
+           (should (eq (drgnx-jobs-test--status id) 'gone)))
+       ;; the "job" is this Emacs: never left for the fixture's clean-up to stop
+       (delete-directory dir t)))))
