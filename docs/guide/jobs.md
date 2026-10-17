@@ -102,10 +102,33 @@ goes through the gateway; profiles drgnx cannot price (a subscription) are liste
 
 The job is **done** when every task is done (or dropped). Review the job's branch and merge it yourself.
 
+## Your first real job
+
+A small plan in a repository of yours, with the agents you use — say Claude Code on your subscription for the work,
+a model on OpenRouter as its fallback, and a local Ollama model for reviews. Set the routes in `agents.eld` (config
+dir), with profiles of your own where the built-in ones do not fit ([agents.md](agents.md),
+[ai.md](ai.md)):
+
+```elisp
+(:routes ((implement "claude" "claude (OpenRouter)")
+          (review "claude (Ollama)")))
+```
+
+Then **Start Job from Plan…** (or `drgnx job propose PLAN --budget 2`): read the proposal — the tasks, what waits on
+what, the profile per role, the estimate (subscription traffic is unpriced: drgnx does not see it) — and approve.
+Watch the job window: agents start per ready task, permissions you did not allow show up as cards, the decision
+log fills. When the job is done, look at its branch (`git log job/ID`, `git diff main...job/ID`) and merge it yourself.
+Things worth trying once: Stop the job and resume it; a budget small enough to pause it; a won't-build decision
+(`**Won't build:**` in the plan) that a task then touches.
+
 ## Tests
 
 `test/unit/job-propose-test.el` (reading plans, proposals), `job-run-test.el` (worktrees, agents per task, the
 limit, a crashed agent), `job-policy-test.el` (the policy, writes in the worktree, cards), `job-review-test.el`
 (review, merge, conflicts), `job-budget-test.el` (the budget pause, fallback), `job-liveness-test.el` (an agent that will
 not start, a stalled turn, a reviewer's answered permission, a restart with a request waiting), `job-cli-test.el` (`drgnx job`
-against a hub in a child process, the commands). Developer details: [coordination.md](../develop/coordination.md#jobs).
+against a hub in a child process), `job-cards-test.el` (cards and their actions), `job-clash-test.el` and
+`job-clash-review-test.el` (the rules, the reviewer, the user's choice), `job-gate-test.el` (the gate),
+`job-ui-test.el` and `test/ui/job-window-test.el` (the window, the badge, notifications), `job-exit-test.el` (a
+four-task job end to end with automatic start, no credential file opened under a fake HOME, closing the window);
+the perf workload `job-window` ([perf.md](../develop/perf.md)). Developer details: [coordination.md](../develop/coordination.md#jobs).

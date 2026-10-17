@@ -63,6 +63,32 @@ error if it does not hold)."
                     :actions ,(make-list 2 (funcall type "(setq y 2) "))
                     :check "(eq (drgnx-agent-session-status drgnx-perf--agent) 'busy)"   ; typed while it streamed
                     :teardown ,(concat "(progn (ignore-errors (drgnx-agents-kill drgnx-perf--agent)) " kill-fixture ")"))
+      ;; a job's window open in its own frame, following three agents that stream (as it follows the hub's events)
+      (job-window
+       :setup ,(format "(progn (setq drgnx-agents-profiles (list (list \"mock\" :command (list (expand-file-name invocation-name invocation-directory) \"--batch\" \"-Q\" \"-l\" %S))))
+                              (setq drgnx-perf--agents (mapcar (lambda (n) (drgnx-agents-start \"mock\" temporary-file-directory (format \"perf#%%d\" n) \"perf\")) '(1 2 3)))
+                              (let ((d (+ (float-time) 10))) (while (and (seq-some (lambda (s) (not (eq (drgnx-agent-session-status s) 'idle))) drgnx-perf--agents) (< (float-time) d)) (accept-process-output nil 0.05)))
+                              (defun drgnx-perf--job-follow (_s) (drgnx-job-ui--event \"agent\" nil))
+                              (add-hook 'drgnx-agents-changed-functions #'drgnx-perf--job-follow)
+                              (let ((home (selected-frame)) (f (drgnx-job-ui--frame \"perf\")))
+                                (with-selected-frame f (drgnx-job-ui--layout \"perf\"))
+                                (drgnx-job-ui--draw \"perf\" (list :id \"perf\" :title \"Perf\" :status \"running\" :repo temporary-file-directory :budget 5.0 :spent 1.0
+                                                                   :tasks (mapcar (lambda (n) (list :n n :title (format \"task %%d\" n) :role \"implement\" :profile \"mock\" :status \"running\" :agent :null :deps :null)) '(1 2 3))
+                                                                   :agents (mapcar (lambda (s) (list :id (drgnx-agent-session-id s) :profile \"mock\" :task (drgnx-agent-session-task s) :status \"busy\" :review :false)) drgnx-perf--agents)
+                                                                   :cards (mapcar (lambda (n) (list :id n :kind \"stalled\" :task (format \"perf#%%d\" n) :title \"waiting\" :actions '((\"retry\" \"Retry\") (\"drop\" \"Drop the task\")) :data :null)) '(1 2 3 4))
+                                                                   :messages :null
+                                                                   :decisions (mapcar (lambda (n) (list :n n :kind \"build\" :subject (format \"part %%d\" n) :author \"user\" :status \"current\")) (number-sequence 20 1 -1))))
+                                (select-frame-set-input-focus home))
+                              t)"
+                       (expand-file-name "test/fixtures/mock-acp.el" drgnx-ui-repo-dir))
+       :each ,(concat "(progn " (drgnx-perf-run--visit-fixture-form)
+                      " (let ((d (+ (float-time) 5))) (while (and (seq-some (lambda (s) (eq (drgnx-agent-session-status s) 'busy)) drgnx-perf--agents) (< (float-time) d)) (accept-process-output nil 0.05)))"
+                      " (dolist (s drgnx-perf--agents) (drgnx-agents-send s \"slow\")) t)")
+       :actions ,(make-list 2 (funcall type "(setq y 2) "))
+       :check "(seq-some (lambda (s) (eq (drgnx-agent-session-status s) 'busy)) drgnx-perf--agents)"   ; typed while they streamed
+       :teardown ,(concat "(progn (remove-hook 'drgnx-agents-changed-functions #'drgnx-perf--job-follow)"
+                          " (dolist (s drgnx-perf--agents) (ignore-errors (drgnx-agents-kill s)))"
+                          " (dolist (f (frame-list)) (when (equal (frame-parameter f 'drgnx-job) \"perf\") (delete-frame f))) " kill-fixture ")"))
       ;; ghost text on: a mock model answers every pause at once (the pause shortened so each key asks and the
       ;; next one cancels — the most work a keystroke can bring)
       (typing-with-ghost

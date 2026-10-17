@@ -40,7 +40,7 @@ Its directory is mode 0700 and must be the user's own. One JSON object per line:
 | `agents/do` `{id, op, n?, text?, item?, reject?}` | `true`: `deliver-queue`, `unqueue`, `requeue`, `review` |
 | `coord/notify` (a notification: no id, no answer) | delivery runs now ([coordination.md](coordination.md)) |
 | `job/propose` `{plan, repo?, budget?, auto?}`, `job/approve` `{id, budget?}`, `job/stop` `{id}`, `job/resume` `{id, budget?}` | the job (`drgnx-job-summary`) |
-| `job/status` `{id?}` | the job, or `{jobs: [...]}` |
+| `job/status` `{id?, decisions?}` | the job (with its decision log when `decisions` is true), or `{jobs: [...]}` |
 | `job/card` `{card, action, arg?}` | the job, after the user's action on a card (once: a settled card is an error) |
 | `job/reply` `{message, text}` | `true`: the user's answer to an agent's message |
 

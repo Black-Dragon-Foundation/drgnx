@@ -11,7 +11,7 @@
 ;;   crash       exits 3, "mock crashed" on stderr
 ;;   commit      commits in its directory: "agent work for $DRGNX_TASK"
 ;;   /compact    the context shrinks
-;;   [drgnx task ID]  commits task.txt (legacy/a.txt when the prompt says legacy), then read_decisions and
+;;   [drgnx task ID]  commits task.txt (legacy/a.txt when the prompt says legacy, ID.txt when it says own file), then read_decisions and
 ;;               complete_task through its MCP server
 ;;   [drgnx review ID]  says "VERDICT: pass" (or "VERDICT: fail: …" with MOCK_ACP_VERDICT=fail)
 ;;   [drgnx clash ID]  says "RECOMMEND: A because it was first" (MOCK_ACP_RECOMMEND=B: B; MOCK_ACP_CLASH_SLOW: 5 s later)
@@ -58,7 +58,9 @@
 (defun mock--task (sid task &optional text)
   "A job's task: commit a file for it (legacy/a.txt when TEXT, its prompt, says legacy; else task.txt), read the
 decision log, complete the task; say what happened."
-  (let ((file (if (and text (string-match-p "legacy" text)) "legacy/a.txt" "task.txt")))
+  (let ((file (cond ((and text (string-match-p "legacy" text)) "legacy/a.txt")
+                    ((and text (string-match-p "own file" text)) (concat (replace-regexp-in-string "[^A-Za-z0-9-]" "-" task) ".txt"))
+                    (t "task.txt"))))
     (call-process "sh" nil nil nil "-c" (format "mkdir -p %s && echo %s >> %s && git add %s && git commit -q -m %s"
                                                 (shell-quote-argument (or (file-name-directory file) "."))
                                                 (shell-quote-argument task) file file (shell-quote-argument (concat "work for " task)))))
