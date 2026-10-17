@@ -159,6 +159,8 @@ usage: drgnx build              byte-compile drgnx (core, wb, modules); native c
                                read specs, plans, ledgers and the board into the work tracker (docs/guide/work.md)
        drgnx work status [--json]
                                every plan: tasks, steps, TODOs and commits done, branch, merged
+       drgnx hub start|stop|status [--json]
+                               the hub: the durable process behind agents and their gateway (docs/guide/agents.md)
        drgnx safe              Emacs with drgnx's core only: no modules, no packages
        drgnx bisect [-- CMD…]  find the module that breaks (CMD fails, or you say so)
        drgnx service-unit [DIR]
@@ -180,6 +182,9 @@ case "${1:-help}" in
         "${DRGNX_EMACS:-emacs}" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" -L "$here/wb" \
               -l drgnx-onboard -f drgnx-onboard-cli -- "$@" ;;
   safe) shift; DRGNX_SAFE=1 exec "${DRGNX_EMACS:-emacs}" --init-directory="$here/init" "$@" ;;
+  hub) shift
+        "${DRGNX_EMACS:-emacs}" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
+              -l drgnx-hub -f drgnx-hub-cli -- "$@" ;;
   work) shift
         "${DRGNX_EMACS:-emacs}" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
               -l drgnx-work -f drgnx-work-cli -- "$@" ;;

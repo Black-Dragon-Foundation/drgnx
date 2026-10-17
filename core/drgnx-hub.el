@@ -1,0 +1,283 @@
+;;; drgnx-hub.el --- The hub: a durable process for agents and their gateway, and its client -*- lexical-binding: t -*-
+
+;; SPDX-License-Identifier: GPL-3.0-or-later
+
+;;; Commentary:
+;; The hub is a batch Emacs started as a durable job (drgnx-jobs.el): it outlives the Emacs that started it, and
+;; holds what must keep running while editors come and go — today the agent traffic gateway (drgnx-gateway.el).
+;; Editors, the CLI and tests talk to it over a Unix socket in a directory only the user can enter: one JSON object
+;; per line, requests {id, method, params} answered {id, result} or {id, error}, and events {event, data} for the
+;; connections that subscribed.  One hub per drgnx data directory.  See docs/develop/hub.md.
+
+;;; Code:
+(require 'cl-lib)
+(require 'subr-x)
+(require 'drgnx-paths)
+(require 'drgnx-gateway)
+(require 'drgnx-jobs)
+
+(defvar drgnx-hub-event-functions nil
+  "Functions called with (EVENT DATA) for each event the hub sends this Emacs (after `drgnx-hub-connect'); EVENT a
+string (\"request\", \"fallback\", \"budget\"), DATA a plist.")
+
+(defvar drgnx-hub--server nil "This Emacs's hub socket, when it is the hub.")
+(defvar drgnx-hub--subscribers nil "Connections that asked for events.")
+(defvar drgnx-hub--started nil)
+(defvar drgnx-hub--exit-function (lambda () (kill-emacs 0)) "What `shutdown' does (tests: stop serving).")
+
+(defvar drgnx-hub--client nil "This Emacs's connection to the hub, for requests.")
+(defvar drgnx-hub--events nil "This Emacs's subscribed connection to the hub.")
+(defvar drgnx-hub--pending (make-hash-table) "Request id → callback.")
+(defvar drgnx-hub--next-id 0)
+
+(defconst drgnx-hub--env-names
+  '("DRGNX_DATA_DIR" "DRGNX_CONFIG_DIR" "XDG_STATE_HOME" "XDG_DATA_HOME" "XDG_CONFIG_HOME" "XDG_RUNTIME_DIR"
+    "OPENROUTER_API_KEY" "ANTHROPIC_API_KEY")
+  "Variables the hub gets from the Emacs that starts it (when set): the same dirs, and the keys it may use.")
+
+;;;; Where
+
+(defun drgnx-hub-socket ()
+  "The hub's socket: $XDG_RUNTIME_DIR/drgnx/hub-HASH.sock (HASH of the data dir: one hub per data dir), else under
+the state dir."
+  (let ((name (format "hub-%s.sock" (substring (secure-hash 'sha1 (drgnx-data-dir)) 0 8)))
+        (run (getenv "XDG_RUNTIME_DIR")))
+    (if (and run (file-directory-p run))
+        (expand-file-name name (expand-file-name "drgnx" run))
+      (expand-file-name name (expand-file-name "hub" (drgnx-state-dir))))))
+
+(defun drgnx-hub--registrations-file () (expand-file-name "hub/registrations.eld" (drgnx-state-dir)))
+
+;;;; JSON
+
+(defun drgnx-hub--jsonable (v)
+  "V with symbols as strings and nil as null, for `json-serialize'."
+  (cond ((null v) :null)
+        ((memq v '(t :null :false)) v)
+        ((keywordp v) v)
+        ((symbolp v) (symbol-name v))
+        ((and (consp v) (keywordp (car v)))
+         (cl-loop for (k x) on v by #'cddr append (list k (drgnx-hub--jsonable x))))
+        ((consp v) (vconcat (mapcar #'drgnx-hub--jsonable v)))
+        ((vectorp v) (vconcat (mapcar #'drgnx-hub--jsonable v)))
+        (t v)))
+
+(defun drgnx-hub--send (conn object)
+  (when (process-live-p conn)
+    (process-send-string conn (concat (json-serialize (drgnx-hub--jsonable object)) "\n"))))
+
+(defun drgnx-hub--lines (conn chunk fn)
+  "Split CONN's input into lines; FN gets each parsed JSON object."
+  (let ((buf (concat (or (process-get conn :buf) "") chunk)))
+    (while (string-match "\n" buf)
+      (let ((line (substring buf 0 (match-beginning 0))))
+        (setq buf (substring buf (match-end 0)))
+        (when-let* ((json (ignore-errors (json-parse-string line :object-type 'plist :array-type 'list
+                                                            :null-object nil :false-object nil))))
+          (funcall fn json))))
+    (process-put conn :buf buf)))
+
+;;;; The hub side
+
+(defun drgnx-hub--save-registrations ()
+  (let ((file (drgnx-hub--registrations-file)))
+    (make-directory (file-name-directory file) t)
+    (with-file-modes #o600
+      (with-temp-file file
+        (let ((print-length nil) (print-level nil)) (prin1 (drgnx-gateway-registrations) (current-buffer)))))
+    (set-file-modes file #o600)))
+
+(defun drgnx-hub--load-registrations ()
+  (let ((file (drgnx-hub--registrations-file)))
+    (when (file-readable-p file)
+      (drgnx-gateway-load-registrations
+       (ignore-errors (with-temp-buffer (insert-file-contents file) (read (current-buffer))))))))
+
+(defun drgnx-hub--chain (chain)
+  "A chain from JSON ([[provider, model-or-null]…]) as ((PROVIDER . MODEL)…)."
+  (mapcar (lambda (step) (cons (intern (car step)) (cadr step))) chain))
+
+(defun drgnx-hub--method (method params)
+  "The result of METHOD with PARAMS, or (:error MESSAGE)."
+  (pcase method
+    ("ping" (list :pid (emacs-pid)))
+    ("status" (list :pid (emacs-pid) :socket (drgnx-hub-socket) :gateway_port (drgnx-gateway-port)
+                    :registrations (length (drgnx-gateway-registrations)) :started drgnx-hub--started))
+    ("gateway/register"
+     (cl-loop for (k v) on (plist-get params :keys) by #'cddr
+              do (drgnx-gateway-set-key (intern (substring (symbol-name k) 1)) v))
+     (let ((token (drgnx-gateway-register (list :job (plist-get params :job) :task (plist-get params :task)
+                                                :agent (plist-get params :agent)
+                                                :chain (drgnx-hub--chain (plist-get params :chain))
+                                                :budget (plist-get params :budget)))))
+       (drgnx-hub--save-registrations)
+       (list :token token :url (format "http://127.0.0.1:%d" (drgnx-gateway-port)))))
+    ("gateway/unregister" (drgnx-gateway-unregister (plist-get params :token)) (drgnx-hub--save-registrations) t)
+    ("spend" (drgnx-work-db-spend :job (plist-get params :job) :task (plist-get params :task) :agent (plist-get params :agent)))
+    (_ (list :error (format "no method %s" method)))))
+
+(defun drgnx-hub--serve-request (conn json)
+  (let ((id (plist-get json :id)) (method (plist-get json :method)))
+    (pcase method
+      ("subscribe" (cl-pushnew conn drgnx-hub--subscribers) (drgnx-hub--send conn (list :id id :result t)))
+      ("shutdown" (drgnx-hub--send conn (list :id id :result t))
+       (run-at-time 0.1 nil (lambda () (funcall drgnx-hub--exit-function))))
+      (_ (let ((r (condition-case err (drgnx-hub--method method (plist-get json :params))
+                    (error (list :error (error-message-string err))))))
+           (drgnx-hub--send conn (if (and (consp r) (eq (car r) :error) (stringp (cadr r)) (null (cddr r)))
+                                     (list :id id :error (list :message (cadr r)))
+                                   (list :id id :result r))))))))
+
+(defun drgnx-hub--broadcast (event data)
+  (setq drgnx-hub--subscribers (seq-filter #'process-live-p drgnx-hub--subscribers))
+  (dolist (c drgnx-hub--subscribers) (drgnx-hub--send c (list :event (symbol-name event) :data data))))
+
+(defun drgnx-hub--ping-socket (socket)
+  "Does a hub answer on SOCKET?  (At most a second.)"
+  (when (file-exists-p socket)
+    (condition-case nil
+        (let* ((got nil)
+               (c (make-network-process :name "drgnx-hub-probe" :family 'local :service socket :noquery t
+                                        :coding 'utf-8-unix :filter (lambda (_p s) (setq got (concat got s))))))
+          (unwind-protect
+              (progn (process-send-string c "{\"id\":0,\"method\":\"ping\"}\n")
+                     (let ((deadline (+ (float-time) 1)))
+                       (while (and (not (and got (string-search "\n" got))) (< (float-time) deadline))
+                         (accept-process-output nil 0.02)))
+                     (and got (string-search "\"pid\"" got) t))
+            (delete-process c)))
+      (error nil))))
+
+(defun drgnx-hub-serve (socket)
+  "Be the hub on SOCKET: the gateway started, the registrations a previous hub kept taken back.  Returns the server.
+Signals an error when a hub already serves there."
+  (when (drgnx-hub--ping-socket socket) (error "a hub already serves on %s" socket))
+  (ignore-errors (delete-file socket))
+  (let ((dir (file-name-directory socket)))
+    (make-directory dir t)
+    (set-file-modes dir #o700))
+  (drgnx-gateway-start)
+  (drgnx-hub--load-registrations)
+  (add-hook 'drgnx-gateway-event-functions #'drgnx-hub--broadcast)
+  (setq drgnx-hub--started (format-time-string "%FT%T%z")
+        drgnx-hub--server
+        (make-network-process :name "drgnx-hub" :family 'local :server t :service socket :noquery t
+                              :coding 'utf-8-unix
+                              :filter (lambda (conn chunk) (drgnx-hub--lines conn chunk (lambda (j) (drgnx-hub--serve-request conn j)))))))
+
+(defun drgnx-hub-stop ()
+  "Stop being the hub (the socket closed and removed, the gateway stopped, its registrations dropped from memory)."
+  (when drgnx-hub--server
+    (let ((socket (process-contact drgnx-hub--server :service)))
+      (delete-process drgnx-hub--server)
+      (ignore-errors (delete-file socket))))
+  (dolist (c drgnx-hub--subscribers) (when (process-live-p c) (delete-process c)))
+  (setq drgnx-hub--server nil drgnx-hub--subscribers nil)
+  (remove-hook 'drgnx-gateway-event-functions #'drgnx-hub--broadcast)
+  (drgnx-gateway-stop)
+  (clrhash drgnx-gateway--registrations))
+
+(defun drgnx-hub-main ()
+  "The hub process's entry point (batch): serve until `shutdown' or SIGTERM.  Exit 3 when a hub already serves."
+  (condition-case err
+      (drgnx-hub-serve (drgnx-hub-socket))
+    (error (message "drgnx hub: %s" (if (string-prefix-p "a hub already serves" (error-message-string err))
+                                        "a hub already serves" (error-message-string err)))
+           (kill-emacs 3)))
+  (add-hook 'kill-emacs-hook #'drgnx-hub-stop)
+  (message "drgnx hub: serving on %s, gateway on 127.0.0.1:%d" (drgnx-hub-socket) (drgnx-gateway-port))
+  (while t
+    (accept-process-output nil 1)
+    (dotimes (_ 2) (read-event nil nil 0.002))))     ; queued events would hold back process sentinels
+
+;;;; The client side
+
+(defun drgnx-hub--connect-socket (filter)
+  (make-network-process :name "drgnx-hub-client" :family 'local :service (drgnx-hub-socket) :noquery t
+                        :coding 'utf-8-unix :filter filter))
+
+(defun drgnx-hub--client-filter (conn chunk)
+  (drgnx-hub--lines conn chunk
+                    (lambda (json)
+                      (when-let* ((cb (gethash (plist-get json :id) drgnx-hub--pending)))
+                        (remhash (plist-get json :id) drgnx-hub--pending)
+                        (funcall cb (plist-get json :result) (plist-get (plist-get json :error) :message))))))
+
+(defun drgnx-hub-call (method params callback)
+  "Ask the hub METHOD with PARAMS (a plist); CALLBACK gets (RESULT ERROR-MESSAGE).  Signals when no hub serves."
+  (unless (process-live-p drgnx-hub--client)
+    (setq drgnx-hub--client (drgnx-hub--connect-socket #'drgnx-hub--client-filter)))
+  (let ((id (cl-incf drgnx-hub--next-id)))
+    (puthash id callback drgnx-hub--pending)
+    (drgnx-hub--send drgnx-hub--client (list :id id :method method :params (or params (make-hash-table))))
+    id))
+
+(defun drgnx-hub-call-sync (method params &optional timeout)
+  "METHOD's result from the hub, waiting up to TIMEOUT (5) s — for commands and the CLI only.  Signals the hub's
+error, or when it does not answer."
+  (let ((done nil) result error)
+    (drgnx-hub-call method params (lambda (r e) (setq done t result r error e)))
+    (let ((deadline (+ (float-time) (or timeout 5))))
+      (while (and (not done) (< (float-time) deadline)) (accept-process-output nil 0.02)))
+    (cond ((not done) (error "The drgnx hub did not answer %s" method))
+          (error (error "drgnx hub: %s" error))
+          (t result))))
+
+(defun drgnx-hub-disconnect ()
+  (dolist (c (list drgnx-hub--client drgnx-hub--events)) (when (process-live-p c) (delete-process c)))
+  (setq drgnx-hub--client nil drgnx-hub--events nil)
+  (clrhash drgnx-hub--pending))
+
+(defun drgnx-hub-running-p ()
+  "Does a hub serve this data dir?"
+  (drgnx-hub--ping-socket (drgnx-hub-socket)))
+
+(defun drgnx-hub-ensure ()
+  "Make sure the hub runs, starting it as a durable job if not (waits up to 5 s: commands and the CLI only).  t, or
+an error saying why not."
+  (or (drgnx-hub-running-p)
+      (let ((env (delq nil (mapcar (lambda (n) (let ((v (getenv n))) (and v (not (string-empty-p v)) (concat n "=" v))))
+                                   drgnx-hub--env-names))))
+        (drgnx-jobs-start "drgnx-hub" (list (expand-file-name invocation-name invocation-directory) "--batch" "-Q"
+                                            "-L" (expand-file-name "core" drgnx-dir) "-l" "drgnx-hub" "-f" "drgnx-hub-main")
+                          :cwd (expand-file-name "~") :env env)
+        (let ((deadline (+ (float-time) 5)))
+          (while (and (not (drgnx-hub-running-p)) (< (float-time) deadline)) (sleep-for 0.1)))
+        (or (drgnx-hub-running-p) (error "The drgnx hub did not start (see `drgnx hub status' and its job log)")))))
+
+(defun drgnx-hub-connect ()
+  "Subscribe to the hub's events (`drgnx-hub-event-functions').  Asynchronous; safe to call again."
+  (unless (process-live-p drgnx-hub--events)
+    (let ((c (drgnx-hub--connect-socket
+              (lambda (conn chunk)
+                (drgnx-hub--lines conn chunk
+                                  (lambda (json)
+                                    (cond ((plist-get json :event)
+                                           (run-hook-with-args 'drgnx-hub-event-functions (plist-get json :event) (plist-get json :data)))
+                                          ((plist-get json :id) (setq drgnx-hub--events conn)))))))))
+      (drgnx-hub--send c (list :id 0 :method "subscribe" :params (make-hash-table))))))
+
+;;;; CLI
+
+(defun drgnx-hub-cli ()
+  "`drgnx hub start|stop|status [--json]'."
+  (let* ((args (prog1 (cdr (member "--" command-line-args-left)) (setq command-line-args-left nil)))
+         (json (member "--json" args)))
+    (kill-emacs
+     (condition-case err
+         (pcase (car args)
+           ("start" (drgnx-hub-ensure) (princ (format "drgnx hub: running (%s)\n" (drgnx-hub-socket))) 0)
+           ("stop" (when (drgnx-hub-running-p) (drgnx-hub-call-sync "shutdown" nil)) 0)
+           ("status"
+            (if (not (drgnx-hub-running-p))
+                (progn (princ (if json "{\"running\":false}\n" "drgnx hub: not running\n")) 1)
+              (let ((s (drgnx-hub-call-sync "status" nil)))
+                (princ (if json (concat (json-serialize (drgnx-hub--jsonable (append (list :running t) s))) "\n")
+                         (format "drgnx hub: running, pid %s, gateway 127.0.0.1:%s, %s registrations, since %s\n"
+                                 (plist-get s :pid) (plist-get s :gateway_port) (plist-get s :registrations) (plist-get s :started))))
+                0)))
+           (_ (princ "usage: drgnx hub start|stop|status [--json]\n" #'external-debugging-output) 2))
+       (error (princ (format "drgnx hub: %s\n" (error-message-string err)) #'external-debugging-output) 1)))))
+
+(provide 'drgnx-hub)
+;;; drgnx-hub.el ends here
