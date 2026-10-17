@@ -314,7 +314,8 @@ claude mcp add -s user drgnx-ui -- /path/to/drgnx/bin/drgnx ui mcp
 A typical agent loop: `ui_start` → `ui_screenshot` (look) → `ui_click`/`ui_keys` (act; read the jank report) →
 `ui_screenshot` (check) → `ui_stop`. Every tool resolves its session through the ownership rules above, so a
 call naming `server` or another Emacs's socket returns an error starting with `refused`. Failures are tool
-results with `isError`, never a crashed server. `harness/drgnx-ui-mcp.el` also has a small client
+results with `isError`, never a crashed server (a reply that cannot be written as JSON becomes a JSON-RPC error
+-32603 for its request). `harness/drgnx-ui-mcp.el` also has a small client
 (`drgnx-ui-mcp-client-start/-request/-tool/-stop`) used by the tests and handy for scripts.
 
 ## Known limits

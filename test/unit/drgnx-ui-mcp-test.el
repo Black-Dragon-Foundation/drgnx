@@ -49,6 +49,14 @@
   (should (equal (plist-get (plist-get (drgnx-ui-mcp-handle '(:jsonrpc "2.0" :id 5 :method "nope")) :error) :code)
                  -32601)))
 
+(ert-deftest drgnx-ui-mcp/a-reply-that-cannot-be-serialised-is-an-error-with-its-id ()
+  ;; the stdio loop must outlive it: the client gets an internal error for its request, never silence
+  (let ((reply (drgnx-ui--parse-json (drgnx-ui-mcp--reply-text (list :jsonrpc "2.0" :id 7 :result (list :x (make-marker)))))))
+    (should (equal (plist-get reply :id) 7))
+    (should (equal (plist-get (plist-get reply :error) :code) -32603)))
+  (should (equal (drgnx-ui--parse-json (drgnx-ui-mcp--reply-text '(:jsonrpc "2.0" :id 8 :result (:ok t))))
+                 '(:jsonrpc "2.0" :id 8 :result (:ok t)))))
+
 (ert-deftest drgnx-ui-mcp/list-is-empty-without-sessions ()
   (drgnx-ui-mcp-test--with-state
     (should (equal (drgnx-ui-mcp-test--text (drgnx-ui-mcp-test--call "ui_list" nil)) "[]"))))

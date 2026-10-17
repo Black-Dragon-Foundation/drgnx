@@ -201,6 +201,15 @@ guard_violations (window moves from timers).")
           (`(failed ,why) (list :jsonrpc "2.0" :id id :error (list :code -32603 :message why)))
           (_ (list :jsonrpc "2.0" :id id :result result)))))))
 
+(defun drgnx-ui-mcp--reply-text (reply)
+  "REPLY as JSON text; a reply that cannot be serialised becomes an internal error (-32603) with its id,
+so the loop goes on and the client hears why."
+  (condition-case err
+      (drgnx-ui--json reply)
+    (error (drgnx-ui--json (list :jsonrpc "2.0" :id (plist-get reply :id)
+                                 :error (list :code -32603 :message (format "the reply cannot be serialised: %s"
+                                                                            (error-message-string err))))))))
+
 (defun drgnx-ui-mcp-main ()
   "Serve MCP over stdin/stdout until EOF, then exit."
   (drgnx-ui-batch-setup)
@@ -213,7 +222,7 @@ guard_violations (window moves from timers).")
                               (drgnx-ui-mcp-handle msg)
                             (list :jsonrpc "2.0" :id :null :error (list :code -32700 :message "parse error")))))
               (when reply
-                (princ (drgnx-ui--json reply))
+                (princ (drgnx-ui-mcp--reply-text reply))
                 (terpri))))))
     (end-of-file nil))
   (kill-emacs 0))
