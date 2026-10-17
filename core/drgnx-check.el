@@ -106,11 +106,14 @@ results go (default: none)."
                                                      (format "(kill-emacs (if (drgnx-run-ert '%S (getenv \"DRGNX_TEST_RESULTS\")) 0 1))" files)))
                                  :gui t :env (funcall results name))
                         jobs))
-      (push (funcall job "scenario" 2 'scenario (list bin "test" "--scenario" "--config" "drgnx") :gui t
+      ;; the tiers that measure time, each alone: scenarios hold frame budgets (a frame from the daemon in
+      ;; < 500 ms failed at 514 ms next to the parallel phase), then the bench, then perf
+      (push (funcall job "scenario" 4 'scenario (list bin "test" "--scenario" "--config" "drgnx") :gui t
                      :env (list "DRGNX_SCENARIO_TIMEOUT=600"))
             jobs)
-      (push (funcall job "bench" 4 'bench (list bin "test" "--bench") :gui t) jobs)
-      (when perf (push (funcall job "perf" 5 'perf (list bin "test" "--perf") :gui t) jobs)))
+      (push (funcall job "bench" 5 'bench (list bin "test" "--bench") :gui t) jobs)
+      ;; exit 3: the machine stayed too busy to measure — not judged, and not a pass
+      (when perf (push (funcall job "perf" 6 'perf (list bin "test" "--perf") :gui t :not-judged 3) jobs)))
     (nreverse jobs)))
 
 ;;;; Running
@@ -149,31 +152,45 @@ each logging to DIR/NAME.log.  A failing phase 1 (the build) stops the rest.  Re
                   (plist-put j :seconds (- (float-time) (plist-get j :start)))
                   (plist-put j :exit (process-exit-status p))
                   (unless (eq (plist-get j :status) 'timeout)
-                    (plist-put j :status (if (eql (process-exit-status p) 0) 'ok 'failed)))
+                    (plist-put j :status (cond ((eql (process-exit-status p) 0) 'ok)
+                                               ;; perf: the machine was too busy to measure (not a pass)
+                                               ((eql (process-exit-status p) (plist-get j :not-judged)) 'not-judged)
+                                               (t 'failed))))
                   (when verbose (princ (format "check: %s %s (%.0f s)\n" (plist-get j :name) (plist-get j :status) (plist-get j :seconds)))))))))
         (when (and (eql phase 1) (seq-find (lambda (j) (and (eql (plist-get j :phase) 1) (not (eq (plist-get j :status) 'ok)))) all))
           (setq stop t))))
     (list :ok (seq-every-p (lambda (j) (eq (plist-get j :status) 'ok)) all) :jobs all :seconds (- (float-time) t0))))
 
-(defun drgnx-check--end (p)
-  "End job process P and everything it started (its process group: Emacs starts each child in its own)."
-  (let ((pid (process-id p)))
-    (ignore-errors (signal-process (- pid) 'TERM))
-    (sleep-for 0.3)
-    (ignore-errors (signal-process (- pid) 'KILL))
+(defconst drgnx-check-grace 15
+  "Seconds a job told to end (timeout, C-c) has to clean up — its Emacs stops the sessions it started — before
+it is killed.")
+
+(defun drgnx-check--end (&rest ps)
+  "End the job processes PS and everything they started (each its own process group): TERM, up to
+`drgnx-check-grace' seconds to clean up, then KILL."
+  (dolist (p ps) (ignore-errors (signal-process (- (process-id p)) 'TERM)))
+  (let ((deadline (+ (float-time) drgnx-check-grace))
+        ;; the whole group: the job's shell goes at once, what it started may still be cleaning up
+        (group-left (lambda (p) (eq 0 (ignore-errors (signal-process (- (process-id p)) 0))))))
+    (while (and (seq-some group-left ps) (< (float-time) deadline))
+      (accept-process-output nil 0.1)))
+  (dolist (p ps)
+    (ignore-errors (signal-process (- (process-id p)) 'KILL))
     (when (process-live-p p) (delete-process p))))
 
 (defun drgnx-check--start (job dir)
   "Start JOB, its output to DIR/NAME.log."
   (let* ((log (expand-file-name (concat (plist-get job :name) ".log") dir))
-         (process-environment (append (plist-get job :env) process-environment)))
+         ;; a test process ended early stops the harness sessions it started (harness/drgnx-ui.el)
+         (process-environment (append (plist-get job :env) (list "DRGNX_UI_STOP_ON_EXIT=1") process-environment)))
     (plist-put job :log log)
     (plist-put job :start (float-time))
     (plist-put job :process
                (make-process :name (concat "check-" (plist-get job :name)) :noquery t :connection-type 'pipe
                              ;; no `exec': its pipe to Emacs must stay open until it ends — a job whose pipe is
                              ;; at end-of-file while it runs hides every other job's end from Emacs until it ends
-                             :command (list "sh" "-c" (format "%s > %s 2>&1"
+                             ;; stdin empty: a stray prompt in a test reads end-of-file, never waits
+                             :command (list "sh" "-c" (format "%s < /dev/null > %s 2>&1"
                                                               (mapconcat #'shell-quote-argument (plist-get job :command) " ")
                                                               (shell-quote-argument log)))))))
 
@@ -186,7 +203,7 @@ each logging to DIR/NAME.log.  A failing phase 1 (the build) stops the rest.  Re
      (mapconcat (lambda (j)
                   (format "%-10s %-16s %7.1f s  %s" (plist-get j :name)
                           (pcase (plist-get j :status)
-                            ('ok "ok") ('skipped "skipped") ('timeout "TIMED OUT")
+                            ('ok "ok") ('skipped "skipped") ('timeout "TIMED OUT") ('not-judged "NOT JUDGED (busy)")
                             (_ (format "FAILED (exit %s)" (plist-get j :exit))))
                           (or (plist-get j :seconds) 0) (or (plist-get j :log) "")))
                 jobs "\n")
@@ -199,25 +216,52 @@ each logging to DIR/NAME.log.  A failing phase 1 (the build) stops the rest.  Re
 
 ;;;; Command line
 
+(defun drgnx-check--parse-args (args)
+  "ARGS of `drgnx check' as (:jobs N :shards N :perf BOOL :gui BOOL), or (:error WHY)."
+  (let ((opts (list :jobs 8 :shards 4 :perf t :gui t)) (err nil))
+    (while (and args (not err))
+      (let ((a (pop args)))
+        (pcase a
+          ("--no-perf" (setq opts (plist-put opts :perf nil)))
+          ("--no-gui" (setq opts (plist-put opts :gui nil)))
+          ((or "--jobs" "--shards")
+           (let ((v (pop args)))
+             (if (and v (string-match-p "\\`[1-9][0-9]*\\'" v))
+                 (setq opts (plist-put opts (intern (concat ":" (substring a 2))) (string-to-number v)))
+               (setq err (format "%s needs a whole number above 0, not %s" a (or v "nothing"))))))
+          (_ (setq err (format "unknown option %s (--no-perf, --no-gui, --jobs N, --shards N)" a))))))
+    (if err (list :error err) opts)))
+
+(defvar drgnx-check--jobs nil "The jobs of the run in progress (C-c ends those still running).")
+
 (defun drgnx-check-cli-run (args)
-  "`drgnx check [--no-perf] [--no-gui] [--jobs N] [--shards N]'; the exit code."
-  (let* ((num (lambda (flag default) (if-let* ((m (member flag args))) (string-to-number (cadr m)) default)))
-         (slots (drgnx-check-gui-slots))
-         (dir (expand-file-name (format-time-string "check/%Y%m%d-%H%M%S") (drgnx-state-dir)))
-         (jobs (drgnx-check-plan :unit-shards (funcall num "--shards" 4) :live-shards (max 1 (min 3 slots))
-                                 :perf (not (member "--no-perf" args)) :gui (not (member "--no-gui" args)) :dir dir))
-         (_ (princ (format "check: %d jobs, %d GUI at a time (%s MiB free), logs in %s\n"
-                           (length jobs) slots (or (drgnx-check--mem-available) "?") dir)))
-         (r (drgnx-check-run jobs :dir dir :jobs (funcall num "--jobs" 8) :gui-slots slots :verbose t)))
-    (ignore-errors (drgnx-check--save-durations dir))
-    (princ (drgnx-check-summary r))
-    (drgnx-check-exit-code r)))
+  "`drgnx check [--no-perf] [--no-gui] [--jobs N] [--shards N]'; the exit code (2: bad arguments)."
+  (let ((o (drgnx-check--parse-args args)))
+    (if (plist-get o :error)
+        (progn (princ (format "drgnx check: %s\n" (plist-get o :error))) 2)
+      (let* ((slots (drgnx-check-gui-slots))
+             (dir (expand-file-name (format-time-string "check/%Y%m%d-%H%M%S") (drgnx-state-dir)))
+             (jobs (drgnx-check-plan :unit-shards (plist-get o :shards) :live-shards (max 1 (min 3 slots))
+                                     :perf (plist-get o :perf) :gui (plist-get o :gui) :dir dir))
+             (_ (princ (format "check: %d jobs, %d GUI at a time (%s MiB free), logs in %s\n"
+                               (length jobs) slots (or (drgnx-check--mem-available) "?") dir)))
+             (r (drgnx-check-run jobs :dir dir :jobs (plist-get o :jobs) :gui-slots slots :verbose t)))
+        (ignore-errors (drgnx-check--save-durations dir))
+        (princ (drgnx-check-summary r))
+        (drgnx-check-exit-code r)))))
+
+(defun drgnx-check--end-running ()
+  "`kill-emacs-hook' (C-c, TERM): end every job still running, giving each time to stop its sessions."
+  (when-let* ((ps (seq-filter #'process-live-p (mapcar (lambda (p) (and (string-prefix-p "check-" (process-name p)) p))
+                                                       (process-list)))))
+    (princ (format "check: ending %d running jobs (up to %d s for them to clean up)\n" (length ps) drgnx-check-grace))
+    (apply #'drgnx-check--end ps)))
 
 (defun drgnx-check-cli ()
   "bin/drgnx check: the arguments after --."
   (let ((args (cdr (member "--" command-line-args-left))))
     (setq command-line-args-left nil)
-    (add-hook 'kill-emacs-hook (lambda () (dolist (p (process-list)) (ignore-errors (delete-process p)))))
+    (add-hook 'kill-emacs-hook #'drgnx-check--end-running)
     (kill-emacs (drgnx-check-cli-run args))))
 
 (provide 'drgnx-check)

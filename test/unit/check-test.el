@@ -30,6 +30,7 @@
     (apply #'max (mapcar (lambda (s) (seq-count (lambda (o) (and (<= (car o) (car s)) (< (car s) (cdr o)))) spans)) spans))))
 
 (ert-deftest drgnx-check/phases-run-in-order-and-jobs-of-a-phase-together ()
+  :tags '(:timing)                                      ; overlaps of 0.3 s sleeps: a quiet machine
   (drgnx-check-test--with dir
     (let* ((jobs (list (drgnx-check-test--job dir "build" 1)
                        (drgnx-check-test--job dir "u1" 2) (drgnx-check-test--job dir "u2" 2) (drgnx-check-test--job dir "u3" 2)
@@ -42,6 +43,7 @@
       (dolist (u '("u1" "u2" "u3")) (should (<= (cddr (assoc u tm)) (cadr (assoc "perf" tm))))))))   ; perf alone, last
 
 (ert-deftest drgnx-check/gui-jobs-never-exceed-the-slots-memory-allows ()
+  :tags '(:timing)                                      ; overlaps of 0.3 s sleeps: a quiet machine
   (drgnx-check-test--with dir
     (let* ((jobs (mapcar (lambda (n) (drgnx-check-test--job dir n 2 :gui t)) '("g1" "g2" "g3" "g4")))
            (r (drgnx-check-run (cons (drgnx-check-test--job dir "u1" 2 :sleep 0.8) jobs) :dir dir :jobs 8 :gui-slots 2))
@@ -70,6 +72,7 @@
       (should (eql (drgnx-check-exit-code r) 1)))))
 
 (ert-deftest drgnx-check/a-short-job-is-seen-ending-while-a-long-one-runs ()
+  :tags '(:timing)                                      ; within 1.5 s: a quiet machine
   ;; the first real run noticed every job of the parallel phase only when the last ended
   (drgnx-check-test--with dir
     (let* ((r (drgnx-check-run (list (drgnx-check-test--job dir "short" 2 :sleep 0.3) (drgnx-check-test--job dir "long" 2 :sleep 4))
@@ -110,9 +113,46 @@
     (should (seq-every-p (lambda (j) (plist-get j :gui)) (seq-filter (lambda (j) (member (plist-get j :name) '("ui" "live-1" "scenario" "bench" "perf"))) jobs)))
     (let ((phase (lambda (n) (plist-get (seq-find (lambda (j) (equal (plist-get j :name) n)) jobs) :phase))))
       ;; the parallel phase, then each that measures time alone: the timing unit tests, the bench, perf
-      (should (equal (mapcar phase '("unit-1" "ui" "unit-timing" "bench" "perf")) '(2 2 3 4 5))))
+      ;; scenarios hold frame budgets (a frame from the daemon < 500 ms): alone too
+      (should (equal (mapcar phase '("unit-1" "ui" "live-1" "unit-timing" "scenario" "bench" "perf")) '(2 2 2 3 4 5 6))))
     (should (member "DRGNX_TEST_SELECTOR=(not (tag :timing))" (plist-get (seq-find (lambda (j) (equal (plist-get j :name) "unit-1")) jobs) :env)))
     (should (member "DRGNX_TEST_SELECTOR=(tag :timing)" (plist-get (seq-find (lambda (j) (equal (plist-get j :name) "unit-timing")) jobs) :env)))
     (should-not (member "perf" (mapcar (lambda (j) (plist-get j :name)) (drgnx-check-plan :root drgnx-dir :unit-shards 1 :live-shards 1))))))
 
 ;;; check-test.el ends here
+
+;;;; Final review fixes
+
+(ert-deftest drgnx-check/a-job-ended-early-gets-time-to-clean-up ()
+  ;; a job's Emacs stops its sessions when told to end: TERM, then time for that, then KILL
+  (drgnx-check-test--with dir
+    (let ((job (list :name "slow-exit" :phase 2 :timeout 1
+                     :command (list "sh" "-c" (format "trap 'sleep 1; echo cleaned > %scleaned; exit 0' TERM; sleep 60 & wait" dir)))))
+      (drgnx-check-run (list job) :dir dir :jobs 2 :gui-slots 1)
+      (should (file-exists-p (concat dir "cleaned"))))))
+
+(ert-deftest drgnx-check/a-job-never-waits-on-the-terminal ()
+  (drgnx-check-test--with dir
+    (let* ((t0 (float-time))
+           (r (drgnx-check-run (list (list :name "reads" :phase 2 :timeout 5 :command (list "sh" "-c" "read x; echo done")))
+                               :dir dir :jobs 2 :gui-slots 1)))
+      (should (eq (plist-get (car (plist-get r :jobs)) :status) 'ok))       ; stdin is empty, not an open pipe
+      (should (< (- (float-time) t0) 3)))))
+
+(ert-deftest drgnx-check/a-bad-number-is-refused-not-run ()
+  ;; the arguments only: a bad one is said, never a run (--jobs 0 used to loop for ever)
+  (dolist (args '(("--jobs" "abc") ("--jobs" "0") ("--shards") ("--jobs" "-2") ("--frobnicate")))
+    (should (stringp (plist-get (drgnx-check--parse-args args) :error))))
+  (should (equal (drgnx-check--parse-args '("--jobs" "6" "--no-perf"))
+                 '(:jobs 6 :shards 4 :perf nil :gui t))))
+
+(ert-deftest drgnx-check/perf-on-a-busy-machine-is-not-judged-and-not-a-pass ()
+  ;; bin/drgnx test --perf exits 3 when the machine was too busy to measure (no history line written)
+  (drgnx-check-test--with dir
+    (let* ((r (drgnx-check-run (list (drgnx-check-test--job dir "perf" 5 :code 3 :not-judged 3)) :dir dir :jobs 2 :gui-slots 1)))
+      (should (eq (plist-get (car (plist-get r :jobs)) :status) 'not-judged))
+      (should (string-match-p "perf +NOT JUDGED (busy)" (drgnx-check-summary r)))
+      (should (eql (drgnx-check-exit-code r) 1))))
+  (should (eql 3 (plist-get (seq-find (lambda (j) (equal (plist-get j :name) "perf"))
+                                      (drgnx-check-plan :root drgnx-dir :unit-shards 1 :live-shards 1 :perf t))
+                            :not-judged))))

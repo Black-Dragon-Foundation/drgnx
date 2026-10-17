@@ -4,7 +4,8 @@
 (require 'drgnx-uitest)
 
 (defmacro drgnx-ui-test--with-state (&rest body)
-  "Run BODY with `root' bound to a fresh DRGNX_UI_STATE directory."
+  "Run BODY with `root' bound to a fresh DRGNX_UI_STATE directory.  No systemd unit counts as active:
+the real ones belong to sessions running next to the tests (bin/drgnx check's live shards)."
   (declare (indent 0))
   `(let* ((root (make-temp-file "drgnx-ui-state" t))
           (runtime (expand-file-name "xdg-runtime" root))
@@ -13,7 +14,9 @@
                                        process-environment)))
      (make-directory runtime)
      (set-file-modes runtime #o700)
-     (unwind-protect (progn ,@body) (delete-directory root t))))
+     (unwind-protect
+         (cl-letf (((symbol-function 'drgnx-ui-unit-active-p) #'ignore)) ,@body)
+       (delete-directory root t))))
 
 (defun drgnx-ui-test--slurp (file)
   (with-temp-buffer (insert-file-contents file) (buffer-string)))
@@ -301,3 +304,20 @@
         (let ((s (drgnx-ui--claim-and-launch nil "1600x900" root)))
           (should (equal (plist-get s :name) "drgnx-ui-2"))
           (should (equal stopped '("drgnx-ui-1"))))))))
+
+(ert-deftest drgnx-ui/a-test-process-ending-stops-the-sessions-it-started ()
+  ;; bin/drgnx check (and the test-* tiers) set DRGNX_UI_STOP_ON_EXIT: a test process that is ended — a
+  ;; timeout, C-c — stops its own sessions on the way out; `drgnx ui start' sessions are meant to outlive it
+  (let ((drgnx-ui--own nil) (stopped nil))
+    (cl-letf (((symbol-function 'drgnx-ui-stop) (lambda (n) (push (cons n (getenv "DRGNX_UI_STATE")) stopped))))
+      (drgnx-ui--own-add "drgnx-ui-7" "/tmp/root-a")
+      (let ((process-environment (cons "DRGNX_UI_STOP_ON_EXIT" process-environment)))   ; unset
+        (drgnx-ui--stop-own-on-exit)
+        (should-not stopped))
+      (let ((process-environment (cons "DRGNX_UI_STOP_ON_EXIT=1" process-environment)))
+        (drgnx-ui--stop-own-on-exit)
+        (should (equal stopped '(("drgnx-ui-7" . "/tmp/root-a")))))))     ; in the root it was started in
+  (let ((drgnx-ui--own nil))
+    (drgnx-ui--own-add "drgnx-ui-8" "/tmp/r")
+    (drgnx-ui--own-remove "drgnx-ui-8")                                   ; a session stopped normally is forgotten
+    (should-not drgnx-ui--own)))

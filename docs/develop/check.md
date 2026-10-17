@@ -15,24 +15,39 @@ It runs in phases:
 2. **In parallel:**
    - the unit suite in `--shards` batch Emacs (4);
    - the test/ui session;
-   - the live tests in shards;
-   - the scenario tier.
+   - the live tests in shards.
 
    GUI jobs (each starts headless Emacs sessions) run no more at a time than free memory allows: 1 GiB each beyond
    1.5 GiB kept free, at least one, at most four.
 3. **The unit tests tagged `:timing`, alone.** They assert how long something takes (`:tags '(:timing)` on the
    `ert-deftest`); `bin/drgnx test` still runs them with the rest.
-4. **The bench, alone.**
-5. **Perf, alone.** It measures input latency.
+4. **The scenario tier, alone.** Its scenarios hold frame budgets; a frame from the daemon in under 500 ms failed
+   at 514 ms next to the parallel phase.
+5. **The bench, alone.**
+6. **Perf, alone.** It measures input latency. When the machine stays too busy to measure, `--perf` exits 3: the
+   summary says NOT JUDGED (busy). That is not a pass.
 
-At most `--jobs` (8) jobs run at once. Each job writes its log to `~/.local/state/drgnx/check/<time>/<job>.log`.
-A job that overruns its time limit is ended with everything it started (its process group). The summary lists
-every job — ok, FAILED (exit N), TIMED OUT or skipped — with its time and log, then the wall time against the time
-the same jobs take one after another. The exit status is 0 only when all passed.
+At most `--jobs` (8) jobs run at once; a value that is not a whole number above 0 is refused (exit 2). Each job writes
+its log to `~/.local/state/drgnx/check/<time>/<job>.log`. Its stdin is empty, so a stray prompt reads end-of-file
+instead of waiting.
+
+**Ending early.** A job that overruns its time limit, or every running job when the run itself is interrupted
+(SIGTERM, or C-c in a terminal), gets TERM on its whole process group. It then has 15 s to clean up before KILL.
+Jobs run with `DRGNX_UI_STOP_ON_EXIT=1`, and so do the `bin/drgnx test --ui/--scenario/--bench/--perf` tiers: a
+test process ended that way stops the harness sessions it started on its way out. A session whose Emacs is slow to
+exit is finished by systemd. `bin/drgnx ui start` sessions are meant to outlive the command and are never stopped
+like this.
+
+The summary lists every job — ok, FAILED (exit N), TIMED OUT, NOT JUDGED or skipped — with its time and log, then
+the wall time against the time the same jobs take one after another. The exit status is 0 only when all passed.
 
 Shards are balanced by how long each test file took last time (`check/durations.eld`, kept from the shards'
-results). Sessions started at the same moment from different shards never share a name: a name is claimed by
-creating its run directory, and a taken one moves on to the next.
+results). Sessions started at the same moment never share a name:
+- within one state root, a name is claimed by creating its run directory;
+- across roots, a unit name another session holds (systemd: "already loaded") is passed over for the next one.
 
-Tests that run in parallel must not depend on machine-wide state another test may share. A check of "no process
-like this one is left" uses a marker only this test's process has, such as a random sleep length.
+Tests that run in parallel must not depend on machine-wide state another test may share:
+- A check of "no process like this one is left" uses a marker only this test's process has, such as a random sleep
+  length.
+- A test of name choice stubs `drgnx-ui-unit-active-p`, because real units belong to the live shards running
+  alongside.

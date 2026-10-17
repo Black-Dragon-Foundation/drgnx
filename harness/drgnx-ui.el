@@ -253,6 +253,29 @@ so `drgnx-ui-prepare-run' refuses it — moves on to the next one."
         (file-already-exists (when (> (cl-incf tries) 50) (signal (car err) (cdr err))))))
     sess))
 
+;;;; Sessions this process started (stopped if it is ended early)
+
+(defvar drgnx-ui--own nil
+  "Sessions this process started and has not stopped: (NAME . STATE-ROOT), or (:group . RUN) for a test-suite
+session.")
+
+(defun drgnx-ui--own-add (name root) (push (cons name root) drgnx-ui--own))
+(defun drgnx-ui--own-remove (name) (setq drgnx-ui--own (seq-remove (lambda (e) (equal (car e) name)) drgnx-ui--own)))
+
+(defun drgnx-ui--stop-own-on-exit ()
+  "`kill-emacs-hook': with DRGNX_UI_STOP_ON_EXIT set (bin/drgnx check, the test-* tiers), stop the sessions
+this process started and did not stop — it was ended early (a timeout, C-c), its own clean-up never ran.
+Without it nothing is stopped: `drgnx ui start' sessions are meant to outlive the command."
+  (when (getenv "DRGNX_UI_STOP_ON_EXIT")
+    (dolist (e drgnx-ui--own)
+      (ignore-errors
+        (if (eq (car e) :group) (drgnx-ui--kill-group (cdr e))
+          (let ((process-environment (cons (concat "DRGNX_UI_STATE=" (cdr e)) process-environment)))
+            (drgnx-ui-stop (car e))))))
+    (setq drgnx-ui--own nil)))
+
+(add-hook 'kill-emacs-hook #'drgnx-ui--stop-own-on-exit)
+
 (defun drgnx-ui--claim-and-launch (config size root &optional daemon monitors)
   "Claim a name in ROOT and launch the session's processes; the session plist.  Unit names are the
 user's, across state roots: one another root's session holds (systemd: \"already loaded\") is given back
@@ -359,6 +382,7 @@ many virtual monitors (default 1)."
          (sess (drgnx-ui--claim-and-launch config size root daemon monitors))
          (name (plist-get sess :name))
          (run (plist-get sess :run)))
+    (drgnx-ui--own-add name root)
     (drgnx-ui--save sess)                 ; stop needs :launcher/:pgid from here on
     (let ((ready (expand-file-name "ready.json" run))
           (t0 (float-time))
@@ -432,6 +456,7 @@ up to WAIT seconds (default 5) for its socket to go.  Never blocks longer; error
   "Stop session NAME — Emacs asked to exit first, then the session's processes — and remove its run
 and socket directories."
   (drgnx-ui--check-name name)
+  (drgnx-ui--own-remove name)
   (let* ((run (expand-file-name name (drgnx-ui-state-root)))
          (sock (drgnx-ui-socket-dir name))
          (file (expand-file-name "session.json" run))
@@ -655,10 +680,12 @@ with EXTRA-ENV (\"K=V\" strings).  Return (RC RESULTS RUN)."
                                                  extra-env)))
          (cmd (mapconcat #'shell-quote-argument
                          (append (drgnx-ui-env-argv env) (drgnx-ui-compositor-argv sess)) " "))
+         (_ (push (cons :group run) drgnx-ui--own))     ; this process ended meanwhile: its group goes too
          (r (drgnx-ui--run-with-timeout
              (or timeout 110) "setsid" "-w" "sh" "-c"
              (format "echo $$ > %s; exec %s > %s 2>&1" (shell-quote-argument pgid-file) cmd
                      (shell-quote-argument (expand-file-name "session.log" run))))))
+    (setq drgnx-ui--own (delete (cons :group run) drgnx-ui--own))
     (when (eq (car r) 'timeout) (drgnx-ui--kill-group run))
     (drgnx-ui--run "pkill" "-KILL" "-f" name)          ; belt and braces
     (drgnx-ui--remove-wayland-display name)
@@ -879,6 +906,8 @@ a boolean flag (`drgnx-ui--boolean-flags') becomes :name t."
                         command-line-args-left)
                  (setq command-line-args-left nil)))
          (cmd (car args)))
+    ;; the test tiers' sessions are theirs alone: a tier ended early (C-c) stops them on the way out
+    (when (and (stringp cmd) (string-prefix-p "test-" cmd)) (setenv "DRGNX_UI_STOP_ON_EXIT" "1"))
     (kill-emacs
      (if (member cmd '(nil "help" "-h" "--help"))
          (progn (princ drgnx-ui-usage) (terpri) 0)
