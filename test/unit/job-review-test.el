@@ -88,4 +88,24 @@
           (should (drgnx-job-run-test--wait (lambda () (> reviews 0)) 20))
           (should (eq (drgnx-agent-session-status s) 'exited)))))))
 
+(ert-deftest drgnx-job/a-failing-hook-merge-shows-git-output ()
+  ;; a merge that fails without a conflict (a hook refuses it): the card says what git said
+  (drgnx-job-run-test--with "# One\n\n### Task 1: first\n"
+    (let* ((drgnx-job-max-agents 0) (drgnx-job-review nil) (id (drgnx-job-propose plan)) (tid (concat id "#1"))
+           (hook (concat repo ".git/hooks/pre-merge-commit")))
+      (drgnx-job-approve id)
+      (let ((tree (drgnx-job--task-tree id 1)))
+        (drgnx-job--git repo "worktree" "add" "-q" "-b" (format "job/%s-1" id) tree (concat "job/" id))
+        (write-region "work\n" nil (concat tree "w.txt") nil 'silent)
+        (drgnx-job-run-test--git tree "add" "-A")
+        (drgnx-job-run-test--git tree "commit" "-q" "-m" "work"))
+      (write-region "#!/bin/sh\necho 'hook says no' >&2\nexit 1\n" nil hook nil 'silent)
+      (set-file-modes hook #o755)
+      (drgnx-job--merge id (drgnx-coord-task tid))
+      (let ((card (car (seq-filter (lambda (c) (equal (plist-get c :kind) "merge-conflict")) (drgnx-coord-cards id "open")))))
+        (should card)
+        (should (string-search "merge failed" (plist-get card :title)))
+        (should (string-search "hook says no" (plist-get card :title))))
+      (should-not (equal (drgnx-job-run-test--status id 1) "done")))))
+
 ;;; job-review-test.el ends here

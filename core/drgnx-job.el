@@ -174,11 +174,18 @@ own repository).  Returns its id; nothing starts (unless `drgnx-job-auto-start')
     (run-at-time 0 nil (lambda () (remhash id drgnx-job--step-pending) (with-demoted-errors "drgnx job: %S" (drgnx-job-step id))))))
 
 (defun drgnx-job--git (dir &rest args)
-  "Run git ARGS in DIR (short operations: worktrees, merges): (EXIT . OUTPUT)."
-  (with-temp-buffer
-    (let ((default-directory (file-name-as-directory dir))
-          (process-environment (cons "GIT_TERMINAL_PROMPT=0" process-environment)))   ; never a prompt in the hub
-      (cons (apply #'call-process "git" nil t nil args) (string-trim (buffer-string))))))
+  "Run git ARGS in DIR (short operations: worktrees, merges): (EXIT . OUTPUT).  OUTPUT is git's stdout, and, when it
+fails, its stderr after it (where a hook's refusal and `fatal:' are)."
+  (let ((err (make-temp-file "drgnx-git-err")))
+    (unwind-protect
+        (with-temp-buffer
+          (let* ((default-directory (file-name-as-directory dir))
+                 (process-environment (cons "GIT_TERMINAL_PROMPT=0" process-environment))   ; never a prompt in the hub
+                 (exit (apply #'call-process "git" nil (list t err) nil args)))
+            (unless (eql exit 0)
+              (insert "\n" (with-temp-buffer (insert-file-contents err) (buffer-string))))
+            (cons exit (string-trim (buffer-string)))))
+      (delete-file err))))
 
 (defun drgnx-job--repo (job) (plist-get (drgnx-coord-job job) :repo))
 (defun drgnx-job--job-tree (job) (expand-file-name (format ".claude/worktrees/%s/" job) (drgnx-job--repo job)))
@@ -401,18 +408,20 @@ review for the user.")
 (defun drgnx-job--merge (id task)
   "Merge TASK's branch into job ID's branch (once): done, and its dependents may start; a conflict is aborted and
 goes to the user."
-  (let* ((tree (drgnx-job--job-tree id)) (branch (format "job/%s-%d" id (plist-get task :n))))
+  (let* ((tree (drgnx-job--job-tree id)) (branch (format "job/%s-%d" id (plist-get task :n))) merged)
     (cond
      ((equal (plist-get task :status) "done"))
      ((eql 0 (car (drgnx-job--git tree "merge-base" "--is-ancestor" branch "HEAD")))   ; merged before
       (drgnx-coord-force-status (plist-get task :id) "done" (plist-get task :agent)))
-     ((eql 0 (car (drgnx-job--git tree "merge" "--no-ff" "-q" "-m" (format "Merge %s: %s" (plist-get task :id) (plist-get task :title)) branch)))
+     ((eql 0 (car (setq merged (drgnx-job--git tree "merge" "--no-ff" "-q" "-m" (format "Merge %s: %s" (plist-get task :id) (plist-get task :title)) branch))))
       (drgnx-coord-force-status (plist-get task :id) "done" (plist-get task :agent)))
      (t
-      (let ((files (cdr (drgnx-job--git tree "diff" "--name-only" "--diff-filter=U"))))
+      (let ((files (split-string (cdr (drgnx-job--git tree "diff" "--name-only" "--diff-filter=U")) "\n" t)))
         (drgnx-job--git tree "merge" "--abort")
         (drgnx-job--card id (plist-get task :id) "merge-conflict"
-                         (format "merging into job/%s conflicts in: %s" id (string-join (split-string files "\n" t) ", "))))))))
+                         (if files
+                             (format "merging into job/%s conflicts in: %s" id (string-join files ", "))
+                           (format "merge failed: %s" (cdr merged)))))))))   ; no conflict: a hook, git's own refusal
 
 ;;;; The budget, a failing provider
 
