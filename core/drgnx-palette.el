@@ -29,10 +29,18 @@
       (setq this-command fn)
       (funcall fn question))))
 
+(defun drgnx-palette--complete (answer cands)
+  "The labels of CANDS that ANSWER completes to under the current `completion-styles' (the way
+`minibuffer-complete-and-exit' resolved a partial label when a match was required)."
+  (let ((all (completion-all-completions answer (mapcar #'car cands) nil (length answer))))
+    (when all (setcdr (last all) nil))     ; the last cdr holds the base size
+    (mapcar #'substring-no-properties all)))
+
 (defun drgnx-palette ()
   "Run any drgnx command by name; `#' followed by words is a Semantic Search.
 The answer is resolved here, not by the completion UI (`require-match' is nil): a command label runs it;
-text starting with `#' is a question; empty does nothing; anything else is an error."
+text starting with `#' is a question; empty does nothing; a partial label that completes to one command
+runs it; several is an \"Ambiguous\" error naming up to three; none is \"No command\"."
   (interactive)
   (let* ((cands (drgnx-palette-candidates))
          (annotate (lambda (label)
@@ -48,7 +56,12 @@ text starting with `#' is a question; empty does nothing; anything else is an er
     (cond ((string-empty-p choice))
           ((assoc choice cands) (drgnx-surfaces-run (cdr (assoc choice cands))))
           ((string-prefix-p "#" choice) (drgnx-palette--search (string-trim (substring choice 1))))
-          (t (user-error "No command: %s" choice)))))
+          (t (let ((labels (drgnx-palette--complete choice cands)))
+               (pcase (length labels)
+                 (0 (user-error "No command: %s" choice))
+                 (1 (drgnx-surfaces-run (cdr (assoc (car labels) cands))))
+                 (_ (user-error "Ambiguous: %s%s" (string-join (seq-take labels 3) ", ")
+                                (if (> (length labels) 3) ", …" "")))))))))
 
 (provide 'drgnx-palette)
 ;;; drgnx-palette.el ends here
