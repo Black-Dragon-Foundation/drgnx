@@ -126,6 +126,42 @@
       (should (assoc "é ü.txt" files))
       (should (= (length (cdr (assoc "src/a.el" files))) 40)))))
 
+(ert-deftest drgnx-search-files/hashes-follow-the-working-tree ()
+  (drgnx-search-chunk-test--repo '(("a.txt" . "hello\n") ("b.txt" . "bee\n") ("gone.txt" . "x\n"))
+    (drgnx-search-chunk-test--git root "commit" "-q" "-m" "init")
+    (let ((before (drgnx-search-files root)))
+      ;; An unstaged edit changes the hash, to the blob SHA of the new content.
+      (drgnx-search-chunk-test--write root "a.txt" "hello again\n")
+      (let ((after (drgnx-search-files root)))
+        (should-not (equal (cdr (assoc "a.txt" after)) (cdr (assoc "a.txt" before))))
+        (should (equal (cdr (assoc "a.txt" after))
+                       (with-temp-buffer
+                         (call-process "git" nil t nil "hash-object" (expand-file-name "a.txt" root))
+                         (string-trim (buffer-string)))))
+        (should (equal (cdr (assoc "b.txt" after)) (cdr (assoc "b.txt" before)))))
+      ;; An untracked file is listed with a hash; an ignored one is not.
+      (drgnx-search-chunk-test--write root ".gitignore" "ignored.txt\nbuild/\n")
+      (drgnx-search-chunk-test--write root "new.txt" "hello\n")
+      (drgnx-search-chunk-test--write root "ignored.txt" "secret\n")
+      (drgnx-search-chunk-test--write root "build/out.txt" "out\n")
+      (let ((files (drgnx-search-files root)))
+        (should (equal (cdr (assoc "new.txt" files)) "ce013625030ba8dba906f756967f9e9ca394464a"))
+        (should-not (assoc "ignored.txt" files))
+        (should-not (assoc "build/out.txt" files))
+        (should-not (assoc ".gitignore" files)))
+      ;; A tracked file deleted on disk is not listed.
+      (delete-file (expand-file-name "gone.txt" root))
+      (should-not (member "gone.txt" (drgnx-search-chunk-test--paths root)))
+      (should (equal (drgnx-search-chunk-test--paths root) '("a.txt" "b.txt" "new.txt"))))))
+
+(ert-deftest drgnx-search-files/an-empty-repo-with-untracked-files ()
+  (let ((root (file-name-as-directory (make-temp-file "drgnx-search-files" t))))
+    (unwind-protect
+        (progn (drgnx-search-chunk-test--git root "init" "-q")
+               (drgnx-search-chunk-test--write root "a.el" "a\n")
+               (should (equal (drgnx-search-chunk-test--paths root) '("a.el"))))
+      (delete-directory root t))))
+
 (ert-deftest drgnx-search-files/skips-symlinks-and-submodules ()
   (let ((outside (make-temp-file "drgnx-search-outside" nil ".txt" "outside\n")))
     (unwind-protect
