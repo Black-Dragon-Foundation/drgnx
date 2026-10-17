@@ -122,9 +122,14 @@ The keymap used is the entry's, else the command's, else the profile's."
           ((and (symbolp def) def (commandp def) (not (memq def '(self-insert-command undefined ignore))))
            (cons 'claim (symbol-name def))))))
 
+(defvar drgnx-keys--parsed (make-hash-table :test #'equal) "Key string → `key-parse' vector (keys never change).")
+
+(defun drgnx-keys--parse (key)
+  (or (gethash key drgnx-keys--parsed) (puthash key (key-parse key) drgnx-keys--parsed)))
+
 (defun drgnx-keys--prefix-of-p (a b)
   "Non-nil if key A is a strict prefix of key B."
-  (let ((a (key-parse a)) (b (key-parse b)))
+  (let ((a (drgnx-keys--parse a)) (b (drgnx-keys--parse b)))
     (and (< (length a) (length b)) (equal a (seq-take b (length a))))))
 
 (cl-defun drgnx-keys-resolve (&key commands profiles layers user platform defaults maps)
@@ -195,17 +200,23 @@ KIND `same-key', `claim' (a key another layer uses natively) or `prefix'."
                     conflicts)
               (setq bindings (seq-remove (lambda (b) (memq b losers)) bindings))))))
       ;; One drgnx key a prefix of another in the same keymap: the higher layer keeps its key.
-      (dolist (w (sort (copy-sequence bindings) (lambda (a b) (> (plist-get a :rank) (plist-get b :rank)))))
-        (when (memq w bindings)
-          (let ((losers (seq-filter (lambda (b) (and (not (eq b w)) (eq (mapsym b) (mapsym w))
-                                                     (or (drgnx-keys--prefix-of-p (plist-get b :key) (plist-get w :key))
-                                                         (drgnx-keys--prefix-of-p (plist-get w :key) (plist-get b :key)))))
-                                    bindings)))
-            (when losers
-              (push (list :key (plist-get w :key) :map (mapsym w) :kind 'prefix :winner (party w)
-                          :losers (mapcar #'party losers))
-                    conflicts)
-              (setq bindings (seq-remove (lambda (b) (memq b losers)) bindings))))))
+      ;; Only keys in one keymap starting with the same event can be prefixes of each other: compare
+      ;; within those groups (all pairs made startup slow).
+      (let ((groups (make-hash-table :test #'equal)) (gone (make-hash-table :test #'eq)))
+        (dolist (b bindings)
+          (push b (gethash (cons (mapsym b) (aref (drgnx-keys--parse (plist-get b :key)) 0)) groups)))
+        (dolist (w (sort (copy-sequence bindings) (lambda (a b) (> (plist-get a :rank) (plist-get b :rank)))))
+          (unless (gethash w gone)
+            (let ((losers (seq-filter (lambda (b) (and (not (eq b w)) (not (gethash b gone))
+                                                       (or (drgnx-keys--prefix-of-p (plist-get b :key) (plist-get w :key))
+                                                           (drgnx-keys--prefix-of-p (plist-get w :key) (plist-get b :key)))))
+                                      (gethash (cons (mapsym w) (aref (drgnx-keys--parse (plist-get w :key)) 0)) groups))))
+              (when losers
+                (push (list :key (plist-get w :key) :map (mapsym w) :kind 'prefix :winner (party w)
+                            :losers (mapcar #'party losers))
+                      conflicts)
+                (dolist (l losers) (puthash l t gone))))))
+        (setq bindings (seq-remove (lambda (b) (gethash b gone)) bindings)))
       ;; Keys other layers use natively (claims), Emacs' defaults, and prefixes in the target keymap.
       (dolist (b (copy-sequence bindings))
         (let* ((key (plist-get b :key)) (rank (plist-get b :rank))

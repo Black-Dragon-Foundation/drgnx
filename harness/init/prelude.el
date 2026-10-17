@@ -21,7 +21,9 @@
 
 ;;;; State: written only inside the run directory
 (when (fboundp 'startup-redirect-eln-cache)
-  (startup-redirect-eln-cache (expand-file-name "eln-cache" drgnx-ui-run)))
+  ;; One cache for every session of this state root (still never the user's): native code and
+  ;; advice trampolines are compiled once, not by every session (that cost ~150 ms per start).
+  (startup-redirect-eln-cache (expand-file-name "eln-cache" (file-name-directory (directory-file-name drgnx-ui-run)))))
 (when (and drgnx-ui-config (boundp 'native-comp-eln-load-path))
   ;; Reuse the config's compiled code; the last entry must stay the system directory.
   (setq native-comp-eln-load-path

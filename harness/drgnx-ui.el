@@ -19,7 +19,7 @@
 (defconst drgnx-ui-repo-dir (file-name-directory (directory-file-name drgnx-ui-harness-dir)))
 (defconst drgnx-ui-name-regexp "\\`drgnx-ui-[0-9]+\\'")
 (defconst drgnx-ui-keep-env
-  '("HOME" "USER" "LOGNAME" "LANG" "LC_ALL" "PATH" "GRYPHN_EMACS_DIR")
+  '("HOME" "USER" "LOGNAME" "LANG" "LC_ALL" "PATH" "GRYPHN_EMACS_DIR" "DRGNX_STARTUP_TRACE")
   "The only variables a session inherits; everything else (keys, tokens) stays out.")
 (defconst drgnx-ui-link '("extras" "lisp" "site-lisp" "tree-sitter" "snippets" "themes")
   "Code directories of an external config, linked read-only into the session.")
@@ -826,6 +826,8 @@ a boolean flag (`drgnx-ui--boolean-flags') becomes :name t."
       ("test-ui" (drgnx-ui-run-ui-tests))
       ("test-scenario" (drgnx-ui-run-scenarios (plist-get opts :config) (plist-get opts :dir)))
       ("test-bench" (require 'drgnx-bench) (drgnx-bench-run))
+      ("test-perf" (require 'drgnx-perf-run) (drgnx-perf-run (getenv "DRGNX_PERF_AUDIT")))
+      ("test-soak" (require 'drgnx-perf-run) (drgnx-perf-soak (and (nth 1 pos) (string-to-number (nth 1 pos)))))
       ("mcp" (require 'drgnx-ui-mcp) (drgnx-ui-mcp-main))
       (_ (drgnx-ui--fail "unknown command %S\n%s" cmd drgnx-ui-usage)))))
 

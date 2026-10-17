@@ -18,6 +18,7 @@
 (require 'drgnx-modules)
 (require 'drgnx-pkg-activate)
 (require 'drgnx-onboard)
+(require 'drgnx-gc)
 
 (defgroup drgnx nil "drgnx, a workbench-first Emacs framework." :group 'convenience)
 
@@ -57,7 +58,8 @@
       (condition-case err (drgnx-modules-start (expand-file-name "modules" drgnx-dir))   ; never stops the rest
         (error (message "drgnx: modules did not start: %s" (error-message-string err))))))
   (drgnx-keys-apply)
-  (drgnx-surfaces-refresh))
+  (drgnx-surfaces-refresh)
+  (drgnx-gc-setup))                     ; startup is over: the steady GC threshold
 
 (provide 'drgnx)
 ;;; drgnx.el ends here

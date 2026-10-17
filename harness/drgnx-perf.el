@@ -181,8 +181,11 @@
                                           (car (read-from-string (plist-get (json-parse-string line :object-type 'plist) :results)))))
                          (split-string (with-temp-buffer (insert-file-contents file) (buffer-string)) "\n" t)))))
 
+(defconst drgnx-perf-regression-floor 5 "Milliseconds a metric must also worsen by to count (noise below).")
+
 (defun drgnx-perf-regressions (file results &optional paths)
-  "Metrics of RESULTS more than 25% worse than the median of the last five runs in FILE.
+  "Metrics of RESULTS more than 25% (and `drgnx-perf-regression-floor' ms) worse than the median of
+the last five runs in FILE.
 PATHS: the metrics compared (default the p95s: input, redisplay, frame)."
   (let ((past (last (drgnx-perf--history file) 5)) out)
     (when past
@@ -192,7 +195,7 @@ PATHS: the metrics compared (default the p95s: input, redisplay, frame)."
                 (old (delq nil (mapcar (lambda (r) (let ((v (drgnx-perf--get r w path))) (and (numberp v) v))) past))))
             (when (and (numberp now) old)
               (let ((median (plist-get (drgnx-perf-stats old) :p50)))
-                (when (> now (* 1.25 (max median 1)))
+                (when (and (> now (* 1.25 median)) (> (- now median) drgnx-perf-regression-floor))
                   (push (format "%s %s %s vs %s (median of the last %d)" w
                                 (mapconcat (lambda (k) (substring (symbol-name k) 1)) path " ")
                                 (drgnx-perf--round now) (drgnx-perf--round median) (length old))

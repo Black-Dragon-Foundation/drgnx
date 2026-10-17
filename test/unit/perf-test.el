@@ -57,8 +57,17 @@
         (progn
           (dotimes (i 5) (drgnx-perf-history-append file (format "c%d" i) '((typing :input (:p95 20)))))
           (should-not (drgnx-perf-regressions file '((typing :input (:p95 22)))))
+          (should-not (drgnx-perf-regressions file '((typing :input (:p95 24)))))   ; 20% … and noise below 5 ms
           (should (equal (drgnx-perf-regressions file '((typing :input (:p95 40))))
                          '("typing input p95 40 vs 20 (median of the last 5)"))))
+      (delete-directory dir t))))
+
+(ert-deftest drgnx-perf/small-differences-are-noise ()
+  (let* ((dir (make-temp-file "drgnx-perf-hist" t)) (file (expand-file-name "history.jsonl" dir)))
+    (unwind-protect
+        (progn
+          (drgnx-perf-history-append file "c0" '((typing :input (:p95 2.2))))
+          (should-not (drgnx-perf-regressions file '((typing :input (:p95 3.5))))))   ; +60%, but 1.3 ms
       (delete-directory dir t))))
 
 ;;; perf-test.el ends here
