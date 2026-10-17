@@ -25,10 +25,16 @@
     (let ((ps (drgnx-ai-providers)))
       (dolist (id '(openrouter ollama lmstudio llamacpp vllm jan localai koboldcpp tabbyapi gpt4all lemonade llamafile tei))
         (should (assq id ps)))
-      (should (equal (plist-get (alist-get 'llamacpp ps) :url) "http://localhost:8012"))     ; not 8080: TEI's
-      (should (equal (plist-get (alist-get 'llamafile ps) :url) "http://localhost:8081/v1"))
-      (should (equal (plist-get (alist-get 'lemonade ps) :url) "http://localhost:13305/api/v1"))
+      (should (equal (plist-get (alist-get 'llamacpp ps) :url) "http://127.0.0.1:8012"))     ; not 8080: TEI's
+      (should (equal (plist-get (alist-get 'llamafile ps) :url) "http://127.0.0.1:8081/v1"))
+      (should (equal (plist-get (alist-get 'lemonade ps) :url) "http://127.0.0.1:13305/api/v1"))
       (should (equal (plist-get (alist-get 'openrouter ps) :key-env) "OPENROUTER_API_KEY")))))
+
+(ert-deftest drgnx-ai/local-presets-use-the-ipv4-address-not-localhost ()
+  ;; `localhost' resolves to ::1 first; a container's IPv6 port forward can accept and reset, and curl does not fall back
+  (drgnx-ai-test--with root
+    (dolist (p (drgnx-ai-providers))
+      (should-not (string-match-p "localhost" (or (plist-get (cdr p) :url) ""))))))
 
 (ert-deftest drgnx-ai/a-project-names-roles-never-providers-or-keys ()
   ;; a cloned repository must not send the buffer, with one of your keys, to an address of its choosing
@@ -92,7 +98,7 @@
       (should (equal (drgnx-ai-agent-env '(:kind claude-openrouter))
                      '("ANTHROPIC_BASE_URL=https://openrouter.ai/api" "ANTHROPIC_AUTH_TOKEN=sk-or-test" "ANTHROPIC_API_KEY=")))
       (should (equal (drgnx-ai-agent-env '(:kind claude-ollama))
-                     '("ANTHROPIC_BASE_URL=http://localhost:11434" "ANTHROPIC_AUTH_TOKEN=ollama" "ANTHROPIC_API_KEY=")))
+                     '("ANTHROPIC_BASE_URL=http://127.0.0.1:11434" "ANTHROPIC_AUTH_TOKEN=ollama" "ANTHROPIC_API_KEY=")))
       (should-not (drgnx-ai-agent-env '(:kind subscription))))                             ; its own login, never read
     (should-error (drgnx-ai-agent-env '(:kind claude-openrouter)) :type 'user-error)))     ; no key: said, not sent empty
 

@@ -9,19 +9,22 @@ a chain of providers and models tried in order, so a feature keeps working when 
 | Id | Provider | Address (default) |
 |---|---|---|
 | `openrouter` | OpenRouter | `https://openrouter.ai/api/v1` (key: `OPENROUTER_API_KEY` or auth-source) |
-| `ollama` | Ollama | `http://localhost:11434` |
-| `lmstudio` | LM Studio | `http://localhost:1234/v1` |
-| `llamacpp` | llama.cpp server | `http://localhost:8012` (start it with `--port 8012`: its 8080 is TEI's) |
-| `vllm` | vLLM | `http://localhost:8000/v1` |
-| `jan` | Jan | `http://localhost:1337/v1` |
-| `localai` | LocalAI | `http://localhost:8090/v1` |
-| `koboldcpp` | KoboldCpp | `http://localhost:5001/v1` |
-| `tabbyapi` | TabbyAPI, text-generation-webui | `http://localhost:5000/v1` |
-| `gpt4all` | GPT4All | `http://localhost:4891/v1` |
-| `lemonade` | Lemonade | `http://localhost:13305/api/v1` |
-| `llamafile` | llamafile | `http://localhost:8081/v1` (start it with `--port 8081`) |
-| `tei` | Text Embeddings Inference | `http://localhost:8080` |
+| `ollama` | Ollama | `http://127.0.0.1:11434` |
+| `lmstudio` | LM Studio | `http://127.0.0.1:1234/v1` |
+| `llamacpp` | llama.cpp server | `http://127.0.0.1:8012` (start it with `--port 8012`: its 8080 is TEI's) |
+| `vllm` | vLLM | `http://127.0.0.1:8000/v1` |
+| `jan` | Jan | `http://127.0.0.1:1337/v1` |
+| `localai` | LocalAI | `http://127.0.0.1:8090/v1` |
+| `koboldcpp` | KoboldCpp | `http://127.0.0.1:5001/v1` |
+| `tabbyapi` | TabbyAPI, text-generation-webui | `http://127.0.0.1:5000/v1` |
+| `gpt4all` | GPT4All | `http://127.0.0.1:4891/v1` |
+| `lemonade` | Lemonade | `http://127.0.0.1:13305/api/v1` |
+| `llamafile` | llamafile | `http://127.0.0.1:8081/v1` (start it with `--port 8081`) |
+| `tei` | Text Embeddings Inference | `http://127.0.0.1:8080` |
 | `anthropic` | Anthropic API (agents only, through the gateway) | `https://api.anthropic.com/v1` (key: `ANTHROPIC_API_KEY` or auth-source) |
+
+The local presets use `127.0.0.1`, not `localhost`: `localhost` resolves to `::1` first, and a container's IPv6 port
+forward can accept the connection and then reset it, which curl-based clients do not retry on IPv4.
 
 Add your own, or move one, in `ai.eld` in drgnx's config directory (`~/.config/drgnx/ai.eld`); a project's `.drgnx/ai.eld` at its
 root can choose **roles** (and wins), among the providers the presets and your `ai.eld` define — never a provider
