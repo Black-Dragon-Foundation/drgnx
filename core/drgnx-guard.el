@@ -17,8 +17,9 @@
 
 (defvar drgnx-guard-prompt-functions
   '(y-or-n-p yes-or-no-p read-string read-from-minibuffer completing-read read-passwd
-             read-number read-file-name read-directory-name read-buffer)
-  "Functions that wait for an answer from the user.")
+             read-number read-file-name read-directory-name read-buffer
+             read-multiple-choice read-answer read-key read-char-choice)
+  "Functions that wait for an answer from the user (not `read-event': `sit-for' uses it).")
 
 (defvar drgnx-guard--timer-fn nil "Function of the timer running now (dynamically bound), or nil.")
 (defvar drgnx-guard--automatic nil "Non-nil inside `drgnx-automatic'.")
@@ -27,9 +28,15 @@
   "Run BODY as automatic code: a prompt inside it signals instead of waiting."
   `(let ((drgnx-guard--automatic t)) ,@body))
 
+(defvar drgnx-guard--started nil
+  "Non-nil once Emacs finished starting: set by the last `window-setup-hook' function (after
+`after-init-hook' and `emacs-startup-hook', which run when `after-init-time' is already set).")
+
 (defun drgnx-guard--daemon-starting-p ()
   "Non-nil while a daemon initialises (no client could answer)."
-  (and (daemonp) (not after-init-time)))
+  (and (daemonp) (not drgnx-guard--started)))
+
+(defun drgnx-guard--mark-started () (setq drgnx-guard--started t))
 
 (defun drgnx-guard--context ()
   "Why the current context is automatic, or nil."
@@ -55,6 +62,9 @@
   :global t :group 'drgnx
   (if drgnx-guard-mode
       (progn
+        ;; Turned on after startup (init done): nothing is starting any more.
+        (if after-init-time (drgnx-guard--mark-started)
+          (add-hook 'window-setup-hook #'drgnx-guard--mark-started 100))
         (advice-add 'timer-event-handler :around #'drgnx-guard--timer '((name . drgnx-guard)))
         (advice-add 'command-execute :around #'drgnx-guard--command '((name . drgnx-guard)))
         (dolist (fn drgnx-guard-prompt-functions)

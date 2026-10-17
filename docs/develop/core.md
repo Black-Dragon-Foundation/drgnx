@@ -36,14 +36,16 @@ runs under its own error guard; errors are collected in `drgnx-hooks-problems`, 
 A prompt asked from a timer, a hook or while the daemon starts has nobody to answer it, and the daemon freezes.
 `drgnx-guard-mode` (on in every drgnx session) makes `y-or-n-p`, `yes-or-no-p`, `read-string`,
 `read-from-minibuffer`, `completing-read`, `read-passwd`, `read-number`, `read-file-name`,
-`read-directory-name` and `read-buffer` signal `drgnx-prompt-in-automatic-path` instead — naming the prompt and
-where it was asked from — when called:
+`read-directory-name`, `read-buffer`, `read-multiple-choice`, `read-answer`, `read-key` and `read-char-choice`
+signal `drgnx-prompt-in-automatic-path` instead — naming the prompt and where it was asked from — when called
+(`read-event` is left alone: `sit-for` uses it):
 
 - from a timer (detected by wrapping `timer-event-handler`; commands run by a nested command loop, such as a
   minibuffer opened by a command, are not timer code);
 - inside `(drgnx-automatic …)` — use it for hook functions, process filters and sentinels (Emacs calls those
   from C, so they cannot be detected);
-- while a daemon initialises.
+- while a daemon initialises — until the last `window-setup-hook` function, so `after-init-hook` and
+  `emacs-startup-hook` count too.
 
 ## Command registry (`drgnx-registry.el`)
 

@@ -37,3 +37,29 @@
   (let ((drgnx-guard-prompt-functions '(drgnx-test--fake-prompt)))
     (drgnx-guard-mode 1) (drgnx-guard-mode -1)
     (should (eq (drgnx-automatic (drgnx-test--fake-prompt "q")) 'answered))))
+
+;;;; Deferred fixes (M2-1)
+
+(ert-deftest drgnx-guard/the-other-prompts-are-guarded ()
+  ;; read-multiple-choice, read-answer, read-key and read-char-choice ask too; read-event does not
+  ;; (sit-for uses it).
+  (dolist (fn '(read-multiple-choice read-answer read-key read-char-choice))
+    (should (memq fn drgnx-guard-prompt-functions)))
+  (should-not (memq 'read-event drgnx-guard-prompt-functions)))
+
+(ert-deftest drgnx-guard/daemon-start-lasts-until-window-setup ()
+  ;; after-init-hook and emacs-startup-hook run after after-init-time is set: still nobody to answer.
+  (let ((after-init-time nil) (window-setup-hook nil) (drgnx-guard--started nil))
+    (cl-letf (((symbol-function 'daemonp) (lambda () t)))
+      (drgnx-test--with-guard
+       (should-error (drgnx-test--fake-prompt "q") :type 'drgnx-prompt-in-automatic-path)
+       (setq after-init-time (current-time))          ; after-init-hook, emacs-startup-hook
+       (should-error (drgnx-test--fake-prompt "q") :type 'drgnx-prompt-in-automatic-path)
+       (run-hooks 'window-setup-hook)                  ; the last of startup
+       (should (eq (drgnx-test--fake-prompt "q") 'answered))))))
+
+(ert-deftest drgnx-guard/turned-on-after-startup-the-daemon-may-ask ()
+  (let ((after-init-time (current-time)) (window-setup-hook nil) (drgnx-guard--started nil))
+    (cl-letf (((symbol-function 'daemonp) (lambda () t)))
+      (drgnx-test--with-guard
+       (should (eq (drgnx-test--fake-prompt "q") 'answered))))))
