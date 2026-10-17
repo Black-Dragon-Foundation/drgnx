@@ -64,6 +64,19 @@ to OR-LOG, OPENROUTER_API_KEY unset."
       (should (integerp (plist-get s :gateway_port))))
     (should (equal (file-modes (file-name-directory (drgnx-hub-socket))) #o700))))
 
+(ert-deftest drgnx-hub/a-stopped-hub-s-shutdown-never-reaches-the-next-one ()
+  ;; shutdown exits 0.1 s later: a hub stopped meanwhile (a test's cleanup) must not take the next hub down with it
+  (drgnx-hub-test--with
+    (drgnx-hub-serve (drgnx-hub-socket))
+    (drgnx-hub-call-sync "shutdown" nil)
+    (drgnx-hub-stop)
+    (drgnx-hub-disconnect)
+    (drgnx-hub-serve (drgnx-hub-socket))
+    (drgnx-hub-call-sync "gateway/register" '(:chain [["openrouter" nil]]))
+    (drgnx-hub-test--wait #'ignore 0.4)
+    (should (drgnx-hub-serving-p))
+    (should (= (plist-get (drgnx-hub-call-sync "status" nil) :registrations) 1))))
+
 (ert-deftest drgnx-hub/subscribers-hear-gateway-events ()
   (drgnx-hub-test--with
     (drgnx-hub-serve (drgnx-hub-socket))
@@ -131,7 +144,7 @@ to OR-LOG, OPENROUTER_API_KEY unset."
         (should (string-search "Bearer sk-sock-only" (with-temp-buffer (insert-file-contents or-log) (buffer-string)))))
       (should-not (string-search "sk-sock" cmdline))
       (dolist (f (directory-files-recursively root "" nil))
-        (unless (equal (file-name-nondirectory f) "or.log")
+        (unless (or (equal (file-name-nondirectory f) "or.log") (not (file-regular-p f)))   ; the socket, without XDG_RUNTIME_DIR
           (should-not (string-search "sk-sock-only" (with-temp-buffer (set-buffer-multibyte nil) (insert-file-contents-literally f) (buffer-string))))))
       (drgnx-hub-call-sync "shutdown" nil)
       ;; judged by its socket: where PID 1 never reaps (a CI container) the stopped hub lingers as a zombie

@@ -31,6 +31,7 @@ string (\"request\", \"fallback\", \"budget\"), DATA a plist.")
 (defvar drgnx-hub--subscribers nil "Connections that asked for events.")
 (defvar drgnx-hub--started nil)
 (defvar drgnx-hub--exit-function (lambda () (kill-emacs 0)) "What `shutdown' does (tests: stop serving).")
+(defvar drgnx-hub--exit-timer nil "A `shutdown' about to happen (a stopped hub cancels it).")
 
 (defvar drgnx-hub--client nil "This Emacs's connection to the hub, for requests.")
 (defvar drgnx-hub--events nil "This Emacs's subscribed connection to the hub.")
@@ -342,7 +343,9 @@ for an agent that is not here (or exited) stays queued."
     (pcase method
       ("subscribe" (cl-pushnew conn drgnx-hub--subscribers) (drgnx-hub--send conn (list :id id :result t)))
       ("shutdown" (drgnx-hub--send conn (list :id id :result t))
-       (run-at-time 0.1 nil (lambda () (funcall drgnx-hub--exit-function))))
+       ;; the exit of this hub, as it is now: a hub stopped meanwhile cancels it (it never reaches the next one)
+       (let ((exit drgnx-hub--exit-function))
+         (setq drgnx-hub--exit-timer (run-at-time 0.1 nil (lambda () (setq drgnx-hub--exit-timer nil) (funcall exit))))))
       (_ (let ((r (condition-case err (drgnx-hub--method method (plist-get json :params))
                     (error (list :error (error-message-string err))))))
            ;; a notification (no id) is answered by nothing
@@ -418,6 +421,8 @@ Signals an error when a hub already serves there."
   (remove-hook 'drgnx-agents-request-functions #'drgnx-job--request)
   (remove-hook 'drgnx-agents-error-functions #'drgnx-job--agent-error)
   (remove-hook 'drgnx-gateway-event-functions #'drgnx-job--gateway-event)
+  (when (timerp drgnx-hub--exit-timer) (cancel-timer drgnx-hub--exit-timer))
+  (setq drgnx-hub--exit-timer nil)
   (when (timerp drgnx-hub--tick-timer) (cancel-timer drgnx-hub--tick-timer))
   (setq drgnx-hub--tick-timer nil)
   (clrhash drgnx-hub--told)
