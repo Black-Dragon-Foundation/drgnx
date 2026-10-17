@@ -170,7 +170,7 @@ A project can narrow what is indexed with `.drgnx/search.eld` at its root (a pli
 `*` and `?` stay within one path component, `**/` stands for any number of directories, a glob without `/` matches at any
 depth, and a trailing `/` means everything below that directory.
 
-`:include` and `:exclude` must be lists of strings and `:off` `t` or `nil`. A file that is there but cannot be read, is
+`:include` and `:exclude` must be lists of strings and `:off` `t` or `nil`. A file that is there but cannot be read (a `.drgnx` directory you cannot enter, or `search.eld` a symlink to nothing, count too), is
 not a plist or gives a key another type (`:exclude "vendor/"` instead of `:exclude ("vendor/")`) never falls back to
 the defaults — that could send files you meant to exclude to the provider. Instead nothing is indexed for the project:
 the indexer stops with ".drgnx/search.eld cannot be read: …", saving a file does not schedule a re-index, and Index

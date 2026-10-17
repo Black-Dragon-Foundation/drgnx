@@ -309,6 +309,26 @@ open: the config is an error and the listing signals it (nothing is indexed).  A
     (should (equal (drgnx-search-config root) '(:include nil :exclude nil :off nil)))
     (should (equal (drgnx-search-chunk-test--paths root) '("a.el" "vendor/v.js")))))
 
+(ert-deftest drgnx-search-files/config-fails-closed-dangling-symlink ()
+  "A search.eld that is a symlink to nothing is a config that cannot be read, not the defaults."
+  (drgnx-search-chunk-test--repo '(("a.el" . "a\n"))
+    (make-directory (expand-file-name ".drgnx" root) t)
+    (make-symbolic-link "nowhere.eld" (expand-file-name ".drgnx/search.eld" root))
+    (should (string-match-p "\\`\\.drgnx/search\\.eld cannot be read: ." (plist-get (drgnx-search-config root) :error)))
+    (should-error (drgnx-search-files root) :type 'drgnx-search-files-error)))
+
+(ert-deftest drgnx-search-files/config-fails-closed-unreadable-dir ()
+  "A .drgnx directory that cannot be searched hides search.eld: that is an error, not the defaults."
+  (drgnx-search-chunk-test--repo '(("a.el" . "a\n"))
+    (drgnx-search-chunk-test--write root ".drgnx/search.eld" "(:off t)")
+    (let ((dir (expand-file-name ".drgnx" root)))
+      (set-file-modes dir 0)
+      (unwind-protect
+          (unless (file-accessible-directory-p dir) ; root reads it anyway
+            (should (string-match-p "\\`\\.drgnx/search\\.eld cannot be read: ." (plist-get (drgnx-search-config root) :error)))
+            (should-error (drgnx-search-files root) :type 'drgnx-search-files-error))
+        (set-file-modes dir #o755)))))
+
 (ert-deftest drgnx-search-files/a-symlinked-directory-out-of-the-project-is-never-followed ()
   "A tracked file under a directory that was replaced by a symlink to elsewhere is not listed: its text is not the
 project's."

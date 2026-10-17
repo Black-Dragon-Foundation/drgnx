@@ -99,7 +99,8 @@ whitespace are dropped, so empty TEXT has none."
   "The search configuration of the project at ROOT.
 A plist (:include GLOBS :exclude GLOBS :off BOOL), read from
 ROOT/.drgnx/search.eld with `read-eval' off; the defaults (all nil) when there is no such file.  A file that
-is there but cannot be read, does not hold a plist, or gives a key the wrong type (:include or :exclude not a
+is there but cannot be read (also: a `.drgnx' that cannot be searched, a `search.eld' that is a dangling
+symlink), does not hold a plist, or gives a key the wrong type (:include or :exclude not a
 list of strings, :off not t or nil) is (:error \".drgnx/search.eld cannot be read: WHY\"), never the defaults:
 `drgnx-search-files' then signals instead of listing more than the project asked for.  With `:include' only the
 files matching one of its globs are indexed; `:exclude' removes files; `:off' t turns the
@@ -108,19 +109,27 @@ are never indexed.  Globs are matched against the path relative to ROOT: `*' and
 one path component, `**/' stands for any number of directories and `**' for anything; a glob
 without `/' matches at any depth (\"*.md\"), and a trailing `/' means everything below that
 directory (\"vendor/\")."
-  (let ((file (expand-file-name ".drgnx/search.eld" root)))
-    (if (not (file-exists-p file))
-        (list :include nil :exclude nil :off nil)
-      (let* ((data (condition-case err
-                       (with-temp-buffer
-                         (let ((read-eval nil) (coding-system-for-read 'utf-8-unix))
-                           (insert-file-contents file nil 0 65536)
-                           (read (current-buffer))))
-                     (error (cons 'drgnx-search--unreadable (error-message-string err)))))
-             (problem (if (eq (car-safe data) 'drgnx-search--unreadable) (cdr data) (drgnx-search--config-problem data))))
-        (if problem
-            (list :error (concat ".drgnx/search.eld cannot be read: " problem))
-          (list :include (plist-get data :include) :exclude (plist-get data :exclude) :off (plist-get data :off)))))))
+  (let* ((dir (expand-file-name ".drgnx" root))
+         (file (expand-file-name "search.eld" dir)))
+    (cond
+     ;; Something is there but hides the file: a .drgnx that cannot be searched, or search.eld a dangling symlink.
+     ((and (file-attributes dir) (not (file-accessible-directory-p dir)))
+      (list :error ".drgnx/search.eld cannot be read: .drgnx is not an accessible directory"))
+     ((and (not (file-exists-p file)) (file-symlink-p file))
+      (list :error ".drgnx/search.eld cannot be read: it is a symbolic link to nothing"))
+     (t
+      (if (not (file-exists-p file))
+          (list :include nil :exclude nil :off nil)
+        (let* ((data (condition-case err
+                         (with-temp-buffer
+                           (let ((read-eval nil) (coding-system-for-read 'utf-8-unix))
+                             (insert-file-contents file nil 0 65536)
+                             (read (current-buffer))))
+                       (error (cons 'drgnx-search--unreadable (error-message-string err)))))
+               (problem (if (eq (car-safe data) 'drgnx-search--unreadable) (cdr data) (drgnx-search--config-problem data))))
+          (if problem
+              (list :error (concat ".drgnx/search.eld cannot be read: " problem))
+            (list :include (plist-get data :include) :exclude (plist-get data :exclude) :off (plist-get data :off)))))))))
 
 (defun drgnx-search--glob-regexp (glob)
   "A regexp matching the relative paths GLOB selects (see `drgnx-search-config')."
