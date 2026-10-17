@@ -48,11 +48,11 @@ parse_args() {
     case "$1" in
       --dry-run) DRY_RUN=1 ;;
       --yes|-y) YES=1 ;;
-      --prefix) PREFIX="${2:?--prefix needs a directory}"; shift ;;
-      --dir) DIR="${2:?--dir needs a directory}"; shift ;;
-      --source-dir) SOURCE_DIR="${2:?--source-dir needs a directory}"; shift ;;
-      --method) METHOD="${2:?--method needs a value}"; shift ;;
-      --branch) BRANCH="${2:?--branch needs a value}"; shift ;;
+      --prefix) need_value "$1" "${2-}" "a directory"; PREFIX="$2"; shift ;;
+      --dir) need_value "$1" "${2-}" "a directory"; DIR="$2"; shift ;;
+      --source-dir) need_value "$1" "${2-}" "a directory"; SOURCE_DIR="$2"; shift ;;
+      --method) need_value "$1" "${2-}" "a value"; METHOD="$2"; shift ;;
+      --branch) need_value "$1" "${2-}" "a value"; BRANCH="$2"; shift ;;
       -h|--help) usage; exit 0 ;;
       *) usage >&2; die 2 "unknown option: $1" ;;
     esac
@@ -62,6 +62,8 @@ parse_args() {
   if [[ -n "$SOURCE_DIR" ]]; then DIR="$SOURCE_DIR"; fi
   PREFIX="$(abs_path "$PREFIX")" DIR="$(abs_path "$DIR")"   # links and the build tree need absolute paths
 }
+
+need_value() { [[ -n "$2" ]] || { usage >&2; die 2 "$1 needs $3"; }; }   # OPTION VALUE WHAT — a bad option: exit 2
 
 abs_path() { case "$1" in /*) printf '%s' "$1" ;; *) printf '%s/%s' "$PWD" "$1" ;; esac; }
 

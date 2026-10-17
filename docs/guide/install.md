@@ -57,7 +57,7 @@ runs nothing.
 | `--branch B` | drgnx branch to clone (default `main`) |
 
 Exit codes: 0 done, 1 a step failed (the message names it and its log), 2 unsupported platform or bad
-option, 3 no terminal to ask on and no `--yes`.
+option (an option without its value too), 3 no terminal to ask on and no `--yes`.
 
 ## Per platform
 
@@ -76,7 +76,7 @@ gets in the way of language servers and tools).
 
 ### The source build
 
-Used where the distribution has no 31.1 yet. Everything happens in `~/.cache/drgnx/build`; logs stay there.
+Used where the distribution has no 31.1 yet. Everything happens in `$XDG_CACHE_HOME/drgnx/build` (default `~/.cache/drgnx/build`); logs stay there.
 
 1. Download `emacs-31.1.tar.xz` and its signature from the GNU mirrors and verify it against the GNU keyring
    (`gnu-keyring.gpg`; the 31.1 release is signed by Sean Whitton, key
@@ -122,10 +122,10 @@ pgtk Emacs). Details: [core.md](../develop/core.md#doctor-drgnx-doctorel).
 ## Uninstall
 
 ```sh
-rm -rf ~/.local/share/drgnx ~/.local/bin/drgnx ~/.cache/drgnx
+rm -rf ~/.local/share/drgnx ~/.local/bin/drgnx "${XDG_CACHE_HOME:-$HOME/.cache}/drgnx"
 ```
 
-A source-built Emacs: `make uninstall` in `~/.cache/drgnx/build/emacs-31.1` before deleting the cache (or
+A source-built Emacs: `make uninstall` in the build directory (`~/.cache/drgnx/build/emacs-31.1`, or under `$XDG_CACHE_HOME` if you set it) before deleting the cache (or
 remove `~/.local/bin/emacs*`, `~/.local/share/emacs`, `~/.local/libexec/emacs`). A packaged Emacs: remove it
 with your package manager. The PATH line, if you let the installer add it, is marked
 `# added by the drgnx installer` in `~/.profile`.

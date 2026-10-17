@@ -119,6 +119,13 @@ HOME is a new empty directory, deleted afterwards (ENV may name another)."
       (should (string-prefix-p (file-name-as-directory (file-truename temporary-file-directory)) (file-truename h)))
       (should-not (file-exists-p h)))))
 
+(ert-deftest drgnx-install/a-missing-option-value-is-a-bad-option ()
+  ;; M2.5-6: exit 2, as docs/guide/install.md says for a bad option.
+  (dolist (opt '("--prefix" "--dir" "--source-dir" "--method" "--branch"))
+    (let ((r (drgnx-install-test--run nil "--dry-run" opt)))
+      (should (= (car r) 2))
+      (should (string-search (concat opt " needs") (cdr r))))))
+
 (ert-deftest drgnx-install/plan-names-the-drgnx-steps ()
   (drgnx-install-test--expect (drgnx-install-test--plan "fedora-45")
                               "git clone" ".local/share/drgnx/drgnx" "bin/drgnx" "drgnx build" "drgnx doctor"))
