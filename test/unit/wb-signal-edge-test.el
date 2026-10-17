@@ -16,4 +16,25 @@ flush schedule, and it is recorded."
           (should (string-match-p "Boom" (car drgnx-signal-errors))))
       (when (timerp drgnx-signal--timer) (cancel-timer drgnx-signal--timer)))))
 
+(ert-deftest drgnx-signal-edge/a-flush-with-many-buffers-is-cheap ()
+  "M3d-8: a flush with 1500 file buffers takes under 10 ms — the best of five, so one slice of a
+busy machine is not judged."
+  :tags '(:timing)                                      ; a quiet machine: bin/drgnx check runs it alone
+  (let ((drgnx-signal--subscribers nil) (drgnx-signal--state nil) (drgnx-signal-errors nil)
+        (dir (make-temp-file "drgnx-signal-edge" t)))
+    (unwind-protect
+        (progn
+          (dotimes (i 1500)
+            (let ((f (expand-file-name (format "f%04d.txt" i) dir)))
+              (write-region "x\n" nil f nil 'silent)
+              (find-file-noselect f)))
+          (drgnx-signal--flush)                       ; the starting state
+          (should (< (cl-loop repeat 5
+                              minimize (let ((t0 (float-time))) (drgnx-signal--flush) (- (float-time) t0)))
+                     0.01)))
+      (dolist (b (buffer-list))
+        (when (and (buffer-file-name b) (string-prefix-p dir (buffer-file-name b))) (kill-buffer b)))
+      (when (timerp drgnx-signal--timer) (cancel-timer drgnx-signal--timer))
+      (delete-directory dir t))))
+
 ;;; wb-signal-edge-test.el ends here
