@@ -129,7 +129,8 @@ reads. Tests: `test/unit/core-keys-test.el` (resolution, switching, keys.eld, su
 
 ## Against gryphn
 
-`bin/drgnx keys diff --against gryphn DIR` (or `$DRGNX_GRYPHN_DIR`) compares gryphn's key sheet — every
+`bin/drgnx keys diff --against gryphn DIR` (or `$DRGNX_GRYPHN_DIR`; any other arguments print the usage and exit 2)
+compares gryphn's key sheet — every
 `gryphn-command-define`, the rows of its VS Code key table, its numbered window keys, read from gryphn's `emacs/`
 directory DIR and never run — with drgnx's VS Code profile, with every module and gryphn's board, runs, agents,
 search, LLM and IDE files as an external module ([modules.md](modules.md)). Every gryphn command is in drgnx with

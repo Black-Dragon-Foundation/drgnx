@@ -135,11 +135,16 @@ lists as :native (KIND `native': documented, never rebound).  Nothing is evaluat
                      lines)))))
     (nreverse lines)))
 
+(defun drgnx-keys-diff--args (args)
+  "The gryphn directory command-line ARGS name: `--against gryphn [DIR]' (no DIR: $DRGNX_GRYPHN_DIR);
+nil for anything else."
+  (pcase (if (equal (car args) "--") (cdr args) args)
+    (`("--against" "gryphn") (getenv "DRGNX_GRYPHN_DIR"))
+    (`("--against" "gryphn" ,dir) dir)))
+
 (defun drgnx-keys-diff-cli ()
   "bin/drgnx keys diff --against gryphn [DIR]."
-  (let* ((args command-line-args-left)
-         (dir (or (car (seq-remove (lambda (a) (member a '("--against" "gryphn" "--"))) args))
-                  (getenv "DRGNX_GRYPHN_DIR")))
+  (let* ((dir (drgnx-keys-diff--args command-line-args-left))
          (lines nil) (unexplained 0))
     (setq command-line-args-left nil)
     (unless (and dir (file-directory-p dir))

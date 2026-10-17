@@ -60,3 +60,19 @@
       (should (equal (list (car out) (car (last (split-string (cadr out) "\n" t))))
                      (list 0 (car (last (split-string (cadr out) "\n" t))))))
       (should (string-match-p " 0 unexplained" (cadr out))))))
+
+(ert-deftest drgnx-keys-diff/arguments-are-strict ()
+  ;; M4-8: only `--against gryphn [DIR]'; anything else is the usage and exit 2, never a diff.
+  (let* ((dir (make-temp-file "drgnx-gryphn" t))
+         (process-environment (cons (concat "DRGNX_GRYPHN_DIR=" dir) process-environment)))
+    (unwind-protect
+        (progn
+          (should (equal (drgnx-keys-diff--args '("--" "--against" "gryphn" "/x")) "/x"))
+          (should (equal (drgnx-keys-diff--args '("--" "--against" "gryphn")) dir))
+          (dolist (args '(("--" "anything") ("--" "--against" "vim") ("--" "--against" "vim" "/x") ("--")
+                          ("--" "--against" "gryphn" "/x" "extra")))
+            (should-not (drgnx-keys-diff--args args))
+            (should (= 2 (apply #'call-process (expand-file-name invocation-name invocation-directory) nil nil nil
+                                "--batch" "-Q" "-L" (expand-file-name "harness" drgnx-dir)
+                                "-l" "drgnx-keys-diff" "-f" "drgnx-keys-diff-cli" args)))))
+      (delete-directory dir t))))
