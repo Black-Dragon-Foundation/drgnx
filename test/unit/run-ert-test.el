@@ -90,3 +90,23 @@
   (dolist (v '("DRGNX_CONFIG_DIR" "DRGNX_DATA_DIR" "XDG_STATE_HOME" "XDG_CACHE_HOME" "HOME"))
     (should (string-prefix-p (file-truename temporary-file-directory) (file-truename (getenv v)))))
   (should (string-prefix-p (file-truename temporary-file-directory) (file-truename project-list-file))))
+
+(ert-deftest drgnx-run-ert/a-file-watch-event-does-not-stop-later-sentinels ()
+  ;; Batch Emacs has no command loop: a file-notify event waits in the input queue for ever, and while input
+  ;; waits Emacs runs no process sentinel (timers still run).  The runner drains the queue after each test.
+  (require 'filenotify)
+  (let* ((dir (make-temp-file "drgnx-watch" t))
+         (w (file-notify-add-watch dir '(change) #'ignore)))
+    (unwind-protect
+        (progn
+          (write-region "x" nil (expand-file-name "a" dir) nil 'silent)
+          (accept-process-output nil 0.3)                                     ; the event arrives
+          (drgnx-run-ert-drain-events)
+          (let* ((got nil) (p (make-process :name "after-watch" :command '("true") :sentinel (lambda (&rest _) (setq got t))))
+                 (deadline (+ (float-time) 3)))
+            (while (and (not got) (< (float-time) deadline)) (accept-process-output nil 0.05))
+            (should got)
+            (ignore p)))
+      (file-notify-rm-watch w)
+      (drgnx-run-ert-drain-events)
+      (delete-directory dir t))))

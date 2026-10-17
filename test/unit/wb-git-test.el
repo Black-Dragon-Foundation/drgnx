@@ -80,6 +80,7 @@ build/ ignored (with build/out.o)."
                 (should (string-search "●" (deco "src")))     ; a folder with changes inside
                 (should (string= "" (deco "a.txt"))))))
         (drgnx-wb-hide-sidebar)
+        (drgnx-explorer-set-roots nil)                ; its watches go: no events from the folder's removal
         (kill-buffer drgnx-explorer-buffer-name)))))
 
 (ert-deftest drgnx-git/the-buffers-panel-shows-letters ()

@@ -26,6 +26,7 @@
            ,@body)
        (drgnx-wb-hide-sidebar)
        (delete-other-windows)
+       (drgnx-explorer-set-roots nil)                 ; its watches go: no events from the folder's removal
        (when (get-buffer drgnx-explorer-buffer-name) (kill-buffer drgnx-explorer-buffer-name))
        (delete-directory ,root t))))
 

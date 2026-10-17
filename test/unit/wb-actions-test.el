@@ -19,6 +19,7 @@
            (drgnx-wb-show-sidebar)
            ,@body)
        (drgnx-rules-mode -1)
+       (drgnx-explorer-set-roots nil)                 ; its watches go: no events from the folder's removal
        (drgnx-wb-hide-sidebar) (drgnx-wb-area-hide 'panel)
        (delete-other-windows)
        (dolist (b (buffer-list))

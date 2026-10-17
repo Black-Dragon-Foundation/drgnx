@@ -10,9 +10,16 @@
 (require 'cl-lib)
 (require 'ert)
 
+(defun drgnx-run-ert-drain-events ()
+  "Handle the events queued for a command loop batch Emacs does not have (file-notify events from a test's
+watches): while one waits in the input queue, Emacs runs no process sentinel — later tests would never hear
+their processes end.  The runner calls this after every test."
+  (dotimes (_ 2) (read-event nil nil 0.002)))     ; 0 reads nothing: the event must be fetched first
+
 (defun drgnx-run-ert (dir &optional results-file)
   "Load every *-test.el under DIR, run all tests, write a JSON summary to RESULTS-FILE.
 Return t if every test passed."
+  (advice-add 'ert-run-test :after (lambda (&rest _) (drgnx-run-ert-drain-events)) '((name . drgnx-run-ert-drain)))
   (let* ((load-failures
           (cl-loop for file in (directory-files-recursively (expand-file-name dir) "-test\\.el\\'")
                    for err = (condition-case err (progn (load file nil t) nil) (error err))
