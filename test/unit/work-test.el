@@ -1,0 +1,205 @@
+;;; work-test.el --- batch tests: the work tracker — store, scan, links -*- lexical-binding: t -*-
+;; Fixture roots (a spec, plans, ledgers, a git repo with commits and a worktree, a board) in temp dirs.
+(require 'ert)
+(require 'drgnx-work-db)
+(require 'drgnx-work-scan)
+
+(defun drgnx-work-test--git (dir &rest args)
+  (with-temp-buffer
+    (let ((default-directory (file-name-as-directory dir)))
+      (unless (eql 0 (apply #'call-process "git" nil t nil "-c" "user.name=t" "-c" "user.email=t@t.invalid" args))
+        (error "git %S: %s" args (buffer-string)))
+      (string-trim (buffer-string)))))
+
+(defun drgnx-work-test--commit (repo file text msg)
+  (write-region text nil (expand-file-name file repo) nil 'silent)
+  (drgnx-work-test--git repo "add" "-A")
+  (drgnx-work-test--git repo "commit" "-q" "-m" msg)
+  (drgnx-work-test--git repo "rev-parse" "--short" "HEAD"))
+
+(defun drgnx-work-test--write (root file text)
+  (let ((f (expand-file-name file root)))
+    (make-directory (file-name-directory f) t)
+    (write-region text nil f nil 'silent)
+    f))
+
+(defmacro drgnx-work-test--with (root &rest body)
+  "BODY with ROOT a fixture: docs/specs/s.md, docs/plans/p.md (two tasks with steps), a code repo
+code/ with three commits, p's ledger naming the first two, a board TODO from p."
+  (declare (indent 1))
+  `(let* ((,root (file-name-as-directory (make-temp-file "drgnx-work" t)))
+          (process-environment (append (list (concat "DRGNX_DATA_DIR=" ,root "data") (concat "DRGNX_CONFIG_DIR=" ,root "config"))
+                                       process-environment))
+          (drgnx-work-db--handles nil)
+          (code (concat ,root "code/")))
+     (unwind-protect
+         (progn
+           (make-directory code t)
+           (drgnx-work-test--git code "init" "-q" "-b" "main")
+           (write-region ".superpowers/\n.claude/\n" nil (expand-file-name ".gitignore" code) nil 'silent)   ; as in real repos
+           (let* ((c0 (drgnx-work-test--commit code "a" "0" "base"))
+                  (c1 (drgnx-work-test--commit code "a" "1" "task one"))
+                  (c2 (drgnx-work-test--commit code "b" "2" "task one, more")))
+             (ignore c0 c1 c2)
+             (drgnx-work-test--write ,root "docs/specs/s.md" "# The spec\n")
+             (drgnx-work-test--write ,root "docs/plans/p.md"
+                                     "# Plan P\n\n**Spec:** `docs/specs/s.md`\n\n### Task 1: First\n- [x] **Step 1: test**\n- [ ] **Step 2: code**\n\n### Task 2: Second\n- [ ] one\n")
+             (drgnx-work-test--write ,root "code/.superpowers/sdd/p/progress.md"
+                                     (format "# SDD ledger — plan: %sdocs/plans/p.md\nTask 1: complete (commits %s..%s, tests: ok)\nTask 1: Ruling: keep it small — why — cost\n" ,root c0 c2))
+             (drgnx-work-test--write ,root "org/board.org"
+                                     (format "* code\n:PROPERTIES:\n:PROJECT_ROOT: %s\n:END:\n** DONE one\n:PROPERTIES:\n:ONBOARD_ID: x1\n:PLAN_FILE: docs/plans/p.md\n:PLAN_TEXT: one\n:END:\n" ,root))
+             ,@body))
+       (drgnx-work-db-close-all)
+       (delete-directory ,root t))))
+
+(defun drgnx-work-test--scan (root) (drgnx-work-scan (list root) :board (concat root "org/board.org")))
+(defun drgnx-work-test--kids (id &optional kind)
+  (seq-filter (lambda (n) (or (null kind) (eq (plist-get n :kind) kind))) (drgnx-work-children id)))
+
+;;;; Task 1: the store
+
+(ert-deftest drgnx-work/the-store-keeps-nodes-edges-and-its-version ()
+  (let* ((dir (make-temp-file "drgnx-work-db" t))
+         (process-environment (cons (concat "DRGNX_DATA_DIR=" dir) process-environment))
+         (drgnx-work-db--handles nil))
+    (unwind-protect
+        (progn
+          (drgnx-work-put-node "plan:a" :kind 'plan :title "A" :path "/a.md" :line 1 :status "open" :source "/a.md")
+          (drgnx-work-put-node "task:a#1" :kind 'task :title "T1" :parent "plan:a" :ord 1 :source "/a.md")
+          (drgnx-work-put-node "task:a#2" :kind 'task :title "T2" :parent "plan:a" :ord 2 :source "/a.md")
+          (drgnx-work-put-edge "commit:abc" "task:a#1" 'implements 'recorded)
+          (should (equal (plist-get (drgnx-work-node "plan:a") :title) "A"))
+          (should (equal (mapcar (lambda (n) (plist-get n :id)) (drgnx-work-children "plan:a")) '("task:a#1" "task:a#2")))
+          (should (equal (drgnx-work-edges-to "task:a#1" 'implements) '(("commit:abc" . recorded))))
+          (drgnx-work-forget-source "/a.md")                               ; a rescan of the file
+          (should-not (drgnx-work-node "task:a#1"))
+          (should (drgnx-work-edges-to "task:a#1" 'implements))           ; recorded links are kept
+          (should (equal (drgnx-work-db-version) drgnx-work-db-schema-version))
+          (should (= (caar (sqlite-select (drgnx-work-db) "pragma busy_timeout")) 5000)))
+      (drgnx-work-db-close-all)
+      (delete-directory dir t))))
+
+;;;; Task 2: the scan
+
+(ert-deftest drgnx-work/a-plan-with-its-spec-tasks-and-steps ()
+  (drgnx-work-test--with root
+    (drgnx-work-test--scan root)
+    (let* ((spec (concat "spec:" root "docs/specs/s.md")) (plan (concat "plan:" root "docs/plans/p.md")))
+      (should (equal (plist-get (drgnx-work-node spec) :title) "The spec"))
+      (should (equal (mapcar (lambda (n) (plist-get n :id)) (drgnx-work-test--kids spec 'plan)) (list plan)))
+      (let ((tasks (drgnx-work-test--kids plan 'task)))
+        (should (equal (mapcar (lambda (n) (plist-get n :title)) tasks) '("First" "Second")))
+        (should (equal (mapcar (lambda (n) (plist-get n :status)) tasks) '("done" "open")))   ; the ledger says Task 1
+        (should (equal (mapcar (lambda (n) (plist-get n :status)) (drgnx-work-test--kids (plist-get (car tasks) :id) 'step))
+                       '("done" "open"))))
+      (should (equal (drgnx-work-counts plan) '(:tasks (1 . 2) :steps (2 . 3) :todos (1 . 1) :commits 2))))))
+
+(ert-deftest drgnx-work/commits-from-the-ledger-and-rulings ()
+  (drgnx-work-test--with root
+    (drgnx-work-test--scan root)
+    (let* ((t1 (concat "task:" root "docs/plans/p.md#1"))
+           (commits (drgnx-work-test--kids t1 'commit)))
+      (should (equal (mapcar (lambda (n) (plist-get n :title)) commits) '("task one, more" "task one")))
+      (should (seq-every-p (lambda (c) (eq (cdar (drgnx-work-edges-from (plist-get c :id) 'implements)) 'inferred)) commits))
+      (should (equal (mapcar (lambda (n) (plist-get n :title)) (drgnx-work-test--kids t1 'ruling)) '("keep it small — why — cost"))))))
+
+(ert-deftest drgnx-work/a-range-git-no-longer-has-is-stale-never-wrong ()
+  (drgnx-work-test--with root
+    (drgnx-work-test--write root "code/.superpowers/sdd/p/progress.md"
+                            (format "# SDD ledger — plan: %sdocs/plans/p.md\nTask 1: complete (commits deadbee..cafef00, tests: ok)\nTask 2: complete (commit HEAD, tests: ok)\n" root))
+    (drgnx-work-test--scan root)
+    (let ((t1 (drgnx-work-node (concat "task:" root "docs/plans/p.md#1")))
+          (t2 (drgnx-work-node (concat "task:" root "docs/plans/p.md#2"))))
+      (should (equal (plist-get t1 :status) "done"))
+      (should (plist-get t1 :stale))
+      (should-not (drgnx-work-test--kids (plist-get t1 :id) 'commit))
+      (should (equal (plist-get t2 :status) "done")))))
+
+(ert-deftest drgnx-work/a-plan-shows-its-worktree-and-branch-then-merged ()
+  (drgnx-work-test--with root
+    (let ((wt (concat root "code/.claude/worktrees/p/")))
+      (drgnx-work-test--git (concat root "code") "worktree" "add" "-q" wt "-b" "p")
+      (drgnx-work-test--write root "code/.claude/worktrees/p/.superpowers/sdd/p/progress.md"
+                              (format "# SDD ledger — plan: %sdocs/plans/p.md\n" root))
+      (drgnx-work-test--commit wt "c" "3" "on the branch")
+      (drgnx-work-test--scan root)
+      (let ((plan (drgnx-work-node (concat "plan:" root "docs/plans/p.md"))))
+        (should (equal (plist-get plan :branch) "p"))
+        (should (equal (file-name-as-directory (plist-get plan :worktree)) wt))
+        (should (equal (plist-get plan :merged) nil)))
+      ;; the work done, merged into main, worktree removed
+      (write-region "Task 2: complete (commit HEAD, tests: ok)\n" nil (concat root "code/.superpowers/sdd/p/progress.md") t 'silent)
+      (drgnx-work-test--git (concat root "code") "merge" "-q" "--ff-only" "p")
+      (drgnx-work-test--git (concat root "code") "worktree" "remove" "--force" wt)
+      (drgnx-work-test--scan root)
+      (should (plist-get (drgnx-work-node (concat "plan:" root "docs/plans/p.md")) :merged)))))
+
+(ert-deftest drgnx-work/a-markdown-without-tasks-is-not-a-plan ()
+  (drgnx-work-test--with root
+    (drgnx-work-test--write root "docs/plans/notes.md" "# Just notes\n\nNo tasks here.\n")
+    (drgnx-work-test--scan root)
+    (should-not (drgnx-work-node (concat "plan:" root "docs/plans/notes.md")))))
+
+(ert-deftest drgnx-work/plans-without-a-spec-and-specs-of-two-plans ()
+  (drgnx-work-test--with root
+    (drgnx-work-test--write root "docs/plans/q.md" "# Plan Q\n\n**Spec:** `docs/specs/s.md`\n\n### Task 1: Only\n")
+    (drgnx-work-test--write root "docs/plans/r.md" "# Plan R (no spec)\n\n### Task 1: Alone\n")
+    (drgnx-work-test--scan root)
+    (should (= 2 (length (drgnx-work-test--kids (concat "spec:" root "docs/specs/s.md") 'plan))))
+    (should (member (concat "plan:" root "docs/plans/r.md")
+                    (mapcar (lambda (n) (plist-get n :id)) (drgnx-work-roots))))))
+
+(ert-deftest drgnx-work/a-rescan-reads-only-what-changed-and-forgets-what-left ()
+  (drgnx-work-test--with root
+    (drgnx-work-test--scan root)
+    (should (eql (plist-get (drgnx-work-test--scan root) :files) 0))     ; nothing changed
+    (rename-file (concat root "docs/plans/p.md") (concat root "docs/plans/p2.md"))
+    (let ((r (drgnx-work-test--scan root)))
+      (should (> (plist-get r :files) 0)))
+    (should-not (drgnx-work-node (concat "plan:" root "docs/plans/p.md")))
+    (should (drgnx-work-node (concat "plan:" root "docs/plans/p2.md")))))
+
+(ert-deftest drgnx-work/a-recorded-commit-survives-rescans ()
+  (drgnx-work-test--with root
+    (drgnx-work-test--scan root)
+    (let ((t2 (concat "task:" root "docs/plans/p.md#2"))
+          (sha (drgnx-work-test--commit (concat root "code") "z" "z" "recorded work")))
+      (drgnx-work-record t2 (concat root "code") sha)
+      (drgnx-work-test--write root "docs/plans/p.md"
+                              "# Plan P\n\n**Spec:** `docs/specs/s.md`\n\n### Task 1: First\n### Task 2: Second, renamed\n")
+      (drgnx-work-test--scan root)
+      (let ((c (drgnx-work-test--kids t2 'commit)))
+        (should (equal (mapcar (lambda (n) (plist-get n :title)) c) '("recorded work")))
+        (should (eq (cdar (drgnx-work-edges-from (plist-get (car c) :id) 'implements)) 'recorded))))))
+
+;;;; Found on this repository's own plans
+
+(ert-deftest drgnx-work/a-single-commit-and-a-spec-in-a-sub-repository ()
+  (drgnx-work-test--with root
+    (drgnx-work-test--write root "code/docs/roadmap.md" "# Roadmap\n")
+    (drgnx-work-test--write root "docs/plans/x/q.md" "# Plan Q\n\n**Spec:** `docs/roadmap.md` (row Q)\n\n### Task 1: One\n")
+    (let ((sha (drgnx-work-test--commit (concat root "code") "q" "q" "the q work")))
+      (drgnx-work-test--write root "docs/plans/x/q.ledger.md"
+                              (format "# SDD ledger — plan: %sdocs/plans/x/q.md\nTask 1: complete (commit %s, tests: ok)\n" root sha))
+      (drgnx-work-test--scan root)
+      (should (equal (mapcar (lambda (n) (plist-get n :id)) (drgnx-work-test--kids (concat "spec:" root "code/docs/roadmap.md") 'plan))
+                     (list (concat "plan:" root "docs/plans/x/q.md"))))
+      (should (equal (mapcar (lambda (n) (plist-get n :title)) (drgnx-work-test--kids (concat "task:" root "docs/plans/x/q.md#1") 'commit))
+                     '("the q work"))))))
+
+(ert-deftest drgnx-work/an-empty-branch-of-work-in-progress-is-not-merged ()
+  (drgnx-work-test--with root
+    (let ((wt (concat root "code/.claude/worktrees/p/")))
+      (drgnx-work-test--git (concat root "code") "worktree" "add" "-q" wt "-b" "p")
+      (drgnx-work-test--write root "code/.claude/worktrees/p/.superpowers/sdd/p/progress.md"
+                              (format "# SDD ledger — plan: %sdocs/plans/p.md\n" root))
+      (drgnx-work-test--scan root)                                    ; task 2 open, no commits on p yet
+      (should-not (plist-get (drgnx-work-node (concat "plan:" root "docs/plans/p.md")) :merged)))))
+
+(ert-deftest drgnx-work/steps-of-a-completed-task-count-as-done ()
+  (drgnx-work-test--with root
+    (drgnx-work-test--scan root)
+    ;; task 1 is complete (ledger): its unticked step 2 counts as done
+    (should (equal (plist-get (drgnx-work-counts (concat "plan:" root "docs/plans/p.md")) :steps) '(2 . 3)))))
+
+;;; work-test.el ends here
