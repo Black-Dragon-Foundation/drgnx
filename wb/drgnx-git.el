@@ -107,6 +107,16 @@ ignored or untracked folder around it."
   "(LETTER FACE) for STATUS."
   (let ((l (alist-get status drgnx-git--looks))) (list (car l) (cadr l))))
 
+(defvar drgnx-git-errors-max 20000 "Characters of git's error output kept in ` *drgnx git errors*'.")
+
+(defun drgnx-git--stderr (_proc text)
+  "Append TEXT (git's error output) to ` *drgnx git errors*', keeping its last `drgnx-git-errors-max' characters."
+  (with-current-buffer (get-buffer-create " *drgnx git errors*" t)
+    (goto-char (point-max))
+    (insert text)
+    (when (> (buffer-size) drgnx-git-errors-max)
+      (delete-region (point-min) (- (point-max) drgnx-git-errors-max)))))
+
 (defun drgnx-git-refresh (path &optional wait)
   "Read the status of PATH's repository in the background (WAIT: until done, for tests).
 A refresh asked for while one runs is done once afterwards."
@@ -117,9 +127,12 @@ A refresh asked for while one runs is done once afterwards."
         (let* ((default-directory root)
                (process-environment (cons "GIT_OPTIONAL_LOCKS=0" process-environment))
                (buf (generate-new-buffer " *drgnx git*" t))
+               ;; git's complaints: a bounded tail, and no "stderr finished" line per run (a buffer
+               ;; given as :stderr gets the default sentinel, which writes one).
+               (err (make-pipe-process :name "drgnx-git-stderr" :noquery t :sentinel #'ignore
+                                       :filter #'drgnx-git--stderr))
                (proc (make-process
-                      :name "drgnx-git" :buffer buf :noquery t :connection-type 'pipe
-                      :stderr (get-buffer-create " *drgnx git errors*" t)
+                      :name "drgnx-git" :buffer buf :noquery t :connection-type 'pipe :stderr err
                       :command '("git" "--no-optional-locks" "status" "--porcelain=v2" "-z"
                                  "--ignored=matching" "--untracked-files=normal")
                       :sentinel (lambda (p _event) (drgnx-git--done p root)))))

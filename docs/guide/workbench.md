@@ -80,7 +80,8 @@ there).
 
 **Git**: `M` modified, `A` added, `U` untracked, `R` renamed, `D` deleted, `C` conflict, in the colours of your
 theme's version-control faces; a folder with changes inside shows `●`; ignored files are dimmed. One background
-`git status` per repository (never holding your git lock); `drgnx-explorer-git` turns it off.
+`git status` per repository (never holding your git lock); `drgnx-explorer-git` turns it off. What git complains
+about is kept in the hidden buffer ` *drgnx git errors*` (its last `drgnx-git-errors-max` characters).
 
 ### Buffers panel
 
