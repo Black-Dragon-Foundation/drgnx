@@ -79,6 +79,24 @@ code/ with three commits, p's ledger naming the first two, a board TODO from p."
       (drgnx-work-db-close-all)
       (delete-directory dir t))))
 
+(ert-deftest drgnx-work/a-store-another-process-began-migrating-opens ()
+  ;; tables and an index there, no schema row yet: what a second Emacs opening a fresh work.db meets
+  (let* ((dir (make-temp-file "drgnx-work-db" t))
+         (process-environment (cons (concat "DRGNX_DATA_DIR=" dir) process-environment))
+         (drgnx-work-db--handles nil))
+    (unwind-protect
+        (let ((db (sqlite-open (drgnx-work-db-file))))
+          (sqlite-execute db "create table meta (key text primary key, value text)")
+          (sqlite-execute db "create table node (id text primary key, kind text, title text, path text, line integer,
+                            status text, parent text, ord integer, source text, data text, updated real)")
+          (sqlite-execute db "create index node_parent on node(parent)")
+          (sqlite-close db)
+          (should (equal (drgnx-work-db-version) drgnx-work-db-schema-version))
+          (drgnx-work-put-edge "commit:abc" "task:a#1" 'implements 'recorded)
+          (should (drgnx-work-edges-to "task:a#1" 'implements)))
+      (drgnx-work-db-close-all)
+      (delete-directory dir t))))
+
 ;;;; Task 2: the scan
 
 (ert-deftest drgnx-work/a-plan-with-its-spec-tasks-and-steps ()

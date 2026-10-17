@@ -23,18 +23,25 @@
 (defun drgnx-work-db-file () (expand-file-name "work.db" (drgnx-data-dir)))
 
 (defun drgnx-work-db--migrate (db)
-  (sqlite-execute db "create table if not exists meta (key text primary key, value text)")
-  (let ((v (caar (sqlite-select db "select value from meta where key = 'schema'"))))
-    (unless v
-      (sqlite-execute db "create table node (id text primary key, kind text, title text, path text, line integer,
+  ;; one writer at a time (immediate: the write lock first), the version read again under it — two
+  ;; Emacsen opening a fresh work.db at once migrate it once; a migration cut short is finished
+  (sqlite-execute db "begin immediate")
+  (condition-case err
+      (progn
+        (sqlite-execute db "create table if not exists meta (key text primary key, value text)")
+        (unless (caar (sqlite-select db "select value from meta where key = 'schema'"))
+          (sqlite-execute db "create table if not exists node (id text primary key, kind text, title text, path text, line integer,
                             status text, parent text, ord integer, source text, data text, updated real)")
-      (sqlite-execute db "create index node_parent on node(parent)")
-      (sqlite-execute db "create index node_source on node(source)")
-      (sqlite-execute db "create table edge (src text, dst text, kind text, origin text, source text,
+          (sqlite-execute db "create index if not exists node_parent on node(parent)")
+          (sqlite-execute db "create index if not exists node_source on node(source)")
+          (sqlite-execute db "create table if not exists edge (src text, dst text, kind text, origin text, source text,
                             primary key (src, dst, kind))")
-      (sqlite-execute db "create index edge_dst on edge(dst, kind)")
-      (sqlite-execute db "create table file (path text primary key, mtime real)")
-      (sqlite-execute db "insert into meta values ('schema', ?)" (list (number-to-string drgnx-work-db-schema-version))))))
+          (sqlite-execute db "create index if not exists edge_dst on edge(dst, kind)")
+          (sqlite-execute db "create table if not exists file (path text primary key, mtime real)")
+          (sqlite-execute db "insert into meta values ('schema', ?)" (list (number-to-string drgnx-work-db-schema-version))))
+        (sqlite-execute db "commit"))
+    (error (ignore-errors (sqlite-execute db "rollback"))
+           (signal (car err) (cdr err)))))
 
 (defun drgnx-work-db ()
   "The open database (opened, created and migrated on first use)."
