@@ -43,7 +43,8 @@
     (drgnx-ui-measure sess (list (list :keys "C-S-`")))
     (should (equal (drgnx-live-mod--q sess "(list (eq (selected-window) (drgnx-wb-area-window 'panel)) (drgnx-wb-area-tab 'panel) (with-current-buffer (window-buffer (selected-window)) major-mode))")
                    '(t terminal eshell-mode)))
-    (drgnx-live-mod--q sess "(progn (call-process \"git\" nil nil nil \"-C\" (file-name-directory (buffer-file-name (window-buffer (drgnx-wb-editor-window)))) \"init\" \"-q\") (select-window (drgnx-wb-editor-window)) t)")
+    ;; Emacs 31 caches "no project here" (the chrome asked when the file opened): forget it after git init.
+    (drgnx-live-mod--q sess "(progn (call-process \"git\" nil nil nil \"-C\" (file-name-directory (buffer-file-name (window-buffer (drgnx-wb-editor-window)))) \"init\" \"-q\") (when (fboundp 'project--clear-cache) (project--clear-cache)) (select-window (drgnx-wb-editor-window)) t)")
     (drgnx-ui-measure sess (list (list :keys "C-S-f") (list :type "list") (list :keys "RET")))
     (should (eq (drgnx-live-mod--q sess "(drgnx-wb-area-tab 'panel)") 'results))
     (should (equal (drgnx-live-mod--q sess "drgnx-wb-unrouted") nil))))
