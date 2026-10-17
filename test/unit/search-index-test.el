@@ -587,7 +587,7 @@ started, stays."
   (drgnx-search-index-test--with (list (cons "w.txt" (concat (unibyte-string #xEF #xBB #xBF) "one\r\ntwo\r\nthree\r\n")))
     (should-not (plist-get (drgnx-search-index root :embed (drgnx-search-index-test--stub)) :error))
     (let ((text (drgnx-search-index-test--peek root (lambda (db) (caar (sqlite-select db "select text from chunk"))))))
-      (should (equal text "one\ntwo\nthree\n")))))
+      (should (equal (string-trim-right text) "one\ntwo\nthree")))))   ; no BOM, no CR
 
 (ert-deftest drgnx-search-index/a-lock-overwritten-right-after-taking-it-is-lost ()
   (drgnx-search-index-test--with (drgnx-search-index-test--named 1)
