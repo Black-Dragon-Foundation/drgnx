@@ -21,6 +21,7 @@
 (require 'drgnx-work)
 (require 'drgnx-projects)
 (require 'svg)
+(require 'image)                        ; (setf image-property): not preloaded in every build (31.1 -nw)
 
 (declare-function drgnx-wb-area-show "drgnx-area")
 (declare-function drgnx-wb-define-tab "drgnx-area")

@@ -108,7 +108,9 @@ git repository ROOT/code), a lone plan, and the tracker's database in a temp dat
       (should (string-search "Plan Alpha" (buffer-string))))))
 
 (defun drgnx-work-ui-test--graph ()
-  "Show Work as Graph as on a graphical frame (batch has none); its buffer."
+  "Show Work as Graph as on a graphical frame (batch has none); its buffer.  Skipped on an Emacs built
+without SVG (librsvg), e.g. a terminal-only build."
+  (unless (image-type-available-p 'svg) (ert-skip "this Emacs has no SVG support"))
   (cl-letf (((symbol-function 'display-images-p) #'always)) (save-window-excursion (drgnx-work-ui-graph))))
 
 (defun drgnx-work-ui-test--edge-ids (layout)

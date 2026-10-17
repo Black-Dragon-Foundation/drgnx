@@ -1,6 +1,7 @@
 # GUI test tier in a container: headless mutter renders without a GPU ("surfaceless").
 # Run with --security-opt seccomp=unconfined --security-opt label=disable (bin/drgnx does):
 # GTK loads icons through glycin, whose bwrap sandbox needs namespaces the default policy denies.
+# Docs on (tsflags=): the Emacs and Elisp manuals the command fuzz opens; findutils for project search.
 FROM registry.fedoraproject.org/fedora:45
-RUN dnf -y install emacs-pgtk mutter dbus-daemon mesa-dri-drivers ImageMagick procps-ng util-linux \
+RUN dnf -y --setopt=tsflags= install emacs-pgtk info diffutils findutils git mutter dbus-daemon mesa-dri-drivers ImageMagick procps-ng util-linux \
     && dnf clean all
