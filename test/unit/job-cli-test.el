@@ -85,7 +85,12 @@
     (let ((bad (drgnx-job-cli-test--run summary "propose" "/p.md" "--budget" "ten")))
       (should (eql (car bad) 1))
       (should-not (nth 2 bad)))
-    (should (eql (car (drgnx-job-cli-test--run summary "approve" "j" "--budget" "2.5")) 0))))
+    (should (eql (car (drgnx-job-cli-test--run summary "approve" "j" "--budget" "2.5")) 0))
+    (dolist (ok '(".5" "5." "5"))
+      (let ((r (drgnx-job-cli-test--run summary "approve" "j" "--budget" ok)))
+        (should (eql (car r) 0))
+        (should (numberp (plist-get (cdr (car (nth 2 r))) :budget)))))
+    (should (eql (car (drgnx-job-cli-test--run summary "approve" "j" "--budget")) 1))))      ; no value
 
 ;; the commands: job-ui-test.el (module tools/jobs)
 

@@ -910,8 +910,8 @@ permissions — and, with DECISIONS, its decision log (newest first)."
 
 (defun drgnx-job--number (text)
   "TEXT (a `--budget') as a number; a user-error when it is none."
-  (if (string-match-p "\\`[0-9]+\\(?:\\.[0-9]+\\)?\\'" text) (string-to-number text)
-    (user-error "--budget wants a number of USD, not %s" text)))
+  (if (and text (string-match-p "\\`\\(?:[0-9]+\\.?[0-9]*\\|\\.[0-9]+\\)\\'" text)) (string-to-number text)
+    (user-error "--budget wants a number of USD%s" (if text (format ", not %s" text) ""))))
 
 (defun drgnx-job-cli ()
   "`drgnx job propose PLAN [--repo DIR] [--budget USD] [--auto] | approve ID [--budget USD] | status [ID] [--json] |
@@ -928,7 +928,7 @@ stop ID | resume ID [--budget USD]', through the hub."
          (show (lambda (job) (princ (if json (concat (json-serialize (drgnx-job--json job)) "\n") (drgnx-job-format job))) 0)))
     (kill-emacs
      (condition-case err
-         (pcase (progn (setq budget (and (funcall opt "--budget") (drgnx-job--number (funcall opt "--budget")))) (car args))
+         (pcase (progn (setq budget (and (member "--budget" args) (drgnx-job--number (funcall opt "--budget")))) (car args))
            ("propose"
             (unless (car pos) (user-error "Which plan?"))
             (let ((job (funcall call "job/propose" (list :plan (expand-file-name (car pos))
