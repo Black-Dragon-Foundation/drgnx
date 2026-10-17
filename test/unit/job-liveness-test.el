@@ -74,4 +74,45 @@
                                   (drgnx-agent-session-entries s))))
         (should (seq-find (lambda (m) (string-prefix-p "[stalled]" (plist-get m :text))) (drgnx-coord-inbox "user")))))))
 
+(ert-deftest drgnx-job/counts-survive-a-hub-restart ()
+  ;; how often a task's agent ended and was nudged is in the job's record, not in the hub's memory
+  (drgnx-job-run-test--with drgnx-job-liveness-test--one
+    (let* ((drgnx-job-max-agents 0) (drgnx-job-review nil) (id (drgnx-job-propose plan)) (tid nil)
+           (forget (lambda () (dolist (h (list drgnx-job--prompts drgnx-job--turns-seen)) (clrhash h))
+                     (dolist (v '(drgnx-job--exits drgnx-job--nudged)) (when (boundp v) (clrhash (symbol-value v)))))))
+      (drgnx-job-approve id)
+      (setq tid (concat id "#1"))
+      (dotimes (_ (1- drgnx-job-start-tries))                               ; its agent is gone: ready again
+        (drgnx-coord-force-status tid "running" "s-gone")
+        (drgnx-job-step id)
+        (should (equal (drgnx-job-run-test--status id 1) "ready")))
+      (funcall forget)
+      (drgnx-coord-force-status tid "running" "s-gone")
+      (drgnx-job-step id)
+      (should (equal (drgnx-job-run-test--status id 1) "needs-input"))      ; the last try counted
+      (should (seq-find (lambda (m) (string-prefix-p "[agent]" (plist-get m :text))) (drgnx-coord-inbox "user")))
+      ;; a nudge too
+      (drgnx-job-card-act (plist-get (car (drgnx-coord-cards id "open")) :id) "retry")
+      (let ((s (drgnx-agents--make :id "s-n" :name "n" :profile "mock" :cwd repo :task tid :job id)))
+        (drgnx-job--nudge id (drgnx-coord-task tid) s)
+        (should-not (seq-find (lambda (c) (equal (plist-get c :kind) "stalled")) (drgnx-coord-cards id "open")))
+        (funcall forget)
+        (drgnx-job--nudge id (drgnx-coord-task tid) s)
+        (should (seq-find (lambda (c) (equal (plist-get c :kind) "stalled")) (drgnx-coord-cards id "open")))))))
+
+(ert-deftest drgnx-job/the-prompt-of-an-ended-session-is-dropped ()
+  (drgnx-job-run-test--with drgnx-job-liveness-test--one
+    (let* ((drgnx-job-max-agents 0) (drgnx-job-review nil) (id (drgnx-job-propose plan)))
+      (drgnx-job-approve id)
+      (let ((s (drgnx-agents-start "mock" repo nil id)))
+        (drgnx-job-run-test--wait (lambda () (eq (drgnx-agent-session-status s) 'idle)))
+        (puthash (drgnx-agent-session-id s) "a prompt" drgnx-job--prompts)
+        (puthash "s-never-was" "another" drgnx-job--prompts)
+        (drgnx-job-step id)
+        (should (gethash (drgnx-agent-session-id s) drgnx-job--prompts))     ; still alive: kept
+        (drgnx-agents-kill s)
+        (drgnx-job-step id)
+        (should-not (gethash (drgnx-agent-session-id s) drgnx-job--prompts))
+        (should-not (gethash "s-never-was" drgnx-job--prompts))))))
+
 ;;; job-liveness-test.el ends here

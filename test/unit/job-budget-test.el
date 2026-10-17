@@ -100,4 +100,14 @@
       (drgnx-coord-force-status tid "running" "s-b")
       (should (equal (plist-get (car (plist-get (drgnx-job-summary id) :tasks)) :profile) "mock-b")))))
 
+(ert-deftest drgnx-job/handover-names-log-version ()
+  ;; the successor is told how far the decision log was when the agent before it stopped
+  (drgnx-job-run-test--with "# One\n\n### Task 1: one\n"
+    (let* ((drgnx-job-max-agents 0) (id (drgnx-job-propose plan)))
+      (drgnx-job-approve id)
+      (drgnx-coord-decide :kind "build" :subject "the CSV export" :author "user" :job id :reason "asked" :seen (drgnx-coord-version))
+      (let ((s (drgnx-agents--make :id "s-h" :name "h" :profile "mock" :cwd repo :task (concat id "#1") :job id)))
+        (should (> (drgnx-coord-version) 0))
+        (should (string-search (format "version %d" (drgnx-coord-version)) (drgnx-job--handover id s)))))))
+
 ;;; job-budget-test.el ends here

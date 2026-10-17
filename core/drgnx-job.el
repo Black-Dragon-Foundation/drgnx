@@ -166,10 +166,21 @@ own repository).  Returns its id; nothing starts (unless `drgnx-job-auto-start')
 (defvar drgnx-job--reviewers (make-hash-table :test #'equal) "Session id → the task it reviews.")
 
 (defvar drgnx-job-start-tries 3 "Times a task's agent may end without finishing it before the user decides.")
-(defvar drgnx-job--exits (make-hash-table :test #'equal) "Task → times its agent ended without finishing it.")
-(defvar drgnx-job--nudged (make-hash-table :test #'equal) "Task → nudges its agent got (a turn ended, the task not done).")
 (defvar drgnx-job--turns-seen (make-hash-table :test #'equal) "Session id → its ended turns already looked at.")
 (defvar drgnx-job--step-pending (make-hash-table :test #'equal) "Job → t while a step is scheduled.")
+
+;; How often a task's agent ended without finishing it (:exits) and got a nudge (:nudged) is kept in the job's record,
+;; like the failed reviews: the hub restarting does not reset it.
+(defun drgnx-job--count (id key task)
+  "Job ID's count KEY (:exits, :nudged) for TASK: 0 when there is none."
+  (alist-get task (plist-get (plist-get (drgnx-coord-job id) :data) key) 0 nil #'equal))
+
+(defun drgnx-job--set-count (id key task n)
+  "Job ID's count KEY for TASK is N (nil: none)."
+  (let ((data (plist-get (drgnx-coord-job id) :data)))
+    (when (or n (alist-get task (plist-get data key) nil nil #'equal))
+      (setf (alist-get task (plist-get data key) nil (null n) #'equal) n)
+      (drgnx-coord-job-set id :data data))))
 
 (defun drgnx-job--step-later (id)
   "Step job ID soon, outside the process filter — once, however many ask."
@@ -244,14 +255,15 @@ what the agent before it left (`drgnx-job--fall-back')."
   "Move job ID on: tasks whose agent is gone are free again; finished agents end; ready tasks get agents (up to
 `drgnx-job-max-agents'); the job is done when every task is."
   (when (equal (plist-get (drgnx-coord-job id) :status) "running")
+    (maphash (lambda (sid _) (unless (drgnx-job--alive-p sid) (remhash sid drgnx-job--prompts))) drgnx-job--prompts)   ; ended before it was free
     (let ((live (mapcar #'drgnx-agent-session-id (drgnx-job--live id))))
       (dolist (task (drgnx-coord-tasks id))
         (let ((status (plist-get task :status)) (agent (plist-get task :agent)))
           (cond
            ;; its agent died or the hub restarted: the task is free (its worktree stays) — a few times, then the user
            ((and (member status '("claimed" "running")) (not (member agent live)))
-            (let ((n (1+ (gethash (plist-get task :id) drgnx-job--exits 0))))
-              (puthash (plist-get task :id) n drgnx-job--exits)
+            (let ((n (1+ (drgnx-job--count id :exits (plist-get task :id)))))
+              (drgnx-job--set-count id :exits (plist-get task :id) n)
               (if (< n drgnx-job-start-tries)
                   (drgnx-coord-force-status (plist-get task :id) "ready" nil)
                 (let ((s (drgnx-job--session agent)))
@@ -273,7 +285,7 @@ what the agent before it left (`drgnx-job--fall-back')."
            ;; comes mid-turn; `drgnx-job--session-changed' steps again when it is free)
            ((and (equal status "in-review")
                  (or (not (member agent live)) (drgnx-agents-free-p (drgnx-job--session agent))))
-            (remhash (plist-get task :id) drgnx-job--exits) (remhash (plist-get task :id) drgnx-job--nudged)
+            (drgnx-job--set-count id :exits (plist-get task :id) nil) (drgnx-job--set-count id :nudged (plist-get task :id) nil)
             (when (member agent live) (drgnx-agents-kill (drgnx-job--session agent)))
             (when (and (not (run-hook-with-args-until-success 'drgnx-job-before-review-functions id task))
                        drgnx-job-review (not (drgnx-job--reviewer-of (plist-get task :id))))
@@ -316,8 +328,8 @@ what the agent before it left (`drgnx-job--fall-back')."
 (defun drgnx-job--nudge (id task s)
   "S's turn ended with TASK of job ID open: once a reminder, then a card."
   (puthash (drgnx-agent-session-id s) (drgnx-job--turns s) drgnx-job--turns-seen)
-  (if (zerop (gethash (plist-get task :id) drgnx-job--nudged 0))
-      (progn (puthash (plist-get task :id) 1 drgnx-job--nudged)
+  (if (zerop (drgnx-job--count id :nudged (plist-get task :id)))
+      (progn (drgnx-job--set-count id :nudged (plist-get task :id) 1)
              (drgnx-agents-deliver s (format "[drgnx] Your turn ended but task %s is not finished. Finish it and call complete_task; if something blocks you, say what and call update_task with needs-input."
                                              (plist-get task :id))))
     (drgnx-job--card id (plist-get task :id) "stalled" "its agent's turns end without complete_task")))
@@ -499,8 +511,8 @@ goes to the user."
          (said (mapconcat (lambda (e) (or (plist-get e :text) ""))
                           (seq-filter (lambda (e) (eq (plist-get e :type) 'agent)) (drgnx-agent-session-entries s)) ""))
          (said (substring said (max 0 (- (length said) 2000)))))
-    (format "You are continuing this task: an agent began it here and stopped (its provider failed).  Its last commit: %s.%s\n\n"
-            (if (string-empty-p commit) "none" commit)
+    (format "You are continuing this task: an agent began it here and stopped (its provider failed).  Its last commit: %s.  The decision log was at version %d then.%s\n\n"
+            (if (string-empty-p commit) "none" commit) (drgnx-coord-version)
             (if (string-empty-p (string-trim said)) "" (format "  Its last words:\n%s" (drgnx-job--quote said))))))
 
 (defun drgnx-job--fall-back (id s err)
@@ -645,9 +657,10 @@ S: the session whose request waits (it goes back to work once answered, or, gone
   "TASK of JOB goes back to a new agent, its counts reset (NOTE: what it is told)."
   (let ((data (plist-get (drgnx-coord-job job) :data)))
     (setf (alist-get task (plist-get data :fails) nil 'remove #'equal) nil)
+    (setf (alist-get task (plist-get data :exits) nil 'remove #'equal) nil)
+    (setf (alist-get task (plist-get data :nudged) nil 'remove #'equal) nil)
     (when note (setf (alist-get task (plist-get data :notes) nil nil #'equal) note))
     (drgnx-coord-job-set job :data data))
-  (dolist (h (list drgnx-job--exits drgnx-job--nudged)) (remhash task h))
   (when-let* ((s (drgnx-job--session (plist-get (drgnx-coord-task task) :agent))))   ; a new agent: the old one ends
     (unless (eq (drgnx-agent-session-status s) 'exited) (drgnx-agents-kill s)))
   (drgnx-job--set-waiting job task nil)

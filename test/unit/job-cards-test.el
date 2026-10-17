@@ -38,11 +38,11 @@
 (ert-deftest drgnx-job-cards/retry-frees-the-task-and-settles-the-card ()
   (drgnx-job-cards-test--running
     (drgnx-coord-force-status tid "running" "s-gone")
-    (puthash tid 3 drgnx-job--exits)
+    (drgnx-job--set-count id :exits tid 3)
     (let ((cid (drgnx-job--card id tid "agent" "its agent ended 3 times")))
       (drgnx-job-card-act cid "retry")
       (should (equal (drgnx-job-run-test--status id 1) "ready"))
-      (should-not (gethash tid drgnx-job--exits))
+      (should (= 0 (drgnx-job--count id :exits tid)))
       (let ((card (drgnx-coord-card cid)))
         (should (equal (plist-get card :state) "settled"))
         (should (equal (plist-get card :choice) "retry")))
