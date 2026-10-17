@@ -126,6 +126,22 @@ HOME is a new empty directory, deleted afterwards (ENV may name another)."
       (should (= (car r) 2))
       (should (string-search (concat opt " needs") (cdr r))))))
 
+(ert-deftest drgnx-install/a-method-without-a-recipe-is-refused ()
+  ;; M2.5-2: --method package/source where there is no such recipe — refused before the plan (exit 2),
+  ;; never an empty "sudo" line (bash 5) or "unbound variable" (bash 3.2).
+  (let ((macos '("DRGNX_INSTALL_UNAME=Darwin" "DRGNX_INSTALL_ARCH=arm64" "DRGNX_INSTALL_MACOS=15.4")))
+    (dolist (r (list (apply #'drgnx-install-test--run macos '("--dry-run" "--method" "package"))
+                     (apply #'drgnx-install-test--run macos '("--dry-run" "--method" "source"))
+                     (drgnx-install-test--run (list (concat "DRGNX_INSTALL_OS_RELEASE=" (drgnx-install-test--os "arch"))
+                                                    "DRGNX_INSTALL_UNAME=Linux")
+                                              "--dry-run" "--method" "source")
+                     (drgnx-install-test--run (list (concat "DRGNX_INSTALL_OS_RELEASE=" (drgnx-install-test--os "unknown"))
+                                                    "DRGNX_INSTALL_UNAME=Linux")
+                                              "--dry-run" "--method" "package")))
+      (should (= (car r) 2))
+      (should (string-match-p "no --method \\(package\\|source\\) recipe for" (cdr r)))
+      (should-not (string-search "1. Emacs" (cdr r))))))
+
 (ert-deftest drgnx-install/plan-names-the-drgnx-steps ()
   (drgnx-install-test--expect (drgnx-install-test--plan "fedora-45")
                               "git clone" ".local/share/drgnx/drgnx" "bin/drgnx" "drgnx build" "drgnx doctor"))

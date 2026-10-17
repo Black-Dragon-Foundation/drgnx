@@ -53,7 +53,7 @@ runs nothing.
 | `--prefix DIR` | where a source-built Emacs and the `drgnx` command go (default `~/.local`) |
 | `--dir DIR` | where drgnx is checked out (default `~/.local/share/drgnx/drgnx`) |
 | `--source-dir DIR` | use an existing drgnx checkout instead of cloning |
-| `--method M` | `auto` (default), `package`, `source`, or `keep` (do not touch Emacs) |
+| `--method M` | `auto` (default), `package`, `source`, or `keep` (do not touch Emacs); `package` and `source` only where the platform has that recipe (Fedora and Arch packages; Fedora and Debian-family source builds) — elsewhere it stops before the plan (exit 2) |
 | `--branch B` | drgnx branch to clone (default `main`) |
 
 Exit codes: 0 done, 1 a step failed (the message names it and its log), 2 unsupported platform or bad

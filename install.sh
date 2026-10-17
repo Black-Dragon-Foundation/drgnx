@@ -163,6 +163,9 @@ choose_method() {
     debian) DEPS=(apt-get build-dep -y emacs) ;;
     *)      DEPS=() ;;
   esac
+  if [[ ( "$CHOSEN" == package && ${#PKG[@]} -eq 0 ) || ( "$CHOSEN" == source && ${#DEPS[@]} -eq 0 ) ]]; then
+    die 2 "no --method $CHOSEN recipe for ${PRETTY:-this system} — use --method auto, or install GNU Emacs $EMACS_VERSION yourself (see $DOCS_URL), then run: bash install.sh --method keep"
+  fi
   BUILD_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/drgnx/build"
   CONFIGURE=(./configure "--prefix=$PREFIX" --with-native-compilation=aot --with-tree-sitter "$GUI_FLAG")
   JOBS="$(build_jobs)"
