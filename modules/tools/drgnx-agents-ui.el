@@ -222,7 +222,7 @@
   "At idle: mirror the hub's agent sessions when a hub runs.  Never waits and never starts one: only a socket that
 exists is connected to (asynchronously)."
   (require 'drgnx-hub)
-  (when (file-exists-p (drgnx-hub-socket))
+  (when (and (file-exists-p (drgnx-hub-socket)) (not (process-live-p (bound-and-true-p drgnx-hub--events))))
     (require 'drgnx-agents-mirror)
     (with-demoted-errors "drgnx: the agent hub does not answer: %S" (drgnx-agents-mirror-sync))))
 
@@ -373,6 +373,8 @@ the copy), then Done writes the copy to the file (Reject, or closing the diff, w
                        (add-hook 'drgnx-agents-changed-functions #'drgnx-agents-ui--changed)
                        ;; the hub's sessions (they outlive this Emacs), once Emacs is idle
                        (run-with-idle-timer 3 nil #'drgnx-agents-ui--maybe-mirror)
+                       ;; …and again later: a hub started (or restarted) since is picked up
+                       (run-with-idle-timer 30 t #'drgnx-agents-ui--maybe-mirror)
                        (when (fboundp 'drgnx-wb-define-tab) (drgnx-wb-define-tab 'right 'agents :title "Agents"))
                        (when (fboundp 'drgnx-wb-place)
                          (drgnx-wb-place 'drgnx-agents-list-mode 'right :tab 'agents)

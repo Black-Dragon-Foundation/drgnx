@@ -114,12 +114,17 @@ or (:error MESSAGE)."
   (sqlite-execute (drgnx-work-db) "update jtask set lease_until = ? where id = ? and agent = ?"
                   (list (drgnx-coord--lease) task agent)))
 
+(defun drgnx-coord-renew (agent)
+  "AGENT is alive: renew every claim it holds."
+  (sqlite-execute (drgnx-work-db) "update jtask set lease_until = ? where agent = ? and status in ('claimed', 'running')"
+                  (list (drgnx-coord--lease) agent)))
+
 (defun drgnx-coord-release-stale ()
   "Release the claims whose lease ran out: ((:task :agent)…)."
   (drgnx-coord--tx
    (lambda (db)
-     (let ((rows (sqlite-select db (concat "select id, agent from jtask where lease_until < ? and status in ('"
-                                           (string-join drgnx-coord--active "','") "')")
+     ;; a task waiting on the user (needs-input, in-review) keeps its claim: the wait is the user's, not the agent's
+     (let ((rows (sqlite-select db "select id, agent from jtask where lease_until < ? and status in ('claimed', 'running')"
                                 (list (float-time)))))
        (dolist (r rows)
          (sqlite-execute db "update jtask set status = 'ready', agent = null, lease_until = null where id = ?" (list (car r))))
@@ -150,40 +155,56 @@ it.  Answers as `drgnx-coord-claim'."
 
 ;;;; The decision log
 
-(defconst drgnx-coord--decision-cols "n, kind, subject, task, paths, reason, author, status, replaces, at, ver")
+(defconst drgnx-coord--decision-cols "n, kind, subject, task, paths, reason, author, status, replaces, at, ver, job")
 
 (defun drgnx-coord--decision-plist (row)
-  (pcase-let ((`(,n ,kind ,subject ,task ,paths ,reason ,author ,status ,replaces ,at ,ver) row))
-    (list :n n :kind kind :subject subject :task task :paths paths :reason reason :author author :status status
+  (pcase-let ((`(,n ,kind ,subject ,task ,paths ,reason ,author ,status ,replaces ,at ,ver ,job) row))
+    (list :n n :kind kind :subject subject :task task :paths paths :reason reason :author author :status status :job job
           :replaces replaces :at at :ver ver)))
 
-(defun drgnx-coord--decisions-since (db n)
+(defun drgnx-coord--decisions-since (db n &optional job)
   (mapcar #'drgnx-coord--decision-plist
-          (sqlite-select db (format "select %s from decision where ver > ? order by n desc" drgnx-coord--decision-cols)
-                         (list n))))
+          (sqlite-select db (format "select %s from decision where ver > ?%s order by n desc" drgnx-coord--decision-cols
+                                    (if job " and job = ?" ""))
+                         (if job (list n job) (list n)))))
 
-(defun drgnx-coord-decisions-since (n)
-  "Decisions recorded, or whose status changed, after version N (newest first)."
-  (drgnx-coord--decisions-since (drgnx-work-db) n))
+(defun drgnx-coord-decisions-since (n &optional job)
+  "Decisions recorded, or whose status changed, after version N (newest first); JOB's only, when given."
+  (drgnx-coord--decisions-since (drgnx-work-db) n job))
 
-(cl-defun drgnx-coord-decide (&key kind subject task paths reason author seen replaces)
-  "Record a decision (KIND build, wait, wont-build or replaces) by AUTHOR, who read the log at SEEN.  The user's is
-current; an agent's is current inside its own claimed TASK, else proposed (for the reviewer and the user).
-REPLACES (a decision's number) is marked replaced.  (:ok t :n N :status S :version V) or (:held …)."
+(defvar drgnx-coord-decision-rate 6 "Decisions one agent may record per minute; more are refused (no loops).")
+
+(cl-defun drgnx-coord-decide (&key kind subject task paths reason author seen replaces job)
+  "Record a decision (KIND build, wait, wont-build or replaces) of JOB by AUTHOR, who read the log at SEEN.  The
+user's is current; an agent's is current inside its own claimed TASK, else proposed (for the reviewer and the user)
+— and replacing a decision is an agent's own only for its own decision in that same task (the user's always win).
+REPLACES (a decision's number) is then marked replaced.  The author is not left behind by its own decision.  More
+than `drgnx-coord-decision-rate' a minute from one agent are refused.  (:ok t :n N :status S :version V),
+(:held …) or (:error MESSAGE)."
   (drgnx-coord--tx
    (lambda (db)
      (or (drgnx-coord--held db seen)
+         (and (not (equal author "user"))
+              (>= (caar (sqlite-select db "select count(*) from decision where author = ? and at > ?" (list author (- (float-time) 60))))
+                  drgnx-coord-decision-rate)
+              (list :error (format "too many decisions in a minute (%d): wait, or ask the user" drgnx-coord-decision-rate)))
          (let* ((own (and task (not (equal author "user"))
                           (pcase (drgnx-coord--task-row db task)
                             (`(,_ ,_ ,_ ,_ ,status ,holder . ,_) (and (equal holder author) (member status drgnx-coord--active))))))
-                (status (if (or (equal author "user") own) "current" "proposed"))
+                (replaced (and replaces (car (sqlite-select db "select author, task from decision where n = ?" (list replaces)))))
+                (own-replace (or (null replaces) (and replaced (equal (car replaced) author) (equal (cadr replaced) task))))
+                (status (if (or (equal author "user") (and own own-replace)) "current" "proposed"))
                 (v (drgnx-coord--bump db)))
-           (sqlite-execute db "insert into decision (kind, subject, task, paths, reason, author, status, replaces, at, ver)
-                               values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-                           (list kind subject task paths reason author status replaces (float-time) v))
-           (when (and replaces (equal status "current"))
-             (sqlite-execute db "update decision set status = 'replaced', ver = ? where n = ?" (list v replaces)))
-           (list :ok t :n (caar (sqlite-select db "select last_insert_rowid()")) :status status :version v))))))
+           (sqlite-execute db "insert into decision (kind, subject, task, paths, reason, author, status, replaces, at, ver, job)
+                               values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                           (list kind subject task paths reason author status replaces (float-time) v job))
+           (let ((n (caar (sqlite-select db "select last_insert_rowid()"))))   ; before any other insert
+             (when (and replaces (equal status "current"))
+               (sqlite-execute db "update decision set status = 'replaced', ver = ? where n = ?" (list v replaces)))
+             ;; its author knows it: not told of it as news (it read the log at SEEN, the one before)
+             (when (and author (not (equal author "user")) seen (= seen (1- v)))
+               (sqlite-execute db "insert or replace into meta values (?, ?)" (list (concat "seen:" author) (number-to-string v))))
+             (list :ok t :n n :status status :version v)))))))
 
 ;;;; Messages
 
@@ -204,7 +225,7 @@ held when RECIPIENT's queue is full or the two exchange too much — or (:held �
                                               (list recipient))))
                 (recent (caar (sqlite-select db "select count(*) from message where sender = ? and recipient = ? and at > ?"
                                              (list sender recipient (- (float-time) 60)))))
-                (reason (cond ((>= waiting drgnx-coord-queue-limit) "queue full")
+                (reason (cond ((and (>= waiting drgnx-coord-queue-limit) (not (equal recipient "user"))) "queue full")
                               ((>= recent drgnx-coord-pair-rate) "too many between these two")))
                 (state (if reason "held" "queued")))
            (sqlite-execute db "insert into message (job, sender, recipient, text, state, reason, at) values (?, ?, ?, ?, ?, ?, ?)"

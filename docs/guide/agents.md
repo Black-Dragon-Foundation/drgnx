@@ -90,7 +90,9 @@ column shows which.
 **New Durable Agent Session…** (palette) starts an agent in the **hub** instead of this Emacs: it keeps working when
 you close Emacs, and the next Emacs shows it again in the Agents tab — its whole transcript, pending permission
 requests and edits to review — and drives it the same way (send, Stop, answer, review). Emacs mirrors the hub's
-sessions once it is idle whenever a hub is running; it never starts a hub for that.
+sessions when it is idle whenever a hub is running (and looks again every 30 s); it never starts a hub for that.
+Durable sessions live as long as the hub: if the hub ends (`drgnx hub stop`, a crash), its sessions end too, and the
+Agents tab shows them as exited.
 
 ## Working together
 
@@ -101,11 +103,14 @@ it, records a decision, sends a message — says which version it last read, and
 **holds the action** and shows it what changed. An agent's decision about its own task counts at once; one about
 anything else is only proposed, for you (and, with jobs, a reviewer) to decide.
 
-Messages never interrupt: an idle agent gets one as a new turn, a busy one when its turn ends, and you can see each
-go queued → delivered → read → acted on. A message is only text to the agent that gets it: it never answers a
-permission request, never approves anything, never changes a setting. Two agents writing to each other too fast,
-or a full queue, holds the rest. A task an agent claimed is a lease: if the agent goes quiet for 15 minutes the
-task is free again, and you are told. Developer details: [coordination.md](../develop/coordination.md).
+Messages never interrupt: an agent gets one as a new turn once it is free (not while it works, not while you have
+stopped it), and each goes queued → delivered → read → acted on. A message is only text to the agent that gets it,
+quoted and marked as coming from another agent: it never answers a permission request, never approves anything,
+never changes a setting. Two agents writing to each other too fast, or a full queue, holds the rest. Agents of a job
+hear about that job's new decisions (once per change); a plain chat session is never woken for them. A task an
+agent claimed is a lease, kept while the agent runs and while the task waits on you; if the agent is gone for 15
+minutes the task is free again (the job window, M9b.4, will show it; messages and escalations to you wait there
+too). Developer details: [coordination.md](../develop/coordination.md).
 
 ## Plans and the board
 

@@ -95,7 +95,7 @@
                            (drgnx-coord-decide :kind (plist-get a :kind) :subject (plist-get a :subject) :task (plist-get a :task)
                                                :paths (plist-get a :paths) :reason (plist-get a :reason)
                                                :author (drgnx-coord-mcp--me) :replaces (plist-get a :replaces)
-                                               :seen (drgnx-coord-mcp--seen a)))))
+                                               :job (getenv "DRGNX_JOB") :seen (drgnx-coord-mcp--seen a)))))
       ("claim_task" :description "Claim a ready task (a lease, kept while you work on it)"
        :schema ,(funcall s `(("task" "string" "The task's id") ,seen) '("task" "seen_version"))
        :call ,(lambda (a) (drgnx-coord-mcp--write
@@ -113,7 +113,7 @@
       ("task_status" :description "The job's tasks: status, agent, dependencies"
        :schema ,(funcall s '(("job" "string" "The job (default: yours)")))
        :call ,(lambda (a) (drgnx-coord-mcp--jsonable (drgnx-coord-tasks (or (plist-get a :job) (getenv "DRGNX_JOB"))))))
-      ("escalate" :description "Ask the user to decide something (a clash, a question): it reaches them as a card"
+      ("escalate" :description "Ask the user to decide something (a clash, a question): queued for them (the job window shows it); go on with what does not depend on it"
        :schema ,(funcall s `(("subject" "string" "What it is about") ("text" "string" "What needs deciding") ,seen)
                          '("subject" "text" "seen_version"))
        :call ,(lambda (a) (drgnx-coord-mcp--write

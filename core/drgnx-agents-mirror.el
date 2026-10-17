@@ -84,9 +84,18 @@
           (puthash id seq drgnx-agents-mirror--seq)
           (drgnx-agents--changed m)))))))
 
+(defun drgnx-agents-mirror--hub-gone ()
+  "The hub's connection closed: its sessions ended with it (they are its children), so the mirrors say so."
+  (dolist (m drgnx-agents--sessions)
+    (when (and (drgnx-agent-session-remote m) (not (eq (drgnx-agent-session-status m) 'exited)))
+      (setf (drgnx-agent-session-status m) 'exited (drgnx-agent-session-permissions m) nil (drgnx-agent-session-reviews m) nil
+            (drgnx-agent-session-stderr m) "the agent hub ended; its sessions end with it")
+      (drgnx-agents--changed m))))
+
 (defun drgnx-agents-mirror-sync ()
   "Mirror the hub's agent sessions here, and keep them current.  Asynchronous; never starts a hub."
   (add-hook 'drgnx-hub-event-functions #'drgnx-agents-mirror--event)
+  (add-hook 'drgnx-hub-disconnect-functions #'drgnx-agents-mirror--hub-gone)
   (drgnx-hub-connect)
   (drgnx-hub-call "agents/list" nil
                   (lambda (r _err)
@@ -98,6 +107,7 @@
 (defun drgnx-agents-mirror-stop ()
   "Stop mirroring (the mirrors stay as they are)."
   (remove-hook 'drgnx-hub-event-functions #'drgnx-agents-mirror--event)
+  (remove-hook 'drgnx-hub-disconnect-functions #'drgnx-agents-mirror--hub-gone)
   (clrhash drgnx-agents-mirror--fetching)
   (clrhash drgnx-agents-mirror--seq))
 

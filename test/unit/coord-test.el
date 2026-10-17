@@ -111,6 +111,56 @@
             (should (seq-find (lambda (d) (and (= (plist-get d :n) n) (equal (plist-get d :status) "replaced"))) since))
             (should (seq-find (lambda (d) (= (plist-get d :n) (plist-get r :n))) since))))))))
 
+(ert-deftest drgnx-coord/an-agent-never-replaces-the-user-s-decision ()
+  ;; "the user's decisions always win": an agent replacing one only proposes
+  (drgnx-coord-test--with
+    (let* ((t1 (drgnx-coord-test--id 1))
+           (users (plist-get (drgnx-coord-decide :kind "wont-build" :subject "XML export" :reason "r" :author "user" :seen 0) :n)))
+      (drgnx-coord-claim t1 "a" (drgnx-coord-version))
+      (let ((r (drgnx-coord-decide :kind "replaces" :subject "XML export after all" :task t1 :reason "r" :author "a"
+                                   :replaces users :seen (drgnx-coord-version))))
+        (should (equal (plist-get r :status) "proposed")))
+      (should (equal (plist-get (seq-find (lambda (d) (equal (plist-get d :n) users)) (drgnx-coord-decisions-since 0)) :status)
+                     "current"))
+      ;; its own decision in its own task it may replace
+      (let* ((own (plist-get (drgnx-coord-decide :kind "build" :subject "a parser" :task t1 :reason "r" :author "a" :seen (drgnx-coord-version)) :n))
+             (r (drgnx-coord-decide :kind "replaces" :subject "a better parser" :task t1 :reason "r" :author "a" :replaces own
+                                    :seen (drgnx-coord-version))))
+        (should (equal (plist-get r :status) "current"))
+        (should (equal (plist-get (seq-find (lambda (d) (equal (plist-get d :n) own)) (drgnx-coord-decisions-since 0)) :status)
+                       "replaced"))))))
+
+(ert-deftest drgnx-coord/an-agent-s-own-decision-keeps-it-current-and-decisions-are-rate-limited ()
+  (drgnx-coord-test--with
+    (drgnx-coord-claim (drgnx-coord-test--id 1) "a" 0)
+    (drgnx-coord-decide :kind "build" :subject "x" :task (drgnx-coord-test--id 1) :reason "r" :author "a" :seen 0)
+    (should (= (drgnx-coord-seen "a") (drgnx-coord-version)))         ; not behind its own decision
+    (dotimes (i 5) (drgnx-coord-decide :kind "build" :subject (format "y%d" i) :reason "r" :author "a" :seen (drgnx-coord-version)))
+    (let ((r (drgnx-coord-decide :kind "build" :subject "the 7th" :reason "r" :author "a" :seen (drgnx-coord-version))))
+      (should-not (plist-get r :ok))
+      (should (string-search "too many decisions" (plist-get r :error))))))
+
+(ert-deftest drgnx-coord/decisions-belong-to-their-job ()
+  (drgnx-coord-test--with
+    (drgnx-coord-decide :kind "build" :subject "for j" :job "j" :reason "r" :author "user" :seen 0)
+    (drgnx-coord-decide :kind "build" :subject "for k" :job "k" :reason "r" :author "user" :seen (drgnx-coord-version))
+    (should (equal (mapcar (lambda (d) (plist-get d :subject)) (drgnx-coord-decisions-since 0 "j")) '("for j")))
+    (should (= (length (drgnx-coord-decisions-since 0)) 2))))
+
+(ert-deftest drgnx-coord/a-task-waiting-on-the-user-keeps-its-claim ()
+  (drgnx-coord-test--with
+    (let ((t1 (drgnx-coord-test--id 1)))
+      (drgnx-coord-claim t1 "a" 0)
+      (drgnx-coord-set-status t1 "a" "in-review" 0)
+      (sqlite-execute (drgnx-work-db) "update jtask set lease_until = ? where id = ?" (list (- (float-time) 1) t1))
+      (should-not (drgnx-coord-release-stale))
+      (should (equal (drgnx-coord-test--status 1) "in-review")))))
+
+(ert-deftest drgnx-coord/escalations-to-the-user-are-never-held-as-a-full-queue ()
+  (drgnx-coord-test--with
+    (dotimes (i 25) (drgnx-coord-send :sender (format "s%d" i) :recipient "user" :text "decide" :seen 0))
+    (should-not (seq-find (lambda (m) (equal (plist-get m :state) "held")) (drgnx-coord-inbox "user")))))
+
 (ert-deftest drgnx-coord/a-silent-lease-is-released ()
   (drgnx-coord-test--with
     (let ((t1 (drgnx-coord-test--id 1)))

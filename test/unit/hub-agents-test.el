@@ -68,7 +68,10 @@
     (let ((id (drgnx-hub-agents-test--start)))
       (drgnx-hub-call-sync "agents/send" (list :id id :text "coord task_status {\"job\":\"j\"}"))
       (should (drgnx-hub-agents-test--wait (lambda () (string-search "coord: " (drgnx-hub-agents-test--text id))) 15))
-      (should (string-search "\"id\":\"j#1\"" (drgnx-hub-agents-test--text id))))))
+      (should (string-search "\"id\":\"j#1\"" (drgnx-hub-agents-test--text id)))
+      ;; its identity is its session's id (a name repeats across hubs and editors; an id does not)
+      (let ((env (plist-get (aref (drgnx-agents--mcp-servers (drgnx-agents-get id)) 0) :env)))
+        (should (equal (plist-get (seq-find (lambda (e) (equal (plist-get e :name) "DRGNX_AGENT")) env) :value) id))))))
 
 (ert-deftest drgnx-hub-agents/a-permission-waits-for-the-user ()
   (drgnx-hub-agents-test--with

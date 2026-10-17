@@ -279,7 +279,8 @@ can carry it, else the provider's (keys resolved now, never kept) — and DRGNX_
   "The `mcpServers' S's agent gets: the coordination tools, as S's name."
   (if (not drgnx-agents-coordination) []
     (require 'drgnx-coord-mcp)
-    (vector (drgnx-coord-mcp-server-spec (drgnx-agent-session-name s) :job (drgnx-agent-session-job s)
+    ;; its identity is its id: a name (\"profile · dir\") repeats across hubs and editors
+    (vector (drgnx-coord-mcp-server-spec (drgnx-agent-session-id s) :job (drgnx-agent-session-job s)
                                          :task (drgnx-agent-session-task s)))))
 
 (defun drgnx-agents-get (id) (seq-find (lambda (s) (equal (drgnx-agent-session-id s) id)) drgnx-agents--sessions))
@@ -350,6 +351,16 @@ its history is replayed into the transcript.  Needs an agent that can load sessi
                                        (drgnx-agents--changed s)
                                        (drgnx-agents--next s)))))))))
     s))
+
+(defun drgnx-agents-free-p (s)
+  "Can S take a new turn now (idle, not paused by a Stop, nothing queued)?"
+  (and (eq (drgnx-agent-session-status s) 'idle) (not (drgnx-agent-session-paused s)) (null (drgnx-agent-session-queue s))
+       (drgnx-agent-session-conn s) t))
+
+(defun drgnx-agents-deliver (s text)
+  "Give TEXT to S as a new turn if it is free (`drgnx-agents-free-p'); t when it did.  Never queues, never steers,
+never interrupts, whatever S's mode — for drgnx's own deliveries (messages, decision notices)."
+  (when (drgnx-agents-free-p s) (drgnx-agents--prompt s text) t))
 
 (defvar drgnx-agents-prompt-functions nil
   "Called with (SESSION TEXT) when TEXT goes to the agent as a prompt (the hub marks delivered messages read).")

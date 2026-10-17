@@ -137,6 +137,31 @@ to OR-LOG, OPENROUTER_API_KEY unset."
       ;; judged by its socket: where PID 1 never reaps (a CI container) the stopped hub lingers as a zombie
       (should (drgnx-hub-test--wait (lambda () (not (drgnx-hub-running-p))) 5)))))
 
+(ert-deftest drgnx-hub/an-agent-hanging-up-never-kills-the-hub ()
+  ;; the editing Emacs starts the hub without ignoring SIGPIPE: a write to a connection the agent closed must not
+  ;; end the hub (exit 141)
+  (drgnx-hub-test--with
+    (with-temp-file (concat root "or.eld")
+      (prin1 '((:path "/api/v1/messages" :chunks ((0 . "data: {}\n\n") (0.2 . "data: {}\n\n") (0.2 . "data: {}\n\n") (0.2 . "data: {}\n\n")
+                                                  (0.2 . "data: {}\n\n") (0.2 . "data: {}\n\n") (0.2 . "data: {}\n\n"))))
+             (current-buffer)))
+    (delete-process mock) (setq mock (drgnx-ai-test-mock-llm or-port (concat root "or.eld") or-log))
+    (should (= 0 (call-process "sh" nil nil nil "-c" "trap - PIPE; exec \"$0\" \"$@\""
+                               (expand-file-name invocation-name invocation-directory) "--batch" "-Q"
+                               "-L" (expand-file-name "core" drgnx-dir) "-l" "drgnx-hub"
+                               "--eval" "(kill-emacs (if (drgnx-hub-ensure) 0 1))")))
+    (let* ((r (drgnx-hub-call-sync "gateway/register" (list :chain [["openrouter" nil]] :keys '(:openrouter "sk-k"))))
+           (port (string-to-number (car (last (split-string (plist-get r :url) ":"))))))
+      (dotimes (_ 3)                                                   ; three agents hang up mid-answer
+        (let ((got "") (c (open-network-stream "agent" nil "127.0.0.1" port :coding 'binary)))
+          (set-process-filter c (lambda (_p s) (setq got (concat got s))))
+          (process-send-string c (format "POST /v1/messages HTTP/1.1\r\nAuthorization: Bearer %s\r\nContent-Length: 2\r\n\r\n{}"
+                                         (plist-get r :token)))
+          (drgnx-hub-test--wait (lambda () (string-search "data:" got)) 5)
+          (delete-process c)))
+      (sleep-for 2)
+      (should (drgnx-hub-running-p)))))
+
 (ert-deftest drgnx-hub/agents-keep-their-address-across-a-restart ()
   ;; a running agent keeps the URL it started with: a restarted hub's gateway must be there
   (drgnx-hub-test--with

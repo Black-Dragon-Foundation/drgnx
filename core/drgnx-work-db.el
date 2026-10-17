@@ -36,7 +36,7 @@
        "create index if not exists jtask_job on jtask(job)"
        "create table if not exists jdep (task text, dep text, primary key (task, dep))"
        "create table if not exists decision (n integer primary key, kind text, subject text, task text, paths text,
-        reason text, author text, status text, replaces integer, at real, ver integer)"
+        reason text, author text, status text, replaces integer, at real, ver integer, job text)"
        "create table if not exists message (id integer primary key, job text, sender text, recipient text, text text,
         state text, reason text, at real, delivered real, read real, acted real)"
        "create index if not exists message_to on message(recipient, state)"))

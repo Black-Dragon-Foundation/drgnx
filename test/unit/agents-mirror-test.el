@@ -67,6 +67,16 @@
         (drgnx-agents-kill m)
         (should (drgnx-agents-mirror-test--wait (lambda () (eq (drgnx-agent-session-status m) 'exited))))))))
 
+(ert-deftest drgnx-agents-mirror/when-the-hub-ends-its-mirrors-say-so ()
+  ;; a hub's sessions are its children: they end with it, and the editor must not show them working
+  (drgnx-agents-mirror-test--with
+    (let ((id (drgnx-agents-mirror-test--start)))
+      (drgnx-agents-mirror-sync)
+      (should (drgnx-agents-mirror-test--wait (lambda () (drgnx-agents-mirror-test--mirror id))))
+      (drgnx-hub-call-sync "shutdown" nil)
+      (should (drgnx-agents-mirror-test--wait (lambda () (eq (drgnx-agent-session-status (drgnx-agents-mirror-test--mirror id)) 'exited))))
+      (should (string-search "hub" (or (drgnx-agent-session-stderr (drgnx-agents-mirror-test--mirror id)) ""))))))
+
 (ert-deftest drgnx-agents-mirror/a-new-emacs-reattaches ()
   (drgnx-agents-mirror-test--with
     (let ((id (drgnx-agents-mirror-test--start)))

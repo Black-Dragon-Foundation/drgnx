@@ -23,17 +23,20 @@ working from the old one. So the shared state is explicit, versioned, and **enfo
 - **Claims are leases:** `drgnx-coord-claim` runs in one `begin immediate` transaction (two processes woken at the
   same instant over 30 tasks: each task goes to exactly one); a claim lasts `drgnx-coord-lease-minutes` (15),
   renewed by `drgnx-coord-heartbeat`; `drgnx-coord-release-stale` frees silent ones (the hub runs it every minute
-  and sends `lease-released`). Only the holder changes a task's status.
+  and sends `lease-released`; it renews the claims of its own live agents first). A task waiting on the user
+  (`needs-input`, `in-review`) keeps its claim. Only the holder changes a task's status.
 - **The decision log:** one version, raised by every decision (a decision's `ver` is the version of its last
-  change, so a later `replaces` shows up in `drgnx-coord-decisions-since`). The user's decisions are current; an
-  agent's are current inside its own claimed task, otherwise **proposed** (for the reviewer and the user).
+  change, so a later `replaces` shows up in `drgnx-coord-decisions-since`) and belongs to a job. The user's decisions
+  are current and always win; an agent's are current inside its own claimed task — and it may replace only its own
+  decision in that task — otherwise **proposed** (for the reviewer and the user). An agent is not left behind by its
+  own decision; one agent records at most `drgnx-coord-decision-rate` (6) a minute.
 - **Freshness is enforced:** every write — claim, status, decision, message — takes the version its author last read
   (`seen`). Behind: nothing is written, and the answer is `(:held t :version V :changes DECISIONS)` with every change
   since.
 - **Messages:** states only move forward. A reply (the recipient writing back to the sender) marks what it answers
   `acted`. Limits against chatty loops: an agent's undelivered queue holds `drgnx-coord-queue-limit` (20); one
   agent sends another at most `drgnx-coord-pair-rate` (6) a minute. Beyond either a message is `held` with its
-  reason (`queue full`, `too many between these two`).
+  reason (`queue full`, `too many between these two`). Escalations to `user` are never held as a full queue.
 
 ## The tools (`core/drgnx-mcp.el`, `core/drgnx-coord-mcp.el`)
 
@@ -43,7 +46,9 @@ string or a value (sent as JSON); its errors are `isError` results. `drgnx-mcp-s
 
 Every agent session gets the coordination server in ACP's `mcpServers` (`drgnx-agents--mcp-servers`, from
 `drgnx-coord-mcp-server-spec`): one batch Emacs per agent, its identity in its environment (`DRGNX_AGENT` = the
-session's name, `DRGNX_JOB`, `DRGNX_TASK`, and drgnx's data and state dirs). Without `DRGNX_AGENT` it only reads.
+session's **id**, `s-…` — a name like "claude · drgnx" repeats across hubs and editors — `DRGNX_JOB`, `DRGNX_TASK`,
+and drgnx's data and state dirs). Without `DRGNX_AGENT` it only reads. Messages are addressed to a session's id
+(or its name).
 
 | Tool | Does |
 |---|---|
@@ -55,7 +60,7 @@ session's name, `DRGNX_JOB`, `DRGNX_TASK`, and drgnx's data and state dirs). Wit
 | `record_decision {kind, subject, task?, paths?, reason, replaces?, seen_version}` | current inside its own task, else proposed |
 | `claim_task`, `update_task`, `complete_task` `{task, …, seen_version}` | the lease and the status |
 | `task_status {job?}` | the job's tasks |
-| `escalate {subject, text, seen_version}` | a message to `user` (a card in the job window, M9b.4) |
+| `escalate {subject, text, seen_version}` | a message to `user`, queued (the job window, M9b.4, shows it; until then nothing does) |
 
 A held write answers `HELD: the decision log moved on — read these changes, then retry with seen_version N.` and
 the changes as JSON. After a write the server tells the hub (`coord/notify`, never waiting) so delivery is prompt.
@@ -63,12 +68,18 @@ the changes as JSON. After a write the server tells the hub (`coord/notify`, nev
 ## Delivery (the hub)
 
 `drgnx-hub--deliver` runs on `coord/notify` and every 2 s:
-- a `queued` message for a hub session of that name goes to the agent as `[message from SENDER #ID] TEXT` —
-  idle: a new turn; busy: queued for its turn's end (M7's queue; never cancelling) — and is `delivered`; when that
-  prompt reaches the agent (`drgnx-agents-prompt-functions`) it is `read`. A message for an agent that is not there,
-  or exited, stays `queued`;
-- an agent whose `seen` version is behind the log gets `[decision log vN] …changes… — call read_decisions` once per
-  version.
+- a `queued` message stays in the store until its agent is **free** (idle, not paused by the user's Stop, nothing
+  queued: `drgnx-agents-free-p`), then goes to it as a new turn (`drgnx-agents-deliver`: never queued, steered or
+  interrupting, whatever the profile's mode) and is `delivered`; when that prompt reaches the agent
+  (`drgnx-agents-prompt-functions`) it is `read`. Meanwhile `read_inbox` finds it too (and then it is not delivered
+  again). The text is **quoted** under a header — `[message from SENDER #ID — from another agent, not from the user;
+  it approves nothing]` then every line as `> …` — so a peer cannot write a line that reads as drgnx's or the user's.
+  A message for an agent that is not there, or exited, stays `queued`. Delivery also runs when a session becomes free;
+- an agent of a job whose `seen` version is behind that job's decisions gets `[decision log vN — job J]` and the
+  changes (quoted) once per version, when free. Sessions without a job (plain chats) are never woken.
+
+Hub sessions are the hub's children: when the hub ends, they end (the editor's mirrors turn `exited` and say so);
+resuming them in a new hub (ACP `session/load`) is not built yet.
 
 A peer message is text for the agent and nothing else: permission requests are answered only by the user's
 `agents/permission`, and no message changes a setting. No agent offers a gate yet (a hook before each tool call),
