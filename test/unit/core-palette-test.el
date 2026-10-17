@@ -70,3 +70,22 @@
                (lambda (_prompt _table &optional _pred _req init &rest _) (setq initial init) "")))
       (drgnx-palette-preferences))
     (should (equal initial "Preferences: "))))
+
+;; From the old UI list ("palette prefix legend", "? palette mode erroring on empty input"): gryphn's palette had
+;; seven prefix modes and a `?' legend of them, whose Enter on an empty box was a Lisp error.  drgnx's palette
+;; has one prefix, `#', and says so in its prompt; anything else it cannot resolve is a plain user error.
+(ert-deftest drgnx-palette/the-prompt-names-the-prefix ()
+  (let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
+        (drgnx-commands-problems nil) prompt)
+    (cl-letf (((symbol-function 'completing-read) (lambda (p &rest _) (setq prompt p) "")))
+      (drgnx-palette))
+    (should (string-match-p "#" prompt))))
+
+(ert-deftest drgnx-palette/a-question-mark-is-no-command-never-a-lisp-error ()
+  (dolist (styles (append '((basic)) (and (locate-library "orderless") '((orderless basic)))))
+    (dolist (typed '("?" "? "))
+      (let ((err (condition-case e (drgnx-test--palette-with-search typed styles) (error e))))
+        (should (eq (car err) 'user-error))
+        (should (string-match-p "No command: \\?" (cadr err)))))
+    ;; the legend's own empty case: nothing typed, nothing happens, no error
+    (should-not (nth 2 (drgnx-test--palette-with-search "" styles)))))

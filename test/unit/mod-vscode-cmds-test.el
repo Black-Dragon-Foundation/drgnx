@@ -134,3 +134,27 @@
     (should (eq (plist-get spec :stage) 'idle))))
 
 ;;; mod-vscode-cmds-test.el ends here
+
+;; From the old UI list ("unbounded closed-files list"): the list behind Reopen Closed Tab keeps the newest 30,
+;; each file once.
+(ert-deftest drgnx-vsc/the-closed-files-list-is-bounded ()
+  (let ((drgnx-basics--closed nil) (files nil))
+    (unwind-protect
+        (progn
+          (dotimes (i 45)
+            (let ((f (make-temp-file (format "drgnx-closed%d-" i))))
+              (push f files)
+              (with-current-buffer (find-file-noselect f)
+                (drgnx-basics--note-closed)
+                (kill-buffer))))
+          (should (= (length drgnx-basics--closed) 30))
+          (should (equal (car drgnx-basics--closed) (car files)))   ; newest first
+          ;; closing a file again moves it to the front, not a second entry
+          (let ((again (nth 5 drgnx-basics--closed)))
+            (with-current-buffer (find-file-noselect again)
+              (drgnx-basics--note-closed)
+              (kill-buffer))
+            (should (equal (car drgnx-basics--closed) again))
+            (should (= (length drgnx-basics--closed) 30))
+            (should (= 1 (seq-count (lambda (f) (equal f again)) drgnx-basics--closed)))))
+      (mapc #'delete-file files))))
