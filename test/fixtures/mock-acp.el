@@ -20,6 +20,7 @@
 ;; Usage comes as a usage_update (:used :size 1000) at the end of each turn (claude-agent-acp's shape).
 ;; MOCK_ACP_NO_LOAD / MOCK_ACP_NO_STEER turn off session/load and steering; MOCK_ACP_STEER_FAILS
 ;; answers steering with an error; MOCK_ACP_LATE_CANCEL=SECS answers a cancel that late ("end_turn").
+;; MOCK_ACP_RATE_LIMIT answers every prompt with error 429 (a provider at its limit).
 (require 'cl-lib)
 (require 'subr-x)
 
@@ -129,6 +130,9 @@
     (setf (alist-get sid mock--tokens 0 nil #'equal) (+ (alist-get sid mock--tokens 0 nil #'equal) (length text)))
     (mock--update sid (list :sessionUpdate "user_message_chunk" :content (list :type "text" :text text)) )
     (cond
+     ((getenv "MOCK_ACP_RATE_LIMIT")
+      (setf (alist-get sid mock--turns nil 'remove #'equal) nil)
+      (mock--error id 429 "rate limit exceeded (429): try again later"))
      ;; crash-once: the first agent in this directory crashes, the next one works
      ((and (string-match-p "crash-once" text) (not (file-exists-p ".mock-crashed")))
       (write-region "" nil ".mock-crashed" nil 'silent)

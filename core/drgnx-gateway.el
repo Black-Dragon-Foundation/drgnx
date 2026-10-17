@@ -50,6 +50,11 @@ its token (shown once: only its hash is kept)."
     (puthash (drgnx-gateway--hash token) registration drgnx-gateway--registrations)
     token))
 
+(defun drgnx-gateway-set-budget (job budget)
+  "Every registration of JOB gets BUDGET (USD)."
+  (maphash (lambda (k reg) (when (equal (plist-get reg :job) job) (puthash k (plist-put reg :budget budget) drgnx-gateway--registrations)))
+           drgnx-gateway--registrations))
+
 (defun drgnx-gateway-unregister (token)
   (remhash (drgnx-gateway--hash token) drgnx-gateway--registrations))
 

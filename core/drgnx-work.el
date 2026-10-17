@@ -57,18 +57,19 @@ later, newest first (`drgnx-work--log').  None when FROM is unknown, or TO does 
 (defun drgnx-work-task-begin (task dir)
   "Start recording for TASK the commits made in DIR's repository from now on: the state."
   (list :task task :dir dir :head (drgnx-work--head dir) :repo (drgnx-work--main-repo dir)
+        :tree (drgnx-work--git dir "rev-parse" "--show-toplevel")
         :since (float-time) :busy nil :overlap nil))
 
 (defun drgnx-work-task-collect (state &optional since overlap)
   "Record the commits made since STATE last looked (committed at SINCE or later, default when it
 began); the SHAs recorded (none twice).  OVERLAP: another task session was busy in the same
-repository meanwhile — whose commits they are is unknown, so none is recorded (`drgnx work record')."
+checkout meanwhile — whose commits they are is unknown, so none is recorded (`drgnx work record')."
   (let* ((dir (plist-get state :dir)) (head (drgnx-work--head dir)) (task (plist-get state :task))
          (new (drgnx-work--new-commits dir (plist-get state :head) head (or since (plist-get state :since)))))
     (plist-put state :head head)
     (cond ((null new) nil)
           (overlap (message "drgnx work: %d commit(s) not recorded for %s: another task session worked in %s too (drgnx work record)"
-                            (length new) task (plist-get state :repo))
+                            (length new) task (plist-get state :tree))
                    nil)
           ((> (length new) drgnx-work-collect-max)
            (message "drgnx work: %d new commits after one turn of %s: not recorded (drgnx work record)" (length new) task)
@@ -92,10 +93,10 @@ on a timer, never inside the process filter that saw the turn end."
       ('turn-start
        (when st
          (plist-put st :since (float-time)) (plist-put st :busy t)
-         (dolist (o drgnx-work--tasks)                 ; two task sessions at work in one repository
+         (dolist (o drgnx-work--tasks)                 ; two task sessions at work in one checkout
            (when (and (not (eq (car o) s)) (plist-get (cdr o) :busy)
                       (not (eq (drgnx-agent-session-status (car o)) 'exited))
-                      (equal (plist-get (cdr o) :repo) (plist-get st :repo)))
+                      (equal (plist-get (cdr o) :tree) (plist-get st :tree)))
              (plist-put (cdr o) :overlap t) (plist-put st :overlap t)))))
       ('turn-end
        (when st

@@ -135,6 +135,10 @@ agents.eld (config dir) and the built-in ones; never holds secrets (keys come fr
 first non-nil answer is used — (:result R), (:error E) or `:deferred'; nil lets the session's own handling run.
 Jobs answer routine requests by a policy here (drgnx-job.el).")
 
+(defvar drgnx-agents-error-functions nil
+  "Functions called with (SESSION ERROR) when a turn ends in an error (ERROR the agent's (:code :message)): jobs move
+a task whose provider failed to the next profile (drgnx-job.el).  Called in the process filter: only schedule work.")
+
 (defun drgnx-agents--on-request (s method params id)
   (or (run-hook-with-args-until-success 'drgnx-agents-request-functions s method params id)
       (drgnx-agents--on-request-1 s method params id)))
@@ -410,6 +414,7 @@ turn Stop's deadline ended lets the held messages go."
       (unless (drgnx-acp-live-p (drgnx-agent-session-conn s))   ; the agent died: the queue waits
         (setf (drgnx-agent-session-status s) 'exited
               (drgnx-agent-session-stderr s) (drgnx-acp-conn-stderr (drgnx-agent-session-conn s))))
+      (when (cdr r) (with-demoted-errors "drgnx agents: %S" (run-hook-with-args 'drgnx-agents-error-functions s (cdr r))))
       (drgnx-agents--changed s)
       (drgnx-agents--next s)))))
 

@@ -17,6 +17,7 @@
 (require 'subr-x)
 (require 'drgnx-coord)
 (require 'drgnx-agents)
+(require 'drgnx-gateway)
 
 (defvar drgnx-job-routes nil
   "Alist ROLE (a symbol: implement, test, review, docs) → agent profile name (or a list: fallbacks in order).  Read
@@ -189,20 +190,21 @@ own repository).  Returns its id; nothing starts (unless `drgnx-job-auto-start')
 
 (defun drgnx-job--session (sid) (and sid (drgnx-agents-get sid)))
 
-(defun drgnx-job--start-task (id task)
-  "Give TASK (a store plist) of job ID an agent in its own worktree."
+(defun drgnx-job--start-task (id task &optional profile handover)
+  "Give TASK (a store plist) of job ID an agent (PROFILE, default its role's first) in its own worktree; HANDOVER:
+what the agent before it left (`drgnx-job--fall-back')."
   (let* ((n (plist-get task :n)) (tree (drgnx-job--task-tree id n)) (repo (drgnx-job--repo id)))
     (unless (file-directory-p tree)
       (or (eql 0 (car (drgnx-job--git repo "worktree" "add" "-q" "-b" (format "job/%s-%d" id n) tree (concat "job/" id))))
           (eql 0 (car (drgnx-job--git repo "worktree" "add" "-q" tree (format "job/%s-%d" id n))))   ; its branch from before
           (error "No worktree for %s" (plist-get task :id))))
-    (let* ((profile (car (drgnx-job-route (intern (or (plist-get task :role) "implement")))))
+    (let* ((profile (or profile (car (drgnx-job-route (intern (or (plist-get task :role) "implement"))))))
            (s (drgnx-agents-start profile tree (plist-get task :id) id))
            (body (plist-get (seq-find (lambda (x) (= (plist-get x :n) n)) (plist-get (plist-get (drgnx-coord-job id) :data) :tasks)) :body)))
       (drgnx-coord-force-status (plist-get task :id) "claimed" (drgnx-agent-session-id s))
       (puthash (drgnx-agent-session-id s)
-               (format "[drgnx task %s] %s\n\n%s\n\n%sWork only in this directory (a git worktree of your own). Commit your work. Then call complete_task."
-                       (plist-get task :id) (plist-get task :title) (or body "")
+               (format "[drgnx task %s] %s\n\n%s\n\n%s%sWork only in this directory (a git worktree of your own). Commit your work. Then call complete_task."
+                       (plist-get task :id) (plist-get task :title) (or body "") (or handover "")
                        (if-let* ((notes (alist-get (plist-get task :id) (plist-get (plist-get (drgnx-coord-job id) :data) :notes) nil nil #'equal)))
                            (format "The reviewer asked for changes:\n%s\n\n" (drgnx-job--quote notes))
                          ""))
@@ -244,7 +246,7 @@ job on."
     (let* ((sid (drgnx-agent-session-id s)) (prompt (gethash sid drgnx-job--prompts))
            (reviewer (gethash sid drgnx-job--reviewers)))
       (cond
-       ((and prompt (drgnx-agents-free-p s))
+       ((and prompt (drgnx-agents-free-p s) (equal (plist-get (drgnx-coord-job job) :status) "running"))
         (remhash sid drgnx-job--prompts)
         (drgnx-agents-deliver s prompt)
         (if reviewer (puthash sid t drgnx-job--reviewing)
@@ -326,6 +328,73 @@ goes to the user."
         (drgnx-job--git tree "merge" "--abort")
         (drgnx-job--card id (plist-get task :id) "merge-conflict"
                          (format "merging into job/%s conflicts in: %s" id (string-join (split-string files "\n" t) ", "))))))))
+
+;;;; The budget, a failing provider
+
+(defun drgnx-job-budget (id) "Job ID's budget in USD, or nil." (and id (plist-get (plist-get (drgnx-coord-job id) :data) :budget)))
+
+(defun drgnx-job--gateway-event (event data)
+  "`drgnx-gateway-event-functions': a running job whose budget is spent pauses — its agents stop, the user decides."
+  (when-let* (((eq event 'budget)) (id (plist-get data :job))
+              ((equal (plist-get (drgnx-coord-job id) :status) "running")))
+    (drgnx-coord-job-set id :status "paused")
+    (dolist (s (drgnx-agents-sessions))
+      (when (and (equal (drgnx-agent-session-job s) id) (eq (drgnx-agent-session-status s) 'busy))
+        (drgnx-agents-stop s)))
+    (drgnx-job--card id nil "budget" (format "spent %s of %s USD: paused" (plist-get data :spent) (plist-get data :budget)))))
+
+(cl-defun drgnx-job-resume (id &key budget)
+  "Go on with paused job ID — with BUDGET USD for the whole job, if given: its stopped agents continue."
+  (let ((job (drgnx-coord-job id)))
+    (unless (equal (plist-get job :status) "paused") (user-error "Job %s is %s, not paused" id (plist-get job :status)))
+    (when budget
+      (drgnx-coord-job-set id :data (plist-put (plist-get job :data) :budget budget))
+      (drgnx-gateway-set-budget id budget))
+    (drgnx-coord-job-set id :status "running")
+    (dolist (s (drgnx-agents-sessions))
+      (when (and (equal (drgnx-agent-session-job s) id) (eq (drgnx-agent-session-status s) 'idle) (drgnx-agent-session-paused s))
+        (setf (drgnx-agent-session-paused s) nil)
+        (drgnx-agents-deliver s "The job goes on: continue where you stopped.")))
+    (drgnx-job-step id)
+    id))
+
+(defconst drgnx-job--provider-limit "\\_<429\\_>\\|rate.?limit\\|overloaded\\|quota\\|too many requests"
+  "What a provider at its limit says (case ignored).")
+
+(defun drgnx-job--agent-error (s err)
+  "`drgnx-agents-error-functions': the task of a job agent whose provider is at its limit goes to the next profile."
+  (when (and (drgnx-agent-session-job s) (not (gethash (drgnx-agent-session-id s) drgnx-job--reviewers))
+             (or (eql (plist-get err :code) 429)
+                 (let ((case-fold-search t)) (string-match-p drgnx-job--provider-limit (format "%s" (plist-get err :message))))))
+    (let ((job (drgnx-agent-session-job s)))
+      (run-at-time 0 nil (lambda () (with-demoted-errors "drgnx job: %S" (drgnx-job--fall-back job s err)))))))
+
+(defun drgnx-job--handover (id s)
+  "What agent S of job ID leaves its successor: its last commit and its last words."
+  (let* ((commit (cdr (drgnx-job--git (drgnx-agent-session-cwd s) "log" "-1" "--format=%h %s" (format "job/%s..HEAD" id))))
+         (said (mapconcat (lambda (e) (or (plist-get e :text) ""))
+                          (seq-filter (lambda (e) (eq (plist-get e :type) 'agent)) (drgnx-agent-session-entries s)) ""))
+         (said (substring said (max 0 (- (length said) 2000)))))
+    (format "You are continuing this task: an agent began it here and stopped (its provider failed).  Its last commit: %s.%s\n\n"
+            (if (string-empty-p commit) "none" commit)
+            (if (string-empty-p (string-trim said)) "" (format "  Its last words:\n%s" (drgnx-job--quote said))))))
+
+(defun drgnx-job--fall-back (id s err)
+  "Agent S's provider failed (ERR): its task goes to the next profile on its role's route, in the same worktree; with
+none left, to the user."
+  (let* ((task (drgnx-coord-task (drgnx-agent-session-task s)))
+         (from (drgnx-agent-session-profile s))
+         (to (cadr (member from (drgnx-job-route (intern (or (plist-get task :role) "implement"))))))
+         (why (format "%s" (plist-get err :message))))
+    (when (and (equal (plist-get (drgnx-coord-job id) :status) "running")
+               (equal (plist-get task :agent) (drgnx-agent-session-id s)))
+      (if (not to)
+          (drgnx-job--card id (plist-get task :id) "fallback" (format "%s failed (%s); no other profile on the route" from why))
+        (drgnx-job--start-task id task to (drgnx-job--handover id s))   ; claims the task before S goes
+        (drgnx-agents-kill s)
+        (when (fboundp 'drgnx-hub--broadcast)
+          (drgnx-hub--broadcast 'fallback (list :job id :task (plist-get task :id) :agent (drgnx-agent-session-name s)
+                                                :from from :to to :why why)))))))
 
 ;;;; Autonomy: the permission policy per role, writes in the worktree
 

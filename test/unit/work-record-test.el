@@ -172,6 +172,25 @@
       (drgnx-work-rec--pump)
       (should (equal (drgnx-work-rec--titles "task:/p.md#11") '("a's work"))))))
 
+(ert-deftest drgnx-work/job-agents-in-their-own-worktrees-are-recorded ()
+  ;; a job's agents work in worktrees of one repository at once: each worktree has its own HEAD, so each turn's
+  ;; commits are its task's (only two sessions in one worktree cannot be told apart)
+  (drgnx-work-rec--with repo
+    (let* ((w1 (concat repo ".claude/worktrees/w1/")) (w2 (concat repo ".claude/worktrees/w2/")))
+      (drgnx-work-rec--git repo "worktree" "add" "-q" "-b" "b1" w1)
+      (drgnx-work-rec--git repo "worktree" "add" "-q" "-b" "b2" w2)
+      (let ((a (drgnx-work-rec--session "task:/p.md#21" w1)) (b (drgnx-work-rec--session "task:/p.md#22" w2)))
+        (dolist (s (list a b)) (drgnx-work--agent-task s 'start))
+        (drgnx-work--agent-task a 'turn-start)
+        (drgnx-work--agent-task b 'turn-start)
+        (drgnx-work-rec--commit w1 "a in w1")
+        (drgnx-work-rec--commit w2 "b in w2")
+        (drgnx-work--agent-task a 'turn-end)
+        (drgnx-work--agent-task b 'turn-end)
+        (drgnx-work-rec--pump)
+        (should (equal (drgnx-work-rec--titles "task:/p.md#21") '("a in w1")))
+        (should (equal (drgnx-work-rec--titles "task:/p.md#22") '("b in w2")))))))
+
 (ert-deftest drgnx-work/two-task-sessions-busy-in-one-repository-record-nothing-by-themselves ()
   (drgnx-work-rec--with repo
     (let ((a (drgnx-work-rec--session "task:/p.md#12" repo)) (b (drgnx-work-rec--session "task:/p.md#13" repo)))

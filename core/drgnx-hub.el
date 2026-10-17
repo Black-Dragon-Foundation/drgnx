@@ -199,7 +199,7 @@ KEY…)), keys held in memory.  (:token :url)."
   (let ((token (drgnx-gateway-register (list :job (plist-get params :job) :task (plist-get params :task)
                                              :agent (plist-get params :agent)
                                              :chain (drgnx-hub--chain (append (plist-get params :chain) nil))
-                                             :budget (plist-get params :budget)))))
+                                             :budget (or (plist-get params :budget) (drgnx-job-budget (plist-get params :job)))))))
     (drgnx-hub--save-registrations)
     (list :token token :url (format "http://127.0.0.1:%d" (drgnx-gateway-port)))))
 
@@ -372,6 +372,8 @@ Signals an error when a hub already serves there."
   (add-hook 'drgnx-agents-prompt-functions #'drgnx-hub--prompted)
   (add-hook 'drgnx-agents-changed-functions #'drgnx-job--session-changed)
   (add-hook 'drgnx-agents-request-functions #'drgnx-job--request)
+  (add-hook 'drgnx-agents-error-functions #'drgnx-job--agent-error)
+  (add-hook 'drgnx-gateway-event-functions #'drgnx-job--gateway-event)
   (setq drgnx-hub--tick-timer (run-at-time 2 2 #'drgnx-hub--tick))
   (setq drgnx-hub--started (format-time-string "%FT%T%z")
         drgnx-hub--server
@@ -395,6 +397,8 @@ Signals an error when a hub already serves there."
   (remove-hook 'drgnx-agents-prompt-functions #'drgnx-hub--prompted)
   (remove-hook 'drgnx-agents-changed-functions #'drgnx-job--session-changed)
   (remove-hook 'drgnx-agents-request-functions #'drgnx-job--request)
+  (remove-hook 'drgnx-agents-error-functions #'drgnx-job--agent-error)
+  (remove-hook 'drgnx-gateway-event-functions #'drgnx-job--gateway-event)
   (when (timerp drgnx-hub--tick-timer) (cancel-timer drgnx-hub--tick-timer))
   (setq drgnx-hub--tick-timer nil)
   (clrhash drgnx-hub--told)
