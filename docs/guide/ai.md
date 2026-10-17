@@ -43,6 +43,29 @@ same in `.drgnx/ai.eld` at its root, and wins:
 | `chat` | chat (gptel), Ask the Codebase | as `edit` |
 | `embed` | semantic search | TEI |
 
+## Ghost text and Tab
+
+In code buffers (module `tools/ai`), a short pause (0.3 s) asks the `complete` role to fill in the middle: the model
+sees up to 2,000 characters before point and 1,000 after. Its answer shows after point, dimmed (face
+`drgnx-ai-ghost`, from your theme's `shadow`). It shows only if nothing changed and point did not move since the
+question. Anything else you do clears it and drops the question in flight.
+
+| Key | While a suggestion shows | Otherwise |
+|---|---|---|
+| `Tab` | accept it all | see below |
+| `C-<right>` | accept its next word | the usual (`right-word`) |
+| `Escape` | dismiss it | the usual |
+
+**Accept Suggestion Line** and **Toggle AI Completion** are in the palette. With no `complete` provider running,
+nothing is asked, and drgnx says so once.
+
+**Tab is one key for everything.** It does the first of these that applies:
+1. accept the suggestion;
+2. the completion popup's own Tab (corfu, company, built-in completion);
+3. the next snippet field (yasnippet, tempel);
+4. cycle an org or outline heading;
+5. indent.
+
 ## Detection, fallback and the doctor
 
 drgnx asks the local providers whether they run — every address at once, one second each, in the background,

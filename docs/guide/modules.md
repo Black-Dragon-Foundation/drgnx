@@ -97,6 +97,7 @@ key profile ([keys.md](keys.md)); faces inherit theme faces (no colours). See [c
 | `tools/search` | startup | Quick Open (project files), Search in Project (results in the panel), Go to Symbol (file, project), Find in File, Replace in Project, Recent Buffers (consult when installed) |
 | `tools/agents` | startup | Show Agents (the right dock's Agents tab: sessions and durable jobs), New Agent Session, Send to Agent (queued while it works), Stop Agent, Take Over Agent Session, Answer Agent, edit review hunk by hunk, Show Job Log, Stop Job ([agents.md](agents.md)) |
 | `tools/work` | startup | Show Work (the right dock's Work tab: specs › plans › tasks › steps, TODOs, commits, branches), Show Work as Graph (svg.el; click a box to open it), Start Agent on Task, Open Plan's Worktree ([work.md](work.md)) |
+| `tools/ai` | startup | ghost-text completion in code buffers (the `complete` role), one Tab for suggestion / popup / snippet / heading / indent, Accept Suggestion (word, line), Toggle AI Completion ([ai.md](ai.md)) |
 | `org/org` | startup | Capture `C-c c`, Agenda `C-c a` |
 | `extra/jump` | idle | Jump to Text (needs avy) |
 | `extra/mc` | idle | Add Next Occurrence, Select All Occurrences — a cursor on each match (needs multiple-cursors) |
