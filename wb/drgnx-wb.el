@@ -42,8 +42,9 @@ follower is not a jank-guard violation (invariant I9).")
     name))
 
 (defun drgnx-wb-define-section (name &rest spec)
-  "Define dock section NAME: SPEC is (:slot N :title STRING :buffer FUNCTION-RETURNING-A-BUFFER
-:height FRACTION-OF-THE-DOCK :on-show FUNCTION-OF-THE-WINDOW)."
+  "Define dock section NAME: SPEC is (:slot N :title STRING-OR-FUNCTION-RETURNING-ONE
+:buffer FUNCTION-RETURNING-A-BUFFER :height FRACTION-OF-THE-DOCK :on-show FUNCTION-OF-THE-WINDOW).
+A function title is asked each time the dock shows (a panel's filter stays in its title)."
   (setf (alist-get name drgnx-wb--sections) spec)
   name)
 
@@ -69,7 +70,9 @@ follower is not a jank-guard violation (invariant I9).")
            ,@(when (plist-get spec :height) `((window-height . ,(plist-get spec :height))))
            (dedicated . t)
            (window-parameters . ((drgnx-role . dock) (drgnx-section . ,name) (no-delete-other-windows . t)
-                                 (no-other-window . t) (header-line-format . ,(plist-get spec :title)))))))
+                                 (no-other-window . t)
+                                 (header-line-format . ,(let ((title (plist-get spec :title)))
+                                                          (if (functionp title) (funcall title) title))))))))
       (when-let* ((px (frame-parameter nil 'drgnx-wb-dock-px)) (w (car (drgnx-wb--dock-windows))))
         (let ((window-resize-pixelwise t))              ; or the width is rounded to whole columns
           (ignore-errors (window-resize w (- px (window-pixel-width w)) t nil t))))

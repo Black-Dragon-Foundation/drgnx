@@ -233,8 +233,11 @@ While a button is held in the panel, wait for the release: rows never move under
   (setq drgnx-buffers--filter (and text (not (string-empty-p text)) text))
   (drgnx-buffers--refresh)
   (when-let* ((w (drgnx-wb-section-window 'buffers)))
-    (set-window-parameter w 'header-line-format
-                          (if drgnx-buffers--filter (format " BUFFERS — %s" drgnx-buffers--filter) drgnx-buffers--title))))
+    (set-window-parameter w 'header-line-format (drgnx-buffers--current-title))))
+
+(defun drgnx-buffers--current-title ()
+  "The panel's title: the filter while one is on, else the title with its buttons."
+  (if drgnx-buffers--filter (format " BUFFERS — %s" drgnx-buffers--filter) drgnx-buffers--title))
 
 (defun drgnx-buffers-filter-clear () "Show every buffer again." (interactive) (drgnx-buffers--filter-apply nil))
 
@@ -312,7 +315,8 @@ While a button is held in the panel, wait for the release: rows never move under
 
 (defun drgnx-buffers-setup ()
   "Put the Buffers panel in the dock (above the Explorer) and keep it current."
-  (drgnx-wb-define-section 'buffers :slot -1 :title drgnx-buffers--title :height 0.3 :buffer #'drgnx-buffers--buffer)
+  (drgnx-wb-define-section 'buffers :slot -1 :title #'drgnx-buffers--current-title :height 0.3
+                           :buffer #'drgnx-buffers--buffer)
   (drgnx-signal-subscribe 'buffer-set-changed #'drgnx-buffers--refresh)
   (drgnx-signal-subscribe 'modified-changed #'drgnx-buffers--refresh)
   (drgnx-signal-subscribe 'editor-changed #'drgnx-buffers--mark-active)

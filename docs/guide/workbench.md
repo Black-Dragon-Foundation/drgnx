@@ -239,8 +239,10 @@ file nesting, icons (an icon theme is a module, M4), problems decorations (with 
   dock is side windows with a pixel width kept across hide/show, no scroll bars, and titles in the
   `header-line-format` *window parameter*, where no mode can erase them. Showing the dock never takes focus; files
   chosen in it go to the most recently used editor window, never splitting it. Sections are registered with
-  `drgnx-wb-define-section` (slot, title, height, buffer, `:on-show`). The dock's buffers are internal (` *drgnx
-  explorer*`, ` *drgnx buffers*`, ` *drgnx outline*` — a leading space), so `C-x b` and ibuffer never list them.
+  `drgnx-wb-define-section` (slot, title, height, buffer, `:on-show`); a title may be a function, asked each time
+  the dock shows, so a panel's Find or filter stays in its title across hide/show. The dock's buffers are internal
+  (` *drgnx explorer*`, ` *drgnx buffers*`, ` *drgnx outline*` — a leading space), so `C-x b` and ibuffer never
+  list them.
 - **Owned windows.** Code running from a timer or a follower may move only windows that show its own buffer, and
   says so with `drgnx-wb-with-owned-windows`; the harness's jank guard records any other window move made from a
   timer (invariant I9).
