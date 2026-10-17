@@ -207,6 +207,9 @@ MONITORS: how many virtual monitors of SIZE (default 1)."
                 (concat "XDG_RUNTIME_DIR=" (drgnx-ui-runtime-dir))
                 (concat "DRGNX_UI_SOCKET_DIR=" (directory-file-name (file-name-directory (plist-get sess :socket))))
                 (concat "EMACS_SOCKET_NAME=" (plist-get sess :socket))
+                ;; no language server per fixture project (12 pyrights in one scenario run); a test that wants
+                ;; one sets this to "" in its session
+                "DRGNX_NO_LANGUAGE_SERVERS=1"
                 ;; drgnx's own config and state stay in the run dir: a session never reads the
                 ;; user's ~/.config/drgnx or writes ~/.local/state (XDG_CACHE_HOME stays: font and
                 ;; shader caches would be rebuilt on every start).

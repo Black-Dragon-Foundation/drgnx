@@ -65,6 +65,8 @@ Unix socket paths are limited to ~108 bytes; the hash keeps two state roots (say
 - Your drgnx files are never touched: a session gets its own `DRGNX_CONFIG_DIR` (`RUN/drgnx-config`) and
   `XDG_STATE_HOME` (`RUN/state`), so it neither reads `~/.config/drgnx` (keys.eld, …) nor writes
   `~/.local/state` (the key report). `XDG_CACHE_HOME` is kept: font and shader caches would be rebuilt every start.
+- No language servers: `DRGNX_NO_LANGUAGE_SERVERS=1`, so a scenario's fixture projects do not each start one (a run
+  once had 12 pyrights); a test that needs a server sets it to "" in its session.
 - Deterministic look: no startup screen, no blinking cursor, no bell, no dialog boxes.
 - Safety: treemacs drag-to-move is off.
 - Its own server, started (with the harness agent) by the generated `init.el` *before* the configuration's

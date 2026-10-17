@@ -30,6 +30,7 @@
   "LANGUAGE MODE TS-MODE: MODE becomes TS-MODE when LANGUAGE's grammar is installed.")
 
 (defvar eglot-sync-connect)
+(defvar eglot-autoshutdown)
 
 (defun drgnx-lang-remap-modes ()
   "Use the tree-sitter mode of every language whose grammar is installed."
@@ -59,8 +60,11 @@
             eglot-server-programs))
 
 (defun drgnx-lang--maybe-eglot ()
-  "In a file's code buffer: start eglot when the server is installed (never asks)."
-  (when (and buffer-file-name (not (file-remote-p buffer-file-name)) (drgnx-lang-server-available-p))
+  "In a file's code buffer: start eglot when the server is installed (never asks) — unless DRGNX_NO_LANGUAGE_SERVERS
+is set non-empty (headless test sessions)."
+  (when (and buffer-file-name (not (file-remote-p buffer-file-name))
+             (member (getenv "DRGNX_NO_LANGUAGE_SERVERS") '(nil ""))
+             (drgnx-lang-server-available-p))
     (eglot-ensure)))
 
 (defun drgnx-lang-rename ()
@@ -96,7 +100,8 @@
                        (drgnx-lang-remap-modes)
                        (add-hook 'prog-mode-hook #'drgnx-lang--maybe-eglot)
                        (setq xref-prompt-for-identifier nil
-                             eglot-sync-connect nil)                ; a slow server never blocks opening the file
+                             eglot-sync-connect nil                 ; a slow server never blocks opening the file
+                             eglot-autoshutdown t)                  ; a server goes with its project's last buffer
                        (pcase-dolist (`(,id ,title ,fn ,doc)
                                       '((code-definition "Go to Definition" xref-find-definitions "Jump to where the symbol is defined")
                                         (code-references "Find References" xref-find-references "Every use of the symbol (in the panel)")
