@@ -43,6 +43,20 @@ same in `.drgnx/ai.eld` at its root, and wins:
 | `chat` | chat (gptel), Ask the Codebase | as `edit` |
 | `embed` | semantic search | TEI |
 
+## Detection, fallback and the doctor
+
+drgnx asks the local providers whether they run — every address at once, one second each, in the background,
+never holding up Emacs — and remembers which answered and which models they have. Something answering on TEI's
+port is taken for TEI only when its `/info` says so (LocalAI can answer there too).
+
+A request walks its role's chain: a provider without its key or the capability (chat, fill in the middle) is
+skipped; no answer, an error status (429, 5xx …) or an answer that does not parse moves on to the next. The feature
+hears which provider answered, or every reason none did — so with OpenRouter unreachable, a local runner answers.
+
+`drgnx doctor` checks `ai`: which providers were found (a key is looked for in the environment only — the doctor
+never opens auth-source), and whether the GPU has room for the completion model next to what already holds it
+(TEI, say): a 1.5B model at 4 bits needs about 1.6 GB.
+
 ## Keys
 
 drgnx reads a key when a feature needs it, from where you already keep it: the provider's environment variable

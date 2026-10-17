@@ -36,7 +36,8 @@
              (len (if (string-match "^Content-Length: *\\([0-9]+\\)" req) (string-to-number (match-string 1 req)) 0)))
         (when (>= (- (length req) head-end) len)
           (process-put proc :req nil)
-          (mock-llm--answer proc (decode-coding-string req 'utf-8)))))))
+          ;; -unix: keep the CRLFs (the body starts after the first blank line)
+          (mock-llm--answer proc (decode-coding-string req 'utf-8-unix)))))))
 
 (defun mock-llm-serve ()
   (setq mock-llm--script (with-temp-buffer (insert-file-contents (getenv "MOCK_LLM_SCRIPT")) (read (current-buffer))))

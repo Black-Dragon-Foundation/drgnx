@@ -95,7 +95,7 @@
   (drgnx-ai-test--with root
     (let* ((port (+ 20000 (random 20000))) (log (concat root "llm.log")) (script (concat root "llm.eld")))
       (drgnx-ai-test--write script '((:path "/v1/chat/completions" :status 200
-                                       :body "{\"choices\":[{\"message\":{\"content\":\"hello\"}}]}")))
+                                            :body "{\"choices\":[{\"message\":{\"content\":\"hello\"}}]}")))
       (let ((p (drgnx-ai-test-mock-llm port script log)))
         (unwind-protect
             (let ((out (with-temp-buffer

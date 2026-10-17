@@ -56,6 +56,17 @@ DEV non-nil: only run for `drgnx doctor --dev' (tools for developing drgnx)."
     (require 'drgnx-work-db)
     (when (file-exists-p (drgnx-work-db-file)) (length (drgnx-work-nodes 'plan)))))
 
+(declare-function drgnx-ai-detected-cached "drgnx-ai-probe")
+(declare-function drgnx-ai-model-vram "drgnx-ai-probe")
+(declare-function drgnx-ai-vram "drgnx-ai-probe")
+(declare-function drgnx-ai-role "drgnx-ai")
+
+(defun drgnx-doctor--ai-up ()
+  "The providers the last probe found running."
+  (ignore-errors
+    (require 'drgnx-ai-probe)
+    (mapcar #'car (seq-filter (lambda (e) (plist-get (cdr e) :up)) (drgnx-ai-detected-cached)))))
+
 (defun drgnx-doctor-facts ()
   "Facts about the running Emacs and this machine."
   (let ((native (and (fboundp 'native-comp-available-p) (native-comp-available-p))))
@@ -78,7 +89,12 @@ DEV non-nil: only run for `drgnx doctor --dev' (tools for developing drgnx)."
                       (error (list :error (error-message-string err))))
           :sqlite (and (fboundp 'sqlite-available-p) (sqlite-available-p))
           :svg (image-type-available-p 'svg)
-          :work-plans (drgnx-doctor--work-plans))))
+          :work-plans (drgnx-doctor--work-plans)
+          :ai-up (drgnx-doctor--ai-up)
+          ;; whether a key is set, from the environment only: the doctor never opens auth-source (it may prompt)
+          :ai-keys (let ((k (getenv "OPENROUTER_API_KEY"))) (and k (not (string-empty-p k)) '(openrouter)))
+          :ai-complete (ignore-errors (require 'drgnx-ai) (cdr (car (drgnx-ai-role 'complete))))
+          :vram (ignore-errors (require 'drgnx-ai-probe) (drgnx-ai-vram)))))
 
 (defun drgnx-doctor--state-file (name)
   "The .eld file NAME the last drgnx session wrote in the state dir, read, or nil."
@@ -176,6 +192,21 @@ DEV non-nil: only run for `drgnx doctor --dev' (tools for developing drgnx)."
                                       (failed (list 'warn (format "steps that failed: %s" (mapconcat (lambda (e) (symbol-name (car e))) failed " "))
                                                     "run them again from Help → Welcome, or drgnx onboard --step ID"))
                                       (t (list 'ok (format "%d steps done" (length s)) nil))))))
+
+(drgnx-doctor-define 'ai :group "drgnx" :doc "AI providers (local runners, OpenRouter) and room on the GPU for the completion model"
+                     :check (lambda (f)
+                              (let* ((v (plist-get f :vram)) (model (plist-get f :ai-complete))
+                                     (need (if model (progn (require 'drgnx-ai-probe) (drgnx-ai-model-vram model)) 0))
+                                     (free (and v (- (plist-get v :total) (plist-get v :used)))))
+                                (cond ((and (null (plist-get f :ai-up)) (null (plist-get f :ai-keys)))
+                                       (list 'info "no AI provider found yet"
+                                             "start a local runner (Ollama, LM Studio, llama.cpp …) or set OPENROUTER_API_KEY; then AI: Choose Provider/Model"))
+                                      ((and free (> need free))
+                                       (list 'warn (format "the completion model %s needs about %d MiB of GPU memory; %d MiB are free" model need free)
+                                             "choose a smaller completion model (AI: Choose Provider/Model), or stop what holds the GPU"))
+                                      (t (list 'ok (format "providers: %s%s" (mapconcat #'symbol-name (append (plist-get f :ai-up) (plist-get f :ai-keys)) ", ")
+                                                           (if free (format "; %d MiB GPU free" free) ""))
+                                               nil))))))
 
 (drgnx-doctor-define 'work :group "drgnx" :doc "The work tracker (SQLite in Emacs; SVG for its graph)"
                      :check (lambda (f)
