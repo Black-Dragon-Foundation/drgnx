@@ -21,6 +21,7 @@ DRGNX_REPO="${DRGNX_INSTALL_REPO:-https://github.com/Black-Dragon-Foundation/drg
 DOCS_URL=https://github.com/Black-Dragon-Foundation/drgnx/blob/main/docs/guide/install.md
 GNU_MIRROR="${DRGNX_INSTALL_MIRROR:-https://ftpmirror.gnu.org/emacs}"         # overridable for tests
 GNU_KEYRING="${DRGNX_INSTALL_KEYRING:-https://ftp.gnu.org/gnu/gnu-keyring.gpg}"
+EMACS_SIGNER="${DRGNX_INSTALL_SIGNER:-8DC2487E51ABDD90B5C4753F0F56D0553B6D411B}"   # who signs $EMACS_VERSION (docs/guide/install.md)
 APT_DIR="${DRGNX_INSTALL_APT_DIR:-/etc/apt}"
 
 say()  { printf '%s\n' "$*"; }
@@ -323,10 +324,17 @@ fetch_emacs_source() { # download, verify and unpack into $BUILD_DIR/emacs-VERSI
   download "$GNU_MIRROR/$src.tar.xz.sig" "$src.tar.xz.sig"
   download "$GNU_KEYRING" gnu-keyring.gpg
   rm -rf gnupg && mkdir -m 700 gnupg   # a private gpg home: the user's ~/.gnupg is neither needed nor touched
-  if ! gpg --homedir ./gnupg --batch --no-default-keyring --keyring "./gnu-keyring.gpg" \
-       --verify "$src.tar.xz.sig" "$src.tar.xz" 2>"$BUILD_DIR/gpg.log"; then
+  if ! gpg --homedir ./gnupg --batch --no-default-keyring --keyring "./gnu-keyring.gpg" --status-fd 3 \
+       --verify "$src.tar.xz.sig" "$src.tar.xz" 2>"$BUILD_DIR/gpg.log" 3>"$BUILD_DIR/gpg.status"; then
     rm -f "$src.tar.xz" "$src.tar.xz.sig"
     die 1 "the signature of $src.tar.xz does not verify — nothing was installed (details: $BUILD_DIR/gpg.log)"
+  fi
+  # Any key of the GNU keyring signs validly; the release's signer is pinned (VALIDSIG: the signing key's
+  # fingerprint, and last the primary key's).
+  if ! awk -v fp="$EMACS_SIGNER" '$1 == "[GNUPG:]" && $2 == "VALIDSIG" && ($3 == fp || $NF == fp) { ok = 1 }
+                                  END { exit !ok }' "$BUILD_DIR/gpg.status"; then
+    rm -f "$src.tar.xz" "$src.tar.xz.sig"
+    die 1 "$src.tar.xz has a good signature, but not by the key that signs Emacs releases ($EMACS_SIGNER) — nothing was installed (details: $BUILD_DIR/gpg.log)"
   fi
   grep -E 'Good signature' "$BUILD_DIR/gpg.log" | sed 's/^/  /' || true
   rm -rf "$src.partial"      # unpacked aside: an interrupted unpack is never taken for a verified tree

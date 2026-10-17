@@ -317,6 +317,54 @@ HOME is a new empty directory, deleted afterwards (ENV may name another)."
     (should (string-search (concat "→ " (directory-file-name drgnx-install-test--root)) (cdr r)))
     (should (string-search (concat "Link " (directory-file-name drgnx-install-test--root)) (cdr r)))))
 
+(defun drgnx-install-test--signed-mirror (tmp)
+  "TMP/mirror: an emacs-31.1.tar.xz signed by a throwaway key, its .sig and the key as keyring.  Returns
+the key's fingerprint."
+  (let ((gnupg (expand-file-name "g" tmp)) (mirror (expand-file-name "mirror" tmp))
+        (sh (lambda (&rest args) (should (= 0 (apply #'call-process "sh" nil nil nil "-c" args))))))
+    (dolist (d (list gnupg mirror (expand-file-name "src/emacs-31.1" tmp))) (make-directory d t))
+    (set-file-modes gnupg #o700)
+    (funcall sh (format "tar -C %s/src -cJf %s/emacs-31.1.tar.xz emacs-31.1" tmp mirror))
+    (funcall sh (format "gpg --homedir %s --batch --passphrase '' --quick-gen-key 'drgnx test <test@drgnx.invalid>' default default never 2>/dev/null" gnupg))
+    (funcall sh (format "gpg --homedir %s --batch --pinentry-mode loopback --passphrase '' --detach-sign -o %s/emacs-31.1.tar.xz.sig %s/emacs-31.1.tar.xz 2>/dev/null" gnupg mirror mirror))
+    (funcall sh (format "gpg --homedir %s --export >%s/keyring 2>/dev/null" gnupg mirror))
+    (prog1 (with-temp-buffer
+             (call-process "gpg" nil t nil "--homedir" gnupg "--batch" "--with-colons" "--list-keys")
+             (goto-char (point-min))
+             (re-search-forward "^fpr:+\\([0-9A-F]+\\):")
+             (match-string 1))
+      (call-process "gpgconf" nil nil nil "--homedir" gnupg "--kill" "all"))))
+
+(ert-deftest drgnx-install/only-the-release-key-is-trusted ()
+  ;; M2.5-5: a good signature by any key of the keyring is not enough — it must be the key that signs the
+  ;; release (DRGNX_INSTALL_SIGNER overrides the published one here).
+  (skip-unless (/= 0 (user-uid)))     ; as root, as_root runs commands without sudo: they would really run
+  (skip-unless (executable-find "gpg"))
+  (let* ((tmp (make-temp-file "drgnx-install" t))
+         (bin (expand-file-name "bin" tmp)) (prefix (expand-file-name "prefix" tmp)))
+    (unwind-protect
+        (let ((signer (drgnx-install-test--signed-mirror tmp)))
+          (make-directory bin)
+          (write-region "#!/bin/sh\necho \"FAKE-SUDO $*\"\nexit 1\n" nil (expand-file-name "sudo" bin))
+          (set-file-modes (expand-file-name "sudo" bin) #o755)
+          (dolist (want (list "0123456789ABCDEF0123456789ABCDEF01234567" signer))
+            (let ((r (drgnx-install-test--run
+                      (list (concat "DRGNX_INSTALL_OS_RELEASE=" (drgnx-install-test--os "fedora-44"))
+                            "DRGNX_INSTALL_UNAME=Linux" (concat "DRGNX_INSTALL_SIGNER=" want)
+                            (concat "DRGNX_INSTALL_MIRROR=file://" tmp "/mirror")
+                            (concat "DRGNX_INSTALL_KEYRING=file://" tmp "/mirror/keyring")
+                            (concat "XDG_CACHE_HOME=" tmp "/cache")
+                            (concat "PATH=" bin ":" (getenv "PATH")))
+                      "--yes" "--method" "source" "--prefix" prefix "--source-dir" drgnx-install-test--root)))
+              (should (= (car r) 1))
+              (if (equal want signer)          ; past the check: the first root step (fake sudo refuses it)
+                  (should (string-search "FAKE-SUDO dnf install" (cdr r)))
+                (should (string-search "not by the key that signs Emacs releases" (cdr r)))
+                (should (string-search "nothing was installed" (cdr r)))
+                (should-not (string-search "As root:" (cdr r)))
+                (should-not (directory-files (expand-file-name "cache/drgnx/build" tmp) nil "\\.tar\\.xz"))))))
+      (delete-directory tmp t))))
+
 (ert-deftest drgnx-install/debian-source-lists-are-mirrored-and-always-removed ()
   ;; Linux Mint keeps its archives in a one-line .list; build-dep needs deb-src for them.  When a step
   ;; fails, drgnx's deb-src list is removed anyway.  A tarball signed by a throwaway key gets past the
@@ -324,15 +372,13 @@ HOME is a new empty directory, deleted afterwards (ENV may name another)."
   (skip-unless (/= 0 (user-uid)))
   (skip-unless (executable-find "gpg"))
   (let* ((tmp (make-temp-file "drgnx-install" t))
-         (gnupg (expand-file-name "g" tmp)) (mirror (expand-file-name "mirror" tmp))
+         (mirror (expand-file-name "mirror" tmp))
          (apt (expand-file-name "apt" tmp)) (bin (expand-file-name "bin" tmp))
-         (log (expand-file-name "apt-get.log" tmp))
-         (sh (lambda (&rest args) (should (= 0 (apply #'call-process "sh" nil nil nil "-c" args))))))
+         (log (expand-file-name "apt-get.log" tmp)))
     (unwind-protect
-        (progn
-          (dolist (d (list gnupg mirror bin (expand-file-name "src/emacs-31.1" tmp) (expand-file-name "sources.list.d" apt)))
+        (let ((signer (drgnx-install-test--signed-mirror tmp)))
+          (dolist (d (list bin (expand-file-name "sources.list.d" apt)))
             (make-directory d t))
-          (set-file-modes gnupg #o700)
           (write-region "" nil (expand-file-name "sources.list" apt))
           (write-region "deb http://packages.linuxmint.com zena main upstream\ndeb http://archive.ubuntu.com/ubuntu noble main\n"
                         nil (expand-file-name "sources.list.d/official-package-repositories.list" apt))
@@ -341,13 +387,9 @@ HOME is a new empty directory, deleted afterwards (ENV may name another)."
                                 log apt log)
                         nil (expand-file-name "apt-get" bin))
           (dolist (f '("sudo" "apt-get")) (set-file-modes (expand-file-name f bin) #o755))
-          (funcall sh (format "tar -C %s/src -cJf %s/emacs-31.1.tar.xz emacs-31.1" tmp mirror))
-          (funcall sh (format "gpg --homedir %s --batch --passphrase '' --quick-gen-key 'drgnx test <test@drgnx.invalid>' default default never 2>/dev/null" gnupg))
-          (funcall sh (format "gpg --homedir %s --batch --pinentry-mode loopback --passphrase '' --detach-sign -o %s/emacs-31.1.tar.xz.sig %s/emacs-31.1.tar.xz 2>/dev/null" gnupg mirror mirror))
-          (funcall sh (format "gpg --homedir %s --export >%s/keyring 2>/dev/null; gpgconf --homedir %s --kill all" gnupg mirror gnupg))
           (let ((r (drgnx-install-test--run
                     (list (concat "DRGNX_INSTALL_OS_RELEASE=" (drgnx-install-test--os "linuxmint"))
-                          "DRGNX_INSTALL_UNAME=Linux"
+                          "DRGNX_INSTALL_UNAME=Linux" (concat "DRGNX_INSTALL_SIGNER=" signer)
                           (concat "DRGNX_INSTALL_MIRROR=file://" mirror)
                           (concat "DRGNX_INSTALL_KEYRING=file://" mirror "/keyring")
                           (concat "DRGNX_INSTALL_APT_DIR=" apt)
