@@ -50,8 +50,7 @@ manual install and uninstall: [docs/guide/install.md](docs/guide/install.md). Ch
 - **Done:** the test harness for agents, the installer and `drgnx doctor`, VS Code / Emacs / Vim key profiles,
   the workbench (Explorer, Buffers, docks, panel, editor groups, several windows, layout that survives restarts),
   modules, reproducible packages with rollback, onboarding, AI agents with queued input and edit review, the perf
-  lab, the work tracker.
-- **Next:** AI completion and inline edits with any model (local runners first), built-in semantic search.
+  lab, the work tracker, AI completion and inline edits with any model (local runners first), built-in semantic search.
 - **Later:** editor amenities to match VS Code and Zed (tree-sitter, language servers, formatting, debugging,
   multi-cursor, git gutter, a settings and shortcuts editor), platforms (tiling window managers, macOS, terminal
   frames, a Vim-style modal module), then the public launch.
