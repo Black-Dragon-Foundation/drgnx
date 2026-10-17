@@ -244,9 +244,12 @@ Returns the process."
   (if (process-live-p drgnx-work-ui--scan) drgnx-work-ui--scan
     (let ((process-environment (append (list (concat "DRGNX_EMACS=" (expand-file-name invocation-name invocation-directory)))
                                        (and drgnx-work-git-notes (list "DRGNX_WORK_GIT_NOTES=1"))   ; the scan collects jobs
-                                       process-environment)))
+                                       process-environment))
+          (default-directory drgnx-dir)                 ; the current one may be gone
+          (out (get-buffer-create " *drgnx work scan*")))
+      (with-current-buffer out (erase-buffer))          ; only this scan's output is reported
       (setq drgnx-work-ui--scan
-            (make-process :name "drgnx-work-scan" :buffer (get-buffer-create " *drgnx work scan*") :noquery t
+            (make-process :name "drgnx-work-scan" :buffer out :noquery t
                           :connection-type 'pipe
                           :command (append (list (expand-file-name "bin/drgnx" drgnx-dir) "work" "scan"
                                                  "--board" (drgnx-projects-board-file))
@@ -255,7 +258,9 @@ Returns the process."
                                       (unless (process-live-p p)
                                         (if (eql 0 (process-exit-status p)) (drgnx-work-ui--redraw)
                                           (message "Work: the scan failed: %s"
-                                                   (with-current-buffer (process-buffer p) (string-trim (buffer-string))))))))))))
+                                                   (if (buffer-live-p (process-buffer p))
+                                                       (with-current-buffer (process-buffer p) (string-trim (buffer-string)))
+                                                     (format "exit %s" (process-exit-status p))))))))))))
 
 (defun drgnx-work-ui--agent-turn (_s event)
   (when (eq event 'turn-end) (drgnx-work-ui--redraw)))

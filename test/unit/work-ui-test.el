@@ -264,6 +264,31 @@ git repository ROOT/code), a lone plan, and the tracker's database in a temp dat
           (accept-process-output nil 0.2))
         (should (string-search "Plan Gamma" (buffer-string)))))))
 
+(ert-deftest drgnx-work-ui/a-failed-scan-says-only-its-own-output-and-never-errors ()
+  ;; a stub bin/drgnx that fails; started from a deleted directory; its buffer holds an earlier scan's
+  ;; output; the buffer killed before the sentinel runs again
+  (let* ((dir (file-name-as-directory (make-temp-file "drgnx-work-ui-stub" t)))
+         (gone (make-temp-file "drgnx-work-ui-gone" t))
+         (drgnx-dir dir) (drgnx-work-ui--scan nil) (said nil))
+    (unwind-protect
+        (progn
+          (make-directory (concat dir "bin"))
+          (write-region "#!/bin/sh\necho this-scan-failed\nexit 1\n" nil (concat dir "bin/drgnx") nil 'silent)
+          (set-file-modes (concat dir "bin/drgnx") #o755)
+          (with-current-buffer (get-buffer-create " *drgnx work scan*") (insert "an-earlier-scan\n"))
+          (delete-directory gone)
+          (cl-letf (((symbol-function 'message) (lambda (fmt &rest args) (push (apply #'format fmt args) said))))
+            (let* ((default-directory (file-name-as-directory gone))
+                   (p (drgnx-work-ui-refresh)))
+              (should (processp p))
+              (let ((d (+ (float-time) 30))) (while (and (process-live-p p) (< (float-time) d)) (accept-process-output p 0.1)))
+              (accept-process-output nil 0.1)
+              (should (equal said '("Work: the scan failed: this-scan-failed")))
+              (kill-buffer (process-buffer p))
+              (funcall (process-sentinel p) p "exited abnormally with code 1\n"))))   ; no error
+      (when (get-buffer " *drgnx work scan*") (kill-buffer " *drgnx work scan*"))
+      (delete-directory dir t))))
+
 (ert-deftest drgnx-work-ui/an-agent-started-on-a-task-works-on-it ()
   (drgnx-work-ui-test--with root
     (let ((started nil))
