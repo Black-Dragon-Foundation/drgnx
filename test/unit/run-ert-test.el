@@ -110,3 +110,21 @@
       (file-notify-rm-watch w)
       (drgnx-run-ert-drain-events)
       (delete-directory dir t))))
+
+(ert-deftest drgnx-run-ert/a-shard-runs-only-its-files-and-results-say-file-and-time ()
+  ;; bin/drgnx check runs the unit suite in shards: the runner takes files as well as a directory
+  (let* ((tmp (file-name-as-directory (make-temp-file "drgnx-shard" t))) (results (expand-file-name "r.json" tmp)))
+    (unwind-protect
+        (progn
+          (with-temp-file (concat tmp "one-test.el") (insert "(require 'ert)\n(ert-deftest shard-one () (should t))\n"))
+          (with-temp-file (concat tmp "two-test.el") (insert "(require 'ert)\n(ert-deftest shard-two () (should t))\n"))
+          (should (eql 0 (let ((process-environment (cons (concat "DRGNX_TEST_RESULTS=" results) process-environment)))
+                           (call-process (expand-file-name invocation-name invocation-directory) nil nil nil
+                                         "--batch" "-Q" "-L" (file-name-directory (locate-library "run-ert.el"))
+                                         "-l" (locate-library "run-ert.el") "-f" "drgnx-run-ert-batch"
+                                         (concat tmp "one-test.el")))))
+          (let ((tests (plist-get (drgnx-run-ert-test--json results) :tests)))
+            (should (equal (mapcar (lambda (te) (plist-get te :name)) tests) '("shard-one")))
+            (should (equal (file-name-nondirectory (plist-get (aref tests 0) :file)) "one-test.el"))
+            (should (numberp (plist-get (aref tests 0) :seconds)))))
+      (delete-directory tmp t))))

@@ -242,6 +242,17 @@ MONITORS: how many virtual monitors of SIZE (default 1)."
       (cl-incf n))
     (format "drgnx-ui-%d" n)))
 
+(defun drgnx-ui-claim-run (config size root &optional daemon monitors)
+  "Prepare a session's run in ROOT under the first free name.  Several processes may start sessions at
+once (bin/drgnx check): a name another took between the choice and the claim — its run directory exists,
+so `drgnx-ui-prepare-run' refuses it — moves on to the next one."
+  (let (sess (tries 0))
+    (while (not sess)
+      (condition-case err
+          (setq sess (drgnx-ui-prepare-run (drgnx-ui-next-name root) config size root daemon monitors))
+        (file-already-exists (when (> (cl-incf tries) 50) (signal (car err) (cdr err))))))
+    sess))
+
 (defun drgnx-ui-journal-tail (name)
   "The session's last log lines, without systemd's own (very long) start/stop lines."
   (mapconcat #'identity
@@ -322,7 +333,7 @@ DAEMON non-nil: run Emacs as a daemon; open frames with `drgnx-ui-new-frame'.  M
 many virtual monitors (default 1)."
   (let* ((root (drgnx-ui-state-root))
          (_ (make-directory root t))
-         (sess (drgnx-ui-prepare-run (drgnx-ui-next-name root) config size root daemon monitors))
+         (sess (drgnx-ui-claim-run config size root daemon monitors))
          (name (plist-get sess :name))
          (run (plist-get sess :run))
          (launcher (drgnx-ui-launcher)))

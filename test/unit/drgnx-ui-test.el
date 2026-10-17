@@ -269,3 +269,14 @@
            (argv (drgnx-ui-compositor-argv s)))
       (should (= 2 (seq-count (lambda (a) (equal a "--virtual-monitor")) argv)))
       (should (= 2 (plist-get (drgnx-ui--parse-json (with-temp-buffer (insert-file-contents (expand-file-name "session.json" (plist-get s :run))) (buffer-string))) :monitors))))))
+
+(ert-deftest drgnx-ui/two-sessions-starting-at-once-take-different-names ()
+  ;; bin/drgnx check starts sessions from several processes: a name taken between the choice and the claim
+  ;; moves on to the next one, never a failed start
+  (drgnx-ui-test--with-state
+    (let ((orig (symbol-function 'drgnx-ui-next-name)) (first t))
+      (cl-letf (((symbol-function 'drgnx-ui-next-name)
+                 (lambda (r) (if first (progn (setq first nil) (make-directory (expand-file-name "drgnx-ui-1" r)) "drgnx-ui-1")
+                               (funcall orig r)))))
+        (let ((s (drgnx-ui-claim-run nil "1600x900" root)))
+          (should (equal (plist-get s :name) "drgnx-ui-2")))))))

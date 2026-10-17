@@ -16,12 +16,18 @@ watches): while one waits in the input queue, Emacs runs no process sentinel —
 their processes end.  The runner calls this after every test."
   (dotimes (_ 2) (read-event nil nil 0.002)))     ; 0 reads nothing: the event must be fetched first
 
+(defun drgnx-run-ert--files (where)
+  "The test files WHERE names: every *-test.el under a directory, or a list of files (a shard)."
+  (if (and (stringp where) (file-directory-p where))
+      (directory-files-recursively (expand-file-name where) "-test\\.el\\'")
+    (mapcar #'expand-file-name (if (listp where) where (list where)))))
+
 (defun drgnx-run-ert (dir &optional results-file)
-  "Load every *-test.el under DIR, run all tests, write a JSON summary to RESULTS-FILE.
-Return t if every test passed."
+  "Load every *-test.el under DIR (or the files of the list DIR: a shard), run all tests, write a JSON
+summary to RESULTS-FILE.  Return t if every test passed."
   (advice-add 'ert-run-test :after (lambda (&rest _) (drgnx-run-ert-drain-events)) '((name . drgnx-run-ert-drain)))
   (let* ((load-failures
-          (cl-loop for file in (directory-files-recursively (expand-file-name dir) "-test\\.el\\'")
+          (cl-loop for file in (drgnx-run-ert--files dir)
                    for err = (condition-case err (progn (load file nil t) nil) (error err))
                    when err collect (list :name (concat "load " (file-name-nondirectory file))
                                           :condition (format "%S" err))))
@@ -39,7 +45,10 @@ Return t if every test passed."
                  :result (cond ((ert-test-passed-p result) "passed")
                                ((ert-test-skipped-p result) "skipped")
                                (t "failed"))
-                 :expected (if expected t :false))
+                 :expected (if expected t :false)
+                 ;; where and how long: bin/drgnx check balances its shards with them
+                 :file (or (ert-test-file-name test) :null)
+                 :seconds (or (ignore-errors (ert-test-result-duration result)) 0))
            tests)
      (cond
       ((not expected)
@@ -79,11 +88,13 @@ Return t if every test passed."
 (defvar project-list-file)
 
 (defun drgnx-run-ert-batch ()
-  "Batch entry point: run the suite in the first remaining argument, exit 0 or 1."
+  "Batch entry point: run the suite in the remaining arguments — a directory, or test files (a shard) —
+exit 0 or 1."
   ;; Absolute paths before HOME changes: "~/…" would then mean the temp home.
   (setq default-directory (expand-file-name default-directory)
         load-path (mapcar (lambda (d) (if (stringp d) (expand-file-name d) d)) load-path))
-  (let* ((dir (expand-file-name (pop command-line-args-left)))
+  (let* ((args (prog1 (mapcar #'expand-file-name command-line-args-left) (setq command-line-args-left nil)))
+         (dir (if (and (= (length args) 1) (file-directory-p (car args))) (car args) args))
          ;; The suite never sees the user's drgnx config, packages, state or cache.
          (tmp (make-temp-file "drgnx-unit" t))
          ;; …nor anything else under ~ (HOME is a temp dir; the user's ELPA stays readable for the
