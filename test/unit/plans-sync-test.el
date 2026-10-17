@@ -87,4 +87,20 @@
         (should (eql (plist-get r :todos) 200))
         (should (equal (plist-get r :capped) '("alpha")))))))
 
+;; a TODO refiled under a project resolves against that project's root — not the nearest :PROJECT_ROOT: above it
+;; (a sibling sub-project's), and a project without one gives its TODOs none (not the previous project's)
+(ert-deftest drgnx-plans/a-todo-takes-the-root-of-the-project-it-is-under ()
+  (drgnx-plans-test--with root
+    (let* ((alpha (drgnx-plans-test--repo root)) (plan (concat alpha "docs/plans/p.md")) (elsewhere (concat root "ws/beta/"))
+           (todo (lambda (text) (format "** DONE %s\n:PROPERTIES:\n:PLAN_FILE: docs/plans/p.md\n:PLAN_TEXT: %s\n:END:\n" text text))))
+      (make-directory (concat elsewhere "docs/plans") t)
+      (make-directory (file-name-directory (drgnx-projects-board-file)) t)
+      (write-region (concat "* alpha\n:PROPERTIES:\n:PROJECT_ROOT: " alpha "\n:END:\n"
+                            "** sub-project\n:PROPERTIES:\n:PROJECT_ROOT: " elsewhere "\n:END:\n"
+                            (funcall todo "**Step 1: test first**")
+                            "* no root\n" (funcall todo "Step 2: code"))
+                    nil (drgnx-projects-board-file) nil 'silent)
+      (should (equal (drgnx-projects-sync-plans) '(:ticked 1 :done 0)))
+      (should (equal (drgnx-plans-test--read plan) "### Task 1\n- [x] **Step 1: test first**\n- [ ] Step 2: code\n")))))
+
 ;;; plans-sync-test.el ends here

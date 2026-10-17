@@ -171,6 +171,23 @@ its encoding and line endings, its modes, through its symlink."
       (forward-line 1)
       (if (re-search-forward (format "^\\*\\{1,%d\\} " level) nil t) (line-beginning-position) (point-max)))))
 
+(defun drgnx-projects-heading-root (pos)
+  "The :PROJECT_ROOT: of the board heading at POS, or of its nearest ancestor heading that has one (in
+the current buffer), or nil — the project a TODO is under, wherever it was refiled."
+  (save-excursion
+    (goto-char pos)
+    (beginning-of-line)
+    (let (root)
+      (while (and (not root) (looking-at "\\(\\*+\\) "))
+        (let ((level (length (match-string 1)))
+              (end (save-excursion (forward-line 1) (if (re-search-forward "^\\*+ " nil t) (line-beginning-position) (point-max)))))
+          (save-excursion
+            (when (re-search-forward "^[ \t]*:PROJECT_ROOT:[ \t]*\\(.+?\\)[ \t]*$" end t) (setq root (match-string-no-properties 1))))
+          ;; up to the parent; none: stop
+          (unless (and (> level 1) (re-search-backward (format "^\\*\\{1,%d\\} " (1- level)) nil t))
+            (goto-char (point-max)))))
+      root)))
+
 (defun drgnx-projects--add-heading (name root url)
   (goto-char (point-max))
   (when (= (point-min) (point-max)) (insert "#+TITLE: Board\n\n"))
@@ -331,10 +348,7 @@ Returns (:ticked N :done N)."
                                                        (match-string 1)))))
                 (file (funcall prop "PLAN_FILE")) (text (funcall prop "PLAN_TEXT"))
                 (n (string-to-number (or (funcall prop "PLAN_N") "0")))
-                (root (save-excursion (goto-char hpos)
-                                      (let (r) (while (and (not r) (re-search-backward "^[ \t]*:PROJECT_ROOT:[ \t]*\\(.+?\\)[ \t]*$" nil t))
-                                                 (setq r (match-string 1)))
-                                           r))))
+                (root (drgnx-projects-heading-root hpos)))
            (when (and file text root)
              (let* ((path (expand-file-name file root))
                     (buf (let ((v (gethash path plans 'absent)))

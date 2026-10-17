@@ -20,6 +20,7 @@
 (require 'seq)
 (require 'subr-x)
 (require 'drgnx-work-db)
+(require 'drgnx-projects)                 ; the board's projects
 
 (defconst drgnx-work-scan-skip '(".git" "node_modules" "eln-cache" "elpa" "target" "dist" "build")
   "Directory names the scan never enters (dot directories are entered: ledgers live in .superpowers).")
@@ -172,15 +173,28 @@ its place: older commits have fewer ancestors (dates tie within a second) — on
       (cons (file-name-as-directory (drgnx-work--git dir "rev-parse" "--show-toplevel"))
             (drgnx-work--git dir "rev-parse" "--abbrev-ref" "HEAD")))))
 
-(defun drgnx-work--parse-ledger (file repos)
-  "Statuses, commits, rulings and the worktree/branch a ledger FILE gives its plan."
+(defun drgnx-work--ledger-plan (file roots)
+  "The plan file the ledger FILE names on its first line: absolute, or relative to ROOTS, the
+repositories under them, the ledger's directory or the nearest one holding docs/ (the first that
+exists) — never to the scanning process's directory.  Nil when it names none."
+  (let ((text (drgnx-work--text file)))
+    (when (string-match "\\`# SDD ledger — plan: \\(.+\\)$" text)
+      (let ((name (string-trim (match-string 1 text))))
+        (if (file-name-absolute-p name) (expand-file-name name)
+          (seq-find #'file-regular-p
+                    (mapcar (lambda (d) (expand-file-name name d))
+                            (append roots (drgnx-work--repos roots) (list (file-name-directory file))
+                                    (let ((top (locate-dominating-file file "docs"))) (and top (list top)))))))))))
+
+(defun drgnx-work--parse-ledger (file repos pf)
+  "Statuses, commits, rulings and the worktree/branch a ledger FILE gives its plan, the file PF
+(`drgnx-work--ledger-plan')."
   (let* ((text (drgnx-work--text file))
-         (plan-file (and (string-match "\\`# SDD ledger — plan: \\(.+\\)$" text) (string-trim (match-string 1 text))))
-         (plan (and plan-file (concat "plan:" (expand-file-name plan-file)))))
+         (plan (and pf (concat "plan:" pf))))
     (when (and plan (drgnx-work-node plan))
       ;; which plan it feeds: when the ledger goes (its worktree removed), the plan is read again
       (drgnx-work-put-edge file plan 'ledger-of 'parsed file)
-      (let ((pf (expand-file-name plan-file)) (n 0))
+      (let ((n 0))
         (dolist (line (split-string text "\n"))
           (setq n (1+ n))
           (cond
@@ -235,20 +249,21 @@ its place: older commits have fewer ancestors (dates tie within a second) — on
   (with-temp-buffer
     (insert-file-contents board)
     (goto-char (point-min))
-    (let (root)
-      (while (re-search-forward "^\\(\\*+\\) \\(?:\\(TODO\\|DONE\\|NEXT\\|WAIT\\|REVIEW\\) \\)?\\(.*\\)$" nil t)
-        (let* ((state (match-string 2)) (title (match-string 3)) (hpos (match-beginning 0)) (line (line-number-at-pos))
-               (end (save-excursion (forward-line 1) (if (re-search-forward "^\\*+ " nil t) (line-beginning-position) (point-max))))
-               (prop (lambda (name) (save-excursion (goto-char hpos)
-                                                    (when (re-search-forward (format "^[ \t]*:%s:[ \t]*\\(.+?\\)[ \t]*$" name) end t)
-                                                      (match-string 1))))))
-          (when-let* ((r (funcall prop "PROJECT_ROOT"))) (setq root r))
-          (when-let* ((pf (funcall prop "PLAN_FILE")))
-            (let ((plan (concat "plan:" (expand-file-name pf (or root default-directory)))))
-              (when (drgnx-work-node plan)
-                (drgnx-work-put-node (format "todo:%s#%s" board (or (funcall prop "ONBOARD_ID") line)) :kind 'todo
-                                     :title (string-trim title) :path board :line line
-                                     :status (if (equal state "DONE") "done" "open") :parent plan :ord line :source board)))))))))
+    (while (re-search-forward "^\\(\\*+\\) \\(?:\\(TODO\\|DONE\\|NEXT\\|WAIT\\|REVIEW\\) \\)?\\(.*\\)$" nil t)
+      (let* ((state (match-string 2)) (title (match-string 3)) (hpos (match-beginning 0)) (line (line-number-at-pos))
+             (end (save-excursion (forward-line 1) (if (re-search-forward "^\\*+ " nil t) (line-beginning-position) (point-max))))
+             (prop (lambda (name) (save-excursion (goto-char hpos)
+                                                  (when (re-search-forward (format "^[ \t]*:%s:[ \t]*\\(.+?\\)[ \t]*$" name) end t)
+                                                    (match-string 1))))))
+        (when-let* ((pf (funcall prop "PLAN_FILE"))
+                    ;; relative to the project the TODO is under (refiled or not); without one: none
+                    (path (if (file-name-absolute-p pf) (expand-file-name pf)
+                            (when-let* ((r (drgnx-projects-heading-root hpos))) (expand-file-name pf r)))))
+          (let ((plan (concat "plan:" path)))
+            (when (drgnx-work-node plan)
+              (drgnx-work-put-node (format "todo:%s#%s" board (or (funcall prop "ONBOARD_ID") line)) :kind 'todo
+                                   :title (string-trim title) :path board :line line
+                                   :status (if (equal state "DONE") "done" "open") :parent plan :ord line :source board))))))))
 
 ;;;; The scan
 
@@ -286,16 +301,14 @@ its place: older commits have fewer ancestors (dates tie within a second) — on
         (let ((f (plist-get s :path)))
           (when (and (member f changed) (not (member f specs)) (file-readable-p f))
             (drgnx-work-forget-source (drgnx-work--spec-source f)) (drgnx-work--parse-spec f))))
-      (let ((ledger-plan (mapcar (lambda (l) (cons l (and (string-match "\\`# SDD ledger — plan: \\(.+\\)$" (drgnx-work--text l))
-                                                          (expand-file-name (string-trim (match-string 1 (drgnx-work--text l)))))))
-                                 ledgers)))
+      (let ((ledger-plan (mapcar (lambda (l) (cons l (drgnx-work--ledger-plan l roots))) ledgers)))
         (dolist (p plans)
           (when (or (member p changed) (member p reread)
                     (seq-find (lambda (lp) (and (equal (cdr lp) p) (member (car lp) changed))) ledger-plan))
             (drgnx-work-forget-source p)
             (drgnx-work--parse-plan p roots)
             (dolist (lp ledger-plan)
-              (when (equal (cdr lp) p) (drgnx-work-forget-source (car lp)) (drgnx-work--parse-ledger (car lp) repos)))))
+              (when (equal (cdr lp) p) (drgnx-work-forget-source (car lp)) (drgnx-work--parse-ledger (car lp) repos p)))))
         (when (and board (file-readable-p board) (or (member board changed) (seq-intersection changed plans)))
           (drgnx-work-forget-source board)
           (drgnx-work--parse-board board))))

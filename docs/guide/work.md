@@ -14,13 +14,15 @@ down (not into `.git`, `node_modules`, `eln-cache`, `elpa`, `target`, `dist`, `b
 - **plans:** Markdown under a `plans/` directory inside the root, with `### Task N:` headings. Each task's `- [ ]` / `- [x]` lines
   are its steps; a task with every step ticked is done. A `**Spec:** \`path\`` line links the plan to its spec
   (resolved against the plan's directory, the roots, the repositories under them and the nearest `docs/`).
-- **ledgers:** `*.ledger.md` and `.superpowers/sdd/*/progress.md`, whose first line is `# SDD ledger — plan: PATH`.
+- **ledgers:** `*.ledger.md` and `.superpowers/sdd/*/progress.md`, whose first line is `# SDD ledger — plan: PATH`
+  (PATH absolute, or relative to a root, a repository under it or the ledger's directory).
   `Task N: complete (commits A..B …)` or `(commit SHA …)` marks the task done and links those commits
   (a range git cannot resolve marks the task *stale*); `Ruling:` lines become rulings under their task.
   A ledger inside a linked git worktree gives its plan that worktree and branch. A worktree's other files are
   copies of its repository's and are not read; when a worktree is removed its ledger goes with it and the plan is
   read again from what is left — keep a copy (`docs/plans/<plan>.ledger.md`) to keep that history.
-- **the board:** TODOs with a `:PLAN_FILE:` property (onboarding's import) appear under their plan.
+- **the board:** TODOs with a `:PLAN_FILE:` property (onboarding's import) appear under their plan; a relative path
+  is resolved against the `:PROJECT_ROOT:` of the project heading the TODO is under (none there: not shown).
 
 A plan is *merged* when all its tasks are done and its branch is in `main`/`master` (or gone). Only files that
 changed since the last scan are read again (a rescan of 30 files takes well under a second). Every scan also

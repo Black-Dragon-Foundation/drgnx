@@ -340,3 +340,21 @@ code/ with three commits, p's ledger naming the first two, a board TODO from p."
             (should-not (drgnx-work-node (concat "plan:" root "docs/specs/s.md"))))
         (drgnx-work-db-close-all)
         (delete-directory top t)))))
+
+(ert-deftest drgnx-work/a-ledger-naming-its-plan-relative-to-the-root-feeds-it ()
+  (drgnx-work-test--with root
+    (drgnx-work-test--write root "docs/plans/p.ledger.md" "# SDD ledger — plan: docs/plans/p.md\nTask 2: complete (tests: ok)\n")
+    (let ((default-directory temporary-file-directory)) (drgnx-work-test--scan root))   ; not the root
+    (should (equal (plist-get (drgnx-work-node (concat "task:" root "docs/plans/p.md#2")) :status) "done"))))
+
+(ert-deftest drgnx-work/a-board-todo-takes-the-root-of-the-project-it-is-under ()
+  (drgnx-work-test--with root
+    (let ((todo (lambda (id) (format "** TODO %s\n:PROPERTIES:\n:ONBOARD_ID: %s\n:PLAN_FILE: docs/plans/p.md\n:PLAN_TEXT: one\n:END:\n" id id))))
+      (drgnx-work-test--write root "org/board.org"
+                              (concat (format "* code\n:PROPERTIES:\n:PROJECT_ROOT: %s\n:END:\n" root)
+                                      (format "** a sub-project\n:PROPERTIES:\n:PROJECT_ROOT: %selsewhere/\n:END:\n" root)
+                                      (funcall todo "refiled")              ; under code, after the sub-project
+                                      "* no root\n" (funcall todo "rootless")))
+      (let ((default-directory root)) (drgnx-work-test--scan root))         ; the cwd is no root either
+      (should (equal (mapcar (lambda (n) (plist-get n :title)) (drgnx-work-test--kids (concat "plan:" root "docs/plans/p.md") 'todo))
+                     '("refiled"))))))
