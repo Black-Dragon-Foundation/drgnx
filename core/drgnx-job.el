@@ -372,7 +372,14 @@ review for the user.")
             (drgnx-agents-sessions)))
 
 (defun drgnx-job--start-review (id task)
-  "A reviewer for TASK of job ID, in the task's worktree (the review policy: reads only)."
+  "A reviewer for TASK of job ID, in the task's worktree (the review policy: reads only) — or, when the task added no
+commit to the job's branch, a card: there is nothing to review."
+  (if (equal (cdr (drgnx-job--git (drgnx-job--task-tree id (plist-get task :n)) "rev-list" "--count" (format "job/%s..HEAD" id))) "0")
+      (drgnx-job--card id (plist-get task :id) "review" "finished with no commits: nothing to review")
+    (drgnx-job--start-review-agent id task)))
+
+(defun drgnx-job--start-review-agent (id task)
+  "A reviewer agent for TASK of job ID."
   (let* ((s (drgnx-agents-start (car (drgnx-job-route 'review)) (drgnx-job--task-tree id (plist-get task :n)) (plist-get task :id) id))
          (sid (drgnx-agent-session-id s)))
     (puthash sid (plist-get task :id) drgnx-job--reviewers)

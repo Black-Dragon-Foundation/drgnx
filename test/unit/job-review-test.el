@@ -118,4 +118,18 @@
     (should (equal (funcall verdict "VERDICT: pass\nOn second thought, no.\nVERDICT: fail: broken") '(fail . "broken")))
     (should-not (funcall verdict "The format is VERDICT: pass or VERDICT: fail: why."))))
 
+(ert-deftest drgnx-job/complete-with-no-commits-is-a-card ()
+  ;; complete_task with nothing committed: no reviewer for an empty diff, the user decides
+  (drgnx-job-run-test--with "# One\n\n### Task 1: first\n"
+    (let* ((drgnx-job-max-agents 0) (id (drgnx-job-propose plan)) (tid (concat id "#1")))
+      (drgnx-job-approve id)
+      (drgnx-job--git repo "worktree" "add" "-q" "-b" (format "job/%s-1" id) (drgnx-job--task-tree id 1) (concat "job/" id))
+      (drgnx-coord-force-status tid "in-review" "s-gone")
+      (drgnx-job-step id)
+      (let ((card (car (seq-filter (lambda (c) (equal (plist-get c :kind) "review")) (drgnx-coord-cards id "open")))))
+        (should card)
+        (should (string-search "no commits" (plist-get card :title))))
+      (should (equal (drgnx-job-run-test--status id 1) "needs-input"))
+      (should-not (seq-find (lambda (s) (gethash (drgnx-agent-session-id s) drgnx-job--reviewers)) drgnx-agents--sessions)))))
+
 ;;; job-review-test.el ends here
