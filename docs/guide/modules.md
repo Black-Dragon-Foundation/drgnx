@@ -112,6 +112,7 @@ key profile ([keys.md](keys.md)); faces inherit theme faces (no colours). See [c
 | `tools/vc` | startup | Source Control (the project's changes), Diff with File, Blame — on Emacs' VC |
 | `tools/diff` | idle | the diff view: working tree, staged or branch vs base; split or unified, files folded, open the file at the line ([git.md](git.md)) |
 | `tools/replace` | idle | search and replace ([replace.md](replace.md)): the Search view in the sidebar and the find bar above an editor; text through ripgrep (else git grep or grep) in the background, symbols through the language server's rename; stale matches skipped, one Undo for every file |
+| `tools/layouts` | idle | layouts ([layouts.md](layouts.md)): Agent (the Explorer, the editor beside the current agent's chat, the Agents list), Editor, Zen (the text centred), Browser, and your own (Save Layout As…, in layouts.eld); Next Layout cycles them; switching back restores the arrangement you left |
 | `tools/commit-message` | idle | Git: Generate Commit Message — the staged diff through the `chat` role, never a trailer ([git.md](git.md)) |
 | `tools/review` | idle | Review Branch: the `review` route's agent reads this branch's diff; findings in the panel's Review tab ([git.md](git.md)) |
 | `tools/prs` | idle | the Pull Requests tab: stacks, forge's review view, Changes in the diff view, `#` in commit messages (needs forge) ([git.md](git.md)) |

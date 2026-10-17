@@ -470,7 +470,10 @@ Returns the buffer."
                      :setup
                      (lambda ()
                        (add-hook 'drgnx-agents-task-functions #'drgnx-work-ui--agent-turn 90)
-                       (when (fboundp 'drgnx-wb-define-tab) (drgnx-wb-define-tab 'right 'work :title "Work"))
+                       (when (fboundp 'drgnx-wb-define-tab)
+                         (drgnx-wb-define-tab 'right 'work :title "Work")
+                         ;; …and in the bottom panel, for the Agent layout (the same buffer)
+                         (drgnx-wb-define-tab 'panel 'work :title "Work" :placeholder #'drgnx-work-ui-buffer))
                        (when (fboundp 'drgnx-wb-place)
                          (drgnx-wb-place 'drgnx-work-mode 'right :tab 'work)
                          (drgnx-wb-place "\\`\\*\\(commit: \\|work graph\\*\\)" 'editor))

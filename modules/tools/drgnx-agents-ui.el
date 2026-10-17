@@ -35,6 +35,20 @@
 
 (defvar drgnx-agents-ui--jobs-cache nil "(TIME . JOBS): the list redraws often; jobs are read every 5 s at most.")
 
+(defvar drgnx-agents-ui--last (make-hash-table :test #'eq :weakness 'key)
+  "Session → the time (`float-time') it last changed, as this UI heard it (the list's Last column).")
+
+(defun drgnx-agents-ui-last-active (s)
+  "The time session S last changed (status, transcript, queue, what waits), or nil."
+  (gethash s drgnx-agents-ui--last))
+
+(defun drgnx-agents-ui--ago (secs)
+  "SECS as a short age: 30s, 5m, 2h, 3d."
+  (let ((secs (max 0 (floor secs))))
+    (cond ((< secs 60) (format "%ds" secs))
+          ((< secs 3600) (format "%dm" (/ secs 60)))
+          ((< secs 86400) (format "%dh" (/ secs 3600)))
+          (t (format "%dd" (/ secs 86400))))))
 
 (defvar drgnx-agents-list-mode-map
   (let ((m (make-sparse-keymap))) (set-keymap-parent m tabulated-list-mode-map) m)
@@ -42,7 +56,7 @@
 
 (define-derived-mode drgnx-agents-list-mode tabulated-list-mode "Agents"
   "Agent sessions and durable jobs: RET opens one."
-  (setq tabulated-list-format [("Name" 26 nil) ("Status" 9 nil) ("Ctx" 5 nil) ("Via" 8 nil) ("Waiting" 0 nil)])
+  (setq tabulated-list-format [("Name" 26 nil) ("Status" 9 nil) ("Last" 5 nil) ("Ctx" 5 nil) ("Via" 8 nil) ("Waiting" 0 nil)])
   (add-hook 'tabulated-list-revert-hook (lambda () (setq drgnx-agents-ui--jobs-cache nil)) nil t)   ; g reads jobs now
   (tabulated-list-init-header))
 
@@ -63,13 +77,14 @@
   (append
    (mapcar (lambda (s)
              (list s (vector (drgnx-agent-session-name s) (symbol-name (drgnx-agent-session-status s))
+                             (if-let* ((at (drgnx-agents-ui-last-active s))) (drgnx-agents-ui--ago (- (float-time) at)) "")
                              (if-let* ((p (drgnx-agents-context-percent s))) (format "%d%%" p) "")
                              (pcase (drgnx-agent-session-via s) ('gateway "gateway") ('direct "direct") (_ ""))
                              (drgnx-agents-ui--waiting s))))
            (drgnx-agents-sessions))
    (mapcar (lambda (j)
              (list (plist-get j :id)
-                   (vector (concat "job: " (plist-get j :name)) (symbol-name (plist-get j :status)) "" ""
+                   (vector (concat "job: " (plist-get j :name)) (symbol-name (plist-get j :status)) "" "" ""
                            (if (plist-get j :exit) (format "exit %s" (plist-get j :exit)) ""))))
            (drgnx-agents-ui--jobs))))
 
@@ -174,13 +189,18 @@
           (drgnx-agents-ui-render s)
           (goto-char (if at-end (point-max) (min pt (point-max)))))))))
 
-(defun drgnx-agents-ui-transcript (s)
-  "Show session S's transcript."
+(defun drgnx-agents-ui-transcript-buffer (s)
+  "Session S's transcript buffer, drawn (not shown)."
   (let ((b (drgnx-agents-ui--buffer s)))
     (with-current-buffer b
       (unless (derived-mode-p 'drgnx-agents-transcript-mode) (drgnx-agents-transcript-mode))
       (setq drgnx-agents-ui--session s))
     (drgnx-agents-ui-refresh s)
+    b))
+
+(defun drgnx-agents-ui-transcript (s)
+  "Show session S's transcript."
+  (let ((b (drgnx-agents-ui-transcript-buffer s)))
     (pop-to-buffer b)
     b))
 
@@ -188,7 +208,9 @@
 (defvar drgnx-agents-ui--timer nil)
 
 (defun drgnx-agents-ui--changed (s)
-  "A session changed: redraw its transcript and the list, at most every 0.1 s (from a timer)."
+  "A session changed: note when (the list's Last column); redraw its transcript and the list, at most
+every 0.1 s (from a timer)."
+  (puthash s (float-time) drgnx-agents-ui--last)
   (cl-pushnew s drgnx-agents-ui--dirty)
   (unless (timerp drgnx-agents-ui--timer)
     (setq drgnx-agents-ui--timer
@@ -375,7 +397,8 @@ the copy), then Done writes the copy to the file (Reject, or closing the diff, w
                        (run-with-idle-timer 3 nil #'drgnx-agents-ui--maybe-mirror)
                        ;; …and again later: a hub started (or restarted) since is picked up
                        (run-with-idle-timer 30 t #'drgnx-agents-ui--maybe-mirror)
-                       (when (fboundp 'drgnx-wb-define-tab) (drgnx-wb-define-tab 'right 'agents :title "Agents"))
+                       (when (fboundp 'drgnx-wb-define-tab)
+                         (drgnx-wb-define-tab 'right 'agents :title "Agents" :placeholder #'drgnx-agents-ui-list-buffer))
                        (when (fboundp 'drgnx-wb-place)
                          (drgnx-wb-place 'drgnx-agents-list-mode 'right :tab 'agents)
                          (drgnx-wb-place '(drgnx-agents-transcript-mode) 'editor)

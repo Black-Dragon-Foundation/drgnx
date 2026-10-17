@@ -41,6 +41,7 @@ The onboarding flow will ask which one you want (VS Code preselected).
 | Fold / Unfold | `C-{` / `C-}` | — | `SPC z c` / `SPC z o` |
 | Expand / Shrink Selection | `M-S-<right>` / `M-S-<left>` | — | `SPC v` / `SPC V` |
 | Zen Mode | `C-k z` | — | `SPC u z` |
+| Next Layout / Layout… | `C-k C-l` / — | — / — | `SPC l n` / `SPC l l` |
 | Go to Line | Emacs' `M-g g` | `M-g g` | `SPC g l` |
 | Go to Definition / References / Rename Symbol / Hover | `F12` / `S-F12` / `F2` / `C-S-SPC` | Emacs' `M-.` / `M-?` / — / `C-h .` | `SPC c d` / `SPC c r` / `SPC c R` / `SPC c h` |
 | Source Control / Blame | `C-S-g` / — | Emacs' `C-x v d` / `C-x v g` | `SPC g s` / `SPC g b` |
