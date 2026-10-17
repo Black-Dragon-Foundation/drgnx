@@ -36,6 +36,8 @@ to OR-LOG, OPENROUTER_API_KEY unset."
        (drgnx-work-db-close-all)
        (ignore-errors (delete-file (drgnx-hub-socket)))
        (ignore-errors (delete-directory (concat (drgnx-hub-socket) ".lock") t))
+       ;; a hub started as a job: its wrapper writes the exit code just after the hub ends — before the tree goes
+       (drgnx-hub-test--wait (lambda () (not (seq-some (lambda (j) (eq (plist-get j :status) 'running)) (drgnx-jobs-list)))) 5)
        (delete-directory root t))))
 
 (defun drgnx-hub-test--post (url token)
@@ -148,7 +150,9 @@ to OR-LOG, OPENROUTER_API_KEY unset."
           (should-not (string-search "sk-sock-only" (with-temp-buffer (set-buffer-multibyte nil) (insert-file-contents-literally f) (buffer-string))))))
       (drgnx-hub-call-sync "shutdown" nil)
       ;; judged by its socket: where PID 1 never reaps (a CI container) the stopped hub lingers as a zombie
-      (should (drgnx-hub-test--wait (lambda () (not (drgnx-hub-running-p))) 5)))))
+      (should (drgnx-hub-test--wait (lambda () (not (drgnx-hub-running-p))) 5))
+      ;; and its job ends: the wrapper records the exit (the tree is removed only then — a CI race)
+      (should (drgnx-hub-test--wait (lambda () (memq (plist-get (car (drgnx-jobs-list)) :status) '(exited stopped))) 5)))))
 
 (defun drgnx-hub-test--sigpipe-ignored-p ()
   "Does this Emacs ignore SIGPIPE, as every hub does (Linux: SigIgn in /proc/self/status)?"
