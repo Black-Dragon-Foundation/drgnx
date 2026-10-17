@@ -188,6 +188,27 @@ the real ones belong to sessions running next to the tests (bin/drgnx check's li
       (should (member (concat "XDG_RUNTIME_DIR=" (drgnx-ui-runtime-dir)) (drgnx-ui-session-env s)))
       (drgnx-ui-stop "drgnx-ui-1"))))
 
+(ert-deftest drgnx-ui/runtime-dir-fallback-must-be-private ()
+  ;; DEFERRED M1-8: an existing /tmp/drgnx-ui-UID is used only if it is our own directory, mode 0700 —
+  ;; not one another user made (or left open), nor a symlink to elsewhere
+  (let* ((tmp (make-temp-file "drgnx-ui-tmp" t))
+         (temporary-file-directory (file-name-as-directory tmp))
+         (dir (expand-file-name (format "drgnx-ui-%d" (user-uid)) tmp))
+         (process-environment (cons "XDG_RUNTIME_DIR" process-environment)))   ; unset
+    (unwind-protect
+        (progn
+          (should (equal (drgnx-ui-runtime-dir) dir))                       ; created, private
+          (should (= (file-modes dir) #o700))
+          (should (equal (drgnx-ui-runtime-dir) dir))                       ; reused
+          (set-file-modes dir #o755)
+          (should-error (drgnx-ui-runtime-dir) :type 'drgnx-ui-error)
+          (delete-directory dir)
+          (make-directory (expand-file-name "elsewhere" tmp))
+          (set-file-modes (expand-file-name "elsewhere" tmp) #o700)
+          (make-symbolic-link (expand-file-name "elsewhere" tmp) dir)
+          (should-error (drgnx-ui-runtime-dir) :type 'drgnx-ui-error))
+      (delete-directory tmp t))))
+
 (ert-deftest drgnx-ui/next-name-skips-taken-wayland-displays ()
   (drgnx-ui-test--with-state
     (write-region "" nil (expand-file-name "drgnx-ui-1" runtime))

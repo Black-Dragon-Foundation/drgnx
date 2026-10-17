@@ -134,6 +134,13 @@ Wayland displays and server sockets live here."
         (directory-file-name xdg)
       (let ((dir (expand-file-name (format "drgnx-ui-%d" (user-uid)) temporary-file-directory)))
         (drgnx-ui--make-private-dir dir)
+        ;; /tmp is shared: anyone may have made this name first (or a symlink to elsewhere)
+        (let ((attrs (file-attributes dir 'integer)))
+          (unless (and (eq (file-attribute-type attrs) t)
+                       (eql (file-attribute-user-id attrs) (user-uid))
+                       (equal (file-attribute-modes attrs) "drwx------"))
+            (drgnx-ui--fail "%s must be a directory of yours with mode 0700 (it holds the sessions' sockets)"
+                            dir)))
         dir))))
 
 (defun drgnx-ui-socket-dir (name &optional root)

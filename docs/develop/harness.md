@@ -270,7 +270,9 @@ session launcher         systemd         # or detached (process group, no system
   failed before saving it) as detached. On a host without a
   systemd user session the same happens. `DRGNX_UI_LAUNCHER=systemd|detached` overrides the choice.
 - Where `XDG_RUNTIME_DIR` is unset (typical in containers) sessions use a private `/tmp/drgnx-ui-<uid>`
-  (mode 0700) for their Wayland displays and sockets.
+  (mode 0700) for their Wayland displays and sockets. An existing one is used only if it is a directory (not a
+  symlink) owned by the user with mode 0700; anything else is an error — `/tmp` is shared, and another user could
+  have made the name first.
 - **Container runtime on the host:** `--container` uses `$DRGNX_CONTAINER` if set, else the first of
   `podman`, `docker`, `nerdctl` on `PATH` (Rancher Desktop provides `docker` in moby mode and `nerdctl` in
   containerd mode). `--podman` is short for `DRGNX_CONTAINER=podman … --container`.
