@@ -382,11 +382,12 @@ review for the user.")
     (drgnx-job--session-changed s)))
 
 (defun drgnx-job--verdict (s)
-  "Reviewer S's verdict from its last words: `pass', (fail . REASONS), or nil."
-  (let ((text (plist-get (car (last (seq-filter (lambda (e) (eq (plist-get e :type) 'agent)) (drgnx-agent-session-entries s)))) :text)))
-    (cond ((null text) nil)
-          ((string-match "VERDICT: *pass" text) 'pass)
-          ((string-match "VERDICT: *fail:? *\\(.*\\)" text) (cons 'fail (string-trim (match-string 1 text)))))))
+  "Reviewer S's verdict, from the last non-empty line of its last words: `pass', (fail . REASONS), or nil."
+  (let* ((text (plist-get (car (last (seq-filter (lambda (e) (eq (plist-get e :type) 'agent)) (drgnx-agent-session-entries s)))) :text))
+         (line (car (last (split-string (or text "") "\n" t "[ \t\r]+")))))
+    (cond ((null line) nil)
+          ((string-match "\\`VERDICT: *pass" line) 'pass)
+          ((string-match "\\`VERDICT: *fail:? *\\(.*\\)" line) (cons 'fail (string-trim (match-string 1 line)))))))
 
 (defun drgnx-job--reviewed (id task-id verdict)
   "TASK-ID of job ID was reviewed: pass → merged; fail → back to an agent with the reasons (the user after

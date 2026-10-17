@@ -108,4 +108,14 @@
         (should (string-search "hook says no" (plist-get card :title))))
       (should-not (equal (drgnx-job-run-test--status id 1) "done")))))
 
+(ert-deftest drgnx-job/verdict-is-the-last-line-only ()
+  (let ((verdict (lambda (text) (drgnx-job--verdict (drgnx-agents--make :id "s-v" :entries (list (list :type 'agent :text text)))))))
+    (should (eq (funcall verdict "Looked at it.\nVERDICT: pass") 'pass))
+    (should (eq (funcall verdict "Looked at it.\nVERDICT: pass\n\n  ") 'pass))              ; trailing blanks
+    (should (equal (funcall verdict "Looked at it.\nVERDICT: fail: rename foo") '(fail . "rename foo")))
+    ;; a mention earlier in the text is not the verdict
+    (should-not (funcall verdict "I would write VERDICT: pass if foo were renamed.\nBut it is not done."))
+    (should (equal (funcall verdict "VERDICT: pass\nOn second thought, no.\nVERDICT: fail: broken") '(fail . "broken")))
+    (should-not (funcall verdict "The format is VERDICT: pass or VERDICT: fail: why."))))
+
 ;;; job-review-test.el ends here
