@@ -150,7 +150,12 @@
       (mock--steps sid (list (cons 0 (lambda () (mock--say sid "Compacted."))))))
      ((string-match-p "permission" text)
       (mock--ask "session/request_permission"
-                 (list :sessionId sid :toolCall (list :toolCallId "p1" :title "Run rm -rf build" :kind "execute")
+                 (list :sessionId sid
+                       ;; "permission KIND :: TITLE [:: PATH]" chooses the tool; plain "permission" is rm -rf build
+                       :toolCall (if (string-match "permission \\([a-z]+\\) :: \\([^:\n]*[^: \n]\\)\\(?: :: \\(.+\\)\\)?" text)
+                                     (append (list :toolCallId "p1" :kind (match-string 1 text) :title (match-string 2 text))
+                                             (and (match-string 3 text) (list :locations (vector (list :path (match-string 3 text))))))
+                                   (list :toolCallId "p1" :title "Run rm -rf build" :kind "execute"))
                        :options (vector '(:optionId "allow" :name "Allow" :kind "allow_once")
                                         '(:optionId "reject" :name "Reject" :kind "reject_once")))
                  (lambda (res)

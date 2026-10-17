@@ -246,5 +246,73 @@ job on."
                    (equal (plist-get (drgnx-coord-task (drgnx-agent-session-task s)) :status) "in-review")))
       (run-at-time 0 nil (lambda () (with-demoted-errors "drgnx job: %S" (drgnx-job-step job)))))))
 
+;;;; Autonomy: the permission policy per role, writes in the worktree
+
+(defconst drgnx-job--outward-commands
+  (concat "\\_<\\(?:curl\\|wget\\|ssh\\|scp\\|rsync\\|git push\\|git fetch\\|git pull\\|npm \\(?:install\\|i\\|add\\)\\|pnpm \\(?:install\\|add\\)"
+          "\\|yarn \\(?:install\\|add\\)\\|pip3? install\\|uv \\(?:pip install\\|add\\)\\|cargo \\(?:install\\|add\\)\\|go get\\|gem install"
+          "\\|dnf\\|yum\\|apt\\(?:-get\\)?\\|brew\\|pacman\\|podman \\(?:pull\\|push\\)\\|docker\\)\\_>")
+  "Commands that reach the network or install something: a job agent asks the user for them.")
+
+(defvar drgnx-job-policies
+  '((review :allow (read search think))
+    (t :allow (read edit delete move search think execute other)))
+  "Per role: the tool kinds allowed without asking (paths inside the worktree, no outward command).  `t': any other
+role.  Everything else — network (fetch), outward commands, paths outside the worktree — goes to the user.")
+
+(defun drgnx-job--inside-p (path tree)
+  "Is PATH inside TREE, once `..' and symlinks are resolved?"
+  (and (stringp path) (file-in-directory-p (file-truename (expand-file-name path tree)) (file-truename tree))))
+
+(defun drgnx-job-policy (role tool tree)
+  "`allow' or `ask': the policy of ROLE (a string) for the ACP TOOL call (its :kind, :title, :locations) of an agent
+working in TREE."
+  (let* ((kind (intern (or (plist-get tool :kind) "other")))
+         (allowed (plist-get (cdr (or (assq (intern (or role "implement")) drgnx-job-policies) (assq t drgnx-job-policies))) :allow))
+         (paths (delq nil (mapcar (lambda (l) (plist-get l :path)) (append (plist-get tool :locations) nil)))))
+    (if (and (memq kind allowed)
+             (seq-every-p (lambda (p) (drgnx-job--inside-p p tree)) paths)
+             (not (and (eq kind 'execute) (string-match-p drgnx-job--outward-commands (or (plist-get tool :title) "")))))
+        'allow 'ask)))
+
+(defun drgnx-job--role (s)
+  (if (gethash (drgnx-agent-session-id s) drgnx-job--reviewers) "review"
+    (plist-get (drgnx-coord-task (drgnx-agent-session-task s)) :role)))
+
+(defun drgnx-job--card (job task kind title)
+  "Something of JOB's TASK needs the user: the task waits (needs-input), the user gets a message and the hub's
+subscribers a `card' event."
+  (when task
+    (drgnx-coord-force-status task "needs-input" (plist-get (drgnx-coord-task task) :agent)))
+  (drgnx-coord-send :job job :sender "drgnx" :recipient "user" :text (format "[%s] %s: %s" kind (or task job) title))
+  (when (fboundp 'drgnx-hub--broadcast) (drgnx-hub--broadcast 'card (list :job job :task task :kind kind :title title))))
+
+(defun drgnx-job--request (s method params _id)
+  "A job agent's request (`drgnx-agents-request-functions'): routine ones answered by its role's policy, writes in
+its worktree done at once; anything else waits for the user as a card (nil: the session keeps it pending)."
+  (when-let* ((job (drgnx-agent-session-job s)))
+    (let ((tree (drgnx-agent-session-cwd s)) (task (drgnx-agent-session-task s)))
+      (pcase method
+        ("session/request_permission"
+         (let ((tool (plist-get params :toolCall)))
+           (if (eq (drgnx-job-policy (drgnx-job--role s) tool tree) 'allow)
+               (let ((opt (seq-find (lambda (o) (equal (plist-get o :kind) "allow_once")) (append (plist-get params :options) nil))))
+                 (list :result (list :outcome (list :outcome "selected" :optionId (plist-get opt :optionId)))))
+             (drgnx-job--card job task "permission" (or (plist-get tool :title) "a permission"))
+             nil)))
+        ("fs/write_text_file"
+         (let ((path (plist-get params :path)) (content (plist-get params :content)))
+           (if (and (stringp content) (drgnx-job--inside-p path tree) (not (equal (drgnx-job--role s) "review")))
+               (progn (let ((coding-system-for-write 'utf-8-unix)) (write-region content nil path nil 'silent))
+                      (list :result nil))
+             (drgnx-job--card job task "write" (format "write %s" path))
+             nil)))))))
+
+(defun drgnx-job--answered (s)
+  "The user answered S's request: its task works again (when nothing else waits)."
+  (when (and (drgnx-agent-session-job s) (null (drgnx-agent-session-permissions s)) (null (drgnx-agent-session-reviews s))
+             (equal (plist-get (drgnx-coord-task (drgnx-agent-session-task s)) :status) "needs-input"))
+    (drgnx-coord-force-status (drgnx-agent-session-task s) "running" (drgnx-agent-session-id s))))
+
 (provide 'drgnx-job)
 ;;; drgnx-job.el ends here

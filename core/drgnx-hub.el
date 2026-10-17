@@ -171,6 +171,7 @@ debugs errors, and without SIGPIPE ignored the write itself would)."
                                 (drgnx-agent-session-permissions s))
                       (error "No such permission request"))))
        (drgnx-agents-answer-permission s item (plist-get params :option))
+       (drgnx-job--answered s)
        t))
     ;; the user's other actions on a session, from the editor that mirrors it
     ("agents/do"
@@ -370,6 +371,7 @@ Signals an error when a hub already serves there."
   (add-hook 'drgnx-agents-changed-functions #'drgnx-hub--agent-changed)
   (add-hook 'drgnx-agents-prompt-functions #'drgnx-hub--prompted)
   (add-hook 'drgnx-agents-changed-functions #'drgnx-job--session-changed)
+  (add-hook 'drgnx-agents-request-functions #'drgnx-job--request)
   (setq drgnx-hub--tick-timer (run-at-time 2 2 #'drgnx-hub--tick))
   (setq drgnx-hub--started (format-time-string "%FT%T%z")
         drgnx-hub--server
@@ -392,6 +394,7 @@ Signals an error when a hub already serves there."
   (remove-hook 'drgnx-agents-changed-functions #'drgnx-hub--agent-changed)
   (remove-hook 'drgnx-agents-prompt-functions #'drgnx-hub--prompted)
   (remove-hook 'drgnx-agents-changed-functions #'drgnx-job--session-changed)
+  (remove-hook 'drgnx-agents-request-functions #'drgnx-job--request)
   (when (timerp drgnx-hub--tick-timer) (cancel-timer drgnx-hub--tick-timer))
   (setq drgnx-hub--tick-timer nil)
   (clrhash drgnx-hub--told)

@@ -130,7 +130,16 @@ agents.eld (config dir) and the built-in ones; never holds secrets (keys come fr
            (part (seq-take (nthcdr from lines) (or limit (length lines)))))
       (concat (string-join part "\n") (if (and part (< (+ from (length part)) (length lines))) "\n" "")))))
 
+(defvar drgnx-agents-request-functions nil
+  "Functions called with (SESSION METHOD PARAMS ID) when an agent asks drgnx something (a permission, a file): the
+first non-nil answer is used — (:result R), (:error E) or `:deferred'; nil lets the session's own handling run.
+Jobs answer routine requests by a policy here (drgnx-job.el).")
+
 (defun drgnx-agents--on-request (s method params id)
+  (or (run-hook-with-args-until-success 'drgnx-agents-request-functions s method params id)
+      (drgnx-agents--on-request-1 s method params id)))
+
+(defun drgnx-agents--on-request-1 (s method params id)
   (pcase method
     ("session/request_permission"
      (setf (drgnx-agent-session-permissions s)
