@@ -251,6 +251,50 @@
     (let ((case-fold-search t))
       (should (equal (drgnx-search-chunk-test--paths root) '("x.md"))))))
 
+(ert-deftest drgnx-search-files/a-submodule-is-not-listed-nor-its-files ()
+  (skip-unless (executable-find "git"))
+  (let ((inner (make-temp-file "drgnx-search-inner" t)))
+    (unwind-protect
+        (progn
+          (drgnx-search-chunk-test--git inner "init" "-q")
+          (drgnx-search-chunk-test--git inner "config" "user.name" "Test")
+          (drgnx-search-chunk-test--git inner "config" "user.email" "test@example.com")
+          (drgnx-search-chunk-test--write inner "in.txt" "inner\n")
+          (drgnx-search-chunk-test--git inner "add" "-A")
+          (drgnx-search-chunk-test--git inner "commit" "-q" "-m" "inner")
+          (drgnx-search-chunk-test--repo '(("real.txt" . "real\n"))
+            (drgnx-search-chunk-test--git root "commit" "-q" "-m" "init")
+            (drgnx-search-chunk-test--git root "-c" "protocol.file.allow=always" "submodule" "add" "-q" inner "sub")
+            (should (file-exists-p (expand-file-name "sub/in.txt" root)))   ; it is checked out
+            (should (string-match-p "160000" (with-temp-buffer (call-process "git" nil t nil "-C" root "ls-files" "-s") (buffer-string))))
+            (should (equal (drgnx-search-chunk-test--paths root) '("real.txt")))))
+      (delete-directory inner t))))
+
+(ert-deftest drgnx-search-files/a-path-with-a-newline-is-out-clean-or-modified ()
+  (drgnx-search-chunk-test--repo '(("a.txt" . "a\n") ("two\nlines.txt" . "x\n"))
+    (should (equal (drgnx-search-chunk-test--paths root) '("a.txt")))              ; clean (tracked)
+    (drgnx-search-chunk-test--git root "commit" "-q" "-m" "init")
+    (should (equal (drgnx-search-chunk-test--paths root) '("a.txt")))
+    (drgnx-search-chunk-test--write root "two\nlines.txt" "edited\n")                ; modified
+    (should (equal (drgnx-search-chunk-test--paths root) '("a.txt")))))
+
+(ert-deftest drgnx-search-files/git-input-has-a-deadline ()
+  "A git that never reads its input cannot hold a timed listing past its deadline."
+  (skip-unless (executable-find "sleep"))
+  (let* ((bin (make-temp-file "drgnx-slow-git" t))
+         (exec-path (cons bin exec-path))
+         (process-environment (cons (concat "PATH=" bin ":" (getenv "PATH")) process-environment))
+         (drgnx-search--git-deadline (+ (float-time) 0.5)) (t0 (float-time)))
+    (unwind-protect
+        (progn
+          (with-temp-file (expand-file-name "git" bin) (insert "#!/bin/sh\nexec sleep 20\n"))
+          (set-file-modes (expand-file-name "git" bin) #o755)
+          (should-error (with-timeout (10 (error "blocked"))
+                          (drgnx-search--git-run-timed (make-string 4000000 ?x) '("hash-object" "--stdin-paths")))
+                        :type 'drgnx-search-files-error)
+          (should (< (- (float-time) t0) 5)))
+      (delete-directory bin t))))
+
 (ert-deftest drgnx-search-files/skips-symlinks-and-submodules ()
   (let ((outside (make-temp-file "drgnx-search-outside" nil ".txt" "outside\n")))
     (unwind-protect
@@ -380,15 +424,33 @@ project's."
       (delete-directory outside t))))
 
 (ert-deftest drgnx-search-files/does-not-depend-on-the-locale ()
-  "git's messages are translated; a non-repo still gives nil and a repo is still listed."
+  "Every git call runs with LC_ALL=C and no LANGUAGE (git's messages are translated otherwise, and the code reads
+them): checked on the environment each call gets — a machine without the German locale would pass anyway."
   (let ((process-environment (append '("LANGUAGE=de" "LANG=de_DE.UTF-8" "LC_ALL=de_DE.UTF-8") process-environment))
-        (dir (make-temp-file "drgnx-search-plain" t)))
-    (unwind-protect
-        (progn (drgnx-search-chunk-test--write dir "a.el" "a\n")
-               (should-not (drgnx-search-files dir)))
-      (delete-directory dir t))
-    (drgnx-search-chunk-test--repo '(("a.el" . "a\n"))
-      (should (equal (drgnx-search-chunk-test--paths root) '("a.el"))))))
+        (dir (make-temp-file "drgnx-search-plain" t)) (seen nil))
+    (cl-flet ((spy (orig &rest args) (push (list (getenv "LC_ALL") (getenv "LANGUAGE")) seen) (apply orig args)))
+      (advice-add 'call-process :around #'spy)
+      (advice-add 'call-process-region :around #'spy)
+      (advice-add 'make-process :around #'spy)
+      (unwind-protect
+          (progn
+            (unwind-protect
+                (progn (drgnx-search-chunk-test--write dir "a.el" "a\n")
+                       (should-not (drgnx-search-files dir)))
+              (delete-directory dir t))
+            (drgnx-search-chunk-test--repo '(("a.el" . "a\n"))
+              (setq seen nil)
+              (should (equal (drgnx-search-chunk-test--paths root) '("a.el")))
+              (should seen)
+              (should (cl-every (lambda (e) (equal e '("C" ""))) seen))
+              ;; the same under a deadline (the doctor's path starts git as an asynchronous process)
+              (setq seen nil)
+              (let ((drgnx-search-git-timeout 30)) (should (equal (drgnx-search-chunk-test--paths root) '("a.el"))))
+              (should seen)
+              (should (cl-every (lambda (e) (equal e '("C" ""))) seen))))
+        (advice-remove 'call-process #'spy)
+        (advice-remove 'call-process-region #'spy)
+        (advice-remove 'make-process #'spy)))))
 
 (ert-deftest drgnx-search-files/not-a-git-repo ()
   (let ((dir (make-temp-file "drgnx-search-plain" t)))

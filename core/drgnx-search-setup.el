@@ -77,15 +77,17 @@ Past it a project's :stale stays nil (unknown).")
 \(not a git project, search off, git failed or timed out).  The listing gets what is left until DEADLINE (a
 `float-time'), at least half a second, and is cut off when that is spent; past DEADLINE it is not tried."
   (condition-case nil
-      (when-let* (((< (float-time) deadline))
-                  (files (let ((drgnx-search-git-timeout (max 0.5 (- deadline (float-time)))))
-                           (drgnx-search-files root))))
-        (let ((stored (drgnx-search-store-files db)) (seen (make-hash-table :test #'equal)) (n 0))
-          (pcase-dolist (`(,path . ,hash) files)
-            (puthash path t seen)
-            (unless (equal (gethash path stored) hash) (cl-incf n)))
-          (maphash (lambda (path _) (unless (gethash path seen) (cl-incf n))) stored)
-          n))
+      (when (< (float-time) deadline)
+        (let* ((drgnx-search-git-timeout (max 0.5 (- deadline (float-time))))
+               (files (drgnx-search-files root))
+               (stored (drgnx-search-store-files db)) (seen (make-hash-table :test #'equal)) (n 0))
+          ;; no files is known (every file excluded) only for a git project with search on
+          (when (or files (and (not (plist-get (drgnx-search-config root) :off)) (drgnx-search--repo-p root)))
+            (pcase-dolist (`(,path . ,hash) files)
+              (puthash path t seen)
+              (unless (equal (gethash path stored) hash) (cl-incf n)))
+            (maphash (lambda (path _) (unless (gethash path seen) (cl-incf n))) stored)
+            n)))
     (error nil)))
 
 (defun drgnx-search-setup-index-info (root &optional stale-deadline)
@@ -187,9 +189,10 @@ provider and model come from one test embedding of at most a second, made only w
 (defconst drgnx-search-setup-test-query "where does the program start"
   "The question of the wizard's test query.")
 
-(defun drgnx-search-setup--index-step (root chain dims info)
-  "The wizard's last steps for the project at ROOT, the provider tested giving DIMS-wide vectors (INFO: who
-answered): (STATUS MESSAGE).  A current index gets a test query; else the indexer starts in the background."
+(defun drgnx-search-setup--index-step (root dims info vectors)
+  "The wizard's last steps for the project at ROOT, the provider tested giving DIMS-wide VECTORS (the embedding of
+`drgnx-search-setup-test-query'; INFO: who answered): (STATUS MESSAGE).  A current index gets the test query,
+run with those vectors (no second embedding); else the indexer starts in the background."
   (let* ((who (format "%s, %d dims" (drgnx-search-setup--label info) dims))
          (index (drgnx-search-setup-index-info root (+ (float-time) 3)))
          (name (abbreviate-file-name root)))
@@ -205,7 +208,7 @@ answered): (STATUS MESSAGE).  A current index gets a test query; else the indexe
                           who name (drgnx-search-setup-mismatch index dims (plist-get info :provider) (plist-get info :model)))))
      ((and index (eql (plist-get index :stale) 0) (> (plist-get index :chunks) 0))
       (let ((hit (car (drgnx-search root drgnx-search-setup-test-query :k 1
-                                    :embed (lambda (inputs) (drgnx-ai-embed-sync inputs :timeout 5 :chain chain))))))
+                                    :embed (lambda (_inputs) (setq drgnx-ai-embed-last-info info) vectors)))))
         (list 'ok (if hit
                       (format "%s works; %s is indexed (%d chunks); test query \"%s\": %s:%d"
                               who name (plist-get index :chunks) drgnx-search-setup-test-query
@@ -239,14 +242,14 @@ the probe (two seconds) and the test embedding (five).  For a command the user r
             (list 'info (concat "no embedding provider is running: " drgnx-search-setup-start-hint))
           (condition-case err
               (let* ((drgnx-ai-embed-last-info nil)
-                     (vectors (drgnx-ai-embed-sync (vector "hello") :timeout 5 :chain chain))
+                     (vectors (drgnx-ai-embed-sync (vector drgnx-search-setup-test-query) :timeout 5 :chain chain))
                      (dims (length (aref vectors 0))) (info drgnx-ai-embed-last-info)
                      (placed (and added interactive (drgnx-search-setup--put-first added))))
                 (cond ((stringp placed) (list 'warn placed))
                       ((null root)
                        (list 'ok (format "%s works (%d dims) — open a project and run Set Up Semantic Search there to index it"
                                          (drgnx-search-setup--label info) dims)))
-                      (t (let ((r (drgnx-search-setup--index-step root chain dims info)))
+                      (t (let ((r (drgnx-search-setup--index-step root dims info vectors)))
                            (if placed (list (car r) (format "%s (put first in the embed role)" (cadr r))) r)))))
             (drgnx-ai-embed-error
              (list 'warn (format "the embedding provider did not answer a test embedding (%s) — check that it runs and serves an embedding model (docs/guide/ai.md)"

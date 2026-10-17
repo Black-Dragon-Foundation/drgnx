@@ -214,6 +214,23 @@
               (should (eq (cadr seen) win))))
         (kill-buffer origin)))))
 
+(ert-deftest drgnx-search-ui/focus-moves-to-the-results-when-the-answer-arrives ()
+  (skip-unless (executable-find "git"))
+  (drgnx-search-ui-test--project
+    (let ((later nil) (hits (list (list :path "a.txt" :start 1 :end 1 :text "alpha" :score 0.03 :why 'both)))
+          (xref (get-buffer-create "*xref*")))
+      (unwind-protect
+          (save-window-excursion
+            (delete-other-windows)
+            (cl-letf (((symbol-function 'drgnx-search-async) (lambda (_r _q cb &rest _) (setq later cb)))
+                      ((symbol-function 'xref-show-xrefs)
+                       (lambda (&rest _) (set-window-buffer (split-window (selected-window)) xref))))
+              (drgnx-search-semantic "alpha")
+              (should-not (eq (window-buffer (selected-window)) xref))
+              (funcall later hits)
+              (should (eq (window-buffer (selected-window)) xref))))
+        (kill-buffer xref)))))
+
 (ert-deftest drgnx-search-ui/results-fall-back-when-the-origin-is-gone-and-errors-are-messages ()
   (skip-unless (executable-find "git"))
   (drgnx-search-ui-test--project

@@ -178,26 +178,42 @@ listing signals `drgnx-search-files-error' \"timed out\".")
 the deadline of `drgnx-search--git-deadline'.  Past it git is killed and `drgnx-search-files-error' is signaled."
   (drgnx-search--check-deadline (format "git %s" (string-join args " ")))
   (let* ((out (generate-new-buffer " *drgnx-search-git*" t)) (err (generate-new-buffer " *drgnx-search-git-err*" t))
-         (proc nil))
+         (proc nil) (watchdog nil) (killed nil))
     (unwind-protect
         (condition-case e
             (progn
               (setq proc (make-process :name "drgnx-search-git" :command (cons "git" args) :buffer out :stderr err
                                        :connection-type 'pipe :coding 'utf-8-unix :noquery t :sentinel #'ignore))
               (when-let* ((errproc (get-buffer-process err))) (set-process-sentinel errproc #'ignore))
-              (when input (process-send-string proc input))
-              (process-send-eof proc)
+              ;; Sending can block for good when git does not read its input; at the deadline a timer
+              ;; kills git, which ends the send.
+              (setq watchdog (run-at-time (max 0 (- drgnx-search--git-deadline (float-time))) nil
+                                          (lambda () (when (process-live-p proc) (setq killed t) (delete-process proc)))))
+              ;; The input goes in pieces, the output read in between: a git that fills its output pipe
+              ;; while we fill its input pipe would wait for us forever.
+              (let ((rest (or input "")))
+                (while (and (> (length rest) 0) (process-live-p proc) (<= (float-time) drgnx-search--git-deadline))
+                  (process-send-string proc (substring rest 0 (min 4096 (length rest))))
+                  (setq rest (substring rest (min 4096 (length rest))))
+                  (accept-process-output proc 0))
+                (if (> (length rest) 0)
+                    (when (or killed (process-live-p proc))
+                      (delete-process proc)
+                      (signal 'drgnx-search-files-error (list (format "git %s timed out" (string-join args " ")))))
+                  (process-send-eof proc)))
               (while (and (or (process-live-p proc) (let ((p (get-buffer-process err))) (and p (process-live-p p))))
                           (<= (float-time) drgnx-search--git-deadline))
                 (accept-process-output proc 0.05))
-              (when (process-live-p proc)
+              (when (or killed (process-live-p proc))
                 (delete-process proc)
                 (signal 'drgnx-search-files-error (list (format "git %s timed out" (string-join args " ")))))
               (accept-process-output nil 0.01)
               (list (process-exit-status proc) (with-current-buffer out (buffer-string))
                     (with-current-buffer err (buffer-substring (point-min) (progn (goto-char (point-min)) (line-end-position))))))
           (drgnx-search-files-error (signal (car e) (cdr e)))
-          (error (list nil nil (error-message-string e))))
+          (error (drgnx-search--check-deadline (format "git %s" (string-join args " ")))   ; killed at the deadline
+                 (list nil nil (error-message-string e))))
+      (when watchdog (cancel-timer watchdog))
       (when (process-live-p proc) (delete-process proc))
       (kill-buffer out) (kill-buffer err))))
 
@@ -361,9 +377,9 @@ submodule), a dot file or a file under a dot directory, a key or secret by name 
 anything containing secret or credential, and any name with netrc or authinfo as a whole component — at the start
 or after `.', `_' or `-', followed by the end, `~' or a `.' — such as .netrc, work.netrc, prod.authinfo,
 authinfo.gpg.bak, but not netrc-parser.el or a source file like netrc.el; all case-insensitively), a file over 1 MiB,
-a binary, a file in a directory whose real path (symlinks resolved) is outside the project.  A modified or
-untracked file whose path contains a newline or starts with a double quote cannot be hashed and is left out
-too.  The configuration then narrows the list.
+a binary, a file in a directory whose real path (symlinks resolved) is outside the project.  A file whose path
+contains a newline is left out (a modified one could not be hashed, and a clean one must not come and go with
+its edits), and so is a modified or untracked file whose path starts with a double quote.  The configuration then narrows the list.
 
 nil when ROOT is no git repository, git is missing or the project's search is `:off'.  When git
 fails, or .drgnx/search.eld is there but cannot be read (see `drgnx-search-config'), the listing signals
@@ -395,6 +411,7 @@ fails, or .drgnx/search.eld is there but cannot be read (see `drgnx-search-confi
           (drgnx-search--check-deadline "listing the files")
           (let ((path (car entry)))
             (when (and (not (string-suffix-p "/" path)) ; a nested repository
+                       (not (string-search "\n" path)) ; cannot be hashed once modified: out when clean too
                        (not (drgnx-search--dot-path-p path))
                        (not (drgnx-search--sensitive-name-p path))
                        (or (null include) (drgnx-search--matches-p path include))

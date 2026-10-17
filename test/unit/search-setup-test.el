@@ -79,6 +79,29 @@ answered at once with DIMS-wide vectors), and the index job start recorded in ST
         (should-not started)
         (should (string-match-p "a\\.txt:1" (cadr r)))))))
 
+(ert-deftest drgnx-search-setup/a-current-index-costs-the-wizard-one-embedding ()
+  "The provider test and the test query are the same request."
+  (drgnx-search-setup-test--with
+    (drgnx-search-index root :embed #'drgnx-search-setup-test--embed)
+    (let ((requests 0))
+      (cl-letf (((symbol-function 'drgnx-ai-request)
+                 (lambda (_role _kind payload callback &rest _)
+                   (cl-incf requests)
+                   (funcall callback (vconcat (mapcar #'drgnx-search-setup-test--vector (plist-get payload :inputs)))
+                            '(:provider tei :model nil))
+                   nil)))
+        (let ((r (drgnx-search-setup root)))
+          (should (eq (car r) 'ok))
+          (should (string-match-p "a\\.txt:1" (cadr r)))
+          (should (= requests 1)))))))
+
+(ert-deftest drgnx-search-setup/stale-is-known-when-every-file-is-excluded ()
+  (drgnx-search-setup-test--with
+    (drgnx-search-index root :embed #'drgnx-search-setup-test--embed)
+    (make-directory (expand-file-name ".drgnx" root))
+    (write-region "(:exclude (\"*.txt\"))" nil (expand-file-name ".drgnx/search.eld" root) nil 'silent)
+    (should (eql (plist-get (drgnx-search-setup-index-info root (+ (float-time) 5)) :stale) 1))))   ; a.txt is gone from the list
+
 (ert-deftest drgnx-search-setup/wizard-without-a-provider-says-how-to-start-one ()
   (drgnx-search-setup-test--with
     (setq up nil)

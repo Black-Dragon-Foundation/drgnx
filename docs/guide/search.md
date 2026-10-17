@@ -18,11 +18,11 @@ Choose **Set Up Semantic Search** (the palette, or Help → Welcome → Semantic
    embedding model), that one is put first in the role. With none running it stops and says how to start one — TEI:
    `podman run -p 8080:80 -m 4g ghcr.io/huggingface/text-embeddings-inference:cpu-latest --model-id BAAI/bge-small-en-v1.5`
    (the memory cap keeps a model from taking the machine), or Ollama: `ollama pull nomic-embed-text`;
-2. makes a test call (the embedding of "hello", five seconds at most) and reports the model and the number of
+2. makes a test call (the embedding of the test question, five seconds at most) and reports the model and the number of
    dimensions it gives — the only wait (besides the probe, which takes a second or so); only once it works is the `embed`
    role changed, if it had to be;
 3. indexes this project **in the background** and tells you so (Index Status shows how far it is). When the project's
-   index is already current it runs a test query instead and shows the top hit; when the index was built with another
+   index is already current it runs a test query instead (with the vector of the test call: one embedding in all) and shows the top hit; when the index was built with another
    model it says so and leaves it to you (`C-u` Index Project rebuilds).
 
 The default is a local [Text Embeddings Inference](ai.md) server (TEI), so nothing leaves your machine. Without the
@@ -57,7 +57,7 @@ only say "this Emacs has no SQLite — semantic search needs Emacs built with SQ
 
 The results are the same kind of list as **Search in Project**: one line per chunk (its first top-level line — one starting at column 0 that is not just closing brackets, else its first non-blank line — and the
 jump goes to that line), `RET` or a click
-jumps to the file, and the preview follows the selection. The hits are grouped by file, the files in the order of their best hit (xref's grouping). When an answer is partial the echo
+jumps to the file, and the preview follows the selection. The answer comes after the command returned (the question is embedded in the background), and the results list then takes the focus, as Search in Project's does. The hits are grouped by file, the files in the order of their best hit (xref's grouping). When an answer is partial the echo
 area says why, in one line, and the list header repeats it:
 
 - **no index** — the project has not been indexed: run Index Project;
@@ -157,7 +157,7 @@ Whatever the configuration says:
 - files whose names look like keys or secrets (`*.pem`, `*.key`, `*.p12`, `*.pfx`, `*.kdbx`, `*.keystore`, `*.jks`,
   `*.asc`, `*.gpg`, `*.env`, `id_rsa*`, `id_dsa*`, `id_ecdsa*`, `id_ed25519*`, any name containing `secret` or `credential`, and
   any name with `netrc` or `authinfo` as a whole component — at the start or after `.`, `_` or `-`, followed by the end, `~` or a `.`: `.netrc`, `work.netrc`, `prod.authinfo`, `authinfo.gpg.bak` (code is not caught: `netrc-parser.el`, `netrc.el` and `authinfo-helper.py` are indexed);
-- binary files, files over 1 MiB, symbolic links, submodules, and files in a directory whose real path is outside the
+- binary files, files over 1 MiB, files whose path contains a newline, symbolic links, submodules, and files in a directory whose real path is outside the
   project (a directory replaced by a symbolic link to elsewhere);
 - files that `.gitignore` excludes (the index lists the project's tracked files and the untracked ones that git does
   not ignore).

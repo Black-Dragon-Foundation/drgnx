@@ -81,15 +81,18 @@ at that line (`drgnx-search-hit-line', the rule the MCP tool and the command lin
                (xref-make-file-location (expand-file-name (plist-get hit :path) root) line 0))))
 
 (defun drgnx-search--show (root query hits notice)
-  "Show HITS for QUERY in the project at ROOT as an xref list (the panel's Results tab); say NOTICE."
+  "Show HITS for QUERY in the project at ROOT as an xref list (the panel's Results tab); say NOTICE.
+Non-nil when a list was shown."
   (require 'xref)
   (if (null hits)
-      (message "No semantic matches for \"%s\"%s" query (if notice (concat ": " notice) ""))
+      (progn (message "No semantic matches for \"%s\"%s" query (if notice (concat ": " notice) ""))
+             nil)
     (let ((items (mapcar (lambda (h) (drgnx-search--xref root h)) hits)))
       (xref-show-xrefs (lambda () items) nil)
       (when-let* ((buf (get-buffer "*xref*")))
         (with-current-buffer buf (setq header-line-format (and notice (concat " " notice)))))
-      (when notice (message "%s" notice)))))
+      (when notice (message "%s" notice))
+      t)))
 
 (defun drgnx-search--show-safely (buffer window root query hits notice)
   "`drgnx-search--show' as the command had it: BUFFER current and WINDOW selected (when still live, else
@@ -100,7 +103,10 @@ Called from a process sentinel: an error becomes one message, never a signal."
                     (if (buffer-live-p buffer)
                         (with-current-buffer buffer (drgnx-search--show root query hits notice))
                       (drgnx-search--show root query hits notice)))))
-        (if (window-live-p window) (with-selected-window window (funcall show)) (funcall show)))
+        (when (if (window-live-p window) (with-selected-window window (funcall show)) (funcall show))
+          ;; the answer came after the command returned: the results get the focus, as for Search in Project
+          (when-let* ((buf (get-buffer "*xref*")) (win (get-buffer-window buf t)))
+            (select-window win))))
     (error (message "Semantic search could not show its results: %s" (error-message-string err)))))
 
 (defun drgnx-search-semantic (query)
