@@ -259,15 +259,18 @@ anything or signals: it runs from hooks."
                         frame))))
 
 (defun drgnx-persist--on-start ()
-  "At the first graphical frame — which a daemon makes before selecting it."
-  (when-let* (((and drgnx-persist-restore-on-start)) (f (drgnx-persist--gui-frame)))
+  "At the first graphical frame — which a daemon makes before selecting it.  An emacsclient's window
+is left to `drgnx-persist--on-new-frame': this runs inside `make-frame', before the server shows *scratch*
+in a window that asked for no file, which would replace one restored file."
+  (when-let* (((and drgnx-persist-restore-on-start)) (f (drgnx-persist--gui-frame))
+              ((not (frame-parameter f 'client))))
     (drgnx-persist--restore-into f)))
 
 (defun drgnx-persist--on-new-frame (&optional frame)
   "A client's new window (`server-after-make-frame-hook', which passes no argument: the selected frame):
-if it is graphical and no other graphical window exists — a daemon that kept running after its last
-window closed — bring the saved workbench back into it.  A frame the first-start restore already
-handled is left alone."
+if it is graphical and no other graphical window exists — a daemon's first, or one that kept running
+after its last window closed — bring the saved workbench back into it.  It runs after the server showed
+*scratch* (no file asked for) and before it shows a file asked for.  A frame already restored is left alone."
   (let ((frame (or frame (selected-frame))))
     (when (and drgnx-persist-restore-on-start (frame-live-p frame) (display-graphic-p frame)
                (not (seq-some (lambda (f) (and (not (eq f frame)) (not (frame-parent f)) (display-graphic-p f)))

@@ -213,6 +213,25 @@
           (drgnx-persist--on-new-frame (selected-frame))
           (should (= 1 calls)))))))
 
+(ert-deftest drgnx-persist/a-daemons-first-client-window-restores-after-the-server-shows-its-buffer ()
+  ;; The first-frame stage runs inside `make-frame'; a client that asked for no file then gets *scratch*
+  ;; in its selected window (server-execute) — so a client's window is restored from
+  ;; `server-after-make-frame-hook', which runs after that, once.
+  (drgnx-persist-test--with dir
+    (drgnx-persist-test--graphical
+      (let ((calls 0) (drgnx-persist-restore-on-start t))
+        (cl-letf (((symbol-function 'drgnx-persist-restore) (lambda (&rest _) (cl-incf calls) t)))
+          (set-frame-parameter nil 'client 'nowait)
+          (unwind-protect
+              (progn
+                (drgnx-persist--on-start)
+                (should (= 0 calls))
+                (should-not (frame-parameter nil 'drgnx-persist-restored))
+                (drgnx-persist--on-new-frame)
+                (drgnx-persist--on-new-frame)
+                (should (= 1 calls)))
+            (set-frame-parameter nil 'client nil)))))))
+
 (ert-deftest drgnx-persist/a-second-window-does-not-restore ()
   (drgnx-persist-test--with dir
     (drgnx-persist-test--graphical
