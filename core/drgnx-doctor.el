@@ -67,6 +67,17 @@ DEV non-nil: only run for `drgnx doctor --dev' (tools for developing drgnx)."
     (require 'drgnx-ai-probe)
     (mapcar #'car (seq-filter (lambda (e) (plist-get (cdr e) :up)) (drgnx-ai-detected-cached)))))
 
+;; Semantic search: SQLite with FTS5, the embedding provider the last probe found, the known projects' indexes.
+;; A failure becomes a fact (:error), never a crash; nothing here prompts, and the network is asked at most once, for a second.
+(declare-function drgnx-search-doctor-facts "drgnx-search-setup")
+(declare-function drgnx-search-setup--roots "drgnx-search-setup")
+
+(defun drgnx-doctor--search ()
+  "The facts of the `search' check (see `drgnx-search-doctor-facts'), or (:error MESSAGE)."
+  (condition-case err
+      (progn (require 'drgnx-search-setup) (drgnx-search-doctor-facts (drgnx-search-setup--roots)))
+    (error (list :error (error-message-string err)))))
+
 (defun drgnx-doctor-facts ()
   "Facts about the running Emacs and this machine."
   (let ((native (and (fboundp 'native-comp-available-p) (native-comp-available-p))))
@@ -91,6 +102,7 @@ DEV non-nil: only run for `drgnx doctor --dev' (tools for developing drgnx)."
           :svg (image-type-available-p 'svg)
           :work-plans (drgnx-doctor--work-plans)
           :ai-up (drgnx-doctor--ai-up)
+          :search (drgnx-doctor--search)
           ;; whether a key is set, from the environment only: the doctor never opens auth-source (it may prompt)
           :ai-keys (let ((k (getenv "OPENROUTER_API_KEY"))) (and k (not (string-empty-p k)) '(openrouter)))
           :ai-complete (ignore-errors (require 'drgnx-ai) (cdr (car (drgnx-ai-role 'complete))))
@@ -207,6 +219,48 @@ DEV non-nil: only run for `drgnx doctor --dev' (tools for developing drgnx)."
                                       (t (list 'ok (format "providers: %s%s" (mapconcat #'symbol-name (append (plist-get f :ai-up) (plist-get f :ai-keys)) ", ")
                                                            (if free (format "; %d MiB GPU free" free) ""))
                                                nil))))))
+
+(defun drgnx-doctor--search-problem (indexes embed-dims embed-model)
+  "The first index of INDEXES ((ROOT . INFO)…) built with another model than the provider gives
+\(EMBED-DIMS, EMBED-MODEL), as a sentence, or nil."
+  (cl-loop for (root . info) in indexes
+           for name = (file-name-nondirectory (directory-file-name root))
+           for dims = (plist-get info :dims)
+           when (and dims embed-dims (/= dims embed-dims))
+           return (format "the index of %s was built with %d dims, provider gives %d — Search: Index Project with rebuild"
+                          name dims embed-dims)
+           when (and dims embed-model (plist-get info :model) (not (equal (plist-get info :model) embed-model)))
+           return (format "the index of %s was built with %s, provider gives %s — Search: Index Project with rebuild"
+                          name (plist-get info :model) embed-model)))
+
+(drgnx-doctor-define 'search :group "drgnx" :doc "Semantic search: SQLite with FTS5, an embedding provider, the project indexes"
+                     :check (lambda (f)
+                              (if (not (plist-member f :search)) (list 'info "not checked" nil)
+                                (let* ((s (plist-get f :search)) (indexes (plist-get s :indexes))
+                                       (stale (seq-filter (lambda (e) (> (or (plist-get (cdr e) :stale) 0) 20)) indexes))
+                                       (broken (seq-filter (lambda (e) (plist-get (cdr e) :error)) indexes))
+                                       (problem (drgnx-doctor--search-problem indexes (plist-get s :embed-dims) (plist-get s :embed-model)))
+                                       (unindexed (or (plist-get s :unindexed) 0))
+                                       (chunks (apply #'+ (mapcar (lambda (e) (or (plist-get (cdr e) :chunks) 0)) indexes))))
+                                  (cond ((plist-get s :error) (list 'warn (format "could not check: %s" (plist-get s :error)) "run drgnx doctor again; Set Up Semantic Search"))
+                                        ((not (plist-get s :sqlite)) (list 'fail "this Emacs has no SQLite: semantic search is off" "use an Emacs built with SQLite (the installer's does)"))
+                                        ((not (plist-get s :fts5)) (list 'fail "this Emacs' SQLite has no FTS5: semantic search is off" "use an Emacs built with SQLite and FTS5 (the installer's does)"))
+                                        (problem (list 'warn problem "Search: Index Project with C-u (rebuild), or choose the model the index was built with (AI: Choose Provider/Model)"))
+                                        (broken (list 'warn (format "the index of %s cannot be read: %s"
+                                                                    (file-name-nondirectory (directory-file-name (car (car broken))))
+                                                                    (plist-get (cdr (car broken)) :error))
+                                                      "Search: Index Project with C-u rebuilds it"))
+                                        (stale (list 'warn (format "stale index (more than 20 files changed since): %s"
+                                                                   (mapconcat (lambda (e) (format "%s %d files" (file-name-nondirectory (directory-file-name (car e)))
+                                                                                                  (plist-get (cdr e) :stale)))
+                                                                              stale ", "))
+                                                     "Search: Index Project in that project"))
+                                        ((not (plist-get s :embed-up))
+                                         (list 'info (format "no embedding provider is reachable: searches use keywords only (%d indexes, %d chunks)" (length indexes) chunks)
+                                               "Set Up Semantic Search (it says how to start TEI or Ollama)"))
+                                        (t (list 'ok (format "%d index%s, %d chunks%s" (length indexes) (if (= (length indexes) 1) "" "es") chunks
+                                                             (if (> unindexed 0) (format "; %d project%s not indexed" unindexed (if (= unindexed 1) "" "s")) ""))
+                                                 (when (zerop (length indexes)) "Set Up Semantic Search in a project"))))))))
 
 (drgnx-doctor-define 'work :group "drgnx" :doc "The work tracker (SQLite in Emacs; SVG for its graph)"
                      :check (lambda (f)

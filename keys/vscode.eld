@@ -127,6 +127,7 @@
         (search-semantic "C-k C-f")
         (search-index-project :none "in the palette")
         (search-index-status :none "in the palette")
+        (search-set-up :none "in the palette")
         (go-symbol "C-S-o")
         (org-capture "C-c c")
         (org-agenda "C-c a")

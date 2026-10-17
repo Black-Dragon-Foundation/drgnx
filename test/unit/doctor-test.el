@@ -104,3 +104,54 @@
             (prin1 '(:layers ((vscode app)) :conflicts ("x") :problems nil) (current-buffer)))
           (should (equal (plist-get (plist-get (drgnx-doctor-facts) :keys-report) :conflicts) '("x"))))
       (delete-directory state t))))
+
+;;;; search
+
+(defun drgnx-doctor-test--search (&rest kv)
+  "The `search' check on healthy search facts changed by KV (:indexes, :embed-dims …)."
+  (drgnx-doctor-check 'search (drgnx-doctor-test--facts
+                               :search (append kv (list :sqlite t :fts5 t :embed-up t :embed-dims 384 :unindexed 0
+                                                        :indexes '(("/p/a" :chunks 120 :files 9 :dims 384 :stale 0)))))))
+
+(ert-deftest drgnx-doctor/search-ok ()
+  (let ((r (drgnx-doctor-test--search)))
+    (should (eq (car r) 'ok))
+    (should (string-match-p "1 index" (nth 1 r)))
+    (should (string-match-p "120 chunks" (nth 1 r)))))
+
+(ert-deftest drgnx-doctor/search-dims-mismatch-warns ()
+  (let ((r (drgnx-doctor-test--search :embed-dims 768)))
+    (should (eq (car r) 'warn))
+    (should (string-match-p "built with 384 dims, provider gives 768" (nth 1 r)))
+    (should (string-match-p "Search: Index Project with rebuild" (nth 1 r)))
+    (should (string-match-p "Index Project" (nth 2 r)))))
+
+(ert-deftest drgnx-doctor/search-stale-warns ()
+  (let ((few (drgnx-doctor-test--search :indexes '(("/p/a" :chunks 5 :dims 384 :stale 20))))
+        (many (drgnx-doctor-test--search :indexes '(("/p/a" :chunks 5 :dims 384 :stale 21)))))
+    (should (eq (car few) 'ok))                                 ; more than 20 files
+    (should (eq (car many) 'warn))
+    (should (string-match-p "21 files" (nth 1 many)))
+    (should (string-match-p "Index Project" (nth 2 many)))))
+
+(ert-deftest drgnx-doctor/search-no-fts5-fails ()
+  (let ((r (drgnx-doctor-test--search :fts5 nil)))
+    (should (eq (car r) 'fail))
+    (should (string-match-p "FTS5" (nth 1 r))))
+  (let ((r (drgnx-doctor-test--search :sqlite nil :fts5 nil)))
+    (should (eq (car r) 'fail))
+    (should (string-match-p "SQLite" (nth 1 r)))))
+
+(ert-deftest drgnx-doctor/search-no-provider-is-info ()
+  (let ((r (drgnx-doctor-test--search :embed-up nil :embed-dims nil)))
+    (should (eq (car r) 'info))
+    (should (string-match-p "Set Up Semantic Search" (nth 2 r)))))
+
+(ert-deftest drgnx-doctor/search-unindexed-projects-are-not-stale ()
+  (let ((r (drgnx-doctor-test--search :indexes nil :unindexed 3)))
+    (should (eq (car r) 'ok))
+    (should (string-match-p "3 projects not indexed" (nth 1 r)))))
+
+(ert-deftest drgnx-doctor/search-fact-failure-is-a-warning-not-a-crash ()
+  (should (eq (car (drgnx-doctor-check 'search (drgnx-doctor-test--facts :search '(:error "boom")))) 'warn))
+  (should (eq (car (drgnx-doctor-check 'search (drgnx-doctor-test--facts))) 'info)))   ; facts without :search

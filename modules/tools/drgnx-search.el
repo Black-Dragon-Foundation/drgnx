@@ -11,6 +11,7 @@
 ;; items, shown the way Search in Project shows its matches, so they land in the panel's Results tab with the
 ;; same jump and preview.  Index Project / Index Status drive the background indexer; a saved file of an indexed
 ;; project schedules an incremental re-index 30 s after the last save (one timer per project, never a prompt).
+;; Set Up Semantic Search (core/drgnx-search-setup.el) finds and tests the embedding model and starts the first index.
 
 ;;; Code:
 (require 'drgnx-modules)
@@ -33,6 +34,8 @@
 (declare-function drgnx-search--glob-regexp "drgnx-search-chunk")
 (declare-function drgnx-search--matches-p "drgnx-search-chunk")
 (declare-function drgnx-search-index-start "drgnx-search-index")
+(declare-function drgnx-search-setup "drgnx-search-setup")
+(declare-function drgnx-search-setup--current-root "drgnx-search-setup")
 (declare-function drgnx-search-index--running-job "drgnx-search-index")
 (defvar drgnx-search-last-notice)
 
@@ -121,6 +124,15 @@ With a prefix argument REBUILD, start from scratch — the way to change the emb
         (message "Search is turned off for this project (.drgnx/search.eld)")
       (drgnx-search-index-start root (and rebuild t))
       (message "Indexing %s in the background — Index Status shows how far it is" (abbreviate-file-name root)))))
+
+(defun drgnx-search-set-up ()
+  "Set Up Semantic Search: find an embedding model, test it, and index this project in the background (or,
+when the index is current, run a test query).  Outside a project it only finds and tests the model."
+  (interactive)
+  (require 'drgnx-search-setup)
+  (message "Setting up semantic search…")
+  (pcase-let ((`(,status ,text) (drgnx-search-setup (drgnx-search-setup--current-root) :interactive t)))
+    (message "%s%s" (if (memq status '(warn fail)) "Semantic search: " "") text)))
 
 (defun drgnx-search-status (root)
   "One line about the index of the project at ROOT: chunks, files, model, when, and whether a job runs."
@@ -222,7 +234,8 @@ indexer would never index (dot files, secrets by name, the project's :exclude)."
                        (pcase-dolist (`(,id ,title ,fn ,doc)
                                       '((search-semantic "Semantic Search" drgnx-search-semantic "Find code by meaning (in the panel)")
                                         (search-index-project "Index Project" drgnx-search-index-project "Build or refresh the semantic search index of this project")
-                                        (search-index-status "Index Status" drgnx-search-index-status "Chunks, files, model and age of this project's index")))
+                                        (search-index-status "Index Status" drgnx-search-index-status "Chunks, files, model and age of this project's index")
+                                        (search-set-up "Set Up Semantic Search" drgnx-search-set-up "Find and test an embedding model, then index this project in the background")))
                          (drgnx-command-define id :category "Search" :title title :command fn :doc doc))
                        (add-hook 'after-save-hook #'drgnx-search--after-save)))
 

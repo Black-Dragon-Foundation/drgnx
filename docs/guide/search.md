@@ -11,10 +11,28 @@ Python and no database server. Turning text into vectors is done by an embedding
 
 ## Setting up
 
-Choose **Set Up Semantic Search** (the palette, or Help → Welcome) — it finds an embedding model, makes a test call
-and builds the first index. The default is a local [Text Embeddings Inference](ai.md) server (TEI), so nothing
-leaves your machine. Without the wizard you need an `embed` role that answers ([ai.md](ai.md)) and **Search: Index
-Project**.
+Choose **Set Up Semantic Search** (the palette, or Help → Welcome → Semantic Search). It:
+
+1. asks the local providers which run (the same one-second probe as [ai.md](ai.md)) and takes the first one of the
+   `embed` role that answers; when the role has none running but another provider does (TEI, or an Ollama with an
+   embedding model), that one is put first in the role. With none running it stops and says how to start one — TEI:
+   `podman run -p 8080:80 -m 4g ghcr.io/huggingface/text-embeddings-inference:cpu-latest --model-id BAAI/bge-small-en-v1.5`
+   (the memory cap keeps a model from taking the machine), or Ollama: `ollama pull nomic-embed-text`;
+2. makes a test call (the embedding of "hello", five seconds at most) and reports the model and the number of
+   dimensions it gives — the only wait;
+3. indexes this project **in the background** and tells you so (Index Status shows how far it is). When the project's
+   index is already current it runs a test query instead and shows the top hit; when the index was built with another
+   model it says so and leaves it to you (`C-u` Index Project rebuilds).
+
+The default is a local [Text Embeddings Inference](ai.md) server (TEI), so nothing leaves your machine. Without the
+wizard you need an `embed` role that answers ([ai.md](ai.md)) and **Search: Index Project**.
+
+`drgnx doctor` has a `search` check: **fail** when this Emacs has no SQLite or its SQLite has no FTS5; **warn** when
+an index was built with another model or number of dimensions than the provider gives now (fix: Index Project with
+`C-u`), when one cannot be read, or when more than 20 files of a project changed since it was indexed; **info** when no
+embedding provider is reachable (searches then use keywords only); otherwise ok, with the number of indexes and chunks.
+It looks at the current project and the projects drgnx knows (at most 20); projects without an index are only counted.
+It never prompts and asks the network for one second at most.
 
 ## Using it
 
@@ -23,6 +41,7 @@ Project**.
 | Search: Semantic Search | asks for a question and shows the best chunks in the panel's Results tab | `C-k C-f` | `C-c s s` | `SPC s i` |
 | Search: Index Project | builds or refreshes this project's index in a background job; with `C-u`, from scratch | palette | palette | palette |
 | Search: Index Status | chunks, files, model, when it was last indexed, whether a job runs | palette | palette | palette |
+| Search: Set Up Semantic Search | finds and tests an embedding model, indexes this project in the background | palette | palette | palette |
 
 In the command palette, type `#` and your question — `#where do we parse the config` — to search without choosing a
 command first; a bare `#` asks for the question.

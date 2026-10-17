@@ -317,6 +317,20 @@ one call, and say how to add an OpenRouter key (drgnx writes none)."
                         "or set the key; then AI: Choose Provider/Model; " (string-join (nreverse lines) "; "))
               (concat (string-join (nreverse lines) "; ") " — change any: AI: Choose Provider/Model (docs/guide/ai.md)"))))))
 
+;;;; Step 5: Semantic Search
+
+(declare-function drgnx-search-setup "drgnx-search-setup")
+(declare-function drgnx-search-setup-detect "drgnx-search-setup")
+(declare-function drgnx-search-setup--current-root "drgnx-search-setup")
+
+(defun drgnx-onboard--search-step (ctx)
+  "Without interaction: report whether an embedding provider runs and whether the known projects have an index
+\(nothing is changed or started).  Interactive: the Set Up Semantic Search wizard for the current project."
+  (require 'drgnx-search-setup)
+  (if (plist-get ctx :interactive)
+      (drgnx-search-setup (drgnx-search-setup--current-root) :interactive t)
+    (drgnx-search-setup-detect)))
+
 ;;;; Step 7: daemon and desktop
 
 (declare-function drgnx-pkg-service-unit "drgnx-pkg")
@@ -380,8 +394,8 @@ one call, and say how to add an OpenRouter key (drgnx writes none)."
                            :doc "Model providers found (OpenRouter, Ollama, LM Studio, llama.cpp …), a provider and model per role, each tested; the GPU's room"
                            :run #'drgnx-onboard--ai-step)
 (drgnx-onboard-define-step 'search :order 50 :title "Semantic Search"
-                           :doc "Embedding servers found; indexing your projects comes with the search milestone"
-                           :run (drgnx-onboard--detect '("text-embeddings-router" "ollama") "indexing is set up by the search step (M10)"))
+                           :doc "An embedding model found and tested, the current project indexed in the background (the same as Set Up Semantic Search); without interaction it only reports what is there"
+                           :run #'drgnx-onboard--search-step)
 (drgnx-onboard-define-step 'agents :order 60 :title "Agents"
                            :doc "Agent CLIs found (Claude, gryphn); profiles and MCP servers come with the agents milestone"
                            :run (drgnx-onboard--detect '("claude" "gry") "agent profiles and MCP servers are set up by the agents step (M7)"))
