@@ -58,7 +58,7 @@
 (defun drgnx-fmt--readable (file)
   "nil when the current buffer reads as Lisp, else where it does not (FILE:LINE: why)."
   (save-excursion
-    (condition-case nil (progn (check-parens) nil)
+    (condition-case nil (let ((inhibit-message t) (message-log-max nil)) (check-parens) nil)   ; no "Mark set"
       (error (format "%s:%d: does not read (an unbalanced parenthesis or an open string)"
                      (file-name-nondirectory file) (line-number-at-pos))))))
 
