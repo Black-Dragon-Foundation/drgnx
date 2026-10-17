@@ -393,3 +393,22 @@ project's."
       (should (equal (mapcar #'car (drgnx-search-files root)) '("a.txt"))))))
 
 ;;; search-chunk-test.el ends here
+
+(ert-deftest drgnx-search-toplevel/through-a-symlink-below-the-top ()
+  "The top keeps DIR's spelling and is right when DIR is reached through a symlink to a directory deeper down."
+  (drgnx-search-chunk-test--repo '(("sub/deep/a.el" . "a\n"))
+    (let* ((root (directory-file-name (file-truename root)))
+           (outside (directory-file-name (file-truename (make-temp-file "drgnx-search-outside" t)))))
+      (unwind-protect
+          (progn
+            (make-symbolic-link "sub/deep" (expand-file-name "link" root))
+            (make-symbolic-link root (expand-file-name "proj" outside))
+            (should (equal (drgnx-search-toplevel (concat root "/sub/deep")) root))
+            ;; through a link below the top: the top is the lexical ancestor ROOT, not ROOT/link/../..
+            (should (equal (drgnx-search-toplevel (concat root "/link")) root))
+            ;; through a link to the whole project: the user's spelling
+            (should (equal (drgnx-search-toplevel (concat outside "/proj/sub/deep")) (concat outside "/proj")))
+            ;; a link from outside to a directory below the top: no lexical ancestor is the top; its real path
+            (make-symbolic-link (concat root "/sub") (expand-file-name "below" outside))
+            (should (equal (drgnx-search-toplevel (concat outside "/below")) root)))
+        (delete-directory outside t)))))

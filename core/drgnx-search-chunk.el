@@ -248,12 +248,24 @@ fails."
 
 (defun drgnx-search-toplevel (dir)
   "The top of the git work tree holding the directory DIR, as a directory name without trailing slash — spelled
-from DIR (`--show-cdup', not `--show-toplevel', which resolves symlinks: the index file is named after the
-path, and the editor's project root keeps the user's spelling) — or nil when DIR is in no git work tree."
-  (let ((dir (file-name-as-directory (expand-file-name dir))))
+from DIR when it can be (the index file is named after the path, and the editor's project root keeps the user's
+spelling) — or nil when DIR is in no git work tree.
+git's `--show-toplevel' gives the real path; the result is the lexical ancestor of DIR (DIR itself included)
+whose truename is that path, or the real path itself when DIR reaches the project through a symlink to a
+directory below its top (no ancestor of DIR is then the top)."
+  (let ((dir (directory-file-name (expand-file-name dir))))
     (when (file-directory-p dir)
-      (pcase (drgnx-search--git-run dir nil '("rev-parse" "--show-cdup"))
-        (`(0 ,out ,_) (directory-file-name (expand-file-name (string-trim out) dir)))))))
+      (pcase (drgnx-search--git-run (file-name-as-directory dir) nil '("rev-parse" "--show-toplevel"))
+        (`(0 ,out ,_)
+         (let* ((top (directory-file-name (string-trim-right out "\n")))
+                (true-top (directory-file-name (file-truename top)))
+                (d dir) found)
+           (while (and d (not found))
+             (if (equal (directory-file-name (file-truename d)) true-top)
+                 (setq found d)
+               (let ((parent (directory-file-name (file-name-directory d))))
+                 (setq d (unless (equal parent d) parent)))))
+           (or found top)))))))
 
 (defun drgnx-search--parse-index (out)
   "The stage 0 entries of `git ls-files -s -z' output OUT: (MODE BLOB PATH) each."
