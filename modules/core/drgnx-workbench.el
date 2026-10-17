@@ -121,6 +121,12 @@
                                              :command #'drgnx-wb-show-unrouted :doc "Buffers no placement rule matched (each one is a rule to add)")
                        (drgnx-command-define 'toggle-sidebar :category "View" :title "Toggle Sidebar" :scope 'window
                                              :command #'drgnx-wb-toggle-sidebar :menu '("View") :doc "Show or hide the Buffers panel and the Explorer")
+                       (drgnx-command-define 'view-explorer :category "View" :title "View: Explorer" :scope 'window
+                                             :command #'drgnx-wb-view-explorer
+                                             :doc "Show the Buffers panel and the Explorer in the sidebar")
+                       (drgnx-command-define 'view-search :category "View" :title "View: Search" :scope 'window
+                                             :command #'drgnx-wb-view-search
+                                             :doc "Show the Search view in the sidebar")
                        (drgnx-command-define 'focus-editor :category "View" :title "Focus Editor" :scope 'window
                                              :command #'drgnx-wb-focus-editor :doc "Move focus to the editor you used last")
                        (drgnx-command-define 'dock-back :category "View" :title "Back to the Editor" :scope 'window

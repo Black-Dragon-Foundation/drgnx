@@ -251,4 +251,6 @@
         (buffers-filter "/")
         (save-all :none "C-x s stays Emacs' save-some-buffers, which asks per buffer")
         (close-saved :none "in the palette")
-        (close-all :none "in the palette")))
+        (close-all :none "in the palette")
+        (view-explorer :none "the palette")
+        (view-search :none "the palette")))

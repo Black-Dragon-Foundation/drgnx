@@ -251,4 +251,6 @@
         (buffers-filter "C-M-f")
         (save-all "C-k s" :mac "M-s-s")
         (close-saved "C-k u")
-        (close-all "C-k C-w")))
+        (close-all "C-k C-w")
+        (view-explorer :none "C-S-e is Focus Explorer; the palette")
+        (view-search :none "C-S-f is Search in Files; the palette")))

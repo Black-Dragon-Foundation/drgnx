@@ -31,7 +31,7 @@ follower is not a jank-guard violation (invariant I9).")
   (declare (indent 1))
   `(let ((drgnx-wb--owned (append ,windows drgnx-wb--owned))) ,@body))
 
-(defvar drgnx-wb--sections nil "Alist NAME → plist (:slot :title :buffer), the left dock's sections.")
+(defvar drgnx-wb--sections nil "Alist NAME → plist (:slot :title :buffer :view), the left dock's sections.")
 
 (defun drgnx-wb-display-name (name)
   "NAME as it can be shown on one row: control characters (a newline in a file name) as ^X."
@@ -43,7 +43,8 @@ follower is not a jank-guard violation (invariant I9).")
 
 (defun drgnx-wb-define-section (name &rest spec)
   "Define dock section NAME: SPEC is (:slot N :title STRING-OR-FUNCTION-RETURNING-ONE
-:buffer FUNCTION-RETURNING-A-BUFFER :height FRACTION-OF-THE-DOCK :on-show FUNCTION-OF-THE-WINDOW).
+:buffer FUNCTION-RETURNING-A-BUFFER :height FRACTION-OF-THE-DOCK :on-show FUNCTION-OF-THE-WINDOW
+:view SYMBOL, the sidebar view the section belongs to, default `explorer').
 A function title is asked each time the dock shows (a panel's filter stays in its title)."
   (setf (alist-get name drgnx-wb--sections) spec)
   name)
@@ -60,11 +61,19 @@ A function title is asked each time the dock shows (a panel's filter stays in it
 
 (defvar drgnx-rules--placing)           ; drgnx-rules.el: the dock's side windows are meant, not rerouted
 
+(defun drgnx-wb-sidebar-view (&optional frame)
+  "The view the sidebar shows (or shows next) on FRAME: `explorer' unless another was chosen."
+  (or (frame-parameter frame 'drgnx-wb-view) 'explorer))
+
+(defun drgnx-wb--in-view-p (spec view)
+  "Non-nil when the section SPEC belongs to VIEW (a section without :view is the Explorer's)."
+  (eq (or (plist-get spec :view) 'explorer) view))
+
 (defun drgnx-wb-show-sidebar ()
-  "Show the left dock (all sections) without selecting it; keep the width it had."
+  "Show the left dock (the current view's sections) without selecting it; keep the width it had."
   (unless (drgnx-wb-sidebar-showing-p)
-    (let ((selected (selected-window)))
-      (pcase-dolist (`(,name . ,spec) (sort (copy-sequence drgnx-wb--sections)
+    (let ((selected (selected-window)) (view (drgnx-wb-sidebar-view)))
+      (pcase-dolist (`(,name . ,spec) (sort (seq-filter (lambda (s) (drgnx-wb--in-view-p (cdr s) view)) drgnx-wb--sections)
                                             (lambda (a b) (< (plist-get (cdr a) :slot) (plist-get (cdr b) :slot)))))
         (let ((drgnx-rules--placing t))
           (display-buffer-in-side-window
@@ -93,6 +102,31 @@ A function title is asked each time the dock shows (a panel's filter stays in it
     (set-frame-parameter nil 'drgnx-wb-dock-px (window-pixel-width (car windows)))
     (when (memq (selected-window) windows) (drgnx-wb-focus-editor))
     (dolist (w windows) (when (window-live-p w) (delete-window w)))))
+
+(defun drgnx-wb-show-view (view)
+  "Show only VIEW's sections in the left dock, swapping them in place at the same width.
+Focus stays where it was (a focus in the dock moves to the new view's first section); a hidden
+sidebar is shown first."
+  (let ((in-dock (memq (selected-window) (drgnx-wb--dock-windows))))
+    (unless (and (eq view (drgnx-wb-sidebar-view)) (drgnx-wb-sidebar-showing-p))
+      (when-let* ((windows (drgnx-wb--dock-windows)))
+        (set-frame-parameter nil 'drgnx-wb-dock-px (window-pixel-width (car windows)))
+        (when in-dock (drgnx-wb-focus-editor))
+        (dolist (w windows) (when (window-live-p w) (delete-window w))))
+      (set-frame-parameter nil 'drgnx-wb-view view)
+      (drgnx-wb-show-sidebar)
+      (when-let* ((_ in-dock) (w (car (drgnx-wb--dock-windows))))
+        (select-window w)))))
+
+(defun drgnx-wb-view-explorer ()
+  "Show the Explorer view (the Buffers panel, the Explorer, the Outline) in the sidebar."
+  (interactive)
+  (drgnx-wb-show-view 'explorer))
+
+(defun drgnx-wb-view-search ()
+  "Show the Search view in the sidebar."
+  (interactive)
+  (drgnx-wb-show-view 'search))
 
 (defun drgnx-wb-toggle-sidebar ()
   "Show or hide the left dock (Buffers and Explorer)."
