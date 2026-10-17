@@ -21,6 +21,7 @@ a chain of providers and models tried in order, so a feature keeps working when 
 | `lemonade` | Lemonade | `http://localhost:13305/api/v1` |
 | `llamafile` | llamafile | `http://localhost:8081/v1` (start it with `--port 8081`) |
 | `tei` | Text Embeddings Inference | `http://localhost:8080` |
+| `anthropic` | Anthropic API (agents only, through the gateway) | `https://api.anthropic.com/v1` (key: `ANTHROPIC_API_KEY` or auth-source) |
 
 Add your own, or move one, in `ai.eld` in drgnx's config directory (`~/.config/drgnx/ai.eld`); a project's `.drgnx/ai.eld` at its
 root can choose **roles** (and wins), among the providers the presets and your `ai.eld` define — never a provider
@@ -43,6 +44,11 @@ or a key variable of its own, so a cloned repository cannot send your code, or a
 | `edit` | inline edit | OpenRouter `openrouter/auto`, then Ollama `qwen2.5-coder:7b` |
 | `chat` | chat (gptel), Ask the Codebase | as `edit` |
 | `embed` | semantic search | TEI |
+| `agent` | Claude Code on OpenRouter, through the agent gateway ([agents.md](agents.md)) | OpenRouter, with the model the agent asks for |
+
+A provider in your `ai.eld` may carry `:price (IN . OUT)` — US dollars per million input and output tokens — so the
+agent gateway can count what agents spend when the provider does not report a cost; `:messages t` says it serves
+Anthropic's Messages API, so the gateway can carry agents to it (OpenRouter, Ollama and Anthropic do).
 
 ## Ghost text and Tab
 

@@ -19,8 +19,11 @@
 
 (defconst drgnx-ai-presets
   '((openrouter :name "OpenRouter" :kind openai :url "https://openrouter.ai/api/v1" :key-env "OPENROUTER_API_KEY"
-                :caps (chat fim embed))
-    (ollama     :name "Ollama" :kind ollama :url "http://localhost:11434" :caps (chat fim embed))
+                :caps (chat fim embed) :messages t)
+    (ollama     :name "Ollama" :kind ollama :url "http://localhost:11434" :caps (chat fim embed) :messages t)
+    ;; the agent gateway only (Claude Code with your own Anthropic API key): no editor feature asks it
+    (anthropic  :name "Anthropic API" :kind anthropic :url "https://api.anthropic.com/v1" :key-env "ANTHROPIC_API_KEY"
+                :auth x-api-key :caps () :messages t)
     (lmstudio   :name "LM Studio" :kind openai :url "http://localhost:1234/v1" :caps (chat fim embed))
     (llamacpp   :name "llama.cpp server" :kind llamacpp :url "http://localhost:8012" :caps (chat fim embed))   ; its 8080 is TEI's
     (vllm       :name "vLLM" :kind openai :url "http://localhost:8000/v1" :caps (chat fim embed))
@@ -32,13 +35,17 @@
     (lemonade   :name "Lemonade" :kind openai :url "http://localhost:13305/api/v1" :caps (chat fim embed))
     (llamafile  :name "llamafile" :kind openai :url "http://localhost:8081/v1" :caps (chat fim))       ; its 8080 is TEI's
     (tei        :name "Text Embeddings Inference" :kind tei :url "http://localhost:8080" :caps (embed)))
-  "The providers drgnx knows without configuration: id → (:name :kind :url [:key-env] :caps).")
+  "The providers drgnx knows without configuration: id → (:name :kind :url [:key-env] :caps [:messages] [:auth]).
+:messages — it serves Anthropic's Messages API (URL without /v1, then the agent's path): the agent gateway can carry
+it; :auth x-api-key — its key goes in that header (else `Authorization: Bearer').  A provider in ai.eld may add
+:price (IN . OUT), USD per million tokens, for the gateway's spend.")
 
 (defconst drgnx-ai-default-roles
   '((complete (ollama . "qwen2.5-coder:1.5b"))           ; fits next to TEI on a 6 GB GPU
     (edit (openrouter . "openrouter/auto") (ollama . "qwen2.5-coder:7b"))
     (chat (openrouter . "openrouter/auto") (ollama . "qwen2.5-coder:7b"))
-    (embed (tei)))
+    (embed (tei))
+    (agent (openrouter)))                                ; the gateway's chain for agents; nil model: the agent's own
   "Each role's chain when neither the project nor the user names one.")
 
 (defvar drgnx-ai--keys (make-hash-table :test #'eq) "Keys found this session: provider → key (never written).")
