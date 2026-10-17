@@ -38,4 +38,45 @@
       (should-not (seq-find (lambda (e) (string-prefix-p "DRGNX_SAFE=" e)) env))
       (should (member "HOME=/tmp/drgnx-perf-x/home" env)))))
 
+(defmacro drgnx-perf-run-test--with-fake-run (loads &rest body)
+  "BODY with a fake session (one :measure workload, no budgets) and the load averages LOADS returned one
+after another (the last repeats).  Binds `history' (the history file) and `started' (sessions started)."
+  (declare (indent 1))
+  `(let* ((dir (make-temp-file "drgnx-perf-run" t)) (history (expand-file-name "perf-history.jsonl" dir))
+          (loads ,loads) (started 0)
+          (process-environment (append '("DRGNX_PERF_MAX_LOAD=4" "DRGNX_PERF_WAIT=60") process-environment)))
+     (unwind-protect
+         (cl-letf (((symbol-function 'drgnx-perf-load) (lambda () (if (cdr loads) (pop loads) (car loads))))
+                   ((symbol-function 'sleep-for) #'ignore)
+                   ((symbol-function 'drgnx-ui-state-root) (lambda () dir))
+                   ((symbol-function 'drgnx-ui-start) (lambda (&rest _) (setq started (1+ started)) '(:name "fake")))
+                   ((symbol-function 'drgnx-ui-own-session) (lambda (_) 'sess))
+                   ((symbol-function 'drgnx-ui-stop) #'ignore)
+                   ((symbol-function 'drgnx-perf-run--make-fixture) (lambda () (make-temp-file "drgnx-perf-fixture")))
+                   ((symbol-function 'drgnx-perf-run--workloads) (lambda () '((frames :measure "m"))))
+                   ((symbol-function 'drgnx-perf-run--call) (lambda (&rest _) '(:frame (:p50 1 :p95 1 :max 1))))
+                   ((symbol-function 'drgnx-perf-run--budgets) #'ignore)
+                   ((symbol-function 'drgnx-perf-run--commit) (lambda () "c0")))
+           ,@body)
+       (delete-directory dir t))))
+
+(ert-deftest drgnx-perf-run/a-machine-busy-during-the-run-is-not-judged-nor-kept ()
+  ;; DEFERRED M7b-1: a run next to other test suites failed the scrolling budget on unchanged code.
+  (drgnx-perf-run-test--with-fake-run '(1.0 9.0)
+    (should (eql (drgnx-perf-run) 3))
+    (should-not (file-exists-p history))))
+
+(ert-deftest drgnx-perf-run/a-machine-that-stays-busy-is-not-measured ()
+  (drgnx-perf-run-test--with-fake-run '(9.0)
+    (let ((process-environment (cons "DRGNX_PERF_WAIT=0" process-environment)))
+      (should (eql (drgnx-perf-run) 3))
+      (should (eql started 0)))))
+
+(ert-deftest drgnx-perf-run/it-waits-for-a-quiet-machine-then-judges ()
+  (drgnx-perf-run-test--with-fake-run '(9.0 9.0 1.5 2.0)
+    (should (eql (drgnx-perf-run) 0))
+    (should (eql started 1))
+    (should (eql (plist-get (json-parse-string (with-temp-buffer (insert-file-contents history) (buffer-string)) :object-type 'plist) :load)
+                 2.0))))
+
 ;;; perf-run-test.el ends here

@@ -147,4 +147,25 @@
           (should (drgnx-perf-regressions file '((typing :input (:p95 36))))))        ; 20% and 6 ms
       (delete-directory dir t))))
 
+(ert-deftest drgnx-perf/a-busy-machine-is-told-apart-from-a-quiet-one ()
+  ;; Timings taken while other processes took the CPU looked like a regression (scrolling 11.6 → 17.6 ms
+  ;; on the same commit); the highest load sample decides, a missing sample never does.
+  (should (eql (drgnx-perf-busy '(1.0 nil 5.5 2.0) 4) 5.5))
+  (should-not (drgnx-perf-busy '(1.0 3.9) 4))
+  (should-not (drgnx-perf-busy '(nil) 4))
+  (let ((process-environment (cons "DRGNX_PERF_MAX_LOAD=7.5" process-environment)))
+    (should (eql (drgnx-perf-max-load) 7.5)))
+  (let ((process-environment (cons "DRGNX_PERF_MAX_LOAD=lots" process-environment)))
+    (should (>= (drgnx-perf-max-load) 3))))
+
+(ert-deftest drgnx-perf/the-history-keeps-the-load-of-a-run ()
+  (let* ((dir (make-temp-file "drgnx-perf-hist" t)) (file (expand-file-name "history.jsonl" dir)))
+    (unwind-protect
+        (progn
+          (drgnx-perf-history-append file "c0" '((typing :input (:p95 3))) 1.234)
+          (should (eql (plist-get (json-parse-string (with-temp-buffer (insert-file-contents file) (buffer-string)) :object-type 'plist) :load)
+                       1.2))
+          (should (drgnx-perf--history file)))
+      (delete-directory dir t))))
+
 ;;; perf-test.el ends here

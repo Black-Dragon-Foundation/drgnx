@@ -221,11 +221,12 @@ if an audit is already running."
                                  out)))))
     (nreverse out)))
 
-(defun drgnx-perf-history-append (file commit results)
-  "Add RESULTS of COMMIT as one JSON line to FILE."
+(defun drgnx-perf-history-append (file commit results &optional load)
+  "Add RESULTS of COMMIT as one JSON line to FILE.  LOAD: the highest load average seen in the run."
   (make-directory (file-name-directory file) t)
-  (write-region (concat (json-serialize (list :commit commit :time (format-time-string "%FT%T%z")
-                                              :results (prin1-to-string results)))
+  (write-region (concat (json-serialize (append (list :commit commit :time (format-time-string "%FT%T%z"))
+                                                (and load (list :load (drgnx-perf--round load)))
+                                                (list :results (prin1-to-string results))))
                         "\n")
                 nil file t 'silent))
 
@@ -255,6 +256,24 @@ PATHS: the metrics compared (default the p95s: input, redisplay, frame)."
                                 (drgnx-perf--round now) (drgnx-perf--round median) (length old))
                         out))))))))
     (nreverse out)))
+
+;;;; A quiet machine: timings taken while other processes compete for the CPU are not judged
+
+(defun drgnx-perf-load ()
+  "The 1-minute load average, or nil where the system reports none."
+  (ignore-errors (car (load-average t))))
+
+(defun drgnx-perf-max-load ()
+  "The load above which timings are not judged: $DRGNX_PERF_MAX_LOAD, else a quarter of the CPUs, at
+least 3 (the measured session adds its own load)."
+  (let ((env (getenv "DRGNX_PERF_MAX_LOAD")))
+    (if (and env (string-match-p "\\`[0-9]+\\(?:\\.[0-9]+\\)?\\'" env)) (string-to-number env)
+      (max 3 (/ (num-processors) 4.0)))))
+
+(defun drgnx-perf-busy (loads limit)
+  "The highest of LOADS (samples; nil ones ignored) when it is above LIMIT, else nil."
+  (let ((top (seq-max (cons 0 (delq nil (copy-sequence loads))))))
+    (and (> top limit) top)))
 
 (provide 'drgnx-perf)
 ;;; drgnx-perf.el ends here

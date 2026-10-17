@@ -8,6 +8,8 @@ drgnx test --perf           every workload; fails when a budget breaks; WORSE li
 drgnx test --perf --audit   the workloads with every hook function timed: judged on the hook budget only
 drgnx test --soak [MIN]     the input workloads in a loop for MIN minutes (30); fails when memory grows
 DRGNX_STARTUP_TRACE=FILE    emacs --init-directory …/init: where startup time goes, written to FILE
+DRGNX_PERF_MAX_LOAD=N       the load average above which --perf does not judge (default: CPUs / 4, at least 3)
+DRGNX_PERF_WAIT=S           how long --perf waits for a quiet machine before giving up (180 s)
 ```
 
 ## What is measured
@@ -43,6 +45,21 @@ The history (`perf-history.jsonl` in the harness state root) gets one line per r
 with its commit. A p95 more than 15% **and** 5 ms worse than the median of the last five runs **fails** the run
 (the 5 ms keeps noise in tiny numbers from failing it). The new-frame path from a daemon (`emacsclient -c`) is
 judged by the scenario `frame-from-daemon-fast` ([scenarios.md](scenarios.md)).
+
+## A quiet machine
+
+Timings only mean something when nothing else takes the CPU: next to other test runs, scrolling p95 went from
+11.6 to 17.6 ms on the same commit, and every other number rose with it (with ten busy loops: 24.5 ms). So
+`--perf` reads the 1-minute load average before the run and after every workload:
+
+- before the run, it waits (up to `DRGNX_PERF_WAIT`) for the load to fall to `DRGNX_PERF_MAX_LOAD`; if it never
+  does, nothing is measured;
+- if the load passed the limit during the run, the numbers are printed but **not judged** and not written to the
+  history;
+- both end with exit code **3** (0: every budget holds, 1: a failure), so a busy machine never reads as a pass or
+  a regression. A judged run records its highest load in its history line (`load`).
+
+Run `--perf` on its own: no other test tiers, agents or builds at the same time.
 
 ## Where things stood (2026-10-17, this machine)
 
