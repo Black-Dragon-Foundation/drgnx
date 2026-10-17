@@ -10,14 +10,18 @@
   (expand-file-name (concat "test/fixtures/os-release/" name) drgnx-install-test--root))
 
 (defun drgnx-install-test--run (env &rest args)
-  "Run install.sh ARGS with ENV (\"K=V\" strings) in a new session (no terminal); return (EXIT . OUTPUT)."
-  (let ((process-environment (append env (list "DRGNX_INSTALL_EMACS=none" "HOME=/tmp/drgnx-install-test-home")
-                                     process-environment))
-        (default-directory drgnx-install-test--root))     ; not "~/…": HOME is changed above
-    (with-temp-buffer
-      (cons (apply #'call-process "setsid" nil t nil "-w" "bash"
-                   (expand-file-name "install.sh" drgnx-install-test--root) args)
-            (buffer-string)))))
+  "Run install.sh ARGS with ENV (\"K=V\" strings) in a new session (no terminal); return (EXIT . OUTPUT).
+HOME is a new empty directory, deleted afterwards (ENV may name another)."
+  (let* ((home (make-temp-file "drgnx-install-home" t))
+         (process-environment (append env (list "DRGNX_INSTALL_EMACS=none" (concat "HOME=" home))
+                                      process-environment))
+         (default-directory drgnx-install-test--root))    ; not "~/…": HOME is changed above
+    (unwind-protect
+        (with-temp-buffer
+          (cons (apply #'call-process "setsid" nil t nil "-w" "bash"
+                       (expand-file-name "install.sh" drgnx-install-test--root) args)
+                (buffer-string)))
+      (delete-directory home t))))
 
 (defun drgnx-install-test--plan (os &rest env)
   (drgnx-install-test--run (append (list (concat "DRGNX_INSTALL_OS_RELEASE=" (drgnx-install-test--os os))
@@ -94,11 +98,26 @@
       (delete-file fake))))
 
 (ert-deftest drgnx-install/no-terminal-without-yes-refuses-before-acting ()
-  (let ((r (drgnx-install-test--run (list (concat "DRGNX_INSTALL_OS_RELEASE=" (drgnx-install-test--os "fedora-45"))
-                                          "DRGNX_INSTALL_UNAME=Linux"))))
-    (should (= (car r) 3))
-    (should (string-search "--yes" (cdr r)))
-    (should-not (file-exists-p "/tmp/drgnx-install-test-home/.local/share/drgnx"))))
+  (let ((home (make-temp-file "drgnx-install-home" t)))
+    (unwind-protect
+        (let ((r (drgnx-install-test--run (list (concat "DRGNX_INSTALL_OS_RELEASE=" (drgnx-install-test--os "fedora-45"))
+                                                "DRGNX_INSTALL_UNAME=Linux" (concat "HOME=" home)))))
+          (should (= (car r) 3))
+          (should (string-search "--yes" (cdr r)))
+          (should-not (directory-files home nil directory-files-no-dot-files-regexp)))   ; nothing written
+      (delete-directory home t))))
+
+(ert-deftest drgnx-install/each-run-has-its-own-home ()
+  ;; M2.5-8: never a fixed, shared HOME — a new one per run, gone afterwards.
+  (let ((homes (mapcar (lambda (_)
+                         (let ((r (drgnx-install-test--plan "fedora-45")))
+                           (should (string-match " into \\(.*\\)/\\.local/share/drgnx/drgnx" (cdr r)))
+                           (match-string 1 (cdr r))))
+                       '(1 2))))
+    (should-not (equal (car homes) (cadr homes)))
+    (dolist (h homes)
+      (should (string-prefix-p (file-name-as-directory (file-truename temporary-file-directory)) (file-truename h)))
+      (should-not (file-exists-p h)))))
 
 (ert-deftest drgnx-install/plan-names-the-drgnx-steps ()
   (drgnx-install-test--expect (drgnx-install-test--plan "fedora-45")
