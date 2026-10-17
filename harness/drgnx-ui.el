@@ -907,12 +907,18 @@ a boolean flag (`drgnx-ui--boolean-flags') becomes :name t."
   (set-language-environment "UTF-8")
   (setq locale-coding-system 'utf-8-unix))
 
+(defun drgnx-ui--decode-arg (arg)
+  "ARG as text: without a UTF-8 locale Emacs leaves the command line as raw bytes (it is decoded
+before `drgnx-ui-batch-setup' runs), so a unibyte argument is decoded as UTF-8."
+  (if (multibyte-string-p arg) arg (decode-coding-string arg 'utf-8)))
+
 (defun drgnx-ui-cli ()
   "Entry point for `drgnx ui' (batch): run the command in `command-line-args-left', exit."
   (drgnx-ui-batch-setup)
-  (let* ((args (prog1 (if (equal (car command-line-args-left) "--")
-                          (cdr command-line-args-left)
-                        command-line-args-left)
+  (let* ((args (prog1 (mapcar #'drgnx-ui--decode-arg
+                              (if (equal (car command-line-args-left) "--")
+                                  (cdr command-line-args-left)
+                                command-line-args-left))
                  (setq command-line-args-left nil)))
          (cmd (car args)))
     ;; the test tiers' sessions are theirs alone: a tier ended early (C-c) stops them on the way out

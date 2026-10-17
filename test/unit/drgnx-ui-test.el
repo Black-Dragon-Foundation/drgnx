@@ -337,3 +337,17 @@ the real ones belong to sessions running next to the tests (bin/drgnx check's li
         (should (string-match-p "action 2 (:keys .*bad.*): no such key" (error-message-string err))))
       (should (equal (car calls) "(drgnx-uitest-api-measure-end)"))
       (should-not (seq-find (lambda (f) (string-search "\"c\"" f)) calls)))))
+
+(ert-deftest drgnx-ui/cli-arguments-are-utf-8-without-a-locale ()
+  ;; DEFERRED M1-2: without a UTF-8 locale Emacs hands the arguments over as raw bytes, before
+  ;; `drgnx-ui-batch-setup' can say UTF-8; `drgnx ui' decodes them itself
+  (drgnx-ui-test--with-state
+    (let ((process-environment (append '("LANG" "LC_ALL" "LC_CTYPE") process-environment))   ; unset
+          (locale-coding-system 'utf-8-unix)
+          (coding-system-for-read 'utf-8-unix))
+      (with-temp-buffer
+        (call-process (expand-file-name invocation-name invocation-directory) nil t nil
+                      "--batch" "-Q" "-L" drgnx-ui-harness-dir "-L" (expand-file-name "core" drgnx-ui-repo-dir)
+                      "-l" "drgnx-ui" "-f" "drgnx-ui-cli" "--" "stop" "drgnx-ui-✓")
+        (should (string-search "not a drgnx harness session" (buffer-string)))
+        (should (string-search "drgnx-ui-✓" (buffer-string)))))))

@@ -209,7 +209,8 @@ only queue; callers poll `status` until settled.
 ## CLI
 
 `bin/drgnx ui COMMAND` runs the controller (`harness/drgnx-ui.el`) in batch Emacs — no other runtime needed.
-Output is JSON on stdout; errors go to stderr with exit status 1.
+Output is JSON on stdout; errors go to stderr with exit status 1. Arguments and output are UTF-8 whatever the
+caller's locale (without a UTF-8 locale Emacs passes the arguments on as raw bytes; the CLI decodes them).
 
 ```sh
 bin/drgnx ui start [--config minimal|gryphn|DIR] [--size 1600x900]   # → {"name":"drgnx-ui-1", …, "ready":{…}}
