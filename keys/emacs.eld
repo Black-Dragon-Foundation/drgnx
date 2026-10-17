@@ -178,6 +178,7 @@
         (preferences-theme :none "in the palette and the Options menu")
         (view-zen :none "in the palette")
         (preferences-modules :none "in the palette and the Options menu")
+        (preferences-user-config :none "in the palette and the Options menu")
         (modules-toggle "RET")
         (move-editor-to-new-window :none "in the palette; C-x 5 2 makes a frame (stock)")
         (open-editor-in-new-window :none "C-x 5 2 (stock)")

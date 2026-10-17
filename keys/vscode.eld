@@ -177,6 +177,7 @@
         (preferences-theme :none "in the palette and the Options menu")
         (view-zen "C-k z" "<f11>")
         (preferences-modules "C-,")
+        (preferences-user-config :none "in the palette and the Options menu")
         (modules-toggle "RET")
         (move-editor-to-new-window :none "in the palette")
         (open-editor-in-new-window "C-k o")

@@ -42,6 +42,15 @@ field that is not what drgnx expects (a typo) is dropped with a message in `*Mes
 from a newer drgnx, is reported and ignored (modules use their defaults) — never an error at start — and before drgnx
 next writes the file it keeps yours as `modules.eld.bak-<time>`.
 
+## Your own code: config.el
+
+`~/.config/drgnx/config.el` (`$DRGNX_CONFIG_DIR`) is your own Emacs Lisp. It loads at the end of every start,
+after the `startup` modules, so what you set there wins; for a package that loads later, use
+`with-eval-after-load`. **Preferences: Open User Config** (palette, Options menu) opens it, made from a short
+template the first time. An error in it is said in `*Messages*` (what came before it ran, the rest did not) and
+drgnx starts anyway; `drgnx safe` skips it. Code you want reported as a module, with its own row in
+Preferences: Modules, is an external module (below).
+
 ## External modules (gryphn)
 
 Code that lives elsewhere loads as an **external module**, listed in modules.eld:

@@ -238,22 +238,37 @@ windows left (\[save-buffers-kill-terminal] in the last client), save every one 
       (ignore-errors (drgnx-persist-save nil (list frame))))))
 
 (defun drgnx-persist--on-start ()
-  "At the first graphical frame — which a daemon makes before selecting it."
-  (when-let* (((and drgnx-persist-restore-on-start)) (f (drgnx-persist--gui-frame)))
+  "At the first graphical frame — which a daemon makes before selecting it.  An emacsclient's
+window is left to `drgnx-persist--on-client-frame'."
+  (when-let* (((and drgnx-persist-restore-on-start)) (f (drgnx-persist--gui-frame))
+              ((not (frame-parameter f 'client))))
     (ignore-errors (with-selected-frame f (drgnx-persist-restore)))))
 
+(defun drgnx-persist--on-client-frame ()
+  "An emacsclient's new window, after the server showed its buffer in it: when it is the only
+graphical window — the daemon's first, or the first after the last one closed — bring the
+workbench back (a file the client asked for is shown next, on top of it)."
+  (let ((f (selected-frame)))
+    (when (and drgnx-persist-restore-on-start (display-graphic-p f)
+               (not (seq-some (lambda (o) (and (not (eq o f)) (display-graphic-p o) (not (frame-parent o))))
+                              (frame-list))))
+      (ignore-errors (drgnx-persist-restore)))))
+
 (define-minor-mode drgnx-persist-mode
-  "Save the workbench when Emacs exits; restore it at the first graphical frame."
+  "Save the workbench when Emacs exits or its last graphical frame closes; restore it at the first
+graphical frame, and at each emacsclient window that opens when no other one is open."
   :global t :group 'drgnx
   (if drgnx-persist-mode
       (progn (add-hook 'kill-emacs-hook #'drgnx-persist--on-exit)
              (add-hook 'delete-frame-functions #'drgnx-persist--on-delete-frame)
              (advice-add 'server-delete-client :before #'drgnx-persist--before-client-delete)
-             (add-hook 'drgnx-first-gui-frame-hook #'drgnx-persist--on-start))
+             (add-hook 'drgnx-first-gui-frame-hook #'drgnx-persist--on-start)
+             (add-hook 'server-after-make-frame-hook #'drgnx-persist--on-client-frame))
     (remove-hook 'kill-emacs-hook #'drgnx-persist--on-exit)
     (remove-hook 'delete-frame-functions #'drgnx-persist--on-delete-frame)
     (advice-remove 'server-delete-client #'drgnx-persist--before-client-delete)
-    (remove-hook 'drgnx-first-gui-frame-hook #'drgnx-persist--on-start)))
+    (remove-hook 'drgnx-first-gui-frame-hook #'drgnx-persist--on-start)
+    (remove-hook 'server-after-make-frame-hook #'drgnx-persist--on-client-frame)))
 
 (provide 'drgnx-persist)
 ;;; drgnx-persist.el ends here

@@ -22,6 +22,30 @@
 
 (defgroup drgnx nil "drgnx, a workbench-first Emacs framework." :group 'convenience)
 
+(defun drgnx-user-config-file ()
+  "Your own Emacs Lisp, loaded at the end of every start: config.el in `drgnx-user-dir'."
+  (expand-file-name "config.el" (drgnx-user-dir)))
+
+(defun drgnx--load-user-config ()
+  "Load `drgnx-user-config-file' when it exists; an error in it is said in *Messages*, never stops the start."
+  (let ((file (drgnx-user-config-file)))
+    (when (file-exists-p file)
+      (condition-case err (load file nil 'nomessage 'nosuffix)
+        (error (message "drgnx: %s: %s (the rest of it did not run)" (abbreviate-file-name file) (error-message-string err)))))))
+
+(defun drgnx-open-user-config ()
+  "Open your config.el — made from a short template the first time."
+  (interactive)
+  (let ((file (drgnx-user-config-file)))
+    (unless (file-exists-p file)
+      (make-directory (file-name-directory file) t)
+      (write-region ";;; config.el --- my drgnx configuration -*- lexical-binding: t -*-
+;; Loaded at the end of every start, after drgnx's startup modules: settings here win.
+;; An error is said in *Messages* and drgnx starts anyway; `drgnx safe' skips this file.
+
+" nil file nil 'silent))
+    (find-file file)))
+
 (defun drgnx--core-commands ()
   "The commands the core itself provides."
   (drgnx-onboard-register-commands)
@@ -33,6 +57,9 @@
                         :command #'drgnx-modules-show-report :menu '("Help") :doc "Which modules loaded, how long they took, what failed")
   (drgnx-command-define 'preferences-modules :category "Preferences" :title "Modules"
                         :command #'drgnx-modules-list :menu '("Options") :doc "Every module, its status; turn modules on and off")
+  (drgnx-command-define 'preferences-user-config :category "Preferences" :title "Open User Config"
+                        :command #'drgnx-open-user-config :menu '("Options")
+                        :doc "Your own Emacs Lisp (config.el), loaded at the end of every start")
   (drgnx-command-define 'modules-toggle :category "Modules" :title "Turn On / Off" :command #'drgnx-modules-list-toggle
                         :map 'drgnx-modules-list-mode-map :when (lambda () (derived-mode-p 'drgnx-modules-list-mode))
                         :doc "Turn the module on this row off at the next start, or back on")
@@ -59,7 +86,8 @@ The steady GC threshold is set at the end, also when a step fails (early-init de
           (if safe
               (message "drgnx safe mode: the core only — no modules, no packages (drgnx bisect finds a module that breaks)")
             (condition-case err (drgnx-modules-start (expand-file-name "modules" drgnx-dir))   ; never stops the rest
-              (error (message "drgnx: modules did not start: %s" (error-message-string err))))))
+              (error (message "drgnx: modules did not start: %s" (error-message-string err))))
+            (drgnx--load-user-config)))
         (drgnx-keys-apply)
         (drgnx-surfaces-refresh))
     (drgnx-gc-setup)))

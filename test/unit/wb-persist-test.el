@@ -128,6 +128,42 @@
       (cl-letf (((symbol-function 'display-graphic-p) (lambda (&optional _) nil)))
         (should-not (drgnx-persist--gui-frame))))))
 
+(ert-deftest drgnx-persist/a-client-window-opened-after-the-last-closed-is-restored ()
+  ;; A daemon outlives its windows: each `emacsclient -c' that opens the only graphical window
+  ;; brings the workbench back — after the server has shown its *scratch* in it.
+  (let* ((f (selected-frame)) (other nil) (restored 0))
+    (cl-letf (((symbol-function 'display-graphic-p) (lambda (&optional x) (memq (or x (selected-frame)) (list f other))))
+              ((symbol-function 'frame-list) (lambda () (delq nil (list f other))))
+              ((symbol-function 'frame-parent) (lambda (&optional _) nil))
+              ((symbol-function 'drgnx-persist-restore) (lambda (&rest _) (cl-incf restored))))
+      (set-frame-parameter f 'client 'kx-proc)
+      (unwind-protect
+          (progn
+            (drgnx-persist--on-start)            ; the first-frame stage leaves a client's window alone
+            (should (= restored 0))
+            (drgnx-persist--on-client-frame)
+            (drgnx-persist--on-client-frame)     ; closed and opened again
+            (should (= restored 2))
+            (setq other 'kx-second)              ; another window is open: a new, empty one
+            (drgnx-persist--on-client-frame)
+            (should (= restored 2))
+            (setq other nil)
+            (let ((drgnx-persist-restore-on-start nil)) (drgnx-persist--on-client-frame))
+            (should (= restored 2))
+            (set-frame-parameter f 'client nil)  ; not a client's window (plain `emacs')
+            (drgnx-persist--on-start)
+            (should (= restored 3)))
+        (set-frame-parameter f 'client nil)))))
+
+(ert-deftest drgnx-persist/the-mode-restores-client-windows ()
+  (let ((on drgnx-persist-mode))
+    (unwind-protect
+        (progn (drgnx-persist-mode 1)
+               (should (memq #'drgnx-persist--on-client-frame server-after-make-frame-hook))
+               (drgnx-persist-mode -1)
+               (should-not (memq #'drgnx-persist--on-client-frame server-after-make-frame-hook)))
+      (drgnx-persist-mode (if on 1 -1)))))
+
 (ert-deftest drgnx-persist/tabs-load-lazily-and-safely ()
   ;; I5: at start only each group's shown file is visited; the other tabs follow at idle, in
   ;; order; remote tabs are never touched (no connection, no password prompt).

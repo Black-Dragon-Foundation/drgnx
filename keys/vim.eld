@@ -179,6 +179,7 @@
         (preferences-theme "SPC h t")
         (view-zen "SPC u z")
         (preferences-modules :none "in the palette and the Options menu")
+        (preferences-user-config :none "in the palette and the Options menu")
         (modules-toggle "RET")
         (move-editor-to-new-window "SPC w n")
         (open-editor-in-new-window "SPC w o")
