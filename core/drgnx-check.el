@@ -165,13 +165,22 @@ each logging to DIR/NAME.log.  A failing phase 1 (the build) stops the rest.  Re
   "Seconds a job told to end (timeout, C-c) has to clean up — its Emacs stops the sessions it started — before
 it is killed.")
 
+(defun drgnx-check--group-running-p (pgid)
+  "Whether a process of group PGID still runs.  Zombies do not count: in a container whose PID 1 never
+reaps (GitHub's job containers), an ended job's processes stay as zombies and signal 0 still reaches them."
+  (and (eq 0 (ignore-errors (signal-process (- pgid) 0)))
+       (seq-some (lambda (pid)
+                   (let ((a (process-attributes pid)))
+                     (and (eql (alist-get 'pgrp a) pgid) (not (equal (alist-get 'state a) "Z")))))
+                 (list-system-processes))))
+
 (defun drgnx-check--end (&rest ps)
   "End the job processes PS and everything they started (each its own process group): TERM, up to
 `drgnx-check-grace' seconds to clean up, then KILL."
   (dolist (p ps) (ignore-errors (signal-process (- (process-id p)) 'TERM)))
   (let ((deadline (+ (float-time) drgnx-check-grace))
         ;; the whole group: the job's shell goes at once, what it started may still be cleaning up
-        (group-left (lambda (p) (eq 0 (ignore-errors (signal-process (- (process-id p)) 0))))))
+        (group-left (lambda (p) (drgnx-check--group-running-p (process-id p)))))
     (while (and (seq-some group-left ps) (< (float-time) deadline))
       (accept-process-output nil 0.1)))
   (dolist (p ps)

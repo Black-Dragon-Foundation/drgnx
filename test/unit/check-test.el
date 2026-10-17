@@ -156,3 +156,13 @@
   (should (eql 3 (plist-get (seq-find (lambda (j) (equal (plist-get j :name) "perf"))
                                       (drgnx-check-plan :root drgnx-dir :unit-shards 1 :live-shards 1 :perf t))
                             :not-judged))))
+
+(ert-deftest drgnx-check/a-group-of-zombies-has-ended ()
+  ;; In a container whose PID 1 never reaps (GitHub's job containers), an ended job's processes stay as zombies:
+  ;; signal 0 to the group still succeeds, yet nothing runs — waiting for them took the whole grace.
+  (let ((procs '((101 (pgrp . 100) (state . "Z")) (102 (pgrp . 100) (state . "Z")) (201 (pgrp . 200) (state . "S")))))
+    (cl-letf (((symbol-function 'signal-process) (lambda (_pid _sig) 0))
+              ((symbol-function 'list-system-processes) (lambda () (mapcar #'car procs)))
+              ((symbol-function 'process-attributes) (lambda (pid) (cdr (assq pid procs)))))
+      (should-not (drgnx-check--group-running-p 100))
+      (should (drgnx-check--group-running-p 200)))))
