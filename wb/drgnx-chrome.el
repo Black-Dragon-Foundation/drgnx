@@ -169,6 +169,10 @@ An error here must never stop the kill."
 (defconst drgnx-chrome--mode-line '(:eval (or mode-line-format (default-value 'mode-line-format)))
   "An editor window's mode line: its buffer's, or the default when the buffer has none.")
 
+(defvar drgnx-chrome-header-tail nil
+  "A mode-line construct an editor window's header shows after its breadcrumb — set buffer-locally (sticky scroll's
+scopes: modules/editor/drgnx-sticky.el); re-apply the chrome after changing it.")
+
 (defconst drgnx-chrome--own-header '(:eval header-line-format)
   "The header of a buffer that has its own (tabulated-list column headings, clicked to sort).")
 
@@ -186,7 +190,8 @@ An error here must never stop the kill."
                         (with-current-buffer (window-buffer w)
                           (if (and (local-variable-p 'header-line-format) header-line-format)
                               drgnx-chrome--own-header
-                            (drgnx-chrome-breadcrumb w))))
+                            (let ((tail (buffer-local-value 'drgnx-chrome-header-tail (window-buffer w))))
+                              (if tail (list (drgnx-chrome-breadcrumb w) tail) (drgnx-chrome-breadcrumb w))))))
      (drgnx-chrome--set w 'mode-line-format drgnx-chrome--mode-line))
     ((or 'dock 'area)
      (drgnx-chrome--set w 'tab-line-format 'none)

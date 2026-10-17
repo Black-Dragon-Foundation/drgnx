@@ -42,6 +42,19 @@
       (should (seq-every-p #'cl-plusp (drgnx-chrome-test--heights editor)))      ; tab line, header, mode line
       (should (equal (mapcar #'cl-plusp (drgnx-chrome-test--heights panel)) '(nil t nil))))))  ; tab row only
 
+(ert-deftest drgnx-chrome/a-buffer-adds-to-the-breadcrumb ()
+  ;; sticky scroll's scopes after the breadcrumb, from the buffer's own `drgnx-chrome-header-tail'
+  (drgnx-chrome-test--with dir
+    (drgnx-chrome-test--open dir "src/a.el")
+    (setq-local drgnx-chrome-header-tail '(:eval " › (defun f ()"))
+    (drgnx-chrome-apply nil t)
+    (let ((h (window-parameter (selected-window) 'header-line-format)))   ; (format-mode-line is "" in batch)
+      (should (string-search "a.el" (car h)))
+      (should (equal (cadr h) '(:eval " › (defun f ()"))))
+    (kill-local-variable 'drgnx-chrome-header-tail)
+    (drgnx-chrome-apply nil t)
+    (should (stringp (window-parameter (selected-window) 'header-line-format)))))
+
 (ert-deftest drgnx-chrome/a-mode-cannot-change-the-height ()
   (drgnx-chrome-test--with dir
     (drgnx-chrome-test--open dir "a.txt")

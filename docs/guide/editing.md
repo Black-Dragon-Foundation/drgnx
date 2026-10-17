@@ -54,6 +54,15 @@ Touchpad and wheel scrolling move by pixels, not lines, on graphical frames: wit
 `ultra-scroll` to `:packages` in `packages.eld`), else Emacs's own `pixel-scroll-precision-mode`. Terminal frames
 scroll by lines as always. **Toggle Smooth Scrolling**. Module `ui/smooth`.
 
+## Sticky scroll
+
+When the start of the function, class or block you are in has scrolled off the top, its first line shows in the
+header, after the breadcrumb — up to three enclosing scopes, outermost first: `src › shape.py › class Shape: › def
+area(self):`. The header line is always there (the breadcrumb), so nothing moves as you scroll. Scopes come from
+tree-sitter when the buffer has a parser (functions, methods, classes, structs, …), else from indentation; each
+position is worked out once. **Toggle Sticky Scroll** for this buffer. Module `editor/sticky` (drgnx's own; a buffer
+can add to the header the same way: `drgnx-chrome-header-tail`).
+
 ## Tests
 
 `test/unit/mod-grammars-test.el` (the language of a buffer, the hint once and never a prompt, the install as a job
