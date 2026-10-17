@@ -34,7 +34,7 @@
   (skip-unless (executable-find "git"))
   (drgnx-search-ui-test--project
     (let ((display-buffer-alist nil) (drgnx-signal--editor-window nil)
-          (hits (list (list :path "a.txt" :start 2 :end 2 :text "  beta  \nmore" :score 0.03 :why 'both))))
+          (hits (list (list :path "a.txt" :start 2 :end 2 :text "beta\n  more" :score 0.03 :why 'both))))
       (delete-other-windows)
       (drgnx-rules-mode 1)
       (unwind-protect
