@@ -16,7 +16,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: macos-${{ github.ref }}
+  group: macos-${{ github.event_name }}-${{ github.ref }}   # a push never cancels the weekly install
   cancel-in-progress: true
 
 jobs:
