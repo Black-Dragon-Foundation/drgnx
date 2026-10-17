@@ -17,13 +17,13 @@
 
 (defun drgnx-jobs-test--status (id) (plist-get (drgnx-jobs-get id) :status))
 
-(ert-deftest drgnx-jobs/a-job-outlives-the-emacs-that-started-it ()
-  (skip-unless (executable-find "setsid"))
+(defun drgnx-jobs-test--outlives ()
+  "A job started by another Emacs, which exits at once, runs on (that Emacs gets this one's `drgnx-jobs--setsid')."
   (drgnx-jobs-test--with
-   ;; started by another Emacs, which exits at once
    (let* ((out (with-temp-buffer
                  (call-process (expand-file-name invocation-name invocation-directory) nil t nil
                                "--batch" "-Q" "-L" (file-name-directory (locate-library "drgnx-jobs")) "-l" "drgnx-jobs"
+                               "--eval" (format "(setq drgnx-jobs--setsid %S)" drgnx-jobs--setsid)
                                "--eval" "(princ (drgnx-jobs-start \"test\" '(\"sh\" \"-c\" \"sleep 1; echo done\")))")
                  (buffer-string)))
           (id (car (last (split-string out "\n" t)))))
@@ -32,25 +32,56 @@
      (should (eql (plist-get (drgnx-jobs-get id) :exit) 0))
      (should (string-match-p "done" (drgnx-jobs-log id))))))
 
+(ert-deftest drgnx-jobs/a-job-outlives-the-emacs-that-started-it ()
+  (drgnx-jobs-test--outlives))
+
+(ert-deftest drgnx-jobs/a-job-outlives-the-emacs-that-started-it-without-setsid ()
+  ;; macOS has no setsid: the portable launcher (perl, which every macOS has)
+  (skip-unless (executable-find "perl"))
+  (let ((drgnx-jobs--setsid nil)) (drgnx-jobs-test--outlives)))
+
 (ert-deftest drgnx-jobs/a-failing-job-says-its-exit-code ()
-  (skip-unless (executable-find "setsid"))
   (drgnx-jobs-test--with
    (let ((id (drgnx-jobs-start "fails" '("sh" "-c" "echo oops >&2; exit 7"))))
      (should (drgnx-jobs-test--wait (lambda () (eq (drgnx-jobs-test--status id) 'exited))))
      (should (eql (plist-get (drgnx-jobs-get id) :exit) 7))
      (should (string-match-p "oops" (drgnx-jobs-log id))))))
 
-(ert-deftest drgnx-jobs/stop-ends-the-whole-job ()
-  (skip-unless (executable-find "setsid"))
+(defun drgnx-jobs-test--stop ()
+  "Stop ends a job's whole process group: the job's shell leads its own session and group."
   (drgnx-jobs-test--with
    ;; a length no other process uses (tests run in parallel shards): only this job's sleep can match
    (let* ((marker (format "sleep %d" (+ 30000 (random 30000))))
           (id (drgnx-jobs-start "long" (list "sh" "-c" marker))))
      (should (drgnx-jobs-test--wait (lambda () (eq (drgnx-jobs-test--status id) 'running))))
+     (let* ((pid (plist-get (drgnx-jobs-get id) :pid)) (attrs (process-attributes pid)))
+       (should (eql (alist-get 'pgrp attrs) pid))
+       (when (assq 'sess attrs) (should (eql (alist-get 'sess attrs) pid))))   ; macOS's attributes have no session
      (drgnx-jobs-stop id)
      (should (drgnx-jobs-test--wait (lambda () (memq (drgnx-jobs-test--status id) '(exited stopped))) 3))
      (should-not (seq-find (lambda (p) (string-match-p (regexp-quote marker) (or (cdr (assq 'args (process-attributes p))) "")))
                            (list-system-processes))))))
+
+(ert-deftest drgnx-jobs/stop-ends-the-whole-job ()
+  (drgnx-jobs-test--stop))
+
+(ert-deftest drgnx-jobs/stop-ends-the-whole-job-without-setsid ()
+  (skip-unless (executable-find "perl"))
+  (let ((drgnx-jobs--setsid nil)) (drgnx-jobs-test--stop)))
+
+(ert-deftest drgnx-jobs/the-boot-id-on-macos ()
+  ;; macOS has no /proc: the boot time's seconds from `sysctl -n kern.boottime'
+  (let* ((bin (make-temp-file "drgnx-jobs-bin" t)) (sysctl (expand-file-name "sysctl" bin)))
+    (unwind-protect
+        (progn
+          (with-temp-file sysctl
+            (insert "#!/bin/sh\n[ \"$*\" = \"-n kern.boottime\" ] || exit 1\n"
+                    "echo '{ sec = 1760000000, usec = 1 } Fri Oct 17 10:00:00 2026'\n"))
+          (set-file-modes sysctl #o755)
+          (let ((exec-path (cons bin exec-path)) (system-type 'darwin)
+                (process-environment (cons (concat "PATH=" bin path-separator (getenv "PATH")) process-environment)))
+            (should (equal (drgnx-jobs--boot-id) "1760000000"))))
+      (delete-directory bin t))))
 
 (ert-deftest drgnx-jobs/a-job-whose-process-vanished-is-gone ()
   (drgnx-jobs-test--with
@@ -78,7 +109,6 @@
      (should-not signalled))))
 
 (ert-deftest drgnx-jobs/a-state-path-with-a-quote-still-runs ()
-  (skip-unless (executable-find "setsid"))
   (let* ((root (concat (make-temp-file "drgnx-jobs" t) "/o'brien"))
          (process-environment (append (list (concat "XDG_STATE_HOME=" root) "DRGNX_JOBS_LAUNCHER=detached") process-environment)))
     (make-directory root t)

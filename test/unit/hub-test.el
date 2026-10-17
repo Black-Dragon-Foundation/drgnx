@@ -243,14 +243,30 @@ to OR-LOG, OPENROUTER_API_KEY unset."
       (drgnx-hub-serve (drgnx-hub-socket))
       (should (drgnx-hub-call-sync "ping" nil))
       (drgnx-hub-disconnect) (drgnx-hub-stop))
-    ;; a state dir so deep the socket path would pass the system's limit (about 108 bytes)
+    ;; a state dir so deep the socket path would pass the system's limit (103 bytes on macOS, 107 on Linux)
     (let* ((deep (concat root (make-string 120 ?d) "/"))
            (process-environment (append (list "XDG_RUNTIME_DIR" (concat "XDG_STATE_HOME=" deep)) process-environment)))
-      (should (<= (string-bytes (drgnx-hub-socket)) 104))
+      (should (<= (string-bytes (drgnx-hub-socket)) 103))
       (drgnx-hub-serve (drgnx-hub-socket))
       (should (drgnx-hub-call-sync "ping" nil))
       (should (equal (file-modes (file-name-directory (drgnx-hub-socket))) #o700))
       (drgnx-hub-disconnect) (drgnx-hub-stop))))
+
+(ert-deftest drgnx-hub/a-socket-path-of-104-bytes-is-too-long ()
+  ;; macOS's limit is 104 bytes with the closing NUL (Linux's 108): 103 is kept, 104 gets the short private path
+  (drgnx-hub-test--with
+    (let ((at (lambda (bytes)
+                ;; a runtime dir whose socket ($RUN/drgnx/hub-HASH.sock, 24 bytes past it) is BYTES long
+                (let ((run (expand-file-name (make-string (- bytes 24 (length (directory-file-name root)) 1) ?r) root)))
+                  (make-directory run t)
+                  (let ((process-environment (cons (concat "XDG_RUNTIME_DIR=" run) process-environment)))
+                    (drgnx-hub-socket))))))
+      (let ((kept (funcall at 103)))
+        (should (eql (string-bytes kept) 103))
+        (should (string-prefix-p root kept)))
+      (let ((moved (funcall at 104)))
+        (should (string-prefix-p (file-name-as-directory (expand-file-name (format "drgnx-hub-%d" (user-uid)) temporary-file-directory))
+                                 moved))))))
 
 (ert-deftest drgnx-hub/no-hub-is-started-where-starting-is-off ()
   (drgnx-hub-test--with

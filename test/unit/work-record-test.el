@@ -66,7 +66,6 @@
         (drgnx-agents-kill s)))))
 
 (ert-deftest drgnx-work/a-job-task-gets-its-commits-when-it-ends ()
-  (skip-unless (executable-find "setsid"))
   (drgnx-work-rec--with repo
     (let ((id (drgnx-jobs-start "j" (list "sh" "-c" "echo x > j.txt && git add j.txt && git -c user.name=t -c user.email=t@t.invalid commit -q -m 'job work'")
                                 :cwd repo :task "task:/p.md#3")))
@@ -210,7 +209,6 @@
       (should (equal (drgnx-work-rec--titles "task:/p.md#12") '("a alone"))))))
 
 (ert-deftest drgnx-work/a-job-whose-worktree-is-gone-still-gets-its-commits ()
-  (skip-unless (executable-find "setsid"))
   (drgnx-work-rec--with repo
     (let ((wt (concat repo ".wt/")))
       (drgnx-work-rec--git repo "worktree" "add" "-q" wt "-b" "w")

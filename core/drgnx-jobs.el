@@ -4,8 +4,8 @@
 
 ;;; Commentary:
 ;; A job is a command run detached from Emacs — a systemd user unit (`systemd-run --user') where
-;; systemd runs the session, else its own process group (`setsid') — so closing a frame, restarting
-;; Emacs or interrupting a chat cannot kill it.  Everything about a job lives in its directory under
+;; systemd runs the session, else its own session and process group (`drgnx-jobs--detach': `setsid',
+;; or perl on macOS) — so closing a frame, restarting Emacs or interrupting a chat cannot kill it.  Everything about a job lives in its directory under
 ;; the state dir (jobs/ID: job.eld, log, pid, exit), so a new Emacs lists it, shows its log and stops
 ;; it.  See docs/guide/agents.md.
 
@@ -49,7 +49,26 @@ code to DIR/exit (143 when stopped); with HEAD, the git HEAD it ended at to DIR/
             (mapconcat #'shell-quote-argument command " "))))
 
 (defun drgnx-jobs--boot-id ()
-  (ignore-errors (string-trim (with-temp-buffer (insert-file-contents "/proc/sys/kernel/random/boot_id") (buffer-string)))))
+  "This boot's id: Linux's boot_id; on macOS the boot time's seconds (`sysctl -n kern.boottime')."
+  (ignore-errors
+    (if (eq system-type 'darwin)
+        (with-temp-buffer
+          ;; "{ sec = 1760000000, usec = 123456 } Fri Oct 17 10:00:00 2026"
+          (and (eql 0 (call-process "sysctl" nil t nil "-n" "kern.boottime"))
+               (progn (goto-char (point-min)) (re-search-forward "\\bsec = \\([0-9]+\\)" nil t))
+               (match-string 1)))
+      (string-trim (with-temp-buffer (insert-file-contents "/proc/sys/kernel/random/boot_id") (buffer-string))))))
+
+(defvar drgnx-jobs--setsid (executable-find "setsid")
+  "setsid(1) where the system has it (Linux; macOS has none).")
+
+(defun drgnx-jobs--detach (line)
+  "Start `sh -c LINE' in its own session and process group, not waited for, outliving this Emacs: `setsid -f'
+where there is one, else perl (every macOS has it).  perl forks first, as `setsid -f' does: Emacs's child already
+leads its own process group, and setsid(2) refuses a group leader."
+  (if drgnx-jobs--setsid
+      (call-process "setsid" nil 0 nil "-f" "sh" "-c" line)
+    (call-process "perl" nil 0 nil "-MPOSIX" "-e" "fork and exit; POSIX::setsid(); exec @ARGV" "sh" "-c" line)))
 
 (defun drgnx-jobs--systemd-args (id cwd line env &optional task memory-max nice)
   "systemd-run's arguments for job ID running LINE in CWD.  ENV (\"NAME=value\"…) travels in systemd-run's own
@@ -93,7 +112,7 @@ keys) is the job's too, and is kept nowhere: not in its state files, not in a co
          (with-temp-buffer
            (unless (eql 0 (apply #'call-process "systemd-run" nil t nil (drgnx-jobs--systemd-args id cwd line env task memory-max nice)))
              (error "The job %s did not start: %s" name (string-trim (buffer-string))))))
-        (_ (call-process "setsid" nil 0 nil "-f" "sh" "-c" line))))
+        (_ (drgnx-jobs--detach line))))
     ;; the pid file appears once the job's shell runs; the boot and the process's start time make
     ;; the pid trustworthy later (a pid from before a reboot may be another process)
     (let ((deadline (+ (float-time) 2)) (pidf (expand-file-name "pid" dir)))

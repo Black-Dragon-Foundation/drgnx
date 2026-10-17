@@ -305,7 +305,6 @@ Keychain and keyring are never reached."
       (should (assoc "claude (Ollama)" drgnx-agents-builtin-profiles)))))
 
 (ert-deftest drgnx-ai/a-job-receives-keys-that-no-command-line-or-state-file-shows ()
-  (skip-unless (executable-find "setsid"))
   (drgnx-ai-test--with root
     (let* ((id (drgnx-jobs-start "k" (list "sh" "-c" "printf %s \"$SECRET_FOR_JOB\" > got") :cwd root :env '("SECRET_FOR_JOB=s3cret")))
            (d (+ (float-time) 10)))

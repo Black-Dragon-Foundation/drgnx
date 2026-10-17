@@ -5,7 +5,11 @@ User docs: [Agents → The hub and the gateway](../guide/agents.md#the-hub-and-t
 ## Processes
 
 - **The hub** (`core/drgnx-hub.el`): a batch Emacs started as a durable job (`drgnx-jobs-start "drgnx-hub" …`), one
-  per drgnx data directory. It gets the starting Emacs's drgnx and XDG directories and provider keys (when set) as
+  per drgnx data directory. Without a systemd user manager (always on macOS) the job is detached by
+  `drgnx-jobs--detach`: `setsid -f`, or where there is no `setsid` (macOS) perl, which forks and calls setsid(2)
+  itself — Emacs's child already leads its own process group, and setsid(2) refuses a group leader. Either way the
+  hub leads its own session and process group and outlives the Emacs that started it. A job's pid is checked
+  against the boot it was started in: Linux's `boot_id`, macOS's `sysctl -n kern.boottime` seconds. It gets the starting Emacs's drgnx and XDG directories and provider keys (when set) as
   its environment; under systemd only named variables pass (`--setenv=NAME`), so no value is ever in a command line.
   Its main loop is `accept-process-output` plus the event drain batch Emacs needs (queued events hold back
   sentinels). SIGTERM or `shutdown` removes its socket. It starts with SIGPIPE ignored (`trap '' PIPE`): the
@@ -19,7 +23,8 @@ User docs: [Agents → The hub and the gateway](../guide/agents.md#the-hub-and-t
 ## The control socket
 
 `drgnx-hub-socket`: `$XDG_RUNTIME_DIR/drgnx/hub-HASH.sock` (HASH: the first 8 hex digits of the SHA-1 of the data
-dir), else `<state>/hub/hub-HASH.sock`; a path over 104 bytes (a deep state dir) moves to `/tmp/drgnx-hub-UID/`.
+dir), else `<state>/hub/hub-HASH.sock`; a path over 103 bytes (macOS's limit, the closing NUL included in 104; Linux
+allows 107) — a deep state dir — moves to `drgnx-hub-UID/` in the temporary directory.
 Its directory is mode 0700 and must be the user's own. One JSON object per line:
 
 | Request (`{"id", "method", "params"}`) | Result |
