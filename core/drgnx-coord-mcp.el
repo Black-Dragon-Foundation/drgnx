@@ -45,7 +45,7 @@
     (let ((socket (drgnx-hub-socket)))
       (when (file-exists-p socket)
         (let ((c (make-network-process :name "drgnx-coord-notify" :family 'local :service socket :noquery t)))
-          (process-send-string c "{\"id\":0,\"method\":\"coord/notify\"}\n")
+          (process-send-string c "{\"method\":\"coord/notify\"}\n")   ; a notification: no answer to wait for
           (delete-process c))))))
 
 (defmacro drgnx-coord-mcp--write (&rest body)
@@ -106,10 +106,11 @@
        :call ,(lambda (a) (drgnx-coord-mcp--write
                            (drgnx-coord-set-status (plist-get a :task) (drgnx-coord-mcp--me) (plist-get a :status)
                                                    (drgnx-coord-mcp--seen a)))))
-      ("complete_task" :description "Your task is done"
+      ("complete_task" :description "Your task is done (in a job: it goes to review, then is merged)"
        :schema ,(funcall s `(("task" "string" "The task's id") ,seen) '("task" "seen_version"))
        :call ,(lambda (a) (drgnx-coord-mcp--write
-                           (drgnx-coord-set-status (plist-get a :task) (drgnx-coord-mcp--me) "done" (drgnx-coord-mcp--seen a)))))
+                           (drgnx-coord-set-status (plist-get a :task) (drgnx-coord-mcp--me)
+                                                   (if (getenv "DRGNX_JOB") "in-review" "done") (drgnx-coord-mcp--seen a)))))
       ("task_status" :description "The job's tasks: status, agent, dependencies"
        :schema ,(funcall s '(("job" "string" "The job (default: yours)")))
        :call ,(lambda (a) (drgnx-coord-mcp--jsonable (drgnx-coord-tasks (or (plist-get a :job) (getenv "DRGNX_JOB"))))))

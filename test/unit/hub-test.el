@@ -137,6 +137,18 @@ to OR-LOG, OPENROUTER_API_KEY unset."
       ;; judged by its socket: where PID 1 never reaps (a CI container) the stopped hub lingers as a zombie
       (should (drgnx-hub-test--wait (lambda () (not (drgnx-hub-running-p))) 5)))))
 
+(ert-deftest drgnx-hub/a-client-that-leaves-before-the-answer-is-no-error ()
+  ;; a coordination server's notify, a probe: they write and go; the hub's answer must not raise an error (under
+  ;; ERT, or with debug-on-error, a filter error ends a batch Emacs)
+  (drgnx-hub-test--with
+    (drgnx-hub-serve (drgnx-hub-socket))
+    (dotimes (_ 5)
+      (let ((c (make-network-process :name "leaver" :family 'local :service (drgnx-hub-socket) :noquery t)))
+        (process-send-string c "{\"id\":7,\"method\":\"status\"}\n{\"method\":\"coord/notify\"}\n")
+        (delete-process c)))
+    (let ((deadline (+ (float-time) 1))) (while (< (float-time) deadline) (accept-process-output nil 0.05)))
+    (should (drgnx-hub-call-sync "ping" nil))))
+
 (ert-deftest drgnx-hub/an-agent-hanging-up-never-kills-the-hub ()
   ;; the editing Emacs starts the hub without ignoring SIGPIPE: a write to a connection the agent closed must not
   ;; end the hub (exit 141)

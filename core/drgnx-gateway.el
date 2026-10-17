@@ -85,13 +85,20 @@ its token (shown once: only its hash is kept)."
 
 (defun drgnx-gateway--emit (event &rest data) (run-hook-with-args 'drgnx-gateway-event-functions event data))
 
+(defun drgnx-gateway--write (conn bytes)
+  "Send BYTES to the agent's connection CONN — unless it is gone (an agent that hung up): then CONN goes (and with
+it, through its sentinel, the request upstream), never an error in a filter."
+  (when (process-live-p conn)
+    (condition-case nil (process-send-string conn bytes)
+      (error (ignore-errors (delete-process conn))))))
+
 (defun drgnx-gateway--respond (conn status type message)
   "Answer CONN with STATUS and an Anthropic-shaped error (TYPE, MESSAGE), then close it."
   (when (process-live-p conn)
     (let ((body (encode-coding-string (json-serialize (list :type "error" :error (list :type type :message message))) 'utf-8)))
-      (process-send-string conn (format "HTTP/1.1 %d %s\r\nContent-Type: application/json\r\nContent-Length: %d\r\nConnection: close\r\n\r\n"
-                                        status type (length body)))
-      (process-send-string conn body)
+      (drgnx-gateway--write conn (format "HTTP/1.1 %d %s\r\nContent-Type: application/json\r\nContent-Length: %d\r\nConnection: close\r\n\r\n"
+                                         status type (length body)))
+      (drgnx-gateway--write conn body)
       (drgnx-gateway--close conn))))
 
 (defun drgnx-gateway--close (conn)
@@ -249,7 +256,7 @@ its token (shown once: only its hash is kept)."
   "CURL's output so far: hold it until the head is whole, then (unless it calls for the next provider) pass the
 head and every later byte to CONN."
   (if (process-get curl :started)
-      (progn (funcall scan bytes) (when (process-live-p conn) (process-send-string conn bytes)))
+      (progn (funcall scan bytes) (when (process-live-p conn) (drgnx-gateway--write conn bytes)))
     (let ((buf (concat (or (process-get curl :buf) "") bytes)) (go t))
       (while (and go (string-match "\\`HTTP/[0-9.]+ \\([0-9]+\\)[^\r\n]*\r\n" buf))
         (let ((status (string-to-number (match-string 1 buf))) (end (string-search "\r\n\r\n" buf)))
@@ -265,9 +272,9 @@ head and every later byte to CONN."
                      (ctype (and (string-match "^[Cc]ontent-[Tt]ype: *\\([^\r\n]+\\)" head) (match-string 1 head))))
                 (process-put curl :started t)
                 (when (process-live-p conn)
-                  (process-send-string conn (format "HTTP/1.1 %d OK\r\nContent-Type: %s\r\nConnection: close\r\n\r\n"
-                                                    status (or ctype "application/json")))
-                  (unless (string-empty-p rest) (funcall scan rest) (process-send-string conn rest))))
+                  (drgnx-gateway--write conn (format "HTTP/1.1 %d OK\r\nContent-Type: %s\r\nConnection: close\r\n\r\n"
+                                                     status (or ctype "application/json")))
+                  (unless (string-empty-p rest) (funcall scan rest) (drgnx-gateway--write conn rest))))
               (setq buf ""))))))
       (process-put curl :buf buf))))
 

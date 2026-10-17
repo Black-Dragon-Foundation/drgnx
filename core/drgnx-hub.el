@@ -17,6 +17,7 @@
 (require 'drgnx-jobs)
 (require 'drgnx-agents)
 (require 'drgnx-coord)
+(require 'drgnx-job)
 
 (defvar drgnx-hub-event-functions nil
   "Functions called with (EVENT DATA) for each event the hub sends this Emacs (after `drgnx-hub-connect'); EVENT a
@@ -104,8 +105,13 @@ answer a ping.  A lock whose process is gone is taken over.  Signals when anothe
         (t v)))
 
 (defun drgnx-hub--send (conn object)
+  "Send OBJECT to CONN — unless CONN is gone: a client may leave before its answer (a coordination server's notify,
+a probe), and writing to it then must be nothing, never an error in a filter (it would end a batch Emacs that
+debugs errors, and without SIGPIPE ignored the write itself would)."
   (when (process-live-p conn)
-    (process-send-string conn (concat (json-serialize (drgnx-hub--jsonable object)) "\n"))))
+    (condition-case nil
+        (process-send-string conn (concat (json-serialize (drgnx-hub--jsonable object)) "\n"))
+      (error (ignore-errors (delete-process conn))))))
 
 (defun drgnx-hub--lines (conn chunk fn)
   "Split CONN's input into lines; FN gets each parsed JSON object."
@@ -296,6 +302,7 @@ for an agent that is not here (or exited) stays queued."
 (defun drgnx-hub--tick ()
   (with-demoted-errors "drgnx hub: %S"
     (drgnx-hub--deliver)
+    (drgnx-job-tick)
     (when (zerop (% (cl-incf drgnx-hub--ticks) 30)) (drgnx-hub--housekeeping))))
 
 (defun drgnx-hub--flush (s)
@@ -318,9 +325,10 @@ for an agent that is not here (or exited) stays queued."
        (run-at-time 0.1 nil (lambda () (funcall drgnx-hub--exit-function))))
       (_ (let ((r (condition-case err (drgnx-hub--method method (plist-get json :params))
                     (error (list :error (error-message-string err))))))
-           (drgnx-hub--send conn (if (and (consp r) (eq (car r) :error) (stringp (cadr r)) (null (cddr r)))
-                                     (list :id id :error (list :message (cadr r)))
-                                   (list :id id :result r))))))))
+           ;; a notification (no id) is answered by nothing
+           (when id (drgnx-hub--send conn (if (and (consp r) (eq (car r) :error) (stringp (cadr r)) (null (cddr r)))
+                                              (list :id id :error (list :message (cadr r)))
+                                            (list :id id :result r)))))))))
 
 (defun drgnx-hub--broadcast (event data)
   (setq drgnx-hub--subscribers (seq-filter #'process-live-p drgnx-hub--subscribers))
@@ -361,6 +369,7 @@ Signals an error when a hub already serves there."
   (add-hook 'drgnx-gateway-event-functions #'drgnx-hub--broadcast)
   (add-hook 'drgnx-agents-changed-functions #'drgnx-hub--agent-changed)
   (add-hook 'drgnx-agents-prompt-functions #'drgnx-hub--prompted)
+  (add-hook 'drgnx-agents-changed-functions #'drgnx-job--session-changed)
   (setq drgnx-hub--tick-timer (run-at-time 2 2 #'drgnx-hub--tick))
   (setq drgnx-hub--started (format-time-string "%FT%T%z")
         drgnx-hub--server
@@ -382,6 +391,7 @@ Signals an error when a hub already serves there."
   (remove-hook 'drgnx-gateway-event-functions #'drgnx-hub--broadcast)
   (remove-hook 'drgnx-agents-changed-functions #'drgnx-hub--agent-changed)
   (remove-hook 'drgnx-agents-prompt-functions #'drgnx-hub--prompted)
+  (remove-hook 'drgnx-agents-changed-functions #'drgnx-job--session-changed)
   (when (timerp drgnx-hub--tick-timer) (cancel-timer drgnx-hub--tick-timer))
   (setq drgnx-hub--tick-timer nil)
   (clrhash drgnx-hub--told)
