@@ -239,4 +239,13 @@
               (should (equal (drgnx-explorer-node-at (point)) path))))
         (when-let* ((b (get-file-buffer path))) (kill-buffer b))))))
 
+;;;; M3b-7: git overlays
+
+(ert-deftest drgnx-explorer-edge/repainting-a-row-never-piles-up-overlays ()
+  (drgnx-explorer-edge--with root
+    (cl-letf (((symbol-function 'drgnx-git-status) (lambda (p) (and (string-suffix-p "README.md" p) 'modified))))
+      (with-current-buffer (drgnx-explorer-edge--at "README.md")
+        (dotimes (_ 3) (drgnx-explorer--fontify (pos-bol) (pos-eol)))
+        (should (= 1 (seq-count (lambda (o) (overlay-get o 'drgnx-git)) (overlays-in (point-min) (point-max)))))))))
+
 ;;; wb-explorer-edge-test.el ends here

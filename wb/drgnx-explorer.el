@@ -152,7 +152,7 @@ name's face, the hover highlight, the git status."
     (forward-line 0)
     (let ((inhibit-read-only t) (end (save-excursion (goto-char end) (pos-eol)))
           (i (drgnx-explorer--index (point))) (rows drgnx-explorer--rows))
-      (remove-overlays (point) end 'drgnx-git t)
+      (remove-overlays (point) (min (1+ end) (point-max)) 'drgnx-git t)   ; END: its empty overlay too
       (with-silent-modifications
         (while (and (< (point) end) (< i (length rows)))
           (let* ((v (aref rows i)) (depth (aref v 1))
