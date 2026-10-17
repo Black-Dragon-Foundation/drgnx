@@ -467,3 +467,22 @@
      (should (seq-find (lambda (c) (and (eq (plist-get c :kind) 'claim)
                                         (equal (plist-get (car (plist-get c :losers)) :claim) "indent the C-i way")))
                        (plist-get r :conflicts))))))
+
+(ert-deftest drgnx-keys/prefix-conflicts-over-one-command-are-one-line ()
+  ;; M3b-3: VS Code's C-k chords each replace kill-line: one line for them all on the sheet, in the
+  ;; report and in the count; the resolver still has one conflict per key.
+  (drgnx-keys-test--live
+   (drgnx-keys-use '((vscode app editing window)))
+   (let* ((per-key (seq-filter (lambda (c) (string-prefix-p "C-k " (plist-get c :key))) (plist-get drgnx-keys-last :conflicts)))
+          (lines (seq-filter (lambda (l) (string-search "kill-line" l)) (drgnx-keys-conflict-lines))))
+     (should (> (length per-key) 3))
+     (should (= (length lines) 1))
+     (should (string-prefix-p "C-k " (car lines)))
+     (should (string-search "Keyboard Shortcuts" (car lines)))
+     (should (string-search "C-k C-s" (car lines)))
+     (should (string-search (format "%d keys" (length per-key)) (car lines)))
+     (should (seq-find (lambda (l) (string-prefix-p "<f1> " l)) (drgnx-keys-conflict-lines))))
+   (let (said)
+     (cl-letf (((symbol-function 'message) (lambda (fmt &rest args) (setq said (apply #'format fmt args)))))
+       (drgnx-keys-choose-profile "VS Code"))
+     (should (string-search (format "%d conflict" (length (drgnx-keys-conflict-lines))) said)))))

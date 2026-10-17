@@ -78,7 +78,8 @@ A conflict is one of:
   `F1` replaces Emacs' `F1` help prefix — `C-h` still works — and its `C-k` chords replace `kill-line`), against a
   loaded mode keymap, or between two drgnx keys (`C-k` for one command, `C-k C-s` for another).
 
-The later layer wins (your `keys.eld` wins over all). Conflicts and problems are listed at the end of the key sheet
+The later layer wins (your `keys.eld` wins over all). Prefix conflicts over the same command in one keymap are one
+line (`C-k … 12 keys over kill-line (C-k)`, then each key). Conflicts and problems are listed at the end of the key sheet
 (**Keyboard Shortcuts**), written to `~/.local/state/drgnx/keys-report.eld` on every start, and summarised by
 `drgnx doctor` (`key-conflicts`: info for conflicts, a warning for problems such as an unknown command in
 `keys.eld`). A key in the keymap of a package that loads later is bound when it loads; what that finds (a key that

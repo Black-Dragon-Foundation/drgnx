@@ -408,9 +408,25 @@ Never prompts: problems are collected in `drgnx-keys-last'.  Returns the resolut
           (mapconcat #'drgnx-keys--party (plist-get c :losers) ", ") (plist-get c :kind)
           (if (memq (plist-get c :map) '(nil global-map)) "" (format ", in %s" (plist-get c :map)))))
 
+(defun drgnx-keys--group-text (group)
+  "Prefix conflicts GROUP (one keymap, the same losers) as one line: COMMON-PREFIX … N keys over LOSERS."
+  (let* ((vs (mapcar (lambda (c) (drgnx-keys--parse (plist-get c :key))) group))
+         (n (apply #'min (mapcar #'length vs))) (i 0) (c (car group)))
+    (while (and (< i n) (seq-every-p (lambda (v) (equal (aref v i) (aref (car vs) i))) vs)) (cl-incf i))
+    (format "%s … %d keys over %s [prefix%s]: %s" (key-description (seq-take (car vs) i)) (length group)
+            (mapconcat #'drgnx-keys--party (plist-get c :losers) ", ")
+            (if (memq (plist-get c :map) '(nil global-map)) "" (format ", in %s" (plist-get c :map)))
+            (mapconcat (lambda (c) (format "%s %s" (plist-get c :key) (drgnx-keys--party (plist-get c :winner)))) group ", "))))
+
 (defun drgnx-keys-conflict-lines ()
-  "The last apply's conflicts as text lines."
-  (mapcar #'drgnx-keys-conflict-text (plist-get drgnx-keys-last :conflicts)))
+  "The last apply's conflicts as text lines; prefix conflicts in one keymap over the same losers (VS
+Code's C-k chords over kill-line) are one line."
+  (let ((groups nil))
+    (dolist (c (plist-get drgnx-keys-last :conflicts))
+      (let ((id (if (eq (plist-get c :kind) 'prefix) (list (plist-get c :map) (plist-get c :losers)) c)))
+        (push c (alist-get id groups nil nil #'equal))))
+    (mapcar (lambda (g) (if (cddr g) (drgnx-keys--group-text (reverse (cdr g))) (drgnx-keys-conflict-text (cadr g))))
+            (reverse groups))))
 
 (defun drgnx-keys--write-report ()
   "Write the conflicts and problems to the state dir for `drgnx doctor' (never prompts)."
@@ -482,7 +498,7 @@ Never prompts: problems are collected in `drgnx-keys-last'.  Returns the resolut
     (user-error "No keyboard profile %S (profiles: %s)" name (mapconcat #'car drgnx-keys-presets ", ")))
   (let ((r (drgnx-keys-use (cdr (assoc name drgnx-keys-presets)) t)))
     (message "Keys: %s%s" name
-             (if-let* ((n (length (plist-get r :conflicts))) ((> n 0)))
+             (if-let* ((n (length (drgnx-keys-conflict-lines))) ((> n 0)))
                  (format " — %d conflict%s, see Keyboard Shortcuts" n (if (= n 1) "" "s"))
                ""))))
 
