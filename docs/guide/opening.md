@@ -27,8 +27,9 @@ What happens:
   ([workbench.md](workbench.md#the-layout-survives-a-restart)) — and the paths in front of it.
 - **A window is open:** the paths open there and the window comes to the front.
 
-A **folder** becomes the Explorer's first folder (the others stay) with the sidebar shown; it does not open as a
-directory listing. A **file** opens in the editor. drgnx started by hand as a normal Emacs (not a daemon) answers
+A **folder** becomes the Explorer's first folder (the others stay) and the Explorer is selected, as in VS Code after
+`code .`, so quick open and project search (`C-p`, `C-S-f`) work in that folder's project right away; it does not
+open as a directory listing. A **file** opens in the editor. drgnx started by hand as a normal Emacs (not a daemon) answers
 `drgnx PATH` too, as long as no other drgnx does.
 
 ## Keep running or quit
@@ -39,11 +40,12 @@ drgnx does one of two things, your choice:
 - **Keep running in the background** (the default, like VS Code on a Mac): drgnx stays running without a window, so
   the next `drgnx PATH` or `drgnx open` is instant and brings your windows back. File → **Quit drgnx** (in the
   palette too) stops it; it then stays stopped until you open drgnx again. It never starts at login: the first open
-  starts it, and after a reboot or logout the next open starts it fresh with your windows restored.
+  starts it, and after a reboot or logout the next open starts it fresh with your windows restored. (The one
+  exception: on Linux, if you enabled the systemd user service `drgnx`, it starts at login, as enabled services do.)
 - **Quit when the last window closes:** closing the last window quits drgnx.
 
-Quitting — Quit drgnx, or closing the last window in quit mode — first offers to save each file with changes. Press
-`C-g`, or keep a file unsaved and then answer no to "quit and lose the changes?", and drgnx stays running with
+Quitting — Quit drgnx, or closing the last window in quit mode — first offers to save each file with changes, and
+each New Untitled buffer you typed in (it asks for a file name). Press `C-g`, or keep one unsaved and then answer no to "quit and lose the changes?", and drgnx stays running with
 everything open: nothing is lost. A drgnx that is not a daemon has nothing to keep running, so closing its last
 window always quits (asking the same way).
 

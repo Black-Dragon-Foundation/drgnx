@@ -4,6 +4,8 @@
 (require 'cl-lib)
 (require 'drgnx)
 (require 'drgnx-session)
+(require 'drgnx-explorer)
+(require 'project)
 
 (defmacro drgnx-session-test--with (spec &rest body)
   "BODY with the stubs SPEC asks for, in a temp config dir.
@@ -132,19 +134,69 @@ frames that count as windows, :unsaved the file buffers still changed after the 
   (should-not (drgnx-session-gui-frame-p))
   (should-not (drgnx-session--windows)))
 
-(ert-deftest drgnx-session/a-folder-goes-first-in-the-explorer ()
-  (let ((roots (list "/tmp/other/" "/tmp/proj/")) shown raised)
-    (cl-letf (((symbol-function 'drgnx-session-raise) (lambda () (setq raised t)))
-              ((symbol-function 'drgnx-explorer-roots) (lambda () roots))
-              ((symbol-function 'drgnx-explorer-set-roots) (lambda (r) (setq roots r)))
-              ((symbol-function 'drgnx-wb-sidebar-showing-p) (lambda (&rest _) shown))
-              ((symbol-function 'drgnx-wb-show-sidebar) (lambda () (setq shown t))))
-      (drgnx-session-open-folder "/tmp/proj")
-      (should raised)
-      (should (equal roots '("/tmp/proj/" "/tmp/other/")))
-      (should shown)
-      (drgnx-session-open-folder "/tmp/new dir/café")
-      (should (equal roots '("/tmp/new dir/café/" "/tmp/proj/" "/tmp/other/"))))))
+(defun drgnx-session-test--repo (root name file)
+  "A git repo NAME under ROOT holding FILE; its directory."
+  (let ((dir (file-name-as-directory (expand-file-name name root))))
+    (make-directory dir t)
+    (let ((default-directory dir)) (call-process "git" nil nil nil "init" "-q"))
+    (write-region "x = 1\n" nil (expand-file-name file dir) nil 'silent)
+    dir))
+
+(ert-deftest drgnx-session/opening-a-folder-makes-it-the-project ()
+  ;; The real Explorer in a one-editor layout.  After `drgnx DIR' quick open and project search (which follow the
+  ;; selected window's buffer) work in DIR's project — also when a file of another project was in front.
+  (let* ((root (file-name-as-directory (make-temp-file "drgnx-session-folder" t)))
+         (a (drgnx-session-test--repo root "projA" "a.py"))
+         (b (drgnx-session-test--repo root "My Project" "café.py"))
+         (project-list-file (expand-file-name "projects" root))
+         (drgnx-wb--sections nil) (drgnx-signal--editor-window nil) (drgnx-explorer--roots nil)
+         (raised 0) buf)
+    (unwind-protect
+        (cl-letf (((symbol-function 'drgnx-session-raise) (lambda () (cl-incf raised))))
+          (delete-other-windows)
+          (drgnx-explorer-setup)
+          (setq buf (find-file-noselect (expand-file-name "a.py" a)))
+          (switch-to-buffer buf)                    ; project A's file in front, as after a restore
+          (drgnx-session-open-folder (directory-file-name b))
+          (should (= raised 1))
+          (with-current-buffer (window-buffer (selected-window))
+            (should (equal (buffer-name) drgnx-explorer-buffer-name))   ; the Explorer is selected
+            (let ((p (project-current nil)))
+              (should p)
+              (should (equal (expand-file-name (project-root p)) b))
+              (should (member (expand-file-name "café.py" b) (project-files p)))))
+          (should (drgnx-wb-sidebar-showing-p))
+          ;; the other folder: first now, the first one stays
+          (drgnx-session-open-folder a)
+          (should (equal (drgnx-explorer-roots) (list a b)))
+          (with-current-buffer (window-buffer (selected-window))
+            (should (equal (expand-file-name (project-root (project-current nil))) a))))
+      (when (buffer-live-p buf) (kill-buffer buf))
+      (drgnx-wb-hide-sidebar)
+      (delete-other-windows)
+      (drgnx-explorer-set-roots nil)
+      (when (get-buffer drgnx-explorer-buffer-name) (kill-buffer drgnx-explorer-buffer-name))
+      (delete-directory root t))))
+
+(ert-deftest drgnx-session/an-unsaved-untitled-buffer-is-offered-and-never-lost ()
+  ;; Nothing of drgnx-session stubbed: the real `save-some-buffers' offers New Untitled's buffer (its question,
+  ;; `map-y-or-n-p', records the buffers and declines), the buffer still counts as unsaved, "no" keeps drgnx.
+  (load (expand-file-name "modules/core/drgnx-basics" drgnx-dir) nil t)
+  (let ((u (drgnx-basics-new-untitled)) offered killed (asked 0))
+    (unwind-protect
+        (progn
+          (with-current-buffer u (insert "typed, never saved"))
+          (cl-letf (((symbol-function 'map-y-or-n-p) (lambda (_prompter _actor list &rest _) (setq offered list) 0))
+                    ((symbol-function 'yes-or-no-p) (lambda (&rest _) (cl-incf asked) nil))
+                    ((symbol-function 'kill-emacs) (lambda (&rest _) (setq killed t))))
+            (drgnx-session-quit))
+          (should (memq u offered))
+          (should (memq u (drgnx-session--unsaved-buffers)))
+          (should (= asked 1))
+          (should-not killed)
+          (should (buffer-live-p u)))
+      (with-current-buffer u (set-buffer-modified-p nil))
+      (kill-buffer u))))
 
 (ert-deftest drgnx-session/the-server-starts-only-where-drgnx-path-should-reach-it ()
   (require 'server)

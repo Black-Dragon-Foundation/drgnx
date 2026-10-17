@@ -32,6 +32,7 @@
     (let ((b (get-buffer-create (format "Untitled-%d" n))))
       (switch-to-buffer b)
       (funcall (default-value 'major-mode))
+      (setq buffer-offer-save t)          ; Quit and Save All offer it: typed text is never dropped unasked
       b)))
 
 (drgnx-module-define 'core/basics

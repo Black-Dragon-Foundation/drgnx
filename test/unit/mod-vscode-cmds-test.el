@@ -68,7 +68,8 @@
         (progn (should-not (eq a b))
                (should (string-prefix-p "Untitled-" (buffer-name a)))
                (should (string-prefix-p "Untitled-" (buffer-name b)))
-               (should (eq (current-buffer) b)))
+               (should (eq (current-buffer) b))
+               (should (buffer-local-value 'buffer-offer-save a)))   ; Save All and Quit offer it
       (kill-buffer a) (kill-buffer b))))
 
 (ert-deftest drgnx-vsc/reopen-the-last-closed-file ()

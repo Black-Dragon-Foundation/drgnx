@@ -21,8 +21,8 @@
 (declare-function server-running-p "server")
 (declare-function drgnx-explorer-roots "drgnx-explorer")
 (declare-function drgnx-explorer-set-roots "drgnx-explorer")
-(declare-function drgnx-wb-sidebar-showing-p "drgnx-wb")
-(declare-function drgnx-wb-show-sidebar "drgnx-wb")
+(declare-function drgnx-explorer-focus "drgnx-explorer")
+(defvar drgnx-explorer-buffer-name)
 
 (defvar drgnx-session-server-name (let ((n (getenv "DRGNX_SERVER_NAME"))) (if (and n (not (string-empty-p n))) n "drgnx"))
   "The server `drgnx PATH' talks to: $DRGNX_SERVER_NAME, else \"drgnx\" (bin/drgnx uses the same).")
@@ -87,29 +87,33 @@ this to decide whether `drgnx PATH' needs a new window."
     f))
 
 (defun drgnx-session-open-folder (dir)
-  "Show DIR in front as the Explorer's first folder (`drgnx DIR'); the Explorer's other folders stay.
-Without the workbench (drgnx safe), DIR opens in dired."
+  "Show DIR in front as the Explorer's first folder (`drgnx DIR'), the Explorer selected — as VS Code after
+`code DIR' — with DIR as its `default-directory', so quick open and project search work in DIR's project.
+The Explorer's other folders stay.  Without the workbench (drgnx safe), DIR opens in dired."
   (let ((dir (file-name-as-directory (expand-file-name dir))))
     (drgnx-session-raise)
     (if (not (fboundp 'drgnx-explorer-set-roots))
         (dired dir)
       (drgnx-explorer-set-roots (cons dir (remove dir (drgnx-explorer-roots))))
-      (unless (drgnx-wb-sidebar-showing-p) (drgnx-wb-show-sidebar)))
+      (drgnx-explorer-focus)
+      (with-current-buffer drgnx-explorer-buffer-name (setq default-directory dir)))
     t))
 
 ;;;; Closing and quitting
 
 (defun drgnx-session--unsaved-buffers ()
-  "File buffers with changes not saved."
-  (seq-filter (lambda (b) (and (buffer-file-name b) (buffer-modified-p b))) (buffer-list)))
+  "Buffers whose changes would be lost: changed file buffers, and changed buffers that offer to be saved
+(`buffer-offer-save': New Untitled)."
+  (seq-filter (lambda (b) (and (buffer-modified-p b) (or (buffer-file-name b) (buffer-local-value 'buffer-offer-save b))))
+              (buffer-list)))
 
 (defun drgnx-session-quit ()
-  "Quit drgnx — the daemon too: offer to save each changed file, then stop.  C-g, an error while saving,
-or keeping a change unsaved and then saying no leaves drgnx running with everything open."
+  "Quit drgnx — the daemon too: offer to save each changed file and New Untitled buffer, then stop.  C-g, an
+error while saving, or keeping a change unsaved and then saying no leaves drgnx running with everything open."
   (interactive)
-  (save-some-buffers)
+  (save-some-buffers nil t)          ; t: buffers with `buffer-offer-save' too, as `save-buffers-kill-emacs' does
   (let ((unsaved (drgnx-session--unsaved-buffers)))
-    (if (and unsaved (not (yes-or-no-p (format "%d file%s not saved; quit and lose the changes? "
+    (if (and unsaved (not (yes-or-no-p (format "%d buffer%s not saved; quit and lose the changes? "
                                                (length unsaved) (if (cdr unsaved) "s are" " is")))))
         (message "drgnx keeps running; nothing was lost")
       (kill-emacs))))
