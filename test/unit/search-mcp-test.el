@@ -261,7 +261,8 @@
       (should (equal (car calls) '((:file "src/a.el" :line 7 :text "chunk text\nmore")))))))
 
 (ert-deftest drgnx-search/retriever-is-registered-and-keeps-grep ()
-  (require 'drgnx-ai-ui)
+  (unless (featurep 'drgnx-ai-ui)                ; a module file, not on the load path: load it as ai-ask-test does
+    (load (expand-file-name "modules/tools/drgnx-ai-ui" drgnx-dir) nil t))
   (let ((drgnx-ai-retrievers (list #'drgnx-ai--grep-retriever)))
     (drgnx-search--register-retriever)
     (drgnx-search--register-retriever)

@@ -5,6 +5,9 @@
 (require 'drgnx-area)
 (require 'project)
 (require 'drgnx-search-store)
+(require 'drgnx-search-chunk)                 ; the libraries whose variables the tests let-bind and whose
+(require 'drgnx-search-query)                 ; functions they stub: loaded here, so the file passes alone
+(require 'drgnx-search-index)                 ; (and in any shard of drgnx check)
 (load (expand-file-name "modules/tools/drgnx-search" drgnx-dir) nil t)
 
 (defmacro drgnx-search-ui-test--project (&rest body)
