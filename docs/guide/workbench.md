@@ -160,7 +160,8 @@ shown files, and the Explorer's folders. At the first graphical frame it comes b
 (`drgnx-persist-restore-on-start`) — with a daemon, in the first `emacsclient -c` frame; closing the last graphical
 frame saves too. Each group's shown file opens at once and its other tabs open while you are idle; nothing asks
 anything at start (no remote files are touched, only safe local variables, no large-file question). Files that no
-longer exist are skipped, sizes are clamped to the frame, and a state in another format is ignored. Save / Restore
+longer exist are skipped, sizes are clamped to the frame, window parameters in the file are ignored (drgnx saves
+none), and a state in another format is ignored. Save / Restore
 Workbench Layout are in the palette. Only a graphical session saves — a batch run never writes your state.
 
 ### Several windows

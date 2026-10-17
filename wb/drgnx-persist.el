@@ -13,6 +13,7 @@
 ;;; Code:
 (require 'cl-lib)
 (require 'seq)
+(require 'drgnx-paths)
 (require 'drgnx-groups)
 
 (defcustom drgnx-persist-restore-on-start t
@@ -27,8 +28,7 @@
 (declare-function drgnx-explorer-set-roots "drgnx-explorer")
 
 (defun drgnx-persist--file ()
-  (or drgnx-persist-file
-      (expand-file-name "drgnx/workbench.eld" (or (getenv "XDG_STATE_HOME") (expand-file-name "~/.local/state")))))
+  (or drgnx-persist-file (expand-file-name "workbench.eld" (drgnx-state-dir))))
 
 (defun drgnx-persist--area (area)
   (let ((w (drgnx-wb-area-window area)))
@@ -75,6 +75,14 @@
 (defun drgnx-persist--read (file)
   (when (file-readable-p file)
     (ignore-errors (with-temp-buffer (insert-file-contents file) (read (current-buffer))))))
+
+(defun drgnx-persist--strip (tree)
+  "The window state TREE without its window parameters: a state file must not set any (drgnx saves
+none — they would come from a crafted file)."
+  (if (consp tree)
+      (let ((rest (drgnx-persist--strip (cdr tree))))   ; dotted and improper lists too
+        (if (eq (car-safe (car tree)) 'parameters) rest (cons (drgnx-persist--strip (car tree)) rest)))
+    tree))
 
 (defun drgnx-persist--clamp (px limit) (and (integerp px) (max 1 (min px (floor limit)))))
 
@@ -159,7 +167,7 @@ visited now, its other tabs at idle (never a question at start)."
         (let ((groups (plist-get state :groups)))
           (when-let* ((main (plist-get state :main)))
             (let ((window-restore-killed-buffer-windows #'ignore))
-              (ignore-errors (window-state-put main (window-main-window) 'safe))))
+              (ignore-errors (window-state-put (drgnx-persist--strip main) (window-main-window) 'safe))))
           (catch 'full                                    ; the tree did not fit: side by side, while it fits
             (while (< (length (drgnx-groups-list)) (length groups))
               (unless (ignore-errors (split-window (car (last (drgnx-groups-list))) nil 'right))

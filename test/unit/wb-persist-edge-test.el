@@ -1,0 +1,55 @@
+;;; wb-persist-edge-test.el --- batch tests: restoring the workbench, edge cases -*- lexical-binding: t -*-
+(require 'ert)
+(require 'drgnx-persist)
+
+(defmacro drgnx-persist-edge-test--with (dir &rest body)
+  "BODY with rules and chrome on, one editor window, files in DIR, a state file."
+  (declare (indent 1))
+  `(let* ((,dir (file-name-as-directory (make-temp-file "drgnx-persist-edge" t)))
+          (drgnx-persist-file (expand-file-name "state.eld" ,dir))
+          (drgnx-persist--pending nil)
+          (drgnx-wb--sections nil) (drgnx-signal--editor-window nil) (display-buffer-alist nil))
+     (delete-other-windows)
+     (set-window-parameter (selected-window) 'drgnx-tabs nil)
+     (set-window-prev-buffers (selected-window) nil)
+     (dolist (p '(drgnx-wb-areas drgnx-wb-panel-px drgnx-wb-right-px drgnx-wb-dock-px)) (set-frame-parameter nil p nil))
+     (drgnx-rules-mode 1)
+     (drgnx-chrome-mode 1)
+     (unwind-protect (progn ,@body)
+       (when (timerp drgnx-persist--timer) (cancel-timer drgnx-persist--timer))
+       (setq drgnx-persist--timer nil)
+       (drgnx-chrome-mode -1)
+       (drgnx-rules-mode -1)
+       (drgnx-wb-area-hide 'panel)
+       (drgnx-wb-hide-sidebar)
+       (delete-other-windows)
+       (dolist (w (window-list)) (set-window-parameter w 'drgnx-test-crafted nil))
+       (dolist (b (buffer-list))
+         (when (and (buffer-file-name b) (string-prefix-p ,dir (buffer-file-name b))) (kill-buffer b)))
+       (delete-directory ,dir t))))
+
+(ert-deftest drgnx-persist-edge/a-state-file-sets-no-window-parameters ()
+  "M3d-4: the saved window tree is put back without the window parameters it carries (a crafted
+file could set any)."
+  (drgnx-persist-edge-test--with dir
+    (let ((f (expand-file-name "a.txt" dir)))
+      (write-region "x\n" nil f nil 'silent)
+      (switch-to-buffer (find-file-noselect f))
+      (drgnx-chrome-apply nil t)
+      (set-window-parameter (selected-window) 'drgnx-test-crafted 'evil)
+      (let ((window-persistent-parameters '((drgnx-test-crafted . writable))))
+        (drgnx-persist-save))
+      (should (string-search "drgnx-test-crafted" (with-temp-buffer (insert-file-contents drgnx-persist-file)
+                                                                    (buffer-string))))
+      (set-window-parameter (selected-window) 'drgnx-test-crafted nil)
+      (should (drgnx-persist-restore))
+      (should-not (seq-some (lambda (w) (window-parameter w 'drgnx-test-crafted)) (window-list)))
+      (should (equal (buffer-file-name (window-buffer (car (drgnx-groups-list)))) f)))))
+
+(ert-deftest drgnx-persist-edge/the-state-file-is-in-the-state-dir ()
+  (let ((drgnx-persist-file nil)
+        (process-environment (cons "XDG_STATE_HOME=/tmp/drgnx-persist-edge-state" process-environment)))
+    (should (equal (drgnx-persist--file) (expand-file-name "workbench.eld" (drgnx-state-dir))))
+    (should (equal (drgnx-persist--file) "/tmp/drgnx-persist-edge-state/drgnx/workbench.eld"))))
+
+;;; wb-persist-edge-test.el ends here
