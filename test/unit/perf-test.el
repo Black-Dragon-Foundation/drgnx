@@ -70,4 +70,22 @@
           (should-not (drgnx-perf-regressions file '((typing :input (:p95 3.5))))))   ; +60%, but 1.3 ms
       (delete-directory dir t))))
 
+(defvar drgnx-perf-test-hook2 nil)
+(defvar drgnx-perf-test--calls 0)
+(defun drgnx-perf-test--once ()
+  (setq drgnx-perf-test--calls (1+ drgnx-perf-test--calls))
+  (remove-hook 'drgnx-perf-test-hook2 #'drgnx-perf-test--once))
+
+(ert-deftest drgnx-perf/the-audit-lets-a-function-remove-itself ()
+  ;; A probe must not change what it measures: a hook function that removes itself is gone.
+  (let ((drgnx-perf-test-hook2 nil) (drgnx-perf-test--calls 0))
+    (add-hook 'drgnx-perf-test-hook2 #'drgnx-perf-test--once)
+    (drgnx-perf-audit-begin '(drgnx-perf-test-hook2))
+    (run-hooks 'drgnx-perf-test-hook2)
+    (run-hooks 'drgnx-perf-test-hook2)
+    (let ((audit (drgnx-perf-audit-end)))
+      (should (= drgnx-perf-test--calls 1))
+      (should (eql (plist-get (car audit) :calls) 1))
+      (should-not (advice--p (symbol-function 'drgnx-perf-test--once))))))
+
 ;;; perf-test.el ends here

@@ -115,37 +115,65 @@
     server-after-make-frame-hook pre-redisplay-functions window-scroll-functions)
   "Hooks the audit times by default.")
 
-(defvar drgnx-perf--audit nil "Alist HOOK → (ORIGINAL . TABLE) while auditing; TABLE: fn-name → (calls . ms).")
+(defvar drgnx-perf--audit nil
+  "While auditing: (TABLE ADVISED WRAPPED): TABLE \"hook fn\" → (calls . ms); ADVISED: named functions
+timed by advice (their hooks untouched, so a function can still remove itself); WRAPPED: (HOOK . ORIGINAL)
+for hooks whose lambdas had to be wrapped.")
 
 (defun drgnx-perf--name (fn) (if (symbolp fn) (symbol-name fn) (format "lambda@%s" (sxhash-eq fn))))
 
+(defun drgnx-perf--note (table key t0)
+  (let ((cell (or (gethash key table) (puthash key (cons 0 0.0) table))))
+    (setcar cell (1+ (car cell)))
+    (setcdr cell (+ (cdr cell) (* 1000 (- (float-time) t0))))))
+
+(defun drgnx-perf--timer-for (fn table)
+  "An :around advice timing FN under every audited hook it is on."
+  (lambda (orig &rest args)
+    (let ((t0 (float-time)))
+      (unwind-protect (apply orig args)
+        (dolist (key (get fn 'drgnx-perf--keys)) (drgnx-perf--note table key t0))))))
+
 (defun drgnx-perf-audit-begin (&optional hooks)
-  "Time every function on HOOKS (default `drgnx-perf-busy-hooks'; their global values)."
-  (dolist (hook (or hooks drgnx-perf-busy-hooks))
-    (when (boundp hook)
-      (let* ((orig (default-value hook)) (table (make-hash-table :test #'equal)))
-        (push (cons hook (cons orig table)) drgnx-perf--audit)
-        (set-default hook
-                     (mapcar (lambda (fn)
-                               (if (eq fn t) t
-                                 (let ((name (drgnx-perf--name fn)))
-                                   (lambda (&rest args)
-                                     (let ((t0 (float-time)))
-                                       (unwind-protect (apply fn args)
-                                         (let ((cell (or (gethash name table) (puthash name (cons 0 0.0) table))))
-                                           (setcar cell (1+ (car cell)))
-                                           (setcdr cell (+ (cdr cell) (* 1000 (- (float-time) t0)))))))))))
-                             (if (listp orig) orig (list orig))))))))
+  "Time every function on HOOKS (default `drgnx-perf-busy-hooks'; their global values): named
+functions by advice (the hooks stay as they are), lambdas by a wrapper in the hook."
+  (let ((table (make-hash-table :test #'equal)) advised wrapped)
+    (dolist (hook (or hooks drgnx-perf-busy-hooks))
+      (when (boundp hook)
+        (let* ((orig (default-value hook)) (fns (if (listp orig) orig (list orig))))
+          (dolist (fn fns)
+            (when (and (symbolp fn) (not (eq fn t)) (fboundp fn))
+              (let ((key (format "%s %s" hook fn)))
+                (put fn 'drgnx-perf--keys (cons key (get fn 'drgnx-perf--keys)))
+                (unless (assq fn advised)
+                  (let ((ad (drgnx-perf--timer-for fn table)))
+                    (advice-add fn :around ad)
+                    (push (cons fn ad) advised))))))
+          (when (seq-find (lambda (fn) (and fn (not (symbolp fn)))) fns)
+            (push (cons hook orig) wrapped)
+            (set-default hook
+                         (mapcar (lambda (fn)
+                                   (if (symbolp fn) fn
+                                     (let ((key (format "%s %s" hook (drgnx-perf--name fn))))
+                                       (lambda (&rest args)
+                                         (let ((t0 (float-time)))
+                                           (unwind-protect (apply fn args) (drgnx-perf--note table key t0)))))))
+                                 fns))))))
+    (setq drgnx-perf--audit (list table advised wrapped))))
 
 (defun drgnx-perf-audit-end ()
-  "Restore the hooks; the audit, costliest first: ((:hook :fn :calls :ms)…)."
-  (let (rows)
-    (pcase-dolist (`(,hook ,orig . ,table) drgnx-perf--audit)
-      (set-default hook orig)
-      (maphash (lambda (name cell)
-                 (push (list :hook (symbol-name hook) :fn name :calls (car cell) :ms (drgnx-perf--round (cdr cell))) rows))
-               table))
+  "Undo the audit; its rows, costliest first: ((:hook :fn :calls :ms)…)."
+  (pcase-let ((`(,table ,advised ,wrapped) drgnx-perf--audit) (rows nil))
     (setq drgnx-perf--audit nil)
+    (pcase-dolist (`(,fn . ,ad) advised)
+      (advice-remove fn ad)
+      (put fn 'drgnx-perf--keys nil))
+    (pcase-dolist (`(,hook . ,orig) wrapped) (set-default hook orig))
+    (when table
+      (maphash (lambda (key cell)
+                 (let ((parts (split-string key " ")))
+                   (push (list :hook (car parts) :fn (cadr parts) :calls (car cell) :ms (drgnx-perf--round (cdr cell))) rows)))
+               table))
     (sort rows (lambda (a b) (> (plist-get a :ms) (plist-get b :ms))))))
 
 ;;;; Budgets and history (the controller's side)

@@ -87,7 +87,11 @@ guard_violations (window moves from timers).")
                               drgnx-ui-mcp--report)
          :inputSchema (drgnx-ui-mcp--schema (append drgnx-ui-mcp--session
                                                     '(:actions (:type "array" :items (:type "object"))))
-                                            '("session" "actions")))))
+                                            '("session" "actions")))
+   (list :name "ui_perf"
+         :description "Run a perf workload in the session (typing, scrolling, tabs, explorer, agent-typing, frames, redisplay, memory): input latency p50/p95/max, GC, redisplay or frame times — the numbers `drgnx test --perf' judges (docs/perf.md)."
+         :inputSchema (drgnx-ui-mcp--schema (append drgnx-ui-mcp--session '(:workload (:type "string") :audit (:type "boolean")))
+                                            '("session" "workload")))))
 
 ;;;; Tool calls
 
@@ -154,7 +158,13 @@ guard_violations (window moves from timers).")
                                                                  (/ (or (plist-get a :timeout_ms) 10000) 1000.0))
                                                   t :false)))))
     ("ui_measure" . ,(lambda (a) (drgnx-ui-mcp--text
-                                  (drgnx-ui-measure (drgnx-ui-mcp--own a) (append (plist-get a :actions) nil)))))))
+                                  (drgnx-ui-measure (drgnx-ui-mcp--own a) (append (plist-get a :actions) nil)))))
+    ("ui_perf" . ,(lambda (a)
+                    (require 'drgnx-perf-run)
+                    (let ((w (assq (intern (plist-get a :workload)) (drgnx-perf-run--workloads))))
+                      (unless w (error "No workload %s" (plist-get a :workload)))
+                      (drgnx-ui-mcp--text (drgnx-perf-run-workload (drgnx-ui-mcp--own a) (cdr w)
+                                                                   (eq (plist-get a :audit) t))))))))
 
 (defun drgnx-ui-mcp-call (name args)
   "Run tool NAME with ARGS (a plist); every failure becomes an isError result."
