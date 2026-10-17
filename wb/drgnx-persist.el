@@ -7,8 +7,9 @@
 ;; dock — each with its pixel size — the editor groups with their sizes, tabs and shown files, and
 ;; the Explorer's folders.  Saved when Emacs exits (only from a graphical session: a batch run
 ;; never writes your state) to $XDG_STATE_HOME/drgnx/workbench.eld; restored at the first
-;; graphical frame.  Files that no longer exist are skipped; sizes are clamped to the frame; a
-;; state written by another format version is ignored.  See docs/guide/workbench.md.
+;; graphical frame, and again whenever a window opens after none (a daemon that keeps running after
+;; its last window closed: the next `emacsclient -c' gets the layout back).  Files that no longer
+;; exist are skipped; sizes are clamped to the frame; a state written by another format version is ignored.  See docs/guide/workbench.md.
 
 ;;; Code:
 (require 'cl-lib)
@@ -19,6 +20,12 @@
 (defcustom drgnx-persist-restore-on-start t
   "Restore the last workbench layout at the first graphical frame."
   :type 'boolean :group 'drgnx)
+
+(defcustom drgnx-persist-after-restore-functions nil
+  "Functions called with the frame after the saved workbench was restored into it — at the first
+graphical frame, and whenever a window opens after none (a daemon that kept running).  Use it to show
+what a client asked for in front.  Nothing here may prompt or block; an error is reported, not raised."
+  :type 'hook :group 'drgnx)
 
 (defvar drgnx-persist-file nil "The state file; nil means $XDG_STATE_HOME/drgnx/workbench.eld.")
 (defconst drgnx-persist-version 2 "Format of the state file (1: one window; 2: :frames, one per window).")
@@ -237,22 +244,35 @@ windows left (\[save-buffers-kill-terminal] in the last client), save every one 
         (setq drgnx-persist--saved-at-exit nil)
       (ignore-errors (drgnx-persist-save nil (list frame))))))
 
-(defun drgnx-persist--on-start ()
-  "At the first graphical frame — which a daemon makes before selecting it.  An emacsclient's
-window is left to `drgnx-persist--on-client-frame'."
-  (when-let* (((and drgnx-persist-restore-on-start)) (f (drgnx-persist--gui-frame))
-              ((not (frame-parameter f 'client))))
-    (ignore-errors (with-selected-frame f (drgnx-persist-restore)))))
+(defun drgnx-persist--restore-into (frame)
+  "Restore the saved workbench into FRAME, once per frame, then run
+`drgnx-persist-after-restore-functions' with it (only when a state was restored).  Nothing here asks
+anything or signals: it runs from hooks."
+  (unless (frame-parameter frame 'drgnx-persist-restored)
+    (set-frame-parameter frame 'drgnx-persist-restored t)
+    (when (ignore-errors (with-selected-frame frame (drgnx-persist-restore)))
+      (run-hook-wrapped 'drgnx-persist-after-restore-functions
+                        (lambda (fn frame)
+                          (condition-case err (funcall fn frame)
+                            (error (message "drgnx: after-restore function %S failed: %s" fn (error-message-string err))))
+                          nil)                          ; nil: go on with the next function
+                        frame))))
 
-(defun drgnx-persist--on-client-frame ()
-  "An emacsclient's new window, after the server showed its buffer in it: when it is the only
-graphical window — the daemon's first, or the first after the last one closed — bring the
-workbench back (a file the client asked for is shown next, on top of it)."
-  (let ((f (selected-frame)))
-    (when (and drgnx-persist-restore-on-start (display-graphic-p f)
-               (not (seq-some (lambda (o) (and (not (eq o f)) (display-graphic-p o) (not (frame-parent o))))
+(defun drgnx-persist--on-start ()
+  "At the first graphical frame — which a daemon makes before selecting it."
+  (when-let* (((and drgnx-persist-restore-on-start)) (f (drgnx-persist--gui-frame)))
+    (drgnx-persist--restore-into f)))
+
+(defun drgnx-persist--on-new-frame (&optional frame)
+  "A client's new window (`server-after-make-frame-hook', which passes no argument: the selected frame):
+if it is graphical and no other graphical window exists — a daemon that kept running after its last
+window closed — bring the saved workbench back into it.  A frame the first-start restore already
+handled is left alone."
+  (let ((frame (or frame (selected-frame))))
+    (when (and drgnx-persist-restore-on-start (frame-live-p frame) (display-graphic-p frame)
+               (not (seq-some (lambda (f) (and (not (eq f frame)) (not (frame-parent f)) (display-graphic-p f)))
                               (frame-list))))
-      (ignore-errors (drgnx-persist-restore)))))
+      (drgnx-persist--restore-into frame))))
 
 (define-minor-mode drgnx-persist-mode
   "Save the workbench when Emacs exits or its last graphical frame closes; restore it at the first
@@ -263,12 +283,12 @@ graphical frame, and at each emacsclient window that opens when no other one is 
              (add-hook 'delete-frame-functions #'drgnx-persist--on-delete-frame)
              (advice-add 'server-delete-client :before #'drgnx-persist--before-client-delete)
              (add-hook 'drgnx-first-gui-frame-hook #'drgnx-persist--on-start)
-             (add-hook 'server-after-make-frame-hook #'drgnx-persist--on-client-frame))
+             (add-hook 'server-after-make-frame-hook #'drgnx-persist--on-new-frame))
+    (remove-hook 'server-after-make-frame-hook #'drgnx-persist--on-new-frame)
     (remove-hook 'kill-emacs-hook #'drgnx-persist--on-exit)
     (remove-hook 'delete-frame-functions #'drgnx-persist--on-delete-frame)
     (advice-remove 'server-delete-client #'drgnx-persist--before-client-delete)
-    (remove-hook 'drgnx-first-gui-frame-hook #'drgnx-persist--on-start)
-    (remove-hook 'server-after-make-frame-hook #'drgnx-persist--on-client-frame)))
+    (remove-hook 'drgnx-first-gui-frame-hook #'drgnx-persist--on-start)))
 
 (provide 'drgnx-persist)
 ;;; drgnx-persist.el ends here

@@ -128,42 +128,6 @@
       (cl-letf (((symbol-function 'display-graphic-p) (lambda (&optional _) nil)))
         (should-not (drgnx-persist--gui-frame))))))
 
-(ert-deftest drgnx-persist/a-client-window-opened-after-the-last-closed-is-restored ()
-  ;; A daemon outlives its windows: each `emacsclient -c' that opens the only graphical window
-  ;; brings the workbench back — after the server has shown its *scratch* in it.
-  (let* ((f (selected-frame)) (other nil) (restored 0))
-    (cl-letf (((symbol-function 'display-graphic-p) (lambda (&optional x) (memq (or x (selected-frame)) (list f other))))
-              ((symbol-function 'frame-list) (lambda () (delq nil (list f other))))
-              ((symbol-function 'frame-parent) (lambda (&optional _) nil))
-              ((symbol-function 'drgnx-persist-restore) (lambda (&rest _) (cl-incf restored))))
-      (set-frame-parameter f 'client 'kx-proc)
-      (unwind-protect
-          (progn
-            (drgnx-persist--on-start)            ; the first-frame stage leaves a client's window alone
-            (should (= restored 0))
-            (drgnx-persist--on-client-frame)
-            (drgnx-persist--on-client-frame)     ; closed and opened again
-            (should (= restored 2))
-            (setq other 'kx-second)              ; another window is open: a new, empty one
-            (drgnx-persist--on-client-frame)
-            (should (= restored 2))
-            (setq other nil)
-            (let ((drgnx-persist-restore-on-start nil)) (drgnx-persist--on-client-frame))
-            (should (= restored 2))
-            (set-frame-parameter f 'client nil)  ; not a client's window (plain `emacs')
-            (drgnx-persist--on-start)
-            (should (= restored 3)))
-        (set-frame-parameter f 'client nil)))))
-
-(ert-deftest drgnx-persist/the-mode-restores-client-windows ()
-  (let ((on drgnx-persist-mode))
-    (unwind-protect
-        (progn (drgnx-persist-mode 1)
-               (should (memq #'drgnx-persist--on-client-frame server-after-make-frame-hook))
-               (drgnx-persist-mode -1)
-               (should-not (memq #'drgnx-persist--on-client-frame server-after-make-frame-hook)))
-      (drgnx-persist-mode (if on 1 -1)))))
-
 (ert-deftest drgnx-persist/tabs-load-lazily-and-safely ()
   ;; I5: at start only each group's shown file is visited; the other tabs follow at idle, in
   ;; order; remote tabs are never touched (no connection, no password prompt).
@@ -214,3 +178,91 @@
       (should (eql 2 (plist-get state :version)))
       (should (= 1 (length (plist-get state :frames))))
       (should (plist-get (car (plist-get state :frames)) :groups)))))
+
+;;; Reopening: a daemon that keeps running restores whenever its first window opens after none.
+
+(defmacro drgnx-persist-test--graphical (&rest body)
+  "BODY with the selected frame the only graphical one and not yet restored."
+  (declare (indent 0))
+  `(cl-letf (((symbol-function 'display-graphic-p) (lambda (&optional _) t))
+             ((symbol-function 'select-frame-set-input-focus) #'ignore)   ; a batch frame has no window system
+             ((symbol-function 'frame-list) (lambda () (list (selected-frame)))))
+     (set-frame-parameter nil 'drgnx-persist-restored nil)
+     (unwind-protect (progn ,@body)
+       (set-frame-parameter nil 'drgnx-persist-restored nil))))
+
+(ert-deftest drgnx-persist/the-first-window-after-none-restores ()
+  (drgnx-persist-test--with dir
+    (drgnx-persist-test--graphical
+      (let ((calls 0) (drgnx-persist-restore-on-start t))
+        (cl-letf (((symbol-function 'drgnx-persist-restore) (lambda (&rest _) (cl-incf calls) t)))
+          (drgnx-persist--on-delete-frame (selected-frame))        ; the last window closes: state saved
+          (should (file-exists-p drgnx-persist-file))
+          (drgnx-persist--on-new-frame (selected-frame))           ; a new window opens
+          (should (= 1 calls))
+          (drgnx-persist--on-new-frame)                            ; the hook gives no argument: the selected frame
+          (should (= 1 calls)))))))                                ; once per opening
+
+(ert-deftest drgnx-persist/a-first-start-restore-is-not-repeated ()
+  ;; A daemon's first `emacsclient -c' runs the first-frame hook and then `server-after-make-frame-hook'.
+  (drgnx-persist-test--with dir
+    (drgnx-persist-test--graphical
+      (let ((calls 0) (drgnx-persist-restore-on-start t))
+        (cl-letf (((symbol-function 'drgnx-persist-restore) (lambda (&rest _) (cl-incf calls) t)))
+          (drgnx-persist--on-start)
+          (drgnx-persist--on-new-frame (selected-frame))
+          (should (= 1 calls)))))))
+
+(ert-deftest drgnx-persist/a-second-window-does-not-restore ()
+  (drgnx-persist-test--with dir
+    (drgnx-persist-test--graphical
+      (let ((calls 0) (other (make-symbol "other-frame")) (drgnx-persist-restore-on-start t))
+        (cl-letf (((symbol-function 'drgnx-persist-restore) (lambda (&rest _) (cl-incf calls) t))
+                  ((symbol-function 'frame-parent) (lambda (&optional _) nil))
+                  ((symbol-function 'frame-list) (lambda () (list (selected-frame) other))))
+          (drgnx-persist--on-new-frame (selected-frame))
+          (should (= 0 calls)))
+        (cl-letf (((symbol-function 'drgnx-persist-restore) (lambda (&rest _) (cl-incf calls) t)) ; a terminal client
+                  ((symbol-function 'display-graphic-p) (lambda (&optional _) nil)))
+          (drgnx-persist--on-new-frame (selected-frame))
+          (should (= 0 calls)))
+        (let ((drgnx-persist-restore-on-start nil))
+          (cl-letf (((symbol-function 'drgnx-persist-restore) (lambda (&rest _) (cl-incf calls) t)))
+            (drgnx-persist--on-new-frame (selected-frame))
+            (should (= 0 calls))))))))
+
+(ert-deftest drgnx-persist/the-reopened-window-gets-what-the-last-close-saved ()
+  (drgnx-persist-test--with dir
+    (drgnx-persist-test--graphical
+      (switch-to-buffer (drgnx-persist-test--file dir "a.txt"))
+      (drgnx-chrome-apply nil t)
+      (drgnx-groups-split-right)
+      (switch-to-buffer (drgnx-persist-test--file dir "b.txt"))
+      (drgnx-chrome-apply nil t)
+      (drgnx-wb-show-sidebar)
+      (let ((before (drgnx-persist-test--layout)))
+        (drgnx-persist--on-delete-frame (selected-frame))
+        (drgnx-persist-test--reset)
+        (should-not (equal before (drgnx-persist-test--layout)))
+        (drgnx-persist--on-new-frame (selected-frame))
+        (should (equal before (drgnx-persist-test--layout)))))))
+
+(ert-deftest drgnx-persist/a-requested-file-ends-up-in-front ()
+  ;; The after-restore functions run once per restore, with the frame, after the layout is back: what
+  ;; they show (the client's buffer) is not undone.
+  (drgnx-persist-test--with dir
+    (drgnx-persist-test--graphical
+      (switch-to-buffer (drgnx-persist-test--file dir "a.txt"))
+      (drgnx-chrome-apply nil t)
+      (drgnx-persist--on-delete-frame (selected-frame))
+      (drgnx-persist-test--reset)
+      (let* ((asked (drgnx-persist-test--file dir "asked.txt")) seen
+             (drgnx-persist-after-restore-functions
+              (list (lambda (frame)
+                      (push (list frame (mapcar #'buffer-file-name (drgnx-chrome-tabs (car (drgnx-groups-list))))) seen)
+                      (error "a failing function must not stop the others")
+                      )
+                    (lambda (frame) (with-selected-frame frame (switch-to-buffer asked))))))
+        (drgnx-persist--on-new-frame (selected-frame))
+        (should (equal seen (list (list (selected-frame) (list (expand-file-name "a.txt" dir))))))
+        (should (eq (window-buffer (selected-window)) asked))))))

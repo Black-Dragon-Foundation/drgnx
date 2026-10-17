@@ -170,9 +170,12 @@ When Emacs exits, the workbench of every window is saved to `$XDG_STATE_HOME/drg
 the other windows are opened again at start (your window manager places them; the first one is the main window): the
 left dock, the panel and its tab, the right dock — each with its pixel size — the editor groups with their sizes, tabs and
 shown files, and the Explorer's folders. At the first graphical frame it comes back as it was
-(`drgnx-persist-restore-on-start`) — with a daemon, in every `emacsclient -c` frame that opens when no other
-graphical frame is open (the first, and the next one after you closed the last); closing the last graphical frame
-saves too. `emacsclient -c FILE` shows FILE in the restored layout. Each group's shown file opens at once and its other tabs open while you are idle; nothing asks
+(`drgnx-persist-restore-on-start`) — with a daemon, in the first `emacsclient -c` frame; closing the last graphical
+frame saves too. It also comes back **whenever a window opens after none**: a daemon that keeps running after its
+last window closed gives the next `emacsclient -c` the saved layout again (a second window opened while one is
+already open is never restored over; a frame is restored once). A file that client asked for is shown in
+front afterwards (the server switches to it after the restore); add a function to `drgnx-persist-after-restore-functions` (called with the restored frame, after
+every restore, never prompting) to do something of your own at that moment. Each group's shown file opens at once and its other tabs open while you are idle; nothing asks
 anything at start (no remote files are touched, only safe local variables, no large-file question). Files that no
 longer exist are skipped, sizes are clamped to the frame, window parameters in the file are ignored (drgnx saves
 none), and a state in another format is ignored. Save / Restore
