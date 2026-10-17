@@ -145,6 +145,26 @@ A project can narrow what is indexed with `.drgnx/search.eld` at its root (a pli
 `*` and `?` stay within one path component, `**/` stands for any number of directories, a glob without `/` matches at any
 depth, and a trailing `/` means everything below that directory.
 
+## How fast
+
+Measured on a development laptop with a CPU-only local TEI server (Qwen3-Embedding-0.6B, 1024 dimensions), indexing
+drgnx's own repository (289 files, 1,462 chunks):
+
+| What | Result |
+|---|---|
+| First index (embedding included) | 231 s — the embedding model is the whole cost, about 6 chunks per second |
+| Indexer peak memory | 83 MB (resident), far below the job's 1 GiB cap |
+| Index again, nothing changed | 0.1 s of work, 0.24 s for the command |
+| Size of the index | 6.8 MB |
+| A question, from the command line (compiled: `drgnx build`) | p50 0.26 s, p95 0.31 s (30 runs of 10 questions) |
+| The same, uncompiled (a checkout that was not built) | p50 0.73 s, p95 0.80 s — the 500 dot products of the re-rank run about six times slower |
+| Recall@10 of the search against exact float cosine | 1.00 (20 questions, all 1,462 chunks re-embedded as floats; the quantized scan found all 10 of the exact top 10 every time) |
+
+A question from the command line includes starting a batch Emacs and loading drgnx; embedding the question takes
+about 25 ms, and inside a running Emacs there is no start-up to pay. The index is searched as vectors of one bit and one
+byte per dimension: a Hamming scan of the one-bit fingerprints picks 500 candidates, which are re-ranked with the bytes.
+The recall above was measured with the real model, not random vectors.
+
 ## Privacy
 
 To make the vectors, the text of the chunks is sent to the provider of the `embed` role — and the text of your
