@@ -98,7 +98,12 @@ or a number that is not finite."
     (let ((raw (pcase (plist-get provider :kind)
                  ('tei json)
                  ('ollama (plist-get json :embeddings))
-                 (_ (and (vectorp (plist-get json :data)) (vconcat (mapcar (lambda (d) (plist-get d :embedding)) (plist-get json :data))))))))
+                 (_ (and (vectorp (plist-get json :data))
+                         ;; data[] may come in any order: :index says which input a vector is for
+                         (let ((data (append (plist-get json :data) nil)))
+                           (when (cl-every (lambda (d) (integerp (plist-get d :index))) data)
+                             (setq data (sort data (lambda (a b) (< (plist-get a :index) (plist-get b :index))))))
+                           (vconcat (mapcar (lambda (d) (plist-get d :embedding)) data))))))))
       (when (vectorp raw)
         (let ((units (vconcat (mapcar #'drgnx-ai--unit raw))))
           (and (cl-every #'identity units) units))))))

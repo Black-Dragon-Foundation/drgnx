@@ -318,7 +318,8 @@ region itself changed since the answer came."
 
 (defvar drgnx-ai-retrievers (list #'drgnx-ai--grep-retriever)
   "Functions (QUESTION ROOT DONE) that find what a question is about under ROOT and call DONE with snippets
-\((:file :line :text)…).  The text search is here; the semantic index joins in M10.")
+\((:file :line :text)…).  The text search is here; Semantic Search (tools/search) adds its index's retriever
+when the project has one.")
 
 (defconst drgnx-ai--stopwords
   '("where" "what" "which" "does" "this" "that" "with" "from" "have" "when" "there" "about" "into" "were" "they"

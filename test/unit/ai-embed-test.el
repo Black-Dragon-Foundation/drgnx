@@ -76,6 +76,13 @@
       (should (string-search "\"model\":\"emb\"" req))
       (should (string-search "\"input\":[\"one\",\"two\"]" req)))))
 
+(ert-deftest drgnx-ai-embed/openai-data-out-of-order-is-sorted-by-index ()
+  "An /embeddings answer may list data[] in any order; :index says which input each vector is for."
+  (drgnx-ai-embed-test--with '((:path "/v1/embeddings"
+                                      :body "{\"data\":[{\"index\":1,\"embedding\":[0,0,2]},{\"index\":0,\"embedding\":[3,4,0]}]}"))
+      '((a . "emb"))
+    (drgnx-ai-embed-test--check (drgnx-ai-embed-test--request ["one" "two"]))))
+
 (ert-deftest drgnx-ai-embed/llamacpp-shape ()
   (drgnx-ai-embed-test--with '((:path "/v1/embeddings" :body "{\"data\":[{\"embedding\":[3,4,0]},{\"embedding\":[0,0,2]}]}")) '((l . "m"))
     (drgnx-ai-embed-test--check (drgnx-ai-embed-test--request ["one" "two"]))))
