@@ -23,7 +23,7 @@
 (defcustom drgnx-outline-delay 0.5 "Idle seconds after an edit before the Outline follows it."
   :type 'number :group 'drgnx)
 
-(defconst drgnx-outline-buffer-name "*drgnx outline*")
+(defconst drgnx-outline-buffer-name " *drgnx outline*" "Internal (a leading space): not in C-x b or ibuffer.")
 (defvar drgnx-outline--rows [] "Per line: [NAME DEPTH POSITION-or-nil].")
 (defvar drgnx-outline--source nil "The buffer the Outline shows.")
 (defvar drgnx-outline--timer nil)

@@ -37,7 +37,7 @@
 (defface drgnx-explorer-guide '((t :inherit shadow)) "Indent guides and chevrons." :group 'drgnx)
 (defface drgnx-explorer-selected '((t :inherit region)) "Rows selected together (multi-select)." :group 'drgnx)
 
-(defconst drgnx-explorer-buffer-name "*drgnx explorer*")
+(defconst drgnx-explorer-buffer-name " *drgnx explorer*" "Internal (a leading space): not in C-x b or ibuffer.")
 
 (defvar drgnx-explorer--roots nil "The Explorer's root directories (never changed by the follower).")
 (defvar drgnx-explorer--expanded (make-hash-table :test #'equal) "Expanded folders (paths without trailing /).")

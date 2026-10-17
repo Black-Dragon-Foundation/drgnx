@@ -24,7 +24,7 @@
 (defface drgnx-buffers-dir '((t :inherit shadow)) "The folder after each name." :group 'drgnx)
 (defface drgnx-buffers-active '((t :inherit bold)) "The row of the buffer shown in the active editor." :group 'drgnx)
 
-(defconst drgnx-buffers-buffer-name "*drgnx buffers*")
+(defconst drgnx-buffers-buffer-name " *drgnx buffers*" "Internal (a leading space): not in C-x b or ibuffer.")
 
 (defvar drgnx-buffers--order nil "User buffers in the order they were first seen.")
 (defvar drgnx-buffers--signature nil "What the panel shows now; a refresh with the same one does nothing.")

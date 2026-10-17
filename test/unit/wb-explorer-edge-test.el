@@ -99,4 +99,16 @@
       (drgnx-explorer-set-roots (list root))
       (should (= (1+ n) drgnx-explorer--renders)))))
 
+;;;; M3a-6: dock buffers are internal
+
+(ert-deftest drgnx-explorer-edge/dock-buffers-are-internal ()
+  (dolist (name (list drgnx-explorer-buffer-name drgnx-buffers-buffer-name drgnx-outline-buffer-name))
+    (should (string-prefix-p " " name)))
+  ;; The Explorer's kill hook still runs (no inhibit-buffer-hooks): its watches go with it.
+  (skip-unless (and (featurep 'filenotify) file-notify--library))
+  (drgnx-explorer-edge--with root
+    (should (> (hash-table-count drgnx-explorer--watches) 0))
+    (kill-buffer drgnx-explorer-buffer-name)
+    (should (= (hash-table-count drgnx-explorer--watches) 0))))
+
 ;;; wb-explorer-edge-test.el ends here
