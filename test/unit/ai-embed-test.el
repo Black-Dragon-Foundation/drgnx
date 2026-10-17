@@ -111,6 +111,13 @@
     ;; who answered, for callers that record it (the search index)
     (should (eq 'tei (plist-get drgnx-ai-embed-last-info :provider)))))
 
+(ert-deftest drgnx-ai-embed/sync-takes-a-chain-instead-of-the-role ()
+  (drgnx-ai-embed-test--with '((:path "/embed" :body "[[3,4,0],[0,0,2]]")) '((dead . "m"))
+    ;; the role is only a dead provider; the chain given is TEI
+    (drgnx-ai-embed-test--check (cons (drgnx-ai-embed-sync ["one" "two"] :timeout 5 :chain '((tei))) nil))
+    (should (eq 'tei (plist-get drgnx-ai-embed-last-info :provider)))
+    (should-error (drgnx-ai-embed-sync ["one"] :timeout 5) :type 'drgnx-ai-embed-error)))
+
 (ert-deftest drgnx-ai-embed/sync-signals-when-none-answers ()
   (drgnx-ai-embed-test--with '((:path "/embed" :status 500 :body "boom")) '((tei) (dead . "m"))
     (let ((err (should-error (drgnx-ai-embed-sync ["one"] :timeout 5) :type 'drgnx-ai-embed-error)))

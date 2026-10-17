@@ -308,4 +308,35 @@
                (should-not (drgnx-search-files (expand-file-name "nonexistent" dir))))
       (delete-directory dir t))))
 
+(defmacro drgnx-search-chunk-test--slow-git (&rest body)
+  "BODY with a `git' first on PATH that does nothing but sleep for five seconds."
+  (declare (indent 0))
+  `(let* ((bin (make-temp-file "drgnx-slow-git" t))
+          (exec-path (cons bin exec-path))
+          (process-environment (cons (concat "PATH=" bin ":" (getenv "PATH")) process-environment)))
+     (unwind-protect
+         (progn
+           (with-temp-file (expand-file-name "git" bin) (insert "#!/bin/sh\nexec sleep 5\n"))
+           (set-file-modes (expand-file-name "git" bin) #o755)
+           ,@body)
+       (delete-directory bin t))))
+
+(ert-deftest drgnx-search-files/a-git-timeout-cuts-a-slow-git-off ()
+  (skip-unless (executable-find "sleep"))
+  (let ((root (make-temp-file "drgnx-search-slow" t)))
+    (unwind-protect
+        (drgnx-search-chunk-test--slow-git
+          (let* ((t0 (float-time))
+                 (err (let ((drgnx-search-git-timeout 0.5))
+                        (should-error (drgnx-search-files root) :type 'drgnx-search-files-error))))
+            (should (< (- (float-time) t0) 2.5))
+            (should (string-match-p "timed out" (cadr err)))))
+      (delete-directory root t))))
+
+(ert-deftest drgnx-search-files/no-timeout-by-default ()
+  (should-not drgnx-search-git-timeout)
+  (drgnx-search-chunk-test--repo '(("a.txt" . "a\n"))
+    (let ((drgnx-search-git-timeout 30))              ; plenty: the timed path lists the same files
+      (should (equal (mapcar #'car (drgnx-search-files root)) '("a.txt"))))))
+
 ;;; search-chunk-test.el ends here

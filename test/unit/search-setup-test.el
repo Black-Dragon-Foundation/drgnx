@@ -104,9 +104,91 @@ answered at once with DIMS-wide vectors), and the index job start recorded in ST
     (setq request-dims 8)
     (let ((r (drgnx-search-setup root)))
       (should (eq (car r) 'warn))
-      (should (string-match-p "4 dims" (cadr r)))
+      (should (string-match-p "built with tei (4), the provider gives 8" (cadr r)))
       (should (string-match-p "rebuild" (cadr r)))
       (should-not started))))
+
+(ert-deftest drgnx-search-setup/wizard-names-a-model-that-differs ()
+  (drgnx-search-setup-test--with
+    (drgnx-search-index root :embed #'drgnx-search-setup-test--embed)
+    (cl-letf (((symbol-function 'drgnx-ai-request)
+               (lambda (_role _kind payload callback &rest _)
+                 (funcall callback (vconcat (mapcar #'drgnx-search-setup-test--vector (plist-get payload :inputs)))
+                          '(:provider tei :model "other"))
+                 nil)))
+      (let ((r (drgnx-search-setup root)))
+        (should (eq (car r) 'warn))
+        (should (string-match-p "built with tei, the provider is tei/other" (cadr r)))
+        (should-not started)))))
+
+(ert-deftest drgnx-search-setup/the-role-changes-only-after-the-test-embedding-works ()
+  (drgnx-search-setup-test--with
+    (let ((set nil) (calls 0))
+      ;; the role has a provider that is down; TEI is up and is found by the probe
+      (cl-letf (((symbol-function 'drgnx-ai-role) (lambda (_role) '((dead . "m"))))
+                ((symbol-function 'drgnx-ai-set-role) (lambda (role chain) (push (cons role chain) set))))
+        ;; a failing embedding: the role stays
+        (cl-letf (((symbol-function 'drgnx-ai-request)
+                   (lambda (_role _kind _payload callback &rest _) (cl-incf calls) (funcall callback nil '(:error "HTTP 500")) nil)))
+          (should (eq (car (drgnx-search-setup root :interactive t)) 'warn))
+          (should-not set))
+        ;; a working one: TEI goes first
+        (let ((r (drgnx-search-setup root :interactive t)))
+          (should (eq (car r) 'ok))
+          (should (equal set '((embed (tei) (dead . "m")))))
+          (should (string-match-p "put first in the embed role" (cadr r))))
+        ;; not interactive: never written
+        (setq set nil)
+        (drgnx-search-setup root)
+        (should-not set)))))
+
+(ert-deftest drgnx-search-setup/a-role-that-cannot-be-written-is-said-not-half-done ()
+  (drgnx-search-setup-test--with
+    (cl-letf (((symbol-function 'drgnx-ai-role) (lambda (_role) '((dead . "m"))))
+              ((symbol-function 'drgnx-ai-set-role) (lambda (&rest _) (user-error "ai.eld does not read"))))
+      (let ((r (drgnx-search-setup root :interactive t)))
+        (should (eq (car r) 'warn))
+        (should (string-match-p "could not be put first" (cadr r)))
+        (should (string-match-p "ai.eld does not read" (cadr r)))
+        (should-not started)))))                                  ; stopped: nothing indexed on a half-set-up role
+
+(ert-deftest drgnx-search-setup/the-doctors-embedding-test-honours-its-second ()
+  (drgnx-search-setup-test--with
+    (drgnx-search-index root :embed #'drgnx-search-setup-test--embed)
+    (let (seen)
+      (cl-letf (((symbol-function 'drgnx-ai-detected-cached) (lambda () '((tei :up t :models ("bge")))))
+                ((symbol-function 'drgnx-ai-embed-sync)
+                 (lambda (inputs &rest args) (setq seen args) (vector (make-vector 4 0.5)))))
+        (let ((facts (drgnx-search-doctor-facts (list root))))
+          (should (= (plist-get seen :timeout) 1))
+          (should (equal (plist-get seen :chain) '((tei))))
+          (should (= (plist-get facts :embed-dims) 4)))))))
+
+(defmacro drgnx-search-setup-test--slow-git (&rest body)
+  "BODY with a `git' first on PATH that only sleeps."
+  (declare (indent 0))
+  `(let* ((bin (make-temp-file "drgnx-slow-git" t))
+          (exec-path (cons bin exec-path))
+          (process-environment (cons (concat "PATH=" bin ":" (getenv "PATH")) process-environment)))
+     (unwind-protect
+         (progn
+           (with-temp-file (expand-file-name "git" bin) (insert "#!/bin/sh\nexec sleep 5\n"))
+           (set-file-modes (expand-file-name "git" bin) #o755)
+           ,@body)
+       (delete-directory bin t))))
+
+(ert-deftest drgnx-search-setup/doctor-facts-return-within-the-budget-with-a-slow-git ()
+  (skip-unless (executable-find "sleep"))
+  (drgnx-search-setup-test--with
+    (drgnx-search-index root :embed #'drgnx-search-setup-test--embed)
+    (let ((drgnx-search-setup-stale-budget 1) (facts nil) (t0 nil))
+      (cl-letf (((symbol-function 'drgnx-ai-detected-cached) (lambda () nil)))
+        (drgnx-search-setup-test--slow-git
+          (setq t0 (float-time))
+          (setq facts (drgnx-search-doctor-facts (list root root root)))))   ; three projects, every git call sleeps
+      (should (< (- (float-time) t0) 2))                                    ; budget + 1 s
+      (should (= (length (plist-get facts :indexes)) 3))
+      (should (cl-every (lambda (e) (null (plist-get (cdr e) :stale))) (plist-get facts :indexes))))))   ; unknown
 
 (ert-deftest drgnx-search-setup/doctor-facts-count-stale-and-unindexed ()
   (drgnx-search-setup-test--with

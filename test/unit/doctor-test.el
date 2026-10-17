@@ -49,7 +49,7 @@
       (should (equal (plist-get (aref json 0) :status) "fail")))))
 
 (ert-deftest drgnx-doctor/facts-from-this-emacs ()
-  (let ((f (drgnx-doctor-facts)))
+  (let ((f (cl-letf (((symbol-function 'drgnx-doctor--search) #'ignore)) (drgnx-doctor-facts))))
     (should (equal (plist-get f :version) emacs-version))
     (should (memq (plist-get f :native-available) '(t nil)))))
 
@@ -98,11 +98,11 @@
          (process-environment (cons (concat "XDG_STATE_HOME=" state) process-environment)))
     (unwind-protect
         (progn
-          (should (null (plist-get (drgnx-doctor-facts) :keys-report)))
+          (should (null (plist-get (cl-letf (((symbol-function 'drgnx-doctor--search) #'ignore)) (drgnx-doctor-facts)) :keys-report)))
           (make-directory (expand-file-name "drgnx" state))
           (with-temp-file (expand-file-name "drgnx/keys-report.eld" state)
             (prin1 '(:layers ((vscode app)) :conflicts ("x") :problems nil) (current-buffer)))
-          (should (equal (plist-get (plist-get (drgnx-doctor-facts) :keys-report) :conflicts) '("x"))))
+          (should (equal (plist-get (plist-get (cl-letf (((symbol-function 'drgnx-doctor--search) #'ignore)) (drgnx-doctor-facts)) :keys-report) :conflicts) '("x"))))
       (delete-directory state t))))
 
 ;;;; search
@@ -120,11 +120,24 @@
     (should (string-match-p "120 chunks" (nth 1 r)))))
 
 (ert-deftest drgnx-doctor/search-dims-mismatch-warns ()
-  (let ((r (drgnx-doctor-test--search :embed-dims 768)))
+  (let ((r (drgnx-doctor-test--search :embed-dims 768 :embed-provider 'tei :embed-model "bge"
+                                      :indexes '(("/p/a" :chunks 5 :provider tei :model "bge" :dims 384 :stale 0)))))
     (should (eq (car r) 'warn))
-    (should (string-match-p "built with 384 dims, provider gives 768" (nth 1 r)))
+    (should (string-match-p "built with tei/bge (384), the provider gives 768" (nth 1 r)))
     (should (string-match-p "Search: Index Project with rebuild" (nth 1 r)))
     (should (string-match-p "Index Project" (nth 2 r)))))
+
+(ert-deftest drgnx-doctor/search-model-mismatch-names-both-models ()
+  (let ((r (drgnx-doctor-test--search :embed-dims 384 :embed-provider 'ollama :embed-model "nomic"
+                                      :indexes '(("/p/a" :chunks 5 :provider tei :model "bge" :dims 384 :stale 0)))))
+    (should (eq (car r) 'warn))
+    (should (string-match-p "built with tei/bge, the provider is ollama/nomic" (nth 1 r)))))
+
+(ert-deftest drgnx-doctor/search-wrapper-turns-a-signal-into-an-error-fact ()
+  (require 'drgnx-search-setup)
+  (cl-letf (((symbol-function 'drgnx-search-setup--roots) (lambda () nil))
+            ((symbol-function 'drgnx-search-doctor-facts) (lambda (_) (error "boom"))))
+    (should (equal (drgnx-doctor--search) '(:error "boom")))))
 
 (ert-deftest drgnx-doctor/search-stale-warns ()
   (let ((few (drgnx-doctor-test--search :indexes '(("/p/a" :chunks 5 :dims 384 :stale 20))))

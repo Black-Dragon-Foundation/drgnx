@@ -220,18 +220,16 @@ DEV non-nil: only run for `drgnx doctor --dev' (tools for developing drgnx)."
                                                            (if free (format "; %d MiB GPU free" free) ""))
                                                nil))))))
 
-(defun drgnx-doctor--search-problem (indexes embed-dims embed-model)
-  "The first index of INDEXES ((ROOT . INFO)…) built with another model than the provider gives
-\(EMBED-DIMS, EMBED-MODEL), as a sentence, or nil."
-  (cl-loop for (root . info) in indexes
-           for name = (file-name-nondirectory (directory-file-name root))
-           for dims = (plist-get info :dims)
-           when (and dims embed-dims (/= dims embed-dims))
-           return (format "the index of %s was built with %d dims, provider gives %d — Search: Index Project with rebuild"
-                          name dims embed-dims)
-           when (and dims embed-model (plist-get info :model) (not (equal (plist-get info :model) embed-model)))
-           return (format "the index of %s was built with %s, provider gives %s — Search: Index Project with rebuild"
-                          name (plist-get info :model) embed-model)))
+(declare-function drgnx-search-setup-mismatch "drgnx-search-setup")
+
+(defun drgnx-doctor--search-problem (indexes dims provider model)
+  "The first index of INDEXES ((ROOT . INFO)…) that does not fit the vectors the provider gives (DIMS, PROVIDER,
+MODEL), as a sentence, or nil."
+  (when indexes
+    (require 'drgnx-search-setup)
+    (cl-loop for (root . info) in indexes
+             for why = (drgnx-search-setup-mismatch info dims provider model)
+             when why return (format "the index of %s was %s — Search: Index Project with rebuild" (file-name-nondirectory (directory-file-name root)) why))))
 
 (drgnx-doctor-define 'search :group "drgnx" :doc "Semantic search: SQLite with FTS5, an embedding provider, the project indexes"
                      :check (lambda (f)
@@ -239,7 +237,7 @@ DEV non-nil: only run for `drgnx doctor --dev' (tools for developing drgnx)."
                                 (let* ((s (plist-get f :search)) (indexes (plist-get s :indexes))
                                        (stale (seq-filter (lambda (e) (> (or (plist-get (cdr e) :stale) 0) 20)) indexes))
                                        (broken (seq-filter (lambda (e) (plist-get (cdr e) :error)) indexes))
-                                       (problem (drgnx-doctor--search-problem indexes (plist-get s :embed-dims) (plist-get s :embed-model)))
+                                       (problem (drgnx-doctor--search-problem indexes (plist-get s :embed-dims) (plist-get s :embed-provider) (plist-get s :embed-model)))
                                        (unindexed (or (plist-get s :unindexed) 0))
                                        (chunks (apply #'+ (mapcar (lambda (e) (or (plist-get (cdr e) :chunks) 0)) indexes))))
                                   (cond ((plist-get s :error) (list 'warn (format "could not check: %s" (plist-get s :error)) "run drgnx doctor again; Set Up Semantic Search"))

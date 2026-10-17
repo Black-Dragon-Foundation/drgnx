@@ -135,9 +135,51 @@ directory (\"vendor/\")."
 
 (define-error 'drgnx-search-files-error "Listing the project's files failed")
 
+(defvar drgnx-search-git-timeout nil
+  "Seconds `drgnx-search-files' may take in all, git and file reads together, or nil for no limit (the indexer's
+case: a big repository takes as long as it takes).  Bound by the doctor, which must never wait long: past it the
+listing signals `drgnx-search-files-error' \"timed out\".")
+
+(defvar drgnx-search--git-deadline nil
+  "The `float-time' at which a listing under `drgnx-search-git-timeout' times out (bound by `drgnx-search-files').")
+
+(defun drgnx-search--check-deadline (what)
+  "Signal `drgnx-search-files-error' naming WHAT when the listing's deadline has passed."
+  (when (and drgnx-search--git-deadline (> (float-time) drgnx-search--git-deadline))
+    (signal 'drgnx-search-files-error (list (format "%s timed out" what)))))
+
+(defun drgnx-search--git-run-timed (input args)
+  "Like `drgnx-search--git-run' for the caller's `default-directory' and environment, but with a hard bound:
+the deadline of `drgnx-search--git-deadline'.  Past it git is killed and `drgnx-search-files-error' is signaled."
+  (drgnx-search--check-deadline (format "git %s" (string-join args " ")))
+  (let* ((out (generate-new-buffer " *drgnx-search-git*" t)) (err (generate-new-buffer " *drgnx-search-git-err*" t))
+         (proc nil))
+    (unwind-protect
+        (condition-case e
+            (progn
+              (setq proc (make-process :name "drgnx-search-git" :command (cons "git" args) :buffer out :stderr err
+                                       :connection-type 'pipe :coding 'utf-8-unix :noquery t :sentinel #'ignore))
+              (when-let* ((errproc (get-buffer-process err))) (set-process-sentinel errproc #'ignore))
+              (when input (process-send-string proc input))
+              (process-send-eof proc)
+              (while (and (or (process-live-p proc) (let ((p (get-buffer-process err))) (and p (process-live-p p))))
+                          (<= (float-time) drgnx-search--git-deadline))
+                (accept-process-output proc 0.05))
+              (when (process-live-p proc)
+                (delete-process proc)
+                (signal 'drgnx-search-files-error (list (format "git %s timed out" (string-join args " ")))))
+              (accept-process-output nil 0.01)
+              (list (process-exit-status proc) (with-current-buffer out (buffer-string))
+                    (with-current-buffer err (buffer-substring (point-min) (progn (goto-char (point-min)) (line-end-position))))))
+          (drgnx-search-files-error (signal (car e) (cdr e)))
+          (error (list nil nil (error-message-string e))))
+      (when (process-live-p proc) (delete-process proc))
+      (kill-buffer out) (kill-buffer err))))
+
 (defun drgnx-search--git-run (root input args)
   "Run git ARGS in ROOT, feeding it the string INPUT (or nil); no shell.
-Returns (STATUS OUTPUT STDERR-FIRST-LINE), STATUS nil when git cannot be started."
+Returns (STATUS OUTPUT STDERR-FIRST-LINE), STATUS nil when git cannot be started.  Under
+`drgnx-search-git-timeout' (see `drgnx-search-files') it waits for git only until the listing's deadline."
   (let ((default-directory (file-name-as-directory (expand-file-name root)))
         ;; Untranslated messages: `drgnx-search--repo-p' reads git's stderr, and git translates it.
         (process-environment (append '("LC_ALL=C" "LANGUAGE=")
@@ -147,19 +189,21 @@ Returns (STATUS OUTPUT STDERR-FIRST-LINE), STATUS nil when git cannot be started
         (coding-system-for-write 'utf-8-unix)
         (errfile (make-temp-file "drgnx-search-git")))
     (unwind-protect
-        (with-temp-buffer
-          (let ((status (condition-case err
-                            (if input
-                                (progn (insert input)
-                                       (apply #'call-process-region (point-min) (point-max) "git" t (list t errfile) nil args))
-                              (apply #'call-process "git" nil (list t errfile) nil args))
-                          (error (list 'error (error-message-string err))))))
-            (if (consp status)
-                (list nil nil (cadr status))
-              (list status (buffer-string)
-                    (with-temp-buffer
-                      (insert-file-contents errfile)
-                      (buffer-substring (point-min) (line-end-position)))))))
+        (if drgnx-search--git-deadline
+            (drgnx-search--git-run-timed input args)
+          (with-temp-buffer
+            (let ((status (condition-case err
+                              (if input
+                                  (progn (insert input)
+                                         (apply #'call-process-region (point-min) (point-max) "git" t (list t errfile) nil args))
+                                (apply #'call-process "git" nil (list t errfile) nil args))
+                            (error (list 'error (error-message-string err))))))
+              (if (consp status)
+                  (list nil nil (cadr status))
+                (list status (buffer-string)
+                      (with-temp-buffer
+                        (insert-file-contents errfile)
+                        (buffer-substring (point-min) (line-end-position))))))))
       (delete-file errfile))))
 
 (defun drgnx-search--git (root input &rest args)
@@ -256,6 +300,12 @@ cannot be hashed and is left out too.  The configuration then narrows the list.
 
 nil when ROOT is no git repository, git is missing or the project's search is `:off'.  When git
 fails the listing signals `drgnx-search-files-error' (never a partial list)."
+  (let ((drgnx-search--git-deadline (or drgnx-search--git-deadline
+                                        (and drgnx-search-git-timeout (+ (float-time) drgnx-search-git-timeout)))))
+    (drgnx-search--files-1 root)))
+
+(defun drgnx-search--files-1 (root)
+  "The body of `drgnx-search-files' (ROOT)."
   (let* ((config (drgnx-search-config root))
          (include (mapcar #'drgnx-search--glob-regexp (plist-get config :include)))
          (exclude (mapcar #'drgnx-search--glob-regexp (plist-get config :exclude)))
@@ -271,6 +321,7 @@ fails the listing signals `drgnx-search-files-error' (never a partial list)."
                                  when (member mode '("100644" "100755")) ; no symlink, no submodule
                                  collect (cons path (unless (gethash path dirty) blob)))
                         (mapcar #'list (drgnx-search--git-paths root "ls-files" "-z" "--others" "--exclude-standard"))))
+          (drgnx-search--check-deadline "listing the files")
           (let ((path (car entry)))
             (when (and (not (string-suffix-p "/" path)) ; a nested repository
                        (not (drgnx-search--dot-path-p path))

@@ -174,15 +174,16 @@ a command the user ran (keys may come from sources that ask, see `drgnx-ai-key')
 (defvar drgnx-ai-embed-last-info nil
   "INFO (:provider :model :fallbacks) of the last answer `drgnx-ai-embed-sync' returned: who gave the vectors.")
 
-(cl-defun drgnx-ai-embed-sync (inputs &key (timeout 30) interactive)
-  "The vectors (a vector of float vectors of length 1) of the vector INPUTS from the `embed' role, waiting for them.
-Each provider gets TIMEOUT seconds; `drgnx-ai-embed-last-info' tells who answered.  Signals
-`drgnx-ai-embed-error' with the providers' reasons when none answers.
+(cl-defun drgnx-ai-embed-sync (inputs &key (timeout 30) interactive chain)
+  "The vectors (a vector of float vectors of length 1) of the vector INPUTS from the `embed' role (or CHAIN,
+\((PROVIDER . MODEL)…), instead), waiting for them.  Each provider gets TIMEOUT seconds;
+`drgnx-ai-embed-last-info' tells who answered.  Signals `drgnx-ai-embed-error' with the providers'
+reasons when none answers.
 Only for batch processes and commands the user ran (INTERACTIVE as for `drgnx-ai-request'): it waits, so never
 from a timer, hook or sentinel."
   (if (zerop (length inputs)) []
     (let* ((result nil)
-           (chain (drgnx-ai-role 'embed))
+           (chain (or chain (drgnx-ai-role 'embed)))
            (h (drgnx-ai-request 'embed 'embed (list :inputs inputs) (lambda (v info) (setq result (cons v info)))
                                 :timeout timeout :chain chain :interactive interactive))
            (deadline (+ (float-time) (* timeout (1+ (length chain))))))

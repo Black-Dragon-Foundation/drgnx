@@ -128,7 +128,7 @@
    (drgnx-modules-run 'startup)
    (drgnx-modules-write-report)
    (require 'drgnx-doctor)
-   (let ((r (drgnx-doctor-check 'modules (drgnx-doctor-facts))))
+   (let ((r (drgnx-doctor-check 'modules (cl-letf (((symbol-function 'drgnx-doctor--search) #'ignore)) (drgnx-doctor-facts)))))
      (should (eq (car r) 'fail))
      (should (string-search "test/broken" (nth 1 r))))))
 
@@ -212,7 +212,7 @@
    (drgnx-modules-run 'startup)
    (drgnx-modules-write-report)
    (require 'drgnx-doctor)
-   (let ((r (drgnx-doctor-check 'modules (drgnx-doctor-facts))))
+   (let ((r (drgnx-doctor-check 'modules (cl-letf (((symbol-function 'drgnx-doctor--search) #'ignore)) (drgnx-doctor-facts)))))
      (should (eq (car r) 'warn))
      (should (string-search "the example program is missing" (nth 1 r))))))
 

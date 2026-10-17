@@ -72,11 +72,14 @@ Past it a project's :stale stays nil (unknown).")
                                     collect (directory-file-name (expand-file-name r))))
               drgnx-search-setup-max-projects)))
 
-(defun drgnx-search-setup--stale (root db)
+(defun drgnx-search-setup--stale (root db deadline)
   "How many files of the project at ROOT differ from what DB indexed (changed, new, gone), or nil when unknown
-\(not a git project, search off, git failed)."
+\(not a git project, search off, git failed or timed out).  The listing gets what is left until DEADLINE (a
+`float-time'), at least half a second, and is cut off when that is spent; past DEADLINE it is not tried."
   (condition-case nil
-      (when-let* ((files (drgnx-search-files root)))
+      (when-let* (((< (float-time) deadline))
+                  (files (let ((drgnx-search-git-timeout (max 0.5 (- deadline (float-time)))))
+                           (drgnx-search-files root))))
         (let ((stored (drgnx-search-store-files db)) (seen (make-hash-table :test #'equal)) (n 0))
           (pcase-dolist (`(,path . ,hash) files)
             (puthash path t seen)
@@ -85,9 +88,10 @@ Past it a project's :stale stays nil (unknown).")
           n))
     (error nil)))
 
-(defun drgnx-search-setup-index-info (root &optional with-stale)
+(defun drgnx-search-setup-index-info (root &optional stale-deadline)
   "What the index of the project at ROOT says about itself — (:chunks :files :provider :model :dims :stale) —
-or nil when the project has none; (:error MESSAGE) when it cannot be read.  WITH-STALE: count the stale files."
+or nil when the project has none; (:error MESSAGE) when it cannot be read.  STALE-DEADLINE (a `float-time'):
+count the stale files, giving up at that time (:stale stays nil)."
   (when (and (sqlite-available-p) (file-exists-p (drgnx-search-store-file root)))
     (condition-case err
         (when-let* ((db (drgnx-search-store-open-read root)))
@@ -96,7 +100,7 @@ or nil when the project has none; (:error MESSAGE) when it cannot be read.  WITH
                 (list :chunks (caar (sqlite-select db "select count(*) from chunk"))
                       :files (caar (sqlite-select db "select count(*) from file"))
                       :provider (plist-get meta :provider) :model (plist-get meta :model) :dims (plist-get meta :dims)
-                      :stale (and with-stale (drgnx-search-setup--stale root db))))
+                      :stale (and stale-deadline (drgnx-search-setup--stale root db stale-deadline))))
             (ignore-errors (sqlite-close db))))
       (error (list :error (error-message-string err))))))
 
@@ -120,22 +124,6 @@ others with a model whose name says embedding.  Nil when there is none."
                     (cons (car e) model)))))
             drgnx-ai-detected))
 
-(defun drgnx-search-setup--embed (inputs chain timeout)
-  "The vectors of the vector INPUTS from CHAIN ((PROVIDER . MODEL)…), waiting at most about TIMEOUT seconds in
-all; `drgnx-ai-embed-last-info' tells who answered.  Signals `drgnx-ai-embed-error' with the reason.
-For commands the user ran and for the doctor's batch Emacs — never from a timer or hook."
-  (let* ((result nil)
-         (h (drgnx-ai-request 'embed 'embed (list :inputs inputs) (lambda (v info) (setq result (cons v info)))
-                              :chain chain :timeout timeout))
-         (deadline (+ (float-time) timeout 0.5)))
-    (while (and (not result) (< (float-time) deadline))
-      (let ((p (and h (drgnx-ai-request-process h))))
-        (accept-process-output (and p (process-live-p p) p) 0.05)))
-    (when (and h (not result)) (drgnx-ai-cancel h))
-    (if (car result)
-        (progn (setq drgnx-ai-embed-last-info (cdr result)) (car result))
-      (signal 'drgnx-ai-embed-error (list (or (plist-get (cdr result) :error) "timed out"))))))
-
 (defun drgnx-search-setup--probe ()
   "Probe the local providers and wait for the answers (two seconds at most); the results are in
 `drgnx-ai-detected'."
@@ -144,9 +132,22 @@ For commands the user ran and for the doctor's batch Emacs — never from a time
     (while (and (not done) (< (float-time) deadline)) (accept-process-output nil 0.05))))
 
 (defun drgnx-search-setup--label (info)
-  "\"provider/model\" of INFO (:provider :model)."
-  (if (plist-get info :model) (format "%s/%s" (plist-get info :provider) (plist-get info :model))
-    (format "%s" (plist-get info :provider))))
+  "\"provider/model\" of INFO (:provider :model), or \"an unknown model\"."
+  (cond ((and (plist-get info :provider) (plist-get info :model))
+         (format "%s/%s" (plist-get info :provider) (plist-get info :model)))
+        ((plist-get info :provider) (format "%s" (plist-get info :provider)))
+        (t (or (plist-get info :model) "an unknown model"))))
+
+(defun drgnx-search-setup-mismatch (index dims provider model)
+  "Why the index described by INDEX (:provider :model :dims) cannot be searched with vectors of DIMS made by
+PROVIDER and MODEL (PROVIDER nil: not known), as a sentence naming what differs, or nil when they fit."
+  (let ((built (drgnx-search-setup--label index)))
+    (cond ((and dims (plist-get index :dims) (/= dims (plist-get index :dims)))
+           (format "built with %s (%d), the provider gives %d" built (plist-get index :dims) dims))
+          ((and provider (plist-get index :dims)
+                (not (and (equal provider (plist-get index :provider)) (equal model (plist-get index :model)))))
+           (format "built with %s, the provider is %s" built
+                   (drgnx-search-setup--label (list :provider provider :model model)))))))
 
 ;;;; The doctor's facts
 
@@ -163,14 +164,14 @@ provider and model come from one test embedding of at most a second, made only w
          (indexes nil) (unindexed 0) (test nil))
     (when sqlite
       (dolist (root roots)
-        (if-let* ((info (drgnx-search-setup-index-info root (< (float-time) deadline))))
+        (if-let* ((info (drgnx-search-setup-index-info root deadline)))
             (push (cons root info) indexes)
           (cl-incf unindexed))))
     (setq indexes (nreverse indexes))
     (when (and indexes chain)
       (let ((drgnx-ai-embed-last-info nil))
         (setq test (ignore-errors
-                     (let ((v (drgnx-search-setup--embed (vector "hello") chain 1)))
+                     (let ((v (drgnx-ai-embed-sync (vector "hello") :timeout 1 :chain (list (car chain)))))
                        (list :dims (length (aref v 0)) :provider (plist-get drgnx-ai-embed-last-info :provider)
                              :model (plist-get drgnx-ai-embed-last-info :model)))))))
     (list :sqlite sqlite :fts5 fts5 :embed-up (and chain t)
@@ -186,23 +187,19 @@ provider and model come from one test embedding of at most a second, made only w
   "The wizard's last steps for the project at ROOT, the provider tested giving DIMS-wide vectors (INFO: who
 answered): (STATUS MESSAGE).  A current index gets a test query; else the indexer starts in the background."
   (let* ((who (format "%s, %d dims" (drgnx-search-setup--label info) dims))
-         (index (drgnx-search-setup-index-info root t))
+         (index (drgnx-search-setup-index-info root (+ (float-time) 3)))
          (name (abbreviate-file-name root)))
     (cond
      ((plist-get (drgnx-search-config root) :off)
       (list 'info (format "%s works; search is turned off for %s (.drgnx/search.eld)" who name)))
      ((plist-get index :error)
       (list 'warn (format "%s works, but the index of %s cannot be read — Search: Index Project with C-u rebuilds it" who name)))
-     ((and index (plist-get index :dims)
-           (or (/= dims (plist-get index :dims))
-               (not (and (equal (plist-get info :provider) (plist-get index :provider))
-                         (equal (plist-get info :model) (plist-get index :model))))))
-      (list 'warn (format "%s works, but the index of %s was built with %s%s dims, provider gives %d — Search: Index Project with rebuild (C-u) to change the model"
-                          who name (if (plist-get index :model) (format "%s, " (plist-get index :model)) "")
-                          (plist-get index :dims) dims)))
+     ((and index (drgnx-search-setup-mismatch index dims (plist-get info :provider) (plist-get info :model)))
+      (list 'warn (format "%s works, but the index of %s was %s — Search: Index Project with rebuild (C-u) to change the model"
+                          who name (drgnx-search-setup-mismatch index dims (plist-get info :provider) (plist-get info :model)))))
      ((and index (eql (plist-get index :stale) 0) (> (plist-get index :chunks) 0))
       (let ((hit (car (drgnx-search root drgnx-search-setup-test-query :k 1
-                                    :embed (lambda (inputs) (drgnx-search-setup--embed inputs chain 5))))))
+                                    :embed (lambda (inputs) (drgnx-ai-embed-sync inputs :timeout 5 :chain chain))))))
         (list 'ok (if hit
                       (format "%s works; %s is indexed (%d chunks); test query \"%s\": %s:%d"
                               who name (plist-get index :chunks) drgnx-search-setup-test-query
@@ -229,26 +226,33 @@ the probe (two seconds) and the test embedding (five).  For a command the user r
       (list 'warn "this Emacs' SQLite has no FTS5: semantic search is off — use an Emacs built with it (the installer's does)"))
      (t
       (drgnx-search-setup--probe)
-      (let* ((chain (drgnx-search-setup--usable drgnx-ai-detected)) (added nil))
-        (when (and (null chain) (setq added (drgnx-search-setup--detected-step)))
-          (setq chain (list added))
-          (when interactive (drgnx-ai-set-role 'embed (cons added (drgnx-ai-role 'embed)))))
+      (let* ((chain (drgnx-search-setup--usable drgnx-ai-detected))
+             (added (and (null chain) (drgnx-search-setup--detected-step))))
+        (when added (setq chain (list added)))
         (if (null chain)
             (list 'info (concat "no embedding provider is running: " drgnx-search-setup-start-hint))
           (condition-case err
               (let* ((drgnx-ai-embed-last-info nil)
-                     (vectors (drgnx-search-setup--embed (vector "hello") chain 5))
-                     (dims (length (aref vectors 0))) (info drgnx-ai-embed-last-info))
-                (if (null root)
-                    (list 'ok (format "%s works (%d dims) — open a project and run Set Up Semantic Search there to index it"
-                                      (drgnx-search-setup--label info) dims))
-                  (let ((r (drgnx-search-setup--index-step root chain dims info)))
-                    (if (and added interactive)
-                        (list (car r) (format "%s (put first in the embed role)" (cadr r)))
-                      r))))
+                     (vectors (drgnx-ai-embed-sync (vector "hello") :timeout 5 :chain chain))
+                     (dims (length (aref vectors 0))) (info drgnx-ai-embed-last-info)
+                     (placed (and added interactive (drgnx-search-setup--put-first added))))
+                (cond ((stringp placed) (list 'warn placed))
+                      ((null root)
+                       (list 'ok (format "%s works (%d dims) — open a project and run Set Up Semantic Search there to index it"
+                                         (drgnx-search-setup--label info) dims)))
+                      (t (let ((r (drgnx-search-setup--index-step root chain dims info)))
+                           (if placed (list (car r) (format "%s (put first in the embed role)" (cadr r))) r)))))
             (drgnx-ai-embed-error
              (list 'warn (format "the embedding provider did not answer a test embedding (%s) — check that it runs and serves an embedding model (docs/guide/ai.md)"
                                  (cadr err)))))))))))
+
+(defun drgnx-search-setup--put-first (step)
+  "Put STEP first in the `embed' role, in the user's ai.eld: t, or a message when that could not be written
+\(`drgnx-ai-set-role' writes nothing then)."
+  (condition-case err
+      (progn (drgnx-ai-set-role 'embed (cons step (drgnx-ai-role 'embed))) t)
+    (error (format "%s works, but it could not be put first in the embed role (%s) — AI: Choose Provider/Model, then Set Up Semantic Search again"
+                   (drgnx-search-setup--label (list :provider (car step) :model (cdr step))) (error-message-string err)))))
 
 (defun drgnx-search-setup-detect ()
   "What the non-interactive onboarding step reports: (STATUS MESSAGE).  Probes, changes nothing."

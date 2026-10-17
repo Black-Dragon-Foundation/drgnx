@@ -19,7 +19,8 @@ Choose **Set Up Semantic Search** (the palette, or Help → Welcome → Semantic
    `podman run -p 8080:80 -m 4g ghcr.io/huggingface/text-embeddings-inference:cpu-latest --model-id BAAI/bge-small-en-v1.5`
    (the memory cap keeps a model from taking the machine), or Ollama: `ollama pull nomic-embed-text`;
 2. makes a test call (the embedding of "hello", five seconds at most) and reports the model and the number of
-   dimensions it gives — the only wait;
+   dimensions it gives — the only wait (besides the probe, which takes a second or so); only once it works is the `embed`
+   role changed, if it had to be;
 3. indexes this project **in the background** and tells you so (Index Status shows how far it is). When the project's
    index is already current it runs a test query instead and shows the top hit; when the index was built with another
    model it says so and leaves it to you (`C-u` Index Project rebuilds).
@@ -32,7 +33,9 @@ an index was built with another model or number of dimensions than the provider 
 `C-u`), when one cannot be read, or when more than 20 files of a project changed since it was indexed; **info** when no
 embedding provider is reachable (searches then use keywords only); otherwise ok, with the number of indexes and chunks.
 It looks at the current project and the projects drgnx knows (at most 20); projects without an index are only counted.
-It never prompts and asks the network for one second at most.
+The warnings name what differs ("built with bge-small (384), the provider gives 768", or "built with A, the provider is B").
+It never prompts, and it is quick: the embedding provider is asked once, for one second at most, and git is bounded per
+project (a project whose files are not counted in time is left out of the stale test), about four seconds in all.
 
 ## Using it
 
