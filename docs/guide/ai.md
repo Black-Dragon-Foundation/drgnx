@@ -141,3 +141,16 @@ Agent profiles can take their provider from the registry; the key is resolved wh
 In `agents.eld`, `:ai claude-openrouter` or `:ai claude-ollama` gives any profile that environment. Durable jobs get
 the keys they need in their environment too — never in a command line or a file (under systemd, the value travels in
 `systemd-run`'s own environment).
+
+## Tests
+
+- `test/unit/ai-test.el` (providers, roles, keys, agent environments), `test/unit/ai-client-test.el` (requests,
+  fallback with every reason, cancel, probes, the doctor's check), `test/unit/ai-ghost-test.el` (ghost text, accept,
+  the Tab arbiter), `test/unit/ai-edit-test.el` (the review, hunk by hunk), `test/unit/ai-ask-test.el` (Ask, Choose,
+  gptel), `test/unit/ai-onboard-test.el` (the onboarding step).
+- `test/live/drgnx-ai-test.el` — in a GUI session: typing, the suggestion as ghost text, Tab takes it; an inline
+  edit's second hunk applied with keys, Done puts only that one in the buffer.
+- `drgnx test --perf` — the `typing-with-ghost` workload holds keystroke p95 under 16 ms with ghost text on.
+
+The mock model (`test/fixtures/mock-llm.el`) is a batch Emacs serving scripted answers on a port; no test reaches
+a real provider (the unit runner unsets the provider keys).
