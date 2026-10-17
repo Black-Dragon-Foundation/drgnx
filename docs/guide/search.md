@@ -30,7 +30,8 @@ wizard you need an `embed` role that answers ([ai.md](ai.md)) and **Search: Inde
 
 `drgnx doctor` has a `search` check: **fail** when this Emacs has no SQLite or its SQLite has no FTS5; **warn** when
 an index was built with another model or number of dimensions than the provider gives now (fix: Index Project with
-`C-u`), when one cannot be read, or when more than 20 files of a project changed since it was indexed; **info** when no
+`C-u`), when one cannot be read, when a project's `.drgnx/search.eld` cannot be read (see below), or when more than
+20 files of a project changed since it was indexed; **info** when no
 embedding provider is reachable (searches then use keywords only); otherwise ok, with the number of indexes and chunks.
 It looks at the current project and the projects drgnx knows (at most 20); projects without an index are only counted.
 The warnings name what differs ("built with bge-small (384), the provider gives 768", or "built with A, the provider is B").
@@ -43,13 +44,19 @@ project (a project whose files are not counted in time is left out of the stale 
 |---|---|---|---|---|
 | Search: Semantic Search | asks for a question and shows the best chunks in the panel's Results tab | `C-k C-f` | `C-c s s` | `SPC s i` |
 | Search: Index Project | builds or refreshes this project's index in a background job; with `C-u`, from scratch | palette | palette | palette |
-| Search: Index Status | chunks, files, model, when it was last indexed, whether a job runs | palette | palette | palette |
+| Search: Index Status | chunks, files, model, when it was last indexed, whether a job runs, the index file, a broken `.drgnx/search.eld` | palette | palette | palette |
 | Search: Set Up Semantic Search | finds and tests an embedding model, indexes this project in the background | palette | palette | palette |
 
 In the command palette, type `#` and your question — `#where do we parse the config` — to search without choosing a
-command first; a bare `#` asks for the question.
+command first; a bare `#` asks for the question. Semantic Search offers the symbol at point as the default: `RET` on an
+empty prompt searches for it.
 
-The results are the same kind of list as **Search in Project**: one line per chunk (its first line), `RET` or a click
+Index Project while a job for the project still runs starts nothing and says so; with `C-u` it says "an index job is
+already running for PROJECT; rebuild after it finishes". In an Emacs without SQLite, Index Project and Index Status
+only say "this Emacs has no SQLite — semantic search needs Emacs built with SQLite".
+
+The results are the same kind of list as **Search in Project**: one line per chunk (its first non-blank line, and the
+jump goes to that line), `RET` or a click
 jumps to the file, and the preview follows the selection. The hits are grouped by file, the files in the order of their best hit (xref's grouping). When an answer is partial the echo
 area says why, in one line, and the list header repeats it:
 
@@ -59,6 +66,8 @@ area says why, in one line, and the list header repeats it:
 - **built with another model** — the index was made with a different model or dimension than the `embed` role
   answers with now; `C-u` Index Project rebuilds with the new model (a chunk made by one model cannot be compared
   with a question embedded by another);
+- **search is off for this project (.drgnx/search.eld)** — the project turned search off with `:off t`; the index,
+  if one was made before, is not searched;
 - **this Emacs has no SQLite** — semantic search is unavailable there.
 
 A search never edits anything and never waits for a running indexer.
@@ -75,10 +84,16 @@ drgnx search index ROOT [--rebuild]      # build or refresh the index (what Inde
 drgnx search query ROOT QUESTION… [-k N] # the best N chunks (default 10), one line each
 ```
 
-`query` prints `PATH:LINE: first line of the chunk` for each hit, best first, with PATH relative to the project — the
-format `grep -n` has, so tools that read grep output read this. When an answer is partial (keywords only because no
+`query` prints `PATH:LINE: first line of the chunk` for each hit, best first, with PATH relative to the project and
+LINE the number of the line printed (the chunk's first non-blank line) — the format `grep -n` has, so tools that read
+grep output read this. When an answer is partial (keywords only because no
 embedding provider answered, or the index was built with another model) the reason is printed on **stderr**. Without an
-index it prints how to make one and exits 1. `ROOT` is the project or any path inside it.
+index it prints how to make one and exits 1. `ROOT` is the project or any directory inside it: both commands use its git
+top level, so a sub-directory never makes an index of its own.
+
+Both run in the foreground, in the shell you call them from: `drgnx search index` is not the background job (no
+memory cap, no lower priority) — wrap it yourself if you need that, for example
+`systemd-run --user --scope -p MemoryMax=1G -p MemorySwapMax=0 nice drgnx search index ROOT`.
 
 **The MCP tool**
 
@@ -88,12 +103,17 @@ index it prints how to make one and exits 1. `ROOT` is the project or any path i
 |---|---|
 | `query` (required) | what you look for, in words |
 | `k` | how many hits, 1 to 50 (default 10) |
-| `path` | the project, or any path inside it; default: the server's project. A path in no git project is an error |
+| `path` | the project, or any directory inside it; default: the server's project. A path in no git project is an error |
+
+`path` is not limited to the server's own project: the agent can search **any git project of yours that already has an
+index** (read-only — the tool never indexes and never edits; a project without an index is an error result). Give an
+agent the server only if it may read the indexed code of all your projects.
 
 The answer is the text `query` prints: one `PATH:LINE: first line` per hit, and a last line `note: …` when the answer is
 partial. With no index the tool returns an error result — "no index for ROOT — run `drgnx search index ROOT` or Search:
-Index Project". The server never asks anything and never edits anything. It embeds the question with the `embed` role like
-the editor; a hosted provider's key must be in the server's environment (a local model needs none).
+Index Project". The server never asks anything and never edits anything. It embeds the question with the `embed` role of
+the project searched, like the editor; a hosted provider's key comes from the server's own environment or a plain
+auth-source file, like any drgnx batch process (a local model needs none).
 
 To give an agent the tool, add the server to the agent's own MCP configuration, for example for Claude Code:
 
@@ -103,22 +123,26 @@ claude mcp add drgnx-search -- /path/to/drgnx/bin/drgnx search mcp /path/to/proj
 
 (add `-e NAME=value` for the key variable of a hosted `embed` provider). drgnx does **not** add this server to the agents
 it starts by itself; `drgnx-search-mcp-server-spec` (core/drgnx-search-mcp.el) returns the ACP `mcpServers` entry for a
-project — command, arguments and the environment: the state directories and the key variables of the `embed` providers,
-as the indexing job gets them — for a profile or a script that wants to pass it in `session/new`.
+project — command, arguments and the environment: the state and config directories (`XDG_*_HOME`, `DRGNX_*_DIR`) and
+**never a key**, because the entry is handed to the agent — for a profile or a script that wants to pass it in
+`session/new`.
 
 **Ask the Codebase** ([ai.md](ai.md)) uses the index too, when the project has one.
 
 ## How the index is made
 
 - It is per project (a git repository), stored under drgnx's state directory (`~/.local/state/drgnx/search/` on
-  Linux), not in the project.
+  Linux), not in the project. Index Status names the file; to drop a project's index, delete that file (and turn
+  search off with `:off t` if it should not come back).
 - **Indexing is incremental.** A file is read again only when its content changed (staged or not, and untracked files
   count); files that are gone are forgotten. A big project's first index takes a while; later runs take seconds.
 - It runs in a **background job** — a separate Emacs under systemd, capped at 1 GiB of memory, at low priority — so
-  the editor stays responsive. One job per project at a time. Its log: Show Job Log (Agents tab).
+  the editor stays responsive. One job per project at a time. Its log: Show Job Log (Agents tab). Starting a new job
+  removes the project's earlier finished index jobs but the last one, so their logs do not pile up.
 - **After a save**: when you save a file of a project that has an index, drgnx re-indexes that project 30 seconds after the
-  last save (a burst of saves is one run). Nothing happens for a project without an index, and it never asks
-  anything.
+  last save (a burst of saves is one run), at the next moment Emacs is idle, so the job never starts while you type.
+  While an indexer still holds the project's lock it waits another 30 seconds. Nothing happens for a project without an
+  index, and it never asks anything.
 
 ### What is never indexed
 
@@ -128,7 +152,8 @@ Whatever the configuration says:
 - files whose names look like keys or secrets (`*.pem`, `*.key`, `*.p12`, `*.pfx`, `*.kdbx`, `*.keystore`, `*.jks`,
   `*.asc`, `*.gpg`, `*.env`, `id_rsa*`, `id_dsa*`, `id_ecdsa*`, `id_ed25519*`, and any name containing `secret`, `credential`, `authinfo` or
   `netrc`);
-- binary files, files over 1 MiB, symbolic links, submodules;
+- binary files, files over 1 MiB, symbolic links, submodules, and files in a directory whose real path is outside the
+  project (a directory replaced by a symbolic link to elsewhere);
 - files that `.gitignore` excludes (the index lists the project's tracked files and the untracked ones that git does
   not ignore).
 
@@ -144,6 +169,12 @@ A project can narrow what is indexed with `.drgnx/search.eld` at its root (a pli
 
 `*` and `?` stay within one path component, `**/` stands for any number of directories, a glob without `/` matches at any
 depth, and a trailing `/` means everything below that directory.
+
+`:include` and `:exclude` must be lists of strings and `:off` `t` or `nil`. A file that is there but cannot be read, is
+not a plist or gives a key another type (`:exclude "vendor/"` instead of `:exclude ("vendor/")`) never falls back to
+the defaults — that could send files you meant to exclude to the provider. Instead nothing is indexed for the project:
+the indexer stops with ".drgnx/search.eld cannot be read: …", saving a file does not schedule a re-index, and Index
+Project, Index Status and `drgnx doctor` say what is wrong. Without the file, the defaults apply.
 
 ## How fast
 

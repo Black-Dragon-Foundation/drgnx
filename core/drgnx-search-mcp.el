@@ -7,8 +7,9 @@
 ;; (query, k, path), over stdio (drgnx-mcp.el); it calls `drgnx-search' — the same function Semantic Search calls — so
 ;; the hits are the editor's.  The answer is text, one line per hit as grep prints it: PATH:LINE: first line of the
 ;; chunk, PATH relative to the project; a last line `note: …' says why an answer is partial (keywords only, …).
-;; `drgnx search query ROOT QUESTION' prints the same lines.  The server never prompts: a key comes from the
-;; environment (`drgnx-search-mcp-server-spec' carries it, as the indexing job gets it).  See docs/guide/search.md.
+;; `drgnx search query ROOT QUESTION' prints the same lines.  The server never prompts: a key comes from its own
+;; environment or a quiet auth-source (`drgnx-search-mcp-server-spec' passes no key: the spec goes to the agent).
+;; See docs/guide/search.md.
 
 ;;; Code:
 (require 'cl-lib)
@@ -18,25 +19,22 @@
 (require 'drgnx-search-store)
 (require 'drgnx-search-query)
 
-(declare-function drgnx-search-index--job-env "drgnx-search-index")
+(declare-function drgnx-search-index--dir-env "drgnx-search-index")
 
 (defconst drgnx-search-mcp-max-k 50 "The most hits one search returns.")
 (defconst drgnx-search-mcp-default-k 10)
 
 (defun drgnx-search-mcp--project (path)
-  "The root (a directory name) of the git project holding PATH; an error when PATH is in none."
-  (let* ((dir (file-name-as-directory (expand-file-name path)))
-         (top (and (file-directory-p dir) (locate-dominating-file dir ".git"))))
-    (if top (directory-file-name (expand-file-name top))
-      (error "%s is not inside a git project" (directory-file-name dir)))))
+  "The root (a directory name without trailing slash) of the git project holding the directory PATH — its git top
+level, so a sub-directory never makes an index of its own; an error when PATH is in none."
+  (let ((dir (file-name-as-directory (expand-file-name path))))
+    (or (drgnx-search-toplevel dir)
+        (error "%s is not inside a git project" (directory-file-name dir)))))
 
 (defun drgnx-search-mcp--line (hit)
-  "HIT (a result of `drgnx-search') as `PATH:LINE: first line of the chunk'."
-  (let* ((first (or (seq-find (lambda (l) (not (string-blank-p l))) (split-string (or (plist-get hit :text) "") "\n"))
-                    ""))
-         (first (string-trim first)))
-    (format "%s:%d: %s" (plist-get hit :path) (max 1 (or (plist-get hit :start) 1))
-            (if (> (length first) 200) (substring first 0 200) first))))
+  "HIT (a result of `drgnx-search') as `PATH:LINE: TEXT': TEXT the chunk's first non-blank line, LINE its number."
+  (pcase-let ((`(,line . ,text) (drgnx-search-hit-line hit)))
+    (format "%s:%d: %s" (plist-get hit :path) line (if (> (length text) 200) (substring text 0 200) text))))
 
 (defun drgnx-search-mcp--search (root query k)
   "Search the project at ROOT for QUERY: (LINES . NOTICE).  An error when there is no index."
@@ -81,8 +79,9 @@ Serves the `search' tool on stdin/stdout for the project at ROOT (default: the w
 
 (defun drgnx-search-mcp-server-spec (root)
   "The ACP `mcpServers' entry that gives an agent the `search' tool for the project at ROOT.
-The environment carries the state directories and the key variable of the `embed' role's providers, as the indexing
-job's does (`drgnx-search-index--job-env').  Nothing adds it to a session by itself: see docs/guide/search.md."
+The entry goes to the agent, so its environment carries only the XDG and DRGNX_*_DIR variables — never a key: the
+server reads a hosted provider's key from its own environment or auth-source, like any drgnx batch process.
+Nothing adds it to a session by itself: see docs/guide/search.md."
   (require 'drgnx-search-index)
   (list :name "drgnx-search"
         :command (expand-file-name invocation-name invocation-directory)
@@ -91,7 +90,7 @@ job's does (`drgnx-search-index--job-env').  Nothing adds it to a session by its
         :env (vconcat (mapcar (lambda (e)
                                 (let ((i (string-search "=" e)))
                                   (list :name (substring e 0 i) :value (substring e (1+ i)))))
-                              (drgnx-search-index--job-env)))))
+                              (drgnx-search-index--dir-env)))))
 
 ;;;; drgnx search query
 

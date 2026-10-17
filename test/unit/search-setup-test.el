@@ -190,6 +190,17 @@ answered at once with DIMS-wide vectors), and the index job start recorded in ST
       (should (= (length (plist-get facts :indexes)) 3))
       (should (cl-every (lambda (e) (null (plist-get (cdr e) :stale))) (plist-get facts :indexes))))))   ; unknown
 
+(ert-deftest drgnx-search-setup/doctor-facts-name-a-broken-config ()
+  (drgnx-search-setup-test--with
+    (make-directory (expand-file-name ".drgnx" root))
+    (write-region "(:off yes)" nil (expand-file-name ".drgnx/search.eld" root) nil 'silent)
+    (let ((facts (drgnx-search-doctor-facts (list root))))
+      (should (equal (plist-get facts :config-errors)
+                     (list (cons root ".drgnx/search.eld cannot be read: :off must be t or nil")))))
+    ;; the wizard says so too, and starts nothing
+    (should (string-match-p "\\.drgnx/search\\.eld cannot be read" (cadr (drgnx-search-setup root :interactive t))))
+    (should-not started)))
+
 (ert-deftest drgnx-search-setup/doctor-facts-count-stale-and-unindexed ()
   (drgnx-search-setup-test--with
     (let ((other (directory-file-name (make-temp-file "drgnx-setup-other" t))))

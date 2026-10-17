@@ -21,6 +21,7 @@
 (require 'cl-lib)
 (require 'subr-x)
 (require 'drgnx-search-store)
+(require 'drgnx-search-chunk)
 (require 'drgnx-ai-client)
 
 (defconst drgnx-search-default-k 10 "Results `drgnx-search' returns unless asked for another number.")
@@ -116,9 +117,19 @@ index described by META, or nil.  Mirrors the indexer's own check."
 (defun drgnx-search--ready (root)
   "Non-nil when ROOT's index can be searched; else nil, and the notice says why."
   (cond ((not (sqlite-available-p)) (drgnx-search--notice "this Emacs has no SQLite") nil)
+        ((eq t (plist-get (drgnx-search-config root) :off))
+         (drgnx-search--notice "search is off for this project (.drgnx/search.eld)") nil)
         ((not (file-exists-p (drgnx-search-store-file root)))
          (drgnx-search--notice "no index for this project — Search: Index Project") nil)
         (t t)))
+
+(defun drgnx-search-hit-line (hit)
+  "(LINE . TEXT) for HIT (a result of `drgnx-search'): its chunk's first non-blank line, trimmed, and that line's
+number — what one line of a result list shows and where it jumps."
+  (let ((lines (split-string (or (plist-get hit :text) "") "\n")) (n 0))
+    (while (and lines (string-blank-p (car lines))) (setq lines (cdr lines) n (1+ n)))
+    (cons (+ (max 1 (or (plist-get hit :start) 1)) (if lines n 0))
+          (string-trim (or (car lines) "")))))
 
 (defun drgnx-search--ranked-ids (db file query k vector info)
   "The fused ranking for QUERY: a list of (ID SCORE SIMILARITY WHY), best first, at most K long.
@@ -198,6 +209,12 @@ by score, then vector similarity, then path."
   (let ((v (and (sequencep vectors) (> (length vectors) 0) (elt vectors 0))))
     (and (sequencep v) (> (length v) 0) (cl-every #'numberp v) (vconcat v))))
 
+(defun drgnx-search--root-dir (root)
+  "The `default-directory' to embed a question for ROOT under: ROOT itself, so the `embed' role is ROOT's (a
+.drgnx/ai.eld there counts), or the current one when ROOT is no directory (curl must start somewhere)."
+  (let ((dir (file-name-as-directory (expand-file-name root))))
+    (if (file-directory-p dir) dir default-directory)))
+
 (defun drgnx-search--no-embedding (why)
   (drgnx-search--notice "no embedding provider answered (%s) — keyword results only" (or why "no reason given")))
 
@@ -207,12 +224,14 @@ by score, then vector similarity, then path."
 the chunk — `vector', `keyword' or `both'.
 EMBED (default `drgnx-ai-embed-sync') takes a vector of texts and returns a vector of vectors, setting
 `drgnx-ai-embed-last-info' to who answered.  It waits for the provider: call this from a command the user ran.
-No provider or another model than the index's: only the keyword hits; no index or no SQLite: nil.  Either
-way `drgnx-search-last-notice' says why, in one line — and never an error, never a prompt."
+The question is embedded with ROOT's `embed' role (its .drgnx/ai.eld counts, not the current buffer's).
+No provider or another model than the index's: only the keyword hits; no index, no SQLite or search turned off
+for the project: nil.  Either way `drgnx-search-last-notice' says why, in one line — and never an error, never a
+prompt."
   (setq drgnx-search-last-notice nil)
   (when (drgnx-search--ready root)
     (let ((vector nil) (info nil))
-      (let ((drgnx-ai-embed-last-info nil))
+      (let ((drgnx-ai-embed-last-info nil) (default-directory (drgnx-search--root-dir root)))
         (condition-case err
             (progn (setq vector (drgnx-search--vector-of (funcall (or embed #'drgnx-ai-embed-sync) (vector query)))
                          info drgnx-ai-embed-last-info)
@@ -222,24 +241,26 @@ way `drgnx-search-last-notice' says why, in one line — and never an error, nev
 
 (cl-defun drgnx-search-async (root query callback &key k)
   "Like `drgnx-search', but the question is embedded without waiting: CALLBACK gets the result list
-\(`drgnx-search-last-notice' is set by then).  CALLBACK is always called, once: with no index or no SQLite at
-once with nil, and whatever goes wrong (the request, the index) with the keyword hits or nil and a notice."
+\(`drgnx-search-last-notice' is set by then).  CALLBACK is always called, once: with no index, no SQLite or search
+off at once with nil, and whatever goes wrong (the request, the index) with the keyword hits or nil and a notice.
+As there, the `embed' role is ROOT's."
   (setq drgnx-search-last-notice nil)
   (let ((called nil))
     (cl-flet ((answer (results) (unless called (setq called t) (funcall callback results))))
       (if (not (drgnx-search--ready root))
           (answer nil)
         (condition-case err
-            (drgnx-ai-request
-             'embed 'embed (list :inputs (vector query))
-             (lambda (vectors info)
-               (answer (condition-case err
-                           (let ((vector (drgnx-search--vector-of vectors)))
-                             (setq drgnx-search-last-notice nil)
-                             (unless vector (drgnx-search--no-embedding (plist-get info :error)))
-                             (drgnx-search--finish root query (or k drgnx-search-default-k) vector info))
-                         (error (drgnx-search--notice "the search failed (%s)" (error-message-string err))
-                                nil)))))
+            (let ((default-directory (drgnx-search--root-dir root)))
+              (drgnx-ai-request
+               'embed 'embed (list :inputs (vector query))
+               (lambda (vectors info)
+                 (answer (condition-case err
+                             (let ((vector (drgnx-search--vector-of vectors)))
+                               (setq drgnx-search-last-notice nil)
+                               (unless vector (drgnx-search--no-embedding (plist-get info :error)))
+                               (drgnx-search--finish root query (or k drgnx-search-default-k) vector info))
+                           (error (drgnx-search--notice "the search failed (%s)" (error-message-string err))
+                                  nil))))))
           (error (unless called
                    (drgnx-search--notice "the search failed (%s)" (error-message-string err))
                    (answer nil))))))))

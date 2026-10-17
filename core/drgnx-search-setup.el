@@ -153,7 +153,8 @@ PROVIDER and MODEL (PROVIDER nil: not known), as a sentence naming what differs,
 
 (defun drgnx-search-doctor-facts (roots)
   "Facts for the doctor's `search' check: (:sqlite :fts5 :embed-up :embed-dims :embed-provider :embed-model
-:indexes ((ROOT :chunks :files :provider :model :dims :stale)…) :unindexed N) over the projects ROOTS.
+:indexes ((ROOT :chunks :files :provider :model :dims :stale)…) :unindexed N :config-errors ((ROOT . MESSAGE)…))
+over the projects ROOTS; :config-errors are the projects whose .drgnx/search.eld cannot be read.
 :embed-up: the last probe found an `embed' provider running (a saved result, no request).  :embed-dims and the
 provider and model come from one test embedding of at most a second, made only when an index exists.
 :stale is nil (unknown) past `drgnx-search-setup-stale-budget'.  Reads only; never prompts."
@@ -161,7 +162,10 @@ provider and model come from one test embedding of at most a second, made only w
          (fts5 (and sqlite (drgnx-search-setup--fts5-p) t))
          (chain (ignore-errors (drgnx-search-setup--usable (drgnx-ai-detected-cached))))
          (deadline (+ (float-time) drgnx-search-setup-stale-budget))
-         (indexes nil) (unindexed 0) (test nil))
+         (indexes nil) (unindexed 0) (test nil)
+         (config-errors (cl-loop for root in roots
+                                 for err = (plist-get (ignore-errors (drgnx-search-config root)) :error)
+                                 when err collect (cons root err))))
     (when sqlite
       (dolist (root roots)
         (if-let* ((info (drgnx-search-setup-index-info root deadline)))
@@ -176,7 +180,7 @@ provider and model come from one test embedding of at most a second, made only w
                              :model (plist-get drgnx-ai-embed-last-info :model)))))))
     (list :sqlite sqlite :fts5 fts5 :embed-up (and chain t)
           :embed-dims (plist-get test :dims) :embed-provider (plist-get test :provider) :embed-model (plist-get test :model)
-          :indexes indexes :unindexed unindexed)))
+          :indexes indexes :unindexed unindexed :config-errors config-errors)))
 
 ;;;; The wizard
 
@@ -190,6 +194,8 @@ answered): (STATUS MESSAGE).  A current index gets a test query; else the indexe
          (index (drgnx-search-setup-index-info root (+ (float-time) 3)))
          (name (abbreviate-file-name root)))
     (cond
+     ((plist-get (drgnx-search-config root) :error)
+      (list 'warn (format "%s works, but %s: %s — fix it or delete it" who name (plist-get (drgnx-search-config root) :error))))
      ((plist-get (drgnx-search-config root) :off)
       (list 'info (format "%s works; search is turned off for %s (.drgnx/search.eld)" who name)))
      ((plist-get index :error)
@@ -207,7 +213,7 @@ answered): (STATUS MESSAGE).  A current index gets a test query; else the indexe
                     (format "%s works; %s is indexed (%d chunks), but the test query found nothing (%s)"
                             who name (plist-get index :chunks) (or drgnx-search-last-notice "no reason given"))))))
      (t
-      (let ((running (drgnx-search-index--running-job root)))
+      (let ((running (drgnx-search-index-busy-p root)))
         (unless running (drgnx-search-index-start root))
         (list 'ok (format "%s works; %s %s in the background — Index Status shows how far it is"
                           who (if running "is already being indexed" "is being indexed") name)))))))

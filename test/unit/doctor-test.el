@@ -168,3 +168,10 @@
 (ert-deftest drgnx-doctor/search-fact-failure-is-a-warning-not-a-crash ()
   (should (eq (car (drgnx-doctor-check 'search (drgnx-doctor-test--facts :search '(:error "boom")))) 'warn))
   (should (eq (car (drgnx-doctor-check 'search (drgnx-doctor-test--facts))) 'info)))   ; facts without :search
+
+(ert-deftest drgnx-doctor/search-a-broken-config-warns ()
+  (let ((r (drgnx-doctor-test--search
+            :config-errors '(("/p/a" . ".drgnx/search.eld cannot be read: :off must be t or nil")))))
+    (should (eq (car r) 'warn))
+    (should (string-match-p "a: \\.drgnx/search\\.eld cannot be read: :off must be t or nil" (nth 1 r)))
+    (should (string-match-p "search\\.eld" (nth 2 r)))))

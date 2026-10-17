@@ -351,36 +351,109 @@
     (should-not (cl-find-if (lambda (a) (string-prefix-p "Nice=" a)) without))))
 
 (ert-deftest drgnx-search-index/start-runs-the-cli-memory-capped-once-per-project ()
-  (let (started (running nil))
-    (cl-letf (((symbol-function 'drgnx-jobs-start)
-               (lambda (name command &rest keys) (push (list name command keys) started) "job-1"))
-              ((symbol-function 'drgnx-jobs-list)
-               (lambda () running)))
-      (let ((id (drgnx-search-index-start "/tmp/some-project/")))
-        (should (equal id "job-1"))
-        (pcase-let ((`(,name ,command ,keys) (car started)))
-          (should (equal name "search-index: some-project"))
-          (should (equal (car command) (expand-file-name invocation-name invocation-directory)))
-          (should (member "--batch" command))
-          (should (member "drgnx-search-index-cli" command))
-          (should (equal (car (last command)) "/tmp/some-project"))
-          (should (file-exists-p (expand-file-name "drgnx-search-index.el"
-                                                   (cadr (member "-L" command)))))
-          (should (equal (plist-get keys :memory-max) "1G"))))
-      (drgnx-search-index-start "/tmp/some-project" t)
-      (should (equal (cl-subseq (reverse (nth 1 (car started))) 0 2) '("--rebuild" "/tmp/some-project")))
-      ;; a running job for the project: nothing new starts, its id comes back
-      (setq started nil
-            running (list (list :id "job-0" :status 'running :name "search-index: some-project"
-                                :command '("emacs" "-f" "drgnx-search-index-cli" "/tmp/some-project"))))
-      (should (equal (drgnx-search-index-start "/tmp/some-project") "job-0"))
-      (should-not started)
-      ;; an exited one does not count, nor does another project's
-      (setq running (list (list :id "job-0" :status 'exited :name "search-index: some-project"
-                                :command '("emacs" "/tmp/some-project"))
-                          (list :id "job-9" :status 'running :name "search-index: other"
-                                :command '("emacs" "/tmp/other"))))
-      (should (equal (drgnx-search-index-start "/tmp/some-project") "job-1")))))
+  (let* ((state (make-temp-file "drgnx-search-state" t))
+         (process-environment (cons (concat "XDG_STATE_HOME=" state) process-environment))
+         (lock (drgnx-search-index--lock-file "/tmp/some-project"))
+         started)
+    (unwind-protect
+        ;; the start never lists the jobs (a timer starts it): the lock says whether an indexer runs
+        (cl-letf (((symbol-function 'drgnx-jobs-start)
+                   (lambda (name command &rest keys) (push (list name command keys) started) "job-1"))
+                  ((symbol-function 'drgnx-jobs-list) (lambda () (error "the jobs were listed"))))
+          (let ((id (drgnx-search-index-start "/tmp/some-project/")))
+            (should (equal id "job-1"))
+            (pcase-let ((`(,name ,command ,keys) (car started)))
+              (should (equal name "search-index: some-project"))
+              (should (equal (car command) (expand-file-name invocation-name invocation-directory)))
+              (should (member "--batch" command))
+              ;; newer sources win over stale .elc files, as in bin/drgnx
+              (should (equal (cl-subseq (member "--eval" command) 0 2) '("--eval" "(setq load-prefer-newer t)")))
+              (should (member "drgnx-search-index-cli" command))
+              (should (equal (car (last command)) "/tmp/some-project"))
+              (should (file-exists-p (expand-file-name "drgnx-search-index.el"
+                                                       (cadr (member "-L" command)))))
+              (should (equal (plist-get keys :memory-max) "1G"))))
+          (drgnx-search-index-start "/tmp/some-project" t)
+          (should (equal (cl-subseq (reverse (nth 1 (car started))) 0 2) '("--rebuild" "/tmp/some-project")))
+          ;; a live process holds the project's lock: nothing new starts
+          (setq started nil)
+          (make-directory (file-name-directory lock) t)
+          (write-region (format "%d %s" (emacs-pid) (drgnx-search-index--start-time (emacs-pid))) nil lock nil 'silent)
+          (should (drgnx-search-index-running-p "/tmp/some-project"))
+          (should-not (drgnx-search-index-start "/tmp/some-project"))
+          (should-not started)
+          ;; a stale lock (its process is gone) does not count
+          (write-region "999999999 12345.0" nil lock nil 'silent)
+          (should-not (drgnx-search-index-running-p "/tmp/some-project"))
+          (should (equal (drgnx-search-index-start "/tmp/some-project") "job-1")))
+      (delete-directory state t))))
+
+(defun drgnx-search-index-test--fake-job (id name root &optional exit)
+  "A job directory ID as drgnx-jobs writes it: NAME, indexing ROOT; EXIT (a string) when it has finished."
+  (let ((dir (drgnx-jobs--dir id)))
+    (make-directory dir t)
+    (with-temp-file (expand-file-name "job.eld" dir)
+      (prin1 (list :id id :name name :command (list "emacs" "-f" "drgnx-search-index-cli" root)) (current-buffer)))
+    (when exit (write-region exit nil (expand-file-name "exit" dir) nil 'silent))
+    dir))
+
+(ert-deftest drgnx-search-index/start-reaps-the-finished-jobs-of-the-project-but-the-last ()
+  (let* ((state (make-temp-file "drgnx-search-state" t))
+         (process-environment (cons (concat "XDG_STATE_HOME=" state) process-environment)))
+    (unwind-protect
+        (let ((old (drgnx-search-index-test--fake-job "20260101-000001-1" "search-index: p" "/tmp/p" "0"))
+              (stopped (drgnx-search-index-test--fake-job "20260101-000002-1" "search-index: p" "/tmp/p" "143"))
+              (last (drgnx-search-index-test--fake-job "20260101-000003-1" "search-index: p" "/tmp/p" "1"))
+              (running (drgnx-search-index-test--fake-job "20260101-000004-1" "search-index: p" "/tmp/p"))
+              (other (drgnx-search-index-test--fake-job "20260101-000000-1" "search-index: q" "/tmp/q" "0"))
+              (agent (drgnx-search-index-test--fake-job "20260101-000000-2" "agent: p" "/tmp/p" "0")))
+          (cl-letf (((symbol-function 'drgnx-jobs-start) (lambda (&rest _) "job-new"))
+                    ((symbol-function 'drgnx-jobs-list) (lambda () (error "the jobs were listed"))))
+            (should (equal (drgnx-search-index-start "/tmp/p") "job-new")))
+          (should-not (file-exists-p old))
+          (should-not (file-exists-p stopped))
+          (should (file-exists-p last))          ; the newest finished one stays (its log)
+          (should (file-exists-p running))       ; never one without an exit
+          (should (file-exists-p other))         ; another project's
+          (should (file-exists-p agent)))        ; not an index job
+      (delete-directory state t))))
+
+(ert-deftest drgnx-search-index/the-job-env-is-the-projects ()
+  "The embed role (and so the keys the job gets) is resolved for ROOT — its .drgnx/ai.eld — not the current buffer."
+  (let* ((conf (make-temp-file "drgnx-search-conf" t))
+         (proj (make-temp-file "drgnx-search-proj" t))
+         (process-environment (append (list (concat "DRGNX_CONFIG_DIR=" conf) "ROLE_A_KEY=sk-a" "ROLE_B_KEY=sk-b")
+                                      process-environment))
+         (auth-sources nil) (drgnx-ai--keys (make-hash-table :test #'eq)) (drgnx-ai--read-cache (make-hash-table :test #'equal)))
+    (unwind-protect
+        (progn
+          (with-temp-file (expand-file-name "ai.eld" conf)
+            (prin1 '(:version 1
+                              :providers ((ka :name "A" :kind openai :url "http://127.0.0.1:1/v1" :key-env "ROLE_A_KEY" :caps (embed))
+                                          (kb :name "B" :kind openai :url "http://127.0.0.1:2/v1" :key-env "ROLE_B_KEY" :caps (embed)))
+                              :roles ((embed (ka . "m"))))
+                   (current-buffer)))
+          (make-directory (expand-file-name ".drgnx" proj))
+          (with-temp-file (expand-file-name ".drgnx/ai.eld" proj) (prin1 '(:roles ((embed (kb . "m")))) (current-buffer)))
+          (let* ((default-directory (file-name-as-directory conf))
+                 (env (drgnx-search-index--job-env proj)))
+            (should (member "ROLE_B_KEY=sk-b" env))
+            (should-not (member "ROLE_A_KEY=sk-a" env))))
+      (delete-directory conf t)
+      (delete-directory proj t))))
+
+(ert-deftest drgnx-search-index/a-broken-config-changes-nothing ()
+  (drgnx-search-index-test--with (drgnx-search-index-test--named 2)
+    (drgnx-search-index root :embed (drgnx-search-index-test--stub))
+    (let ((before (drgnx-search-index-test--peek root #'drgnx-search-store-meta)))
+      (drgnx-search-index-test--write root ".drgnx/search.eld" "(:exclude \"f1.txt\")")
+      (setq drgnx-search-index-test--calls nil)
+      (drgnx-search-index-test--write root "f3.txt" "a new file")
+      (let ((r (drgnx-search-index root :embed (drgnx-search-index-test--stub))))
+        (should (string-match-p "\\.drgnx/search\\.eld cannot be read" (plist-get r :error))))
+      (should-not drgnx-search-index-test--calls)      ; nothing went to the provider
+      (should (equal (drgnx-search-index-test--paths root) '("f1.txt" "f2.txt")))
+      (should (equal (drgnx-search-index-test--peek root #'drgnx-search-store-meta) before)))))
 
 (ert-deftest drgnx-search-index/start-gives-the-job-the-keys-and-dirs-it-needs ()
   (let* ((conf (make-temp-file "drgnx-search-conf" t))
@@ -421,7 +494,7 @@
     (unwind-protect
         (with-temp-buffer
           (let ((code (call-process (expand-file-name invocation-name invocation-directory) nil t nil
-                                    "--batch" "-Q" "-L" core "-l" "drgnx-search-index"
+                                    "--batch" "-Q" "--eval" "(setq load-prefer-newer t)" "-L" core "-l" "drgnx-search-index"
                                     "-f" "drgnx-search-index-cli" plain "--rebuild")))
             (should (= code 1))
             (should (= (length (split-string (string-trim (buffer-string)) "\n")) 1))

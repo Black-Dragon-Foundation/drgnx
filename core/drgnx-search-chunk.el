@@ -86,28 +86,41 @@ whitespace are dropped, so empty TEXT has none."
   "VALUE when it is a list of strings, else nil."
   (and (proper-list-p value) (cl-every #'stringp value) value))
 
+(defun drgnx-search--config-problem (data)
+  "Why DATA (the form read from .drgnx/search.eld) is no search configuration, or nil."
+  (cond ((not (and (proper-list-p data) (cl-evenp (length data)))) "it is not a plist")
+        ((not (or (null (plist-get data :include)) (drgnx-search--string-list (plist-get data :include))))
+         ":include must be a list of strings")
+        ((not (or (null (plist-get data :exclude)) (drgnx-search--string-list (plist-get data :exclude))))
+         ":exclude must be a list of strings")
+        ((not (memq (plist-get data :off) '(nil t))) ":off must be t or nil")))
+
 (defun drgnx-search-config (root)
   "The search configuration of the project at ROOT.
 A plist (:include GLOBS :exclude GLOBS :off BOOL), read from
-ROOT/.drgnx/search.eld with `read-eval' off.  Absent, unreadable or malformed
-(a key with the wrong type falls back to its default) is never an error.  With `:include' only the
-files matching one of its globs are indexed; `:exclude' removes files; `:off' non-nil turns the
+ROOT/.drgnx/search.eld with `read-eval' off; the defaults (all nil) when there is no such file.  A file that
+is there but cannot be read, does not hold a plist, or gives a key the wrong type (:include or :exclude not a
+list of strings, :off not t or nil) is (:error \".drgnx/search.eld cannot be read: WHY\"), never the defaults:
+`drgnx-search-files' then signals instead of listing more than the project asked for.  With `:include' only the
+files matching one of its globs are indexed; `:exclude' removes files; `:off' t turns the
 project's search off.  This can only narrow the list: dot files, big files, binaries and symlinks
 are never indexed.  Globs are matched against the path relative to ROOT: `*' and `?' stay within
 one path component, `**/' stands for any number of directories and `**' for anything; a glob
 without `/' matches at any depth (\"*.md\"), and a trailing `/' means everything below that
 directory (\"vendor/\")."
-  (let* ((file (expand-file-name ".drgnx/search.eld" root))
-         (data (condition-case nil
-                   (with-temp-buffer
-                     (let ((read-eval nil) (coding-system-for-read 'utf-8-unix))
-                       (insert-file-contents file nil 0 65536)
-                       (read (current-buffer))))
-                 (error nil)))
-         (plist (and (proper-list-p data) (cl-evenp (length data)) data)))
-    (list :include (drgnx-search--string-list (plist-get plist :include))
-          :exclude (drgnx-search--string-list (plist-get plist :exclude))
-          :off (and (plist-get plist :off) t))))
+  (let ((file (expand-file-name ".drgnx/search.eld" root)))
+    (if (not (file-exists-p file))
+        (list :include nil :exclude nil :off nil)
+      (let* ((data (condition-case err
+                       (with-temp-buffer
+                         (let ((read-eval nil) (coding-system-for-read 'utf-8-unix))
+                           (insert-file-contents file nil 0 65536)
+                           (read (current-buffer))))
+                     (error (cons 'drgnx-search--unreadable (error-message-string err)))))
+             (problem (if (eq (car-safe data) 'drgnx-search--unreadable) (cdr data) (drgnx-search--config-problem data))))
+        (if problem
+            (list :error (concat ".drgnx/search.eld cannot be read: " problem))
+          (list :include (plist-get data :include) :exclude (plist-get data :exclude) :off (plist-get data :off)))))))
 
 (defun drgnx-search--glob-regexp (glob)
   "A regexp matching the relative paths GLOB selects (see `drgnx-search-config')."
@@ -224,6 +237,15 @@ fails."
          (`(,_ ,_ ,err) (unless (string-match-p "not a git repository" err)
                           (signal 'drgnx-search-files-error (list (format "git rev-parse: %s" err))))))))
 
+(defun drgnx-search-toplevel (dir)
+  "The top of the git work tree holding the directory DIR, as a directory name without trailing slash — spelled
+from DIR (`--show-cdup', not `--show-toplevel', which resolves symlinks: the index file is named after the
+path, and the editor's project root keeps the user's spelling) — or nil when DIR is in no git work tree."
+  (let ((dir (file-name-as-directory (expand-file-name dir))))
+    (when (file-directory-p dir)
+      (pcase (drgnx-search--git-run dir nil '("rev-parse" "--show-cdup"))
+        (`(0 ,out ,_) (directory-file-name (expand-file-name (string-trim out) dir)))))))
+
 (defun drgnx-search--parse-index (out)
   "The stage 0 entries of `git ls-files -s -z' output OUT: (MODE BLOB PATH) each."
   (let ((pos 0) entries)
@@ -284,6 +306,14 @@ These are never indexed, whatever the configuration says."
         (search-forward "\0" nil t))
     (error t)))
 
+(defun drgnx-search--inside-p (dir true-root cache)
+  "Non-nil when the directory DIR, its symlinks resolved, is TRUE-ROOT (a truename, as a directory name) or
+below it — a directory of the project replaced by a symlink to elsewhere is not.  CACHE (a hash table) keeps
+the answer per directory."
+  (let ((known (gethash dir cache 'unknown)))
+    (if (not (eq known 'unknown)) known
+      (puthash dir (string-prefix-p true-root (file-name-as-directory (file-truename dir))) cache))))
+
 (defun drgnx-search-files (root)
   "The files of the project at ROOT to index, as (PATH . HASH).
 PATH is relative to ROOT; HASH is the working-tree content hash (git blob SHA), so an unchanged
@@ -295,11 +325,13 @@ included, whatever `drgnx-search-config' says: anything but a regular file (syml
 submodule), a dot file or a file under a dot directory, a key or secret by name (*.pem, *.key, *.p12,
 *.pfx, *.kdbx, *.keystore, *.jks, *.asc, *.gpg, *.env, id_rsa*, id_dsa*, id_ecdsa*, id_ed25519*,
 anything containing secret, credential, authinfo or netrc, case-insensitively), a file over 1 MiB,
-a binary.  A modified or untracked file whose path contains a newline or starts with a double quote
-cannot be hashed and is left out too.  The configuration then narrows the list.
+a binary, a file in a directory whose real path (symlinks resolved) is outside the project.  A modified or
+untracked file whose path contains a newline or starts with a double quote cannot be hashed and is left out
+too.  The configuration then narrows the list.
 
 nil when ROOT is no git repository, git is missing or the project's search is `:off'.  When git
-fails the listing signals `drgnx-search-files-error' (never a partial list)."
+fails, or .drgnx/search.eld is there but cannot be read (see `drgnx-search-config'), the listing signals
+`drgnx-search-files-error' (never a partial list, never more than the project asked for)."
   (let ((drgnx-search--git-deadline (or drgnx-search--git-deadline
                                         (and drgnx-search-git-timeout (+ (float-time) drgnx-search-git-timeout)))))
     (drgnx-search--files-1 root)))
@@ -310,7 +342,10 @@ fails the listing signals `drgnx-search-files-error' (never a partial list)."
          (include (mapcar #'drgnx-search--glob-regexp (plist-get config :include)))
          (exclude (mapcar #'drgnx-search--glob-regexp (plist-get config :exclude)))
          (root (file-name-as-directory (expand-file-name root)))
+         (true-root (file-name-as-directory (file-truename root)))
+         (dirs (make-hash-table :test #'equal))
          known pending)
+    (when (plist-get config :error) (signal 'drgnx-search-files-error (list (plist-get config :error))))
     (when (and (not (plist-get config :off)) (drgnx-search--repo-p root))
       (let ((dirty (make-hash-table :test #'equal))
             (staged (drgnx-search--git root nil "ls-files" "-s" "-z")))
@@ -332,6 +367,7 @@ fails the listing signals `drgnx-search-files-error' (never a partial list)."
               (let* ((file (concat root path))
                      (attrs (file-attributes file 'integer)))
                 (when (and attrs (null (file-attribute-type attrs)) (file-regular-p file)
+                           (drgnx-search--inside-p (file-name-directory file) true-root dirs)
                            (<= (file-attribute-size attrs) drgnx-search-chunk-max-file-bytes)
                            (not (drgnx-search--binary-p file)))
                   (if (cdr entry) (push entry known) (push path pending)))))))

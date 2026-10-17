@@ -275,19 +275,52 @@
 
 (defvar drgnx-search-chunk-test--pwned nil)
 
-(ert-deftest drgnx-search-files/config-never-errors ()
-  (drgnx-search-chunk-test--repo '(("a.el" . "a\n"))
-    (dolist (bad '("(:include " "(:include #.(setq drgnx-search-chunk-test--pwned t))" "42" "(:include 5 :exclude \"x\")" "" "\0\0"))
+(ert-deftest drgnx-search-files/a-broken-config-stops-the-listing ()
+  "A .drgnx/search.eld that is there but cannot be read, is malformed or has a key of the wrong type never fails
+open: the config is an error and the listing signals it (nothing is indexed).  Absent: the defaults."
+  (drgnx-search-chunk-test--repo '(("a.el" . "a\n") ("vendor/v.js" . "v\n"))
+    (dolist (bad '("(:include " "(:include #.(setq drgnx-search-chunk-test--pwned t))" "42" "(:include)" "" "\0\0"
+                   "(:exclude \"vendor/\")" "(:include (\"src/\" 5))" "(:off yes)" "(:off 1)"))
       (drgnx-search-chunk-test--write root ".drgnx/search.eld" bad)
       (let ((config (drgnx-search-config root)))
-        (should-not (plist-get config :off))
-        (should-not (plist-get config :include))
-        (should-not (plist-get config :exclude)))
-      (should (equal (drgnx-search-chunk-test--paths root) '("a.el"))))
+        (should (string-match-p "\\`\\.drgnx/search\\.eld cannot be read: ." (plist-get config :error)))
+        (should-not (plist-get config :off)))
+      (let ((err (should-error (drgnx-search-files root) :type 'drgnx-search-files-error)))
+        (should (string-match-p "\\.drgnx/search\\.eld cannot be read" (cadr err)))))
     (should-not drgnx-search-chunk-test--pwned)
+    ;; the wrong type is named
+    (drgnx-search-chunk-test--write root ".drgnx/search.eld" "(:exclude \"vendor/\")")
+    (should (string-match-p ":exclude" (plist-get (drgnx-search-config root) :error)))
+    ;; an unreadable file (not when running as root: root reads it anyway)
+    (let ((file (expand-file-name ".drgnx/search.eld" root)))
+      (drgnx-search-chunk-test--write root ".drgnx/search.eld" "(:off nil)")
+      (set-file-modes file 0)
+      (unwind-protect
+          (unless (file-readable-p file)
+            (should (plist-get (drgnx-search-config root) :error))
+            (should-error (drgnx-search-files root) :type 'drgnx-search-files-error))
+        (set-file-modes file #o644)))
+    ;; well-formed: no error
+    (drgnx-search-chunk-test--write root ".drgnx/search.eld" "(:exclude (\"vendor/\") :off nil)")
+    (should-not (plist-get (drgnx-search-config root) :error))
+    (should (equal (drgnx-search-chunk-test--paths root) '("a.el")))
     ;; No file at all: defaults.
     (delete-file (expand-file-name ".drgnx/search.eld" root))
-    (should-not (plist-get (drgnx-search-config root) :off))))
+    (should (equal (drgnx-search-config root) '(:include nil :exclude nil :off nil)))
+    (should (equal (drgnx-search-chunk-test--paths root) '("a.el" "vendor/v.js")))))
+
+(ert-deftest drgnx-search-files/a-symlinked-directory-out-of-the-project-is-never-followed ()
+  "A tracked file under a directory that was replaced by a symlink to elsewhere is not listed: its text is not the
+project's."
+  (let ((outside (file-name-as-directory (make-temp-file "drgnx-search-outside" t))))
+    (unwind-protect
+        (drgnx-search-chunk-test--repo '(("real.txt" . "real\n") ("sub/f.txt" . "inside\n"))
+          (drgnx-search-chunk-test--git root "commit" "-q" "-m" "init")
+          (drgnx-search-chunk-test--write outside "f.txt" "private outside text\n")
+          (delete-directory (expand-file-name "sub" root) t)
+          (make-symbolic-link (directory-file-name outside) (expand-file-name "sub" root))
+          (should (equal (drgnx-search-chunk-test--paths root) '("real.txt"))))
+      (delete-directory outside t))))
 
 (ert-deftest drgnx-search-files/does-not-depend-on-the-locale ()
   "git's messages are translated; a non-repo still gives nil and a repo is still listed."

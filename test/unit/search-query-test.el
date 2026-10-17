@@ -357,5 +357,53 @@
       (message "drgnx-search recall@10 = %.3f" recall)
       (should (>= recall 0.95)))))
 
+;;;; Final review
+
+(defmacro drgnx-search-query-test--with-dir (&rest body)
+  "BODY with ROOT a real directory (a directory name) whose index (DB) holds the stub texts."
+  (declare (indent 0))
+  `(progn
+     (skip-unless (sqlite-available-p))
+     (let* ((dir (make-temp-file "drgnx-search" t))
+            (process-environment (cons (concat "XDG_STATE_HOME=" dir) process-environment))
+            (root (file-name-as-directory (make-temp-file "drgnx-search-proj" t)))
+            (drgnx-search-last-notice nil)
+            (db (drgnx-search-store-open root)))
+       (unwind-protect (progn (drgnx-search-query-test--index db drgnx-search-query-test--texts) ,@body)
+         (ignore-errors (sqlite-close db))
+         (delete-directory root t)
+         (delete-directory dir t)))))
+
+(ert-deftest drgnx-search/search-off-is-honoured-at-query-time ()
+  (drgnx-search-query-test--with-dir
+    (make-directory (expand-file-name ".drgnx" root))
+    (write-region "(:off t)" nil (expand-file-name ".drgnx/search.eld" root) nil 'silent)
+    (let ((asked nil) (got 'none))
+      (should-not (drgnx-search root "database" :embed (lambda (_) (setq asked t) (error "asked"))))
+      (should (equal drgnx-search-last-notice "search is off for this project (.drgnx/search.eld)"))
+      (setq drgnx-search-last-notice nil)
+      (cl-letf (((symbol-function 'drgnx-ai-request) (lambda (&rest _) (setq asked t) (error "asked"))))
+        (drgnx-search-async root "database" (lambda (r) (setq got r))))
+      (should (null got))
+      (should (equal drgnx-search-last-notice "search is off for this project (.drgnx/search.eld)"))
+      (should-not asked))))
+
+(ert-deftest drgnx-search/the-embed-role-is-the-searched-projects ()
+  "The question is embedded with the `embed' role of ROOT (its .drgnx/ai.eld), not of the current buffer."
+  (drgnx-search-query-test--with-dir
+    (let ((elsewhere (make-temp-file "drgnx-search-elsewhere" t)) (seen nil))
+      (unwind-protect
+          (let ((default-directory (file-name-as-directory elsewhere)))
+            (drgnx-search root "database" :embed (lambda (inputs) (push default-directory seen)
+                                                   (funcall (drgnx-search-query-test--embedder) inputs)))
+            (cl-letf (((symbol-function 'drgnx-ai-request)
+                       (lambda (_r _k payload callback &rest _)
+                         (push default-directory seen)
+                         (funcall callback (vector (drgnx-search-query-test--embed-text (aref (plist-get payload :inputs) 0)))
+                                  '(:provider stub :model "stub-1")))))
+              (drgnx-search-async root "database" #'ignore))
+            (should (equal seen (list root root))))
+        (delete-directory elsewhere t)))))
+
 (provide 'search-query-test)
 ;;; search-query-test.el ends here

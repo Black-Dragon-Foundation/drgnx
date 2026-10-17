@@ -237,6 +237,7 @@ MODEL), as a sentence, or nil."
                                 (let* ((s (plist-get f :search)) (indexes (plist-get s :indexes))
                                        (stale (seq-filter (lambda (e) (> (or (plist-get (cdr e) :stale) 0) 20)) indexes))
                                        (broken (seq-filter (lambda (e) (plist-get (cdr e) :error)) indexes))
+                                       (config (car (plist-get s :config-errors)))
                                        (problem (drgnx-doctor--search-problem indexes (plist-get s :embed-dims) (plist-get s :embed-provider) (plist-get s :embed-model)))
                                        (unindexed (or (plist-get s :unindexed) 0))
                                        (chunks (apply #'+ (mapcar (lambda (e) (or (plist-get (cdr e) :chunks) 0)) indexes))))
@@ -248,6 +249,9 @@ MODEL), as a sentence, or nil."
                                                                     (file-name-nondirectory (directory-file-name (car (car broken))))
                                                                     (plist-get (cdr (car broken)) :error))
                                                       "Search: Index Project with C-u rebuilds it"))
+                                        (config (list 'warn (format "%s: %s (nothing is indexed there)"
+                                                                    (file-name-nondirectory (directory-file-name (car config))) (cdr config))
+                                                      "fix or delete that project's .drgnx/search.eld (docs/guide/search.md)"))
                                         (stale (list 'warn (format "stale index (more than 20 files changed since): %s"
                                                                    (mapconcat (lambda (e) (format "%s %d files" (file-name-nondirectory (directory-file-name (car e)))
                                                                                                   (plist-get (cdr e) :stale)))

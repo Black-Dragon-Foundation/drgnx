@@ -30,17 +30,23 @@
     "render the user interface window"
     "parse json configuration file"))
 
+(defun drgnx-search-mcp-test--git-init (dir)
+  "Make DIR a git repository (no user configuration read)."
+  (let ((default-directory (file-name-as-directory dir))
+        (process-environment (append '("GIT_CONFIG_GLOBAL=/dev/null" "GIT_CONFIG_SYSTEM=/dev/null") process-environment)))
+    (should (eql 0 (call-process "git" nil nil nil "init" "-q")))))
+
 (defmacro drgnx-search-mcp-test--project (&rest body)
   "Run BODY in a git project ROOT whose state dir is temporary; INDEXED: its index is built from the stub texts."
   (declare (indent 0))
   `(progn
-     (skip-unless (sqlite-available-p))
+     (skip-unless (and (sqlite-available-p) (executable-find "git")))
      (let* ((root (directory-file-name (make-temp-file "drgnx-mcp-proj" t)))
             (state (make-temp-file "drgnx-mcp-state" t))
             (process-environment (cons (concat "XDG_STATE_HOME=" state) process-environment))
             (drgnx-search-last-notice nil)
             (default-directory (file-name-as-directory root)))
-       (make-directory (expand-file-name ".git" root))
+       (drgnx-search-mcp-test--git-init root)
        (unwind-protect
            (cl-letf (((symbol-function 'drgnx-ai-embed-sync) #'drgnx-search-mcp-test--embed))
              ,@body)
@@ -140,50 +146,106 @@
     (should (equal (plist-get (plist-get tool :inputSchema) :required) ["query"]))
     (should (hash-table-p (plist-get (plist-get tool :inputSchema) :properties)))))
 
-(ert-deftest drgnx-search-mcp/server-spec-carries-the-embed-environment ()
-  (let* ((process-environment (append '("XDG_STATE_HOME=/tmp/st" "DRGNX_DATA_DIR=/tmp/dd") process-environment))
-         (spec (drgnx-search-mcp-server-spec "/some/project")))
-    (should (equal (plist-get spec :name) "drgnx-search"))
-    (should (stringp (plist-get spec :command)))
-    (let ((args (append (plist-get spec :args) nil)))
-      (should (member "drgnx-search-mcp-main" args))
-      (should (equal (car (last args)) "/some/project")))
-    (let ((env (mapcar (lambda (e) (cons (plist-get e :name) (plist-get e :value))) (plist-get spec :env))))
-      (should (equal (cdr (assoc "XDG_STATE_HOME" env)) "/tmp/st"))
-      (should (equal (cdr (assoc "DRGNX_DATA_DIR" env)) "/tmp/dd")))))
+(ert-deftest drgnx-search-mcp/server-spec-carries-the-dirs-and-never-a-key ()
+  "The spec goes to an agent: the state and config directories only — a key of the embed role never."
+  (let* ((conf (make-temp-file "drgnx-mcp-conf" t))
+         (process-environment (append (list "XDG_STATE_HOME=/tmp/st" "DRGNX_DATA_DIR=/tmp/dd" (concat "DRGNX_CONFIG_DIR=" conf)
+                                            "MCP_TEST_KEY=sk-never-for-agents")
+                                      process-environment))
+         (auth-sources nil) (drgnx-ai--keys (make-hash-table :test #'eq)) (drgnx-ai--read-cache (make-hash-table :test #'equal)))
+    (unwind-protect
+        (progn
+          (with-temp-file (expand-file-name "ai.eld" conf)
+            (prin1 '(:version 1 :providers ((kz :name "K" :kind openai :url "http://127.0.0.1:1/v1" :key-env "MCP_TEST_KEY" :caps (embed)))
+                              :roles ((embed (kz . "m"))))
+                   (current-buffer)))
+          (let ((spec (drgnx-search-mcp-server-spec "/some/project")))
+            (should (equal (plist-get spec :name) "drgnx-search"))
+            (should (stringp (plist-get spec :command)))
+            (let ((args (append (plist-get spec :args) nil)))
+              (should (member "drgnx-search-mcp-main" args))
+              (should (equal (car (last args)) "/some/project")))
+            (let ((env (mapcar (lambda (e) (cons (plist-get e :name) (plist-get e :value))) (plist-get spec :env))))
+              (should (equal (cdr (assoc "XDG_STATE_HOME" env)) "/tmp/st"))
+              (should (equal (cdr (assoc "DRGNX_DATA_DIR" env)) "/tmp/dd"))
+              (should (equal (cdr (assoc "DRGNX_CONFIG_DIR" env)) conf))
+              (should-not (assoc "MCP_TEST_KEY" env))
+              (should-not (string-search "sk-never" (prin1-to-string spec))))))
+      (delete-directory conf t))))
+
+(ert-deftest drgnx-search-mcp/a-line-is-the-line-shown ()
+  "PATH:LINE names the line printed: the chunk's first non-blank one."
+  (should (equal (drgnx-search-mcp--line '(:path "a.el" :start 10 :text "\n   \n  (defun foo ()\n  1)"))
+                 "a.el:12: (defun foo ()"))
+  (should (equal (drgnx-search-mcp--line '(:path "a.el" :start 3 :text "x"))
+                 "a.el:3: x")))
+
+(ert-deftest drgnx-search-mcp/the-project-is-the-git-toplevel ()
+  "A sub-directory names its repository's top: one index per project, whatever path the CLI is given."
+  (skip-unless (executable-find "git"))
+  (let ((root (directory-file-name (make-temp-file "drgnx-mcp-top" t))))
+    (unwind-protect
+        (progn
+          (drgnx-search-mcp-test--git-init root)
+          (make-directory (expand-file-name "src/deep" root) t)
+          (should (equal (drgnx-search-mcp--project (expand-file-name "src/deep" root)) root))
+          (should (equal (drgnx-search-mcp--project (concat root "/src/")) root))
+          (should (equal (drgnx-search-mcp--project root) root))
+          ;; the index CLI too
+          (require 'drgnx-search-index)
+          (let ((indexed nil) (command-line-args-left (list (expand-file-name "src/deep" root) "--rebuild")))
+            (cl-letf (((symbol-function 'drgnx-search-index) (lambda (r &rest keys) (setq indexed (cons r keys)) nil))
+                      ((symbol-function 'kill-emacs) #'ignore)
+                      ((symbol-function 'princ) #'ignore))
+              (drgnx-search-index-cli))
+            (should (equal (directory-file-name (car indexed)) root))
+            (should (plist-get (cdr indexed) :rebuild))))
+      (delete-directory root t))))
 
 ;;;; The command line
 
 (ert-deftest drgnx-search-mcp/cli-query-prints-the-lines ()
-  (skip-unless (and (sqlite-available-p) (executable-find "bash")))
+  (skip-unless (and (sqlite-available-p) (executable-find "bash") (executable-find "git")))
   (let* ((root (directory-file-name (make-temp-file "drgnx-mcp-cli" t)))
          (state (make-temp-file "drgnx-mcp-cli-state" t))
-         (process-environment (append (list (concat "XDG_STATE_HOME=" state)) process-environment))
+         (conf (make-temp-file "drgnx-mcp-cli-conf" t))
+         (err (make-temp-file "drgnx-mcp-err"))
+         (dead (+ 40000 (random 9000)))
+         ;; the child never reaches a real embedding provider: its config has an embed role on a dead local port
+         (process-environment (append (list (concat "XDG_STATE_HOME=" state) (concat "XDG_CONFIG_HOME=" conf)
+                                            (concat "DRGNX_CONFIG_DIR=" conf "/drgnx"))
+                                      process-environment))
          (script (expand-file-name "bin/drgnx" drgnx-dir)))
     (unwind-protect
         (progn
-          (make-directory (expand-file-name ".git" root))
+          (make-directory (expand-file-name "drgnx" conf))
+          (with-temp-file (expand-file-name "drgnx/ai.eld" conf)
+            (prin1 `(:version 1 :providers ((dead :name "Dead" :kind openai :url ,(format "http://127.0.0.1:%d/v1" dead) :caps (embed)))
+                              :roles ((embed (dead . "m"))))
+                   (current-buffer)))
+          (drgnx-search-mcp-test--git-init root)
           (let ((drgnx-search-last-notice nil))
             (cl-letf (((symbol-function 'drgnx-ai-embed-sync) #'drgnx-search-mcp-test--embed))
               (drgnx-search-mcp-test--build-index root)))
-          ;; the subprocess has the stub index but not the stub embedder: whatever it says, the keyword hits come
+          ;; the subprocess has the stub index but no embedder that answers: the keyword hits, and why on stderr
           (with-temp-buffer
-            (let* ((err (make-temp-file "drgnx-mcp-err"))
-                   (status (call-process script nil (list t err) nil "search" "query" root "database" "connection" "-k" "2")))
+            (let ((status (call-process script nil (list t err) nil "search" "query" root "database" "connection" "-k" "2")))
               (should (= status 0))
               (should (string-match-p "\\`src/a\\.el:[0-9]+: open the database connection" (buffer-string)))
               (should (<= (length (split-string (buffer-string) "\n" t)) 2))
-              (delete-file err)))
+              (should (string-match-p "dead: no answer" (with-temp-buffer (insert-file-contents err) (buffer-string))))))
           ;; no index: status 1 and a clear message
           (let ((other (directory-file-name (make-temp-file "drgnx-mcp-cli2" t))))
             (unwind-protect
                 (progn
-                  (make-directory (expand-file-name ".git" other))
+                  (drgnx-search-mcp-test--git-init other)
                   (with-temp-buffer
                     (should (= 1 (call-process script nil (list t t) nil "search" "query" other "x")))
                     (should (string-match-p "no index for" (buffer-string)))))
               (delete-directory other t))))
+      (delete-file err)
       (delete-directory root t)
+      (delete-directory conf t)
       (delete-directory state t))))
 
 ;;;; Ask the Codebase

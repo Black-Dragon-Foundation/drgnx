@@ -226,51 +226,83 @@ with are an :error.  A project that is no git project, has search off, or whose 
 
 (defun drgnx-search-index-cli ()
   "Batch entry: `emacs --batch -L core -l drgnx-search-index -f drgnx-search-index-cli ROOT [--rebuild]'.
+ROOT may be any directory of the project: its git top level is indexed (`drgnx-search-toplevel').
 Prints one summary line; exits 0, or 1 on an error."
   (let* ((args command-line-args-left) (rebuild (member "--rebuild" args)) (root (car (delete "--rebuild" (copy-sequence args)))))
     (setq command-line-args-left nil)
     (if (null root)
         (progn (princ "search index: usage: drgnx-search-index-cli ROOT [--rebuild]\n") (kill-emacs 1))
-      (let ((result (drgnx-search-index root :rebuild (and rebuild t))))
+      (let ((result (drgnx-search-index (or (drgnx-search-toplevel root) root) :rebuild (and rebuild t))))
         (princ (concat (drgnx-search-index--summary result) "\n"))
         (kill-emacs (if (plist-get result :error) 1 0))))))
 
+(defun drgnx-search-index-running-p (root)
+  "Non-nil when an indexer runs for the project at ROOT: a live process holds its lock.  Reads the lock file
+only — never lists the jobs — so a timer may ask."
+  (drgnx-search-index--lock-live-p (drgnx-search-index--lock-file root)))
+
 (defun drgnx-search-index--running-job (root)
-  "The running indexing job for ROOT (a directory name without trailing slash), if any."
+  "The running indexing job for ROOT (a directory name without trailing slash), if any.  Lists every job (a
+process query each): for commands the user runs, never a timer."
   (cl-find-if (lambda (job) (and (eq (plist-get job :status) 'running)
                                  (string-prefix-p "search-index:" (or (plist-get job :name) ""))
                                  (member root (plist-get job :command))))
               (drgnx-jobs-list)))
 
+(defun drgnx-search-index-busy-p (root)
+  "Non-nil when the project at ROOT is being indexed: its lock is held, or one of its index jobs runs (one that
+has not taken the lock yet).  For commands the user runs: it lists the jobs."
+  (or (drgnx-search-index-running-p root)
+      (drgnx-search-index--running-job (directory-file-name (expand-file-name root)))))
+
+(defun drgnx-search-index--reap (root)
+  "Remove the directories of ROOT's finished index jobs (exited or stopped: they have an exit file) but the newest.
+Reads each job's job.eld and looks for its exit file: no process or systemd query."
+  (let ((dir (drgnx-jobs-dir)) (kept nil))
+    (when (file-directory-p dir)
+      (dolist (id (sort (directory-files dir nil "\\`[0-9]") (lambda (a b) (string> a b))))
+        (let* ((jdir (drgnx-jobs--dir id)) (job (drgnx-jobs--read (expand-file-name "job.eld" jdir))))
+          (when (and (string-prefix-p "search-index:" (or (plist-get job :name) ""))
+                     (member root (plist-get job :command))
+                     (file-exists-p (expand-file-name "exit" jdir)))
+            (if kept (ignore-errors (delete-directory jdir t)) (setq kept t))))))))
+
 ;; The job is a fresh process: it gets the editor's state directories (so it writes the index and lock the
 ;; editor reads) and the keys of the embed chain (resolved here, where a key may live in auth-source).
 
-(defun drgnx-search-index--job-env ()
-  "\"NAME=value\"… for the indexing job: the XDG and DRGNX_*_DIR variables set here, and for each provider in the
-`embed' role with a key, its key variable.  Resolved without prompting.  The values travel in the environment only."
+(defun drgnx-search-index--dir-env ()
+  "\"NAME=value\"… of the XDG and DRGNX_*_DIR variables set here: where a batch drgnx finds the user's files."
+  (cl-loop for e in process-environment
+           when (string-match-p "\\`\\(XDG_\\(STATE\\|CONFIG\\|CACHE\\|DATA\\)_HOME\\|DRGNX_[A-Z0-9_]*_DIR\\)=." e)
+           collect e))
+
+(defun drgnx-search-index--job-env (root)
+  "\"NAME=value\"… for the indexing job of the project at ROOT: the XDG and DRGNX_*_DIR variables set here, and for
+each provider in ROOT's `embed' role (its .drgnx/ai.eld counts, not the current buffer's) with a key, its key
+variable.  Resolved without prompting.  The values travel in the environment only."
   (append
-   (cl-loop for e in process-environment
-            when (string-match-p "\\`\\(XDG_\\(STATE\\|CONFIG\\|CACHE\\|DATA\\)_HOME\\|DRGNX_[A-Z0-9_]*_DIR\\)=." e)
-            collect e)
-   (cl-loop for (id . _) in (drgnx-ai-role 'embed)
-            for name = (plist-get (drgnx-ai-provider id) :key-env)
-            for key = (and name (drgnx-ai-key id nil))
-            when key collect (concat name "=" key))))
+   (drgnx-search-index--dir-env)
+   (let ((default-directory (file-name-as-directory (expand-file-name root))))
+     (cl-loop for (id . _) in (drgnx-ai-role 'embed)
+              for name = (plist-get (drgnx-ai-provider id) :key-env)
+              for key = (and name (drgnx-ai-key id nil))
+              when key collect (concat name "=" key)))))
 
 (defun drgnx-search-index-start (root &optional rebuild)
-  "Index the project at ROOT in a background job (REBUILD: from scratch); returns the job's id.
-The job is a batch Emacs of the running version, memory-capped at 1G and niced where the jobs run under systemd.  When a
-job for ROOT already runs, nothing starts and that job's id comes back."
+  "Index the project at ROOT in a background job (REBUILD: from scratch); returns the job's id, or nil when an
+indexer holds ROOT's lock (nothing starts then).  The finished index jobs of ROOT are removed first, the newest kept.
+The job is a batch Emacs of the running version, memory-capped at 1G and niced where the jobs run under systemd.
+Never lists the jobs (the re-index timer calls this); a command the user runs asks `drgnx-search-index-busy-p' first."
   (let ((root (directory-file-name (expand-file-name root))))
-    (if-let* ((job (drgnx-search-index--running-job root)))
-        (plist-get job :id)
+    (unless (drgnx-search-index-running-p root)
+      (drgnx-search-index--reap root)
       (drgnx-jobs-start (format "search-index: %s" (file-name-nondirectory root))
                         (append (list (expand-file-name invocation-name invocation-directory)
-                                      "--batch" "-Q" "-L" drgnx-search-index--core-dir
+                                      "--batch" "-Q" "--eval" "(setq load-prefer-newer t)" "-L" drgnx-search-index--core-dir
                                       "-l" "drgnx-search-index" "-f" "drgnx-search-index-cli" root)
                                 (and rebuild (list "--rebuild")))
                         :cwd root :memory-max "1G" :nice 10
-                        :env (drgnx-search-index--job-env)))))
+                        :env (drgnx-search-index--job-env root)))))
 
 (provide 'drgnx-search-index)
 ;;; drgnx-search-index.el ends here
