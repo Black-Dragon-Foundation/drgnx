@@ -775,7 +775,9 @@ inside another one selected goes: the folder carries it."
             (y-or-n-p (format "Move %s to the trash? " (drgnx-explorer--describe paths))))
       (let ((delete-by-moving-to-trash (not permanently)))     ; the trash unless asked otherwise — not Emacs' default (nil)
         (dolist (p paths)
-          (if (file-directory-p p) (delete-directory p t (not permanently)) (delete-file p (not permanently)))))
+          (if (and (file-directory-p p) (not (file-symlink-p p)))   ; a link goes, never what it points to
+              (delete-directory p t (not permanently))
+            (delete-file p (not permanently)))))
       (setq drgnx-explorer--selection nil)
       (dolist (d (delete-dups (mapcar #'drgnx-explorer--parent paths))) (drgnx-explorer--show-folder d)))))
 

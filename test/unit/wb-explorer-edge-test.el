@@ -184,4 +184,17 @@
     (should (file-exists-p (expand-file-name "tests/docs/guide.md" root)))
     (should-not (file-exists-p (expand-file-name "tests/guide.md" root)))))
 
+;;;; M3b-5: a link to a folder
+
+(ert-deftest drgnx-explorer-edge/deleting-a-link-to-a-folder-keeps-the-folder ()
+  (dolist (permanently '(t nil))
+    (drgnx-explorer-edge--with root
+      (make-symbolic-link (expand-file-name "src" root) (expand-file-name "link" root))
+      (drgnx-explorer-refresh)
+      (drgnx-explorer-edge--answering '(t)
+        (with-current-buffer (drgnx-explorer-edge--at "link")
+          (drgnx-explorer-delete permanently)))
+      (should-not (file-symlink-p (expand-file-name "link" root)))
+      (should (file-exists-p (expand-file-name "src/app/main.py" root))))))
+
 ;;; wb-explorer-edge-test.el ends here
