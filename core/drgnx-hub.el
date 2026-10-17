@@ -148,7 +148,8 @@ answer a ping.  A lock whose process is gone is taken over.  Signals when anothe
        (list :id (drgnx-agent-session-id s) :name (drgnx-agent-session-name s))))
     ("agents/list" (list :sessions (vconcat (mapcar #'drgnx-hub--snapshot-lisp (drgnx-agents-sessions)))))
     ("agents/get" (let ((s (drgnx-hub--session params)))
-                    (list :lisp (drgnx-hub--snapshot-lisp s) :entries (drgnx-hub--lisp (drgnx-agent-session-entries s)))))
+                    (list :lisp (drgnx-hub--snapshot-lisp s) :entries (drgnx-hub--lisp (drgnx-agent-session-entries s))
+                          :seq (gethash (drgnx-agent-session-id s) drgnx-hub--seq 0))))
     ("agents/send" (drgnx-agents-send (drgnx-hub--session params) (plist-get params :text)) t)
     ("agents/stop" (drgnx-agents-stop (drgnx-hub--session params)) t)
     ("agents/kill" (drgnx-agents-kill (drgnx-hub--session params)) t)
@@ -159,6 +160,20 @@ answer a ping.  A lock whose process is gone is taken over.  Signals when anothe
                                 (drgnx-agent-session-permissions s))
                       (error "No such permission request"))))
        (drgnx-agents-answer-permission s item (plist-get params :option))
+       t))
+    ;; the user's other actions on a session, from the editor that mirrors it
+    ("agents/do"
+     (let ((s (drgnx-hub--session params)) (n (plist-get params :n)))
+       (pcase (plist-get params :op)
+         ("deliver-queue" (drgnx-agents-deliver-queue s))
+         ("unqueue" (drgnx-agents-unqueue s n))
+         ("requeue" (drgnx-agents-requeue s n (plist-get params :text)))
+         ("review" (drgnx-agents-finish-review
+                    s (or (seq-find (lambda (r) (equal (format "%s" (plist-get r :id)) (format "%s" (plist-get params :item))))
+                                    (drgnx-agent-session-reviews s))
+                          (error "No such review"))
+                    (plist-get params :reject)))
+         (op (error "No action %s" op)))
        t))
     (_ (list :error (format "no method %s" method)))))
 
@@ -192,6 +207,8 @@ KEY…)), keys held in memory.  (:token :url)."
         :permissions (mapcar (lambda (p) (list :id (plist-get p :id) :title (plist-get p :title) :tool (plist-get p :tool)
                                                :options (plist-get p :options)))
                              (drgnx-agent-session-permissions s))
+        :reviews (mapcar (lambda (r) (list :id (plist-get r :id) :path (plist-get r :path) :content (plist-get r :content)))
+                         (drgnx-agent-session-reviews s))
         :usage (drgnx-agent-session-usage s) :commands (drgnx-agent-session-commands s)
         :capabilities (drgnx-agent-session-capabilities s) :exit (drgnx-agent-session-exit s)
         :stderr (let ((e (drgnx-agent-session-stderr s))) (and e (substring e (max 0 (- (length e) 2000)))))
@@ -201,6 +218,9 @@ KEY…)), keys held in memory.  (:token :url)."
 
 (defvar drgnx-hub--sent (make-hash-table :test #'equal) "Session id → the entries last sent to subscribers (copies).")
 (defvar drgnx-hub--flush-timers (make-hash-table :test #'equal))
+(defvar drgnx-hub--seq (make-hash-table :test #'equal)
+  "Session id → how many times its changes went out: events carry it, `agents/get' answers it, so an editor that
+fetched a transcript keeps only the events after it.")
 
 (defun drgnx-hub--agent-changed (s)
   "Session S changed: tell subscribers soon (one message per burst of changes)."
@@ -217,8 +237,9 @@ KEY…)), keys held in memory.  (:token :url)."
         (push (vector i (drgnx-hub--lisp e)) changed))
       (setq i (1+ i)))
     (puthash id (vconcat (mapcar #'copy-tree (drgnx-agent-session-entries s))) drgnx-hub--sent)
-    (drgnx-hub--broadcast 'agent (list :id id :lisp (drgnx-hub--snapshot-lisp s)))
-    (when changed (drgnx-hub--broadcast 'agent-entries (list :id id :entries (vconcat (nreverse changed)))))))
+    (let ((seq (puthash id (1+ (gethash id drgnx-hub--seq 0)) drgnx-hub--seq)))
+      (drgnx-hub--broadcast 'agent (list :id id :seq seq :lisp (drgnx-hub--snapshot-lisp s)))
+      (when changed (drgnx-hub--broadcast 'agent-entries (list :id id :seq seq :entries (vconcat (nreverse changed))))))))
 
 (defun drgnx-hub--serve-request (conn json)
   (let ((id (plist-get json :id)) (method (plist-get json :method)))

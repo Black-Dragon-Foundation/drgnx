@@ -158,15 +158,23 @@ agents.eld (config dir) and the built-in ones; never holds secrets (keys come fr
      :deferred)
     (_ (list :error (list :code -32601 :message (format "%s is not supported" method))))))
 
-(defun drgnx-agents-answer-permission (s item option-id)
+(cl-defun drgnx-agents-answer-permission (s item option-id)
   "Answer the pending permission ITEM of session S with OPTION-ID (nil: cancelled)."
+  (when (drgnx-agent-session-remote s)
+    (setf (drgnx-agent-session-permissions s) (delq item (drgnx-agent-session-permissions s)))
+    (drgnx-agents--remote s "agents/permission" (list :request (plist-get item :id) :option option-id))
+    (cl-return-from drgnx-agents-answer-permission))
   (setf (drgnx-agent-session-permissions s) (delq item (drgnx-agent-session-permissions s)))
   (drgnx-acp-respond (drgnx-agent-session-conn s) (plist-get item :id)
                      (list :outcome (if option-id (list :outcome "selected" :optionId option-id) (list :outcome "cancelled"))))
   (drgnx-agents--changed s))
 
-(defun drgnx-agents-finish-review (s item &optional reject)
+(cl-defun drgnx-agents-finish-review (s item &optional reject)
   "Answer the agent's write request ITEM: done (the user applied what they accepted) or REJECT."
+  (when (drgnx-agent-session-remote s)
+    (setf (drgnx-agent-session-reviews s) (delq item (drgnx-agent-session-reviews s)))
+    (drgnx-agents--remote s "agents/do" (list :op "review" :item (plist-get item :id) :reject (and reject t)))
+    (cl-return-from drgnx-agents-finish-review))
   (setf (drgnx-agent-session-reviews s) (delq item (drgnx-agent-session-reviews s)))
   (if reject
       (drgnx-acp-respond (drgnx-agent-session-conn s) (plist-get item :id) nil '(:code -32003 :message "the user rejected the change"))
@@ -275,6 +283,14 @@ can carry it, else the provider's (keys resolved now, never kept) — and DRGNX_
                                          :task (drgnx-agent-session-task s)))))
 
 (defun drgnx-agents-get (id) (seq-find (lambda (s) (equal (drgnx-agent-session-id s) id)) drgnx-agents--sessions))
+
+(declare-function drgnx-hub-call "drgnx-hub")
+
+(defun drgnx-agents--remote (s method params)
+  "Ask the hub to do METHOD (with PARAMS) on mirror S's session; asynchronous, never waits."
+  (require 'drgnx-hub)
+  (drgnx-hub-call method (append (list :id (drgnx-agent-session-remote s)) params)
+                  (lambda (_r err) (when err (message "drgnx agent %s: %s" (drgnx-agent-session-name s) err)))))
 
 (defun drgnx-agents--new (profile cwd &optional task job)
   (let* ((base (format "%s · %s" profile (file-name-nondirectory (directory-file-name (expand-file-name cwd)))))
@@ -387,10 +403,12 @@ turn Stop's deadline ended lets the held messages go."
 
 (defun drgnx-agents--enqueue (s text) (setf (drgnx-agent-session-queue s) (append (drgnx-agent-session-queue s) (list text))))
 
-(defun drgnx-agents-send (s text)
+(cl-defun drgnx-agents-send (s text)
   "Send TEXT to session S: now when ready; when busy, queued (default), steering the turn (mode
 `steer', when the agent can; queued if it refuses), or — only in mode `interrupt' — after cancelling
 the turn."
+  (when (drgnx-agent-session-remote s)
+    (drgnx-agents--remote s "agents/send" (list :text text)) (cl-return-from drgnx-agents-send))
   (pcase (drgnx-agent-session-status s)
     ((guard (drgnx-agents--ready-p s))
      (if (drgnx-agent-session-queue s)
@@ -416,26 +434,34 @@ the turn."
     (_ (drgnx-agents--enqueue s text)))
   (drgnx-agents--changed s))
 
-(defun drgnx-agents-deliver-queue (s)
+(cl-defun drgnx-agents-deliver-queue (s)
   "Send the queued messages a Stop held back."
+  (when (drgnx-agent-session-remote s)
+    (drgnx-agents--remote s "agents/do" (list :op "deliver-queue")) (cl-return-from drgnx-agents-deliver-queue))
   (setf (drgnx-agent-session-paused s) nil)
   (drgnx-agents--next s))
 
-(defun drgnx-agents-unqueue (s n)
+(cl-defun drgnx-agents-unqueue (s n)
   "Remove the Nth queued message of S (before it is sent)."
+  (when (drgnx-agent-session-remote s)
+    (drgnx-agents--remote s "agents/do" (list :op "unqueue" :n n)) (cl-return-from drgnx-agents-unqueue))
   (setf (drgnx-agent-session-queue s) (append (seq-take (drgnx-agent-session-queue s) n) (nthcdr (1+ n) (drgnx-agent-session-queue s))))
   (drgnx-agents--changed s))
 
-(defun drgnx-agents-requeue (s n text)
+(cl-defun drgnx-agents-requeue (s n text)
   "Replace the Nth queued message of S with TEXT (empty: remove it)."
+  (when (drgnx-agent-session-remote s)
+    (drgnx-agents--remote s "agents/do" (list :op "requeue" :n n :text text)) (cl-return-from drgnx-agents-requeue))
   (if (string-empty-p (string-trim text)) (drgnx-agents-unqueue s n)
     (setf (nth n (drgnx-agent-session-queue s)) text)
     (drgnx-agents--changed s)))
 
-(defun drgnx-agents-stop (s &optional why)
+(cl-defun drgnx-agents-stop (s &optional why)
   "Cancel S's running turn: it ends within a second; pending permission requests are answered
 cancelled and pending edits rejected; queued messages wait (`drgnx-agents-deliver-queue') unless WHY
 is `interrupt'."
+  (when (drgnx-agent-session-remote s)
+    (drgnx-agents--remote s "agents/stop" nil) (cl-return-from drgnx-agents-stop))
   (when (eq (drgnx-agent-session-status s) 'busy)
     (dolist (p (drgnx-agent-session-permissions s)) (drgnx-agents-answer-permission s p nil))
     (dolist (r (drgnx-agent-session-reviews s))
@@ -456,8 +482,10 @@ is `interrupt'."
                                                (setf (drgnx-agent-session-draining s) nil)
                                                (drgnx-agents--next s))))))))))
 
-(defun drgnx-agents-kill (s)
+(cl-defun drgnx-agents-kill (s)
   "End session S's agent process."
+  (when (drgnx-agent-session-remote s)
+    (drgnx-agents--remote s "agents/kill" nil) (cl-return-from drgnx-agents-kill))
   (when-let* ((c (drgnx-agent-session-conn s))) (drgnx-acp-stop c))
   (drgnx-agents--release-gateway s)
   (setf (drgnx-agent-session-status s) 'exited)

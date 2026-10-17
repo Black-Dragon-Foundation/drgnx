@@ -14,6 +14,7 @@
         (wb-unrouted :none "in the palette")
         (agents-view :none "in the palette")
         (agents-new :none "the Agents tab and transcripts; the palette")
+        (agents-new-durable :none "the palette")
         (agents-send :none "the Agents tab and transcripts; the palette")
         (agents-stop "C-c C-c" :map drgnx-agents-transcript-mode-map)
         (agents-deliver "C-c C-d" :map drgnx-agents-transcript-mode-map)

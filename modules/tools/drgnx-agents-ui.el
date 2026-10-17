@@ -213,6 +213,28 @@
 (defun drgnx-agents-ui--cwd ()
   (or (when-let* ((p (and (fboundp 'project-current) (project-current)))) (project-root p)) default-directory))
 
+(declare-function drgnx-agents-mirror-sync "drgnx-agents-mirror")
+(declare-function drgnx-hub-socket "drgnx-hub")
+(declare-function drgnx-hub-ensure "drgnx-hub")
+(declare-function drgnx-hub-call-sync "drgnx-hub")
+
+(defun drgnx-agents-ui--maybe-mirror ()
+  "At idle: mirror the hub's agent sessions when a hub runs.  Never waits and never starts one: only a socket that
+exists is connected to (asynchronously)."
+  (require 'drgnx-hub)
+  (when (file-exists-p (drgnx-hub-socket))
+    (require 'drgnx-agents-mirror)
+    (with-demoted-errors "drgnx: the agent hub does not answer: %S" (drgnx-agents-mirror-sync))))
+
+(defun drgnx-agents-ui-new-durable (profile)
+  "Start an agent session of PROFILE in this project, held by the hub: it keeps working when Emacs closes."
+  (interactive (list (completing-read "Durable agent profile: " (drgnx-agents-profile-names) nil t)))
+  (require 'drgnx-agents-mirror)
+  (drgnx-hub-ensure)
+  (drgnx-agents-mirror-sync)
+  (let ((r (drgnx-hub-call-sync "agents/start" (list :profile profile :cwd (drgnx-agents-ui--cwd)))))
+    (message "Agent %s started in the hub (it keeps working when Emacs closes)" (plist-get r :name))))
+
 (defun drgnx-agents-ui-new (profile)
   "Start an agent session of PROFILE in this project."
   (interactive (list (completing-read "Agent profile: " (drgnx-agents-profile-names) nil t)))
@@ -349,6 +371,8 @@ the copy), then Done writes the copy to the file (Reject, or closing the diff, w
                      :setup
                      (lambda ()
                        (add-hook 'drgnx-agents-changed-functions #'drgnx-agents-ui--changed)
+                       ;; the hub's sessions (they outlive this Emacs), once Emacs is idle
+                       (run-with-idle-timer 3 nil #'drgnx-agents-ui--maybe-mirror)
                        (when (fboundp 'drgnx-wb-define-tab) (drgnx-wb-define-tab 'right 'agents :title "Agents"))
                        (when (fboundp 'drgnx-wb-place)
                          (drgnx-wb-place 'drgnx-agents-list-mode 'right :tab 'agents)
@@ -357,6 +381,8 @@ the copy), then Done writes the copy to the file (Reject, or closing the diff, w
                        (pcase-dolist (`(,id ,title ,fn ,doc)
                                       '((agents-view "Show Agents" drgnx-agents-ui-view "Agent sessions and durable jobs, in the right dock")
                                         (agents-new "New Agent Session…" drgnx-agents-ui-new "Start an agent (a profile) in this project")
+                                        (agents-new-durable "New Durable Agent Session…" drgnx-agents-ui-new-durable
+                                                            "An agent held by the hub: it keeps working when Emacs closes")
                                         (agents-send "Send to Agent…" drgnx-agents-ui-send "Queued while the agent works; never cancels")
                                         (agents-stop "Stop Agent" drgnx-agents-ui-stop "Cancel the running turn (the only thing that does)")
                                         (agents-deliver "Deliver Queued Messages" drgnx-agents-ui-deliver "Send what a Stop held back")

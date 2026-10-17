@@ -79,8 +79,30 @@
 (ert-deftest drgnx-agents-ui/every-command-is-registered ()
   (let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil))
     (funcall (plist-get (alist-get 'tools/agents drgnx-modules--table) :setup))
-    (dolist (id '(agents-view agents-new agents-send agents-stop agents-deliver agents-take-over agents-answer jobs-log jobs-stop agents-open agents-reply agents-review-done agents-review-reject))
+    (dolist (id '(agents-view agents-new agents-send agents-stop agents-deliver agents-take-over agents-answer jobs-log jobs-stop agents-open agents-reply agents-review-done agents-review-reject
+                              agents-new-durable))
       (should (drgnx-commands-get id)))))
+
+(ert-deftest drgnx-agents-ui/hub-sessions-are-mirrored-only-when-a-hub-runs ()
+  ;; at idle: never a wait (no ping), never a hub started — only a socket that is there is connected to
+  (require 'drgnx-agents-mirror)
+  (let* ((root (make-temp-file "drgnx-ui-mirror" t))
+         (process-environment (append (list (concat "DRGNX_DATA_DIR=" root "/data") (concat "XDG_STATE_HOME=" root "/state")
+                                            "XDG_RUNTIME_DIR")
+                                      process-environment))
+         (synced 0) (started 0))
+    (unwind-protect
+        (cl-letf (((symbol-function 'drgnx-agents-mirror-sync) (lambda () (cl-incf synced)))
+                  ((symbol-function 'drgnx-hub-ensure) (lambda () (cl-incf started)))
+                  ((symbol-function 'drgnx-hub-running-p) (lambda () (error "no ping at idle"))))
+          (drgnx-agents-ui--maybe-mirror)
+          (should (= synced 0))
+          (make-directory (file-name-directory (drgnx-hub-socket)) t)
+          (write-region "" nil (drgnx-hub-socket) nil 'silent)
+          (drgnx-agents-ui--maybe-mirror)
+          (should (= synced 1))
+          (should (= started 0)))
+      (delete-directory root t))))
 
 ;;;; Review fixes (M7 final review)
 
