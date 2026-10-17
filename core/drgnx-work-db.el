@@ -16,7 +16,22 @@
 (require 'drgnx-paths)
 (require 'sqlite)                   ; with-sqlite-transaction
 
-(defconst drgnx-work-db-schema-version 1)
+(defconst drgnx-work-db--steps
+  '((1 "create table if not exists node (id text primary key, kind text, title text, path text, line integer,
+        status text, parent text, ord integer, source text, data text, updated real)"
+       "create index if not exists node_parent on node(parent)"
+       "create index if not exists node_source on node(source)"
+       "create table if not exists edge (src text, dst text, kind text, origin text, source text,
+        primary key (src, dst, kind))"
+       "create index if not exists edge_dst on edge(dst, kind)"
+       "create table if not exists file (path text primary key, mtime real)")
+    ;; M9b: what the gateway carried, one row per request
+    (2 "create table if not exists spend (at real, job text, task text, agent text, provider text, model text,
+        input integer, output integer, cost real, status integer)"
+       "create index if not exists spend_job on spend(job)"))
+  "Migrations: (VERSION SQL…), applied in order to a database below VERSION.")
+
+(defconst drgnx-work-db-schema-version (car (car (last drgnx-work-db--steps))))
 
 (defvar drgnx-work-db--handles nil "Alist file → open database.")
 
@@ -29,16 +44,13 @@
   (condition-case err
       (progn
         (sqlite-execute db "create table if not exists meta (key text primary key, value text)")
-        (unless (caar (sqlite-select db "select value from meta where key = 'schema'"))
-          (sqlite-execute db "create table if not exists node (id text primary key, kind text, title text, path text, line integer,
-                            status text, parent text, ord integer, source text, data text, updated real)")
-          (sqlite-execute db "create index if not exists node_parent on node(parent)")
-          (sqlite-execute db "create index if not exists node_source on node(source)")
-          (sqlite-execute db "create table if not exists edge (src text, dst text, kind text, origin text, source text,
-                            primary key (src, dst, kind))")
-          (sqlite-execute db "create index if not exists edge_dst on edge(dst, kind)")
-          (sqlite-execute db "create table if not exists file (path text primary key, mtime real)")
-          (sqlite-execute db "insert into meta values ('schema', ?)" (list (number-to-string drgnx-work-db-schema-version))))
+        (let ((have (string-to-number (or (caar (sqlite-select db "select value from meta where key = 'schema'")) "0"))))
+          (when (> have drgnx-work-db-schema-version)
+            (user-error "work.db is schema %d, newer than this drgnx (%d): update drgnx" have drgnx-work-db-schema-version))
+          (pcase-dolist (`(,version . ,sqls) drgnx-work-db--steps)
+            (when (> version have) (dolist (sql sqls) (sqlite-execute db sql))))
+          (sqlite-execute db "insert or replace into meta values ('schema', ?)"
+                          (list (number-to-string drgnx-work-db-schema-version))))
         (sqlite-execute db "commit"))
     (error (ignore-errors (sqlite-execute db "rollback"))
            (signal (car err) (cdr err)))))
@@ -152,6 +164,23 @@ and the commits that implement it (newest first)."
 (defun drgnx-work-set-file (path mtime) (sqlite-execute (drgnx-work-db) "insert or replace into file values (?, ?)" (list path mtime)))
 (defun drgnx-work-files () (mapcar #'car (sqlite-select (drgnx-work-db) "select path from file")))
 (defun drgnx-work-drop-file (path) (sqlite-execute (drgnx-work-db) "delete from file where path = ?" (list path)))
+
+;;;; Spend (the gateway's requests)
+
+(cl-defun drgnx-work-db-add-spend (&key job task agent provider model (input 0) (output 0) (cost 0.0) status)
+  "Record one request the gateway carried."
+  (sqlite-execute (drgnx-work-db)
+                  "insert into spend values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                  (list (float-time) job task agent provider model input output (float cost) status)))
+
+(cl-defun drgnx-work-db-spend (&key job task agent)
+  "What the requests of JOB, TASK and/or AGENT came to: (:input N :output N :cost USD :requests N)."
+  (let* ((where (delq nil (list (and job "job = ?") (and task "task = ?") (and agent "agent = ?"))))
+         (row (car (sqlite-select (drgnx-work-db)
+                                  (concat "select coalesce(sum(input), 0), coalesce(sum(output), 0), coalesce(sum(cost), 0.0), count(*)
+                                           from spend" (if where (concat " where " (string-join where " and ")) ""))
+                                  (delq nil (list job task agent))))))
+    (list :input (nth 0 row) :output (nth 1 row) :cost (float (nth 2 row)) :requests (nth 3 row))))
 
 (provide 'drgnx-work-db)
 ;;; drgnx-work-db.el ends here

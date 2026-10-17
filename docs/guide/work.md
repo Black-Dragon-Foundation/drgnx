@@ -107,7 +107,9 @@ tasks steps todos commits`, counts as `[done, all]`).
 
 One SQLite database, `work.db` in drgnx's data directory (Emacs's built-in SQLite; WAL, a 5 s busy timeout so
 several Emacs can share it). Every node and edge carries the source it came from — a file, `recorded`, `branch` —
-so reading a file again replaces exactly what that file gave.
+so reading a file again replaces exactly what that file gave. The database migrates itself step by step when drgnx
+updates it (a `work.db` from a newer drgnx is left alone, with an error saying so); since schema 2 it also keeps what
+the agent gateway carried, one row per request (`spend`: job, task, agent, provider, model, tokens, cost).
 
 ## Tests
 
