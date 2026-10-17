@@ -3,7 +3,7 @@
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 
 ;;; Commentary:
-;; Invariant I9 (docs/roadmap.md): nothing moves, selects, splits or deletes windows from
+;; Invariant I9 (docs/workbench.md): nothing moves, selects, splits or deletes windows from
 ;; a timer.  The guard observes and records; it never blocks.  It knows it is in timer
 ;; context by wrapping `timer-event-handler'; commands run by a command loop nested
 ;; inside a timer (a minibuffer or a test's recursive edit) are not timer code, so

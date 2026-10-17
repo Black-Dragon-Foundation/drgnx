@@ -35,7 +35,7 @@ The last results of each configuration are kept in `$XDG_STATE_HOME/drgnx/ui/sce
 
 `frame-from-daemon-fast` runs in the controller after the in-session suite (because it starts a daemon
 session itself) when the suite has a `frames.eld` budget: it opens three frames with `emacsclient -c` and
-compares the median time-to-visible with the budget (500 ms, from the roadmap). On gryphn it is **green**
+compares the median time-to-visible with the budget (500 ms). On gryphn it is **green**
 (median ~400–430 ms over runs; the first frame of a daemon takes 500–870 ms).
 
 The reported 2.1 s for a new frame does **not** reproduce in an isolated session. The gryphn configuration alone is

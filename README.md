@@ -6,7 +6,7 @@ on top of everything that makes Emacs worth it: org, deep programmability, a per
 whole Emacs package ecosystem. Light on memory: the target is a daemon under 400 MB with all modules on.
 
 > **Status: pre-release.** drgnx is being built in the open. You can install it to follow along, but there is no
-> support, and contributions are not being accepted yet. Watch the repo or read the roadmap.
+> support, and contributions are not being accepted yet. Watch the repo for updates.
 
 ## What makes it different
 
@@ -43,7 +43,6 @@ manual install and uninstall: [docs/install.md](docs/install.md). Check a machin
 ## Documentation
 
 - [Install](docs/install.md)
-- [Roadmap and design](docs/roadmap.md)
 - [Architecture](docs/architecture.md)
 
 ## License

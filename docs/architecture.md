@@ -20,5 +20,3 @@ The core as it exists today is described in [core.md](core.md).
 
 Layers, lowest to highest: Emacs built-ins → core → workbench → modules → external modules → user config
 (`~/.config/drgnx`, never inside the checkout).
-
-Details: [roadmap.md](roadmap.md).

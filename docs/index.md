@@ -1,7 +1,5 @@
 # drgnx documentation
 
-- [Design and roadmap](roadmap.md): architecture, workbench window manager, harness, AI, search,
-  onboarding, milestones with exit criteria.
 - [Architecture overview](architecture.md)
 - [Install](install.md): install.sh, per-platform guide, source build, `drgnx doctor`, uninstall.
 - [Workbench](workbench.md): the sidebar — Explorer and Buffers panel — the change bus, performance vs treemacs/ibuffer.

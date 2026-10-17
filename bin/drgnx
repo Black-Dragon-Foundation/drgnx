@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# drgnx — command-line entry point (pre-release; see docs/roadmap.md).
+# drgnx — command-line entry point (pre-release).
 set -euo pipefail
 here="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
 
