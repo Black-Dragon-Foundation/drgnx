@@ -634,4 +634,27 @@
   (let ((invocation-directory "/usr/bin/") (invocation-name "emacs") (drgnx-dir "/src/drgnx/"))
     (should (string-match-p "\nExecStart=/usr/bin/emacs --fg-daemon=drgnx --init-directory=/src/drgnx/init\n" (drgnx-pkg-service-unit)))))
 
+(ert-deftest drgnx-pkg/no-temp-files-are-left-behind ()
+  ;; M5-14: a write or a download that stops half way (an error, C-g) leaves no temp file; one left by a
+  ;; killed run is removed by the next sync.
+  (drgnx-pkg-test--with root
+    (let ((user (drgnx-user-dir)) (cache (drgnx-package-cache-dir)))
+      (cl-letf (((symbol-function 'pp) (lambda (&rest _) (error "Disk full"))))
+        (should-error (drgnx-pkg-write-lock '((aa :version "1.0")))))
+      (should-not (file-exists-p (drgnx-pkg-lock-file)))
+      (should-not (directory-files user nil "tmp"))
+      (let ((arch (drgnx-pkg-test--archive (concat root "arch") '((fa "1.0")))))
+        (let ((package-archives `(("fx" . ,arch)))
+              (desc (package-desc-create :name 'fa :version '(1 0) :kind 'single :archive "fx")))
+          (cl-letf (((symbol-function 'copy-file) (lambda (_from to &rest _) (write-region "half" nil to) (signal 'quit nil))))
+            (should (eq (condition-case nil (drgnx-pkg--fetch desc nil) (quit 'quit)) 'quit))))
+        (should-not (directory-files cache nil "\\.part\\'"))
+        (write-region "half" nil (expand-file-name "fz-1.0.el.part" cache) nil 'silent)
+        (write-region "half" nil (expand-file-name ".drgnx.lock.eld.tmp-x1Y2z3" user) nil 'silent)
+        (write-region "keep" nil (expand-file-name ".tmp-not-drgnx" user) nil 'silent)
+        (drgnx-pkg-test--want root 'fa)
+        (should (plist-get (drgnx-pkg-test--sync root :archives `(("fx" . ,arch))) :ok))
+        (should-not (directory-files cache nil "\\.part\\'"))
+        (should (equal (directory-files user nil "tmp") '(".tmp-not-drgnx")))))))
+
 ;;; pkg-test.el ends here

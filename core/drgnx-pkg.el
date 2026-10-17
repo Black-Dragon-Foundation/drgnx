@@ -45,13 +45,16 @@
       (error (drgnx-pkg--error "%s is unreadable (%s); fix or remove it" file (error-message-string err))))))
 
 (defun drgnx-pkg--write-file (file header data)
-  "Write DATA to FILE (atomically: a temp file renamed over it), after the comment HEADER."
+  "Write DATA to FILE (atomically: a temp file .FILE.tmp-* renamed over it), after the comment HEADER.
+A write that stops half way leaves no temp file."
   (make-directory (file-name-directory file) t)
-  (let ((tmp (make-temp-file (expand-file-name ".tmp-" (file-name-directory file)))))
-    (with-temp-file tmp
-      (insert ";; " header "\n")
-      (let ((print-length nil) (print-level nil)) (pp data (current-buffer))))
-    (rename-file tmp file t)))
+  (let ((tmp (make-temp-file (expand-file-name (concat "." (file-name-nondirectory file) ".tmp-") (file-name-directory file)))))
+    (unwind-protect
+        (progn (with-temp-file tmp
+                 (insert ";; " header "\n")
+                 (let ((print-length nil) (print-level nil)) (pp data (current-buffer))))
+               (rename-file tmp file t))
+      (ignore-errors (delete-file tmp)))))
 
 (defun drgnx-pkg--bytes (file)
   (with-temp-buffer (set-buffer-multibyte nil) (insert-file-contents-literally file) (buffer-string)))
@@ -187,6 +190,15 @@ process took the lock meanwhile: it is put back and this is a `drgnx-pkg-error'.
   (when (and (not (file-exists-p (drgnx-elpa-dir))) (file-directory-p (drgnx-pkg--old)))
     (rename-file (drgnx-pkg--old) (directory-file-name (drgnx-elpa-dir)))))
 
+(defun drgnx-pkg--sweep ()
+  "Delete what a killed run left: half downloads (cache/*.part), the lock's temp files and stale locks
+set aside.  Called holding the sync lock: no other run is writing them."
+  (pcase-dolist (`(,dir . ,re) `((,(drgnx-package-cache-dir) . "\\.part\\'")
+                                 (,(drgnx-user-dir) . "\\`\\.drgnx\\.lock\\.eld\\.tmp-")
+                                 (,(drgnx-data-dir) . "\\`sync\\.lock\\.stale-")))
+    (dolist (f (and (file-directory-p dir) (directory-files dir t re)))
+      (ignore-errors (delete-file f)))))
+
 (defun drgnx-pkg--swap-in (dir)
   "Make DIR the packages directory: two renames.  A running session keeps the files it loaded; it
 should be restarted to use the new ones (the CLI says so)."
@@ -302,18 +314,19 @@ archive signs) before it enters the cache; the cached path.  Any failure is a `d
   (let* ((file (drgnx-pkg--file desc)) (base (package-archive-base desc))
          (cache (drgnx-pkg--cached desc)) (tmp (concat cache ".part")))
     (make-directory (drgnx-package-cache-dir) t)
-    (condition-case err
-        (progn
-          (if (file-name-absolute-p base) (copy-file (expand-file-name file base) tmp t)
-            (drgnx-pkg--http-get (concat base file) tmp))
-          (when (and want (not (equal (drgnx-pkg--sha256 tmp) want)))
-            (error "its sha256 is %s, the lock says %s" (drgnx-pkg--sha256 tmp) want))
-          (when (and (package-check-signature) (not (member (package-desc-archive desc) package-unsigned-archives)))
-            (package--check-signature base file (drgnx-pkg--bytes tmp)))
-          (rename-file tmp cache t)
-          cache)
-      (error (ignore-errors (delete-file tmp))
-             (drgnx-pkg--error "%s: download failed (%s) — nothing was changed" file (error-message-string err))))))
+    (unwind-protect                                     ; whatever stops it (an error, C-g): no .part left
+        (condition-case err
+            (progn
+              (if (file-name-absolute-p base) (copy-file (expand-file-name file base) tmp t)
+                (drgnx-pkg--http-get (concat base file) tmp))
+              (when (and want (not (equal (drgnx-pkg--sha256 tmp) want)))
+                (error "its sha256 is %s, the lock says %s" (drgnx-pkg--sha256 tmp) want))
+              (when (and (package-check-signature) (not (member (package-desc-archive desc) package-unsigned-archives)))
+                (package--check-signature base file (drgnx-pkg--bytes tmp)))
+              (rename-file tmp cache t)
+              cache)
+          (error (drgnx-pkg--error "%s: download failed (%s) — nothing was changed" file (error-message-string err))))
+      (ignore-errors (delete-file tmp)))))
 
 (defvar drgnx-pkg--warnings nil
   "What a sync reports without failing (files that did not compile): strings, newest first.")
@@ -519,6 +532,7 @@ changes nothing; packages that cannot be had are reported (the rest is installed
          (missing (list nil)) (drgnx-pkg--warnings nil) installed new-entries generation)
     (drgnx-pkg--with-sync-lock
       (drgnx-pkg--recover)
+      (drgnx-pkg--sweep)
       (unwind-protect
           (let ((package-user-dir staging) (package-directory-list nil)
                 (package-archives (cond (offline nil) (archives-given archives) (t (drgnx-pkg-archives))))
