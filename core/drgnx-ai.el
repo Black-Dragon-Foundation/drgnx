@@ -49,6 +49,27 @@ it; :auth x-api-key — its key goes in that header (else `Authorization: Bearer
     (agent (openrouter)))                                ; the gateway's chain for agents; nil model: the agent's own
   "Each role's chain when neither the project nor the user names one.")
 
+(defconst drgnx-ai-lmstudio-models
+  '(("qwen2.5-coder:1.5b" "qwen2.5-coder-1.5b-instruct" "https://huggingface.co/lmstudio-community/Qwen2.5-Coder-1.5B-Instruct-GGUF")
+    ("qwen2.5-coder:3b" "qwen2.5-coder-3b-instruct" "https://huggingface.co/lmstudio-community/Qwen2.5-Coder-3B-Instruct-GGUF")
+    ("qwen2.5-coder:7b" "qwen2.5-coder-7b-instruct" "https://huggingface.co/lmstudio-community/Qwen2.5-Coder-7B-Instruct-GGUF")
+    ("nomic-embed-text" "text-embedding-nomic-embed-text-v1.5" "https://huggingface.co/nomic-ai/nomic-embed-text-v1.5-GGUF"))
+  "Ollama's model → (the name LM Studio serves it by, the name `lms get' downloads it by): the same GGUF models.")
+
+(declare-function drgnx-ai-model-vram "drgnx-ai-probe")
+
+(defun drgnx-ai-default-models (room &optional provider)
+  "The models onboarding sets up for ROOM MiB of (GPU or unified) memory: ((complete . MODEL) (edit . MODEL)
+\(chat . MODEL)).  Completion is always the 1.5B coder (it answers on every pause); edit and chat get the 7B next to
+it when both fit, else the 3B, else the 1.5B too.  ROOM nil: as little as can be.  Ollama's names; PROVIDER
+`lmstudio': LM Studio's (`drgnx-ai-lmstudio-models')."
+  (require 'drgnx-ai-probe)
+  (let* ((small "qwen2.5-coder:1.5b") (room (or room 0))
+         (big (seq-find (lambda (m) (>= room (+ (drgnx-ai-model-vram small) (drgnx-ai-model-vram m))))
+                        '("qwen2.5-coder:7b" "qwen2.5-coder:3b") small))
+         (name (lambda (m) (if (eq provider 'lmstudio) (nth 1 (assoc m drgnx-ai-lmstudio-models)) m))))
+    (list (cons 'complete (funcall name small)) (cons 'edit (funcall name big)) (cons 'chat (funcall name big)))))
+
 (defvar drgnx-ai--keys (make-hash-table :test #'eq) "Keys found this session: provider → key (kept in memory only).")
 
 ;;;; Configuration

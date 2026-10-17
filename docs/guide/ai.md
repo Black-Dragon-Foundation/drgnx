@@ -53,6 +53,12 @@ A provider in your `ai.eld` may carry `:price (IN . OUT)` — US dollars per mil
 agent gateway can count what agents spend when the provider does not report a cost; `:messages t` says it serves
 Anthropic's Messages API, so the gateway can carry agents to it (OpenRouter, Ollama and Anthropic do).
 
+With nothing set up, onboarding's AI step sets up Ollama, LM Studio or OpenRouter for you and fills these roles with
+models sized to the machine ([onboarding.md](onboarding.md#setting-ai-up)): `drgnx-ai-default-models` gives Inline
+Completion `qwen2.5-coder:1.5b` and Edit and Chat `qwen2.5-coder:7b` when both fit in the room models get (the GPU's
+free memory; on a Mac two thirds of the RAM, which Apple silicon shares with the GPU — `drgnx-ai-vram`), else `:3b`,
+else the 1.5B too; LM Studio serves the same GGUF models as `qwen2.5-coder-…-instruct` (`drgnx-ai-lmstudio-models`).
+
 The `embed` role works like the others: its chain is tried in order and the next provider answers when one is down, has
 no key, or sends something that is not a vector per text. TEI needs no model (`(tei)`); for Ollama, llama.cpp and the
 OpenAI-compatible runners the chain names one, for example `(ollama . "nomic-embed-text")`. Providers that can embed
@@ -110,7 +116,8 @@ hits of the index, and a project without an index gets the word search only). Th
 
 The answer opens in `*AI answer*` with the files it drew on as links. Other ways to find code join through
 `drgnx-ai-retrievers` (each a function of the question, the project root and a callback); the semantic search adds
-its own when the search module is on.
+its own when the search module is on. `drgnx-ai-ask-request` is the same search and question without the buffer —
+onboarding tests Ask the Codebase with it over a small temporary project.
 
 ## Choosing a provider and model
 
@@ -149,7 +156,8 @@ drgnx reads a key when a feature needs it, from where you already keep it: the p
 Linux keyring) with the provider's host — e.g. `machine openrouter.ai password sk-or-…`.
 
 drgnx writes a key in exactly one place: the macOS Keychain, or the Linux keyring (Secret Service; needs
-`secret-tool`, from `libsecret-tools` or `libsecret`). Only when you ask — in onboarding or a command you run —
+`secret-tool`, from `libsecret-tools` or `libsecret`). Only when you ask — in onboarding (choose OpenRouter in the AI
+step, in the drgnx app: the key is read with `read-passwd`, never shown) or a command you run —
 never into a drgnx file, and never on a command line (it goes to the store on stdin). A Keychain that is locked
 or denies access gives an error saying so; the environment variable always works instead. drgnx never sends a key to
 a model.
@@ -178,7 +186,8 @@ the keys they need in their environment too — never in a command line or a fil
 - `test/unit/ai-test.el` (providers, roles, keys, agent environments), `test/unit/ai-client-test.el` (requests,
   fallback with every reason, cancel, probes, the doctor's check), `test/unit/ai-ghost-test.el` (ghost text, accept,
   the Tab arbiter), `test/unit/ai-edit-test.el` (the review, hunk by hunk), `test/unit/ai-ask-test.el` (Ask, Choose,
-  gptel), `test/unit/ai-onboard-test.el` (the onboarding step).
+  gptel), `test/unit/ai-onboard-test.el` (the onboarding step; setting up Ollama, LM Studio and OpenRouter with fake
+  `brew`, `ollama`, `lms`, `sysctl` and `security`; the room on a Mac and the models for it).
 - `test/live/drgnx-ai-test.el` — in a GUI session: typing, the suggestion as ghost text, Tab takes it; an inline
   edit's second hunk applied with keys, Done puts only that one in the buffer.
 - `drgnx test --perf` — the `typing-with-ghost` workload holds keystroke p95 under 16 ms with ghost text on.

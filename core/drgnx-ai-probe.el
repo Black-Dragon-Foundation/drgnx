@@ -6,7 +6,8 @@
 ;; `drgnx-ai-probe' asks every local provider's well-known address at once — curl processes, one second each —
 ;; and returns immediately; the results land in `drgnx-ai-detected' (and a cache in the state dir, for the
 ;; doctor).  Something answering on TEI's port is only taken for TEI when /info says so (LocalAI answers there
-;; too).  `drgnx-ai-probe-fim' asks whether a model fills in the middle.  `drgnx-ai-vram' reads nvidia-smi.
+;; too).  `drgnx-ai-probe-fim' asks whether a model fills in the middle.  `drgnx-ai-vram' reads nvidia-smi (macOS: two
+;; thirds of the RAM, which Apple silicon shares with the GPU).
 
 ;;; Code:
 (require 'cl-lib)
@@ -102,11 +103,17 @@ may come from a source that asks)."
     (list :total (string-to-number (match-string 1 text)) :used (string-to-number (match-string 2 text)))))
 
 (defun drgnx-ai-vram ()
-  "The first GPU's memory (MiB) when nvidia-smi is there, else nil."
-  (when (executable-find "nvidia-smi")
-    (with-temp-buffer
-      (when (eql 0 (call-process "nvidia-smi" nil t nil "--query-gpu=memory.total,memory.used" "--format=csv,noheader,nounits"))
-        (drgnx-ai--parse-vram (buffer-string))))))
+  "The memory models get (MiB): on macOS (:total M :used 0 :unified t), M two thirds of the RAM (`sysctl -n
+hw.memsize'; Apple silicon shares it with the GPU); else the first GPU's when nvidia-smi is there; else nil."
+  (if (eq (drgnx-platform) 'macos)
+      (with-temp-buffer
+        (when (eql 0 (ignore-errors (call-process "sysctl" nil t nil "-n" "hw.memsize")))
+          (let ((bytes (string-to-number (string-trim (buffer-string)))))
+            (when (> bytes 0) (list :total (/ (* 2 (/ bytes 1048576)) 3) :used 0 :unified t)))))
+    (when (executable-find "nvidia-smi")
+      (with-temp-buffer
+        (when (eql 0 (call-process "nvidia-smi" nil t nil "--query-gpu=memory.total,memory.used" "--format=csv,noheader,nounits"))
+          (drgnx-ai--parse-vram (buffer-string)))))))
 
 (defun drgnx-ai-model-vram (model)
   "About how much GPU memory (MiB) MODEL needs at 4-bit, from the size in its name (\"…:1.5b\"), or 0."

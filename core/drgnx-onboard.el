@@ -22,6 +22,8 @@
 (require 'drgnx-session)
 
 (defvar drgnx-onboard--steps nil "Alist ID → plist (:title :doc :order :run :check).")
+(defvar drgnx-onboard--current nil "The id of the step running now.")
+(defvar drgnx-onboard--progress nil "(STEP . TEXT): what a step waiting on a job is doing, shown in the Welcome.")
 
 (defun drgnx-onboard-define-step (id &rest spec)
   "Define onboarding step ID: SPEC has :title :doc :order, :run (CONTEXT → (STATUS MESSAGE)) and an
@@ -67,6 +69,7 @@ NON-INTERACTIVE: never read input (`inhibit-interaction').  OPTIONS: plist for t
                  (not (and resume (memq (plist-get (alist-get id done) :status) '(ok info)))))
         (let* ((spec (alist-get id drgnx-onboard--steps))
                (inhibit-interaction non-interactive)
+               (drgnx-onboard--current id)
                (r (condition-case err (funcall (plist-get spec :run) ctx)
                     (error (list 'fail (error-message-string err)))))
                (r (or (and (not (eq (car r) 'fail)) (plist-get spec :check)
@@ -316,9 +319,26 @@ may come from sources that ask."
                                       (car models))))))
               drgnx-ai-detected)))
 
-(defun drgnx-onboard--ai-step (ctx)
+(defun drgnx-onboard--ai-test (role step ctx)
+  "One call to STEP (PROVIDER . MODEL) of the kind ROLE makes — fill in the middle, chat or an embedding: t when it
+answered."
+  (let ((interactive (plist-get ctx :interactive)))
+    (if (eq role 'embed)
+        (condition-case nil
+            (and (drgnx-ai-embed-sync (vector "hello") :timeout 15 :chain (list step) :interactive interactive) t)
+          (drgnx-ai-embed-error nil))
+      (let ((fim (eq role 'complete)) (result nil))
+        (drgnx-ai-request role (if fim 'fim 'chat)
+                          (if fim (list :prefix "(defun hello ()\n  " :suffix ")\n" :max-tokens 8)
+                            (list :messages (vector (list :role "user" :content "Say OK."))))
+                          (lambda (text _info) (setq result (if text 'yes 'no)))
+                          :chain (list step) :timeout 15 :interactive interactive)
+        (drgnx-onboard--wait (lambda () result) 16)
+        (eq result 'yes)))))
+
+(defun drgnx-onboard--ai-found (ctx)
   "Find the providers running here, give each role without a working one a provider found, test each role with
-one call, and say how to add an OpenRouter key (drgnx writes none)."
+one call: (STATUS MESSAGE ANSWERED), ANSWERED how many of the three roles answered."
   (require 'drgnx-ai-probe)
   (let ((done nil))
     (drgnx-ai-probe (lambda () (setq done t)))
@@ -331,26 +351,391 @@ one call, and say how to add an OpenRouter key (drgnx writes none)."
         (if (not step) (push (format "%s: no provider" role) lines)
           (unless usable (drgnx-ai-set-role role (cons step (drgnx-ai-role role))))
           (cl-incf asked)
-          (let (result)
-            (drgnx-ai-request role (if (eq cap 'fim) 'fim 'chat)
-                              (if (eq cap 'fim) (list :prefix "(defun hello ()\n  " :suffix ")\n" :max-tokens 8)
-                                (list :messages (vector (list :role "user" :content "Say OK."))))
-                              (lambda (text _info) (setq result (if text 'yes 'no)))
-                              :chain (list step) :timeout 15 :interactive (plist-get ctx :interactive))
-            (drgnx-onboard--wait (lambda () result) 16)
-            (when (eq result 'yes) (cl-incf answered))
-            (push (format "%s: %s/%s %s" role (car step) (cdr step) (if (eq result 'yes) "answered" "did not answer")) lines)))))
+          (let ((yes (drgnx-onboard--ai-test role step ctx)))
+            (when yes (cl-incf answered))
+            (push (format "%s: %s/%s %s" role (car step) (cdr step) (if yes "answered" "did not answer")) lines)))))
     (unless key
-      (push "OpenRouter: set OPENROUTER_API_KEY in your shell profile, or add \"machine openrouter.ai password <key>\" to ~/.authinfo.gpg (drgnx writes no key)" lines))
+      (push "OpenRouter: set OPENROUTER_API_KEY in your shell profile, or add \"machine openrouter.ai password <key>\" to ~/.authinfo.gpg" lines))
     (let* ((vram (drgnx-ai-vram)) (model (cdr (car (drgnx-ai-role 'complete))))
            (need (if model (drgnx-ai-model-vram model) 0))
            (free (and vram (- (plist-get vram :total) (plist-get vram :used)))))
-      (when free (push (format "GPU: %d MiB free, the completion model needs about %d" free need) lines))
+      (when free
+        (push (format (if (plist-get vram :unified) "memory for models: %d MiB (two thirds of the RAM), the completion model needs about %d"
+                        "GPU: %d MiB free, the completion model needs about %d")
+                      free need)
+              lines))
       (list (cond ((zerop asked) 'info) ((and free (> need free)) 'warn) ((< answered asked) 'warn) (t 'ok))
             (if (zerop asked)
                 (concat "no provider is running here and no OpenRouter key is set — start Ollama, LM Studio or llama.cpp, "
                         "or set the key; then AI: Choose Provider/Model; " (string-join (nreverse lines) "; "))
-              (concat (string-join (nreverse lines) "; ") " — change any: AI: Choose Provider/Model (docs/guide/ai.md)"))))))
+              (concat (string-join (nreverse lines) "; ") " — change any: AI: Choose Provider/Model (docs/guide/ai.md)"))
+            answered))))
+
+;;;; Step 4: setting AI up — Ollama, LM Studio or OpenRouter
+
+(defconst drgnx-onboard-install-recipes
+  '((ollama :name "Ollama" :provider ollama
+            :check (:program "ollama" :provider ollama)
+            :macos (:install ("brew" "install" "ollama"))
+            :linux (:shell "curl -fsSL https://ollama.com/install.sh | sh" :sudo t)
+            :start ("ollama" "serve")
+            :pull ("ollama" "pull"))
+    (lmstudio :name "LM Studio" :provider lmstudio
+              :check (:program "lms" :provider lmstudio)
+              :macos (:install ("brew" "install" "--cask" "lm-studio") :launch ("open" "-a" "LM Studio"))
+              :linux (:page "https://lmstudio.ai/download")
+              :start ("lms" "server" "start")
+              :pull ("lms" "get" "-y")))
+  "How onboarding sets up a local model runner: ID → plist.  :check — it is there when its :program is found (lms
+also in ~/.lmstudio/bin, where LM Studio puts it) or its :provider's address answers.  :macos :install — the
+Homebrew command, a drgnx job; :launch — LM Studio's first start, which puts lms in place.  :linux :shell — Ollama's
+official installer, which uses sudo: shown, for you to run in a terminal (a job has no terminal to ask your
+password in); :page — LM Studio's download page.  :start — the server, a drgnx job (never at login); :pull — the
+download, the model's name after it.")
+
+(defconst drgnx-onboard-embed-model "nomic-embed-text"
+  "The embedding model a local runner set up here downloads (Ollama's name; LM Studio's: `drgnx-ai-lmstudio-models').")
+
+(defconst drgnx-onboard-openrouter-models
+  '((complete . "qwen/qwen-2.5-coder-32b-instruct") (edit . "openrouter/auto") (chat . "openrouter/auto"))
+  "The OpenRouter model onboarding gives each role.")
+
+(defconst drgnx-onboard-ai-choices
+  '(("Ollama (local)" . ollama) ("LM Studio (local)" . lmstudio) ("OpenRouter (cloud key)" . openrouter) ("Skip" . skip))
+  "The answers to \"Set up AI with\".")
+
+(defvar drgnx-onboard-lms-wait 120 "Seconds LM Studio's first start may take to put lms in place.")
+(defvar drgnx-onboard-server-wait 60 "Seconds a model server started here may take to answer.")
+(defvar drgnx-onboard-app-wait 600 "Seconds onboarding waits for a runner you install yourself (Linux) to answer.")
+
+(declare-function drgnx-jobs-start "drgnx-jobs")
+(declare-function drgnx-jobs-get "drgnx-jobs")
+(declare-function drgnx-jobs-log "drgnx-jobs")
+(declare-function drgnx-jobs-stop "drgnx-jobs")
+(declare-function drgnx-jobs--dir "drgnx-jobs")
+(declare-function drgnx-ai-default-models "drgnx-ai")
+(declare-function drgnx-ai-store-key "drgnx-ai")
+(declare-function drgnx-ai-embed-sync "drgnx-ai-client")
+(declare-function drgnx-ai-ask-request "drgnx-ai-ui")
+(defvar drgnx-ai-lmstudio-models)
+
+(defconst drgnx-onboard--brew-programs '("/opt/homebrew/bin/brew" "/usr/local/bin/brew")
+  "Where Homebrew lives on Apple silicon and on Intel, when the app's PATH lacks it.")
+
+(defun drgnx-onboard--brew ()
+  (or (executable-find "brew") (seq-find #'file-executable-p drgnx-onboard--brew-programs)))
+
+(defun drgnx-onboard--program (tool)
+  "TOOL's program, a path — on the path, in ~/.lmstudio/bin or beside brew — or nil."
+  (let ((name (plist-get (plist-get (alist-get tool drgnx-onboard-install-recipes) :check) :program))
+        (brew (drgnx-onboard--brew)))
+    (or (executable-find name)
+        (seq-find #'file-executable-p
+                  (delq nil (list (and (eq tool 'lmstudio) (expand-file-name name "~/.lmstudio/bin"))
+                                  (and brew (expand-file-name name (file-name-directory brew)))))))))
+
+(defun drgnx-onboard--up-p (provider)
+  "Does PROVIDER's address answer now?  One probe of it (a second at most); `drgnx-ai-detected' has what it found."
+  (let ((done nil))
+    (drgnx-ai-probe (lambda () (setq done t)) (list provider))
+    (drgnx-onboard--wait (lambda () done) 3)
+    (plist-get (alist-get provider drgnx-ai-detected) :up)))
+
+(defun drgnx-onboard--until (pred secs)
+  "Wait until PRED, asked four times a second, at most SECS: its last value.  For the step (a command): C-g quits."
+  (let ((deadline (+ (float-time) secs)) (v nil))
+    (while (and (not (setq v (funcall pred))) (< (float-time) deadline))
+      (unless noninteractive (redisplay))
+      (accept-process-output nil 0.25))
+    v))
+
+(defun drgnx-onboard--refresh-welcome ()
+  (when-let* ((b (get-buffer "*drgnx Welcome*"))) (with-current-buffer b (tabulated-list-print t))))
+
+(defun drgnx-onboard--last-line (id)
+  "The last line job ID wrote (a progress bar's last state), or nil."
+  (car (last (split-string (drgnx-jobs-log id 2000) "[\r\n]+" t "[ \t]+"))))
+
+(defun drgnx-onboard--show-progress (step what id)
+  "The progress timer: WHAT and job ID's last log line, in STEP's row of the Welcome and the echo area.  Reads only."
+  (let ((text (format "%s… %s" what (or (drgnx-onboard--last-line id) ""))))
+    (unless (equal text (cdr drgnx-onboard--progress))
+      (setq drgnx-onboard--progress (cons step text))
+      (drgnx-onboard--refresh-welcome)
+      (message "%s" text))))
+
+(defun drgnx-onboard--job (what command &optional secs)
+  "Run COMMAND (a list) as a drgnx job for WHAT and wait for it to end, at most SECS (default an hour); meanwhile the
+Welcome shows its last log line.  `ok', or (fail REASON LOG): REASON ends with the log's last line.  C-g stops the
+job, then quits."
+  (require 'drgnx-jobs)
+  (make-directory (drgnx-state-dir) t)
+  (let* ((id (drgnx-jobs-start (concat "Onboarding: " what) command :cwd (drgnx-state-dir)))
+         (log (expand-file-name "log" (drgnx-jobs--dir id)))
+         (t0 (float-time)) (job nil)
+         (timer (run-at-time 0.5 0.5 #'drgnx-onboard--show-progress drgnx-onboard--current what id)))
+    (unwind-protect
+        (condition-case nil
+            (progn
+              (drgnx-onboard--until (lambda ()
+                                      (setq job (drgnx-jobs-get id))
+                                      ;; gone: it ended without writing its exit (killed); not while it starts
+                                      (or (plist-get job :exit) (and (eq (plist-get job :status) 'gone) (> (- (float-time) t0) 3))))
+                                    (or secs 3600))
+              (if (eql (plist-get job :exit) 0) 'ok
+                (when (eq (plist-get job :status) 'running) (drgnx-jobs-stop id))
+                (list 'fail (format "%s failed (%s)%s" what
+                                    (cond ((plist-get job :exit) (format "exit %d" (plist-get job :exit)))
+                                          ((eq (plist-get job :status) 'running) "it took too long and was stopped")
+                                          (t "it ended without an exit status"))
+                                    (if-let* ((line (drgnx-onboard--last-line id))) (concat ": " line) ""))
+                      log)))
+          (quit (drgnx-jobs-stop id) (signal 'quit nil)))
+      (cancel-timer timer)
+      (setq drgnx-onboard--progress nil)
+      (drgnx-onboard--refresh-welcome))))
+
+(declare-function browse-url "browse-url")
+
+(defun drgnx-onboard--install (tool ctx)
+  "Install TOOL (an id of `drgnx-onboard-install-recipes') for this platform: `ok' once its program is there or its
+server answers, else (fail REASON LOG), LOG nil when nothing ran.  Only when CTX is interactive (the step asked
+first).  macOS: the Homebrew command as a drgnx job — LM Studio: then its first start, which puts lms in place.
+Linux: Ollama's installer for you to run in a terminal (it uses sudo), or LM Studio's download page; then a wait
+for its server (C-g stops it).  Every run starts from the top: nothing is resumed from a run that failed."
+  (let* ((r (alist-get tool drgnx-onboard-install-recipes))
+         (name (plist-get r :name))
+         (there (lambda () (or (drgnx-onboard--program tool) (drgnx-onboard--up-p (plist-get r :provider))))))
+    (cond
+     ((not (plist-get ctx :interactive)) (list 'fail (format "%s is not installed (nothing is installed without asking)" name) nil))
+     ((funcall there) 'ok)
+     ((eq (drgnx-platform) 'macos)
+      (let ((m (plist-get r :macos)) (brew (drgnx-onboard--brew)))
+        (if (not brew)
+            (list 'fail (format "Homebrew is needed to install %s: install it (https://brew.sh), then run this step again" name) nil)
+          (let ((done (drgnx-onboard--job (format "Installing %s" name) (cons brew (cdr (plist-get m :install))))))
+            (cond ((not (eq done 'ok)) done)
+                  ((drgnx-onboard--program tool) 'ok)
+                  ((plist-get m :launch)
+                   (let ((launch (plist-get m :launch)))
+                     (drgnx-onboard--job (format "Opening %s once" name) (cons (or (executable-find (car launch)) (car launch)) (cdr launch)) 30))
+                   (if (drgnx-onboard--until (lambda () (drgnx-onboard--program tool)) drgnx-onboard-lms-wait) 'ok
+                     (list 'fail (format "%s is installed, but its lms command is not there yet: Open LM Studio once (Applications), wait for its window, then run this step again" name) nil)))
+                  (t (list 'fail (format "%s was installed, but %s cannot be found: check brew doctor, then run this step again"
+                                         name (plist-get (plist-get r :check) :program))
+                           nil)))))))
+     (t
+      (let ((l (plist-get r :linux)))
+        (if (plist-get l :page)
+            (progn (browse-url (plist-get l :page))
+                   (message "Install %s from %s and open it (Developer → Start Server); waiting for it… (C-g stops)" name (plist-get l :page)))
+          (kill-new (plist-get l :shell))
+          (message "Run in a terminal (copied): %s — it asks for your password (sudo); waiting for %s… (C-g stops)" (plist-get l :shell) name))
+        (if (drgnx-onboard--until there drgnx-onboard-app-wait) 'ok
+          (list 'fail (format "%s did not show up within %d minutes: %s, then run this step again" name (/ drgnx-onboard-app-wait 60)
+                              (if (plist-get l :page) (format "install it from %s and open it" (plist-get l :page))
+                                (format "run %s in a terminal" (plist-get l :shell))))
+                nil)))))))
+
+(defun drgnx-onboard--start (tool)
+  "TOOL's server: `ok' when its address answers — at once, or after its :start command as a drgnx job (`ollama
+serve' keeps running as one; `lms server start' starts LM Studio's and ends) — else (fail REASON LOG)."
+  (require 'drgnx-jobs)
+  (let* ((r (alist-get tool drgnx-onboard-install-recipes)) (provider (plist-get r :provider)) (name (plist-get r :name))
+         (program (drgnx-onboard--program tool)))
+    (cond
+     ((drgnx-onboard--up-p provider) 'ok)
+     ((not program) (list 'fail (format "%s is not installed" name) nil))
+     (t
+      (make-directory (drgnx-state-dir) t)
+      (let* ((id (drgnx-jobs-start (format "%s server" name) (cons program (cdr (plist-get r :start))) :cwd (drgnx-state-dir)))
+             (log (expand-file-name "log" (drgnx-jobs--dir id)))
+             (up (condition-case nil
+                     (drgnx-onboard--until (lambda ()
+                                             (or (drgnx-onboard--up-p provider)
+                                                 (let ((exit (plist-get (drgnx-jobs-get id) :exit))) (and exit (/= exit 0) 'failed))))
+                                           drgnx-onboard-server-wait)
+                   (quit (drgnx-jobs-stop id) (signal 'quit nil)))))
+        (if (eq up t) 'ok
+          (drgnx-jobs-stop id)
+          (list 'fail (format "%s did not answer at %s%s" name (plist-get (drgnx-ai-provider provider) :url)
+                              (if-let* ((line (drgnx-onboard--last-line id))) (concat ": " line) ""))
+                log)))))))
+
+(defun drgnx-onboard--pull-name (tool model)
+  "The name TOOL downloads Ollama's MODEL by."
+  (if (eq tool 'lmstudio) (nth 2 (assoc model drgnx-ai-lmstudio-models)) model))
+
+(defun drgnx-onboard--served-name (tool model)
+  "The name TOOL serves Ollama's MODEL by: for LM Studio the one it lists that holds the expected name, else that."
+  (if (not (eq tool 'lmstudio)) model
+    (let ((want (nth 1 (assoc model drgnx-ai-lmstudio-models)))
+          (listed (plist-get (alist-get 'lmstudio drgnx-ai-detected) :models)))
+      (or (car (member want listed)) (seq-find (lambda (m) (string-search want (downcase m))) listed) want))))
+
+(defun drgnx-onboard--local-models ()
+  "((ROLE . MODEL)…), Ollama's names: the defaults for the room models get here (`drgnx-ai-vram'), and the embedding model."
+  (append (drgnx-ai-default-models (let ((v (drgnx-ai-vram))) (and v (- (plist-get v :total) (plist-get v :used)))))
+          (list (cons 'embed drgnx-onboard-embed-model))))
+
+(defun drgnx-onboard--setup-commands (tool models)
+  "What sets TOOL up here with MODELS, as text: its install (unless it is there), its server, the downloads."
+  (let* ((r (alist-get tool drgnx-onboard-install-recipes))
+         (mac (eq (drgnx-platform) 'macos))
+         (p (plist-get r (if mac :macos :linux)))
+         (cmd (lambda (l) (mapconcat (lambda (a) (if (string-search " " a) (format "\"%s\"" a) a)) l " "))))
+    (append (unless (or (drgnx-onboard--program tool) (plist-get (alist-get (plist-get r :provider) drgnx-ai-detected) :up))
+              (cond (mac (cons (funcall cmd (plist-get p :install))
+                               (and (plist-get p :launch) (list (concat (funcall cmd (plist-get p :launch)) " (once)")))))
+                    ((plist-get p :shell) (list (format "%s (in a terminal: it uses sudo, your password)" (plist-get p :shell))))
+                    (t (list (format "install %s from %s and open it" (plist-get r :name) (plist-get p :page))))))
+            (list (funcall cmd (plist-get r :start)))
+            (mapcar (lambda (m) (funcall cmd (append (plist-get r :pull) (list (drgnx-onboard--pull-name tool m)))))
+                    (delete-dups (mapcar #'cdr models))))))
+
+(defun drgnx-onboard--download-gb (models)
+  "About how many GB MODELS (Ollama's names) take to download, as text."
+  (format "%.1f" (/ (apply #'+ (mapcar (lambda (m) (if (equal m drgnx-onboard-embed-model) 280 (max 0 (- (drgnx-ai-model-vram m) 500))))
+                                       models))
+                    1024.0)))
+
+(defun drgnx-onboard--put-first (role step)
+  "STEP (PROVIDER . MODEL) first in ROLE's chain in ai.eld; the role's other providers stay behind it."
+  (drgnx-ai-set-role role (cons step (seq-remove (lambda (s) (eq (car s) (car step))) (drgnx-ai-role role)))))
+
+(defconst drgnx-onboard--ask-question "Where is the onboarding greeting defined?"
+  "What onboarding asks Ask the Codebase about its test project.")
+
+(defun drgnx-onboard--ask-test (step ctx)
+  "Ask the Codebase — its retrievers, then the `chat' model STEP — over a temp project of one file: t when an answer
+came for the snippets found."
+  (unless (featurep 'drgnx-ai-ui) (load (expand-file-name "modules/tools/drgnx-ai-ui" drgnx-dir) nil t))
+  (let ((root (make-temp-file "drgnx-onboard-ask" t)) (result nil))
+    (unwind-protect
+        (progn
+          (write-region "(defun drgnx-onboarding-greeting ()\n  \"Hello from onboarding.\")\n" nil
+                        (expand-file-name "greeting.el" root) nil 'silent)
+          (drgnx-ai-ask-request drgnx-onboard--ask-question root
+                                (lambda (answer _info snippets) (setq result (list (and answer snippets t))))
+                                :chain (and step (list step)) :interactive (plist-get ctx :interactive))
+          (drgnx-onboard--wait (lambda () result) 20)
+          (car result))
+      (delete-directory root t))))
+
+(defun drgnx-onboard--ai-verify (head steps ctx &optional tail)
+  "Test each of STEPS ((ROLE PROVIDER . MODEL)…) with one call, then Ask the Codebase with the chat step:
+\(STATUS MESSAGE), the message HEAD, the results, TAIL."
+  (let* ((results (mapcar (lambda (s) (cons s (drgnx-onboard--ai-test (car s) (cdr s) ctx))) steps))
+         (ask (drgnx-onboard--ask-test (cdr (assq 'chat steps)) ctx)))
+    (list (if (and ask (seq-every-p #'cdr results)) 'ok 'warn)
+          (concat head "; "
+                  (mapconcat (lambda (r) (format "%s: %s/%s %s" (caar r) (cadar r) (cddar r) (if (cdr r) "answered" "did not answer")))
+                             results "; ")
+                  "; Ask the Codebase " (if ask "answered" "did not answer")
+                  (if tail (concat "; " tail) "")
+                  " — change any: AI: Choose Provider/Model (docs/guide/ai.md)"))))
+
+(defun drgnx-onboard--failed (result)
+  "(STATUS MESSAGE) of a failed RESULT (fail REASON LOG): REASON, how to retry, where the log is."
+  (pcase-let ((`(,_ ,reason ,log) result))
+    (list 'fail (concat reason (if (string-search "step again" reason) "" " — run the step again to retry (downloads already done stay)")
+                        (if log (format " (log: %s)" (abbreviate-file-name log)) "")))))
+
+(defun drgnx-onboard--local-setup (tool ctx)
+  "Set up TOOL (`ollama', `lmstudio') after asking: install it if missing, start it, download the models for the
+room here and the embedding model, put them first in the roles, test every feature.  Asked nothing (CTX not
+interactive): only says what it would run."
+  (let* ((r (alist-get tool drgnx-onboard-install-recipes)) (name (plist-get r :name)) (provider (plist-get r :provider))
+         (models (drgnx-onboard--local-models))
+         (pulls (delete-dups (mapcar #'cdr models)))
+         (commands (string-join (drgnx-onboard--setup-commands tool models) "; ")))
+    (if (not (and (plist-get ctx :interactive)
+                  (y-or-n-p (format "Set up %s: %s (about %s GB to download)? " name commands (drgnx-onboard--download-gb pulls)))))
+        (list 'info (format "%s is not set up%s — to set it up: %s" name
+                            (if (plist-get ctx :interactive) "" " (nothing is installed or downloaded without asking)") commands))
+      (catch 'stop
+        (cl-flet ((must (result) (unless (eq result 'ok) (throw 'stop (drgnx-onboard--failed result)))))
+          (must (drgnx-onboard--install tool ctx))
+          (must (drgnx-onboard--start tool))
+          (dolist (m pulls)
+            (must (drgnx-onboard--job (format "Downloading %s" m)
+                                      (append (list (drgnx-onboard--program tool)) (cdr (plist-get r :pull))
+                                              (list (drgnx-onboard--pull-name tool m))))))
+          (drgnx-onboard--up-p provider)                ; what it lists now: the names it serves them by
+          (let ((steps (mapcar (lambda (rm) (cons (car rm) (cons provider (drgnx-onboard--served-name tool (cdr rm))))) models))
+                (v (drgnx-ai-vram)))
+            (pcase-dolist (`(,role . ,step) steps) (drgnx-onboard--put-first role step))
+            (drgnx-onboard--ai-verify
+             (format "%s set up (models for %s)" name
+                     (if v (format "%d MiB of %s" (- (plist-get v :total) (plist-get v :used)) (if (plist-get v :unified) "memory" "GPU memory"))
+                       "a machine without a GPU tool"))
+             steps ctx)))))))
+
+(defun drgnx-onboard--openrouter-setup (ctx)
+  "OpenRouter: the key — asked in the drgnx app (`read-passwd') and kept in the Keychain or keyring; from the
+environment in the CLI, which never reads those stores — then its model for complete, edit and chat, every
+feature tested.  The embed role stays: OpenRouter has no embedding model here."
+  (let* ((interactive (plist-get ctx :interactive))
+         (app (and interactive (not noninteractive)))
+         (key (drgnx-ai-key 'openrouter interactive))
+         (new (and app (read-passwd (if key "OpenRouter API key (openrouter.ai/keys; empty: keep the one you have): "
+                                      "OpenRouter API key (from openrouter.ai/keys): ")))))
+    (when (equal new "") (setq new nil))
+    (cond
+     ((and (not key) (not app))
+      (list 'info "OpenRouter: set OPENROUTER_API_KEY for the CLI, or run this step in the drgnx app (Help → Welcome), which keeps the key in your Keychain or keyring"))
+     ((and (not key) (not new))
+      (list 'info "no OpenRouter key given — run this step again with one (openrouter.ai/keys)"))
+     (t
+      (let ((stored (and new (condition-case err (drgnx-ai-store-key 'openrouter new) (user-error (cadr err))))))
+        (if (stringp stored) (list 'fail (concat "OpenRouter: " stored))
+          (let ((steps (mapcar (lambda (rm) (cons (car rm) (cons 'openrouter (cdr rm)))) drgnx-onboard-openrouter-models)))
+            (pcase-dolist (`(,role . ,step) steps) (drgnx-onboard--put-first role step))
+            (drgnx-onboard--ai-verify
+             (format "OpenRouter set up (key %s)" (pcase stored ('keychain "in your Keychain") ('keyring "in your keyring") (_ "found")))
+             steps ctx
+             "semantic search needs a local model or TEI: the next step, Semantic Search, says how"))))))))
+
+(defun drgnx-onboard--ai-setup (choice ctx)
+  "Set up AI with CHOICE — `ollama', `lmstudio', `openrouter' or `skip' — and test every feature: (STATUS MESSAGE).
+Local: install if missing, start, download the models for the room and the embedding model, set the roles.
+OpenRouter: the key into the Keychain or keyring, the roles.  Then one call per role and Ask the Codebase over a
+temp project.  Without interaction nothing is installed, downloaded or asked: the message says what would run.
+C-g stops it (and any job it waits on)."
+  (require 'drgnx-ai-probe)
+  (condition-case nil
+      (pcase choice
+        ('skip (list 'info "AI is not set up (skipped) — run this step again, or AI: Choose Provider/Model"))
+        ('openrouter (drgnx-onboard--openrouter-setup ctx))
+        (_ (drgnx-onboard--local-setup choice ctx)))
+    (quit (list 'fail "stopped (C-g) — run this step again to go on"))))
+
+(defun drgnx-onboard--ai-how ()
+  "What would set AI up here, for the step's answer without interaction."
+  (let ((models (drgnx-onboard--local-models)))
+    (format "to set AI up, run this step in the drgnx app (Help → Welcome) and choose — Ollama: %s; LM Studio: %s; OpenRouter: a key (OPENROUTER_API_KEY)"
+            (string-join (drgnx-onboard--setup-commands 'ollama models) ", ")
+            (string-join (drgnx-onboard--setup-commands 'lmstudio models) ", "))))
+
+(defun drgnx-onboard--ai-step (ctx)
+  "Find what runs here and test each role (`drgnx-onboard--ai-found').  Interactive, when no role answered: ask
+\"Set up AI with\" — Ollama, LM Studio, OpenRouter or Skip (`drgnx-onboard--ai-setup'); when some did not, or the
+step ran before: keep it or change it.  Without interaction: what was found, and what would set it up."
+  (let* ((again (alist-get 'ai (drgnx-onboard-state)))
+         (found (drgnx-onboard--ai-found ctx))
+         (working (nth 2 found))
+         (ask (lambda () (cdr (assoc (completing-read "Set up AI with: " drgnx-onboard-ai-choices nil t) drgnx-onboard-ai-choices))))
+         (choice (and (plist-get ctx :interactive)
+                      (if (zerop working) (funcall ask)
+                        (and (or again (< working 3))
+                             (equal (completing-read (format "AI answers for %d of 3 roles (complete, edit, chat): keep it or change it? " working)
+                                                     '("Keep" "Change") nil t nil nil (if (< working 3) "Change" "Keep"))
+                                    "Change")
+                             (funcall ask))))))
+    (cond ((and choice (not (and (eq choice 'skip) (> working 0)))) (drgnx-onboard--ai-setup choice ctx))
+          ((and (not (plist-get ctx :interactive)) (zerop working))
+           (list (car found) (concat (cadr found) "; " (drgnx-onboard--ai-how))))
+          (t (list (car found) (cadr found))))))
 
 ;;;; Step 5: Semantic Search
 
@@ -462,7 +847,7 @@ keep running.  Saved (session.eld); returns the sentence for the step's result."
                            :doc "Find your git repositories and put them, with their TODOs, on the org board"
                            :run #'drgnx-onboard--projects-step)
 (drgnx-onboard-define-step 'ai :order 40 :title "AI Providers"
-                           :doc "Model providers found (OpenRouter, Ollama, LM Studio, llama.cpp …), a provider and model per role, each tested; the GPU's room"
+                           :doc "Model providers found (OpenRouter, Ollama, LM Studio, llama.cpp …), a provider and model per role, each tested; with none, sets up Ollama, LM Studio or OpenRouter (asked), models sized to the machine, every feature tested"
                            :run #'drgnx-onboard--ai-step)
 (drgnx-onboard-define-step 'search :order 50 :title "Semantic Search"
                            :doc "An embedding model found and tested, the current project indexed in the background (the same as Set Up Semantic Search); without interaction it only reports what is there"
@@ -493,10 +878,11 @@ keep running.  Saved (session.eld); returns the sentence for the step's result."
 (defun drgnx-onboard--entries ()
   (let ((state (drgnx-onboard-state)))
     (mapcar (lambda (id)
-              (let ((spec (alist-get id drgnx-onboard--steps)) (s (alist-get id state)))
+              (let ((spec (alist-get id drgnx-onboard--steps)) (s (alist-get id state))
+                    (busy (and (eq id (car drgnx-onboard--progress)) (cdr drgnx-onboard--progress))))
                 (list id (vector (plist-get spec :title)
-                                 (if s (symbol-name (plist-get s :status)) "—")
-                                 (or (plist-get s :message) (plist-get spec :doc))))))
+                                 (cond (busy "…") (s (symbol-name (plist-get s :status))) (t "—"))
+                                 (or busy (plist-get s :message) (plist-get spec :doc))))))
             (drgnx-onboard-steps))))
 
 (defun drgnx-onboard-welcome ()
@@ -535,7 +921,7 @@ never inside the hook (the window and the restored layout come first)."
   "Run onboarding step ID now (it may ask), then show the steps."
   (let ((r (car (drgnx-onboard-run :only (list id)))))
     (message "%s: %s — %s" (plist-get (alist-get id drgnx-onboard--steps) :title) (nth 1 r) (nth 2 r))
-    (when-let* ((b (get-buffer "*drgnx Welcome*"))) (with-current-buffer b (tabulated-list-print t)))
+    (drgnx-onboard--refresh-welcome)
     r))
 
 (defun drgnx-onboard-run-step-at-point ()

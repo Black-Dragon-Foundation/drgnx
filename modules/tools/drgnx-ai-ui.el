@@ -390,14 +390,11 @@ when the project has one.")
     (pop-to-buffer (current-buffer))
     (current-buffer)))
 
-(defun drgnx-ai-ask (question &optional root)
-  "Ask QUESTION about the project at ROOT (default: this project): what it names is looked up in the code, the
-best snippets go to the `chat' role with it, the answer cites the files."
-  (interactive (list (read-string "Ask the codebase: ")
-                     (or (when-let* ((p (and (fboundp 'project-current) (project-current)))) (project-root p)) default-directory)))
-  (let* ((root (expand-file-name (or root default-directory)))
-         (left (length drgnx-ai-retrievers)) (snippets nil))
-    (message "Ask the Codebase: looking…")
+(cl-defun drgnx-ai-ask-request (question root callback &key chain interactive)
+  "Find what QUESTION is about under ROOT (`drgnx-ai-retrievers') and ask the `chat' role (or CHAIN) with the
+snippets found: CALLBACK gets (ANSWER INFO SNIPPETS), ANSWER nil when no provider answered (INFO's :error says
+why).  INTERACTIVE as for `drgnx-ai-request'.  Ask the Codebase, and onboarding's test of it."
+  (let ((left (length drgnx-ai-retrievers)) (snippets nil))
     (dolist (r drgnx-ai-retrievers)
       (funcall r question root
                (lambda (found)
@@ -411,9 +408,20 @@ best snippets go to the `chat' role with it, the answer cites the files."
                                         :content (concat "Question: " question "\n\nExcerpts:\n"
                                                          (mapconcat (lambda (s) (format "--- %s:%d\n%s" (plist-get s :file) (plist-get s :line) (plist-get s :text)))
                                                                     snippets "\n")))))
-                    (lambda (answer info)
-                      (drgnx-ai--answer-buffer question (or answer (format "No answer: %s" (plist-get info :error))) snippets root))
-                    :interactive t)))))))
+                    (lambda (answer info) (funcall callback answer info snippets))
+                    :chain chain :interactive interactive)))))))
+
+(defun drgnx-ai-ask (question &optional root)
+  "Ask QUESTION about the project at ROOT (default: this project): what it names is looked up in the code, the
+best snippets go to the `chat' role with it, the answer cites the files."
+  (interactive (list (read-string "Ask the codebase: ")
+                     (or (when-let* ((p (and (fboundp 'project-current) (project-current)))) (project-root p)) default-directory)))
+  (let ((root (expand-file-name (or root default-directory))))
+    (message "Ask the Codebase: looking…")
+    (drgnx-ai-ask-request question root
+                          (lambda (answer info snippets)
+                            (drgnx-ai--answer-buffer question (or answer (format "No answer: %s" (plist-get info :error))) snippets root))
+                          :interactive t)))
 
 ;;;; Choose Provider/Model
 
