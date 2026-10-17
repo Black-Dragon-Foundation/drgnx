@@ -795,8 +795,9 @@ came for the snippets found."
 
 (defun drgnx-onboard--chat-module (ctx)
   "Chat (gptel) is module extra/llm, off in the minimal and ide presets: (ON . TEXT), ON nil also when installing its
-package failed.  Whether gptel is installed: drgnx's packages.  Interactive, when it is off: asked whether to turn it on, and gptel installed
-(drgnx sync, as Look and Keys does) when it is missing.  Either loads at the next start: the text says so."
+package failed.  Whether gptel is installed: drgnx's packages.  Interactive, when it is off: asked whether to turn it
+on, and gptel installed (drgnx sync, as Look and Keys does) when it is missing.  Either loads at the next start: the
+text says so."
   (let ((next "from the next start: restart drgnx to load it (the Finish step offers it)"))
     (cond ((not (drgnx-module-disabled-p 'extra/llm))
            (cond ((featurep 'gptel) (cons t "Chat (module extra/llm) is on"))
