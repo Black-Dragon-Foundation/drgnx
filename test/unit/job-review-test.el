@@ -113,6 +113,9 @@
     (should (eq (funcall verdict "Looked at it.\nVERDICT: pass") 'pass))
     (should (eq (funcall verdict "Looked at it.\nVERDICT: pass\n\n  ") 'pass))              ; trailing blanks
     (should (equal (funcall verdict "Looked at it.\nVERDICT: fail: rename foo") '(fail . "rename foo")))
+    (should (eq (funcall verdict "Looked at it.\n**VERDICT: pass**") 'pass))                ; Markdown round the line
+    (should (eq (funcall verdict "Looked at it.\n`VERDICT: pass`") 'pass))
+    (should (equal (funcall verdict "> *VERDICT: fail: rename foo*") '(fail . "rename foo")))
     ;; a mention earlier in the text is not the verdict
     (should-not (funcall verdict "I would write VERDICT: pass if foo were renamed.\nBut it is not done."))
     (should (equal (funcall verdict "VERDICT: pass\nOn second thought, no.\nVERDICT: fail: broken") '(fail . "broken")))

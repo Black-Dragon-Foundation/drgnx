@@ -209,9 +209,10 @@
     ;; nothing changed in the index
     (should (= (drgnx-search-index-test--chunk-count root) 3))
     (should (= (plist-get (drgnx-search-index-test--peek root #'drgnx-search-store-meta) :dims) 8))
-    ;; another model with the same dims is the same story
+    ;; another model with the same dims is a fallback that answered: said so, not a re-index
     (let ((r (drgnx-search-index root :embed (drgnx-search-index-test--stub 8 "other-model"))))
-      (should (string-match-p "built with stub-model (8)" (plist-get r :error))))
+      (should (string-match-p "answered by fallback other-model; the index was built with stub-model"
+                              (plist-get r :error))))
     ;; a rebuild starts over
     (let ((r (drgnx-search-index root :embed (drgnx-search-index-test--stub 4) :rebuild t)))
       (should-not (plist-get r :error))
@@ -414,6 +415,7 @@
               (running (drgnx-search-index-test--fake-job "20260101-000004-1" "search-index: p" "/tmp/p"))
               (other (drgnx-search-index-test--fake-job "20260101-000000-1" "search-index: q" "/tmp/q" "0"))
               (agent (drgnx-search-index-test--fake-job "20260101-000000-2" "agent: p" "/tmp/p" "0")))
+          (set-file-times running (time-subtract nil 3600))   ; not a job that is just starting
           (cl-letf (((symbol-function 'drgnx-jobs-start) (lambda (&rest _) "job-new"))
                     ((symbol-function 'drgnx-jobs-list) (lambda () (error "the jobs were listed"))))
             (should (equal (drgnx-search-index-start "/tmp/p") "job-new")))
@@ -437,6 +439,8 @@ started, stays."
               (starting (drgnx-search-index-test--fake-job "20260101-000004-1" "search-index: p" "/tmp/p")))
           (dolist (d (list gone-old gone-new)) (write-region "999999999\n" nil (expand-file-name "pid" d) nil 'silent))
           (write-region (format "%d\n" (emacs-pid)) nil (expand-file-name "pid" live) nil 'silent)
+          (dolist (d (list gone-old gone-new)) (set-file-times d (time-subtract nil 3600)))
+          (dolist (d (list live starting)) (set-file-times d (time-subtract nil 3600)))   ; not just starting
           (cl-letf (((symbol-function 'drgnx-jobs-start) (lambda (&rest _) "job-new")))
             (should (equal (drgnx-search-index-start "/tmp/p") "job-new")))
           (should-not (file-exists-p gone-old))
@@ -532,6 +536,87 @@ started, stays."
   (should (string-match-p "added 2, changed 1, removed 3"
                           (drgnx-search-index--summary '(:added 2 :changed 1 :removed 3 :chunks 9 :seconds 1.5 :skipped 0))))
   (should (string-match-p "boom" (drgnx-search-index--summary '(:added 2 :error "boom")))))
+
+
+;;;; Minors (M10-11)
+
+(ert-deftest drgnx-search-index/a-same-dims-fallback-is-named-not-a-reindex ()
+  (drgnx-search-index-test--with (drgnx-search-index-test--named 2)
+    (should-not (plist-get (drgnx-search-index root :embed (drgnx-search-index-test--stub 8 "main-model")) :error))
+    (drgnx-search-index-test--write root "f3.txt" "a third file\n")
+    (drgnx-search-index-test--git root "add" "-A" "-f")
+    (let ((err (plist-get (drgnx-search-index root :embed (drgnx-search-index-test--stub 8 "backup-model")) :error)))
+      (should (string-match-p "answered by fallback backup-model" err))
+      (should (string-match-p "main-model" err))
+      (should-not (string-match-p "re-index" err)))
+    ;; other dimensions still say the index must be rebuilt
+    (should (string-match-p "re-index"
+                            (plist-get (drgnx-search-index root :embed (drgnx-search-index-test--stub 4 "other")) :error)))))
+
+(ert-deftest drgnx-search-index/one-poisoned-chunk-skips-its-file ()
+  (drgnx-search-index-test--with (drgnx-search-index-test--named 4)
+    (let* ((ok (drgnx-search-index-test--stub))
+           (embed (lambda (inputs &rest r)
+                    (if (cl-some (lambda (x) (string-match-p "file2 " x)) inputs)
+                        (signal 'drgnx-ai-embed-error (list "tei: HTTP 413 input too long"))
+                      (apply ok inputs r))))
+           (r (drgnx-search-index root :embed embed :batch 1)))
+      (should-not (plist-get r :error))
+      (should (= (plist-get r :skipped) 1))
+      (should (= (plist-get r :added) 3))
+      (should (equal (drgnx-search-index-test--paths root) '("f1.txt" "f3.txt" "f4.txt")))
+      (should (floatp (plist-get (drgnx-search-index-test--peek root #'drgnx-search-store-meta) :indexed-at))))))
+
+(ert-deftest drgnx-search-index/a-provider-that-fails-every-chunk-still-stops-the-run ()
+  (drgnx-search-index-test--with (drgnx-search-index-test--named 8)
+    (let ((r (drgnx-search-index root :embed (lambda (&rest _) (signal 'drgnx-ai-embed-error (list "tei: down")))
+                                 :batch 1)))
+      (should (string-match-p "down" (plist-get r :error)))
+      (should (<= (plist-get r :skipped) 3)))))
+
+(ert-deftest drgnx-search-index/a-failing-repo-check-is-an-error-result ()
+  (drgnx-search-index-test--with (drgnx-search-index-test--named 2)
+    (cl-letf* ((orig (symbol-function 'drgnx-search--repo-p)) (calls 0)   ; the file listing asks too: only the later ask fails
+               ((symbol-function 'drgnx-search--repo-p)
+                (lambda (r) (if (> (cl-incf calls) 1) (signal 'drgnx-search-files-error (list "git rev-parse: boom")) (funcall orig r)))))
+      (let ((r (drgnx-search-index root :embed (drgnx-search-index-test--stub))))
+        (should (string-match-p "boom" (plist-get r :error)))))
+    (should-not (file-exists-p (drgnx-search-index-test--lock root)))))
+
+(ert-deftest drgnx-search-index/crlf-and-a-bom-are-not-indexed ()
+  (drgnx-search-index-test--with (list (cons "w.txt" (concat (unibyte-string #xEF #xBB #xBF) "one\r\ntwo\r\nthree\r\n")))
+    (should-not (plist-get (drgnx-search-index root :embed (drgnx-search-index-test--stub)) :error))
+    (let ((text (drgnx-search-index-test--peek root (lambda (db) (caar (sqlite-select db "select text from chunk"))))))
+      (should (equal text "one\ntwo\nthree\n")))))
+
+(ert-deftest drgnx-search-index/a-lock-overwritten-right-after-taking-it-is-lost ()
+  (drgnx-search-index-test--with (drgnx-search-index-test--named 1)
+    (let ((lock (drgnx-search-index-test--lock root)))
+      (make-directory (file-name-directory lock) t)
+      (advice-add 'write-region :around
+                  (lambda (orig start end file &rest more)   ; another process takes over at the same moment
+                    (apply orig start end file more)
+                    (when (equal file lock) (funcall orig "4242 1.0" nil file)))
+                  '((name . steal)))
+      (unwind-protect
+          (should-not (drgnx-search-index--lock root))
+        (advice-remove 'write-region 'steal)))))
+
+(ert-deftest drgnx-search-index/a-start-right-after-another-start-backs-off ()
+  (let* ((state (make-temp-file "drgnx-search-state" t))
+         (process-environment (cons (concat "XDG_STATE_HOME=" state) process-environment)))
+    (unwind-protect
+        (let ((job (drgnx-search-index-test--fake-job "20260101-000001-1" "search-index: p" "/tmp/p")) (started nil))
+          (cl-letf (((symbol-function 'drgnx-jobs-start) (lambda (&rest _) (setq started t) "job-new")))
+            ;; a job dir without an exit file, just made: that job has not taken the lock yet
+            (should-not (drgnx-search-index-start "/tmp/p"))
+            (should-not started)
+            ;; another project's is no reason to wait
+            (should (equal (drgnx-search-index-start "/tmp/q") "job-new"))
+            ;; an old one without an exit file is a job that died
+            (set-file-times job (time-subtract nil 3600))
+            (should (equal (drgnx-search-index-start "/tmp/p") "job-new"))))
+      (delete-directory state t))))
 
 (provide 'search-index-test)
 ;;; search-index-test.el ends here

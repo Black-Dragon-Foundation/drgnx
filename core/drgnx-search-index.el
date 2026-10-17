@@ -49,6 +49,9 @@ within half a second, as for jobs: a pid recycled by another process is no holde
       (let ((attrs (file-attributes file)))
         (and attrs (< (float-time (time-since (file-attribute-modification-time attrs))) 10))))))
 
+(defun drgnx-search-index--lock-text (file)
+  (ignore-errors (with-temp-buffer (insert-file-contents file) (buffer-string))))
+
 (defun drgnx-search-index--lock (root)
   "Take ROOT's indexing lock: its contents (\"PID START\"), or nil when a live process holds it.  A stale
 lock is replaced."
@@ -59,7 +62,9 @@ lock is replaced."
       (cl-decf tries)
       (condition-case nil
           (progn (write-region token nil file nil 'silent nil 'excl)
-                 (setq taken token))
+                 ;; read it back: another process taking over a stale lock at the same moment may have
+                 ;; replaced it, and then it is theirs
+                 (if (equal token (drgnx-search-index--lock-text file)) (setq taken token) (setq tries 0)))
         (file-already-exists
          (if (drgnx-search-index--lock-live-p file) (setq tries 0) (ignore-errors (delete-file file))))))
     taken))
@@ -68,7 +73,7 @@ lock is replaced."
   "Remove ROOT's lock if it still holds TOKEN (a lock taken over meanwhile is another indexer's)."
   (let ((file (drgnx-search-index--lock-file root)))
     (ignore-errors
-      (when (equal token (with-temp-buffer (insert-file-contents file) (buffer-string)))
+      (when (equal token (drgnx-search-index--lock-text file))
         (delete-file file)))))
 
 ;;;; Reading files
@@ -86,7 +91,9 @@ limit since it was listed (at most one byte more than the limit is read) or is n
                       (buffer-string)))
              (text (and (<= (length bytes) drgnx-search-chunk-max-file-bytes)
                         (decode-coding-string bytes 'utf-8-unix))))
-        (unless (or (null text) (string-match-p drgnx-search-index--raw-byte-regexp text)) text))
+        (unless (or (null text) (string-match-p drgnx-search-index--raw-byte-regexp text))
+          ;; a byte-order mark and Windows line ends are not content: they would reach the chunks and the summary
+          (replace-regexp-in-string "\r\n" "\n" (string-remove-prefix "\ufeff" text) t t)))
     (error nil)))
 
 ;;;; Indexing
@@ -120,7 +127,9 @@ with are an :error.  A project that is no git project, has search off, or whose 
                   (drgnx-search-files-error (setq failure (or (cadr err) "listing the project's files failed")) nil))))
     (cond (failure nil)
           ((plist-get (drgnx-search-config root) :off) (setq failure "search is off for this project"))
-          ((not (drgnx-search--repo-p root)) (setq failure "not a git project")))
+          ((not (condition-case err (drgnx-search--repo-p root)
+                  (error (setq failure (or (cadr err) "checking the project failed")) nil)))
+           (unless failure (setq failure "not a git project"))))
     (if failure (funcall result)
       (if (not (setq token (drgnx-search-index--lock root)))
           (progn (setq failure "indexing") (funcall result))
@@ -130,7 +139,7 @@ with are an :error.  A project that is no git project, has search off, or whose 
                   (let* ((known (progn (setq db (drgnx-search-store-open root)) (drgnx-search-store-files db)))
                          (fresh (or rebuild (zerop (hash-table-count known))))
                          (wanted (make-hash-table :test #'equal))
-                         todo (buf nil) (retried-halving nil))
+                         todo (buf nil) (retried-halving nil) (strikes 0))
                     (when fresh                 ; nothing indexed to stay comparable with
                       (maphash (lambda (path _) (drgnx-search-store-delete-file db path)) known)
                       (clrhash known)
@@ -156,12 +165,15 @@ with are an :error.  A project that is no git project, has search off, or whose 
                              (if (null (plist-get meta :dims))
                                  (drgnx-search-store-set-meta
                                   db (list :provider (plist-get info :provider) :model (plist-get info :model) :dims dims))
-                               (unless (and (= dims (plist-get meta :dims))
-                                            (or (null (plist-get info :provider))
-                                                (and (equal (plist-get info :provider) (plist-get meta :provider))
-                                                     (equal (plist-get info :model) (plist-get meta :model)))))
-                                 (error "the index was built with %s (%s); re-index"
-                                        (drgnx-search-index--model-name meta) (plist-get meta :dims))))))
+                               (let ((same-model (or (null (plist-get info :provider))
+                                                     (and (equal (plist-get info :provider) (plist-get meta :provider))
+                                                          (equal (plist-get info :model) (plist-get meta :model))))))
+                                 (cond ((/= dims (plist-get meta :dims))
+                                        (error "the index was built with %s (%s); re-index"
+                                               (drgnx-search-index--model-name meta) (plist-get meta :dims)))
+                                       ((not same-model)   ; the same size from another model: a fallback answered
+                                        (error "answered by fallback %s; the index was built with %s — run again when that is back, or rebuild to change the model"
+                                               (drgnx-search-index--model-name info) (drgnx-search-index--model-name meta))))))))
                          (request (texts)
                            (setq drgnx-ai-embed-last-info nil)
                            (funcall embed (vconcat texts)))
@@ -177,16 +189,32 @@ with are an :error.  A project that is no git project, has search off, or whose 
                                   (push (request (seq-take texts batch)) vectors)
                                   (setq texts (nthcdr batch texts)))
                                 (apply #'vconcat (nreverse vectors))))))
+                         (skip (file)
+                           ;; a chunk the provider refuses even alone: its file is skipped, and tried again by the
+                           ;; next run (a changed file keeps its old rows meanwhile)
+                           (setq buf (cl-remove file buf :key #'car))
+                           (setf (drgnx-search-index--file-done file) nil)
+                           (cl-incf skipped)
+                           (tick))
                          (flush ()
-                           (let* ((now (seq-take buf batch)) (vectors (embed-texts (mapcar (lambda (e) (plist-get (cdr e) :text)) now))))
-                             (unless (= (length vectors) (length now))
-                               (error "the provider answered %d vectors for %d texts" (length vectors) (length now)))
-                             (check-meta vectors)
-                             (setq buf (nthcdr (length now) buf))
-                             (cl-loop for (file . chunk) in now for vector across vectors
-                                      do (push (append (list :vector vector) chunk) (drgnx-search-index--file-done file))
-                                      (when (zerop (cl-decf (drgnx-search-index--file-left file)))
-                                        (finish file)))))
+                           (let* ((now (seq-take buf batch))
+                                  (vectors (condition-case err
+                                               (embed-texts (mapcar (lambda (e) (plist-get (cdr e) :text)) now))
+                                             (drgnx-ai-embed-error
+                                              ;; two single chunks in a row refused: the provider is down, not the text
+                                              (if (and (= (length now) 1) (< (cl-incf strikes) 2))
+                                                  (progn (skip (car (car now))) nil)
+                                                (signal (car err) (cdr err)))))))
+                             (when vectors
+                               (setq strikes 0)
+                               (unless (= (length vectors) (length now))
+                                 (error "the provider answered %d vectors for %d texts" (length vectors) (length now)))
+                               (check-meta vectors)
+                               (setq buf (nthcdr (length now) buf))
+                               (cl-loop for (file . chunk) in now for vector across vectors
+                                        do (push (append (list :vector vector) chunk) (drgnx-search-index--file-done file))
+                                        (when (zerop (cl-decf (drgnx-search-index--file-left file)))
+                                          (finish file))))))
                          (finish (file)
                            (let ((chunk-list (nreverse (drgnx-search-index--file-done file))))
                              (drgnx-search-store-put-file db (drgnx-search-index--file-path file) (drgnx-search-index--file-hash file) chunk-list)
@@ -293,14 +321,34 @@ variable.  Resolved without prompting.  The values travel in the environment onl
               for key = (and name (drgnx-ai-key id nil))
               when key collect (concat name "=" key)))))
 
+(defconst drgnx-search-index--start-grace 30
+  "Seconds a job just started may take to hold the lock: a second start in that time waits for it.")
+
+(defun drgnx-search-index--starting-p (root)
+  "Non-nil when a job of ROOT (a directory name without trailing slash) was started a moment ago and has no
+exit file: it may not hold the lock yet, and a second job would only exit with \"indexing\".  Reads the job
+directories, lists no process."
+  (let ((dir (drgnx-jobs-dir)))
+    (and (file-directory-p dir)
+         (cl-some (lambda (id)
+                    (let ((jdir (drgnx-jobs--dir id)))
+                      (and (not (file-exists-p (expand-file-name "exit" jdir)))
+                           (when-let* ((attrs (file-attributes jdir)))
+                             (< (float-time (time-since (file-attribute-modification-time attrs)))
+                                drgnx-search-index--start-grace))
+                           (let ((job (drgnx-jobs--read (expand-file-name "job.eld" jdir))))
+                             (and (string-prefix-p "search-index:" (or (plist-get job :name) ""))
+                                  (member root (plist-get job :command)))))))
+                  (directory-files dir nil "\\`[0-9]")))))
+
 (defun drgnx-search-index-start (root &optional rebuild)
   "Index the project at ROOT in a background job (REBUILD: from scratch); returns the job's id, or nil when an
-indexer holds ROOT's lock (nothing starts then).  The finished index jobs of ROOT are removed first, the newest kept.
+indexer holds ROOT's lock or a job of ROOT started within the last 30 seconds (nothing starts then).  The finished index jobs of ROOT are removed first, the newest kept.
 The job is a batch Emacs of the running version, memory-capped at 1G and niced where the jobs run under systemd.
 Never lists the jobs (the re-index timer calls this), but a job of ROOT without an exit file costs a process query
 (under systemd a `systemctl' call) while the old jobs are reaped; a command the user runs asks `drgnx-search-index-busy-p' first."
   (let ((root (directory-file-name (expand-file-name root))))
-    (unless (drgnx-search-index-running-p root)
+    (unless (or (drgnx-search-index-running-p root) (drgnx-search-index--starting-p root))
       (drgnx-search-index--reap root)
       (drgnx-jobs-start (format "search-index: %s" (file-name-nondirectory root))
                         (append (list (expand-file-name invocation-name invocation-directory)

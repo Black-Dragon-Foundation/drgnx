@@ -414,7 +414,9 @@ commit to the job's branch, a card: there is nothing to review."
 (defun drgnx-job--verdict (s)
   "Reviewer S's verdict, from the last non-empty line of its last words: `pass', (fail . REASONS), or nil."
   (let* ((text (plist-get (car (last (seq-filter (lambda (e) (eq (plist-get e :type) 'agent)) (drgnx-agent-session-entries s)))) :text))
-         (line (car (last (split-string (or text "") "\n" t "[ \t\r]+")))))
+         ;; the last non-empty line, without the Markdown emphasis, quote or code marks a model puts round it
+         (line (car (last (split-string (or text "") "\n" t "[ \t\r]+"))))
+         (line (and line (string-trim line "[*_`> \t]+" "[*_`> \t]+"))))
     (cond ((null line) nil)
           ((string-match "\\`VERDICT: *pass" line) 'pass)
           ((string-match "\\`VERDICT: *fail:? *\\(.*\\)" line) (cons 'fail (string-trim (match-string 1 line)))))))

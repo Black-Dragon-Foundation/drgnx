@@ -136,8 +136,13 @@ project — command, arguments and the environment: the state and config directo
   search off with `:off t` if it should not come back).
 - **Indexing is incremental.** A file is read again only when its content changed (staged or not, and untracked files
   count); files that are gone are forgotten. A big project's first index takes a while; later runs take seconds.
+  A leading byte-order mark and Windows line ends (CRLF) are dropped before a file is cut into chunks. A file whose
+  one chunk the embedding provider refuses even alone is skipped (counted in the summary, tried again by the next run,
+  its earlier rows kept); two such refusals in a row mean the provider is down and stop the run. If a fallback
+  provider answers with vectors of the same size as the index's, the run stops saying "answered by fallback X" —
+  run it again when the first provider is back, or rebuild to change the model.
 - It runs in a **background job** — a separate Emacs under systemd, capped at 1 GiB of memory, at low priority — so
-  the editor stays responsive. One job per project at a time. Its log: Show Job Log (Agents tab). Starting a new job
+  the editor stays responsive. One job per project at a time. A second start within 30 seconds of the first waits for it instead of launching a job that would only exit with "indexing". Its log: Show Job Log (Agents tab). Starting a new job
   removes the project's earlier finished index jobs (also those killed without a trace, by a reboot say) but the last one, so their logs do not pile up.
 - **After a save**: when you save a file of a project that has an index, drgnx re-indexes that project 30 seconds after the
   last save (a burst of saves is one run), at the next moment Emacs is idle, so the job never starts while you type.
