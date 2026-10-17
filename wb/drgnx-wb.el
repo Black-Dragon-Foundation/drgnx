@@ -61,13 +61,19 @@ A function title is asked each time the dock shows (a panel's filter stays in it
 
 (defvar drgnx-rules--placing)           ; drgnx-rules.el: the dock's side windows are meant, not rerouted
 
-(defun drgnx-wb-sidebar-view (&optional frame)
-  "The view the sidebar shows (or shows next) on FRAME: `explorer' unless another was chosen."
-  (or (frame-parameter frame 'drgnx-wb-view) 'explorer))
-
 (defun drgnx-wb--in-view-p (spec view)
   "Non-nil when the section SPEC belongs to VIEW (a section without :view is the Explorer's)."
   (eq (or (plist-get spec :view) 'explorer) view))
+
+(defun drgnx-wb--view-defined-p (view)
+  "Non-nil when at least one section belongs to VIEW."
+  (seq-some (lambda (s) (drgnx-wb--in-view-p (cdr s) view)) drgnx-wb--sections))
+
+(defun drgnx-wb-sidebar-view (&optional frame)
+  "The view the sidebar shows (or shows next) on FRAME.
+It is `explorer' unless another view with sections was chosen (a stale choice falls back)."
+  (let ((view (frame-parameter frame 'drgnx-wb-view)))
+    (if (and view (drgnx-wb--view-defined-p view)) view 'explorer)))
 
 (defun drgnx-wb-show-sidebar ()
   "Show the left dock (the current view's sections) without selecting it; keep the width it had."
@@ -106,7 +112,8 @@ A function title is asked each time the dock shows (a panel's filter stays in it
 (defun drgnx-wb-show-view (view)
   "Show only VIEW's sections in the left dock, swapping them in place at the same width.
 Focus stays where it was (a focus in the dock moves to the new view's first section); a hidden
-sidebar is shown first."
+sidebar is shown first.  A view with no sections is a `user-error' and changes nothing."
+  (unless (drgnx-wb--view-defined-p view) (user-error "No %s view" view))
   (let ((in-dock (memq (selected-window) (drgnx-wb--dock-windows))))
     (unless (and (eq view (drgnx-wb-sidebar-view)) (drgnx-wb-sidebar-showing-p))
       (when-let* ((windows (drgnx-wb--dock-windows)))

@@ -72,3 +72,23 @@
    (should (window-live-p (drgnx-wb-section-window 'top)))
    (should (window-live-p (drgnx-wb-section-window 'bottom)))
    (should-not (drgnx-wb-section-window 'find))))
+
+(ert-deftest drgnx-wb-views/a-view-without-sections-changes-nothing ()
+  (drgnx-wb-views-test--with-sections
+   (drgnx-wb-show-sidebar)
+   (let ((px (window-pixel-width (drgnx-wb-section-window 'top))))
+     (should-error (drgnx-wb-show-view 'ghost) :type 'user-error)
+     (should (eq (drgnx-wb-sidebar-view) 'explorer))
+     (should (window-live-p (drgnx-wb-section-window 'top)))
+     (should (= px (window-pixel-width (drgnx-wb-section-window 'top))))
+     (drgnx-wb-hide-sidebar)
+     (should-error (drgnx-wb-show-view 'ghost) :type 'user-error)
+     (should-not (drgnx-wb-sidebar-showing-p)))))
+
+(ert-deftest drgnx-wb-views/a-stale-view-falls-back-to-the-explorer ()
+  (drgnx-wb-views-test--with-sections
+   (set-frame-parameter nil 'drgnx-wb-view 'ghost)
+   (should (eq (drgnx-wb-sidebar-view) 'explorer))
+   (drgnx-wb-show-sidebar)
+   (should (window-live-p (drgnx-wb-section-window 'top)))
+   (should-not (drgnx-wb-section-window 'find))))
