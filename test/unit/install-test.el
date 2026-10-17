@@ -243,6 +243,24 @@ HOME is a new empty directory, deleted afterwards (ENV may name another)."
             (should-not (file-exists-p (expand-file-name "bin/emacs" prefix)))))
       (delete-directory tmp t))))
 
+(ert-deftest drgnx-install/the-path-hint-names-the-shell-startup-file ()
+  ;; M2.5-3: zsh (macOS's default) never reads ~/.profile.  A run with --yes keeps a good (fake) Emacs,
+  ;; links drgnx into a temp prefix that is not on PATH, and prints the hint.
+  (let* ((tmp (make-temp-file "drgnx-install" t))
+         (fake (expand-file-name "emacs" tmp)))
+    (unwind-protect
+        (progn
+          (write-region "#!/bin/sh\necho '31.1 t pgtk'\n" nil fake)
+          (set-file-modes fake #o755)
+          (pcase-dolist (`(,shell ,file) '(("/bin/zsh" "/.zprofile") ("/bin/bash" "/.profile")))
+            (let ((r (drgnx-install-test--run
+                      (list (concat "DRGNX_INSTALL_OS_RELEASE=" (drgnx-install-test--os "fedora-45"))
+                            "DRGNX_INSTALL_UNAME=Linux" (concat "DRGNX_INSTALL_EMACS=" fake) (concat "SHELL=" shell))
+                      "--yes" "--prefix" (expand-file-name "prefix" tmp) "--source-dir" drgnx-install-test--root)))
+              (should (= (car r) 0))
+              (should (string-match-p (concat "add this to [^ ]*" (regexp-quote file) ": export PATH=") (cdr r))))))
+      (delete-directory tmp t))))
+
 (ert-deftest drgnx-install/root-steps-are-announced-even-with-yes ()
   (skip-unless (/= 0 (user-uid)))     ; as root, as_root runs commands without sudo: they would really run
   (let* ((tmp (make-temp-file "drgnx-install" t))

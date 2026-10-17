@@ -403,14 +403,15 @@ link_drgnx() {
 path_hint() {
   case ":$PATH:" in *":$PREFIX/bin:"*) return ;; esac
   local rc="$HOME/.profile" line="export PATH=\"$PREFIX/bin:\$PATH\""
+  case "${SHELL:-}" in */zsh) rc="$HOME/.zprofile" ;; esac    # zsh (macOS's default) never reads ~/.profile
   say ""
   say "$PREFIX/bin is not on your PATH."
-  if ((YES)) || ! have_tty; then note "add this to your shell startup file: $line"; return; fi
+  if ((YES)) || ! have_tty; then note "add this to $rc: $line"; return; fi
   if confirm "Add it to $rc?"; then
     grep -qxF "$line" "$rc" 2>/dev/null || printf '\n# added by the drgnx installer\n%s\n' "$line" >>"$rc"
     note "added to $rc — open a new terminal (or: . $rc)"
   else
-    note "add this to your shell startup file: $line"
+    note "add this to $rc: $line"
   fi
 }
 

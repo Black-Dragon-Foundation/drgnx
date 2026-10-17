@@ -36,8 +36,8 @@ rest of your machine, sets keys and modules, and puts your projects on the board
 5. **drgnx:** clones it into `~/.local/share/drgnx/drgnx` (or fast-forwards an existing checkout, never
    discarding local changes), installing git first if it is missing, and links `~/.local/bin/drgnx`.
 6. **Compiles drgnx** (`drgnx build`) and **checks** it: runs `drgnx doctor` with the Emacs it found or installed.
-7. **PATH:** if `~/.local/bin` is not on your `PATH`, it offers to add one line to `~/.profile` — only when you
-   answer yes; with `--yes` it only prints the line.
+7. **PATH:** if `~/.local/bin` is not on your `PATH`, it offers to add one line to `~/.profile` (`~/.zprofile`
+   when your shell is zsh) — only when you answer yes; with `--yes` it only prints the line and that file.
 
 Running it again is safe: a good Emacs is kept, the checkout is fast-forwarded.
 
@@ -131,7 +131,7 @@ rm -rf ~/.local/share/drgnx ~/.local/bin/drgnx "${XDG_CACHE_HOME:-$HOME/.cache}/
 A source-built Emacs: `make uninstall` in the build directory (`~/.cache/drgnx/build/emacs-31.1`, or under `$XDG_CACHE_HOME` if you set it) before deleting the cache (or
 remove `~/.local/bin/emacs*`, `~/.local/share/emacs`, `~/.local/libexec/emacs`). A packaged Emacs: remove it
 with your package manager. The PATH line, if you let the installer add it, is marked
-`# added by the drgnx installer` in `~/.profile`.
+`# added by the drgnx installer` in `~/.profile` (zsh: `~/.zprofile`).
 
 ## Testing the installer
 
