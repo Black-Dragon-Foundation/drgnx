@@ -55,8 +55,11 @@
     (let ((id (drgnx-job-propose plan)))
       (drgnx-job-approve id)
       (should (drgnx-job-run-test--wait (lambda () (equal (drgnx-job-run-test--status id 1) "in-review")) 30))
-      ;; two sessions worked on it, in the same worktree
-      (should (= (length (seq-filter (lambda (s) (equal (drgnx-agent-session-task s) (format "%s#1" id))) drgnx-agents--sessions)) 2))
+      ;; two agents worked on it, in the same worktree (its reviewer, which may have started by now, apart)
+      (should (= (length (seq-filter (lambda (s) (and (equal (drgnx-agent-session-task s) (format "%s#1" id))
+                                                      (not (gethash (drgnx-agent-session-id s) drgnx-job--reviewers))))
+                                     drgnx-agents--sessions))
+                 2))
       (should (file-exists-p (format "%s.claude/worktrees/%s-1/.mock-crashed" repo id))))))
 
 ;;; job-run-test.el ends here
