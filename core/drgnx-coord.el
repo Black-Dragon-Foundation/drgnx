@@ -51,11 +51,13 @@
 
 ;;;; Jobs and tasks
 
-(cl-defun drgnx-coord-job-create (&key id title plan repo tasks)
-  "Make job ID with TASKS ((:n :title :role :deps (N…))…): those without dependencies ready, the rest pending."
+(cl-defun drgnx-coord-job-create (&key id title plan repo tasks data)
+  "Make job ID with TASKS ((:n :title :role :deps (N…))…): those without dependencies ready, the rest pending.  DATA:
+a plist kept with it (`drgnx-coord-job')."
   (drgnx-coord--tx
    (lambda (db)
-     (sqlite-execute db "insert into job values (?, ?, ?, ?, 'proposed', ?, null)" (list id title plan repo (float-time)))
+     (sqlite-execute db "insert into job values (?, ?, ?, ?, 'proposed', ?, ?)"
+                     (list id title plan repo (float-time) (and data (prin1-to-string data))))
      (dolist (task tasks)
        (let ((tid (format "%s#%d" id (plist-get task :n))))
          (sqlite-execute db "insert into jtask (id, job, n, title, role, status) values (?, ?, ?, ?, ?, ?)"
@@ -64,6 +66,39 @@
          (dolist (d (plist-get task :deps))
            (sqlite-execute db "insert into jdep values (?, ?)" (list tid (format "%s#%d" id d))))))
      id)))
+
+(defun drgnx-coord-job (id)
+  "Job ID: (:id :title :plan :repo :status :created :data PLIST), or nil."
+  (pcase (car (sqlite-select (drgnx-work-db) "select id, title, plan, repo, status, created, data from job where id = ?" (list id)))
+    ('nil nil)
+    (`(,id ,title ,plan ,repo ,status ,created ,data)
+     (list :id id :title title :plan plan :repo repo :status status :created created
+           :data (and data (car (read-from-string data)))))))
+
+(defun drgnx-coord-jobs (&optional status)
+  "Every job's id (with STATUS when given), newest first."
+  (mapcar #'car (sqlite-select (drgnx-work-db) (concat "select id from job" (if status " where status = ?" "") " order by created desc")
+                               (and status (list status)))))
+
+(cl-defun drgnx-coord-job-set (id &key status data)
+  "Change job ID's STATUS and/or DATA (a plist)."
+  (when status (sqlite-execute (drgnx-work-db) "update job set status = ? where id = ?" (list status id)))
+  (when data (sqlite-execute (drgnx-work-db) "update job set data = ? where id = ?" (list (prin1-to-string data) id))))
+
+(defun drgnx-coord-force-status (task status &optional agent)
+  "Set TASK's STATUS (and holder AGENT) as the job engine decides — no holder check; done readies its dependents."
+  (drgnx-coord--tx
+   (lambda (db)
+     (sqlite-execute db "update jtask set status = ?, agent = ?, lease_until = ? where id = ?"
+                     (list status agent (and agent (member status drgnx-coord--active) (drgnx-coord--lease)) task))
+     (when (equal status "done") (drgnx-coord--ready-dependents db task))
+     t)))
+
+(defun drgnx-coord--ready-dependents (db task)
+  (dolist (waiting (mapcar #'car (sqlite-select db "select task from jdep where dep = ?" (list task))))
+    (when (and (equal (nth 4 (drgnx-coord--task-row db waiting)) "pending")
+               (seq-every-p (lambda (d) (equal (nth 4 (drgnx-coord--task-row db d)) "done")) (drgnx-coord--deps db waiting)))
+      (sqlite-execute db "update jtask set status = 'ready' where id = ?" (list waiting)))))
 
 (defun drgnx-coord--deps (db task)
   (mapcar #'car (sqlite-select db "select dep from jdep where task = ? order by dep" (list task))))
