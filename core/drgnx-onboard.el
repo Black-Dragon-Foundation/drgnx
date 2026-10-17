@@ -197,8 +197,16 @@ current choice as the default) — with no option and no question, the current c
 
 (defconst drgnx-onboard-default-roots '("~/workspace" "~/code" "~/src" "~/projects" "~/git"))
 
+(defconst drgnx-onboard--none "(none)" "The project picker's choice of no project.")
+(defvar crm-separator)
+
+(defun drgnx-onboard--separator (choices)
+  "What separates several CHOICES in `completing-read-multiple': the first of , ; | that none contains."
+  (or (seq-find (lambda (s) (not (seq-some (lambda (c) (string-search s c)) choices))) '("," ";" "|")) ","))
+
 (defun drgnx-onboard--projects-step (ctx)
   (require 'drgnx-projects)
+  (require 'crm)
   (let* ((o (plist-get ctx :options))
          (roots (or (plist-get o :roots) (seq-filter #'file-directory-p (mapcar #'expand-file-name drgnx-onboard-default-roots))))
          (found (delete-dups (mapcar #'directory-file-name
@@ -206,9 +214,14 @@ current choice as the default) — with no option and no question, the current c
                                              (seq-filter #'file-directory-p (drgnx-projects-gryphn-roots))))))
          (truncated drgnx-projects-scan-truncated)
          (ask (and (plist-get ctx :interactive) found))
+         (sep (drgnx-onboard--separator found))
+         (crm-separator (concat "[ \t]*" (regexp-quote sep) "[ \t]*"))   ; never splits a path
          (picked (if ask
-                     (or (completing-read-multiple (format "Projects to import (%d found; empty: all): " (length found)) found)
-                         found)
+                     (let ((answer (completing-read-multiple
+                                    (format "Projects to import (%d found; several: separate with %s; empty: all; %s: none): "
+                                            (length found) sep drgnx-onboard--none)
+                                    (cons drgnx-onboard--none found))))
+                       (cond ((member drgnx-onboard--none answer) nil) (answer) (t found)))
                    found))
          (todos (cond ((plist-member o :todos) (plist-get o :todos))
                       ((and ask picked)
@@ -216,7 +229,10 @@ current choice as the default) — with no option and no question, the current c
          (stopped (and truncated (format " — the scan stopped after %ss at %s; pass the directories with --roots"
                                          drgnx-projects-scan-budget truncated))))
     (if (null picked)
-        (list (if truncated 'warn 'info) (concat (format "no git repositories found under %s" (string-join roots ", ")) stopped))
+        (list (if truncated 'warn 'info)
+              (concat (if found "no projects imported (none picked)"
+                        (format "no git repositories found under %s" (string-join roots ", ")))
+                      stopped))
       (let ((r (drgnx-projects-import picked :todos todos)))
         (list (if truncated 'warn 'ok)
               (concat (format "%d projects on the board (%d new), %d TODOs added%s — %s"

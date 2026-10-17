@@ -356,4 +356,32 @@
   ;; M1: emacsclient -a "" would start a daemon with the default init (not drgnx's) on drgnx's socket.
   (should-not (string-match-p " -a " drgnx-onboard-desktop-entry)))
 
+(defun drgnx-onboard-test--pick (root answers)
+  "Run the projects step on ROOT's ws/, the user answering ANSWERS (what they type, split as crm splits it).
+Returns (RESULT PROMPTS)."
+  (let (prompts)
+    (cl-letf (((symbol-function 'completing-read-multiple)
+               (lambda (prompt table &rest _)
+                 (push prompt prompts)
+                 (let ((picked (split-string (pop answers) crm-separator t)))
+                   (should (seq-every-p (lambda (s) (member s (all-completions "" table))) picked))   ; real choices
+                   picked))))
+      (list (car (drgnx-onboard-run :only '(projects) :options `(:roots (,(concat root "ws/"))))) (nreverse prompts)))))
+
+(ert-deftest drgnx-onboard/the-project-picker-can-pick-none-and-paths-with-commas ()
+  (drgnx-onboard-test--with root
+    (let ((odd (directory-file-name (drgnx-onboard-test--repo (concat root "ws/al,pha")))))
+      (drgnx-onboard-test--repo (concat root "ws/beta"))
+      ;; (none): nothing imported, no question about TODOs
+      (pcase-let ((`(,r ,prompts) (drgnx-onboard-test--pick root (list "(none)"))))
+        (should (eq (cadr r) 'info))
+        (should (string-match-p "none" (nth 2 r)))
+        (should (= (length prompts) 1))
+        (should-not (file-exists-p (drgnx-projects-board-file))))
+      ;; a path with a comma is one choice
+      (pcase-let ((`(,r ,_) (drgnx-onboard-test--pick root (list odd ""))))
+        (should (eq (cadr r) 'ok))
+        (should (string-match-p "\\`1 projects on the board" (nth 2 r)))
+        (should (string-search (concat ":PROJECT_ROOT: " odd) (drgnx-onboard-test--board)))))))
+
 ;;; onboard-test.el ends here
