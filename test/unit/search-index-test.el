@@ -164,6 +164,22 @@
       (should (= (length (drgnx-search-index-test--paths root)) 6))
       (should (floatp (plist-get (drgnx-search-index-test--peek root #'drgnx-search-store-meta) :indexed-at))))))
 
+(ert-deftest drgnx-search-index/a-failing-run-after-a-complete-one-leaves-indexed-at-and-rows ()
+  (drgnx-search-index-test--with (drgnx-search-index-test--named 4)
+    (should-not (plist-get (drgnx-search-index root :embed (drgnx-search-index-test--stub)) :error))
+    (let ((stamp (plist-get (drgnx-search-index-test--peek root #'drgnx-search-store-meta) :indexed-at)))
+      (should (floatp stamp))
+      (sleep-for 0.02)
+      (dolist (n '("f1.txt" "f2.txt" "f3.txt")) (drgnx-search-index-test--write root n (format "new %s\n" n)))
+      (let ((r (drgnx-search-index root :embed (drgnx-search-index-test--stub-failing-from 2) :batch 1)))
+        (should (string-match-p "HTTP 500" (plist-get r :error)))
+        (should (= (plist-get r :changed) 1)))
+      (should (eql (plist-get (drgnx-search-index-test--peek root #'drgnx-search-store-meta) :indexed-at) stamp))
+      ;; every earlier file still has its rows (the changed one rewritten, the rest as before)
+      (should (equal (drgnx-search-index-test--paths root) '("f1.txt" "f2.txt" "f3.txt" "f4.txt")))
+      (dolist (n '("f1.txt" "f2.txt" "f3.txt" "f4.txt"))
+        (should (= (drgnx-search-index-test--chunk-count root n) 1))))))
+
 (ert-deftest drgnx-search-index/a-provider-error-retries-once-with-half-the-batch ()
   (drgnx-search-index-test--with (drgnx-search-index-test--named 6)
     (let* ((ok (drgnx-search-index-test--stub)) (sizes nil)
@@ -260,6 +276,59 @@
         (should (equal (drgnx-search-index-test--paths root) '("ok.txt")))
         (should-not (plist-get (drgnx-search-index-test--peek root #'drgnx-search-store-meta) :error))))))
 
+;;;; Files that stop being indexable
+
+(ert-deftest drgnx-search-index/a-changed-file-that-became-unreadable-loses-its-rows ()
+  (drgnx-search-index-test--with (drgnx-search-index-test--named 3)
+    (drgnx-search-index root :embed (drgnx-search-index-test--stub))
+    ;; f1 becomes non-UTF-8, f2 vanishes from disk but is still listed
+    (drgnx-search-index-test--write root "f1.txt" (concat "caf" (unibyte-string #xe9) " now\n"))
+    (drgnx-search-index-test--write root "f2.txt" "edited\n")
+    (cl-letf* ((orig (symbol-function 'drgnx-search-files))
+               ((symbol-function 'drgnx-search-files)
+                (lambda (r) (prog1 (funcall orig r) (delete-file (expand-file-name "f2.txt" r))))))
+      (let ((r (drgnx-search-index root :embed (drgnx-search-index-test--stub))))
+        (should-not (plist-get r :error))
+        (should (= (plist-get r :skipped) 2))
+        (should (= (plist-get r :changed) 0))))
+    (should (equal (drgnx-search-index-test--paths root) '("f3.txt")))
+    (should (= (drgnx-search-index-test--chunk-count root "f1.txt") 0))
+    (should (= (drgnx-search-index-test--chunk-count root "f2.txt") 0))))
+
+(ert-deftest drgnx-search-index/a-file-grown-past-the-limit-is-never-read-whole ()
+  (drgnx-search-index-test--with (drgnx-search-index-test--named 2)
+    (drgnx-search-index root :embed (drgnx-search-index-test--stub))
+    (drgnx-search-index-test--write root "f1.txt" "small edit\n")
+    (let (ends)
+      (cl-letf* ((orig (symbol-function 'drgnx-search-files))
+                 ((symbol-function 'drgnx-search-files)
+                  ;; listed small, then grown before it is read
+                  (lambda (r) (prog1 (funcall orig r)
+                                (drgnx-search-index-test--write
+                                 r "f1.txt" (make-string (+ drgnx-search-chunk-max-file-bytes 5000) ?x)))))
+                 (orig-insert (symbol-function 'insert-file-contents-literally))
+                 ((symbol-function 'insert-file-contents-literally)
+                  (lambda (file &optional visit beg end replace)
+                    (push end ends) (funcall orig-insert file visit beg end replace))))
+        (let ((r (drgnx-search-index root :embed (drgnx-search-index-test--stub))))
+          (should (= (plist-get r :skipped) 1))))
+      (should ends)
+      (should (cl-every (lambda (e) (and e (<= e (1+ drgnx-search-chunk-max-file-bytes)))) ends)))
+    (should (= (drgnx-search-index-test--chunk-count root "f1.txt") 0))
+    (should (equal (drgnx-search-index-test--paths root) '("f2.txt")))))
+
+(ert-deftest drgnx-search-index/the-lock-of-another-process-is-not-removed ()
+  (drgnx-search-index-test--with (drgnx-search-index-test--named 2)
+    (let ((ok (drgnx-search-index-test--stub)) (lock (drgnx-search-index-test--lock root)))
+      ;; while we index, the lock is replaced (as if taken over after being judged stale)
+      (drgnx-search-index root :embed (lambda (inputs &rest r)
+                                        (write-region "4242 1.0" nil lock nil 'silent)
+                                        (apply ok inputs r)))
+      (should (equal (with-temp-buffer (insert-file-contents lock) (buffer-string)) "4242 1.0"))
+      (delete-file lock)
+      (drgnx-search-index root :embed ok :rebuild t)
+      (should-not (file-exists-p lock)))))
+
 ;;;; Starting it
 
 (ert-deftest drgnx-jobs/memory-max-reaches-systemd-run ()
@@ -270,6 +339,16 @@
     (should (< (cl-position "MemoryMax=1G" with :test #'equal) (cl-position "sh" with :test #'equal)))
     (should (equal (last with 3) '("sh" "-c" "true")))
     (should-not (member "-p" without))))
+
+(ert-deftest drgnx-jobs/nice-reaches-systemd-run ()
+  (let ((with (drgnx-jobs--systemd-args "id1" "/tmp" "true" nil nil "1G" 10))
+        (only (drgnx-jobs--systemd-args "id1" "/tmp" "true" nil nil nil 10))
+        (without (drgnx-jobs--systemd-args "id1" "/tmp" "true" nil nil "1G")))
+    (should (member "Nice=10" with))
+    (should (equal (cl-subseq (member "-p" only) 0 2) '("-p" "Nice=10")))
+    (should (< (cl-position "Nice=10" with :test #'equal) (cl-position "sh" with :test #'equal)))
+    (should (equal (last with 3) '("sh" "-c" "true")))
+    (should-not (cl-find-if (lambda (a) (string-prefix-p "Nice=" a)) without))))
 
 (ert-deftest drgnx-search-index/start-runs-the-cli-memory-capped-once-per-project ()
   (let (started (running nil))
@@ -302,6 +381,37 @@
                           (list :id "job-9" :status 'running :name "search-index: other"
                                 :command '("emacs" "/tmp/other"))))
       (should (equal (drgnx-search-index-start "/tmp/some-project") "job-1")))))
+
+(ert-deftest drgnx-search-index/start-gives-the-job-the-keys-and-dirs-it-needs ()
+  (let* ((conf (make-temp-file "drgnx-search-conf" t))
+         (process-environment (append (list (concat "DRGNX_CONFIG_DIR=" conf) "XDG_STATE_HOME=/tmp/xs" "XDG_CONFIG_HOME=/tmp/xc"
+                                            "XDG_CACHE_HOME=/tmp/xk" "XDG_DATA_HOME=/tmp/xd" "DRGNX_DATA_DIR=/tmp/dd"
+                                            "SEARCH_TEST_KEY=sk-secret-1" "DRGNX_TASK=nope")
+                                      process-environment))
+         (auth-sources nil) (drgnx-ai--keys (make-hash-table :test #'eq)) (drgnx-ai--read-cache (make-hash-table :test #'equal))
+         started)
+    (unwind-protect
+        (progn
+          (with-temp-file (expand-file-name "ai.eld" conf)
+            (prin1 '(:version 1
+                              :providers ((kz :name "K" :kind openai :url "http://127.0.0.1:1/v1" :key-env "SEARCH_TEST_KEY" :caps (embed))
+                                          (nokey :name "N" :kind openai :url "http://127.0.0.1:2/v1" :key-env "SEARCH_TEST_NOKEY" :caps (embed)))
+                              :roles ((embed (kz . "m") (nokey . "m") (tei))))
+                   (current-buffer)))
+          (cl-letf (((symbol-function 'drgnx-jobs-start) (lambda (&rest args) (setq started args) "job-1"))
+                    ((symbol-function 'drgnx-jobs-list) (lambda () nil)))
+            (drgnx-search-index-start "/tmp/some-project"))
+          (let ((env (plist-get (cddr started) :env)))
+            (dolist (e '("SEARCH_TEST_KEY=sk-secret-1" "XDG_STATE_HOME=/tmp/xs" "XDG_CONFIG_HOME=/tmp/xc"
+                         "XDG_CACHE_HOME=/tmp/xk" "XDG_DATA_HOME=/tmp/xd" "DRGNX_DATA_DIR=/tmp/dd"))
+              (should (member e env)))
+            (should (member (concat "DRGNX_CONFIG_DIR=" conf) env))
+            (should-not (cl-find-if (lambda (e) (string-prefix-p "SEARCH_TEST_NOKEY" e)) env))
+            (should-not (member "DRGNX_TASK=nope" env)))
+          ;; nothing key-like in the command line, and the job is niced
+          (should-not (cl-find-if (lambda (a) (string-match-p "sk-secret\\|KEY" a)) (cadr started)))
+          (should (eql (plist-get (cddr started) :nice) 10)))
+      (delete-directory conf t))))
 
 (ert-deftest drgnx-search-index/cli-prints-one-line-and-exits-1-on-error ()
   (let* ((state (make-temp-file "drgnx-search-state" t))

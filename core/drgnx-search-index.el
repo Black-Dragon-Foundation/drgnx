@@ -11,7 +11,9 @@
 ;; It runs as a background job (`drgnx-search-index-start'): a batch Emacs under systemd with a memory cap, so
 ;; indexing a big project can neither freeze the editor nor eat the machine.  Only the current batch's vectors
 ;; are ever in memory.  One indexer per project: a lock file next to the index holds the pid and start time of
-;; the process indexing; a lock whose process is gone is taken over.  See docs/guide/search.md once it exists.
+;; the process indexing; a lock whose process is gone is taken over.  The lock is removed on exit only while it
+;; still holds this process's pid and start time; a SIGTERM or an OOM kill leaves it behind, and the next run
+;; takes it over as stale.  See docs/guide/search.md once it exists.
 
 ;;; Code:
 (require 'cl-lib)
@@ -47,18 +49,26 @@ within half a second, as for jobs: a pid recycled by another process is no holde
         (and attrs (< (float-time (time-since (file-attribute-modification-time attrs))) 10))))))
 
 (defun drgnx-search-index--lock (root)
-  "Take ROOT's indexing lock: t, or nil when a live process holds it.  A stale lock is replaced."
-  (let ((file (drgnx-search-index--lock-file root)) (taken nil) (tries 2))
+  "Take ROOT's indexing lock: its contents (\"PID START\"), or nil when a live process holds it.  A stale
+lock is replaced."
+  (let ((file (drgnx-search-index--lock-file root)) (taken nil) (tries 2)
+        (token (format "%d %s" (emacs-pid) (or (drgnx-search-index--start-time (emacs-pid)) 0))))
     (make-directory (file-name-directory file) t)
     (while (and (not taken) (> tries 0))
       (cl-decf tries)
       (condition-case nil
-          (progn (write-region (format "%d %s" (emacs-pid) (or (drgnx-search-index--start-time (emacs-pid)) 0))
-                               nil file nil 'silent nil 'excl)
-                 (setq taken t))
+          (progn (write-region token nil file nil 'silent nil 'excl)
+                 (setq taken token))
         (file-already-exists
          (if (drgnx-search-index--lock-live-p file) (setq tries 0) (ignore-errors (delete-file file))))))
     taken))
+
+(defun drgnx-search-index--unlock (root token)
+  "Remove ROOT's lock if it still holds TOKEN (a lock taken over meanwhile is another indexer's)."
+  (let ((file (drgnx-search-index--lock-file root)))
+    (ignore-errors
+      (when (equal token (with-temp-buffer (insert-file-contents file) (buffer-string)))
+        (delete-file file)))))
 
 ;;;; Reading files
 
@@ -66,14 +76,16 @@ within half a second, as for jobs: a pid recycled by another process is no holde
   "A byte that did not decode (Emacs keeps those as raw-byte characters).")
 
 (defun drgnx-search-index--read (root path)
-  "The text of ROOT/PATH, decoded as UTF-8; nil when the file vanished, cannot be read or is not valid UTF-8."
+  "The text of ROOT/PATH, decoded as UTF-8; nil when the file vanished, cannot be read, grew past the size
+limit since it was listed (at most one byte more than the limit is read) or is not valid UTF-8."
   (condition-case nil
-      (let ((text (decode-coding-string (with-temp-buffer
-                                          (set-buffer-multibyte nil)
-                                          (insert-file-contents-literally (concat root path))
-                                          (buffer-string))
-                                        'utf-8-unix)))
-        (unless (string-match-p drgnx-search-index--raw-byte-regexp text) text))
+      (let* ((bytes (with-temp-buffer
+                      (set-buffer-multibyte nil)
+                      (insert-file-contents-literally (concat root path) nil 0 (1+ drgnx-search-chunk-max-file-bytes))
+                      (buffer-string)))
+             (text (and (<= (length bytes) drgnx-search-chunk-max-file-bytes)
+                        (decode-coding-string bytes 'utf-8-unix))))
+        (unless (or (null text) (string-match-p drgnx-search-index--raw-byte-regexp text)) text))
     (error nil)))
 
 ;;;; Indexing
@@ -87,7 +99,8 @@ within half a second, as for jobs: a pid recycled by another process is no holde
 (cl-defun drgnx-search-index (root &key embed progress batch rebuild)
   "Bring the index of the project at ROOT up to date.  Returns (:added :changed :removed :chunks :skipped
 :seconds :error): the files written new, rewritten (their content changed) and forgotten, the chunks written,
-the files that could not be read as UTF-8 text (skipped, not an error), and :error — a message, or nil.
+the files that could not be read as UTF-8 text or grew past the size limit (skipped, not an error; a changed
+one loses its old rows), and :error — a message, or nil.
 EMBED (default `drgnx-ai-embed-sync') takes a vector of texts and returns a vector of vectors, setting
 `drgnx-ai-embed-last-info' to who answered (provider, model).  BATCH (default 16) chunks go in one request;
 a request the provider refuses is retried once in halves (the halved size stays for the run), and a second
@@ -98,7 +111,7 @@ with are an :error.  A project that is no git project, has search off, or whose 
 :error and changes nothing.  A second indexer for the project is an :error \"indexing\"."
   (let* ((t0 (float-time)) (root (file-name-as-directory (expand-file-name root)))
          (embed (or embed #'drgnx-ai-embed-sync)) (batch (or batch drgnx-search-index-default-batch))
-         (added 0) (changed 0) (removed 0) (chunks 0) (skipped 0) (done 0) (total 0) (failure nil)
+         (added 0) (changed 0) (removed 0) (chunks 0) (skipped 0) (done 0) (total 0) (failure nil) (token nil)
          (result (lambda ()
                    (list :added added :changed changed :removed removed :chunks chunks :skipped skipped
                          :seconds (- (float-time) t0) :error failure)))
@@ -108,7 +121,7 @@ with are an :error.  A project that is no git project, has search off, or whose 
           ((plist-get (drgnx-search-config root) :off) (setq failure "search is off for this project"))
           ((not (drgnx-search--repo-p root)) (setq failure "not a git project")))
     (if failure (funcall result)
-      (if (not (drgnx-search-index--lock root))
+      (if (not (setq token (drgnx-search-index--lock root)))
           (progn (setq failure "indexing") (funcall result))
         (let ((db nil))
           (unwind-protect
@@ -183,7 +196,10 @@ with are an :error.  A project that is no git project, has search off, or whose 
                       (dolist (file todo)
                         (let ((text (drgnx-search-index--read root (drgnx-search-index--file-path file))))
                           (if (null text)
-                              (progn (cl-incf skipped) (tick))
+                              ;; no longer readable: what was indexed of it is no longer there either
+                              (progn (when (eq (drgnx-search-index--file-kind file) 'changed)
+                                       (drgnx-search-store-delete-file db (drgnx-search-index--file-path file)))
+                                     (cl-incf skipped) (tick))
                             (let ((cs (drgnx-search-chunks text)))
                               (setf (drgnx-search-index--file-left file) (length cs))
                               (if (null cs) (finish file)
@@ -193,7 +209,7 @@ with are an :error.  A project that is no git project, has search off, or whose 
                     (drgnx-search-store-set-meta db (list :indexed-at (float-time))))
                 (error (setq failure (if (eq (car err) 'drgnx-ai-embed-error) (cadr err) (error-message-string err)))))
             (when db (ignore-errors (sqlite-close db)))
-            (ignore-errors (delete-file (drgnx-search-index--lock-file root)))))
+            (drgnx-search-index--unlock root token)))
         (funcall result)))))
 
 ;;;; Batch entry and the job
@@ -226,9 +242,24 @@ Prints one summary line; exits 0, or 1 on an error."
                                  (member root (plist-get job :command))))
               (drgnx-jobs-list)))
 
+;; The job is a fresh process: it gets the editor's state directories (so it writes the index and lock the
+;; editor reads) and the keys of the embed chain (resolved here, where a key may live in auth-source).
+
+(defun drgnx-search-index--job-env ()
+  "\"NAME=value\"… for the indexing job: the XDG and DRGNX_*_DIR variables set here, and for each provider in the
+`embed' role with a key, its key variable.  Resolved without prompting.  The values travel in the environment only."
+  (append
+   (cl-loop for e in process-environment
+            when (string-match-p "\\`\\(XDG_\\(STATE\\|CONFIG\\|CACHE\\|DATA\\)_HOME\\|DRGNX_[A-Z0-9_]*_DIR\\)=." e)
+            collect e)
+   (cl-loop for (id . _) in (drgnx-ai-role 'embed)
+            for name = (plist-get (drgnx-ai-provider id) :key-env)
+            for key = (and name (drgnx-ai-key id nil))
+            when key collect (concat name "=" key))))
+
 (defun drgnx-search-index-start (root &optional rebuild)
   "Index the project at ROOT in a background job (REBUILD: from scratch); returns the job's id.
-The job is a batch Emacs of the running version, memory-capped at 1G where the jobs run under systemd.  When a
+The job is a batch Emacs of the running version, memory-capped at 1G and niced where the jobs run under systemd.  When a
 job for ROOT already runs, nothing starts and that job's id comes back."
   (let ((root (directory-file-name (expand-file-name root))))
     (if-let* ((job (drgnx-search-index--running-job root)))
@@ -238,7 +269,8 @@ job for ROOT already runs, nothing starts and that job's id comes back."
                                       "--batch" "-Q" "-L" drgnx-search-index--core-dir
                                       "-l" "drgnx-search-index" "-f" "drgnx-search-index-cli" root)
                                 (and rebuild (list "--rebuild")))
-                        :cwd root :memory-max "1G"))))
+                        :cwd root :memory-max "1G" :nice 10
+                        :env (drgnx-search-index--job-env)))))
 
 (provide 'drgnx-search-index)
 ;;; drgnx-search-index.el ends here
