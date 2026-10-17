@@ -14,6 +14,7 @@
                                        process-environment))
           (auth-sources nil) (drgnx-ai--keys (make-hash-table :test #'eq)))
      (unwind-protect (progn (make-directory (concat ,root "config") t) (make-directory (concat ,root "proj/.drgnx") t) ,@body)
+       (auth-source-forget-all-cached)                  ; auth-source remembers the fixture's keys: not for later tests
        (delete-directory ,root t))))
 
 (defun drgnx-ai-test--write (file form) (with-temp-file file (prin1 form (current-buffer))))

@@ -250,6 +250,72 @@ current choice as the default) — with no option and no question, the current c
     (let ((found (seq-filter #'executable-find programs)))
       (list 'info (format "%s; %s" (if found (concat "found: " (string-join found ", ")) "nothing found") then)))))
 
+;;;; Step 4: AI providers
+
+(defvar drgnx-ai-detected)
+(declare-function drgnx-ai-probe "drgnx-ai-probe")
+(declare-function drgnx-ai-usable-p "drgnx-ai-probe")
+(declare-function drgnx-ai-vram "drgnx-ai-probe")
+(declare-function drgnx-ai-model-vram "drgnx-ai-probe")
+(declare-function drgnx-ai-role "drgnx-ai")
+(declare-function drgnx-ai-set-role "drgnx-ai")
+(declare-function drgnx-ai-key "drgnx-ai")
+(declare-function drgnx-ai-provider "drgnx-ai")
+(declare-function drgnx-ai-request "drgnx-ai-client")
+
+(defun drgnx-onboard--wait (pred secs)
+  (let ((deadline (+ (float-time) secs)))
+    (while (and (not (funcall pred)) (< (float-time) deadline)) (accept-process-output nil 0.05))
+    (funcall pred)))
+
+(defun drgnx-onboard--ai-pick (role cap)
+  "A (PROVIDER . MODEL) for ROLE among the providers that can do CAP, or nil: OpenRouter for edit and chat when
+its key is set; else a provider running here — for `complete' a coder model when it has one."
+  (if (and (memq role '(edit chat)) (drgnx-ai-usable-p 'openrouter cap))
+      (cons 'openrouter "openrouter/auto")
+    (seq-some (lambda (e)
+                (let ((models (plist-get (cdr e) :models)))
+                  (when (and models (drgnx-ai-usable-p (car e) cap))
+                    (cons (car e) (or (and (eq role 'complete) (seq-find (lambda (m) (string-match-p "code" m)) models))
+                                      (car models))))))
+              drgnx-ai-detected)))
+
+(defun drgnx-onboard--ai-step (ctx)
+  "Find the providers running here, give each role without a working one a provider found, test each role with
+one call, and say how to add an OpenRouter key (drgnx writes none)."
+  (require 'drgnx-ai-probe)
+  (let ((done nil))
+    (drgnx-ai-probe (lambda () (setq done t)))
+    (drgnx-onboard--wait (lambda () done) 3))
+  (let ((key (drgnx-ai-key 'openrouter (plist-get ctx :interactive))) (lines nil) (answered 0) (asked 0))
+    (dolist (role '(complete edit chat))
+      (let* ((cap (if (eq role 'complete) 'fim 'chat))
+             (usable (seq-find (lambda (s) (drgnx-ai-usable-p (car s) cap)) (drgnx-ai-role role)))
+             (step (or usable (drgnx-onboard--ai-pick role cap))))
+        (if (not step) (push (format "%s: no provider" role) lines)
+          (unless usable (drgnx-ai-set-role role (cons step (drgnx-ai-role role))))
+          (cl-incf asked)
+          (let (result)
+            (drgnx-ai-request role (if (eq cap 'fim) 'fim 'chat)
+                              (if (eq cap 'fim) (list :prefix "(defun hello ()\n  " :suffix ")\n" :max-tokens 8)
+                                (list :messages (vector (list :role "user" :content "Say OK."))))
+                              (lambda (text _info) (setq result (if text 'yes 'no)))
+                              :chain (list step) :timeout 15)
+            (drgnx-onboard--wait (lambda () result) 16)
+            (when (eq result 'yes) (cl-incf answered))
+            (push (format "%s: %s/%s %s" role (car step) (cdr step) (if (eq result 'yes) "answered" "did not answer")) lines)))))
+    (unless key
+      (push "OpenRouter: set OPENROUTER_API_KEY in your shell profile, or add \"machine openrouter.ai password <key>\" to ~/.authinfo.gpg (drgnx writes no key)" lines))
+    (let* ((vram (drgnx-ai-vram)) (model (cdr (car (drgnx-ai-role 'complete))))
+           (need (if model (drgnx-ai-model-vram model) 0))
+           (free (and vram (- (plist-get vram :total) (plist-get vram :used)))))
+      (when free (push (format "GPU: %d MiB free, the completion model needs about %d" free need) lines))
+      (list (cond ((zerop asked) 'info) ((and free (> need free)) 'warn) ((< answered asked) 'warn) (t 'ok))
+            (if (zerop asked)
+                (concat "no provider is running here and no OpenRouter key is set — start Ollama, LM Studio or llama.cpp, "
+                        "or set the key; then AI: Choose Provider/Model; " (string-join (nreverse lines) "; "))
+              (concat (string-join (nreverse lines) "; ") " — change any: AI: Choose Provider/Model (docs/guide/ai.md)"))))))
+
 ;;;; Step 7: daemon and desktop
 
 (declare-function drgnx-pkg-service-unit "drgnx-pkg")
@@ -310,8 +376,8 @@ current choice as the default) — with no option and no question, the current c
                            :doc "Find your git repositories and put them, with their TODOs, on the org board"
                            :run #'drgnx-onboard--projects-step)
 (drgnx-onboard-define-step 'ai :order 40 :title "AI Providers"
-                           :doc "Local model runners found; providers, keys and models per role come with the AI milestone"
-                           :run (drgnx-onboard--detect '("ollama" "llama-server" "lms") "providers and models are set up by the AI step (M9)"))
+                           :doc "Model providers found (OpenRouter, Ollama, LM Studio, llama.cpp …), a provider and model per role, each tested; the GPU's room"
+                           :run #'drgnx-onboard--ai-step)
 (drgnx-onboard-define-step 'search :order 50 :title "Semantic Search"
                            :doc "Embedding servers found; indexing your projects comes with the search milestone"
                            :run (drgnx-onboard--detect '("text-embeddings-router" "ollama") "indexing is set up by the search step (M10)"))

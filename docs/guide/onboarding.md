@@ -22,7 +22,7 @@ The exit code is 1 when a step failed. `drgnx doctor` reports onboarding too.
 | Check the Environment | git (required), ripgrep, fd, podman, mise, a GPU tool, the Symbols Nerd Font — each found or missing, with how to get it |
 | Look and Keys | the key profile (VS Code, Emacs, Vim, combinations), a colour theme, and the module preset: **minimal** (the workbench and built-in modules), **ide** (plus the package-backed editing modules — not AI), **full-ai** (everything). Your own module choices outside `extra/` stay. Change any of it later: Preferences: Keyboard Profile, Color Theme, Modules |
 | Import Projects | finds git repositories under `~/workspace`, `~/code`, `~/src`, `~/projects`, `~/git` (or `--roots`) and in gryphn's `~/.config/gryphn/projects.tsv`; you pick (empty: all; `(none)`: none; several are separated by a comma, or by `;` or `|` when a path has a comma — the prompt says which). Each goes on the **board**; you choose which projects also bring their open TODOs (`--todos`: all of them; default: none) |
-| AI Providers | lists local model runners found (Ollama, llama.cpp, LM Studio); providers, keys and models per role arrive with the AI milestone |
+| AI Providers | finds the model runners running here (Ollama, llama.cpp, LM Studio, vLLM, … — [ai.md](ai.md)) and the providers you have a key for, picks a model for each role (Inline Completion prefers a code model; Edit and Chat prefer OpenRouter when it has a key), makes one test call per role and keeps the roles that answered — a role you chose that still answers stays. It writes no key: with none, it says how to add one (`OPENROUTER_API_KEY`, or `~/.authinfo`). It also reports the GPU's free memory. Change a role later: AI: Choose Provider/Model |
 | Semantic Search | lists embedding servers found; indexing arrives with the search milestone |
 | Agents | lists agent CLIs found (Claude, gryphn's `gry`); profiles and MCP servers arrive with the agents milestone |
 | Daemon and Desktop | writes `~/.config/drgnx/systemd/drgnx.service` and `~/.config/drgnx/applications/drgnx.desktop` and prints how to install them (and `EDITOR`/`VISUAL`); run interactively, it installs them into `~/.config/systemd/user/` and `~/.local/share/applications/` if you say yes |
@@ -64,6 +64,6 @@ The scan goes at most three levels below each root, never into a repository, a h
 
 `test/unit/onboard-test.el` (fixture repositories and boards in temp dirs: order and resume, failures, never
 asking when non-interactive, presets, the scan's bounds, importing twice, an existing gryphn board, an unsaved
-board, the daemon files, the whole flow twice, the CLI) and `test/live/drgnx-onboard-test.el` (a fresh GUI
+board, the daemon files, the whole flow twice, the CLI), `test/unit/ai-onboard-test.el` (the AI step against a mock model server: roles set and tested, a working choice kept, nothing running) and `test/live/drgnx-onboard-test.el` (a fresh GUI
 session onboards non-interactively; the board has the projects and TODOs, no step or doctor check fails, Welcome
 opens in the editor, a second run changes nothing).

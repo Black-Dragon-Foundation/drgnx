@@ -165,6 +165,8 @@ own (only gptel's default, none, or the one drgnx made is replaced).  Returns th
   "Point gptel at the first provider of the `chat' role USABLE-P accepts.  Returns it, or nil."
   (when-let* ((step (seq-find (lambda (s) (funcall usable-p (car s))) (drgnx-ai-role 'chat))))
     (let ((spec (drgnx-ai-gptel-spec (car step) (cdr step))))
+      ;; `gptel' alone does not load the backend makers (they are autoloads, absent without package.el)
+      (unless (fboundp (car spec)) (require (if (eq (car spec) 'gptel-make-ollama) 'gptel-ollama 'gptel-openai)))
       (setq gptel-backend (apply (car spec) (cdr spec))
             gptel-model (intern (cdr step)))
       step)))

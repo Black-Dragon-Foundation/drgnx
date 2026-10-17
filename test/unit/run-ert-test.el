@@ -144,3 +144,9 @@
           (should (equal (mapcar (lambda (te) (plist-get te :name)) (plist-get (drgnx-run-ert-test--json results) :tests))
                          '("sel-fast"))))
       (delete-directory tmp t))))
+
+(ert-deftest drgnx-run-ert/unit-tests-never-see-the-users-provider-keys ()
+  ;; a test that runs the onboarding's AI step (a live test call) must never reach a paid provider
+  (skip-unless (getenv "DRGNX_TEST_ISOLATED"))
+  (dolist (v '("OPENROUTER_API_KEY" "ANTHROPIC_API_KEY" "ANTHROPIC_AUTH_TOKEN" "OPENAI_API_KEY"))
+    (should-not (getenv v))))

@@ -115,6 +115,8 @@ installer command. Checks are defined with `drgnx-doctor-define`; modules will a
 
 ## Tests
 
-Batch: `test/unit/core-*-test.el`. In a session: `test/live/drgnx-boot-test.el` boots `config=drgnx` and checks
+Batch: `test/unit/core-*-test.el`. The batch runner (`harness/run-ert.el`) gives the suite a temp HOME and drgnx
+dirs, and unsets the provider keys (`OPENROUTER_API_KEY`, `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`,
+`OPENAI_API_KEY`): no test reaches a paid model. In a session: `test/live/drgnx-boot-test.el` boots `config=drgnx` and checks
 the registry, the guard (a `y-or-n-p` from a timer signals), the palette (`C-S-p`), the key sheet (F1) and the
 module report. Scenarios run against drgnx with `bin/drgnx test --scenario`; the workbench ones skip until M3.
