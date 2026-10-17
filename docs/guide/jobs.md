@@ -14,8 +14,10 @@ drgnx job stop job-20261017-101500                    # its agents end; worktree
 drgnx job resume job-20261017-101500 --budget 10      # go on (after a stop, or at the budget)
 ```
 
-`--json` on `status` gives the same as JSON; `status` without an id lists every job. `propose --auto` starts at
-once; `--repo DIR` names the repository when the plan is not inside it. In Emacs: **Start Job from Plan…** (the
+`--json` on `status` gives the same as JSON (an empty list is `[]`); `status` without an id lists every job.
+`--budget` wants a number of USD (`5`, `.5`), nothing else. `propose --auto` starts at once, with no proposal card;
+`--repo DIR` names the repository when the plan is not inside it. `resume` of a proposal you rejected says the job
+was never approved: propose the plan again. In Emacs: **Start Job from Plan…** (the
 proposal, in the job's window, with Approve and Reject), **Show Job Window…**, **Approve Plan Job…**, **Show Plan
 Jobs**, **Stop Plan Job…** — in the palette (no keys by default; module `tools/jobs`).
 
@@ -55,7 +57,8 @@ at once, without a card. Every command goes through the hub, starting it when ne
 The work tracker's grammar ([work.md](work.md)): `# Title`, then `### Task N: title` per task, its text below. Under a
 task, `**Depends:** Task 1, Task 2` (it waits for them) and `**Role:** implement|test|review|docs` (default
 `implement`). Plan-wide: `**Repo:** path` and `**Won't build:** text` — each won't-build line becomes your decision
-in the job's decision log, so no agent builds it. A plan with a dependency cycle or an unknown task is refused. The
+in the job's decision log, so no agent builds it. A plan with a dependency cycle, an unknown task or a task number
+twice is refused. The
 job keeps a snapshot of the plan: editing the file later does not change a running job.
 
 ## Routes and the estimate
@@ -82,11 +85,15 @@ goes through the gateway; profiles drgnx cannot price (a subscription) are liste
   push`, `npm install`, `podman pull`, …), any path outside the worktree (`..` and symlinks resolved), a write to a relative path. Answer it in
   the agent's transcript (Answer Agent). The command check is best effort, not a sandbox: an interpreter
   (`python -c`, `node -e`) can reach the network, and a command can write outside the worktree, unseen.
-- **Review:** an agent finishes a task with `complete_task`; it goes to `in-review`, and a reviewer (role `review`)
-  reads the diff and answers `VERDICT: pass` or `VERDICT: fail: …`. Pass: the task's branch is merged (`--no-ff`)
-  into the job's branch and its dependents may start. Fail: an agent gets the reasons and works again in the same
-  worktree; after three failed reviews (`drgnx-job-review-tries`) it is yours. A merge conflict is aborted (the job's
-  branch stays clean) and becomes a card. `drgnx-job-review` nil: finished tasks wait in review for you.
+- **Review:** an agent finishes a task with `complete_task`; it goes to `in-review`, and once the agent's turn is
+  over (a Stop counts as the end; a request the agent makes after `complete_task` returns the task to review when you
+  answer it) a reviewer (role `review`) reads the diff and answers `VERDICT: pass` or `VERDICT: fail: …` as its last
+  line (Markdown emphasis around it is fine). A task that added no commit to the job's branch is a card ("finished
+  with no commits"), not a review. Pass: the task's branch is merged (`--no-ff`) into the job's branch and its
+  dependents may start. Fail: an agent gets the reasons and works again in the same worktree; after three failed
+  reviews (`drgnx-job-review-tries`) it is yours. A merge conflict is aborted (the job's branch stays clean) and
+  becomes a card; a merge that fails for another reason (a hook, git's own refusal) is a card "merge failed:" with
+  git's message. `drgnx-job-review` nil: finished tasks wait in review for you. Clash reviewers end with the job.
 - **The decision log is enforced:** an agent that has not read the latest decisions of its job gets its next edit
   or command refused, with the changes put in front of it at once; reading is never held, so it catches up and goes on.
 - **Budget:** what goes through the gateway is counted (a subscription agent's traffic is not). When the job's spend
@@ -95,10 +102,11 @@ goes through the gateway; profiles drgnx cannot price (a subscription) are liste
   where it stopped.
 - **A provider at its limit** (429, rate limit, overloaded, quota): the task moves to the next profile on its role's
   route, in a new session in the same worktree, told what the agent before it committed and said last. With no
-  profile left it is a card.
+  profile left it is a card. The summary (`status`) names the profile the task's agent runs on now.
 - **An agent that ends without finishing** (it exited, or never started: a missing command, not logged in) frees
   its task for a new agent — `drgnx-job-start-tries` (3) times, then it is a card with the agent's last error. A turn
-  that ends without `complete_task` gets one reminder; the next such turn is a card ("stalled").
+  that ends without `complete_task` gets one reminder; the next such turn is a card ("stalled"). These counts are in
+  the job's record: a hub restart does not reset them.
 - **The hub restarts:** the job is in `work.db`; tasks whose agents are gone are free again and start anew in their
   worktrees (a task waiting on a permission its agent asked goes back too: the request went with the agent); cards
   for your decision (a conflict, a failed review) stay yours; nothing merges twice.
