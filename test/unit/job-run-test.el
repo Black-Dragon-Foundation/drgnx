@@ -5,58 +5,7 @@
 (require 'drgnx-hub)
 (require 'drgnx-job)
 
-(defun drgnx-job-run-test--git (dir &rest args)
-  (with-temp-buffer
-    (let ((default-directory (file-name-as-directory dir)))
-      (unless (eql 0 (apply #'call-process "git" nil t nil "-c" "user.name=t" "-c" "user.email=t@t.invalid" args))
-        (error "git %S: %s" args (buffer-string)))
-      (string-trim (buffer-string)))))
-
-(defmacro drgnx-job-run-test--with (plan-text &rest body)
-  "BODY with drgnx's dirs in ROOT, a git repo REPO (one commit), PLAN-TEXT as PLAN in it, the hub served here and the
-profile \"mock\" on every route."
-  (declare (indent 1))
-  `(let* ((root (file-name-as-directory (make-temp-file "drgnx-job-run" t)))
-          (repo (concat root "repo/")) (plan (concat repo "docs/plans/p.md"))
-          (process-environment (append (list (concat "DRGNX_CONFIG_DIR=" root "config") (concat "DRGNX_DATA_DIR=" root "data")
-                                             (concat "XDG_STATE_HOME=" root "state") "DRGNX_NO_HUB_START"
-                                             "GIT_AUTHOR_NAME=t" "GIT_AUTHOR_EMAIL=t@t.invalid" "GIT_COMMITTER_NAME=t"
-                                             "GIT_COMMITTER_EMAIL=t@t.invalid")
-                                       process-environment))
-          (drgnx-work-db--handles nil) (drgnx-agents--sessions nil) (drgnx-hub--exit-function #'drgnx-hub-stop)
-          (drgnx-gateway--registrations (make-hash-table :test #'equal))
-          (drgnx-agents-profiles
-           (list (list "mock" :command (list (expand-file-name invocation-name invocation-directory) "--batch" "-Q"
-                                             "-l" (expand-file-name "test/fixtures/mock-acp.el" drgnx-dir)))))
-          (drgnx-job-routes '((implement . "mock") (test . "mock") (docs . "mock") (review . "mock")))
-          (drgnx-job-auto-start nil) (drgnx-job-max-agents 3))
-     (unwind-protect
-         (progn
-           (make-directory (concat root "config") t) (make-directory (concat repo "docs/plans") t)
-           (write-region "x\n" nil (concat repo "README") nil 'silent)
-           (write-region ,plan-text nil plan nil 'silent)
-           (drgnx-job-run-test--git repo "init" "-q" "-b" "main")
-           (drgnx-job-run-test--git repo "add" "-A")
-           (drgnx-job-run-test--git repo "commit" "-q" "-m" "start")
-           (drgnx-hub-serve (drgnx-hub-socket))
-           ,@body)
-       (dolist (s drgnx-agents--sessions) (ignore-errors (drgnx-agents-kill s)))
-       (drgnx-hub-disconnect)
-       (drgnx-hub-stop)
-       (drgnx-work-db-close-all)
-       (delete-directory root t))))
-
-(defun drgnx-job-run-test--wait (pred &optional secs)
-  (let ((deadline (+ (float-time) (or secs 15))))
-    (while (and (not (funcall pred)) (< (float-time) deadline)) (accept-process-output nil 0.05)))
-  (funcall pred))
-
-(defun drgnx-job-run-test--status (job n)
-  (plist-get (seq-find (lambda (task) (= (plist-get task :n) n)) (drgnx-coord-tasks job)) :status))
-
-(defun drgnx-job-run-test--sessions (job)
-  (seq-filter (lambda (s) (and (equal (drgnx-agent-session-job s) job) (not (eq (drgnx-agent-session-status s) 'exited))))
-              drgnx-agents--sessions))
+(load (expand-file-name "test/fixtures/job-fixture" drgnx-dir) nil t)
 
 (defconst drgnx-job-run-test--two "# Two\n\n### Task 1: one\n\n- [ ] a\n\n### Task 2: two\n\n- [ ] b\n\n### Task 3: three\n**Depends:** Task 1, Task 2\n")
 
@@ -84,7 +33,7 @@ profile \"mock\" on every route."
 
 (ert-deftest drgnx-job/a-finished-task-goes-to-review-not-done ()
   (drgnx-job-run-test--with drgnx-job-run-test--two
-    (let ((id (drgnx-job-propose plan)))
+    (let ((drgnx-job-review nil) (id (drgnx-job-propose plan)))   ; no reviewer: it waits in review
       (drgnx-job-approve id)
       (should (drgnx-job-run-test--wait (lambda () (member (drgnx-job-run-test--status id 1) '("in-review" "done"))) 20))
       (should (equal (drgnx-job-run-test--status id 1) "in-review"))
@@ -96,9 +45,9 @@ profile \"mock\" on every route."
     (let ((drgnx-job-max-agents 2) (id (drgnx-job-propose plan)) (most 0))
       (drgnx-job-approve id)
       (drgnx-job-run-test--wait (lambda () (setq most (max most (length (drgnx-job-run-test--sessions id))))
-                                  (seq-every-p (lambda (n) (equal (drgnx-job-run-test--status id n) "in-review")) '(1 2 3 4)))
+                                  (seq-every-p (lambda (n) (member (drgnx-job-run-test--status id n) '("in-review" "done" "needs-input"))) '(1 2 3 4)))
                                 40)
-      (should (seq-every-p (lambda (n) (equal (drgnx-job-run-test--status id n) "in-review")) '(1 2 3 4)))
+      (should (seq-every-p (lambda (n) (member (drgnx-job-run-test--status id n) '("in-review" "done" "needs-input"))) '(1 2 3 4)))
       (should (= most 2)))))
 
 (ert-deftest drgnx-job/an-agent-that-dies-gives-its-task-back ()
