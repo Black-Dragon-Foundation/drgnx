@@ -154,8 +154,10 @@ never into a drgnx file, and never on a command line (it goes to the store on st
 or denies access gives an error saying so; the environment variable always works instead. drgnx never sends a key to
 a model.
 
-Sources that may ask for something (`.gpg` files, the Keychain, the keyring) are only read from commands you run
-(Edit with AI, Ask the Codebase, Choose, onboarding); background features use the environment or a key read earlier.
+Sources that may ask for something (`.gpg` files, the Keychain, the keyring) are only read from commands you run in
+the drgnx app or an interactive Emacs (Edit with AI, Ask the Codebase, Choose); background features (ghost text, the
+hub, agents) use the environment or a key read earlier, and the `drgnx` command-line tool, which runs in batch Emacs,
+never reads the Keychain or keyring: set `OPENROUTER_API_KEY` for it.
 
 ## Agents
 

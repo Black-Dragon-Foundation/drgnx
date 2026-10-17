@@ -227,6 +227,23 @@ Keychain and keyring are never reached."
           (should-not (drgnx-ai-key 'openrouter t))
           (should (equal searched (list (list "/tmp/drgnx-plain-authinfo" (drgnx-ai--secret-source))))))))))
 
+(ert-deftest drgnx-ai/drgnxs-own-store-is-searched-beside-other-keychain-entries-once ()
+  (drgnx-ai-test--with root
+    (dolist (system '(darwin gnu/linux))
+      (let ((system-type system) (noninteractive nil) (searched nil)
+            (own (if (eq system 'darwin) 'macos-keychain-internet 'default)))
+        (cl-letf (((symbol-function 'auth-source-search)
+                   (lambda (&rest _) (push auth-sources searched) nil)))
+          ;; an unrelated Keychain/Secret Service entry does not stand in for drgnx's own
+          (let ((auth-sources (list "/tmp/drgnx-plain-authinfo" 'macos-keychain-generic
+                                    "macos-keychain-internet:/tmp/other.keychain" "secrets:session")))
+            (drgnx-ai-key 'openrouter t)
+            (should (equal (car searched) (append auth-sources (list own)))))
+          ;; already there: not added twice
+          (let ((auth-sources (list "/tmp/drgnx-plain-authinfo" own)))
+            (drgnx-ai-key 'openrouter t)
+            (should (equal (car searched) (list "/tmp/drgnx-plain-authinfo" own)))))))))
+
 (ert-deftest drgnx-ai/background-reads-never-open-the-keychain ()
   (drgnx-ai-test--with root
     (dolist (system '(darwin gnu/linux))
