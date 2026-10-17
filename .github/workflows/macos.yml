@@ -1,0 +1,69 @@
+# macOS (Apple silicon, pinned image). Every push to main and every pull request: the unit suite and the install
+# plan, with Homebrew's Emacs and macOS's own bash 3.2. Weekly and on demand: a real install.sh --yes, then the
+# first sync from the shipped lock, the app bundle and a headless start. The GUI tier stays Linux-only.
+# docs/develop/ci.md
+name: macOS
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "23 4 * * 3"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit:
+    name: Unit suite and install plan (macOS 15)
+    if: github.event_name != 'schedule'
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Emacs and ripgrep (Homebrew)
+        run: brew install emacs ripgrep
+      - name: install.sh parses under macOS's bash 3.2
+        run: /bin/bash -n install.sh
+      - name: install.sh prints the macOS plan and changes nothing
+        run: /bin/bash install.sh --dry-run
+      - name: Unit suite
+        run: |
+          DRGNX_EMACS="$(brew --prefix)/bin/emacs"
+          export DRGNX_EMACS
+          "$DRGNX_EMACS" --version | head -1
+          bin/drgnx test
+
+  install:
+    name: Real install (macOS 15)
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: macos-15
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: install.sh --yes on this checkout (Homebrew's emacs-plus, the command in ~/.local/bin, the app)
+        env:
+          DRGNX_INSTALL_TTY: none   # no terminal on a runner: the installer must not try to open the app
+        run: /bin/bash install.sh --yes --source-dir "$GITHUB_WORKSPACE"
+      - name: Put the drgnx command on the PATH
+        run: echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: drgnx doctor
+        run: drgnx doctor
+      - name: drgnx sync (a first sync, from the shipped lock)
+        run: drgnx sync
+      - name: drgnx macos-app
+        run: |
+          drgnx macos-app
+          test -d "$HOME/Applications/drgnx.app"
+      - name: drgnx open --check (a headless start)
+        run: drgnx open --check
