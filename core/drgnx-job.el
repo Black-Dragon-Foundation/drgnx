@@ -152,5 +152,99 @@ own repository).  Returns its id; nothing starts (unless `drgnx-job-auto-start')
     (not (and file (file-readable-p file)
               (equal (secure-hash 'sha1 (with-temp-buffer (insert-file-contents file) (buffer-string))) (plist-get prop :sha))))))
 
+;;;; Running (in the hub)
+
+(defvar drgnx-job--prompts (make-hash-table :test #'equal) "Session id → its task prompt, given once it is free.")
+(defvar drgnx-job--reviewers (make-hash-table :test #'equal) "Session id → the task it reviews.")
+
+(defun drgnx-job--git (dir &rest args)
+  "Run git ARGS in DIR (short operations: worktrees, merges): (EXIT . OUTPUT)."
+  (with-temp-buffer
+    (let ((default-directory (file-name-as-directory dir)))
+      (cons (apply #'call-process "git" nil t nil args) (string-trim (buffer-string))))))
+
+(defun drgnx-job--repo (job) (plist-get (drgnx-coord-job job) :repo))
+(defun drgnx-job--job-tree (job) (expand-file-name (format ".claude/worktrees/%s/" job) (drgnx-job--repo job)))
+(defun drgnx-job--task-tree (job n) (expand-file-name (format ".claude/worktrees/%s-%d/" job n) (drgnx-job--repo job)))
+
+(cl-defun drgnx-job-approve (id &key budget)
+  "Start job ID: its branch job/ID from the repository's HEAD (in a worktree of its own), then its ready tasks."
+  (let ((job (drgnx-coord-job id)))
+    (unless (equal (plist-get job :status) "proposed") (user-error "Job %s is %s, not proposed" id (plist-get job :status)))
+    (let ((tree (drgnx-job--job-tree id)))
+      (unless (file-directory-p tree)
+        (make-directory (file-name-directory (directory-file-name tree)) t)
+        (pcase (drgnx-job--git (plist-get job :repo) "worktree" "add" "-q" "-b" (concat "job/" id) tree "HEAD")
+          (`(0 . ,_))
+          (`(,_ . ,err) (user-error "Job %s: no job branch: %s" id err)))))
+    (drgnx-coord-job-set id :status "running" :data (plist-put (plist-get job :data) :budget budget))
+    (drgnx-job-step id)
+    id))
+
+(defun drgnx-job--live (id)
+  "Job ID's live sessions that work on its tasks (reviewers apart)."
+  (seq-filter (lambda (s) (and (equal (drgnx-agent-session-job s) id) (not (eq (drgnx-agent-session-status s) 'exited))
+                               (not (gethash (drgnx-agent-session-id s) drgnx-job--reviewers))))
+              (drgnx-agents-sessions)))
+
+(defun drgnx-job--session (sid) (and sid (drgnx-agents-get sid)))
+
+(defun drgnx-job--start-task (id task)
+  "Give TASK (a store plist) of job ID an agent in its own worktree."
+  (let* ((n (plist-get task :n)) (tree (drgnx-job--task-tree id n)) (repo (drgnx-job--repo id)))
+    (unless (file-directory-p tree)
+      (or (eql 0 (car (drgnx-job--git repo "worktree" "add" "-q" "-b" (format "job/%s-%d" id n) tree (concat "job/" id))))
+          (eql 0 (car (drgnx-job--git repo "worktree" "add" "-q" tree (format "job/%s-%d" id n))))   ; its branch from before
+          (error "No worktree for %s" (plist-get task :id))))
+    (let* ((profile (car (drgnx-job-route (intern (or (plist-get task :role) "implement")))))
+           (s (drgnx-agents-start profile tree (plist-get task :id) id))
+           (body (plist-get (seq-find (lambda (x) (= (plist-get x :n) n)) (plist-get (plist-get (drgnx-coord-job id) :data) :tasks)) :body)))
+      (drgnx-coord-force-status (plist-get task :id) "claimed" (drgnx-agent-session-id s))
+      (puthash (drgnx-agent-session-id s)
+               (format "[drgnx task %s] %s\n\n%s\n\nWork only in this directory (a git worktree of your own). Commit your work. Then call complete_task."
+                       (plist-get task :id) (plist-get task :title) (or body ""))
+               drgnx-job--prompts)
+      (drgnx-job--session-changed s))))
+
+(defun drgnx-job-step (id)
+  "Move job ID on: tasks whose agent is gone are free again; finished agents end; ready tasks get agents (up to
+`drgnx-job-max-agents'); the job is done when every task is."
+  (when (equal (plist-get (drgnx-coord-job id) :status) "running")
+    (let ((live (mapcar #'drgnx-agent-session-id (drgnx-job--live id))))
+      (dolist (task (drgnx-coord-tasks id))
+        (let ((status (plist-get task :status)) (agent (plist-get task :agent)))
+          (cond
+           ;; its agent died or the hub restarted: the task is free (its worktree stays)
+           ((and (member status '("claimed" "running")) (not (member agent live)))
+            (drgnx-coord-force-status (plist-get task :id) "ready" nil))
+           ;; finished: its agent's work is done
+           ((and (equal status "in-review") (member agent live))
+            (drgnx-agents-kill (drgnx-job--session agent))))))
+      (let ((count (length (drgnx-job--live id))))
+        (dolist (task (drgnx-coord-tasks id))
+          (when (and (equal (plist-get task :status) "ready") (< count drgnx-job-max-agents))
+            (drgnx-job--start-task id task)
+            (setq count (1+ count)))))
+      (when (seq-every-p (lambda (task) (member (plist-get task :status) '("done" "dropped"))) (drgnx-coord-tasks id))
+        (drgnx-coord-job-set id :status "done")))))
+
+(defun drgnx-job-tick ()
+  "Move every running job on (the hub's tick)."
+  (dolist (id (drgnx-coord-jobs "running")) (with-demoted-errors "drgnx job: %S" (drgnx-job-step id))))
+
+(defun drgnx-job--session-changed (s)
+  "A job session changed (`drgnx-agents-changed-functions'): a free one gets its task prompt; an ended one moves its
+job on."
+  (when-let* ((job (drgnx-agent-session-job s)))
+    (let* ((sid (drgnx-agent-session-id s)) (prompt (gethash sid drgnx-job--prompts)))
+      (when (and prompt (drgnx-agents-free-p s))
+        (remhash sid drgnx-job--prompts)
+        (drgnx-agents-deliver s prompt)
+        (drgnx-coord-force-status (drgnx-agent-session-task s) "running" sid)))
+    (when (or (eq (drgnx-agent-session-status s) 'exited)
+              (and (drgnx-agents-free-p s)
+                   (equal (plist-get (drgnx-coord-task (drgnx-agent-session-task s)) :status) "in-review")))
+      (run-at-time 0 nil (lambda () (with-demoted-errors "drgnx job: %S" (drgnx-job-step job)))))))
+
 (provide 'drgnx-job)
 ;;; drgnx-job.el ends here

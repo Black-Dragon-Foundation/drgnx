@@ -11,6 +11,8 @@
 ;;   crash       exits 3, "mock crashed" on stderr
 ;;   commit      commits in its directory: "agent work for $DRGNX_TASK"
 ;;   /compact    the context shrinks
+;;   [drgnx task ID]  commits task.txt, then read_decisions and complete_task through its MCP server
+;;   crash-once  crashes when .mock-crashed is not in its directory (then makes it): the next agent works
 ;;   coord TOOL JSON  starts the first server of its mcpServers (session/new) and calls TOOL with the JSON arguments;
 ;;               says "coord: TEXT" (the tool's answer)
 ;;   anything else: "You said: …" in two chunks
@@ -27,6 +29,36 @@
 (defvar mock--tokens nil "Alist session → tokens in context.")
 (defvar mock--sessions 0)
 (defvar mock--mcp nil "Alist session → the mcpServers it was given.")
+
+(defun mock--mcp-call (sid tool args)
+  "Call TOOL with ARGS (JSON text) on SID's first MCP server; its answer's text, or nil."
+  (let* ((spec (car (alist-get sid mock--mcp nil nil #'equal))) (out "") (done nil)
+         (process-environment (append (mapcar (lambda (e) (concat (plist-get e :name) "=" (plist-get e :value))) (plist-get spec :env))
+                                      process-environment))
+         (p (and spec (make-process :name "mock-mcp" :command (cons (plist-get spec :command) (plist-get spec :args))
+                                    :connection-type 'pipe :coding 'utf-8-unix :noquery t
+                                    :filter (lambda (_p s) (setq out (concat out s)))))))
+    (when p
+      (process-send-string p "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}\n")
+      (process-send-string p (format "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":%S,\"arguments\":%s}}\n"
+                                     tool args))
+      (let ((deadline (+ (float-time) 10)))
+        (while (and (not done) (< (float-time) deadline))
+          (accept-process-output p 0.05)
+          (dolist (line (split-string out "\n" t))
+            (let ((j (ignore-errors (json-parse-string line :object-type 'plist :array-type 'list :null-object nil :false-object nil))))
+              (when (equal (plist-get j :id) 2) (setq done (plist-get (car (plist-get (plist-get j :result) :content)) :text)))))))
+      (delete-process p)
+      done)))
+
+(defun mock--task (sid task)
+  "A job's task: commit a file for it, read the decision log, complete the task; say what happened."
+  (call-process "sh" nil nil nil "-c" (format "echo %s >> task.txt && git add task.txt && git commit -q -m %s"
+                                              (shell-quote-argument task) (shell-quote-argument (concat "work for " task))))
+  (let* ((d (mock--mcp-call sid "read_decisions" "{\"since\":0}"))
+         (v (or (ignore-errors (plist-get (json-parse-string d :object-type 'plist) :version)) 0))
+         (r (mock--mcp-call sid "complete_task" (format "{\"task\":%S,\"seen_version\":%d}" task v))))
+    (mock--steps sid (list (cons 0 (lambda () (mock--say sid (format "task done: %s" r))))))))
 
 (defun mock--coord (sid tool args)
   "Start SID's first MCP server, call TOOL with ARGS (JSON text), say its answer; then end the turn."
@@ -96,6 +128,13 @@
     (setf (alist-get sid mock--tokens 0 nil #'equal) (+ (alist-get sid mock--tokens 0 nil #'equal) (length text)))
     (mock--update sid (list :sessionUpdate "user_message_chunk" :content (list :type "text" :text text)) )
     (cond
+     ;; crash-once: the first agent in this directory crashes, the next one works
+     ((and (string-match-p "crash-once" text) (not (file-exists-p ".mock-crashed")))
+      (write-region "" nil ".mock-crashed" nil 'silent)
+      (message "mock crashed") (sleep-for 0.1)
+      (kill-emacs 3))
+     ((string-match "\\[drgnx task \\([^] ]+\\)" text)
+      (mock--task sid (match-string 1 text)))
      ((string-match "\\`coord \\([a-z_]+\\) ?\\(.*\\)\\'" text)
       (mock--coord sid (match-string 1 text) (match-string 2 text)))
      ((string-match-p "crash" text)

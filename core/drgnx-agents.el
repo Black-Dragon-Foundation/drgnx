@@ -268,7 +268,8 @@ can carry it, else the provider's (keys resolved now, never kept) — and DRGNX_
             (drgnx-ai-agent-env (list :kind kind) t
                                 (and drgnx-agents-use-gateway (memq kind drgnx-ai-gateway-kinds)
                                      (drgnx-agents--gateway s kind))))
-          (and (drgnx-agent-session-task s) (list (concat "DRGNX_TASK=" (drgnx-agent-session-task s))))))
+          (and (drgnx-agent-session-task s) (list (concat "DRGNX_TASK=" (drgnx-agent-session-task s))))
+          (and (drgnx-agent-session-job s) (list (concat "DRGNX_JOB=" (drgnx-agent-session-job s))))))
 
 (defvar drgnx-agents-coordination t
   "Non-nil: every agent gets drgnx's coordination tools (an MCP server, docs/develop/coordination.md).")
