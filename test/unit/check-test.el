@@ -26,7 +26,8 @@
 (defun drgnx-check-test--overlap (times names)
   "The most of NAMES that ran at the same moment."
   (let ((spans (mapcar (lambda (n) (alist-get n times nil nil #'equal)) names)))
-    (apply #'max (mapcar (lambda (s) (seq-count (lambda (o) (and (< (car o) (cdr s)) (< (car s) (cdr o)))) spans)) spans))))
+    ;; at each moment one of them starts: how many are running then
+    (apply #'max (mapcar (lambda (s) (seq-count (lambda (o) (and (<= (car o) (car s)) (< (car s) (cdr o)))) spans)) spans))))
 
 (ert-deftest drgnx-check/phases-run-in-order-and-jobs-of-a-phase-together ()
   (drgnx-check-test--with dir
@@ -67,6 +68,14 @@
       (should (string-match-p "bad +FAILED (exit 3)" summary))
       (should (string-search (plist-get bad :log) summary))
       (should (eql (drgnx-check-exit-code r) 1)))))
+
+(ert-deftest drgnx-check/a-short-job-is-seen-ending-while-a-long-one-runs ()
+  ;; the first real run noticed every job of the parallel phase only when the last ended
+  (drgnx-check-test--with dir
+    (let* ((r (drgnx-check-run (list (drgnx-check-test--job dir "short" 2 :sleep 0.3) (drgnx-check-test--job dir "long" 2 :sleep 4))
+                               :dir dir :jobs 4 :gui-slots 1))
+           (short (seq-find (lambda (j) (equal (plist-get j :name) "short")) (plist-get r :jobs))))
+      (should (< (plist-get short :seconds) 1.5)))))
 
 (ert-deftest drgnx-check/a-failing-build-stops-everything ()
   (drgnx-check-test--with dir

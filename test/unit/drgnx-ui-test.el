@@ -207,11 +207,13 @@
 
 (ert-deftest drgnx-ui/stop-removes-the-wayland-display-socket ()
   (drgnx-ui-test--with-state
-    (drgnx-ui-prepare-run "drgnx-ui-4")
-    (dolist (f '("drgnx-ui-4" "drgnx-ui-4.lock")) (write-region "" nil (expand-file-name f runtime)))
-    (drgnx-ui-stop "drgnx-ui-4")
-    (should-not (file-exists-p (expand-file-name "drgnx-ui-4" runtime)))
-    (should-not (file-exists-p (expand-file-name "drgnx-ui-4.lock" runtime)))))
+    ;; a name no real session has (tests run next to live shards' sessions: drgnx-ui-4 may be one)
+    (let ((name (format "drgnx-ui-%d" (+ 900000 (random 99999)))))
+      (drgnx-ui-prepare-run name)
+      (dolist (f (list name (concat name ".lock"))) (write-region "" nil (expand-file-name f runtime)))
+      (drgnx-ui-stop name)
+      (should-not (file-exists-p (expand-file-name name runtime)))
+      (should-not (file-exists-p (expand-file-name (concat name ".lock") runtime))))))
 
 (ert-deftest drgnx-ui/process-groups-are-verified-before-signalling ()
   (should-not (drgnx-ui--group-ours-p "1" "/any/run"))
@@ -280,3 +282,22 @@
                                (funcall orig r)))))
         (let ((s (drgnx-ui-claim-run nil "1600x900" root)))
           (should (equal (plist-get s :name) "drgnx-ui-2")))))))
+
+(ert-deftest drgnx-ui/a-unit-name-another-session-holds-moves-on-to-the-next ()
+  ;; unit names are global to the user: a session of another state root (a parallel shard) may hold
+  ;; drgnx-ui-1 while this root has no run of that name — systemd says so, and the start takes the next name
+  (drgnx-ui-test--with-state
+    (let ((tries nil) (stopped nil))
+      (cl-letf (((symbol-function 'drgnx-ui-launcher) (lambda () "systemd"))
+                ((symbol-function 'drgnx-ui-unit-active-p) (lambda (_n) nil))
+                ((symbol-function 'drgnx-ui-stop) (lambda (n) (push n stopped) (delete-directory (expand-file-name n root) t)))
+                ((symbol-function 'drgnx-ui--run)
+                 (lambda (&rest args)
+                   (let ((unit (cadr (member "--unit" args))))
+                     (push unit tries)
+                     (if (equal unit "drgnx-ui-1")
+                         (cons 1 "Failed to start transient service unit: Unit drgnx-ui-1.service was already loaded or has a fragment file.")
+                       (cons 0 ""))))))
+        (let ((s (drgnx-ui--claim-and-launch nil "1600x900" root)))
+          (should (equal (plist-get s :name) "drgnx-ui-2"))
+          (should (equal stopped '("drgnx-ui-1"))))))))

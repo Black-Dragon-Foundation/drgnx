@@ -253,6 +253,29 @@ so `drgnx-ui-prepare-run' refuses it — moves on to the next one."
         (file-already-exists (when (> (cl-incf tries) 50) (signal (car err) (cdr err))))))
     sess))
 
+(defun drgnx-ui--claim-and-launch (config size root &optional daemon monitors)
+  "Claim a name in ROOT and launch the session's processes; the session plist.  Unit names are the
+user's, across state roots: one another root's session holds (systemd: \"already loaded\") is given back
+and the next name tried."
+  (let (sess (refused nil))
+    (unwind-protect
+        (while (not sess)
+          (let* ((s (drgnx-ui-claim-run config size root daemon monitors))
+                 (launcher (drgnx-ui-launcher)))
+            (setq s (plist-put s :launcher launcher))
+            (if (equal launcher "detached")
+                (setq sess (plist-put s :pgid (drgnx-ui--launch-detached s)))
+              (let ((r (apply #'drgnx-ui--run (drgnx-ui-launch-argv s))))
+                (cond ((eq (car r) 0) (setq sess s))
+                      ;; kept claimed while we look further, so the next choice is another name
+                      ((and (string-match-p "already loaded\\|has a fragment" (cdr r)) (< (length refused) 20))
+                       (push (plist-get s :name) refused))
+                      (t (drgnx-ui-stop (plist-get s :name))
+                         (drgnx-ui--fail "systemd-run failed: %s" (string-trim (cdr r)))))))))
+      ;; our runs of the refused names go (stop leaves a unit it does not own alone)
+      (dolist (n refused) (drgnx-ui-stop n)))
+    sess))
+
 (defun drgnx-ui-journal-tail (name)
   "The session's last log lines, without systemd's own (very long) start/stop lines."
   (mapconcat #'identity
@@ -333,17 +356,9 @@ DAEMON non-nil: run Emacs as a daemon; open frames with `drgnx-ui-new-frame'.  M
 many virtual monitors (default 1)."
   (let* ((root (drgnx-ui-state-root))
          (_ (make-directory root t))
-         (sess (drgnx-ui-claim-run config size root daemon monitors))
+         (sess (drgnx-ui--claim-and-launch config size root daemon monitors))
          (name (plist-get sess :name))
-         (run (plist-get sess :run))
-         (launcher (drgnx-ui-launcher)))
-    (setq sess (plist-put sess :launcher launcher))
-    (if (equal launcher "detached")
-        (setq sess (plist-put sess :pgid (drgnx-ui--launch-detached sess)))
-      (let ((r (apply #'drgnx-ui--run (drgnx-ui-launch-argv sess))))
-        (unless (eq (car r) 0)
-          (drgnx-ui-stop name)
-          (drgnx-ui--fail "systemd-run failed: %s" (string-trim (cdr r))))))
+         (run (plist-get sess :run)))
     (drgnx-ui--save sess)                 ; stop needs :launcher/:pgid from here on
     (let ((ready (expand-file-name "ready.json" run))
           (t0 (float-time))

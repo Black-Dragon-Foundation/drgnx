@@ -171,7 +171,9 @@ each logging to DIR/NAME.log.  A failing phase 1 (the build) stops the rest.  Re
     (plist-put job :start (float-time))
     (plist-put job :process
                (make-process :name (concat "check-" (plist-get job :name)) :noquery t :connection-type 'pipe
-                             :command (list "sh" "-c" (format "exec %s > %s 2>&1"
+                             ;; no `exec': its pipe to Emacs must stay open until it ends — a job whose pipe is
+                             ;; at end-of-file while it runs hides every other job's end from Emacs until it ends
+                             :command (list "sh" "-c" (format "%s > %s 2>&1"
                                                               (mapconcat #'shell-quote-argument (plist-get job :command) " ")
                                                               (shell-quote-argument log)))))))
 
