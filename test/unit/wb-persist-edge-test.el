@@ -52,4 +52,17 @@ file could set any)."
     (should (equal (drgnx-persist--file) (expand-file-name "workbench.eld" (drgnx-state-dir))))
     (should (equal (drgnx-persist--file) "/tmp/drgnx-persist-edge-state/drgnx/workbench.eld"))))
 
+(ert-deftest drgnx-persist-edge/a-second-window-keeps-the-first-ones-tab-order ()
+  "M3e-5: restoring a second window appends its groups' pending tabs; the first window's stay in
+order (the whole shared list was reversed)."
+  (drgnx-persist-edge-test--with dir
+    (let ((state '(:left (:shown nil) :panel (:shown nil) :right (:shown nil) :main nil
+                         :groups ((:tabs nil :shown nil) (:tabs nil :shown nil)))))
+      (drgnx-persist--restore-frame state)
+      (let ((first (mapcar #'car drgnx-persist--pending)))
+        (should (equal first (drgnx-groups-list)))
+        (drgnx-persist--restore-frame state)
+        (should (= 4 (length drgnx-persist--pending)))
+        (should (equal (seq-take (mapcar #'car drgnx-persist--pending) 2) first))))))
+
 ;;; wb-persist-edge-test.el ends here

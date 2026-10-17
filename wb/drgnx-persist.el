@@ -172,15 +172,15 @@ visited now, its other tabs at idle (never a question at start)."
             (while (< (length (drgnx-groups-list)) (length groups))
               (unless (ignore-errors (split-window (car (last (drgnx-groups-list))) nil 'right))
                 (throw 'full nil))))
-          (cl-loop for g in (drgnx-groups-list) for spec in groups
-                   do (let* ((files (plist-get spec :tabs))
-                             (shown (drgnx-persist--visit (plist-get spec :shown))))
-                        (set-window-buffer g (or shown (get-scratch-buffer-create)))
-                        (set-window-prev-buffers g nil)
-                        (drgnx-persist--set-tabs g files)
-                        (push (list g (seq-remove (lambda (f) (equal f (plist-get spec :shown))) files) files)
-                              drgnx-persist--pending)))
-          (setq drgnx-persist--pending (nreverse drgnx-persist--pending))   ; a frame's groups in order
+          (setq drgnx-persist--pending                    ; after earlier windows' entries, groups in order
+                (append drgnx-persist--pending
+                        (cl-loop for g in (drgnx-groups-list) for spec in groups
+                                 collect (let* ((files (plist-get spec :tabs))
+                                                (shown (drgnx-persist--visit (plist-get spec :shown))))
+                                           (set-window-buffer g (or shown (get-scratch-buffer-create)))
+                                           (set-window-prev-buffers g nil)
+                                           (drgnx-persist--set-tabs g files)
+                                           (list g (seq-remove (lambda (f) (equal f (plist-get spec :shown))) files) files)))))
           (when (and drgnx-persist--pending (not (timerp drgnx-persist--timer)))
             (setq drgnx-persist--timer (run-with-idle-timer 0.2 t #'drgnx-persist--visit-pending)))))
     ;; Docks and panel come back whatever happened above: sizes first (clamped), then shown.
