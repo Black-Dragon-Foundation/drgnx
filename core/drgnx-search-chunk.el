@@ -139,8 +139,10 @@ directory (\"vendor/\")."
   "Run git ARGS in ROOT, feeding it the string INPUT (or nil); no shell.
 Returns (STATUS OUTPUT STDERR-FIRST-LINE), STATUS nil when git cannot be started."
   (let ((default-directory (file-name-as-directory (expand-file-name root)))
-        (process-environment (cl-remove-if (lambda (e) (string-match-p "\\`GIT_\\(DIR\\|WORK_TREE\\|INDEX_FILE\\)=" e))
-                                           process-environment))
+        ;; Untranslated messages: `drgnx-search--repo-p' reads git's stderr, and git translates it.
+        (process-environment (append '("LC_ALL=C" "LANGUAGE=")
+                                     (cl-remove-if (lambda (e) (string-match-p "\\`GIT_\\(DIR\\|WORK_TREE\\|INDEX_FILE\\)=" e))
+                                                   process-environment)))
         (coding-system-for-read 'utf-8-unix)
         (coding-system-for-write 'utf-8-unix)
         (errfile (make-temp-file "drgnx-search-git")))
@@ -189,7 +191,8 @@ fails."
     (nreverse entries)))
 
 (defun drgnx-search--git-paths (root &rest args)
-  "The NUL-separated paths git ARGS print in ROOT (`ls-files -z' options), or nil."
+  "The NUL-separated paths git ARGS print in ROOT (`ls-files -z' options).
+Signals `drgnx-search-files-error' when git fails."
   (split-string (or (apply #'drgnx-search--git root nil args) "") "\0" t))
 
 (defun drgnx-search--hashable-p (path file)

@@ -289,6 +289,17 @@
     (delete-file (expand-file-name ".drgnx/search.eld" root))
     (should-not (plist-get (drgnx-search-config root) :off))))
 
+(ert-deftest drgnx-search-files/does-not-depend-on-the-locale ()
+  "git's messages are translated; a non-repo still gives nil and a repo is still listed."
+  (let ((process-environment (append '("LANGUAGE=de" "LANG=de_DE.UTF-8" "LC_ALL=de_DE.UTF-8") process-environment))
+        (dir (make-temp-file "drgnx-search-plain" t)))
+    (unwind-protect
+        (progn (drgnx-search-chunk-test--write dir "a.el" "a\n")
+               (should-not (drgnx-search-files dir)))
+      (delete-directory dir t))
+    (drgnx-search-chunk-test--repo '(("a.el" . "a\n"))
+      (should (equal (drgnx-search-chunk-test--paths root) '("a.el"))))))
+
 (ert-deftest drgnx-search-files/not-a-git-repo ()
   (let ((dir (make-temp-file "drgnx-search-plain" t)))
     (unwind-protect
