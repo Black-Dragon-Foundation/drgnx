@@ -322,10 +322,21 @@ Returns the process."
       (list :boxes (nreverse boxes) :edges (nreverse edges)
             :w (+ (nth 2 xs) (nth 2 cols) hgap) :h (+ y vgap)))))
 
+(defvar color-name-rgb-alist)
+
+(defun drgnx-work-ui--hex (c)
+  "Colour C as #rrggbb, or nil: SVG knows CSS's colour names only, Emacs's are X11's (grey50, dark cyan)."
+  (cond ((string-match-p "\\`#[0-9a-fA-F]\\{6\\}\\'" c) c)
+        ((let ((v (if (display-graphic-p) (color-values c)
+                    ;; without a display `color-values' rounds to terminal colours: the X11 table instead
+                    (unless (boundp 'color-name-rgb-alist) (load "term/tty-colors" nil t))
+                    (cdr (assoc (downcase (replace-regexp-in-string "[ \t]" "" c)) color-name-rgb-alist)))))
+           (and v (apply #'format "#%02x%02x%02x" (mapcar (lambda (x) (/ x 257)) v)))))))
+
 (defun drgnx-work-ui--colour (face attr)
-  "FACE's ATTR colour as the theme sets it, or currentColor (the image's foreground) when it has none."
+  "FACE's ATTR colour as the theme sets it (#rrggbb), or currentColor (the image's foreground) when it has none."
   (let ((c (face-attribute face attr nil t)))
-    (if (and (stringp c) (not (string-prefix-p "unspecified" c))) c "currentColor")))
+    (or (and (stringp c) (not (string-prefix-p "unspecified" c)) (drgnx-work-ui--hex c)) "currentColor")))
 
 (defun drgnx-work-ui--box-face (b)
   (pcase (plist-get b :kind) ('spec 'drgnx-work-ui-graph-spec) ('branch 'drgnx-work-ui-graph-branch)
@@ -394,17 +405,22 @@ Returns the process."
         ;; a click comes as mouse-1 with the hot spot in its position, or prefixed by it: both open
         (define-key map (vector area 'mouse-1) #'drgnx-work-ui-graph-click)))
     (define-key map [mouse-1] #'drgnx-work-ui-graph-click)
+    (define-key map [down-mouse-1] #'ignore)            ; a press neither moves point nor selects
     (setq drgnx-work-ui--graph-spots spots)
     (with-current-buffer b
       (let ((inhibit-read-only t))
         (erase-buffer)
         (special-mode)
+        (setq-local cursor-type nil)                     ; no cursor box drawn round the image
         (let ((img (create-image (drgnx-work-ui-graph-svg layout) 'svg t :scale 1.0
                                  :foreground (drgnx-work-ui--colour 'default :foreground))))
           ;; the hot spots in the image's own pixels (it is never scaled); set after `create-image', which
           ;; would measure the image for them — impossible without a window system
           (setf (image-property img :map) (nreverse areas))
-          (insert (propertize " " 'display img 'keymap map 'pointer 'hand)))
+          ;; in slices, one per line: a graph taller than the window scrolls like text (hot spots follow)
+          (insert-sliced-image img nil nil (max 1 (/ (plist-get layout :h) (* 2 (cdr (drgnx-work-ui--metrics))))))
+          (put-text-property (point-min) (point-max) 'keymap map)
+          (put-text-property (point-min) (point-max) 'pointer 'hand))
         (goto-char (point-min))))
     (pop-to-buffer b)
     b))

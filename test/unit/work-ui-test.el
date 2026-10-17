@@ -143,14 +143,38 @@ git repository ROOT/code), a lone plan, and the tracker's database in a temp dat
             (set-face-attribute 'drgnx-work-ui-graph-plan nil :foreground "#123456")   ; as a theme would
             (let ((svg (drgnx-work-ui-graph-svg (drgnx-work-ui-graph-layout))))
               (should (string-search "#123456" svg))
-              (should (string-search "currentColor" svg))))                      ; faces with no colour (batch)
+              (should (string-search "currentColor" svg)))                     ; faces with no colour (batch)
+            ;; Emacs's colour names are X11's (grey50, dark cyan); SVG knows only CSS's: written as #rrggbb
+            (set-face-attribute 'drgnx-work-ui-graph-plan nil :foreground "dark cyan")
+            (let ((svg (drgnx-work-ui-graph-svg (drgnx-work-ui-graph-layout))))
+              (should (string-search "#008b8b" svg))
+              (should-not (string-search "dark cyan" svg))))                      ; faces with no colour (batch)
         (set-face-attribute 'drgnx-work-ui-graph-plan nil :foreground old)))))
+
+(ert-deftest drgnx-work-ui/a-tall-graph-scrolls-line-by-line ()
+  (drgnx-work-ui-test--with root
+    (let ((g (save-window-excursion (drgnx-work-ui-graph))))
+      (unwind-protect
+          (with-current-buffer g
+            (should (> (count-lines (point-min) (point-max)) 1))              ; slices, one per line
+            (goto-char (point-max)) (forward-line -1)
+            (should (get-text-property (point) 'keymap)))                     ; every slice clickable
+        (kill-buffer g)))))
+
+(ert-deftest drgnx-work-ui/the-graph-shows-no-cursor-and-a-press-moves-nothing ()
+  (drgnx-work-ui-test--with root
+    (let ((g (save-window-excursion (drgnx-work-ui-graph))))
+      (unwind-protect
+          (with-current-buffer g
+            (should (null cursor-type))                                          ; no box drawn round the image
+            (should (eq (lookup-key (get-text-property (point-min) 'keymap) [down-mouse-1]) #'ignore)))
+        (kill-buffer g)))))
 
 (ert-deftest drgnx-work-ui/a-click-on-a-box-opens-what-it-shows ()
   (drgnx-work-ui-test--with root
     (drgnx-work-update-node (concat "plan:" root "docs/plans/alpha.md") :branch "feature")
     (let* ((g (save-window-excursion (drgnx-work-ui-graph)))
-           (img (with-current-buffer g (get-text-property (point-min) 'display)))
+           (img (with-current-buffer g (let ((d (get-text-property (point-min) 'display))) (if (eq (car d) 'image) d (cadr d)))))
            (keymap (with-current-buffer g (get-text-property (point-min) 'keymap)))
            (area (lambda (title) (seq-find (lambda (a) (string-prefix-p title (plist-get (nth 2 a) 'help-echo))) (image-property img :map)))))
       (unwind-protect

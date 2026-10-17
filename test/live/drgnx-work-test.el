@@ -39,16 +39,17 @@
                                                          (and (drgnx-signal-editor-window-p (selected-window)) t)))")
                          '("alpha.md" 9 t)))
           ;; the graph opens in the editor; a click on the plan's box (by pixel, as a person would) opens the plan
+          ;; (the window shows the graph from its top: the image's top-left is the text area's)
           (let ((xy (drgnx-live-wk--q sess (concat (format "(progn (kill-buffer (get-file-buffer %S))      ; the plan closed again
                                                    (drgnx-work-ui-graph) (redisplay t)" (concat root "docs/plans/alpha.md"))
                                            "
                                                    (let* ((w (get-buffer-window \"*work graph*\")) (o (drgnx-uitest--text-origin w))
-                                                          (p (posn-x-y (posn-at-point 1 w)))
+                                                         
                                                           (b (seq-find (lambda (b) (string-prefix-p \"Plan Alpha\" (car (plist-get b :lines))))
                                                                        (plist-get (drgnx-work-ui-graph-layout) :boxes))))
                                                      (and (drgnx-signal-editor-window-p w)
-                                                          (list (+ (car o) (car p) (plist-get b :x) (/ (plist-get b :w) 2))
-                                                                (+ (cdr o) (cdr p) (plist-get b :y) (/ (plist-get b :h) 2))))))"))))
+                                                          (list (+ (car o) (plist-get b :x) (/ (plist-get b :w) 2))
+                                                                (+ (cdr o) (plist-get b :y) (/ (plist-get b :h) 2))))))"))))
             (should xy)
             (drgnx-ui-measure sess (list (list :x (car xy) :y (cadr xy))))
             (should (equal (drgnx-live-wk--q sess "(and (buffer-file-name (window-buffer (selected-window))) (file-name-nondirectory (buffer-file-name (window-buffer (selected-window)))))")
