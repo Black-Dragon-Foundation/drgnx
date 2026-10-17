@@ -256,15 +256,19 @@ has not taken the lock yet).  For commands the user runs: it lists the jobs."
       (drgnx-search-index--running-job (directory-file-name (expand-file-name root)))))
 
 (defun drgnx-search-index--reap (root)
-  "Remove the directories of ROOT's finished index jobs (exited or stopped: they have an exit file) but the newest.
-Reads each job's job.eld and looks for its exit file: no process or systemd query."
+  "Remove the directories of ROOT's finished index jobs (exited or stopped: they have an exit file; gone: a pid
+file but no live process) but the newest.
+Reads each job's job.eld and looks for its exit file; only a job of ROOT without one costs a process query."
   (let ((dir (drgnx-jobs-dir)) (kept nil))
     (when (file-directory-p dir)
       (dolist (id (sort (directory-files dir nil "\\`[0-9]") (lambda (a b) (string> a b))))
         (let* ((jdir (drgnx-jobs--dir id)) (job (drgnx-jobs--read (expand-file-name "job.eld" jdir))))
           (when (and (string-prefix-p "search-index:" (or (plist-get job :name) ""))
                      (member root (plist-get job :command))
-                     (file-exists-p (expand-file-name "exit" jdir)))
+                     (or (file-exists-p (expand-file-name "exit" jdir))
+                         ;; killed without an exit file (a reboot, a SIGKILL): started, but its process is gone
+                         (and (file-exists-p (expand-file-name "pid" jdir))
+                              (eq (plist-get (drgnx-jobs-get id) :status) 'gone))))
             (if kept (ignore-errors (delete-directory jdir t)) (setq kept t))))))))
 
 ;; The job is a fresh process: it gets the editor's state directories (so it writes the index and lock the

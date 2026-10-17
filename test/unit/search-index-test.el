@@ -418,6 +418,26 @@
           (should (file-exists-p agent)))        ; not an index job
       (delete-directory state t))))
 
+(ert-deftest drgnx-search-index/reap-removes-gone-jobs ()
+  "A job whose process died without an exit file (status gone) is finished too; one still running, or not yet
+started, stays."
+  (let* ((state (make-temp-file "drgnx-search-state" t))
+         (process-environment (cons (concat "XDG_STATE_HOME=" state) process-environment)))
+    (unwind-protect
+        (let ((gone-old (drgnx-search-index-test--fake-job "20260101-000001-1" "search-index: p" "/tmp/p"))
+              (gone-new (drgnx-search-index-test--fake-job "20260101-000002-1" "search-index: p" "/tmp/p"))
+              (live (drgnx-search-index-test--fake-job "20260101-000003-1" "search-index: p" "/tmp/p"))
+              (starting (drgnx-search-index-test--fake-job "20260101-000004-1" "search-index: p" "/tmp/p")))
+          (dolist (d (list gone-old gone-new)) (write-region "999999999\n" nil (expand-file-name "pid" d) nil 'silent))
+          (write-region (format "%d\n" (emacs-pid)) nil (expand-file-name "pid" live) nil 'silent)
+          (cl-letf (((symbol-function 'drgnx-jobs-start) (lambda (&rest _) "job-new")))
+            (should (equal (drgnx-search-index-start "/tmp/p") "job-new")))
+          (should-not (file-exists-p gone-old))
+          (should (file-exists-p gone-new))     ; the newest finished one stays (its log)
+          (should (file-exists-p live))
+          (should (file-exists-p starting)))
+      (delete-directory state t))))
+
 (ert-deftest drgnx-search-index/the-job-env-is-the-projects ()
   "The embed role (and so the keys the job gets) is resolved for ROOT — its .drgnx/ai.eld — not the current buffer."
   (let* ((conf (make-temp-file "drgnx-search-conf" t))

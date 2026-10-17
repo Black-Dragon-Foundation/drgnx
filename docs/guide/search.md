@@ -138,7 +138,7 @@ project — command, arguments and the environment: the state and config directo
   count); files that are gone are forgotten. A big project's first index takes a while; later runs take seconds.
 - It runs in a **background job** — a separate Emacs under systemd, capped at 1 GiB of memory, at low priority — so
   the editor stays responsive. One job per project at a time. Its log: Show Job Log (Agents tab). Starting a new job
-  removes the project's earlier finished index jobs but the last one, so their logs do not pile up.
+  removes the project's earlier finished index jobs (also those killed without a trace, by a reboot say) but the last one, so their logs do not pile up.
 - **After a save**: when you save a file of a project that has an index, drgnx re-indexes that project 30 seconds after the
   last save (a burst of saves is one run), at the next moment Emacs is idle, so the job never starts while you type.
   While an indexer still holds the project's lock it waits another 30 seconds. Nothing happens for a project without an
