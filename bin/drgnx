@@ -14,7 +14,7 @@ cmd_doctor() { # [--json] [--dev] — checks run inside the Emacs drgnx uses (co
   if [[ " $* " == *" --dev "* && " $* " != *" --json "* ]]; then
     local env rt launcher
     env="$(env_eval '(drgnx-env-container)')"
-    rt="$(env_eval '(drgnx-env-container-runtime)')"
+    rt="${DRGNX_CONTAINER:-$(env_eval '(drgnx-env-container-runtime)')}"   # set: no host Emacs needed (CI)
     launcher="$(emacs --batch -Q -L "$here/harness" -l drgnx-ui --eval '(princ (drgnx-ui-launcher))')"
     printf 'INFO  %-20s %s\n' "environment" "${env:-host}" "container-runtime" "${rt:-none}" \
       "session-launcher" "$launcher$([ "$launcher" = detached ] && echo ' (process group, no systemd unit)')"
@@ -43,7 +43,7 @@ env_eval() { # FORM — evaluate with harness/drgnx-env.el loaded, print the res
 
 test_container() { # [--ui] — the batch (or GUI) tier inside a fedora:45 / Emacs 31.1 container
   local rt mount image file args=() cmd=(bin/drgnx test)
-  rt="$(env_eval '(drgnx-env-container-runtime)')"
+  rt="${DRGNX_CONTAINER:-$(env_eval '(drgnx-env-container-runtime)')}"   # set: no host Emacs needed (CI)
   [ -n "$rt" ] || { echo "drgnx: no container runtime found (podman, docker, nerdctl); set DRGNX_CONTAINER" >&2; return 1; }
   mount="$here:/src:ro"; [ "$rt" = podman ] && mount="$mount,Z"
   image=drgnx-test:f45; file=Containerfile
@@ -72,7 +72,7 @@ test_install() { # [NAME…] — install.sh end to end in fresh containers (slow
   for name in "${names[@]}"; do
     [[ " ${known[*]} " == *" $name "* ]] || { echo "drgnx: unknown image $name (known: ${known[*]})" >&2; return 2; }
   done
-  rt="$(env_eval '(drgnx-env-container-runtime)')"
+  rt="${DRGNX_CONTAINER:-$(env_eval '(drgnx-env-container-runtime)')}"   # set: no host Emacs needed (CI)
   [ -n "$rt" ] || { echo "drgnx: no container runtime found (podman, docker, nerdctl); set DRGNX_CONTAINER" >&2; return 1; }
   logs="${XDG_STATE_HOME:-$HOME/.local/state}/drgnx/install-tests"
   # A snapshot of the working tree (edits during a run cannot reach it), committed and bundled so the
