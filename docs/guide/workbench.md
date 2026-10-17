@@ -168,7 +168,7 @@ mode line (ibuffer, Info) cannot change a window's height — text never jumps (
   Click a tab to show it, `×` or middle-click closes it (the buffer stays open — close it in the Buffers panel).
   Close Tab `C-<f4>` · palette · `SPC b d`; Next / Previous Tab `C-<next>` / `C-<prior>` · Emacs' `C-x <right>` /
   `C-x <left>` · `SPC b n` / `SPC b p`. `*scratch*` is a tab only while it is shown. Killing a buffer takes its tab
-  out of every window at once; a window that showed it shows the tab to its right, else its left.
+  out of every window at once; closing the shown tab (or killing its buffer) shows the tab you used before it, as in VS Code; with no such tab, the one to its right, else its left. Each window keeps its own history.
 - **Breadcrumb**: project › folders › file, `●` while unsaved. A buffer with a header line of its own (the column
   headings of a list, clicked to sort) keeps it.
 - A buffer shown only for a moment — a preview while you choose in the minibuffer — does not become a tab.
