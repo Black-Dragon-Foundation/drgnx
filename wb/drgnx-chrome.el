@@ -107,6 +107,18 @@ Called on the bus's edges and by commands — never while drawing, so a buffer s
       (set-window-buffer w (or (car rest) (car (last before)) (get-scratch-buffer-create))))
     (drgnx-chrome-apply (window-frame w) t)))
 
+(defun drgnx-chrome--killed ()
+  "From `kill-buffer-hook': the buffer leaves every editor window's tabs at once, and a window that
+shows it shows its neighbour tab (not whatever Emacs picks: after a restore it has no history).
+An error here must never stop the kill."
+  (let ((b (current-buffer)))
+    (when (drgnx-chrome--tab-buffer-p b)          ; temp buffers: no work
+      (with-demoted-errors "drgnx chrome: %S"
+        (dolist (w (seq-filter (lambda (w) (and (eq (drgnx-chrome--role w) 'editor)
+                                                (or (eq (window-buffer w) b) (memq b (window-parameter w 'drgnx-tabs)))))
+                               (window-list-1 nil 'nomini t)))
+          (drgnx-chrome--close w b))))))
+
 (defun drgnx-chrome-close-tab ()
   "Close the shown tab (the buffer stays open; Close in the Buffers panel closes it)."
   (interactive)
@@ -200,10 +212,12 @@ those are previews)."
   (if drgnx-chrome-mode
       (progn
         (add-hook 'drgnx-signal-window-functions #'drgnx-chrome-apply)
+        (add-hook 'kill-buffer-hook #'drgnx-chrome--killed)
         (dolist (e '(editor-changed buffer-set-changed modified-changed))
           (drgnx-signal-subscribe e #'drgnx-chrome--refresh))
         (drgnx-chrome--refresh))
     (remove-hook 'drgnx-signal-window-functions #'drgnx-chrome-apply)
+    (remove-hook 'kill-buffer-hook #'drgnx-chrome--killed)
     (dolist (e '(editor-changed buffer-set-changed modified-changed))
       (drgnx-signal-unsubscribe e #'drgnx-chrome--refresh))
     (dolist (f (frame-list))
