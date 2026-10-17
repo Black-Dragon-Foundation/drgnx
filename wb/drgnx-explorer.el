@@ -436,8 +436,8 @@ A remote file is never revealed: this runs from the change bus, where remote I/O
       (drgnx-explorer-reveal file w))))
 
 (defun drgnx-explorer-set-roots (roots)
-  "Show ROOTS (directories) in the Explorer."
-  (setq drgnx-explorer--find nil)
+  "Show ROOTS (directories) in the Explorer (this ends Find)."
+  (when drgnx-explorer--find (setq drgnx-explorer--find nil) (drgnx-explorer--plain-title))
   (setq drgnx-explorer--roots (mapcar (lambda (r) (file-name-as-directory (expand-file-name r))) roots))
   (if (get-buffer drgnx-explorer-buffer-name) (drgnx-explorer--render) (drgnx-explorer--buffer)))   ; a new one renders itself
 
@@ -618,6 +618,15 @@ excluded names left out.  A root that is your home or / and not a project is ref
         (when-let* ((w (drgnx-wb-section-window 'explorer)))
           (set-window-parameter w 'header-line-format (format " EXPLORER — %s" query)))))))
 
+(defun drgnx-explorer--plain-title ()
+  "The Explorer's title without a Find query."
+  (when-let* ((w (drgnx-wb-section-window 'explorer)))
+    (set-window-parameter w 'header-line-format " EXPLORER")))
+
+(defun drgnx-explorer--forget-find ()
+  "The Explorer was killed: its Find goes too (else the live updates would wait for it forever)."
+  (setq drgnx-explorer--find nil))
+
 (defun drgnx-explorer-find-clear ()
   "Leave Find: the tree, its open folders, the view and the selection come back as they were."
   (interactive)
@@ -626,8 +635,7 @@ excluded names left out.  A root that is your home or / and not a project is ref
     (with-current-buffer (drgnx-explorer--buffer)
       (drgnx-explorer--render)
       (drgnx-explorer--restore-views (plist-get state :views)))
-    (when-let* ((w (drgnx-wb-section-window 'explorer)))
-      (set-window-parameter w 'header-line-format " EXPLORER"))
+    (drgnx-explorer--plain-title)
     (when drgnx-explorer--dirty (drgnx-explorer--apply-file-events))))
 
 (defun drgnx-explorer-find ()
@@ -928,7 +936,8 @@ inside another one selected goes: the folder carries it."
   (setq-local scroll-margin 0 make-cursor-line-fully-visible nil)
   (hl-line-mode 1)
   (jit-lock-register #'drgnx-explorer--fontify)
-  (add-hook 'kill-buffer-hook #'drgnx-explorer--unwatch-all nil t))
+  (add-hook 'kill-buffer-hook #'drgnx-explorer--unwatch-all nil t)
+  (add-hook 'kill-buffer-hook #'drgnx-explorer--forget-find nil t))
 
 (defun drgnx-explorer-setup ()
   "Put the Explorer in the dock and let it follow the editor."

@@ -261,4 +261,21 @@
       (drgnx-explorer--sync-watches)                    ; the limit was raised, or watches freed
       (should (file-notify-valid-p (gethash (directory-file-name root) drgnx-explorer--watches))))))
 
+;;;; M3b-12: Find and the Explorer's end
+
+(ert-deftest drgnx-explorer-edge/killing-the-explorer-ends-find ()
+  (drgnx-explorer-edge--with root
+    (drgnx-explorer--find-apply "main")
+    (kill-buffer drgnx-explorer-buffer-name)
+    (should-not drgnx-explorer--find)
+    (drgnx-explorer--apply-file-events)
+    (should-not drgnx-explorer--event-timer)))          ; the 0.15 s poll stops
+
+(ert-deftest drgnx-explorer-edge/new-roots-drop-the-find-title ()
+  (drgnx-explorer-edge--with root
+    (drgnx-wb-show-sidebar)
+    (drgnx-explorer--find-apply "main")
+    (drgnx-explorer-set-roots (list root))
+    (should (equal (window-parameter (drgnx-wb-section-window 'explorer) 'header-line-format) " EXPLORER"))))
+
 ;;; wb-explorer-edge-test.el ends here
