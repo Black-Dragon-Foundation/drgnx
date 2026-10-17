@@ -101,9 +101,13 @@ overwrite it.
 2. The five files that hold the most of them each give a snippet around their first match.
 3. The snippets and the question go to the `chat` role.
 
+When the project has a [semantic search index](search.md), the five best chunks for the question by meaning join the
+snippets (same index and embedding model as Semantic Search; without a reachable embedding provider they are the keyword
+hits of the index, and a project without an index gets the word search only). The excerpts of the two kinds go to the model together.
+
 The answer opens in `*AI answer*` with the files it drew on as links. Other ways to find code join through
-`drgnx-ai-retrievers` (each a function of the question, the project root and a callback); the semantic index comes
-in M10.
+`drgnx-ai-retrievers` (each a function of the question, the project root and a callback); the semantic search adds
+its own when the search module is on.
 
 ## Choosing a provider and model
 

@@ -217,6 +217,36 @@ indexer would never index (dot files, secrets by name, the project's :exclude)."
     (when (and (drgnx-search--indexed-p root) (drgnx-search--indexable-p root file))
       (drgnx-search--schedule root))))
 
+;;;; Ask the Codebase
+
+(defvar drgnx-ai-retrievers)
+
+(defun drgnx-search--retriever (question root done)
+  "Ask the Codebase's semantic retriever: the best chunks of the project at ROOT for QUESTION, to DONE as snippets
+\((:file :line :text)…).  DONE is called once — without waiting for the embedding provider — and with nil when
+the project has no index or anything goes wrong.  Never asks anything."
+  (let ((called nil))
+    (cl-flet ((finish (snippets) (unless called (setq called t) (funcall done snippets))))
+      (condition-case nil
+          (if (not (drgnx-search--indexed-p root))
+              (finish nil)
+            (require 'drgnx-search-query)
+            (drgnx-search-async
+             root question
+             (lambda (hits)
+               (finish (condition-case nil
+                           (mapcar (lambda (h) (list :file (plist-get h :path) :line (max 1 (plist-get h :start))
+                                                     :text (plist-get h :text)))
+                                   hits)
+                         (error nil))))
+             :k 5))
+        (error (finish nil))))))
+
+(defun drgnx-search--register-retriever ()
+  "Add the semantic retriever to `drgnx-ai-retrievers' (once; the grep retriever stays)."
+  (with-eval-after-load 'drgnx-ai-ui
+    (add-to-list 'drgnx-ai-retrievers #'drgnx-search--retriever t)))
+
 (drgnx-module-define 'tools/search
                      :doc "Quick Open, Search in Project, Go to Symbol, Semantic Search."
                      :stage 'startup
@@ -237,6 +267,7 @@ indexer would never index (dot files, secrets by name, the project's :exclude)."
                                         (search-index-status "Index Status" drgnx-search-index-status "Chunks, files, model and age of this project's index")
                                         (search-set-up "Set Up Semantic Search" drgnx-search-set-up "Find and test an embedding model, then index this project in the background")))
                          (drgnx-command-define id :category "Search" :title title :command fn :doc doc))
+                       (drgnx-search--register-retriever)
                        (add-hook 'after-save-hook #'drgnx-search--after-save)))
 
 (provide 'drgnx-search)

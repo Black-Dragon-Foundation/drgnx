@@ -166,6 +166,11 @@ usage: drgnx build              byte-compile drgnx (core, wb, modules); native c
                                a job from a plan: tasks, routes, estimate; nothing starts before approve
        drgnx job approve|resume ID [--budget USD] | stop ID | status [ID] [--json]
                                run, pause and inspect jobs in the hub (docs/guide/jobs.md)
+       drgnx search index ROOT [--rebuild]
+                               build or refresh a project's semantic search index (docs/guide/search.md)
+       drgnx search query ROOT QUESTION… [-k N]
+                               the best chunks as PATH:LINE: first line (the notice, if any, on stderr)
+       drgnx search mcp [ROOT] serve the `search' tool to an agent over stdio (MCP; ROOT default: here)
        drgnx safe              Emacs with drgnx's core only: no modules, no packages
        drgnx bisect [-- CMD…]  find the module that breaks (CMD fails, or you say so)
        drgnx service-unit [DIR]
@@ -196,6 +201,17 @@ case "${1:-help}" in
   work) shift
         "${DRGNX_EMACS:-emacs}" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
               -l drgnx-work -f drgnx-work-cli -- "$@" ;;
+  search) shift
+        sub="${1:-}"; [ "$#" -gt 0 ] && shift
+        case "$sub" in
+          index) "${DRGNX_EMACS:-emacs}" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
+                       -l drgnx-search-index -f drgnx-search-index-cli "$@" ;;
+          query) "${DRGNX_EMACS:-emacs}" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
+                       -l drgnx-search-mcp -f drgnx-search-mcp-query-cli -- "$@" ;;
+          mcp) "${DRGNX_EMACS:-emacs}" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
+                     -l drgnx-search-mcp -f drgnx-search-mcp-main -- "$@" ;;
+          *) echo "usage: drgnx search index ROOT [--rebuild] | query ROOT QUESTION… [-k N] | mcp [ROOT]" >&2; exit 2 ;;
+        esac ;;
   keys) shift
         if [[ "${1:-}" != diff ]]; then
           echo "usage: drgnx keys diff --against gryphn DIR   (or set DRGNX_GRYPHN_DIR to gryphn's emacs/ directory)" >&2

@@ -63,6 +63,51 @@ area says why, in one line, and the list header repeats it:
 
 A search never edits anything and never waits for a running indexer.
 
+## For agents
+
+Agents get the same search the editor uses, three ways. They all call the same function as **Semantic Search**, over the
+same index, so an agent and you see the same hits (and a missing index or a missing embedding provider shows the same notices).
+
+**The command line**
+
+```
+drgnx search index ROOT [--rebuild]      # build or refresh the index (what Index Project runs); one summary line
+drgnx search query ROOT QUESTION… [-k N] # the best N chunks (default 10), one line each
+```
+
+`query` prints `PATH:LINE: first line of the chunk` for each hit, best first, with PATH relative to the project — the
+format `grep -n` has, so tools that read grep output read this. When an answer is partial (keywords only because no
+embedding provider answered, or the index was built with another model) the reason is printed on **stderr**. Without an
+index it prints how to make one and exits 1. `ROOT` is the project or any path inside it.
+
+**The MCP tool**
+
+`drgnx search mcp [ROOT]` serves one MCP tool over stdio (ROOT defaults to the current directory):
+
+| Argument | |
+|---|---|
+| `query` (required) | what you look for, in words |
+| `k` | how many hits, 1 to 50 (default 10) |
+| `path` | the project, or any path inside it; default: the server's project. A path in no git project is an error |
+
+The answer is the text `query` prints: one `PATH:LINE: first line` per hit, and a last line `note: …` when the answer is
+partial. With no index the tool returns an error result — "no index for ROOT — run `drgnx search index ROOT` or Search:
+Index Project". The server never asks anything and never edits anything. It embeds the question with the `embed` role like
+the editor; a hosted provider's key must be in the server's environment (a local model needs none).
+
+To give an agent the tool, add the server to the agent's own MCP configuration, for example for Claude Code:
+
+```
+claude mcp add drgnx-search -- /path/to/drgnx/bin/drgnx search mcp /path/to/project
+```
+
+(add `-e NAME=value` for the key variable of a hosted `embed` provider). drgnx does **not** add this server to the agents
+it starts by itself; `drgnx-search-mcp-server-spec` (core/drgnx-search-mcp.el) returns the ACP `mcpServers` entry for a
+project — command, arguments and the environment: the state directories and the key variables of the `embed` providers,
+as the indexing job gets them — for a profile or a script that wants to pass it in `session/new`.
+
+**Ask the Codebase** ([ai.md](ai.md)) uses the index too, when the project has one.
+
 ## How the index is made
 
 - It is per project (a git repository), stored under drgnx's state directory (`~/.local/state/drgnx/search/` on
