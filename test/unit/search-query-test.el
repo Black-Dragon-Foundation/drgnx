@@ -421,5 +421,17 @@ config error, as the indexer does."
             (should (equal seen (list root root))))
         (delete-directory elsewhere t)))))
 
+(ert-deftest drgnx-search/hit-line-is-the-first-top-level-line ()
+  "A chunk that starts inside a body shows its first column-0 line that is not just closing brackets."
+  (should (equal (drgnx-search-hit-line '(:start 10 :text "    (setq x 1))\n  )\n\n(defun foo ()\n  1)"))
+                 '(13 . "(defun foo ()")))
+  (should (equal (drgnx-search-hit-line '(:start 5 :text "  a\n});\n)\nfunction g() {}"))
+                 '(8 . "function g() {}")))
+  ;; no column-0 line at all: the first non-blank line, as before
+  (should (equal (drgnx-search-hit-line '(:start 3 :text "\n   one\n   two"))
+                 '(4 . "one")))
+  (should (equal (drgnx-search-hit-line '(:start 7 :text "(defun f ()\n  1)"))
+                 '(7 . "(defun f ()"))))
+
 (provide 'search-query-test)
 ;;; search-query-test.el ends here

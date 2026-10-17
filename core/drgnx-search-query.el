@@ -128,10 +128,15 @@ A search.eld that cannot be read refuses the query, as it stops the indexer."
           (t t))))
 
 (defun drgnx-search-hit-line (hit)
-  "(LINE . TEXT) for HIT (a result of `drgnx-search'): its chunk's first non-blank line, trimmed, and that line's
-number — what one line of a result list shows and where it jumps."
-  (let ((lines (split-string (or (plist-get hit :text) "") "\n")) (n 0))
-    (while (and lines (string-blank-p (car lines))) (setq lines (cdr lines) n (1+ n)))
+  "(LINE . TEXT) for HIT (a result of `drgnx-search'): its chunk's first line that starts at column 0 and is
+not only closing brackets (the top-level form a window cut into), else its first non-blank line; trimmed, with
+that line's number — what one line of a result list shows and where it jumps."
+  (let* ((lines (split-string (or (plist-get hit :text) "") "\n")) (n 0)
+         (top (seq-position lines t (lambda (l _) (and (string-match-p "\\`[^ \t]" l)
+                                                       (not (string-match-p "\\`[])}>;,]+\\'" l)))))))
+    (if top
+        (setq lines (nthcdr top lines) n top)
+      (while (and lines (string-blank-p (car lines))) (setq lines (cdr lines) n (1+ n))))
     (cons (+ (max 1 (or (plist-get hit :start) 1)) (if lines n 0))
           (string-trim (or (car lines) "")))))
 

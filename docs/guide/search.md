@@ -55,7 +55,7 @@ Index Project while a job for the project still runs starts nothing and says so;
 already running for PROJECT; rebuild after it finishes". In an Emacs without SQLite, Index Project and Index Status
 only say "this Emacs has no SQLite — semantic search needs Emacs built with SQLite".
 
-The results are the same kind of list as **Search in Project**: one line per chunk (its first non-blank line, and the
+The results are the same kind of list as **Search in Project**: one line per chunk (its first top-level line — one starting at column 0 that is not just closing brackets, else its first non-blank line — and the
 jump goes to that line), `RET` or a click
 jumps to the file, and the preview follows the selection. The hits are grouped by file, the files in the order of their best hit (xref's grouping). When an answer is partial the echo
 area says why, in one line, and the list header repeats it:
@@ -85,7 +85,7 @@ drgnx search query ROOT QUESTION… [-k N] # the best N chunks (default 10), one
 ```
 
 `query` prints `PATH:LINE: first line of the chunk` for each hit, best first, with PATH relative to the project and
-LINE the number of the line printed (the chunk's first non-blank line) — the format `grep -n` has, so tools that read
+LINE the number of the line printed (the chunk's first top-level line, as in the list) — the format `grep -n` has, so tools that read
 grep output read this. When an answer is partial (keywords only because no
 embedding provider answered, or the index was built with another model) the reason is printed on **stderr**. Without an
 index it prints how to make one and exits 1. `ROOT` is the project or any directory inside it: both commands use its git
