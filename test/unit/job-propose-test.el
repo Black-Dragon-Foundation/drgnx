@@ -93,6 +93,11 @@
     (write-region "# P\n\n### Task 1: a\n**Depends:** Task 9\n" nil plan nil 'silent)
     (should (string-search "Task 9" (cadr (should-error (drgnx-job-propose plan) :type 'user-error))))))
 
+(ert-deftest drgnx-job/a-duplicate-task-number-is-refused ()
+  (drgnx-job-test--with
+    (write-region "# P\n\n### Task 1: a\n\n### Task 2: b\n\n### Task 1: again\n" nil plan nil 'silent)
+    (should (string-search "Task 1 appears twice" (cadr (should-error (drgnx-job-propose plan) :type 'user-error))))))
+
 (ert-deftest drgnx-job/a-changed-plan-is-noticed-never-applied ()
   (drgnx-job-test--with
     (let ((id (drgnx-job-propose plan)))

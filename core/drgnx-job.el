@@ -65,8 +65,10 @@ from agents.eld's :routes when nil.")
           :sha (secure-hash 'sha1 text))))
 
 (defun drgnx-job--check (tasks)
-  "Refuse TASKS whose dependencies name a task that is not there, or go round in a cycle."
+  "Refuse TASKS that number a task twice, whose dependencies name a task that is not there, or go round in a cycle."
   (let ((ns (mapcar (lambda (task) (plist-get task :n)) tasks)))
+    (dolist (n ns)
+      (when (> (cl-count n ns) 1) (user-error "Task %d appears twice in the plan" n)))
     (dolist (task tasks)
       (dolist (d (plist-get task :deps))
         (unless (memq d ns) (user-error "Task %d depends on Task %d, which the plan does not have" (plist-get task :n) d))))
