@@ -109,6 +109,8 @@ the real ones belong to sessions running next to the tests (bin/drgnx check's li
       (should (equal (seq-take argv 6) '("systemd-run" "--user" "--quiet" "--collect" "--unit" "drgnx-ui-1")))
       (should (member "RuntimeMaxSec=1800" argv))
       (should (member "MemoryMax=3G" argv))
+      ;; CHK-2: a stop returns within the check's 15 s grace (systemd's default is 90 s before it kills what is left)
+      (should (member "TimeoutStopSec=10" argv))
       (should (equal (seq-take (cdr (member "--" argv)) 2) '("env" "-i"))))))
 
 (ert-deftest drgnx-ui/el-quoting-roundtrip ()

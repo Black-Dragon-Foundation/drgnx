@@ -233,7 +233,10 @@ MONITORS: how many virtual monitors of SIZE (default 1)."
 (defun drgnx-ui-launch-argv (sess)
   (append (list "systemd-run" "--user" "--quiet" "--collect" "--unit" (plist-get sess :name)
                 ;; a session never outlives its budget: 30 min, or $DRGNX_UI_MAX_RUNTIME s (the soak)
-                "-p" (format "RuntimeMaxSec=%s" (or (getenv "DRGNX_UI_MAX_RUNTIME") "1800")) "-p" "MemoryMax=3G" "--")
+                "-p" (format "RuntimeMaxSec=%s" (or (getenv "DRGNX_UI_MAX_RUNTIME") "1800")) "-p" "MemoryMax=3G"
+                ;; a stop kills what is left after 10 s (default 90), inside bin/drgnx check's 15 s grace for an ended
+                ;; job: a session slow to exit under load no longer outlives the job that stops it
+                "-p" "TimeoutStopSec=10" "--")
           (drgnx-ui-env-argv (drgnx-ui-session-env sess))
           (drgnx-ui-compositor-argv sess)))
 
