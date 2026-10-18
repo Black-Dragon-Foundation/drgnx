@@ -130,11 +130,17 @@
       (should (equal (sort (directory-files (file-name-directory file) nil "\\`[^.]") #'string<)
                      '("settings.json" "settings.json.drgnx-bak")))
       (should (equal (directory-files (file-name-directory file) nil "\\`\\.drgnx") nil))
-      ;; other modes are kept too
+      ;; other modes are kept for the file; the backup (the secrets of before) is for the owner alone, from the start:
+      ;; an old backup's wider mode never reaches the new one, not even until the rename
       (set-file-modes file #o640)
-      (drgnx-agent-config-json-write file '((n . 4)) 2)
+      (set-file-modes bak #o644)
+      (let ((orig (symbol-function 'rename-file)) (at-rename nil))
+        (cl-letf (((symbol-function 'rename-file)
+                   (lambda (from to &rest r) (push (cons to (file-modes from)) at-rename) (apply orig from to r))))
+          (drgnx-agent-config-json-write file '((n . 4)) 2))
+        (should (= (cdr (assoc (file-truename bak) at-rename)) #o600)))
       (should (= (file-modes file) #o640))
-      (should (= (file-modes bak) #o640)))))
+      (should (= (file-modes bak) #o600)))))
 
 (ert-deftest drgnx-agent-config/write-text-checks-and-follows-symlinks ()
   (drgnx-agent-config-test-env
@@ -169,7 +175,7 @@
       (should (equal (drgnx-agent-config-test--read real) "new\n"))
       (should (= (file-modes real) #o640))
       (should (equal (drgnx-agent-config-test--read (concat real ".drgnx-bak")) "old\n"))
-      (should (= (file-modes (concat real ".drgnx-bak")) #o640))
+      (should (= (file-modes (concat real ".drgnx-bak")) #o600))       ; a backup is the owner's alone
       ;; no temp file is left beside it
       (should (equal (sort (directory-files (file-name-directory real) nil "\\`[^.]\\|\\`\\.[^.]") #'string<)
                      '("settings.json" "settings.json.drgnx-bak")))

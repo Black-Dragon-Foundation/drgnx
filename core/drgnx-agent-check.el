@@ -298,14 +298,30 @@ most `drgnx-agent-check--kept' of them, the newest by `:at'.  The first entry (t
     (setq rest (sort rest (lambda (a b) (> (or (plist-get (cdr a) :at) 0) (or (plist-get (cdr b) :at) 0)))))
     (cons (car entries) (take (1- drgnx-agent-check--kept) rest))))
 
+(defun drgnx-agent-check--fit (entries)
+  "ENTRIES (the newest first) without the oldest ones that would take the printed file over `drgnx-file-max-bytes',
+the reader's cap: a file over it would read as nothing, and no later result could be kept.  The first entry always
+stays (its outputs are cut to the limits above).  Sizes are printed as `drgnx-file-write' prints, UTF-8."
+  (let ((print-length nil) (print-level nil) (print-circle nil) (print-integers-as-characters nil)
+        (float-output-format nil) (total 3) (kept nil))             ; "(", ")" and the newline
+    (catch 'full
+      (dolist (e entries)
+        (let ((n (1+ (length (encode-coding-string (prin1-to-string e) 'utf-8-unix)))))   ; and a space
+          (when (and kept (> (+ total n) drgnx-file-max-bytes)) (throw 'full nil))
+          (setq total (+ total n))
+          (push e kept))))
+    (nreverse kept)))
+
 (defun drgnx-agent-check-remember (item result)
   "Keep RESULT as the last result of checking ITEM, masked, with the time (`:at').  The file keeps the newest
-`drgnx-agent-check--kept' results and drops those of settings files that are gone (`drgnx-agent-check--prune')."
+`drgnx-agent-check--kept' results and drops those of settings files that are gone (`drgnx-agent-check--prune'),
+then the oldest while it would not fit under the reader's cap (`drgnx-agent-check--fit')."
   (let* ((sets (drgnx-agent-check--secret-sets item))
          (masked (drgnx-agent-check--mask-result result (car sets) (cdr sets)))
          (masked (if (plist-member masked :at) masked (append masked (list :at (float-time)))))
          (key (drgnx-agent-check--key item))
-         (all (drgnx-agent-check--prune (cons (cons key masked) (assoc-delete-all key (drgnx-agent-check--read-all)))))
+         (all (drgnx-agent-check--fit
+               (drgnx-agent-check--prune (cons (cons key masked) (assoc-delete-all key (drgnx-agent-check--read-all))))))
          (file (drgnx-agent-check--file))
          (dir (file-name-directory file)))
     (make-directory dir t)

@@ -424,6 +424,28 @@ with the HTTP mock stopped afterwards."
         (should-not (assoc (funcall key "s5" kept) all))           ; the oldest went
         (should (assoc (funcall key "s6" kept) all))))))
 
+(ert-deftest drgnx-agent-check/results-are-pruned-to-fit-the-size-cap ()
+  ;; 300 results of up to ~32 K characters each would pass the reader's cap: the oldest go until the file fits
+  (drgnx-agent-check-test-env
+    (let* ((kept (expand-file-name "kept.json" root))
+           (file (expand-file-name "agent-checks.eld" (drgnx-state-dir)))
+           (key (lambda (name) (list 'claude 'hooks name kept)))
+           (out (make-string 30000 ?x)))
+      (write-region "{}" nil kept)
+      (make-directory (file-name-directory file) t)
+      (with-temp-file file                                      ; 34 × 30 KB: just under 1 MiB, 35 are over
+        (prin1 (cl-loop for i below 34 collect (cons (funcall key (format "s%d" i)) (list :status 'ok :stdout out :at (float i))))
+               (current-buffer)))
+      (should (= (length (drgnx-agent-check-results)) 34))
+      (drgnx-agent-check-remember (list :kind 'claude :section 'hooks :name "new" :file kept)
+                                  (list :status 'ok :stdout out :time 0.1))
+      (should (<= (file-attribute-size (file-attributes file)) drgnx-file-max-bytes))
+      (let ((all (drgnx-agent-check-results)))
+        (should (equal (plist-get (cdr (assoc (funcall key "new") all)) :stdout) out))
+        (should-not (assoc (funcall key "s0") all))                ; the oldest went
+        (should (assoc (funcall key "s33") all))
+        (should (= (length all) 34))))))
+
 ;;;; Fix round 1
 
 (ert-deftest drgnx-agent-check/the-process-table-is-read-from-proc ()

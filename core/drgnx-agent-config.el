@@ -102,11 +102,13 @@ CALLBACK gets (:ok t :note STRING) or (:error STRING): at once for a file, later
     (buffer-string)))
 
 (defun drgnx-agent-config-save-backup (file)
-  "Copy FILE to FILE.drgnx-bak (replacing the last backup), atomically, with FILE's modes.
-The bytes go through `drgnx-file-write-text' (UTF-8 read and written back, so any byte survives)."
+  "Copy FILE to FILE.drgnx-bak (replacing the last backup), atomically, for the owner alone (0600): it holds the
+secrets of before, which the user may have rotated out of FILE.  The temp file is owner-only before the rename
+\(`:private'), so an old backup's wider mode never reaches the new one.  The bytes go through
+`drgnx-file-write-text' (UTF-8 read and written back, so any byte survives)."
   (let ((bak (drgnx-file-write-text (concat file ".drgnx-bak") (drgnx-agent-config-read-text file)
-                                    :mode (file-modes file))))
-    (set-file-modes bak (file-modes file))))                ; the layer keeps an old backup's mode
+                                    :mode #o600 :private t)))
+    (set-file-modes bak #o600)))                            ; `:private' keeps an old backup's owner bits (x)
 
 (defun drgnx-agent-config--make-private-dirs (dir)
   "Make DIR and the parents that are missing, each new one with modes 0700."

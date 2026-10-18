@@ -15,7 +15,8 @@ here ever asks you a question; you trust a folder when you choose to.
   names the file and the reason, once each time the file changes. Trust This Folder copies a file it cannot use
   aside (`trusted-folders.eld.bak-…`, the newest three kept) before it writes a new one, and refuses to change a
   newer drgnx's file. Two Emacs sessions trusting folders at once both keep theirs. A folder in the file that
-  Trust This Folder would refuse (below) is not trusted.
+  Trust This Folder would refuse (below), and a remote folder, are not trusted; reading the file never contacts
+  another machine.
 - Anything you put in Emacs's own `trusted-content` option. drgnx only adds to it; `:all` trusts everything.
 
 Every other folder is untrusted, including the projects you open, until you trust them.
@@ -24,10 +25,11 @@ Every other folder is untrusted, including the projects you open, until you trus
 
 A file from an untrusted folder shows **restricted** in the mode line, in a quiet colour from your theme. Click it
 to trust the file's folder: its project's root when the file is in a project (a git repository, for example), else
-the file's own folder. The mark is not shown for remote files.
+the file's own folder. The mark is not shown for remote files, and Trust This Folder refuses a remote folder.
 
-A folder that holds far more than one project is never trusted: `/`, your home folder or a folder above it,
-and the temp folder. A file lying directly in one of them has to move into a project folder first.
+A folder that holds far more than one project is never trusted: `/`, your home folder, the temp folder, `/tmp/`,
+`/var/tmp/` and `/dev/shm/`, or a folder above any of them. A file lying directly in one of them has to move into a
+project folder first.
 
 Or use the palette: **File: Trust This Folder**, and **File: Untrust This Folder** to take it back (drgnx's own
 folders stay trusted). Untrusting always takes effect at once. When `trusted-folders.eld` cannot be changed (it

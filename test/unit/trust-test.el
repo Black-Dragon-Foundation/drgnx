@@ -285,6 +285,34 @@ nobody trusted.  Buffers BODY opens are killed after it."
       (dolist (d (list "~/" "/" up (drgnx-trust--entry temporary-file-directory)))
         (should-not (member d trusted-content))))))
 
+(ert-deftest drgnx-trust/an-entry-that-signals-never-stops-the-guards ()
+  (drgnx-trust-test--with (dir)
+    (let ((e (drgnx-trust--entry dir)) (inhibit-message t)
+          (guards-on (lambda ()
+                       (let ((s (drgnx-trust-guards-status)))
+                         (and (plist-get s :mode) (plist-get s :tramp) (plist-get s :ffap) (plist-get s :shorthands)
+                              (plist-get s :compile))))))
+      (drgnx-trust-test--put (format "(:version 1 :folders (\"/nosuchmethod:h:/x/\" %S))" e))
+      (drgnx-trust-mode -1)
+      (setq trusted-content nil)
+      (drgnx-trust-mode 1)                                       ; no error
+      (should (funcall guards-on))
+      (should (member e trusted-content))
+      (should-not (seq-find (lambda (c) (string-search "nosuchmethod" c)) trusted-content))
+      ;; whatever the read signals, the mode still installs every guard
+      (drgnx-trust-mode -1)
+      (cl-letf (((symbol-function 'drgnx-trust--read) (lambda () (error "Boom"))))
+        (drgnx-trust-mode 1))
+      (should (funcall guards-on)))))
+
+(ert-deftest drgnx-trust/the-temp-dirs-and-their-ancestors-are-broad ()
+  (drgnx-trust-test--with (dir)
+    (let ((tmp (file-name-as-directory (file-truename temporary-file-directory))))
+      (dolist (d (list tmp (file-name-directory (directory-file-name tmp)) "/tmp/" "/var/tmp/" "/dev/shm/"))
+        (should (drgnx-trust--broad-p d)))
+      (should-not (drgnx-trust--broad-p (drgnx-trust--entry dir)))
+      (should-not (drgnx-trust--broad-p "/tmp/a-project/")))))
+
 (ert-deftest drgnx-trust/an-unusable-file-is-told-once-per-change ()
   (drgnx-trust-test--with (_dir)
     (let* ((told nil) (file (drgnx-trust-folders-file)) (name (file-name-nondirectory file)))
@@ -488,5 +516,23 @@ connects) goes on, anything else returns its first argument."
       (should (equal (list (plist-get s :enable-remote-dir-locals) (plist-get s :auto-revert-remote-files)
                            (plist-get s :remote-file-name-inhibit-auto-save-visited))
                      '(nil nil t))))))
+
+;;;; Fix round 2: entries read from trusted-folders.eld never reach a file name handler
+
+(ert-deftest drgnx-trust/a-remote-entry-is-not-trusted-and-connects-nowhere ()
+  (drgnx-trust-test--with (dir)
+    (let ((e (drgnx-trust--entry dir)) (drgnx-trust-test--tramp-ops nil) (inhibit-message t))
+      (drgnx-trust-test--put (format "(:version 1 :folders (\"/ssh:drgnx-test.invalid:/proj/\" %S))" e))
+      (advice-add 'tramp-file-name-handler :around #'drgnx-trust-test--tramp-stub)
+      (unwind-protect
+          (should (= 0 (drgnx-trust-test--no-connections
+                        (should (equal (drgnx-trust-folders) (list e)))
+                        (should (drgnx-trust-test--trusts-from-file-p e))
+                        (should-not (member "/ssh:drgnx-test.invalid:/proj/" trusted-content))
+                        ;; Trust This Folder refuses a remote folder: the next session would not trust it
+                        (should-error (drgnx-trust-folder "/ssh:drgnx-test.invalid:/proj/") :type 'user-error))))
+        (advice-remove 'tramp-file-name-handler #'drgnx-trust-test--tramp-stub))
+      ;; TRAMP was only asked whether the name is remote, which never connects
+      (should (seq-every-p (lambda (op) (eq op 'file-remote-p)) drgnx-trust-test--tramp-ops)))))
 
 ;;; trust-test.el ends here
