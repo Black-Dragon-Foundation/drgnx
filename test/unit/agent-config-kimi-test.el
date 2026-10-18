@@ -291,12 +291,12 @@
                     (prog1 (apply orig file args)
                       (drgnx-agent-config-kimi-test--rewrite-once
                        user "{\"mcpServers\": {\"a\": {\"command\": \"x\"}, \"theirs\": {\"command\": \"y\"}}}\n")))))
-        (advice-add 'drgnx-agent-config-json-read :around stub)
+        (advice-add 'drgnx-agent-config-json-read-text :around stub)
         (unwind-protect
             (should (plist-get (drgnx-agent-config-kimi-test--write
                                 'add (drgnx-agent-config-kimi-test--mcp "mine" '(:command "z")) 'user root)
                                :ok))
-          (advice-remove 'drgnx-agent-config-json-read stub)))
+          (advice-remove 'drgnx-agent-config-json-read-text stub)))
       (should (equal (drgnx-agent-config-kimi-test--keys user "mcpServers") '("a" "theirs" "mine")))
       ;; the same for config.toml
       (drgnx-agent-config-kimi-test--put config "default_model = \"m\"\n")

@@ -266,6 +266,107 @@ an error naming its place and type, never its content."
      (lambda (new) (drgnx-agent-config--json-parse file new))
      expect)))
 
+;;;; Parsed JSON, taken apart and changed
+;; Shared by the agent files.  Objects are alists with symbol keys, arrays vectors, as `drgnx-agent-config-json-read'
+;; returns them; a path into an object is a list of key strings.
+
+(defun drgnx-agent-config-json-keystr (key)
+  "KEY (a symbol or string) as a string."
+  (if (symbolp key) (symbol-name key) key))
+
+(defun drgnx-agent-config-json-str (x)
+  "X when it is a string."
+  (and (stringp x) x))
+
+(defun drgnx-agent-config-json-alist-p (x)
+  "Non-nil when X is a parsed JSON object that has members."
+  (and (consp x) (cl-every #'consp x)))
+
+(defun drgnx-agent-config-json-cell (obj key)
+  "The member of the object OBJ called KEY (a string), or nil."
+  (and (listp obj)
+       (cl-find-if (lambda (c) (and (consp c) (equal (drgnx-agent-config-json-keystr (car c)) key))) obj)))
+
+(defun drgnx-agent-config-json-get (obj &rest keys)
+  "The value in OBJ at KEYS (strings), or nil."
+  (dolist (k keys obj)
+    (setq obj (cdr (drgnx-agent-config-json-cell obj k)))))
+
+(defun drgnx-agent-config-json-set (obj keys value)
+  "OBJ with VALUE at KEYS (strings): an existing member keeps its place, a new one goes last."
+  (unless (or (null obj) (drgnx-agent-config-json-alist-p obj))
+    (error "The file has no object where drgnx has to write"))
+  (let* ((key (car keys))
+         (cell (drgnx-agent-config-json-cell obj key))
+         (new (if (cdr keys) (drgnx-agent-config-json-set (cdr cell) (cdr keys) value) value)))
+    (if cell
+        (mapcar (lambda (c) (if (eq c cell) (cons (car c) new) c)) obj)
+      (append obj (list (cons (intern key) new))))))
+
+(defun drgnx-agent-config-json-del (obj keys)
+  "OBJ without the member at KEYS (strings); OBJ itself when it is not there."
+  (let ((cell (drgnx-agent-config-json-cell obj (car keys))))
+    (cond ((null cell) obj)
+          ((cdr keys) (mapcar (lambda (c)
+                                (if (eq c cell) (cons (car c) (drgnx-agent-config-json-del (cdr c) (cdr keys))) c))
+                              obj))
+          (t (remq cell obj)))))
+
+(defun drgnx-agent-config-json-strings (x)
+  "The strings of the vector X, as a list (anything else in it as text)."
+  (and (vectorp x) (mapcar (lambda (e) (if (stringp e) e (format "%s" e))) x)))
+
+(defun drgnx-agent-config-json-string-alist (obj)
+  "The members of the object OBJ as ((\"NAME\" . \"value\")…)."
+  (and (drgnx-agent-config-json-alist-p obj)
+       (mapcar (lambda (c) (cons (drgnx-agent-config-json-keystr (car c))
+                                 (if (stringp (cdr c)) (cdr c) (format "%s" (cdr c)))))
+               obj)))
+
+(defun drgnx-agent-config-json-pairs (pairs)
+  "The alist PAIRS ((\"NAME\" . \"value\")…) as a JSON object; a value that is not text is an error."
+  (mapcar (lambda (p)
+            (unless (stringp (cdr p)) (error "A value of an environment variable or header must be text"))
+            (cons (intern (drgnx-agent-config-json-keystr (car p))) (cdr p)))
+          pairs))
+
+(defun drgnx-agent-config-json-modify (file function)
+  "Replace the JSON object in FILE with (FUNCTION VALUE), VALUE being what FILE holds now.
+FILE is read again just before each attempt and the write is refused when it changed since: an agent rewrites its
+files often, so a refused write is tried once more with the new content.  A second refusal signals
+`drgnx-agent-config-changed'.  Returns FILE."
+  (let ((attempt 0) done)
+    (while (not done)
+      (setq attempt (1+ attempt))
+      ;; one read: the value and the text EXPECT is checked against are the same version of the file
+      (let* ((text (and (file-exists-p file) (drgnx-agent-config-read-text file)))
+             (read (if text (drgnx-agent-config-json-read-text file text) (list :value nil :indent 2)))
+             (value (plist-get read :value)))
+        (unless (or (null value) (drgnx-agent-config-json-alist-p value))
+          (error "The file does not hold a JSON object"))
+        (condition-case nil
+            (progn (drgnx-agent-config-json-write file (funcall function value) (plist-get read :indent) text)
+                   (setq done t))
+          (drgnx-agent-config-changed
+           (when (>= attempt 2) (signal 'drgnx-agent-config-changed (list file)))))))
+    file))
+
+(defun drgnx-agent-config-hook-matcher= (group matcher)
+  "Non-nil when the JSON hook GROUP has the matcher MATCHER (nil and \"\" are the same)."
+  (equal (or (drgnx-agent-config-json-str (drgnx-agent-config-json-get group "matcher")) "")
+         (or matcher "")))
+
+(defun drgnx-agent-config-error-text (err item)
+  "The message for the error ERR of a write of ITEM: where and why, never the item's data."
+  (pcase (car err)
+    ('drgnx-agent-config-unreadable
+     (let ((data (cdr err)))
+       (format "%s does not parse (line %s: %s); nothing was written" (nth 0 data) (or (nth 1 data) "?") (nth 2 data))))
+    ('drgnx-agent-config-changed
+     (format "%s was changed by another program while it was being written; nothing was written, try again" (cadr err)))
+    (_ (drgnx-agent-config-mask-text (error-message-string err)
+                                     (ignore-errors (drgnx-agent-config-secrets (plist-get item :spec)))))))
+
 ;;;; Secrets
 
 (defconst drgnx-agent-config--secret-key-re "token\\|secret\\|key\\|password\\|authorization"

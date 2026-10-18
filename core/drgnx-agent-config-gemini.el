@@ -32,19 +32,6 @@
 (require 'cl-lib)
 (require 'subr-x)
 (require 'drgnx-agent-config)
-;; The JSON object helpers and the error text are generic; they live in the Claude file until they are hoisted.
-(require 'drgnx-agent-config-claude)
-
-(defalias 'drgnx-agent-config-gemini--keystr #'drgnx-agent-config-claude--keystr)
-(defalias 'drgnx-agent-config-gemini--str #'drgnx-agent-config-claude--str)
-(defalias 'drgnx-agent-config-gemini--alist-p #'drgnx-agent-config-claude--alist-p)
-(defalias 'drgnx-agent-config-gemini--cell #'drgnx-agent-config-claude--cell)
-(defalias 'drgnx-agent-config-gemini--get #'drgnx-agent-config-claude--get)
-(defalias 'drgnx-agent-config-gemini--set #'drgnx-agent-config-claude--set)
-(defalias 'drgnx-agent-config-gemini--del #'drgnx-agent-config-claude--del)
-(defalias 'drgnx-agent-config-gemini--strings #'drgnx-agent-config-claude--strings)
-(defalias 'drgnx-agent-config-gemini--string-alist #'drgnx-agent-config-claude--string-alist)
-(defalias 'drgnx-agent-config-gemini--error-text #'drgnx-agent-config-claude--error-text)
 
 (defconst drgnx-agent-config-gemini--events
   '("BeforeTool" "AfterTool" "BeforeAgent" "AfterAgent" "Notification" "SessionStart" "SessionEnd" "PreCompress"
@@ -150,17 +137,17 @@ Signals `drgnx-agent-config-unreadable' with (FILE LINE MESSAGE) like `drgnx-age
 (defun drgnx-agent-config-gemini--mcp-spec (json)
   "The :spec of the server entry JSON (nil when it is not an object).
 Gemini's precedence: httpUrl (Streamable HTTP), then url (`type' sse for SSE, else Streamable HTTP), then command."
-  (when (drgnx-agent-config-gemini--alist-p json)
-    (let* ((command (drgnx-agent-config-gemini--str (drgnx-agent-config-gemini--get json "command")))
-           (http (drgnx-agent-config-gemini--str (drgnx-agent-config-gemini--get json "httpUrl")))
-           (url (drgnx-agent-config-gemini--str (drgnx-agent-config-gemini--get json "url")))
-           (type (drgnx-agent-config-gemini--str (drgnx-agent-config-gemini--get json "type"))))
+  (when (drgnx-agent-config-json-alist-p json)
+    (let* ((command (drgnx-agent-config-json-str (drgnx-agent-config-json-get json "command")))
+           (http (drgnx-agent-config-json-str (drgnx-agent-config-json-get json "httpUrl")))
+           (url (drgnx-agent-config-json-str (drgnx-agent-config-json-get json "url")))
+           (type (drgnx-agent-config-json-str (drgnx-agent-config-json-get json "type"))))
       (list :type (cond (http 'http) (url (if (equal type "sse") 'sse 'http)) (command 'stdio))
             :command command
-            :args (drgnx-agent-config-gemini--strings (drgnx-agent-config-gemini--get json "args"))
-            :env (drgnx-agent-config-gemini--string-alist (drgnx-agent-config-gemini--get json "env"))
+            :args (drgnx-agent-config-json-strings (drgnx-agent-config-json-get json "args"))
+            :env (drgnx-agent-config-json-string-alist (drgnx-agent-config-json-get json "env"))
             :url (or http url)
-            :headers (drgnx-agent-config-gemini--string-alist (drgnx-agent-config-gemini--get json "headers"))))))
+            :headers (drgnx-agent-config-json-string-alist (drgnx-agent-config-json-get json "headers"))))))
 
 (defun drgnx-agent-config-gemini--spec-members (spec &optional existing)
   "The modelled members Gemini files for the server SPEC, as an alist of (NAME . VALUE).
@@ -175,16 +162,16 @@ Signals when SPEC is not a server.  EXISTING is the entry being edited: an http 
        (append (list (cons "command" command))
                (and (plist-get spec :args) (list (cons "args" (vconcat (plist-get spec :args)))))
                (and (plist-get spec :env)
-                    (list (cons "env" (drgnx-agent-config-claude--pairs-json (plist-get spec :env)))))))
+                    (list (cons "env" (drgnx-agent-config-json-pairs (plist-get spec :env)))))))
       ((or 'http 'sse)
        (unless (and (stringp url) (not (string-empty-p url))) (error "An http or sse server needs a URL"))
        (append (if (and (eq type 'http)
-                        (drgnx-agent-config-gemini--cell existing "httpUrl")
-                        (not (drgnx-agent-config-gemini--cell existing "url")))
+                        (drgnx-agent-config-json-cell existing "httpUrl")
+                        (not (drgnx-agent-config-json-cell existing "url")))
                    (list (cons "httpUrl" url))
                  (list (cons "url" url) (cons "type" (symbol-name type))))
                (and (plist-get spec :headers)
-                    (list (cons "headers" (drgnx-agent-config-claude--pairs-json (plist-get spec :headers)))))))
+                    (list (cons "headers" (drgnx-agent-config-json-pairs (plist-get spec :headers)))))))
       (_ (error "Unknown server type")))))
 
 (defun drgnx-agent-config-gemini--merge-members (entry members)
@@ -193,8 +180,8 @@ Other members stay."
   (dolist (key drgnx-agent-config-gemini--managed-keys entry)
     (let ((cell (assoc key members)))
       (setq entry (if cell
-                      (drgnx-agent-config-gemini--set entry (list key) (cdr cell))
-                    (drgnx-agent-config-gemini--del entry (list key)))))))
+                      (drgnx-agent-config-json-set entry (list key) (cdr cell))
+                    (drgnx-agent-config-json-del entry (list key)))))))
 
 (defun drgnx-agent-config-gemini--check-name (name)
   "Signal unless NAME can be the name of a new MCP server.
@@ -206,9 +193,9 @@ Gemini's policy engine splits mcp_SERVER_TOOL at the first underscore, so a name
 
 (defun drgnx-agent-config-gemini--server-items (servers from file keys readonly &optional prefix)
   "MCP items for the object SERVERS from FROM, found in FILE under KEYS (for the line numbers)."
-  (when (drgnx-agent-config-gemini--alist-p servers)
+  (when (drgnx-agent-config-json-alist-p servers)
     (mapcar (lambda (cell)
-              (let* ((name (drgnx-agent-config-gemini--keystr (car cell)))
+              (let* ((name (drgnx-agent-config-json-keystr (car cell)))
                      (spec (drgnx-agent-config-gemini--mcp-spec (cdr cell))))
                 (append (list :kind 'gemini :section 'mcp :name (concat prefix name) :from from :file file
                               :line (drgnx-agent-config-gemini--line-of file (append keys (list name)))
@@ -218,18 +205,18 @@ Gemini's policy engine splits mcp_SERVER_TOOL at the first underscore, so a name
 
 (defun drgnx-agent-config-gemini--hook-items (value from file readonly disabled)
   "Hook items for the `hooks' of the settings VALUE, read from FILE; DISABLED is `hooksConfig.disabled'."
-  (let ((hooks (drgnx-agent-config-gemini--get value "hooks")) out)
-    (when (drgnx-agent-config-gemini--alist-p hooks)
+  (let ((hooks (drgnx-agent-config-json-get value "hooks")) out)
+    (when (drgnx-agent-config-json-alist-p hooks)
       (dolist (entry hooks)
-        (let ((event (drgnx-agent-config-gemini--keystr (car entry))))
+        (let ((event (drgnx-agent-config-json-keystr (car entry))))
           (dolist (group (and (vectorp (cdr entry)) (append (cdr entry) nil)))
-            (let ((matcher (drgnx-agent-config-gemini--str (drgnx-agent-config-gemini--get group "matcher")))
-                  (members (drgnx-agent-config-gemini--get group "hooks")))
+            (let ((matcher (drgnx-agent-config-json-str (drgnx-agent-config-json-get group "matcher")))
+                  (members (drgnx-agent-config-json-get group "hooks")))
               (dolist (hook (and (vectorp members) (append members nil)))
-                (let* ((type (drgnx-agent-config-gemini--str (drgnx-agent-config-gemini--get hook "type")))
-                       (command (drgnx-agent-config-gemini--str (drgnx-agent-config-gemini--get hook "command")))
-                       (hook-name (drgnx-agent-config-gemini--str (drgnx-agent-config-gemini--get hook "name")))
-                       (timeout (drgnx-agent-config-gemini--get hook "timeout")))
+                (let* ((type (drgnx-agent-config-json-str (drgnx-agent-config-json-get hook "type")))
+                       (command (drgnx-agent-config-json-str (drgnx-agent-config-json-get hook "command")))
+                       (hook-name (drgnx-agent-config-json-str (drgnx-agent-config-json-get hook "name")))
+                       (timeout (drgnx-agent-config-json-get hook "timeout")))
                   (push (list :kind 'gemini :section 'hook
                               :name (if (and matcher (not (string-empty-p matcher))) (format "%s %s" event matcher) event)
                               :from from :file file
@@ -257,7 +244,7 @@ Gemini's policy engine splits mcp_SERVER_TOOL at the first underscore, so a name
   "Non-nil when the extension NAME is on for the project ROOT by the extension-enablement.json value ENABLEMENT."
   (let ((enabled t)
         (path (file-name-as-directory (expand-file-name (or root "~")))))
-    (dolist (rule (append (drgnx-agent-config-gemini--get enablement name "overrides") nil) enabled)
+    (dolist (rule (append (drgnx-agent-config-json-get enablement name "overrides") nil) enabled)
       (when (and (stringp rule) (string-match-p (drgnx-agent-config-gemini--rule-regexp rule) path))
         (setq enabled (not (string-prefix-p "!" rule)))))))
 
@@ -265,7 +252,7 @@ Gemini's policy engine splits mcp_SERVER_TOOL at the first underscore, so a name
   "The names of the rules files: `context.fileName' (a name or a list) of the settings VALUES, else GEMINI.md."
   (let (names)
     (dolist (value values)
-      (let ((setting (drgnx-agent-config-gemini--get value "context" "fileName")))
+      (let ((setting (drgnx-agent-config-json-get value "context" "fileName")))
         (dolist (name (if (stringp setting) (list setting) (and (vectorp setting) (append setting nil))))
           (when (and (stringp name) (not (string-empty-p name)) (not (string-match-p "/" name)))
             (cl-pushnew name names :test #'equal)))))
@@ -305,11 +292,11 @@ Gemini's policy engine splits mcp_SERVER_TOOL at the first underscore, so a name
                                   (cons 'defaults (drgnx-agent-config-gemini--settings-file 'defaults root))
                                   (cons 'system (drgnx-agent-config-gemini--settings-file 'system root))))))
              (values (mapcar #'caddr settings))
-             (disabled-skills (apply #'append (mapcar (lambda (v) (drgnx-agent-config-gemini--strings
-                                                                   (drgnx-agent-config-gemini--get v "skills" "disabled")))
+             (disabled-skills (apply #'append (mapcar (lambda (v) (drgnx-agent-config-json-strings
+                                                                   (drgnx-agent-config-json-get v "skills" "disabled")))
                                                       values)))
-             (disabled-hooks (apply #'append (mapcar (lambda (v) (drgnx-agent-config-gemini--strings
-                                                                  (drgnx-agent-config-gemini--get v "hooksConfig" "disabled")))
+             (disabled-hooks (apply #'append (mapcar (lambda (v) (drgnx-agent-config-json-strings
+                                                                  (drgnx-agent-config-json-get v "hooksConfig" "disabled")))
                                                      values)))
              (ext-dir (expand-file-name "extensions" home))
              (enablement (plist-get (read-json (expand-file-name "extension-enablement.json" ext-dir) t) :value)))
@@ -324,25 +311,25 @@ Gemini's policy engine splits mcp_SERVER_TOOL at the first underscore, so a name
                               file)
                       notes))
               (add (drgnx-agent-config-gemini--server-items
-                    (drgnx-agent-config-gemini--get value "mcpServers") from file '("mcpServers") readonly))
+                    (drgnx-agent-config-json-get value "mcpServers") from file '("mcpServers") readonly))
               (add (drgnx-agent-config-gemini--hook-items value from file readonly disabled-hooks))
-              (when (eq (drgnx-agent-config-gemini--get value "hooksConfig" "enabled") :false)
+              (when (eq (drgnx-agent-config-json-get value "hooksConfig" "enabled") :false)
                 (push (format "%s switches every hook off (hooksConfig.enabled)" file) notes))
-              (when (eq (drgnx-agent-config-gemini--get value "skills" "enabled") :false)
+              (when (eq (drgnx-agent-config-json-get value "skills" "enabled") :false)
                 (push (format "%s switches every skill off (skills.enabled)" file) notes)))))
         ;; extensions
         (let ((extensions nil))
           (dolist (dir (and (file-directory-p ext-dir) (directory-files ext-dir t "\\`[^.]")))
             (let* ((manifest (expand-file-name "gemini-extension.json" dir))
                    (value (plist-get (read-json manifest t) :value)))
-              (when (drgnx-agent-config-gemini--alist-p value)
-                (let* ((name (or (drgnx-agent-config-gemini--str (drgnx-agent-config-gemini--get value "name"))
+              (when (drgnx-agent-config-json-alist-p value)
+                (let* ((name (or (drgnx-agent-config-json-str (drgnx-agent-config-json-get value "name"))
                                  (file-name-nondirectory dir)))
                        (on (drgnx-agent-config-gemini--extension-enabled-p name enablement root))
                        (hooks-file (expand-file-name "hooks/hooks.json" dir)))
                   (push (list name dir on) extensions)
                   (dolist (item (drgnx-agent-config-gemini--server-items
-                                 (drgnx-agent-config-gemini--get value "mcpServers") 'extension manifest
+                                 (drgnx-agent-config-json-get value "mcpServers") 'extension manifest
                                  '("mcpServers") t (format "extension:%s:" name)))
                     (add (list (plist-put item :enabled on))))
                   (dolist (item (drgnx-agent-config-gemini--hook-items
@@ -399,7 +386,7 @@ when FILE changed since it was read here.  Returns FILE."
       (error "%s has comments, which drgnx would lose when it writes: change it by hand" file))
     (let* ((read (drgnx-agent-config-json-read file))
            (value (plist-get read :value)))
-      (unless (or (null value) (drgnx-agent-config-gemini--alist-p value))
+      (unless (or (null value) (drgnx-agent-config-json-alist-p value))
         (error "The file does not hold a JSON object"))
       (drgnx-agent-config-json-write file (funcall function value) (plist-get read :indent) text))
     file))
@@ -418,51 +405,47 @@ when FILE changed since it was read here.  Returns FILE."
       (drgnx-agent-config-gemini--modify
        file
        (lambda (value)
-         (let ((existing (drgnx-agent-config-gemini--get value "mcpServers")))
+         (let ((existing (drgnx-agent-config-json-get value "mcpServers")))
            (pcase op
              ('add
-              (when (drgnx-agent-config-gemini--cell existing name) (error "%s is already in this file" name))
-              (drgnx-agent-config-gemini--set
+              (when (drgnx-agent-config-json-cell existing name) (error "%s is already in this file" name))
+              (drgnx-agent-config-json-set
                value (list "mcpServers" name)
                (drgnx-agent-config-gemini--merge-members nil (drgnx-agent-config-gemini--spec-members spec))))
              ('edit
-              (let ((cell (drgnx-agent-config-gemini--cell existing old)))
+              (let ((cell (drgnx-agent-config-json-cell existing old)))
                 (unless cell (error "%s is not in this file" old))
-                (when (and (not (equal old name)) (drgnx-agent-config-gemini--cell existing name))
+                (when (and (not (equal old name)) (drgnx-agent-config-json-cell existing name))
                   (error "%s is already in this file" name))
                 (let ((entry (drgnx-agent-config-gemini--merge-members
                               (cdr cell) (drgnx-agent-config-gemini--spec-members spec (cdr cell)))))
                   (if (equal old name)
-                      (drgnx-agent-config-gemini--set value (list "mcpServers" name) entry)
+                      (drgnx-agent-config-json-set value (list "mcpServers" name) entry)
                     ;; renamed: the entry keeps its place among the servers
-                    (drgnx-agent-config-gemini--set
+                    (drgnx-agent-config-json-set
                      value '("mcpServers")
                      (mapcar (lambda (c) (if (eq c cell) (cons (intern name) entry) c)) existing))))))
              ('remove
-              (unless (drgnx-agent-config-gemini--cell existing name) (error "%s is not in this file" name))
-              (let ((without (drgnx-agent-config-gemini--del value (list "mcpServers" name))))
-                (if (drgnx-agent-config-gemini--get without "mcpServers") without
-                  (drgnx-agent-config-gemini--del without '("mcpServers"))))))))))
+              (unless (drgnx-agent-config-json-cell existing name) (error "%s is not in this file" name))
+              (let ((without (drgnx-agent-config-json-del value (list "mcpServers" name))))
+                (if (drgnx-agent-config-json-get without "mcpServers") without
+                  (drgnx-agent-config-json-del without '("mcpServers"))))))))))
     (list :ok t :note (format "Wrote %s. Restart running Gemini sessions to pick this up" file))))
 
 ;;;; Writing hooks
 
-(defun drgnx-agent-config-gemini--matcher= (group matcher)
-  "Non-nil when the hook GROUP has the matcher MATCHER (nil and \"\" are the same)."
-  (equal (or (drgnx-agent-config-gemini--str (drgnx-agent-config-gemini--get group "matcher")) "") (or matcher "")))
-
 (defun drgnx-agent-config-gemini--hook-json (spec base)
   "The hook object for the hook SPEC: BASE (the hook it replaces, or nil) with the modelled members replaced."
-  (let ((hook (drgnx-agent-config-gemini--set base '("type") "command")))
-    (setq hook (drgnx-agent-config-gemini--set hook '("command") (plist-get spec :command)))
+  (let ((hook (drgnx-agent-config-json-set base '("type") "command")))
+    (setq hook (drgnx-agent-config-json-set hook '("command") (plist-get spec :command)))
     (if (numberp (plist-get spec :timeout))
-        (drgnx-agent-config-gemini--set hook '("timeout") (plist-get spec :timeout))
-      (drgnx-agent-config-gemini--del hook '("timeout")))))
+        (drgnx-agent-config-json-set hook '("timeout") (plist-get spec :timeout))
+      (drgnx-agent-config-json-del hook '("timeout")))))
 
 (defun drgnx-agent-config-gemini--command-hook-p (hook command)
   "Non-nil when HOOK is a command hook running COMMAND."
-  (and (equal (drgnx-agent-config-gemini--get hook "type") "command")
-       (equal (drgnx-agent-config-gemini--get hook "command") command)))
+  (and (equal (drgnx-agent-config-json-get hook "type") "command")
+       (equal (drgnx-agent-config-json-get hook "command") command)))
 
 (defun drgnx-agent-config-gemini--hooks-update (value old new)
   "The settings VALUE with the hook OLD (a spec: :event :matcher :command; nil for none) replaced by NEW.
@@ -477,8 +460,8 @@ The hook's other members (name, description) stay; a hook whose event and matche
               (delq nil
                     (mapcar
                      (lambda (group)
-                       (let* ((hooks (and (not found) (drgnx-agent-config-gemini--matcher= group (plist-get old :matcher))
-                                          (append (drgnx-agent-config-gemini--get group "hooks") nil)))
+                       (let* ((hooks (and (not found) (drgnx-agent-config-hook-matcher= group (plist-get old :matcher))
+                                          (append (drgnx-agent-config-json-get group "hooks") nil)))
                               (pos (and hooks (cl-position-if (lambda (h) (drgnx-agent-config-gemini--command-hook-p
                                                                            h (plist-get old :command)))
                                                               hooks))))
@@ -486,33 +469,33 @@ The hook's other members (name, description) stay; a hook whose event and matche
                                (same-place
                                 (setq found t in-place t base (nth pos hooks))
                                 (setf (nth pos hooks) (drgnx-agent-config-gemini--hook-json new base))
-                                (drgnx-agent-config-gemini--set group '("hooks") (vconcat hooks)))
+                                (drgnx-agent-config-json-set group '("hooks") (vconcat hooks)))
                                (t
                                 (setq found t base (nth pos hooks))
                                 (setq hooks (append (take pos hooks) (nthcdr (1+ pos) hooks)))
-                                (and hooks (drgnx-agent-config-gemini--set group '("hooks") (vconcat hooks)))))))
-                     (append (drgnx-agent-config-gemini--get value "hooks" event) nil)))))
+                                (and hooks (drgnx-agent-config-json-set group '("hooks") (vconcat hooks)))))))
+                     (append (drgnx-agent-config-json-get value "hooks" event) nil)))))
         (unless found (error "The hook was not found in this file"))
         (setq value (if groups
-                        (drgnx-agent-config-gemini--set value (list "hooks" event) (vconcat groups))
-                      (let ((without (drgnx-agent-config-gemini--del value (list "hooks" event))))
-                        (if (drgnx-agent-config-gemini--get without "hooks") without
-                          (drgnx-agent-config-gemini--del without '("hooks"))))))))
+                        (drgnx-agent-config-json-set value (list "hooks" event) (vconcat groups))
+                      (let ((without (drgnx-agent-config-json-del value (list "hooks" event))))
+                        (if (drgnx-agent-config-json-get without "hooks") without
+                          (drgnx-agent-config-json-del without '("hooks"))))))))
     (when (and new (not in-place))
       (let* ((event (plist-get new :event))
              (matcher (plist-get new :matcher))
-             (groups (append (drgnx-agent-config-gemini--get value "hooks" event) nil))
-             (pos (cl-position-if (lambda (g) (drgnx-agent-config-gemini--matcher= g matcher)) groups))
+             (groups (append (drgnx-agent-config-json-get value "hooks" event) nil))
+             (pos (cl-position-if (lambda (g) (drgnx-agent-config-hook-matcher= g matcher)) groups))
              (hook (drgnx-agent-config-gemini--hook-json new base)))
         (if pos
             (setf (nth pos groups)
-                  (drgnx-agent-config-gemini--set
+                  (drgnx-agent-config-json-set
                    (nth pos groups) '("hooks")
-                   (vconcat (drgnx-agent-config-gemini--get (nth pos groups) "hooks") (list hook))))
+                   (vconcat (drgnx-agent-config-json-get (nth pos groups) "hooks") (list hook))))
           (setq groups (append groups
                                (list (append (and matcher (not (string-empty-p matcher)) (list (cons 'matcher matcher)))
                                              (list (cons 'hooks (vector hook))))))))
-        (setq value (drgnx-agent-config-gemini--set value (list "hooks" event) (vconcat groups)))))
+        (setq value (drgnx-agent-config-json-set value (list "hooks" event) (vconcat groups)))))
     value))
 
 (defun drgnx-agent-config-gemini--write-hook (op item scope root)
@@ -536,13 +519,13 @@ The hook's other members (name, description) stay; a hook whose event and matche
 
 (defun drgnx-agent-config-gemini--without-name (value name)
   "The settings VALUE without NAME in skills.disabled (and without the member when that leaves it empty)."
-  (let* ((names (cl-remove name (append (drgnx-agent-config-gemini--get value "skills" "disabled") nil) :test #'equal))
-         (set (lambda (v) (drgnx-agent-config-gemini--set v '("skills" "disabled") (vconcat names)))))
+  (let* ((names (cl-remove name (append (drgnx-agent-config-json-get value "skills" "disabled") nil) :test #'equal))
+         (set (lambda (v) (drgnx-agent-config-json-set v '("skills" "disabled") (vconcat names)))))
     (if names
         (funcall set value)
-      (let ((without (drgnx-agent-config-gemini--del value '("skills" "disabled"))))
-        (if (drgnx-agent-config-gemini--get without "skills") without
-          (drgnx-agent-config-gemini--del without '("skills")))))))
+      (let ((without (drgnx-agent-config-json-del value '("skills" "disabled"))))
+        (if (drgnx-agent-config-json-get without "skills") without
+          (drgnx-agent-config-json-del without '("skills")))))))
 
 (defun drgnx-agent-config-gemini--describe-file (file scope root)
   "FILE of SCOPE for a note: the project's settings are shared with the team."
@@ -552,7 +535,7 @@ The hook's other members (name, description) stay; a hook whose event and matche
 
 (defun drgnx-agent-config-gemini--lists-skill-p (value name)
   "Non-nil when the settings VALUE lists NAME in skills.disabled."
-  (member name (drgnx-agent-config-gemini--strings (drgnx-agent-config-gemini--get value "skills" "disabled"))))
+  (member name (drgnx-agent-config-json-strings (drgnx-agent-config-json-get value "skills" "disabled"))))
 
 (defun drgnx-agent-config-gemini--skill-on (name root)
   "Take NAME out of skills.disabled of every writable settings file that lists it; return ((FILE . SCOPE)…) written.
@@ -587,7 +570,7 @@ is written when one fails.  If a later write fails, the files already written ar
                  (error nil))
                (push (caar d) undone)
              (push (caar d) stuck)))
-         (error "%s%s%s" (drgnx-agent-config-gemini--error-text err nil)
+         (error "%s%s%s" (drgnx-agent-config-error-text err nil)
                 (if undone (format "; the change to %s was undone" (string-join (nreverse undone) ", ")) "")
                 (if stuck (format "; the change to %s could NOT be undone (its backup has the previous content)"
                                   (string-join (nreverse stuck) ", "))
@@ -611,9 +594,9 @@ returns the result."
              (unless file (error "This scope needs a project"))
              (drgnx-agent-config-gemini--modify
               file (lambda (value)
-                     (let ((names (append (drgnx-agent-config-gemini--get value "skills" "disabled") nil)))
+                     (let ((names (append (drgnx-agent-config-json-get value "skills" "disabled") nil)))
                        (if (member name names) value
-                         (drgnx-agent-config-gemini--set value '("skills" "disabled") (vconcat names (list name)))))))
+                         (drgnx-agent-config-json-set value '("skills" "disabled") (vconcat names (list name)))))))
              (list :ok t :note (format "%s is now off (written to %s)" name
                                        (drgnx-agent-config-gemini--describe-file file target root))))
          (let ((files (drgnx-agent-config-gemini--skill-on name root)))
@@ -643,7 +626,7 @@ Items from extensions or the system settings, and from a settings file with comm
                   ('hook (drgnx-agent-config-gemini--write-hook op item scope root))
                   ('skill (drgnx-agent-config-gemini--write-skill op item scope root))
                   (_ (error "No such section"))))
-            (error (list :error (drgnx-agent-config-gemini--error-text err item))))))
+            (error (list :error (drgnx-agent-config-error-text err item))))))
     (funcall callback result)
     nil))
 

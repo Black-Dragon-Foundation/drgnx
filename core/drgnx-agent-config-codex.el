@@ -36,7 +36,6 @@
 (require 'subr-x)
 (require 'drgnx-agent-config)
 (require 'drgnx-toml)
-(require 'drgnx-agent-config-claude)
 
 (defconst drgnx-agent-config-codex--ignored "Codex ignores it until the project is trusted"
   "Why the items of an untrusted project do nothing.")
@@ -119,7 +118,7 @@
       (error (drgnx-agent-config-codex--problem file nil "cannot be read") nil))))
 
 (defun drgnx-agent-config-codex--load-json (file)
-  "The parsed JSON of FILE, as `drgnx-agent-config-claude--get' reads it; nil with a problem when it does not parse."
+  "The parsed JSON of FILE, as `drgnx-agent-config-json-get' reads it; nil with a problem when it does not parse."
   (when (and file (file-regular-p file))
     (condition-case err
         (plist-get (drgnx-agent-config-json-read file) :value)
@@ -163,27 +162,27 @@
 
 (defun drgnx-agent-config-codex--mcp-spec (tbl)
   "The :spec of the server table TBL (nil when it is not a table)."
-  (when (drgnx-agent-config-claude--alist-p tbl)
-    (let* ((get (lambda (key) (drgnx-agent-config-claude--get tbl key)))
-           (command (drgnx-agent-config-claude--str (funcall get "command")))
-           (url (drgnx-agent-config-claude--str (funcall get "url")))
-           (literal (drgnx-agent-config-claude--string-alist (funcall get "http_headers")))
-           (from-env (drgnx-agent-config-claude--string-alist (funcall get "env_http_headers"))))
+  (when (drgnx-agent-config-json-alist-p tbl)
+    (let* ((get (lambda (key) (drgnx-agent-config-json-get tbl key)))
+           (command (drgnx-agent-config-json-str (funcall get "command")))
+           (url (drgnx-agent-config-json-str (funcall get "url")))
+           (literal (drgnx-agent-config-json-string-alist (funcall get "http_headers")))
+           (from-env (drgnx-agent-config-json-string-alist (funcall get "env_http_headers"))))
       (list :type (cond (command 'stdio) (url 'http))
             :command command
-            :args (drgnx-agent-config-claude--strings (funcall get "args"))
-            :env (drgnx-agent-config-claude--string-alist (funcall get "env"))
+            :args (drgnx-agent-config-json-strings (funcall get "args"))
+            :env (drgnx-agent-config-json-string-alist (funcall get "env"))
             :url url
             :headers (append literal
                              (cl-remove-if (lambda (p) (string-match-p "\\`[A-Za-z_][A-Za-z0-9_]*\\'" (cdr p))) from-env))
             :env-headers (mapcar #'car from-env)
             :env-header-vars (mapcar #'cdr from-env)
-            :bearer-env (drgnx-agent-config-claude--str (funcall get "bearer_token_env_var"))))))
+            :bearer-env (drgnx-agent-config-json-str (funcall get "bearer_token_env_var"))))))
 
 (defun drgnx-agent-config-codex--server-items (parsed from file)
   "MCP items for the `mcp_servers' of the parsed config PARSED, from FROM, found in FILE."
   (let ((servers (drgnx-agent-config-codex--table parsed "mcp_servers")))
-    (when (drgnx-agent-config-claude--alist-p servers)
+    (when (drgnx-agent-config-json-alist-p servers)
       (mapcar (lambda (cell)
                 (let* ((name (car cell))
                        (spec (drgnx-agent-config-codex--mcp-spec (cdr cell)))
@@ -192,7 +191,7 @@
                                 :line (drgnx-agent-config-codex--line-of
                                        file (format "^[ \t]*\\[mcp_servers\\.\\(?:%s\\|\"%s\"\\)[] .]" quoted quoted))
                                 :spec spec
-                                :enabled (not (eq (drgnx-agent-config-claude--get (cdr cell) "enabled") :false))
+                                :enabled (not (eq (drgnx-agent-config-json-get (cdr cell) "enabled") :false))
                                 :readonly nil)
                           (unless spec (list :problem "not a server definition")))))
               servers))))
@@ -201,16 +200,16 @@
   "Hook items for the event map HOOKS (the `hooks' member of hooks.json or of config.toml), read from FILE.
 INLINE: the hooks are tables in config.toml, which are shown but not edited here."
   (let (out)
-    (when (drgnx-agent-config-claude--alist-p hooks)
+    (when (drgnx-agent-config-json-alist-p hooks)
       (dolist (entry hooks)
-        (let ((event (drgnx-agent-config-claude--keystr (car entry))))
+        (let ((event (drgnx-agent-config-json-keystr (car entry))))
           (dolist (group (and (vectorp (cdr entry)) (append (cdr entry) nil)))
-            (let ((matcher (drgnx-agent-config-claude--str (drgnx-agent-config-claude--get group "matcher")))
-                  (members (drgnx-agent-config-claude--get group "hooks")))
+            (let ((matcher (drgnx-agent-config-json-str (drgnx-agent-config-json-get group "matcher")))
+                  (members (drgnx-agent-config-json-get group "hooks")))
               (dolist (hook (and (vectorp members) (append members nil)))
-                (let* ((type (or (drgnx-agent-config-claude--str (drgnx-agent-config-claude--get hook "type")) "command"))
-                       (command (drgnx-agent-config-claude--str (drgnx-agent-config-claude--get hook "command")))
-                       (timeout (drgnx-agent-config-claude--get hook "timeout")))
+                (let* ((type (or (drgnx-agent-config-json-str (drgnx-agent-config-json-get hook "type")) "command"))
+                       (command (drgnx-agent-config-json-str (drgnx-agent-config-json-get hook "command")))
+                       (timeout (drgnx-agent-config-json-get hook "timeout")))
                   (push (append
                          (list :kind 'codex :section 'hook
                                :name (if (and matcher (not (string-empty-p matcher))) (format "%s %s" event matcher) event)
@@ -258,19 +257,19 @@ INLINE: the hooks are tables in config.toml, which are shown but not edited here
   (let ((providers (drgnx-agent-config-codex--table parsed "model_providers"))
         (profiles (drgnx-agent-config-codex--table parsed "profiles")))
     (cons (list :profile "codex" :kind nil :base-url nil
-                :model (drgnx-agent-config-claude--str (cdr (assoc "model" parsed)))
+                :model (drgnx-agent-config-json-str (cdr (assoc "model" parsed)))
                 :key-where "Codex's own ChatGPT login (drgnx never reads it)"
                 :billing 'subscription :vendor "OpenAI" :launch "codex")
-          (and (drgnx-agent-config-claude--alist-p profiles)
+          (and (drgnx-agent-config-json-alist-p profiles)
                (cl-loop
                 for cell in profiles
-                for id = (drgnx-agent-config-claude--str (drgnx-agent-config-claude--get (cdr cell) "model_provider"))
+                for id = (drgnx-agent-config-json-str (drgnx-agent-config-json-get (cdr cell) "model_provider"))
                 for provider = (and id (cdr (assoc id providers)))
                 when (and id (drgnx-agent-config-codex--openrouter-provider-p id provider))
-                collect (let ((env-key (drgnx-agent-config-claude--str (cdr (assoc "env_key" provider)))))
+                collect (let ((env-key (drgnx-agent-config-json-str (cdr (assoc "env_key" provider)))))
                           (list :profile (car cell) :kind nil
-                                :base-url (drgnx-agent-config-claude--str (cdr (assoc "base_url" provider)))
-                                :model (drgnx-agent-config-claude--str (drgnx-agent-config-claude--get (cdr cell) "model"))
+                                :base-url (drgnx-agent-config-json-str (cdr (assoc "base_url" provider)))
+                                :model (drgnx-agent-config-json-str (drgnx-agent-config-json-get (cdr cell) "model"))
                                 :key-where (if env-key
                                                (format "%s (environment variable)" env-key)
                                              "no key variable set in the provider")
@@ -305,7 +304,7 @@ BILLING is `subscription' or `openrouter'.  :key-where says where the key is kep
                (parsed (drgnx-agent-config-codex--load-toml config))
                (new (append (drgnx-agent-config-codex--server-items parsed scope config)
                             (drgnx-agent-config-codex--hook-items
-                             (drgnx-agent-config-claude--get (drgnx-agent-config-codex--load-json hooks) "hooks")
+                             (drgnx-agent-config-json-get (drgnx-agent-config-codex--load-json hooks) "hooks")
                              scope hooks nil)
                             (drgnx-agent-config-codex--hook-items
                              (drgnx-agent-config-codex--table parsed "hooks") scope config t))))
@@ -331,7 +330,7 @@ BILLING is `subscription' or `openrouter'.  :key-where says where the key is kep
                                   (delq nil (list (expand-file-name "AGENTS.md" home)
                                                   (and root (expand-file-name "AGENTS.md" root))))))
     ;; a default provider other than the ChatGPT login
-    (when-let* ((provider (drgnx-agent-config-claude--str (cdr (assoc "model_provider" user-config)))))
+    (when-let* ((provider (drgnx-agent-config-json-str (cdr (assoc "model_provider" user-config)))))
       (push (format "%s sets model_provider = %s: that is Codex's default instead of your ChatGPT login"
                     (drgnx-agent-config-codex--config-file 'user nil) provider)
             notes))
@@ -418,7 +417,7 @@ drgnx does not model.  Signals when SPEC is not a server Codex can run."
        (append (list (cons "command" command))
                (and (plist-get spec :args) (list (cons "args" (vconcat (plist-get spec :args)))))
                (and (plist-get spec :env)
-                    (list (cons "env" (mapcar (lambda (p) (cons (drgnx-agent-config-claude--keystr (car p)) (cdr p)))
+                    (list (cons "env" (mapcar (lambda (p) (cons (drgnx-agent-config-json-keystr (car p)) (cdr p)))
                                               (plist-get spec :env)))))
                kept))
       ('http
@@ -520,54 +519,54 @@ written some other way): the caller then rebuilds the table."
 
 (defun drgnx-agent-config-codex--hook-position (value spec)
   "(GROUP-INDEX . HOOK-INDEX) of the command hook SPEC (:event :matcher :command) in the hooks.json VALUE, or nil."
-  (let ((groups (append (drgnx-agent-config-claude--get value "hooks" (plist-get spec :event)) nil)))
+  (let ((groups (append (drgnx-agent-config-json-get value "hooks" (plist-get spec :event)) nil)))
     (cl-loop for group in groups
              for gi from 0
-             when (drgnx-agent-config-claude--matcher= group (plist-get spec :matcher))
+             when (drgnx-agent-config-hook-matcher= group (plist-get spec :matcher))
              do (let ((pos (cl-position-if
                             (lambda (h)
-                              (and (equal (or (drgnx-agent-config-claude--get h "type") "command") "command")
-                                   (equal (drgnx-agent-config-claude--get h "command") (plist-get spec :command))))
-                            (append (drgnx-agent-config-claude--get group "hooks") nil))))
+                              (and (equal (or (drgnx-agent-config-json-get h "type") "command") "command")
+                                   (equal (drgnx-agent-config-json-get h "command") (plist-get spec :command))))
+                            (append (drgnx-agent-config-json-get group "hooks") nil))))
                   (when pos (cl-return (cons gi pos)))))))
 
 (defun drgnx-agent-config-codex--hook-object (object spec)
   "The hook OBJECT (nil for a new one) with the command and timeout of SPEC; its other members stay."
-  (let ((object (drgnx-agent-config-claude--set (or object (list (cons 'type "command"))) '("command")
-                                                (plist-get spec :command))))
+  (let ((object (drgnx-agent-config-json-set (or object (list (cons 'type "command"))) '("command")
+                                             (plist-get spec :command))))
     (if (numberp (plist-get spec :timeout))
-        (drgnx-agent-config-claude--set object '("timeout") (plist-get spec :timeout))
-      (drgnx-agent-config-claude--del object '("timeout")))))
+        (drgnx-agent-config-json-set object '("timeout") (plist-get spec :timeout))
+      (drgnx-agent-config-json-del object '("timeout")))))
 
 (defun drgnx-agent-config-codex--hook-remove (value event position)
   "VALUE without the hook at POSITION ((GROUP . HOOK) indices) of EVENT; emptied groups and events go too."
-  (let* ((groups (append (drgnx-agent-config-claude--get value "hooks" event) nil))
+  (let* ((groups (append (drgnx-agent-config-json-get value "hooks" event) nil))
          (group (nth (car position) groups))
-         (hooks (append (drgnx-agent-config-claude--get group "hooks") nil))
+         (hooks (append (drgnx-agent-config-json-get group "hooks") nil))
          (hooks (append (take (cdr position) hooks) (nthcdr (1+ (cdr position)) hooks))))
     (if hooks
-        (setf (nth (car position) groups) (drgnx-agent-config-claude--set group '("hooks") (vconcat hooks)))
+        (setf (nth (car position) groups) (drgnx-agent-config-json-set group '("hooks") (vconcat hooks)))
       (setq groups (append (take (car position) groups) (nthcdr (1+ (car position)) groups))))
     (if groups
-        (drgnx-agent-config-claude--set value (list "hooks" event) (vconcat groups))
-      (let ((without (drgnx-agent-config-claude--del value (list "hooks" event))))
-        (if (drgnx-agent-config-claude--get without "hooks")
+        (drgnx-agent-config-json-set value (list "hooks" event) (vconcat groups))
+      (let ((without (drgnx-agent-config-json-del value (list "hooks" event))))
+        (if (drgnx-agent-config-json-get without "hooks")
             without
-          (drgnx-agent-config-claude--del without '("hooks")))))))
+          (drgnx-agent-config-json-del without '("hooks")))))))
 
 (defun drgnx-agent-config-codex--hook-insert (value event matcher object)
   "VALUE with the hook OBJECT added to the group of EVENT with MATCHER (a new group when there is none)."
-  (let* ((groups (append (drgnx-agent-config-claude--get value "hooks" event) nil))
-         (pos (cl-position-if (lambda (g) (drgnx-agent-config-claude--matcher= g matcher)) groups)))
+  (let* ((groups (append (drgnx-agent-config-json-get value "hooks" event) nil))
+         (pos (cl-position-if (lambda (g) (drgnx-agent-config-hook-matcher= g matcher)) groups)))
     (if pos
         (setf (nth pos groups)
-              (drgnx-agent-config-claude--set
+              (drgnx-agent-config-json-set
                (nth pos groups) '("hooks")
-               (vconcat (drgnx-agent-config-claude--get (nth pos groups) "hooks") (list object))))
+               (vconcat (drgnx-agent-config-json-get (nth pos groups) "hooks") (list object))))
       (setq groups (append groups
                            (list (append (and matcher (not (string-empty-p matcher)) (list (cons 'matcher matcher)))
                                          (list (cons 'hooks (vector object))))))))
-    (drgnx-agent-config-claude--set value (list "hooks" event) (vconcat groups))))
+    (drgnx-agent-config-json-set value (list "hooks" event) (vconcat groups))))
 
 (defun drgnx-agent-config-codex--hooks-update (value old new)
   "The hooks.json VALUE with the hook OLD (a spec; nil for none) replaced by NEW (a spec; nil for none).
@@ -577,15 +576,15 @@ event and matcher keeps its place."
     (when old
       (let ((position (drgnx-agent-config-codex--hook-position value old)))
         (unless position (error "The hook was not found in this file"))
-        (let* ((groups (append (drgnx-agent-config-claude--get value "hooks" (plist-get old :event)) nil))
-               (hooks (append (drgnx-agent-config-claude--get (nth (car position) groups) "hooks") nil)))
+        (let* ((groups (append (drgnx-agent-config-json-get value "hooks" (plist-get old :event)) nil))
+               (hooks (append (drgnx-agent-config-json-get (nth (car position) groups) "hooks") nil)))
           (setq object (nth (cdr position) hooks))
           (if (and new (equal (plist-get new :event) (plist-get old :event))
                    (equal (or (plist-get new :matcher) "") (or (plist-get old :matcher) "")))
               (let ((group (nth (car position) groups)))
                 (setf (nth (cdr position) hooks) (drgnx-agent-config-codex--hook-object object new))
-                (setf (nth (car position) groups) (drgnx-agent-config-claude--set group '("hooks") (vconcat hooks)))
-                (setq value (drgnx-agent-config-claude--set value (list "hooks" (plist-get old :event)) (vconcat groups))
+                (setf (nth (car position) groups) (drgnx-agent-config-json-set group '("hooks") (vconcat hooks)))
+                (setq value (drgnx-agent-config-json-set value (list "hooks" (plist-get old :event)) (vconcat groups))
                       in-place t))
             (setq value (drgnx-agent-config-codex--hook-remove value (plist-get old :event) position))))))
     (if (and new (not in-place))
@@ -606,7 +605,7 @@ event and matcher keeps its place."
         (error "A hook needs an event"))
       (unless (and (stringp (plist-get spec :command)) (not (string-empty-p (plist-get spec :command))))
         (error "A hook needs a command")))
-    (drgnx-agent-config-claude--modify
+    (drgnx-agent-config-json-modify
      file (lambda (value) (drgnx-agent-config-codex--hooks-update value previous (and (memq op '(add edit)) spec))))
     (list :ok t :note (format "Wrote %s%s; Codex may ask to re-approve changed hooks" file
                               (drgnx-agent-config-codex--untrusted-note scope root)))))
