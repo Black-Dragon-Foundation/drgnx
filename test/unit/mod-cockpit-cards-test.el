@@ -9,6 +9,7 @@
 (require 'drgnx-hub)                                   ; before any stub of its functions
 (require 'drgnx-coord)
 (require 'drgnx-job)                                   ; job/reply, as the hub runs it
+(load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
 
 (defconst drgnx-cockpit-cards-test--summary
   ;; as `job/status' gives it back through JSON: nil as :null, false as :false
@@ -34,8 +35,7 @@
 by `drgnx-cockpit-cards-test--answer' when that is a function of METHOD and PARAMS), and the parts' buffers killed
 after — they owned their hooks and timers."
   (declare (indent 0))
-  `(let ((drgnx-cockpit-graph-current-filter nil) (drgnx-cockpit--timer nil) (drgnx-cockpit--check-timer nil)
-         (drgnx-cockpit-cards--timer nil) (drgnx-cockpit-cards--retry nil) (drgnx-cockpit-cards--stale nil)
+  `(let ((drgnx-cockpit-graph-current-filter nil) (drgnx-cockpit-cards--stale nil)
          (drgnx-cockpit-cards-test--calls nil)
          (config (current-window-configuration)) (frames (frame-list)))
      (cl-letf (((symbol-function 'drgnx-hub-call)
@@ -53,8 +53,8 @@ after — they owned their hooks and timers."
              ,@body)
          (dolist (b (list (get-buffer drgnx-cockpit-cards-buffer-name) (get-buffer drgnx-cockpit-decisions-buffer-name)))
            (when b (kill-buffer b)))
-         (should-not (timerp drgnx-cockpit-cards--timer))
-         (should-not (timerp drgnx-cockpit-cards--retry))
+         (should-not (drgnx-timer-active-p 'cockpit-cards-refresh))
+         (should-not (drgnx-timer-active-p 'cockpit-cards-retry))
          (should-not (memq #'drgnx-cockpit-cards--hub-event (bound-and-true-p drgnx-hub-event-functions)))
          (should-not (memq #'drgnx-cockpit-cards--hub-gone (bound-and-true-p drgnx-hub-disconnect-functions)))
          (should (equal frames (frame-list)))
@@ -182,7 +182,7 @@ after — they owned their hooks and timers."
     (delete-other-windows)
     (switch-to-buffer "*scratch*")
     (drgnx-cockpit-cards--hub-event "card" '(:job "j1"))
-    (should-not (timerp drgnx-cockpit-cards--timer))
+    (should-not (drgnx-timer-active-p 'cockpit-cards-refresh))
     (should drgnx-cockpit-cards--stale)
     (drgnx-cockpit-cards-test--show)
     (drgnx-cockpit-cards--on-show (selected-window))
@@ -195,7 +195,7 @@ after — they owned their hooks and timers."
     (cl-letf (((symbol-function 'drgnx-hub-call) (lambda (&rest _) (error "No drgnx hub runs"))))
       (drgnx-cockpit-cards-refresh))
     (should (string-search "No drgnx hub" (drgnx-cockpit-cards-test--text 'cards)))
-    (should (timerp drgnx-cockpit-cards--retry))
+    (should (drgnx-timer-active-p 'cockpit-cards-retry))
     ;; a hub that was there goes away: the part says so
     (drgnx-cockpit-cards--draw "j1" drgnx-cockpit-cards-test--summary)
     (run-hooks 'drgnx-hub-disconnect-functions)
@@ -211,22 +211,24 @@ after — they owned their hooks and timers."
       (cl-letf (((symbol-function 'message) #'ignore))
         (drgnx-cockpit-cards-refresh)))
     (should (equal drgnx-cockpit-graph-current-filter '(:milestone "M9")))
-    (should-not (timerp drgnx-cockpit-cards--retry))))
+    (should-not (drgnx-timer-active-p 'cockpit-cards-retry))))
 
 (ert-deftest drgnx-cockpit-cards/discuss-looks-once-more-for-a-reviewer-not-mirrored-yet ()
-  (let ((timers nil) (said nil) (tries 0))
-    (cl-letf (((symbol-function 'drgnx-cockpit-cards--transcript) (lambda (_id) (cl-incf tries) (user-error "Agent s-rev is not mirrored here (yet)")))
-              ((symbol-function 'run-at-time) (lambda (_time _repeat fn &rest args) (push (cons fn args) timers) 'timer))
-              ((symbol-function 'message) (lambda (fmt &rest args) (push (apply #'format fmt args) said))))
-      (drgnx-cockpit-cards--open-transcript "s-rev" t)
-      (should (= 1 tries))
-      (should-not said)
-      (should (= 1 (length timers)))                        ; one retry scheduled
-      (apply (caar timers) (cdar timers))
-      (should (= 2 tries))
-      (should (= 1 (length timers)))                        ; and not another
-      (should (= 1 (length said)))
-      (should (string-search "not mirrored" (car said))))))
+  (drgnx-test-with-clock ()
+    (let ((said nil) (tries 0))
+      (cl-letf (((symbol-function 'drgnx-cockpit-cards--transcript) (lambda (_id) (cl-incf tries) (user-error "Agent s-rev is not mirrored here (yet)")))
+                ((symbol-function 'message) (lambda (fmt &rest args) (push (apply #'format fmt args) said))))
+        (drgnx-cockpit-cards--open-transcript "s-rev" t)
+        (should (= 1 tries))
+        (should-not said)
+        (should (drgnx-timer-active-p '(cockpit-cards-transcript . "s-rev")))   ; one retry scheduled
+        (drgnx-test-advance 0.9)
+        (should (= 1 tries))
+        (drgnx-test-advance 0.2)
+        (should (= 2 tries))
+        (should-not (drgnx-timer-pending))                  ; and not another
+        (should (= 1 (length said)))
+        (should (string-search "not mirrored" (car said)))))))
 
 (ert-deftest drgnx-cockpit-cards/a-part-is-drawn-only-where-it-lives ()
   ;; a refresh draws into the parts that live: it never makes the decision log's buffer when only What needs you shows
@@ -237,7 +239,7 @@ after — they owned their hooks and timers."
     (should-not (get-buffer drgnx-cockpit-decisions-buffer-name))
     (drgnx-cockpit-cards--no-hub "test")
     (should-not (get-buffer drgnx-cockpit-decisions-buffer-name))
-    (cancel-timer drgnx-cockpit-cards--retry) (setq drgnx-cockpit-cards--retry nil)
+    (drgnx-timer-cancel 'cockpit-cards-retry)
     ;; every job: a blank line between two jobs
     (drgnx-cockpit-cards--draw-all (list drgnx-cockpit-cards-test--summary
                                          (list :id "j2" :title "Other" :status "paused" :cards :null
@@ -452,13 +454,13 @@ after — they owned their hooks and timers."
   (let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
         (drgnx-pane--kinds nil) (drgnx-cockpit-filter-functions nil)
         (drgnx-persist-state-functions nil) (drgnx-persist-after-restore-functions nil)
-        (drgnx-hub-event-functions nil) (drgnx-hub-disconnect-functions nil)
-        (drgnx-cockpit-cards--timer nil) (drgnx-cockpit-cards--retry nil))
+        (drgnx-hub-event-functions nil) (drgnx-hub-disconnect-functions nil))
     (cl-letf (((symbol-function 'drgnx-pane--call) #'ignore))
       (drgnx-cockpit--setup))
     (drgnx-cockpit-cards-buffer)
     (drgnx-cockpit-decisions-buffer)
-    (setq drgnx-cockpit-cards--timer (run-at-time 60 nil #'ignore) drgnx-cockpit-cards--retry (run-at-time 60 nil #'ignore))
+    (drgnx-timer-start 'cockpit-cards-refresh 60 #'ignore :owner :core)
+    (drgnx-timer-start 'cockpit-cards-retry 60 #'ignore :owner :core)
     (should (memq #'drgnx-cockpit-cards--job-node-p drgnx-cockpit-filter-functions))
     (should (memq #'drgnx-cockpit-cards--hub-event drgnx-hub-event-functions))
     (drgnx-cockpit--teardown)
@@ -469,8 +471,8 @@ after — they owned their hooks and timers."
     (should-not (memq #'drgnx-cockpit-cards--hub-gone drgnx-hub-disconnect-functions))
     (should-not (get-buffer drgnx-cockpit-cards-buffer-name))
     (should-not (get-buffer drgnx-cockpit-decisions-buffer-name))
-    (should-not (timerp drgnx-cockpit-cards--timer))
-    (should-not (timerp drgnx-cockpit-cards--retry))
+    (should-not (drgnx-timer-active-p 'cockpit-cards-refresh))
+    (should-not (drgnx-timer-active-p 'cockpit-cards-retry))
     (drgnx-cockpit--teardown)))                        ; twice: nothing to do, no error
 
 (ert-deftest drgnx-cockpit-cards/what-reaches-an-agent-is-the-user-s-and-its-own-words-stay-quoted ()

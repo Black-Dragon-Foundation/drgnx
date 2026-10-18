@@ -20,6 +20,7 @@
 (require 'button)
 (require 'drgnx-registry)
 (require 'drgnx-panes)
+(require 'drgnx-timer)
 (require 'drgnx-coord)                                ; Message…: the user's text, left in the store
 ;; the jobs module's count of what needs you (the badge's), beside this file
 (unless (featurep 'drgnx-job-ui)
@@ -50,8 +51,6 @@
 (defconst drgnx-cockpit-cards-buffer-name "*Needs You*")
 (defconst drgnx-cockpit-decisions-buffer-name "*Decisions*")
 
-(defvar drgnx-cockpit-cards--timer nil "The refresh on its way: one at a time.")
-(defvar drgnx-cockpit-cards--retry nil "The look, 10 s on, for a hub that was not there.")
 (defvar drgnx-cockpit-cards--stale nil "Something changed while no part showed: they refresh when one shows.")
 (defvar-local drgnx-cockpit-cards--shown :none "What this part shows, as last drawn: the same again draws nothing.")
 
@@ -277,12 +276,10 @@ the decision log says it is per job."
   (drgnx-cockpit-cards--put 'cards (list :no-hub why)
                             (lambda () (insert "No drgnx hub — what jobs need of you appears when it runs (drgnx hub start).\n"
                                                (format "(%s)\n" why))))
-  (unless (timerp drgnx-cockpit-cards--retry)
-    (setq drgnx-cockpit-cards--retry (run-at-time 10 nil #'drgnx-cockpit-cards--look-again))))
+  (drgnx-timer-soon 'cockpit-cards-retry 10 #'drgnx-cockpit-cards--look-again :owner :core))
 
 (defun drgnx-cockpit-cards--look-again ()
   "The retry of `drgnx-cockpit-cards--no-hub' (a timer)."
-  (setq drgnx-cockpit-cards--retry nil)
   (drgnx-cockpit-cards--schedule 0))
 
 ;;;; Talking to the hub (never waiting)
@@ -327,8 +324,8 @@ draw what changed."
   (unless (delq (current-buffer) (drgnx-cockpit-cards--buffers))
     (remove-hook 'drgnx-hub-event-functions #'drgnx-cockpit-cards--hub-event)
     (remove-hook 'drgnx-hub-disconnect-functions #'drgnx-cockpit-cards--hub-gone)
-    (dolist (tm (list drgnx-cockpit-cards--timer drgnx-cockpit-cards--retry)) (when (timerp tm) (cancel-timer tm)))
-    (setq drgnx-cockpit-cards--timer nil drgnx-cockpit-cards--retry nil)))
+    (drgnx-timer-cancel 'cockpit-cards-refresh)
+    (drgnx-timer-cancel 'cockpit-cards-retry)))
 
 (defun drgnx-cockpit-cards--visible-p ()
   "Whether a part shows in a window of a visible frame."
@@ -339,12 +336,10 @@ draw what changed."
 shows (hidden, they refresh when one shows).  Cheap: called from every event."
   (when (drgnx-cockpit-cards--buffers)
     (cond ((not (drgnx-cockpit-cards--visible-p)) (setq drgnx-cockpit-cards--stale t))
-          ((not (timerp drgnx-cockpit-cards--timer))
-           (setq drgnx-cockpit-cards--timer (run-at-time (or delay 0.5) nil #'drgnx-cockpit-cards--tick))))))
+          (t (drgnx-timer-soon 'cockpit-cards-refresh (or delay 0.5) #'drgnx-cockpit-cards--tick :owner :core)))))
 
 (defun drgnx-cockpit-cards--tick ()
   "The scheduled refresh (a timer).  Parts hidden since it was scheduled only note they are stale."
-  (setq drgnx-cockpit-cards--timer nil)
   (if (drgnx-cockpit-cards--visible-p)
       (progn (setq drgnx-cockpit-cards--stale nil) (drgnx-cockpit-cards-refresh))
     (setq drgnx-cockpit-cards--stale t)))
@@ -405,7 +400,8 @@ job's repository, for Open."
 (defun drgnx-cockpit-cards--open-transcript (id retry)
   "Show agent ID's transcript; one that is not mirrored here yet (a reviewer just started) is tried again once (RETRY)."
   (condition-case err (drgnx-cockpit-cards--transcript id)
-    (user-error (if retry (run-at-time 1 nil #'drgnx-cockpit-cards--open-transcript id nil)
+    (user-error (if retry (drgnx-timer-start (cons 'cockpit-cards-transcript id) 1 #'drgnx-cockpit-cards--open-transcript
+                                             :args (list id nil) :owner :core)
                   (message "drgnx: %s" (error-message-string err))))))
 
 (defun drgnx-cockpit-cards--reply (message)
@@ -547,8 +543,9 @@ case no part lives) and forget nothing else — the filter is the graph's.  Idem
   (mapc #'kill-buffer (drgnx-cockpit-cards--buffers))
   (remove-hook 'drgnx-hub-event-functions #'drgnx-cockpit-cards--hub-event)
   (remove-hook 'drgnx-hub-disconnect-functions #'drgnx-cockpit-cards--hub-gone)
-  (dolist (tm (list drgnx-cockpit-cards--timer drgnx-cockpit-cards--retry)) (when (timerp tm) (cancel-timer tm)))
-  (setq drgnx-cockpit-cards--timer nil drgnx-cockpit-cards--retry nil drgnx-cockpit-cards--stale nil))
+  (drgnx-timer-cancel 'cockpit-cards-refresh)
+  (drgnx-timer-cancel 'cockpit-cards-retry)
+  (setq drgnx-cockpit-cards--stale nil))
 
 (provide 'drgnx-cockpit-cards)
 ;;; drgnx-cockpit-cards.el ends here
