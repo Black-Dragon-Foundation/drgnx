@@ -206,7 +206,6 @@ lambda or not)."
     ("wb/drgnx-explorer.el" 4)
     ("wb/drgnx-monitors.el" 1)
     ("wb/drgnx-outline.el" 1)
-    ("wb/drgnx-persist.el" 2)
     ("wb/drgnx-signal.el" 1))
   "Timer sites that do not go through `drgnx-timer-*' yet: (FILE COUNT).
 Counts can only fall; teardown's Task 24 needs this list empty.  A branch merged later adds its
