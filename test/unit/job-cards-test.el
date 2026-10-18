@@ -118,6 +118,16 @@
                      "acted"))
       (should-error (drgnx-hub-call-sync "job/dismiss" (list :message 99999))))))
 
+;; the hub's job/dismiss is this function (the body lives in drgnx-job.el, with `drgnx-job-reply')
+(ert-deftest drgnx-job-cards/dismissing-is-a-job-function ()
+  (drgnx-job-cards-test--running
+    (let ((mid (plist-get (drgnx-coord-send :job id :sender "s-a" :recipient "user" :text "[fyi] done" :seen (drgnx-coord-version)) :id)))
+      (should (drgnx-job-dismiss mid))
+      (should (equal (plist-get (drgnx-coord-message mid) :state) "acted"))
+      (should-error (drgnx-job-dismiss 99999) :type 'user-error)
+      (let ((other (plist-get (drgnx-coord-send :job id :sender "s-a" :recipient "s-b" :text "hello b" :seen (drgnx-coord-version)) :id)))
+        (should-error (drgnx-job-dismiss other) :type 'user-error)))))
+
 ;; only a job's own message to the user can be dismissed: an agent's message to another agent stays queued
 (ert-deftest drgnx-job-cards/only-a-message-to-the-user-can-be-dismissed ()
   (drgnx-job-cards-test--running
