@@ -1539,18 +1539,20 @@ Nil when the match's text changed."
           (when (and (window-live-p below) (eq (window-buffer below) target)) (select-window below)))))))
 
 (defun drgnx-replace--close-bars (&rest _)
-  "Close the find bar in every frame: before the workbench is saved, so a restart never brings back its window."
-  (when-let* ((bar (get-buffer drgnx-replace-bar-buffer-name)))
-    (with-current-buffer bar (drgnx-replace--bar-clear))
-    (dolist (w (get-buffer-window-list bar nil t))
-      (when (window-live-p w) (ignore-errors (delete-window w))))))
+  "Close the find bar in every frame: before the workbench is saved, so a restart never brings back its window.
+An error here is ignored: it must never make the save fail."
+  (ignore-errors
+    (when-let* ((bar (get-buffer drgnx-replace-bar-buffer-name)))
+      (with-current-buffer bar (drgnx-replace--bar-clear))
+      (dolist (w (get-buffer-window-list bar nil t))
+        (when (window-live-p w) (ignore-errors (delete-window w)))))))
 
 ;; wb/drgnx-persist.el saves the main area with `window-state-get': the bar's window would be in it.
 (advice-add 'drgnx-persist-save :before #'drgnx-replace--close-bars)
 
 (defun drgnx-replace-bar-show-all ()
-  "Move the find bar's search to the Search view, scope This file."
-  (interactive)
+  "Move the find bar's search to the Search view, scope This file.
+The find bar's button; not a command of its own (it needs the bar)."
   (with-current-buffer (drgnx-replace--bar-buffer)
     (let ((text (drgnx-replace--text 'find)) (new (drgnx-replace--text 'replace)) (origin drgnx-replace--origin)
           (opts (list :case (drgnx-replace--opt :case) :word (drgnx-replace--opt :word) :regexp (drgnx-replace--opt :regexp)))

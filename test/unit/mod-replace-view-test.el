@@ -583,4 +583,21 @@ bar's keymaps), one editor window, no view or bar left over."
         (should-not (get-buffer-window (drgnx-replace-view-test--bar)))
         (should-not (string-search drgnx-replace-bar-buffer-name (drgnx-replace-view-test--read drgnx-persist-file)))))))
 
+(ert-deftest drgnx-replace/an-error-closing-the-bar-never-stops-the-save ()
+  ;; The find bar's `drgnx-persist-save' advice runs on every exit: it must not make the save fail.
+  (drgnx-replace-view-test--with
+    (let ((drgnx-persist-file (expand-file-name "state.eld" (make-temp-file "drgnx-replace-save" t))))
+      (unwind-protect
+          (progn
+            (get-buffer-create drgnx-replace-bar-buffer-name)
+            (cl-letf (((symbol-function 'drgnx-replace--bar-clear) (lambda () (error "the bar is broken"))))
+              (should (file-exists-p (drgnx-persist-save))))
+            (should (drgnx-persist--read drgnx-persist-file)))
+        (when (get-buffer drgnx-replace-bar-buffer-name) (kill-buffer drgnx-replace-bar-buffer-name))
+        (delete-directory (file-name-directory drgnx-persist-file) t)))))
+
+(ert-deftest drgnx-replace/show-all-is-the-bars-button-not-a-command ()
+  ;; It needs the find bar and is reached by its button: not an interactive command outside the registry.
+  (should-not (commandp 'drgnx-replace-bar-show-all)))
+
 ;;; mod-replace-view-test.el ends here
