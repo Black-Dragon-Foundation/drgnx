@@ -17,6 +17,8 @@
 (require 'subr-x)
 (require 'tabulated-list)
 (require 'drgnx-paths)
+(require 'drgnx-file)
+(require 'drgnx-config)
 (require 'drgnx-modules)
 (require 'drgnx-registry)
 (require 'drgnx-session)
@@ -41,23 +43,39 @@ a plist (:interactive BOOL :options PLIST).  STATUS: ok, info, warn or fail."
 
 ;;;; Progress
 
-(defun drgnx-onboard-state-file () (expand-file-name "onboarding.eld" (drgnx-state-dir)))
+(drgnx-config-define 'onboarding
+                     :file "onboarding.eld" :dir 'state :shape 'alist :version 1 :reload 'mtime :last-good t :default nil
+                     :schema '(alist symbol
+                                     (plist (:status symbol "How the step ended: ok, info, warn or fail")
+                                            (:message (or string null) "What it said")
+                                            (:time (or string null) "When it ended")))
+                     :header ";; drgnx: which onboarding steps ran, written by Onboarding (docs/guide/onboarding.md)\n"
+                     :doc "Which onboarding steps ran and how they ended, so a run resumes where it stopped.")
+
+(defun drgnx-onboard-state-file () (drgnx-config-file 'onboarding))
 
 (defun drgnx-onboard-state ()
-  "Alist ID → (:status :message :time) of the steps run so far."
-  (and (file-readable-p (drgnx-onboard-state-file))
-       (ignore-errors (with-temp-buffer (insert-file-contents (drgnx-onboard-state-file)) (read (current-buffer))))))
+  "Alist ID → (:status :message :time) of the steps run so far.  A file that cannot be read gives nil (and the
+doctor names its mistake).  Do not change the value: it is shared."
+  (drgnx-config-get 'onboarding))
 
 (defun drgnx-onboard--write-state (state)
-  (make-directory (file-name-directory (drgnx-onboard-state-file)) t)
-  (let ((tmp (make-temp-file (expand-file-name ".onboarding-" (file-name-directory (drgnx-onboard-state-file))))))
-    (with-temp-file tmp (let ((print-length nil)) (prin1 state (current-buffer))))
-    (rename-file tmp (drgnx-onboard-state-file) t)))
+  "Write STATE, the whole alist, as onboarding.eld."
+  (drgnx-file-write (drgnx-onboard-state-file) state
+                    :header (plist-get (drgnx-config-definition 'onboarding) :header) :pretty t))
 
 (defun drgnx-onboard--record (id status message)
-  (let ((state (drgnx-onboard-state)))
-    (setf (alist-get id state) (list :status status :message message :time (format-time-string "%FT%T%z")))
-    (drgnx-onboard--write-state state)))
+  "Record that step ID ended with STATUS and MESSAGE.  Under the file's lock and on a fresh read, so the command
+line and the daemon each keep their steps; a file that cannot be read is copied aside (`drgnx-file-backup') and
+started again."
+  (drgnx-file-update
+   (drgnx-onboard-state-file)
+   (lambda (state)
+     (let ((entry (list :status status :message message :time (format-time-string "%FT%T%z")))
+           (cell (assq id state)))
+       (if cell (progn (setcdr cell entry) state) (append state (list (cons id entry))))))
+   :on-unreadable 'backup :pretty t
+   :header (plist-get (drgnx-config-definition 'onboarding) :header)))
 
 (cl-defun drgnx-onboard-run (&key only non-interactive resume options)
   "Run the steps (ONLY: a list of ids) in order; RESUME skips steps done (ok or info) before.
@@ -186,11 +204,11 @@ the Xcode Command Line Tools.  :fix is the one for this platform."
                 ('minimal extras)
                 ('ide (seq-filter (lambda (m) (memq m '(extra/llm))) extras))
                 ('full-ai nil)
-                (_ (user-error "Unknown preset %s (minimal, ide, full-ai)" preset))))
-         (state (drgnx-modules-read-state)))
-    (drgnx-modules-write-state
-     (plist-put (copy-sequence state) :disabled
-                (append (seq-remove (lambda (m) (memq m extras)) (plist-get state :disabled)) off)))))
+                (_ (user-error "Unknown preset %s (minimal, ide, full-ai)" preset)))))
+    (drgnx-modules-update-state
+     (lambda (state)
+       (drgnx-modules--put-list
+        state :disabled (append (seq-remove (lambda (m) (memq m extras)) (plist-get state :disabled)) off))))))
 
 (defvar drgnx-keys-presets)
 (declare-function drgnx-keys--save-layers "drgnx-keys")
@@ -200,6 +218,7 @@ the Xcode Command Line Tools.  :fix is the one for this platform."
 (defvar drgnx-keys-file)
 (defvar drgnx-keys-layers)
 (declare-function drgnx-keys-file "drgnx-keys")
+(declare-function drgnx-config-read "drgnx-config")
 (declare-function drgnx-keys-read-user "drgnx-keys")
 (declare-function drgnx-keys-set-mac-option "drgnx-keys")
 (declare-function drgnx-keys--save-key "drgnx-keys")
@@ -209,9 +228,7 @@ the Xcode Command Line Tools.  :fix is the one for this platform."
 
 (defun drgnx-onboard--current-keys ()
   "The name of the key preset keys.eld uses now, or nil."
-  (let ((layers (ignore-errors
-                  (plist-get (with-temp-buffer (insert-file-contents (drgnx-keys-file)) (read (current-buffer))) :layers))))
-    (car (rassoc layers drgnx-keys-presets))))
+  (car (rassoc (plist-get (plist-get (drgnx-config-read 'keys) :data) :layers) drgnx-keys-presets)))
 
 (defun drgnx-onboard--current-preset ()
   "The preset the extra/ modules match now (none off — a fresh install too — is full-ai), or nil: a mix of your own."
@@ -271,6 +288,12 @@ current choice as the default) — with no option and no question, the current c
                                  "types characters")
                           'characters 'meta)))
          (modal nil))
+    ;; a modules.eld with a mistake (or a newer one) refuses every write to it: say so before anything changes
+    (when (or (and preset (not (eq preset cur-preset))) theme (and keys (not (equal keys cur-keys))))
+      (drgnx-config-ensure-writable 'modules))
+    ;; the same for keys.eld: a mistake in it stops the step before the preset, the engine or the live keys change
+    (when (or (and layers (or (not (equal keys cur-keys)) pending)) option)
+      (drgnx-config-ensure-writable 'keys))
     (when (and preset (not (eq preset cur-preset))) (drgnx-onboard-apply-preset preset))
     ;; A Vim stack switches only once its engine is loaded: asked to install it when interactive, else it waits
     (when (and layers (or (not (equal keys cur-keys)) pending))
@@ -278,13 +301,13 @@ current choice as the default) — with no option and no question, the current c
       (setq modal (drgnx-modal-prepare layers ask))
       (when (memq modal '(ready started installed))
         (if (and (not noninteractive) (fboundp 'drgnx-keys-apply))
-            (progn (drgnx-keys-use layers) (drgnx-keys--save-layers layers))
+            (drgnx-keys-use layers t)                   ; saves first, then switches the live keys
           (drgnx-keys--save-layers layers))))
     (when option
       (if (and (not noninteractive) (fboundp 'drgnx-keys-apply)) (drgnx-keys-set-mac-option option) (drgnx-keys--save-key :mac-option option)))
     (when theme
       (if (and (not noninteractive) (fboundp 'drgnx-look-load-theme)) (drgnx-look-load-theme theme)
-        (drgnx-modules-write-state (plist-put (copy-sequence (drgnx-modules-read-state)) :theme theme))))
+        (drgnx-modules-update-state (lambda (state) (plist-put (copy-sequence state) :theme theme)))))
     (let* ((pkgs (drgnx-onboard--packages-to-install))
            (bytes (plist-get pkgs :bytes))
            (done (cond ((null pkgs) 'none)
@@ -896,7 +919,7 @@ text says so — with the Finish step's restart offer only when this run changed
                   (cons t (concat "Chat (module extra/llm) is on" later)))
                  (t (cons t "Chat (module extra/llm) is on; its package is not installed yet: run drgnx sync (or the Look and Keys step)"))))
           ((and (plist-get ctx :interactive) (y-or-n-p "Turn on Chat (module extra/llm)? "))
-           (drgnx-modules-toggle 'extra/llm)
+           (drgnx-modules-set-enabled 'extra/llm t)     ; on, whatever the file says now (a toggle could turn it off)
            (setq drgnx-onboard--restart-needed t)
            (let ((done (if (drgnx-onboard--installed-p 'gptel) 'ok (drgnx-onboard--sync-job))))
              (if (eq done 'ok)
@@ -1359,8 +1382,7 @@ result reads: keep running; that platform part; the terminal note (`drgnx-onboar
                       (shell-quote-argument unit) (shell-quote-argument unit-target)
                       (shell-quote-argument desktop) (shell-quote-argument desktop-target))))
     (drgnx-pkg-service-unit (file-name-directory unit))
-    (make-directory (file-name-directory desktop) t)
-    (write-region drgnx-onboard-desktop-entry nil desktop nil 'silent)
+    (drgnx-file-write-text desktop drgnx-onboard-desktop-entry)
     (if (and (plist-get ctx :interactive)
              (y-or-n-p (format "Install the drgnx service and desktop entry into %s and %s%s? "
                                (file-name-directory unit-target) (file-name-directory desktop-target)

@@ -110,7 +110,7 @@ yours.  A job keeps the gate it was proposed with (the hub runs it): this option
 (defvar drgnx-job-review)
 
 (defun drgnx-job--routes ()
-  (or drgnx-job-routes (plist-get (drgnx-agents--read-file) :routes)))
+  (or drgnx-job-routes (drgnx-config-get 'agents :routes)))
 
 (defun drgnx-job-route (role)
   "ROLE's profiles, in order (the first is used; the rest are its fallbacks)."

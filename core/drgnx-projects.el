@@ -11,7 +11,8 @@
 ;; imported again).  The board is edited as text — no org-mode, no #+SETUPFILE — and written back
 ;; with its encoding, line endings, modes and symlink kept; nothing on it is moved or rewritten.  A
 ;; board with unsaved changes (in this Emacs, or locked by another) is left alone.  Projects are also
-;; listed in projects.eld (config dir) and remembered by project.el.  See docs/guide/onboarding.md.
+;; listed in projects.eld (config dir, through `drgnx-config': a file with a mistake stops the import) and
+;; remembered by project.el.  See docs/guide/onboarding.md.
 
 ;;; Code:
 (require 'cl-lib)
@@ -19,6 +20,18 @@
 (require 'subr-x)
 (require 'project)
 (require 'drgnx-paths)
+(require 'drgnx-file)
+(require 'drgnx-config)
+
+(drgnx-config-define 'projects
+                     :file "projects.eld" :shape 'plist :version 1 :reload 'mtime :last-good t
+                     :schema '(plist (:projects (list-of (plist (:name string "The project's name")
+                                                                (:root home-path "Its folder" :required t)
+                                                                (:url (or string null) "Its remote's URL")))
+                                                "The projects Import Projects added"))
+                     :default '(:projects nil)
+                     :header ";; drgnx projects (written by Onboarding: Import Projects)\n"
+                     :doc "The projects drgnx knows: the work tracker and search scan their roots.")
 
 (defvar org-directory)
 (defvar project--list)
@@ -215,55 +228,73 @@ markdown FILE remembers it (:PLAN_FILE:, :PLAN_TEXT:) for `drgnx-projects-sync-p
 (defun drgnx-projects--imported-file () (expand-file-name "projects-imported.eld" (drgnx-state-dir)))
 
 (defun drgnx-projects--imported ()
-  (let ((h (make-hash-table :test #'equal)))
-    (dolist (k (and (file-readable-p (drgnx-projects--imported-file))
-                    (ignore-errors (with-temp-buffer (insert-file-contents (drgnx-projects--imported-file)) (read (current-buffer))))))
-      (puthash k t h))
+  "The keys of what was imported, as a table; an unreadable file gives an empty one."
+  (let ((h (make-hash-table :test #'equal))
+        (data (plist-get (drgnx-file-read (drgnx-projects--imported-file)) :data)))
+    (dolist (k (and (proper-list-p data) data))
+      (when (stringp k) (puthash k t h)))
     h))
 
 (defun drgnx-projects--save-imported (h)
-  (let ((keys nil) (file (drgnx-projects--imported-file)))
+  "Add the keys of the table H to the file, under its lock: two imports at once keep both.  An unreadable file
+is copied aside first."
+  (let ((keys nil))
     (maphash (lambda (k _) (push k keys)) h)
-    (make-directory (file-name-directory file) t)
-    (let ((tmp (make-temp-file (expand-file-name ".imported-" (file-name-directory file)))))
-      (with-temp-file tmp (prin1 (sort keys #'string<) (current-buffer)))
-      (rename-file tmp file t))))
+    (drgnx-file-update (drgnx-projects--imported-file)
+                       (lambda (old)
+                         (sort (delete-dups (append (and (proper-list-p old) (seq-filter #'stringp old)) keys))
+                               #'string<))
+                       :on-unreadable 'backup)))
 
 ;;;; projects.eld, project.el
 
-(defun drgnx-projects-file () (expand-file-name "projects.eld" (drgnx-user-dir)))
+(defun drgnx-projects-file () (drgnx-config-file 'projects))
 
 (defun drgnx-projects-read ()
-  "projects.eld: (:version 1 :projects ((:name :root :url)…))."
-  (or (and (file-readable-p (drgnx-projects-file))
-           (ignore-errors (with-temp-buffer (insert-file-contents (drgnx-projects-file)) (read (current-buffer)))))
-      (list :version 1 :projects nil)))
+  "projects.eld: (:version 1 :projects ((:name :root :url)…)), each root expanded.
+A file with a mistake gives its last good copy, else no projects (`drgnx-config-get')."
+  (list :version 1
+        :projects (mapcar (lambda (p)
+                            (plist-put (copy-sequence p) :root (expand-file-name (plist-get p :root))))
+                          (drgnx-config-get 'projects :projects))))
 
 (defun drgnx-projects--remember (entries)
-  (let* ((data (drgnx-projects-read))
-         (known (mapcar (lambda (p) (plist-get p :root)) (plist-get data :projects)))
-         (new (seq-remove (lambda (e) (member (plist-get e :root) known)) entries)))
-    (when new
-      (make-directory (file-name-directory (drgnx-projects-file)) t)
-      (with-temp-file (drgnx-projects-file)
-        (insert ";; drgnx projects (written by Onboarding: Import Projects)\n")
-        (pp (list :version 1 :projects (append (plist-get data :projects) new)) (current-buffer))))
-    ;; project.el's list in drgnx's state dir: the session's own list when it already uses that file
-    ;; (so it learns them too), else a fresh read of that file (the command line).
-    (let ((ours (expand-file-name "projects" (drgnx-state-dir))))
-      (make-directory (drgnx-state-dir) t)
-      (cl-flet ((remember ()
-                  (dolist (e entries)
-                    (when-let* ((p (ignore-errors (project-current nil (plist-get e :root)))))
-                      (project-remember-project p)))))
-        (if (equal (expand-file-name project-list-file) ours)
-            (remember)
-          (let ((project-list-file ours) (project--list 'unset)) (remember)))))))
+  "Add the ENTRIES (plists :name :root :url) whose root is not in projects.eld yet, and tell project.el about them.
+`drgnx-config-refused' when the file has a mistake or is newer: it is not changed."
+  (drgnx-config-update
+   'projects
+   (lambda (data)
+     (let* ((old (plist-get data :projects))
+            (known (mapcar (lambda (p) (drgnx-projects--norm (plist-get p :root))) old))
+            (new nil))
+       (dolist (e entries)
+         (let ((key (drgnx-projects--norm (plist-get e :root))))
+           (unless (member key known)
+             (push key known)
+             (push e new))))
+       (if new (plist-put data :projects (append old (nreverse new))) data))))
+  ;; project.el's list in drgnx's state dir: the session's own list when it already uses that file
+  ;; (so it learns them too), else a fresh read of that file (the command line).
+  (let ((ours (expand-file-name "projects" (drgnx-state-dir))))
+    (make-directory (drgnx-state-dir) t)
+    (cl-flet ((remember ()
+                (dolist (e entries)
+                  (when-let* ((p (ignore-errors (project-current nil (plist-get e :root)))))
+                    (project-remember-project p)))))
+      (if (equal (expand-file-name project-list-file) ours)
+          (remember)
+        (let ((project-list-file ours) (project--list 'unset)) (remember))))))
+
+(defun drgnx-projects--refuse-bad-file ()
+  "Signal `drgnx-config-refused' when projects.eld has a mistake or is newer: Import Projects changes nothing then,
+not even the board."
+  (drgnx-config-ensure-writable 'projects))
 
 (cl-defun drgnx-projects-import (roots &key (todos t))
   "Put the git repositories ROOTS on the board (once each); TODOS: t for every root's open TODOs, a
 list of roots for theirs, nil for none (each TODO once, and never again once removed from the
 board).  Returns (:added NAMES :todos N :capped NAMES)."
+  (drgnx-projects--refuse-bad-file)
   (let* ((roots (delete-dups (mapcar (lambda (r) (directory-file-name (expand-file-name r)))
                                      (seq-filter #'file-directory-p roots))))
          (todo-roots (cond ((eq todos t) roots)

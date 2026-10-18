@@ -7,6 +7,11 @@ your current choices. Progress is kept in `~/.local/state/drgnx/onboarding.eld`:
 first step not done (`--again` runs every step; `--step ID` runs that one), and a step that fails is shown failed
 with how to fix it — it never stops the others.
 
+`onboarding.eld` is a config file ([reference](../reference/config.md#onboardingeld)). Two runs at once (the command
+line and the daemon) each keep their own steps: a step is recorded under the file's lock, on a fresh read. A file
+that cannot be read is copied aside to `onboarding.eld.bak-<time>` and started again (every step shows as not run) —
+your copy is never lost; a file from an earlier drgnx reads as it is.
+
 **The first start opens the Welcome by itself.** When drgnx's first window shows and onboarding has never run on
 this machine (no `onboarding.eld`), the Welcome opens a moment later — from a timer, after your layout is back; it
 asks nothing until you run a step. It does this once: opening it leaves `onboarding.eld` behind (with no step done),
@@ -199,7 +204,11 @@ again, even after you archived or deleted it (drgnx remembers what it imported);
 syntax (tags, a property drawer, COMMENT) is quoted. The board is edited as text and written back with its
 encoding, line endings, file modes and symlink; nothing on it is moved or rewritten. If the board has unsaved
 changes in this Emacs, or another Emacs is editing it, the step stops and asks you to save first. Projects are also listed in `~/.config/drgnx/projects.eld` and
-remembered by project.el (its list lives in `~/.local/state/drgnx/projects`).
+remembered by project.el (its list lives in `~/.local/state/drgnx/projects`). A `projects.eld` with a mistake is never
+overwritten: Import Projects stops before it touches the board and says where the mistake is (and likewise for a file a
+newer drgnx wrote); the work tracker and search keep using its last good copy meanwhile. Two imports at once both land:
+`projects.eld` and the record of what was imported (`projects-imported.eld`) are changed under a lock, adding to what is
+there. Comments and keys of your own in `projects.eld` stay as they are.
 
 The scan goes at most three levels below each root, never into a repository, a hidden or symlinked directory or
 `node_modules`/`target`/`build`/`dist`, and stops after five seconds — then the step warns and says where it stopped

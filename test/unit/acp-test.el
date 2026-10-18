@@ -2,6 +2,8 @@
 (require 'ert)
 (require 'drgnx-acp)
 (require 'drgnx-paths)
+(require 'drgnx-timer)
+(load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
 
 (defconst drgnx-acp-test--mock (expand-file-name "test/fixtures/mock-acp.el" drgnx-dir))
 (defconst drgnx-acp-test--wrapper (expand-file-name "test/fixtures/mock-acp-stdin.sh" drgnx-dir))
@@ -156,5 +158,111 @@
             (should (equal (mapcar #'car got) '("c" "big" "a")))
             (should (= (length (plist-get (cdr (nth 1 got)) :s)) 1000000))))
       (drgnx-acp-stop c))))
+
+;;;; The watchdog, on the timer layer (virtual time)
+
+(defmacro drgnx-acp-test--timed (&rest body)
+  "BODY on the virtual clock with no recorded timer errors and a state dir of its own."
+  (declare (indent 0))
+  `(let* ((state (make-temp-file "drgnx-acp-state" t))
+          (process-environment (cons (concat "XDG_STATE_HOME=" state) process-environment))
+          (drgnx-timer-errors nil))
+     (unwind-protect (drgnx-test-with-clock () ,@body) (delete-directory state t))))
+
+(defun drgnx-acp-test--sleeper (&rest keys)
+  "A connection to a process that only sleeps, its sentinel replaced by `ignore': only the watchdog can notice it die."
+  (let ((conn (apply #'drgnx-acp-start (list "sleep" "30") keys)))
+    (set-process-sentinel (drgnx-acp-conn-process conn) #'ignore)
+    conn))
+
+(defun drgnx-acp-test--kill (conn)
+  "Kill CONN's process and wait (real time, in polls: the clock is virtual) until it is dead."
+  (let ((p (drgnx-acp-conn-process conn)) (n 0))
+    (kill-process p)
+    (while (and (process-live-p p) (< (cl-incf n) 500)) (accept-process-output nil 0.02))
+    (should-not (process-live-p p))))
+
+(ert-deftest drgnx-acp/the-watchdog-reports-a-dead-agent ()
+  (drgnx-acp-test--timed
+    (let* ((status 'none) (conn (drgnx-acp-test--sleeper :on-exit (lambda (_c s _e) (setq status s)))))
+      (unwind-protect
+          (progn
+            (should (drgnx-timer-active-p (cons 'acp-watchdog (drgnx-acp-conn-process conn))))
+            (drgnx-test-advance 1.0)
+            (should-not (drgnx-acp-conn-exited conn))        ; alive: nothing reported
+            (drgnx-acp-test--kill conn)
+            (drgnx-test-advance 0.5)                         ; one watchdog period
+            (should (drgnx-acp-conn-exited conn))
+            (should-not (drgnx-timer-active-p (cons 'acp-watchdog (drgnx-acp-conn-process conn))))
+            (drgnx-test-advance 0.1)                         ; the exit is reported a moment later
+            (should-not (eq status 'none)))
+        (drgnx-acp-stop conn)))))
+
+(ert-deftest drgnx-acp/the-exit-report-is-a-keyed-timer ()
+  (drgnx-acp-test--timed
+    (let* ((status 'none) (conn (drgnx-acp-test--sleeper :on-exit (lambda (_c s _e) (setq status s))))
+           (key (cons 'acp-exit (drgnx-acp-conn-process conn))))
+      (unwind-protect
+          (progn
+            (should-not (drgnx-timer-active-p key))
+            (drgnx-acp-test--kill conn)
+            (drgnx-test-advance 0.5)                         ; the watchdog notices
+            (should (drgnx-timer-active-p key))
+            (should (eq status 'none))
+            (drgnx-test-advance 0.1)
+            (should-not (drgnx-timer-active-p key))
+            (should-not (eq status 'none)))
+        (drgnx-acp-stop conn)))))
+
+(ert-deftest drgnx-acp/a-failing-exit-handler-is-recorded-and-the-cleanup-still-runs ()
+  (drgnx-acp-test--timed
+    (let* ((conn (drgnx-acp-test--sleeper :on-exit (lambda (&rest _) (error "Boom"))))
+           (stderr (drgnx-acp-conn-stderr-process conn)))
+      (unwind-protect
+          (progn
+            (drgnx-acp-test--kill conn)
+            (drgnx-test-advance 0.7)
+            (should (= (length drgnx-timer-errors) 1))
+            (should (equal (plist-get (car drgnx-timer-errors) :fn) 'drgnx-acp--report-exit))
+            (should-not (process-live-p stderr)))
+        (drgnx-acp-stop conn)))))
+
+(ert-deftest drgnx-acp/a-failing-watchdog-stops-after-three ()
+  (drgnx-acp-test--timed
+    (let ((conn (drgnx-acp-test--sleeper)) (key nil))
+      (unwind-protect
+          (progn
+            (setq key (cons 'acp-watchdog (drgnx-acp-conn-process conn)))
+            (drgnx-acp-test--kill conn)
+            (cl-letf (((symbol-function 'drgnx-acp--exited) (lambda (&rest _) (error "Boom"))))
+              (drgnx-test-advance 1.6))                      ; 3 periods
+            (should (= (length drgnx-timer-errors) 3))
+            (should (equal (plist-get (car drgnx-timer-errors) :key) key))
+            (should (plist-get (car drgnx-timer-errors) :stopped))
+            (should-not (drgnx-timer-active-p key))
+            (cl-letf (((symbol-function 'drgnx-acp--exited) (lambda (&rest _) (error "Boom"))))
+              (drgnx-test-advance 3))                        ; and no more, every half second
+            (should (= (length drgnx-timer-errors) 3)))
+        (drgnx-acp-stop conn)))))
+
+(ert-deftest drgnx-acp/stop-cancels-the-watchdog ()
+  (drgnx-acp-test--timed
+    (let* ((conn (drgnx-acp-test--sleeper)) (key (cons 'acp-watchdog (drgnx-acp-conn-process conn))))
+      (should (drgnx-timer-active-p key))
+      (drgnx-acp-stop conn)
+      (should-not (drgnx-timer-active-p key)))))
+
+(ert-deftest drgnx-acp/two-connections-two-watchdogs ()
+  (drgnx-acp-test--timed
+    (let* ((a (drgnx-acp-test--sleeper)) (b (drgnx-acp-test--sleeper))
+           (ka (cons 'acp-watchdog (drgnx-acp-conn-process a))) (kb (cons 'acp-watchdog (drgnx-acp-conn-process b))))
+      (unwind-protect
+          (progn
+            (should (drgnx-timer-active-p ka))
+            (should (drgnx-timer-active-p kb))
+            (drgnx-acp-stop a)
+            (should-not (drgnx-timer-active-p ka))
+            (should (drgnx-timer-active-p kb)))              ; the other connection keeps its own
+        (drgnx-acp-stop a) (drgnx-acp-stop b)))))
 
 ;;; acp-test.el ends here

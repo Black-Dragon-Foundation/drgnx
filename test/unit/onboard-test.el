@@ -1,9 +1,12 @@
 ;;; onboard-test.el --- batch tests: onboarding steps, projects onto the board -*- lexical-binding: t -*-
 ;; Fixture git repos, boards and configs live in temp dirs: never ~/workspace, ~/org or ~/.config.
 (require 'ert)
+(require 'drgnx-file)
 (require 'drgnx-onboard)
 (require 'drgnx-projects)
 (require 'drgnx-macos)
+(require 'drgnx-doctor)
+(require 'drgnx-config-doc)
 
 (defmacro drgnx-onboard-test--with (root &rest body)
   "BODY with ROOT a temp dir holding config, state, data and org dirs."
@@ -15,8 +18,7 @@
                                        process-environment))
           ;; the board path itself — never through `org-directory' (not special unless org is loaded)
           (drgnx-projects-board-file (concat ,root "org/board.org"))
-          (drgnx-projects-gryphn-file (concat ,root "gryphn/projects.tsv"))
-          (drgnx-modules--state nil))
+          (drgnx-projects-gryphn-file (concat ,root "gryphn/projects.tsv")))
      (make-directory (concat ,root "config") t)
      (unwind-protect (progn ,@body) (delete-directory ,root t))))
 
@@ -34,6 +36,11 @@
 (defun drgnx-onboard-test--board () (with-temp-buffer (insert-file-contents (drgnx-projects-board-file)) (buffer-string)))
 
 (defun drgnx-onboard-test--read (file) (with-temp-buffer (insert-file-contents file) (read (current-buffer))))
+
+(defun drgnx-onboard-test--keep-running-is (value)
+  "Non-nil when session.eld holds :keep-running VALUE (the config layer adds :version to a new file)."
+  (let ((data (drgnx-onboard-test--read (drgnx-session-file))))
+    (and (plist-member data :keep-running) (eq (plist-get data :keep-running) value))))
 
 ;;;; Task 1: steps, progress, runner
 
@@ -73,7 +80,7 @@
 
 (ert-deftest drgnx-onboard/presets-choose-the-extra-modules ()
   (drgnx-onboard-test--with root
-    (drgnx-modules-write-state '(:version 1 :disabled (ui/look) :theme tango))
+    (drgnx-modules-update-state (lambda (_) '(:disabled (ui/look) :theme tango)))
     (drgnx-onboard-apply-preset 'minimal)
     (let ((s (drgnx-modules-read-state)))
       (should (memq 'ui/look (plist-get s :disabled)))             ; the user's own choice stays
@@ -260,7 +267,7 @@ one.  Returns (RESULT PROMPTS PROGRAMS INSTALLED): the questions asked, the prog
         (should (= 1 (seq-count (lambda (p) (string-match-p "\\`Keep drgnx running" p)) prompts)))
         (should (equal installed '(t)))
         (should-not (member "systemctl" programs))
-        (should (equal (drgnx-onboard-test--read (drgnx-session-file)) '(:keep-running nil)))
+        (should (drgnx-onboard-test--keep-running-is nil))
         (should-not drgnx-keep-running)
         (should (string-search "drgnx quits when its last window closes" (nth 2 r)))
         (should (string-search "Preferences: Keep drgnx Running in the Background" (nth 2 r)))
@@ -277,7 +284,7 @@ one.  Returns (RESULT PROMPTS PROGRAMS INSTALLED): the questions asked, the prog
         (should (eq (cadr r) 'ok))
         (should (= 1 (length prompts)))
         (should-not installed)
-        (should (equal (drgnx-onboard-test--read (drgnx-session-file)) '(:keep-running t)))))))
+        (should (drgnx-onboard-test--keep-running-is t))))))
 
 (ert-deftest drgnx-onboard/step-7-on-macos-without-interaction-installs-nothing ()
   (drgnx-onboard-test--with root
@@ -290,11 +297,11 @@ one.  Returns (RESULT PROMPTS PROGRAMS INSTALLED): the questions asked, the prog
           (should (string-search "keeps running in the background" (nth 2 r))))
         (should-not installed)
         (should-not (file-exists-p (concat root "Applications")))
-        (should (equal (drgnx-onboard-test--read (drgnx-session-file)) '(:keep-running t)))
+        (should (drgnx-onboard-test--keep-running-is t))
         ;; a choice made before stays
         (drgnx-session-set-keep-running nil)
         (drgnx-onboard-run :only '(daemon) :non-interactive t)
-        (should (equal (drgnx-onboard-test--read (drgnx-session-file)) '(:keep-running nil)))))))
+        (should (drgnx-onboard-test--keep-running-is nil))))))
 
 (ert-deftest drgnx-onboard/step-7-on-linux-is-unchanged-plus-the-question ()
   (drgnx-onboard-test--with root
@@ -310,7 +317,7 @@ one.  Returns (RESULT PROMPTS PROGRAMS INSTALLED): the questions asked, the prog
         (should (file-exists-p (expand-file-name "applications/drgnx.desktop" (drgnx-user-dir))))
         (should (string-match-p "systemctl --user" (nth 2 r)))
         (should (string-search "drgnx keeps running in the background" (nth 2 r)))
-        (should (equal (drgnx-onboard-test--read (drgnx-session-file)) '(:keep-running t)))))))
+        (should (drgnx-onboard-test--keep-running-is t))))))
 
 (ert-deftest drgnx-onboard/the-first-window-opens-the-welcome-once ()
   ;; The first graphical frame schedules the Welcome (a timer: never inside the hook); it opens when onboarding
@@ -420,7 +427,7 @@ one.  Returns (RESULT PROMPTS PROGRAMS INSTALLED): the questions asked, the prog
           (mods (drgnx-modules-read-state)))
       (should (eq (cadr (car (drgnx-onboard-run :only '(look-and-keys) :non-interactive t))) 'ok))
       (should (equal (with-temp-buffer (insert-file-contents (expand-file-name "keys.eld" (drgnx-user-dir))) (buffer-string)) keys))
-      (setq drgnx-modules--state nil)
+      (drgnx-config-reread 'modules)
       (should (equal (drgnx-modules-read-state) mods)))))
 
 (ert-deftest drgnx-projects/imported-projects-stay-in-the-sessions-project-list ()
@@ -508,6 +515,21 @@ one.  Returns (RESULT PROMPTS PROGRAMS INSTALLED): the questions asked, the prog
         (should-not (string-match-p "^\\*\\* TODO :PROPERTIES:" board))
         (should-not (string-match-p "^\\*\\* TODO COMMENT" board))
         (should (string-match-p "urgent" board))))))
+
+(ert-deftest drgnx-onboard/the-linux-desktop-files-are-written-in-the-config-folder-only ()
+  (drgnx-onboard-test--with root
+    (let ((calls nil) (orig (symbol-function 'drgnx-file-write-text)))
+      (cl-letf (((symbol-function 'drgnx-file-write-text)
+                 (lambda (f text &rest args) (push f calls) (apply orig f text args))))
+        (let ((result (drgnx-onboard--linux-desktop nil))
+              (unit (expand-file-name "systemd/drgnx.service" (drgnx-user-dir)))
+              (desktop (expand-file-name "applications/drgnx.desktop" (drgnx-user-dir))))
+          (should (eq (car result) 'info))
+          (should (equal (sort (copy-sequence calls) #'string<) (sort (list unit desktop) #'string<)))
+          (should (equal (with-temp-buffer (insert-file-contents desktop) (buffer-string)) drgnx-onboard-desktop-entry))
+          (should (file-exists-p unit))
+          (should-not (file-exists-p (expand-file-name "~/.local/share/applications/drgnx.desktop"))))))))
+
 
 (ert-deftest drgnx-onboard/the-desktop-entry-never-starts-another-config ()
   ;; M1: emacsclient -a "" would start a daemon with the default init (not drgnx's) on drgnx's socket.
@@ -871,7 +893,7 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
       (should (equal (cdr (car (last asked))) "full-ai"))
       (should-not (drgnx-module-disabled-p 'extra/llm)))
     ;; a mix of your own: Return keeps it
-    (drgnx-modules-write-state '(:version 1 :disabled (extra/magit)))
+    (drgnx-modules-update-state (lambda (s) (plist-put (copy-sequence s) :disabled '(extra/magit))))
     (should-not (drgnx-onboard--current-preset))
     (cl-letf (((symbol-function 'completing-read)
                (lambda (_prompt _c &optional _p _r _i _h def &rest _) (or (car (ensure-list def)) "")))
@@ -996,7 +1018,7 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
     (let ((drgnx-onboard--restart-needed nil))
       (should-not (featurep 'gptel))
       (make-directory (expand-file-name "gptel-0.9.9" (drgnx-elpa-dir)) t)
-      (drgnx-modules-write-state (list :disabled nil))
+      (drgnx-modules-update-state (lambda (s) (plist-put (copy-sequence s) :disabled nil)))
       ;; batch, module already on
       (should noninteractive)
       (let ((r (drgnx-onboard--chat-module '(:interactive nil))))
@@ -1011,7 +1033,7 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
         (should-not (string-search "Finish" (cdr r)))
         (should-not drgnx-onboard--restart-needed))
       ;; the app, this run turns the module on: the restart is offered
-      (drgnx-modules-write-state (list :disabled '(extra/llm)))
+      (drgnx-modules-update-state (lambda (s) (plist-put (copy-sequence s) :disabled '(extra/llm))))
       (cl-letf (((symbol-function 'y-or-n-p) (lambda (_) t)))
         (let ((noninteractive nil) (r nil))
           (setq r (drgnx-onboard--chat-module '(:interactive t)))
@@ -1019,11 +1041,42 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
           (should drgnx-onboard--restart-needed)))
       ;; batch, this run turns it on: no Finish offer is promised
       (setq drgnx-onboard--restart-needed nil)
-      (drgnx-modules-write-state (list :disabled '(extra/llm)))
+      (drgnx-modules-update-state (lambda (s) (plist-put (copy-sequence s) :disabled '(extra/llm))))
       (cl-letf (((symbol-function 'y-or-n-p) (lambda (_) t)))
         (let ((r (drgnx-onboard--chat-module '(:interactive t))))
           (should (string-search "loads at drgnx's next start" (cdr r)))
           (should-not (string-search "Finish" (cdr r))))))))
+
+(ert-deftest drgnx-onboard/chat-step-turns-chat-on-whatever-the-file-says-now ()
+  ;; This Emacs applied a modules.eld with extra/llm off; the file has it on since (a hand edit, another process).
+  ;; "Turn on Chat? y" must leave it on: a toggle would read the file and turn it off.
+  (drgnx-onboard-test--with root
+    (let ((drgnx-onboard--restart-needed nil))
+      (drgnx-modules-update-state (lambda (s) (plist-put (copy-sequence s) :disabled '(extra/llm))))
+      (write-region "(:disabled nil)\n" nil (expand-file-name "modules.eld" (drgnx-user-dir)) nil 'silent)
+      (should (drgnx-module-disabled-p 'extra/llm))                       ; the applied copy still has it off
+      (cl-letf (((symbol-function 'y-or-n-p) (lambda (_) t))
+                ((symbol-function 'drgnx-onboard--installed-p) (lambda (_) t)))
+        (drgnx-onboard--chat-module '(:interactive t)))
+      (should-not (drgnx-modules--disabled-in (plist-get (drgnx-config-read 'modules) :data) 'extra/llm)))))
+
+(ert-deftest drgnx-onboard/look-step-stops-at-a-keys-mistake-before-any-change ()
+  ;; keys.eld has a mistake: the Look step refuses before the preset, the engine or the live keys change, in batch and
+  ;; in a session (where the live keys used to switch before the save refused).
+  (drgnx-onboard-test--with root
+    (let* ((file (expand-file-name "keys.eld" (drgnx-user-dir)))
+           (bad "(:layers 5)\n")
+           (modules (expand-file-name "modules.eld" (drgnx-user-dir))))
+      (write-region bad nil file nil 'silent)
+      (should-error (drgnx-onboard--look-step '(:interactive nil :options (:keys "Emacs" :preset minimal)))
+                    :type 'drgnx-config-refused)
+      (let ((noninteractive nil))
+        (cl-letf (((symbol-function 'drgnx-keys-use) (lambda (&rest _) (ert-fail "the live keys switched")))
+                  ((symbol-function 'drgnx-modal-prepare) (lambda (&rest _) (ert-fail "the engine step ran"))))
+          (should-error (drgnx-onboard--look-step '(:interactive nil :options (:keys "Vim" :preset minimal)))
+                        :type 'drgnx-config-refused)))
+      (should (equal (with-temp-buffer (insert-file-contents file) (buffer-string)) bad))
+      (should-not (file-exists-p modules)))))
 
 ;; M12a-74: the restart asks its save questions first, detaches the waiter only after they are answered, then quits.
 (ert-deftest drgnx-onboard/restart-detaches-after-the-questions ()
@@ -1307,7 +1360,138 @@ record the prompts and the default in the lists they return as the cars of (PROM
       ;; a file that cannot be read is not touched; the result says so
       (write-region "(:profiles" nil file nil 'silent)
       (cl-letf (((symbol-function 'completing-read) (lambda (&rest _) "claude")) ((symbol-function 'y-or-n-p) (nth 1 a)))
-        (should (string-match-p "agents.eld cannot be read" (funcall drgnx-onboard-test--offers))))
+        (should (string-match-p "agents.eld has a mistake" (funcall drgnx-onboard-test--offers))))
       (should (equal (drgnx-onboard-test--slurp file) "(:profiles")))))
+
+;;;; Task 19: onboarding.eld on the config layer
+
+(load (expand-file-name "test/fixtures/config-fixture" drgnx-dir) nil t)
+
+(defun drgnx-onboard-test--bytes (file)
+  "FILE's bytes as a unibyte string, nil when missing."
+  (when (file-exists-p file)
+    (with-temp-buffer (set-buffer-multibyte nil) (insert-file-contents-literally file) (buffer-string))))
+
+(defun drgnx-onboard-test--baks ()
+  "The backups of onboarding.eld."
+  (directory-files (drgnx-state-dir) t "\\`onboarding\\.eld\\.bak-"))
+
+(defun drgnx-onboard-test--children (forms)
+  "Run each of FORMS (strings) in a child `emacs --batch' with this run's environment; wait for all (30 s bound)."
+  (let* ((at (+ (float-time) 2)) (bufs nil)
+         (procs (mapcar
+                 (lambda (form)
+                   (let ((b (generate-new-buffer " *onboard-child*" t)))
+                     (push b bufs)
+                     (make-process
+                      :name "onboard-child" :buffer b :noquery t
+                      :command (list (expand-file-name invocation-name invocation-directory) "--batch" "-Q"
+                                     "--eval" (format "(setq load-path '%S load-prefer-newer t)" load-path)
+                                     "--eval" "(require 'drgnx-onboard)"
+                                     "--eval" (format "(progn (sleep-for (max 0 (- %f (float-time)))) %s)" at form)))))
+                 forms))
+         (deadline (+ (float-time) 30)))
+    (unwind-protect
+        (progn
+          (while (and (cl-some #'process-live-p procs) (< (float-time) deadline)) (accept-process-output nil 0.05))
+          (dolist (p procs) (should (not (process-live-p p))))
+          (cl-loop for p in procs for b in (reverse bufs)
+                   do (should (equal (list (process-exit-status p) (with-current-buffer b (buffer-string)))
+                                     (list 0 (with-current-buffer b (buffer-string)))))))
+      (mapc #'delete-process procs)
+      (mapc #'kill-buffer bufs))))
+
+(ert-deftest drgnx-onboard/the-definition ()
+  (drgnx-test-with-config
+    (should (drgnx-config-defined-p 'onboarding))
+    (let ((def (drgnx-config-definition 'onboarding)))
+      (should (equal (plist-get def :file) "onboarding.eld"))
+      (should (eq (plist-get def :dir) 'state))
+      (should (eq (plist-get def :shape) 'alist)))
+    (should (equal (drgnx-onboard-state-file) (drgnx-config-file 'onboarding)))
+    (should-not (drgnx-onboard-state))))
+
+(ert-deftest drgnx-onboard/an-older-file-keeps-working-and-keeps-its-steps ()
+  ;; The form every earlier drgnx wrote: one line of `prin1', no header, a step with a nil message.
+  (drgnx-test-with-config
+    (drgnx-test-config-put 'onboarding
+                           "((environment :status ok :message \"fine\" :time \"2026-10-01T10:00:00+0000\") (ai :status warn :message nil :time \"2026-10-01T10:01:00+0000\"))")
+    (should (eq (plist-get (alist-get 'environment (drgnx-onboard-state)) :status) 'ok))
+    (should-not (drgnx-config-problem 'onboarding))
+    (drgnx-onboard--record 'projects 'info "none")
+    (let ((state (drgnx-onboard-state)))
+      (should (equal (mapcar #'car state) '(environment ai projects)))
+      (should (equal (plist-get (alist-get 'environment state) :message) "fine"))
+      (should (eq (plist-get (alist-get 'ai state) :status) 'warn))
+      (should (equal (plist-get (alist-get 'projects state) :message) "none")))
+    (should-not (drgnx-onboard-test--baks))))
+
+(ert-deftest drgnx-onboard/record-replaces-its-step-and-keeps-other-entries-and-keys ()
+  (drgnx-test-with-config
+    (drgnx-test-config-put 'onboarding
+                           "((a :status ok :message \"x\" :time \"t\" :extra 7) (b :status fail :message \"y\" :time \"t\"))")
+    (drgnx-onboard--record 'b 'ok "fixed")
+    (let ((state (drgnx-onboard-state)))
+      (should (equal (mapcar #'car state) '(a b)))
+      (should (equal (plist-get (alist-get 'a state) :extra) 7))
+      (should (eq (plist-get (alist-get 'b state) :status) 'ok))
+      (should (equal (plist-get (alist-get 'b state) :message) "fixed"))
+      (should (stringp (plist-get (alist-get 'b state) :time))))
+    (should-not (drgnx-config-problem 'onboarding))))
+
+(ert-deftest drgnx-onboard/a-new-file-has-the-header-and-reads-back ()
+  (drgnx-test-with-config
+    (drgnx-onboard--record 'a 'ok "one")
+    (should (string-prefix-p ";;" (drgnx-test-config-text 'onboarding)))
+    (should (equal (mapcar #'car (drgnx-config-reread 'onboarding)) '(a)))))
+
+(ert-deftest drgnx-onboard/two-processes-record-different-steps-both-kept ()
+  (drgnx-test-with-config
+    (drgnx-onboard--record 'seed 'ok "seed")
+    (drgnx-onboard-test--children
+     (list "(drgnx-onboard--record 'one 'ok \"from one\")"
+           "(drgnx-onboard--record 'two 'warn \"from two\")"
+           "(drgnx-onboard--record 'three 'info \"from three\")"))
+    (let ((state (drgnx-config-reread 'onboarding)))
+      (should (equal (sort (mapcar #'car state) (lambda (a b) (string< a b))) '(one seed three two)))
+      (should (equal (plist-get (alist-get 'two state) :message) "from two"))
+      (should (eq (plist-get (alist-get 'three state) :status) 'info)))
+    (should-not (drgnx-onboard-test--baks))))
+
+(ert-deftest drgnx-onboard/an-unreadable-state-is-backed-up ()
+  (drgnx-test-with-config
+    (let* ((bad "((environment :status ok :message \"half")
+           (file (drgnx-test-config-put 'onboarding bad)))
+      (should (drgnx-config-problem 'onboarding))
+      (should-not (drgnx-onboard-state))                    ; reading tolerates it: nothing is done
+      (drgnx-onboard--record 'environment 'ok "again")
+      (let ((baks (drgnx-onboard-test--baks)))
+        (should (= (length baks) 1))
+        (should (equal (drgnx-onboard-test--bytes (car baks)) bad)))   ; the user's bytes, kept
+      (should (eq (plist-get (alist-get 'environment (drgnx-onboard-state)) :status) 'ok))
+      (should-not (drgnx-config-problem 'onboarding))
+      (should (file-exists-p file)))))
+
+(ert-deftest drgnx-onboard/write-state-writes-the-state-whole-and-nil-leaves-an-empty-file ()
+  (drgnx-test-with-config
+    (drgnx-onboard--write-state nil)
+    (should (file-exists-p (drgnx-onboard-state-file)))
+    (should-not (drgnx-onboard-state))
+    (should-not (drgnx-config-problem 'onboarding))
+    (drgnx-onboard--write-state '((a :status ok :message "m" :time "t")))
+    (should (equal (drgnx-config-reread 'onboarding) '((a :status ok :message "m" :time "t"))))))
+
+(ert-deftest drgnx-onboard/an-unreadable-file-is-never-written-by-a-read ()
+  ;; Reading (the Welcome, the doctor, resume) writes nothing, whatever the file holds.
+  (drgnx-test-with-config
+    (let* ((bad "(this is not an alist")
+           (file (drgnx-test-config-put 'onboarding bad)))
+      (drgnx-onboard-state) (drgnx-onboard--welcome-due-p) (drgnx-onboard-run :only '(no-such-step) :non-interactive t)
+      (should (equal (drgnx-onboard-test--bytes file) bad))
+      (should-not (drgnx-onboard-test--baks)))))
+
+(ert-deftest drgnx-onboard/the-doctor-and-the-reference-know-onboarding ()
+  (should (memq 'drgnx-onboard drgnx-doctor-config-features))
+  (should (member '(require drgnx-onboard) drgnx-config-doc-sources)))
 
 ;;; onboard-test.el ends here

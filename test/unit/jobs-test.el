@@ -1,6 +1,8 @@
 ;;; jobs-test.el --- batch tests: durable jobs (detached launcher; no systemd units created) -*- lexical-binding: t -*-
 (require 'ert)
 (require 'drgnx-jobs)
+(require 'drgnx-timer)
+(load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
 
 (defmacro drgnx-jobs-test--with (&rest body)
   `(let* ((root (make-temp-file "drgnx-jobs" t))
@@ -258,18 +260,161 @@ killing the starter's whole process group does not take the job along."
      (should-not ran)
      (should-not (drgnx-jobs-list)))))
 
-(ert-deftest drgnx-jobs/no-wait-stamps-before-exit ()
-  ;; M12a-44: Emacs exiting before the stamping timer fires still leaves :boot and :start (the hook runs once)
-  (skip-unless (executable-find "setsid"))
-  (drgnx-jobs-test--with
-   (let ((kill-emacs-hook nil) id dir hooks)
-     (cl-letf (((symbol-function 'run-at-time) (lambda (&rest _) (timer-create))))   ; a timer that never fires
-       (setq id (drgnx-jobs-start "short-lived" '("sleep" "3") :no-wait t)))
-     (setq dir (drgnx-jobs--dir id) hooks kill-emacs-hook)
-     (should (= (length hooks) 1))
-     (should (drgnx-jobs-test--wait (lambda () (file-exists-p (expand-file-name "pid" dir)))))
-     (should-not (plist-get (drgnx-jobs--read (expand-file-name "job.eld" dir)) :start))
+;; The no-wait stamp on the clock fixture: a job that is this Emacs (its pid file holds our pid), never started for real.
+(defmacro drgnx-jobs-test--no-wait (&rest body)
+  "BODY on the virtual clock with a launcher that starts nothing; `id' and `dir' are the :no-wait job's."
+  `(drgnx-jobs-test--with
+    (drgnx-test-with-clock ()
+      (cl-letf (((symbol-function 'drgnx-jobs--detach) #'ignore))
+        (let* ((kill-emacs-hook nil) (id (drgnx-jobs-start "stamp" '("true") :no-wait t))
+               (dir (drgnx-jobs--dir id)) (key (cons 'jobs-stamp id)))
+          (unwind-protect (progn ,@body)
+            (drgnx-timer-cancel key)
+            (delete-directory dir t)))))))
+
+(defun drgnx-jobs-test--stamped-p (dir)
+  (plist-get (drgnx-jobs--read (expand-file-name "job.eld" dir)) :start))
+
+(ert-deftest drgnx-jobs/no-wait-stamps-when-the-pid-appears ()
+  (drgnx-jobs-test--no-wait
+   (should (drgnx-timer-active-p key))
+   (drgnx-test-advance 0.5)                                       ; no pid yet: polling, not stamped
+   (should (drgnx-timer-active-p key))
+   (should-not (drgnx-jobs-test--stamped-p dir))
+   (write-region (number-to-string (emacs-pid)) nil (expand-file-name "pid" dir) nil 'silent)
+   (drgnx-test-advance 0.05)
+   (should (drgnx-jobs-test--stamped-p dir))
+   (should (equal (plist-get (drgnx-jobs--read (expand-file-name "job.eld" dir)) :boot) (drgnx-jobs--boot-id)))
+   (should-not (drgnx-timer-active-p key))))                      ; the poll ended
+
+(ert-deftest drgnx-jobs/no-wait-gives-up-after-2s ()
+  (drgnx-jobs-test--no-wait
+   (drgnx-test-advance 1.9)
+   (should (drgnx-timer-active-p key))
+   (drgnx-test-advance 0.2)
+   (should-not (drgnx-timer-active-p key))
+   (should-not (drgnx-jobs-test--stamped-p dir))
+   (should-not drgnx-timer-errors)))                              ; the job never started: gave up quietly
+
+(ert-deftest drgnx-jobs/no-wait-stamps-at-exit ()
+  ;; M12a-44: Emacs exiting before the poll fires still leaves :boot and :start (the hook runs once)
+  (drgnx-jobs-test--no-wait
+   (let ((hooks kill-emacs-hook))
+     (should (memq #'drgnx-jobs--stamp-at-exit hooks))
+     (write-region (number-to-string (emacs-pid)) nil (expand-file-name "pid" dir) nil 'silent)
+     (should-not (drgnx-jobs-test--stamped-p dir))
      (mapc #'funcall hooks)
-     (should-not kill-emacs-hook)                                 ; once: the hook removed itself
-     (should (plist-get (drgnx-jobs--read (expand-file-name "job.eld" dir)) :start))
+     (should-not (drgnx-timer-active-p key))                      ; the poll ended with it
+     (funcall #'drgnx-jobs--stamp-at-exit)                        ; a second exit stamps nothing again
+     (should (= 1 (length (seq-filter (lambda (k) (eq k :boot)) (drgnx-jobs--read (expand-file-name "job.eld" dir))))))
+     (should (drgnx-jobs-test--stamped-p dir))
      (should (equal (plist-get (drgnx-jobs--read (expand-file-name "job.eld" dir)) :boot) (drgnx-jobs--boot-id))))))
+
+(ert-deftest drgnx-jobs/no-wait-adds-one-exit-hook ()
+  ;; T9-1: one named hook however many jobs, and none of their polls left behind
+  (drgnx-jobs-test--no-wait
+   (let ((ids (list id (drgnx-jobs-start "stamp2" '("true") :no-wait t) (drgnx-jobs-start "stamp3" '("true") :no-wait t))))
+     (unwind-protect
+         (progn
+           (dolist (i ids)
+             (write-region (number-to-string (emacs-pid)) nil (expand-file-name "pid" (drgnx-jobs--dir i)) nil 'silent))
+           (drgnx-test-advance 0.05)
+           (should (= 1 (cl-count #'drgnx-jobs--stamp-at-exit kill-emacs-hook)))
+           (should-not (seq-find (lambda (e) (eq (car-safe (car e)) 'jobs-stamp)) (drgnx-timer-pending)))
+           (dolist (i ids) (should (drgnx-jobs-test--stamped-p (drgnx-jobs--dir i)))))
+       (dolist (i (cdr ids)) (delete-directory (drgnx-jobs--dir i) t))))))
+
+;;;; job.eld goes through the file layer (config Task 18)
+
+(defun drgnx-jobs-test--job-dir (text)
+  "A job directory holding a job.eld of TEXT and a pid file naming this Emacs, so that a stamp has work to do."
+  (let ((dir (drgnx-jobs--dir "20261019-000000-1")))
+    (make-directory dir t)
+    (with-temp-file (expand-file-name "job.eld" dir) (insert text))
+    (write-region (number-to-string (emacs-pid)) nil (expand-file-name "pid" dir) nil 'silent)
+    dir))
+
+(defun drgnx-jobs-test--bytes (file)
+  (with-temp-buffer (set-buffer-multibyte nil) (insert-file-contents-literally file) (buffer-string)))
+
+(ert-deftest drgnx-jobs/job-eld-is-written-atomically ()
+  (drgnx-jobs-test--with
+   (cl-letf (((symbol-function 'drgnx-jobs--detach) #'ignore))
+     (let* ((written nil) (orig (symbol-function 'drgnx-file-write))
+            (id (cl-letf (((symbol-function 'drgnx-file-write)
+                           (lambda (file &rest args) (push file written) (apply orig file args))))
+                  ;; a command assembled from buffer text carries text properties: still startable
+                  (drgnx-jobs-start "atomic" (list "echo" (propertize "hi" 'face 'bold)) :no-wait t)))
+            (dir (drgnx-jobs--dir id)) (file (expand-file-name "job.eld" dir)))
+       (unwind-protect
+           (progn
+             (should (equal written (list file)))                  ; through the layer, once
+             (should (equal (plist-get (drgnx-jobs--read file) :command) '("echo" "hi")))
+             (should (equal (plist-get (drgnx-jobs--read file) :name) "atomic"))
+             (should-not (directory-files dir nil "\\`\\.#\\|tmp\\|~\\'"))   ; no temp file left beside it
+             (should (eq (plist-get (drgnx-file-read file) :status) 'ok)))
+         (drgnx-timer-cancel (cons 'jobs-stamp id)))))))
+
+(ert-deftest drgnx-jobs/the-stamp-keeps-the-rest ()
+  ;; an existing file (one prin1 form, no newline: what every older drgnx wrote) with a key this code does not know
+  (drgnx-jobs-test--with
+   (let* ((dir (drgnx-jobs-test--job-dir
+                (prin1-to-string '(:id "x" :name "old" :command ("a" "b") :launcher detached :future (1 2) :started "then"))))
+          (file (expand-file-name "job.eld" dir)))
+     (drgnx-jobs--stamp dir)
+     (let ((job (drgnx-jobs--read file)))
+       (should (equal (cl-subseq job 0 12) '(:id "x" :name "old" :command ("a" "b") :launcher detached :future (1 2) :started "then")))
+       (should (equal (plist-get job :boot) (drgnx-jobs--boot-id)))
+       (should (plist-get job :start)))
+     (let ((once (drgnx-jobs-test--bytes file)))
+       (drgnx-jobs--stamp dir)                                     ; a second stamp changes nothing and repeats no key
+       (should (equal (drgnx-jobs-test--bytes file) once))
+       (should (= 1 (cl-count :boot (drgnx-jobs--read file))))))))
+
+(ert-deftest drgnx-jobs/an-unreadable-job-eld-is-not-overwritten ()
+  (drgnx-jobs-test--with
+   (dolist (text '("(:id \"x\" :name " "(:id \"x\") (:extra 1)" "#1=(:id . #1#)" ""))
+     (let* ((dir (drgnx-jobs-test--job-dir text)) (file (expand-file-name "job.eld" dir))
+            (before (drgnx-jobs-test--bytes file)) (said nil))
+       (cl-letf (((symbol-function 'message) (lambda (fmt &rest args) (push (apply #'format fmt args) said))))
+         (should-not (drgnx-jobs--stamp dir))                      ; the error is caught
+         (drgnx-jobs--stamp-at-exit)
+         (should-not (drgnx-jobs--stamp-anyway dir)))
+       (should (equal (drgnx-jobs-test--bytes file) before))
+       (should-not (directory-files dir nil "\\.lock\\|\\.#"))     ; no lock left
+       (should-not (drgnx-jobs--read file))
+       (delete-directory dir t)))))
+
+(ert-deftest drgnx-jobs/a-busy-job-eld-skips-the-stamp-without-waiting ()
+  (drgnx-jobs-test--with
+   (let* ((dir (drgnx-jobs-test--job-dir (prin1-to-string '(:id "x" :name "n"))))
+          (file (expand-file-name "job.eld" dir)) (waited nil) (said nil))
+     (cl-letf (((symbol-function 'drgnx-file--sleep) (lambda (_) (setq waited t)))
+               ((symbol-function 'message) (lambda (fmt &rest args) (push (apply #'format fmt args) said))))
+       (drgnx-file-update file (lambda (data) (drgnx-jobs--stamp dir) data)))   ; the lock is ours: the stamp finds it busy
+     (should-not waited)
+     (should-not said)                                             ; skipped, quietly
+     (should-not (plist-get (drgnx-jobs--read file) :boot)))))
+
+(ert-deftest drgnx-jobs/a-stamp-never-creates-job-eld-nor-its-directory ()
+  (drgnx-jobs-test--with
+   (let ((dir (drgnx-jobs-test--job-dir "")))                      ; empty job.eld: nothing to add the stamp to
+     (delete-file (expand-file-name "job.eld" dir))
+     (drgnx-jobs--stamp dir)
+     (should-not (file-exists-p (expand-file-name "job.eld" dir)))
+     (delete-directory dir t)
+     (drgnx-jobs--stamp dir)
+     (should-not (file-exists-p dir)))))
+
+(ert-deftest drgnx-jobs/the-exit-stamp-takes-the-default-timeout-and-never-prompts ()
+  (drgnx-jobs-test--no-wait
+   (write-region (number-to-string (emacs-pid)) nil (expand-file-name "pid" dir) nil 'silent)
+   (let ((timeouts nil) (interaction nil) (orig (symbol-function 'drgnx-file-update)))
+     (cl-letf (((symbol-function 'drgnx-file-update)
+                (lambda (file fn &rest args)
+                  (push (plist-get args :timeout) timeouts) (push inhibit-interaction interaction)
+                  (apply orig file fn args))))
+       (drgnx-jobs--stamp-at-exit)                                 ; kill-emacs-hook: the layer's default (1 s)
+       (drgnx-jobs--stamp dir))                                    ; automatic paths: one attempt
+     (should (equal timeouts '(0 1.0)))
+     (should (equal interaction '(t t))))))

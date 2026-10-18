@@ -15,7 +15,7 @@
                                              (concat "DRGNX_DATA_DIR=" ,root "data")
                                              (concat "XDG_STATE_HOME=" ,root "state"))
                                        process-environment))
-          (drgnx-modules--table nil) (drgnx-modules--report nil) (drgnx-modules--state nil)
+          (drgnx-modules--table nil) (drgnx-modules--report nil)
           (drgnx-modules-default-off-test--ran nil))
      (make-directory (concat ,root "config") t)
      (make-directory (concat ,root "mods/test") t)
@@ -73,7 +73,7 @@
 (ert-deftest drgnx-modules-default-off/disabled-wins-over-enabled ()
   (drgnx-modules-default-off-test--with root
     (drgnx-modules-default-off-test--define)
-    (drgnx-modules-write-state '(:version 1 :disabled (test/off) :enabled (test/off)))
+    (drgnx-modules-update-state (lambda (_) '(:disabled (test/off) :enabled (test/off))))
     (should (drgnx-module-disabled-p 'test/off))
     (drgnx-modules-run 'startup)
     (should (eq (drgnx-modules-default-off-test--status 'test/off) 'disabled))
@@ -84,7 +84,7 @@
     (should-not (drgnx-module-disabled-p 'test/x))
     (should (drgnx-module-disabled-p 'test/x 'off))
     (should-not (drgnx-module-disabled-p 'test/x 'on))
-    (drgnx-modules-write-state '(:version 1 :enabled (test/x)))
+    (drgnx-modules-update-state (lambda (_) '(:enabled (test/x))))
     (should-not (drgnx-module-disabled-p 'test/x 'off))))
 
 (ert-deftest drgnx-modules-default-off/modules-list-says-off-until-chosen ()
@@ -109,7 +109,7 @@
 (ert-deftest drgnx-modules-default-off/set-enabled-returns-the-state ()
   (drgnx-modules-default-off-test--with root
     (drgnx-modules-default-off-test--define)
-    (drgnx-modules-write-state '(:version 1 :disabled (test/off test/on)))
+    (drgnx-modules-update-state (lambda (_) '(:disabled (test/off test/on))))
     (let ((s (drgnx-modules-set-enabled 'test/off t)))
       (should (equal (plist-get s :enabled) '(test/off)))
       (should (equal (plist-get s :disabled) '(test/on))))   ; removed from :disabled, the other kept
@@ -158,17 +158,17 @@
     (let ((s (drgnx-modules-read-state)))
       (should (equal (plist-get s :disabled) '(a/b)))
       (should-not (plist-member s :enabled))
-      (drgnx-modules-write-state s)
-      (setq drgnx-modules--state nil)
+      (drgnx-modules-toggle 'c/d)                            ; a write: :enabled stays absent
+      (drgnx-config-reread 'modules)
       (should-not (plist-member (drgnx-modules-read-state) :enabled))
       (should-not (string-match-p ":enabled" (with-temp-buffer (insert-file-contents (concat root "config/modules.eld"))
                                                                (buffer-string)))))
     ;; :enabled reads, validates like :disabled, and is written back unchanged
     (write-region "(:version 1 :enabled (test/off))\n" nil (concat root "config/modules.eld") nil 'silent)
-    (setq drgnx-modules--state nil)
+    (drgnx-config-reread 'modules)
     (should (equal (plist-get (drgnx-modules-read-state) :enabled) '(test/off)))
     (write-region "(:version 1 :enabled (\"oops\"))\n" nil (concat root "config/modules.eld") nil 'silent)
-    (setq drgnx-modules--state nil)
+    (drgnx-config-reread 'modules)
     (should-not (plist-member (drgnx-modules-read-state) :enabled))))
 
 (provide 'modules-default-off-test)

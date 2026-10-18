@@ -19,6 +19,13 @@ Mac) opens the Agents tab. Profiles live in
             ("local" :command ("my-acp-agent" "--model" "qwen") :mode steer)))
 ```
 
+**If `agents.eld` has a mistake** (it does not read, or a value is the wrong kind: a `:command` that is not a list of
+strings, a `:mcp` name that is neither `coordination` nor `search`, an `:openrouter` value that is not a restriction),
+drgnx does not apply any of it and says where the mistake is, once. Only the built-in profiles are offered, the agents
+get the coordination tools alone, and OpenRouter agents wait until it is fixed: a restriction you wrote is never
+dropped for a typo. The settings pages and onboarding do not write to a file with a mistake; they say so. The file is
+read again at the next use after you save it, with no restart.
+
 `:command` is the agent program; `:mode` is what a message to a busy agent does: `queue` (default), `steer` (when
 the agent advertises steering — sent as `_session/steering`; if the agent refuses, the message is queued instead) or
 `interrupt` (stop the turn, then send). A profile whose program is not installed gives a session that says so. Keys and tokens are
@@ -105,7 +112,7 @@ never signalled). Under systemd the job's wrapper line passes through the unit's
 every `$` in it: the `pid` file holds the job shell's real pid, and the job reads as running and can be stopped. A job can be memory-capped (`:memory-max "1G"` in `drgnx-jobs-start`: systemd's `MemoryMax`, no swap;
 `:nice 10` lowers its priority (`Nice=`); the detached launcher can do neither and ignores both). `:no-wait t`
 returns without waiting for the job's pid (the boot and start time that make it trustworthy are stamped from a short
-timer, or at once when Emacs exits first): for callers in a timer that must not block, such as drgnx starting the local AI runner again. Sessions and jobs started on a task get it as `DRGNX_TASK`, and the commits they make are
+poll that gives up after 2 s, or at once when Emacs exits first): for callers in a timer that must not block, such as drgnx starting the local AI runner again. A job's `job.eld` is written atomically and stamped without waiting; a `job.eld` drgnx cannot read is never overwritten, and that job does not show in the list. Sessions and jobs started on a task get it as `DRGNX_TASK`, and the commits they make are
 recorded for it ([Work tracker](work.md)).
 
 ## The hub and the gateway
@@ -159,7 +166,7 @@ per token; Kimi's coding membership is a different endpoint these profiles do no
 **New Durable Agent Session…** (palette) starts an agent in the **hub** instead of this Emacs: it keeps working when
 you close Emacs, and the next Emacs shows it again in the Agents tab — its whole transcript, pending permission
 requests and edits to review — and drives it the same way (send, Stop, answer, review). Emacs mirrors the hub's
-sessions when it is idle whenever a hub is running (and looks again every 30 s); it never starts a hub for that.
+sessions when it is idle whenever a hub is running (and looks again every 30 s of idleness, until the Agents module is turned off); it never starts a hub for that.
 Durable sessions live as long as the hub: if the hub ends (`drgnx hub stop`, a crash), its sessions end too, and the
 Agents tab shows them as exited. The next hub (the next durable session, an agent that needs the gateway, or `drgnx
 hub start`) resumes them when their agent can load sessions: each comes back idle with its history,

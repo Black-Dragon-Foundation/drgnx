@@ -17,6 +17,9 @@ Agents tab, no agent session, no layout state and a temp config dir (layouts.eld
   (declare (indent 0))
   `(let* ((dir (make-temp-file "drgnx-layouts" t))
           (process-environment (cons (concat "DRGNX_CONFIG_DIR=" dir) process-environment))
+          (drgnx-config--defs (copy-hash-table drgnx-config--defs))      ; layouts.eld's definition is this test's own
+          (drgnx-config--state (copy-hash-table drgnx-config--state))
+          (drgnx-config--notified (copy-hash-table drgnx-config--notified))
           (drgnx-wb--sections nil) (drgnx-signal--editor-window nil)
           (drgnx-wb--areas (copy-tree drgnx-wb--areas))
           (drgnx-agents--sessions nil)
@@ -24,6 +27,7 @@ Agents tab, no agent session, no layout state and a temp config dir (layouts.eld
           (drgnx-agents-ui--jobs-cache (cons 1.0e+INF nil))     ; no job directory is read
           (display-buffer-alist nil) (display-buffer-overriding-action '(nil))
           (size (cons (frame-width) (frame-height))))
+     (drgnx-layouts--define-config)
      (set-frame-size nil 200 60)
      (delete-other-windows)
      (dolist (p '(drgnx-wb-view drgnx-wb-areas drgnx-wb-panel-px drgnx-wb-right-px drgnx-wb-dock-px

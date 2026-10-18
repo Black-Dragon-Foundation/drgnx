@@ -1,6 +1,7 @@
 ;;; mod-markdown-test.el --- batch tests: Markdown — GFM for READMEs, a preview, Mermaid through mmdc as a job -*- lexical-binding: t -*-
 (require 'ert)
 (require 'drgnx)
+(load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
 
 (defconst drgnx-markdown-test--elpa (expand-file-name (or (getenv "DRGNX_USER_ELPA") "~/.config/emacs/elpa")))
 
@@ -120,5 +121,51 @@
              (b (seq-find (lambda (b) (eq (plist-get b :id) 'markdown-preview)) (plist-get r :bindings))))
         (should (equal (plist-get b :key) "C-S-v"))
         (should (equal (plist-get b :map) '(markdown-mode . markdown-mode-map)))))))
+
+(ert-deftest drgnx-markdown/saves-in-a-row-render-once-after-a-pause ()
+  (drgnx-markdown-test--with
+    (drgnx-test-with-clock ()
+      (let ((rendered nil) (a (generate-new-buffer " md-a")) (drgnx-markdown--pending nil))
+        (unwind-protect
+            (cl-letf (((symbol-function 'drgnx-markdown--render) (lambda (src prev) (push (cons src prev) rendered))))
+              (with-current-buffer a (setq-local drgnx-markdown--source a))
+              (dotimes (_ 3) (with-current-buffer a (drgnx-markdown--after-save)))
+              (should (drgnx-timer-active-p 'markdown-render))
+              (drgnx-test-advance 5)
+              (should-not rendered)                                   ; idle time, not wall time
+              (drgnx-test-idle 0.2)
+              (should (= 1 (length rendered)))
+              (should-not drgnx-markdown--pending)
+              ;; a later save is scheduled again (a timer that once died never blocks it)
+              (with-current-buffer a (drgnx-markdown--after-save))
+              (drgnx-test-idle 0.2)
+              (should (= 2 (length rendered))))
+          (kill-buffer a))))))
+
+(ert-deftest drgnx-markdown/a-diagram-job-is-watched-until-it-ends-or-ten-minutes ()
+  (drgnx-markdown-test--with
+    (drgnx-test-with-clock ()
+      (let ((job (list :status 'running)) (drawn nil))
+        (cl-letf (((symbol-function 'drgnx-jobs-get) (lambda (_id) job))
+                  ((symbol-function 'drgnx-markdown--drawn) (lambda (hash exit) (push (list hash exit) drawn))))
+          (drgnx-markdown--watch "J1" "h1")
+          (drgnx-markdown--watch "J2" "h2")
+          (drgnx-test-advance 4)
+          (should-not drawn)
+          (setq job (list :status 'exited :exit 0))
+          (drgnx-test-advance 2)
+          (should (equal (sort (mapcar #'car drawn) #'string<) '("h1" "h2")))
+          (should (equal (mapcar #'cadr drawn) '(0 0)))
+          (should-not (drgnx-timer-active-p '(markdown-watch . "J1"))))
+        ;; a job that never ends: after ten minutes the diagram stays code
+        (setq job (list :status 'running) drawn nil)
+        (cl-letf (((symbol-function 'drgnx-jobs-get) (lambda (_id) job))
+                  ((symbol-function 'drgnx-markdown--drawn) (lambda (hash exit) (push (list hash exit) drawn))))
+          (drgnx-markdown--watch "J3" "h3")
+          (drgnx-test-advance 598)
+          (should-not drawn)
+          (drgnx-test-advance 4)
+          (should (equal drawn '(("h3" 1))))
+          (should-not (drgnx-timer-active-p '(markdown-watch . "J3"))))))))
 
 ;;; mod-markdown-test.el ends here

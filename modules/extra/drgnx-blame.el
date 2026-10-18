@@ -15,6 +15,7 @@
 (require 'subr-x)
 (require 'drgnx-modules)
 (require 'drgnx-registry)
+(require 'drgnx-timer)
 
 (declare-function drgnx-diff-show "drgnx-diff")
 
@@ -28,7 +29,6 @@
 (defvar-local drgnx-blame--cache nil "Line → (TIME . INFO).")
 (defvar-local drgnx-blame--proc nil "The git process asking for a line.")
 (defvar-local drgnx-blame--off nil "git refused this file: not asked again.")
-(defvar drgnx-blame--timer nil "The idle timer (one for every buffer).")
 (defvar drgnx-blame-mode)
 
 (defun drgnx-blame--parse (porcelain)
@@ -143,8 +143,7 @@ has not answered).  The empty line after the last newline has none."
 (defun drgnx-blame--release-timer ()
   "Cancel the idle timer when no buffer but this one has inline blame (this one is going: off or killed)."
   (unless (seq-some (lambda (b) (and (not (eq b (current-buffer))) (buffer-local-value 'drgnx-blame-mode b))) (buffer-list))
-    (when (timerp drgnx-blame--timer) (cancel-timer drgnx-blame--timer))
-    (setq drgnx-blame--timer nil)))
+    (drgnx-timer-cancel 'blame-tick)))
 
 (define-minor-mode drgnx-blame-mode
   "Inline blame: who last changed the current line, when, and the commit's subject, at its end."
@@ -157,8 +156,8 @@ has not answered).  The empty line after the last newline has none."
         (add-hook 'after-save-hook #'drgnx-blame--forget nil t)
         (add-hook 'after-revert-hook #'drgnx-blame--forget nil t)
         (add-hook 'kill-buffer-hook #'drgnx-blame--release-timer nil t)
-        (unless (timerp drgnx-blame--timer)
-          (setq drgnx-blame--timer (run-with-idle-timer drgnx-blame-delay t #'drgnx-blame--tick))))
+        (unless (drgnx-timer-active-p 'blame-tick)           ; one idle timer for every buffer
+          (drgnx-timer-start 'blame-tick drgnx-blame-delay #'drgnx-blame--tick :repeat t :idle t)))
     (remove-hook 'post-command-hook #'drgnx-blame--follow t)
     (remove-hook 'after-change-functions #'drgnx-blame--forget t)
     (remove-hook 'after-save-hook #'drgnx-blame--forget t)

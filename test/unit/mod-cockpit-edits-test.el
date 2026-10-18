@@ -10,10 +10,16 @@
 (defconst drgnx-cockpit-edits-test--ext "ext:claude-code:42"
   "The fixture's outside agent: README changed and new.txt added in its own worktree WT-A, both reported.")
 
+(defun drgnx-cockpit-edits-test--keys (buffer)
+  "BUFFER's pane's four timer keys: the tick, the listing's turn, the flush and the check."
+  (mapcar (lambda (k) (cons k buffer)) '(cockpit-edits-tick cockpit-edits-turn cockpit-edits-flush cockpit-edits-check)))
+
 (defun drgnx-cockpit-edits-test--settled-p (buffer)
   "Whether BUFFER's pane has listed and diffed everything, with nothing on its way."
   (with-current-buffer buffer
-    (and drgnx-cockpit-edits--loaded (not drgnx-cockpit-edits--busy) (not (timerp drgnx-cockpit-edits--timer))
+    (and drgnx-cockpit-edits--loaded (not drgnx-cockpit-edits--busy)
+         (not (drgnx-timer-active-p (cons 'cockpit-edits-tick buffer)))
+         (not (drgnx-timer-active-p (cons 'cockpit-edits-turn buffer)))
          (zerop (hash-table-count drgnx-cockpit-edits--dirty)) (not drgnx-cockpit-edits--list-dirty))))
 
 (defun drgnx-cockpit-edits-test--settle (buffer)
@@ -47,11 +53,10 @@ The pane is killed after, and must leave no timer or watch behind."
                  (set-buffer e)
                  (drgnx-cockpit-edits-test--settle e)
                  ,@body)
-             (let ((timers (with-current-buffer e (list drgnx-cockpit-edits--timer drgnx-cockpit-edits--check-timer)))
-                   (own (buffer-local-value 'drgnx-cockpit-edits--neutral e)))
+             (let ((own (buffer-local-value 'drgnx-cockpit-edits--neutral e)))
                (kill-buffer e)
                (should-not (file-exists-p own))                     ; its own folder went with it
-               (dolist (tm timers) (should-not (and (timerp tm) (memq tm timer-list))))   ; the buffer owned them
+               (dolist (k (drgnx-cockpit-edits-test--keys e)) (should-not (drgnx-timer-active-p k)))   ; the buffer owned them
                (should (zerop (hash-table-count watches))))
              (set-window-configuration config)))))))
 
@@ -117,7 +122,7 @@ The pane is killed after, and must leave no timer or watch behind."
     (drgnx-cockpit-edits-test--watch watches (concat wt-a "docs/"))
     (drgnx-cockpit-edits-test--notify wt-a ".git/index")
     (drgnx-cockpit-edits-test--notify repo "README")
-    (should-not (timerp drgnx-cockpit-edits--timer))
+    (should-not (drgnx-timer-active-p (cons 'cockpit-edits-tick (current-buffer))))
     ;; nothing here is ever remote: a remote agent folder is an error line, no git, no watch
     (let ((src (list :dir "/ssh:host:/w/" :base "main")))
       (cl-letf (((symbol-function 'drgnx-cockpit-edit-source) (lambda (&rest _) src))
@@ -236,7 +241,21 @@ The pane is killed after, and must leave no timer or watch behind."
       (should-error (clone-buffer))
       (should-error (clone-indirect-buffer nil nil))
       (should (= n (length (buffer-list))))
-      (should (timerp drgnx-cockpit-edits--check-timer)))))
+      (should (drgnx-timer-active-p (cons 'cockpit-edits-check (current-buffer)))))))
+
+(ert-deftest drgnx-cockpit-edits/a-listing-waiting-for-its-turn-never-holds-a-touch-back ()
+  ;; the turn has a timer of its own, so a tick asked for meanwhile is not behind it; a second ask moves the turn
+  (drgnx-cockpit-edits-test--with drgnx-cockpit-edits-test--ext
+    (let ((tick (cons 'cockpit-edits-tick e)) (turn (cons 'cockpit-edits-turn e)))
+      (drgnx-cockpit-edits--schedule-turn 3600)
+      (drgnx-cockpit-edits--schedule 0.2)
+      (should (drgnx-timer-active-p turn))
+      (should (drgnx-timer-active-p tick))
+      (should (= 1 (cl-count turn (drgnx-timer-pending) :key #'car :test #'equal)))
+      (drgnx-cockpit-edits--schedule-turn 3600)
+      (should (= 1 (cl-count turn (drgnx-timer-pending) :key #'car :test #'equal)))
+      (drgnx-timer-cancel turn)
+      (drgnx-timer-cancel tick))))
 
 (ert-deftest drgnx-cockpit-edits/diff-commands-by-name-and-g-change-no-file ()
   (drgnx-cockpit-edits-test--with drgnx-cockpit-edits-test--ext
@@ -264,7 +283,7 @@ The pane is killed after, and must leave no timer or watch behind."
 
 (ert-deftest drgnx-cockpit-edits/the-graph-opens-an-agents-edits ()
   (drgnx-cockpit-fixture-with
-    (let ((drgnx-cockpit-graph-current-filter nil) (drgnx-cockpit--timer nil) (drgnx-cockpit--check-timer nil)
+    (let ((drgnx-cockpit-graph-current-filter nil)
           (drgnx-cockpit--silent nil) (drgnx-cockpit--silent-n 0) (drgnx-cockpit--silent-at (float-time))
           (drgnx-cockpit--silent-running nil) (drgnx-cockpit-edits--last nil) (shown nil))
       (cl-letf (((symbol-function 'drgnx-cockpit-sessions) (lambda () sessions))

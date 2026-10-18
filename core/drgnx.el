@@ -9,6 +9,7 @@
 
 ;;; Code:
 (require 'drgnx-paths)
+(require 'drgnx-file)
 (require 'drgnx-hooks)
 (require 'drgnx-guard)
 (require 'drgnx-registry)
@@ -23,6 +24,7 @@
 (autoload 'drgnx-ai--on-first-window "drgnx-ai-probe")
 (require 'drgnx-gc)
 (require 'drgnx-session)
+(require 'drgnx-config)
 
 (defgroup drgnx nil "drgnx, a workbench-first Emacs framework." :group 'convenience)
 
@@ -43,12 +45,11 @@ the start."
   (interactive)
   (let ((file (drgnx-user-config-file)))
     (unless (file-exists-p file)
-      (make-directory (file-name-directory file) t)
-      (write-region ";;; config.el --- my drgnx configuration -*- lexical-binding: t -*-
+      (drgnx-file-write-text file ";;; config.el --- my drgnx configuration -*- lexical-binding: t -*-
 ;; Loaded at the end of every start, after drgnx's startup modules: settings here win.
 ;; An error is said in *Messages* and drgnx starts anyway; `drgnx safe' skips this file.
 
-" nil file nil 'silent))
+"))
     (find-file file)))
 
 (defun drgnx--core-commands ()
@@ -56,6 +57,7 @@ the start."
   (drgnx-onboard-register-commands)
   (drgnx-session-register-commands)
   (drgnx-modal-register-commands)
+  (drgnx-config-register-commands)
   (drgnx-command-define 'palette :category "View" :title "Command Palette"
                         :command #'drgnx-palette :menu '("View") :doc "Every command by name, with its key")
   (drgnx-command-define 'keys-sheet :category "Help" :title "Keyboard Shortcuts"

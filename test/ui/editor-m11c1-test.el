@@ -75,7 +75,7 @@
          (drgnx-agents-ui--jobs-cache (cons 1.0e+INF nil))
          (drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
          (drgnx-keys--applied nil) (drgnx-keys--session-layers nil) (drgnx-keys-last nil)
-         (drgnx-surfaces--usage nil) (drgnx-surfaces--usage-dirty nil) (drgnx-surfaces--usage-timer nil)
+         (drgnx-surfaces--usage nil) (drgnx-surfaces--usage-dirty nil)
          (drgnx-shortcuts-chord-wait 3.0)
          (display-buffer-alist nil) (display-buffer-overriding-action '(nil))
          (dired nil))
@@ -238,6 +238,7 @@
       (dolist (b (append drgnx-m11c1-ui-test--buffers (list drgnx-replace-buffer-name drgnx-replace-bar-buffer-name)))
         (when-let* ((buf (get-buffer b))) (kill-buffer buf)))
       (when (buffer-live-p dired) (kill-buffer dired))
+      (drgnx-timer-cancel 'surfaces-usage)
       (delete-directory shots t)
       (delete-directory state t))))
 

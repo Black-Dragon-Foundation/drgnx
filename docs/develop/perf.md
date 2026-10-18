@@ -123,7 +123,7 @@ Run `--perf` on its own: no other test tiers, agents or builds at the same time.
 
 - **GC.** Emacs' default threshold (800 kB) collected 28 times in 186 keystrokes. drgnx raises it to 512 MB while
   starting (early-init; set back after startup even if drgnx fails to start), then uses 64 MB (`drgnx-gc-cons-threshold`) and collects after 8 s idle
-  (`drgnx-gc-idle-seconds`), where nobody waits. The price is memory: +70 MB, within budget. A threshold your own
+  (`drgnx-gc-idle-seconds`; the timer is the layer's key `gc-idle`, started again by a second setup, never doubled), where nobody waits. The price is memory: +70 MB, within budget. A threshold your own
   init set (no longer early-init's) is kept, and with `gcmh-mode` on drgnx sets neither (gcmh does both).
 - **Key resolution** at startup checked every pair of bindings for prefixes and re-parsed keys each time; it now
   caches parsed keys and compares only keys in one keymap with the same first event.

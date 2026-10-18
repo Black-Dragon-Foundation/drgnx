@@ -20,6 +20,7 @@
 (require 'image)
 (require 'drgnx-modules)
 (require 'drgnx-registry)
+(require 'drgnx-timer)
 (require 'drgnx-cockpit-model)
 (require 'drgnx-panes)
 ;; the layout, the drawing and the outline sit beside this file
@@ -87,8 +88,6 @@ its file, when it has one."
 \(`drgnx-cockpit-filter'); nil shows everything.  Set by `drgnx-cockpit-graph-filter'; `:job' by Show Job in Work
 \(`drgnx-cockpit-show-job'), which What needs you and the decision log follow too (drgnx-cockpit-cards.el).")
 
-(defvar drgnx-cockpit--timer nil "The redraw on its way: one at a time.")
-(defvar drgnx-cockpit--check-timer nil "The repeating look at the store (`drgnx-cockpit--check'), while the graph lives.")
 (defvar drgnx-cockpit--draws 0 "How many times the Work graph was drawn (tests and the perf lab read it).")
 (defvar drgnx-cockpit--last-error nil "The last error a redraw said: the same one is said once.")
 (defvar drgnx-cockpit--scan-n 0 "Counts finished work-tracker scans: part of the redraw key.")
@@ -159,9 +158,9 @@ and a look every `drgnx-cockpit-check-interval' s (idempotent)."
   (add-hook 'drgnx-agents-changed-functions #'drgnx-cockpit--agent-changed)
   (add-hook 'drgnx-work-ui-scanned-hook #'drgnx-cockpit--scanned)
   (add-hook 'enable-theme-functions #'drgnx-cockpit--theme-changed)
-  (unless (timerp drgnx-cockpit--check-timer)
-    (setq drgnx-cockpit--check-timer
-          (run-with-timer drgnx-cockpit-check-interval drgnx-cockpit-check-interval #'drgnx-cockpit--check))))
+  ;; Owned by the graph's buffer: killed with it; a second watch replaces the timer.
+  (drgnx-timer-start 'cockpit-check drgnx-cockpit-check-interval #'drgnx-cockpit--check
+                     :repeat drgnx-cockpit-check-interval :owner (current-buffer)))
 
 (defun drgnx-cockpit--flush-bands ()
   "Release the drawing's band images (their pixels) and forget them."
@@ -174,8 +173,6 @@ and a look every `drgnx-cockpit-check-interval' s (idempotent)."
   (remove-hook 'drgnx-agents-changed-functions #'drgnx-cockpit--agent-changed)
   (remove-hook 'drgnx-work-ui-scanned-hook #'drgnx-cockpit--scanned)
   (remove-hook 'enable-theme-functions #'drgnx-cockpit--theme-changed)
-  (dolist (tm (list drgnx-cockpit--timer drgnx-cockpit--check-timer)) (when (timerp tm) (cancel-timer tm)))
-  (setq drgnx-cockpit--timer nil drgnx-cockpit--check-timer nil)
   (drgnx-cockpit--flush-bands))
 
 (defconst drgnx-cockpit--quiet-events '("agent-entries" "request" "budget")
@@ -212,8 +209,7 @@ meanwhile, only while the graph is visible (hidden, it redraws when it shows), a
 changed.  Cheap: called from every event."
   (when-let* ((b (get-buffer drgnx-cockpit-graph-buffer-name)))
     (cond ((not (drgnx-cockpit--visible-p b)) (with-current-buffer b (setq drgnx-cockpit--stale t)))
-          ((not (timerp drgnx-cockpit--timer))
-           (setq drgnx-cockpit--timer (run-at-time (or delay drgnx-cockpit-redraw-delay) nil #'drgnx-cockpit--tick))))))
+          (t (drgnx-timer-soon 'cockpit-redraw (or delay drgnx-cockpit-redraw-delay) #'drgnx-cockpit--tick :owner b)))))
 
 (defun drgnx-cockpit--error (err)
   "Say ERR, unless it is the one said last (a broken store would otherwise say it twice a second)."
@@ -229,7 +225,6 @@ changed.  Cheap: called from every event."
 
 (defun drgnx-cockpit--tick ()
   "The scheduled redraw (a timer).  A graph hidden since it was scheduled only notes it is stale."
-  (setq drgnx-cockpit--timer nil)
   (when-let* ((b (get-buffer drgnx-cockpit-graph-buffer-name)))
     (if (drgnx-cockpit--visible-p b) (drgnx-cockpit--call #'drgnx-cockpit-graph-redraw)
       (with-current-buffer b (setq drgnx-cockpit--stale t)))))
