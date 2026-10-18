@@ -117,7 +117,12 @@
     (let ((s (drgnx-modules-set-enabled 'test/on nil)))
       (should (memq 'test/on (plist-get s :disabled)))
       (should (equal (plist-get s :enabled) '(test/off))))
-    (should (drgnx-module-disabled-p 'test/on))))
+    (should (drgnx-module-disabled-p 'test/on))
+    ;; and ON takes it out of :disabled without adding it to :enabled (it is on by default)
+    (let ((s (drgnx-modules-set-enabled 'test/on t)))
+      (should-not (memq 'test/on (plist-get s :disabled)))
+      (should (equal (plist-get s :enabled) '(test/off))))
+    (should-not (drgnx-module-disabled-p 'test/on))))
 
 (ert-deftest drgnx-modules-default-off/ship-lock-still-wants-it ()
   (drgnx-modules-default-off-test--with root
@@ -142,6 +147,7 @@
 
 (ert-deftest drgnx-modules-default-off/bisect-leaves-it-out ()
   (drgnx-modules-default-off-test--with root
+    (drgnx-modules-load-directory (concat root "mods"))      ; set-enabled needs the module defined
     (should (equal (drgnx-modules-default-off-test--bisect-candidates root) '(test/on)))
     (drgnx-modules-set-enabled 'test/off t)
     (should (equal (drgnx-modules-default-off-test--bisect-candidates root) '(test/off test/on)))))

@@ -40,10 +40,11 @@ Your choices live in `~/.config/drgnx/modules.eld` (`$DRGNX_CONFIG_DIR`):
 ```
 
 `:enabled` is absent until a module that is off until chosen is turned on, and is kept as it is when drgnx writes
-the file (a bootstrap or onboarding that writes modules.eld keeps it too). `:theme` is the colour theme Color Theme picked (ui/look writes it). An older format is migrated when it is read; a
-field that is not what drgnx expects (a typo) is dropped with a message in `*Messages*`; an unreadable file, or one
-from a newer drgnx, is reported and ignored (modules use their defaults) — never an error at start — and before drgnx
-next writes the file it keeps yours as `modules.eld.bak-<time>`.
+the file (a bootstrap or onboarding that writes modules.eld keeps it too). `:theme` is the colour theme Color Theme
+picked (ui/look writes it). An older format is migrated when it is read; a field that is not what drgnx
+expects (a typo) is dropped with a message in `*Messages*`; an unreadable file, or one from a newer drgnx, is
+reported and ignored (modules use their defaults) — never an error at start — and before drgnx next writes the
+file it keeps yours as `modules.eld.bak-<time>`.
 
 ## Modules that are off until chosen
 
@@ -53,7 +54,9 @@ such a module on: the key profile that needs it (choosing a Vim key stack in onb
 Preferences: Modules says `off (chosen by the key profile)` in its Next start column and `RET` on the row adds it to
 `:enabled` (and again, removes it). `:disabled` always wins: a module in both lists stays off. A module that is on by
 default is turned off through `:disabled` as before. `drgnx bisect` leaves an off-until-chosen module out unless it is
-enabled, and the shipped lock still pins its packages so that choosing it later installs verified versions. From Lisp:
+enabled. The shipped lock still lists its packages, so a fresh install that chooses the module before its first sync
+gets verified versions; once a sync has rewritten your own lock from what is installed, the module's packages are not
+in it until they are installed. From Lisp:
 `(drgnx-module-default-off-p MODULE)`, `(drgnx-module-disabled-p MODULE)` and `(drgnx-modules-set-enabled MODULE ON)`.
 
 ## Your own code: config.el

@@ -75,6 +75,7 @@ Read, never run."
             (while t
               (pcase (read (current-buffer))
                 (`(drgnx-module-define (quote ,(and (pred symbolp) name)) . ,args)
+                 ;; :default counts only as the literal 'off (read, never evaluated)
                  (push (list name :packages (pcase (plist-get args :packages) (`(quote ,l) l))
                              :default (pcase (plist-get args :default) (`(quote off) 'off) (_ 'on)))
                        out))))

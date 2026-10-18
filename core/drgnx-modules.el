@@ -8,9 +8,10 @@
 ;; `first-input' — under its own error guard, timed.  It may require other modules, need packages
 ;; (it waits, reported, until they are installed: Emacs never installs anything by itself), have
 ;; flags, doctor checks and settings.  The user's choices live in modules.eld in the user dir
-;; (`drgnx-user-dir'): disabled modules, enabled ones (those that are off until chosen), flags, external modules; older formats are migrated, an
-;; unreadable file is reported and ignored.  Preferences: Modules lists every module with its
-;; status and turns modules on and off.  See docs/guide/modules.md.
+;; (`drgnx-user-dir'): disabled modules, enabled ones (those that are off until chosen), flags,
+;; external modules; older formats are migrated, an unreadable file is reported and ignored.
+;; Preferences: Modules lists every module with its status and turns modules on and off.  See
+;; docs/guide/modules.md.
 
 ;;; Code:
 (require 'cl-lib)
@@ -133,13 +134,16 @@ the one it was defined with) is `off' and it is not in :enabled.  :disabled wins
              (not (memq module (plist-get state :enabled)))))))
 
 (defun drgnx-modules-set-enabled (module on)
-  "Choose MODULE on (ON non-nil: in :enabled, out of :disabled) or off (out of :enabled; a module that
-is on by default goes into :disabled) in modules.eld.  Returns the new state."
+  "Choose MODULE on or off in modules.eld.  A module that is off until chosen: ON adds it to :enabled and
+takes it out of :disabled; off takes it out of :enabled.  One that is on by default: ON takes it out of
+:disabled, off puts it there.  MODULE must be defined (its default is read from the table).  Returns
+the new state."
   (let* ((state (copy-sequence (drgnx-modules-read-state)))
          (enabled (remq module (plist-get state :enabled)))
          (disabled (remq module (plist-get state :disabled))))
-    (cond (on (setq enabled (append enabled (list module))))
-          ((not (drgnx-module-default-off-p module)) (setq disabled (append disabled (list module)))))
+    (cond ((drgnx-module-default-off-p module)       ; on by default: only :disabled matters
+           (when on (setq enabled (append enabled (list module)))))
+          ((not on) (setq disabled (append disabled (list module)))))
     (when (or enabled (plist-member state :enabled)) (setq state (plist-put state :enabled enabled)))
     (drgnx-modules-write-state (plist-put state :disabled disabled))
     (drgnx-modules-read-state)))
