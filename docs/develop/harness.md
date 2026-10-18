@@ -398,6 +398,29 @@ session launcher         systemd         # or detached (process group, no system
   needed. The container needs `--security-opt seccomp=unconfined --security-opt label=disable`: GTK loads icons
   through glycin, whose `bwrap` sandbox cannot create namespaces under the default policy, and Emacs aborts.
 
+## Real-tool tests
+
+Two live tests drive an external program drgnx only wraps, so they skip on a machine without it:
+`test/live/dape-live-test.el` (dape against a real debugpy adapter: a three-line script with a breakpoint on line 2
+stops there, and the top frame is at line 2) and `test/live/mermaid-live-test.el` (the Markdown module's mermaid
+job renders a two-node diagram with a real `mmdc`: a PNG through the module's job, an SVG through the same command
+line). `test/container/Containerfile.tools` has everything they need: fedora:45 with `emacs-pgtk`, `debugpy`
+(pip; Fedora has no package), dape 0.27.1 (the version `etc/drgnx.lock.eld` pins, checksum-checked, found through
+`$DRGNX_TOOLS_ELPA`), Node with `@mermaid-js/mermaid-cli` and Fedora's `chromium-headless`. The `mmdc` on its `PATH`
+is a wrapper that adds a puppeteer config with `--no-sandbox` (Chromium cannot sandbox as root in a container).
+
+The image is large (Chromium): build it with at least 3 GB of memory free, and cap the build and every run:
+
+```
+podman build --memory 3g --memory-swap 3g --jobs 1 -t drgnx-test-tools:f45 -f test/container/Containerfile.tools test/container
+podman run --rm --memory 3g --memory-swap 3g -v "$PWD:/src:ro,Z" -w /src drgnx-test-tools:f45 \
+  emacs --batch -Q -L harness -L core -L wb -l harness/run-ert.el -f drgnx-run-ert-batch \
+  test/live/dape-live-test.el test/live/mermaid-live-test.el
+```
+
+The runner gives the tests a temporary home, so nothing reaches `~`. `bin/drgnx test --ui` and CI do not build this
+image; there the two tests skip.
+
 ## MCP server
 
 `bin/drgnx ui mcp` serves the harness as MCP tools over stdio (`harness/drgnx-ui-mcp.el`, batch Emacs — no
