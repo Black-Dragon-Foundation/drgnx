@@ -53,14 +53,17 @@
 
 (defun drgnx-bootstrap--url-problem (value)
   "Why VALUE is not a configuration source bootstrap takes, or nil.  It takes an https URL with a host and no user
-name or password, or an absolute path that exists.  The reason never shows VALUE (it may hold a password)."
+name, password, query or fragment (git keeps the URL in .git/config and its logs), or an absolute path that
+exists.  The reason never shows VALUE (it may hold a password or a token)."
   (cond ((not (stringp value)) "it is missing")
         ((string-match-p "[[:cntrl:]]" value) "it holds a control character")
         ((string-prefix-p "https://" value)
          (let ((authority (car (split-string (substring value 8) "/"))))
            (cond ((string-match-p "[[:space:]]" value) "a URL with a blank in it")
                  ((string-empty-p authority) "a URL with no host")
-                 ((string-match-p "[@\\]" authority) "a URL with a user name or a password (use a git credential helper)"))))
+                 ((string-match-p "[@\\]" authority) "a URL with a user name or a password (use a git credential helper)")
+                 ((string-match-p "[?#]" value)
+                  "a URL with a query or fragment (?…, #…): put credentials in a git credential helper and drop the query"))))
         ((string-prefix-p "/" value) (unless (file-exists-p value) "a path that does not exist"))
         (t "not an https URL or an absolute path (not http, ssh, git@host:, file://, ext:: or a relative path)")))
 
@@ -74,18 +77,9 @@ owner can read.  The file is never read."
          (format "--identity: %s can be read by other users: chmod 600 %s, then run this again"
                  (shell-quote-argument file) (shell-quote-argument file)))))
 
-(defun drgnx-bootstrap--bare (url)
-  "URL without its query and fragment (a token can be in them): what is shown, and what .git/config keeps."
-  (if (string-prefix-p "/" url) url (replace-regexp-in-string "[?#].*\\'" "" url)))
-
-(defun drgnx-bootstrap--scrub (text url)
-  "TEXT (a program's message) without URL's query and fragment, wherever they appear in it."
-  (let ((extra (substring url (length (drgnx-bootstrap--bare url)))))
-    (if (string-empty-p extra) text (string-replace extra "" text))))
-
 (defun drgnx-bootstrap--label (url)
-  "URL as shown: a path as ~/…, a URL without its query and fragment."
-  (if (string-prefix-p "/" url) (drgnx-portable-path url) (drgnx-bootstrap--bare url)))
+  "URL as shown: a path as ~/…, a URL as it is (it has no user, password or query: `drgnx-bootstrap--url-problem')."
+  (if (string-prefix-p "/" url) (drgnx-portable-path url) url))
 
 (defun drgnx-bootstrap--word (file)
   "FILE as one shell word: ~/ unquoted (the shell expands it), the rest quoted."
@@ -267,8 +261,8 @@ an entry."
         ((or (file-exists-p dir) (file-symlink-p dir)) (list (file-name-nondirectory dir)))))
 
 (defun drgnx-bootstrap--norm-url (u)
-  "U compared as a remote: without query, fragment, a trailing slash or .git (the clone keeps it without query)."
-  (string-remove-suffix ".git" (string-remove-suffix "/" (drgnx-bootstrap--bare u))))
+  "U compared as a remote: without a trailing slash or .git."
+  (string-remove-suffix ".git" (string-remove-suffix "/" u)))
 
 (defun drgnx-bootstrap--same-repo-p (dir url)
   "Non-nil when DIR is the top of a git work tree whose origin is URL."
@@ -285,16 +279,10 @@ stopped clone leaves nothing."
     (setq tmp (make-temp-file (expand-file-name ".drgnx-clone-" parent) t))
     (unwind-protect
         (let* ((into (expand-file-name "config" tmp))
-               (r (drgnx-bootstrap--git "clone" "-q" "--template=" "--" url into))
-               (bare (drgnx-bootstrap--bare url))
-               ;; .git/config keeps the URL without its query (a token there would travel with every later copy)
-               (saved (if (or (not (eql (car r) 0)) (equal bare url)) r
-                        (drgnx-bootstrap--git "-C" into "config" "remote.origin.url" bare))))
+               (r (drgnx-bootstrap--git "clone" "-q" "--template=" "--" url into)))
           (cond
            ((not (eql (car r) 0))
-            (list 'failed (format "%s; nothing was changed" (drgnx-bootstrap--scrub (drgnx-bootstrap--why r "git clone") url))))
-           ((not (eql (car saved) 0))
-            (list 'failed (format "%s; nothing was changed" (drgnx-bootstrap--why saved "git config remote.origin.url"))))
+            (list 'failed (format "%s; nothing was changed" (drgnx-bootstrap--why r "git clone"))))
            (t
             (when (file-directory-p dir) (delete-directory dir)) ; empty: anything else fails here, and nothing moves
             (rename-file into dir)
@@ -339,9 +327,8 @@ shown, then `chezmoi apply' only after a second yes, never under --yes."
           (let* ((cz (drgnx-onboard--program 'chezmoi))
                  ;; stdout and stderr apart: a failure is named by chezmoi's error, never by a line of the files
                  (call (lambda (&rest args) (drgnx-bootstrap--call cz (cons "--no-tty" args) nil drgnx-bootstrap--git-env t)))
-                 (why (lambda (r what) (drgnx-bootstrap--scrub
-                                        (drgnx-bootstrap--why (if (integerp (car-safe r)) (cons (car r) (nth 2 r)) r) what)
-                                        url)))
+                 (why (lambda (r what)
+                        (drgnx-bootstrap--why (if (integerp (car-safe r)) (cons (car r) (nth 2 r)) r) what)))
                  (source (funcall call "source-path"))
                  (src (and (eql (car source) 0) (not (string-empty-p (nth 1 source))) (nth 1 source)))
                  (state (cond ((not (and src (drgnx-bootstrap--entries src))) 'none)

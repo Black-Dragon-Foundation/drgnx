@@ -94,7 +94,7 @@ and the shell integration. The plan names this as its last line (`Then: drgnx bo
 it. `bootstrap` asks on your terminal (`/dev/tty`), even when the script itself comes down a pipe.
 
 - **The URL** is `https://…` or a local path (a clone on a USB stick, a mounted directory). `http://`, `ssh://`,
-  `git@host:path`, `file://` and a URL with a user name or password in it are refused (exit 2): a password in a URL
+  `git@host:path`, `file://` and a URL with a user name, password or query (`?…`, `#…`) in it are refused (exit 2): a password in a URL
   shows in `ps` and in the shell history, so use a git credential helper for a private repository. The value is passed
   on as one argument and never evaluated by the shell. A local path must exist.
 - **`--identity FILE`** is an age identity file that decrypts `secrets.age` without a passphrase (for a machine

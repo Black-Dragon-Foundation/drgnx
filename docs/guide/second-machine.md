@@ -138,8 +138,8 @@ or `chezmoi apply` yourself. A chezmoi source dir that holds another repository 
 
 **The URL** is an https URL or an absolute path that exists. `http://`, `ssh://`, `git@host:path`, `file://`,
 `ext::`, a relative path and a URL with a user name or password are refused (exit 2) without showing the value; use
-a git credential helper for a private repository. A query or fragment (`?…`, `#…`) goes to git for the clone, but
-is never shown, and `.git/config` keeps the URL without it. git runs without your hooks, templates and commit signing, over
+a git credential helper for a private repository. A URL with a query or fragment (`?…`, `#…`) is refused too: git
+would keep it in `.git/config` and its logs, so put credentials in a credential helper and drop the query. git runs without your hooks, templates and commit signing, over
 https or a local path only, never asks for a password, and is stopped after two minutes. A clone goes into a new
 directory beside the config dir and is renamed into place only when it worked, so a failed or stopped clone leaves
 nothing behind. **`--identity FILE`** must be a file only you can read (`chmod 600`); bootstrap passes its path to

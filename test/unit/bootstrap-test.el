@@ -455,35 +455,30 @@ age is not on the path.  Returns the identity file."
         (should (eq (drgnx-bootstrap-test--status r 'config) 'changed))
         (should-not (file-exists-p marker))))))
 
-(ert-deftest drgnx-bootstrap/a-query-in-the-url-is-never-shown-or-saved ()
-  ;; git sees the URL as given; what is shown and what .git/config keeps has no query (a token can be in it).  No
-  ;; network: a git wrapper clones the fixture when it sees the https URL, or fails as git does for one not found.
+(ert-deftest drgnx-bootstrap/a-url-with-a-query-is-refused ()
+  ;; git would keep a query (a token, say) in .git/logs ("clone: from …?token=…"): refused before anything runs
   (let ((secret (concat "tok" (make-string 12 ?q))))
-    (dolist (fails '(nil t))
-      (drgnx-bootstrap-test--with (root url)
-        (let ((real (executable-find "git"))
-              (https (format "https://example.invalid/ana/config.git?token=%s" secret)))
-          (drgnx-bootstrap-test--write
-           (concat root "bin/git")
-           (format "#!/bin/bash
-args=()
-for a; do case $a in https://example.invalid/*'?'*) %s args+=(%s) ;; *) args+=(\"$a\") ;; esac; done
-exec %s \"${args[@]}\"
-" (if fails "echo \"fatal: repository '$a/' not found\" >&2; exit 128;" "") (shell-quote-argument url) (shell-quote-argument real))
-           #o755)
-          (let* ((r (car (drgnx-bootstrap-test--run :config https :only '(config))))
-                 (row (drgnx-bootstrap-test--row r 'config)))
-            (should-not (string-search secret (nth 2 row)))
-            (if fails
-                (progn (should (eq (nth 1 row) 'failed))
-                       (should (string-match-p "not found" (nth 2 row))))
-              (should (eq (nth 1 row) 'changed))
-              (should (equal (drgnx-bootstrap-test--git (concat root "config") "config" "--get" "remote.origin.url")
-                             "https://example.invalid/ana/config.git"))
-              (should-not (string-search secret (drgnx-bootstrap-test--text (concat root "config/.git/config"))))
-              ;; the next run knows it as the same clone
-              (should (eq (drgnx-bootstrap-test--status (car (drgnx-bootstrap-test--run :config https :only '(config))) 'config)
-                          'ok)))))))))
+    (drgnx-bootstrap-test--with (root _url)
+      (drgnx-bootstrap-test--fake root "git" "exit 0")
+      (drgnx-bootstrap-test--fake root "chezmoi" "exit 0")
+      (dolist (https (list (format "https://example.invalid/ana/config.git?token=%s" secret)
+                           (format "https://example.invalid/ana/config.git#%s" secret)
+                           "https://example.invalid/ana/config.git?"))
+        (dolist (opt '("--config" "--chezmoi"))
+          ;; the command line: a usage error that says what to do, the value never shown
+          (let ((r (drgnx-bootstrap-test--cli opt https)))
+            (should (equal (list opt https (car r)) (list opt https 2)))
+            (should (string-match-p "credential helper" (cdr r)))
+            (should (string-match-p "query" (cdr r)))
+            (should-not (string-search secret (cdr r)))))
+        ;; called from Lisp: config fails, nothing ran
+        (dolist (key '(:config :chezmoi))
+          (let ((row (drgnx-bootstrap-test--row (car (drgnx-bootstrap-test--run key https :only '(config))) 'config)))
+            (should (eq (nth 1 row) 'failed))
+            (should (string-match-p "credential helper" (nth 2 row)))
+            (should-not (string-search secret (nth 2 row))))))
+      (should (equal (drgnx-bootstrap-test--log root) ""))
+      (should-not (file-exists-p (concat root "config"))))))
 
 (ert-deftest drgnx-bootstrap/a-failed-clone-leaves-nothing ()
   (drgnx-bootstrap-test--with (root _url)

@@ -123,13 +123,15 @@ unsets it); return (EXIT . OUTPUT)."
   (dolist (bad '("http://example.invalid/c.git" "ssh://git@example.invalid/c.git" "git@example.invalid:me/c.git"
                  "file:///srv/c.git" "ext::sh -c touch% /tmp/pwned" "git://example.invalid/c.git"
                  "https://me:tok@example.invalid/c.git" "https://me@example.invalid/c.git"
-                 "https://example.invalid/a b.git" "https://example.invalid/a\nb.git"))
+                 "https://example.invalid/a b.git" "https://example.invalid/a\nb.git"
+                 ;; git keeps a query (a token) in .git/config and its logs
+                 "https://example.invalid/c.git?token=x" "https://example.invalid/c.git#x"))
     (dolist (opt '("--config" "--chezmoi"))
       (let ((r (drgnx-install-config-test--plan opt bad)))
         (should (= (car r) 2))
         (should (string-search "https URL or a local path" (cdr r)))
         (should-not (string-search "Then:" (cdr r))))))
-  (dolist (good '("https://example.invalid/c.git" "https://codeberg.org/me/c.git?x=1"))
+  (dolist (good '("https://example.invalid/c.git" "https://codeberg.org/me/c.git"))
     (should (= (car (drgnx-install-config-test--plan "--config" good)) 0)))
   ;; local paths are made absolute (the hand-over runs in another directory's context), ~/ is HOME
   (let ((r (drgnx-install-config-test--plan "--config" "rel/c.git")))

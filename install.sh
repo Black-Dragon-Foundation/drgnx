@@ -96,12 +96,13 @@ home_path() { case "$1" in "~/"*) printf '%s' "$HOME/${1#"~/"}" ;; *) printf '%s
 # echoed in an error (it may hold a password).
 config_ref() {
   local var="$1" opt="$2" v="$3" rest
-  local why="$opt takes an https URL or a local path (not http, ssh, git@host:, file:// or a URL with a password: use a git credential helper for private repositories)"
+  local why="$opt takes an https URL or a local path (not http, ssh, git@host:, file://, or a URL with a password or a query: put credentials in a git credential helper and drop the query)"
   if [[ "$v" == *[[:cntrl:]]* ]]; then die 2 "$why"; fi
   case "$v" in
     https://*)
       rest="${v#https://}"
-      if [[ -z "${rest%%/*}" || "${rest%%/*}" == *@* || "$rest" == *[[:space:]]* ]]; then die 2 "$why"; fi
+      # git keeps the URL in .git/config and its logs: no user, password or query (a token) in it
+      if [[ -z "${rest%%/*}" || "${rest%%/*}" == *@* || "$rest" == *[[:space:]]* || "$rest" == *[?#]* ]]; then die 2 "$why"; fi
       printf -v "$var" '%s' "$v" ;;
     *)
       if [[ "$v" =~ ^[^/]*: ]]; then die 2 "$why"; fi          # a scheme, or scp-style host:path
