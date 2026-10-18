@@ -851,6 +851,7 @@ The commands of modules that need no installed package are in it, the later stag
                               layout-next browser-go keyboard-shortcuts shortcuts-change shortcuts-add shortcuts-filter
                               shortcuts-record-filter shortcuts-conflicts shortcuts-no-key shortcuts-changed
                               shortcuts-undo shortcuts-reset shortcuts-reset-all shortcuts-profile
+                              shortcuts-tty-fallback  ; M12b's terminal fallback in the Shortcuts editor
                               quit preferences edit-line-start edit-line-end edit-buffer-start edit-buffer-end edit-word-left
                               edit-word-right edit-delete-word-back edit-delete-line-back edit-copy edit-cut edit-paste))
          (drgnx-keys-test--later-stages t)
