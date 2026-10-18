@@ -122,4 +122,41 @@
       (should (string-search "No pull requests here yet" (with-current-buffer "*drgnx pull requests*" (buffer-string))))
       (should (seq-some (lambda (m) (string-search "Invalid slot name" m)) messages)))))
 
+(defun drgnx-prs-test--stacks-reference (prs)
+  "The quadratic first version of `drgnx-prs-stacks', kept to compare the order against."
+  (let ((seen (make-hash-table)) (out nil)
+        (newest (lambda (l) (sort (copy-sequence l) (lambda (a b) (> (plist-get a :number) (plist-get b :number)))))))
+    (cl-labels ((children (p) (and (not (plist-get p :cross))
+                                   (seq-filter (lambda (q) (and (not (eq q p)) (equal (plist-get q :base) (plist-get p :head)))) prs)))
+                (walk (p depth)
+                  (unless (gethash (plist-get p :number) seen)
+                    (puthash (plist-get p :number) t seen)
+                    (push (cons p depth) out)
+                    (dolist (c (funcall newest (children p))) (walk c (1+ depth))))))
+      (dolist (r (funcall newest (seq-remove (lambda (p) (seq-some (lambda (q) (and (not (eq q p)) (not (plist-get q :cross)) (equal (plist-get p :base) (plist-get q :head))))
+                                                                   prs))
+                                             prs)))
+        (walk r 0))
+      (dolist (p (funcall newest prs)) (walk p 0)))
+    (nreverse out)))
+
+(ert-deftest drgnx-prs/stacks-same-order ()
+  ;; M11b-9: hashing the heads changes the cost, not the order (cycles, forks, shared heads and bases included)
+  (let ((names ["main" "a" "b" "c" "d" "e" "f" "g"]) (state 7))
+    (dotimes (_ 40)
+      (let ((prs (cl-loop for n from 1 to 30
+                          collect (progn (setq state (mod (+ (* state 1103515245) 12345) 2147483648))
+                                         (let ((b (aref names (mod (ash state -8) 8))) (h (aref names (mod (ash state -14) 8))))
+                                           (append (drgnx-prs-test--pr n b h) (and (zerop (mod (ash state -20) 5)) '(:cross t))))))))
+        (should (equal (mapcar (lambda (e) (cons (plist-get (car e) :number) (cdr e))) (drgnx-prs-stacks prs))
+                       (mapcar (lambda (e) (cons (plist-get (car e) :number) (cdr e))) (drgnx-prs-test--stacks-reference prs))))))))
+
+(ert-deftest drgnx-prs/2000-prs-stack-fast ()
+  :tags '(:timing)                                       ; wall-clock: a quiet machine
+  (let* ((prs (cl-loop for n from 1 to 2000
+                       collect (drgnx-prs-test--pr n (if (zerop (mod n 3)) (format "h%d" (1- n)) "main") (format "h%d" n))))
+         (t0 (float-time)) (s (drgnx-prs-stacks prs)))
+    (should (= 2000 (length s)))
+    (should (< (- (float-time) t0) 0.25))))
+
 ;;; mod-prs-test.el ends here

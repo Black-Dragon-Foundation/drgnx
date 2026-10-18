@@ -80,16 +80,19 @@
 not a fork's) right after it, one deeper;
 newest first at each level.  Every PR appears once, a cycle cut where it is found."
   (let ((seen (make-hash-table)) (out nil)
+        (by-base (make-hash-table :test #'equal)) (by-head (make-hash-table :test #'equal))   ; each PR looked up once, not scanned for
         (newest (lambda (l) (sort (copy-sequence l) (lambda (a b) (> (plist-get a :number) (plist-get b :number)))))))
+    (dolist (p prs)
+      (push p (gethash (plist-get p :base) by-base))
+      (unless (plist-get p :cross) (push p (gethash (plist-get p :head) by-head))))
     (cl-labels ((children (p) (and (not (plist-get p :cross))   ; a fork's branch (often its main) is no base here
-                                   (seq-filter (lambda (q) (and (not (eq q p)) (equal (plist-get q :base) (plist-get p :head)))) prs)))
+                                   (seq-remove (lambda (q) (eq q p)) (gethash (plist-get p :head) by-base))))
                 (walk (p depth)
                   (unless (gethash (plist-get p :number) seen)
                     (puthash (plist-get p :number) t seen)
                     (push (cons p depth) out)
                     (dolist (c (funcall newest (children p))) (walk c (1+ depth))))))
-      (dolist (r (funcall newest (seq-remove (lambda (p) (seq-some (lambda (q) (and (not (eq q p)) (not (plist-get q :cross)) (equal (plist-get p :base) (plist-get q :head))))
-                                                                   prs))
+      (dolist (r (funcall newest (seq-remove (lambda (p) (seq-some (lambda (q) (not (eq q p))) (gethash (plist-get p :base) by-head)))
                                              prs)))
         (walk r 0))
       (dolist (p (funcall newest prs)) (walk p 0)))       ; what a cycle left
