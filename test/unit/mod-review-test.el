@@ -255,4 +255,18 @@
     (drgnx-review--check-head run)                      ; no error
     (should-not (process-live-p (plist-get run :checking)))))
 
+(ert-deftest drgnx-review/turning-it-off-kills-the-reviewers-and-forgets-the-runs ()
+  ;; The hooks that confine a reviewer go with the module, so its running sessions go too.
+  (let* ((killed nil) (running (drgnx-agents--make :id "rev-run" :name "r1" :status 'idle :conn 'fake))
+         (answered (drgnx-agents--make :id "rev-done" :name "r2" :status 'idle :conn 'fake))
+         (drgnx-agents--sessions (list running answered)))
+    (cl-letf (((symbol-function 'drgnx-agents-kill) (lambda (x) (push x killed))))
+      (drgnx-test-with-modules '(tools/review) :strict t
+                               (puthash "rev-run" (list :root "/x/" :state 'reviewing) drgnx-review--runs)
+                               (puthash "rev-done" (list :root "/x/" :state 'done) drgnx-review--runs)
+                               (setq drgnx-review--current "rev-run")))
+    (should (equal killed (list running)))
+    (should (zerop (hash-table-count drgnx-review--runs)))
+    (should-not drgnx-review--current)))
+
 ;;; mod-review-test.el ends here

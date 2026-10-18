@@ -29,6 +29,7 @@
 (declare-function drgnx-agent-session-status "drgnx-agents")
 (declare-function drgnx-agent-session-paused "drgnx-agents")
 (declare-function drgnx-agents-kill "drgnx-agents")
+(declare-function drgnx-agents-get "drgnx-agents")
 (declare-function drgnx-wb-define-tab "drgnx-area")
 (declare-function drgnx-wb-area-show "drgnx-area")
 (declare-function drgnx-wb-editor-window "drgnx-wb")
@@ -259,7 +260,15 @@ master); its findings land in the Review tab."
       s)))
 
 (defun drgnx-review--teardown ()
-  "Turned off: the Review tab is closed.  Runs stay: their agents are the user's sessions."
+  "Turned off: the reviewers still working are killed (the hooks that confine and feed them go with the module),
+the runs are forgotten and the Review tab is closed."
+  (maphash (lambda (sid run)
+             (when (eq (plist-get run :state) 'reviewing)
+               (when-let* (((fboundp 'drgnx-agents-get)) (s (drgnx-agents-get sid)))
+                 (drgnx-agents-kill s))))
+           drgnx-review--runs)
+  (clrhash drgnx-review--runs)
+  (setq drgnx-review--current nil)
   (dolist (b (buffer-list))
     (when (provided-mode-derived-p (buffer-local-value 'major-mode b) 'drgnx-review-mode)
       (let ((kill-buffer-query-functions nil)) (kill-buffer b)))))
