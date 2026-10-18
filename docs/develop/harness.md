@@ -32,9 +32,12 @@ own `make check` does: a hook, timer, advice, feature or variable a file leaves 
 so a test cannot pass or fail because of the file that happened to run before it. Within a file, ERT still runs the
 tests in name order in one Emacs. Each file's Emacs gets the runner's `load-path` and environment — the temp HOME
 and XDG directories, the dead session bus, `$DRGNX_TEST_SELECTOR` (applied inside each file), the trampoline
-directory below — and a temp directory (and HOME) of its own, removed when it ends: inside `$DRGNX_RUN_TMP` under
-`bin/drgnx test`, beside the runner's own under `check`, never deeper than a single Emacs's would be (a Unix socket
-path has ~104 bytes). It writes its own summary; the runner merges them into one, in the same shape, plus `"files"`
+directory below — and a temp directory of its own (its `TMPDIR`, HOME, state and `XDG_RUNTIME_DIR`), removed when it
+ends. Those directories are made in a short root of the run's, `/tmp/drgnx-t-XXXXXX/` (mode 0700; the caller's
+`$TMPDIR` only where `/tmp` cannot be written), whatever `$TMPDIR` is, and the root goes when the run ends or is
+stopped: a Unix socket's path has at most 103 bytes on macOS (104 with its closing NUL; 107 on Linux), the hub's tests
+make one three levels below a file's directory (`run/drgnx/hub-HASH.sock`), and macOS's `$TMPDIR`
+(`/var/folders/xx/…/T/`, 49 bytes) with two `drgnx-run.XXXXXX/` levels below it leaves no room. It writes its own summary; the runner merges them into one, in the same shape, plus `"files"`
 (`[{"file","exit","seconds"}]`). A file whose Emacs dies (a test calls `kill-emacs`), exits non-zero without a failed
 test, or runs longer than `$DRGNX_TEST_FILE_TIMEOUT` seconds (default 300; it gets TERM, 5 s, then KILL, with what it
 started) is a failure named `file NAME-test.el`, and the other files still run. Files run one after another;

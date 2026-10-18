@@ -97,6 +97,17 @@ summary to RESULTS-FILE.  Return t if every test passed."
 
 (defvar drgnx-run-ert--file-dirs nil "The temp directories of the per-file Emacsen running now.")
 
+(defvar drgnx-run-ert--file-root nil "The short directory the per-file Emacsen's temp directories are made in.")
+
+(defun drgnx-run-ert--short-root ()
+  "A new directory of this user's (mode 0700) right in /tmp (`temporary-file-directory' where /tmp cannot be
+written), for the per-file Emacsen's temp directories.  A Unix socket's path has at most 103 bytes on macOS (104
+with its closing NUL; 107 on Linux), and the hub's tests make one three levels below a file's temp directory
+\(run/drgnx/hub-HASH.sock): macOS's TMPDIR (/var/folders/xx/…/T/, 49 bytes) or any deep one leaves no room for
+that, /tmp/drgnx-t-XXXXXX/drgnx-run.XXXXXX/ (37 bytes) does."
+  (let ((temporary-file-directory (if (file-writable-p "/tmp/") "/tmp/" temporary-file-directory)))
+    (with-file-modes #o700 (make-temp-file "drgnx-t-" t))))
+
 (defun drgnx-run-ert--env-number (var default)
   "The whole number above 0 in the environment variable VAR, else DEFAULT."
   (let ((s (getenv var)))
@@ -113,10 +124,13 @@ to clean up, then KILL."
 
 (defun drgnx-run-ert--end-files ()
   "`kill-emacs-hook' of a per-file run (C-c, TERM): end the files' Emacsen, which run in process groups of their own,
-and remove their temp directories."
+and remove their temp directories and the root they are in."
   (dolist (p drgnx-run-ert--file-processes)
     (when (process-live-p p) (ignore-errors (signal-process (- (process-id p)) 'TERM))))
-  (dolist (d drgnx-run-ert--file-dirs) (ignore-errors (delete-directory d t))))
+  (dolist (d drgnx-run-ert--file-dirs) (ignore-errors (delete-directory d t)))
+  (when drgnx-run-ert--file-root
+    (ignore-errors (delete-directory drgnx-run-ert--file-root t))
+    (setq drgnx-run-ert--file-root nil)))
 
 (defun drgnx-run-ert--start-file (file tmp json buffer)
   "Start an Emacs that runs the test FILE alone (`drgnx-run-ert-batch', this Emacs's `load-path' and environment),
@@ -179,11 +193,12 @@ the files it needs."
             (setq found (string-match-p selector (match-string 1))))
           found))))
 
-(defun drgnx-run-ert-files (files results-file &optional tmp-parent)
+(defun drgnx-run-ert-files (files results-file)
   "Run each test file of FILES in an Emacs of its own, as Emacs's own `make check' does: a hook, timer, feature or
 variable one file leaves never reaches the next.  Each gets this Emacs's `load-path' and environment (selector,
-eln directory, no desktop), a temp directory of its own made in TMP-PARENT (default `temporary-file-directory') and
-removed when it ends, and writes its own summary; one merged summary goes to RESULTS-FILE.  DRGNX_TEST_JOBS files
+eln directory, no desktop), a temp directory of its own (its TMPDIR, runtime and state directories: short, so its
+sockets fit, see `drgnx-run-ert--short-root') removed when it ends, and writes its own summary; one merged summary
+goes to RESULTS-FILE.  The root of those directories goes when the run ends, or is stopped.  DRGNX_TEST_JOBS files
 run at once (default 1); one that runs DRGNX_TEST_FILE_TIMEOUT seconds (default 300) is ended.  Return t when every
 file passed."
   (let* ((selector (let ((s (getenv "DRGNX_TEST_SELECTOR"))) (and s (not (string-empty-p s)) (car (read-from-string s)))))
@@ -195,12 +210,13 @@ file passed."
                          collect (list :file file :json (expand-file-name (format "%d.json" i) out-dir))))
          (count (length queue)) (running nil) (done nil) (t0 (float-time)))
     (add-hook 'kill-emacs-hook #'drgnx-run-ert--end-files)
+    (setq drgnx-run-ert--file-root (file-name-as-directory (drgnx-run-ert--short-root)))
     (unwind-protect
         (while (or queue running)
           (while (and queue (< (length running) jobs))
             (let* ((f (pop queue)) (buffer (and (> jobs 1) (generate-new-buffer " *drgnx-test-file*")))
                    ;; named as bin/drgnx names a run's directory, so the file's runner takes it as given
-                   (tmp (let ((temporary-file-directory (file-name-as-directory (or tmp-parent temporary-file-directory))))
+                   (tmp (let ((temporary-file-directory drgnx-run-ert--file-root))
                           (make-temp-file "drgnx-run." t))))
               (unless buffer (message "drgnx: %s (%d/%d)" (plist-get f :file) (- count (length queue)) count))
               (push tmp drgnx-run-ert--file-dirs)
@@ -358,10 +374,8 @@ exit 0 or 1."
          (project-list-file (expand-file-name "projects" tmp))
          (ok (if one-process
                  (drgnx-run-ert dir (getenv "DRGNX_TEST_RESULTS"))
-               ;; each file's directory as deep as this one (a socket path has ~104 bytes): in the run's given
-               ;; directory, else beside this run's own (check's shards: in check's)
-               (drgnx-run-ert-files (drgnx-run-ert--files dir) (getenv "DRGNX_TEST_RESULTS")
-                                    (if given tmp (file-name-directory (directory-file-name own)))))))
+               ;; each file's directory in a short root of its own (a socket path has at most 103 bytes on macOS)
+               (drgnx-run-ert-files (drgnx-run-ert--files dir) (getenv "DRGNX_TEST_RESULTS")))))
     (when own (delete-directory own t))
     (kill-emacs (if ok 0 1))))
 

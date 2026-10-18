@@ -590,9 +590,12 @@ case \"$*\" in *is-enabled*) [ -f %s ] ;; *start*) touch %s ;; esac"
                                                               (concat "DRGNX_TEST_DIR=" suite))
                                          "test")))
             (should (eql 0 (car r))))
-          ;; the test did run in a temp dir below PARENT, not in PARENT itself …
-          (should (string-prefix-p (file-name-as-directory parent) (drgnx-bin-test--slurp probe)))
-          ;; … and nothing of it is left
+          ;; the test did run in a temp dir of its own (in the runner's short root, so its sockets fit), not in
+          ;; PARENT itself …
+          (let ((seen (drgnx-bin-test--slurp probe)))
+            (should (string-match-p "\\`/tmp/drgnx-t-[A-Za-z0-9]\\{6\\}/drgnx-run\\.[A-Za-z0-9]\\{6\\}/\\'" seen))
+            ;; … and nothing of it is left, there nor in PARENT
+            (should-not (file-exists-p (file-name-directory (directory-file-name seen)))))
           (should-not (drgnx-bin-test--left parent)))
       (delete-directory dir t))))
 
@@ -699,7 +702,9 @@ case \"$*\" in *is-enabled*) [ -f %s ] ;; *start*) touch %s ;; esac"
               (signal-process proc sig)
               (should (drgnx-bin-test--wait-exit proc 30))
               (should (drgnx-bin-test--wait-for (lambda () (not (drgnx-bin-test--pid-alive-p pid))) 10)))
-            (should-not (drgnx-bin-test--left parent)))
+            (should-not (drgnx-bin-test--left parent))
+            ;; nor the runner's short root its test ran in
+            (should-not (file-exists-p (file-name-directory (directory-file-name (drgnx-bin-test--slurp probe))))))
         (when (process-live-p proc) (kill-process proc))
         (delete-directory dir t)))))
 
