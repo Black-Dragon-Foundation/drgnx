@@ -407,6 +407,9 @@ timer and non-nil for an idle one (once per pause), as in `run-at-time` and `run
   until it is killed: its first timer adds `drgnx-timer--buffer-killed` to the buffer's own `kill-buffer-hook`
   (permanent-local, as is its key list `drgnx-timer--buffer-keys`; no global hook). A process owns them while it
   lives. `:core` lives as long as Emacs (the hub tick, the GC).
+  Module repeats are keyed this way: `tools/agents` owns `agents-ui-mirror` (idle, every 30 s) and `tools/jobs` owns
+  `job-ui-recount-idle` (idle, every 60 s), so a second setup replaces the timer instead of stacking another, and
+  turning the module off ends it.
 
 ### What the fire wrapper guarantees
 

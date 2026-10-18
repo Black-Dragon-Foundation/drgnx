@@ -1,6 +1,8 @@
 ;;; agents-ui-test.el --- batch tests: transcripts, the Agents list, edit review -*- lexical-binding: t -*-
 (require 'ert)
 (require 'drgnx)
+(require 'drgnx-timer)
+(load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
 (load (expand-file-name "modules/tools/drgnx-agents-ui" drgnx-dir) nil t)
 
 (defconst drgnx-agents-ui-test--mock (expand-file-name "test/fixtures/mock-acp.el" drgnx-dir))
@@ -235,5 +237,37 @@ answers recorded in ANSWERS)."
     (cl-letf (((symbol-function 'drgnx-jobs-list) (lambda () (setq calls (1+ calls)) nil)))
       (drgnx-agents-ui--entries) (drgnx-agents-ui--entries) (drgnx-agents-ui--entries)
       (should (= calls 1)))))
+
+(defun drgnx-agents-ui-test--fires ()
+  "How many idle timers on the list are the timer layer's."
+  (let ((n 0)) (dolist (tm timer-idle-list n) (when (eq (timer--function tm) #'drgnx-timer--fire) (setq n (1+ n))))))
+
+(ert-deftest drgnx-agents-ui/the-mirror-timer-has-an-owner ()
+  ;; B1: the 30 s repeat belongs to the module's setup, so a second setup (or a reload) cannot stack another.
+  (let* ((state (make-temp-file "drgnx-agents-ui-state" t))
+         (process-environment (cons (concat "XDG_STATE_HOME=" state) process-environment))
+         (drgnx-modules--table (list (assq 'tools/agents drgnx-modules--table)))
+         (drgnx-modules--report nil) (drgnx-modules--stacks nil) (drgnx-modules--runs nil) (drgnx-modules--features nil)
+         (setup (plist-get (cdar drgnx-modules--table) :setup)))
+    (unwind-protect
+        (drgnx-test-with-clock (:allow-pending t)
+          (dotimes (_ 3)
+            (should-not (drgnx-modules--run-setup 'tools/agents setup))
+            (drgnx-modules--record 'tools/agents 'startup 0 'ok)
+            (should (drgnx-timer-active-p 'agents-ui-mirror))
+            (should (= 1 (drgnx-agents-ui-test--fires)))
+            (should-not (drgnx-module-teardown 'tools/agents))
+            (should-not (drgnx-timer-active-p 'agents-ui-mirror))
+            (should (= 0 (drgnx-agents-ui-test--fires)))
+            (should (= 0 (drgnx-timer-cancel-owner 'tools/agents))))
+          ;; the 30 s idle repeat is unchanged: once per pause
+          (should-not (drgnx-modules--run-setup 'tools/agents setup))
+          (let ((idle (seq-find (lambda (tm) (eq (timer--function tm) #'drgnx-timer--fire)) timer-idle-list)))
+            (should idle)
+            (should (= 30 (float-time (timer--time idle))))
+            (should (timer--repeat-delay idle)))
+          (drgnx-module-teardown 'tools/agents)
+          (mapc #'cancel-timer (append timer-list timer-idle-list)))
+      (delete-directory state t))))
 
 ;;; agents-ui-test.el ends here
