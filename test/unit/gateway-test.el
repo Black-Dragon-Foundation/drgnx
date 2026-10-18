@@ -46,7 +46,7 @@ the gateway told."
        (delete-directory root t))))
 
 (cl-defun drgnx-gw-test--request (port &key token (body "{\"model\":\"claude-x\",\"stream\":true}") (path "/v1/messages")
-                                       hang-up-after (wait 8))
+                                       hang-up-after (wait 8) extra)
   "Send a request to the gateway; (:status N :head S :body S :first SECS :closed BOOL) once it closed (or WAIT s)."
   (let* ((got "") (first nil) (t0 (float-time)) (closed nil)
          (c (open-network-stream "gw-test" nil "127.0.0.1" port :coding 'binary))
@@ -60,6 +60,7 @@ the gateway told."
                             (when (and hang-up-after first) (delete-process p) (setq closed t))))
     (process-send-string c (concat (format "POST %s HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\n" path)
                                    (if token (format "Authorization: Bearer %s\r\n" token) "")
+                                   (or extra "")
                                    (format "Content-Length: %d\r\n\r\n" (length bytes))
                                    bytes))
     (let ((deadline (+ (float-time) wait))) (while (and (not closed) (< (float-time) deadline)) (accept-process-output nil 0.01)))
@@ -250,5 +251,28 @@ the gateway told."
       (dolist (f (directory-files-recursively root "" nil))
         (unless (member (file-name-nondirectory f) '("or.log"))
           (should-not (string-search "sk-mem-only" (with-temp-buffer (set-buffer-multibyte nil) (insert-file-contents-literally f) (buffer-string)))))))))
+
+(defun drgnx-gw-test--fake-curl (root)
+  "A `curl' that only keeps its stdin (the config) in ROOT/curl.config; the directory to put first on `exec-path'."
+  (let ((dir (concat root "fakebin/")) (file (concat root "fakebin/curl")))
+    (make-directory dir t)
+    (with-temp-file file (insert "#!/bin/sh\ncat > \"" root "curl.config\"\n"))
+    (set-file-modes file #o755)
+    dir))
+
+(defun drgnx-gw-test--config (root)
+  "What the gateway gave the fake curl, once it came."
+  (let ((file (concat root "curl.config")))
+    (drgnx-gw-test--settle (lambda () (and (file-exists-p file) (> (file-attribute-size (file-attributes file)) 0))))
+    (drgnx-gw-test--log file)))
+
+(ert-deftest drgnx-gateway/config-suppresses-proxy-connect-head ()
+  ;; behind an https proxy curl's `include' would also print the proxy's CONNECT head: the gateway would take it for
+  ;; the provider's answer
+  (drgnx-gw-test--with '() '()
+    (let ((exec-path (cons (drgnx-gw-test--fake-curl root) exec-path))
+          (token (drgnx-gateway-register '(:chain ((openrouter . nil))))))
+      (drgnx-gw-test--request port :token token :wait 1)
+      (should (string-match-p "^suppress-connect-headers$" (drgnx-gw-test--config root))))))
 
 ;;; gateway-test.el ends here

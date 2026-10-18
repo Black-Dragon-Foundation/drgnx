@@ -236,7 +236,7 @@ it, through its sentinel, the request upstream), never an error in a filter."
          (header (lambda (name value) (concat "header = " (drgnx-gateway--quote (concat name ": " value)) "\n")))
          (config (concat "url = " (drgnx-gateway--quote url) "\n"
                          "request = " (drgnx-gateway--quote (plist-get req :method)) "\n"
-                         "no-buffer\ninclude\nsilent\nshow-error\nconnect-timeout = 10\n"
+                         "no-buffer\ninclude\nsilent\nshow-error\nsuppress-connect-headers\nconnect-timeout = 10\n"
                          (mapconcat (lambda (h) (if-let* ((v (drgnx-http-header req h))) (funcall header h v) ""))
                                     '("content-type" "accept" "anthropic-version" "anthropic-beta") "")
                          (cond ((null key) "")

@@ -21,6 +21,8 @@ User docs: [Agents → The hub and the gateway](../guide/agents.md#the-hub-and-t
   touch the keystroke budget.
 - **curl**, one per forwarded request, reads its config on stdin (`-K -`): the URL, the provider's key header and the
   request body never appear in its argv.
+  The config has `suppress-connect-headers`: behind an HTTPS proxy curl's `include` would otherwise print the
+  proxy's CONNECT head first, and the gateway would take it for the provider's answer.
 
 ## The control socket
 
