@@ -1,8 +1,9 @@
 ;; Vim key profile — command id → keys (docs/guide/keys.md).  Commands are on the leader key (SPC), in
 ;; drgnx's own leader map (:map), which the modal engine plugs into its normal, visual and motion states: the
 ;; keys exist, and show on every surface, before evil is installed.  Keys outside the leader (C-w h, g d, panel
-;; j/k) go in the map of their command or entry, else evil's normal state.  :claims are Vim's own normal-mode
-;; keys, so a layer that rebinds one of them is reported.
+;; j/k) go in the map of their command or entry, else evil's normal state.  :claims are evil's own keys, (SCOPE
+;; KEY DESCRIPTION STATES) with the states evil binds them in: another layer's key there is kept and reported,
+;; and the higher layer wins in those states only.  Once evil loads, its own maps replace this list.
 (:name "Vim"
  :doc "Vim / Neovim keys (evil), commands on the SPC leader"
  :map drgnx-modal-leader-map
@@ -309,20 +310,20 @@
         (panel-next "j")
         (panel-previous "k")
         (modal-toggle "SPC u m"))
- :claims ((editing "C-o" "jump back")
-          (editing "C-w" "window commands (prefix)")
-          (editing "C-v" "visual block")
-          (editing "C-a" "increment number")
-          (editing "C-x" "decrement number")
-          (editing "C-u" "scroll up")
-          (editing "C-d" "scroll down")
-          (editing "C-r" "redo")
-          (editing "C-e" "scroll line down")
-          (editing "C-y" "scroll line up")
-          (editing "C-f" "page down")
-          (editing "C-b" "page up")
-          (editing "C-n" "next line")
-          (editing "C-p" "previous line")
-          (editing "C-t" "tag stack back")
-          (editing "C-z" "emacs state")
-          (editing "C-]" "jump to tag")))
+ :claims ((editing "C-o" "Jump Back" (normal visual motion insert))
+          (editing "C-w" "Window Commands (prefix)" (normal visual motion insert))
+          (editing "C-v" "Visual Block" (normal visual motion insert))
+          (editing "C-a" "Paste Last Insertion" (insert))
+          (editing "C-x" "Completion (prefix)" (insert))
+          (editing "C-u" "Scroll Up" (normal visual motion))
+          (editing "C-d" "Scroll Down" (normal visual motion insert))
+          (editing "C-r" "Redo" (normal visual insert))
+          (editing "C-e" "Scroll Line Down" (normal visual motion insert))
+          (editing "C-y" "Scroll Line Up" (normal visual motion insert))
+          (editing "C-f" "Page Down" (normal visual motion))
+          (editing "C-b" "Page Up" (normal visual motion))
+          (editing "C-n" "Next Paste or Completion" (normal visual insert))
+          (editing "C-p" "Previous Paste or Completion" (normal visual insert))
+          (editing "C-t" "Tag Stack Back" (normal visual insert))
+          (editing "C-z" "Emacs State" (normal visual motion insert))
+          (editing "C-]" "Jump to Tag" (normal visual motion))))
