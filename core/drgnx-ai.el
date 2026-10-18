@@ -286,10 +286,7 @@ later — after the window it opened shows, never inside its emacsclient call.  
   (auth-source-forget+ :host host)
   (let* ((auth-sources (list (drgnx-ai--secret-source)))
          (auth-source-do-cache nil)
-         ;; the Keychain may hold other internet passwords for the host: ask for the account the store wrote
-         (secret (plist-get (car (apply #'auth-source-search :host host :max 1 :create nil
-                                        (and (eq system-type 'darwin) '(:user "drgnx"))))
-                            :secret)))
+         (secret (plist-get (car (auth-source-search :host host :max 1 :create nil)) :secret)))
     (if (functionp secret) (funcall secret) secret)))
 
 (defun drgnx-ai--dbus-session-p ()
@@ -334,11 +331,49 @@ the program's output is discarded."
   "S as one word for `security -i' (it splits like a shell): in double quotes, \\ and \" escaped."
   (concat "\"" (replace-regexp-in-string "[\\\"]" "\\\\\\&" s) "\""))
 
+(defun drgnx-ai--security-call (args)
+  "Run `drgnx-ai--security-program' with ARGS and an empty stdin, waiting at most `drgnx-ai--store-timeout'
+seconds (\\[keyboard-quit] stops it): (STATUS . OUTPUT), STATUS its exit status or `timeout', OUTPUT its standard
+output, gathered in a string (never a buffer); its standard error is discarded."
+  (let ((coding-system-for-read 'utf-8-unix) (chunks nil) (out nil) err proc)
+    (unwind-protect
+        (progn
+          (setq err (make-pipe-process :name "drgnx-secret-err" :buffer nil :noquery t :filter #'ignore :sentinel #'ignore))
+          (setq proc (make-process :name "drgnx-secret" :command (cons drgnx-ai--security-program args) :buffer nil
+                                   :connection-type 'pipe :noquery t :stderr err :sentinel #'ignore
+                                   :filter (lambda (_ s) (push s chunks))))
+          (ignore-errors (process-send-eof proc))
+          (let ((deadline (+ (float-time) drgnx-ai--store-timeout)))
+            (while (and (process-live-p proc) (< (float-time) deadline))
+              (accept-process-output proc 0.1)))
+          (if (process-live-p proc) (list 'timeout)
+            (cons (process-exit-status proc) (setq out (apply #'concat (reverse chunks))))))
+      (dolist (c chunks) (unless (eq c out) (clear-string c)))   ; the caller clears OUTPUT
+      (when (process-live-p proc) (delete-process proc))
+      (when err (delete-process err)))))
+
+(defun drgnx-ai--keychain-verify (host key env)
+  "Read drgnx's Keychain item for HOST back with the same `security' program and compare it with KEY, showing
+neither: `security -i''s exit status does not say how it parsed the line.  On anything but KEY itself (another
+value, no item, an error, no answer) the item is deleted and a `user-error' names ENV as the way around."
+  (let* ((item (list "-a" "drgnx" "-s" host "-r" "htps"))
+         (back (cdr (drgnx-ai--security-call (append '("find-internet-password") item '("-w")))))
+         (n (length key)))
+    (unwind-protect
+        (unless (and back (= (length back) (1+ n)) (eq (aref back n) ?\n) (eq t (compare-strings back 0 n key 0 n)))
+          (user-error "The Keychain did not give the key back as it was given, so %s. Store it again, or set %s instead"
+                      (if (eql 0 (car (drgnx-ai--security-call (cons "delete-internet-password" item))))
+                          "drgnx removed it"
+                        (format "remove the drgnx item for %s in Keychain Access" host))
+                      env))
+      (when back (clear-string back)))))
+
 (defun drgnx-ai-store-key (id key)
   "Store KEY for provider ID in the system's secret store — the macOS Keychain or the Linux keyring — and return
 `keychain' or `keyring'.  Only for a command the user ran, after asking: nowhere else does drgnx write a key.
-The key travels on stdin (a pipe), never in a command line or a file.  Afterwards the store alone is asked for the
-key and it must match, else a `user-error'."
+The key travels on stdin (a pipe), never in a command line or a file; a key with a NUL, CR or LF is refused first.
+Afterwards the store alone is asked for the key and it must match, else a `user-error'; on a Mac `security' itself
+reads it back, and a Keychain item that does not match is deleted (`drgnx-ai--keychain-verify')."
   (let* ((p (drgnx-ai-provider id))
          (env (plist-get p :key-env))
          (host (and env (url-host (url-generic-parse-url (plist-get p :url)))))
@@ -346,8 +381,8 @@ key and it must match, else a `user-error'."
          (store (if mac "Keychain" "keyring"))
          (advice (format "Unlock %s, or set %s instead." (if mac "it in Keychain Access" "your keyring") env)))
     (unless host (user-error "Provider %s has no key to store" id))
-    (when (or (not (stringp key)) (string-empty-p key) (string-match-p "[\n\r]" key))
-      (user-error "The key is empty or has more than one line"))
+    (when (or (not (stringp key)) (string-empty-p key) (string-match-p "[\0\n\r]" key))
+      (user-error "The key is empty, has more than one line or holds a NUL character"))
     (cond
      (mac (unless (file-executable-p drgnx-ai--security-program)
             (user-error "No `security' program found: the macOS Keychain is needed to store a key")))
@@ -367,11 +402,12 @@ key and it must match, else a `user-error'."
             ((not (eql status 0))
              (user-error "The %s refused the key (exit %s). %s" store status advice))))
     (remhash id drgnx-ai--keys)
-    ;; the store alone must hold this very key: not the environment, not another source's older one
-    (let ((back (condition-case err (drgnx-ai--stored-key host)
-                  (error (user-error "The key was stored, but the %s could not be read (%s). %s" store (car err) advice)))))
-      (unless (equal back key)
-        (user-error "The key was stored, but the %s did not give it back. %s" store advice)))
+    (if mac (drgnx-ai--keychain-verify host key env)
+      ;; the store alone must hold this very key: not the environment, not another source's older one
+      (let ((back (condition-case err (drgnx-ai--stored-key host)
+                    (error (user-error "The key was stored, but the %s could not be read (%s). %s" store (car err) advice)))))
+        (unless (equal back key)
+          (user-error "The key was stored, but the %s did not give it back. %s" store advice))))
     (puthash id key drgnx-ai--keys)
     (if mac 'keychain 'keyring)))
 
