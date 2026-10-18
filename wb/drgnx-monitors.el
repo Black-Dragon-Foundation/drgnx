@@ -21,12 +21,12 @@
 (require 'cl-lib)
 (require 'seq)
 (require 'drgnx-platform)
+(require 'drgnx-timer)
 
 (defvar drgnx-monitors--count nil
   "How many monitors the window manager lists, as of the last refresh (nil: not known yet).")
 
 (defvar drgnx-monitors--pending nil "Frames waiting for the idle timer's refresh.")
-(defvar drgnx-monitors--timer nil "The idle timer that refreshes `drgnx-monitors--pending', or nil.")
 (defvar drgnx-monitors--force nil
   "Non-nil when the pending refresh ignores `drgnx-monitors--min-interval' (monitors were plugged or unplugged).")
 (defvar drgnx-monitors--list-gen 0 "Generation of the latest monitor-list query; an older reply is ignored.")
@@ -270,16 +270,14 @@ Emacs' own.  A terminal or child frame is left alone."
       (error (message "drgnx: monitors: %s" (error-message-string err))))))
 
 (defun drgnx-monitors--arm (delay)
-  "(Re)start the idle timer: one timer for all frames, restarted by every new request."
-  (when (timerp drgnx-monitors--timer) (cancel-timer drgnx-monitors--timer))
-  (setq drgnx-monitors--timer (run-with-idle-timer delay nil #'drgnx-monitors--run-pending)))
+  "Have `drgnx-monitors--run-pending' run after DELAY seconds of idleness: one idle debounce for all frames."
+  (drgnx-timer-debounce 'monitors-refresh delay #'drgnx-monitors--run-pending :idle t :owner :core))
 
 (defun drgnx-monitors--run-pending ()
   "The idle timer's job.  Each pending frame not refreshed in the last `drgnx-monitors--min-interval' s (all of
 them after a hot-plug) is refreshed, the monitor list being fetched once for all of them; the others are kept
 and the timer is armed again for the time they have left."
-  (when (timerp drgnx-monitors--timer) (cancel-timer drgnx-monitors--timer))   ; harmless when it is the one running
-  (setq drgnx-monitors--timer nil)
+  (drgnx-timer-cancel 'monitors-refresh)                ; harmless when it is the one running
   (let ((frames (seq-filter #'drgnx-monitors--eligible-p drgnx-monitors--pending))
         (force drgnx-monitors--force) (now (float-time)) due deferred (soonest nil))
     (setq drgnx-monitors--pending nil drgnx-monitors--force nil)
@@ -469,8 +467,8 @@ the window manager opened them.  Returns at once; never prompts or signals."
     (remove-hook 'display-monitors-changed-functions #'drgnx-monitors--monitors-changed)
     (remove-hook 'move-frame-functions #'drgnx-monitors--frame-moved)
     (remove-function after-focus-change-function #'drgnx-monitors--focus-changed)
-    (when (timerp drgnx-monitors--timer) (cancel-timer drgnx-monitors--timer))
-    (setq drgnx-monitors--timer nil drgnx-monitors--pending nil drgnx-monitors--force nil)))
+    (drgnx-timer-cancel 'monitors-refresh)
+    (setq drgnx-monitors--pending nil drgnx-monitors--force nil)))
 
 (provide 'drgnx-monitors)
 ;;; drgnx-monitors.el ends here

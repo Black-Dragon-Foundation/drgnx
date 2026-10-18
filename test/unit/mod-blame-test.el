@@ -188,26 +188,20 @@ filename a.txt
 (ert-deftest drgnx-blame/timer-cancelled ()
   ;; M11b-12: the one idle timer lives while some buffer has inline blame, not for the rest of the session
   (dolist (b (buffer-list)) (with-current-buffer b (when (bound-and-true-p drgnx-blame-mode) (drgnx-blame-mode -1))))
-  (should-not drgnx-blame--timer)
+  (should-not (drgnx-timer-active-p 'blame-tick))
   (drgnx-blame-test--with-history
-    (let ((first (current-buffer)) (second (progn (drgnx-git-test-write repo "b.txt" "b\n") (find-file-noselect (expand-file-name "b.txt" repo)))) (timer nil))
+    (let ((first (current-buffer)) (second (progn (drgnx-git-test-write repo "b.txt" "b\n") (find-file-noselect (expand-file-name "b.txt" repo)))))
       (with-current-buffer second (drgnx-blame-mode 1))
-      (setq timer drgnx-blame--timer)
-      (should (timerp timer))
-      (should (memq timer timer-idle-list))
+      (should (drgnx-timer-active-p 'blame-tick))
       (drgnx-blame-mode -1)                                  ; one buffer still has it
-      (should (eq drgnx-blame--timer timer))
-      (should (memq timer timer-idle-list))
+      (should (drgnx-timer-active-p 'blame-tick))
       (with-current-buffer second (drgnx-blame-mode -1))     ; the last one
-      (should-not drgnx-blame--timer)
-      (should-not (memq timer timer-idle-list))
+      (should-not (drgnx-timer-active-p 'blame-tick))
       ;; on again, then the last buffer killed
       (drgnx-blame-mode 1)
-      (should (timerp drgnx-blame--timer))
-      (setq timer drgnx-blame--timer)
+      (should (drgnx-timer-active-p 'blame-tick))
       (kill-buffer first)
-      (should-not drgnx-blame--timer)
-      (should-not (memq timer timer-idle-list))
+      (should-not (drgnx-timer-active-p 'blame-tick))
       (kill-buffer second))))
 
 ;;; mod-blame-test.el ends here
