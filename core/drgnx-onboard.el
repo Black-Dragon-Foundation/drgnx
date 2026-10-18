@@ -273,6 +273,9 @@ current choice as the default) — with no option and no question, the current c
     ;; a modules.eld with a mistake (or a newer one) refuses every write to it: say so before anything changes
     (when (or (and preset (not (eq preset cur-preset))) theme (and keys (not (equal keys cur-keys))))
       (drgnx-config-ensure-writable 'modules))
+    ;; the same for keys.eld: a mistake in it stops the step before the preset, the engine or the live keys change
+    (when (or (and layers (or (not (equal keys cur-keys)) pending)) option)
+      (drgnx-config-ensure-writable 'keys))
     (when (and preset (not (eq preset cur-preset))) (drgnx-onboard-apply-preset preset))
     ;; A Vim stack switches only once its engine is loaded: asked to install it when interactive, else it waits
     (when (and layers (or (not (equal keys cur-keys)) pending))
@@ -280,7 +283,7 @@ current choice as the default) — with no option and no question, the current c
       (setq modal (drgnx-modal-prepare layers ask))
       (when (memq modal '(ready started installed))
         (if (and (not noninteractive) (fboundp 'drgnx-keys-apply))
-            (progn (drgnx-keys-use layers) (drgnx-keys--save-layers layers))
+            (drgnx-keys-use layers t)                   ; saves first, then switches the live keys
           (drgnx-keys--save-layers layers))))
     (when option
       (if (and (not noninteractive) (fboundp 'drgnx-keys-apply)) (drgnx-keys-set-mac-option option) (drgnx-keys--save-key :mac-option option)))
@@ -898,7 +901,7 @@ text says so — with the Finish step's restart offer only when this run changed
                   (cons t (concat "Chat (module extra/llm) is on" later)))
                  (t (cons t "Chat (module extra/llm) is on; its package is not installed yet: run drgnx sync (or the Look and Keys step)"))))
           ((and (plist-get ctx :interactive) (y-or-n-p "Turn on Chat (module extra/llm)? "))
-           (drgnx-modules-toggle 'extra/llm)
+           (drgnx-modules-set-enabled 'extra/llm t)     ; on, whatever the file says now (a toggle could turn it off)
            (setq drgnx-onboard--restart-needed t)
            (let ((done (if (drgnx-onboard--installed-p 'gptel) 'ok (drgnx-onboard--sync-job))))
              (if (eq done 'ok)

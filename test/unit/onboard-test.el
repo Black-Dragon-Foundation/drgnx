@@ -1029,6 +1029,37 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
           (should (string-search "loads at drgnx's next start" (cdr r)))
           (should-not (string-search "Finish" (cdr r))))))))
 
+(ert-deftest drgnx-onboard/chat-step-turns-chat-on-whatever-the-file-says-now ()
+  ;; This Emacs applied a modules.eld with extra/llm off; the file has it on since (a hand edit, another process).
+  ;; "Turn on Chat? y" must leave it on: a toggle would read the file and turn it off.
+  (drgnx-onboard-test--with root
+    (let ((drgnx-onboard--restart-needed nil))
+      (drgnx-modules-update-state (lambda (s) (plist-put (copy-sequence s) :disabled '(extra/llm))))
+      (write-region "(:disabled nil)\n" nil (expand-file-name "modules.eld" (drgnx-user-dir)) nil 'silent)
+      (should (drgnx-module-disabled-p 'extra/llm))                       ; the applied copy still has it off
+      (cl-letf (((symbol-function 'y-or-n-p) (lambda (_) t))
+                ((symbol-function 'drgnx-onboard--installed-p) (lambda (_) t)))
+        (drgnx-onboard--chat-module '(:interactive t)))
+      (should-not (drgnx-modules--disabled-in (plist-get (drgnx-config-read 'modules) :data) 'extra/llm)))))
+
+(ert-deftest drgnx-onboard/look-step-stops-at-a-keys-mistake-before-any-change ()
+  ;; keys.eld has a mistake: the Look step refuses before the preset, the engine or the live keys change, in batch and
+  ;; in a session (where the live keys used to switch before the save refused).
+  (drgnx-onboard-test--with root
+    (let* ((file (expand-file-name "keys.eld" (drgnx-user-dir)))
+           (bad "(:layers 5)\n")
+           (modules (expand-file-name "modules.eld" (drgnx-user-dir))))
+      (write-region bad nil file nil 'silent)
+      (should-error (drgnx-onboard--look-step '(:interactive nil :options (:keys "Emacs" :preset minimal)))
+                    :type 'drgnx-config-refused)
+      (let ((noninteractive nil))
+        (cl-letf (((symbol-function 'drgnx-keys-use) (lambda (&rest _) (ert-fail "the live keys switched")))
+                  ((symbol-function 'drgnx-modal-prepare) (lambda (&rest _) (ert-fail "the engine step ran"))))
+          (should-error (drgnx-onboard--look-step '(:interactive nil :options (:keys "Vim" :preset minimal)))
+                        :type 'drgnx-config-refused)))
+      (should (equal (with-temp-buffer (insert-file-contents file) (buffer-string)) bad))
+      (should-not (file-exists-p modules)))))
+
 ;; M12a-74: the restart asks its save questions first, detaches the waiter only after they are answered, then quits.
 (ert-deftest drgnx-onboard/restart-detaches-after-the-questions ()
   (let ((events nil))
