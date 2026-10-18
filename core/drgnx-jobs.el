@@ -97,7 +97,7 @@ keys) is the job's too, and is kept nowhere: not in its state files, not in a co
 (\"1G\"): the systemd launcher caps the job's memory (MemoryMax, no swap); NICE (10) lowers its priority
 (Nice=); the detached launcher can do neither and ignores both.  NO-WAIT: return without waiting (up to
 two seconds) for the job's pid — its boot and start time are stamped from a short timer once the pid file
-appears — for callers that must not block (a timer started from a sentinel)."
+appears, or when Emacs exits first — for callers that must not block (a timer started from a sentinel)."
   (let* ((id (drgnx-jobs--new-id)) (dir (drgnx-jobs--dir id))
          (cwd (expand-file-name (or cwd default-directory)))
          (launcher (drgnx-jobs-launcher))
@@ -129,12 +129,22 @@ appears — for callers that must not block (a timer started from a sentinel)."
     ;; the pid trustworthy later (a pid from before a reboot may be another process)
     (let ((deadline (+ (float-time) 2)) (pidf (expand-file-name "pid" dir)))
       (if no-wait
-          (let ((timer nil))
+          (let (timer finish on-exit)
+            ;; once, from the timer or, when Emacs exits first, from `kill-emacs-hook' (waiting out the
+            ;; deadline for the pid at most): either way the other is gone afterwards
+            (setq finish (lambda ()
+                           (remove-hook 'kill-emacs-hook on-exit)
+                           (when timer (cancel-timer timer))
+                           ;; the job's directory may be gone by now (a removed job)
+                           (ignore-errors (drgnx-jobs--stamp dir)))
+                  on-exit (lambda ()
+                            (while (and (not (file-exists-p pidf)) (< (float-time) deadline))
+                              (sleep-for 0.02))
+                            (funcall finish)))
+            (add-hook 'kill-emacs-hook on-exit)
             (setq timer (run-at-time 0.05 0.05 (lambda ()
                                                  (when (or (file-exists-p pidf) (>= (float-time) deadline))
-                                                   (cancel-timer timer)
-                                                   ;; the job's directory may be gone by now (a removed job)
-                                                   (ignore-errors (drgnx-jobs--stamp dir)))))))
+                                                   (funcall finish))))))
         (while (and (not (file-exists-p pidf)) (< (float-time) deadline)) (sleep-for 0.02))
         (drgnx-jobs--stamp dir)))
     id))

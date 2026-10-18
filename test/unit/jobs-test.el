@@ -232,3 +232,19 @@
          (should (equal (cadr err) "Detached jobs need setsid or perl"))))
      (should-not ran)
      (should-not (drgnx-jobs-list)))))
+
+(ert-deftest drgnx-jobs/no-wait-stamps-before-exit ()
+  ;; M12a-44: Emacs exiting before the stamping timer fires still leaves :boot and :start (the hook runs once)
+  (skip-unless (executable-find "setsid"))
+  (drgnx-jobs-test--with
+   (let ((kill-emacs-hook nil) id dir hooks)
+     (cl-letf (((symbol-function 'run-at-time) (lambda (&rest _) (timer-create))))   ; a timer that never fires
+       (setq id (drgnx-jobs-start "short-lived" '("sleep" "3") :no-wait t)))
+     (setq dir (drgnx-jobs--dir id) hooks kill-emacs-hook)
+     (should (= (length hooks) 1))
+     (should (drgnx-jobs-test--wait (lambda () (file-exists-p (expand-file-name "pid" dir)))))
+     (should-not (plist-get (drgnx-jobs--read (expand-file-name "job.eld" dir)) :start))
+     (mapc #'funcall hooks)
+     (should-not kill-emacs-hook)                                 ; once: the hook removed itself
+     (should (plist-get (drgnx-jobs--read (expand-file-name "job.eld" dir)) :start))
+     (should (equal (plist-get (drgnx-jobs--read (expand-file-name "job.eld" dir)) :boot) (drgnx-jobs--boot-id))))))
