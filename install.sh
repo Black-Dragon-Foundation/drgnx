@@ -235,7 +235,7 @@ plan_homebrew() { # the Homebrew lines of the plan (macOS)
   if [[ -z "$BREW" ]]; then
     note "Install Homebrew first (asked): it asks for your password, installs Apple's Command Line Tools if they are missing, and takes a few minutes:"
     note "  /bin/bash -c \"\$(curl -fsSL $HOMEBREW_INSTALLER_URL)\""
-    note "then add its shellenv line to ~/.zprofile (asked)"
+    note "then add its shellenv line to $(shell_rc) (asked)"
   elif brew_is_rosetta; then
     note "warning: $BREW is Homebrew for Intel, running under Rosetta on this Apple silicon Mac. It works, but a native one (/opt/homebrew) is better: see https://brew.sh"
   fi
@@ -346,12 +346,21 @@ install_homebrew() { # macOS without Homebrew: explained, asked, then Homebrew's
   brew_profile_hint
 }
 
-brew_profile_hint() { # Homebrew's own installer asks you to put this in ~/.zprofile; so do we, but ask
-  local line="eval \"\$($BREW shellenv)\""
-  grep -qxF "$line" "$HOME/.zprofile" 2>/dev/null && return
+shell_rc() { # the login profile the user's shell reads (the doctor's rule, drgnx-doctor--shell-profile)
+  case "${SHELL:-}" in
+    */zsh) echo "$HOME/.zprofile" ;;                            # zsh (macOS's default) never reads ~/.profile
+    "") if [[ -e "$HOME/.zprofile" ]]; then echo "$HOME/.zprofile"; else echo "$HOME/.profile"; fi ;;   # no SHELL: a guess
+    *) echo "$HOME/.profile" ;;
+  esac
+}
+
+brew_profile_hint() { # Homebrew's own installer asks you to put this in your profile; so do we, but ask
+  local line="eval \"\$($BREW shellenv)\"" rc
+  rc="$(shell_rc)"
+  grep -qxF "$line" "$rc" 2>/dev/null && return
   say ""
   say "Homebrew must be on your PATH in new terminals."
-  offer_rc_line "$HOME/.zprofile" "$line"
+  offer_rc_line "$rc" "$line"
 }
 
 install_emacs_brew() {
@@ -536,8 +545,8 @@ open_app() { # APP — the first start opens the Welcome; only in a desktop sess
 
 path_hint() {
   case ":$PATH:" in *":$PREFIX/bin:"*) return ;; esac
-  local rc="$HOME/.profile" line="export PATH=\"$PREFIX/bin:\$PATH\""
-  case "${SHELL:-}" in */zsh) rc="$HOME/.zprofile" ;; esac    # zsh (macOS's default) never reads ~/.profile
+  local rc line="export PATH=\"$PREFIX/bin:\$PATH\""
+  rc="$(shell_rc)"
   say ""
   say "$PREFIX/bin is not on your PATH."
   offer_rc_line "$rc" "$line"

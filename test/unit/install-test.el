@@ -261,6 +261,33 @@ install.sh find that brew after the install (DRGNX_INSTALL_BREW_PATHS), starting
           (should-not (string-search "Homebrew was installed but brew was not found" (cdr r))))
       (delete-directory tmp t))))
 
+(ert-deftest drgnx-install/brew-profile-hint-follows-the-shell ()
+  ;; The Homebrew line goes to the file the user's shell reads, as the PATH line and the doctor do: zsh
+  ;; ~/.zprofile; with SHELL unset ~/.zprofile if it exists, else ~/.profile; any other shell ~/.profile.
+  (let ((tmp (make-temp-file "drgnx-install" t)))
+    (unwind-protect
+        (let ((hint (lambda (shell &optional zprofile)
+                      (let* ((home (make-temp-file "drgnx-install-home" t))
+                             (r (unwind-protect
+                                    (progn
+                                      (when zprofile (write-region "" nil (expand-file-name ".zprofile" home)))
+                                      (drgnx-install-test--run
+                                       (append (drgnx-install-test--fake-homebrew tmp) (list (concat "HOME=" home))
+                                               (if shell (list (concat "SHELL=" shell)) (list "SHELL="))
+                                               drgnx-install-test--macos)
+                                       "--yes" "--source-dir" drgnx-install-test--root
+                                       "--prefix" (expand-file-name "prefix" tmp)))
+                                  (delete-directory home t))))
+                        (should (= (car r) 0))
+                        (and (string-match "add this to [^ ]*/\\(\\.z?profile\\): eval " (cdr r))
+                             (match-string 1 (cdr r)))))))
+          (should (equal (funcall hint "/bin/zsh") ".zprofile"))
+          (should (equal (funcall hint "/bin/bash") ".profile"))
+          (should (equal (funcall hint "/usr/bin/fish") ".profile"))
+          (should (equal (funcall hint nil) ".profile"))
+          (should (equal (funcall hint nil t) ".zprofile")))
+      (delete-directory tmp t))))
+
 (ert-deftest drgnx-install/no-bash-4-constructs ()
   ;; macOS ships bash 3.2: it must run there.
   (let ((code (with-temp-buffer
@@ -569,7 +596,7 @@ install.sh find that brew after the install (DRGNX_INSTALL_BREW_PATHS), starting
         (progn
           (write-region "#!/bin/sh\necho '31.1 t pgtk'\n" nil fake)
           (set-file-modes fake #o755)
-          (pcase-dolist (`(,shell ,file) '(("/bin/zsh" "/.zprofile") ("/bin/bash" "/.profile")))
+          (pcase-dolist (`(,shell ,file) '(("/bin/zsh" "/.zprofile") ("/bin/bash" "/.profile") ("" "/.profile")))
             (let ((r (drgnx-install-test--run
                       (list (concat "DRGNX_INSTALL_OS_RELEASE=" (drgnx-install-test--os "fedora-45"))
                             "DRGNX_INSTALL_UNAME=Linux" (concat "DRGNX_INSTALL_EMACS=" fake) (concat "SHELL=" shell))
