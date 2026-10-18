@@ -104,6 +104,28 @@ to OR-LOG, OPENROUTER_API_KEY unset."
     (drgnx-hub-test--wait #'ignore 0.3)
     (should (= (length drgnx-hub--subscribers) 1))))
 
+(ert-deftest drgnx-hub/a-subscribe-never-answered-stops-blocking-connect ()
+  ;; one subscription while the hub has not answered — but not forever: a subscribe left unanswered (a stopped hub)
+  ;; past the deadline is given up, and the next connect tries again (the editor is not told the hub went away)
+  (drgnx-hub-test--with
+    (drgnx-hub--private-dir (file-name-directory (drgnx-hub-socket)))
+    (let* ((accepted 0) (gone 0)
+           (drgnx-hub-disconnect-functions (list (lambda () (cl-incf gone))))
+           (server (make-network-process :name "mute-hub" :family 'local :server t :service (drgnx-hub-socket) :noquery t
+                                         :filter #'ignore :log (lambda (&rest _) (cl-incf accepted)))))
+      (unwind-protect
+          (let ((drgnx-hub-subscribe-deadline 0.3))
+            (drgnx-hub-connect)
+            (should (drgnx-hub-test--wait (lambda () (= accepted 1)) 2))
+            (drgnx-hub-connect)                                   ; before the deadline: still the one
+            (drgnx-hub-test--wait #'ignore 0.1)
+            (should (= accepted 1))
+            (drgnx-hub-test--wait #'ignore 0.4)
+            (drgnx-hub-connect)                                   ; past it: a new one
+            (should (drgnx-hub-test--wait (lambda () (= accepted 2)) 2))
+            (should (= gone 0)))
+        (delete-process server)))))
+
 (ert-deftest drgnx-hub/a-subscriber-that-stops-reading-is-dropped ()
   ;; a blocked write runs timers and filters meanwhile: each new event would write to the same stuck subscriber one
   ;; level deeper (until excessive-lisp-nesting lands anywhere in the hub); it is dropped instead, and the hub serves

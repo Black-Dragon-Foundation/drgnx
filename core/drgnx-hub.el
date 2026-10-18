@@ -36,6 +36,8 @@ string (\"request\", \"fallback\", \"budget\"), DATA a plist.")
 (defvar drgnx-hub--client nil "This Emacs's connection to the hub, for requests.")
 (defvar drgnx-hub--events nil "This Emacs's subscribed connection to the hub.")
 (defvar drgnx-hub--subscribing nil "This Emacs's connection whose `subscribe' the hub has not answered yet.")
+(defvar drgnx-hub-subscribe-deadline 5
+  "Seconds a `subscribe' may go unanswered: after that `drgnx-hub-connect' gives it up and subscribes again.")
 (defvar drgnx-hub--pending (make-hash-table) "Request id → callback.")
 (defvar drgnx-hub--next-id 0)
 
@@ -639,6 +641,12 @@ hand it the keys this Emacs holds.  t, or an error saying why not."
 (defun drgnx-hub-connect ()
   "Subscribe to the hub's events (`drgnx-hub-event-functions') and hand it the keys this Emacs holds
 \(`drgnx-hub--send-keys').  Asynchronous; safe to call again, also before the hub has answered (one subscription)."
+  ;; a subscribe left unanswered past the deadline (a hub stopped, or one that lost the line) is given up quietly
+  (when (and (process-live-p drgnx-hub--subscribing)
+             (> (- (float-time) (process-get drgnx-hub--subscribing :since)) drgnx-hub-subscribe-deadline))
+    (set-process-sentinel drgnx-hub--subscribing #'ignore)
+    (delete-process drgnx-hub--subscribing)
+    (setq drgnx-hub--subscribing nil))
   (unless (or (process-live-p drgnx-hub--events) (process-live-p drgnx-hub--subscribing))
     (let ((c (drgnx-hub--connect-socket
               (lambda (conn chunk)
@@ -650,6 +658,7 @@ hand it the keys this Emacs holds.  t, or an error saying why not."
                                            (setq drgnx-hub--events conn)
                                            (when (eq drgnx-hub--subscribing conn) (setq drgnx-hub--subscribing nil))))))))))
       (setq drgnx-hub--subscribing c)
+      (process-put c :since (float-time))
       ;; the hub went away (shutdown, a crash, a restart): whoever mirrors it is told
       (set-process-sentinel c (lambda (p _e)
                                 (unless (process-live-p p)
