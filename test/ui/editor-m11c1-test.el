@@ -183,7 +183,7 @@
                       (should (drgnx-mock-cdp-wait (lambda () (drgnx-mock-cdp-received "Page.startScreencast"))))
                       (if jpeg
                           (drgnx-mock-cdp-event "Page.screencastFrame"
-                                                (list :data (base64-encode-string jpeg) :sessionId 1
+                                                (list :data (base64-encode-string jpeg t) :sessionId 1
                                                       :metadata (list :deviceWidth 1280 :deviceHeight 800 :offsetTop 0 :pageScaleFactor 1
                                                                       :scrollOffsetX 0 :scrollOffsetY 0 :timestamp (float-time)))
                                                 "S-T1")

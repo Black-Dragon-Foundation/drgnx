@@ -201,7 +201,7 @@ it ends, and a stop returns before it has)."
 (defvar-local drgnx-live--session nil "The flat CDP session on the watched page.")
 (defvar-local drgnx-live--status nil "What the view says about the connection (a string), or nil.")
 (defvar-local drgnx-live--closing nil "Non-nil while the view closes its own connection.")
-(defvar-local drgnx-live--pending nil "The newest frame not yet drawn: (DATA . METADATA).")
+(defvar-local drgnx-live--pending nil "The newest frame not yet drawn (see `drgnx-live--on-frame').")
 (defvar-local drgnx-live--timer nil "The timer that draws the pending frame.")
 (defvar-local drgnx-live--notes-timer nil)
 (defvar-local drgnx-live--last-draw 0)
@@ -211,6 +211,7 @@ it ends, and a stop returns before it has)."
 (defvar-local drgnx-live--dropped 0 "Frames replaced by a newer one before they were drawn.")
 (defvar-local drgnx-live--ready nil "Non-nil once the browser listed its pages (a page created later is a new tab).")
 (defvar-local drgnx-live--paused nil "Non-nil while the screencast is stopped because no window shows the view.")
+(defvar-local drgnx-live--max-width nil "The width in pixels the screencast was asked for (the view's window's).")
 
 (defun drgnx-live--send (method &optional params session callback)
   "Send METHOD with PARAMS (on flat SESSION); CALLBACK gets the result.  Nothing when the connection is gone."
@@ -304,17 +305,69 @@ it ends, and a stop returns before it has)."
 
 (defun drgnx-live--start-screencast ()
   "Screencast the watched page: jpeg, quality 60, as wide as the view's window."
-  (setq drgnx-live--paused nil)
-  (drgnx-live--send "Page.startScreencast"
-                    (list :format "jpeg" :quality 60 :maxWidth (let ((w (drgnx-live--window))) (if w (window-body-width w t) 1280)))
+  (setq drgnx-live--paused nil
+        drgnx-live--max-width (let ((w (drgnx-live--window))) (if w (window-body-width w t) 1280)))
+  (drgnx-live--send "Page.startScreencast" (list :format "jpeg" :quality 60 :maxWidth drgnx-live--max-width)
                     drgnx-live--session))
 
+(defun drgnx-live--resized (_window)
+  "The view's window changed size (`window-size-change-functions'): the screencast starts again as wide as it is
+now, so the browser scales the page once instead of Emacs scaling every frame it draws."
+  (when-let* ((w (drgnx-live--window)))
+    (when (and drgnx-live--session (not drgnx-live--paused) drgnx-live--max-width
+               (/= (window-body-width w t) drgnx-live--max-width))
+      (drgnx-live--send "Page.stopScreencast" nil drgnx-live--session)
+      (drgnx-live--start-screencast))))
+
 (defun drgnx-live--shown-again (_window)
-  "The view is in a window again (`window-buffer-change-functions'): its screencast resumes."
-  (when (and drgnx-live--paused drgnx-live--session) (drgnx-live--start-screencast)))
+  "The view is in a window again (`window-buffer-change-functions'): its screencast resumes, or follows the width
+of the window it is in now."
+  (if (and drgnx-live--paused drgnx-live--session) (drgnx-live--start-screencast) (drgnx-live--resized nil)))
 
 (defun drgnx-live--message (text)
   "One message from the browser: an answer or an event."
+  (if-let* ((frame (drgnx-live--peek-frame text)))
+      (drgnx-live--on-frame frame)
+    (drgnx-live--parsed-message text)))
+
+(defun drgnx-live--peek-frame (text)
+  "TEXT, a screencast frame's message, read without the JSON parser: (:session S :id N :text TEXT :start B :end E
+:meta-json M) — the flat session, the frame's id, where its base64 data is in TEXT, its metadata's JSON.  Nil for any
+other message, and for one this cannot read safely (an escape inside the data): the parser reads those.  A busy page
+sends a frame of ~150 kB many times a second; only the one drawn is decoded (`drgnx-live--frame-data')."
+  (when-let* (((string-search "\"method\":\"Page.screencastFrame\"" text))   ; base64 has no quote: never inside the data
+              (b (string-search "\"data\":\"" text))
+              (start (+ b 8))
+              (end (string-search "\"" text start))
+              ((let ((bs (string-search "\\" text start))) (or (null bs) (> bs end))))
+              (rest (concat (substring text 0 b) (substring text end)))
+              (session (and (string-match "\"sessionId\":\"\\([^\"]*\\)\"" rest) (match-string 1 rest)))
+              (id (and (string-match "\"sessionId\":\\([0-9]+\\)" rest) (string-to-number (match-string 1 rest)))))
+    (list :session session :id id :text text :start start :end end
+          :meta-json (and (string-match "\"metadata\":\\({[^{}]*}\\)" rest) (match-string 1 rest)))))
+
+(defun drgnx-live--frame-data (frame)
+  "FRAME's image bytes (decoded only now: for the frame that is drawn)."
+  (base64-decode-string (or (plist-get frame :data)
+                            (substring (plist-get frame :text) (plist-get frame :start) (plist-get frame :end)))))
+
+(defun drgnx-live--frame-meta (frame)
+  "FRAME's metadata, a plist (page size in CSS pixels)."
+  (or (plist-get frame :meta)
+      (and (plist-get frame :meta-json)
+           (json-parse-string (plist-get frame :meta-json) :object-type 'plist :null-object nil :false-object nil))))
+
+(defun drgnx-live--on-frame (frame)
+  "A screencast FRAME (`drgnx-live--peek-frame' or parsed): acknowledged at once (the browser sends the next one);
+only the newest waits to be drawn."
+  (when (equal (plist-get frame :session) drgnx-live--session)
+    (drgnx-live--send "Page.screencastFrameAck" (list :sessionId (plist-get frame :id)) (plist-get frame :session))
+    (when drgnx-live--pending (cl-incf drgnx-live--dropped))
+    (setq drgnx-live--pending frame)
+    (drgnx-live--schedule-draw)))
+
+(defun drgnx-live--parsed-message (text)
+  "One message from the browser, through the JSON parser: an answer or an event."
   (let* ((msg (json-parse-string text :object-type 'plist :null-object nil :false-object nil))
          (id (plist-get msg :id)))
     (if id
@@ -326,12 +379,8 @@ it ends, and a stop returns before it has)."
 (defun drgnx-live--event (method params session)
   (pcase method
     ("Page.screencastFrame"
-     (when (equal session drgnx-live--session)
-       ;; every frame is acknowledged (the browser sends the next one); only the newest waits to be drawn
-       (drgnx-live--send "Page.screencastFrameAck" (list :sessionId (plist-get params :sessionId)) session)
-       (when drgnx-live--pending (cl-incf drgnx-live--dropped))
-       (setq drgnx-live--pending (cons (plist-get params :data) (plist-get params :metadata)))
-       (drgnx-live--schedule-draw)))
+     (drgnx-live--on-frame (list :session session :id (plist-get params :sessionId)
+                                 :data (plist-get params :data) :meta (plist-get params :metadata))))
     ("Target.targetCreated"
      (let ((info (plist-get params :targetInfo)))
        ;; Chrome announces the pages it has as discovery starts: those are listed, not watched; a page created
@@ -373,14 +422,15 @@ it ends, and a stop returns before it has)."
         (unless drgnx-live--paused
           (setq drgnx-live--paused t)
           (drgnx-live--send "Page.stopScreencast" nil drgnx-live--session))
+      (drgnx-live--resized nil)                         ; the window changed size meanwhile: frames as wide as it
       (drgnx-live--draw-frame frame))))
 
 (defun drgnx-live--draw-frame (frame)
-  "Show FRAME, (DATA . METADATA)."
-  (setq drgnx-live--last-draw (float-time) drgnx-live--meta (cdr frame))
+  "Show FRAME (see `drgnx-live--on-frame')."
+  (setq drgnx-live--last-draw (float-time) drgnx-live--meta (drgnx-live--frame-meta frame))
   (let* ((w (drgnx-live--window))
          (old drgnx-live--image)
-         (img (create-image (base64-decode-string (car frame)) 'jpeg t
+         (img (create-image (drgnx-live--frame-data frame) 'jpeg t
                             :max-width (if w (window-body-width w t) 1280)))
          (inhibit-read-only t))
     (put-text-property (point-min) (1+ (point-min)) 'display img)
@@ -448,6 +498,7 @@ it ends, and a stop returns before it has)."
   (setq-local revert-buffer-function (lambda (&rest _) (drgnx-live--open (current-buffer) (drgnx-live-browser))))
   (setq-local cursor-type nil)
   (add-hook 'window-buffer-change-functions #'drgnx-live--shown-again nil t)
+  (add-hook 'window-size-change-functions #'drgnx-live--resized nil t)
   (add-hook 'kill-buffer-hook #'drgnx-live--killed nil t))
 
 (defun drgnx-live--killed ()

@@ -386,4 +386,104 @@ are pushed to STEERED as (NAME TEXT)."
       (with-current-buffer "*drgnx live*" (run-hook-with-args 'window-buffer-change-functions win))
       (should (drgnx-mock-cdp-wait (lambda () (= 2 (length (drgnx-mock-cdp-received "Page.startScreencast")))))))))
 
+
+(ert-deftest drgnx-live/dropped-frames-are-never-parsed ()
+  ;; A frame is acknowledged from a cheap look at its message; only the frame that is drawn has its JSON and image
+  ;; data decoded (each frame of a busy page is ~150 kB of garbage otherwise).
+  (skip-unless drgnx-live-test--websocket)
+  (drgnx-live-test--with
+    (let ((drgnx-live-frame-interval 0.5) (parsed nil) (decoded 0)
+          (big (base64-encode-string (make-string 60000 ?x) t)))
+      (drgnx-live-test--open)
+      (drgnx-mock-cdp-frame 1)
+      (should (drgnx-mock-cdp-wait (lambda () (equal (drgnx-live-test--shown) "frame-1"))))
+      (cl-letf* ((parse (symbol-function 'json-parse-string))
+                 (decode (symbol-function 'base64-decode-string))
+                 ((symbol-function 'json-parse-string) (lambda (s &rest args) (push (length s) parsed) (apply parse s args)))
+                 ((symbol-function 'base64-decode-string) (lambda (s &rest args) (cl-incf decoded) (apply decode s args))))
+        (dotimes (i 5)
+          (drgnx-mock-cdp-event "Page.screencastFrame"
+                                (list :data big :sessionId (+ 2 i)
+                                      :metadata (list :deviceWidth 1280 :deviceHeight 800 :offsetTop 0 :pageScaleFactor 1
+                                                      :scrollOffsetX 0 :scrollOffsetY 0 :timestamp 1.0))
+                                "S-T1"))
+        (should (drgnx-mock-cdp-wait (lambda () (= 6 (length (drgnx-live-test--acks))))))
+        (should (drgnx-mock-cdp-wait (lambda () (with-current-buffer "*drgnx live*" (= 2 drgnx-live--drawn)))))
+        (should (equal (mapcar #'cdr (drgnx-live-test--acks)) '(1 2 3 4 5 6)))
+        (should-not (seq-some (lambda (n) (> n 1000)) parsed))     ; no frame's message went through the JSON parser
+        (should (= 1 decoded))                                     ; only the drawn frame's image was decoded
+        (with-current-buffer "*drgnx live*"
+          (should (= 4 drgnx-live--dropped))
+          (should (= 1280 (plist-get drgnx-live--meta :deviceWidth))))))))
+
+(ert-deftest drgnx-live/frame-peek-reads-the-message ()
+  ;; The cheap look: the flat session, the frame's id, where its data is, its metadata — in any key order; a message
+  ;; it cannot read safely (an escape inside the data) is left to the JSON parser.
+  (let* ((text "{\"method\":\"Page.screencastFrame\",\"params\":{\"data\":\"QUJD\",\"metadata\":{\"deviceWidth\":10,\"deviceHeight\":20},\"sessionId\":7},\"sessionId\":\"S-T1\"}")
+         (f (drgnx-live--peek-frame text)))
+    (should (equal (plist-get f :session) "S-T1"))
+    (should (= 7 (plist-get f :id)))
+    (should (equal (drgnx-live--frame-data f) "ABC"))
+    (should (equal (drgnx-live--frame-meta f) '(:deviceWidth 10 :deviceHeight 20))))
+  (let ((f (drgnx-live--peek-frame "{\"sessionId\":\"S-T2\",\"method\":\"Page.screencastFrame\",\"params\":{\"sessionId\":3,\"metadata\":{\"deviceWidth\":1},\"data\":\"QQ==\"}}")))
+    (should (equal (list (plist-get f :session) (plist-get f :id) (drgnx-live--frame-data f)) '("S-T2" 3 "A"))))
+  (should-not (drgnx-live--peek-frame "{\"method\":\"Page.screencastFrame\",\"params\":{\"data\":\"QU\\/D\",\"sessionId\":1},\"sessionId\":\"S\"}"))
+  (should-not (drgnx-live--peek-frame "{\"id\":3,\"result\":{}}")))
+
+(ert-deftest drgnx-live/a-narrower-view-asks-for-narrower-frames ()
+  ;; Frames as wide as the view's window: when it changes size the screencast starts again at the new width (Chrome
+  ;; scales the page, not Emacs on every frame it draws); the same size asks for nothing.
+  (skip-unless drgnx-live-test--websocket)
+  (drgnx-live-test--with
+    (drgnx-live-test--open)
+    (drgnx-mock-cdp-frame 1)
+    (should (drgnx-mock-cdp-wait (lambda () (drgnx-live-test--shown))))
+    (let* ((win (get-buffer-window "*drgnx live*")) (before (window-body-width win t))
+           (widths (lambda () (mapcar (lambda (m) (plist-get (plist-get m :params) :maxWidth))
+                                      (drgnx-mock-cdp-received "Page.startScreencast")))))
+      (with-current-buffer "*drgnx live*" (run-hook-with-args 'window-size-change-functions win))
+      (accept-process-output nil 0.1)
+      (should (equal (funcall widths) (list before)))
+      (unwind-protect
+          (progn
+            (split-window win nil 'right)
+            (with-current-buffer "*drgnx live*" (run-hook-with-args 'window-size-change-functions win))
+            (should (drgnx-mock-cdp-wait (lambda () (= 2 (length (funcall widths))))))
+            (should (equal (funcall widths) (list before (window-body-width win t))))
+            (should (< (window-body-width win t) before)))
+        (delete-other-windows win)))))
+
+(ert-deftest drgnx-live/a-view-moved-to-a-narrower-window-asks-for-narrower-frames ()
+  ;; Shown in another window (a split made for it), not hidden first: the screencast follows that window's width too.
+  (skip-unless drgnx-live-test--websocket)
+  (drgnx-live-test--with
+    (drgnx-live-test--open)
+    (let* ((win (get-buffer-window "*drgnx live*")) (before (window-body-width win t)))
+      (unwind-protect
+          (let ((right (split-window win nil 'right)))
+            (set-window-buffer win (get-buffer-create "*scratch*"))
+            (set-window-buffer right "*drgnx live*")
+            (with-current-buffer "*drgnx live*" (run-hook-with-args 'window-buffer-change-functions right))
+            (should (drgnx-mock-cdp-wait (lambda () (= 2 (length (drgnx-mock-cdp-received "Page.startScreencast"))))))
+            (should (= (window-body-width right t)
+                       (plist-get (plist-get (car (last (drgnx-mock-cdp-received "Page.startScreencast"))) :params) :maxWidth)))
+            (should (< (window-body-width right t) before)))
+        (delete-other-windows win)
+        (set-window-buffer win "*drgnx live*")))))
+
+(ert-deftest drgnx-live/a-frame-drawn-in-a-narrower-window-asks-for-narrower-frames ()
+  ;; Whatever changed the window (window change functions may not have run yet), drawing a frame checks its width.
+  (skip-unless drgnx-live-test--websocket)
+  (drgnx-live-test--with
+    (drgnx-live-test--open)
+    (let ((win (get-buffer-window "*drgnx live*")))
+      (unwind-protect
+          (progn
+            (split-window win nil 'right)                ; no hook run by hand: only the draw can notice
+            (drgnx-mock-cdp-frame 1)
+            (should (drgnx-mock-cdp-wait (lambda () (= 2 (length (drgnx-mock-cdp-received "Page.startScreencast"))))))
+            (should (= (window-body-width win t)
+                       (plist-get (plist-get (car (last (drgnx-mock-cdp-received "Page.startScreencast"))) :params) :maxWidth))))
+        (delete-other-windows win)))))
+
 ;;; mod-live-test.el ends here

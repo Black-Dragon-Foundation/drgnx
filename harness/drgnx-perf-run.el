@@ -104,20 +104,23 @@ for agents, the Live view open, and the session functions it uses."
       (require 'drgnx-jobs)
       (defvar drgnx-perf--live-jpeg nil "The frames' bytes, base64.")
       (defvar drgnx-perf--live-timer nil "Sends the frames.")
-      (defvar drgnx-perf--live-message nil "A frame's message, as the browser sends it.")
+      (defvar drgnx-perf--live-message nil "A frame's message, as the browser sends it: an encoded websocket frame.")
       (setq drgnx-perf--live-message nil)
+      (defvar drgnx-perf--live-width nil "The frames' width.")
+      (setq drgnx-perf--live-width nil)
       (defvar drgnx-perf--live-sent 0 "How many messages the mock had received when it sent the last frame.")
       (setq drgnx-perf--live-sent 0)
       (defvar drgnx-perf--live-drawn 0 "Frames drawn when the typing began.")
       (defvar drgnx-perf--jobs-get nil "The real `drgnx-jobs-get'.")
-      ;; a real 1280x800 JPEG (ImageMagick's built-in logo); without ImageMagick the frames are a few bytes no
-      ;; decoder accepts, so drawing them costs less than real ones
-      (setq drgnx-perf--live-jpeg
-            (when-let* ((magick (or (executable-find "magick") (executable-find "convert"))))
-              (with-temp-buffer
-                (set-buffer-multibyte nil)
-                (and (eq 0 (call-process magick nil t nil "logo:" "-resize" "1280x800!" "jpeg:-"))
-                     (base64-encode-string (buffer-string))))))
+      (defun drgnx-perf--live-make-jpeg (width)
+        "A real JPEG WIDTH pixels wide, as Chrome sends at the view's maxWidth (ImageMagick's built-in logo, a
+1280×800 page scaled); without ImageMagick nil: the frames are then a few bytes no decoder accepts, cheaper to draw."
+        (when-let* ((magick (or (executable-find "magick") (executable-find "convert"))))
+          (with-temp-buffer
+            (set-buffer-multibyte nil)
+            (and (eq 0 (call-process magick nil t nil "logo:" "-resize" (format "%dx%d!" width (round (* width 0.625))) "jpeg:-"))
+                 (base64-encode-string (buffer-string) t)))))
+      (setq drgnx-perf--live-jpeg nil)
       (setq drgnx-perf--jobs-get (symbol-function 'drgnx-jobs-get))
       (fset 'drgnx-jobs-get (lambda (id) (if (equal id "job-perf-live") (list :id id :status 'running) (funcall drgnx-perf--jobs-get id))))
       (let ((port (drgnx-mock-cdp-start)))
@@ -127,15 +130,27 @@ for agents, the Live view open, and the session functions it uses."
         "A frame, once the last one was acknowledged (as Chrome sends them)."
         (when (> (length drgnx-mock-cdp--received) drgnx-perf--live-sent)   ; the view answered (its ack)
           (setq drgnx-perf--live-sent (length drgnx-mock-cdp--received))
-          ;; the message is made once: the mock runs in this Emacs, and making it is the browser's work, not drgnx's
+          ;; the message and its websocket frame are made once: the mock runs in this Emacs, and making them is the
+          ;; browser's work, not drgnx's (websocket.el's encoder makes a list of every byte)
+          ;; at the width the view asked for last, as Chrome sends them
+          (let ((width (or (plist-get (plist-get (car (last (drgnx-mock-cdp-received "Page.startScreencast"))) :params) :maxWidth)
+                           1280)))
+            (unless (eql width drgnx-perf--live-width) (setq drgnx-perf--live-message nil drgnx-perf--live-width width)))
           (unless drgnx-perf--live-message
+            (setq drgnx-perf--live-jpeg (drgnx-perf--live-make-jpeg drgnx-perf--live-width))
             (setq drgnx-perf--live-message
-                  (json-serialize
-                   (list :method "Page.screencastFrame" :sessionId "S-T1"
-                         :params (list :data (or drgnx-perf--live-jpeg (base64-encode-string "frame")) :sessionId 1
-                                       :metadata (list :deviceWidth 1280 :deviceHeight 800 :offsetTop 0 :pageScaleFactor 1
-                                                       :scrollOffsetX 0 :scrollOffsetY 0 :timestamp (float-time)))))))
-          (dolist (ws (drgnx-mock-cdp-clients)) (websocket-send-text ws drgnx-perf--live-message))))
+                  (websocket-encode-frame
+                   (make-websocket-frame
+                    :opcode 'text :completep t
+                    :payload (encode-coding-string
+                              (json-serialize
+                               (list :method "Page.screencastFrame" :sessionId "S-T1"
+                                     :params (list :data (or drgnx-perf--live-jpeg (base64-encode-string "frame")) :sessionId 1
+                                                   :metadata (list :deviceWidth 1280 :deviceHeight 800 :offsetTop 0 :pageScaleFactor 1
+                                                                   :scrollOffsetX 0 :scrollOffsetY 0 :timestamp (float-time)))))
+                              'raw-text))
+                   nil)))
+          (dolist (ws (drgnx-mock-cdp-clients)) (process-send-string (websocket-conn ws) drgnx-perf--live-message))))
       (defun drgnx-perf--live-arm ()
         "The Live view beside the file, frames arriving."
         (let* ((editor (selected-window)) (file (window-buffer editor)))

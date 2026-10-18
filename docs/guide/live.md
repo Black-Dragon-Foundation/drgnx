@@ -40,7 +40,9 @@ those.
 
 The view shows the page through Chrome DevTools Protocol screencast frames (JPEG, quality 60, as wide as the
 window), about ten a second. Frames are drawn from a timer, never while you type; a frame that arrives before the
-last one was drawn replaces it, so a busy Emacs drops frames and never queues them. Every frame is acknowledged.
+last one was drawn replaces it, so a busy Emacs drops frames and never queues them. Every frame is acknowledged
+from a quick look at its message; only the frame that is drawn is parsed and decoded. When the view's window
+changes width, the screencast starts again at the new width, so Chrome scales the page, not Emacs on every frame.
 While no window shows the view, the screencast stops; it starts again when the view is shown.
 
 The header line lists the browser's tabs (the watched one in bold) and the watched page's address. When the agent
