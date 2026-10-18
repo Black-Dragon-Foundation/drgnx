@@ -31,6 +31,11 @@
 (defcustom drgnx-platform-doctor-timeout 1.0
   "Seconds a synchronous call (the doctor, a typed command) may take before it is cut."
   :type 'number :group 'drgnx-platform)
+(defcustom drgnx-platform-watchdog-margin 1.0
+  "Seconds added to an operation's deadline before the public function gives up waiting for its adapter.
+The adapter's calls each have the deadline; the watchdog catches an adapter that never calls back
+\(an error in one of its own timers or callbacks) and reports (:error \"timed out\") once."
+  :type 'number :group 'drgnx-platform)
 
 ;;;; Environment
 
@@ -82,7 +87,7 @@ front of `process-environment'.  Always asynchronous; an error in CALLBACK is sh
     (if (not (and program (executable-find program)))
         (drgnx-platform--later
          (lambda () (funcall cb 'error (format "%s is not installed" (or program "(no program)")))))
-      (let* ((chunks nil) (timer nil) (finished nil) (proc nil)
+      (let* ((chunks nil) (timer nil) (finished nil) (proc nil) (errproc nil) (exit nil)
              (errbuf (generate-new-buffer " *drgnx-wm-stderr*"))
              (finish
               (lambda (status output)
@@ -95,22 +100,29 @@ front of `process-environment'.  Always asynchronous; an error in CALLBACK is sh
                     (ignore-errors (signal-process proc 'KILL))
                     (delete-process proc))
                   (let ((out (or output (string-join (nreverse chunks))))
-                        (err (with-current-buffer errbuf (buffer-string))))
+                        (err (if (buffer-live-p errbuf) (with-current-buffer errbuf (buffer-string)) "")))
                     (when (buffer-live-p errbuf) (kill-buffer errbuf))
-                    (funcall cb status (if (and (string-empty-p out) (not (eq status 'ok))) err out)))))))
+                    (funcall cb status (if (and (string-empty-p out) (not (eq status 'ok))) err out))))))
+             ;; a failed call is reported once its standard error has been read to the end (its own pipe)
+             (maybe-finish
+              (lambda ()
+                (when (and exit (or (eq exit 'ok) (not (process-live-p errproc))))
+                  (funcall finish exit nil)))))
         (condition-case err
             (let ((process-environment (append env process-environment)))
               (setq proc (make-process
                           :name "drgnx-wm" :command argv :connection-type 'pipe :noquery t
-                          :buffer nil :stderr errbuf
+                          :coding 'utf-8 :buffer nil :stderr errbuf
                           :filter (lambda (_p s) (push s chunks))
                           :sentinel (lambda (p _e)
                                       (unless (process-live-p p)
-                                        (funcall finish (if (eq (process-exit-status p) 0) 'ok 'error)
-                                                 nil)))))
-              (when-let* ((errproc (get-buffer-process errbuf)))
-                (set-process-sentinel errproc #'ignore)
-                (set-process-query-on-exit-flag errproc nil))
+                                        (setq exit (if (eq (process-exit-status p) 0) 'ok 'error))
+                                        (funcall maybe-finish)))))
+              (when-let* ((p (get-buffer-process errbuf)))
+                (setq errproc p)
+                (set-process-coding-system p 'utf-8 'utf-8)
+                (set-process-sentinel p (lambda (_p _e) (funcall maybe-finish)))
+                (set-process-query-on-exit-flag p nil))
               (setq timer (run-at-time (or timeout drgnx-platform-command-timeout) nil
                                        (lambda () (funcall finish 'timeout "")))))
           (error
@@ -136,22 +148,26 @@ For the doctor and for commands the user typed; never from an automatic path."
 (defvar drgnx-platform--adapters nil
   "Alist (NAME . SPEC) in definition order; detection tries them in that order.")
 
+(defvar drgnx-platform--registering-builtins nil
+  "Non-nil while the built-in adapters are defined: they are appended in the order written.")
+
 (defun drgnx-platform-define-adapter (name &rest spec)
   "Define (or extend: keys given here replace those of an earlier definition) the adapter NAME.
 SPEC keys: :detect (fn ENV WINDOW-SYSTEM -> non-nil), :title, :tool, :version (argv), :status
 (`verified' or `reported'), :monitors (fn CTX CALLBACK), :frame-monitor (fn CTX CALLBACK), :move
 (fn CTX MONITOR CALLBACK), :place (fn CTX MONITOR CALLBACK; default :move), :can-move (fn CTX -> t or
-\(REASON . FIX)), :doctor (fn ENV -> plist :monitors :answers).  A new adapter goes before the catch-alls
-`other-wayland' and `none' (after them it would never be tried)."
+\(REASON . FIX)), :doctor (fn ENV -> plist :monitors :answers).  A new adapter is tried before `x11'
+(so one for an X window manager like bspwm or xmonad wins over plain X) and before the catch-alls `tty',
+`other-wayland' and `none'."
   (let ((cell (assq name drgnx-platform--adapters)))
     (if cell
         (let ((old (cdr cell)) (new (copy-sequence spec)))
           (while new (setq old (plist-put old (pop new) (pop new))))
           (setcdr cell old))
       (let* ((entry (cons name (copy-sequence spec)))
-             (tail (and (not (eq name 'none))
-                        (or (memq (assq 'other-wayland drgnx-platform--adapters) drgnx-platform--adapters)
-                            (memq (assq 'none drgnx-platform--adapters) drgnx-platform--adapters)))))
+             (tail (and (not drgnx-platform--registering-builtins)
+                        (seq-some (lambda (n) (memq (assq n drgnx-platform--adapters) drgnx-platform--adapters))
+                                  '(x11 tty other-wayland none)))))
         (setq drgnx-platform--adapters
               (append (seq-take-while (lambda (c) (not (eq c (car tail)))) drgnx-platform--adapters)
                       (list entry) tail))))
@@ -208,7 +224,8 @@ WSYS is `ns', `pgtk', `x', `tty' (a terminal frame) or nil (batch: WAYLAND_DISPL
 pgtk, DISPLAY for x, neither gives `none')."
   (or (seq-some (lambda (cell)
                   (when-let* ((fn (plist-get (cdr cell) :detect)))
-                    (and (funcall fn env wsys) (car cell))))
+                    ;; an adapter's detect function that signals matches nothing
+                    (and (ignore-errors (funcall fn env wsys)) (car cell))))
                 drgnx-platform--adapters)
       'none))
 
@@ -243,52 +260,72 @@ No process, no window-manager call.  Without FRAME in batch Emacs: from the proc
 
 (defun drgnx-platform-can-move (frame)
   "t when drgnx can move FRAME to another monitor, else (REASON . FIX) (FIX may be nil)."
-  (let* ((ctx (drgnx-platform-ctx frame)) (spec (drgnx-platform-adapter (plist-get ctx :wm))))
-    (cond ((plist-get spec :can-move) (funcall (plist-get spec :can-move) ctx))
-          ((plist-get spec :move) t)
-          (t (cons (format "drgnx has no adapter to move windows here (%s)"
-                           (or (plist-get spec :title) (plist-get ctx :wm)))
-                   nil)))))
+  (condition-case err
+      (let* ((ctx (drgnx-platform-ctx frame)) (spec (drgnx-platform-adapter (plist-get ctx :wm))))
+        (cond ((plist-get spec :can-move) (funcall (plist-get spec :can-move) ctx))
+              ((plist-get spec :move) t)
+              (t (cons (format "drgnx has no adapter to move windows here (%s)"
+                               (or (plist-get spec :title) (plist-get ctx :wm)))
+                       nil))))
+    (error (cons (format "the window-manager adapter failed: %s" (error-message-string err)) nil))))
 
 (defun drgnx-platform--reason (can)
   (if (consp can) (concat (car can) (and (cdr can) (concat " — " (cdr can)))) "cannot move"))
 
 (defun drgnx-platform--error-p (r) (and (consp r) (eq (car r) :error)))
 
-(defun drgnx-platform--run (fn &rest args)
-  "Call FN with ARGS; a signal becomes (:error MESSAGE) given to the last of ARGS (the callback)."
-  (let ((cb (car (last args))))
-    (condition-case err (apply fn args)
-      (error (let ((msg (error-message-string err))) (drgnx-platform--later (lambda () (funcall cb (list :error msg)))))))))
+(defun drgnx-platform--operation (timeout callback starter transform)
+  "Run STARTER with an adapter callback; CALLBACK gets what TRANSFORM makes of the adapter's answer, or
+(:error MESSAGE) when the adapter or TRANSFORM signals, or (:error \"timed out\") when the adapter has not
+answered `drgnx-platform-watchdog-margin' seconds after TIMEOUT.  CALLBACK runs exactly once, later."
+  (let* ((cb (drgnx-platform--once callback)) (timer nil)
+         (reply (lambda (r)
+                  (when timer (cancel-timer timer))
+                  (funcall cb (condition-case err
+                                  (if (drgnx-platform--error-p r) r (funcall transform r))
+                                (error (list :error (error-message-string err))))))))
+    (setq timer (run-at-time (+ timeout drgnx-platform-watchdog-margin) nil
+                             (lambda () (funcall cb (list :error "timed out")))))
+    (condition-case err (funcall starter reply)
+      (error (let ((msg (error-message-string err)))
+               (drgnx-platform--later (lambda () (funcall reply (list :error msg)))))))
+    nil))
+
+(defun drgnx-platform--refuse (callback result)
+  "Later, call CALLBACK once with RESULT."
+  (let ((cb (drgnx-platform--once callback)))
+    (drgnx-platform--later (lambda () (funcall cb result)))))
 
 (defun drgnx-platform-monitors (frame callback)
   "Call CALLBACK with FRAME's monitors, numbered (`drgnx-platform-number-monitors'), or (:error MESSAGE)."
-  (let* ((cb (drgnx-platform--once callback)) (ctx (drgnx-platform-ctx frame))
-         (fn (drgnx-platform--spec (plist-get ctx :wm) :monitors)))
+  (let* ((ctx (drgnx-platform-ctx frame)) (fn (drgnx-platform--spec (plist-get ctx :wm) :monitors)))
     (if (not fn)
-        (drgnx-platform--later
-         (lambda () (funcall cb (list :error (drgnx-platform--reason (drgnx-platform-can-move frame))))))
-      (drgnx-platform--run fn ctx
-                           (lambda (r) (funcall cb (if (drgnx-platform--error-p r) r
-                                                     (drgnx-platform-number-monitors r))))))))
+        (drgnx-platform--refuse
+         callback (list :error (drgnx-platform--reason (drgnx-platform-can-move frame))))
+      (drgnx-platform--operation (plist-get ctx :timeout) callback
+                                 (lambda (reply) (funcall fn ctx reply))
+                                 #'drgnx-platform-number-monitors))))
 
 (defun drgnx-platform-frame-monitor (frame callback)
-  "Call CALLBACK with the monitor FRAME is on (a plist), or nil when unknown or not applicable."
-  (let* ((cb (drgnx-platform--once callback)) (ctx (drgnx-platform-ctx frame))
-         (fn (drgnx-platform--spec (plist-get ctx :wm) :frame-monitor)))
+  "Call CALLBACK with the monitor FRAME is on (a plist), or nil when unknown, failing or not applicable."
+  (let* ((ctx (drgnx-platform-ctx frame)) (fn (drgnx-platform--spec (plist-get ctx :wm) :frame-monitor))
+         (done (lambda (r) (funcall callback (and (not (drgnx-platform--error-p r)) r)))))
     (if (not fn)
-        (drgnx-platform--later (lambda () (funcall cb nil)))
-      (drgnx-platform--run fn ctx (lambda (r) (funcall cb (and (not (drgnx-platform--error-p r)) r)))))))
+        (drgnx-platform--refuse done nil)
+      (drgnx-platform--operation (plist-get ctx :timeout) done
+                                 (lambda (reply) (funcall fn ctx reply))
+                                 #'identity))))
 
 (defun drgnx-platform--move (key timeout frame monitor callback)
-  (let* ((cb (drgnx-platform--once callback)) (ctx (drgnx-platform-ctx frame timeout))
+  (let* ((ctx (drgnx-platform-ctx frame timeout))
          (spec (drgnx-platform-adapter (plist-get ctx :wm)))
          (fn (or (plist-get spec key) (plist-get spec :move)))
          (can (drgnx-platform-can-move frame)))
     (if (or (not fn) (not (eq can t)))
-        (drgnx-platform--later (lambda () (funcall cb (list :error (drgnx-platform--reason can)))))
-      (drgnx-platform--run fn ctx monitor
-                           (lambda (r) (funcall cb (if (drgnx-platform--error-p r) r 'ok)))))))
+        (drgnx-platform--refuse callback (list :error (drgnx-platform--reason can)))
+      (drgnx-platform--operation timeout callback
+                                 (lambda (reply) (funcall fn ctx monitor reply))
+                                 (lambda (_r) 'ok)))))
 
 (defun drgnx-platform-move-frame (frame monitor callback)
   "Move FRAME to MONITOR (a plist); a command's path, so `drgnx-platform-command-timeout'.
@@ -301,7 +338,9 @@ CALLBACK gets `ok' or (:error MESSAGE)."
 
 ;;;; Monitors: numbering, labels, matching
 
-(defun drgnx-platform--geometry (m) (plist-get m :geometry))
+(defun drgnx-platform--geometry (m)
+  "M's geometry as a list (X Y W H) (a saved one may have been read back as a vector)."
+  (append (plist-get m :geometry) nil))
 
 (defun drgnx-platform--relation (m first)
   "How M lies relative to FIRST: right of, left of, above or below (the larger offset wins)."
@@ -334,7 +373,7 @@ CALLBACK gets `ok' or (:error MESSAGE)."
 non-empty and equal (if exactly one); else the one with SAVED's name (if exactly one); else the one
 with SAVED's geometry; else nil."
   (let ((make (plist-get saved :make)) (model (plist-get saved :model)) (serial (plist-get saved :serial))
-        (name (plist-get saved :name)) (geometry (plist-get saved :geometry)))
+        (name (plist-get saved :name)) (geometry (drgnx-platform--geometry saved)))
     (or (and (drgnx-platform--filled make) (drgnx-platform--filled model) (drgnx-platform--filled serial)
              (let ((hits (seq-filter (lambda (m) (and (equal (plist-get m :make) make)
                                                       (equal (plist-get m :model) model)
@@ -345,13 +384,19 @@ with SAVED's geometry; else nil."
              (let ((hits (seq-filter (lambda (m) (equal (plist-get m :name) name)) monitors)))
                (and (null (cdr hits)) (car hits))))
         (and geometry
-             (seq-find (lambda (m) (equal (plist-get m :geometry) geometry)) monitors)))))
+             (seq-find (lambda (m) (equal (drgnx-platform--geometry m) geometry)) monitors)))))
 
 ;;;; Built-in adapters: frame positions (x11, ns)
 
-(defun drgnx-platform--attrs-monitor (attrs)
-  "A monitor plist from an entry of `display-monitor-attributes-list'."
-  (list :name (or (alist-get 'name attrs) "") :make "" :model "" :serial ""
+(defun drgnx-platform--attrs-monitor (attrs &optional frame)
+  "A monitor plist from an entry of `display-monitor-attributes-list'.
+Under pgtk the name is GDK's model string (\"Unknown\", \"MetaVirtualMonitor\"), not the compositor's output
+name: it is no identity, so the monitor of a pgtk FRAME gets the name \"\" (only an adapter that knows the
+compositor vouches for a name)."
+  (list :name (if (eq (and frame (drgnx-platform--frame-window-system frame)) 'pgtk)
+                  ""
+                (or (alist-get 'name attrs) ""))
+        :make "" :model "" :serial ""
         :geometry (alist-get 'geometry attrs) :workarea (alist-get 'workarea attrs)))
 
 (defun drgnx-platform--answer-later (callback thunk)
@@ -364,28 +409,35 @@ with SAVED's geometry; else nil."
   "CALLBACK with Emacs' own monitor list for CTX's frame, later."
   (let ((frame (plist-get ctx :frame)))
     (drgnx-platform--answer-later
-     callback (lambda () (mapcar #'drgnx-platform--attrs-monitor (display-monitor-attributes-list frame))))))
+     callback (lambda () (mapcar (lambda (a) (drgnx-platform--attrs-monitor a frame)) (display-monitor-attributes-list frame))))))
 
 (defun drgnx-platform--emacs-frame-monitor (ctx callback)
   "CALLBACK with the monitor CTX's frame is on, later."
   (let ((frame (plist-get ctx :frame)))
     (drgnx-platform--answer-later
      callback (lambda () (and (frame-live-p frame)
-                              (drgnx-platform--attrs-monitor (frame-monitor-attributes frame)))))))
+                              (drgnx-platform--attrs-monitor (frame-monitor-attributes frame) frame))))))
 
 (defun drgnx-platform--graphic-can-move (ctx)
   (if (display-graphic-p (plist-get ctx :frame)) t
     '("a terminal window has no monitor" . nil)))
 
+(defun drgnx-platform--position (v)
+  "V as a `left' or `top' frame parameter: a negative number is an offset from the left/top, (+ V)."
+  (if (< v 0) (list '+ v) v))
+
 (defun drgnx-platform--move-by-position (ctx monitor callback)
   "Keep the frame's `fullscreen' value, clear it, set `left' and `top' to MONITOR's workarea origin,
-re-apply the value (the window manager moves a frame by position; a fullscreen one would not move)."
+re-apply the value (the window manager moves a frame by position; a fullscreen one would not move).
+A negative coordinate is written (+ N): a plain negative integer would count from the right or bottom edge.
+On macOS a natively fullscreen frame lives in its own Space; whether clearing `fullscreen' moves it back to
+a desktop first is for the macOS tier to check."
   (let* ((frame (plist-get ctx :frame))
          (area (or (plist-get monitor :workarea) (plist-get monitor :geometry)))
          (fs (frame-parameter frame 'fullscreen)))
     (set-frame-parameter frame 'fullscreen nil)
-    (set-frame-parameter frame 'left (nth 0 area))
-    (set-frame-parameter frame 'top (nth 1 area))
+    (set-frame-parameter frame 'left (drgnx-platform--position (nth 0 area)))
+    (set-frame-parameter frame 'top (drgnx-platform--position (nth 1 area)))
     (when fs (set-frame-parameter frame 'fullscreen fs))
     (drgnx-platform--later (lambda () (funcall callback 'ok)))))
 
@@ -447,7 +499,10 @@ re-apply the value (the window manager moves a frame by position; a fullscreen o
     (nreverse out)))
 
 (defun drgnx-platform--gnome-doctor (env)
-  "Monitors from Mutter's DisplayConfig when the D-Bus call answers within `drgnx-platform-doctor-timeout'."
+  "Monitors from Mutter's DisplayConfig when the D-Bus call answers within `drgnx-platform-doctor-timeout'.
+The :session connection is opened once, from the daemon's environment at that time: binding
+DBUS_SESSION_BUS_ADDRESS here does not select another frame's session bus (it only helps while no
+connection has been made yet).  The doctor reports the daemon's session."
   (let ((answer
          (and (require 'dbus nil t) (fboundp 'dbus-call-method)
               (let ((process-environment
@@ -475,6 +530,8 @@ re-apply the value (the window manager moves a frame by position; a fullscreen o
 (defun drgnx-platform--no-monitor (_ctx) '("a terminal window has no monitor" . nil))
 
 ;;;; Registration, in detection order (later milestones' adapters extend the declared ones)
+
+(setq drgnx-platform--registering-builtins t)
 
 (drgnx-platform-define-adapter
  'ns :title "macOS" :status 'verified
@@ -532,6 +589,8 @@ re-apply the value (the window manager moves a frame by position; a fullscreen o
  :detect (lambda (_env _ws) t)
  :can-move #'drgnx-platform--no-monitor
  :frame-monitor (lambda (_ctx callback) (drgnx-platform--later (lambda () (funcall callback nil)))))
+
+(setq drgnx-platform--registering-builtins nil)
 
 (provide 'drgnx-platform)
 ;;; drgnx-platform.el ends here

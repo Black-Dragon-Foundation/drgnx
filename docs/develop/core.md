@@ -169,7 +169,8 @@ it never starts a process. A terminal frame counts as a workbench frame elsewher
 **Calls.** `(drgnx-platform-call ARGV :env :timeout :callback)` runs a program without blocking. The callback gets
 `ok`, `error` or `timeout` and the output, exactly once, never before the function returns; at the deadline the
 process is killed and its later output dropped; a missing program is an `error` ("PROGRAM is not installed"); an
-error in the callback is shown with `message`. Deadlines: `drgnx-platform-command-timeout` (2 s, commands),
+error in the callback is shown with `message`; standard error is read to the end before a failed call is reported;
+output is decoded as UTF-8. Deadlines: `drgnx-platform-command-timeout` (2 s, commands),
 `drgnx-platform-restore-timeout` (5 s, restoring frames), `drgnx-platform-doctor-timeout` (1 s, the doctor's and
 typed commands' `drgnx-platform-call-sync`). `(drgnx-platform-process-env FRAME)` gives the session variables of
 the frame as `"K=V"` strings for `:env`; an adapter function calls `(drgnx-platform-ctx-call CTX ARGV CALLBACK)`,
@@ -180,22 +181,31 @@ sorts them left to right, then top to bottom and adds `:number` and `:label` ("1
 2560×1440, right of 1"). `(drgnx-platform-match-monitor SAVED MONITORS)` finds a saved monitor again: make, model
 and serial (all non-empty), else the name, else the geometry. Under pgtk Emacs' monitor `name` is GDK's model
 string ("Unknown" under sway), not the compositor's output name, and Emacs lists monitors in no stable order: an
-adapter that talks to a compositor matches Emacs' monitors to the compositor's by geometry.
+adapter that talks to a compositor matches Emacs' monitors to the compositor's by geometry. For that reason the
+monitors drgnx builds from a pgtk frame's `display-monitor-attributes-list` (the gnome adapter's) get the name
+`""`: a name is identity only when an adapter that knows the compositor vouches for it (X11 and XWayland report
+the real connector names).
 
-**Public operations** (all take a callback; `(:error MESSAGE)` instead of a signal): `drgnx-platform-monitors`,
+**Public operations** (all take a callback; `(:error MESSAGE)` instead of a signal, whatever the adapter does:
+a signal in its function, in its reply (a monitor list that cannot be numbered) or in a timer of its own; an adapter
+that does not answer within its deadline plus `drgnx-platform-watchdog-margin` (1 s) gets `(:error "timed out")`,
+once; a `:detect` function that signals matches nothing): `drgnx-platform-monitors`,
 `drgnx-platform-frame-monitor`, `drgnx-platform-move-frame` (a command's path, 2 s), `drgnx-platform-place-frame`
 (restoring, 5 s) and `drgnx-platform-can-move` -> `t` or `(REASON . FIX)`, e.g. GNOME: "GNOME does not let apps
 move their windows", fix "press Super+Shift+→ or Super+Shift+←".
 
 **Built in:** `x11` and `ns` (frame positions: the move keeps the frame's `fullscreen` value, clears it, sets
-`left`/`top` to the target's workarea origin and re-applies it), `gnome` (explains; the doctor asks Mutter's
+`left`/`top` to the target's workarea origin and re-applies it; a negative coordinate is written `(+ N)`, because a
+plain negative integer counts from the right or bottom edge. macOS native fullscreen, a Space of its own, is for the
+macOS tier to check), `gnome` (explains; the doctor asks Mutter's
 `DisplayConfig` for the monitors, within 1 s), `other-wayland` (names the compositor, tells the user to use its
 own key), `tty` and `none`. `sway`, `hyprland`, `niri`, `kwin` and `i3` are declared (detection, title, tool,
 version command); their monitor and move functions arrive with their milestone tasks.
 
 **Another compositor** (river, Wayfire, labwc, Cosmic, ...): call `drgnx-platform-define-adapter` from your
-config. A new name goes before the catch-alls `other-wayland` and `none`, so its `:detect` is tried before them;
-defining an existing name replaces only the keys you give.
+config. A new name goes before `x11` (so an adapter for an X window manager such as bspwm, awesome or xmonad
+wins over plain X) and before the catch-alls `tty`, `other-wayland` and `none`; its `:detect` is tried after the
+built-in compositors. Defining an existing name replaces only the keys you give.
 
 ```elisp
 (drgnx-platform-define-adapter

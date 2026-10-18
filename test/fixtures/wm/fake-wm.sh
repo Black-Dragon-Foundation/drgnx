@@ -6,6 +6,8 @@
 #   DRGNX_FAKE_WM_MAP    lines "ARGS-REGEXP FILE": the first regexp (grep -E) matching the arguments
 #                        joined with spaces picks FILE (relative to DIR; ".json" is added if missing)
 #   DRGNX_FAKE_WM_DELAY  seconds to sleep before answering
+#   DRGNX_FAKE_WM_OUT    text printed to standard output (before any mapped reply)
+#   DRGNX_FAKE_WM_STDERR text printed to standard error
 #   DRGNX_FAKE_WM_EXIT   exit status (default 0)
 name=$(basename "$0")
 args="$*"
@@ -17,6 +19,8 @@ if [ -n "$DRGNX_FAKE_WM_LOG" ]; then
     "$SWAYSOCK" "$I3SOCK" "$HYPRLAND_INSTANCE_SIGNATURE" "$NIRI_SOCKET" >> "$DRGNX_FAKE_WM_LOG.env"
 fi
 [ -n "$DRGNX_FAKE_WM_DELAY" ] && sleep "$DRGNX_FAKE_WM_DELAY"
+[ -n "$DRGNX_FAKE_WM_OUT" ] && printf '%s' "$DRGNX_FAKE_WM_OUT"
+[ -n "$DRGNX_FAKE_WM_STDERR" ] && printf '%s' "$DRGNX_FAKE_WM_STDERR" >&2
 printf '%s\n' "$DRGNX_FAKE_WM_MAP" | while IFS= read -r line; do
   [ -n "$line" ] || continue
   file=${line##* }
