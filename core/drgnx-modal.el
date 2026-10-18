@@ -30,6 +30,11 @@ Filled from the key profiles (keys/vim.eld, `:modal').")
   "The modal state of this buffer: normal insert visual visual-line visual-block replace motion
 operator emacs; nil when no modal engine runs here.")
 
+(defvar-local drgnx-modal-keys-off nil
+  "Non-nil in a buffer whose keys go somewhere else (the Live view while you drive the page): neither the leader
+map nor the panel map is active here, whatever the state.  Whoever sets it calls
+`(drgnx-modal-set-state drgnx-modal-state)' after, so the switch takes effect at once; the same after clearing it.")
+
 (defvar-local drgnx-modal--leader-on nil "Non-nil while `drgnx-modal-leader-map' is active in this buffer.")
 (defvar-local drgnx-modal--panel-on nil "Non-nil while `drgnx-modal-panel-map' is active in this buffer.")
 
@@ -69,10 +74,10 @@ operator emacs; nil when no modal engine runs here.")
 (defun drgnx-modal-set-state (state)
   "Make STATE the modal state of this buffer and switch the leader and panel maps to match.
 The leader map is on in the normal-like and visual states, and in a panel's emacs state; the panel map
-only in a panel's emacs state.  Returns STATE."
-  (let ((panel (and (eq state 'emacs) (drgnx-modal-panel-p))))
+only in a panel's emacs state; neither while `drgnx-modal-keys-off' is set here.  Returns STATE."
+  (let ((panel (and (eq state 'emacs) (not drgnx-modal-keys-off) (drgnx-modal-panel-p))))
     (setq drgnx-modal-state state
-          drgnx-modal--leader-on (and (or panel (memq state drgnx-modal--leader-states)) t)
+          drgnx-modal--leader-on (and (not drgnx-modal-keys-off) (or panel (memq state drgnx-modal--leader-states)) t)
           drgnx-modal--panel-on panel)
     (force-mode-line-update)
     state))

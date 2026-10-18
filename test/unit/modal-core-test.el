@@ -78,6 +78,28 @@
         (should-not (drgnx-modal-test--leader-p))
         (should-not (drgnx-modal-test--panel-key-p))))))
 
+(ert-deftest drgnx-modal/keys-off-takes-the-modal-maps-out-of-a-buffer ()
+  ;; A buffer that sends its keys elsewhere (Live view while you drive) turns the leader and panel maps off, in
+  ;; every state; back on, the state it is in decides again.
+  (drgnx-modal-test--with-leader
+    (keymap-set drgnx-modal-panel-map "j" #'drgnx-modal-test-cmd)
+    (with-temp-buffer
+      (drgnx-modal-test-panel-mode)
+      (drgnx-modal-set-state 'emacs)
+      (should (drgnx-modal-test--leader-p))
+      (setq drgnx-modal-keys-off t)
+      (should (eq (drgnx-modal-set-state drgnx-modal-state) 'emacs))
+      (should-not (drgnx-modal-test--leader-p))
+      (should-not (drgnx-modal-test--panel-key-p))
+      (drgnx-modal-set-state 'normal)
+      (should-not (drgnx-modal-test--leader-p))
+      (setq drgnx-modal-keys-off nil)
+      (drgnx-modal-set-state 'emacs)
+      (should (drgnx-modal-test--leader-p))
+      (should (drgnx-modal-test--panel-key-p)))
+    (with-temp-buffer
+      (should-not (local-variable-p 'drgnx-modal-keys-off)))))
+
 (ert-deftest drgnx-modal/mode-lists-use-derived-mode ()
   (with-temp-buffer
     (should-not (drgnx-modal-input-p))

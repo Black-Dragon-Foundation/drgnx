@@ -115,8 +115,10 @@ Nothing in it needs evil, and `test/unit/modal-core-test.el` drives it with a fa
 - **State.** An engine calls `(drgnx-modal-set-state STATE)` on every change (`normal insert visual visual-line
   visual-block replace motion operator emacs`, nil when no engine runs in the buffer). The leader map is on in
   `normal`, `motion` and the visual states, and in a panel's `emacs` state; the panel map only in a panel's `emacs`
-  state. The switches are buffer-local and are dropped with the major mode, so an engine calls
-  `drgnx-modal-init-buffer` (the buffer's `drgnx-modal-initial-state`: emacs in forms and panels, insert in input
+  state. A buffer whose keys go elsewhere sets `drgnx-modal-keys-off` (buffer-local) and calls
+  `(drgnx-modal-set-state drgnx-modal-state)`: neither map is on there in any state (the Live view does it while you
+  drive the page, so `SPC`, `j` and `k` reach the page). The switches are buffer-local and are dropped with the
+  major mode, so an engine calls `drgnx-modal-init-buffer` (the buffer's `drgnx-modal-initial-state`: emacs in forms and panels, insert in input
   buffers, else normal) in every buffer when it starts and after each major-mode change (or mirrors its own state with
 `drgnx-modal-set-state`; the minibuffer is never modal: `drgnx-modal-init-buffer` leaves it alone). Panels, forms and input buffers are told apart by `drgnx-modal-panel-modes`, `-form-modes` (fields you
   type in: no modal keys) and `-input-modes` (shells and message buffers: start in insert or emacs state), with

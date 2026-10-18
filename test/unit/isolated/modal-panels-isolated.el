@@ -282,6 +282,30 @@
       (drgnx-modal-panels-test--press "C-w l")
       (should (equal (drgnx-modal-panels-test--calls) '((focus-right)))))))
 
+(ert-deftest drgnx-modal-panels/live-driving-keys-reach-the-page ()
+  ;; The Live view is a panel (leader and panel maps on); while you drive, SPC, j and C-w are the page's or Emacs's,
+  ;; never the leader's; handing back gives the panel its keys again.
+  (drgnx-modal-panels-test--with
+    (require 'drgnx-live)
+    (let ((b (generate-new-buffer " *live-driving*")))
+      (unwind-protect
+          (drgnx-modal-panels-test--show b
+            (drgnx-live-mode)
+            (should (eq evil-state 'emacs))
+            (should (keymapp (key-binding " ")))
+            (should (eq (key-binding "j") #'drgnx-modal-panel-next))
+            (should (keymapp (key-binding (kbd "C-w"))))
+            (drgnx-live-driving-mode 1)
+            (should (eq (key-binding " ") #'drgnx-live-key))
+            (should (eq (key-binding "j") #'drgnx-live-key))
+            (should (eq (key-binding "k") #'drgnx-live-key))
+            (should-not (keymapp (key-binding (kbd "C-w"))))
+            (drgnx-live-driving-mode -1)
+            (should (eq evil-state 'emacs))
+            (should (keymapp (key-binding " ")))
+            (should (eq (key-binding "j") #'drgnx-modal-panel-next)))
+        (kill-buffer b)))))
+
 (ert-deftest drgnx-modal-panels/no-cursor-box-in-any-state-change ()
   (drgnx-modal-panels-test--with
     (let ((cursors nil))
