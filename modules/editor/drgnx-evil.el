@@ -440,9 +440,16 @@ state, or emacs state where Emacs' keys type).  Called once per pause; reads onl
 
 (defun drgnx-evil--selection ()
   "`drgnx-modal-selection-function': in visual state, the selection as evil's operators take it, (BEG . END):
-whole lines with the last newline in visual line, the characters under both ends in visual; nil otherwise."
+whole lines with the last newline in visual line, the characters under both ends in visual.  A block (C-v) is a
+rectangle, which one region cannot be: it gives the whole lines it touches, as visual line does.  Nil outside visual
+state and for an empty selection (`v' in an empty buffer), so the caller falls back."
   (when (and (bound-and-true-p evil-local-mode) (evil-visual-state-p))
-    (let ((range (evil-visual-range))) (cons (car range) (cadr range)))))
+    (pcase-let ((`(,beg ,end ,type) (evil-visual-range)))
+      (when (eq type 'block)
+        (save-excursion
+          (setq beg (progn (goto-char beg) (line-beginning-position))
+                end (progn (goto-char end) (line-beginning-position 2)))))
+      (and (< beg end) (cons beg end)))))
 
 (defun drgnx-evil--ai (on)
   "ON: ghost text asks only while typing, and \"the selection\" (Edit with AI) is the visual one.  Nil: as before."

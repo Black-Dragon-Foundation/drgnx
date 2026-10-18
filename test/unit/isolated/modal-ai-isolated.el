@@ -101,10 +101,10 @@ so what clears a suggestion is the keys pressed."
     (execute-kbd-macro (kbd keys))))
 
 (defun drgnx-modal-ai-test--pause ()
-  "The pause after the last command: the idle timer the ghost's post-command set, run now."
+  "The pause after the last command: the idle timer the ghost's post-command set, run now as Emacs runs a due timer
+\(`timer-event-handler', which also takes it off the idle list)."
   (when (timerp drgnx-ai-ghost--timer)
-    (cancel-timer drgnx-ai-ghost--timer)
-    (funcall (timer--function drgnx-ai-ghost--timer))))
+    (timer-event-handler drgnx-ai-ghost--timer)))
 
 (defun drgnx-modal-ai-test--wait (pred &optional secs)
   (let ((deadline (+ (float-time) (or secs 5)))) (while (and (not (funcall pred)) (< (float-time) deadline)) (accept-process-output nil 0.02)))
@@ -134,7 +134,15 @@ so what clears a suggestion is the keys pressed."
       (should (= drgnx-modal-ai-test--asked 0))
       (drgnx-modal-ai-test--keys "<escape>")
       (drgnx-modal-ai-test--suggest)                               ; insert state: one question, its answer shows
-      (should (= drgnx-modal-ai-test--asked 1)))))
+      (should (= drgnx-modal-ai-test--asked 1))
+      (drgnx-modal-ai-test--keys "<escape> C-z")                   ; emacs state types with Emacs' keys: it asks
+      (should (eq evil-state 'emacs))
+      (drgnx-modal-ai-test--pause)
+      (should (= drgnx-modal-ai-test--asked 2))
+      (drgnx-modal-ai-test--keys "C-z R")                          ; replace state: Tab's insert would not overwrite
+      (should (eq evil-state 'replace))
+      (drgnx-modal-ai-test--pause)
+      (should (= drgnx-modal-ai-test--asked 2)))))
 
 (ert-deftest drgnx-modal-ai/one-escape-dismisses-and-leaves-insert ()
   (drgnx-modal-ai-test--with
@@ -181,6 +189,39 @@ so what clears a suggestion is the keys pressed."
         (drgnx-modal-ai-test--keys "<escape>")
         (should (eq evil-state 'normal))
         (should-not (drgnx-modal-selection))))))
+
+(defun drgnx-modal-ai-test--spec ()
+  "Edit with AI's interactive spec evaluated here, the instruction answered \"shorter\"."
+  (cl-letf (((symbol-function 'read-string) (lambda (&rest _) "shorter")))
+    (advice-eval-interactive-spec (cadr (interactive-form 'drgnx-ai-edit)))))
+
+(ert-deftest drgnx-modal-ai/visual-block-edits-the-lines-it-touches ()
+  ;; one region cannot be a rectangle: the stream between the corners would send text outside the columns
+  (drgnx-modal-ai-test--with
+    (drgnx-modal-ai-test--buffer "one\ntwo\nthree\nfour\n"
+      (forward-line 1)
+      (let ((beg (line-beginning-position 1)) (end (line-beginning-position 3)))
+        (drgnx-modal-ai-test--keys "C-v j l")
+        (should (eq evil-state 'visual))
+        (should (equal (drgnx-modal-selection) (cons beg end)))
+        (should (equal (drgnx-modal-ai-test--spec) (list "shorter" beg end)))))))
+
+(ert-deftest drgnx-modal-ai/visual-edits-the-characters-under-both-ends ()
+  (drgnx-modal-ai-test--with
+    (drgnx-modal-ai-test--buffer "one\ntwo\nthree\nfour\n"
+      (forward-line 1)
+      (let ((beg (point)))
+        (drgnx-modal-ai-test--keys "v l l")                        ; "two"
+        (should (equal (drgnx-modal-selection) (cons beg (+ beg 3))))
+        (should (equal (drgnx-modal-ai-test--spec) (list "shorter" beg (+ beg 3))))
+        (drgnx-modal-ai-test--keys "<escape> v h")                 ; backwards from the last o: "wo", in order
+        (should (equal (drgnx-modal-selection) (cons (1+ beg) (+ beg 3))))))
+    ;; an empty buffer: an empty selection is none, Edit with AI falls back to the line
+    (drgnx-modal-ai-test--buffer ""
+      (drgnx-modal-ai-test--keys "v")
+      (should (eq evil-state 'visual))
+      (should-not (drgnx-modal-selection))
+      (should (equal (drgnx-modal-ai-test--spec) '("shorter" 1 1))))))
 
 (ert-deftest drgnx-modal-ai/stop-gives-the-hooks-back ()
   (drgnx-modal-ai-test--with

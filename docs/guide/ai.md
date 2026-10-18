@@ -118,7 +118,9 @@ nothing is asked, and drgnx says so once; it looks for running providers again a
 **Edit with AI…** rewrites the selected region, or the defun at point when nothing is selected, as you say. Keys:
 VS Code `C-k C-e` (⌘K ⌘E on a Mac), Emacs `C-c e`, Vim `SPC a e`; never `C-i`, which is Tab in a terminal. It asks the `edit` role.
 Under Vim keys the selection is the visual one, as Vim's operators take it: `V` and `j` select whole lines, and the
-edit covers both lines with the last newline; in visual (`v`) the characters under both ends are in it.
+edit covers both lines with the last newline; in visual (`v`) the characters under both ends are in it. A block
+(`C-v`) selects the lines it touches, whole: an edit rewrites one stretch of text, never a rectangle. An empty
+selection counts as none (the defun at point).
 The answer opens as a diff against the buffer as it is now (a code fence the model adds is dropped), and nothing
 changes until you decide:
 
