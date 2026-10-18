@@ -268,9 +268,10 @@ Sets `drgnx-surfaces--usage-bad' when something was left out."
   "The `which-key-replacement-alist' entries drgnx added, removed again on the next refresh.")
 
 (defun drgnx-surfaces--leader-prefix-titles (keys)
-  "Alist PREFIX → \"+CATEGORY\" for the proper prefixes of two or more keys of the leader-map KEYS ((KEY . CMD)…):
+  "Alist PREFIX → \"CATEGORY\" for the proper prefixes of two or more keys of the leader-map KEYS ((KEY . CMD)…):
 `SPC f' for `SPC f f', `SPC f s'.  CATEGORY is the most common category of the commands under the prefix (the first
-alphabetically on a tie).  A prefix that is itself a key of KEYS is not labelled."
+alphabetically on a tie); which-key shows it as +CATEGORY (it puts `which-key-prefix-prefix' before a prefix's
+label).  A prefix that is itself a key of KEYS is not labelled."
   (let (prefixes)
     (pcase-dolist (`(,key . ,cmd) keys)
       (let ((events (split-string key " ")))
@@ -280,13 +281,13 @@ alphabetically on a tie).  A prefix that is itself a key of KEYS is not labelled
                         (unless (assoc (car p) keys)
                           (let ((counts nil))
                             (dolist (c (cdr p)) (cl-incf (alist-get c counts 0 nil #'equal)))
-                            (cons (car p) (concat "+" (car (car (sort counts (lambda (a b) (or (> (cdr a) (cdr b))
-                                                                                               (and (= (cdr a) (cdr b)) (string< (car a) (car b)))))))))))))
+                            (cons (car p) (car (car (sort counts (lambda (a b) (or (> (cdr a) (cdr b))
+                                                                                   (and (= (cdr a) (cdr b)) (string< (car a) (car b))))))))))))
                       prefixes))))
 
 (defun drgnx-surfaces-apply-which-key ()
   "Label every active global key and every key of the leader map in which-key with its command's title, and each
-leader prefix (`SPC f') with +CATEGORY, replacing the labels of the previous key setup.  Keys in other mode keymaps are
+leader prefix (`SPC f') with its CATEGORY (which-key shows +CATEGORY), replacing the labels of the previous key setup.  Keys in other mode keymaps are
 not labelled: which-key's keymap-based labels write into the keymap, which would make an unbound key a prefix
 \(which-key shows the command)."
   (when (require 'which-key nil t)

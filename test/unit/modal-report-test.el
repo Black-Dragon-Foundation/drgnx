@@ -74,7 +74,12 @@ no registered modal engine; every binding is undone after."
     (drgnx-modal-report-test--live
       (drgnx-keys-use drgnx-modal-report-test--vim)
       (should (equal (drgnx-modal-report-test--label "SPC f f") "Open File…"))
-      (should (equal (drgnx-modal-report-test--label "SPC f") "+File"))
+      ;; the prefix's label is the category alone: which-key itself puts `which-key-prefix-prefix' ("+") before a
+      ;; prefix's description, so the popup reads "+File" (a label "+File" showed "++File")
+      (should (equal (drgnx-modal-report-test--label "SPC f") "File"))
+      (should (equal (substring-no-properties
+                      (which-key--propertize-description (drgnx-modal-report-test--label "SPC f") t nil nil))
+                     "+File"))
       (drgnx-keys-use drgnx-modal-report-test--vscode)
       (should-not (drgnx-modal-report-test--label "SPC f f"))
       (should-not (drgnx-modal-report-test--label "SPC f")))))
