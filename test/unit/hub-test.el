@@ -2,7 +2,9 @@
 (require 'ert)
 (require 'drgnx-hub)
 (require 'drgnx-paths)
+(require 'drgnx-timer)
 (load (expand-file-name "test/fixtures/mock-llm" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
 
 (defmacro drgnx-hub-test--with (&rest body)
   "BODY with drgnx's dirs under ROOT (so the hub's socket is this test's own), a mock OpenRouter on OR-PORT logging
@@ -900,5 +902,133 @@ about) and keeps the tests within their time limits."
         (should (integerp (plist-get (json-parse-string (cdr s) :object-type 'plist) :gateway_port))))
       (should (= (car (funcall cli "stop")) 0))
       (should (drgnx-hub-test--wait (lambda () (not (drgnx-hub-running-p))) 5)))))
+
+;;;; The hub's timers, on the timer layer (virtual time; no socket, no gateway)
+
+(defvar drgnx-hub-test--calls nil "What the stubbed hub functions saw, newest first.")
+
+(defmacro drgnx-hub-test--timed (&rest body)
+  "BODY on the virtual clock, with the hub's side effects stubbed (they log to `drgnx-hub-test--calls'), no recorded
+timer errors and a state dir of its own.  The hub's tables are fresh; nothing is served."
+  (declare (indent 0))
+  `(let* ((state (make-temp-file "drgnx-hub-state" t))
+          (process-environment (cons (concat "XDG_STATE_HOME=" state) process-environment))
+          (drgnx-timer-errors nil) (drgnx-timer-report-file drgnx-timer-report-file) (drgnx-hub-test--calls nil)
+          (drgnx-hub--event-state (make-hash-table :test #'equal)) (drgnx-hub--told (make-hash-table :test #'equal))
+          (drgnx-hub--sent (make-hash-table :test #'equal)) (drgnx-hub--subscribers nil) (drgnx-hub--server nil)
+          (drgnx-hub--exit-function (lambda () (push 'exit drgnx-hub-test--calls)))
+          (drgnx-gateway--registrations (make-hash-table :test #'equal)))
+     (unwind-protect
+         (cl-letf (((symbol-function 'drgnx-hub--save-sessions) #'ignore)
+                   ((symbol-function 'drgnx-hub--session-events) #'ignore)
+                   ((symbol-function 'drgnx-hub--answer) #'ignore)
+                   ((symbol-function 'drgnx-gateway-stop) #'ignore)
+                   ((symbol-function 'drgnx-agents-free-p) (lambda (_s) t))
+                   ((symbol-function 'drgnx-hub--deliver) (lambda () (push 'deliver drgnx-hub-test--calls)))
+                   ((symbol-function 'drgnx-hub--flush) (lambda (s) (push (list 'flush (drgnx-agent-session-id s)) drgnx-hub-test--calls)))
+                   ((symbol-function 'drgnx-hub--events-send) (lambda () (push 'events drgnx-hub-test--calls))))
+           (drgnx-test-with-clock () ,@body))
+       (drgnx-timer-reset)
+       (delete-directory state t))))
+
+(defun drgnx-hub-test--bad () (error "Boom"))
+
+(defun drgnx-hub-test--seen (what) (cl-count what drgnx-hub-test--calls :test #'equal))
+
+(ert-deftest drgnx-hub/a-burst-of-changes-delivers-once ()
+  (drgnx-hub-test--timed
+    (let ((s (drgnx-agents--make :id "s-1" :name "one")))
+      (dotimes (_ 10) (drgnx-hub--agent-changed s))
+      (should (drgnx-timer-active-p 'hub-deliver))
+      (drgnx-test-advance 0.09)
+      (should (= (drgnx-hub-test--seen 'deliver) 0))
+      (drgnx-test-advance 0.02)
+      (should (= (drgnx-hub-test--seen 'deliver) 1))
+      (drgnx-test-advance 1)
+      (should (= (drgnx-hub-test--seen 'deliver) 1))
+      (drgnx-hub--agent-changed s)                        ; the next burst delivers again
+      (drgnx-test-advance 0.2)
+      (should (= (drgnx-hub-test--seen 'deliver) 2)))))
+
+(ert-deftest drgnx-hub/one-flush-per-session-per-burst ()
+  (drgnx-hub-test--timed
+    (let ((a (drgnx-agents--make :id "s-a" :name "a")) (b (drgnx-agents--make :id "s-b" :name "b")))
+      (dotimes (_ 5) (drgnx-hub--agent-changed a) (drgnx-hub--agent-changed b))
+      (should (drgnx-timer-active-p (cons 'hub-flush "s-a")))
+      (should (drgnx-timer-active-p (cons 'hub-flush "s-b")))
+      (drgnx-test-advance 0.06)
+      (should (= (drgnx-hub-test--seen '(flush "s-a")) 1))
+      (should (= (drgnx-hub-test--seen '(flush "s-b")) 1))
+      (drgnx-hub--agent-changed a)
+      (drgnx-test-advance 0.06)
+      (should (= (drgnx-hub-test--seen '(flush "s-a")) 2))
+      (should (= (drgnx-hub-test--seen '(flush "s-b")) 1)))))
+
+(ert-deftest drgnx-hub/events-go-at-most-every-interval ()
+  (drgnx-hub-test--timed
+    (let ((drgnx-hub-events-interval 0.3))
+      (dotimes (_ 5) (drgnx-hub--events-soon))
+      (drgnx-test-advance 0.29)
+      (should (= (drgnx-hub-test--seen 'events) 0))
+      (drgnx-test-advance 0.02)
+      (should (= (drgnx-hub-test--seen 'events) 1))
+      (drgnx-hub--events-soon)                            ; at once after the first went out: the next interval
+      (drgnx-hub--events-soon)
+      (drgnx-test-advance 0.29)
+      (should (= (drgnx-hub-test--seen 'events) 1))
+      (drgnx-test-advance 0.02)
+      (should (= (drgnx-hub-test--seen 'events) 2)))))
+
+(ert-deftest drgnx-hub/shutdown-exits-after-a-tenth-unless-stopped ()
+  (drgnx-hub-test--timed
+    (drgnx-hub--serve-request nil '(:id 1 :method "shutdown"))
+    (should (drgnx-timer-active-p 'hub-exit))
+    (drgnx-test-advance 0.09)
+    (should (= (drgnx-hub-test--seen 'exit) 0))
+    (drgnx-test-advance 0.02)
+    (should (= (drgnx-hub-test--seen 'exit) 1))
+    (should-not (drgnx-timer-active-p 'hub-exit))
+    ;; a hub stopped meanwhile never exits
+    (drgnx-hub--serve-request nil '(:id 2 :method "shutdown"))
+    (drgnx-hub-stop)
+    (drgnx-test-advance 1)
+    (should (= (drgnx-hub-test--seen 'exit) 1))))
+
+(ert-deftest drgnx-hub/stop-leaves-no-hub-timer ()
+  (drgnx-hub-test--timed
+    (drgnx-hub--agent-changed (drgnx-agents--make :id "s-1" :name "one"))
+    (drgnx-hub--agent-changed (drgnx-agents--make :id "s-2" :name "two"))
+    (drgnx-hub--events-soon)
+    (drgnx-hub--serve-request nil '(:id 1 :method "shutdown"))
+    (drgnx-timer-start 'hub-tick 2 #'drgnx-hub--tick :repeat 2 :owner :core)
+    (should (= (length (drgnx-timer-pending)) 6))        ; deliver, 2 flushes, events, exit, tick
+    (drgnx-timer-start 'unrelated 5 #'ignore :owner :core)
+    (drgnx-hub-stop)
+    (should (equal (mapcar #'car (drgnx-timer-pending)) '(unrelated)))
+    (drgnx-timer-cancel 'unrelated)))
+
+(ert-deftest drgnx-hub/a-failing-tick-step-never-stops-the-tick ()
+  ;; the tick's steps fail on a busy work.db: demoted by the tick itself, so the failure limit never counts them
+  (drgnx-hub-test--timed
+    (cl-letf (((symbol-function 'drgnx-hub--deliver) (lambda () (error "database is locked"))))
+      (drgnx-timer-start 'hub-tick 2 #'drgnx-hub--tick :repeat 2 :owner :core)
+      (drgnx-test-advance 10))
+    (should-not drgnx-timer-errors)
+    (should (drgnx-timer-active-p 'hub-tick))
+    (drgnx-timer-cancel 'hub-tick)))
+
+(ert-deftest drgnx-hub/the-hub-writes-its-own-timer-report ()
+  (drgnx-hub-test--timed
+    (let ((report nil))
+      (cl-letf (((symbol-function 'drgnx-hub-serve) (lambda (_s) (error "stop here")))
+                ((symbol-function 'kill-emacs) (lambda (&rest _) (throw 'drgnx-hub-test--out nil))))
+        (catch 'drgnx-hub-test--out (drgnx-hub-main)))
+      (should (equal drgnx-timer-report-file "hub-timers-report.eld"))
+      (drgnx-timer-start 'hub-bad 1 #'drgnx-hub-test--bad :repeat 1 :owner :core)
+      (drgnx-test-advance 3.5)
+      (setq report (expand-file-name "hub-timers-report.eld" (drgnx-state-dir)))
+      (should (file-exists-p report))
+      (should (string-match-p "hub-bad" (with-temp-buffer (insert-file-contents report) (buffer-string))))
+      (should-not (file-exists-p (expand-file-name "timers-report.eld" (drgnx-state-dir)))))))
 
 ;;; hub-test.el ends here
