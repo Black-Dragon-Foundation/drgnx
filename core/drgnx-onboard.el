@@ -1449,8 +1449,8 @@ last step it goes on from the first; nil when no step but ID is left."
   "A \"Next: STEP\" button to the next step not done after ID, or nil when there is none.  It moves the cursor
 there; it runs nothing (each step keeps its own consent)."
   (when-let* ((next (drgnx-onboard--next-undone id state)))
-    (button-buttonize (format "Next: %s" (plist-get (alist-get next drgnx-onboard--steps) :title))
-                      #'drgnx-onboard--goto-step next)))
+    (buttonize (format "Next: %s" (plist-get (alist-get next drgnx-onboard--steps) :title))
+               #'drgnx-onboard--goto-step next)))
 
 (defun drgnx-onboard--entries ()
   (let ((state (drgnx-onboard-state)))
