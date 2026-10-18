@@ -212,4 +212,15 @@
         (let ((system-type 'gnu/linux)) (drgnx-job-ui--send "t" "b")))
       (should (equal made '(dbus))))))
 
+;; M12a-70
+(ert-deftest drgnx-job-ui/badge-mode-adds-and-removes-its-disconnect-hook ()
+  (let ((drgnx-hub-disconnect-functions nil) (drgnx-hub-event-functions nil) (global-mode-string nil) (drgnx-job-ui-badge-mode nil))
+    (cl-letf (((symbol-function 'drgnx-job-ui--schedule-recount) #'ignore))
+      (drgnx-job-ui-badge-mode 1)
+      (should (memq #'drgnx-job-ui--badge-clear drgnx-hub-disconnect-functions))
+      (should (memq #'drgnx-job-ui--event drgnx-hub-event-functions))
+      (drgnx-job-ui-badge-mode -1)
+      (should-not (memq #'drgnx-job-ui--badge-clear drgnx-hub-disconnect-functions))
+      (should-not (memq #'drgnx-job-ui--event drgnx-hub-event-functions)))))
+
 ;;; job-ui-test.el ends here
