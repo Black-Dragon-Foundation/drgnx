@@ -70,16 +70,25 @@ layout is kept.
 
 Layouts are data: `drgnx-layouts` holds the built-in ones as `(NAME :left VIEW :right TAB :panel TAB :editor
 SHAPE)`. For an area, `nil` hides it and `keep` leaves it as it was. Editor shapes are registered in
-`drgnx-layouts-shapes` (SHAPE → a function of the editor window). drgnx ships `one`, `editor+agent` and `zen`, and
+`drgnx-layouts-shapes` (SHAPE → a function of the editor window); add one with
+`(drgnx-layouts-define-shape SHAPE FN)` (returns SHAPE), never by writing the variable. drgnx ships `one`, `editor+agent` and `zen`, and
 the browser pane (module `tools/browser`) adds `editor+browser`. A shape that is not registered arranges as `one`.
 A shape that makes a pane marks its window with `drgnx-layouts--mark-pane` (a window and the kind, a symbol) and
 registers the kind with `(drgnx-layouts-define-pane KIND FILLER)` (FILLER: a function of the pane window that fills
 it), so the pane is found and filled again after a restart. A pane found again before its module has set up is
-marked at once and filled when the module calls `drgnx-layouts-define-pane`. `drgnx-layouts-apply`
+marked at once and filled when the module calls `drgnx-layouts-define-pane`.
+
+Both calls are undone when the module is turned off: called from a module's setup they push their own undo, which
+removes the shape or filler (and puts the entry it replaced back, unless something else has set it since).
+`drgnx-layouts-undefine-shape SHAPE` and `drgnx-layouts-undefine-pane KIND` do the same by hand. Only the
+registries change: your layouts keep naming the shape (they arrange as `one` while it is gone), and the saved
+arrangements, which windows were panes and where, are not touched, so turning the module on again brings the
+pane back where it was. A pane of that kind that is already shown keeps its window and mark until the next layout
+removes it; calling `drgnx-layouts-define-pane` again fills it again. `drgnx-layouts-apply`
 switches the selected window's layout. To keep your own data in the saved workbench, add a function to
 `drgnx-persist-state-functions` (no argument, returns a plist for the selected frame) and read it back in a
 `drgnx-persist-after-restore-functions` function from the frame parameter `drgnx-persist-extra`.
 
 ## Tests
 
-`test/unit/mod-layouts-test.el` and `test/unit/mod-layouts-persist-test.el`; `test/ui/editor-m11c1-test.el` (`drgnx test --ui`) walks the Search view with results, the find bar, the Agent and Zen layouts, the Browser layout without WebKit, the Live view on a mock browser and the Keyboard Shortcuts editor recording a chord on a graphical frame, with a screenshot of each.
+`test/unit/mod-layouts-test.el` (the shape and pane registration tests have the prefix `drgnx-layouts-shape/`) and `test/unit/mod-layouts-persist-test.el`; `test/ui/editor-m11c1-test.el` (`drgnx test --ui`) walks the Search view with results, the find bar, the Agent and Zen layouts, the Browser layout without WebKit, the Live view on a mock browser and the Keyboard Shortcuts editor recording a chord on a graphical frame, with a screenshot of each.

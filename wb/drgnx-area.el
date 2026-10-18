@@ -15,6 +15,7 @@
 (require 'cl-lib)
 (require 'seq)
 (require 'drgnx-rules)
+(require 'drgnx-modules-helpers)
 (require 'tab-line)                     ; the tab faces we inherit
 
 (defface drgnx-wb-tab '((t :inherit tab-line-tab-inactive)) "A tab in an area's tab row." :group 'drgnx)
@@ -29,13 +30,77 @@
   area)
 
 (cl-defun drgnx-wb-define-tab (area tab &key title placeholder)
-  "Add TAB to AREA, titled TITLE; PLACEHOLDER returns the buffer shown while the tab has none."
-  (let* ((spec (alist-get area drgnx-wb--areas)) (tabs (copy-alist (plist-get spec :tabs)))
+  "Add TAB to AREA, titled TITLE; PLACEHOLDER returns the buffer shown while the tab has none.
+Called from a module's setup, the definition claims the tab and records its undo: the tab it
+replaced put back in the same place, or `drgnx-wb-undefine-tab' — only while the tab is still the one
+defined here.  Two modules defining the same tab may be torn down in either order."
+  (let* ((rec (drgnx-modules--recording-p))
+         (spec (alist-get area drgnx-wb--areas)) (tabs (copy-alist (plist-get spec :tabs)))
+         (previous (cdr (assq tab tabs)))
          (props (list :title (or title (capitalize (symbol-name tab))) :placeholder placeholder)))
     (if (assq tab tabs) (setf (alist-get tab tabs) props)
       (setq tabs (append tabs (list (cons tab props)))))         ; in the order they are defined
     (setf (alist-get area drgnx-wb--areas) (plist-put spec :tabs tabs))
+    (when rec
+      (let* ((target (list 'tab area tab)) (box (drgnx-module--claim target previous)))
+        (drgnx-modules-push-undo
+         (format "tab %s/%s" area tab)
+         (lambda ()
+           (drgnx-module--release
+            target box
+            (lambda () (eq (cdr (assq tab (plist-get (alist-get area drgnx-wb--areas) :tabs))) props))
+            (lambda (prev)
+              (if prev (drgnx-area--restore-tab area tab prev) (drgnx-wb-undefine-tab area tab))))))))
     tab))
+
+(defun drgnx-area--restore-tab (area tab props)
+  "Put TAB's PROPS back in AREA, keeping its place in the row, and redraw the row.
+A window that shows the tab's current placeholder (the module's) shows the restored tab's instead."
+  (let (swap)
+    (dolist (frame (frame-list))
+      (with-selected-frame frame
+        (when-let* ((w (drgnx-wb-area-window area)) ((eq (drgnx-wb-area-tab area) tab))
+                    ((eq (window-buffer w) (drgnx-area--placeholder area tab))))
+          (let ((state (copy-sequence (drgnx-area--state area))))
+            (drgnx-area--set-state
+             area (plist-put state :tabs (assq-delete-all tab (copy-alist (plist-get state :tabs))))))
+          (push (cons frame w) swap))))
+    (let* ((spec (alist-get area drgnx-wb--areas)) (tabs (copy-alist (plist-get spec :tabs))))
+      (setf (alist-get tab tabs) props)
+      (setf (alist-get area drgnx-wb--areas) (plist-put spec :tabs tabs)))
+    (pcase-dolist (`(,frame . ,w) swap)
+      (with-selected-frame frame (drgnx-wb-set-area-buffer w (drgnx-area--placeholder area tab))))
+    (drgnx-area--redraw-rows area)))
+
+(defun drgnx-area--redraw-rows (area)
+  "Redraw AREA's tab row in every frame that shows it."
+  (dolist (frame (frame-list))
+    (when-let* ((w (drgnx-wb-area-window area frame)))
+      (with-selected-frame frame
+        (set-window-parameter w 'header-line-format (drgnx-area--tab-row area))))))
+
+(defun drgnx-wb-undefine-tab (area tab)
+  "Remove TAB from AREA.  Where the area shows TAB it shows the next tab instead (the one before,
+for the last), or hides when TAB was its only one; the frame's saved buffer for TAB is dropped.
+Returns non-nil when TAB was defined."
+  (let* ((tabs (plist-get (alist-get area drgnx-wb--areas) :tabs))
+         (names (mapcar #'car tabs)) (pos (seq-position names tab))
+         (next (and pos (or (nth (1+ pos) names) (and (> pos 0) (nth (1- pos) names))))))
+    (when pos
+      (setf (alist-get area drgnx-wb--areas)
+            (plist-put (alist-get area drgnx-wb--areas) :tabs (assq-delete-all tab (copy-alist tabs))))
+      (dolist (frame (frame-list))
+        (with-selected-frame frame
+          (let ((shown (or (plist-get (drgnx-area--state area) :tab) (car names))))
+            ;; Show the next tab (or hide) first: the area remembers the buffer it leaves under the shown tab.
+            (when (and (eq shown tab) (drgnx-wb-area-window area))
+              (if next (drgnx-wb-area-show area next) (drgnx-wb-area-hide area)))
+            (when-let* ((state (drgnx-area--state area)))
+              (drgnx-area--set-state
+               area (plist-put (plist-put (copy-sequence state) :tabs (assq-delete-all tab (copy-alist (plist-get state :tabs))))
+                               :tab (if (eq (plist-get state :tab) tab) next (plist-get state :tab))))))))
+      (drgnx-area--redraw-rows area))
+    (and pos t)))
 
 (defun drgnx-wb-area-window (area &optional frame)
   "The window showing AREA on FRAME, or nil."

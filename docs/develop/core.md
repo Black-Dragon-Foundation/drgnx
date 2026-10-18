@@ -72,6 +72,19 @@ Redefining an id replaces it. **Keys come from key profiles** ([keys.md](../guid
 are in its `bound` slot, which every surface reads. The entries keep the ids of the gryphn layer's registry, which
 this is ported from.
 
+**Undefining.** `(drgnx-command-undefine ID)` removes a command from the table and the order (it returns ID, or nil
+when there was none). A `drgnx-command-define` made by a module's setup pushes its own undo (see "Teardown" under Modules):
+if the table still holds that very definition, the one it replaced comes back (keeping its bound keys and its place
+in the order), or the command goes when it replaced none. Definitions of one id form a chain, so the undos are safe in
+any order: tearing down the first of two modules that defined an id leaves the second one's entry alone and the second
+one's teardown does not bring the first one back; a definition made outside a setup (a user's `config.el`) is never
+touched. A library a setup `require`s registers for itself and stays until restart.
+
+**How keys and menus follow.** The registry is the one source: after a batch of teardowns
+`drgnx-modules-after-teardown-functions` runs `drgnx--after-teardown`, which calls `drgnx-keys-apply` (it puts back
+Emacs's own bindings first, then binds what the registry still holds, so a removed command's keys are free again and
+nothing a user bound is touched) and `drgnx-surfaces-refresh`.
+
 ## Surfaces (`drgnx-surfaces.el`, `drgnx-palette.el`)
 
 Generated from the registry, never written by hand, showing the keys of the active key profiles: the menu bar,
@@ -88,6 +101,19 @@ most once a minute and at exit, never prompting, to `command-usage.eld` in the s
 days. The file stays on your machine; it feeds the suggestions of the Keyboard Shortcuts editor ("you ran X 12
 times this week; give it a key?"). Read it with `drgnx-surfaces-usage-count` and `drgnx-surfaces-usage-week`.
 
+**Removing what a command added.** The palette, the key sheet, the cheat sheet and the right-click menu are computed
+from the registry on each use, so an undefined command is gone from them at once. The menu bar and which-key are
+written, so they are undone explicitly. `drgnx-surfaces-build-menus` remembers what it added, per command id: the item
+(a claim on its menu path and title, `drgnx-module--claim`, so two commands sharing a title in one submenu go in either
+order), the binding it replaced and the submenus it had to create. A command that is no longer the registered one
+(undefined, or defined again) has its item taken out, newest first: a replaced item is put back in its place, a submenu
+made for the item goes once empty, and an item someone else replaced or removed since is left alone. Every other
+item is replaced where it stands (`easy-menu-add-item` keeps the position, and refreshes `:keys`), so nothing untouched
+moves behind an item someone else added meanwhile. `drgnx-surfaces-apply-which-key` already removes its previous labels
+on every refresh. Right-click contexts: `(drgnx-surfaces-undefine-context CONTEXT)` removes one;
+`drgnx-surfaces-define-context` called from a setup claims the context (the same claims as the option and key helpers),
+so two modules defining one context, and a user's own definition on top, undo in any order.
+
 ## Modules (`drgnx-modules.el`)
 
 ```elisp
@@ -101,6 +127,231 @@ Module files are `modules/<category>/drgnx-<name>.el`. Stages: `startup` (during
 Emacs is idle). Each setup runs under its own error guard and is timed; a file that fails to load is reported as
 a module too. "Help: Module Report" (`drgnx-modules-show-report`) lists stage, milliseconds and errors. Flags,
 settings, doctor checks, more stages and the modules index come with M4.
+
+### Teardown: the cleanup stack (`drgnx-modules-record.el`)
+
+A module can be turned off while Emacs runs. While its setup runs, `drgnx-modules--current` names it, and each call
+that changes global state pushes its own undo onto the module's cleanup stack (the shape of buttercup's cleanup
+stack — the code that knows what it changed knows how to change it back):
+
+```elisp
+(add-hook 'find-file-hook #'drgnx-blame--maybe)
+(drgnx-modules-push-undo "hook find-file-hook drgnx-blame--maybe"
+                         (lambda () (remove-hook 'find-file-hook #'drgnx-blame--maybe)))
+```
+
+- `(drgnx-modules-push-undo LABEL UNDO)` records only during a setup, and only the setup's own code: the top level
+  of a library the setup loads registers for itself and stays (`require` cannot be undone; the code stays loaded
+  until restart). "Own code" means the `load-file-name` the setup began with — the startup stage itself runs
+  inside a `load` (`init.el` calls `drgnx-init`), so "a load is in progress" cannot tell the two apart; a nested
+  `load` or `require` binds `load-file-name` anew (`drgnx-modules--recording-p`). Outside a setup it costs one
+  variable test. LABEL is a short description for reports; UNDO, a function of no arguments, first checks that the
+  state is still what this module set and changes nothing otherwise — it never removes what someone else added
+  since.
+- Whatever runs synchronously inside a setup pushes onto the module whose setup runs — including another owner's
+  hook functions it runs (a nested stage's `drgnx-modules-after-stage-functions`) — and a module whose setup is run
+  from another's records onto its own stack. Code a setup defers (`eval-after-load`, a timer) runs outside it
+  and records nothing unless it names its owner (`drgnx-modules-with-owner`, below). That holds also when the
+  deferred code runs *inside* a setup: `eval-after-load` forms that a setup's `require` triggers belong to nobody
+  (see the safety net).
+- `:teardown` in `drgnx-module-define`: a function for what the stack cannot see (a theme, live frames' parameters,
+  a mode turned on in live buffers, a sub-module's own state), or `restart`: the module is not turned off while Emacs
+  runs, only at the next start. Anything else is an error when the module is defined, so the function must be
+  defined before the `drgnx-module-define` form.
+- `(drgnx-module-teardown NAME)` runs the module's `:teardown`, then its stack last in first out inside
+  `unwind-protect`, each undo under its own error guard, and forgets the stack; the status becomes `off`. It returns
+  the problems (nil when clean) — a failed undo is named by its label, a failed `:teardown` by `teardown` — and never
+  raises. A module that is not running does nothing, and so does a `:teardown` that tears its own module down
+  again. A `restart` module (and an external one) stays running and returns `("restart")`. After a batch of
+  teardowns the caller runs `drgnx-modules-after-teardown-functions` once.
+- A setup that does not finish — an error, a quit, a throw — is rolled back: the undos it pushed run, newest first.
+  After an error the module is `failed`, with the error and any undo problems in the report; a quit or a throw goes
+  on after the rollback.
+- Running a module that is already on tears it down first (its `:teardown`, then its stack), so no undo is left
+  behind; a `restart` module is set up again on top, as before, and keeps its earlier undos. That teardown does not
+  run `drgnx-modules-after-teardown-functions`: the setup registers its commands again at once, and `drgnx-modules-run`
+  runs `drgnx-modules-after-stage-functions` (keys and menus apply) once after the whole stage, so a hook per re-run
+  would only add a second full keys resolve while the registry is half rebuilt. Whoever tears down on purpose
+  (Preferences, the batch teardown) runs the after-teardown hook once.
+- Teardown and rollback run in automatic paths: they never prompt. Undos and `:teardown` run with
+  `inhibit-interaction` bound, so one that would ask fails at once and is reported. Every undo checks before it
+  changes anything, so off, on, off is the same as off once, and two undos of the same thing (a `:teardown` that
+  calls a sub-module's off function, then the stack) leave it undone once.
+
+#### Workbench registries (`wb/`)
+
+The workbench's registries push their own undo, so a module that defines a section, a tab, a rule, a place or a
+bus subscription in its setup leaves none behind. Each undo changes the entry only while it is still the one this
+module defined; a definition that replaced an entry puts the previous one back instead of removing it. Each
+definition claims its target with the helpers' claims (`drgnx-module--claim`, `drgnx-module--release`: a section by
+name, a tab by area and name, a rule by matcher, a place by name), so two modules that define the same one end where
+they started whichever is torn down first.
+
+| Define | Undo (also callable on its own) | Open panes |
+|---|---|---|
+| `drgnx-wb-define-section` | `(drgnx-wb-undefine-section NAME)` | the section's dock window closes (focus leaves it first); the dock keeps its other sections. A restored previous section shows again the next time the dock is shown. |
+| `drgnx-wb-define-tab` | `(drgnx-wb-undefine-tab AREA TAB)` | where the area shows the tab it shows the next tab in the same window (the one before for the last tab), or hides when it was the only one; the tab row is redrawn and the frame's saved buffer for the tab dropped. A restored tab replaces the module's placeholder in a window that shows it. |
+| `drgnx-wb-place` | `(drgnx-wb-unplace MATCHER)` (`equal`) | none: rules decide only where a buffer goes next. |
+| `drgnx-wb-define-place` | `(drgnx-wb-undefine-place PLACE)` | none. A rule that still names an undefined place sends its buffers to the editor, with a one-time message. |
+| `drgnx-signal-subscribe` | `drgnx-signal-unsubscribe` | none. A count per (event, function): each module's subscription holds it and the last release unsubscribes. A function already subscribed by code that records nothing (a mode, the user) is never unsubscribed by a module. A subscription re-made outside a setup (a mode switched off and on by the user) while a module holds one is unsubscribed with the module's last release. |
+
+The `add-function` on `after-focus-change-function` (Explorer and Buffers panel) pushes its `remove-function`
+beside it, by the advice's name. Areas (`drgnx-wb-define-area`) are not undone: they belong to the workbench.
+
+#### Helpers that undo themselves (`drgnx-modules-helpers.el`)
+
+Four changes a setup makes to global state are done through a helper that makes the change and pushes its own
+undo. Each undo runs only while the state is still what this call set, so it never removes what the user, a theme
+or another module put there since. Outside a setup a helper only makes the change.
+
+| Use | For | Undo |
+|---|---|---|
+| `(drgnx-module-set VAR VALUE)` | another package's option, instead of `setq`, `setopt` or `setq-default` | puts the old value back (VAR unbound again if it was) |
+| `(drgnx-module-alist-put VAR KEY VALUE)` | one key of an alist such as `auto-mode-alist`, `major-mode-remap-alist` or `default-frame-alist`, instead of `setf alist-get` | puts the old entry back, or removes KEY when there was none |
+| `(drgnx-module-face-spec FACE SPEC)` | a face's default spec, instead of `face-spec-set` | puts the previous default spec back |
+| `(drgnx-module-define-key MAP-SYMBOL KEY DEF)` | a remap or a mouse/chrome event in a global map such as `global-map` | puts the previous binding back, or removes the entry |
+
+- `drgnx-module-set` sets through the option's custom `:set` function when it has one, else `set-default`, and the
+  undo goes through the same setter, so a `:set` that does more than store runs again on the way back. The undo runs
+  while the default value is still the one stored (what a setter stored, which can differ from VALUE).
+- `drgnx-module-alist-put` compares keys with `equal` (an `auto-mode-alist` key is a string) and replaces the alist
+  instead of changing it, so a list shared with the original value is never mutated. It stores through the
+  variable's custom `:set` function too, and an alist that is not loaded yet counts as empty. A hook or an advice
+  has its own helper.
+- `drgnx-module-face-spec` touches only the face's default spec (`face-defface-spec`); what the user customized or a
+  theme set lives apart from it and is never touched. `face-spec-set` recalculates the face, so an attribute set
+  directly with `set-face-attribute` is wiped by it (at the set and again at the undo): give such a face its look
+  through the spec.
+- `drgnx-module-define-key` binds in the keymap object, never rebinding the variable, and looks at the map's own
+  entry (not its parent's). A keyboard key signals an error: typed keys come from the key profiles
+  (`keys/*.eld`). Allowed: `[remap CMD]`, the chrome (`menu-bar`, `tool-bar`, `tab-bar`, `tab-line`,
+  `header-line`, `mode-line`, scroll bars, fringes) and any key whose last event is a mouse or wheel event.
+- **Two modules, one target.** Each helper claims its target (the option, the alist key, the face, the key in the
+  map) and remembers what it found there. Tearing the modules down in any order ends where they started: an undo
+  that is not the newest claim leaves the live value alone and hands what it found to the claim above it; the
+  newest one restores, if the value is still what it set (so a change by the user stays). A claim is dropped only
+  by its undo, so a module that is never torn down (a `restart` module) keeps its claim until restart.
+- The undo compares with `equal`: a list stored by reference and changed in place later still equals itself, so the
+  undo overwrites that change. Do not mutate a value you gave `drgnx-module-set`.
+- Outside a setup the helpers make the change and nothing else (no label, closure or claim).
+
+#### Hooks and advice: `drgnx-module-hook` and `drgnx-module-advice`
+
+A global hook function or advice a module adds goes through a paired helper (Doom's `add-hook!` and `defadvice!`
+shape). It defines the function with a name and an owner, adds it, and pushes its removal, which is what
+AGENTS.md asks of every global hook and advice ("named, with an owner", no lambdas).
+
+```elisp
+(drgnx-module-hook 'find-file-hook maybe ()           ; defines drgnx-editor/blame--maybe
+  (drgnx-blame--check))
+(drgnx-module-hook '(text-mode-hook prog-mode-hook) enable () :depth 90 (drgnx-blame-mode 1))
+(drgnx-module-advice 'save-buffer :after refresh (&rest _) (drgnx-blame--refresh))
+(drgnx-module-unhook 'find-file-hook maybe)           ; early, e.g. when a mode turns off
+```
+
+- The function is `drgnx-<module>--<NAME>`, the module being the one the file's `drgnx-module-define` names (the
+  file's forms are read at macro-expansion time, so comments and strings never count; cached by the file's mtime) or
+  `:module NAME` (a symbol) first in the body. NAME is a plain symbol and is used once per module file: the same
+  NAME for two helpers is an error at expansion. `:depth N` goes to `add-hook` (`drgnx-module-advice` refuses it).
+  HOOK is evaluated: a symbol or a list of symbols; SYMBOL and HOW of an advice are evaluated. The advice is named
+  by its function (`advice-add` name property), so equal NAMEs in two modules never replace each other.
+- Running a helper again changes nothing. The undo takes the function off only when no claim on it is left: the
+  helpers use the claims of the section above (target: the hook and the function, or the advised symbol and the
+  function), so two modules adding the same named function tear down in either order, and a function that was on
+  the hook before the module added it stays. `drgnx-module-unhook` and `drgnx-module-unadvise` drop the calling
+  module's own claim early (its teardown then has nothing left to do); another module's claim keeps the function in
+  place. Outside a setup the helper adds and records nothing; a name is a symbol, never a lambda.
+- The safety net of the cleanup stack (below) records raw `add-hook` and `advice-add` calls a setup makes. It
+  skips the helpers' own changes: every claim-aware helper (these two, and `drgnx-module-set`,
+  `-alist-put`, `-face-spec`) makes its change inside `drgnx-modules--quietly`. A raw call is a fallback; use the
+  helper.
+
+### The safety net: what a setup reaches through Emacs's own doors
+
+Code a setup reaches that does not push its own undo — wb modes, the setup functions of `wb/` libraries, packages'
+mode functions — is recorded anyway. For each setup's extent only (`drgnx-modules--with-recorder`, inside
+`drgnx-modules--run-setup`), drgnx advises four functions and removes the advice in `unwind-protect`, also after
+an error, a quit or a throw (a second quit during the removal is held off). Outside a setup nothing is advised and
+no call goes through the net; what stays is two properties `advice-remove` leaves on each advised symbol's plist
+(`function-documentation`, `defalias-fset-function`), which change nothing.
+
+| What the setup does | Recorded when | Undo (each checks first) |
+|---|---|---|
+| `add-hook` on a hook's global value | the function was not on it before | `remove-hook`, if it is still there |
+| `advice-add` | `advice-member-p` was nil before | `advice-remove`, if still there |
+| `add-to-list` on a list's global value | the element was not a member before (same test as `add-to-list`) | remove that one element, if still a member; others' additions stay |
+| a new timer (`timer-list`, `timer-idle-list` compared before and after) | it is not one of Emacs's own (below) | `cancel-timer`, if still pending |
+| a global minor mode newly in `global-minor-modes` | it was off before | `(MODE -1)`, if still on; pushed after everything the setup pushed, so modes go off first and their own off code runs before the hook and timer undos. This is the one break in last in, first out: a mode goes off before undos the setup pushed after turning it on |
+| a feature newly in `features` | always | none: kept for the report, `(drgnx-modules-features-of MODULE)` |
+
+Labels read `hook HOOK FN`, `advice SYMBOL FN`, `list VAR ELEMENT`, `timer FN`, `mode MODE` (`a lambda` for an
+anonymous function), cut to 100 characters. The undos make teardown and rollback complete for these doors.
+
+The net's undos are unconditional: they check that the thing is still there, not whether another module still
+needs it. So a change made by a claim-aware API — one whose undo hands over to another module's claim (the helpers
+above) — must not also be recorded by the net: such an API makes its change inside `drgnx-modules--quietly`, which
+binds `drgnx-module--in-helper` (the three advices record nothing) and marks the timers and global modes started
+in its extent as seen, for nobody. Then a mode that module A's option turned on stays on while module B's claim on
+the option stands. A plain `drgnx-modules-push-undo` next to a raw call (an unconditional undo too) may be
+recorded twice; that is harmless, since the second finds nothing to do.
+
+What it does **not** record:
+
+- **Buffer-local changes**: `add-hook … nil t`, a buffer-local list value. Buffers own those.
+- **`add-to-list` on `global-minor-modes` or `local-minor-modes`**: Emacs 31's `define-minor-mode` keeps them that
+  way; the modes are compared after the setup instead.
+- **A drgnx helper's own changes** (`drgnx-modules--quietly`, above).
+- **Emacs's own timers.** Emacs's libraries start singleton timers lazily from code a setup calls (an edit starts
+  undo's boundary timer, a buffer's jit-lock its context timer) and keep them in a variable; cancelled, they would
+  stay dead for the session (undo boundaries for process output would stop). A timer whose function is defined
+  under `lisp-directory` (or preloaded), or that sits in one of `drgnx-modules--emacs-timer-variables` (jit-lock's
+  lambdas), is left alone.
+- **Global modes are owned by the first module that turns them on.** "Newly on" is all the net sees: when module
+  A turns `drgnx-signal-mode` on and B relies on it, tearing A down turns it off. Modes a module shares go through
+  an option (`drgnx-module-set`, claim-aware) or B's `:teardown`/`requires`. And a mode a setup turns *off* is not
+  turned back on at teardown.
+- **Timer callbacks that fire inside a setup** (`sit-for`, `accept-process-output`) run with the module current,
+  so what they change is recorded onto it.
+- **The top level of a library the setup loads** (hooks, advice, list entries): it registers for itself and stays
+  (`drgnx-modules--recording-p`). Timers and global modes are found by comparing lists, so one that a library
+  starts at its top level while the setup loads it *is* recorded onto the setup — a library that does that is
+  itself the bug.
+- **`eval-after-load` forms that the setup's `require` triggers.** They run once, when their library loads, after
+  `load-file-name` is back to the setup's. Recorded, turning the module off would undo them and turning it on
+  again would not bring them back (the library is already loaded). So while they run (`do-after-load-evaluation`
+  is advised too) no module is current, and the timers and modes they start are claimed by nobody. A form that
+  names its owner records onto it.
+- **A setup run inside another's** records onto its own module only: what an inner recorder found is claimed,
+  and the outer one skips it.
+- **`add-to-list` that the compiler rewrote.** Its compiler macro turns `(add-to-list 'VAR …)` into a plain
+  `push` when VAR is not special at compile time — a lexical variable, or one whose `defvar` the compiling Emacs
+  has not run, such as one defined in the caller's own file or declared with a bare `(defvar VAR)`
+  (`drgnx-search.el`'s `drgnx-ai-retrievers`). Checked on 30.2 and 31.1. Use `drgnx-modules-push-undo` (or the
+  module helpers) for such a list.
+- `setq`, `setf`, `put`, `add-function`, key bindings, faces, frames: the module's own undo or `:teardown`.
+
+**Deferred work: `drgnx-modules-with-owner`.** `(drgnx-modules-with-owner BODY…)` evaluates to a function: it
+names the module whose setup evaluates the form, and when called later runs BODY as that module's code, with the
+safety net — what BODY changes is recorded onto the module, as in its setup. Use it as the deferred thing itself:
+
+```elisp
+(eval-after-load 'drgnx-ai-ui (drgnx-modules-with-owner (add-to-list 'drgnx-ai-retrievers #'my-retriever t)))
+(run-with-idle-timer 1 nil (drgnx-modules-with-owner (my-mode 1)))
+```
+
+Not `(with-eval-after-load 'x (drgnx-modules-with-owner …))`: there the form is evaluated only when `x` loads, so
+it names no module, and its function is never called. Once the module is turned off, rolled back, or run again
+(each run of a setup gets a fresh token in `drgnx-modules--runs`), the function does nothing and returns nil, so a
+late `eval-after-load` or idle step of a turned-off module never runs and an off-on cycle never runs the old run's
+work twice. Evaluated outside a setup, it just runs BODY. Each call installs the safety net for its extent (about
+20 µs): for one-off work, not for a hook that runs on every command.
+
+**Cost.** The safety net around a setup costs 16–22 µs (byte-compiled, 30.2: four `advice-add` and
+`advice-remove`, two snapshots and their comparison), and up to about 70 µs in runs where the garbage it makes
+brings a collection forward (65–73 µs measured so); 41 setups × 75 µs ≈ 3 ms at worst. The shipped startup stage (16 modules, batch) took 29.4 ms with
+it and 28.2 ms without (5 runs each, within the runs' noise); the budget is 5 ms across all setups.
+`test/unit/modules-record-test.el` covers it, including `startup-is-unchanged`: the shipped modules' startup stage
+gives the same statuses and commands with the recorder as without it.
 
 ## Build (`drgnx-build.el`)
 
