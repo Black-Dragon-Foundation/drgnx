@@ -712,6 +712,114 @@ dirs and every tool's config), nor in ~/.ssh: not from `PATH', not through a lin
           (dolist (d '("/.local" "/.local/share" "/.config" "/.cache")) (should-not (equal r (concat home d))))
           (should-not (drgnx-sandbox-test--within-p r (concat home "/.ssh"))))))))
 
+(ert-deftest drgnx-sandbox/toolchain-roots-links-reach-no-dirs ()
+  "A link in a `PATH' dir that leads into no toolchain layout gives its target file alone: never the dir it is in
+nor a dir it leads to — another repo, dotfiles with a key, notes — and nothing at all in ~/.config, ~/.local/share
+or ~/.cache but a known layout.  Every root passes `:read' validation."
+  (drgnx-sandbox-test--toolchains
+    (dolist (d '("/dotfiles" "/src/otherrepo/.git" "/notes" "/.config/gh" "/.local/share/keyrings" "/.cache/x"))
+      (make-directory (concat home d) t))
+    (dolist (f '("/dotfiles/sync.sh" "/dotfiles/id_ed25519" "/src/otherrepo/run.sh" "/notes/n.org" "/.config/gh/hosts.yml"
+                 "/.local/share/keyrings/login.keyring" "/.cache/x/tool"))
+      (write-region "x" nil (concat home f) nil 'silent))
+    (pcase-dolist (`(,name . ,target) '(("sync" . "/dotfiles/sync.sh") ("run" . "/src/otherrepo/run.sh") ("notesdir" . "/notes")
+                                        ("ghx" . "/.config/gh/hosts.yml") ("kr" . "/.local/share/keyrings/login.keyring")
+                                        ("cx" . "/.cache/x/tool") ("cfg" . "/.config/gh")))
+      (make-symbolic-link (concat home target) (concat home "/.local/bin/" name)))
+    (let ((roots (drgnx-sandbox-toolchain-roots path-dirs home)))
+      (dolist (r roots)
+        (ert-info (r)
+          (dolist (closed '("/notes" "/.config" "/.cache" "/.local/share/keyrings" "/dotfiles/id_ed25519" "/src/otherrepo/.git"))
+            (should-not (drgnx-sandbox-test--within-p r (concat home closed))))
+          (dolist (dir '("/dotfiles" "/src" "/src/otherrepo" "/.local/share"))
+            (should-not (equal r (concat home dir))))))
+      ;; the scripts themselves, alone
+      (should (member (concat home "/dotfiles/sync.sh") roots))
+      (should (member (concat home "/src/otherrepo/run.sh") roots))
+      (should-not (drgnx-sandbox-validate (drgnx-sandbox-spec :read roots))))))
+
+(ert-deftest drgnx-sandbox/toolchain-roots-skip-drgnx-itself ()
+  "install.sh's layout (~/.local/bin/drgnx → ~/.local/share/drgnx/drgnx/bin/drgnx) and a link into a checkout give
+no root: drgnx's own files reach a sandbox only through Task 15's explicit bind.  A spec of the roots validates."
+  (drgnx-sandbox-test--toolchains
+    (let* ((data (concat home "/.local/share/drgnx")) (bin (concat data "/drgnx/bin"))
+           (process-environment (cons (concat "DRGNX_DATA_DIR=" data) process-environment))
+           (checkout (concat home "/src/drgnx")) (drgnx-dir (file-name-as-directory checkout)))
+      (make-directory bin t)
+      (make-directory (concat checkout "/bin") t)
+      (write-region "" nil (concat bin "/drgnx") nil 'silent)
+      (write-region "" nil (concat checkout "/bin/drgnx") nil 'silent)
+      (make-symbolic-link (concat bin "/drgnx") (concat home "/.local/bin/drgnx"))
+      (make-symbolic-link (concat checkout "/bin/drgnx") (concat home "/.local/bin/drgnx-dev"))
+      (let ((roots (drgnx-sandbox-toolchain-roots path-dirs home)))
+        (should (member tool roots))
+        (dolist (r roots)
+          (should-not (drgnx-sandbox-test--within-p r data))
+          (should-not (drgnx-sandbox-test--within-p r checkout)))
+        (should-not (drgnx-sandbox-validate (drgnx-sandbox-spec :read roots)))))))
+
+(ert-deftest drgnx-sandbox/toolchain-roots-npm-pipx-uv ()
+  "npm's prefix (~/.npm-global, or ~/.local/lib/node_modules/PKG), pipx's and uv's tool venvs are roots whole, so a
+package finds its own files; layouts match whole path components only."
+  (drgnx-sandbox-test--toolchains
+    (let ((npm (concat home "/.npm-global")) (local-npm (concat home "/.local/lib/node_modules/y"))
+          (pipx (concat home "/.local/share/pipx/venvs/black")) (uv (concat home "/.local/share/uv/tools/ruff")))
+      (dolist (d (list (concat npm "/lib/node_modules/x/bin") (concat npm "/bin") local-npm (concat pipx "/bin")
+                       (concat uv "/bin")))
+        (make-directory d t))
+      (dolist (f (list (concat npm "/lib/node_modules/x/bin/x.js") (concat local-npm "/cli.js") (concat pipx "/bin/black")
+                       (concat uv "/bin/ruff")))
+        (write-region "" nil f nil 'silent))
+      (make-symbolic-link "../lib/node_modules/x/bin/x.js" (concat npm "/bin/x"))
+      (make-symbolic-link (concat local-npm "/cli.js") (concat home "/.local/bin/y"))
+      (make-symbolic-link (concat pipx "/bin/black") (concat home "/.local/bin/black"))
+      (make-symbolic-link (concat uv "/bin/ruff") (concat home "/.local/bin/ruff"))
+      (let ((roots (drgnx-sandbox-toolchain-roots (cons (concat npm "/bin") path-dirs) home)))
+        (dolist (r (list npm local-npm pipx uv)) (should (member r roots)))
+        (should-not (member (concat npm "/bin") roots))
+        (should-not (drgnx-sandbox-validate (drgnx-sandbox-spec :read roots))))
+      (let ((h (file-name-as-directory home)))
+        (should (equal (drgnx-sandbox--toolchain-root (concat h "go/binx/foo") h) (concat h "go/binx/foo")))
+        (should (equal (drgnx-sandbox--toolchain-root (concat h ".cargo/binaries") h) (concat h ".cargo/binaries")))
+        (should (equal (drgnx-sandbox--toolchain-root (concat h "go/bin") h) (concat h "go/bin")))))))
+
+(ert-deftest drgnx-sandbox/check-never-wedges ()
+  "An error while the probes are built, or while their answer is made, still answers every caller and ends the
+check.  A reset while a check runs: the next call starts a new one, the old one answers its own callers and its
+answer is not kept."
+  (drgnx-sandbox-test--quiet
+    (let ((system-type 'gnu/linux) (a nil) (b nil))
+      (cl-letf (((symbol-function 'drgnx-sandbox--probes) (lambda (_b) (error "Boom"))))
+        (drgnx-sandbox-check-async (lambda (x) (setq a x)))
+        (should a)
+        (should-not (plist-get a :ok))
+        (should (string-match-p "Boom" (plist-get a :reason)))
+        (should-not drgnx-sandbox--check-waiting))
+      (drgnx-sandbox-check-reset)
+      (setq a nil)
+      (cl-letf (((symbol-function 'drgnx-sandbox--probes) (lambda (_b) '((:probe "/bin/sh" "-c" "sleep 0.2"))))
+                ((symbol-function 'drgnx-sandbox--answer) (lambda (&rest _) (error "Bad answer"))))
+        (drgnx-sandbox-check-async (lambda (x) (setq a x)))
+        (drgnx-sandbox-check-async (lambda (x) (setq b x)))
+        (should (drgnx-sandbox-test--wait (lambda () (and a b))))
+        (should (string-match-p "Bad answer" (plist-get a :reason)))
+        (should (eq a b))
+        (should-not drgnx-sandbox--check-waiting))
+      (drgnx-sandbox-check-reset)
+      (let ((old nil) (new nil) (n 0))
+        (cl-letf (((symbol-function 'drgnx-sandbox--probes)
+                   (lambda (_b) (cl-incf n)
+                     (if (= n 1) '((:probe "/bin/sh" "-c" "sleep 0.3; exit 1")) '((:probe "/bin/sh" "-c" "exit 0"))))))
+          (drgnx-sandbox-check-async (lambda (x) (setq old x)))
+          (drgnx-sandbox-check-reset)
+          (should-not drgnx-sandbox--check-waiting)
+          (drgnx-sandbox-check-async (lambda (x) (setq new x)))
+          (should (drgnx-sandbox-test--wait (lambda () (and old new))))
+          (should (= n 2))
+          (should-not (plist-get old :ok))
+          (should (plist-get new :ok))
+          (should (eq drgnx-sandbox--checked new)))))))
+
 (ert-deftest drgnx-sandbox/memory-prefix-only-with-a-manager ()
   "The memory cap is a systemd scope (the trusted systemd-run) in front of the sandbox, when the spec has a
 `:memory-max' (`drgnx-sandbox-memory-max' unless given) and the check found a user manager that answers."
@@ -728,9 +836,10 @@ dirs and every tool's config), nor in ~/.ssh: not from `PATH', not through a lin
       (let ((spec (drgnx-sandbox-spec :write (list folder) :memory-max "2G")))
         (should (equal (drgnx-sandbox-wrap spec '("a"))
                        (append (drgnx-sandbox-memory-prefix spec) (drgnx-sandbox-bwrap-argv spec '("a"))))))
-      ;; a size and nothing else
+      ;; a size and nothing else, whoever asks
       (dolist (bad '("4G -p Delegate=yes" "lots" ""))
-        (drgnx-sandbox-test--refused (drgnx-sandbox-spec :memory-max bad))))
+        (drgnx-sandbox-test--refused (drgnx-sandbox-spec :memory-max bad))
+        (should-error (drgnx-sandbox-memory-prefix (list :memory-max bad)) :type 'drgnx-sandbox-refused)))
     ;; no manager answered, no check yet, no trusted systemd-run: no cap
     (dolist (case '(((:ok t :scope nil) ("systemd-run" . "/usr/bin/systemd-run"))
                     (nil ("systemd-run" . "/usr/bin/systemd-run"))

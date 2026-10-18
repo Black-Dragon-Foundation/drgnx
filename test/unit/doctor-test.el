@@ -62,6 +62,15 @@
                                              :sandbox '(:ok t :backend bwrap :version "0.12.0" :scope nil :memory-max "4G")))))
     (should (eq (car r) 'ok))
     (should (string-search "no memory cap" (nth 1 r))))
+  ;; `drgnx doctor' runs with -Q: it sees the default, not the user's setting, and says so
+  (let ((r (drgnx-doctor-check 'job-sandbox (drgnx-doctor-test--facts
+                                             :sandbox '(:ok t :backend bwrap :version "0.12.0" :scope t :memory-max "4G"
+                                                            :memory-max-default t)))))
+    (should (string-search "memory cap 4G per agent by default (drgnx-sandbox-memory-max)" (nth 1 r))))
+  (require 'drgnx-sandbox)
+  (should (plist-get (cl-letf (((symbol-function 'drgnx-sandbox-check) (lambda () '(:ok t :backend bwrap))))
+                       (let ((user-init-file nil)) (drgnx-doctor--sandbox)))
+                     :memory-max-default))
   (should (equal (nth 1 (drgnx-doctor-check 'job-sandbox (drgnx-doctor-test--facts :sandbox '(:ok t :backend seatbelt))))
                  "sandbox-exec ok"))
   ;; the fact is the sandbox's own check

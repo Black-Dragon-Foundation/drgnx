@@ -61,6 +61,9 @@ PREFIX/etc/npmrc."
   "The resolver's configuration.  Where it is a link to a file under /run (systemd-resolved's stub), that file is
 bound read-only inside, so names resolve under the empty /run.")
 
+(defconst drgnx-sandbox--size "\\`[0-9]+\\(?:\\.[0-9]+\\)?[KMGT]?\\'\\|\\`[0-9]+%\\'"
+  "What a `:memory-max' must look like: a systemd size (4G, 512M, 1.5G) or a percentage (50%), nothing else.")
+
 (defconst drgnx-sandbox--keys
   '(:backend :read :write :hide :binds :home :run :sockets :env :chdir :net :proxy :gateway :tmp :profile-file
              :memory-max)
@@ -280,7 +283,7 @@ or holds a dir of `exec-path'."
     (unless (or (null (plist-get spec key)) (natnump (plist-get spec key)))
       (drgnx-sandbox--refuse "%s is not a port" key)))
   (let ((max (plist-get spec :memory-max)))
-    (unless (or (null max) (and (stringp max) (string-match-p "\\`[0-9]+\\(?:\\.[0-9]+\\)?[KMGT]?\\'\\|\\`[0-9]+%\\'" max)))
+    (unless (or (null max) (and (stringp max) (string-match-p drgnx-sandbox--size max)))
       (drgnx-sandbox--refuse ":memory-max %S is not a size (4G, 512M, 50%%)" max))))
 
 (defun drgnx-sandbox-validate (spec)
@@ -456,8 +459,11 @@ its `:profile-file'.  The memory cap's scope (`drgnx-sandbox-memory-prefix') com
   "The systemd scope that caps SPEC's memory at its `:memory-max', to put in front of the sandbox: (SYSTEMD-RUN
 \"--user\" \"--scope\" \"--quiet\" \"-p\" \"MemoryMax=M\" \"-p\" \"MemorySwapMax=0\" \"--\"), with the trusted
 systemd-run (`drgnx-sandbox-program').  Nil when `:memory-max' is nil, or when the last check
-(`drgnx-sandbox--checked') did not find a user manager that answers — or has not run: this never runs a process."
+(`drgnx-sandbox--checked') did not find a user manager that answers — or has not run: this never runs a process.
+Signals `drgnx-sandbox-refused' when `:memory-max' is not a size (`drgnx-sandbox--size'), whoever built SPEC."
   (let ((max (plist-get spec :memory-max)))
+    (unless (or (null max) (and (stringp max) (string-match-p drgnx-sandbox--size max)))
+      (signal 'drgnx-sandbox-refused (list (format ":memory-max %S is not a size (4G, 512M, 50%%)" max))))
     (when-let* (((and max (plist-get drgnx-sandbox--checked :scope))) (run (drgnx-sandbox-program "systemd-run")))
       (list run "--user" "--scope" "--quiet" "-p" (concat "MemoryMax=" max) "-p" "MemorySwapMax=0" "--"))))
 
@@ -505,7 +511,10 @@ nothing runs then."
 (defvar drgnx-sandbox-check-timeout 5 "Seconds each probe of the sandbox's check may take.")
 
 (defvar drgnx-sandbox--check-waiting nil
-  "While a check runs: the DONEs of `drgnx-sandbox-check-async' waiting for it, newest first.")
+  "While a check runs: (GENERATION . DONES), the DONEs of `drgnx-sandbox-check-async' waiting for it, newest first.")
+
+(defvar drgnx-sandbox--check-generation 0
+  "Bumped by `drgnx-sandbox-check-reset': a check started before it does not keep its answer.")
 
 (defvar drgnx-sandbox-container-files '("/run/.containerenv" "/.dockerenv")
   "Files that are there when this Emacs runs in a container (podman's, docker's).")
@@ -590,10 +599,14 @@ is not there, or a string: why even the probe was refused."
                        (t (drgnx-sandbox--explain (cdr probe))))))
         (list :ok nil :backend backend :version version :reason (car why) :fix (cdr why))))))
 
-(defun drgnx-sandbox--check-done (answer)
-  "Keep ANSWER as the check's and hand it to every DONE waiting for it."
-  (let ((waiting (reverse drgnx-sandbox--check-waiting)))
-    (setq drgnx-sandbox--checked answer drgnx-sandbox--check-waiting nil)
+(defun drgnx-sandbox--check-done (run answer)
+  "End the check RUN, (GENERATION . DONES), with ANSWER: keep it unless `drgnx-sandbox-check-reset' came since, and
+hand it to each DONE of RUN.  A second call for the same RUN does nothing."
+  (let ((waiting (reverse (cdr run))))
+    (setcdr run nil)
+    (when (eq drgnx-sandbox--check-waiting run) (setq drgnx-sandbox--check-waiting nil))
+    (when (eql (car run) drgnx-sandbox--check-generation) (setq drgnx-sandbox--checked answer))
+    (setcar run :done)
     (dolist (done waiting) (with-demoted-errors "drgnx sandbox check: %S" (funcall done answer)))))
 
 (defun drgnx-sandbox-check-async (done)
@@ -601,27 +614,37 @@ is not there, or a string: why even the probe was refused."
 The probes (`drgnx-sandbox--probes') run side by side as processes of their own, each for at most
 `drgnx-sandbox-check-timeout' seconds.  Their programs are looked for again (`drgnx-sandbox-program-reset'), so a
 bubblewrap installed since is seen.  The answer is kept until `drgnx-sandbox-check-reset': with one kept, or when no
-probe can run, DONE is called before this returns; a call while a check runs waits for that one.  Never prompts."
+probe can run, DONE is called before this returns; a call while a check runs waits for that one.  Any error ends the
+check with an answer that says so: every DONE is always called.  Never prompts."
   (cond (drgnx-sandbox--checked (funcall done drgnx-sandbox--checked))
-        (drgnx-sandbox--check-waiting (push done drgnx-sandbox--check-waiting))
+        (drgnx-sandbox--check-waiting (push done (cdr drgnx-sandbox--check-waiting)))
         (t
-         (setq drgnx-sandbox--check-waiting (list done))
-         (drgnx-sandbox-program-reset)
-         (let* ((backend (pcase system-type ('gnu/linux 'bwrap) ('darwin 'seatbelt)))
-                (probes (condition-case e (and backend (drgnx-sandbox--probes backend))
-                          (drgnx-sandbox-refused (format "the sandbox refuses even its probe: %s" (cadr e)))))
-                (results nil)
-                (left (and (consp probes) (length probes)))
-                (land (lambda (key r)
-                        (push (cons key r) results)
-                        (when (zerop (cl-decf left)) (drgnx-sandbox--check-done (drgnx-sandbox--answer backend results))))))
-           (if (not (consp probes))
-               (drgnx-sandbox--check-done (drgnx-sandbox--answer backend probes))
-             (pcase-dolist (`(,key . ,argv) probes)
-               (condition-case e
-                   (drgnx-sandbox--spawn "drgnx-sandbox-check" argv drgnx-sandbox-check-timeout
-                                         (lambda (r) (funcall land key r)))
-                 (error (funcall land key (cons 127 (error-message-string e))))))))))
+         (let* ((run (list drgnx-sandbox--check-generation done))
+                (backend (pcase system-type ('gnu/linux 'bwrap) ('darwin 'seatbelt)))
+                (fail (lambda (e) (list :ok nil :backend backend
+                                        :reason (format "the sandbox's check failed: %s" (error-message-string e))
+                                        :fix nil)))
+                (finish (lambda (thunk)
+                          (drgnx-sandbox--check-done run (condition-case e (funcall thunk) (error (funcall fail e))))))
+                (results nil) (left 0))
+           (setq drgnx-sandbox--check-waiting run)
+           (condition-case e
+               (progn
+                 (drgnx-sandbox-program-reset)
+                 (let ((probes (condition-case e (and backend (drgnx-sandbox--probes backend))
+                                 (drgnx-sandbox-refused (format "the sandbox refuses even its probe: %s" (cadr e))))))
+                   (if (not (consp probes))
+                       (funcall finish (lambda () (drgnx-sandbox--answer backend probes)))
+                     (setq left (length probes))
+                     (pcase-dolist (`(,key . ,argv) probes)
+                       (let ((land (lambda (r)
+                                     (push (cons key r) results)
+                                     (when (and (zerop (cl-decf left)) (not (eq (car run) :done)))
+                                       (funcall finish (lambda () (drgnx-sandbox--answer backend results)))))))
+                         (condition-case e
+                             (drgnx-sandbox--spawn "drgnx-sandbox-check" argv drgnx-sandbox-check-timeout land)
+                           (error (funcall land (cons 127 (error-message-string e))))))))))
+             (error (unless (eq (car run) :done) (drgnx-sandbox--check-done run (funcall fail e))))))))
   nil)
 
 (defun drgnx-sandbox-check ()
@@ -637,58 +660,79 @@ until `drgnx-sandbox-check-reset'."
         (or answer (list :ok nil :reason "the sandbox's check did not answer" :fix nil)))))
 
 (defun drgnx-sandbox-check-reset ()
-  "Forget the check's answer and the programs found (`drgnx-sandbox-program-reset'): the next check looks again."
-  (setq drgnx-sandbox--checked nil)
+  "Forget the check's answer and the programs found (`drgnx-sandbox-program-reset'): the next check looks again.  A
+check that runs still answers its own callers, but its answer is not kept, and later calls start a new one."
+  (setq drgnx-sandbox--checked nil drgnx-sandbox--check-waiting nil)
+  (cl-incf drgnx-sandbox--check-generation)
   (drgnx-sandbox-program-reset))
 
 ;;;; Toolchains
 
 (defconst drgnx-sandbox--toolchain-layouts
-  '("\\`\\(?:.*/\\)?mise/installs/[^/]+/[^/]+" "\\`\\.cargo/bin" "\\`\\.rustup/toolchains" "\\`go/bin"
-    "\\`\\.nvm/versions/node/[^/]+")
-  "Where a toolchain installs under HOME, as regexps on a path relative to HOME: what one matches is the root.")
+  '("\\(?:.*/\\)?mise/installs/[^/]+/[^/]+" "\\.cargo/bin" "\\.rustup/toolchains" "go/bin" "\\.nvm/versions/node/[^/]+"
+    "\\.npm-global" "\\.local/lib/node_modules/\\(?:@[^/]+/\\)?[^/]+" "\\.local/share/pipx/venvs/[^/]+"
+    "\\.local/pipx/venvs/[^/]+" "\\.local/share/uv/tools/[^/]+" "\\.local/share/uv/python/[^/]+"
+    "\\.local/share/claude/versions")
+  "Where a toolchain installs under HOME, as regexps on a path relative to HOME, each matching whole path
+components from the start: what one matches is the root.  mise's installs/TOOL/VER, cargo, rustup, go, nvm, npm's
+prefix (~/.npm-global, or ~/.local's node_modules/PKG), pipx's and uv's tool venvs and uv's Pythons, Claude Code's
+versioned binaries.")
 
 (defconst drgnx-sandbox--toolchain-also '((".cargo/bin" . ".rustup/toolchains"))
   "A root (relative to HOME) → another root it runs: cargo's proxies run rustup's toolchains.")
 
-(defconst drgnx-sandbox--home-not-roots '(".local" ".local/share" ".local/state" ".config" ".cache")
-  "Dirs of HOME that are never a toolchain root: they hold drgnx's own dirs and every tool's config and state.")
+(defconst drgnx-sandbox--home-config '(".config" ".local/share" ".local/state" ".cache")
+  "Dirs of HOME where every tool keeps its config, state and tokens (drgnx's own too): nothing in them is a toolchain
+root but a known layout (`drgnx-sandbox--toolchain-layouts').")
 
 (defconst drgnx-sandbox--home-closed '(".ssh" ".gnupg" ".aws" ".kube" ".docker" ".password-store")
   "Dirs of HOME no toolchain root is in: keys and credentials.")
 
-(defun drgnx-sandbox--toolchain-root (path home)
-  "PATH's install root: a true name strictly inside HOME's (with a slash), cut where a layout of
-`drgnx-sandbox--toolchain-layouts' ends; PATH itself when none matches."
+(defun drgnx-sandbox--toolchain-layout (path home)
+  "The root of the toolchain layout PATH is in (`drgnx-sandbox--toolchain-layouts'), or nil.  PATH is a true name
+strictly inside HOME (a true name with a slash)."
   (let ((rel (substring path (length home))))
-    (or (cl-loop for re in drgnx-sandbox--toolchain-layouts
-                 when (string-match re rel) return (concat home (match-string 0 rel)))
-        path)))
+    (cl-loop for re in drgnx-sandbox--toolchain-layouts
+             when (string-match (concat "\\`\\(" re "\\)\\(?:/\\|\\'\\)") rel)
+             return (concat home (match-string 1 rel)))))
+
+(defun drgnx-sandbox--toolchain-root (path home)
+  "PATH's install root: the root of the toolchain layout it is in, else PATH itself (see
+`drgnx-sandbox--toolchain-layout')."
+  (or (drgnx-sandbox--toolchain-layout path home) path))
 
 (defun drgnx-sandbox--root-ok-p (root home)
-  "May ROOT be a toolchain root, HOME's (with a slash) true name: strictly inside it, not one of
-`drgnx-sandbox--home-not-roots', nor in one of `drgnx-sandbox--home-closed'."
+  "May ROOT be a toolchain root, HOME's (with a slash) true name: strictly inside it; not ~/.local, nor in ~/.ssh,
+~/.gnupg and the like (`drgnx-sandbox--home-closed'); in ~/.config, ~/.local/share, ~/.local/state or ~/.cache
+only as a known layout's root."
   (and (string-prefix-p home root)
-       (not (member (substring root (length home)) drgnx-sandbox--home-not-roots))
-       (not (cl-some (lambda (d) (drgnx-sandbox--within-p root (concat home d))) drgnx-sandbox--home-closed))))
+       (not (string= root (concat home ".local")))
+       (not (cl-some (lambda (d) (drgnx-sandbox--within-p root (concat home d))) drgnx-sandbox--home-closed))
+       (or (equal (drgnx-sandbox--toolchain-layout root home) root)
+           (not (cl-some (lambda (d) (drgnx-sandbox--within-p root (concat home d))) drgnx-sandbox--home-config)))))
 
 (defun drgnx-sandbox-toolchain-roots (path-dirs home)
-  "The read-only roots under HOME that the PATH-DIRS there need, sorted true names.  Each dir of PATH-DIRS inside
-HOME, its links resolved, gives its install root: mise's installs/TOOL/VER, ~/.cargo/bin (and ~/.rustup/toolchains),
-~/go/bin, nvm's versions/node/V, else the dir itself; and each link in it (~/.local/bin's) gives the root of what it
-leads to.  Never HOME nor a parent of it, ~/.local, ~/.local/share, ~/.config, ~/.cache, or anything in ~/.ssh,
-~/.gnupg and the like; a root inside another is left to it.  Dirs outside HOME are the system's reads."
+  "The read-only roots under HOME that the PATH-DIRS there need, sorted true names: dirs, and single files.
+- Each dir of PATH-DIRS inside HOME, its links resolved, gives its install root: the root of its toolchain layout
+  (`drgnx-sandbox--toolchain-layouts': mise's installs/TOOL/VER, ~/.cargo/bin and ~/.rustup/toolchains, ~/go/bin,
+  nvm's versions/node/V, npm's prefix, pipx's and uv's venvs …), else the dir itself.
+- Each link in such a dir (~/.local/bin's) gives the root of the layout it leads into; a link into no layout gives
+  its target file alone, read-only — never the dir it is in — and a link to a dir in no layout gives nothing.
+- A link into drgnx's data dir or checkout gives nothing: drgnx's own files reach a sandbox only by an explicit bind.
+Never a root: HOME nor a parent of it, ~/.local, anything in ~/.ssh, ~/.gnupg and the like, or in ~/.config,
+~/.local/share, ~/.local/state or ~/.cache but a known layout; nor what `drgnx-sandbox-validate' refuses to read.  A
+root inside another is left to it.  Dirs outside HOME are the system's reads."
   (let* ((file-name-handler-alist nil)
          (true-home (and (stringp home) (drgnx-sandbox--truename home)))
          (home (and true-home (file-name-as-directory true-home)))
+         (own (delq nil (mapcar #'drgnx-sandbox--truename (list (drgnx-data-dir) drgnx-dir))))
          (roots nil)
-         (add (lambda (path)
-                (let ((r (and path (string-prefix-p home path) (drgnx-sandbox--toolchain-root path home))))
-                  (when (and r (drgnx-sandbox--root-ok-p r home)) (push r roots) r)))))
+         (add (lambda (r)
+                (when (and r (drgnx-sandbox--root-ok-p r home)) (push r roots) r))))
     (when home
       (dolist (dir path-dirs)
         (let* ((true (and (stringp dir) (file-name-absolute-p dir) (file-directory-p dir) (drgnx-sandbox--truename dir)))
-               (root (funcall add true)))
+               (root (and true (string-prefix-p home true) (funcall add (drgnx-sandbox--toolchain-root true home)))))
           (when root
             (pcase-dolist (`(,from . ,to) drgnx-sandbox--toolchain-also)
               (when (and (string= root (concat home from)) (file-directory-p (concat home to)))
@@ -696,11 +740,17 @@ leads to.  Never HOME nor a parent of it, ~/.local, ~/.local/share, ~/.config, ~
             (dolist (f (directory-files true t "\\`[^.]" t))
               (when (file-symlink-p f)
                 (let ((target (drgnx-sandbox--truename f)))
-                  (when (and target (file-exists-p target))
-                    (funcall add (if (file-directory-p target) target
-                                   (directory-file-name (file-name-directory target))))))))))))
-    (let ((all (delete-dups (cl-remove-if-not #'file-directory-p roots))))
-      (sort (cl-remove-if (lambda (r) (cl-some (lambda (o) (drgnx-sandbox--under-p r o)) all)) all) #'string<))))
+                  (when (and target (string-prefix-p home target) (file-exists-p target)
+                             (not (cl-some (lambda (o) (drgnx-sandbox--within-p target o)) own)))
+                    (funcall add (or (drgnx-sandbox--toolchain-layout target home)
+                                     (and (file-regular-p target) target))))))))))
+      ;; what Task 3's rules refuse to read is never a root either
+      (let* ((ctx (drgnx-sandbox--context))
+             (all (cl-remove-if (lambda (r)
+                                  (or (not (file-exists-p r))
+                                      (catch 'drgnx-sandbox--refused (drgnx-sandbox--check-source ctx :read r) nil)))
+                                (delete-dups roots))))
+        (sort (cl-remove-if (lambda (r) (cl-some (lambda (o) (drgnx-sandbox--under-p r o)) all)) all) #'string<)))))
 
 (defun drgnx-sandbox-toolchain-hide (roots)
   "The `:hide' list for ROOTS: each of `drgnx-sandbox-secret-files' inside a root, where it is there, as its true

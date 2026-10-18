@@ -143,9 +143,12 @@ its package read from its package.json, never run), nil when none is installed, 
 
 (defun drgnx-doctor--sandbox ()
   "The fact of the `job-sandbox' check: `drgnx-sandbox-check' (its probes take at most a few seconds) with
-:memory-max, `drgnx-sandbox-memory-max'; or (:error MESSAGE)."
+:memory-max, `drgnx-sandbox-memory-max', and :memory-max-default t when no init file was loaded (`drgnx doctor'
+runs with -Q, so it sees the default, not the user's setting); or (:error MESSAGE)."
   (condition-case err
-      (progn (require 'drgnx-sandbox) (append (drgnx-sandbox-check) (list :memory-max drgnx-sandbox-memory-max)))
+      (progn (require 'drgnx-sandbox)
+             (append (drgnx-sandbox-check)
+                     (list :memory-max drgnx-sandbox-memory-max :memory-max-default (null user-init-file))))
     (error (list :error (error-message-string err)))))
 
 (defun drgnx-doctor--job-sandbox-check (s)
@@ -157,7 +160,9 @@ its package read from its package.json, never run), nil when none is installed, 
            (list 'ok (concat program (if (plist-get s :version) (concat " " (plist-get s :version)) "") " ok"
                              (cond ((not (eq (plist-get s :backend) 'bwrap)) "")
                                    ((null (plist-get s :memory-max)) "; no memory cap (drgnx-sandbox-memory-max is nil)")
-                                   ((plist-get s :scope) (format "; memory cap %s per agent" (plist-get s :memory-max)))
+                                   ((plist-get s :scope)
+                                    (format "; memory cap %s per agent%s" (plist-get s :memory-max)
+                                            (if (plist-get s :memory-max-default) " by default (drgnx-sandbox-memory-max)" "")))
                                    (t "; no memory cap (no systemd user manager answers)")))
                  nil))
           (t (list 'warn (format "jobs' agents cannot be sandboxed, so jobs do not start: %s" (plist-get s :reason))

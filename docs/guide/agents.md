@@ -113,10 +113,11 @@ they see the system, your toolchains read-only, their task's folder and a privat
 group:
 
 ```
-OK    job-sandbox          bwrap 0.12.0 ok; memory cap 4G per agent
+OK    job-sandbox          bwrap 0.12.0 ok; memory cap 4G per agent by default (drgnx-sandbox-memory-max)
 ```
 
-or a warning with the reason and the fix. Without a working sandbox, jobs do not start. What to install:
+or a warning with the reason and the fix. (`drgnx doctor` runs without your configuration, so it shows the cap's
+default; the doctor of the Welcome's Finish step shows yours.) Without a working sandbox, jobs do not start. What to install:
 
 - **Fedora, RHEL:** `sudo dnf install bubblewrap`. **Debian, Ubuntu:** `sudo apt install bubblewrap`. **Arch:**
   `sudo pacman -S bubblewrap`. **openSUSE:** `sudo zypper install bubblewrap`. drgnx uses only a `bwrap` that only
@@ -127,9 +128,12 @@ or a warning with the reason and the fix. Without a working sandbox, jobs do not
 - **macOS** ships `sandbox-exec`.
 - **Inside a container** there is no sandbox for jobs: run drgnx on the host.
 
-Your toolchains under `~` are found from `PATH` (mise, cargo and rustup, go, nvm, the targets of the links in
-`~/.local/bin`), read-only, with the token files package managers keep in them (`.npmrc`, `etc/npmrc`, `.pypirc` …,
-`drgnx-sandbox-secret-files`) hidden. Where systemd runs your session, each agent also runs under a memory cap,
+Your toolchains under `~` are found from `PATH` and bound read-only: the install dirs of mise, cargo and rustup, go,
+nvm, npm's prefix, pipx and uv, and the `PATH` dirs themselves (`~/.local/bin`). A link in a `PATH` dir to anything
+else (a script in your dotfiles or another repository) brings that one file, never the directory it is in; nothing
+of `~/.config`, `~/.local/share` or `~/.cache` comes in but those install dirs, and nothing of drgnx's own. The token
+files package managers keep in the install dirs (`.npmrc`, `etc/npmrc`, `.pypirc` …, `drgnx-sandbox-secret-files`)
+are hidden. Where systemd runs your session, each agent also runs under a memory cap,
 `drgnx-sandbox-memory-max` (4G; nil for none), so one agent's build cannot run your session out of memory.
 
 ## The hub and the gateway

@@ -181,13 +181,15 @@ with a card that says why and how to fix it; the doctor shows the same answer.
 - `(drgnx-sandbox-check-async DONE)` is the hub's: it never blocks and never prompts. Its probes run side by side as
   processes of their own, each for at most `drgnx-sandbox-check-timeout` seconds (5), and DONE gets the answer. With
   an answer kept, or when no probe can run (no program), DONE is called before it returns; a call while a check runs
-  waits for that one.
+  waits for that one. Any error, while the probes are built or their answer is made, ends the check with an answer
+  that says so: every caller is always answered, and the check never stays "running".
 - `(drgnx-sandbox-check)` is the same, synchronous, for the doctor and the CLI: it waits for the async one.
 - The answer: `(:ok BOOL :backend SYM :version STRING :reason STRING :fix STRING :scope BOOL)`. `:fix` is nil where
   nothing can be done here; `:scope` says whether a systemd user manager answers (the memory cap).
 - It is kept in `drgnx-sandbox--checked` until `drgnx-sandbox-check-reset`, which also forgets the programs found.
   A check that runs looks for its programs again (`drgnx-sandbox-program-reset`), so a bubblewrap installed while the
-  hub runs is seen at the next check rather than never.
+  hub runs is seen at the next check rather than never. A reset while a check runs lets that check answer its own
+  callers, but its answer is not kept (a generation counter), and the next call starts a new check.
 
 The probes (`drgnx-sandbox--probes`), all run by the hub:
 
@@ -198,7 +200,8 @@ The probes (`drgnx-sandbox--probes`), all run by the hub:
 | `:scope` | `systemd-run --user --scope --quiet -p MemoryMax=64M -p MemorySwapMax=0 -- /usr/bin/true`, with the trusted systemd-run | — |
 
 The probe is the real argv, not a smaller one, so whatever an agent's start would trip on (`--proc` without a pid
-namespace, `--disable-userns` without a user namespace) fails the check first.
+namespace, `--disable-userns` without a user namespace) fails the check first. Its spec is empty, though: it has no
+`:home` and no `:run` bind, so a failure particular to those binds shows only when an agent starts.
 
 `(drgnx-sandbox--explain STDERR)` turns a failure into `(REASON . FIX)`:
 
@@ -217,26 +220,36 @@ failure is "inside a container", and `bin/drgnx test --container` skips the real
 
 An agent needs the user's compilers, linters and test runners, many of which live under `~`. Binding `~` is refused,
 so `(drgnx-sandbox-toolchain-roots PATH-DIRS HOME)` finds the read-only roots under HOME that the `PATH` entries
-there need, as sorted true names. Each `PATH` dir inside HOME, its links resolved, gives its install root:
+there need, as sorted true names: dirs, and single files. A known **toolchain layout**
+(`drgnx-sandbox--toolchain-layouts`, matched on whole path components) gives its install root:
 
-| `PATH` entry | Root |
+| Layout | Root |
 |---|---|
-| `…/mise/installs/TOOL/VER/bin` (any mise data dir under `~`) | `…/mise/installs/TOOL/VER` |
+| `…/mise/installs/TOOL/VER/…` (any mise data dir under `~`) | `…/mise/installs/TOOL/VER` |
 | `~/.cargo/bin` | `~/.cargo/bin`, and `~/.rustup/toolchains` where it exists (cargo's proxies run them) |
 | `~/.rustup/toolchains/…` | `~/.rustup/toolchains` |
 | `~/go/bin` | `~/go/bin` |
-| `~/.nvm/versions/node/V/bin` | `~/.nvm/versions/node/V` |
-| a link (`~/bin` → `~/tools/bin`) | its target, by the same rules |
-| anything else (`~/.local/bin`) | the dir itself |
+| `~/.nvm/versions/node/V/…` | `~/.nvm/versions/node/V` |
+| npm's prefix: `~/.npm-global/…`, or `~/.local/lib/node_modules/PKG/…` | `~/.npm-global`, or that package |
+| pipx: `~/.local/share/pipx/venvs/APP/…` (older: `~/.local/pipx/venvs/APP`) | the venv |
+| uv: `~/.local/share/uv/tools/APP/…`, `~/.local/share/uv/python/V/…` | the tool's venv, the Python |
+| Claude Code: `~/.local/share/claude/versions/…` | `~/.local/share/claude/versions` |
 
-Each link inside such a dir (`~/.local/bin/python` → mise's python, `~/.local/bin/claude` → its versioned binary)
-adds the root of what it leads to: the target dir, or the dir holding the target file, by the same rules. A root
-inside another is left to the outer one; dirs outside HOME are the system's reads already.
+- **Each `PATH` dir inside HOME**, its links resolved (`~/bin` → `~/tools/bin`), gives the root of its layout, else
+  the dir itself (`~/.local/bin`, `~/.bun/bin`).
+- **Each link inside such a dir** gives the root of the layout it leads into (`~/.local/bin/python` → mise's python).
+  A link into no layout gives **its target file alone**, read-only: `~/.local/bin/sync` → `~/dotfiles/sync.sh` binds
+  that script, never `~/dotfiles` with the key beside it. A link to a dir in no layout gives nothing.
+- **A link into drgnx's own data dir or checkout gives nothing** (install.sh's `~/.local/bin/drgnx` →
+  `~/.local/share/drgnx/drgnx/bin/drgnx`). drgnx's files reach a sandbox only through the explicit bind the hub
+  makes for what needs them (the MCP bridge), never through `PATH`.
 
-Never a root: HOME or a parent of it; `~/.local`, `~/.local/share`, `~/.local/state`, `~/.config` and `~/.cache`
-(they hold drgnx's own dirs and every tool's config); anything in `~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.kube`,
-`~/.docker` or `~/.password-store`. A `PATH` dir that would be one of these is skipped with its links. Validation
-refuses the drgnx dirs again when the spec is built.
+Never a root: HOME or a parent of it; `~/.local` itself; anything in `~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.kube`,
+`~/.docker` or `~/.password-store`; anything in `~/.config`, `~/.local/share`, `~/.local/state` or `~/.cache` but a
+known layout's root (`~/.config/gh`, `~/.local/share/keyrings` never). A `PATH` dir that would be one of these is
+skipped with its links. Last, every root goes through validation's `:read` rules, and what they refuse is dropped. A
+root inside another is left to the outer one; dirs outside HOME are the system's reads already. Broader reads are the
+user's to give, through `:sandbox-read` in `agents.eld`.
 
 Bin dirs rather than whole tool homes keep the credentials beside them out: `~/.cargo/credentials.toml` is not
 inside `~/.cargo/bin`. Those inside a root are hidden: `(drgnx-sandbox-toolchain-hide ROOTS)` is the `:hide` list,
@@ -249,7 +262,8 @@ The whole command can run in a systemd scope, so that one agent's build cannot r
 is an operational guard, not a security boundary.
 
 - `drgnx-sandbox-memory-max` (default `"4G"`; nil for none) is a spec's `:memory-max` unless the spec gives one.
-  Validation takes only a size: digits with `K`, `M`, `G` or `T`, or a percentage.
+  Validation takes only a size: digits with `K`, `M`, `G` or `T`, or a percentage. `drgnx-sandbox-memory-prefix`
+  checks it too, so a caller that builds its own argv cannot pass anything else.
 - `(drgnx-sandbox-memory-prefix SPEC)` is `(SYSTEMD-RUN "--user" "--scope" "--quiet" "-p" "MemoryMax=M" "-p"
   "MemorySwapMax=0" "--")`, with the trusted systemd-run (`drgnx-sandbox-program`, never one found on `PATH`
   first). It is nil when `:memory-max` is nil, or when the last check found no user manager that answers (`:scope`),
@@ -294,9 +308,14 @@ The check runs its probes side by side once per hub start, so it costs about as 
   Their caches belong in the private home (`CARGO_HOME`, `GOMODCACHE` pointing there). rustup's proxies in
   `~/.cargo/bin` read `~/.rustup/settings.toml`, which is not bound: the agent's environment needs
   `RUSTUP_TOOLCHAIN`. mise's shims (`…/mise/shims`) run mise itself, which reads its config: put mise's
-  `installs/…/bin` on `PATH` (mise's activation does) rather than the shims.
+  `installs/…/bin` on `PATH` (mise's activation does) rather than the shims (they are in `~/.local/share`, so no
+  root anyway).
+- **A script linked from `PATH` gets only itself.** A link into no layout binds the target file alone, so a script
+  that loads files beside it, or a tool installed in a layout drgnx does not know, fails inside. A pipx or uv venv's
+  `python` is a link to the interpreter it was made from: that interpreter must be a root too (a system one, or one
+  of mise's or uv's on `PATH`). The fix is a layout entry, or `:sandbox-read` for that profile.
 - **Secret files are looked for at fixed places** in each root (`drgnx-sandbox-secret-files`), not throughout a
-  toolchain's tree.
+  toolchain's tree. The layout roots are install dirs, where that is enough.
 
 
 ## MCP through a socket
