@@ -31,6 +31,34 @@
 
 (defconst drgnx-keys-eld-test--other-stack '((vscode app editing window)))
 
+;;;; Saving keys.eld by hand
+
+(ert-deftest drgnx-keys-eld/a-hand-save-applies-the-keys-at-once ()
+  ;; Open Config File…, fix the mistake, save: the notice clears and the keys are applied, without a restart.
+  (drgnx-test-with-config
+    (drgnx-keys-eld-test--editor
+      (let ((drgnx-keys-last '(:layers nil)) (drgnx-keys--session-layers '((vim app)))
+            (create-lockfiles nil) (buf nil))
+        (should (memq #'drgnx-keys--config-changed drgnx-config-changed-functions))
+        (drgnx-keys-eld-test--put "(:bind ((palette)))\n")
+        (should (drgnx-config-problem 'keys))
+        (unwind-protect
+            (progn
+              (drgnx-config-open 'keys)
+              (setq buf (current-buffer))
+              (erase-buffer)
+              (insert "(:layers ((emacs editing)))\n")
+              (save-buffer)
+              (should (= applied 1))
+              (should-not (drgnx-config-problem 'keys))
+              (should-not drgnx-keys--session-layers)                     ; the file is the authority now
+              ;; drgnx's own writes apply what they write themselves: the listener stays out
+              (drgnx-config-set 'keys :unbind '(keys-sheet))
+              (should (= applied 1)))
+          (when (buffer-live-p buf) (with-current-buffer buf (set-buffer-modified-p nil)) (kill-buffer buf)))
+        (drgnx-keys-unload-function)
+        (should-not (memq #'drgnx-keys--config-changed drgnx-config-changed-functions))))))
+
 ;;;; The definition
 
 (ert-deftest drgnx-keys-eld/the-forms-the-guide-teaches-still-read ()

@@ -85,7 +85,7 @@ Your own layouts; the built-in ones are not stored.
 
 ## drgnx.lock.eld
 
-Folder: config. Format: 1. Read: when it changes. On a mistake: the defaults.
+Folder: config. Format: 1. Read: when it changes. On a mistake: drgnx sync stops until it is fixed; nothing is changed.
 
 Every installed package, pinned by drgnx sync.  A mistake in it stops the sync, and drgnx never replaces the file.
 
@@ -110,7 +110,7 @@ Which modules run, their flags, external modules.
 
 ## packages.eld
 
-Folder: config. Format: 1. Read: at start. On a mistake: the defaults.
+Folder: config. Format: 1. Read: at start. On a mistake: drgnx sync stops until it is fixed; nothing is changed.
 
 The packages you want besides the modules', their sources and archives.  Read at each drgnx sync; a mistake in it stops the sync (nothing is applied or replaced).
 

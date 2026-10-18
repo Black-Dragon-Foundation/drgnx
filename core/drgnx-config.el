@@ -47,6 +47,14 @@ goes when its file reads well again.")
 or `drgnx-config-reread' sees a new file.  They run with `inhibit-interaction' t; an error is one message.  Code
 that draws from a config value caches it and listens here, rather than getting it per redisplay.")
 
+(defvar drgnx-config-user-save nil
+  "Non-nil while `drgnx-config-changed-functions' run because the user saved a config file in the buffer
+`drgnx-config-open' visited: a listener that applies its file at once (keys.eld) acts then, and not for drgnx's own
+writes, which apply what they write themselves.")
+
+(defvar-local drgnx-config--visiting nil
+  "In a buffer `drgnx-config-open' visited: the name of the config file it shows.")
+
 (defvar drgnx-config--in-changed nil
   "Non-nil while `drgnx-config-changed-functions' run: a change they cause runs no listener again.")
 
@@ -69,7 +77,7 @@ that draws from a config value caches it and listens here, rather than getting i
       (dolist (k keys) (remhash k table)))))
 
 (cl-defun drgnx-config-define (name &key file (dir 'config) (shape 'plist) (version 1) schema default (reload 'mtime)
-                                    (last-good t) max-bytes migrate header doc)
+                                    (last-good t) max-bytes migrate header doc on-mistake)
   "Declare the config file NAME (a symbol): FILE (a file name) in DIR.  Return NAME.
 DIR: `config' (`drgnx-user-dir'), `state' (`drgnx-state-dir') or `project' (ROOT/.drgnx/, read-only and untrusted).
 SHAPE: `plist' or `alist', the top form.  VERSION: the format this drgnx writes; a plist's `:version', missing
@@ -78,7 +86,8 @@ is absent or has a mistake.  RELOAD: `mtime' (a get stats the file and reads it 
 \(read at the first get, then only by `drgnx-config-reread').  LAST-GOOD: on a mistake, apply the last good copy
 rather than DEFAULT (never for a project file).  MAX-BYTES: the read and write limit (1 MiB; 64 KiB for a project
 file).  MIGRATE: ((FROM . FN)…), FN taking format FROM's data to FROM+1's.  HEADER: the comment a new file starts
-with.  DOC: one line for the reference.
+with.  DOC: one line for the reference.  ON-MISTAKE: a string saying what happens instead of using the file,
+when that is not its last good copy or the defaults (the notice and the reference say it).
 In a module's setup the definition is undone at teardown: the previous one comes back, if any.  Redefining NAME
 drops what was applied from it."
   (unless (and name (symbolp name)) (error "drgnx-config: %S is not a config file name" name))
@@ -90,6 +99,7 @@ drops what was applied from it."
   (unless (memq reload '(start mtime)) (error "drgnx-config: %s: :reload must be start or mtime, not %S" name reload))
   (unless (and (integerp version) (> version 0)) (error "drgnx-config: %s: :version must be 1 or more" name))
   (unless (or (null max-bytes) (natnump max-bytes)) (error "drgnx-config: %s: :max-bytes must be a size" name))
+  (unless (or (null on-mistake) (stringp on-mistake)) (error "drgnx-config: %s: :on-mistake must be a string" name))
   (unless (eq (car-safe schema) shape) (error "drgnx-config: %s: a %s file needs a (%s …) schema" name shape shape))
   (drgnx-schema-validate schema)
   (unless (drgnx-config--migrate-ok-p migrate)
@@ -98,7 +108,8 @@ drops what was applied from it."
          (def (list :name name :file file :dir dir :shape shape :version version :schema schema :default default
                     :reload reload :last-good (and last-good (not project) t)
                     :max-bytes (or max-bytes (if project 65536 1048576)) :migrate migrate
-                    :header (or header (format ";; drgnx: %s (docs/reference/config.md)\n" file)) :doc doc))
+                    :header (or header (format ";; drgnx: %s (docs/reference/config.md)\n" file)) :doc doc
+                    :on-mistake on-mistake))
          (old (gethash name drgnx-config--defs)))
     (puthash name def drgnx-config--defs)
     (drgnx-config--forget name)
@@ -288,14 +299,17 @@ not name.  ST: `drgnx-file-stamp'."
     (error (message "drgnx: the last good copy of %s was not kept: %s" (plist-get def :file)
                     (error-message-string err)))))
 
-(defun drgnx-config--notify (key file problem fallback)
+(defun drgnx-config--notify (key file problem fallback def)
   "Say PROBLEM of FILE (state KEY) once per text: a `drgnx-notify' condition, else one message.
-FALLBACK is what is applied instead: `last-good' or `default'."
+FALLBACK is what is applied instead: `last-good' or `default'; DEF's `:on-mistake' (a project file: that the file
+is refused) says what happens when it is not the last good copy."
   (let ((text (plist-get problem :text)))
     (unless (equal (gethash key drgnx-config--notified) text)
       (puthash key text drgnx-config--notified)
-      (let ((line (format "%s: %s (line %d) — using %s" (drgnx-config--shown file) text (plist-get problem :line)
-                          (if (eq fallback 'last-good) "its last good copy" "the defaults"))))
+      (let ((line (format "%s: %s (line %d) — %s" (drgnx-config--shown file) text (plist-get problem :line)
+                          (cond ((eq fallback 'last-good) "using its last good copy")
+                                (t (or (plist-get def :on-mistake)
+                                       (if (eq (plist-get def :dir) 'project) "the file is refused" "using the defaults")))))))
         (if (fboundp 'drgnx-notify)
             (drgnx-notify 'config 'fail line :id key :life 'condition :command 'config-open)
           (message "drgnx: %s" line))))))
@@ -338,7 +352,7 @@ listeners run even when nothing had been applied yet."
                (not (and old (equal (plist-get old :stamp) (plist-get r :stamp)))))
       (drgnx-config--keep-good def (cdr read)))
     (if (eq status 'problem)
-        (drgnx-config--notify key file (plist-get r :problem) fallback)
+        (drgnx-config--notify key file (plist-get r :problem) fallback def)
       (drgnx-config--unnotify key))
     (when (if old (not (equal (plist-get old :value) value)) wrote)
       (drgnx-config--run-changed (plist-get def :name)))
@@ -742,6 +756,15 @@ file is read-only.  TIMEOUT is the lock's, as in `drgnx-config-update'.  Then th
                                    (complete-with-action action names string pred)))
                                nil t)))))
 
+(defun drgnx-config--after-save ()
+  "After the user saved a buffer `drgnx-config-open' visited: read the file again now, so a fix applies at once
+\(the notice clears, `drgnx-config-changed-functions' run with `drgnx-config-user-save' t).  Never signals."
+  (when (and drgnx-config--visiting (drgnx-config-defined-p drgnx-config--visiting))
+    (condition-case err
+        (let ((drgnx-config-user-save t)) (drgnx-config-reread drgnx-config--visiting))
+      (error (message "drgnx: %s was saved, but reading it again failed: %s" drgnx-config--visiting
+                      (error-message-string err))))))
+
 (defun drgnx-config-open (name)
   "Visit config file NAME, at its mistake when it has one."
   (interactive (list (drgnx-config--read-name "Open config file: ")))
@@ -749,6 +772,8 @@ file is read-only.  TIMEOUT is the lock's, as in `drgnx-config-update'.  Then th
         (file (drgnx-config-file name)))
     (let ((default-directory "/")) (make-directory (file-name-directory file) t))
     (find-file file)
+    (setq drgnx-config--visiting name)
+    (add-hook 'after-save-hook #'drgnx-config--after-save nil t)      ; buffer-local: it goes with the buffer
     (when problem
       (goto-char (point-min))
       (forward-line (1- (plist-get problem :line)))

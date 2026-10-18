@@ -79,6 +79,7 @@ still takes a lower priority archive's package when only it satisfies a requirem
                                      (:archives (alist string string) "The archives: name and URL or directory")
                                      (:archive-priorities (alist string number) "Which archive wins: name and priority"))
                      :default nil
+                     :on-mistake "drgnx sync stops until it is fixed; nothing is changed"
                      :doc "The packages you want besides the modules', their sources and archives.  Read at each drgnx sync; a mistake in it stops the sync (nothing is applied or replaced).")
 
 (drgnx-config-define 'lock
@@ -88,6 +89,7 @@ still takes a lower priority archive's package when only it satisfies a requirem
                                                 "What is installed: one entry per package" :required t)
                                      (:from-shipped boolean "Copied from the lock drgnx ships; the first sync completes it"))
                      :default '(:packages nil)
+                     :on-mistake "drgnx sync stops until it is fixed; nothing is changed"
                      :header ";; drgnx package lock — written by drgnx sync; commit it with your config\n"
                      :doc "Every installed package, pinned by drgnx sync.  A mistake in it stops the sync, and drgnx never replaces the file.")
 

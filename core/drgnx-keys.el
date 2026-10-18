@@ -477,6 +477,22 @@ adds `drgnx-modal-sync-engine' so a runtime switch starts and stops the engine. 
   (unless drgnx-keys-profiles
     (setq drgnx-keys-profiles (drgnx-keys-load-profiles (expand-file-name "keys" drgnx-dir)))))
 
+(defun drgnx-keys--config-changed (name)
+  "A listener on `drgnx-config-changed-functions': keys.eld, saved by hand (Open Config File…), applies at once.
+The file is the authority then, so a stack chosen earlier in this session no longer wins over its `:layers'.
+Not for drgnx's own writes: they apply what they write."
+  (when (and (eq name 'keys) drgnx-config-user-save drgnx-keys-last)
+    (setq drgnx-keys--session-layers nil)
+    (drgnx-keys-apply)
+    (when (fboundp 'drgnx-surfaces-refresh) (drgnx-surfaces-refresh))))
+
+(add-hook 'drgnx-config-changed-functions #'drgnx-keys--config-changed)
+
+(defun drgnx-keys-unload-function ()
+  "Remove the keys.eld listener (`unload-feature'); nil, so the feature unloads as usual."
+  (remove-hook 'drgnx-config-changed-functions #'drgnx-keys--config-changed)
+  nil)
+
 (defun drgnx-keys-file () (expand-file-name "keys.eld" (drgnx-user-dir)))
 
 (defun drgnx-keys-read-user ()

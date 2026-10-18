@@ -211,6 +211,24 @@
     (should-not (drgnx-config-problems))
     (should-not (drgnx-config-problem 'drgnx-config-test))))
 
+(ert-deftest drgnx-config/on-mistake-says-what-happens-instead ()
+  (drgnx-test-with-config
+    ;; :on-mistake replaces "using the defaults" in the notice
+    (drgnx-config-test--define :on-mistake "drgnx sync stops until it is fixed")
+    (let ((said (drgnx-config-test--messages
+                  (drgnx-test-config-put 'drgnx-config-test "(:a \"oops\")")
+                  (drgnx-config-get 'drgnx-config-test))))
+      (should (= 1 (length said)))
+      (should (string-suffix-p "(line 1) — drgnx sync stops until it is fixed" (car said))))
+    ;; a project file with no :on-mistake says the file is refused
+    (drgnx-config-define 'drgnx-config-test-p :file "p.eld" :dir 'project :schema drgnx-config-test--schema)
+    (let ((said (drgnx-config-test--messages
+                  (drgnx-test-config-put 'drgnx-config-test-p "(:a \"oops\")" drgnx-test-config-root)
+                  (drgnx-config-get 'drgnx-config-test-p nil drgnx-test-config-root))))
+      (should (= 1 (length said)))
+      (should (string-suffix-p "(line 1) — the file is refused" (car said))))
+    (should-error (drgnx-config-test--define :on-mistake 5))))
+
 (ert-deftest drgnx-config/mtime-get-is-one-stat ()
   (drgnx-test-with-config
     (drgnx-config-test--define)

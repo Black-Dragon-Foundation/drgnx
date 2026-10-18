@@ -509,7 +509,9 @@ With Vim keys the sheet shows leader keys plain (`SPC f f`) and a key that works
   problem, with its line, is on the key sheet and in the doctor. An unknown command or an invalid key is a smaller
   problem, listed the same way, and everything else in the file still applies.
 - `keys.eld` is read when drgnx starts and each time keys are applied (a profile switch, the editor), not
-  while you type in it: change it by hand and the new keys apply at the next of those, or at the next start.
+  while you type in it. Change it by hand in Preferences: Open Config File… and save, and the file is read again
+  and the keys apply at once (the mistake notice clears too). Saved some other way, it applies at the next profile
+  switch, editor change or start.
 - Keyboard Profile… rewrites only `:layers` and keeps the rest of the file (a new `keys.eld` also gets `:version 1`).
   It, the editor and Onboarding refuse a `keys.eld` with a mistake, naming the line, and change nothing.
 - The Keyboard Shortcuts editor writes through `drgnx-keys-edit` (`core/drgnx-keys-edit.el`): `drgnx-keys-edit-bind`,

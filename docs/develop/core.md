@@ -190,8 +190,15 @@ header doc)` returns NAME:
   `core/drgnx-search-chunk.el`) is the first: `drgnx-search-config` asks `drgnx-config-problem` and turns a mistake into
   `(:error …)`, because a search must fail closed rather than fall back to the defaults the layer applies.
 - `:last-good` (t) applies the last good copy on a mistake. `:max-bytes` (1 MiB) caps reads and writes.
+- `:on-mistake` is a string saying what happens instead of using the file when it is not the last good copy or the
+  defaults ("drgnx sync stops until it is fixed; nothing is changed"). The mistake notice and the reference's "On a
+  mistake:" line print it; a project file with none is said to be refused.
 - `:migrate` is `((FROM . FN)…)`; `:header` is the comment a new file starts with (default
   `;; drgnx: FILE (docs/reference/config.md)`); `:doc` is one line for the reference.
+- Open Config File… visits the file with a buffer-local `after-save-hook` that reads it again (`drgnx-config-reread`),
+  so a hand fix clears the notice at once. Listeners of `drgnx-config-changed-functions` see
+  `drgnx-config-user-save` t then, and keys.eld's (`drgnx-keys--config-changed`) re-applies the keys; drgnx's own writes
+  do not set it, as they apply what they write.
 - Defined in a module's setup, it is undone at teardown: the previous definition comes back, or NAME is undefined,
   unless NAME was defined again since. Core files define theirs at load. `(drgnx-config-undefine NAME)` takes one
   out. `drgnx-config--defs` is in the teardown census.

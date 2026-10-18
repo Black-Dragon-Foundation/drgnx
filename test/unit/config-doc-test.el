@@ -93,8 +93,12 @@
                          :schema '(plist (:c boolean "A flag")) :doc "The second test file.")
     (drgnx-config-define 'doc-test-c :file "zz-c.eld" :last-good nil
                          :schema '(plist (:d boolean "A flag")) :doc "The third test file.")
+    (drgnx-config-define 'doc-test-d :file "zz-d.eld" :last-good nil :on-mistake "drgnx sync stops until it is fixed"
+                         :schema '(plist (:e boolean "A flag")) :doc "The fourth test file.")
     (let ((text (drgnx-config-doc-markdown)))
       (should (string-prefix-p "# " text))
+      (should (string-match-p "^## zz-d\\.eld\n\nFolder: config\\. Format: 1\\. Read: when it changes\\. On a mistake: drgnx sync stops until it is fixed\\."
+                              text))
       (should (string-suffix-p "\n" text))
       (should (string-match-p
                (concat "^## zz-a\\.eld\n\n"
