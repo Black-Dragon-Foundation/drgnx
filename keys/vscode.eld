@@ -290,5 +290,6 @@
         (shortcuts-reset "r" :map (drgnx-shortcuts . drgnx-shortcuts-mode-map))
         (shortcuts-reset-all "R" :map (drgnx-shortcuts . drgnx-shortcuts-mode-map))
         (face-toggle-menu-bar :none "the palette; F10 opens the menu")
+        (statusbar-toggle :none "the palette")
         (shortcuts-profile "p" :map (drgnx-shortcuts . drgnx-shortcuts-mode-map))
         (ai-stop :none "in the palette")))

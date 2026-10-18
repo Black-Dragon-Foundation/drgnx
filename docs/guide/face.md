@@ -56,6 +56,61 @@ as a box. Change one for your font:
 
 For code: `(drgnx-face-glyph 'close)` is the string for the selected frame, `(drgnx-face-glyph 'close FRAME)` for another.
 
+## The status bar
+
+In place of Emacs's raw mode line (`-:@--- file All L5 Git-main (YAML)`) each editor window ends in a quiet bar:
+what you need at a glance, nothing that shouts. It is built from **segments**. Turn it off and on with **Toggle
+Status Bar** (View menu, palette); `drgnx-statusbar-mode` is the switch.
+
+| Left | Shows | Click |
+|---|---|---|
+| `branch` | `⑂ main` (the branch, from the buffer's version control) | the repository status |
+| `problems` | `✓` when flymake finds none, else `⚠ 1` (errors) and `⚠ 2` (warnings) | the problems list |
+| `tests` | test results (arrives with the work tracker; nothing yet) | |
+| `jobs` | the job badge when a job needs you | job status |
+| `agents` | `◎ 1 busy`, and `◐ 1 waiting on you` when an agent needs an answer | the Agents tab |
+| `modal` | the modal-editing state, when that module is loaded | |
+| `misc` | other indicators (nothing yet) | |
+
+| Right | Shows | Click |
+|---|---|---|
+| `lsp` | `LSP ●` (connected), `○` (starting), `✕` (exited) when eglot manages the buffer | the server's events |
+| `position` | `Ln 12, Col 4` | go to a line |
+| `indent` | `Spaces: 2` or `Tab Size: 8` | tabs or spaces |
+| `encoding` | `UTF-8` | change it |
+| `eol` | `LF`, `CRLF` or `CR` | change it |
+| `language` | `YAML`, `Python`, `Emacs Lisp` | the mode's help |
+
+The most recently used editor window shows the whole bar; the other editor groups show `drgnx-statusbar-compact`
+(position and language). A buffer whose own `mode-line-format` is nil (a terminal, say) keeps no bar. In a narrow
+window the bar never wraps: segments go in the order of `drgnx-statusbar-drop-order` (line endings first), and the
+branch is cut with an ellipsis, never dropped. The glyphs come from `drgnx-face-glyphs`, so a terminal that is not
+UTF-8 shows ASCII.
+
+| Setting | Default | What it does |
+|---|---|---|
+| `drgnx-statusbar-left` | `(branch problems tests jobs agents modal misc)` | segments on the left, in order |
+| `drgnx-statusbar-right` | `(lsp position indent encoding eol language)` | segments on the right, in order |
+| `drgnx-statusbar-drop-order` | `(eol indent encoding lsp language misc tests jobs)` | dropped first to last when the window is narrow |
+| `drgnx-statusbar-compact` | `(position language)` | what the other editor groups show |
+| `drgnx-statusbar-place` | `editors` | `editors`; `frame` (one bar across the frame) arrives with the grid |
+| `drgnx-statusbar-indent-vars` | the common indent offsets | the variables `indent` reads, first bound one wins |
+
+Reorder or drop with `setopt`, and add your own in `config.el`:
+
+```elisp
+(setopt drgnx-statusbar-left '(branch problems agents))          ; fewer, in this order
+(drgnx-statusbar-define-segment 'clock
+  :fn (lambda () (format-time-string "%H:%M"))                   ; a string, or nil to show nothing
+  :click #'calendar                                              ; a command or a function
+  :help "The time; click for the calendar")
+(setopt drgnx-statusbar-right (cons 'clock drgnx-statusbar-right))
+```
+
+A segment function runs on every redisplay of its window, so it must only read what is already known (a variable,
+a buffer-local value): never call git, start a process, read a file or ask a language server. One that signals an
+error shows nothing and the message is kept once in `drgnx-statusbar--errors` (no message per redisplay).
+
 ## Faces
 
 drgnx draws with the theme's faces and none of its own colours: the dividers inherit `shadow`, so a theme that

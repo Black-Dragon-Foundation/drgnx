@@ -18,6 +18,7 @@
 (defvar display-line-numbers-width-start)
 (defvar display-line-numbers-grow-only)
 (declare-function window-divider-mode "frame")
+(declare-function drgnx-statusbar-setup "drgnx-statusbar")
 (declare-function drgnx-tty-popups-ascii-p "drgnx-tty-popups")
 
 (defgroup drgnx-face nil
@@ -175,6 +176,7 @@ On `after-change-major-mode-hook'."
   (drgnx-command-define 'face-toggle-menu-bar :category "View" :title "Toggle Menu Bar" :menu '("View")
                         :command #'drgnx-face-toggle-menu-bar
                         :doc "Show or hide Emacs's menu bar for this session (F10 opens the menu when it is hidden)")
+  (when (fboundp 'drgnx-statusbar-setup) (drgnx-statusbar-setup))   ; the status bar (drgnx-statusbar.el)
   (add-hook 'after-make-frame-functions #'drgnx-face-apply-frame)
   (add-hook 'after-change-major-mode-hook #'drgnx-face-line-numbers-maybe)
   (setq drgnx-face--active t)
@@ -194,7 +196,11 @@ On `after-change-major-mode-hook'."
                                  (drgnx-face-line-numbers-modes . "modes whose files show line numbers")
                                  (drgnx-face-inline-problems . "nil, short (default) or t: problems at the end of the line")
                                  (drgnx-face-line-spacing . "extra pixels between lines")
-                                 (drgnx-face-glyphs . "the glyphs drgnx draws, each with an ASCII form")))
+                                 (drgnx-face-glyphs . "the glyphs drgnx draws, each with an ASCII form")
+                                 (drgnx-statusbar-left . "status bar segments on the left, in order")
+                                 (drgnx-statusbar-right . "status bar segments on the right, in order")
+                                 (drgnx-statusbar-drop-order . "segments dropped first when the window is narrow")
+                                 (drgnx-statusbar-compact . "segments the other editor groups show")))
 
 (provide 'drgnx-face)
 ;;; drgnx-face.el ends here
