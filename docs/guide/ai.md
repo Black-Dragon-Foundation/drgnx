@@ -9,6 +9,8 @@ a chain of providers and models tried in order, so a feature keeps working when 
 | Id | Provider | Address (default) |
 |---|---|---|
 | `openrouter` | OpenRouter | `https://openrouter.ai/api/v1` (key: `OPENROUTER_API_KEY` or auth-source) |
+| `moonshot` | Moonshot (Kimi), for Claude Code agents only | `https://api.moonshot.ai/anthropic` (key: `MOONSHOT_API_KEY` or auth-source) |
+| `deepseek` | DeepSeek, for Claude Code agents only | `https://api.deepseek.com/anthropic` (key: `DEEPSEEK_API_KEY` or auth-source) |
 | `ollama` | Ollama | `http://127.0.0.1:11434` |
 | `lmstudio` | LM Studio | `http://127.0.0.1:1234/v1` |
 | `llamacpp` | llama.cpp server | `http://127.0.0.1:8012` (start it with `--port 8012`: its 8080 is TEI's) |
@@ -63,7 +65,7 @@ asked from a timer, hook or in batch.
 
 A provider in your `ai.eld` may carry `:price (IN . OUT)` — US dollars per million input and output tokens — so the
 agent gateway can count what agents spend when the provider does not report a cost; `:messages t` says it serves
-Anthropic's Messages API, so the gateway can carry agents to it (OpenRouter, Ollama and Anthropic do).
+Anthropic's Messages API, so the gateway can carry agents to it (OpenRouter, Ollama, Anthropic, Moonshot and DeepSeek do).
 
 With nothing set up, onboarding's AI step sets up Ollama, LM Studio or OpenRouter for you and fills these roles with
 models sized to the machine ([onboarding.md](onboarding.md#setting-ai-up)): `drgnx-ai-default-models` gives Inline
@@ -236,8 +238,20 @@ Agent profiles can take their provider from the registry; the key is resolved wh
 - **claude (OpenRouter)** — Claude Code on OpenRouter: `ANTHROPIC_BASE_URL=https://openrouter.ai/api`,
   `ANTHROPIC_AUTH_TOKEN` = your OpenRouter key, `ANTHROPIC_API_KEY` empty.
 - **claude (Ollama)** — Claude Code on a local Ollama model.
+- **claude (Kimi)** and **claude (DeepSeek)** — Claude Code on Kimi or DeepSeek through the vendor's own
+  Anthropic-compatible API (`:ai claude-moonshot`, `claude-deepseek`): `ANTHROPIC_BASE_URL` = the vendor's address,
+  `ANTHROPIC_AUTH_TOKEN` = your `MOONSHOT_API_KEY` or `DEEPSEEK_API_KEY` (or auth-source for `api.moonshot.ai` or
+  `api.deepseek.com`), `ANTHROPIC_API_KEY` empty. The vendor bills you per token.
+- **claude (Kimi via OpenRouter)** and **claude (DeepSeek via OpenRouter)** — the same models through OpenRouter
+  (`:ai claude-openrouter` with a `:model`), billed by OpenRouter with your OpenRouter key.
 
-In `agents.eld`, `:ai claude-openrouter` or `:ai claude-ollama` gives any profile that environment. Durable jobs get
+A profile's `:model` (any profile with an `:ai`) also sets `ANTHROPIC_MODEL` and `ANTHROPIC_DEFAULT_HAIKU_MODEL`
+(Claude Code's small, background model) to that name. The built-in names are data in
+`drgnx-agents-builtin-profiles`: copy a profile into `agents.eld` to use another model. Nothing about the route is
+written to `~/.claude/settings.json`: two profiles share Claude Code's configuration directory and differ only in
+these variables, so a model in that file's `env` would override them (the Claude page in Agent Settings notes it).
+
+In `agents.eld`, `:ai claude-openrouter`, `claude-ollama`, `claude-moonshot` or `claude-deepseek` gives any profile that environment. Durable jobs get
 the keys they need in their environment too — never in a command line or a file (under systemd, the value travels in
 `systemd-run`'s own environment).
 
@@ -248,6 +262,8 @@ the keys they need in their environment too — never in a command line or a fil
   the Tab arbiter), `test/unit/ai-edit-test.el` (the review, hunk by hunk), `test/unit/ai-ask-test.el` (Ask, Choose,
   gptel), `test/unit/ai-onboard-test.el` (the onboarding step; setting up Ollama, LM Studio and OpenRouter with fake
   `brew`, `ollama`, `lms`, `sysctl` and `security`; the room on a Mac and the models for it).
+- `test/unit/agents-profiles-test.el` — Kimi and DeepSeek profiles: direct and gateway environments, the OpenRouter
+  model chain, the missing-key message, routes on the Claude page, the runner unsetting the keys.
 - `test/live/drgnx-ai-test.el` — in a GUI session: typing, the suggestion as ghost text, Tab takes it; an inline
   edit's second hunk applied with keys, Done puts only that one in the buffer.
 - `drgnx test --perf` — the `typing-with-ghost` workload holds keystroke p95 under 16 ms with ghost text on.

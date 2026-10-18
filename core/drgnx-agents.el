@@ -40,7 +40,16 @@ agents.eld (config dir) and the built-in ones; never holds secrets (keys come fr
   '(("claude" :command ("claude-agent-acp") :mode queue :doc "Claude through the unmodified agent (subscription or API key)")
     ("claude (OpenRouter)" :command ("claude-agent-acp") :mode queue :ai claude-openrouter
      :doc "Claude Code on OpenRouter (your OpenRouter key, from the environment or auth-source)")
-    ("claude (Ollama)" :command ("claude-agent-acp") :mode queue :ai claude-ollama :doc "Claude Code on a local Ollama model"))
+    ("claude (Ollama)" :command ("claude-agent-acp") :mode queue :ai claude-ollama :doc "Claude Code on a local Ollama model")
+    ("claude (Kimi)" :command ("claude-agent-acp") :mode queue :ai claude-moonshot :model "kimi-k3"
+     :doc "Claude Code on Kimi through Moonshot's own API (MOONSHOT_API_KEY or auth-source for api.moonshot.ai; billed per token by Moonshot)")
+    ("claude (DeepSeek)" :command ("claude-agent-acp") :mode queue :ai claude-deepseek :model "deepseek-v4-pro"
+     :doc "Claude Code on DeepSeek through its own API (DEEPSEEK_API_KEY or auth-source for api.deepseek.com; billed per token by DeepSeek)")
+    ("claude (Kimi via OpenRouter)" :command ("claude-agent-acp") :mode queue :ai claude-openrouter :model "moonshotai/kimi-k3"
+     :doc "Claude Code on Kimi through OpenRouter (OPENROUTER_API_KEY or auth-source for openrouter.ai; billed by OpenRouter)")
+    ("claude (DeepSeek via OpenRouter)" :command ("claude-agent-acp") :mode queue :ai claude-openrouter
+     :model "deepseek/deepseek-v4-pro"
+     :doc "Claude Code on DeepSeek through OpenRouter (OPENROUTER_API_KEY or auth-source for openrouter.ai; billed by OpenRouter)"))
   "Profiles drgnx offers without setup; :ai names the provider environment the agent gets when it starts
 (`drgnx-ai-agent-env').")
 
@@ -265,12 +274,12 @@ without a hub they go to the provider directly.")
   "Is this Emacs the hub?  A daemon: it never looks a key up where that may ask."
   (and (fboundp 'drgnx-hub-serving-p) (drgnx-hub-serving-p)))
 
-(defun drgnx-agents--gateway (s kind)
-  "Register S's agent (profile KIND) with the hub's gateway: (:url :token), or nil when no hub can be had (S then
-goes direct, and says so).  In the hub, keys are only those editors handed over (and the environment, quiet
-auth-source files): with none for any provider of the chain, a `user-error' says how one comes."
+(defun drgnx-agents--gateway (s kind &optional model)
+  "Register S's agent (profile KIND, with the profile's MODEL) with the hub's gateway: (:url :token), or nil when
+no hub can be had (S then goes direct, and says so).  In the hub, keys are only those editors handed over (and the
+environment, quiet auth-source files): with none for any provider of the chain, a `user-error' says how one comes."
   (when (drgnx-agents--in-hub-p)
-    (let ((chain (drgnx-ai-agent-gateway-chain kind)))
+    (let ((chain (drgnx-ai-agent-gateway-chain kind model)))
       (unless (seq-some (lambda (st) (or (not (plist-get (drgnx-ai-provider (car st)) :key-env)) (drgnx-ai-key (car st))))
                         chain)
         (user-error "No key for %s in the drgnx hub: an editor hands its keys over when it connects (or run `drgnx hub start' where the key is set)"
@@ -279,7 +288,7 @@ auth-source files): with none for any provider of the chain, a `user-error' says
       (progn
         (require 'drgnx-hub)
         (unless (drgnx-hub-serving-p) (drgnx-hub-ensure))
-        (let* ((chain (drgnx-ai-agent-gateway-chain kind))
+        (let* ((chain (drgnx-ai-agent-gateway-chain kind model))
                ;; keys this command can read (also from sources that ask) travel to the hub's memory — never in the
                ;; hub, which has what editors gave it
                (keys (unless (drgnx-agents--in-hub-p)
@@ -320,11 +329,12 @@ returned that is not a string.")
 can carry it, else the provider's (keys resolved now, never kept) — DRGNX_TASK when S works on a task, and what
 `drgnx-agents-env-functions' add."
   (append (plist-get (cdr (drgnx-agents-profile (drgnx-agent-session-profile s))) :env)
-          (when-let* ((kind (plist-get (cdr (drgnx-agents-profile (drgnx-agent-session-profile s))) :ai)))
+          (when-let* ((profile (cdr (drgnx-agents-profile (drgnx-agent-session-profile s))))
+                      (kind (plist-get profile :ai)))
             (require 'drgnx-ai)
-            (drgnx-ai-agent-env (list :kind kind) (not (drgnx-agents--in-hub-p))
+            (drgnx-ai-agent-env (list :kind kind :model (plist-get profile :model)) (not (drgnx-agents--in-hub-p))
                                 (and drgnx-agents-use-gateway (memq kind drgnx-ai-gateway-kinds)
-                                     (drgnx-agents--gateway s kind))))
+                                     (drgnx-agents--gateway s kind (plist-get profile :model)))))
           (and (drgnx-agent-session-task s) (list (concat "DRGNX_TASK=" (drgnx-agent-session-task s))))
           (and (drgnx-agent-session-job s) (list (concat "DRGNX_JOB=" (drgnx-agent-session-job s))))
           (let (extra)

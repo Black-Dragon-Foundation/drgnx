@@ -25,7 +25,13 @@
     ;; the agent gateway only (Claude Code with your own Anthropic API key): no editor feature asks it
     (anthropic  :name "Anthropic API" :kind anthropic :url "https://api.anthropic.com/v1" :key-env "ANTHROPIC_API_KEY"
                 :auth x-api-key :caps () :messages t)
-    (lmstudio   :name "LM Studio" :kind openai :url "http://127.0.0.1:1234/v1" :caps (chat fim embed))
+    ;; Kimi and DeepSeek on their own Anthropic-compatible APIs (Claude Code agents only; Bearer through
+    ;; ANTHROPIC_AUTH_TOKEN, as both vendors' Claude Code guides have it)
+    (moonshot   :name "Moonshot (Kimi)" :kind anthropic :url "https://api.moonshot.ai/anthropic" :key-env "MOONSHOT_API_KEY"
+                :caps () :messages t)
+    (deepseek   :name "DeepSeek" :kind anthropic :url "https://api.deepseek.com/anthropic" :key-env "DEEPSEEK_API_KEY"
+                :caps () :messages t)
+    (lmstudio  :name "LM Studio" :kind openai :url "http://127.0.0.1:1234/v1" :caps (chat fim embed))
     (llamacpp   :name "llama.cpp server" :kind llamacpp :url "http://127.0.0.1:8012" :caps (chat fim embed))   ; its 8080 is TEI's
     (vllm       :name "vLLM" :kind openai :url "http://127.0.0.1:8000/v1" :caps (chat fim embed))
     (jan        :name "Jan" :kind openai :url "http://127.0.0.1:1337/v1" :caps (chat))
@@ -377,20 +383,43 @@ key and it must match, else a `user-error'."
 
 ;;;; Agent environments (agent profiles; M9b adds more kinds)
 
-(defconst drgnx-ai-gateway-kinds '(claude-openrouter claude-ollama claude-anthropic)
+(defconst drgnx-ai-gateway-kinds '(claude-openrouter claude-ollama claude-anthropic claude-moonshot claude-deepseek)
   "Agent profile kinds whose traffic the agent gateway may carry (drgnx-gateway.el).")
 
-(defun drgnx-ai-agent-gateway-chain (kind)
-  "The providers ((PROVIDER . MODEL)…) an agent of KIND may use through the gateway, in order."
+(defun drgnx-ai-agent-gateway-chain (kind &optional model)
+  "The providers ((PROVIDER . MODEL)…) an agent of KIND may use through the gateway, in order.  MODEL (the
+profile's) names the model of the one provider of `claude-moonshot', `claude-deepseek' and `claude-openrouter';
+`claude-openrouter' without it follows the `agent' role."
   (pcase kind
-    ('claude-openrouter (drgnx-ai-role 'agent))
+    ('claude-openrouter (if model (list (cons 'openrouter model)) (drgnx-ai-role 'agent)))
     ('claude-ollama '((ollama)))
-    ('claude-anthropic '((anthropic)))))
+    ('claude-anthropic '((anthropic)))
+    ('claude-moonshot (list (cons 'moonshot model)))
+    ('claude-deepseek (list (cons 'deepseek model)))))
+
+(defun drgnx-ai--agent-bearer-env (id name interactive)
+  "The environment of an agent on provider ID's own Anthropic-compatible API: its URL and its key as the bearer
+token (`ANTHROPIC_AUTH_TOKEN'), `ANTHROPIC_API_KEY' empty.  NAME is how the error calls the provider."
+  (let* ((p (drgnx-ai-provider id))
+         (key (or (drgnx-ai-key id interactive)
+                  (user-error "No %s key: set %s, or add one to auth-source for %s" name (plist-get p :key-env)
+                              (url-host (url-generic-parse-url (plist-get p :url)))))))
+    (list (concat "ANTHROPIC_BASE_URL=" (plist-get p :url)) (concat "ANTHROPIC_AUTH_TOKEN=" key) "ANTHROPIC_API_KEY=")))
 
 (defun drgnx-ai-agent-env (profile &optional interactive gateway)
-  "The environment (\"NAME=value\"…) an agent of PROFILE (:kind …) starts with, resolved now.  GATEWAY (:url :token):
-the agent talks to the gateway with its token, and never sees a key.  A subscription CLI gets nothing: it uses its
-own login, which drgnx never reads."
+  "The environment (\"NAME=value\"…) an agent of PROFILE (:kind …, :model …) starts with, resolved now.  GATEWAY
+\(:url :token): the agent talks to the gateway with its token, and never sees a key.  With a :model every route
+also names it, for the main model and the small background one (`ANTHROPIC_MODEL', `ANTHROPIC_DEFAULT_HAIKU_MODEL':
+Claude Code's current variable; `ANTHROPIC_SMALL_FAST_MODEL' is deprecated).  A subscription CLI gets nothing: it
+uses its own login, which drgnx never reads."
+  (let ((env (drgnx-ai--agent-route-env profile interactive gateway))
+        (model (plist-get profile :model)))
+    (if (and env (stringp model))
+        (append env (list (concat "ANTHROPIC_MODEL=" model) (concat "ANTHROPIC_DEFAULT_HAIKU_MODEL=" model)))
+      env)))
+
+(defun drgnx-ai--agent-route-env (profile interactive gateway)
+  "`drgnx-ai-agent-env' without the model variables."
   (pcase (plist-get profile :kind)
     ((and kind (guard gateway) (guard (memq kind drgnx-ai-gateway-kinds)))
      (list (concat "ANTHROPIC_BASE_URL=" (plist-get gateway :url)) (concat "ANTHROPIC_AUTH_TOKEN=" (plist-get gateway :token))
@@ -405,6 +434,8 @@ own login, which drgnx never reads."
        (list "ANTHROPIC_BASE_URL=https://openrouter.ai/api" (concat "ANTHROPIC_AUTH_TOKEN=" key) "ANTHROPIC_API_KEY=")))
     ('claude-ollama
      (list (concat "ANTHROPIC_BASE_URL=" (plist-get (drgnx-ai-provider 'ollama) :url)) "ANTHROPIC_AUTH_TOKEN=ollama" "ANTHROPIC_API_KEY="))
+    ('claude-moonshot (drgnx-ai--agent-bearer-env 'moonshot "Moonshot" interactive))
+    ('claude-deepseek (drgnx-ai--agent-bearer-env 'deepseek "DeepSeek" interactive))
     (_ nil)))
 
 ;;;; Choosing (written to ai.eld: providers and models, never a key)

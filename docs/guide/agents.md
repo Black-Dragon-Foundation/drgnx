@@ -84,8 +84,8 @@ recorded for it ([Work tracker](work.md)).
 
 ## The hub and the gateway
 
-Agents on **OpenRouter, Ollama or your own Anthropic key** (profiles with `:ai claude-openrouter`, `claude-ollama`,
-`claude-anthropic`) do not get your key: they talk to the **gateway**, a local HTTP server in drgnx's **hub**, with a
+Agents on **OpenRouter, Ollama, your own Anthropic key, Kimi or DeepSeek** (profiles with `:ai claude-openrouter`,
+`claude-ollama`, `claude-anthropic`, `claude-moonshot`, `claude-deepseek`) do not get your key: they talk to the **gateway**, a local HTTP server in drgnx's **hub**, with a
 token of their own. The gateway checks the token, adds the real key, forwards each request and streams the answer
 back as it comes (it adds well under 50 ms before the first token). For each answer it counts the tokens the
 provider reports — spend per job, task and agent, kept in the work tracker's database — and when a provider fails
@@ -160,6 +160,25 @@ TODO is under, wherever it was refiled). Projects: Sync Plans and Board TODOs ma
 checkbox (`- [x]`) in the plan; a ticked checkbox marks its TODO DONE. It writes only what changed, only when you
 run it, with the plan's own encoding and line endings — and leaves alone a plan open in Emacs with unsaved edits.
 
+## Kimi and DeepSeek
+
+Claude Code also runs on Kimi and DeepSeek, with the same agent and the same tools; only the model behind it changes.
+Four built-in profiles (listed in New Agent Session… and on the Claude page of Agent Settings, with how each is
+billed):
+
+| Profile | Goes to | Key | Billed by |
+|---|---|---|---|
+| `claude (Kimi)` | Moonshot's own API | `MOONSHOT_API_KEY` | Moonshot, per token |
+| `claude (DeepSeek)` | DeepSeek's own API | `DEEPSEEK_API_KEY` | DeepSeek, per token |
+| `claude (Kimi via OpenRouter)` | OpenRouter | `OPENROUTER_API_KEY` | OpenRouter |
+| `claude (DeepSeek via OpenRouter)` | OpenRouter | `OPENROUTER_API_KEY` | OpenRouter |
+
+Like the other provider profiles they go through the gateway when a hub is available: the agent holds a token, never
+the key. Without a key the session does not start and the message names the variable and the keyring host to put it
+under. Each session gets its route in its own environment (`ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`,
+`ANTHROPIC_MODEL`, `ANTHROPIC_DEFAULT_HAIKU_MODEL`); drgnx writes nothing to `~/.claude/settings.json`, so the plain
+`claude` profile keeps using your login. Details and the model names: [AI](ai.md#agents).
+
 ## Tests
 
 - `test/unit/coord-test.el`, `coord-mcp-test.el`, `hub-agents-test.el`, `agents-mirror-test.el`, `coord-delivery-test.el`
@@ -167,6 +186,7 @@ run it, with the plan's own encoding and line endings — and leaves alone a pla
 - `test/unit/gateway-test.el`, `test/unit/hub-test.el`, `test/unit/http-test.el`, `test/unit/agents-gateway-test.el`
   — the gateway against mock providers (streaming, tokens, keys, spend, budget, fallback, a hang-up, a 1 MB body),
   the hub (socket, events, restart, one hub, outliving its starter, the CLI), agents' environments.
+- `test/unit/agents-profiles-test.el` — the Kimi and DeepSeek profiles ([above](#kimi-and-deepseek)).
 - `test/unit/acp-test.el` — the transport against a mock agent: requests, notifications, the agent's own requests,
   split / malformed / 1 MB lines, the agent exiting with its error output.
 - `test/unit/agents-test.el` — sessions: a turn's transcript, queueing during a turn (delivered in order, never
