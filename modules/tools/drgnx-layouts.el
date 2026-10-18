@@ -21,6 +21,7 @@
 (require 'drgnx-modules)
 (require 'drgnx-registry)
 (require 'drgnx-paths)
+(require 'drgnx-config)
 (require 'drgnx-wb)
 
 (declare-function drgnx-wb-area-window "drgnx-area")
@@ -69,16 +70,31 @@ arranges as `one'.")
   "The layout FRAME shows: the last one applied, or nil before any (that arrangement has no name)."
   (frame-parameter frame 'drgnx-layouts-current))
 
-(defun drgnx-layouts--file () (expand-file-name "layouts.eld" (drgnx-user-dir)))
+(defun drgnx-layouts--name-p (x)
+  "Whether X can name a layout: a symbol that is not nil, t or a keyword."
+  (and (symbolp x) x (not (eq x t)) (not (keywordp x))))
+
+(defun drgnx-layouts--define-config ()
+  "Define the config file `layouts' (layouts.eld).  The module's setup calls this first; teardown undefines it."
+  (drgnx-config-define
+   'layouts
+   :file "layouts.eld" :shape 'alist :version 1 :reload 'mtime :last-good t :default nil
+   :schema '(alist (pred drgnx-layouts--name-p "a layout name: a symbol, not nil, t or a keyword")
+                   (plist (:left (or symbol null) "The left dock's view")
+                          (:right (or symbol null) "The right area's tab")
+                          (:panel (or symbol null) "The panel's tab")
+                          (:editor symbol "The editor area's shape")
+                          (:windows any "The editor area's window state")
+                          (:px (plist (:left (or natnum null)) (:panel (or natnum null)) (:right (or natnum null)))
+                               "Sizes in pixels")))
+   :header ";; drgnx: your layouts, written by View: Save Layout As… (docs/guide/layouts.md)\n"
+   :doc "Your own layouts; the built-in ones are not stored."))
 
 (defun drgnx-layouts--user ()
-  "Your layouts from layouts.eld: NAME → plist (an unreadable file holds none; built-in names are skipped)."
-  (let* ((f (drgnx-layouts--file))
-         (data (and (file-readable-p f)
-                    (ignore-errors (with-temp-buffer (insert-file-contents f) (read (current-buffer)))))))
-    (and (proper-list-p data)
-         (seq-filter (lambda (e) (and (consp e) (symbolp (car e)) (proper-list-p (cdr e)) (not (assq (car e) drgnx-layouts))))
-                     data))))
+  "Your layouts from layouts.eld: NAME → plist, without the entries named like a built-in layout (those stay in
+the file).  A file with a mistake gives its last good copy; with the module off, no layouts."
+  (and (gethash 'layouts drgnx-config--defs)
+       (seq-remove (lambda (e) (assq (car e) drgnx-layouts)) (drgnx-config-get 'layouts))))
 
 (defun drgnx-layouts--all () (append drgnx-layouts (drgnx-layouts--user)))
 
@@ -444,18 +460,14 @@ was picked yet, to the arrangement you had)."
   (interactive (list (intern (completing-read "Layout: " (mapcar #'symbol-name (drgnx-layouts-names)) nil t))))
   (drgnx-layouts-apply name))
 
-(defun drgnx-layouts--write-user (alist)
-  (let ((f (drgnx-layouts--file)))
-    (make-directory (file-name-directory f) t)
-    (with-temp-file f
-      (insert ";; drgnx: your layouts, written by View: Save Layout As… (docs/guide/layouts.md)\n")
-      (let ((print-length nil) (print-level nil)) (pp alist (current-buffer))))))
-
 (defun drgnx-layouts-save (name)
-  "Save the selected frame's arrangement as your layout NAME (in layouts.eld); you are then in it."
+  "Save the selected frame's arrangement as your layout NAME (in layouts.eld); you are then in it.
+NAME is a string or a symbol.  Only that entry of the file changes; a layouts.eld with a mistake is left as it is
+and `drgnx-config-refused' says where the mistake is."
   (interactive (list (read-string "Save layout as: ")))
-  (let ((sym (intern (string-trim name))))
-    (when (string-empty-p (string-trim name)) (user-error "A layout needs a name"))
+  (let ((sym (if (stringp name) (intern (string-trim name)) name)))
+    (when (and (stringp name) (string-empty-p (string-trim name))) (user-error "A layout needs a name"))
+    (unless (drgnx-layouts--name-p sym) (user-error "%S is not a layout name" sym))
     (when (assq sym drgnx-layouts) (user-error "%s is a built-in layout: choose another name" sym))
     (drgnx-layouts--close-bars)
     (let* ((snap (drgnx-layouts--snapshot))
@@ -464,10 +476,13 @@ was picked yet, to the arrangement you had)."
                       :editor (or (plist-get (alist-get (drgnx-layouts-current) (drgnx-layouts--all)) :editor) 'one)
                       :windows (window-state-get (window-main-window) t)
                       :px (list :left (plist-get (plist-get snap :left) :px) :panel (plist-get (plist-get snap :panel) :px)
-                                :right (plist-get (plist-get snap :right) :px))))
-           (user (drgnx-layouts--user)))
-      (setf (alist-get sym user) def)
-      (drgnx-layouts--write-user user)
+                                :right (plist-get (plist-get snap :right) :px)))))
+      (drgnx-config-update
+       'layouts
+       (lambda (data)
+         (if (assq sym data)
+             (mapcar (lambda (e) (if (eq (car e) sym) (cons sym def) e)) data)
+           (append data (list (cons sym def))))))
       (when-let* ((from (drgnx-layouts-current)))
         (drgnx-layouts--remember from snap)
         (unless (eq from sym) (set-frame-parameter nil 'drgnx-layouts-previous from)))
@@ -567,6 +582,7 @@ before this ran (the module sets up at idle) is adopted now."
                        (require 'drgnx-area)
                        (require 'drgnx-groups)
                        (require 'drgnx-persist)
+                       (drgnx-layouts--define-config)
                        (drgnx-layouts--wire-persist)
                        (drgnx-layouts--define-commands)))
 
