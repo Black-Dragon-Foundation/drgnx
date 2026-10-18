@@ -33,8 +33,8 @@ A job's control room — its own window on a graphical display, so it can sit on
 - **right — the decision log,** newest first: replaced decisions dimmed, disputed ones (in an open clash) marked.
 
 It follows the hub's events and redraws only what changed (at most twice a second). Closing it stops nothing; it
-comes back when Emacs restarts (with the workbench's windows). Without a hub it says so, and fills in when the hub
-runs again.
+comes back when Emacs restarts at the position and size it had (with the workbench's windows). Without a hub it says
+so, and fills in when the hub runs again; if the hub does not know the job (it was deleted), the window closes.
 
 You do not have to watch it: while something of a job needs you, the mode line shows **⚑N** (the cards and messages
 waiting; a click opens the job with the newest; it disappears when the hub cannot be asked, rather than showing the

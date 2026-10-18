@@ -57,10 +57,22 @@ After the restore the keys are in the frame parameter `drgnx-persist-extra', rea
 
 (defun drgnx-persist-state (&optional frame)
   "FRAME's workbench as a plist (see the commentary).  A frame that rebuilds itself — its parameter
-`drgnx-persist-restore' is (FUNCTION . ARGS), e.g. a job window — is saved as (:role custom :restore …)."
+`drgnx-persist-restore' is (FUNCTION . ARGS), e.g. a job window — is saved as (:role custom :restore …),
+with `:geometry' (pixel left top width height) when it is graphical."
   (if-let* ((restore (frame-parameter frame 'drgnx-persist-restore)))
-      (list :role 'custom :restore restore)
+      (append (list :role 'custom :restore restore)
+              (and (display-graphic-p frame)
+                   (let ((edges (frame-edges frame 'outer-edges)))
+                     (list :geometry (list (nth 0 edges) (nth 1 edges)
+                                           (frame-pixel-width frame) (frame-pixel-height frame))))))
     (drgnx-persist--workbench-state frame)))
+
+(defun drgnx-persist--geometry (state)
+  "STATE's `:geometry' (pixel left top width height) if it is four integers of a sane size, else nil
+\(a state file can hold anything)."
+  (let ((g (plist-get state :geometry)))
+    (and (proper-list-p g) (= (length g) 4) (seq-every-p #'integerp g)
+         (seq-every-p (lambda (n) (<= (abs n) 20000)) g) (> (nth 2 g) 0) (> (nth 3 g) 0) g)))
 
 (defun drgnx-persist--workbench-state (frame)
   (with-selected-frame (or frame (selected-frame))
@@ -170,10 +182,19 @@ no remote files, only safe local variables, no large-file question; nil if it ca
           (drgnx-chrome-apply (window-frame w))))
       t))))
 
+(defun drgnx-persist--main-state (frames)
+  "The state of FRAMES that goes into the selected frame: the one saved with `:role main', else the first that
+is a workbench (not a window that rebuilds itself), else the first."
+  (or (seq-find (lambda (st) (eq (plist-get st :role) 'main)) frames)
+      (seq-find (lambda (st) (not (eq (plist-get st :role) 'custom))) frames)
+      (car frames)))
+
 (defun drgnx-persist-restore (&optional file)
-  "Bring back the workbench saved in FILE — the selected frame gets the main window's layout,
-every other window is made again; non-nil if a state was restored.  Each group's shown file is
-visited now, its other tabs at idle (never a question at start)."
+  "Bring back the workbench saved in FILE — the selected frame gets the main window's layout (the state
+saved with `:role main', wherever it stands in the file), every other window is made again; non-nil if a
+state was restored.  A window that rebuilds itself (a job window) is rebuilt only in a graphical frame and
+put back at its saved pixel position and size.  Each group's shown file is visited now, its other tabs at
+idle (never a question at start)."
   (interactive)
   (let* ((file (or file (drgnx-persist--file))) (state (drgnx-persist--read file))
          (frames (pcase (plist-get state :version)
@@ -189,16 +210,23 @@ visited now, its other tabs at idle (never a question at start)."
       ;; The selected frame gets the main window's layout — and is the main window.
       (dolist (f (frame-list)) (when (eq (frame-parameter f 'drgnx-frame-role) 'main) (set-frame-parameter f 'drgnx-frame-role nil)))
       (set-frame-parameter nil 'drgnx-frame-role 'main)
-      (drgnx-persist--restore-frame (car frames))
+      (let ((main (drgnx-persist--main-state frames)))
+        (drgnx-persist--restore-frame main)
+        (setq frames (cons main (remq main frames))))
       (let ((home (selected-frame)))
         (unwind-protect
             (dolist (st (cdr frames))            ; the window manager places them; one failing is skipped
               (if (eq (plist-get st :role) 'custom)    ; it rebuilds itself (a job window), if its code is here
                   (let ((restore (plist-get st :restore)))
-                    (if (and (consp restore) (fboundp (car restore)))
-                        (condition-case err (apply (car restore) (cdr restore))
-                          (error (message "drgnx: a window was not restored: %s" (error-message-string err))))
-                      (message "drgnx: a window was not restored: %S is not loaded" (car-safe restore))))
+                    (cond
+                     ((and (consp restore) (fboundp (car restore)))
+                      (condition-case err
+                          (let ((frame (apply (car restore) (cdr restore))) (g (drgnx-persist--geometry st)))
+                            (when (and g (frame-live-p frame) (display-graphic-p frame))
+                              (set-frame-position frame (nth 0 g) (nth 1 g))
+                              (set-frame-size frame (nth 2 g) (nth 3 g) t)))
+                        (error (message "drgnx: a window was not restored: %s" (error-message-string err)))))
+                     (t (message "drgnx: a window was not restored: %S is not loaded" (car-safe restore)))))
                 (when-let* ((f (ignore-errors (make-frame '((drgnx-frame-role . aux))))))
                   (condition-case err (with-selected-frame f (drgnx-persist--restore-frame st))
                     (error (message "drgnx: a window's layout was not restored: %s" (error-message-string err)))))))
@@ -277,15 +305,17 @@ windows left (\[save-buffers-kill-terminal] in the last client), save every one 
   "Closing the last graphical frame (a daemon's client): save it — the daemon may never exit cleanly
 — unless the closing client saved every window already."
   (when (and (display-graphic-p frame)
-             (not (seq-some (lambda (f) (and (not (eq f frame)) (display-graphic-p f))) (frame-list))))
+             (not (seq-some (lambda (f) (and (not (eq f frame)) (not (frame-parent f)) (display-graphic-p f)))
+                            (frame-list))))       ; a child frame (a posframe) is no window of the workbench
     (if drgnx-persist--saved-at-exit
         (setq drgnx-persist--saved-at-exit nil)
       (ignore-errors (drgnx-persist-save nil (list frame))))))
 
 (defun drgnx-persist--restore-into (frame)
   "Restore the saved workbench into FRAME, once per frame, then run
-`drgnx-persist-after-restore-functions' with it (only when a state was restored).  Nothing here asks
-anything or signals: it runs from hooks."
+`drgnx-persist-after-restore-functions' with it (only when a state was restored).  The frame is marked
+first, so a restore that fails is not tried again in that frame (not at the next window or hook either).
+Nothing here asks anything or signals: it runs from hooks."
   (unless (frame-parameter frame 'drgnx-persist-restored)
     (set-frame-parameter frame 'drgnx-persist-restored t)
     (when (ignore-errors (with-selected-frame frame (drgnx-persist-restore)))

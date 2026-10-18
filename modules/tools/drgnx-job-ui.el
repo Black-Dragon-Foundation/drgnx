@@ -195,10 +195,20 @@
     (condition-case err
         (progn (drgnx-job-ui--hub)
                (drgnx-hub-call "job/status" (list :id job :decisions t)
-                               (lambda (r e) (if (or e (not r)) (drgnx-job-ui--no-hub job (or e "no answer"))
-                                               (drgnx-job-ui--draw job r)
-                                               (ignore-errors (drgnx-hub-connect))))))   ; events again, after a hub came back
+                               (lambda (r e) (cond
+                                              ((and (stringp e) (string-prefix-p "No job " e)) (drgnx-job-ui--gone job))
+                                              ((or e (not r)) (drgnx-job-ui--no-hub job (or e "no answer")))
+                                              (t (drgnx-job-ui--draw job r)
+                                                 (ignore-errors (drgnx-hub-connect)))))))   ; events again, after a hub came back
       (error (drgnx-job-ui--no-hub job (error-message-string err))))))
+
+(defun drgnx-job-ui--gone (job)
+  "The hub does not know JOB (it was deleted, or this window outlived it): close its window — its frame when it
+has one of its own — and forget its buffers, instead of looking again every 10 s."
+  (when-let* ((f (seq-find (lambda (f) (equal (frame-parameter f 'drgnx-job) job)) (frame-list)))
+              ((cdr (frame-list))))
+    (delete-frame f))
+  (drgnx-job-ui--forget job))
 
 (defun drgnx-job-ui--hub-gone ()
   "`drgnx-hub-disconnect-functions': every open job window says the hub is gone (and looks for it again)."
@@ -333,9 +343,13 @@
 (defun drgnx-job-ui--frame-deleted (frame)
   "A job window closed: its buffers go; the job goes on."
   (when-let* ((job (frame-parameter frame 'drgnx-job)))
-    (dolist (part '(tasks cards log))
-      (when-let* ((b (get-buffer (drgnx-job-ui--buffer-name job part)))) (kill-buffer b))
-      (remhash (cons job part) drgnx-job-ui--drawn))))
+    (drgnx-job-ui--forget job)))
+
+(defun drgnx-job-ui--forget (job)
+  "Kill JOB's window buffers and what was drawn in them."
+  (dolist (part '(tasks cards log))
+    (when-let* ((b (get-buffer (drgnx-job-ui--buffer-name job part)))) (kill-buffer b))
+    (remhash (cons job part) drgnx-job-ui--drawn)))
 
 ;;;; The badge and notifications: nobody has to watch the window
 

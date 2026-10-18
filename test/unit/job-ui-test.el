@@ -99,6 +99,28 @@
       (drgnx-job-ui--refresh "j1"))
     (should (string-search "No drgnx hub" (drgnx-job-ui-test--text 'cards)))))
 
+(ert-deftest drgnx-job-ui/a-deleted-job-closes-its-window ()
+  ;; M9b4-9: a restored window of a job the hub does not know is closed (its frame, its buffers), not kept with a
+  ;; "No drgnx hub" note that looks again every 10 s.
+  (drgnx-job-ui-test--with
+    (drgnx-job-ui--draw "j1" drgnx-job-ui-test--summary)
+    (let ((closed nil) (drgnx-job-ui--retry nil)
+          (orig-param (symbol-function 'frame-parameter)))
+      (cl-letf (((symbol-function 'drgnx-hub-call) (lambda (_m _p &optional cb) (funcall cb nil "No job j1")))
+                ((symbol-function 'frame-list) (lambda () (list 'job-frame 'other-frame)))
+                ((symbol-function 'frame-parameter)
+                 (lambda (f p) (if (symbolp f) (and (eq f 'job-frame) (eq p 'drgnx-job) "j1") (funcall orig-param f p))))
+                ((symbol-function 'delete-frame) (lambda (f &rest _) (push f closed))))
+        (drgnx-job-ui--refresh "j1"))
+      (should (equal closed '(job-frame)))
+      (should-not (drgnx-job-ui--live-p "j1"))
+      (should-not (timerp drgnx-job-ui--retry))
+      ;; a hub that is not there is another matter: the window stays and looks again
+      (cl-letf (((symbol-function 'drgnx-hub-call) (lambda (_m _p &optional cb) (funcall cb nil "No drgnx hub runs"))))
+        (drgnx-job-ui--refresh "j1"))
+      (should (drgnx-job-ui--live-p "j1"))
+      (when (timerp drgnx-job-ui--retry) (cancel-timer drgnx-job-ui--retry) (setq drgnx-job-ui--retry nil)))))
+
 (ert-deftest drgnx-job-ui/the-badge-counts-what-needs-you ()
   (let ((drgnx-job-ui--badge "") (answer nil))
     (cl-letf (((symbol-function 'drgnx-hub-call) (lambda (_m _p &optional cb) (funcall cb answer nil))))

@@ -195,22 +195,31 @@ open in the **other group** — the one you used last besides this one — never
 
 When Emacs exits, the workbench of every window is saved to `$XDG_STATE_HOME/drgnx/workbench.eld`
 (`~/.local/state/…`) — with a daemon, when you close its last client (`C-x C-c`), every window of that client — and
-the other windows are opened again at start (your window manager places them; the first one is the main window): the
-left dock (and the sidebar view it shows, Explorer or Search), the panel and its tab, the right dock — each with its pixel size — the layout you were in ([layouts.md](layouts.md#after-a-restart)), the editor groups with their sizes, tabs and
-shown files, and the Explorer's folders. At the first graphical frame it comes back as it was
-(`drgnx-persist-restore-on-start`) — with a daemon, in the first `emacsclient -c` frame, once the server has shown its `*scratch*` there (the restored files replace it); closing the last graphical
-frame saves too. It also comes back **whenever a window opens after none**: a daemon that keeps running after its
-last window closed ([opening.md](opening.md#keep-running-or-quit)) gives the next `drgnx open` or `emacsclient -c` the saved layout again (a second window opened while one is
-already open is never restored over; a frame is restored once). A file that client asked for is shown in
-front afterwards (the server switches to it after the restore); add a function to `drgnx-persist-after-restore-functions` (called with the restored frame, after
-every restore, never prompting; the other windows of a saved workbench are not passed to it) to do something of your own at that moment. To
-keep data of your own in the saved state, add a function to `drgnx-persist-state-functions` that returns a plist of
-namespaced keys (`:mymodule-thing`) with readable values only; one that returns anything else is left out (said
-once) without costing the other functions' keys. Each group's shown file opens at once and its other tabs open while you are idle; nothing asks
-anything at start (no remote files are touched, only safe local variables, no large-file question). Files that no
-longer exist are skipped, sizes are clamped to the frame, window parameters in the file are ignored (drgnx saves
-none), and a state in another format is ignored. Save / Restore
-Workbench Layout are in the palette. Only a graphical session saves — a batch run never writes your state.
+the other windows are opened again at start (your window manager places them; the one saved as the main window goes
+into the frame you start in, the others follow in order): the left dock (and the sidebar view it shows, Explorer or
+Search), the panel and its tab, the right dock — each with its pixel size — the layout you were in
+([layouts.md](layouts.md#after-a-restart)), the editor groups with their sizes, tabs and shown files, and the
+Explorer's folders. A window that rebuilds itself, such as a job window, comes back where and how big it was; a job
+window whose job no longer exists closes instead of waiting for the hub.
+
+At the first graphical frame it comes back as it was (`drgnx-persist-restore-on-start`) — with a daemon, in the first
+`emacsclient -c` frame, once the server has shown its `*scratch*` there (the restored files replace it); closing the
+last graphical frame saves too (a child frame, such as a popup, does not count as a window). It also comes back
+**whenever a window opens after none**: a daemon that keeps running after its last window closed
+([opening.md](opening.md#keep-running-or-quit)) gives the next `drgnx open` or `emacsclient -c` the saved layout again
+(a second window opened while one is already open is never restored over; a frame is restored once, and one whose
+restore failed is not tried again). A file that client asked for is shown in front afterwards (the server switches to
+it after the restore); add a function to `drgnx-persist-after-restore-functions` (called with the restored frame, after
+every restore, never prompting; the other windows of a saved workbench are not passed to it) to do something of your
+own at that moment. To keep data of your own in the saved state, add a function to `drgnx-persist-state-functions`
+that returns a plist of namespaced keys (`:mymodule-thing`) with readable values only; one that returns anything else
+is left out (said once) without costing the other functions' keys.
+
+Each group's shown file opens at once and its other tabs open while you are idle; nothing asks anything at start (no
+remote files are touched, only safe local variables, no large-file question). Files that no longer exist are skipped,
+sizes are clamped to the frame, window parameters in the file are ignored (drgnx saves none), and a state in another
+format is ignored. Save / Restore Workbench Layout are in the palette. Only a graphical session saves — a batch run
+never writes your state.
 
 ### Several windows
 

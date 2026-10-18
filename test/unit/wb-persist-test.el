@@ -169,6 +169,36 @@
       (set-frame-parameter nil 'drgnx-persist-restore nil)
       (delete-file file))))
 
+(ert-deftest drgnx-persist/custom-frame-keeps-its-geometry ()
+  ;; M9b4-9: a window that rebuilds itself comes back where and how big it was: pixel left, top, width, height,
+  ;; applied to the frame the rebuilding function returns.
+  (let ((frame (selected-frame)) placed sized (file (make-temp-file "drgnx-persist" nil ".eld")))
+    (unwind-protect
+        (progn
+          (cl-letf (((symbol-function 'display-graphic-p) (lambda (&optional _) t))
+                    ((symbol-function 'frame-edges) (lambda (&rest _) '(10 20 810 620)))
+                    ((symbol-function 'frame-pixel-width) (lambda (&rest _) 800))
+                    ((symbol-function 'frame-pixel-height) (lambda (&rest _) 600)))
+            (set-frame-parameter nil 'drgnx-persist-restore '(drgnx-persist-test--rebuild "j1"))
+            (should (equal (drgnx-persist-state)
+                           '(:role custom :restore (drgnx-persist-test--rebuild "j1") :geometry (10 20 800 600)))))
+          (set-frame-parameter nil 'drgnx-persist-restore nil)
+          (with-temp-file file
+            (prin1 (list :version 2 :frames (list (drgnx-persist-state)
+                                                  '(:role custom :restore (drgnx-persist-test--rebuild "j1") :geometry (30 40 700 500))
+                                                  '(:role custom :restore (drgnx-persist-test--rebuild "j2") :geometry (1 2 "junk" 4))))
+                   (current-buffer)))
+          (cl-letf (((symbol-function 'drgnx-persist-test--rebuild) (lambda (&rest _) frame))
+                    ((symbol-function 'display-graphic-p) (lambda (&optional _) t))
+                    ((symbol-function 'select-frame-set-input-focus) #'ignore)
+                    ((symbol-function 'set-frame-position) (lambda (f x y) (push (list f x y) placed)))
+                    ((symbol-function 'set-frame-size) (lambda (f w h &optional pixelwise) (push (list f w h pixelwise) sized))))
+            (drgnx-persist-restore file))
+          (should (equal placed (list (list frame 30 40))))        ; the junk geometry is ignored
+          (should (equal sized (list (list frame 700 500 t)))))
+      (set-frame-parameter nil 'drgnx-persist-restore nil)
+      (delete-file file))))
+
 (ert-deftest drgnx-persist/the-file-lists-every-window ()
   ;; Format 2: one entry per window (the main one first); format 1 files (one window) still restore.
   (drgnx-persist-test--with dir
@@ -275,15 +305,16 @@
       (drgnx-chrome-apply nil t)
       (drgnx-persist--on-delete-frame (selected-frame))
       (drgnx-persist-test--reset)
-      (let* ((asked (drgnx-persist-test--file dir "asked.txt")) seen
+      (let* ((asked (drgnx-persist-test--file dir "asked.txt")) seen told
              (drgnx-persist-after-restore-functions
               (list (lambda (frame)
                       (push (list frame (mapcar #'buffer-file-name (drgnx-chrome-tabs (car (drgnx-groups-list))))) seen)
-                      (error "a failing function must not stop the others")
-                      )
+                      (error "a failing function must not stop the others"))
                     (lambda (frame) (with-selected-frame frame (switch-to-buffer asked))))))
-        (drgnx-persist--on-new-frame (selected-frame))
+        (cl-letf (((symbol-function 'message) (lambda (fmt &rest args) (push (apply #'format fmt args) told))))
+          (drgnx-persist--on-new-frame (selected-frame)))
         (should (equal seen (list (list (selected-frame) (list (expand-file-name "a.txt" dir))))))
+        (should (cl-some (lambda (m) (string-search "after-restore function" m)) told))   ; said, not raised or logged
         (should (eq (window-buffer (selected-window)) asked))))))
 
 (ert-deftest drgnx-persist/extras-a-bad-result-costs-only-its-own-keys ()
