@@ -69,6 +69,19 @@ Redefining an id replaces it. **Keys come from key profiles** ([keys.md](../guid
 are in its `bound` slot, which every surface reads. The entries keep the ids of the gryphn layer's registry, which
 this is ported from.
 
+**Undefining.** `(drgnx-command-undefine ID)` removes a command from the table and the order (it returns ID, or nil
+when there was none). A `drgnx-command-define` made by a module's setup pushes its own undo (see "Teardown" under Modules):
+if the table still holds that very definition, the one it replaced comes back (keeping its bound keys and its place
+in the order), or the command goes when it replaced none. Definitions of one id form a chain, so the undos are safe in
+any order: tearing down the first of two modules that defined an id leaves the second one's entry alone and the second
+one's teardown does not bring the first one back; a definition made outside a setup (a user's `config.el`) is never
+touched. A library a setup `require`s registers for itself and stays until restart.
+
+**How keys and menus follow.** The registry is the one source: after a batch of teardowns
+`drgnx-modules-after-teardown-functions` runs `drgnx--after-teardown`, which calls `drgnx-keys-apply` (it puts back
+Emacs's own bindings first, then binds what the registry still holds, so a removed command's keys are free again and
+nothing a user bound is touched) and `drgnx-surfaces-refresh`.
+
 ## Surfaces (`drgnx-surfaces.el`, `drgnx-palette.el`)
 
 Generated from the registry, never written by hand, showing the keys of the active key profiles: the menu bar,
@@ -84,6 +97,19 @@ most once a minute and at exit, never prompting, to `command-usage.eld` in the s
 (`drgnx-shortcuts-usage-file`): `((ID COUNT (DAY . N)…)…)`, with the per-day counts (`time-to-days`) of the last 7
 days. The file stays on your machine; it feeds the suggestions of the Keyboard Shortcuts editor ("you ran X 12
 times this week; give it a key?"). Read it with `drgnx-surfaces-usage-count` and `drgnx-surfaces-usage-week`.
+
+**Removing what a command added.** The palette, the key sheet, the cheat sheet and the right-click menu are computed
+from the registry on each use, so an undefined command is gone from them at once. The menu bar and which-key are
+written, so they are undone explicitly. `drgnx-surfaces-build-menus` remembers what it added, per command id: the item
+(a claim on its menu path and title, `drgnx-module--claim`, so two commands sharing a title in one submenu go in either
+order), the binding it replaced and the submenus it had to create. A command that is no longer the registered one
+(undefined, or defined again) has its item taken out, newest first: a replaced item is put back in its place, a submenu
+made for the item goes once empty, and an item someone else replaced or removed since is left alone. Every other
+item is replaced where it stands (`easy-menu-add-item` keeps the position, and refreshes `:keys`), so nothing untouched
+moves behind an item someone else added meanwhile. `drgnx-surfaces-apply-which-key` already removes its previous labels
+on every refresh. Right-click contexts: `(drgnx-surfaces-undefine-context CONTEXT)` removes one;
+`drgnx-surfaces-define-context` called from a setup claims the context (the same claims as the option and key helpers),
+so two modules defining one context, and a user's own definition on top, undo in any order.
 
 ## Modules (`drgnx-modules.el`)
 
@@ -139,7 +165,11 @@ stack — the code that knows what it changed knows how to change it back):
   After an error the module is `failed`, with the error and any undo problems in the report; a quit or a throw goes
   on after the rollback.
 - Running a module that is already on tears it down first (its `:teardown`, then its stack), so no undo is left
-  behind; a `restart` module is set up again on top, as before, and keeps its earlier undos.
+  behind; a `restart` module is set up again on top, as before, and keeps its earlier undos. That teardown does not
+  run `drgnx-modules-after-teardown-functions`: the setup registers its commands again at once, and `drgnx-modules-run`
+  runs `drgnx-modules-after-stage-functions` (keys and menus apply) once after the whole stage, so a hook per re-run
+  would only add a second full keys resolve while the registry is half rebuilt. Whoever tears down on purpose
+  (Preferences, the batch teardown) runs the after-teardown hook once.
 - Teardown and rollback run in automatic paths: they never prompt. Undos and `:teardown` run with
   `inhibit-interaction` bound, so one that would ask fails at once and is reported. Every undo checks before it
   changes anything, so off, on, off is the same as off once, and two undos of the same thing (a `:teardown` that
