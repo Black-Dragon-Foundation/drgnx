@@ -162,6 +162,10 @@ Onboarding's Daemon and Desktop step asks it once ([onboarding.md](onboarding.md
 Change the choice with **Preferences: Keep drgnx Running in the Background** (palette, Options menu): it switches
 between the two and says which one is on. The choice is kept in `~/.config/drgnx/session.eld` as
 `(:keep-running t)` or `(:keep-running nil)` and read at every start. drgnx never asks it when a window closes.
+Changing the choice edits only that key: comments and other keys you added stay as they are. If the file has a mistake,
+drgnx keeps using the last good choice and says where the mistake is (`drgnx doctor` too); the toggle then refuses to
+write, so your file is never replaced. Fix the file, or delete it, and toggle again. The file is described in
+[the config reference](../reference/config.md).
 
 ## For CI and scripts
 

@@ -220,6 +220,7 @@ off), or inside a session, the mode is read as it is and never switched: an off 
     drgnx-keys
     drgnx-ai
     drgnx-pkg
+    drgnx-session
     )
   "The core features whose loading defines config files, for the `config-files' check.")
 

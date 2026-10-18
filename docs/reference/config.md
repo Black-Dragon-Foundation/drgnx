@@ -136,3 +136,13 @@ The projects drgnx knows: the work tracker and search scan their roots.
 | `:projects * :root` | home-path | yes | Its folder |
 | `:projects * :url` | string or null | no | Its remote's URL |
 
+## session.eld
+
+Folder: config. Format: 1. Read: at start. On a mistake: its last good copy, else the defaults.
+
+Whether drgnx keeps running when its last window closes (read at every start).
+
+| Key | Type | Required | What |
+| --- | --- | --- | --- |
+| `:keep-running` | boolean | no | Keep drgnx running when its last window closes |
+

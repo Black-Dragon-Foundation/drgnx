@@ -34,6 +34,11 @@
 
 (defun drgnx-onboard-test--read (file) (with-temp-buffer (insert-file-contents file) (read (current-buffer))))
 
+(defun drgnx-onboard-test--keep-running-is (value)
+  "Non-nil when session.eld holds :keep-running VALUE (the config layer adds :version to a new file)."
+  (let ((data (drgnx-onboard-test--read (drgnx-session-file))))
+    (and (plist-member data :keep-running) (eq (plist-get data :keep-running) value))))
+
 ;;;; Task 1: steps, progress, runner
 
 (ert-deftest drgnx-onboard/steps-run-in-order-and-record-progress ()
@@ -259,7 +264,7 @@ one.  Returns (RESULT PROMPTS PROGRAMS INSTALLED): the questions asked, the prog
         (should (= 1 (seq-count (lambda (p) (string-match-p "\\`Keep drgnx running" p)) prompts)))
         (should (equal installed '(t)))
         (should-not (member "systemctl" programs))
-        (should (equal (drgnx-onboard-test--read (drgnx-session-file)) '(:keep-running nil)))
+        (should (drgnx-onboard-test--keep-running-is nil))
         (should-not drgnx-keep-running)
         (should (string-search "drgnx quits when its last window closes" (nth 2 r)))
         (should (string-search "Preferences: Keep drgnx Running in the Background" (nth 2 r)))
@@ -276,7 +281,7 @@ one.  Returns (RESULT PROMPTS PROGRAMS INSTALLED): the questions asked, the prog
         (should (eq (cadr r) 'ok))
         (should (= 1 (length prompts)))
         (should-not installed)
-        (should (equal (drgnx-onboard-test--read (drgnx-session-file)) '(:keep-running t)))))))
+        (should (drgnx-onboard-test--keep-running-is t))))))
 
 (ert-deftest drgnx-onboard/step-7-on-macos-without-interaction-installs-nothing ()
   (drgnx-onboard-test--with root
@@ -289,11 +294,11 @@ one.  Returns (RESULT PROMPTS PROGRAMS INSTALLED): the questions asked, the prog
           (should (string-search "keeps running in the background" (nth 2 r))))
         (should-not installed)
         (should-not (file-exists-p (concat root "Applications")))
-        (should (equal (drgnx-onboard-test--read (drgnx-session-file)) '(:keep-running t)))
+        (should (drgnx-onboard-test--keep-running-is t))
         ;; a choice made before stays
         (drgnx-session-set-keep-running nil)
         (drgnx-onboard-run :only '(daemon) :non-interactive t)
-        (should (equal (drgnx-onboard-test--read (drgnx-session-file)) '(:keep-running nil)))))))
+        (should (drgnx-onboard-test--keep-running-is nil))))))
 
 (ert-deftest drgnx-onboard/step-7-on-linux-is-unchanged-plus-the-question ()
   (drgnx-onboard-test--with root
@@ -309,7 +314,7 @@ one.  Returns (RESULT PROMPTS PROGRAMS INSTALLED): the questions asked, the prog
         (should (file-exists-p (expand-file-name "applications/drgnx.desktop" (drgnx-user-dir))))
         (should (string-match-p "systemctl --user" (nth 2 r)))
         (should (string-search "drgnx keeps running in the background" (nth 2 r)))
-        (should (equal (drgnx-onboard-test--read (drgnx-session-file)) '(:keep-running t)))))))
+        (should (drgnx-onboard-test--keep-running-is t))))))
 
 (ert-deftest drgnx-onboard/the-first-window-opens-the-welcome-once ()
   ;; The first graphical frame schedules the Welcome (a timer: never inside the hook); it opens when onboarding
