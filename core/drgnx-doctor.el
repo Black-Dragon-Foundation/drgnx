@@ -92,14 +92,19 @@ PLATFORM (`linux' or `macos'): only run on that platform, as `drgnx-platform' sa
   "The facts of the Terminal checks: `drgnx-tty-facts' of FRAME's client (this process's own when FRAME is nil)
 with :caps (what the terminal can do) and :os (`drgnx-tty-os'); :fallbacks, rows (CHORD NATIVE-P ALT PREFIX),
 only when known.  CAPS and FALLBACKS are the live frame's (Check This Terminal); without CAPS they are those of
-the newest entry of terminal-report.eld for this kind of terminal, which drgnx wrote when a window of it opened.
+the newest entry of terminal-report.eld for this kind of terminal (inside tmux, preferably one with the same terminal
+around it), which drgnx wrote when a window of it opened.
 A failure is (:error MESSAGE)."
   (condition-case err
       (let* ((facts (drgnx-tty-facts frame))
              (id (plist-get (plist-get facts :identity) :id))
-             (entry (and (not caps) (plist-get facts :in-terminal)
-                         (seq-find (lambda (e) (and (consp e) (eq (plist-get (plist-get (cdr e) :caps) :id) id)))
-                                   (let ((all (plist-get (plist-get facts :report) :terminals))) (and (proper-list-p all) all))))))
+             (outer (plist-get (plist-get facts :identity) :outer))
+             (same (and (not caps) (plist-get facts :in-terminal)
+                        (seq-filter (lambda (e) (and (consp e) (eq (plist-get (plist-get (cdr e) :caps) :id) id)))
+                                    (let ((all (plist-get (plist-get facts :report) :terminals))) (and (proper-list-p all) all)))))
+             ;; tmux in kitty is not tmux in Ptyxis: the entry with the same terminal around it first, else the newest
+             (entry (or (and outer (seq-find (lambda (e) (eq (plist-get (plist-get (cdr e) :caps) :outer) outer)) same))
+                        (car same))))
         (append facts
                 (list :caps (or caps (plist-get (cdr entry) :caps)) :os (and (plist-get facts :in-terminal) (drgnx-tty-os)))
                 (cond (fallbacks-p (list :fallbacks fallbacks))
@@ -565,7 +570,7 @@ what its table row or tmux's extended-keys say), nil when that cannot be told."
                    nil))
        ('mok (if-let* ((folded (plist-get caps :folded)))
                  (list 'info (format "modifyOtherKeys, but tmux sends %d chords as other keys (C-S-<letter> …): Alt+Shift or F6 then the key" (length folded))
-                       nil)
+                       "type those chords as Alt+Shift or F6 then the key; or customize drgnx-tty-tmux-mok-level to 2 (then C-g cannot stop busy Lisp)")
                (list 'ok "modifyOtherKeys: C-S- chords and the like work (Super keys need the kitty keyboard protocol)" nil)))
        ('legacy
         (let* ((rows (plist-get tf :fallbacks))
@@ -574,7 +579,9 @@ what its table row or tmux's extended-keys say), nil when that cannot be told."
           (list 'warn
                 (concat "neither the kitty keyboard protocol nor modifyOtherKeys: this terminal cannot send C-S- chords and the like\n"
                         (if rows (drgnx-doctor--key-table rows) "open drgnx in this terminal once to list them"))
-                (if (eq id 'tmux) (drgnx-doctor--tty-fix row 'mok)
+                ;; tmux with extended-keys already on: the terminal around it is what cannot send the keys
+                (if (and (eq id 'tmux) (not (member (plist-get (plist-get tf :tmux) :extended-keys) '("on" "always"))))
+                    (drgnx-doctor--tty-fix row 'mok)
                   (concat recommendation (when own (format " In %s: %s." (plist-get row :name) own)))))))
        (_ (list 'info (if row
                           (format "not measured yet; %s %s (open drgnx in this terminal once to check)" (plist-get row :name)

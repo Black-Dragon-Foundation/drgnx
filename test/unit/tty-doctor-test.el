@@ -87,9 +87,7 @@
 
 (ert-deftest drgnx-tty-doctor/keys-without-a-report-say-to-open-drgnx-once ()
   (drgnx-tty-doctor-test--with-path nil
-    (let* ((tf (apply #'drgnx-tty-doctor-test--tf (append '(:fallbacks nil :caps nil) drgnx-tty-doctor-test--ptyxis)))
-           (tf (plist-put (copy-sequence tf) :caps nil))
-           (tf (plist-put tf :fallbacks nil))
+    (let* ((tf (apply #'drgnx-tty-doctor-test--tf :caps nil :fallbacks nil drgnx-tty-doctor-test--ptyxis))   ; the first value of a key wins
            (keys (cdr (assq 'terminal-keys (drgnx-tty-doctor-test--results (drgnx-tty-doctor-test--facts tf))))))
       ;; VTE can send neither kkp nor modifyOtherKeys by its row alone: warn, and say how to list the keys
       (should (eq (plist-get keys :status) 'warn))
@@ -153,6 +151,35 @@
          (results (drgnx-tty-doctor-test--results (drgnx-tty-doctor-test--facts tf))))
     (should (eq (drgnx-tty-doctor-test--get results 'terminal-tmux :status) 'ok))
     (should (eq (drgnx-tty-doctor-test--get results 'terminal-keys :status) 'ok))))
+
+(defun drgnx-tty-doctor-test--tmux-keys (extended-keys keys &rest caps)
+  "The terminal-keys result in tmux with EXTENDED-KEYS set, the caps KEYS (and CAPS on top), on Ptyxis."
+  (let* ((tmux (plist-put (copy-sequence drgnx-tty-doctor-test--tmux-good) :extended-keys extended-keys))
+         (tf (drgnx-tty-doctor-test--tf :identity '(:id tmux :outer vte :version "3.4") :term "tmux-256color" :tmux tmux
+                                        :caps (append (list :id 'tmux :keys keys) caps '(:c-g always :osc52 t :colors 256 :mouse t))
+                                        :fallbacks nil)))
+    (cdr (assq 'terminal-keys (drgnx-tty-doctor-test--results (drgnx-tty-doctor-test--facts tf))))))
+
+(ert-deftest drgnx-tty-doctor/tmux-with-extended-keys-off-gets-the-tmux-line ()
+  (drgnx-tty-doctor-test--with-path nil
+    (let ((r (drgnx-tty-doctor-test--tmux-keys "off" 'legacy)))
+      (should (eq (plist-get r :status) 'warn))
+      (should (string-prefix-p "set -s extended-keys on" (plist-get r :fix)))
+      (should-not (string-search "install a terminal" (plist-get r :fix))))))
+
+(ert-deftest drgnx-tty-doctor/tmux-with-extended-keys-on-blames-the-terminal-around-it ()
+  ;; the line is already set: the terminal around tmux cannot send the keys, so the fix is a better terminal
+  (drgnx-tty-doctor-test--with-path nil
+    (let ((r (drgnx-tty-doctor-test--tmux-keys "on" 'legacy)))
+      (should (eq (plist-get r :status) 'warn))
+      (should-not (string-search "extended-keys" (plist-get r :fix)))
+      (should (string-search "sudo dnf install " (plist-get r :fix))))))
+
+(ert-deftest drgnx-tty-doctor/folded-chords-say-what-to-do ()
+  (let ((r (drgnx-tty-doctor-test--tmux-keys "on" 'mok :folded '("C-S-p" "C-S-n"))))
+    (should (eq (plist-get r :status) 'info))
+    (should (string-search "Alt+Shift or F6" (plist-get r :fix)))
+    (should (string-search "drgnx-tty-tmux-mok-level" (plist-get r :fix)))))
 
 (ert-deftest drgnx-tty-doctor/tmux-across-ssh-lists-what-to-check-there ()
   (let* ((tf (drgnx-tty-doctor-test--tf :identity '(:id tmux :outer nil :version nil) :term "tmux-256color" :ssh t
@@ -239,6 +266,27 @@
               (should (eq (plist-get (plist-get tf :identity) :id) 'wezterm))
               (should-not (plist-get tf :caps))
               (should-not (plist-member tf :fallbacks)))))
+      (delete-directory state t))))
+
+(ert-deftest drgnx-tty-doctor/a-tmux-report-entry-with-the-same-outer-terminal-wins ()
+  (let* ((state (make-temp-file "drgnx-doctor-state" t))
+         (process-environment (append (list (concat "XDG_STATE_HOME=" state) "TERM=tmux-256color" "TMUX=" "TERM_PROGRAM="
+                                            "VTE_VERSION=" "KITTY_WINDOW_ID=3" "SSH_CONNECTION=" "SSH_TTY=")
+                                      process-environment)))
+    (unwind-protect
+        (progn
+          (make-directory (expand-file-name "drgnx" state))
+          (with-temp-file (expand-file-name "drgnx/terminal-report.eld" state)
+            ;; newest first: tmux in Ptyxis, then tmux in kitty
+            (prin1 '(:terminals (("/dev/pts/9" . (:caps (:id tmux :outer vte :keys legacy) :fallbacks (("C-S-p" nil nil nil))))
+                                 ("/dev/pts/8" . (:caps (:id tmux :outer kitty :keys mok) :fallbacks nil))))
+                   (current-buffer)))
+          (let ((tf (drgnx-doctor-terminal-facts)))
+            (should (eq (plist-get (plist-get tf :identity) :outer) 'kitty))
+            (should (eq (plist-get (plist-get tf :caps) :outer) 'kitty)))
+          ;; no entry with this outer terminal: the newest tmux one
+          (let ((process-environment (cons "KITTY_WINDOW_ID=" (cons "WEZTERM_PANE=3" process-environment))))
+            (should (eq (plist-get (plist-get (drgnx-doctor-terminal-facts) :caps) :outer) 'vte))))
       (delete-directory state t))))
 
 (ert-deftest drgnx-tty-doctor/terminal-check-in-a-graphical-window ()
