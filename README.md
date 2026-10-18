@@ -64,5 +64,7 @@ manual install and uninstall: [docs/guide/install.md](docs/guide/install.md). Ch
 
 drgnx is free software under the **GNU General Public License v3.0 or later** (see `LICENSE`).
 Code derived from [Emacs Bedrock](https://codeberg.org/ashton314/emacs-bedrock) keeps its MIT notice.
+The Seatbelt base policy in `core/drgnx-sandbox-macos.el` is OpenAI Codex's, Copyright 2025 OpenAI, under the
+Apache License 2.0 (`LICENSES/Apache-2.0.txt`).
 A separate `drgnx-pro` add-on may follow later under a source-available license that stays free for
 individuals, open-source developers and small businesses.
