@@ -64,6 +64,7 @@ coordination server's `coord/notify` checks the same. One JSON object per line:
 | `job/status` `{id?, decisions?}` | the job (with its decision log when `decisions` is true), or `{jobs: [...]}` |
 | `job/card` `{card, action, arg?}` | the job, after the user's action on a card (once: a settled card is an error) |
 | `job/reply` `{message, text}` | `true`: the user's answer to an agent's message |
+| `job/dismiss` `{message}` | `true`: the message is acted on without an answer (the badge stops counting it) |
 
 Errors: `{"id", "error": {"message"}}`. A line that is not JSON is answered with an error too when its `"id"` can be
 read (otherwise it is dropped); a line over 1 MiB closes its connection. A client that reads slowly is never dropped for it: once its

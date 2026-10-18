@@ -29,7 +29,7 @@ A job's control room — its own window on a graphical display, so it can sit on
   the agents at work, each with **Transcript** and **Message…**;
 - **middle — what needs you:** the cards, each with its actions as buttons (a clash shows both sides and the
   reviewer's recommendation; **Accept the reviewer** is there only when it recommended a side; a clash whose reviewer
-  was lost twice says so), then the messages agents sent you, each with **Reply…**;
+  was lost twice says so), then the messages agents sent you, each with **Reply…** (answers the agent) or **Dismiss** (needs no answer: it is acted on, and stops counting in the badge);
 - **right — the decision log,** newest first: replaced decisions dimmed, disputed ones (in an open clash) marked.
 
 It follows the hub's events and redraws only what changed (at most twice a second). Closing it stops nothing; it
@@ -42,7 +42,7 @@ last count), and each new card is a desktop notification (D-Bus; else a message
 in the echo area — `drgnx-job-ui-notify` nil turns them off). Neither ever asks you anything. What needs you is a **card** with its actions — the proposal (Approve, Reject), a permission (Allow, Reject),
 a merge conflict (let the agent resolve it, merge again after you resolved it, drop the task), a review that failed
 (merge as it is, back to an agent, drop), a stuck or failed agent (retry, drop), the budget (resume with more, stop);
-each acts once. Messages agents send you are listed with a Reply.
+each acts once. Messages agents send you are listed with a Reply and a Dismiss.
 
 **Clashes** are found by rules, not guessed: two agents deciding opposite things about one subject (build it / don't),
 an agent deciding about another task, a task changing files a won't-build decision covers (its review waits), an

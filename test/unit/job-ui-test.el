@@ -169,4 +169,20 @@
     (should (equal drgnx-job-ui--badge ""))
     (should-not drgnx-job-ui--badge-job)))
 
+;; M9b4-1: a message that needs no answer is dismissed, not replied to.
+(ert-deftest drgnx-job-ui/dismiss-clears-the-badge ()
+  (drgnx-job-ui-test--with
+    (drgnx-job-ui--draw "j1" drgnx-job-ui-test--summary)
+    (should (drgnx-job-ui-test--button 'cards "Dismiss"))
+    (let ((calls nil) (again nil))
+      (cl-letf (((symbol-function 'drgnx-hub-call) (lambda (method params &optional cb) (push (cons method params) calls) (when cb (funcall cb t nil))))
+                ((symbol-function 'drgnx-job-ui--schedule) (lambda (job) (push (list 'window job) again)))
+                ((symbol-function 'drgnx-job-ui--schedule-recount) (lambda () (push 'badge again))))
+        (button-activate (drgnx-job-ui-test--button 'cards "Dismiss")))
+      (should (equal (assoc "job/dismiss" calls) '("job/dismiss" :message 3)))
+      (should (member 'badge again))                        ; the badge counts again
+      (should (member '(window "j1") again))))
+  ;; once the hub has marked it acted, the recount gives 0
+  (should (= 0 (car (drgnx-job-ui--count '((:id "j1" :status "running" :cards :null :messages ((:id 3 :state "acted")))))))))
+
 ;;; job-ui-test.el ends here

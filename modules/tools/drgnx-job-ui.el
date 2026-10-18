@@ -133,6 +133,7 @@
           (insert (format "  from %s (%s): %s\n  " (plist-get m :sender) (plist-get m :state)
                           (replace-regexp-in-string "[\n\r]+" " ⏎ " (format "%s" (plist-get m :text)))))
           (drgnx-job-ui--button "Reply…" (lambda () (drgnx-job-ui--reply job id)))
+          (drgnx-job-ui--button "Dismiss" (lambda () (drgnx-job-ui--dismiss job id)))
           (insert "\n"))))))
 
 (defun drgnx-job-ui--insert-log (_job s)
@@ -232,6 +233,15 @@
     (drgnx-job-ui--hub)
     (drgnx-hub-call "job/reply" (list :message message :text text)
                     (lambda (_r err) (when err (message "drgnx: %s" err)) (drgnx-job-ui--schedule job)))))
+
+(defun drgnx-job-ui--dismiss (job message)
+  "MESSAGE of JOB needs no answer: acted on, so the window and the badge stop showing it."
+  (drgnx-job-ui--hub)
+  (drgnx-hub-call "job/dismiss" (list :message message)
+                  (lambda (_r err)
+                    (when err (message "drgnx: %s" err))
+                    (drgnx-job-ui--schedule job)
+                    (drgnx-job-ui--schedule-recount))))
 
 (defun drgnx-job-ui--open-tree (job)
   "The job's worktree (its branch, job/JOB) in Dired."
