@@ -491,15 +491,38 @@ else a message.  A failed osascript says so once.  Never a prompt."
   (drgnx-hub-call-sync "job/stop" (list :id id))
   (message "Job %s stopped" id))
 
+(defvar drgnx-job-ui--recount-idle-timer nil "The idle timer that counts the badge again every 60 s.")
+
+(defun drgnx-job-ui--recount-at-idle ()
+  "Count the badge again, once the hub's client is here (the Agents mirror loads it); never loads it."
+  (when (featurep 'drgnx-hub) (drgnx-job-ui--recount)))
+
+(defun drgnx-job-ui--recount-now-and-then ()
+  "Count the badge again every 60 s of idle.  Idempotent: while the timer is pending, nothing more starts.  The
+module's cleanup stack cancels it, so a module turned on again starts it again."
+  (unless (memq drgnx-job-ui--recount-idle-timer timer-idle-list)
+    (setq drgnx-job-ui--recount-idle-timer (run-with-idle-timer 60 t #'drgnx-job-ui--recount-at-idle))))
+
+(defun drgnx-job-ui--teardown ()
+  "Turned off: open job windows hear the hub no more and refresh no more (they stay as they are); a recount on its
+way is dropped, so a module turned on again schedules one again.  The badge's mode, the hook, the idle timer and
+the commands go with the cleanup stack."
+  (remove-hook 'drgnx-hub-event-functions #'drgnx-job-ui--event)
+  (remove-hook 'drgnx-hub-disconnect-functions #'drgnx-job-ui--hub-gone)
+  (dolist (tm (cl-list* drgnx-job-ui--retry drgnx-job-ui--recount-timer (hash-table-values drgnx-job-ui--timers)))
+    (when (timerp tm) (cancel-timer tm)))
+  (setq drgnx-job-ui--retry nil drgnx-job-ui--recount-timer nil)
+  (clrhash drgnx-job-ui--timers))
+
 (drgnx-module-define 'tools/jobs
                      :doc "Jobs: agents through a plan you approve — the job window (tasks, what needs you, decisions), cards, clashes."
                      :stage 'startup :requires '(tools/agents)
+                     :teardown #'drgnx-job-ui--teardown
                      :setup
                      (lambda ()
-                       (add-hook 'delete-frame-functions #'drgnx-job-ui--frame-deleted)
+                       (drgnx-module-hook 'delete-frame-functions frame-deleted (frame) (drgnx-job-ui--frame-deleted frame))
                        (drgnx-job-ui-badge-mode 1)
-                       ;; counted again now and then once the hub's client is here (the Agents mirror loads it)
-                       (run-with-idle-timer 60 t (lambda () (when (featurep 'drgnx-hub) (drgnx-job-ui--recount))))
+                       (drgnx-job-ui--recount-now-and-then)
                        (when (fboundp 'drgnx-wb-place) (drgnx-wb-place "\\`\\*plan jobs\\*\\'" 'editor))
                        (pcase-dolist (`(,id ,title ,fn ,doc)
                                       '((job-show "Show Job Window…" drgnx-job-ui-show "Tasks and agents, what needs you, the decision log")

@@ -413,18 +413,38 @@ the copy), then Done writes the copy to the file (Reject, or closing the diff, w
 
 ;;;; The module
 
+(defvar drgnx-agents-ui--mirror-timer nil "The idle timer that mirrors the hub's sessions again every 30 s.")
+
+(defun drgnx-agents-ui--mirror-at-idle ()
+  "Mirror the hub's sessions once Emacs is idle, and again every 30 s of idle (a hub started or restarted since is
+picked up).  Idempotent: while the repeating timer is pending, nothing more starts.  The module's cleanup stack
+cancels both timers, so a module turned on again starts them again."
+  (unless (memq drgnx-agents-ui--mirror-timer timer-idle-list)
+    (run-with-idle-timer 3 nil #'drgnx-agents-ui--maybe-mirror)
+    (setq drgnx-agents-ui--mirror-timer (run-with-idle-timer 30 t #'drgnx-agents-ui--maybe-mirror))))
+
+(declare-function drgnx-agents-mirror-stop "drgnx-agents-mirror")
+(declare-function drgnx-hub-disconnect "drgnx-hub")
+
+(defun drgnx-agents-ui--teardown ()
+  "Turned off: the hub's sessions are mirrored no more and the hub's event connection closes; the list's redraw
+stops.  The hooks, the idle timers, the tab, the rules and the commands go with the cleanup stack."
+  (when (featurep 'drgnx-agents-mirror) (drgnx-agents-mirror-stop))
+  (when (featurep 'drgnx-hub) (drgnx-hub-disconnect))
+  (when (timerp drgnx-agents-ui--tick-timer) (cancel-timer drgnx-agents-ui--tick-timer))
+  (setq drgnx-agents-ui--tick-timer nil))
+
 (drgnx-module-define 'tools/agents
                      :doc "Agents: sessions over ACP in the right dock's Agents tab, durable jobs, edit review."
                      :stage 'startup :requires '(core/workbench)
+                     :teardown #'drgnx-agents-ui--teardown
                      :setup
                      (lambda ()
-                       (add-hook 'drgnx-agents-changed-functions #'drgnx-agents-ui--changed)
+                       (drgnx-module-hook 'drgnx-agents-changed-functions changed (s) (drgnx-agents-ui--changed s))
                        ;; the list's Last ages: redrawn every 30 s while it is on screen, nothing otherwise
-                       (add-hook 'window-buffer-change-functions #'drgnx-agents-ui--tick-update)
-                       ;; the hub's sessions (they outlive this Emacs), once Emacs is idle
-                       (run-with-idle-timer 3 nil #'drgnx-agents-ui--maybe-mirror)
-                       ;; …and again later: a hub started (or restarted) since is picked up
-                       (run-with-idle-timer 30 t #'drgnx-agents-ui--maybe-mirror)
+                       (drgnx-module-hook 'window-buffer-change-functions tick (&rest _) (drgnx-agents-ui--tick-update))
+                       ;; the hub's sessions (they outlive this Emacs), once Emacs is idle and again later
+                       (drgnx-agents-ui--mirror-at-idle)
                        (when (fboundp 'drgnx-wb-define-tab)
                          (drgnx-wb-define-tab 'right 'agents :title "Agents" :placeholder #'drgnx-agents-ui-list-buffer))
                        (when (fboundp 'drgnx-wb-place)

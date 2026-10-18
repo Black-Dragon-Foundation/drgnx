@@ -3,6 +3,7 @@
 (require 'drgnx)
 (load (expand-file-name "modules/tools/drgnx-ai-ui" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/mock-llm" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
 
 (defvar drgnx-ai-ask-test--delay nil "Seconds the mock waits before it answers a chat.")
 
@@ -275,12 +276,8 @@ provider `o' served by a mock answering ANSWER, its LOG."
         (if was-bound (setq gptel-backend old gptel-model old-model) (makunbound 'gptel-backend) (makunbound 'gptel-model))))))
 
 (ert-deftest drgnx-ai/ask-and-choose-are-registered ()
-  (let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil))
-    (unwind-protect
-        (progn
-          (funcall (plist-get (alist-get 'tools/ai drgnx-modules--table) :setup))
-          (dolist (id '(ai-ask ai-choose ai-stop)) (should (drgnx-commands-get id))))
-      (remove-hook 'prog-mode-hook #'drgnx-ai-ghost--maybe-enable))))
+  (drgnx-test-with-modules '(tools/ai) :strict t
+                           (dolist (id '(ai-ask ai-choose ai-stop)) (should (drgnx-commands-get id)))))
 
 ;;; ai-ask-test.el ends here
 

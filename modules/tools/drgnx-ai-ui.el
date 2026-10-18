@@ -39,8 +39,8 @@
 (defvar drgnx-ai-ghost--last-probe 0 "When a pause with no provider last asked the probe to look again.")
 
 (defvar drgnx-ai-ghost-showing-map (make-sparse-keymap) "Keys active only while a suggestion shows.")
-(defvar drgnx-ai-ghost--emulation (list (cons 'drgnx-ai-ghost--showing drgnx-ai-ghost-showing-map)))
-(add-to-list 'emulation-mode-map-alists 'drgnx-ai-ghost--emulation)
+(defvar drgnx-ai-ghost--emulation (list (cons 'drgnx-ai-ghost--showing drgnx-ai-ghost-showing-map))
+  "On `emulation-mode-map-alists' while the module is on (its setup adds it).")
 
 (defvar drgnx-ai-ghost-mode-map (make-sparse-keymap) "Keys of buffers with ghost text (Tab: `drgnx-ai-tab').")
 
@@ -563,14 +563,26 @@ and keep it in ai.eld (never a key)."
 
 ;;;; The module
 
+(defun drgnx-ai-ui--probe () "Which providers run here (at idle)." (drgnx-ai-probe nil))
+
+(defun drgnx-ai-ui--teardown ()
+  "Turned off: ghost text leaves every buffer it is on, with its suggestion, and a pause asks for none.  The hook,
+the keys of a showing suggestion, the probe's timer and the commands go with the cleanup stack."
+  (when (timerp drgnx-ai-ghost--timer) (cancel-timer drgnx-ai-ghost--timer))
+  (setq drgnx-ai-ghost--timer nil)
+  (dolist (b (buffer-list))
+    (with-current-buffer b (when drgnx-ai-ghost-mode (drgnx-ai-ghost-mode -1)))))
+
 (drgnx-module-define 'tools/ai
                      :doc "AI: ghost-text completion in code buffers (the `complete' role) and one Tab for everything."
                      :stage 'startup :requires '(core/workbench)
+                     :teardown #'drgnx-ai-ui--teardown
                      :setup
                      (lambda ()
+                       (add-to-list 'emulation-mode-map-alists 'drgnx-ai-ghost--emulation)   ; a suggestion's keys
                        (add-hook 'prog-mode-hook #'drgnx-ai-ghost--maybe-enable)
                        ;; which providers run here: asked once Emacs is idle, never while it works
-                       (run-with-idle-timer 2 nil (lambda () (drgnx-ai-probe nil)))
+                       (run-with-idle-timer 2 nil #'drgnx-ai-ui--probe)
                        (pcase-dolist (`(,id ,title ,fn ,doc ,map)
                                       '((ai-accept "Accept Suggestion" drgnx-ai-accept "Insert the whole suggestion" nil)
                                         (ai-accept-word "Accept Suggestion Word" drgnx-ai-accept-word "Insert its next word"

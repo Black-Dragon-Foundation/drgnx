@@ -17,8 +17,7 @@
 (load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
 
 (defconst drgnx-teardown--not-yet
-  '((tools/agents :until 19) (tools/ai :until 19) (tools/jobs :until 19) (tools/live :until 19) (tools/work :until 19)
-    (tools/layouts :until 20) (tools/browser :until 20) (tools/replace :until 20) (tools/search :until 20)
+  '((tools/layouts :until 20) (tools/browser :until 20) (tools/replace :until 20) (tools/search :until 20)
     (tools/shortcuts :until 20)
     (tools/diff :until 21) (tools/review :until 21) (tools/prs :until 21) (tools/vc :until 21)
     (tools/commit-message :until 21) (tools/terminal :until 21)
@@ -30,8 +29,7 @@ migration batch that converts it and takes it off.  The dynamic check and the ra
 (defconst drgnx-teardown--load-registrations
   '(("modules/tools/drgnx-replace.el" advice-add :until 20)
     ("modules/tools/drgnx-replace.el" with-eval-after-load :until 20)
-    ("modules/tools/drgnx-shortcuts.el" with-eval-after-load :until 20)
-    ("modules/tools/drgnx-ai-ui.el" add-to-list :until 19))
+    ("modules/tools/drgnx-shortcuts.el" with-eval-after-load :until 20))
   "Registrations at the top level of a module file that are known and wait for their batch: (FILE CALL :until
 BATCH).  One that is gone fails the lint too, so the entry goes with it.")
 

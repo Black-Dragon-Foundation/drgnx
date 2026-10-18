@@ -157,6 +157,8 @@ per token; Kimi's coding membership is a different endpoint these profiles do no
 you close Emacs, and the next Emacs shows it again in the Agents tab — its whole transcript, pending permission
 requests and edits to review — and drives it the same way (send, Stop, answer, review). Emacs mirrors the hub's
 sessions when it is idle whenever a hub is running (and looks again every 30 s); it never starts a hub for that.
+Turning `tools/agents` off (Preferences: Modules) stops the mirroring and closes this Emacs's connection to the hub;
+the hub and its sessions go on.
 Durable sessions live as long as the hub: if the hub ends (`drgnx hub stop`, a crash), its sessions end too, and the
 Agents tab shows them as exited. The next hub (the next durable session, an agent that needs the gateway, or `drgnx
 hub start`) resumes them when their agent can load sessions: each comes back idle with its history,

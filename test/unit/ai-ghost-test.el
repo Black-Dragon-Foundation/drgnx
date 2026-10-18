@@ -4,6 +4,7 @@
 (require 'drgnx)
 (load (expand-file-name "modules/tools/drgnx-ai-ui" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/mock-llm" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
 
 (defmacro drgnx-ai-ghost-test--with (spec &rest body)
   "BODY in an Emacs Lisp buffer with ghost text on, its `complete' role on provider `o' (Ollama) served by a mock
@@ -107,20 +108,18 @@ LLM answering SPEC; `o' found running."
     (should-not (drgnx-ai-ghost-text))))
 
 (defmacro drgnx-ai-ghost-test--keys (&rest body)
-  "BODY with the module's commands registered and the default key profile applied on Linux (undone after)."
+  "BODY with the module set up and the default key profile applied on Linux (undone after)."
   `(cl-letf (((symbol-function 'drgnx-platform) (lambda () 'linux)))
      (let* ((dir (make-temp-file "drgnx-ai-keys" t))
             (process-environment (append (list (concat "DRGNX_CONFIG_DIR=" dir) (concat "XDG_STATE_HOME=" dir "/state"))
                                          process-environment))
-            (drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
             (drgnx-keys--applied nil) (drgnx-keys--session-layers nil) (drgnx-keys-profiles nil)
             (drgnx-keys-problems nil) (drgnx-keys-last nil))
        (unwind-protect
-           (progn (funcall (plist-get (alist-get 'tools/ai drgnx-modules--table) :setup))
-                  (drgnx-keys-apply)
-                  ,@body)
+           (drgnx-test-with-modules '(tools/ai) :strict t
+                                    (drgnx-keys-apply)
+                                    ,@body)
          (drgnx-keys--restore)
-         (remove-hook 'prog-mode-hook #'drgnx-ai-ghost--maybe-enable)
          (delete-directory dir t)))))
 
 (ert-deftest drgnx-ai-ghost/c-right-accepts-a-word-only-while-a-suggestion-shows ()
@@ -293,10 +292,26 @@ LLM answering SPEC; `o' found running."
       (define-key drgnx-ai-ghost-mode-map (kbd "TAB") was))))
 
 (ert-deftest drgnx-ai/every-ai-command-is-registered ()
-  (let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil))
-    (funcall (plist-get (alist-get 'tools/ai drgnx-modules--table) :setup))
-    (dolist (id '(ai-accept ai-accept-word ai-accept-line ai-dismiss ai-tab ai-complete-toggle
-                            ai-edit ai-edit-apply-hunk ai-edit-done ai-edit-reject))
-      (should (drgnx-commands-get id)))))
+  (drgnx-test-with-modules '(tools/ai) :strict t
+                           (dolist (id '(ai-accept ai-accept-word ai-accept-line ai-dismiss ai-tab ai-complete-toggle
+                                                   ai-edit ai-edit-apply-hunk ai-edit-done ai-edit-reject))
+                             (should (drgnx-commands-get id)))))
+
+(ert-deftest drgnx-ai/turned-off-ghost-text-leaves-the-open-buffers ()
+  ;; a local mode in live buffers and the keys of a showing suggestion: no door records them
+  (let ((b (generate-new-buffer " drgnx-ai-off")))
+    (unwind-protect
+        (drgnx-test-with-modules '(tools/ai) :strict t
+                                 (should (memq 'drgnx-ai-ghost--emulation emulation-mode-map-alists))
+                                 (with-current-buffer b
+                                   (emacs-lisp-mode)
+                                   (should drgnx-ai-ghost-mode)
+                                   (drgnx-ai-ghost--show "abc"))
+                                 (drgnx-module-teardown 'tools/ai)
+                                 (with-current-buffer b
+                                   (should-not drgnx-ai-ghost-mode)
+                                   (should-not (drgnx-ai-ghost-text)))
+                                 (should-not (memq 'drgnx-ai-ghost--emulation emulation-mode-map-alists)))
+      (kill-buffer b))))
 
 ;;; ai-ghost-test.el ends here

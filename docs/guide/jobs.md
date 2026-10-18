@@ -39,7 +39,9 @@ so, and fills in when the hub runs again; if the hub does not know the job (it w
 You do not have to watch it: while something of a job needs you, the mode line shows **⚑N** (the cards and messages
 waiting; a click opens the job with the newest; it disappears when the hub cannot be asked, rather than showing the
 last count), and each new card is a desktop notification (D-Bus on Linux; `osascript` on macOS; else a message
-in the echo area — `drgnx-job-ui-notify` nil turns them off). Neither ever asks you anything. What needs you is a **card** with its actions — the proposal (Approve, Reject), a permission (Allow, Reject),
+in the echo area — `drgnx-job-ui-notify` nil turns them off). Neither ever asks you anything. Turning `tools/jobs`
+off (Preferences: Modules) removes the badge; open job windows stay as they are but no longer follow the hub (the
+job goes on). What needs you is a **card** with its actions — the proposal (Approve, Reject), a permission (Allow, Reject),
 a merge conflict (let the agent resolve it, merge again after you resolved it, drop the task), a review that failed
 (merge as it is, back to an agent, drop), a stuck or failed agent (retry, drop), the budget (resume with more, stop);
 each acts once. Messages agents send you are listed with a Reply and a Dismiss.
