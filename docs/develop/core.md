@@ -186,6 +186,9 @@ header doc)` returns NAME:
   the pre-flight for a flow that ends in a write: it reads the file fresh and signals `drgnx-config-refused` when it
   has a mistake or is newer, so call it before the flow's first side effect (Import, Save Layout As…, a settings page
   that asks questions first) and a refusal changes nothing.
+- A project file is untrusted data: it is read, never evaluated. `search-project` (`.drgnx/search.eld`, in
+  `core/drgnx-search-chunk.el`) is the first: `drgnx-search-config` asks `drgnx-config-problem` and turns a mistake into
+  `(:error …)`, because a search must fail closed rather than fall back to the defaults the layer applies.
 - `:last-good` (t) applies the last good copy on a mistake. `:max-bytes` (1 MiB) caps reads and writes.
 - `:migrate` is `((FROM . FN)…)`; `:header` is the comment a new file starts with (default
   `;; drgnx: FILE (docs/reference/config.md)`); `:doc` is one line for the reference.

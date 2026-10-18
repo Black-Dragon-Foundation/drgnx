@@ -53,3 +53,15 @@ The projects drgnx knows: the work tracker and search scan their roots.
 | `:projects * :root` | home-path | yes | Its folder |
 | `:projects * :url` | string or null | no | Its remote's URL |
 
+## search.eld
+
+Folder: project. Format: 1. Read: when it changes. On a mistake: refused.
+
+Narrows what a project's semantic search indexes: only these globs, not these, or off.
+
+| Key | Type | Required | What |
+| --- | --- | --- | --- |
+| `:include` | list of string | no |  |
+| `:exclude` | list of string | no |  |
+| `:off` | boolean | no |  |
+
