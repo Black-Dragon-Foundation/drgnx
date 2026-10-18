@@ -565,8 +565,8 @@ hand it the keys this Emacs holds.  t, or an error saying why not."
         (or (drgnx-hub-running-p) (error "The drgnx hub did not start (see `drgnx hub status' and its job log)")))))
 
 (defun drgnx-hub-connect ()
-  "Subscribe to the hub's events (`drgnx-hub-event-functions').  Asynchronous; safe to call again, also before the
-hub has answered (one subscription)."
+  "Subscribe to the hub's events (`drgnx-hub-event-functions') and hand it the keys this Emacs holds
+\(`drgnx-hub--send-keys').  Asynchronous; safe to call again, also before the hub has answered (one subscription)."
   (unless (or (process-live-p drgnx-hub--events) (process-live-p drgnx-hub--subscribing))
     (let ((c (drgnx-hub--connect-socket
               (lambda (conn chunk)
@@ -584,7 +584,9 @@ hub has answered (one subscription)."
                                   (when (eq drgnx-hub--events p) (setq drgnx-hub--events nil))
                                   (when (eq drgnx-hub--subscribing p) (setq drgnx-hub--subscribing nil))
                                   (run-hooks 'drgnx-hub-disconnect-functions))))
-      (drgnx-hub--send c (list :id 0 :method "subscribe" :params (make-hash-table))))))
+      (drgnx-hub--send c (list :id 0 :method "subscribe" :params (make-hash-table)))
+      ;; a hub keeps keys in memory only: one that restarted has none, so each new subscription gives them again
+      (with-demoted-errors "drgnx hub: keys not handed over: %S" (drgnx-hub--send-keys)))))
 
 ;;;; CLI
 

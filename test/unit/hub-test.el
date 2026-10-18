@@ -247,6 +247,28 @@ to OR-LOG, OPENROUTER_API_KEY unset."
         (should (= (drgnx-hub-test--post (plist-get r :url) (plist-get r :token)) 200))
         (should (string-search "Bearer sk-fake-env" (with-temp-buffer (insert-file-contents or-log) (buffer-string))))))))
 
+(ert-deftest drgnx-hub/an-editor-gives-its-keys-again-to-a-restarted-hub ()
+  ;; a key this Emacs loaded (a .gpg file: in no environment) lives in the hub's memory only: a restarted hub has
+  ;; none until the editor connects again, which hands it over again
+  (drgnx-hub-test--with
+    (puthash 'openrouter "sk-fake-loaded" drgnx-ai--keys)
+    (should (= (drgnx-hub-test--start-elsewhere) 0))
+    (drgnx-hub-connect)
+    (should (drgnx-hub-test--wait (lambda () (process-live-p drgnx-hub--events))))
+    (let ((r (drgnx-hub-call-sync "gateway/register" '(:chain [["openrouter" nil]]))))
+      (should (= (drgnx-hub-test--post (plist-get r :url) (plist-get r :token)) 200))
+      (drgnx-hub-call-sync "shutdown" nil)
+      (should (drgnx-hub-test--wait (lambda () (not (process-live-p drgnx-hub--events))) 5))
+      (should (drgnx-hub-test--wait (lambda () (not (drgnx-hub-running-p))) 5))
+      (should (= (drgnx-hub-test--start-elsewhere) 0))
+      (should (= (drgnx-hub-test--post (plist-get r :url) (plist-get r :token)) 502))   ; the same token: no key yet
+      (drgnx-hub-connect)                                                               ; (the editor's idle timer)
+      (should (drgnx-hub-test--wait (lambda () (process-live-p drgnx-hub--events))))
+      (drgnx-hub-call-sync "ping" nil)
+      (should (= (drgnx-hub-test--post (plist-get r :url) (plist-get r :token)) 200))
+      (should (= (with-temp-buffer (insert-file-contents or-log) (how-many "Bearer sk-fake-loaded" (point-min) (point-max)))
+                 2)))))
+
 (defun drgnx-hub-test--sigpipe-ignored-p ()
   "Does this Emacs ignore SIGPIPE, as every hub does (Linux: SigIgn in /proc/self/status)?"
   (with-temp-buffer

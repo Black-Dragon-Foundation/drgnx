@@ -86,7 +86,7 @@ reason exits with status 1. A
 lock whose process is gone (or a zombie) is taken over. A hub removes its socket and lock when it stops, and only if
 the lock is still its own. Client side: `drgnx-hub-ensure` (start if needed; commands and the CLI only — it waits),
 `drgnx-hub-call` (asynchronous), `drgnx-hub-call-sync`, `drgnx-hub-connect` (one subscription, even when called
-again before the hub answers) + `drgnx-hub-event-functions`. The unit
+again before the hub answers; each new one hands over the keys this Emacs holds) + `drgnx-hub-event-functions`. The unit
 runner sets `DRGNX_NO_HUB_START=1`: a test never starts a hub that would outlive the suite unless it unsets it (the
 hub's own tests do, and stop what they start). It also sets `DRGNX_HUB_PARENT_PID` to its own pid, which a hub
 inherits: a hub whose parent is gone exits (checked each second), so an interrupted run leaves none behind.
@@ -101,8 +101,10 @@ keep working across a hub restart (when the port is taken meanwhile, a new one i
 session's token is unregistered when its agent exits or is killed. Keys sent in `keys` live in the hub's
 memory only (`drgnx-gateway-set-key`), never in a file. `drgnx-hub-ensure` (a command, the CLI's `drgnx hub start`)
 hands the hub the keys its Emacs already holds, asking no one (`drgnx-hub--held-keys`: a provider's environment
-variable, else a key loaded this session), with `gateway/keys` after the hub answers; the hub itself finds others only
-in quiet auth-source files.
+variable, else a key loaded this session), with `gateway/keys` after the hub answers, and `drgnx-hub-connect` does so again with each new subscription: a
+restarted hub has no key a command gave its predecessor (a `.gpg` one) until an editor connects again — the Agents
+module's idle timer looks every 30 s — and its requests until then fail over or answer "no key". The hub itself finds
+others only in quiet auth-source files.
 
 ## Forwarding
 
