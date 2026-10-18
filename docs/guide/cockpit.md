@@ -108,21 +108,22 @@ press `RET`) and that agent's file changes since it started open in the editor a
 
 The keys are the same in the VS Code, Emacs and Vim profiles: the buffer starts in Emacs state under evil.
 
-**Read-only.** diff-mode's commands that would write a file or this buffer are refused here, from keys and menus
-alike: applying a hunk or the whole diff (`C-c C-a`, `C-c RET a`), reversing, killing or splitting hunks, ediff,
-converting the format, fixing whitespace, change-log entries, narrowing and undo. They say that `r` and `c` are the
-way to act on an agent's change.
+**Read-only.** The pane keeps only diff-mode's motions and visits (`TAB`, `S-TAB`, `{`, `}`, `RET`, `o`): it has no
+Diff menu and none of diff-mode's `C-c` keys. diff-mode's commands that would write a file or this buffer are refused
+in it however they are called, from `M-x` too: applying a hunk or the whole diff, reversing, killing or splitting
+hunks, ediff, converting the format, fixing whitespace, change-log entries, narrowing and undo. They say that `r` and
+`c` are the way to act on an agent's change.
 
 **When `r` puts a file back itself.** Only when all of these hold. Anything else is a request to the agent.
-- The folder is a worktree that is the agent's alone and that drgnx can name:
-  - a job's task worktree, the `.claude/worktrees/JOB-N/` that drgnx made for that task;
-  - or the worktree an outside agent registered (not just the folder it runs in), when no other agent works there.
+- The agent is a job's, and the folder is its task's worktree: the `.claude/worktrees/JOB-N/` that drgnx made for
+  that task. git must say that the folder is a worktree's top and that it is on the job's branch (`job/JOB…`), and no
+  other session or registered agent may work in it.
 
-  A chat session's folder, a silent worktree and the main checkout are never touched, even in a linked worktree
-  where you may be working.
-- The agent is known to have stopped. For a job's agent, its session (here or the hub's) has exited **and** its task
-  is no longer claimed, running or waiting for input. For an outside agent, it reported that it stopped. Not being
-  among the sessions proves nothing.
+  Everything else is only ever a request: an outside agent (the worktree it registered may be your own, and its
+  reports cannot prove it stopped), a chat session's folder, a silent worktree and the main checkout. That holds even
+  in a linked worktree where you may be working.
+- The agent is known to have stopped: its session (here or the hub's) has exited **and** its task is no longer
+  claimed, running or waiting for input. Not being among the sessions proves nothing.
 - git can name the base. The base is resolved to a commit first, and the file is looked up in it. If git fails,
   nothing is changed: a failure is never taken to mean that the file is new.
 
@@ -152,8 +153,9 @@ Each accept, revert and comment is also an event (`accept`, `revert`, `comment`)
   the agent writes. Only their sections of the buffer are replaced.
 - Your point and the window's scroll stay on the same file and line. No window moves.
 - A file the pane does not list yet makes it list the changes again, at most every 2 s. While the pane shows, it
-  also lists them every `drgnx-cockpit-edits-check-interval`, so a first write in a folder nobody watches yet shows
-  without `g`.
+  also lists them on its own, so a first write in a folder nobody watches yet shows without `g`. That happens every
+  `drgnx-cockpit-edits-check-interval`, and the gap doubles, up to 10 s, while these listings find nothing new. Any
+  change heard of brings it back.
 - A hidden pane only notes what changed. It catches up when it shows.
 - Remote (TRAMP) folders are never touched: such an agent's pane says so, with no git and no watch.
 

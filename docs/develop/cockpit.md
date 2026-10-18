@@ -80,8 +80,7 @@ matches a node whose title or path contains it, or one of its ancestors' (case i
 
 A job agent's task comes from its session's `:task`, else the task it holds and works on. Its source also has `:job`,
 `:task` (the jtask id) and `:job-worktree t` when `:dir` is the `.claude/worktrees/JOB-N/` that drgnx makes for that
-task (from the job's repository and a jtask row), not a session's cwd. An outside agent's has `:registered-worktree t`
-when its registry row names a worktree, not only a cwd. `:stopped` is a hint for display (an agent missing from
+task (from the job's repository and a jtask row), not a session's cwd. `:stopped` is a hint for display (an agent missing from
 SESSIONS counts as stopped); anything that acts on it needs positive evidence (see the edits' direct revert).
 
 **Two exact bases are still to come.** A job agent's registry `base` should be the task's HEAD at its start, and a
@@ -242,14 +241,24 @@ model's agent plist, so a silent worktree keeps its folder and base. The user's 
   - `diff-refine` and `diff-font-lock-syntax` are off, because each would read files or run diff during redisplay.
 - **No undo** (`buffer-disable-undo`), no dir-local variables, and `default-directory` is the agent's folder when it
   is local, so `RET` opens the file.
-- **Nothing writes from here.** The mode map remaps diff-mode's commands that write a file or the buffer to
-  `drgnx-cockpit-edits-read-only` (a `user-error` naming `r` and `c`). Remapping covers keys and menus alike:
-  - apply a hunk or the buffer, `diff-revert-and-kill-hunk` (Emacs 31), ediff, delete trailing whitespace, change-log
-    entries, wiggle;
-  - reverse, kill a hunk or a file, kill applied hunks or junk, split, convert the format, ignore whitespace, refresh,
-    fix up, narrow, and `undo`/`diff-undo`.
+- **Nothing writes from here.**
+  - **The mode map does not inherit `diff-mode-map`.** Its parent (`drgnx-cockpit-edits--kept-map`) holds only
+    diff-mode's own keys for its motions and visits (`drgnx-cockpit-edits--kept`), over `special-mode-map`. So the
+    Diff menu and diff-mode's `C-c` keys are not there. `define-derived-mode` keeps a parent that is already set.
+  - **The refused commands** (`drgnx-cockpit-edits--refused`, 20 of them) are:
+    - those that write a file: apply a hunk or the buffer, `diff-revert-and-kill-hunk` (Emacs 31), ediff, delete
+      trailing whitespace, change-log entries, wiggle;
+    - those that edit the buffer: reverse, kill a hunk or a file, kill applied hunks or junk, split, convert the
+      format, ignore whitespace, refresh, fix up, narrow, `diff-undo`.
 
-  A test walks diff-mode's key maps: every `diff-` command they reach is either a motion, visit or view, or refused.
+    Each gets the module's named `:before` advice `drgnx-cockpit-edits--refuse` (installed by `--setup`, idempotent;
+    `drgnx-cockpit-edits--teardown` removes it). In the pane it signals the `user-error`, also from `M-x` and before
+    the command's interactive spec reads a region or prefix: its own interactive spec is a function of the
+    original's. They are also remapped in the mode map, as is `undo`.
+  - **diff-mode's local `read-only-mode-hook` is killed,** so `C-x C-q` twice cannot turn `diff-mode-read-only` (and
+    its key map) back on.
+
+  A test walks the pane's maps, `menu-item`s included: no Diff menu, and no `diff-` command but the kept ones.
 - **The header line** is text cached at each patch: the agent, counts, base, "stopped" (positive evidence only) and
   the keys (`a accept · r revert · c comment · n/p files`).
 
@@ -265,8 +274,10 @@ The pane never polls a file. Three things name the files that changed:
    pane shows. It compares `data_version` and `total_changes`, one query. When they moved, it reads the agent's `edit`
    events after the last id it saw. Their paths, cut to the folder with no remote name expanded, mark files dirty. Review
    marks set elsewhere redraw their headers.
-3. **A periodic listing.** The same check marks a listing due each time, so a first write in a folder nobody
-   watches yet (and no event names) shows. The listing is still rate-limited to one per 2 s.
+3. **A periodic listing.** The same check marks a listing due when `drgnx-cockpit-edits--quiet-next` has come, so
+   a first write in a folder nobody watches yet (and no event names) shows. A listing that finds nothing new
+   (nothing to diff, nothing gone) doubles the gap (`drgnx-cockpit-edits--quiet-gap`, from the check interval up to
+   10 s). Any change heard of (`--touched`) resets it.
 4. **g** marks every file dirty and asks for a listing.
 
 A file the pane does not list makes it list again (`drgnx-cockpit-changed-files`, with a fresh
@@ -311,15 +322,16 @@ holds that.
     when the agent is free; an outside agent reads it with `read_inbox`. A held message is said, and no event is
     written.
 - **Direct revert** (`drgnx-cockpit-edits--direct-p`) needs all of these; anything else is a request:
-  - the source's kind allows it: `job` with `:job-worktree` (the task worktree drgnx made, with its jtask row), or
-    `outside` with `:registered-worktree` and `:own-worktree`. Never `native` or `silent`: the user may work in a
-    chat session's linked worktree;
+  - the source is a job's with `:job-worktree` (the task worktree drgnx made, with its jtask row). Never `outside`
+    (`hello` registers its cwd's toplevel as its worktree, which may be the user's, and its stop events can be forged),
+    `native` or `silent` (the user may work there);
+  - git says the folder is a worktree's top (`rev-parse --show-toplevel`) on the job's branch (`job/JOB`, `job/JOB-…`);
+  - no other live session or registered agent has its cwd or worktree in it (`drgnx-cockpit-edits--alone-p`);
   - its folder is local and a linked worktree (its top has a `.git` file, so it is never the main checkout);
   - the file passes `drgnx-cockpit--file-ok`;
   - positive evidence that the agent stopped (`drgnx-cockpit-edits--stopped-p`):
-    - a job's agent: its session here (or the hub's mirror) has status `exited` or `failed`, **and** its jtask is not
-      `claimed`, `running` or `needs-input`;
-    - an outside agent: its last start/stop event is a stop.
+    - its session here (or the hub's mirror) has status `exited` or `failed`, **and** its jtask is not `claimed`,
+      `running` or `needs-input`.
 
     Absence from the sessions never counts.
 
@@ -358,14 +370,18 @@ nothing reads, and no process sentinel runs while it waits. It covers:
 - accept, and a change shown as `changed since accepted` (the mark keeps its hash);
 - accept never merging or committing;
 - revert: queued while the agent runs, queued for a session set to interrupt, queued for a stopped agent in the main
-  checkout; done in an outside agent's registered worktree after the exact question when it said it stopped; nothing
-  done when you say no;
+  checkout, queued for an outside agent that said it stopped in its registered worktree; nothing done when you say
+  no (in a job's worktree);
 - a native session stopped in a linked worktree: queued, never asked;
 - a job's task worktree: queued while no session proves the agent stopped, or while its task still runs; put back,
-  after the exact questions, once its mirror exited and its task is done;
+  after the exact questions, once its mirror exited and its task is done; queued while another agent registered
+  its cwd there, on another branch than the job's, or when the folder is no worktree's top;
 - a git failure (no such base): an error before any question, nothing deleted;
-- a silent worktree: no message (said); a first write in a new folder shows without `g`; the header's key hint;
-- diff-mode's writing commands refused (every `diff-` command its maps reach checked; `C-c C-a`, `C-c RET a` signal);
+- a silent worktree: no message (said); a first write in a new folder shows without `g`; quiet listings space out
+  4, 8, 10 s and a change resets them; the header's key hint;
+- diff-mode never writes: no Diff menu, the pane's maps (menu items too) reach only kept commands, the advice (idempotent,
+  removed by teardown) refuses `diff-reverse-direction`, `diff-apply-buffer`, `diff-apply-hunk`, `diff-hunk-kill`
+  called interactively with a prefix (the file unchanged), and `C-x C-q` twice keeps diff-mode's read-only map off;
 - comments queued, the line a diff line stands for, the hub routes (an exited mirror gets a message in the store);
 - the graph opening an agent's edits from a task or an agent;
 - the keys in every profile.

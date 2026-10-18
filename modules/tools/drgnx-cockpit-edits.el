@@ -118,6 +118,11 @@ reported); a file already listed is diffed again at once.")
 (defvar-local drgnx-cockpit-edits--watches nil "Hash folder → its file watch.")
 (defvar-local drgnx-cockpit-edits--store-key nil "The store's data version and change count at the last look.")
 (defvar-local drgnx-cockpit-edits--event-id 0 "The last event the pane read: edits reported after it are new.")
+(defvar-local drgnx-cockpit-edits--quiet-gap nil
+  "Seconds between the check's own listings: nil (`drgnx-cockpit-edits-check-interval') until one finds nothing new,
+then twice the last, up to `drgnx-cockpit-edits--quiet-max'.  Any change heard of resets it.")
+(defvar-local drgnx-cockpit-edits--quiet-next 0 "When the check lists again on its own (`float-time').")
+(defconst drgnx-cockpit-edits--quiet-max 10 "The longest gap, in seconds, between the check's own listings.")
 
 ;;;; Glyphs and text
 
@@ -333,6 +338,8 @@ tick set later (a listing waiting for its turn) is brought forward."
   "FILE (relative to the agent's folder) changed: diff it again soon, or list the files again when it is not listed."
   (if (gethash file drgnx-cockpit-edits--info) (puthash file t drgnx-cockpit-edits--dirty)
     (setq drgnx-cockpit-edits--list-dirty t))
+  (setq drgnx-cockpit-edits--quiet-gap nil      ; the agent is at work: the check lists at its own pace again
+        drgnx-cockpit-edits--quiet-next (min drgnx-cockpit-edits--quiet-next (+ (float-time) drgnx-cockpit-edits-check-interval)))
   (drgnx-cockpit-edits--schedule))
 
 (defun drgnx-cockpit-edits--relative (name)
@@ -407,11 +414,13 @@ to diff again; review marks set elsewhere redraw their headers."
     (drgnx-cockpit-edits--in buffer #'drgnx-cockpit-edits--look-and-list)))
 
 (defun drgnx-cockpit-edits--look-and-list ()
-  "The check's work: look at the store, and have the changes listed again (at most every
-`drgnx-cockpit-edits--list-every'), so a first write in a folder nobody watches yet shows without g."
+  "The check's work: look at the store, and list the changes again when it is time
+(`drgnx-cockpit-edits--quiet-next'), so a first write in a folder nobody watches yet shows without g.  Listings that
+find nothing new space themselves out, up to `drgnx-cockpit-edits--quiet-max' seconds apart."
   (drgnx-cockpit-edits--look)
-  (setq drgnx-cockpit-edits--list-dirty t)
-  (drgnx-cockpit-edits--schedule))
+  (when (>= (float-time) drgnx-cockpit-edits--quiet-next)
+    (setq drgnx-cockpit-edits--list-dirty t)
+    (drgnx-cockpit-edits--schedule)))
 
 (defun drgnx-cockpit-edits--tick (buffer)
   "The scheduled patch (a timer): list again when due, and diff the files that changed.  A hidden pane only notes it
@@ -476,6 +485,12 @@ then diff the new ones, FILES and those whose counts moved."
                                             :hash (plist-get info :hash) :note (plist-get info :note))
                                (list :added (plist-get e :added) :removed (plist-get e :removed))))
                    drgnx-cockpit-edits--info)))
+      ;; nothing new (no file to diff, none gone): the check's next listing waits twice as long
+      (let ((base drgnx-cockpit-edits-check-interval))
+        (setq drgnx-cockpit-edits--quiet-gap
+              (if (or todo (/= (length names) (length drgnx-cockpit-edits--files))) nil
+                (min (max base drgnx-cockpit-edits--quiet-max) (* 2 (or drgnx-cockpit-edits--quiet-gap base))))
+              drgnx-cockpit-edits--quiet-next (+ (float-time) (or drgnx-cockpit-edits--quiet-gap base))))
       (drgnx-cockpit-edits--show-list names)
       (drgnx-cockpit-edits--diff (nreverse todo)))))
 
@@ -616,11 +631,47 @@ or edited (r asks the agent to undo a file)."
   (interactive)
   (user-error "An agent's edits are read-only here: r asks the agent to undo a file, c comments on a line"))
 
+(defconst drgnx-cockpit-edits--refused
+  '(diff-apply-hunk diff-apply-buffer diff-revert-and-kill-hunk diff-ediff-patch diff-delete-trailing-whitespace
+                    diff-add-change-log-entries-other-window diff-wiggle diff-reverse-direction diff-hunk-kill diff-file-kill
+                    diff-kill-applied-hunks diff-kill-junk diff-split-hunk diff-context->unified diff-unified->context
+                    diff-ignore-whitespace-hunk diff-refresh-hunk diff-fixup-modifs diff-restrict-view diff-undo)
+  "diff-mode's commands that write a file (apply, revert, ediff, fix whitespace, change logs) or edit the diff buffer
+(reverse, kill, split, convert, refresh, fix up, narrow, undo): refused in an agent's edits, however they are called.")
+
+(defconst drgnx-cockpit-edits--kept '(diff-hunk-next diff-hunk-prev diff-file-next diff-file-prev diff-goto-source)
+  "diff-mode's commands an agent's edits keep with diff-mode's own keys: motions and visits.")
+
+(defun drgnx-cockpit-edits--refuse (&rest _)
+  "Advice before each of `drgnx-cockpit-edits--refused': in an agent's edits, refuse (M-x, a menu of another buffer's,
+any caller) — called interactively, before the command's own interactive spec reads anything (a region, a prefix)."
+  (interactive (lambda (spec) (drgnx-cockpit-edits--refuse) (advice-eval-interactive-spec spec)))
+  (when (derived-mode-p 'drgnx-cockpit-edits-mode) (drgnx-cockpit-edits-read-only)))
+
+(defun drgnx-cockpit-edits--guard ()
+  "Put `drgnx-cockpit-edits--refuse' before each refused diff-mode command (idempotent; module setup)."
+  (dolist (f drgnx-cockpit-edits--refused) (advice-add f :before #'drgnx-cockpit-edits--refuse)))
+
+(defun drgnx-cockpit-edits--teardown ()
+  "Take the module's advice off diff-mode's commands again (for the module's teardown)."
+  (dolist (f drgnx-cockpit-edits--refused) (advice-remove f #'drgnx-cockpit-edits--refuse)))
+
+(defun drgnx-cockpit-edits--kept-map ()
+  "A keymap of diff-mode's own keys for `drgnx-cockpit-edits--kept' only (no Diff menu, nothing that writes), over
+`special-mode-map'."
+  (let ((m (make-sparse-keymap)) (entries nil))
+    (map-keymap (lambda (ev b) (when (and (symbolp b) (memq b drgnx-cockpit-edits--kept) (not (assq ev entries)))
+                                 (push (cons ev b) entries)))
+                diff-mode-shared-map)
+    (setcdr m (nreverse entries))
+    (set-keymap-parent m special-mode-map)
+    m))
+
 (defvar drgnx-cockpit-edits-mode-map
   (let ((m (make-sparse-keymap)))
-    (set-keymap-parent m (make-composed-keymap (list diff-mode-shared-map) diff-mode-map))
-    ;; diff-mode's commands that write a file (apply, revert, ediff, fix whitespace, change logs) or edit this buffer
-    ;; (kill, split, reverse, convert, refresh, undo, narrow): refused, by remapping, so menus are covered too
+    ;; not diff-mode's map (its Diff menu and C-c keys apply, kill and reverse): its motions and visits only
+    (set-keymap-parent m (drgnx-cockpit-edits--kept-map))
+    ;; the refused commands, should a key still reach them (the advice refuses every other way in)
     (define-key m [remap diff-apply-hunk] #'drgnx-cockpit-edits-read-only)
     (define-key m [remap diff-apply-buffer] #'drgnx-cockpit-edits-read-only)
     (define-key m [remap diff-revert-and-kill-hunk] #'drgnx-cockpit-edits-read-only)
@@ -643,8 +694,8 @@ or edited (r asks the agent to undo a file)."
     (define-key m [remap diff-undo] #'drgnx-cockpit-edits-read-only)
     (define-key m [remap undo] #'drgnx-cockpit-edits-read-only)
     m)
-  "An agent's edits' keys (from the key profiles: a, r, c, n, p); diff-mode's own keys below them, except those that
-would write a file or this buffer (`drgnx-cockpit-edits-read-only').")
+  "An agent's edits' keys (from the key profiles: a, r, c, n, p); below them diff-mode's motions and visits
+(`drgnx-cockpit-edits--kept') and `special-mode-map' — never diff-mode's map or menu.")
 
 (define-derived-mode drgnx-cockpit-edits-mode diff-mode "Agent Edits"
   "An agent's edits as a live diff: a header line per file, its diff below (docs/guide/cockpit.md)."
@@ -652,6 +703,7 @@ would write a file or this buffer (`drgnx-cockpit-edits-read-only').")
   (buffer-disable-undo)
   ;; diff-mode's read-only keys would cover ours: they sit under our map instead
   (when (boundp 'diff-mode-read-only) (setq-local diff-mode-read-only nil))
+  (kill-local-variable 'read-only-mode-hook)    ; diff-mode's: C-x C-q twice would bring its read-only map back
   ;; patches are not hand edits: no hunk-header fixing after them
   (when (bound-and-true-p diff--track-changes)
     (ignore-errors (track-changes-unregister diff--track-changes))
@@ -849,33 +901,60 @@ matches the diff's, which is what the merge gate compares."
           'message))))))
 
 (defun drgnx-cockpit-edits--stopped-p (src)
-  "Whether SRC's agent is known to have stopped — positive evidence only; not being among the sessions never counts:
-- a job's agent: its session here (or the hub's mirror) has exited or failed, and its job task is no longer claimed,
-  running or waiting for input;
-- an outside agent: the last of its start and stop events is a stop (it said so).
-Any other agent: nil."
-  (pcase (plist-get src :kind)
-    ('job (let ((s (drgnx-cockpit-edits--session drgnx-cockpit-edits--id))
-                (status (and (plist-get src :task)
-                             (caar (sqlite-select (drgnx-work-db) "select status from jtask where id = ?" (list (plist-get src :task)))))))
-            (and s (memq (drgnx-agent-session-status s) '(exited failed))
-                 (stringp status) (not (member status '("claimed" "running" "needs-input")))
-                 t)))
-    ('outside (and (plist-get src :stopped) t))))
+  "Whether SRC's agent is known to have stopped — positive evidence only; not being among the sessions never counts.
+Only a job's agent can be: its session here (or the hub's mirror) has exited or failed, and its job task is no longer
+claimed, running or waiting for input.  Any other agent (an outside one's stop event can be forged): nil."
+  (when (eq (plist-get src :kind) 'job)
+    (let ((s (drgnx-cockpit-edits--session drgnx-cockpit-edits--id))
+          (status (and (plist-get src :task)
+                       (caar (sqlite-select (drgnx-work-db) "select status from jtask where id = ?" (list (plist-get src :task)))))))
+      (and s (memq (drgnx-agent-session-status s) '(exited failed))
+           (stringp status) (not (member status '("claimed" "running" "needs-input")))
+           t))))
+
+(defun drgnx-cockpit-edits--inside-p (dir name)
+  "Whether NAME (a folder, local) is DIR or inside it; a remote NAME is not (it is never expanded)."
+  (and (stringp name) (not (drgnx-cockpit--remote-p name))
+       (string-prefix-p dir (file-name-as-directory (expand-file-name name)))))
+
+(defun drgnx-cockpit-edits--alone-p (src)
+  "Whether no other agent works in SRC's folder: no other live session (here or the hub's) and no other registered
+agent has its cwd or worktree in it."
+  (let ((dir (plist-get src :dir)) (id drgnx-cockpit-edits--id))
+    (not (or (seq-some (lambda (s) (and (not (equal (plist-get s :id) id)) (drgnx-cockpit-edits--inside-p dir (plist-get s :cwd))))
+                       (drgnx-cockpit-edits--sessions))
+             (seq-some (lambda (r) (and (not (equal (plist-get r :id) id))
+                                        (or (drgnx-cockpit-edits--inside-p dir (plist-get r :cwd))
+                                            (drgnx-cockpit-edits--inside-p dir (plist-get r :worktree)))))
+                       (drgnx-coord-agents))))))
+
+(defun drgnx-cockpit-edits--job-worktree-p (src)
+  "Whether git says SRC's folder is the top of a worktree on its job's branch (`job/JOB' or `job/JOB-…'); a git
+failure is a no."
+  (let ((dir (plist-get src :dir)) (job (plist-get src :job)))
+    (ignore-errors
+      (and (stringp job)
+           (equal (file-name-as-directory (file-truename (drgnx-cockpit-edits--git dir "rev-parse" "--show-toplevel")))
+                  (file-name-as-directory (file-truename dir)))
+           (let ((branch (drgnx-cockpit-edits--git dir "rev-parse" "--abbrev-ref" "HEAD")))
+             (or (equal branch (concat "job/" job)) (string-prefix-p (concat "job/" job "-") branch)
+                 (string-prefix-p (concat "job/" job "/") branch)))))))
 
 (defun drgnx-cockpit-edits--direct-p (src file)
-  "Whether r may put FILE back itself: SRC's agent is known to be stopped (`drgnx-cockpit-edits--stopped-p'), and its
-folder is a worktree that is its alone — a job's task worktree drgnx made (`.claude/worktrees/JOB-N/', with its jtask
-row), or the worktree an outside agent registered (not only a cwd) that no other agent works in — local, a linked
-worktree (never a main checkout), and FILE a regular file inside it (or gone: a deleted file).  A native session or a
-silent worktree: never (the user may work there)."
+  "Whether r may put FILE back itself.  Only for a job's agent, and only when all hold:
+- SRC's folder is the task worktree drgnx made (`.claude/worktrees/JOB-N/' with its jtask row: :job-worktree), local,
+  a linked worktree (never a main checkout), and git says it is a worktree's top on the job's branch;
+- no other agent works in it (`drgnx-cockpit-edits--alone-p');
+- FILE is a regular file inside it (or gone: a deleted file);
+- the agent is known to be stopped (`drgnx-cockpit-edits--stopped-p').
+An outside agent (its worktree may be the user's own), a native session or a silent worktree: never."
   (let ((dir (plist-get src :dir)))
-    (and (pcase (plist-get src :kind)
-           ('job (plist-get src :job-worktree))
-           ('outside (and (plist-get src :registered-worktree) (plist-get src :own-worktree))))
+    (and (eq (plist-get src :kind) 'job) (plist-get src :job-worktree)
          (stringp dir) (not (drgnx-cockpit--remote-p dir)) (drgnx-cockpit--linked-worktree-p dir)
          (drgnx-cockpit--file-ok dir file)
-         (drgnx-cockpit-edits--stopped-p src))))
+         (drgnx-cockpit-edits--alone-p src)
+         (drgnx-cockpit-edits--stopped-p src)
+         (drgnx-cockpit-edits--job-worktree-p src))))
 
 (defun drgnx-cockpit-edits--git (dir &rest args)
   "Run git ARGS in local DIR and wait (a command's own step): its output, trimmed; an error when git fails."
@@ -946,7 +1025,9 @@ agent, never an interruption."
 ;;;; The module's part
 
 (defun drgnx-cockpit-edits--setup ()
-  "tools/cockpit's part for agents' edits: their commands (the pane kind is `agent-edits')."
+  "tools/cockpit's part for agents' edits: their commands (the pane kind is `agent-edits') and the advice that refuses
+diff-mode's writing commands in them (`drgnx-cockpit-edits--teardown' takes it off)."
+  (drgnx-cockpit-edits--guard)
   (pcase-dolist (`(,id ,title ,fn ,doc)
                  '((cockpit-accept-file "Accept File" drgnx-cockpit-edits-accept-file
                                         "Mark the agent's change to this file accepted (a review mark; never a merge)")

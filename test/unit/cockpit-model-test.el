@@ -229,7 +229,6 @@
       (should (equal (plist-get src :base) sha))
       (should (equal (plist-get src :paths) '("README" "new.txt")))
       (should (eq (plist-get src :kind) 'outside))
-      (should (plist-get src :registered-worktree))
       (should (plist-get src :own-worktree))
       (should-not (plist-get src :stopped)))
     (drgnx-coord-event-add :agent "ext:claude-code:42" :kind "stop" :summary "ended")

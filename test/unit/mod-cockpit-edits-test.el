@@ -193,71 +193,6 @@ The pane is killed after, and must leave no timer or watch behind."
       (should (equal status (drgnx-cockpit-fixture-git wt-a "status" "--porcelain")))
       (should (equal (drgnx-cockpit-fixture-git wt-a "show" ":README") "readme")))))
 
-(ert-deftest drgnx-cockpit-edits/revert-queues-unless-stopped-in-its-own-worktree ()
-  (drgnx-cockpit-edits-test--with drgnx-cockpit-edits-test--ext
-    (let ((ext drgnx-cockpit-edits-test--ext) (main-status (drgnx-cockpit-fixture-git repo "status" "--porcelain"))
-          (inbox (lambda (id) (mapcar (lambda (m) (plist-get m :text)) (drgnx-coord-inbox id)))))
-      (cl-letf (((symbol-function 'yes-or-no-p) (lambda (&rest _) (ert-fail "Asked")))
-                ((symbol-function 'drgnx-agents-stop) (lambda (&rest _) (ert-fail "Stopped an agent"))))
-        ;; running: a queued request, the file untouched
-        (drgnx-cockpit-edits-test--goto "README" "+more")
-        (call-interactively #'drgnx-cockpit-edits-revert-file)
-        (should (equal (funcall inbox ext) '("[revert] please undo your changes to README")))
-        (should (equal (with-temp-buffer (insert-file-contents (concat wt-a "README")) (buffer-string)) "readme\nmore\n"))
-        (should (plist-get (plist-get (car (last (drgnx-coord-events :agent ext :kinds '("revert")))) :data) :requested))
-        (should (= 1 notified)))
-      ;; a session in this Emacs set to interrupt: queued all the same — never a cancel
-      (let* ((s (drgnx-agents--make :id "s-2" :name "chat" :cwd repo :status 'busy :mode 'interrupt))
-             (sent nil))
-        (cl-letf (((symbol-function 'drgnx-agents-sessions) (lambda () (list s)))
-                  ((symbol-function 'drgnx-agents-send) (lambda (s text) (push (list text (drgnx-agent-session-mode s)) sent)))
-                  ((symbol-function 'drgnx-agents-stop) (lambda (&rest _) (ert-fail "Stopped an agent")))
-                  ((symbol-function 'yes-or-no-p) (lambda (&rest _) (ert-fail "Asked"))))
-          (with-current-buffer (drgnx-cockpit-edits-buffer "s-2")
-            (unwind-protect
-                ;; s-2 works in the main checkout: never reverted there, stopped or not
-                (dolist (live (list sessions (list (car sessions))))
-                  (cl-letf (((symbol-function 'drgnx-cockpit-sessions) (lambda () live)))
-                    (drgnx-cockpit-edits-revert-file "README")))
-              (kill-buffer)))
-          (should (equal sent '(("[revert] please undo your changes to README" queue)
-                                ("[revert] please undo your changes to README" queue))))
-          (should (eq (drgnx-agent-session-mode s) 'interrupt))))
-      ;; stopped in its own worktree: reverted there, after asking
-      (drgnx-coord-event-add :agent ext :kind "stop" :summary "stopped")
-      (let ((asked nil))
-        (cl-letf (((symbol-function 'yes-or-no-p) (lambda (prompt) (push prompt asked) t)))
-          (drgnx-cockpit-edits-test--goto "README" "+more")
-          (call-interactively #'drgnx-cockpit-edits-revert-file)
-          (drgnx-cockpit-edits-test--goto "new.txt")
-          (call-interactively #'drgnx-cockpit-edits-revert-file))
-        (let ((wt (abbreviate-file-name (directory-file-name wt-a))))
-          (should (equal (reverse asked)
-                         (list (format "Put README back as %s has it, in %s, discarding the agent's changes? " (substring sha 0 8) wt)
-                               (format "Delete new file new.txt in %s (the agent's own worktree)? " wt))))))
-      (should (equal (with-temp-buffer (insert-file-contents (concat wt-a "README")) (buffer-string)) "readme\n"))
-      (should-not (file-exists-p (concat wt-a "new.txt")))
-      (should (= 1 (length (funcall inbox ext))))                       ; nothing more queued
-      (should (seq-every-p (lambda (ev) (plist-get (plist-get ev :data) :direct))
-                           (cdr (drgnx-coord-events :agent ext :kinds '("revert")))))
-      (should (equal main-status (drgnx-cockpit-fixture-git repo "status" "--porcelain")))   ; main's checkout untouched
-      ;; the pane follows: nothing left to show
-      (drgnx-cockpit-edits-test--settle e)
-      (should (null drgnx-cockpit-edits--files))
-      (should (string-match-p "No changes" (buffer-string))))))
-
-(ert-deftest drgnx-cockpit-edits/revert-direct-asks-first ()
-  (drgnx-cockpit-edits-test--with drgnx-cockpit-edits-test--ext
-    (let ((ext drgnx-cockpit-edits-test--ext) (asked nil))
-      (drgnx-coord-event-add :agent ext :kind "stop" :summary "stopped")
-      (cl-letf (((symbol-function 'yes-or-no-p) (lambda (prompt) (push prompt asked) nil)))
-        (drgnx-cockpit-edits-test--goto "README")
-        (call-interactively #'drgnx-cockpit-edits-revert-file))
-      (should (string-match-p "README" (car asked)))
-      (should (equal (with-temp-buffer (insert-file-contents (concat wt-a "README")) (buffer-string)) "readme\nmore\n"))
-      (should-not (drgnx-coord-inbox ext))                               ; no request queued instead
-      (should-not (drgnx-coord-events :agent ext :kinds '("revert"))))))
-
 (ert-deftest drgnx-cockpit-edits/comment-queues-a-message ()
   (drgnx-cockpit-edits-test--with drgnx-cockpit-edits-test--ext
     (let ((ext drgnx-cockpit-edits-test--ext))
@@ -311,7 +246,8 @@ The pane is killed after, and must leave no timer or watch behind."
 (ert-deftest drgnx-cockpit-edits/keys-in-every-profile ()
   (let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil) (kinds nil))
     (cl-letf (((symbol-function 'drgnx-pane-define-kind) (lambda (kind &rest props) (push (cons kind props) kinds))))
-      (funcall (plist-get (alist-get 'tools/cockpit drgnx-modules--table) :setup)))
+      (unwind-protect (funcall (plist-get (alist-get 'tools/cockpit drgnx-modules--table) :setup))
+        (drgnx-cockpit-edits--teardown)))
     (should (eq (plist-get (alist-get 'agent-edits kinds) :home) 'editor))
     (pcase-dolist (`(,id ,fn) '((cockpit-accept-file drgnx-cockpit-edits-accept-file)
                                 (cockpit-revert-file drgnx-cockpit-edits-revert-file)
@@ -330,30 +266,6 @@ The pane is killed after, and must leave no timer or watch behind."
                      (cockpit-edits-next-file "n") (cockpit-edits-previous-file "p")))
         (should (equal (assq (car row) bind) row))))))
 
-(ert-deftest drgnx-cockpit-edits/diff-mode-never-writes-from-here ()
-  (let ((refused '(diff-apply-hunk diff-apply-buffer diff-revert-and-kill-hunk diff-ediff-patch diff-delete-trailing-whitespace
-                                   diff-add-change-log-entries-other-window diff-wiggle diff-reverse-direction diff-hunk-kill
-                                   diff-file-kill diff-kill-applied-hunks diff-kill-junk diff-split-hunk diff-context->unified
-                                   diff-unified->context diff-ignore-whitespace-hunk diff-refresh-hunk diff-fixup-modifs
-                                   diff-restrict-view diff-undo undo))
-        (safe '(diff-hunk-next diff-hunk-prev diff-file-next diff-file-prev diff-goto-source diff-test-hunk diff-refine-hunk))
-        (bound nil))
-    (dolist (c refused)
-      (should (eq (lookup-key drgnx-cockpit-edits-mode-map (vector 'remap c)) #'drgnx-cockpit-edits-read-only)))
-    ;; every diff-mode command its keys reach is a motion, a visit or a view, or it is refused
-    (cl-labels ((walk (map) (map-keymap (lambda (_ b) (cond ((keymapp b) (walk b))
-                                                            ((and (symbolp b) (string-prefix-p "diff-" (symbol-name b))) (push b bound))))
-                                        map)))
-      (walk diff-mode-map) (walk diff-mode-shared-map))
-    (should bound)
-    (dolist (c (delete-dups bound)) (should (or (memq c safe) (memq c refused))))
-    ;; the keys say no (C-c C-a applies a hunk, C-c RET a the whole diff)
-    (with-temp-buffer
-      (drgnx-cockpit-edits-mode)
-      (dolist (k '("C-c C-a" "C-c RET a" "C-c C-r" "k" "C-c C-s"))
-        (should (eq (key-binding (kbd k)) #'drgnx-cockpit-edits-read-only))
-        (should-error (call-interactively (key-binding (kbd k))) :type 'user-error)))))
-
 (ert-deftest drgnx-cockpit-edits/a-native-session-is-never-reverted-here ()
   ;; a chat session stopped in a linked worktree (the user may work there): a request, never a question
   (drgnx-cockpit-fixture-with
@@ -371,58 +283,183 @@ The pane is killed after, and must leave no timer or watch behind."
       (should (equal (mapcar (lambda (m) (plist-get m :text)) (drgnx-coord-inbox "s-9"))
                      '("[revert] please undo your changes to .superpowers/sdd/p/progress.md"))))))
 
+(ert-deftest drgnx-cockpit-edits/revert-queues-unless-stopped-in-its-own-worktree ()
+  (drgnx-cockpit-edits-test--with drgnx-cockpit-edits-test--ext
+    (let ((ext drgnx-cockpit-edits-test--ext) (main-status (drgnx-cockpit-fixture-git repo "status" "--porcelain"))
+          (inbox (lambda (id) (mapcar (lambda (m) (plist-get m :text)) (drgnx-coord-inbox id))))
+          (readme (lambda () (with-temp-buffer (insert-file-contents (concat wt-a "README")) (buffer-string)))))
+      (cl-letf (((symbol-function 'yes-or-no-p) (lambda (&rest _) (ert-fail "Asked")))
+                ((symbol-function 'drgnx-agents-stop) (lambda (&rest _) (ert-fail "Stopped an agent"))))
+        ;; running: a queued request, the file untouched
+        (drgnx-cockpit-edits-test--goto "README" "+more")
+        (call-interactively #'drgnx-cockpit-edits-revert-file)
+        (should (equal (funcall inbox ext) '("[revert] please undo your changes to README")))
+        (should (equal (funcall readme) "readme\nmore\n"))
+        (should (plist-get (plist-get (car (last (drgnx-coord-events :agent ext :kinds '("revert")))) :data) :requested))
+        (should (= 1 notified))
+        ;; an outside agent that says it stopped, in the worktree it registered: still only a request — its worktree may
+        ;; be the user's own, and a stop event proves nothing
+        (drgnx-coord-event-add :agent ext :kind "stop" :summary "stopped")
+        (drgnx-cockpit-edits-test--goto "README" "+more")
+        (call-interactively #'drgnx-cockpit-edits-revert-file)
+        (drgnx-cockpit-edits-test--goto "new.txt")
+        (call-interactively #'drgnx-cockpit-edits-revert-file)
+        (should (equal (funcall inbox ext) '("[revert] please undo your changes to README" "[revert] please undo your changes to README"
+                                             "[revert] please undo your changes to new.txt")))
+        (should (equal (funcall readme) "readme\nmore\n"))
+        (should (file-exists-p (concat wt-a "new.txt"))))
+      ;; a session in this Emacs set to interrupt: queued all the same — never a cancel
+      (let* ((s (drgnx-agents--make :id "s-2" :name "chat" :cwd repo :status 'busy :mode 'interrupt))
+             (sent nil))
+        (cl-letf (((symbol-function 'drgnx-agents-sessions) (lambda () (list s)))
+                  ((symbol-function 'drgnx-agents-send) (lambda (s text) (push (list text (drgnx-agent-session-mode s)) sent)))
+                  ((symbol-function 'drgnx-agents-stop) (lambda (&rest _) (ert-fail "Stopped an agent")))
+                  ((symbol-function 'yes-or-no-p) (lambda (&rest _) (ert-fail "Asked"))))
+          (with-current-buffer (drgnx-cockpit-edits-buffer "s-2")
+            (unwind-protect
+                ;; s-2 works in the main checkout: never reverted there, stopped or not
+                (dolist (live (list sessions (list (car sessions))))
+                  (cl-letf (((symbol-function 'drgnx-cockpit-sessions) (lambda () live)))
+                    (drgnx-cockpit-edits-revert-file "README")))
+              (kill-buffer)))
+          (should (equal sent '(("[revert] please undo your changes to README" queue)
+                                ("[revert] please undo your changes to README" queue))))
+          (should (eq (drgnx-agent-session-mode s) 'interrupt))))
+      (should (equal main-status (drgnx-cockpit-fixture-git repo "status" "--porcelain"))))))   ; main's checkout untouched
+
+(defmacro drgnx-cockpit-edits-test--job (&rest body)
+  "BODY in the cockpit fixture with jx#2's task worktree TREE made as drgnx makes it (`.claude/worktrees/jx-2' on
+job/jx-2, from job/jx), README changed and n2.txt new there, and s-1's edits buffer current (not shown).  s-1 is gone
+from the hub's list; its session here is MIRROR (nil: none; set it).  Questions go to ASKED and get ANSWER (t);
+NOTIFIED counts the hub told; (INBOX) is s-1's messages; (SLURP FILE) a file's text."
+  (declare (indent 0))
+  `(drgnx-cockpit-fixture-with
+     (let ((drgnx-cockpit-edits--last nil) (asked nil) (answer t) (mirror nil) (notified 0))
+       (drgnx-cockpit-fixture-git repo "branch" "job/jx" "main")
+       (drgnx-cockpit-fixture-git repo "worktree" "add" "-q" "-b" "job/jx-2" tree "job/jx")
+       (drgnx-cockpit-fixture-write (concat tree "README") "readme\nby the job\n")
+       (drgnx-cockpit-fixture-write (concat tree "n2.txt") "new\n")
+       (cl-flet ((inbox () (mapcar (lambda (m) (plist-get m :text)) (drgnx-coord-inbox "s-1")))
+                 (slurp (file) (and (file-exists-p file) (with-temp-buffer (insert-file-contents file) (buffer-string)))))
+         (ignore #'inbox #'slurp)
+         (cl-letf (((symbol-function 'drgnx-cockpit-sessions) (lambda () (cdr sessions)))
+                   ((symbol-function 'drgnx-agents-sessions) (lambda () (and mirror (list mirror))))
+                   ((symbol-function 'drgnx-cockpit-edits--notify-hub) (lambda () (cl-incf notified)))
+                   ((symbol-function 'yes-or-no-p) (lambda (prompt) (push prompt asked) answer)))
+           (with-current-buffer (drgnx-cockpit-edits-buffer "s-1")
+             (unwind-protect (progn ,@body) (kill-buffer))))))))
+
+(ert-deftest drgnx-cockpit-edits/revert-direct-asks-first ()
+  (drgnx-cockpit-edits-test--job
+    (setq mirror (drgnx-agents--make :id "m-1" :remote "s-1" :name "claude · jx#2" :status 'exited) answer nil)
+    (drgnx-coord-force-status "jx#2" "done" "s-1")
+    (drgnx-cockpit-edits-revert-file "README")
+    (should (string-match-p "\\`Put README back as " (car asked)))
+    (should (equal (slurp (concat tree "README")) "readme\nby the job\n"))
+    (should-not (inbox))                                                  ; no request queued instead
+    (should-not (drgnx-coord-events :agent "s-1" :kinds '("revert")))))
+
 (ert-deftest drgnx-cockpit-edits/a-job-worktree-is-reverted-only-when-its-agent-is-known-stopped ()
-  (drgnx-cockpit-fixture-with
-    (let ((drgnx-cockpit-edits--last nil) (asked nil) (mirror nil) (notified 0)
-          (inbox (lambda () (mapcar (lambda (m) (plist-get m :text)) (drgnx-coord-inbox "s-1")))))
-      ;; jx#2's worktree, as drgnx makes it: .claude/worktrees/jx-2 on the job branch
-      (drgnx-cockpit-fixture-git repo "branch" "job/jx" "main")
-      (drgnx-cockpit-fixture-git repo "worktree" "add" "-q" "-b" "job/jx-2" tree "job/jx")
+  (drgnx-cockpit-edits-test--job
+    ;; no session of it here: absence proves nothing — a request
+    (drgnx-coord-force-status "jx#2" "done" "s-1")
+    (drgnx-cockpit-edits-revert-file "README")
+    ;; its mirror exited, but its task is still running: a request
+    (drgnx-coord-force-status "jx#2" "running" "s-1")
+    (setq mirror (drgnx-agents--make :id "m-1" :remote "s-1" :name "claude · jx#2" :status 'exited))
+    (drgnx-cockpit-edits-revert-file "README")
+    ;; exited and done, but another agent registered its cwd in the worktree: a request
+    (drgnx-coord-force-status "jx#2" "done" "s-1")
+    (drgnx-coord-agent-register :id "ext:zed:9" :kind "zed" :cwd (concat tree "sub"))
+    (drgnx-cockpit-edits-revert-file "README")
+    (drgnx-coord-agent-register :id "ext:zed:9" :clear '(:cwd))
+    (should-not asked)
+    (should (equal (inbox) (make-list 3 "[revert] please undo your changes to README")))
+    (should (= 3 notified))
+    ;; exited, done, alone: put back in its worktree, after the exact question
+    (drgnx-cockpit-edits-revert-file "README")
+    (drgnx-cockpit-edits-revert-file "n2.txt")
+    (let ((wt (abbreviate-file-name (directory-file-name tree))))
+      (should (equal (reverse asked)
+                     (list (format "Put README back as %s has it, in %s, discarding the agent's changes? " (substring sha 0 8) wt)
+                           (format "Delete new file n2.txt in %s (the agent's own worktree)? " wt)))))
+    (should (equal (slurp (concat tree "README")) "readme\n"))
+    (should-not (file-exists-p (concat tree "n2.txt")))
+    (should (= 3 (length (inbox))))
+    (should (equal (slurp (concat repo "README")) "readme\n"))))
+
+(ert-deftest drgnx-cockpit-edits/a-job-folder-must-be-its-worktrees-top-on-its-branch ()
+  (drgnx-cockpit-edits-test--job
+    (setq mirror (drgnx-agents--make :id "m-1" :remote "s-1" :name "claude · jx#2" :status 'exited))
+    (drgnx-coord-force-status "jx#2" "done" "s-1")
+    ;; the task worktree on another branch than the job's: a request
+    (drgnx-cockpit-fixture-git tree "checkout" "-q" "-b" "elsewhere")
+    (drgnx-cockpit-edits-revert-file "README")
+    (drgnx-cockpit-fixture-git tree "checkout" "-q" "job/jx-2")
+    ;; the folder is no worktree's top (a plain folder inside another worktree): a request
+    (let ((top (file-name-directory (directory-file-name tree))) (moved (concat (directory-file-name tree) "-real")))
+      (rename-file tree moved)
+      (make-directory tree)
       (drgnx-cockpit-fixture-write (concat tree "README") "readme\nby the job\n")
-      (drgnx-cockpit-fixture-write (concat tree "n2.txt") "new\n")
-      (cl-letf (((symbol-function 'drgnx-cockpit-sessions) (lambda () (cdr sessions)))       ; s-1 gone from the hub's list
-                ((symbol-function 'drgnx-agents-sessions) (lambda () (and mirror (list mirror))))
-                ((symbol-function 'drgnx-cockpit-edits--notify-hub) (lambda () (cl-incf notified)))
-                ((symbol-function 'yes-or-no-p) (lambda (prompt) (push prompt asked) t)))
-        (with-current-buffer (drgnx-cockpit-edits-buffer "s-1")
-          (unwind-protect
-              (progn
-                ;; no session of it here: absence proves nothing — a request
-                (drgnx-coord-force-status "jx#2" "done" "s-1")
-                (drgnx-cockpit-edits-revert-file "README")
-                ;; its mirror exited, but its task is still running: a request
-                (drgnx-coord-force-status "jx#2" "running" "s-1")
-                (setq mirror (drgnx-agents--make :id "m-1" :remote "s-1" :name "claude · jx#2" :status 'exited))
-                (drgnx-cockpit-edits-revert-file "README")
-                (should-not asked)
-                (should (equal (funcall inbox) (make-list 2 "[revert] please undo your changes to README")))
-                (should (= 2 notified))
-                ;; exited and its task done: put back in its worktree, after the exact question
-                (drgnx-coord-force-status "jx#2" "done" "s-1")
-                (drgnx-cockpit-edits-revert-file "README")
-                (drgnx-cockpit-edits-revert-file "n2.txt"))
-            (kill-buffer))))
-      (let ((wt (abbreviate-file-name (directory-file-name tree))))
-        (should (equal (reverse asked)
-                       (list (format "Put README back as %s has it, in %s, discarding the agent's changes? " (substring sha 0 8) wt)
-                             (format "Delete new file n2.txt in %s (the agent's own worktree)? " wt)))))
-      (should (equal (with-temp-buffer (insert-file-contents (concat tree "README")) (buffer-string)) "readme\n"))
-      (should-not (file-exists-p (concat tree "n2.txt")))
-      (should (= 2 (length (funcall inbox))))
-      (should (equal (with-temp-buffer (insert-file-contents (concat repo "README")) (buffer-string)) "readme\n")))))
+      (with-temp-file (concat top ".git") (insert-file-contents (concat moved "/.git")))   ; .claude/worktrees/ looks linked
+      (drgnx-cockpit-edits-revert-file "README")
+      (delete-file (concat top ".git")))
+    (should-not asked)
+    (should (equal (inbox) (make-list 2 "[revert] please undo your changes to README")))
+    (should (equal (slurp (concat tree "README")) "readme\nby the job\n"))))
 
 (ert-deftest drgnx-cockpit-edits/a-git-failure-never-deletes ()
+  (drgnx-cockpit-edits-test--job
+    (setq mirror (drgnx-agents--make :id "m-1" :remote "s-1" :name "claude · jx#2" :status 'exited))
+    (drgnx-coord-force-status "jx#2" "done" "s-1")
+    (drgnx-coord-agent-register :id "s-1" :base "0000000000000000000000000000000000000001")   ; no such commit
+    (should-error (drgnx-cockpit-edits-revert-file "n2.txt") :type 'error)
+    (should-error (drgnx-cockpit-edits-revert-file "README") :type 'error)
+    (should-not asked)                                                   ; it failed before asking anything
+    (should (file-exists-p (concat tree "n2.txt")))
+    (should (equal (slurp (concat tree "README")) "readme\nby the job\n"))
+    (should-not (drgnx-coord-events :agent "s-1" :kinds '("revert")))))
+
+(ert-deftest drgnx-cockpit-edits/diff-mode-never-writes-from-here ()
   (drgnx-cockpit-edits-test--with drgnx-cockpit-edits-test--ext
-    (let ((ext drgnx-cockpit-edits-test--ext) (asked nil))
-      (drgnx-coord-event-add :agent ext :kind "stop" :summary "stopped")
-      (drgnx-coord-agent-register :id ext :base "0000000000000000000000000000000000000001")   ; no such commit
-      (cl-letf (((symbol-function 'yes-or-no-p) (lambda (prompt) (push prompt asked) t)))
-        (should-error (drgnx-cockpit-edits-revert-file "new.txt") :type 'error)
-        (should-error (drgnx-cockpit-edits-revert-file "README") :type 'error))
-      (should-not asked)                                                 ; it failed before asking anything
-      (should (file-exists-p (concat wt-a "new.txt")))
-      (should (equal (with-temp-buffer (insert-file-contents (concat wt-a "README")) (buffer-string)) "readme\nmore\n"))
-      (should-not (drgnx-coord-events :agent ext :kinds '("revert"))))))
+    (let ((allowed (append drgnx-cockpit-edits--kept '(drgnx-cockpit-edits-read-only)))
+          (cmds nil))
+      ;; the pane's maps (its own and its parents): no Diff menu, only motions, visits and its own commands
+      (should-not (keymapp (lookup-key drgnx-cockpit-edits-mode-map [menu-bar Diff])))
+      (should-not (key-binding [menu-bar Diff]))
+      (cl-labels ((walk (map) (map-keymap (lambda (_ b)
+                                            (cond ((keymapp b) (walk b))
+                                                  ((eq (car-safe b) 'menu-item)
+                                                   (if (keymapp (nth 2 b)) (walk (nth 2 b)) (push (nth 2 b) cmds)))
+                                                  ((symbolp b) (push b cmds))))
+                                          map)))
+        (walk drgnx-cockpit-edits-mode-map))
+      (dolist (c (delete-dups cmds))
+        (when (and c (symbolp c) (string-prefix-p "diff-" (symbol-name c))) (should (memq c allowed)))
+        (should-not (memq c drgnx-cockpit-edits--refused)))
+      ;; keys that apply in diff-mode do nothing here
+      (dolist (k '("C-c C-a" "C-c RET a" "C-c C-r" "C-c C-s"))
+        (should-not (memq (key-binding (kbd k)) drgnx-cockpit-edits--refused)))
+      ;; M-x, a menu of another map, any caller: the module's advice refuses them in the pane, the file stays
+      (unwind-protect
+          (progn
+            (drgnx-cockpit-edits--guard)
+            (drgnx-cockpit-edits--guard)                                 ; idempotent
+            (dolist (f drgnx-cockpit-edits--refused)
+              (should (advice-member-p #'drgnx-cockpit-edits--refuse f)))
+            (drgnx-cockpit-edits-test--goto "README" "+more")
+            (dolist (f '(diff-reverse-direction diff-apply-buffer diff-apply-hunk diff-hunk-kill))
+              (should-error (let ((current-prefix-arg '(4))) (call-interactively f)) :type 'user-error))
+            (should (equal (with-temp-buffer (insert-file-contents (concat wt-a "README")) (buffer-string)) "readme\nmore\n"))
+            (should (drgnx-cockpit-edits-test--header "README"))         ; the buffer as it was
+            ;; elsewhere diff-mode is itself
+            (with-temp-buffer (diff-mode) (should-not (drgnx-cockpit-edits--refuse))))
+        (drgnx-cockpit-edits--teardown))
+      (dolist (f drgnx-cockpit-edits--refused) (should-not (advice-member-p #'drgnx-cockpit-edits--refuse f)))
+      ;; C-x C-q twice never brings diff-mode's read-only map back
+      (let ((inhibit-message t)) (read-only-mode -1) (read-only-mode 1))
+      (should-not (bound-and-true-p diff-mode-read-only))
+      (should buffer-read-only))))
 
 (ert-deftest drgnx-cockpit-edits/a-silent-worktree-takes-no-messages-and-shows-first-writes ()
   (drgnx-cockpit-edits-test--with (concat "silent:" (directory-file-name wt-b))
@@ -431,12 +468,28 @@ The pane is killed after, and must leave no timer or watch behind."
     (should-error (drgnx-cockpit-edits-revert-file "b.txt") :type 'user-error)
     (should (file-exists-p (concat wt-b "b.txt")))
     (should-not (drgnx-coord-events :kinds '("comment" "revert")))
-    ;; a first write in a folder with no changes yet (nobody watches it) shows at the next look, without g
-    (should-not (member "fresh/dir/f.txt" drgnx-cockpit-edits--files))
-    (drgnx-cockpit-fixture-write (concat wt-b "fresh/dir/f.txt") "f\n")
-    (drgnx-cockpit-edits--check e)
-    (drgnx-cockpit-edits-test--settle e)
-    (should (member "fresh/dir/f.txt" drgnx-cockpit-edits--files))
-    (should (string-match-p "a accept [·|] r revert [·|] c comment [·|] n/p files" (car header-line-format)))))
+    (should (string-match-p "a accept [·|] r revert [·|] c comment [·|] n/p files" (car header-line-format)))
+    (let ((drgnx-cockpit-edits-check-interval 2)
+          (check (lambda () (drgnx-cockpit-edits--check e) (drgnx-cockpit-edits-test--settle e))))
+      ;; not its time yet: the check only looks at the store
+      (setq drgnx-cockpit-edits--quiet-next (+ (float-time) 60))
+      (drgnx-cockpit-edits--check e)
+      (should-not drgnx-cockpit-edits--list-dirty)
+      ;; a first write in a folder with no changes yet (nobody watches it) shows at the check's next listing, without g
+      (drgnx-cockpit-fixture-write (concat wt-b "fresh/dir/f.txt") "f\n")
+      (setq drgnx-cockpit-edits--quiet-next 0)
+      (funcall check)
+      (should (member "fresh/dir/f.txt" drgnx-cockpit-edits--files))
+      (should-not drgnx-cockpit-edits--quiet-gap)                       ; it found something: the usual pace
+      ;; listings that find nothing space out: 4, 8, then 10 s at most
+      (dolist (gap '(4 8 10 10))
+        (setq drgnx-cockpit-edits--quiet-next 0)
+        (funcall check)
+        (should (equal drgnx-cockpit-edits--quiet-gap gap))
+        (should (> drgnx-cockpit-edits--quiet-next (+ (float-time) gap -1))))
+      ;; any change heard of resets it
+      (drgnx-cockpit-edits-test--notify wt-b "b.txt")
+      (should-not drgnx-cockpit-edits--quiet-gap)
+      (should (<= drgnx-cockpit-edits--quiet-next (+ (float-time) 2))))))
 
 ;;; mod-cockpit-edits-test.el ends here

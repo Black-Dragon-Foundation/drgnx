@@ -507,8 +507,7 @@ a native session not among them is :stopped.
 :own-worktree: the folder is the agent's alone (a job's task worktree, or a linked worktree no other agent works in).
 :kind is `job', `native', `outside' or `silent'.  A job's agent also has :job and :task (its job task's id) and
 :job-worktree t when :dir is the worktree drgnx makes for that task (`.claude/worktrees/JOB-N/' of the job's repository,
-from its jtask row); an outside agent has :registered-worktree t when its registry row names a worktree, not only a
-cwd."
+from its jtask row)."
   (let* ((plist (and (consp agent) agent)) (id (if plist (plist-get plist :id) agent))
          (session (seq-find (lambda (s) (equal (plist-get s :id) id)) sessions))
          (exited (and session (equal (drgnx-cockpit--status (plist-get session :status)) "exited")))
@@ -542,7 +541,7 @@ cwd."
               :own-worktree t :stopped (if sessions (or (null session) exited) (equal life "stop")))))
      ((and row (not session) (or (string-prefix-p "ext:" id) (plist-get row :kind)))
       (let ((dir (drgnx-cockpit--dir (or (plist-get row :worktree) (plist-get row :cwd)))))
-        (list :kind 'outside :registered-worktree (and (plist-get row :worktree) t) :dir dir :base (plist-get row :base) :merge-base nil
+        (list :kind 'outside :dir dir :base (plist-get row :base) :merge-base nil
               :paths (and dir (drgnx-cockpit--reported-paths id dir))
               :own-worktree (and dir (drgnx-cockpit--linked-worktree-p dir) (not (funcall others dir)) t)
               :stopped (equal life "stop"))))
