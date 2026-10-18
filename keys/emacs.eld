@@ -6,7 +6,7 @@
  :bind ((palette "C-S-p")
         (keys-sheet "C-h C-k")
         (keyboard-profile :none "in the palette")
-        (quit :none "File → Quit drgnx; the palette (C-x C-c closes this client's windows, stock)")
+        (quit :none "File → Quit drgnx; the palette (C-x C-c closes a window like its close button; a terminal frame, stock)")
         (preferences-keep-running :none "in the palette and the Options menu")
         (open-folder :none "File → Open Folder…; the palette")
         (open-file "C-x C-f")
