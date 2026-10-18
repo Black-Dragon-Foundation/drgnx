@@ -336,12 +336,20 @@ F10's `menu-bar-open' has no menu to open on a toolkit frame whose bar is hidden
       (tmm-menubar)
     (call-interactively #'menu-bar-open)))
 
+(defun drgnx-face-preferences ()
+  "Open Customize on the `drgnx-face' group: every setting of how drgnx looks, applied live."
+  (interactive)
+  (customize-group 'drgnx-face))
+
 (defun drgnx-face--setup ()
   (drgnx-command-define 'face-toggle-menu-bar :category "View" :title "Toggle Menu Bar" :menu '("View")
                         :command #'drgnx-face-toggle-menu-bar
                         :doc "Show or hide Emacs's menu bar for this session (hidden, F10 opens the menu as text)")
   (drgnx-command-define 'face-menu :category "View" :title "Open the Menu" :command #'drgnx-face-menu
                         :doc "Open the menu: the menu bar when it is shown, else the same menu as text in the minibuffer (F10)")
+  (drgnx-command-define 'face-preferences :category "Preferences" :title "Look and Layout Settings…" :menu '("Options")
+                        :command #'drgnx-face-preferences
+                        :doc "How drgnx looks: the frame, status bar, top line, quick help, start page (Customize)")
   (define-key global-map [remap menu-bar-open] #'drgnx-face-menu)   ; F10 opens the menu as text while the bar is hidden
   (when (fboundp 'drgnx-close-setup) (drgnx-close-setup))   ; Esc and q close panes (drgnx-close.el)
   (when (fboundp 'drgnx-statusbar-setup) (drgnx-statusbar-setup))   ; the status bar (drgnx-statusbar.el)

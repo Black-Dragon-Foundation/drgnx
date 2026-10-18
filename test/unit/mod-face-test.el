@@ -340,6 +340,21 @@ setup changes neither the dividers nor the faces of the test process."
       (call-interactively (drgnx-cmd-command (drgnx-commands-get 'face-toggle-menu-bar)))
       (should-not drgnx-face-menu-bar))))
 
+(ert-deftest drgnx-face/preferences-opens-the-group ()
+  (drgnx-face-test--with
+    (drgnx-face-test--setup)
+    (let ((cmd (drgnx-commands-get 'face-preferences)) (calls nil))
+      (should cmd)
+      (should (equal (drgnx-cmd-category cmd) "Preferences"))
+      (should (equal (drgnx-cmd-title cmd) "Look and Layout Settings…"))
+      (cl-letf (((symbol-function 'customize-group) (lambda (&rest args) (push args calls))))
+        (call-interactively (drgnx-cmd-command cmd)))
+      (should (equal calls '((drgnx-face))))))
+  (dolist (p '("vscode" "emacs" "vim"))
+    (with-temp-buffer
+      (insert-file-contents (expand-file-name (format "keys/%s.eld" p) drgnx-dir))
+      (should (search-forward "(face-preferences :none \"the palette\")" nil t)))))
+
 (ert-deftest drgnx-face/early-init-starts-without-a-menu-bar-or-scroll-bar ()
   (with-temp-buffer
     (insert-file-contents (expand-file-name "init/early-init.el" drgnx-dir))

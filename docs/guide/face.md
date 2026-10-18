@@ -2,7 +2,8 @@
 
 How drgnx looks. The aim is a calm editor like Zed that is as informed as VS Code: nothing on screen that you did
 not ask for, everything you need one glance away. Every choice below is a setting of the module `ui/face`
-(Preferences: Modules turns the module off; the settings are in Customize, group `drgnx-face`), every one applies
+(Preferences: Modules turns the module off; **Preferences: Look and Layout Settings…** in the palette or the Options
+menu opens them all in Customize, group `drgnx-face`), every one applies
 at once when you change it, and every one works in a terminal as well as in a window.
 
 Put your choices in `config.el` ([modules.md](modules.md#your-own-code-configel)) with `setopt`, for example:
