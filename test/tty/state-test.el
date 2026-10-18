@@ -9,7 +9,7 @@
      (defvar drgnx-state-tty-test--log nil "(EVENT . DATA) delivered, newest first.")
      (defvar drgnx-state-tty-test--commands 0 "Commands run since the log was cleared.")
      (defun drgnx-state-tty-test--count () (setq drgnx-state-tty-test--commands (1+ drgnx-state-tty-test--commands)))
-     (dolist (event '(windows-changed pane-shown frame-resized editor-changed))
+     (dolist (event '(windows-changed pane-shown frame-resized editor-changed selected-changed))
        (let ((event event))
          (defalias (intern (format "drgnx-state-tty-test--on-%s" event))
            (lambda (data) (push (cons event data) drgnx-state-tty-test--log)))
@@ -18,7 +18,7 @@
      (drgnx-state-mode 1)
      (setq drgnx-state-tty-test--log nil drgnx-state-tty-test--commands 0)
      t)
-  "A form, in the inner Emacs: the store on, a recorder on the `now' lane of four events, a command counter.")
+  "A form, in the inner Emacs: the store on, a recorder on the `now' lane of five events, a command counter.")
 
 (defconst drgnx-state-tty-test--split
   '(progn
@@ -95,5 +95,22 @@
                                                             (eq (plist-get (cdr e) :frame) drgnx-state-tty-test--a)))
                                            drgnx-state-tty-test--log))))
                      '(100 t nil))))))
+
+(ert-deftest drgnx-state-tty/a-sync-in-another-frame-is-no-frame-switch ()
+  ;; Code that syncs or writes a background frame inside `with-selected-frame' (persist's restore, layouts) does not
+  ;; switch frames: no `selected-changed' then, nor when the frame comes back after it.
+  (drgnx-tty-session-with (s :daemon t :size "120x40")
+    (should (drgnx-tty-session-eval s `(progn (defvar drgnx-state-tty-test--a (car ,drgnx-state-tty-test--clients)) t)))
+    (drgnx-tty-session-client s)
+    (should (drgnx-tty-session-eval
+             s `(progn (defvar drgnx-state-tty-test--b (car ,drgnx-state-tty-test--clients))
+                       (not (eq drgnx-state-tty-test--a drgnx-state-tty-test--b)))))
+    (should (drgnx-tty-session-eval s drgnx-state-tty-test--listen))
+    (should (drgnx-tty-session-eval
+             s '(progn (dolist (f (list drgnx-state-tty-test--a drgnx-state-tty-test--b))
+                         (with-selected-frame f (drgnx-state-sync f) (drgnx-state-with-write (f 'restore) nil)))
+                       t)))
+    (sleep-for 0.5)                                       ; redisplays and a command-free interval pass
+    (should-not (drgnx-tty-session-eval s '(assq 'selected-changed drgnx-state-tty-test--log)))))
 
 ;;; state-test.el ends here

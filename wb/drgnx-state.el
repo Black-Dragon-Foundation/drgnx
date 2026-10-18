@@ -69,6 +69,9 @@ data's `:kind'), holding the last DATA.  Bounded: subscribers × events × frame
 (defvar drgnx-state--selected-frame nil
   "The frame that was selected at the last record stored for it (`selected-changed' names it as
 `:old-frame' when another frame becomes the selected one).")
+(defvar drgnx-state--watching nil
+  "Non-nil while the mode's hooks observe (or the mode comes on): only then is the selected frame the
+user's, so only then is a frame switch seen.  A sync or write may run inside `with-selected-frame'.")
 
 ;;;; Roles
 
@@ -215,7 +218,7 @@ replaces NEW, not OLD.  Records are never changed in place."
   (unless old (drgnx-state--note-frame frame))
   (puthash frame new drgnx-state--frames)
   (let* ((prev drgnx-state--selected-frame)
-         (switched (and (eq frame (selected-frame)) (not (eq frame prev)))))
+         (switched (and drgnx-state--watching (eq frame (selected-frame)) (not (eq frame prev)))))
     (when switched (setq drgnx-state--selected-frame frame))
     (when (or drgnx-state--now drgnx-state--idle)
       (drgnx-state--diff frame old new switched prev)))
@@ -290,7 +293,8 @@ not raised.  During an observation it does nothing: a change made meanwhile wait
             (if (and old (frame-live-p frame) (not (frame-parent frame)))
                 (if (drgnx-state--same-p frame old parameters)
                     ;; the same windows, but now the selected frame: only `selected-changed'
-                    (when (and (eq frame (selected-frame)) (not (eq frame drgnx-state--selected-frame)))
+                    (when (and drgnx-state--watching (eq frame (selected-frame))
+                               (not (eq frame drgnx-state--selected-frame)))
                       (drgnx-state--put frame old old)
                       nil)
                   (drgnx-state--rebuild frame old))
@@ -306,7 +310,7 @@ not a workbench frame.  For code that changes windows and reads the store in the
 sets `drgnx-frame-role' or `drgnx-monitor' (setting a frame parameter is no window change, and only this
 observation compares them), and for batch tests (no redisplay runs there).  The copy is shallow: the lists
 in it are the store's and are read-only."
-  (let ((frame (or frame (selected-frame))))
+  (let ((frame (or frame (selected-frame))) (drgnx-state--watching nil)) ; maybe inside `with-selected-frame'
     (drgnx-state--observe frame t)
     (let ((rec (and (frame-live-p frame) (gethash frame drgnx-state--frames))))
       (and rec (copy-sequence rec)))))
@@ -327,10 +331,12 @@ in it are the store's and are read-only."
   "Run BODY as a write to FRAME's windows on behalf of BY, then observe FRAME; return BODY's value.
 SPEC is (FRAME &optional BY).  FRAME nil: the frame selected when BODY starts.  BY: who asked — `user',
 `auto', `layout', `restore', `teardown'; nil: `drgnx-state-default-by'.  While BODY and the observation
-run, `drgnx-state--writing' is (:by BY)."
+run, `drgnx-state--writing' is (:by BY).  A write sees no frame switch (it may run inside
+`with-selected-frame'; `drgnx-state--watching')."
   (declare (indent 1) (debug ((form &optional form) body)))
   (let ((frame (make-symbol "frame")))
     `(let* ((,frame (or ,(car spec) (selected-frame)))
+            (drgnx-state--watching nil)
             (drgnx-state--writing (list :by (or ,(cadr spec) (drgnx-state-default-by)))))
        (prog1 (progn ,@body) (drgnx-state-sync ,frame)))))
 
@@ -676,7 +682,7 @@ height — or nil."
 (defun drgnx-state--on-window-state-change (frame)
   "From the default value of `window-state-change-functions': FRAME's windows changed (during redisplay,
 before FRAME is drawn)."
-  (drgnx-state--observe frame))
+  (let ((drgnx-state--watching t)) (drgnx-state--observe frame)))
 
 (defun drgnx-state--pre-command ()
   "A command starts: writes default to `user' (`drgnx-state-default-by')."
@@ -684,12 +690,12 @@ before FRAME is drawn)."
 
 (defun drgnx-state--post-command ()
   "A command ended: observe the selected frame (even when redisplay is skipped), then leave the command."
-  (drgnx-state--observe (selected-frame))
+  (let ((drgnx-state--watching t)) (drgnx-state--observe (selected-frame)))
   (setq drgnx-state--in-command nil))
 
 (defun drgnx-state--frame-made (frame)
   "From `after-make-frame-functions': record FRAME before its first redisplay."
-  (drgnx-state--observe frame))
+  (let ((drgnx-state--watching t)) (drgnx-state--observe frame)))
 
 (defun drgnx-state--frame-deleted (frame)
   "From `delete-frame-functions' (FRAME still live), or FRAME is no workbench frame: its record goes,
@@ -720,7 +726,7 @@ On, it observes every live workbench frame, oldest first; off, the records go."
   :global t :group 'drgnx
   (drgnx-state--install drgnx-state-mode)
   (if drgnx-state-mode
-      (dolist (f (reverse (frame-list))) (drgnx-state--observe f))
+      (let ((drgnx-state--watching t)) (dolist (f (reverse (frame-list))) (drgnx-state--observe f)))
     (clrhash drgnx-state--frames)
     (drgnx-state--drop-idle)
     (setq drgnx-state--order nil drgnx-state--in-command nil drgnx-state--selected-frame nil)))

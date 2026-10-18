@@ -771,7 +771,8 @@ kind (a dock's section, an editor's layouts pane or editor kind; an area's front
 allocating nothing (about 3.5 µs on a 7-window frame, byte-compiled). A frame it has a record of is not classified
 again (only its parent and its life can change, and `terminal-name` makes a string). Only on a difference does it
 take the record anew. A frame that has just become the selected frame, with its windows unchanged, keeps its record
-and emits `selected-changed` (Events, below). Every record replaced, by an observation or by
+and emits `selected-changed` (Events, below). Only the mode's hooks see a frame switch: a sync or a write may run
+inside `with-selected-frame` (a restore per frame), and the frame it selects for a moment is not the user's. Every record replaced, by an observation or by
 `drgnx-state-use-editor`, goes through one internal function, `drgnx-state--put`; records are never changed in
 place. While it runs, a change made meanwhile
 waits for the next observation. `drgnx-state-mode` (global; `core/workbench` turns
@@ -818,7 +819,7 @@ A frame's first record emits `frame-added`, then everything it shows as new: `wi
 `pane-shown`, `selected-changed`, `editor-changed`.
 
 **`:cause` and `:by`** say who changed a pane. `write` with `:by` from the write (`user`, `auto`, `layout`,
-`restore`, `teardown`; `drgnx-state-with-write`). `user` with `:by user`: a command in
+`restore`, `teardown`, `other`; `drgnx-state-with-write`). `user` with `:by user`: a command in
 `drgnx-state-user-resize-commands` (a user option; a mouse drag on a divider is that command's own loop, so every
 step observed during it counts). Else `other` with `:by` nil: Emacs fitting a popup, the minibuffer growing, the
 window manager resizing the frame, a package.

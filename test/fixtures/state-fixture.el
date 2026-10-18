@@ -14,6 +14,7 @@
     (drgnx-state--queue . nil)
     (drgnx-state--idle-timer . nil)
     (drgnx-state--selected-frame . nil)
+    (drgnx-state--watching . nil)
     (drgnx-signal--subscribers . nil)
     (drgnx-signal--state . nil)
     (drgnx-signal--posted . nil)
