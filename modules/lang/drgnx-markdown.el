@@ -17,6 +17,7 @@
 (require 'drgnx-modules)
 (require 'drgnx-registry)
 (require 'drgnx-jobs)
+(require 'drgnx-timer)
 
 (defvar markdown-fontify-code-blocks-natively)
 (defvar markdown-enable-math)
@@ -60,13 +61,20 @@
     (message "drgnx: a Mermaid diagram did not draw (Show Job Log: mermaid); it shows as code")))
 
 (defun drgnx-markdown--watch (id hash)
-  "When job ID ends: `drgnx-markdown--drawn' (looked at every 2 s; never waits)."
-  (let ((timer nil))
-    (setq timer (run-with-timer 2 2 (lambda ()
-                                      (let ((job (drgnx-jobs-get id)))
-                                        (unless (eq (plist-get job :status) 'running)
-                                          (cancel-timer timer)
-                                          (drgnx-markdown--drawn hash (plist-get job :exit)))))))))
+  "When job ID ends: `drgnx-markdown--drawn' (looked at every 2 s for ten minutes; never waits)."
+  (drgnx-timer-poll (cons 'markdown-watch id) 2 #'drgnx-markdown--watch-tick :deadline 600
+                    :on-timeout #'drgnx-markdown--watch-timeout :args (list id hash)))
+
+(defun drgnx-markdown--watch-tick (id hash)
+  "The poll of `drgnx-markdown--watch': non-nil, once job ID is over and HASH's drawing has been judged."
+  (let ((job (drgnx-jobs-get id)))
+    (unless (eq (plist-get job :status) 'running)
+      (drgnx-markdown--drawn hash (plist-get job :exit))
+      t)))
+
+(defun drgnx-markdown--watch-timeout (_id hash)
+  "The drawing of HASH never ended in ten minutes: it stays code and is not tried again."
+  (drgnx-markdown--drawn hash 1))
 
 (defun drgnx-markdown--with-diagrams (text)
   "TEXT with each ```mermaid block whose picture is cached replaced by that picture (a file: URL); the others are drawn
@@ -133,14 +141,16 @@ replaces one still running), never waiting for it."
 
 (defun drgnx-markdown--after-save ()
   "The preview follows the saved file: just after the save, never in it; saves in a row render once."
-  (unless drgnx-markdown--pending
-    (run-with-idle-timer 0.2 nil (lambda ()
-                                   (let ((sources drgnx-markdown--pending))
-                                     (setq drgnx-markdown--pending nil)
-                                     (dolist (b (buffer-list))
-                                       (when (memq (buffer-local-value 'drgnx-markdown--source b) sources)
-                                         (drgnx-markdown--render (buffer-local-value 'drgnx-markdown--source b) b)))))))
-  (cl-pushnew (current-buffer) drgnx-markdown--pending))
+  (cl-pushnew (current-buffer) drgnx-markdown--pending)
+  (drgnx-timer-soon 'markdown-render 0.2 #'drgnx-markdown--render-pending :idle t))
+
+(defun drgnx-markdown--render-pending ()
+  "Render the previews of the sources saved since the last time (`drgnx-markdown--pending')."
+  (let ((sources drgnx-markdown--pending))
+    (setq drgnx-markdown--pending nil)
+    (dolist (b (buffer-list))
+      (when (memq (buffer-local-value 'drgnx-markdown--source b) sources)
+        (drgnx-markdown--render (buffer-local-value 'drgnx-markdown--source b) b)))))
 
 (defun drgnx-markdown-preview ()
   "Markdown: Open Preview — this buffer rendered beside it; again after each save.  The preview buffer."
