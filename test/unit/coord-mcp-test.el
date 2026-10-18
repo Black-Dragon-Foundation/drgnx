@@ -284,10 +284,12 @@
     dir))
 
 (defvar drgnx-coord-mcp-test--clock 1000.0)
+(defvar drgnx-coord-mcp-test--start '(26000 1000))
 
 (defmacro drgnx-coord-mcp-test--outside (&rest body)
-  "BODY in this Emacs as an outside agent of kind claude whose process is 4242, started in REPO (a temp git repository
-with a commit); a store in a temp data dir (job j: tasks 1, 2); the clock at `drgnx-coord-mcp-test--clock'."
+  "BODY in this Emacs as an outside agent of kind claude whose process is 4242, started at
+`drgnx-coord-mcp-test--start' — its identity `me' — in REPO (a temp git repository with a commit); a store in a temp
+data dir (job j: tasks 1, 2); the clock at `drgnx-coord-mcp-test--clock'."
   (declare (indent 0))
   `(let* ((data (file-name-as-directory (make-temp-file "drgnx-coord-mcp" t)))
           (repo (drgnx-coord-mcp-test--repo))
@@ -295,15 +297,18 @@ with a commit); a store in a temp data dir (job j: tasks 1, 2); the clock at `dr
           (process-environment (append (list (concat "DRGNX_DATA_DIR=" data) (concat "XDG_STATE_HOME=" data "state")
                                              "DRGNX_AGENT" "DRGNX_JOB" "DRGNX_TASK" "DRGNX_AGENT_KIND=claude")
                                        process-environment))
-          (drgnx-work-db--handles nil) (drgnx-coord-mcp--parent nil)
+          (drgnx-work-db--handles nil) (drgnx-coord-mcp--parent nil) (drgnx-coord-mcp--home nil)
           (drgnx-coord-mcp--reports (make-hash-table :test #'equal))
           (drgnx-coord-mcp--told (make-hash-table :test #'equal))
           (drgnx-coord-mcp-test--clock 1000.0))
      (unwind-protect
          (cl-letf (((symbol-function 'drgnx-coord-mcp--parent-pid) (lambda () 4242))
+                   ((symbol-function 'drgnx-coord-mcp--process-start) (lambda (_pid) drgnx-coord-mcp-test--start))
                    ((symbol-function 'drgnx-coord-mcp--now) (lambda () drgnx-coord-mcp-test--clock)))
            (drgnx-coord-job-create :id "j" :tasks '((:n 1 :title "one") (:n 2 :title "two")))
-           ,@body)
+           (let ((me (drgnx-coord-mcp--me)))
+             (ignore me)
+             ,@body))
        (drgnx-work-db-close-all)
        (delete-directory data t)
        (delete-directory repo t))))
@@ -318,19 +323,29 @@ with a commit); a store in a temp data dir (job j: tasks 1, 2); the clock at `dr
   (caar (sqlite-select (drgnx-work-db) "select count(*) from card where kind = 'rate'")))
 
 (ert-deftest drgnx-coord-mcp/outside-identity-from-the-parent ()
-  ;; over stdio: the server's parent — the agent that started it — is this Emacs
+  ;; over stdio: the server's parent — the agent that started it — is this Emacs; the hash is of its start time
   (let* ((repo (drgnx-coord-mcp-test--repo)) (default-directory repo))
     (unwind-protect
         (drgnx-coord-mcp-test--with '("DRGNX_AGENT" "DRGNX_JOB" "DRGNX_TASK" "DRGNX_AGENT_KIND=claude")
           (let ((r (drgnx-coord-mcp-test--tool proc "hello" (list :name "claude in a terminal"))))
             (should-not (cdr r))
-            (should (equal (plist-get (drgnx-coord-mcp-test--json (car r)) :agent) (format "ext:claude:%d" (emacs-pid))))))
+            (should (string-match-p (format "\\`ext:claude:%d-[0-9a-f]\\{6\\}\\'" (emacs-pid))
+                                    (plist-get (drgnx-coord-mcp-test--json (car r)) :agent)))))
       (delete-directory repo t)))
   (drgnx-coord-mcp-test--outside
-    (should (equal (drgnx-coord-mcp--me) "ext:claude:4242"))
+    (should (equal me (format "ext:claude:4242-%s" (drgnx-coord-mcp--start-hash drgnx-coord-mcp-test--start))))
     ;; read once: a parent that changes later (the agent died, the server was reparented) changes nothing
     (cl-letf (((symbol-function 'drgnx-coord-mcp--parent-pid) (lambda () 1)))
-      (should (equal (drgnx-coord-mcp--me) "ext:claude:4242")))
+      (should (equal (drgnx-coord-mcp--me) me)))
+    ;; the same pid, started at another time: another process, another identity
+    (let ((drgnx-coord-mcp--parent nil) (drgnx-coord-mcp-test--start '(26000 2000)))
+      (should-not (equal (drgnx-coord-mcp--me) me))
+      (should (string-prefix-p "ext:claude:4242-" (drgnx-coord-mcp--me))))
+    ;; no start time: the pid alone, and hello says so
+    (let ((drgnx-coord-mcp--parent nil))
+      (cl-letf (((symbol-function 'drgnx-coord-mcp--process-start) #'ignore))
+        (should (equal (drgnx-coord-mcp--me) "ext:claude:4242"))
+        (should (string-search "start time" (plist-get (drgnx-coord-mcp-test--json (drgnx-coord-mcp-test--call "hello")) :note)))))
     ;; no parent to read (some platforms), or init's: the server's own pid
     (dolist (none '(nil 1))
       (let ((drgnx-coord-mcp--parent nil))
@@ -351,8 +366,8 @@ with a commit); a store in a temp data dir (job j: tasks 1, 2); the clock at `dr
     (let* ((head (drgnx-coord-mcp-test--git repo "rev-parse" "HEAD"))
            (j (drgnx-coord-mcp-test--json (drgnx-coord-mcp-test--call "hello" :name "claude · drgnx" :cwd "sub" :plan "m12f"
                                                                       :task "C2")))
-           (row (drgnx-coord-agent "ext:claude:4242")))
-      (should (equal (plist-get j :agent) "ext:claude:4242"))
+           (row (drgnx-coord-agent me)))
+      (should (equal (plist-get j :agent) me))
       (should (equal (plist-get j :version) (drgnx-coord-version)))
       (should (equal (plist-get j :base) head))
       (should (equal (plist-get row :kind) "claude"))
@@ -366,20 +381,20 @@ with a commit); a store in a temp data dir (job j: tasks 1, 2); the clock at `dr
       (should (equal (plist-get row :pid) 4242))
       (let ((starts (drgnx-coord-events :kinds '("start"))))
         (should (= (length starts) 1))
-        (should (equal (plist-get (car starts) :agent) "ext:claude:4242"))
+        (should (equal (plist-get (car starts) :agent) me))
         (should (equal (plist-get (car starts) :data)
                        (list :kind "claude" :cwd (concat repo "sub") :branch (plist-get row :branch) :base head))))
       ;; a later hello: the base is the first one's, no second start
       (drgnx-coord-mcp-test--git repo "commit" "-q" "--allow-empty" "-m" "two")
       (setq j (drgnx-coord-mcp-test--json (drgnx-coord-mcp-test--call "hello" :name "renamed")))
       (should (equal (plist-get j :base) head))
-      (should (equal (plist-get (drgnx-coord-agent "ext:claude:4242") :base) head))
-      (should (equal (plist-get (drgnx-coord-agent "ext:claude:4242") :name) "renamed"))
+      (should (equal (plist-get (drgnx-coord-agent me) :base) head))
+      (should (equal (plist-get (drgnx-coord-agent me) :name) "renamed"))
       (should (= (length (drgnx-coord-events :kinds '("start"))) 1))
       ;; a cwd outside the folder it was started in is refused
       (dolist (bad '("/" ".." "sub/../.." "/ssh:host:/srv"))
         (should-error (drgnx-coord-mcp-test--call "hello" :cwd bad)))
-      (should (equal (plist-get (drgnx-coord-agent "ext:claude:4242") :cwd) (concat repo "sub"))))))
+      (should (equal (plist-get (drgnx-coord-agent me) :cwd) (concat repo "sub"))))))
 
 (ert-deftest drgnx-coord-mcp/report-edit-inside-only ()
   (drgnx-coord-mcp-test--outside
@@ -389,33 +404,80 @@ with a commit); a store in a temp data dir (job j: tasks 1, 2); the clock at `dr
             (drgnx-coord-mcp-test--call "hello")
             (make-directory (expand-file-name "src" repo))
             (make-symbolic-link outside (expand-file-name "src/escape" repo))
-            ;; inside: relative, absolute, comma and newline separated
-            (should (string-search "\"ok\":true" (drgnx-coord-mcp-test--call "report_edit" :paths (format "a.el, src/b.el\n%sc.el" repo)
+            ;; inside: relative and absolute, one per line (a comma is then part of a name)
+            (should (string-search "\"ok\":true" (drgnx-coord-mcp-test--call "report_edit" :paths (format "a.el\nsrc/b,c.el\n%sc.el" repo)
                                                                              :summary "three files")))
             (let ((e (car (drgnx-coord-events :kinds '("edit")))))
-              (should (equal (plist-get e :agent) "ext:claude:4242"))
+              (should (equal (plist-get e :agent) me))
               (should (equal (plist-get e :summary) "three files"))
-              (should (equal (plist-get (plist-get e :data) :paths) '("a.el" "src/b.el" "c.el")))
+              (should (equal (plist-get (plist-get e :data) :paths) '("a.el" "src/b,c.el" "c.el")))
               (should (equal (plist-get (plist-get e :data) :root) (directory-file-name repo))))
-            ;; many paths: as many as the event's data holds, the rest counted — never a truncated event
-            (drgnx-coord-mcp-test--call "report_edit" :paths (mapconcat (lambda (n) (format "src/file-%03d.el" n)) (number-sequence 1 300) ","))
-            (let ((data (plist-get (cadr (drgnx-coord-events :kinds '("edit"))) :data)))
-              (should-not (plist-get data :truncated))
-              (should (> (plist-get data :more) 0))
-              (should (= (+ (length (plist-get data :paths)) (plist-get data :more)) 300)))
+            ;; separated by commas when there is no newline; an array as it is
+            (drgnx-coord-mcp-test--call "report_edit" :paths "a.el, src/b.el")
+            (drgnx-coord-mcp-test--call "report_edit" :paths ["a.el" "src/b, c.el"])
+            (should (equal (mapcar (lambda (e) (plist-get (plist-get e :data) :paths)) (cdr (drgnx-coord-events :kinds '("edit"))))
+                           '(("a.el" "src/b.el") ("a.el" "src/b, c.el"))))
             ;; each of these is refused, and nothing is written
             (dolist (bad (list "../x.el" "src/../../x.el" "src/../a.el" (concat outside "x.el") "/etc/passwd" "src/escape/x.el"
-                               "/ssh:host:/etc/passwd" "/sudo::/etc/shadow" "a.el, /etc/passwd" "" " , " "a\ab.el"))
+                               "/ssh:host:/etc/passwd" "/sudo::/etc/shadow" "a.el, /etc/passwd" "" " , " "a\ab.el"
+                               (concat "a" (string #x202e) "b.el") (concat "a" (string #x85) "b.el")
+                               (vconcat (make-list 1001 "a.el"))))
               (should-error (drgnx-coord-mcp-test--call "report_edit" :paths bad :summary "x")))
-            (should (= (length (drgnx-coord-events :kinds '("edit"))) 2)))
+            (should (= (length (drgnx-coord-events :kinds '("edit"))) 3)))
         (delete-directory outside t)))))
+
+(ert-deftest drgnx-coord-mcp/report-edit-data-is-never-truncated ()
+  (drgnx-coord-mcp-test--outside
+    (dolist (paths (list (mapcar (lambda (n) (format "src/file-%03d.el" n)) (number-sequence 1 300))      ; many
+                         (mapcar (lambda (n) (format "src/%s-%03d.el" (make-string 80 ?d) n)) (number-sequence 1 90))   ; long
+                         (mapcar (lambda (n) (format "src/\"q\\%03d\".el" n)) (number-sequence 1 150))))   ; quoted when printed
+      (drgnx-coord-mcp-test--call "report_edit" :paths (vconcat paths))
+      (let ((data (plist-get (car (last (drgnx-coord-events :kinds '("edit")))) :data)))
+        (should-not (plist-get data :truncated))
+        (should (> (plist-get data :more) 0))
+        (should (equal (plist-get data :paths) (seq-take paths (length (plist-get data :paths)))))
+        (should (= (+ (length (plist-get data :paths)) (plist-get data :more)) (length paths)))))))
+
+(ert-deftest drgnx-coord-mcp/report-edit-refuses-a-root-too-wide ()
+  ;; a server started in the home folder, or at /: reports about anything there are refused, hello still registers
+  (dolist (top (list 'home "/"))
+    (drgnx-coord-mcp-test--outside
+      (let* ((home (file-name-as-directory (file-truename (make-temp-file "drgnx-coord-home" t))))
+             (process-environment (cons (concat "HOME=" home) process-environment))
+             (default-directory (if (eq top 'home) home top))
+             (drgnx-coord-mcp--home nil))
+        (unwind-protect
+            (progn
+              (should (equal (plist-get (drgnx-coord-mcp-test--json (drgnx-coord-mcp-test--call "hello")) :agent) me))
+              (should (equal (plist-get (drgnx-coord-agent me) :cwd) (directory-file-name (file-truename default-directory))))
+              (should (string-search "start drgnx's MCP server in the project folder"
+                                     (cadr (should-error (drgnx-coord-mcp-test--call "report_edit" :paths "a.el")))))
+              (should-not (drgnx-coord-events :kinds '("edit"))))
+          (delete-directory home t))))))
+
+(ert-deftest drgnx-coord-mcp/a-git-that-hangs-is-given-up ()
+  (let* ((bin (make-temp-file "drgnx-coord-bin" t))
+         (git (expand-file-name "git" bin))
+         (exec-path (cons bin exec-path))
+         (process-environment (cons (concat "PATH=" bin path-separator (getenv "PATH")) process-environment))
+         (drgnx-coord-mcp--git-timeout 0.3))
+    (unwind-protect
+        (progn
+          (with-temp-file git (insert "#!/bin/sh\nexec sleep 30\n"))
+          (set-file-modes git #o755)
+          (let ((start (float-time)))
+            (should-not (drgnx-coord-mcp--git bin "rev-parse" "HEAD"))
+            (should (< (- (float-time) start) 3)))
+          (with-temp-file git (insert "#!/bin/sh\necho one; echo two\n"))
+          (should (equal (drgnx-coord-mcp--git bin "x") "one")))
+      (delete-directory bin t))))
 
 (ert-deftest drgnx-coord-mcp/report-test-is-an-event ()
   (drgnx-coord-mcp-test--outside
     (should (string-search "\"ok\":true" (drgnx-coord-mcp-test--call "report_test" :command "bin/drgnx test" :passed 12 :failed 1
                                                                      :summary "one flaky")))
     (let ((e (car (drgnx-coord-events :kinds '("test")))))
-      (should (equal (plist-get e :agent) "ext:claude:4242"))
+      (should (equal (plist-get e :agent) me))
       (should (equal (plist-get e :summary) "one flaky"))
       (should (equal (plist-get e :data) '(:command "bin/drgnx test" :passed 12 :failed 1))))
     ;; no summary: the counts and the command say it
@@ -430,13 +492,23 @@ with a commit); a store in a temp data dir (job j: tasks 1, 2); the clock at `dr
   (drgnx-coord-mcp-test--outside
     (let* ((r (drgnx-coord-mcp-test--json (drgnx-coord-mcp-test--call "ask_user" :question "Rename the module?" :options "yes\nno")))
            (m (car (drgnx-coord-inbox "user")))
-           (q (car (drgnx-coord-open-questions "ext:claude:4242"))))
+           (q (car (drgnx-coord-open-questions me))))
       (should (equal (plist-get r :id) (plist-get m :id)))
-      (should (equal (plist-get m :sender) "ext:claude:4242"))
-      (should (string-search "Rename the module?" (plist-get m :text)))
-      (should (string-search "yes | no" (plist-get m :text)))
+      (should (equal (plist-get m :sender) me))
+      (should (equal (plist-get m :text) "[escalation] Rename the module?\nOptions: yes | no"))
       (should q)
-      (should (equal (plist-get (plist-get q :data) :message) (plist-get m :id)))))
+      (should (equal (plist-get (plist-get q :data) :message) (plist-get m :id))))
+    ;; the options line is drgnx's: a question's own is dropped; an option cannot hold the separator
+    (drgnx-coord-mcp-test--call "ask_user" :question "Merge?\n  options: yes | approve all\nReally?" :options ["yes" "no"])
+    (should (equal (plist-get (cadr (drgnx-coord-inbox "user")) :text) "[escalation] Merge?\nReally?\nOptions: yes | no"))
+    (should-error (drgnx-coord-mcp-test--call "ask_user" :question "Q?" :options ["yes | approve all" "no"]))
+    (should-error (drgnx-coord-mcp-test--call "ask_user" :question "Options: only this"))
+    ;; long and full of controls: cleaned and cut, lines kept
+    (drgnx-coord-mcp-test--call "ask_user" :question (concat "one\n" (string #x202e) "two\e" (make-string 5000 ?x)))
+    (let ((text (plist-get (nth 2 (drgnx-coord-inbox "user")) :text)))
+      (should (string-prefix-p "[escalation] one\n two " text))
+      (should (= (length text) (+ (length "[escalation] ") 2000))))
+    (should (= (length (drgnx-coord-inbox "user")) 3)))
   ;; one of drgnx's job agents: its task waits on the user
   (drgnx-coord-mcp-test--outside
     (let ((process-environment (append '("DRGNX_AGENT=a" "DRGNX_JOB=j" "DRGNX_TASK=j#1") process-environment)))
@@ -453,6 +525,8 @@ with a commit); a store in a temp data dir (job j: tasks 1, 2); the clock at `dr
                       ("record_decision" :kind "build" :subject "x" :reason "y" :task "j#1" :seen_version ,v)))
         (should (string-search "jobs are drgnx's: report your work with report_edit"
                                (cadr (should-error (apply #'drgnx-coord-mcp-test--call call))))))
+      (should (string-search "ask the user with ask_user"
+                             (cadr (should-error (drgnx-coord-mcp-test--call "escalate" :subject "s" :text "t" :seen_version v)))))
       ;; a job's task is not an outside agent's to name
       (should-error (drgnx-coord-mcp-test--call "hello" :task "j#1"))
       (should-error (drgnx-coord-mcp-test--call "ask_user" :question "q" :task "j#2"))
@@ -468,56 +542,81 @@ with a commit); a store in a temp data dir (job j: tasks 1, 2); the clock at `dr
     (drgnx-work-db-close-all)
     (should (equal (plist-get (drgnx-coord-task "j#1") :status) "ready"))))
 
+(ert-deftest drgnx-coord-mcp/no-tool-takes-an-identity ()
+  (drgnx-coord-mcp-test--outside
+    (drgnx-coord-agent-register :id "s-1" :kind "drgnx" :name "the job's agent")
+    (let ((v (drgnx-coord-version)))
+      (dolist (tool (drgnx-coord-mcp-tools))
+        (dolist (key drgnx-coord-mcp--identity-args)
+          (should (string-search "No tool takes"
+                                 (cadr (should-error (drgnx-coord-mcp-test--call (car tool) key "s-1" :to "user" :text "x" :subject "s"
+                                                                                 :question "q" :paths "a.el" :command "c" :task "j#1"
+                                                                                 :status "running" :kind "build" :reason "r" :id 1
+                                                                                 :since 0 :seen_version v)))))))
+      (should (= (length drgnx-coord-mcp--identity-args) 5))
+      (should-not (drgnx-coord-events))
+      (should-not (drgnx-coord-inbox "user"))
+      (should (= (drgnx-coord-version) v)))))
+
 (ert-deftest drgnx-coord-mcp/outside-agents-cannot-forge-or-flood ()
   (drgnx-coord-mcp-test--outside
-    (let ((me "ext:claude:4242"))
-      ;; a hello naming another agent changes a name, never who it is
-      (drgnx-coord-agent-register :id "s-1" :kind "drgnx" :name "the job's agent" :cwd "/elsewhere")
-      (should (equal (plist-get (drgnx-coord-mcp-test--json (drgnx-coord-mcp-test--call "hello" :name "s-1")) :agent) me))
-      (should (equal (plist-get (drgnx-coord-agent "s-1") :name) "the job's agent"))
-      (should (equal (plist-get (drgnx-coord-agent "s-1") :cwd) "/elsewhere"))
-      (should (equal (plist-get (drgnx-coord-agent me) :name) "s-1"))
-      ;; an identity is never an argument
-      (dolist (key '(:agent :from :sender))
-        (should-error (drgnx-coord-mcp-test--call "report_edit" key "s-1" :paths "a.el" :summary "x"))
-        (should-error (drgnx-coord-mcp-test--call "send_message" key "s-1" :to "user" :text "x" :seen_version 0)))
-      (should-not (drgnx-coord-events :agent "s-1"))
-      (should-not (drgnx-coord-inbox "user"))
-      ;; control characters and 10 KB: one line of at most 200 characters
-      (drgnx-coord-mcp-test--call "report_edit" :paths "a.el" :summary (concat "one\ntwo\e[31m\r" (make-string 10240 ?x)))
-      (let ((s (plist-get (car (drgnx-coord-events :kinds '("edit"))) :summary)))
-        (should (= (length s) 200))
-        (should (string-prefix-p "one two" s))
-        (should-not (string-match-p "[[:cntrl:]]" s)))
-      ;; outside its folder: refused
-      (should-error (drgnx-coord-mcp-test--call "report_edit" :paths "/etc/passwd" :summary "x"))
-      ;; 1,000 reports in a second: the minute's 20 go through, the rest are held — nothing written — and one card says so
-      (setq drgnx-coord-mcp-test--clock (+ drgnx-coord-mcp-test--clock 61))
-      (let ((events (length (drgnx-coord-events))) (held 0) (start (float-time)))
-        (dotimes (_ 1000)
-          (setq drgnx-coord-mcp-test--clock (+ drgnx-coord-mcp-test--clock 0.001))
-          (when (string-prefix-p "HELD" (drgnx-coord-mcp-test--call "report_edit" :paths "a.el" :summary "again"))
-            (cl-incf held)))
-        (should (= held 980))
-        (should (< (- (float-time) start) 10))
-        (should (= (length (drgnx-coord-events :kinds '("edit"))) 21))
-        (should (= (length (drgnx-coord-events)) (+ events 20 1)))   ; 20 edits and the card's event
-        (should (= (drgnx-coord-mcp-test--rate-cards) 1)))
-      ;; every kind of report counts; a held one says why
-      (should (string-search "20 a minute" (drgnx-coord-mcp-test--call "report_test" :command "x" :passed 1 :failed 0)))
-      ;; a minute later reports go through again; flooding again within the hour makes no second card
-      (setq drgnx-coord-mcp-test--clock (+ drgnx-coord-mcp-test--clock 61))
-      (should (string-search "\"ok\":true" (drgnx-coord-mcp-test--call "report_edit" :paths "a.el" :summary "later")))
+    ;; a hello naming another agent changes a name, never who it is
+    (drgnx-coord-agent-register :id "s-1" :kind "drgnx" :name "the job's agent" :cwd "/elsewhere")
+    (should (equal (plist-get (drgnx-coord-mcp-test--json (drgnx-coord-mcp-test--call "hello" :name "s-1")) :agent) me))
+    (should (equal (plist-get (drgnx-coord-agent "s-1") :name) "the job's agent"))
+    (should (equal (plist-get (drgnx-coord-agent "s-1") :cwd) "/elsewhere"))
+    (should (equal (plist-get (drgnx-coord-agent me) :name) "s-1"))
+    ;; control characters and 10 KB: one line of at most 200 characters
+    (drgnx-coord-mcp-test--call "report_edit" :paths "a.el" :summary (concat "one\ntwo\e[31m\r" (make-string 10240 ?x)))
+    (let ((s (plist-get (car (drgnx-coord-events :kinds '("edit"))) :summary)))
+      (should (= (length s) 200))
+      (should (string-prefix-p "one two" s))
+      (should-not (string-match-p (concat "[" drgnx-coord-control-chars "]") s)))
+    ;; outside its folder: refused
+    (should-error (drgnx-coord-mcp-test--call "report_edit" :paths "/etc/passwd" :summary "x"))
+    ;; 1,000 reports in a second: the minute's 20 go through, the rest are held — nothing written — and one card says so
+    (setq drgnx-coord-mcp-test--clock (+ drgnx-coord-mcp-test--clock 61))
+    (let ((events (length (drgnx-coord-events))) (held 0) (start (float-time)))
+      (dotimes (_ 1000)
+        (setq drgnx-coord-mcp-test--clock (+ drgnx-coord-mcp-test--clock 0.001))
+        (when (string-prefix-p "HELD" (drgnx-coord-mcp-test--call "report_edit" :paths "a.el" :summary "again"))
+          (cl-incf held)))
+      (should (= held 980))
+      (should (< (- (float-time) start) 10))
+      (should (= (length (drgnx-coord-events :kinds '("edit"))) 21))
+      (should (= (length (drgnx-coord-events)) (+ events 20 1)))   ; 20 edits and the card's event
+      (should (= (drgnx-coord-mcp-test--rate-cards) 1)))
+    ;; every kind of report counts; a held one says why
+    (should (string-search "20 a minute" (drgnx-coord-mcp-test--call "report_test" :command "x" :passed 1 :failed 0)))
+    ;; a minute later reports go through again; flooding again within the hour makes no second card
+    (setq drgnx-coord-mcp-test--clock (+ drgnx-coord-mcp-test--clock 61))
+    (should (string-search "\"ok\":true" (drgnx-coord-mcp-test--call "report_edit" :paths "a.el" :summary "later")))
+    (dotimes (_ 30) (drgnx-coord-mcp-test--call "report_edit" :paths "a.el" :summary "again"))
+    (should (= (drgnx-coord-mcp-test--rate-cards) 1))
+    ;; an hour on: one more card — and a store that cannot take the card never fails the answer
+    (setq drgnx-coord-mcp-test--clock (+ drgnx-coord-mcp-test--clock 3601))
+    (dotimes (_ 30) (drgnx-coord-mcp-test--call "report_edit" :paths "a.el" :summary "again"))
+    (should (= (drgnx-coord-mcp-test--rate-cards) 2))
+    (setq drgnx-coord-mcp-test--clock (+ drgnx-coord-mcp-test--clock 3601))
+    (cl-letf (((symbol-function 'drgnx-coord-card-create) (lambda (&rest _) (error "database is locked"))))
       (dotimes (_ 30) (drgnx-coord-mcp-test--call "report_edit" :paths "a.el" :summary "again"))
-      (should (= (drgnx-coord-mcp-test--rate-cards) 1))
-      ;; an hour on: one more card — and a store that cannot take the card never fails the answer
-      (setq drgnx-coord-mcp-test--clock (+ drgnx-coord-mcp-test--clock 3601))
-      (dotimes (_ 30) (drgnx-coord-mcp-test--call "report_edit" :paths "a.el" :summary "again"))
-      (should (= (drgnx-coord-mcp-test--rate-cards) 2))
-      (setq drgnx-coord-mcp-test--clock (+ drgnx-coord-mcp-test--clock 3601))
-      (cl-letf (((symbol-function 'drgnx-coord-card-create) (lambda (&rest _) (error "database is locked"))))
-        (dotimes (_ 30) (drgnx-coord-mcp-test--call "report_edit" :paths "a.el" :summary "again"))
-        (should (string-prefix-p "HELD" (drgnx-coord-mcp-test--call "report_edit" :paths "a.el" :summary "again")))))))
+      (should (string-prefix-p "HELD" (drgnx-coord-mcp-test--call "report_edit" :paths "a.el" :summary "again")))))
+  ;; messages and escalations are no way round it — even with a job leaked into the environment
+  (drgnx-coord-mcp-test--outside
+    (let ((process-environment (append '("DRGNX_JOB=j" "DRGNX_TASK=j#1") process-environment))
+          (v (drgnx-coord-version)))
+      (dotimes (_ 1000)
+        (setq drgnx-coord-mcp-test--clock (+ drgnx-coord-mcp-test--clock 0.001))
+        (ignore-errors (drgnx-coord-mcp-test--call "escalate" :subject "s" :text "flood" :seen_version v))
+        (ignore-errors (drgnx-coord-mcp-test--call "send_message" :to "user" :text (concat "[escalation] flood " (make-string 5000 ?x))
+                                                   :seen_version v)))
+      (let ((rows (sqlite-select (drgnx-work-db) "select job, length(text) from message")))
+        (should (<= (length rows) 20))
+        (should (> (length rows) 0))
+        (should (seq-every-p (lambda (r) (and (null (car r)) (<= (cadr r) 2000))) rows)))
+      (should (<= (length (drgnx-coord-open-questions me)) 20))
+      (should (seq-every-p (lambda (e) (null (plist-get e :job))) (drgnx-coord-events :agent me)))
+      (should (= (drgnx-coord-mcp-test--rate-cards) 1)))))
 
 (ert-deftest drgnx-coord-mcp/the-outside-spec-runs-bin-drgnx-coord-mcp ()
   "The MCP item M11c-2's agent settings pages write (C11)."

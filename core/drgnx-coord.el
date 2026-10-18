@@ -63,9 +63,13 @@ is an error: nothing was read at a version that does not exist."
 
 (defconst drgnx-coord--summary-max 200 "The longest event summary, in characters.")
 
+(defconst drgnx-coord-control-chars (concat "\0-\37\177-" (string #x9f #x200e #x200f #x202a ?- #x202e #x2066 ?- #x2069))
+  "Characters an agent's text must not carry, as the inside of a regexp bracket: the C0 controls, DEL, the C1
+controls and the BiDi controls (marks, embeddings, overrides, isolates) that make text read other than it is.")
+
 (defun drgnx-coord--one-line (text)
-  "TEXT as one line of at most `drgnx-coord--summary-max' characters (control characters become spaces)."
-  (let ((line (replace-regexp-in-string "[[:cntrl:]]" " " (format "%s" (or text "")))))
+  "TEXT as one line of at most `drgnx-coord--summary-max' characters (`drgnx-coord-control-chars' become spaces)."
+  (let ((line (replace-regexp-in-string (concat "[" drgnx-coord-control-chars "]") " " (format "%s" (or text "")))))
     (if (> (length line) drgnx-coord--summary-max) (substring line 0 drgnx-coord--summary-max) line)))
 
 (defconst drgnx-coord--data-max 4096 "The longest printed event data, in characters; more is stored as (:truncated t :size N).")

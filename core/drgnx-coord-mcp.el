@@ -9,9 +9,9 @@
 ;; carries the decision-log version the agent last read, and a write made from an old version is held — nothing
 ;; written, the changes returned.  After a write the server tells the hub, so messages go out at once.
 ;; Agents outside drgnx (Claude Code in a terminal, Codex, Zed, …) start it from their own config
-;; (`drgnx-coord-mcp-outside-spec'): DRGNX_AGENT_KIND names their kind, their identity is ext:KIND:PID — PID their
-;; process, this server's parent — and they report (hello, report_edit, report_test, ask_user) but never touch a
-;; job's tasks.  No tool takes an identity as an argument.  See docs/develop/coordination.md.
+;; (`drgnx-coord-mcp-outside-spec'): DRGNX_AGENT_KIND names their kind, their identity is ext:KIND:PID-HASH — PID
+;; their process, this server's parent, HASH its start time — and they report (hello, report_edit, report_test,
+;; ask_user) and send messages, within one limit, but never touch a job's tasks or escalate.  No tool takes an identity as an argument.  See docs/develop/coordination.md.
 
 ;;; Code:
 (require 'cl-lib)
@@ -27,18 +27,34 @@
 ;;;; Who this server speaks for
 
 (defvar drgnx-coord-mcp--parent nil
-  "The agent process this server speaks for, read once: (PID . FROM-PARENT) — FROM-PARENT nil when no parent could be
-read and PID is this server's own.")
+  "The agent process this server speaks for, read once (at startup, `drgnx-coord-mcp-main'): (:pid PID :tag TAG
+:note NOTE).  TAG is PID-HASH — HASH of the process's start time, so a pid used again by another process is another
+agent — or PID alone when the start time cannot be read; when no parent can be read, PID is this server's own.  NOTE
+says which fallback was taken.")
 
 (defun drgnx-coord-mcp--parent-pid ()
   "This server's parent process — the agent that started it — or nil when the platform does not say."
   (alist-get 'ppid (ignore-errors (process-attributes (emacs-pid)))))
 
+(defun drgnx-coord-mcp--process-start (pid)
+  "When process PID started (a Lisp time), or nil when the platform does not say."
+  (alist-get 'start (ignore-errors (process-attributes pid))))
+
+(defun drgnx-coord-mcp--start-hash (start)
+  "A short hash of START, a process's start time, to the second (the boot time it is computed from jitters)."
+  (substring (secure-hash 'sha1 (number-to-string (round (float-time start)))) 0 6))
+
 (defun drgnx-coord-mcp--parent ()
   (or drgnx-coord-mcp--parent
       (setq drgnx-coord-mcp--parent
             (let ((ppid (drgnx-coord-mcp--parent-pid)))
-              (if (and (natnump ppid) (> ppid 1)) (cons ppid t) (cons (emacs-pid) nil))))))   ; 1: init, not an agent
+              (if (not (and (natnump ppid) (> ppid 1)))   ; 1: init, not an agent
+                  (list :pid (emacs-pid) :tag (number-to-string (emacs-pid))
+                        :note "the agent's process could not be read: this identity is from this server's own pid")
+                (let ((start (drgnx-coord-mcp--process-start ppid)))
+                  (if start (list :pid ppid :tag (format "%d-%s" ppid (drgnx-coord-mcp--start-hash start)) :parent t)
+                    (list :pid ppid :tag (number-to-string ppid) :parent t
+                          :note "the agent's start time could not be read: this identity is its pid alone, which another process may get later"))))))))
 
 (defun drgnx-coord-mcp--valid-kind (kind)
   "KIND (a string or symbol) as a string when it is a short lower-case name, else an error."
@@ -52,13 +68,13 @@ read and PID is this server's own.")
     (and (or (null a) (string-empty-p a)) k (not (string-empty-p k)) (drgnx-coord-mcp--valid-kind k))))
 
 (defun drgnx-coord-mcp--identity ()
-  "Who this server speaks for: DRGNX_AGENT (drgnx's own agents), else ext:KIND:PID for an agent outside drgnx — PID
-its process, this server's parent (this server's own pid where no parent can be read) — else nil (it only reads).
-Never from a tool's arguments."
+  "Who this server speaks for: DRGNX_AGENT (drgnx's own agents), else ext:KIND:PID-HASH for an agent outside drgnx —
+PID its process, this server's parent, HASH its start time (see `drgnx-coord-mcp--parent' for the fallbacks) — else
+nil (it only reads).  Never from a tool's arguments."
   (let ((a (getenv "DRGNX_AGENT")))
     (if (and a (not (string-empty-p a))) a
       (when-let* ((kind (drgnx-coord-mcp--outside-kind)))
-        (format "ext:%s:%d" kind (car (drgnx-coord-mcp--parent)))))))
+        (format "ext:%s:%s" kind (plist-get (drgnx-coord-mcp--parent) :tag))))))
 
 (defun drgnx-coord-mcp--me ()
   (or (drgnx-coord-mcp--identity)
@@ -87,7 +103,8 @@ Never from a tool's arguments."
 ;;;; Reports from any agent: paths, limits
 
 (defcustom drgnx-coord-report-rate 20
-  "Reports (hello, report_edit, report_test, ask_user) one agent may make a minute.  More are held: nothing is
+  "Reports (hello, report_edit, report_test, ask_user; an outside agent's send_message too) one agent may make a
+minute.  More are held: nothing is
 written, the answer says so, and a card tells the user — at most one an hour per agent."
   :type 'natnum :group 'drgnx)
 
@@ -126,23 +143,55 @@ the store, for a server started again); best effort: a busy store tells nobody a
               drgnx-coord-report-rate drgnx-coord-report-rate))))
 
 (defun drgnx-coord-mcp--line (text &optional max)
-  "TEXT (a string or nil) as one line of at most MAX (200) characters, control characters as spaces; nil when blank."
+  "TEXT (a string or nil) as one line of at most MAX (200) characters, `drgnx-coord-control-chars' as spaces; nil when
+blank."
   (when (stringp text)
-    (let ((line (string-trim (replace-regexp-in-string "[[:cntrl:]]+" " " text))))
+    (let ((line (string-trim (replace-regexp-in-string (concat "[" drgnx-coord-control-chars "]+") " " text))))
       (unless (string-empty-p line) (substring line 0 (min (length line) (or max 200)))))))
 
+(defconst drgnx-coord-mcp--text-max 2000 "The longest question or message text an agent sends, in characters.")
+
+(defun drgnx-coord-mcp--text (text what)
+  "TEXT (WHAT, for the error) cleaned for the user to read: trimmed, the characters of `drgnx-coord-control-chars'
+other than newline and tab as spaces, at most `drgnx-coord-mcp--text-max' characters.  An error when it is blank."
+  (let ((clean (and (stringp text)
+                    (string-trim (replace-regexp-in-string (concat "[" drgnx-coord-control-chars "]")
+                                                           (lambda (c) (if (member c '("\n" "\t")) c " "))
+                                                           text t t)))))
+    (if (or (null clean) (string-empty-p clean)) (error "%s is required" what)
+      (substring clean 0 (min (length clean) drgnx-coord-mcp--text-max)))))
+
+(defvar drgnx-coord-mcp--git-timeout 3 "Seconds a git command may take before it is given up (nil is its answer).")
+
 (defun drgnx-coord-mcp--git (dir &rest args)
-  "git ARGS in DIR: the first line of its output, or nil when git fails.  Never asks (no terminal, no stdin)."
-  (let ((default-directory (file-name-as-directory dir))
-        (process-environment (append '("GIT_TERMINAL_PROMPT=0" "GIT_OPTIONAL_LOCKS=0") process-environment)))
-    (with-temp-buffer
-      (when (eq 0 (ignore-errors (apply #'call-process "git" nil '(t nil) nil args)))
-        (car (split-string (buffer-string) "\n" t))))))
+  "git ARGS in DIR: the first line of its output, or nil when git fails or takes over `drgnx-coord-mcp--git-timeout'
+seconds (it is killed).  Never asks: no terminal, its stdin closed at once."
+  (let* ((default-directory (file-name-as-directory dir))
+         (process-environment (append '("GIT_TERMINAL_PROMPT=0" "GIT_OPTIONAL_LOCKS=0") process-environment))
+         (out (generate-new-buffer " *drgnx-coord-git*" t))
+         (err (generate-new-buffer " *drgnx-coord-git-err*" t))
+         (deadline (+ (float-time) drgnx-coord-mcp--git-timeout))
+         (proc nil))
+    (unwind-protect
+        (condition-case nil
+            (progn
+              (setq proc (make-process :name "drgnx-coord-git" :buffer out :stderr err :command (cons "git" args)
+                                       :connection-type 'pipe :noquery t :sentinel #'ignore))
+              (process-send-eof proc)
+              (while (and (process-live-p proc) (< (float-time) deadline)) (accept-process-output proc 0.05))
+              (if (process-live-p proc) nil   ; too slow: given up (killed below)
+                (while (accept-process-output proc 0))
+                (and (eq (process-exit-status proc) 0)
+                     (car (split-string (with-current-buffer out (buffer-string)) "\n" t)))))
+          (error nil))
+      (when (and proc (process-live-p proc)) (delete-process proc))
+      (let ((ep (get-buffer-process err))) (when ep (delete-process ep)))
+      (kill-buffer out) (kill-buffer err))))
 
 (defun drgnx-coord-mcp--local (path base)
   "PATH, relative to BASE, as a local truename (no trailing slash).  An error for a blank name, a control character, a
 `..', or a remote (TRAMP) name — refused before any file handler runs, so nothing connects."
-  (when (or (not (stringp path)) (string-blank-p path) (string-match-p "[[:cntrl:]]" path))
+  (when (or (not (stringp path)) (string-blank-p path) (string-match-p (concat "[" drgnx-coord-control-chars "]") path))
     (error "Not a path: %S" path))
   (when (string-match-p "\\`/[^/]*:" path) (error "%s is not a local path" path))
   (when (member ".." (split-string path "[/\\]+")) (error "%s has a `..': name it from the folder you work in" path))
@@ -159,11 +208,21 @@ the store, for a server started again); best effort: a busy store tells nobody a
   (when-let* ((top (drgnx-coord-mcp--git dir "rev-parse" "--show-toplevel")))
     (let ((file-name-handler-alist nil)) (directory-file-name (file-truename top)))))
 
+(defvar drgnx-coord-mcp--home nil "(DIR . HOME): `drgnx-coord-mcp--home' for the working directory DIR, found once.")
+
 (defun drgnx-coord-mcp--home ()
   "The folder this server's agent may report about: the git worktree of the folder it started this server in (the
-process's own working directory, never an argument), else that folder."
+process's own working directory, never an argument), else that folder.  Found once per server."
   (let ((dir (let ((file-name-handler-alist nil)) (directory-file-name (file-truename default-directory)))))
-    (or (drgnx-coord-mcp--worktree dir) dir)))
+    (if (equal (car drgnx-coord-mcp--home) dir) (cdr drgnx-coord-mcp--home)
+      (cdr (setq drgnx-coord-mcp--home (cons dir (or (drgnx-coord-mcp--worktree dir) dir)))))))
+
+(defun drgnx-coord-mcp--too-wide-p (root)
+  "Whether ROOT (a truename) is too wide to report about: a file system root, the home folder or one above it."
+  (let ((home (let ((h (getenv "HOME")) (file-name-handler-alist nil))
+                (and h (not (string-empty-p h)) (directory-file-name (file-truename h))))))
+    (or (string-match-p "\\`\\(/\\|[A-Za-z]:/?\\)\\'" root)
+        (and home (drgnx-coord-mcp--under-p home root)))))
 
 (defun drgnx-coord-mcp--where (me)
   "(CWD . ROOT) for ME's reports: CWD resolves relative paths, ROOT holds them — the cwd and worktree its hello
@@ -201,7 +260,7 @@ registered when they lie in `drgnx-coord-mcp--home', else that folder."
            (parent (drgnx-coord-mcp--parent)))
       (drgnx-coord-agent-register :id me :kind kind :name name :cwd cwd :worktree worktree :branch branch :base base
                                   :plan (drgnx-coord-mcp--line (plist-get args :plan)) :task task
-                                  :pid (and (drgnx-coord-mcp--outside-kind) (cdr parent) (car parent))
+                                  :pid (and (drgnx-coord-mcp--outside-kind) (plist-get parent :parent) (plist-get parent :pid))
                                   :clear (and start (append (and (null worktree) '(:worktree)) (and (null base) '(:base)))))
       (when start
         (drgnx-coord-event-add :agent me :job (drgnx-coord-mcp--own "DRGNX_JOB") :task (drgnx-coord-mcp--own "DRGNX_TASK")
@@ -210,26 +269,47 @@ registered when they lie in `drgnx-coord-mcp--home', else that folder."
                                               when v append (list k v)))
         (drgnx-coord-mcp--notify-hub))
       (append (list :agent me :version (drgnx-coord-version) :cwd cwd :worktree worktree :base base)
-              (and (drgnx-coord-mcp--outside-kind) (not (cdr parent))
-                   (list :note "the agent's process could not be read: this identity is from this server's own pid"))))))
+              (and (drgnx-coord-mcp--outside-kind) (plist-get parent :note) (list :note (plist-get parent :note)))))))
+
+(defconst drgnx-coord-mcp--paths-max 1000 "The most paths one report_edit may name; more are refused unread.")
+
+(defun drgnx-coord-mcp--edit-data (root paths more)
+  "An edit event's data: ROOT, PATHS (relative), and MORE paths left out when it is above 0."
+  (append (list :root root :paths paths) (and (> more 0) (list :more more))))
+
+(defun drgnx-coord-mcp--fitting (root paths)
+  "The first of PATHS that an edit event's data keeps whole: printed as C1 prints it (`drgnx-coord--data-print': at
+most 100 elements of a list), within `drgnx-coord--data-max' characters."
+  (let ((kept (seq-take paths 100)))
+    (while (and kept (> (length (let ((print-length 100) (print-level 6) (print-escape-newlines t))
+                                  (prin1-to-string (drgnx-coord-mcp--edit-data root kept (- (length paths) (length kept))))))
+                        drgnx-coord--data-max))
+      (setq kept (butlast kept)))
+    kept))
 
 (defun drgnx-coord-mcp--report-edit (me args)
   "Record ME's edit (`report_edit'): see `drgnx-coord-mcp-tools'."
   (let* ((where (drgnx-coord-mcp--where me)) (cwd (car where)) (root (cdr where))
-         (given (let ((p (plist-get args :paths))) (if (vectorp p) (append p nil) (split-string (or p "") "[\n,]" t "[ \t]+"))))
+         ;; an array, else one per line — or, in a string with no newline, separated by commas
+         (given (let ((p (plist-get args :paths)))
+                  (cond ((vectorp p) (append p nil))
+                        ((not (stringp p)) nil)
+                        (t (split-string p (if (string-search "\n" p) "\n" ",") t "[ \t\r]+")))))
+         (_ (when (drgnx-coord-mcp--too-wide-p root)
+              (error "%s" (format "The folder you work in is %s — your home folder or above it, too wide to report about: start drgnx's MCP server in the project folder (the agent's working directory there)" root))))
+         (_ (when (nthcdr drgnx-coord-mcp--paths-max given)
+              (error "%d paths: at most %d in one report" (length given) drgnx-coord-mcp--paths-max)))
          (paths (mapcar (lambda (p)
                           (let ((file (drgnx-coord-mcp--local p cwd)))
                             (unless (drgnx-coord-mcp--under-p file root) (error "%s is outside %s, the folder you work in" p root))
                             (let ((file-name-handler-alist nil)) (file-relative-name file root))))
                         given)))
-    (unless paths (error "paths is required: the files you changed, one per line or separated by commas"))
-    (let* ((size 0)
-           ;; as many as the event's data keeps whole (4 KB with the root; a list prints at most 100): the rest are counted
-           (kept (seq-take (seq-take-while (lambda (p) (<= (cl-incf size (+ 3 (string-bytes p))) 3000)) paths) 100))
+    (unless paths (error "paths is required: the files you changed (an array, or one per line)"))
+    (let* ((kept (drgnx-coord-mcp--fitting root paths))
            (id (drgnx-coord-event-add-best-effort
                 :agent me :job (drgnx-coord-mcp--own "DRGNX_JOB") :task (drgnx-coord-mcp--own "DRGNX_TASK") :kind "edit"
                 :summary (or (plist-get args :summary) (format "%d file%s" (length paths) (if (cdr paths) "s" "")))
-                :data (append (list :root root :paths kept) (and (nthcdr (length kept) paths) (list :more (- (length paths) (length kept))))))))
+                :data (drgnx-coord-mcp--edit-data root kept (- (length paths) (length kept))))))
       (drgnx-coord-agent-seen me)
       (drgnx-coord-mcp--notify-hub)
       (if id (list :ok t :event id :paths (length paths)) (list :ok :false :busy "the store was busy: not recorded, go on")))))
@@ -250,23 +330,25 @@ registered when they lie in `drgnx-coord-mcp--home', else that folder."
 
 (defun drgnx-coord-mcp--ask-user (me args)
   "Ask the user (`ask_user'): see `drgnx-coord-mcp-tools'."
-  (let* ((question (or (let ((q (plist-get args :question)))
-                         (and (stringp q) (not (string-blank-p q))
-                              (let ((q (replace-regexp-in-string "[^[:print:]\n\t]" " " (string-trim q))))
-                                (substring q 0 (min (length q) 2000)))))
-                       (error "question is required")))
+  (let* ((question (string-trim
+                    ;; the options line is drgnx's to write: an "Options:" line of the question's own goes
+                    (replace-regexp-in-string "^[ \t]*[Oo][Pp][Tt][Ii][Oo][Nn][Ss][ \t]*:.*\\(\n\\|\\'\\)" ""
+                                              (drgnx-coord-mcp--text (plist-get args :question) "question"))))
          (options (delq nil (mapcar #'drgnx-coord-mcp--line
-                                    (let ((o (plist-get args :options))) (if (vectorp o) (append o nil) (and (stringp o) (split-string o "\n" t)))))))
-         (task (or (drgnx-coord-mcp--own-task (plist-get args :task)) (drgnx-coord-mcp--own "DRGNX_TASK")))
-         (r (drgnx-coord-send :job (drgnx-coord-mcp--own "DRGNX_JOB") :sender me :recipient "user"
-                              :text (concat "[escalation] " (if task (format "(%s) " task) "") question
-                                            (if options (concat "\nOptions: " (string-join (seq-take options 20) " | ")) "")))))
-    ;; one of drgnx's agents with a task it holds: the task waits on the user
-    (when-let* ((held (and task (not (drgnx-coord-mcp--outside-kind)) (drgnx-coord-task task))))
-      (when (and (equal (plist-get held :agent) me) (member (plist-get held :status) '("claimed" "running")))
-        (drgnx-coord-set-status task me "needs-input" (drgnx-coord-version))))
-    (drgnx-coord-mcp--notify-hub)
-    (append r (list :answer "the user's answer comes as a message: read_inbox"))))
+                                    (let ((o (plist-get args :options))) (if (vectorp o) (append o nil) (and (stringp o) (split-string o "\n" t))))))))
+    (when (string-empty-p question) (error "question is required"))
+    (when-let* ((bad (seq-find (lambda (o) (string-search "|" o)) options)))
+      (error "An option cannot hold a `|' (it separates them): %s" bad))
+    (let* ((task (or (drgnx-coord-mcp--own-task (plist-get args :task)) (drgnx-coord-mcp--own "DRGNX_TASK")))
+           (r (drgnx-coord-send :job (drgnx-coord-mcp--own "DRGNX_JOB") :sender me :recipient "user"
+                                :text (concat "[escalation] " (if task (format "(%s) " task) "") question
+                                              (if options (concat "\nOptions: " (string-join (seq-take options 20) " | ")) "")))))
+      ;; one of drgnx's agents with a task it holds: the task waits on the user
+      (when-let* ((held (and task (not (drgnx-coord-mcp--outside-kind)) (drgnx-coord-task task))))
+        (when (and (equal (plist-get held :agent) me) (member (plist-get held :status) '("claimed" "running")))
+          (drgnx-coord-set-status task me "needs-input" (drgnx-coord-version))))
+      (drgnx-coord-mcp--notify-hub)
+      (append r (list :answer "the user's answer comes as a message: read_inbox")))))
 
 (defun drgnx-coord-mcp--jsonable (v)
   (cond ((null v) :null) ((eq v t) t)
@@ -317,7 +399,7 @@ registered when they lie in `drgnx-coord-mcp--home', else that folder."
 (defun drgnx-coord-mcp--agents ()
   "The agents of this job (every agent when the caller has no job), ((:agent ID :task TASK :name NAME)…): the hub's
 sessions when it runs, else the job's tasks that have an agent."
-  (let ((job (getenv "DRGNX_JOB")) (sessions (drgnx-coord-mcp--hub-agents)))
+  (let ((job (drgnx-coord-mcp--own "DRGNX_JOB")) (sessions (drgnx-coord-mcp--hub-agents)))
     (if (listp sessions)
         (delq nil (mapcar (lambda (s) (and (or (null job) (equal (plist-get s :job) job))
                                            (list :agent (plist-get s :id) :task (plist-get s :task) :name (plist-get s :name))))
@@ -330,7 +412,7 @@ sessions when it runs, else the job's tasks that have an agent."
 TO names (by id or name; an agent's identity is its session id, so inbox, ack and replies find the message).  Else an
 error, nothing is sent.  The hub is asked only when the cheap checks fail."
   (or (and (equal to "user") to)
-      (and (seq-some (lambda (task) (equal to (plist-get task :agent))) (drgnx-coord-tasks (getenv "DRGNX_JOB"))) to)
+      (and (seq-some (lambda (task) (equal to (plist-get task :agent))) (drgnx-coord-tasks (drgnx-coord-mcp--own "DRGNX_JOB"))) to)
       (let ((sessions (drgnx-coord-mcp--hub-agents)))
         (or (and (listp sessions)
                  (plist-get (seq-find (lambda (s) (member to (list (plist-get s :id) (plist-get s :name)))) sessions) :id))
@@ -360,9 +442,12 @@ error, nothing is sent.  The hub is asked only when the cheap checks fail."
                              ("task" "string" "The task you work on (your own label; a drgnx job's tasks are not yours to name)")))
        :call ,(lambda (a) (drgnx-coord-mcp--reporting drgnx-coord-mcp--hello a)))
       ("report_edit" :description "Say which files you changed (paths only; inside the folder you work in): the user's Work cockpit shows them and their diff."
-       :schema ,(funcall s '(("paths" "string" "The files, one per line or separated by commas, relative to your cwd or absolute")
-                             ("summary" "string" "What you changed, one line"))
-                         '("paths"))
+       :schema ,(let ((schema (funcall s '(("paths" "array" "") ("summary" "string" "What you changed, one line")) '("paths"))))
+                  ;; an array of strings (best), or a string: one per line, or — with no newline — separated by commas
+                  (puthash "paths" (list :type ["array" "string"] :items (list :type "string")
+                                         :description "The files (at most 1000), relative to your cwd or absolute: best an array of strings; a string takes one per line, or, with no newline, separated by commas")
+                           (plist-get schema :properties))
+                  schema)
        :call ,(lambda (a) (drgnx-coord-mcp--reporting drgnx-coord-mcp--report-edit a)))
       ("report_test" :description "Say you ran tests, and how they went: the user's status bar and cockpit show it."
        :schema ,(funcall s '(("command" "string" "The test command") ("passed" "integer" "Tests passed")
@@ -384,10 +469,13 @@ error, nothing is sent.  The hub is asked only when the cheap checks fail."
       ("send_message" :description "Send a message to another agent (or \"user\"); it is queued and never interrupts them"
        :schema ,(funcall s `(("to" "string" "The recipient") ("text" "string" "The message") ,seen) '("to" "text" "seen_version"))
        :call ,(lambda (a)
-                (let ((to (drgnx-coord-mcp--resolve-recipient (plist-get a :to))))
-                  (drgnx-coord-mcp--write
-                   (drgnx-coord-send :job (getenv "DRGNX_JOB") :sender (drgnx-coord-mcp--me) :recipient to
-                                     :text (plist-get a :text) :seen (drgnx-coord-mcp--seen a))))))
+                ;; an outside agent's messages count as its reports: the same limit
+                (or (and (drgnx-coord-mcp--outside-kind) (drgnx-coord-mcp--held-report (drgnx-coord-mcp--me)))
+                    (let ((text (drgnx-coord-mcp--text (plist-get a :text) "text"))
+                          (to (drgnx-coord-mcp--resolve-recipient (plist-get a :to))))
+                      (drgnx-coord-mcp--write
+                       (drgnx-coord-send :job (drgnx-coord-mcp--own "DRGNX_JOB") :sender (drgnx-coord-mcp--me) :recipient to
+                                         :text text :seen (drgnx-coord-mcp--seen a)))))))
       ("read_inbox" :description "Messages to you not read yet (they become read)"
        :schema ,(funcall s nil)
        :call ,(lambda (_a) (let ((msgs (drgnx-coord-inbox (drgnx-coord-mcp--me) '("queued" "delivered"))))
@@ -454,13 +542,18 @@ error, nothing is sent.  The hub is asked only when the cheap checks fail."
       ("escalate" :description "Ask the user to decide something (a clash, a question): queued for them (the job window shows it); go on with what does not depend on it"
        :schema ,(funcall s `(("subject" "string" "What it is about") ("text" "string" "What needs deciding") ,seen)
                          '("subject" "text" "seen_version"))
-       :call ,(lambda (a) (drgnx-coord-mcp--write
-                           (drgnx-coord-send :job (getenv "DRGNX_JOB") :sender (drgnx-coord-mcp--me) :recipient "user"
-                                             :text (format "[escalation] %s: %s" (plist-get a :subject) (plist-get a :text))
-                                             :seen (drgnx-coord-mcp--seen a))))))))
+       :call ,(lambda (a)
+                (when (drgnx-coord-mcp--outside-kind)
+                  (error "%s" "escalate is for drgnx's own job agents: ask the user with ask_user"))
+                (drgnx-coord-mcp--write
+                 (drgnx-coord-send :job (drgnx-coord-mcp--own "DRGNX_JOB") :sender (drgnx-coord-mcp--me) :recipient "user"
+                                   :text (format "[escalation] %s: %s" (drgnx-coord-mcp--text (plist-get a :subject) "subject")
+                                                 (drgnx-coord-mcp--text (plist-get a :text) "text"))
+                                   :seen (drgnx-coord-mcp--seen a))))))))
 
 (defun drgnx-coord-mcp-main ()
   "Batch entry: serve the coordination tools on stdin/stdout."
+  (drgnx-coord-mcp--parent)   ; the agent's process, read now: while it surely is this server's parent
   (drgnx-mcp-serve "drgnx" (drgnx-coord-mcp-tools)))
 
 (defun drgnx-coord-mcp-server-spec (agent &rest props)

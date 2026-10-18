@@ -110,6 +110,13 @@
     (should-error (drgnx-coord-event-add :agent "a" :kind "bogus" :summary "x"))
     (should (= (length (drgnx-coord-events)) 2))))
 
+(ert-deftest drgnx-coord-events/summaries-lose-del-c1-and-bidi-controls ()
+  ;; a summary that reads other than it is (an RTL override, an isolate) or hides in a C1 control
+  (drgnx-coord-events-test--with
+    (drgnx-coord-event-add :agent "a" :kind "status"
+                           :summary (concat "a\177b" (string #x85) "c" (string #x9b) "d" (string #x200e) "e" (string #x200f) "f" (string #x202e) "g" (string #x202a) "h" (string #x2066) "i" (string #x2069) "j" "é → ok"))
+    (should (equal (plist-get (car (drgnx-coord-events)) :summary) "a b c d e f g h i jé → ok"))))
+
 (ert-deftest drgnx-coord-events/events-since-and-filters ()
   (drgnx-coord-events-test--with
     (let* ((a (drgnx-coord-event-add :agent "a" :job "j" :task "j#1" :kind "start" :summary "s1" :at 10.0))
