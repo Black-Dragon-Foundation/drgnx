@@ -116,19 +116,21 @@ ai.eld never adds or changes one: a cloned repository must not choose where your
 ;; away).  The user confirms that once per project, from a command they ran; until then (and after a no) only the
 ;; local steps of the project's chain are used.
 (defun drgnx-ai-remote-p (id)
-  "Non-nil when provider ID is not on this machine: its address is not loopback."
-  (when-let* ((url (plist-get (drgnx-ai-provider id) :url))
-              (host (ignore-errors (url-host (url-generic-parse-url url)))))
-    (not (member (downcase host) '("localhost" "127.0.0.1" "::1" "[::1]")))))
+  "Non-nil when provider ID is not on this machine: its address is not loopback.  A provider whose address has
+no host, or does not parse, counts as remote (an unknown ID does not: nothing is asked of it)."
+  (when-let* ((p (drgnx-ai-provider id)))
+    (let ((host (ignore-errors (url-host (url-generic-parse-url (plist-get p :url))))))
+      (or (not (stringp host)) (not (member (downcase host) '("localhost" "127.0.0.1" "::1" "[::1]")))))))
 
 (defun drgnx-ai-routes-file ()
   "Where the answers about projects' remote routes are kept (drgnx state): :projects ((ROOT :allow BOOL :ids IDS)…)."
   (expand-file-name "ai-project-routes.eld" (drgnx-state-dir)))
 
 (defun drgnx-ai--project-root ()
-  "The root of the project whose .drgnx/ai.eld applies here, or nil."
+  "The real root (symlinks resolved: one repository, one answer; a link pointed at another repository gets its own)
+of the project whose .drgnx/ai.eld applies here, or nil."
   (when-let* ((file (drgnx-ai--project-file)))
-    (file-name-directory (directory-file-name (file-name-directory file)))))
+    (file-truename (file-name-directory (directory-file-name (file-name-directory file))))))
 
 (defun drgnx-ai--chain-remote-ids (chain)
   (seq-filter #'drgnx-ai-remote-p (delete-dups (mapcar #'car chain))))
@@ -183,6 +185,12 @@ that name a remote provider count only once the user allowed it (`drgnx-ai-confi
         (alist-get role (plist-get (drgnx-ai--config (drgnx-ai-file)) :roles))
         (alist-get role drgnx-ai-default-roles))))
 
+(defun drgnx-ai-user-role (role)
+  "ROLE's chain in the user's own configuration (their ai.eld, else the default), without any project's: what a
+choice written back to ai.eld starts from, so one project's route never becomes global."
+  (or (alist-get role (plist-get (drgnx-ai--config (drgnx-ai-file)) :roles))
+      (alist-get role drgnx-ai-default-roles)))
+
 ;;;; Keys
 
 (defun drgnx-ai--secret-source ()
@@ -191,10 +199,12 @@ that name a remote provider count only once the user allowed it (`drgnx-ai-confi
 
 (defun drgnx-ai--secret-source-p (s)
   "Non-nil when auth-source entry S is the macOS Keychain or the Secret Service (it may prompt or block): a symbol
-or string naming one, or a plist entry whose `:source' is one (`(:source (:secrets \"Login\"))')."
+or string naming one, or a plist entry whose `:source' is one (`(:source (:secrets \"Login\"))',
+`(:source (:macos-keychain-internet default))')."
   (cond ((consp s)
          (let ((source (ignore-errors (plist-get s :source))))
-           (or (eq (car-safe source) :secrets) (eq (car s) :secrets)
+           (or (memq (car-safe source) '(:secrets :macos-keychain-internet :macos-keychain-generic))
+               (memq (car s) '(:secrets :macos-keychain-internet :macos-keychain-generic))
                (and source (drgnx-ai--secret-source-p source)))))
         (t (or (memq s '(macos-keychain-internet macos-keychain-generic default))
                (and (stringp s) (or (string-prefix-p "macos-keychain-" s) (string-prefix-p "secrets:" s)))))))
@@ -213,8 +223,8 @@ prompt; a plist entry is not known to be quiet, so it is left out)."
 (defun drgnx-ai-key (id &optional interactive)
   "The key of provider ID, or nil: its environment variable, else auth-source (host of its URL).  Only when
 INTERACTIVE (a command the user ran) are sources that may prompt (.gpg files, the Keychain, the keyring) consulted;
-the Keychain and the keyring only in an interactive Emacs, and the keyring only when a D-Bus session bus can be
-reached.  A batch Emacs never opens them, but a `.gpg' file it is asked to read may still ask for its passphrase on
+the Keychain and the keyring only in an interactive Emacs, and the keyring only when a session bus can be reached
+and a Secret Service answers on it (`drgnx-ai--secret-service-p').  A batch Emacs never opens them, but a `.gpg' file it is asked to read may still ask for its passphrase on
 standard input.  With `auth-sources' nil an interactive command still gets the system's store (the Keychain, the
 keyring).  auth-source's own cache is not used: it is keyed by the search alone, so a miss from a source that was left
 out would hide the key for hours."
@@ -228,7 +238,7 @@ out would hide the key for hours."
                                      (noninteractive (seq-remove #'drgnx-ai--secret-source-p auth-sources))
                                      ((member (drgnx-ai--secret-source) auth-sources) auth-sources)
                                      ;; the keyring lives on the session bus: without one `default' only logs an error
-                                     ((not (or (eq system-type 'darwin) (drgnx-ai--dbus-session-p))) auth-sources)
+                                     ((not (or (eq system-type 'darwin) (drgnx-ai--secret-service-p))) auth-sources)
                                      (t (append auth-sources (list (drgnx-ai--secret-source))))))
                  (auth-source-do-cache nil)
                  (found (and auth-sources (car (auth-source-search :host host :max 1 :create nil))))
@@ -280,6 +290,15 @@ later — after the window it opened shows, never inside its emacsclient call.  
   "Non-nil when a D-Bus session bus can be reached (the Secret Service lives on it)."
   (or (not (string-empty-p (or (getenv "DBUS_SESSION_BUS_ADDRESS") "")))
       (let ((run (getenv "XDG_RUNTIME_DIR"))) (and run (file-exists-p (expand-file-name "bus" run))))))
+
+(defun drgnx-ai--secrets-usable-p ()
+  "Non-nil when Emacs can talk to a Secret Service: built with D-Bus, and secrets.el loads with `secrets-enabled'
+\(it pings the service once, with a short timeout).  Without these auth-source's `default' only logs an error."
+  (and (featurep 'dbusbind) (require 'secrets nil t) (bound-and-true-p secrets-enabled) t))
+
+(defun drgnx-ai--secret-service-p ()
+  "Non-nil when the keyring can be searched: a session bus can be reached and a Secret Service answers on it."
+  (and (drgnx-ai--dbus-session-p) (drgnx-ai--secrets-usable-p)))
 
 (defvar drgnx-ai--security-program "/usr/bin/security"
   "The macOS Keychain tool, by its absolute name: a `security' elsewhere on `exec-path' never gets a key.")

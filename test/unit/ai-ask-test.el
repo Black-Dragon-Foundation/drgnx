@@ -287,10 +287,31 @@ provider `o' served by a mock answering ANSWER, its LOG."
 (ert-deftest drgnx-ai-ask/the-command-confirms-the-roots-project-route-and-fixes-its-chain ()
   ;; asked from the command (not the retriever's callback), for ROOT's project, whatever buffer is current
   (drgnx-ai-ask-test--with "never"
-    (let ((asked nil) (chain nil) (default-directory (expand-file-name "~")))
+    (let ((asked nil) (chain nil) (drgnx-ai--active nil) (default-directory (expand-file-name "~")))
       (cl-letf (((symbol-function 'drgnx-ai-confirm-project-route) (lambda () (push default-directory asked) t))
                 ((symbol-function 'drgnx-ai-ask-request) (lambda (_q _r _cb &rest args) (setq chain (plist-get args :chain)) #'ignore))
                 ((symbol-function 'message) #'ignore))
         (drgnx-ai-ask "q?" (concat root "proj/"))
         (should (equal asked (list (concat root "proj/"))))
         (should (equal chain (let ((default-directory (concat root "proj/"))) (drgnx-ai-role 'chat))))))))
+
+(ert-deftest drgnx-ai-choose/never-copies-a-projects-remote-route-into-the-global-ai-eld ()
+  ;; the user allowed this project's OpenRouter step; choosing a provider there must not make it global
+  (drgnx-ai-ask-test--with "OK"
+    (let ((process-environment (cons (concat "XDG_STATE_HOME=" root "state") process-environment))
+          (default-directory (concat root "proj/")) (noninteractive nil))
+      (make-directory (concat root "proj/.drgnx") t)
+      (with-temp-file (concat root "proj/.drgnx/ai.eld")
+        (prin1 '(:version 1 :roles ((chat (openrouter . "paid/m") (o . "m")))) (current-buffer)))
+      (cl-letf (((symbol-function 'y-or-n-p) (lambda (&rest _) t)))
+        (should (drgnx-ai-confirm-project-route)))
+      (should (assq 'openrouter (drgnx-ai-role 'chat)))                       ; in force in the project
+      (let ((answers '("chat" "o" "big")) (said nil))
+        (cl-letf (((symbol-function 'completing-read) (lambda (&rest _) (pop answers)))
+                  ((symbol-function 'message) (lambda (fmt &rest args) (push (apply #'format fmt args) said))))
+          (drgnx-ai-choose)
+          (let ((deadline (+ (float-time) 5)))
+            (while (and (not (seq-find (lambda (m) (string-match-p "answered" m)) said)) (< (float-time) deadline))
+              (accept-process-output nil 0.05)))))
+      (let ((roles (plist-get (with-temp-buffer (insert-file-contents (concat root "config/ai.eld")) (read (current-buffer))) :roles)))
+        (should (equal (alist-get 'chat roles) '((o . "big"))))))))

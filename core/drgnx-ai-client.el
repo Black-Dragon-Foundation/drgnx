@@ -211,7 +211,11 @@ ON-ANSWER, a function, is called with this request's INFO (:provider :model :fal
 reasons when none answers.  C-g ends the request (its curl is killed).
 Only for batch processes and commands the user ran (INTERACTIVE as for `drgnx-ai-request'): it waits, so never
 from a timer, hook or sentinel."
-  (if (zerop (length inputs)) []
+  (if (zerop (length inputs))
+      (let ((info (list :provider nil :model nil :fallbacks nil)))   ; nobody was asked
+        (setq drgnx-ai-embed-last-info info)
+        (when on-answer (funcall on-answer info))
+        [])
     (let* ((result nil)
            (chain (or chain (drgnx-ai-role 'embed)))
            (h (drgnx-ai-request 'embed 'embed (list :inputs inputs) (lambda (v info) (setq result (cons v info)))

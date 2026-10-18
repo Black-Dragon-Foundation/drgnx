@@ -43,7 +43,10 @@ A project's role may still name a provider that is not on this machine (OpenRout
 repository would then make a paid call and send your code away. So the first time you run a command that uses AI
 there (Edit with AI, Ask the Codebase), drgnx asks once whether that project may use the remote provider, and keeps
 your answer for that project root in `ai-project-routes.eld` in drgnx's state directory (delete the entry to be asked
-again; it is asked again only if the project later names a remote provider you were not asked about). Until you say
+again; it is asked again only if the project later names a remote provider you were not asked about). The project is
+its real directory, so one repository reached through two paths is asked once, and a link re-pointed at another
+repository does not inherit the answer. A provider whose address has no host counts as remote. Choose Provider/Model
+changes your own `ai.eld` chain, never a copy of the project's. Until you say
 yes, and after a no, the project's remote steps are left out of its chains: ghost text, the search index and every
 other automatic path use only the local steps (or your own `ai.eld`'s chain when none is left). Nothing is ever
 asked from a timer, hook or in batch.
@@ -202,13 +205,15 @@ a model. On a Mac the key is an internet password for `openrouter.ai`, account `
 (stored with `/usr/bin/security`, never a `security` found elsewhere on your path, and read back for that account,
 so another password for the host cannot answer in its place):
 Keychain Access shows it, and `security delete-internet-password -s openrouter.ai -a drgnx` removes it. On Linux the
-keyring is looked at only when a D-Bus session bus can be reached (not over a bare SSH login, say), so a machine
-without one gets no "invalid backend spec" noise in `*Messages*`.
+keyring is looked at only when Emacs has D-Bus support, a session bus can be reached and a Secret Service answers on
+it (an SSH login, WSL or a container often has a bus but no keyring daemon), so such a machine gets no "invalid
+backend spec" noise in `*Messages*`. Loading the Secret Service client pings it once, only from a command you ran.
 
 Sources that may ask for something (`.gpg` files, the Keychain, the keyring) are only read from commands you run in
 the drgnx app or an interactive Emacs (Edit with AI, Ask the Codebase, Choose, AI: Load Keys); a batch Emacs never
 opens the Keychain or keyring (a `.gpg` file it is asked to read can still want its passphrase on standard input).
-Entries of `auth-sources` that are plists, such as `(:source (:secrets "Login"))`, count as the stores they name. And
+Entries of `auth-sources` that are plists, such as `(:source (:secrets "Login"))` or
+`(:source (:macos-keychain-internet default))`, count as the stores they name. And
 even with `auth-sources` set to nil, those commands still read the system's own store (the Keychain on a Mac, the
 keyring on Linux), because that is where onboarding puts the key. Background features
 (ghost text, the hub, agents) never read them — they use the environment or a key this drgnx read earlier. So that
