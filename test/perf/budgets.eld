@@ -18,12 +18,14 @@
  (diff-scrolling (:input :p95) 16) (diff-scrolling (:input :max) 50)
  (replace-typing (:input :p95) 16) (replace-typing (:input :max) 50)
  (live-view (:input :p95) 16) (live-view (:input :max) 50)
- ;; eat (2026-10-18, load 3-5, medians of three runs of the workload's own three repeats): terminal-typing p95 4.2-4.8 ms,
- ;; max 6.4-12.5; terminal-output p95 4.2-5.2, max (with drgnx's early collection, `drgnx-terminal-eat-gc-quiet') 5-49 over
- ;; ten runs at load 2.7-6.2 (41 at the most below load 4.1; without it 8-55, three of ten over 50: a 55 ms collection
- ;; lands in a keystroke).  What is left is an eat output batch (20-60 ms under load) that a key waits for.
- ;; The p95 rows are the measured p95 rounded up; terminal-typing's max is the worst measured, rounded up; terminal-output's
- ;; max is the worst measured, rounded up (the ceiling).  See docs/develop/perf.md.
- (terminal-typing (:input :p95) 5) (terminal-typing (:input :max) 13)
+ ;; eat (2026-10-18, with the tools/terminal-eat module running, medians of the workload's three repeats, load 3-6; the
+ ;; machine was never quiet): terminal-typing p95 1.9-6.4 ms over 16 runs (two above 5, at load 3.9 and 5.8), max 2.5-10.6;
+ ;; terminal-output p95 4.2-8.0 (above 5.2 only at load 5.5 and above), max 5-49 with drgnx's early collection
+ ;; (`drgnx-terminal-eat-gc-quiet') over ten runs at load 2.7-6.2, 5-44 over five more at load 3.3-6.6.
+ ;; The p95 rows are the worst measured at load below 6, rounded up; terminal-typing's max the worst measured, rounded up.
+ ;; terminal-output's max is PROVISIONAL: 50 ms is the ceiling, not a measurement (n=10 per arm, a busy machine).  The
+ ;; collection no longer lands in a keystroke (that was the failure before: 3 of 10 runs over 50); what is left comes from
+ ;; the length of eat's output batches (20-60 ms under load), not from GC: DEFERRED M12e-5-1.  See docs/develop/perf.md.
+ (terminal-typing (:input :p95) 6) (terminal-typing (:input :max) 13)
  (terminal-output (:input :p95) 6) (terminal-output (:input :max) 50)
  (redisplay (:redisplay :p95) 16))
