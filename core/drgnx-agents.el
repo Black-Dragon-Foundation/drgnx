@@ -380,9 +380,12 @@ a task whose provider failed to the next profile (drgnx-job.el).  Called in the 
 ;;;; Starting, prompting, stopping
 
 (defun drgnx-agents--connect (s on-ready)
-  "Start S's agent and initialize it; then ON-READY."
+  "Start S's agent and initialize it; then call ON-READY with the `_meta' its session/new or session/load carries
+\(`drgnx-agents--session-meta', made from the environment the agent was started with: nil sends none)."
   (let* ((profile (cdr (drgnx-agents-profile (drgnx-agent-session-profile s))))
-         (conn (drgnx-acp-start (drgnx-agents-command (plist-get profile :command)) :cwd (drgnx-agent-session-cwd s) :env (drgnx-agents--env s)
+         (env (drgnx-agents--env s))
+         (meta (drgnx-agents--session-meta s env))
+         (conn (drgnx-acp-start (drgnx-agents-command (plist-get profile :command)) :cwd (drgnx-agent-session-cwd s) :env env
                                 :on-notification (lambda (_c method params)
                                                    (when (equal method "session/update")
                                                      (drgnx-agents--update s (plist-get params :update))))
@@ -399,7 +402,7 @@ a task whose provider failed to the next profile (drgnx-job.el).  Called in the 
                        (lambda (r)
                          (if (cdr r) (drgnx-agents--failed s (cdr r))
                            (setf (drgnx-agent-session-capabilities s) (plist-get (car r) :agentCapabilities))
-                           (funcall on-ready))))))
+                           (funcall on-ready meta))))))
 
 (defun drgnx-agents--failed (s err)
   (drgnx-agents--add s (list :type 'error :text (format "%s" (or (plist-get err :message) err))))
@@ -568,6 +571,35 @@ can carry it, else the provider's (keys resolved now, never kept) — DRGNX_TASK
              extra))
    (cdr (drgnx-agents-profile (drgnx-agent-session-profile s)))))
 
+(defconst drgnx-agents-job-claude-options
+  (list :allowDangerouslySkipPermissions :false
+        :managedSettings (list :allowManagedPermissionRulesOnly t :allowManagedHooksOnly t
+                               :permissions '(:disableBypassPermissionsMode "disable" :disableAutoMode "disable"))
+        :strictMcpConfig t
+        :settings '(:sandbox (:enabled :false)))
+  "The options a job session's Claude Code gets (`_meta.claudeCode.options' of claude-agent-acp), so that nothing
+pre-allows a tool in a job: bypass mode gone from every settings tier; as the policy tier, allow rules and hooks of
+the user, project and local settings ignored and bypass and auto modes disabled; only drgnx's MCP servers (no
+.mcp.json, user, plugin or agent servers); Claude Code's own sandbox off, as drgnx's sandbox is the boundary.
+`settingSources' is left to the adapter, so CLAUDE.md, skills and every tier's deny and ask rules still apply.
+docs/guide/agents.md, \"Jobs and your Claude settings\".")
+
+(defun drgnx-agents--session-meta (s env)
+  "The `_meta' S's session/new and session/load carry: for a session of a job whose profile runs Claude Code
+\(`drgnx-agents--command-agent' is `claude'), (:claudeCode (:options OPTS)), OPTS being
+`drgnx-agents-job-claude-options' and `:env', ENV (the \"NAME=value\" strings S's agent was started with) as an
+object, the first of a name winning as in the agent's environment; nil, so no `_meta' at all, for any other."
+  (and (drgnx-agent-session-job s)
+       (eq (drgnx-agents--command-agent (plist-get (cdr (drgnx-agents-profile (drgnx-agent-session-profile s))) :command))
+           'claude)
+       (let (object)
+         (dolist (e env)
+           (when (string-match "\\`\\([^=]+\\)=" e)
+             (let ((key (intern (concat ":" (match-string 1 e)))))
+               (unless (plist-member object key)
+                 (setq object (plist-put object key (substring e (match-end 0))))))))
+         (list :claudeCode (list :options (append drgnx-agents-job-claude-options (list :env object)))))))
+
 (defvar drgnx-agents-coordination t
   "Non-nil: every agent gets drgnx's coordination tools (an MCP server, docs/develop/coordination.md).")
 
@@ -628,8 +660,10 @@ the commits each turn makes are recorded for it.  JOB: the coordination job it b
     (drgnx-agents--start-safely
      s (lambda ()
          (drgnx-agents--connect
-          s (lambda ()
-              (drgnx-acp-request (drgnx-agent-session-conn s) "session/new" (list :cwd (drgnx-agent-session-cwd s) :mcpServers (drgnx-agents--mcp-servers s))
+          s (lambda (meta)
+              (drgnx-acp-request (drgnx-agent-session-conn s) "session/new"
+                                 (append (list :cwd (drgnx-agent-session-cwd s) :mcpServers (drgnx-agents--mcp-servers s))
+                                         (and meta (list :_meta meta)))
                                  (lambda (r)
                                    (if (cdr r) (drgnx-agents--failed s (cdr r))
                                      (setf (drgnx-agent-session-acp-id s) (plist-get (car r) :sessionId)
@@ -638,23 +672,25 @@ the commits each turn makes are recorded for it.  JOB: the coordination job it b
                                      (drgnx-agents--next s))))))))
     s))
 
-(defun drgnx-agents-take-over (profile cwd session-id &optional task id name)
+(defun drgnx-agents-take-over (profile cwd session-id &optional task id name job)
   "Resume the agent session SESSION-ID (from another client, or one that ended) with PROFILE in CWD:
 its history is replayed into the transcript.  Needs an agent that can load sessions: when it cannot, the session
-ends and says why.  TASK as in `drgnx-agents-start'; ID and NAME, the session's own when it keeps them (a hub
-resuming its sessions: messages and spend follow them)."
-  (let ((s (drgnx-agents--new profile cwd task)))
+ends and says why.  TASK and JOB as in `drgnx-agents-start'; ID and NAME, the session's own when it keeps them (a
+hub resuming its sessions: messages and spend follow them)."
+  (let ((s (drgnx-agents--new profile cwd task job)))
     (when id (setf (drgnx-agent-session-id s) id))
     (when (stringp name) (setf (drgnx-agent-session-name s) name))
     (setf (drgnx-agent-session-acp-id s) session-id)
     (drgnx-agents--start-safely
      s (lambda ()
          (drgnx-agents--connect
-          s (lambda ()
+          s (lambda (meta)
               (if (memq (plist-get (drgnx-agent-session-capabilities s) :loadSession) '(nil :false))
                   (progn (drgnx-agents--failed s "this agent cannot resume sessions (no session/load)") (drgnx-agents-kill s))
                 (drgnx-acp-request (drgnx-agent-session-conn s) "session/load"
-                                   (list :sessionId session-id :cwd (drgnx-agent-session-cwd s) :mcpServers (drgnx-agents--mcp-servers s))
+                                   (append (list :sessionId session-id :cwd (drgnx-agent-session-cwd s)
+                                                 :mcpServers (drgnx-agents--mcp-servers s))
+                                           (and meta (list :_meta meta)))
                                    (lambda (r)
                                      (if (cdr r) (progn (drgnx-agents--failed s (cdr r)) (drgnx-agents-kill s))
                                        (setf (drgnx-agent-session-status s) 'idle)

@@ -166,8 +166,12 @@ the perf workload `job-window` ([perf.md](../develop/perf.md)). Developer detail
   as drgnx gave the session (source `dynamic`). The adapter drgnx installs today names no server, so there a server
   of yours that is itself called `drgnx` or `drgnx-search` is taken for drgnx's. A call whose tool cannot be named,
   or whose kind is not a string, asks. Other calls of the kind `other` (loading a skill, a to-do list) are allowed
-  as before. A tool that Claude Code itself allows from your settings (`permissions.allow`) never asks anyone,
-  drgnx included.
+  as before.
+- **Your allow rules no longer pre-allow inside jobs.** A job's Claude Code session ignores the allow rules and hooks
+  of your user, project and local settings, bypass and auto modes, and every MCP server but drgnx's (a repository's
+  `.mcp.json` included): drgnx sends it these options with `session/new` and `session/load`. The deny and ask rules,
+  `CLAUDE.md` and skills still apply, and your own sessions are unchanged. Details in
+  [agents.md](agents.md#jobs-and-your-claude-settings).
 - **The agents' configuration asks.** A change to a `.claude/` directory at any depth of the worktree (its settings
   can set a permission mode such as `bypassPermissions`, allow rules or hooks, and hold for the reviewer and every
   agent that works in the worktree after it; nested ones hold skills) or to a `.mcp.json` anywhere in the worktree

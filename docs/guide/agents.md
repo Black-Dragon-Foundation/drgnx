@@ -178,6 +178,35 @@ Onboarding's Agents step asks for both and writes them without touching the rest
 edit them by hand too. The search tool lets an agent read the indexed code of any of your projects, so it is off until
 you say yes.
 
+## Jobs and your Claude settings
+
+A [job](jobs.md)'s agent works unwatched, in a repository you may not have written, so nothing in a settings file may
+let it act without asking. When a job runs a profile on Claude Code, its `session/new` and `session/load` carry
+options for the adapter (`_meta.claudeCode.options`, `drgnx-agents-job-claude-options`), and that session's Claude
+**ignores**:
+
+- the **allow rules and hooks** of your user settings (`~/.claude/settings.json`), the project's
+  (`.claude/settings.json`) and the local ones (`.claude/settings.local.json`) — drgnx passes them as the policy tier
+  (`allowManagedPermissionRulesOnly`, `allowManagedHooksOnly`), so a tool you allowed for your own sessions asks in
+  a job;
+- **bypass mode** (`bypassPermissions`, `--dangerously-skip-permissions`) from any tier, and **auto mode**;
+- **MCP servers** other than drgnx's own: a repository's `.mcp.json`, your user and plugin servers and those of
+  agent definitions are not started (`strictMcpConfig`).
+
+What **still applies**: the deny and ask rules of every tier, `CLAUDE.md`, skills and agent definitions (which
+settings files Claude reads is left as it is: they are content, and the permission check bounds what they can make
+the agent do). Claude Code's own sandbox is off in a job: drgnx's is the boundary. A default mode of `acceptEdits`
+in your user or local settings still applies; edits in the task's folder are allowed in a job anyway.
+
+Your own sessions (New Agent Session…, Take Over) and agents other than Claude get none of this. Other agents
+(Gemini CLI, Codex) have no such switch yet. On a machine whose administrator installed a `managed-settings.json`
+(`/etc/claude-code/` on Linux, `/Library/Application Support/ClaudeCode/` on macOS), Claude Code uses the
+administrator's policy instead of drgnx's unless that file sets `"parentSettingsBehavior": "merge"`; the refusal of
+bypass mode and the MCP lock hold either way.
+
+Tests: `test/unit/agents-claude-options-test.el` (what job sessions send through `session/new` and `session/load`,
+nothing for your sessions or other agents, a repository's bypass settings and `.mcp.json` changing nothing sent).
+
 ## Working together
 
 Every agent drgnx starts — durable or not — gets drgnx's **coordination tools** (an MCP server): the job's tasks
@@ -263,6 +292,8 @@ run it, with the plan's own encoding and line endings — and leaves alone a pla
 - `test/unit/agents-test.el` — sessions: a turn's transcript, queueing during a turn (delivered in order, never
   cancelling), steering (and its fallback), Stop within a second, permissions, tool calls, plans and subagents, a
   dying agent, Take Over, `/compact`.
+- `test/unit/agents-claude-options-test.el` — a job session's Claude cannot be pre-allowed
+  ([above](#jobs-and-your-claude-settings)).
 - `test/unit/agents-adapter-test.el` — which adapter runs, from fake npm prefixes with `package.json` files only (no
   npm, no agent): the maintained package wins wherever it is on the `PATH`, the deprecated one still runs and says so
   once with its fix, an old version, a copy instead of a link, a program of no known package, other commands left
@@ -273,6 +304,7 @@ run it, with the plan's own encoding and line endings — and leaves alone a pla
   a real profile with `DRGNX_AGENT_PROFILE=NAME` (uses your subscription or key, and the network).
 
 The mock agent (`test/fixtures/mock-acp.el`) is a batch Emacs whose turns are chosen by words in the prompt
-(`slow`, `tool`, `plan`, `subagent`, `permission`, `write PATH`, `crash`, `/compact`). Tests start it through
+(`slow`, `tool`, `plan`, `subagent`, `permission`, `write PATH`, `crash`, `/compact`, `meta`: the `_meta` its
+`session/new` or `session/load` got). Tests start it through
 `test/fixtures/mock-acp-stdin.sh` (`sh mock-acp-stdin.sh emacs --batch -Q -l mock-acp.el`), which copies its stdin into
 a FIFO the mock reads while a turn streams; without the wrapper it reads `/proc/PID/fd/0`, which only Linux has.
