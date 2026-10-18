@@ -286,8 +286,10 @@ read (comments ignored, line numbers kept), its items are read-only, a note says
 changes only the modelled members of one entry (`command`, `args`, `env`, `url`, `httpUrl`, `type`, `headers`; a hook's
 `type`, `command`, `timeout`) and keeps every other member in place (`cwd`, `trust`, `includeTools`, unknown keys); it passes
 what it read as EXPECT, so a file changed meanwhile is refused. Switching a skill off adds its name to `skills.disabled` of the
-user's settings (or the chosen file); switching it on removes it from every writable file that lists it, and is refused when
-the system settings list it. Hooks and MCP servers cannot be switched off here. A new server name is letters, digits, `-`
+user's settings (or the chosen file); switching it on removes it from every writable file that lists it (the project's
+file is shared with the team, and the note says so). All those files are checked first (parse, no comments, not listed by the
+system settings) and nothing is written if one fails; a later failed write puts the earlier files back and says so. An edit of an
+http server that has `httpUrl` keeps `httpUrl` (older Gemini CLIs). Hooks and MCP servers cannot be switched off here. A new server name is letters, digits, `-`
 and `.` (Gemini's policy rules misread an underscore).
 
 ## Doctor (`drgnx-doctor.el`)

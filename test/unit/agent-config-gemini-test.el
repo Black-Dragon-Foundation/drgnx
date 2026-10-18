@@ -405,5 +405,70 @@
           (should (string-match-p "theirs" (drgnx-agent-config-gemini-test--text user)))
           (should-not (string-match-p "mine" (drgnx-agent-config-gemini-test--text user))))))))
 
+(ert-deftest drgnx-agent-config-gemini/skill-on-is-all-or-nothing ()
+  (drgnx-agent-config-gemini-test-env
+    (let* ((user (drgnx-agent-config-gemini-test--user-file))
+           (project (expand-file-name ".gemini/settings.json" root))
+           (user-text "{\n  \"skills\": {\"disabled\": [\"mine\"]}\n}\n")
+           (project-text "{\n  \"skills\": {\"disabled\": [\"mine\", \"x\"]}\n}\n")
+           (item (list :kind 'gemini :section 'skill :name "mine" :enabled nil)))
+      ;; a later file is refused (comments): nothing is written, the user's file included
+      (drgnx-agent-config-gemini-test--put user user-text)
+      (drgnx-agent-config-gemini-test--put project (concat "// shared\n" project-text))
+      (should (string-match-p "has comments" (plist-get (drgnx-agent-config-gemini-test--write 'toggle item nil root) :error)))
+      (should (equal (drgnx-agent-config-gemini-test--text user) user-text))
+      (should (equal (drgnx-agent-config-gemini-test--text project) (concat "// shared\n" project-text)))
+      (should-not (file-exists-p (concat user ".drgnx-bak")))
+      ;; an earlier file with comments
+      (drgnx-agent-config-gemini-test--put user (concat "// mine\n" user-text))
+      (drgnx-agent-config-gemini-test--put project project-text)
+      (should (string-match-p "has comments" (plist-get (drgnx-agent-config-gemini-test--write 'toggle item nil root) :error)))
+      (should (equal (drgnx-agent-config-gemini-test--text project) project-text))
+      ;; the second write fails after the first went through: the first file is put back
+      (drgnx-agent-config-gemini-test--put user user-text)
+      (let ((calls 0) (real (symbol-function 'drgnx-agent-config-json-write)))
+        (cl-letf (((symbol-function 'drgnx-agent-config-json-write)
+                   (lambda (&rest args)
+                     (setq calls (1+ calls))
+                     (if (= calls 2) (error "disk full") (apply real args)))))
+          (let ((result (drgnx-agent-config-gemini-test--write 'toggle item nil root)))
+            (should (string-match-p "undone" (plist-get result :error)))
+            (should (string-match-p user (plist-get result :error))))))
+      (should (equal (drgnx-agent-config-gemini-test--text user) user-text))
+      (should (equal (drgnx-agent-config-gemini-test--text project) project-text))
+      ;; all well: both files change and the note names them, the project's as shared
+      (let ((result (drgnx-agent-config-gemini-test--write 'toggle item nil root)))
+        (should (plist-get result :ok))
+        (should (string-match-p (regexp-quote user) (plist-get result :note)))
+        (should (string-match-p "\\.gemini/settings\\.json (project: shared with the team)" (plist-get result :note))))
+      (should-not (drgnx-agent-config-gemini-test--value user))
+      (should (equal (append (cdr (assq 'disabled (cdr (assq 'skills (drgnx-agent-config-gemini-test--value project))))) nil)
+                     '("x")))
+      ;; off names the file written
+      (let ((result (drgnx-agent-config-gemini-test--write 'toggle (plist-put (copy-sequence item) :enabled t) nil root)))
+        (should (string-match-p (regexp-quote user) (plist-get result :note)))))))
+
+(ert-deftest drgnx-agent-config-gemini/editing-a-server-keeps-its-httpUrl ()
+  (drgnx-agent-config-gemini-test-env
+    (let ((user (drgnx-agent-config-gemini-test--user-file)))
+      (drgnx-agent-config-gemini-test--put
+       user "{\"mcpServers\": {\"web\": {\"httpUrl\": \"https://example.com/old\", \"trust\": true}}}")
+      (let ((old (drgnx-agent-config-gemini-test--item (drgnx-agent-config-gemini-test--read root) 'mcp "web")))
+        (should (plist-get (drgnx-agent-config-gemini-test--write
+                            'edit (list :kind 'gemini :section 'mcp :name "web" :replaces old
+                                        :spec '(:type http :url "https://example.com/new"))
+                            'user root)
+                           :ok))
+        (should (equal (cdr (assq 'web (cdr (assq 'mcpServers (drgnx-agent-config-gemini-test--value user)))))
+                       '((httpUrl . "https://example.com/new") (trust . t))))
+        ;; another transport is the current form
+        (should (plist-get (drgnx-agent-config-gemini-test--write
+                            'edit (list :kind 'gemini :section 'mcp :name "web" :replaces old
+                                        :spec '(:type sse :url "https://example.com/sse"))
+                            'user root)
+                           :ok))
+        (should (equal (cdr (assq 'web (cdr (assq 'mcpServers (drgnx-agent-config-gemini-test--value user)))))
+                       '((trust . t) (url . "https://example.com/sse") (type . "sse"))))))))
+
 (provide 'agent-config-gemini-test)
 ;;; agent-config-gemini-test.el ends here

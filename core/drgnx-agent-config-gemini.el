@@ -162,9 +162,10 @@ Gemini's precedence: httpUrl (Streamable HTTP), then url (`type' sse for SSE, el
             :url (or http url)
             :headers (drgnx-agent-config-gemini--string-alist (drgnx-agent-config-gemini--get json "headers"))))))
 
-(defun drgnx-agent-config-gemini--spec-members (spec)
+(defun drgnx-agent-config-gemini--spec-members (spec &optional existing)
   "The modelled members Gemini files for the server SPEC, as an alist of (NAME . VALUE).
-Signals when SPEC is not a server."
+Signals when SPEC is not a server.  EXISTING is the entry being edited: an http server that had `httpUrl' (and no
+`url') keeps it, because older Gemini CLIs on a teammate's machine do not know `url' with `type'."
   (let* ((command (plist-get spec :command))
          (url (plist-get spec :url))
          (type (or (plist-get spec :type) (cond (command 'stdio) (url 'http)))))
@@ -177,7 +178,11 @@ Signals when SPEC is not a server."
                     (list (cons "env" (drgnx-agent-config-claude--pairs-json (plist-get spec :env)))))))
       ((or 'http 'sse)
        (unless (and (stringp url) (not (string-empty-p url))) (error "An http or sse server needs a URL"))
-       (append (list (cons "url" url) (cons "type" (symbol-name type)))
+       (append (if (and (eq type 'http)
+                        (drgnx-agent-config-gemini--cell existing "httpUrl")
+                        (not (drgnx-agent-config-gemini--cell existing "url")))
+                   (list (cons "httpUrl" url))
+                 (list (cons "url" url) (cons "type" (symbol-name type))))
                (and (plist-get spec :headers)
                     (list (cons "headers" (drgnx-agent-config-claude--pairs-json (plist-get spec :headers)))))))
       (_ (error "Unknown server type")))))
@@ -352,9 +357,8 @@ Gemini's policy engine splits mcp_SERVER_TOOL at the first underscore, so a name
               (add (list (plist-put skill :enabled (not (member (plist-get skill :name) disabled-skills)))))))
           (dolist (extension (nreverse extensions))
             (dolist (skill (drgnx-agent-config-skills-in (expand-file-name "skills" (nth 1 extension)) 'extension 'gemini))
-              (plist-put skill :readonly t)
-              (add (list (plist-put skill :enabled (and (nth 2 extension)
-                                                        (not (member (plist-get skill :name) disabled-skills)))))))))
+              (add (list (plist-put (plist-put skill :readonly t) :enabled
+                                    (and (nth 2 extension) (not (member (plist-get skill :name) disabled-skills)))))))))
         ;; rules
         (let ((names (drgnx-agent-config-gemini--context-names values)))
           (setq rules (cl-remove-duplicates
@@ -409,7 +413,8 @@ when FILE changed since it was read here.  Returns FILE."
     (unless file (error "This scope needs a project"))
     (when (eq op 'toggle) (error "An MCP server cannot be switched off here"))
     (when (or (eq op 'add) (and (eq op 'edit) (not (equal old name)))) (drgnx-agent-config-gemini--check-name name))
-    (let ((members (and (memq op '(add edit)) (drgnx-agent-config-gemini--spec-members (plist-get item :spec)))))
+    (let ((spec (and (memq op '(add edit)) (plist-get item :spec))))
+      (when spec (drgnx-agent-config-gemini--spec-members spec)) ; refuse a bad spec before the file is read
       (drgnx-agent-config-gemini--modify
        file
        (lambda (value)
@@ -417,14 +422,16 @@ when FILE changed since it was read here.  Returns FILE."
            (pcase op
              ('add
               (when (drgnx-agent-config-gemini--cell existing name) (error "%s is already in this file" name))
-              (drgnx-agent-config-gemini--set value (list "mcpServers" name)
-                                              (drgnx-agent-config-gemini--merge-members nil members)))
+              (drgnx-agent-config-gemini--set
+               value (list "mcpServers" name)
+               (drgnx-agent-config-gemini--merge-members nil (drgnx-agent-config-gemini--spec-members spec))))
              ('edit
               (let ((cell (drgnx-agent-config-gemini--cell existing old)))
                 (unless cell (error "%s is not in this file" old))
                 (when (and (not (equal old name)) (drgnx-agent-config-gemini--cell existing name))
                   (error "%s is already in this file" name))
-                (let ((entry (drgnx-agent-config-gemini--merge-members (cdr cell) members)))
+                (let ((entry (drgnx-agent-config-gemini--merge-members
+                              (cdr cell) (drgnx-agent-config-gemini--spec-members spec (cdr cell)))))
                   (if (equal old name)
                       (drgnx-agent-config-gemini--set value (list "mcpServers" name) entry)
                     ;; renamed: the entry keeps its place among the servers
@@ -537,6 +544,56 @@ The hook's other members (name, description) stay; a hook whose event and matche
         (if (drgnx-agent-config-gemini--get without "skills") without
           (drgnx-agent-config-gemini--del without '("skills")))))))
 
+(defun drgnx-agent-config-gemini--describe-file (file scope root)
+  "FILE of SCOPE for a note: the project's settings are shared with the team."
+  (if (eq scope 'project)
+      (format "%s (project: shared with the team)" (if root (file-relative-name file root) file))
+    file))
+
+(defun drgnx-agent-config-gemini--lists-skill-p (value name)
+  "Non-nil when the settings VALUE lists NAME in skills.disabled."
+  (member name (drgnx-agent-config-gemini--strings (drgnx-agent-config-gemini--get value "skills" "disabled"))))
+
+(defun drgnx-agent-config-gemini--skill-on (name root)
+  "Take NAME out of skills.disabled of every writable settings file that lists it; return ((FILE . SCOPE)…) written.
+All the files are checked first (the system settings do not list it; the others parse, have no comments); nothing
+is written when one fails.  If a later write fails, the files already written are put back and the error says so."
+  (dolist (scope '(system defaults))
+    (let ((file (drgnx-agent-config-gemini--settings-file scope root)))
+      (when (and (file-regular-p file)
+                 (drgnx-agent-config-gemini--lists-skill-p
+                  (plist-get (drgnx-agent-config-gemini--read-file file) :value) name))
+        (error "%s is switched off by the system settings, which drgnx does not change" name))))
+  (let (plan done)
+    (dolist (scope '(user project))
+      (let ((file (drgnx-agent-config-gemini--settings-file scope root)))
+        (when (and file (file-regular-p file))
+          (let ((read (drgnx-agent-config-gemini--read-file file)))
+            (when (drgnx-agent-config-gemini--lists-skill-p (plist-get read :value) name)
+              (when (plist-get read :commented)
+                (error "%s has comments, which drgnx would lose when it writes: change it by hand" file))
+              (push (cons file scope) plan))))))
+    (condition-case err
+        (dolist (entry (nreverse plan))
+          (let ((before (drgnx-agent-config-read-text (car entry))))
+            (drgnx-agent-config-gemini--modify
+             (car entry) (lambda (value) (drgnx-agent-config-gemini--without-name value name)))
+            (push (list entry before (drgnx-agent-config-read-text (car entry))) done)))
+      (error
+       (let (undone stuck)
+         (dolist (d done)
+           (if (condition-case nil
+                   (progn (drgnx-agent-config-write-text (caar d) (nth 1 d) #'ignore nil (nth 2 d)) t)
+                 (error nil))
+               (push (caar d) undone)
+             (push (caar d) stuck)))
+         (error "%s%s%s" (drgnx-agent-config-gemini--error-text err nil)
+                (if undone (format "; the change to %s was undone" (string-join (nreverse undone) ", ")) "")
+                (if stuck (format "; the change to %s could NOT be undone (its backup has the previous content)"
+                                  (string-join (nreverse stuck) ", "))
+                  "")))))
+    (nreverse (mapcar #'car done))))
+
 (defun drgnx-agent-config-gemini--write-skill (op item scope root)
   "Add the skill ITEM to SCOPE, or switch it on or off (SCOPE then names the settings file written, nil: the user's);
 returns the result."
@@ -549,33 +606,22 @@ returns the result."
                                          dir name (or (plist-get (plist-get item :spec) :description) ""))))))
       ('toggle
        (if (plist-get item :enabled)
-           (let ((file (drgnx-agent-config-gemini--settings-file (or scope 'user) root)))
-             (unless (and file (memq (or scope 'user) '(user project))) (error "This scope needs a project"))
+           (let* ((target (or scope 'user))
+                  (file (and (memq target '(user project)) (drgnx-agent-config-gemini--settings-file target root))))
+             (unless file (error "This scope needs a project"))
              (drgnx-agent-config-gemini--modify
               file (lambda (value)
                      (let ((names (append (drgnx-agent-config-gemini--get value "skills" "disabled") nil)))
                        (if (member name names) value
-                         (drgnx-agent-config-gemini--set value '("skills" "disabled") (vconcat names (list name))))))))
-         ;; on: the name goes out of every file that lists it, because Gemini joins the lists of all of them
-         (let ((system (drgnx-agent-config-gemini--settings-file 'system root))
-               (defaults (drgnx-agent-config-gemini--settings-file 'defaults root)))
-           (dolist (file (list system defaults))
-             (when (and (file-regular-p file)
-                        (member name (drgnx-agent-config-gemini--strings
-                                      (drgnx-agent-config-gemini--get
-                                       (plist-get (drgnx-agent-config-gemini--read-file file) :value)
-                                       "skills" "disabled"))))
-               (error "%s is switched off by the system settings, which drgnx does not change" name))))
-         (dolist (s '(user project))
-           (let ((f (drgnx-agent-config-gemini--settings-file s root)))
-             (when (and f (file-regular-p f)
-                        (member name (drgnx-agent-config-gemini--strings
-                                      (drgnx-agent-config-gemini--get
-                                       (plist-get (drgnx-agent-config-gemini--read-file f) :value)
-                                       "skills" "disabled"))))
-               (drgnx-agent-config-gemini--modify
-                f (lambda (value) (drgnx-agent-config-gemini--without-name value name)))))))
-       (list :ok t :note (format "%s is now %s" name (if (plist-get item :enabled) "off" "on"))))
+                         (drgnx-agent-config-gemini--set value '("skills" "disabled") (vconcat names (list name)))))))
+             (list :ok t :note (format "%s is now off (written to %s)" name
+                                       (drgnx-agent-config-gemini--describe-file file target root))))
+         (let ((files (drgnx-agent-config-gemini--skill-on name root)))
+           (list :ok t :note (if files
+                                 (format "%s is now on (removed from %s)" name
+                                         (mapconcat (lambda (f) (drgnx-agent-config-gemini--describe-file (car f) (cdr f) root))
+                                                    files " and "))
+                               (format "%s is now on (no settings file switched it off)" name))))))
       (_ (error "Only adding a skill and switching one on or off are supported")))))
 
 ;;;; The generic write
