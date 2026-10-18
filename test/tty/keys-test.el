@@ -1,15 +1,33 @@
 ;;; keys-test.el --- tty tier: C-S- chords through kkp or modifyOtherKeys; C-g still interrupts -*- lexical-binding: t -*-
 ;; Run under `drgnx-run-ert-batch' (temp HOME and XDG dirs); every test has its own tmux server.  The keys are
 ;; the bytes a terminal sends (`drgnx-tty-session-key'), fed to the pane unchanged.  tmux does not speak the kitty
-;; keyboard protocol: kkp's question to the terminal is answered by the test ("yes"); kitty proves it for real
-;; (the exit test).  kkp comes from the user's ELPA (DRGNX_USER_ELPA, read-only); without it these tests skip.
+;; keyboard protocol: the test answers kkp's question ("yes") and names the terminal (its XTVERSION answer, which
+;; tmux would give as tmux); kitty proves it for real (the exit test).  kkp comes from DRGNX_USER_ELPA (read-only,
+;; the version etc/drgnx.lock.eld pins); without it the kkp tests skip and say how to supply it.
 (require 'ert)
 (require 'drgnx-tty-session)
 
+(defun drgnx-tty-keys-test--pinned ()
+  "The kkp entry of the shipped lock (etc/drgnx.lock.eld): (VERSION . SHA256)."
+  (let ((e (alist-get 'kkp (plist-get (with-temp-buffer
+                                        (insert-file-contents (expand-file-name "../etc/drgnx.lock.eld"
+                                                                                drgnx-ui-harness-dir))
+                                        (read (current-buffer)))
+                                      :packages))))
+    (cons (plist-get e :version) (plist-get e :sha256))))
+
 (defun drgnx-tty-keys-test--kkp-dir ()
-  "The directory of the pinned kkp in the user's ELPA (DRGNX_USER_ELPA, read-only), or nil."
-  (let ((elpa (getenv "DRGNX_USER_ELPA")))
-    (and elpa (file-directory-p elpa) (car (last (directory-files elpa t "\\`kkp-[0-9]"))))))
+  "The pinned kkp's directory in DRGNX_USER_ELPA (read-only), or nil."
+  (let ((dir (expand-file-name (concat "kkp-" (car (drgnx-tty-keys-test--pinned))) (or (getenv "DRGNX_USER_ELPA") "/nonexistent"))))
+    (and (file-directory-p dir) dir)))
+
+(defun drgnx-tty-keys-test--need-kkp ()
+  "Skip, saying how to supply it, unless the pinned kkp is in DRGNX_USER_ELPA."
+  (unless (drgnx-tty-keys-test--kkp-dir)
+    (let ((pin (drgnx-tty-keys-test--pinned)))
+      (ert-skip (format "kkp %s not in DRGNX_USER_ELPA: unpack https://melpa.org/packages/kkp-%s.tar (sha256 %s) \
+into a directory and set DRGNX_USER_ELPA to it, or point DRGNX_USER_ELPA at an elpa drgnx sync filled"
+                        (car pin) (car pin) (cdr pin))))))
 
 (defun drgnx-tty-keys-test--env ()
   "The inner Emacs's extra environment: kkp on its load path (read-only, nothing installed)."
@@ -38,20 +56,33 @@
      t)
   "A form, in the inner daemon: record each command and the key that ran it in `kx-seen', newest first.")
 
-(defconst drgnx-tty-keys-test--kkp-yes
-  '(progn
+(defun drgnx-tty-keys-test--kkp-yes (name)
+  "A form, in the inner daemon: terminals made from now on say they are NAME (their XTVERSION answer, e.g.
+\"kitty(0.40.0)\") and answer kkp's question with yes once the test sends the answer
+\(`drgnx-tty-keys-test--answer-kkp'); `kx-kkp-asked' counts the questions."
+  `(progn
+     (defvar kx-kkp-asked 0)
+     (defvar kx-xtversion nil)
+     (setq kx-xtversion ,(concat "\eP>|" name "\e\\"))
+     ;; as the real one: the answer is also the terminal's parameter
+     (advice-add 'drgnx-tty-frames--ask :override
+                 (lambda (frame)
+                   (set-terminal-parameter (frame-terminal frame) 'drgnx-tty-xtversion kx-xtversion)
+                   kx-xtversion)
+                 '((name . kx-kkp-yes)))
      ;; the question is not sent (tmux would answer its device-attributes half and so say no): the test answers
      (advice-add 'kkp--query-terminal-async :around
                  (lambda (orig &rest args)
+                   (setq kx-kkp-asked (1+ kx-kkp-asked))
                    (cl-letf (((symbol-function 'send-string-to-terminal) #'ignore)) (apply orig args)))
                  '((name . kx-kkp-yes)))
      ;; …and the flags the terminal took are the ones asked for
      (advice-add 'kkp--query-terminal-sync :override
                  (lambda (&rest _) (append (format "\e[?%du" (kkp--calculate-flags-integer)) nil))
                  '((name . kx-kkp-yes)))
-     t)
-  "A form, in the inner daemon: terminals made from now on answer kkp's question with yes once the test sends
-the answer (`drgnx-tty-keys-test--answer-kkp').")
+     t))
+
+(defconst drgnx-tty-keys-test--kitty "kitty(0.40.0)" "The XTVERSION answer of a kitty.")
 
 (defun drgnx-tty-keys-test--answer-kkp (s c)
   "Answer kkp's question in client C's terminal as a kkp terminal does (flags, then device attributes); wait
@@ -110,8 +141,10 @@ quits only that (\"[Quit]\"), as it would for a person, who presses it again."
     (drgnx-tty-keys-test--ran s 'drgnx-lang-quick-fix "C-.")))
 
 (ert-deftest drgnx-tty-keys/c-s-chords-under-modify-other-keys ()
-  (skip-unless (drgnx-tty-keys-test--kkp-dir))
-  (drgnx-tty-session-with (s :daemon t :keys 'vscode :env (drgnx-tty-keys-test--env))
+  ;; no kkp in this session: modifyOtherKeys is ui/terminal's and needs no package
+  (drgnx-tty-session-with (s :daemon t :keys 'vscode)
+    (should (eq (drgnx-tty-session-eval s '(plist-get (alist-get 'ui/terminal-keys (drgnx-modules-report)) :status))
+                'missing-packages))
     ;; a client inside tmux, its TMUX naming the session's own server, whose extended-keys is on
     (let ((c (drgnx-tty-session-client s :env (list (format "TMUX=%s,1,0" (plist-get s :tmux))))))
       (drgnx-tty-session-wait-screen c "\\*scratch\\*" 20)
@@ -121,18 +154,89 @@ quits only that (\"[Quit]\"), as it would for a person, who presses it again."
       (should (equal (plist-get (drgnx-tty-session-pane-flags c) :key-mode) "Ext 1"))
       (drgnx-tty-keys-test--five s c 'mok))))
 
-(ert-deftest drgnx-tty-keys/c-s-chords-under-kkp ()
-  (skip-unless (drgnx-tty-keys-test--kkp-dir))
+(defun drgnx-tty-keys-test--busy (s run)
+  "A form, in the inner daemon: F12 runs `kx-busy', 30 s of busy Lisp that writes RUN/busy-started first and
+sets `kx-returned' when it ends (C-g ends it early)."
+  `(progn
+     (defvar kx-returned nil)
+     (defun kx-busy ()
+       (interactive)
+       (write-region "" nil ,(expand-file-name "busy-started" run) nil 'silent)
+       (let ((t0 (float-time)))
+         (unwind-protect (while (< (- (float-time) t0) 30))
+           (setq kx-returned (float-time)))))
+     (push (list (cons t (let ((m (make-sparse-keymap))) (define-key m [f12] #'kx-busy) m))) emulation-mode-map-alists)
+     t))
+
+(ert-deftest drgnx-tty-keys/a-terminal-with-both-gets-modify-other-keys ()
+  ;; a terminal that speaks both (WezTerm here) would answer kkp's question with yes, but kkp is never asked:
+  ;; modifyOtherKeys is preferred, the chords arrive, and C-g stays a plain byte that stops busy Lisp
+  (drgnx-tty-keys-test--need-kkp)
   (drgnx-tty-session-with (s :daemon t :keys 'vscode :env (drgnx-tty-keys-test--env))
     (should (eq (drgnx-tty-session-eval s '(plist-get (alist-get 'ui/terminal-keys (drgnx-modules-report)) :status)) 'ok))
-    (drgnx-tty-session-eval s drgnx-tty-keys-test--kkp-yes)
-    (let ((c (drgnx-tty-session-client s)))
+    (drgnx-tty-session-eval s (drgnx-tty-keys-test--kkp-yes "WezTerm 20240203-110809-5046fc22"))
+    (drgnx-tty-session-eval s (drgnx-tty-keys-test--busy s (plist-get s :run)))
+    (let ((c (drgnx-tty-session-client s :env '("TERM=xterm-256color"))))
+      (drgnx-tty-session-wait-screen c "\\*scratch\\*" 20)
+      (let ((caps (drgnx-tty-keys-test--caps s c)))
+        (should (eq (plist-get caps :id) 'wezterm))
+        (should (eq (plist-get caps :keys) 'mok))
+        (should (eq (plist-get caps :c-g) 'always)))
+      (should (eq (drgnx-tty-session-eval s 'kx-kkp-asked) 0))
+      (should (equal (plist-get (drgnx-tty-session-pane-flags c) :key-mode) "Ext 1"))
+      (drgnx-tty-session-eval s drgnx-tty-keys-test--record)
+      (drgnx-tty-session-key c "C-S-p" 'mok)
+      (drgnx-tty-keys-test--ran s 'drgnx-palette "C-S-p")
+      (drgnx-tty-keys-test--quit s c 'mok)
+      ;; busy Lisp, and C-g as this terminal sends it: the raw byte
+      (let ((started (expand-file-name "busy-started" (plist-get s :run))))
+        (drgnx-tty-session-key c "<f12>" 'mok)
+        (let ((deadline (+ (float-time) 10)))
+          (while (and (not (file-exists-p started)) (< (float-time) deadline)) (sleep-for 0.05)))
+        (should (file-exists-p started))
+        (should (equal (drgnx-tty-session-encode "C-g" 'mok) "\a"))
+        (let ((sent (float-time)))
+          (drgnx-tty-session-key c "C-g" 'mok)
+          (should (< (- (drgnx-tty-session-wait s 'kx-returned 10) sent) 2)))))))
+
+(ert-deftest drgnx-tty-keys/kkp-off-leaves-kitty-legacy ()
+  ;; `drgnx-tty-use-kkp' nil: a kitty is asked nothing and reports legacy, its C-S- chords listed as unsendable
+  (drgnx-tty-keys-test--need-kkp)
+  (drgnx-tty-session-with (s :daemon t :keys 'vscode :env (drgnx-tty-keys-test--env))
+    (drgnx-tty-session-eval s (drgnx-tty-keys-test--kkp-yes drgnx-tty-keys-test--kitty))
+    (drgnx-tty-session-eval s '(setq drgnx-tty-use-kkp nil))
+    (let ((c (drgnx-tty-session-client s :env '("TERM=xterm-256color"))))
+      (drgnx-tty-session-wait-screen c "\\*scratch\\*" 20)
+      (let ((caps (drgnx-tty-keys-test--caps s c)))
+        (should (eq (plist-get caps :id) 'kitty))
+        (should (eq (plist-get caps :keys) 'legacy)))
+      (should (eq (drgnx-tty-session-eval s 'kx-kkp-asked) 0))
+      (let ((tty (drgnx-tty-session-eval s `(terminal-name (frame-terminal ,(drgnx-tty-keys-test--frame c))))))
+        (should (member "C-S-p" (drgnx-tty-session-eval
+                                 s `(plist-get (cdr (assoc ,tty (plist-get (with-temp-buffer
+                                                                             (insert-file-contents
+                                                                              (expand-file-name "terminal-report.eld"
+                                                                                                (drgnx-state-dir)))
+                                                                             (read (current-buffer)))
+                                                                           :terminals)))
+                                               :unsendable))))))))
+
+(ert-deftest drgnx-tty-keys/c-s-chords-under-kkp ()
+  (drgnx-tty-keys-test--need-kkp)
+  (drgnx-tty-session-with (s :daemon t :keys 'vscode :env (drgnx-tty-keys-test--env))
+    (should (eq (drgnx-tty-session-eval s '(plist-get (alist-get 'ui/terminal-keys (drgnx-modules-report)) :status)) 'ok))
+    (drgnx-tty-session-eval s (drgnx-tty-keys-test--kkp-yes drgnx-tty-keys-test--kitty))
+    (let ((c (drgnx-tty-session-client s :env '("TERM=xterm-256color"))))
       (drgnx-tty-keys-test--answer-kkp s c)
-      (should (eq (plist-get (drgnx-tty-keys-test--caps s c) :keys) 'kkp))
+      (let ((caps (drgnx-tty-keys-test--caps s c)))
+        (should (eq (plist-get caps :id) 'kitty))
+        (should (eq (plist-get caps :keys) 'kkp))
+        ;; recorded for the doctor: C-g there stops programs Emacs waits for, not busy Lisp
+        (should (eq (plist-get caps :c-g) 'waits)))
       (drgnx-tty-keys-test--five s c 'kkp))))
 
 (ert-deftest drgnx-tty-keys/c-g-interrupts-a-blocking-git-call ()
-  (skip-unless (drgnx-tty-keys-test--kkp-dir))
+  (drgnx-tty-keys-test--need-kkp)
   (drgnx-tty-session-with (s :daemon t :keys 'vscode :env (drgnx-tty-keys-test--env))
     (let* ((run (plist-get s :run))
            (bin (expand-file-name "bin" run))
@@ -142,7 +246,7 @@ quits only that (\"[Quit]\"), as it would for a person, who presses it again."
       (make-directory bin t)
       (drgnx-ui--write (expand-file-name "git" bin) (format "#!/bin/sh\ntouch '%s'\nexec sleep 30\n" started))
       (set-file-modes (expand-file-name "git" bin) #o755)
-      (drgnx-tty-session-eval s drgnx-tty-keys-test--kkp-yes)
+      (drgnx-tty-session-eval s (drgnx-tty-keys-test--kkp-yes drgnx-tty-keys-test--kitty))
       (drgnx-tty-session-eval
        s `(progn
             ;; what Emacs tells the terminals goes to a file: the test is the terminal and follows it, also
@@ -160,7 +264,7 @@ quits only that (\"[Quit]\"), as it would for a person, who presses it again."
             (push (list (cons t (let ((m (make-sparse-keymap))) (define-key m [f12] #'kx-git-status) m)))
                   emulation-mode-map-alists)
             t))
-      (let ((c (drgnx-tty-session-client s)))
+      (let ((c (drgnx-tty-session-client s :env '("TERM=xterm-256color"))))
         (drgnx-tty-keys-test--answer-kkp s c)
         (drgnx-tty-session-key c "<f12>" 'kkp)
         (let ((deadline (+ (float-time) 10)))
@@ -179,12 +283,12 @@ quits only that (\"[Quit]\"), as it would for a person, who presses it again."
                                 (with-temp-buffer (insert-file-contents log) (buffer-string))))))))
 
 (ert-deftest drgnx-tty-keys/two-terminals-keep-their-own-keys ()
-  (skip-unless (drgnx-tty-keys-test--kkp-dir))
-  ;; client B (the session's first) is legacy, like Ptyxis: TERM=xterm-256color, VTE_VERSION; kkp's question goes
-  ;; out to it and gets no for an answer
-  (drgnx-tty-session-with (s :daemon t :keys 'vscode :term "xterm-256color"
-                             :env (cons "VTE_VERSION=7800" (drgnx-tty-keys-test--env)))
-    (let* ((b s)
+  (drgnx-tty-keys-test--need-kkp)
+  (drgnx-tty-session-with (s :daemon t :keys 'vscode :env (drgnx-tty-keys-test--env))
+    ;; client B is legacy, like Ptyxis: TERM=xterm-256color, VTE_VERSION, and a VTE's version answer; it has
+    ;; neither protocol
+    (drgnx-tty-session-eval s (drgnx-tty-keys-test--kkp-yes "VTE(7800)"))
+    (let* ((b (drgnx-tty-session-client s :env '("TERM=xterm-256color" "VTE_VERSION=7800")))
            (problems (drgnx-tty-session-eval s 'drgnx-hooks-problems))
            (report '(plist-get (with-temp-buffer
                                  (insert-file-contents (expand-file-name "terminal-report.eld" (drgnx-state-dir)))
@@ -192,9 +296,9 @@ quits only that (\"[Quit]\"), as it would for a person, who presses it again."
                                :terminals)))
       (drgnx-tty-session-wait-screen b "\\*scratch\\*" 20)
       (should (eq (plist-get (drgnx-tty-keys-test--caps s b) :id) 'vte))
-      ;; client A: kkp (its terminal says yes)
-      (drgnx-tty-session-eval s drgnx-tty-keys-test--kkp-yes)
-      (let* ((a (drgnx-tty-session-client s :env '("TERM=tmux-256color" "VTE_VERSION=")))
+      ;; client A: a kitty (kkp; its terminal says yes)
+      (drgnx-tty-session-eval s (drgnx-tty-keys-test--kkp-yes drgnx-tty-keys-test--kitty))
+      (let* ((a (drgnx-tty-session-client s :env '("TERM=xterm-256color")))
              (tty-a (drgnx-tty-session-eval s `(terminal-name (frame-terminal ,(drgnx-tty-keys-test--frame a)))))
              (tty-b (drgnx-tty-session-eval s `(terminal-name (frame-terminal ,(drgnx-tty-keys-test--frame b))))))
         (drgnx-tty-keys-test--answer-kkp s a)

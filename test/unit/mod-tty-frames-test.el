@@ -45,7 +45,8 @@ strings; the real frame is not touched), an empty cache and no terminal to ask: 
 
 (ert-deftest drgnx-tty-frames/caps-of-a-modify-other-keys-terminal ()
   ;; xterm.el turned modifyOtherKeys on (its set string is among the terminal's mode strings)
-  (drgnx-tty-frames-test--terminal '((tty-mode-set-strings . ("\e[?2004h" "\e[>4;1m"))) '("TERM=xterm-256color" "XTERM_VERSION=XTerm(397)")
+  (drgnx-tty-frames-test--terminal '((tty-mode-set-strings . ("\e[?2004h" "\e[>4;1m")) (drgnx-tty-mok-decoded . t))
+      '("TERM=xterm-256color" "XTERM_VERSION=XTerm(397)")
     (let ((caps (drgnx-tty-frame-caps)))
       (should (eq (plist-get caps :keys) 'mok))
       (should (eq (plist-get caps :id) 'xterm))
@@ -62,7 +63,7 @@ strings; the real frame is not touched), an empty cache and no terminal to ask: 
 
 (ert-deftest drgnx-tty-frames/only-the-identity-is-cached ()
   ;; two terminals of one kind: asked once, but each has its own keys and colours, read again on every call
-  (drgnx-tty-frames-test--terminal '((tty-mode-set-strings . ("\e[>4;1m"))) '("TERM=xterm-kitty")
+  (drgnx-tty-frames-test--terminal '((tty-mode-set-strings . ("\e[>4;1m")) (drgnx-tty-mok-decoded . t)) '("TERM=xterm-kitty")
     (should (eq (plist-get (drgnx-tty-frame-caps) :keys) 'mok))
     (let ((drgnx-tty-frames-test--term 'kx-b))
       (cl-letf (((symbol-function 'display-color-cells) (lambda (&optional _) 16777216)))

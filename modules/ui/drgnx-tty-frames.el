@@ -13,6 +13,9 @@
 ;;   `drgnx-tty-frames-query-timeout' seconds, and never again for another client of the same terminal: only
 ;;   that identity is kept (`drgnx-tty-frames--cache'); the rest is read from the frame on every call.  The last
 ;;   result is in the terminal parameter `drgnx-tty-caps'.
+;; - Keys: each terminal decodes every modifyOtherKeys key (Emacs decodes only a few, so C-S-p would type text),
+;;   and it is asked for where it arrives: xterm, WezTerm, Ghostty; tmux only with its extended-keys on.  The
+;;   kitty keyboard protocol is ui/terminal-keys' (it needs the kkp package); this works without it.
 ;; - The mouse: `xterm-mouse-mode' (SGR reports) on while `drgnx-tty-mouse' is t, started from a terminal frame's
 ;;   setup, never for a graphical frame; Toggle Mouse in Terminal Windows.  The terminal's own selection is then
 ;;   Shift+drag.  Each terminal keeps its own enable and disable strings (Emacs 30.2 puts them on the selected one).
@@ -40,6 +43,7 @@
 (declare-function drgnx-frames-mark-main "drgnx-frames")
 (declare-function xterm--query "term/xterm")
 (declare-function xterm--read-event-for-query "term/xterm")
+(declare-function xterm--init-modify-other-keys "term/xterm")
 (defvar xterm-query-timeout)
 (defvar server-buffer-clients)
 (defvar drgnx-keys-last)
@@ -89,9 +93,10 @@ seconds at most; a later answer is taken off the input by Emacs's xterm.el.  Not
 
 (defun drgnx-tty-frames--keys (term)
   "How TERM's keys arrive: `kkp' when the ui/terminal-keys module turned it on (terminal parameter
-`drgnx-tty-kkp'), `mok' when Emacs's xterm.el turned modifyOtherKeys on, else `legacy'."
+`drgnx-tty-kkp'), `mok' when modifyOtherKeys is asked for and drgnx decodes it there
+\(`drgnx-tty-frames--keys-setup'), else `legacy'."
   (cond ((terminal-parameter term 'drgnx-tty-kkp) 'kkp)
-        ((member "\e[>4;1m" (terminal-parameter term 'tty-mode-set-strings)) 'mok)
+        ((and (terminal-parameter term 'drgnx-tty-mok-decoded) (drgnx-tty-frames-mok-asked-p term)) 'mok)
         (t 'legacy)))
 
 (defun drgnx-tty-frames--identity (frame)
@@ -114,22 +119,98 @@ already asked (the cache); an answer that came after the wait (xterm.el's handle
         id))))
 
 (defun drgnx-tty-frame-caps (&optional frame)
-  "What FRAME's terminal can do: (:id :outer :version :keys kkp|mok|legacy :osc52 BOOL :colors N :mouse BOOL).
-The identity is asked once per terminal (`drgnx-tty-frames--identity'); keys, OSC 52, colours and the mouse are
-read from FRAME on every call, so kkp turned on later shows.  The result is also the terminal parameter
-`drgnx-tty-caps'.  Nil when the terminal went away meanwhile (killed while it was asked)."
+  "What FRAME's terminal can do: (:id :outer :version :keys kkp|mok|legacy :c-g always|waits :osc52 BOOL
+:colors N :mouse BOOL).  :c-g `waits' (under kkp): C-g interrupts only while Emacs waits for a program, not
+busy Lisp (`drgnx-tty-use-kkp' nil gives up kkp for that).  The identity is asked once per terminal
+\(`drgnx-tty-frames--identity'); keys, OSC 52, colours and the mouse are read from FRAME on every call, so kkp
+turned on later shows.  The result is also the terminal parameter `drgnx-tty-caps'.  Nil when the terminal went
+away meanwhile (killed while it was asked)."
   (let* ((frame (or frame (selected-frame)))
          (term (frame-terminal frame))
          (id (drgnx-tty-frames--identity frame)))
     (when (and (frame-live-p frame) (terminal-live-p term))
       (let* ((row (drgnx-tty-terminal (plist-get id :id)))
+             (keys (drgnx-tty-frames--keys term))
              (caps (list :id (plist-get id :id) :outer (plist-get id :outer) :version (plist-get id :version)
-                         :keys (drgnx-tty-frames--keys term)
+                         :keys keys :c-g (if (eq keys 'kkp) 'waits 'always)
                          :osc52 (and (or (terminal-parameter term 'xterm--set-selection) (plist-get row :osc52)) t)
                          :colors (display-color-cells frame)
                          :mouse (if row (and (plist-get row :mouse) t) t))))
         (set-terminal-parameter term 'drgnx-tty-caps caps)
         caps))))
+
+;;;; Keys: modifyOtherKeys
+
+(defconst drgnx-tty-frames--mok-on "\e[>4;1m" "The request for modifyOtherKeys (xterm.el's).")
+(defconst drgnx-tty-frames--mok-off "\e[>4m" "Its reset.")
+
+(defun drgnx-tty-frames-mok-asked-p (term)
+  "Non-nil when modifyOtherKeys is asked for on TERM (by xterm.el or drgnx)."
+  (member drgnx-tty-frames--mok-on (terminal-parameter term 'tty-mode-set-strings)))
+
+(defun drgnx-tty-frames--mok-key (m k)
+  "The key a terminal sends as CSI 27 ; M ; K ~: K a character code (9 TAB, 13 RET, 27 ESC, 127 DEL), M 1 plus
+shift 1, meta 2, control 4.  An upper-case letter is its lower-case one with Shift (C-S-p, however it came).
+Ctrl+Shift+` arrives as Ctrl+Shift+~ from a US layout (xterm and tmux send the shifted character): C-S-`."
+  (let ((mods (delq nil (list (and (/= 0 (logand (1- m) 1)) 'shift)
+                              (and (/= 0 (logand (1- m) 2)) 'meta)
+                              (and (/= 0 (logand (1- m) 4)) 'control))))
+        (base (pcase k (9 'tab) (13 'return) (27 'escape) (127 'backspace) (_ k))))
+    (when (and (integerp base) (<= ?A base ?Z))
+      (setq base (downcase base))
+      (unless (memq 'shift mods) (push 'shift mods)))
+    (when (and (eq base ?~) (memq 'shift mods) (memq 'control mods))
+      (setq base ?`))
+    (vector (event-convert-list (append mods (list base))))))
+
+(defvar drgnx-tty-frames--mok-map nil "The keymap the function `drgnx-tty-frames--mok-map' returns, made once.")
+
+(defun drgnx-tty-frames--mok-map ()
+  "A keymap for `input-decode-map': every modifyOtherKeys key with Shift, Meta or Control."
+  (or drgnx-tty-frames--mok-map
+      (setq drgnx-tty-frames--mok-map
+            (let ((map (make-sparse-keymap)))
+              (dolist (m (number-sequence 2 8) map)
+                (dolist (k (append '(9 13 27 127) (number-sequence 32 126)))
+                  (define-key map (format "\e[27;%d;%d~" m k) (drgnx-tty-frames--mok-key m k))))))))
+
+(defun drgnx-tty-frames--decode-mok ()
+  "The selected frame's terminal decodes every modifyOtherKeys key: drgnx's map after Emacs's own (xterm.el
+decodes a few: C-tab, C-. …; its decodings come first).  A terminal that never sends them is not changed by it."
+  (set-keymap-parent input-decode-map
+                     (make-composed-keymap (delq nil (list (keymap-parent input-decode-map) (drgnx-tty-frames--mok-map)))))
+  (set-terminal-parameter nil 'drgnx-tty-mok-decoded t))
+
+(defun drgnx-tty-frames--ask-mok (frame)
+  (unless (drgnx-tty-frames-mok-asked-p (frame-terminal frame))
+    (require 'term/xterm)
+    (with-selected-frame frame (xterm--init-modify-other-keys))))
+
+(defun drgnx-tty-frames--withdraw-mok (term)
+  (when (drgnx-tty-frames-mok-asked-p term)
+    (send-string-to-terminal drgnx-tty-frames--mok-off term)
+    (set-terminal-parameter term 'tty-mode-set-strings
+                            (remove drgnx-tty-frames--mok-on (terminal-parameter term 'tty-mode-set-strings)))
+    (set-terminal-parameter term 'tty-mode-reset-strings
+                            (remove drgnx-tty-frames--mok-off (terminal-parameter term 'tty-mode-reset-strings)))))
+
+(defun drgnx-tty-frames--keys-setup (frame)
+  "Once per terminal: FRAME's terminal decodes modifyOtherKeys, and it is asked for where it arrives.
+- tmux, its TMUX known: asked for when tmux's extended-keys is on or always; else (off, or a tmux too old to
+  have the option, or one that does not answer) withdrawn — tmux then sends none, the keys are legacy.
+- tmux without TMUX (a tmux on the other side of SSH): Emacs's own choice stays.
+- Another terminal whose row says modifyOtherKeys (xterm, WezTerm, Ghostty): asked for, if Emacs did not."
+  (let ((term (frame-terminal frame)))
+    (unless (terminal-parameter term 'drgnx-tty-mok-decoded)
+      (with-selected-frame frame (drgnx-tty-frames--decode-mok))
+      (let* ((env (drgnx-tty-env frame))
+             (id (plist-get (drgnx-tty-frames--identity frame) :id)))
+        (cond ((and (eq id 'tmux) (cdr (assoc "TMUX" env)))
+               (if (member (plist-get (drgnx-tty-tmux-options env) :extended-keys) '("on" "always"))
+                   (drgnx-tty-frames--ask-mok frame)
+                 (drgnx-tty-frames--withdraw-mok term)))
+              ((eq id 'tmux))
+              ((plist-get (drgnx-tty-terminal id) :mok) (drgnx-tty-frames--ask-mok frame)))))))
 
 ;;;; The report
 
@@ -290,14 +371,17 @@ once it has no file left."
     (error (push (format "ui/terminal: %s: %s" what (error-message-string err)) drgnx-hooks-problems) nil)))
 
 (defun drgnx-tty-frames-setup (&optional frame)
-  "Look after FRAME (default: the selected frame) when it is a terminal frame: its capabilities and the
-report, asked once per terminal; the mouse.  Never prompts or signals: each step on its own, a failing one
-does not stop the next."
+  "Look after FRAME (default: the selected frame) when it is a terminal frame: its keys (modifyOtherKeys),
+capabilities and the report, once per terminal; the mouse.  Never prompts or signals: each step on its own, a
+failing one does not stop the next."
   (let ((frame (or frame (selected-frame))))
     (when (and (frame-live-p frame) (not (display-graphic-p frame))
                (not (equal (terminal-name (frame-terminal frame)) "initial_terminal")))
-      (unless (terminal-parameter (frame-terminal frame) 'drgnx-tty-identity)
-        (drgnx-tty-frames--guard "capabilities" #'drgnx-tty-frames-write-report frame))
+      (let ((first (not (terminal-parameter (frame-terminal frame) 'drgnx-tty-set-up))))
+        (drgnx-tty-frames--guard "keys" #'drgnx-tty-frames--keys-setup frame)
+        (when first
+          (set-terminal-parameter (frame-terminal frame) 'drgnx-tty-set-up t)
+          (drgnx-tty-frames--guard "capabilities" #'drgnx-tty-frames-write-report frame)))
       (drgnx-tty-frames--guard "mouse" #'drgnx-tty-frames-mouse-apply)
       (when (fboundp 'drgnx-tty-clip-setup)   ; drgnx-tty-clipboard.el: OSC 52 copy
         (drgnx-tty-frames--guard "clipboard" #'drgnx-tty-clip-setup frame)))))

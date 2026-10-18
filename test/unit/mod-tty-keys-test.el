@@ -1,4 +1,4 @@
-;;; mod-tty-keys-test.el --- batch tests: ui/terminal-keys — kkp, modifyOtherKeys, C-g -*- lexical-binding: t -*-
+;;; mod-tty-keys-test.el --- batch tests: terminal keys — modifyOtherKeys (ui/terminal), kkp (ui/terminal-keys), C-g -*- lexical-binding: t -*-
 ;; Batch Emacs has no terminal: terminals, their parameters and tmux are stubbed; the tty tier
 ;; (test/tty/keys-test.el) sends the real bytes.  kkp is a fake here unless a test says otherwise.
 (require 'ert)
@@ -7,16 +7,34 @@
 (load (expand-file-name "modules/ui/drgnx-tty-frames" drgnx-dir) nil t)
 (load (expand-file-name "modules/ui/drgnx-tty-keys" drgnx-dir) nil t)
 
+(defun drgnx-tty-keys-test--pinned ()
+  "The kkp entry of the shipped lock (etc/drgnx.lock.eld): (VERSION . SHA256)."
+  (let ((e (alist-get 'kkp (plist-get (with-temp-buffer
+                                        (insert-file-contents (expand-file-name "etc/drgnx.lock.eld" drgnx-dir))
+                                        (read (current-buffer)))
+                                      :packages))))
+    (cons (plist-get e :version) (plist-get e :sha256))))
+
 (defun drgnx-tty-keys-test--kkp-dir ()
-  "The directory of the pinned kkp in the user's ELPA (DRGNX_USER_ELPA, read-only), or nil."
-  (let ((elpa (getenv "DRGNX_USER_ELPA")))
-    (and elpa (file-directory-p elpa) (car (last (directory-files elpa t "\\`kkp-[0-9]"))))))
+  "The pinned kkp's directory in DRGNX_USER_ELPA (read-only), or nil."
+  (let ((dir (expand-file-name (concat "kkp-" (car (drgnx-tty-keys-test--pinned))) (or (getenv "DRGNX_USER_ELPA") "/nonexistent"))))
+    (and (file-directory-p dir) dir)))
+
+(defun drgnx-tty-keys-test--need-kkp ()
+  "Skip, saying how to supply it, unless the pinned kkp is in DRGNX_USER_ELPA."
+  (unless (drgnx-tty-keys-test--kkp-dir)
+    (let ((pin (drgnx-tty-keys-test--pinned)))
+      (ert-skip (format "kkp %s not in DRGNX_USER_ELPA: unpack https://melpa.org/packages/kkp-%s.tar (sha256 %s) \
+into a directory and set DRGNX_USER_ELPA to it, or point DRGNX_USER_ELPA at an elpa drgnx sync filled"
+                        (car pin) (car pin) (cdr pin))))))
 
 (defun drgnx-tty-keys-test--unload-kkp ()
   "Turn kkp's mode off and unload it (the fake or the real one), so the next test loads its own."
   (when (featurep 'kkp)
     (when (fboundp 'global-kkp-mode) (funcall 'global-kkp-mode -1))
-    (unload-feature 'kkp t)))
+    (unload-feature 'kkp t))
+  (advice-remove 'kkp-enable-in-terminal #'drgnx-tty-keys--enable-guard)
+  (advice-remove 'kkp--terminal-setup #'drgnx-tty-keys--kkp-setup-guard))
 
 (defmacro drgnx-tty-keys-test--modules (&rest body)
   "BODY with only ui/terminal and ui/terminal-keys defined, fresh tables, the hooks they touch restored after."
@@ -34,74 +52,20 @@
          (advice-remove 'drgnx-chrome--close-clicked #'drgnx-tty-frames--close-clicked)
          (delete-directory cfg t)))))
 
+(defmacro drgnx-tty-keys-test--without-kkp (&rest body)
+  "BODY where the kkp package cannot be found."
+  `(let ((load-path (seq-remove (lambda (d) (string-match-p "/kkp-[0-9]" d)) load-path))
+         (orig (symbol-function 'featurep))
+         (orig-locate (symbol-function 'locate-library)))
+     (cl-letf (((symbol-function 'locate-library)
+                (lambda (lib &rest r) (unless (equal lib "kkp") (apply orig-locate lib r))))
+               ((symbol-function 'featurep) (lambda (f &rest r) (and (not (eq f 'kkp)) (apply orig f r)))))
+       ,@body)))
+
 (defun drgnx-tty-keys-test--status (module)
   (plist-get (alist-get module (drgnx-modules-report)) :status))
 
-(ert-deftest drgnx-tty-keys/the-module-waits-without-kkp ()
-  (let ((load-path (seq-remove (lambda (d) (string-match-p "/kkp-[0-9]" d)) load-path))
-        (orig (symbol-function 'featurep))
-        (orig-locate (symbol-function 'locate-library)))
-    (cl-letf (((symbol-function 'locate-library)
-               (lambda (lib &rest r) (unless (equal lib "kkp") (apply orig-locate lib r))))
-              ((symbol-function 'featurep) (lambda (f &rest r) (and (not (eq f 'kkp)) (apply orig f r)))))
-      (drgnx-tty-keys-test--modules
-       (drgnx-modules-run 'startup)
-       (should (eq (drgnx-tty-keys-test--status 'ui/terminal) 'ok))
-       (should (eq (drgnx-tty-keys-test--status 'ui/terminal-keys) 'missing-packages))
-       (should (equal (plist-get (alist-get 'ui/terminal-keys (drgnx-modules-report)) :missing) '(kkp)))
-       ;; the terminal windows' own setup is there; the keys' is not
-       (should (memq #'drgnx-tty-frames-setup tty-setup-hook))
-       (should-not (memq #'drgnx-tty-keys-setup tty-setup-hook))))))
-
-(defconst drgnx-tty-keys-test--fake-kkp
-  "(defvar kkp-restore-legacy-keys-around-subprocesses nil)
-(defvar kkp-terminal-query-timeout 2)
-(defvar kkp-terminal-setup-complete-hook nil)
-(defvar kkp-terminal-teardown-complete-hook nil)
-(defvar kx-kkp-saw nil)
-(define-minor-mode global-kkp-mode \"A fake.\" :global t
-  (push (list global-kkp-mode kkp-restore-legacy-keys-around-subprocesses kkp-terminal-query-timeout) kx-kkp-saw))
-(provide 'kkp)
-"
-  "A kkp that records what its options were when its mode changed.")
-
-(ert-deftest drgnx-tty-keys/kkp-is-on-with-c-g-covered ()
-  (let* ((dir (make-temp-file "drgnx-fake-kkp" t))
-         (load-path (cons dir load-path)))
-    (drgnx-tty-keys-test--unload-kkp)
-    (unwind-protect
-        (progn
-          (write-region drgnx-tty-keys-test--fake-kkp nil (expand-file-name "kkp.el" dir) nil 'silent)
-          (drgnx-tty-keys-test--modules
-           (drgnx-modules-run 'startup)
-           (should (eq (drgnx-tty-keys-test--status 'ui/terminal-keys) 'ok))
-           ;; the mode went on with kkp's subprocess option already set (it is read when the mode turns on), and
-           ;; drgnx's query bound: kkp's wait for the terminal's answer is drgnx's 0.2 s, not kkp's 2
-           (should (equal (symbol-value 'kx-kkp-saw) (list (list t t drgnx-tty-frames-query-timeout))))
-           (should (memq #'drgnx-tty-keys--kkp-on (symbol-value 'kkp-terminal-setup-complete-hook)))
-           (should (memq #'drgnx-tty-keys-setup tty-setup-hook))))
-      (drgnx-tty-keys-test--unload-kkp)
-      (delete-directory dir t))))
-
-(ert-deftest drgnx-tty-keys/the-pinned-kkp-has-the-subprocess-option ()
-  ;; the real kkp: its option advises `call-process' (`process-file' runs it for local files), and the advice
-  ;; switches a terminal to legacy keys only where kkp is active
-  (skip-unless (drgnx-tty-keys-test--kkp-dir))
-  (drgnx-tty-keys-test--unload-kkp)
-  (let ((load-path (cons (drgnx-tty-keys-test--kkp-dir) load-path))
-        (sent nil))
-    (unwind-protect
-        (drgnx-tty-keys-test--modules
-         (drgnx-modules-run 'startup)
-         (should (eq (drgnx-tty-keys-test--status 'ui/terminal-keys) 'ok))
-         (should (symbol-value 'global-kkp-mode))
-         (should (advice-member-p 'kkp-restore-legacy-keys 'call-process))
-         (cl-letf (((symbol-function 'send-string-to-terminal) (lambda (s &rest _) (push s sent))))
-           (should (eq (call-process "true") 0))
-           (should-not sent)))
-      (drgnx-tty-keys-test--unload-kkp))))
-
-;;;; modifyOtherKeys
+;;;; A fake terminal
 
 (defvar drgnx-tty-keys-test--params nil "The fake terminal's parameters (an alist).")
 
@@ -122,6 +86,7 @@ a fake `tmux' printing TMUX-OUT on PATH, and no terminal to ask.  `sent' collect
          (cl-letf (((symbol-function 'frame-parameter)
                     (lambda (f p) (if (eq p 'environment) ,env (funcall real-frame-parameter f p))))
                    ((symbol-function 'frame-terminal) (lambda (&optional _) 'kx-a))
+                   ((symbol-function 'frames-on-display-list) (lambda (&optional _) (list (selected-frame))))
                    ((symbol-function 'terminal-name) (lambda (&optional _) "kx-a"))
                    ((symbol-function 'terminal-live-p) (lambda (_term) t))
                    ((symbol-function 'terminal-parameter)
@@ -137,41 +102,168 @@ a fake `tmux' printing TMUX-OUT on PATH, and no terminal to ask.  `sent' collect
                (set-keymap-parent input-decode-map parent))))
        (delete-directory bin t))))
 
+(defconst drgnx-tty-keys-test--asked '((tty-mode-set-strings . ("\e[>4;1m")) (tty-mode-reset-strings . ("\e[>4m")))
+  "A terminal for which Emacs's xterm.el asked for modifyOtherKeys.")
+
 (defconst drgnx-tty-keys-test--chords '("C-S-p" "C-S-f" "C-S-e" "C-`" "C-." "C-S-`" "C-S-SPC" "C-S-<return>"
                                         "C-<tab>" "C-," "C-;" "C-=" "C-M-S-k")
   "Chords only an extended key protocol sends (the VS Code profile binds most of them).")
+
+(defun drgnx-tty-keys-test--decodes ()
+  "Every chord of `drgnx-tty-keys-test--chords', as modifyOtherKeys sends it, decodes to that key."
+  (dolist (key drgnx-tty-keys-test--chords)
+    (should (equal (list key (lookup-key input-decode-map (drgnx-tty-session-encode key 'mok)))
+                   (list key (kbd key))))))
+
+;;;; The module and kkp
+
+(ert-deftest drgnx-tty-keys/the-module-waits-without-kkp ()
+  (drgnx-tty-keys-test--without-kkp
+   (drgnx-tty-keys-test--modules
+    (drgnx-modules-run 'startup)
+    (should (eq (drgnx-tty-keys-test--status 'ui/terminal) 'ok))
+    (should (eq (drgnx-tty-keys-test--status 'ui/terminal-keys) 'missing-packages))
+    (should (equal (plist-get (alist-get 'ui/terminal-keys (drgnx-modules-report)) :missing) '(kkp)))
+    (should (memq #'drgnx-tty-frames-setup tty-setup-hook)))))
+
+(ert-deftest drgnx-tty-keys/modify-other-keys-without-kkp ()
+  ;; modifyOtherKeys is ui/terminal's: an xterm works with kkp missing.  Before drgnx decodes it, the terminal is
+  ;; legacy even though Emacs asked for it (C-S-p would type text); after, it is mok and C-S-p arrives
+  (drgnx-tty-keys-test--without-kkp
+   (drgnx-tty-keys-test--modules
+    (drgnx-modules-run 'startup)
+    (should (eq (drgnx-tty-keys-test--status 'ui/terminal-keys) 'missing-packages))
+    (drgnx-tty-keys-test--terminal drgnx-tty-keys-test--asked '("TERM=xterm-256color" "XTERM_VERSION=XTerm(397)") ""
+      (should (eq (plist-get (drgnx-tty-frame-caps) :keys) 'legacy))
+      (drgnx-tty-frames--keys-setup (selected-frame))
+      (let ((caps (drgnx-tty-frame-caps)))
+        (should (eq (plist-get caps :id) 'xterm))
+        (should (eq (plist-get caps :keys) 'mok))
+        (should (eq (plist-get caps :c-g) 'always)))
+      (should-not sent)
+      (drgnx-tty-keys-test--decodes)))))
+
+(defconst drgnx-tty-keys-test--fake-kkp
+  "(defvar kkp-restore-legacy-keys-around-subprocesses nil)
+(defvar kkp-terminal-query-timeout 2)
+(defvar kkp-terminal-setup-complete-hook nil)
+(defvar kkp-terminal-teardown-complete-hook nil)
+(defvar kx-kkp-saw nil)
+(defun kkp-enable-in-terminal (&optional _terminal) nil)
+(defun kkp--terminal-setup () nil)
+(define-minor-mode global-kkp-mode \"A fake.\" :global t
+  (push (list global-kkp-mode kkp-restore-legacy-keys-around-subprocesses kkp-terminal-query-timeout) kx-kkp-saw))
+(provide 'kkp)
+"
+  "A kkp that records what its options were when its mode changed.")
+
+(ert-deftest drgnx-tty-keys/kkp-is-on-with-c-g-covered ()
+  (let* ((dir (make-temp-file "drgnx-fake-kkp" t))
+         (load-path (cons dir load-path)))
+    (drgnx-tty-keys-test--unload-kkp)
+    (unwind-protect
+        (progn
+          (write-region drgnx-tty-keys-test--fake-kkp nil (expand-file-name "kkp.el" dir) nil 'silent)
+          (drgnx-tty-keys-test--modules
+           (drgnx-modules-run 'startup)
+           (should (eq (drgnx-tty-keys-test--status 'ui/terminal-keys) 'ok))
+           ;; the mode went on with kkp's subprocess option already set (it is read when the mode turns on), and
+           ;; drgnx's query bound: kkp's wait for the terminal's answer is drgnx's 0.2 s, not kkp's 2
+           (should (equal (symbol-value 'kx-kkp-saw) (list (list t t drgnx-tty-frames-query-timeout))))
+           (should (memq #'drgnx-tty-keys--kkp-on (symbol-value 'kkp-terminal-setup-complete-hook)))
+           ;; kkp asks only where it is wanted, and a setup it cannot finish is undone
+           (should (advice-member-p #'drgnx-tty-keys--enable-guard 'kkp-enable-in-terminal))
+           (should (advice-member-p #'drgnx-tty-keys--kkp-setup-guard 'kkp--terminal-setup))))
+      (drgnx-tty-keys-test--unload-kkp)
+      (delete-directory dir t))))
+
+(ert-deftest drgnx-tty-keys/the-pinned-kkp-has-the-subprocess-option ()
+  ;; the real kkp: its option advises `call-process' (`process-file' runs it for local files), and the advice
+  ;; switches a terminal to legacy keys only where kkp is active
+  (drgnx-tty-keys-test--need-kkp)
+  (drgnx-tty-keys-test--unload-kkp)
+  (let ((load-path (cons (drgnx-tty-keys-test--kkp-dir) load-path))
+        (sent nil))
+    (unwind-protect
+        (drgnx-tty-keys-test--modules
+         (drgnx-modules-run 'startup)
+         (should (eq (drgnx-tty-keys-test--status 'ui/terminal-keys) 'ok))
+         (should (symbol-value 'global-kkp-mode))
+         (should (advice-member-p 'kkp-restore-legacy-keys 'call-process))
+         (cl-letf (((symbol-function 'send-string-to-terminal) (lambda (s &rest _) (push s sent))))
+           (should (eq (call-process "true") 0))
+           (should-not sent)))
+      (drgnx-tty-keys-test--unload-kkp))))
+
+(ert-deftest drgnx-tty-keys/modify-other-keys-is-preferred-to-kkp ()
+  ;; kkp is asked for only in a terminal without modifyOtherKeys (kitty); with modifyOtherKeys C-g stays a plain
+  ;; byte and interrupts busy Lisp too.  `drgnx-tty-use-kkp' nil: never
+  (let ((asked nil))
+    (cl-flet ((try (params env)
+                (setq asked nil)
+                (drgnx-tty-keys-test--terminal params env ""
+                  (drgnx-tty-keys--enable-guard (lambda (&rest _) (setq asked t)))
+                  (list asked (plist-get (drgnx-tty-frame-caps) :keys)))))
+      (let ((drgnx-tty-use-kkp t))
+        (should (equal (try nil '("TERM=xterm-kitty")) '(t legacy)))                         ; kitty: kkp asked
+        (should (equal (try nil '("TERM=xterm-256color" "TERM_PROGRAM=WezTerm")) '(nil legacy))) ; its row: mok
+        (should (equal (car (try drgnx-tty-keys-test--asked '("TERM=xterm-256color" "XTERM_VERSION=XTerm(397)")))
+                       nil))                                                                 ; Emacs asked for mok
+        (should (equal (car (try nil '("TERM=tmux-256color"))) nil)))                        ; tmux passes no kkp
+      (let ((drgnx-tty-use-kkp nil))
+        ;; kkp off: kitty is asked nothing and stays legacy (C-S-p is listed as a key it cannot send)
+        (should (equal (try nil '("TERM=xterm-kitty")) '(nil legacy)))))))
+
+(ert-deftest drgnx-tty-keys/a-kkp-setup-that-cannot-finish-is-undone ()
+  ;; a link slower than the 0.2 s wait: the terminal answered kkp's question, kkp pushed its flags, then its
+  ;; confirmation (CSI ? u) did not come.  kkp 20260706.858 signals there, before it decodes anything: drgnx pops
+  ;; the flags again, the keys stay plain, the problem is recorded
+  (drgnx-tty-keys-test--need-kkp)
+  (drgnx-tty-keys-test--unload-kkp)
+  (let ((load-path (cons (drgnx-tty-keys-test--kkp-dir) load-path))
+        (drgnx-hooks-problems nil))
+    (unwind-protect
+        (drgnx-tty-keys-test--modules
+         (drgnx-modules-run 'startup)
+         (drgnx-tty-keys-test--terminal nil '("TERM=xterm-kitty") ""
+           (let ((input (append "5u\e[?62c" nil)))
+             (cl-letf (((symbol-function 'read-event) (lambda (&rest _) (pop input)))
+                       ((symbol-function 'kkp--query-terminal-sync) (lambda (&rest _) nil)))
+               (funcall 'kkp--terminal-setup)))
+           (should (equal sent (list (format "\e[>%du" (funcall 'kkp--calculate-flags-integer)) "\e[<u")))
+           (should-not (funcall 'kkp--active-p 'kx-a))
+           (should (eq (plist-get (drgnx-tty-frame-caps) :keys) 'legacy))
+           (should (string-match-p "ui/terminal-keys: kkp did not finish" (car drgnx-hooks-problems)))))
+      (drgnx-tty-keys-test--unload-kkp))))
+
+;;;; modifyOtherKeys under tmux
 
 (ert-deftest drgnx-tty-keys/tmux-gets-modify-other-keys ()
   ;; TERM=xterm-256color inside tmux: Emacs asked tmux (DA2: version 0) and did not turn modifyOtherKeys on;
   ;; extended-keys is on, so drgnx asks for it, and decodes what tmux then sends
   (drgnx-tty-keys-test--terminal nil '("TERM=xterm-256color" "TMUX=/tmp/kx-sock,1,0") "external\non\n"
-    (drgnx-tty-keys-setup (selected-frame))
+    (drgnx-tty-frames--keys-setup (selected-frame))
     (should (member "\e[>4;1m" (terminal-parameter nil 'tty-mode-set-strings)))
     (should (member "\e[>4m" (terminal-parameter nil 'tty-mode-reset-strings)))
     (should (equal sent '("\e[>4;1m")))
     (should (eq (plist-get (drgnx-tty-frame-caps) :keys) 'mok))
-    (should (= reports 1))
-    (dolist (key drgnx-tty-keys-test--chords)
-      (should (equal (list key (lookup-key input-decode-map (drgnx-tty-session-encode key 'mok)))
-                     (list key (kbd key)))))
+    (drgnx-tty-keys-test--decodes)
     ;; Emacs's own decodings stay (xterm.el's C-tab and friends come first), and a second setup adds nothing
-    (drgnx-tty-keys-setup (selected-frame))
+    (drgnx-tty-frames--keys-setup (selected-frame))
     (should (equal sent '("\e[>4;1m")))
     (should (= (seq-count (lambda (s) (equal s "\e[>4;1m")) (terminal-parameter nil 'tty-mode-set-strings)) 1)))
   ;; always: the same
   (drgnx-tty-keys-test--terminal nil '("TERM=xterm-256color" "TMUX=/tmp/kx-sock,1,0") "on\nalways\n"
-    (drgnx-tty-keys-setup (selected-frame))
+    (drgnx-tty-frames--keys-setup (selected-frame))
     (should (eq (plist-get (drgnx-tty-frame-caps) :keys) 'mok)))
   ;; TERM=tmux-256color: Emacs's term/tmux.el already asked; nothing is sent twice
-  (drgnx-tty-keys-test--terminal '((tty-mode-set-strings . ("\e[>4;1m")) (tty-mode-reset-strings . ("\e[>4m")))
-      '("TERM=tmux-256color" "TMUX=/tmp/kx-sock,1,0") "on\non\n"
-    (drgnx-tty-keys-setup (selected-frame))
+  (drgnx-tty-keys-test--terminal drgnx-tty-keys-test--asked '("TERM=tmux-256color" "TMUX=/tmp/kx-sock,1,0") "on\non\n"
+    (drgnx-tty-frames--keys-setup (selected-frame))
     (should-not sent)
     (should (eq (plist-get (drgnx-tty-frame-caps) :keys) 'mok)))
   ;; a tmux on the other side of SSH (TERM=tmux-*, no TMUX): its options are unknown, Emacs's request stays
-  (drgnx-tty-keys-test--terminal '((tty-mode-set-strings . ("\e[>4;1m")) (tty-mode-reset-strings . ("\e[>4m")))
-      '("TERM=tmux-256color") "on\noff\n"
-    (drgnx-tty-keys-setup (selected-frame))
+  (drgnx-tty-keys-test--terminal drgnx-tty-keys-test--asked '("TERM=tmux-256color") "on\noff\n"
+    (drgnx-tty-frames--keys-setup (selected-frame))
     (should-not sent)
     (should (eq (plist-get (drgnx-tty-frame-caps) :keys) 'mok))))
 
@@ -181,29 +273,31 @@ a fake `tmux' printing TMUX-OUT on PATH, and no terminal to ask.  `sent' collect
   (drgnx-tty-keys-test--terminal '((tty-mode-set-strings . ("\e[?2004h" "\e[>4;1m"))
                                    (tty-mode-reset-strings . ("\e[>4m" "\e[?2004l")))
       '("TERM=tmux-256color" "TMUX=/tmp/kx-sock,1,0") "on\noff\n"
-    (drgnx-tty-keys-setup (selected-frame))
+    (drgnx-tty-frames--keys-setup (selected-frame))
     (should (equal sent '("\e[>4m")))
     (should (equal (terminal-parameter nil 'tty-mode-set-strings) '("\e[?2004h")))
     (should (equal (terminal-parameter nil 'tty-mode-reset-strings) '("\e[?2004l")))
     (should (eq (plist-get (drgnx-tty-frame-caps) :keys) 'legacy))
-    (should (= reports 1))
     (should (member "C-S-p" (drgnx-tty-unsendable '("C-S-p" "C-p") (plist-get (drgnx-tty-frame-caps) :keys)))))
-  ;; a tmux that does not answer (no extended-keys before 3.2, or no server): nothing changes
-  (drgnx-tty-keys-test--terminal '((tty-mode-set-strings . ("\e[>4;1m")) (tty-mode-reset-strings . ("\e[>4m")))
-      '("TERM=tmux-256color" "TMUX=/tmp/kx-sock,1,0") ""
-    (drgnx-tty-keys-setup (selected-frame))
-    (should-not sent)
-    (should (eq (plist-get (drgnx-tty-frame-caps) :keys) 'mok))))
+  ;; a tmux whose extended-keys cannot be read (older than 3.2: the option does not exist; or no answer): it is
+  ;; not known to pass modifyOtherKeys, so legacy too
+  (dolist (out '("on\n" ""))
+    (drgnx-tty-keys-test--terminal drgnx-tty-keys-test--asked '("TERM=tmux-256color" "TMUX=/tmp/kx-sock,1,0") out
+      (drgnx-tty-frames--keys-setup (selected-frame))
+      (should (equal sent '("\e[>4m")))
+      (should (eq (plist-get (drgnx-tty-frame-caps) :keys) 'legacy)))))
 
 (ert-deftest drgnx-tty-keys/kkp-marks-the-terminal ()
-  ;; kkp's setup hook (a frame of the terminal selected): the terminal is kkp, its report written again; kkp's
-  ;; teardown (suspend, the last frame closed) takes the mark away
+  ;; kkp's setup hook (a frame of the terminal selected): the terminal is kkp, its report written again, and C-g
+  ;; there interrupts only waits for programs; kkp's teardown (suspend, the last frame closed) takes it away
   (drgnx-tty-keys-test--terminal nil '("TERM=xterm-kitty") ""
     (drgnx-tty-keys--kkp-on)
     (should (eq (plist-get (drgnx-tty-frame-caps) :keys) 'kkp))
+    (should (eq (plist-get (drgnx-tty-frame-caps) :c-g) 'waits))
     (should (= reports 1))
     (drgnx-tty-keys--kkp-off)
-    (should (eq (plist-get (drgnx-tty-frame-caps) :keys) 'legacy))))
+    (should (eq (plist-get (drgnx-tty-frame-caps) :keys) 'legacy))
+    (should (eq (plist-get (drgnx-tty-frame-caps) :c-g) 'always))))
 
 (provide 'mod-tty-keys-test)
 ;;; mod-tty-keys-test.el ends here

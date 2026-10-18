@@ -477,6 +477,11 @@ hyper 16).")
       ((and (equal mods '(control)) (not named) (eq base ??)) (unibyte-string 127))
       (t (signal 'drgnx-ui-error (list (format "%s: a legacy terminal cannot send it" key))))))))
 
+(defconst drgnx-tty-session--us-shift
+  '((?` . ?~) (?1 . ?!) (?2 . ?@) (?3 . ?#) (?4 . ?$) (?5 . ?%) (?6 . ?^) (?7 . ?&) (?8 . ?*) (?9 . ?\() (?0 . ?\))
+    (?- . ?_) (?= . ?+) (?\[ . ?{) (?\] . ?}) (?\\ . ?|) (?\; . ?:) (?' . ?\") (?, . ?<) (?. . ?>) (?/ . ??))
+  "What Shift makes of a key on a US layout: modifyOtherKeys reports that character.")
+
 (defun drgnx-tty-session--encode-event (ev caps key)
   (let* ((raw (and (integerp ev) (car (rassq ev drgnx-tty-session--named))))   ; RET, TAB, ESC, DEL as chars
          ;; first: it parses a symbol's modifiers, which `event-basic-type' only reads
@@ -492,10 +497,13 @@ hyper 16).")
       ((guard xterm) (drgnx-tty-session--xterm-key xterm mods caps key))
       ('legacy (drgnx-tty-session--legacy base named mods key))
       ('mok
+       ;; as xterm and tmux send it: the character Shift makes on a US layout (C-S-` is 27;6;126, `~')
        (or (ignore-errors (drgnx-tty-session--legacy base named mods key))
            (format "\e[27;%d;%d~"
                    (1+ (drgnx-tty-session--bits mods '((shift . 1) (meta . 2) (control . 4)) key))
-                   (if (and (memq 'shift mods) (not named)) (upcase base) base))))
+                   (if (and (memq 'shift mods) (not named))
+                       (or (alist-get base drgnx-tty-session--us-shift) (upcase base))
+                     base))))
       ('kkp
        (cond ((and (null mods) (eq base 27)) "\e[27u")
              ((null mods) (drgnx-tty-session--legacy base named nil key))

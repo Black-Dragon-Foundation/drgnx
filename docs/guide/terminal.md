@@ -84,17 +84,20 @@ helps.
 ## Keys
 
 `C-S-p`, `` C-` ``, `C-.` and the other chords of your profile reach drgnx only through a key protocol: a plain
-terminal sends `C-S-p` as `C-p`, and `C-.` not at all. The `ui/terminal-keys` module turns on whichever protocol
-the terminal has, in each terminal window:
+terminal sends `C-S-p` as `C-p`, and `C-.` not at all. drgnx turns on one protocol in each terminal window:
 
-- **The kitty keyboard protocol (kkp)**: kitty, foot, Ghostty, Alacritty, and WezTerm or iTerm2 with the setting
-  in [The fixes](#the-fixes). drgnx uses the `kkp` package from MELPA, pinned in drgnx's lock (`drgnx sync`
-  installs it). When a terminal window opens, kkp asks the terminal once whether it speaks the protocol
-  (`CSI ? u`) and waits 0.2 s at most. A terminal that says no, or does not answer, keeps its plain keys. Under
-  kkp every key arrives, `s-` keys included.
-- **modifyOtherKeys**: xterm (Emacs turns it on there by itself) and tmux with `extended-keys on`. drgnx reads
-  tmux's `extended-keys` and asks tmux for modifyOtherKeys when it is `on` or `always`. When it is `off`, drgnx
-  does not ask, and the window counts as plain. Every chord arrives except `s-` and `H-` keys.
+- **modifyOtherKeys**, wherever the terminal has it: xterm, WezTerm, Ghostty, and tmux with `extended-keys on`.
+  drgnx asks the terminal for it when Emacs did not, and decodes every chord (Emacs alone decodes only a few, so
+  `C-S-p` would type text). Under tmux drgnx reads `extended-keys` and asks tmux for it when it is `on` or
+  `always`. When it is `off`, or tmux is too old to have the option (before 3.2), the window counts as plain.
+  Every chord arrives except `s-` and `H-` keys. This needs no package.
+- **The kitty keyboard protocol (kkp)**, only for terminals that have kkp but not modifyOtherKeys: kitty, foot,
+  Alacritty, and iTerm2 with the setting in [The fixes](#the-fixes). The `ui/terminal-keys` module uses the `kkp`
+  package from MELPA, pinned in drgnx's lock (`drgnx sync` installs it). When such a terminal window opens, kkp
+  asks the terminal once whether it speaks the protocol (`CSI ? u`) and waits 0.2 s at most. A terminal that says
+  no, or does not answer, keeps its plain keys. If the answer starts but does not finish in time (a slow SSH
+  link), drgnx takes the half-made change back, the window keeps its plain keys, and drgnx records the
+  problem. Under kkp every key arrives, `s-` keys included.
 - **Neither** (GNOME Terminal, Ptyxis, Terminal.app, the Linux console): open the palette with **F1** (VS Code
   keys) or `M-x`; every command is there. `terminal-report.eld` lists the keys of your profile this terminal
   cannot send.
@@ -102,14 +105,20 @@ the terminal has, in each terminal window:
 Each terminal window keeps its own keys: a kitty window and a Ptyxis window on the same drgnx each get what their
 terminal can send.
 
-**`C-g` still interrupts.** Under kkp a terminal sends `C-g` as an escape sequence. While Emacs waits for a program
-(a `git` that hangs, say), it reacts only to the plain `C-g` byte. drgnx turns on kkp's
-`kkp-restore-legacy-keys-around-subprocesses`: while Emacs waits, the terminal sends plain keys, so `C-g` stops
-the program.
+**`C-g` in a kkp terminal (kitty).** modifyOtherKeys leaves `C-g` the plain byte it always was, so it stops
+anything, busy Lisp included; that is why drgnx prefers it. Under kkp the terminal sends `C-g` as an escape
+sequence, which Emacs reads only between commands. drgnx turns on kkp's `kkp-restore-legacy-keys-around-subprocesses`,
+so while Emacs waits for a program (a `git` that hangs, say) the terminal sends plain keys and `C-g` stops the
+program. But `C-g` cannot stop busy Lisp (a long computation, a loop) in a kkp terminal; `terminal-report.eld`
+says so for that terminal (`:c-g waits`). To keep `C-g` working everywhere, set **`drgnx-tty-use-kkp`** to `nil`
+(`M-x customize-variable`; it applies to terminal windows opened afterwards). kitty then sends plain keys: no
+`C-S-` chords, so use F1 or the palette for those.
 
-Without the `kkp` package the module waits, and the doctor's module check names it (`ui/terminal-keys (kkp)`).
-modifyOtherKeys then works only for the few chords Emacs decodes itself (`C-<tab>`, `C-.`, `C-,` …), not for
-`C-S-` chords.
+Ctrl+Shift+`` ` `` arrives from xterm and tmux as Ctrl+Shift+`~` (the character Shift makes on a US layout);
+drgnx reads it as `` C-S-` `` (New Terminal). On other layouts, use the palette if the key does nothing.
+
+Without the `kkp` package, `ui/terminal-keys` waits and the doctor's module check names it
+(`ui/terminal-keys (kkp)`); modifyOtherKeys works as above.
 
 ## SSH
 
@@ -156,8 +165,9 @@ found — how keys arrive (kitty keyboard protocol, modifyOtherKeys, or neither)
 keys of your profile this terminal cannot send are written to `terminal-report.eld` in drgnx's state directory
 (`~/.local/state/drgnx/`), one entry per terminal device, for the doctor and the key sheet. The file is written
 whole and then renamed into place, so two Emacs processes never leave half of it, and nothing ever asks about it.
-Like Emacs's own terminal setup, the question drops keys typed ahead while a new terminal window opens. kkp asks
-its own question, once per terminal, waiting 0.2 s at most (see [Keys](#keys)); its answer is added to the report.
+Like Emacs's own terminal setup, the question drops keys typed ahead while a new terminal window opens. In a terminal
+without modifyOtherKeys, kkp asks its own question, once per terminal, waiting 0.2 s at most (see [Keys](#keys));
+its answer is added to the report.
 
 ## Mouse
 

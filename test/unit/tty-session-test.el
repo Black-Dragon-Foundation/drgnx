@@ -7,6 +7,9 @@
   (should (equal (drgnx-tty-session-encode "C-S-p" 'mok) "\e[27;6;80~"))
   (should (equal (drgnx-tty-session-encode "C-`" 'kkp) "\e[96;5u"))
   (should (equal (drgnx-tty-session-encode "C-`" 'mok) "\e[27;5;96~"))
+  ;; Shift with punctuation: modifyOtherKeys reports the shifted character (US layout), kkp the key
+  (should (equal (drgnx-tty-session-encode "C-S-`" 'mok) "\e[27;6;126~"))
+  (should (equal (drgnx-tty-session-encode "C-S-`" 'kkp) "\e[96;6u"))
   (should (equal (drgnx-tty-session-encode "C-." 'kkp) "\e[46;5u"))
   (should (equal (drgnx-tty-session-encode "C-g" 'kkp) "\e[103;5u"))
   (should (equal (drgnx-tty-session-encode "C-g" 'legacy) "\a"))
