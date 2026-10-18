@@ -157,7 +157,7 @@ alone unless a rule names them.
 | `panel` Problems | flymake / flycheck lists |
 | `panel` Output | `*Messages*`, `*Warnings*`, `*Backtrace*`, ert results |
 | `panel` Results | compilation, grep, occur, xref |
-| `panel` Terminal | shell, eshell, term, vterm, ielm, other comint buffers |
+| `panel` Terminal | New Terminal (your shell in eat; eshell for a remote folder, on Windows, and until eat is synced), New Eshell, shell, eshell, term, vterm, ielm, other comint buffers |
 | `panel` Help | help, apropos, Info, man, eldoc documentation |
 | `right` | agents, chat, viewers — tabs come with their modules (M7) |
 | `popup` | transient, which-key, `*Completions*`, `*Calendar*` |

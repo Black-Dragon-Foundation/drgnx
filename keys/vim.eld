@@ -171,6 +171,7 @@
         (scm-blame "SPC g b")
         (terminal-new "SPC t n")
         (explorer-terminal-here :none "the Explorer's right-click menu")
+        (terminal-new-eshell :none "in the palette")
         (go-quick-open "SPC f p")
         (search-project "SPC s p")
         (search-semantic "SPC s i")

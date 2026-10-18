@@ -47,6 +47,11 @@
 		    "87dfec1f904595045d3dd215525f50445264e5d94e6591e2b9cc044ce74a91b1"
 		    :size 215040 :requires ((cl-lib "0.2")) :summary
 		    "Highlight uncommitted changes using VC")
+	   (eat :version "0.9.4" :archive "nongnu" :kind tar :file
+		"eat-0.9.4.tar" :sha256
+		"14971fc562f0820794eb6af78beebc7dc3ba898221e785c2d272a9f0fccfc54a"
+		:size 778240 :requires ((emacs "26.1") (compat "29.1")) :summary
+		"Emulate A Terminal, in a region, in a buffer and in Eshell")
 	   (eglot-booster :kind git :url
 			  "https://github.com/jdtsmith/eglot-booster"
 			  :rev "main" :commit
