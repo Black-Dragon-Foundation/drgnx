@@ -1273,6 +1273,16 @@ The reply is an array of screens or of windows (the shape of test/fixtures/wm/kw
       (json-parse-string json :object-type 'plist :array-type 'list :null-object nil :false-object nil)
     (error (list :error "KWin's script answered something unreadable"))))
 
+(defvar drgnx-platform-kwin--error-handlers (make-hash-table :test #'eql)
+  "D-Bus serial of a KWin call in flight -> the function (of the error) that ends that call.  An entry goes when its
+call ends, so the table holds only the calls in flight.")
+
+(defun drgnx-platform-kwin--dbus-error (event err)
+  "`dbus-event-error-functions', while KWin calls are in flight: end the call whose serial EVENT answers with ERR."
+  (when (eq (nth 1 event) :session)
+    (when-let* ((fn (gethash (nth 3 event) drgnx-platform-kwin--error-handlers)))
+      (funcall fn err))))
+
 (defun drgnx-platform-kwin--run (kind args timeout callback)
   "Run the script KIND (with ARGS plus the reply address) in KWin; call CALLBACK once, later, with the parsed
 reply or (:error MESSAGE).  TIMEOUT seconds bound every step: when KWin has not answered by then the call
@@ -1283,13 +1293,15 @@ ends with an error.  Script, reply object and temporary file are gone by the tim
       (let* ((n (cl-incf drgnx-platform-kwin--counter))
              (name (format "drgnx-%d-%d" (emacs-pid) n))
              (ms (max 1 (round (* 1000 timeout))))
-             (object nil) (file nil) (timer nil) (sent nil) (done nil) (serials nil) (on-error nil)
+             (object nil) (file nil) (timer nil) (sent nil) (done nil) (serials nil) (on-error nil) (track nil)
              (finish
               (lambda (result)
                 (unless done
                   (setq done t)
                   (when timer (cancel-timer timer))
-                  (when on-error (remove-hook 'dbus-event-error-functions on-error))
+                  (dolist (s serials) (remhash s drgnx-platform-kwin--error-handlers))
+                  (when (= 0 (hash-table-count drgnx-platform-kwin--error-handlers))
+                    (remove-hook 'dbus-event-error-functions #'drgnx-platform-kwin--dbus-error))
                   (when object (ignore-errors (dbus-unregister-object object)))
                   (when sent
                     (ignore-errors
@@ -1299,11 +1311,14 @@ ends with an error.  Script, reply object and temporary file are gone by the tim
                   (drgnx-platform--later (lambda () (funcall cb result)))))))
         ;; A D-Bus error reply (KWin is not running, no such method) does not reach the handler of an
         ;; asynchronous call: dbus.el runs `dbus-event-error-functions' with the event, whose serial is that of
-        ;; the call.  This call's function is in the hook until `finish' removes it.
-        (setq on-error (lambda (event err)
-                         (when (and (not done) (eq (nth 1 event) :session) (memq (nth 3 event) serials))
+        ;; the call.  The one named function on the hook finds this call by its serials until `finish' ends it.
+        (setq on-error (lambda (err)
+                         (unless done
                            (funcall finish (list :error (format "KWin: %s" (string-join (mapcar (lambda (x) (format "%s" x)) (cdr err)) ": ")))))))
-        (add-hook 'dbus-event-error-functions on-error)
+        (setq track (lambda (serial)
+                      (push serial serials)
+                      (puthash serial on-error drgnx-platform-kwin--error-handlers)))
+        (add-hook 'dbus-event-error-functions #'drgnx-platform-kwin--dbus-error)
         (condition-case err
             (let* ((service (dbus-get-unique-name :session)) ; the first use opens the session connection (local, no round trip to a name owner)
                    (path (format "/org/drgnx/Wm%d" n))
@@ -1319,23 +1334,21 @@ ends with an error.  Script, reply object and temporary file are gone by the tim
               (setq file (let ((coding-system-for-write 'utf-8-unix))
                            (make-temp-file "drgnx-kwin-" nil ".js" script)))
               (setq sent t)
-              (push (nth 2 (dbus-call-method-asynchronously
-                            :session "org.kde.KWin" "/Scripting" "org.kde.kwin.Scripting" "loadScript"
-                            ;; `:timeout' right after the handler: anywhere else dbus.el sends it as an argument
-                            (lambda (id)
-                              (unless done
-                                (if (not (and (integerp id) (>= id 0)))
-                                    (funcall finish (list :error "KWin could not load the script"))
-                                  ;; `start' runs every loaded script not running yet.  Not `run' on
-                                  ;; /Scripting/Script<id>: KWin numbers scripts by how many are loaded, so after
-                                  ;; an unload two loaded scripts share an id and one object, and `run' there runs
-                                  ;; another call's script (two calls at once, seen on KWin 6.7.5)
-                                  (push (nth 2 (dbus-call-method-asynchronously
-                                                :session "org.kde.KWin" "/Scripting" "org.kde.kwin.Scripting" "start"
-                                                nil :timeout ms))
-                                        serials))))
-                            :timeout ms file name))
-                    serials))
+              (funcall track (nth 2 (dbus-call-method-asynchronously
+                                     :session "org.kde.KWin" "/Scripting" "org.kde.kwin.Scripting" "loadScript"
+                                     ;; `:timeout' right after the handler: anywhere else dbus.el sends it as an argument
+                                     (lambda (id)
+                                       (unless done
+                                         (if (not (and (integerp id) (>= id 0)))
+                                             (funcall finish (list :error "KWin could not load the script"))
+                                           ;; `start' runs every loaded script not running yet.  Not `run' on
+                                           ;; /Scripting/Script<id>: KWin numbers scripts by how many are loaded, so after
+                                           ;; an unload two loaded scripts share an id and one object, and `run' there runs
+                                           ;; another call's script (two calls at once, seen on KWin 6.7.5)
+                                           (funcall track (nth 2 (dbus-call-method-asynchronously
+                                                                  :session "org.kde.KWin" "/Scripting" "org.kde.kwin.Scripting" "start"
+                                                                  nil :timeout ms))))))
+                                     :timeout ms file name))))
           (error (funcall finish (list :error (error-message-string err)))))))
     nil))
 

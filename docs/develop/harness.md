@@ -328,7 +328,9 @@ lowest free `drgnx-ui-N`, so a stopped session's name came back for the next sta
 sharing the state root, twice drove each other's sessions. Now an id names one session only: once it is stopped,
 every command given that id is refused ("no harness session"). The socket's directory is the id without
 `drgnx-ui-` (a socket path holds 108 bytes); runs of the old `drgnx-ui-N` shape (an older checkout's) are not
-addressed or reaped from here.
+addressed or reaped from here. **Once, after updating** (when no older checkout runs sessions any more), clean up the
+old-shape ones by hand: `systemctl --user list-units 'drgnx-ui-*'`, then `systemctl --user stop drgnx-ui-N` for each
+unit without a `-HEX` suffix, and delete the `drgnx-ui-N` run directories (no suffix) under the state root.
 
 Only sessions this harness created can be addressed. A name must match `drgnx-ui-N-HEX`, its run directory must
 exist under the state root (`$DRGNX_UI_STATE`, default `$XDG_STATE_HOME/drgnx/ui`), and its socket must be the

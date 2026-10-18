@@ -363,6 +363,17 @@ temporary directory is private to the test."
                                   (should-not dbus-event-error-functions)
                                   (should-not (file-exists-p drgnx-platform-kwin-test--script-file)))))
 
+(drgnx-platform-test--deftest drgnx-platform-kwin/the-error-hook-holds-one-named-function-while-calls-run ()
+                              ;; AGENTS.md: no lambdas on global hooks; two calls in flight share the one named function
+                              (drgnx-platform-kwin-test--with-kwin nil
+                                (let ((results nil) (ctx (drgnx-platform-ctx nil 0.5)))
+                                  (drgnx-platform-kwin--monitors ctx (lambda (r) (push r results)))
+                                  (drgnx-platform-kwin--monitors ctx (lambda (r) (push r results)))
+                                  (should (drgnx-platform-test--await (lambda () (= 4 (length drgnx-platform-kwin-test--calls))) 3))
+                                  (should (equal dbus-event-error-functions '(drgnx-platform-kwin--dbus-error)))
+                                  (should (drgnx-platform-test--await (lambda () (= 2 (length results))) 3))
+                                  (should-not dbus-event-error-functions))))
+
 (drgnx-platform-test--deftest drgnx-platform-kwin/an-error-for-another-call-is-not-ours ()
                               (drgnx-platform-kwin-test--with-kwin nil
                                 (let ((results nil))

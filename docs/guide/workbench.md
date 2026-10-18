@@ -284,7 +284,7 @@ documentation and recorded replies and has not run here yet.
 | KDE Plasma 6 (KWin) | `XDG_CURRENT_DESKTOP` lists KDE | yes (KWin's scripting over D-Bus) | verified (KWin in the container) |
 | plain X11 (another X window manager) | `DISPLAY` without `WAYLAND_DISPLAY` | yes, by frame position | verified (x11 tier) |
 | macOS | a Cocoa window | yes, by frame position | reported (not run by a tier yet) |
-| GNOME (Mutter) | `XDG_CURRENT_DESKTOP` lists GNOME | no: GNOME does not let apps move windows; the commands say so — press **Super+Shift+→** or **Super+Shift+←** (GNOME's "Move window one monitor to the right/left"); a restore leaves placement to GNOME | verified (mutter tier) |
+| GNOME (Mutter) | `XDG_CURRENT_DESKTOP` lists GNOME | no: GNOME does not let apps move windows; the commands say so — press **Super+Shift+→** or **Super+Shift+←** (GNOME's "Move window one monitor to the right/left"); a restore leaves placement to GNOME | GNOME's message unit-tested; the mutter tier verifies the other-Wayland path (it sets no `XDG_CURRENT_DESKTOP`): the command refuses, names the compositor's own key, moves nothing |
 | another Wayland compositor (river, Wayfire, labwc, Cosmic…) | `WAYLAND_DISPLAY` and none of the above | no: the commands say so and point to its own key | — |
 
 **Floating drgnx's windows.** A tiling window manager tiles drgnx's extra windows like any other. If you want them
@@ -470,7 +470,7 @@ runs in the tier that names its compositor and is skipped in the others:
 | i3 | `... --compositor i3` | move and back |
 | kwin (`test/live/drgnx-wm-other-test.el`, the window managers' image) | `... --compositor kwin` | move to monitor 2 and back with Next, restore onto monitor 2 |
 | niri (one output only) | `... --compositor niri` | detection, the output list, a restore's placement, a move, and an output niri does not have refused; no move between two outputs |
-| mutter (the default) | `bin/drgnx test --container --ui` | the command explains that GNOME cannot be driven, names its own key, and moves nothing |
+| mutter (the default) | `bin/drgnx test --container --ui` | the other-Wayland path (the session sets no `XDG_CURRENT_DESKTOP`, so not GNOME's own message): the command explains it cannot drive the compositor, names its own key, and moves nothing |
 
 Narrow a run with `DRGNX_TEST_SELECTOR='"^drgnx-wm/"'`. Under sway the session's seat has no keyboard, so Emacs never
 hears the focus-in event a focused window gets; the move tests deliver it themselves (sway's own focus, in its

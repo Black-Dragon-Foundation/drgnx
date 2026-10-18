@@ -652,15 +652,19 @@ what its table row or tmux's extended-keys say), nil when that cannot be told."
 ;;;; Desktop: the window manager (core/drgnx-platform.el)
 
 (defconst drgnx-doctor--wm-packages
-  '((sway "sway") (i3 "i3") (hyprland "hyprland" fedora) (niri "niri"))
-  "Adapter → (PACKAGE FAMILY…): the package with the adapter's tool (Fedora 45's names, the m12c facts), then the
-package families whose repositories lack it (Fedora has no Hyprland).")
+  '((sway :pkg "sway") (i3 :pkg "i3" :arch "i3-wm") (hyprland :pkg "hyprland" :fedora nil) (niri :pkg "niri"))
+  "Adapter → plist: :pkg, the package with the adapter's tool (Fedora 45's names, the m12c facts); a family's key
+(:fedora, :debian, :arch) names that family's package instead, nil when its repositories lack it (Fedora has no
+Hyprland; on Arch `i3' is a group and `i3-wm' has i3-msg).")
 
 (defun drgnx-doctor--wm-install (wm os)
   "The command that installs the tool of WM on OS (`drgnx-tty-os'), or how to get it; never runs it."
   (when-let* ((entry (alist-get wm drgnx-doctor--wm-packages)))
-    (let ((pkg (car entry)) (family (drgnx-tty--family os)))
-      (pcase (and (not (memq family (cdr entry))) family)
+    (let* ((family (drgnx-tty--family os))
+           (key (and (memq family '(fedora debian arch)) (intern (format ":%s" family))))
+           (pkg (if (and key (plist-member entry key)) (plist-get entry key) (plist-get entry :pkg))))
+      (unless pkg (setq pkg (plist-get entry :pkg) family nil))
+      (pcase family
         ('fedora (concat (if (plist-get os :ostree) "rpm-ostree install " "sudo dnf install ") pkg))
         ('debian (concat "sudo apt install " pkg))
         ('arch (concat "sudo pacman -S " pkg))

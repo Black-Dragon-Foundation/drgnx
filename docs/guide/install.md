@@ -224,7 +224,7 @@ installs anything and never asks.
 | sway, i3, Hyprland, niri, KDE Plasma (KWin) | `ok sway 1.10, 2 monitors: Move to Monitor and restore work` (the version and count left out when unknown) |
 | X11 (another X window manager), macOS | `ok X11, 2 monitors: Move to Monitor and restore work (frame positions)` |
 | GNOME | `ok GNOME (Wayland): apps cannot move windows; use Super+Shift+←/→` |
-| its tool missing | `warn Hyprland: hyprctl not found: Move to Monitor and restore need it`, fix: the install line for this system (`sudo dnf install sway`, `sudo apt install sway`, `sudo pacman -S sway`; else "install PKG with your package manager"; Fedora has no Hyprland package) |
+| its tool missing | `warn Hyprland: hyprctl not found: Move to Monitor and restore need it`, fix: the install line for this system (`sudo dnf install sway`, `sudo apt install sway`, `sudo pacman -S sway`; else "install PKG with your package manager"; Fedora has no Hyprland package; on Arch i3's is `i3-wm`) |
 | no answer within 1 s | `warn sway did not answer within 1 s`, fix: run drgnx doctor from a terminal inside your sway session |
 | KWin without D-Bus or a session bus | `warn` with the reason and its fix |
 | another Wayland compositor | `info river (Wayland): no adapter; drgnx leaves window placement to it` |

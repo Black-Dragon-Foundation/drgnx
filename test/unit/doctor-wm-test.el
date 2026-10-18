@@ -107,7 +107,11 @@ and `exec-path' (`drgnx-doctor-wm-test--tool' adds to it), a dead session bus an
     (should (equal (drgnx-doctor-wm-test--row "arch")
                    '(warn "Hyprland: hyprctl not found: Move to Monitor and restore need it" "sudo pacman -S hyprland")))
     ;; Fedora's repositories have no Hyprland: no dnf line that would fail
-    (should (equal (nth 2 (drgnx-doctor-wm-test--row "fedora-45")) "install hyprland with your package manager"))))
+    (should (equal (nth 2 (drgnx-doctor-wm-test--row "fedora-45")) "install hyprland with your package manager")))
+  ;; on Arch `i3' is a group (pacman asks which members); `i3-wm' is the package with i3-msg
+  (drgnx-doctor-wm-test--with '("DISPLAY=:99" "I3SOCK=/nonexistent/i3")
+    (should (equal (nth 2 (drgnx-doctor-wm-test--row "arch")) "sudo pacman -S i3-wm"))
+    (should (equal (nth 2 (drgnx-doctor-wm-test--row "fedora-45")) "sudo dnf install i3"))))
 
 (ert-deftest drgnx-doctor-wm/a-silent-wm-warns-within-a-second ()
   (drgnx-doctor-wm-test--with (append '("DRGNX_FAKE_WM_DELAY=5" "DRGNX_FAKE_WM_MAP=get_outputs sway/get_outputs")
