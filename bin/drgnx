@@ -58,10 +58,17 @@ ui() { # the harness controller, in batch Emacs (harness/drgnx-ui.el)
         -l drgnx-ui -f drgnx-ui-cli -- "$@"
 }
 
+ui_exec() { # ui, as the Emacs itself (run_in_tmp signals and waits for that process, not for a subshell around it)
+  exec "$(emacs_bin)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/harness" -L "$here/core" -L "$here/wb" \
+        -l drgnx-ui -f drgnx-ui-cli -- "$@"
+}
+
 run_in_tmp() { # CMD… — run CMD with a TMPDIR of its own (so temporary-file-directory and libgccjit use it); on every exit
   # (end, error, INT, TERM, HUP) CMD and what it started are stopped and the directory removed: /tmp is RAM, a run leaves nothing
   # there.  The runner (harness/run-ert.el) is told the directory in DRGNX_RUN_TMP and never deletes it: only this trap does.
-  # RUN_TMP_SHARDS=1 (see run_in_tmp_shards): the children make dirs of their own in it instead.
+  # --shards (see run_in_tmp_shards): the children make dirs of their own in it instead.
+  local shards=""
+  if [[ "${1:-}" == --shards ]]; then shards=1; shift; fi
   RUN_TMP="" RUN_PID=""
   trap run_tmp_cleanup EXIT
   trap 'exit 130' INT
@@ -72,7 +79,7 @@ run_in_tmp() { # CMD… — run CMD with a TMPDIR of its own (so temporary-file-
   local rc=0
   set -m                                    # the child leads a process group of its own: signalled as a whole
   ( export TMPDIR="$RUN_TMP" DRGNX_RUN_TMP="$RUN_TMP"
-    if [[ -n "${RUN_TMP_SHARDS:-}" ]]; then unset DRGNX_RUN_TMP; fi
+    if [[ -n "$shards" ]]; then unset DRGNX_RUN_TMP; fi
     "$@" ) <&0 &                            # not exec'd: this shell stays to clean up
   RUN_PID=$!
   set +m
@@ -82,15 +89,19 @@ run_in_tmp() { # CMD… — run CMD with a TMPDIR of its own (so temporary-file-
 }
 
 run_in_tmp_shards() { # CMD… — like run_in_tmp, for a CMD that starts several test runs (drgnx check): each makes its own dir in it
-  RUN_TMP_SHARDS=1 run_in_tmp "$@"
+  run_in_tmp --shards "$@"
 }
 
 run_tmp_cleanup() {
-  local i
+  local i grace="${DRGNX_RUN_GRACE:-30}"
   trap '' INT TERM HUP                      # a second signal does not cut the cleanup short
+  [[ "$grace" =~ ^[0-9]+$ ]] || grace=30
   if [[ -n "${RUN_PID:-}" ]]; then
+    # TERM to the group, then the command itself gets $DRGNX_RUN_GRACE s (default 30) to end: it stops what it
+    # started outside the group (check's jobs: up to 15 s; the GUI tiers' sessions: ~8 s each) before we
+    # KILL what is left and delete the directory those still use.
     kill -TERM -- "-$RUN_PID" 2>/dev/null || true
-    for ((i = 0; i < 50; i++)); do kill -0 -- "-$RUN_PID" 2>/dev/null || break; sleep 0.1; done
+    for ((i = 0; i < grace * 10; i++)); do kill -0 "$RUN_PID" 2>/dev/null || break; sleep 0.1; done
     kill -KILL -- "-$RUN_PID" 2>/dev/null || true
     wait "$RUN_PID" 2>/dev/null || true
   fi
@@ -98,8 +109,8 @@ run_tmp_cleanup() {
   return 0
 }
 
-check_emacs() { # the CI check (core/drgnx-check.el)
-  "$(emacs_bin)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
+check_emacs() { # the CI check (core/drgnx-check.el); exec'd, see ui_exec
+  exec "$(emacs_bin)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
         -l drgnx-check -f drgnx-check-cli -- "$@"
 }
 
@@ -188,11 +199,11 @@ cmd_test() {
   case "${1:-}" in
     "") test_batch ;;
     --install) shift; test_install "$@" ;;
-    --ui) run_in_tmp ui test-ui ;;
-    --scenario) shift; run_in_tmp ui test-scenario "$@" ;;
-    --bench) run_in_tmp ui test-bench ;;
-    --perf) shift; [ "${1:-}" = --audit ] && export DRGNX_PERF_AUDIT=1; run_in_tmp ui test-perf ;;
-    --soak) shift; run_in_tmp ui test-soak "${1:-30}" ;;
+    --ui) run_in_tmp ui_exec test-ui ;;
+    --scenario) shift; run_in_tmp ui_exec test-scenario "$@" ;;
+    --bench) run_in_tmp ui_exec test-bench ;;
+    --perf) shift; [ "${1:-}" = --audit ] && export DRGNX_PERF_AUDIT=1; run_in_tmp ui_exec test-perf ;;
+    --soak) shift; run_in_tmp ui_exec test-soak "${1:-30}" ;;
     --container) shift; test_container "$@" ;;
     --podman) shift; DRGNX_CONTAINER=podman test_container "$@" ;;
     *) echo "usage: drgnx test [--ui | --scenario [--config C] | --bench | --perf [--audit] | --soak [MIN] | --container [--ui] | --install [NAME…]]" >&2; exit 2 ;;

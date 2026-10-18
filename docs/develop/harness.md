@@ -29,9 +29,11 @@ pass/fail. `$DRGNX_TEST_SELECTOR` (an ERT selector, e.g. `(tag :timing)`) picks 
 run in a `$TMPDIR` of their own — a fresh `mktemp -d` (`drgnx-run.XXXXXX`, made absolute) below the caller's `$TMPDIR` or
 `/tmp`, so `temporary-file-directory` and the native compiler's libgccjit files land in it too — and remove it on every
 exit: the end, a failure, Ctrl-C, `TERM` or `HUP`. The command runs in a process group of its own that the shell's trap
-stops (TERM, then KILL after 5 s; a second signal does not cut it short) before it deletes the directory. `bin/drgnx
+stops (TERM; the command then has `$DRGNX_RUN_GRACE` seconds, default 30, to end and stop what it started outside the
+group — check's jobs, the GUI tiers' sessions — then KILL; a second signal does not cut it short) before it deletes the
+directory. That group is a background one: a tier that read from the terminal would be stopped (none does). `bin/drgnx
 test` tells the batch runner the directory in `$DRGNX_RUN_TMP`; the runner uses it as the suite's temp home but never
-deletes it (only a real, own directory of that name is accepted: empty, a symlink or someone's directory is ignored),
+deletes it (only a real directory of that name owned by the user is used: empty, a symlink, another name or owner is ignored),
 and makes and deletes a `drgnx-unit…` directory of its own when run standalone, also from `kill-emacs-hook`. `check`
 leaves `$DRGNX_RUN_TMP` unset: each shard makes its own directory in the shared `$TMPDIR`. A harness session's `TMPDIR`
 is `tmp/` in its run dir (so, without `$XDG_RUNTIME_DIR`, the session sockets' fallback directory is inside it too).

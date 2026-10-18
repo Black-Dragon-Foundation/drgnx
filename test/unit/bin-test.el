@@ -596,22 +596,30 @@ case \"$*\" in *is-enabled*) [ -f %s ] ;; *start*) touch %s ;; esac"
           (should-not (drgnx-bin-test--left parent)))
       (delete-directory dir t))))
 
+(defun drgnx-bin-test--fake-emacs (file body)
+  "A fake Emacs script FILE running the shell BODY."
+  (write-region (concat "#!/bin/sh\n" body "\n") nil file nil 'silent)
+  (set-file-modes file #o755)
+  file)
+
 (ert-deftest drgnx-bin/a-relative-tmpdir-is-made-absolute ()
+  ;; the child (and what it starts) must see absolute TMPDIR and DRGNX_RUN_TMP, whatever the caller's TMPDIR
   (let* ((dir (make-temp-file "drgnx-bin-tmp" t))
          (parent (expand-file-name "parent" dir))
-         (suite (expand-file-name "suite" dir))
-         (probe (expand-file-name "probe" dir))
-         (emacs (expand-file-name invocation-name invocation-directory))
+         (seen (expand-file-name "seen" dir))
+         (emacs (drgnx-bin-test--fake-emacs (expand-file-name "fake-emacs" dir)
+                                            (format "echo \"$TMPDIR|$DRGNX_RUN_TMP\" > %s" seen)))
          (drgnx-bin-test--cwd dir))
     (unwind-protect
         (progn
-          (make-directory parent) (make-directory suite)
-          (drgnx-bin-test--leaky-suite suite probe)
+          (make-directory parent)
           (should (eql 0 (car (drgnx-bin-test--call drgnx-bin-test--bin
-                                                    (drgnx-bin-test--env dir "parent" (concat "DRGNX_EMACS=" emacs)
-                                                                         (concat "DRGNX_TEST_DIR=" suite))
+                                                    (drgnx-bin-test--env dir "parent" (concat "DRGNX_EMACS=" emacs))
                                                     "test"))))
-          (should (string-prefix-p (file-name-as-directory (file-truename parent)) (drgnx-bin-test--slurp probe)))
+          (let ((s (split-string (string-trim (drgnx-bin-test--slurp seen)) "|")))
+            (should (= 2 (length s)))
+            (dolist (v s)
+              (should (string-prefix-p (file-name-as-directory (file-truename parent)) v))))
           (should-not (drgnx-bin-test--left parent)))
       (delete-directory dir t))))
 
@@ -643,12 +651,6 @@ case \"$*\" in *is-enabled*) [ -f %s ] ;; *start*) touch %s ;; esac"
         (when (process-live-p proc) (kill-process proc))
         (delete-directory dir t)))))
 
-(defun drgnx-bin-test--fake-emacs (file body)
-  "A fake Emacs script FILE running the shell BODY."
-  (write-region (concat "#!/bin/sh\n" body "\n") nil file nil 'silent)
-  (set-file-modes file #o755)
-  file)
-
 (ert-deftest drgnx-bin/a-gui-tier-stopped-by-a-signal-leaves-no-process-and-no-dir ()
   ;; TMP-1: the GUI tiers run a function that starts the controller Emacs (not exec'd): the whole process
   ;; group is stopped.  The fake Emacs starts a child and ignores TERM; a second TERM during the grace period
@@ -663,7 +665,7 @@ case \"$*\" in *is-enabled*) [ -f %s ] ;; *start*) touch %s ;; esac"
     (unwind-protect
         (progn
           (make-directory parent)
-          (setq proc (drgnx-bin-test--spawn (drgnx-bin-test--env dir parent (concat "DRGNX_EMACS=" emacs))
+          (setq proc (drgnx-bin-test--spawn (drgnx-bin-test--env dir parent (concat "DRGNX_EMACS=" emacs) "DRGNX_RUN_GRACE=2")
                                             "test" "--scenario"))
           (should (drgnx-bin-test--wait-for (lambda () (file-exists-p pids)) 30))
           (let* ((ids (mapcar #'string-to-number (split-string (drgnx-bin-test--slurp pids))))
@@ -676,6 +678,35 @@ case \"$*\" in *is-enabled*) [ -f %s ] ;; *start*) touch %s ;; esac"
             (should-not (funcall alive))
             (should-not (drgnx-bin-test--left parent))))
       (when (process-live-p proc) (kill-process proc))
+      (delete-directory dir t))))
+
+(ert-deftest drgnx-bin/a-stopped-check-gets-the-time-to-end-its-jobs-before-the-dir-goes ()
+  ;; TMP-1 re-review: `drgnx check' ends its jobs (each in a session of its own, outside bin's process group)
+  ;; with a grace of its own (15 s) before it KILLs them.  bin waits for the check to end, not a fixed 5 s, and
+  ;; only then removes the dir.  The fake check lets its TERM-ignoring job live 7 s after the TERM.
+  (let* ((dir (make-temp-file "drgnx-bin-tmp" t))
+         (parent (expand-file-name "parent" dir))
+         (job (expand-file-name "job.pid" dir))
+         (emacs (drgnx-bin-test--fake-emacs
+                 (expand-file-name "fake-check" dir)
+                 (format "setsid sh -c 'trap \"\" TERM; echo $$ > %s.tmp && mv %s.tmp %s; exec sleep 300' &
+trap 'kill -TERM $(cat %s); sleep 7; kill -KILL $(cat %s); exit 0' TERM
+while :; do wait; done" job job job job job)))
+         proc)
+    (unwind-protect
+        (progn
+          (make-directory parent)
+          (setq proc (drgnx-bin-test--spawn (drgnx-bin-test--env dir parent (concat "DRGNX_EMACS=" emacs)) "check"))
+          (should (drgnx-bin-test--wait-for (lambda () (file-exists-p job)) 30))
+          (sleep-for 0.3)                                  ; the fake has set its trap
+          (let ((pid (drgnx-bin-test--slurp-number job)))
+            (should (drgnx-bin-test--pid-alive-p pid))
+            (signal-process proc 'TERM)
+            (should (drgnx-bin-test--wait-exit proc 45))
+            (should-not (drgnx-bin-test--pid-alive-p pid))   ; ended by the check, not orphaned
+            (should-not (drgnx-bin-test--left parent))))
+      (when (process-live-p proc) (kill-process proc))
+      (when (file-exists-p job) (ignore-errors (signal-process (drgnx-bin-test--slurp-number job) 'KILL)))
       (delete-directory dir t))))
 
 (ert-deftest drgnx-bin/check-runs-in-a-tmpdir-of-its-own-and-its-shards-make-theirs ()

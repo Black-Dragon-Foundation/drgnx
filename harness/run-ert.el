@@ -111,7 +111,8 @@ exit 0 or 1."
          ;; The suite never sees the user's drgnx config, packages, state or cache.
          ;; `bin/drgnx test' makes a directory of its own, DRGNX_RUN_TMP, and removes it: used as it is (so
          ;; paths stay short), never deleted here.  Anything else the variable holds — empty (the current
-         ;; directory), a symlink, someone's directory — is ignored.  Else the runner makes a directory and
+         ;; directory), a symlink, a directory of another name or owner — is ignored.  A user-owned one of the right
+         ;; name is used but, like the given one, never deleted.  Else the runner makes a directory and
          ;; deletes exactly that one.
          (given (drgnx-run-ert--given-tmp))
          (own (unless given (make-temp-file "drgnx-unit" t)))
