@@ -9,8 +9,8 @@
 
 (defmacro drgnx-session-test--with (spec &rest body)
   "BODY with the stubs SPEC asks for, in a temp config dir.
-SPEC: (:keep-running BOOL :daemon BOOL :windows LIST :save FN :unsaved LIST :confirm BOOL) — :windows the
-frames that count as windows, :unsaved the file buffers still changed after the save.  Binds KILLED (non-nil once
+SPEC: (:keep-running BOOL :daemon BOOL :windows LIST :save FN :unsaved LIST :confirm BOOL :processes LIST) — :windows the
+frames that count as windows, :unsaved the file buffers still changed after the save, :processes what `process-list' returns.  Binds KILLED (non-nil once
 `kill-emacs' ran), DELETED (frames deleted), SAVED (calls of `save-some-buffers') and ASKED (confirmations)."
   (declare (indent 1))
   `(let* ((dir (make-temp-file "drgnx-session-test" t))
@@ -26,6 +26,7 @@ frames that count as windows, :unsaved the file buffers still changed after the 
                    ((symbol-function 'save-some-buffers)
                     (lambda (&rest _) (cl-incf saved) (funcall (or ,(plist-get spec :save) #'ignore))))
                    ((symbol-function 'drgnx-session--unsaved-buffers) (lambda () ,(plist-get spec :unsaved)))
+                   ((symbol-function 'process-list) (lambda () ,(plist-get spec :processes)))
                    ((symbol-function 'yes-or-no-p) (lambda (&rest _) (cl-incf asked) ,(plist-get spec :confirm))))
            (ignore killed deleted saved asked)
            ,@body)
@@ -90,6 +91,34 @@ frames that count as windows, :unsaved the file buffers still changed after the 
     (drgnx-session-quit)
     (should (= asked 0))
     (should killed)))
+
+;; M12a-28: the programs a quit would stop are asked about, once.
+(ert-deftest drgnx-session/quit-asks-once-for-running-processes ()
+  (let ((p (make-process :name "drgnx-session-test-sleep" :command '("sleep" "30") :noquery nil))
+        (q (make-process :name "drgnx-session-test-quiet" :command '("sleep" "30") :noquery t)))
+    (unwind-protect
+        (progn
+          ;; "no": asked once, and drgnx stays
+          (drgnx-session-test--with (:keep-running nil :daemon t :windows (list 'f1) :processes (list p q) :confirm nil)
+            (drgnx-session-quit)
+            (should (= asked 1))
+            (should-not killed))
+          ;; "yes": asked once, quits
+          (drgnx-session-test--with (:keep-running nil :daemon t :windows (list 'f1) :processes (list p p q) :confirm t)
+            (drgnx-session-quit)
+            (should (= asked 1))
+            (should killed))
+          ;; a process that does not ask on exit does not count
+          (drgnx-session-test--with (:keep-running nil :daemon t :windows (list 'f1) :processes (list q) :confirm nil)
+            (drgnx-session-quit)
+            (should (= asked 0))
+            (should killed))
+          ;; unsaved changes and a running program: two questions, the first "no" ends it
+          (drgnx-session-test--with (:keep-running nil :daemon t :windows (list 'f1) :unsaved (list 'buf) :processes (list p) :confirm nil)
+            (should-not (drgnx-session-quit-confirm))
+            (should (= asked 1))))
+      (delete-process p)
+      (delete-process q))))
 
 ;; M12a-33: a changed *scratch* is not a buffer whose changes would be lost.
 (ert-deftest drgnx-session/scratch-is-not-offered ()
