@@ -3,13 +3,13 @@
 set -euo pipefail
 here="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
 
-emacs_bin() { # the one Emacs every subcommand runs in: $DRGNX_EMACS, else the one install.sh recorded, else PATH's
+emacs_bin() { # the one Emacs every subcommand runs in: $DRGNX_EMACS, else the one install.sh recorded (an absolute path), else PATH's
   if [[ -n "${DRGNX_EMACS:-}" ]]; then printf '%s\n' "$DRGNX_EMACS"; return; fi
   local file="${DRGNX_CONFIG_DIR:-$HOME/.config/drgnx}/emacs" line=""
   if [[ -f "$file" ]]; then   # first line only, as a path: never evaluated
     IFS= read -r line <"$file" || true
     line="${line#"${line%%[![:space:]]*}"}"; line="${line%"${line##*[![:space:]]}"}"
-    if [[ -n "$line" && -f "$line" && -x "$line" ]]; then printf '%s\n' "$line"; return; fi
+    if [[ "$line" == /* && -f "$line" && -x "$line" ]]; then printf '%s\n' "$line"; return; fi
   fi
   echo emacs
 }
@@ -42,7 +42,7 @@ cmd_doctor() { # [--json] [--dev] — checks run inside the Emacs drgnx uses (co
     local env rt launcher
     env="$(env_eval '(drgnx-env-container)')"
     rt="${DRGNX_CONTAINER:-$(env_eval '(drgnx-env-container-runtime)')}"   # set: no host Emacs needed (CI)
-    launcher="$("$(emacs_bin)" --batch -Q -L "$here/harness" -l drgnx-ui --eval '(princ (drgnx-ui-launcher))')"
+    launcher="$("$(emacs_bin)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/harness" -l drgnx-ui --eval '(princ (drgnx-ui-launcher))')"
     printf 'INFO  %-20s %s\n' "environment" "${env:-host}" "container-runtime" "${rt:-none}" \
       "session-launcher" "$launcher$([ "$launcher" = detached ] && echo ' (process group, no systemd unit)')"
   fi

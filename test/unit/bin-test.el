@@ -87,6 +87,42 @@ logging to PATHLOG), CONFIG (a DRGNX_CONFIG_DIR) and ENV (the environment lists 
       (should (string-search fake (drgnx-bin-test--slurp log)))
       (should-not (file-exists-p marker)))))
 
+(ert-deftest drgnx-bin/a-recorded-emacs-path-with-spaces-is-used ()
+  (drgnx-bin-test--with-setup ()
+    (let* ((sub (expand-file-name "Emacs App/Contents MacOS" dir))
+           (log (expand-file-name "recorded.log" dir))
+           (fake (progn (make-directory sub t) (drgnx-bin-test--fake (expand-file-name "Emacs" sub) log))))
+      (write-region (concat fake "\n") nil (expand-file-name "emacs" config))
+      (dolist (args '(("build") ("ui" "--help") ("macos-app")))
+        (delete-file log)
+        (apply #'drgnx-bin-test--call drgnx-bin-test--bin env args)
+        (should (string-search fake (drgnx-bin-test--slurp log))))
+      (should (string-empty-p (drgnx-bin-test--slurp pathlog))))))
+
+(ert-deftest drgnx-bin/a-relative-recorded-emacs-is-ignored ()
+  ;; The record is an absolute path (install.sh writes one); a relative line would mean whatever directory
+  ;; the command happens to run in.
+  (drgnx-bin-test--with-setup ()
+    (let ((log (expand-file-name "recorded.log" dir))
+          (drgnx-bin-test--cwd dir))
+      (drgnx-bin-test--fake (expand-file-name "local-emacs" dir) log)
+      (dolist (line '("local-emacs" "./local-emacs"))
+        (write-region (concat line "\n") nil (expand-file-name "emacs" config))
+        (delete-file log)
+        (drgnx-bin-test--call drgnx-bin-test--bin env "build")
+        (should (string-empty-p (drgnx-bin-test--slurp log)))
+        (should (string-search "--batch" (drgnx-bin-test--slurp pathlog)))))))
+
+(ert-deftest drgnx-bin/the-launcher-probe-prefers-newer-sources ()
+  ;; `doctor --dev' loads harness/drgnx-ui.el in a batch Emacs: with a stale .elc beside it Emacs would
+  ;; print "Source file … newer than byte-compiled" into the probe's answer.
+  (drgnx-bin-test--with-setup ()
+    (drgnx-bin-test--call drgnx-bin-test--bin (append env (list "DRGNX_CONTAINER=none")) "doctor" "--dev")
+    (let ((probe (seq-find (lambda (l) (string-search "-l drgnx-ui" l))
+                           (split-string (drgnx-bin-test--slurp pathlog) "\n" t))))
+      (should probe)
+      (should (string-search "load-prefer-newer" probe)))))
+
 (ert-deftest drgnx-bin/doctor-json-starts-with-the-json-when-an-elc-is-stale ()
   ;; A pull leaves an .elc older than its .el; without load-prefer-newer Emacs prints "Source file … newer
   ;; than byte-compiled" before the JSON.  A temp copy of bin/ and core/, so the real files stay untouched.

@@ -19,6 +19,8 @@
          (process-environment (append env (list "DRGNX_INSTALL_EMACS=none" "DRGNX_INSTALL_TTY=none"
                                                 "DRGNX_INSTALL_MACOS_APP=none"   ; never this Mac's /Applications/Emacs.app
                                                 (concat "HOME=" home)
+                                                ;; never this machine's drgnx config (a DRGNX_CONFIG_DIR in the caller's environment)
+                                                (concat "DRGNX_CONFIG_DIR=" home "/.config/drgnx")
                                                 ;; never this machine's /run/ostree-booted
                                                 (concat "DRGNX_INSTALL_OSTREE_BOOTED=" home "/no-ostree"))
                                       process-environment))

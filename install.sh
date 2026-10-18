@@ -241,7 +241,8 @@ plan_homebrew() { # the Homebrew lines of the plan (macOS)
   fi
 }
 
-planned_emacs() { # the Emacs this run leaves behind, as far as the plan can tell
+planned_emacs() { # the Emacs this run leaves behind, as far as the plan can tell (the formula's path is an estimate:
+                  # beside brew; the run records `brew --prefix emacs-plus@31` itself)
   case "$CHOSEN" in
     keep) echo "${EMACS_FOUND:-emacs}" ;;
     cask) echo /Applications/Emacs.app/Contents/MacOS/Emacs ;;
