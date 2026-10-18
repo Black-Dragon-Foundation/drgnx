@@ -149,8 +149,6 @@
         (should (with-temp-buffer (insert-file-contents (expand-file-name (format "keys/%s.eld" profile) drgnx-dir))
                                   (search-forward (format "(%s " id) nil t)))))))
 
-;;; job-ui-test.el ends here
-
 ;; From the old UI list ("stale status values after gry failures"): a status that cannot be read says nothing
 ;; instead of keeping the last count.
 (ert-deftest drgnx-job-ui/the-badge-clears-when-the-hub-cannot-answer ()
@@ -170,3 +168,5 @@
       (drgnx-job-ui--hub-gone))
     (should (equal drgnx-job-ui--badge ""))
     (should-not drgnx-job-ui--badge-job)))
+
+;;; job-ui-test.el ends here

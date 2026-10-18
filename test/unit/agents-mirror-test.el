@@ -102,8 +102,6 @@
                  (lambda () (let ((m (drgnx-agents-mirror-test--mirror id))) (and m (equal (drgnx-agent-session-entries m) hub))))
                  5))))))
 
-;;; agents-mirror-test.el ends here
-
 ;; From the old UI list ("a malformed RUN_STARTED aborting the board refresh"): one unreadable record from the
 ;; hub must not stop the others from being mirrored.
 (ert-deftest drgnx-agents-mirror/a-malformed-session-record-does-not-abort-the-sync ()
@@ -128,3 +126,5 @@
       (drgnx-agents-mirror--apply-entries m '((0 "(:text \"one\")") (1 "(:text \"cut off") (2 "(:text \"three\")"))))
     (should (equal (plist-get (nth 0 (drgnx-agent-session-entries m)) :text) "one"))
     (should (equal (plist-get (nth 2 (drgnx-agent-session-entries m)) :text) "three"))))
+
+;;; agents-mirror-test.el ends here
