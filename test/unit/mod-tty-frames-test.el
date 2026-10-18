@@ -71,3 +71,27 @@
                                           :terminals))
                        1))))
       (delete-directory state t))))
+
+(ert-deftest drgnx-tty-frames/toggle-mouse-is-in-every-profile ()
+  (dolist (profile '("vscode" "emacs" "vim"))
+    (should (string-search "(terminal-toggle-mouse "
+                           (with-temp-buffer
+                             (insert-file-contents (expand-file-name (format "keys/%s.eld" profile) drgnx-dir))
+                             (buffer-string))))))
+
+(ert-deftest drgnx-tty-frames/toggle-mouse-saves-only-when-run-interactively ()
+  (let (saved set (drgnx-tty-mouse t))
+    (cl-letf (((symbol-function 'customize-save-variable) (lambda (sym val &rest _) (push (list sym val) saved)))
+              ((symbol-function 'customize-set-variable) (lambda (sym val &rest _) (push (list sym val) set)))
+              ((symbol-function 'message) #'ignore))
+      (drgnx-tty-frames-toggle-mouse)
+      (should (equal set '((drgnx-tty-mouse nil))))
+      (should-not saved)
+      (call-interactively #'drgnx-tty-frames-toggle-mouse)
+      (should (equal saved '((drgnx-tty-mouse nil)))))))
+
+(ert-deftest drgnx-tty-frames/the-mouse-is-never-turned-on-without-a-terminal-frame ()
+  ;; batch Emacs has no terminal frame: a graphical session never gets xterm-mouse-mode from this module
+  (let ((xterm-mouse-mode nil) (drgnx-tty-mouse t))
+    (drgnx-tty-frames-mouse-apply)
+    (should-not xterm-mouse-mode)))

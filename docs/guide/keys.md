@@ -58,6 +58,7 @@ else the command's own, else the profile's.
 
 "—" means the profile has no key for it; every command is always in the palette. Vim's keys are leader keys in
 evil's normal state. On **macOS** the VS Code profile uses Cmd (`s-`) as VS Code does there — see below.
+In a terminal window drgnx has the mouse, so the terminal's own selection and paste are **Shift+drag** (Option+drag in iTerm2); see [terminal.md](terminal.md#mouse).
 
 ## On a Mac
 

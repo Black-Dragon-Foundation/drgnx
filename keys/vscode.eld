@@ -170,6 +170,7 @@
         (scm-blame :none "in the palette")
         (terminal-new "C-S-`" :mac "C-S-`")
         (explorer-terminal-here :none "the Explorer's right-click menu")
+        (terminal-toggle-mouse :none "the palette")
         (go-quick-open "C-p")
         (search-project :none "C-S-f is View: Search; the palette")
         (search-semantic "C-k C-f")

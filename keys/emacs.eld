@@ -170,6 +170,7 @@
         (scm-blame :none "C-x v g (stock)")
         (terminal-new :none "in the palette")
         (explorer-terminal-here :none "the Explorer's right-click menu")
+        (terminal-toggle-mouse :none "the palette")
         (go-quick-open :none "C-x p f (stock)")
         (search-project :none "C-x p g (stock)")
         (search-semantic "C-c s s")

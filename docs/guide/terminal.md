@@ -124,6 +124,22 @@ found — how keys arrive (kitty keyboard protocol, modifyOtherKeys, or neither)
 keys of your profile this terminal cannot send are written to `terminal-report.eld` in drgnx's state directory
 (`~/.local/state/drgnx/`), one entry per terminal device, for the doctor and the key sheet.
 
+## Mouse
+
+In a terminal window the mouse works as in a graphical one: a click puts the cursor there, a double click selects
+a word, the wheel scrolls, a divider can be dragged (the sidebar's edge resizes it), and the Explorer, the tab line
+(a click shows the tab, the `×` closes it), the status bar's items and the menu bar answer clicks. Ctrl-click in
+the Explorer adds a row to the selection (Shift-click belongs to the terminal, see below). A click on the menu bar opens a text menu: move with the arrow
+keys, `RET` takes an item, `C-g` closes it. drgnx turns this on for each terminal window when it opens, never for a
+graphical window, with the SGR mouse protocol; the Linux console, which the table lists without mouse reporting,
+keeps its mouse.
+
+While the mouse is on, the terminal gives the mouse to drgnx, so **selecting text with the terminal's own selection
+is Shift+drag** (Option+drag in iTerm2). To keep the terminal's behaviour instead,
+run **Toggle Mouse in Terminal Windows** (palette: "mouse"); it saves the choice. The same is the setting
+`drgnx-tty-mouse` (`M-x customize-variable`): `nil` leaves the mouse to the terminal. On Emacs 31 the
+setting also overrides Emacs's own default of turning the mouse on in terminals.
+
 ## Clipboard
 
 Copying in drgnx puts the text on your computer's clipboard through OSC 52 when the terminal takes it (the table's

@@ -12,6 +12,9 @@
 ;;   or legacy), OSC 52 copy, colours, the mouse.  The terminal is asked once, for at most
 ;;   `drgnx-tty-frames-query-timeout' seconds, and never again for another client of the same terminal
 ;;   (`drgnx-tty-frames--cache').  Kept in the terminal parameter `drgnx-tty-caps'.
+;; - The mouse: `xterm-mouse-mode' (SGR reports) on while `drgnx-tty-mouse' is t, started from a terminal frame's
+;;   setup, never for a graphical frame; Toggle Mouse in Terminal Windows.  The terminal's own selection is then
+;;   Shift+drag.
 ;; - `drgnx-tty-frames-write-report': terminal-report.eld in the state dir — each terminal's capabilities and
 ;;   the active profile's keys it cannot send — for the doctor and the key sheet.
 ;; - EDITOR frames: `emacsclient -t FILE' (git's editor) shows the editor only; closing the file's tab, or
@@ -25,6 +28,7 @@
 (require 'drgnx-hooks)
 (require 'drgnx-modules)
 (require 'drgnx-paths)
+(require 'drgnx-registry)
 (require 'drgnx-tty)
 (require 'drgnx-wb)
 (declare-function drgnx-wb-area-hide "drgnx-area")
@@ -35,6 +39,10 @@
 (defvar xterm-query-timeout)
 (defvar server-buffer-clients)
 (defvar drgnx-keys-last)
+(defvar xterm-mouse-mode)
+(declare-function xterm-mouse-mode "xt-mouse")
+(declare-function turn-on-xterm-mouse-tracking-on-terminal "xt-mouse")
+(declare-function turn-off-xterm-mouse-tracking-on-terminal "xt-mouse")
 
 (defvar drgnx-tty-frames-query-timeout 0.2
   "Seconds to wait for a terminal's answer to XTVERSION (a late answer is still taken off the input).")
@@ -131,6 +139,48 @@ KEYS :seen TIME)) …)), newest first, one entry per terminal device (two client
                (current-buffer))
         (insert "\n")))))
 
+;;;; The mouse
+
+(defcustom drgnx-tty-mouse t
+  "Non-nil: the mouse works in terminal windows (clicks, wheel, dragging dividers, the Explorer, tabs, menus).
+The terminal's own selection and paste are then Shift+drag (Option+drag in iTerm2).  Nil: the terminal keeps the
+mouse.  Toggle Mouse in Terminal Windows changes it."
+  :type 'boolean :group 'drgnx :initialize #'custom-initialize-default
+  :set (lambda (sym val) (set-default sym val) (drgnx-tty-frames-mouse-apply)))
+
+(defun drgnx-tty-frames--tty-frames ()
+  "The live terminal frames of terminals Emacs set up (not the daemon's initial terminal)."
+  (seq-filter (lambda (f) (and (frame-live-p f) (not (display-graphic-p f))
+                               (not (equal (terminal-name (frame-terminal f)) "initial_terminal"))))
+              (frame-list)))
+
+(defun drgnx-tty-frames-mouse-apply ()
+  "Make the terminals follow `drgnx-tty-mouse': mouse reports on in the terminals that can send them while it
+is t, off in all of them when it is nil (Emacs 31 turns the mode on by itself).  A session without a terminal
+frame is left alone: a graphical frame never gets `xterm-mouse-mode'.  Never asks a terminal anything."
+  (when-let* ((frames (drgnx-tty-frames--tty-frames)))
+    (let ((wanted (and drgnx-tty-mouse
+                       (seq-filter (lambda (f) (let ((caps (terminal-parameter (frame-terminal f) 'drgnx-tty-caps)))
+                                                 (or (null caps) (plist-get caps :mouse))))
+                                   frames))))
+      (require 'xt-mouse)
+      (if wanted
+          (unless xterm-mouse-mode (xterm-mouse-mode 1))
+        (when xterm-mouse-mode (xterm-mouse-mode -1)))
+      (dolist (f frames)
+        (if (memq f wanted)
+            (turn-on-xterm-mouse-tracking-on-terminal (frame-terminal f))
+          (turn-off-xterm-mouse-tracking-on-terminal (frame-terminal f)))))))
+
+(defun drgnx-tty-frames-toggle-mouse ()
+  "Turn the mouse in terminal windows on or off; run interactively, the choice is saved."
+  (interactive)
+  (let ((val (not drgnx-tty-mouse)))
+    (if (called-interactively-p 'any)
+        (customize-save-variable 'drgnx-tty-mouse val)
+      (customize-set-variable 'drgnx-tty-mouse val))
+    (message "Mouse in terminal windows: %s" (if val "on" "off"))))
+
 ;;;; EDITOR frames
 
 (defun drgnx-tty-frames--visit ()
@@ -170,6 +220,7 @@ report, asked once per terminal; an editor frame shows the editor only.  Never p
           (unless (terminal-parameter (frame-terminal frame) 'drgnx-tty-caps)
             (drgnx-tty-frame-caps frame)
             (drgnx-tty-frames-write-report frame))
+          (drgnx-tty-frames-mouse-apply)
           (when (frame-parameter frame 'drgnx-tty-editor-only)
             (drgnx-tty-frames--editor-only frame)))
       (error (push (format "ui/terminal: %s" (error-message-string err)) drgnx-hooks-problems)))))
@@ -187,9 +238,13 @@ bus would see, and its tab line would stay empty.  The frame has shown now."
         (error (push (format "ui/terminal: %s" (error-message-string err)) drgnx-hooks-problems))))))
 
 (drgnx-module-define 'ui/terminal
-                     :doc "Terminal windows: what each terminal can do, asked once; editor-only EDITOR frames."
+                     :doc "Terminal windows: what each terminal can do, asked once; the mouse; editor-only EDITOR frames."
                      :stage 'startup
                      :setup (lambda ()
+                              (drgnx-command-define 'terminal-toggle-mouse :category "Terminal"
+                                                    :title "Toggle Mouse in Terminal Windows" :scope 'window
+                                                    :command #'drgnx-tty-frames-toggle-mouse
+                                                    :doc "Mouse clicks, wheel and drags in terminal windows on or off")
                               (add-hook 'tty-setup-hook #'drgnx-tty-frames-setup)
                               (add-hook 'server-visit-hook #'drgnx-tty-frames--visit)
                               (add-hook 'server-after-make-frame-hook #'drgnx-tty-frames--after-make-frame)
