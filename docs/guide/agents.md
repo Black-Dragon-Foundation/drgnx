@@ -159,7 +159,8 @@ What an outside agent cannot do:
 - **pass for another agent.** Its identity comes from its own process (`ext:KIND:PID-HASH`: its process id and when
   that process started), never from what it says. A name it gives is only a label.
 - **touch drgnx's jobs.** It cannot claim, update or finish a job's tasks, or record decisions; it is told to report
-  its work instead. It asks you with ask_user rather than the escalate tool of drgnx's own job agents.
+  its work instead. It asks you with ask_user rather than the escalate tool of drgnx's own job agents; anything else it sends you is a
+  message, never a question waiting on you, whatever it says.
 - **report a file outside the folder it was started in** (that folder's git worktree), a path with `..`, a symlink
   that leads out, or a remote file.
 - **flood you.** It may make 20 reports and messages a minute together (`drgnx-coord-report-rate`). Past that, they

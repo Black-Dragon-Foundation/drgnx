@@ -494,6 +494,7 @@ data dir (job j: tasks 1, 2); the clock at `drgnx-coord-mcp-test--clock'."
            (m (car (drgnx-coord-inbox "user")))
            (q (car (drgnx-coord-open-questions me))))
       (should (equal (plist-get r :id) (plist-get m :id)))
+      (should-not (plist-member r :cut))   ; not shortened: no :cut
       (should (equal (plist-get m :sender) me))
       (should (equal (plist-get m :text) "[escalation] Rename the module?\nOptions: yes | no"))
       (should q)
@@ -504,7 +505,8 @@ data dir (job j: tasks 1, 2); the clock at `drgnx-coord-mcp-test--clock'."
     (should-error (drgnx-coord-mcp-test--call "ask_user" :question "Q?" :options ["yes | approve all" "no"]))
     (should-error (drgnx-coord-mcp-test--call "ask_user" :question "Options: only this"))
     ;; long and full of controls: cleaned and cut, lines kept
-    (drgnx-coord-mcp-test--call "ask_user" :question (concat "one\n" (string #x202e) "two\e" (make-string 5000 ?x)))
+    (let ((r (drgnx-coord-mcp-test--json (drgnx-coord-mcp-test--call "ask_user" :question (concat "one\n" (string #x202e) "two\e" (make-string 5000 ?x))))))
+      (should (= (plist-get r :cut) 3009)))   ; 5,009 characters cleaned, 2,000 kept
     (let ((text (plist-get (nth 2 (drgnx-coord-inbox "user")) :text)))
       (should (string-prefix-p "[escalation] one\n two " text))
       (should (= (length text) (+ (length "[escalation] ") 2000))))
@@ -614,7 +616,9 @@ data dir (job j: tasks 1, 2); the clock at `drgnx-coord-mcp-test--clock'."
         (should (<= (length rows) 20))
         (should (> (length rows) 0))
         (should (seq-every-p (lambda (r) (and (null (car r)) (<= (cadr r) 2000))) rows)))
-      (should (<= (length (drgnx-coord-open-questions me)) 20))
+      ;; an outside agent's message is never a question, whatever its text says: only ask_user asks
+      (should-not (drgnx-coord-open-questions me))
+      (should-not (drgnx-coord-events :kinds '("question")))
       (should (seq-every-p (lambda (e) (null (plist-get e :job))) (drgnx-coord-events :agent me)))
       (should (= (drgnx-coord-mcp-test--rate-cards) 1)))))
 
@@ -626,5 +630,58 @@ data dir (job j: tasks 1, 2); the clock at `drgnx-coord-mcp-test--clock'."
   (should (file-executable-p (plist-get (drgnx-coord-mcp-outside-spec "claude") :command)))
   (should-error (drgnx-coord-mcp-outside-spec "a b"))
   (should-error (drgnx-coord-mcp-outside-spec "")))
+
+(ert-deftest drgnx-coord-mcp/send-message-says-when-it-was-cut ()
+  (drgnx-coord-mcp-test--outside
+    (let ((v (drgnx-coord-version)))
+      (should-not (plist-member (drgnx-coord-mcp-test--json (drgnx-coord-mcp-test--call "send_message" :to "user" :text "short" :seen_version v))
+                                :cut))
+      (let ((r (drgnx-coord-mcp-test--json (drgnx-coord-mcp-test--call "send_message" :to "user" :text (make-string 3000 ?x)
+                                                                       :seen_version v))))
+        (should (eq (plist-get r :ok) t))
+        (should (= (plist-get r :cut) 1000)))
+      (should (= (length (plist-get (cadr (drgnx-coord-inbox "user")) :text)) 2000)))))
+
+(ert-deftest drgnx-coord-mcp/a-dotfiles-repository-at-home-is-not-the-worktree ()
+  ;; the home folder is a git repository (dotfiles): a project folder under it that is no repository of its own is
+  ;; where the agent works — not the whole home, which would be refused as too wide
+  (drgnx-coord-mcp-test--outside
+    (let* ((home (drgnx-coord-mcp-test--repo))
+           (project (file-name-as-directory (expand-file-name "proj" home)))
+           (process-environment (cons (concat "HOME=" home) process-environment))
+           (default-directory (progn (make-directory project) project))
+           (drgnx-coord-mcp--home nil))
+      (unwind-protect
+          (progn
+            (should (equal (drgnx-coord-mcp--home) (directory-file-name project)))
+            (should-not (plist-get (drgnx-coord-mcp-test--json (drgnx-coord-mcp-test--call "hello")) :worktree))
+            (should (string-search "\"ok\":true" (drgnx-coord-mcp-test--call "report_edit" :paths "a.el")))
+            (should (equal (plist-get (plist-get (car (drgnx-coord-events :kinds '("edit"))) :data) :root) (directory-file-name project)))
+            ;; outside the project, in the rest of the home: refused
+            (should-error (drgnx-coord-mcp-test--call "report_edit" :paths (concat home ".bashrc"))))
+        (delete-directory home t)))))
+
+(ert-deftest drgnx-coord-mcp/nothing-changed-nothing-written ()
+  ;; read_decisions writes seen: only when it moved; ack tells the hub only when the message's state moved
+  (drgnx-coord-mcp-test--outside
+    (let ((seen-writes 0) (notices 0) (set-seen (symbol-function 'drgnx-coord-set-seen)))
+      (cl-letf (((symbol-function 'drgnx-coord-set-seen) (lambda (&rest args) (cl-incf seen-writes) (apply set-seen args)))
+                ((symbol-function 'drgnx-coord-mcp--notify-hub) (lambda () (cl-incf notices))))
+        (drgnx-coord-decide :kind "build" :subject "x" :reason "y" :author "user" :seen 0)
+        (dotimes (_ 3) (drgnx-coord-mcp-test--call "read_decisions" :since 0))
+        (should (= seen-writes 1))
+        (should (= (drgnx-coord-seen me) 1))
+        (let ((id (plist-get (drgnx-coord-send :sender "user-emacs" :recipient me :text "hi" :seen 1) :id)))
+          (drgnx-coord-mark id "read")
+          (should (equal (drgnx-coord-mcp-test--call "ack" :id id) "acted"))
+          (should (equal (drgnx-coord-mcp-test--call "ack" :id id) "acted"))
+          (should (= notices 1)))))))
+
+(ert-deftest drgnx-coord-mcp/list-arguments-take-an-array ()
+  "paths and options are an array of strings (best) or a string, with items declared for strict clients."
+  (dolist (tool-arg '(("report_edit" . "paths") ("ask_user" . "options")))
+    (let ((prop (gethash (cdr tool-arg) (plist-get (plist-get (cdr (assoc (car tool-arg) (drgnx-coord-mcp-tools))) :schema) :properties))))
+      (should (equal (plist-get prop :type) ["array" "string"]))
+      (should (equal (plist-get prop :items) '(:type "string"))))))
 
 ;;; coord-mcp-test.el ends here

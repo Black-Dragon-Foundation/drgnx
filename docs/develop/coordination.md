@@ -51,7 +51,8 @@ working from the old one. So the shared state is explicit, versioned, and **enfo
   indexed by `at`, `(agent, id)`, `(job, id)` and `(kind, id)`). The writers above add their event in the **same
   transaction** as the change, so the two are there together or not at all: claim (`claim`, only when the task
   was `ready`: a holder's renewal writes nothing), release-stale (`release`), set-status and force-status (`status`),
-  decide (`decision`), send (`message`; to `user` with a text starting `[escalation]`, `question`), card-create and
+  decide (`decision`), send (`message`; to `user`, `question` when asked with `:question`, as `ask_user` does, or —
+  from drgnx's own agents, never from an `ext:` one — with a text starting `[escalation]`), card-create and
   card-settle (`card`; an `ask` card is a `question`, see below), card-set (`card`, when its state changes: a reopened
   card shows) and job-set (`job`, when its status changes). A held write (behind the log) or a refused claim writes
   nothing. `edit`, `test`, `start`, `stop`, `review`, `accept`, `revert`, `answer` and `comment` are written by their
@@ -60,8 +61,10 @@ working from the old one. So the shared state is explicit, versioned, and **enfo
   else (a buffer, a function, a hash table) is an error. It is printed with `print-length` 100 and `print-level` 6;
   over 4096 characters only `(:truncated t :size N)` is kept. It is read back with `read-eval` off. An `edit` event
   carries a path, a hash and line counts — never file contents or environment values.
-- **Questions:** one model for everything that waits on the user. A `question` event is an escalation (a message to
-  `user` starting `[escalation]`; data `(:message ID …)`) or an `ask` card (data `(:card ID)`). An `answer` event closes
+- **Questions:** one model for everything that waits on the user. A `question` event is a message to `user` that asks
+  (`drgnx-coord-send` with `:question` — `ask_user` — or an escalation, a text starting `[escalation]`, from drgnx's own
+  agents: an agent outside drgnx (`ext:…`) asks only through `ask_user`, so its messages are never questions, whatever
+  they say; data `(:message ID …)`) or an `ask` card (data `(:card ID)`). An `answer` event closes
   it: its `data` holds `(:question EVENT-ID)`. Settling an `ask` card writes that answer itself (by `user`);
   `drgnx-coord-open-questions` lists the questions with no answer.
 - **Retention:** `drgnx-coord-events-prune` (`:before`, default `drgnx-coord-event-retention-days`, 30) forgets older
@@ -96,8 +99,8 @@ and drgnx's data and state dirs). Without `DRGNX_AGENT` it only reads. An agent 
 | `list_agents` | the job's agents and their tasks: the hub's sessions of the job (`agents/list`, when a hub runs), else the job's tasks that have an agent |
 | `send_message {to, text, seen_version}` | queue a message (never interrupts); `to` must be `user`, an agent of the job's tasks or a session the hub runs (any job's; id or name — a name is stored as the session's id), else the tool errors and nothing is written |
 | `read_inbox` | unread messages (they become read) |
-| `ack {id}` | acted on (only a message addressed to the caller) |
-| `read_decisions {since}` | the log since a version, and the current version (recorded as the agent's `seen`) |
+| `ack {id}` | acted on (only a message addressed to the caller); the hub is told only when the state moved |
+| `read_decisions {since}` | the log since a version, and the current version (recorded as the agent's `seen`, written only when it moved) |
 | `record_decision {kind, subject, task?, paths?, reason, replaces?, seen_version}` | current inside its own task, else proposed |
 | `claim_task`, `update_task`, `complete_task` `{task, …, seen_version}` | the lease and the status; `update_task` takes `running`, `needs-input`, `in-review` (and `failed` outside a job), nothing else |
 | `task_status {job?}` | the job's tasks |
@@ -117,7 +120,7 @@ reports what it does with four more tools. Their events feed the Work cockpit:
 | `hello {name?, cwd?, branch?, plan?, task?}` | registers the agent (`drgnx-coord-agent-register`): kind, name, cwd, worktree (`git rev-parse --show-toplevel` of the cwd), branch (given, else the cwd's), plan, task, pid. `base` is `git rev-parse HEAD` of the cwd at its first hello, kept by later ones (taken again only when the agent shows up in another worktree). A first hello writes a `start` event. Answers `{agent, version, cwd, worktree, base}` (the identity and the decision log's version), and a `note` when the identity is a fallback |
 | `report_edit {paths, summary?}` | an `edit` event, data `(:root ROOT :paths (RELATIVE…) [:more N])`. `paths` is best an array of strings. A string takes one path per line; only a string with no newline is split on commas (so a name with a comma needs the array or lines). At most 1,000 paths; more are refused before any is looked at. Each must lie inside the agent's worktree (else its cwd), or the whole report is refused and nothing is written |
 | `report_test {command, passed?, failed?, summary?}` | a `test` event, data `(:command :passed :failed)`. The counts must be whole numbers, 0 or more. With no summary, the summary is `N passed, M failed: COMMAND` |
-| `ask_user {question, options?, task?}` | a message to `user` starting `[escalation]`, which `drgnx-coord-send` turns into a `question` event, so `drgnx-coord-open-questions` lists it. Options are an array or one per line, at most 20; an option holding a `\|` (the separator drgnx writes them with) is refused. Any line of the question starting `Options:` is dropped: that line is drgnx's to write. For one of drgnx's agents, a task it holds (`task`, else `DRGNX_TASK`) goes to `needs-input`. The answer comes back as a message (`read_inbox`) |
+| `ask_user {question, options?, task?}` | a message to `user` starting `[escalation]`, sent with `:question t`, so its event is a `question` and `drgnx-coord-open-questions` lists it. Options are an array of strings (best; `items` declared) or one per line, at most 20; an option holding a `\|` (the separator drgnx writes them with) is refused. Any line of the question starting `Options:` is dropped: that line is drgnx's to write. For one of drgnx's agents, a task it holds (`task`, else `DRGNX_TASK`) goes to `needs-input`. The answer comes back as a message (`read_inbox`) |
 
 **Identity.**
 - **drgnx's own agents:** `DRGNX_AGENT`, trusted as before. drgnx sets it in the environment of the server it gives
@@ -146,15 +149,16 @@ reports what it does with four more tools. Their events feed the Work cockpit:
 
 **Text.**
 - Questions and message texts (`ask_user`, `send_message`, `escalate`'s subject and text) are trimmed and cut to
-  2,000 characters.
-- `drgnx-coord-control-chars` (C0 controls, DEL, the C1 controls U+0080–U+009F and the BiDi controls U+200E–U+200F,
+  2,000 characters; the answer of `ask_user` and `send_message` then has `cut`: how many characters were left out.
+- `drgnx-coord-control-chars` (C0 controls, DEL, the C1 controls U+0080–U+009F and the BiDi controls U+061C, U+200E–U+200F,
   U+202A–U+202E, U+2066–U+2069) become spaces, except newline and tab.
 - Event summaries, names, branches and plans lose newlines and tabs too: one line, at most 200 characters (a name
   at 80). C1's `drgnx-coord--one-line` strips the same set.
 
 **Paths.** The root comes from the server's process, never from an argument: the git worktree of the folder the
-agent started the server in, else that folder (`drgnx-coord-mcp--home`, found once per server). `hello`'s `cwd`
-must lie inside it; a later hello without a `cwd` keeps the registered one.
+agent started the server in, else that folder (`drgnx-coord-mcp--home`, found once per server). A git toplevel that is
+the home folder itself (a repository of dotfiles) counts as no worktree: the folder is taken, so projects under `~`
+work. `hello`'s `cwd` must lie inside it; a later hello without a `cwd` keeps the registered one.
 
 `report_edit` is refused outright when the root is a file system root, the home folder (`$HOME`) or a folder above
 it. That is a server started in the wrong place, and the answer says to start it in the project folder. `hello`

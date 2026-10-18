@@ -151,15 +151,25 @@ blank."
 
 (defconst drgnx-coord-mcp--text-max 2000 "The longest question or message text an agent sends, in characters.")
 
-(defun drgnx-coord-mcp--text (text what)
-  "TEXT (WHAT, for the error) cleaned for the user to read: trimmed, the characters of `drgnx-coord-control-chars'
-other than newline and tab as spaces, at most `drgnx-coord-mcp--text-max' characters.  An error when it is blank."
+(defun drgnx-coord-mcp--text-cut (text what)
+  "TEXT (WHAT, for the error) cleaned for the user to read — trimmed, the characters of `drgnx-coord-control-chars'
+other than newline and tab as spaces, at most `drgnx-coord-mcp--text-max' characters — and how many characters were
+cut off: (CLEAN . CUT).  An error when it is blank."
   (let ((clean (and (stringp text)
                     (string-trim (replace-regexp-in-string (concat "[" drgnx-coord-control-chars "]")
                                                            (lambda (c) (if (member c '("\n" "\t")) c " "))
                                                            text t t)))))
     (if (or (null clean) (string-empty-p clean)) (error "%s is required" what)
-      (substring clean 0 (min (length clean) drgnx-coord-mcp--text-max)))))
+      (cons (substring clean 0 (min (length clean) drgnx-coord-mcp--text-max))
+            (max 0 (- (length clean) drgnx-coord-mcp--text-max))))))
+
+(defun drgnx-coord-mcp--text (text what)
+  "TEXT cleaned and cut as `drgnx-coord-mcp--text-cut' does (WHAT names it in the error)."
+  (car (drgnx-coord-mcp--text-cut text what)))
+
+(defun drgnx-coord-mcp--with-cut (answer cut)
+  "ANSWER (a plist), with :cut CUT when the text was shortened."
+  (if (and (consp answer) (> cut 0)) (append answer (list :cut cut)) answer))
 
 (defvar drgnx-coord-mcp--git-timeout 3 "Seconds a git command may take before it is given up (nil is its answer).")
 
@@ -204,9 +214,13 @@ seconds (it is killed).  Never asks: no terminal, its stdin closed at once."
                    (memq system-type '(darwin windows-nt ms-dos cygwin))))
 
 (defun drgnx-coord-mcp--worktree (dir)
-  "The git worktree DIR is in (its truename), or nil."
+  "The git worktree DIR is in (its truename), or nil — nil too when it is the home folder itself (a repository of
+dotfiles holds no project: the folder, not the home, is where an agent under ~ works)."
   (when-let* ((top (drgnx-coord-mcp--git dir "rev-parse" "--show-toplevel")))
-    (let ((file-name-handler-alist nil)) (directory-file-name (file-truename top)))))
+    (let* ((file-name-handler-alist nil)
+           (top (directory-file-name (file-truename top)))
+           (home (let ((h (getenv "HOME"))) (and h (not (string-empty-p h)) (directory-file-name (file-truename h))))))
+      (unless (equal top home) top))))
 
 (defvar drgnx-coord-mcp--home nil "(DIR . HOME): `drgnx-coord-mcp--home' for the working directory DIR, found once.")
 
@@ -330,17 +344,17 @@ most 100 elements of a list), within `drgnx-coord--data-max' characters."
 
 (defun drgnx-coord-mcp--ask-user (me args)
   "Ask the user (`ask_user'): see `drgnx-coord-mcp-tools'."
-  (let* ((question (string-trim
+  (let* ((given (drgnx-coord-mcp--text-cut (plist-get args :question) "question"))
+         (question (string-trim
                     ;; the options line is drgnx's to write: an "Options:" line of the question's own goes
-                    (replace-regexp-in-string "^[ \t]*[Oo][Pp][Tt][Ii][Oo][Nn][Ss][ \t]*:.*\\(\n\\|\\'\\)" ""
-                                              (drgnx-coord-mcp--text (plist-get args :question) "question"))))
+                    (replace-regexp-in-string "^[ \t]*[Oo][Pp][Tt][Ii][Oo][Nn][Ss][ \t]*:.*\\(\n\\|\\'\\)" "" (car given))))
          (options (delq nil (mapcar #'drgnx-coord-mcp--line
                                     (let ((o (plist-get args :options))) (if (vectorp o) (append o nil) (and (stringp o) (split-string o "\n" t))))))))
     (when (string-empty-p question) (error "question is required"))
     (when-let* ((bad (seq-find (lambda (o) (string-search "|" o)) options)))
       (error "An option cannot hold a `|' (it separates them): %s" bad))
     (let* ((task (or (drgnx-coord-mcp--own-task (plist-get args :task)) (drgnx-coord-mcp--own "DRGNX_TASK")))
-           (r (drgnx-coord-send :job (drgnx-coord-mcp--own "DRGNX_JOB") :sender me :recipient "user"
+           (r (drgnx-coord-send :job (drgnx-coord-mcp--own "DRGNX_JOB") :sender me :recipient "user" :question t
                                 :text (concat "[escalation] " (if task (format "(%s) " task) "") question
                                               (if options (concat "\nOptions: " (string-join (seq-take options 20) " | ")) "")))))
       ;; one of drgnx's agents with a task it holds: the task waits on the user
@@ -348,7 +362,7 @@ most 100 elements of a list), within `drgnx-coord--data-max' characters."
         (when (and (equal (plist-get held :agent) me) (member (plist-get held :status) '("claimed" "running")))
           (drgnx-coord-set-status task me "needs-input" (drgnx-coord-version))))
       (drgnx-coord-mcp--notify-hub)
-      (append r (list :answer "the user's answer comes as a message: read_inbox")))))
+      (drgnx-coord-mcp--with-cut (append r (list :answer "the user's answer comes as a message: read_inbox")) (cdr given)))))
 
 (defun drgnx-coord-mcp--jsonable (v)
   (cond ((null v) :null) ((eq v t) t)
@@ -455,9 +469,13 @@ error, nothing is sent.  The hub is asked only when the cheap checks fail."
                          '("command"))
        :call ,(lambda (a) (drgnx-coord-mcp--reporting drgnx-coord-mcp--report-test a)))
       ("ask_user" :description "Ask the user a question; it waits for them in the cockpit (never a prompt).  Go on with what does not depend on it: the answer comes as a message (read_inbox)."
-       :schema ,(funcall s '(("question" "string" "The question") ("options" "string" "The choices, one per line")
-                             ("task" "string" "The task it is about"))
-                         '("question"))
+       :schema ,(let ((schema (funcall s '(("question" "string" "The question") ("options" "array" "")
+                                           ("task" "string" "The task it is about"))
+                                       '("question"))))
+                  (puthash "options" (list :type ["array" "string"] :items (list :type "string")
+                                           :description "The choices: best an array of strings; a string takes one per line (none may hold a |)")
+                           (plist-get schema :properties))
+                  schema)
        :call ,(lambda (a) (drgnx-coord-mcp--reporting drgnx-coord-mcp--ask-user a))))))
 
 (defun drgnx-coord-mcp--job-tools ()
@@ -471,11 +489,13 @@ error, nothing is sent.  The hub is asked only when the cheap checks fail."
        :call ,(lambda (a)
                 ;; an outside agent's messages count as its reports: the same limit
                 (or (and (drgnx-coord-mcp--outside-kind) (drgnx-coord-mcp--held-report (drgnx-coord-mcp--me)))
-                    (let ((text (drgnx-coord-mcp--text (plist-get a :text) "text"))
+                    (let ((text (drgnx-coord-mcp--text-cut (plist-get a :text) "text"))
                           (to (drgnx-coord-mcp--resolve-recipient (plist-get a :to))))
                       (drgnx-coord-mcp--write
-                       (drgnx-coord-send :job (drgnx-coord-mcp--own "DRGNX_JOB") :sender (drgnx-coord-mcp--me) :recipient to
-                                         :text text :seen (drgnx-coord-mcp--seen a)))))))
+                       (drgnx-coord-mcp--with-cut
+                        (drgnx-coord-send :job (drgnx-coord-mcp--own "DRGNX_JOB") :sender (drgnx-coord-mcp--me) :recipient to
+                                          :text (car text) :seen (drgnx-coord-mcp--seen a))
+                        (cdr text)))))))
       ("read_inbox" :description "Messages to you not read yet (they become read)"
        :schema ,(funcall s nil)
        :call ,(lambda (_a) (let ((msgs (drgnx-coord-inbox (drgnx-coord-mcp--me) '("queued" "delivered"))))
@@ -487,12 +507,13 @@ error, nothing is sent.  The hub is asked only when the cheap checks fail."
                 (let ((m (drgnx-coord-message (plist-get a :id))))
                   (unless (and m (equal (plist-get m :recipient) (drgnx-coord-mcp--me)))
                     (error "No message %s for you" (plist-get a :id))))
-                (drgnx-coord-mark (plist-get a :id) "acted") (drgnx-coord-mcp--notify-hub) "acted"))
+                (when (drgnx-coord-mark (plist-get a :id) "acted") (drgnx-coord-mcp--notify-hub))   ; nothing changed: no news
+                "acted"))
       ("read_decisions" :description "The decision log since a version (0: all), and the current version"
        :schema ,(funcall s '(("since" "integer" "The last version you read (0 for all)")))
        :call ,(lambda (a)
                 (let ((v (drgnx-coord-version)) (me (ignore-errors (drgnx-coord-mcp--identity))))
-                  (when me (drgnx-coord-set-seen me v))   ; the hub stops telling it
+                  (when (and me (/= (drgnx-coord-seen me) v)) (drgnx-coord-set-seen me v))   ; the hub stops telling it; a write only when it changed
                   (drgnx-coord-mcp--jsonable (list :version v :decisions (drgnx-coord-decisions-since (or (plist-get a :since) 0)))))))
       ("record_decision"
        :description "Record a decision: build, wait, wont-build or replaces.  Inside your own task it is current; about anything else it is proposed (the reviewer and the user decide)"

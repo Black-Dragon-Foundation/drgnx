@@ -63,9 +63,10 @@ is an error: nothing was read at a version that does not exist."
 
 (defconst drgnx-coord--summary-max 200 "The longest event summary, in characters.")
 
-(defconst drgnx-coord-control-chars (concat "\0-\37\177-" (string #x9f #x200e #x200f #x202a ?- #x202e #x2066 ?- #x2069))
+(defconst drgnx-coord-control-chars (concat "\0-\37\177-" (string #x9f #x61c #x200e #x200f #x202a ?- #x202e #x2066 ?- #x2069))
   "Characters an agent's text must not carry, as the inside of a regexp bracket: the C0 controls, DEL, the C1
-controls and the BiDi controls (marks, embeddings, overrides, isolates) that make text read other than it is.")
+controls and the BiDi controls (the Arabic letter mark, marks, embeddings, overrides, isolates) that make text
+read other than it is.")
 
 (defun drgnx-coord--one-line (text)
   "TEXT as one line of at most `drgnx-coord--summary-max' characters (`drgnx-coord-control-chars' become spaces)."
@@ -466,9 +467,11 @@ than `drgnx-coord-decision-rate' a minute from one agent are refused.  (:ok t :n
     (list :id id :job job :sender sender :recipient recipient :text text :state state :reason reason :at at
           :delivered delivered :read read :acted acted)))
 
-(cl-defun drgnx-coord-send (&key job sender recipient text seen)
+(cl-defun drgnx-coord-send (&key job sender recipient text seen question)
   "SENDER (who read the log at SEEN; nil: the user's own Emacs) sends TEXT to RECIPIENT.  (:ok t :id ID :state S) —
-held when RECIPIENT's queue is full or the two exchange too much — or (:held …) when SEEN is behind."
+held when RECIPIENT's queue is full or the two exchange too much — or (:held …) when SEEN is behind.
+A message to \"user\" is a question (its event's kind) when QUESTION is set (the ask_user tool), or when its TEXT
+starts with [escalation] and SENDER is not an agent outside drgnx (ext:…): their messages are never questions."
   (drgnx-coord--tx
    (lambda (db)
      (or (drgnx-coord--held db seen)
@@ -487,7 +490,10 @@ held when RECIPIENT's queue is full or the two exchange too much — or (:held �
                            (list (float-time) recipient (or sender "user")))
            (let ((id (caar (sqlite-select db "select last_insert_rowid()"))))   ; before any other insert
              (drgnx-coord--event db :agent (or sender "user") :job job
-                                 :kind (if (and (equal recipient "user") (string-prefix-p "[escalation]" (or text ""))) "question" "message")
+                                 :kind (if (and (equal recipient "user")
+                                                (or question (and (not (string-prefix-p "ext:" (or sender "")))
+                                                                  (string-prefix-p "[escalation]" (or text "")))))
+                                           "question" "message")
                                  :summary (if (equal recipient "user") text (format "to %s: %s" recipient text))
                                  :data (list :message id :to recipient :state state))
              (list :ok t :id id :state state)))))))

@@ -110,12 +110,25 @@
     (should-error (drgnx-coord-event-add :agent "a" :kind "bogus" :summary "x"))
     (should (= (length (drgnx-coord-events)) 2))))
 
+(ert-deftest drgnx-coord-events/an-outside-agents-message-is-never-a-question ()
+  ;; a question is what asks: ask_user (:question), or an escalation by drgnx's own agents — never an ext: agent's text
+  (drgnx-coord-events-test--with
+    (dolist (case '(("a" "[escalation] s: t" nil "user" "question")
+                    ("ext:claude:1-abcdef" "[escalation] s: t" nil "user" "message")
+                    ("ext:claude:1-abcdef" "Which one?" t "user" "question")
+                    ("a" "plain" nil "user" "message")
+                    ("a" "[escalation] x" t "b" "message")))
+      (pcase-let ((`(,sender ,text ,question ,to ,kind) case))
+        (drgnx-coord-send :sender sender :recipient to :text text :question question :seen 0)
+        (should (equal (plist-get (car (last (drgnx-coord-events))) :kind) kind))))
+    (should (equal (mapcar (lambda (q) (plist-get q :agent)) (drgnx-coord-open-questions)) '("a" "ext:claude:1-abcdef")))))
+
 (ert-deftest drgnx-coord-events/summaries-lose-del-c1-and-bidi-controls ()
   ;; a summary that reads other than it is (an RTL override, an isolate) or hides in a C1 control
   (drgnx-coord-events-test--with
     (drgnx-coord-event-add :agent "a" :kind "status"
-                           :summary (concat "a\177b" (string #x85) "c" (string #x9b) "d" (string #x200e) "e" (string #x200f) "f" (string #x202e) "g" (string #x202a) "h" (string #x2066) "i" (string #x2069) "j" "é → ok"))
-    (should (equal (plist-get (car (drgnx-coord-events)) :summary) "a b c d e f g h i jé → ok"))))
+                           :summary (concat "a\177b" (string #x85) "c" (string #x9b) "d" (string #x200e) "e" (string #x200f) "f" (string #x202e) "g" (string #x202a) "h" (string #x2066) "i" (string #x2069) "j" (string #x61c) "k" "é → ok"))
+    (should (equal (plist-get (car (drgnx-coord-events)) :summary) "a b c d e f g h i j ké → ok"))))
 
 (ert-deftest drgnx-coord-events/events-since-and-filters ()
   (drgnx-coord-events-test--with
