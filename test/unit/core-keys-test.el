@@ -596,7 +596,7 @@
                      '("s-L"))))))
 
 (defconst drgnx-keys-test--linux-snapshot
-  '((palette "C-S-p" nil) (palette "<f1>" nil) (keys-sheet "C-k C-s" nil) (preferences-modules "C-," nil)
+  '((open-folder "C-k C-o" nil) (palette "C-S-p" nil) (palette "<f1>" nil) (keys-sheet "C-k C-s" nil) (preferences-modules "C-," nil)
     (modules-toggle "RET" drgnx-modules-list-mode-map) (keyboard-profile "C-k C-p" nil) (open-file "C-o" nil)
     (save-file "C-s" nil) (file-save-as "C-S-s" nil) (file-new "C-n" nil) (file-reopen-tab "C-S-t" nil)
     (file-new-window "C-S-n" nil) (file-close-window "C-q" nil) (view-escape "<escape>" nil)

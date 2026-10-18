@@ -8,6 +8,7 @@
         (keyboard-profile "C-k C-p")
         (quit :none "File → Quit drgnx; C-q closes the window as in VS Code" :mac "s-q")
         (preferences-keep-running :none "in the palette and the Options menu")
+        (open-folder "C-k C-o")
         (open-file "C-o")
         (save-file "C-s")
         (line-numbers :none "VS Code has no default key for line numbers")

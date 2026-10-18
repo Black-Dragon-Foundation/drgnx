@@ -129,6 +129,30 @@ frames that count as windows, :unsaved the file buffers still changed after the 
     (should (equal (drgnx-commands-label (drgnx-commands-get 'preferences-keep-running))
                    "Preferences: Keep drgnx Running in the Background"))))
 
+(ert-deftest drgnx-session/open-folder-asks-for-the-folder ()
+  ;; File → Open Folder…: the folder chosen opens as with `drgnx DIR'.  Only the command asks: bin/drgnx's call never does.
+  (let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
+        (drgnx-explorer-buffer-name " *drgnx-session-test-explorer*")
+        (dir (file-name-as-directory (make-temp-file "drgnx-session-open" t)))
+        roots asked)
+    (unwind-protect
+        (cl-letf (((symbol-function 'read-directory-name) (lambda (&rest _) (setq asked t) dir))
+                  ((symbol-function 'drgnx-session-raise) #'ignore)
+                  ((symbol-function 'drgnx-explorer-roots) (lambda () nil))
+                  ((symbol-function 'drgnx-explorer-set-roots) (lambda (r) (setq roots r)))
+                  ((symbol-function 'drgnx-explorer-focus) #'ignore))
+          (get-buffer-create drgnx-explorer-buffer-name)
+          (drgnx-session-register-commands)
+          (should (equal (drgnx-commands-label (drgnx-commands-get 'open-folder)) "File: Open Folder…"))
+          (call-interactively (drgnx-cmd-command (drgnx-commands-get 'open-folder)))
+          (should asked)
+          (should (equal roots (list dir)))
+          (setq asked nil)
+          (drgnx-session-open-folder dir)
+          (should-not asked))
+      (when (get-buffer drgnx-explorer-buffer-name) (kill-buffer drgnx-explorer-buffer-name))
+      (delete-directory dir t))))
+
 (ert-deftest drgnx-session/no-window-in-batch ()
   ;; A daemon's (or batch Emacs's) own terminal frame is not a window.
   (should-not (drgnx-session-gui-frame-p))

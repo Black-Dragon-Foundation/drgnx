@@ -8,6 +8,7 @@
         (keyboard-profile :none "in the palette")
         (quit :none "File → Quit drgnx; the palette (C-x C-c closes this client's windows, stock)")
         (preferences-keep-running :none "in the palette and the Options menu")
+        (open-folder :none "File → Open Folder…; the palette")
         (open-file "C-x C-f")
         (save-file "C-x C-s")
         (line-numbers :none "Emacs has no default key for line numbers")

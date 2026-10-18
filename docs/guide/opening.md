@@ -35,6 +35,9 @@ A **folder** becomes the Explorer's first folder (the others stay) and the Explo
 open as a directory listing. A **file** opens in the editor. drgnx started by hand as a normal Emacs (not a daemon) answers
 `drgnx PATH` too, as long as no other drgnx does.
 
+Inside drgnx, **File → Open Folder…** (palette; `C-k C-o` in the VS Code profile, `SPC f o` in Vim's) asks for a
+folder and shows it the same way.
+
 ## On macOS: the drgnx app
 
 On a Mac, drgnx is also an app: **drgnx** in `~/Applications` (the Applications folder in your home folder), so

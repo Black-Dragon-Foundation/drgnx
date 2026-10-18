@@ -12,7 +12,7 @@ init/init.el         core/ on the load path, (require 'drgnx), (drgnx-init); a p
 core/drgnx.el        drgnx-init: guard on, staged hooks armed, keep-running choice read, the first window's Welcome
                      (a first start only), packages activated, core commands, modules, surfaces (DRGNX_SAFE — drgnx
                      safe — skips packages and modules)
-core/drgnx-session.el  drgnx PATH's Emacs side, keep running or quit, Quit drgnx (../guide/opening.md)
+core/drgnx-session.el  drgnx PATH's Emacs side, Open Folder…, keep running or quit, Quit drgnx (../guide/opening.md)
 core/drgnx-macos.el  the drgnx app on macOS (drgnx macos-app; ../guide/opening.md)
 modules/<category>/drgnx-<name>.el   one drgnx-module-define per file
 ```

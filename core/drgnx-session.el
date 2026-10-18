@@ -89,7 +89,9 @@ this to decide whether `drgnx PATH' needs a new window."
 (defun drgnx-session-open-folder (dir)
   "Show DIR in front as the Explorer's first folder (`drgnx DIR'), the Explorer selected — as VS Code after
 `code DIR' — with DIR as its `default-directory', so quick open and project search work in DIR's project.
-The Explorer's other folders stay.  Without the workbench (drgnx safe), DIR opens in dired."
+The Explorer's other folders stay.  Without the workbench (drgnx safe), DIR opens in dired.
+As File → Open Folder… it asks for DIR; bin/drgnx's call never asks."
+  (interactive (list (read-directory-name "Open folder: " nil nil t)))
   (let ((dir (file-name-as-directory (expand-file-name dir))))
     (drgnx-session-raise)
     (if (not (fboundp 'drgnx-explorer-set-roots))
@@ -131,9 +133,11 @@ one quits drgnx unless it keeps running in the background (`drgnx-keep-running',
 ;;;; Setup
 
 (defun drgnx-session-register-commands ()
-  "Quit drgnx and the keep-running preference, in the registry."
+  "Quit drgnx, Open Folder… and the keep-running preference, in the registry."
   (drgnx-command-define 'quit :category "File" :title "Quit drgnx" :command #'drgnx-session-quit :menu '("File")
                         :doc "Stop drgnx, the background one too, after offering to save changed files")
+  (drgnx-command-define 'open-folder :category "File" :title "Open Folder…" :command #'drgnx-session-open-folder
+                        :menu '("File") :doc "Show a folder in the Explorer, first, the Explorer selected (as `drgnx DIR')")
   (drgnx-command-define 'preferences-keep-running :category "Preferences" :title "Keep drgnx Running in the Background"
                         :command #'drgnx-session-toggle-keep-running :menu '("Options")
                         :doc "When the last window closes: keep running (reopening is instant), or quit"))
