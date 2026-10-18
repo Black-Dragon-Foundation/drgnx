@@ -475,8 +475,9 @@ DRGNX_MODAL_ELPA="$PWD/.claude/tmp/modal-elpa" bin/drgnx test
 ```
 
 The first sync installs the known-good lock (every locked package), so it takes a few minutes and about 1 GB of
-disk; the versions are the ones in `etc/drgnx.lock.eld`. In a container you run by hand, mount the directory read-only and set
-the variable inside (`-v …/data/elpa:/elpa:ro -e DRGNX_MODAL_ELPA=/elpa`).
+disk; the versions are the ones in `etc/drgnx.lock.eld`. `bin/drgnx test --container` passes it on: the directory is mounted read-only at `/modal-elpa` and
+`DRGNX_MODAL_ELPA=/modal-elpa` is set inside. In a container you run by hand, do the same
+(`-v …/data/elpa:/elpa:ro -e DRGNX_MODAL_ELPA=/elpa`).
 
 The success list of Vim keys runs end to end in the live tier (`bin/drgnx test --ui`, second half), not in the GUI
 tier's shared minimal session: evil and drgnx's startup cannot be undone in one Emacs, and later GUI tests would run
