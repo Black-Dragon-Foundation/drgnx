@@ -6,7 +6,8 @@
   "BODY with DRGNX_CONFIG_DIR a temp dir (never the user's), no applied keys, and `drgnx-keys-apply' counted
 in `applied'."
   `(let* ((dir (make-temp-file "drgnx-keys-edit" t))
-          (process-environment (cons (concat "DRGNX_CONFIG_DIR=" dir) process-environment))
+          (process-environment (append (list (concat "DRGNX_CONFIG_DIR=" dir) (concat "XDG_STATE_HOME=" dir "/state"))
+                                       process-environment))
           (drgnx-keys-last (list :bindings nil)) (drgnx-keys-problems nil) (applied 0))
      (unwind-protect
          (cl-letf (((symbol-function 'drgnx-keys-apply) (lambda () (cl-incf applied) drgnx-keys-last))
@@ -342,14 +343,18 @@ in `applied'."
    (set-file-modes (drgnx-keys-file) #o664)
    (drgnx-keys-edit-bind 'open-file "C-c g")
    (should (= (file-modes (drgnx-keys-file)) #o664))
-   ;; the text is UTF-8 whatever the session's default coding is
-   (let ((file (expand-file-name "enc.eld" dir)) (old (default-value 'buffer-file-coding-system)))
+   ;; the text is read and written as UTF-8 whatever the session's default coding is
+   (let ((old (default-value 'buffer-file-coding-system)))
      (unwind-protect
-         (progn (setq-default buffer-file-coding-system 'iso-8859-1)
-                (drgnx-keys-edit--write-file file ";; é\n"))
+         (progn (let ((coding-system-for-write 'utf-8-unix))
+                  (write-region ";; é\n(:bind ((a \"C-c a\")))\n" nil (drgnx-keys-file) nil 'silent))
+                (setq-default buffer-file-coding-system 'iso-8859-1)
+                (drgnx-keys-edit-bind 'b "C-c b"))
        (setq-default buffer-file-coding-system old))
-     (should (equal (string-to-list (string-to-unibyte (with-temp-buffer (insert-file-contents-literally file) (buffer-string))))
-                    '(59 59 32 195 169 10))))))
+     (let ((bytes (with-temp-buffer (set-buffer-multibyte nil) (insert-file-contents-literally (drgnx-keys-file))
+                                    (buffer-string))))
+       (should (string-prefix-p (unibyte-string 59 59 32 195 169 10) bytes))
+       (should (string-search "(b \"C-c b\")" bytes))))))
 
 (ert-deftest drgnx-keys-edit/sets-a-tty-fallback ()
   (drgnx-keys-edit-test--with-dir

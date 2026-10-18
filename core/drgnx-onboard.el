@@ -200,6 +200,7 @@ the Xcode Command Line Tools.  :fix is the one for this platform."
 (defvar drgnx-keys-file)
 (defvar drgnx-keys-layers)
 (declare-function drgnx-keys-file "drgnx-keys")
+(declare-function drgnx-config-read "drgnx-config")
 (declare-function drgnx-keys-read-user "drgnx-keys")
 (declare-function drgnx-keys-set-mac-option "drgnx-keys")
 (declare-function drgnx-keys--save-key "drgnx-keys")
@@ -209,9 +210,7 @@ the Xcode Command Line Tools.  :fix is the one for this platform."
 
 (defun drgnx-onboard--current-keys ()
   "The name of the key preset keys.eld uses now, or nil."
-  (let ((layers (ignore-errors
-                  (plist-get (with-temp-buffer (insert-file-contents (drgnx-keys-file)) (read (current-buffer))) :layers))))
-    (car (rassoc layers drgnx-keys-presets))))
+  (car (rassoc (plist-get (plist-get (drgnx-config-read 'keys) :data) :layers) drgnx-keys-presets)))
 
 (defun drgnx-onboard--current-preset ()
   "The preset the extra/ modules match now (none off — a fresh install too — is full-ai), or nil: a mix of your own."

@@ -12,7 +12,8 @@
 ;;   backup.  A newer file is applied when it fits our schema, read-only.
 ;; - `drgnx-config-set', `-unset' and `-update' change a file under its lock, surgically: only the top-level plist keys
 ;;   or alist entries that changed are replaced in the text, so comments and unknown keys stay byte for byte.  They
-;;   refuse a file with a mistake and a newer one (`drgnx-config-refused').
+;;   refuse a file with a mistake and a newer one (`drgnx-config-refused').  `drgnx-config-write-text' replaces the
+;;   whole file by an editor's text, after the same checks on that text and a stamp check.
 ;; It requires only cl-lib, subr-x, drgnx-paths, drgnx-file and drgnx-schema, so the `emacs --batch -Q' hub loads it.
 
 ;;; Code:
@@ -668,6 +669,58 @@ A `drgnx-config-update': only that item changes in the file.  ROOT: a project fi
 A get of KEY then gives the default's."
   (let ((def (drgnx-config--def name)))
     (drgnx-config-update name (lambda (data) (drgnx-config--remove def data key)))))
+
+(defun drgnx-config--text-read (def file text)
+  "TEXT, as the text of FILE (DEF's), analyzed by DEF's rules like a file read: the config read of it."
+  (let* ((parsed (drgnx-file--parse text))
+         (r (pcase (car parsed)
+              ('ok (list :status 'ok :data (cdr parsed) :text text))
+              ('absent (list :status 'absent :text text))
+              (_ (list :status 'unreadable :problem (cdr parsed) :text text)))))
+    (drgnx-config--analyze def r file)))
+
+(cl-defun drgnx-config-write-text (name text &key (expect-stamp nil stamp-p) (timeout 1.0))
+  "Replace config file NAME by TEXT whole, under its lock; the new applied value.
+For an editor that holds the file's whole text (the keys editor): it changes the file's bytes to exactly TEXT.
+TEXT must read, fit the schema and be no newer than this drgnx writes, and fit the size limit, else
+`drgnx-config-refused' names its line.  With EXPECT-STAMP (`drgnx-file-stamp' of the file as the editor read it; nil
+for a file that was absent) given and not `equal' to the file's stamp now it refuses: \"FILE changed since you opened
+it\", and nothing is written.  Without EXPECT-STAMP it also refuses a file that has a mistake (the editor was shown
+none) and one a newer drgnx wrote; with it the editor has seen the file, so a mistake may be written over.  A project
+file is read-only.  TIMEOUT is the lock's, as in `drgnx-config-update'.  Then the listeners run."
+  (let ((def (drgnx-config--def name)))
+    (when (eq (plist-get def :dir) 'project) (error "%s is read-only" name))
+    (let* ((file (drgnx-config--path def nil))
+           (want (plist-get def :version))
+           (new (drgnx-config--text-read def file text)))
+      (pcase (plist-get new :status)
+        ('problem
+         (let ((p (plist-get new :problem)))
+           (signal 'drgnx-config-refused
+                   (list (format "the new text of %s has a mistake at line %d: %s; it was not written"
+                                 (drgnx-config--shown file) (plist-get p :line) (plist-get p :text))))))
+        ('newer
+         (signal 'drgnx-config-refused
+                 (list (format "the new text of %s is in format %d, newer than this drgnx writes (%d); it was not written"
+                               (drgnx-config--shown file) (plist-get new :version) want)))))
+      (when (> (length (encode-coding-string text 'utf-8-unix)) (plist-get def :max-bytes))
+        (signal 'drgnx-config-refused
+                (list (format "the new text of %s is over %d bytes; it was not written"
+                              (drgnx-config--shown file) (plist-get def :max-bytes)))))
+      (let* ((target (drgnx-file--target file))
+             (held (drgnx-file--lock target timeout)))
+        (unwind-protect
+            (let ((cur (car (drgnx-config--read def target))))
+              (if (not stamp-p)
+                  (drgnx-config--refuse file cur want)
+                (unless (equal (drgnx-file-stamp target) expect-stamp)
+                  (signal 'drgnx-config-refused
+                          (list (format "%s changed since you opened it; nothing was written"
+                                        (drgnx-config--shown file)))))
+                (when (eq (plist-get cur :status) 'newer) (drgnx-config--refuse file cur want)))
+              (drgnx-file-write-text target text))
+          (drgnx-file--unlock held)))
+      (plist-get (drgnx-config--refresh def name file t) :value))))
 
 ;;;; Commands
 

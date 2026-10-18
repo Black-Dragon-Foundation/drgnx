@@ -239,6 +239,15 @@ not the default), the write.
   whole file. An absent file gets the header and the data pretty-printed, `:version` first for a plist. The write's
   read-back (`drgnx-file-write`'s `:text` check) refuses a text that does not read back as the new data.
 - From timers, filters and sentinels, pass `:timeout 0` and catch `drgnx-file-busy` (the next run writes).
+- **A whole text.** `(drgnx-config-write-text NAME TEXT &key expect-stamp (timeout 1.0))` is for an editor that holds
+  the file's whole text and changes it its own way (the keys editor): it replaces the file by exactly TEXT, under
+  the lock, through `drgnx-file-write-text`, and returns the new applied value. TEXT must read, fit the schema, be no
+  newer than this drgnx writes and fit the size limit, else `drgnx-config-refused` names the line ("the new text of
+  FILE has a mistake at line L: …; it was not written"). EXPECT-STAMP is `drgnx-file-stamp` of the file as the
+  editor read it (nil: it was absent); when it is given and the file's stamp is not `equal` now, the write is
+  refused: "FILE changed since you opened it; nothing was written". Given, a file that has a mistake may be written
+  over (the editor showed it); without it a file with a mistake is refused, as the other writers do. A file a newer
+  drgnx wrote is refused either way.
 
 **Commands** (Preferences, in the palette): Open Config File… (`drgnx-config-open`, at the mistake's line and column),
 Reset Config File… (`drgnx-config-reset`: asks, keeps a backup, writes the header and the default; refused in batch;

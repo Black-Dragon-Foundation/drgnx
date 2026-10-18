@@ -22,6 +22,21 @@ Agent profiles, the MCP servers agents get, OpenRouter restrictions and job rout
 | `:openrouter` | not an OpenRouter restriction (:only :ignore :data-collection :zdr) | no | Which providers OpenRouter may use |
 | `:routes` | alist of symbol to string or list of string | no | Which profiles do each job role: a list of names, or one name |
 
+## keys.eld
+
+Folder: config. Format: 1. Read: at start. On a mistake: its last good copy, else the defaults.
+
+Your key bindings: the profile stack, entries that win over it, keys taken away.
+
+| Key | Type | Required | What |
+| --- | --- | --- | --- |
+| `:layers` | a profile stack such as ((emacs editing) (vscode app window)) | no | The key profile stack, later layers winning; omitted: the default (VS Code) |
+| `:pending-layers` | a profile stack such as ((vim app editing window)) | no | A stack waiting for its modal engine to be installed (drgnx sync) |
+| `:bind` | list of (ID KEY… [:map MAP]) | no | Command id → keys, winning over every layer |
+| `:unbind` | list of symbol | no | Command ids that get no key |
+| `:mac-option` | characters or meta | no | What the left Option key does on a Mac with VS Code's keys |
+| `:tty-fallback` | any | no | Chord → another Alt key for it, in a legacy terminal: (("C-S-p" . "M-Z")) |
+
 ## layouts.eld
 
 Folder: config. Format: 1. Read: when it changes. On a mistake: its last good copy, else the defaults.
