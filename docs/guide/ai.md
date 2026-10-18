@@ -115,7 +115,9 @@ overwrite it.
 
 **Ask the Codebase…** (Vim `SPC a q`; the palette) answers a question about the project from its own code:
 1. Up to six of the question's words (four letters or more) are searched for with ripgrep (find and grep, any POSIX or BSD one, without it), never in dot files or directories (`.env`, `.git`) — what
-   is found goes to a model.
+   is found goes to a model. Without ripgrep (which also honours `.gitignore`), the folders `node_modules`, `vendor`,
+   `target`, `dist`, `build` and `__pycache__` are skipped by name. A search that runs longer than 10 s
+   (`drgnx-ai-search-timeout`) is cut off and the question goes on without code; lines are cut to 500 characters.
 2. The five files that hold the most of them each give a snippet around their first match.
 3. The snippets and the question go to the `chat` role.
 

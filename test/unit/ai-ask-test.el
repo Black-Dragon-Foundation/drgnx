@@ -113,6 +113,72 @@ provider `o' served by a mock answering ANSWER, its LOG."
         (should (string-search "(twist widget)" sent))
         (should-not (string-search "hidden-env-value" sent))))))
 
+(defun drgnx-ai-ask-test--ask-without-rg (root grep-script)
+  "Ask about ROOT's project with ripgrep hidden and GREP-SCRIPT (shell text) as the `grep' first on PATH."
+  (let ((bin (concat root "bin/")))
+    (make-directory bin t)
+    (write-region (concat "#!/bin/sh\n" grep-script "\n") nil (concat bin "grep") nil 'silent)
+    (set-file-modes (concat bin "grep") #o755)
+    (let ((orig (symbol-function 'executable-find))
+          (exec-path (cons bin exec-path))
+          (process-environment (cons (concat "PATH=" bin ":" (getenv "PATH")) process-environment)))
+      (cl-letf (((symbol-function 'executable-find) (lambda (name &rest r) (and (not (equal name "rg")) (apply orig name r)))))
+        (drgnx-ai-ask "where do we frobnicate?" (concat root "proj/"))))))
+
+(defun drgnx-ai-ask-test--sent (log)
+  (with-temp-buffer (insert-file-contents log) (buffer-string)))
+
+(ert-deftest drgnx-ai-ask/vendored-and-build-trees-are-not-searched ()
+  ;; without ripgrep there is no .gitignore: the usual dependency and build trees are skipped by name
+  (drgnx-ai-ask-test--with "ok"
+    (dolist (d '("node_modules/pkg" "vendor/x" "target/debug" "dist" "build" "__pycache__"))
+      (make-directory (concat root "proj/" d) t)
+      (write-region (format "frobnicate in-%s\n" (replace-regexp-in-string "/" "-" d)) nil
+                    (concat root "proj/" d "/f.txt") nil 'silent))
+    (drgnx-ai-ask-test--ask-without-rg root (format "exec %s \"$@\"" (executable-find "grep")))
+    (should (drgnx-ai-ask-test--answer))
+    (let ((sent (drgnx-ai-ask-test--sent log)))
+      (should (string-search "(twist widget)" sent))
+      (should-not (string-search "in-node_modules" sent))
+      (should-not (string-search "in-vendor" sent))
+      (should-not (string-search "in-target" sent))
+      (should-not (string-search "in-dist" sent))
+      (should-not (string-search "in-build" sent))
+      (should-not (string-search "in-__pycache__" sent)))))
+
+(ert-deftest drgnx-ai-ask/a-search-that-never-ends-is-cut-off-and-ask-answers-without-context ()
+  (drgnx-ai-ask-test--with "ok"
+    (let ((drgnx-ai-search-timeout 0.5) (t0 (float-time)))
+      (drgnx-ai-ask-test--ask-without-rg root "exec sleep 8")
+      (should (drgnx-ai-ask-test--answer 4))
+      (should (< (- (float-time) t0) 4))
+      (should-not (drgnx-ai-ask-test--sent-p log "(twist widget)"))
+      (should-not (seq-find (lambda (p) (equal (process-name p) "drgnx-ai-grep")) (process-list)))
+      (should-not drgnx-ai--active))))
+
+(defun drgnx-ai-ask-test--sent-p (log needle)
+  (string-search needle (drgnx-ai-ask-test--sent log)))
+
+(ert-deftest drgnx-ai-ask/a-huge-line-is-cut-before-it-reaches-the-model ()
+  (drgnx-ai-ask-test--with "ok"
+    (write-region (concat "frobnicate " (make-string 200000 ?q) "\n") nil (concat root "proj/src/big.el") nil 'silent)
+    ;; a grep that reports a 2 MB line, as for a minified file
+    (drgnx-ai-ask-test--ask-without-rg
+     root "printf './src/big.el:1:frobnicate '; head -c 2000000 /dev/zero | tr '\\0' q; printf '\\n'")
+    (should (drgnx-ai-ask-test--answer))
+    (let ((sent (drgnx-ai-ask-test--sent log)))
+      (should (string-search "big.el" sent))                              ; its snippet came
+      (should-not (string-match-p "q\\{600\\}" sent)))))
+
+(ert-deftest drgnx-ai-ask/stop-kills-the-search ()
+  (drgnx-ai-ask-test--with "ok"
+    (drgnx-ai-ask-test--ask-without-rg root "exec sleep 8")
+    (should (seq-find (lambda (p) (and (equal (process-name p) "drgnx-ai-grep") (process-live-p p))) (process-list)))
+    (drgnx-ai-stop)
+    (should-not (seq-find (lambda (p) (and (equal (process-name p) "drgnx-ai-grep") (process-live-p p))) (process-list)))
+    (accept-process-output nil 0.3)
+    (should-not (get-buffer "*AI answer*"))))
+
 (ert-deftest drgnx-ai-ask/hidden-files-never-reach-the-model ()
   ;; .env, .git and other dot files: never searched, with ripgrep or with grep
   (dolist (rg (if (executable-find "rg") '(t nil) '(nil)))

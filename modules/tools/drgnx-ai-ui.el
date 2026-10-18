@@ -393,47 +393,74 @@ when the project has one.")
                                              (split-string (downcase question) "[^[:alnum:]_-]+" t)))))
             6))
 
+(defvar drgnx-ai-search-timeout 10
+  "Seconds the text search of Ask the Codebase may run before it is cut off (Ask then goes on without context).")
+
+(defconst drgnx-ai--line-max 500 "Longest line of a search hit or an excerpt that goes to the model.")
+
+(defun drgnx-ai--cut-lines (text)
+  "TEXT with every line cut to `drgnx-ai--line-max' characters."
+  (mapconcat (lambda (l) (if (> (length l) drgnx-ai--line-max) (substring l 0 drgnx-ai--line-max) l))
+             (split-string text "\n") "\n"))
+
 (defun drgnx-ai--grep-retriever (question root done)
-  "Files under ROOT holding the most of QUESTION's keywords (ripgrep, else grep), a snippet of each, to DONE."
+  "Files under ROOT holding the most of QUESTION's keywords (ripgrep, else grep), a snippet of each, to DONE.
+Returns the search process (or nil), so that a stopped Ask can end it.  A search still running after
+`drgnx-ai-search-timeout' seconds is killed and DONE gets nil."
   (let* ((kws (drgnx-ai--keywords question))
          (out (generate-new-buffer " *drgnx-ai-grep*" t))
          (cmd (if (executable-find "rg")
                   (append (list "rg" "--no-heading" "--line-number" "--ignore-case" "--max-count" "5" "--max-columns" "300")
                           (seq-mapcat (lambda (k) (list "-e" k)) kws) (list "."))
                 ;; as ripgrep does: never a dot file or directory (.env, .git, .authinfo) — what is found goes to a
-                ;; model.  find prunes them (".?*": the starting "." itself is searched) and runs grep with options
-                ;; BSD grep (macOS) has too: its --exclude/--exclude-dir are not GNU's
-                (append (list "find" "." "(" "-name" ".?*" "-prune" ")" "-o" "-type" "f" "-exec"
-                              "grep" "-InHi" "-m" "5")
+                ;; model — nor the usual dependency and build trees (ripgrep also reads .gitignore; this cannot).
+                ;; find prunes them (".?*": the starting "." itself is searched) and runs grep with options BSD grep
+                ;; (macOS) has too: its --exclude/--exclude-dir are not GNU's
+                (append (list "find" "." "(" "-name" ".?*" "-o" "-name" "node_modules" "-o" "-name" "vendor"
+                              "-o" "-name" "target" "-o" "-name" "dist" "-o" "-name" "build" "-o" "-name" "__pycache__"
+                              ")" "-prune" "-o" "-type" "f" "-exec" "grep" "-InHi" "-m" "5")
                         (seq-mapcat (lambda (k) (list "-e" k)) kws) (list "{}" "+")))))
-    (if (null kws) (progn (kill-buffer out) (funcall done nil))
-      (let ((default-directory (file-name-as-directory root)))
-        (make-process
-         :name "drgnx-ai-grep" :buffer out :command cmd :noquery t :connection-type 'pipe
-         :sentinel
-         (lambda (p _)
-           (unless (process-live-p p)
-             (let ((hits (make-hash-table :test #'equal)))
-               (with-current-buffer out
-                 (goto-char (point-min))
-                 (while (re-search-forward "^\\(?:\\./\\)?\\([^:\n]+\\):\\([0-9]+\\):\\(.*\\)$" nil t)
-                   (let* ((file (match-string 1)) (line (string-to-number (match-string 2))) (text (downcase (match-string 3)))
-                          (e (or (gethash file hits) (puthash file (list :line line :kws nil) hits))))
-                     (dolist (k kws) (when (string-search k text) (cl-pushnew k (plist-get e :kws) :test #'equal)))
-                     (puthash file (plist-put e :kws (plist-get e :kws)) hits))))
-               (kill-buffer out)
-               (let ((ranked (seq-take (sort (let (l) (maphash (lambda (f e) (push (cons f e) l)) hits) l)
-                                             (lambda (a b) (> (length (plist-get (cdr a) :kws)) (length (plist-get (cdr b) :kws)))))
-                                       5)))
-                 (funcall done
-                          (mapcar (lambda (fe)
-                                    (let ((line (plist-get (cdr fe) :line)))
-                                      (list :file (car fe) :line line
-                                            :text (with-temp-buffer
-                                                    (insert-file-contents (expand-file-name (car fe) root))
-                                                    (goto-char (point-min)) (forward-line (max 0 (- line 4)))
-                                                    (buffer-substring-no-properties (point) (progn (forward-line 10) (point)))))))
-                                  ranked)))))))))))
+    (if (null kws) (progn (kill-buffer out) (funcall done nil) nil)
+      (let* ((default-directory (file-name-as-directory root))
+             (timer nil)
+             (proc
+              (make-process
+               :name "drgnx-ai-grep" :buffer out :command cmd :noquery t :connection-type 'pipe
+               :sentinel
+               (lambda (p _)
+                 (unless (process-live-p p)
+                   (when (timerp timer) (cancel-timer timer))
+                   (let ((hits (make-hash-table :test #'equal)))
+                     (with-current-buffer out
+                       (goto-char (point-min))
+                       (while (and (not (process-get p :cut)) (not (process-get p :dropped))
+                                   ;; a hit's text is cut at the line maximum: a minified file is one huge line
+                                   (re-search-forward "^\\(?:\\./\\)?\\([^:\n]+\\):\\([0-9]+\\):\\(.\\{0,500\\}\\).*$" nil t))
+                         (let* ((file (match-string 1)) (line (string-to-number (match-string 2))) (text (downcase (match-string 3)))
+                                (e (or (gethash file hits) (puthash file (list :line line :kws nil) hits))))
+                           (dolist (k kws) (when (string-search k text) (cl-pushnew k (plist-get e :kws) :test #'equal)))
+                           (puthash file (plist-put e :kws (plist-get e :kws)) hits))))
+                     (kill-buffer out)
+                     (cond
+                      ((process-get p :dropped))                     ; stopped: nobody waits for the answer
+                      ((process-get p :cut) (funcall done nil))
+                      (t
+                       (let ((ranked (seq-take (sort (let (l) (maphash (lambda (f e) (push (cons f e) l)) hits) l)
+                                                     (lambda (a b) (> (length (plist-get (cdr a) :kws)) (length (plist-get (cdr b) :kws)))))
+                                               5)))
+                         (funcall done
+                                  (mapcar (lambda (fe)
+                                            (let ((line (plist-get (cdr fe) :line)))
+                                              (list :file (car fe) :line line
+                                                    :text (with-temp-buffer
+                                                            (insert-file-contents (expand-file-name (car fe) root) nil 0 2000000)
+                                                            (goto-char (point-min)) (forward-line (max 0 (- line 4)))
+                                                            (drgnx-ai--cut-lines
+                                                             (buffer-substring-no-properties (point) (progn (forward-line 10) (point))))))))
+                                          ranked)))))))))))
+        (setq timer (run-with-timer drgnx-ai-search-timeout nil
+                                    (lambda () (when (process-live-p proc) (process-put proc :cut t) (delete-process proc)))))
+        proc))))
 
 (defun drgnx-ai--answer-buffer (question answer snippets root)
   (with-current-buffer (get-buffer-create "*AI answer*")
@@ -456,23 +483,29 @@ when the project has one.")
 snippets found: CALLBACK gets (ANSWER INFO SNIPPETS), ANSWER nil when no provider answered (INFO's :error says
 why).  INTERACTIVE as for `drgnx-ai-request'.  Ask the Codebase, and onboarding's test of it.  Returns a function
 that stops it (CALLBACK never runs)."
-  (let ((left (length drgnx-ai-retrievers)) (snippets nil) (stopped nil) (h nil))
+  (let ((left (length drgnx-ai-retrievers)) (snippets nil) (stopped nil) (h nil) (searches nil))
     (dolist (r drgnx-ai-retrievers)
-      (funcall r question root
-               (lambda (found)
-                 (setq snippets (append snippets found))
-                 (when (and (zerop (setq left (1- left))) (not stopped))
-                   (setq h (drgnx-ai-request
-                            'chat 'chat
-                            (list :messages
-                                  (vector (list :role "system" :content "Answer the question about this codebase from the excerpts given.  Cite the files you use as path:line.  Say so when the excerpts do not answer it.")
-                                          (list :role "user"
-                                                :content (concat "Question: " question "\n\nExcerpts:\n"
-                                                                 (mapconcat (lambda (s) (format "--- %s:%d\n%s" (plist-get s :file) (plist-get s :line) (plist-get s :text)))
-                                                                            snippets "\n")))))
-                            (lambda (answer info) (funcall callback answer info snippets))
-                            :chain chain :interactive interactive))))))
-    (lambda () (setq stopped t) (when h (drgnx-ai-cancel h)))))
+      (push
+       (funcall r question root
+                (lambda (found)
+                  (setq snippets (append snippets found))
+                  (when (and (zerop (setq left (1- left))) (not stopped))
+                    (setq h (drgnx-ai-request
+                             'chat 'chat
+                             (list :messages
+                                   (vector (list :role "system" :content "Answer the question about this codebase from the excerpts given.  Cite the files you use as path:line.  Say so when the excerpts do not answer it.")
+                                           (list :role "user"
+                                                 :content (concat "Question: " question "\n\nExcerpts:\n"
+                                                                  (mapconcat (lambda (s) (format "--- %s:%d\n%s" (plist-get s :file) (plist-get s :line) (plist-get s :text)))
+                                                                             snippets "\n")))))
+                             (lambda (answer info) (funcall callback answer info snippets))
+                             :chain chain :interactive interactive)))))
+       searches))
+    (lambda ()
+      (setq stopped t)
+      (when h (drgnx-ai-cancel h))
+      ;; a retriever that returns its process lets Stop end the search too
+      (dolist (p searches) (when (processp p) (process-put p :dropped t) (delete-process p))))))
 
 (defun drgnx-ai-ask (question &optional root)
   "Ask QUESTION about the project at ROOT (default: this project): what it names is looked up in the code, the
