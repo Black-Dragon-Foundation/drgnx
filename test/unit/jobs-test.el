@@ -37,6 +37,9 @@
                  (buffer-string)))
           (id (car (last (split-string out "\n" t)))))
      (should (eq (drgnx-jobs-test--status id) 'running))
+     ;; its own session, not this Emacs's (macOS's attributes have no session)
+     (let ((sess (alist-get 'sess (process-attributes (plist-get (drgnx-jobs-get id) :pid)))))
+       (when sess (should-not (eql sess (alist-get 'sess (process-attributes (emacs-pid)))))))
      (should (drgnx-jobs-test--wait (lambda () (eq (drgnx-jobs-test--status id) 'exited))))
      (should (eql (plist-get (drgnx-jobs-get id) :exit) 0))
      (should (string-match-p "done" (drgnx-jobs-log id))))))
@@ -68,7 +71,8 @@
        (when (assq 'sess attrs) (should (eql (alist-get 'sess attrs) pid))))   ; macOS's attributes have no session
      (drgnx-jobs-stop id)
      (should (drgnx-jobs-test--wait (lambda () (memq (drgnx-jobs-test--status id) '(exited stopped))) 3))
-     (should-not (seq-find (lambda (p) (string-match-p (regexp-quote marker) (or (cdr (assq 'args (process-attributes p))) "")))
+     (should-not (seq-find (lambda (p)
+                             (string-match-p (regexp-quote marker) (or (cdr (assq 'args (process-attributes p))) "")))
                            (list-system-processes))))))
 
 (ert-deftest drgnx-jobs/stop-ends-the-whole-job ()
@@ -86,7 +90,8 @@
                  (with-temp-file sysctl (insert "#!/bin/sh\n[ \"$*\" = \"-n kern.bootsessionuuid\" ] || exit 1\n" body))
                  (set-file-modes sysctl #o755))))
     (unwind-protect
-        (let ((exec-path (list bin)) (system-type 'darwin) (drgnx-jobs--boot-id-cache nil)   ; found ids are kept: ask afresh each time
+        ;; a found id is kept (M12a-8): the cache is reset for each question
+        (let ((exec-path (list bin)) (system-type 'darwin) (drgnx-jobs--boot-id-cache nil)
               (process-environment (cons (concat "PATH=" bin path-separator (getenv "PATH")) process-environment)))
           (funcall fake "echo '  9D3B5C2E-1F4A-4B6C-8E7D-0A1B2C3D4E5F  '\n")
           (should (equal (drgnx-jobs--boot-id) "9D3B5C2E-1F4A-4B6C-8E7D-0A1B2C3D4E5F"))
@@ -144,7 +149,8 @@
    (let* ((id "20261017-000000-3") (dir (expand-file-name (concat "drgnx/jobs/" id) (getenv "XDG_STATE_HOME")))
           (start (alist-get 'start (process-attributes (emacs-pid))))
           (write (lambda (s) (with-temp-file (expand-file-name "job.eld" dir)
-                               (prin1 (list :id id :name "me" :launcher 'detached :boot (drgnx-jobs--boot-id) :start s) (current-buffer))))))
+                               (prin1 (list :id id :name "me" :launcher 'detached :boot (drgnx-jobs--boot-id) :start s)
+                                      (current-buffer))))))
      (make-directory dir t)
      (unwind-protect
          (progn
@@ -208,7 +214,8 @@
            (drgnx-jobs-stop id)
            (should (drgnx-jobs-test--wait (lambda () (not (eq (drgnx-jobs-test--status id) 'running))) 5))
            (should (memq (drgnx-jobs-test--status id) '(stopped exited gone)))
-           (should-not (eql 0 (call-process "systemctl" nil nil nil "--user" "--quiet" "is-active" (concat "drgnx-job-" id)))))
+           (should-not (eql 0 (call-process "systemctl" nil nil nil "--user" "--quiet" "is-active"
+                                            (concat "drgnx-job-" id)))))
        (when id (call-process "systemctl" nil nil nil "--user" "stop" (concat "drgnx-job-" id)))))))
 
 ;;;; Deferred pass B, batch 9
@@ -226,7 +233,8 @@
   ;; M12a-9: a clear error before anything is created or run, not a "file is missing" from `call-process'
   (drgnx-jobs-test--with
    (let ((drgnx-jobs--setsid nil) (ran nil) (real-find (symbol-function 'executable-find)))
-     (cl-letf (((symbol-function 'executable-find) (lambda (name &rest r) (and (not (equal name "perl")) (apply real-find name r))))
+     (cl-letf (((symbol-function 'executable-find)
+                (lambda (name &rest r) (and (not (equal name "perl")) (apply real-find name r))))
                ((symbol-function 'call-process) (lambda (&rest a) (push a ran) 0)))
        (let ((err (should-error (drgnx-jobs-start "x" '("true")) :type 'user-error)))
          (should (equal (cadr err) "Detached jobs need setsid or perl"))))
