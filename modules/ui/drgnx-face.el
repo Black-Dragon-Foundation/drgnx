@@ -20,6 +20,7 @@
 (declare-function window-divider-mode "frame")
 (declare-function drgnx-statusbar-setup "drgnx-statusbar")
 (declare-function drgnx-quickhelp-setup "drgnx-quickhelp")
+(declare-function drgnx-topline-setup "drgnx-topline")
 (declare-function drgnx-tty-popups-ascii-p "drgnx-tty-popups")
 
 (defgroup drgnx-face nil
@@ -81,7 +82,8 @@ Toggle for this session with the command Toggle Menu Bar."
 (defcustom drgnx-face-glyphs
   '((handle "⠿" . "::") (close "✕" . "x") (branch "⑂" . "Y") (warning "⚠" . "!") (ok "✓" . "+")
     (busy "◎" . "@") (waiting "◐" . "?") (paused "⏸" . "||") (ahead "↑" . "^") (behind "↓" . "v")
-    (dot "●" . "*") (circle "○" . "o") (sep " · " . " | ") (flag "⚑" . "#"))
+    (dot "●" . "*") (circle "○" . "o") (sep " · " . " | ") (flag "⚑" . "#")
+    (diamond "◆" . "<>") (search "⌕" . "/") (minimize "–" . "-") (maximize "▢" . "[]"))
   "The glyphs drgnx draws: NAME → (UNICODE . ASCII).  The ASCII form is used on a terminal frame that is not UTF-8.
 Change one to suit your font; `drgnx-face-glyph' reads this."
   :type '(alist :key-type symbol :value-type (cons (string :tag "Unicode") (string :tag "ASCII")))
@@ -223,6 +225,7 @@ F10's `menu-bar-open' has no menu to open on a toolkit frame whose bar is hidden
   (define-key global-map [remap menu-bar-open] #'drgnx-face-menu)   ; F10 opens the menu as text while the bar is hidden
   (when (fboundp 'drgnx-statusbar-setup) (drgnx-statusbar-setup))   ; the status bar (drgnx-statusbar.el)
   (when (fboundp 'drgnx-quickhelp-setup) (drgnx-quickhelp-setup))   ; quick help (drgnx-quickhelp.el)
+  (when (fboundp 'drgnx-topline-setup) (drgnx-topline-setup))   ; the top line (drgnx-topline.el)
   (add-hook 'after-make-frame-functions #'drgnx-face-apply-frame)
   (add-hook 'after-change-major-mode-hook #'drgnx-face-line-numbers-maybe)
   (setq drgnx-face--active t)
@@ -253,7 +256,9 @@ F10's `menu-bar-open' has no menu to open on a toolkit frame whose bar is hidden
                                  (drgnx-quickhelp-hover . "quick help when the mouse rests on a symbol")
                                  (drgnx-quickhelp-delay . "seconds the mouse rests before quick help shows")
                                  (drgnx-quickhelp-max-lines . "most lines of docs on the card")
-                                 (drgnx-quickhelp-strip-lines . "height of the quick help strip in a terminal")))
+                                 (drgnx-quickhelp-strip-lines . "height of the quick help strip in a terminal")
+                                 (drgnx-topline . "the top line: project, branch, the keys that open everything")
+                                 (drgnx-topline-min-lines . "fewest lines a terminal needs to show the top line")))
 
 (provide 'drgnx-face)
 ;;; drgnx-face.el ends here

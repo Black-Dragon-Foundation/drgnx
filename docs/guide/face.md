@@ -61,6 +61,8 @@ as a box. Change one for your font:
 | `ok` | ✓ | `+` | `circle` | ○ | `o` |
 | `busy` | ◎ | `@` | `waiting` | ◐ | `?` |
 | `sep` | ` · ` | ` \| ` | `flag` | ⚑ | `#` |
+| `diamond` | ◆ | `<>` | `search` | ⌕ | `/` |
+| `minimize` | – | `-` | `maximize` | ▢ | `[]` |
 
 For code: `(drgnx-face-glyph 'close)` is the string for the selected frame, `(drgnx-face-glyph 'close FRAME)` for another.
 
@@ -161,6 +163,42 @@ with faces: a `%` is a percent sign (not a mode-line construct) and `display` pr
 count its columns. One that signals an error shows nothing, is skipped for 10 seconds and then tried again (when it
 works, it comes back; when it fails again, it is skipped for another 10 seconds), and the message is kept in
 `drgnx-statusbar--errors` (no message per redisplay). Defining it again gives it a new chance at once.
+
+## The top line
+
+A quiet line along the top of the frame says where you are and where to start:
+
+```
+ ◆ drgnx · main                 ⌕ C-p files · C-S-p commands · C-k C-r all keys
+```
+
+On the left, the project and branch of the editor you used last (the folder of the project's root, and the branch
+git put in the file's version-control text; with no project it says `drgnx`, with no git it leaves the branch out).
+In the middle, the three keys that open everything, as the profile you chose has them: **Quick Open** (files),
+the **Command Palette** (commands) and **Keyboard Shortcuts** (all keys). Each one is a button: click `C-S-p
+commands` and the palette opens. A command with no key of its own in your profile shows the key Emacs gives it
+(`C-x p f` for files in the Emacs profile), and one with none at all is left out. In a terminal a chord the terminal
+cannot send is shown the way it can be typed (the same form the palette and the key sheet show). When the frame is
+too narrow for the hint, the hint goes first and the place is cut with an ellipsis last: the line never wraps.
+
+When drgnx draws the window's title itself (a frame without its own title bar, a setting of the face that arrives
+with window titles) the right end has `– ▢ ✕` (minimise, maximise, close) and the empty part of the line moves the
+window when you drag it. With your window manager's own title bar those buttons would be a second set, so they are
+not there; until that setting exists they never are.
+
+The line is Emacs's tab bar with no tabs, since drgnx has no workspaces. It only reads what is already known (the
+branch from the file's version-control text, never by running git), so it costs nothing when you type. A
+`tab-bar-format` of your own is never replaced: if you set one, the top line stays off, and turning the setting off
+puts back what it changed. A terminal with fewer than 20 lines shows no line at all (it needs the room).
+
+| Setting | Default | What it does |
+|---|---|---|
+| `drgnx-topline` | `t` | Show the top line. Set it to `nil` in `config.el` (or Customize) to take it away. |
+| `drgnx-topline-min-lines` | `20` | A terminal frame with fewer lines than this shows none; windows always show it. |
+
+Its faces are `drgnx-topline` (the quiet text, inherits `shadow` over `header-line`) and `drgnx-topline-strong`
+(the project and the keys, inherits `bold` over `header-line`); the line itself takes the theme's `header-line`
+look. The glyphs `diamond`, `search`, `minimize` and `maximize` are in the table above.
 
 ## Quick help
 

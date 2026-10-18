@@ -29,7 +29,8 @@ setup changes neither the dividers nor the faces of the test process."
          (drgnx-face-inline-problems drgnx-face-inline-problems)
          (line-spacing line-spacing)
          (drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil))
-     (cl-letf (((symbol-function 'window-divider-mode)
+     (cl-letf (((symbol-function 'drgnx-topline-setup) #'ignore)   ; the top line turns the tab bar on: mod-topline-test.el
+               ((symbol-function 'window-divider-mode)
                 (lambda (&optional arg) (push arg drgnx-face-test--mode-calls) (setq window-divider-mode (and arg (> arg 0)))))
                ((symbol-function 'face-spec-set)
                 (lambda (face spec &optional type) (push (list face spec type) drgnx-face-test--spec-calls))))
