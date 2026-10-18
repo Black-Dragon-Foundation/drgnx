@@ -193,6 +193,10 @@ The eat terminal runs COMMAND with SWITCHES directly: no shell, so no shell conf
       (let ((spec (cdr (assq 'tools/terminal-eat drgnx-modules--table))))
         (when (and spec (not (eq (plist-get (cdr (assq 'tools/terminal-eat (drgnx-modules-report))) :status) 'ok)))
           (drgnx-modules--run-one 'tools/terminal-eat spec 'startup)))
+      ;; never measure a terminal without the module (its key split, its GC timing) and not know it
+      (unless (eq (plist-get (cdr (assq 'tools/terminal-eat (drgnx-modules-report))) :status) 'ok)
+        (error "The terminal workloads need the tools/terminal-eat module to run (status %S)"
+               (plist-get (cdr (assq 'tools/terminal-eat (drgnx-modules-report))) :status)))
       (defvar drgnx-perf--term nil "The terminal's buffer.")
       (defvar drgnx-perf--term-tick 0 "The terminal buffer's modification tick when the keys began.")
       (defun drgnx-perf--term-open ()

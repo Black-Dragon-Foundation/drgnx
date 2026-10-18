@@ -96,6 +96,7 @@ after another (the last repeats).  Binds `history' (the history file) and `start
         (should (consp (read setup)))
         (should (string-match-p (regexp-quote (cadr spec)) setup))
         (should (string-match-p "tools/terminal-eat" setup))   ; the session has no eat package at start: the module runs here
+        (should (string-match-p "need the tools/terminal-eat module" setup))   ; and the workload stops when it did not reach ok
         (should-not (string-match-p "\\.bashrc\\|\\.zshrc\\|SHELL" setup))))
     (should (string-match-p "seq 1 2000" (plist-get (cdr (assq 'terminal-output ws)) :setup)))))
 

@@ -57,8 +57,8 @@ _drgnx() {
         case "$cmd $sub" in
           'open '*) words='--check --wait' ;;
           'doctor '*) words='--json --dev' ;;
-          'test '*) words='--ui --scenario --config --bench --perf --audit --soak --container --install' ;;
-          'sync '*) words='--offline --seed' ;;
+          'test '*) words='--one-process --ui --scenario --config --bench --perf --audit --soak --container --install' ;;
+          'sync '*) words='--offline --seed --prune --dry-run' ;;
           'lock '*) words='--ship' ;;
           'onboard '*) words='--non-interactive --again --preset --keys --theme --roots --todos --step' ;;
           'check '*) words='--no-perf --no-gui --jobs --shards' ;;

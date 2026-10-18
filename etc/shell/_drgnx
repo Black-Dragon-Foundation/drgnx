@@ -49,14 +49,14 @@ case $cmd in
   doctor)
     _arguments '--json[machine-readable]' '--dev[also the tools to develop drgnx]' ;;
   test)
-    _arguments '--ui[GUI tests in a headless session]' '--scenario[behaviour scenarios]' \
+    _arguments '--one-process[every test file in one Emacs]' '--ui[GUI tests in a headless session]' '--scenario[behaviour scenarios]' \
       '--config[configuration of the session]:configuration:(drgnx gryphn)' \
       '--bench[the workbench vs treemacs and ibuffer]' '--perf[input latency, redisplay, frames, GC]' \
       '--audit[what each hook function costs]' '--soak[the workloads in a loop]' \
       '--container[inside a container]' '--install[install.sh in fresh distribution containers]' \
       '*:image:(fedora-44 debian-trixie ubuntu-26.04 fedora-45 archlinux)' ;;
   sync)
-    _arguments '--offline[from the lock and the cache]' '--seed[copy another elpa first]:directory:_files -/' ;;
+    _arguments '--offline[from the lock and the cache]' '--seed[copy another elpa first]:directory:_files -/' '--prune[remove packages the manifest no longer needs]' '--dry-run[with --prune: only list them]' ;;
   lock)
     _arguments '--ship[write etc/drgnx.lock.eld]' ;;
   onboard)

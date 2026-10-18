@@ -51,6 +51,8 @@
                          ((symbol-function 'featurep) (lambda (f &rest r) (and (not (eq f 'eat)) (apply orig f r)))))
                  (drgnx-modules-run 'startup))))
            ,@body)
+       (advice-remove 'eat--process-output-queue #'drgnx-terminal-eat--collect-in-gap)
+       (remove-hook 'post-gc-hook #'drgnx-terminal-eat--gc-note)
        (drgnx-rules-mode -1)
        (drgnx-wb-area-hide 'panel)
        (dolist (b (buffer-list))
@@ -191,15 +193,15 @@
 
 (ert-deftest drgnx-terminal/quit-and-save-never-ask-eats-question ()
   (unless (drgnx-terminal-test--eat-dir) (ert-skip drgnx-terminal-test--skip))
-  (skip-unless (or (fboundp 'drgnx-session-quit-confirm)
-                   (ert-skip "drgnx-session-quit-confirm arrives with pass B (deferred-b); the quit half runs after it merges")))
   (let* ((dir (make-temp-file "drgnx-term" t))
-         (script (drgnx-terminal-test--script dir "read x"))
+         (script (drgnx-terminal-test--script dir "sleep 30 &\nread x"))
          (process-environment (cons (concat "SHELL=" script) process-environment)))
     (unwind-protect
         (drgnx-terminal-test--fresh t
-          ;; a command is running, as eat's shell integration reports it (an idle shell asks nothing)
-          (set-process-query-on-exit-flag (get-buffer-process (drgnx-terminal-new dir)) t)
+          ;; a program is running: the shell has a child (the quit path refreshes the flag from the children; an idle
+          ;; shell asks nothing)
+          (let ((proc (get-buffer-process (drgnx-terminal-new dir))))
+            (should (drgnx-terminal-test--wait-until (lambda () (drgnx-terminal-test--children proc)))))
           (let ((state (expand-file-name "state.eld" dir)) (asked nil) (killed 0))
             ;; saving the workbench asks nothing, eat running or not
             (let ((inhibit-interaction t)) (should (drgnx-persist-save state)))
@@ -356,15 +358,16 @@
       (should (process-query-on-exit-flag proc))
       (should-not (process-query-on-exit-flag idle-proc)))))
 
-;;;; GC pauses off the typing path (M12e: a terminal flooding output allocates ~500 bytes per output line)
+;;;; GC pauses off the typing path (M12e perf: a terminal flooding output allocates ~500 bytes per output line)
 
-(defun drgnx-terminal-test--collects-p (idle consed-share)
-  "Whether the gap hook collects when Emacs has been idle IDLE seconds (nil: it is not idle) and CONSED-SHARE of
-`gc-cons-threshold' has been consed since the last collection."
+(defun drgnx-terminal-test--collects-p (idle consed-share &optional pending)
+  "Whether the gap hook collects when Emacs has been idle IDLE seconds (nil: it is not idle), CONSED-SHARE of
+`gc-cons-threshold' has been consed since the last collection, and input is waiting when PENDING."
   (let* ((gc-cons-threshold 1000000)
          (drgnx-terminal-eat--gc-base (- (drgnx-terminal-eat--consed) (* consed-share gc-cons-threshold)))
          (collected nil))
     (cl-letf (((symbol-function 'current-idle-time) (lambda () (and idle (seconds-to-time idle))))
+              ((symbol-function 'input-pending-p) (lambda (&rest _) pending))
               ((symbol-function 'garbage-collect) (lambda () (setq collected t) nil)))
       (drgnx-terminal-eat--collect-in-gap))
     collected))
@@ -373,21 +376,36 @@
   (drgnx-terminal-test--fresh nil
     (let ((drgnx-terminal-eat-gc-quiet 0.02))
       (should (drgnx-terminal-test--collects-p 0.05 0.9))        ; quiet long enough, 90% of the threshold consed
+      (should-not (drgnx-terminal-test--collects-p 0.05 0.9 t))  ; a key is waiting to be read
       (should-not (drgnx-terminal-test--collects-p 0.005 0.9))   ; a key was handled a moment ago: the next batch may be in its span
       (should-not (drgnx-terminal-test--collects-p nil 0.9))     ; not idle at all (a command is running)
       (should-not (drgnx-terminal-test--collects-p 0.05 0.3)))   ; plenty of room left: nothing to do yet
     (let ((drgnx-terminal-eat-gc-quiet nil))
-      (should-not (drgnx-terminal-test--collects-p 0.05 0.9)))))  ; switched off
+      (should-not (drgnx-terminal-test--collects-p 0.05 0.9)))   ; switched off
+    (let ((drgnx-terminal-eat-gc-quiet "0.02"))
+      (should-not (drgnx-terminal-test--collects-p 0.05 0.9)))))  ; a mistyped value never signals in eat's output path
 
 (ert-deftest drgnx-terminal/gc-gap-counts-from-the-last-collection ()
   (drgnx-terminal-test--fresh nil
     (let ((drgnx-terminal-eat--gc-base nil))
       (drgnx-terminal-eat--gc-note)
-      (should (< (- (drgnx-terminal-eat--consed) drgnx-terminal-eat--gc-base) 100000)))
-    (let ((drgnx-terminal-eat--gc-base 0))
-      (make-list 1000 nil)
+      (should (< (abs (- (drgnx-terminal-eat--consed) drgnx-terminal-eat--gc-base)) 10000)))
+    (let ((drgnx-terminal-eat--gc-base 0) (before (drgnx-terminal-eat--consed)))
+      (make-list 1000 nil)                ; 16000 bytes of conses
       (drgnx-terminal-eat--gc-note)
-      (should (> drgnx-terminal-eat--gc-base 0)))))
+      (should (>= (- drgnx-terminal-eat--gc-base before) 16000)))))
+
+(ert-deftest drgnx-terminal/gc-gap-collects-once-per-threshold ()
+  ;; after a collection (the post-gc-hook noted it) the next batch finds nothing consed: no second collection
+  (drgnx-terminal-test--fresh nil
+    (let* ((gc-cons-threshold 1000000) (drgnx-terminal-eat-gc-quiet 0.02) (collections 0)
+           (drgnx-terminal-eat--gc-base (- (drgnx-terminal-eat--consed) (* 0.9 gc-cons-threshold))))
+      (cl-letf (((symbol-function 'current-idle-time) (lambda () (seconds-to-time 0.05)))
+                ((symbol-function 'input-pending-p) (lambda (&rest _) nil))
+                ((symbol-function 'garbage-collect) (lambda () (cl-incf collections) (drgnx-terminal-eat--gc-note))))
+        (drgnx-terminal-eat--collect-in-gap)
+        (drgnx-terminal-eat--collect-in-gap)
+        (should (= collections 1))))))
 
 (ert-deftest drgnx-terminal/gc-gap-is-wired-to-eats-output-batches ()
   (unless (drgnx-terminal-test--eat-dir) (ert-skip drgnx-terminal-test--skip))
