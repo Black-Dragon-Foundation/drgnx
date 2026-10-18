@@ -38,19 +38,24 @@
           (let ((form (read (current-buffer))))
             (cond ((not (and (consp form) (proper-list-p form) (cl-evenp (length form)) (keywordp (car form))))
                    "it is not a plist like (:layers … :bind … :unbind …)")
-                  ((not (proper-list-p (plist-get form :bind))) ":bind is not a list")
-                  ((not (proper-list-p (plist-get form :unbind))) ":unbind is not a list")))))
+                  ;; plain lists only: '(…) or #'(…) would read as the symbol `quote' / `function' (and be wiped)
+                  ((not (and (proper-list-p (plist-get form :bind))
+                             (seq-every-p (lambda (e) (and (consp e) (symbolp (car e)) (proper-list-p e))) (plist-get form :bind))))
+                   ":bind is not a plain list of (ID KEY…) entries (no quote); fix it by hand")
+                  ((not (and (proper-list-p (plist-get form :unbind)) (seq-every-p #'symbolp (plist-get form :unbind))))
+                   ":unbind is not a plain list of command ids (no quote); fix it by hand")))))
     (error (format "it cannot be read (%s)" (error-message-string err)))))
 
 (defun drgnx-keys-edit--write-file (file text)
-  "Replace FILE by TEXT through a temp file, so a stale buffer is never asked about.  A symlink FILE is written
-through, so it stays a link."
+  "Replace FILE by TEXT (as UTF-8) through a temp file, so a stale buffer is never asked about.  A symlink FILE
+is written through, so it stays a link; FILE keeps its permissions (a new one gets the default ones)."
   (let* ((file (file-truename file))
+         (modes (or (file-modes file) (default-file-modes)))
          (tmp (progn (make-directory (file-name-directory file) t)
                      (make-temp-file (expand-file-name ".keys-" (file-name-directory file))))))
     (condition-case err
-        (progn (with-temp-file tmp (insert text))
-               (set-file-modes tmp #o644)
+        (progn (let ((coding-system-for-write 'utf-8-unix)) (with-temp-file tmp (insert text)))
+               (set-file-modes tmp modes)
                (rename-file tmp file t))
       (error (ignore-errors (delete-file tmp)) (signal (car err) (cdr err))))))
 
@@ -80,14 +85,16 @@ else return nil when there is none."
     found))
 
 (defun drgnx-keys-edit--ensure-list (key)
-  "Make KEY's value a list (adding KEY, or turning `nil' into `()'); return the (BEG . END) of that list."
+  "Make KEY's value a list (adding KEY, or turning a literal `nil' into `()'); return the (BEG . END) of
+that list.  Any other value is a `user-error': it is never replaced."
   (or (when-let* ((v (drgnx-keys-edit--value key)))
-        (if (eq (char-after (car v)) ?\()
-            v
-          (goto-char (car v))
-          (delete-region (car v) (cdr v))
-          (insert "()")
-          (cons (car v) (point))))
+        (cond ((eq (char-after (car v)) ?\() v)
+              ((equal (buffer-substring (car v) (cdr v)) "nil")
+               (goto-char (car v))
+               (delete-region (car v) (cdr v))
+               (insert "()")
+               (cons (car v) (point)))
+              (t (user-error "keys.eld: %s is not a plain list; fix it by hand — nothing was changed" key))))
       (let* ((start (drgnx-keys-edit--open t)) (close (1- (scan-sexps start 1))))
         (goto-char close)
         (let ((empty (save-excursion (skip-chars-backward " \t\n") (= (point) (1+ start)))))

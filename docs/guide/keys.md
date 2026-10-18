@@ -185,8 +185,11 @@ cannot be bound, a prefix it replaces) joins the list and the report then.
 - The Keyboard Shortcuts editor writes through `drgnx-keys-edit` (`core/drgnx-keys-edit.el`): `drgnx-keys-edit-bind`,
   `-add`, `-replace`, `-unbind`, `-reset`, `-reset-all` and `-undo`. Each changes one entry of `:bind` or `:unbind` and
   keeps your comments, `:layers` and the other entries as they are; an entry keeps its `:mac` keys and `:none` reason
-  (on a Mac, edits go to the `:mac` keys of an entry that has them). A symlinked `keys.eld` stays a symlink. A `keys.eld`
-  that does not read is reported and never written; a missing one is created with a header comment. Taking the last
+  (on a Mac, edits go to the `:mac` keys of an entry that has them). A symlinked `keys.eld` stays a symlink, and the
+  file keeps its permissions; it is written as UTF-8. A `keys.eld` that does not read is reported and never written, and
+  so is one whose `:bind` or `:unbind` is not a plain list written out (`:bind ((palette "C-c p"))`, not
+  `:bind '((palette "C-c p"))`): the error says to fix it by hand and nothing is changed. A missing file is created
+  with a header comment. Taking the last
   key away puts the command in `:unbind`.
 - Undo goes one step back, also after a restart: `keys.eld.undo` holds the text before and after the last change made
   by the editor. If `keys.eld` has been changed since (by you, another session, or Keyboard Profile…), undo refuses and

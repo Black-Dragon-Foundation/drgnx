@@ -301,3 +301,50 @@ in `applied'."
 
 (provide 'keys-edit-test)
 ;;; keys-edit-test.el ends here
+
+(ert-deftest drgnx-keys-edit/a-quoted-bind-list-is-refused-not-wiped ()
+  ;; A file whose :bind is written '(…) is not a plain list: every writer refuses it and leaves the bytes alone.
+  (drgnx-keys-edit-test--with-dir
+   (dolist (text '("(:bind '((palette \"C-c p\") ; my palette\n (save-all \"C-c s\")))\n"
+                   "(:bind #'((palette \"C-c p\")))\n"
+                   "(:unbind '(palette other) :bind ((a \"C-c a\")))\n"
+                   "(:bind ((palette \"C-c p\") not-an-entry))\n"
+                   "(:unbind (palette (nested)))\n"))
+     (drgnx-keys-edit-test--put text)
+     (dolist (op (list (lambda () (drgnx-keys-edit-bind 'palette "C-c x"))
+                       (lambda () (drgnx-keys-edit-unbind 'palette "C-c p"))
+                       (lambda () (drgnx-keys-edit-reset 'palette))
+                       #'drgnx-keys-edit-reset-all))
+       (let ((err (should-error (funcall op) :type 'user-error)))
+         (should (string-search "keys.eld" (cadr err)))
+         (should (string-search "not changed" (cadr err)))))
+     (should (equal (drgnx-keys-edit-test--text) text)))
+   (should (= applied 0))))
+
+(ert-deftest drgnx-keys-edit/ensure-list-only-turns-nil-into-a-list ()
+  ;; The internal guard: a value that is neither a list nor nil is an error, never replaced by ().
+  (with-temp-buffer
+    (set-syntax-table emacs-lisp-mode-syntax-table)
+    (insert "(:bind nil :unbind 5)")
+    (should (drgnx-keys-edit--ensure-list :bind))
+    (should (equal (buffer-string) "(:bind () :unbind 5)"))
+    (should-error (drgnx-keys-edit--ensure-list :unbind) :type 'user-error)
+    (should (equal (buffer-string) "(:bind () :unbind 5)"))))
+
+(ert-deftest drgnx-keys-edit/writing-keeps-the-files-mode-and-writes-utf-8 ()
+  (drgnx-keys-edit-test--with-dir
+   (drgnx-keys-edit-test--put drgnx-keys-edit-test--sample)
+   (set-file-modes (drgnx-keys-file) #o600)
+   (drgnx-keys-edit-bind 'open-file "C-c f")
+   (should (= (file-modes (drgnx-keys-file)) #o600))
+   (set-file-modes (drgnx-keys-file) #o664)
+   (drgnx-keys-edit-bind 'open-file "C-c g")
+   (should (= (file-modes (drgnx-keys-file)) #o664))
+   ;; the text is UTF-8 whatever the session's default coding is
+   (let ((file (expand-file-name "enc.eld" dir)) (old (default-value 'buffer-file-coding-system)))
+     (unwind-protect
+         (progn (setq-default buffer-file-coding-system 'iso-8859-1)
+                (drgnx-keys-edit--write-file file ";; é\n"))
+       (setq-default buffer-file-coding-system old))
+     (should (equal (string-to-list (string-to-unibyte (with-temp-buffer (insert-file-contents-literally file) (buffer-string))))
+                    '(59 59 32 195 169 10))))))
