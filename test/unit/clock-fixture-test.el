@@ -175,6 +175,33 @@
      (should (drgnx-clock-test--close (float-time (current-time)) (+ t0 0.9)))   ; the pause ended at the key
      (should (drgnx-clock-test--close (- (car drgnx-clock-test--runs) t0) 0.3)))))
 
+(ert-deftest drgnx-test-clock/advance-by-the-delay-always-fires ()
+  ;; run-at-time D then advance D fires, for every D (0.3 is not a whole number of binary floats)
+  (let (misses)
+    (drgnx-test-with-clock ()
+      (let ((d 0.001))
+        (while (<= d 3.0)
+          (let* ((fired nil) (idle-fired nil) (tm (run-at-time d nil (lambda () (setq fired t)))))
+            (drgnx-test-advance d)
+            (unless fired (push (list 'advance d) misses))
+            (cancel-timer tm)
+            (setq fired nil)
+            (run-at-time d nil (lambda () (setq fired t)))        ; a wall timer inside a pause
+            (run-with-idle-timer d nil (lambda () (setq idle-fired t)))
+            (drgnx-test-idle d)
+            (unless fired (push (list 'pause-wall d) misses))
+            (unless idle-fired (push (list 'pause-idle d) misses))
+            (mapc #'cancel-timer (append timer-list timer-idle-list)))
+          (setq d (+ d (if (< d 1.5) 0.01 0.07))))
+        (dolist (d '(0.3 0.6 0.7 2.3 0.98 1.13))
+          (let ((fired nil) (input nil))
+            (run-at-time d nil (lambda () (setq fired t)))
+            (run-with-idle-timer d nil (lambda () (setq input t)))
+            (drgnx-test-idle (+ d 1) :input-at d)               ; the key arrives as the timers fall due: nothing runs
+            (when (or fired input) (push (list 'input-at d) misses))
+            (mapc #'cancel-timer (append timer-list timer-idle-list))))))
+    (should-not misses)))
+
 (ert-deftest drgnx-test-clock/the-real-timer-lists-are-untouched ()
   (let ((before timer-list) (idle-before timer-idle-list) (copy (copy-sequence timer-list)) (idle-copy (copy-sequence timer-idle-list)))
     (drgnx-test-with-clock ()
@@ -239,6 +266,25 @@
     (timer-event-handler wall)                                 ; a cancelled timer is not run, even when called
     (timer-event-handler idle)
     (should-not ran)))
+
+(ert-deftest drgnx-test-clock/a-body-error-restores-everything ()
+  (let ((before timer-list) (reset nil))
+    (cl-letf (((symbol-function 'drgnx-timer-reset) (lambda () (setq reset t))))
+      (should-error (drgnx-test-with-clock ()
+                      (run-at-time 5 nil #'ignore)
+                      (run-with-idle-timer 5 nil #'ignore)
+                      (error "boom"))))
+    (should reset)
+    (should-not drgnx-test--active)
+    (should (eq timer-list before))
+    (should-not drgnx-test--pause)
+    (dolist (a '(float-time current-time current-idle-time input-pending-p sleep-for sit-for accept-process-output
+                            timer--activate))
+      (should-not (advice--p (advice--symbol-function a))))
+    (should (< (abs (- (float-time) (drgnx-test-real-time))) 1))
+    (should-not (input-pending-p))
+    ;; and the fixture works again
+    (drgnx-test-with-clock () (should (= 0.0 (drgnx-test-clock-now))))))
 
 (ert-deftest drgnx-test-clock/nesting-is-an-error ()
   (let ((err (should-error (drgnx-test-with-clock () (drgnx-test-with-clock () nil)))))

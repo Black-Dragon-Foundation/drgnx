@@ -37,8 +37,16 @@
   (float-time (time-subtract drgnx-test--now drgnx-test--start)))
 
 (defun drgnx-test--secs (secs)
-  "SECS as an exact Lisp time: a float is rounded to the microsecond, so repeated sums do not drift."
-  (if (floatp secs) (cons (round (* secs 1000000)) 1000000) secs))
+  "SECS as an exact Lisp time.
+A number within a microsecond of a whole millisecond becomes that exact millisecond count, as a timer's delay does
+(`drgnx-test-clock--shift'), so `run-at-time D' then `drgnx-test-advance D' always fires (0.3 is not exact in
+binary).  Any other float is rounded to the microsecond, so repeated sums do not drift."
+  (if (numberp secs)
+      (let ((ms (round (* 1000 secs))))
+        (cond ((< (abs (- secs (/ ms 1000.0))) 1e-6) (cons ms 1000))
+              ((floatp secs) (cons (round (* secs 1000000)) 1000000))
+              (t secs)))
+    secs))
 
 ;;;; The clock reads
 
@@ -168,7 +176,7 @@ run in the same order, virtual time moving with it.  From INPUT-AT seconds into 
         (while (not done)
           (let* ((idle (cl-find-if-not #'timer--triggered timer-idle-list))
                  (wall (cl-find-if-not #'timer--triggered timer-list))
-                 (idle-at (and idle (timer--time idle)))
+                 (idle-at (and idle (drgnx-test--secs (float-time (timer--time idle)))))   ; stored truncated to a picosecond
                  (wall-at (and wall (time-subtract (drgnx-test--due wall) start)))
                  (next (cond ((and idle wall) (if (time-less-p wall-at idle-at) wall idle))
                              (t (or idle wall))))
@@ -213,9 +221,9 @@ run in the same order, virtual time moving with it.  From INPUT-AT seconds into 
          (drgnx-test--accept (symbol-function 'accept-process-output))
          (layer (fboundp 'drgnx-timer--now))
          (advice (drgnx-test--advice)) names)
-    (dolist (a advice) (advice-add (nth 0 a) (nth 1 a) (nth 2 a)))
     (unwind-protect
-        (progn (funcall body)
+        (progn (dolist (a advice) (advice-add (nth 0 a) (nth 1 a) (nth 2 a)))
+               (funcall body)
                (when (and (not layer) (fboundp 'drgnx-timer--now))
                  (error "drgnx-timer was loaded inside drgnx-test-with-clock: require it first"))
                (when (and (not allow-pending) (or timer-list timer-idle-list (fboundp 'drgnx-timer-pending)))
