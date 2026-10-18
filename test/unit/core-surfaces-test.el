@@ -45,7 +45,8 @@
   ;; (Batch Emacs has no echo area, so the tip is checked through its return value.)
   (drgnx-test--with-commands
    (setq drgnx-test--ran nil)
-   (drgnx-surfaces-run 'a-cmd)
+   (let ((drgnx-surfaces-run-functions nil))   ; not the usage counter
+     (drgnx-surfaces-run 'a-cmd))
    (should drgnx-test--ran)
    (should (string-search "Able: Alpha — next time: <f19>" (drgnx-surfaces-tip (drgnx-commands-get 'a-cmd))))))
 

@@ -12,7 +12,7 @@
           (drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
           (drgnx-commands-problems nil)
           (drgnx-surfaces--usage nil) (drgnx-surfaces--usage-dirty nil)
-          (drgnx-surfaces--usage-saved nil) (drgnx-surfaces--usage-timer nil))
+          (drgnx-surfaces--usage-saved nil) (drgnx-surfaces--usage-timer nil) (drgnx-surfaces--usage-bad nil))
      (unwind-protect
          (progn
            (drgnx-command-define 'run-cmd :title "Run" :category "Test" :command #'drgnx-test--run-cmd)
@@ -85,5 +85,56 @@
      (drgnx-surfaces--count-run 'run-cmd)
      (drgnx-surfaces--usage-flush)
      (should drgnx-surfaces--usage-dirty))))
+
+;; A hand-written file with bad entries: the good parts load, counting and the readers work, the next write
+;; keeps the bad file as a .bak and leaves a clean one.
+(ert-deftest drgnx-shortcuts/usage-bad-file-is-cleaned-and-kept ()
+  (drgnx-test--with-usage
+   (let ((file (drgnx-shortcuts-usage-file)) (today (time-to-days nil)))
+     (make-directory (file-name-directory file) t)
+     (with-temp-file file
+       (insert (format "((a-cmd 3 . 4) (b-cmd 5 (zzz . 2) (%d . 2) (%d . -1)) (c-cmd 2 (foo)) (d-cmd -1) (\"x\" 1) 7 (run-cmd 4 (%d . 4)))"
+                       today today today)))
+     (should (= 3 (drgnx-surfaces-usage-count 'a-cmd)))
+     (should (= 0 (drgnx-surfaces-usage-week 'a-cmd)))
+     (should (= 5 (drgnx-surfaces-usage-count 'b-cmd)))
+     (should (= 2 (drgnx-surfaces-usage-week 'b-cmd)))
+     (should (= 0 (drgnx-surfaces-usage-week 'c-cmd)))
+     (should (= 0 (drgnx-surfaces-usage-count 'd-cmd)))
+     (dolist (id '(a-cmd b-cmd c-cmd run-cmd)) (drgnx-surfaces--count-run id))
+     (should (= 4 (drgnx-surfaces-usage-count 'a-cmd)))
+     (should (= 3 (drgnx-surfaces-usage-week 'b-cmd)))
+     (should (= 5 (drgnx-surfaces-usage-week 'run-cmd)))
+     (drgnx-surfaces--usage-flush)
+     (should (directory-files (file-name-directory file) nil "\\`command-usage\\.eld\\.bak-"))
+     (let ((back (drgnx-surfaces--usage-read file)))
+       (should-not drgnx-surfaces--usage-bad)
+       (should (equal (cdr (assq 'a-cmd back)) `(4 (,today . 1)))))
+     ;; No temp files left behind.
+     (should-not (directory-files (file-name-directory file) nil "\\`command-usage\\.eld\\.[^b]")))))
+
+(ert-deftest drgnx-shortcuts/usage-unparsable-file-counts-from-zero-and-is-kept ()
+  (drgnx-test--with-usage
+   (let ((file (drgnx-shortcuts-usage-file)))
+     (make-directory (file-name-directory file) t)
+     (with-temp-file file (insert "((a-cmd 3 "))
+     (should (= 0 (drgnx-surfaces-usage-count 'a-cmd)))
+     (drgnx-surfaces--count-run 'run-cmd)
+     (drgnx-surfaces--usage-flush)
+     (should (directory-files (file-name-directory file) nil "\\`command-usage\\.eld\\.bak-"))
+     (should (= 1 (cadr (assq 'run-cmd (drgnx-surfaces--usage-read file))))))))
+
+(ert-deftest drgnx-shortcuts/usage-forced-flush-at-exit-cancels-the-idle-timer ()
+  (drgnx-test--with-usage
+   (let ((file (drgnx-shortcuts-usage-file)))
+     (should (memq #'drgnx-surfaces--usage-flush-at-exit kill-emacs-hook))
+     (drgnx-surfaces--count-run 'run-cmd)
+     (should (timerp drgnx-surfaces--usage-timer))
+     (setq drgnx-surfaces--usage-saved (float-time))   ; a write a moment ago: only the exit may write now
+     (let ((timer drgnx-surfaces--usage-timer))
+       (drgnx-surfaces--usage-flush-at-exit)
+       (should-not drgnx-surfaces--usage-timer)
+       (should-not (memq timer timer-idle-list)))
+     (should (= 1 (cadr (assq 'run-cmd (drgnx-surfaces--usage-read file))))))))
 
 ;;; core-surfaces-run-test.el ends here

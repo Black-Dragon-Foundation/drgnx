@@ -78,15 +78,30 @@ COUNT is all runs; each (DAY . N) is N runs on day DAY (`time-to-days') for the 
   "Where the palette's run counts are kept: command-usage.eld in drgnx's state dir."
   (expand-file-name "command-usage.eld" (drgnx-state-dir)))
 
+(defvar drgnx-surfaces--usage-bad nil
+  "Non-nil when the usage file had something unreadable in it; it is kept as a .bak file before the next write.")
+
+(defun drgnx-surfaces--usage-entry (e)
+  "E as a clean (ID COUNT (DAY . N)…) entry, or nil when it is not one.  Bad day entries are dropped."
+  (when (and (consp e) (symbolp (car e)) e (natnump (cadr e)))
+    (let ((days (and (proper-list-p (cddr e))
+                     (seq-filter (lambda (d) (and (consp d) (integerp (car d)) (natnump (cdr d)))) (cddr e)))))
+      (if (equal days (cddr e)) e `(,(car e) ,(cadr e) ,@days)))))
+
 (defun drgnx-surfaces--usage-read (file)
-  "The alist (ID COUNT (DAY . N)…) in FILE; nil when missing or unreadable."
+  "The alist (ID COUNT (DAY . N)…) in FILE, with anything malformed left out; nil when missing or unreadable.
+Sets `drgnx-surfaces--usage-bad' when something was left out."
   (condition-case nil
       (when (file-readable-p file)
         (let ((data (with-temp-buffer
                       (insert-file-contents file)
                       (read (current-buffer)))))
-          (and (listp data) (seq-filter (lambda (e) (and (consp e) (symbolp (car e)) (integerp (cadr e)))) data))))
-    (error nil)))
+          (if (not (proper-list-p data))
+              (setq drgnx-surfaces--usage-bad t data nil)
+            (let ((clean (delq nil (mapcar #'drgnx-surfaces--usage-entry data))))
+              (unless (equal clean data) (setq drgnx-surfaces--usage-bad t))
+              clean))))
+    (error (setq drgnx-surfaces--usage-bad t) nil)))
 
 (defun drgnx-surfaces--usage-table ()
   "The counts, read from the file the first time."
@@ -128,24 +143,32 @@ COUNT is all runs; each (DAY . N) is N runs on day DAY (`time-to-days') for the 
 
 (defun drgnx-surfaces--usage-flush (&optional force)
   "Write the counts if they changed, at most once a minute unless FORCE (exit).  Never prompts or signals."
+  (when (and force (timerp drgnx-surfaces--usage-timer)) (cancel-timer drgnx-surfaces--usage-timer))
   (setq drgnx-surfaces--usage-timer nil)
   (when (and drgnx-surfaces--usage-dirty drgnx-surfaces--usage)
     (if (and (not force) drgnx-surfaces--usage-saved
              (< (- (float-time) drgnx-surfaces--usage-saved) drgnx-surfaces--usage-flush-interval))
         (drgnx-surfaces--usage-arm)
-      (let ((file (drgnx-shortcuts-usage-file)) (rows nil))
+      (let ((file (drgnx-shortcuts-usage-file)) (rows nil) (tmp nil))
         (maphash (lambda (id v) (push (cons id v) rows)) drgnx-surfaces--usage)
         (setq drgnx-surfaces--usage-saved (float-time))
         (condition-case nil
-            (let ((tmp (concat file ".tmp")) (inhibit-message t) (coding-system-for-write 'utf-8-unix))
+            (let ((inhibit-message t) (coding-system-for-write 'utf-8-unix))
               (make-directory (file-name-directory file) t)
+              ;; A file with something unreadable in it is kept before it is overwritten.
+              (when (and drgnx-surfaces--usage-bad (file-exists-p file))
+                (rename-file file (format-time-string (concat file ".bak-%Y%m%d-%H%M%S")) t))
+              (setq drgnx-surfaces--usage-bad nil)
+              ;; A temp name of its own, so two Emacs sessions never write the same one.
+              (setq tmp (make-temp-file (concat file ".")))
               (with-temp-file tmp
                 (let ((print-length nil) (print-level nil))
                   (prin1 (sort rows (lambda (a b) (string< (symbol-name (car a)) (symbol-name (car b))))) (current-buffer))
                   (insert "\n")))
               (rename-file tmp file t)
               (setq drgnx-surfaces--usage-dirty nil))
-          (error (drgnx-surfaces--usage-arm)))))))
+          (error (when (and tmp (file-exists-p tmp)) (ignore-errors (delete-file tmp)))
+                 (drgnx-surfaces--usage-arm)))))))
 
 (add-hook 'drgnx-surfaces-run-functions #'drgnx-surfaces--count-run)
 (defun drgnx-surfaces--usage-flush-at-exit () (drgnx-surfaces--usage-flush t))
