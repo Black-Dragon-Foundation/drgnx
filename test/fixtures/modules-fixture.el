@@ -8,7 +8,8 @@
 ;; DRGNX_CONFIG_DIR), or every shipped module of the stages in :stages.  Afterwards it turns them off through
 ;; the product path (`drgnx-module-teardown', last set up first, then `drgnx-modules-after-teardown-functions'),
 ;; so every use also tests the teardown, and puts back a snapshot of every registry variable of
-;; `drgnx-modules-fingerprint-registries' taken before.  The snapshot is copied values restored with `set' (a
+;; `drgnx-modules-fingerprint-registries' taken after the module files and the libraries their setups load are
+;; loaded (a library's own top-level registrations are the library's and stay).  The snapshot is copied values restored with `set' (a
 ;; keymap in place), never `let': binding a variable of a library that is first loaded inside BODY leaves it
 ;; void once the library is loaded (it is bound after, see `drgnx-test-modules/no-let-binding-trap').
 ;; `:strict t' fails the test, with the fingerprint diff, when the state after the teardown differs from the
@@ -184,7 +185,7 @@ applied before; when some were, the after-teardown function's re-application sta
     (delete-dups (nreverse out))))
 
 (defun drgnx-test-modules--preload (names)
-  "Load what the setups of NAMES load first, before `:strict' takes its snapshot: their `:packages' and the
+  "Load what the setups of NAMES load first, before the helper takes its snapshots: their `:packages' and the
 features their files `require'.  A library's top level belongs to the library, which stays loaded (spec row 26).
 Loaded here, it is in the snapshot whichever test loaded it first.  Nothing a setup does comes before the
 snapshot, so no leak is hidden.  A library that cannot be found or does not load is left to the setup."
@@ -246,7 +247,7 @@ snapshot, so no leak is hidden.  A library that cannot be found or does not load
          (drgnx-modules--stacks nil) (drgnx-modules--runs nil) (drgnx-modules--features nil)
          (drgnx-module--claims (make-hash-table :test 'equal))
          (drgnx-module--releasers (make-hash-table :test 'equal))
-         (snap (drgnx-test-modules--snapshot)))
+         (snap nil))
     (unwind-protect
         (drgnx-test-modules--hiding (eq (plist-get opts :packages) 'hidden)
           (let* ((named (drgnx-test-modules--load modules))
@@ -258,7 +259,9 @@ snapshot, so no leak is hidden.  A library that cannot be found or does not load
                                     (and stages
                                          (mapcar #'car (seq-filter (lambda (m) (memq (plist-get (cdr m) :stage) stages))
                                                                    drgnx-modules--table))))))
-                 (_ (when (plist-get opts :strict) (drgnx-test-modules--preload selected)))
+                 ;; the libraries' own top level (registrations too) is theirs and stays: load them, then copy
+                 (_ (drgnx-test-modules--preload selected))
+                 (_ (setq snap (drgnx-test-modules--snapshot)))
                  (before (drgnx-modules-fingerprint))
                  (ui (drgnx-test-modules--ui-snapshot))
                  (done nil) (problems nil) (value nil))
@@ -279,7 +282,7 @@ snapshot, so no leak is hidden.  A library that cannot be found or does not load
                                   (drgnx-test-modules--without-emacs-timers (drgnx-modules-fingerprint)))))
                 (ert-fail (cons "modules left state behind after their teardown:" lines))))
             value))
-      (drgnx-test-modules--restore snap)
+      (when snap (drgnx-test-modules--restore snap))
       (delete-directory cfg t))))
 
 (defmacro drgnx-test-with-modules (modules &rest body)

@@ -14,6 +14,7 @@
 (defvar drgnx-fixture-test-alist nil "An alist registry for the in-place test.")
 (defvar drgnx-fixture-test-map nil "A keymap registry for the in-place test.")
 (defvar drgnx-fixture-test-log nil "What the fake modules' teardowns did, newest first.")
+(defvar drgnx-fixture-test-areas nil "A registry a fake library adds to at its top level.")
 
 (defun drgnx-fixture-test--module-file (dir name contents)
   "Write the file NAME.el under DIR holding CONTENTS; return its path."
@@ -37,6 +38,44 @@
     (should (equal shapes (bound-and-true-p drgnx-layouts-shapes)))
     (should (equal state-fns drgnx-persist-state-functions))
     (should (equal after-fns drgnx-persist-after-restore-functions))))
+
+(ert-deftest drgnx-test-modules/a-librarys-registrations-stay-for-the-next-module ()
+  ;; A library the first module loads registers an area at its top level (as wb/drgnx-area.el does); it stays
+  ;; loaded, so its area stays too: a later module that defines a tab on it finds it, in any order.
+  (ert-with-temp-directory dir
+                           (let ((load-path (cons dir load-path))
+                                 (drgnx-modules-fingerprint-registries (cons 'drgnx-fixture-test-areas drgnx-modules-fingerprint-registries))
+                                 (drgnx-fixture-test-areas nil))
+                             (drgnx-fixture-test--module-file dir "drgnx-fixture-test-arealib" "(push (list 'lib-area) drgnx-fixture-test-areas)
+(provide 'drgnx-fixture-test-arealib)")
+                             (unwind-protect
+                                 (let ((first (drgnx-fixture-test--module-file dir "fake-first" "(drgnx-module-define 'fake/first :doc \"loads the library\"
+  :setup (lambda () (require 'drgnx-fixture-test-arealib)))"))
+                                       (second (drgnx-fixture-test--module-file dir "fake-second" "(drgnx-module-define 'fake/second :doc \"a tab on its area\"
+  :setup (lambda () (unless (assq 'lib-area drgnx-fixture-test-areas) (error \"no lib-area\"))))")))
+                                   (should (eq 'ok (drgnx-test-with-modules (list first) :strict t
+                                                                            (plist-get (alist-get 'fake/first (drgnx-modules-report)) :status))))
+                                   (should (assq 'lib-area drgnx-fixture-test-areas))
+                                   (should (eq 'ok (drgnx-test-with-modules (list second) :strict t
+                                                                            (plist-get (alist-get 'fake/second (drgnx-modules-report)) :status))))
+                                   (should (assq 'lib-area drgnx-fixture-test-areas)))
+                               (setq features (delq 'drgnx-fixture-test-arealib features))))))
+
+(ert-deftest drgnx-test-modules/strict-skips-emacss-own-timers ()
+  ;; A setup that edits a buffer starts undo's boundary timer (Emacs's lazy singleton, which the recorder leaves
+  ;; alone and Emacs keeps in a variable): not the module's, so strict does not count it.
+  (ert-with-temp-directory dir
+                           (let ((buf (get-buffer-create "drgnx-fixture-test-edit"))
+                                 (file (drgnx-fixture-test--module-file dir "fake-edits" "(drgnx-module-define 'fake/edits :doc \"edits a buffer\"
+  :setup (lambda () (with-current-buffer \"drgnx-fixture-test-edit\" (buffer-enable-undo) (insert \"a\"))))")))
+                             (unwind-protect
+                                 (progn
+                                   (when (timerp undo-auto-current-boundary-timer)   ; so the setup starts it
+                                     (cancel-timer undo-auto-current-boundary-timer)
+                                     (setq undo-auto-current-boundary-timer nil))
+                                   (should (eq 'done (drgnx-test-with-modules (list file) :strict t 'done)))
+                                   (should (timerp undo-auto-current-boundary-timer)))
+                               (kill-buffer buf)))))
 
 (ert-deftest drgnx-test-modules/strict-fails-on-a-leak ()
   ;; A setup that reaches a hook outside every door (the safety net sees `add-hook', not `push').

@@ -318,7 +318,7 @@ ALWAYS is non-nil when a :teardown does not make it right."
     (`(,(or 'define-key 'keymap-set) ,(or 'global-map '(current-global-map)) . ,_)
      (cons nil (format "%s global-map (use drgnx-module-define-key)" (car form))))
     (`(add-function ,_ ,(and place (or `(default-value ,_) (pred symbolp))) . ,_)
-     (cons nil (format "add-function on %S (push its remove-function)" place)))
+     (cons nil (format "add-function on %S (remove it in the module's :teardown)" place)))
     (`(add-hook ,hook ,(pred drgnx-teardown--lambda-p) . ,(or 'nil `(,_) `(,_ nil)))
      (cons t (format "a lambda on the global hook %S (name it)" hook)))))
 
@@ -385,7 +385,7 @@ ALWAYS is non-nil when a :teardown does not make it right."
                                               "define-key global-map (use drgnx-module-define-key), without a :teardown"
                                               "default-frame-alist (use drgnx-module-alist-put), without a :teardown"
                                               "modify-frame-parameters, without a :teardown"
-                                              "add-function on (default-value 'x) (push its remove-function), without a :teardown"
+                                              "add-function on (default-value 'x) (remove it in the module's :teardown), without a :teardown"
                                               "a lambda on the global hook 'find-file-hook (name it)")))
                              ;; with a :teardown, only what it cannot make right
                              (should (equal (mapcar (lambda (s) (replace-regexp-in-string "\\`[^:]*: " "" s))

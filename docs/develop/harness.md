@@ -163,7 +163,9 @@ Inside BODY, `drgnx-modules--table` holds only the selected modules and the modu
   were applied before the helper ran (in a live session they were: then the re-application stays). A teardown problem (an undo that failed, named by its label) fails the test; a module that
   is `:teardown 'restart` is left running.
 - **Registries come back.** Whatever happened to a variable of `drgnx-modules-fingerprint-registries` (a table, an
-  alist, a keymap) is put back from a copy taken before: tables and keymaps in place, the rest with `set`. It is a
+  alist, a keymap) is put back from a copy taken before the setups, after the module files and the libraries their
+  setups load are loaded (a library's own top-level registrations, such as the panel areas, are the library's and
+  stay; `drgnx-test-modules/a-librarys-registrations-stay-for-the-next-module`): tables and keymaps in place, the rest with `set`. It is a
   safety net for what no door recorded, not a way to avoid writing the teardown. Never `let`-bind such a variable in
   a test that sets modules up: binding the variable of a library that is first loaded inside the `let` leaves it void
   afterwards (`drgnx-test-modules/no-let-binding-trap`).
