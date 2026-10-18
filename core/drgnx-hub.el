@@ -116,16 +116,31 @@ debugs errors, and without SIGPIPE ignored the write itself would)."
         (process-send-string conn (concat (json-serialize (drgnx-hub--jsonable object)) "\n"))
       (error (ignore-errors (delete-process conn))))))
 
-(defun drgnx-hub--lines (conn chunk fn)
-  "Split CONN's input into lines; FN gets each parsed JSON object."
+(defconst drgnx-hub--max-line (* 1024 1024)
+  "The longest request line the hub reads (characters): a longer one closes its connection.")
+
+(defun drgnx-hub--lines (conn chunk fn &optional bad limit)
+  "Split CONN's input into lines; FN gets each parsed JSON object, BAD (when given) each line that is not JSON.
+With LIMIT, a line longer than LIMIT closes CONN: nothing after it is read."
   (let ((buf (concat (or (process-get conn :buf) "") chunk)))
-    (while (string-match "\n" buf)
+    (while (and buf (string-match "\n" buf))
       (let ((line (substring buf 0 (match-beginning 0))))
         (setq buf (substring buf (match-end 0)))
-        (when-let* ((json (ignore-errors (json-parse-string line :object-type 'plist :array-type 'list
-                                                            :null-object nil :false-object nil))))
-          (funcall fn json))))
-    (process-put conn :buf buf)))
+        (if (and limit (> (length line) limit)) (setq buf nil)
+          (let ((json (condition-case nil
+                          (json-parse-string line :object-type 'plist :array-type 'list :null-object nil :false-object nil)
+                        (error :bad))))
+            (cond ((eq json :bad) (when bad (funcall bad line)))
+                  (json (funcall fn json)))))))
+    (if (and buf (not (and limit (> (length buf) limit))))
+        (process-put conn :buf buf)
+      (message "drgnx hub: a line over %d characters; its connection is closed" limit)
+      (delete-process conn))))
+
+(defun drgnx-hub--malformed (conn line)
+  "LINE from CONN is not JSON: when its id can be read, it is answered with an error (its sender would wait)."
+  (when (string-match "\"id\"[ \t]*:[ \t]*\\(-?[0-9]+\\)[ \t]*[,}]" line)
+    (drgnx-hub--send conn (list :id (string-to-number (match-string 1 line)) :error (list :message "not a JSON object")))))
 
 ;;;; The hub side
 
@@ -402,7 +417,9 @@ Signals an error when a hub already serves there."
         drgnx-hub--server
         (make-network-process :name "drgnx-hub" :family 'local :server t :service socket :noquery t
                               :coding 'utf-8-unix
-                              :filter (lambda (conn chunk) (drgnx-hub--lines conn chunk (lambda (j) (drgnx-hub--serve-request conn j)))))))
+                              :filter (lambda (conn chunk)
+                                        (drgnx-hub--lines conn chunk (lambda (j) (drgnx-hub--serve-request conn j))
+                                                          (lambda (line) (drgnx-hub--malformed conn line)) drgnx-hub--max-line)))))
 
 (defun drgnx-hub-stop ()
   "Stop being the hub (the socket closed and removed, the gateway stopped, its registrations dropped from memory)."

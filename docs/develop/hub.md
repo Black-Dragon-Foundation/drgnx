@@ -55,7 +55,11 @@ Its directory is mode 0700 and must be the user's own. One JSON object per line:
 | `job/card` `{card, action, arg?}` | the job, after the user's action on a card (once: a settled card is an error) |
 | `job/reply` `{message, text}` | `true`: the user's answer to an agent's message |
 
-Errors: `{"id", "error": {"message"}}`. Snapshots and transcript entries travel as **printed Lisp** (`lisp`,
+Errors: `{"id", "error": {"message"}}`. A line that is not JSON is answered with an error too when its `"id"` can be
+read (otherwise it is dropped); a line over 1 MiB closes its connection. A subscriber that stops reading stalls the
+hub once its socket's buffer is full: Emacs has no non-blocking write (`process-send-string` waits until it can
+write); subscribers are Emacs process filters, which read as long as their Emacs runs.
+Snapshots and transcript entries travel as **printed Lisp** (`lisp`,
 `entries`): JSON would lose the difference between a symbol and a string in an entry; both ends are Emacs. Events: from the gateway `request` (job, task, agent, provider, model, status, input, output, cost), `fallback`
 (agent, from, to, why), `budget` (job, spent, budget); from jobs `card` (id, job, task, kind, title), `job` (id: its status, tasks or open cards changed) and `fallback` (job, task,
 agent, from, to, why); from sessions `agent` (id, seq, lisp — the snapshot) and

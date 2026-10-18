@@ -176,6 +176,27 @@ to OR-LOG, OPENROUTER_API_KEY unset."
     (let ((deadline (+ (float-time) 1))) (while (< (float-time) deadline) (accept-process-output nil 0.05)))
     (should (drgnx-hub-call-sync "ping" nil))))
 
+(ert-deftest drgnx-hub/long-line-and-malformed-answered ()
+  ;; a line that is not JSON but names its id is answered with an error (the client never waits for nothing); a
+  ;; line over the cap (1 MiB) closes its connection; the hub serves on
+  (drgnx-hub-test--with
+    (drgnx-hub-serve (drgnx-hub-socket))
+    (let* ((got "")
+           (c (make-network-process :name "raw" :family 'local :service (drgnx-hub-socket) :noquery t :coding 'utf-8-unix
+                                    :filter (lambda (_p s) (setq got (concat got s))))))
+      (process-send-string c "{\"id\":7,\"method\":\n")
+      (should (drgnx-hub-test--wait (lambda () (string-search "\n" got)) 1))
+      (let ((answer (json-parse-string got :object-type 'plist)))
+        (should (eql (plist-get answer :id) 7))
+        (should (stringp (plist-get (plist-get answer :error) :message))))
+      ;; 2 MiB without an end of line (the write to a closed connection is an error only where SIGPIPE is ignored,
+      ;; as the runner does)
+      (when (drgnx-hub-test--sigpipe-ignored-p)
+        (ignore-errors (process-send-string c (make-string (* 2 1024 1024) ?x)))
+        (should (drgnx-hub-test--wait (lambda () (not (process-live-p c))) 5)))
+      (delete-process c))
+    (should (drgnx-hub-call-sync "ping" nil))))
+
 (ert-deftest drgnx-hub/an-agent-hanging-up-never-kills-the-hub ()
   ;; the editing Emacs starts the hub without ignoring SIGPIPE: a write to a connection the agent closed must not
   ;; end the hub (exit 141)
