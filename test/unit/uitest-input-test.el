@@ -18,6 +18,83 @@
   (should (equal (drgnx-uitest-click-events 'P 1 2)
                  '((down-mouse-1 P) (drgnx-uitest-release 1 P) (double-down-mouse-1 P 2) (double-mouse-1 P 2)))))
 
+(defmacro drgnx-uitest-input-test--in-window (header &rest body)
+  "Run BODY with a temp buffer (with a header line if HEADER) shown in the selected window."
+  (declare (indent 1))
+  `(let ((win (selected-window)) (old (window-buffer (selected-window))))
+     (with-temp-buffer
+       (when ,header (setq-local header-line-format "H"))
+       (set-window-buffer win (current-buffer))
+       (redisplay t)                    ; the window's header-line height is a redisplay result
+       (unwind-protect (progn ,@body) (set-window-buffer win old)))))
+
+(defun drgnx-uitest-input-test--posn (x y)
+  (posn-at-x-y x y (selected-frame)))
+
+(ert-deftest drgnx-uitest/drag-events-press-move-release ()
+  (drgnx-uitest-input-test--in-window nil
+    (let* ((from (drgnx-uitest-input-test--posn 5 5))
+           (to (drgnx-uitest-input-test--posn 35 5))
+           (events (drgnx-uitest-drag-events from to :steps 3)))
+      (should (equal (mapcar #'car events)
+                     '(down-mouse-1 mouse-movement mouse-movement mouse-movement drag-mouse-1)))
+      (should (equal (car events) (list 'down-mouse-1 from)))
+      ;; three movements on the straight line, the last one at TO
+      (should (equal (mapcar (lambda (ev) (car (posn-x-y (cadr ev)))) (cl-subseq events 1 4))
+                     '(15 25 35)))
+      (should (equal (cl-subseq events 1 4)
+                     (mapcar (lambda (x) (list 'mouse-movement (drgnx-uitest-input-test--posn x 5)))
+                             '(15 25 35))))
+      (should (equal (car (last events)) (list 'drag-mouse-1 from to))))
+    ;; the button and the default of 8 steps
+    (let ((events (drgnx-uitest-drag-events (drgnx-uitest-input-test--posn 2 2)
+                                            (drgnx-uitest-input-test--posn 30 10) :button 3)))
+      (should (eq (car (car events)) 'down-mouse-3))
+      (should (eq (car (car (last events))) 'drag-mouse-3))
+      (should (= (cl-count 'mouse-movement events :key #'car) 8)))))
+
+(ert-deftest drgnx-uitest/a-drag-in-place-is-a-click ()
+  (drgnx-uitest-input-test--in-window nil
+    (let ((p (drgnx-uitest-input-test--posn 5 5)))
+      (should (equal (drgnx-uitest-drag-events p p) (list (list 'down-mouse-1 p) (list 'mouse-1 p))))
+      ;; a different posn object for the same pixel is the same position
+      (should (equal (mapcar #'car (drgnx-uitest-drag-events p (drgnx-uitest-input-test--posn 5 5) :button 2))
+                     '(down-mouse-2 mouse-2))))))
+
+(ert-deftest drgnx-uitest/drag-from-a-header-line ()
+  (drgnx-uitest-input-test--in-window t
+    (let* ((top (nth 1 (window-pixel-edges)))     ; the header line is the window's first pixel row
+           (from (drgnx-uitest-input-test--posn 5 top))
+           (to (drgnx-uitest-input-test--posn 5 (+ top 12)))
+           (events (drgnx-uitest-drag-events from to :steps 4)))
+      (should (eq (posn-area from) 'header-line))
+      ;; Emacs prefixes the area ([header-line down-mouse-1]) only for symbols of kind mouse-click
+      (dolist (head '(down-mouse-1 drag-mouse-1 mouse-1))
+        (should (eq (get head 'event-kind) 'mouse-click)))
+      (should (eq (posn-area (cadr (car events))) 'header-line))        ; pressed on the header line
+      (should (eq (posn-area (cadr (car (last events)))) 'header-line)) ; and released as a drag from it
+      (should (equal (car (last events)) (list 'drag-mouse-1 from to)))
+      ;; the pointer leaves the header line for the text on the way
+      (should (null (posn-area (cadr (nth 4 events)))))
+      (should (equal (cadr (nth 4 events)) to)))))
+
+(ert-deftest drgnx-uitest/a-lazy-drag-is-placed-when-each-event-is-delivered ()
+  ;; a divider drag moves the layout under the pointer: movements and release are resolved at delivery
+  (drgnx-uitest-input-test--in-window nil
+    (let* ((from (drgnx-uitest-input-test--posn 5 5))
+           (events (drgnx-uitest-drag-events from (drgnx-uitest-input-test--posn 35 5) :steps 3 :lazy t)))
+      (should (equal (mapcar #'car events)
+                     '(down-mouse-1 drgnx-uitest-move drgnx-uitest-move drgnx-uitest-move drgnx-uitest-drag-end)))
+      (should (equal (car (last events)) (list 'drgnx-uitest-drag-end 1 from 35 5))))
+    (let ((drgnx-uitest--queue (list '(drgnx-uitest-move 15 5) '(drgnx-uitest-drag-end 3 start 35 5)))
+          (unread-command-events nil) (drgnx-uitest--timer 'dummy))
+      (drgnx-uitest--tick)
+      (drgnx-uitest--tick)
+      (should (equal unread-command-events
+                     (list (list 'mouse-movement (drgnx-uitest-posn 15 5))
+                           (list 'drag-mouse-3 'start (drgnx-uitest-posn 35 5)))))
+      (setq unread-command-events nil))))
+
 (ert-deftest drgnx-uitest/window-ids-are-stable ()
   (let ((w (selected-window)))
     (should (string-match-p "\\`w[0-9]+\\'" (drgnx-uitest-window-id w)))

@@ -103,6 +103,14 @@ skip redisplay and hide the very jank we want to see.
   real input: if the buffer position under the pressed pixel changed meanwhile (the text moved under a held
   button), it becomes `drag-mouse-N` from the press, else `mouse-N` — which is how a click on a moving file tree
   can turn into a drag.
+- **Drags** (`drgnx-uitest-drag-events FROM TO &key button steps`) are `down-mouse-N` at FROM, `steps` (default 8)
+  `mouse-movement` events on the straight line to TO, then `drag-mouse-N` from FROM to TO (or a plain `mouse-N`
+  when both are the same pixel). FROM may be on any part of a window — text, header line, tab line, mode line,
+  fringe, window divider — and keeps its `posn-area`, so a tab row or a divider can be dragged; the movements
+  are what `track-mouse` consumers (`mouse-drag-vertical-line`, drag-and-drop code) read. The harness places each
+  movement and the release against the layout *as it is when the event is delivered*, so a drag that resizes
+  windows under the pointer behaves as with a real mouse. Run one with
+  `bin/drgnx ui measure S '[{"drag":{"from":[401,100],"to":[601,100],"steps":6}}]'` or the MCP tool `ui_drag`.
 - **Keys** use `kbd` syntax (`"C-x b"`, `"M-x"`, `"RET"`); typed text is one event per character.
 - **Settled** = no queued or unread input and nothing visibly changed for 300 ms (`drgnx-uitest-quiet`).
 
@@ -211,6 +219,7 @@ Functions the CLI and MCP server call through `emacsclient -s <session socket> -
 | `(drgnx-uitest-api-screenshot DIR)` | `root`, `width`, `height`, `children [{path,x,y}]`, `windows` |
 | `(drgnx-uitest-api-click X Y &optional BUTTON COUNT HOLD-MS)` | `x`, `y`, `window` (id, or null when the pixel is on no window) |
 | `(drgnx-uitest-api-click-target BUFFER TEXT &optional BUTTON COUNT HOLD-MS)` | same; errors if not on screen |
+| `(drgnx-uitest-api-drag FROM-X FROM-Y TO-X TO-Y &optional BUTTON STEPS)` | `from`, `to` (`x`, `y`), `window` (id of the window pressed on, or null), `area` (`header-line`, `right-divider`, … or null for text) |
 | `(drgnx-uitest-api-keys KEYS)`, `(drgnx-uitest-api-type TEXT)` | `queued` |
 | `(drgnx-uitest-api-status &optional QUIET-MS)` | `busy`, `settled` |
 | `(drgnx-uitest-api-measure-begin)` / `(drgnx-uitest-api-measure-end)` | `ok` / the jank report |
@@ -312,10 +321,11 @@ claude mcp add -s user drgnx-ui -- /path/to/drgnx/bin/drgnx ui mcp
 | `ui_state` | `session` | frame, windows, minibuffer, child frames, busy |
 | `ui_screenshot` | `session`, `path`? | an image block (PNG, child frames composited) + path and window map |
 | `ui_click` | `session`, `x`+`y` or `buffer`+`text`, `button`?, `count`?, `hold_ms`? | jank report |
+| `ui_drag` | `session`, `from_x`, `from_y`, `to_x`, `to_y`, `steps`? (1–1000, default 8), `button`? | jank report; bad or missing coordinates are an error, never a drag from 0,0 |
 | `ui_keys` | `session`, `keys` (kbd syntax) | jank report |
 | `ui_type` | `session`, `text` (a newline is the Return key) | jank report |
 | `ui_wait` | `session`, `quiet_ms`?, `timeout_ms`? | `{settled}` |
-| `ui_measure` | `session`, `actions` (list of `{keys}`, `{type}`, `{x,y}`, `{buffer,text}`) | one jank report |
+| `ui_measure` | `session`, `actions` (list of `{keys}`, `{type}`, `{x,y}`, `{buffer,text}`, `{drag:{from:[x,y],to:[x,y],steps?,button?}}`) | one jank report |
 | `ui_diff` | `session` (diffs against the state the previous `ui_state`/`ui_diff` saw), or `a` and `b` | `changes`: `{window, field, old, new}` (also a field only one of the states has), windows `added`/`removed` |
 | `ui_record` | `session`, `action` (`start` / `stop`) | `stop`: the jank report of everything between (input, timers, redisplays) |
 | `ui_perf` | `session`, `workload`, `audit`? | a perf workload's numbers: input latency, GC, frames, redisplay ([perf.md](perf.md)) |
