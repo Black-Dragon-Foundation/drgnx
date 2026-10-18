@@ -592,6 +592,31 @@ to OR-LOG, OPENROUTER_API_KEY unset."
               (should (drgnx-hub-running-p)))
           (delete-process listener))))))
 
+(ert-deftest drgnx-hub/a-socket-whose-directory-is-missing-is-never-connected-to ()
+  ;; checked, then connected to by path: a directory missing at the check could be another user's by the connect (a
+  ;; swap in /tmp) — so a missing one is a refusal, never a connect by path; the coordination server's notify too
+  (require 'drgnx-coord-mcp)
+  (drgnx-hub-test--with
+    (let* ((run (concat root "run")) (process-environment (cons (concat "XDG_RUNTIME_DIR=" run) process-environment))
+           (connects 0))
+      (make-directory run t)
+      (should-not (file-exists-p (file-name-directory (drgnx-hub-socket))))
+      (should (string-match-p "does not exist" (drgnx-hub--untrusted (drgnx-hub-socket))))
+      (cl-letf* ((real (symbol-function 'make-network-process))
+                 ((symbol-function 'make-network-process)
+                  (lambda (&rest args) (unless (plist-get args :server) (cl-incf connects)) (apply real args))))
+        (should (string-match-p "does not exist" (cadr (should-error (drgnx-hub-connect)))))
+        (should-error (drgnx-hub-call "status" nil #'ignore))
+        (should (= connects 0))
+        ;; a socket in a directory open to others: the notify does not go there either
+        (make-directory (file-name-directory (drgnx-hub-socket)) t)
+        (set-file-modes (file-name-directory (drgnx-hub-socket)) #o777)
+        (let ((listener (make-network-process :name "foreign" :family 'local :server t :service (drgnx-hub-socket) :noquery t)))
+          (unwind-protect
+              (progn (drgnx-coord-mcp--notify-hub)
+                     (should (= connects 0)))
+            (delete-process listener)))))))
+
 (ert-deftest drgnx-hub/without-a-runtime-dir-the-socket-is-short-and-private ()
   (drgnx-hub-test--with
     (let ((process-environment (cons "XDG_RUNTIME_DIR" process-environment)))

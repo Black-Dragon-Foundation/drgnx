@@ -73,10 +73,11 @@ the state dir."
 (defun drgnx-hub--untrusted (socket)
   "Why this Emacs must not use SOCKET (it would hand its keys to whatever answers there), or nil: its directory must
 be a directory (not a link) of this user's with no access for others (0700), and the socket, when there, this
-user's.  Nothing else can then have made it.  A directory not there yet is no reason: nothing listens in it."
+user's.  Nothing else can then have made it.  A directory that is not there is a reason too: what is checked is
+then connected to by path, and a missing one could be another user's by then (one swapped in and out of /tmp)."
   (let* ((dir (directory-file-name (file-name-directory socket)))
          (d (file-attributes dir)) (s (file-attributes socket)))
-    (cond ((null d) nil)
+    (cond ((null d) (format "%s does not exist (no hub)" dir))
           ((not (eq (file-attribute-type d) t)) (format "%s is not a directory" dir))
           ((not (eql (file-attribute-user-id d) (user-uid))) (format "%s belongs to another user" dir))
           ((/= 0 (logand (file-modes dir 'nofollow) #o077))

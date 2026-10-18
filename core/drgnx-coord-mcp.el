@@ -20,6 +20,7 @@
 (declare-function drgnx-hub-socket "drgnx-hub")
 (declare-function drgnx-work--status-rows "drgnx-work")
 (declare-function drgnx-work--json-row "drgnx-work")
+(declare-function drgnx-hub--untrusted "drgnx-hub")
 
 (defun drgnx-coord-mcp--me ()
   (let ((a (getenv "DRGNX_AGENT")))
@@ -45,7 +46,7 @@
   (ignore-errors
     (require 'drgnx-hub)
     (let ((socket (drgnx-hub-socket)))
-      (when (file-exists-p socket)
+      (when (and (file-exists-p socket) (not (drgnx-hub--untrusted socket)))   ; never a socket not private to the user
         (let ((c (make-network-process :name "drgnx-coord-notify" :family 'local :service socket :noquery t)))
           (process-send-string c "{\"method\":\"coord/notify\"}\n")   ; a notification: no answer to wait for
           (delete-process c))))))
