@@ -154,7 +154,9 @@
 (ert-deftest drgnx-run-ert/unit-tests-start-no-hub-unless-they-say-so ()
   ;; an agent on an :ai profile in any test would start a durable hub that outlives the suite
   (skip-unless (getenv "DRGNX_TEST_ISOLATED"))
-  (should (equal (getenv "DRGNX_NO_HUB_START") "1")))
+  (should (equal (getenv "DRGNX_NO_HUB_START") "1"))
+  ;; …and a hub one starts anyway ends with the run (an interrupted run leaves none)
+  (should (equal (getenv "DRGNX_HUB_PARENT_PID") (number-to-string (emacs-pid)))))
 
 (ert-deftest drgnx-run-ert/a-run-that-dies-leaves-no-temp-dir-and-tests-write-below-the-run-dir ()
   ;; TMP-1: a test's temp files land in the run's own dir; when the run ends through `kill-emacs' (a test

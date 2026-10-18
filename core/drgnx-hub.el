@@ -40,8 +40,9 @@ string (\"request\", \"fallback\", \"budget\"), DATA a plist.")
 
 (defconst drgnx-hub--env-names
   '("DRGNX_DATA_DIR" "DRGNX_CONFIG_DIR" "XDG_STATE_HOME" "XDG_DATA_HOME" "XDG_CONFIG_HOME" "XDG_RUNTIME_DIR"
-    "OPENROUTER_API_KEY" "ANTHROPIC_API_KEY")
-  "Variables the hub gets from the Emacs that starts it (when set): the same dirs, and the keys it may use.")
+    "OPENROUTER_API_KEY" "ANTHROPIC_API_KEY" "DRGNX_HUB_PARENT_PID")
+  "Variables the hub gets from the Emacs that starts it (when set): the same dirs, the keys it may use, and (tests
+only) the pid it ends with.")
 
 ;;;; Where
 
@@ -467,9 +468,14 @@ when it cannot start for any other reason."
              (kill-emacs (if already 3 1)))))
   (add-hook 'kill-emacs-hook #'drgnx-hub-stop)
   (message "drgnx hub: serving on %s, gateway on 127.0.0.1:%d" (drgnx-hub-socket) (drgnx-gateway-port))
-  (while t
-    (accept-process-output nil 1)
-    (dotimes (_ 2) (read-event nil nil 0.002))))     ; queued events would hold back process sentinels
+  ;; a test's hub (DRGNX_HUB_PARENT_PID: its test Emacs) ends with it, never outliving the test's dir
+  (let ((parent (string-to-number (or (getenv "DRGNX_HUB_PARENT_PID") "0"))))
+    (while t
+      (accept-process-output nil 1)
+      (dotimes (_ 2) (read-event nil nil 0.002))     ; queued events would hold back process sentinels
+      (when (and (> parent 0) (not (drgnx-hub--alive-p parent)))
+        (message "drgnx hub: its parent (pid %d) is gone" parent)
+        (kill-emacs 0)))))
 
 ;;;; The client side
 

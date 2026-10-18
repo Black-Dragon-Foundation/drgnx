@@ -13,7 +13,8 @@ to OR-LOG, OPENROUTER_API_KEY unset."
           (process-environment (append (list (concat "DRGNX_CONFIG_DIR=" root "config") (concat "DRGNX_DATA_DIR=" root "data")
                                              (concat "XDG_STATE_HOME=" root "state") (concat "HOME=" root "home")
                                              "OPENROUTER_API_KEY" "DRGNX_JOBS_LAUNCHER=detached"
-                                             "DRGNX_NO_HUB_START")                ; these tests start hubs (and stop them)
+                                             "DRGNX_NO_HUB_START"                 ; these tests start hubs (and stop them)
+                                             (format "DRGNX_HUB_PARENT_PID=%d" (emacs-pid)))   ; …ending with this Emacs
                                        process-environment))
           (drgnx-ai--keys (make-hash-table :test #'eq)) (auth-sources nil) (drgnx-work-db--handles nil)
           (drgnx-gateway--keys (make-hash-table :test #'eq)) (drgnx-gateway--registrations (make-hash-table :test #'equal))
@@ -161,6 +162,23 @@ to OR-LOG, OPENROUTER_API_KEY unset."
         (should (= rc 1))
         (should (string-search "drgnx hub: " (with-current-buffer out (buffer-string))))
         (kill-buffer out)))))
+
+(ert-deftest drgnx-hub/a-test-hub-exits-with-its-parent ()
+  ;; DRGNX_HUB_PARENT_PID (tests only): a hub whose test Emacs is gone stops instead of outliving the test's dir
+  (drgnx-hub-test--with
+    (let* ((gone (let ((p (start-process "gone" nil "true")))
+                   (drgnx-hub-test--wait (lambda () (not (process-live-p p))))
+                   (process-id p)))
+           (process-environment (cons (format "DRGNX_HUB_PARENT_PID=%d" gone) process-environment))
+           (p (make-process :name "orphan-hub" :noquery t
+                            :command (list (expand-file-name invocation-name invocation-directory) "--batch" "-Q"
+                                           "-L" (expand-file-name "core" drgnx-dir) "-l" "drgnx-hub" "-f" "drgnx-hub-main"))))
+      (unwind-protect
+          (progn
+            (should (drgnx-hub-test--wait (lambda () (not (process-live-p p))) 10))
+            (should (eql (process-exit-status p) 0))
+            (should-not (file-exists-p (drgnx-hub-socket))))
+        (ignore-errors (delete-process p))))))
 
 (ert-deftest drgnx-hub/the-hub-outlives-the-emacs-that-started-it ()
   (drgnx-hub-test--with

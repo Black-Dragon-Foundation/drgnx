@@ -134,6 +134,8 @@ exit 0 or 1."
                   (list "DRGNX_RUN_TMP")
                   ;; …nor start a durable hub that would outlive it (the hub's own tests unset this)
                   (list "DRGNX_NO_HUB_START=1")
+                  ;; …and a hub one starts anyway ends with this Emacs (an interrupted run leaves none)
+                  (list (format "DRGNX_HUB_PARENT_PID=%d" (emacs-pid)))
                   ;; …nor the user's provider keys: no test may reach a paid model (bare names unset them)
                   (list "OPENROUTER_API_KEY" "ANTHROPIC_API_KEY" "ANTHROPIC_AUTH_TOKEN" "OPENAI_API_KEY")
                   (and (getenv "DRGNX_USER_ELPA") (list (concat "DRGNX_USER_ELPA=" (getenv "DRGNX_USER_ELPA"))))
