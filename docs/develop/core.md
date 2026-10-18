@@ -51,6 +51,9 @@ signal `drgnx-prompt-in-automatic-path` instead — naming the prompt and where 
 - while a daemon initialises — until the last `window-setup-hook` function, so `after-init-hook` and
   `emacs-startup-hook` count too.
 
+`(drgnx-guard-automatic-p)` says whether the code running now is such a path, for code that would rather not ask
+than signal (choosing a Vim stack records it as pending instead of offering to install evil).
+
 ## Command registry (`drgnx-registry.el`)
 
 Every command is registered once, without keys:

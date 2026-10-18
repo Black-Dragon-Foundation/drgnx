@@ -125,14 +125,20 @@ directory (what drgnx sync installed, loadable after `drgnx-pkg-activate')."
         (with-temp-file tmp (insert text))
         (set-file-modes tmp #o644)
         (rename-file tmp file t)
-        (drgnx-keys--write-report)))))   ; the key report no longer says a stack waits
+        (drgnx-modal--write-report)))))   ; the key report no longer says a stack waits
+
+(defun drgnx-modal--write-report ()
+  "Write the key report now (no apply runs when a stack starts or stops waiting) — only in a process that applied
+the keys: elsewhere (`drgnx onboard') it would replace the last session's report with an empty one, and the next
+session's report reads `:pending-layers' from keys.eld."
+  (when drgnx-keys-last (drgnx-keys--write-report)))
 
 ;;;; Choosing
 
 (defun drgnx-modal--can-ask-p (interactive)
   "Non-nil when a question can be answered: INTERACTIVE (a command the user ran), an Emacs with a user, not an
 automatic path (`drgnx-guard'), not the daemon's own terminal."
-  (and interactive (not noninteractive) (not inhibit-interaction) (not (drgnx-guard--context))
+  (and interactive (not noninteractive) (not inhibit-interaction) (not (drgnx-guard-automatic-p))
        (not (and (daemonp) (equal (terminal-name) "initial_terminal")))))
 
 (defun drgnx-modal--profile-name (layers)
@@ -159,8 +165,8 @@ nil) with the module as it was (WAS-ON)."
 
 (defun drgnx-modal-prepare (layers &optional interactive)
   "Make the engine LAYERS need ready before a caller switches to them.  The result:
-`ready'     LAYERS need no engine, or it is loaded (or installed, in a process that runs no modules: `drgnx
-            onboard' saves the stack and the engine loads with it at the next start);
+`ready'     LAYERS need no engine, or it is loaded (or installed, in `drgnx onboard': batch, no modules run; it
+            saves the stack and the engine loads with it at the next start);
 `started'   it was installed: its module is on and ran now;
 `installed' INTERACTIVE, not installed: the user was told what it installs and said yes (asked once), drgnx sync
             ran as a job with its progress shown, and the module ran;
@@ -168,7 +174,8 @@ nil) with the module as it was (WAS-ON)."
 `pending'   not installed and nobody to ask (not INTERACTIVE, batch, `inhibit-interaction', an automatic path, the
             daemon's own terminal): the module is on and keys.eld's `:pending-layers' is LAYERS, for
             `drgnx-modal-apply-pending' at a start once drgnx sync installed it; nothing asked;
-\(fail REASON LOG) the sync or the module failed; the module is as it was.
+\(fail REASON LOG) the sync or the module failed, or modules are off (drgnx safe); the module is as it was (also
+            after C-g during the sync).
 Switch to LAYERS only on `ready', `started' or `installed'.  Those also set the modules for LAYERS
 \(`drgnx-modal-set-module': no engine, every engine module off at the next start) and drop a pending stack."
   (let* ((engine (drgnx-modal-engine-for layers))
@@ -178,27 +185,32 @@ Switch to LAYERS only on `ready', `started' or `installed'.  Those also set the 
           (cond
            ((or (null engine) (assq engine drgnx-modal-engines)) (drgnx-modal-set-module layers) 'ready)
            ((drgnx-modal-engine-installed-p engine)
-            (if (assq module drgnx-modules--table)
-                (drgnx-modal--start layers engine 'started was-on)
-              ;; A process that runs no modules (drgnx onboard): the stack is saved and its engine loads with it
-              ;; at the next start.
-              (drgnx-modal-set-module layers)
-              'ready))
+            (cond ((assq module drgnx-modules--table) (drgnx-modal--start layers engine 'started was-on))
+                  ;; `drgnx onboard' (batch, no modules): the stack is saved and its engine loads with it at the
+                  ;; next start.
+                  (noninteractive (drgnx-modal-set-module layers) 'ready)
+                  ;; a session without modules (drgnx safe): its keys never become Vim's without evil
+                  (t (list 'fail "modules are off in this session (drgnx safe)" nil))))
            ((not (drgnx-modal--can-ask-p interactive))
-            (drgnx-modal-set-module layers)
+            ;; keys.eld first: a failure there (an unreadable file) leaves the module as it was
             (drgnx-keys--save-key :pending-layers layers)
-            (drgnx-keys--write-report)   ; no apply runs now: the key report and the doctor say what waits
+            (drgnx-modal-set-module layers)
+            (drgnx-modal--write-report)
             'pending)
-           ((not (y-or-n-p (format "%s keys need %s (module %s), not installed yet.  Install now with drgnx sync? "
+           ((not (y-or-n-p (format "%s keys need %s (module %s), not installed yet.  Run drgnx sync now (it installs \
+every package your modules are missing)? "
                                    (drgnx-modal--profile-name layers)
                                    (mapconcat #'symbol-name (drgnx-modal--module-packages module) ", ")
                                    module)))
             'declined)
            (t (drgnx-modal-set-module layers)
-              (let ((sync (drgnx-onboard--sync-job)))
-                (if (eq sync 'ok) (drgnx-modal--start layers engine 'installed was-on)
-                  (unless was-on (drgnx-modal--set-enabled module nil))
-                  sync))))))
+              (let ((r nil))
+                (unwind-protect
+                    (setq r (let ((sync (drgnx-onboard--sync-job)))
+                              (if (eq sync 'ok) (drgnx-modal--start layers engine 'installed t) sync)))
+                  ;; a failed sync or start, and C-g during the sync (a quit): the module as it was
+                  (unless (or was-on (eq r 'installed)) (drgnx-modal--set-enabled module nil)))
+                r)))))
     (when (memq result '(ready started installed)) (drgnx-modal--forget-pending))
     result))
 

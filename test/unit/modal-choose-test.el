@@ -1,5 +1,6 @@
 ;;; modal-choose-test.el --- batch tests: choosing a modal key stack (onboarding, Keyboard Profile…), evil missing -*- lexical-binding: t -*-
-;; A temp configuration (config, data, state, home); evil is not installed here.  The tests that load evil are in
+;; A temp configuration (config, data, state, home); evil is not installed here.  The tests that load evil or run
+;; the startup modules are in
 ;; test/unit/isolated/modal-choose-isolated.el, each run in its own Emacs by the test of the same name below
 ;; (docs/develop/harness.md, "Modal tests").
 (require 'ert)
@@ -9,14 +10,8 @@
 (load (expand-file-name "test/fixtures/modal-elpa" drgnx-dir) nil t)
 
 (defvar drgnx-onboard--restart-needed)
-(defvar drgnx-agents-request-functions)
-(defvar drgnx-agents-changed-functions)
-(defvar drgnx-wb--areas)
-(defvar drgnx-layouts-pane-fillers)
-(defvar drgnx-layouts-shapes)
-(defvar drgnx-persist-state-functions)
-(defvar drgnx-persist-after-restore-functions)
 (declare-function drgnx-modal-apply-pending "drgnx-modal-choose")
+(declare-function drgnx-modal-prepare "drgnx-modal-choose")
 
 (defconst drgnx-modal-choose-test--vim '((vim app editing window)))
 (defconst drgnx-modal-choose-test--vscode '((vscode app editing window)))
@@ -58,6 +53,15 @@ registered and the keys applied, no engine registered.  Skipped where evil can b
          (drgnx-keys--restore)
          (delete-directory dir t)))))
 
+(defmacro drgnx-modal-choose-test--no-prompts (&rest body)
+  "BODY with every prompt but `y-or-n-p' failing the test (`noninteractive' is nil around the interactive path)."
+  (declare (indent 0))
+  `(cl-letf (((symbol-function 'read-from-minibuffer) (lambda (&rest _) (ert-fail "read-from-minibuffer")))
+             ((symbol-function 'read-key) (lambda (&rest _) (ert-fail "read-key")))
+             ((symbol-function 'yes-or-no-p) (lambda (&rest _) (ert-fail "yes-or-no-p")))
+             ((symbol-function 'completing-read) (lambda (&rest _) (ert-fail "completing-read"))))
+     ,@body))
+
 (ert-deftest drgnx-modal-choose/non-interactive-records-pending ()
   ;; `drgnx onboard --non-interactive --keys Vim' without evil: editor/evil on, the stack waits in keys.eld, nothing asked.
   (drgnx-modal-choose-test--with
@@ -82,9 +86,10 @@ registered and the keys applied, no engine registered.  Skipped where evil can b
 (ert-deftest drgnx-modal-choose/declined-keeps-the-stack ()
   (drgnx-modal-choose-test--with
     (let ((keys (drgnx-modal-choose-test--text "keys.eld")) (asked nil) (noninteractive nil))
-      (cl-letf (((symbol-function 'y-or-n-p) (lambda (q) (push q asked) nil))
-                ((symbol-function 'drgnx-onboard--sync-job) (lambda () (ert-fail "drgnx sync ran"))))
-        (drgnx-keys-choose-profile "Vim" t))
+      (drgnx-modal-choose-test--no-prompts
+        (cl-letf (((symbol-function 'y-or-n-p) (lambda (q) (push q asked) nil))
+                  ((symbol-function 'drgnx-onboard--sync-job) (lambda () (ert-fail "drgnx sync ran"))))
+          (drgnx-keys-choose-profile "Vim" t)))
       (should (= (length asked) 1))
       (should (string-match-p "evil" (car asked)))                ; it says what it installs
       (should (equal (drgnx-modal-choose-test--text "keys.eld") keys))
@@ -104,38 +109,34 @@ registered and the keys applied, no engine registered.  Skipped where evil can b
       (should (equal (plist-get user :layers) drgnx-modal-choose-test--vscode)))
     (should (string-prefix-p ";; my keys\n" (drgnx-modal-choose-test--text "keys.eld")))))
 
-(ert-deftest drgnx-modal-choose/a-vim-stack-without-evil-stays-usable ()
-  ;; keys.eld names the Vim stack, editor/evil is on, evil is not installed: the start goes on, the module waits,
-  ;; the palette and the Leader Menu keep their keys.
+(ert-deftest drgnx-modal-choose/stopping-the-sync-turns-the-module-back-off ()
+  ;; C-g during drgnx sync (a quit out of the job): the keys stay, editor/evil is off again, nothing waits.
   (drgnx-modal-choose-test--with
-    (drgnx-modal-choose-test--write "keys.eld" "(:layers ((vim app editing window)))\n")
-    (drgnx-modal-choose-test--write "modules.eld" "(:version 1 :enabled (editor/evil))\n")
-    (setq drgnx-modules--state nil)
-    (let ((doctor 0)
-          (find-file-hook find-file-hook)
-          (drgnx-agents-request-functions (bound-and-true-p drgnx-agents-request-functions))
-          (drgnx-agents-changed-functions (bound-and-true-p drgnx-agents-changed-functions))
-          (drgnx-wb--areas (copy-tree (bound-and-true-p drgnx-wb--areas)))
-          (drgnx-layouts-pane-fillers (copy-tree (bound-and-true-p drgnx-layouts-pane-fillers)))
-          (drgnx-layouts-shapes (copy-tree (bound-and-true-p drgnx-layouts-shapes)))
-          (drgnx-persist-state-functions (bound-and-true-p drgnx-persist-state-functions))
-          (drgnx-persist-after-restore-functions (bound-and-true-p drgnx-persist-after-restore-functions))
-          (ring-bell-function ring-bell-function) (use-dialog-box use-dialog-box)
-          (use-short-answers use-short-answers) (inhibit-startup-screen inhibit-startup-screen))
-      (drgnx-modules-load-directory (expand-file-name "modules" drgnx-dir))
-      (cl-letf (((symbol-function 'drgnx-evil-doctor) (lambda () (cl-incf doctor) nil)))
-        (drgnx-modules-run 'startup)
-        (drgnx-keys-apply)
-        (let ((inhibit-interaction t)) (drgnx-modal-apply-pending)))
-      (should (eq (plist-get (alist-get 'editor/evil drgnx-modules--report) :status) 'missing-packages))
-      (should (= doctor 0))
-      (should-not (seq-filter (lambda (m) (eq (plist-get (cdr m) :status) 'failed)) drgnx-modules--report))
-      (should-not (seq-find (lambda (p) (string-match-p "could not be applied" p)) (plist-get drgnx-keys-last :problems)))
-      (should (equal (plist-get drgnx-keys-last :layers) drgnx-modal-choose-test--vim))
-      (should-not drgnx-modal-running)
-      (should (eq (keymap-lookup global-map "C-S-p") #'drgnx-palette))
-      (should (eq (keymap-lookup global-map "<f1>") #'drgnx-palette))
-      (should (eq (keymap-lookup global-map "M-SPC") #'drgnx-modal-leader-menu)))))
+    (let ((keys (drgnx-modal-choose-test--text "keys.eld")) (noninteractive nil) (synced nil))
+      (drgnx-modal-choose-test--no-prompts
+        (cl-letf (((symbol-function 'y-or-n-p) (lambda (_) t))
+                  ((symbol-function 'drgnx-onboard--sync-job)
+                   (lambda ()
+                     (setq synced (plist-get (drgnx-modal-choose-test--read "modules.eld") :enabled))
+                     (signal 'quit nil))))
+          (should (eq (condition-case nil (progn (drgnx-keys-choose-profile "Vim" t) 'returned) (quit 'quit)) 'quit))))
+      (should (equal synced '(editor/evil)))                   ; the sync saw the module on
+      (should-not (memq 'editor/evil (plist-get (drgnx-modal-choose-test--read "modules.eld") :enabled)))
+      (should (equal (drgnx-modal-choose-test--text "keys.eld") keys))
+      (should (equal (plist-get drgnx-keys-last :layers) drgnx-modal-choose-test--vscode)))))
+
+(ert-deftest drgnx-modal-choose/drgnx-onboard-keeps-the-last-key-report ()
+  ;; A process that never applied the keys (drgnx onboard) does not replace the last session's key report.
+  (drgnx-modal-choose-test--with
+    (let ((report (expand-file-name "keys-report.eld" (drgnx-state-dir)))
+          (old "(:layers ((emacs app editing window)) :conflicts (\"C-x a conflict\") :problems nil)")
+          (drgnx-keys-last nil))
+      (with-temp-file report (insert old))
+      (should (eq (drgnx-modal-prepare drgnx-modal-choose-test--vim) 'pending))
+      (should (equal (with-temp-buffer (insert-file-contents report) (buffer-string)) old))
+      (should (eq (drgnx-modal-prepare drgnx-modal-choose-test--vscode) 'ready))   ; the pending stack goes
+      (should-not (plist-member (drgnx-modal-choose-test--read "keys.eld") :pending-layers))
+      (should (equal (with-temp-buffer (insert-file-contents report) (buffer-string)) old)))))
 
 (ert-deftest drgnx-modal-choose/onboarding-keys-on-a-mac-say-there-are-no-clashes ()
   ;; The Keys question: the presets, VS Code preselected; on a Mac a help line above it.  Return keeps a pending stack.
@@ -167,9 +168,13 @@ registered and the keys applied, no engine registered.  Skipped where evil can b
       (should (equal (cdr (seq-find (lambda (q) (string-match-p "^Keys (" (car q))) asked)) "Vim"))
       (should (equal (plist-get (drgnx-modal-choose-test--read "keys.eld") :pending-layers) drgnx-modal-choose-test--vim)))))
 
-;;;; With evil: each in its own Emacs
+;;;; With evil, or all the startup modules: each in its own Emacs
 
 (defconst drgnx-modal-choose-test--isolated "test/unit/isolated/modal-choose-isolated.el")
+
+(ert-deftest drgnx-modal-choose/a-vim-stack-without-evil-stays-usable ()
+  (should (null (drgnx-modal-test-isolated-result
+                 drgnx-modal-choose-test--isolated "^drgnx-modal-choose/a-vim-stack-without-evil-stays-usable\\'"))))
 
 (ert-deftest drgnx-modal-choose/interactive-asks-once-and-switches-after-the-engine-loads ()
   (should (null (drgnx-modal-test-isolated-result

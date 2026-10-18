@@ -31,13 +31,14 @@ loaded, so there is never a session with Vim keys and no Vim editing:
 
 - evil installed (by an earlier `drgnx sync`): `editor/evil` is turned on and runs at once, then the keys switch.
 - evil not installed: it asks once, naming what it installs ("Vim keys need evil, evil-collection (module
-  editor/evil), not installed yet. Install now with drgnx sync?"). Yes turns the module on and runs `drgnx sync` as a
-  job (its progress in the echo area; `C-g` stops it), then starts evil and switches. No changes nothing. A sync or
-  start that fails keeps your keys and says why, with the log.
+  editor/evil), not installed yet. Run drgnx sync now (it installs every package your modules are missing)?"). Yes
+  turns the module on and runs `drgnx sync` as a job (its progress in the echo area), then starts evil and switches.
+  No changes nothing. A sync or start that fails, or `C-g` during the sync, keeps your keys and turns the module back
+  off; a failure says why, with the log. In `drgnx safe` (no modules run) the keys stay as they are.
 - Called from code instead of as a command (`emacsclient -e`, a daemon, `drgnx onboard --non-interactive`), nothing
   is asked: `editor/evil` is turned on and the stack is written to `keys.eld` as `:pending-layers`, your keys stay
   as they are, and the message says "Vim needs drgnx sync". After `drgnx sync` the next start switches to it (and
-  takes `:pending-layers` out); the doctor says what waits until then.
+  takes `:pending-layers` out).
 - A Vim stack in `keys.eld` without evil (uninstalled, say) still starts: the palette keeps `C-S-p` and `F1`, Leader
   Menu `M-SPC`; `SPC` types a space, and `editor/evil` waits for its packages (Preferences: Modules).
 - Choosing VS Code or Emacs again turns `editor/evil` off from the next start, and drops a pending Vim stack.
