@@ -495,13 +495,37 @@ tall: only the elements that reach into it."
   "The SVG text of LAYOUT (`drgnx-cockpit-graph-layout'), in the theme's colours."
   (drgnx-cockpit-graph--print layout (drgnx-cockpit-graph--elements layout) 0 (plist-get layout :h)))
 
+(defun drgnx-cockpit-graph--luminance (hex)
+  "The relative luminance (WCAG) of colour HEX (#rrggbb), or nil for anything else (currentColor, none)."
+  (when (and (stringp hex) (string-match-p "\\`#[0-9a-fA-F]\\{6\\}\\'" hex))
+    (let ((lin (lambda (i) (let ((c (/ (string-to-number (substring hex i (+ i 2)) 16) 255.0)))
+                             (if (<= c 0.03928) (/ c 12.92) (expt (/ (+ c 0.055) 1.055) 2.4))))))
+      (+ (* 0.2126 (funcall lin 1)) (* 0.7152 (funcall lin 3)) (* 0.0722 (funcall lin 5))))))
+
+(defun drgnx-cockpit-graph--contrast (a b)
+  "The contrast ratio (WCAG, 1 to 21) of colours A and B, or nil when one is not a #rrggbb colour."
+  (when-let* ((la (drgnx-cockpit-graph--luminance a)) (lb (drgnx-cockpit-graph--luminance b)))
+    (/ (+ (max la lb) 0.05) (+ (min la lb) 0.05))))
+
+(defun drgnx-cockpit-graph--focus-colour ()
+  "The focus stroke's colour: `drgnx-cockpit-focus''s background (`highlight''s), unless it stands out less than 3:1
+from the default background (a pale highlight on a light theme) — then the face's foreground, else the default
+foreground (the window's text colour)."
+  (let ((bg (drgnx-work-ui--colour 'default :background))
+        (ok (lambda (c bg) (and (not (equal c "currentColor"))
+                                (let ((r (drgnx-cockpit-graph--contrast c bg))) (or (null r) (>= r 3)))))))
+    (seq-find (lambda (c) (funcall ok c bg))
+              (list (drgnx-work-ui--colour 'drgnx-cockpit-focus :background)
+                    (drgnx-work-ui--colour 'drgnx-cockpit-focus :foreground)
+                    (drgnx-work-ui--colour 'default :foreground))
+              "currentColor")))
+
 (defun drgnx-cockpit-graph-focus-element (layout id)
-  "The focus stroke round box ID of LAYOUT, as an element of `drgnx-cockpit-graph--elements' (in the background
-colour of `drgnx-cockpit-focus', else its foreground), or nil when LAYOUT has no such box."
+  "The focus stroke round box ID of LAYOUT, as an element of `drgnx-cockpit-graph--elements' (in
+`drgnx-cockpit-graph--focus-colour'), or nil when LAYOUT has no such box."
   (when-let* ((b (seq-find (lambda (b) (equal (plist-get b :id) id)) (plist-get layout :boxes))))
     (let* ((y (- (plist-get b :y) 3)) (h (+ (plist-get b :h) 6))
-           (bg (drgnx-work-ui--colour 'drgnx-cockpit-focus :background))
-           (colour (if (equal bg "currentColor") (drgnx-work-ui--colour 'drgnx-cockpit-focus :foreground) bg)))
+           (colour (drgnx-cockpit-graph--focus-colour)))
       (list y (+ y h) (drgnx-cockpit-graph--tag 'rect `((x . ,(- (plist-get b :x) 3)) (y . ,y) (width . ,(+ (plist-get b :w) 6))
                                                         (height . ,h) (rx . 5) (fill . "none") (stroke . ,colour)
                                                         (stroke-width . 3)))))))

@@ -37,7 +37,7 @@ border.
 **Silent worktrees.** A worktree with changes that no agent reports from shows as an agent of its own, `silent`,
 "not reporting". When the tracker knows its plan, it hangs under that plan. The graph looks for these while it
 shows:
-- in the repositories the store knows (jobs' and plans');
+- in the repositories the store knows (jobs' and plans', and those registered agents work in);
 - at most every `drgnx-cockpit-silent-interval` (45 s), and after each work-tracker scan;
 - with one git process per repository, and never in a remote (TRAMP) one.
 
@@ -94,9 +94,9 @@ The graph never asks anything, and it never blocks typing. It redraws when one o
   outside agent's MCP server or another Emacs. The check is one query, and it runs only while the graph shows.
 
 However many events come, at most one redraw runs per `drgnx-cockpit-redraw-delay` (0.5 s). A redraw first
-compares a cheap key, which costs about 20 µs. The key covers the store's version and change count, the agents,
-scans and silent worktrees, the filter, the options, the font, and the windows. When the key is the same, the
-redraw ends there.
+compares a cheap key, which costs about 20 µs. The key covers the store's version and change count, what the graph
+shows of each agent session (not its transcript, so an agent that streams costs nothing more), scans and silent
+worktrees, the filter, the options, the font, and the windows. When the key is the same, the redraw ends there.
 
 Otherwise it reads the store, and it draws only what changed:
 - In the outline, an unchanged line stays, and so does your place in it.
@@ -135,7 +135,7 @@ Faces, all inheriting your theme's:
 | `drgnx-cockpit-blocked` | `warning` | pending and failed work, blocks lines |
 | `drgnx-cockpit-edge` | `shadow` | lines, column titles, details |
 | `drgnx-cockpit-kind` | `bold` | kind words |
-| `drgnx-cockpit-focus` | `highlight` | the selected node's stroke (its background colour) |
+| `drgnx-cockpit-focus` | `highlight` | the selected node's stroke: its background colour, or, when that stands out less than 3:1 from the default background, its foreground, else the text colour |
 
 The drawing takes every colour from these faces and `default`. When a face has no colour, it uses the window's
 text colour.

@@ -86,7 +86,6 @@ shows everything.  Set by `drgnx-cockpit-graph-filter'.")
 (defvar drgnx-cockpit--check-timer nil "The repeating look at the store (`drgnx-cockpit--check'), while the graph lives.")
 (defvar drgnx-cockpit--draws 0 "How many times the Work graph was drawn (tests and the perf lab read it).")
 (defvar drgnx-cockpit--last-error nil "The last error a redraw said: the same one is said once.")
-(defvar drgnx-cockpit--agent-n 0 "Counts agent session changes: part of the redraw key.")
 (defvar drgnx-cockpit--scan-n 0 "Counts finished work-tracker scans: part of the redraw key.")
 (defvar drgnx-cockpit--silent nil "The worktrees nobody reports from, as `drgnx-cockpit-silent-worktrees' found them last.")
 (defvar drgnx-cockpit--silent-n 0 "Counts changes of `drgnx-cockpit--silent': part of the redraw key.")
@@ -182,8 +181,8 @@ and a look every `drgnx-cockpit-check-interval' s (idempotent)."
   (unless (member event drgnx-cockpit--quiet-events) (drgnx-cockpit-schedule)))
 
 (defun drgnx-cockpit--agent-changed (_session)
-  "`drgnx-agents-changed-functions': a session's state may show in the graph."
-  (cl-incf drgnx-cockpit--agent-n)
+  "`drgnx-agents-changed-functions' (also every transcript chunk): a session's state may show in the graph.  The
+redraw's key holds what the model reads of the sessions, so a chunk that changes none of it builds no model."
   (drgnx-cockpit-schedule))
 
 (defun drgnx-cockpit--scanned ()
@@ -242,11 +241,19 @@ changed.  Cheap: called from every event."
 
 ;;;; What other processes wrote; worktrees nobody reports from
 
+(defun drgnx-cockpit--sessions-key ()
+  "What the model reads of this Emacs's sessions: ((ID STATUS TASK JOB NAME CWD PERMISSIONS-P)…).  A transcript's
+chunk changes none of it."
+  (mapcar (lambda (s) (list (plist-get s :id) (plist-get s :status) (plist-get s :task) (plist-get s :job)
+                            (plist-get s :name) (plist-get s :cwd) (and (plist-get s :permissions) t)))
+          (drgnx-cockpit-sessions)))
+
 (defun drgnx-cockpit--store-key ()
-  "(DATA-VERSION TOTAL-CHANGES AGENT-N SCAN-N SILENT-N): it changes when the store or this Emacs's agents do.  One
-query: the data version moves when another connection commits, the change count when this Emacs writes."
+  "(DATA-VERSION TOTAL-CHANGES SESSIONS SCAN-N SILENT-N CLOSED): it changes when what the model reads does.  One
+query: the data version moves when another connection commits, the change count when this Emacs writes; SESSIONS is
+`drgnx-cockpit--sessions-key'; CLOSED is `drgnx-cockpit-include-closed-jobs'."
   (append (car (sqlite-select (drgnx-work-db) "select (select data_version from pragma_data_version()), total_changes()"))
-          (list drgnx-cockpit--agent-n drgnx-cockpit--scan-n drgnx-cockpit--silent-n)))
+          (list (drgnx-cockpit--sessions-key) drgnx-cockpit--scan-n drgnx-cockpit--silent-n drgnx-cockpit-include-closed-jobs)))
 
 (defun drgnx-cockpit--check ()
   "Every `drgnx-cockpit-check-interval' s while the graph lives (a timer): when it shows, ask for a redraw if the
@@ -258,10 +265,12 @@ store changed since the last one (another process wrote it), and look for silent
        (drgnx-cockpit--silent-scan)))))
 
 (defun drgnx-cockpit--roots ()
-  "The repositories the store knows — jobs' and the tracker's plans' — that are local folders.  A remote name is
-left out by its syntax (`file-remote-p') before any `file-directory-p' runs."
+  "The folders the store knows in repositories — jobs' repos, the tracker's plans' repos, registered agents' working
+folders and worktrees — that are local folders (git lists a repository's worktrees from any of them).  A remote name
+is left out by its syntax (`file-remote-p') before any `file-directory-p' runs."
   (let ((dirs (append (mapcar #'car (sqlite-select (drgnx-work-db) "select distinct repo from job where repo is not null"))
-                      (mapcar (lambda (p) (plist-get p :repo)) (drgnx-work-nodes 'plan)))))
+                      (mapcar (lambda (p) (plist-get p :repo)) (drgnx-work-nodes 'plan))
+                      (mapcan (lambda (r) (list (plist-get r :cwd) (plist-get r :worktree))) (drgnx-coord-agents)))))
     (seq-filter #'file-directory-p
                 (delete-dups (mapcar (lambda (d) (file-name-as-directory (expand-file-name d)))
                                      (seq-remove #'file-remote-p (seq-filter #'stringp dirs)))))))
@@ -279,7 +288,9 @@ left out by its syntax (`file-remote-p') before any `file-directory-p' runs."
 (defun drgnx-cockpit--silent-found (agents)
   "The silent worktrees' AGENTS were found (a sentinel): keep them, and redraw when they changed."
   (setq drgnx-cockpit--silent-running nil)
-  (let ((found (seq-remove (lambda (a) (plist-get a :error)) agents)))
+  ;; two folders of one repository list the same worktrees: each once
+  (let ((found (cl-remove-duplicates (seq-remove (lambda (a) (plist-get a :error)) agents)
+                                     :key (lambda (a) (plist-get a :id)) :test #'equal :from-end t)))
     (unless (equal found drgnx-cockpit--silent)
       (setq drgnx-cockpit--silent found)
       (cl-incf drgnx-cockpit--silent-n)
@@ -340,10 +351,11 @@ An exited session is left out (it no longer works on anything)."
 (defun drgnx-cockpit-graph-redraw (&optional force)
   "Draw the Work graph again when what it shows changed (FORCE: read the store again and draw anyway); non-nil when
 it drew.  The drawing in graphical windows wide enough for it (`drgnx-cockpit-graph-svg'), else the outline.
-First a cheap key: the store's data version and change count, the agent, scan and silent-worktree counters, the
-filter, the options' generation, the font's metrics, the widest window, ASCII or not.  The same key: nothing to do.
-Then the model is built only when the store, filter or options changed, the layout only when the model, metrics or
-options did.  Reads the store and the cached sessions only: never prompts."
+First a cheap key: the store's data version and change count, what the model reads of the sessions, the scan and
+silent-worktree counters, the filter, `drgnx-cockpit-include-closed-jobs', the options' generation, the font's
+metrics, the widest window, ASCII or not.  The same key: nothing to do.  Then the model is built only when the
+store, sessions, filter or options changed, the layout only when the model, metrics or options did.  Reads the store
+and the cached sessions only: never prompts."
   (when-let* ((b (get-buffer drgnx-cockpit-graph-buffer-name)))
     (with-current-buffer b
       (let* ((windows (get-buffer-window-list b nil t))
@@ -444,12 +456,13 @@ and windows keep their start and point where the buffer still reaches."
     (dolist (b (plist-get layout :boxes)) (puthash (plist-get b :id) b byid))
     (setq drgnx-cockpit--elements (drgnx-cockpit-graph--elements layout))
     (if (and drgnx-cockpit--svg (equal frame drgnx-cockpit--frame))
-        (progn
+        (let ((fg (drgnx-work-ui--colour 'default :foreground)))   ; currentColor follows a theme change
           (cl-mapc (lambda (band m)
                      (pcase-let* ((`(,y0 ,hb ,img) band) (svg (drgnx-cockpit--band-svg layout y0 hb)))
-                       (unless (and (equal svg (image-property img :data)) (equal m (image-property img :map)))
+                       (unless (and (equal svg (image-property img :data)) (equal m (image-property img :map))
+                                    (equal fg (image-property img :foreground)))
                          (ignore-errors (image-flush img t))
-                         (setf (image-property img :data) svg (image-property img :map) m))))
+                         (setf (image-property img :data) svg (image-property img :map) m (image-property img :foreground) fg))))
                    drgnx-cockpit--bands (drgnx-cockpit--band-maps byid ranges))
           (force-window-update (current-buffer)))
       (let* ((inhibit-read-only t) (map (make-sparse-keymap)) (spots nil) (i 0)

@@ -429,13 +429,15 @@ the fixture's."
 
 (ert-deftest drgnx-cockpit-graph/silent-worktrees-show-as-not-reporting ()
   (drgnx-cockpit-graph-test--with
-    ;; a remote repository in the store is never asked whether it is a folder
+    ;; roots: jobs' repos and registered agents' folders; a remote one (a job's, an agent's) is never asked whether
+    ;; it is a folder
     (drgnx-coord-job-create :id "jr" :title "remote" :repo "/ssh:nowhere.invalid:/r/" :tasks '((:n 1 :title "t" :role "implement")))
+    (drgnx-coord-agent-register :id "ext:far:1" :kind "far" :cwd "/ssh:nowhere.invalid:/w" :worktree "/ssh:nowhere.invalid:/w")
     (let ((asked nil) (orig (symbol-function 'file-directory-p)))
       (cl-letf (((symbol-function 'file-directory-p) (lambda (f) (push f asked) (funcall orig f))))
-        (should (equal (drgnx-cockpit--roots) (list repo))))
+        (should (equal (sort (drgnx-cockpit--roots) #'string<) (sort (list repo wt-a) #'string<))))
       (should-not (seq-find (lambda (f) (string-prefix-p "/ssh:" f)) asked)))
-    ;; of the two worktrees, wt-a has an agent: only wt-b is silent
+    ;; of the two worktrees, wt-a has an agent: only wt-b is silent (once, though two roots list it)
     (drgnx-cockpit--silent-scan t)
     (should (drgnx-cockpit-fixture-wait (lambda () (not drgnx-cockpit--silent-running))))
     (should (equal (mapcar (lambda (a) (plist-get a :worktree)) drgnx-cockpit--silent) (list wt-b)))
@@ -488,5 +490,82 @@ the fixture's."
                 (call-interactively #'drgnx-cockpit-graph-open))
               (should (get-buffer-window (get-file-buffer spec))))
           (set-face-attribute 'drgnx-cockpit-focus nil :background old))))))
+
+(ert-deftest drgnx-cockpit-graph/streaming-builds-no-model ()
+  (drgnx-cockpit-graph-test--with
+    (drgnx-cockpit-graph-redraw)
+    (let* ((built 0) (orig (symbol-function 'drgnx-cockpit-model)))
+      (cl-letf (((symbol-function 'drgnx-cockpit-model) (lambda (&rest args) (cl-incf built) (apply orig args))))
+        ;; an agent streams: every chunk runs the changed hook, nothing the model reads changes
+        (dotimes (_ 5) (drgnx-cockpit--agent-changed nil) (drgnx-cockpit-graph-test--tick))
+        (should (= 0 built))
+        ;; its status changes: one model
+        (setq sessions (cons (plist-put (copy-sequence (car sessions)) :status 'busy) (cdr sessions)))
+        (drgnx-cockpit--agent-changed nil)
+        (drgnx-cockpit-graph-test--tick)
+        (should (= 1 built))
+        ;; done jobs shown or not: another model
+        (let ((drgnx-cockpit-include-closed-jobs t))
+          (drgnx-cockpit-schedule)
+          (drgnx-cockpit-graph-test--tick)
+          (should (= 2 built)))))))
+
+(ert-deftest drgnx-cockpit-graph/a-theme-redraws ()
+  (drgnx-cockpit-graph-test--with
+    (drgnx-cockpit-graph-redraw)
+    (should (memq #'drgnx-cockpit--theme-changed enable-theme-functions))
+    (let ((n drgnx-cockpit--draws))
+      (drgnx-cockpit--theme-changed 'some-theme)
+      (drgnx-cockpit-graph-test--tick)
+      (should (= (1+ n) drgnx-cockpit--draws)))))
+
+(ert-deftest drgnx-cockpit-graph/the-drawing-tells-the-question-and-keeps-the-selection ()
+  (drgnx-cockpit-graph-test--with
+    (drgnx-cockpit-graph-test--drawn
+      (let ((drgnx-cockpit-graph-band-height 100) (old (face-attribute 'drgnx-cockpit-focus :background))
+            (t2 (format "task:%s#2" plan)) (t3 (format "task:%s#3" plan)))
+        (unwind-protect
+            (with-current-buffer g
+              (set-face-attribute 'drgnx-cockpit-focus nil :background "#00ee00")
+              (drgnx-cockpit-graph-redraw t)
+              (should (> (length drgnx-cockpit--bands) 2))
+              ;; hovering T3's box tells the open question
+              (let ((area (car (rassoc t3 drgnx-cockpit--spots))))
+                (should (seq-some (lambda (b) (seq-some (lambda (spot) (and (eq (nth 1 spot) area)
+                                                                            (string-search "Pick a name" (plist-get (nth 2 spot) 'help-echo))))
+                                                        (image-property (nth 2 b) :map)))
+                                  drgnx-cockpit--bands)))
+              ;; TAB: only the bands the focus stroke reaches are drawn again
+              (let ((before (mapcar (lambda (b) (image-property (nth 2 b) :data)) drgnx-cockpit--bands)))
+                (with-selected-window (get-buffer-window g) (drgnx-cockpit-graph-select-next))
+                (let* ((e (drgnx-cockpit-graph-focus-element drgnx-cockpit--layout drgnx-cockpit--selected))
+                       (changed (cl-loop for b in drgnx-cockpit--bands for d in before
+                                         unless (equal d (image-property (nth 2 b) :data)) collect b)))
+                  (should changed)
+                  (should (< (length changed) (length drgnx-cockpit--bands)))
+                  (dolist (b changed) (should (and (<= (car e) (+ (car b) (cadr b))) (>= (cadr e) (car b)))))))
+              ;; a model change keeps the selection, and its stroke
+              (drgnx-cockpit--focus t2)
+              (drgnx-coord-force-status "jx#4" "running" "s-1")
+              (drgnx-cockpit-graph-redraw)
+              (should (equal drgnx-cockpit--selected t2))
+              (should (seq-some (lambda (b) (string-search "#00ee00" (image-property (nth 2 b) :data))) drgnx-cockpit--bands)))
+          (set-face-attribute 'drgnx-cockpit-focus nil :background old))))))
+
+(ert-deftest drgnx-cockpit-graph/the-focus-stroke-stands-out ()
+  (let ((saved (list (face-attribute 'default :background) (face-attribute 'default :foreground)
+                     (face-attribute 'drgnx-cockpit-focus :background))))
+    (unwind-protect
+        (progn
+          (set-face-attribute 'default nil :background "#ffffff" :foreground "#101010")
+          ;; a pale highlight on a light background (under 3:1): the text colour instead
+          (set-face-attribute 'drgnx-cockpit-focus nil :background "#eeeeee")
+          (should (< (drgnx-cockpit-graph--contrast "#eeeeee" "#ffffff") 3))
+          (should (equal (drgnx-cockpit-graph--focus-colour) "#101010"))
+          ;; one that stands out: itself
+          (set-face-attribute 'drgnx-cockpit-focus nil :background "#0000ff")
+          (should (equal (drgnx-cockpit-graph--focus-colour) "#0000ff")))
+      (ignore-errors (set-face-attribute 'default nil :background (nth 0 saved) :foreground (nth 1 saved)))
+      (ignore-errors (set-face-attribute 'drgnx-cockpit-focus nil :background (nth 2 saved))))))
 
 ;;; mod-cockpit-graph-test.el ends here

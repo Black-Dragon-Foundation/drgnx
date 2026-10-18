@@ -154,7 +154,10 @@ the graph hidden only marks it stale; `:on-show` catches up. `drgnx-cockpit-grap
 
 1. **The key** (about 20 µs, one query):
    - `PRAGMA data_version` (moves when another connection commits) and `total_changes()` (this Emacs's writes);
-   - counters bumped by agent changes, tracker scans and new silent worktrees;
+   - what the model reads of this Emacs's sessions: `(ID STATUS TASK JOB NAME CWD PERMISSIONS-P)` each. A
+     transcript's chunk changes none of it, so an agent that streams builds no model: 0.023 ms and 1 KB a tick at
+     293 nodes, where a counter of session changes cost 2.1 ms and 500 KB;
+   - counters bumped by tracker scans and new silent worktrees, and `drgnx-cockpit-include-closed-jobs`;
    - the filter, the options' generation, the font's metrics, the widest window, ASCII or not.
 
    The same key: return.
@@ -205,5 +208,8 @@ why a change touches as few bands as it can.
   timer included);
 - options and fonts reaching the drawing, old band images flushed (and kept when drawn the same);
 - writes of another connection caught by the check;
-- silent worktrees as agents "not reporting" (a remote repository never asked about);
+- an agent that streams builds no model (a status change does, and so does showing done jobs);
+- a theme redraws; the drawing's hover text tells the open question; TAB draws only the bands its stroke reaches;
+  the selection survives a model change; the focus stroke stands out (3:1);
+- silent worktrees as agents "not reporting", each once (a remote repository or agent folder never asked about);
 - the keys in every profile.
