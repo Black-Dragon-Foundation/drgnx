@@ -82,17 +82,26 @@ checkout meanwhile — whose commits they are is unknown, so none is recorded (`
 (declare-function drgnx-agent-session-cwd "drgnx-agents")
 (declare-function drgnx-agent-session-status "drgnx-agents")
 
-(defun drgnx-work--exited-states ()
-  "The recording states of the sessions that have exited."
-  (mapcar #'cdr (seq-filter (lambda (e) (eq (drgnx-agent-session-status (car e)) 'exited)) drgnx-work--tasks)))
+(defun drgnx-work--collect-exit (s st)
+  "Record, once, what exited session S (recording state ST) committed since its last turn ended — unless another
+task session is busy in the same checkout (whose commits they are is unknown).  ST is `:done' then: later commits in
+that checkout, the user's among them, are never the dead session's."
+  (let ((overlap (seq-some (lambda (o) (and (not (eq (car o) s)) (plist-get (cdr o) :busy)
+                                            (not (eq (drgnx-agent-session-status (car o)) 'exited))
+                                            (equal (plist-get (cdr o) :tree) (plist-get st :tree))))
+                           drgnx-work--tasks)))
+    (plist-put st :busy nil) (plist-put st :overlap nil)
+    (with-demoted-errors "drgnx work: %S" (drgnx-work-task-collect st nil overlap))))
 
-(defun drgnx-work--collect-exited (states)
-  "Record what the exited sessions of STATES committed since their last turn ended (none twice; a state whose
-turn ended already has its head moved on)."
-  (dolist (st states)
-    (let ((overlap (plist-get st :overlap)))
-      (plist-put st :busy nil) (plist-put st :overlap nil)
-      (with-demoted-errors "drgnx work: %S" (drgnx-work-task-collect st nil overlap)))))
+(defun drgnx-work--agent-changed (s)
+  "`drgnx-agents-changed-functions': the first time S is seen exited, its last commits are collected (on a timer,
+never inside the process sentinel that saw the exit)."
+  (let ((st (alist-get s drgnx-work--tasks)))
+    (when (and st (not (plist-get st :done)) (eq (drgnx-agent-session-status s) 'exited))
+      (plist-put st :done t)
+      (run-at-time 0 nil (lambda () (drgnx-work--collect-exit s st))))))
+
+(add-hook 'drgnx-agents-changed-functions #'drgnx-work--agent-changed)
 
 (defun drgnx-work--agent-task (s event)
   "`drgnx-agents-task-functions': note where S's work starts; after each turn, record its commits —
@@ -100,8 +109,6 @@ on a timer, never inside the process filter that saw the turn end."
   (let ((st (alist-get s drgnx-work--tasks)))
     (pcase event
       ('start
-       (let ((gone (drgnx-work--exited-states)))             ; their last commits first, on a timer (not in this path)
-         (when gone (run-at-time 0 nil #'drgnx-work--collect-exited gone)))
        (setq drgnx-work--tasks (seq-remove (lambda (e) (eq (drgnx-agent-session-status (car e)) 'exited)) drgnx-work--tasks))
        (push (cons s (drgnx-work-task-begin (drgnx-agent-session-task s) (drgnx-agent-session-cwd s))) drgnx-work--tasks))
       ('turn-start
@@ -156,11 +163,9 @@ the job started in (its worktree may be gone by now)."
                                            (delq nil (mapcar (lambda (p) (plist-get p :root)) (plist-get (drgnx-projects-read) :projects))))))))
 
 (defun drgnx-work-refresh (&optional roots board)
-  "Scan ROOTS (default: `drgnx-work-default-roots') and BOARD (default: the board); collect the commits of ended jobs
-and of exited agent sessions."
+  "Scan ROOTS (default: `drgnx-work-default-roots') and BOARD (default: the board), and collect ended jobs."
   (require 'drgnx-projects)
   (prog1 (drgnx-work-scan (or roots (drgnx-work-default-roots)) :board (or board (drgnx-projects-board-file)))
-    (drgnx-work--collect-exited (drgnx-work--exited-states))
     (drgnx-work-collect-jobs)))
 
 ;;;; Command line
