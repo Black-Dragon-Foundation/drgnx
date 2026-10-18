@@ -1,6 +1,8 @@
 ;;; mock-llm.el --- a scripted HTTP server standing in for every LLM provider in tests -*- lexical-binding: t -*-
 ;; Run as its own batch Emacs (a server in the test's Emacs could not answer while the test waits on curl):
 ;;   MOCK_LLM_SERVE=1 MOCK_LLM_PORT=N MOCK_LLM_SCRIPT=FILE [MOCK_LLM_LOG=FILE] emacs --batch -Q -l mock-llm.el
+;; N = 0 (or empty): the system picks the port.  Once listening, the server reports it on one line,
+;; "MOCK-LLM-PORT N", which `drgnx-ai-test-mock-llm' reads (a listener that is not the mock cannot pass for it).
 ;; FILE holds a list of answers (:path PREFIX [:match REGEXP] [:status 200] [:delay SECS] [:body STRING]
 ;; [:headers ((NAME . VALUE)…) more response headers] [:once t]):
 ;; the first whose PREFIX starts the request path and whose REGEXP (if any) matches the body answers; :once answers
@@ -59,8 +61,10 @@
 
 (defun mock-llm-serve ()
   (setq mock-llm--script (with-temp-buffer (insert-file-contents (getenv "MOCK_LLM_SCRIPT")) (read (current-buffer))))
-  (make-network-process :name "mock-llm" :server t :host "127.0.0.1" :family 'ipv4 :coding 'binary
-                        :service (string-to-number (getenv "MOCK_LLM_PORT")) :filter #'mock-llm--filter)
+  (let* ((n (string-to-number (or (getenv "MOCK_LLM_PORT") "")))
+         (srv (make-network-process :name "mock-llm" :server t :host "127.0.0.1" :family 'ipv4 :coding 'binary
+                                    :service (if (> n 0) n t) :filter #'mock-llm--filter)))
+    (message "MOCK-LLM-PORT %d" (process-contact srv :service)))
   ;; it ends with the test Emacs that started it — even one killed by a signal, which cannot stop it
   (let ((parent (and (getenv "MOCK_LLM_PARENT") (string-to-number (getenv "MOCK_LLM_PARENT")))))
     (while t
@@ -69,22 +73,35 @@
         (let ((a (process-attributes parent)))
           (when (or (null a) (equal (alist-get 'state a) "Z")) (kill-emacs 0)))))))
 
+(defun drgnx-test-free-port ()
+  "A port a listener of this Emacs just bound and released: nothing listens on it, a connection is refused."
+  (let ((srv (make-network-process :name "free-port" :server t :host "127.0.0.1" :family 'ipv4 :service t :noquery t)))
+    (prog1 (process-contact srv :service) (delete-process srv))))
+
 (defun drgnx-ai-test-mock-llm (port script &optional log)
-  "Start the mock on PORT answering from SCRIPT (a file), logging to LOG; the process, once it listens."
-  (let* ((process-environment (append (list "MOCK_LLM_SERVE=1" (format "MOCK_LLM_PORT=%d" port) (concat "MOCK_LLM_SCRIPT=" script)
+  "Start the mock answering from SCRIPT (a file), logging to LOG; the process, once it listens.
+PORT nil: the mock listens on a port the system picks.  A number asks for that port (a caller that needs a fixed one);
+it errors when the port is taken.  Either way the port the mock reports is the process's `:port' property."
+  (let* ((process-environment (append (list "MOCK_LLM_SERVE=1" (format "MOCK_LLM_PORT=%d" (or port 0)) (concat "MOCK_LLM_SCRIPT=" script)
                                             (format "MOCK_LLM_PARENT=%d" (emacs-pid)))
                                       (and log (list (concat "MOCK_LLM_LOG=" log)))
                                       process-environment))
+         (out "")
          ;; SIGPIPE ignored, as a server does: a client that went away (a cancelled request) must not kill it —
          ;; started from a GUI session it would (signal 13)
          (p (make-process :name "mock-llm" :noquery t :buffer nil :connection-type 'pipe
+                          :filter (lambda (_p s) (setq out (concat out s)))
                           :command (list "sh" "-c" "trap '' PIPE; exec \"$0\" \"$@\""
                                          (expand-file-name invocation-name invocation-directory) "--batch" "-Q" "-l"
                                          mock-llm--file)))
          (deadline (+ (float-time) 10)))
-    (while (and (< (float-time) deadline)
-                (not (ignore-errors (delete-process (open-network-stream "probe" nil "127.0.0.1" port)) t)))
-      (sleep-for 0.05))
+    ;; ready = the server said which port it bound (not "something accepts on PORT")
+    (while (and (< (float-time) deadline) (process-live-p p) (not (string-match "MOCK-LLM-PORT \\([0-9]+\\)" out)))
+      (accept-process-output p 0.05))
+    (unless (string-match "MOCK-LLM-PORT \\([0-9]+\\)" out)
+      (when (process-live-p p) (delete-process p))
+      (error "Mock LLM did not start (port %s): %s" (or port "any") (string-trim out)))
+    (process-put p :port (string-to-number (match-string 1 out)))
     p))
 
 (when (getenv "MOCK_LLM_SERVE") (mock-llm-serve))

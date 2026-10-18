@@ -10,7 +10,7 @@
 `a' (openai), `o' (ollama), `l' (llama.cpp) and `dead' (nothing listens) pointing at it in ai.eld."
   (declare (indent 1))
   `(let* ((root (file-name-as-directory (make-temp-file "drgnx-ai-client" t)))
-          (port (+ 20000 (random 20000))) (dead (+ 40000 (random 9000)))
+          (port nil) (dead nil)
           (log (concat root "llm.log")) (script (concat root "llm.eld"))
           (process-environment (append (list (concat "DRGNX_CONFIG_DIR=" root "config") (concat "XDG_STATE_HOME=" root "state")
                                              "A_KEY=sk-test-123")
@@ -21,6 +21,9 @@
          (progn
            (make-directory (concat root "config") t)
            (with-temp-file script (prin1 ,spec (current-buffer)))
+           (setq mock (drgnx-ai-test-mock-llm nil script log)
+                 port (process-get mock :port)
+                 dead (drgnx-test-free-port))
            (with-temp-file (concat root "config/ai.eld")
              (prin1 `(:version 1
                                :providers ((a :name "A" :kind openai :url ,(format "http://127.0.0.1:%d/v1" port) :key-env "A_KEY" :caps (chat fim))
@@ -28,7 +31,6 @@
                                            (l :name "L" :kind llamacpp :url ,(format "http://127.0.0.1:%d" port) :caps (chat fim))
                                            (dead :name "Dead" :kind openai :url ,(format "http://127.0.0.1:%d/v1" dead) :caps (chat fim))))
                     (current-buffer)))
-           (setq mock (drgnx-ai-test-mock-llm port script log))
            ,@body)
        (when mock (delete-process mock))
        (delete-directory root t))))

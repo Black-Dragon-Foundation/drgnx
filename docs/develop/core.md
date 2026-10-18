@@ -995,3 +995,13 @@ dirs, and unsets the provider keys (`OPENROUTER_API_KEY`, `ANTHROPIC_API_KEY`, `
 `OPENAI_API_KEY`): no test reaches a paid model. In a session: `test/live/drgnx-boot-test.el` boots `config=drgnx` and checks
 the registry, the guard (a `y-or-n-p` from a timer signals), the palette (`C-S-p`), the key sheet (F1) and the
 module report. Scenarios run against drgnx with `bin/drgnx test --scenario`; the workbench ones skip until M3.
+
+### Test ports
+
+A test never picks a port by chance. The mock LLM (`test/fixtures/mock-llm.el`) is started with
+`(drgnx-ai-test-mock-llm nil SCRIPT [LOG])`: it listens on a port the system picks and reports it on one line
+(`MOCK-LLM-PORT N`), which the call reads before it returns; the process's `:port` property is that port, and the
+config is written with it. The readiness check is that report, so another program listening on a port cannot pass for
+the mock. A number instead of `nil` asks for that port and errors when it is taken. A "dead provider" that must refuse
+connections uses `(drgnx-test-free-port)`: a port a listener of this Emacs just bound and released. The mock CDP and
+MCP servers listen on `:service t` and return their port the same way.
