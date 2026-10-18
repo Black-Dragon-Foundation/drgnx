@@ -372,16 +372,19 @@ this Emacs found (`drgnx-ai--keys'), which the agents the hub starts read withou
   "Register an agent with the gateway: PARAMS (:job :task :agent :chain ((PROVIDER MODEL)…) :budget :openrouter (the
 restrictions of `drgnx-gateway-restrictions', lists or vectors) :keys (:PROVIDER KEY…) :owner PID), keys held in
 memory; OWNER, the pid of the Emacs whose agent it is, ends it when it is gone
-\(`drgnx-hub--prune-registrations').  (:token :url)."
-  (drgnx-hub--set-keys (plist-get params :keys))
-  (let ((token (drgnx-gateway-register (list :job (plist-get params :job) :task (plist-get params :task)
-                                             :agent (plist-get params :agent)
-                                             :owner (let ((o (plist-get params :owner))) (and (natnump o) o))
-                                             :chain (drgnx-hub--chain (append (plist-get params :chain) nil))
-                                             :openrouter (drgnx-gateway-restrictions (plist-get params :openrouter))
-                                             :budget (or (plist-get params :budget) (drgnx-job-budget (plist-get params :job)))))))
-    (drgnx-hub--save-registrations)
-    (list :token token :url (format "http://127.0.0.1:%d" (drgnx-gateway-port)))))
+\(`drgnx-hub--prune-registrations').  (:token :url :openrouter KEPT): KEPT, the restrictions registered, lets the
+editor check that they all were.  Restrictions that do not read refuse the registration (an error naming them)."
+  (let ((restrictions (drgnx-gateway-restrictions (plist-get params :openrouter) t)))
+    (drgnx-hub--set-keys (plist-get params :keys))
+    (let ((token (drgnx-gateway-register (list :job (plist-get params :job) :task (plist-get params :task)
+                                               :agent (plist-get params :agent)
+                                               :owner (let ((o (plist-get params :owner))) (and (natnump o) o))
+                                               :chain (drgnx-hub--chain (append (plist-get params :chain) nil))
+                                               :openrouter restrictions
+                                               :budget (or (plist-get params :budget) (drgnx-job-budget (plist-get params :job)))))))
+      (drgnx-hub--save-registrations)
+      (append (list :token token :url (format "http://127.0.0.1:%d" (drgnx-gateway-port)))
+              (and restrictions (list :openrouter restrictions))))))
 
 ;;;; Agent sessions (held here; editors mirror them)
 

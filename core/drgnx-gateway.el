@@ -206,10 +206,35 @@ the body (up to 32 MB) is waited for; the body's pieces are kept in a list and j
        (cl-loop for s in (append value nil)
                 when (and (stringp s) (string-match-p "\\`[A-Za-z0-9][A-Za-z0-9._/-]*\\'" s)) collect s)))
 
-(defun drgnx-gateway-restrictions (raw)
+(defun drgnx-gateway--restrictions-check (raw)
+  "Signal a `user-error' naming the first part of RAW (an `:openrouter' value) that is not a restriction: RAW not a
+plist, a key other than :only :ignore :data-collection :zdr, a list of slugs that is not one, a :data-collection
+other than deny or allow, a :zdr other than t or false.  Empty values (nil, [], JSON false or null) are no
+restriction."
+  (unless (and (proper-list-p raw) (cl-evenp (length raw)))
+    (user-error "OpenRouter restrictions: :openrouter is %S, not a list of keys and values" raw))
+  (cl-loop for (key value) on raw by #'cddr
+           do (pcase key
+                ((or :only :ignore)
+                 (unless (and (or (listp value) (vectorp value))
+                              (cl-every (lambda (s) (and (stringp s) (string-match-p "\\`[A-Za-z0-9][A-Za-z0-9._/-]*\\'" s)))
+                                        (append value nil)))
+                   (user-error "OpenRouter restrictions: %s is %S, not a list of provider slugs (like (\"anthropic\"))"
+                               key value)))
+                (:data-collection
+                 (unless (member value '(nil :null deny allow "deny" "allow"))
+                   (user-error "OpenRouter restrictions: :data-collection is %S, not deny or allow" value)))
+                (:zdr
+                 (unless (memq value '(nil t :false :null))
+                   (user-error "OpenRouter restrictions: :zdr is %S, not t or nil" value)))
+                (_ (user-error "OpenRouter restrictions: %S is not one of :only :ignore :data-collection :zdr" key)))))
+
+(defun drgnx-gateway-restrictions (raw &optional strict)
   "RAW (agents.eld's `:openrouter', or what a hub call carried: lists or vectors, strings for symbols) as the
 restrictions a registration keeps: (:only SLUGS :ignore SLUGS :data-collection deny|allow :zdr t), each only when
-set; nil when none is."
+set; nil when none is.  STRICT: anything in RAW that is not a restriction is a `user-error' naming it
+\(`drgnx-gateway--restrictions-check'), never \"no restriction\" — an agent's start and the hub's registration use it."
+  (when strict (drgnx-gateway--restrictions-check raw))
   (when (proper-list-p raw)
     (let* ((only (drgnx-gateway--slugs (plist-get raw :only)))
            (ignore (drgnx-gateway--slugs (plist-get raw :ignore)))

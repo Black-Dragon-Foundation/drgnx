@@ -198,9 +198,108 @@ answered is in `drgnx-gateway-openrouter-test--answer')."
                                                   :openrouter '(:only ["a/b"] :ignore [] :data-collection "allow" :zdr :false)))))
               (should (equal (plist-get (gethash (drgnx-gateway--hash (plist-get json :token)) drgnx-gateway--registrations)
                                         :openrouter)
-                             '(:only ("a/b") :data-collection allow)))))
+                             '(:only ("a/b") :data-collection allow)))
+              ;; the answer says what was kept, so an editor can tell a hub that dropped them
+              (should (equal (plist-get json :openrouter) '(:only ("a/b") :data-collection allow)))))
         (drgnx-hub-disconnect)
         (drgnx-hub-stop)))))
+
+;;;; Fail closed (final review C1, I1, I2)
+
+(defun drgnx-gateway-openrouter-test--session (&optional profile)
+  (drgnx-agents--make :name "t" :profile (or profile "claude (OpenRouter)") :cwd temporary-file-directory))
+
+(ert-deftest drgnx-gateway-openrouter/no-hub-with-restrictions-refuses ()
+  ;; the restrictions apply through the hub's gateway only: without a hub, an OpenRouter agent with restrictions does
+  ;; not start (directly it would reach OpenRouter with none of them); its session says why
+  (drgnx-gateway-openrouter-test--with
+    (let ((drgnx-agents-profiles nil) (drgnx-agents--sessions nil) (started nil))
+      (drgnx-agents-set-setting :openrouter drgnx-gateway-openrouter-test--restrictions)
+      (cl-letf (((symbol-function 'drgnx-hub-ensure) (lambda () (error "No hub here")))
+                ((symbol-function 'drgnx-acp-start) (lambda (&rest args) (push args started) nil)))
+        (let* ((s (drgnx-gateway-openrouter-test--session))
+               (err (should-error (drgnx-agents--env s) :type 'user-error)))
+          (should (string-search "OpenRouter restrictions" (error-message-string err)))
+          (should (string-search "No hub here" (error-message-string err)))
+          (should-not (eq (drgnx-agent-session-via s) 'direct)))
+        (let ((s (drgnx-agents-start "claude (OpenRouter)" temporary-file-directory)))
+          (should-not started)                                    ; no agent ran, with any environment
+          (should (eq (drgnx-agent-session-status s) 'exited))
+          (should (seq-find (lambda (e) (string-search "OpenRouter restrictions" (or (plist-get e :text) "")))
+                            (drgnx-agent-session-entries s))))
+        ;; without restrictions it goes direct, as before
+        (drgnx-agents-set-setting :openrouter nil)
+        (let ((s (drgnx-gateway-openrouter-test--session)))
+          (should (seq-find (lambda (e) (string-prefix-p "ANTHROPIC_BASE_URL=" e)) (drgnx-agents--env s)))
+          (should (eq (drgnx-agent-session-via s) 'direct)))))))
+
+(ert-deftest drgnx-gateway-openrouter/restrictions-that-cannot-be-read-refuse-the-start ()
+  ;; a typo never turns a restriction off: an agents.eld that does not read, or an :openrouter value that is not one,
+  ;; refuses the OpenRouter agent's start, naming the problem; the hub refuses such a registration itself
+  (drgnx-gateway-openrouter-test--with
+    (let ((drgnx-agents-profiles nil) (drgnx-hub--exit-function #'drgnx-hub-stop)
+          (file (concat root "config/agents.eld")))
+      (unwind-protect
+          (progn
+            (drgnx-hub-serve (drgnx-hub-socket))
+            (pcase-dolist (`(,text . ,named)
+                           '(("(:openrouter (:zdr t)" . "agents.eld")             ; a parenthesis short
+                             ("(:openrouter (:only \"anthropic\"))" . ":only")    ; a string, not a list
+                             ("(:openrouter (:only (\"bad slug!\")))" . ":only")
+                             ("(:openrouter (:ignore (anthropic)))" . ":ignore")   ; a symbol, not a slug
+                             ("(:openrouter (:zdr 1))" . ":zdr")
+                             ("(:openrouter (:zdr yes))" . ":zdr")
+                             ("(:openrouter (:data-collection no))" . ":data-collection")
+                             ("(:openrouter (:zdrr t))" . ":zdrr")                ; a key that is not one
+                             ("(:openrouter \"anthropic\")" . ":openrouter")))
+              (with-temp-file file (insert ";; mine\n" text "\n"))
+              (let ((err (should-error (drgnx-agents--env (drgnx-gateway-openrouter-test--session)) :type 'user-error)))
+                (should (string-search named (error-message-string err))))
+              (should-not (drgnx-gateway-registrations)))
+            ;; a file of comments only has no restrictions
+            (with-temp-file file (insert ";; nothing yet\n"))
+            (should-not (drgnx-agents-openrouter-restrictions))
+            ;; empty values are no restriction, as the JSON call carries them
+            (with-temp-file file (insert "(:openrouter (:only () :zdr nil))\n"))
+            (should-not (drgnx-agents-openrouter-restrictions))
+            ;; an agent with no OpenRouter step is not held up by a broken value
+            (with-temp-file file (insert "(:openrouter (:zdr yes))\n"))
+            (drgnx-agents--env (drgnx-gateway-openrouter-test--session "claude (Ollama)"))
+            (should (= (length (drgnx-gateway-registrations)) 1))
+            ;; the hub: in this Emacs and over its socket
+            (should-error (drgnx-hub-register (list :chain '(("openrouter" nil)) :openrouter '(:zdr "yes"))))
+            (should-error (drgnx-hub-call-sync "gateway/register"
+                                               (list :chain [["openrouter" nil]] :openrouter '(:only "anthropic"))))
+            (should (= (length (drgnx-gateway-registrations)) 1)))
+        (drgnx-hub-disconnect)
+        (drgnx-hub-stop)))))
+
+(ert-deftest drgnx-gateway-openrouter/a-hub-that-drops-them-is-refused ()
+  ;; a hub started before restrictions existed keeps a registration without them: its answer says what it kept, and
+  ;; an agent whose restrictions it did not keep does not start (its token is given back)
+  (drgnx-gateway-openrouter-test--with
+    (let ((drgnx-agents-profiles nil) (answer nil) (calls nil))
+      (drgnx-agents-set-setting :openrouter drgnx-gateway-openrouter-test--restrictions)
+      (cl-letf (((symbol-function 'drgnx-hub-ensure) #'ignore)
+                ((symbol-function 'drgnx-hub-serving-p) #'ignore)
+                ((symbol-function 'drgnx-hub-call-sync) (lambda (method &rest _) (push method calls) answer))
+                ((symbol-function 'drgnx-hub-call) (lambda (method params &rest _) (push (list method params) calls))))
+        (dolist (a '((:token "tok-old" :url "http://127.0.0.1:1")                               ; says nothing
+                     (:token "tok-less" :url "http://127.0.0.1:1" :openrouter (:only ("anthropic")))))  ; kept fewer
+          (setq answer a calls nil)
+          (let* ((s (drgnx-gateway-openrouter-test--session))
+                 (err (should-error (drgnx-agents--env s) :type 'user-error)))
+            (should (string-search "drgnx hub stop" (error-message-string err)))
+            (should (member (list "gateway/unregister" (list :token (plist-get a :token))) calls))
+            (should-not (drgnx-agent-session-gateway s))))
+        ;; what it kept, as JSON brings it back: the agent starts through it
+        (setq answer '(:token "tok-ok" :url "http://127.0.0.1:1"
+                              :openrouter (:only ("anthropic" "google-vertex") :ignore ("azure") :data-collection "deny" :zdr t))
+              calls nil)
+        (let ((s (drgnx-gateway-openrouter-test--session)))
+          (should (member "ANTHROPIC_BASE_URL=http://127.0.0.1:1" (drgnx-agents--env s)))
+          (should (eq (drgnx-agent-session-via s) 'gateway))
+          (should-not (assoc "gateway/unregister" calls)))))))
 
 (ert-deftest drgnx-gateway-openrouter/other-providers-untouched ()
   (drgnx-gateway-openrouter-test--with
@@ -252,9 +351,10 @@ answered is in `drgnx-gateway-openrouter-test--answer')."
           (drgnx-agents-set-setting :openrouter '(:only ("anthropic") :data-collection allow))
           (should (equal (drgnx-agents-openrouter-restrictions) '(:only ("anthropic") :data-collection allow)))
           (should (string-search "; the usual one" (with-temp-buffer (insert-file-contents file) (buffer-string))))
-          ;; what is not a restriction is dropped when read: slugs that could break the JSON or the line, odd values
+          ;; what is not a restriction is refused when read, never read as none: slugs that could break the JSON or
+          ;; the line, odd values
           (drgnx-agents-set-setting :openrouter '(:only ("ok" "bad\"slug" 5) :ignore "x" :data-collection maybe :zdr maybe))
-          (should (equal (drgnx-agents-openrouter-restrictions) '(:only ("ok"))))
+          (should-error (drgnx-agents-openrouter-restrictions) :type 'user-error)
           (drgnx-agents-set-setting :openrouter nil)
           (should-not (drgnx-agents-openrouter-restrictions)))
       (delete-directory root t))))
@@ -282,6 +382,17 @@ answered is in `drgnx-gateway-openrouter-test--answer')."
         (should (string-search "never azure" text))
         (should (string-search "[Change…]" text))
         (should-not (string-search "applies through drgnx's gateway only" text))))))
+
+(ert-deftest drgnx-gateway-openrouter/the-page-says-when-they-cannot-be-read ()
+  (drgnx-agent-config-test-env
+    (let ((process-environment (cons (concat "DRGNX_CONFIG_DIR=" home "cfg") process-environment))
+          (drgnx-agents-profiles nil))
+      (make-directory (concat home "cfg") t)
+      (with-temp-file (concat home "cfg/agents.eld") (insert "(:openrouter (:zdr yes))\n"))
+      (let ((text (drgnx-gateway-openrouter-test--page-text t root)))
+        (should (string-search "OpenRouter restrictions: unreadable" text))
+        (should (string-search ":zdr" text))
+        (should (string-search "OpenRouter agents do not start" text))))))
 
 (ert-deftest drgnx-gateway-openrouter/the-command-asks-and-saves ()
   (drgnx-agent-config-test-env

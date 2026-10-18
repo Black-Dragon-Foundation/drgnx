@@ -287,7 +287,10 @@ OpenRouter chooses, among the providers that serve a model, one for each request
   settings: it is not sent);
 - `:zdr t` -- zero-data-retention endpoints only.
 
-Each key is optional. A value that is not a slug list, `deny`/`allow` or `t` is ignored. The gateway puts them into the
+Each key is optional; an empty value (`()`, `nil`) is no restriction. Restrictions fail closed: a value that is not a
+slug list, `deny`/`allow` or `t`/`nil`, a key other than these four, or an `agents.eld` that does not read (a parenthesis
+short) is never read as "no restriction". An agent with an OpenRouter route does not start, and its session says which
+key is wrong; the Agent Settings page shows *unreadable* with the reason. The hub refuses such a registration too. The gateway puts them into the
 request's top-level `provider` object (`only`, `ignore`, `data_collection`, `zdr`), which OpenRouter's Anthropic-compatible
 `/api/v1/messages` accepts (its `ProviderPreferences`). They apply to Messages requests (`/v1/messages`, also with a query
 such as `?beta=true`) sent to the provider with the id `openrouter` only: other providers' requests are unchanged, and so
@@ -302,8 +305,13 @@ body cannot be read as a JSON object (or its `provider` is not one), the gateway
 and sends nothing: a request that might not honour them never goes out. Without restrictions the body goes as it was.
 
 They reach only
-the agents that go through the gateway, so a route without it (no hub, or `drgnx-agents-use-gateway` off) is bound by
-your OpenRouter account settings alone ([openrouter.ai/settings/privacy](https://openrouter.ai/settings/privacy)). A model
+the agents that go through the gateway. When restrictions are set and the hub cannot be had (it does not start, its
+socket refuses), an agent with an OpenRouter route does not start: it would reach OpenRouter directly without them. Its
+session says why; start the hub, or remove `:openrouter` from `agents.eld` to go direct. The hub's answer to a
+registration lists the restrictions it kept. A hub started before drgnx had restrictions keeps none, so the agent does
+not start and the session says to restart the hub (`drgnx hub stop`, then start an agent). Without restrictions, an
+agent without a hub goes direct as before. With `drgnx-agents-use-gateway` off, a route is bound by your OpenRouter
+account settings alone ([openrouter.ai/settings/privacy](https://openrouter.ai/settings/privacy)). A model
 that no allowed provider serves fails with OpenRouter's own error, which the agent shows.
 Set it from Agent Settings (`r`, **OpenRouter Restrictions…**, [agent-settings.md](agent-settings.md#routes)); comments
 and the other settings in `agents.eld` stay.

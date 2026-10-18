@@ -323,9 +323,14 @@
   "Under an OpenRouter ROUTE: the restrictions with a Change button, or why they do not apply to it."
   (if (drgnx-agent-settings--via-gateway-p route)
       (progn
-        (insert (propertize (concat "      OpenRouter restrictions: "
-                                    (drgnx-agent-settings--restrictions-text (drgnx-agents-openrouter-restrictions)) "  ")
-                            'face 'drgnx-agent-settings-dim))
+        (insert (condition-case err
+                    (propertize (concat "      OpenRouter restrictions: "
+                                        (drgnx-agent-settings--restrictions-text (drgnx-agents-openrouter-restrictions)) "  ")
+                                'face 'drgnx-agent-settings-dim)
+                  (user-error
+                   (propertize (format "      OpenRouter restrictions: unreadable (%s); OpenRouter agents do not start until they are fixed  "
+                                       (error-message-string err))
+                               'face 'drgnx-agent-settings-problem))))
         (drgnx-agent-settings--button "[Change…]" #'drgnx-agent-settings-openrouter
                                       "Which providers OpenRouter may use, and whether they may keep data")
         (insert "\n"))
@@ -916,7 +921,7 @@ for every OpenRouter route, saved in agents.eld; it applies through drgnx's gate
   (interactive)
   (drgnx-agent-settings--page)
   (require 'drgnx-agents)
-  (let* ((old (drgnx-agents-openrouter-restrictions))
+  (let* ((old (condition-case nil (drgnx-agents-openrouter-restrictions) (user-error nil))) ; unreadable: asked afresh
          (only (drgnx-agent-settings--ask-slugs "Only these providers (slugs, comma separated; empty: any): " (plist-get old :only)))
          (ignore (drgnx-agent-settings--ask-slugs "Never these providers (slugs; empty: none): " (plist-get old :ignore)))
          (dc (intern (completing-read "Providers that keep your data: "

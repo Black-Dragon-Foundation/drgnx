@@ -59,9 +59,20 @@ agents.eld (config dir) and the built-in ones; never holds secrets (keys come fr
       (assoc name drgnx-agents-builtin-profiles)
       (user-error "No agent profile %s" name)))
 
-(defun drgnx-agents--read-file ()
+(defun drgnx-agents--read-file (&optional strict)
+  "agents.eld's plist, or nil.  A file that does not read is nil too — or, with STRICT, a `user-error' saying why (a
+file of comments only is nil either way)."
   (let ((f (expand-file-name "agents.eld" (drgnx-user-dir))))
-    (and (file-readable-p f) (ignore-errors (with-temp-buffer (insert-file-contents f) (read (current-buffer)))))))
+    (if (not strict)
+        (and (file-readable-p f) (ignore-errors (with-temp-buffer (insert-file-contents f) (read (current-buffer)))))
+      (when (file-exists-p f)
+        (condition-case err
+            (with-temp-buffer
+              (insert-file-contents f)
+              (goto-char (point-min))
+              (with-syntax-table emacs-lisp-mode-syntax-table (forward-comment (buffer-size)))
+              (unless (eobp) (read (current-buffer))))
+          (error (user-error "%s cannot be read (%s)" (abbreviate-file-name f) (error-message-string err))))))))
 
 (defun drgnx-agents-profile-names ()
   (delete-dups (mapcar #'car (append drgnx-agents-profiles (plist-get (drgnx-agents--read-file) :profiles)
@@ -90,10 +101,13 @@ rest stay.  A file that cannot be read is a `user-error' and is not changed."
 
 (defun drgnx-agents-openrouter-restrictions ()
   "Which providers OpenRouter may use for the agents' requests, from agents.eld's `:openrouter': (:only SLUGS
-:ignore SLUGS :data-collection deny|allow :zdr t), each only when set (anything else in the file is dropped), or nil.
-One setting for every OpenRouter route; it applies through the gateway only."
+:ignore SLUGS :data-collection deny|allow :zdr t), each only when set, or nil.  A file that does not read, or a value
+that is not a restriction, is a `user-error' naming it: a typo never turns a restriction off.  One setting for every
+OpenRouter route; it applies through the gateway only."
   (require 'drgnx-gateway)
-  (drgnx-gateway-restrictions (plist-get (drgnx-agents--read-file) :openrouter)))
+  (let ((file (drgnx-agents--read-file t)))
+    (unless (proper-list-p file) (user-error "agents.eld is not a list of keys and values")) ; (never shown: :env values)
+    (drgnx-gateway-restrictions (plist-get file :openrouter) t)))
 
 (defun drgnx-agents--openrouter-json (restrictions)
   "RESTRICTIONS as a hub call carries them (vectors for lists, a string for the symbol)."
@@ -295,43 +309,56 @@ without a hub they go to the provider directly.")
 (defun drgnx-agents--gateway (s kind &optional model)
   "Register S's agent (profile KIND, with the profile's MODEL) with the hub's gateway: (:url :token), or nil when
 no hub can be had (S then goes direct, and says so).  In the hub, keys are only those editors handed over (and the
-environment, quiet auth-source files): with none for any provider of the chain, a `user-error' says how one comes."
-  (when (drgnx-agents--in-hub-p)
-    (let ((chain (drgnx-ai-agent-gateway-chain kind model)))
+environment, quiet auth-source files): with none for any provider of the chain, a `user-error' says how one comes.
+An OpenRouter chain with restrictions (`drgnx-agents-openrouter-restrictions') fails closed: restrictions that do
+not read, no hub, or a hub that did not keep them all is a `user-error' — never a direct start without them."
+  (let* ((chain (drgnx-ai-agent-gateway-chain kind model))
+         ;; read before anything can fall back: a file that does not read refuses the start here
+         (restrictions (and (assq 'openrouter chain) (drgnx-agents-openrouter-restrictions))))
+    (when (drgnx-agents--in-hub-p)
       (unless (seq-some (lambda (st) (or (not (plist-get (drgnx-ai-provider (car st)) :key-env)) (drgnx-ai-key (car st))))
                         chain)
         (user-error "No key for %s in the drgnx hub: an editor hands its keys over when it connects (or run `drgnx hub start' where the key is set)"
-                    (mapconcat (lambda (st) (symbol-name (car st))) chain ", ")))))
-  (condition-case err
-      (progn
-        (require 'drgnx-hub)
-        (unless (drgnx-hub-serving-p) (drgnx-hub-ensure))
-        (let* ((chain (drgnx-ai-agent-gateway-chain kind model))
-               ;; keys this command can read (also from sources that ask) travel to the hub's memory — never in the
-               ;; hub, which has what editors gave it
-               (keys (unless (drgnx-agents--in-hub-p)
-                       (cl-loop for (id . _) in chain
-                                for key = (and (plist-get (drgnx-ai-provider id) :key-env) (drgnx-ai-key id t))
-                                when key append (list (intern (concat ":" (symbol-name id))) key))))
-               (params (list :task (drgnx-agent-session-task s) :job (drgnx-agent-session-job s)
-                             :agent (drgnx-agent-session-name s)
-                             :owner (emacs-pid)   ; its agent is this Emacs's child: gone with it, its token goes too
-                             :chain (mapcar (lambda (st) (list (symbol-name (car st)) (cdr st))) chain)
-                             :keys keys))
-               (params (if-let* (((assq 'openrouter chain))
-                                 (restrictions (drgnx-agents-openrouter-restrictions)))
-                           (append params (list :openrouter (drgnx-agents--openrouter-json restrictions)))
-                         params))
-               (r (if (drgnx-hub-serving-p) (drgnx-hub-register params)
-                    (drgnx-hub-call-sync "gateway/register"
-                                         (plist-put (plist-put (copy-sequence params) :chain (vconcat (mapcar #'vconcat (plist-get params :chain))))
-                                                    :keys (or keys (make-hash-table)))))))
-          (setf (drgnx-agent-session-via s) 'gateway (drgnx-agent-session-gateway s) (plist-get r :token))
-          r))
-    (error (setf (drgnx-agent-session-via s) 'direct)
-           (message "drgnx: no agent hub (%s); %s goes to its provider directly" (error-message-string err)
-                    (drgnx-agent-session-name s))
-           nil)))
+                    (mapconcat (lambda (st) (symbol-name (car st))) chain ", "))))
+    (let ((r (condition-case err
+                 (progn
+                   (require 'drgnx-hub)
+                   (unless (drgnx-hub-serving-p) (drgnx-hub-ensure))
+                   (let* (;; keys this command can read (also from sources that ask) travel to the hub's memory — never
+                          ;; in the hub, which has what editors gave it
+                          (keys (unless (drgnx-agents--in-hub-p)
+                                  (cl-loop for (id . _) in chain
+                                           for key = (and (plist-get (drgnx-ai-provider id) :key-env) (drgnx-ai-key id t))
+                                           when key append (list (intern (concat ":" (symbol-name id))) key))))
+                          (params (list :task (drgnx-agent-session-task s) :job (drgnx-agent-session-job s)
+                                        :agent (drgnx-agent-session-name s)
+                                        :owner (emacs-pid) ; its agent is this Emacs's child: gone with it, its token goes too
+                                        :chain (mapcar (lambda (st) (list (symbol-name (car st)) (cdr st))) chain)
+                                        :keys keys))
+                          (params (if restrictions
+                                      (append params (list :openrouter (drgnx-agents--openrouter-json restrictions)))
+                                    params))
+                          (r (if (drgnx-hub-serving-p) (drgnx-hub-register params)
+                               (drgnx-hub-call-sync "gateway/register"
+                                                    (plist-put (plist-put (copy-sequence params) :chain (vconcat (mapcar #'vconcat (plist-get params :chain))))
+                                                               :keys (or keys (make-hash-table)))))))
+                     (setf (drgnx-agent-session-via s) 'gateway (drgnx-agent-session-gateway s) (plist-get r :token))
+                     r))
+               (error
+                (when restrictions
+                  (user-error "OpenRouter restrictions are set in agents.eld and apply through drgnx's hub only, which is not available (%s): %s is not started directly without them; start the hub, or remove :openrouter from agents.eld to go direct"
+                              (error-message-string err) (drgnx-agent-session-name s)))
+                (setf (drgnx-agent-session-via s) 'direct)
+                (message "drgnx: no agent hub (%s); %s goes to its provider directly" (error-message-string err)
+                         (drgnx-agent-session-name s))
+                nil))))
+      ;; a hub started before restrictions existed registers without them, and says nothing about them
+      (when (and restrictions
+                 (not (equal (ignore-errors (drgnx-gateway-restrictions (plist-get r :openrouter) t)) restrictions)))
+        (drgnx-agents--release-gateway s)
+        (user-error "The drgnx hub did not keep the OpenRouter restrictions (it predates them): %s is not started; restart the hub (`drgnx hub stop', then start an agent)"
+                    (drgnx-agent-session-name s)))
+      r)))
 
 (declare-function drgnx-hub-call "drgnx-hub")
 

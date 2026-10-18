@@ -40,8 +40,12 @@ An OpenRouter route also shows the **OpenRouter restrictions** (which providers 
 [ai.md](ai.md#openrouter-restrictions)) with **[Change…]**, the command **OpenRouter Restrictions…** (`r`). It asks for
 the providers to use only, the providers to avoid (slugs, comma separated, empty for none), whether providers may keep
 your data, and whether to use only zero-data-retention endpoints, and saves the answers as `:openrouter` in
-`agents.eld`: one setting for every OpenRouter route. The restrictions apply through drgnx's gateway. A route that goes
-direct (Codex, or no gateway) says *applies through drgnx's gateway only; without it, your OpenRouter account settings
+`agents.eld`: one setting for every OpenRouter route. The restrictions apply through drgnx's gateway. When the hub
+cannot be had, an agent with restrictions does not start rather than go direct without them. A value that is not a
+restriction, or an `agents.eld` that does not read, shows *OpenRouter restrictions: unreadable* with the reason, and
+OpenRouter agents do not start until it is fixed (**[Change…]** replaces a wrong value; a file that does not read is
+fixed in the file itself). A route that goes direct (Codex,
+or the gateway turned off) says *applies through drgnx's gateway only; without it, your OpenRouter account settings
 apply* and links to `https://openrouter.ai/settings/privacy`.
 
 A setting that overrides a route is shown in the warning colour. Examples: a Claude Code settings file whose `env`
