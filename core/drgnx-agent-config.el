@@ -23,6 +23,7 @@
   "The agents with a settings page.")
 
 (define-error 'drgnx-agent-config-unreadable "Unreadable settings file")
+(define-error 'drgnx-agent-config-changed "Settings file changed since it was read")
 
 (defconst drgnx-agent-config-mask "••••"
   "What replaces a secret in text shown to the user.")
@@ -108,26 +109,45 @@ CALLBACK gets (:ok t :note STRING) or (:error STRING): at once for a file, later
           (rename-file tmp (concat file ".drgnx-bak") t))
       (when (file-exists-p tmp) (delete-file tmp)))))
 
-(defun drgnx-agent-config-write-text (file text check &optional verify)
+(defun drgnx-agent-config--make-private-dirs (dir)
+  "Make DIR and the parents that are missing, each new one with modes 0700."
+  (unless (file-directory-p dir)
+    (drgnx-agent-config--make-private-dirs (file-name-directory (directory-file-name dir)))
+    (make-directory dir)
+    (set-file-modes dir #o700)))
+
+(defun drgnx-agent-config-write-text (file text check &optional verify expect)
   "Replace the content of FILE with TEXT, safely.
+EXPECT, when given, is what the caller saw when it read FILE: its text (a string), or its modification time.
+If FILE differs now (or is gone), `drgnx-agent-config-changed' is signalled with FILE and nothing is touched.
 CHECK is called with FILE's current text (when FILE exists) and must not signal; otherwise nothing is touched.
+When TEXT is what FILE holds already, nothing is written and the backup stays as it was.
 VERIFY, when given, is called the same way with TEXT.  Then FILE is copied to FILE.drgnx-bak (the one backup),
 TEXT goes to a temp file next to FILE with FILE's modes (0600 for a new file), and the temp file is renamed over
-FILE.  A symbolic link is written through.  Parent directories are made."
-  (let* ((file (file-truename (expand-file-name file)))
-         (exists (file-exists-p file)))
-    (when exists (funcall check (drgnx-agent-config-read-text file)))
-    (when verify (funcall verify text))
-    (make-directory (file-name-directory file) t)
-    (when exists (drgnx-agent-config--save-backup file))
-    (let ((tmp (drgnx-agent-config--temp-file file)))
-      (unwind-protect
-          (progn
-            (let ((coding-system-for-write 'utf-8-unix))
-              (write-region text nil tmp nil 'silent))
-            (set-file-modes tmp (if exists (file-modes file) #o600))
-            (rename-file tmp file t))
-        (when (file-exists-p tmp) (delete-file tmp))))
+FILE.  A symbolic link is written through.  Parent directories that are missing are made with modes 0700."
+  (let* ((given file)
+         (file (file-truename (expand-file-name file)))
+         (exists (file-exists-p file))
+         (current (and exists (drgnx-agent-config-read-text file))))
+    (when (and expect
+               (not (and exists
+                         (if (stringp expect)
+                             (equal expect current)
+                           (time-equal-p expect (file-attribute-modification-time (file-attributes file)))))))
+      (signal 'drgnx-agent-config-changed (list (expand-file-name given))))
+    (when exists (funcall check current))
+    (unless (and exists (equal text current))
+      (when verify (funcall verify text))
+      (drgnx-agent-config--make-private-dirs (file-name-directory file))
+      (when exists (drgnx-agent-config--save-backup file))
+      (let ((tmp (drgnx-agent-config--temp-file file)))
+        (unwind-protect
+            (progn
+              (let ((coding-system-for-write 'utf-8-unix))
+                (write-region text nil tmp nil 'silent))
+              (set-file-modes tmp (if exists (file-modes file) #o600))
+              (rename-file tmp file t))
+          (when (file-exists-p tmp) (delete-file tmp)))))
     file))
 
 (defun drgnx-agent-config--json-fail (file line message)
@@ -180,12 +200,29 @@ data (FILE LINE MESSAGE).  N is the file's indent in spaces (2 when unknown, or 
                      2)))
       (list :value value :indent indent))))
 
-(defun drgnx-agent-config--json-scalar (value)
-  "VALUE (string, number, t, :null or :false) as JSON text."
-  (decode-coding-string (substring (json-serialize (vector value)) 1 -1) 'utf-8))
+(defun drgnx-agent-config--json-type (value)
+  "A description of VALUE's type that shows none of its content."
+  (cond ((consp value) "a list")
+        ((functionp value) "a function")
+        ((symbolp value) "a symbol")
+        (t (format "a %s" (type-of value)))))
 
-(defun drgnx-agent-config--json-encode (value indent level)
-  "VALUE as JSON text, objects and arrays one entry per line, INDENT spaces per LEVEL."
+(defun drgnx-agent-config--json-bad (path value &optional expected)
+  "Signal that VALUE at PATH (reversed keys) is not JSON, saying its type and where, never the data."
+  (error "Not a JSON value at %s (%s%s)" (if path (mapconcat #'identity (reverse path) ".") "the top level")
+         (drgnx-agent-config--json-type value) (if expected (concat ", expected " expected) "")))
+
+(defun drgnx-agent-config--json-scalar (value path)
+  "VALUE (string, number, t, :null or :false) at PATH as JSON text."
+  (unless (or (stringp value) (numberp value) (memq value '(t :null :false)))
+    (drgnx-agent-config--json-bad path value))
+  (condition-case nil
+      (decode-coding-string (substring (json-serialize (vector value)) 1 -1) 'utf-8)
+    (error (drgnx-agent-config--json-bad path value))))
+
+(defun drgnx-agent-config--json-encode (value indent level &optional path)
+  "VALUE as JSON text, objects and arrays one entry per line, INDENT spaces per LEVEL.
+PATH is the keys leading here, innermost first, for error messages."
   (let ((pad (make-string (* indent (1+ level)) ?\s))
         (end (make-string (* indent level) ?\s)))
     (cond
@@ -194,7 +231,7 @@ data (FILE LINE MESSAGE).  N is the file's indent in spaces (2 when unknown, or 
       (if (zerop (length value))
           "[]"
         (concat "[\n"
-                (mapconcat (lambda (v) (concat pad (drgnx-agent-config--json-encode v indent (1+ level))))
+                (mapconcat (lambda (v) (concat pad (drgnx-agent-config--json-encode v indent (1+ level) path)))
                            value ",\n")
                 "\n" end "]")))
      ((and (consp value) (consp (car value)))
@@ -202,29 +239,59 @@ data (FILE LINE MESSAGE).  N is the file's indent in spaces (2 when unknown, or 
               (mapconcat
                (lambda (pair)
                  (unless (and (consp pair) (or (symbolp (car pair)) (stringp (car pair))))
-                   (error "Not a JSON object entry: %S" pair))
-                 (concat pad
-                         (drgnx-agent-config--json-scalar (if (symbolp (car pair)) (symbol-name (car pair)) (car pair)))
-                         ": " (drgnx-agent-config--json-encode (cdr pair) indent (1+ level))))
+                   (drgnx-agent-config--json-bad path pair "an object entry"))
+                 (let ((key (if (symbolp (car pair)) (symbol-name (car pair)) (car pair))))
+                   (concat pad (drgnx-agent-config--json-scalar key path)
+                           ": " (drgnx-agent-config--json-encode (cdr pair) indent (1+ level) (cons key path)))))
                value ",\n")
               "\n" end "}"))
-     ((consp value) (error "Not a JSON value (an array is a vector): %S" value))
-     (t (drgnx-agent-config--json-scalar value)))))
+     ((consp value) (drgnx-agent-config--json-bad path value "a vector"))
+     (t (drgnx-agent-config--json-scalar value path)))))
 
-(defun drgnx-agent-config-json-write (file value indent)
+(defun drgnx-agent-config-json-write (file value indent &optional expect)
   "Write VALUE (as `drgnx-agent-config-json-read' returns it) to FILE, INDENT spaces per level.
-Key order as in VALUE, a final newline.  Goes through `drgnx-agent-config-write-text': a FILE that does not parse
-is not written, and neither is a text that does not parse back."
+Key order as in VALUE, a final newline.  Goes through `drgnx-agent-config-write-text' (EXPECT is passed on): a FILE
+that does not parse is not written, and neither is a text that does not parse back.  A VALUE that is not JSON is
+an error naming its place and type, never its content."
   (let ((text (concat (drgnx-agent-config--json-encode value indent 0) "\n")))
     (drgnx-agent-config-write-text
      file text
      (lambda (current) (drgnx-agent-config--json-parse file current))
-     (lambda (new) (drgnx-agent-config--json-parse file new)))))
+     (lambda (new) (drgnx-agent-config--json-parse file new))
+     expect)))
 
 ;;;; Secrets
 
 (defconst drgnx-agent-config--secret-key-re "token\\|secret\\|key\\|password\\|authorization"
   "Keys whose values are secrets.")
+
+(defconst drgnx-agent-config--secret-name-re
+  "[A-Za-z0-9_.-]*\\(?:token\\|secret\\|key\\|password\\|passwd\\|authorization\\)[A-Za-z0-9_.-]*"
+  "A flag, variable or query parameter name that suggests a secret.")
+
+(defconst drgnx-agent-config--text-patterns
+  `(;; NAME=VALUE, --flag=VALUE and ?param=VALUE with a secret-ish name
+    (,(concat "\\(?:\\`\\|[ \t;&|?\"']\\)" drgnx-agent-config--secret-name-re
+              "=\\(\"[^\"]+\"\\|'[^']+'\\|[^ \t;&|\"'#]+\\)")
+     1 t)
+    ;; Bearer TOKEN, Basic TOKEN, Token TOKEN
+    ("\\<\\(?:Bearer\\|Basic\\|Token\\)[ \t]+\\([^ \t\"']\\{4,\\}\\)" 1 t)
+    ;; Authorization: VALUE
+    ("Authorization:[ \t]*\\([^\"'\n]+?\\)[ \t]*\\(?:[\"'\n]\\|\\'\\)" 1 t)
+    ;; user:PASSWORD@host
+    ("://[^/:@ \t\"']*:\\([^/@ \t\"']+\\)@" 1 t)
+    ;; a secret-ish query parameter
+    ("[?&]\\(?:key\\|api[_-]?key\\|token\\|access[_-]?token\\|secret\\|password\\|sig\\|signature\\|auth\\)=\\([^& \t\"'#]+\\)"
+     1 t)
+    ;; well-known token shapes (case matters)
+    ("\\<sk-[A-Za-z0-9_-]\\{16,\\}" 0 nil)
+    ("\\<gh[pousr]_[A-Za-z0-9]\\{20,\\}" 0 nil)
+    ("\\<github_pat_[A-Za-z0-9_]\\{10,\\}" 0 nil)
+    ("\\<xox[abprs]-[A-Za-z0-9-]\\{4,\\}" 0 nil)
+    ("\\<AKIA[0-9A-Z]\\{16\\}" 0 nil)
+    ("\\<AIza[A-Za-z0-9_-]\\{30,\\}" 0 nil)
+    ("\\<eyJ[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+" 0 nil))
+  "The secret parts inside a free string (an argument, a URL, a command): (REGEXP GROUP FOLD-CASE).")
 
 (defun drgnx-agent-config--key-name (key)
   "KEY (a keyword, symbol or string) as a plain string, or nil."
@@ -238,10 +305,63 @@ is not written, and neither is a text that does not parse back."
          (cl-loop for (k v) on x by #'cddr collect (cons k v)))
         ((and (consp x) (cl-every (lambda (e) (and (consp e) (atom (car e)))) x)) x)))
 
+(defun drgnx-agent-config--unquote-shell (value)
+  "VALUE without a pair of quotes around it."
+  (if (string-match "\\`\\([\"']\\)\\(.*\\)\\1\\'" value) (match-string 2 value) value))
+
+(defun drgnx-agent-config--text-secrets (text)
+  "The secret parts of the free string TEXT (an argument, a command, a URL): only the secret, not its context."
+  (let (out)
+    (dolist (spec drgnx-agent-config--text-patterns)
+      (let ((case-fold-search (nth 2 spec)) (pos 0))
+        (while (string-match (car spec) text pos)
+          (push (drgnx-agent-config--unquote-shell (match-string (nth 1 spec) text)) out)
+          (setq pos (max (match-end 0) (1+ pos))))))
+    (nreverse out)))
+
+(defun drgnx-agent-config--header-secret (header)
+  "The secret part of an HTTP HEADER given as \"Name: value\" (nil when it is not secret-looking)."
+  (let ((case-fold-search t))
+    (when (string-match "\\`\\([^:]+\\):[ \t]*\\(.+?\\)[ \t]*\\'" header)
+      (let ((name (match-string 1 header)) (value (match-string 2 header)))
+        (when (or (string-match-p drgnx-agent-config--secret-key-re name)
+                  (string-match-p "\\`\\(?:Bearer\\|Basic\\|Token\\)[ \t]" value))
+          value)))))
+
+(defun drgnx-agent-config--args-secrets (args)
+  "The secrets in the argument list ARGS (a list or vector of strings): the argument after a secret-ish flag,
+after -H / --header (the secret part of the header) and after -e / --env (the value)."
+  (let ((rest (append args nil)) out)
+    (while rest
+      (let ((arg (pop rest)) (next (car rest)))
+        (when (and (stringp arg) (stringp next))
+          (cond
+           ((or (string= arg "-H") (string-match-p "\\`--header\\'" arg))
+            (when-let* ((s (drgnx-agent-config--header-secret next))) (push s out)))
+           ((or (string= arg "-e") (string-match-p "\\`--env\\'" arg))
+            (when (string-match "=\\(.+\\)\\'" next) (push (match-string 1 next) out)))
+           ((or (string= arg "-p")
+                (let ((case-fold-search t))
+                  (string-match-p "\\`--?[A-Za-z-]*\\(?:token\\|secret\\|key\\|password\\|passwd\\|pass\\|auth\\)[A-Za-z-]*\\'"
+                                  arg)))
+            (push next out))))))
+    out))
+
+(defun drgnx-agent-config--url-secrets (url)
+  "The secrets in URL beyond what `drgnx-agent-config--text-secrets' finds: long path segments."
+  (when (string-match "\\`[A-Za-z][A-Za-z0-9+.-]*://[^/?#]*\\(/[^?#]*\\)" url)
+    (cl-remove-if-not (lambda (seg) (string-match-p "\\`[A-Za-z0-9_-]\\{24,\\}\\'" seg))
+                      (split-string (match-string 1 url) "/" t))))
+
 (defun drgnx-agent-config-secrets (spec)
-  "The secret strings in SPEC (an item's :spec): every :env and :headers value, and the value of any key
-matching token, secret, key, password or authorization (case-insensitive), when longer than 3 characters.
-A header value like \"Bearer abc\" also gives the bare \"abc\"."
+  "The secret strings in SPEC (an item's :spec), each longer than 3 characters:
+- every :env and :headers value, and the value of any key matching token, secret, key, password or authorization
+  (case-insensitive); of such a key holding a list or object, every string in it;
+- in :args and in every other string (a hook's :command, a :url): the secret part of NAME=VALUE with a secret-ish
+  name, of Bearer / Basic / Token and Authorization: values, of URL userinfo and secret-ish query parameters, of
+  well-known token shapes, the argument after a secret-ish flag, -H / --header, -e / --env, and :url path segments of
+  24 or more letters, digits, `_' and `-'.
+A value like \"Bearer abc\" also gives the bare \"abc\"."
   (let ((case-fold-search t) out)
     (cl-labels ((add (v)
                   (when (and (stringp v) (> (length v) 3))
@@ -249,17 +369,23 @@ A header value like \"Bearer abc\" also gives the bare \"abc\"."
                     (when (and (string-match "\\`\\(?:Bearer\\|Basic\\|Token\\)[ \t]+\\(.+\\)\\'" v)
                                (> (length (match-string 1 v)) 3))
                       (cl-pushnew (match-string 1 v) out :test #'equal))))
+                (all (x)
+                  (cond ((stringp x) (add x))
+                        ((vectorp x) (mapc #'all x))
+                        ((drgnx-agent-config--pairs x) (dolist (p (drgnx-agent-config--pairs x)) (all (cdr p))))
+                        ((consp x) (mapc #'all x))))
                 (walk (x)
                   (cond
+                   ((stringp x) (mapc #'add (drgnx-agent-config--text-secrets x)))
                    ((drgnx-agent-config--pairs x)
                     (dolist (pair (drgnx-agent-config--pairs x))
-                      (let ((name (drgnx-agent-config--key-name (car pair))))
-                        (cond ((member (and name (downcase name)) '("env" "headers"))
-                               (dolist (p (drgnx-agent-config--pairs (cdr pair))) (add (cdr p))))
-                              ((and name (string-match-p drgnx-agent-config--secret-key-re name)
-                                    (stringp (cdr pair)))
-                               (add (cdr pair)))
-                              (t (walk (cdr pair)))))))
+                      (let ((name (downcase (or (drgnx-agent-config--key-name (car pair)) ""))))
+                        (cond ((member name '("env" "headers")) (all (cdr pair)))
+                              ((string-match-p drgnx-agent-config--secret-key-re name) (all (cdr pair)))
+                              (t (when (string= name "args") (mapc #'add (drgnx-agent-config--args-secrets (cdr pair))))
+                                 (when (and (string= name "url") (stringp (cdr pair)))
+                                   (mapc #'add (drgnx-agent-config--url-secrets (cdr pair))))
+                                 (walk (cdr pair)))))))
                    ((vectorp x) (mapc #'walk x))
                    ((consp x) (mapc #'walk x)))))
       (walk spec))
@@ -294,12 +420,14 @@ without one) or unreadable (the item has a :problem, or an MCP server has no usa
              (type (or type (cond (command 'stdio) (url 'http)))))
         (pcase type
           ('stdio
-           (cond ((not (and (stringp command) (not (string-empty-p command))))
-                  (cons 'missing-command "no command"))
-                 ((drgnx-agent-config--command-found-p command) (cons 'ok command))
-                 (t (cons 'missing-command command))))
+           (if (not (and (stringp command) (not (string-empty-p command))))
+               (cons 'missing-command "no command")
+             (cons (if (drgnx-agent-config--command-found-p command) 'ok 'missing-command)
+                   (drgnx-agent-config-mask-text command (drgnx-agent-config-secrets (list :command command))))))
           ((or 'http 'sse)
-           (if (and (stringp url) (not (string-empty-p url))) (cons 'ok url) (cons 'no-url "no url")))
+           (if (and (stringp url) (not (string-empty-p url)))
+               (cons 'ok (drgnx-agent-config-mask-text url (drgnx-agent-config-secrets (list :url url))))
+             (cons 'no-url "no url")))
           (_ (cons 'unreadable "no usable server entry")))))
      (t (cons 'ok nil)))))
 

@@ -22,34 +22,42 @@
       (write-region (format "#!/bin/sh\nprintf '%%s\\n' \"%s $*\" >> '%s'\nexit 0\n" name log) nil script nil 'silent)
       (set-file-modes script #o755))))
 
+(defun drgnx-agent-config-test--environment (dir home bin)
+  "The variables of the fixture: HOME, every agent home and the XDG directories under DIR, BIN first on PATH."
+  (list (concat "HOME=" home)
+        (concat "CLAUDE_CONFIG_DIR=" (expand-file-name "claude" dir))
+        (concat "CODEX_HOME=" (expand-file-name "codex" dir))
+        (concat "KIMI_CODE_HOME=" (expand-file-name "kimi" dir))
+        (concat "GEMINI_CLI_HOME=" (expand-file-name "gemini" dir))
+        (concat "XDG_CONFIG_HOME=" (expand-file-name "xdg/config" dir))
+        (concat "XDG_DATA_HOME=" (expand-file-name "xdg/data" dir))
+        (concat "XDG_STATE_HOME=" (expand-file-name "xdg/state" dir))
+        (concat "XDG_CACHE_HOME=" (expand-file-name "xdg/cache" dir))
+        (concat "PATH=" bin path-separator (or (getenv "PATH") "/usr/bin:/bin"))))
+
 (defmacro drgnx-agent-config-test-env (&rest body)
   "BODY with fresh temp dirs for HOME (bound to `home'), CLAUDE_CONFIG_DIR, CODEX_HOME, KIMI_CODE_HOME and Gemini's
-home (GEMINI_CLI_HOME, whose `.gemini' is the settings dir), a temp project (bound to `root'), and fake `claude',
-`codex' and `kimi' scripts first on PATH and `exec-path'.  Nothing of the user's is read or written."
+home (GEMINI_CLI_HOME, whose `.gemini' is the settings dir), the XDG directories, a temp project (bound to `root'),
+and fake `claude', `codex' and `kimi' scripts first on PATH and `exec-path'.  Only `home' and `root' are visible to
+BODY (the temp directory itself is `drgnx-agent-config-test--dir').  Nothing of the user's is read or written."
   (declare (indent 0))
-  `(let* ((drgnx-agent-config-test--dir (file-name-as-directory (make-temp-file "drgnx-agentcfg" t)))
-          (dir drgnx-agent-config-test--dir)
-          (home (file-name-as-directory (expand-file-name "home" dir)))
-          (root (file-name-as-directory (expand-file-name "project" dir)))
-          (bin (expand-file-name "bin" dir))
-          (process-environment
-           (append (list (concat "HOME=" home)
-                         (concat "CLAUDE_CONFIG_DIR=" (expand-file-name "claude" dir))
-                         (concat "CODEX_HOME=" (expand-file-name "codex" dir))
-                         (concat "KIMI_CODE_HOME=" (expand-file-name "kimi" dir))
-                         (concat "GEMINI_CLI_HOME=" (expand-file-name "gemini" dir))
-                         (concat "XDG_CONFIG_HOME=" (expand-file-name "xdg" dir))
-                         (concat "PATH=" bin path-separator (or (getenv "PATH") "/usr/bin:/bin")))
-                   process-environment))
-          (exec-path (cons bin exec-path)))
-     (ignore home root)
-     (unwind-protect
-         (progn
-           (make-directory home t)
-           (make-directory root t)
-           (drgnx-agent-config-test--make-fakes bin (drgnx-agent-config-test-argv-log))
-           ,@body)
-       (delete-directory dir t))))
+  (let ((dir (gensym "dir")) (bin (gensym "bin")))
+    `(let* ((drgnx-agent-config-test--dir (file-name-as-directory (make-temp-file "drgnx-agentcfg" t)))
+            (,dir drgnx-agent-config-test--dir)
+            (home (file-name-as-directory (expand-file-name "home" ,dir)))
+            (root (file-name-as-directory (expand-file-name "project" ,dir)))
+            (,bin (expand-file-name "bin" ,dir))
+            (process-environment
+             (append (drgnx-agent-config-test--environment ,dir home ,bin) process-environment))
+            (exec-path (cons ,bin exec-path)))
+       (ignore home root)
+       (unwind-protect
+           (progn
+             (make-directory home t)
+             (make-directory root t)
+             (drgnx-agent-config-test--make-fakes ,bin (drgnx-agent-config-test-argv-log))
+             ,@body)
+         (delete-directory ,dir t)))))
 
 (provide 'agent-config-fixture)
 ;;; agent-config-fixture.el ends here

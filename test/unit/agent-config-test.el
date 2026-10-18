@@ -235,3 +235,165 @@
       (should-error (drgnx-agent-config-new-skill dir "Bad Name" "x"))
       (should-error (drgnx-agent-config-new-skill dir "../escape" "x"))
       (should-not (file-exists-p (expand-file-name "../escape" dir))))))
+
+;;;; Fix round 1: secrets in args, URLs and commands
+
+(defun drgnx-agent-config-test--secrets-of (&rest spec)
+  "The secrets found in the plist SPEC."
+  (drgnx-agent-config-secrets spec))
+
+(ert-deftest drgnx-agent-config/secrets-in-flags-and-assignments ()
+  (let ((s (drgnx-agent-config-test--secrets-of
+            :args '("--api-key=ak12345678" "MY_SECRET=sh12345678" "--mode=fast" "--Password=\"pw 12345\"" "plain"))))
+    (should (member "ak12345678" s))
+    (should (member "sh12345678" s))
+    (should (member "pw 12345" s))
+    (should-not (member "fast" s))
+    (should-not (member "plain" s))
+    (should (= (length s) 3))))
+
+(ert-deftest drgnx-agent-config/secrets-in-the-arg-after-a-secret-flag ()
+  (let ((s (drgnx-agent-config-test--secrets-of
+            :args '("--api-key" "ak22222222" "--TOKEN" "tk22222222" "-p" "pp22222222" "--port" "9999" "-y" "srv"))))
+    (should (equal (sort (copy-sequence s) #'string<) '("ak22222222" "pp22222222" "tk22222222")))))
+
+(ert-deftest drgnx-agent-config/secrets-in-header-and-env-args ()
+  (let ((s (drgnx-agent-config-test--secrets-of
+            :args '("-H" "Authorization: Bearer hb33333333" "--header" "X-Api-Key: kk33333333"
+                    "-H" "Content-Type: json" "--header" "X-Other: Basic bs33333333"
+                    "-e" "PLAIN=pv33333333" "--env" "OTHER=ev33333333"))))
+    (dolist (v '("hb33333333" "kk33333333" "bs33333333" "pv33333333" "ev33333333" "Bearer hb33333333"))
+      (should (member v s)))
+    (should-not (member "json" s))
+    (should-not (member "Content-Type: json" s))
+    (should-not (member "X-Api-Key: kk33333333" s))))
+
+(ert-deftest drgnx-agent-config/secrets-in-schemes-inside-any-arg ()
+  (let ((s (drgnx-agent-config-test--secrets-of
+            :command "curl -s -H 'Authorization: Bearer cm44444444' -H \"X: Basic dXNlcjpwYXNz\" -H 'Authorization: Digest dg44444444'")))
+    (should (member "cm44444444" s))
+    (should (member "dXNlcjpwYXNz" s))
+    (should (member "Digest dg44444444" s))
+    (should-not (member "curl" s))
+    (should (equal (drgnx-agent-config-mask-text "curl -H 'Authorization: Bearer cm44444444' -s" s)
+                   "curl -H 'Authorization: ••••' -s"))))
+
+(ert-deftest drgnx-agent-config/secrets-in-urls ()
+  (let ((s (drgnx-agent-config-test--secrets-of
+            :url "https://user:pw55555555@h.invalid/mcp?api_key=qk55555555&x=1&Sig=sg55555555#f")))
+    (should (equal (sort (copy-sequence s) #'string<) '("pw55555555" "qk55555555" "sg55555555")))
+    (should (equal (drgnx-agent-config-mask-text "https://user:pw55555555@h.invalid/mcp?api_key=qk55555555&x=1" s)
+                   "https://user:••••@h.invalid/mcp?api_key=••••&x=1")))
+  (let ((s (drgnx-agent-config-test--secrets-of :url "https://h.invalid/mcp?token=t6666666&other=ab&password=p6666666")))
+    (should (equal (sort (copy-sequence s) #'string<) '("p6666666" "t6666666"))))
+  ;; a URL inside an arg too
+  (should (member "aq77777777" (drgnx-agent-config-test--secrets-of :args '("https://h.invalid/x?access-token=aq77777777")))))
+
+(ert-deftest drgnx-agent-config/secrets-by-well-known-prefix ()
+  (let* ((fakes (list (concat "sk-" (make-string 20 ?a))
+                      (concat "gh" "p_" (make-string 24 ?b))
+                      (concat "github_" "pat_" (make-string 20 ?c) "_x")
+                      (concat "xo" "xb-" "1234-5678-abcd")
+                      (concat "AK" "IA" (make-string 16 ?D))
+                      (concat "AI" "za" (make-string 32 ?e))
+                      (concat "ey" "J" (make-string 8 ?f) "." (make-string 8 ?g) "." (make-string 8 ?h))))
+         (s (drgnx-agent-config-test--secrets-of :command (concat "run " (string-join fakes " and ")))))
+    (dolist (f fakes) (should (member f s)))
+    (should-not (member "run" s))
+    ;; too short to be one
+    (should-not (drgnx-agent-config-test--secrets-of :command (concat "sk-" (make-string 5 ?a))))))
+
+(ert-deftest drgnx-agent-config/secrets-in-long-url-path-segments ()
+  (let ((s (drgnx-agent-config-test--secrets-of :url "https://h.invalid/hooks/abcdefghijklmnopqrstuvwx1234/run")))
+    (should (equal s '("abcdefghijklmnopqrstuvwx1234"))))
+  (should-not (drgnx-agent-config-test--secrets-of :url "https://h.invalid/mcp/v1/some-short-name")))
+
+(ert-deftest drgnx-agent-config/secrets-inside-secret-named-containers ()
+  (let ((s (drgnx-agent-config-test--secrets-of
+            :oauth '((api_keys . ["ak88888888" ("bk88888888") ((deep . "dk88888888"))]) (name . "plain")
+                     (secrets . ((a . "sa88888888") (b . ["sb88888888"])))))))
+    (dolist (v '("ak88888888" "bk88888888" "dk88888888" "sa88888888" "sb88888888"))
+      (should (member v s)))
+    (should-not (member "plain" s))))
+
+(ert-deftest drgnx-agent-config/cheap-status-detail-hides-secrets ()
+  (let* ((url "https://u:pw99999999@h.invalid/mcp?api_key=qk99999999")
+         (detail (cdr (drgnx-agent-config-cheap-status
+                       (list :section 'mcp :name "s" :spec (list :type 'http :url url))))))
+    (should (string-match-p "h\\.invalid/mcp" detail))
+    (should-not (string-match-p "pw99999999\\|qk99999999" detail))))
+
+(ert-deftest drgnx-agent-config/json-errors-never-print-the-data ()
+  (drgnx-agent-config-test-env
+    (let* ((file (expand-file-name "x.json" home))
+           (leak "leak-me-1234")
+           (messages
+            (mapcar (lambda (value) (error-message-string (should-error (drgnx-agent-config-json-write file value 2))))
+                    `(((mcpServers . ((x . ((args . (,leak "b"))))))) ((a . ((b . (,leak . 1)))))
+                      ((k . (,(intern leak)))) ((a . ,(intern leak))) ((a . ,(lambda () leak)))))))
+      (should (string-match-p "mcpServers\\.x\\.args (a list, expected a vector)" (nth 0 messages)))
+      (should (string-match-p "a\\.b" (nth 1 messages)))
+      (should (string-match-p "at k" (nth 2 messages)))
+      (should (string-match-p "a symbol" (nth 3 messages)))
+      (dolist (m messages) (should-not (string-match-p (regexp-quote leak) m)))
+      (should-not (file-exists-p file)))))
+
+;;;; Fix round 1: the write path
+
+(ert-deftest drgnx-agent-config/write-text-refuses-a-file-that-changed ()
+  (drgnx-agent-config-test-env
+    (let ((file (expand-file-name "claude.json" home)))
+      (drgnx-agent-config-test--write file "one\n")
+      (let ((text (drgnx-agent-config-read-text file))
+            (mtime (file-attribute-modification-time (file-attributes file))))
+        ;; unchanged: both kinds of expectation pass
+        (drgnx-agent-config-write-text file "two\n" #'ignore nil text)
+        (should (equal (drgnx-agent-config-test--read file) "two\n"))
+        (set-file-times file (seconds-to-time 1000000000))
+        (drgnx-agent-config-write-text file "three\n" #'ignore nil (file-attribute-modification-time (file-attributes file)))
+        ;; changed meanwhile
+        (let ((err (should-error (drgnx-agent-config-write-text file "four\n" #'ignore nil text)
+                                 :type 'drgnx-agent-config-changed)))
+          (should (equal (cadr err) file)))
+        (should-error (drgnx-agent-config-write-text file "four\n" #'ignore nil mtime) :type 'drgnx-agent-config-changed)
+        (should (equal (drgnx-agent-config-test--read file) "three\n"))
+        (should (equal (drgnx-agent-config-test--read (concat file ".drgnx-bak")) "two\n"))
+        ;; the JSON writer passes it on
+        (drgnx-agent-config-test--write file "{}\n")
+        (should-error (drgnx-agent-config-json-write file '((a . 1)) 2 "{ }\n") :type 'drgnx-agent-config-changed)
+        ;; a file that appeared or vanished since
+        (should-error (drgnx-agent-config-write-text (expand-file-name "gone.json" home) "x" #'ignore nil "was here")
+                      :type 'drgnx-agent-config-changed)))))
+
+(ert-deftest drgnx-agent-config/writing-the-same-text-keeps-the-backup ()
+  (drgnx-agent-config-test-env
+    (let ((file (expand-file-name "s.json" home)))
+      (drgnx-agent-config-json-write file '((n . 1)) 2)
+      (drgnx-agent-config-json-write file '((n . 2)) 2)
+      (set-file-times file (seconds-to-time 1000000000))
+      (let ((mtime (file-attribute-modification-time (file-attributes file))))
+        (drgnx-agent-config-json-write file '((n . 2)) 2)
+        (should (equal (file-attribute-modification-time (file-attributes file)) mtime))
+        (should (equal (drgnx-agent-config-test--read (concat file ".drgnx-bak")) "{\n  \"n\": 1\n}\n"))))))
+
+(ert-deftest drgnx-agent-config/directories-made-for-a-file-are-private ()
+  (drgnx-agent-config-test-env
+    (let ((file (expand-file-name "a/b/settings.json" home)))
+      (drgnx-agent-config-json-write file '((n . 1)) 2)
+      (should (= (file-modes (expand-file-name "a" home)) #o700))
+      (should (= (file-modes (expand-file-name "a/b" home)) #o700))
+      (should (= (file-modes file) #o600))
+      ;; a directory that exists keeps its modes
+      (set-file-modes (expand-file-name "a" home) #o755)
+      (drgnx-agent-config-json-write (expand-file-name "a/c/other.json" home) '((n . 1)) 2)
+      (should (= (file-modes (expand-file-name "a" home)) #o755))
+      (should (= (file-modes (expand-file-name "a/c" home)) #o700)))))
+
+(ert-deftest drgnx-agent-config/fixture-isolates-xdg-and-keeps-its-names-to-itself ()
+  (drgnx-agent-config-test-env
+    (dolist (v '("XDG_CONFIG_HOME" "XDG_DATA_HOME" "XDG_STATE_HOME" "XDG_CACHE_HOME"))
+      (should (string-prefix-p drgnx-agent-config-test--dir (getenv v))))
+    ;; the body may use its own `dir' and `bin'
+    (let ((dir "mine") (bin "mine"))
+      (should (string-prefix-p drgnx-agent-config-test--dir (executable-find "claude")))
+      (should (equal (list dir bin) '("mine" "mine"))))))
