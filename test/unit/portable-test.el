@@ -191,4 +191,115 @@
               (should (eql (plist-get (car r) :protocolVersion) 1)))
           (drgnx-acp-stop conn))))))
 
+;;;; Fix round 1
+
+(ert-deftest drgnx-portable/an-unreadable-directory-is-never-ok ()
+  ;; A directory the scan cannot enter is skipped and named; the doctor never says the config dir can travel then.
+  (skip-when (zerop (user-uid)))                                       ; root reads it anyway
+  (drgnx-portable-test--with root
+    (let* ((config (drgnx-user-dir)) (private (expand-file-name "lisp/private" config)))
+      (drgnx-portable-test--write (expand-file-name "config.el" config) (format "%S\n" (drgnx-portable-test--key)))
+      (drgnx-portable-test--write (expand-file-name "inner.el" private) "nothing\n")
+      (drgnx-portable-test--write (expand-file-name "locked.el" config) "nothing\n")
+      (set-file-modes private #o000)
+      (set-file-modes (expand-file-name "locked.el" config) #o000)
+      (unwind-protect
+          (let ((facts (lambda () (cl-letf (((symbol-function 'drgnx-doctor--search) #'ignore)) (drgnx-doctor-facts)))))
+            (let ((p (drgnx-portable-config-problems)))
+              (should (equal (plist-get p :keys) '("config.el")))
+              (should (equal (plist-get p :unchecked) '("lisp/private/" "locked.el"))))
+            (should (eq (car (drgnx-doctor-check 'portable-config (funcall facts))) 'warn))
+            ;; without the key: info, naming what was not checked
+            (delete-file (expand-file-name "config.el" config))
+            (let ((r (drgnx-doctor-check 'portable-config (funcall facts))))
+              (should (eq (car r) 'info))
+              (should (string-search "could not check 2 files: lisp/private/, locked.el" (nth 1 r))))
+            ;; the scan itself failing: info with the reason, never ok
+            (let ((r (drgnx-doctor-check 'portable-config
+                                         (cl-letf (((symbol-function 'drgnx-portable-config-problems)
+                                                    (lambda () (error "boom")))
+                                                   ((symbol-function 'drgnx-doctor--search) #'ignore))
+                                           (drgnx-doctor-facts)))))
+              (should (eq (car r) 'info))
+              (should (string-search "could not check the config dir: boom" (nth 1 r)))))
+        (set-file-modes private #o755)
+        (set-file-modes (expand-file-name "locked.el" config) #o644)))))
+
+(ert-deftest drgnx-portable/a-root-under-a-linked-home-is-remembered-once ()
+  ;; gryphn's projects.tsv may spell a root through a link to home (/home/u when HOME is /var/home/u)
+  (drgnx-portable-test--with root
+    (let* ((real (concat root "home")) (link (concat root "linked-home")) (alpha (concat real "/ws/alpha")))
+      (make-symbolic-link real link)
+      (make-directory alpha t)
+      (let ((default-directory (file-name-as-directory alpha))) (call-process "git" nil nil nil "init" "-q"))
+      (dolist (spelling (list (concat link "/ws/alpha") (concat link "/ws/alpha") alpha))
+        (drgnx-projects-import (list spelling) :todos nil))
+      (should (= 1 (length (plist-get (drgnx-projects-read) :projects))))
+      (should (string-search ":root \"~/ws/alpha\"" (drgnx-portable-test--text (drgnx-projects-file)))))))
+
+(defconst drgnx-portable-test--keys
+  (list (concat "sk-proj-" (make-string 24 ?x)) (concat "sk-svcacct-" (make-string 24 ?x))
+        (concat "sk-admin-" (make-string 24 ?x)) (concat "github_pat_" (make-string 30 ?x))
+        (concat "xsk-or-v1-" (make-string 24 ?x)) (concat "KEY_sk-ant-" (make-string 24 ?x)))
+  "Keys of today's formats, and keys after a word character.  Built here: no key is in a file of the repository.")
+
+(ert-deftest drgnx-portable/todays-key-formats-are-found ()
+  (drgnx-portable-test--with root
+    (let ((config (drgnx-user-dir)) (n 0))
+      (dolist (k drgnx-portable-test--keys)
+        (drgnx-portable-test--write (expand-file-name (format "k%d.el" (cl-incf n)) config) (format "(setq k %S)\n" k)))
+      ;; no false positives: words ending in "sk", hashes, long command names
+      (drgnx-portable-test--write (expand-file-name "fine.eld" config)
+                                  (format "(:task %S :id %S :cmd \"desk-admin-panel-component-name\")\n"
+                                          (concat "task-" (make-string 40 ?a)) (concat "mask-" (make-string 32 ?b))))
+      (should (equal (plist-get (drgnx-portable-config-problems) :keys)
+                     (cl-loop for i from 1 to (length drgnx-portable-test--keys) collect (format "k%d.el" i)))))))
+
+(ert-deftest drgnx-portable/the-pre-commit-hook-knows-the-new-formats ()
+  ;; The hook (the CI leak scan, --all) refuses each of today's formats too.
+  (skip-unless (executable-find "git"))
+  (let ((repo (make-temp-file "drgnx-hook" t)) (hook (expand-file-name ".githooks/pre-commit" drgnx-dir)))
+    (unwind-protect
+        (let ((default-directory (file-name-as-directory repo)))
+          (call-process "git" nil nil nil "init" "-q")
+          (dolist (k (seq-take drgnx-portable-test--keys 4))
+            (write-region (concat "x = " k "\n") nil "f.txt")
+            (call-process "git" nil nil nil "add" "f.txt")
+            (should (= 1 (call-process "bash" nil nil nil hook "--all"))))
+          (write-region "x = 1\n" nil "f.txt")
+          (call-process "git" nil nil nil "add" "f.txt")
+          (should (= 0 (call-process "bash" nil nil nil hook "--all"))))
+      (delete-directory repo t))))
+
+(ert-deftest drgnx-portable/a-linked-item-moves-and-its-target-stays ()
+  (drgnx-portable-test--with root
+    (let ((units (concat root "elsewhere/units")) (link (expand-file-name "systemd" (drgnx-user-dir))))
+      (drgnx-portable-test--write (expand-file-name "drgnx.service" units) "[Unit]\n")
+      (make-symbolic-link units link)
+      (should (equal (drgnx-portable-move-machine-local) '(("systemd/" . moved))))
+      (should-not (file-symlink-p link))
+      (should (file-exists-p (expand-file-name "drgnx.service" units)))
+      (should (file-exists-p (expand-file-name "systemd/drgnx.service" (drgnx-data-dir))))
+      ;; again, with the same files in the data dir: the link goes, its target stays
+      (make-symbolic-link units link)
+      (should (equal (drgnx-portable-move-machine-local) '(("systemd/" . dropped))))
+      (should-not (file-symlink-p link))
+      (should (file-exists-p (expand-file-name "drgnx.service" units))))))
+
+(ert-deftest drgnx-portable/an-item-in-both-places-says-what-to-do ()
+  (drgnx-portable-test--with root
+    (drgnx-portable-test--write (expand-file-name "emacs" (drgnx-user-dir)) "/opt/old-emacs\n")
+    (drgnx-portable-test--write (expand-file-name "emacs" (drgnx-data-dir)) "/usr/bin/emacs\n")
+    (should (equal (plist-get (drgnx-portable-config-problems) :in-both) '("emacs")))
+    (let ((r (drgnx-doctor-check 'portable-config (list :portable (drgnx-portable-config-problems)))))
+      (should (eq (car r) 'warn))
+      (should (string-search "emacs has its own copy in the data dir, which drgnx uses: compare them, then delete the config dir's"
+                             (nth 2 r))))))
+
+(ert-deftest drgnx-portable/an-empty-data-dir-variable-is-unset ()
+  ;; bash's ${XDG_DATA_HOME:-…} treats empty as unset; so does drgnx-data-dir, or the two would pick different dirs
+  (drgnx-portable-test--with root
+    (let ((process-environment (append '("DRGNX_DATA_DIR=" "XDG_DATA_HOME=") process-environment)))
+      (should (equal (drgnx-data-dir) (expand-file-name "~/.local/share/drgnx/"))))))
+
 ;;; portable-test.el ends here

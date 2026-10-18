@@ -24,15 +24,19 @@
   "install.sh, for the command a new machine runs.")
 
 (defconst drgnx-portable-key-patterns
-  '("\\bsk-or-v1-[A-Za-z0-9]\\{20,\\}"         ; OpenRouter
-    "\\bsk-ant-[A-Za-z0-9_-]\\{20,\\}"         ; Anthropic
-    "\\bsk-[A-Za-z0-9]\\{32,\\}"               ; OpenAI-style
-    "\\bgh[pousr]_[A-Za-z0-9]\\{30,\\}"        ; GitHub tokens
-    "\\bAKIA[0-9A-Z]\\{16\\}"                  ; AWS access keys
+  '("sk-or-v1-[A-Za-z0-9]\\{20,\\}"           ; OpenRouter
+    "sk-ant-[A-Za-z0-9_-]\\{20,\\}"           ; Anthropic
+    "\\bsk-\\(?:proj\\|svcacct\\|admin\\)-[A-Za-z0-9_-]\\{20,\\}" ; OpenAI project, service account, admin keys
+    "\\bsk-[A-Za-z0-9]\\{32,\\}"               ; OpenAI-style (legacy)
+    "gh[pousr]_[A-Za-z0-9]\\{30,\\}"          ; GitHub tokens
+    "github_pat_[A-Za-z0-9_]\\{22,\\}"        ; GitHub fine-grained tokens
+    "AKIA[0-9A-Z]\\{16\\}"                    ; AWS access keys
     "-----BEGIN [A-Z ]*PRIVATE KEY-----"
-    "\\bAGE-SECRET-KEY-1[0-9A-Z]\\{58\\}")     ; an age identity
+    "AGE-SECRET-KEY-1[0-9A-Z]\\{58\\}")       ; an age identity
   "Text that is a secret: the pre-commit hook's key patterns (.githooks/pre-commit), and an age identity.
-A new provider's key prefix goes here and in the hook.")
+A distinctive prefix matches after any character (\"KEY_sk-ant-…\", \"xsk-or-v1-…\"); the generic sk- forms only at
+a word start, so \"task-<hash>\" or \"desk-admin-…\" is not a key.  Plain text only: a base64-wrapped key is not
+found.  A new provider's key prefix goes here and in the hook.")
 
 (defconst drgnx-portable-secret-file-regexp "\\`\\(?:\\.env\\(?:\\..*\\)?\\|secrets\\.env\\|.*\\.pem\\|.*\\.key\\)\\'"
   "File names that hold secrets whatever their text (the pre-commit hook's list).")
@@ -83,7 +87,8 @@ with `expand-file-name'."
         (t (equal (drgnx-portable--bytes a) (drgnx-portable--bytes b)))))
 
 (defun drgnx-portable--delete (path)
-  (if (file-directory-p path) (delete-directory path t) (delete-file path)))
+  "Delete PATH: a directory with its files; a symlink (to a directory too) as the link only."
+  (if (and (file-directory-p path) (not (file-symlink-p path))) (delete-directory path t) (delete-file path)))
 
 (defun drgnx-portable-move-machine-local ()
   "Move the machine-local items of the config dir to the data dir: copy, verify, then delete.
@@ -121,16 +126,22 @@ dir already: the config dir's is deleted); `kept' (a different copy is there: ne
           (cl-some (lambda (re) (goto-char (point-min)) (re-search-forward re nil t)) drgnx-portable-key-patterns)))))
 
 (defun drgnx-portable--key-files (config)
-  "Config-relative names of the regular files under CONFIG (not .git/, not secrets.age, not symlinks) that hold
-a secret.  Names only: a key's text never leaves this function."
-  (when (file-directory-p config)
-    (sort (cl-loop for f in (directory-files-recursively
-                             config "" nil (lambda (d) (not (equal (file-name-nondirectory d) ".git"))))
-                   for name = (file-relative-name f config)
-                   when (and (not (equal name "secrets.age")) (not (file-symlink-p f)) (file-regular-p f)
-                             (file-readable-p f) (drgnx-portable--secret-p f name))
-                   collect name)
-          #'string<)))
+  "(:keys FILES :unchecked NAMES) for the regular files under CONFIG (not .git/, not secrets.age, not symlinks).
+FILES hold a secret; NAMES are the files and directories (\"DIR/\") that could not be read, so were not checked.
+Config-relative names only: a key's text never leaves this function."
+  (let (keys unchecked)
+    (when (file-directory-p config)
+      (dolist (f (directory-files-recursively
+                  config "" nil (lambda (d)
+                                  (cond ((equal (file-name-nondirectory d) ".git") nil)
+                                        ((file-accessible-directory-p d) t)
+                                        (t (push (file-name-as-directory (file-relative-name d config)) unchecked) nil)))))
+        (let ((name (file-relative-name f config)))
+          (when (and (not (equal name "secrets.age")) (not (file-symlink-p f)) (file-regular-p f))
+            (condition-case nil
+                (when (drgnx-portable--secret-p f name) (push name keys))
+              (file-error (push name unchecked)))))))
+    (list :keys (sort keys #'string<) :unchecked (sort unchecked #'string<))))
 
 (defun drgnx-portable--missing-roots ()
   "projects.eld's roots that are not directories on this machine, as written (\"~/...\")."
@@ -141,13 +152,17 @@ a secret.  Names only: a key's text never leaves this function."
            collect (drgnx-portable-path root)))
 
 (defun drgnx-portable-config-problems ()
-  "What keeps the config dir from travelling as it is: (:keys FILES :machine-local ITEMS :missing-roots ROOTS).
-FILES: config-relative names of files that hold a key in plain text (never the key); ITEMS: members of
-`drgnx-portable-machine-local' present there; ROOTS: projects.eld roots not cloned here."
-  (let ((config (drgnx-user-dir)))
-    (list :keys (drgnx-portable--key-files config)
-          :machine-local (cl-remove-if-not (lambda (i) (file-exists-p (expand-file-name i config))) drgnx-portable-machine-local)
-          :missing-roots (drgnx-portable--missing-roots))))
+  "What keeps the config dir from travelling as it is:
+(:keys FILES :unchecked NAMES :machine-local ITEMS :in-both ITEMS :missing-roots ROOTS).
+FILES: config-relative names of files that hold a key in plain text (never the key); NAMES: files and directories
+the scan could not read; ITEMS: members of `drgnx-portable-machine-local' present there (:in-both: those the data
+dir has too, which drgnx uses); ROOTS: projects.eld roots not cloned here."
+  (let* ((config (drgnx-user-dir))
+         (local (cl-remove-if-not (lambda (i) (file-exists-p (expand-file-name i config))) drgnx-portable-machine-local)))
+    (append (drgnx-portable--key-files config)
+            (list :machine-local local
+                  :in-both (cl-remove-if-not (lambda (i) (file-exists-p (expand-file-name i (drgnx-data-dir)))) local)
+                  :missing-roots (drgnx-portable--missing-roots)))))
 
 (provide 'drgnx-portable)
 ;;; drgnx-portable.el ends here

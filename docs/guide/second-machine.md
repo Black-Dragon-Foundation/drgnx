@@ -21,7 +21,8 @@ A path under your home directory is written `~/…` in the files that travel —
 the rc line ([shell.md](shell.md)) — and read back as this machine's home. So `~/work/alpha` on a machine whose home
 is `/home/ana` is `~/work/alpha` on a Mac whose home is `/Users/ana` too. A home behind a symlink (Fedora
 Silverblue's `/home`, which is `/var/home`) counts as home in both spellings. A path outside your home stays as
-it is.
+it is, except a symlink that points into your home: it is written as the place it points to (`/opt/proj` linked to
+`~/ws/proj` is written `~/ws/proj`).
 
 A project root that is not on the new machine is shown as missing; drgnx never clones it for you.
 
@@ -30,24 +31,35 @@ A project root that is not on the new machine is shown as missing; drgnx never c
 Older installs wrote the `emacs` record and onboarding's `systemd/` and `applications/` into the config dir. They
 are moved to the data dir: copied, compared, and only then deleted from the config dir. When the data dir has an
 identical copy already, the config dir's is deleted; when it has a different one, neither is touched and the
-doctor keeps saying so. `drgnx bootstrap --step config` does the move, or do it yourself:
+doctor keeps saying so. `drgnx bootstrap --step config` does the move, or do it yourself; this moves each item only
+when the data dir has none, so it never replaces the data dir's (newer) copy:
 
 ```sh
-mkdir -p ~/.local/share/drgnx && mv ~/.config/drgnx/emacs ~/.config/drgnx/systemd ~/.config/drgnx/applications ~/.local/share/drgnx/
+c="${DRGNX_CONFIG_DIR:-$HOME/.config/drgnx}"; d="${DRGNX_DATA_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/drgnx}"
+mkdir -p "$d"
+for f in emacs systemd applications; do
+  if [ -e "$c/$f" ] && [ ! -e "$d/$f" ]; then mv "$c/$f" "$d/"; fi
+done
 ```
 
-Until then `drgnx` still reads the old `emacs` record when the data dir has none.
+Anything still in the config dir afterwards has its own copy in the data dir, which drgnx uses: compare them (`diff
+-r "$c/emacs" "$d/emacs"`, and the same for `systemd` and `applications`), then delete the config dir's. Until then
+`drgnx` still reads the old `emacs` record when the data dir has none.
 
 ## The doctor's check
 
 `drgnx doctor`'s `portable-config` line says whether the config dir can travel as it is:
 
 - **WARN, a key in plain text in FILE:** a file of the config dir holds something that looks like a secret — an
-  OpenRouter, Anthropic or OpenAI-style key, a GitHub token, an AWS access key, a private key, an age identity — or
-  is named like one (`.env`, `secrets.env`, `*.pem`, `*.key`). The doctor names the file, never the key. Move the
-  key to your keyring ([ai.md](ai.md#keys)) and take it out of the file. `secrets.age`, the repository's own
-  `.git/` and symlinks are not read.
-- **WARN, machine-local files in the config dir:** the older install's files above; move them.
+  OpenRouter or Anthropic key, an OpenAI key (`sk-…`, `sk-proj-…`, `sk-svcacct-…`, `sk-admin-…`), a GitHub token
+  (`ghp_…`, `github_pat_…`), an AWS access key, a private key, an age identity — or is named like one (`.env`,
+  `secrets.env`, `*.pem`, `*.key`). The doctor names the file, never the key. Move the key to your keyring
+  ([ai.md](ai.md#keys)) and take it out of the file. `secrets.age`, the repository's own `.git/` and symlinks are
+  not read. The check finds keys in plain text only: a key encoded (base64, say) or split across lines is not found.
+- **WARN, machine-local files in the config dir:** the older install's files above; move them. For an item the data
+  dir has too, the fix says so: compare the two, then delete the config dir's.
+- **INFO, could not check N files:** files or directories of the config dir that could not be read (their
+  permissions), or the whole scan failed; the doctor never says OK then. Make them readable and run it again.
 - **INFO, not cloned on this machine:** `projects.eld` roots that are not here. Clone them to work on them here, or
   leave them.
 - **OK:** the config dir can travel as it is.

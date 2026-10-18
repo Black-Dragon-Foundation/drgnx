@@ -250,8 +250,12 @@ home, so it travels: docs/guide/second-machine.md)."
 
 (defun drgnx-projects--remember (entries)
   (let* ((data (drgnx-projects-read))
-         (known (mapcar (lambda (p) (plist-get p :root)) (plist-get data :projects)))
-         (new (seq-remove (lambda (e) (member (plist-get e :root) known)) entries)))
+         ;; compared as true names: a root spelled through a link to home is the one read back as ~/… (once)
+         (known (mapcar (lambda (p) (let ((r (plist-get p :root))) (and (stringp r) (drgnx-projects--norm r))))
+                        (plist-get data :projects)))
+         (new (seq-filter (lambda (e) (let ((n (drgnx-projects--norm (plist-get e :root))))
+                                        (unless (member n known) (push n known))))
+                          entries)))
     (when new
       (make-directory (file-name-directory (drgnx-projects-file)) t)
       (with-temp-file (drgnx-projects-file)
