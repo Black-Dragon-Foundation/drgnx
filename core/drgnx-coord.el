@@ -261,17 +261,17 @@ held when RECIPIENT's queue is full or the two exchange too much â€” or (:held â
      (or (drgnx-coord--held db seen)
          (let* ((waiting (caar (sqlite-select db "select count(*) from message where recipient = ? and state = 'queued'"
                                               (list recipient))))
-                (recent (caar (sqlite-select db "select count(*) from message where sender = ? and recipient = ? and at > ?"
-                                             (list sender recipient (- (float-time) 60)))))
+                (recent (caar (sqlite-select db "select count(*) from message where coalesce(sender, 'user') = ? and recipient = ? and at > ?"
+                                             (list (or sender "user") recipient (- (float-time) 60)))))
                 (reason (cond ((and (>= waiting drgnx-coord-queue-limit) (not (equal recipient "user"))) "queue full")
                               ((>= recent drgnx-coord-pair-rate) "too many between these two")))
                 (state (if reason "held" "queued")))
            (sqlite-execute db "insert into message (job, sender, recipient, text, state, reason, at) values (?, ?, ?, ?, ?, ?, ?)"
                            (list job sender recipient text state reason (float-time)))
            ;; a reply: what the other side sent this sender is acted on
-           (sqlite-execute db "update message set state = 'acted', acted = ? where sender = ? and recipient = ?
+           (sqlite-execute db "update message set state = 'acted', acted = ? where sender = ? and coalesce(recipient, 'user') = ?
                                and state in ('delivered', 'read')"
-                           (list (float-time) recipient sender))
+                           (list (float-time) recipient (or sender "user")))
            (list :ok t :id (caar (sqlite-select db "select last_insert_rowid()")) :state state))))))
 
 (defun drgnx-coord-queued ()

@@ -38,7 +38,8 @@ working from the old one. So the shared state is explicit, versioned, and **enfo
 - **Messages:** states only move forward. A reply (the recipient writing back to the sender) marks what it answers
   `acted`. Limits against chatty loops: an agent's undelivered queue holds `drgnx-coord-queue-limit` (20); one
   agent sends another at most `drgnx-coord-pair-rate` (6) a minute. Beyond either a message is `held` with its
-  reason (`queue full`, `too many between these two`). Escalations to `user` are never held as a full queue.
+  reason (`queue full`, `too many between these two`); the user's own Emacs, which sends with no sender, counts as the sender
+  `user` for both that limit and the replies it makes. Escalations to `user` are never held as a full queue.
 
 ## The tools (`core/drgnx-mcp.el`, `core/drgnx-coord-mcp.el`)
 

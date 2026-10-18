@@ -237,4 +237,15 @@
       (should (plist-get (drgnx-coord-send :job "j" :sender "a" :recipient "d" :text "late" :seen 0) :held))
       (should (= (length (drgnx-coord-inbox "d")) count)))))
 
+(ert-deftest drgnx-coord/the-user-s-own-messages-count-towards-the-pair-rate-and-answer-agents ()
+  ;; the user's Emacs sends with no sender: still one sender for the loop limit, and a reply to an agent
+  (drgnx-coord-test--with
+    (let ((id (plist-get (drgnx-coord-send :job "j" :sender "a" :recipient "user" :text "question" :seen 0) :id)))
+      (drgnx-coord-mark id "delivered") (drgnx-coord-mark id "read")
+      (drgnx-coord-send :job "j" :sender nil :recipient "a" :text "answer" :seen 0)
+      (should (equal (plist-get (drgnx-coord-message id) :state) "acted")))
+    (dotimes (_ 4) (drgnx-coord-send :job "j" :sender nil :recipient "a" :text "more" :seen 0))   ; 5 sent so far
+    (should (equal (plist-get (drgnx-coord-send :job "j" :sender nil :recipient "a" :text "6th" :seen 0) :state) "queued"))
+    (should (equal (plist-get (drgnx-coord-send :job "j" :sender nil :recipient "a" :text "7th" :seen 0) :state) "held"))))
+
 ;;; coord-test.el ends here
