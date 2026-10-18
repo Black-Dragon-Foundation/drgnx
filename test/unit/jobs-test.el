@@ -221,3 +221,14 @@
       (should (equal (drgnx-jobs--boot-id) "UUID-1"))
       (should (equal (drgnx-jobs--boot-id) "UUID-1"))
       (should (= calls 1)))))
+
+(ert-deftest drgnx-jobs/no-setsid-no-perl-says-so ()
+  ;; M12a-9: a clear error before anything is created or run, not a "file is missing" from `call-process'
+  (drgnx-jobs-test--with
+   (let ((drgnx-jobs--setsid nil) (ran nil) (real-find (symbol-function 'executable-find)))
+     (cl-letf (((symbol-function 'executable-find) (lambda (name &rest r) (and (not (equal name "perl")) (apply real-find name r))))
+               ((symbol-function 'call-process) (lambda (&rest a) (push a ran) 0)))
+       (let ((err (should-error (drgnx-jobs-start "x" '("true")) :type 'user-error)))
+         (should (equal (cadr err) "Detached jobs need setsid or perl"))))
+     (should-not ran)
+     (should-not (drgnx-jobs-list)))))

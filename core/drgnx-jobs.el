@@ -61,7 +61,8 @@ is a process, and `drgnx-jobs-get' wants it for every live job."
                   (with-temp-buffer
                     (and (eql 0 (call-process "sysctl" nil t nil "-n" "kern.bootsessionuuid"))
                          (let ((id (string-trim (buffer-string)))) (and (not (string-empty-p id)) id))))
-                (string-trim (with-temp-buffer (insert-file-contents "/proc/sys/kernel/random/boot_id") (buffer-string))))))))
+                (string-trim (with-temp-buffer (insert-file-contents "/proc/sys/kernel/random/boot_id")
+                                               (buffer-string))))))))
 
 (defvar drgnx-jobs--setsid (executable-find "setsid")
   "setsid(1) where the system has it (Linux; macOS has none).")
@@ -108,6 +109,9 @@ appears — for callers that must not block (a timer started from a sentinel)."
          (git-dir (and task (funcall git "rev-parse" "--path-format=absolute" "--git-common-dir")))
          (process-environment (append env (and task (list (concat "DRGNX_TASK=" task))) process-environment))
          (line (drgnx-jobs--wrapper dir command task)))
+    ;; before anything is created: a missing program would surface as `call-process''s "file is missing"
+    (unless (or (eq launcher 'systemd) drgnx-jobs--setsid (executable-find "perl"))
+      (user-error "Detached jobs need setsid or perl"))
     (make-directory dir t)
     (with-temp-file (expand-file-name "job.eld" dir)
       (prin1 (list :id id :name name :command command :cwd cwd :launcher launcher :task task :head head :git-dir git-dir :start-time (float-time)

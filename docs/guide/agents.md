@@ -66,7 +66,8 @@ edits included; both need absolute paths.
 
 Background work that must survive a closed frame, a restart of Emacs or an interrupted chat runs as a **job**: a
 systemd user unit (`systemd-run --user`) where systemd runs your session, else its own process group (the detached
-launcher: `setsid`, or on macOS, which has no `setsid`, the perl every Mac has). Each job has
+launcher: `setsid`, or on macOS, which has no `setsid`, the perl every Mac has; with neither, starting a job says
+"Detached jobs need setsid or perl" and creates nothing). Each job has
 a directory under `~/.local/state/drgnx/jobs/` (its command, log, pid and exit code), so any Emacs lists it in the
 Agents tab (running, exited N, stopped, gone), shows its log (Show Job Log) and stops it (Stop Job). A job's pid is
 trusted only within the boot that started it and for the process it started (a pid reused after a reboot is "gone",
