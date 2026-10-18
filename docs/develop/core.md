@@ -230,7 +230,10 @@ case. All calls of one move share the operation's single deadline, so the watchd
 `focuswindow address:0x…` and `movewindow mon:NAME [silent]` (and the focus is given back after a silent one). The
 Lua form is tried first; the answer "Invalid dispatcher" marks a hyprlang instance, remembered per
 `HYPRLAND_INSTANCE_SIGNATURE`. niri answers an unknown output with exit 0 and no effect, so the output is looked up
-first and an unknown one is an error; the move is `niri msg action move-window-to-monitor --id ID OUTPUT`.
+first and an unknown one is an error; the move is `niri msg action move-window-to-monitor --id ID OUTPUT`. (niri warps the
+cursor to the target output on a restore too; that cannot be turned off). A hyprlang config splits a dispatcher's
+arguments at spaces and commas, so a monitor name with whitespace, `,` or `;` is refused there; if the silent move fails after
+the window was focused, the window that had the focus gets it back (best effort, a call of its own).
 
 **Another compositor** (river, Wayfire, labwc, Cosmic, ...): call `drgnx-platform-define-adapter` from your
 config. A new name goes before `x11` (so an adapter for an X window manager such as bspwm, awesome or xmonad
