@@ -14,6 +14,7 @@
 (require 'seq)
 (require 'subr-x)
 (require 'drgnx-paths)
+(require 'drgnx-file)
 (require 'drgnx-timer)
 
 (defun drgnx-jobs-dir () (file-name-as-directory (expand-file-name "jobs" (drgnx-state-dir))))
@@ -29,7 +30,15 @@
           (t 'detached))))
 
 (defun drgnx-jobs--read (file)
-  (and (file-readable-p file) (ignore-errors (with-temp-buffer (insert-file-contents file) (read (current-buffer))))))
+  "The job plist in FILE (a job.eld), or nil when it is missing or unreadable (`drgnx-file-read')."
+  (let ((r (drgnx-file-read file)))
+    (and (eq (plist-get r :status) 'ok) (plist-get r :data))))
+
+(defun drgnx-jobs--plain (x)
+  "X, a string or a list of strings, without text properties."
+  (cond ((stringp x) (substring-no-properties x))
+        ((consp x) (mapcar #'drgnx-jobs--plain x))
+        (t x)))
 
 (defun drgnx-jobs--text (file)
   (and (file-readable-p file) (string-trim (with-temp-buffer (insert-file-contents file) (buffer-string)))))
@@ -115,11 +124,13 @@ Signals a `user-error' (before anything is created) when the detached launcher h
     (unless (or (eq launcher 'systemd) drgnx-jobs--setsid (executable-find "perl"))
       (user-error "Detached jobs need setsid or perl"))
     (make-directory dir t)
-    (with-temp-file (expand-file-name "job.eld" dir)
-      (prin1 (list :id id :name name :command command :cwd cwd :launcher launcher :task task :head head :git-dir git-dir :start-time (float-time)
-                   :unit (and (eq launcher 'systemd) (concat "drgnx-job-" id))
-                   :started (format-time-string "%FT%T%z"))
-             (current-buffer)))
+    ;; atomic, through the file layer; strings from buffer text lose their properties (the layer refuses them)
+    (drgnx-file-write (expand-file-name "job.eld" dir)
+                      (list :id id :name (drgnx-jobs--plain name) :command (drgnx-jobs--plain command) :cwd cwd
+                            :launcher launcher :task (drgnx-jobs--plain task) :head head :git-dir git-dir
+                            :start-time (float-time)
+                            :unit (and (eq launcher 'systemd) (concat "drgnx-job-" id))
+                            :started (format-time-string "%FT%T%z")))
     (let ((default-directory (file-name-as-directory cwd)))
       (pcase launcher
         ('systemd
@@ -158,20 +169,32 @@ A job whose poll ended is not in the layer's table, so none is stamped twice."
             (while (and (not (file-exists-p (expand-file-name "pid" dir))) (< (float-time) deadline))
               (sleep-for 0.02))
             (drgnx-timer-cancel key)
-            (drgnx-jobs--stamp-anyway dir)))))))
+            (drgnx-jobs--stamp-anyway dir 1.0)))))))
 
-(defun drgnx-jobs--stamp-anyway (dir)
-  "Stamp the job in DIR if it can be; the job's directory may be gone by now (a removed job)."
-  (ignore-errors (drgnx-jobs--stamp dir)))
+(defun drgnx-jobs--stamp-anyway (dir &optional timeout)
+  "Stamp the job in DIR if it can be (see `drgnx-jobs--stamp'); the job's directory may be gone by now."
+  (ignore-errors (drgnx-jobs--stamp dir timeout)))
 
-(defun drgnx-jobs--stamp (dir)
-  "Add the boot and the start time of the job in DIR's process to its job.eld, once its pid file is there."
-  (let ((pidf (expand-file-name "pid" dir)))
-    (when-let* ((pid (and (file-exists-p pidf) (string-to-number (or (drgnx-jobs--text pidf) "0"))))
+(defun drgnx-jobs--stamp (dir &optional timeout)
+  "Add the boot and the start time of the job in DIR's process to its job.eld, once its pid file is there.
+Runs from timers and `kill-emacs-hook': it never prompts, and it gives up on a job.eld another drgnx holds the
+lock of after TIMEOUT seconds (default 0: one attempt; the stamp is then skipped).  A job.eld that is missing is
+not made, and one that cannot be read is left alone; the error is a `message', never raised."
+  (let ((pidf (expand-file-name "pid" dir)) (file (expand-file-name "job.eld" dir)) (inhibit-interaction t))
+    (when-let* ((pid (and (file-exists-p pidf) (file-exists-p file) (string-to-number (or (drgnx-jobs--text pidf) "0"))))
                 (attrs (and (> pid 0) (process-attributes pid))))
-      (let ((job (drgnx-jobs--read (expand-file-name "job.eld" dir))))
-        (with-temp-file (expand-file-name "job.eld" dir)
-          (prin1 (append job (list :boot (drgnx-jobs--boot-id) :start (alist-get 'start attrs))) (current-buffer)))))))
+      (condition-case err
+          (drgnx-file-update
+           file
+           (lambda (job)
+             (when job
+               (plist-put job :boot (drgnx-jobs--boot-id))
+               (plist-put job :start (alist-get 'start attrs))
+               job))
+           :timeout (or timeout 0))
+        (drgnx-file-busy nil)
+        (error (message "drgnx: job.eld not stamped: %s" (error-message-string err))
+               nil)))))
 
 (defun drgnx-jobs-get (id)
   "Job ID: its job.eld plus :status (running, exited, stopped or gone) and :exit."

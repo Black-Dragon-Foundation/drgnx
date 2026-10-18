@@ -49,6 +49,13 @@ nothing here reaches Tramp, and nothing prompts or visits a buffer. Errors: `drg
 `drgnx-file-update` with `:on-unreadable 'backup`. Reports and other files rewritten whole use `drgnx-file-write`
 with `:fsync nil`. Text files drgnx writes (unit files, desktop entries, exports) use `drgnx-file-write-text`.
 
+**job.eld.** A durable job's `jobs/ID/job.eld` is a plist of plain data in one form: `drgnx-jobs-start` writes it with
+`drgnx-file-write` (text properties on the name and command are dropped first), `drgnx-jobs--read` reads it with
+`drgnx-file-read` (nil for a missing or unreadable file), and the stamp (`drgnx-jobs--stamp`: `:boot` and `:start`) is
+`drgnx-file-update` with `:timeout 0` from the poll, `1.0` from `kill-emacs-hook`, `inhibit-interaction` bound. A busy lock
+skips the stamp; an unreadable job.eld is left alone and the error becomes one `message`; the stamp never creates a
+missing job.eld or its directory. Files written by older versions (one `prin1` form) read unchanged.
+
 **Reading.** `(drgnx-file-read-bounded FILE &key max-bytes)` gives the file's text decoded as UTF-8, or nil when it
 does not exist. It refuses, in this order:
 - a remote name (`/method:host:…`): "a remote file";
