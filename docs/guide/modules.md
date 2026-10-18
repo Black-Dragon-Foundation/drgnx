@@ -68,6 +68,9 @@ row) keeps it from loading. gryphn's files load unchanged: drgnx provides
 `gryphn-command-define` and `gryphn-surfaces-define-context` on its own registry and surfaces
 (`core/drgnx-compat-gryphn.el`), so the board, runs, agents and search commands appear in the palette and menus and
 their keys join the key profiles (the VS Code and Emacs profiles bind them, the Vim profile leaves them to the palette) — never replacing what a profile ships: a profile that has an entry for the command or binds the key keeps its own, and the Emacs profile keeps Emacs' own keys. drgnx never changes the gryphn checkout.
+A gryphn command whose id drgnx already has (gryphn's `view-explorer`, Toggle Sidebar, next to drgnx's View: Explorer)
+never replaces drgnx's: it is registered as `gryphn/<id>`, its key bound where the profile does not own it, and
+`*Messages*` says so once.
 
 ## Writing a module
 

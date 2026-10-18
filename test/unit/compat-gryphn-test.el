@@ -60,6 +60,34 @@
       (cl-mapc (lambda (p old) (dolist (e old) (should (equal e (funcall entry p (car e))))))
                '(vscode emacs vim) before))))
 
+(defun drgnx-compat-test--drgnx-view-explorer () "drgnx's View: Explorer, in the tests." (interactive))
+
+(ert-deftest drgnx-compat/a-gryphn-id-drgnx-has-gets-a-prefix ()
+  ;; gryphn's view-explorer (Toggle Sidebar, C-b) never replaces drgnx's View: Explorer: it is gryphn/view-explorer,
+  ;; with its key where drgnx's profile does not own it, said once; gryphn's own ids keep theirs when loaded again.
+  (drgnx-ext-test--with dir
+    (setq drgnx-keys-profiles (drgnx-keys-load-profiles (expand-file-name "keys" drgnx-dir)))
+    (drgnx-command-define 'view-explorer :category "View" :title "View: Explorer" :command #'drgnx-compat-test--drgnx-view-explorer)
+    (write-region (concat "(require 'gryphn-commands)\n"
+                          "(gryphn-command-define 'view-explorer :title \"Toggle Sidebar\" :category \"View\" :command #'ignore :key \"C-b\")\n"
+                          "(gryphn-command-define 'kx-board :title \"Show Board\" :category \"Board\" :command #'ignore :key \"<f19>\")\n")
+                  nil (expand-file-name "kx-fake-gryphn.el" dir) nil 'silent)
+    (let ((said nil) (drgnx-compat-gryphn--renamed nil))
+      (cl-letf (((symbol-function 'message) (lambda (fmt &rest args) (push (apply #'format fmt args) said))))
+        (load (expand-file-name "kx-fake-gryphn.el" dir) nil t)
+        (load (expand-file-name "kx-fake-gryphn.el" dir) nil t))      ; loaded again: nothing new
+      (should (eq (drgnx-cmd-command (drgnx-commands-get 'view-explorer)) #'drgnx-compat-test--drgnx-view-explorer))
+      (should (equal (drgnx-cmd-title (drgnx-commands-get 'gryphn/view-explorer)) "Toggle Sidebar"))
+      (should-not (drgnx-commands-get 'gryphn/gryphn/view-explorer))
+      (should (drgnx-commands-get 'kx-board))                       ; an id drgnx does not have stays as it is
+      (should-not (drgnx-commands-get 'gryphn/kx-board))
+      (should (= 1 (length (seq-filter (lambda (m) (string-search "gryphn/view-explorer" m)) said))))
+      (let ((entry (lambda (p id) (assq id (plist-get (alist-get p drgnx-keys-profiles) :bind)))))
+        (should (equal (cadr (funcall entry 'vscode 'view-explorer)) "C-S-e"))   ; drgnx's entries untouched
+        (should-not (funcall entry 'vscode 'gryphn/view-explorer))            ; C-b is VS Code's Toggle Sidebar
+        (should-not (funcall entry 'emacs 'gryphn/view-explorer))             ; C-b is backward-char
+        (should (equal (funcall entry 'vim 'gryphn/view-explorer) '(gryphn/view-explorer :none "the palette")))))))
+
 (ert-deftest drgnx-compat/external-modules-load-and-report ()
   (drgnx-ext-test--with dir
     (write-region "(require 'gryphn-commands)\n(gryphn-command-define 'kx-ext :title \"Ext\" :category \"X\" :command #'ignore)\n(provide 'kx-good)\n"
