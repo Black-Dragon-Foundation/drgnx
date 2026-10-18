@@ -163,8 +163,9 @@ Inside BODY, `drgnx-modules--table` holds only the selected modules and the modu
   module's teardown too. The product's after-teardown function re-applies the keys and menus from the registry; the
   helper puts what it changed back (the applied keys, the menu items, the which-key labels, `menu-bar-update-hook`,
   `context-menu-functions` and `context-menu-mode`) before the `:strict` comparison, provided none of the keys or menus
-  were applied before the helper ran (in a live session they were: then the re-application stays). A teardown problem (an undo that failed, named by its label) fails the test; a module that
-  is `:teardown 'restart` is left running.
+  were applied before the helper ran (in a live session they were: then the re-application stays). A teardown problem (an undo that failed, named by its label) fails the test. A module that
+  is `:teardown 'restart`, which stays on in a session, is unwound all the same (its cleanup stack, newest first):
+  its record must be exact.
 - **Registries come back.** Whatever happened to a variable of `drgnx-modules-fingerprint-registries` (a table, an
   alist, a keymap) is put back from a copy taken before the setups, after the module files and the libraries their
   setups load are loaded (a library's own top-level registrations, such as the panel areas, are the library's and

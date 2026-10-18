@@ -392,7 +392,8 @@ tests you add.
   `drgnx-teardown/off-on-off-is-off` turns each one off and on again in between: the second setup must set up the
   same things as the first, compared by what they are (a timer made again is a new object but the same timer) —
   no stacked timers, no idempotence guard that outlived the teardown.
-  `restart` modules are not set up.
+  `restart` modules are not set up here: their own tests set them up `:strict`, and the helper unwinds their record
+  (`core/basics`, `core/workbench`: `test/unit/mod-core-test.el`).
 - `drgnx-lint/modules-register-nothing-at-load`: a registration (`add-hook`, `advice-add`, `add-to-list`,
   `with-eval-after-load`, a timer, a drgnx `define`…) that runs when a module file loads fails — it runs outside every setup, so nothing records it.
 - `drgnx-lint/raw-global-forms-need-a-teardown`: in a module file, `with-eval-after-load` or an `eval-after-load`
