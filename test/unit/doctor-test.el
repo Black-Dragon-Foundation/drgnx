@@ -452,3 +452,124 @@
       (should (string-search "drgnx onboard --step agents" (nth 2 r))))
     (should (eq (car (funcall check '(:error "boom"))) 'warn))
     (should (= 0 (drgnx-doctor-exit-code (drgnx-doctor-run (drgnx-doctor-test--facts :version "31.2" :claude-adapter old) nil))))))
+
+;;;; Config files and the checkout (config layer, Task 5)
+
+(load (expand-file-name "test/fixtures/config-fixture" drgnx-dir) nil t)
+
+(defun drgnx-doctor-test--define-config (name file &rest args)
+  "Define the plist config file NAME in FILE (schema :a integer, :b string); ARGS come first."
+  (apply #'drgnx-config-define name
+         (append args (list :file file :schema '(plist (:a integer "A number") (:b string "A string"))
+                            :default '(:a 1) :doc "A test file."))))
+
+(defun drgnx-doctor-test--config-check ()
+  "The `config-files' check on the facts a fresh read gives."
+  (drgnx-doctor-check 'config-files (list :config-files (drgnx-doctor--config-files))))
+
+(ert-deftest drgnx-doctor/config-files-ok ()
+  (drgnx-test-with-config
+    (drgnx-doctor-test--define-config 'doctor-test-a "a.eld")
+    (drgnx-doctor-test--define-config 'doctor-test-b "b.eld")
+    (drgnx-test-config-put 'doctor-test-a "(:a 2 :b \"x\")\n")
+    (let ((r (drgnx-doctor-test--config-check)))
+      (should (eq (car r) 'ok))
+      (should (equal (nth 1 r) "2 files read")))
+    ;; no definitions at all is fine too; a project file is not read (it needs a folder)
+    (drgnx-config-undefine 'doctor-test-a)
+    (drgnx-config-undefine 'doctor-test-b)
+    (drgnx-doctor-test--define-config 'doctor-test-p "p.eld" :dir 'project)
+    (should (equal (nth 1 (drgnx-doctor-test--config-check)) "0 files read"))
+    (should (eq (car (drgnx-doctor-check 'config-files nil)) 'ok))))
+
+(ert-deftest drgnx-doctor/config-files-fail-names-file-and-line ()
+  (drgnx-test-with-config
+    (drgnx-doctor-test--define-config 'doctor-test-a "a.eld")
+    (drgnx-test-config-put 'doctor-test-a ";; mine\n\n(:a \"not a number\")\n")
+    (let ((r (drgnx-doctor-test--config-check)))
+      (should (eq (car r) 'fail))
+      (should (string-match-p "\\`a\\.eld line 3: " (nth 1 r)))
+      (should (string-search ":a" (nth 1 r)))
+      (should (equal (nth 2 r) (concat "Preferences: Open Config File… or edit it; "
+                                       "its last good copy is in use until then"))))
+    ;; the doctor only reads: the file keeps its bytes
+    (should (equal (drgnx-test-config-text 'doctor-test-a) ";; mine\n\n(:a \"not a number\")\n"))))
+
+(ert-deftest drgnx-doctor/config-files-newer-warns ()
+  (drgnx-test-with-config
+    (drgnx-doctor-test--define-config 'doctor-test-a "a.eld")
+    (drgnx-test-config-put 'doctor-test-a "(:version 99 :a 2)\n")
+    (let ((r (drgnx-doctor-test--config-check)))
+      (should (eq (car r) 'warn))
+      (should (string-search "a.eld" (nth 1 r)))
+      (should (string-search "written by a newer drgnx" (nth 1 r)))
+      (should (string-search "update drgnx here" (concat (nth 1 r) (nth 2 r)))))))
+
+(ert-deftest drgnx-doctor/config-files-unknown-keys-are-info ()
+  (drgnx-test-with-config
+    (drgnx-doctor-test--define-config 'doctor-test-a "a.eld")
+    (drgnx-test-config-put 'doctor-test-a "(:a 2 :zzz 1)\n")
+    (let ((r (drgnx-doctor-test--config-check)))
+      (should (eq (car r) 'info))
+      (should (string-search "a.eld: :zzz — a newer drgnx, or a typo?" (nth 1 r))))
+    ;; a mistake outranks it, and both are said
+    (drgnx-doctor-test--define-config 'doctor-test-b "b.eld")
+    (drgnx-test-config-put 'doctor-test-b "(:a \"x\")\n")
+    (let ((r (drgnx-doctor-test--config-check)))
+      (should (eq (car r) 'fail))
+      (should (string-search "b.eld line 1" (nth 1 r)))
+      (should (string-search ":zzz" (nth 1 r))))))
+
+(ert-deftest drgnx-doctor/config-files-migrated-is-info ()
+  (drgnx-test-with-config
+    (drgnx-doctor-test--define-config 'doctor-test-a "a.eld" :version 2 :migrate (list (cons 1 #'identity)))
+    (drgnx-test-config-put 'doctor-test-a "(:a 2)\n")
+    (let ((r (drgnx-doctor-test--config-check)))
+      (should (eq (car r) 'info))
+      (should (string-search "a.eld" (nth 1 r)))
+      (should (string-search "older" (nth 1 r))))))
+
+(ert-deftest drgnx-doctor/config-files-fact-failure-is-a-warning ()
+  (let ((r (drgnx-doctor-check 'config-files '(:config-files (:error "boom")))))
+    (should (eq (car r) 'warn))
+    (should (string-search "boom" (nth 1 r)))))
+
+(defun drgnx-doctor-test--git (dir &rest args)
+  "Run git ARGS in DIR (a throwaway repo, no user config), failing the test when it does."
+  (let ((process-environment (append '("GIT_CONFIG_GLOBAL=/dev/null" "GIT_CONFIG_SYSTEM=/dev/null"
+                                       "GIT_AUTHOR_NAME=t" "GIT_AUTHOR_EMAIL=t@example.org"
+                                       "GIT_COMMITTER_NAME=t" "GIT_COMMITTER_EMAIL=t@example.org")
+                                     process-environment)))
+    (should (eql 0 (apply #'call-process "git" nil nil nil "-C" dir args)))))
+
+(ert-deftest drgnx-doctor/checkout-clean-warns-on-a-changed-init ()
+  (let ((dir (file-name-as-directory (make-temp-file "drgnx-doctor-checkout" t))))
+    (unwind-protect
+        (progn
+          (make-directory (expand-file-name "init" dir))
+          (write-region "(a)\n" nil (expand-file-name "init/init.el" dir) nil 'silent)
+          (write-region "x\n" nil (expand-file-name "other.txt" dir) nil 'silent)
+          (drgnx-doctor-test--git dir "init" "-q")
+          (drgnx-doctor-test--git dir "add" ".")
+          (drgnx-doctor-test--git dir "commit" "-q" "-m" "first")
+          (let ((facts (list :checkout-init (drgnx-doctor--checkout-init dir))))
+            (should (eq (car (drgnx-doctor-check 'checkout-clean facts)) 'ok)))
+          ;; a change outside init/ does not count; one inside does, and is named
+          (write-region "y\n" nil (expand-file-name "other.txt" dir) nil 'silent)
+          (should (eq (car (drgnx-doctor-check 'checkout-clean (list :checkout-init (drgnx-doctor--checkout-init dir)))) 'ok))
+          (write-region "(b)\n" nil (expand-file-name "init/init.el" dir) nil 'silent)
+          (let ((r (drgnx-doctor-check 'checkout-clean (list :checkout-init (drgnx-doctor--checkout-init dir)))))
+            (should (eq (car r) 'warn))
+            (should (string-search "init/init.el" (nth 1 r)))
+            (should (string-search "config.el or custom.el" (nth 2 r)))
+            (should (string-search (format "git -C %s checkout -- init/" (directory-file-name dir)) (nth 2 r)))))
+      (delete-directory dir t))))
+
+(ert-deftest drgnx-doctor/checkout-clean-absent-without-git ()
+  (let ((dir (file-name-as-directory (make-temp-file "drgnx-doctor-nogit" t))))
+    (unwind-protect
+        (progn
+          (should-not (drgnx-doctor--checkout-init dir))
+          (should-not (drgnx-doctor-check 'checkout-clean (list :checkout-init (drgnx-doctor--checkout-init dir))))
+          (should-not (drgnx-doctor-check 'checkout-clean nil)))
+      (delete-directory dir t))))

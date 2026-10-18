@@ -209,6 +209,80 @@ off), or inside a session, the mode is read as it is and never switched: an off 
             (drgnx-trust-mode -1))))
     (error (list :error (error-message-string err)))))
 
+;; The config files (docs/guide/files.md): read fresh, applying nothing.  The core features whose loading defines config
+;; files are listed here, one line each; a module's file is loaded by `drgnx-config-doc' for its reference, not here.
+(defvar drgnx-doctor-config-features
+  '(
+    ;; one feature per line, appended below by each port
+    )
+  "The core features whose loading defines config files, for the `config-files' check.")
+
+(declare-function drgnx-config-read "drgnx-config")
+(defvar drgnx-config--defs)
+
+(defun drgnx-doctor--config-files ()
+  "The fact of the `config-files' check: (NAME :status :problem :unknown-keys :file) for every defined file that is
+not a project's, from a fresh `drgnx-config-read' (it applies nothing and writes nothing), by name; or (:error MESSAGE)."
+  (condition-case err
+      (progn
+        (require 'drgnx-config)
+        (dolist (feature drgnx-doctor-config-features) (require feature))
+        (let (names)
+          (maphash (lambda (name def) (unless (eq (plist-get def :dir) 'project) (push name names))) drgnx-config--defs)
+          (mapcar (lambda (name)
+                    (let ((r (drgnx-config-read name)))
+                      (list name :status (plist-get r :status) :problem (plist-get r :problem)
+                            :unknown-keys (plist-get r :unknown-keys) :file (plist-get r :file))))
+                  (sort names (lambda (a b) (string< (symbol-name a) (symbol-name b)))))))
+    (error (list :error (error-message-string err)))))
+
+(defun drgnx-doctor--config-files-check (rows)
+  "The `config-files' check of the fact ROWS (`drgnx-doctor--config-files')."
+  (if (eq (car-safe rows) :error)
+      (list 'warn (format "could not check: %s" (cadr rows)) "run drgnx doctor again")
+    (let (fail warn info)
+      (dolist (row rows)
+        (let* ((r (cdr row)) (file (file-name-nondirectory (or (plist-get r :file) (symbol-name (car row))))))
+          (pcase (plist-get r :status)
+            ('problem (push (format "%s line %s: %s" file (plist-get (plist-get r :problem) :line)
+                                    (plist-get (plist-get r :problem) :text))
+                            fail))
+            ('newer (push (format "%s: written by a newer drgnx: update drgnx here" file) warn))
+            ('migrated (push (format "%s: an older format, read as the current one; Migrate Config File… writes it" file)
+                             info)))
+          (dolist (key (plist-get r :unknown-keys))
+            (push (format "%s: %s — a newer drgnx, or a typo?" file (mapconcat (lambda (k) (format "%s" k)) key " "))
+                  info))))
+      (cond (fail (list 'fail (string-join (append (nreverse fail) (nreverse warn) (nreverse info)) "\n")
+                        (concat "Preferences: Open Config File… or edit it; "
+                                "its last good copy is in use until then")))
+            (warn (list 'warn (string-join (append (nreverse warn) (nreverse info)) "\n") "update drgnx here"))
+            (info (list 'info (string-join (nreverse info) "\n") nil))
+            (t (list 'ok (format "%d file%s read" (length rows) (if (= (length rows) 1) "" "s")) nil))))))
+
+(defun drgnx-doctor--checkout-init (dir)
+  "The fact of the `checkout-clean' check: (:dir DIR :changed LINES), LINES being `git status --porcelain -- init/'
+of the checkout DIR, run with GIT_OPTIONAL_LOCKS=0 and bounded at 5 s; nil without DIR/.git (an installed copy
+that is not a checkout); (:error MESSAGE) when git cannot say."
+  (when (file-exists-p (expand-file-name ".git" dir))
+    (condition-case err
+        (let* ((process-environment (cons "GIT_OPTIONAL_LOCKS=0" process-environment))
+               (default-directory (file-name-as-directory (expand-file-name dir)))
+               (buf (generate-new-buffer " *drgnx-doctor-git*" t))
+               (proc (make-process :name "drgnx-doctor-git" :buffer buf :noquery t :connection-type 'pipe
+                                   :sentinel #'ignore   ; the default one writes "Process … finished" into the buffer
+                                   :command (list "git" "-C" (directory-file-name default-directory)
+                                                  "status" "--porcelain" "--" "init/")))
+               (deadline (+ (float-time) 5)))
+          (unwind-protect
+              (progn
+                (while (and (process-live-p proc) (< (float-time) deadline)) (accept-process-output proc 0.05))
+                (cond ((process-live-p proc) (delete-process proc) (list :error "git status took more than 5 s"))
+                      ((not (eql (process-exit-status proc) 0)) (list :error "git status failed"))
+                      (t (list :dir dir :changed (split-string (with-current-buffer buf (buffer-string)) "\n" t)))))
+            (kill-buffer buf)))
+      (error (list :error (error-message-string err))))))
+
 (defun drgnx-doctor-facts ()
   "Facts about the running Emacs and this machine."
   (let ((native (and (fboundp 'native-comp-available-p) (native-comp-available-p))))
@@ -244,7 +318,9 @@ off), or inside a session, the mode is read as it is and never switched: an off 
            :ai-complete (ignore-errors (require 'drgnx-ai) (cdr (car (drgnx-ai-role 'complete))))
            :claude-adapter (drgnx-doctor--claude-adapter)
            :vram (ignore-errors (require 'drgnx-ai-probe) (drgnx-ai-vram))
-           :trust-guards (drgnx-doctor--trust-guards))
+           :trust-guards (drgnx-doctor--trust-guards)
+           :config-files (drgnx-doctor--config-files)
+           :checkout-init (drgnx-doctor--checkout-init drgnx-dir))
      (and (eq (drgnx-platform) 'macos) (drgnx-doctor--macos-facts)))))
 
 (defun drgnx-doctor--state-path (name)
@@ -359,6 +435,24 @@ off), or inside a session, the mode is read as it is and never switched: an off 
 (drgnx-doctor-define 'claude-adapter :group "Tools"
                      :doc "The Claude Code adapter the claude agent profiles run: @agentclientprotocol/claude-agent-acp 0.93.0 or newer"
                      :check (lambda (f) (drgnx-doctor--claude-adapter-check (plist-get f :claude-adapter))))
+
+(drgnx-doctor-define 'config-files :group "drgnx" :doc "drgnx's config files read, with no mistakes"
+                     :check (lambda (f) (drgnx-doctor--config-files-check (plist-get f :config-files))))
+
+(drgnx-doctor-define 'checkout-clean :group "drgnx"
+                     :doc "The checkout's init/ has no local changes (install.sh's update needs that)"
+                     :check (lambda (f)
+                              (let ((c (plist-get f :checkout-init)))
+                                (cond ((null c) nil)
+                                      ((plist-get c :error)
+                                       (list 'warn (format "could not check: %s" (plist-get c :error)) "run drgnx doctor again"))
+                                      ((plist-get c :changed)
+                                       (list 'warn (format "init/ has local changes: %s"
+                                                           (mapconcat (lambda (l) (string-trim l)) (plist-get c :changed) ", "))
+                                             (format "move what you changed to config.el or custom.el in %s, then: git -C %s checkout -- init/"
+                                                     (abbreviate-file-name (drgnx-user-dir))
+                                                     (directory-file-name (plist-get c :dir)))))
+                                      (t (list 'ok "init/ has no local changes" nil))))))
 
 (drgnx-doctor-define 'modules :group "drgnx" :doc "Modules that failed or wait for packages (from the last session)"
                      :check (lambda (f)
