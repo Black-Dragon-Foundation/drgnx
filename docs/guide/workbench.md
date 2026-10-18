@@ -222,7 +222,8 @@ Right Dock: `C-M-b` · palette · `SPC R`) runs the frame's full height, like th
 switching tabs swaps the buffer *in place*: the window stays, nothing around it moves, and each tab comes back
 scrolled where you left it. Both keep their pixel size across hiding and showing. Killing the buffer a tab shows
 leaves the tab empty — another buffer never slips into the panel. `C-x 1` keeps the docks and the panel; `C-x 0` in
-the panel hides it (size and tabs kept). The echo
+the panel hides it (size and tabs kept), and so does `q` in a panel buffer that binds it to quit (Help, Info, a
+compilation, …): the panel hides and focus goes back to the editor, as Escape does in VS Code. The echo
 area stays one line (`resize-mini-windows` is off), so a tall message never takes pixels from the panel; while you
 type in the minibuffer it may grow (icomplete-vertical, fido-vertical).
 

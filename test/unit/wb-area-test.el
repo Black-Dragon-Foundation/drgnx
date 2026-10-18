@@ -210,3 +210,19 @@
   (dolist (f (face-list))
     (when (string-prefix-p "drgnx-" (symbol-name f))
       (should (assq f (get 'drgnx 'custom-group))))))
+
+(ert-deftest drgnx-area/q-in-a-panel-buffer-hides-the-panel-and-returns-to-the-editor ()
+  ;; DEFERRED M3c-6, ruled: `q' (quit-window) in a panel buffer hides the panel (size and tabs kept)
+  ;; and focus goes back to the editor, as Escape does in VS Code.
+  (drgnx-area-test--with
+   (let ((editor (selected-window)))
+     (with-current-buffer (get-buffer-create "*Help*") (help-mode))
+     (display-buffer "*Help*")
+     (let ((panel (drgnx-wb-area-window 'panel)))
+       (should (window-live-p panel))
+       (select-window panel)
+       (call-interactively (key-binding "q"))
+       (should-not (drgnx-wb-area-window 'panel))
+       (should (eq (selected-window) editor))
+       (should (eq (drgnx-wb-area-tab 'panel) 'help))        ; the tab is kept
+       (should (window-live-p editor))))))
