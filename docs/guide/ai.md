@@ -181,11 +181,14 @@ sends.
 
 drgnx asks the local providers whether they run — every address at once, one second each, in the background,
 never holding up Emacs — and remembers which answered and which models they have (a probe updates the providers it
-asked; what it knows of the others stays). It probes once Emacs is first idle, again in onboarding and Choose, and while no `complete` provider runs. Something
+asked; what it knows of the others stays). The answers are also saved in `ai-detected.eld` in the state directory
+(for the doctor), under a lock, adding to what another Emacs saved; a probe that finds the file locked skips the
+save and the next one writes it, and a file with a mistake is copied aside (`ai-detected.eld.bak-…`) first. It probes once Emacs is first idle, again in onboarding and Choose, and while no `complete` provider runs. Something
 answering on TEI's
 port is taken for TEI only when its `/info` says so (LocalAI can answer there too).
 
-The local runner onboarding set up (`drgnx-ai-managed`, kept in `ai-local.eld` in the state directory) is started
+The local runner onboarding set up (`drgnx-ai-managed`, kept in `ai-local.eld` in the state directory, changed under
+a lock with its other keys left alone) is started
 again when it is down: `drgnx-ai-ensure-local` asks its address in the background and, when nothing answers and no
 drgnx job runs it, starts it as a drgnx job with one message ("Starting Ollama…"). It runs a moment after the first
 window opens (never at daemon start) and when a request finds nothing listening there (`drgnx-ai-refused-functions`),
