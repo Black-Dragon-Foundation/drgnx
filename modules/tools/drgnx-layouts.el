@@ -31,6 +31,7 @@
 (declare-function drgnx-groups--split "drgnx-groups")
 (declare-function drgnx-chrome-apply "drgnx-chrome")
 (declare-function drgnx-persist--strip "drgnx-persist")
+(declare-function drgnx-persist--clamp "drgnx-persist")
 (declare-function drgnx-replace--bar-clear "drgnx-replace")
 (declare-function drgnx-agents-sessions "drgnx-agents")
 (declare-function drgnx-agent-session-status "drgnx-agents")

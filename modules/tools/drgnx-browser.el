@@ -35,6 +35,7 @@
 (declare-function drgnx-agent-session-name "drgnx-agents")
 (declare-function drgnx-agent-session-entries "drgnx-agents")
 (defvar drgnx-layouts-shapes)
+(defvar drgnx-layouts-pane-fillers)
 (defvar xwidget-webkit-last-session-buffer)
 
 (defvar drgnx-browser--told nil "Non-nil once the message about the missing WebKit has been shown.")
