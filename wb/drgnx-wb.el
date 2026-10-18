@@ -134,14 +134,14 @@ sidebar is shown first.  A view with no sections is a `user-error' and changes n
 
 (defun drgnx-wb-view-explorer ()
   "Show the Explorer view (the Buffers panel, the Explorer, the Outline) in the sidebar and focus the file tree.
-Like VS Code's Ctrl+Shift+E; clicking a sidebar tab (`drgnx-wb-show-view') keeps the focus where it was."
+Like VS Code's Ctrl+Shift+E; `drgnx-wb-show-view' (a layout, or a program) swaps the view and keeps the focus where it was."
   (interactive)
   (drgnx-wb-show-view 'explorer)
   (drgnx-wb-focus-section 'explorer))
 
 (defun drgnx-wb-view-search ()
   "Show the Search view in the sidebar and focus it.
-Like VS Code's Ctrl+Shift+F; clicking a sidebar tab (`drgnx-wb-show-view') keeps the focus where it was."
+Like VS Code's Ctrl+Shift+F; `drgnx-wb-show-view' (a layout, or a program) swaps the view and keeps the focus where it was."
   (interactive)
   (drgnx-wb-show-view 'search)
   (drgnx-wb-focus-section 'search))
