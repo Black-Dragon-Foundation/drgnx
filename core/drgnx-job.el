@@ -191,6 +191,10 @@ own repository).  Returns its id; nothing starts (unless `drgnx-job-auto-start')
 (defvar drgnx-job-start-tries 3 "Times a task's agent may end without finishing it before the user decides.")
 (defvar drgnx-job--turns-seen (make-hash-table :test #'equal) "Session id → its ended turns already looked at.")
 (defvar drgnx-job--step-pending (make-hash-table :test #'equal) "Job → t while a step is scheduled.")
+(defcustom drgnx-job-git-timeout 300
+  "Seconds a git process of a job (a worktree add, a merge) may take; then it is ended and the user gets a card."
+  :type 'number :group 'drgnx)
+
 (defvar drgnx-job--busy (make-hash-table :test #'equal)
   "Task id → \"starting\" while its worktree is being made, \"merging\" while its branch is merged: a git process of its
 own does it, the hub goes on.  The summary shows it; a restart forgets it (the store still says ready / in-review).")
@@ -232,19 +236,32 @@ fails, its stderr after it (where a hook's refusal and `fatal:' are)."
             (cons exit (string-trim (buffer-string)))))
       (delete-file err))))
 
-(defun drgnx-job--git-async (dir args done)
+(defun drgnx-job--git-async (dir args done &optional job task)
   "Run git ARGS in DIR in a process of its own, never blocking the hub; DONE is called with (EXIT . OUTPUT), as
-`drgnx-job--git' gives it (stderr mixed into OUTPUT), from the process's sentinel once git has ended.  The process."
+`drgnx-job--git' gives it (stderr mixed into OUTPUT), from the process's sentinel once git has ended.  A git that takes
+more than `drgnx-job-git-timeout' seconds is ended: EXIT is then `:timeout'.  JOB and TASK: whose it is — stopping JOB
+ends it (DONE is not called; TASK is no longer busy).  The process."
   (let* ((out (generate-new-buffer " *drgnx-git*" t))
          (default-directory (file-name-as-directory dir))
          (process-environment (cons "GIT_TERMINAL_PROMPT=0" process-environment))   ; never a prompt in the hub
+         (timer nil)
          (p (make-process :name "drgnx-git" :buffer out :noquery t :connection-type 'pipe :command (cons "git" args)
                           :sentinel (lambda (p _event)
                                       (unless (process-live-p p)
-                                        (let ((result (cons (process-exit-status p) (string-trim (with-current-buffer out (buffer-string))))))
+                                        (when timer (cancel-timer timer))
+                                        (let ((exit (process-exit-status p))
+                                              (text (string-trim (with-current-buffer out (buffer-string)))))
                                           (kill-buffer out)
-                                          (with-demoted-errors "drgnx job: %S" (funcall done result))))))))
-    (process-send-eof p)                               ; like call-process: git (a hook) reads nothing
+                                          (cond ((process-get p :stopped) (when task (remhash task drgnx-job--busy)))
+                                                (t (with-demoted-errors "drgnx job: %S"
+                                                     (funcall done (if (process-get p :timed-out)
+                                                                       (cons :timeout (format "git did not finish in %s s%s" drgnx-job-git-timeout
+                                                                                              (if (string-empty-p text) "" (concat ": " text))))
+                                                                     (cons exit text))))))))))))
+    (process-put p :job job)
+    (setq timer (run-at-time drgnx-job-git-timeout nil
+                             (lambda () (when (process-live-p p) (process-put p :timed-out t) (delete-process p)))))
+    (ignore-errors (process-send-eof p))               ; like call-process: git (a hook) reads nothing
     p))
 
 (defun drgnx-job--repo (job) (plist-get (drgnx-coord-job job) :repo))
@@ -287,10 +304,16 @@ process of its own: the agent starts when it is there."
      (t (drgnx-job--git-async
          repo (list "worktree" "add" "-q" "-b" branch tree (concat "job/" id))
          (lambda (made)
-           (if (eql 0 (car made))
-               (drgnx-job--worktree-made id task profile handover nil)
-             (drgnx-job--git-async repo (list "worktree" "add" "-q" tree branch)       ; its branch from before
-                                   (lambda (again) (drgnx-job--worktree-made id task profile handover (and (not (eql 0 (car again))) (cdr again))))))))
+           (cond
+            ((eql 0 (car made)) (drgnx-job--worktree-made id task profile handover nil))
+            ((eq (car made) :timeout) (drgnx-job--worktree-made id task profile handover (cdr made)))
+            (t (condition-case err
+                   (drgnx-job--git-async repo (list "worktree" "add" "-q" tree branch)       ; its branch from before
+                                         (lambda (again)
+                                           (drgnx-job--worktree-made id task profile handover (and (not (eql 0 (car again))) (cdr again))))
+                                         id tid)
+                 (error (drgnx-job--worktree-made id task profile handover (error-message-string err)))))))
+         id tid)
         (puthash tid "starting" drgnx-job--busy)
         (drgnx-job--changed id)))))
 
@@ -528,7 +551,7 @@ goes to the user.  The merge itself is a git process of its own (a hook may be s
      ((eql 0 (car (drgnx-job--git tree "merge-base" "--is-ancestor" branch "HEAD")))   ; merged before
       (drgnx-coord-force-status tid "done" (plist-get task :agent)))
      (t (drgnx-job--git-async tree (list "merge" "--no-ff" "-q" "-m" (format "Merge %s: %s" tid (plist-get task :title)) branch)
-                              (lambda (merged) (drgnx-job--merged id task merged)))
+                              (lambda (merged) (drgnx-job--merged id task merged)) id tid)
         (puthash tid "merging" drgnx-job--busy)
         (drgnx-job--changed id)))))
 
@@ -539,7 +562,8 @@ goes to the user.  The merge itself is a git process of its own (a hook may be s
     (if (eql 0 (car merged))
         (drgnx-coord-force-status tid "done" (plist-get task :agent))
       (let ((files (split-string (cdr (drgnx-job--git tree "diff" "--name-only" "--diff-filter=U")) "\n" t)))
-        (drgnx-job--git tree "merge" "--abort")
+        (unless (eql 0 (car (drgnx-job--git tree "merge" "--abort")))
+          (drgnx-job--git tree "reset" "--merge"))             ; no merge to abort (git was cut off before it began one)
         (drgnx-job--card id tid "merge-conflict"
                          (if files
                              (format "merging into job/%s conflicts in: %s" id (string-join files ", "))
@@ -938,6 +962,9 @@ back in review, with the work of the agent that did it."
   (drgnx-job--settle-kind id "proposal" "reject")
   (drgnx-coord-job-set id :status "stopped")
   (drgnx-job--changed id)
+  (dolist (p (process-list))                       ; its worktree adds and merges end too; resume starts them again
+    (when (and (process-get p :job) (equal (process-get p :job) id) (process-live-p p))
+      (process-put p :stopped t) (delete-process p)))
   (dolist (s (drgnx-agents-sessions))
     (when (and (equal (drgnx-agent-session-job s) id) (not (eq (drgnx-agent-session-status s) 'exited)))
       (drgnx-agents-kill s)))

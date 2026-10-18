@@ -75,6 +75,30 @@
       (should (string-search "worktree" (plist-get (car (drgnx-coord-cards id "open")) :title)))
       (should-not (drgnx-job-run-test--sessions id)))))
 
+(ert-deftest drgnx-job/a-worktree-add-that-never-ends-is-a-card ()
+  (drgnx-job-run-test--with "# One\n\n### Task 1: one\n"
+    (let ((id (drgnx-job-propose plan)) (hook (concat repo ".git/hooks/post-checkout")) (drgnx-job-git-timeout 0.5))
+      (write-region "#!/bin/sh\ncase \"$PWD\" in *-1) echo 'checking out' >&2; sleep 20;; esac\n" nil hook nil 'silent)
+      (set-file-modes hook #o755)
+      (drgnx-job-approve id)
+      (should (equal (plist-get (car (plist-get (drgnx-job-summary id) :tasks)) :status) "starting"))
+      (should (drgnx-job-run-test--wait (lambda () (seq-find (lambda (c) (equal (plist-get c :kind) "agent")) (drgnx-coord-cards id "open"))) 15))
+      (should (string-search "did not finish" (plist-get (car (drgnx-coord-cards id "open")) :title)))
+      (should-not (equal (plist-get (car (plist-get (drgnx-job-summary id) :tasks)) :status) "starting")))))
+
+(ert-deftest drgnx-job/stopping-a-job-ends-its-git-processes ()
+  (drgnx-job-run-test--with "# One\n\n### Task 1: one\n"
+    (let ((id (drgnx-job-propose plan)) (hook (concat repo ".git/hooks/post-checkout")))
+      (write-region "#!/bin/sh\ncase \"$PWD\" in *-1) sleep 20;; esac\n" nil hook nil 'silent)
+      (set-file-modes hook #o755)
+      (drgnx-job-approve id)
+      (let ((git (seq-find (lambda (p) (string-prefix-p "drgnx-git" (process-name p))) (process-list))))
+        (should git)
+        (drgnx-job-stop id)
+        (should (drgnx-job-run-test--wait (lambda () (not (process-live-p git))) 5))
+        (should (drgnx-job-run-test--wait (lambda () (not (equal (plist-get (car (plist-get (drgnx-job-summary id) :tasks)) :status) "starting"))) 5))
+        (should-not (drgnx-coord-cards id "open"))))))
+
 (ert-deftest drgnx-job/at-most-max-agents-at-once ()
   (drgnx-job-run-test--with "# Four\n\n### Task 1: a\n\n### Task 2: b\n\n### Task 3: c\n\n### Task 4: d\n"
     (let ((drgnx-job-max-agents 2) (id (drgnx-job-propose plan)) (most 0))

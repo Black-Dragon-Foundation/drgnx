@@ -131,6 +131,23 @@
       (should (equal (plist-get (car (plist-get (drgnx-job-summary id) :tasks)) :status) "done"))
       (should (= 1 (length (split-string (drgnx-job-run-test--git repo "log" "--merges" "--format=%s" (concat "job/" id)) "\n" t)))))))
 
+(ert-deftest drgnx-job/a-merge-that-never-ends-is-a-card ()
+  (drgnx-job-run-test--with "# One\n\n### Task 1: first\n"
+    (let* ((drgnx-job-max-agents 0) (drgnx-job-review nil) (id (drgnx-job-propose plan)) (tid (concat id "#1"))
+           (hook (concat repo ".git/hooks/pre-merge-commit")) (drgnx-job-git-timeout 0.5))
+      (drgnx-job-approve id)
+      (let ((tree (drgnx-job--task-tree id 1)))
+        (drgnx-job--git repo "worktree" "add" "-q" "-b" (format "job/%s-1" id) tree (concat "job/" id))
+        (write-region "work\n" nil (concat tree "w.txt") nil 'silent)
+        (drgnx-job-run-test--git tree "add" "-A")
+        (drgnx-job-run-test--git tree "commit" "-q" "-m" "work"))
+      (write-region "#!/bin/sh\nsleep 20\n" nil hook nil 'silent)
+      (set-file-modes hook #o755)
+      (drgnx-job--merge id (drgnx-coord-task tid))
+      (should (drgnx-job-run-test--wait (lambda () (seq-find (lambda (c) (equal (plist-get c :kind) "merge-conflict")) (drgnx-coord-cards id "open"))) 15))
+      (should (string-search "did not finish" (plist-get (car (drgnx-coord-cards id "open")) :title)))
+      (should (equal (drgnx-job-run-test--git (drgnx-job--job-tree id) "status" "--porcelain") "")))))
+
 (ert-deftest drgnx-job/verdict-is-the-last-line-only ()
   (let ((verdict (lambda (text) (drgnx-job--verdict (drgnx-agents--make :id "s-v" :entries (list (list :type 'agent :text text)))))))
     (should (eq (funcall verdict "Looked at it.\nVERDICT: pass") 'pass))
