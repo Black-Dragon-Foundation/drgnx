@@ -50,11 +50,13 @@ panel); returns its buffer.  Its environment starts with `drgnx-terminal-environ
 
 ;;;; Which keys reach drgnx, which the shell
 
-(defcustom drgnx-terminal-skip-shell-commands '(go-quick-open)
-  "Commands whose keys reach drgnx in a terminal even when they are readline keys (VS Code's \"skip shell\" list).
-Quick Open is C-p in the VS Code profile, as in VS Code's own terminal; in the Emacs and Vim profiles nothing
-takes C-p, so it reaches the shell.  Every other control or Alt key of an app or window command goes to the shell."
-  :type '(repeat symbol) :group 'drgnx)
+(defcustom drgnx-terminal-skip-shell-keys '("C-p" "C-b" "C-k" "C-f")
+  "First keys that reach drgnx in a terminal even though readline uses them: VS Code's commandsToSkipShell.
+Quick Open (C-p), Toggle Sidebar (C-b), every C-k chord, and Find (C-f, which searches the terminal's text).
+It only applies to keys the active key stack binds to an app or window command, so the Emacs and Vim profiles,
+which bind none of them, leave these keys to the shell.  Every other control or Alt key of such a command goes to
+the shell.  Key descriptions of one event, e.g. \"C-p\" or \"M-j\"."
+  :type '(repeat string) :group 'drgnx)
 
 (defconst drgnx-terminal--meta-bit #x8000000 "The meta modifier bit of an event.")
 
@@ -96,14 +98,14 @@ takes C-p, so it reaches the shell.  Every other control or Alt key of an app or
   "Where the active key profile's keys go in a terminal: (:to-drgnx KEYS :to-shell KEYS), key strings.
 Only global bindings of commands with scope app or window count.  A key whose first event is an ASCII control
 or Alt character that eat sends to the shell goes to the shell (C-a, C-e, C-w, C-k, M-f as readline mean them),
-unless its command is in `drgnx-terminal-skip-shell-commands'; every other key reaches drgnx (as do the keys eat
+unless its first key is in `drgnx-terminal-skip-shell-keys'; every other key reaches drgnx (as do the keys eat
 leaves to Emacs: C-x, C-c, C-g, C-h, C-u, C-q, C-\\, M-x, M-:, M-!, M-&)."
   (let ((reserved (drgnx-terminal--eat-reserved)) to-drgnx to-shell)
     (dolist (b (drgnx-terminal--bindings))
       (let* ((key (plist-get b :key)) (event (aref (key-parse key) 0)))
         (if (and (drgnx-terminal--shell-event-p event)
                  (not (member (drgnx-terminal--eat-keys event) reserved))
-                 (not (memq (plist-get b :id) drgnx-terminal-skip-shell-commands)))
+                 (not (member (key-description (vector event)) drgnx-terminal-skip-shell-keys)))
             (cl-pushnew key to-shell :test #'equal)
           (cl-pushnew key to-drgnx :test #'equal))))
     (list :to-drgnx (nreverse to-drgnx) :to-shell (nreverse to-shell))))
@@ -131,15 +133,33 @@ put into `minor-mode-map-alist' (the alist keeps the old map).  Runs when eat lo
               (cmd (drgnx-commands-get (plist-get b :id))))
     (drgnx-cmd-title cmd)))
 
+(defun drgnx-terminal--collapse-chords (keys)
+  "KEYS with the chords of one first key (two or more, e.g. C-k C-s and C-k C-o) shown once, as \"C-k chords\"."
+  (let (seen out)
+    (dolist (k keys)
+      (let* ((v (key-parse k)) (prefix (key-description (vector (aref v 0)))))
+        (if (or (< (length v) 2)
+                (= 1 (seq-count (lambda (k2) (let ((v2 (key-parse k2))) (and (> (length v2) 1) (equal (aref v2 0) (aref v 0)))))
+                                keys)))
+            (push k out)
+          (unless (member prefix seen)
+            (push prefix seen)
+            (push (concat prefix " chords") out)))))
+    (nreverse out)))
+
 (defun drgnx-terminal-cheatsheet-section ()
   "The key sheet's \"In the terminal\" section: (TITLE . LINES), or nil without eat or keys."
   (when (and (drgnx-modules--ok-p 'tools/terminal-eat) (drgnx-terminal--eat-default))
-    (let* ((split (drgnx-terminal-key-split)) (to-drgnx (plist-get split :to-drgnx)) (to-shell (plist-get split :to-shell)))
+    (let* ((split (drgnx-terminal-key-split))
+           (to-drgnx (drgnx-terminal--collapse-chords (plist-get split :to-drgnx)))
+           (to-shell (drgnx-terminal--collapse-chords (plist-get split :to-shell))))
       (when (or to-drgnx to-shell)
         (cons "In the terminal"
               (append (when to-drgnx (list (format "Reach drgnx: %s" (string-join to-drgnx ", "))))
-                      (mapcar (lambda (k) (format "%s goes to the shell (%s: outside the terminal, or the palette)"
-                                                  k (drgnx-terminal--key-title k)))
+                      (mapcar (lambda (k)
+                                (let ((title (drgnx-terminal--key-title k)))   ; nil for "C-k chords"
+                                  (format "%s goes to the shell (%soutside the terminal, or the palette)"
+                                          k (if title (concat title ": ") ""))))
                               to-shell)))))))
 
 (defun drgnx-terminal--sheet-sections (&rest _)

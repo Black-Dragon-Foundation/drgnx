@@ -8,6 +8,7 @@
 (defvar eat--semi-char-mode)
 (defvar drgnx-terminal--eat-default-non-bound)
 (defvar drgnx-surfaces-cheatsheet-sections)
+(defvar drgnx-terminal-skip-shell-keys)
 (declare-function eat-mode "eat")
 (declare-function eat-yank "eat")
 
@@ -62,25 +63,50 @@
   (drgnx-terminal-keys-test--live '((vscode app editing window))
     (let* ((split (drgnx-terminal-key-split)) (to-drgnx (plist-get split :to-drgnx)) (to-shell (plist-get split :to-shell)))
       (dolist (k '("C-S-p" "<f1>" "C-`" "C-c c")) (should (member k to-drgnx)))
-      ;; C-p is Quick Open in the VS Code profile, and VS Code's own terminal keeps it for itself
-      (should (member "C-p" to-drgnx))
-      (should-not (member "C-p" to-shell))
+      ;; VS Code's commandsToSkipShell: C-p (Quick Open), C-b (sidebar), C-k (every chord), C-f (Find) are drgnx's
+      (dolist (k '("C-p" "C-b" "C-k C-s" "C-k C-o" "C-f"))
+        (should (member k to-drgnx))
+        (should-not (member k to-shell)))
       (should to-shell)
       (dolist (k to-shell)
         (let ((ev (aref (key-parse k) 0)))
           (should (integerp ev))
           (should (<= 0 (logand ev (lognot #x8000000)) 127))))
       ;; readline's editing keys that drgnx binds stay with the shell
-      (dolist (k '("C-b" "C-w" "C-s")) (should (member k to-shell)))
+      (dolist (k '("C-w" "C-s" "C-n")) (should (member k to-shell)))
       ;; eat's own reserved keys are drgnx's, not the shell's
       (dolist (k to-drgnx) (should-not (member k to-shell))))))
+
+(ert-deftest drgnx-terminal-keys/the-skip-list-is-the-users ()
+  (drgnx-terminal-keys-test--live '((vscode app editing window))
+    (let ((drgnx-terminal-skip-shell-keys nil))
+      (drgnx-terminal-apply-keys)
+      (should (member "C-p" (plist-get (drgnx-terminal-key-split) :to-shell)))
+      (should (member "C-k C-s" (plist-get (drgnx-terminal-key-split) :to-shell)))
+      (should (eq (cdr (assq 'eat--semi-char-mode minor-mode-map-alist)) eat-semi-char-mode-map))
+      (drgnx-terminal-keys-test--eat-buffer
+       (should (eq (drgnx-terminal-keys-test--bound-to "C-p") #'eat-self-input))
+       (should (eq (drgnx-terminal-keys-test--bound-to "C-k") #'eat-self-input))))
+    ;; a chord prefix is one "C-k chords" line when its keys go to the shell
+    (let ((drgnx-terminal-skip-shell-keys nil))
+      (let ((lines (cdr (drgnx-terminal-cheatsheet-section))))
+        (should (seq-find (lambda (l) (string-prefix-p "C-k chords goes to the shell (outside the terminal" l)) lines))
+        (should-not (seq-find (lambda (l) (string-prefix-p "C-k C-s" l)) lines))))))
+
+(ert-deftest drgnx-terminal-keys/the-skip-list-leaves-the-emacs-and-vim-profiles-alone ()
+  (dolist (layers '(((emacs app editing window)) ((vim app editing window))))
+    (drgnx-terminal-keys-test--live layers
+      (drgnx-terminal-keys-test--eat-buffer
+       (dolist (k '("C-p" "C-b" "C-k" "C-f"))
+         (should (eq (drgnx-terminal-keys-test--bound-to k) #'eat-self-input)))))))
 
 (ert-deftest drgnx-terminal-keys/app-keys-work-in-a-terminal-buffer ()
   (drgnx-terminal-keys-test--live '((vscode app editing window))
     (drgnx-terminal-keys-test--eat-buffer
      (should (eq (drgnx-terminal-keys-test--bound-to "C-S-p") #'drgnx-palette))
      (should (eq (drgnx-terminal-keys-test--bound-to "C-a") #'eat-self-input))
-     (should (eq (drgnx-terminal-keys-test--bound-to "C-b") #'eat-self-input))
+     (should (eq (drgnx-terminal-keys-test--bound-to "C-w") #'eat-self-input))
+     (should (eq (drgnx-terminal-keys-test--bound-to "C-b") (drgnx-cmd-command (drgnx-commands-get 'toggle-sidebar))))
      (should (eq (drgnx-terminal-keys-test--bound-to "C-S-c")
                  (drgnx-cmd-command (drgnx-commands-get 'terminal-copy))))
      (should (eq (drgnx-terminal-keys-test--bound-to "C-S-v")
@@ -129,7 +155,11 @@
             (let ((text (buffer-string)))
               (should (string-match-p "^In the terminal$" text))
               (should (string-match-p "Reach drgnx: .*C-p" text))
-              (should (string-match-p "^  C-b goes to the shell (Toggle Sidebar: outside the terminal, or the palette)$" text))
+              (should (string-match-p "^  C-w goes to the shell (Close Tab: outside the terminal, or the palette)$" text))
+              ;; chords are one entry, not one line each
+              (should (string-match-p "Reach drgnx: .*C-k chords" text))
+              (should (string-match-p "Reach drgnx: .*C-c chords" text))
+              (should-not (string-match-p "C-k C-s" (substring text (string-match "^In the terminal$" text))))
               (should-not (string-match-p "^  C-p goes to the shell" text))
               (should-not (string-match-p "^  C-c c goes to the shell" text))
               ;; once, also when the sheet is shown again
