@@ -169,6 +169,39 @@ LLM answering SPEC; `o' found running."
     (drgnx-ai-ghost--trigger)
     (should (drgnx-ai-ghost-test--wait (lambda () (drgnx-ai-ghost-text))))))
 
+(ert-deftest drgnx-ai-ghost/revert-under-suggestion-tab-indents ()
+  ;; a revert, an agent or a process changes the buffer while a suggestion shows: no command ran, so nothing cleared it
+  (with-temp-buffer
+    (emacs-lisp-mode)
+    (drgnx-ai-ghost-mode 1)
+    (insert "(foo\nbar)")
+    (goto-char 5)
+    (drgnx-ai-ghost--show "abc")
+    (save-excursion (goto-char (point-min)) (insert ";; changed elsewhere\n"))
+    (should-not (eq (drgnx-ai-tab-command) 'drgnx-ai-accept))        ; Tab indents
+    (should-not (drgnx-ai-ghost-text)))
+  (with-temp-buffer
+    (emacs-lisp-mode)
+    (drgnx-ai-ghost-mode 1)
+    (insert "(foo)")
+    (drgnx-ai-ghost--show "abc def")
+    (let ((was (buffer-string)))
+      (save-excursion (goto-char (point-min)) (insert "x"))
+      (drgnx-ai-accept)
+      (drgnx-ai-accept-word)
+      (should (equal (buffer-string) (concat "x" was)))               ; nothing inserted
+      (should-not (drgnx-ai-ghost-text))))
+  ;; unchanged: accepting works, and what is left of the suggestion still accepts
+  (with-temp-buffer
+    (emacs-lisp-mode)
+    (drgnx-ai-ghost-mode 1)
+    (drgnx-ai-ghost--show "abc def")
+    (should (eq (drgnx-ai-tab-command) 'drgnx-ai-accept))
+    (drgnx-ai-accept-word)
+    (should (eq (drgnx-ai-tab-command) 'drgnx-ai-accept))
+    (drgnx-ai-accept)
+    (should (equal (buffer-string) "abc def"))))
+
 (ert-deftest drgnx-ai-ghost/any-other-command-clears-it ()
   (with-temp-buffer
     (emacs-lisp-mode)

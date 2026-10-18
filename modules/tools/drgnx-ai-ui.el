@@ -30,6 +30,7 @@
 
 (defvar-local drgnx-ai-ghost--text nil "The suggestion still to accept.")
 (defvar-local drgnx-ai-ghost--overlay nil)
+(defvar-local drgnx-ai-ghost--tick nil "`buffer-chars-modified-tick' when the suggestion was shown.")
 (defvar-local drgnx-ai-ghost--request nil "The request in flight.")
 (defvar-local drgnx-ai-ghost--showing nil "Non-nil while a suggestion shows: its keys are active.")
 (defvar drgnx-ai-ghost--timer nil)
@@ -59,7 +60,7 @@
   "Show TEXT as a suggestion at point."
   (drgnx-ai-ghost--clear)
   (unless (string-empty-p text)
-    (setq drgnx-ai-ghost--text text drgnx-ai-ghost--showing t
+    (setq drgnx-ai-ghost--text text drgnx-ai-ghost--showing t drgnx-ai-ghost--tick (buffer-chars-modified-tick)
           drgnx-ai-ghost--overlay (make-overlay (point) (point) nil nil t))
     (overlay-put drgnx-ai-ghost--overlay 'after-string
                  (concat (propertize (substring text 0 1) 'cursor 1 'face 'drgnx-ai-ghost)
@@ -146,9 +147,16 @@ Keychain or the keyring), or nil."
 
 ;;;; Accepting
 
+(defun drgnx-ai-ghost--stale-p ()
+  "Non-nil (and the suggestion dropped) when the buffer changed since it was shown: a revert, an agent or a
+process changed it and no command cleared the suggestion."
+  (when (and drgnx-ai-ghost--text (not (eql drgnx-ai-ghost--tick (buffer-chars-modified-tick))))
+    (drgnx-ai-ghost--clear)
+    t))
+
 (defun drgnx-ai--accept-part (n)
   "Insert the first N characters of the suggestion; the rest keeps showing."
-  (let ((text drgnx-ai-ghost--text))
+  (let ((text (and (not (drgnx-ai-ghost--stale-p)) drgnx-ai-ghost--text)))
     (when text
       (drgnx-ai-ghost--clear)
       (insert (substring text 0 n))
@@ -193,7 +201,7 @@ Keychain or the keyring), or nil."
 (defun drgnx-ai-tab-command ()
   "What Tab does here: the first of — accept the suggestion; the completion popup's Tab; the next snippet
 field; cycle the heading; indent."
-  (cond (drgnx-ai-ghost--text 'drgnx-ai-accept)
+  (cond ((and drgnx-ai-ghost--text (not (drgnx-ai-ghost--stale-p))) 'drgnx-ai-accept)
         ((and (bound-and-true-p corfu--frame) (frame-live-p corfu--frame) (frame-visible-p corfu--frame)) 'corfu-complete)
         ((bound-and-true-p company-candidates) 'company-complete-common)
         ((bound-and-true-p completion-in-region-mode) 'completion-at-point)

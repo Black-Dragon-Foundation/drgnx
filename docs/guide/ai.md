@@ -69,7 +69,9 @@ list `embed` in their `:caps`.
 In code buffers (module `tools/ai`), a short pause (0.3 s) asks the `complete` role to fill in the middle: the model
 sees up to 2,000 characters before point and 1,000 after. Its answer shows after point, dimmed (face
 `drgnx-ai-ghost`, from your theme's `shadow`). It shows only if nothing changed and point did not move since the
-question. Anything else you do clears it and drops the question in flight.
+question. Anything else you do clears it and drops the question in flight. If the buffer changes under a showing
+suggestion with no command of yours (a revert, an agent's edit), Tab and the accept commands drop it instead of
+inserting it into changed text; Tab then indents as usual.
 
 | Key | While a suggestion shows | Otherwise |
 |---|---|---|
