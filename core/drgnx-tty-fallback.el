@@ -113,6 +113,9 @@ PROFILE the active profile's keys (strings; a key that starts with ALT counts), 
 TAKEN the ALTs already given to other chords."
   (let ((ev (ignore-errors (aref (key-parse alt) 0))))
     (cond ((not (and (key-valid-p alt) (= (length (key-parse alt)) 1))) (format "%s is not one key" alt))
+          ;; ESC and one character is what the layer decodes: no function key, named key or other modifier
+          ((not (and (integerp ev) (/= 0 (logand ev ?\M-\0)) (<= 32 (logand ev (lognot ?\M-\0)) 126)))
+           (format "%s is not Alt with a character key" alt))
           ((not (drgnx-tty-key-sendable-p alt 'legacy)) (format "%s cannot be sent by a legacy terminal either" alt))
           ((member alt drgnx-tty-fallback-never) (format "%s is reserved (an Emacs key or the start of a terminal reply)" alt))
           ((drgnx-tty-fallback--bound-p global alt)
@@ -188,12 +191,23 @@ chords.  Empty when TABLE is clean."
         (push (cons chord alt) taken)))
     (nreverse out)))
 
-(defun drgnx-tty-fallback-problems (table)
-  "The keys.eld :tty-fallback entries TABLE could not apply, as lines (terminal-report.eld's :fallback-problems)."
-  (delq nil (mapcar (pcase-lambda (`(,chord . ,row))
-                      (when-let* ((r (plist-get row :rejected)))
-                        (format "keys.eld :tty-fallback %s → %s not used: %s" chord (car r) (cdr r))))
-                    table)))
+(defun drgnx-tty-fallback-problems (table &optional overrides)
+  "The keys.eld :tty-fallback entries TABLE could not apply, as lines (terminal-report.eld's :fallback-problems).
+With OVERRIDES (the :tty-fallback value TABLE was made with), also each entry that is not (CHORD . KEY) or names a
+chord the profile needs no fallback for (one a plain terminal sends, or no key of the profile)."
+  (append
+   (delq nil (mapcar (pcase-lambda (`(,chord . ,row))
+                       (when-let* ((r (plist-get row :rejected)))
+                         (format "keys.eld :tty-fallback %s → %s not used: %s" chord (car r) (cdr r))))
+                     table))
+   (if (and overrides (not (proper-list-p overrides)))
+       (list (format "keys.eld :tty-fallback %S is not a list of (CHORD . KEY)" overrides))
+     (delq nil (mapcar (lambda (o)
+                         (cond ((not (and (consp o) (stringp (car o)) (key-valid-p (car o))))
+                                (format "keys.eld :tty-fallback %S is not (CHORD . KEY)" o))
+                               ((not (seq-find (lambda (r) (equal (key-parse (car r)) (key-parse (car o)))) table))
+                                (format "keys.eld :tty-fallback %s: the profile needs no fallback for it" (car o)))))
+                       overrides)))))
 
 ;;;; The active profile's table
 
@@ -237,15 +251,21 @@ an ALT it keeps for itself (its row's :takes) dropped."
 
 (defun drgnx-tty-fallback--free-p (alt)
   "Non-nil when ALT (a key string) does nothing in the current buffer's active maps: overriding and minibuffer
-maps, minor modes, the local map, the global map (no shift translation; input decoding is not a keymap)."
-  (let ((def (key-binding (key-parse alt))))
-    (or (null def) (numberp def))))
+maps, minor modes, the local map, the global map, default bindings included (no shift translation; input decoding
+is not a keymap)."
+  (not (drgnx-tty-fallback--bound-here-p alt)))
+
+(defun drgnx-tty-fallback--bound-here-p (key)
+  "Non-nil when KEY (a key string) does something in the current buffer's active maps (a default binding counts)."
+  (let ((def (key-binding (key-parse key) t)))
+    (and def (not (numberp def)))))
 
 (defun drgnx-tty-fallback--decode (alt chord)
   "What ALT (the Alt+Shift key a terminal sent) stands for now: CHORD's event while ALT is free in the current
-buffer (`drgnx-tty-fallback--free-p'), else ALT itself, for the mode that binds it.  The current buffer is the one
-Emacs then looks the key up in (the selected window's, as of the last command)."
-  (key-parse (if (drgnx-tty-fallback--free-p alt) chord alt)))
+buffer (`drgnx-tty-fallback--free-p') and CHORD does something there; else ALT itself, for the mode that binds it
+or for what Emacs makes of it.  The current buffer is the one Emacs then looks the key up in (the selected
+window's, as of the last command)."
+  (key-parse (if (and (drgnx-tty-fallback--free-p alt) (drgnx-tty-fallback--bound-here-p chord)) chord alt)))
 
 (defun drgnx-tty-sendable-key (frame key)
   "KEY (a key string) as FRAME's terminal can send it, for every surface (palette, key sheet, Shortcuts editor):

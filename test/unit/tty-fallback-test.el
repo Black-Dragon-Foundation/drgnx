@@ -225,7 +225,9 @@ binding are taken off afterwards."
 
 (ert-deftest drgnx-tty-fallback/a-clashing-override-is-a-problem ()
   ;; bound in the profile, reserved, not sendable either, Emacs's own (not-modified)
-  (dolist (override '(("C-S-p" . "M-j") ("C-S-p" . "M-x") ("C-S-p" . "C-S-z") ("C-S-p" . "M-~")))
+  ;; …and anything but Alt with a character key: a function key, Alt with a named key, Shift with one
+  (dolist (override '(("C-S-p" . "M-j") ("C-S-p" . "M-x") ("C-S-p" . "C-S-z") ("C-S-p" . "M-~")
+                      ("C-S-p" . "<f7>") ("C-S-p" . "M-<f5>") ("C-S-p" . "M-<up>") ("C-S-p" . "S-<f7>")))
     (let* ((table (tty-fallback-test--table "VS Code" :overrides (list override)))
            (problems (drgnx-tty-fallback-problems table)))
       (should (equal (list override 1) (list override (length problems))))
@@ -237,29 +239,69 @@ binding are taken off afterwards."
     (should (equal (plist-get (tty-fallback-test--row table "C-S-e") :alt) "M-E"))
     (should (string-match-p "C-S-e → M-Z not used: M-Z is already the fallback of C-S-p"
                             (car (drgnx-tty-fallback-problems table)))))
+  ;; entries that are not (CHORD . KEY), or name a chord the profile needs no fallback for, are said too
+  (let* ((overrides '(("C-S-p") "junk" ("C-p" . "M-Z") ("C-S-q" . "M-Q")))
+         (problems (drgnx-tty-fallback-problems (tty-fallback-test--table "VS Code" :overrides overrides) overrides)))
+    (should (= (length problems) 4))
+    (dolist (text '("C-S-p" "junk" "C-p" "C-S-q"))
+      (should (seq-find (lambda (p) (string-search text p)) problems))))
   ;; the problem reaches the terminal's report entry
   (tty-fallback-test--with-terminal '((drgnx-tty-set-up . t)) '("TERM=xterm-256color" "VTE_VERSION=7800")
     (let ((drgnx-tty-fallback--cache nil)
           (drgnx-keys-last (list :bindings (tty-fallback-test--bindings "VS Code"))))
-      (cl-letf (((symbol-function 'drgnx-tty-fallback--overrides) (lambda () '(("C-S-p" . "M-j")))))
+      (cl-letf (((symbol-function 'drgnx-tty-fallback--overrides) (lambda () '(("C-S-p" . "M-j") ("C-p" . "M-Z")))))
         (drgnx-tty-frames-write-report (selected-frame))
-        (let ((entry (cdr (assoc "kx-a" (plist-get (tty-fallback-test--report) :terminals)))))
-          (should (string-match-p "M-j" (car (plist-get entry :fallback-problems)))))))))
+        (let ((problems (plist-get (cdr (assoc "kx-a" (plist-get (tty-fallback-test--report) :terminals)))
+                                   :fallback-problems)))
+          (should (= (length problems) 2))
+          (should (string-match-p "M-j" (car problems)))
+          (should (string-match-p "C-p" (cadr problems))))))))
+
+(ert-deftest drgnx-tty-fallback/a-bad-row-never-breaks-the-layer ()
+  ;; a row whose key has no bytes (it cannot come from the table any more) is skipped: the rest is installed, the
+  ;; prefix is bound, and everything installed comes off again
+  (tty-fallback-test--with-terminal nil '("TERM=xterm-256color")
+    (let ((drgnx-keys-last (list :bindings (tty-fallback-test--bindings "VS Code"))))
+      (cl-letf (((symbol-function 'drgnx-tty-fallback-for-terminal)
+                 (lambda (&rest _) '(("C-S-f" :alt "M-F" :prefix "<f6> f") ("C-S-e" :alt "M-<f5>" :prefix "<f6> e")
+                                     ("C-S-b" :alt "M-B" :prefix "<f6> b")))))
+        (should (drgnx-tty-fallback-install (selected-frame) tty-fallback-test--legacy)))
+      (should (eq (lookup-key key-translation-map [f6]) #'drgnx-tty-fallback--prefix))
+      (should (functionp (lookup-key input-decode-map "\eF")))
+      (should (functionp (lookup-key input-decode-map "\eB")))
+      (drgnx-tty-fallback-remove 'kx-a)
+      (should-not (functionp (lookup-key input-decode-map "\eF")))
+      (should-not (functionp (lookup-key input-decode-map "\eB"))))))
 
 ;;;; Per frame
 
 (ert-deftest drgnx-tty-fallback/decode-at-key-time ()
-  (cl-letf (((symbol-function 'key-binding) (lambda (&rest _) nil)))
-    (should (equal (drgnx-tty-fallback--decode "M-F" "C-S-f") (key-parse "C-S-f"))))
-  (cl-letf (((symbol-function 'key-binding) (lambda (&rest _) 'some-mode-command)))
-    (should (equal (drgnx-tty-fallback--decode "M-F" "C-S-f") (key-parse "M-F"))))
-  ;; a key too long for a binding (a prefix of it is a command) is free
-  (cl-letf (((symbol-function 'key-binding) (lambda (&rest _) 1)))
-    (should (equal (drgnx-tty-fallback--decode "M-F" "C-S-f") (key-parse "C-S-f"))))
+  (let ((asked nil))
+    (cl-flet ((bindings (alt chord) (lambda (key &rest args)
+                                      (push (cons key args) asked)
+                                      (if (equal key (key-parse "M-F")) alt chord))))
+      ;; M-F free, C-S-f a command: the chord
+      (cl-letf (((symbol-function 'key-binding) (bindings nil 'drgnx-search-project)))
+        (should (equal (drgnx-tty-fallback--decode "M-F" "C-S-f") (key-parse "C-S-f"))))
+      ;; M-F bound here: M-F, for the mode
+      (cl-letf (((symbol-function 'key-binding) (bindings 'some-mode-command 'drgnx-search-project)))
+        (should (equal (drgnx-tty-fallback--decode "M-F" "C-S-f") (key-parse "M-F"))))
+      ;; a key too long for a binding (a prefix of it is a command) is free
+      (cl-letf (((symbol-function 'key-binding) (bindings 1 'drgnx-search-project)))
+        (should (equal (drgnx-tty-fallback--decode "M-F" "C-S-f") (key-parse "C-S-f"))))
+      ;; the chord does nothing here: Alt+Shift stays what Emacs makes of it
+      (cl-letf (((symbol-function 'key-binding) (bindings nil nil)))
+        (should (equal (drgnx-tty-fallback--decode "M-F" "C-S-f") (key-parse "M-F"))))
+      ;; default bindings count (a keymap that takes every key)
+      (should (seq-every-p (lambda (call) (eq (cadr call) t)) asked))))
   ;; for real: a buffer whose mode binds M-F keeps it (the current buffer, where Emacs then looks the key up)
   (with-temp-buffer
+    (use-local-map (let ((m (make-sparse-keymap))) (define-key m (key-parse "C-S-f") #'ignore) m))
     (should (equal (drgnx-tty-fallback--decode "M-F" "C-S-f") (key-parse "C-S-f")))
-    (use-local-map (let ((m (make-sparse-keymap))) (define-key m (key-parse "M-F") #'ignore) m))
+    (define-key (current-local-map) (key-parse "M-F") #'ignore)
+    (should (equal (drgnx-tty-fallback--decode "M-F" "C-S-f") (key-parse "M-F")))
+    ;; a mode map with a default binding takes M-F too
+    (use-local-map (let ((m (make-sparse-keymap))) (define-key m [t] #'ignore) (define-key m (key-parse "C-S-f") #'ignore) m))
     (should (equal (drgnx-tty-fallback--decode "M-F" "C-S-f") (key-parse "M-F")))))
 
 (ert-deftest drgnx-tty-fallback/sendable-key-answers-per-frame ()
@@ -309,6 +351,7 @@ binding are taken off afterwards."
       (should (functionp (lookup-key input-decode-map "\eF")))
       (should-not (functionp (lookup-key input-decode-map "\eP")))          ; ESC P starts a terminal reply
       (with-temp-buffer
+        (use-local-map (let ((m (make-sparse-keymap))) (define-key m (key-parse "C-S-f") #'ignore) m))   ; Search's key
         (should (equal (funcall (lookup-key input-decode-map "\eF") nil) (key-parse "C-S-f"))))
       (should (eq (lookup-key key-translation-map [f6]) #'drgnx-tty-fallback--prefix))
       ;; kkp turned on later: the layer goes
@@ -358,21 +401,29 @@ binding are taken off afterwards."
       (should-not drgnx-hooks-problems))))
 
 (ert-deftest drgnx-tty-fallback/profile-switch-rebuilds-it ()
-  (tty-fallback-test--with-terminal '((drgnx-tty-set-up . t)) '("TERM=xterm-256color" "VTE_VERSION=7800")
-    (let ((drgnx-keys-last (list :bindings (tty-fallback-test--bindings "VS Code"))))
-      (drgnx-tty-frames-write-report (selected-frame))
-      (should (functionp (lookup-key input-decode-map "\eF")))
-      ;; the Emacs profile: only C-S-p is left, and it has no Alt+Shift key
-      (setq drgnx-keys-last (list :bindings (tty-fallback-test--bindings "Emacs")))
-      (unwind-protect
-          (progn
-            (drgnx-tty-fallback-setup)
-            ;; every key apply (a profile switch is `drgnx-keys-use', which applies) runs the rebuild after it
-            (should (advice-member-p #'drgnx-tty-fallback-apply 'drgnx-keys-apply))
-            (drgnx-tty-fallback-apply)
-            (should-not (functionp (lookup-key input-decode-map "\eF")))
-            (should (equal (terminal-parameter nil 'drgnx-tty-fallback-table) '(("C-S-p" :alt nil :prefix "<f6> p")))))
-        (advice-remove 'drgnx-keys-apply #'drgnx-tty-fallback-apply)))))
+  ;; a real switch (`drgnx-keys-use', the Keyboard Profile command's), with the core and module commands; the
+  ;; modules are loaded before the terminal is faked (loading them defines the functions the fake replaces)
+  (let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
+        (drgnx-commands-problems nil) (drgnx-modules--table nil) (drgnx-modules--report nil)
+        (ring-bell-function ring-bell-function) (use-dialog-box use-dialog-box)
+        (use-short-answers use-short-answers) (inhibit-startup-screen inhibit-startup-screen)
+        (drgnx-keys--applied nil) (drgnx-keys--session-layers nil) (drgnx-keys-profiles nil)
+        (drgnx-keys-problems nil) (drgnx-keys-last nil))
+    (drgnx--core-commands)
+    (drgnx-modules-load-directory (expand-file-name "modules" drgnx-dir))
+    (drgnx-modules-run 'startup)            ; ui/terminal's setup adds the rebuild after every key apply
+    (unwind-protect
+        (tty-fallback-test--with-terminal '((drgnx-tty-set-up . t)) '("TERM=xterm-256color" "VTE_VERSION=7800")
+          (should (advice-member-p #'drgnx-tty-fallback-apply 'drgnx-keys-apply))
+          (drgnx-keys-use '((vscode app editing window)))
+          (should (terminal-parameter nil 'drgnx-tty-fallback))
+          (should (functionp (lookup-key input-decode-map "\eF")))
+          ;; the Emacs profile: only C-S-p is left, and it has no Alt+Shift key
+          (drgnx-keys-use '((emacs app editing window)))
+          (should-not (functionp (lookup-key input-decode-map "\eF")))
+          (should (equal (terminal-parameter nil 'drgnx-tty-fallback-table) '(("C-S-p" :alt nil :prefix "<f6> p"))))
+          (should-not drgnx-hooks-problems))
+      (drgnx-keys--restore))))
 
 (ert-deftest drgnx-tty-fallback/the-hint-once-per-terminal-type ()
   (let ((hint "This terminal can't send Ctrl+Shift keys: use Alt+Shift (or F6 then the key). drgnx doctor has details."))
@@ -390,6 +441,13 @@ binding are taken off afterwards."
         (drgnx-tty-frames-write-report (selected-frame))
         (should (equal (plist-get (tty-fallback-test--report) :hinted) '(vte)))
         (should (= (seq-count (lambda (m) (equal m hint)) messages) 1))))
+    ;; a profile whose chords that terminal sends (nothing to type another way): nothing said, nothing remembered
+    (tty-fallback-test--with-terminal nil '("TERM=xterm-256color" "VTE_VERSION=7800")
+      (let ((drgnx-keys-last '(:bindings ((:id open-file :key "C-o") (:id palette :key "<f1>")))))
+        (drgnx-tty-frames-write-report (selected-frame))
+        (should-not (terminal-parameter nil 'drgnx-tty-fallback-table))
+        (should-not (member hint messages))
+        (should-not (plist-get (tty-fallback-test--report) :hinted))))
     ;; the hint off: nothing said, nothing remembered
     (tty-fallback-test--with-terminal nil '("TERM=xterm-256color" "VTE_VERSION=7800")
       (let ((drgnx-keys-last (list :bindings (tty-fallback-test--bindings "VS Code")))
@@ -424,13 +482,25 @@ binding are taken off afterwards."
         (tty-fallback-test--reading events
           (should (equal (cons events (drgnx-tty-fallback--prefix nil)) (cons events (key-parse chord))))
           (should (equal (car (last prompts)) "Ctrl+Shift+…"))))
-      ;; twice: F6 itself; C-g or ESC alone: nothing
+      ;; twice: F6 itself; ESC alone: nothing; C-g: C-g, so a pending prefix (C-x F6 C-g) quits too
       (tty-fallback-test--reading (list ?\e ?\[ ?1 ?7 ?~)
         (should (equal (drgnx-tty-fallback--prefix nil) [f6])))
       (tty-fallback-test--reading (list ?\C-g)
-        (should (equal (drgnx-tty-fallback--prefix nil) [])))
+        (should (equal (drgnx-tty-fallback--prefix nil) [?\C-g])))
       (tty-fallback-test--reading (list ?\e)
-        (should (equal (drgnx-tty-fallback--prefix nil) []))))))
+        (should (equal (drgnx-tty-fallback--prefix nil) [])))
+      ;; a click, a paste or a focus report after F6 is no key: F6 is dropped, and what was read of the
+      ;; sequence goes back to the input in order, where Emacs decodes it whole (with the rest still unread)
+      (pcase-dolist (`(,read ,rest) '(((?\e ?\[ ?<) (?0 ?\; ?5 ?\; ?5 ?M))              ; SGR mouse press
+                                      ((?\e ?\[ ?2 ?0 ?0 ?~) (?h ?i ?\e ?\[ ?2 ?0 ?1 ?~)) ; bracketed paste
+                                      ((?\e ?\[ ?I) ())                                ; focus in
+                                      ((?\e ?\[ ?Q) ())))                              ; something unknown
+        (tty-fallback-test--reading (append read rest)
+          (let ((input-decode-map input-decode-map) (unread-command-events nil))
+            (dolist (seq '("\e[<" "\e[200~" "\e[I")) (define-key input-decode-map seq (lambda (_) [ignore])))
+            (should (equal (cons read (drgnx-tty-fallback--prefix nil)) (cons read [])))
+            (should (equal unread-command-events read))
+            (should (equal queue rest))))))))
 
 ;;;; Words
 

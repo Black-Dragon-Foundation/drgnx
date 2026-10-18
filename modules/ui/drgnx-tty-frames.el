@@ -302,7 +302,7 @@ KEYS :seen TIME)) …)), newest first, one entry per terminal device (two client
                           (list :fallback (and layer t)
                                 :fallbacks (drgnx-tty-fallback-report-rows
                                             table caps (terminal-parameter (frame-terminal frame) 'drgnx-tty-fallback-table))
-                                :fallback-problems (drgnx-tty-fallback-problems table)))))
+                                :fallback-problems (drgnx-tty-fallback-problems table (drgnx-tty-fallback--overrides))))))
       (drgnx-tty-frames--save-report
        (append (list :terminals (cons (cons key entry) (assoc-delete-all key (copy-sequence old))))
                (when-let* ((hinted (plist-get data :hinted))) (and (proper-list-p hinted) (list :hinted hinted))))))))

@@ -120,15 +120,26 @@
       (drgnx-tty-keys-test--ran s 'drgnx-palette "C-S-p")
       (drgnx-tty-session-wait-screen c "Command (# for a code question)")
       (drgnx-tty-keys-test--quit s c 'legacy)
-      ;; C-g while F6 waits cancels it: nothing runs.  (Typed in the same instant as F6, C-g would be Emacs's
-      ;; interrupt, handled before the F6 before it, as for any key.)
+      ;; C-g while F6 waits is C-g: it quits, a pending prefix too (C-x F6 C-g is C-x C-g, which ends C-x and runs
+      ;; no command), and nothing else runs.  (Typed in
+      ;; the same instant as F6, C-g would be Emacs's interrupt, handled before the F6 before it, as for any key.)
       (drgnx-tty-session-eval s '(setq kx-seen nil))
-      (drgnx-tty-session-send c f6)
+      (drgnx-tty-session-send c (concat "\C-x" f6))
       (drgnx-tty-session-wait-screen c "Ctrl\\+Shift\\+…")
       (drgnx-tty-session-send c "\a")
       (sleep-for 0.5)
-      (should-not (drgnx-tty-session-eval s 'kx-seen))
-      ;; F6 twice is F6 itself (unbound here: Emacs says so, nothing waits)
+      (should-not (drgnx-tty-session-eval s '(seq-remove (lambda (c) (memq (car c) '(keyboard-quit nil))) kx-seen)))
+      ;; a click after F6 is a click: F6 is dropped, nothing of the mouse report is typed
+      (let ((text `(with-current-buffer "*scratch*" (buffer-string))))
+        (let ((before (drgnx-tty-session-eval s text)))
+          (drgnx-tty-session-send c f6)
+          (drgnx-tty-session-wait-screen c "Ctrl\\+Shift\\+…")
+          (drgnx-tty-session-send c "\e[<0;60;6M\e[<0;60;6m")
+          (sleep-for 0.5)
+          (should (equal (drgnx-tty-session-eval s text) before))
+          (should-not (drgnx-tty-session-find c "60;6\\|\\[<0"))
+          (should-not (drgnx-tty-session-find c "Ctrl\\+Shift\\+…"))))
+      ;; F6 twice is F6 itself (unbound here: Emacs says so, nothing waits; no C-x was left pending)
       (drgnx-tty-session-send c (concat f6 f6))
       (drgnx-tty-session-wait s '(member '(nil . "<f6>") kx-seen))
       ;; and the next F6 p is the palette again

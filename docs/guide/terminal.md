@@ -182,7 +182,10 @@ graphical window, get none, and each terminal window on one drgnx has its own (k
 
 - **Alt+Shift with the key**, where it is free: **Alt+Shift+F** is Search in Project (`C-S-f`), Alt+Shift+E the
   Explorer. It is decided when you press it: in a buffer whose mode binds that Alt+Shift key (`M-F`) itself, the mode
-  keeps it. Some chords have no Alt+Shift key, and drgnx guesses no other one for them: where Emacs uses it
+  keeps it, and where the chord itself does nothing, Alt+Shift stays what Emacs makes of it. With VS Code keys this
+  means Alt+Shift+F, B, E, A and the like no longer select by word in a legacy terminal (Emacs's shift selection of
+  Alt+F, Alt+B…): select with Ctrl+Shift+← and →, which every terminal sends. Some chords have no Alt+Shift key,
+  and drgnx guesses no other one for them: where Emacs uses it
   (Alt+Shift+. is the end of the buffer, Alt+Shift+\` is `not-modified`), and where a terminal starts its replies with it.
   **Alt+Shift+P** is `ESC P`, how a terminal begins its answer to "which terminal are you?"; an answer that arrives
   late would otherwise open the palette and type its text. So Ctrl+Shift+P is **F6 p**, or **F1** (VS Code keys).
@@ -190,7 +193,8 @@ graphical window, get none, and each terminal window on one drgnx has its own (k
   F6 p is `C-S-p`, F6 . is `C-.`, F6 Enter is `C-<return>`, F6 Tab is `C-<tab>`, F6 Shift+Tab is `C-S-<tab>`. A
   Shift+punctuation chord is typed with the character Shift makes (`` C-S-` `` is F6 ~); Enter and Backspace, which
   a terminal sends no Shift with, take Alt for it (`C-S-<return>` is F6 Alt+Enter); `C-SPC` is F6 Ctrl+Space. While
-  F6 waits, the echo area says `Ctrl+Shift+…`; `C-g` or Esc cancels it; F6 twice is F6.
+  F6 waits, the echo area says `Ctrl+Shift+…`; `C-g` quits, a key typed before F6 included (C-x F6 C-g); Esc
+  cancels F6 alone; F6 twice is F6. A click, a paste or a focus change after F6 drops F6 and happens as usual.
 
 The first time a kind of terminal with the layer connects, one message says so: "This terminal can't send Ctrl+Shift
 keys: use Alt+Shift (or F6 then the key). drgnx doctor has details." It is never a question, and it is said once per
@@ -209,8 +213,9 @@ Settings (`M-x customize-variable`):
   go-to keys, F8 the Emacs profile's sidebar, F10 the menu (VTE keeps F10 and F11).
 - **`drgnx-tty-fallback-hint`** (`t`): `nil`, no message.
 - **`keys.eld`'s `:tty-fallback`** gives a chord another Alt key: `(:tty-fallback (("C-S-p" . "M-Z")))`. The key must
-  be one a plain terminal sends, unused by Emacs and your profile, not reserved, and not another chord's; otherwise it
-  is not used and `terminal-report.eld` says why (`:fallback-problems`).
+  be Alt with a character key, unused by Emacs and your profile, not reserved, and not another chord's; otherwise it
+  is not used and `terminal-report.eld` says why (`:fallback-problems`), as it does for an entry that is not
+  `(CHORD . KEY)` or names a chord your profile needs no fallback for.
 
 With VS Code keys (the table below is checked against the profile by a test):
 
