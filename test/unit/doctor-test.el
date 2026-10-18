@@ -369,3 +369,21 @@
     (should (eq (car r) 'warn))
     (should (string-match-p "a: \\.drgnx/search\\.eld cannot be read: :off must be t or nil" (nth 1 r)))
     (should (string-match-p "search\\.eld" (nth 2 r)))))
+
+(ert-deftest drgnx-doctor/drgnx-on-path-skips-a-profile-it-cannot-read ()
+  ;; M12a-3 (review): a profile that is a directory, or unreadable, is skipped quietly: no signal, no stack trace.
+  (let* ((home (file-name-as-directory (make-temp-file "drgnx-doctor-home" t)))
+         (process-environment (append (list (concat "HOME=" home) "SHELL=/bin/zsh") process-environment))
+         (zprofile (concat home ".zprofile")))
+    (unwind-protect
+        (cl-letf (((symbol-function 'executable-find) (lambda (&rest _) nil)))
+          (make-directory (concat home ".local/bin") t)
+          (write-region "" nil (concat home ".local/bin/drgnx"))
+          (make-directory zprofile)
+          (should-not (drgnx-doctor--drgnx-on-path))                         ; a directory
+          (delete-directory zprofile)
+          (write-region "export PATH=\"$HOME/.local/bin:$PATH\"\n" nil zprofile)
+          (cl-letf (((symbol-function 'insert-file-contents) (lambda (&rest _) (signal 'file-error '("Reading" "denied")))))
+            (should-not (drgnx-doctor--drgnx-on-path)))                      ; the read fails
+          (should (drgnx-doctor--drgnx-on-path)))                            ; readable again: counted
+      (delete-directory home t))))

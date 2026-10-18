@@ -109,13 +109,15 @@ default; it never reads ~/.profile), else ~/.profile."
   (or (and (executable-find "drgnx") t)
       (let ((profile (expand-file-name (drgnx-doctor--shell-profile))) (case-fold-search nil))
         (and (file-exists-p (expand-file-name "~/.local/bin/drgnx"))
-             (file-readable-p profile)
-             (with-temp-buffer
-               (insert-file-contents profile)
-               (re-search-forward (rx bol (* (not (any "#\n"))) (or "PATH=" (seq "path" (? "+") "=(")) (* nonl)
-                                      (or "$HOME" "${HOME}" "~" (literal (directory-file-name (expand-file-name "~"))))
-                                      "/.local/bin")
-                                  nil t))
+             (file-regular-p profile) (file-readable-p profile)
+             ;; a profile that cannot be read is skipped quietly (the facts are gathered outside any condition-case)
+             (ignore-errors
+               (with-temp-buffer
+                 (insert-file-contents profile)
+                 (re-search-forward (rx bol (* (not (any "#\n"))) (or "PATH=" (seq "path" (? "+") "=(")) (* nonl)
+                                        (or "$HOME" "${HOME}" "~" (literal (directory-file-name (expand-file-name "~"))))
+                                        "/.local/bin")
+                                    nil t)))
              t))))
 
 (defun drgnx-doctor--gui-from-features (features)
