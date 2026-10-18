@@ -35,7 +35,8 @@
 
 (defun drgnx-jank-guard--wrap (hook fn)
   "FN as a member of HOOK, noting that it runs; the same closure for the same member."
-  (if (or (eq fn t) (not (or (symbolp fn) (functionp fn))))
+  (if (or (eq fn t) (not (or (symbolp fn) (functionp fn)))
+          (rassq fn drgnx-jank-guard--wrapped))        ; already ours (a second enable)
       fn
     (or (cdr (assoc (cons hook fn) drgnx-jank-guard--wrapped))
         (let ((w (lambda (&rest args)

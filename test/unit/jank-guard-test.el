@@ -53,3 +53,21 @@
      (should (= (length drgnx-jank-guard-log) 2)))
     ;; the guard off: the hooks hold the original functions again
     (should (equal window-configuration-change-hook (list #'drgnx-jank-test--quiet #'drgnx-jank-test--mover)))))
+
+(ert-deftest drgnx-jank-guard/enable-twice-then-disable-puts-the-originals-back ()
+  ;; review F3: a second enable must not wrap the wrappers
+  (let ((window-configuration-change-hook (list #'drgnx-jank-test--quiet #'drgnx-jank-test--mover))
+        (window-size-change-functions nil)
+        (drgnx-jank-guard-log nil))
+    (drgnx-jank-guard-enable)
+    (drgnx-jank-guard-enable)
+    (unwind-protect
+        (progn
+          (add-hook 'window-size-change-functions #'drgnx-jank-test--mover)
+          (add-hook 'window-size-change-functions #'drgnx-jank-test--mover)   ; no duplicate member
+          (should (= 1 (length window-size-change-functions)))
+          (run-hooks 'window-configuration-change-hook)
+          (should (= (length drgnx-jank-guard-log) 1)))
+      (drgnx-jank-guard-disable))
+    (should (equal window-configuration-change-hook (list #'drgnx-jank-test--quiet #'drgnx-jank-test--mover)))
+    (should (equal window-size-change-functions (list #'drgnx-jank-test--mover)))))
