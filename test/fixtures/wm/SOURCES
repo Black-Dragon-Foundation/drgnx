@@ -13,3 +13,5 @@ niri/workspaces.json: recorded 2026-10-18 from the same session, `niri msg --jso
 kwin/kwin-screens.json: recorded 2026-10-18 from a real kwin_wayland 6.7.5 --virtual --output-count 2 session in the GUI container; the output of kwin/probe.js (workspace.screens) delivered through callDBus to an Emacs-registered service
 kwin/kwin-windows.json: recorded 2026-10-18 from the same session; the windows part of kwin/probe.js's output with two Emacs processes (pid 296 "drgnx - workbench", pid 877 "other emacs", the latter active)
 kwin/probe.js: the KWin script that produced the two kwin files (loaded with org.kde.kwin.Scripting.loadScript, started with org.kde.kwin.Script.run)
+hyprland/activewindow.json: `hyprctl -j activewindow` shape from the Hyprland v0.56.2 source (src/debug/HyprCtl.cpp activeWindowRequest: the window object of getWindowData), values invented, 2026-10-18: the first window of hyprland/clients.json (the Emacs one); not recorded from a running Hyprland
+hyprland/activewindow-other.json: the same shape and the same invented values, the second window of hyprland/clients.json (another app with focus); not recorded from a running Hyprland

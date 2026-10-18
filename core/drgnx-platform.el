@@ -848,5 +848,286 @@ at `drgnx-platform-wm--place-polls' seconds, then every second, until the window
      :move (lambda (ctx monitor callback) (drgnx-platform-wm--move wm ctx monitor callback))
      :place (lambda (ctx monitor callback) (drgnx-platform-wm--place wm ctx monitor callback)))))
 
+;;;; Hyprland and niri (reported: written from their sources and documented replies, not yet run on the real WM)
+
+;; Both adapters share one contract.  `monitors' lists the outputs.  A command move acts on the focused window
+;; only when it is Emacs' own (pid) and the frame has focus; a restore (`place') finds the window by Emacs' pid
+;; and a temporary title, polling, and gives the title back whatever happens.  A move makes several calls, so
+;; they share ONE deadline (the operation's timeout, `drgnx-platform-wm--caller'): the watchdog margin stays
+;; the default.
+
+(defconst drgnx-platform-wm--not-focused
+  "drgnx moves only its own window while it has focus: click this window, then run the command again"
+  "The answer to a command move when Emacs' window is not the focused one.")
+
+(defconst drgnx-platform-wm--poll-times '(0.1 0.3 0.7 1.5 3.0)
+  "Seconds after setting the temporary title at which a restored window is looked for.")
+
+(defvar drgnx-platform-wm--placing-counter 0 "Makes each temporary title unique.")
+
+(defun drgnx-platform-wm--json (text)
+  "TEXT parsed: objects as alists (symbol keys), arrays as lists, null and false as nil."
+  (json-parse-string text :object-type 'alist :array-type 'list :null-object nil :false-object nil))
+
+(defun drgnx-platform-wm--refuse (callback message)
+  "Later, call CALLBACK with (:error MESSAGE)."
+  (drgnx-platform--later (lambda () (funcall callback (list :error message)))))
+
+(defun drgnx-platform-wm--caller (name ctx &optional moving)
+  "A function (ARGV ON-OK FAIL) running ARGV for the adapter NAME inside ONE deadline: CTX's timeout from now.
+ON-OK gets the output; FAIL gets (:error MESSAGE) for a missing tool, a failed call (the tool's own text) or the
+deadline.  A signal in ON-OK also goes to FAIL.  MOVING adds \"the window was not moved\" to the timeout message."
+  (let* ((limit (plist-get ctx :timeout)) (end (+ (float-time) limit))
+         (title (or (drgnx-platform--spec name :title) (symbol-name name)))
+         (tool (drgnx-platform--spec name :tool))
+         (late (format "%s did not answer within %g s%s" title limit (if moving "; the window was not moved" ""))))
+    (lambda (argv on-ok fail)
+      (let ((left (- end (float-time))))
+        (cond
+         ((not (executable-find (car argv)))
+          (drgnx-platform-wm--refuse
+           fail (format "%s: %s is not installed, so drgnx cannot move windows" title (or tool (car argv)))))
+         ((< left 0.05) (drgnx-platform-wm--refuse fail late))
+         (t (drgnx-platform-ctx-call
+             (plist-put (copy-sequence ctx) :timeout left) argv
+             (lambda (status output)
+               (condition-case err
+                   (pcase status
+                     ('ok (funcall on-ok output))
+                     ('timeout (funcall fail (list :error late)))
+                     (_ (funcall fail (list :error (let ((m (string-trim output))) (if (string-empty-p m) "the call failed" m))))))
+                 (error (funcall fail (list :error (error-message-string err)))))))))))))
+
+(defun drgnx-platform-wm--own-focused-p (ctx)
+  "Non-nil when CTX's frame has input focus."
+  (eq (frame-focus-state (plist-get ctx :frame)) t))
+
+(defun drgnx-platform-wm--place (name ctx callback list-argv find move)
+  "Place CTX's frame for the adapter NAME (the restore path), then call CALLBACK with `ok' or (:error MESSAGE).
+Sets the frame's `title' to a temporary one, runs LIST-ARGV at `drgnx-platform-wm--poll-times' until
+\(FIND OUTPUT PID TITLE) gives a window, calls (MOVE CALL WINDOW ON-OK FAIL) on it, and puts the previous title
+back in every case.  Everything shares the one deadline of CTX."
+  (let* ((frame (plist-get ctx :frame)) (call (drgnx-platform-wm--caller name ctx t))
+         (previous (frame-parameter frame 'title)) (done nil)
+         (title (format "drgnx [placing %d-%d]" (emacs-pid) (cl-incf drgnx-platform-wm--placing-counter)))
+         (start (float-time))
+         (finish (lambda (r)
+                   (unless done
+                     (setq done t)
+                     (when (frame-live-p frame) (ignore-errors (set-frame-parameter frame 'title previous)))
+                     (funcall callback r)))))
+    (cl-labels
+        ((poll (times)
+           (condition-case err
+               (funcall call list-argv
+                        (lambda (out)
+                          (if-let* ((w (funcall find out (emacs-pid) title)))
+                              (funcall move call w (lambda () (funcall finish 'ok)) finish)
+                            (if (cdr times)
+                                (run-at-time (max 0 (- (cadr times) (- (float-time) start))) nil
+                                             (lambda () (poll (cdr times))))
+                              (funcall finish (list :error (format "%s did not show the window within %g s; it was not placed"
+                                                                   (drgnx-platform--spec name :title)
+                                                                   (plist-get ctx :timeout)))))))
+                        finish)
+             (error (funcall finish (list :error (error-message-string err)))))))
+      (set-frame-parameter frame 'title title)
+      (run-at-time (car drgnx-platform-wm--poll-times) nil (lambda () (poll drgnx-platform-wm--poll-times))))))
+
+;;;;; Hyprland
+
+(defvar drgnx-platform-wm--hypr-config nil
+  "Alist (INSTANCE-SIGNATURE . `lua' or `hyprlang'): which dispatch syntax a running Hyprland took.
+Hyprland 0.56 has a Lua config (`hyprctl dispatch' takes a Lua dispatcher) and the hyprlang one (the legacy
+dispatchers).  A Lua config answers `hl.dsp...' with \"ok\"; a hyprlang config answers a dispatcher it does not
+know with \"Invalid dispatcher\" (HyprCtl.cpp dispatchRequest).  That reply is the signal: the Lua form is tried
+first and the first answer is remembered for the instance.")
+
+(defun drgnx-platform-wm--hypr-window (w)
+  "A window plist (:id :pid :title :fullscreen) from the window object W of `hyprctl -j', or nil."
+  (when (and w (alist-get 'address w))
+    (list :id (alist-get 'address w) :pid (alist-get 'pid w) :title (alist-get 'title w)
+          :fullscreen (let ((f (alist-get 'fullscreen w))) (if (numberp f) f 0)))))
+
+(defun drgnx-platform-wm--hypr-monitors (text)
+  "Monitor plists from `hyprctl -j monitors' TEXT, in logical pixels (the size Emacs sees): the mode size
+divided by the scale, width and height swapped for a transform of 90 or 270 degrees.  Disabled monitors are left out."
+  (let (out)
+    (dolist (m (drgnx-platform-wm--json text))
+      (unless (alist-get 'disabled m)
+        (let* ((scale (let ((s (alist-get 'scale m))) (if (and (numberp s) (> s 0)) s 1)))
+               (w (alist-get 'width m)) (h (alist-get 'height m))
+               (turned (cl-oddp (or (alist-get 'transform m) 0))))
+          (push (list :name (or (alist-get 'name m) "") :make (or (alist-get 'make m) "")
+                      :model (or (alist-get 'model m) "") :serial (or (alist-get 'serial m) "")
+                      :geometry (list (alist-get 'x m) (alist-get 'y m)
+                                      (round (/ (if turned h w) scale)) (round (/ (if turned w h) scale))))
+                out))))
+    (nreverse out)))
+
+(defun drgnx-platform-wm--hypr-focused (text)
+  "The focused window (a plist) from `hyprctl -j activewindow' TEXT, or nil (Hyprland answers {})."
+  (drgnx-platform-wm--hypr-window (drgnx-platform-wm--json text)))
+
+(defun drgnx-platform-wm--hypr-find (text pid title)
+  "The window of `hyprctl -j clients' TEXT with PID and TITLE (a plist), or nil."
+  (seq-some (lambda (w) (and (eql (alist-get 'pid w) pid) (equal (alist-get 'title w) title)
+                             (alist-get 'mapped w t) (drgnx-platform-wm--hypr-window w)))
+            (drgnx-platform-wm--json text)))
+
+(defun drgnx-platform-wm--lua-string (s)
+  "S as a Lua string literal."
+  (concat "\"" (string-replace "\n" "\\n" (replace-regexp-in-string "[\\\\\"]" "\\\\\\&" s)) "\""))
+
+(defun drgnx-platform-wm--hypr-dispatch (call args k fail)
+  "Run `hyprctl dispatch ARGS...' with CALL; K gets Hyprland's reply (\"ok\" or an error text)."
+  (funcall call (append '("hyprctl" "dispatch") args) (lambda (out) (funcall k (string-trim out))) fail))
+
+(defun drgnx-platform-wm--hypr-dispatch-ok (call args on-ok fail)
+  "`drgnx-platform-wm--hypr-dispatch' where anything but \"ok\" is a failure with Hyprland's own text."
+  (drgnx-platform-wm--hypr-dispatch
+   call args (lambda (reply) (if (equal reply "ok") (funcall on-ok) (funcall fail (list :error reply)))) fail))
+
+(defun drgnx-platform-wm--hypr-move-legacy (call address name follow focused on-ok fail)
+  "Move ADDRESS to monitor NAME with the hyprlang dispatchers.  They act on the focused window: so unless it
+FOCUSED already, focus it first; unless FOLLOW, move it silently and give the focus back to the window that had it."
+  (let ((move (lambda (&optional prior)
+                (drgnx-platform-wm--hypr-dispatch-ok
+                 call (append (list "movewindow" (concat "mon:" name)) (unless follow '("silent")))
+                 (lambda ()
+                   (if prior
+                       (drgnx-platform-wm--hypr-dispatch-ok call (list "focuswindow" (concat "address:" prior)) on-ok fail)
+                     (funcall on-ok)))
+                 fail)))
+        (focus (lambda (k)
+                 (drgnx-platform-wm--hypr-dispatch-ok call (list "focuswindow" (concat "address:" address)) k fail))))
+    (cond (focused (funcall move))
+          (follow (funcall focus move))
+          (t (funcall call '("hyprctl" "-j" "activewindow")
+                      (lambda (out)
+                        (let ((prior (plist-get (drgnx-platform-wm--hypr-focused out) :id)))
+                          (funcall focus (lambda () (funcall move (and prior (not (equal prior address)) prior))))))
+                      fail)))))
+
+(defun drgnx-platform-wm--hypr-send (ctx call address name follow focused on-ok fail)
+  "Move the window ADDRESS to monitor NAME: the Lua form, or the hyprlang one when this instance answered the
+Lua form \"Invalid dispatcher\" (remembered in `drgnx-platform-wm--hypr-config').  FOLLOW: the focus goes with
+the window.  FOCUSED: the window has the focus (the hyprlang form needs it)."
+  (let* ((sig (funcall (plist-get ctx :env) "HYPRLAND_INSTANCE_SIGNATURE"))
+         (remember (lambda (type) (setf (alist-get sig drgnx-platform-wm--hypr-config nil nil #'equal) type)))
+         (legacy (lambda ()
+                   (funcall remember 'hyprlang)
+                   (drgnx-platform-wm--hypr-move-legacy call address name follow focused on-ok fail))))
+    (if (eq (cdr (assoc sig drgnx-platform-wm--hypr-config)) 'hyprlang)
+        (funcall legacy)
+      (drgnx-platform-wm--hypr-dispatch
+       call (list (format "hl.dsp.window.move({ window = %s, monitor = %s, follow = %s })"
+                          (drgnx-platform-wm--lua-string (concat "address:" address))
+                          (drgnx-platform-wm--lua-string name) (if follow "true" "false")))
+       (lambda (reply)
+         (cond ((equal reply "ok") (funcall remember 'lua) (funcall on-ok))
+               ((string-prefix-p "Invalid dispatcher" reply) (funcall legacy))
+               (t (funcall fail (list :error reply)))))
+       fail))))
+
+(defun drgnx-platform-wm--hypr-monitors-fn (ctx callback)
+  (funcall (drgnx-platform-wm--caller 'hyprland ctx) '("hyprctl" "-j" "monitors")
+           (lambda (out) (funcall callback (drgnx-platform-wm--hypr-monitors out))) callback))
+
+(defun drgnx-platform-wm--hypr-move (ctx monitor callback)
+  "Move CTX's frame to MONITOR when it is the focused window; the focus goes with it."
+  (if (not (drgnx-platform-wm--own-focused-p ctx))
+      (drgnx-platform-wm--refuse callback drgnx-platform-wm--not-focused)
+    (let ((call (drgnx-platform-wm--caller 'hyprland ctx t)))
+      (funcall call '("hyprctl" "-j" "activewindow")
+               (lambda (out)
+                 (let ((w (drgnx-platform-wm--hypr-focused out)))
+                   (if (not (and w (eql (plist-get w :pid) (emacs-pid))))
+                       (funcall callback (list :error drgnx-platform-wm--not-focused))
+                     (drgnx-platform-wm--hypr-send ctx call (plist-get w :id) (plist-get monitor :name) t t
+                                                   (lambda () (funcall callback 'ok)) callback))))
+               callback))))
+
+(defun drgnx-platform-wm--hypr-place (ctx monitor callback)
+  "Move the restored window of CTX's frame to MONITOR without taking the focus.  A fullscreen window is moved
+the other way (the focus follows): Hyprland's following move re-applies the fullscreen mode itself."
+  (drgnx-platform-wm--place
+   'hyprland ctx callback '("hyprctl" "-j" "clients") #'drgnx-platform-wm--hypr-find
+   (lambda (call w on-ok fail)
+     (drgnx-platform-wm--hypr-send ctx call (plist-get w :id) (plist-get monitor :name)
+                                   (> (plist-get w :fullscreen) 0) nil on-ok fail))))
+
+;;;;; niri
+
+(defun drgnx-platform-wm--niri-monitors (text)
+  "Monitor plists from `niri msg --json outputs' TEXT (an object keyed by output name); an output without a
+logical position (switched off) is left out.  The geometry is niri's logical one, the size Emacs sees."
+  (let (out)
+    (dolist (cell (drgnx-platform-wm--json text))
+      (let* ((o (cdr cell)) (l (alist-get 'logical o)))
+        (when l
+          (push (list :name (or (alist-get 'name o) (symbol-name (car cell))) :make (or (alist-get 'make o) "")
+                      :model (or (alist-get 'model o) "") :serial (or (alist-get 'serial o) "")
+                      :geometry (list (alist-get 'x l) (alist-get 'y l) (alist-get 'width l) (alist-get 'height l)))
+                out))))
+    (nreverse out)))
+
+(defun drgnx-platform-wm--niri-window (w)
+  (list :id (alist-get 'id w) :pid (alist-get 'pid w) :title (alist-get 'title w)))
+
+(defun drgnx-platform-wm--niri-focused (text)
+  "The focused window (a plist :id :pid :title) in `niri msg --json windows' TEXT, or nil."
+  (when-let* ((w (seq-find (lambda (w) (alist-get 'is_focused w)) (drgnx-platform-wm--json text))))
+    (drgnx-platform-wm--niri-window w)))
+
+(defun drgnx-platform-wm--niri-find (text pid title)
+  "The window of `niri msg --json windows' TEXT with PID and TITLE (a plist), or nil."
+  (when-let* ((w (seq-find (lambda (w) (and (eql (alist-get 'pid w) pid) (equal (alist-get 'title w) title)))
+                           (drgnx-platform-wm--json text))))
+    (drgnx-platform-wm--niri-window w)))
+
+(defun drgnx-platform-wm--niri-send (call id name on-ok fail)
+  "Move the window ID to output NAME.  niri exits 0 and does nothing for an unknown output, so the output is
+looked up first.  With `--id' a window that is the active one stays so, one that is not does not take the focus."
+  (funcall call '("niri" "msg" "--json" "outputs")
+           (lambda (out)
+             (if (not (seq-some (lambda (m) (equal (plist-get m :name) name)) (drgnx-platform-wm--niri-monitors out)))
+                 (funcall fail (list :error (format "niri has no output named \"%s\"; the window was not moved" name)))
+               (funcall call (list "niri" "msg" "action" "move-window-to-monitor" "--id" (number-to-string id) name)
+                        (lambda (_out) (funcall on-ok)) fail)))
+           fail))
+
+(defun drgnx-platform-wm--niri-monitors-fn (ctx callback)
+  (funcall (drgnx-platform-wm--caller 'niri ctx) '("niri" "msg" "--json" "outputs")
+           (lambda (out) (funcall callback (drgnx-platform-wm--niri-monitors out))) callback))
+
+(defun drgnx-platform-wm--niri-move (ctx monitor callback)
+  "Move CTX's frame to MONITOR when it is the focused window."
+  (if (not (drgnx-platform-wm--own-focused-p ctx))
+      (drgnx-platform-wm--refuse callback drgnx-platform-wm--not-focused)
+    (let ((call (drgnx-platform-wm--caller 'niri ctx t)))
+      (funcall call '("niri" "msg" "--json" "windows")
+               (lambda (out)
+                 (let ((w (drgnx-platform-wm--niri-focused out)))
+                   (if (not (and w (eql (plist-get w :pid) (emacs-pid))))
+                       (funcall callback (list :error drgnx-platform-wm--not-focused))
+                     (drgnx-platform-wm--niri-send call (plist-get w :id) (plist-get monitor :name)
+                                                   (lambda () (funcall callback 'ok)) callback))))
+               callback))))
+
+(defun drgnx-platform-wm--niri-place (ctx monitor callback)
+  "Move the restored window of CTX's frame to MONITOR."
+  (drgnx-platform-wm--place
+   'niri ctx callback '("niri" "msg" "--json" "windows") #'drgnx-platform-wm--niri-find
+   (lambda (call w on-ok fail)
+     (drgnx-platform-wm--niri-send call (plist-get w :id) (plist-get monitor :name) on-ok fail))))
+
+(drgnx-platform-define-adapter
+ 'hyprland :monitors #'drgnx-platform-wm--hypr-monitors-fn
+ :move #'drgnx-platform-wm--hypr-move :place #'drgnx-platform-wm--hypr-place)
+(drgnx-platform-define-adapter
+ 'niri :monitors #'drgnx-platform-wm--niri-monitors-fn
+ :move #'drgnx-platform-wm--niri-move :place #'drgnx-platform-wm--niri-place)
+
 (provide 'drgnx-platform)
 ;;; drgnx-platform.el ends here

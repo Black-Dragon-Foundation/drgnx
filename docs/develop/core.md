@@ -218,6 +218,20 @@ put back whatever happens. All calls of one operation share its deadline (the se
 the core's watchdog never fires first. Messages: "sway: swaymsg is not installed, so drgnx cannot move windows",
 "sway did not answer within 2 s; the window was not moved", or sway's own `error` text.
 
+**Hyprland and niri** (status `reported`: written from the sources and documented replies, not yet run on the real
+compositor). Monitors come from `hyprctl -j monitors` (mode size divided by the scale, so the geometry is the
+logical one Emacs sees) and `niri msg --json outputs`. A command move acts on the focused window only when its pid
+is Emacs' and the frame has focus (`frame-focus-state`); otherwise `(:error "drgnx moves only its own window while
+it has focus: ...")`. A restore sets the frame's `title` to `drgnx [placing PID-N]`, looks the window up by Emacs'
+pid and that title at 0.1, 0.3, 0.7, 1.5 and 3 s, moves it without taking focus and puts the title back in every
+case. All calls of one move share the operation's single deadline, so the watchdog margin is not raised. Hyprland
+0.56 has two config types and `hyprctl dispatch` differs: a Lua config takes
+`hl.dsp.window.move({ window = "address:0x…", monitor = "NAME", follow = … })`; a hyprlang config takes
+`focuswindow address:0x…` and `movewindow mon:NAME [silent]` (and the focus is given back after a silent one). The
+Lua form is tried first; the answer "Invalid dispatcher" marks a hyprlang instance, remembered per
+`HYPRLAND_INSTANCE_SIGNATURE`. niri answers an unknown output with exit 0 and no effect, so the output is looked up
+first and an unknown one is an error; the move is `niri msg action move-window-to-monitor --id ID OUTPUT`.
+
 **Another compositor** (river, Wayfire, labwc, Cosmic, ...): call `drgnx-platform-define-adapter` from your
 config. A new name goes before `x11` (so an adapter for an X window manager such as bspwm, awesome or xmonad
 wins over plain X) and before the catch-alls `tty`, `other-wayland` and `none`; its `:detect` is tried after the
