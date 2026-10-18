@@ -18,7 +18,7 @@ Using drgnx.
 - [Editing](guide/editing.md): language support (tree-sitter grammars), and the editor's amenities.
 - [Git and review](guide/git.md): the diff view, inline blame, AI commit messages, Review Branch, Pull Requests.
 - [Work tracker](guide/work.md): specs › plans › tasks › TODOs › commits, branches and worktrees; `drgnx work`.
-- [Work cockpit](guide/cockpit.md): the Work graph — specs, plans, tasks, agents, jobs and reviews, who is on what, needs and blocks, what waits on you; drawn in a wide window, an outline in terminals; worktrees that do not report; filters; TAB selects, RET or a click opens. Each agent's edits as a live diff: accept a file (a review mark, never a merge), ask the agent to undo it, comment on a line.
+- [Work cockpit](guide/cockpit.md): the Work graph — specs, plans, tasks, agents, jobs and reviews, who is on what, needs and blocks, what waits on you; drawn in a wide window, an outline in terminals; worktrees that do not report; filters; TAB selects, RET or a click opens. Each agent's edits as a live diff: accept a file (a review mark, never a merge), ask the agent to undo it, comment on a line. What happened, one line per event; the timeline, chips per agent; questions in the graph and the timeline (the status bar's count: pending), answered with A (queued, never interrupting).
 - [Search and replace](guide/replace.md): the Search view in the sidebar and the find bar — symbols and text in one interface, tick boxes, one Undo.
 - [Layouts](guide/layouts.md): Agent, Editor, Zen and Browser, and your own; one key cycles them, and switching back restores what you left.
 - [Browser pane](guide/browser.md): a web page beside the editor (WebKit), Test Report for Playwright, and an agent's page with its screenshot.
@@ -44,6 +44,6 @@ How drgnx is built, tested and measured.
 - [CI](develop/ci.md): the GitHub Actions workflows — Emacs 31.1 and 30.2 suites, shellcheck, leak scan, nightly GUI tier.
 - [The hub and the gateway](develop/hub.md): the durable process behind agents, its socket protocol, the traffic gateway.
 - [Agent coordination](develop/coordination.md): jobs, tasks and leases, the decision log, messages, the MCP tools (and the identity and limits of agents outside drgnx), delivery.
-- [The Work cockpit's model](develop/cockpit.md): one model of specs, plans, tasks, agents, jobs and reviews from the live store; what happened, the timeline; each agent's edits (async git, regular files only); the Work graph's redraws, cost and tests; an agent's edits pane: live patches, accept, revert, comment.
+- [The Work cockpit's model](develop/cockpit.md): one model of specs, plans, tasks, agents, jobs and reviews from the live store; what happened, the timeline; each agent's edits (async git, regular files only); the Work graph's redraws, cost and tests; an agent's edits pane: live patches, accept, revert, comment; what happened, the timeline and answers: appends, routes, cost and tests.
 
 Docs are updated in the same commit as the code they describe.
