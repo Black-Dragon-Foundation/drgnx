@@ -552,7 +552,8 @@ later application of the keys (`drgnx-modal-suspended'); another stack ends it."
 
 (defun drgnx-evil-setup ()
   "Set evil's defaults, load it, register the engine, and start it when the key layers need it."
-  (setq evil-want-keybinding nil)
+  (setq evil-want-keybinding nil
+        evil-want-C-u-scroll t)    ; also before: evil binds C-u as it loads, so the snapshot of its maps has it
   (require 'evil)
   (drgnx-evil--note-cursor-defaults)
   (drgnx-evil--settings)

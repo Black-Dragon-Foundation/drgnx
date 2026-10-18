@@ -198,10 +198,7 @@ a Vim stack mixed with another editor's keys."
   (unless profiles
     (drgnx-keys--ensure-profiles)
     (setq profiles drgnx-keys-profiles))
-  (cl-some (lambda (layer)
-             (when-let* ((profile (assq (car layer) profiles)))
-               (not (plist-get (cdr profile) :modal))))
-           layers))
+  (drgnx-keys-modal-mixed-p layers profiles))
 
 (defun drgnx-modal-current-layers ()
   "The key layers in force: this session's, else keys.eld's `:layers', else `drgnx-keys-layers'."

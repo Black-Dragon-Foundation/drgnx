@@ -87,6 +87,21 @@ started by an apply (the after-apply functions are off)."
       (should (equal (mapcar (lambda (c) (cdr (drgnx-commands--keymap-spec (plist-get c :map)))) cls)
                      '(evil-motion-state-map)))
       (should (equal (plist-get (car cls) :states) '(normal visual motion))))
+    ;; The mixed preset read from evil's maps: VS Code's six Ctrl keys stay global; C-p is evil's in its normal map,
+    ;; which evil's visual state enables too.
+    (let ((r (drgnx-keys-claims-evil-test--resolve drgnx-keys-claims-evil-test--mixed
+                                                   :snapshots drgnx-keys-modal-snapshots)))
+      (pcase-dolist (`(,id ,key) '((open-file "C-o") (close-tab "C-w") (toggle-sidebar "C-b") (go-quick-open "C-p")
+                                   (file-new "C-n") (go-symbol-project "C-t")))
+        (should (equal (list id key t)
+                       (list id key (and (seq-find (lambda (b) (and (eq (plist-get b :id) id) (equal (plist-get b :key) key)
+                                                                    (memq (plist-get b :map) '(nil global-map))))
+                                                   (plist-get r :bindings))
+                                         t)))))
+      (should (equal (plist-get (seq-find (lambda (c) (and (equal (plist-get c :key) "C-p") (plist-get c :states)))
+                                          (plist-get r :conflicts))
+                                :states)
+                     '(normal visual))))
     ;; With no hand list at all, the snapshot still claims C-b; without the snapshot, nothing does.
     (let ((bare (mapcar (lambda (p) (if (eq (car p) 'vim) (cons 'vim (plist-put (copy-sequence (cdr p)) :claims nil)) p))
                         drgnx-keys-claims-evil-test--profiles)))
@@ -116,6 +131,32 @@ started by an apply (the after-apply functions are off)."
       (should (eq (plist-get c :kind) 'claim))
       (should (memq 'motion (plist-get c :states)))
       (should (eq (plist-get (plist-get c :winner) :layer) 'vim)))))
+
+(defun drgnx-keys-claims-evil-test--mine ()
+  "A command the user binds in evil's normal-state map (config.el)."
+  (interactive))
+
+(ert-deftest drgnx-keys-claims/your-own-key-in-evils-map-is-kept ()
+  ;; config.el bound C-p in evil's normal-state map after evil loaded: a winning key is not bound over it; it is said.
+  (drgnx-keys-claims-evil-test--with
+    (drgnx-keys-claims-evil-test--live
+      (keymap-set evil-normal-state-map "C-p" #'drgnx-keys-claims-evil-test--mine)
+      (unwind-protect
+          (progn
+            (drgnx-keys-claims-evil-test--user '(:layers ((vim app editing window)) :bind ((go-quick-open "C-p"))))
+            (drgnx-keys-apply)
+            (should (eq (keymap-lookup evil-normal-state-map "C-p") #'drgnx-keys-claims-evil-test--mine))
+            (should (eq (keymap-lookup evil-insert-state-map "C-p") #'project-find-file))   ; evil's own: replaced
+            (should (eq (keymap-lookup global-map "C-p") #'project-find-file))
+            (should-not (member '("C-p" . (evil . evil-normal-state-map))
+                                (drgnx-cmd-bound (drgnx-commands-get 'go-quick-open))))
+            (let ((c (seq-find (lambda (c) (and (equal (plist-get c :key) "C-p") (eq (plist-get c :map) 'evil-normal-state-map)))
+                               (plist-get drgnx-keys-last :conflicts))))
+              (should (equal (drgnx-keys-conflict-text c)
+                             "C-p drgnx-keys-claims-evil-test--mine (your own binding, kept) over Quick Open (user) [claim, in evil-normal-state-map]")))
+            (drgnx-keys--restore)
+            (should (eq (keymap-lookup evil-normal-state-map "C-p") #'drgnx-keys-claims-evil-test--mine)))
+        (keymap-set evil-normal-state-map "C-p" #'evil-paste-pop)))))
 
 (ert-deftest drgnx-keys-claims/user-key-wins-in-evils-map ()
   (drgnx-keys-claims-evil-test--with

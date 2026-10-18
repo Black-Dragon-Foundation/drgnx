@@ -9,7 +9,7 @@
 
 (defvar evil-normal-state-map)
 
-(defconst drgnx-keys-claims-test--profiles
+(defconst drgnx-keys-claims-test--shipped
   (drgnx-keys-load-profiles (expand-file-name "keys" drgnx-dir))
   "The shipped profiles.")
 
@@ -27,7 +27,7 @@ registered as test commands of scope `window'.")
             (if-let* ((more (alist-get (car p) drgnx-keys-claims-test--more)))
                 (cons (car p) (plist-put (copy-sequence (cdr p)) :bind (append (plist-get (cdr p) :bind) more)))
               p))
-          drgnx-keys-claims-test--profiles))
+          drgnx-keys-claims-test--shipped))
 
 (defmacro drgnx-keys-claims-test--with (var layers &rest body)
   "BODY with VAR the resolution of LAYERS, in a registry holding the core commands and the startup modules."
@@ -56,9 +56,13 @@ registered as test commands of scope `window'.")
               (plist-get r :conflicts)))
 
 (ert-deftest drgnx-keys-claims/a-snapshot-without-evil-maps-is-quiet ()
-  ;; evil "arrives" with only its normal-state map: the snapshot holds that one, nothing fails.
+  ;; evil "arrives" with only its normal-state map: the snapshot holds that one, nothing fails.  Only the snapshot
+  ;; runs on this fake evil (not whatever else this process registered on evil's load).
+  (should drgnx-keys-modal--snapshot-registered)
   (should (assq 'evil after-load-alist))
   (let ((features features) (drgnx-keys-modal-snapshots nil)
+        (after-load-alist (list (list 'evil #'drgnx-keys-modal--snapshot-evil)))
+        (drgnx-keys-profiles nil)
         (evil-normal-state-map (make-sparse-keymap)))
     (keymap-set evil-normal-state-map "C-r" #'ignore)
     (provide 'evil)
@@ -111,6 +115,17 @@ registered as test commands of scope `window'.")
       (should (eq (plist-get (plist-get c :winner) :layer) 'vim))
       (should (equal (mapcar (lambda (p) (plist-get p :id)) (plist-get c :losers)) '(close-tab)))
       (should (string-suffix-p "; Close Tab in insert state" (drgnx-keys-conflict-text c))))))
+
+(ert-deftest drgnx-keys-claims/leader-keys-a-higher-layer-beats-are-named ()
+  ;; VS Code above Vim (not a preset): its C-w Close Tab beats the leader's C-w h … (Focus Left …), which are
+  ;; dropped and each named, so the sheet marks their commands.
+  (drgnx-keys-claims-test--with r '((vim editing) (vscode app window))
+    (should-not (member '("C-w h" . drgnx-modal-leader-map) (drgnx-keys-claims-test--binds r 'focus-left)))
+    (let ((c (car (drgnx-keys-claims-test--conflicts r "C-w" 'global-map))))
+      (should (eq (plist-get (plist-get c :winner) :id) 'close-tab))
+      (dolist (id '(focus-left focus-down focus-up focus-right))
+        (should (member (list :id id :layer 'vim) (plist-get c :losers))))
+      (should (seq-find (lambda (p) (equal (plist-get p :claim) "the leader's C-w keys")) (plist-get c :losers))))))
 
 (ert-deftest drgnx-keys-claims/no-modal-layer-no-state-claims ()
   (dolist (layers '(((vscode app editing window)) ((emacs app editing window)) ((emacs editing) (vscode app window))))

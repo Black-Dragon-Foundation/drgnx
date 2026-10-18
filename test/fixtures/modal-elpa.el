@@ -65,12 +65,17 @@ Memory-capped by systemd-run when it works.  Returns (EXIT-CODE . OUTPUT)."
         (cons code (buffer-string))))))
 
 (defun drgnx-modal-test-isolated-result (file selector)
-  "Run FILE's tests (SELECTOR) in their own Emacs; nil when they passed, else the child's output (the tail of it)."
+  "Run FILE's tests (SELECTOR) in their own Emacs; nil when they passed, else the child's output (the tail of it).
+When the child skipped every test it ran (no evil: DRGNX_MODAL_ELPA unset), the calling test is skipped too, so the
+count says so."
   (pcase-let ((`(,code . ,out) (drgnx-modal-test-run-isolated file selector)))
     (cond ((not (eql code 0)) (format "exit %S\n%s" code (if (> (length out) 8000)
                                                              (concat (substring out 0 3000) "\n[…]\n" (substring out -5000))
                                                            out)))
           ((string-match-p "Ran 0 tests" out) (format "no test ran\n%s" out))
+          ((and (string-match "Ran \\([0-9]+\\) tests?, 0 results as expected, 0 unexpected, \\([0-9]+\\) skipped" out)
+                (equal (match-string 1 out) (match-string 2 out)))
+           (ert-skip (format "all %s tests of %s skipped in their own Emacs (evil not available?)" (match-string 1 out) file)))
           (t nil))))
 
 (provide 'modal-elpa)

@@ -203,9 +203,7 @@ panel keys it beats are dropped."
   (let ((cmds (make-hash-table :test #'eq)) (assign (make-hash-table :test #'eq))
         (extras (make-hash-table :test #'eq))
         (stack (and (not (drgnx-keys--layers-error layers)) (drgnx-keys-modal-of-stack layers profiles)))
-        (mixed (seq-some (lambda (l) (when-let* ((spec (and (consp l) (alist-get (car l) profiles))))
-                                       (not (plist-get spec :modal))))
-                         (and (proper-list-p layers) layers)))
+        (mixed (drgnx-keys-modal-mixed-p layers profiles))
         (rank 0) claims modal-layer defaults-claim problems bindings conflicts)
     (dolist (c commands) (puthash (drgnx-cmd-id c) c cmds))
     (cl-flet ((extra (entry spec layer)
@@ -396,7 +394,10 @@ panel keys it beats are dropped."
                 (push (list :key (plist-get b :key) :map (mapsym b) :kind 'claim :states states
                             :winner (if b-wins (party b)
                                       (plist-put (copy-sequence (car (drgnx-keys--claim-parties (list top)))) :states states))
-                            :losers (if b-wins them (list (party b)))
+                            ;; the leader or panel keys dropped are losers too, so their commands are marked
+                            :losers (if b-wins
+                                        (append them (mapcar #'party (apply #'append (mapcar (lambda (c) (plist-get c :drop)) cls))))
+                                      (list (party b)))
                             :elsewhere t)
                       conflicts)))))))
     (list :bindings (mapcar (lambda (b) (append (list :id (plist-get b :id) :key (plist-get b :key)
@@ -576,6 +577,15 @@ adds what it finds (a failure, a lifted prefix) to `drgnx-keys-last' and rewrite
           ((and (boundp mapsym) (keymapp (symbol-value mapsym))) (funcall bind))
           (t (push (format "%s: no keymap %s for %s" (plist-get b :id) mapsym (plist-get b :key)) drgnx-keys-problems)))))
 
+(defun drgnx-keys--theirs (spec key)
+  "What the user bound on KEY in the engine keymap SPEC since evil made it: its definition now, when that is
+neither empty nor what `drgnx-keys-modal-snapshots' holds for KEY; else nil (also before the engine loads).  Called
+after `drgnx-keys--restore', so drgnx's own bindings are gone."
+  (let* ((sym (cdr (drgnx-commands--keymap-spec spec))) (snap (alist-get sym drgnx-keys-modal-snapshots)))
+    (when (and snap (boundp sym) (keymapp (symbol-value sym)))
+      (let ((now (drgnx-keys--lookup (symbol-value sym) key)))
+        (and now (not (equal now (drgnx-keys--lookup snap key))) now)))))
+
 (defun drgnx-keys-apply ()
   "Bind the keys of the active stack and keys.eld, replacing what drgnx bound before.
 Never prompts: problems are collected in `drgnx-keys-last'.  Returns the resolution."
@@ -597,10 +607,18 @@ Never prompts: problems are collected in `drgnx-keys-last'.  Returns the resolut
           (dolist (b (plist-get r :bindings))
             (let ((cmd (drgnx-commands-get (plist-get b :id))))
               ;; A key that beats the modal engine's in some states is bound in the engine's keymaps too (:also);
-              ;; `drgnx-keys--restore' puts the engine's own key back on the next apply.
+              ;; `drgnx-keys--restore' puts the engine's own key back on the next apply.  A key the user bound in
+              ;; such a keymap (config.el) is left alone and said.
               (dolist (map (cons (plist-get b :map) (plist-get b :also)))
-                (setf (drgnx-cmd-bound cmd) (append (drgnx-cmd-bound cmd) (list (cons (plist-get b :key) map))))
-                (drgnx-keys--apply-binding (plist-put (copy-sequence b) :map map) cmd drgnx-keys--generation))))
+                (if-let* ((theirs (and (not (eq map (plist-get b :map))) (drgnx-keys--theirs map (plist-get b :key)))))
+                    (setq r (plist-put r :conflicts
+                                       (append (plist-get r :conflicts)
+                                               (list (list :key (plist-get b :key)
+                                                           :map (cdr (drgnx-commands--keymap-spec map)) :kind 'claim
+                                                           :winner (list :claim (format "%s" theirs) :layer "your own binding, kept")
+                                                           :losers (list (list :id (plist-get b :id) :layer (plist-get b :layer))))))))
+                  (setf (drgnx-cmd-bound cmd) (append (drgnx-cmd-bound cmd) (list (cons (plist-get b :key) map))))
+                  (drgnx-keys--apply-binding (plist-put (copy-sequence b) :map map) cmd drgnx-keys--generation)))))
           (drgnx-keys--set-everywhere (plist-get r :bindings))
           (setq drgnx-keys-last (append (list :layers layers
                                               :problems (append (reverse drgnx-keys-problems) (plist-get r :problems)))

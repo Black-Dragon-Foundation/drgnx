@@ -98,8 +98,21 @@ Its size is fixed: one copy per keymap the profiles' `:modal' `:maps' name.")
       (drgnx-keys--ensure-profiles)
       (drgnx-keys-modal-take-snapshots 'evil drgnx-keys-profiles))))
 
+(defvar drgnx-keys-modal--snapshot-registered nil
+  "Non-nil once `drgnx-keys-modal--snapshot-evil' waits for evil (a reload of this file registers it once).")
+
 ;; Registered as this file loads, before any binding drgnx defers to evil's load, so it runs first.
-(eval-after-load 'evil #'drgnx-keys-modal--snapshot-evil)
+(unless drgnx-keys-modal--snapshot-registered
+  (setq drgnx-keys-modal--snapshot-registered t)
+  (eval-after-load 'evil #'drgnx-keys-modal--snapshot-evil))
+
+(defun drgnx-keys-modal-mixed-p (layers profiles)
+  "Non-nil when LAYERS has a layer of a profile in PROFILES (alist PROFILE → plist) without `:modal': a modal
+profile mixed with another editor's keys (no modal layer at all counts too).  Malformed LAYERS: nil."
+  (and (proper-list-p layers)
+       (cl-some (lambda (l) (when-let* ((spec (and (consp l) (assq (car l) profiles))))
+                              (not (plist-get (cdr spec) :modal))))
+                layers)))
 
 (defun drgnx-keys-modal-panel-maps ()
   "The keymap symbols of panels: those of `drgnx-modal-panel-modes' and the sidebar docks' `drgnx-wb-dock-map'."

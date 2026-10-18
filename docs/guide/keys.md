@@ -367,7 +367,10 @@ Vim's keys exist only in some states: `C-o` is jump back in normal, visual and m
   motion insert))`, each with the states evil binds it in. A claim without states holds in every state.
 - A key that **beats** Vim's — a `keys.eld` key, or a layer above Vim — is bound in evil's map too, so it works in
   those states (`(:bind ((go-quick-open "C-p")))` in the Vim stack: `C-p` is Quick Open in normal and insert
-  state, not evil's paste-pop). The next switch of the key stack puts evil's own key back.
+  state, not evil's paste-pop). The next switch of the key stack puts evil's own key back. Only global keys beat
+  evil's state maps this way (a key of a mode's keymap stays under evil's in normal state). Keys you bind yourself
+  in evil's state maps, in `config.el`, are left alone: the sheet says `C-p my-command (your own binding, kept)
+  over Quick Open (user)`.
 
 The key sheet says who wins where: `C-o Jump Back (vim; normal, visual, motion state) over Open File… (vscode)
 [claim]; Open File… in insert state and panels`.
