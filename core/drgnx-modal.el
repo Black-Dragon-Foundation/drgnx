@@ -93,17 +93,42 @@ Returns the state."
   (unless (minibufferp)
     (drgnx-modal-set-state (drgnx-modal-initial-state))))
 
-(defun drgnx-modal-where (mapsym)
+(defun drgnx-modal-where (mapsym &optional verbose)
   "How a key bound in MAPSYM is described next to its command: \"\" for the leader map (the keys are
 shown plain), \"panels\" for the panel map, \"normal state\" and so on for the engine's state maps, nil for
-any other keymap.  MAPSYM is a keymap symbol or (FEATURE . KEYMAP-SYMBOL)."
+any other keymap.  MAPSYM is a keymap symbol or (FEATURE . KEYMAP-SYMBOL).  With VERBOSE the leader map is
+described by where it works, as the profile's `:modal' `:maps' says: \"normal, visual, motion state and panels\"."
   (pcase (if (consp mapsym) (cdr mapsym) mapsym)
-    ('drgnx-modal-leader-map "")
+    ('drgnx-modal-leader-map (if verbose (drgnx-modal--places 'drgnx-modal-leader-map) ""))
     ('drgnx-modal-panel-map "panels")
     ('evil-normal-state-map "normal state")
     ('evil-visual-state-map "visual state")
     ('evil-motion-state-map "motion state")
     ('evil-insert-state-map "insert state")))
+
+(defun drgnx-modal--places (mapsym)
+  "The places MAPSYM works in as words (\"normal, visual, motion state and panels\"), from the first loaded
+profile's `:modal' `:maps' that lists it; \"\" when none does."
+  (drgnx-keys--ensure-profiles)
+  (or (cl-some (lambda (profile)
+                 (cl-some (lambda (m)
+                            (and (eq (cdr (drgnx-commands--keymap-spec (car m))) mapsym)
+                                 (drgnx-keys--states-text (cdr m))))
+                          (plist-get (plist-get (cdr profile) :modal) :maps)))
+               drgnx-keys-profiles)
+      ""))
+
+(defun drgnx-modal-default-notes ()
+  "Lines for the key sheet's and the report's conflicts: what the modal keys take from Emacs that the resolver does
+not report (it knows Emacs' defaults only with an Emacs layer).  Today the Leader Menu on M-SPC over cycle-spacing;
+nil when the Leader Menu is on another key, or the resolver reported that key already."
+  (when-let* ((cmd (drgnx-commands-get 'modal-leader))
+              ((seq-some (lambda (b) (and (equal (car b) "M-SPC")
+                                          (eq (cdr (drgnx-commands--keymap-spec (cdr b))) 'global-map)))
+                         (drgnx-cmd-bound cmd)))
+              ((not (seq-some (lambda (c) (equal (plist-get c :key) "M-SPC"))
+                              (plist-get drgnx-keys-last :conflicts)))))
+    (list (format "M-SPC %s over cycle-spacing (Emacs) [default]" (drgnx-cmd-title cmd)))))
 
 ;;;; Order of the emulation maps
 
@@ -228,8 +253,10 @@ start the emulation maps are put in order.  An engine's start function turns the
 buffer in its state: by `drgnx-modal-init-buffer', or by mirroring its own state through `drgnx-modal-set-state'.
 While `drgnx-modal-suspended' holds these same layers no engine is wanted; with other layers the suspension
 ends.  Returns the engine running, or nil.  An engine whose module is not installed is not started.
-At the end `drgnx-modal-sync-functions' are called with LAYERS."
-  (let* ((layers (or layers (drgnx-modal-current-layers)))
+At the end `drgnx-modal-sync-functions' are called with LAYERS, and the key report is written again when the
+running engine changed (it said what ran before the after-apply functions started it)."
+  (let* ((was drgnx-modal-running)
+         (layers (or layers (drgnx-modal-current-layers)))
          (_ (when (and drgnx-modal-suspended (not (equal (car drgnx-modal-suspended) layers)))
               (setq drgnx-modal-suspended nil)))
          (want (and (not drgnx-modal-suspended) (drgnx-modal-engine-for layers)))
@@ -253,6 +280,7 @@ At the end `drgnx-modal-sync-functions' are called with LAYERS."
     (dolist (fn drgnx-modal-sync-functions)
       (condition-case err (funcall fn layers)
         (error (message "drgnx: %S failed: %s" fn (error-message-string err)))))
+    (when (and drgnx-keys-last (not (eq was drgnx-modal-running))) (drgnx-keys--write-report))
     drgnx-modal-running))
 
 ;;;; Commands

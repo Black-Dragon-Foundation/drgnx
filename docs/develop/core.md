@@ -132,7 +132,12 @@ evil, and `test/unit/modal-core-test.el` drives it with a fake engine.
   `:modal` (a Vim stack mixed with another editor's keys); `drgnx-modal-sync-functions` are called with the layers
   at the end of every sync, started or not. `drgnx-modal-suspended` (one element: the layers at the time) keeps the engine off
 for those layers, however often the keys are applied again (Toggle Modal Editing); other layers end it. `:maps` says, per keymap, the states a key bound there must also work in
-  (the key resolver reads it); `drgnx-modal-where` names a map for the key sheet.
+  (the key resolver reads it); `drgnx-modal-where` names a map for the key sheet ("" for the leader map, whose keys show plain; with VERBOSE it
+  says where the leader works, from `:maps`: "normal, visual, motion state and panels", the Shortcuts "where" column).
+  `drgnx-modal-default-notes` are lines the key sheet and `keys-report.eld` append to the conflicts: what the modal keys
+  take from Emacs' defaults that the resolver does not report without an Emacs layer (the Leader Menu on `M-SPC`
+  over `cycle-spacing`). `keys-report.eld` also carries `:modal (:engine :running :pending)` and `:leader-menu-key`,
+  and is written again when the engine starts or stops; the doctor's `modal` check reads them.
 - **Where keys go** (`core/drgnx-keys-modal.el`, pure, used by `drgnx-keys-resolve`). `drgnx-keys-modal-leader-p`
   tells a leader key (`SPC f f`, `C-w h`) from the rest; `drgnx-keys-modal-key-map` binds a leader key in the
   profile's `:map` (`drgnx-modal-leader-map`) whatever the entry says, any other key in the entry's map, the

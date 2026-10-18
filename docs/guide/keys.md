@@ -397,6 +397,8 @@ line (`C-k … 12 keys over kill-line (C-k)`, then each key). Conflicts and prob
 `keys.eld`). A key in the keymap of a package that loads later is bound when it loads; what that finds (a key that
 cannot be bound, a prefix it replaces) joins the list and the report then.
 
+With Vim keys the sheet shows leader keys plain (`SPC f f`) and a key that works in one state with it (`g d (normal state)`); the Leader Menu on `M-SPC` over Emacs' `cycle-spacing` is listed with the conflicts; which-key labels the leader keys and their prefixes (`SPC f` is `+File`); `drgnx doctor` (`modal`) warns when the engine is missing.
+
 ## keys.eld
 
 `~/.config/drgnx/keys.eld` (or `$DRGNX_CONFIG_DIR/keys.eld`) is one plist:

@@ -145,6 +145,7 @@ default; it never reads ~/.profile), else ~/.profile.  With SHELL unset or empty
            :magick (and (executable-find "magick") t)
            :pgtk-emacs (or (featurep 'pgtk) (and (executable-find "emacs-pgtk") t))
            :keys-report (drgnx-doctor--keys-report)
+           :desktop (getenv "XDG_CURRENT_DESKTOP")
            :wb-report (drgnx-doctor--state-file "wb-report.eld")
            :modules-report (drgnx-doctor--state-file "modules-report.eld")
            :modules-report-time (drgnx-doctor--state-file-time "modules-report.eld")
@@ -393,6 +394,29 @@ MODEL), as a sentence, or nil."
                                 (list 'warn "drgnx is not on PATH: Terminal does not find the command"
                                       (format "add ~/.local/bin to PATH: echo 'export PATH=\"$HOME/.local/bin:$PATH\"' >> %s  (then open a new Terminal)"
                                               (or (plist-get f :shell-profile) "~/.zprofile"))))))
+
+(drgnx-doctor-define 'modal :group "drgnx" :doc "Vim keys: the modal engine (evil) is installed and running (from the last session)"
+                     :check (lambda (f)
+                              (let* ((r (plist-get f :keys-report)) (modal (plist-get r :modal))
+                                     (engine (plist-get modal :engine))
+                                     (module-status (plist-get (alist-get (and engine (intern (format "editor/%s" engine)))
+                                                                          (plist-get f :modules-report))
+                                                               :status))
+                                     (m-spc (and (equal (plist-get r :leader-menu-key) "M-SPC")
+                                                 "M-SPC replaces Emacs' cycle-spacing"))
+                                     (say (lambda (detail) (if m-spc (format "%s; %s" detail m-spc) detail))))
+                                (cond ((null r) (list 'info "no key report yet — start drgnx once" nil))
+                                      ((and engine (not (plist-get modal :running)))
+                                       (list 'warn (funcall say (format "Vim keys need %s (%s)" engine
+                                                                        (if (eq module-status 'missing-packages) "not installed"
+                                                                          "installed, not running: restart drgnx")))
+                                             "drgnx sync, then restart — or Keyboard Profile… to choose another"))
+                                      ((plist-get modal :pending) (list 'info (funcall say "Vim waits for drgnx sync") "drgnx sync"))
+                                      ((null engine) (list 'ok "no modal engine needed" nil))
+                                      ((and m-spc (string-search "GNOME" (or (plist-get f :desktop) "")))
+                                       (list 'info (funcall say "Alt+Space opens GNOME's window menu before drgnx sees it: Settings → Keyboard → Keyboard Shortcuts → Windows")
+                                             nil))
+                                      (t (list 'ok (funcall say (format "Vim keys: %s running" engine)) nil))))))
 
 (dolist (tool '((ui-mutter :mutter "mutter" "the headless compositor of drgnx test --ui" linux)
                 (ui-dbus :dbus-run-session "dbus-run-session" "a private D-Bus per test session" linux)
