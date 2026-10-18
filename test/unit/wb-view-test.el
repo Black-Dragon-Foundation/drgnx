@@ -54,6 +54,7 @@ with ARGS), attached at `point-min', and an empty model."
   (drgnx-view-test--with (v :render #'drgnx-view-test--render)
     (drgnx-view-append v '(a b c))
     (should (drgnx-view-pending-p v))
+    (should (equal "" (drgnx-view-test--text v)))      ; a mark draws nothing
     (should (= 3 (drgnx-view-draw-now v)))
     (should (equal "a: \nb: \nc: \n" (drgnx-view-test--text v)))
     (should-not (drgnx-view-pending-p v))
@@ -211,6 +212,23 @@ fresh render and the order is the one a plain list gets from the same marks."
           (should (equal (drgnx-view-test--expected v) (drgnx-view-test--text v))))
         (should (> (drgnx-view-test--stat v :rows-grown) 0))))))
 
+(defun drgnx-view-test--append-one-alloc (rows)
+  "What appending and drawing one row allocates, on a view of ROWS rows."
+  (drgnx-view-test--with (v :render #'drgnx-view-test--render :key-test 'eq)
+    (drgnx-view-append v (number-sequence 1 rows))
+    (drgnx-view-draw-now v)
+    (let ((keys (drgnx-view--keys v)) (next rows))
+      (prog1 (drgnx-view-test--alloc (lambda () (drgnx-view-append v (list (setq next (1+ next))))
+                                       (drgnx-view-draw-now v)))
+        (should (eq keys (drgnx-view--keys v)))       ; drawn in place: no fresh vectors
+        (should (= (+ rows 5) (drgnx-view-row-count v)))
+        (drgnx-view-test--ok v)))))
+
+(ert-deftest drgnx-view/an-append-stays-in-place ()
+  "Appending one row allocates the same on 1,000 rows as on 4,000: the vectors are not copied (review I2)."
+  (let ((small (drgnx-view-test--append-one-alloc 1000)) (big (drgnx-view-test--append-one-alloc 4000)))
+    (should (< (abs (- big small)) 64))))
+
 ;;;; Sync
 
 (ert-deftest drgnx-view/sync-rows-marks-appends-removals-and-dirty ()
@@ -290,11 +308,15 @@ fresh render and the order is the one a plain list gets from the same marks."
           (goto-char 3)
           (insert "x")                          ; above START
           (should (equal "hexader\na: \nb: \n" (buffer-string)))
-          (goto-char (1+ (drgnx-view-row-start v 'b)))
-          (should-error (insert "y") :type 'text-read-only)
-          (goto-char (point-max))
-          (insert "z")                          ; after the last row
-          (should (equal "hexader\na: \nb: \nz" (buffer-string)))))
+          ;; at START, between two rows, inside a row and after the last row: refused
+          (dolist (pos (list (drgnx-view-row-start v 'a) (drgnx-view-row-start v 'b)
+                             (1+ (drgnx-view-row-start v 'b)) (point-max)))
+            (goto-char pos)
+            (should-error (insert "y") :type 'text-read-only))
+          (goto-char (1- (drgnx-view-row-start v 'a)))
+          (insert "z")                          ; just above START
+          (should (equal "hexaderz\na: \nb: \n" (buffer-string)))
+          (should-not (drgnx-view--check v))))
       (with-temp-buffer
         (drgnx-view-attach 'drgnx-view-test-t)
         (should buffer-read-only)))))

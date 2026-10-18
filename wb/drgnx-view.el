@@ -6,18 +6,23 @@
 ;; A view draws a buffer as rows, one per KEY, from START (its only marker) to the end of the buffer.  A view type
 ;; (`drgnx-view-define') says how a row is rendered (RENDER), how it grows at its end (GROW) and how the view pulls
 ;; changes from its model (SYNC).  Code that changes the model only MARKS the view: a mark is a hash put or a queue
-;; push, cheap enough for a process filter.  The draw applies the marks in buffer order, with one running position:
-;; a dirty row is deleted and inserted again at its integer start, a growing row gets only its new characters,
-;; removed rows are deleted one by one.  Nothing is applied by erasing a region, undo is off, and no row has a
-;; marker: row starts are integers, relative to START, shifted in one pass.
+;; push plus a timer arm, cheap enough for a process filter.  The draw runs from that timer, only while a window on
+;; a visible frame shows the buffer, in slices that all views share (`drgnx-view-slice' per gap, stopped by input),
+;; visible rows first.  A draw first folds the structural marks into the row vectors (no buffer change), then works
+;; row by row: a dirty row is deleted and inserted again at its integer start, a growing row gets only its new
+;; characters, a new row is inserted, a removed row deleted.  Nothing is applied by erasing a region, undo is off,
+;; and no row has a marker: row starts are integers, relative to START.  Window start and point stay on their row.
 ;;
 ;; `drgnx-view-draw-now' draws at once (for `g' and tests).  See docs/develop/core.md, "Views".
 
 ;;; Code:
 (require 'cl-lib)
 (require 'drgnx-modules-record)
+(require 'drgnx-timer)
+(require 'drgnx-wb)
 
 (defvar drgnx-signal-errors)            ; drgnx-signal, when loaded
+(declare-function drgnx-gc-gap "drgnx-gc" ())
 
 (defcustom drgnx-view-slice 0.004
   "The longest slice, in seconds, a view type may ask for: all views together draw at most this long per gap."
@@ -39,15 +44,35 @@
 (defconst drgnx-view--all (make-symbol "all")
   "The key `drgnx-view-dirty' stores in the dirty table for KEYS t: every row.")
 
-(defconst drgnx-view--read-only '(read-only t)
-  "Text properties of a drawn row's text when the buffer is not read-only (see `drgnx-view--protect').")
-
-(defconst drgnx-view--last-char '(rear-nonsticky (read-only))
-  "Text properties of a drawn row's last character: text typed after the row does not inherit `read-only'.")
+(defconst drgnx-view--read-only '(read-only t front-sticky (read-only))
+  "Text properties of a drawn row when the buffer is not read-only: an insertion at the row's start, inside it or
+right after it would inherit `read-only' and is refused (see `drgnx-view--protect').")
 
 (defconst drgnx-view--stat-names
   [:rows-drawn :rows-grown :appended :removed :slices :max-slice-rows :full-draws :stale-skips]
   "The names of the counters in a view's `stats' vector, in order.")
+
+;;;; The frame budget: one deadline for every view in a timer pass
+
+(defvar drgnx-view--deadline nil
+  "When the slice now running ends (`drgnx-timer-now' time).  A view whose draw starts before it shares it.")
+
+(defvar drgnx-view--slicing nil "Non-nil while a sliced draw runs: `drgnx-view--go-p' checks the deadline.")
+(defvar drgnx-view--rows 0 "Rows the draw now running has drawn, grown or removed.")
+(defvar drgnx-view--stopped nil "Non-nil once the draw now running stopped at its deadline or on input.")
+(defvar drgnx-view--changed nil "Keys the draw now running drew or grew, newest first (for PATCHED).")
+(defvar drgnx-view--syncing nil "The view whose SYNC runs now: its marks need no timer, the draw takes them.")
+
+(defun drgnx-view--go-p ()
+  "Non-nil if the draw now running may work on one more row (and count it).  Every `drgnx-view--check-every' rows a
+sliced draw reads the clock and `input-pending-p': past the deadline or with input waiting it stops.  A slice always
+draws its first row."
+  (cond (drgnx-view--stopped nil)
+        ((and drgnx-view--slicing (> drgnx-view--rows 0) (zerop (% drgnx-view--rows drgnx-view--check-every))
+              (or (>= (drgnx-timer-now) drgnx-view--deadline) (input-pending-p)))
+         (setq drgnx-view--stopped t)
+         nil)
+        (t (setq drgnx-view--rows (1+ drgnx-view--rows)) t)))
 
 ;;;; Types
 
@@ -61,9 +86,10 @@ RENDER (KEY): the row's text, a string ending in a newline, or (BODY . SUFFIX) s
 GROW (KEY BODY-LENGTH): the characters to add at the end of the row's BODY, or nil to render the row again.
 SYNC (VIEW): called at draw time after `drgnx-view-touch', to mark what changed (`drgnx-view-sync-rows').
 SLICE: nil (draw all at once) or at most `drgnx-view-slice' seconds.  DELAY: the throttle (nil:
-`drgnx-view-delay').  FOLLOW-TAIL: a window at the end stays at the end.  KEY-TEST: `eq' or `equal' (the
-default).  PATCHED (VIEW KEYS): called after a draw with the keys whose rows it drew or grew.
-The undo `\"view type NAME\"' removes the definition while it is still this one."
+`drgnx-view-delay'; 0: draw at the next timer pass).  FOLLOW-TAIL: a window at the end stays at the end.
+KEY-TEST: `eq' or `equal' (the default).  PATCHED (VIEW KEYS): called after a draw with the keys whose rows it drew
+or grew.  The undo `\"view type NAME\"' removes the definition while it is still this one; views of a removed type
+stop drawing."
   (unless (and name (symbolp name)) (signal 'wrong-type-argument (list 'symbolp name)))
   (unless (functionp render) (error "View type %s: RENDER is not a function: %S" name render))
   (unless (or (null slice) (and (numberp slice) (> slice 0) (<= slice drgnx-view-slice)))
@@ -77,32 +103,38 @@ The undo `\"view type NAME\"' removes the definition while it is still this one.
     name))
 
 (defun drgnx-view--undefine (name &optional type)
-  "Remove the view type NAME, when TYPE is nil or still its definition.  Attached views keep drawing."
+  "Remove the view type NAME, when TYPE is nil or still its definition.  Its views stop drawing."
   (when (or (null type) (eq (alist-get name drgnx-view--types) type))
     (setq drgnx-view--types (assq-delete-all name drgnx-view--types))))
 
 ;;;; The record
 
 (cl-defstruct (drgnx-view (:constructor drgnx-view--make) (:copier nil) (:conc-name drgnx-view--))
-  "A view attached to a buffer.  Row I of N is `keys'[I], from START + `starts'[I] to START + `starts'[I+1]."
+  "A view attached to a buffer.  Entry I of N is `keys'[I], from START + `starts'[I] to START + `starts'[I+1].
+An entry is a row, or, between the slices of a draw, a row still to insert (empty, `work' `new'), a row still to
+delete (`work' `gone', not in the index) or a deleted one (empty, not in the index)."
   buffer type
   start                                 ; the only marker: where the rows begin (insertion type nil)
-  keys starts                           ; vectors grown by doubling: N keys and N+1 starts
-  index                                 ; KEY → row number (the type's KEY-TEST)
+  keys starts work                      ; vectors grown by doubling: N keys, N+1 starts, N work marks
+  index                                 ; KEY → entry number (the type's KEY-TEST), for rows and rows to insert
   dirty                                 ; KEY → `patch' or `grow'; `drgnx-view--all' → `patch' for every row
   pending                               ; structural changes (OP KEYS AFTER), newest first
   bodies                                ; KEY → its BODY's length, for rows rendered as (BODY . SUFFIX)
-  stale shown
+  stale                                 ; non-nil: a draw found the view hidden; showing it draws it
+  shown                                 ; the last answer of `drgnx-view-shown-p'
   stats                                 ; the counters of `drgnx-view--stat-names'
   (n 0) touched
   error                                 ; the error message already recorded for this view
-  places                                ; window places kept across a draw
-  sigs)                                 ; KEY → its signature at the last `drgnx-view-sync-rows'
+  sigs                                  ; KEY → its signature at the last `drgnx-view-sync-rows'
+  (empty 0)                             ; how many entries are empty (to insert, or deleted)
+  cut)                                  ; non-nil: the last draw stopped with work left in `work'
 
 (cl-defun drgnx-view-attach (name &key buffer start)
   "Attach a view of type NAME to BUFFER (default: the current buffer), with rows from START (default `point-min').
-Undo is turned off.  The rows are read-only: the whole buffer when START is `point-min', else each row (text above
-START and after the last row stays editable).  Attaching again removes the old view's rows first.  Returns the view."
+START to the end of the buffer belongs to the view: text there that is not a row is deleted at the first draw.
+Attach after the major mode (it kills local variables).  Undo is turned off.  The rows are read-only: the whole
+buffer when START is `point-min', else each row, so text above START stays editable.  Attaching again removes the
+old view's rows first.  Returns the view."
   (let ((type (or (alist-get name drgnx-view--types) (error "No view type %s" name))))
     (with-current-buffer (or buffer (current-buffer))
       (save-restriction
@@ -113,11 +145,13 @@ START and after the last row stays editable).  Attaching again removes the old v
           (setq-local drgnx-view
                       (drgnx-view--make :buffer (current-buffer) :type type :start start
                                         :keys (make-vector 16 nil) :starts (make-vector 17 0)
+                                        :work (make-vector 16 nil)
                                         :index (make-hash-table :test test) :dirty (make-hash-table :test test)
                                         :bodies (make-hash-table :test test) :sigs (make-hash-table :test test)
                                         :stats (make-vector (length drgnx-view--stat-names) 0)))
           (setq buffer-undo-list t)
           (when (= start (point-min)) (setq buffer-read-only t))
+          (add-hook 'window-buffer-change-functions #'drgnx-view--buffer-shown nil t)
           drgnx-view)))))
 
 (defun drgnx-view--remove-rows (view)
@@ -131,11 +165,59 @@ START and after the last row stays editable).  Attaching again removes the old v
       (delete-region s (point-max)))       ; the starts are wrong (a foreign edit): no row can be found
     (set-marker (drgnx-view--start view) nil)))
 
+;;;; Visibility (before the store: live windows on visible frames)
+
+(defun drgnx-view--tree-shows-p (window buffer)
+  "Non-nil if WINDOW, its siblings after it or their children show BUFFER.  Allocates nothing."
+  (let ((found nil))
+    (while (and window (not found))
+      (setq found (if (window-live-p window)
+                      (eq (window-buffer window) buffer)
+                    (drgnx-view--tree-shows-p (window-child window) buffer))
+            window (window-next-sibling window)))
+    found))
+
+(defun drgnx-view--frame-shows-p (frame buffer)
+  (and (eq (frame-visible-p frame) t) (drgnx-view--tree-shows-p (frame-root-window frame) buffer)))
+
+(defun drgnx-view-shown-p (view)
+  "Non-nil if a window on a visible frame shows VIEW's buffer, as `get-buffer-window' with `visible' answers, without
+its window list: it walks the frames `next-frame' reaches from the selected one (that terminal's) and their window
+trees, and allocates nothing.  The answer is kept in the view's `shown'."
+  (let* ((buffer (drgnx-view--buffer view)) (start (selected-frame))
+         (found (drgnx-view--frame-shows-p start buffer)))
+    (unless found
+      (let* ((first (next-frame start t)) (frame first))
+        (while (and (not found) (not (eq frame start))
+                    (progn (setq found (drgnx-view--frame-shows-p frame buffer))
+                           (setq frame (next-frame frame t))
+                           (not (eq frame first)))))))
+    (setf (drgnx-view--shown view) found)))
+
+(defun drgnx-view--buffer-shown (window)
+  "On the view buffer's own `window-buffer-change-functions': WINDOW now shows it.  A stale view (a draw found it
+hidden) arms its draw."
+  (let ((view (and (window-live-p window) (buffer-local-value 'drgnx-view (window-buffer window)))))
+    (when (and (drgnx-view-p view) (drgnx-view--stale view) (drgnx-view-shown-p view))
+      (drgnx-view--arm view))))
+
 ;;;; Marks: a hash put or a queue push, then `drgnx-view--arm'
 
-(defun drgnx-view--arm (_view)
-  "Arm VIEW's draw.  Nothing yet: views draw with `drgnx-view-draw-now'."
-  nil)
+(defun drgnx-view--arm (view)
+  "Arm VIEW's draw: the timer `(drgnx-view . BUFFER)', DELAY after the first mark of a burst, at most once per DELAY
+\(a DELAY of 0: at the next timer pass).  Nothing while VIEW's SYNC runs (that draw takes the marks), for a view
+no longer attached, or for a stale view that is still hidden: showing it arms the draw."
+  (let ((buffer (drgnx-view--buffer view)))
+    (when (and (not (eq view drgnx-view--syncing))
+               (buffer-live-p buffer) (eq view (buffer-local-value 'drgnx-view buffer))
+               (or (not (drgnx-view--stale view)) (drgnx-view-shown-p view)))
+      (setf (drgnx-view--stale view) nil)
+      (let ((delay (or (drgnx-view-type-delay (drgnx-view--type view)) drgnx-view-delay)))
+        (if (> delay 0)
+            (drgnx-timer-soon (cons 'drgnx-view buffer) delay #'drgnx-view--draw-buffer
+                              :args (list buffer) :min-interval delay :owner buffer)
+          (drgnx-timer-soon (cons 'drgnx-view buffer) 0 #'drgnx-view--draw-buffer
+                            :args (list buffer) :owner buffer))))))
 
 (defun drgnx-view--queue (view op keys after)
   (push (list op keys after) (drgnx-view--pending view))
@@ -269,21 +351,29 @@ An AFTER that is neither appends KEYS.  A key already shown or pending is left w
         (funcall fn key nil 'new)
         (when group (setq stack (append (car group) stack)))))))
 
+(defun drgnx-view--ghost-p (view i)
+  "Non-nil if VIEW's entry I is not a row of the model: a row still to delete, or a deleted one."
+  (let ((w (aref (drgnx-view--work view) i)) (starts (drgnx-view--starts view)))
+    (or (eq w 'gone) (and (= (aref starts i) (aref starts (1+ i))) (not (eq w 'new))))))
+
 (defun drgnx-view--walk (view plan fn)
-  "Call FN (KEY I STATE) for each row of VIEW after PLAN, in buffer order: STATE nil for drawn row I that stays,
-`gone' for drawn row I that goes, `new' (I nil) for a new row.  PLAN nil: every drawn row stays."
-  (let ((keys (drgnx-view--keys view)) (n (drgnx-view--n view)) (i 0))
-    (if (null plan)
-        (while (< i n) (funcall fn (aref keys i) i nil) (setq i (1+ i)))
-      (let ((all (drgnx-view--plan-all-gone plan)) (gone (drgnx-view--plan-gone plan))
-            (after-old (drgnx-view--plan-after-old plan)))
-        (drgnx-view--walk-group plan (drgnx-view--plan-first plan) fn)
-        (while (< i n)
-          (let* ((key (aref keys i)) (group (gethash key after-old)))
-            (funcall fn key i (and (or all (gethash key gone)) 'gone))
-            (when group (drgnx-view--walk-group plan group fn)))
-          (setq i (1+ i)))
-        (drgnx-view--walk-group plan (drgnx-view--plan-end plan) fn)))))
+  "Call FN (KEY I STATE) for each entry of VIEW after PLAN, in buffer order: STATE nil for entry I that stays,
+`gone' for entry I that PLAN removes, `ghost' for entry I that is no row of the model (`drgnx-view--ghost-p'), `new'
+\(I nil) for a new row.  PLAN nil: every entry stays."
+  (let ((keys (drgnx-view--keys view)) (n (drgnx-view--n view)) (i 0)
+        (all (and plan (drgnx-view--plan-all-gone plan)))
+        (gone (and plan (drgnx-view--plan-gone plan)))
+        (after-old (and plan (drgnx-view--plan-after-old plan))))
+    (when plan (drgnx-view--walk-group plan (drgnx-view--plan-first plan) fn))
+    (while (< i n)
+      (let ((key (aref keys i)))
+        (if (drgnx-view--ghost-p view i)
+            (funcall fn key i 'ghost)
+          (funcall fn key i (and plan (or all (gethash key gone)) 'gone))
+          (when plan
+            (let ((group (gethash key after-old))) (when group (drgnx-view--walk-group plan group fn))))))
+      (setq i (1+ i)))
+    (when plan (drgnx-view--walk-group plan (drgnx-view--plan-end plan) fn))))
 
 ;;;; Rows: render, insert, grow
 
@@ -296,8 +386,8 @@ An AFTER that is neither appends KEYS.  A key already shown or pending is left w
       (setq drgnx-signal-errors (take 20 drgnx-signal-errors)))))
 
 (defun drgnx-view--error-text (key message)
-  "The row drawn for KEY when its RENDER or GROW signalled MESSAGE."
-  (propertize (format "⚠ %s: %s\n" key message) 'face 'error))
+  "The row drawn for KEY when its RENDER or GROW signalled MESSAGE (KEY printed to 60 characters at most)."
+  (propertize (format "⚠ %.60s: %s\n" key message) 'face 'error))
 
 (defun drgnx-view--newline-end-p (string)
   (let ((n (length string))) (and (> n 0) (eq (aref string (1- n)) ?\n))))
@@ -320,12 +410,11 @@ An AFTER that is neither appends KEYS.  A key already shown or pending is left w
         (drgnx-view--record view message)
         (drgnx-view--error-text key message)))))
 
-(defun drgnx-view--protect (beg end row-end)
-  "Make BEG..END of a row ending at ROW-END read-only, unless the whole buffer is.  Only the row's last character is
-rear-nonsticky: an insertion inside the row would inherit `read-only' and is refused, one after the row is not."
+(defun drgnx-view--protect (beg end)
+  "Make BEG..END of a row read-only and front-sticky, unless the whole buffer is read-only: an insertion at the
+row's start, inside it or right after it is refused.  Text above START stays editable."
   (unless buffer-read-only
-    (add-text-properties beg end drgnx-view--read-only)
-    (add-text-properties (1- row-end) row-end drgnx-view--last-char)))
+    (add-text-properties beg end drgnx-view--read-only)))
 
 (defun drgnx-view--put-row (view key pos text)
   "Insert TEXT, KEY's row (a string or (BODY . SUFFIX)), at POS; note its body; return its length."
@@ -335,7 +424,7 @@ rear-nonsticky: an insertion inside the row would inherit `read-only' and is ref
              (puthash key (length (car text)) (drgnx-view--bodies view)))
     (insert text)
     (remhash key (drgnx-view--bodies view)))
-  (drgnx-view--protect pos (point) (point))
+  (drgnx-view--protect pos (point))
   (cl-incf (aref (drgnx-view--stats view) 0))
   (- (point) pos))
 
@@ -352,7 +441,7 @@ A GROW that signals or returns a non-string draws the error row."
                   ((equal text "") len)
                   (t (goto-char (+ pos body))
                      (insert text)
-                     (drgnx-view--protect (+ pos body) (point) (+ pos len (length text)))
+                     (drgnx-view--protect (+ pos body) (point))
                      (puthash key (+ body (length text)) (drgnx-view--bodies view))
                      (cl-incf (aref (drgnx-view--stats view) 1))
                      (+ len (length text)))))
@@ -362,7 +451,7 @@ A GROW that signals or returns a non-string draws the error row."
            (delete-region pos (+ pos len))
            (drgnx-view--put-row view key pos (drgnx-view--error-text key message))))))))
 
-;;;; The pass
+;;;; The fold: structural marks into the vectors, without touching the buffer
 
 (defun drgnx-view--forget-gone (view plan)
   "Drop the rows PLAN removes from VIEW's index and bodies, and their signatures unless they come back."
@@ -376,94 +465,363 @@ A GROW that signals or returns a non-string draws the error row."
                  (unless (gethash key new) (remhash key sigs)))
                (drgnx-view--plan-gone plan)))))
 
-(defun drgnx-view--self-check (view)
-  "When VIEW's region (START to the end of the buffer) is not as long as its rows, reset it: delete the region and
-draw every row again, before the pending changes.  In VIEW's buffer, widened."
-  (let ((s (marker-position (drgnx-view--start view))) (n (drgnx-view--n view)))
-    (unless (= (- (point-max) s) (aref (drgnx-view--starts view) n))
-      (let ((keys (drgnx-view--keys view)) (i n) old)
-        (while (> i 0) (setq i (1- i)) (push (aref keys i) old))
-        (delete-region s (point-max))
-        (setf (drgnx-view--n view) 0)
-        (aset (drgnx-view--starts view) 0 0)
-        (clrhash (drgnx-view--index view))
-        (clrhash (drgnx-view--bodies view))
-        (setf (drgnx-view--pending view) (nconc (drgnx-view--pending view) (list (list 'append old nil))))
-        (cl-incf (aref (drgnx-view--stats view) 6))))))
+(defun drgnx-view--only-at-end-p (plan)
+  "Non-nil if PLAN puts no new row before a row that stays: only appends and removals."
+  (and (null (car (drgnx-view--plan-first plan)))
+       (catch 'no
+         (maphash (lambda (_ box) (when (car box) (throw 'no nil))) (drgnx-view--plan-after-old plan))
+         t)))
 
-(defun drgnx-view--pass (view)
-  "Apply VIEW's pending changes and dirty rows in buffer order, with one running position; return the rows
-drawn, grown or removed.  In VIEW's buffer, widened, with `inhibit-read-only'."
-  (let ((plan (drgnx-view--plan-pending view)) (dirty (drgnx-view--dirty view)))
-    (if (and (null plan) (zerop (hash-table-count dirty)))
-        0
-      (let* ((stats (drgnx-view--stats view))
-             (before (+ (aref stats 0) (aref stats 1) (aref stats 3)))
-             (all (gethash drgnx-view--all dirty))
-             (index (drgnx-view--index view))
-             (ostarts (drgnx-view--starts view))
-             (nkeys (drgnx-view--keys view)) (nstarts ostarts)   ; in place when no row comes or goes
-             (s (marker-position (drgnx-view--start view)))
-             (patched (drgnx-view-type-patched (drgnx-view--type view)))
-             (here 0) (o 0) changed)
-        (when plan
-          (drgnx-view--forget-gone view plan)
-          (let ((cap (length nkeys))
-                (need (+ (drgnx-view--n view) (hash-table-count (drgnx-view--plan-new plan)) 1)))
-            (while (< cap need) (setq cap (* 2 cap)))
-            (setq nkeys (make-vector cap nil) nstarts (make-vector (1+ cap) 0))))
+(defun drgnx-view--fold (view)
+  "Apply VIEW's pending structural changes to its vectors; the buffer does not change.  A row that goes stays as an
+entry marked `gone' (a slice deletes it), a new row is an empty entry marked `new' (a slice inserts it), and empty
+entries of rows deleted earlier are dropped.  The vectors are rewritten in place when new rows only go at the end
+\(appends, removals), grown by doubling only when full; otherwise fresh ones are made."
+  (let ((plan (drgnx-view--plan-pending view)))
+    (when plan
+      (drgnx-view--forget-gone view plan)
+      (setf (drgnx-view--pending view) nil)
+      (let* ((okeys (drgnx-view--keys view)) (ostarts (drgnx-view--starts view)) (owork (drgnx-view--work view))
+             (index (drgnx-view--index view)) (n (drgnx-view--n view))
+             (cap (length okeys)) (need (+ n (hash-table-count (drgnx-view--plan-new plan)) 1))
+             nkeys nstarts nwork (here 0) (o 0) (empty 0))
+        (while (< cap need) (setq cap (* 2 cap)))
+        (if (and (= cap (length okeys)) (drgnx-view--only-at-end-p plan))
+            (setq nkeys okeys nstarts ostarts nwork owork)     ; o <= i throughout: no unread entry is overwritten
+          (setq nkeys (make-vector cap nil) nstarts (make-vector (1+ cap) 0) nwork (make-vector cap nil)))
         (drgnx-view--walk
          view plan
          (lambda (key i state)
-           ;; old row I's length is read before its start is overwritten (in place, nstarts is ostarts)
-           (let ((len (and i (- (aref ostarts (1+ i)) (aref ostarts i)))) (pos (+ s here)))
-             (if (eq state 'gone)
-                 (progn (delete-region pos (+ pos len))
-                        (cl-incf (aref stats 3)))
-               (let ((mark (cond ((null i) 'new) (all 'patch) (t (gethash key dirty)))))
-                 (pcase mark
-                   ('new (setq len (drgnx-view--put-row view key pos (drgnx-view--render view key)))
-                         (cl-incf (aref stats 2)))
-                   ('patch (delete-region pos (+ pos len))
-                           (setq len (drgnx-view--put-row view key pos (drgnx-view--render view key))))
-                   ('grow (setq len (or (drgnx-view--grow-row view key pos len)
-                                        (progn (delete-region pos (+ pos len))
-                                               (drgnx-view--put-row view key pos
-                                                                    (drgnx-view--render view key)))))))
-                 (when (and mark patched) (push key changed)))
+           (let ((len (if i (- (aref ostarts (1+ i)) (aref ostarts i)) 0)) (mark nil) (keep t))
+             (cond ((eq state 'new) (setq mark 'new) (puthash key o index))
+                   ((memq state '(gone ghost)) (if (> len 0) (setq mark 'gone) (setq keep nil)))
+                   (t (setq mark (aref owork i))
+                      (unless (eql i o) (puthash key o index))))
+             (when keep
                (aset nkeys o key)
                (aset nstarts o here)
-               (unless (eql i o) (puthash key o index))
+               (aset nwork o mark)
+               (when (= len 0) (setq empty (1+ empty)))
                (setq here (+ here len) o (1+ o))))))
         (aset nstarts o here)
+        (when (eq nkeys okeys) (drgnx-view--clear-entries nkeys nwork o n))
         (setf (drgnx-view--n view) o (drgnx-view--keys view) nkeys (drgnx-view--starts view) nstarts
-              (drgnx-view--pending view) nil)
-        (clrhash dirty)
-        (set-buffer-modified-p nil)
-        (when changed
-          (condition-case err (funcall patched view (nreverse changed))
-            (error (drgnx-view--record view (format "PATCHED: %s" (error-message-string err))))))
-        (- (+ (aref stats 0) (aref stats 1) (aref stats 3)) before)))))
+              (drgnx-view--work view) nwork (drgnx-view--empty view) empty)))))
+
+(defun drgnx-view--clear-entries (keys work from to)
+  "Clear KEYS and WORK from FROM to TO (exclusive), so dropped entries hold no key."
+  (while (< from to) (aset keys from nil) (aset work from nil) (setq from (1+ from))))
+
+(defun drgnx-view--take-dirty (view)
+  "Move VIEW's dirty marks onto its entries' work marks (`patch' wins over `grow'; a row to insert or delete keeps
+its mark) and empty the dirty table.  Marks of keys with no row are dropped."
+  (let ((dirty (drgnx-view--dirty view)))
+    (when (> (hash-table-count dirty) 0)
+      (let ((work (drgnx-view--work view)) (index (drgnx-view--index view)) (starts (drgnx-view--starts view)))
+        (when (gethash drgnx-view--all dirty)
+          (dotimes (i (drgnx-view--n view))
+            (when (and (memq (aref work i) '(nil grow)) (< (aref starts i) (aref starts (1+ i))))
+              (aset work i 'patch))))
+        (maphash (lambda (key mark)
+                   (let ((i (gethash key index)))
+                     (when i
+                       (let ((w (aref work i)))
+                         (cond ((null w) (aset work i mark))
+                               ((and (eq w 'grow) (eq mark 'patch)) (aset work i 'patch)))))))
+                 dirty)
+        (clrhash dirty)))))
+
+;;;; The sweep: row work in buffer order, one running shift
+
+(defun drgnx-view--do-row (view key mark pos len)
+  "Do the work MARK on KEY's entry at POS, LEN long; return its new length."
+  (let ((stats (drgnx-view--stats view)) (new nil))
+    (pcase mark
+      ('gone (delete-region pos (+ pos len))
+             (cl-incf (aref stats 3))
+             (cl-incf (drgnx-view--empty view))
+             (setq new 0))
+      ('new (setq new (drgnx-view--put-row view key pos (drgnx-view--render view key)))
+            (cl-incf (aref stats 2))
+            (cl-decf (drgnx-view--empty view)))
+      ('patch (delete-region pos (+ pos len))
+              (setq new (drgnx-view--put-row view key pos (drgnx-view--render view key))))
+      (_ (setq new (or (drgnx-view--grow-row view key pos len)
+                       (progn (delete-region pos (+ pos len))
+                              (drgnx-view--put-row view key pos (drgnx-view--render view key)))))))
+    (when (and (not (eq mark 'gone)) (drgnx-view-type-patched (drgnx-view--type view)))
+      (push key drgnx-view--changed))
+    new))
+
+(defun drgnx-view--sweep (view ranges)
+  "Do the work marks of VIEW's entries in RANGES, sorted disjoint (FROM . TO) entry ranges, or t for every entry, in
+buffer order while `drgnx-view--go-p' allows; shift the starts after each changed row.  In VIEW's buffer."
+  (let* ((keys (drgnx-view--keys view)) (starts (drgnx-view--starts view)) (work (drgnx-view--work view))
+         (n (drgnx-view--n view)) (s (marker-position (drgnx-view--start view)))
+         (all (eq ranges t)) (i (if all 0 (car (car ranges)))) (delta 0))
+    (while (< i n)
+      (unless all
+        (while (and ranges (>= i (cdr (car ranges)))) (setq ranges (cdr ranges)))
+        (when (and ranges (= delta 0) (< i (car (car ranges)))) (setq i (car (car ranges)))))
+      (if (and (= delta 0) (or drgnx-view--stopped (and (not all) (null ranges))))
+          (setq i n)                    ; nothing left to do or to shift
+        (let ((beg (+ (aref starts i) delta)) (mark (aref work i)))
+          (aset starts i beg)
+          (when (and mark (or all (and ranges (>= i (car (car ranges))))) (drgnx-view--go-p))
+            (let* ((len (- (+ (aref starts (1+ i)) delta) beg))
+                   (new (drgnx-view--do-row view (aref keys i) mark (+ s beg) len)))
+              (aset work i nil)
+              (setq delta (+ delta (- new len)))))
+          (setq i (1+ i)))))
+    (aset starts n (+ (aref starts n) delta))))
+
+(defun drgnx-view--compact (view)
+  "Drop VIEW's empty entries (rows deleted), in place, and point the index at the entries that moved."
+  (let ((keys (drgnx-view--keys view)) (starts (drgnx-view--starts view)) (work (drgnx-view--work view))
+        (index (drgnx-view--index view)) (n (drgnx-view--n view)) (i 0) (o 0))
+    (while (< i n)
+      (when (< (aref starts i) (aref starts (1+ i)))
+        (unless (= i o)
+          (let ((key (aref keys i)))
+            (aset keys o key) (aset starts o (aref starts i)) (aset work o (aref work i))
+            (puthash key o index)))
+        (setq o (1+ o)))
+      (setq i (1+ i)))
+    (aset starts o (aref starts n))
+    (drgnx-view--clear-entries keys work o n)
+    (setf (drgnx-view--n view) o (drgnx-view--empty view) 0)))
+
+(defun drgnx-view--visible-ranges (view)
+  "The entries VIEW's windows on visible frames show, as sorted disjoint (FROM . TO) ranges: from the entry at the
+window's start, `window-body-height' entries."
+  (let ((s (marker-position (drgnx-view--start view))) (n (drgnx-view--n view)) ranges out)
+    (when (> n 0)
+      (dolist (w (get-buffer-window-list (drgnx-view--buffer view) nil 'visible))
+        (let* ((rel (- (window-start w) s)) (i (if (< rel 0) 0 (drgnx-view--entry-at view rel))))
+          (when i (push (cons i (+ i (window-body-height w))) ranges))))
+      (dolist (r (sort ranges (lambda (a b) (< (car a) (car b)))))
+        (if (and out (<= (car r) (cdr (car out))))
+            (setcdr (car out) (max (cdr (car out)) (cdr r)))
+          (push (cons (car r) (cdr r)) out))))
+    (nreverse out)))
+
+;;;; Places: window start and point stay on their row
+
+(defun drgnx-view--live-p (view i)
+  (let ((starts (drgnx-view--starts view))) (< (aref starts i) (aref starts (1+ i)))))
+
+(defun drgnx-view--live-after (view i)
+  "The first non-empty entry of VIEW from I on, or nil."
+  (let ((n (drgnx-view--n view)))
+    (while (and (< i n) (not (drgnx-view--live-p view i))) (setq i (1+ i)))
+    (and (< i n) i)))
+
+(defun drgnx-view--live-before (view i)
+  "The last non-empty entry of VIEW before I, or nil."
+  (setq i (1- i))
+  (while (and (>= i 0) (not (drgnx-view--live-p view i))) (setq i (1- i)))
+  (and (>= i 0) i))
+
+(defun drgnx-view--row-place (view pos follow)
+  "POS as a place in VIEW: [ENTRY OFFSET TAG POS].  TAG nil: OFFSET into ENTRY; `abs': POS itself (above START, or
+an empty view); `tail': the end of the buffer (FOLLOW and POS at the end); `row-end': the end of ENTRY (POS at
+the end, not FOLLOW)."
+  (let* ((rel (- pos (marker-position (drgnx-view--start view)))) (starts (drgnx-view--starts view))
+         (n (drgnx-view--n view)))
+    (cond ((< rel 0) (vector nil 0 'abs pos))
+          ((< rel (aref starts n))
+           (let ((i (drgnx-view--entry-at view rel))) (vector i (- rel (aref starts i)) nil pos)))
+          (follow (vector nil 0 'tail pos))
+          (t (let ((i (drgnx-view--live-before view n)))
+               (if i (vector i 0 'row-end pos) (vector nil 0 'abs pos)))))))
+
+(defun drgnx-view--row-place-pos (view place)
+  "Where PLACE (`drgnx-view--row-place') is now.  An entry that was deleted falls to the next non-empty one, or to
+the previous one at the end."
+  (let ((tag (aref place 2)) (s (marker-position (drgnx-view--start view))) (starts (drgnx-view--starts view)))
+    (cond ((eq tag 'abs) (max (point-min) (min (aref place 3) (point-max))))
+          ((eq tag 'tail) (point-max))
+          (t (let* ((i (aref place 0))
+                    (j (if (drgnx-view--live-p view i) i
+                         (or (drgnx-view--live-after view (1+ i)) (drgnx-view--live-before view i)))))
+               (cond ((null j) s)
+                     ((not (eql j i)) (+ s (aref starts j)))
+                     ((eq tag 'row-end) (+ s (aref starts (1+ i))))
+                     (t (+ s (aref starts i)
+                           (min (aref place 1) (- (aref starts (1+ i)) (aref starts i) 1))))))))))
+
+(defun drgnx-view--save-row-places (view)
+  "The buffer's point and, for each window showing the buffer (all frames), its start and point, as places:
+\(POINT-PLACE (WINDOW START-PLACE POINT-PLACE)...).  In VIEW's buffer."
+  (let ((follow (drgnx-view-type-follow-tail (drgnx-view--type view))) windows)
+    (dolist (w (get-buffer-window-list (current-buffer) nil t))
+      (push (list w (drgnx-view--row-place view (window-start w) nil)
+                  (drgnx-view--row-place view (window-point w) follow))
+            windows))
+    (cons (drgnx-view--row-place view (point) follow) windows)))
+
+(defun drgnx-view--restore-row-places (view places)
+  "Put the buffer's point and each live window of PLACES back on its row (`drgnx-view--save-row-places').  The
+windows move as the caller's own (`drgnx-wb-with-owned-windows')."
+  (goto-char (drgnx-view--row-place-pos view (car places)))
+  (when (cdr places)
+    (drgnx-wb-with-owned-windows (mapcar #'car (cdr places))
+      (dolist (e (cdr places))
+        (let ((w (car e)))
+          (when (and (window-live-p w) (eq (window-buffer w) (current-buffer)))
+            (set-window-start w (drgnx-view--row-place-pos view (nth 1 e)) t)
+            (set-window-point w (drgnx-view--row-place-pos view (nth 2 e)))))))))
+
+;;;; The draw
+
+(defun drgnx-view--self-check (view)
+  "When VIEW's region (START to the end of the buffer) is not as long as its entries, reset it: delete the region and
+draw every row again, before the pending changes.  In VIEW's buffer, widened."
+  (let ((s (marker-position (drgnx-view--start view))) (n (drgnx-view--n view)))
+    (unless (= (- (point-max) s) (aref (drgnx-view--starts view) n))
+      (let (old)
+        (drgnx-view--walk view nil (lambda (key _ state) (unless (eq state 'ghost) (push key old))))
+        (delete-region s (point-max))
+        (setf (drgnx-view--n view) 0 (drgnx-view--empty view) 0 (drgnx-view--cut view) nil)
+        (aset (drgnx-view--starts view) 0 0)
+        (drgnx-view--clear-entries (drgnx-view--keys view) (drgnx-view--work view) 0 n)
+        (clrhash (drgnx-view--index view))
+        (clrhash (drgnx-view--bodies view))
+        (setf (drgnx-view--pending view) (nconc (drgnx-view--pending view) (list (list 'append (nreverse old) nil))))
+        (cl-incf (aref (drgnx-view--stats view) 6))))))
+
+(defun drgnx-view--current-type (view)
+  "VIEW's type as defined now, looked up by name (stored in VIEW when it was redefined), or nil once removed."
+  (let ((type (alist-get (drgnx-view-type-name (drgnx-view--type view)) drgnx-view--types)))
+    (when type (setf (drgnx-view--type view) type))))
+
+(defun drgnx-view--draw (view slice)
+  "Draw VIEW: SYNC when touched, the self-check, the fold, then the row work, the visible rows first when SLICE (a
+number of seconds: stop at the shared deadline or on input).  Window start and point stay on their row.  Returns the
+rows drawn, grown or removed; the view's `cut' says whether work is left."
+  (with-current-buffer (drgnx-view--buffer view)
+    (save-restriction
+      (widen)
+      (let ((inhibit-read-only t) (inhibit-interaction t)
+            (drgnx-view--slicing (and slice t)) (drgnx-view--rows 0) (drgnx-view--stopped nil)
+            (drgnx-view--changed nil) (type (drgnx-view--type view)))
+        (when slice
+          (let ((now (drgnx-timer-now)))
+            (unless (and drgnx-view--deadline (> drgnx-view--deadline now))
+              (setq drgnx-view--deadline (+ now slice)))))
+        (when (drgnx-view--touched view)
+          (setf (drgnx-view--touched view) nil)
+          (let ((sync (drgnx-view-type-sync type)))
+            (when sync
+              (let ((drgnx-view--syncing view))
+                (condition-case err (funcall sync view)
+                  (error (drgnx-view--record view (format "SYNC: %s" (error-message-string err)))))))))
+        (drgnx-view--self-check view)
+        (drgnx-view--fold view)
+        (drgnx-view--take-dirty view)
+        (let ((places (drgnx-view--save-row-places view)))
+          (when slice
+            (let ((ranges (drgnx-view--visible-ranges view))) (when ranges (drgnx-view--sweep view ranges))))
+          (drgnx-view--sweep view t)
+          (when (> drgnx-view--rows 0) (drgnx-view--restore-row-places view places)))
+        (setf (drgnx-view--cut view) drgnx-view--stopped)
+        (when (and (not drgnx-view--stopped) (> (drgnx-view--empty view) 0)) (drgnx-view--compact view))
+        (when (> drgnx-view--rows 0) (set-buffer-modified-p nil))
+        (let ((patched (drgnx-view-type-patched type)))
+          (when (and patched drgnx-view--changed)
+            (condition-case err (funcall patched view (nreverse drgnx-view--changed))
+              (error (drgnx-view--record view (format "PATCHED: %s" (error-message-string err)))))))
+        drgnx-view--rows))))
 
 (defun drgnx-view-draw-now (view)
-  "Draw VIEW now: run SYNC when touched, then apply every mark.  Returns the number of rows drawn, grown or removed.
-A RENDER, GROW, SYNC or PATCHED that signals is recorded (`drgnx-view--record'), never raised."
+  "Draw VIEW now, whole, even when hidden: run SYNC when touched, then apply every mark.  Window start and point stay
+on their row.  Returns the number of rows drawn, grown or removed; 0 for a view no longer attached or whose type
+was removed.  A RENDER, GROW, SYNC or PATCHED that signals is recorded (`drgnx-view--record'), never raised."
   (let ((buffer (drgnx-view--buffer view)))
-    (if (not (buffer-live-p buffer))
-        0
-      (with-current-buffer buffer
-        (save-excursion
-          (save-restriction
-            (widen)
-            (let ((inhibit-read-only t) (inhibit-interaction t))
-              (when (drgnx-view--touched view)
-                (setf (drgnx-view--touched view) nil)
-                (let ((sync (drgnx-view-type-sync (drgnx-view--type view))))
-                  (when sync
-                    (condition-case err (funcall sync view)
-                      (error (drgnx-view--record view (format "SYNC: %s" (error-message-string err))))))))
-              (drgnx-view--self-check view)
-              (drgnx-view--pass view))))))))
+    (if (and (buffer-live-p buffer) (eq view (buffer-local-value 'drgnx-view buffer))
+             (drgnx-view--current-type view))
+        (prog1 (drgnx-view--draw view nil) (setf (drgnx-view--stale view) nil))
+      0)))
+
+(defun drgnx-view--draw-buffer (buffer)
+  "The timer function of BUFFER's view (keys `(drgnx-view . BUFFER)' and `(drgnx-view-more . BUFFER)').
+Hidden: mark it stale, count a `:stale-skips', draw and allocate nothing.  Shown: draw one slice (a type with SLICE)
+or everything; work left re-arms `(drgnx-view-more . BUFFER)' at 0; when no view has work left, `drgnx-gc-gap'."
+  (let ((view (and (buffer-live-p buffer) (buffer-local-value 'drgnx-view buffer))))
+    (when (drgnx-view-p view)
+      (cond ((not (drgnx-view-shown-p view))
+             (setf (drgnx-view--stale view) t)
+             (cl-incf (aref (drgnx-view--stats view) 7)))
+            ((drgnx-view--current-type view)
+             (setf (drgnx-view--stale view) nil)
+             (let* ((slice (drgnx-view-type-slice (drgnx-view--type view)))
+                    (rows (drgnx-view--draw view slice)) (stats (drgnx-view--stats view)))
+               (when (and slice (> rows 0))
+                 (cl-incf (aref stats 4))
+                 (when (> rows (aref stats 5)) (aset stats 5 rows)))
+               (if (drgnx-view--cut view)
+                   (drgnx-timer-start (cons 'drgnx-view-more buffer) 0 #'drgnx-view--draw-buffer
+                                      :args (list buffer) :owner buffer)
+                 (drgnx-view--pass-over))))))))
+
+(defun drgnx-view--pass-over ()
+  "When no view that is not stale has work left, call `drgnx-gc-gap' (when loaded): the gap is quiet."
+  (let ((buffers (buffer-list)) (busy nil))
+    (while (and buffers (not busy))
+      (let ((v (buffer-local-value 'drgnx-view (car buffers))))
+        (setq busy (and (drgnx-view-p v) (not (drgnx-view--stale v)) (drgnx-view-pending-p v))
+              buffers (cdr buffers))))
+    (when (and (not busy) (fboundp 'drgnx-gc-gap)) (drgnx-gc-gap))))
+
+;;;; Keeping places in any buffer
+
+(defun drgnx-view--key-place (pos key-at)
+  "POS as (KEY OFFSET LINE): KEY = (KEY-AT POS), OFFSET from the start of KEY's row (the first of the lines above
+POS whose key is KEY), LINE POS's line number."
+  (save-excursion
+    (goto-char pos)
+    (let ((key (funcall key-at pos)) (line (line-number-at-pos pos t)))
+      (forward-line 0)
+      (when key
+        (while (and (not (bobp)) (equal (funcall key-at (line-beginning-position 0)) key)) (forward-line -1)))
+      (list key (- pos (point)) line))))
+
+(defun drgnx-view--key-place-pos (place pos-of)
+  "Where PLACE (`drgnx-view--key-place') is now: (POS-OF KEY) + OFFSET, or the start of its LINE (clamped)."
+  (let ((start (and (car place) (funcall pos-of (car place)))))
+    (if start
+        (max (point-min) (min (+ start (nth 1 place)) (point-max)))
+      (save-excursion (goto-char (point-min)) (forward-line (1- (nth 2 place))) (point)))))
+
+(defun drgnx-view-save-places (key-at)
+  "The current buffer's point and, for each window showing it (all frames), its start and point, each as
+\(KEY OFFSET LINE) with KEY = (KEY-AT POS) and OFFSET the distance from KEY's row start.  The value is
+\(POINT-PLACE (WINDOW START-PLACE POINT-PLACE)...), for `drgnx-view-restore-places'."
+  (cons (drgnx-view--key-place (point) key-at)
+        (mapcar (lambda (w) (list w (drgnx-view--key-place (window-start w) key-at)
+                                  (drgnx-view--key-place (window-point w) key-at)))
+                (get-buffer-window-list (current-buffer) nil t))))
+
+(defun drgnx-view-restore-places (places pos-of)
+  "Put the point and windows of PLACES (`drgnx-view-save-places') back: each at (+ (POS-OF KEY) OFFSET), POS-OF
+giving a row's start, or at its LINE (clamped) when POS-OF returns nil.  Dead windows, and windows that show
+another buffer now, are skipped.  The windows move as the caller's own (`drgnx-wb-with-owned-windows')."
+  (goto-char (drgnx-view--key-place-pos (car places) pos-of))
+  (drgnx-wb-with-owned-windows (mapcar #'car (cdr places))
+    (dolist (e (cdr places))
+      (let ((w (car e)))
+        (when (and (window-live-p w) (eq (window-buffer w) (current-buffer)))
+          (set-window-start w (drgnx-view--key-place-pos (nth 1 e) pos-of) t)
+          (set-window-point w (drgnx-view--key-place-pos (nth 2 e) pos-of)))))))
+
+(cl-defmacro drgnx-view-with-kept-windows ((&key key-at pos-of) &rest body)
+  "Run BODY keeping the current buffer's point and its windows' start and point on their rows: save them by key
+with KEY-AT, run BODY, restore them with POS-OF (`drgnx-view-save-places', `drgnx-view-restore-places').
+Returns BODY's value."
+  (declare (indent 1))
+  (let ((places (make-symbol "places")))
+    `(let ((,places (drgnx-view-save-places ,key-at)))
+       (prog1 (progn ,@body) (drgnx-view-restore-places ,places ,pos-of)))))
 
 ;;;; Sync: diff a model's keys against the rows
 
@@ -504,7 +862,7 @@ shown are inserted, rows not in KEYS removed.  A row that moved is removed and i
 rows moved, the view is reset instead.  The drawn rows and the pending changes are both taken into account."
   (let* ((plan (drgnx-view--plan-pending view))
          (n (drgnx-view--n view)) (vkeys (drgnx-view--keys view))
-         (same (and (null plan)
+         (same (and (null plan) (not (drgnx-view--cut view))
                     (let ((i 0) (rest keys))
                       (while (and rest (< i n) (drgnx-view--same-key-p view (car rest) (aref vkeys i)))
                         (setq i (1+ i) rest (cdr rest)))
@@ -518,7 +876,8 @@ rows moved, the view is reset instead.  The drawn rows and the pending changes a
 (defun drgnx-view--sync-diff (view keys sig plan)
   "`drgnx-view-sync-rows' when KEYS differ from VIEW's rows after PLAN."
   (let* ((test (drgnx-view-type-key-test (drgnx-view--type view)))
-         (current (let (l) (drgnx-view--walk view plan (lambda (key _ state) (unless (eq state 'gone) (push key l))))
+         (current (let (l) (drgnx-view--walk view plan (lambda (key _ state)
+                                                         (unless (memq state '(gone ghost)) (push key l))))
                        (nreverse l)))
          (pos (make-hash-table :test test :size (length current)))
          (kept (make-hash-table :test test))
@@ -547,19 +906,24 @@ rows moved, the view is reset instead.  The drawn rows and the pending changes a
 
 ;;;; Reads
 
+(defun drgnx-view--entry-at (view rel)
+  "The entry of VIEW that holds the position REL (relative to START), or nil.  A binary search on the starts (an
+empty entry never holds a position); allocates nothing."
+  (let ((starts (drgnx-view--starts view)) (n (drgnx-view--n view)))
+    (when (and (>= rel 0) (< rel (aref starts n)))
+      (let ((lo 0) (hi n))                  ; starts[lo] <= rel < starts[hi]
+        (while (> (- hi lo) 1)
+          (let ((mid (ash (+ lo hi) -1)))
+            (if (<= (aref starts mid) rel) (setq lo mid) (setq hi mid))))
+        lo))))
+
 (defun drgnx-view-key-at (&optional pos)
   "The key of the row at POS (default: point) of the current buffer's view, or nil.  A binary search on the row
 starts; allocates nothing."
   (let ((view drgnx-view))
     (when (drgnx-view-p view)
-      (let* ((starts (drgnx-view--starts view)) (n (drgnx-view--n view))
-             (rel (- (or pos (point)) (marker-position (drgnx-view--start view)))))
-        (when (and (>= rel 0) (< rel (aref starts n)))
-          (let ((lo 0) (hi n))                  ; starts[lo] <= rel < starts[hi]
-            (while (> (- hi lo) 1)
-              (let ((mid (ash (+ lo hi) -1)))
-                (if (<= (aref starts mid) rel) (setq lo mid) (setq hi mid))))
-            (aref (drgnx-view--keys view) lo)))))))
+      (let ((i (drgnx-view--entry-at view (- (or pos (point)) (marker-position (drgnx-view--start view))))))
+        (and i (aref (drgnx-view--keys view) i))))))
 
 (defun drgnx-view-row-start (view key)
   "The buffer position where KEY's drawn row starts in VIEW, or nil."
@@ -567,12 +931,12 @@ starts; allocates nothing."
     (and i (+ (marker-position (drgnx-view--start view)) (aref (drgnx-view--starts view) i)))))
 
 (defun drgnx-view-row-count (view)
-  "The number of rows drawn in VIEW."
-  (drgnx-view--n view))
+  "The number of rows in VIEW's buffer (between the slices of a draw, rows still to delete count too)."
+  (- (drgnx-view--n view) (drgnx-view--empty view)))
 
 (defun drgnx-view-pending-p (view)
   "Non-nil if VIEW has marks not drawn yet."
-  (or (drgnx-view--pending view) (drgnx-view--touched view)
+  (or (drgnx-view--pending view) (drgnx-view--touched view) (drgnx-view--cut view)
       (> (hash-table-count (drgnx-view--dirty view)) 0)))
 
 (defun drgnx-view-body-length (view key)
@@ -596,25 +960,36 @@ starts; allocates nothing."
     plist))
 
 (defun drgnx-view--check (view)
-  "nil when VIEW's starts are its rows' actual extents (each row ends with a newline just before the next start,
-the last at the end of the buffer, and the index points at each row); otherwise a string naming the first fault."
+  "nil when VIEW's starts are its entries' actual extents (each non-empty entry ends with a newline just before the
+next start, the last at the end of the buffer; an empty entry is a row to insert or a deleted one) and the index
+points at each row and row to insert; otherwise a string naming the first fault."
   (with-current-buffer (drgnx-view--buffer view)
     (save-restriction
       (widen)
       (let ((s (marker-position (drgnx-view--start view))) (starts (drgnx-view--starts view))
-            (keys (drgnx-view--keys view)) (index (drgnx-view--index view)) (n (drgnx-view--n view)))
+            (keys (drgnx-view--keys view)) (work (drgnx-view--work view)) (index (drgnx-view--index view))
+            (n (drgnx-view--n view)) (rows 0) (empty 0))
         (catch 'fault
           (unless (= 0 (aref starts 0)) (throw 'fault (format "row 0 starts at %d, not 0" (aref starts 0))))
           (dotimes (i n)
-            (let ((beg (aref starts i)) (end (aref starts (1+ i))) (key (aref keys i)))
-              (cond ((<= end beg) (throw 'fault (format "row %d (%S) is empty: %d to %d" i key beg end)))
+            (let* ((beg (aref starts i)) (end (aref starts (1+ i))) (key (aref keys i)) (w (aref work i))
+                   (row (not (drgnx-view--ghost-p view i))))
+              (when (= end beg) (setq empty (1+ empty)))
+              (cond ((< end beg) (throw 'fault (format "row %d (%S) runs backwards: %d to %d" i key beg end)))
                     ((> (+ s end) (point-max)) (throw 'fault (format "row %d (%S) runs past the buffer" i key)))
-                    ((not (eq (char-after (+ s end -1)) ?\n))
+                    ((and (> end beg) (not (eq (char-after (+ s end -1)) ?\n)))
                      (throw 'fault (format "row %d (%S) does not end with a newline at %d" i key end)))
-                    ((not (eql (gethash key index) i))
-                     (throw 'fault (format "row %d (%S) is indexed at %S" i key (gethash key index)))))))
-          (unless (= (hash-table-count index) n)
-            (throw 'fault (format "%d rows indexed, %d drawn" (hash-table-count index) n)))
+                    ((and (= end beg) w (not (eq w 'new)))
+                     (throw 'fault (format "row %d (%S) is empty with work %S" i key w)))
+                    ((and row (not (eql (gethash key index) i)))
+                     (throw 'fault (format "row %d (%S) is indexed at %S" i key (gethash key index))))
+                    ((and (not row) (eql (gethash key index) i))
+                     (throw 'fault (format "row %d (%S) is gone but indexed" i key))))
+              (when row (setq rows (1+ rows)))))
+          (unless (= (hash-table-count index) rows)
+            (throw 'fault (format "%d rows indexed, %d drawn" (hash-table-count index) rows)))
+          (unless (= empty (drgnx-view--empty view))
+            (throw 'fault (format "%d empty entries, %d counted" empty (drgnx-view--empty view))))
           (unless (= (- (point-max) s) (aref starts n))
             (throw 'fault (format "the region is %d long, the rows %d" (- (point-max) s) (aref starts n))))
           nil)))))
