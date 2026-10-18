@@ -54,7 +54,8 @@ Preferences: Modules, is an external module (below).
 
 What Customize saves (and `M-x package-install`'s list of packages) goes to `custom.el` beside it, which loads in every
 start once your packages are active (so a package's mode saved on there turns on) and before config.el; an error in
-it is said in `*Messages*`, and `drgnx safe` skips it.
+it is said in `*Messages*`, and `drgnx safe` skips it. A theme picked with Color Theme (ui/look) wins over one saved
+through Customize: ui/look loads it after custom.el.
 
 ## External modules (gryphn)
 

@@ -153,6 +153,21 @@ and data dirs, whose init.el is INIT (text); what it prints, read."
                          nil)))
       (delete-directory tmp t))))
 
+(ert-deftest drgnx-paths/custom-el-loads-under-the-package-guard ()
+  ;; custom.el runs once the packages are active and their guard is on, before config.el
+  (require 'drgnx)
+  (let ((calls nil) (custom-file "/nonexistent/custom.el") (drgnx-first-gui-frame-hook nil)
+        (drgnx-modules-after-stage-functions nil) (process-environment (cons "DRGNX_SAFE" process-environment)))
+    (cl-letf (((symbol-function 'drgnx-guard-mode) #'ignore) ((symbol-function 'drgnx-hooks-install) #'ignore)
+              ((symbol-function 'drgnx-session-setup) #'ignore) ((symbol-function 'drgnx--core-commands) #'ignore)
+              ((symbol-function 'drgnx-modules-start) #'ignore) ((symbol-function 'drgnx-keys-apply) #'ignore)
+              ((symbol-function 'drgnx-surfaces-refresh) #'ignore) ((symbol-function 'drgnx-gc-setup) #'ignore)
+              ((symbol-function 'drgnx-pkg-activate) (lambda () (push 'activate calls)))
+              ((symbol-function 'drgnx-pkg-guard-mode) (lambda (&rest _) (push 'guard calls)))
+              ((symbol-function 'drgnx--load-user-config) (lambda (&optional file) (push (if file 'custom 'config) calls))))
+      (drgnx-init))
+    (should (equal (nreverse calls) '(activate guard custom config)))))
+
 (ert-deftest drgnx-paths/a-harness-session-keeps-its-state-in-its-run-directory ()
   (let ((tmp (file-name-as-directory (make-temp-file "drgnx-init" t))))
     (unwind-protect

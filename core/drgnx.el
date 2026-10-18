@@ -87,8 +87,8 @@ The steady GC threshold is set at the end, also when a step fails (early-init de
           (unless safe
             (condition-case err (drgnx-pkg-activate)
               (error (message "drgnx: packages not activated: %s" (error-message-string err))))
-            (when custom-file (drgnx--load-user-config custom-file))   ; what Customize saved, packages now active
-            (drgnx-pkg-guard-mode 1))
+            (drgnx-pkg-guard-mode 1)
+            (when custom-file (drgnx--load-user-config custom-file)))  ; what Customize saved: packages active, guarded
           (drgnx--core-commands)
           ;; Modules that run later (idle, first frame, …) register commands after the keys were applied.
           (add-hook 'drgnx-modules-after-stage-functions
