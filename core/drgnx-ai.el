@@ -209,10 +209,15 @@ or string naming one, or a plist entry whose `:source' is one (`(:source (:secre
         (t (or (memq s '(macos-keychain-internet macos-keychain-generic default))
                (and (stringp s) (or (string-prefix-p "macos-keychain-" s) (string-prefix-p "secrets:" s)))))))
 
+(defvar epa-file-name-regexp)
+
 (defun drgnx-ai--quiet-sources (sources)
-  "SOURCES that can be read without asking anything: plain file names (a .gpg file, the Keychain or a keyring may
-prompt; a plist entry is not known to be quiet, so it is left out)."
-  (seq-filter (lambda (s) (and (stringp s) (not (string-suffix-p ".gpg" s)) (not (drgnx-ai--secret-source-p s))))
+  "SOURCES that can be read without asking anything: plain file names (a file epa decrypts — .gpg, and its backups
+by `epa-file-name-regexp' —, the Keychain or a keyring may prompt; a plist entry is not known to be quiet, so it is
+left out)."
+  (require 'epa-hook)
+  (seq-filter (lambda (s) (and (stringp s) (not (string-suffix-p ".gpg" s)) (not (string-match-p epa-file-name-regexp s))
+                               (not (drgnx-ai--secret-source-p s))))
               sources))
 
 (defvar auth-sources)

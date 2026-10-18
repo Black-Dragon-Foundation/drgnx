@@ -268,6 +268,11 @@ Keychain and keyring are never reached."
           (should-not (drgnx-ai-key 'openrouter t))
           (should (equal searched (list (list plain 'macos-keychain-internet)))))))))
 
+(ert-deftest drgnx-ai/files-epa-decrypts-are-not-quiet ()
+  ;; anything epa would decrypt asks for a passphrase: .gpg, and its backups (.gpg~, .gpg.~N~)
+  (should (equal (drgnx-ai--quiet-sources '("~/.authinfo" "~/.authinfo.gpg" "~/.authinfo.gpg~" "~/.authinfo.gpg.~3~"))
+                 '("~/.authinfo"))))
+
 (ert-deftest drgnx-ai/plist-secret-sources-are-not-quiet ()
   ;; auth-sources may hold plists: (:source (:secrets "Login")) is the Secret Service, whatever the keyring's name
   (let ((secrets '(:source (:secrets "Login"))) (keychain '(:source "macos-keychain-internet:login" :host t))

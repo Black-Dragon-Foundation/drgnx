@@ -209,7 +209,7 @@ keyring is looked at only when Emacs has D-Bus support, a session bus can be rea
 it (an SSH login, WSL or a container often has a bus but no keyring daemon), so such a machine gets no "invalid
 backend spec" noise in `*Messages*`. Loading the Secret Service client pings it once, only from a command you ran.
 
-Sources that may ask for something (`.gpg` files, the Keychain, the keyring) are only read from commands you run in
+Sources that may ask for something (`.gpg` files and their backups — anything Emacs would decrypt —, the Keychain, the keyring) are only read from commands you run in
 the drgnx app or an interactive Emacs (Edit with AI, Ask the Codebase, Choose, AI: Load Keys); a batch Emacs never
 opens the Keychain or keyring (a `.gpg` file it is asked to read can still want its passphrase on standard input).
 Entries of `auth-sources` that are plists, such as `(:source (:secrets "Login"))` or
