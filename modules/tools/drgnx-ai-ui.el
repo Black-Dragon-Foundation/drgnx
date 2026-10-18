@@ -18,6 +18,7 @@
 (require 'drgnx-ai)
 (require 'drgnx-ai-client)
 (require 'drgnx-ai-probe)
+(require 'drgnx-trust)
 (require 'diff)
 (require 'diff-mode)
 
@@ -470,17 +471,26 @@ Returns the search process (or nil), so that a stopped Ask can end it.  A search
                                     (lambda () (when (process-live-p proc) (process-put proc :cut t) (delete-process proc)))))
         proc))))
 
+(defun drgnx-ai--open-source (file line)
+  "Visit FILE at LINE, from a Sources link in this answer buffer.  A remote name is visited only when the answer
+is about a remote folder (this buffer's `default-directory' is remote): a name the model or a file name put in
+local text never reaches TRAMP (M2-6 c)."
+  (if (drgnx-trust-link-ok-p file)
+      (progn (pop-to-buffer (find-file-noselect file)) (goto-char (point-min)) (forward-line (1- line)))
+    (message "Not opening %s: a remote name from local text" file)))
+
 (defun drgnx-ai--answer-buffer (question answer snippets root)
   (with-current-buffer (get-buffer-create "*AI answer*")
     (let ((inhibit-read-only t))
       (erase-buffer)
       (special-mode)
+      (setq default-directory (file-name-as-directory root)) ; the source of the links: remote only when the folder is
       (insert (propertize (concat "Q: " question) 'face 'bold) "\n\n" (or answer "") "\n\nSources:\n")
       (dolist (s snippets)
         (insert "  ")
         (insert-text-button (format "%s:%d" (plist-get s :file) (plist-get s :line))
                             'action (let ((f (expand-file-name (plist-get s :file) root)) (l (plist-get s :line)))
-                                      (lambda (_) (pop-to-buffer (find-file-noselect f)) (goto-char (point-min)) (forward-line (1- l)))))
+                                      (lambda (_) (drgnx-ai--open-source f l))))
         (insert "\n"))
       (goto-char (point-min)))
     (pop-to-buffer (current-buffer))

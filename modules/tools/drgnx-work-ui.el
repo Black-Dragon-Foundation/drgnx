@@ -18,6 +18,7 @@
 (require 'diff-mode)
 (require 'drgnx-modules)
 (require 'drgnx-registry)
+(require 'drgnx-trust)
 (require 'drgnx-work)
 (require 'drgnx-projects)
 (require 'svg)
@@ -173,8 +174,15 @@
 
 ;;;; Opening
 
+(defun drgnx-work-ui--local-only (path)
+  "PATH, unless it is a remote name: a row's path comes from tracked text, and the Work tab's source is local, so
+a remote name is never visited or even checked (M2-6 c).  A `user-error' says so."
+  (unless (with-temp-buffer (setq default-directory "/") (drgnx-trust-link-ok-p path (current-buffer)))
+    (user-error "Work: not opening %s: a remote name from local text" path))
+  path)
+
 (defun drgnx-work-ui--show-commit (node)
-  (let* ((sha (plist-get node :sha)) (repo (or (plist-get node :repo) (plist-get node :path)))
+  (let* ((sha (plist-get node :sha)) (repo (drgnx-work-ui--local-only (or (plist-get node :repo) (plist-get node :path))))
          (_ (unless (file-directory-p repo) (user-error "The repository of %s is gone: %s" (substring sha 0 7) repo)))
          (b (get-buffer-create (format "*commit: %s*" (substring sha 0 7)))))
     (with-current-buffer b
@@ -193,7 +201,7 @@
   (interactive)
   (let ((n (or (drgnx-work-ui--node) (user-error "Nothing on this line"))))
     (if (eq (plist-get n :kind) 'commit) (drgnx-work-ui--show-commit n)
-      (let ((path (or (plist-get n :path) (user-error "This line has no file"))))
+      (let ((path (drgnx-work-ui--local-only (or (plist-get n :path) (user-error "This line has no file")))))
         (pop-to-buffer (find-file-noselect path))
         (goto-char (point-min))
         (forward-line (1- (or (plist-get n :line) 1)))
@@ -215,6 +223,7 @@
 
 (defun drgnx-work-ui--show-worktree (wt)
   "Add the worktree WT to the Explorer and show it (dired without the workbench)."
+  (drgnx-work-ui--local-only wt)
   (if (not (fboundp 'drgnx-explorer-set-roots)) (dired wt)
     (drgnx-explorer-set-roots (append (drgnx-explorer-roots) (unless (member wt (drgnx-explorer-roots)) (list wt))))
     (unless (drgnx-wb-sidebar-showing-p) (drgnx-wb-toggle-sidebar))))
@@ -395,10 +404,11 @@ window (viewBox) on the same drawing, so lines cross from one band into the next
   "Open what box B shows: a spec's or plan's file, a branch's worktree.  Says why when it cannot."
   (let ((node (plist-get b :node)))
     (pcase (plist-get b :kind)
-      ('branch (if-let* ((wt (plist-get node :worktree)) ((file-directory-p wt)))
+      ('branch (if-let* ((wt (and (plist-get node :worktree) (drgnx-work-ui--local-only (plist-get node :worktree))))
+                         ((file-directory-p wt)))
                    (progn (drgnx-work-ui--show-worktree wt) wt)
                  (message "Work: branch %s has no worktree" (car (plist-get b :lines)))))
-      (_ (let ((path (plist-get node :path)))
+      (_ (let ((path (and (plist-get node :path) (drgnx-work-ui--local-only (plist-get node :path)))))
            (if (and path (file-readable-p path)) (pop-to-buffer (find-file-noselect path))
              (message "Work: %s is gone" (or path (plist-get node :title)))))))))
 

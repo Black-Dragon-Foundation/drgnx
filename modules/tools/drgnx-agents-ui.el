@@ -17,6 +17,7 @@
 (require 'diff-mode)
 (require 'drgnx-modules)
 (require 'drgnx-registry)
+(require 'drgnx-trust)
 (require 'drgnx-agents)
 (require 'drgnx-jobs)
 
@@ -342,9 +343,24 @@ exists is connected to (asynchronously)."
 applied to the file, C-c C-k rejects — nothing touches the file before Done."
   :lighter " Review")
 
+(defun drgnx-agents-ui--path-ok-p (s path)
+  "May the agent of session S have PATH reviewed?  A remote name only when the session's folder is remote
+(`drgnx-trust-link-ok-p' with that folder as the source): what the agent says never makes Emacs connect (M2-6 c)."
+  (with-temp-buffer
+    (setq default-directory (or (drgnx-agent-session-cwd s) "/"))
+    (drgnx-trust-link-ok-p path (current-buffer))))
+
 (defun drgnx-agents-ui-review (s item)
   "Show the change ITEM proposes as a diff against a copy of its file: apply the hunks you want (to
-the copy), then Done writes the copy to the file (Reject, or closing the diff, writes nothing)."
+the copy), then Done writes the copy to the file (Reject, or closing the diff, writes nothing).  A remote
+name from a local session is rejected without a look at it."
+  (if (not (drgnx-agents-ui--path-ok-p s (plist-get item :path)))
+      (progn (message "Agent edit rejected: %s is a remote name from a local session" (plist-get item :path))
+             (drgnx-agents-finish-review s item t)
+             nil)
+    (drgnx-agents-ui--review-open s item)))
+
+(defun drgnx-agents-ui--review-open (s item)
   (let* ((path (plist-get item :path))
          (copy (make-temp-file "drgnx-review-" nil (concat "-" (file-name-nondirectory path))))
          (new (make-temp-file "drgnx-proposed-"))

@@ -48,6 +48,12 @@ shorthands come back, without reopening them.
 - **Remote names in compile and grep output.** In a local compilation or grep buffer, a remote file name or an
   "Entering directory" line naming a remote directory is read as a local name (quoted with `/:`). Output text never
   makes Emacs connect anywhere, and clicking such an error opens nothing remote.
+- **Links in the Work tab and agent edits.** A Work row, graph box, commit or worktree that names a remote file opens
+  nothing and says so. When an agent proposes a change to a remote name from a local session, the review does not
+  open and the agent is told the change was rejected; in a session started in a remote folder, its files review as
+  usual.
+- **Links in AI answers.** The Sources links of an Ask the Codebase answer open a remote file only when you asked
+  about a remote folder. A remote name that shows up in a local folder's answer is not opened; a message says so.
 - **Host names in text.** `ffap` (find file at point) never pings a host name it finds in text
   (`ffap-machine-p-known` is set to `reject` while you leave it at its default). Emacs's own defaults already keep
   directory-local variables and auto-revert away from remote files; drgnx leaves them as they are.
