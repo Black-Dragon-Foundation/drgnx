@@ -99,13 +99,14 @@ Clipboard managers (GPaste and Clipboard Indicator on GNOME, Klipper on KDE, Cop
 history) keep every change of the clipboard, and Emacs by default changes it a lot. Module `editor/clipboard`
 (on by default) deals with three clashes:
 
-- **Kills do not fill the history.** `C-k`, `M-d`, `M-DEL` and the other kills stay in Emacs's kill ring;
-  only a copy or a cut reaches the system clipboard (and, in a terminal window, the terminal's clipboard over
-  OSC 52, so a laptop's manager is not flooded over SSH either). `C-y` still brings in what another program copied
-  last. Setting `drgnx-clipboard-kills` to `all` gives Emacs's own behaviour back. The commands that count as a copy
-  or cut are `drgnx-clipboard-commands` (`kill-region`, `kill-ring-save`, Copy and Cut, CUA's, evil's yank and
-  delete, the Copy Path commands of the Explorer and the buffer list). Code that copies on purpose binds
-  `drgnx-clipboard-force`. A command's first kill decides for the whole command, and it pushes once.
+- **Kills do not fill the history.** The line and word kills (`C-k`, `M-d`, `M-DEL`, `C-S-DEL`, `M-z`, the sexp,
+  sentence and paragraph kills, evil's `x` and `D`) stay in Emacs's kill ring; they are listed in
+  `drgnx-clipboard-local-kills`. Everything else reaches the system clipboard as in plain Emacs: copy and cut,
+  commands of other packages (Magit's copy commands, Embark's), and kills made by Lisp or a timer with no command
+  running. In a terminal window the same rule decides what reaches the terminal's clipboard over OSC 52, so a
+  laptop's manager is not flooded over SSH either. `C-y` still brings in what another program copied last. Setting
+  `drgnx-clipboard-kills` to `all` gives Emacs's own behaviour back; code can bind `drgnx-clipboard-force` to push a
+  kill whatever the command. A command's first kill decides for the whole command, and it pushes once.
 - **A clipboard owner that does not answer never freezes Emacs.** Emacs waits for ever for the program that owns
   the clipboard; a stuck one froze the whole session. drgnx waits `drgnx-clipboard-read-timeout` seconds (1.5) —
   it sets `x-selection-timeout` and `pgtk-selection-timeout` only while they are at Emacs's standard 0, so a value

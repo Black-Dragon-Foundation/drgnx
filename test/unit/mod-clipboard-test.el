@@ -27,12 +27,12 @@ uninstalled afterwards."
           (interprogram-cut-function (lambda (text) (push text drgnx-clip-test--pushed)))
           (interprogram-paste-function ,paste-function)
           (kill-ring nil) (kill-ring-yank-pointer nil) (kill-do-not-save-duplicates nil)
-          (pre-command-hook nil) (after-make-frame-functions nil)
+          (pre-command-hook nil) (post-command-hook nil) (after-make-frame-functions nil)
           (select-active-regions t) (x-selection-timeout 0) (pgtk-selection-timeout 0)
           (drgnx-clipboard-kills 'region) (drgnx-clipboard-force nil)
           (drgnx-clipboard-publish-selection 'auto) (drgnx-clipboard-read-timeout 1.5)
           (drgnx-clipboard--installed nil) (drgnx-clipboard--orig-cut nil) (drgnx-clipboard--orig-paste nil)
-          (drgnx-clipboard--decision nil) (drgnx-clipboard--warned nil) (drgnx-clipboard--timeout-set nil)
+          (drgnx-clipboard--decision nil) (drgnx-clipboard--in-command nil) (drgnx-clipboard--warned nil) (drgnx-clipboard--timeout-set nil)
           (drgnx-clipboard--state nil) (drgnx-clipboard--saved-regions nil) (drgnx-clipboard--graphical-seen nil)
           (drgnx-clipboard--generation 0))
      (make-directory drgnx-clip-test--bin t)
@@ -44,7 +44,8 @@ uninstalled afterwards."
   "Run THUNK as one run of COMMAND (as the command loop does: `this-command' and a fresh command)."
   (let ((this-command command) (real-this-command command))
     (drgnx-clipboard--new-command)
-    (funcall thunk)))
+    (unwind-protect (funcall thunk)
+      (drgnx-clipboard--end-command))))
 
 (defun drgnx-clip-test--file (relative text)
   "Write TEXT to RELATIVE under the temp HOME."
@@ -68,6 +69,41 @@ uninstalled afterwards."
   (activate-mark))
 
 ;;;; Kills
+
+(ert-deftest drgnx-clip/an-unknown-command-that-kills-reaches-the-clipboard ()
+  ;; a third-party copy command (magit, embark, ...) is not on any list: it behaves as in plain Emacs
+  (drgnx-clip-test--env nil
+    (drgnx-clipboard-install)
+    (drgnx-clip-test--as 'magit-copy-section-value (lambda () (kill-new "abc123")))
+    (should (equal drgnx-clip-test--pushed '("abc123")))))
+
+(ert-deftest drgnx-clip/a-kill-outside-a-command-reaches-the-clipboard ()
+  ;; a timer, a process filter, emacsclient -e: no command is running, whatever `this-command' still says
+  (drgnx-clip-test--env nil
+    (drgnx-clipboard-install)
+    (kill-new "from lisp")
+    (let ((this-command 'kill-line) (real-this-command 'kill-line))
+      (kill-new "from a timer"))
+    (let ((this-command nil) (real-this-command nil))
+      (kill-new "from nowhere"))
+    (should (equal drgnx-clip-test--pushed '("from nowhere" "from a timer" "from lisp")))))
+
+(ert-deftest drgnx-clip/the-denylist-holds-for-every-local-kill ()
+  (drgnx-clip-test--env nil
+    (drgnx-clipboard-install)
+    (dolist (command drgnx-clipboard-local-kills)
+      (drgnx-clip-test--as command (lambda () (kill-new "x") (kill-append "y" nil))))
+    (should-not drgnx-clip-test--pushed)
+    (dolist (command '(kill-line kill-whole-line kill-word backward-kill-word kill-sexp backward-kill-sexp kill-sentence
+                                 backward-kill-sentence kill-paragraph backward-kill-paragraph zap-to-char zap-up-to-char
+                                 kill-visual-line kill-rectangle kill-comment comment-kill kill-forward-chars
+                                 kill-backward-chars kill-backward-up-list))
+      (should (memq command drgnx-clipboard-local-kills)))
+    ;; run from the palette: this-command is the target, the real one is the palette's
+    (let ((this-command 'kill-line) (real-this-command 'drgnx-palette))
+      (drgnx-clipboard--new-command)
+      (kill-new "x"))
+    (should-not drgnx-clip-test--pushed)))
 
 (ert-deftest drgnx-clip/other-kills-stay-in-the-kill-ring ()
   (dolist (command '(kill-line kill-word backward-kill-word kill-whole-line))
@@ -115,9 +151,9 @@ uninstalled afterwards."
 (ert-deftest drgnx-clip/force-pushes ()
   (drgnx-clip-test--env nil
     (drgnx-clipboard-install)
-    (drgnx-clip-test--as 'some-command (lambda () (kill-new "a path")))
+    (drgnx-clip-test--as 'kill-line (lambda () (kill-new "a path")))
     (should-not drgnx-clip-test--pushed)
-    (drgnx-clip-test--as 'some-command (lambda () (let ((drgnx-clipboard-force t)) (kill-new "a path"))))
+    (drgnx-clip-test--as 'kill-line (lambda () (let ((drgnx-clipboard-force t)) (kill-new "a path"))))
     (should (equal drgnx-clip-test--pushed '("a path")))))
 
 (ert-deftest drgnx-clip/the-command-loop-decides ()
@@ -294,7 +330,8 @@ uninstalled afterwards."
         (should (eq interprogram-paste-function #'ignore))
         (should select-active-regions)
         (should (= x-selection-timeout 0))
-        (should-not (memq #'drgnx-clipboard--new-command pre-command-hook))))))
+        (should-not (memq #'drgnx-clipboard--new-command pre-command-hook))
+        (should-not (memq #'drgnx-clipboard--end-command post-command-hook))))))
 
 ;;;; The module
 
