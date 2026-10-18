@@ -29,6 +29,11 @@ binds `load-file-name' anew.")
 (defvar drgnx-modules--stacks nil
   "Alist MODULE → list of (LABEL . UNDO), newest first: how to undo what its setup changed.")
 
+(defvar drgnx-module--in-helper nil
+  "Non-nil (dynamically bound) while a paired helper itself calls `add-hook' or `advice-add'.
+The safety net that records raw `add-hook' and `advice-add' calls during a setup skips them: the
+helper already made the claim, and a second, unconditional undo would break the either-order rule.")
+
 (defvar drgnx-modules--tearing-down nil "Modules whose teardown is running (dynamically bound).")
 
 (defvar drgnx-modules-after-teardown-functions nil
@@ -50,10 +55,6 @@ Outside a setup, or from the top level of a library the setup loads, nothing is 
   nil)
 
 ;;;; The safety net: what a setup reaches through Emacs's own doors
-
-(defvar drgnx-module--in-helper nil
-  "Non-nil while a drgnx helper (`drgnx-module-hook', `drgnx-module-advice') adds a hook or an advice: it pushes
-its own undo, so the safety net records nothing then.  Defined here so that it exists before either file loads.")
 
 (defsubst drgnx-modules--net-records-p ()
   "Non-nil if the safety net records the call being made: a setup's own code, not a drgnx helper."

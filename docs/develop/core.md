@@ -145,6 +145,74 @@ stack — the code that knows what it changed knows how to change it back):
   changes anything, so off, on, off is the same as off once, and two undos of the same thing (a `:teardown` that
   calls a sub-module's off function, then the stack) leave it undone once.
 
+#### Helpers that undo themselves (`drgnx-modules-helpers.el`)
+
+Four changes a setup makes to global state are done through a helper that makes the change and pushes its own
+undo. Each undo runs only while the state is still what this call set, so it never removes what the user, a theme
+or another module put there since. Outside a setup a helper only makes the change.
+
+| Use | For | Undo |
+|---|---|---|
+| `(drgnx-module-set VAR VALUE)` | another package's option, instead of `setq`, `setopt` or `setq-default` | puts the old value back (VAR unbound again if it was) |
+| `(drgnx-module-alist-put VAR KEY VALUE)` | one key of an alist such as `auto-mode-alist`, `major-mode-remap-alist` or `default-frame-alist`, instead of `setf alist-get` | puts the old entry back, or removes KEY when there was none |
+| `(drgnx-module-face-spec FACE SPEC)` | a face's default spec, instead of `face-spec-set` | puts the previous default spec back |
+| `(drgnx-module-define-key MAP-SYMBOL KEY DEF)` | a remap or a mouse/chrome event in a global map such as `global-map` | puts the previous binding back, or removes the entry |
+
+- `drgnx-module-set` sets through the option's custom `:set` function when it has one, else `set-default`, and the
+  undo goes through the same setter, so a `:set` that does more than store runs again on the way back. The undo runs
+  while the default value is still the one stored (what a setter stored, which can differ from VALUE).
+- `drgnx-module-alist-put` compares keys with `equal` (an `auto-mode-alist` key is a string) and replaces the alist
+  instead of changing it, so a list shared with the original value is never mutated. It stores through the
+  variable's custom `:set` function too, and an alist that is not loaded yet counts as empty. A hook or an advice
+  has its own helper.
+- `drgnx-module-face-spec` touches only the face's default spec (`face-defface-spec`); what the user customized or a
+  theme set lives apart from it and is never touched. `face-spec-set` recalculates the face, so an attribute set
+  directly with `set-face-attribute` is wiped by it (at the set and again at the undo): give such a face its look
+  through the spec.
+- `drgnx-module-define-key` binds in the keymap object, never rebinding the variable, and looks at the map's own
+  entry (not its parent's). A keyboard key signals an error: typed keys come from the key profiles
+  (`keys/*.eld`). Allowed: `[remap CMD]`, the chrome (`menu-bar`, `tool-bar`, `tab-bar`, `tab-line`,
+  `header-line`, `mode-line`, scroll bars, fringes) and any key whose last event is a mouse or wheel event.
+- **Two modules, one target.** Each helper claims its target (the option, the alist key, the face, the key in the
+  map) and remembers what it found there. Tearing the modules down in any order ends where they started: an undo
+  that is not the newest claim leaves the live value alone and hands what it found to the claim above it; the
+  newest one restores, if the value is still what it set (so a change by the user stays). A claim is dropped only
+  by its undo, so a module that is never torn down (a `restart` module) keeps its claim until restart.
+- The undo compares with `equal`: a list stored by reference and changed in place later still equals itself, so the
+  undo overwrites that change. Do not mutate a value you gave `drgnx-module-set`.
+- Outside a setup the helpers make the change and nothing else (no label, closure or claim).
+
+#### Hooks and advice: `drgnx-module-hook` and `drgnx-module-advice`
+
+A global hook function or advice a module adds goes through a paired helper (Doom's `add-hook!` and `defadvice!`
+shape). It defines the function with a name and an owner, adds it, and pushes its removal, which is what
+AGENTS.md asks of every global hook and advice ("named, with an owner", no lambdas).
+
+```elisp
+(drgnx-module-hook 'find-file-hook maybe ()           ; defines drgnx-editor/blame--maybe
+  (drgnx-blame--check))
+(drgnx-module-hook '(text-mode-hook prog-mode-hook) enable () :depth 90 (drgnx-blame-mode 1))
+(drgnx-module-advice 'save-buffer :after refresh (&rest _) (drgnx-blame--refresh))
+(drgnx-module-unhook 'find-file-hook maybe)           ; early, e.g. when a mode turns off
+```
+
+- The function is `drgnx-<module>--<NAME>`, the module being the one the file's `drgnx-module-define` names (the
+  file's forms are read at macro-expansion time, so comments and strings never count; cached by the file's mtime) or
+  `:module NAME` (a symbol) first in the body. NAME is a plain symbol and is used once per module file: the same
+  NAME for two helpers is an error at expansion. `:depth N` goes to `add-hook` (`drgnx-module-advice` refuses it).
+  HOOK is evaluated: a symbol or a list of symbols; SYMBOL and HOW of an advice are evaluated. The advice is named
+  by its function (`advice-add` name property), so equal NAMEs in two modules never replace each other.
+- Running a helper again changes nothing. The undo takes the function off only when no claim on it is left: the
+  helpers use the claims of the section above (target: the hook and the function, or the advised symbol and the
+  function), so two modules adding the same named function tear down in either order, and a function that was on
+  the hook before the module added it stays. `drgnx-module-unhook` and `drgnx-module-unadvise` drop the calling
+  module's own claim early (its teardown then has nothing left to do); another module's claim keeps the function in
+  place. Outside a setup the helper adds and records nothing; a name is a symbol, never a lambda.
+- The safety net of the cleanup stack records raw `add-hook` and `advice-add` calls a setup makes. It skips the
+  helpers' own calls: `drgnx-module--in-helper` is bound to non-nil while a helper calls them, and the net's
+  `:around` advice records nothing then (the variable is defined in `drgnx-modules-record.el`, where the net
+  reads it). A raw call is a fallback; use the helper.
+
 ### The safety net: what a setup reaches through Emacs's own doors
 
 Code a setup reaches that does not push its own undo — wb modes, the setup functions of `wb/` libraries, packages'
