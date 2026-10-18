@@ -111,21 +111,33 @@ stack — the code that knows what it changed knows how to change it back):
                          (lambda () (remove-hook 'find-file-hook #'drgnx-blame--maybe)))
 ```
 
-- `(drgnx-modules-push-undo LABEL UNDO)` records only during a setup, and not while a library loads (a library's top
-  level registers for itself and stays: `require` cannot be undone, the code stays loaded until restart). Outside a
-  setup it costs one variable test. LABEL is a short description for reports; UNDO, a function of no arguments,
-  first checks that the state is still what this module set and changes nothing otherwise — it never removes what
-  someone else added since.
+- `(drgnx-modules-push-undo LABEL UNDO)` records only during a setup, and only the setup's own code: the top level
+  of a library the setup loads registers for itself and stays (`require` cannot be undone; the code stays loaded
+  until restart). "Own code" means the `load-file-name` the setup began with — the startup stage itself runs
+  inside a `load` (`init.el` calls `drgnx-init`), so "a load is in progress" cannot tell the two apart; a nested
+  `load` or `require` binds `load-file-name` anew (`drgnx-modules--recording-p`). Outside a setup it costs one
+  variable test. LABEL is a short description for reports; UNDO, a function of no arguments, first checks that the
+  state is still what this module set and changes nothing otherwise — it never removes what someone else added
+  since.
+- Whatever runs synchronously inside a setup pushes onto the module whose setup runs — including another owner's
+  hook functions it runs (a nested stage's `drgnx-modules-after-stage-functions`) — and a module whose setup is run
+  from another's records onto its own stack. Code a setup defers (`with-eval-after-load`, a timer) runs outside it
+  and records nothing unless it binds its owner again.
 - `:teardown` in `drgnx-module-define`: a function for what the stack cannot see (a theme, live frames' parameters,
   a mode turned on in live buffers, a sub-module's own state), or `restart`: the module is not turned off while Emacs
-  runs, only at the next start.
+  runs, only at the next start. Anything else is an error when the module is defined, so the function must be
+  defined before the `drgnx-module-define` form.
 - `(drgnx-module-teardown NAME)` runs the module's `:teardown`, then its stack last in first out inside
   `unwind-protect`, each undo under its own error guard, and forgets the stack; the status becomes `off`. It returns
   the problems (nil when clean) — a failed undo is named by its label, a failed `:teardown` by `teardown` — and never
-  raises. A module that is not running does nothing; a `restart` module (and an external one) stays running and
-  returns `("restart")`. After a batch of teardowns the caller runs `drgnx-modules-after-teardown-functions` once.
-- A setup that fails half-way is rolled back: the undos it pushed run, newest first, and the module is `failed`, with
-  the error and any undo problems in the report.
+  raises. A module that is not running does nothing, and so does a `:teardown` that tears its own module down
+  again. A `restart` module (and an external one) stays running and returns `("restart")`. After a batch of
+  teardowns the caller runs `drgnx-modules-after-teardown-functions` once.
+- A setup that does not finish — an error, a quit, a throw — is rolled back: the undos it pushed run, newest first.
+  After an error the module is `failed`, with the error and any undo problems in the report; a quit or a throw goes
+  on after the rollback.
+- Running a module that is already on tears it down first (its `:teardown`, then its stack), so no undo is left
+  behind; a `restart` module is set up again on top, as before, and keeps its earlier undos.
 - Teardown and rollback run in automatic paths: they never prompt. Undos and `:teardown` run with
   `inhibit-interaction` bound, so one that would ask fails at once and is reported. Every undo checks before it
   changes anything, so off, on, off is the same as off once, and two undos of the same thing (a `:teardown` that

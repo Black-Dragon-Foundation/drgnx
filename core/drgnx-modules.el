@@ -35,6 +35,8 @@ waits, reported as missing-packages).  FLAGS: the flags it understands (`drgnx-m
 DOCTOR: a function returning problem strings.  SETTINGS: alist VARIABLE → doc.  TEARDOWN: a
 function that undoes what the cleanup stack cannot see (`drgnx-module-teardown'), or `restart':
 the module is not turned off while Emacs runs."
+  (unless (or (null teardown) (eq teardown 'restart) (functionp teardown))
+    (error "drgnx-module-define %s: :teardown must be a function or restart, not %S" name teardown))
   (let ((entry (list :doc doc :stage (or stage 'startup) :setup setup :requires requires :packages packages
                      :flags flags :doctor doctor :settings settings :teardown teardown :file load-file-name)))
     (if (assq name drgnx-modules--table)
@@ -153,13 +155,13 @@ order (a cycle keeps it, and is reported waiting)."
      (missing (drgnx-modules--record name stage 0 'missing-packages nil missing) nil)
      (unmet (drgnx-modules--record name stage 0 'missing-requires nil unmet) nil)
      (t (let* ((t0 (float-time))
-               (failure (drgnx-modules--run-setup name (plist-get spec :setup)))   ; rolled back on error
+               (failure (drgnx-modules--run-setup name (plist-get spec :setup)))   ; rolled back if unfinished
                (err (car failure))
                (ms (round (* 1000 (- (float-time) t0))))
                (problems (and (not err) (plist-get spec :doctor)
                               (condition-case e (funcall (plist-get spec :doctor))
                                 (error (list (format "its doctor check failed: %s" (error-message-string e))))))))
-          (drgnx-modules--record name stage ms (if err 'failed 'ok) err nil (or (cdr failure) problems)))
+          (drgnx-modules--record name stage ms (if err 'failed 'ok) err nil (append (cdr failure) problems)))
         t))))
 
 (defun drgnx-modules-run (stage)
