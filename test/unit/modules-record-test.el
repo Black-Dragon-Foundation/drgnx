@@ -264,12 +264,13 @@ test hook, list and modes as they were after."
                                                          (drgnx-modules-record-test-b-mode 1)
                                                          'ran))))
              (drgnx-modules-record-test--run 'test/a)
-             (should-not (drgnx-modules-record-test--labels 'test/a))
+             (should (equal (drgnx-modules-record-test--labels 'test/a) '("after-load drgnx-modules-record-test-later")))
              (load lib nil t)                                  ; later, outside any setup
              (should (eq (funcall later) 'ran))                ; a timer callback, say
              (should (equal (drgnx-modules-record-test--labels 'test/a)
                             '("mode drgnx-modules-record-test-b-mode" "timer drgnx-modules-record-test-other"
-                              "hook drgnx-modules-record-test-hook drgnx-modules-record-test-fn")))
+                              "hook drgnx-modules-record-test-hook drgnx-modules-record-test-fn"
+                              "after-load drgnx-modules-record-test-later")))
              (should-not drgnx-modules--current)
              (should-not (drgnx-module-teardown 'test/a))
              (should-not drgnx-modules-record-test-hook)
@@ -296,7 +297,38 @@ test hook, list and modes as they were after."
      ;; outside a setup there is no owner: the work just runs
      (should (equal (funcall (drgnx-modules-with-owner 'plain)) 'plain)))))
 
-(defconst drgnx-modules-record-test--net '(add-hook advice-add add-to-list do-after-load-evaluation)
+(ert-deftest drgnx-modules-record/after-load-entries-go-with-the-module ()
+  ;; The function a setup's `eval-after-load' adds goes at teardown, whether its feature is loaded or not; another's
+  ;; form for the same feature stays.  On, off, on, then the feature loads: the deferred work runs once (a stale
+  ;; entry would make `eval-after-load' drop the new run's function as `equal').
+  (drgnx-modules-record-test--with
+   (let ((theirs (lambda () nil)))
+     (unwind-protect
+         (progn
+           (eval-after-load 'drgnx-modules-record-test-eal theirs)
+           ;; for a feature Emacs stores a wrapper around the function: that object is theirs in the entry
+           (setq theirs (car (last (assq 'drgnx-modules-record-test-eal after-load-alist))))
+           (drgnx-module-define 'test/a :doc "a"
+                                :setup (lambda ()
+                                         (eval-after-load 'drgnx-modules-record-test-eal
+                                           (drgnx-modules-with-owner (push 'ran drgnx-modules-record-test-ran)))
+                                         (eval-after-load 'cl-lib (drgnx-modules-with-owner nil))))
+           (let ((n (length (assq 'drgnx-modules-record-test-eal after-load-alist)))
+                 (n-cl (length (cdr (assq 'cl-lib after-load-alist)))))   ; forms: an emptied entry stays
+             (drgnx-modules-record-test--run 'test/a)
+             (should (= (length (assq 'drgnx-modules-record-test-eal after-load-alist)) (1+ n)))
+             (should-not (drgnx-module-teardown 'test/a))
+             (should (= (length (assq 'drgnx-modules-record-test-eal after-load-alist)) n))
+             (should (= (length (cdr (assq 'cl-lib after-load-alist))) n-cl))
+             (drgnx-modules-record-test--run 'test/a)                    ; on again
+             (let ((load-file-name nil)) (provide 'drgnx-modules-record-test-eal))
+             (should (equal drgnx-modules-record-test-ran '(ran)))
+             (should-not (drgnx-module-teardown 'test/a))
+             (should (memq theirs (cdr (assq 'drgnx-modules-record-test-eal after-load-alist))))))
+       (setq after-load-alist (assq-delete-all 'drgnx-modules-record-test-eal after-load-alist)
+             features (delq 'drgnx-modules-record-test-eal features))))))
+
+(defconst drgnx-modules-record-test--net '(add-hook advice-add add-to-list do-after-load-evaluation eval-after-load)
   "The functions the safety net advises while a setup runs.")
 
 (ert-deftest drgnx-modules-record/the-advice-is-gone-after-setup ()

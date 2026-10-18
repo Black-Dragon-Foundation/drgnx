@@ -172,6 +172,24 @@ Not the minor mode lists (Emacs 31's `define-minor-mode' adds to them so): modes
     (when box
       (dolist (part new) (setcar box (append part (car box))) (setq box (cdr box))))))
 
+(defun drgnx-modules--eval-after-load (orig file form)
+  "Around `eval-after-load' while a setup runs: the function it adds to `after-load-alist' is recorded.
+Emacs adds it even when FILE is already loaded and keeps it after FILE loads.  Left there, a module turned off
+keeps an entry, and turned on again its new function is dropped as `equal' to the old one: the deferred work
+never runs."
+  (if (not (drgnx-modules--net-records-p))
+      (funcall orig file form)
+    (let* ((key (if (stringp file) (load-history-regexp file) file))
+           (old (copy-sequence (cdr (assoc key after-load-alist)))))   ; a copy: the entry grows in place
+      (prog1 (funcall orig file form)
+        (dolist (fn (cdr (assoc key after-load-alist)))
+          (unless (memq fn old)
+            (drgnx-modules-push-undo
+             (drgnx-modules--label "after-load %s" key)
+             (lambda ()
+               (when-let* ((elt (assoc key after-load-alist)) ((memq fn (cdr elt))))
+                 (setcdr elt (delq fn (cdr elt))))))))))))
+
 (defun drgnx-modules--after-load (orig &rest args)
   "Around `do-after-load-evaluation' while a setup runs: `eval-after-load' forms belong to nobody.
 They run once, when their library loads; were they recorded on the module whose setup loaded it, turning that
@@ -183,7 +201,8 @@ except deferred work that names its owner (`drgnx-modules-with-owner')."
 
 (defconst drgnx-modules--net
   '((add-hook . drgnx-modules--add-hook) (add-to-list . drgnx-modules--add-to-list)
-    (do-after-load-evaluation . drgnx-modules--after-load) (advice-add . drgnx-modules--advice-add))
+    (do-after-load-evaluation . drgnx-modules--after-load) (eval-after-load . drgnx-modules--eval-after-load)
+    (advice-add . drgnx-modules--advice-add))
   "The safety net: advice on Emacs's own doors, there only while a setup runs.  `advice-add' last, so
 installing the others is not recorded.")
 
@@ -205,8 +224,9 @@ note its new features.  Modes are pushed last: they go off first, and their own 
 
 (defun drgnx-modules--record-call (module fn)
   "Call FN as MODULE's code, with the safety net; return its value.
-While FN runs, `add-hook' (global), `advice-add' and `add-to-list' calls from MODULE's own code that change
-something push their undo onto MODULE's stack; after it (also after an error, a quit or a throw), so do the timers
+While FN runs, `add-hook' (global), `advice-add', `add-to-list' and `eval-after-load' calls from MODULE's own code
+that change something push their undo onto MODULE's stack; after it (also after an error, a quit or a throw), so
+do the timers
 and global minor modes that appeared.  The advice is installed by the outermost call only and removed when it
 ends: outside a setup it costs nothing."
   (let ((outer drgnx-modules--net-seen) (before (drgnx-modules--snapshot)))

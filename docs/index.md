@@ -38,7 +38,7 @@ Commands, options and the CLI, generated from the command registry — not writt
 How drgnx is built, tested and measured.
 
 - [Architecture overview](develop/architecture.md)
-- [Core](develop/core.md): paths, staged hooks, no-prompt guard, command registry, surfaces, palette, modules.
+- [Core](develop/core.md): paths, staged hooks, no-prompt guard, command registry, surfaces, palette, modules (every module turns off cleanly: the rule and its check).
 - [Harness](develop/harness.md): headless GUI test sessions, test tiers (each unit test file in an Emacs of its
   own), CLI and MCP tools for agents.
 - [Performance](develop/perf.md): the perf lab — input latency, frames, GC, startup, memory, budgets, the soak, tuning.

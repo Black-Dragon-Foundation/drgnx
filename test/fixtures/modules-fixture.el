@@ -8,11 +8,13 @@
 ;; DRGNX_CONFIG_DIR), or every shipped module of the stages in :stages.  Afterwards it turns them off through
 ;; the product path (`drgnx-module-teardown', last set up first, then `drgnx-modules-after-teardown-functions'),
 ;; so every use also tests the teardown, and puts back a snapshot of every registry variable of
-;; `drgnx-modules-fingerprint-registries' taken before.  The snapshot is copied values restored with `set' (a
+;; `drgnx-modules-fingerprint-registries' taken after the module files and the libraries their setups load are
+;; loaded (a library's own top-level registrations are the library's and stay).  The snapshot is copied values restored with `set' (a
 ;; keymap in place), never `let': binding a variable of a library that is first loaded inside BODY leaves it
 ;; void once the library is loaded (it is bound after, see `drgnx-test-modules/no-let-binding-trap').
 ;; `:strict t' fails the test, with the fingerprint diff, when the state after the teardown differs from the
-;; state before the first setup (features excepted).  `:packages hidden' hides third-party features during the
+;; state before the first setup, taken after the libraries the setups load are loaded (features and Emacs's own
+;; lazy timers excepted).  `:packages hidden' hides third-party features during the
 ;; setups, for tests of a result shape (the key snapshot) that must not depend on what is installed.
 ;; See docs/develop/harness.md ("Tests that set modules up").
 
@@ -167,6 +169,37 @@ applied before; when some were, the after-teardown function's re-application sta
     (when (and (bound-and-true-p context-menu-mode) (not (plist-get snap :context-mode)))
       (context-menu-mode -1))))
 
+;;;; What `:strict' does not count: what the libraries a setup loads, and Emacs itself, leave behind
+
+(defun drgnx-test-modules--requires (file)
+  "The features FILE (or the .el beside a .elc) `require's with a quoted name, read with the Lisp reader."
+  (let ((src (concat (file-name-sans-extension file) ".el")) out)
+    (when (file-readable-p src)
+      (with-temp-buffer
+        (insert-file-contents src)
+        (cl-labels ((walk (x)
+                      (when (consp x)
+                        (pcase x (`(require (quote ,(and f (pred symbolp))) . ,_) (push f out)))
+                        (while (consp x) (walk (car x)) (setq x (cdr x))))))
+          (condition-case nil (while t (walk (read (current-buffer)))) (end-of-file nil)))))
+    (delete-dups (nreverse out))))
+
+(defun drgnx-test-modules--preload (names)
+  "Load what the setups of NAMES load first, before the helper takes its snapshots: their `:packages' and the
+features their files `require'.  A library's top level belongs to the library, which stays loaded (spec row 26).
+Loaded here, it is in the snapshot whichever test loaded it first.  Nothing a setup does comes before the
+snapshot, so no leak is hidden.  A library that cannot be found or does not load is left to the setup."
+  (dolist (name names)
+    (let* ((spec (alist-get name drgnx-modules--table)) (file (plist-get spec :file)))
+      (dolist (f (append (plist-get spec :packages) (and file (drgnx-test-modules--requires file))))
+        (unless (or (featurep f) (not (locate-library (symbol-name f))))
+          (ignore-errors (require f)))))))
+
+(defun drgnx-test-modules--without-emacs-timers (fp)
+  "FP without Emacs's own lazy singleton timers (undo's boundary timer…), which the recorder leaves alone too."
+  (plist-put (copy-sequence fp) :timers
+             (seq-remove (lambda (it) (drgnx-modules--emacs-timer-p (cdr it))) (plist-get fp :timers))))
+
 ;;;; Running
 
 (defun drgnx-test-modules--diff-lines (before after)
@@ -214,7 +247,7 @@ applied before; when some were, the after-teardown function's re-application sta
          (drgnx-modules--stacks nil) (drgnx-modules--runs nil) (drgnx-modules--features nil)
          (drgnx-module--claims (make-hash-table :test 'equal))
          (drgnx-module--releasers (make-hash-table :test 'equal))
-         (snap (drgnx-test-modules--snapshot)))
+         (snap nil))
     (unwind-protect
         (drgnx-test-modules--hiding (eq (plist-get opts :packages) 'hidden)
           (let* ((named (drgnx-test-modules--load modules))
@@ -226,6 +259,9 @@ applied before; when some were, the after-teardown function's re-application sta
                                     (and stages
                                          (mapcar #'car (seq-filter (lambda (m) (memq (plist-get (cdr m) :stage) stages))
                                                                    drgnx-modules--table))))))
+                 ;; the libraries' own top level (registrations too) is theirs and stays: load them, then copy
+                 (_ (drgnx-test-modules--preload selected))
+                 (_ (setq snap (drgnx-test-modules--snapshot)))
                  (before (drgnx-modules-fingerprint))
                  (ui (drgnx-test-modules--ui-snapshot))
                  (done nil) (problems nil) (value nil))
@@ -241,17 +277,20 @@ applied before; when some were, the after-teardown function's re-application sta
             (when problems
               (ert-fail (list "modules did not tear down cleanly" problems)))
             (when (plist-get opts :strict)
-              (when-let* ((lines (drgnx-test-modules--diff-lines before (drgnx-modules-fingerprint))))
+              (when-let* ((lines (drgnx-test-modules--diff-lines
+                                  (drgnx-test-modules--without-emacs-timers before)
+                                  (drgnx-test-modules--without-emacs-timers (drgnx-modules-fingerprint)))))
                 (ert-fail (cons "modules left state behind after their teardown:" lines))))
             value))
-      (drgnx-test-modules--restore snap)
+      (when snap (drgnx-test-modules--restore snap))
       (delete-directory cfg t))))
 
 (defmacro drgnx-test-with-modules (modules &rest body)
   "Run BODY with MODULES (a list of module names, evaluated) set up and torn down after.
 Keywords before BODY: `:stages' (a list of stages: every shipped module of them as well), `:packages hidden'
 \(third-party features are hidden during the setups) and `:strict t' (fail with the fingerprint diff when the
-state after differs from before, features excepted).  The module table, report, state and config directory
+state after differs from before — taken after the setups' libraries are loaded — features and Emacs's own timers
+excepted).  The module table, report, state and config directory
 are fresh; the registries of `drgnx-modules-fingerprint-registries' are put back after.  Returns BODY's value."
   (declare (indent 1) (debug t))
   (let (opts)
