@@ -128,7 +128,9 @@ evil, and `test/unit/modal-core-test.el` drives it with a fake engine.
   an engine with a top-level `:modal (:engine NAME :leader KEYS :default-map … :maps …)` (keys/vim.eld);
   `drgnx-modal-sync-engine` starts the engine the current layers need (once) and stops any other (a stop clears every buffer's state and
   removes the indicator, so `SPC` types a space again; an engine's start turns the indicator on), and
-  `drgnx-modal-running` names it. `drgnx-modal-suspended` (one element: the layers at the time) keeps the engine off
+  `drgnx-modal-running` names it. `(drgnx-modal-mixed-p LAYERS)` is non-nil when a layer is of a profile without
+  `:modal` (a Vim stack mixed with another editor's keys); `drgnx-modal-sync-functions` are called with the layers
+  at the end of every sync, started or not. `drgnx-modal-suspended` (one element: the layers at the time) keeps the engine off
 for those layers, however often the keys are applied again (Toggle Modal Editing); other layers end it. `:maps` says, per keymap, the states a key bound there must also work in
   (the key resolver reads it); `drgnx-modal-where` names a map for the key sheet.
 - **Commands.** `modal-leader` (Leader Menu) reads the leader's `SPC` submap as a transient map from any state.

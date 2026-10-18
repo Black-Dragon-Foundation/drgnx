@@ -84,6 +84,17 @@ VS Code or Emacs keys). It runs [evil](https://github.com/emacs-evil/evil) as th
 - **Toggle Modal Editing** (`SPC u m`, the palette) turns Vim editing off and on for this session; the key stack
   stays as it is. It stays off however often the keys are applied again, until you toggle it on, choose another
   key stack, or restart. With it off, `SPC` types a space again; `M-SPC u m` is the way back.
+- **Third-party modes** (Magit, Dired, xref, compilation, Help, Info, vundo, Eglot, Ediff) get Vim keys from
+  [evil-collection](https://github.com/emacs-evil/evil-collection), each when the mode's library loads, not before,
+  so starting Vim editing stays cheap. The list is `drgnx-evil-collection-modes`; drgnx's own modes are never in it.
+  `:flags ((editor/evil no-collection))` in `modules.eld` leaves them all out (they keep their own keys).
+- **Insert-state keys.** In the pure Vim stack insert state has Vim's keys: `C-w` deletes a word, `C-r` pastes a
+  register, `C-v` quotes, `C-a`, `C-e`, `C-y`, `C-t`, `C-d`, `C-n`, `C-p`, `C-o` … When another profile's layer is
+  mixed in (VS Code's app and window keys with Vim's editing, say) those keys stay Emacs' own, so the other
+  profile's keys keep working while you type; switching back to the pure stack restores them. A key you rebound in
+  `evil-insert-state-map` is never touched.
+- **Multiple cursors** (the `multiple-cursors` package) run in Emacs state, because Vim's keys would act on one cursor
+  at a time; when they end the buffer returns to the state it was in (normal when it was a visual one).
 - **Your settings win.** The module sets evil's defaults (`evil-undo-system` `undo-redo`, `evil-want-C-u-scroll`,
   `evil-search-module` `evil-search`, no evil in the minibuffer) before your `config.el`, so your `setopt` is last. A
   cursor variable you set (`evil-normal-state-cursor` …) is kept.

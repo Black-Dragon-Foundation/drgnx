@@ -42,7 +42,14 @@
 (defvar which-key-mode)
 (defvar xterm-update-cursor)
 (defvar git-commit-setup-hook)
+(defvar evil-disable-insert-state-bindings)
+(defvar multiple-cursors-mode-enabled-hook)
+(defvar multiple-cursors-mode-disabled-hook)
 (declare-function evil-mode "evil-core")
+(declare-function evil-change-state "evil-core")
+(declare-function evil-update-insert-state-bindings "evil-maps")
+(declare-function evil-emacs-state "evil-states")
+(declare-function evil-collection-init "evil-collection")
 (declare-function evil-set-initial-state "evil-core")
 (declare-function evil-insert-state "evil-states")
 (declare-function which-key-mode "which-key")
@@ -61,6 +68,70 @@ tag (drgnx's indicator replaces it).  Users override these in config.el with `se
           evil-search-module 'evil-search
           evil-want-minibuffer nil
           evil-mode-line-format nil))
+
+;;;; evil-collection
+
+(defvar drgnx-evil--active nil "Non-nil while the engine runs (the after-load forms check it).")
+
+(defvar drgnx-evil-collection-modes '(magit dired xref compile help info vundo eglot ediff)
+  "The third-party and built-in modes that get evil-collection's Vim keys.  Each loads its keys when the mode's
+library loads, not before.  drgnx's own modes (panels, forms, inputs) are never in it: they keep their own keys.
+The flag `no-collection' of editor/evil (modules.eld :flags) leaves them all out.")
+
+(defvar drgnx-evil--collection-done nil "The modes of `drgnx-evil-collection-modes' evil-collection was told about.")
+
+(defun drgnx-evil--collection ()
+  "Register evil-collection's keys for the modes of `drgnx-evil-collection-modes' not registered yet, unless the
+flag `no-collection' is on.  Only the registration happens now: each mode's keys load with the mode's library."
+  (unless (drgnx-module-flag-p 'editor/evil 'no-collection)
+    (let ((todo (seq-remove (lambda (m) (memq m drgnx-evil--collection-done)) drgnx-evil-collection-modes)))
+      (when todo
+        (if (require 'evil-collection nil t)
+            (progn (evil-collection-init todo)
+                   (setq drgnx-evil--collection-done (append todo drgnx-evil--collection-done)))
+          (message "drgnx: evil-collection is not installed: third-party modes keep their own keys"))))))
+
+;;;; Insert-state keys
+
+(defun drgnx-evil--insert-bindings (on)
+  "ON: evil's `evil-insert-state-bindings' are in `evil-insert-state-map', as evil made them (a key bound to
+something else by now is left alone).  Nil: they are taken out, so the other editor's keys (C-w, C-r, C-v …) are
+the Emacs ones in insert state; only a binding still evil's own goes, a key you rebound stays.  Evil's function does
+both, and does nothing when you set `evil-disable-insert-state-bindings'."
+  (unless evil-disable-insert-state-bindings
+    (if on (evil-update-insert-state-bindings) (evil-update-insert-state-bindings nil t))))
+
+(defun drgnx-evil--insert-for-layers (layers)
+  "`drgnx-modal-sync-functions': Vim's insert-state keys only in the pure Vim stack."
+  (when drgnx-evil--active
+    (drgnx-evil--insert-bindings (not (drgnx-modal-mixed-p layers)))))
+
+;;;; Multiple cursors
+
+(defvar-local drgnx-evil--mc-state nil
+  "The evil state a buffer was in when multiple cursors started, as (STATE).")
+
+(defun drgnx-evil--mc-enter ()
+  "Multiple cursors run in emacs state: Vim's keys would act on the cursors one by one."
+  (when (and drgnx-evil--active (bound-and-true-p evil-local-mode) (not drgnx-evil--mc-state))
+    (setq drgnx-evil--mc-state (list evil-state))
+    (evil-emacs-state)))
+
+(defun drgnx-evil--mc-leave ()
+  "Back to the state before multiple cursors (normal when it was a visual or operator one).  The hook also runs
+when the mode is not on: then nothing was noted and nothing changes."
+  (when drgnx-evil--mc-state
+    (let ((state (car drgnx-evil--mc-state)))
+      (setq drgnx-evil--mc-state nil)
+      (when (bound-and-true-p evil-local-mode)
+        (evil-change-state (if (memq state '(insert replace emacs motion)) state 'normal))))))
+
+(defun drgnx-evil--mc-hooks (on)
+  (dolist (cell '((multiple-cursors-mode-enabled-hook . drgnx-evil--mc-enter)
+                  (multiple-cursors-mode-disabled-hook . drgnx-evil--mc-leave)))
+    (if on (add-hook (car cell) (cdr cell)) (remove-hook (car cell) (cdr cell)))))
+
+(defun drgnx-evil--mc-hooks-on () (when drgnx-evil--active (drgnx-evil--mc-hooks t)))
 
 ;;;; Cursor
 
@@ -142,8 +213,6 @@ user set (`setopt' in config.el) is theirs."
         (kill-local-variable 'drgnx-evil--own-cursor)))))
 
 ;;;; Terminal cursor
-
-(defvar drgnx-evil--active nil "Non-nil while the engine runs (the after-load forms check it).")
 
 (defun drgnx-evil--xterm-frames ()
   "The live terminal frames whose terminal ran Emacs' xterm initialisation (it ran before the option was set,
@@ -282,6 +351,10 @@ far is undone and the error is signalled again."
   (setq drgnx-evil--active t)
   (drgnx-evil--cursors-on)
   (drgnx-evil--initial-states)
+  (drgnx-evil--collection)
+  (drgnx-evil--insert-bindings (not (drgnx-modal-mixed-p (drgnx-modal-current-layers))))
+  (add-hook 'drgnx-modal-sync-functions #'drgnx-evil--insert-for-layers)
+  (eval-after-load 'multiple-cursors-core #'drgnx-evil--mc-hooks-on)
   (dolist (cell drgnx-evil--mode-lists) (add-variable-watcher (car cell) #'drgnx-evil--watch))
   (dolist (hook drgnx-evil--entry-hooks) (add-hook hook #'drgnx-evil--sync))
   (add-hook 'git-commit-setup-hook #'drgnx-evil--insert)
@@ -300,6 +373,9 @@ far is undone and the error is signalled again."
   "Turn Vim editing off: evil's mode, the hooks, every buffer's state, the cursors, the indicator, which-key."
   (setq drgnx-evil--active nil)
   (when (fboundp 'evil-mode) (evil-mode -1))
+  (remove-hook 'drgnx-modal-sync-functions #'drgnx-evil--insert-for-layers)
+  (when (fboundp 'evil-update-insert-state-bindings) (drgnx-evil--insert-bindings t))
+  (drgnx-evil--mc-hooks nil)
   (dolist (cell drgnx-evil--mode-lists) (remove-variable-watcher (car cell) #'drgnx-evil--watch))
   (dolist (hook drgnx-evil--entry-hooks) (remove-hook hook #'drgnx-evil--sync))
   (remove-hook 'git-commit-setup-hook #'drgnx-evil--insert)

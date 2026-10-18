@@ -192,6 +192,17 @@ functions of no arguments that turn the engine on and off.  Returns NAME."
     (setq profiles drgnx-keys-profiles))
   (cl-some (lambda (layer) (plist-get (plist-get (alist-get (car layer) profiles) :modal) :engine)) layers))
 
+(defun drgnx-modal-mixed-p (layers &optional profiles)
+  "Non-nil when LAYERS has a layer of a known profile (in PROFILES, default the loaded ones) without `:modal':
+a Vim stack mixed with another editor's keys."
+  (unless profiles
+    (drgnx-keys--ensure-profiles)
+    (setq profiles drgnx-keys-profiles))
+  (cl-some (lambda (layer)
+             (when-let* ((profile (assq (car layer) profiles)))
+               (not (plist-get (cdr profile) :modal))))
+           layers))
+
 (defun drgnx-modal-current-layers ()
   "The key layers in force: this session's, else keys.eld's `:layers', else `drgnx-keys-layers'."
   (or drgnx-keys--session-layers
@@ -204,6 +215,10 @@ functions of no arguments that turn the engine on and off.  Returns NAME."
     (with-current-buffer buf (drgnx-modal-set-state nil)))
   (drgnx-modal-indicator-off))
 
+(defvar drgnx-modal-sync-functions nil
+  "Functions called with the key layers at the end of every `drgnx-modal-sync-engine', whether or not an engine
+started or stopped: the engine's keys that depend on the layers (insert-state keys in a mixed stack).")
+
 (defvar drgnx-modal-suspended nil
   "Non-nil while the user has turned modal editing off for this session (Toggle Modal Editing): a list of one
 element, the key layers in force at that moment.  `drgnx-modal-sync-engine' starts no engine for those same
@@ -215,7 +230,8 @@ After a stop every buffer's state is cleared and the indicator removed (SPC type
 start the emulation maps are put in order.  An engine's start function turns the indicator on and puts each
 buffer in its state: by `drgnx-modal-init-buffer', or by mirroring its own state through `drgnx-modal-set-state'.
 While `drgnx-modal-suspended' holds these same layers no engine is wanted; with other layers the suspension
-ends.  Returns the engine running, or nil.  An engine whose module is not installed is not started."
+ends.  Returns the engine running, or nil.  An engine whose module is not installed is not started.
+At the end `drgnx-modal-sync-functions' are called with LAYERS."
   (let* ((layers (or layers (drgnx-modal-current-layers)))
          (_ (when (and drgnx-modal-suspended (not (equal (car drgnx-modal-suspended) layers)))
               (setq drgnx-modal-suspended nil)))
@@ -237,6 +253,9 @@ ends.  Returns the engine running, or nil.  An engine whose module is not instal
                    (setq drgnx-modal-running want)
                    (drgnx-modal-order-alists))
           (error (message "drgnx: starting %s failed: %s" want (error-message-string err))))))
+    (dolist (fn drgnx-modal-sync-functions)
+      (condition-case err (funcall fn layers)
+        (error (message "drgnx: %S failed: %s" fn (error-message-string err)))))
     drgnx-modal-running))
 
 ;;;; Commands

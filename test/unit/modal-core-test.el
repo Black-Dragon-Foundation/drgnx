@@ -180,6 +180,24 @@
     (should (equal (plist-get modal :default-map) '(evil . evil-normal-state-map)))
     (should (equal (assq 'drgnx-modal-panel-map (plist-get modal :maps)) '(drgnx-modal-panel-map panels)))))
 
+(ert-deftest drgnx-modal/mixed-means-a-layer-without-modal-keys ()
+  (let ((p drgnx-modal-test--profiles))
+    (should-not (drgnx-modal-mixed-p '((vim app editing window)) p))
+    (should (drgnx-modal-mixed-p '((vscode app window) (vim editing)) p))
+    (should (drgnx-modal-mixed-p '((vim editing) (emacs)) p))
+    (should-not (drgnx-modal-mixed-p nil p))
+    ;; a layer of an unknown profile adds no keys
+    (should-not (drgnx-modal-mixed-p '((nonesuch editing) (vim app)) p))))
+
+(ert-deftest drgnx-modal/every-sync-tells-the-hook-the-layers ()
+  (let* ((drgnx-modal-engines nil) (drgnx-modal-running nil) (drgnx-keys-profiles drgnx-modal-test--profiles)
+         (log nil)
+         (drgnx-modal-sync-functions (list (lambda (layers) (push (list layers drgnx-modal-running) log)))))
+    (drgnx-modal-define-engine 'evil :module "editor/evil" :start #'ignore :stop #'ignore)
+    (drgnx-modal-sync-engine '((vim editing)))
+    (drgnx-modal-sync-engine '((vscode app window) (vim editing)))
+    (should (equal (reverse log) '((((vim editing)) evil) (((vscode app window) (vim editing)) evil))))))
+
 (ert-deftest drgnx-modal/sync-starts-and-stops-once ()
   (let ((drgnx-modal-engines nil) (drgnx-modal-running nil) (drgnx-keys-profiles drgnx-modal-test--profiles)
         (log nil))

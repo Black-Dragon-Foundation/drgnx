@@ -8,6 +8,10 @@
 (ert-deftest drgnx-evil/own-process ()
   (should (null (drgnx-modal-test-isolated-result "test/unit/isolated/mod-evil-isolated.el" "^drgnx-evil/"))))
 
+(ert-deftest drgnx-evil-more/own-process ()
+  (should (null (drgnx-modal-test-isolated-result "test/unit/isolated/mod-evil-more-isolated.el"
+                                                  "^drgnx-evil-more/"))))
+
 (ert-deftest drgnx-modal-fixture/own-process ()
   (should (null (drgnx-modal-test-isolated-result "test/unit/isolated/modal-fixture-isolated.el"
                                                   "^drgnx-modal-fixture/"))))
