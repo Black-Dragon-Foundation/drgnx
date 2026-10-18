@@ -7,6 +7,9 @@
 (load (expand-file-name "modules/ui/drgnx-statusbar" drgnx-dir) nil t)
 (defvar drgnx-job-ui--badge)
 (defvar compilation-arguments)
+(defvar flymake-mode)
+(defvar eglot--cached-server)
+(defvar drgnx-statusbar-test--offset nil "An indentation variable of a test.")
 
 (defmacro drgnx-statusbar-test--with (&rest body)
   "BODY with the status bar's segments, lists and error record kept away from the rest of the test process.
@@ -460,7 +463,7 @@ Segments a, b, c are defined: their text is A, B, C."
   (declare (indent 0))
   `(let ((drgnx-statusbar--tick 0) (drgnx-statusbar-tests-state nil) (drgnx-statusbar--jobs-state nil)
          (drgnx-statusbar--agents-state nil) (drgnx-statusbar--refresh-timer nil)
-         (drgnx-statusbar--redraw-wanted nil) (drgnx-statusbar--jobs-wanted nil)
+         (drgnx-statusbar--redraw-wanted nil) (drgnx-statusbar--jobs-wanted nil) (drgnx-statusbar--jobs-pending nil)
          (drgnx-statusbar--state-texts (make-hash-table :test #'eq))
          (drgnx-statusbar--memo (make-hash-table :test #'eq :weakness 'key))
          (drgnx-statusbar-waiting-functions (list #'drgnx-statusbar-agents-waiting)))
@@ -598,6 +601,70 @@ Segments a, b, c are defined: their text is A, B, C."
           (setq drgnx-job-ui--badge "")
           (drgnx-statusbar--hub-gone)
           (should-not (drgnx-statusbar-test--seg 'jobs)))))))
+
+(ert-deftest drgnx-statusbar/a-test-summary-never-breaks-the-compilation ()
+  (drgnx-statusbar-test--with
+    (drgnx-statusbar-test--state
+      (cl-letf (((symbol-function 'force-mode-line-update) #'ignore))
+        ;; a bad regexp of the user's: recorded, never signalled into the compilation's sentinel
+        (let ((b (drgnx-statusbar-test--compilation "make test" "Ran 2 tests, 2 results as expected, 0 unexpected"))
+              (drgnx-statusbar-test-count-regexps '(("\\(" :passed 1))))
+          (unwind-protect (drgnx-statusbar--compilation-finished b "finished\n")
+            (kill-buffer b))
+          (should-not drgnx-statusbar-tests-state)
+          (should (assq 'tests drgnx-statusbar--errors)))
+        ;; only the last 64 KB are searched: a summary further back is not this run's
+        (let ((b (drgnx-statusbar-test--compilation
+                  "make test" "Ran 2 tests, 2 results as expected, 0 unexpected" (make-string 70000 ?x))))
+          (unwind-protect (drgnx-statusbar--compilation-finished b "finished\n")
+            (kill-buffer b))
+          (should-not drgnx-statusbar-tests-state))))))
+
+(ert-deftest drgnx-statusbar/the-hub-is-asked-one-question-at-a-time ()
+  (drgnx-statusbar-test--with
+    (drgnx-statusbar-test--state
+      (drgnx-statusbar--define-defaults)
+      (let ((asked 0) (callback nil) (connected nil))
+        (cl-letf (((symbol-function 'force-mode-line-update) #'ignore)
+                  ((symbol-function 'drgnx-statusbar--hub-connected-p) (lambda () connected))
+                  ((symbol-function 'drgnx-hub-call) (lambda (_m _p cb) (cl-incf asked) (setq callback cb))))
+          ;; an event that is not a job's (or not a string) does not ask while the count is known or the hub is away
+          (drgnx-statusbar--hub-event 'job nil)
+          (drgnx-statusbar--hub-event "agent" nil)
+          (drgnx-statusbar--refresh-now)
+          (should (= asked 0))
+          ;; the first event after the hub connects asks: the count is not known yet
+          (setq connected t)
+          (drgnx-statusbar--hub-event "agent" nil)
+          (drgnx-statusbar--refresh-now)
+          (should (= asked 1))
+          ;; while the answer is on its way, more job events ask nothing…
+          (drgnx-statusbar--hub-event "job" '(:id "a"))
+          (drgnx-statusbar--refresh-now)
+          (drgnx-statusbar--hub-event "card" '(:id 1))
+          (drgnx-statusbar--refresh-now)
+          (should (= asked 1))
+          ;; …the answer asks once more for them, on the next refresh
+          (funcall callback '(:jobs [(:status "running")]) nil)
+          (should-not drgnx-statusbar--jobs-pending)
+          (should (equal (drgnx-statusbar-test--seg 'jobs) "◎ 1 job"))
+          (should (timerp drgnx-statusbar--refresh-timer))
+          (drgnx-statusbar--refresh-now)
+          (should (= asked 2))
+          ;; an answer of the wrong shape (in the hub client's filter) signals nothing: the count is not known
+          (funcall callback '(:jobs 42) nil)
+          (should-not drgnx-statusbar--jobs-state)
+          (funcall callback "garbage" nil)
+          (should-not drgnx-statusbar--jobs-state)
+          ;; the hub went away with a question on its way: the next one is asked
+          (drgnx-statusbar--hub-event "job" nil)
+          (drgnx-statusbar--refresh-now)
+          (should (= asked 3))
+          (drgnx-statusbar--hub-gone)
+          (should-not drgnx-statusbar--jobs-pending)
+          (drgnx-statusbar--hub-event "job" nil)
+          (drgnx-statusbar--refresh-now)
+          (should (= asked 4)))))))
 
 (ert-deftest drgnx-statusbar/agents-busy-and-waiting ()
   (require 'drgnx-agents)
@@ -747,6 +814,31 @@ Segments a, b, c are defined: their text is A, B, C."
                 (should-not (rebuilt-p))
                 (drgnx-statusbar-refresh t)                    ; a segment of your own says its state changed
                 (should (rebuilt-p))
+                ;; git changed: the refresh redraws, and the bars are built again (vc-mode may be another)
+                (drgnx-statusbar--git-changed "/repo/")
+                (drgnx-statusbar--refresh-now)
+                (should (rebuilt-p)) (should-not (rebuilt-p))
+                ;; the indentation width, flymake's backends and eglot's server state are in the key
+                (let ((drgnx-statusbar-indent-vars '(drgnx-statusbar-test--offset)))
+                  (setq-local indent-tabs-mode nil)
+                  (setq-local drgnx-statusbar-test--offset 2)
+                  (should (rebuilt-p)) (should-not (rebuilt-p))
+                  (setq-local drgnx-statusbar-test--offset 4)
+                  (should (rebuilt-p)) (should-not (rebuilt-p)))
+                (let ((running '(b1)) (reporting nil) (alive t))
+                  (cl-letf (((symbol-function 'flymake-running-backends) (lambda () running))
+                            ((symbol-function 'flymake-reporting-backends) (lambda () reporting))
+                            ((symbol-function 'jsonrpc-running-p) (lambda (_s) alive)))
+                    (setq-local flymake-mode t)
+                    (should (rebuilt-p)) (should-not (rebuilt-p))
+                    (setq reporting '(b1))                     ; the backend reported
+                    (should (rebuilt-p)) (should-not (rebuilt-p))
+                    (setq-local eglot--cached-server 'server)
+                    (should (rebuilt-p)) (should-not (rebuilt-p))
+                    (setq alive nil)                           ; the server exited
+                    (should (rebuilt-p)) (should-not (rebuilt-p))
+                    (setq-local flymake-mode nil)
+                    (setq-local eglot--cached-server nil)))
                 ;; the compact bar in another window is its own entry
                 (let ((other (split-window-right)))
                   (unwind-protect
@@ -757,6 +849,7 @@ Segments a, b, c are defined: their text is A, B, C."
 (ert-deftest drgnx-statusbar/hooks-and-timers-are-owned-by-the-mode ()
   (let ((drgnx-chrome-editor-mode-line drgnx-chrome-editor-mode-line)
         (drgnx-signal--subscribers nil)
+        (was drgnx-statusbar-mode)                       ; the process's other tests keep what they had
         (hooks '((post-command-hook . drgnx-statusbar--post-command)
                  (drgnx-agents-changed-functions . drgnx-statusbar--agents-changed)
                  (drgnx-hub-event-functions . drgnx-statusbar--hub-event)
@@ -780,7 +873,7 @@ Segments a, b, c are defined: their text is A, B, C."
               (dolist (h hooks) (should-not (memq (cdr h) (default-value (car h)))))
               (should-not drgnx-statusbar--refresh-timer)
               (should (= 0 (hash-table-count drgnx-statusbar--memo))))
-          (drgnx-statusbar-mode -1))))))
+          (drgnx-statusbar-mode (if was 1 -1)))))))
 
 (ert-deftest drgnx-statusbar/the-modal-indicator-moves-into-the-bar ()
   (let (calls (drgnx-chrome-editor-mode-line drgnx-chrome-editor-mode-line))

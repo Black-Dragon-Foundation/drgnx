@@ -60,7 +60,7 @@ as a box. Change one for your font:
 | `warning` | ⚠ | `!` | `dot` | ● | `*` |
 | `ok` | ✓ | `+` | `circle` | ○ | `o` |
 | `busy` | ◎ | `@` | `waiting` | ◐ | `?` |
-| `sep` | ` · ` | ` \| ` | `flag` | ⚑ | `!` |
+| `sep` | ` · ` | ` \| ` | `flag` | ⚑ | `#` |
 
 For code: `(drgnx-face-glyph 'close)` is the string for the selected frame, `(drgnx-face-glyph 'close FRAME)` for another.
 
@@ -101,11 +101,15 @@ come from `drgnx-face-glyphs`, so a terminal that is not UTF-8 shows ASCII (` | 
 `drgnx-statusbar-test-command-regexp` (the word `test`: `bin/drgnx test`, `make test`, `cargo test`) is a test run.
 When it finishes, the bar reads its last summary line once — ERT's `Ran 41 tests, 41 results as expected, 0
 unexpected`, or `bin/drgnx test --ui`'s `ui ERT: 27/27 passed` (`drgnx-statusbar-test-count-regexps`) — and shows
-`✓ tests 41/41`, or `✕ tests 2 failed`; a click shows that compilation. Other code reports a run with
-`(drgnx-statusbar-note-tests PASSED FAILED SOURCE)`.
+`✓ tests 41/41`, or `✕ tests 2 failed`; a click shows that compilation. Only the last 64 KB of the output are
+searched. Other code reports a run with `(drgnx-statusbar-note-tests PASSED FAILED SOURCE)`.
 
-**Jobs.** `◎ 2 jobs` counts the jobs the hub says are running (asked when a job or a card changes, never on
-redisplay; nothing while there is no hub). `⚑1` is the job badge's count of cards and messages waiting on you.
+**Branch.** The branch is the one Emacs's version control put in `vc-mode`: a checkout made outside Emacs shows at
+the next VC refresh of the buffer (saving it, or `M-x vc-refresh-state`).
+
+**Jobs.** `◎ 2 jobs` counts the jobs the hub says are running (asked when the mode starts or the first hub event
+arrives, then when a job or a card changes — one question at a time, never on redisplay; nothing while there is no
+hub). `⚑1` is the job badge's count of cards and messages waiting on you.
 
 **Waiting on you.** The number in `◐ 1 waiting on you` is the sum of `drgnx-statusbar-waiting-functions`: each
 returns how many things wait for you. drgnx counts the agents' permission requests and edits to review; a module of
@@ -116,10 +120,13 @@ your own can add a function and call `drgnx-statusbar-refresh` when its count ch
 The bar is redrawn after every command that moved point, changed the text or selected another window (both windows
 trade the full and the compact bar a moment later, when the most recently used editor window is settled), and when
 agents, the hub or git report a change (`drgnx-statusbar-refresh`: at most one redraw every 0.2 seconds, however many
-changes come in, and only when a count changed). Each window keeps the bar it last drew, with what it was drawn from
-(the buffer, point, the text's change count, the width, full or compact, the counts above and the buffer's
-version-control, encoding, indentation, mode, narrowing and checker state): a redisplay that changes none of these
-reuses it, so a window you do not type in costs almost nothing however often Emacs redraws the screen.
+changes come in, and only when a count changed; git always redraws). Each window keeps the bar it last drew, with
+what it was drawn from (the buffer, point, the text's change count, the width, full or compact, the counts above and
+the buffer's version-control, encoding, indentation width, mode, narrowing, checker and language-server state): a
+redisplay that changes none of these reuses it, so a window you do not type in costs almost nothing however often
+Emacs redraws the screen. Shown up to one keystroke late, because nothing announces them: a failed segment's retry
+after 10 seconds, a change inside the buffer's process indicator (`mode-line-process`) that keeps the same construct,
+and a segment of your own that has not called `(drgnx-statusbar-refresh t)`.
 
 | Setting | Default | What it does |
 |---|---|---|

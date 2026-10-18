@@ -53,7 +53,6 @@
 (defvar drgnx-job-ui--badge)
 (defvar drgnx-face-glyphs)
 (defvar drgnx-modal-state)
-(defvar flymake--state)
 (defvar flymake--mode-line-counter-cache)
 (defvar compilation-arguments)
 (defvar drgnx-hub--events)
@@ -330,8 +329,9 @@ Weak on the window, so a deleted window's entry goes with it; emptied when the m
     '((current-buffer) (window-point w) (buffer-chars-modified-tick) drgnx-statusbar--tick width compact
       (point-min) (point-max) major-mode vc-mode buffer-file-coding-system indent-tabs-mode tab-width
       defining-kbd-macro mode-line-process default-directory
-      (bound-and-true-p flymake-mode) (bound-and-true-p flymake--mode-line-counter-cache) (bound-and-true-p flymake--state)
-      (bound-and-true-p eglot--managed-mode) (bound-and-true-p eglot--cached-server)
+      (bound-and-true-p flymake-mode) (bound-and-true-p flymake--mode-line-counter-cache) (drgnx-statusbar--flymake-backends)
+      (bound-and-true-p eglot--managed-mode) (bound-and-true-p eglot--cached-server) (drgnx-statusbar--eglot-live-p)
+      (drgnx-statusbar--indent-width)
       (bound-and-true-p drgnx-modal-state) (bound-and-true-p drgnx-job-ui--badge) (bound-and-true-p drgnx-face-glyphs)
       drgnx-statusbar-left drgnx-statusbar-right drgnx-statusbar-compact drgnx-statusbar-drop-order
       global)
@@ -435,6 +435,7 @@ recorded in `drgnx-statusbar--errors' as `waiting').")
 (defvar drgnx-statusbar--refresh-timer nil "The pending refresh, or nil.")
 (defvar drgnx-statusbar--redraw-wanted nil "Non-nil: the next refresh redraws the bars even when no count changed.")
 (defvar drgnx-statusbar--jobs-wanted nil "Non-nil: the next refresh asks the hub how many jobs run.")
+(defvar drgnx-statusbar--jobs-pending nil "Non-nil while a `job/status' question is on its way to the hub.")
 
 (defun drgnx-statusbar-refresh (&optional changed)
   "Bring drgnx's segments (agents, jobs, waiting counts) up to date and redraw the bars when they changed.
@@ -456,13 +457,14 @@ Called directly, it takes the place of the pending one."
   (let ((redraw drgnx-statusbar--redraw-wanted)
         (agents (drgnx-statusbar--agent-counts)))
     (setq drgnx-statusbar--redraw-wanted nil)
-    (when drgnx-statusbar--jobs-wanted
+    (when (and drgnx-statusbar--jobs-wanted (not drgnx-statusbar--jobs-pending))   ; else: asked when it answers
       (setq drgnx-statusbar--jobs-wanted nil)
       (drgnx-statusbar--ask-jobs))
     (unless (equal agents drgnx-statusbar--agents-state)
-      (setq drgnx-statusbar--agents-state agents redraw t)
-      (drgnx-statusbar--bump))
-    (when redraw (force-mode-line-update t))))
+      (setq drgnx-statusbar--agents-state agents redraw t))
+    (when redraw
+      (drgnx-statusbar--bump)                            ; else every window would reuse its memoized bar
+      (force-mode-line-update t))))
 
 (defun drgnx-statusbar-note-tests (passed failed &optional source)
   "Record a test run: PASSED and FAILED tests, SOURCE where it came from (the compilation buffer, which a click on
@@ -482,12 +484,16 @@ the `tests' segment shows, or what the work tracker knows it by).  The bars are 
 The last line of the compilation that matches one of them gives the counts."
   :type '(repeat (cons regexp (plist :value-type integer))) :group 'drgnx-statusbar)
 
+(defconst drgnx-statusbar--test-scan-bytes 65536 "How far back from its end a compilation is searched for a summary.")
+
 (defun drgnx-statusbar--test-counts ()
-  "(PASSED . FAILED) from the last line of this buffer that matches `drgnx-statusbar-test-count-regexps', or nil."
+  "(PASSED . FAILED) from the last line of this buffer that matches `drgnx-statusbar-test-count-regexps', or nil.
+Only the last `drgnx-statusbar--test-scan-bytes' characters are searched."
   (save-excursion
     (save-restriction
       (widen)
-      (let ((best nil) (best-pos nil) (case-fold-search nil))
+      (let ((best nil) (best-pos (max (point-min) (- (point-max) drgnx-statusbar--test-scan-bytes)))
+            (case-fold-search nil))
         (dolist (spec drgnx-statusbar-test-count-regexps)
           (goto-char (point-max))
           (when (re-search-backward (car spec) best-pos t)   ; only a later line than the best so far
@@ -500,30 +506,48 @@ The last line of the compilation that matches one of them gives the counts."
 
 (defun drgnx-statusbar--compilation-finished (buffer _how)
   "On `compilation-finish-functions': when BUFFER ran tests (`drgnx-statusbar-test-command-regexp'), note the counts
-of its last summary line.  The buffer is read once, here."
-  (when (buffer-live-p buffer)
-    (with-current-buffer buffer
-      (let ((command (car-safe (bound-and-true-p compilation-arguments))))
-        (when (and (stringp command) (stringp drgnx-statusbar-test-command-regexp)
-                   (with-syntax-table (standard-syntax-table)
-                     (let ((case-fold-search nil)) (string-match-p drgnx-statusbar-test-command-regexp command))))
-          (when-let* ((counts (drgnx-statusbar--test-counts)))
-            (drgnx-statusbar-note-tests (car counts) (cdr counts) buffer)))))))
+of its last summary line.  The buffer is read once, here.  It runs in the compilation's sentinel: an error (a bad
+regexp of yours) is recorded as `tests' in `drgnx-statusbar--errors', never signalled."
+  (condition-case err
+      (when (buffer-live-p buffer)
+        (with-current-buffer buffer
+          (let ((command (car-safe (bound-and-true-p compilation-arguments))))
+            (when (and (stringp command) (stringp drgnx-statusbar-test-command-regexp)
+                       (with-syntax-table (standard-syntax-table)
+                         (let ((case-fold-search nil)) (string-match-p drgnx-statusbar-test-command-regexp command))))
+              (when-let* ((counts (drgnx-statusbar--test-counts)))
+                (drgnx-statusbar-note-tests (car counts) (cdr counts) buffer))))))
+    (error (setq drgnx-statusbar--errors (assq-delete-all 'tests drgnx-statusbar--errors))
+           (drgnx-statusbar--note-error 'tests err))))
+
+(defun drgnx-statusbar--hub-connected-p ()
+  "Non-nil when this Emacs receives the hub's events."
+  (and (boundp 'drgnx-hub--events) (process-live-p drgnx-hub--events)))
 
 (defun drgnx-statusbar--ask-jobs ()
-  "Ask the hub (asynchronously) how many jobs run; the answer redraws the bars when the count changed."
-  (when (fboundp 'drgnx-hub-call)
+  "Ask the hub (asynchronously) how many jobs run, unless a question is already on its way; the answer redraws the
+bars when the count changed."
+  (when (and (fboundp 'drgnx-hub-call) (not drgnx-statusbar--jobs-pending))
+    (setq drgnx-statusbar--jobs-pending t)
     (condition-case nil
         (drgnx-hub-call "job/status" nil #'drgnx-statusbar--jobs-answer)
-      (error (drgnx-statusbar--set-jobs nil)))))
+      (error (setq drgnx-statusbar--jobs-pending nil)
+             (drgnx-statusbar--set-jobs nil)))))
 
 (defun drgnx-statusbar--jobs-answer (result err)
-  "The hub's answer to `job/status' (RESULT, or the error message ERR): the running jobs are counted."
+  "The hub's answer to `job/status' (RESULT, or the error message ERR): the running jobs are counted.
+It runs in the hub client's process filter: nothing here signals.  A job event that came while the question was on
+its way asks again."
+  (setq drgnx-statusbar--jobs-pending nil)
   (drgnx-statusbar--set-jobs
-   (unless err
-     (let ((n 0))
-       (dolist (j (append (plist-get result :jobs) nil)) (when (equal (plist-get j :status) "running") (setq n (1+ n))))
-       n))))
+   (condition-case nil
+       (unless (or err (not (listp result)))
+         (let ((n 0))
+           (dolist (j (append (plist-get result :jobs) nil))
+             (when (equal (plist-get j :status) "running") (setq n (1+ n))))
+           n))
+     (error nil)))
+  (when drgnx-statusbar--jobs-wanted (drgnx-statusbar-refresh)))
 
 (defun drgnx-statusbar--set-jobs (running)
   "RUNNING jobs (nil: not known); the bars are redrawn when that changed."
@@ -537,13 +561,16 @@ of its last summary line.  The buffer is read once, here."
   (drgnx-statusbar-refresh))
 
 (defun drgnx-statusbar--hub-event (event &rest _)
-  "On `drgnx-hub-event-functions': refresh (debounced); a job or a card EVENT asks the hub for the running jobs."
-  (when (member (format "%s" event) '("job" "card")) (setq drgnx-statusbar--jobs-wanted t))
+  "On `drgnx-hub-event-functions': refresh (debounced).  A job or a card EVENT asks the hub for the running jobs; so
+does the first event after the hub connects (the count is not known yet: the hub has no connect hook)."
+  (when (or (and (stringp event) (member event '("job" "card")))
+            (and (null drgnx-statusbar--jobs-state) (drgnx-statusbar--hub-connected-p)))
+    (setq drgnx-statusbar--jobs-wanted t))
   (drgnx-statusbar-refresh))
 
 (defun drgnx-statusbar--hub-gone ()
-  "On `drgnx-hub-disconnect-functions': the running jobs are not known any more."
-  (setq drgnx-statusbar--jobs-wanted nil)
+  "On `drgnx-hub-disconnect-functions': the running jobs are not known any more (the question on its way is lost)."
+  (setq drgnx-statusbar--jobs-wanted nil drgnx-statusbar--jobs-pending nil)
   (drgnx-statusbar--set-jobs nil))
 
 (defun drgnx-statusbar--git-changed (&rest _)
@@ -573,7 +600,7 @@ of its last summary line.  The buffer is read once, here."
           (drgnx-signal-subscribe e #'drgnx-statusbar--editor-changed))
         (when (fboundp 'drgnx-modal-indicator-off) (drgnx-modal-indicator-off))   ; the bar shows the modal state
         (setq drgnx-statusbar--agents-state (drgnx-statusbar--agent-counts))
-        (when (and (boundp 'drgnx-hub--events) (process-live-p drgnx-hub--events))   ; connected: count the jobs
+        (when (drgnx-statusbar--hub-connected-p)            ; connected: count the jobs
           (setq drgnx-statusbar--jobs-wanted t)
           (drgnx-statusbar-refresh)))
     (dolist (h drgnx-statusbar--hooks) (remove-hook (car h) (cdr h)))
@@ -589,11 +616,11 @@ of its last summary line.  The buffer is read once, here."
 
 ;;;; The default segments (cached state only)
 
-(defun drgnx-statusbar--glyph (name)
-  "The glyph NAME for the frame being drawn (ASCII on a terminal that is not UTF-8)."
-  (if (fboundp 'drgnx-face-glyph)
-      (or (drgnx-face-glyph name (window-frame (drgnx-statusbar-source-window))) "")
-    ""))
+(defun drgnx-statusbar--glyph (name &optional fallback)
+  "The glyph NAME for the frame being drawn (ASCII on a terminal that is not UTF-8); FALLBACK (default \"\") when
+the glyph table has no NAME."
+  (or (and (fboundp 'drgnx-face-glyph) (drgnx-face-glyph name (window-frame (drgnx-statusbar-source-window))))
+      fallback ""))
 
 (defun drgnx-statusbar--separator ()
   "What goes between the left segments: the glyph `sep' (` · ', or ` | ' in ASCII)."
@@ -669,7 +696,7 @@ changed: drgnx's own segments are worked out once per change of their state, not
             (text (string-join
                    (delq nil (list (and running (> running 0)
                                         (format "%s %d job%s" (drgnx-statusbar--glyph 'busy) running (if (= running 1) "" "s")))
-                                   (and (> cards 0) (propertize (format "%s%d" (drgnx-statusbar--glyph 'flag) cards) 'face 'warning))))
+                                   (and (> cards 0) (propertize (format "%s%d" (drgnx-statusbar--glyph 'flag "#") cards) 'face 'warning))))
                    " ")))
        (unless (string-empty-p text) text)))
    (and (boundp 'drgnx-job-ui--badge) drgnx-job-ui--badge)))
@@ -786,12 +813,31 @@ a change of the text (or of the narrowing) counts again from the top."
              (col (if (> (- pt bol) 2000) (- pt bol) (current-column))))   ; a minified line: characters, not columns
         (format "Ln %d, Col %d" (drgnx-statusbar--line-at bol) (1+ col))))))
 
-(defun drgnx-statusbar--seg-indent ()
+(defun drgnx-statusbar--indent-width ()
+  "The indentation width the `indent' segment shows: `tab-width' with tabs, else the first of
+`drgnx-statusbar-indent-vars' that is bound to a natural number.  Part of the memo's key: no allocation."
   (if indent-tabs-mode
-      (format "Tab Size: %d" tab-width)
-    (format "Spaces: %d" (or (seq-some (lambda (v) (and (boundp v) (natnump (symbol-value v)) (symbol-value v)))
-                                       drgnx-statusbar-indent-vars)
-                             tab-width))))
+      tab-width
+    (let ((vars drgnx-statusbar-indent-vars) (found nil))
+      (while (and vars (not found))
+        (let ((v (car vars)))
+          (when (and (boundp v) (natnump (symbol-value v))) (setq found (symbol-value v))))
+        (setq vars (cdr vars)))
+      (or found tab-width))))
+
+(defun drgnx-statusbar--seg-indent ()
+  (format (if indent-tabs-mode "Tab Size: %d" "Spaces: %d") (drgnx-statusbar--indent-width)))
+
+(defun drgnx-statusbar--flymake-backends ()
+  "Flymake's backends that run and that reported, as one number (a part of the memo's key), 0 without flymake."
+  (if (and (bound-and-true-p flymake-mode) (fboundp 'flymake-running-backends))
+      (+ (* 1024 (length (flymake-running-backends))) (length (flymake-reporting-backends)))
+    0))
+
+(defun drgnx-statusbar--eglot-live-p ()
+  "Non-nil when eglot's server for this buffer is running (a part of the memo's key)."
+  (and (bound-and-true-p eglot--cached-server) (fboundp 'jsonrpc-running-p)
+       (ignore-errors (jsonrpc-running-p eglot--cached-server))))
 
 (defun drgnx-statusbar--seg-encoding ()
   (when-let* ((cs buffer-file-coding-system)
