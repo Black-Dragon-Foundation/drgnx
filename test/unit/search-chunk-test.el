@@ -278,6 +278,16 @@
     (drgnx-search-chunk-test--write root "two\nlines.txt" "edited\n")                ; modified
     (should (equal (drgnx-search-chunk-test--paths root) '("a.txt")))))
 
+(ert-deftest drgnx-search-files/timed-git-gets-all-of-a-big-input ()
+  "The input goes to a timed git in pieces and arrives whole: the same hash as the untimed call."
+  (skip-unless (executable-find "git"))
+  (let* ((input (mapconcat (lambda (n) (format "line %d of a long input\n" n)) (number-sequence 1 30000) ""))
+         (plain (drgnx-search--git-run default-directory input '("hash-object" "--stdin"))))
+    (should (> (length input) 500000))
+    (should (= (car plain) 0))
+    (let ((drgnx-search--git-deadline (+ (float-time) 20)))
+      (should (equal (drgnx-search--git-run default-directory input '("hash-object" "--stdin")) plain)))))
+
 (ert-deftest drgnx-search-files/git-input-has-a-deadline ()
   "A git that never reads its input cannot hold a timed listing past its deadline."
   (skip-unless (executable-find "sleep"))

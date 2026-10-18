@@ -143,7 +143,7 @@ not only closing brackets (the top-level form a window cut into), else its first
 that line's number — what one line of a result list shows and where it jumps."
   (let* ((lines (split-string (or (plist-get hit :text) "") "\n")) (n 0)
          (top (seq-position lines t (lambda (l _) (and (string-match-p "\\`[^ \t]" l)
-                                                       (not (string-match-p "\\`[])}>;,]+\\'" l)))))))
+                                                       (not (string-match-p "\\`[])}>;, \t]+\\'" l)))))))
     (if top
         (setq lines (nthcdr top lines) n top)
       (while (and lines (string-blank-p (car lines))) (setq lines (cdr lines) n (1+ n))))

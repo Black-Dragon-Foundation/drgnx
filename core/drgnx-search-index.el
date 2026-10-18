@@ -108,9 +108,10 @@ limit since it was listed (at most one byte more than the limit is read) or is n
   "Bring the index of the project at ROOT up to date.  Returns (:added :changed :removed :chunks :skipped
 :seconds :error): the files written new, rewritten (their content changed) and forgotten, the chunks written,
 the files that could not be read as UTF-8 text or grew past the size limit (skipped, not an error; a changed
-one loses its old rows), and :error — a message, or nil.
+one loses its old rows) or that have a chunk the provider refuses even alone (skipped too, tried again by the
+next run, old rows kept), and :error — a message, or nil.
 EMBED (default `drgnx-ai-embed-sync') takes a vector of texts and returns a vector of vectors, setting
-`drgnx-ai-embed-last-info' to who answered (provider, model).  BATCH (default 16) chunks go in one request;
+`drgnx-ai-embed-last-info' to who answered (provider, model).  BATCH (default 32) chunks go in one request;
 a request the provider refuses is retried once in halves (the halved size stays for the run), and a second
 failure stops the run: what is written stays, `:indexed-at' is not advanced so the index remains stale, and
 :error has the provider's reason.  PROGRESS gets (FILES-DONE FILES-TOTAL) after each file.  REBUILD drops
@@ -267,7 +268,7 @@ with are an :error.  A project that is no git project, has search off, or whose 
   (let ((counts (format "added %d, changed %d, removed %d (%d chunks%s)"
                         (or (plist-get result :added) 0) (or (plist-get result :changed) 0) (or (plist-get result :removed) 0)
                         (or (plist-get result :chunks) 0)
-                        (if (> (or (plist-get result :skipped) 0) 0) (format ", %d unreadable files skipped" (plist-get result :skipped)) ""))))
+                        (if (> (or (plist-get result :skipped) 0) 0) (format ", %d files skipped (unreadable, or a chunk the provider refuses)" (plist-get result :skipped)) ""))))
     (if (plist-get result :error)
         (format "search index: error: %s (%s)" (plist-get result :error) counts)
       (format "search index: %s in %.1f s" counts (or (plist-get result :seconds) 0)))))

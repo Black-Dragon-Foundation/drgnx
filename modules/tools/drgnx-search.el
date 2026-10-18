@@ -73,7 +73,7 @@
       (user-error "Semantic search needs a project: open a file of one first")))
 
 (defun drgnx-search--xref (root hit)
-  "An xref item for HIT (a result plist of `drgnx-search') in the project at ROOT: the chunk's first non-blank line,
+  "An xref item for HIT (a result plist of `drgnx-search') in the project at ROOT: the chunk's first top-level line,
 at that line (`drgnx-search-hit-line', the rule the MCP tool and the command line use too)."
   (require 'drgnx-search-query)
   (pcase-let ((`(,line . ,summary) (drgnx-search-hit-line hit)))
@@ -105,7 +105,9 @@ Called from a process sentinel: an error becomes one message, never a signal."
                       (drgnx-search--show root query hits notice)))))
         (when (if (window-live-p window) (with-selected-window window (funcall show)) (funcall show))
           ;; the answer came after the command returned: the results get the focus, as for Search in Project
-          (when-let* ((buf (get-buffer "*xref*")) (win (get-buffer-window buf t)))
+          ;; not while the user is in the minibuffer (another command began), nor in another frame
+          (when-let* (((not (active-minibuffer-window)))
+                      (buf (get-buffer "*xref*")) (win (get-buffer-window buf)))
             (select-window win))))
     (error (message "Semantic search could not show its results: %s" (error-message-string err)))))
 
@@ -143,8 +145,9 @@ With a prefix argument REBUILD, start from scratch — the way to change the emb
                (if rebuild
                    (message "an index job is already running for %s; rebuild after it finishes" name)
                  (message "%s is already being indexed — Index Status shows how far it is" name)))
-              (t (drgnx-search-index-start root (and rebuild t))
-                 (message "Indexing %s in the background — Index Status shows how far it is" name)))))))
+              ((drgnx-search-index-start root (and rebuild t))
+               (message "Indexing %s in the background — Index Status shows how far it is" name))
+              (t (message "an index job for %s started a moment ago and is still being cleaned up; try again shortly" name)))))))
 
 (defun drgnx-search-set-up ()
   "Set Up Semantic Search: find an embedding model, test it, and index this project in the background (or,

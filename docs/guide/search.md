@@ -142,7 +142,7 @@ project — command, arguments and the environment: the state and config directo
   provider answers with vectors of the same size as the index's, the run stops saying "answered by fallback X" —
   run it again when the first provider is back, or rebuild to change the model.
 - It runs in a **background job** — a separate Emacs under systemd, capped at 1 GiB of memory, at low priority — so
-  the editor stays responsive. One job per project at a time. A second start within 30 seconds of the first waits for it instead of launching a job that would only exit with "indexing". Its log: Show Job Log (Agents tab). Starting a new job
+  the editor stays responsive. One job per project at a time. A second start within 30 seconds of a job that has no result yet does nothing (the job it would start would only exit with "indexing"); Index Project says so, and trying again a moment later works. Its log: Show Job Log (Agents tab). Starting a new job
   removes the project's earlier finished index jobs (also those killed without a trace, by a reboot say) but the last one, so their logs do not pile up.
 - **After a save**: when you save a file of a project that has an index, drgnx re-indexes that project 30 seconds after the
   last save (a burst of saves is one run), at the next moment Emacs is idle, so the job never starts while you type.
@@ -198,7 +198,7 @@ differ. The project indexed is drgnx's own repository (289 files, 1,462 chunks):
 
 A question from the command line includes starting a batch Emacs and loading drgnx; embedding the question takes
 about 25 ms, and inside a running Emacs there is no start-up to pay. The index is searched as vectors of one bit and one
-byte per dimension: a Hamming scan of the one-bit fingerprints picks 500 candidates, which are re-ranked with the bytes. The question is quantized the same way, so the re-rank is a sum of integers. The fingerprints are kept in memory for the last project searched; while an index run adds files a query reads only the new chunks, and the index is read after the embedding answer arrives, not inside the process that delivers it.
+byte per dimension: a Hamming scan of the one-bit fingerprints picks 500 candidates, which are re-ranked with the bytes. The question is quantized the same way, so the re-rank is a sum of integers. (The recall and timing figures above were measured before this change, with the question kept as floats; they have not been measured again.) The fingerprints are kept in memory for the last project searched; while an index run adds files a query reads only the new chunks, and the index is read after the embedding answer arrives, not inside the process that delivers it.
 The recall above was measured with the real model, not random vectors.
 
 ## Privacy

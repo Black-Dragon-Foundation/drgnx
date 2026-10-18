@@ -26,7 +26,7 @@
        (delete-directory state t))))
 
 (defun drgnx-search-ui-test--stub-search (results &optional notice)
-  "A `drgnx-search-async' that answers RESULTS (and sets NOTICE) at once."
+  "A `drgnx-search-async' that answers RESULTS and NOTICE (its callback's two arguments) at once."
   (lambda (_root _query callback &rest _)
     (funcall callback results notice)))
 
@@ -171,6 +171,17 @@
         (write-region "(:off t)" nil (expand-file-name ".drgnx/search.eld" root) nil 'silent)
         (drgnx-search-index-project)
         (should (= (length calls) 2))))))   ; search off: no job
+
+(ert-deftest drgnx-search-ui/a-start-that-backs-off-says-so ()
+  "An index job started a moment ago makes the start return nil: the message must not claim indexing began."
+  (skip-unless (executable-find "git"))
+  (drgnx-search-ui-test--project
+    (let ((said nil))
+      (cl-letf (((symbol-function 'drgnx-search-index-start) (lambda (&rest _) nil))
+                ((symbol-function 'message) (lambda (fmt &rest args) (push (apply #'format fmt args) said))))
+        (drgnx-search-index-project t)
+        (should (cl-some (lambda (m) (string-match-p "try again shortly" m)) said))
+        (should-not (cl-some (lambda (m) (string-match-p "\\`Indexing" m)) said))))))
 
 (ert-deftest drgnx-search-ui/index-status-reports-the-index ()
   (skip-unless (and (executable-find "git") (sqlite-available-p)))

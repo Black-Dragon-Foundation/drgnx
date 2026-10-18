@@ -102,6 +102,13 @@ answered at once with DIMS-wide vectors), and the index job start recorded in ST
     (write-region "(:exclude (\"*.txt\"))" nil (expand-file-name ".drgnx/search.eld" root) nil 'silent)
     (should (eql (plist-get (drgnx-search-setup-index-info root (+ (float-time) 5)) :stale) 1))))   ; a.txt is gone from the list
 
+(ert-deftest drgnx-search-setup/a-start-that-backs-off-is-not-reported-as-indexing ()
+  (drgnx-search-setup-test--with
+    (cl-letf (((symbol-function 'drgnx-search-index-start) (lambda (&rest _) nil)))
+      (let ((r (drgnx-search-setup root)))
+        (should (string-match-p "try again shortly" (cadr r)))
+        (should-not (string-match-p "is being indexed" (cadr r)))))))
+
 (ert-deftest drgnx-search-setup/wizard-without-a-provider-says-how-to-start-one ()
   (drgnx-search-setup-test--with
     (setq up nil)

@@ -191,12 +191,12 @@ the deadline of `drgnx-search--git-deadline'.  Past it git is killed and `drgnx-
                                           (lambda () (when (process-live-p proc) (setq killed t) (delete-process proc)))))
               ;; The input goes in pieces, the output read in between: a git that fills its output pipe
               ;; while we fill its input pipe would wait for us forever.
-              (let ((rest (or input "")))
-                (while (and (> (length rest) 0) (process-live-p proc) (<= (float-time) drgnx-search--git-deadline))
-                  (process-send-string proc (substring rest 0 (min 4096 (length rest))))
-                  (setq rest (substring rest (min 4096 (length rest))))
+              (let ((sent 0) (size (length input)))   ; by offsets: no copy of the remainder per piece
+                (while (and (< sent size) (process-live-p proc) (<= (float-time) drgnx-search--git-deadline))
+                  (process-send-string proc (substring input sent (min size (+ sent 4096))))
+                  (setq sent (min size (+ sent 4096)))
                   (accept-process-output proc 0))
-                (if (> (length rest) 0)
+                (if (< sent size)
                     (when (or killed (process-live-p proc))
                       (delete-process proc)
                       (signal 'drgnx-search-files-error (list (format "git %s timed out" (string-join args " ")))))

@@ -82,7 +82,9 @@ Past it a project's :stale stays nil (unknown).")
                (files (drgnx-search-files root))
                (stored (drgnx-search-store-files db)) (seen (make-hash-table :test #'equal)) (n 0))
           ;; no files is known (every file excluded) only for a git project with search on
-          (when (or files (and (not (plist-get (drgnx-search-config root) :off)) (drgnx-search--repo-p root)))
+          (when (or files (and (not (plist-get (drgnx-search-config root) :off))
+                               (let ((drgnx-search--git-deadline (+ (float-time) drgnx-search-git-timeout)))   ; bounded too
+                                 (drgnx-search--repo-p root))))
             (pcase-dolist (`(,path . ,hash) files)
               (puthash path t seen)
               (unless (equal (gethash path stored) hash) (cl-incf n)))
@@ -217,14 +219,16 @@ run with those vectors (no second embedding); else the indexer starts in the bac
                             who name (plist-get index :chunks) (or drgnx-search-last-notice "no reason given"))))))
      (t
       (let ((running (drgnx-search-index-busy-p root)))
-        (unless running (drgnx-search-index-start root))
-        (list 'ok (format "%s works; %s %s in the background — Index Status shows how far it is"
-                          who (if running "is already being indexed" "is being indexed") name)))))))
+        (if (or running (drgnx-search-index-start root))
+            (list 'ok (format "%s works; %s %s in the background — Index Status shows how far it is"
+                              who (if running "is already being indexed" "is being indexed") name))
+          (list 'info (format "%s works; an index job for %s started a moment ago and is still being cleaned up — try again shortly"
+                              who name))))))))
 
 (cl-defun drgnx-search-setup (root &key interactive)
   "Set up Semantic Search for the project at ROOT (nil: only the provider): (STATUS MESSAGE).
 Finds an embedding provider (M9's probe; INTERACTIVE: when the `embed' role has none running but a provider
-found does, that one is put first in the role), tests it with one embedding of \"hello\", then starts the
+found does, that one is put first in the role), tests it with one embedding of the test question, then starts the
 project's indexer in the background — or, when the index is current, runs a test query.  The only wait is
 the probe (two seconds) and the test embedding (five).  For a command the user ran."
   (let ((root (and root (directory-file-name (expand-file-name root)))))

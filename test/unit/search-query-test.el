@@ -432,6 +432,8 @@ config error, as the indexer does."
                  '(13 . "(defun foo ()")))
   (should (equal (drgnx-search-hit-line '(:start 5 :text "  a\n});\n)\nfunction g() {}"))
                  '(8 . "function g() {}")))
+  (should (equal (drgnx-search-hit-line '(:start 2 :text "  x))  \n))  \n\t)\n(defun g ())"))
+                 '(5 . "(defun g ())")))
   ;; no column-0 line at all: the first non-blank line, as before
   (should (equal (drgnx-search-hit-line '(:start 3 :text "\n   one\n   two"))
                  '(4 . "one")))
