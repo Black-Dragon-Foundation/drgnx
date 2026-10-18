@@ -121,10 +121,27 @@ Run `--perf` on its own: no other test tiers, agents or builds at the same time.
 
 ## Tuning (and why)
 
-- **GC.** Emacs' default threshold (800 kB) collected 28 times in 186 keystrokes. drgnx raises it to 512 MB while
-  starting (early-init; set back after startup even if drgnx fails to start), then uses 64 MB (`drgnx-gc-cons-threshold`) and collects after 8 s idle
-  (`drgnx-gc-idle-seconds`; the timer is the layer's key `gc-idle`, started again by a second setup, never doubled), where nobody waits. The price is memory: +70 MB, within budget. A threshold your own
-  init set (no longer early-init's) is kept, and with `gcmh-mode` on drgnx sets neither (gcmh does both).
+- **GC.** One owner, `core/drgnx-gc.el`. Emacs' default threshold (800 kB) collected 28 times in 186 keystrokes.
+  drgnx raises it to 512 MB while starting (early-init; set back after startup even if drgnx fails to start), then
+  uses 64 MB (`drgnx-gc-cons-threshold`). A threshold your own init set (no longer early-init's) is kept.
+  - **The idle collection** is the timer layer's key `gc-idle` (`drgnx-gc-idle-seconds`, 8 s; started again by a
+    second setup, never doubled), owner `:core`, so it is covered by the timer lint like every other timer. It
+    collects only when more than a quarter of the threshold was allocated since the last collection
+    (`drgnx-gc--consed` minus `drgnx-gc--base`, which `drgnx-gc--note` on `post-gc-hook` sets): an idle Emacs that
+    allocated nothing stays still. `drgnx-gc-mode` (on after `drgnx-gc-setup`) owns that hook function, so it is
+    one function, removed when the mode turns off.
+  - **A gap collection for producers:** `(drgnx-gc-gap)` collects, and returns t, when `drgnx-gc-gap-quiet` (0.02 s,
+    nil: never) has passed without input, no input is pending and at least `drgnx-gc-gap-share` (85%) of the
+    threshold was allocated since the last collection. A producer that finished a burst of work calls it instead
+    of waiting for the threshold to be hit in the middle of the next keystroke.
+  - **gcmh:** `drgnx-gc-mode` watches `gcmh-mode`. Turned on, gcmh does the threshold and the idle collection and
+    `gc-idle` is cancelled; turned off, drgnx's threshold, `gc-cons-percentage` 0.1 and `gc-idle` are back
+    (gcmh's own mode function sets its low threshold after the watcher ran, so `gcmh-mode-off-hook` restores
+    them too). A `let` of `gcmh-mode` changes nothing.
+  - **Batch Emacs** (the hub and workers): `drgnx-gc-batch-setup` sets 32 MB (`drgnx-gc-batch-threshold`) and
+    `gc-cons-percentage` 0.2.
+  - **Harness sessions** of the minimal configuration run at the same settings (`drgnx-ui-gc-early` and
+    `drgnx-ui-gc-setup` in `harness/init/prelude.el`); a session of an external configuration brings its own.
 - **Key resolution** at startup checked every pair of bindings for prefixes and re-parsed keys each time; it now
   caches parsed keys and compares only keys in one keymap with the same first event.
 - **Harness sessions** share one native-code cache per state root, so advice trampolines (the no-prompt guard

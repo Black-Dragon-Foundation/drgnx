@@ -189,6 +189,8 @@ Unix socket paths are limited to ~108 bytes; the hash keeps two state roots (say
 **Configurations:** `minimal` (stock Emacs, menu/tool/scroll bars off — `harness/init/minimal.el`), `gryphn`
 (the gryphn layer's config directory, `$DRGNX_GRYPHN_CONFIG` or `~/.config/emacs`), or any directory with an
 `init.el`. Emacs is launched with `--init-directory` and without `-Q` (which would skip the init file).
+A `minimal` session runs at drgnx's GC settings (`drgnx-gc-setup`, so timings do not include Emacs' 800 kB
+default collecting every few keystrokes); a session of any other configuration brings its own.
 The Emacs binary is `$DRGNX_EMACS`, else `emacs-pgtk`, else `emacs`.
 
 ## Driving a session
