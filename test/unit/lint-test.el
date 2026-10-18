@@ -79,6 +79,32 @@
          (when (drgnx-lint--keyboard-key-p key) (format "%S binds a keyboard key" (car form))))
         (`(,(or 'global-set-key 'keymap-global-set) . ,_) (format "%S" (car form))))))))
 
+(defconst drgnx-lint--raw-input-maps '(drgnx-live-driving-map)
+  "Keymaps allowed to bind keyboard keys in code: they forward raw input (to a web page, like a terminal's raw map), so
+their keys are not commands and have no registry entries.  Everything else gets its keys from the profiles.")
+
+(defun drgnx-lint--names-mouse-p (key)
+  "Does the computed KEY form name a mouse or wheel event (a quoted mouse-1, wheel-up…)?"
+  (catch 'found
+    (drgnx-lint--walk key (lambda (x) (when (and (symbolp x) (string-match-p "mouse\\|wheel" (symbol-name x))) (throw 'found t))))
+    nil))
+
+(ert-deftest drgnx-lint/computed-keys-only-in-raw-input-maps ()
+  ;; A key computed in code (not a literal string, vector or (kbd "…")) slips past keys-come-from-the-profiles;
+  ;; only the declared raw-input maps may do that (mouse events built in code, like (vector area 'mouse-1), are fine).
+  (let (out)
+    (dolist (f (drgnx-lint--files "wb" "modules"))
+      (dolist (top (drgnx-lint--forms f))
+        (unless (and (memq (car-safe top) '(defvar defconst defvar-keymap)) (memq (cadr top) drgnx-lint--raw-input-maps))
+          (drgnx-lint--walk top (lambda (form)
+                                  (pcase form
+                                    (`(,(or 'define-key 'keymap-set 'keymap-local-set 'local-set-key) ,_ ,key . ,_)
+                                     (unless (or (stringp key) (vectorp key) (and (eq (car-safe key) 'kbd) (stringp (cadr key)))
+                                                 (drgnx-lint--names-mouse-p key))
+                                       (push (format "%s: %S binds a computed key %S" (file-relative-name f drgnx-dir) (car form) key)
+                                             out)))))))))
+    (should (equal (nreverse out) nil))))
+
 (ert-deftest drgnx-lint/every-face-has-a-group ()
   ;; Emacs 31 warns otherwise (the build must have no warnings).
   (should-not

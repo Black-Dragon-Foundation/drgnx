@@ -41,13 +41,16 @@ those.
 The view shows the page through Chrome DevTools Protocol screencast frames (JPEG, quality 60, as wide as the
 window), about ten a second. Frames are drawn from a timer, never while you type; a frame that arrives before the
 last one was drawn replaces it, so a busy Emacs drops frames and never queues them. Every frame is acknowledged.
+While no window shows the view, the screencast stops; it starts again when the view is shown.
 
 The header line lists the browser's tabs (the watched one in bold) and the watched page's address. When the agent
-opens a new tab, the view follows it; when the watched tab closes, it shows another one.
+opens a new tab, the view follows it; when the watched tab closes, it shows another one. (The tabs open when the
+view connects are listed, not followed: the first one is watched.)
 
 Below the page, the view says what is wrong when something is:
 
 - **No Chrome or Chromium:** the command stops with a message naming the programs it looked for.
+- **No `websocket` package:** Watch says so before it starts any browser.
 - **The browser exits at start or does not open its port** (10 s): a message with the end of its log.
 - **The port refuses the connection,** or the browser goes away while you watch: the view says so; `g` connects
   again, and Live: Start Browser for Agents starts a new browser.
@@ -56,23 +59,28 @@ Below the page, the view says what is wrong when something is:
   `PLAYWRIGHT_MCP_CDP_ENDPOINT`.
 
 Nothing here prompts or waits for the browser, except starting it (Start, or Watch when it is not running), which
-waits up to 10 s for its port (`C-g` stops the wait).
+waits up to 10 s for its port. `C-g` stops the wait, and the browser it was starting is stopped and its profile
+deleted, as when it fails to start.
 
 ## Taking over
 
 **Live: Take Over / Hand Back** (`C-c C-c` in the view) marks the view **DRIVING**. While it is on:
 
 - mouse clicks (left, middle, right, double) and the wheel on the page go to it as `Input.dispatchMouseEvent`, at
-  the point you clicked: the coordinates are scaled back from the image's size on screen to the page's;
+  the point you clicked: the coordinates are scaled back from the image's size on screen to the page's. A drag moves
+  the mouse to where you let go and is released there;
 - printable characters, `RET`, `TAB`, Backspace, Delete, Escape, the arrows, Home, End, PgUp and PgDn go to it as
   `Input.dispatchKeyEvent`; `C-…` and `M-…` keys stay Emacs's, so the palette and `C-c C-c` still work.
 
 Taking over steers every busy agent using this browser with "the user is driving the browser; wait" (through the
 agent's usual steering, or queued for the end of its turn when it cannot be steered); handing back steers "the user
-handed the browser back". Idle agents are not sent anything.
+handed the browser back", also when driving ends because you close the view or stop the browser. Idle agents are
+not sent anything.
 
 ## For module authors
 
-`drgnx-live-browser` returns `(:port N :ws URL)`, starting the browser when it is not running. Agent environments
-are extended through `drgnx-agents-env-functions` (in `core/drgnx-agents.el`): each function gets the session and
-returns extra `NAME=value` strings. The tests talk to a CDP stand-in, `test/fixtures/mock-cdp.el`, never to Chrome.
+`drgnx-live-browser` returns `(:port N :ws URL)`, starting the browser when it is not running; it can wait up to
+10 s, so call it only from commands (`drgnx-live-running` answers at once, nil when no browser runs). Agent
+environments are extended through `drgnx-agents-env-functions` (in `core/drgnx-agents.el`): each function gets the
+session and returns a list of extra `NAME=value` strings; one that fails, or anything returned that is not a string,
+is reported in a message and left out. The tests talk to a CDP stand-in, `test/fixtures/mock-cdp.el`, never to Chrome.

@@ -1,7 +1,8 @@
 ;;; mock-cdp.el --- for Live view tests: a Chrome DevTools Protocol stand-in on a local websocket server -*- lexical-binding: t -*-
 ;; Served in the test's own Emacs (`websocket-server', 127.0.0.1, a random port): it records every message a
 ;; client sends, answers Target.getTargets with `drgnx-mock-cdp-targets', Target.attachToTarget with a session
-;; per target and everything else with {}, and sends screencast frames when a test asks.  Needs `websocket'.
+;; per target and everything else with {} (Target.setDiscoverTargets first announces every target with
+;; Target.targetCreated, as Chrome does), and sends screencast frames when a test asks.  Needs `websocket'.
 (require 'cl-lib)
 (require 'seq)
 (require 'websocket)
@@ -21,6 +22,10 @@
 (defun drgnx-mock-cdp--answer (ws msg)
   (push msg drgnx-mock-cdp--received)
   (let* ((method (plist-get msg :method)) (params (plist-get msg :params))
+         ;; as Chrome does: discovering targets first announces every existing one, then answers
+         (_ (when (and (equal method "Target.setDiscoverTargets") (eq (plist-get params :discover) t))
+              (dolist (tg drgnx-mock-cdp-targets)
+                (drgnx-mock-cdp--send ws (list :method "Target.targetCreated" :params (list :targetInfo tg))))))
          (result (pcase method
                    ("Target.getTargets" (list :targetInfos (vconcat drgnx-mock-cdp-targets)))
                    ("Target.attachToTarget" (list :sessionId (concat "S-" (plist-get params :targetId))))

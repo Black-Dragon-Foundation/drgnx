@@ -165,6 +165,8 @@ no agents, and everything closed afterwards."
          (drgnx-live--browser nil) (drgnx-live--given nil) (drgnx-live-chrome-programs '("sh"))
          (dir (expand-file-name (format "drgnx/live-profile-%d" (emacs-pid)) root))
          (starts nil) (stopped nil) (status 'running)
+         ;; the "browser": a child process its lock names, which stopping the job ends
+         (chrome (make-process :name "drgnx-live-test-chrome" :command '("sleep" "60") :noquery t))
          (s (drgnx-agents--make :name "a" :profile "claude")))
     (cl-letf (((symbol-function 'drgnx-jobs-start)
                (lambda (name command &rest keys)
@@ -174,9 +176,7 @@ no agents, and everything closed afterwards."
                    (write-region "9555\n/devtools/browser/abc\n" nil (expand-file-name "DevToolsActivePort" d) nil 'silent))
                  "job-1"))
               ((symbol-function 'drgnx-jobs-get) (lambda (id) (and (equal id "job-1") (list :id id :status status))))
-              ((symbol-function 'drgnx-jobs-stop) (lambda (id)        ; the browser ends: its lock goes
-                                                    (push id stopped) (setq status 'stopped)
-                                                    (ignore-errors (delete-file (expand-file-name "SingletonLock" dir))))))
+              ((symbol-function 'drgnx-jobs-stop) (lambda (id) (push id stopped) (setq status 'stopped) (delete-process chrome))))
       (unwind-protect
           (let ((drgnx-agents-env-functions nil)
                 (drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil))
@@ -201,16 +201,21 @@ no agents, and everything closed afterwards."
             ;; a job that reads as gone (systemd's) runs as long as the browser's own lock names a live process
             (setq status 'gone)
             (should-not (drgnx-live-running))
-            (make-symbolic-link (format "testhost-%d" (emacs-pid)) (expand-file-name "SingletonLock" dir))
+            (make-symbolic-link (format "testhost-%d" (process-id chrome)) (expand-file-name "SingletonLock" dir))
             (should (equal (plist-get (drgnx-live-running) :port) 9555))
             (should (member "PLAYWRIGHT_MCP_CDP_ENDPOINT=http://127.0.0.1:9555" (drgnx-agents--env s)))
             (should (= 1 (length starts)))
-            ;; stopping it: the job ends, the profile goes, agents started now get no endpoint
-            (drgnx-live-stop-browser)
+            ;; stopping it: the job ends, the profile goes once the browser has exited (not after the 3 s cap),
+            ;; agents started now get no endpoint
+            (let ((t0 (float-time)))
+              (drgnx-live-stop-browser)
+              (should (< (- (float-time) t0) 1)))
+            (should-not (process-live-p chrome))
             (should (equal stopped '("job-1")))
             (should-not (file-exists-p dir))
             (should-not (seq-find (lambda (e) (string-prefix-p "PLAYWRIGHT_MCP_CDP_ENDPOINT=" e)) (drgnx-agents--env s))))
         (remove-hook 'kill-emacs-hook #'drgnx-live--cleanup)
+        (delete-process chrome)
         (delete-directory root t)))))
 
 (ert-deftest drgnx-live/failures-say-why ()
@@ -251,9 +256,9 @@ no agents, and everything closed afterwards."
       (setq drgnx-agents--sessions (list early late fine))
       (drgnx-agents--env late) (drgnx-agents--env fine)
       (setf (drgnx-agent-session-entries late)
-            (list (list :type 'tool :title "browser_navigate" :rawInput '(:url "https://elsewhere.test/"))))
+            (list (list :type 'tool :title "browser_navigate" :url "https://elsewhere.test/")))
       (setf (drgnx-agent-session-entries fine)
-            (list (list :type 'tool :title "browser_navigate" :rawInput '(:url "https://example.org"))))
+            (list (list :type 'tool :title "browser_navigate" :url "https://example.org")))
       (drgnx-live-test--open)
       (with-current-buffer "*drgnx live*"
         (should (drgnx-mock-cdp-wait (lambda () (string-search "early" (buffer-string)))))
@@ -261,5 +266,124 @@ no agents, and everything closed afterwards."
           (should (string-match-p "early[^\n]*started before" text))
           (should (string-match-p "late[^\n]*https://elsewhere\\.test/" text))
           (should-not (string-search "fine" text)))))))
+
+;;;; Fix round 1
+
+(defun drgnx-live-test--posn (x y w h)
+  "A position X,Y on the Live view's image, shown W×H pixels."
+  (list (get-buffer-window "*drgnx live*") 1 (cons x y) 0 nil 1 '(0 . 0)
+        (with-current-buffer "*drgnx live*" (get-text-property 1 'display)) (cons x y) (cons w h)))
+
+(defmacro drgnx-live-test--driving (steered &rest body)
+  "BODY in the Live view on the mock, a frame of 1280×800 shown, with a busy agent using the browser; agent steers
+are pushed to STEERED as (NAME TEXT)."
+  (declare (indent 1))
+  `(let ((busy (drgnx-agents--make :name "busy" :profile "claude" :status 'busy)))
+     (setq drgnx-agents--sessions (list busy))
+     (drgnx-agents--env busy)
+     (cl-letf (((symbol-function 'drgnx-agents-steer)
+                (lambda (s text) (push (list (drgnx-agent-session-name s) text) ,steered))))
+       (drgnx-live-test--open)
+       (drgnx-mock-cdp-frame 1 :width 1280 :height 800)
+       (should (drgnx-mock-cdp-wait (lambda () (drgnx-live-test--shown))))
+       ,@body)))
+
+(ert-deftest drgnx-live/attaches-once ()
+  ;; Chrome announces every existing page (targetCreated) when discovery starts: the view still attaches once
+  (skip-unless drgnx-live-test--websocket)
+  (drgnx-live-test--with
+    (drgnx-live-test--open)
+    (drgnx-mock-cdp-wait #'ignore 0.3)
+    (should (equal (mapcar (lambda (m) (plist-get (plist-get m :params) :targetId)) (drgnx-mock-cdp-received "Target.attachToTarget"))
+                   '("T1")))
+    (should (= 1 (length (drgnx-mock-cdp-received "Page.startScreencast"))))
+    (with-current-buffer "*drgnx live*"
+      (should (equal (mapcar (lambda (tg) (plist-get tg :targetId)) drgnx-live--targets) '("T1" "T2"))))))
+
+(ert-deftest drgnx-live/drag-moves-then-releases-at-the-end ()
+  (skip-unless drgnx-live-test--websocket)
+  (drgnx-live-test--with
+    (let (steered)
+      (drgnx-live-test--driving steered
+        (with-current-buffer "*drgnx live*"
+          (drgnx-live-take-over)
+          (drgnx-live-mouse (list 'down-mouse-1 (drgnx-live-test--posn 100 50 640 400)))
+          (drgnx-live-mouse (list 'drag-mouse-1 (drgnx-live-test--posn 100 50 640 400) (drgnx-live-test--posn 300 150 640 400))))
+        (should (drgnx-mock-cdp-wait (lambda () (= 3 (length (drgnx-mock-cdp-received "Input.dispatchMouseEvent"))))))
+        (should (equal (mapcar (lambda (p) (list (plist-get p :type) (plist-get p :x) (plist-get p :y)))
+                               (drgnx-live-test--input "Input.dispatchMouseEvent"))
+                       '(("mousePressed" 200 100) ("mouseMoved" 600 300) ("mouseReleased" 600 300))))
+        (should (equal (plist-get (nth 1 (drgnx-live-test--input "Input.dispatchMouseEvent")) :button) "left"))))))
+
+(ert-deftest drgnx-live/hand-back-is-always-said ()
+  ;; driving ends by closing the view, or by stopping the browser: the agent hears it either way
+  (skip-unless drgnx-live-test--websocket)
+  (drgnx-live-test--with
+    (let (steered)
+      (drgnx-live-test--driving steered
+        (with-current-buffer "*drgnx live*" (drgnx-live-take-over))
+        (kill-buffer "*drgnx live*")
+        (should (equal (car steered) '("busy" "the user handed the browser back")))
+        (setq steered nil)
+        (drgnx-live-test--open)
+        (with-current-buffer "*drgnx live*" (drgnx-live-take-over))
+        (cl-letf (((symbol-function 'drgnx-jobs-stop) #'ignore))
+          (drgnx-live-stop-browser))
+        (should (equal steered '(("busy" "the user handed the browser back") ("busy" "the user is driving the browser; wait"))))
+        (with-current-buffer "*drgnx live*" (should-not drgnx-live-driving-mode))))))
+
+(ert-deftest drgnx-live/quit-while-starting-leaks-nothing ()
+  ;; C-g during the wait for the port: the browser is stopped and its profile goes, then the quit goes on
+  (let* ((root (make-temp-file "drgnx-live" t))
+         (process-environment (cons (concat "XDG_STATE_HOME=" root) process-environment))
+         (drgnx-live--browser nil) (drgnx-live-chrome-programs '("sh")) (stopped nil)
+         (dir (expand-file-name (format "drgnx/live-profile-%d" (emacs-pid)) root)))
+    (cl-letf (((symbol-function 'drgnx-jobs-start) (lambda (&rest _) "job-q"))
+              ((symbol-function 'drgnx-jobs-get) (lambda (id) (list :id id :status (if (member id stopped) 'stopped 'running))))
+              ((symbol-function 'drgnx-jobs-stop) (lambda (id) (push id stopped)))
+              ((symbol-function 'sleep-for) (lambda (&rest _) (signal 'quit nil))))
+      (unwind-protect
+          (progn
+            (should (eq 'quit (condition-case nil (progn (drgnx-live-browser) 'returned) (quit 'quit))))
+            (should (equal stopped '("job-q")))
+            (should-not (file-exists-p dir))
+            (should-not drgnx-live--browser))
+        (delete-directory root t)))))
+
+(ert-deftest drgnx-live/stopping-never-waits-on-systemd ()
+  ;; the unit is asked to stop without waiting for it (an exit never sits out systemd's stop timeout)
+  (let (calls)
+    (cl-letf (((symbol-function 'drgnx-jobs-get) (lambda (id) (list :id id :status 'gone :unit "drgnx-job-x")))
+              ((symbol-function 'drgnx-jobs-stop) #'ignore)
+              ((symbol-function 'call-process) (lambda (prog &rest args) (push (cons prog args) calls) 0)))
+      (drgnx-live--stop-job "x"))
+    (should (equal calls '(("systemctl" nil nil nil "--user" "--no-block" "stop" "drgnx-job-x"))))))
+
+(ert-deftest drgnx-live/watch-needs-websocket-before-chrome ()
+  (let ((drgnx-live--browser nil) (drgnx-live-chrome-programs '("sh")) (started nil) (orig (symbol-function 'require)))
+    (cl-letf (((symbol-function 'drgnx-jobs-start) (lambda (&rest _) (setq started t) "x"))
+              ((symbol-function 'require)
+               (lambda (feature &rest args)
+                 (if (eq feature 'websocket) (signal 'file-missing '("Cannot open load file" "No such file or directory" "websocket"))
+                   (apply orig feature args)))))
+      (let ((err (should-error (drgnx-live-view) :type 'user-error)))
+        (should (string-match-p "websocket" (cadr err))))
+      (should-not started))))
+
+(ert-deftest drgnx-live/hidden-view-stops-the-screencast ()
+  ;; a view nobody sees costs nothing: the screencast stops, and starts again when the view is shown
+  (skip-unless drgnx-live-test--websocket)
+  (drgnx-live-test--with
+    (drgnx-live-test--open)
+    (drgnx-mock-cdp-frame 1)
+    (should (drgnx-mock-cdp-wait (lambda () (drgnx-live-test--shown))))
+    (let ((win (get-buffer-window "*drgnx live*")))
+      (set-window-buffer win (get-buffer-create "*scratch*"))
+      (drgnx-mock-cdp-frame 2)
+      (should (drgnx-mock-cdp-wait (lambda () (drgnx-mock-cdp-received "Page.stopScreencast"))))
+      (should (equal (drgnx-live-test--shown) "frame-1"))
+      (set-window-buffer win "*drgnx live*")
+      (with-current-buffer "*drgnx live*" (run-hook-with-args 'window-buffer-change-functions win))
+      (should (drgnx-mock-cdp-wait (lambda () (= 2 (length (drgnx-mock-cdp-received "Page.startScreencast")))))))))
 
 ;;; mod-live-test.el ends here

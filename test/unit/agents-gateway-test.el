@@ -80,4 +80,16 @@
           (should (eq (drgnx-agent-session-via s) 'direct))
           (should (seq-find (lambda (m) (string-match-p "hub" m)) said)))))))
 
+(ert-deftest drgnx-agents/env-functions-add-strings-only ()
+  ;; a function that fails, or returns anything but a list of strings, is reported; the agent still starts with the rest
+  (let ((drgnx-agents-env-functions (list (lambda (_s) (error "Boom")) (lambda (_s) "BARE=string")
+                                          (lambda (_s) (list "A=1" 42)) (lambda (_s) nil) (lambda (_s) '("B=2"))))
+        (said nil))
+    (cl-letf (((symbol-function 'message) (lambda (fmt &rest args) (push (apply #'format fmt args) said))))
+      (let ((env (drgnx-agents--env (drgnx-agents--make :name "a" :profile "claude"))))
+        (should (equal env '("A=1" "B=2")))
+        (should (seq-find (lambda (m) (string-match-p "Boom" m)) said))
+        (should (seq-find (lambda (m) (string-match-p "BARE=string" m)) said))
+        (should (seq-find (lambda (m) (string-match-p "42" m)) said))))))
+
 ;;; agents-gateway-test.el ends here
