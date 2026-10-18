@@ -200,10 +200,14 @@ the deadline of `drgnx-search--git-deadline'.  Past it git is killed and `drgnx-
                     (when (or killed (process-live-p proc))
                       (delete-process proc)
                       (signal 'drgnx-search-files-error (list (format "git %s timed out" (string-join args " ")))))
-                  (process-send-eof proc)))
+                  ;; git need not read its input: it may be gone already, which is no error of ours
+                  (condition-case e (process-send-eof proc)
+                    (error (when (process-live-p proc) (signal (car e) (cdr e)))))))
+              ;; From any process, not just git: once git is gone, `accept-process-output' on it returns at once
+              ;; and never reads the end of its stderr pipe, which may come after git's exit (macOS: often).
               (while (and (or (process-live-p proc) (let ((p (get-buffer-process err))) (and p (process-live-p p))))
                           (<= (float-time) drgnx-search--git-deadline))
-                (accept-process-output proc 0.05))
+                (accept-process-output nil 0.05))
               (when (or killed (process-live-p proc))
                 (delete-process proc)
                 (signal 'drgnx-search-files-error (list (format "git %s timed out" (string-join args " ")))))
