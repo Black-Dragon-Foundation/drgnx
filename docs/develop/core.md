@@ -14,6 +14,7 @@ core/drgnx.el        drgnx-init: guard on, staged hooks armed, keep-running choi
                      safe — skips packages and modules)
 core/drgnx-session.el  drgnx PATH's Emacs side, Open Folder…, keep running or quit, Quit drgnx (../guide/opening.md)
 core/drgnx-macos.el  the drgnx app on macOS (drgnx macos-app; ../guide/opening.md)
+core/drgnx-tty.el    terminals, batch-safe: which one, what it can do, keys it can send, terminfo, tmux (../guide/terminal.md)
 modules/<category>/drgnx-<name>.el   one drgnx-module-define per file
 ```
 

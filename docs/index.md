@@ -24,6 +24,7 @@ Using drgnx.
 - [Live view](guide/live.md): watch the browser your agents drive, live, and take it over.
 - [Keyboard Shortcuts editor](guide/shortcuts.md): every command with its keys; record new ones, see conflicts, filter, undo.
 - [Editor features vs VS Code, Zed and Cursor](guide/editor-matrix.md): what drgnx has, where it is described, its GUI test and perf workload.
+- [In a terminal](guide/terminal.md): what each terminal can do (kitty, WezTerm, foot, Ghostty, Ptyxis, tmux …), the lines that fix what is missing, SSH, tmux, `EDITOR`, the clipboard.
 
 ## Reference
 
