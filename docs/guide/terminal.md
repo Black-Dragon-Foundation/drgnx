@@ -110,19 +110,23 @@ Onboarding suggests `EDITOR='emacsclient -s drgnx -t'`: `git commit` and other p
 open it in drgnx, in the terminal you ran them from.
 
 A client that opens a file this way (`emacsclient -t FILE`) gets the **editor only**: no sidebar, panel or right
-dock, so the commit message has the whole terminal. Save it (`C-s`), then close its tab (Close Tab, or the tab's
-`×`) or press `C-x #`: the edit ends and the program that opened it goes on, as with `code --wait`. Closing the tab
-does not save for you; an unsaved change stays in the open buffer. `emacsclient -t` without a file (and `drgnx -t`)
-opens the whole workbench.
+dock, so the commit message has the whole terminal. It is never the main window. Close its tab (Close Tab, or
+the tab's `×`) or press `C-x #`: the edit ends and the program that opened it goes on, as with `code --wait`. If
+the file has unsaved changes, drgnx first asks whether to save it (answering no ends the edit without them, as
+`C-x #` does). Moving the tab to another group or window does not end the edit. `emacsclient -t` without a file
+(and `drgnx -t`) opens the whole workbench.
 
 ## What drgnx asks the terminal
 
 When a terminal window opens, drgnx works out which terminal it is from that client's own environment (in a
 daemon, never the daemon's) and asks the terminal its name and version once (XTVERSION), waiting 0.2 s at most;
-a terminal that does not answer just stays unnamed. A second window of the same terminal asks nothing. What it
+a terminal that does not answer just stays unnamed (an answer that comes later is still used). A second window of
+the same kind of terminal asks nothing. Which keys arrive, colours and the rest are read for each window. What it
 found — how keys arrive (kitty keyboard protocol, modifyOtherKeys, or neither), OSC 52, colours, the mouse — and the
 keys of your profile this terminal cannot send are written to `terminal-report.eld` in drgnx's state directory
-(`~/.local/state/drgnx/`), one entry per terminal device, for the doctor and the key sheet.
+(`~/.local/state/drgnx/`), one entry per terminal device, for the doctor and the key sheet. The file is written
+whole and then renamed into place, so two Emacs processes never leave half of it, and nothing ever asks about it.
+Like Emacs's own terminal setup, the question drops keys typed ahead while a new terminal window opens.
 
 ## Mouse
 

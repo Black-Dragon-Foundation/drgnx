@@ -21,14 +21,18 @@
   (and (frame-live-p f) (frame-visible-p f) (not (frame-parent f))
        (not (and (daemonp) (equal (terminal-name (frame-terminal f)) "initial_terminal")))))
 
+(defun drgnx-frames--candidate-p (f)
+  "F can be the main window: a workbench frame not kept for one file (an EDITOR frame, role `editor')."
+  (and (drgnx-frames--workbench-p f) (not (eq (frame-parameter f 'drgnx-frame-role) 'editor))))
+
 (defun drgnx-frames--main ()
   (seq-find (lambda (f) (and (frame-live-p f) (eq (frame-parameter f 'drgnx-frame-role) 'main))) (frame-list)))
 
 (defun drgnx-frames-mark-main (&optional frame)
   "Make FRAME — default: the oldest workbench frame (`frame-list' is newest first; a daemon's first
-client frame; never a child frame) — the main window unless one exists."
+client frame; never a child frame, never an EDITOR frame) — the main window unless one exists."
   (unless (drgnx-frames--main)
-    (when-let* ((f (or frame (seq-find #'drgnx-frames--workbench-p (reverse (frame-list))))))
+    (when-let* ((f (or frame (seq-find #'drgnx-frames--candidate-p (reverse (frame-list))))))
       (set-frame-parameter f 'drgnx-frame-role 'main))))
 
 (defun drgnx-frame-role (&optional frame)
@@ -38,11 +42,18 @@ client frame; never a child frame) — the main window unless one exists."
     (if (eq (frame-parameter f 'drgnx-frame-role) 'main) 'main 'aux)))
 
 (defun drgnx-frames--deleted (frame)
-  "The main window closes: the next workbench window becomes main."
+  "The main window closes: the next workbench window (not an EDITOR frame) becomes main."
   (when (eq (frame-parameter frame 'drgnx-frame-role) 'main)
-    (when-let* ((next (seq-find (lambda (f) (and (not (eq f frame)) (drgnx-frames--workbench-p f))) (reverse (frame-list)))))
+    (when-let* ((next (seq-find (lambda (f) (and (not (eq f frame)) (drgnx-frames--candidate-p f))) (reverse (frame-list)))))
       (set-frame-parameter next 'drgnx-frame-role 'main)))
   (drgnx-signal-post 'tabs-changed))
+
+(defun drgnx-frames--made (frame)
+  "`after-make-frame-functions': a new terminal frame (a client's) is the main window when none is — not a child
+frame, not one on the daemon's initial terminal.  A graphical frame waits for `drgnx-first-gui-frame-hook' (it
+may not be mapped yet)."
+  (when (and (not (display-graphic-p frame)) (drgnx-frames--candidate-p frame))
+    (drgnx-frames-mark-main frame)))
 
 (defun drgnx-frames-count ()
   "How many workbench windows are open."
@@ -143,10 +154,10 @@ Sorts, never filters: every buffer stays a candidate."
       (progn (drgnx-frames--sort-overrides t)
              (add-hook 'delete-frame-functions #'drgnx-frames--deleted)
              (add-hook 'drgnx-first-gui-frame-hook #'drgnx-frames-mark-main -10)   ; before the restore
-             (add-hook 'after-make-frame-functions #'drgnx-frames-mark-main)      ; a client's terminal frame too
+             (add-hook 'after-make-frame-functions #'drgnx-frames--made)      ; a client's terminal frame too
              (drgnx-frames-mark-main))                ; a frame that exists already (not a daemon's terminal)
     (drgnx-frames--sort-overrides nil)
-    (remove-hook 'after-make-frame-functions #'drgnx-frames-mark-main)
+    (remove-hook 'after-make-frame-functions #'drgnx-frames--made)
     (remove-hook 'delete-frame-functions #'drgnx-frames--deleted)
     (remove-hook 'drgnx-first-gui-frame-hook #'drgnx-frames-mark-main)))
 

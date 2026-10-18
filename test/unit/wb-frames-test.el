@@ -98,3 +98,42 @@ visible, without parent."
   ;; the daemon's own frame (F1, on its initial terminal) is nobody's window
   (drgnx-frames-test--terminal "drgnx" "initial_terminal"
     (should-not (drgnx-frames--workbench-p (selected-frame)))))
+
+(ert-deftest drgnx-frames/a-new-terminal-frame-is-main-unless-a-child-or-the-daemon-s ()
+  ;; after-make-frame-functions: a client's terminal frame becomes main when none is; a child frame, or one on
+  ;; the daemon's initial terminal, never does
+  (let ((params (make-hash-table)) (parent nil) (terminal "/dev/pts/3"))
+    (cl-letf (((symbol-function 'frame-parameter) (lambda (f p) (and (eq p 'drgnx-frame-role) (gethash f params))))
+              ((symbol-function 'set-frame-parameter) (lambda (f p v) (when (eq p 'drgnx-frame-role) (puthash f v params)))))
+      (drgnx-frames-test--terminal "drgnx" terminal
+        (cl-letf (((symbol-function 'frame-list) (lambda () '(kx-new)))
+                  ((symbol-function 'frame-live-p) (lambda (f) (eq f 'kx-new)))
+                  ((symbol-function 'frame-parent) (lambda (&optional _) parent)))
+          (setq parent 'kx-parent)
+          (drgnx-frames--made 'kx-new)
+          (should-not (gethash 'kx-new params))
+          (setq parent nil terminal "initial_terminal")
+          (drgnx-frames--made 'kx-new)
+          (should-not (gethash 'kx-new params))
+          (setq terminal "/dev/pts/3")
+          (drgnx-frames--made 'kx-new)
+          (should (eq (gethash 'kx-new params) 'main)))))))
+
+(ert-deftest drgnx-frames/an-editor-frame-is-never-main ()
+  ;; an EDITOR frame (`emacsclient -t FILE', role `editor') is kept for one file: the next window is main
+  (let ((params (make-hash-table)))
+    (puthash 'kx-editor 'editor params)
+    (cl-letf (((symbol-function 'frame-parameter) (lambda (f p) (and (eq p 'drgnx-frame-role) (gethash f params))))
+              ((symbol-function 'set-frame-parameter) (lambda (f p v) (when (eq p 'drgnx-frame-role) (puthash f v params)))))
+      (drgnx-frames-test--fake (list 'kx-later 'kx-editor)
+        (drgnx-frames-mark-main)
+        (should (eq (gethash 'kx-later params) 'main))
+        (should (eq (gethash 'kx-editor params) 'editor))
+        (should (eq (drgnx-frame-role 'kx-editor) 'aux))
+        ;; the main window closes: the editor frame does not take over
+        (clrhash params)
+        (puthash 'kx-editor 'editor params)
+        (puthash 'kx-later 'main params)
+        (cl-letf (((symbol-function 'drgnx-signal-post) #'ignore))
+          (drgnx-frames--deleted 'kx-later))
+        (should (eq (gethash 'kx-editor params) 'editor))))))

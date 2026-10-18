@@ -33,9 +33,16 @@
 
 (defun drgnx-tty-env (&optional frame)
   "The client's environment as an alist over `drgnx-tty-env-variables': FRAME's (the environment its
-emacsclient brought, which a daemon's own `process-environment' must not shadow), or this Emacs's own when
-FRAME is nil (a plain `emacs -nw')."
-  (mapcar (lambda (var) (cons var (getenv var frame))) drgnx-tty-env-variables))
+emacsclient brought, which a daemon's own `process-environment' must not shadow); for a frame without one, its
+client's (`env' of the client process: a frame made later on a client's terminal has the client, not the
+environment); else this Emacs's own (FRAME nil, or a plain `emacs -nw')."
+  (let* ((client (and frame (frame-parameter frame 'client)))
+         (env (or (and frame (frame-parameter frame 'environment))
+                  (and (processp client) (process-get client 'env))
+                  process-environment)))
+    ;; an entry without `=' unsets the variable: `getenv-internal' says t for it
+    (mapcar (lambda (var) (cons var (let ((v (getenv-internal var env))) (and (stringp v) v))))
+            drgnx-tty-env-variables)))
 
 (defconst drgnx-tty--xtversion-names
   '(("kitty" . kitty) ("wezterm" . wezterm) ("foot" . foot) ("ghostty" . ghostty) ("alacritty" . alacritty)

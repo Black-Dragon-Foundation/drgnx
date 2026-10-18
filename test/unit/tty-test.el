@@ -275,6 +275,24 @@ for a in \"$@\"; do case \"$a\" in set-clipboard) echo on;; extended-keys) echo 
       (set-frame-parameter frame 'environment saved)
       (delete-directory tmp t))))
 
+(ert-deftest drgnx-tty/env-is-the-frame-s-then-its-client-s-then-this-emacs-s ()
+  ;; a frame made later on a client's terminal has the client but no environment of its own
+  (let ((client (make-pipe-process :name "kx-client" :noquery t))
+        (process-environment (cons "TERM=xterm-own" process-environment))
+        params)
+    (unwind-protect
+        (cl-letf (((symbol-function 'frame-parameter) (lambda (_f p) (alist-get p params))))
+          (process-put client 'env '("TERM=xterm-kitty" "KITTY_WINDOW_ID=1"))
+          (setq params `((environment . ("TERM=foot")) (client . ,client)))
+          (should (equal (cdr (assoc "TERM" (drgnx-tty-env (selected-frame)))) "foot"))
+          (setq params `((environment . nil) (client . ,client)))
+          (should (equal (cdr (assoc "TERM" (drgnx-tty-env (selected-frame)))) "xterm-kitty"))
+          (should (equal (cdr (assoc "KITTY_WINDOW_ID" (drgnx-tty-env (selected-frame)))) "1"))
+          (setq params '((environment . nil)))
+          (should (equal (cdr (assoc "TERM" (drgnx-tty-env (selected-frame)))) "xterm-own"))
+          (should (equal (cdr (assoc "TERM" (drgnx-tty-env))) "xterm-own")))
+      (delete-process client))))
+
 (ert-deftest drgnx-tty/the-report-is-read-safely ()
   (let* ((tmp (drgnx-tty-test--tmp))
          (marker (expand-file-name "evaluated" tmp))
