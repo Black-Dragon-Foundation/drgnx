@@ -52,7 +52,8 @@ Below the Explorer, the **Outline** lists the definitions of the file in the edi
 same way). A click shows the definition in the editor and keeps you in the Outline; `RET` goes there. It follows the
 editor, and half a second after you stop typing, your edits — only while it is shown (hidden, it lets go of the file
 at the next pause or editor change), and a key you press while it works wins (it tries again at the next pause). Files without an index, remote files and buffers over 1 MB get a
-one-line notice instead. Focus Outline: palette · `SPC o`.
+one-line notice instead. The definition your cursor is in is highlighted in the Outline (an overlay, set a moment
+after the cursor stops — the Outline's own cursor is yours and never moves). Focus Outline: palette · `SPC o`.
 
 ### Files
 
@@ -248,7 +249,7 @@ Not yet: file nesting, icons (an icon theme is a module, M4), problems decoratio
 
 - **The change bus** (`wb/drgnx-signal.el`) is the only code that listens to Emacs' window and buffer hooks. A
   hook only arms an idle flush; the flush compares the state with the previous one and emits **edges**:
-  `editor-changed` (the file in the editor you used last), `buffer-set-changed`, `modified-changed`. Followers
+  `editor-changed` (the file in the editor you used last), `editor-point-changed` (its cursor moved), `buffer-set-changed`, `modified-changed`. Followers
   subscribe to these, never to hooks — so a focus change, a background buffer or a burst of events cannot make
   them fire. Internal buffers (names starting with a space) never count. A follower (or a window-setup function)
   that fails is recorded in `drgnx-signal-errors`; the others still run and the next flush stays armed.

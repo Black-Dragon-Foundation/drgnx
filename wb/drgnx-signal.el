@@ -5,7 +5,8 @@
 ;;; Commentary:
 ;; The only subscriber to Emacs' raw window and buffer hooks.  A raw hook does no work: it arms
 ;; one idle flush.  The flush compares the state with the last one and emits edges only —
-;; `editor-changed' (the buffer of the most recently used editor window), `buffer-set-changed'
+;; `editor-changed' (the buffer of the most recently used editor window), `editor-point-changed'
+;; (that window's point moved, in the same buffer; data: the buffer), `buffer-set-changed'
 ;; (the set of user buffers: files and directories) and `modified-changed' (buffers whose
 ;; modified flag flipped).  Internal buffers (names starting with a space) never count.
 ;; Followers (the Explorer's reveal, the Buffers panel) subscribe here and never to hooks, so a
@@ -18,7 +19,7 @@
 
 (defvar drgnx-signal-delay 0.05 "Idle seconds before raw events are flushed as edges.")
 (defvar drgnx-signal--subscribers nil "Alist EVENT → list of functions, in subscription order.")
-(defvar drgnx-signal--state nil "The state at the last flush: (:editor :set :modified).")
+(defvar drgnx-signal--state nil "The state at the last flush: (:editor :set :modified :names :frame :point).")
 (defvar drgnx-signal--timer nil "The armed idle flush, or nil.")
 (defvar drgnx-signal--editor-window nil "The most recently selected editor window.")
 (defvar drgnx-signal-errors nil "Recent subscriber errors (newest first).")
@@ -96,9 +97,13 @@
          (names (mapcar (lambda (b) (cons b (buffer-name b))) set))
          (old drgnx-signal--state))
     (setq drgnx-signal--state (list :editor editor :set set :modified modified :names names
-                                    :frame (drgnx-signal--frame)))
+                                    :frame (drgnx-signal--frame)
+                                    :point (when-let* ((w (drgnx-signal-editor-window))) (window-point w))))
     (unless (eq editor (plist-get old :editor))
       (drgnx-signal--emit 'editor-changed editor))
+    (when (and old editor (eq editor (plist-get old :editor))
+               (not (eql (plist-get drgnx-signal--state :point) (plist-get old :point))))
+      (drgnx-signal--emit 'editor-point-changed editor))
     (when (and old (not (eq (plist-get old :frame) (plist-get drgnx-signal--state :frame))))
       (drgnx-signal--emit 'frame-changed (plist-get drgnx-signal--state :frame)))
     (let ((posted (reverse drgnx-signal--posted)))

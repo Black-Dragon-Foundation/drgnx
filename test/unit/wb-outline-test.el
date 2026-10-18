@@ -86,3 +86,28 @@
 (ert-deftest drgnx-outline/ret-is-a-registry-command ()
   ;; I10: keys come from the profiles, never a direct `define-key'.
   (should-not (lookup-key (let ((m (copy-keymap drgnx-outline-mode-map))) (set-keymap-parent m nil) m) (kbd "RET"))))
+
+(ert-deftest drgnx-outline/follows-current-symbol ()
+  ;; DEFERRED M3d-6: the definition the editor's point is in is marked in the Outline with an overlay; the
+  ;; Outline's own point (the user's selection in it) never moves.
+  (drgnx-outline-test--with src
+    (let* ((drgnx-signal--state nil) (editor (selected-window)) (outline (get-buffer drgnx-outline-buffer-name))
+           (marked (lambda () (with-current-buffer outline
+                                (when-let* ((o (seq-find (lambda (o) (overlay-get o 'drgnx-outline-current))
+                                                         (overlays-in (point-min) (point-max)))))
+                                  (buffer-substring-no-properties (overlay-start o) (overlay-end o))))))
+           (here (with-current-buffer outline (point))))
+      (drgnx-signal--flush)                          ; the starting state
+      (set-window-point editor (with-current-buffer src (goto-char (point-min)) (search-forward "gamma") (point)))
+      (drgnx-signal--flush)
+      (should (string-match-p "gamma" (funcall marked)))
+      (set-window-point editor (with-current-buffer src (goto-char (point-min)) (search-forward "beta") (point)))
+      (drgnx-signal--flush)
+      (should (string-match-p "beta" (funcall marked)))
+      (should (= here (with-current-buffer outline (point))))
+      ;; before the first definition: nothing is marked
+      (with-current-buffer src (goto-char (point-min)) (insert ";; header\n"))
+      (drgnx-outline--idle)
+      (set-window-point editor 1)
+      (drgnx-signal--flush)
+      (should-not (funcall marked)))))

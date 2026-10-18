@@ -89,3 +89,20 @@
                  (drgnx-signal--schedule)
                  (should (eq drgnx-signal--timer armed))))
       (when (timerp drgnx-signal--timer) (cancel-timer drgnx-signal--timer)))))
+
+(ert-deftest drgnx-signal/editor-point-changed-is-an-edge ()
+  ;; DEFERRED M3d-6: the point of the editor's window moving (same buffer) is an edge, for followers such as
+  ;; the Outline; no edge while it stays, none for a buffer switch (that is `editor-changed').
+  (drgnx-signal-test--with events
+    (let ((a (drgnx-signal-test--file dir "a.txt")) (moved nil))
+      (with-current-buffer a (insert "line one\nline two\n"))
+      (drgnx-signal-subscribe 'editor-point-changed (lambda (data) (push data moved)))
+      (switch-to-buffer a)
+      (drgnx-signal--flush)
+      (should (null moved))                         ; a new editor buffer: `editor-changed', not a move
+      (goto-char (point-min))
+      (drgnx-signal--flush)
+      (should (equal moved (list a)))
+      (drgnx-signal--flush)
+      (should (= 1 (length moved)))                 ; it stayed
+      (set-buffer-modified-p nil))))

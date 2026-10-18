@@ -8,7 +8,8 @@
 ;; Outline (browse on); RET goes there.  It follows the editor (the bus's `editor-changed' edge)
 ;; and, half a second after you stop typing, the file's changes.  Files without an index, remote
 ;; files and very large buffers get a one-line notice instead — computing an index never blocks
-;; typing.  See docs/guide/workbench.md.
+;; typing.  The definition the editor's point is in is marked with an overlay (the Outline's own point is
+;; yours and never moves), on the bus's `editor-point-changed' edge.  See docs/guide/workbench.md.
 
 ;;; Code:
 (require 'cl-lib)
@@ -22,6 +23,9 @@
   "Buffers larger than this (characters) get no outline." :type 'integer :group 'drgnx)
 (defcustom drgnx-outline-delay 0.5 "Idle seconds after an edit before the Outline follows it."
   :type 'number :group 'drgnx)
+
+(defface drgnx-outline-current '((t :inherit highlight :weight bold))
+  "The definition the editor's point is in." :group 'drgnx)
 
 (defconst drgnx-outline-buffer-name " *drgnx outline*" "Internal (a leading space): not in C-x b or ibuffer.")
 (defvar drgnx-outline--rows [] "Per line: [NAME DEPTH POSITION-or-nil].")
@@ -109,7 +113,30 @@ refreshes it): an index can take most of a second to build.  Hidden, it stops fo
                                    (if (aref r 2) text (propertize text 'face 'drgnx-outline-group))))
                                rows "\n")))
           (goto-char (point-min))
-          (forward-line (1- line)))))))
+          (forward-line (1- line)))
+        (drgnx-outline--mark-current)))))
+
+(defun drgnx-outline--mark-current (&rest _)
+  "Mark, in the Outline, the last definition that starts at or before the editor's point (an overlay: the
+Outline's point and window are not touched).  Nothing when the Outline is hidden or point is above them all."
+  (when-let* ((buf (get-buffer drgnx-outline-buffer-name)))
+    (with-current-buffer buf
+      (mapc (lambda (o) (when (overlay-get o 'drgnx-outline-current) (delete-overlay o))) (overlays-in (point-min) (point-max)))
+      (when-let* (((get-buffer-window buf t)) ((buffer-live-p drgnx-outline--source))
+                  (editor (drgnx-wb-editor-window)) ((eq (window-buffer editor) drgnx-outline--source))
+                  (point (window-point editor))
+                  (best (let ((best nil) (best-pos -1) (i 0))
+                          (seq-doseq (r drgnx-outline--rows)
+                            (when-let* ((p (aref r 2)) (p (if (markerp p) (marker-position p) p)))
+                              (when (and (<= p point) (>= p best-pos)) (setq best i best-pos p)))
+                            (setq i (1+ i)))
+                          best)))
+        (save-excursion
+          (goto-char (point-min))
+          (forward-line best)
+          (let ((o (make-overlay (pos-bol) (pos-eol))))
+            (overlay-put o 'drgnx-outline-current t)
+            (overlay-put o 'face 'drgnx-outline-current)))))))
 
 (defun drgnx-outline-jump (i &optional select)
   "Show row I's definition in the editor (SELECT: and go there)."
@@ -137,7 +164,8 @@ refreshes it): an index can take most of a second to build.  Hidden, it stops fo
   "Put the Outline in the dock, below the Explorer, following the editor."
   (drgnx-wb-define-section 'outline :slot 1 :title " OUTLINE" :height 0.25 :buffer #'drgnx-outline--buffer
                            :on-show (lambda (_w) (drgnx-outline-refresh)))
-  (drgnx-signal-subscribe 'editor-changed #'drgnx-outline-refresh))
+  (drgnx-signal-subscribe 'editor-changed #'drgnx-outline-refresh)
+  (drgnx-signal-subscribe 'editor-point-changed #'drgnx-outline--mark-current))
 
 (provide 'drgnx-outline)
 ;;; drgnx-outline.el ends here
