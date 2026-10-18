@@ -293,4 +293,6 @@
         (cockpit-filter "f")
         (cockpit-open "RET")
         (cockpit-open-in-plan "o")
-        (cockpit-refresh "g")))
+        (cockpit-refresh "g")
+        (cockpit-next "TAB")
+        (cockpit-previous "<backtab>")))

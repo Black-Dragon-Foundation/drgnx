@@ -91,6 +91,8 @@ never replaces drgnx's: it is registered as `gryphn/<id>`, its key bound where t
 
 `:doctor` returns the problems it finds (strings) after the module ran; they are kept with the module's status and
 `drgnx doctor` reports them as a warning. `:settings` is reserved for the Settings screen (M6) and not used yet.
+`(drgnx-module-running-p 'tools/example)` says whether a module's setup ran and went well. Another module can use
+it to take a path only while that module runs.
 
 Every command goes through the registry (`drgnx-command-define`) and gets a key — or `:none` with a reason — in each
 key profile ([keys.md](keys.md)); faces inherit theme faces (no colours). See [core.md](../develop/core.md) for the registry.
@@ -124,7 +126,7 @@ key profile ([keys.md](keys.md)); faces inherit theme faces (no colours). See [c
 | `tools/agents` | startup | Show Agents (the right dock's Agents tab: sessions and durable jobs), New Agent Session, Send to Agent (queued while it works), Stop Agent, Take Over Agent Session, Answer Agent, edit review hunk by hunk, Show Job Log, Stop Job ([agents.md](agents.md)) |
 | `tools/jobs` | startup | Show Job Window (tasks and agents · what needs you · the decision log), Start Job from Plan, Approve Plan Job, Show Plan Jobs, Stop Plan Job ([jobs.md](jobs.md)) |
 | `tools/work` | startup | Show Work (the right dock's Work tab: specs › plans › tasks › steps, TODOs, commits, branches), Show Work as Graph (the Work cockpit's graph when `tools/cockpit` runs, else specs, plans and branches drawn with svg.el), Start Agent on Task, Open Plan's Worktree ([work.md](work.md)) |
-| `tools/cockpit` | startup | the Work cockpit: the Work graph (pane `work-graph`, the left dock's Work view) — specs, plans, tasks, agents, jobs and reviews, who is on what, needs and blocks, what waits on you; drawn in a wide graphical window, an outline elsewhere; Filter Graph, Open Node, Open in Plan, Draw Graph Again ([cockpit.md](cockpit.md)) |
+| `tools/cockpit` | startup | the Work cockpit: the Work graph (pane `work-graph`, the left dock's Work view) — specs, plans, tasks, agents, jobs and reviews, who is on what, needs and blocks, what waits on you, worktrees that do not report; drawn in a wide graphical window, an outline elsewhere; Filter Graph, Open Node, Open in Plan, Draw Graph Again, Select Next/Previous Node ([cockpit.md](cockpit.md)) |
 | `tools/ai` | startup | ghost-text completion in code buffers (the `complete` role), one Tab for suggestion / popup / snippet / heading / indent, Accept Suggestion (word, line), Toggle AI Completion, Edit with AI… (reviewed hunk by hunk), Ask the Codebase…, Choose AI Provider/Model… ([ai.md](ai.md)) |
 | `org/org` | startup | Capture `C-c c`, Agenda `C-c a` |
 | `extra/jump` | idle | Jump to Text (needs avy) |

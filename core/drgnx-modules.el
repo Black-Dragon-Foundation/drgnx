@@ -124,6 +124,10 @@ malformed external entry is kept (written back unchanged) and listed as failed."
 
 (defun drgnx-modules--ok-p (name) (eq (plist-get (alist-get name drgnx-modules--report) :status) 'ok))
 
+(defun drgnx-module-running-p (name)
+  "Whether module NAME runs: its setup ran in this Emacs and went well (not disabled, missing or failed)."
+  (drgnx-modules--ok-p name))
+
 (defvar drgnx-modules-after-stage-functions nil
   "Called with the stage after its modules ran (core re-applies keys and menus after later stages).")
 

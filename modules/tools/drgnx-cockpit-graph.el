@@ -20,7 +20,6 @@
 
 (declare-function drgnx-work-ui--colour "drgnx-work-ui")
 (declare-function drgnx-face-glyph "drgnx-face")
-(defvar drgnx-work-ui-graph-band)
 
 (defvar drgnx-cockpit-graph--generation 0
   "Counts changes to the graph's options: a redraw after one draws even when the model is the same.")
@@ -46,6 +45,11 @@ A kind no column lists goes in the last one; adding a column is adding a list."
   "The most characters a line of a box in the drawing shows; a longer title is cut (all of it shows on hover)."
   :type 'natnum :set #'drgnx-cockpit-graph--set :group 'drgnx-cockpit)
 
+(defcustom drgnx-cockpit-graph-band-height 400
+  "The drawing is made of images this many pixels tall, one under the other (at least 100).  A change draws again
+only the bands it reaches, so shorter bands cost less per change; Emacs refuses one image over `max-image-size'."
+  :type 'natnum :set #'drgnx-cockpit-graph--set :group 'drgnx-cockpit)
+
 (defcustom drgnx-cockpit-graph-states
   '(("done" drgnx-cockpit-done ok) ("merged" drgnx-cockpit-done ok) ("pass" drgnx-cockpit-done ok)
     ("dropped" drgnx-cockpit-done circle) ("stopped" drgnx-cockpit-done paused) ("exited" drgnx-cockpit-done circle)
@@ -68,6 +72,8 @@ the glyph `waiting'."
   "Work that waits on other work or failed, in the graph: its mark; the blocks lines." :group 'drgnx-cockpit)
 (defface drgnx-cockpit-edge '((t :inherit shadow))
   "The graph's lines between nodes, column titles and the details after a title." :group 'drgnx-cockpit)
+(defface drgnx-cockpit-focus '((t :inherit highlight))
+  "The node selected with TAB in the graph: the stroke round its box (its background colour)." :group 'drgnx-cockpit)
 (defface drgnx-cockpit-kind '((t :inherit bold)) "The kind of a node in the graph: Spec, Plan, Job, TODO, Review."
   :group 'drgnx-cockpit)
 
@@ -166,9 +172,11 @@ the glyph `waiting'."
   (or (plist-get node :waiting) (memq (plist-get node :kind) '(task agent))))
 
 (defun drgnx-cockpit-graph--details (node ix g)
-  "The details after NODE's title, as propertized strings: who works on it, its review, its state, waiting on you."
+  "The details after NODE's title, as propertized strings: waiting on you (first: a cut line keeps it), who works on
+it, its review, its state."
   (let* ((byid (plist-get ix :byid)) (id (plist-get node :id)) (kind (plist-get node :kind))
          (state (plist-get node :state)) (out nil))
+    (when (plist-get node :waiting) (push (propertize "waits on you" 'face 'drgnx-cockpit-waiting) out))
     (pcase kind
       ('plan (let* ((tasks (seq-filter (lambda (k) (eq (plist-get (gethash k byid) :kind) 'task)) (gethash id (plist-get ix :kids))))
                     (done (seq-count (lambda (k) (member (plist-get (gethash k byid) :state) '("done" "merged"))) tasks)))
@@ -186,7 +194,6 @@ the glyph `waiting'."
     (when (and state (not (member state '("open" "ready"))) (not (eq kind 'plan))
                (not (and (drgnx-cockpit-graph--marked-p node) (member state '("done" "merged")))))
       (push (format "%s" state) out))
-    (when (plist-get node :waiting) (push (propertize "waits on you" 'face 'drgnx-cockpit-waiting) out))
     (nreverse out)))
 
 (defun drgnx-cockpit-graph-summary (model &optional g)
@@ -291,11 +298,11 @@ task's agents and review on its line, then its needs and blocks — then the age
   "S cut to N characters (a cut ends in …)."
   (if (> (string-width s) n) (truncate-string-to-width s n nil nil "…") s))
 
-(defun drgnx-cockpit-graph--box-lines (node ix)
+(defun drgnx-cockpit-graph--box-lines (node ix g)
   "NODE's two lines in a box: (MARK TITLE-LINE DETAILS-LINE), plain text cut to `drgnx-cockpit-graph-box-chars'.
-MARK is nil where the outline has none (`drgnx-cockpit-graph--marked-p'); the details line starts with its kind."
-  (let* ((g (drgnx-cockpit-graph--glyph-table t))
-         (n drgnx-cockpit-graph-box-chars)
+MARK is nil where the outline has none (`drgnx-cockpit-graph--marked-p'); the details line starts with its kind.
+G: the drawing's glyphs (`drgnx-cockpit-graph--glyph-table', once per layout)."
+  (let* ((n drgnx-cockpit-graph-box-chars)
          (mark (and (drgnx-cockpit-graph--marked-p node) (alist-get (cdr (drgnx-cockpit-graph--style node)) g)))
          (short (drgnx-cockpit-graph--short node))
          (title (format "%s" (or (plist-get node :title) (plist-get node :id))))
@@ -315,11 +322,12 @@ parent moves to the middle of what it joins after it; in a column boxes never ov
          (ncol (max 1 (length drgnx-cockpit-graph-columns)))
          (top (* 2 lh)) (bh (+ (* 2 lh) (* 2 pad)))
          (ix (drgnx-cockpit-graph--index model))
+         (g (drgnx-cockpit-graph--glyph-table t))
          (boxes (make-hash-table :test #'equal)) (cols (make-vector ncol nil))
          (near (make-hash-table :test #'equal)) (edges nil))
     (dolist (n (plist-get model :nodes))
       (let* ((col (drgnx-cockpit-graph--column (plist-get n :kind)))
-             (b (list :id (plist-get n :id) :node n :col col :lines (drgnx-cockpit-graph--box-lines n ix) :x 0 :y 0 :w 0 :h bh)))
+             (b (list :id (plist-get n :id) :node n :col col :lines (drgnx-cockpit-graph--box-lines n ix g) :x 0 :y 0 :w 0 :h bh)))
         (puthash (plist-get n :id) b boxes)
         (push b (aref cols col))))
     (dotimes (c ncol) (aset cols c (nreverse (aref cols c))))
@@ -379,12 +387,20 @@ drawing uses, plus `default' (its foreground) and `background' (the default back
                   '(default drgnx-cockpit-waiting drgnx-cockpit-done drgnx-cockpit-running drgnx-cockpit-blocked drgnx-cockpit-edge))
           (list (cons 'background (let ((c (drgnx-work-ui--colour 'default :background))) (if (equal c "currentColor") "none" c))))))
 
+(defvar drgnx-cockpit-graph--encoded (make-hash-table :test #'equal)
+  "Text → its SVG form (`drgnx-cockpit-graph--encode'): the titles and details of one redraw are mostly the last
+one's.  Bounded: emptied when it holds 4096 texts.")
+
 (defun drgnx-cockpit-graph--encode (text)
   "TEXT as SVG text: &, < and > escaped, every character past ASCII as &#N; (what svg.el does, in one pass)."
   (if (not (string-match-p "[&<>[:nonascii:]]" text)) text
-    (replace-regexp-in-string "[&<>]\\|[^[:ascii:]]"
-                              (lambda (m) (pcase m ("&" "&amp;") ("<" "&lt;") (">" "&gt;") (_ (format "&#%d;" (aref m 0)))))
-                              text t t)))
+    (or (gethash text drgnx-cockpit-graph--encoded)
+        (progn
+          (when (>= (hash-table-count drgnx-cockpit-graph--encoded) 4096) (clrhash drgnx-cockpit-graph--encoded))
+          (puthash text (replace-regexp-in-string "[&<>]\\|[^[:ascii:]]"
+                                                  (lambda (m) (pcase m ("&" "&amp;") ("<" "&lt;") (">" "&gt;") (_ (format "&#%d;" (aref m 0)))))
+                                                  text t t)
+                   drgnx-cockpit-graph--encoded)))))
 
 (defun drgnx-cockpit-graph--tag (tag attrs &optional text)
   "The SVG text of element TAG (a symbol) with ATTRS ((NAME . VALUE)…) and TEXT."
@@ -402,11 +418,9 @@ ELEMENT its SVG text, written once for every band it reaches into.  Every colour
          (c (lambda (face) (or (alist-get face col) (alist-get 'default col))))
          (byid (make-hash-table :test #'equal))
          (blocking (make-hash-table :test #'equal))
-         ;; column → (X W BOTTOM), nil for an empty one
+         ;; column → t when it has boxes
          (cols (let ((v (make-vector (1+ (apply #'max 0 (mapcar (lambda (b) (plist-get b :col)) (plist-get layout :boxes)))) nil)))
-                 (dolist (b (plist-get layout :boxes))
-                   (let ((k (plist-get b :col)) (bot (+ (plist-get b :y) (plist-get b :h))))
-                     (aset v k (list (plist-get b :x) (plist-get b :w) (max bot (or (nth 2 (aref v k)) 0))))))
+                 (dolist (b (plist-get layout :boxes)) (aset v (plist-get b :col) t))
                  v))
          (out nil))
     (cl-flet ((el (ymin ymax tag attrs &optional text)
@@ -436,20 +450,13 @@ ELEMENT its SVG text, written once for every band it reaches into.  Every colour
                        (x2 (plist-get r :x)) (y2 (if (eq l a) yb ya)) (mx (/ (+ x1 x2) 2))
                        (between (seq-filter (lambda (k) (and (aref cols k) (< (plist-get l :col) k (plist-get r :col))))
                                             (number-sequence 0 (1- (length cols))))))
-                  (if (null between)
-                      (el (min y1 y2) (max y1 y2) 'path
-                          `((d . ,(format "M%d,%d C%d,%d %d,%d %d,%d" x1 y1 mx y1 mx y2 x2 y2)) (fill . "none")
-                            (stroke . ,(funcall c 'drgnx-cockpit-edge)) (stroke-width . 1.2)))
-                    ;; past a column (a job to its plan): round it, above or below — never behind its boxes, where
-                    ;; it would seem to come out of one of them
-                    (let* ((first (aref cols (car between))) (last (aref cols (car (last between))))
-                           (gx1 (/ (+ x1 (car first)) 2)) (gx2 (/ (+ (car last) (cadr last) x2) 2))
-                           (above (round (* lh 1.5)))
-                           (below (+ (apply #'max (mapcar (lambda (k) (nth 2 (aref cols k))) between)) (/ lh 4)))
-                           (cy (if (<= (+ (abs (- y1 above)) (abs (- y2 above))) (+ (abs (- y1 below)) (abs (- y2 below)))) above below)))
-                      (el (min y1 y2 cy) (max y1 y2 cy) 'path
-                          `((d . ,(format "M%d,%d H%d V%d H%d V%d H%d" x1 y1 gx1 cy gx2 y2 x2)) (fill . "none")
-                            (stroke . ,(funcall c 'drgnx-cockpit-edge)) (stroke-width . 1.2) (stroke-linejoin . "round")))))))))))
+                  ;; an edge past a column (a job to its plan) is not drawn: behind that column's boxes it would seem to
+                  ;; come out of one of them, and the job's tasks join it to the plan already (an agent on a plan
+                  ;; shows on the plan's box, ← NAME)
+                  (unless between
+                    (el (min y1 y2) (max y1 y2) 'path
+                        `((d . ,(format "M%d,%d C%d,%d %d,%d %d,%d" x1 y1 mx y1 mx y2 x2 y2)) (fill . "none")
+                          (stroke . ,(funcall c 'drgnx-cockpit-edge)) (stroke-width . 1.2))))))))))
       (dolist (b (plist-get layout :boxes))
         (pcase-let* ((n (plist-get b :node)) (`(,face . ,_) (drgnx-cockpit-graph--style n))
                      (`(,mark ,title ,details) (plist-get b :lines))
@@ -488,14 +495,29 @@ tall: only the elements that reach into it."
   "The SVG text of LAYOUT (`drgnx-cockpit-graph-layout'), in the theme's colours."
   (drgnx-cockpit-graph--print layout (drgnx-cockpit-graph--elements layout) 0 (plist-get layout :h)))
 
-(defun drgnx-cockpit-graph-bands (layout)
-  "LAYOUT drawn as bands no taller than `drgnx-work-ui-graph-band' (Emacs refuses an image over `max-image-size'):
-\((Y0 HEIGHT SVG-TEXT)…), each a window (viewBox) on the same drawing with the elements that reach into it, so
-lines cross from one band into the next."
-  (let ((elements (drgnx-cockpit-graph--elements layout)) (h (plist-get layout :h))
-        (band (if (boundp 'drgnx-work-ui-graph-band) drgnx-work-ui-graph-band 1000)))
-    (cl-loop for y0 from 0 below h by band
-             collect (let ((hb (min band (- h y0)))) (list y0 hb (drgnx-cockpit-graph--print layout elements y0 hb))))))
+(defun drgnx-cockpit-graph-focus-element (layout id)
+  "The focus stroke round box ID of LAYOUT, as an element of `drgnx-cockpit-graph--elements' (in the background
+colour of `drgnx-cockpit-focus', else its foreground), or nil when LAYOUT has no such box."
+  (when-let* ((b (seq-find (lambda (b) (equal (plist-get b :id) id)) (plist-get layout :boxes))))
+    (let* ((y (- (plist-get b :y) 3)) (h (+ (plist-get b :h) 6))
+           (bg (drgnx-work-ui--colour 'drgnx-cockpit-focus :background))
+           (colour (if (equal bg "currentColor") (drgnx-work-ui--colour 'drgnx-cockpit-focus :foreground) bg)))
+      (list y (+ y h) (drgnx-cockpit-graph--tag 'rect `((x . ,(- (plist-get b :x) 3)) (y . ,y) (width . ,(+ (plist-get b :w) 6))
+                                                        (height . ,h) (rx . 5) (fill . "none") (stroke . ,colour)
+                                                        (stroke-width . 3)))))))
+
+(defun drgnx-cockpit-graph-band-ranges (layout)
+  "The bands LAYOUT is drawn in: ((Y0 HEIGHT)…), none taller than `drgnx-cockpit-graph-band-height'."
+  (let ((h (plist-get layout :h)) (band (max 100 drgnx-cockpit-graph-band-height)))
+    (cl-loop for y0 from 0 below h by band collect (list y0 (min band (- h y0))))))
+
+(defun drgnx-cockpit-graph-bands (layout &optional elements)
+  "LAYOUT drawn as bands (`drgnx-cockpit-graph-band-ranges'): ((Y0 HEIGHT SVG-TEXT)…), each a window (viewBox) on the
+same drawing with the ELEMENTS (default: `drgnx-cockpit-graph--elements' of LAYOUT) that reach into it, so lines
+cross from one band into the next."
+  (let ((elements (or elements (drgnx-cockpit-graph--elements layout))))
+    (mapcar (lambda (r) (list (car r) (cadr r) (drgnx-cockpit-graph--print layout elements (car r) (cadr r))))
+            (drgnx-cockpit-graph-band-ranges layout))))
 
 (provide 'drgnx-cockpit-graph)
 ;;; drgnx-cockpit-graph.el ends here

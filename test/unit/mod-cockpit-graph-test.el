@@ -17,7 +17,11 @@
 the fixture's."
   (declare (indent 0))
   `(drgnx-cockpit-fixture-with
-     (let ((drgnx-cockpit-graph-filter nil) (drgnx-cockpit--draws 0) (drgnx-cockpit--timer nil)
+     (let ((drgnx-cockpit-graph-current-filter nil) (drgnx-cockpit--draws 0) (drgnx-cockpit--timer nil)
+           (drgnx-cockpit--check-timer nil) (drgnx-cockpit--last-error nil)
+           ;; no search for silent worktrees unless a test asks for one
+           (drgnx-cockpit--silent nil) (drgnx-cockpit--silent-n 0) (drgnx-cockpit--silent-at (float-time))
+           (drgnx-cockpit--silent-running nil)
            (config (current-window-configuration)))
        (cl-letf (((symbol-function 'drgnx-cockpit-sessions) (lambda () sessions)))
          (let ((g (drgnx-cockpit-graph-buffer)))
@@ -28,6 +32,8 @@ the fixture's."
                  ,@body)
              (when (timerp drgnx-cockpit--timer) (cancel-timer drgnx-cockpit--timer))
              (kill-buffer g)
+             (should-not (timerp drgnx-cockpit--check-timer))       ; the buffer owned it
+             (drgnx-cockpit-fixture-wait (lambda () (not drgnx-cockpit--silent-running)))
              (set-window-configuration config)))))))
 
 (defun drgnx-cockpit-graph-test--tick ()
@@ -97,7 +103,7 @@ the fixture's."
       (let ((i (string-search (concat mark " ") t3)))
         (should i)
         (should (eq (get-text-property i 'face t3) 'drgnx-cockpit-waiting))
-        (should (string-search "waits on you" t3)))
+        (should (string-search "T3 task 3  waits on you · pending" t3)))          ; first: a cut line keeps it
       (should-not (string-search (concat mark " ") t4))
       ;; the first line says how many wait on you, in the waiting face
       (should (string-match-p "2 waiting on you" (car lines)))
@@ -128,8 +134,17 @@ the fixture's."
       ;; faces without a colour (batch): only the image's foreground and none
       (dolist (c (funcall colours (drgnx-cockpit-graph-svg layout)))
         (should (string-match-p "\\`\\(none\\|currentColor\\|#[0-9a-f]\\{6\\}\\)\\'" c)))
-      ;; the job's edge to its plan goes round the tasks' column (never behind a task, as if it came out of one)
-      (should (string-match-p "d=\"M[0-9]+,[0-9]+ H[0-9]+ V[0-9]+ H[0-9]+ V[0-9]+ H[0-9]+\"" (drgnx-cockpit-graph-svg layout)))
+      ;; the job's edge to its plan, past the tasks' column, is not drawn (behind a task it seemed to come out of it):
+      ;; every line drawn joins neighbouring columns or two tasks
+      (let* ((svg (drgnx-cockpit-graph-svg layout))
+             (drawn (cl-loop with start = 0 while (string-match "<path " svg start) count t do (setq start (match-end 0))))
+             (adjacent (seq-count (lambda (e) (and (not (eq (plist-get e :kind) 'blocks))
+                                                   (<= (abs (- (plist-get (drgnx-cockpit-graph-test--box layout (plist-get e :from)) :col)
+                                                               (plist-get (drgnx-cockpit-graph-test--box layout (plist-get e :to)) :col)))
+                                                       1)))
+                                  (plist-get layout :edges))))
+        (should (seq-find (lambda (e) (equal (plist-get e :from) "job:jx")) (plist-get layout :edges)))   ; in the layout
+        (should (= drawn adjacent)))
       (unwind-protect
           (progn
             ;; as a theme sets them: every colour in the drawing is one of these
@@ -159,7 +174,12 @@ the fixture's."
         (should (re-search-forward "T2 task 2  ← claude · jx#2" nil t))
         (should (re-search-forward "blocks: T3, T4" nil t))
         (should (re-search-forward "needs: T2" nil t))
-        (should (re-search-forward "^AGENTS" nil t)))
+        (should (re-search-forward "^AGENTS" nil t))
+        ;; hovering a waiting node shows the open question's first line
+        (drgnx-cockpit-graph-test--goto (format "task:%s#3" plan))
+        (should (equal (get-text-property (point) 'help-echo) "Pick a name"))
+        (drgnx-cockpit-graph-test--goto "agent:s-1")
+        (should (equal (get-text-property (point) 'help-echo) "which way?")))
       ;; a small window (Review Focus 5): no error, the outline
       (let ((w (split-window-right 20)))
         (set-window-buffer w g)
@@ -270,7 +290,17 @@ the fixture's."
       (drgnx-cockpit--on-show (selected-window))
       (drgnx-cockpit-graph-test--tick)
       (should (= (1+ n) drgnx-cockpit--draws))
-      (should-not (buffer-local-value 'drgnx-cockpit--stale g)))))
+      (should-not (buffer-local-value 'drgnx-cockpit--stale g))
+      (drgnx-cockpit--on-show (selected-window))                ; shown again, nothing missed: nothing to do
+      (should-not drgnx-cockpit--timer)
+      ;; a redraw on its way when the graph is hidden draws nothing: it only notes the graph is stale
+      (drgnx-coord-force-status "jx#4" "done" "s-1")
+      (drgnx-cockpit-schedule)
+      (should (timerp drgnx-cockpit--timer))
+      (set-window-buffer (selected-window) (get-buffer "*scratch*"))
+      (drgnx-cockpit-graph-test--tick)
+      (should (= (1+ n) drgnx-cockpit--draws))
+      (should (buffer-local-value 'drgnx-cockpit--stale g)))))
 
 (ert-deftest drgnx-cockpit-graph/commands-and-keys-in-every-profile ()
   (let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil))
@@ -278,20 +308,185 @@ the fixture's."
       (funcall (plist-get (alist-get 'tools/cockpit drgnx-modules--table) :setup)))
     (should (equal (plist-get (alist-get 'tools/cockpit drgnx-modules--table) :requires) '(tools/work tools/jobs)))
     (pcase-dolist (`(,id ,fn) '((cockpit-filter drgnx-cockpit-graph-filter) (cockpit-open drgnx-cockpit-graph-open)
-                                (cockpit-open-in-plan drgnx-cockpit-graph-open-in-plan) (cockpit-refresh drgnx-cockpit-graph-refresh)))
+                                (cockpit-open-in-plan drgnx-cockpit-graph-open-in-plan) (cockpit-refresh drgnx-cockpit-graph-refresh)
+                                (cockpit-next drgnx-cockpit-graph-select-next) (cockpit-previous drgnx-cockpit-graph-select-previous)))
       (should (eq (drgnx-cmd-command (drgnx-commands-get id)) fn))
       (should (eq (drgnx-cmd-map (drgnx-commands-get id)) 'drgnx-cockpit-graph-mode-map))))
   ;; Show Work as Graph opens this graph while tools/cockpit runs, the Work tab's older graph without it
   (let ((shown nil))
     (cl-letf (((symbol-function 'drgnx-cockpit-graph-show) (lambda () (push 'cockpit shown)))
               ((symbol-function 'drgnx-work-ui-graph) (lambda () (push 'old shown))))
-      (cl-letf (((symbol-function 'drgnx-modules--ok-p) (lambda (m) (eq m 'tools/cockpit)))) (drgnx-work-ui-show-graph))
-      (cl-letf (((symbol-function 'drgnx-modules--ok-p) #'ignore)) (drgnx-work-ui-show-graph)))
+      (cl-letf (((symbol-function 'drgnx-module-running-p) (lambda (m) (eq m 'tools/cockpit)))) (drgnx-work-ui-show-graph))
+      (cl-letf (((symbol-function 'drgnx-module-running-p) #'ignore)) (drgnx-work-ui-show-graph)))
     (should (equal shown '(old cockpit))))
   (dolist (profile '("vscode" "emacs" "vim"))
     (let ((text (with-temp-buffer (insert-file-contents (expand-file-name (format "keys/%s.eld" profile) drgnx-dir)) (buffer-string))))
-      (dolist (row '("(cockpit-filter \"f\")" "(cockpit-open \"RET\")" "(cockpit-open-in-plan \"o\")" "(cockpit-refresh \"g\")"
-                     "(work-graph "))
+      (dolist (row (append '("(cockpit-filter \"f\")" "(cockpit-open \"RET\")" "(cockpit-open-in-plan \"o\")" "(cockpit-refresh \"g\")"
+                             "(work-graph ")
+                           (if (equal profile "vim") '("(cockpit-next \"TAB\" \"n\")" "(cockpit-previous \"<backtab>\" \"p\")")
+                             '("(cockpit-next \"TAB\")" "(cockpit-previous \"<backtab>\")"))))
         (should (string-search row text))))))
+
+(defmacro drgnx-cockpit-graph-test--drawn (&rest body)
+  "BODY with the graph's windows graphical and wide enough for the drawing (skipped without SVG support)."
+  (declare (indent 0))
+  `(progn
+     (unless (image-type-available-p 'svg) (ert-skip "this Emacs has no SVG support"))
+     (cl-letf (((symbol-function 'display-images-p) #'always) ((symbol-function 'window-body-width) (lambda (&rest _) 5000)))
+       ,@body)))
+
+(ert-deftest drgnx-cockpit-graph/options-and-fonts-reach-the-drawing ()
+  (drgnx-cockpit-graph-test--with
+    (drgnx-cockpit-graph-test--drawn
+      (let ((cols drgnx-cockpit-graph-columns) (layout (lambda () (buffer-local-value 'drgnx-cockpit--layout g))))
+        (unwind-protect
+            (progn
+              (drgnx-cockpit-graph-redraw)
+              (should (= 4 (length (plist-get (funcall layout) :titles))))
+              ;; an option changed while the drawing shows: its setter asks for a redraw, which lays it out again
+              (customize-set-variable 'drgnx-cockpit-graph-columns '((spec plan task todo) (agent job review)))
+              (drgnx-cockpit-graph-test--tick)
+              (should (= 2 (length (plist-get (funcall layout) :titles))))
+              (should (equal '(0 1) (sort (delete-dups (mapcar (lambda (b) (plist-get b :col)) (plist-get (funcall layout) :boxes))) #'<)))
+              ;; another font: measured again on the next redraw
+              (cl-letf (((symbol-function 'drgnx-work-ui--metrics) (lambda () '(11 . 23))))
+                (drgnx-cockpit-schedule)
+                (drgnx-cockpit-graph-test--tick)
+                (should (equal '(11 . 23) (plist-get (funcall layout) :metrics)))))
+          (customize-set-variable 'drgnx-cockpit-graph-columns cols))))))
+
+(ert-deftest drgnx-cockpit-graph/old-band-images-are-flushed ()
+  (drgnx-cockpit-graph-test--with
+    (drgnx-cockpit-graph-test--drawn
+      (let ((images (lambda () (mapcar (lambda (b) (nth 2 b)) (buffer-local-value 'drgnx-cockpit--bands g))))
+            (flushed nil))
+        (drgnx-cockpit-graph-redraw t)
+        (let ((old (funcall images)))
+          (should old)
+          (cl-letf (((symbol-function 'image-flush) (lambda (img &rest _) (push img flushed))))
+            ;; drawn the same again: its cached pixels serve the new image, nothing is flushed
+            (drgnx-cockpit-graph-redraw t)
+            (should-not flushed)
+            ;; a change: the old band's pixels go
+            (setq old (funcall images))
+            (drgnx-coord-force-status "jx#4" "running" "s-1")
+            (drgnx-cockpit-graph-redraw)
+            (dolist (i old) (should (memq i flushed)))
+            ;; a change that moves no box (running → claimed, as long): the buffer's text stays, the band gets its
+            ;; new drawing in place, its old pixels flushed first
+            (let ((tick (with-current-buffer g (buffer-modified-tick))) (img (car (funcall images))))
+              (setq flushed nil)
+              (let ((data (image-property img :data)))
+                (drgnx-coord-force-status "jx#4" "claimed" "s-1")
+                (drgnx-cockpit-graph-redraw)
+                (should (= tick (with-current-buffer g (buffer-modified-tick))))
+                (should (eq img (car (funcall images))))
+                (should (memq img flushed))
+                (should-not (equal data (image-property img :data)))))
+            ;; the outline instead: the drawing's images go too
+            (setq old (funcall images) flushed nil)
+            (let ((drgnx-cockpit-graph-svg nil)) (drgnx-cockpit-graph-redraw t))
+            (dolist (i old) (should (memq i flushed)))
+            (should-not (funcall images))))))))
+
+(ert-deftest drgnx-cockpit-graph/nothing-changed-builds-no-model ()
+  (drgnx-cockpit-graph-test--with
+    (drgnx-cockpit-graph-redraw)
+    (let* ((built 0) (orig (symbol-function 'drgnx-cockpit-model)))
+      (cl-letf (((symbol-function 'drgnx-cockpit-model) (lambda (&rest args) (cl-incf built) (apply orig args))))
+        ;; events, nothing written: the key is the same, no model is built
+        (dotimes (_ 5) (drgnx-cockpit--hub-event "job" '(:id "jx")) (drgnx-cockpit-graph-test--tick))
+        (should (= 0 built))
+        (let ((t0 (float-time)))
+          (dotimes (_ 100) (drgnx-cockpit-graph-redraw))
+          (should (< (/ (- (float-time) t0) 100) 0.002)))                ; about 30 µs; loose for a loaded machine
+        (should (= 0 built))
+        ;; this Emacs writes the store: one build, one draw
+        (drgnx-coord-force-status "jx#4" "running" "s-1")
+        (drgnx-cockpit-schedule)
+        (drgnx-cockpit-graph-test--tick)
+        (should (= 1 built))))))
+
+(ert-deftest drgnx-cockpit-graph/writes-of-other-processes-show ()
+  (drgnx-cockpit-graph-test--with
+    (drgnx-cockpit-graph-redraw)
+    (should (timerp drgnx-cockpit--check-timer))                       ; started with the buffer
+    (drgnx-cockpit--check)
+    (should-not drgnx-cockpit--timer)                                   ; nothing written: nothing to do
+    ;; another process (a second connection) writes the store
+    (let ((db2 (sqlite-open (drgnx-work-db-file))))
+      (unwind-protect (sqlite-execute db2 "update jtask set status = 'running' where id = 'jx#4'")
+        (sqlite-close db2)))
+    (drgnx-cockpit--check)
+    (drgnx-cockpit--check)
+    (should (timerp drgnx-cockpit--timer))                              ; one redraw on its way
+    (let ((n drgnx-cockpit--draws))
+      (drgnx-cockpit-graph-test--tick)
+      (should (= (1+ n) drgnx-cockpit--draws)))
+    (with-current-buffer g (drgnx-cockpit-graph-test--goto (format "task:%s#4" plan)) (should (looking-at ".*running")))
+    (drgnx-cockpit--check)
+    (should-not drgnx-cockpit--timer)))
+
+(ert-deftest drgnx-cockpit-graph/silent-worktrees-show-as-not-reporting ()
+  (drgnx-cockpit-graph-test--with
+    ;; a remote repository in the store is never asked whether it is a folder
+    (drgnx-coord-job-create :id "jr" :title "remote" :repo "/ssh:nowhere.invalid:/r/" :tasks '((:n 1 :title "t" :role "implement")))
+    (let ((asked nil) (orig (symbol-function 'file-directory-p)))
+      (cl-letf (((symbol-function 'file-directory-p) (lambda (f) (push f asked) (funcall orig f))))
+        (should (equal (drgnx-cockpit--roots) (list repo))))
+      (should-not (seq-find (lambda (f) (string-prefix-p "/ssh:" f)) asked)))
+    ;; of the two worktrees, wt-a has an agent: only wt-b is silent
+    (drgnx-cockpit--silent-scan t)
+    (should (drgnx-cockpit-fixture-wait (lambda () (not drgnx-cockpit--silent-running))))
+    (should (equal (mapcar (lambda (a) (plist-get a :worktree)) drgnx-cockpit--silent) (list wt-b)))
+    (drgnx-cockpit-graph-test--tick)
+    (with-current-buffer g
+      (drgnx-cockpit-graph-test--goto (concat "agent:silent:" (directory-file-name wt-b)))
+      (should (looking-at ".*wt-b +silent.*not reporting"))
+      (should-not (text-property-any (point-min) (point-max) 'drgnx-cockpit-node (concat "agent:silent:" (directory-file-name wt-a)))))
+    ;; not again before `drgnx-cockpit-silent-interval'
+    (drgnx-cockpit--silent-scan)
+    (should-not drgnx-cockpit--silent-running)))
+
+(ert-deftest drgnx-cockpit-graph/keyboard-selects-in-column-order ()
+  (drgnx-cockpit-graph-test--with
+    ;; the outline: TAB to the next node's line (a task's needs and blocks lines are its own)
+    (drgnx-cockpit-graph-redraw t)
+    (with-selected-window (get-buffer-window g)
+      (goto-char (point-min))
+      (drgnx-cockpit-graph-select-next)
+      (should (equal (get-text-property (point) 'drgnx-cockpit-node) (concat "spec:" spec)))
+      (drgnx-cockpit-graph-select-next 4)                               ; plan, T1, T2, then T3 (T2's blocks line skipped)
+      (should (equal (get-text-property (point) 'drgnx-cockpit-node) (format "task:%s#3" plan)))
+      (drgnx-cockpit-graph-select-previous)
+      (should (equal (get-text-property (point) 'drgnx-cockpit-node) (format "task:%s#2" plan))))
+    ;; the drawing: boxes in column order, the focus stroke drawn again in its band only, RET opens the selection
+    (drgnx-cockpit-graph-test--drawn
+      (drgnx-cockpit-graph-redraw t)
+      (let ((old (face-attribute 'drgnx-cockpit-focus :background)) (msg nil))
+        (unwind-protect
+            (with-selected-window (get-buffer-window g)
+              (set-face-attribute 'drgnx-cockpit-focus nil :background "#00ee00")
+              (setq drgnx-cockpit--selected nil)
+              (let ((img (nth 2 (car drgnx-cockpit--bands))) (tick (buffer-modified-tick)))
+                (should-not (string-search "#00ee00" (image-property img :data)))
+                (cl-letf (((symbol-function 'message) (lambda (fmt &rest args) (setq msg (apply #'format fmt args)))))
+                  (drgnx-cockpit-graph-select-next))
+                (should (equal drgnx-cockpit--selected (concat "spec:" spec)))
+                (should (string-prefix-p "Spec: The spec" msg))
+                (should (eq img (nth 2 (car drgnx-cockpit--bands))))             ; the same image, its pixels again
+                (should (string-search "stroke=\"#00ee00\"" (image-property img :data)))
+                (should (= tick (buffer-modified-tick))))                         ; the buffer's text untouched
+              (drgnx-cockpit-graph-select-next)
+              (should (equal drgnx-cockpit--selected (concat "plan:" plan)))
+              (drgnx-cockpit-graph-select-next)
+              (should (equal drgnx-cockpit--selected (format "task:%s#1" plan)))    ; the tasks' column, top first
+              (drgnx-cockpit-graph-select-previous 2)
+              (should (equal drgnx-cockpit--selected (concat "spec:" spec)))
+              ;; RET opens the selection: no completion asked
+              (cl-letf (((symbol-function 'completing-read) (lambda (&rest _) (error "Asked"))))
+                (call-interactively #'drgnx-cockpit-graph-open))
+              (should (get-buffer-window (get-file-buffer spec))))
+          (set-face-attribute 'drgnx-cockpit-focus nil :background old))))))
 
 ;;; mod-cockpit-graph-test.el ends here

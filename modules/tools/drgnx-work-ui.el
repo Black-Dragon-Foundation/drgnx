@@ -416,13 +416,11 @@ window (viewBox) on the same drawing, so lines cross from one band into the next
     (message "Work: click a box to open it")))
 
 (declare-function drgnx-cockpit-graph-show "drgnx-cockpit")
-(declare-function drgnx-modules--ok-p "drgnx-modules")
-
 (defun drgnx-work-ui-show-graph ()
   "Show the Work graph: the Work cockpit's (specs, plans, tasks, agents, jobs, reviews) when module tools/cockpit
 runs, else specs, plans and branches (`drgnx-work-ui-graph')."
   (interactive)
-  (if (and (fboundp 'drgnx-cockpit-graph-show) (drgnx-modules--ok-p 'tools/cockpit)) (drgnx-cockpit-graph-show)
+  (if (and (fboundp 'drgnx-cockpit-graph-show) (drgnx-module-running-p 'tools/cockpit)) (drgnx-cockpit-graph-show)
     (drgnx-work-ui-graph)))
 
 (defun drgnx-work-ui-graph ()

@@ -140,3 +140,70 @@ fixture is a temp project with:
 - a job of three tasks;
 - two worktrees: one with an outside agent registered in it, one silent;
 - events.
+
+## The Work graph (module `tools/cockpit`)
+
+`modules/tools/drgnx-cockpit-graph.el` holds the layout, the drawing (SVG text, every colour from a face) and the
+outline. `modules/tools/drgnx-cockpit.el` holds the pane, the redraws and the commands. The user's side is in
+[cockpit.md](../guide/cockpit.md).
+
+### Redraws
+
+`drgnx-cockpit-schedule` keeps one owned one-shot timer, and only while the graph is visible. A tick that finds
+the graph hidden only marks it stale; `:on-show` catches up. `drgnx-cockpit-graph-redraw` works in four steps:
+
+1. **The key** (about 20 µs, one query):
+   - `PRAGMA data_version` (moves when another connection commits) and `total_changes()` (this Emacs's writes);
+   - counters bumped by agent changes, tracker scans and new silent worktrees;
+   - the filter, the options' generation, the font's metrics, the widest window, ASCII or not.
+
+   The same key: return.
+2. **The model**, built only when the store part, the filter or the generation changed.
+3. **The layout**, cached by `(model metrics generation)`.
+4. **The signature**: the model, the mode and the metrics. It decides whether anything is drawn.
+
+How the views change:
+- The outline is patched line by line.
+- The drawing redraws in place while its frame (head lines, bands, every box's place) is the same: only the bands
+  whose SVG changed get it, through `image-property`, with `image-flush` on the old pixels first.
+- Otherwise the buffer is rebuilt, and the old band images are flushed except one equal to a new one (the image
+  cache serves it).
+- TAB re-renders only the bands the old and the new focus stroke reach.
+
+Owners:
+- The buffer owns its hooks (hub events, agent changes, tracker scans, `enable-theme-functions`; all named) and
+  the repeating `drgnx-cockpit--check` timer. Its `kill-buffer-hook` removes them and flushes its images.
+- `drgnx-cockpit-graph--encoded` (the SVG form of a text) is emptied at 4,096 texts.
+
+### Cost
+
+Batch, drgnx's steady GC settings (64 MB, 0.1); per redraw over 100 runs, p50, with the allocation per draw from
+`memory-use-counts`. One garbage collection (about 28 ms) lands in about one redraw in 20 at 300 nodes.
+
+| Store | Nodes | Nothing changed | A change shown (drawing) | Forced, outline | Forced, drawing | TAB |
+|---|---|---|---|---|---|---|
+| The cockpit fixture | 13 | 0.022 ms, 1 KB | 1.2 ms, 159 KB | 0.71 ms, 131 KB | 0.79 ms, 125 KB | 0.05 ms |
+| 151 jobs (11 open), 2,000 events | 83 | 0.023 ms, 1 KB | 3.3 ms, 751 KB | 1.7 ms, 465 KB | 2.5 ms, 608 KB | 0.23 ms |
+| 41 open jobs | 293 | 0.022 ms, 1 KB | 10.6 ms, 2.5 MB | 4.4 ms, 1.4 MB | 7.8 ms, 2.0 MB | 0.84 ms |
+
+In a GUI session (harness, 1600×900), a change shown at 294 nodes is measured as the redraw plus `(redisplay t)`,
+which is when librsvg renders the changed band. It takes 27.5 ms p50: 11.8 ms redraw and 14.6 ms render. 28 of 30
+changes take 29 ms or less; the other two each contain a GC (61 ms).
+
+Each changed band costs about 15 ms to render, whatever its height between 250 and 1,000 px. That fixed cost is
+why a change touches as few bands as it can.
+
+### Tests
+
+`test/unit/mod-cockpit-graph-test.el` (prefix `drgnx-cockpit-graph/`) runs on the cockpit fixture. It covers:
+- the columns and edges (no link drawn across a column);
+- the waiting mark (outline, drawing, ASCII, hover text);
+- that every colour in the drawing comes from a face;
+- the outline in terminals and small windows;
+- clicks and `RET`, keyboard selection in column order;
+- one redraw per burst of events, none when nothing changed and no model built then, none while hidden (a pending
+  timer included);
+- options and fonts reaching the drawing, old band images flushed (and kept when drawn the same);
+- writes of another connection caught by the check;
+- silent worktrees as agents "not reporting" (a remote repository never asked about);
+- the keys in every profile.

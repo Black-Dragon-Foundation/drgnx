@@ -21,22 +21,35 @@ The first line counts what waits on you, the agents and the jobs. The nodes foll
 | Task | `T2` and its state's mark | `← agent` (who works on it), `review: …`, its state; then `needs:` and `blocks:` lines |
 | Agent | its state's mark | how it reports (`job`, `native`, `outside`, `silent`), its tasks, its state |
 
-Marks: `✓` done, `●` working, `○` open or pending, `⚠` failed or needing input, `⏸` paused or stopped. A node that
-waits on you has `◐` in red, the words "waits on you", and, in the drawing, a red dot and a red border. A node
-waits while an open question, an open ask card or a permission is about it. A terminal that does not write UTF-8
-gets ASCII marks (`+ * o ! || ?`).
+Marks: `✓` done, `●` working, `○` open or pending, `⚠` failed or needing input, `⏸` paused or stopped.
+
+A node that waits on you is marked several ways:
+- `◐` in red, and "waits on you" first among its details, so a cut line keeps it;
+- in the drawing, a red dot and a red border;
+- hovering it shows the first line of the open question.
+
+A node waits while an open question, an open ask card or a permission is about it. A terminal that does not write
+UTF-8 gets ASCII marks (`+ * o ! || ?`).
 
 A task that exists only in its plan file (no job runs it) is read-only here. The drawing shows it with a dashed
 border.
+
+**Silent worktrees.** A worktree with changes that no agent reports from shows as an agent of its own, `silent`,
+"not reporting". When the tracker knows its plan, it hangs under that plan. The graph looks for these while it
+shows:
+- in the repositories the store knows (jobs' and plans');
+- at most every `drgnx-cockpit-silent-interval` (45 s), and after each work-tracker scan;
+- with one git process per repository, and never in a remote (TRAMP) one.
 
 ## The drawing and the outline
 
 - **The drawing** (SVG, built in): four columns, left to right: specs | plans | tasks and TODOs | agents, jobs
   and reviews. Each box sits level with what it joins; a plan sits in the middle of its tasks.
-  - A line joins each node to its parent.
+  - A line joins each node to its parent in the next column.
   - A dashed arc joins a task to the task it needs, in the warning colour while it still blocks.
-  - A line that skips a column (a job to its plan) goes round that column's boxes, above or below them.
-  - Hovering a box shows its full title, state and file.
+  - A link that would cross a column is not drawn: behind that column's boxes it would seem to come out of one of
+    them. A job joins its plan through its tasks; an agent on a plan shows on the plan's box (`← name`).
+  - Hovering a box shows its full title, state, open question and file.
 - **The outline**: the same nodes as a tree — spec › plan › tasks, TODOs, jobs — then the agents.
 
 The drawing shows in a graphical window wide enough for it. Elsewhere you get the outline: terminal frames, small
@@ -47,10 +60,11 @@ you always get the outline.
 
 | Key | Command | Does |
 |---|---|---|
-| `RET` | Open Node (`cockpit-open`) | opens the node on this line (in the drawing: you pick one by name) |
+| `TAB`, `S-TAB` (Vim also `n`, `p`) | Select Next / Previous Node (`cockpit-next`, `cockpit-previous`) | selects the next node and says what it is. In the drawing that is the next box in column order: it gets a focus stroke and scrolls into view. In the outline it is the next node's line. |
+| `RET` | Open Node (`cockpit-open`) | opens the node on this line, or the selected one (with nothing selected in the drawing, you pick one by name) |
 | `o` | Open in Plan (`cockpit-open-in-plan`) | the plan at this task's heading (an agent: its task's) |
-| `f` | Filter Graph… (`cockpit-filter`) | a milestone (text in a title or path), an agent, states; empty: all |
-| `g` | Draw Graph Again (`cockpit-refresh`) | reads the store again and draws now (after a theme change too) |
+| `f` | Filter Graph… (`cockpit-filter`) | a milestone (completion offers the specs' and plans' titles; any text in a title or path works), an agent, states; empty: all |
+| `g` | Draw Graph Again (`cockpit-refresh`) | reads the store again and draws now |
 
 The keys are the same in the VS Code, Emacs and Vim profiles: the graph's buffer starts in Emacs state under evil.
 A click on a node (a box or an outline line) opens it too.
@@ -74,28 +88,42 @@ The graph never asks anything, and it never blocks typing. It redraws when one o
 - the hub sends an event (a job, a card, an agent or a lease changed; not a transcript's chunks or the gateway's
   requests);
 - an agent session here changes;
-- the work tracker finishes a scan.
+- the work tracker finishes a scan;
+- a theme is enabled (the drawing's colours come from faces);
+- a check every `drgnx-cockpit-check-interval` (3 s) finds that another process wrote the store, for example an
+  outside agent's MCP server or another Emacs. The check is one query, and it runs only while the graph shows.
 
-Each event asks for a redraw. However many events come, at most one redraw runs per `drgnx-cockpit-redraw-delay`
-(0.5 s). It reads the store, and it draws only when what the graph would show changed: an outline line that did
-not change is left as it is, and so is your place in it.
+However many events come, at most one redraw runs per `drgnx-cockpit-redraw-delay` (0.5 s). A redraw first
+compares a cheap key, which costs about 20 µs. The key covers the store's version and change count, the agents,
+scans and silent worktrees, the filter, the options, the font, and the windows. When the key is the same, the
+redraw ends there.
 
-A hidden graph does nothing. It remembers that something changed and catches up when it shows. Remote (TRAMP)
-folders are never touched. Writes that reach the store without a hub event show at the next event, or with `g`:
-for example, an outside agent's MCP server when no hub runs.
+Otherwise it reads the store, and it draws only what changed:
+- In the outline, an unchanged line stays, and so does your place in it.
+- In the drawing, while no box moves, the buffer's text stays and only the images of the bands that changed are
+  drawn again. Their old pixels are released first.
+
+A hidden graph does nothing: it remembers that something changed and catches up when it shows. Remote (TRAMP)
+folders are never touched.
 
 ## Customizing
 
-Customize group `drgnx-cockpit`; each option applies at once, `setopt` in `config.el` too.
+Customize group `drgnx-cockpit`, or `setopt` in `config.el`.
+- The drawing's options apply at once: the graph is drawn again.
+- The others take effect at the next redraw, check or open.
+
+The options:
 
 - `drgnx-cockpit-graph-columns`: the columns, each a list of node kinds, default
   `((spec) (plan) (task todo) (agent job review))`. A kind no column lists goes in the last one; adding a column
   is adding a list.
 - `drgnx-cockpit-graph-svg`: draw (t) or always the outline (nil).
 - `drgnx-cockpit-graph-box-chars` (32): how much of a title a box shows.
+- `drgnx-cockpit-graph-band-height` (400): the drawing is made of images this tall, one under the other. A change
+  draws again only the bands it reaches.
 - `drgnx-cockpit-graph-states`: each state's face and mark.
 - `drgnx-cockpit-open-functions`: what opening a node of each kind does.
-- `drgnx-cockpit-redraw-delay` (0.5 s).
+- `drgnx-cockpit-redraw-delay` (0.5 s), `drgnx-cockpit-check-interval` (3 s), `drgnx-cockpit-silent-interval` (45 s).
 
 Faces, all inheriting your theme's:
 
@@ -107,6 +135,7 @@ Faces, all inheriting your theme's:
 | `drgnx-cockpit-blocked` | `warning` | pending and failed work, blocks lines |
 | `drgnx-cockpit-edge` | `shadow` | lines, column titles, details |
 | `drgnx-cockpit-kind` | `bold` | kind words |
+| `drgnx-cockpit-focus` | `highlight` | the selected node's stroke (its background colour) |
 
 The drawing takes every colour from these faces and `default`. When a face has no colour, it uses the window's
 text colour.
@@ -114,30 +143,4 @@ text colour.
 A new node kind needs a function on `drgnx-cockpit-node-functions` (the model), a column (or the last one) and,
 if you like, an entry in `drgnx-cockpit-open-functions`.
 
-## Cost
-
-Measured in batch with drgnx's steady GC settings. Each figure is the mean of a forced redraw: the model, the
-outline or the drawing, and the buffer. A garbage collection (40–50 ms) lands in about one redraw in 20.
-
-| Store | Nodes | Outline | Drawing |
-|---|---|---|---|
-| The cockpit fixture | 13 | 0.7 ms | 1.0 ms |
-| 151 jobs (11 open) and 2,000 events | 83 | 2.0 ms | 3.8 ms |
-| 41 open jobs | 293 | 7.3 ms | 16.6 ms |
-
-In a GUI session, a 293-node drawing with its rendering on screen takes about 28 ms (median). A redraw that would
-show the same takes the model's time, about 2.5 ms at 300 nodes. With `drgnx-cockpit-include-closed-jobs` and 151
-jobs (1,063 nodes), the outline takes about 25 ms and the drawing about 85 ms.
-
-## Tests
-
-`test/unit/mod-cockpit-graph-test.el` (prefix `drgnx-cockpit-graph/`) runs on the cockpit fixture
-(`test/fixtures/cockpit-fixture.el`). It covers:
-
-- the columns and edges;
-- the waiting mark (outline, drawing, ASCII);
-- that every colour in the drawing comes from a face;
-- the outline in terminals and small windows;
-- that clicks and `RET` open the right tab;
-- one redraw per burst of events, none when nothing changed, none while hidden;
-- the keys in every profile.
+What it costs, and its tests: [the cockpit, for developers](../develop/cockpit.md).
