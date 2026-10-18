@@ -14,6 +14,7 @@
 (require 'seq)
 (require 'subr-x)
 (require 'drgnx-paths)
+(require 'drgnx-timer)
 
 (defun drgnx-jobs-dir () (file-name-as-directory (expand-file-name "jobs" (drgnx-state-dir))))
 (defun drgnx-jobs--dir (id) (file-name-as-directory (expand-file-name id (drgnx-jobs-dir))))
@@ -130,25 +131,33 @@ Signals a `user-error' (before anything is created) when the detached launcher h
     ;; the pid trustworthy later (a pid from before a reboot may be another process)
     (let ((deadline (+ (float-time) 2)) (pidf (expand-file-name "pid" dir)))
       (if no-wait
-          (let (timer finish on-exit)
-            ;; once, from the timer or, when Emacs exits first, from `kill-emacs-hook' (waiting out the
-            ;; deadline for the pid at most): either way the other is gone afterwards
-            (setq finish (lambda ()
-                           (remove-hook 'kill-emacs-hook on-exit)
-                           (when timer (cancel-timer timer))
-                           ;; the job's directory may be gone by now (a removed job)
-                           (ignore-errors (drgnx-jobs--stamp dir)))
-                  on-exit (lambda ()
-                            (while (and (not (file-exists-p pidf)) (< (float-time) deadline))
-                              (sleep-for 0.02))
-                            (funcall finish)))
+          (let ((key (cons 'jobs-stamp id)) on-exit)
+            ;; the poll stamps once the pid is there, or gives up after 2 s.  When Emacs exits first, this hook
+            ;; ends the poll and stamps (waiting out the deadline for the pid at most); a poll that ended
+            ;; already leaves nothing to do, so a job is stamped once
+            (setq on-exit (lambda ()
+                            (remove-hook 'kill-emacs-hook on-exit)
+                            (when (drgnx-timer-active-p key)
+                              (while (and (not (file-exists-p pidf)) (< (float-time) deadline))
+                                (sleep-for 0.02))
+                              (drgnx-timer-cancel key)
+                              (drgnx-jobs--stamp-anyway dir))))
             (add-hook 'kill-emacs-hook on-exit)
-            (setq timer (run-at-time 0.05 0.05 (lambda ()
-                                                 (when (or (file-exists-p pidf) (>= (float-time) deadline))
-                                                   (funcall finish))))))
+            (drgnx-timer-poll key 0.05 #'drgnx-jobs--stamp-when-ready :deadline 2
+                              :on-timeout #'drgnx-jobs--stamp-anyway :args (list dir) :owner :core))
         (while (and (not (file-exists-p pidf)) (< (float-time) deadline)) (sleep-for 0.02))
         (drgnx-jobs--stamp dir)))
     id))
+
+(defun drgnx-jobs--stamp-when-ready (dir)
+  "Stamp the job in DIR and return t once its pid file is there; nil until then (the poll's function)."
+  (when (file-exists-p (expand-file-name "pid" dir))
+    (drgnx-jobs--stamp-anyway dir)
+    t))
+
+(defun drgnx-jobs--stamp-anyway (dir)
+  "Stamp the job in DIR if it can be; the job's directory may be gone by now (a removed job)."
+  (ignore-errors (drgnx-jobs--stamp dir)))
 
 (defun drgnx-jobs--stamp (dir)
   "Add the boot and the start time of the job in DIR's process to its job.eld, once its pid file is there."

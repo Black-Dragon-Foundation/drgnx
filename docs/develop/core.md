@@ -105,7 +105,8 @@ command as "Category: Title" with its key and description beside it, through the
 **Run hook and usage counter.** `drgnx-surfaces-run` (what the palette and the menus call) runs
 `drgnx-surfaces-run-functions` with the command id after the command ran; an error in a member is swallowed. The
 first member counts the run: in memory only, so a run costs nothing noticeable. The counts are written at idle, at
-most once a minute and at exit, never prompting, to `command-usage.eld` in the state dir
+most once a minute and at exit, never prompting (one idle timer under the key `surfaces-usage`, `drgnx-timer-soon`
+with `:idle t`: a burst of runs makes one write per pause; the exit hook cancels it and writes), to `command-usage.eld` in the state dir
 (`drgnx-shortcuts-usage-file`): `((ID COUNT (DAY . N)…)…)`, with the per-day counts (`time-to-days`) of the last 7
 days. The file stays on your machine; it feeds the suggestions of the Keyboard Shortcuts editor ("you ran X 12
 times this week; give it a key?"). Read it with `drgnx-surfaces-usage-count` and `drgnx-surfaces-usage-week`.
@@ -406,7 +407,8 @@ timer and non-nil for an idle one (once per pause), as in `run-at-time` and `run
   the module's current run; a module with no run refuses the start (nil, nothing started). A buffer owns its timers
   until it is killed: its first timer adds `drgnx-timer--buffer-killed` to the buffer's own `kill-buffer-hook`
   (permanent-local, as is its key list `drgnx-timer--buffer-keys`; no global hook). A process owns them while it
-  lives. `:core` lives as long as Emacs (the hub tick, the GC).
+  lives. `:core` lives as long as Emacs (the hub tick, the idle GC under the key `gc-idle`, the job stamp poll
+  `(jobs-stamp . ID)`, the usage write `surfaces-usage`).
 
 ### What the fire wrapper guarantees
 
