@@ -10,9 +10,11 @@ User docs: [Agents → The hub and the gateway](../guide/agents.md#the-hub-and-t
   itself — Emacs's child already leads its own process group, and setsid(2) refuses a group leader. Either way the
   hub leads its own session and process group and outlives the Emacs that started it. A job's pid is checked
   against the boot it was started in: Linux's `boot_id`, macOS's `sysctl -n kern.bootsessionuuid` (not
-  `kern.boottime`, which moves when the clock is set). It gets the starting Emacs's drgnx and XDG directories and
-  provider keys (when set) as its environment; under systemd only named variables pass (`--setenv=NAME`), so no
-  value is ever in a command line.
+  `kern.boottime`, which moves when the clock is set). It gets the starting Emacs's drgnx and XDG directories as its
+  environment (under systemd only named variables pass, `--setenv=NAME`, so no value is in a command line) and never
+  a provider key: a systemd unit keeps its environment where `systemctl --user show` prints it, and the detached
+  launcher passes the starting Emacs's environment on, so `drgnx-hub-ensure` unsets every provider's `:key-env` for
+  it. Keys come over the socket instead (`gateway/keys`, below).
   Its main loop is `accept-process-output` plus the event drain batch Emacs needs (queued events hold back
   sentinels). SIGTERM or `shutdown` removes its socket. It starts with SIGPIPE ignored (`trap '' PIPE`): the
   editing Emacs that launches it does not ignore it, and a write to a connection an agent closed must be an error,
@@ -41,6 +43,7 @@ Its directory is mode 0700 and must be the user's own. One JSON object per line:
 | `subscribe` | `true`; then events `{"event", "data"}` on this connection |
 | `gateway/register` `{job, task, agent, chain: [[provider, model-or-null]…], budget, keys: {provider: key}}` | `{token, url}` |
 | `gateway/unregister` `{token}` | `true` |
+| `gateway/keys` `{keys: {provider: key}}` | `true`: the keys go to the gateway's memory |
 | `spend` `{job?, task?, agent?}` | `{input, output, cost, requests}` |
 | `shutdown` | `true`, then the hub exits |
 
@@ -96,8 +99,10 @@ written to a temporary file beside it and renamed over it (a hub that dies mid-w
 reads it back when it starts (a file it cannot read is logged: those agents register again); it also keeps the gateway's port (`<state>/hub/port`) and binds it again, so agents
 keep working across a hub restart (when the port is taken meanwhile, a new one is used and the log says so). A
 session's token is unregistered when its agent exits or is killed. Keys sent in `keys` live in the hub's
-memory only (`drgnx-gateway-set-key`); after a restart they come again from the environment, quiet auth-source files,
-or the next command that registers.
+memory only (`drgnx-gateway-set-key`), never in a file. `drgnx-hub-ensure` (a command, the CLI's `drgnx hub start`)
+hands the hub the keys its Emacs already holds, asking no one (`drgnx-hub--held-keys`: a provider's environment
+variable, else a key loaded this session), with `gateway/keys` after the hub answers; the hub itself finds others only
+in quiet auth-source files.
 
 ## Forwarding
 

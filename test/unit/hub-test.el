@@ -215,6 +215,38 @@ to OR-LOG, OPENROUTER_API_KEY unset."
       ;; and its job ends: the wrapper records the exit (the tree is removed only then — a CI race)
       (should (drgnx-hub-test--wait (lambda () (memq (plist-get (car (drgnx-jobs-list)) :status) '(exited stopped))) 5)))))
 
+(defun drgnx-hub-test--start-elsewhere (&rest env)
+  "Start the hub from another Emacs with ENV (\"NAME=value\"…) added, as an editor or the CLI does; its exit status."
+  (let ((process-environment (append env process-environment)))
+    (call-process (expand-file-name invocation-name invocation-directory) nil nil nil "--batch" "-Q"
+                  "-L" (expand-file-name "core" drgnx-dir) "-l" "drgnx-hub" "--eval" "(kill-emacs (if (drgnx-hub-ensure) 0 1))")))
+
+(ert-deftest drgnx-hub/no-key-in-unit-environment ()
+  ;; a key in the starting Emacs's environment never becomes the hub's (a systemd unit's --setenv is kept in the
+  ;; unit, `systemctl --user show' shows it): it is handed over the socket once the hub runs
+  (skip-unless (file-readable-p "/proc/self/environ"))
+  (drgnx-hub-test--with
+    (let ((started nil))
+      (cl-letf (((symbol-function 'drgnx-jobs-start)
+                 (lambda (&rest args) (setq started args) (drgnx-hub-serve (drgnx-hub-socket)))))
+        (let ((process-environment (cons "OPENROUTER_API_KEY=sk-fake-env" process-environment)))
+          (drgnx-hub-ensure)))
+      (should started)
+      (should-not (string-search "sk-fake-env" (prin1-to-string started)))
+      (should-not (string-search "API_KEY" (prin1-to-string started))))
+    (drgnx-hub-disconnect)
+    (drgnx-hub-stop)
+    (clrhash drgnx-gateway--keys)
+    ;; a real hub, started by an Emacs that has the key: not in its environment, yet its agents' requests carry it
+    (should (= (drgnx-hub-test--start-elsewhere "OPENROUTER_API_KEY=sk-fake-env") 0))
+    (let* ((pid (plist-get (drgnx-hub-call-sync "status" nil) :pid))
+           (environ (with-temp-buffer (set-buffer-multibyte nil)
+                                      (insert-file-contents-literally (format "/proc/%d/environ" pid)) (buffer-string))))
+      (let ((leaked (and (string-search "sk-fake-env" environ) t))) (should-not leaked))   ; (never the environment printed)
+      (let ((r (drgnx-hub-call-sync "gateway/register" '(:chain [["openrouter" nil]]))))
+        (should (= (drgnx-hub-test--post (plist-get r :url) (plist-get r :token)) 200))
+        (should (string-search "Bearer sk-fake-env" (with-temp-buffer (insert-file-contents or-log) (buffer-string))))))))
+
 (defun drgnx-hub-test--sigpipe-ignored-p ()
   "Does this Emacs ignore SIGPIPE, as every hub does (Linux: SigIgn in /proc/self/status)?"
   (with-temp-buffer

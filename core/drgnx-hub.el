@@ -41,9 +41,10 @@ string (\"request\", \"fallback\", \"budget\"), DATA a plist.")
 
 (defconst drgnx-hub--env-names
   '("DRGNX_DATA_DIR" "DRGNX_CONFIG_DIR" "XDG_STATE_HOME" "XDG_DATA_HOME" "XDG_CONFIG_HOME" "XDG_RUNTIME_DIR"
-    "OPENROUTER_API_KEY" "ANTHROPIC_API_KEY" "DRGNX_HUB_PARENT_PID")
-  "Variables the hub gets from the Emacs that starts it (when set): the same dirs, the keys it may use, and (tests
-only) the pid it ends with.")
+    "DRGNX_HUB_PARENT_PID")
+  "Variables the hub gets from the Emacs that starts it (when set): the same dirs and (tests only) the pid it ends
+with.  Never a key: a systemd unit keeps its environment where `systemctl --user show' prints it; keys come over the
+socket (`drgnx-hub--send-keys').")
 
 ;;;; Where
 
@@ -181,6 +182,7 @@ that dies mid-write leaves the old file whole."
                     :registrations (length (drgnx-gateway-registrations)) :started drgnx-hub--started))
     ("gateway/register" (drgnx-hub-register params))
     ("gateway/unregister" (drgnx-gateway-unregister (plist-get params :token)) (drgnx-hub--save-registrations) t)
+    ("gateway/keys" (drgnx-hub--set-keys (plist-get params :keys)) t)
     ("coord/notify" (run-at-time 0 nil #'drgnx-hub--deliver)   ; a coordination server wrote: deliver now, look for clashes
      (run-at-time 0 nil (lambda () (dolist (j (drgnx-coord-jobs "running")) (with-demoted-errors "drgnx job: %S" (drgnx-job-clash-scan j)))))
      t)   ; a coordination server wrote: deliver now
@@ -243,11 +245,16 @@ that dies mid-write leaves the old file whole."
 
 (defun drgnx-hub-serving-p () "Is this Emacs the hub?" (and drgnx-hub--server (process-live-p drgnx-hub--server) t))
 
+(defun drgnx-hub--set-keys (keys)
+  "KEYS (:PROVIDER KEY…), from a client: kept in the gateway's memory only (never written anywhere)."
+  (cl-loop for (k v) on keys by #'cddr
+           when (and (keywordp k) (stringp v) (not (string-empty-p v)))
+           do (drgnx-gateway-set-key (intern (substring (symbol-name k) 1)) v)))
+
 (defun drgnx-hub-register (params)
   "Register an agent with the gateway: PARAMS (:job :task :agent :chain ((PROVIDER MODEL)…) :budget :keys (:PROVIDER
 KEY…)), keys held in memory.  (:token :url)."
-  (cl-loop for (k v) on (plist-get params :keys) by #'cddr
-           do (drgnx-gateway-set-key (intern (substring (symbol-name k) 1)) v))
+  (drgnx-hub--set-keys (plist-get params :keys))
   (let ((token (drgnx-gateway-register (list :job (plist-get params :job) :task (plist-get params :task)
                                              :agent (plist-get params :agent)
                                              :chain (drgnx-hub--chain (append (plist-get params :chain) nil))
@@ -520,14 +527,34 @@ error, or when it does not answer."
   "Does a hub serve this data dir?"
   (drgnx-hub--ping-socket (drgnx-hub-socket)))
 
+(defun drgnx-hub--held-keys ()
+  "The provider keys this Emacs already holds, asking no one: a provider's environment variable, else a key loaded
+this session (`drgnx-ai--keys': from a command the user ran).  (:PROVIDER KEY…)."
+  (cl-loop for (id . p) in (drgnx-ai-providers)
+           for env = (plist-get p :key-env)
+           for key = (and env (let ((v (getenv env))) (if (and v (not (string-empty-p v))) v (gethash id drgnx-ai--keys))))
+           when key append (list (intern (concat ":" (symbol-name id))) key)))
+
+(defun drgnx-hub--send-keys ()
+  "Hand the hub the keys this Emacs holds (`drgnx-hub--held-keys'), over the socket: never in an environment, an
+argument or a file.  The hub keeps them in memory only, so they go again on each start and each (re)connect."
+  (when-let* ((keys (drgnx-hub--held-keys)))
+    (drgnx-hub-call "gateway/keys" (list :keys keys) #'ignore)))
+
 (defun drgnx-hub-ensure ()
-  "Make sure the hub runs, starting it as a durable job if not (waits up to 5 s: commands and the CLI only).  t, or
-an error saying why not."
+  "Make sure the hub runs, starting it as a durable job if not (waits up to 5 s: commands and the CLI only), and
+hand it the keys this Emacs holds.  t, or an error saying why not."
+  (prog1 (drgnx-hub--ensure-running) (drgnx-hub--send-keys)))
+
+(defun drgnx-hub--ensure-running ()
   (or (drgnx-hub-running-p)
       (and (getenv "DRGNX_NO_HUB_START")
            (error "No drgnx hub runs, and starting one is off here (DRGNX_NO_HUB_START)"))
       (let ((env (delq nil (mapcar (lambda (n) (let ((v (getenv n))) (and v (not (string-empty-p v)) (concat n "=" v))))
-                                   drgnx-hub--env-names))))
+                                   drgnx-hub--env-names)))
+            ;; nor through inheritance (a launcher without systemd passes this Emacs's environment on): keys unset
+            (process-environment (append (delq nil (mapcar (lambda (p) (plist-get (cdr p) :key-env)) (drgnx-ai-providers)))
+                                         process-environment)))
         ;; SIGPIPE ignored (the editing Emacs does not): an agent that hangs up must never end the hub
         (drgnx-jobs-start "drgnx-hub" (list "sh" "-c" "trap '' PIPE; exec \"$0\" \"$@\""
                                             (expand-file-name invocation-name invocation-directory) "--batch" "-Q"
