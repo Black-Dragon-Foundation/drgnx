@@ -112,9 +112,9 @@ later (Meow is the candidate):
 - **Toggle Modal Editing** (`SPC u m`, the palette) turns Vim editing off and on for this session; the key stack
   stays as it is. It stays off however often the keys are applied again, until you toggle it on, choose another
   key stack, or restart. With it off, `SPC` types a space again; `M-SPC u m` is the way back.
-- **Third-party modes** (Magit, Dired, xref, compilation, Help, Info, vundo, Eglot, Ediff) get Vim keys from
-  [evil-collection](https://github.com/emacs-evil/evil-collection), each when the mode's library loads, not before,
-  so starting Vim editing stays cheap. The list is `drgnx-evil-collection-modes`; drgnx's own modes are never in it.
+- **Third-party modes** (Magit and its commit messages, Dired, xref, compilation, Help, Info, vundo, Eglot, Ediff)
+  get Vim keys from [evil-collection](https://github.com/emacs-evil/evil-collection), each when the mode's library
+  loads, not before, so starting Vim editing stays cheap. The list is `drgnx-evil-collection-modes`; drgnx's own modes are never in it.
   `:flags ((editor/evil no-collection))` in `modules.eld` leaves them all out (they keep their own keys).
 - **Insert-state keys.** In the pure Vim stack insert state has Vim's keys: `C-w` deletes a word, `C-r` pastes a
   register, `C-v` quotes, `C-a`, `C-e`, `C-y`, `C-t`, `C-d`, `C-n`, `C-p`, `C-o` … When another profile's layer is
@@ -270,6 +270,10 @@ commands, so the workbench keeps its editor groups, tabs and layout (the key tip
 | `C-w c`, `:clo` | Close Editor Group |
 | `:q`, `ZQ` | Close Tab when the group has other tabs, else Close Editor Group when there is another group, else Close Window |
 | `:wq`, `:x`, `ZZ` | Save when the buffer changed, then what `:q` does |
+| `:wq`, `:x`, `ZZ` in a Magit commit or rebase message | Finish the edit: git goes on (`with-editor-finish`) |
+| `:q`, `ZQ` in a Magit commit or rebase message | Cancel the edit (`with-editor-cancel`) |
+| `:wq`, `:x`, `ZZ` in an `emacsclient` buffer | Save when the buffer changed, then Done (`C-x #`): the client returns |
+| `:q`, `ZQ` / `:q!` in an `emacsclient` buffer | Done (it asks before saving changes) / Done without saving |
 | `:qa`, `:cq` | Close Window |
 | `:wqa`, `:xa` | Save All, then Close Window |
 | `C-w h` `j` `k` `l` | Focus Left / Below / Above / Right (editor groups, the sidebar, the panel and the right dock: `C-w l` reaches Work and Agents, `C-w h` comes back) |

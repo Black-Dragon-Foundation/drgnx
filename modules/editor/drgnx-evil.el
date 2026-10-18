@@ -78,7 +78,7 @@ tag (drgnx's indicator replaces it).  Users override these in config.el with `se
 
 (defvar drgnx-evil--active nil "Non-nil while the engine runs (the after-load forms check it).")
 
-(defvar drgnx-evil-collection-modes '(magit dired xref compile help info vundo eglot ediff)
+(defvar drgnx-evil-collection-modes '(magit with-editor dired xref compile help info vundo eglot ediff)
   "The third-party and built-in modes that get evil-collection's Vim keys.  Each loads its keys when the mode's
 library loads, not before.  drgnx's own modes (panels, forms, inputs) are never in it: they keep their own keys.
 The flag `no-collection' of editor/evil (modules.eld :flags) leaves them all out.")
@@ -354,16 +354,44 @@ else Close Window (which keeps a background drgnx running, and otherwise asks be
                             ((cdr (drgnx-groups-list)) 'close-group)
                             (t 'file-close-window))))
 
+(defvar with-editor-mode)
+(defvar server-buffer-clients)
+(declare-function with-editor-finish "with-editor")
+(declare-function with-editor-cancel "with-editor")
+(declare-function server-edit "server")
+(declare-function server-buffer-done "server")
+
+(defun drgnx-evil-ex--end-edit (how)
+  "In a buffer another program waits for, end the edit and return non-nil; elsewhere nil.  A magit commit or rebase
+message (`with-editor-mode'): HOW `finish' is `with-editor-finish' (git goes on), `cancel' or `drop' is
+`with-editor-cancel'.  An emacsclient buffer (`server-buffer-clients'): `finish' saves a changed buffer, then
+`server-edit'; `cancel' is `server-edit' (C-x #, which asks before saving changes); `drop' is `server-buffer-done',
+unsaved."
+  (cond ((bound-and-true-p with-editor-mode)
+         (if (eq how 'finish) (with-editor-finish nil) (with-editor-cancel nil))
+         t)
+        ((bound-and-true-p server-buffer-clients)
+         (pcase how
+           ('finish (when (buffer-modified-p) (save-buffer)) (server-edit))
+           ('cancel (server-edit))
+           ('drop (server-buffer-done (current-buffer))))
+         t)))
+
 (defun drgnx-evil-ex-quit (orig &rest args)
-  "Advice around `evil-quit' (`:q', `ZQ'): `drgnx-evil-ex--quit'; evil's own without the workbench."
-  (if (drgnx-evil-ex--workbench-p) (drgnx-evil-ex--quit) (apply orig args)))
+  "Advice around `evil-quit' (`:q', `ZQ'): in a commit message or an emacsclient buffer the edit is cancelled
+\(`drgnx-evil-ex--end-edit'; `:q!' drops a client's buffer), else `drgnx-evil-ex--quit'; evil's own without the
+workbench."
+  (cond ((drgnx-evil-ex--end-edit (if (car args) 'drop 'cancel)))
+        ((drgnx-evil-ex--workbench-p) (drgnx-evil-ex--quit))
+        (t (apply orig args))))
 
 (defun drgnx-evil-ex-write-quit (orig &rest args)
-  "Advice around `evil-save-and-close' and `evil-save-modified-and-close' (`:wq', `:x', ZZ): save when the buffer
-has changes, then `drgnx-evil-ex--quit'; evil's own without the workbench."
-  (if (drgnx-evil-ex--workbench-p)
-      (progn (when (buffer-modified-p) (drgnx-evil-ex-write)) (drgnx-evil-ex--quit))
-    (apply orig args)))
+  "Advice around `evil-save-and-close' and `evil-save-modified-and-close' (`:wq', `:x', ZZ): in a commit message or
+an emacsclient buffer the edit is finished (`drgnx-evil-ex--end-edit'), so git or the client stops waiting; else
+save when the buffer has changes, then `drgnx-evil-ex--quit'; evil's own without the workbench."
+  (cond ((drgnx-evil-ex--end-edit 'finish))
+        ((drgnx-evil-ex--workbench-p) (when (buffer-modified-p) (drgnx-evil-ex-write)) (drgnx-evil-ex--quit))
+        (t (apply orig args))))
 
 (defun drgnx-evil-ex-close-window (_orig &rest _)
   "Advice around `evil-quit-all' and `evil-quit-all-with-error-code' (`:qa', `:cq'): Close Window."

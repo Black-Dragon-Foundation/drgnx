@@ -282,6 +282,53 @@ Window, tab and group commands are recorded in `drgnx-evil-ex-test--calls' (as (
             (should (= (length (window-list)) (+ n 2)))))
         (should-not (drgnx-evil-ex-test--calls))))))
 
+(defvar with-editor-mode)
+(defvar server-buffer-clients)
+
+(ert-deftest drgnx-evil-ex/commit-and-client-buffers-finish-the-edit ()
+  ;; magit's commit or rebase message (with-editor) and an emacsclient buffer: ZZ, :wq and :x end the edit, so git
+  ;; or the client stops waiting; :q and ZQ cancel it (:q! in a client buffer drops it unsaved).  The workbench's
+  ;; Close Tab or Close Window never runs there, and evil-collection gives with-editor its ZZ / ZQ.
+  (drgnx-evil-ex-test--with
+    (should (memq 'with-editor drgnx-evil-collection-modes))
+    (cl-letf (((symbol-function 'with-editor-finish)
+               (lambda (&rest _) (interactive) (push '(finish) drgnx-evil-ex-test--calls)))
+              ((symbol-function 'with-editor-cancel)
+               (lambda (&rest _) (interactive) (push '(cancel) drgnx-evil-ex-test--calls)))
+              ((symbol-function 'server-edit)
+               (lambda (&rest _) (interactive) (push '(server-edit) drgnx-evil-ex-test--calls)))
+              ((symbol-function 'server-buffer-done)
+               (lambda (&rest _) (push '(server-done) drgnx-evil-ex-test--calls))))
+      (drgnx-evil-ex-test--buffer b #'text-mode
+        (drgnx-evil-ex-test--layout (list b) (list (selected-window))
+          (setq-local with-editor-mode t)
+          (set-buffer-modified-p t)
+          (dolist (cmd '("wq" "x"))
+            (evil-ex-execute cmd)
+            (should (equal (drgnx-evil-ex-test--calls) '((finish)))))
+          (execute-kbd-macro (kbd "Z Z"))
+          (should (equal (drgnx-evil-ex-test--calls) '((finish))))
+          (evil-ex-execute "q")
+          (should (equal (drgnx-evil-ex-test--calls) '((cancel))))
+          (execute-kbd-macro (kbd "Z Q"))
+          (should (equal (drgnx-evil-ex-test--calls) '((cancel))))
+          (setq-local with-editor-mode nil)
+          (setq-local server-buffer-clients (list 'a-client))
+          (evil-ex-execute "wq")
+          (should (equal (drgnx-evil-ex-test--calls) '((save) (server-edit))))
+          (set-buffer-modified-p nil)
+          (evil-ex-execute "x")
+          (should (equal (drgnx-evil-ex-test--calls) '((server-edit))))
+          (execute-kbd-macro (kbd "Z Z"))
+          (should (equal (drgnx-evil-ex-test--calls) '((server-edit))))
+          (evil-ex-execute "q")
+          (should (equal (drgnx-evil-ex-test--calls) '((server-edit))))
+          (evil-ex-execute "q!")
+          (should (equal (drgnx-evil-ex-test--calls) '((server-done))))
+          (setq-local server-buffer-clients nil)
+          (evil-ex-execute "q")
+          (should (equal (drgnx-evil-ex-test--calls) '((close-frame)))))))))
+
 (ert-deftest drgnx-evil-ex/stop-keeps-what-the-user-defined-meanwhile ()
   (drgnx-evil-ex-test--with
     (evil-ex-define-cmd "w[rite]" 'ignore)         ; the user's own, after the engine started

@@ -208,7 +208,9 @@ variables); a failing start undoes what it did.
   `drgnx-evil--insert-for-layers`), via `evil-disable-insert-state-bindings`.
 - **Ex commands and window keys.** `drgnx-evil-ex-routes` (`:w`, `:wa`, `:e`) are redefined with `evil-ex-define-cmd`, keeping
   evil's argument properties; evil's quit and split commands are `:around` advice (`drgnx-evil--advice-pairs`) that call
-  evil's own when the workbench is off.
+  evil's own when the workbench is off. In a buffer another program waits for, the quit advice ends the edit first
+  (`drgnx-evil-ex--end-edit`): `with-editor-finish` / `-cancel` in a magit commit or rebase message, `server-edit` (or
+  `server-buffer-done` for `:q!`) in an emacsclient buffer.
 - **AI.** `drgnx-evil--ghost-inhibit` is on `drgnx-ai-ghost-inhibit-functions` (ghost text asks in insert and emacs state
   only) and `drgnx-evil--selection` is `drgnx-modal-selection-function` (the visual selection, a block widened to its lines).
 - **Which-key.** The built-in which-key is turned on, with transient maps shown, while the engine runs, and put back at stop.
