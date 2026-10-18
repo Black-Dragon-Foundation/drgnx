@@ -310,7 +310,7 @@ faces come later, from jit-lock, for the rows on screen."
     (seq-doseq (v drgnx-explorer--rows)
       (when (and (aref v 2) (or (= (aref v 1) 0) (drgnx-explorer--expanded-p (drgnx-explorer--path v))))
         (push (drgnx-explorer--path v) out))
-      (when (and (aref v 3) (string-search "/" (aref v 0)))   ; a joined row: its middle folders are open too
+      (when (and (aref v 2) (aref v 3) (string-search "/" (aref v 0)))   ; a joined row: its middle folders are open too
         (let ((dir (aref v 3)))
           (dolist (seg (butlast (split-string (aref v 0) "/")))
             (push (setq dir (drgnx-explorer--join dir seg)) out)))))

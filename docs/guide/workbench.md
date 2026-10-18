@@ -327,7 +327,7 @@ What "nothing moves on its own" means, each pinned by a test in a GUI session wi
 | I6 | Followers react to edges, never to focus alone | `test/unit/wb-signal-test.el` |
 | I7 | Panels refresh only when their rows changed and keep the view by identity | `test/unit/wb-buffers-test.el` |
 | I8 | 50 commands that display buffers: no split, no resize, no frame, nothing unrouted | `drgnx-inv/i8-fuzz-of-fifty-commands` (`test/fixtures/fuzz-commands.eld`) |
-| I9 | No window moved from a timer except the caller's own | every report's `guard_violations` = 0 |
+| I9 | No window moved from a timer or a window change hook except the caller's own | every report's `guard_violations` = 0 |
 | I10 | Each step settles within 250 ms, without oscillation | `drgnx-inv/i1-i9-i10-explorer-and-buffers-flows` |
 
 Two Emacs behaviours the workbench corrects so that these hold: `balance-windows` on a whole frame (finder calls
