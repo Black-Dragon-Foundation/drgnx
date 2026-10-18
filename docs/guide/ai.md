@@ -204,8 +204,11 @@ step, in the drgnx app: the key is read with `read-passwd`, never shown) or a co
 never into a drgnx file, and never on a command line (it goes to the store on stdin). A Keychain that is locked
 or denies access gives an error saying so; the environment variable always works instead. drgnx never sends a key to
 a model. On a Mac the key is an internet password for `openrouter.ai`, account `drgnx`, in your login keychain
-(stored with `/usr/bin/security`, never a `security` found elsewhere on your path, and read back for that account,
-so another password for the host cannot answer in its place):
+(stored with `/usr/bin/security`, never a `security` found elsewhere on your path, and read back with the same
+program for that account, so another password for the host cannot answer in its place). `security` reports success
+whatever it made of the key, so drgnx compares what it reads back with what you gave, without showing either; when
+they differ, or the Keychain does not answer, drgnx deletes the item and says so. A key with a line break or a NUL
+character is refused before anything is stored (API keys never contain them).
 Keychain Access shows it, and `security delete-internet-password -s openrouter.ai -a drgnx` removes it. On Linux the
 keyring is looked at only when Emacs has D-Bus support, a session bus can be reached and a Secret Service answers on
 it (an SSH login, WSL or a container often has a bus but no keyring daemon), so such a machine gets no "invalid

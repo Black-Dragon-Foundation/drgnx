@@ -95,7 +95,11 @@
 (defmacro drgnx-ai-test--with-fake-store (system bin log &rest body)
   "BODY as SYSTEM (`darwin' or `gnu/linux') with fake `security' and `secret-tool' scripts in BIN, the only things on the
 path.  Each logs its argv to LOG/NAME.argv and its stdin to LOG/NAME.stdin; `FAKE_EXIT' is their exit status.  The real
-Keychain and keyring are never reached."
+Keychain and keyring are never reached.
+The fake `security' is a one-item store: `-i' keeps the `-w \"…\"' word of its line, unquoted, in LOG/security.store;
+`find-internet-password' prints it (`FAKE_READBACK' instead, when set; exit 44 when there is none; `FAKE_READ_EXIT',
+`FAKE_READ_SLEEP'); `delete-internet-password' removes it.  These two log their argv, one per line, to
+LOG/security.calls."
   (declare (indent 3))
   `(let* ((,bin (file-name-as-directory (make-temp-file "drgnx-ai-bin" t)))
           (,log (file-name-as-directory (make-temp-file "drgnx-ai-log" t))))
@@ -104,7 +108,21 @@ Keychain and keyring are never reached."
            (dolist (name '("security" "secret-tool"))
              (let ((script (concat ,bin name)))
                (with-temp-file script
-                 (insert "#!/bin/sh\nPATH=/usr/bin:/bin\nprintf '%s\\n' \"$@\" > " ,log name ".argv\nreadlink /proc/self/fd/0 > " ,log name ".fd0 2>/dev/null\n${FAKE_SLEEP:+sleep $FAKE_SLEEP}\ncat > " ,log name ".stdin\nexit ${FAKE_EXIT:-0}\n"))
+                 (insert "#!/bin/sh\nPATH=/usr/bin:/bin\nL=" ,log name "\n"
+                         "case \"$1\" in\n"
+                         "  find-internet-password)\n"
+                         "    printf '%s\\n' \"$@\" >> $L.calls\n"
+                         "    ${FAKE_READ_SLEEP:+sleep $FAKE_READ_SLEEP}\n"
+                         "    [ -n \"$FAKE_READ_EXIT\" ] && exit $FAKE_READ_EXIT\n"
+                         "    if [ -n \"${FAKE_READBACK+x}\" ]; then printf '%s\\n' \"$FAKE_READBACK\"; exit 0; fi\n"
+                         "    [ -f $L.store ] || exit 44\n"
+                         "    cat $L.store; exit 0;;\n"
+                         "  delete-internet-password) printf '%s\\n' \"$@\" >> $L.calls; rm -f $L.store; exit 0;;\n"
+                         "esac\n"
+                         "printf '%s\\n' \"$@\" > $L.argv\nreadlink /proc/self/fd/0 > $L.fd0 2>/dev/null\n"
+                         "${FAKE_SLEEP:+sleep $FAKE_SLEEP}\ncat > $L.stdin\n"
+                         "[ \"$1\" = -i ] && sed -n 's/.* -w \"\\(.*\\)\"$/\\1/p' $L.stdin | sed 's/\\\\\\(.\\)/\\1/g' > $L.store\n"
+                         "exit ${FAKE_EXIT:-0}\n"))
                (set-file-modes script #o755)))
            (let ((system-type ,system) (exec-path (list ,bin)) (drgnx-ai--security-program (concat ,bin "security"))
                  (process-environment (append (list (concat "PATH=" ,bin) "DBUS_SESSION_BUS_ADDRESS=unix:path=/nonexistent/drgnx-test-bus")
@@ -126,6 +144,8 @@ Keychain and keyring are never reached."
         (let ((argv (drgnx-ai-test--slurp (concat log (nth 1 case) ".argv")))
               (stdin (drgnx-ai-test--slurp (concat log (nth 1 case) ".stdin"))))
           (should-not (string-search "sk-or-test-123" argv))
+          (when (eq (nth 0 case) 'darwin)                        ; the read-back's command line neither
+            (should-not (string-search "sk-or-test-123" (drgnx-ai-test--slurp (concat log "security.calls")))))
           (when (file-exists-p "/proc/self/fd/0")                ; stdin is a pipe, never a file on disk
             (should (string-prefix-p "pipe:" (drgnx-ai-test--slurp (concat log (nth 1 case) ".fd0")))))
           (should (string-search "openrouter.ai" (if (eq (nth 0 case) 'darwin) stdin argv)))
@@ -167,7 +187,7 @@ Keychain and keyring are never reached."
   (drgnx-ai-test--with root
     (let ((plain (concat root "authinfo")) (noninteractive nil))
       (with-temp-file plain (insert "machine openrouter.ai password from-authinfo\n"))
-      (dolist (system '(darwin gnu/linux))
+      (dolist (system '(gnu/linux))                     ; the Keychain's read-back: drgnx-ai/a-keychain-that-…-is-emptied
         (drgnx-ai-test--with-fake-store system bin log
           (let ((auth-sources (list plain))
                 (process-environment (cons "OPENROUTER_API_KEY=from-env" process-environment)))
@@ -317,10 +337,11 @@ Keychain and keyring are never reached."
           (should (string-match-p "OPENROUTER_API_KEY" (cadr err)))
           (should-not (string-search "sk-or-test-123" (cadr err))))
         (should-not (gethash 'openrouter drgnx-ai--keys))))
-    (drgnx-ai-test--with-fake-store 'darwin bin log               ; stored, but reading it back signals
-      (cl-letf (((symbol-function 'auth-source-search) (lambda (&rest _) (error "Keychain locked"))))
+    (drgnx-ai-test--with-fake-store 'darwin bin log               ; stored, but reading it back fails
+      (let ((process-environment (cons "FAKE_READ_EXIT=51" process-environment)))
         (let ((err (should-error (drgnx-ai-store-key 'openrouter "sk-or-test-123") :type 'user-error)))
-          (should (string-match-p "Keychain" (cadr err))))
+          (should (string-match-p "Keychain" (cadr err)))
+          (should-not (string-search "sk-or-test-123" (cadr err))))
         (should-not (gethash 'openrouter drgnx-ai--keys))))))
 
 (ert-deftest drgnx-ai/without-a-secret-store-it-says-what-to-install ()
@@ -339,14 +360,80 @@ Keychain and keyring are never reached."
 (ert-deftest drgnx-ai/macos-read-back-asks-for-drgnx-s-entry ()
   ;; another internet password for the host could answer first: the read-back names the account the store wrote
   (drgnx-ai-test--with root
-    (dolist (case '((darwin "drgnx") (gnu/linux nil)))
-      (drgnx-ai-test--with-fake-store (nth 0 case) bin log
-        (let ((specs nil))
-          (cl-letf (((symbol-function 'auth-source-search)
-                     (lambda (&rest spec) (push spec specs) (list (list :secret "sk-or-test-123")))))
-            (drgnx-ai-store-key 'openrouter "sk-or-test-123"))
-          (should (equal (plist-get (car specs) :user) (nth 1 case)))
-          (should (equal (plist-get (car specs) :host) "openrouter.ai")))))))
+    (drgnx-ai-test--with-fake-store 'darwin bin log      ; the same `security', for drgnx's account, host and protocol
+      (cl-letf (((symbol-function 'auth-source-search) (lambda (&rest _) (error "The Keychain is read with `security'"))))
+        (should (eq (drgnx-ai-store-key 'openrouter "sk-or-test-123") 'keychain)))
+      (should (equal (drgnx-ai-test--slurp (concat log "security.calls"))
+                     "find-internet-password\n-a\ndrgnx\n-s\nopenrouter.ai\n-r\nhtps\n-w\n")))
+    (drgnx-ai-test--with-fake-store 'gnu/linux bin log
+      (let ((specs nil))
+        (cl-letf (((symbol-function 'auth-source-search)
+                   (lambda (&rest spec) (push spec specs) (list (list :secret "sk-or-test-123")))))
+          (drgnx-ai-store-key 'openrouter "sk-or-test-123"))
+        (should (equal (plist-get (car specs) :host) "openrouter.ai"))))))
+
+(ert-deftest drgnx-ai/a-keychain-that-stores-a-mangled-key-is-emptied-and-says-so ()
+  ;; `security -i' exits 0 whatever it made of the line: only reading the item back proves what it holds
+  (drgnx-ai-test--with root
+    (dolist (back '("sk-or-test-12" "" "sk-or-test-123x" "sk-or-test-123\n"))   ; the last prints "key\n\n": no trimming
+      (drgnx-ai-test--with-fake-store 'darwin bin log
+        (let ((process-environment (cons (concat "FAKE_READBACK=" back) process-environment)))
+          (let ((err (should-error (drgnx-ai-store-key 'openrouter "sk-or-test-123") :type 'user-error)))
+            (should (string-match-p "Keychain" (cadr err)))
+            (should (string-match-p "removed" (cadr err)))
+            (should-not (string-search "sk-or-test-12" (cadr err)))))   ; neither the key nor what came back
+        (should-not (gethash 'openrouter drgnx-ai--keys))
+        (let ((calls (drgnx-ai-test--slurp (concat log "security.calls"))))
+          (should (string-search "delete-internet-password\n-a\ndrgnx\n-s\nopenrouter.ai\n-r\nhtps\n" calls))
+          (should-not (string-search "sk-or-test" calls)))
+        (should-not (file-exists-p (concat log "security.store")))))))
+
+(ert-deftest drgnx-ai/a-keychain-read-back-that-never-answers-is-bounded ()
+  (drgnx-ai-test--with root
+    (drgnx-ai-test--with-fake-store 'darwin bin log
+      (let ((drgnx-ai--store-timeout 0.5) (process-environment (cons "FAKE_READ_SLEEP=30" process-environment))
+            (start (float-time)))
+        (let ((err (should-error (drgnx-ai-store-key 'openrouter "sk-or-test-123") :type 'user-error)))
+          (should (string-match-p "did not answer" (cadr err)))
+          (should-not (string-search "as it was given" (cadr err)))
+          (should-not (string-search "sk-or-test-123" (cadr err))))
+        (should (< (- (float-time) start) 10))
+        (should-not (gethash 'openrouter drgnx-ai--keys))
+        (should (string-search "delete-internet-password" (drgnx-ai-test--slurp (concat log "security.calls"))))))))
+
+(ert-deftest drgnx-ai/a-keychain-with-no-item-after-storing-says-so ()
+  (drgnx-ai-test--with root
+    (drgnx-ai-test--with-fake-store 'darwin bin log
+      (let ((process-environment (cons "FAKE_READ_EXIT=44" process-environment)))   ; `security': item not found
+        (let ((err (should-error (drgnx-ai-store-key 'openrouter "sk-or-test-123") :type 'user-error)))
+          (should (string-match-p "no drgnx item" (cadr err)))
+          (should-not (string-search "Keychain Access" (cadr err)))  ; there is nothing to remove by hand
+          (should-not (string-search "sk-or-test-123" (cadr err))))
+        (should-not (gethash 'openrouter drgnx-ai--keys))))))
+
+(ert-deftest drgnx-ai/c-g-during-the-keychain-read-back-still-deletes-the-item ()
+  ;; a quit must not leave an item nobody verified: the delete runs, then the quit goes on
+  (drgnx-ai-test--with root
+    (drgnx-ai-test--with-fake-store 'darwin bin log
+      (let ((call (symbol-function 'drgnx-ai--security-call)))
+        (cl-letf (((symbol-function 'drgnx-ai--security-call)
+                   (lambda (args) (if (equal (car args) "find-internet-password") (signal 'quit nil) (funcall call args)))))
+          (should (eq (condition-case nil (progn (drgnx-ai-store-key 'openrouter "sk-or-test-123") 'returned)
+                        (quit 'quit))
+                      'quit))))
+      (should-not (gethash 'openrouter drgnx-ai--keys))
+      (should (string-search "delete-internet-password\n-a\ndrgnx\n-s\nopenrouter.ai\n-r\nhtps\n"
+                             (drgnx-ai-test--slurp (concat log "security.calls"))))
+      (should-not (file-exists-p (concat log "security.store"))))))
+
+(ert-deftest drgnx-ai/a-key-with-a-line-break-or-nul-is-refused-before-any-call ()
+  (drgnx-ai-test--with root
+    (dolist (system '(darwin gnu/linux))
+      (drgnx-ai-test--with-fake-store system bin log
+        (dolist (key '("sk-or\n-test" "sk-or\r-test" "sk-or\0-test" "sk-or-test\n"))
+          (let ((err (should-error (drgnx-ai-store-key 'openrouter key) :type 'user-error)))
+            (should-not (string-search "sk-or" (cadr err)))))
+        (should-not (directory-files log nil "\\`[^.]"))))))         ; neither program ran
 
 (ert-deftest drgnx-ai/security-is-the-system-one-on-macos ()
   ;; a `security' earlier on the path (a stray script, a Homebrew tool) must never get the key

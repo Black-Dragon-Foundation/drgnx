@@ -249,7 +249,14 @@ with BODY."
                     "[ \"$2\" = hw.optional.arm64 ] && { echo ${FAKE_ARM64:-1}; exit 0; }\nexit 1\n"))
            (drgnx-ai-onboard-test--script
             (concat bin "security")
-            (concat (funcall log-line "security") "cat > " root "security.stdin\n"))
+            ;; `-i' stdin is kept; `find-internet-password' answers with its `-w "…"' word, unquoted (the read-back)
+            (concat (funcall log-line "security")
+                    "case \"$1\" in\n"
+                    " find-internet-password) [ -f " root "security.stdin ] || exit 44\n"
+                    "   sed -n 's/.* -w \"\\(.*\\)\"$/\\1/p' " root "security.stdin | sed 's/\\\\\\(.\\)/\\1/g'; exit 0;;\n"
+                    " delete-internet-password) exit 0;;\n"
+                    "esac\n"
+                    "cat > " root "security.stdin\n"))
            (drgnx-ai-onboard-test--script (concat bin "fake-serve") (concat (funcall log-line "fake-serve") "exec sleep 30\n"))
            (cl-letf (((symbol-function 'drgnx-platform) (lambda () 'macos)))
              ,@body))
