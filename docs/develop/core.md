@@ -143,6 +143,79 @@ PATH, `/opt/homebrew/bin/brew` or `/usr/local/bin/brew`; the doctor may run with
 `drgnx-on-path` (fix: `~/.local/bin` in the shell's profile: `~/.zprofile` for zsh (or, with `SHELL` unset, when it exists), else `~/.profile`, as
 `drgnx-doctor--shell-profile` says; the same rule as `install.sh`).
 
+## Window managers (`drgnx-platform.el`)
+
+Emacs cannot move a frame to another monitor by itself under Wayland, and a tiling window manager ignores
+`set-frame-position`. An *adapter* knows one window manager (or none): its monitors, which one a frame is on, and
+how to move a frame. Nothing here blocks, prompts or signals on an automatic path (frame creation,
+monitors-changed, restore): every window-manager call is asynchronous with a deadline.
+
+**Detection** is per frame, from the frame's own environment (`(getenv VAR frame)`, else the daemon's), because
+one daemon serves frames from several sessions. `(drgnx-platform-detect ENV WINDOW-SYSTEM)` is pure (ENV is a
+function VAR -> value) and tries the adapters in definition order:
+
+| Window system | Order |
+|---|---|
+| `ns` | `ns` |
+| `pgtk` | `sway` (`SWAYSOCK`), `hyprland` (`HYPRLAND_INSTANCE_SIGNATURE`), `niri` (`NIRI_SOCKET`), `kwin` (`XDG_CURRENT_DESKTOP` lists `KDE`), `gnome` (lists `GNOME`), else `other-wayland` (also pgtk with only `DISPLAY`) |
+| `x` | with `WAYLAND_DISPLAY` (Emacs on XWayland): the compositor's adapter, as for pgtk. Otherwise `i3` (`I3SOCK`, or the root window's `I3_SOCKET_PATH`; only checked for existence), else `x11` |
+| terminal frame | `tty` |
+| none (batch) | `WAYLAND_DISPLAY` stands for pgtk, `DISPLAY` for x; neither: `none` |
+
+`(drgnx-platform-wm &optional FRAME)` returns the name and caches it in the frame parameter `drgnx-platform-wm`;
+it never starts a process. A terminal frame counts as a workbench frame elsewhere, so commands check
+`display-graphic-p` themselves (the `tty` adapter explains).
+
+**Calls.** `(drgnx-platform-call ARGV :env :timeout :callback)` runs a program without blocking. The callback gets
+`ok`, `error` or `timeout` and the output, exactly once, never before the function returns; at the deadline the
+process is killed and its later output dropped; a missing program is an `error` ("PROGRAM is not installed"); an
+error in the callback is shown with `message`. Deadlines: `drgnx-platform-command-timeout` (2 s, commands),
+`drgnx-platform-restore-timeout` (5 s, restoring frames), `drgnx-platform-doctor-timeout` (1 s, the doctor's and
+typed commands' `drgnx-platform-call-sync`). `(drgnx-platform-process-env FRAME)` gives the session variables of
+the frame as `"K=V"` strings for `:env`; an adapter function calls `(drgnx-platform-ctx-call CTX ARGV CALLBACK)`,
+which adds them and the deadline of the operation.
+
+**Monitors** are plists `(:name :make :model :serial :geometry (X Y W H))`. `(drgnx-platform-number-monitors)`
+sorts them left to right, then top to bottom and adds `:number` and `:label` ("1 — eDP-1, 1920×1200", "2 — DP-2,
+2560×1440, right of 1"). `(drgnx-platform-match-monitor SAVED MONITORS)` finds a saved monitor again: make, model
+and serial (all non-empty), else the name, else the geometry. Under pgtk Emacs' monitor `name` is GDK's model
+string ("Unknown" under sway), not the compositor's output name, and Emacs lists monitors in no stable order: an
+adapter that talks to a compositor matches Emacs' monitors to the compositor's by geometry.
+
+**Public operations** (all take a callback; `(:error MESSAGE)` instead of a signal): `drgnx-platform-monitors`,
+`drgnx-platform-frame-monitor`, `drgnx-platform-move-frame` (a command's path, 2 s), `drgnx-platform-place-frame`
+(restoring, 5 s) and `drgnx-platform-can-move` -> `t` or `(REASON . FIX)`, e.g. GNOME: "GNOME does not let apps
+move their windows", fix "press Super+Shift+→ or Super+Shift+←".
+
+**Built in:** `x11` and `ns` (frame positions: the move keeps the frame's `fullscreen` value, clears it, sets
+`left`/`top` to the target's workarea origin and re-applies it), `gnome` (explains; the doctor asks Mutter's
+`DisplayConfig` for the monitors, within 1 s), `other-wayland` (names the compositor, tells the user to use its
+own key), `tty` and `none`. `sway`, `hyprland`, `niri`, `kwin` and `i3` are declared (detection, title, tool,
+version command); their monitor and move functions arrive with their milestone tasks.
+
+**Another compositor** (river, Wayfire, labwc, Cosmic, ...): call `drgnx-platform-define-adapter` from your
+config. A new name goes before the catch-alls `other-wayland` and `none`, so its `:detect` is tried before them;
+defining an existing name replaces only the keys you give.
+
+```elisp
+(drgnx-platform-define-adapter
+ 'labwc :title "labwc" :status 'reported
+ :detect (lambda (env wsys) (and (memq wsys '(pgtk x)) (funcall env "LABWC_PID") t))
+ :monitors (lambda (ctx callback)          ; CTX: (:frame :env :wm :timeout)
+             (drgnx-platform-ctx-call ctx '("wlr-randr" "--json")
+                                      (lambda (status out)
+                                        (funcall callback (if (eq status 'ok) (my-parse out) (list :error out))))))
+ :move (lambda (ctx monitor callback) ...))  ; CALLBACK: `ok' or (:error MESSAGE)
+```
+
+Keys: `:detect` (fn ENV WINDOW-SYSTEM), `:title`, `:tool` (program or nil), `:version` (argv or nil), `:status`
+(`verified` = tested against the real thing, `reported` = from documentation), `:monitors` and `:frame-monitor`
+(fn CTX CALLBACK), `:move` and `:place` (fn CTX MONITOR CALLBACK; `:place` defaults to `:move`), `:can-move`
+(fn CTX -> `t` or `(REASON . FIX)`), `:doctor` (fn ENV -> plist `:monitors`, `:answers`; synchronous).
+
+Tests use `test/fixtures/wm/fake-wm.sh`, linked as `swaymsg`, `i3-msg`, `hyprctl` and `niri` into a temp bin: it logs
+its arguments, prints the recorded reply a regexp picks (`DRGNX_FAKE_WM_MAP`) and can sleep or fail.
+
 ## Tests
 
 Batch: `test/unit/core-*-test.el`. The batch runner (`harness/run-ert.el`) gives the suite a temp HOME and drgnx
