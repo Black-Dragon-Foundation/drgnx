@@ -449,6 +449,16 @@
     (execute-kbd-macro "tt")
     (should (= drgnx-modal-test--count 1))))
 
+(ert-deftest drgnx-modal/leader-menu-records-no-key-of-its-own ()
+  ;; The SPC the Leader Menu reads again is not recorded (recent keys and a keyboard macro being defined are fed
+  ;; together): a macro recorded through M-SPC must not replay SPC twice (SPC SPC is the palette).
+  (drgnx-modal-test--with-leader
+    (let ((overriding-terminal-local-map nil) (pre-command-hook nil) (unread-command-events nil))
+      (drgnx-modal-leader-menu)
+      (let ((before (length (recent-keys))))
+        (should (eq (read-event) 32))
+        (should (= (length (recent-keys)) before))))))
+
 (ert-deftest drgnx-modal/commands-are-registered ()
   (let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil))
     (drgnx-modal-register-commands)

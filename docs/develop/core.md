@@ -111,8 +111,8 @@ Nothing in it needs evil, and `test/unit/modal-core-test.el` drives it with a fa
   that exist only in panels. Both are emulation maps (`drgnx-modal--leader-alist`, `drgnx-modal--panel-alist`),
   switched per buffer; `drgnx-modal-order-alists` puts them in front of the engine's in
   `emulation-mode-map-alists` after `drgnx-keys--everywhere-alist` and before the AI ghost text's (the ghost's has
-  its place whether or not it exists yet; the everywhere alist is in the list only while there are `:everywhere`
-  keys, and goes back in at the front, its place), and `drgnx-modal-sync-engine` calls it after an engine starts.
+  its place whether or not it exists yet; the everywhere alist always gets the first place, and is off while there are
+  no `:everywhere` keys: `drgnx-keys--set-everywhere` turns it off and takes it out until the next ordering), and `drgnx-modal-sync-engine` calls it after an engine starts.
   A module whose keys must beat the engine's too (Esc and `q` closing a pane, the quick-help card) adds its alist's
   symbol to `drgnx-modal-front-alists` when its map comes on and calls `drgnx-modal-order-alists`: those go right
   after the panel alist, before the ghost text's.
@@ -175,8 +175,8 @@ for those layers, however often the keys are applied again (Toggle Modal Editing
   engine map's key now differs from the snapshot and is not empty (`drgnx-keys--theirs`: the user's own binding, kept
   and reported as a conflict); leader or panel keys it beats are dropped and each named among the losers. In panels the leader and panel maps always win (they are above the panel's own map).
 - **Commands.** `modal-leader` (Leader Menu) reads the leader's keys from any state: a transient map holding the
-  leader's `SPC`, and `SPC` read again as if typed (`(t . 32)` in `unread-command-events`, as which-key replays a
-  prefix), so which-key shows the `SPC` popup with the leader's labels (`+File`, the command titles).
+  leader's `SPC`, and `SPC` read again as if typed (`(no-record . 32)` in `unread-command-events`: in the command
+  keys which-key reads, but not in a keyboard macro being recorded, which would replay `SPC SPC`), so which-key shows the `SPC` popup with the leader's labels (`+File`, the command titles).
   `panel-next` / `panel-previous` (Next / Previous Row, bound in the panel map) run the panel's own `<down>` /
   `<up>` binding, else `next-line` / `previous-line`, so a panel keeps its row movement.
 

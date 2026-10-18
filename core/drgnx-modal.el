@@ -154,10 +154,10 @@ when it turns the map off.")
 The order: `drgnx-keys--everywhere-alist' (keys that work in every state beat the engine's), the leader
 alist, the panel alist, the modules' `drgnx-modal-front-alists', `drgnx-ai-ghost--emulation', then the rest as
 it was.  The leader, panel and ghost alists always have their place, bound or not: Emacs skips an unbound symbol in
-the list, and a later `add-to-list' of the ghost's finds it already there.  The everywhere alist is in the list only
-while there are `:everywhere' keys (`drgnx-keys--set-everywhere' takes it out and puts it back with `add-to-list',
-at the front: its place).  Safe to call again; `drgnx-modal-sync-engine'
-calls it after an engine starts, and the engine when it pushed its maps in front again."
+the list, and a later `add-to-list' of the ghost's finds it already there.  The everywhere alist is put first on every
+call, whatever it holds; it is off (`drgnx-keys--everywhere-on' nil) while there are no `:everywhere' keys, and
+`drgnx-keys--set-everywhere' then also takes it out until the next call here.  Safe to call again;
+`drgnx-modal-sync-engine' calls it after an engine starts, and the engine when it pushed its maps in front again."
   (let ((front `(drgnx-keys--everywhere-alist drgnx-modal--leader-alist drgnx-modal--panel-alist
                                               ,@drgnx-modal-front-alists drgnx-ai-ghost--emulation)))
     (setq emulation-mode-map-alists
@@ -309,15 +309,17 @@ is written again (it said what ran before the after-apply functions started it) 
 
 (defun drgnx-modal-leader-menu ()
   "Read the leader keys (`SPC …' in normal state) wherever you are, then run the command they name.
-It goes on as if SPC had been typed (a transient map holding the leader's SPC, and SPC read again the way which-key
-replays a prefix), so which-key's popup is the one SPC shows, with the leader's labels."
+It goes on as if SPC had been typed (a transient map holding the leader's SPC, and SPC read again), so which-key's
+popup is the one SPC shows, with the leader's labels.  The SPC read again is `no-record': it starts the key sequence,
+so it is in the command keys which-key reads, but a keyboard macro recorded through the menu does not hold it (on
+replay the menu reads its own SPC again; a recorded one would make it SPC SPC, the palette)."
   (interactive)
   (let ((map (keymap-lookup drgnx-modal-leader-map "SPC")))
     (if (keymapp map)
         (let ((transient (make-sparse-keymap)))
           (keymap-set transient "SPC" map)
           (set-transient-map transient)
-          (push '(t . 32) unread-command-events))
+          (push '(no-record . 32) unread-command-events))
       (message "The leader menu has no keys: choose Vim keys (Keyboard Profile…)"))))
 
 (defun drgnx-modal--panel-move (key fallback)

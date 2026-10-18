@@ -100,7 +100,7 @@ no registered modal engine; every binding is undone after."
               (which-key-show-transient-maps t))
           (drgnx-modal-leader-menu)
           ;; the menu goes on as if SPC had been typed (in this-command-keys, where which-key reads the prefix)
-          (should (equal unread-command-events '((t . 32))))
+          (should (equal unread-command-events '((no-record . 32))))
           (should (eq (key-binding " ") (keymap-lookup drgnx-modal-leader-map "SPC")))
           (let* ((rows (which-key--get-bindings (kbd "SPC")))
                  (descs (mapcar (lambda (r) (substring-no-properties (nth 2 r))) rows)))
