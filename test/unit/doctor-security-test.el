@@ -70,9 +70,9 @@
   (should (eq (car (drgnx-doctor-security-test--check "31.2" 'none)) 'ok)))
 
 (ert-deftest drgnx-doctor-security/facts-hold-the-guards-this-emacs-gets ()
-  ;; A batch doctor runs in a bare Emacs where the mode is off: the facts switch it on, read the status, and put
-  ;; it back, so that the answer is about the guards drgnx's startup installs.
-  (let ((was drgnx-trust-mode))
+  ;; A bare batch doctor (drgnx's startup has not run: no commands registered) has the mode off: the facts switch it
+  ;; on, read the status, and put it back, so that the answer is about the guards drgnx's startup installs.
+  (let ((was drgnx-trust-mode) (drgnx-commands--table (make-hash-table :test #'eq)) (noninteractive t))
     (unwind-protect
         (progn
           (drgnx-trust-mode -1)
@@ -82,6 +82,44 @@
             (should-not drgnx-trust-mode)
             (should (eq (car (drgnx-doctor-check 'security f)) 'ok))))
       (drgnx-trust-mode (if was 1 -1)))))
+
+(ert-deftest drgnx-doctor-security/batch-with-the-mode-on-is-never-toggled ()
+  (let ((was drgnx-trust-mode) (noninteractive t) (calls 0))
+    (unwind-protect
+        (progn
+          (drgnx-trust-mode 1)
+          (cl-letf* ((orig (symbol-function 'drgnx-trust-mode))
+                     ((symbol-function 'drgnx-trust-mode) (lambda (&rest a) (cl-incf calls) (apply orig a))))
+            (should (plist-get (drgnx-doctor--trust-guards) :mode)))
+          (should (= calls 0))
+          (should drgnx-trust-mode))
+      (drgnx-trust-mode (if was 1 -1)))))
+
+(ert-deftest drgnx-doctor-security/batch-after-startup-with-the-mode-off-warns ()
+  ;; drgnx's startup ran (its commands are registered) and the mode is off: someone turned it off
+  (let ((was drgnx-trust-mode) (noninteractive t) (drgnx-commands--table (make-hash-table :test #'eq)))
+    (puthash 'trust-folder t drgnx-commands--table)
+    (unwind-protect
+        (progn
+          (drgnx-trust-mode -1)
+          (let ((g (drgnx-doctor--trust-guards)))
+            (should-not (plist-get g :mode))
+            (should-not drgnx-trust-mode)   ; read, not switched on
+            (let ((r (drgnx-doctor-check 'security (list :version "31.2" :trust-guards g))))
+              (should (eq (car r) 'warn))
+              (should (string-search "drgnx-trust-mode is off" (nth 1 r))))))
+      (drgnx-trust-mode (if was 1 -1)))))
+
+(ert-deftest drgnx-doctor-security/flymake-on-load-is-not-verified-in-a-batch-check ()
+  (should (string-search "not verified in a batch check" (nth 1 (drgnx-doctor-security-test--check "31.2" :flymake 'on-load))))
+  (dolist (f '(emacs drgnx))
+    (should-not (string-search "not verified" (nth 1 (drgnx-doctor-security-test--check "31.2" :flymake f))))))
+
+(ert-deftest drgnx-doctor-security/the-detail-is-short ()
+  (let ((r (drgnx-doctor-security-test--check "30.2")))
+    (should (string-search "4 known issues" (nth 1 r)))
+    (should (string-search "security.md" (nth 1 r)))
+    (should (< (length (nth 1 r)) 250))))
 
 (ert-deftest drgnx-doctor-security/live-mode-is-read-not-switched ()
   ;; interactively (`noninteractive' nil) a mode the user turned off is reported off, and stays off
