@@ -118,6 +118,13 @@ after another (the last repeats).  Binds `history' (the history file) and `start
         (should (eql (drgnx-perf-run) 0))        ; typing's budget is not "not measured"
         (should-not (file-exists-p history))))))  ; a partial run is no history line
 
+;; Review I1: only a filtered run drops the budgets of workloads it did not run.
+(ert-deftest drgnx-perf-run/a-full-run-reports-a-budget-with-no-workload ()
+  (drgnx-perf-run-test--with-fake-run '(1.0)
+    (cl-letf (((symbol-function 'drgnx-perf-run--budgets)
+               (lambda () '((frames (:frame :p95) 500) (ghost (:input :p95) 16)))))
+      (should (eql (drgnx-perf-run) 1)))))
+
 (ert-deftest drgnx-perf-run/an-unfiltered-run-keeps-its-history ()
   (drgnx-perf-run-test--with-fake-run '(1.0)
     (should (eql (drgnx-perf-run) 0))

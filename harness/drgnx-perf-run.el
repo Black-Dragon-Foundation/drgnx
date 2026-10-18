@@ -715,7 +715,7 @@ the hook budget only (the audit adds its own cost to the other numbers)."
        (t
         (let* ((history (expand-file-name "perf-history.jsonl" (drgnx-ui-state-root)))
                (partial (/= (length selected) (length all)))   ; DRGNX_PERF_WORKLOADS: judge those, keep no history
-               (fails (drgnx-perf-verdict results (seq-filter (lambda (b) (assq (car b) results)) (drgnx-perf-run--budgets))))
+               (fails (drgnx-perf-verdict results (if partial (seq-filter (lambda (b) (assq (car b) results)) (drgnx-perf-run--budgets)) (drgnx-perf-run--budgets))))
                (worse (drgnx-perf-regressions history results)))
           (dolist (f fails) (princ (format "FAIL %s\n" f)))
           (dolist (r worse) (princ (format "FAIL regression: %s\n" r)))
