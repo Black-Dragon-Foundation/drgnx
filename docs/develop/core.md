@@ -173,6 +173,15 @@ stack — the code that knows what it changed knows how to change it back):
   runs `drgnx-modules-after-stage-functions` (keys and menus apply) once after the whole stage, so a hook per re-run
   would only add a second full keys resolve while the registry is half rebuilt. Whoever tears down on purpose
   (Preferences, the batch teardown) runs the after-teardown hook once.
+- Preferences: Modules calls `(drgnx-modules-turn-off MODULE &key dependents)` and `(drgnx-modules-turn-on MODULE)`
+  (`core/drgnx-modules.el`; user guide: `docs/guide/modules.md`). Turn-off returns the running modules that
+  `:requires` MODULE, doing nothing, unless `:dependents t`: then it tears them down deepest first, then MODULE, runs
+  the after-teardown hook once and writes MODULE with `drgnx-modules-set-enabled`. If MODULE is `restart`, or a
+  running dependent is, it only writes (nothing torn down; the dependents wait for it at the next start). Turn-on
+  writes it and, when the report shows the module's stage has run, calls `drgnx-modules--run-one` (which checks
+  packages and requirements) and runs `drgnx-modules-after-teardown-functions` (not the after-stage hook, whose
+  subscriber skips `startup`) so keys and menus follow whatever the stage. Neither prompts; the question "Also turn off X, Y?" belongs to the
+  command `drgnx-modules-list-toggle`. `drgnx-modules-toggle` (onboarding) only writes.
 - Teardown and rollback run in automatic paths: they never prompt. Undos and `:teardown` run with
   `inhibit-interaction` bound, so one that would ask fails at once and is reported. Every undo checks before it
   changes anything, so off, on, off is the same as off once, and two undos of the same thing (a `:teardown` that
