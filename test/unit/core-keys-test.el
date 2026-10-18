@@ -648,7 +648,10 @@ that took VS Code's C-S-h and F2 (the rest of the replace module is not modelled
     (ai-edit-done "C-c C-c" drgnx-ai-edit-review-mode-map) (ai-edit-reject "C-c C-k" drgnx-ai-edit-review-mode-map)
     (work-view "C-k t" nil) (work-open "RET" drgnx-work-mode-map) (work-toggle "TAB" drgnx-work-mode-map)
     (work-refresh "g" drgnx-work-mode-map) (work-filter "f" drgnx-work-mode-map)
-    (work-hide-merged "m" drgnx-work-mode-map))
+    (work-hide-merged "m" drgnx-work-mode-map)
+    ;; M12f: the Work graph's keys
+    (cockpit-filter "f" drgnx-cockpit-graph-mode-map) (cockpit-open "RET" drgnx-cockpit-graph-mode-map)
+    (cockpit-open-in-plan "o" drgnx-cockpit-graph-mode-map) (cockpit-refresh "g" drgnx-cockpit-graph-mode-map))
   "The VS Code profile's resolved keys on Linux before M12a gave it its macOS keys: (ID KEY MAP).")
 
 (ert-deftest drgnx-keys/linux-is-unchanged ()

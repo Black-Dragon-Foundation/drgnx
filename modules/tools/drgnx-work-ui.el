@@ -43,6 +43,7 @@
 (defvar drgnx-work-ui-filter-text nil "Only plans whose title or path contain this (any case).")
 (defvar drgnx-work-ui-hide-merged nil "Non-nil: merged plans are not shown.")
 (defvar drgnx-work-ui--scan nil "The scan running in another Emacs (`drgnx-work-ui-refresh').")
+(defvar drgnx-work-ui-scanned-hook nil "Run after a scan (`drgnx-work-ui-refresh') finished well: the tracker changed.")
 
 (defvar drgnx-work-mode-map (let ((m (make-sparse-keymap))) (set-keymap-parent m special-mode-map) m))
 
@@ -257,7 +258,8 @@ Returns the process."
                                            (drgnx-work-default-roots))
                           :sentinel (lambda (p _)
                                       (unless (process-live-p p)
-                                        (if (eql 0 (process-exit-status p)) (drgnx-work-ui--redraw)
+                                        (if (eql 0 (process-exit-status p))
+                                            (progn (drgnx-work-ui--redraw) (run-hooks 'drgnx-work-ui-scanned-hook))
                                           (message "Work: the scan failed: %s"
                                                    (if (buffer-live-p (process-buffer p))
                                                        (with-current-buffer (process-buffer p) (string-trim (buffer-string)))
@@ -413,6 +415,16 @@ window (viewBox) on the same drawing, so lines cross from one band into the next
       (drgnx-work-ui--graph-open box)
     (message "Work: click a box to open it")))
 
+(declare-function drgnx-cockpit-graph-show "drgnx-cockpit")
+(declare-function drgnx-modules--ok-p "drgnx-modules")
+
+(defun drgnx-work-ui-show-graph ()
+  "Show the Work graph: the Work cockpit's (specs, plans, tasks, agents, jobs, reviews) when module tools/cockpit
+runs, else specs, plans and branches (`drgnx-work-ui-graph')."
+  (interactive)
+  (if (and (fboundp 'drgnx-cockpit-graph-show) (drgnx-modules--ok-p 'tools/cockpit)) (drgnx-cockpit-graph-show)
+    (drgnx-work-ui-graph)))
+
 (defun drgnx-work-ui-graph ()
   "Show specs, plans and branches as a graph (svg.el): click a box to open it, g to draw it again.
 Returns the buffer."
@@ -479,7 +491,8 @@ Returns the buffer."
                          (drgnx-wb-place "\\`\\*\\(commit: \\|work graph\\*\\)" 'editor))
                        (pcase-dolist (`(,id ,title ,fn ,doc)
                                       '((work-view "Show Work" drgnx-work-ui-view "Specs, plans, tasks, TODOs and commits, in the right dock")
-                                        (work-graph "Show Work as Graph" drgnx-work-ui-graph "Specs, plans and branches as a graph; click a box to open it")
+                                        (work-graph "Show Work as Graph" drgnx-work-ui-show-graph
+                                                    "The Work graph: specs, plans, tasks, agents, jobs and reviews; click a node to open it")
                                         (work-start-agent "Start Agent on Task…" drgnx-work-ui-start-agent "An agent on this task; its commits are recorded for it")
                                         (work-open-worktree "Open Plan's Worktree" drgnx-work-ui-open-worktree "The worktree of this plan, in the Explorer")))
                          (drgnx-command-define id :category "Work" :title title :command fn :doc doc))

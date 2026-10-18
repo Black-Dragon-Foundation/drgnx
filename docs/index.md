@@ -18,6 +18,7 @@ Using drgnx.
 - [Editing](guide/editing.md): language support (tree-sitter grammars), and the editor's amenities.
 - [Git and review](guide/git.md): the diff view, inline blame, AI commit messages, Review Branch, Pull Requests.
 - [Work tracker](guide/work.md): specs › plans › tasks › TODOs › commits, branches and worktrees; `drgnx work`.
+- [Work cockpit](guide/cockpit.md): the Work graph — specs, plans, tasks, agents, jobs and reviews, who is on what, needs and blocks, what waits on you; drawn in a wide window, an outline in terminals; filters; a click opens a node.
 - [Search and replace](guide/replace.md): the Search view in the sidebar and the find bar — symbols and text in one interface, tick boxes, one Undo.
 - [Layouts](guide/layouts.md): Agent, Editor, Zen and Browser, and your own; one key cycles them, and switching back restores what you left.
 - [Browser pane](guide/browser.md): a web page beside the editor (WebKit), Test Report for Playwright, and an agent's page with its screenshot.
