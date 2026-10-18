@@ -39,6 +39,18 @@ or a key variable of its own, so a cloned repository cannot send your code, or a
 
 `:kind` is `openai` (any OpenAI-compatible server), `ollama`, `llamacpp` or `tei`.
 
+A project's role may still name a provider that is not on this machine (OpenRouter, say): every pause in that
+repository would then make a paid call and send your code away. So the first time you run a command that uses AI
+there (Edit with AI, Ask the Codebase, Generate Commit Message, the semantic search commands), drgnx asks once whether that project may use the remote provider, and keeps
+your answer for that project root in `ai-project-routes.eld` in drgnx's state directory (delete the entry to be asked
+again; it is asked again only if the project later names a remote provider you were not asked about). The project is
+its real directory, so one repository reached through two paths is asked once, and a link re-pointed at another
+repository does not inherit the answer. A provider whose address has no host counts as remote. Choose Provider/Model
+changes your own `ai.eld` chain, never a copy of the project's. Until you say
+yes, and after a no, the project's remote steps are left out of its chains: ghost text, the search index and every
+other automatic path use only the local steps (or your own `ai.eld`'s chain when none is left). Nothing is ever
+asked from a timer, hook or in batch.
+
 ## Roles
 
 | Role | Used by | Default chain |
@@ -56,26 +68,35 @@ Anthropic's Messages API, so the gateway can carry agents to it (OpenRouter, Oll
 With nothing set up, onboarding's AI step sets up Ollama, LM Studio or OpenRouter for you and fills these roles with
 models sized to the machine ([onboarding.md](onboarding.md#setting-ai-up)): `drgnx-ai-default-models` gives Inline
 Completion `qwen2.5-coder:1.5b` and Edit and Chat `qwen2.5-coder:7b` when both fit in the room models get (the GPU's
-free memory; on a Mac two thirds of the RAM, which Apple silicon shares with the GPU — `drgnx-ai-vram`), else `:3b`,
-else the 1.5B too; LM Studio serves the same GGUF models as `qwen2.5-coder-…-instruct` (`drgnx-ai-lmstudio-models`).
+free memory; on an Apple silicon Mac two thirds of the RAM, which it shares with the GPU, while an Intel Mac counts
+as having none — `drgnx-ai-vram`), else `:3b`, else the 1.5B too; LM Studio serves the same GGUF models as `qwen2.5-coder-…-instruct` (`drgnx-ai-lmstudio-models`).
 
 The `embed` role works like the others: its chain is tried in order and the next provider answers when one is down, has
 no key, or sends something that is not a vector per text. TEI needs no model (`(tei)`); for Ollama, llama.cpp and the
 OpenAI-compatible runners the chain names one, for example `(ollama . "nomic-embed-text")`. Providers that can embed
-list `embed` in their `:caps`.
+list `embed` in their `:caps`. Vectors come back scaled to length 1, even when the numbers are so small that their
+squares underflow; an empty request asks nobody. For Lisp callers, `drgnx-ai-embed-sync` takes `:timeout nil` (no
+limit), ends its request on C-g, and reports who answered through `:on-answer` (`drgnx-ai-embed-last-info` is only a
+mirror of the last answer).
 
 ## Ghost text and Tab
 
 In code buffers (module `tools/ai`), a short pause (0.3 s) asks the `complete` role to fill in the middle: the model
 sees up to 2,000 characters before point and 1,000 after. Its answer shows after point, dimmed (face
 `drgnx-ai-ghost`, from your theme's `shadow`). It shows only if nothing changed and point did not move since the
-question. Anything else you do clears it and drops the question in flight.
+question. Anything else you do clears it and drops the question in flight. If the buffer changes under a showing
+suggestion with no command of yours (a revert, an agent's edit), Tab and the accept commands drop it instead of
+inserting it into changed text; Tab then indents as usual.
 
 | Key | While a suggestion shows | Otherwise |
 |---|---|---|
 | `Tab` | accept it all | see below |
 | `C-<right>` (Mac: ⌘→) | accept its next word | the usual (`right-word`; Mac: line end) |
-| `Escape` | dismiss it | the usual |
+| `C-g` | dismiss it | the usual (cancel) |
+
+Escape is not bound while a suggestion shows, so `Esc x` still works as `M-x`; any other key or command also drops
+the suggestion. Under the Vim profile (evil), nothing is asked in normal or visual state, only while you type
+(insert state, or Emacs state).
 
 **Accept Suggestion Line** and **Toggle AI Completion** are in the palette. With no `complete` provider running,
 nothing is asked, and drgnx says so once; it looks for running providers again at most once a minute.
@@ -98,6 +119,9 @@ changes until you decide:
 - `C-c C-c` (Done) puts the hunks you applied into the buffer's region;
 - `C-c C-k` (Reject), or closing the diff, drops it all.
 
+Each edit gets its own diff buffer (`*AI edit: NAME*`, then `*AI edit: NAME*<2>`), so a second edit of the same buffer
+never takes over the first one's review.
+
 Edits you make elsewhere in the buffer meanwhile stay — text typed right before or after the region too. If the
 region itself changed while the model answered, no review opens; if it changed since, Done refuses rather than
 overwrite it.
@@ -105,8 +129,10 @@ overwrite it.
 ## Ask the Codebase
 
 **Ask the Codebase…** (Vim `SPC a q`; the palette) answers a question about the project from its own code:
-1. Up to six of the question's words (four letters or more) are searched for with ripgrep (grep without it), never in dot files or directories (`.env`, `.git`) — what
-   is found goes to a model.
+1. Up to six of the question's words (four letters or more) are searched for with ripgrep (find and grep, any POSIX or BSD one, without it), never in dot files or directories (`.env`, `.git`) — what
+   is found goes to a model. Without ripgrep (which also honours `.gitignore`), the folders `node_modules`, `vendor`,
+   `target`, `dist`, `build` and `__pycache__` are skipped by name. A search that runs longer than 10 s
+   (`drgnx-ai-search-timeout`) is cut off and the question goes on without code; lines are cut to 500 characters.
 2. The five files that hold the most of them each give a snippet around their first match.
 3. The snippets and the question go to the `chat` role.
 
@@ -119,6 +145,12 @@ The answer opens in `*AI answer*` with the files it drew on as links. Other ways
 its own when the search module is on. `drgnx-ai-ask-request` is the same search and question without the buffer —
 onboarding tests Ask the Codebase with it over a small temporary project.
 
+## Stopping a request
+
+**Stop AI Request** (the palette; no key by default) cancels the Edit with AI and Ask the Codebase requests in flight:
+the model's process ends and nothing opens when it would have answered. With nothing in flight it says so. It does not
+touch ghost text (any key you type drops that question) or a job an agent is running ([agents.md](agents.md)).
+
 ## Choosing a provider and model
 
 **Choose AI Provider/Model…** first looks for what runs here now (a second at most), then asks for a role and a
@@ -130,8 +162,9 @@ reported. It makes one test call. Only if that answers is the choice kept: at th
 ## Chat (gptel)
 
 With module `extra/llm` (gptel installed), gptel's backend comes from the `chat` role: its first provider that can
-be asked. drgnx sets it up again whenever a probe finishes. A backend you set yourself is never replaced, and gptel
-asks for the key only when it sends.
+be asked. drgnx sets it up again whenever a probe finishes. A backend you set yourself is never replaced, and neither is
+gptel's default ChatGPT backend once you have set your own `gptel-api-key`. gptel asks for the key only when it
+sends.
 
 ## Detection, fallback and the doctor
 
@@ -145,7 +178,9 @@ The local runner onboarding set up (`drgnx-ai-managed`, kept in `ai-local.eld` i
 again when it is down: `drgnx-ai-ensure-local` asks its address in the background and, when nothing answers and no
 drgnx job runs it, starts it as a drgnx job with one message ("Starting Ollama…"). It runs a moment after the first
 window opens (never at daemon start) and when a request finds nothing listening there (`drgnx-ai-refused-functions`),
-at most once a minute, never in batch, never asking anything.
+never in batch, never asking anything. A look that finds the server down starts it at most once a minute; a look
+that finds it up counts for nothing, so a refusal a moment later still restarts it. The refusal is heard even in a
+process that never loaded the probe (a search, a script).
 
 A request walks its role's chain: a provider without its key or the capability (chat, fill in the middle) is
 skipped; no answer, an error status (429, 5xx …) or an answer that does not parse moves on to the next. The feature
@@ -166,11 +201,23 @@ drgnx writes a key in exactly one place: the macOS Keychain, or the Linux keyrin
 step, in the drgnx app: the key is read with `read-passwd`, never shown) or a command you run —
 never into a drgnx file, and never on a command line (it goes to the store on stdin). A Keychain that is locked
 or denies access gives an error saying so; the environment variable always works instead. drgnx never sends a key to
-a model. On a Mac the key is an internet password for `openrouter.ai`, account `drgnx`, in your login keychain:
-Keychain Access shows it, and `security delete-internet-password -s openrouter.ai -a drgnx` removes it.
+a model. On a Mac the key is an internet password for `openrouter.ai`, account `drgnx`, in your login keychain
+(stored with `/usr/bin/security`, never a `security` found elsewhere on your path, and read back for that account,
+so another password for the host cannot answer in its place):
+Keychain Access shows it, and `security delete-internet-password -s openrouter.ai -a drgnx` removes it. On Linux the
+keyring is looked at only when Emacs has D-Bus support, a session bus can be reached and a Secret Service answers on
+it (an SSH login, WSL or a container often has a bus but no keyring daemon), so such a machine gets no "invalid
+backend spec" noise in `*Messages*`. Loading the Secret Service client pings it once, only from a command you ran.
 
-Sources that may ask for something (`.gpg` files, the Keychain, the keyring) are only read from commands you run in
-the drgnx app or an interactive Emacs (Edit with AI, Ask the Codebase, Choose, AI: Load Keys); background features
+Sources that may ask for something — files Emacs decrypts with GnuPG (`.gpg`, its backups `.gpg~` and `.gpg.~N~`,
+and `.plist` files, which auth-source reads as a plstore), the Keychain, the keyring, and any `auth-sources` entry
+that is a plist — are only read from commands you run in
+the drgnx app or an interactive Emacs (Edit with AI, Ask the Codebase, Choose, AI: Load Keys); a batch Emacs never
+opens the Keychain or keyring (a `.gpg` file it is asked to read can still want its passphrase on standard input).
+Entries of `auth-sources` that are plists, such as `(:source (:secrets "Login"))` or
+`(:source (:macos-keychain-internet default))`, count as the stores they name. And
+even with `auth-sources` set to nil, those commands still read the system's own store (the Keychain on a Mac, the
+keyring on Linux), because that is where onboarding puts the key. Background features
 (ghost text, the hub, agents) never read them — they use the environment or a key this drgnx read earlier. So that
 they have it after a restart, `drgnx open` (which the drgnx app runs) has drgnx read the keys of the providers your
 roles name once per start, a moment after its window shows (macOS may ask whether Emacs may use the Keychain).

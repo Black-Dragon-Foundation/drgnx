@@ -44,10 +44,13 @@ machine at any time.
 7. **macOS: the drgnx app.** Installs `~/Applications/drgnx.app` (`drgnx macos-app`: Finder, Spotlight, the Dock,
    Open With — [opening.md](opening.md#on-macos-the-drgnx-app)); if that fails it warns and goes on.
 8. **PATH:** if `~/.local/bin` is not on your `PATH`, it offers to add one line to `~/.profile` (`~/.zprofile`
-   when your shell is zsh) — only when you answer yes; with `--yes` it only prints the line and that file.
+   when your shell is zsh; with `SHELL` unset, `~/.zprofile` if it exists) — only when you answer yes; with `--yes`
+   it only prints the line and that file.
 9. **Checks** it all: runs `drgnx doctor` with the Emacs it found or installed — after the app and the PATH line, so
-   it checks what is there. On a Mac `drgnx` counts as on PATH when `~/.local/bin/drgnx` exists and `~/.zprofile`
-   puts `~/.local/bin` on PATH (what a new Terminal sees), also in a drgnx the app started, whose own PATH lacks it.
+   it checks what is there. On a Mac `drgnx` counts as on PATH when `~/.local/bin/drgnx` exists and your shell's
+   profile (`~/.zprofile` for zsh or, with `SHELL` unset, when it exists; else `~/.profile`) puts `~/.local/bin` on PATH (`export PATH=…`, or in zsh
+   `path=(… ~/.local/bin …)` / `path+=(…)`; what a new Terminal sees), also in a drgnx the app started, whose own PATH
+   lacks it.
 10. **macOS: opens drgnx** (the app just installed), so the first start's Welcome takes over — only in a desktop
    session: not over SSH, and not under `--yes` without a terminal.
 
@@ -119,8 +122,8 @@ The details:
   installer (`/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"`).
   Under `--yes` that installer runs with `NONINTERACTIVE=1` and cannot ask for your password: run `sudo -v`
   first, or leave `--yes` out. Afterwards the installer evaluates `brew shellenv` for itself and offers to add the
-  line `eval "$(/opt/homebrew/bin/brew shellenv)"` (`/usr/local/bin/brew` on Intel) to `~/.zprofile` — only when you answer yes;
-  with `--yes` it only prints the line.
+  line `eval "$(/opt/homebrew/bin/brew shellenv)"` (`/usr/local/bin/brew` on Intel) to your shell's profile (`~/.zprofile`
+  for zsh, the macOS default; else `~/.profile`) — only when you answer yes; with `--yes` it only prints the line.
 - **Intel Homebrew on Apple silicon** (`/usr/local/bin/brew` on an arm64 Mac) runs under Rosetta. It is used, and the
   plan warns about it.
 - **Your Emacs configuration is never touched.** `~/.emacs.d` and `~/.config/emacs` are neither read nor written;
@@ -194,7 +197,7 @@ one line per check, `OK`, `WARN` or `FAIL`, with a fix under anything that is no
 pgtk Emacs; on a Mac, which has no mutter, D-Bus or pgtk, only ImageMagick). On a Mac the doctor also checks that the
 drgnx app is installed (fix: `drgnx macos-app`), that Homebrew is there (also looked for in `/opt/homebrew/bin` and
 `/usr/local/bin`, in case it is not on PATH) and that the `drgnx` command is on PATH (fix: add `~/.local/bin` to PATH in
-`~/.zprofile`) — each only a warning. Details: [core.md](../develop/core.md#doctor-drgnx-doctorel).
+your shell's profile, `~/.zprofile` for zsh or, with `SHELL` unset, when it exists; else `~/.profile`) — each only a warning. Details: [core.md](../develop/core.md#doctor-drgnx-doctorel).
 
 ## Uninstall
 

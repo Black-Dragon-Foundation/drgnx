@@ -585,6 +585,7 @@ bar's keymaps), one editor window, no view or bar left over."
 
 (ert-deftest drgnx-replace/an-error-closing-the-bar-never-stops-the-save ()
   ;; The find bar's `drgnx-persist-save' advice runs on every exit: it must not make the save fail.
+  (require 'drgnx-persist)
   (drgnx-replace-view-test--with
     (let ((drgnx-persist-file (expand-file-name "state.eld" (make-temp-file "drgnx-replace-save" t))))
       (unwind-protect

@@ -24,9 +24,13 @@ spaces, accents (`café.py`) and iCloud folders work. A file that does not exist
 What happens:
 
 - **drgnx is not running:** it starts in the background (an Emacs daemon named `drgnx`, with the Emacs drgnx was
-  installed with — see [install.md](install.md)), and the paths open as soon as it answers (it is given 10 s; its
-  startup messages go to `~/.local/state/drgnx/daemon.log`). On Linux, when the systemd user unit `drgnx` is installed
-  and enabled ([packages.md](packages.md#running-drgnx-as-a-daemon)), drgnx starts that unit instead.
+  installed with — see [install.md](install.md)), and the paths open as soon as it answers (it is given 30 s, or
+  `DRGNX_OPEN_WAIT` seconds, a whole number above 0 counted on the clock; anything else is refused with a note and 30
+  is used; it says "still starting" after a third of that; its startup messages are added to
+  `~/.local/state/drgnx/daemon.log`). On Linux, when the systemd user unit `drgnx` is installed and enabled ([packages.md](packages.md#running-drgnx-as-a-daemon)), drgnx starts that unit instead.
+  Two `drgnx` commands started at once make one daemon and one window: the second waits for the first (a lock,
+  `~/.local/state/drgnx/open-drgnx.lock`, dropped as stale 15 s after the wait above, 45 s by default, if its owner
+  died). A window that takes more than 10 s to appear is not waited for further.
 - **No window is open:** a window opens, with the layout you left — groups, tabs, docks, Explorer folders
   ([workbench.md](workbench.md#the-layout-survives-a-restart)) — and the paths in front of it.
 - **A window is open:** the paths open there and the window comes to the front.
@@ -100,9 +104,11 @@ the palette) — drgnx does one of two things, your choice:
 - **Quit when the last window closes:** closing the last window quits drgnx.
 
 Quitting — Quit drgnx, or closing the last window in quit mode — first offers to save each file with changes, and
-each New Untitled buffer (tab) you typed in (it asks for a file name). Press Ctrl+G (`C-g`, Emacs' cancel), or keep one unsaved and then answer no to "quit and lose the changes?", and drgnx stays running with
-everything open: nothing is lost. A drgnx that is not a daemon has nothing to keep running, so closing its last
-window always quits (asking the same way).
+each New Untitled buffer (tab) you typed in (it asks for a file name); the `*scratch*` buffer is not offered. Press
+Ctrl+G (`C-g`, Emacs' cancel), or keep one unsaved and then answer no to "quit and lose the changes?", and drgnx
+stays running with everything open: nothing is lost. If terminals or other programs are still running, drgnx then
+asks once whether to quit and stop them (no keeps everything running). A drgnx that is not a daemon has nothing to
+keep running, so closing its last window always quits (asking the same way).
 
 Onboarding's Daemon and Desktop step asks it once ([onboarding.md](onboarding.md#the-steps)).
 Change the choice with **Preferences: Keep drgnx Running in the Background** (palette, Options menu): it switches

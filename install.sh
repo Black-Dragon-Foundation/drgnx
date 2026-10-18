@@ -235,13 +235,14 @@ plan_homebrew() { # the Homebrew lines of the plan (macOS)
   if [[ -z "$BREW" ]]; then
     note "Install Homebrew first (asked): it asks for your password, installs Apple's Command Line Tools if they are missing, and takes a few minutes:"
     note "  /bin/bash -c \"\$(curl -fsSL $HOMEBREW_INSTALLER_URL)\""
-    note "then add its shellenv line to ~/.zprofile (asked)"
+    note "then add its shellenv line to $(shell_rc) (asked)"
   elif brew_is_rosetta; then
     note "warning: $BREW is Homebrew for Intel, running under Rosetta on this Apple silicon Mac. It works, but a native one (/opt/homebrew) is better: see https://brew.sh"
   fi
 }
 
-planned_emacs() { # the Emacs this run leaves behind, as far as the plan can tell
+planned_emacs() { # the Emacs this run leaves behind, as far as the plan can tell (the formula's path is an estimate:
+                  # beside brew; the run records `brew --prefix emacs-plus@31` itself)
   case "$CHOSEN" in
     keep) echo "${EMACS_FOUND:-emacs}" ;;
     cask) echo /Applications/Emacs.app/Contents/MacOS/Emacs ;;
@@ -331,12 +332,14 @@ install_homebrew() { # macOS without Homebrew: explained, asked, then Homebrew's
   local script
   script="$(curl -fsSL "$HOMEBREW_INSTALLER_URL")" || die 1 "could not download Homebrew's installer ($HOMEBREW_INSTALLER_URL) — nothing was installed (no network?)"
   if ((YES)); then   # nobody to answer its questions; it needs sudo to work without a password prompt
-    NONINTERACTIVE=1 /bin/bash -c "$script" || die 1 "Homebrew's installer failed (above). With --yes it cannot ask for your password: run sudo -v first, or run without --yes"
+    # </dev/null: its stdin must not be ours, which under `curl … | bash' is this script
+    NONINTERACTIVE=1 /bin/bash -c "$script" </dev/null || die 1 "Homebrew's installer failed (above). With --yes it cannot ask for your password: run sudo -v first, or run without --yes"
   else
     /bin/bash -c "$script" </dev/tty || die 1 "Homebrew's installer failed (above) — nothing else was installed"
   fi
-  local b
-  for b in /opt/homebrew/bin/brew /usr/local/bin/brew; do
+  local b candidates   # where its installer puts brew (DRGNX_INSTALL_BREW_PATHS, colon-separated: tests)
+  IFS=: read -r -a candidates <<<"${DRGNX_INSTALL_BREW_PATHS:-/opt/homebrew/bin/brew:/usr/local/bin/brew}"
+  for b in "${candidates[@]}"; do
     if [[ -x "$b" ]]; then BREW="$b"; break; fi
   done
   [[ -n "$BREW" ]] || die 1 "Homebrew was installed but brew was not found in /opt/homebrew/bin or /usr/local/bin — open a new terminal and run this again"
@@ -344,12 +347,21 @@ install_homebrew() { # macOS without Homebrew: explained, asked, then Homebrew's
   brew_profile_hint
 }
 
-brew_profile_hint() { # Homebrew's own installer asks you to put this in ~/.zprofile; so do we, but ask
-  local line="eval \"\$($BREW shellenv)\""
-  grep -qxF "$line" "$HOME/.zprofile" 2>/dev/null && return
+shell_rc() { # the login profile the user's shell reads (the doctor's rule, drgnx-doctor--shell-profile)
+  case "${SHELL:-}" in
+    */zsh) echo "$HOME/.zprofile" ;;                            # zsh (macOS's default) never reads ~/.profile
+    "") if [[ -e "$HOME/.zprofile" ]]; then echo "$HOME/.zprofile"; else echo "$HOME/.profile"; fi ;;   # no SHELL: a guess
+    *) echo "$HOME/.profile" ;;
+  esac
+}
+
+brew_profile_hint() { # Homebrew's own installer asks you to put this in your profile; so do we, but ask
+  local line="eval \"\$($BREW shellenv)\"" rc
+  rc="$(shell_rc)"
+  grep -qxF "$line" "$rc" 2>/dev/null && return
   say ""
   say "Homebrew must be on your PATH in new terminals."
-  offer_rc_line "$HOME/.zprofile" "$line"
+  offer_rc_line "$rc" "$line"
 }
 
 install_emacs_brew() {
@@ -502,7 +514,9 @@ link_drgnx() {
 remember_emacs() { # drgnx commands run in the Emacs just installed, even when it is not `emacs' on PATH (macOS)
   local cfg="${DRGNX_CONFIG_DIR:-$HOME/.config/drgnx}" e
   e="$(command -v "$EMACS_BIN" 2>/dev/null || true)"
-  { mkdir -p "$cfg" && printf '%s\n' "${e:-$EMACS_BIN}" >"$cfg/emacs"; } ||
+  e="${e:-$EMACS_BIN}"
+  [[ "$e" == /* ]] || warn "the Emacs ($e) is not an absolute path, which drgnx ignores: it will use the emacs on your PATH (or set DRGNX_EMACS)"
+  { mkdir -p "$cfg" && printf '%s\n' "$e" >"$cfg/emacs"; } ||
     warn "could not record the Emacs in $cfg/emacs: drgnx will use the emacs on your PATH (or set DRGNX_EMACS)"
 }
 
@@ -534,8 +548,8 @@ open_app() { # APP — the first start opens the Welcome; only in a desktop sess
 
 path_hint() {
   case ":$PATH:" in *":$PREFIX/bin:"*) return ;; esac
-  local rc="$HOME/.profile" line="export PATH=\"$PREFIX/bin:\$PATH\""
-  case "${SHELL:-}" in */zsh) rc="$HOME/.zprofile" ;; esac    # zsh (macOS's default) never reads ~/.profile
+  local rc line="export PATH=\"$PREFIX/bin:\$PATH\""
+  rc="$(shell_rc)"
   say ""
   say "$PREFIX/bin is not on your PATH."
   offer_rc_line "$rc" "$line"

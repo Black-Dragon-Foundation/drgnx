@@ -433,6 +433,17 @@ project's."
           (should (equal (drgnx-search-chunk-test--paths root) '("real.txt"))))
       (delete-directory outside t))))
 
+(ert-deftest drgnx-search-files/a-git-that-ends-before-its-input-does-is-no-error ()
+  "A git that reads nothing (`rev-parse', `--version') can be gone before the last piece or the end of the input is
+sent; sending to a finished process signals, which showed as a failed listing (a flake under load).  Made certain
+here: the end of input is sent only after git has ended."
+  (let ((drgnx-search--git-deadline (+ (float-time) 10)) (eof (symbol-function 'process-send-eof)))
+    (cl-letf (((symbol-function 'process-send-eof)
+               (lambda (p) (while (process-live-p p) (accept-process-output p 0.05)) (funcall eof p))))
+      (let ((r (drgnx-search--git-run-timed "" '("--version"))))
+        (should (eql 0 (car r)))
+        (should (string-prefix-p "git version" (nth 1 r)))))))
+
 (ert-deftest drgnx-search-files/does-not-depend-on-the-locale ()
   "Every git call runs with LC_ALL=C and no LANGUAGE (git's messages are translated otherwise, and the code reads
 them): checked on the environment each call gets — a machine without the German locale would pass anyway."

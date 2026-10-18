@@ -69,13 +69,17 @@
 (ert-deftest drgnx-area/killing-the-shown-buffer-shows-the-placeholder ()
   (drgnx-area-test--with
    (describe-function 'car)
-   (let ((w (drgnx-wb-area-window 'panel)) (file (find-file-noselect (make-temp-file "drgnx-area"))))
-     (kill-buffer "*Help*")
-     (should (window-live-p w))
-     (should (eq (drgnx-wb-area-window 'panel) w))
-     (should (string-prefix-p " *drgnx " (buffer-name (window-buffer w))))
-     (should-not (eq (window-buffer w) file))
-     (kill-buffer file))))
+   (let* ((name (make-temp-file "drgnx-area"))
+          (w (drgnx-wb-area-window 'panel)) (file (find-file-noselect name)))
+     (unwind-protect
+         (progn
+           (kill-buffer "*Help*")
+           (should (window-live-p w))
+           (should (eq (drgnx-wb-area-window 'panel) w))
+           (should (string-prefix-p " *drgnx " (buffer-name (window-buffer w))))
+           (should-not (eq (window-buffer w) file)))
+       (kill-buffer file)
+       (delete-file name)))))
 
 (ert-deftest drgnx-area/c-x-1-in-the-panel-keeps-the-layout ()
   (drgnx-area-test--with

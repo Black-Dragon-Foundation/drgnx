@@ -178,6 +178,7 @@ MONITORS: how many virtual monitors of SIZE (default 1)."
       (make-directory run)                ; signals if it exists: never reuse a run dir
       (make-directory init)
       (make-directory (expand-file-name "out" run))
+      (make-directory (expand-file-name "tmp" run))     ; the session's TMPDIR: gone with the run dir
       (when (file-directory-p sock) (delete-directory sock t))   ; stale, from a crashed session
       (drgnx-ui--make-private-dir sock)
       (drgnx-ui--write (expand-file-name "early-init.el" init) drgnx-ui--early-init)
@@ -203,6 +204,7 @@ MONITORS: how many virtual monitors of SIZE (default 1)."
                             drgnx-ui-keep-env))
           (list (concat "DRGNX_UI_NAME=" (plist-get sess :name))
                 (concat "DRGNX_UI_RUN=" (plist-get sess :run))
+                (concat "TMPDIR=" (expand-file-name "tmp" (plist-get sess :run)))
                 (concat "DRGNX_UI_HARNESS=" (directory-file-name drgnx-ui-harness-dir))
                 (concat "DRGNX_UI_CONFIG=" (plist-get sess :config_dir))
                 (concat "XDG_RUNTIME_DIR=" (drgnx-ui-runtime-dir))

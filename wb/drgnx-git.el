@@ -145,11 +145,16 @@ A refresh asked for while one runs is done once afterwards."
                       :sentinel (lambda (p _event) (drgnx-git--done p root)))))
           (puthash root (plist-put (copy-sequence repo) :proc proc) drgnx-git--repos)))
       (when wait
-        ;; Until no run is left: the one running, and the one queued behind it.
+        ;; Until no run is left unread: the one running, and the one queued behind it.  A run is read
+        ;; when `drgnx-git--done' clears :proc, not when git exits: on a loaded machine git can be gone
+        ;; before the first look, its output still in the pipe and its sentinel not yet run.
         (let (p)
-          (while (process-live-p (setq p (plist-get (gethash root drgnx-git--repos) :proc)))
-            (accept-process-output p 0.05)
-            (unless (process-live-p p) (drgnx-git--done p root))))))))
+          (while (setq p (plist-get (gethash root drgnx-git--repos) :proc))
+            (if (process-live-p p)
+                (accept-process-output p 0.05)
+              ;; Read what it left in the pipe (this runs its sentinel), then finish it if that did not.
+              (while (accept-process-output p 0))
+              (drgnx-git--done p root))))))))
 
 (defun drgnx-git-refresh-tree (dirs &optional wait)
   "Refresh the repositories of DIRS and every repository already seen inside them (nested ones).
@@ -163,15 +168,19 @@ WAIT: until done, for tests."
     (dolist (r (delete-dups (append roots nested))) (drgnx-git-refresh r wait))))
 
 (defun drgnx-git--done (proc root)
-  "PROC (git status for ROOT) ended: keep its result, tell the panels, run a waiting refresh."
-  (let ((buf (process-buffer proc)))
-    (when (and (memq (process-status proc) '(exit signal)) (buffer-live-p buf))
-      (let ((repo (plist-put (gethash root drgnx-git--repos) :result      ; how the last run ended
-                             (list (process-status proc) (process-exit-status proc)))))
-        (when (and (eq (process-status proc) 'exit) (= (process-exit-status proc) 0))
+  "PROC (git status for ROOT) ended: keep its result, tell the panels, run a waiting refresh.
+Only ROOT's current run counts: one already finished, or one a newer run replaced (it ended before its
+sentinel ran, and a refresh started another), just gives its buffer back.  Its late sentinel must not
+clear the newer run's :proc, or a wait on that run stops before it is read."
+  (let ((buf (process-buffer proc)) (repo (gethash root drgnx-git--repos)))
+    (when (memq (process-status proc) '(exit signal))
+      (if (not (eq proc (plist-get repo :proc)))
+          (when (buffer-live-p buf) (kill-buffer buf))
+        (setq repo (plist-put repo :result (list (process-status proc) (process-exit-status proc)))) ; how the last run ended
+        (when (and (eq (process-status proc) 'exit) (= (process-exit-status proc) 0) (buffer-live-p buf))
           (let ((files (drgnx-git-parse (with-current-buffer buf (buffer-string)))))
             (setq repo (plist-put (plist-put repo :files files) :folders (drgnx-git--folders files)))))
-        (kill-buffer buf)
+        (when (buffer-live-p buf) (kill-buffer buf))
         (let ((again (plist-get repo :again)))
           (puthash root (plist-put (plist-put repo :proc nil) :again nil) drgnx-git--repos)
           (run-hook-with-args 'drgnx-git-changed-functions root)

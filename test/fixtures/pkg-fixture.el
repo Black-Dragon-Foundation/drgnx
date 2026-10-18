@@ -59,5 +59,15 @@
   (make-directory (concat root "mods") t)
   (apply #'drgnx-pkg-sync :modules-dir (concat root "mods") args))
 
+(defun drgnx-pkg-test--bytes (file)
+  (with-temp-buffer (set-buffer-multibyte nil) (insert-file-contents-literally file) (buffer-string)))
+
+(defun drgnx-pkg-test--entry (arch name version &optional requires)
+  "The lock entry of the archive ARCH's file NAME-VERSION.el (REQUIRES: ((NAME VERSION)…))."
+  (let ((file (format "%s-%s.el" name version)))
+    (cons name (list :version version :archive "fx" :kind 'single :file file
+                     :sha256 (secure-hash 'sha256 (drgnx-pkg-test--bytes (concat arch file)))
+                     :requires requires :summary (format "fixture %s" name)))))
+
 (provide 'pkg-fixture)
 ;;; pkg-fixture.el ends here

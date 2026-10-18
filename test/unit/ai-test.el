@@ -106,7 +106,7 @@ Keychain and keyring are never reached."
                (with-temp-file script
                  (insert "#!/bin/sh\nPATH=/usr/bin:/bin\nprintf '%s\\n' \"$@\" > " ,log name ".argv\nreadlink /proc/self/fd/0 > " ,log name ".fd0 2>/dev/null\n${FAKE_SLEEP:+sleep $FAKE_SLEEP}\ncat > " ,log name ".stdin\nexit ${FAKE_EXIT:-0}\n"))
                (set-file-modes script #o755)))
-           (let ((system-type ,system) (exec-path (list ,bin))
+           (let ((system-type ,system) (exec-path (list ,bin)) (drgnx-ai--security-program (concat ,bin "security"))
                  (process-environment (append (list (concat "PATH=" ,bin) "DBUS_SESSION_BUS_ADDRESS=unix:path=/nonexistent/drgnx-test-bus")
                                               process-environment)))
              ,@body))
@@ -150,7 +150,8 @@ Keychain and keyring are never reached."
       (drgnx-ai-test--with-fake-store (nth 0 case) bin log
         (let ((stored nil) (seen nil) (noninteractive nil))
           (puthash 'openrouter "stale" drgnx-ai--keys)
-          (cl-letf (((symbol-function 'auth-source-search)       ; the secret store: answers only to its own source and host
+          (cl-letf (((symbol-function 'drgnx-ai--secrets-usable-p) (lambda () t))   ; a Secret Service, not this machine's
+                    ((symbol-function 'auth-source-search)       ; the secret store: answers only to its own source and host
                      (lambda (&rest spec)
                        (push auth-sources seen)
                        (and (member (nth 1 case) auth-sources) (equal (plist-get spec :host) "openrouter.ai")
@@ -199,55 +200,103 @@ Keychain and keyring are never reached."
   (drgnx-ai-test--with root
     (let ((plain (concat root "authinfo")) (auth-source-do-cache t))
       (with-temp-file plain (insert ""))
-      (let ((auth-sources (list plain)))
+      (let ((auth-sources (list plain)) (auth-source-netrc-cache nil))   ; the file's parse cache: this test's own
         (should-not (drgnx-ai-key 'openrouter))
         (should-not (auth-source-search :host "openrouter.ai" :max 1 :create nil)))   ; another caller's miss: cached
       (with-temp-file plain (insert "machine openrouter.ai password sk-or-test-123\n"))
-      (setq auth-source-netrc-cache nil)                         ; the file's parse cache (not the search cache, which stays)
-      (let ((auth-sources (list plain)))
+      ;; a fresh parse cache (not the search cache, which stays)
+      (let ((auth-sources (list plain)) (auth-source-netrc-cache nil))
         (should (equal (drgnx-ai-key 'openrouter) "sk-or-test-123"))
         (clrhash drgnx-ai--keys)
-        (with-temp-file plain (insert "machine openrouter.ai password sk-or-new-789\n"))   ; replaced: the old one is not served
-        (setq auth-source-netrc-cache nil)
+        (with-temp-file plain (insert "machine openrouter.ai password sk-or-new-789\n")))   ; replaced: the old one is not served
+      (let ((auth-sources (list plain)) (auth-source-netrc-cache nil))
         (should (equal (drgnx-ai-key 'openrouter) "sk-or-new-789"))))))
 
 (ert-deftest drgnx-ai/a-batch-emacs-never-searches-the-keychain-even-when-asked ()
   (drgnx-ai-test--with root
     (dolist (system '(darwin gnu/linux))
-      (let ((system-type system) (searched nil) (noninteractive t)
-            (auth-sources (list "/tmp/drgnx-plain-authinfo" 'macos-keychain-internet 'default "secrets:Login")))
+      (let* ((plain (concat root "authinfo")) (system-type system) (searched nil) (noninteractive t)
+             (auth-sources (list plain 'macos-keychain-internet 'default "secrets:Login")))
         (cl-letf (((symbol-function 'auth-source-search)
                    (lambda (&rest _) (push auth-sources searched) nil)))
           (should-not (drgnx-ai-key 'openrouter t))
-          (should (equal searched '(("/tmp/drgnx-plain-authinfo")))))
+          (should (equal searched (list (list plain)))))
         ;; …while an interactive Emacs does add it
-        (setq searched nil noninteractive nil auth-sources (list "/tmp/drgnx-plain-authinfo"))
+        (setq searched nil noninteractive nil auth-sources (list plain))
         (cl-letf (((symbol-function 'auth-source-search)
-                   (lambda (&rest _) (push auth-sources searched) nil)))
+                   (lambda (&rest _) (push auth-sources searched) nil))
+                  ((symbol-function 'drgnx-ai--secret-service-p) (lambda () t)))
           (should-not (drgnx-ai-key 'openrouter t))
-          (should (equal searched (list (list "/tmp/drgnx-plain-authinfo" (drgnx-ai--secret-source))))))))))
+          (should (equal searched (list (list plain (drgnx-ai--secret-source))))))))))
 
 (ert-deftest drgnx-ai/drgnxs-own-store-is-searched-beside-other-keychain-entries-once ()
   (drgnx-ai-test--with root
     (dolist (system '(darwin gnu/linux))
-      (let ((system-type system) (noninteractive nil) (searched nil)
+      (let ((plain (concat root "authinfo")) (system-type system) (noninteractive nil) (searched nil)
             (own (if (eq system 'darwin) 'macos-keychain-internet 'default)))
         (cl-letf (((symbol-function 'auth-source-search)
-                   (lambda (&rest _) (push auth-sources searched) nil)))
+                   (lambda (&rest _) (push auth-sources searched) nil))
+                  ((symbol-function 'drgnx-ai--secret-service-p) (lambda () t)))
           ;; an unrelated Keychain/Secret Service entry does not stand in for drgnx's own
-          (let ((auth-sources (list "/tmp/drgnx-plain-authinfo" 'macos-keychain-generic
-                                    "macos-keychain-internet:/tmp/other.keychain" "secrets:session")))
+          (let ((auth-sources (list plain 'macos-keychain-generic
+                                    (concat "macos-keychain-internet:" root "other.keychain") "secrets:session")))
             (drgnx-ai-key 'openrouter t)
             (should (equal (car searched) (append auth-sources (list own)))))
           ;; already there: not added twice
-          (let ((auth-sources (list "/tmp/drgnx-plain-authinfo" own)))
+          (let ((auth-sources (list plain own)))
             (drgnx-ai-key 'openrouter t)
-            (should (equal (car searched) (list "/tmp/drgnx-plain-authinfo" own)))))))))
+            (should (equal (car searched) (list plain own)))))))))
+
+(ert-deftest drgnx-ai/no-secret-source-without-a-session-bus ()
+  ;; Linux without a D-Bus session: `default' would only log "invalid backend spec" and find nothing
+  (drgnx-ai-test--with root
+    (let* ((plain (concat root "authinfo")) (run (concat root "run")) (system-type 'gnu/linux) (noninteractive nil)
+           (auth-sources (list plain)) (searched nil)
+           (process-environment (append (list "DBUS_SESSION_BUS_ADDRESS" (concat "XDG_RUNTIME_DIR=" run)) process-environment)))
+      (make-directory run)
+      (cl-letf (((symbol-function 'auth-source-search) (lambda (&rest _) (push auth-sources searched) nil))
+                ((symbol-function 'drgnx-ai--secrets-usable-p) (lambda () t)))
+        (should-not (drgnx-ai-key 'openrouter t))
+        (should (equal searched (list (list plain))))
+        ;; a session bus (here: its address): the keyring is added again
+        (setq searched nil)
+        (let ((process-environment (cons "DBUS_SESSION_BUS_ADDRESS=unix:path=/nonexistent/drgnx-test-bus" process-environment)))
+          (should-not (drgnx-ai-key 'openrouter t))
+          (should (equal searched (list (list plain 'default)))))
+        ;; macOS has no bus and needs none
+        (setq searched nil)
+        (let ((system-type 'darwin))
+          (should-not (drgnx-ai-key 'openrouter t))
+          (should (equal searched (list (list plain 'macos-keychain-internet)))))))))
+
+(ert-deftest drgnx-ai/files-epa-decrypts-are-not-quiet ()
+  ;; anything epa would decrypt asks for a passphrase: .gpg, and its backups (.gpg~, .gpg.~N~)
+  (should (equal (drgnx-ai--quiet-sources '("~/.authinfo" "~/.authinfo.gpg" "~/.authinfo.gpg~" "~/.authinfo.gpg.~3~"))
+                 '("~/.authinfo")))
+  ;; …and a .plist source: auth-source opens it as a plstore, whose secret part GnuPG decrypts
+  (should (equal (drgnx-ai--quiet-sources '("~/.authinfo.plist" "~/.netrc")) '("~/.netrc"))))
+
+(ert-deftest drgnx-ai/plist-secret-sources-are-not-quiet ()
+  ;; auth-sources may hold plists: (:source (:secrets "Login")) is the Secret Service, whatever the keyring's name
+  (let ((secrets '(:source (:secrets "Login"))) (keychain '(:source "macos-keychain-internet:login" :host t))
+        (file '(:source "~/.authinfo" :host t)))
+    (should (drgnx-ai--secret-source-p secrets))
+    (should (drgnx-ai--secret-source-p keychain))
+    (should-not (drgnx-ai--secret-source-p file))
+    (should (equal (drgnx-ai--quiet-sources (list secrets "~/.authinfo")) '("~/.authinfo")))
+    (should (equal (drgnx-ai--quiet-sources (list keychain "~/.authinfo")) '("~/.authinfo"))))
+  ;; …and a batch Emacs, which skips the secret stores, skips these too
+  (drgnx-ai-test--with root
+    (let* ((plain (concat root "authinfo")) (noninteractive t) (searched nil)
+           (auth-sources (list '(:source (:secrets "Login")) '(:source "macos-keychain-internet:login") plain)))
+      (cl-letf (((symbol-function 'auth-source-search) (lambda (&rest _) (push auth-sources searched) nil)))
+        (should-not (drgnx-ai-key 'openrouter t))
+        (should (equal searched (list (list plain))))))))
 
 (ert-deftest drgnx-ai/background-reads-never-open-the-keychain ()
   (drgnx-ai-test--with root
     (dolist (system '(darwin gnu/linux))
-      (let ((system-type system) (searched nil)
+      (let ((plain (concat root "authinfo")) (system-type system) (searched nil)
             (auth-sources '("~/.authinfo.gpg" macos-keychain-internet macos-keychain-generic "macos-keychain-internet:login"
                             default "secrets:Login")))
         (cl-letf (((symbol-function 'auth-source-search)
@@ -255,9 +304,9 @@ Keychain and keyring are never reached."
                      (and (or (memq 'macos-keychain-internet auth-sources) (memq 'default auth-sources)) (list (list :secret "from-keychain"))))))
           (should-not (drgnx-ai-key 'openrouter nil))
           (should-not searched)                                  ; nothing left to search: not even asked
-          (setq auth-sources (append auth-sources '("/tmp/drgnx-plain-authinfo")))
+          (setq auth-sources (append auth-sources (list plain)))
           (should-not (drgnx-ai-key 'openrouter nil))
-          (should (equal searched '(("/tmp/drgnx-plain-authinfo")))))))))
+          (should (equal searched (list (list plain)))))))))
 
 (ert-deftest drgnx-ai/a-denied-keychain-says-so ()
   (drgnx-ai-test--with root
@@ -277,7 +326,8 @@ Keychain and keyring are never reached."
 (ert-deftest drgnx-ai/without-a-secret-store-it-says-what-to-install ()
   (drgnx-ai-test--with root
     (drgnx-ai-test--with-fake-store 'darwin bin log
-      (let ((exec-path nil) (process-environment (cons "PATH=/nonexistent" process-environment)))
+      (let ((exec-path nil) (drgnx-ai--security-program (concat bin "no-security"))
+            (process-environment (cons "PATH=/nonexistent" process-environment)))
         (should (string-match-p "security" (cadr (should-error (drgnx-ai-store-key 'openrouter "sk-or-test-123") :type 'user-error))))))
     (drgnx-ai-test--with-fake-store 'gnu/linux bin log
       (let ((exec-path nil) (process-environment (cons "PATH=/nonexistent" process-environment)))
@@ -285,6 +335,56 @@ Keychain and keyring are never reached."
       (let ((process-environment (cons "DBUS_SESSION_BUS_ADDRESS" (cons "XDG_RUNTIME_DIR=/nonexistent" process-environment))))
         (should (string-match-p "D-Bus" (cadr (should-error (drgnx-ai-store-key 'openrouter "sk-or-test-123") :type 'user-error)))))
       (should-error (drgnx-ai-store-key 'ollama "x") :type 'user-error))))                ; a local runner has no key
+
+(ert-deftest drgnx-ai/macos-read-back-asks-for-drgnx-s-entry ()
+  ;; another internet password for the host could answer first: the read-back names the account the store wrote
+  (drgnx-ai-test--with root
+    (dolist (case '((darwin "drgnx") (gnu/linux nil)))
+      (drgnx-ai-test--with-fake-store (nth 0 case) bin log
+        (let ((specs nil))
+          (cl-letf (((symbol-function 'auth-source-search)
+                     (lambda (&rest spec) (push spec specs) (list (list :secret "sk-or-test-123")))))
+            (drgnx-ai-store-key 'openrouter "sk-or-test-123"))
+          (should (equal (plist-get (car specs) :user) (nth 1 case)))
+          (should (equal (plist-get (car specs) :host) "openrouter.ai")))))))
+
+(ert-deftest drgnx-ai/security-is-the-system-one-on-macos ()
+  ;; a `security' earlier on the path (a stray script, a Homebrew tool) must never get the key
+  (should (equal (default-value 'drgnx-ai--security-program) "/usr/bin/security"))
+  (drgnx-ai-test--with root
+    (drgnx-ai-test--with-fake-store 'darwin bin log
+      (let ((drgnx-ai--security-program (concat bin "not-here")))      ; not the real one either: the store is never reached
+        (should-error (drgnx-ai-store-key 'openrouter "sk-or-test-123") :type 'user-error)
+        (should-not (file-exists-p (concat log "security.argv")))))))      ; the fake on the path was not run
+
+(ert-deftest drgnx-ai/refused-hook-without-probe-loaded ()
+  ;; a process that only loaded the client (a search, a script) still starts the runner again when nothing listens
+  (let ((out (with-temp-buffer
+               (call-process (expand-file-name invocation-name invocation-directory) "/dev/null" t nil
+                             "--batch" "-Q" "-L" (expand-file-name "core" drgnx-dir) "--eval" "(require 'drgnx-ai-client)"
+                             "--eval" "(princ (list (featurep 'drgnx-ai-probe) (and (memq 'drgnx-ai--refused drgnx-ai-refused-functions) t) (fboundp 'drgnx-ai--refused)))")
+               (buffer-string))))
+    (should (equal out "(nil t t)"))))
+
+(ert-deftest drgnx-ai/an-answer-stamps-no-rate-limit ()
+  ;; the first-window look finding the server up must not hold back the restart a refused request asks for a
+  ;; moment later; only a look that finds it down counts toward the once-a-minute limit
+  (let ((noninteractive nil) (drgnx-ai--ensure-time nil) (drgnx-ai--ensure-looking nil)
+        (up t) (started nil))
+    (cl-letf (((symbol-function 'drgnx-ai-managed) (lambda () '(ollama :start ("ollama" "serve") :name "Ollama")))
+              ((symbol-function 'drgnx-ai-probe)
+               (lambda (callback &optional _ids) (let ((drgnx-ai-detected `((ollama :up ,up)))) (funcall callback))))
+              ((symbol-function 'run-at-time) (lambda (_time _repeat fn &rest args) (apply fn args) nil))
+              ((symbol-function 'drgnx-ai--start-local) (lambda (id &rest _) (push id started))))
+      (drgnx-ai-ensure-local)                                  ; the first-window look: it answers
+      (should-not drgnx-ai--ensure-time)
+      (should-not started)
+      (setq up nil)
+      (drgnx-ai--refused 'ollama)                              ; …so a refusal right after is not held back
+      (should (equal started '(ollama)))
+      (should drgnx-ai--ensure-time)
+      (drgnx-ai--refused 'ollama)                              ; a second one within the minute is
+      (should (equal started '(ollama))))))
 
 (ert-deftest drgnx-ai/agent-profiles-get-their-environment-when-they-start ()
   (drgnx-ai-test--with root
@@ -382,4 +482,160 @@ Keychain and keyring are never reached."
         (should (eq (cadr entry) :none))
         (should (stringp (nth 2 entry)))))))                                            ; with its reason
 
+(defmacro drgnx-ai-test--with-gptel-vars (vars &rest body)
+  "BODY with the gptel variables VARS ((SYMBOL VALUE)…) set by hand and unset or restored after: gptel is not loaded
+here, and a variable let-bound before it loads would turn special for good."
+  (declare (indent 1))
+  `(let ((saved (mapcar (lambda (v) (list (car v) (boundp (car v)) (and (boundp (car v)) (symbol-value (car v))))) ',vars)))
+     (unwind-protect (progn ,@(mapcar (lambda (v) `(set ',(car v) ,(cadr v))) vars) ,@body)
+       (dolist (s saved) (if (nth 1 s) (set (nth 0 s) (nth 2 s)) (makunbound (nth 0 s)))))))
+
+(ert-deftest drgnx-ai/own-gptel-api-key-keeps-default-backend ()
+  ;; gptel's default backend with the user's own `gptel-api-key' is the user's choice: not replaced
+  (drgnx-ai-test--with root
+    (let ((drgnx-ai--gptel-ours nil))
+      (cl-letf (((symbol-function 'gptel-make-ollama) (lambda (name &rest _) (list 'backend name))))
+        (drgnx-ai-test--with-gptel-vars ((gptel--openai 'the-default) (gptel-backend 'the-default) (gptel-model 'gpt-x)
+                                         (gptel-api-key "sk-x"))
+          (should-not (drgnx-ai-gptel-maybe-configure (lambda (id) (eq id 'ollama))))
+          (should (eq gptel-backend 'the-default))
+          (should (eq gptel-model 'gpt-x))
+          ;; gptel's own default key function is nobody's choice: the default backend is still replaced
+          (set 'gptel-api-key #'gptel-api-key-from-auth-source)
+          (should (drgnx-ai-gptel-maybe-configure (lambda (id) (eq id 'ollama))))
+          (should (equal gptel-backend '(backend "Ollama"))))))))
+
 ;;; ai-test.el ends here
+
+;;;; A project's route to a remote provider (M9-10)
+
+(defun drgnx-ai-test--remote-project (root)
+  "ROOT/proj routes complete to OpenRouter then Ollama, chat to OpenRouter only; returns the project dir."
+  (drgnx-ai-test--write (concat root "proj/.drgnx/ai.eld")
+                        '(:version 1 :roles ((complete (openrouter . "paid/m") (ollama . "local-m"))
+                                             (chat (openrouter . "paid/m")))))
+  (concat root "proj/"))
+
+(ert-deftest drgnx-ai/an-unconfirmed-remote-route-is-local-only-and-never-prompts ()
+  (drgnx-ai-test--with root
+    (let ((default-directory (drgnx-ai-test--remote-project root)) (asked nil))
+      (cl-letf (((symbol-function 'y-or-n-p) (lambda (&rest _) (setq asked t)))
+                ((symbol-function 'yes-or-no-p) (lambda (&rest _) (setq asked t))))
+        (should (equal (drgnx-ai-role 'complete) '((ollama . "local-m"))))      ; the remote step is left out
+        (should (equal (drgnx-ai-role 'chat) (alist-get 'chat drgnx-ai-default-roles)))   ; only remote: the user's chain
+        (should-not asked)))))
+
+(ert-deftest drgnx-ai/confirming-a-project-route-asks-once-and-remembers-per-root ()
+  (drgnx-ai-test--with root
+    (let ((default-directory (drgnx-ai-test--remote-project root)) (asks 0) (answer t) (noninteractive nil))
+      (cl-letf (((symbol-function 'y-or-n-p) (lambda (&rest _) (cl-incf asks) answer)))
+        (should (drgnx-ai-confirm-project-route))
+        (should (= asks 1))
+        (should (equal (drgnx-ai-role 'complete) '((openrouter . "paid/m") (ollama . "local-m"))))   ; the project's own
+        (should (drgnx-ai-confirm-project-route))
+        (should (= asks 1))                                                      ; not asked again…
+        (clrhash drgnx-ai--read-cache)
+        (should (drgnx-ai-confirm-project-route))                                ; …the answer is on disk, per root
+        (should (equal (drgnx-ai-role 'complete) '((openrouter . "paid/m") (ollama . "local-m"))))
+        (should (= asks 1))
+        (should (string-search (file-truename (concat root "proj/"))(with-temp-buffer (insert-file-contents (drgnx-ai-routes-file)) (buffer-string))))
+        ;; another project root is asked on its own
+        (make-directory (concat root "other/.drgnx") t)
+        (copy-file (concat root "proj/.drgnx/ai.eld") (concat root "other/.drgnx/ai.eld"))
+        (let ((default-directory (concat root "other/")))
+          (setq answer nil)
+          (should-not (drgnx-ai-confirm-project-route))
+          (should (= asks 2))
+          (should (equal (drgnx-ai-role 'complete) '((ollama . "local-m"))))      ; a no keeps it local…
+          (should-not (drgnx-ai-confirm-project-route))
+          (should (= asks 2)))))))                                                ; …and is not asked again
+
+(ert-deftest drgnx-ai/confirming-never-asks-in-batch-or-for-a-local-route ()
+  (drgnx-ai-test--with root
+    (let ((asks 0))
+      (cl-letf (((symbol-function 'y-or-n-p) (lambda (&rest _) (cl-incf asks) t)))
+        (let ((default-directory (drgnx-ai-test--remote-project root)) (noninteractive t))
+          (should-not (drgnx-ai-confirm-project-route))                           ; batch: no, silently
+          (should (= asks 0)))
+        (drgnx-ai-test--write (concat root "proj/.drgnx/ai.eld") '(:version 1 :roles ((complete (ollama . "m")))))
+        (let ((default-directory (concat root "proj/")) (noninteractive nil))
+          (should (drgnx-ai-confirm-project-route))                               ; nothing remote: nothing to ask
+          (should (= asks 0)))
+        (let ((default-directory root) (noninteractive nil))                      ; no project file at all
+          (should (drgnx-ai-confirm-project-route))
+          (should (= asks 0)))))))
+
+(ert-deftest drgnx-ai/a-route-to-a-new-remote-provider-is-asked-again ()
+  (drgnx-ai-test--with root
+    (let ((default-directory (drgnx-ai-test--remote-project root)) (asks 0) (noninteractive nil))
+      (cl-letf (((symbol-function 'y-or-n-p) (lambda (&rest _) (cl-incf asks) t)))
+        (drgnx-ai-confirm-project-route)
+        (drgnx-ai-test--write (concat root "proj/.drgnx/ai.eld")
+                              '(:version 1 :roles ((chat (openrouter . "paid/m") (anthropic . "x")))))
+        (set-file-times (concat root "proj/.drgnx/ai.eld") (time-add (current-time) 5))
+        (should (equal (drgnx-ai-role 'chat) '((openrouter . "paid/m"))))         ; the new one is held back
+        (drgnx-ai-confirm-project-route)
+        (should (= asks 2))))))
+
+;;;; Fix round 1
+
+(ert-deftest drgnx-ai/auth-sources-own-keychain-plists-are-secret-sources ()
+  (dolist (s '((:source (:macos-keychain-internet default)) (:source (:macos-keychain-generic "login"))
+               (:source (:macos-keychain-internet "login.keychain"))))
+    (should (drgnx-ai--secret-source-p s))
+    (should-not (drgnx-ai--quiet-sources (list s "~/.authinfo.gpg"))))
+  (should-not (drgnx-ai--secret-source-p '(:source (:other "x")))))
+
+(ert-deftest drgnx-ai/no-secret-source-when-the-bus-has-no-secret-service ()
+  ;; a session bus (SSH, WSL, a container) without a keyring daemon: `default' would log "invalid backend spec"
+  (drgnx-ai-test--with root
+    (let* ((plain (concat root "authinfo")) (system-type 'gnu/linux) (noninteractive nil)
+           (auth-sources (list plain)) (searched nil)
+           (process-environment (cons "DBUS_SESSION_BUS_ADDRESS=unix:path=/nonexistent/drgnx-test-bus" process-environment)))
+      (cl-letf (((symbol-function 'auth-source-search) (lambda (&rest _) (push auth-sources searched) nil))
+                ((symbol-function 'drgnx-ai--secrets-usable-p) (lambda () nil)))
+        (should-not (drgnx-ai-key 'openrouter t))
+        (should (equal searched (list (list plain))))))))
+
+(ert-deftest drgnx-ai/a-provider-with-no-host-counts-as-remote ()
+  (drgnx-ai-test--with root
+    (drgnx-ai-test--write (concat root "config/ai.eld")
+                          '(:version 1 :providers ((bare :name "b" :kind openai :url "openrouter.ai/api/v1" :caps (chat))
+                                                   (none :name "n" :kind openai :caps (chat))
+                                                   (spoof :name "s" :kind openai :url "http://localhost.evil.com/v1" :caps (chat))
+                                                   (at :name "a" :kind openai :url "http://127.0.0.1@evil.com/v1" :caps (chat))
+                                                   (v6 :name "v" :kind openai :url "http://[::1]:9/v1" :caps (chat)))))
+    (dolist (id '(bare none spoof at)) (should (drgnx-ai-remote-p id)))
+    (should-not (drgnx-ai-remote-p 'v6))
+    (should-not (drgnx-ai-remote-p 'ollama))
+    (should-not (drgnx-ai-remote-p 'not-a-provider))
+    (should (drgnx-ai-remote-p 'openrouter))))
+
+(ert-deftest drgnx-ai/one-repo-reached-by-two-paths-is-asked-once-and-a-repointed-link-asks-again ()
+  (drgnx-ai-test--with root
+    (let ((real (drgnx-ai-test--remote-project root)) (asks 0) (noninteractive nil)
+          (link (concat root "link")))
+      (make-directory (concat root "other/.drgnx") t)
+      (copy-file (concat real ".drgnx/ai.eld") (concat root "other/.drgnx/ai.eld"))
+      (make-symbolic-link (directory-file-name real) link)
+      (cl-letf (((symbol-function 'y-or-n-p) (lambda (&rest _) (cl-incf asks) t)))
+        (let ((default-directory (file-name-as-directory link))) (should (drgnx-ai-confirm-project-route)))
+        (should (= asks 1))
+        (let ((default-directory real))                                           ; the same repo by its real path
+          (should (drgnx-ai-confirm-project-route))
+          (should (= asks 1))
+          (should (assq (quote openrouter) (drgnx-ai-role (quote complete)))))
+        ;; the link now points at another repository: it does not inherit the answer
+        (delete-file link)
+        (make-symbolic-link (directory-file-name (concat root "other")) link)
+        (let ((default-directory (file-name-as-directory link)))
+          (should-not (assq 'openrouter (drgnx-ai-role 'complete)))
+          (should (drgnx-ai-confirm-project-route))
+          (should (= asks 2)))))))
+
+(ert-deftest drgnx-ai/an-empty-embed-sync-reports-no-provider ()
+  (require 'drgnx-ai-client)
+  (let ((drgnx-ai-embed-last-info '(:provider tei)) got)
+    (should (equal [] (drgnx-ai-embed-sync [] :on-answer (lambda (i) (setq got i)))))
+    (should (equal got '(:provider nil :model nil :fallbacks nil)))
+    (should (equal drgnx-ai-embed-last-info got))))

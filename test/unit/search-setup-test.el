@@ -156,6 +156,7 @@ answered at once with DIMS-wide vectors), and the index job start recorded in ST
     (let ((set nil) (calls 0))
       ;; the role has a provider that is down; TEI is up and is found by the probe
       (cl-letf (((symbol-function 'drgnx-ai-role) (lambda (_role) '((dead . "m"))))
+                ((symbol-function 'drgnx-ai-user-role) (lambda (_role) '((dead . "m"))))
                 ((symbol-function 'drgnx-ai-set-role) (lambda (role chain) (push (cons role chain) set))))
         ;; a failing embedding: the role stays
         (cl-letf (((symbol-function 'drgnx-ai-request)
@@ -172,9 +173,21 @@ answered at once with DIMS-wide vectors), and the index job start recorded in ST
         (drgnx-search-setup root)
         (should-not set)))))
 
+(ert-deftest drgnx-search-setup/a-projects-route-never-reaches-the-global-ai-eld ()
+  ;; A-1: the step that worked goes first in the user's own embed chain, not in the effective one (which holds the
+  ;; project's steps): one project's route must not become everybody's.
+  (drgnx-search-setup-test--with
+    (let ((set nil))
+      (cl-letf (((symbol-function 'drgnx-ai-role) (lambda (_role) '((proj . "p"))))             ; the project's chain
+                ((symbol-function 'drgnx-ai-user-role) (lambda (_role) '((dead . "m"))))        ; the user's own
+                ((symbol-function 'drgnx-ai-set-role) (lambda (role chain) (push (cons role chain) set))))
+        (should (eq (car (drgnx-search-setup root :interactive t)) 'ok))
+        (should (equal set '((embed (tei) (dead . "m")))))))))
+
 (ert-deftest drgnx-search-setup/a-role-that-cannot-be-written-is-said-not-half-done ()
   (drgnx-search-setup-test--with
     (cl-letf (((symbol-function 'drgnx-ai-role) (lambda (_role) '((dead . "m"))))
+              ((symbol-function 'drgnx-ai-user-role) (lambda (_role) '((dead . "m"))))
               ((symbol-function 'drgnx-ai-set-role) (lambda (&rest _) (user-error "ai.eld does not read"))))
       (let ((r (drgnx-search-setup root :interactive t)))
         (should (eq (car r) 'warn))

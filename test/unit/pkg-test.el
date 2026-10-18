@@ -268,6 +268,30 @@
     (drgnx-pkg-guard-mode -1))
   (should-not (advice-member-p #'drgnx-pkg--guard 'package-install)))
 
+(defvar drgnx-pkg-test--hook nil)
+(defvar drgnx-guard--automatic)
+
+(ert-deftest drgnx-pkg/the-guard-refuses-installs-from-hooks-in-user-commands ()
+  ;; M5-8: a hook running inside a user command (find-file, …) is not the user asking to install.
+  (let ((orig (lambda (&rest _) 'installed)) (after-init-time (current-time)) (this-command 'find-file))
+    (dolist (runner '(run-hooks run-hook-with-args run-hook-with-args-until-success run-hook-with-args-until-failure))
+      (let ((drgnx-pkg-test--hook (list (lambda (&rest _) (drgnx-pkg--guard orig 'foo)))))
+        (let ((err (should-error (funcall runner 'drgnx-pkg-test--hook) :type 'drgnx-pkg-error)))
+          (should (string-match-p "hook" (cadr err)))
+          (should-not (string-match-p "automatic code" (cadr err))))))
+    (let ((drgnx-pkg-test--hook (list (lambda () (drgnx-pkg--guard orig 'foo)))))   ; a mode hook
+      (should-error (run-mode-hooks 'drgnx-pkg-test--hook) :type 'drgnx-pkg-error))
+    (let ((drgnx-guard--automatic t))                              ; inside drgnx-automatic
+      (should-error (drgnx-pkg--guard orig 'foo) :type 'drgnx-pkg-error))))
+
+(ert-deftest drgnx-pkg/the-guard-allows-installs-the-user-started ()
+  ;; Review I1: M-x list-packages, describe-package's Install button (push-button), M-: and a third-party command
+  ;; are the user's own: only hooks, timers, startup and automatic code are refused.
+  (let ((orig (lambda (&rest _) 'installed)) (after-init-time (current-time)))
+    (dolist (c '(list-packages push-button eval-expression package-install package-menu-execute auto-package-update-now))
+      (let ((this-command c))
+        (should (eq (drgnx-pkg--guard orig 'foo) 'installed))))))
+
 (ert-deftest drgnx-pkg/use-package-ensure-only-records ()
   (drgnx-pkg-test--with root
     (should-not (drgnx-pkg-ensure 'drgnx-no-such-package-x '(t) nil))
@@ -316,6 +340,14 @@
       (should-not (file-exists-p (expand-file-name "~/.config/systemd/user/drgnx.service.drgnx-test"))))
     (drgnx-pkg-service-unit (concat root "units"))
     (should (file-exists-p (concat root "units/drgnx.service")))))
+
+(ert-deftest drgnx-pkg/the-service-unit-stops-restarting-when-another-drgnx-holds-the-name ()
+  ;; M12a-30: Restart=on-failure looped when another drgnx held the server name.
+  (drgnx-pkg-test--with root
+    (let ((unit (drgnx-pkg-service-unit)))
+      (should (string-match-p "^Restart=on-failure$" unit))
+      (should (string-match-p "^RestartSec=2$" unit))
+      (should (string-match-p "\\`\\[Unit\\]\n\\(.*\n\\)*StartLimitIntervalSec=60\n\\(.*\n\\)*StartLimitBurst=3\n\\(.*\n\\)*\\[Service\\]" unit)))))
 
 (ert-deftest drgnx-pkg/the-cli-parses-its-commands ()
   (let (calls)
@@ -456,14 +488,15 @@
     (drgnx-pkg-ensure 'plain-pkg-x '(t) nil)
     (should (equal (drgnx-pkg--read-file (drgnx-pkg-wanted-file)) '(other-pkg-x pinned-pkg-x plain-pkg-x)))))
 
-(ert-deftest drgnx-pkg/installed-wants-are-forgotten ()
+(ert-deftest drgnx-pkg/installed-wants-are-kept ()
+  ;; C1: the want outlives the sync that installed it (it is what keeps the package out of `sync --prune').
   (drgnx-pkg-test--with root
     (drgnx-pkg-ensure 'fa '(t) nil)
     (drgnx-pkg-test--want root)
     (should (plist-get (drgnx-pkg-test--sync root :archives `(("fx" . ,(drgnx-pkg-test--archive (concat root "arch") '((fa "1.0"))))))
                        :ok))
     (should (equal (drgnx-pkg-test--installed) '("fa-1.0")))
-    (should-not (drgnx-pkg--read-file (drgnx-pkg-wanted-file)))))
+    (should (equal (drgnx-pkg--read-file (drgnx-pkg-wanted-file)) '(fa)))))
 
 (ert-deftest drgnx-pkg/rollback-waits-for-no-sync ()
   ;; I7: rollback takes the sync lock too.
@@ -898,5 +931,134 @@ fy with a newer fa 2.0.  Returns (FX FY FA-1.0-ENTRY)."
         (should (string-match-p "\\bgp\\b" (cadr err)))
         (should-not (string-match-p "\\bfz\\b" (cadr err))))
       (should-not (file-exists-p (drgnx-pkg-shipped-lock-file))))))
+
+;;;; Deferred pass B: packages
+
+(ert-deftest drgnx-pkg/compat-version-files-are-not-native-compiled ()
+  ;; M10-13: compat-29.el etc. need their siblings at compile time and load only on an old Emacs: skipped
+  ;; like -pkg/-autoloads, so a sync does not warn about them.
+  (drgnx-pkg-test--with root
+    (let ((dir (concat root "compat-1.0/")) (compiled nil) (drgnx-pkg-native-compile t) (drgnx-pkg--warnings nil))
+      (make-directory dir t)
+      ;; compat-27/29 are never loaded here (compat loads compat-NN only on an Emacs older than NN); compat-99 could be
+      (dolist (f '("compat.el" "compat-27.el" "compat-29.el" "compat-99.el" "compat-macs.el"))
+        (write-region "" nil (concat dir f) nil 'silent))
+      (cl-letf (((symbol-function 'native-compile)
+                 (lambda (f &rest _)
+                   (push (file-name-nondirectory f) compiled)
+                   (when (string-match-p "compat-2" f) (error "needs its siblings")))))
+        (drgnx-pkg--native-compile (list dir)))
+      (should (equal (sort compiled #'string<) '("compat-99.el" "compat-macs.el" "compat.el")))
+      (should-not drgnx-pkg--warnings))))
+
+(ert-deftest drgnx-pkg/soft-pin-fallback-keeps-newer-versions ()
+  ;; M12a-55: the dropped pin's archive offers fa 1.0 only; fb needs fa 2.0, which another archive has.  The entry
+  ;; archive's desc goes first, it does not replace the others: fb installs, it is not MISSING.
+  (drgnx-pkg-test--with root
+    (let* ((fx (drgnx-pkg-test--archive (concat root "fx") '((fa "1.0") (fb "1.0" ((fa "2.0"))))))
+           (fy (drgnx-pkg-test--archive (concat root "fy") '((fa "2.0")))))
+      (drgnx-pkg-test--ship (list (drgnx-pkg-test--entry fx 'fa "1.0") (drgnx-pkg-test--entry fx 'fb "1.0" '((fa "2.0")))))
+      (drgnx-pkg-test--want root 'fb)
+      (let ((r (drgnx-pkg-test--sync root :archives `(("fx" . ,fx) ("fy" . ,fy)))))
+        (should (plist-get r :ok))
+        (should-not (plist-get r :missing)))
+      (should (equal (drgnx-pkg-test--installed) '("fa-2.0" "fb-1.0"))))))
+
+(ert-deftest drgnx-pkg/two-dropped-pins-re-plan-twice ()
+  ;; M12a-56: dropping fc's pin (gone; fc 1.1 needs fa 2.0) makes fa's pin 1.0 too old: a second round drops it too.
+  (drgnx-pkg-test--with root
+    (let* ((fx (drgnx-pkg-test--archive (concat root "fx") '((fa "1.0"))))
+           (old-fa (drgnx-pkg-test--entry fx 'fa "1.0"))
+           (fy (drgnx-pkg-test--archive (concat root "fy") '((fa "2.0")))))
+      (drgnx-pkg-test--archive fx '((fa "1.0") (fc "1.0" ((fa "1.0")))))
+      (let ((old-fc (drgnx-pkg-test--entry fx 'fc "1.0" '((fa "1.0")))))
+        (drgnx-pkg-test--archive fx '((fa "1.0") (fc "1.1" ((fa "2.0")))))
+        (drgnx-pkg-test--ship (list old-fa old-fc)))
+      (drgnx-pkg-test--want root 'fc)
+      (let ((r (drgnx-pkg-test--sync root :archives `(("fx" . ,fx) ("fy" . ,fy)))))
+        (should (plist-get r :ok))
+        (should-not (plist-get r :missing))
+        (should (member "fc: shipped 1.0 no longer served; installed 1.1" (plist-get r :warnings)))
+        (should (member "fa: shipped 1.0 is older than 2.0 needs; installed 2.0" (plist-get r :warnings))))
+      (should (equal (drgnx-pkg-test--installed) '("fa-2.0" "fc-1.1"))))))
+
+(ert-deftest drgnx-pkg/sync-prune-removes-what-left-the-manifest ()
+  ;; M5-5: a plain sync keeps a package that left the manifest; `sync --prune' removes it (and only it, not what
+  ;; the manifest still requires), says so, and the generation before keeps the rollback.
+  (drgnx-pkg-test--with root
+    (let ((arch (drgnx-pkg-test--archive (concat root "arch") '((fa "1.0") (fb "1.0" ((fa "1.0"))) (fc "1.0")))))
+      (drgnx-pkg-test--want root 'fb 'fc)
+      (drgnx-pkg-test--sync root :archives `(("fx" . ,arch)))
+      (should (equal (drgnx-pkg-test--installed) '("fa-1.0" "fb-1.0" "fc-1.0")))
+      (drgnx-pkg-test--want root 'fb)
+      (let ((r (drgnx-pkg-test--sync root :archives `(("fx" . ,arch)))))   ; plain: nothing removed
+        (should (plist-get r :ok))
+        (should-not (plist-get r :pruned)))
+      (should (equal (drgnx-pkg-test--installed) '("fa-1.0" "fb-1.0" "fc-1.0")))
+      ;; installed by hand after the last generation: only the "before prune" generation has it
+      (let ((hand (expand-file-name "fh-1.0/" (drgnx-elpa-dir))))
+        (make-directory hand t)
+        (write-region "(define-package \"fh\" \"1.0\" \"by hand\" nil)\n" nil (concat hand "fh-pkg.el") nil 'silent)
+        (write-region "(provide 'fh)\n" nil (concat hand "fh.el") nil 'silent))
+      (let ((r (drgnx-pkg-test--sync root :archives `(("fx" . ,arch)) :prune t)))
+        (should (plist-get r :ok))
+        (should (equal (plist-get r :pruned) '(fc fh)))
+        (should (equal (drgnx-pkg-test--installed) '("fa-1.0" "fb-1.0")))
+        (should-not (assq 'fc (drgnx-pkg-read-lock)))
+        (let ((out (with-output-to-string (drgnx-pkg--report r))))
+          (should (string-match-p "^pruned: fc fh$" out))
+          (should (string-match-p "restart drgnx" out))))                   ; a daemon still holds their autoloads
+      (should (equal (plist-get (cdr (nth 1 (drgnx-pkg-generations))) :note) "before prune"))
+      (drgnx-pkg-rollback)                                    ; no N: the generation before the current one
+      (should (equal (drgnx-pkg-test--installed) '("fa-1.0" "fb-1.0" "fc-1.0" "fh-1.0"))))))
+
+(ert-deftest drgnx-pkg/sync-prune-dry-run-lists-and-removes-nothing ()
+  ;; Review I3: `--prune --dry-run' says what would go.
+  (drgnx-pkg-test--with root
+    (let ((arch (drgnx-pkg-test--archive (concat root "arch") '((fa "1.0") (fb "1.0" ((fa "1.0"))) (fc "1.0")))))
+      (drgnx-pkg-test--want root 'fb 'fc)
+      (drgnx-pkg-test--sync root :archives `(("fx" . ,arch)))
+      (drgnx-pkg-test--want root 'fb)
+      (make-directory (concat root "mods") t)
+      (should (equal (drgnx-pkg-prune-candidates (concat root "mods")) '(fc)))
+      (let ((gens (drgnx-pkg-generations)) (drgnx-dir (concat root "fake-checkout/")))   ; the CLI reads its modules/
+        (make-directory (concat drgnx-dir "modules") t)
+        (should (equal (with-output-to-string (should (eql (drgnx-pkg-cli-run '("sync" "--prune" "--dry-run")) 0)))
+                       "would prune: fc\n"))
+        (should (equal (drgnx-pkg-test--installed) '("fa-1.0" "fb-1.0" "fc-1.0")))
+        (should (equal (drgnx-pkg-generations) gens))
+        (with-output-to-string (should (eql (drgnx-pkg-cli-run '("sync" "--dry-run")) 1)))))))   ; --dry-run needs --prune
+
+(ert-deftest drgnx-pkg/sync-prune-keeps-what-use-package-ensure-asked-for ()
+  ;; C1: a want recorded by :ensure (or an external module) stays in the manifest after the sync that installed it,
+  ;; so a later --prune does not remove it.
+  (drgnx-pkg-test--with root
+    (let ((arch (drgnx-pkg-test--archive (concat root "arch") '((fa "1.0") (fz "1.0")))))
+      (drgnx-pkg-test--want root 'fa)
+      (drgnx-pkg-ensure 'fz '(t))
+      (should (plist-get (drgnx-pkg-test--sync root :archives `(("fx" . ,arch))) :ok))
+      (should (equal (drgnx-pkg-test--installed) '("fa-1.0" "fz-1.0")))
+      (let ((r (drgnx-pkg-test--sync root :archives `(("fx" . ,arch)) :prune t)))
+        (should (plist-get r :ok))
+        (should-not (plist-get r :pruned)))
+      (should (equal (drgnx-pkg-test--installed) '("fa-1.0" "fz-1.0"))))))
+
+(ert-deftest drgnx-pkg/sync-prune-removes-nothing-while-something-is-missing ()
+  ;; A sync that could not install everything prunes nothing.
+  (drgnx-pkg-test--with root
+    (let ((arch (drgnx-pkg-test--archive (concat root "arch") '((fa "1.0") (fc "1.0")))))
+      (drgnx-pkg-test--want root 'fa 'fc)
+      (drgnx-pkg-test--sync root :archives `(("fx" . ,arch)))
+      (drgnx-pkg-test--want root 'fa 'fnone)
+      (let ((r (drgnx-pkg-test--sync root :archives `(("fx" . ,arch)) :prune t)))
+        (should-not (plist-get r :ok))
+        (should-not (plist-get r :pruned)))
+      (should (equal (drgnx-pkg-test--installed) '("fa-1.0" "fc-1.0"))))))
+
+(ert-deftest drgnx-pkg/the-cli-reads-sync-prune ()
+  (let (calls)
+    (cl-letf (((symbol-function 'drgnx-pkg-sync) (lambda (&rest a) (push a calls) '(:ok t))))
+      (with-output-to-string (should (eql (drgnx-pkg-cli-run '("sync" "--prune")) 0)))
+      (should (equal (car calls) '(:prune t))))))
 
 ;;; pkg-test.el ends here

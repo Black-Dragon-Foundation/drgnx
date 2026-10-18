@@ -131,4 +131,29 @@
           (should (equal (drgnx-pkg-test--installed) '("fa-1.0"))))
         (should (eq (plist-get (alist-get 'gp (drgnx-pkg-read-lock)) :kind) 'git))))))   ; the copy stays for the next sync
 
+(ert-deftest drgnx-pkg-git/a-git-requirement-is-inside-the-lock ()
+  ;; M12a-56: fb (locked) requires gp, a Git package: gp is not "beyond the lock" for package.el to resolve from the
+  ;; archives (it has no archive); drgnx installs it from its source.
+  (drgnx-pkg-test--with root
+    (let* ((arch (drgnx-pkg-test--archive (concat root "arch") '((fb "1.0" ((gp "0.3"))))))
+           (repo (concat root "src/gp/")))
+      (drgnx-pkg-git-test--commit repo "gp" "0.3")
+      (drgnx-pkg-git-test--want-git root `((gp :url ,repo :rev "main")) 'fb 'gp)
+      (should-not (drgnx-pkg--beyond-lock '(fb) (list (drgnx-pkg-test--entry arch 'fb "1.0" '((gp "0.3"))))))
+      (drgnx-pkg-write-lock (list (drgnx-pkg-test--entry arch 'fb "1.0" '((gp "0.3")))))
+      (let ((r (drgnx-pkg-test--sync root :archives `(("fx" . ,arch)))))
+        (should (plist-get r :ok))
+        (should-not (plist-get r :missing)))
+      (should (equal (drgnx-pkg-test--installed) '("fb-1.0" "gp-0.3"))))))
+
+(ert-deftest drgnx-pkg-git/lock-prints-the-commit ()
+  ;; M12a-56: `drgnx lock' showed "(seeded)" for a Git entry; it shows the commit.
+  (drgnx-pkg-test--with root
+    (let* ((repo (concat root "src/gp/")) (sha (drgnx-pkg-git-test--commit repo "gp" "0.3")))
+      (drgnx-pkg-git-test--want-git root `((gp :url ,repo :rev "main")))
+      (drgnx-pkg-test--sync root :archives nil)
+      (let ((out (with-output-to-string (should (eql (drgnx-pkg-cli-run '("lock")) 0)))))
+        (should (string-match-p (format "^gp +0\\.3 +git %s$" (regexp-quote (substring sha 0 12))) out))
+        (should-not (string-match-p "seeded" out))))))
+
 ;;; pkg-git-test.el ends here

@@ -37,12 +37,35 @@
       ;; registered with role `agent''s chain (OpenRouter) and the session's name
       (let ((reg (cdar (drgnx-gateway-registrations))))
         (should (equal (plist-get reg :chain) '((openrouter))))
-        (should (equal (plist-get reg :agent) "t"))))))
+        (should (equal (plist-get reg :agent) "t"))
+        ;; …and its owner: this Emacs (its agents are its children; a crashed one's tokens are pruned)
+        (should (eql (plist-get reg :owner) (emacs-pid)))))))
+
+(ert-deftest drgnx-agents/in-the-hub-keys-come-only-from-editors ()
+  ;; the hub is a daemon: an agent it starts never looks a key up where that may ask (a .gpg file's passphrase); it
+  ;; uses what editors handed over (`gateway/keys'), and without one it does not start, saying how one comes
+  (drgnx-agents-gw-test--with
+    (let ((process-environment (cons "OPENROUTER_API_KEY" process-environment))
+          (auth-sources (list (concat root "authinfo.gpg"))) (asked nil))
+      (cl-letf (((symbol-function 'auth-source-search) (lambda (&rest _) (push auth-sources asked) nil)))
+        (drgnx-hub-serve (drgnx-hub-socket))
+        (let ((err (should-error (drgnx-agents--env (drgnx-agents-gw-test--session "claude (OpenRouter)")))))
+          (should (string-match-p "editor" (error-message-string err))))
+        (should-not (seq-some (lambda (srcs) (seq-some (lambda (s) (and (stringp s) (string-suffix-p ".gpg" s))) srcs)) asked))
+        (should (= (plist-get (drgnx-hub-call-sync "status" nil) :registrations) 0))
+        ;; an editor connects: its key is the agents' too (the gateway's, and a direct start's)
+        (drgnx-hub-call-sync "gateway/keys" '(:keys (:openrouter "sk-fake-sent")))
+        (let ((env (drgnx-agents--env (drgnx-agents-gw-test--session "claude (OpenRouter)"))))
+          (should (seq-find (lambda (e) (string-prefix-p "ANTHROPIC_AUTH_TOKEN=" e)) env))
+          (should-not (seq-find (lambda (e) (string-search "sk-fake-sent" e)) env)))
+        (should (equal (drgnx-ai-key 'openrouter) "sk-fake-sent"))
+        (should-not (seq-some (lambda (srcs) (seq-some (lambda (s) (and (stringp s) (string-suffix-p ".gpg" s))) srcs)) asked))))))
 
 (ert-deftest drgnx-agents/an-ollama-or-anthropic-agent-has-its-own-chain ()
   (drgnx-agents-gw-test--with
     (drgnx-hub-serve (drgnx-hub-socket))
     (let ((drgnx-agents-profiles '(("mine" :command ("x") :ai claude-anthropic))))
+      (drgnx-hub-call-sync "gateway/keys" '(:keys (:anthropic "sk-fake-ant")))   ; (in the hub: from an editor)
       (drgnx-agents--env (drgnx-agents-gw-test--session "claude (Ollama)"))
       (drgnx-agents--env (drgnx-agents-gw-test--session "mine"))
       (should (equal (sort (mapcar (lambda (r) (plist-get (cdr r) :chain)) (drgnx-gateway-registrations))

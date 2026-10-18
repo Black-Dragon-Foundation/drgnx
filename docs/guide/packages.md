@@ -1,17 +1,21 @@
 # Packages
 
 drgnx installs packages in one place only: `drgnx sync`, a command you run. Emacs never installs anything on
-its own, and neither does the daemon at startup, a timer or a module. Installed packages are pinned in a lock,
+its own, and neither does the daemon at startup, a timer, a module or a hook that happens to run inside one of
+your commands (opening a file, say): `package-install`, `package-refresh-contents` and the like are refused from those (with an error saying
+so) and work when you run them yourself: `M-x package-install`, `M-x list-packages`, an Install button, `M-:`. Installed packages are pinned in a lock,
 every downloaded file is kept in a cache, and each sync leaves a **generation** you can go back to at once.
 
 ```
 drgnx sync                  install what drgnx needs (from the archives, the cache and the lock)
 drgnx sync --offline        only the lock and the cache — no network
 drgnx sync --seed DIR       first copy the packages of another Emacs (e.g. ~/.config/emacs/elpa), then sync
+drgnx sync --prune          also remove the packages the manifest no longer needs (listed; rollback restores them)
+drgnx sync --prune --dry-run  only list what --prune would remove
 drgnx upgrade               the newest versions; if they break, the previous generation comes back
 drgnx rollback [N]          the packages of generation N (default: the one before the current one)
 drgnx generations           the generations kept (five)
-drgnx lock                  what the lock pins
+drgnx lock                  what the lock pins (version, and the archive or, for Git, the commit)
 drgnx lock --ship           (maintainers) write the known-good lock drgnx ships from yours
 drgnx safe                  Emacs with drgnx's core only: no modules, no packages
 drgnx bisect [-- CMD…]      find the module that breaks something
@@ -40,8 +44,9 @@ The **manifest** is:
 - what `use-package … :ensure` asked for in a session, or an external module's files (gryphn) would have
   installed. In drgnx `:ensure` installs nothing: it records the package use-package would have installed
   (`:ensure t` the package itself, `:ensure other` that one, `:ensure nil` none) in
-  `~/.local/state/drgnx/packages-wanted.eld` and says so in `*Messages*`; the next `drgnx sync` installs it and
-  forgets the want.
+  `~/.local/state/drgnx/packages-wanted.eld` and says so in `*Messages*`; the next `drgnx sync` installs it. The want stays
+  in that file (so the package stays in the manifest, and `drgnx sync --prune` keeps it); delete the name from the file
+  when you no longer want it.
 
 `drgnx sync` resolves each package of the manifest with its dependencies (package.el — one that no archive has
 is reported and does not stop the others), downloads what is missing into `~/.cache/drgnx/packages/` (an HTTP
@@ -51,7 +56,16 @@ byte-compiles, compiles to native code ahead of time (when your Emacs has native
 at startup. A download or an install that fails stops the sync with nothing changed, and a file that did not
 install is removed from the cache. A download or a lock write that stops half way (an error, `C-g`) leaves no
 partial file; what a killed sync left (`*.part` in the cache, `.drgnx.lock.eld.tmp-*`) the next sync removes. A file that does not compile (byte or native) is not a failure: the package is
-installed, runs that file less compiled, and the sync prints a `WARNING` line naming the package and the file. Sync never removes a package: one installed by hand stays and is locked too.
+installed, runs that file less compiled, and the sync prints a `WARNING` line naming the package and the file (compat's per-version files for versions your Emacs already has, such as `compat-29.el` on Emacs 30, are never
+loaded and are not compiled to native code, so they never warn).
+
+A plain sync never removes a package: one that left the manifest (a module turned off) or was installed by hand
+stays and is locked too. `drgnx sync --prune` removes them: every installed package the manifest does not name and
+no package of the manifest requires — hand-installed ones included. Packages that `use-package … :ensure` or an
+external module asked for count as named. It is never automatic, it lists what it removed (`pruned: …`), it removes
+nothing while a package is missing, and it first keeps a generation of the state before, so `drgnx rollback`
+brings them back. `drgnx sync --prune --dry-run` only prints `would prune: …` (from the packages installed now and
+the current manifest) and changes nothing.
 
 ### Packages from Git
 
@@ -82,9 +96,11 @@ lock to the archives' versions. An unreadable lock is an error, never silently r
 
 The packages of the manifest that the lock has install at their locked versions, together with what their lock
 entries require — not with what the archives' newest versions would need — so a lock installs as the set it was
-made from even when an archive has moved on (MELPA builds every commit). A locked package that a built-in one
-already satisfies at the version required (e.g. `compat` on a newer Emacs) is not installed, as package.el would
-not; a requirement the lock does not have is resolved from the archives. Packages install after the packages they
+made from even when an archive has moved on (MELPA builds every commit). A locked package that is there
+only because another package requires it, and that a built-in one already satisfies at the version required (e.g.
+`compat` on a newer Emacs), is not installed, as package.el would not (a package the manifest itself names is
+installed as locked); a requirement the lock does not have is resolved from the archives, except one on a Git-sourced
+package, which installs from its source. Packages install after the packages they
 require. Each archive entry also records its download's size (`:size`), which onboarding uses to say how much it
 would download.
 
@@ -169,14 +185,16 @@ after a reboot does not hold it, and of two commands taking over the same stale 
   your files are untouched), starts drgnx and asks whether the problem showed, and halves again — about log2(N)
   rounds. `drgnx bisect -- CMD ARGS…` runs CMD instead of asking (a non-zero exit means "the problem showed";
   `DRGNX_CONFIG_DIR` points at the copy).
-- `drgnx doctor` reports packages the manifest needs that are not installed, a missing or unreadable lock, and the
-  generations kept.
+- `drgnx doctor` reports packages the manifest needs that are not installed (not those your Emacs ships, such as
+  `eglot`), a missing or unreadable lock, and the generations kept.
 
 ## Running drgnx as a daemon
 
 `drgnx service-unit` prints a systemd user unit (`Type=notify`, `emacs --fg-daemon=drgnx
 --init-directory=<checkout>/init`); `drgnx service-unit DIR` writes `DIR/drgnx.service`. drgnx never installs or
-enables it. The unit runs the Emacs that ran the command — `$DRGNX_EMACS`, default `emacs` — by its full path
+enables it. A daemon that fails is restarted after 2 seconds and
+started at most 3 times a minute (after that, `systemctl --user reset-failed drgnx`), so a second drgnx holding the
+server name does not loop. The unit runs the Emacs that ran the command — `$DRGNX_EMACS`, default `emacs` — by its full path
 (quoted for systemd, so paths with spaces work). Choose another one when you write the unit, e.g.
 `DRGNX_EMACS=emacs-pgtk drgnx service-unit DIR` on Fedora where `emacs` may be another build. To run it next to your current Emacs daemon:
 

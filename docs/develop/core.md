@@ -140,7 +140,8 @@ A check may be for one platform (`:platform 'linux` or `'macos`, as `drgnx-platf
 from the results. The dev checks for mutter, dbus-run-session and a pgtk Emacs are Linux-only. macOS adds three
 warnings with their facts: `macos-app` (`~/Applications/drgnx.app` exists; fix `drgnx macos-app`), `brew` (`brew` on
 PATH, `/opt/homebrew/bin/brew` or `/usr/local/bin/brew`; the doctor may run without Homebrew on PATH) and
-`drgnx-on-path` (fix: `~/.local/bin` in `~/.zprofile`).
+`drgnx-on-path` (fix: `~/.local/bin` in the shell's profile: `~/.zprofile` for zsh (or, with `SHELL` unset, when it exists), else `~/.profile`, as
+`drgnx-doctor--shell-profile` says; the same rule as `install.sh`).
 
 ## Tests
 

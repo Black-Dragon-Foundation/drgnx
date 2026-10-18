@@ -9,6 +9,9 @@
 (defun drgnx-install-test--os (name)
   (expand-file-name (concat "test/fixtures/os-release/" name) drgnx-install-test--root))
 
+(defvar drgnx-install-test--stdin nil
+  "A file that install.sh reads as its standard input (nil: /dev/null).  `curl … | bash' hands it a pipe.")
+
 (defun drgnx-install-test--run (env &rest args)
   "Run install.sh ARGS with ENV (\"K=V\" strings), without a terminal (DRGNX_INSTALL_TTY=none); return
 \(EXIT . OUTPUT).  HOME is a new empty directory, deleted afterwards (ENV may name another)."
@@ -16,13 +19,15 @@
          (process-environment (append env (list "DRGNX_INSTALL_EMACS=none" "DRGNX_INSTALL_TTY=none"
                                                 "DRGNX_INSTALL_MACOS_APP=none"   ; never this Mac's /Applications/Emacs.app
                                                 (concat "HOME=" home)
+                                                ;; never this machine's drgnx config (a DRGNX_CONFIG_DIR in the caller's environment)
+                                                (concat "DRGNX_CONFIG_DIR=" home "/.config/drgnx")
                                                 ;; never this machine's /run/ostree-booted
                                                 (concat "DRGNX_INSTALL_OSTREE_BOOTED=" home "/no-ostree"))
                                       process-environment))
          (default-directory drgnx-install-test--root))    ; not "~/…": HOME is changed above
     (unwind-protect
         (with-temp-buffer
-          (cons (apply #'call-process "bash" nil t nil
+          (cons (apply #'call-process "bash" drgnx-install-test--stdin t nil
                        (expand-file-name "install.sh" drgnx-install-test--root) args)
                 (buffer-string)))
       (delete-directory home t))))
@@ -107,6 +112,13 @@
     (should (= (car r) 3))
     (should (string-search "--yes" (cdr r)))))
 
+(ert-deftest drgnx-install/the-plan-names-the-shell-profile-for-homebrews-line ()
+  (pcase-dolist (`(,shell ,file) '(("/bin/zsh" ".zprofile") ("/bin/bash" ".profile")))
+    (let ((out (cdr (drgnx-install-test--run (append (list "DRGNX_INSTALL_BREW=none" (concat "SHELL=" shell))
+                                                     drgnx-install-test--macos)
+                                             "--dry-run"))))
+      (should (string-match-p (concat "then add its shellenv line to [^ ]*/" (regexp-quote file) " (asked)") out)))))
+
 (ert-deftest drgnx-install/macos-with-homebrew-does-not-offer-it ()
   (let ((out (cdr (drgnx-install-test--run (cons "DRGNX_INSTALL_BREW=/opt/homebrew/bin/brew" drgnx-install-test--macos)
                                            "--dry-run"))))
@@ -186,11 +198,16 @@
 (ert-deftest drgnx-install/homebrew-installer-runs-noninteractive-and-its-failure-stops-the-run ()
   ;; A fake curl hands out a Homebrew "installer" that reports its environment and fails; nothing after it
   ;; (tap, install) runs.  A download that fails is its own message.
-  (let* ((tmp (make-temp-file "drgnx-install" t)) (bin (expand-file-name "bin" tmp)))
+  ;; The installer also tries to read: run as `curl … | bash' its stdin is the script's pipe, so --yes must
+  ;; hand it /dev/null (M12a-2); the test gives install.sh a stdin that has input to take.
+  (let* ((tmp (make-temp-file "drgnx-install" t)) (bin (expand-file-name "bin" tmp))
+         (drgnx-install-test--stdin (expand-file-name "stdin" tmp)))
     (unwind-protect
         (progn
           (make-directory bin)
-          (dolist (curl '("echo 'echo HB-INSTALLER NONINTERACTIVE=$NONINTERACTIVE; exit 1'" "exit 22"))
+          (write-region "PIPED-SCRIPT-TEXT\n" nil drgnx-install-test--stdin)
+          (dolist (curl '("echo 'echo HB-INSTALLER NONINTERACTIVE=$NONINTERACTIVE; read x && echo GOT || echo STDIN-EOF; exit 1'"
+                          "exit 22"))
             (write-region (format "#!/bin/sh\n%s\n" curl) nil (expand-file-name "curl" bin))
             (set-file-modes (expand-file-name "curl" bin) #o755)
             (let ((r (drgnx-install-test--run
@@ -203,20 +220,111 @@
               (should-not (string-search "emacs-plus" (substring (cdr r) (string-search "Emacs comes from Homebrew" (cdr r)))))
               (if (string-search "exit 1" curl)
                   (progn (should (string-search "HB-INSTALLER NONINTERACTIVE=1" (cdr r)))
+                         (should (string-search "STDIN-EOF" (cdr r)))
+                         (should-not (string-search "GOT" (cdr r)))
                          (should (string-search "Homebrew's installer failed" (cdr r))))
                 (should (string-search "could not download Homebrew's installer" (cdr r)))))))
       (delete-directory tmp t))))
 
+(defun drgnx-install-test--fake-homebrew (tmp)
+  "In TMP: a fake `curl' whose Homebrew \"installer\" succeeds by creating a fake brew (answering `shellenv',
+`--prefix', anything else by printing FAKE-BREW and its arguments).  Return the environment that makes
+install.sh find that brew after the install (DRGNX_INSTALL_BREW_PATHS), starting from no Homebrew."
+  (let* ((bin (expand-file-name "bin" tmp))
+         (hb (expand-file-name "hb" tmp))
+         (installer (expand-file-name "installer.sh" tmp)))
+    (make-directory bin t)
+    (write-region (concat "mkdir -p \"$FAKE_HB_DIR\"\n"
+                          "cat > \"$FAKE_HB_DIR/brew\" <<'EOF'\n"
+                          "#!/bin/sh\n"
+                          "case \"$1\" in\n"
+                          "  shellenv) echo 'export FAKE_SHELLENV=1' ;;\n"
+                          "  --prefix) echo \"$FAKE_HB_DIR/opt\" ;;\n"
+                          "  *) echo \"FAKE-BREW $*\" ;;\n"
+                          "esac\n"
+                          "EOF\n"
+                          "chmod +x \"$FAKE_HB_DIR/brew\"\n"
+                          "echo FAKE-HB-INSTALLED\n")
+                  nil installer)
+    (write-region "#!/bin/sh\ncat \"$FAKE_HB_INSTALLER\"\n" nil (expand-file-name "curl" bin))
+    (set-file-modes (expand-file-name "curl" bin) #o755)
+    (list "DRGNX_INSTALL_BREW=none" (concat "DRGNX_INSTALL_BREW_PATHS=" hb "/brew")
+          (concat "FAKE_HB_DIR=" hb) (concat "FAKE_HB_INSTALLER=" installer)
+          (concat "PATH=" bin ":" (getenv "PATH")))))
+
+(ert-deftest drgnx-install/homebrew-installer-success-path ()
+  ;; The installer succeeds (a fake one that makes a fake brew): the brew it made is found, its shellenv
+  ;; is evaluated, the profile line is offered (--yes only prints it) and tap and install run through it.
+  (let ((tmp (make-temp-file "drgnx-install" t)))
+    (unwind-protect
+        (let ((r (drgnx-install-test--run
+                  (append (drgnx-install-test--fake-homebrew tmp) (list "SHELL=/bin/zsh") drgnx-install-test--macos)
+                  "--yes" "--source-dir" drgnx-install-test--root "--prefix" (expand-file-name "prefix" tmp))))
+          (should (= (car r) 0))
+          (should (string-search "FAKE-HB-INSTALLED" (cdr r)))
+          (should (string-search "Homebrew must be on your PATH in new terminals." (cdr r)))
+          (should (string-match-p (concat "add this to [^ ]*/\\.zprofile: eval \"\\$(" (regexp-quote tmp) "/hb/brew shellenv)\"")
+                                  (cdr r)))
+          (should (string-search "FAKE-BREW tap d12frosted/emacs-plus" (cdr r)))
+          (should (string-search "FAKE-BREW install --cask emacs-plus-app" (cdr r)))
+          (should-not (string-search "Homebrew was installed but brew was not found" (cdr r))))
+      (delete-directory tmp t))))
+
+(ert-deftest drgnx-install/brew-profile-hint-follows-the-shell ()
+  ;; The Homebrew line goes to the file the user's shell reads, as the PATH line and the doctor do: zsh
+  ;; ~/.zprofile; with SHELL unset ~/.zprofile if it exists, else ~/.profile; any other shell ~/.profile.
+  (let ((tmp (make-temp-file "drgnx-install" t)))
+    (unwind-protect
+        (let ((hint (lambda (shell &optional zprofile)
+                      (let* ((home (make-temp-file "drgnx-install-home" t))
+                             (r (unwind-protect
+                                    (progn
+                                      (when zprofile (write-region "" nil (expand-file-name ".zprofile" home)))
+                                      (drgnx-install-test--run
+                                       (append (drgnx-install-test--fake-homebrew tmp) (list (concat "HOME=" home))
+                                               (if shell (list (concat "SHELL=" shell)) (list "SHELL="))
+                                               drgnx-install-test--macos)
+                                       "--yes" "--source-dir" drgnx-install-test--root
+                                       "--prefix" (expand-file-name "prefix" tmp)))
+                                  (delete-directory home t))))
+                        (should (= (car r) 0))
+                        (and (string-match "add this to [^ ]*/\\(\\.z?profile\\): eval " (cdr r))
+                             (match-string 1 (cdr r)))))))
+          (should (equal (funcall hint "/bin/zsh") ".zprofile"))
+          (should (equal (funcall hint "/bin/bash") ".profile"))
+          (should (equal (funcall hint "/usr/bin/fish") ".profile"))
+          (should (equal (funcall hint nil) ".profile"))
+          (should (equal (funcall hint nil t) ".zprofile")))
+      (delete-directory tmp t))))
+
 (ert-deftest drgnx-install/no-bash-4-constructs ()
-  ;; macOS ships bash 3.2: it must run there.
+  ;; macOS ships bash 3.2: it must run there.  Each pattern comes with a line it must match, so a mistyped
+  ;; pattern cannot pass for ever (`;;&' is caught by `;&').
   (let ((code (with-temp-buffer
                 (insert-file-contents (expand-file-name "install.sh" drgnx-install-test--root))
                 (goto-char (point-min))
                 (while (re-search-forward "^[ \t]*#.*$\\|[ \t]#[ \t].*$" nil t) (replace-match ""))
                 (buffer-string))))
-    (dolist (re '("\\bmapfile\\b" "\\breadarray\\b" "declare -A" "local -n" "\\${[a-zA-Z_]*,,}" "\\${[a-zA-Z_]*\\^\\^}"
-                  ";&" "|&" "\\[-[0-9]+\\]"))
-      (should-not (string-match-p re code)))))
+    (dolist (case '(("\\bmapfile\\b" . "mapfile -t lines < file")
+                    ("\\breadarray\\b" . "readarray -t lines < file")
+                    ("declare -A" . "declare -A map")
+                    ("local -n" . "local -n ref=other")
+                    ("\\${[a-zA-Z_]*,,}" . "x=${name,,}")
+                    ("\\${[a-zA-Z_]*\\^\\^}" . "x=${name^^}")
+                    (";&" . "  a) cmd ;& b) other ;;")
+                    (";&" . "  a) cmd ;;& b) other ;;")
+                    ("|&" . "cmd |& tee log")
+                    ("\\[-[0-9]+\\]" . "last=${arr[-1]}")
+                    ("\\[\\[ -v" . "if [[ -v name ]]; then")
+                    ("&>>" . "cmd &>> log")
+                    ("\\${[A-Za-z_]+@[QEPAa]}" . "x=${name@Q}")
+                    ("\\${[A-Za-z_]+[,^]}" . "x=${name^}")
+                    ("\\bread\\b[^\n]* -[a-zA-Z]*t " . "read -t 0.1 line")
+                    ("\\bwait -n\\b" . "wait -n")
+                    ("declare -g" . "declare -g name=1")
+                    ("\\bcoproc\\b" . "coproc cat")))
+      (should (string-match-p (car case) (cdr case)))
+      (should-not (string-match-p (car case) code)))))
 
 (ert-deftest drgnx-install/never-touches-the-users-emacs-config ()
   ;; The plan names neither ~/.emacs.d nor ~/.config/emacs; a real run (a kept fake Emacs, --source-dir)
@@ -515,7 +623,7 @@
         (progn
           (write-region "#!/bin/sh\necho '31.1 t pgtk'\n" nil fake)
           (set-file-modes fake #o755)
-          (pcase-dolist (`(,shell ,file) '(("/bin/zsh" "/.zprofile") ("/bin/bash" "/.profile")))
+          (pcase-dolist (`(,shell ,file) '(("/bin/zsh" "/.zprofile") ("/bin/bash" "/.profile") ("" "/.profile")))
             (let ((r (drgnx-install-test--run
                       (list (concat "DRGNX_INSTALL_OS_RELEASE=" (drgnx-install-test--os "fedora-45"))
                             "DRGNX_INSTALL_UNAME=Linux" (concat "DRGNX_INSTALL_EMACS=" fake) (concat "SHELL=" shell))

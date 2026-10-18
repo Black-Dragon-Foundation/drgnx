@@ -48,15 +48,21 @@ code to DIR/exit (143 when stopped); with HEAD, the git HEAD it ended at to DIR/
             (if head "git rev-parse HEAD > \"$h\" 2>/dev/null" ":")
             (mapconcat #'shell-quote-argument command " "))))
 
+(defvar drgnx-jobs--boot-id-cache nil "This boot's id once found: it cannot change while this Emacs runs.")
+
 (defun drgnx-jobs--boot-id ()
   "This boot's id: Linux's boot_id; on macOS the boot session's UUID (`sysctl -n kern.bootsessionuuid' — not
-kern.boottime, which moves when the clock is set); nil when there is none."
-  (ignore-errors
-    (if (eq system-type 'darwin)
-        (with-temp-buffer
-          (and (eql 0 (call-process "sysctl" nil t nil "-n" "kern.bootsessionuuid"))
-               (let ((id (string-trim (buffer-string)))) (and (not (string-empty-p id)) id))))
-      (string-trim (with-temp-buffer (insert-file-contents "/proc/sys/kernel/random/boot_id") (buffer-string))))))
+kern.boottime, which moves when the clock is set); nil when there is none.  Asked once per Emacs: on macOS it
+is a process, and `drgnx-jobs-get' wants it for every live job."
+  (or drgnx-jobs--boot-id-cache
+      (setq drgnx-jobs--boot-id-cache
+            (ignore-errors
+              (if (eq system-type 'darwin)
+                  (with-temp-buffer
+                    (and (eql 0 (call-process "sysctl" nil t nil "-n" "kern.bootsessionuuid"))
+                         (let ((id (string-trim (buffer-string)))) (and (not (string-empty-p id)) id))))
+                (string-trim (with-temp-buffer (insert-file-contents "/proc/sys/kernel/random/boot_id")
+                                               (buffer-string))))))))
 
 (defvar drgnx-jobs--setsid (executable-find "setsid")
   "setsid(1) where the system has it (Linux; macOS has none).")
@@ -72,14 +78,16 @@ leads its own process group, and setsid(2) refuses a group leader."
 (defun drgnx-jobs--systemd-args (id cwd line env &optional task memory-max nice)
   "systemd-run's arguments for job ID running LINE in CWD.  ENV (\"NAME=value\"…) travels in systemd-run's own
 environment — `--setenv=NAME' copies it from there — so no value (a key) is ever in a command line.  MEMORY-MAX
-(\"1G\"): the unit may use no more memory, and no swap.  NICE (10): its scheduling niceness."
+(\"1G\"): the unit may use no more memory, and no swap.  NICE (10): its scheduling niceness.
+LINE goes through systemd's ExecStart, which reads `$$' as `$' and substitutes `${NAME}': every `$' is doubled
+so the shell gets LINE as written (its `echo $$ > pid' records the job's real pid, not a literal `$')."
   (append (list "--user" "--quiet" "--collect" (concat "--unit=drgnx-job-" id) (concat "--working-directory=" cwd)
                 (concat "--setenv=PATH=" (or (getenv "PATH") "")) (concat "--setenv=HOME=" (or (getenv "HOME") "")))
           (and task (list (concat "--setenv=DRGNX_TASK=" task)))
           (mapcar (lambda (e) (concat "--setenv=" (car (split-string e "=")))) env)
           (and memory-max (list "-p" (concat "MemoryMax=" memory-max) "-p" "MemorySwapMax=0"))
           (and nice (list "-p" (format "Nice=%d" nice)))
-          (list "sh" "-c" line)))
+          (list "sh" "-c" (string-replace "$" "$$" line))))
 
 (cl-defun drgnx-jobs-start (name command &key cwd task env memory-max nice no-wait)
   "Run COMMAND (a list) as the durable job NAME in CWD.  Returns the job's id.  TASK (a work-tracker
@@ -89,7 +97,8 @@ keys) is the job's too, and is kept nowhere: not in its state files, not in a co
 (\"1G\"): the systemd launcher caps the job's memory (MemoryMax, no swap); NICE (10) lowers its priority
 (Nice=); the detached launcher can do neither and ignores both.  NO-WAIT: return without waiting (up to
 two seconds) for the job's pid — its boot and start time are stamped from a short timer once the pid file
-appears — for callers that must not block (a timer started from a sentinel)."
+appears, or when Emacs exits first — for callers that must not block (a timer started from a sentinel).
+Signals a `user-error' (before anything is created) when the detached launcher has neither setsid nor perl."
   (let* ((id (drgnx-jobs--new-id)) (dir (drgnx-jobs--dir id))
          (cwd (expand-file-name (or cwd default-directory)))
          (launcher (drgnx-jobs-launcher))
@@ -101,6 +110,9 @@ appears — for callers that must not block (a timer started from a sentinel)."
          (git-dir (and task (funcall git "rev-parse" "--path-format=absolute" "--git-common-dir")))
          (process-environment (append env (and task (list (concat "DRGNX_TASK=" task))) process-environment))
          (line (drgnx-jobs--wrapper dir command task)))
+    ;; before anything is created: a missing program would surface as `call-process''s "file is missing"
+    (unless (or (eq launcher 'systemd) drgnx-jobs--setsid (executable-find "perl"))
+      (user-error "Detached jobs need setsid or perl"))
     (make-directory dir t)
     (with-temp-file (expand-file-name "job.eld" dir)
       (prin1 (list :id id :name name :command command :cwd cwd :launcher launcher :task task :head head :git-dir git-dir :start-time (float-time)
@@ -118,12 +130,22 @@ appears — for callers that must not block (a timer started from a sentinel)."
     ;; the pid trustworthy later (a pid from before a reboot may be another process)
     (let ((deadline (+ (float-time) 2)) (pidf (expand-file-name "pid" dir)))
       (if no-wait
-          (let ((timer nil))
+          (let (timer finish on-exit)
+            ;; once, from the timer or, when Emacs exits first, from `kill-emacs-hook' (waiting out the
+            ;; deadline for the pid at most): either way the other is gone afterwards
+            (setq finish (lambda ()
+                           (remove-hook 'kill-emacs-hook on-exit)
+                           (when timer (cancel-timer timer))
+                           ;; the job's directory may be gone by now (a removed job)
+                           (ignore-errors (drgnx-jobs--stamp dir)))
+                  on-exit (lambda ()
+                            (while (and (not (file-exists-p pidf)) (< (float-time) deadline))
+                              (sleep-for 0.02))
+                            (funcall finish)))
+            (add-hook 'kill-emacs-hook on-exit)
             (setq timer (run-at-time 0.05 0.05 (lambda ()
                                                  (when (or (file-exists-p pidf) (>= (float-time) deadline))
-                                                   (cancel-timer timer)
-                                                   ;; the job's directory may be gone by now (a removed job)
-                                                   (ignore-errors (drgnx-jobs--stamp dir)))))))
+                                                   (funcall finish))))))
         (while (and (not (file-exists-p pidf)) (< (float-time) deadline)) (sleep-for 0.02))
         (drgnx-jobs--stamp dir)))
     id))
@@ -173,12 +195,31 @@ appears — for callers that must not block (a timer started from a sentinel)."
         (insert-file-contents f)
         (buffer-substring (max (point-min) (- (point-max) (or max 20000))) (point-max))))))
 
+(defcustom drgnx-jobs-stop-wait 3
+  "Seconds `drgnx-jobs-stop' waits for a systemd job's unit to go down before it returns.
+A job that ignores TERM keeps its unit \"deactivating\" until systemd kills it (90 s): Stop returns after this
+long and leaves that to systemd."
+  :type 'number :group 'drgnx)
+
+(defun drgnx-jobs--unit-down-p (unit)
+  "Non-nil when systemd UNIT is neither active nor on its way down (inactive, failed, or gone)."
+  (not (member (with-temp-buffer
+                 (call-process "systemctl" nil t nil "--user" "is-active" unit)
+                 (string-trim (buffer-string)))
+               '("active" "activating" "deactivating" "reloading"))))
+
 (defun drgnx-jobs-stop (id)
-  "Stop job ID (its whole process group, or its unit)."
+  "Stop job ID (its whole process group, or its unit).  A systemd unit is asked to stop without waiting for it
+\(`systemctl stop' would hold this for the unit's TimeoutStopSec, 90 s, while a process of the job ignores TERM):
+this returns once the whole unit is down, so the job's children are gone too, or after `drgnx-jobs-stop-wait'
+seconds."
   (let ((job (drgnx-jobs-get id)))
     (when (eq (plist-get job :status) 'running)
       (if (eq (plist-get job :launcher) 'systemd)
-          (call-process "systemctl" nil nil nil "--user" "stop" (plist-get job :unit))
+          (let ((unit (plist-get job :unit)) (deadline (+ (float-time) drgnx-jobs-stop-wait)))
+            (call-process "systemctl" nil nil nil "--user" "--no-block" "stop" unit)
+            (while (and (< (float-time) deadline) (not (drgnx-jobs--unit-down-p unit)))
+              (sleep-for 0.05)))
         ;; only a pid verified as the job's (status `running' checked the boot and the start time)
         (when-let* ((pid (plist-get job :pid))) (signal-process (- pid) 'SIGTERM))))))
 
