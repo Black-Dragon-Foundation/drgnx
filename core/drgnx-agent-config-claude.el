@@ -37,6 +37,14 @@
   "The directory of Claude Code's managed settings and MCP servers; nil: the platform's own
 \(/etc/claude-code, or /Library/Application Support/ClaudeCode on macOS).")
 
+(defconst drgnx-agent-config-claude-hook-events
+  '("PreToolUse" "PostToolUse" "PostToolUseFailure" "PostToolBatch" "PermissionRequest" "PermissionDenied"
+    "UserPromptSubmit" "UserPromptExpansion" "Notification" "MessageDisplay" "Stop" "StopFailure" "SubagentStart"
+    "SubagentStop" "PreCompact" "PostCompact" "SessionStart" "SessionEnd" "Setup" "PreModelSwitch" "PostModelSwitch"
+    "TeammateIdle" "TaskCreated" "TaskCompleted" "Elicitation" "ElicitationResult" "ConfigChange" "InstructionsLoaded"
+    "CwdChanged" "FileChanged" "WorktreeCreate" "WorktreeRemove" "DirectoryAdded")
+  "Claude Code's hook events (offered on the settings page; another name may be typed).")
+
 (defvar drgnx-agent-config-claude-cli-timeout 20
   "Seconds a `claude mcp' command may run before it is stopped.")
 

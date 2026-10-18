@@ -37,6 +37,11 @@
 (require 'drgnx-agent-config)
 (require 'drgnx-toml)
 
+(defconst drgnx-agent-config-codex-hook-events
+  '("SessionStart" "UserPromptSubmit" "PreToolUse" "PermissionRequest" "PostToolUse" "Stop" "PreCompact" "PostCompact"
+    "SessionEnd" "SubagentStart" "SubagentStop")
+  "Codex's hook events (offered on the settings page; another name may be typed).")
+
 (defconst drgnx-agent-config-codex--ignored "Codex ignores it until the project is trusted"
   "Why the items of an untrusted project do nothing.")
 
@@ -114,7 +119,8 @@
   (when (and file (file-regular-p file))
     (condition-case err
         (drgnx-toml-parse (drgnx-agent-config-read-text file))
-      (drgnx-toml-error (drgnx-agent-config-codex--problem file (nth 1 err) (nth 2 err)) nil)
+      ;; the parser's message quotes the file (a key, a value's characters): only the line is kept
+      (drgnx-toml-error (drgnx-agent-config-codex--problem file (nth 1 err) "not valid TOML") nil)
       (error (drgnx-agent-config-codex--problem file nil "cannot be read") nil))))
 
 (defun drgnx-agent-config-codex--load-json (file)

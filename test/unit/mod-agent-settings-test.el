@@ -57,24 +57,32 @@ user hook, a user skill and a CLAUDE.md."
            (when (string-prefix-p "*agent settings: " (buffer-name b)) (kill-buffer b)))
          (clrhash drgnx-agent-settings--running)))))
 
+(defun drgnx-agent-settings-test--name-here ()
+  "The name of the item on this line (its key, (KIND SECTION NAME FILE), is the text property)."
+  (nth 2 (get-text-property (point) 'drgnx-agent-settings-item)))
+
 (defun drgnx-agent-settings-test--item-line (name)
   "The text of the first line of the item called NAME on the page in the current buffer."
   (save-excursion
     (goto-char (point-min))
     (let ((found nil))
       (while (and (not found) (not (eobp)))
-        (let ((item (get-text-property (point) 'drgnx-agent-settings-item)))
-          (if (and item (equal (plist-get item :name) name))
-              (setq found (buffer-substring-no-properties (line-beginning-position) (line-end-position)))
-            (forward-line 1))))
+        (if (equal (drgnx-agent-settings-test--name-here) name)
+            (setq found (buffer-substring-no-properties (line-beginning-position) (line-end-position)))
+          (forward-line 1)))
       found)))
 
 (defun drgnx-agent-settings-test--goto-item (name)
   (goto-char (point-min))
-  (while (not (let ((item (get-text-property (point) 'drgnx-agent-settings-item)))
-                (and item (equal (plist-get item :name) name))))
+  (while (not (equal (drgnx-agent-settings-test--name-here) name))
     (when (eobp) (error "No item %s on the page" name))
     (forward-line 1)))
+
+(defun drgnx-agent-settings-test--clear-messages ()
+  (with-current-buffer (messages-buffer) (let ((inhibit-read-only t)) (erase-buffer))))
+
+(defun drgnx-agent-settings-test--messages ()
+  (with-current-buffer (messages-buffer) (buffer-string)))
 
 (defvar drgnx-agent-settings-test--prompts nil "The prompts asked, newest first.")
 
@@ -171,6 +179,7 @@ A `completing-read' answer is the first candidate that starts with it.  The prom
     (with-current-buffer (drgnx-agent-settings-open 'claude root)
       (goto-char (point-min))
       (search-forward "MCP Servers")
+      (drgnx-agent-settings-test--clear-messages)
       (drgnx-agent-settings-test--answering
           (list "Project" "fs" "stdio" "npx -y server-fs /tmp" "API_KEY" "k-1234567")
         (call-interactively #'drgnx-agent-settings-add))
@@ -185,7 +194,9 @@ A `completing-read' answer is the first candidate that starts with it.  The prom
         (should (equal (alist-get 'API_KEY (alist-get 'env (alist-get 'fs servers))) "k-1234567")))
       ;; the page was read again: the new server is on it, its value is not
       (should (drgnx-agent-settings-test--item-line "fs"))
-      (should-not (string-search "k-1234567" (buffer-string))))))
+      (should-not (string-search "k-1234567" (buffer-string)))
+      (should (string-search "Wrote" (drgnx-agent-settings-test--messages)))
+      (should-not (string-search "k-1234567" (drgnx-agent-settings-test--messages))))))
 
 (ert-deftest drgnx-agent-settings/blank-env-keeps-the-value ()
   (drgnx-agent-settings-test--env
@@ -219,8 +230,12 @@ A `completing-read' answer is the first candidate that starts with it.  The prom
                  (lambda (item _root callback) (push (cons item callback) callbacks) nil)))
         (with-current-buffer (drgnx-agent-settings-open 'claude root)
           (drgnx-agent-settings-test--goto-item "docs")
+          (drgnx-agent-settings-test--clear-messages)
           (call-interactively #'drgnx-agent-settings-test)
           (should (equal (plist-get (car (car callbacks)) :name) "docs"))
+          ;; the check gets the item as it is in the file (the page itself holds no values)
+          (should (equal (cdr (assoc "X-Api" (plist-get (plist-get (car (car callbacks)) :spec) :headers)))
+                         drgnx-agent-settings-test--header-secret))
           (should (string-search "testing" (drgnx-agent-settings-test--item-line "docs")))
           ;; the result arrives later (from a process): the row shows it, and it is kept masked
           (funcall (cdr (car callbacks)) (list :status 'ok :tools '("search" "fetch") :time 0.4))
@@ -238,7 +253,92 @@ A `completing-read' answer is the first candidate that starts with it.  The prom
             (call-interactively #'drgnx-agent-settings-test))
           (should (= (length callbacks) 2))
           (funcall (cdr (car callbacks)) (list :exit 0 :stdout "" :stderr "" :time 0.1))
-          (should (string-search "exit 0" (drgnx-agent-settings-test--item-line "PreToolUse Bash"))))))))
+          (should (string-search "exit 0" (drgnx-agent-settings-test--item-line "PreToolUse Bash")))
+          (let ((messages (drgnx-agent-settings-test--messages)))
+            (should-not (string-search drgnx-agent-settings-test--secret messages))
+            (should-not (string-search drgnx-agent-settings-test--header-secret messages))))))))
+
+(defun drgnx-agent-settings-test--codex-files (root)
+  "Codex's fixture: a server that is on, one that is off, and one in an untrusted project (inactive)."
+  (drgnx-agent-settings-test--write
+   (expand-file-name "config.toml" (getenv "CODEX_HOME"))
+   "[mcp_servers.on]\ncommand = \"drgnx-on\"\n\n[mcp_servers.off]\ncommand = \"drgnx-off\"\nenabled = false\n")
+  (drgnx-agent-settings-test--write (expand-file-name ".codex/config.toml" root)
+                                    "[mcp_servers.proj]\ncommand = \"drgnx-proj\"\n"))
+
+(defmacro drgnx-agent-settings-test--counting-checks (&rest body)
+  "BODY with the checks stubbed: `started' collects the names of the MCP servers, `hooks' counts hook runs."
+  (declare (indent 0))
+  `(let ((started nil) (hooks 0))
+     (cl-letf (((symbol-function 'drgnx-agent-check-mcp)
+                (lambda (item _root _callback) (push (plist-get item :name) started) nil))
+               ((symbol-function 'drgnx-agent-check-hook) (lambda (&rest _) (cl-incf hooks) nil)))
+       ,@body)))
+
+(ert-deftest drgnx-agent-settings/test-all-skips-inactive-and-off ()
+  (drgnx-agent-settings-test--env
+    (drgnx-agent-settings-test--codex-files root)
+    (drgnx-agent-settings-test--counting-checks
+      (with-current-buffer (drgnx-agent-settings-open 'codex root)
+        (drgnx-agent-settings-test--clear-messages)
+        ;; nothing is asked: the only project server is inactive (the project is not trusted)
+        (drgnx-agent-settings-test--answering nil
+          (call-interactively #'drgnx-agent-settings-test-all))
+        (should (equal started '("on")))
+        (should (string-search "2 skipped" (drgnx-agent-settings-test--messages)))
+        ;; one Test of the inactive server asks first, with its command
+        (drgnx-agent-settings-test--goto-item "proj")
+        (drgnx-agent-settings-test--answering (list nil)
+          (call-interactively #'drgnx-agent-settings-test))
+        (should (string-search "drgnx-proj" (car drgnx-agent-settings-test--prompts)))
+        (should (equal started '("on")))))))
+
+(ert-deftest drgnx-agent-settings/test-all-never-runs-a-hook-and-asks-before-project-servers ()
+  (drgnx-agent-settings-test--env
+    (drgnx-agent-settings-test--counting-checks
+      (with-current-buffer (drgnx-agent-settings-open 'claude root)
+        ;; declined: only the user's server starts
+        (drgnx-agent-settings-test--answering (list nil)
+          (call-interactively #'drgnx-agent-settings-test-all))
+        (should (string-search "https://example.invalid/mcp" (car drgnx-agent-settings-test--prompts)))
+        (should-not (string-search drgnx-agent-settings-test--header-secret (car drgnx-agent-settings-test--prompts)))
+        (should (equal started '("github")))
+        (clrhash drgnx-agent-settings--running)
+        ;; accepted: both
+        (setq started nil)
+        (drgnx-agent-settings-test--answering (list t)
+          (call-interactively #'drgnx-agent-settings-test-all))
+        (should (equal (sort started #'string<) '("docs" "github")))
+        (should (= hooks 0))))))
+
+(ert-deftest drgnx-agent-settings/kill-ring-and-text-properties-hold-no-secret ()
+  (drgnx-agent-settings-test--env
+    (with-current-buffer (drgnx-agent-settings-open 'claude root)
+      (let ((kill-ring nil) (helps nil))
+        (kill-ring-save (point-min) (point-max))
+        (dolist (text (list (prin1-to-string (car kill-ring)) (prin1-to-string (buffer-string))))
+          (should-not (string-search drgnx-agent-settings-test--secret text))
+          (should-not (string-search drgnx-agent-settings-test--header-secret text)))
+        (should-not (text-property-not-all 0 (length (car kill-ring)) 'drgnx-agent-settings-item nil (car kill-ring)))
+        (let ((pos (point-min)))
+          (while (< pos (point-max))
+            (when-let* ((help (get-text-property pos 'help-echo))) (push (format "%s" help) helps))
+            (setq pos (next-single-property-change pos 'help-echo nil (point-max)))))
+        (should helps)
+        (dolist (help helps)
+          (should-not (string-search drgnx-agent-settings-test--secret help))
+          (should-not (string-search drgnx-agent-settings-test--header-secret help)))))))
+
+(ert-deftest drgnx-agent-settings/toml-message-never-quotes-the-file ()
+  (drgnx-agent-settings-test--env
+    (drgnx-agent-settings-test--write
+     (expand-file-name "config.toml" (getenv "CODEX_HOME"))
+     "[mcp_servers.x]\ncommand = \"a\"\nenv = { TOKEN = \"abc\\qTOMLSECRET123\" }\n")
+    (with-current-buffer (drgnx-agent-settings-open 'codex root)
+      (let ((text (buffer-string)))
+        (should (string-search "config.toml, line 3: not valid TOML" text))
+        (should-not (string-search "TOMLSECRET123" text))
+        (should-not (string-search "escape" text))))))
 
 (ert-deftest drgnx-agent-settings/unreadable-file-shown-with-its-line ()
   (drgnx-agent-settings-test--env

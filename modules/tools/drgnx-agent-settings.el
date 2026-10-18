@@ -57,22 +57,16 @@
 (defconst drgnx-agent-settings--sections '((mcp . "MCP Servers") (hook . "Hooks") (skill . "Skills"))
   "The sections of a page, top to bottom.")
 
-(defconst drgnx-agent-settings--claude-events
-  '("PreToolUse" "PostToolUse" "PostToolUseFailure" "PermissionRequest" "UserPromptSubmit" "Notification" "Stop"
-    "SubagentStart" "SubagentStop" "PreCompact" "PostCompact" "SessionStart" "SessionEnd")
-  "Claude Code's hook events (offered; another name may be typed).")
-
-(defconst drgnx-agent-settings--codex-events
-  '("SessionStart" "UserPromptSubmit" "PreToolUse" "PermissionRequest" "PostToolUse" "Stop")
-  "Codex's hook events (offered; another name may be typed).")
+(defvar drgnx-agent-settings--results nil
+  "While the page is drawn: the last Test results, read once: ((KIND SECTION NAME FILE) . RESULT)….")
 
 ;;;; Small parts
 
 (defun drgnx-agent-settings--events (kind)
   "The hook events of agent KIND, and whether only they may be given: (EVENTS . STRICT)."
   (pcase kind
-    ('claude (cons drgnx-agent-settings--claude-events nil))
-    ('codex (cons drgnx-agent-settings--codex-events nil))
+    ('claude (cons drgnx-agent-config-claude-hook-events nil))
+    ('codex (cons drgnx-agent-config-codex-hook-events nil))
     ('gemini (cons drgnx-agent-config-gemini--events t))
     ('kimi (cons drgnx-agent-config-kimi--hook-events t))))
 
@@ -127,8 +121,8 @@
 ;;;; Status and detail of a row
 
 (defun drgnx-agent-settings--cheap-status (item)
-  "ITEM's status from its files (nothing is run), as text with a face."
-  (pcase-let ((`(,status . ,detail) (drgnx-agent-config-cheap-status item)))
+  "ITEM's status from its files (nothing is run; worked out when it was read), as text with a face."
+  (pcase-let ((`(,status . ,detail) (plist-get item :cheap)))
     (pcase status
       ('ok (if (eq (plist-get item :section) 'mcp) (propertize "ok" 'face 'drgnx-agent-settings-ok) ""))
       ('missing-command (propertize "command not found" 'face 'drgnx-agent-settings-problem))
@@ -140,7 +134,7 @@
   "The last Test of ITEM with its age, or that it runs now; \"\" when it never ran."
   (if (gethash (drgnx-agent-settings--key item) drgnx-agent-settings--running)
       (propertize "testing…" 'face 'drgnx-agent-settings-dim)
-    (let* ((r (ignore-errors (drgnx-agent-check-last item)))
+    (let* ((r (cdr (assoc (drgnx-agent-settings--key item) drgnx-agent-settings--results)))
            (age (and r (plist-get r :at) (concat "Test " (drgnx-agent-settings--ago (- (float-time) (plist-get r :at))) ": "))))
       (cond
        ((null r) "")
@@ -351,7 +345,8 @@
     (insert "\n")
     (dolist (line (drgnx-agent-settings--detail item))
       (insert (make-string (+ 4 width) ?\s) (propertize line 'face 'drgnx-agent-settings-dim) "\n"))
-    (put-text-property start (point) 'drgnx-agent-settings-item item)))
+    ;; only the key: a copy of the text (kill-ring-save, yank) must never carry the item
+    (put-text-property start (point) 'drgnx-agent-settings-item (drgnx-agent-settings--key item))))
 
 (defun drgnx-agent-settings--insert-section (section title)
   "The SECTION of the page under TITLE, with its buttons and rows."
@@ -365,7 +360,7 @@
       (drgnx-agent-settings--button "[Add…]" #'drgnx-agent-settings-add))
     (when (eq section 'mcp)
       (insert " ")
-      (drgnx-agent-settings--button "[Test All]" #'drgnx-agent-settings-test-all "Test every MCP server on this page"))
+      (drgnx-agent-settings--button "[Test All]" #'drgnx-agent-settings-test-all "Test the MCP servers the agent would start (the project's asked first)"))
     (insert "\n")
     (if (null items)
         (insert (propertize "  none\n" 'face 'drgnx-agent-settings-dim))
@@ -374,8 +369,9 @@
     (put-text-property start (point) 'drgnx-agent-settings-section section)))
 
 (defun drgnx-agent-settings--render ()
-  "Draw the page from what was read last; only the last Test results are read here."
-  (let ((inhibit-read-only t))
+  "Draw the page from what was read last; only the last Test results are read here (once)."
+  (let ((inhibit-read-only t)
+        (drgnx-agent-settings--results (drgnx-agent-settings--saved-results)))
     (erase-buffer)
     (drgnx-agent-settings--insert-agents)
     (drgnx-agent-settings--insert-problems)
@@ -398,13 +394,61 @@
         (set-window-start w (at start) t)
         (set-window-point w (at pt))))))
 
+(defun drgnx-agent-settings--saved-results ()
+  "The last Test results of every item, read once: ((KIND SECTION NAME FILE) . RESULT)…."
+  (ignore-errors
+    (if (fboundp 'drgnx-agent-check--read-all)
+        (drgnx-agent-check--read-all)
+      ;; Task 7's file without its reader: one read per item on the page
+      (mapcar (lambda (i) (cons (drgnx-agent-settings--key i) (drgnx-agent-check-last i)))
+              (plist-get drgnx-agent-settings--data :items)))))
+
+(defun drgnx-agent-settings--sanitize (item)
+  "ITEM as the page keeps it: environment and header values gone, the command, arguments, URL and problem masked,
+and its status from the files (`:cheap', worked out from the whole ITEM).  Test and the edits read the item again."
+  (let* ((spec (plist-get item :spec))
+         (secrets (drgnx-agent-settings--secrets item))
+         (mask (lambda (s) (if (stringp s) (drgnx-agent-config-mask-text s secrets) s)))
+         (names (lambda (pairs) (mapcar (lambda (p) (list (drgnx-agent-config-json-keystr (car p)))) pairs)))
+         (safe (copy-sequence spec))
+         (out (copy-sequence item))
+         (cheap (drgnx-agent-config-cheap-status item)))
+    (dolist (key '(:env :headers))
+      (when (plist-get safe key) (setq safe (plist-put safe key (funcall names (plist-get safe key))))))
+    (dolist (key '(:command :url :description))
+      (when (plist-get safe key) (setq safe (plist-put safe key (funcall mask (plist-get safe key))))))
+    (when (plist-get safe :args)
+      (setq safe (plist-put safe :args (mapcar mask (append (plist-get safe :args) nil)))))
+    (when spec (setq out (plist-put out :spec safe)))
+    (when (plist-get out :problem) (setq out (plist-put out :problem (funcall mask (plist-get out :problem)))))
+    (plist-put out :cheap (cons (car cheap) (funcall mask (cdr cheap))))))
+
 (defun drgnx-agent-settings--read ()
-  "Read the agent's settings for the page (files only)."
-  (setq drgnx-agent-settings--data
-        (condition-case err
-            (drgnx-agent-config-read drgnx-agent-settings--kind drgnx-agent-settings--root)
-          (error (list :problems (list (list (drgnx-agent-config-home drgnx-agent-settings--kind) nil
-                                             (error-message-string err))))))))
+  "Read the agent's settings for the page (files only); the page keeps them without secret values."
+  (let ((data (condition-case nil
+                  (drgnx-agent-config-read drgnx-agent-settings--kind drgnx-agent-settings--root)
+                ;; an unexpected error's text may quote a file: a fixed message
+                (error (list :problems (list (list (drgnx-agent-config-home drgnx-agent-settings--kind) nil
+                                                   "could not be read")))))))
+    (setq drgnx-agent-settings--data
+          (plist-put (copy-sequence data) :items (mapcar #'drgnx-agent-settings--sanitize (plist-get data :items))))))
+
+(defun drgnx-agent-settings--fresh (item)
+  "ITEM as its file holds it now (with its values), for a Test or a write; a `user-error' when it is gone."
+  (let ((key (drgnx-agent-settings--key item)))
+    (or (seq-find (lambda (i) (equal (drgnx-agent-settings--key i) key))
+                  (plist-get (drgnx-agent-config-read drgnx-agent-settings--kind drgnx-agent-settings--root) :items))
+        (user-error "%s is no longer in %s: Refresh (g) to see what is there" (plist-get item :name)
+                    (abbreviate-file-name (or (plist-get item :file) "its file"))))))
+
+(defun drgnx-agent-settings--filter-substring (beg end &optional delete)
+  "`filter-buffer-substring-function' of a page: copied text carries none of the page's own properties."
+  (let ((text (buffer-substring--filter beg end delete)))
+    (remove-list-of-text-properties
+     0 (length text) '(drgnx-agent-settings-item drgnx-agent-settings-section drgnx-agent-settings-file action button
+                                                 category follow-link help-echo)
+     text)
+    text))
 
 ;;;; The page
 
@@ -415,7 +459,8 @@
 (define-derived-mode drgnx-agent-settings-mode special-mode "Agent Settings"
   "An agent's routes, MCP servers, hooks and skills: add, edit, remove, turn on or off, Test."
   (setq-local truncate-lines t
-              revert-buffer-function (lambda (&rest _) (drgnx-agent-settings-refresh))))
+              revert-buffer-function (lambda (&rest _) (drgnx-agent-settings-refresh))
+              filter-buffer-substring-function #'drgnx-agent-settings--filter-substring))
 
 (defun drgnx-agent-settings--buffer (kind)
   (get-buffer-create (format "*agent settings: %s*" (drgnx-agent-config-title kind))))
@@ -442,11 +487,13 @@
   (current-buffer))
 
 (defun drgnx-agent-settings--item-at-point (&optional what)
-  "The item on this line; a `user-error' naming WHAT when there is none."
+  "The item on this line, as the page keeps it (no secret values); a `user-error' naming WHAT when there is none."
   (drgnx-agent-settings--page)
-  (or (get-text-property (point) 'drgnx-agent-settings-item)
-      (get-text-property (line-beginning-position) 'drgnx-agent-settings-item)
-      (user-error "No MCP server, hook or skill on this line%s" (if what (concat " to " what) ""))))
+  (let ((key (or (get-text-property (point) 'drgnx-agent-settings-item)
+                 (get-text-property (line-beginning-position) 'drgnx-agent-settings-item))))
+    (or (and key (seq-find (lambda (i) (equal (drgnx-agent-settings--key i) key))
+                           (plist-get drgnx-agent-settings--data :items)))
+        (user-error "No MCP server, hook or skill on this line%s" (if what (concat " to " what) "")))))
 
 (defun drgnx-agent-settings--refresh-buffer (buffer)
   "Read BUFFER's agent settings again and redraw it (never asks)."
@@ -556,29 +603,62 @@ Interactively: the agent of the session at point (in the Agents list or a transc
              (signal (car err) (cdr err))))
     (drgnx-agent-settings--redraw)))
 
+(defun drgnx-agent-settings--runs (item)
+  "What the MCP server ITEM (as the page keeps it: masked) starts or reaches."
+  (let ((spec (plist-get item :spec)))
+    (if (plist-get spec :command)
+        (combine-and-quote-strings (cons (plist-get spec :command) (append (plist-get spec :args) nil)))
+      (or (plist-get spec :url) "no URL"))))
+
 (defun drgnx-agent-settings-test ()
-  "Test the MCP server on this line (start it, list its tools), or run the hook on this line for real."
+  "Test the MCP server on this line (start it, list its tools), or run the hook on this line for real.
+An inactive server (one the agent ignores, such as an untrusted project's) is started only after a confirmation."
   (interactive)
   (let ((item (drgnx-agent-settings--item-at-point "test")))
     (pcase (plist-get item :section)
-      ('mcp (drgnx-agent-settings--start-test item))
+      ('mcp
+       (when (or (not (plist-get item :inactive))
+                 (yes-or-no-p (format "%s is inactive (%s). Start %s anyway? " (plist-get item :name)
+                                      (plist-get item :inactive) (drgnx-agent-settings--runs item))))
+         (drgnx-agent-settings--start-test (drgnx-agent-settings--fresh item))))
       ('hook
        (let ((command (plist-get (plist-get item :spec) :command)))
          (unless command (user-error "This hook runs no command"))
-         (when (yes-or-no-p (format "Run %s for real? " (drgnx-agent-settings--mask command item)))
-           (drgnx-agent-settings--start-test item))))
+         (when (yes-or-no-p (format "Run %s for real? " command))
+           (drgnx-agent-settings--start-test (drgnx-agent-settings--fresh item)))))
       (_ (user-error "A skill has nothing to test")))))
 
 (defun drgnx-agent-settings-test-all ()
-  "Test every MCP server on the page (hooks are tested one by one: they run for real)."
+  "Test the MCP servers on the page that the agent would start: inactive and off ones are skipped, and the project's
+own servers (from files in the project) start only after one confirmation.  Hooks are never run here: they run for
+real, so each is tested on its own."
   (interactive)
   (drgnx-agent-settings--page)
-  (let ((servers (seq-filter (lambda (i) (and (eq (plist-get i :section) 'mcp)
-                                              (not (gethash (drgnx-agent-settings--key i) drgnx-agent-settings--running))))
-                             (plist-get drgnx-agent-settings--data :items))))
-    (unless servers (user-error "No MCP server to test"))
-    (mapc #'drgnx-agent-settings--start-test servers)
-    (message "Testing %d MCP server%s" (length servers) (if (cdr servers) "s" ""))))
+  (let* ((all (seq-filter (lambda (i) (and (eq (plist-get i :section) 'mcp)
+                                           (not (gethash (drgnx-agent-settings--key i) drgnx-agent-settings--running))))
+                          (plist-get drgnx-agent-settings--data :items)))
+         (skipped (seq-filter (lambda (i) (or (plist-get i :inactive) (not (plist-get i :enabled)))) all))
+         (servers (seq-difference all skipped #'eq))
+         (project (seq-filter (lambda (i) (eq (plist-get i :from) 'project)) servers))
+         (declined nil))
+    (when (and project
+               (not (yes-or-no-p (format "Start %s from the project's files: %s? "
+                                         (if (cdr project) (format "%d servers" (length project)) "a server")
+                                         (mapconcat (lambda (i) (format "%s (%s)" (plist-get i :name)
+                                                                        (drgnx-agent-settings--runs i)))
+                                                    project "; ")))))
+      (setq servers (seq-difference servers project #'eq)
+            declined (length project)))
+    (when servers
+      (let ((fresh (plist-get (drgnx-agent-config-read drgnx-agent-settings--kind drgnx-agent-settings--root) :items)))
+        (dolist (i servers)
+          (when-let* ((item (seq-find (lambda (f) (equal (drgnx-agent-settings--key f) (drgnx-agent-settings--key i)))
+                                      fresh)))
+            (drgnx-agent-settings--start-test item)))))
+    (message "%s%s%s"
+             (if servers (format "Testing %d MCP server%s" (length servers) (if (cdr servers) "s" "")) "No MCP server tested")
+             (if skipped (format "; %d skipped (inactive or off)" (length skipped)) "")
+             (if declined (format "; %d project server%s not started" declined (if (= declined 1) "" "s")) ""))))
 
 ;;;;; Writing
 
@@ -663,17 +743,19 @@ The answer may hold a secret (a token in a command line or URL): it is kept out 
          (matcher (read-string "Matcher (empty: every tool or source): " (plist-get spec :matcher)))
          (command (drgnx-agent-settings--ask-text "Command" (plist-get spec :command) old))
          (unit (if (eq drgnx-agent-settings--kind 'gemini) "milliseconds" "seconds"))
-         (timeout (read-string (format "Timeout in %s (empty: %s): " unit
-                                       (if (plist-get spec :timeout) (format "keep %s" (plist-get spec :timeout)) "none")))))
+         (timeout (string-trim
+                   (read-string (if (plist-get spec :timeout)
+                                    (format "Timeout in %s (empty: keep %s; none or 0: no timeout): " unit
+                                            (plist-get spec :timeout))
+                                  (format "Timeout in %s (empty, none or 0: no timeout): " unit))))))
     (unless command (user-error "A hook needs a command"))
     (setq spec (plist-put spec :event event)
           spec (plist-put spec :matcher (and (not (string-empty-p matcher)) matcher))
           spec (plist-put spec :command command))
-    (unless (string-empty-p timeout)
-      (let ((n (string-to-number timeout)))
-        (unless (and (string-match-p "\\`[0-9]+\\'" (string-trim timeout)) (> n 0))
-          (user-error "A timeout is a whole number of %s" unit))
-        (setq spec (plist-put spec :timeout n))))
+    (cond ((string-empty-p timeout))
+          ((member (downcase timeout) '("none" "0")) (setq spec (plist-put spec :timeout nil)))
+          ((string-match-p "\\`[0-9]+\\'" timeout) (setq spec (plist-put spec :timeout (string-to-number timeout))))
+          (t (user-error "A timeout is a whole number of %s, or none" unit)))
     (cons (if (plist-get spec :matcher) (format "%s %s" event (plist-get spec :matcher)) event) spec)))
 
 (defun drgnx-agent-settings--section-here ()
@@ -709,7 +791,9 @@ The answer may hold a secret (a token in a command line or URL): it is kept out 
     (if (eq (plist-get item :section) 'skill)
         (drgnx-agent-settings--visit (plist-get item :file))
       (drgnx-agent-settings--refuse-read-only item)
-      (let* ((answer (if (eq (plist-get item :section) 'mcp)
+      ;; the item with its values, as the file holds it now: an empty answer keeps them
+      (let* ((item (drgnx-agent-settings--fresh item))
+             (answer (if (eq (plist-get item :section) 'mcp)
                          (drgnx-agent-settings--ask-mcp item)
                        (drgnx-agent-settings--ask-hook item)))
              (new (copy-sequence item)))
@@ -728,12 +812,12 @@ The answer may hold a secret (a token in a command line or URL): it is kept out 
     (drgnx-agent-settings--refuse-read-only item)
     (when (yes-or-no-p (format "Remove %s from %s? " (plist-get item :name)
                                (abbreviate-file-name (or (plist-get item :file) "its file"))))
-      (drgnx-agent-settings--write 'remove item (plist-get item :from)))))
+      (drgnx-agent-settings--write 'remove (drgnx-agent-settings--fresh item) (plist-get item :from)))))
 
 (defun drgnx-agent-settings-toggle ()
   "Turn the MCP server or skill on this line on or off."
   (interactive)
-  (let ((item (drgnx-agent-settings--item-at-point "turn on or off")))
+  (let ((item (drgnx-agent-settings--fresh (drgnx-agent-settings--item-at-point "turn on or off"))))
     (drgnx-agent-settings--write 'toggle item (and (eq (plist-get item :section) 'mcp) (plist-get item :from)))))
 
 (defun drgnx-agent-settings-new-skill ()
@@ -763,7 +847,8 @@ The answer may hold a secret (a token in a command line or URL): it is kept out 
                  '((agent-settings-refresh "Refresh" drgnx-agent-settings-refresh "Read the agent's files again")
                    (agent-settings-test "Test" drgnx-agent-settings-test
                                         "Start the MCP server and list its tools, or run the hook for real (asked first)")
-                   (agent-settings-test-all "Test All" drgnx-agent-settings-test-all "Test every MCP server on the page")
+                   (agent-settings-test-all "Test All" drgnx-agent-settings-test-all
+                                            "Test the page's MCP servers: inactive and off ones skipped, the project's asked first")
                    (agent-settings-add "Add…" drgnx-agent-settings-add "An MCP server, a hook or a skill: where, then what")
                    (agent-settings-edit "Edit…" drgnx-agent-settings-edit "Change this MCP server or hook in its file")
                    (agent-settings-remove "Remove…" drgnx-agent-settings-remove "Take this MCP server or hook out of its file")

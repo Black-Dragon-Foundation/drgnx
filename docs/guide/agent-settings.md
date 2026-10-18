@@ -61,7 +61,7 @@ The same keys in every key profile (VS Code, Emacs, Vim):
 |---|---|---|
 | `g` | Refresh | read the files again |
 | `t` | Test | an MCP server: start it in a separate process and list its tools; a hook: run its command for real |
-| `T` | Test All | test every MCP server on the page |
+| `T` | Test All | test the MCP servers the agent would start (see Test, below) |
 | `a` | Add… | add an MCP server, a hook or a skill (the section you are in) |
 | `RET`, `e` | Edit… | change the MCP server or hook on this line (a skill: open its `SKILL.md`) |
 | `d` | Remove… | remove the MCP server or hook on this line, after you confirm |
@@ -82,11 +82,15 @@ Add asks, in the minibuffer:
    URL, then the names of its environment variables (or headers) and each value. Values are read with the input
    hidden;
 3. a hook: the event (from the agent's list), the matcher, the command and the timeout (seconds; milliseconds for
-   Gemini).
+   Gemini; `none` or `0` for no timeout).
 
 Edit asks the same questions about the item on the line and writes to the file it is in. An empty answer keeps
 what is there: the command line, the URL and, above all, each value ("empty: keep the current value"). The current
-command line is shown with its secrets masked.
+command line is shown with its secrets masked. To drop an environment variable or a header, take its name out of
+the list of names.
+
+The page itself never holds a value: it keeps only the names, and Edit and Test read the item from its file when
+you run them. Text copied from the page (`M-w`, then yank) is plain text.
 
 How each agent's files are written (one backup next to the file, key order kept, a file that changed meanwhile read
 again) is in [develop/core.md](../develop/core.md). Claude Code's user and local servers go through `claude mcp`,
@@ -98,7 +102,11 @@ again; the message after a write says so.
 - **MCP server** (`t`, **[Test]**): drgnx starts a separate Emacs, which starts the server (or connects to its URL),
   asks for its tools and ends it. The editor never waits. The row shows "testing…", then `ok, N tools`, `failed: …`,
   `needs a login` (with the agent's way to log in) or `no answer (timed out)` after 20 seconds. Anything the server
-  prints is masked before it is shown or kept.
+  prints is masked before it is shown or kept. An `inactive` server (for example from a Codex project you have not
+  trusted) starts only after you confirm, with its command shown.
+- **Test All** (`T`, **[Test All]**): every MCP server the agent would start. Inactive and off servers are skipped
+  (the message says how many). The project's own servers (from files in the project) start only after one question
+  that lists their commands. Hooks are never run by Test All.
 - **Hook** (**[Test (runs the command)]**): this runs the hook's command for real, in the project, with a sample
   event on its input. It asks "Run COMMAND for real?" first. The row shows its exit status.
 
