@@ -168,6 +168,8 @@ also pushes (the same hook, recorded twice) is harmless: the second finds nothin
 What it does **not** record:
 
 - **Buffer-local changes**: `add-hook … nil t`, a buffer-local list value. Buffers own those.
+- **`add-to-list` on `global-minor-modes` or `local-minor-modes`**: Emacs 31's `define-minor-mode` keeps them that
+  way; the modes are compared after the setup instead.
 - **A drgnx helper's own calls**: the paired hook and advice helpers bind `drgnx-module--in-helper` while they call
   `add-hook` and `advice-add`, and push their own undo, which respects what other modules still claim. A second,
   unconditional undo from the net would remove a function another module still needs.

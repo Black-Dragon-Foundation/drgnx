@@ -108,8 +108,10 @@ Deferred work (`drgnx-modules-with-owner') runs only while the run that schedule
           (t (while (and l (not (funcall compare (car l) element))) (setq l (cdr l))) l))))
 
 (defun drgnx-modules--add-to-list (orig var element &optional append compare)
-  "Around `add-to-list' while a setup runs: an element newly in a list's global value is recorded."
-  (let ((new (and (drgnx-modules--net-records-p) (symbolp var) (not (drgnx-modules--list-has var element compare)))))
+  "Around `add-to-list' while a setup runs: an element newly in a list's global value is recorded.
+Not the minor mode lists (Emacs 31's `define-minor-mode' adds to them so): modes are compared after the setup."
+  (let ((new (and (drgnx-modules--net-records-p) (symbolp var) (not (memq var '(global-minor-modes local-minor-modes)))
+                  (not (drgnx-modules--list-has var element compare)))))
     (prog1 (funcall orig var element append compare)
       (when (and new (drgnx-modules--list-has var element compare))
         (drgnx-modules-push-undo (format "list %s %s" var element)

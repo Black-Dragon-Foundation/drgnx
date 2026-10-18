@@ -1,6 +1,7 @@
 ;;; modules-record-test.el --- batch tests: the safety net records what a setup reaches -*- lexical-binding: t -*-
 (require 'ert)
 (require 'drgnx-modules)
+(require 'bytecomp)                                  ; `byte-compile-warnings' is let-bound below
 
 (defvar drgnx-modules-record-test-hook nil "A hook the fake modules add to.")
 (defvar drgnx-modules-record-test-list nil "A list the fake modules add to.")
