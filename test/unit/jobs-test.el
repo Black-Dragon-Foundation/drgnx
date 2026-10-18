@@ -248,3 +248,18 @@
      (should-not kill-emacs-hook)                                 ; once: the hook removed itself
      (should (plist-get (drgnx-jobs--read (expand-file-name "job.eld" dir)) :start))
      (should (equal (plist-get (drgnx-jobs--read (expand-file-name "job.eld" dir)) :boot) (drgnx-jobs--boot-id))))))
+
+(ert-deftest drgnx-jobs/stop-returns-for-a-job-that-ignores-term ()
+  ;; JOBS-2: a blocking `systemctl stop' holds for TimeoutStopSec (90 s) while a process in the unit ignores TERM
+  (skip-unless (drgnx-jobs-test--systemd-p))
+  (drgnx-jobs-test--with
+   (let ((process-environment (cons "DRGNX_JOBS_LAUNCHER=systemd" process-environment)) (drgnx-jobs-stop-wait 3) id)
+     (unwind-protect
+         (progn
+           (setq id (drgnx-jobs-start "stubborn" '("sh" "-c" "trap '' TERM; sleep 600")))
+           (should (eq (drgnx-jobs-test--status id) 'running))
+           (let ((t0 (float-time)))
+             (drgnx-jobs-stop id)
+             (should (< (- (float-time) t0) 8)))
+           (should-not (eq (drgnx-jobs-test--status id) 'running)))
+       (when id (call-process "systemctl" nil nil nil "--user" "kill" "--signal=SIGKILL" (concat "drgnx-job-" id)))))))

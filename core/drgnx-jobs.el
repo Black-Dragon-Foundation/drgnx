@@ -194,12 +194,26 @@ appears, or when Emacs exits first — for callers that must not block (a timer 
         (insert-file-contents f)
         (buffer-substring (max (point-min) (- (point-max) (or max 20000))) (point-max))))))
 
+(defvar drgnx-jobs-stop-wait 3
+  "Seconds `drgnx-jobs-stop' waits for a systemd job's process to go before it returns.")
+
+(defun drgnx-jobs--await-gone (pid unit)
+  "Wait up to `drgnx-jobs-stop-wait' seconds for process PID (or, without one, systemd UNIT) to end."
+  (let ((deadline (+ (float-time) drgnx-jobs-stop-wait)))
+    (while (and (< (float-time) deadline)
+                (if pid (process-attributes pid)
+                  (eql 0 (call-process "systemctl" nil nil nil "--user" "--quiet" "is-active" unit))))
+      (sleep-for 0.05))))
+
 (defun drgnx-jobs-stop (id)
-  "Stop job ID (its whole process group, or its unit)."
+  "Stop job ID (its whole process group, or its unit).  A systemd unit is asked to stop without waiting for it
+\(`systemctl stop' would hold this for the unit's TimeoutStopSec, 90 s, while a process of the job ignores TERM):
+this returns once the job's own process is gone, or after `drgnx-jobs-stop-wait' seconds."
   (let ((job (drgnx-jobs-get id)))
     (when (eq (plist-get job :status) 'running)
       (if (eq (plist-get job :launcher) 'systemd)
-          (call-process "systemctl" nil nil nil "--user" "stop" (plist-get job :unit))
+          (progn (call-process "systemctl" nil nil nil "--user" "--no-block" "stop" (plist-get job :unit))
+                 (drgnx-jobs--await-gone (plist-get job :pid) (plist-get job :unit)))
         ;; only a pid verified as the job's (status `running' checked the boot and the start time)
         (when-let* ((pid (plist-get job :pid))) (signal-process (- pid) 'SIGTERM))))))
 
