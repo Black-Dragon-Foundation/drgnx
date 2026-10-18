@@ -68,8 +68,11 @@
                  (sort (list 'kitty 'wezterm 'foot 'ghostty 'alacritty 'iterm2 'vte 'apple-terminal 'xterm 'linux 'tmux)
                        #'string<)))
   (dolist (row drgnx-tty-terminals)
-    (dolist (key '(:id :name :kkp :mok :osc52 :truecolor :mouse :takes :fixes :verified :source))
+    (dolist (key '(:id :name :kkp :mok :osc52 :truecolor :mouse :takes :fixes :verified :source :unconfirmed))
       (should (plist-member row key)))
+    ;; cells the linked documentation does not back are named, and only cells can be named
+    (dolist (cell (plist-get row :unconfirmed))
+      (should (memq cell '(:kkp :mok :osc52 :truecolor :mouse :takes))))
     (should (stringp (plist-get row :name)))
     (should (string-prefix-p "https://" (plist-get row :source)))
     (should-not (plist-get row :verified))     ; first version: every row "reported"
@@ -80,7 +83,14 @@
           (ert-info ((format "%s lacks %s" (plist-get row :id) cap))
             (should (stringp fix))
             ;; "none" alone is not enough: it says why
-            (should (> (length (string-trim (string-remove-prefix "none" fix))) 10))))))))
+            (should (> (length (string-trim (string-remove-prefix "none" fix))) 10)))))))
+  ;; "yes" means "with its default settings": iTerm2 needs a setting for kkp, so it is no, with the fix
+  (let ((iterm (drgnx-tty-terminal 'iterm2)))
+    (should-not (plist-get iterm :kkp))
+    (should (string-match-p "Apps can change how keys are reported" (alist-get 'kkp (plist-get iterm :fixes)))))
+  ;; xterm's OSC 52 fix drops SetSelection from its documented default list
+  (should (equal (alist-get 'osc52 (plist-get (drgnx-tty-terminal 'xterm) :fixes))
+                 "XTerm*disallowedWindowOps: GetChecksum,GetIconTitle,GetSelection,GetWinTitle,SetXprop   (in ~/.Xresources: xterm's default list without SetSelection)")))
 
 (defun drgnx-tty-test--tmp ()
   (file-name-as-directory (make-temp-file "drgnx-tty" t)))
@@ -101,6 +111,25 @@
             (should-not (drgnx-tty-terminfo-p nil))
             (should-not (drgnx-tty-terminfo-p "")))
         (delete-directory tmp t))))
+  ;; a TERM is a file name, never a path: nothing outside the terminfo dirs, and directories do not count
+  (let* ((tmp (drgnx-tty-test--tmp))
+         (dir (expand-file-name "ti/" tmp))
+         (process-environment (append (list (concat "TERMINFO=" dir) (concat "HOME=" tmp) "TERMINFO_DIRS")
+                                      process-environment))
+         (drgnx-tty-terminfo-system-dirs nil))
+    (unwind-protect
+        (progn
+          (make-directory (expand-file-name "x/xdir" dir) t)
+          (make-directory (expand-file-name "2e" dir) t)
+          (write-region "" nil (expand-file-name "evil" tmp) nil 'silent)       ; TI/./../evil and TI/2e/../../evil
+          (write-region "" nil (expand-file-name "x/xterm" dir) nil 'silent)
+          (should (drgnx-tty-terminfo-p "xterm"))
+          (should-not (drgnx-tty-terminfo-p "../evil"))
+          (should-not (drgnx-tty-terminfo-p ".hidden"))
+          (should-not (drgnx-tty-terminfo-p "x/../x/xterm"))
+          (should-not (drgnx-tty-terminfo-p "xterm\0"))
+          (should-not (drgnx-tty-terminfo-p "xdir")))
+      (delete-directory tmp t)))
   ;; TERMINFO_DIRS, colon-separated, is searched too
   (let* ((tmp (drgnx-tty-test--tmp))
          (process-environment (append (list "TERMINFO" (concat "HOME=" tmp)
@@ -113,6 +142,16 @@
                (should (drgnx-tty-terminfo-p "foot")))
       (delete-directory tmp t))))
 
+(defun drgnx-tty-test--fake-tmux (dir ran)
+  "A fake tmux in DIR: it writes its TMUX, its working directory and its arguments to RAN, answers `on' for
+set-clipboard, `off' for extended-keys and kitty(0.39.1) for #{client_termtype}."
+  (write-region (format "#!/bin/sh
+{ echo \"TMUX=$TMUX\"; echo \"PWD=$(pwd)\"; echo \"ARGS=$*\"; } > %s
+for a in \"$@\"; do case \"$a\" in set-clipboard) echo on;; extended-keys) echo off;; '#{client_termtype}') echo 'kitty(0.39.1)';; esac; done\n"
+                        (shell-quote-argument ran))
+                nil (expand-file-name "tmux" dir) nil 'silent)
+  (set-file-modes (expand-file-name "tmux" dir) #o755))
+
 (ert-deftest drgnx-tty/tmux-options-with-a-fake-tmux ()
   (let* ((tmp (drgnx-tty-test--tmp))
          (ran (expand-file-name "ran" tmp))
@@ -121,15 +160,13 @@
          (process-environment (cons (format "PATH=%s:%s" tmp (getenv "PATH")) process-environment)))
     (unwind-protect
         (progn
-          (write-region (format "#!/bin/sh\ntouch %s\nfor a in \"$@\"; do case \"$a\" in set-clipboard) echo on;; extended-keys) echo off;; esac; done\n"
-                                (shell-quote-argument ran))
-                        nil (expand-file-name "tmux" tmp) nil 'silent)
-          (set-file-modes (expand-file-name "tmux" tmp) #o755)
+          (drgnx-tty-test--fake-tmux tmp ran)
           (let ((process-environment (cons "TMUX" process-environment)))
             (should-not (drgnx-tty-tmux-options))
             (should-not (file-exists-p ran)))
           (let ((process-environment (cons "TMUX=/tmp/fake,1,0" process-environment)))
-            (should (equal (drgnx-tty-tmux-options) '(:set-clipboard "on" :extended-keys "off")))
+            (should (equal (drgnx-tty-tmux-options)
+                           '(:set-clipboard "on" :extended-keys "off" :client-termtype "kitty(0.39.1)")))
             (should (file-exists-p ran))))
       (delete-directory tmp t))))
 
@@ -173,11 +210,101 @@
             (should (equal (plist-get facts :report) '(:kkp t)))))
       (delete-directory tmp t))))
 
+(ert-deftest drgnx-tty/the-client-environment-wins ()
+  ;; in a daemon, process-environment is the daemon's own: the client's ENV (or its FRAME) decides
+  (let* ((tmp (drgnx-tty-test--tmp))
+         (ran (expand-file-name "ran" tmp))
+         (daemon-ti (expand-file-name "daemon-ti/" tmp))
+         (client-ti (expand-file-name "client-ti/" tmp))
+         (exec-path (list tmp))
+         (drgnx-tty-terminfo-system-dirs nil)
+         (process-environment (append (list (format "PATH=%s:%s" tmp (getenv "PATH")) "TMUX=/tmp/daemon-sock,1,0"
+                                            "TERM=xterm-daemon" (concat "TERMINFO=" daemon-ti) (concat "HOME=" tmp)
+                                            "TERMINFO_DIRS" (concat "XDG_STATE_HOME=" tmp))
+                                      process-environment))
+         (env `(("TERM" . "xterm-kitty") ("TMUX" . "/tmp/client-sock,2,0") ("TERMINFO" . ,client-ti)
+                ("HOME" . ,tmp) ("KITTY_WINDOW_ID" . "1")))
+         (frame (selected-frame))
+         (saved (frame-parameter frame 'environment)))
+    (unwind-protect
+        (progn
+          (drgnx-tty-test--fake-tmux tmp ran)
+          (make-directory (expand-file-name "x" daemon-ti) t)
+          (make-directory (expand-file-name "x" client-ti) t)
+          (write-region "" nil (expand-file-name "x/xterm-daemon" daemon-ti) nil 'silent)
+          (write-region "" nil (expand-file-name "x/xterm-kitty" client-ti) nil 'silent)
+          ;; terminfo: the client's TERMINFO (the one the daemon's ncurses reads for this client's frame)
+          (should (drgnx-tty-terminfo-p "xterm-kitty" env))
+          (should-not (drgnx-tty-terminfo-p "xterm-daemon" env))
+          (should-not (drgnx-tty-terminfo-p "xterm-kitty"))
+          ;; tmux: the client's server, through its socket and its TMUX; run from a local directory
+          (should (equal (plist-get (drgnx-tty-tmux-options env) :set-clipboard) "on"))
+          (let ((log (with-temp-buffer (insert-file-contents ran) (buffer-string))))
+            (should (string-match-p "^TMUX=/tmp/client-sock,2,0$" log))
+            (should (string-match-p "^ARGS=-S /tmp/client-sock show" log))
+            (should (string-match-p "^PWD=/$" log)))
+          ;; a client outside tmux is outside tmux, even when the daemon was started in one
+          (delete-file ran)
+          (should-not (drgnx-tty-tmux-options '(("TERM" . "xterm-kitty"))))
+          (should-not (file-exists-p ran))
+          ;; facts for a FRAME read that frame's environment
+          (set-frame-parameter frame 'environment
+                               (mapcar (lambda (pair) (format "%s=%s" (car pair) (cdr pair))) env))
+          (let ((facts (drgnx-tty-facts frame)))
+            (should (equal (plist-get facts :term) "xterm-kitty"))
+            (should (plist-get facts :terminfo))
+            (should (equal (plist-get facts :identity) '(:id tmux :outer kitty :version nil)))
+            (should (equal (plist-get (plist-get facts :tmux) :extended-keys) "off"))))
+      (set-frame-parameter frame 'environment saved)
+      (delete-directory tmp t))))
+
+(ert-deftest drgnx-tty/tmux-names-the-outer-terminal ()
+  ;; tmux 3.4+ knows its client's terminal (#{client_termtype}): better than a variable inherited by the server
+  (let* ((tmp (drgnx-tty-test--tmp))
+         (exec-path (list tmp))
+         (process-environment (append (list (format "PATH=%s:%s" tmp (getenv "PATH")) (concat "XDG_STATE_HOME=" tmp))
+                                      process-environment))
+         (frame (selected-frame))
+         (saved (frame-parameter frame 'environment)))
+    (unwind-protect
+        (progn
+          (drgnx-tty-test--fake-tmux tmp (expand-file-name "ran" tmp))
+          ;; a stale WEZTERM_PANE from the server's first client; tmux says kitty
+          (set-frame-parameter frame 'environment '("TERM=tmux-256color" "TMUX=/tmp/s,1,0" "WEZTERM_PANE=3"))
+          (should (eq (plist-get (plist-get (drgnx-tty-facts frame) :identity) :outer) 'kitty)))
+      (set-frame-parameter frame 'environment saved)
+      (delete-directory tmp t))))
+
+(ert-deftest drgnx-tty/the-report-is-read-safely ()
+  (let* ((tmp (drgnx-tty-test--tmp))
+         (marker (expand-file-name "evaluated" tmp))
+         (report (expand-file-name "drgnx/terminal-report.eld" tmp))
+         (process-environment (append (list (concat "XDG_STATE_HOME=" tmp) "TERM") process-environment)))
+    (unwind-protect
+        (progn
+          (make-directory (file-name-directory report) t)
+          (write-region "(:kkp t" nil report nil 'silent)          ; garbled: cut short
+          (should-not (plist-get (drgnx-tty-facts) :report))
+          ;; Emacs's reader has no read-time evaluation (no `read-eval', unlike Common Lisp): `#.' is an error
+          (write-region (format "#.(progn (write-region \"\" nil %S) '(:kkp t))" marker) nil report nil 'silent)
+          (should-not (plist-get (drgnx-tty-facts) :report))
+          (should-not (file-exists-p marker))
+          ;; a report that is not a plist is no report
+          (write-region "\"just a string\"" nil report nil 'silent)
+          (should-not (plist-get (drgnx-tty-facts) :report)))
+      (delete-directory tmp t))))
+
 (ert-deftest drgnx-tty/the-onboarding-note ()
   (let ((note (drgnx-tty-onboard-note)))
     (dolist (name '("kitty" "WezTerm" "foot" "Ghostty"))
       (should (string-match-p (regexp-quote name) note)))
+    ;; WezTerm needs its setting; every one of them keeps some chords for itself
+    (should (string-match-p "WezTerm with enable_kitty_keyboard" note))
+    (should (string-match-p "keeps some" note))
     (should-not (string-match-p "\n\n" note)))
+  (should (string-match-p "keeps 62 shortcuts for itself" (drgnx-tty-onboard-note 'kitty)))
+  ;; a claim the documentation does not back says so
+  (should (string-match-p "the mouse (unconfirmed)" (drgnx-tty-onboard-note 'tmux)))
   (let ((note (drgnx-tty-onboard-note 'vte)))
     (should (string-match-p "no C-S- chords" note))
     (should (string-match-p "no OSC 52" note))

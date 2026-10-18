@@ -5,30 +5,34 @@ works depends on the terminal. A terminal has to send the shortcuts (`C-S-p`, ``
 computer's clipboard, show true colour and report the mouse. This page lists what each common terminal can do,
 the shortcuts it keeps for itself, and the line that fixes what is missing.
 
-**Works best:** kitty, WezTerm (with one setting), foot and Ghostty. They send every shortcut and copy to the
-clipboard, over SSH as well. In any terminal, **F1** opens the command palette (VS Code keys) and `M-x` works in every
+**Works best:** kitty, foot, Ghostty, and WezTerm with one setting. They send `C-S-` chords and the other shortcuts,
+and copy to the clipboard, over SSH as well. Each keeps some `C-S-` chords for itself; [the fixes](#the-fixes) free
+them. In any terminal, **F1** opens the command palette (VS Code keys) and `M-x` works in every
 profile, so every command can still be reached.
 
 The table is `drgnx-tty-terminals` in `core/drgnx-tty.el`; onboarding and the doctor read the same data.
 
 ## What each terminal can do
 
-Each row is **reported**: it comes from the terminal's documentation (the link) and has not yet been run by drgnx's
-builders. "Yes" means the terminal does it with its default settings.
+Each row is **reported**: drgnx's builders have not run it yet. Each cell comes from official documentation: the
+linked page, or another official page or source named in [The fixes](#the-fixes), such as the kitty keyboard
+protocol's list of terminals, xterm's manual, tmux's manual, or the default shortcuts Ptyxis ships. A cell marked
+**(unconfirmed)** rests on secondary sources or general knowledge only. "Yes" means the terminal does it with its
+default settings.
 
 | Terminal | kkp | modifyOtherKeys | OSC 52 copy | True colour | Mouse | Shortcuts it keeps | Row |
 |---|---|---|---|---|---|---|---|
-| [kitty](https://sw.kovidgoyal.net/kitty/conf/) | yes | no | yes | yes | yes | 62, all `C-S-`: `C-S-c` `C-S-v` `C-S-t` `C-S-p` `C-S-<return>` `C-S-<left>`/`<right>`/`<up>`/`<down>` … | reported |
-| [WezTerm](https://wezterm.org/config/key-encoding.html) | no (opt-in) | yes | yes | yes | yes | 55: `C-S-c` `C-S-v` `C-S-t` `C-S-n` `C-S-w` `C-S-p` `C-S-f` `C-S-<arrows>` …, and `s-` keys | reported |
-| [foot](https://codeberg.org/dnkl/foot/src/branch/master/doc/foot.ini.5.scd) | yes | no | yes | yes | yes | `C-S-c` `C-S-v` `C-S-r` `C-S-n` `C-S-o` `C-S-z` `C-S-x` `C-S-u` | reported |
-| [Ghostty](https://ghostty.org/docs/config/reference) | yes | yes | yes | yes | yes | `C-S-c` `C-S-v` `C-S-t` `C-S-n` `C-S-w`, and more (`ghostty +list-keybinds --default`) | reported |
-| [Alacritty](https://alacritty.org/config-alacritty.html) | yes | no | yes | yes | yes | `C-S-c` `C-S-v` `C-S-f` `C-S-b` `C-S-SPC` `C-S-o` | reported |
-| [iTerm2](https://iterm2.com/documentation-preferences-profiles-keys.html) | yes | no | no | yes | yes | Cmd keys (`s-c` `s-v` `s-t` …) | reported |
-| [GNOME Terminal, Ptyxis (VTE)](https://gitlab.gnome.org/GNOME/vte/-/issues/2495) | no | no | no | yes | yes | `C-S-c` `C-S-v` `C-S-t` `C-S-n` `C-S-o` `C-S-f` `C-S-a` `C-S-w` `C-S-q` `C-S-<prior>` `C-S-<next>` `S-<f10>` `C-M-S-t` | reported |
-| [Terminal.app](https://support.apple.com/guide/terminal/change-profiles-keyboard-settings-trmlkbrd/mac) | no | no | no | no | yes | Cmd keys (`s-c` `s-v` `s-t` …) | reported |
-| [xterm](https://invisible-island.net/xterm/ctlseqs/ctlseqs.html) | no | yes | no | no | yes | `S-<prior>` `S-<next>` `S-<insert>` | reported |
-| [Linux console](https://man7.org/linux/man-pages/man4/console_codes.4.html) | no | no | no | no | no | `M-<f1>`…`M-<f12>`, `C-M-<f1>`…`C-M-<f12>` (switch consoles) | reported |
-| [tmux](https://man.openbsd.org/tmux) | no | no | no | no | yes | `C-b` (its prefix) | reported |
+| [kitty](https://sw.kovidgoyal.net/kitty/conf/) | yes | no (unconfirmed) | yes | yes (unconfirmed) | yes (unconfirmed) | 62, all `C-S-`: `C-S-c` `C-S-v` `C-S-t` `C-S-p` `C-S-<return>` `C-S-<left>`/`<right>`/`<up>`/`<down>` … | reported |
+| [WezTerm](https://wezterm.org/config/key-encoding.html) | no (opt-in) | yes | yes | yes (unconfirmed) | yes (unconfirmed) | 55: `C-S-c` `C-S-v` `C-S-t` `C-S-n` `C-S-w` `C-S-p` `C-S-f` `C-S-<arrows>` …, and `s-` keys | reported |
+| [foot](https://codeberg.org/dnkl/foot/src/branch/master/doc/foot.ini.5.scd) | yes | no (unconfirmed) | yes | yes | yes | `C-S-c` `C-S-v` `C-S-r` `C-S-n` `C-S-o` `C-S-z` `C-S-x` `C-S-u` | reported |
+| [Ghostty](https://ghostty.org/docs/config/reference) | yes | yes (unconfirmed) | yes | yes (unconfirmed) | yes | (unconfirmed) `C-S-c` `C-S-v` `C-S-t` `C-S-n` `C-S-w`, and more (`ghostty +list-keybinds --default`) | reported |
+| [Alacritty](https://alacritty.org/config-alacritty.html) | yes | no (unconfirmed) | yes | yes (unconfirmed) | yes (unconfirmed) | `C-S-c` `C-S-v` `C-S-f` `C-S-b` `C-S-SPC` `C-S-o` | reported |
+| [iTerm2](https://iterm2.com/documentation-preferences-profiles-keys.html) | no (unconfirmed; a setting) | no (unconfirmed) | no (unconfirmed) | yes (unconfirmed) | yes (unconfirmed) | (unconfirmed) Cmd keys (`s-c` `s-v` `s-t` …) | reported |
+| [GNOME Terminal, Ptyxis (VTE)](https://gitlab.gnome.org/GNOME/vte/-/issues/2495) | no (unconfirmed) | no | no | yes (unconfirmed) | yes (unconfirmed) | `C-S-c` `C-S-v` `C-S-t` `C-S-n` `C-S-o` `C-S-f` `C-S-a` `C-S-w` `C-S-q` `C-S-<prior>` `C-S-<next>` `S-<f10>` `C-M-S-t` | reported |
+| [Terminal.app](https://support.apple.com/guide/terminal/change-profiles-keyboard-settings-trmlkbrd/mac) | no (unconfirmed) | no (unconfirmed) | no (unconfirmed) | no (unconfirmed) | yes (unconfirmed) | (unconfirmed) Cmd keys (`s-c` `s-v` `s-t` …) | reported |
+| [xterm](https://invisible-island.net/xterm/ctlseqs/ctlseqs.html) | no (unconfirmed) | yes | no | no (unconfirmed) | yes | (unconfirmed) `S-<prior>` `S-<next>` `S-<insert>` | reported |
+| [Linux console](https://man7.org/linux/man-pages/man4/console_codes.4.html) | no (unconfirmed) | no (unconfirmed) | no | no (unconfirmed) | no (unconfirmed) | (unconfirmed) `M-<f1>`…`M-<f12>`, `C-M-<f1>`…`C-M-<f12>` (switch consoles) | reported |
+| [tmux](https://man.openbsd.org/tmux) | no | no | no | no | yes (unconfirmed) | `C-b` (its prefix) | reported |
 
 - **kkp** is the [kitty keyboard protocol](https://sw.kovidgoyal.net/kitty/keyboard-protocol/): every key and
   modifier arrives, `s-` (Super/Cmd) included. Its page lists the terminals that implement it.
@@ -59,16 +63,20 @@ helps.
   `[[keyboard.bindings]] key = "F", mods = "Control|Shift", action = "ReceiveChar"` to `alacritty.toml`. OSC 52 copy
   is on by default (`[terminal] osc52 = "OnlyCopy"`).
 - **iTerm2:** Settings → General → Selection: turn on *Applications in terminal may access clipboard* (OSC 52).
-  Settings → Profiles → Keys → General: *Apps can change how keys are reported* lets drgnx turn kkp on. macOS keeps
-  the Cmd chords.
+  Settings → Profiles → Keys → General: *Apps can change how keys are reported* lets drgnx turn kkp on. Kitty's
+  protocol page lists iTerm2, but whether this setting is on by default is unconfirmed, so the table says no. macOS
+  keeps the Cmd chords.
 - **GNOME Terminal, Ptyxis (VTE):** none for keys or copy. VTE has no kkp and no modifyOtherKeys (Emacs turns the
   latter off for VTE), and it does not take OSC 52 ([VTE issue 2495](https://gitlab.gnome.org/GNOME/vte/-/issues/2495)).
   Freeing a chord in Preferences → Shortcuts does not help: VTE then sends it without Shift. Use F1 or the palette;
   copies stay inside drgnx.
-- **Terminal.app:** none for keys, copy or true colour. True colour was announced for macOS 26 (unverified).
+- **Terminal.app:** none for keys, copy or true colour. True colour was announced for macOS 26 (unconfirmed).
   Settings → Profiles → Keyboard: *Use Option as Meta key* makes `M-` keys work.
-- **xterm:** add `XTerm*disallowedWindowOps: 20,21,SetXprop` to `~/.Xresources` (xterm refuses OSC 52 by default).
-  For true colour, try `TERM=xterm-direct` (unverified). Emacs turns on modifyOtherKeys in xterm by itself.
+- **xterm:** it refuses OSC 52 by default, because its `disallowedWindowOps` resource defaults to
+  `GetChecksum,GetIconTitle,GetSelection,GetWinTitle,SetSelection,SetXprop`
+  ([xterm(1)](https://invisible-island.net/xterm/manpage/xterm.html)). Add the same list without `SetSelection` to
+  `~/.Xresources`: `XTerm*disallowedWindowOps: GetChecksum,GetIconTitle,GetSelection,GetWinTitle,SetXprop`. For true
+  colour, try `TERM=xterm-direct` (unconfirmed). Emacs turns on modifyOtherKeys in xterm by itself.
 - **Linux console:** none for keys, copy or colour (16 colours). For the mouse, run the gpm service and
   `M-x gpm-mouse-mode` (in an Emacs built with gpm).
 - **tmux:** see [below](#tmux).
