@@ -25,7 +25,7 @@
     (css css-mode css-ts-mode) (html mhtml-mode html-ts-mode "\\.html?\\'") (bash sh-mode bash-ts-mode)
     (c c-mode c-ts-mode) (cpp c++-mode c++-ts-mode) (java java-mode java-ts-mode) (ruby ruby-mode ruby-ts-mode)
     (yaml yaml-mode yaml-ts-mode "\\.ya?ml\\'") (rust rust-mode rust-ts-mode "\\.rs\\'") (go go-mode go-ts-mode "\\.go\\'")
-    (typescript nil typescript-ts-mode "\\.ts\\'") (tsx nil tsx-ts-mode "\\.tsx\\'") (toml conf-toml-mode toml-ts-mode "\\.toml\\'")
+    (typescript typescript-mode typescript-ts-mode "\\.ts\\'") (tsx nil tsx-ts-mode "\\.tsx\\'") (toml conf-toml-mode toml-ts-mode "\\.toml\\'")
     (lua lua-mode lua-ts-mode "\\.lua\\'"))
   "LANGUAGE MODE TS-MODE [FILE-REGEXP]: files in MODE (or matching FILE-REGEXP) want LANGUAGE's grammar for TS-MODE.")
 

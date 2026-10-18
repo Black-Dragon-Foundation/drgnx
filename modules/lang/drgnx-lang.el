@@ -13,6 +13,10 @@
 (require 'seq)
 (require 'drgnx-modules)
 (require 'drgnx-registry)
+(defvar drgnx-grammars-modes)
+;; The language/mode table is lang/grammars's: one table for both modules (its file sits beside this one).
+(unless (featurep 'drgnx-grammars)
+  (load (expand-file-name "drgnx-grammars" (file-name-directory (or load-file-name buffer-file-name))) nil t))
 (defvar eglot-server-programs)
 (defvar xref-prompt-for-identifier)
 (declare-function eglot-ensure "eglot")
@@ -22,21 +26,14 @@
 (declare-function eglot-format-buffer "eglot")
 (declare-function eldoc-doc-buffer "eldoc")
 
-(defconst drgnx-lang-tree-sitter-modes
-  '((python python-mode python-ts-mode) (javascript js-mode js-ts-mode) (json js-json-mode json-ts-mode)
-    (css css-mode css-ts-mode) (bash sh-mode bash-ts-mode) (c c-mode c-ts-mode) (cpp c++-mode c++-ts-mode)
-    (java java-mode java-ts-mode) (ruby ruby-mode ruby-ts-mode) (yaml yaml-mode yaml-ts-mode)
-    (rust rust-mode rust-ts-mode) (go go-mode go-ts-mode) (typescript typescript-mode typescript-ts-mode))
-  "LANGUAGE MODE TS-MODE: MODE becomes TS-MODE when LANGUAGE's grammar is installed.")
-
 (defvar eglot-sync-connect)
 (defvar eglot-autoshutdown)
 
 (defun drgnx-lang-remap-modes ()
   "Use the tree-sitter mode of every language whose grammar is installed."
   (when (fboundp 'treesit-language-available-p)
-    (pcase-dolist (`(,lang ,mode ,ts) drgnx-lang-tree-sitter-modes)
-      (when (and (treesit-language-available-p lang) (fboundp ts))
+    (pcase-dolist (`(,lang ,mode ,ts . ,_) drgnx-grammars-modes)
+      (when (and mode (treesit-language-available-p lang) (fboundp ts))
         (setf (alist-get mode major-mode-remap-alist) ts)))))
 
 (defun drgnx-lang--program (contact)
