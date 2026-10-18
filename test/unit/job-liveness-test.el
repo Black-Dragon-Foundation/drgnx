@@ -74,6 +74,26 @@
                                   (drgnx-agent-session-entries s))))
         (should (seq-find (lambda (m) (string-prefix-p "[stalled]" (plist-get m :text))) (drgnx-coord-inbox "user")))))))
 
+(ert-deftest drgnx-job/a-turn-that-never-ends-in-review-is-a-card ()
+  ;; complete_task puts the task in review mid-turn; the turn hangs: the review waits for `drgnx-job-review-turn-limit',
+  ;; then it is the user's
+  (drgnx-job-run-test--with drgnx-job-liveness-test--one
+    (let* ((drgnx-job-max-agents 0) (id (drgnx-job-propose plan)) (tid (concat id "#1")) (drgnx-job-review-turn-limit 0.3))
+      (drgnx-job-approve id)
+      (let ((s (drgnx-agents-start "mock" repo tid id)))
+        (drgnx-job-run-test--wait (lambda () (eq (drgnx-agent-session-status s) 'idle)))
+        (drgnx-agents-send s "slow")
+        (should (drgnx-job-run-test--wait (lambda () (eq (drgnx-agent-session-status s) 'busy))))
+        (drgnx-coord-force-status tid "in-review" (drgnx-agent-session-id s))
+        (drgnx-job-step id)                                                     ; records when the review began to wait
+        (should (equal (drgnx-job-run-test--status id 1) "in-review"))
+        (should-not (seq-find (lambda (c) (equal (plist-get c :kind) "stalled")) (drgnx-coord-cards id "open")))
+        (sleep-for 0.4)
+        (drgnx-job-step id)
+        (should (eq (drgnx-agent-session-status s) 'busy))
+        (should (seq-find (lambda (c) (equal (plist-get c :kind) "stalled")) (drgnx-coord-cards id "open")))
+        (should (equal (drgnx-job-run-test--status id 1) "needs-input"))))))
+
 (ert-deftest drgnx-job/counts-survive-a-hub-restart ()
   ;; how often a task's agent ended and was nudged is in the job's record, not in the hub's memory
   (drgnx-job-run-test--with drgnx-job-liveness-test--one

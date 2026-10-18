@@ -80,7 +80,9 @@ what it spends, so the budget would not stop it.
 
 - **Worktrees:** the job's branch `job/ID` (from your HEAD when you approved) in `.claude/worktrees/ID`; each task
   on `job/ID-N` in `.claude/worktrees/ID-N`, branched from the job's branch — so a task starts from the work of the
-  tasks it depends on. At most `drgnx-job-max-agents` (3) agents work at once.
+  tasks it depends on. At most `drgnx-job-max-agents` (3) agents work at once. A slow checkout (a big repository, a
+  hook) does not hold drgnx up: the task says `starting` until its worktree is there, and `merging` while its branch
+  is merged; a worktree that cannot be made is a card.
 - **Permissions:** a role's policy (`drgnx-job-policies`) allows routine tool calls inside the task's worktree —
   reading, editing, running commands; a reviewer only reads (and runs `git diff`, `log`, `show`, `status`). Anything else waits for you as a **card** (a message
   to you; the task says `needs-input`): network access, a command that reaches out or installs (`curl`, `git
@@ -104,11 +106,13 @@ what it spends, so the budget would not stop it.
   where it stopped.
 - **A provider at its limit** (429, rate limit, overloaded, quota): the task moves to the next profile on its role's
   route, in a new session in the same worktree, told what the agent before it committed and said last. With no
-  profile left it is a card. The summary (`status`) names the profile the task's agent runs on now.
+  profile left it is a card. A reviewer at its limit starts again on the next profile of the `review` route (a card
+  when there is none). The summary (`status`) names the profile the task's agent runs on now.
 - **An agent that ends without finishing** (it exited, or never started: a missing command, not logged in) frees
   its task for a new agent — `drgnx-job-start-tries` (3) times, then it is a card with the agent's last error. A turn
   that ends without `complete_task` gets one reminder; the next such turn is a card ("stalled"). These counts are in
-  the job's record: a hub restart does not reset them.
+  the job's record: a hub restart does not reset them. A finished task whose agent's turn never ends waits for its
+  review `drgnx-job-review-turn-limit` seconds (600), then it is a card too.
 - **The hub restarts:** the job is in `work.db`; tasks whose agents are gone are free again and start anew in their
   worktrees (a task waiting on a permission its agent asked goes back too: the request went with the agent); cards
   for your decision (a conflict, a failed review) stay yours; nothing merges twice.

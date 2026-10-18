@@ -102,7 +102,9 @@ hub's `--auto` path still makes and settles the card); `drgnx-job-approve` adds 
 and runs `drgnx-job-step`, which the hub's tick repeats for every running job: tasks whose agent is not live are
 released, `in-review` tasks get a reviewer once their agent's turn is over (idle, free or held by a Stop) or the agent
 is gone — the agent is then ended; a task with no commits on its branch (`git rev-list --count job/ID..HEAD` is 0)
-gets a `review` card, "finished with no commits", instead — ready tasks get agents (`drgnx-job--start-task`: a worktree, a session
+gets a `review` card, "finished with no commits", instead — ready tasks get agents (`drgnx-job--start-task`: a worktree, made by a git process of its own
+(`drgnx-job--git-async`, a sentinel continues: the task shows `starting` meanwhile, counts against
+`drgnx-job-max-agents`, and a worktree that cannot be made is an `agent` card), then a session
 with `DRGNX_JOB` and `DRGNX_TASK`, the task prompt given once the session is free), and a job whose tasks are all
 done is done, and every session of it still running ends (a clash reviewer too, even one the user is discussing with:
 the clash is moot by then). Prompts of sessions that ended before they were free are dropped. The hub wires it to sessions with hooks:
@@ -111,19 +113,23 @@ the clash is moot by then). Prompts of sessions that ended before they were free
 |---|---|
 | `drgnx-agents-changed-functions` | `drgnx-job--session-changed`: prompts out, a reviewer's verdict in (the last non-empty line of its last answer, starting `VERDICT:`, Markdown emphasis round it ignored), a step after a session ends or a finished task's agent's turn is over |
 | `drgnx-agents-request-functions` | `drgnx-job--request`: permissions by `drgnx-job-policy` (allowed but with no `allow_once` option: a card), writes inside the worktree (missing directories are made), else a card |
-| `drgnx-agents-error-functions` | `drgnx-job--agent-error`: a provider at its limit → `drgnx-job--fall-back` to the next profile |
+| `drgnx-agents-error-functions` | `drgnx-job--agent-error`: a provider at its limit → `drgnx-job--fall-back` to the next profile; a task's reviewer → `drgnx-job--review-fall-back`: the review starts again on the next profile of the `review` route (a `review` card when none is left); a clash reviewer is left alone |
 | `drgnx-gateway-event-functions` | `drgnx-job--gateway-event`: `budget` → the job pauses, its agents stop |
 
 `complete_task` from an agent of a job (`DRGNX_JOB` set) puts the task `in-review`, not `done`, and `update_task`
-there takes only `running`, `needs-input` and `in-review`; the reviewer's verdict decides (`drgnx-job--reviewed`, `drgnx-job--merge`: a merge that fails with no unmerged files
-gets a `merge-conflict` card titled `merge failed: <git output>`; `drgnx-job--git` returns stderr after stdout when
-git fails). A card (`drgnx-job--card`) is a `card` row — one open per task and kind, actions by
+there takes only `running`, `needs-input` and `in-review`; the reviewer's verdict decides (`drgnx-job--reviewed`, `drgnx-job--merge`: the merge is a git process of its own, the task shows `merging` meanwhile
+(`drgnx-job--busy`, in the hub's memory only: a restart finds the store's `in-review` and the "merged before" check);
+a merge that fails with no unmerged files gets a `merge-conflict` card titled `merge failed: <git output>`;
+`drgnx-job--git`, the short synchronous reads, returns stderr after stdout when git fails; the job's own worktree at
+approval is still made synchronously, for the command that asked). A card (`drgnx-job--card`) is a `card` row — one open per task and kind, actions by
 kind (`drgnx-job-card-actions`), acted on once through `job/card` (`drgnx-job-card-act`: settled first, so a second
 action is refused; reopened if the action fails) — plus a message from `drgnx` to `user` with the job and task (one line, `acted` once settled), the task `needs-input`, and a `card` event (job, task, kind, title); a
 card for an agent's pending request records it in the job's data (`:waiting`: the session, and the status to go back
 to — `in-review` for a reviewer's, and for an agent of a task already in review whose turn went on), so an answer, or
 the agent's end, puts the task back; the job's data also keeps, per task, how often its agent ended (`:exits`) and was
-nudged (`:nudged`; cleared on review and on retry), so a hub restart does not reset them; `fallback` events carry job,
+nudged (`:nudged`; cleared on review and on retry) and when a task in review began to wait for its agent's turn to end
+(`:in-review-since`; after `drgnx-job-review-turn-limit` seconds, 600, a `stalled` card), so a hub restart does not
+reset them; `fallback` events carry job,
 task, agent, from, to, why, and the successor's handover names the decision log's version. The hub's `job/propose`, `job/approve`, `job/status`, `job/stop`,
 `job/resume` ([hub.md](hub.md)) answer `drgnx-job-summary` (a task's `:profile` is its current agent's, else the route's first); `job/resume`
 refuses a job with no job worktree (a rejected proposal); `bin/drgnx job` and the Plan Job commands use them

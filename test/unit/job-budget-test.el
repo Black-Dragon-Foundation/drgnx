@@ -73,6 +73,36 @@
         (should (string-search "continuing" (format "%S" (drgnx-agent-session-entries b)))))
       (should (seq-find (lambda (e) (and (equal (car e) "fallback") (equal (plist-get (cdr e) :to) "mock-b"))) events)))))
 
+(ert-deftest drgnx-job/a-reviewer-at-its-limit-moves-to-the-next-review-profile ()
+  (drgnx-job-run-test--with "# One\n\n### Task 1: one\n"
+    (let* ((mock (plist-get (cdr (assoc "mock" drgnx-agents-profiles)) :command))
+           (drgnx-agents-profiles (append (list (list "rev-a" :command mock :env '("MOCK_ACP_RATE_LIMIT=1"))
+                                                (list "rev-b" :command mock))
+                                          drgnx-agents-profiles))
+           (drgnx-job-routes '((implement . "mock") (review "rev-a" "rev-b")))
+           (id (drgnx-job-propose plan)) (second nil))
+      (drgnx-job-approve id)
+      (should (drgnx-job-run-test--wait
+               (lambda () (when (seq-find (lambda (s) (and (equal (drgnx-agent-session-profile s) "rev-b")
+                                                           (gethash (drgnx-agent-session-id s) drgnx-job--reviewers)))
+                                          drgnx-agents--sessions)
+                            (setq second t))
+                 (equal (drgnx-job-run-test--status id 1) "done"))
+               40))
+      (should second))))                                                            ; reviewed by the second, merged
+
+(ert-deftest drgnx-job/a-reviewer-at-its-limit-with-no-profile-left-is-a-card ()
+  (drgnx-job-run-test--with "# One\n\n### Task 1: one\n"
+    (let* ((mock (plist-get (cdr (assoc "mock" drgnx-agents-profiles)) :command))
+           (drgnx-agents-profiles (cons (list "rev-a" :command mock :env '("MOCK_ACP_RATE_LIMIT=1")) drgnx-agents-profiles))
+           (drgnx-job-routes '((implement . "mock") (review . "rev-a")))
+           (id (drgnx-job-propose plan)))
+      (drgnx-job-approve id)
+      (should (drgnx-job-run-test--wait (lambda () (equal (drgnx-job-run-test--status id 1) "needs-input")) 30))
+      (let ((card (seq-find (lambda (c) (equal (plist-get c :kind) "review")) (drgnx-coord-cards id "open"))))
+        (should card)
+        (should (string-search "rev-a" (plist-get card :title)))))))
+
 (ert-deftest drgnx-job/no-next-profile-is-a-card ()
   (drgnx-job-run-test--with "# One\n\n### Task 1: one\n"
     (let* ((mock (plist-get (cdr (assoc "mock" drgnx-agents-profiles)) :command))

@@ -56,7 +56,7 @@
       (should (drgnx-job-run-test--wait (lambda () (equal (drgnx-job-run-test--status id 1) "in-review")) 30))
       (let ((cid (drgnx-job--card id tid "review" "the reviewer gave no verdict")))
         (drgnx-job-card-act cid "accept")
-        (should (equal (drgnx-job-run-test--status id 1) "done"))
+        (should (drgnx-job-run-test--wait (lambda () (equal (drgnx-job-run-test--status id 1) "done")) 15))   ; the merge is a git process
         (let ((head (drgnx-job-run-test--git repo "rev-parse" (concat "job/" id))))
           (should-error (drgnx-job-card-act cid "accept"))
           (should (equal (drgnx-job-run-test--git repo "rev-parse" (concat "job/" id)) head)))))))

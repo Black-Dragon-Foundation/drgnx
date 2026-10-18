@@ -185,9 +185,15 @@ own repository).  Returns its id; nothing starts (unless `drgnx-job-auto-start')
 (defvar drgnx-job--prompts (make-hash-table :test #'equal) "Session id → its task prompt, given once it is free.")
 (defvar drgnx-job--reviewers (make-hash-table :test #'equal) "Session id → the task it reviews.")
 
+(defvar drgnx-job-review-turn-limit 600
+  "Seconds the review of a finished task waits for its agent's turn to end; then the task is the user's.")
+
 (defvar drgnx-job-start-tries 3 "Times a task's agent may end without finishing it before the user decides.")
 (defvar drgnx-job--turns-seen (make-hash-table :test #'equal) "Session id → its ended turns already looked at.")
 (defvar drgnx-job--step-pending (make-hash-table :test #'equal) "Job → t while a step is scheduled.")
+(defvar drgnx-job--busy (make-hash-table :test #'equal)
+  "Task id → \"starting\" while its worktree is being made, \"merging\" while its branch is merged: a git process of its
+own does it, the hub goes on.  The summary shows it; a restart forgets it (the store still says ready / in-review).")
 
 ;; How often a task's agent ended without finishing it (:exits) and got a nudge (:nudged) is kept in the job's record,
 ;; like the failed reviews: the hub restarting does not reset it.
@@ -226,6 +232,21 @@ fails, its stderr after it (where a hook's refusal and `fatal:' are)."
             (cons exit (string-trim (buffer-string)))))
       (delete-file err))))
 
+(defun drgnx-job--git-async (dir args done)
+  "Run git ARGS in DIR in a process of its own, never blocking the hub; DONE is called with (EXIT . OUTPUT), as
+`drgnx-job--git' gives it (stderr mixed into OUTPUT), from the process's sentinel once git has ended.  The process."
+  (let* ((out (generate-new-buffer " *drgnx-git*" t))
+         (default-directory (file-name-as-directory dir))
+         (process-environment (cons "GIT_TERMINAL_PROMPT=0" process-environment))   ; never a prompt in the hub
+         (p (make-process :name "drgnx-git" :buffer out :noquery t :connection-type 'pipe :command (cons "git" args)
+                          :sentinel (lambda (p _event)
+                                      (unless (process-live-p p)
+                                        (let ((result (cons (process-exit-status p) (string-trim (with-current-buffer out (buffer-string))))))
+                                          (kill-buffer out)
+                                          (with-demoted-errors "drgnx job: %S" (funcall done result))))))))
+    (process-send-eof p)                               ; like call-process: git (a hook) reads nothing
+    p))
+
 (defun drgnx-job--repo (job) (plist-get (drgnx-coord-job job) :repo))
 (defun drgnx-job--job-tree (job) (expand-file-name (format ".claude/worktrees/%s/" job) (drgnx-job--repo job)))
 (defun drgnx-job--task-tree (job n) (expand-file-name (format ".claude/worktrees/%s-%d/" job n) (drgnx-job--repo job)))
@@ -256,24 +277,47 @@ fails, its stderr after it (where a hook's refusal and `fatal:' are)."
 
 (defun drgnx-job--start-task (id task &optional profile handover)
   "Give TASK (a store plist) of job ID an agent (PROFILE, default its role's first) in its own worktree; HANDOVER:
-what the agent before it left (`drgnx-job--fall-back')."
-  (let* ((n (plist-get task :n)) (tree (drgnx-job--task-tree id n)) (repo (drgnx-job--repo id)))
-    (unless (file-directory-p tree)
-      (or (eql 0 (car (drgnx-job--git repo "worktree" "add" "-q" "-b" (format "job/%s-%d" id n) tree (concat "job/" id))))
-          (eql 0 (car (drgnx-job--git repo "worktree" "add" "-q" tree (format "job/%s-%d" id n))))   ; its branch from before
-          (error "No worktree for %s" (plist-get task :id))))
-    (let* ((profile (or profile (car (drgnx-job-route (intern (or (plist-get task :role) "implement"))))))
-           (s (drgnx-agents-start profile tree (plist-get task :id) id))
-           (body (plist-get (seq-find (lambda (x) (= (plist-get x :n) n)) (plist-get (plist-get (drgnx-coord-job id) :data) :tasks)) :body)))
-      (drgnx-coord-force-status (plist-get task :id) "claimed" (drgnx-agent-session-id s))
-      (puthash (drgnx-agent-session-id s)
-               (format "[drgnx task %s] %s\n\n%s\n\n%s%sFirst call read_decisions (the job's decision log). Work only in this directory (a git worktree of your own). Commit your work. Then call complete_task."
-                       (plist-get task :id) (plist-get task :title) (or body "") (or handover "")
-                       (if-let* ((notes (alist-get (plist-get task :id) (plist-get (plist-get (drgnx-coord-job id) :data) :notes) nil nil #'equal)))
-                           (format "The reviewer asked for changes:\n%s\n\n" (drgnx-job--quote notes))
-                         ""))
-               drgnx-job--prompts)
-      (drgnx-job--session-changed s))))
+what the agent before it left (`drgnx-job--fall-back').  The worktree, when it has to be made, is made by a git
+process of its own: the agent starts when it is there."
+  (let* ((n (plist-get task :n)) (tid (plist-get task :id)) (tree (drgnx-job--task-tree id n)) (repo (drgnx-job--repo id))
+         (branch (format "job/%s-%d" id n)))
+    (cond
+     ((file-directory-p tree) (drgnx-job--launch-task id task profile handover))
+     ((gethash tid drgnx-job--busy))                               ; being made
+     (t (drgnx-job--git-async
+         repo (list "worktree" "add" "-q" "-b" branch tree (concat "job/" id))
+         (lambda (made)
+           (if (eql 0 (car made))
+               (drgnx-job--worktree-made id task profile handover nil)
+             (drgnx-job--git-async repo (list "worktree" "add" "-q" tree branch)       ; its branch from before
+                                   (lambda (again) (drgnx-job--worktree-made id task profile handover (and (not (eql 0 (car again))) (cdr again))))))))
+        (puthash tid "starting" drgnx-job--busy)
+        (drgnx-job--changed id)))))
+
+(defun drgnx-job--worktree-made (id task profile handover failure)
+  "TASK's worktree is made (FAILURE: git's message when it could not be): its agent starts, if the task still wants one."
+  (remhash (plist-get task :id) drgnx-job--busy)
+  (cond (failure (drgnx-job--card id (plist-get task :id) "agent" (format "no worktree for it: %s" failure)))
+        ((and (equal (plist-get (drgnx-coord-job id) :status) "running")
+              (equal (plist-get (drgnx-coord-task (plist-get task :id)) :status) "ready"))
+         (drgnx-job--launch-task id task profile handover)))
+  (drgnx-job--changed id))
+
+(defun drgnx-job--launch-task (id task &optional profile handover)
+  "The agent of TASK of job ID, in its worktree (made)."
+  (let* ((n (plist-get task :n)) (tree (drgnx-job--task-tree id n))
+         (profile (or profile (car (drgnx-job-route (intern (or (plist-get task :role) "implement"))))))
+         (s (drgnx-agents-start profile tree (plist-get task :id) id))
+         (body (plist-get (seq-find (lambda (x) (= (plist-get x :n) n)) (plist-get (plist-get (drgnx-coord-job id) :data) :tasks)) :body)))
+    (drgnx-coord-force-status (plist-get task :id) "claimed" (drgnx-agent-session-id s))
+    (puthash (drgnx-agent-session-id s)
+             (format "[drgnx task %s] %s\n\n%s\n\n%s%sFirst call read_decisions (the job's decision log). Work only in this directory (a git worktree of your own). Commit your work. Then call complete_task."
+                     (plist-get task :id) (plist-get task :title) (or body "") (or handover "")
+                     (if-let* ((notes (alist-get (plist-get task :id) (plist-get (plist-get (drgnx-coord-job id) :data) :notes) nil nil #'equal)))
+                         (format "The reviewer asked for changes:\n%s\n\n" (drgnx-job--quote notes))
+                       ""))
+             drgnx-job--prompts)
+    (drgnx-job--session-changed s)))
 
 (defun drgnx-job-step (id)
   "Move job ID on: tasks whose agent is gone are free again; finished agents end; ready tasks get agents (up to
@@ -284,6 +328,7 @@ what the agent before it left (`drgnx-job--fall-back')."
       (dolist (task (drgnx-coord-tasks id))
         (let ((status (plist-get task :status)) (agent (plist-get task :agent)))
           (cond
+           ((gethash (plist-get task :id) drgnx-job--busy))               ; its worktree is being made, or its branch merged
            ;; its agent died or the hub restarted: the task is free (its worktree stays) — a few times, then the user
            ((and (member status '("claimed" "running")) (not (member agent live)))
             (let ((n (1+ (drgnx-job--count id :exits (plist-get task :id)))))
@@ -310,13 +355,17 @@ what the agent before it left (`drgnx-job--fall-back')."
            ((and (equal status "in-review")
                  (or (not (member agent live)) (drgnx-job--turn-over-p (drgnx-job--session agent))))
             (drgnx-job--set-count id :exits (plist-get task :id) nil) (drgnx-job--set-count id :nudged (plist-get task :id) nil)
+            (drgnx-job--set-count id :in-review-since (plist-get task :id) nil)
             (when (member agent live) (drgnx-agents-kill (drgnx-job--session agent)))
             (when (and (not (run-hook-with-args-until-success 'drgnx-job-before-review-functions id task))
                        drgnx-job-review (not (drgnx-job--reviewer-of (plist-get task :id))))
-              (drgnx-job--start-review id task))))))
-      (let ((count (length (drgnx-job--live id))))
+              (drgnx-job--start-review id task)))
+           ;; finished, but its agent's turn goes on: the review waits for it — not for ever
+           ((equal status "in-review") (drgnx-job--review-wait id task)))))
+      (let ((count (+ (length (drgnx-job--live id))        ; the agents to be count too: their worktrees are being made
+                      (seq-count (lambda (task) (equal (gethash (plist-get task :id) drgnx-job--busy) "starting")) (drgnx-coord-tasks id)))))
         (dolist (task (drgnx-coord-tasks id))
-          (when (and (equal (plist-get task :status) "ready") (< count drgnx-job-max-agents))
+          (when (and (equal (plist-get task :status) "ready") (not (gethash (plist-get task :id) drgnx-job--busy)) (< count drgnx-job-max-agents))
             (drgnx-job--start-task id task)
             (setq count (1+ count)))))
       (let ((finished (mapcar (lambda (task) (plist-get task :id))
@@ -348,6 +397,16 @@ what the agent before it left (`drgnx-job--fall-back')."
   "Has S, free now, ended a turn not looked at yet (its task still open)?"
   (and s (drgnx-agents-free-p s) (not (gethash (drgnx-agent-session-id s) drgnx-job--prompts))
        (> (drgnx-job--turns s) (gethash (drgnx-agent-session-id s) drgnx-job--turns-seen 0))))
+
+(defun drgnx-job--review-wait (id task)
+  "TASK of job ID is in review and its agent's turn goes on (that turn may hang): when it began to wait is in the
+job's record; after `drgnx-job-review-turn-limit' seconds a card."
+  (let ((since (drgnx-job--count id :in-review-since (plist-get task :id))))
+    (cond ((zerop since) (drgnx-job--set-count id :in-review-since (plist-get task :id) (float-time)))
+          ((> (- (float-time) since) drgnx-job-review-turn-limit)
+           (drgnx-job--set-count id :in-review-since (plist-get task :id) nil)
+           (drgnx-job--card id (plist-get task :id) "stalled"
+                            (format "its agent's turn has not ended %d minutes after it finished the task" (round (/ drgnx-job-review-turn-limit 60))))))))
 
 (defun drgnx-job--nudge (id task s)
   "S's turn ended with TASK of job ID open: once a reminder, then a card."
@@ -421,9 +480,9 @@ commit to the job's branch, a card: there is nothing to review."
       (drgnx-job--card id (plist-get task :id) "review" "finished with no commits: nothing to review")
     (drgnx-job--start-review-agent id task)))
 
-(defun drgnx-job--start-review-agent (id task)
-  "A reviewer agent for TASK of job ID."
-  (let* ((s (drgnx-agents-start (car (drgnx-job-route 'review)) (drgnx-job--task-tree id (plist-get task :n)) (plist-get task :id) id))
+(defun drgnx-job--start-review-agent (id task &optional profile)
+  "A reviewer agent for TASK of job ID, on PROFILE (default: the first of the review route)."
+  (let* ((s (drgnx-agents-start (or profile (car (drgnx-job-route 'review))) (drgnx-job--task-tree id (plist-get task :n)) (plist-get task :id) id))
          (sid (drgnx-agent-session-id s)))
     (puthash sid (plist-get task :id) drgnx-job--reviewers)
     (puthash sid (format "[drgnx review %s] %s\n\nReview the changes: git diff job/%s...HEAD.  Answer with a last line VERDICT: pass, or VERDICT: fail: what to change."
@@ -460,21 +519,32 @@ commit to the job's branch, a card: there is nothing to review."
 
 (defun drgnx-job--merge (id task)
   "Merge TASK's branch into job ID's branch (once): done, and its dependents may start; a conflict is aborted and
-goes to the user."
-  (let* ((tree (drgnx-job--job-tree id)) (branch (format "job/%s-%d" id (plist-get task :n))) merged)
+goes to the user.  The merge itself is a git process of its own (a hook may be slow): the task says \"merging\"."
+  (let* ((tree (drgnx-job--job-tree id)) (tid (plist-get task :id)) (branch (format "job/%s-%d" id (plist-get task :n))))
     (cond
      ((equal (plist-get task :status) "done"))
+     ((gethash tid drgnx-job--busy))                                  ; being merged
      ((eql 0 (car (drgnx-job--git tree "merge-base" "--is-ancestor" branch "HEAD")))   ; merged before
-      (drgnx-coord-force-status (plist-get task :id) "done" (plist-get task :agent)))
-     ((eql 0 (car (setq merged (drgnx-job--git tree "merge" "--no-ff" "-q" "-m" (format "Merge %s: %s" (plist-get task :id) (plist-get task :title)) branch))))
-      (drgnx-coord-force-status (plist-get task :id) "done" (plist-get task :agent)))
-     (t
+      (drgnx-coord-force-status tid "done" (plist-get task :agent)))
+     (t (drgnx-job--git-async tree (list "merge" "--no-ff" "-q" "-m" (format "Merge %s: %s" tid (plist-get task :title)) branch)
+                              (lambda (merged) (drgnx-job--merged id task merged)))
+        (puthash tid "merging" drgnx-job--busy)
+        (drgnx-job--changed id)))))
+
+(defun drgnx-job--merged (id task merged)
+  "TASK of job ID was merged by git (MERGED: (EXIT . OUTPUT)): done; or, aborted, the user's."
+  (let ((tree (drgnx-job--job-tree id)) (tid (plist-get task :id)))
+    (remhash tid drgnx-job--busy)
+    (if (eql 0 (car merged))
+        (drgnx-coord-force-status tid "done" (plist-get task :agent))
       (let ((files (split-string (cdr (drgnx-job--git tree "diff" "--name-only" "--diff-filter=U")) "\n" t)))
         (drgnx-job--git tree "merge" "--abort")
-        (drgnx-job--card id (plist-get task :id) "merge-conflict"
+        (drgnx-job--card id tid "merge-conflict"
                          (if files
                              (format "merging into job/%s conflicts in: %s" id (string-join files ", "))
-                           (format "merge failed: %s" (cdr merged)))))))))   ; no conflict: a hook, git's own refusal
+                           (format "merge failed: %s" (cdr merged))))))   ; no conflict: a hook, git's own refusal
+    (drgnx-job--step-later id)
+    (drgnx-job--changed id)))
 
 ;;;; The budget, a failing provider
 
@@ -524,12 +594,29 @@ goes to the user."
                                 (and (eq (drgnx-agent-session-status s) 'exited) (or (drgnx-agent-session-stderr s) "")))))))
 
 (defun drgnx-job--agent-error (s err)
-  "`drgnx-agents-error-functions': the task of a job agent whose provider is at its limit goes to the next profile."
-  (when (and (drgnx-agent-session-job s) (not (gethash (drgnx-agent-session-id s) drgnx-job--reviewers))
-             (drgnx-job--provider-limit-p s err))
-    (puthash (drgnx-agent-session-id s) (drgnx-job--turns s) drgnx-job--turns-seen)   ; no nudge for this turn
-    (let ((job (drgnx-agent-session-job s)))
-      (run-at-time 0 nil (lambda () (with-demoted-errors "drgnx job: %S" (drgnx-job--fall-back job s err)))))))
+  "`drgnx-agents-error-functions': the task of a job agent whose provider is at its limit goes to the next profile;
+a task's reviewer starts again on the next profile of the review route (a clash reviewer is left alone)."
+  (let ((reviewer (gethash (drgnx-agent-session-id s) drgnx-job--reviewers)))
+    (when (and (drgnx-agent-session-job s) (not (consp reviewer)) (drgnx-job--provider-limit-p s err))
+      (puthash (drgnx-agent-session-id s) (drgnx-job--turns s) drgnx-job--turns-seen)   ; no nudge for this turn
+      (when reviewer (remhash (drgnx-agent-session-id s) drgnx-job--reviewing))   ; its turn's end is no verdict
+      (let ((job (drgnx-agent-session-job s)))
+        (run-at-time 0 nil (lambda () (with-demoted-errors "drgnx job: %S"
+                                        (if reviewer (drgnx-job--review-fall-back job s reviewer err) (drgnx-job--fall-back job s err)))))))))
+
+(defun drgnx-job--review-fall-back (id s task-id err)
+  "Reviewer S of TASK-ID (job ID) is at its provider's limit (ERR): the review starts again on the next profile of the
+review route; with none left, a card."
+  (let* ((from (drgnx-agent-session-profile s)) (live (drgnx-job--reviewer-of task-id))
+         (to (cadr (member from (drgnx-job-route 'review)))))
+    (when (and (equal (plist-get (drgnx-coord-job id) :status) "running") (equal (plist-get (drgnx-coord-task task-id) :status) "in-review")
+               (or (null live) (eq live s)))
+      (remhash (drgnx-agent-session-id s) drgnx-job--reviewing)
+      (unless (eq (drgnx-agent-session-status s) 'exited) (drgnx-agents-kill s))
+      (if to
+          (drgnx-job--start-review-agent id (drgnx-coord-task task-id) to)
+        (drgnx-job--card id task-id "review" (format "the reviewer (%s) failed (%s); no other review profile on the route"
+                                                     from (plist-get err :message)))))))
 
 (defun drgnx-job--handover (id s)
   "What agent S of job ID leaves its successor: its last commit and its last words."
@@ -629,7 +716,8 @@ working in TREE."
 (defun drgnx-job--changed (id)
   "Tell the hub's subscribers (a `job' event) when job ID's status, its tasks or its open cards changed."
   (let ((sig (list (plist-get (drgnx-coord-job id) :status)
-                   (mapcar (lambda (task) (cons (plist-get task :status) (plist-get task :agent))) (drgnx-coord-tasks id))
+                   (mapcar (lambda (task) (list (plist-get task :status) (plist-get task :agent) (gethash (plist-get task :id) drgnx-job--busy)))
+                           (drgnx-coord-tasks id))
                    (mapcar (lambda (c) (list (plist-get c :id) (plist-get c :title) (plist-get c :data))) (drgnx-coord-cards id "open")))))
     (unless (equal sig (gethash id drgnx-job--signatures))
       (puthash id sig drgnx-job--signatures)
@@ -691,6 +779,7 @@ S: the session whose request waits (it goes back to work once answered, or, gone
     (setf (alist-get task (plist-get data :fails) nil 'remove #'equal) nil)
     (setf (alist-get task (plist-get data :exits) nil 'remove #'equal) nil)
     (setf (alist-get task (plist-get data :nudged) nil 'remove #'equal) nil)
+    (setf (alist-get task (plist-get data :in-review-since) nil 'remove #'equal) nil)
     (when note (setf (alist-get task (plist-get data :notes) nil nil #'equal) note))
     (drgnx-coord-job-set job :data data))
   (when-let* ((s (drgnx-job--session (plist-get (drgnx-coord-task task) :agent))))   ; a new agent: the old one ends
@@ -863,7 +952,8 @@ permissions — and, with DECISIONS, its decision log (newest first)."
                                    :profile (if-let* ((s (drgnx-job--session (plist-get task :agent))))   ; after a fall-back: its agent's
                                                 (drgnx-agent-session-profile s)
                                               (car (drgnx-job-route (intern (or (plist-get task :role) "implement")))))
-                                   :status (plist-get task :status) :agent (plist-get task :agent) :deps (plist-get task :deps)))
+                                   :status (or (gethash (plist-get task :id) drgnx-job--busy) (plist-get task :status))   ; starting, merging
+                                   :agent (plist-get task :agent) :deps (plist-get task :deps)))
                            (drgnx-coord-tasks id))
             :agents (mapcar (lambda (s) (list :id (drgnx-agent-session-id s) :profile (drgnx-agent-session-profile s)
                                               :task (drgnx-agent-session-task s) :status (drgnx-agent-session-status s)

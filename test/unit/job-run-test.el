@@ -48,6 +48,33 @@
       (should (string-search (format "work for %s#1" id)
                              (drgnx-job-run-test--git repo "log" "--format=%s" (format "job/%s-1" id)))))))
 
+(ert-deftest drgnx-job/a-slow-worktree-add-does-not-block-the-hub ()
+  ;; `git worktree add' runs the post-checkout hook, however slow: the step goes on, the task says "starting"
+  (drgnx-job-run-test--with "# One\n\n### Task 1: one\n"
+    (let ((id (drgnx-job-propose plan)) (hook (concat repo ".git/hooks/post-checkout")) (t0 nil))
+      (write-region "#!/bin/sh\ncase \"$PWD\" in *-1) sleep 2;; esac\n" nil hook nil 'silent)
+      (set-file-modes hook #o755)
+      (setq t0 (float-time))
+      (drgnx-job-approve id)
+      (should (< (- (float-time) t0) 1.5))
+      (should (equal (plist-get (car (plist-get (drgnx-job-summary id) :tasks)) :status) "starting"))
+      (should-not (drgnx-job-run-test--sessions id))
+      (drgnx-job-step id)                                               ; asked again meanwhile: one worktree add
+      (should (drgnx-job-run-test--wait (lambda () (drgnx-job-run-test--sessions id)) 15))
+      (should (= 1 (length (drgnx-job-run-test--sessions id))))
+      (should (file-directory-p (drgnx-job--task-tree id 1)))
+      (should (member (plist-get (car (plist-get (drgnx-job-summary id) :tasks)) :status) '("claimed" "running" "in-review"))))))
+
+(ert-deftest drgnx-job/a-task-whose-worktree-cannot-be-made-is-a-card ()
+  ;; its branch is checked out somewhere else: neither way of making the worktree works
+  (drgnx-job-run-test--with "# One\n\n### Task 1: one\n"
+    (let ((id (drgnx-job-propose plan)))
+      (drgnx-job-run-test--git repo "worktree" "add" "-q" "-b" (format "job/%s-1" id) (concat root "elsewhere"))
+      (drgnx-job-approve id)
+      (should (drgnx-job-run-test--wait (lambda () (seq-find (lambda (c) (equal (plist-get c :kind) "agent")) (drgnx-coord-cards id "open"))) 15))
+      (should (string-search "worktree" (plist-get (car (drgnx-coord-cards id "open")) :title)))
+      (should-not (drgnx-job-run-test--sessions id)))))
+
 (ert-deftest drgnx-job/at-most-max-agents-at-once ()
   (drgnx-job-run-test--with "# Four\n\n### Task 1: a\n\n### Task 2: b\n\n### Task 3: c\n\n### Task 4: d\n"
     (let ((drgnx-job-max-agents 2) (id (drgnx-job-propose plan)) (most 0))
