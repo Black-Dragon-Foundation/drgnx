@@ -43,7 +43,7 @@ buffer of the selected window (a temp buffer in project `proj', no git).  Faces 
          ;; what `--on' and `--fit' set on the frame, put back
          (lines (frame-parameter nil 'tab-bar-lines)) (decided (frame-parameter nil 'drgnx-topline-lines))
          (old (window-buffer (selected-window))))
-     (cl-letf (((symbol-function 'drgnx-face--ascii-frame-p) (lambda (_frame) nil))   ; the batch terminal is not UTF-8
+     (cl-letf (((symbol-function 'drgnx-ui-ascii-frame-p) (lambda (_frame) nil))   ; the batch terminal is not UTF-8
                ;; whatever redisplay would reach for besides the buffer-local cache: a lookup is an error here
                ((symbol-function 'project-current) (lambda (&rest _) (error "a project lookup"))))
        (drgnx-command-define 'go-quick-open :title "Quick Open" :category "Go" :command #'drgnx-topline-test-files)
@@ -213,7 +213,7 @@ buffer of the selected window (a temp buffer in project `proj', no git).  Faces 
 (ert-deftest drgnx-topline/glyphs-have-an-ascii-form ()
   (drgnx-topline-test--with 'vscode
     (setq-local vc-mode " Git-main")
-    (cl-letf (((symbol-function 'drgnx-face--ascii-frame-p) (lambda (_frame) t)))
+    (cl-letf (((symbol-function 'drgnx-ui-ascii-frame-p) (lambda (_frame) t)))
       (should (string-match-p "\\`<> proj | main" (string-trim-left (drgnx-topline-test--text))))
       (should (string-match-p "/ C-p files | C-S-p commands" (drgnx-topline-test--text))))
     ;; the glyph table changed: made again

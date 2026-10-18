@@ -37,7 +37,7 @@ Segments a, b, c are defined: their text is A, B, C."
          (drgnx-statusbar-compact '(c))
          (drgnx-statusbar--window nil))
      ;; the batch terminal is not UTF-8: the tests that look at glyphs say which they mean
-     (cl-letf (((symbol-function 'drgnx-face--ascii-frame-p) (lambda (_frame) nil)))
+     (cl-letf (((symbol-function 'drgnx-ui-ascii-frame-p) (lambda (_frame) nil)))
        (drgnx-statusbar-define-segment 'a :fn (lambda () "A"))
        (drgnx-statusbar-define-segment 'b :fn (lambda () "B"))
        (drgnx-statusbar-define-segment 'c :fn (lambda () "C"))
@@ -756,7 +756,7 @@ Segments a, b, c are defined: their text is A, B, C."
 (ert-deftest drgnx-statusbar/the-separator-is-ascii-on-a-terminal-that-is-not-utf-8 ()
   (drgnx-statusbar-test--with
     (should (string-match-p "\\` A · B " (substring-no-properties (drgnx-statusbar-render 60))))
-    (cl-letf (((symbol-function 'drgnx-face--ascii-frame-p) (lambda (_frame) t)))
+    (cl-letf (((symbol-function 'drgnx-ui-ascii-frame-p) (lambda (_frame) t)))
       (let ((s (substring-no-properties (drgnx-statusbar-render 60))))
         (should (string-match-p "\\` A | B " s))
         (should-not (string-match-p "·" s))))
@@ -1049,7 +1049,7 @@ Segments a, b, c are defined: their text is A, B, C."
           (drgnx-statusbar--refresh-now)
           (should (equal (drgnx-statusbar-test--seg 'agents) "◐ 2 waiting on you"))
           ;; ASCII on a terminal that is not UTF-8
-          (cl-letf (((symbol-function 'drgnx-face--ascii-frame-p) (lambda (_frame) t)))
+          (cl-letf (((symbol-function 'drgnx-ui-ascii-frame-p) (lambda (_frame) t)))
             (should (equal (drgnx-statusbar-test--seg 'agents) "? 2 waiting on you"))))))))
 
 (ert-deftest drgnx-statusbar/waiting-functions-add-up ()

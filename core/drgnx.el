@@ -11,6 +11,7 @@
 (require 'drgnx-paths)
 (require 'drgnx-hooks)
 (require 'drgnx-guard)
+(require 'drgnx-ui-kit)
 (require 'drgnx-registry)
 (require 'drgnx-surfaces)
 (require 'drgnx-palette)

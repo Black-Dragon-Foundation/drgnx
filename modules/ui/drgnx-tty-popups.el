@@ -26,6 +26,7 @@
 (require 'seq)
 (require 'drgnx-hooks)
 (require 'drgnx-modules)
+(require 'drgnx-ui-kit)
 (defvar corfu-mode)
 (defvar corfu-auto)
 (defvar corfu-auto-delay)
@@ -60,12 +61,8 @@ candidates in `*Completions*' in the popup lane.  Nil: not there (corfu-auto sta
   (condition-case nil (progn (display-table-slot (make-display-table) (car drgnx-tty-popups-box-slots)) t)
     (error nil)))
 
-(defun drgnx-tty-popups-ascii-p (&optional frame)
-  "Non-nil when FRAME (default: the selected one) is a terminal frame whose terminal does not write UTF-8."
-  (let ((frame (or frame (selected-frame))))
-    (and (not (display-graphic-p frame))
-         (let ((coding (terminal-coding-system (frame-terminal frame))))
-           (not (and coding (string-prefix-p "utf-8" (symbol-name (coding-system-base coding)))))))))
+(defalias 'drgnx-tty-popups-ascii-p #'drgnx-ui-ascii-frame-p
+  "Non-nil when FRAME (default: the selected one) is a terminal frame whose terminal does not write UTF-8.")
 
 (defun drgnx-tty-popups--borders (ascii)
   "Set the box slots of `standard-display-table': ASCII marks when ASCII is non-nil, else box drawing.
