@@ -63,7 +63,7 @@ coordination server's `coord/notify` checks the same. One JSON object per line:
 | `job/propose` `{plan, repo?, budget?, auto?}`, `job/approve` `{id, budget?}`, `job/stop` `{id}`, `job/resume` `{id, budget?}` | the job (`drgnx-job-summary`) |
 | `job/status` `{id?, decisions?}` | the job (with its decision log when `decisions` is true), or `{jobs: [...]}` |
 | `job/card` `{card, action, arg?}` | the job, after the user's action on a card (once: a settled card is an error) |
-| `job/reply` `{message, text}` | `true`: the user's answer to an agent's message |
+| `job/reply` `{message, text}` | `true`: the user's answer to an agent's message, which reaches the agent as the user's answer to that question ([coordination.md](coordination.md#delivery-the-hub)) |
 | `job/dismiss` `{message}` | `true`: the message is acted on without an answer (the badge stops counting it) |
 
 Errors: `{"id", "error": {"message"}}`. A line that is not JSON is answered with an error too when its `"id"` can be

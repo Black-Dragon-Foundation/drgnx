@@ -166,6 +166,8 @@ stopped (`drgnx-agents-stop' fails the test).  The feed's buffers are killed aft
       (setq drgnx-cockpit-feed-test--hub nil)
       (should (eq (drgnx-cockpit-answer ext-q "yes, rename") 'message))
       (should (equal (mapcar (lambda (m) (plist-get m :text)) (drgnx-coord-inbox "ext:claude-code:42" '("queued"))) '("yes, rename")))
+      (should (equal (plist-get (drgnx-coord-message-answers (plist-get (car (drgnx-coord-inbox "ext:claude-code:42")) :id)) :id)
+                     (plist-get (plist-get ext-q :data) :message)))   ; the hub names the question it answers
       (should-not (assoc "agents/send" drgnx-cockpit-feed-test--hub))
       (should-not (drgnx-cockpit-feed-test--open-p (plist-get ext-q :id)))
       ;; a native session (busy): the hub's agents/send, which queues

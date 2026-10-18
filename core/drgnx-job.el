@@ -888,7 +888,8 @@ S: the session whose request waits (it goes back to work once answered, or, gone
 (defun drgnx-job-reply (mid text)
   "The user answers message MID (from an agent) with TEXT; MID is acted on."
   (let ((m (or (drgnx-coord-message mid) (user-error "No message %s" mid))))
-    (drgnx-coord-send :job (plist-get m :job) :recipient (plist-get m :sender) :text text :seen (drgnx-coord-version))
+    (drgnx-coord-send :job (plist-get m :job) :recipient (plist-get m :sender) :text text :seen (drgnx-coord-version)
+                      :answers mid)
     (drgnx-coord-mark mid "acted")
     (drgnx-job--changed (plist-get m :job))
     t))

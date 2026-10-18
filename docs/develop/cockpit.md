@@ -200,8 +200,9 @@ fixture is a temp project with:
       (`cl-letf`), so it starts a turn when free and waits in the queue when busy, never cancelling;
     - a live mirror whose mode is not `interrupt`: the hub's `agents/send`;
     - anything else (a mirror in `interrupt` mode, an exited or failed session, an outside or absent agent):
-      `drgnx-coord-send` to the agent, and the hub is told (`coord/notify`). A held message is said, returns nil and
-      closes nothing (and "Answer queued" is not said).
+      `drgnx-coord-send` to the agent, naming the question's message (`:answers`, so the hub's header names the
+      question: [coordination.md](coordination.md#delivery-the-hub)), and the hub is told (`coord/notify`). A held
+      message is said, returns nil and closes nothing (and "Answer queued" is not said).
   - Then `drgnx-coord-event-add` of an `answer` `(:question ID)` by `user`, and the message is marked `acted`.
     When the hub answers asynchronously, this happens in its callback, so a refused reply leaves the question open.
   - A permission opens the transcript, and nothing is written.

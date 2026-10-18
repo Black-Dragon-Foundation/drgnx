@@ -861,8 +861,9 @@ until the hub answers, the call fails or `drgnx-cockpit-feed-in-flight-timeout' 
   (drgnx-cockpit-schedule 0)
   (when (fboundp 'drgnx-statusbar-refresh) (drgnx-statusbar-refresh)))
 
-(defun drgnx-cockpit-feed--queue (agent text done &optional flight)
-  "Queue TEXT for AGENT, never interrupting it, then DONE (FLIGHT: as `drgnx-cockpit-feed--hub''s):
+(defun drgnx-cockpit-feed--queue (agent text done &optional flight answers)
+  "Queue TEXT for AGENT, never interrupting it, then DONE (FLIGHT: as `drgnx-cockpit-feed--hub''s; ANSWERS: the id of
+the message of AGENT's that TEXT answers, which a message in the store names):
 - a session of this Emacs takes it as if its mode were `queue' (or `steer', which steers its turn): it starts a turn
   when the session is free, else it waits in its queue — its mode `interrupt' never cancels the turn here;
 - a hub session's mirror: the hub's `agents/send' (queued), unless its mode interrupts;
@@ -882,7 +883,7 @@ until the hub answers, the call fails or `drgnx-cockpit-feed-in-flight-timeout' 
       (drgnx-cockpit-feed--hub "agents/send" (list :id (drgnx-agent-session-remote s) :text text) done flight)
       'session)
      (t
-      (let ((r (drgnx-coord-send :recipient agent :text text)))
+      (let ((r (drgnx-coord-send :recipient agent :text text :answers answers)))
         (if (equal (plist-get r :state) "held")
             (progn (message "Work cockpit: held, not sent — %s" (or (plist-get (drgnx-coord-message (plist-get r :id)) :reason) "too many messages"))
                    nil)
@@ -935,7 +936,7 @@ else one you pick; then the text is asked for.  In what happened, an agent with 
                ((and mid job)
                 (drgnx-cockpit-feed--hub "job/reply" (list :message mid :text text) answered flight)
                 'job)
-               (t (drgnx-cockpit-feed--queue agent text answered flight)))))
+               (t (drgnx-cockpit-feed--queue agent text answered flight mid)))))
         ;; nil: the store held it back, and said so
         (when (and route (not (eq route 'transcript)))
           ;; through the hub, it is not queued yet: the hub's answer (or error) comes later

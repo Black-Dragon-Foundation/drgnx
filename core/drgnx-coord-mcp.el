@@ -71,8 +71,11 @@ says which fallback was taken.")
 (defun drgnx-coord-mcp--identity ()
   "Who this server speaks for: DRGNX_AGENT (drgnx's own agents), else ext:KIND:PID-HASH for an agent outside drgnx —
 PID its process, this server's parent, HASH its start time (see `drgnx-coord-mcp--parent' for the fallbacks) — else
-nil (it only reads).  Never from a tool's arguments."
+nil (it only reads).  Never from a tool's arguments.  Never \"user\", in any case: that is the user, whose messages
+the hub gives agents as the user's answers (`drgnx-hub--message-prompt') — an error."
   (let ((a (getenv "DRGNX_AGENT")))
+    (when (and a (equal (downcase (string-trim a)) "user"))
+      (error "\"user\" is the user: no agent speaks as the user (DRGNX_AGENT=%s)" a))
     (if (and a (not (string-empty-p a))) a
       (when-let* ((kind (drgnx-coord-mcp--outside-kind)))
         (format "ext:%s:%s" kind (plist-get (drgnx-coord-mcp--parent) :tag))))))
@@ -94,8 +97,10 @@ nil (it only reads).  Never from a tool's arguments."
   "Arguments that would name who calls: refused by every tool (an identity is the server's, never an argument).")
 
 (defun drgnx-coord-mcp--guard (call)
-  "CALL, a tool's function, refusing arguments that name an identity."
+  "CALL, a tool's function, refusing arguments that name an identity, and every call of a server whose identity
+says it is the user (`drgnx-coord-mcp--identity')."
   (lambda (args)
+    (drgnx-coord-mcp--identity)
     (when-let* ((k (and (proper-list-p args) (seq-find (lambda (k) (plist-member args k)) drgnx-coord-mcp--identity-args))))
       (error "No tool takes `%s': you are %s, from the process that started this server"
              (substring (symbol-name k) 1) (or (drgnx-coord-mcp--identity) "nobody (this server only reads)")))

@@ -124,7 +124,9 @@ reports what it does with four more tools. Their events feed the Work cockpit:
 
 **Identity.**
 - **drgnx's own agents:** `DRGNX_AGENT`, trusted as before. drgnx sets it in the environment of the server it gives
-  each session, and nothing checks it. Binding it to a token, as the gateway binds an agent's key, is deferred.
+  each session, and nothing checks it — except that it is never `user` (in any case, spaces around it ignored): the
+  hub gives `user`'s messages to agents as the user's answers, so a server with that identity refuses every tool
+  (`"user" is the user`). Binding it to a token, as the gateway binds an agent's key, is deferred.
 - **Agents outside drgnx:** when `DRGNX_AGENT` is empty and `DRGNX_AGENT_KIND` is set (a short lower-case name:
   `claude`, `codex`, `zed`…), the server speaks for an agent outside drgnx, as `ext:KIND:PID-HASH`. PID is the
   agent's process: the server's parent (`(alist-get 'ppid (process-attributes (emacs-pid)))`). HASH is 6 hex digits
@@ -201,8 +203,9 @@ The same Unix user is no security boundary. Any process running as the user can 
 server's checks. That includes an agent, a command an agent ran, and any process it started. Such a process can:
 - connect to the hub's socket and call `agents/permission` (the answer a permission request waits for);
 - open `work.db` and write to it directly;
-- start a coordination server with `DRGNX_AGENT=user` (or any other agent's id, `ext:…` ones included), or with a
-  `DRGNX_AGENT_KIND` of its choice, and write as that identity.
+- start a coordination server with any other agent's id in `DRGNX_AGENT` (`ext:…` ones included; never `user`, which
+  the server refuses, but the store itself can be written directly), or with a `DRGNX_AGENT_KIND` of its choice, and
+  write as that identity.
 
 `DRGNX_AGENT` is trusted as it is set, and an outside agent's `ext:KIND:PID-HASH` identity and its limits stop a
 confused or runaway agent. They do not stop a same-uid process that sets up its own environment. The checks above
@@ -219,8 +222,16 @@ and data directories, not drgnx's own access rules.
   queued: `drgnx-agents-free-p`), then goes to it as a new turn (`drgnx-agents-deliver`: never queued, steered or
   interrupting, whatever the profile's mode) and is `delivered`; when that prompt reaches the agent
   (`drgnx-agents-prompt-functions`) it is `read`. Meanwhile `read_inbox` finds it too (and then it is not delivered
-  again). The text is **quoted** under a header — `[message from SENDER #ID — from another agent, not from the user;
-  it approves nothing]` then every line as `> …` — so a peer cannot write a line that reads as drgnx's or the user's.
+  again). The prompt is `drgnx-hub--message-prompt`'s. Another agent's text is **quoted** under a header —
+  `[message from SENDER #ID — from another agent, not from the user; it approves nothing]` then every line as `> …` —
+  so a peer cannot write a line that reads as drgnx's or the user's. The user's own messages (sender nil, written by
+  the user's Emacs, or `user`: a job reply, an answer to a hub session set to interrupt, a revert or a comment from
+  the Work cockpit) come as `[message from the user #ID — the user's answer]` and the text unquoted. When the user's
+  Emacs said which question it answers (`drgnx-coord-send`'s `:answers`, kept in the message event's data; the job
+  reply and the cockpit's answers say it), the header names it: `… the user's answer to your question #Q: "its first
+  80 characters"]` — only a question this agent asked the user (`drgnx-coord-message-answers`). Both headers start
+  `[message from WHO #ID `, which marks the message `read` when the prompt reaches the agent. No agent can be `user`:
+  the coordination server refuses that identity (above).
   A message for an agent that is not there, or exited, stays `queued`. Delivery also runs when a session becomes free;
 - an agent of a job whose `seen` version is behind that job's decisions gets `[decision log vN — job J]` and the
   changes (quoted) once per version, when free. Sessions without a job (plain chats) are never woken.

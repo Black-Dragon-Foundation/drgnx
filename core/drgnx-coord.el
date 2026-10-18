@@ -467,11 +467,13 @@ than `drgnx-coord-decision-rate' a minute from one agent are refused.  (:ok t :n
     (list :id id :job job :sender sender :recipient recipient :text text :state state :reason reason :at at
           :delivered delivered :read read :acted acted)))
 
-(cl-defun drgnx-coord-send (&key job sender recipient text seen question)
+(cl-defun drgnx-coord-send (&key job sender recipient text seen question answers)
   "SENDER (who read the log at SEEN; nil: the user's own Emacs) sends TEXT to RECIPIENT.  (:ok t :id ID :state S) —
 held when RECIPIENT's queue is full or the two exchange too much — or (:held …) when SEEN is behind.
 A message to \"user\" is a question (its event's kind) when QUESTION is set (the ask_user tool), or when its TEXT
-starts with [escalation] and SENDER is not an agent outside drgnx (ext:…): their messages are never questions."
+starts with [escalation] and SENDER is not an agent outside drgnx (ext:…): their messages are never questions.
+ANSWERS is the id of the message (a question to the user) this one answers, kept in its event's data: see
+`drgnx-coord-message-answers'."
   (drgnx-coord--tx
    (lambda (db)
      (or (drgnx-coord--held db seen)
@@ -495,8 +497,20 @@ starts with [escalation] and SENDER is not an agent outside drgnx (ext:…): the
                                                                   (string-prefix-p "[escalation]" (or text "")))))
                                            "question" "message")
                                  :summary (if (equal recipient "user") text (format "to %s: %s" recipient text))
-                                 :data (list :message id :to recipient :state state))
+                                 :data (append (list :message id :to recipient :state state)
+                                               (and (natnump answers) (list :answers answers))))
              (list :ok t :id id :state state)))))))
+
+(defun drgnx-coord-message-answers (id)
+  "The question the user's message ID answers, when its sender named one (`drgnx-coord-send''s ANSWERS): the message
+from ID's recipient to \"user\" — nil for another agent's message, for a question of someone else's, or when the
+message's event was pruned."
+  (when-let* ((m (drgnx-coord-message id))
+              ((equal (or (plist-get m :sender) "user") "user"))
+              (e (seq-find (lambda (e) (eql (plist-get (plist-get e :data) :message) id))
+                           (nreverse (drgnx-coord-events :agent "user" :kinds '("message")))))
+              (q (drgnx-coord-message (plist-get (plist-get e :data) :answers))))
+    (and (equal (plist-get q :sender) (plist-get m :recipient)) (equal (plist-get q :recipient) "user") q)))
 
 (defun drgnx-coord-queued ()
   "Every message waiting to be delivered, oldest first."
