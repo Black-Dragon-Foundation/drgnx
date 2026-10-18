@@ -210,6 +210,29 @@ provider's name. `:key-where` names the variable and the keyring host. An `env` 
 `ANTHROPIC_BASE_URL`, `ANTHROPIC_MODEL`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_API_KEY`, `ANTHROPIC_SMALL_FAST_MODEL` or
 `ANTHROPIC_DEFAULT_*_MODEL` is a note ("overrides every profile's route"), by file and name, never the value.
 
+## Kimi Code's settings (`drgnx-agent-config-kimi.el`)
+
+The `kimi` methods of the three generic functions (checked against kimi-code 2.2.0). Read: the files below; write: only
+the entry that changed, with one backup next to the file. `HOME/credentials/` is never opened and no key is looked up.
+The route is one: Kimi Code's own login (`kimi login`), billing `subscription`.
+
+| What | Where |
+| --- | --- |
+| Home | `(drgnx-agent-config-home 'kimi)`: `$KIMI_CODE_HOME` (unset or empty: `~/.kimi-code`). |
+| User / project MCP servers | `mcpServers` of `HOME/mcp.json` and `ROOT/.kimi-code/mcp.json`. An entry has `command` (stdio) or `url` (http; `transport` "sse" is written for sse); `enabled` false is off; `bearerTokenEnvVar` names a variable. |
+| Read only | `ROOT/.mcp.json` (Kimi Code reads it too; Claude Code's page edits it), the enabled plugins' servers (`plugin-ID:SERVER`), hooks and skills (`HOME/plugins/installed.json`, each root's `kimi.plugin.json` or `.kimi-plugin/plugin.json`), and the old kimi-cli's `~/.kimi` (`mcp.json`, `config.toml` hooks, `skills/`) under `:from legacy` with the note "the old kimi-cli's config: kimi-code migrates from it; drgnx does not edit it". |
+| Hooks | `[[hooks]]` tables (`event`, `matcher`, `command`, `timeout` 1 to 600) in `HOME/config.toml`, user scope only. Hooks written some other way (an inline `hooks = [...]`) are read only, with `:reason` naming the line. |
+| Skills | `HOME/skills`, `~/.agents/skills`, `ROOT/.kimi-code/skills`, `ROOT/.agents/skills`. The format has no off switch: a skill is always on and a toggle is refused. |
+| Rules | `HOME/AGENTS.md`, `ROOT/.kimi-code/AGENTS.md`, `ROOT/AGENTS.md` when present. |
+
+Writes are synchronous (the callback runs at once). An MCP edit merges the modelled members (`transport`, `command`,
+`args`, `env`, `cwd`, `url`, `headers`, `bearerTokenEnvVar`) into the entry that is there and keeps every other member
+(`enabled`, timeouts, `auth`, tool lists, ...); a rename keeps the entry's place. A hook edit does the same for its
+table. Each write re-reads the file just before and passes what it read as EXPECT, so a file changed meanwhile is read
+again, once; a second change is reported and nothing is written. A file that does not parse is reported with its line
+and never written. Errors never show the entry's data. The hook events are the 16 `config.toml` accepts; any other
+makes Kimi Code reject the whole file, so drgnx refuses it.
+
 ## Doctor (`drgnx-doctor.el`)
 
 `bin/drgnx doctor [--json] [--dev]` asks the Emacs drgnx will use (see above) whether this
