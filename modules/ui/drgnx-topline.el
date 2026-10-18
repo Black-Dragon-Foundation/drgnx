@@ -9,9 +9,9 @@
 ;; and, only when drgnx draws the title itself (`drgnx-face-drawn-title-p'), `– ▢ ✕' on the right with the empty
 ;; area dragging the frame.  It exists to tell someone who has just opened drgnx where to start.
 ;;
-;; The tab bar calls the format on its redisplay, so `drgnx-topline--line' reads cached state only: the editor's
-;; `vc-mode' text for the branch (never git), the project root in the buffer-local cache the breadcrumb keeps
-;; (`drgnx-chrome--root'; no file or process access, a miss shows `drgnx'), the keys the registry already resolved.
+;; The tab bar calls the format on its redisplay, so `drgnx-topline--line' reads cached state only: the branch from
+;; drgnx's git cache, as the status bar shows it, else the editor's `vc-mode' text (never git), the project root in
+;; the buffer-local cache the breadcrumb keeps (`drgnx-chrome--root'; no file or process access, a miss shows `drgnx'), the keys the registry already resolved.
 ;; The cache is filled off redisplay, from the change bus's `editor-changed' edge (never for a remote directory).
 ;; What the line makes is memoized on what it shows (the editor buffer, its `vc-mode' text, directory and cached
 ;; project, the frame and its width, the keys, the glyph forms), so a redisplay that changes nothing costs a few
@@ -34,6 +34,9 @@
 (declare-function drgnx-chrome--project-root "drgnx-chrome")
 (declare-function drgnx-signal-subscribe "drgnx-signal")
 (declare-function drgnx-signal-unsubscribe "drgnx-signal")
+(declare-function drgnx-git-cached-root "drgnx-git")
+(declare-function drgnx-git-branch "drgnx-git")
+(declare-function drgnx-git-roots-known "drgnx-git")
 (defvar vc-mode)
 (defvar drgnx-chrome--root)
 (defvar drgnx-face-glyphs)
@@ -79,11 +82,20 @@ A tab-bar format you set yourself is never replaced: then the line stays off."
   "The glyph NAME for the selected frame (see `drgnx-face-glyph'); ASCII when it is not known."
   (or (and (fboundp 'drgnx-face-glyph) (drgnx-face-glyph name)) ascii))
 
+(defun drgnx-topline--git-root (buffer)
+  "The repository root of BUFFER's file (or folder) that drgnx's git cache already knows, or nil.  A cache read."
+  (when (fboundp 'drgnx-git-cached-root)
+    (let ((path (or (buffer-local-value 'buffer-file-name buffer) (buffer-local-value 'default-directory buffer))))
+      (and (stringp path) (drgnx-git-cached-root path)))))
+
 (defun drgnx-topline--branch (buffer)
-  "The branch git put in BUFFER's `vc-mode' text (\" Git-main\"), or nil.  Reads the cached text; never runs git."
-  (let ((vc (buffer-local-value 'vc-mode buffer)))
-    (when (and (stringp vc) (string-match "\\`[ ]*[[:alpha:]]+[-:@!?]\\(.+\\)" (substring-no-properties vc)))
-      (match-string 1 (substring-no-properties vc)))))
+  "The branch of BUFFER as the status bar shows it: from drgnx's git cache (\"(detached)\" for a detached HEAD), else
+the branch git put in its `vc-mode' text (\" Git-main\"), else nil.  Reads caches only; never runs git."
+  (if-let* ((root (drgnx-topline--git-root buffer)) (b (drgnx-git-branch root)))
+      (or (plist-get b :head) "(detached)")
+    (let ((vc (buffer-local-value 'vc-mode buffer)))
+      (when (and (stringp vc) (string-match "\\`[ ]*[[:alpha:]]+[-:@!?]\\(.+\\)" (substring-no-properties vc)))
+        (match-string 1 (substring-no-properties vc))))))
 
 (defun drgnx-topline--project (buffer)
   "The name of BUFFER's project (the folder of its root), or nil.  Reads the breadcrumb's buffer-local cache
@@ -212,18 +224,20 @@ left out), each one running its command.  nil when none has a key."
 (defvar drgnx-topline--memo (make-hash-table :test #'eq :weakness 'key)
   "Frame → the vector of the items last made for it and what they were made from, compared in place so a redisplay
 that changes nothing allocates nothing: [FRAME BUFFER VC-MODE DIRECTORY PROJECT-CACHE WIDTH DRAWN, then for each of the
-three hint commands its command and its keys, GLYPHS ITEMS].  One vector per frame (the tab bar of each frame is drawn
-with that frame selected, so two frames would otherwise make the line again at every redisplay), weak on the frame, so
-a deleted frame's goes with it.  The vector holds the editor's buffer strongly: a killed buffer is kept until that
-frame's next redisplay replaces it (a few objects that are otherwise gone; it never accumulates).")
+three hint commands its command and its keys, GLYPHS ITEMS, GIT-ROOT BRANCH-PLIST ROOTS-KNOWN FILE].  One vector per
+frame (the tab bar of each frame is drawn with that frame selected, so two frames would otherwise make the line again
+at every redisplay), weak on the frame, so a deleted frame's goes with it.  The vector holds the editor's buffer
+strongly: a killed buffer is kept until that frame's next redisplay replaces it (a few objects that are otherwise
+gone; it never accumulates).")
 
 (defun drgnx-topline--forget ()
   "Empty the memo."
   (clrhash drgnx-topline--memo))
 
 (defun drgnx-topline--same-p (m frame buffer width drawn)
-  "Non-nil when the memo vector M was made from exactly these: FRAME, BUFFER (its `vc-mode' text, directory and
-project cache), WIDTH columns, DRAWN, the hint commands and their keys, and the glyph table.  Allocates nothing."
+  "Non-nil when the memo vector M was made from exactly these: FRAME, BUFFER (its `vc-mode' text, file, directory,
+project cache and git cache entry), WIDTH columns, DRAWN, the hint commands and their keys, and the glyph table.
+Allocates nothing."
   (let ((i 7) (same t))
     (and (eq (aref m 0) frame) (eq (aref m 1) buffer)
          (eq (aref m 2) (buffer-local-value 'vc-mode buffer))
@@ -231,6 +245,13 @@ project cache), WIDTH columns, DRAWN, the hint commands and their keys, and the 
          (eq (aref m 4) (and (boundp 'drgnx-chrome--root) (buffer-local-value 'drgnx-chrome--root buffer)))
          (eql (aref m 5) width) (eq (aref m 6) drawn)
          (eq (aref m 13) drgnx-face-glyphs)
+         (eq (aref m 18) (buffer-local-value 'buffer-file-name buffer))
+         ;; the git cache: the branch plist of the root found (a status run makes a new one), else whether the cache
+         ;; has learnt more folders' roots since (one of them may be this buffer's)
+         (let ((root (aref m 15)))
+           (if root
+               (eq (aref m 16) (drgnx-git-branch root))
+             (eql (aref m 17) (and (fboundp 'drgnx-git-roots-known) (drgnx-git-roots-known)))))
          (dolist (spec drgnx-topline--hint-commands same)
            (let ((cmd (drgnx-commands-get (car spec))))
              (unless (and (eq (aref m i) (and cmd (drgnx-cmd-command cmd)))
@@ -247,6 +268,11 @@ project cache), WIDTH columns, DRAWN, the hint commands and their keys, and the 
     (aset m 4 (and (boundp 'drgnx-chrome--root) (buffer-local-value 'drgnx-chrome--root buffer)))
     (aset m 5 width) (aset m 6 drawn)
     (aset m 13 drgnx-face-glyphs) (aset m 14 items)
+    (let ((root (drgnx-topline--git-root buffer)))
+      (aset m 15 root)
+      (aset m 16 (and root (drgnx-git-branch root)))
+      (aset m 17 (and (fboundp 'drgnx-git-roots-known) (drgnx-git-roots-known))))
+    (aset m 18 (buffer-local-value 'buffer-file-name buffer))
     (dolist (spec drgnx-topline--hint-commands)
       (let ((cmd (drgnx-commands-get (car spec))))
         (aset m i (and cmd (drgnx-cmd-command cmd)))
@@ -288,7 +314,7 @@ alone for `drgnx-topline-retry-seconds'.  A memo hit allocates nothing."
                (buffer (if (window-live-p window) (window-buffer window) (current-buffer)))
                (width (frame-text-cols frame))   ; `frame-width' conses ~140 cells and 14 strings per call
                (drawn (and (drgnx-topline--drawn-title-p frame) t)))
-          (let ((m (or (gethash frame drgnx-topline--memo) (puthash frame (make-vector 15 nil) drgnx-topline--memo))))
+          (let ((m (or (gethash frame drgnx-topline--memo) (puthash frame (make-vector 19 nil) drgnx-topline--memo))))
             (unless (drgnx-topline--same-p m frame buffer width drawn)
               (drgnx-topline--stamp m frame buffer width drawn (drgnx-topline--build buffer width drawn)))
             (setq drgnx-topline--error nil drgnx-topline--error-at nil)

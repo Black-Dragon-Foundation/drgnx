@@ -241,8 +241,9 @@ A quiet line along the top of the frame says where you are and where to start:
  ◆ drgnx · main                 ⌕ C-p files · C-S-p commands · C-k C-r all keys
 ```
 
-On the left, the project and branch of the editor you used last (the folder of the project's root, and the branch
-git put in the file's version-control text; with no project it says `drgnx`, with no git it leaves the branch out).
+On the left, the project and branch of the editor you used last (the folder of the project's root, and the same
+branch the status bar shows, so a new file git does not track yet has it too; with no project it says `drgnx`, with
+no git it leaves the branch out).
 In the middle, the three keys that open everything, as the profile you chose has them: **Quick Open** (files),
 the **Command Palette** (commands) and **Keyboard Shortcuts** (all keys). Each one is a button: click `C-S-p
 commands` and the palette opens. A command with no key of its own in your profile shows the key Emacs gives it
@@ -255,7 +256,8 @@ the right end has `– ▢ ✕` (minimise, maximise, close) and the empty part o
 it. With the system's own title bar (the default) those buttons would be a second set, so they are not there.
 
 The line is Emacs's tab bar with no tabs, since drgnx has no workspaces. It only reads what is already known: the
-branch from the file's version-control text (never by running git), and the project from the same cache the breadcrumb
+branch from drgnx's git cache, as the status bar reads it (until the cache has read the repository, the file's
+version-control text; never by running git), and the project from the same cache the breadcrumb
 keeps, which is filled when you switch editor, so a directory it has not met yet shows `drgnx` for a moment. Nothing
 in it touches the disk or a process while you type. If something in it fails it shows the mark alone for ten seconds
 rather than disappearing. A `tab-bar-format` of your own is never replaced, and a tab bar that was already on is

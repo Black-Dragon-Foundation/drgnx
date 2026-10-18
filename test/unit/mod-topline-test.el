@@ -4,6 +4,7 @@
 (require 'drgnx)
 (require 'drgnx-chrome)                 ; the project cache the line reads
 (require 'drgnx-signal)                 ; the editor-changed edge it subscribes to
+(require 'drgnx-git)                    ; the git cache the branch comes from
 (load (expand-file-name "modules/ui/drgnx-face" drgnx-dir) nil t)
 (load (expand-file-name "modules/ui/drgnx-topline" drgnx-dir) nil t)
 (defvar drgnx-signal--editor-window)
@@ -389,6 +390,30 @@ buffer of the selected window (a temp buffer in project `proj', no git).  Faces 
           (cl-letf (((symbol-function 'frame-text-cols) (lambda (&optional _) 100)))
             (should-not (eq third (drgnx-topline--line)))))))))
 
+(ert-deftest drgnx-topline/the-branch-comes-from-the-git-cache-the-status-bar-reads ()
+  "An untracked file has no branch in `vc-mode'; the status bar shows it from drgnx's git cache, so does the line."
+  (drgnx-topline-test--with 'vscode
+    (let ((drgnx-git--repos (make-hash-table :test #'equal)) (drgnx-git--roots (make-hash-table :test #'equal))
+          (root "/tmp/drgnx-tl-repo/"))
+      (setq-local buffer-file-name "/tmp/drgnx-tl-repo/src/new.el")
+      (setq-local vc-mode nil)
+      (should (string-match-p "◆ proj +⌕" (drgnx-topline-test--text)))   ; the cache has not read it yet
+      ;; the cache finds the repository, then a status run reads its branch: the line is made again each time
+      (puthash "/tmp/drgnx-tl-repo/src/" root drgnx-git--roots)
+      (should (string-match-p "◆ proj +⌕" (drgnx-topline-test--text)))
+      (puthash root (list :branch (list :head "main")) drgnx-git--repos)
+      (should (string-match-p "◆ proj · main" (drgnx-topline-test--text)))
+      (puthash root (list :branch (list :head "feature")) drgnx-git--repos)
+      (should (string-match-p "◆ proj · feature" (drgnx-topline-test--text)))
+      ;; `vc-mode' is only the fallback (the same as the status bar's)
+      (setq-local vc-mode " Git-other")
+      (should (string-match-p "· feature" (drgnx-topline-test--text)))
+      (puthash root (list :branch (list :head nil :detached t)) drgnx-git--repos)
+      (should (string-match-p "· (detached)" (drgnx-topline-test--text)))
+      ;; no cache entry: vc-mode's branch
+      (remhash root drgnx-git--repos)
+      (should (string-match-p "· other" (drgnx-topline-test--text))))))
+
 (ert-deftest drgnx-topline/a-memo-hit-allocates-nothing ()
   ;; the tab bar asks for the items about 40 times per keystroke in some flows
   (drgnx-topline-test--with 'vscode
@@ -398,7 +423,8 @@ buffer of the selected window (a temp buffer in project `proj', no git).  Faces 
     ;; .elc: measure the line and everything it calls on a hit compiled
     (dolist (fn '(drgnx-topline--line drgnx-topline--same-p drgnx-topline--failing-p drgnx-topline--drawn-title-p
                                       drgnx-face-drawn-title-p drgnx-signal-editor-window drgnx-signal-editor-window-p
-                                      drgnx-commands-get drgnx-cmd-command drgnx-cmd-bound))
+                                      drgnx-commands-get drgnx-cmd-command drgnx-cmd-bound
+                                      drgnx-git-branch drgnx-git-roots-known))
       (unless (byte-code-function-p (symbol-function fn)) (byte-compile fn)))
     (let ((first (drgnx-topline--line))
           (loop (byte-compile (lambda () (dotimes (_ 1000) (drgnx-topline--line))))))   ; a compiled loop

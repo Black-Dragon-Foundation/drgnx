@@ -58,6 +58,11 @@ For code that runs on redisplay; `drgnx-git-root' (which may look at the disk) f
                         drgnx-git--roots)))
       (and (stringp hit) hit))))
 
+(defun drgnx-git-roots-known ()
+  "How many folders the root cache has an answer for: it changes when a folder's repository (or that it has none)
+is found.  A count, no allocation: redisplay memos compare it to see that `drgnx-git-cached-root' may answer now."
+  (hash-table-count drgnx-git--roots))
+
 (defun drgnx-git--xy (xy)
   "The status of a porcelain v2 ordinary or renamed entry from its XY field."
   (let ((x (aref xy 0)) (y (aref xy 1)))
