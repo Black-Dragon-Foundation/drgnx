@@ -2,11 +2,11 @@
 ;; Run under `drgnx-run-ert-batch' (temp HOME and XDG dirs); every test has its own tmux server.  A legacy client
 ;; is a VTE (Ptyxis, GNOME Terminal): TERM=xterm-256color, VTE_VERSION, and VTE's answer to XTVERSION (the test
 ;; gives it: tmux would answer as tmux).  Keys are the bytes such a terminal sends: Alt+Shift+F is ESC F, F6 is
-;; ESC [ 1 7 ~.  The helpers for recording commands, kkp and the clients' frames are keys-test.el's.
+;; ESC [ 1 7 ~.  The helpers for recording commands, kkp and the clients' frames are tty-keys-helpers.el's.
 (require 'ert)
 (require 'drgnx-tty-session)
-(unless (featurep 'keys-test)
-  (load (expand-file-name "keys-test" (file-name-directory (or load-file-name buffer-file-name))) nil t))
+(unless (featurep 'tty-keys-helpers)
+  (load (expand-file-name "tty-keys-helpers" (file-name-directory (or load-file-name buffer-file-name))) nil t))
 
 (defun drgnx-tty-fallback-test--says (name)
   "A form, in the inner daemon: terminals made from now on answer XTVERSION as NAME (\"VTE(7800)\")."
