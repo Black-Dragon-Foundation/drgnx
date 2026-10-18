@@ -30,7 +30,16 @@ MIDWAY (a function of the id) is called once the job is running, its tasks not d
              (lambda () (or both (setq both (and (file-directory-p (drgnx-job--task-tree id 1)) (file-directory-p (drgnx-job--task-tree id 2))
                                                  (not (file-directory-p (drgnx-job--task-tree id 3)))))))
              15))
-    (should (drgnx-job-run-test--wait (lambda () (equal (plist-get (drgnx-coord-job id) :status) "done")) 90))
+    (let ((done (drgnx-job-run-test--wait (lambda () (equal (plist-get (drgnx-coord-job id) :status) "done")) 90)))
+      ;; a job that does not finish says where it stands (the failure carries it): the tasks, the open cards, what each session last said
+      (unless done (ert-fail (list :tasks (mapcar (lambda (task) (list (plist-get task :n) (plist-get task :status) (plist-get task :agent)))
+                                                  (drgnx-coord-tasks id))
+                                   :cards (mapcar (lambda (c) (list (plist-get c :kind) (plist-get c :task) (plist-get c :title)))
+                                                  (drgnx-coord-cards id "open"))
+                                   :sessions (mapcar (lambda (s)
+                                                       (list (drgnx-agent-session-id s) (drgnx-agent-session-task s) (drgnx-agent-session-status s)
+                                                             (let ((said (drgnx-job-clash--said s))) (substring said (max 0 (- (length said) 300))))))
+                                                     drgnx-agents--sessions)))))
     ;; task 3 started from the job branch with task 1 merged
     (should (string-search (format "work for %s#1" id) (drgnx-job-run-test--git repo "log" "--format=%s" (format "job/%s-3" id))))
     (should (= 4 (length (split-string (drgnx-job-run-test--git repo "log" "--merges" "--format=%s" (concat "job/" id)) "\n" t))))
@@ -59,10 +68,11 @@ whoever reads one — a process of any kind — takes the word away.  The holder
           drgnx-job-exit-test--credential-files))
 
 (defun drgnx-job-exit-test--unread-p (canary)
-  "Is the word still in CANARY's FIFO (a (PATH . HOLDER))?  Looking takes it out and puts it back."
+  "Is the word still in CANARY's FIFO (a (PATH . HOLDER))?  Looking takes it out and puts it back.
+An `x' goes in first, so the read never waits on an empty FIFO (POSIX dd: macOS's has no iflag=nonblock)."
   (equal (with-temp-buffer
            (call-process "sh" nil t nil "-c"
-                         "exec 3<>\"$1\"; w=$(dd bs=6 count=1 iflag=nonblock <&3 2>/dev/null); printf '%s' \"$w\" >&3; printf '%s' \"$w\""
+                         "exec 3<>\"$1\"; printf x >&3; w=$(dd bs=7 count=1 <&3 2>/dev/null); w=${w%x}; printf '%s' \"$w\" >&3; printf '%s' \"$w\""
                          "sh" (car canary))
            (buffer-string))
          "canary"))
@@ -77,7 +87,7 @@ whoever reads one — a process of any kind — takes the word away.  The holder
       (unwind-protect
           (progn
             (should (seq-every-p #'drgnx-job-exit-test--unread-p canaries))
-            (call-process "timeout" nil nil nil "5" "head" "-c" "3" (car (car canaries)))
+            (call-process "dd" nil nil nil (concat "if=" (car (car canaries))) "bs=3" "count=1")   ; no `timeout' on macOS; the word is there
             (should-not (drgnx-job-exit-test--unread-p (car canaries)))
             (should (drgnx-job-exit-test--unread-p (cadr canaries))))
         (drgnx-job-exit-test--release canaries)))))

@@ -1,0 +1,9 @@
+# Terminal test tiers in a container: tmux for the tty tier; kitty under headless mutter for the exit test.
+# FEDORA=44 gives Emacs 30.2, FEDORA=45 gives Emacs 31.1.
+# Run with --security-opt seccomp=unconfined --security-opt label=disable, as Containerfile.gui.
+# Docs on (tsflags=): the Emacs and Elisp manuals; findutils for project search; ncurses for infocmp and terminfo.
+ARG FEDORA=45
+FROM registry.fedoraproject.org/fedora:${FEDORA}
+RUN dnf -y --setopt=tsflags= install emacs-pgtk info diffutils findutils git tmux kitty kitty-terminfo wl-clipboard \
+        mutter dbus-daemon mesa-dri-drivers procps-ng util-linux ncurses \
+    && dnf clean all

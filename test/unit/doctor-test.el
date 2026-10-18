@@ -26,7 +26,7 @@
 
 (ert-deftest drgnx-doctor/tree-sitter-and-gui ()
   (should (eq (drgnx-doctor-test--status 'tree-sitter (drgnx-doctor-test--facts :treesit nil)) 'warn))
-  (should (eq (drgnx-doctor-test--status 'gui (drgnx-doctor-test--facts :gui nil)) 'warn))
+  (should (eq (drgnx-doctor-test--status 'gui (drgnx-doctor-test--facts :gui nil)) 'ok))   ; a terminal-only build is fine (M12b)
   (should (eq (drgnx-doctor-test--status 'gui (drgnx-doctor-test--facts :gui 'ns)) 'ok)))
 
 (ert-deftest drgnx-doctor/security-notice-until-31.2 ()
@@ -37,8 +37,9 @@
 
 (ert-deftest drgnx-doctor/dev-checks-only-with-dev ()
   (let ((names (lambda (results) (mapcar (lambda (r) (plist-get r :name)) results))))
-    (should-not (memq 'ui-mutter (funcall names (drgnx-doctor-run (drgnx-doctor-test--facts) nil))))
-    (should (memq 'ui-mutter (funcall names (drgnx-doctor-run (drgnx-doctor-test--facts :mutter nil) t))))))
+    ;; ui-magick: a dev check on every platform (ui-mutter is Linux-only)
+    (should-not (memq 'ui-magick (funcall names (drgnx-doctor-run (drgnx-doctor-test--facts) nil))))
+    (should (memq 'ui-magick (funcall names (drgnx-doctor-run (drgnx-doctor-test--facts :magick nil) t))))))
 
 (ert-deftest drgnx-doctor/report-and-exit-code ()
   (let* ((results (drgnx-doctor-run (drgnx-doctor-test--facts :version "29.4") nil))
@@ -90,8 +91,8 @@
           (let ((r (drgnx-doctor-test--run "doctor")))
             (should (string-search "native-compilation" (cdr r)))
             (should-not (string-search "noise on stderr" (cdr r)))
-            (should-not (string-search "ui-mutter" (cdr r))))
-          (should (string-search "ui-mutter" (cdr (drgnx-doctor-test--run "doctor" "--dev"))))
+            (should-not (string-search "ui-magick" (cdr r))))         ; a dev check on every platform
+          (should (string-search "ui-magick" (cdr (drgnx-doctor-test--run "doctor" "--dev"))))
           (let ((out (cdr (drgnx-doctor-test--run "doctor" "--json"))))
             (should (plist-get (aref (json-parse-string (string-trim out) :object-type 'plist) 0) :name))))
       (delete-directory dir t))))
@@ -407,3 +408,38 @@
           (let ((process-environment (cons "SHELL=/bin/bash" process-environment)))   ; a set SHELL still decides
             (should (equal (drgnx-doctor--shell-profile) "~/.profile"))))
       (delete-directory home t))))
+
+(ert-deftest drgnx-doctor/the-claude-adapter-must-be-the-maintained-package ()
+  ;; C2-3: the deprecated adapter never says which MCP server a tool is from
+  (let* ((old '(:program "/p/bin/claude-agent-acp" :name "@zed-industries/claude-agent-acp" :version "0.23.1" :prefix "/p"))
+         (new '(:program "/q/bin/claude-agent-acp" :name "@agentclientprotocol/claude-agent-acp" :version "0.93.0" :prefix "/q"))
+         (check (lambda (a) (drgnx-doctor-check 'claude-adapter (drgnx-doctor-test--facts :claude-adapter a)))))
+    (let ((r (funcall check old)))
+      (should (eq (car r) 'warn))
+      (should (string-search "deprecated" (nth 1 r)))
+      (should (string-search "0.23.1" (nth 1 r)))
+      (should (equal (nth 2 r) (concat "npm uninstall -g --prefix /p @zed-industries/claude-agent-acp"
+                                       " && npm install -g --prefix /p @agentclientprotocol/claude-agent-acp"))))
+    (let ((r (funcall check new)))
+      (should (eq (car r) 'ok))
+      (should (string-search "@agentclientprotocol/claude-agent-acp 0.93.0" (nth 1 r))))
+    (should (eq (car (funcall check (plist-put (copy-sequence new) :version "1.2.0"))) 'ok))
+    (let ((r (funcall check (plist-put (copy-sequence new) :version "0.59.0"))))
+      (should (eq (car r) 'warn))
+      (should (equal (nth 2 r) "npm install -g --prefix /q @agentclientprotocol/claude-agent-acp@latest")))
+    ;; a program of no package drgnx knows: it cannot tell, so it warns
+    (let ((r (funcall check '(:program "/r/claude-agent-acp"))))
+      (should (eq (car r) 'warn))
+      (should (string-search "/r/claude-agent-acp" (nth 1 r)))
+      (should (string-search "@agentclientprotocol/claude-agent-acp 0.93.0 or newer" (nth 2 r)))
+      (should (string-search "the tool that installed it" (nth 2 r))))
+    ;; a known package outside a global npm prefix (pnpm, volta, a project): advice, no npm -g command
+    (let ((r (funcall check (plist-put (copy-sequence old) :prefix nil))))
+      (should (eq (car r) 'warn))
+      (should-not (string-match-p "npm uninstall" (nth 2 r))))
+    ;; none: only a notice (the agent panel is optional); never a failure, so the doctor's exit stays 0
+    (let ((r (funcall check nil)))
+      (should (eq (car r) 'info))
+      (should (string-search "drgnx onboard --step agents" (nth 2 r))))
+    (should (eq (car (funcall check '(:error "boom"))) 'warn))
+    (should (= 0 (drgnx-doctor-exit-code (drgnx-doctor-run (drgnx-doctor-test--facts :version "31.2" :claude-adapter old) nil))))))

@@ -5,6 +5,7 @@
 (require 'drgnx-wb)
 (load (expand-file-name "test/fixtures/git-fixture" drgnx-dir) nil t)
 (load (expand-file-name "modules/tools/drgnx-replace" drgnx-dir) nil t)
+(require 'drgnx-run-ert "run-ert")                     ; `drgnx-run-ert-time-factor'
 
 (defun drgnx-replace-view-test--bind-keys ()
   "Bind the shipped VS Code profile's keys of the replace commands that live in the view's and the bar's keymaps."
@@ -53,6 +54,14 @@ bar's keymaps), one editor window, no view or bar left over."
 
 (defun drgnx-replace-view-test--count ()
   (with-current-buffer (drgnx-replace-view-test--view) (length drgnx-replace--matches)))
+
+(defun drgnx-replace-view-test--rows ()
+  "The view's matches as (FILE LINE), FILE as given (no directory only when below the view's root), sorted: a wrong
+count says which rows."
+  (with-current-buffer (drgnx-replace-view-test--view)
+    (sort (mapcar (lambda (m) (list (file-relative-name (plist-get m :file) drgnx-replace--root) (plist-get m :line)))
+                  drgnx-replace--matches)
+          (lambda (a b) (string< (format "%S" a) (format "%S" b))))))
 
 (defun drgnx-replace-view-test--files ()
   "The files the view lists, by name, sorted (ripgrep sends files in any order)."
@@ -195,7 +204,8 @@ bar's keymaps), one editor window, no view or bar left over."
       (drgnx-replace-in-files)
       (drgnx-replace-view-test--set 'replace "bar")
       (drgnx-replace-view-test--wait)
-      (should (= (drgnx-replace-view-test--count) 4))
+      ;; (macOS CI once listed 7 here; the rows say which)
+      (should (equal (drgnx-replace-view-test--rows) '(("a.txt" 1) ("a.txt" 2) ("b.txt" 1) ("c.txt" 1))))
       (let ((a (expand-file-name "a.txt" repo)) (b (expand-file-name "b.txt" repo)) (c (expand-file-name "c.txt" repo))
             (row (lambda (file line) (lambda (v) (and (consp v) (equal (plist-get v :file) file) (= (plist-get v :line) line))))))
         ;; untick a match, then a whole file
@@ -386,30 +396,43 @@ bar's keymaps), one editor window, no view or bar left over."
       (let ((text (apply #'concat (make-list 100 "a needle in the haystack, line after line\n"))))
         (dotimes (i 100) (drgnx-git-test-write repo (format "d/f%03d.txt" i) text)))
       (drgnx-replace-view-test--visit repo "d/f000.txt" 3)
-      (let* ((t0 (progn (garbage-collect) (float-time)))
-             (_ (drgnx-replace-in-files))         ; searches at once (no typing to wait for)
-             (first nil) (worst 0) (view (drgnx-replace-view-test--view))
-             (drawn (lambda () (with-current-buffer view drgnx-replace--drawn))))
-        (while (and (with-current-buffer view (drgnx-replace--busy-p)) (< (- (float-time) t0) 20))
-          (let ((s (float-time)) (gc gc-elapsed))
-            (accept-process-output nil 0.001)
-            ;; time spent in our filter, timers and drawing; a garbage collection is the GC policy's business
-            (setq worst (max worst (- (float-time) s (- gc-elapsed gc)))))
-          (when (and (not first) (> (funcall drawn) 0)) (setq first (- (float-time) t0))))
-        (should (= (funcall drawn) 10000))
-        (should (= (drgnx-replace-view-test--count) 10000))
-        (should (< first 0.1))
-        (should (< worst 0.016))
-        ;; typing a replacement draws all 10000 rows again (new previews): in slices too
-        (setq worst 0)
-        (drgnx-replace-view-test--set 'replace "pin")
-        (let ((t1 (float-time)))
-          (while (and (with-current-buffer view (drgnx-replace--busy-p)) (< (- (float-time) t1) 20))
-            (let ((s (float-time)) (gc gc-elapsed))
-              (accept-process-output nil 0.001)
-              (setq worst (max worst (- (float-time) s (- gc-elapsed gc)))))))
-        (should (= (funcall drawn) 10000))
-        (should (< worst 0.016))))))
+      ;; three runs, each judged by its worst slice; the budgets hold for the median run: one slice the machine
+      ;; stole (macOS CI: 32.1 ms once, 17.6 and 20.5 before) is not the view's, a slow slice in every run is
+      (let* ((drawn (lambda () (with-current-buffer (drgnx-replace-view-test--view) drgnx-replace--drawn)))
+             (watch (lambda (t0)
+                      ;; until the view is idle: (FIRST-ROW-AFTER WORST-SLICE), from T0
+                      (let ((first nil) (worst 0))
+                        (while (and (with-current-buffer (drgnx-replace-view-test--view) (drgnx-replace--busy-p))
+                                    (< (- (float-time) t0) 20))
+                          (let ((s (float-time)) (gc gc-elapsed))
+                            (accept-process-output nil 0.001)
+                            ;; time spent in our filter, timers and drawing; a garbage collection is the GC
+                            ;; policy's business
+                            (setq worst (max worst (- (float-time) s (- gc-elapsed gc)))))
+                          (when (and (not first) (> (funcall drawn) 0)) (setq first (- (float-time) t0))))
+                        (list first worst))))
+             (median (lambda (xs) (nth 1 (sort (copy-sequence xs) #'<))))
+             (factor (drgnx-run-ert-time-factor))
+             (firsts nil) (streams nil) (redraws nil))
+        (dotimes (i 3)
+          ;; each run the same: a new view, no replacement typed yet
+          (when (> i 0) (kill-buffer (drgnx-replace-view-test--view)) (select-window (drgnx-wb-editor-window)))
+          (let ((t0 (progn (garbage-collect) (float-time))))
+            (drgnx-replace-in-files)              ; searches at once (no typing to wait for)
+            (pcase-let ((`(,first ,worst) (funcall watch t0)))
+              (should (= (funcall drawn) 10000))
+              (should (= (drgnx-replace-view-test--count) 10000))
+              (push first firsts)
+              (push worst streams)))
+          ;; typing a replacement draws all 10000 rows again (new previews): in slices too
+          (drgnx-replace-view-test--set 'replace "pin")
+          (push (cadr (funcall watch (float-time))) redraws)
+          (should (= (funcall drawn) 10000)))
+        (message "ten thousand matches: first row %S s, worst slice %S s streaming, %S s redrawing (factor %s)"
+                 firsts streams redraws factor)
+        (should (< (funcall median firsts) (* 0.1 factor)))
+        (should (< (funcall median streams) (* 0.016 factor)))
+        (should (< (funcall median redraws) (* 0.016 factor)))))))
 
 
 ;; fix round 1
@@ -582,6 +605,42 @@ bar's keymaps), one editor window, no view or bar left over."
         (drgnx-persist-save)
         (should-not (get-buffer-window (drgnx-replace-view-test--bar)))
         (should-not (string-search drgnx-replace-bar-buffer-name (drgnx-replace-view-test--read drgnx-persist-file)))))))
+
+(ert-deftest drgnx-replace/a-save-that-writes-nothing-leaves-the-find-bar-open ()
+  ;; Save Workbench Layout in a terminal window does nothing, so it must not close the bar either
+  (require 'drgnx-persist)
+  (drgnx-replace-view-test--with
+    (drgnx-git-test-with-repo
+      (drgnx-git-test-write repo "f.txt" "foo\n")
+      (let ((drgnx-persist-file (expand-file-name "state.eld" tmp)))
+        (drgnx-replace-view-test--visit repo "f.txt" 1)
+        (drgnx-replace-in-file)
+        (should (get-buffer-window (drgnx-replace-view-test--bar)))
+        (cl-letf (((symbol-function 'terminal-name) (lambda (&optional _) "/dev/pts/9"))
+                  ((symbol-function 'message) #'ignore))
+          (drgnx-persist-save))
+        (should (get-buffer-window (drgnx-replace-view-test--bar)))
+        (should-not (file-exists-p drgnx-persist-file))))))
+
+(ert-deftest drgnx-replace/a-client-closing-saves-the-graphical-windows-and-closes-the-bar-from-a-terminal-selection ()
+  ;; the save when a client's last graphical windows close passes them explicitly: a terminal window being the
+  ;; selected frame does not stop it, nor the bar closing before it
+  (require 'drgnx-persist)
+  (drgnx-replace-view-test--with
+    (drgnx-git-test-with-repo
+      (drgnx-git-test-write repo "f.txt" "foo\n")
+      (let ((drgnx-persist-file (expand-file-name "state.eld" tmp)) (drgnx-persist--saved-at-exit nil))
+        (drgnx-replace-view-test--visit repo "f.txt" 1)
+        (drgnx-replace-in-file)
+        (should (get-buffer-window (drgnx-replace-view-test--bar)))
+        (set-frame-parameter nil 'client 'proc)
+        (unwind-protect
+            (cl-letf (((symbol-function 'terminal-name) (lambda (&optional _) "/dev/pts/9"))
+                      ((symbol-function 'display-graphic-p) (lambda (&optional f) (and f t))))   ; the selected frame is text, the saved ones not
+              (drgnx-persist--before-client-delete 'proc))
+          (set-frame-parameter nil 'client nil))
+        (should-not (get-buffer-window (drgnx-replace-view-test--bar)))
+        (should (file-exists-p drgnx-persist-file))))))
 
 (ert-deftest drgnx-replace/an-error-closing-the-bar-never-stops-the-save ()
   ;; The find bar's `drgnx-persist-save' advice runs on every exit: it must not make the save fail.

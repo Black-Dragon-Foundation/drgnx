@@ -284,6 +284,41 @@
       (should (eq (drgnx-coord-events-prune-daily) t))
       (should-not (drgnx-coord-events)))))
 
+(ert-deftest drgnx-coord-events/prune-daily-never-signals-whatever-fails ()
+  (drgnx-coord-events-test--with
+    ;; not only a locked database: any error (a full disk, a corrupt file) is a message, never a signal out of a tick
+    (cl-letf (((symbol-function 'drgnx-coord-events-prune) (lambda (&rest _) (error "Disk full"))))
+      (should-not (drgnx-coord-events-prune-daily)))
+    (cl-letf (((symbol-function 'drgnx-coord--meta) (lambda (&rest _) (signal 'sqlite-error '("file is not a database")))))
+      (should-not (drgnx-coord-events-prune-daily)))))
+
+(ert-deftest drgnx-coord-events/deep-data-reads-back-whole ()
+  (drgnx-coord-events-test--with
+    (let* ((deep '(:a (1 (2 (3 (4 (5 (6 (7 (8 "deep"))))))))))
+           (id (drgnx-coord-event-add :agent "a" :kind "edit" :summary "x" :data deep)))
+      (should (equal (plist-get (car (drgnx-coord-events :since (1- id))) :data) deep)))))
+
+(ert-deftest drgnx-coord-events/ids-are-never-reused ()
+  (drgnx-coord-events-test--with
+    (let ((a (drgnx-coord-event-add :agent "a" :kind "edit" :summary "one"))
+          (b (drgnx-coord-event-add :agent "a" :kind "edit" :summary "two")))
+      (drgnx-coord-events-prune :before (+ (float-time) 10))     ; the newest gone too
+      (should (> (drgnx-coord-event-add :agent "a" :kind "edit" :summary "three") (max a b))))))
+
+(ert-deftest drgnx-coord-events/the-log-is-capped-between-prunes ()
+  (drgnx-coord-events-test--with
+    (let ((drgnx-coord-event-max-rows 10))
+      (drgnx-coord-event-add :agent "a" :kind "question" :summary "q")
+      (dotimes (i 15) (drgnx-coord-event-add :agent "a" :kind "edit" :summary (format "e%d" i)))
+      (drgnx-coord-events-prune-daily)
+      ;; the oldest go first; questions, answers and decisions stay
+      (should (equal (mapcar (lambda (e) (plist-get e :summary)) (drgnx-coord-events))
+                     (cons "q" (mapcar (lambda (i) (format "e%d" i)) (number-sequence 6 14)))))
+      ;; on every call, not once a day
+      (dotimes (i 3) (drgnx-coord-event-add :agent "a" :kind "edit" :summary "more"))
+      (should-not (drgnx-coord-events-prune-daily))
+      (should (= (length (drgnx-coord-events)) 10)))))
+
 (ert-deftest drgnx-coord-events/telemetry-is-best-effort-when-the-db-is-busy ()
   (drgnx-coord-events-test--with
     (drgnx-coord-agent-register :id "s-1")

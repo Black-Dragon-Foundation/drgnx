@@ -107,20 +107,21 @@ LLM answering SPEC; `o' found running."
     (should-not (drgnx-ai-ghost-text))))
 
 (defmacro drgnx-ai-ghost-test--keys (&rest body)
-  "BODY with the module's commands registered and the default key profile applied (undone after)."
-  `(let* ((dir (make-temp-file "drgnx-ai-keys" t))
-          (process-environment (append (list (concat "DRGNX_CONFIG_DIR=" dir) (concat "XDG_STATE_HOME=" dir "/state"))
-                                       process-environment))
-          (drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
-          (drgnx-keys--applied nil) (drgnx-keys--session-layers nil) (drgnx-keys-profiles nil)
-          (drgnx-keys-problems nil) (drgnx-keys-last nil))
-     (unwind-protect
-         (progn (funcall (plist-get (alist-get 'tools/ai drgnx-modules--table) :setup))
-                (drgnx-keys-apply)
-                ,@body)
-       (drgnx-keys--restore)
-       (remove-hook 'prog-mode-hook #'drgnx-ai-ghost--maybe-enable)
-       (delete-directory dir t))))
+  "BODY with the module's commands registered and the default key profile applied on Linux (undone after)."
+  `(cl-letf (((symbol-function 'drgnx-platform) (lambda () 'linux)))
+     (let* ((dir (make-temp-file "drgnx-ai-keys" t))
+            (process-environment (append (list (concat "DRGNX_CONFIG_DIR=" dir) (concat "XDG_STATE_HOME=" dir "/state"))
+                                         process-environment))
+            (drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
+            (drgnx-keys--applied nil) (drgnx-keys--session-layers nil) (drgnx-keys-profiles nil)
+            (drgnx-keys-problems nil) (drgnx-keys-last nil))
+       (unwind-protect
+           (progn (funcall (plist-get (alist-get 'tools/ai drgnx-modules--table) :setup))
+                  (drgnx-keys-apply)
+                  ,@body)
+         (drgnx-keys--restore)
+         (remove-hook 'prog-mode-hook #'drgnx-ai-ghost--maybe-enable)
+         (delete-directory dir t)))))
 
 (ert-deftest drgnx-ai-ghost/c-right-accepts-a-word-only-while-a-suggestion-shows ()
   (drgnx-ai-ghost-test--keys

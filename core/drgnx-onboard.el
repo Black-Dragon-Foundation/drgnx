@@ -20,6 +20,8 @@
 (require 'drgnx-modules)
 (require 'drgnx-registry)
 (require 'drgnx-session)
+(require 'drgnx-tty)
+(require 'drgnx-tty-recommend)
 
 (defvar drgnx-onboard--steps nil "Alist ID → plist (:title :doc :order :run :check).")
 (defvar drgnx-onboard--current nil "The id of the step running now.")
@@ -506,8 +508,10 @@ is still loading) reads \"not tested\" and counts as neither asked nor failed."
 
 ;;;; Step 4: setting AI up — Ollama, LM Studio or OpenRouter
 
-(defconst drgnx-onboard-claude-package "@zed-industries/claude-agent-acp"
-  "The npm package of the Claude Code adapter (binary `claude-agent-acp') drgnx's `claude' agent profile runs.")
+(defconst drgnx-onboard-claude-package "@agentclientprotocol/claude-agent-acp"
+  "The npm package of the Claude Code adapter (binary `claude-agent-acp') drgnx's `claude' agent profile runs: the
+maintained one (`drgnx-agents-claude-package'), not the deprecated @zed-industries package.  Not pinned: npm installs
+the latest; the doctor checks the version.")
 
 (defconst drgnx-onboard-install-recipes
   `((ollama :name "Ollama" :provider ollama
@@ -1046,6 +1050,9 @@ step ran before: keep it or change it.  Without interaction: what was found, and
   "The header line of the terminal Claude Code's login happens in.")
 
 (declare-function drgnx-agents-profile "drgnx-agents")
+(declare-function drgnx-agents-command "drgnx-agents")
+(declare-function drgnx-agents-claude-adapter "drgnx-agents")
+(declare-function drgnx-agents-adapter-problem "drgnx-agents")
 (declare-function drgnx-acp-start "drgnx-acp")
 (declare-function drgnx-acp-request "drgnx-acp")
 (declare-function drgnx-acp-stop "drgnx-acp")
@@ -1126,7 +1133,7 @@ end: a program you chose earlier on the PATH keeps winning."
          (answer nil) (ended nil) (conn nil))
     (drgnx-onboard--say "Starting the claude profile's agent…")
     (condition-case err
-        (setq conn (drgnx-acp-start command :cwd (drgnx-state-dir)
+        (setq conn (drgnx-acp-start (drgnx-agents-command command) :cwd (drgnx-state-dir)
                                     :on-exit (lambda (_c status stderr) (setq ended (cons status stderr)))))
       (error (setq answer (cons nil (list :message (error-message-string err))))))
     (unwind-protect
@@ -1209,14 +1216,17 @@ then ends `info', waiting for you to run it again (Done).  A login that cannot b
       (pcase-let ((`(,ok . ,text) (drgnx-onboard--claude-profile)))
         (if (not ok)
             (list 'fail (format "Claude Code is installed, but %s — run claude-agent-acp in a terminal to see why, then this step again" text))
-          (list (if unknown 'info 'ok)
-                (format "Claude Code is installed%s; %s — Agents: New Agent Session… starts it%s%s"
-                        (if unknown ", but drgnx could not tell whether it is logged in (run claude and type /login if it is not)" ", logged in")
-                        text
-                        (if added (format " (added %s to this Emacs's PATH: add it to your shell's PATH too%s)" (string-join added ", ")
-                                          (if (drgnx-onboard--hub-running-p) "; the hub keeps its old PATH: drgnx hub stop, then start a durable session again" ""))
-                          "")
-                        (if (and interactive (not unknown)) (concat "; " (drgnx-onboard--agents-offers)) "")))))))))
+          ;; the deprecated adapter (or one too old) works, but says nothing of MCP servers: the command that moves it
+          (let ((problem (drgnx-agents-adapter-problem (drgnx-agents-claude-adapter))))
+            (list (cond (problem 'warn) (unknown 'info) (t 'ok))
+                  (format "Claude Code is installed%s; %s%s — Agents: New Agent Session… starts it%s%s"
+                          (if unknown ", but drgnx could not tell whether it is logged in (run claude and type /login if it is not)" ", logged in")
+                          text
+                          (if problem (format "; but %s — to move to the maintained adapter: %s" (car problem) (cdr problem)) "")
+                          (if added (format " (added %s to this Emacs's PATH: add it to your shell's PATH too%s)" (string-join added ", ")
+                                            (if (drgnx-onboard--hub-running-p) "; the hub keeps its old PATH: drgnx hub stop, then start a durable session again" ""))
+                            "")
+                          (if (and interactive (not unknown)) (concat "; " (drgnx-onboard--agents-offers)) ""))))))))))
 
 (defun drgnx-onboard--agents-step (ctx)
   "Claude Code for the agent panel: `claude' (a VS Code extension's bundled copy does not count), Node and the
@@ -1287,12 +1297,22 @@ keep running.  Saved (session.eld); returns the sentence for the step's result."
                              (abbreviate-file-name (drgnx-macos-install-app)) drgnx-onboard-macos-open-text)))
           (t (list 'info (format "the drgnx app is not installed — to install it into %s: drgnx macos-app" where))))))
 
+(defun drgnx-onboard--terminal-note ()
+  "The terminals drgnx works best in and, in a terminal frame, that terminal's row (`drgnx-tty-onboard-note'); for a
+terminal that cannot send every key, also what to install (`drgnx-tty-recommendation': it only says, nothing is
+installed).  Reads what drgnx found when the terminal opened (the terminal parameter `drgnx-tty-caps'); asks the
+terminal nothing."
+  (let* ((caps (and (not (display-graphic-p)) (terminal-parameter nil 'drgnx-tty-caps)))
+         (rec (and caps (ignore-errors (drgnx-tty-recommendation caps (drgnx-tty-os))))))
+    (concat (drgnx-tty-onboard-note (plist-get caps :id)) (if rec (concat " " (plist-get rec :text)) ""))))
+
 (defun drgnx-onboard--daemon-step (ctx)
-  "Keep running or quit (asked once), then macOS: the drgnx app; Linux: the systemd unit and desktop entry."
+  "Keep running or quit (asked once), then macOS: the drgnx app; Linux: the systemd unit and desktop entry.  The
+result ends with the terminal note (`drgnx-onboard--terminal-note')."
   (let ((keep (drgnx-onboard--keep-running ctx)))
     (pcase-let ((`(,status ,message) (if (eq (drgnx-platform) 'macos) (drgnx-onboard--macos-app ctx)
                                        (drgnx-onboard--linux-desktop ctx))))
-      (list status (concat message "; " keep)))))
+      (list status (concat message "; " keep ". " (drgnx-onboard--terminal-note))))))
 
 (defun drgnx-onboard--linux-desktop (ctx)
   (require 'drgnx-pkg)
@@ -1409,26 +1429,48 @@ modules on or installed packages here, in the drgnx app (CTX interactive): asked
 ;;;; Welcome (the steps in Emacs)
 
 (defvar drgnx-onboard-mode-map
-  (let ((m (make-sparse-keymap))) (keymap-set m "RET" #'drgnx-onboard-run-step-at-point) m))
+  (let ((m (make-sparse-keymap)))
+    (keymap-set m "RET" #'drgnx-onboard-run-step-at-point)
+    (keymap-set m "n" #'drgnx-onboard-next-step)
+    m))
 
 (defconst drgnx-onboard-welcome-header "Return runs the step under the cursor — start at the top"
   "The Welcome's header line (its column names are the buffer's first line).")
 
 (define-derived-mode drgnx-onboard-mode tabulated-list-mode "Welcome"
-  "The onboarding steps: RET runs the step on the line, then the cursor moves to the next one."
+  "The onboarding steps: RET runs the step on the line, then the cursor moves to the next one; n moves to the
+next step not done (a finished step's row ends with a Next button that does the same)."
   (setq tabulated-list-format [("Step" 22 nil) ("Status" 7 nil) ("" 0 nil)]
         tabulated-list-use-header-line nil)   ; the column names in the buffer: the header line says what to do
   (tabulated-list-init-header)
   (setq header-line-format drgnx-onboard-welcome-header))
 
+(defun drgnx-onboard--next-undone (id state)
+  "The next step after ID that is not done in STATE (`drgnx-onboard-state'): ok and info are done.  After the
+last step it goes on from the first; nil when no step but ID is left."
+  (let* ((ids (drgnx-onboard-steps))
+         (tail (cdr (memq id ids))))
+    (seq-find (lambda (i) (not (memq (plist-get (alist-get i state) :status) '(ok info))))
+              (append tail (seq-take-while (lambda (i) (not (eq i id))) ids)))))
+
+(defun drgnx-onboard--next-button (id state)
+  "A \"Next: STEP\" button to the next step not done after ID, or nil when there is none.  It moves the cursor
+there; it runs nothing (each step keeps its own consent)."
+  (when-let* ((next (drgnx-onboard--next-undone id state)))
+    (buttonize (format "Next: %s" (plist-get (alist-get next drgnx-onboard--steps) :title))
+               #'drgnx-onboard--goto-step next)))
+
 (defun drgnx-onboard--entries ()
   (let ((state (drgnx-onboard-state)))
     (mapcar (lambda (id)
-              (let ((spec (alist-get id drgnx-onboard--steps)) (s (alist-get id state))
-                    (busy (and (eq id (car drgnx-onboard--progress)) (cdr drgnx-onboard--progress))))
+              (let* ((spec (alist-get id drgnx-onboard--steps)) (s (alist-get id state))
+                     (busy (and (eq id (car drgnx-onboard--progress)) (cdr drgnx-onboard--progress)))
+                     (next (and s (not busy) (drgnx-onboard--next-button id state))))
                 (list id (vector (plist-get spec :title)
                                  (cond (busy "…") (s (symbol-name (plist-get s :status))) (t "—"))
-                                 (or busy (plist-get s :message) (plist-get spec :doc))))))
+                                 (if next
+                                     (concat (plist-get s :message) "  " next)
+                                   (or busy (plist-get s :message) (plist-get spec :doc)))))))
             (drgnx-onboard-steps))))
 
 (defun drgnx-onboard-welcome ()
@@ -1489,6 +1531,18 @@ never inside the hook (the window and the restored layout come first)."
   (when-let* ((id (tabulated-list-get-id)))
     (drgnx-onboard-run-step id)
     (when-let* ((next (cadr (memq id (drgnx-onboard-steps))))) (drgnx-onboard--goto-step next))))
+
+(defun drgnx-onboard-next-step ()
+  "Move to the next step not done (after this one, then from the top); runs nothing."
+  (interactive)
+  (let ((state (drgnx-onboard-state)))
+    (if-let* ((id (tabulated-list-get-id))
+              (next (drgnx-onboard--next-undone id state)))
+        (drgnx-onboard--goto-step next)
+      (message (if (seq-every-p (lambda (i) (memq (plist-get (alist-get i state) :status) '(ok info)))
+                                (drgnx-onboard-steps))
+                   "All done: every step is done"
+                 "This is the only step left")))))
 
 (declare-function drgnx-command-define "drgnx-registry")
 

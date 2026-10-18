@@ -11,11 +11,10 @@
     v))
 
 (ert-deftest drgnx-parity/context-compact-and-slash-commands ()
-  (skip-unless (file-readable-p "/proc/self/fd/0"))
   (let* ((real (getenv "DRGNX_AGENT_PROFILE"))
          (drgnx-agents-profiles
           (unless real
-            (list (list "mock" :command (list (expand-file-name invocation-name invocation-directory) "--batch" "-Q" "-l"
+            (list (list "mock" :command (list "sh" (expand-file-name "test/fixtures/mock-acp-stdin.sh" drgnx-dir) (expand-file-name invocation-name invocation-directory) "--batch" "-Q" "-l"
                                               (expand-file-name "test/fixtures/mock-acp.el" drgnx-dir))))))
          (drgnx-agents--sessions nil)
          (secs (if real 120 10))

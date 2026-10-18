@@ -78,7 +78,8 @@ after the cursor stops — the Outline's own cursor is yours and never moves). F
 | Select several: extend down / up, mark | `S-<down>` / `S-<up>`, `C-SPC` | `S-<down>` / `S-<up>`, `m` | `J` / `K`, `m` |
 | Find (filter the tree) | `C-M-f` | `/` | `/` |
 
-Ctrl-click adds a row to the selection, Shift-click selects a range; moving without Shift ends it. Delete, Copy,
+Ctrl-click adds a row to the selection, Shift-click selects a range (in a terminal window Shift-click is the
+terminal's own, so a range is Shift+arrows there); moving without Shift ends it. Delete, Copy,
 Cut and Rename act on the selection; a folder selected together with something inside it counts once (the folder
 carries it). Every operation takes its targets before it asks anything, so nothing that happens while you answer
 can make it act on another file, and Paste checks every item before it moves the first. Deleting a symbolic link
@@ -168,7 +169,11 @@ alone unless a rule names them.
 Every window's chrome is decided by its **role**, never by its buffer: an **editor** window has a tab line, a
 breadcrumb header and a mode line; a **dock** section has its title only; the **panel** and the **right dock** have
 their tab row only; a popup has none. The chrome lives in window parameters, so a mode that sets its own header or
-mode line (ibuffer, Info) cannot change a window's height — text never jumps (invariant I3).
+mode line (ibuffer, Info) cannot change a window's height — text never jumps (invariant I3). A terminal window
+needs at least 30 frame lines for the breadcrumb row, which is 31 terminal rows with the menu bar on (the menu bar
+is not a frame line); with fewer, the frame parameter `drgnx-chrome-breadcrumb` is `off` (set by the terminal layout)
+and the row is gone, sticky scroll's scopes with it. It comes back with room, and a buffer's own header line (column
+headings) stays.
 
 - **Tabs**: the buffers an editor window has shown, in the order they were opened; switching never reorders them.
   Click a tab to show it, `×` or middle-click closes it (the buffer stays open — close it in the Buffers panel).
@@ -219,8 +224,17 @@ is left out (said once) without costing the other functions' keys.
 Each group's shown file opens at once and its other tabs open while you are idle; nothing asks anything at start (no
 remote files are touched, only safe local variables, no large-file question). Files that no longer exist are skipped,
 sizes are clamped to the frame, window parameters in the file are ignored (drgnx saves none), and a state in another
-format is ignored. Save / Restore Workbench Layout are in the palette. Only a graphical session saves — a batch run
-never writes your state.
+format is ignored. Save / Restore Workbench Layout are in the palette. Only graphical windows save and restore — a
+batch run never writes your state.
+
+**Terminal windows** (`emacs -nw`, `emacsclient -t`) open with the default layout for their size
+([terminal.md](terminal.md)) and neither save nor restore their own layout: a terminal session never overwrites the
+layout of your desktop windows. Save Workbench Layout, run in a terminal window, does nothing and says "Layouts are
+saved and restored from graphical windows". Restore Workbench Layout, run in a terminal window while a graphical
+window is open, restores the saved layout into that graphical window (not into the terminal) and says "Restored into
+the graphical window"; focus stays in the terminal (you may be over SSH). With no graphical window open, it does nothing and gives the same message as Save. A job window
+comes back on the graphical display only, never laid out over a terminal window; with no graphical window, it is not
+restored.
 
 ### Several windows
 
@@ -234,6 +248,16 @@ first and every other buffer after them: it sorts, it never hides one (the order
 category, in `completion-category-overrides`; a `display-sort-function` of your own there stays). A help or results buffer shown from a window opens that
 window's panel; nothing moves in the other window. drgnx never places or sizes a window: your window manager does.
 
+**In a terminal.** A terminal window — `emacsclient -t`, `emacs -nw` — is a workbench window too: the same docks,
+groups, tab line, breadcrumb, panel and status bar, and the first one is the main window (a daemon's own hidden
+frame never is) until the daemon's first graphical window opens, which then becomes the main window. A client that asked for a file (`emacsclient -t FILE`, git's `EDITOR`) shows the editor only and
+returns when you close the file's tab or press `C-x #`. See [terminal.md](terminal.md).
+
+**In a small terminal.** A new terminal window shows the sidebar from 120 columns and the panel from 30 lines; the
+docks are fractions of the terminal (a quarter of the columns for the sidebar, 30% of the lines for the panel) and
+follow its size. They come when it grows (unless you toggled them), never close when it shrinks, and below 40x12
+nothing is shown or resized. See [Small terminals](terminal.md#small-terminals).
+
 ### Popups
 
 Short-lived buffers — a transient menu, which-key's hints, `*Completions*`, the calendar — show in one **popup
@@ -244,6 +268,10 @@ height come back exactly. With the panel hidden, the popup gets a window under t
 ends, giving every pixel back. However a package ends its popup — `delete-window`, `quit-window`, `bury-buffer`,
 killing the buffer — the lane notices. A package that calls `display-buffer-in-side-window` directly (which-key does)
 still goes where the rules say.
+
+In a terminal window the lane works the same, and the line you are on stays visible. On Emacs 30.2 completion as you
+type (corfu) also shows there, as `*Completions*`; on 31.1 corfu's popup is a child frame. See
+[terminal.md](terminal.md#popups).
 
 ### The panel and the right dock
 
@@ -366,3 +394,25 @@ by real key presses: no focus taken, width identical over 10 hide/show cycles, t
 the ten Explorer and Buffers scenarios of [scenarios.md](../develop/scenarios.md), plus two for live updates (a folder
 appearing during a held click; a folder appearing while browsing), are green on drgnx (`bin/drgnx test
 --scenario --config drgnx`; driver `test/scenario/drivers/drgnx.el`).
+
+## Remote folders in the Explorer
+
+A remote folder (a TRAMP name) is listed only by a command of yours: opening it (Open Remote…), Refresh, expanding or
+opening a folder row, New File, Rename, Delete and Paste, and leaving Find. A redraw that nothing of yours started, such as the one after a git status or a window change,
+shows the listing it already has and asks the host nothing; a remote folder that was never listed shows one row,
+`(not listed — Refresh)`, and Enter or a click on that row refreshes. A checkout in a local folder forgets only the
+local listings. Git decorations, inline blame, the Outline and the change gutter skip remote files, and sticky scroll
+works from the buffer's text alone; see [remote.md](remote.md).
+
+## Known limits of the restore
+
+A client's window is restored from `server-after-make-frame-hook`. Two rare paths do not reach it, so that first
+window opens without the saved layout (Restore Workbench Layout in the palette brings it back):
+
+- a graphical frame made by `make-frame-on-display` from a terminal client (the hook runs for frames the server
+  makes for a client, not for this one);
+- a client whose window opens while isearch or a minibuffer is active, or whose `server-execute` signals an error
+  (the server skips the hook then).
+
+Both were left as they are on purpose: moving the restore off the hook risks the restore of the ordinary client
+window, which works. They will get another restore entry point if one is seen in use.

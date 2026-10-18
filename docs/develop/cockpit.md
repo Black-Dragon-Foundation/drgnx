@@ -37,8 +37,11 @@ handler runs on it. It comes back untouched, or is left out.
   lines. The parse is cached by modification time. Plan files are never written.
 - **The board** is one more source, never the master. Its TODOs with `:PLAN_FILE:` come from the tracker's scan of
   the board file (`drgnx-projects-board-file`). The model reads only the store.
-- **Agents.** A hub session with a job is `job`; any other session is `native`. A registered agent that is not a
-  session (an `ext:` id, or one with a kind) is `outside`. A worktree found by `drgnx-cockpit-silent-worktrees` is
+- **Agents.** A hub session with a job is `job`; any other session is `native`. A registered agent of kind `job` (the
+  hub registers each job's task agent) is `job` too, shown only while its job is (a done job's agents are left out
+  with it). Any other registered agent that is not a session (an `ext:` id, or one with a kind) is `outside`.
+  - An agent's life — "stopped" or not, an edit source's `:stopped` — is its last `start` or `stop` that is not a
+    turn's: the hub's turn events lead their data with `:turn t` and are left out. A worktree found by `drgnx-cockpit-silent-worktrees` is
   `silent` ("not reporting").
   - An outside agent's task is a free label of its own (`:label`). It is never joined to a job or plan task. Its
     plan joins only when it names a scanned plan file exactly.
@@ -61,7 +64,7 @@ matches a node whose title or path contains it, or one of its ancestors' (case i
   events and the cards, questions and answers about the job tasks it holds. Each line is `(:at :kind :text :target)`.
   For example, "edited 2 files: a.el, b.el" or "tests 12/12 ✓ (make test)".
 - `(drgnx-cockpit-timeline &key since)` gives chips `(:id :at :agent :kind :label :target)` after an event id, such as
-  `T6 ✓`, `T7 review: fail` or `s-1 asks you`.
+  `T6 ✓`, `T7 review: fail` or `s-1 asks you`. A turn's `start` and `stop` (`:turn t`) are not chips.
 - A `:target` is `(:node ID :event ID)`. The node is the event's task node, else its agent's, else its job's.
 - Glyphs come from `drgnx-face-glyph` when the face is loaded.
 - The limits are `drgnx-cockpit-happened-limit` (50) and `drgnx-cockpit-timeline-limit` (300).
@@ -83,16 +86,21 @@ A job agent's task comes from its session's `:task`, else the task it holds and 
 task (from the job's repository and a jtask row), not a session's cwd. `:stopped` is a hint for display (an agent missing from
 SESSIONS counts as stopped); anything that acts on it needs positive evidence (see the edits' direct revert).
 
-**Two exact bases are still to come.** A job agent's registry `base` should be the task's HEAD at its start, and a
-native session's `start` event should carry `:head`. Until their writers record them (the hub, C3), the job
-branch's fork point (`git diff --merge-base`) or HEAD is used.
+**The exact bases** come from the hub ([hub.md](hub.md#events)): a job agent is registered with the commit its
+worktree starts at as `base`, and a native session's first `start` event carries `:head`. Without them (an agent from
+before, a folder whose HEAD could not be read), the job branch's fork point (`git diff --merge-base`) or HEAD is used.
 
 `--merge-base` needs git 2.30 or later.
 
 - **`drgnx-cockpit-changed-files`** runs `git diff -z --numstat --summary` against the base, then
-  `git ls-files -z --others`, and answers `((:file :added :removed :status new|modified|deleted)…)` or
-  `(:error MSG)`.
-  - It lists at most `drgnx-cockpit-changed-files-max` (500) files, then `(:more N)` for the rest.
+  `git ls-files -z --others`, and answers `((:file :added :removed :status new|modified|deleted)…)`,
+  `(:too-large BYTES)` or `(:error MSG)`.
+  - It checks at most `drgnx-cockpit-changed-files-max` (500) files and lists those of them it may show, then
+    `(:more N)` for the rest, so its sentinel stays bounded however many files are refused.
+  - Each of git's two lists is capped at `drgnx-cockpit-diff-max-bytes` (1 MB) while git writes; past it the answer is
+    `(:too-large BYTES)`. A silent worktree whose list is too large is still found, with `:changed` nil.
+  - The names on `--summary` lines, which git C-quotes even under `-z` (a quote, a backslash, a control character),
+    are unquoted before they are matched.
   - It counts untracked files' lines until `drgnx-cockpit-count-bytes-max` (1 MB) has been read. After that, `:added`
     is nil.
   - A source without a folder is an error answer, not a signal.
@@ -118,7 +126,7 @@ have changes against their merge-base with `drgnx-cockpit-main-branches`, leavin
 - every job's worktrees.
 
 Each one found is an agent of `:reporting silent`, with the plan and ledger the tracker has for its branch. At most
-three git processes run at a time.
+three git processes run at a time (their stderr pipes aside); the rest wait in a queue that drains as each ends.
 
 ## Cost
 

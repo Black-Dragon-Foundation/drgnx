@@ -25,6 +25,12 @@
     ;; the agent gateway only (Claude Code with your own Anthropic API key): no editor feature asks it
     (anthropic  :name "Anthropic API" :kind anthropic :url "https://api.anthropic.com/v1" :key-env "ANTHROPIC_API_KEY"
                 :auth x-api-key :caps () :messages t)
+    ;; Kimi and DeepSeek on their own Anthropic-compatible APIs (Claude Code agents only; Bearer through
+    ;; ANTHROPIC_AUTH_TOKEN, as both vendors' Claude Code guides have it)
+    (moonshot   :name "Moonshot (Kimi)" :kind anthropic :url "https://api.moonshot.ai/anthropic" :key-env "MOONSHOT_API_KEY"
+                :caps () :messages t)
+    (deepseek   :name "DeepSeek" :kind anthropic :url "https://api.deepseek.com/anthropic" :key-env "DEEPSEEK_API_KEY"
+                :caps () :messages t)
     (lmstudio   :name "LM Studio" :kind openai :url "http://127.0.0.1:1234/v1" :caps (chat fim embed))
     (llamacpp   :name "llama.cpp server" :kind llamacpp :url "http://127.0.0.1:8012" :caps (chat fim embed))   ; its 8080 is TEI's
     (vllm       :name "vLLM" :kind openai :url "http://127.0.0.1:8000/v1" :caps (chat fim embed))
@@ -286,10 +292,7 @@ later — after the window it opened shows, never inside its emacsclient call.  
   (auth-source-forget+ :host host)
   (let* ((auth-sources (list (drgnx-ai--secret-source)))
          (auth-source-do-cache nil)
-         ;; the Keychain may hold other internet passwords for the host: ask for the account the store wrote
-         (secret (plist-get (car (apply #'auth-source-search :host host :max 1 :create nil
-                                        (and (eq system-type 'darwin) '(:user "drgnx"))))
-                            :secret)))
+         (secret (plist-get (car (auth-source-search :host host :max 1 :create nil)) :secret)))
     (if (functionp secret) (funcall secret) secret)))
 
 (defun drgnx-ai--dbus-session-p ()
@@ -334,11 +337,59 @@ the program's output is discarded."
   "S as one word for `security -i' (it splits like a shell): in double quotes, \\ and \" escaped."
   (concat "\"" (replace-regexp-in-string "[\\\"]" "\\\\\\&" s) "\""))
 
+(defun drgnx-ai--security-call (args)
+  "Run `drgnx-ai--security-program' with ARGS and an empty stdin, waiting at most `drgnx-ai--store-timeout'
+seconds (\\[keyboard-quit] stops it): (STATUS . OUTPUT), STATUS its exit status or `timeout', OUTPUT its standard
+output, gathered in a string (never a buffer); its standard error is discarded."
+  (let ((coding-system-for-read 'utf-8-unix) (chunks nil) (out nil) err proc)
+    (unwind-protect
+        (progn
+          (setq err (make-pipe-process :name "drgnx-secret-err" :buffer nil :noquery t :filter #'ignore :sentinel #'ignore))
+          (setq proc (make-process :name "drgnx-secret" :command (cons drgnx-ai--security-program args) :buffer nil
+                                   :connection-type 'pipe :noquery t :stderr err :sentinel #'ignore
+                                   :filter (lambda (_ s) (push s chunks))))
+          (ignore-errors (process-send-eof proc))
+          (let ((deadline (+ (float-time) drgnx-ai--store-timeout)))
+            (while (and (process-live-p proc) (< (float-time) deadline))
+              (accept-process-output proc 0.1)))
+          (if (process-live-p proc) (list 'timeout)
+            (cons (process-exit-status proc) (setq out (apply #'concat (reverse chunks))))))
+      (dolist (c chunks) (unless (eq c out) (clear-string c)))   ; the caller clears OUTPUT
+      (when (process-live-p proc) (delete-process proc))
+      (when err (delete-process err)))))
+
+(defun drgnx-ai--keychain-verify (host key env)
+  "Read drgnx's Keychain item for HOST back with the same `security' program and compare it with KEY, showing
+neither: `security -i''s exit status does not say how it parsed the line.  On anything but KEY itself (another
+value, no item, an error, no answer, \\[keyboard-quit]) the item is deleted and a `user-error' names ENV as the way
+around (a quit is signalled again after the delete).  No message holds the key or what came back."
+  (let* ((item (list "-a" "drgnx" "-s" host "-r" "htps"))
+         (delete (lambda () (eql 0 (car (ignore-errors (drgnx-ai--security-call (cons "delete-internet-password" item)))))))
+         (read (condition-case nil (drgnx-ai--security-call (append '("find-internet-password") item '("-w")))
+                 (quit (funcall delete) (signal 'quit nil))))
+         (status (car read)) (back (cdr read)) (n (length key)))
+    (unwind-protect
+        (unless (and (eql status 0) back (= (length back) (1+ n)) (eq (aref back n) ?\n)
+                     (eq t (compare-strings back 0 n key 0 n)))
+          (let ((removed (funcall delete)))
+            (user-error "%s, so %s. Store it again, or set %s instead"
+                        (pcase status
+                          ('timeout (format "The Keychain did not answer within %s seconds when drgnx read the key back"
+                                            drgnx-ai--store-timeout))
+                          (44 (format "The Keychain holds no drgnx item for %s after storing the key" host))
+                          (_ "The Keychain did not give the key back as it was given"))
+                        (cond (removed "drgnx removed it")
+                              ((eql status 44) "no key was kept")
+                              (t (format "remove the drgnx item for %s in Keychain Access" host)))
+                        env)))
+      (when back (clear-string back)))))
+
 (defun drgnx-ai-store-key (id key)
   "Store KEY for provider ID in the system's secret store — the macOS Keychain or the Linux keyring — and return
 `keychain' or `keyring'.  Only for a command the user ran, after asking: nowhere else does drgnx write a key.
-The key travels on stdin (a pipe), never in a command line or a file.  Afterwards the store alone is asked for the
-key and it must match, else a `user-error'."
+The key travels on stdin (a pipe), never in a command line or a file; a key with a NUL, CR or LF is refused first.
+Afterwards the store alone is asked for the key and it must match, else a `user-error'; on a Mac `security' itself
+reads it back, and a Keychain item that does not match is deleted (`drgnx-ai--keychain-verify')."
   (let* ((p (drgnx-ai-provider id))
          (env (plist-get p :key-env))
          (host (and env (url-host (url-generic-parse-url (plist-get p :url)))))
@@ -346,8 +397,8 @@ key and it must match, else a `user-error'."
          (store (if mac "Keychain" "keyring"))
          (advice (format "Unlock %s, or set %s instead." (if mac "it in Keychain Access" "your keyring") env)))
     (unless host (user-error "Provider %s has no key to store" id))
-    (when (or (not (stringp key)) (string-empty-p key) (string-match-p "[\n\r]" key))
-      (user-error "The key is empty or has more than one line"))
+    (when (or (not (stringp key)) (string-empty-p key) (string-match-p "[\0\n\r]" key))
+      (user-error "The key is empty, has more than one line or holds a NUL character"))
     (cond
      (mac (unless (file-executable-p drgnx-ai--security-program)
             (user-error "No `security' program found: the macOS Keychain is needed to store a key")))
@@ -367,30 +418,66 @@ key and it must match, else a `user-error'."
             ((not (eql status 0))
              (user-error "The %s refused the key (exit %s). %s" store status advice))))
     (remhash id drgnx-ai--keys)
-    ;; the store alone must hold this very key: not the environment, not another source's older one
-    (let ((back (condition-case err (drgnx-ai--stored-key host)
-                  (error (user-error "The key was stored, but the %s could not be read (%s). %s" store (car err) advice)))))
-      (unless (equal back key)
-        (user-error "The key was stored, but the %s did not give it back. %s" store advice)))
+    (if mac (drgnx-ai--keychain-verify host key env)
+      ;; the store alone must hold this very key: not the environment, not another source's older one
+      (let ((back (condition-case err (drgnx-ai--stored-key host)
+                    (error (user-error "The key was stored, but the %s could not be read (%s). %s" store (car err) advice)))))
+        (unless (equal back key)
+          (user-error "The key was stored, but the %s did not give it back. %s" store advice))))
     (puthash id key drgnx-ai--keys)
     (if mac 'keychain 'keyring)))
 
 ;;;; Agent environments (agent profiles; M9b adds more kinds)
 
-(defconst drgnx-ai-gateway-kinds '(claude-openrouter claude-ollama claude-anthropic)
+(defconst drgnx-ai-gateway-kinds '(claude-openrouter claude-ollama claude-anthropic claude-moonshot claude-deepseek)
   "Agent profile kinds whose traffic the agent gateway may carry (drgnx-gateway.el).")
 
-(defun drgnx-ai-agent-gateway-chain (kind)
-  "The providers ((PROVIDER . MODEL)…) an agent of KIND may use through the gateway, in order."
+(defun drgnx-ai-agent-gateway-chain (kind &optional model)
+  "The providers ((PROVIDER . MODEL)…) an agent of KIND may use through the gateway, in order.  MODEL (the
+profile's) names the model of the one provider of `claude-moonshot', `claude-deepseek' and `claude-openrouter';
+`claude-openrouter' without it follows the `agent' role."
   (pcase kind
-    ('claude-openrouter (drgnx-ai-role 'agent))
+    ('claude-openrouter (if model (list (cons 'openrouter model)) (drgnx-ai-role 'agent)))
     ('claude-ollama '((ollama)))
-    ('claude-anthropic '((anthropic)))))
+    ('claude-anthropic '((anthropic)))
+    ('claude-moonshot (list (cons 'moonshot model)))
+    ('claude-deepseek (list (cons 'deepseek model)))))
+
+(defun drgnx-ai--agent-bearer-env (id name interactive)
+  "The environment of an agent on provider ID's own Anthropic-compatible API: its URL and its key as the bearer
+token (`ANTHROPIC_AUTH_TOKEN'), `ANTHROPIC_API_KEY' empty.  NAME is how the error calls the provider."
+  (let* ((p (drgnx-ai-provider id))
+         (key (or (drgnx-ai-key id interactive)
+                  (user-error "No %s key: set %s, or add one to auth-source for %s" name (plist-get p :key-env)
+                              (url-host (url-generic-parse-url (plist-get p :url)))))))
+    (list (concat "ANTHROPIC_BASE_URL=" (plist-get p :url)) (concat "ANTHROPIC_AUTH_TOKEN=" key) "ANTHROPIC_API_KEY=")))
+
+(defun drgnx-ai-check-agent-model (kind model)
+  "Signal a `user-error' when an agent of KIND needs a MODEL and has none: the vendors' own APIs
+\(`claude-moonshot', `claude-deepseek') do not know Claude Code's default model names."
+  (when (and (memq kind '(claude-moonshot claude-deepseek)) (not (and (stringp model) (not (string-empty-p model)))))
+    (user-error "The %s agent profile needs a :model (the vendor's model name)" kind)))
 
 (defun drgnx-ai-agent-env (profile &optional interactive gateway)
-  "The environment (\"NAME=value\"…) an agent of PROFILE (:kind …) starts with, resolved now.  GATEWAY (:url :token):
-the agent talks to the gateway with its token, and never sees a key.  A subscription CLI gets nothing: it uses its
-own login, which drgnx never reads."
+  "The environment (\"NAME=value\"…) an agent of PROFILE (:kind …, :model …, :small-model …) starts with,
+resolved now.  GATEWAY (:url :token): the agent talks to the gateway with its token, and never sees a key.  With a
+:model every route also names it for Claude Code's main, Sonnet, Opus and subagent models, and :small-model (else the
+:model) for the small background one: `ANTHROPIC_MODEL', `ANTHROPIC_DEFAULT_SONNET_MODEL',
+`ANTHROPIC_DEFAULT_OPUS_MODEL', `CLAUDE_CODE_SUBAGENT_MODEL', `ANTHROPIC_DEFAULT_HAIKU_MODEL' (Claude Code's
+current variable; `ANTHROPIC_SMALL_FAST_MODEL' is deprecated).  A subscription CLI gets nothing: it uses its own
+login, which drgnx never reads."
+  (drgnx-ai-check-agent-model (plist-get profile :kind) (plist-get profile :model))
+  (let ((env (drgnx-ai--agent-route-env profile interactive gateway))
+        (model (plist-get profile :model)))
+    (if (and env (stringp model))
+        (append env (mapcar (lambda (name) (concat name "=" model))
+                            '("ANTHROPIC_MODEL" "ANTHROPIC_DEFAULT_SONNET_MODEL" "ANTHROPIC_DEFAULT_OPUS_MODEL"
+                              "CLAUDE_CODE_SUBAGENT_MODEL"))
+                (list (concat "ANTHROPIC_DEFAULT_HAIKU_MODEL=" (or (plist-get profile :small-model) model))))
+      env)))
+
+(defun drgnx-ai--agent-route-env (profile interactive gateway)
+  "`drgnx-ai-agent-env' without the model variables."
   (pcase (plist-get profile :kind)
     ((and kind (guard gateway) (guard (memq kind drgnx-ai-gateway-kinds)))
      (list (concat "ANTHROPIC_BASE_URL=" (plist-get gateway :url)) (concat "ANTHROPIC_AUTH_TOKEN=" (plist-get gateway :token))
@@ -405,6 +492,8 @@ own login, which drgnx never reads."
        (list "ANTHROPIC_BASE_URL=https://openrouter.ai/api" (concat "ANTHROPIC_AUTH_TOKEN=" key) "ANTHROPIC_API_KEY=")))
     ('claude-ollama
      (list (concat "ANTHROPIC_BASE_URL=" (plist-get (drgnx-ai-provider 'ollama) :url)) "ANTHROPIC_AUTH_TOKEN=ollama" "ANTHROPIC_API_KEY="))
+    ('claude-moonshot (drgnx-ai--agent-bearer-env 'moonshot "Moonshot" interactive))
+    ('claude-deepseek (drgnx-ai--agent-bearer-env 'deepseek "DeepSeek" interactive))
     (_ nil)))
 
 ;;;; Choosing (written to ai.eld: providers and models, never a key)

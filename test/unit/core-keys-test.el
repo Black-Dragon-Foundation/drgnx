@@ -38,18 +38,23 @@ is undone after BODY."
          (drgnx-persist-state-functions (bound-and-true-p drgnx-persist-state-functions))
          (drgnx-persist-after-restore-functions (bound-and-true-p drgnx-persist-after-restore-functions))
          (ring-bell-function ring-bell-function) (use-dialog-box use-dialog-box)
-         (use-short-answers use-short-answers) (inhibit-startup-screen inhibit-startup-screen))
-     (drgnx--core-commands)
-     (drgnx-modules-load-directory (expand-file-name "modules" drgnx-dir))
-     (drgnx-modules-run 'startup)
-     (drgnx-command-define 'replace-in-files :category "Search" :title "Replace in Files" :command #'ignore :doc "test")
-     (drgnx-command-define 'rename-symbol :category "Search" :title "Rename Symbol" :command #'ignore :doc "test")
-     (when drgnx-keys-test--later-stages
-       ;; A module that needs a package (magit, avy, websocket, …) stays out whatever this machine has installed.
-       ;; (Another test file's packages cannot be loaded here: each file runs in an Emacs of its own.)
-       (cl-letf (((symbol-function 'locate-library) (lambda (&rest _) nil)))
-         (dolist (stage (cdr drgnx-modules-stages)) (drgnx-modules-run stage))))
-     ,@body))
+         (use-short-answers use-short-answers) (inhibit-startup-screen inhibit-startup-screen)
+         ;; core/basics turns the trust guards on: put them back as they were, the trusted set untouched
+         (trust-was (bound-and-true-p drgnx-trust-mode)) (trusted-content trusted-content))
+     (unwind-protect
+         (progn
+           (drgnx--core-commands)
+           (drgnx-modules-load-directory (expand-file-name "modules" drgnx-dir))
+           (drgnx-modules-run 'startup)
+           (drgnx-command-define 'replace-in-files :category "Search" :title "Replace in Files" :command #'ignore :doc "test")
+           (drgnx-command-define 'rename-symbol :category "Search" :title "Rename Symbol" :command #'ignore :doc "test")
+           (when drgnx-keys-test--later-stages
+             ;; A module that needs a package (magit, avy, websocket, …) stays out whatever this machine has installed.
+             ;; (Another test file's packages cannot be loaded here: each file runs in an Emacs of its own.)
+             (cl-letf (((symbol-function 'locate-library) (lambda (&rest _) nil)))
+               (dolist (stage (cdr drgnx-modules-stages)) (drgnx-modules-run stage))))
+           ,@body)
+       (when (fboundp 'drgnx-trust-mode) (drgnx-trust-mode (if trust-was 1 -1))))))
 
 (defun drgnx-keys-test--resolve (layers &rest args)
   (drgnx-keys-test--with-core-commands
@@ -154,16 +159,18 @@ is undone after BODY."
 ;;;; Applying, switching, keys.eld
 
 (defmacro drgnx-keys-test--live (&rest body)
-  "BODY with the core commands, fresh drgnx-keys state and a temp config dir; every binding is undone after."
+  "BODY with the core commands, fresh drgnx-keys state and a temp config dir, on Linux (macOS profiles bind other
+keys); every binding is undone after."
   `(drgnx-keys-test--with-core-commands
-    (let* ((dir (make-temp-file "drgnx-keys" t))
-           (process-environment (append (list (concat "DRGNX_CONFIG_DIR=" dir) (concat "XDG_STATE_HOME=" dir "/state"))
-                                        process-environment))
-           (drgnx-keys--applied nil) (drgnx-keys--session-layers nil) (drgnx-keys-profiles nil)
-           (drgnx-keys-problems nil) (drgnx-keys-last nil))
-      (unwind-protect (progn ,@body)
-        (drgnx-keys--restore)
-        (delete-directory dir t)))))
+    (cl-letf (((symbol-function 'drgnx-platform) (lambda () 'linux)))
+      (let* ((dir (make-temp-file "drgnx-keys" t))
+             (process-environment (append (list (concat "DRGNX_CONFIG_DIR=" dir) (concat "XDG_STATE_HOME=" dir "/state"))
+                                          process-environment))
+             (drgnx-keys--applied nil) (drgnx-keys--session-layers nil) (drgnx-keys-profiles nil)
+             (drgnx-keys-problems nil) (drgnx-keys-last nil))
+        (unwind-protect (progn ,@body)
+          (drgnx-keys--restore)
+          (delete-directory dir t))))))
 
 (defun drgnx-keys-test--write-user (form)
   (make-directory (drgnx-user-dir) t)
@@ -753,14 +760,15 @@ is undone after BODY."
     (should (string-search "kill-current-buffer (s-k)" (seq-find (lambda (l) (string-prefix-p "s-k " l))
                                                                  (drgnx-keys-conflict-lines))))
     ;; The ns-win keys VS Code takes over, on purpose (Cmd+Shift+letter included: s-S Save As, s-H Replace
-    ;; in Project, …); the others stay Emacs' (s-c, s-v, s-x, s-z …).
+    ;; in Project, …) and s-v, Paste (M12b: it replaces the selection); the others stay Emacs' (s-z …).  s-c and
+    ;; s-x are bound only while text is selected (the region map), so Emacs' own stay without a selection.
     (should (equal (sort (seq-filter (lambda (key) (seq-find (lambda (b) (and (null (plist-get b :map))
                                                                               (equal (plist-get b :key) key)))
                                                              (plist-get r :bindings)))
                                      (mapcar #'car drgnx-keys-test--ns-defaults))
                          #'string<)
                    (sort (list "<end>" "<home>" "s-'" "s-+" "s-," "s--" "s-0" "s-<left>" "s-<right>" "s-=" "s-a"
-                               "s-f" "s-l" "s-n" "s-o" "s-p" "s-q" "s-s" "s-t" "s-w" "s-S" "s-H" "s-M" "s-F"
+                               "s-f" "s-l" "s-n" "s-o" "s-p" "s-q" "s-s" "s-t" "s-v" "s-w" "s-S" "s-H" "s-M" "s-F"
                                "s-E")
                          #'string<)))
     ;; and s-L, Select All Occurrences — the extra/mc module's command, not in this registry
@@ -860,8 +868,14 @@ The commands of modules that need no installed package are in it, the later stag
                               layout-next browser-go keyboard-shortcuts shortcuts-change shortcuts-add shortcuts-filter
                               shortcuts-record-filter shortcuts-conflicts shortcuts-no-key shortcuts-changed
                               shortcuts-undo shortcuts-reset shortcuts-reset-all shortcuts-profile
+                              ;; M11c-2's Agent settings page and its key in the Agents list
+                              agent-settings-here agent-settings-refresh agent-settings-test agent-settings-test-all
+                              agent-settings-add agent-settings-edit agent-settings-remove agent-settings-toggle
+                              agent-settings-new-skill agent-settings-open-file agent-settings-other
+                              agent-settings-openrouter
+                              shortcuts-tty-fallback  ; M12b's terminal fallback in the Shortcuts editor
                               quit preferences edit-line-start edit-line-end edit-buffer-start edit-buffer-end edit-word-left
-                              edit-word-right edit-delete-word-back edit-delete-line-back))
+                              edit-word-right edit-delete-word-back edit-delete-line-back edit-copy edit-cut edit-paste))
          (drgnx-keys-test--later-stages t)
          (r (drgnx-keys-test--resolve '((vscode app editing window)) :platform 'linux)))
     (should (equal (mapcar (lambda (b) (list (plist-get b :id) (plist-get b :key) (plist-get b :map)))

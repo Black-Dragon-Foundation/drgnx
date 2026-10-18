@@ -14,7 +14,7 @@
           (drgnx-work-db--handles nil) (drgnx-agents--sessions nil) (drgnx-hub--exit-function #'drgnx-hub-stop)
           (drgnx-gateway--registrations (make-hash-table :test #'equal))
           (drgnx-agents-profiles
-           (list (list "mock" :command (list (expand-file-name invocation-name invocation-directory) "--batch" "-Q"
+           (list (list "mock" :command (list "sh" (expand-file-name "test/fixtures/mock-acp-stdin.sh" drgnx-dir) (expand-file-name invocation-name invocation-directory) "--batch" "-Q"
                                              "-l" (expand-file-name "test/fixtures/mock-acp.el" drgnx-dir)))))
           (drgnx-job-routes '((implement . "mock"))) (events nil) (job nil)
           (drgnx-hub-event-functions (list (lambda (e d) (push (cons e d) events)))))

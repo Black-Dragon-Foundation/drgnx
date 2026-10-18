@@ -9,6 +9,8 @@ a chain of providers and models tried in order, so a feature keeps working when 
 | Id | Provider | Address (default) |
 |---|---|---|
 | `openrouter` | OpenRouter | `https://openrouter.ai/api/v1` (key: `OPENROUTER_API_KEY` or auth-source) |
+| `moonshot` | Moonshot (Kimi) | `https://api.moonshot.ai/anthropic` (key: `MOONSHOT_API_KEY` or auth-source) |
+| `deepseek` | DeepSeek | `https://api.deepseek.com/anthropic` (key: `DEEPSEEK_API_KEY` or auth-source) |
 | `ollama` | Ollama | `http://127.0.0.1:11434` |
 | `lmstudio` | LM Studio | `http://127.0.0.1:1234/v1` |
 | `llamacpp` | llama.cpp server | `http://127.0.0.1:8012` (start it with `--port 8012`: its 8080 is TEI's) |
@@ -63,7 +65,7 @@ asked from a timer, hook or in batch.
 
 A provider in your `ai.eld` may carry `:price (IN . OUT)` — US dollars per million input and output tokens — so the
 agent gateway can count what agents spend when the provider does not report a cost; `:messages t` says it serves
-Anthropic's Messages API, so the gateway can carry agents to it (OpenRouter, Ollama and Anthropic do).
+Anthropic's Messages API, so the gateway can carry agents to it (OpenRouter, Ollama, Anthropic, Moonshot and DeepSeek do).
 
 With nothing set up, onboarding's AI step sets up Ollama, LM Studio or OpenRouter for you and fills these roles with
 models sized to the machine ([onboarding.md](onboarding.md#setting-ai-up)): `drgnx-ai-default-models` gives Inline
@@ -202,8 +204,11 @@ step, in the drgnx app: the key is read with `read-passwd`, never shown) or a co
 never into a drgnx file, and never on a command line (it goes to the store on stdin). A Keychain that is locked
 or denies access gives an error saying so; the environment variable always works instead. drgnx never sends a key to
 a model. On a Mac the key is an internet password for `openrouter.ai`, account `drgnx`, in your login keychain
-(stored with `/usr/bin/security`, never a `security` found elsewhere on your path, and read back for that account,
-so another password for the host cannot answer in its place):
+(stored with `/usr/bin/security`, never a `security` found elsewhere on your path, and read back with the same
+program for that account, so another password for the host cannot answer in its place). `security` reports success
+whatever it made of the key, so drgnx compares what it reads back with what you gave, without showing either; when
+they differ, or the Keychain does not answer, drgnx deletes the item and says so. A key with a line break or a NUL
+character is refused before anything is stored (API keys never contain them).
 Keychain Access shows it, and `security delete-internet-password -s openrouter.ai -a drgnx` removes it. On Linux the
 keyring is looked at only when Emacs has D-Bus support, a session bus can be reached and a Secret Service answers on
 it (an SSH login, WSL or a container often has a bus but no keyring daemon), so such a machine gets no "invalid
@@ -231,15 +236,90 @@ environment variable.
 
 Agent profiles can take their provider from the registry; the key is resolved when the agent starts:
 
-- **claude** — Claude Code through `claude-agent-acp` with its own login (subscription or API key). drgnx only
-  launches it; it never reads its login.
+- **claude** — Claude Code through `claude-agent-acp` with its own login (a subscription, kept in Claude Code's own
+  files, or the Anthropic key or Bedrock/Vertex switches in your environment). drgnx only launches it; it never reads
+  its login. Other vendors' keys in Emacs's environment are not passed on (below).
 - **claude (OpenRouter)** — Claude Code on OpenRouter: `ANTHROPIC_BASE_URL=https://openrouter.ai/api`,
   `ANTHROPIC_AUTH_TOKEN` = your OpenRouter key, `ANTHROPIC_API_KEY` empty.
 - **claude (Ollama)** — Claude Code on a local Ollama model.
+- **claude (Kimi)** and **claude (DeepSeek)** — Claude Code on Kimi or DeepSeek through the vendor's own
+  Anthropic-compatible API (`:ai claude-moonshot`, `claude-deepseek`): `ANTHROPIC_BASE_URL` = the vendor's address,
+  `ANTHROPIC_AUTH_TOKEN` = your `MOONSHOT_API_KEY` or `DEEPSEEK_API_KEY` (or auth-source for `api.moonshot.ai` or
+  `api.deepseek.com`), `ANTHROPIC_API_KEY` empty. The vendor bills you per token for an API key; Kimi's coding
+  membership is a subscription on a different endpoint, which these profiles do not use.
+- **claude (Kimi via OpenRouter)** and **claude (DeepSeek via OpenRouter)** — the same models through OpenRouter
+  (`:ai claude-openrouter` with a `:model`), billed by OpenRouter with your OpenRouter key.
 
-In `agents.eld`, `:ai claude-openrouter` or `:ai claude-ollama` gives any profile that environment. Durable jobs get
-the keys they need in their environment too — never in a command line or a file (under systemd, the value travels in
+A profile's `:model` (any profile with an `:ai`) also sets `ANTHROPIC_MODEL`, `ANTHROPIC_DEFAULT_SONNET_MODEL`,
+`ANTHROPIC_DEFAULT_OPUS_MODEL` and `CLAUDE_CODE_SUBAGENT_MODEL` to that name, and `ANTHROPIC_DEFAULT_HAIKU_MODEL`
+(Claude Code's small, background model) to the profile's `:small-model`, else to the `:model`. A `claude-moonshot` or
+`claude-deepseek` profile without a `:model` does not start. The built-in names are data in
+`drgnx-agents-builtin-profiles`: copy a profile into `agents.eld` to use another model. Nothing about the route is
+written to `~/.claude/settings.json`: two profiles share Claude Code's configuration directory and differ only in
+these variables, so a model in that file's `env` would override them (the Claude page in Agent Settings notes it).
+
+Moonshot and DeepSeek carry no `:price`, so the gateway cannot price their answers and counts their spend as zero (a
+job's budget does not stop them). Give the provider a `:price (IN . OUT)` in your `ai.eld` to count it.
+
+**Agents do not inherit other vendors' keys.** Whatever Emacs's environment holds, an agent gets only the variables
+of its own route (its provider key or the gateway's token, the model names). The others -- every vendor key and route
+variable, `drgnx-agents-scrubbed-env` -- are unset for it, so a Kimi agent never sees your DeepSeek or OpenRouter key,
+and a Claude agent never sees `OPENAI_API_KEY`. A profile with no `:ai` route is your own login, and keeps its own
+agent's names from the environment (`drgnx-agents-own-env`, found from the profile's command): Claude Code
+`ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL`, the model names, `CLAUDE_CODE_OAUTH_TOKEN` and the
+Bedrock and Vertex switches (the `AWS_*` and `GOOGLE_APPLICATION_CREDENTIALS` they need are never scrubbed); Codex
+`OPENAI_API_KEY` and `OPENAI_BASE_URL`; Gemini `GEMINI_API_KEY` and `GOOGLE_API_KEY`. A profile with a route (Kimi,
+DeepSeek, OpenRouter, Ollama) gets none of these, only its route's. To pass any other variable on, remove it from
+`drgnx-agents-scrubbed-env` (Customize), or set it in the profile's `:env`.
+
+In `agents.eld`, `:ai claude-openrouter`, `claude-ollama`, `claude-moonshot` or `claude-deepseek` gives any profile
+that environment. Durable jobs get the keys they need in their environment too — never in a command line or a file (under systemd, the value travels in
 `systemd-run`'s own environment).
+
+### OpenRouter restrictions
+
+OpenRouter chooses, among the providers that serve a model, one for each request. The `:openrouter` setting in
+`agents.eld` narrows that choice for every OpenRouter route of every agent:
+
+```elisp
+(:openrouter (:only ("anthropic" "google-vertex") :ignore ("azure") :data-collection deny :zdr t))
+```
+
+- `:only` -- the provider slugs OpenRouter may use (nothing else serves the request); `:ignore` -- slugs it must not use;
+- `:data-collection deny` -- only providers that keep no data (`allow` leaves the choice to your OpenRouter account
+  settings: it is not sent);
+- `:zdr t` -- zero-data-retention endpoints only.
+
+Each key is optional; an empty value (`()`, `nil`) is no restriction. Restrictions fail closed: a value that is not a
+slug list, `deny`/`allow` or `t`/`nil`, a key other than these four, or an `agents.eld` that does not read (a parenthesis
+short) is never read as "no restriction". An agent with an OpenRouter route does not start, and its session says which
+key is wrong; the Agent Settings page shows *unreadable* with the reason. The hub refuses such a registration too. The gateway puts them into the
+request's top-level `provider` object (`only`, `ignore`, `data_collection`, `zdr`), which OpenRouter's Anthropic-compatible
+`/api/v1/messages` accepts (its `ProviderPreferences`). They apply to Messages requests (`/v1/messages`, also with a query
+such as `?beta=true`) sent to the provider with the id `openrouter` only: other providers' requests are unchanged, and so
+are the token count (`/v1/messages/count_tokens`) and the model list, which route to no provider. A custom provider that
+points at openrouter.ai under another id is not covered.
+
+If the agent's own request already has a `provider` object, the two are merged and the stricter value wins: `only` is
+the intersection of the two lists (when both set one; none in common is a 400 `invalid_request_error` from the gateway,
+nothing is sent), `ignore` the union, `data_collection` `deny` if either says so, `zdr` on if either says so. The agent's
+other keys (`order`, `sort`, `require_parameters`, `allow_fallbacks`, …) pass through. If restrictions are set and the
+body cannot be read as a JSON object (or its `provider` is not one), the gateway answers 400 `invalid_request_error`
+and sends nothing: a request that might not honour them never goes out. Without restrictions the body goes as it was.
+
+They reach only
+the agents that go through the gateway. When restrictions are set and the hub cannot be had (it does not start, its
+socket refuses), an agent with an OpenRouter route does not start: it would reach OpenRouter directly without them. Its
+session says why; start the hub, or remove `:openrouter` from `agents.eld` to go direct. The hub's answer to a
+registration lists the restrictions it kept. A hub started before drgnx had restrictions keeps none, so the agent does
+not start and the session says to restart the hub (`drgnx hub stop`, then start an agent). Without restrictions, an
+agent without a hub goes direct as before. With `drgnx-agents-use-gateway` off, an agent with an OpenRouter route and
+restrictions does not start either (restrictions are never dropped silently); its session says to turn the gateway on
+or remove `:openrouter` from `agents.eld`. Without restrictions, such a route is bound by your OpenRouter account
+settings alone ([openrouter.ai/settings/privacy](https://openrouter.ai/settings/privacy)). A model
+that no allowed provider serves fails with OpenRouter's own error, which the agent shows.
+Set it from Agent Settings (`r`, **OpenRouter Restrictions…**, [agent-settings.md](agent-settings.md#routes)); comments
+and the other settings in `agents.eld` stay.
 
 ## Tests
 
@@ -248,6 +328,10 @@ the keys they need in their environment too — never in a command line or a fil
   the Tab arbiter), `test/unit/ai-edit-test.el` (the review, hunk by hunk), `test/unit/ai-ask-test.el` (Ask, Choose,
   gptel), `test/unit/ai-onboard-test.el` (the onboarding step; setting up Ollama, LM Studio and OpenRouter with fake
   `brew`, `ollama`, `lms`, `sysctl` and `security`; the room on a Mac and the models for it).
+- `test/unit/agents-profiles-test.el` — Kimi and DeepSeek profiles: direct and gateway environments, the OpenRouter
+  model chain, the missing-key message, routes on the Claude page, the runner unsetting the keys.
+- `test/unit/gateway-openrouter-test.el` -- the restrictions in the request body, other providers untouched, the setting
+  in `agents.eld` with its comments, the Routes line and the Change command.
 - `test/live/drgnx-ai-test.el` — in a GUI session: typing, the suggestion as ghost text, Tab takes it; an inline
   edit's second hunk applied with keys, Done puts only that one in the buffer.
 - `drgnx test --perf` — the `typing-with-ghost` workload holds keystroke p95 under 16 ms with ghost text on.

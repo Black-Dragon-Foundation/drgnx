@@ -16,6 +16,7 @@
 ;;; Code:
 (require 'cl-lib)
 (require 'seq)
+(require 'drgnx-modules-record)
 
 (defvar drgnx-signal-delay 0.05 "Idle seconds before raw events are flushed as edges.")
 (defvar drgnx-signal--subscribers nil "Alist EVENT → list of functions, in subscription order.")
@@ -24,13 +25,34 @@
 (defvar drgnx-signal--editor-window nil "The most recently selected editor window.")
 (defvar drgnx-signal-errors nil "Recent subscriber errors (newest first).")
 
+(defvar drgnx-signal--owners nil
+  "Subscriptions made from module setups: a list of (EVENT FN COUNT FOREIGN), COUNT the modules holding
+the subscription, FOREIGN non-nil when FN was already subscribed by code that records nothing.")
+
+(defun drgnx-signal--release (entry)
+  "A module lets go of ENTRY's subscription; the last one unsubscribes (a FOREIGN one stays)."
+  (when (zerop (cl-decf (nth 2 entry)))
+    (setq drgnx-signal--owners (delq entry drgnx-signal--owners))
+    (unless (nth 3 entry) (drgnx-signal-unsubscribe (nth 0 entry) (nth 1 entry)))))
+
 (defun drgnx-signal-subscribe (event fn)
-  "Call FN with the event's data whenever EVENT is emitted (once per FN)."
-  (unless (memq fn (alist-get event drgnx-signal--subscribers))
-    (setf (alist-get event drgnx-signal--subscribers)
-          (append (alist-get event drgnx-signal--subscribers) (list fn)))))
+  "Call FN with the event's data whenever EVENT is emitted (once per FN).
+Called from a module's setup, the subscription is counted for that module and its release is
+recorded (module teardown): two modules subscribing the same FN both hold it, and it goes when the
+last lets go.  A subscription made before the first module's, by code that records nothing, stays."
+  (let ((present (memq fn (alist-get event drgnx-signal--subscribers))))
+    (unless present
+      (setf (alist-get event drgnx-signal--subscribers)
+            (append (alist-get event drgnx-signal--subscribers) (list fn))))
+    (when (drgnx-modules--recording-p)
+      (let ((entry (or (seq-find (lambda (e) (and (eq (nth 0 e) event) (eq (nth 1 e) fn))) drgnx-signal--owners)
+                       (car (push (list event fn 0 (and present t)) drgnx-signal--owners)))))
+        (cl-incf (nth 2 entry))
+        (drgnx-modules-push-undo (format "signal %s" event) (lambda () (drgnx-signal--release entry)))))
+    nil))
 
 (defun drgnx-signal-unsubscribe (event fn)
+  "Stop calling FN for EVENT."
   (setf (alist-get event drgnx-signal--subscribers) (remq fn (alist-get event drgnx-signal--subscribers))))
 
 (defun drgnx-signal-user-buffer-p (buffer)

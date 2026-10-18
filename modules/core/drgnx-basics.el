@@ -8,6 +8,7 @@
 (defvar project-list-file)
 (require 'drgnx-paths)
 (require 'drgnx-session)
+(require 'drgnx-trust)
 
 (defvar drgnx-basics--closed nil "Files of the buffers closed, newest first (Reopen Closed Tab).")
 
@@ -46,6 +47,8 @@
                              inhibit-startup-screen t
                              ;; Background native compilation: warnings go to the log, never a window popping up.
                              native-comp-async-report-warnings-errors 'silent)
+                       ;; Trusted folders and the guards for files from the others, before any file opens
+                       (drgnx-trust-setup)
                        (drgnx-command-define 'open-file :category "File" :title "Open File…" :command #'find-file
                                              :doc "Open a file")
                        (drgnx-command-define 'save-file :category "File" :title "Save" :command #'save-buffer

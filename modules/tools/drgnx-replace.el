@@ -1538,11 +1538,15 @@ Nil when the match's text changed."
           (delete-window w)
           (when (and (window-live-p below) (eq (window-buffer below) target)) (select-window below)))))))
 
-(defun drgnx-replace--close-bars (&rest _)
+(declare-function drgnx-persist--save-skipped-p "drgnx-persist")
+
+(defun drgnx-replace--close-bars (&optional _file frames)
   "Close the find bar in every frame: before the workbench is saved, so a restart never brings back its window.
+Not when the save writes nothing (from a terminal window; FRAMES is what `drgnx-persist-save' was given).
 An error here is ignored: it must never make the save fail."
   (ignore-errors
-    (when-let* ((bar (get-buffer drgnx-replace-bar-buffer-name)))
+    (when-let* (((not (drgnx-persist--save-skipped-p frames)))
+                (bar (get-buffer drgnx-replace-bar-buffer-name)))
       (with-current-buffer bar (drgnx-replace--bar-clear))
       (dolist (w (get-buffer-window-list bar nil t))
         (when (window-live-p w) (ignore-errors (delete-window w)))))))

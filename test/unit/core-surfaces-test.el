@@ -1,6 +1,8 @@
 ;;; core-surfaces-test.el --- batch tests: surfaces generated from the registry -*- lexical-binding: t -*-
 (require 'ert)
 (require 'drgnx-surfaces)
+(require 'drgnx-modules)
+(require 'drgnx-modules-helpers)
 
 (defun drgnx-test--surf-cmd () (interactive) (setq drgnx-test--ran t))
 (defvar drgnx-test--ran nil)
@@ -65,3 +67,191 @@
       (drgnx-surfaces-context-menu (make-sparse-keymap) 'f11)
       (should (eq (current-buffer) here))
       (should (= (point) pt)))))
+
+;;;; Undefining contexts and menu items, and a module's teardown
+
+(defmacro drgnx-surfaces-test--with-modules (&rest body)
+  "BODY with a fresh registry, contexts, menu records, module state and cleanup stacks."
+  `(let* ((cfg (make-temp-file "drgnx-cfg" t))
+          (process-environment (cons (concat "DRGNX_CONFIG_DIR=" cfg) process-environment))
+          (drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
+          (drgnx-commands-problems nil) (drgnx-surfaces-contexts nil) (drgnx-surfaces--menu-items (make-hash-table :test #'eq))
+          (drgnx-surfaces--menu-created nil) (drgnx-module--claims (make-hash-table :test 'equal))
+          (drgnx-modules--table nil) (drgnx-modules--report nil) (drgnx-modules--state nil)
+          (drgnx-modules--stacks nil))
+     (unwind-protect (progn ,@body) (delete-directory cfg t))))
+
+(ert-deftest drgnx-surfaces/undefine-context ()
+  (drgnx-test--with-commands
+   (should (eq (drgnx-surfaces-undefine-context 'always) 'always))
+   (should-not (assq 'always drgnx-surfaces-contexts))
+   (should-not (drgnx-surfaces-undefine-context 'always))
+   (let ((menu (drgnx-surfaces-context-menu (make-sparse-keymap) nil)))   ; the command naming it no longer shows
+     (should-not (lookup-key menu [a-cmd])))))
+
+(ert-deftest drgnx-surfaces/a-module-context-goes-with-the-module ()
+  (drgnx-surfaces-test--with-modules
+   (drgnx-surfaces-define-context 'code (lambda (_) 'core))
+   (let ((core (alist-get 'code drgnx-surfaces-contexts)))
+     (drgnx-module-define 'test/a :doc "a"
+                          :setup (lambda ()
+                                   (drgnx-surfaces-define-context 'extra (lambda (_) t))
+                                   (drgnx-surfaces-define-context 'code (lambda (_) 'module))))
+     (drgnx-modules-run 'startup)
+     (should (assq 'extra drgnx-surfaces-contexts))
+     (should (eq (funcall (alist-get 'code drgnx-surfaces-contexts) nil) 'module))
+     (drgnx-module-teardown 'test/a)
+     (should-not (assq 'extra drgnx-surfaces-contexts))
+     (should (eq (alist-get 'code drgnx-surfaces-contexts) core)))))
+
+(ert-deftest drgnx-surfaces/a-context-changed-since-is-kept ()
+  (drgnx-surfaces-test--with-modules
+   (drgnx-module-define 'test/a :doc "a" :setup (lambda () (drgnx-surfaces-define-context 'extra (lambda (_) 'module))))
+   (drgnx-modules-run 'startup)
+   (drgnx-surfaces-define-context 'extra (lambda (_) 'user))     ; outside a setup
+   (drgnx-module-teardown 'test/a)
+   (should (eq (funcall (alist-get 'extra drgnx-surfaces-contexts) nil) 'user))))
+
+(ert-deftest drgnx-surfaces/a-library-loaded-by-a-setup-keeps-its-contexts ()
+  (drgnx-surfaces-test--with-modules
+   (let ((lib (make-temp-file "drgnx-lib" nil ".el" "(drgnx-surfaces-define-context 'lib (lambda (_) t))\n")))
+     (unwind-protect
+         (progn (drgnx-module-define 'test/a :doc "a" :setup (lambda () (load lib nil t)))
+                (drgnx-modules-run 'startup)
+                (drgnx-module-teardown 'test/a)
+                (should (assq 'lib drgnx-surfaces-contexts)))
+       (delete-file lib)))))
+
+(defun drgnx-surfaces-test--menu-bar () (copy-tree (lookup-key global-map [menu-bar])))
+
+(defun drgnx-surfaces-test--menu-def (id title menu)
+  (lambda () (drgnx-command-define id :title title :category "Test" :command #'drgnx-test--surf-cmd :menu menu)))
+
+(ert-deftest drgnx-surfaces/teardown-leaves-the-menu-bar-as-it-was ()
+  (drgnx-surfaces-test--with-modules
+   ;; A foreign item the module's entry will replace, and one in a menu the module's entries create.
+   (easy-menu-add-item (lookup-key global-map [menu-bar]) '("Tools") (vector "Replaced" #'ignore))
+   (let ((before (drgnx-surfaces-test--menu-bar)))
+     (unwind-protect
+         (progn
+           (drgnx-module-define
+            'test/a :doc "a"
+            :setup (lambda ()
+                     (funcall (drgnx-surfaces-test--menu-def 'm1 "Replaced" '("Tools")))
+                     (funcall (drgnx-surfaces-test--menu-def 'm2 "Nested" '("Tools" "Drgnx Test Sub")))
+                     (funcall (drgnx-surfaces-test--menu-def 'm3 "Deep" '("Drgnx Test Top" "Level")))))
+           (drgnx-modules-run 'startup)
+           (drgnx-surfaces-build-menus)
+           (should-not (equal (drgnx-surfaces-test--menu-bar) before))
+           (should (easy-menu-item-present-p (lookup-key global-map [menu-bar]) '("Drgnx Test Top" "Level") "Deep"))
+           (drgnx-surfaces-build-menus)                        ; idempotent: nothing doubles
+           (drgnx-module-teardown 'test/a)
+           (drgnx-surfaces-build-menus)
+           (should (equal (drgnx-surfaces-test--menu-bar) before))
+           (should (zerop (hash-table-count drgnx-surfaces--menu-items))))
+       (easy-menu-remove-item (lookup-key global-map [menu-bar]) '("Tools") "Replaced")))))
+
+(ert-deftest drgnx-surfaces/another-modules-menu-item-stays ()
+  (drgnx-surfaces-test--with-modules
+   (let ((bar (lookup-key global-map [menu-bar])))
+     (drgnx-module-define 'test/a :doc "a" :setup (drgnx-surfaces-test--menu-def 'm1 "One" '("Drgnx Test Top")))
+     (drgnx-module-define 'test/b :doc "b" :setup (drgnx-surfaces-test--menu-def 'm2 "Two" '("Drgnx Test Top")))
+     (drgnx-modules-run 'startup)
+     (drgnx-surfaces-build-menus)
+     (drgnx-module-teardown 'test/a)
+     (drgnx-surfaces-build-menus)
+     (should-not (easy-menu-item-present-p bar '("Drgnx Test Top") "One"))
+     (should (easy-menu-item-present-p bar '("Drgnx Test Top") "Two"))
+     (drgnx-module-teardown 'test/b)
+     (drgnx-surfaces-build-menus)
+     ;; (`easy-menu-item-present-p' would make the missing submenu, so look the plain way.)
+     (should-not (lookup-key global-map [menu-bar Drgnx\ Test\ Top])))))
+
+(ert-deftest drgnx-surfaces/a-menu-item-replaced-by-someone-else-is-kept ()
+  (drgnx-surfaces-test--with-modules
+   (drgnx-module-define 'test/a :doc "a" :setup (drgnx-surfaces-test--menu-def 'm1 "Mine" '("Drgnx Test Top")))
+   (drgnx-modules-run 'startup)
+   (drgnx-surfaces-build-menus)
+   (easy-menu-add-item (lookup-key global-map [menu-bar]) '("Drgnx Test Top") (vector "Mine" #'ignore))
+   (drgnx-module-teardown 'test/a)
+   (drgnx-surfaces-build-menus)
+   (should (easy-menu-item-present-p (lookup-key global-map [menu-bar]) '("Drgnx Test Top") "Mine"))
+   (easy-menu-remove-item (lookup-key global-map [menu-bar]) nil "Drgnx Test Top")))
+
+(defun drgnx-surfaces-test--titles (path)
+  "The titles of the items in the submenu PATH of the menu bar, in order."
+  (let (out)
+    (map-keymap (lambda (_ item) (when (eq (car-safe item) 'menu-item) (push (nth 1 item) out)))
+                (drgnx-surfaces--menu-submenu (lookup-key global-map [menu-bar]) path))
+    (nreverse out)))
+
+(ert-deftest drgnx-surfaces/an-untouched-menu-item-keeps-its-place ()
+  ;; Alpha, Beta, then an item someone else added: removing Alpha must not move Beta behind it.
+  (drgnx-surfaces-test--with-modules
+   (let ((bar (lookup-key global-map [menu-bar])))
+     (funcall (drgnx-surfaces-test--menu-def 'a1 "Alpha" '("Drgnx Test Top")))
+     (funcall (drgnx-surfaces-test--menu-def 'b1 "Beta" '("Drgnx Test Top")))
+     (drgnx-surfaces-build-menus)
+     (easy-menu-add-item bar '("Drgnx Test Top") (vector "Foreign" #'ignore))
+     (should (equal (drgnx-surfaces-test--titles '("Drgnx Test Top")) '("Alpha" "Beta" "Foreign")))
+     (drgnx-command-undefine 'a1)
+     (drgnx-surfaces-build-menus)
+     (should (equal (drgnx-surfaces-test--titles '("Drgnx Test Top")) '("Beta" "Foreign")))
+     (drgnx-command-undefine 'b1)
+     (drgnx-surfaces-build-menus)
+     (should (equal (drgnx-surfaces-test--titles '("Drgnx Test Top")) '("Foreign")))
+     (easy-menu-remove-item bar nil "Drgnx Test Top"))))
+
+(ert-deftest drgnx-surfaces/two-commands-sharing-a-title-go-in-either-order ()
+  (dolist (order '((test/a test/b) (test/b test/a)))
+    (drgnx-surfaces-test--with-modules
+     (easy-menu-add-item (lookup-key global-map [menu-bar]) '("Tools") (vector "Same" #'ignore))
+     (let ((before (drgnx-surfaces-test--menu-bar)))
+       (unwind-protect
+           (progn
+             (drgnx-module-define 'test/a :doc "a" :setup (drgnx-surfaces-test--menu-def 'm1 "Same" '("Tools")))
+             (drgnx-module-define 'test/b :doc "b" :setup (drgnx-surfaces-test--menu-def 'm2 "Same" '("Tools")))
+             (drgnx-modules-run 'startup)
+             (drgnx-surfaces-build-menus)
+             (drgnx-module-teardown (car order))
+             (drgnx-surfaces-build-menus)
+             ;; The other command's entry is still there under the shared title.
+             (should (member "Same" (drgnx-surfaces-test--titles '("Tools"))))
+             (drgnx-module-teardown (cadr order))
+             (drgnx-surfaces-build-menus)
+             (should (equal (drgnx-surfaces-test--menu-bar) before)))
+         (easy-menu-remove-item (lookup-key global-map [menu-bar]) '("Tools") "Same"))))))
+
+(ert-deftest drgnx-surfaces/two-modules-one-context-go-in-either-order ()
+  (dolist (order '((test/a test/b) (test/b test/a)))
+    (drgnx-surfaces-test--with-modules
+     (drgnx-surfaces-define-context 'shared (lambda (_) 'core))
+     (let ((core (alist-get 'shared drgnx-surfaces-contexts)))
+       (drgnx-module-define 'test/a :doc "a" :setup (lambda () (drgnx-surfaces-define-context 'shared (lambda (_) 'a))))
+       (drgnx-module-define 'test/b :doc "b" :setup (lambda () (drgnx-surfaces-define-context 'shared (lambda (_) 'b))))
+       (drgnx-modules-run 'startup)
+       (should (eq (funcall (alist-get 'shared drgnx-surfaces-contexts) nil) 'b))
+       (drgnx-module-teardown (car order))
+       (drgnx-module-teardown (cadr order))
+       (should (eq (alist-get 'shared drgnx-surfaces-contexts) core))))))
+
+(ert-deftest drgnx-surfaces/a-context-only-modules-defined-goes-in-either-order ()
+  ;; Neither module's predicate may outlive both teardowns, even when both pass the same function.
+  (dolist (order '((test/a test/b) (test/b test/a)))
+    (drgnx-surfaces-test--with-modules
+     (drgnx-module-define 'test/a :doc "a" :setup (lambda () (drgnx-surfaces-define-context 'extra #'ignore)))
+     (drgnx-module-define 'test/b :doc "b" :setup (lambda () (drgnx-surfaces-define-context 'extra #'ignore)))
+     (drgnx-modules-run 'startup)
+     (drgnx-module-teardown (car order))
+     (drgnx-module-teardown (cadr order))
+     (should-not (assq 'extra drgnx-surfaces-contexts)))))
+
+(ert-deftest drgnx-surfaces/a-user-context-over-two-modules-is-kept ()
+  (drgnx-surfaces-test--with-modules
+   (drgnx-module-define 'test/a :doc "a" :setup (lambda () (drgnx-surfaces-define-context 'extra (lambda (_) 'a))))
+   (drgnx-module-define 'test/b :doc "b" :setup (lambda () (drgnx-surfaces-define-context 'extra (lambda (_) 'b))))
+   (drgnx-modules-run 'startup)
+   (drgnx-surfaces-define-context 'extra (lambda (_) 'user))     ; outside a setup
+   (drgnx-module-teardown 'test/a)
+   (drgnx-module-teardown 'test/b)
+   (should (eq (funcall (alist-get 'extra drgnx-surfaces-contexts) nil) 'user))))

@@ -27,7 +27,9 @@ profile's; every command is also in the palette.
 | Layouts (Agent, Editor, Zen, Browser, your own) | Next Layout `C-k C-l` | [layouts.md](layouts.md) | `drgnx-ui-m11c1/replace-layouts-shortcuts` | — |
 | A web page beside the editor; Playwright reports | `tools/browser` | [browser.md](browser.md) | `drgnx-ui-m11c1/replace-layouts-shortcuts` (without WebKit) | — |
 | Watch and take over the agents' browser | `tools/live` | [live.md](live.md) | `drgnx-ui-m11c1/replace-layouts-shortcuts` (a mock browser) | live-view |
+| Edit on another machine (ssh hosts, podman containers), a status-line segment, Reconnect | `tools/remote` | [remote.md](remote.md) | `drgnx-ui-m11c2/agent-settings-and-remote` (a podman container) | remote-typing |
+| Agent settings pages (Claude Code, Codex, Gemini, Kimi Code): routes, MCP servers, hooks, skills, Test | `tools/agent-settings` | [agent-settings.md](agent-settings.md) | `drgnx-ui-m11c2/agent-settings-and-remote` (mock MCP servers) | agent-settings-open |
 | Keyboard Shortcuts editor (record chords, conflicts, filters) | Keyboard Shortcuts `C-k C-s` | [shortcuts.md](shortcuts.md) | `drgnx-ui-m11c1/replace-layouts-shortcuts` | — |
 
-Not yet: agent settings pages, remote editing (TRAMP), VS Code settings import, Reopen Closed Tab, agent modes and
+Not yet: VS Code settings import, Reopen Closed Tab, agent modes and
 checkpoints, @-context, side chats — they come in the next milestones.

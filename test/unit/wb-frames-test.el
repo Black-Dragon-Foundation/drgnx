@@ -75,3 +75,88 @@ visible, without parent."
     (drgnx-signal-post 'tabs-changed)
     (drgnx-signal--flush)
     (should (memq 'tabs seen))))
+
+(defmacro drgnx-frames-test--terminal (daemon terminal &rest body)
+  "BODY with every frame a visible, parentless text frame on a terminal named TERMINAL; `daemonp' DAEMON."
+  (declare (indent 2))
+  `(cl-letf (((symbol-function 'daemonp) (lambda () ,daemon))
+             ((symbol-function 'display-graphic-p) (lambda (&optional _) nil))
+             ((symbol-function 'frame-visible-p) (lambda (_) t))
+             ((symbol-function 'frame-parent) (lambda (&optional _) nil))
+             ((symbol-function 'frame-terminal) (lambda (&optional _) 'kx-terminal))
+             ((symbol-function 'terminal-name) (lambda (&optional _) ,terminal)))
+     ,@body))
+
+(ert-deftest drgnx-frames/a-daemon-s-client-terminal-frame-is-a-workbench ()
+  ;; `emacsclient -t' (and `emacs -nw') get the workbench: a text frame is a window like a graphical one
+  (drgnx-frames-test--terminal "drgnx" "/dev/pts/3"
+    (should (drgnx-frames--workbench-p (selected-frame))))
+  (drgnx-frames-test--terminal nil "/dev/tty"
+    (should (drgnx-frames--workbench-p (selected-frame)))))
+
+(ert-deftest drgnx-frames/the-daemon-s-initial-frame-is-not ()
+  ;; the daemon's own frame (F1, on its initial terminal) is nobody's window
+  (drgnx-frames-test--terminal "drgnx" "initial_terminal"
+    (should-not (drgnx-frames--workbench-p (selected-frame)))))
+
+(ert-deftest drgnx-frames/a-new-terminal-frame-is-main-unless-a-child-or-the-daemon-s ()
+  ;; after-make-frame-functions: a client's terminal frame becomes main when none is; a child frame, or one on
+  ;; the daemon's initial terminal, never does
+  (let ((params (make-hash-table)) (parent nil) (terminal "/dev/pts/3"))
+    (cl-letf (((symbol-function 'frame-parameter) (lambda (f p) (and (eq p 'drgnx-frame-role) (gethash f params))))
+              ((symbol-function 'set-frame-parameter) (lambda (f p v) (when (eq p 'drgnx-frame-role) (puthash f v params)))))
+      (drgnx-frames-test--terminal "drgnx" terminal
+        (cl-letf (((symbol-function 'frame-list) (lambda () '(kx-new)))
+                  ((symbol-function 'frame-live-p) (lambda (f) (eq f 'kx-new)))
+                  ((symbol-function 'frame-parent) (lambda (&optional _) parent)))
+          (setq parent 'kx-parent)
+          (drgnx-frames--made 'kx-new)
+          (should-not (gethash 'kx-new params))
+          (setq parent nil terminal "initial_terminal")
+          (drgnx-frames--made 'kx-new)
+          (should-not (gethash 'kx-new params))
+          (setq terminal "/dev/pts/3")
+          (drgnx-frames--made 'kx-new)
+          (should (eq (gethash 'kx-new params) 'main)))))))
+
+(ert-deftest drgnx-frames/the-first-graphical-window-takes-main-from-a-terminal-one ()
+  ;; the daemon's first client was a terminal, so its frame became main; the first graphical window then becomes
+  ;; main (its buffer list has the files that are a tab nowhere; persist saves it as main), without a restore
+  (let ((params (make-hash-table)) (drgnx-frames-mode nil) (drgnx-first-gui-frame-hook nil)
+        (after-make-frame-functions nil) (delete-frame-functions nil)
+        (completion-category-overrides nil))
+    (puthash 'kx-tty 'main params)
+    (cl-letf (((symbol-function 'frame-parameter) (lambda (f p) (and (eq p 'drgnx-frame-role) (gethash f params))))
+              ((symbol-function 'set-frame-parameter) (lambda (f p v) (when (eq p 'drgnx-frame-role) (puthash f v params)))))
+      (drgnx-frames-test--fake (list 'kx-gui 'kx-tty)
+        (cl-letf (((symbol-function 'display-graphic-p) (lambda (&optional f) (eq f 'kx-gui))))
+          (drgnx-frames-mode 1)
+          (unwind-protect
+              (progn
+                (run-hooks 'drgnx-first-gui-frame-hook)
+                (should (eq (gethash 'kx-gui params) 'main))
+                (should-not (eq (gethash 'kx-tty params) 'main))
+                ;; a graphical main window stays main
+                (puthash 'kx-gui 'main params)
+                (run-hooks 'drgnx-first-gui-frame-hook)
+                (should (eq (gethash 'kx-gui params) 'main)))
+            (drgnx-frames-mode -1)))))))
+
+(ert-deftest drgnx-frames/an-editor-frame-is-never-main ()
+  ;; an EDITOR frame (`emacsclient -t FILE', role `editor') is kept for one file: the next window is main
+  (let ((params (make-hash-table)))
+    (puthash 'kx-editor 'editor params)
+    (cl-letf (((symbol-function 'frame-parameter) (lambda (f p) (and (eq p 'drgnx-frame-role) (gethash f params))))
+              ((symbol-function 'set-frame-parameter) (lambda (f p v) (when (eq p 'drgnx-frame-role) (puthash f v params)))))
+      (drgnx-frames-test--fake (list 'kx-later 'kx-editor)
+        (drgnx-frames-mark-main)
+        (should (eq (gethash 'kx-later params) 'main))
+        (should (eq (gethash 'kx-editor params) 'editor))
+        (should (eq (drgnx-frame-role 'kx-editor) 'aux))
+        ;; the main window closes: the editor frame does not take over
+        (clrhash params)
+        (puthash 'kx-editor 'editor params)
+        (puthash 'kx-later 'main params)
+        (cl-letf (((symbol-function 'drgnx-signal-post) #'ignore))
+          (drgnx-frames--deleted 'kx-later))
+        (should (eq (gethash 'kx-editor params) 'editor))))))

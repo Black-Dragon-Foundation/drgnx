@@ -56,10 +56,11 @@ working from the old one. So the shared state is explicit, versioned, and **enfo
   card-settle (`card`; an `ask` card is a `question`, see below), card-set (`card`, when its state changes: a reopened
   card shows) and job-set (`job`, when its status changes). A held write (behind the log) or a refused claim writes
   nothing. `edit`, `test`, `start`, `stop`, `review`, `accept`, `revert`, `answer` and `comment` are written by their
-  own sources through `drgnx-coord-event-add`.
+  own sources through `drgnx-coord-event-add` — for the hub's sessions and jobs (turns, edits, permissions, verdicts,
+  merges), the hub ([hub.md](hub.md#events)).
 - **What `data` may hold:** small, readable data — a plist of strings, numbers, symbols and lists of those; anything
-  else (a buffer, a function, a hash table) is an error. It is printed with `print-length` 100 and `print-level` 6;
-  over 4096 characters only `(:truncated t :size N)` is kept. It is read back with `read-eval` off. An `edit` event
+  else (a buffer, a function, a hash table) is an error. It is printed with `print-length` 100 (a longer list keeps its
+  first 100 elements and ends in the symbol `...`) at any depth; over 4096 characters only `(:truncated t :size N)` is kept. It is read back with `read-eval` off. An `edit` event
   carries a path, a hash and line counts — never file contents or environment values.
 - **Questions:** one model for everything that waits on the user. A `question` event is a message to `user` that asks
   (`drgnx-coord-send` with `:question` — `ask_user` — or an escalation, a text starting `[escalation]`, from drgnx's own
@@ -67,9 +68,13 @@ working from the old one. So the shared state is explicit, versioned, and **enfo
   they say; data `(:message ID …)`) or an `ask` card (data `(:card ID)`). An `answer` event closes
   it: its `data` holds `(:question EVENT-ID)`. Settling an `ask` card writes that answer itself (by `user`);
   `drgnx-coord-open-questions` lists the questions with no answer.
-- **Retention:** `drgnx-coord-events-prune` (`:before`, default `drgnx-coord-event-retention-days`, 30) forgets older
-  events except `question`, `answer` and `decision`. `drgnx-coord-events-prune-daily` runs it at most once in 24 hours
-  (stamp in `meta` as `event-pruned`) and never signals: meant for a periodic tick.
+- **Retention:** `drgnx-coord-events-prune` (`:before`, seconds since the epoch; default
+  `drgnx-coord-event-retention-days`, 30, ago) forgets older events except `question`, `answer` and `decision`.
+  `drgnx-coord-events-prune-daily` runs it at most once in 24 hours (stamp in `meta` as `event-pruned`) and never
+  signals (a locked database waits for the next call, any other error is a message): meant for a periodic tick. On
+  every call it also holds the log to `drgnx-coord-event-max-rows` (100,000), the oldest going first (questions,
+  answers and decisions apart), so a busy day is bounded before the next prune. Event ids are `autoincrement`: an id is
+  never given twice, even after the newest rows were pruned.
 - **Busy database:** `work.db` opens with a 5-second busy timeout, so a writer waits for another Emacs's write lock for up
   to 5 seconds. After that SQLite reports the database locked. Claims, cards, messages, decisions and
   `drgnx-coord-event-add` then signal (the change did not happen: say so). Telemetry — `drgnx-coord-agent-seen` and
@@ -287,7 +292,10 @@ the clash is moot by then). Prompts of sessions that ended before they were free
 `complete_task` from an agent of a job (`DRGNX_JOB` set) puts the task `in-review`, not `done`, and `update_task`
 there takes only `running`, `needs-input` and `in-review`; the reviewer's verdict decides (`drgnx-job--reviewed`, `drgnx-job--merge`: the merge is a git process of its own, the task shows `merging` meanwhile
 (`drgnx-job--busy`, in the hub's memory only: a restart finds the store's `in-review` and the "merged before" check);
-a merge that fails with no unmerged files gets a `merge-conflict` card titled `merge failed: <git output>`;
+one merge at a time in a job's worktree — two at once fail on its HEAD (`cannot lock ref`), so a task whose review passes
+while another merges waits, `queued` (`drgnx-job--merge-queue`; stopping the job empties it); a merge that fails with
+no unmerged files is no conflict: it goes once more after what merges then, and fails again into a `merge-failed` card
+titled `merge failed: <git output>` (Merge again, Drop, Open — no agent is sent to resolve a conflict);
 `drgnx-job--git`, the short synchronous reads, returns stderr after stdout when git fails; the job's own worktree at
 approval is still made synchronously, for the command that asked). A card (`drgnx-job--card`) is a `card` row — one open per task and kind, actions by
 kind (`drgnx-job-card-actions`), acted on once through `job/card` (`drgnx-job-card-act`: settled first, so a second

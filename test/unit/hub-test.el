@@ -216,6 +216,13 @@ OUT and exits."
                              (kill-emacs 0))"
                           (drgnx-hub-socket) delay out))))
 
+(defun drgnx-hub-test--blob (mib char)
+  "MIB mebibytes of CHAR to send a client — an eighth of that on macOS.  A hub write that fills the client's socket
+waits 20 ms (Emacs's send_process) before it tries again: Linux's local sockets hold ~200 KB, macOS's 8 KB, so the
+hub writes ~25 times slower there (~400 KB/s).  An eighth is still many socket-fulls (the waits these tests are
+about) and keeps the tests within their time limits."
+  (make-string (round (* mib 1024 1024 (if (eq system-type 'darwin) 0.125 1))) char))
+
 (defun drgnx-hub-test--got (out)
   "The `test' events' numbers in what a reader wrote to OUT, in the order it got them."
   (with-temp-buffer
@@ -231,13 +238,19 @@ OUT and exits."
     (drgnx-hub-serve (drgnx-hub-socket))
     (let* ((fast-out (concat root "fast.txt")) (slow-out (concat root "slow.txt"))
            (fast (drgnx-hub-test--reader fast-out 0)) (slow nil)
-           (big (make-string (* 1024 1024) ?b)) (small (make-string 200 ?s)) (n 0) (timers nil)
-           (send (lambda (blob) (run-at-time 0 nil (lambda () (drgnx-hub--broadcast 'test (list :n (cl-incf n) :blob blob)))))))
+           (big (drgnx-hub-test--blob 1 ?b)) (small (make-string 200 ?s)) (n 0) (timers nil)
+           ;; nothing after STOP, whoever has control then: on macOS the hub writes hardly faster than these timers
+           ;; make events (~400 KB/s), its drain goes on while new ones come, and the test's own 2 s would never end
+           ;; (the queue grew for 200 s, to its 16 MiB limit)
+           (stop 0)
+           (send (lambda (blob) (run-at-time 0 nil (lambda () (when (< (float-time) stop)
+                                                                (drgnx-hub--broadcast 'test (list :n (cl-incf n) :blob blob))))))))
       (unwind-protect
           (progn
             (should (drgnx-hub-test--wait (lambda () (= (length drgnx-hub--subscribers) 1)) 10))
             (setq slow (drgnx-hub-test--reader slow-out 0.002))           ; subscribed second: written to first
             (should (drgnx-hub-test--wait (lambda () (= (length drgnx-hub--subscribers) 2)) 10))
+            (setq stop (+ (float-time) 2))
             (push (run-at-time 0 0.05 (lambda () (funcall send small))) timers)
             (push (run-at-time 0 0.5 (lambda () (funcall send big))) timers)
             (drgnx-hub-test--wait #'ignore 2)
@@ -274,8 +287,8 @@ OUT and exits."
             (setq b (car drgnx-hub--subscribers))
             (signal-process b-proc 'SIGSTOP)
             (setq rescue (run-at-time 9 nil (lambda () (signal-process b-proc 'SIGCONT))))
-            (run-at-time 0 nil (lambda () (drgnx-hub--answer a (list :event "test" :data (list :n 1 :blob (make-string (* 4 1024 1024) ?a))))))
-            (run-at-time 0.2 nil (lambda () (drgnx-hub--answer b (list :event "test" :data (list :n 1 :blob (make-string (* 4 1024 1024) ?b))))))
+            (run-at-time 0 nil (lambda () (drgnx-hub--answer a (list :event "test" :data (list :n 1 :blob (drgnx-hub-test--blob 4 ?a))))))
+            (run-at-time 0.2 nil (lambda () (drgnx-hub--answer b (list :event "test" :data (list :n 1 :blob (drgnx-hub-test--blob 4 ?b))))))
             (should (drgnx-hub-test--wait (lambda () (not (process-live-p b))) 6))
             (should (process-live-p a))
             (drgnx-hub--answer a '(:event "done" :data nil))
@@ -307,10 +320,13 @@ OUT and exits."
             (setq stopped (car drgnx-hub--subscribers))
             (signal-process stopped-proc 'SIGSTOP)
             (setq rescue (run-at-time 12 nil (lambda () (signal-process stopped-proc 'SIGCONT))))
-            (run-at-time 0 nil (lambda () (drgnx-hub--answer stopped (list :event "big" :data (list :blob (make-string (* 4 1024 1024) ?b))))))
+            (run-at-time 0 nil (lambda () (drgnx-hub--answer stopped (list :event "big" :data (list :blob (drgnx-hub-test--blob 4 ?b))))))
             (setq ticker (run-at-time 0.1 0.1 (lambda () (run-at-time 0 nil (lambda () (drgnx-hub--broadcast 'test (list :n (cl-incf n))))))))
             (should (drgnx-hub-test--wait (lambda () (not (process-live-p stopped))) 4))
             (cancel-timer ticker)
+            ;; a broadcast the ticker queued just before is still to come: after it, `done' (else it follows `done',
+            ;; which the reader does not wait past)
+            (drgnx-hub-test--wait #'ignore 0.1)
             (should (process-live-p live))
             (drgnx-hub--broadcast 'done nil)
             (should (drgnx-hub-test--wait (lambda () (not (process-live-p live-proc))) 20))
@@ -320,6 +336,49 @@ OUT and exits."
         (when (timerp rescue) (cancel-timer rescue))
         (when stopped-proc (ignore-errors (signal-process stopped-proc 'SIGCONT)) (delete-process stopped-proc))
         (delete-process live-proc)))))
+
+(ert-deftest drgnx-hub/a-queue-past-its-limit-is-dropped-beneath-other-writes ()
+  ;; a stopped client X whose write waits beneath a live, slow client Y's (which can go on for long: it makes
+  ;; progress) is not judged by time, but its queue is held to `drgnx-hub-client-max-queued' wherever it is; Y's
+  ;; old write, innermost, is judged by time
+  (let* ((x (make-pipe-process :name "hub-x" :noquery t)) (y (make-pipe-process :name "hub-y" :noquery t))
+         (drgnx-hub-client-max-queued 1000) (drgnx-hub-client-stuck-after 10) (inhibit-message t))
+    (unwind-protect
+        (let ((drgnx-hub--writing (list y x)))
+          (process-put x :sending (- (float-time) 60))                          ; beneath: its time is not judged
+          (process-put y :sending (float-time))
+          (drgnx-hub--enqueue x (make-string 600 ?a))
+          (should (process-live-p x))
+          (drgnx-hub--enqueue x (make-string 600 ?a))                              ; 1200 bytes: past the limit
+          (should-not (process-live-p x))
+          (should (process-live-p y))
+          (process-put y :sending (- (float-time) 11))                          ; innermost: judged by time
+          (drgnx-hub--enqueue y "z")
+          (should-not (process-live-p y)))
+      (delete-process x)
+      (delete-process y))))
+
+(ert-deftest drgnx-hub/a-live-reader-is-kept-through-a-long-line ()
+  ;; One line can take long to go out to a client that reads, slowly: on macOS a local socket holds 8 KB and Emacs
+  ;; waits 20 ms each time a write fills it, so a snapshot of a few MB takes seconds there.  Only a write that makes
+  ;; no progress for `drgnx-hub-client-stuck-after' is stuck: the line goes out a piece at a time, each one progress.
+  (drgnx-hub-test--with
+    (drgnx-hub-serve (drgnx-hub-socket))
+    (let* ((out (concat root "got.txt")) (reader (drgnx-hub-test--reader out 0.05)) (conn nil) (judge nil)
+           (drgnx-hub-client-stuck-after 0.3))
+      (unwind-protect
+          (progn
+            (should (drgnx-hub-test--wait (lambda () drgnx-hub--subscribers) 10))
+            (setq conn (car drgnx-hub--subscribers))
+            (setq judge (run-at-time 0.05 0.05 #'drgnx-hub--drop-stuck))          ; as the hub's tick does, more often
+            (drgnx-hub--broadcast 'test (list :n 1 :blob (drgnx-hub-test--blob 4 ?l)))
+            (cancel-timer judge)
+            (should (process-live-p conn))
+            (drgnx-hub--broadcast 'done nil)
+            (should (drgnx-hub-test--wait (lambda () (not (process-live-p reader))) 30))
+            (should (equal (drgnx-hub-test--got out) '(1))))
+        (when (timerp judge) (cancel-timer judge))
+        (delete-process reader)))))
 
 (ert-deftest drgnx-hub/a-slow-subscriber-is-kept-and-gets-everything-in-order ()
   ;; a live reader that is merely slow (big snapshots, a busy editor) makes writes wait: what comes meanwhile is
@@ -340,12 +399,18 @@ OUT and exits."
                                            (let ((coding-system-for-write 'binary)) (write-region (apply #'concat (nreverse got)) nil %S))
                                            (kill-emacs 0))"
                                         (drgnx-hub-socket) out))))
-           (big (make-string (* 1024 1024) ?b)) (small (make-string 200 ?s)) (n 0) (timers nil)
-           (send (lambda (blob) (run-at-time 0 nil (lambda () (drgnx-hub--broadcast 'test (list :n (cl-incf n) :blob blob)))))))
+           (big (drgnx-hub-test--blob 1 ?b)) (small (make-string 200 ?s)) (n 0) (timers nil)
+           ;; nothing after STOP, whoever has control then: on macOS the hub writes hardly faster than these timers
+           ;; make events (~400 KB/s), its drain goes on while new ones come, and the test's own 2 s would never end
+           ;; (the queue grew for 200 s, to its 16 MiB limit)
+           (stop 0)
+           (send (lambda (blob) (run-at-time 0 nil (lambda () (when (< (float-time) stop)
+                                                                (drgnx-hub--broadcast 'test (list :n (cl-incf n) :blob blob))))))))
       (unwind-protect
           (progn
             (should (drgnx-hub-test--wait (lambda () drgnx-hub--subscribers) 10))
             (let ((conn (car drgnx-hub--subscribers)))
+              (setq stop (+ (float-time) 2))
               (push (run-at-time 0 0.05 (lambda () (funcall send small))) timers)
               (push (run-at-time 0 0.5 (lambda () (funcall send big))) timers)
               (drgnx-hub-test--wait #'ignore 2)
@@ -508,7 +573,8 @@ OUT and exits."
       (should (= rc 0)))
     (should (drgnx-hub-running-p))                    ; the starter is gone; the hub serves
     (let* ((pid (plist-get (drgnx-hub-call-sync "status" nil) :pid))
-           (cmdline (with-temp-buffer (insert-file-contents-literally (format "/proc/%d/cmdline" pid)) (buffer-string))))
+           (cmdline (or (alist-get 'args (process-attributes pid))           ; no /proc on macOS
+                        (shell-command-to-string (format "ps -ww -o command= -p %d" pid)))))
       (should (/= pid (emacs-pid)))
       (should (string-search "drgnx-hub-main" cmdline))
       ;; keys sent over the socket: in the hub's memory only

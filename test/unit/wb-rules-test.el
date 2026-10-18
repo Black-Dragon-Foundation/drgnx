@@ -131,9 +131,9 @@
      (setq drgnx-signal--editor-window editor)
      (should (eq (display-buffer f) editor))
      (dolist (name (quote ("*Ibuffer*" "*Buffer List*" "*Customize Group: Editing*" "*Abbrevs*" "*scratch*")))
-       (let ((b (get-buffer-create name)))               ; fundamental-mode when first displayed
+       (let* ((old (get-buffer name)) (b (get-buffer-create name)))   ; fundamental-mode when first displayed
          (should (eq (display-buffer b) editor))
-         (kill-buffer b)))
+         (unless old (kill-buffer b))))                  ; never the suite's own *scratch*
      (should-not drgnx-wb-unrouted)
      (kill-buffer f))))
 

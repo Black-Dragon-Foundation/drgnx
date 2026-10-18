@@ -368,6 +368,7 @@ after — they owned their hooks and timers."
             (cl-letf (((symbol-function 'drgnx-persist--restore-frame) (lambda (_st) (cl-incf restored)))
                       ((symbol-function 'drgnx-persist--place-frame) (lambda (&rest args) (push args placed)))
                       ((symbol-function 'select-frame-set-input-focus) #'ignore)
+                      ((symbol-function 'drgnx-persist--gui-frame) #'selected-frame)   ; a window that rebuilds itself needs a display
                       ((symbol-function 'drgnx-cockpit-schedule) #'ignore))
               (should (drgnx-persist-restore))
               (should (= restored 1))

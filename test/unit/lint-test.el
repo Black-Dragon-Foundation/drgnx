@@ -83,6 +83,13 @@
   "Keymaps allowed to bind keyboard keys in code: they forward raw input (to a web page, like a terminal's raw map), so
 their keys are not commands and have no registry entries.  Everything else gets its keys from the profiles.")
 
+(defconst drgnx-lint--decode-maps '(input-decode-map key-translation-map)
+  "The terminal's decoding maps: a key sequence computed in code there is what a terminal sends (bytes, CSI forms), not
+a keyboard key of a command.")
+
+(defconst drgnx-lint--decode-map-builders '(drgnx-tty-frames--mok-map drgnx-tty-frames--csi-u-map)
+  "Functions that build a keymap for `input-decode-map' from the terminal's key encodings (modifyOtherKeys, CSI u).")
+
 (defun drgnx-lint--names-mouse-p (key)
   "Does the computed KEY form name a mouse or wheel event (a quoted mouse-1, wheel-up…)?"
   (catch 'found
@@ -95,11 +102,13 @@ their keys are not commands and have no registry entries.  Everything else gets 
   (let (out)
     (dolist (f (drgnx-lint--files "wb" "modules"))
       (dolist (top (drgnx-lint--forms f))
-        (unless (and (memq (car-safe top) '(defvar defconst defvar-keymap)) (memq (cadr top) drgnx-lint--raw-input-maps))
+        (unless (or (and (memq (car-safe top) '(defvar defconst defvar-keymap)) (memq (cadr top) drgnx-lint--raw-input-maps))
+                    (and (eq (car-safe top) 'defun) (memq (cadr top) drgnx-lint--decode-map-builders)))
           (drgnx-lint--walk top (lambda (form)
                                   (pcase form
-                                    (`(,(or 'define-key 'keymap-set 'keymap-local-set 'local-set-key) ,_ ,key . ,_)
+                                    (`(,(or 'define-key 'keymap-set 'keymap-local-set 'local-set-key) ,map ,key . ,_)
                                      (unless (or (stringp key) (vectorp key) (and (eq (car-safe key) 'kbd) (stringp (cadr key)))
+                                                 (memq map drgnx-lint--decode-maps)
                                                  (drgnx-lint--names-mouse-p key))
                                        (push (format "%s: %S binds a computed key %S" (file-relative-name f drgnx-dir) (car form) key)
                                              out)))))))))

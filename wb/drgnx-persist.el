@@ -49,6 +49,22 @@ After the restore the keys are in the frame parameter `drgnx-persist-extra', rea
 (defun drgnx-persist--file ()
   (or drgnx-persist-file (expand-file-name "workbench.eld" (drgnx-state-dir))))
 
+(defun drgnx-persist--terminal-frame-p (&optional frame)
+  "Non-nil if FRAME (default: the selected one) is a terminal window: text, on a real terminal.  Batch Emacs's
+frame and a daemon's first one are on the initial terminal and are not."
+  (and (not (display-graphic-p frame))
+       (not (equal (terminal-name (frame-terminal frame)) "initial_terminal"))))
+
+(defun drgnx-persist--save-skipped-p (frames)
+  "Non-nil if `drgnx-persist-save' called with FRAMES writes nothing: no frames were given (it would save the
+selected frame's workbench) and the selected frame is a terminal window.  Explicit FRAMES are graphical windows."
+  (and (null frames) (drgnx-persist--terminal-frame-p)))
+
+(defun drgnx-persist--graphical-only ()
+  "Say that layouts belong to graphical windows (what Save / Restore Workbench Layout answer in a terminal)."
+  (message "Layouts are saved and restored from graphical windows")
+  nil)
+
 (defun drgnx-persist--area (area)
   (let ((w (drgnx-wb-area-window area)))
     (list :shown (and w t) :tab (drgnx-wb-area-tab area)
@@ -138,15 +154,19 @@ other object); otherwise that function is skipped and said once, and the others'
 
 (defun drgnx-persist-save (&optional file frames)
   "Write the workbench of FRAMES (default: every window, the main one first) to FILE (default:
-`drgnx-persist-file').  Tabs not visited yet (restored at idle) are kept."
+`drgnx-persist-file').  Tabs not visited yet (restored at idle) are kept.  Called from a terminal window
+\(and with no FRAMES) it writes nothing, whatever FILE is: a terminal frame has no layout to export, and a terminal
+session never overwrites the desktop layout."
   (interactive)
-  (let ((file (or file (drgnx-persist--file)))
-        (state (list :version drgnx-persist-version
-                     :frames (mapcar #'drgnx-persist-state (or frames (drgnx-persist--frames))))))
-    (make-directory (file-name-directory file) t)
-    (with-temp-file file
-      (let ((print-length nil) (print-level nil)) (prin1 state (current-buffer))))
-    file))
+  (if (drgnx-persist--save-skipped-p frames)
+      (drgnx-persist--graphical-only)
+    (let ((file (or file (drgnx-persist--file)))
+          (state (list :version drgnx-persist-version
+                       :frames (mapcar #'drgnx-persist-state (or frames (drgnx-persist--frames))))))
+      (make-directory (file-name-directory file) t)
+      (with-temp-file file
+        (let ((print-length nil) (print-level nil)) (prin1 state (current-buffer))))
+      file)))
 
 (defun drgnx-persist--read (file)
   (when (file-readable-p file)
@@ -212,11 +232,24 @@ before M12f only filters the Work cockpit to its job).")
 (defun drgnx-persist-restore (&optional file)
   "Bring back the workbench saved in FILE — the selected frame gets the main window's layout (the state
 saved with `:role main', wherever it stands in the file), every other window is made again; non-nil if a
-state was restored.  A window that rebuilds itself is rebuilt by its function (with `drgnx-persist-restoring'
-non-nil) and, when it returns a frame and the display still has room, put back at its saved pixel position and size
-\(a terminal start does not treat it differently yet).  Each group's shown file is visited now, its other tabs at
-idle (never a question at start)."
+state was restored.  A window that rebuilt itself is rebuilt by its function (with `drgnx-persist-restoring'
+non-nil), on the graphical display, and, when it returns a frame and the display still has room, put back at its
+saved pixel position and size.
+Each group's shown file is visited now, its other tabs at idle (never a question at start).
+From a terminal window, the workbench is restored into the graphical window when one is open (and the terminal
+says so); with none, nothing is restored (a terminal window keeps the default layout for its size)."
   (interactive)
+  (cond ((not (drgnx-persist--terminal-frame-p)) (drgnx-persist--restore file))
+        ((drgnx-persist--gui-frame)
+         ;; focus stays in the terminal: the user may be over SSH, or there on purpose
+         (when (with-selected-frame (drgnx-persist--gui-frame) (drgnx-persist--restore file t))
+           (message "Restored into the graphical window")
+           t))
+        (t (drgnx-persist--graphical-only))))
+
+(defun drgnx-persist--restore (file &optional keep-focus)
+  "`drgnx-persist-restore' in the selected frame, which is not a terminal window.  The selected frame gets the
+input focus back after the other windows are made, unless KEEP-FOCUS (a restore asked for from a terminal)."
   (let* ((drgnx-persist-restoring t)
          (file (or file (drgnx-persist--file))) (state (drgnx-persist--read file))
          (frames (pcase (plist-get state :version)
@@ -243,16 +276,19 @@ idle (never a question at start)."
                   (let ((restore (plist-get st :restore)))
                     (cond
                      ((and (consp restore) (fboundp (car restore)))
-                      (condition-case err
-                          (let ((frame (apply (car restore) (cdr restore))) (g (drgnx-persist--geometry st)))
-                            (when (and g (frame-live-p frame) (display-graphic-p frame))
-                              (drgnx-persist--place-frame frame g)))
-                        (error (message "drgnx: a window was not restored: %s" (error-message-string err)))))
+                      (if-let* ((host (drgnx-persist--gui-frame)))      ; its display, never a text frame
+                          (condition-case err
+                              (let ((frame (with-selected-frame host (apply (car restore) (cdr restore))))
+                                    (g (drgnx-persist--geometry st)))
+                                (when (and g (frame-live-p frame) (display-graphic-p frame))
+                                  (drgnx-persist--place-frame frame g)))
+                            (error (message "drgnx: a window was not restored: %s" (error-message-string err))))
+                        (message "drgnx: a window was not restored: no graphical display")))
                      (t (message "drgnx: a window was not restored: %S is not loaded" (car-safe restore)))))
                 (when-let* ((f (ignore-errors (make-frame '((drgnx-frame-role . aux))))))
                   (condition-case err (with-selected-frame f (drgnx-persist--restore-frame st))
                     (error (message "drgnx: a window's layout was not restored: %s" (error-message-string err)))))))
-          (when (frame-live-p home) (select-frame-set-input-focus home))))
+          (when (and (not keep-focus) (frame-live-p home)) (select-frame-set-input-focus home))))
       t))))
 
 (defun drgnx-persist--restore-frame (state)
@@ -317,9 +353,9 @@ none, leaves that group as it is."
                 (ignore-errors (window-resize g (- px (window-pixel-width g)) t nil t)))))
 
 (defun drgnx-persist--gui-frame ()
-  "The graphical frame to restore into or save from (a daemon's F1 is not one)."
-  (if (display-graphic-p (selected-frame)) (selected-frame)
-    (seq-find #'display-graphic-p (frame-list))))
+  "The graphical frame to restore into or save from (a daemon's F1 is not one, nor is a child frame)."
+  (if (and (display-graphic-p (selected-frame)) (not (frame-parent (selected-frame)))) (selected-frame)
+    (seq-find (lambda (f) (and (display-graphic-p f) (not (frame-parent f)))) (frame-list))))
 
 (defun drgnx-persist--on-exit ()
   "Save from a graphical frame only (a batch run must never write the user's state)."
@@ -335,7 +371,7 @@ windows left (\[save-buffers-kill-terminal] in the last client), save every one 
   (unless noframe
     (let ((gui (seq-filter (lambda (f) (and (frame-live-p f) (display-graphic-p f) (not (frame-parent f)))) (frame-list))))
       (when (and gui (seq-every-p (lambda (f) (eq (frame-parameter f 'client) proc)) gui))
-        (ignore-errors (drgnx-persist-save))
+        (ignore-errors (drgnx-persist-save nil (drgnx-persist--frames)))   ; a terminal window may be the selected one
         (setq drgnx-persist--saved-at-exit t)))))
 
 (defun drgnx-persist--on-delete-frame (frame)
@@ -376,7 +412,10 @@ in a window that asked for no file, which would replace one restored file."
   "A client's new window (`server-after-make-frame-hook', which passes no argument: the selected frame):
 if it is graphical and no other graphical window exists — a daemon's first, or one that kept running
 after its last window closed — bring the saved workbench back into it.  It runs after the server showed
-*scratch* (no file asked for) and before it shows a file asked for.  A frame already restored is left alone."
+*scratch* (no file asked for) and before it shows a file asked for.  A frame already restored is left alone.
+Known limits (accepted; reopen when seen): this hook does not run for a graphical frame made by
+`make-frame-on-display' from a terminal client, nor while isearch or a minibuffer is active or when the
+server's `server-execute' signals an error — that window gets no restore."
   (let ((frame (or frame (selected-frame))))
     (when (and drgnx-persist-restore-on-start (frame-live-p frame) (display-graphic-p frame)
                (not (seq-some (lambda (f) (and (not (eq f frame)) (not (frame-parent f)) (display-graphic-p f)))

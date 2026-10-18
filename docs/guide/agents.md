@@ -23,10 +23,33 @@ Mac) opens the Agents tab. Profiles live in
 the agent advertises steering — sent as `_session/steering`; if the agent refuses, the message is queued instead) or
 `interrupt` (stop the turn, then send). A profile whose program is not installed gives a session that says so. Keys and tokens are
 never written there — the agent reads them from its environment or its own login. The built-in `claude` profile
-runs the unmodified `claude-agent-acp` (npm package `@zed-industries/claude-agent-acp`) when it is installed, with
+runs the unmodified `claude-agent-acp` (npm package `@agentclientprotocol/claude-agent-acp`) when it is installed, with
 your own Claude login. Onboarding's Agents step installs Claude Code, Node and that adapter if they are missing
 (asked first), opens a terminal for the login and checks that the profile starts
 ([onboarding.md](onboarding.md#setting-claude-code-up)); to check it again later, run Onboarding: Agents.
+
+**Which adapter runs.** The deprecated package `@zed-industries/claude-agent-acp` (frozen at 0.23.1, which drgnx
+installed before) installs a program of the same name. It never tells drgnx which MCP server a tool comes from, so the
+jobs permission check can only go by the tool's name. A profile whose command is the bare `claude-agent-acp` (the
+built-in ones) runs the first `claude-agent-acp` on the `PATH` that belongs to `@agentclientprotocol/claude-agent-acp`,
+read from the `package.json` the program links into; failing that, the first one on the `PATH`. When that is the
+deprecated package it still runs, and the first time in each Emacs a message says how to move. `drgnx doctor`
+warns about it too (check `claude-adapter`, which also wants version 0.93.0 or newer). The one-line fix replaces it
+in the same npm prefix:
+
+```sh
+npm uninstall -g --prefix PREFIX @zed-industries/claude-agent-acp && npm install -g --prefix PREFIX @agentclientprotocol/claude-agent-acp
+```
+
+The doctor and the message fill in `PREFIX` (a prefix in your home folder is written `~/…`, for the shell to
+expand). The old package is removed first because npm will not install a program over another package's. drgnx
+never runs this command for you: until you do, the old adapter keeps working. An adapter that is not in a global npm
+prefix (pnpm, volta, a project's `node_modules`) gets no npm command: the advice is to replace it, with the tool that
+installed it, by `@agentclientprotocol/claude-agent-acp` 0.93.0 or newer. A pre-release version is compared without
+its suffix (`0.93.1-rc.1` counts as 0.93.1). drgnx reads only a regular `package.json` of at most 64 KiB; anything
+else counts as a program of no known package. A copy of the program (no link) with both packages beside it counts
+the same way, since drgnx cannot tell which one it came from. A command given as a path
+(`:command ("/opt/x/claude-agent-acp")`) runs exactly that program.
 
 A session's **transcript** (RET on its row; opens in the editor) shows:
 
@@ -51,6 +74,8 @@ acted last beside your file.
 
 Nothing an agent asks is ever a question in the minibuffer: the agent waits, the Agents tab says "1 to answer",
 and you answer when you look.
+
+Each agent's own settings (its routes and billing, MCP servers, hooks and skills) are on its settings page: `,` on a session's row, or Agents: Settings ([agent-settings.md](agent-settings.md)).
 
 ## Reviewing an agent's edits
 
@@ -82,8 +107,8 @@ recorded for it ([Work tracker](work.md)).
 
 ## The hub and the gateway
 
-Agents on **OpenRouter, Ollama or your own Anthropic key** (profiles with `:ai claude-openrouter`, `claude-ollama`,
-`claude-anthropic`) do not get your key: they talk to the **gateway**, a local HTTP server in drgnx's **hub**, with a
+Agents on **OpenRouter, Ollama, your own Anthropic key, Kimi or DeepSeek** (profiles with `:ai claude-openrouter`,
+`claude-ollama`, `claude-anthropic`, `claude-moonshot`, `claude-deepseek`) do not get your key: they talk to the **gateway**, a local HTTP server in drgnx's **hub**, with a
 token of their own. The gateway checks the token, adds the real key, forwards each request and streams the answer
 back as it comes (it adds well under 50 ms before the first token). For each answer it counts the tokens the
 provider reports — spend per job, task and agent, kept in the work tracker's database — and when a provider fails
@@ -103,6 +128,28 @@ that started it: when an agent's program was installed while a hub ran (onboardi
 `drgnx hub stop` (its durable sessions end), so the hub the next durable session starts finds the program.
 With no hub to be had, an agent goes to its provider directly and says so. The Agents list's **Via**
 column shows which.
+
+## Kimi and DeepSeek
+
+Claude Code also runs on Kimi and DeepSeek, with the same agent and the same tools; only the model behind it changes.
+Four built-in profiles (listed in New Agent Session… and on the Claude page of Agent Settings, with how each is
+billed):
+
+| Profile | Goes to | Key | Billed by |
+|---|---|---|---|
+| `claude (Kimi)` | Moonshot's own API | `MOONSHOT_API_KEY` | Moonshot, per token |
+| `claude (DeepSeek)` | DeepSeek's own API | `DEEPSEEK_API_KEY` | DeepSeek, per token |
+| `claude (Kimi via OpenRouter)` | OpenRouter | `OPENROUTER_API_KEY` | OpenRouter |
+| `claude (DeepSeek via OpenRouter)` | OpenRouter | `OPENROUTER_API_KEY` | OpenRouter |
+
+Like the other provider profiles they go through the gateway when a hub is available: the agent holds a token, never
+the key. Without a key the session does not start and the message names the variable and the keyring host to put it
+under. Each session gets its route in its own environment (`ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, the model
+names); drgnx writes nothing to `~/.claude/settings.json`, so the plain `claude` profile keeps using your login. No
+agent inherits the other vendors' keys from Emacs's environment (`drgnx-agents-scrubbed-env`; the plain `claude`
+profile keeps Claude Code's own variables). The API keys are billed
+per token; Kimi's coding membership is a different endpoint these profiles do not use. Moonshot and DeepSeek have no
+`:price`, so the gateway counts their spend as zero. Details and the model names: [AI](ai.md#agents).
 
 ## Durable sessions
 
@@ -213,15 +260,22 @@ run it, with the plan's own encoding and line endings — and leaves alone a pla
 - `test/unit/gateway-test.el`, `test/unit/hub-test.el`, `test/unit/http-test.el`, `test/unit/agents-gateway-test.el`
   — the gateway against mock providers (streaming, tokens, keys, spend, budget, fallback, a hang-up, a 1 MB body),
   the hub (socket, events, restart, one hub, outliving its starter, the CLI), agents' environments.
+- `test/unit/agents-profiles-test.el` — the Kimi and DeepSeek profiles ([above](#kimi-and-deepseek)).
 - `test/unit/acp-test.el` — the transport against a mock agent: requests, notifications, the agent's own requests,
   split / malformed / 1 MB lines, the agent exiting with its error output.
 - `test/unit/agents-test.el` — sessions: a turn's transcript, queueing during a turn (delivered in order, never
   cancelling), steering (and its fallback), Stop within a second, permissions, tool calls, plans and subagents, a
   dying agent, Take Over, `/compact`.
+- `test/unit/agents-adapter-test.el` — which adapter runs, from fake npm prefixes with `package.json` files only (no
+  npm, no agent): the maintained package wins wherever it is on the `PATH`, the deprecated one still runs and says so
+  once with its fix, an old version, a copy instead of a link, a program of no known package, other commands left
+  alone, sessions and jobs starting the chosen program, and the doctor's fact.
 - `test/unit/jobs-test.el`, `test/unit/agents-ui-test.el` (the transcript, the list, hunk-by-hunk review),
   `test/unit/plans-sync-test.el`, `test/live/drgnx-agents-test.el` (queue, Stop and the dock in a GUI session).
 - `test/unit/agents-parity-test.el` — slash commands, context %, `/compact` lowering it: against the mock, or against
   a real profile with `DRGNX_AGENT_PROFILE=NAME` (uses your subscription or key, and the network).
 
 The mock agent (`test/fixtures/mock-acp.el`) is a batch Emacs whose turns are chosen by words in the prompt
-(`slow`, `tool`, `plan`, `subagent`, `permission`, `write PATH`, `crash`, `/compact`).
+(`slow`, `tool`, `plan`, `subagent`, `permission`, `write PATH`, `crash`, `/compact`). Tests start it through
+`test/fixtures/mock-acp-stdin.sh` (`sh mock-acp-stdin.sh emacs --batch -Q -l mock-acp.el`), which copies its stdin into
+a FIFO the mock reads while a turn streams; without the wrapper it reads `/proc/PID/fd/0`, which only Linux has.

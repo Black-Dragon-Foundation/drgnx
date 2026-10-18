@@ -27,6 +27,18 @@ stderr included.  DRGNX_EMACS is unset unless ENV sets it; HOME is the caller's 
     (with-temp-buffer
       (cons (apply #'call-process bin nil t nil args) (buffer-string)))))
 
+(defun drgnx-bin-test--call-pty (bin env &rest args)
+  "Like `drgnx-bin-test--call', with a terminal for stdin and stdout, as when a person types the command."
+  (let* ((process-environment (append env (list "DRGNX_EMACS") process-environment))
+         (default-directory (file-name-as-directory (or drgnx-bin-test--cwd temporary-file-directory)))
+         (buf (generate-new-buffer " bin-test-pty"))
+         (p (make-process :name "bin-test-pty" :buffer buf :command (cons bin args) :connection-type 'pty
+                          :noquery t :sentinel #'ignore)))
+    (while (process-live-p p) (accept-process-output p 0.05))
+    (accept-process-output p 0.1)
+    (prog1 (cons (process-exit-status p) (with-current-buffer buf (buffer-string)))
+      (kill-buffer buf))))
+
 (defmacro drgnx-bin-test--with-setup (vars &rest body)
   "Bind VARS: DIR (temp directory, deleted afterwards), PATHDIR (first on PATH, holds a fake `emacs'
 logging to PATHLOG), CONFIG (a DRGNX_CONFIG_DIR) and ENV (the environment lists that isolate the run)."
@@ -183,6 +195,7 @@ case \"$*\" in *--bg-daemon=*)
 esac"
                                       (funcall f "emacs.log") (funcall f "delay") (funcall f "delay")
                                       (funcall f "running") (funcall f "running")))
+                    ("infocmp" "exit 0")      ; the terminal's description is known (a terminal frame checks it)
                     ("systemctl" ,(format "echo \"$*\" >> %s
 case \"$*\" in *is-enabled*) [ -f %s ] ;; *start*) touch %s ;; esac"
                                           (funcall f "systemctl.log") (funcall f "enabled") (funcall f "running")))))
@@ -199,12 +212,13 @@ case \"$*\" in *is-enabled*) [ -f %s ] ;; *start*) touch %s ;; esac"
   (dolist (n names) (write-region "" nil (expand-file-name n dir))))
 
 (defmacro drgnx-bin-test--with-open (&rest body)
-  "BODY in `drgnx-bin-test--with-setup' with the open fakes; ENV names the test's server."
+  "BODY in `drgnx-bin-test--with-setup' with the open fakes; ENV names the test's server.  A local terminal
+with a display: `drgnx open' stays graphical (the unit tier has no DISPLAY, and a terminal is chosen without one)."
   (declare (indent 0))
   `(drgnx-bin-test--with-setup ()
      (drgnx-bin-test--open-fakes dir pathdir)
      (let ((env (append (list (concat "DRGNX_SERVER_NAME=" drgnx-bin-test--server)
-                              (concat "XDG_STATE_HOME=" dir "/state"))
+                              (concat "XDG_STATE_HOME=" dir "/state") "DISPLAY=:99" "SSH_CONNECTION" "SSH_TTY")
                         env)))
        ,@body)))
 
@@ -371,7 +385,9 @@ case \"$*\" in *is-enabled*) [ -f %s ] ;; *start*) touch %s ;; esac"
   (drgnx-bin-test--with-open
     (write-region "3" nil (expand-file-name "delay" dir))
     (let* ((out "") (done nil)
-           (process-environment (append (cons "DRGNX_OPEN_WAIT=6" env) process-environment))
+           ;; DRGNX_EMACS unset, as `drgnx-bin-test--call' does: a run's own (CI sets it) would pick the real
+           ;; emacsclient beside it over the fake on PATH
+           (process-environment (append (cons "DRGNX_OPEN_WAIT=6" env) (list "DRGNX_EMACS") process-environment))
            (proc (make-process :name "drgnx-open" :command (list drgnx-bin-test--bin "open") :connection-type 'pipe
                                :noquery t :filter (lambda (_p s) (setq out (concat out s)))
                                :sentinel (lambda (_p _e) (setq done t)))))
@@ -485,8 +501,8 @@ case \"$*\" in *is-enabled*) [ -f %s ] ;; *start*) touch %s ;; esac"
           (should (string-search "--wait opens files" (cdr r)))))
       (should-not (drgnx-bin-test--client-calls dir))
       (unless (eq system-type 'darwin)          ; a Mac always has its display
-        (should (eql 0 (car (drgnx-bin-test--call drgnx-bin-test--bin (append env '("DISPLAY" "WAYLAND_DISPLAY"))
-                                                  "open" "--wait" file))))
+        (should (eql 0 (car (drgnx-bin-test--call-pty drgnx-bin-test--bin (append '("DISPLAY" "WAYLAND_DISPLAY") env)
+                                                      "open" "--wait" file))))
         (should (equal (drgnx-bin-test--client-calls dir)
                        (list (drgnx-bin-test--p "-e" "t") (drgnx-bin-test--c "-t" "--" file))))))))
 
@@ -569,9 +585,10 @@ case \"$*\" in *is-enabled*) [ -f %s ] ;; *start*) touch %s ;; esac"
     (not (process-live-p proc))))
 
 (defun drgnx-bin-test--pid-alive-p (pid)
-  (and (> pid 0) (file-exists-p (format "/proc/%d" pid))
-       (not (string-match-p "^State:\\s-*Z" (with-temp-buffer (insert-file-contents (format "/proc/%d/status" pid))
-                                                              (buffer-string))))))
+  "Whether PID runs (a zombie does not): `process-attributes', which reads /proc on Linux and asks the kernel on
+macOS (no /proc there)."
+  (let ((attrs (and (> pid 0) (process-attributes pid))))
+    (and attrs (not (equal (alist-get 'state attrs) "Z")))))
 
 (ert-deftest drgnx-bin/a-test-run-leaves-nothing-in-the-parent-temp-dir ()
   ;; TMP-1: every run has a TMPDIR of its own (so tests, libgccjit and the runner all write there) that
@@ -590,9 +607,13 @@ case \"$*\" in *is-enabled*) [ -f %s ] ;; *start*) touch %s ;; esac"
                                                               (concat "DRGNX_TEST_DIR=" suite))
                                          "test")))
             (should (eql 0 (car r))))
-          ;; the test did run in a temp dir below PARENT, not in PARENT itself …
-          (should (string-prefix-p (file-name-as-directory parent) (drgnx-bin-test--slurp probe)))
-          ;; … and nothing of it is left
+          ;; the test did run in a temp dir of its own (in the runner's short root, so its sockets fit), not in
+          ;; PARENT itself …
+          (let ((seen (drgnx-bin-test--slurp probe)))
+            ;; (in /tmp, or in the run's TMPDIR where /tmp cannot be written)
+            (should (string-match-p "/drgnx-t-[A-Za-z0-9]\\{6\\}/drgnx-run\\.[A-Za-z0-9]\\{6\\}/\\'" seen))
+            ;; … and nothing of it is left, there nor in PARENT
+            (should-not (file-exists-p (file-name-directory (directory-file-name seen)))))
           (should-not (drgnx-bin-test--left parent)))
       (delete-directory dir t))))
 
@@ -699,7 +720,9 @@ case \"$*\" in *is-enabled*) [ -f %s ] ;; *start*) touch %s ;; esac"
               (signal-process proc sig)
               (should (drgnx-bin-test--wait-exit proc 30))
               (should (drgnx-bin-test--wait-for (lambda () (not (drgnx-bin-test--pid-alive-p pid))) 10)))
-            (should-not (drgnx-bin-test--left parent)))
+            (should-not (drgnx-bin-test--left parent))
+            ;; nor the runner's short root its test ran in
+            (should-not (file-exists-p (file-name-directory (directory-file-name (drgnx-bin-test--slurp probe))))))
         (when (process-live-p proc) (kill-process proc))
         (delete-directory dir t)))))
 
@@ -741,7 +764,9 @@ case \"$*\" in *is-enabled*) [ -f %s ] ;; *start*) touch %s ;; esac"
          (job (expand-file-name "job.pid" dir))
          (emacs (drgnx-bin-test--fake-emacs
                  (expand-file-name "fake-check" dir)
-                 (format "setsid sh -c 'trap \"\" TERM; echo $$ > %s.tmp && mv %s.tmp %s; exec sleep 300' &
+                 ;; a session of its own: setsid(1), else perl's (macOS has no setsid command), as bin/drgnx does
+                 (format "newsession() { if command -v setsid >/dev/null 2>&1; then setsid \"$@\"; else perl -MPOSIX -e 'POSIX::setsid() or die \"setsid: $!\"; exec @ARGV or die \"exec: $!\"' \"$@\"; fi; }
+newsession sh -c 'trap \"\" TERM; echo $$ > %s.tmp && mv %s.tmp %s; exec sleep 300' &
 trap 'kill -TERM $(cat %s); sleep 7; kill -KILL $(cat %s); exit 0' TERM
 while :; do wait; done" job job job job job)))
          proc)
@@ -803,3 +828,30 @@ while :; do wait; done" job job job job job)))
                                        args)))))
           (should (equal (split-string (drgnx-bin-test--slurp seen) "\n" t) '("unset" "1"))))
       (delete-directory dir t))))
+
+(ert-deftest drgnx-bin/coord-mcp-runs-the-server-as-the-agents-child ()
+  (drgnx-bin-test--with-setup ()
+    (let ((log (expand-file-name "coord.log" dir)) (emacs (expand-file-name "coord-emacs" dir)))
+      ;; a fake Emacs that records its argv, its parent and the identity it was given
+      (write-region (format "#!/bin/sh\n{ echo \"argv $*\"; echo \"ppid $PPID\"; echo \"kind ${DRGNX_AGENT_KIND-unset}\"
+echo \"agent ${DRGNX_AGENT-unset} job ${DRGNX_JOB-unset} task ${DRGNX_TASK-unset}\"; } > '%s'\n" log)
+                    nil emacs)
+      (set-file-modes emacs #o755)
+      (let ((r (drgnx-bin-test--call drgnx-bin-test--bin
+                                     (append (list (concat "DRGNX_EMACS=" emacs) "DRGNX_AGENT=s-1" "DRGNX_JOB=jx" "DRGNX_TASK=jx#2") env)
+                                     "coord" "mcp" "--kind" "claude")))
+        (should (eql 0 (car r))))
+      (let ((out (drgnx-bin-test--slurp log)))
+        (should (string-match-p "^argv .*-l drgnx-coord-mcp -f drgnx-coord-mcp-main" out))
+        (should (string-match-p "^kind claude$" out))
+        ;; exec: the server's parent is whoever started bin/drgnx (the agent), here this Emacs
+        (should (string-match-p (format "^ppid %d$" (emacs-pid)) out))
+        ;; a drgnx session's identity in the agent's shell is not inherited
+        (should (string-match-p "^agent unset job unset task unset$" out)))
+      ;; no kind, or a bad one: usage, and no server
+      (dolist (args '(("coord" "mcp") ("coord" "mcp" "--kind") ("coord" "mcp" "--kind" "Bad Kind") ("coord" "nope")))
+        (delete-file log)
+        (let ((r (apply #'drgnx-bin-test--call drgnx-bin-test--bin (cons (concat "DRGNX_EMACS=" emacs) env) args)))
+          (should (eql 2 (car r)))
+          (should (string-match-p "usage: drgnx coord mcp --kind KIND" (cdr r))))
+        (should-not (file-exists-p log))))))

@@ -73,6 +73,21 @@ A gryphn command whose id drgnx already has (gryphn's `view-explorer`, Toggle Si
 never replaces drgnx's: it is registered as `gryphn/<id>`, its key bound where the profile does not own it, and
 `*Messages*` says so once.
 
+### What an external module honours: `drgnx-loading-external`
+
+While drgnx loads the files of an external module, the variable `drgnx-loading-external` is `t`; it is `nil` again
+when the load ends, whether the feature loaded or failed. It is the switch for code that belongs to your key
+profiles rather than to the module: global keymap sets, fixes for the CUA keys, popper setup. An external module that
+also runs outside drgnx wraps those parts and keeps everything else:
+
+```elisp
+(unless (bound-and-true-p drgnx-loading-external)
+  (global-set-key (kbd "C-c b") #'gryphn-board))   ; skipped under drgnx: the profile binds the command
+```
+
+`bound-and-true-p` keeps the file working where drgnx is not loaded. Commands, menus and context definitions are not
+affected: they reach the registry and the palette as before.
+
 ## Writing a module
 
 ```elisp
@@ -102,7 +117,7 @@ key profile ([keys.md](keys.md)); faces inherit theme faces (no colours). See [c
 
 | Module | Stage | What it gives you |
 |---|---|---|
-| `core/basics` | startup | quiet defaults (no bell, no dialogs, y/n, background compiler warnings only in the log), Open File, Save, Save As, New Untitled, Reopen Closed Tab, New Window, Close Window, Cancel / Close Popup (Escape), line numbers |
+| `core/basics` | startup | quiet defaults (no bell, no dialogs, y/n, background compiler warnings only in the log), Open File, Save, Save As, New Untitled, Reopen Closed Tab, New Window, Close Window, Cancel / Close Popup (Escape), line numbers, trusted folders and their guards (Trust This Folder, the "restricted" mark; [security.md](security.md)) |
 | `core/workbench` | startup | the workbench: docks, panel, popups, chrome, groups, several windows, the layout across restarts ([workbench.md](workbench.md)) |
 | `editor/editing` | startup | Fold / Unfold, Change Case (camelCase, snake_case, kebab-case, cycle — a single word says it has nothing to cycle), Expand / Shrink Selection (tree-sitter nodes when the buffer has a parser), Go to Line, Move Line Up / Down (the line or the selected lines), Select Line (again for the next), Select All, Duplicate Line, Delete Line, New Line Below / Above, Redo, Toggle Comment, Back / Forward, VS Code's cursor moves and deletes (Line Start — the first non-blank, then the start — / End, File Start / End, Word Left / Right, Delete Word Left, Delete to Line Start; Cmd+←, Option+←, Cmd+⌫ on a Mac, [keys.md](keys.md#on-a-mac)) |
 | `ui/look` | startup | Color Theme (remembered in modules.eld; a saved theme that does not load is said in `*Messages*`, and Color Theme picks another), Zen Mode (only the text; again to give the sidebar and panel back), Zoom In / Out / Reset (every window; then `+`, `-` or `0`) |
@@ -114,6 +129,7 @@ key profile ([keys.md](keys.md)); faces inherit theme faces (no colours). See [c
 | `extra/guides` | first-frame | indent guides in code and YAML on graphical frames (indent-bars, the theme's colours); Toggle Indent Guides ([editing.md](editing.md)) |
 | `ui/smooth` | first-frame | smooth, pixel-precise scrolling on graphical frames (ultra-scroll when installed, else Emacs's own); Toggle Smooth Scrolling ([editing.md](editing.md)) |
 | `editor/sticky` | startup | sticky scroll: the function, class or block you are in, when its start has scrolled off, after the breadcrumb (tree-sitter or indentation; drgnx's own); Toggle Sticky Scroll ([editing.md](editing.md)) |
+| `editor/clipboard` | startup | clipboard managers: line and word kills stay in the kill ring, everything else reaches the system clipboard, a clipboard owner that does not answer is given up on after 1.5 s (X11 and Wayland), selecting text stops filling the history when Klipper, CopyQ or GPaste syncs it ([editing.md](editing.md#the-system-clipboard)) |
 | `lang/markdown` | startup | Markdown (READMEs as GitHub Flavored Markdown): code blocks in their language, math; Markdown: Open Preview (pandoc, cmark or markdown when installed), Mermaid diagrams through mmdc ([editing.md](editing.md)) |
 | `tools/vc` | startup | Source Control (the project's changes), Diff with File, Blame — on Emacs' VC |
 | `tools/diff` | idle | the diff view: working tree, staged or branch vs base; split or unified, files folded, open the file at the line ([git.md](git.md)) |
@@ -143,6 +159,12 @@ key profile ([keys.md](keys.md)); faces inherit theme faces (no colours). See [c
 | `extra/completion` | idle | vertical minibuffer lists, any-order matching, completion popups as you type (needs vertico, orderless, marginalia, corfu) |
 | `tools/browser` | idle | the browser pane ([browser.md](browser.md)): a web page beside the editor (WebKit, else your system browser), Browser: Test Report (Playwright), Browser: Agent's Page |
 | `tools/live` | idle | the Live view ([live.md](live.md)): a headless browser for agents, watched live (CDP screencast) and taken over (needs websocket) |
+| `tools/remote` | idle | Open Remote… ([remote.md](remote.md)): an ssh host from `~/.ssh/config` or a podman container, then a folder, through TRAMP; a status-line segment (⇄ HOST, connected or lost); Reconnect keeps buffers and changes; language servers run on the remote side (looked for only by these commands, never automatically) |
 | `tools/shortcuts` | idle | Preferences: Keyboard Shortcuts ([shortcuts.md](shortcuts.md)): every command with its keys, source and place; record keys and chords, conflicts, filters, suggestions from use |
+| `tools/agent-settings` | idle | Agents: Settings ([agent-settings.md](agent-settings.md)): one page per agent — Claude Code, Codex, Gemini, Kimi Code — with its routes and billing, MCP servers, hooks and skills; add, edit, remove, turn on or off in the agent's own files; Test an MCP server or a hook in a separate process; opening the page starts nothing |
+| `ui/terminal` | startup | terminal windows (`emacsclient -t`, `emacs -nw`): what each terminal can do, asked once per terminal and written to terminal-report.eld with the keys it cannot send; `C-S-` chords through modifyOtherKeys (xterm, WezTerm; tmux with `extended-keys`); the mouse in terminal windows (Toggle Mouse in Terminal Windows); copy to your clipboard by OSC 52 (also in tmux and over SSH), true colour per window, VS Code's `C-c` / `C-x` / `C-v` on a selection; for terminals that cannot send `C-S-` chords, Alt+Shift or F6 then the key; Check This Terminal (the doctor's Terminal group for the window you are in); `emacsclient -t FILE` (git's `EDITOR`) shows the editor only and returns when you close the tab or press `C-x #` ([terminal.md](terminal.md)) |
+| `ui/terminal-keys` | startup | `C-S-` chords, `` C-` ``, `C-.` … in terminals that have the kitty keyboard protocol but no confirmed modifyOtherKeys (kitty, foot, Alacritty, Ghostty); `C-g` there stops a hanging `git` but not busy Lisp; `drgnx-tty-use-kkp` turns it off (needs kkp; [terminal.md](terminal.md#keys)) |
+| `ui/terminal-layout` | startup | the workbench in a small terminal: the sidebar and panel by the terminal's size, docks as fractions of it, nothing closed that you opened ([terminal.md](terminal.md)) |
+| `ui/terminal-popups` | startup | popups in terminal windows: corfu's child frame with box-drawing borders on Emacs 31.1; completion as you type in the popup lane on 30.2; ASCII marks for the tab line, breadcrumb and Explorer in a terminal that does not write UTF-8 ([terminal.md](terminal.md#popups)) |
 
 The `extra/` modules wait until their packages are installed; Preferences: Modules says which.

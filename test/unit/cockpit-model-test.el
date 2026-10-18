@@ -1,7 +1,7 @@
 ;;; cockpit-model-test.el --- batch tests: the Work cockpit's model of specs, plans, tasks, agents, jobs, reviews -*- lexical-binding: t -*-
 (require 'ert)
 (require 'cl-lib)
-(require 'drgnx)                                      ; `drgnx-dir': each test file runs in an Emacs of its own
+(require 'drgnx-paths)                                ; `drgnx-dir': each test file runs in an Emacs of its own
 (load (expand-file-name "test/fixtures/cockpit-fixture" drgnx-dir) nil t)   ; a project, a job, worktrees, events
 (require 'drgnx-cockpit-model)
 
@@ -412,5 +412,162 @@
         (drgnx-cockpit-file-diff src "README" (lambda (r) (setq diff (list r))))
         (should (drgnx-cockpit-fixture-wait (lambda () diff)))
         (should (plist-get (car diff) :too-large))))))
+
+(ert-deftest drgnx-cockpit-model/changed-files-checks-at-most-the-cap ()
+  (drgnx-cockpit-fixture-with
+    ;; 20 links out of the worktree (never shown) come before a regular file: only the cap's worth is checked
+    (drgnx-cockpit-fixture-write (concat root "secret.txt") "secret\n")
+    (dotimes (i 20) (make-symbolic-link (concat root "secret.txt") (format "%sa-link-%02d" wt-a i)))
+    (let ((checked 0) files)
+      (advice-add 'drgnx-cockpit--file-ok :before (lambda (&rest _) (cl-incf checked)) '((name . drgnx-cockpit-model-test--count)))
+      (unwind-protect
+          (let ((drgnx-cockpit-changed-files-max 5))
+            (drgnx-cockpit-changed-files (list :dir wt-a :base sha) (lambda (r) (setq files (list r))))
+            (should (drgnx-cockpit-fixture-wait (lambda () files))))
+        (advice-remove 'drgnx-cockpit--file-ok 'drgnx-cockpit-model-test--count))
+      (should (<= checked 5))
+      (should (plist-get (car (last (car files))) :more)))))
+
+(ert-deftest drgnx-cockpit-model/changed-files-listing-is-capped-and-answers-once ()
+  (drgnx-cockpit-fixture-with
+    (dotimes (i 200) (write-region "x\n" nil (format "%suntracked-file-with-a-long-name-%04d.txt" wt-a i) nil 'silent))
+    (let ((calls 0) r)
+      (let ((drgnx-cockpit-diff-max-bytes 1000))
+        (drgnx-cockpit-changed-files (list :dir wt-a :base sha) (lambda (x) (cl-incf calls) (setq r x)))
+        (should (drgnx-cockpit-fixture-wait (lambda () r)))
+        (drgnx-cockpit-fixture-wait (lambda () nil) 0.5))          ; a second answer would come now
+      (should (plist-get r :too-large))
+      (should (= calls 1)))
+    ;; a diff over the cap: one answer too
+    (let ((big (concat wt-a "big.txt")) (calls 0) r)
+      (with-temp-file big (dotimes (i 20000) (insert (format "line %06d of a big file\n" i))))
+      (drgnx-cockpit-fixture-git wt-a "add" "big.txt")
+      (drgnx-cockpit-fixture-git wt-a "commit" "-q" "-m" "big")
+      (delete-file big)
+      (let ((drgnx-cockpit-diff-max-bytes 1000))
+        (drgnx-cockpit-file-diff (list :dir wt-a :base "HEAD") "big.txt" (lambda (x) (cl-incf calls) (setq r x)))
+        (should (drgnx-cockpit-fixture-wait (lambda () r)))
+        (drgnx-cockpit-fixture-wait (lambda () nil) 0.5))
+      (should (plist-get r :too-large))
+      (should (= calls 1)))))
+
+(ert-deftest drgnx-cockpit-model/summary-names-are-unquoted ()
+  ;; git C-quotes the names on its --summary lines, even under -z
+  (let ((files (drgnx-cockpit--numstat
+                (concat "1\t0\ta\"b\0" "1\t0\tt\tab\0" "1\t0\t\001x\0" "0\t1\tü.txt\0"
+                        " create mode 100644 \"a\\\"b\"\n" " create mode 100644 \"t\\tab\"\n"
+                        " create mode 100644 \"\\001x\"\n" " delete mode 100644 \"\\303\\274.txt\"\n"))))
+    (should (equal (mapcar (lambda (f) (cons (plist-get f :file) (plist-get f :status))) files)
+                   '(("a\"b" . new) ("t\tab" . new) ("\001x" . new) ("ü.txt" . deleted))))))
+
+(ert-deftest drgnx-cockpit-model/a-git-that-cannot-start-leaves-no-buffers ()
+  (drgnx-cockpit-fixture-with
+    (let ((before (length (buffer-list))) r)
+      (cl-letf (((symbol-function 'make-process) (lambda (&rest _) (error "No git here"))))
+        (drgnx-cockpit--git repo '("status") (lambda (x) (setq r x))))
+      (should (drgnx-cockpit-fixture-wait (lambda () r)))
+      (should (equal (plist-get r :error) "No git here"))
+      (should (= (length (buffer-list)) before)))))
+
+(ert-deftest drgnx-cockpit-model/closed-jobs-deps-are-not-read ()
+  (drgnx-cockpit-fixture-with
+    (drgnx-coord-job-create :id "jold" :title "old" :plan plan :repo repo
+                            :tasks '((:n 5 :title "task 5" :role "implement") (:n 6 :title "task 6" :role "implement" :deps (5))))
+    (drgnx-coord-job-set "jold" :status "done")
+    (let ((deps (nth 2 (drgnx-cockpit--jobs))))
+      (should (gethash "jx#3" deps))
+      (should-not (gethash "jold#6" deps)))
+    (let ((drgnx-cockpit-include-closed-jobs t))
+      (should (gethash "jold#6" (nth 2 (drgnx-cockpit--jobs)))))))
+
+(ert-deftest drgnx-cockpit-model/paused-and-stopped-jobs-are-shown ()
+  (drgnx-cockpit-fixture-with
+    (drgnx-coord-job-create :id "jp" :title "paused one" :plan plan :repo repo :tasks '((:n 5 :title "task 5" :role "implement")))
+    (drgnx-coord-job-set "jp" :status "paused")
+    (drgnx-coord-job-create :id "js" :title "stopped one" :plan plan :repo repo :tasks '((:n 6 :title "task 6" :role "implement")))
+    (drgnx-coord-job-set "js" :status "stopped")
+    (let ((m (drgnx-cockpit-model :sessions sessions)))
+      (should (equal (plist-get (drgnx-cockpit-model-test--node m "job:jp") :state) "paused"))
+      (should (equal (plist-get (drgnx-cockpit-model-test--node m "job:js") :state) "stopped"))
+      (should (equal (plist-get (drgnx-cockpit-model-test--node m (format "task:%s#6" plan)) :job) "js")))))
+
+(ert-deftest drgnx-cockpit-model/silent-worktrees-three-git-at-a-time ()
+  (drgnx-cockpit-fixture-with
+    ;; six more silent worktrees, each with a change
+    (dotimes (i 6)
+      (let ((wt (format "%s.claude/worktrees/s%d/" repo i)))
+        (drgnx-cockpit-fixture-git repo "worktree" "add" "-q" "-b" (format "s%d" i) wt "main")
+        (drgnx-cockpit-fixture-write (concat wt "x.txt") "x\n")))
+    (let ((most 0) got)
+      (cl-letf* ((orig (symbol-function 'make-process))
+                 ((symbol-function 'make-process)
+                  (lambda (&rest args)
+                    (setq most (max most (1+ (seq-count (lambda (p) (and (process-live-p p) (eq (process-type p) 'real)   ; not their stderr pipes
+                                                                         (string-prefix-p "drgnx-cockpit-git" (process-name p))))
+                                                        (process-list)))))
+                    (apply orig args))))
+        (drgnx-cockpit-silent-worktrees (list repo) (lambda (agents) (setq got (list agents))) sessions)
+        (should (drgnx-cockpit-fixture-wait (lambda () got) 30)))
+      (should (<= most 3))
+      (should (> most 1))
+      ;; the queue drained: wt-b and the six
+      (should (= (length (car got)) 7)))))
+
+(ert-deftest drgnx-cockpit-model/plan-cache-is-capped-and-follows-mtime ()
+  (let ((dir (make-temp-file "drgnx-cockpit-plans" t)) (drgnx-cockpit--plan-cache (make-hash-table :test #'equal)))
+    (unwind-protect
+        (let ((files (mapcar (lambda (i) (let ((f (format "%s/p%02d.md" dir i))) (write-region (format "# Plan %d\n" i) nil f nil 'silent) f))
+                             (number-sequence 0 64))))
+          (dolist (f (seq-take files 64)) (drgnx-cockpit--plan-file f))
+          (should (= (hash-table-count drgnx-cockpit--plan-cache) 64))
+          ;; a file read again after it changed: its entry is replaced, the others are kept
+          (write-region "# Plan zero, renamed\n" nil (car files) nil 'silent)
+          (set-file-times (car files) (time-add (current-time) 10))
+          (should (equal (car (drgnx-cockpit--plan-file (car files))) "Plan zero, renamed"))
+          (should (= (hash-table-count drgnx-cockpit--plan-cache) 64))
+          ;; a 65th file: the cache is emptied first
+          (should (equal (car (drgnx-cockpit--plan-file (nth 64 files))) "Plan 64"))
+          (should (= (hash-table-count drgnx-cockpit--plan-cache) 1)))
+      (delete-directory dir t))))
+
+(ert-deftest drgnx-cockpit-model/job-agents-registered-by-the-hub-are-job-agents ()
+  (drgnx-cockpit-fixture-with
+    ;; the hub registers each task agent (kind job): an open job's shows as its job's agent, a done job's not at all
+    (drgnx-coord-agent-register :id "s-1" :kind "job" :name "claude · jx#2" :cwd tree :worktree tree :branch "job/jx-2" :base sha
+                                :task "jx#2")
+    (drgnx-coord-job-create :id "jold" :title "old" :plan plan :repo repo :tasks '((:n 6 :title "task 6" :role "implement")))
+    (drgnx-coord-agent-register :id "s-old" :kind "job" :name "claude · jold#6" :cwd repo :task "jold#6")
+    (drgnx-coord-event-add :agent "s-old" :kind "stop" :summary "session ended")
+    (drgnx-coord-job-set "jold" :status "done")
+    (let ((m (drgnx-cockpit-model :sessions nil)))
+      (should-not (drgnx-cockpit-model-test--agent m "s-old"))
+      (should-not (drgnx-cockpit-model-test--node m "agent:s-old"))
+      (let ((a (drgnx-cockpit-model-test--agent m "s-1")))
+        (should (eq (plist-get a :reporting) 'job))
+        (should (equal (plist-get a :job) "jx"))))
+    (let ((src (drgnx-cockpit-edit-source "s-1")))
+      (should (equal (plist-get src :base) sha))
+      (should-not (plist-get src :merge-base)))
+    ;; with closed jobs asked for, its agent comes back as a job agent
+    (let* ((drgnx-cockpit-include-closed-jobs t) (m (drgnx-cockpit-model :sessions nil)))
+      (should (eq (plist-get (drgnx-cockpit-model-test--agent m "s-old") :reporting) 'job)))))
+
+(ert-deftest drgnx-cockpit-model/turns-are-not-an-agent-s-life ()
+  (drgnx-cockpit-fixture-with
+    ;; s-2's session started (the fixture); a turn of it ended: it is not stopped, and the timeline shows no turns
+    (drgnx-coord-agent-register :id "s-2" :name "chat" :cwd repo)   ; a native agent the registry knows
+    (drgnx-coord-event-add :agent "s-2" :kind "start" :summary "turn started" :data '(:turn t))
+    (drgnx-coord-event-add :agent "s-2" :kind "stop" :summary "turn ended (end_turn)" :data '(:turn t))
+    (let ((m (drgnx-cockpit-model :sessions nil)))
+      (should (equal (plist-get (drgnx-cockpit-model-test--agent m "s-2") :state) "not running")))
+    (should-not (plist-get (drgnx-cockpit-edit-source "s-2") :stopped))
+    (should (equal (mapcar (lambda (c) (plist-get c :label)) (seq-filter (lambda (c) (equal (plist-get c :agent) "s-2")) (drgnx-cockpit-timeline)))
+                   '("started")))
+    ;; the session's own stop is its life
+    (drgnx-coord-event-add :agent "s-2" :kind "stop" :summary "session ended")
+    (should (equal (plist-get (drgnx-cockpit-model-test--agent (drgnx-cockpit-model :sessions nil) "s-2") :state) "stopped"))
+    (should (plist-get (drgnx-cockpit-edit-source "s-2") :stopped))
+    (should (equal (mapcar (lambda (c) (plist-get c :label)) (seq-filter (lambda (c) (equal (plist-get c :agent) "s-2")) (drgnx-cockpit-timeline)))
+                   '("started" "stopped")))))
 
 ;;; cockpit-model-test.el ends here

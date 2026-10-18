@@ -90,10 +90,12 @@ this to decide whether `drgnx PATH' needs a new window."
   "Show DIR in front as the Explorer's first folder (`drgnx DIR'), the Explorer selected — as VS Code after
 `code DIR' — with DIR as its `default-directory', so quick open and project search work in DIR's project.
 The Explorer's other folders stay.  Without the workbench (drgnx safe), DIR opens in dired.
-As File → Open Folder… it asks for DIR; bin/drgnx's call never asks."
+In a terminal frame (`drgnx -t DIR', or the command typed there) DIR opens in that frame: the graphical window
+is not raised.  As File → Open Folder… it asks for DIR; bin/drgnx's call never asks."
   (interactive (list (read-directory-name "Open folder: " nil nil t)))
   (let ((dir (file-name-as-directory (expand-file-name dir))))
-    (drgnx-session-raise)
+    (when (or (display-graphic-p) (equal (terminal-name (frame-terminal)) "initial_terminal"))
+      (drgnx-session-raise))
     (if (not (fboundp 'drgnx-explorer-set-roots))
         (dired dir)
       (drgnx-explorer-set-roots (cons dir (remove dir (drgnx-explorer-roots))))

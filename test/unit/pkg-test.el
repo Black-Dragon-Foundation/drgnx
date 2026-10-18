@@ -188,6 +188,7 @@
 (ert-deftest drgnx-pkg/native-code-goes-to-drgnx-own-cache ()
   ;; Never into the user's other Emacs (~/.config/emacs/eln-cache): sync compiles into the data dir,
   ;; where sessions look first.
+  (skip-unless (native-comp-available-p))                ; Homebrew's Emacs (macOS CI) has no native compilation
   (drgnx-pkg-test--with root
     (let ((arch (drgnx-pkg-test--archive (concat root "arch") '((fa "1.0")))) (dirs nil)
           (drgnx-pkg-native-compile t))
@@ -585,7 +586,7 @@
   (drgnx-pkg-test--with root
     (let ((arch (drgnx-pkg-test--archive (concat root "arch")
                                          '((fa "1.0") (fbad "1.0" nil "(eval-when-compile (error \"fixture fails to compile\"))"))))
-          (drgnx-pkg-native-compile t))
+          (drgnx-pkg-native-compile (native-comp-available-p)))   ; the native half needs native compilation
       (drgnx-pkg-test--want root 'fa 'fbad)
       (cl-letf (((symbol-function 'native-compile)
                  (lambda (f &rest _) (when (string-match-p "/fa\\.el\\'" f) (error "no libgccjit")))))
@@ -593,9 +594,33 @@
           (should (plist-get r :ok))
           (should (equal (drgnx-pkg-test--installed) '("fa-1.0" "fbad-1.0")))
           (should (seq-find (lambda (w) (string-match-p "fbad\\.el does not byte-compile" w)) (plist-get r :warnings)))
-          (should (seq-find (lambda (w) (string-match-p "fa\\.el .*native.*no libgccjit" w)) (plist-get r :warnings)))
+          (when (native-comp-available-p)
+            (should (seq-find (lambda (w) (string-match-p "fa\\.el .*native.*no libgccjit" w)) (plist-get r :warnings))))
           (should-not (seq-find (lambda (w) (string-match-p "\\_<fa\\.el does not byte-compile" w)) (plist-get r :warnings)))
           (should (string-match-p "^WARNING .*fbad\\.el" (with-output-to-string (drgnx-pkg--report r)))))))))
+
+(ert-deftest drgnx-pkg/every-package-compiles-when-bytecomp-was-not-loaded ()
+  ;; macOS install: in an Emacs that had not loaded bytecomp, the first package compiled and every later one failed
+  ;; ("symbolp, (autoload \"bytecomp\" …)"): the byte-compile-file wrapper put back the autoload it had found.  A fresh
+  ;; Emacs, then: bytecomp unloaded where something loads it (Emacs 30's package.el), two packages synced.
+  (let* ((form `(progn
+                  (when (featurep 'bytecomp) (unload-feature 'bytecomp t))
+                  (unless (autoloadp (symbol-function 'byte-compile-file)) (error "Bytecomp still loaded"))
+                  (drgnx-pkg-test--with root
+                    (let ((arch (drgnx-pkg-test--archive (concat root "arch") '((fa "1.0") (fb "1.0")))))
+                      (drgnx-pkg-test--write (concat root "config/packages.eld") '(:packages (fa fb)))
+                      (let ((r (drgnx-pkg-test--sync root :archives (list (cons "fx" arch)))))
+                        (princ (format "RESULT %S\n" (list (and (plist-get r :ok) t)
+                                                           (file-exists-p (expand-file-name "fa-1.0/fa.elc" (drgnx-elpa-dir)))
+                                                           (file-exists-p (expand-file-name "fb-1.0/fb.elc" (drgnx-elpa-dir)))))))))))
+         (out (with-temp-buffer
+                (call-process (expand-file-name invocation-name invocation-directory) nil t nil "--batch" "-Q"
+                              "-L" (expand-file-name "core" drgnx-dir)
+                              "-l" (expand-file-name "test/fixtures/pkg-fixture.el" drgnx-dir)
+                              "--eval" (prin1-to-string form))
+                (buffer-string))))
+    (should (string-match "^RESULT \\(.*\\)$" out))
+    (should (equal (car (read-from-string (match-string 1 out))) '(t t t)))))
 
 (ert-deftest drgnx-pkg/the-sync-lock-knows-its-process-by-pid-and-start ()
   ;; M5-10: a pid reused (after a reboot) by another process is not the sync that wrote the lock.
@@ -937,6 +962,9 @@ fy with a newer fa 2.0.  Returns (FX FY FA-1.0-ENTRY)."
 (ert-deftest drgnx-pkg/compat-version-files-are-not-native-compiled ()
   ;; M10-13: compat-29.el etc. need their siblings at compile time and load only on an old Emacs: skipped
   ;; like -pkg/-autoloads, so a sync does not warn about them.
+  (unless (and (fboundp 'native-comp-available-p) (native-comp-available-p))
+    ;; the step binds `native-comp-eln-load-path', which an Emacs without it lacks (a sync never runs the step there)
+    (ert-skip "needs an Emacs with native compilation (Homebrew's has none)"))
   (drgnx-pkg-test--with root
     (let ((dir (concat root "compat-1.0/")) (compiled nil) (drgnx-pkg-native-compile t) (drgnx-pkg--warnings nil))
       (make-directory dir t)

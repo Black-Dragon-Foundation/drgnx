@@ -1,0 +1,558 @@
+;;; drgnx-tty.el --- Terminals: which one this is, what it can do, which keys it can send -*- lexical-binding: t -*-
+
+;; SPDX-License-Identifier: GPL-3.0-or-later
+
+;;; Commentary:
+;; Knowledge about text terminals, safe in batch: nothing here needs a frame or talks to a terminal.  The only
+;; I/O is looking up terminfo files and, inside tmux, one `tmux show' with a 1 s limit.
+;;
+;; - `drgnx-tty-identify': which terminal a client runs in, from its environment and, when the caller has one,
+;;   the terminal's answer to XTVERSION or DA2.  Under tmux the terminal is tmux, and the one around it, when
+;;   the environment says so.
+;; - `drgnx-tty-terminals': what each terminal can do — the kitty keyboard protocol (kkp), modifyOtherKeys
+;;   (mok), OSC 52 copy, true colour, the mouse — the chords it keeps for itself, and the line that fixes what
+;;   is missing.  Rows are "reported" from each terminal's documentation until the builder has run them.
+;; - `drgnx-tty-key-sendable-p': which keys a terminal can send at all: plain (legacy) terminals cannot send
+;;   C-S- chords, C-. and the like; modifyOtherKeys can, except super and hyper; kkp sends everything.
+;; - `drgnx-tty-facts': the above for the terminal this Emacs runs in, for the doctor and onboarding.
+;; See docs/guide/terminal.md.
+
+;;; Code:
+(require 'seq)
+(require 'subr-x)
+(require 'drgnx-paths)
+
+;;;; Which terminal
+
+(defconst drgnx-tty-env-variables
+  '("TERM" "TERM_PROGRAM" "TERM_PROGRAM_VERSION" "VTE_VERSION" "KITTY_WINDOW_ID" "WEZTERM_PANE"
+    "GHOSTTY_RESOURCES_DIR" "ALACRITTY_SOCKET" "XTERM_VERSION" "TMUX" "COLORTERM" "SSH_CONNECTION" "SSH_TTY"
+    "TERMINFO" "TERMINFO_DIRS" "HOME")
+  "The variables of a client's environment that drgnx reads: `drgnx-tty-identify' the terminal ones,
+`drgnx-tty-terminfo-p' TERMINFO, TERMINFO_DIRS and HOME, `drgnx-tty-tmux-options' TMUX.")
+
+(defun drgnx-tty-env (&optional frame)
+  "The client's environment as an alist over `drgnx-tty-env-variables': FRAME's (the environment its
+emacsclient brought, which a daemon's own `process-environment' must not shadow); for a frame without one, its
+client's (`env' of the client process: a frame made later on a client's terminal has the client, not the
+environment); else this Emacs's own (FRAME nil, or a plain `emacs -nw')."
+  (let* ((client (and frame (frame-parameter frame 'client)))
+         (env (or (and frame (frame-parameter frame 'environment))
+                  (and (processp client) (process-get client 'env))
+                  process-environment)))
+    ;; an entry without `=' unsets the variable: `getenv-internal' says t for it
+    (mapcar (lambda (var) (cons var (let ((v (getenv-internal var env))) (and (stringp v) v))))
+            drgnx-tty-env-variables)))
+
+(defconst drgnx-tty--xtversion-names
+  '(("kitty" . kitty) ("wezterm" . wezterm) ("foot" . foot) ("ghostty" . ghostty) ("alacritty" . alacritty)
+    ("iterm2" . iterm2) ("vte" . vte) ("xterm" . xterm) ("tmux" . tmux))
+  "XTVERSION names (lower case) → terminal ids.")
+
+(defconst drgnx-tty--da2-types '(("65" . vte) ("41" . xterm) ("84" . tmux))
+  "DA2 terminal types → ids: 65 is VTE (GNOME Terminal, Ptyxis; Emacs's term/xterm.el), 41 xterm since patch
+280 (the same file), 84 tmux (its answer `ESC [ > 84 ; 0 ; 0 c').  Type 1 is ambiguous (old VTE, kitty, foot,
+others), so it names nothing.")
+
+(defconst drgnx-tty--term-programs
+  '(("WezTerm" . wezterm) ("iTerm.app" . iterm2) ("Apple_Terminal" . apple-terminal) ("ghostty" . ghostty)
+    ("tmux" . tmux))
+  "TERM_PROGRAM values → terminal ids.")
+
+(defconst drgnx-tty--window-variables
+  '(("KITTY_WINDOW_ID" . kitty) ("WEZTERM_PANE" . wezterm) ("GHOSTTY_RESOURCES_DIR" . ghostty)
+    ("ALACRITTY_SOCKET" . alacritty) ("VTE_VERSION" . vte) ("XTERM_VERSION" . xterm))
+  "Variables a terminal sets in its shells → terminal ids.  They are inherited by whatever starts from that
+shell (another terminal, a tmux server), so they come after TERM and TERM_PROGRAM.")
+
+(defun drgnx-tty--get (env var)
+  "VAR's value in ENV (an alist), nil when unset or empty."
+  (let ((v (cdr (assoc var env))))
+    (and v (not (string-empty-p v)) v)))
+
+(defun drgnx-tty--from-answer (answer)
+  "(ID . VERSION) from ANSWER, an XTVERSION (`ESC P > | NAME(VERSION) ESC \\') or DA2 (`ESC [ > T ; V ; X c')
+reply; nil when it names no terminal drgnx knows."
+  (cond
+   ((null answer) nil)
+   ((string-match "\eP>|\\([^ (\e]+\\)[ (]?\\([^)\e]*\\)" answer)
+    (when-let* ((id (cdr (assoc (downcase (match-string 1 answer)) drgnx-tty--xtversion-names))))
+      (cons id (let ((v (match-string 2 answer))) (and (not (string-empty-p v)) v)))))
+   ((string-match "\e\\[>\\([0-9]+\\);\\([0-9]+\\)" answer)
+    (when-let* ((id (cdr (assoc (match-string 1 answer) drgnx-tty--da2-types))))
+      (cons id (match-string 2 answer))))))
+
+(defun drgnx-tty--from-env (env)
+  "(ID . VERSION) from ENV when a variable names the terminal, else nil."
+  (let ((term (or (drgnx-tty--get env "TERM") ""))
+        (program (drgnx-tty--get env "TERM_PROGRAM")))
+    (or
+     ;; TERM names a few terminals exactly; it travels over SSH where the others do not
+     (when-let* ((id (cond ((equal term "xterm-kitty") 'kitty)
+                           ((string-match-p "\\`foot\\(-\\|\\'\\)" term) 'foot)
+                           ((equal term "xterm-ghostty") 'ghostty)
+                           ((equal term "wezterm") 'wezterm)
+                           ((equal term "alacritty") 'alacritty)
+                           ((equal term "linux") 'linux))))
+       (cons id nil))
+     (when-let* ((id (cdr (assoc program drgnx-tty--term-programs))))
+       (cons id (drgnx-tty--get env "TERM_PROGRAM_VERSION")))
+     (seq-some (lambda (pair)
+                 (when-let* ((v (drgnx-tty--get env (car pair))))
+                   (cons (cdr pair) (and (memq (cdr pair) '(vte xterm)) v))))
+               drgnx-tty--window-variables))))
+
+(defun drgnx-tty--tmux-p (env)
+  "Non-nil when ENV is a client inside tmux: TMUX set, or TERM tmux-* (a tmux on the other side of SSH)."
+  (or (drgnx-tty--get env "TMUX")
+      (string-prefix-p "tmux" (or (drgnx-tty--get env "TERM") ""))))
+
+(defun drgnx-tty-identify (env &optional answer)
+  "Which terminal a client runs in: (:id ID :outer OUTER :version STRING).
+ENV is an alist of the client's variables (`drgnx-tty-env-variables'); ANSWER, when given, the terminal's
+reply to XTVERSION or DA2.  ID is one of the ids of `drgnx-tty-terminals', or `unknown'.  The answer comes
+from the terminal itself, so it wins over variables inherited from another one.  Inside tmux the terminal is
+tmux (it decides what reaches Emacs), and OUTER a hint at the terminal around it, from the variables the tmux
+server inherited from its first client (stale when another terminal attached since; none over SSH), else nil.
+`drgnx-tty-facts' prefers tmux's own #{client_termtype} (tmux 3.4 and later) when it names one."
+  (if (drgnx-tty--tmux-p env)
+      (let* ((outer-env (seq-remove (lambda (pair)
+                                      (or (member (car pair) '("TMUX" "TERM"))
+                                          (and (member (car pair) '("TERM_PROGRAM" "TERM_PROGRAM_VERSION"))
+                                               (equal (drgnx-tty--get env "TERM_PROGRAM") "tmux"))))
+                                    env))
+             (outer (car (drgnx-tty--from-env outer-env)))
+             (answered (drgnx-tty--from-answer answer)))
+        (list :id 'tmux :outer outer
+              :version (or (and (eq (car answered) 'tmux) (cdr answered))
+                           (and (equal (drgnx-tty--get env "TERM_PROGRAM") "tmux")
+                                (drgnx-tty--get env "TERM_PROGRAM_VERSION")))))
+    (let ((found (or (drgnx-tty--from-answer answer) (drgnx-tty--from-env env))))
+      (list :id (or (car found) 'unknown) :outer nil :version (cdr found)))))
+
+;;;; What each terminal can do
+
+(defconst drgnx-tty-terminals
+  `((:id kitty :name "kitty"
+         :kkp t :mok nil :osc52 t :truecolor t :mouse t
+         :takes ("C-S-c" "C-S-v" "C-S-s" "C-S-o" "C-S-<up>" "C-S-<down>" "C-S-k" "C-S-j" "C-S-<prior>" "C-S-<next>"
+                 "C-S-<home>" "C-S-<end>" "C-S-z" "C-S-x" "C-S-h" "C-S-<return>" "C-S-n" "C-S-w" "C-S-]" "C-S-["
+                 "C-S-f" "C-S-b" "C-S-`" "C-S-r" "C-S-1" "C-S-2" "C-S-3" "C-S-4" "C-S-5" "C-S-6" "C-S-7" "C-S-8"
+                 "C-S-9" "C-S-0" "C-S-<right>" "C-S-<left>" "C-S-<tab>" "C-S-t" "C-S-q" "C-S-." "C-S-," "C-S-l"
+                 "C-S-=" "C-S--" "C-S-<backspace>" "C-S-e" "C-S-p" "C-S-/" "C-S-g" "C-S-u" "C-S-<escape>" "C-S-a"
+                 "C-S-<delete>" "C-S-<f1>" "C-S-<f2>" "C-S-<f3>" "C-S-<f5>" "C-S-<f6>" "C-S-<f7>" "C-S-<f8>"
+                 "C-S-<f10>" "C-S-<f11>")
+         :fixes ((mok . "none: kitty speaks its own keyboard protocol (kkp), which drgnx uses instead")
+                 (takes . "clear_all_shortcuts yes   (in kitty.conf, before your own map lines; `map kitty_mod+t' with no action frees one chord)"))
+         :unconfirmed (:mok :mouse)
+         :verified "partly: kitty 0.48.2's kkp, OSC 52 copy and true colour (test/tty/kitty-test.el); not its mouse reports or shortcuts"
+         :source "https://sw.kovidgoyal.net/kitty/conf/")
+    (:id wezterm :name "WezTerm"
+         :kkp nil :mok t :osc52 t :truecolor t :mouse t
+         :takes ("C-S-c" "C-S-v" "C-S-n" "C-S-t" "C-S-w" "C-S-1" "C-S-2" "C-S-3" "C-S-4" "C-S-5" "C-S-6" "C-S-7"
+                 "C-S-8" "C-S-9" "C-S-<tab>" "C-S-<prior>" "C-S-<next>" "C-S-r" "C-S-k" "C-S-l" "C-S-p" "C-S-u"
+                 "C-S-f" "C-S-x" "C-S-SPC" "C-S-<left>" "C-S-<right>" "C-S-<up>" "C-S-<down>" "C-S-z"
+                 "s-c" "s-v" "s-m" "s-n" "s--" "s-=" "s-0" "s-t" "s-w" "s-1" "s-2" "s-3" "s-4" "s-5" "s-6" "s-7"
+                 "s-8" "s-9" "s-r" "s-h" "s-k" "s-f" "S-s-t" "S-s-[" "S-s-]")
+         :fixes ((kkp . "none: WezTerm has modifyOtherKeys, which drgnx uses; no setting is needed")
+                 (takes . "config.disable_default_key_bindings = true   (in wezterm.lua; then bind only what you want)"))
+         :unconfirmed (:truecolor :mouse)
+         :verified nil :source "https://wezterm.org/config/key-encoding.html")
+    (:id foot :name "foot"
+         :kkp t :mok nil :osc52 t :truecolor t :mouse t
+         :takes ("C-S-c" "C-S-v" "C-S-r" "C-S-n" "C-S-o" "C-S-z" "C-S-x" "C-S-u")
+         :fixes ((mok . "none: foot's documentation does not describe modifyOtherKeys; it speaks kkp, which drgnx uses")
+                 (takes . "search-start=none   (in foot.ini under [key-bindings]; one line per action to free)"))
+         :unconfirmed (:mok)
+         :verified nil :source "https://codeberg.org/dnkl/foot/src/branch/master/doc/foot.ini.5.scd")
+    (:id ghostty :name "Ghostty"
+         :kkp t :mok t :osc52 t :truecolor t :mouse t
+         :takes ("C-S-c" "C-S-v" "C-S-t" "C-S-n" "C-S-w")
+         :fixes ((takes . "keybind = ctrl+shift+t=unbind   (in Ghostty's config; `ghostty +list-keybinds --default' lists the rest)"))
+         :unconfirmed (:mok :truecolor :takes)
+         :verified nil :source "https://ghostty.org/docs/config/reference")
+    (:id alacritty :name "Alacritty"
+         :kkp t :mok nil :osc52 t :truecolor t :mouse t
+         :takes ("C-S-c" "C-S-v" "C-S-f" "C-S-b" "C-S-SPC" "C-S-o")
+         :fixes ((mok . "none: Alacritty's documentation does not describe modifyOtherKeys; it speaks kkp, which drgnx uses")
+                 (takes . "[[keyboard.bindings]] key = \"F\", mods = \"Control|Shift\", action = \"ReceiveChar\"   (in alacritty.toml)"))
+         :unconfirmed (:mok :truecolor :mouse)
+         :verified nil :source "https://alacritty.org/config-alacritty.html")
+    (:id iterm2 :name "iTerm2"
+         :kkp nil :mok nil :osc52 nil :truecolor t :mouse t
+         :takes ("s-c" "s-v" "s-t" "s-n" "s-w" "s-q")
+         :fixes ((kkp . "Settings → Profiles → Keys → General: Apps can change how keys are reported")
+                 (mok . "none: iTerm2's documentation points programs to kkp, which drgnx uses")
+                 (osc52 . "Settings → General → Selection: Applications in terminal may access clipboard")
+                 (takes . "none: macOS keeps the Cmd (s-) chords; drgnx's keys in a terminal are C- and M- chords"))
+         :unconfirmed (:kkp :mok :osc52 :truecolor :mouse :takes)
+         :verified nil :source "https://iterm2.com/documentation-preferences-profiles-keys.html")
+    (:id vte :name "GNOME Terminal, Ptyxis (VTE)"
+         :kkp nil :mok nil :osc52 nil :truecolor t :mouse t
+         :takes ("C-S-c" "C-S-v" "C-S-t" "C-S-n" "C-S-o" "C-S-f" "C-S-a" "C-S-w" "C-S-q" "C-S-<prior>" "C-S-<next>"
+                 "S-<f10>" "C-M-S-t")
+         :fixes ((kkp . "none: VTE has no kitty keyboard protocol; F1 and the palette reach every command")
+                 (mok . "none: VTE sends no modifyOtherKeys (Emacs's term/xterm.el turns it off for VTE)")
+                 (osc52 . "none: VTE does not take OSC 52 (GNOME VTE issue 2495); copy stays in drgnx")
+                 (takes . "none: freeing a chord in Preferences → Shortcuts sends it without Shift, VTE has no C-S- encoding"))
+         :unconfirmed (:kkp :truecolor :mouse)
+         :verified nil :source "https://gitlab.gnome.org/GNOME/vte/-/issues/2495")
+    (:id apple-terminal :name "Terminal.app"
+         :kkp nil :mok nil :osc52 nil :truecolor nil :mouse t
+         :takes ("s-c" "s-v" "s-t" "s-n" "s-w" "s-q")
+         :fixes ((kkp . "none: Terminal.app has no kitty keyboard protocol; F1 and the palette reach every command")
+                 (mok . "none: Terminal.app sends no modifyOtherKeys")
+                 (osc52 . "none: Terminal.app is not known to take OSC 52; copy stays in drgnx")
+                 (truecolor . "none: 256 colours; true colour was announced for macOS 26 (unconfirmed)")
+                 (meta . "Settings → Profiles → Keyboard: Use Option as Meta key")
+                 (takes . "none: macOS keeps the Cmd (s-) chords"))
+         :unconfirmed (:kkp :mok :osc52 :truecolor :mouse :takes)
+         :verified nil :source "https://support.apple.com/guide/terminal/change-profiles-keyboard-settings-trmlkbrd/mac")
+    (:id xterm :name "xterm"
+         :kkp nil :mok t :osc52 nil :truecolor nil :mouse t
+         :takes ("S-<prior>" "S-<next>" "S-<insert>")
+         :fixes ((kkp . "none: xterm speaks modifyOtherKeys, which Emacs turns on by itself")
+                 (osc52 . "XTerm*disallowedWindowOps: GetChecksum,GetIconTitle,GetSelection,GetWinTitle,SetXprop   (in ~/.Xresources: xterm's default list without SetSelection)")
+                 (truecolor . "TERM=xterm-direct   (xterm's direct-colour terminfo; unconfirmed)"))
+         :unconfirmed (:kkp :truecolor :takes)
+         :verified "an xterm-like terminal (TERM=xterm-256color, modifyOtherKeys) under tmux, not a real xterm window: C-S- chords, the mouse as bytes, 256 colours (test/tty)"
+         :source "https://invisible-island.net/xterm/ctlseqs/ctlseqs.html")
+    (:id linux :name "Linux console"
+         :kkp nil :mok nil :osc52 nil :truecolor nil :mouse nil
+         :takes ,(append (mapcar (lambda (n) (format "M-<f%d>" n)) (number-sequence 1 12))
+                         (mapcar (lambda (n) (format "C-M-<f%d>" n)) (number-sequence 1 12)))
+         :fixes ((kkp . "none: the console sends neither kkp nor modifyOtherKeys; F1 and the palette reach every command")
+                 (mok . "none: the console sends neither kkp nor modifyOtherKeys")
+                 (osc52 . "none: the console has no clipboard to copy to")
+                 (truecolor . "none: the console shows 16 colours")
+                 (mouse . "M-x gpm-mouse-mode   (with the gpm service running)")
+                 (takes . "none: Alt+F1…F12 and Ctrl+Alt+F1…F12 switch consoles"))
+         :unconfirmed (:kkp :mok :truecolor :mouse :takes)
+         :verified nil :source "https://man7.org/linux/man-pages/man4/console_codes.4.html")
+    (:id tmux :name "tmux"
+         :kkp nil :mok nil :osc52 nil :truecolor nil :mouse t
+         :takes ("C-b")
+         :fixes ((kkp . "none: tmux passes modifyOtherKeys (extended-keys), not the kitty keyboard protocol")
+                 (mok . "set -s extended-keys on   (in ~/.tmux.conf; off by default)")
+                 (osc52 . "set -s set-clipboard on   (in ~/.tmux.conf; the default, external, refuses programs)")
+                 (truecolor . "set -as terminal-features ',xterm-kitty:RGB'   (in ~/.tmux.conf, with the outer TERM)")
+                 (takes . "none: C-b is tmux's prefix; press it twice to send C-b, or `set -g prefix' another key"))
+         :unconfirmed (:mouse)
+         :verified "tmux 3, a private server per test: extended-keys, set-clipboard and passthrough copy, focus events, true colour with RGB (test/tty/tmux-test.el)"
+         :source "https://man.openbsd.org/tmux"))
+  "What each terminal can do with its default settings, as its documentation reports it (`:verified' nil
+until the builder ran it, then what ran; `:source' the page).  :kkp the kitty keyboard protocol, :mok modifyOtherKeys,
+:osc52 copy to the local clipboard, :truecolor 24-bit colour, :mouse mouse reporting; :takes the chords the
+terminal keeps for itself (Emacs notation); :fixes, per missing capability, the line that fixes it, or
+\"none: \" and why.  :unconfirmed names the cells no official page drgnx read backs (secondary sources or
+general knowledge); docs/guide/terminal.md marks them.")
+
+(defun drgnx-tty-terminal (id)
+  "The row of `drgnx-tty-terminals' for ID, nil for `unknown'."
+  (seq-find (lambda (row) (eq (plist-get row :id) id)) drgnx-tty-terminals))
+
+(defun drgnx-tty-mok-confirmed-p (id)
+  "Non-nil when the row of terminal ID has modifyOtherKeys and it is not `:unconfirmed' (WezTerm, xterm).  The one
+test of whether a known terminal gets its chords by modifyOtherKeys, where C-g keeps stopping busy Lisp; every
+other capable terminal (Ghostty, whose modifyOtherKeys is unconfirmed, foot, kitty, Alacritty) gets kkp."
+  (let ((row (drgnx-tty-terminal id)))
+    (and (plist-get row :mok) (not (memq :mok (plist-get row :unconfirmed))) t)))
+
+(defconst drgnx-tty-best-order
+  (let ((order '(wezterm ghostty xterm foot kitty alacritty)))
+    (append (seq-filter #'drgnx-tty-mok-confirmed-p order) (seq-remove #'drgnx-tty-mok-confirmed-p order)))
+  "The terminals that can send every key, best first: those with confirmed modifyOtherKeys
+\(`drgnx-tty-mok-confirmed-p': C-g keeps stopping busy Lisp there) before those that get the kitty keyboard
+protocol (kkp: C-g stops only programs Emacs waits for); within each, in the order written here.  So WezTerm,
+xterm, then Ghostty, foot, kitty, Alacritty.  The one order for the recommender (`drgnx-tty-capable-terminals')
+and for `drgnx-tty-onboard-note'.  A row whose modifyOtherKeys becomes confirmed moves up by itself.  xterm
+ranks above foot and kitty only by this rule: foot's modifyOtherKeys is unconfirmed (its documentation does not
+describe it), so foot stays with the kkp terminals; on systems that package xterm, xterm is the second suggestion.")
+
+;;;; Which keys a terminal can send
+
+(defconst drgnx-tty--c0-aliases '(?@ ?\[ ?\\ ?\] ?^ ?_ ??)
+  "Characters C- of which a plain terminal sends as a C0 control code Emacs reads back as the same key.")
+
+(defun drgnx-tty--event-sendable-p (event caps)
+  "Non-nil when a terminal with CAPS (`kkp', `mok' or `legacy') can send EVENT."
+  (let ((mods (event-modifiers event))
+        (base (event-basic-type event)))
+    (cond
+     ((eq caps 'kkp) t)
+     ((or (memq 'super mods) (memq 'hyper mods)) nil)
+     ((eq caps 'mok) t)
+     ;; legacy: C- reaches only letters and the C0 aliases; Shift does not travel with C-
+     ((integerp base)
+      (or (not (memq 'control mods))
+          (and (not (memq 'shift mods))
+               (or (<= ?a base ?z) (memq base drgnx-tty--c0-aliases)))))
+     ;; RET, TAB, DEL and ESC are C0 codes too: no modifier but S-TAB (backtab) survives
+     ((memq base '(return tab backspace escape))
+      (or (null (remq 'meta mods)) (and (eq base 'tab) (equal (remq 'meta mods) '(shift)))))
+     ;; arrows, F keys, Home…: xterm-style terminals send their modifiers (the Linux console does not; this
+     ;; answers for the key model, not for one terminal)
+     (t t))))
+
+(defun drgnx-tty-key-sendable-p (key caps)
+  "Non-nil when a terminal with CAPS (`kkp', `mok' or `legacy') can send KEY (a `kbd' string or a vector).
+Legacy terminals cannot send C-S-<letter>, C-<punctuation> other than Emacs's C0 aliases (C-@ C-[ C-\\ C-]
+C-^ C-_ C-?), C-<digit>, C-<return>, C-<tab>, C-S-<tab> or any s- or H- key; modifyOtherKeys sends all but s-
+and H- keys; kkp sends every key.  Any other CAPS counts as legacy."
+  (seq-every-p (lambda (event) (drgnx-tty--event-sendable-p event caps))
+               (if (stringp key) (key-parse key) key)))
+
+(defconst drgnx-tty-tmux-folded-chords
+  (append (mapcar (lambda (c) (format "C-S-%c" c)) (number-sequence ?a ?z))
+          (mapcar (lambda (c) (format "C-M-S-%c" c)) (number-sequence ?a ?z))
+          '("C-S-SPC" "C-`" "C-S-`"))
+  "The chords tmux folds into another key at modifyOtherKeys level 1, which Emacs asks for (checked with tmux
+3.7c): C-S-<letter> and C-M-S-<letter> arrive as C-<letter> and C-M-<letter>, C-S-SPC and C-` as C-SPC, C-S-`
+as C-^.  Level 2 sends them all.  A terminal's caps carry this list as `:folded' while it applies.")
+
+(defun drgnx-tty-unsendable (keys caps &optional folded)
+  "The KEYS (a list of `kbd' strings) a terminal with CAPS cannot send, in their order.  FOLDED (a list of
+`kbd' strings, the caps' `:folded') are chords the terminal sends as another key: they count as unsendable even
+where CAPS would allow them."
+  (let ((folded (mapcar #'key-parse folded)))
+    (seq-remove (lambda (key)
+                  (and (drgnx-tty-key-sendable-p key caps)
+                       ;; any key of a sequence ("C-k C-S-p") may be a folded one
+                       (not (seq-some (lambda (event) (member (vector event) folded))
+                                      (if (stringp key) (key-parse key) key)))))
+                keys)))
+
+;;;; terminfo and tmux
+
+(defvar drgnx-tty-terminfo-system-dirs '("/etc/terminfo" "/lib/terminfo" "/usr/share/terminfo")
+  "The system's terminfo directories, searched after TERMINFO, ~/.terminfo and TERMINFO_DIRS.")
+
+(defun drgnx-tty--env-get (env var)
+  "VAR from ENV (an alist, see `drgnx-tty-env'), or from this Emacs's environment when ENV is nil."
+  (if env (drgnx-tty--get env var) (getenv var)))
+
+(defun drgnx-tty-terminfo-p (term &optional env)
+  "Non-nil when a terminfo entry for TERM exists: in TERMINFO, ~/.terminfo, TERMINFO_DIRS or the system
+directories, under the first letter (Linux) or its hex code (macOS).  TERMINFO, TERMINFO_DIRS and HOME come
+from ENV, the client's environment (`drgnx-tty-env'): a daemon creates a client's terminal frame with these
+of the client's (server.el), so the client's view is the one that counts.  A TERM that is not a plain file
+name (a `/', a NUL, a leading `.') has no entry."
+  (when (and term (not (string-empty-p term)) (not (string-match-p "[/\0]" term))
+             (not (string-prefix-p "." term)))
+    (let* ((get (lambda (var) (drgnx-tty--env-get env var)))
+           (home (funcall get "HOME"))
+           (dirs (append (and (funcall get "TERMINFO") (list (funcall get "TERMINFO")))
+                         (and home (list (expand-file-name ".terminfo" home)))
+                         (and (funcall get "TERMINFO_DIRS") (split-string (funcall get "TERMINFO_DIRS") ":" t))
+                         drgnx-tty-terminfo-system-dirs)))
+      (seq-some (lambda (dir)
+                  (seq-some (lambda (sub) (file-regular-p (expand-file-name (concat sub "/" term) dir)))
+                            (list (substring term 0 1) (format "%x" (aref term 0)))))
+                dirs))))
+
+(defun drgnx-tty--command-lines (command timeout &optional env)
+  "The lines COMMAND (a list: program and arguments) prints within TIMEOUT seconds; nil when the program is
+missing, fails to start or takes longer (it is then killed).  ENV (an alist) overrides the environment it
+runs with (an unset variable is removed); it runs from a local directory, never a remote one."
+  (when-let* ((exe (executable-find (car command))))
+    (let ((out (generate-new-buffer " *drgnx-tty*" t))
+          (err (generate-new-buffer " *drgnx-tty-err*" t))
+          (deadline (+ (float-time) timeout))
+          (default-directory "/")
+          (process-environment (append (mapcar (lambda (pair)
+                                                 (if (cdr pair) (format "%s=%s" (car pair) (cdr pair)) (car pair)))
+                                               env)
+                                       process-environment)))
+      (unwind-protect
+          (when-let* ((proc (ignore-errors
+                              (make-process :name "drgnx-tty" :buffer out :stderr err :noquery t
+                                            :connection-type 'pipe :sentinel #'ignore
+                                            :command (cons exe (cdr command))))))
+            (while (and (process-live-p proc) (< (float-time) deadline))
+              (accept-process-output proc 0.05))
+            (if (process-live-p proc)
+                (progn (delete-process proc) nil)
+              (accept-process-output proc 0)
+              (split-string (with-current-buffer out (buffer-string)) "\n" t)))
+        (let ((kill-buffer-query-functions nil))
+          (dolist (buf (list out err))
+            (when-let* ((p (get-buffer-process buf))) (delete-process p))
+            (kill-buffer buf)))))))
+
+(defun drgnx-tty--tmux-line-value (lines name)
+  "The value of option NAME in LINES, tmux's `show -q' output (\"NAME VALUE\" per line), or nil."
+  (when-let* ((line (seq-find (lambda (l) (string-prefix-p (concat name " ") l)) lines)))
+    (string-trim (substring line (1+ (length name))))))
+
+(defun drgnx-tty-tmux-options (&optional env)
+  "tmux's options that decide copy, keys, focus and colour, and its client's terminal:
+\(:version :set-clipboard :allow-passthrough :extended-keys :extended-keys-format :focus-events :rgb
+:outer-term :client-termtype), from one `tmux' call, 1 s at most.  :version is tmux's (\"3.4\"), :outer-term
+the TERM of the terminal around tmux (#{client_termname}), :rgb non-nil when tmux sends that terminal true
+colour (#{client_termfeatures} has RGB), :client-termtype its XTVERSION name (#{client_termtype}, tmux 3.4 and
+later); the others are the options' values as strings.  TMUX comes from ENV, the client's environment
+\(`drgnx-tty-env'; this Emacs's own when nil): the call goes to that client's server (`-S' its socket, with its
+TMUX).  nil outside tmux, or when tmux does not answer.  A nil value means unknown: an option this tmux lacks
+\(extended-keys before 3.2, allow-passthrough before 3.3, extended-keys-format before 3.5) or no client.
+The client facts (:outer-term, :rgb, :client-termtype) come from `display -p' without `-c': tmux takes the
+session's most recently active client, which is not always this Emacs's when several are attached.
+:allow-passthrough is the global (`-g') value; a per-pane `set -p' is not seen.
+The options are asked with `-q', which prints nothing for an unknown one; without it the first unknown option
+would end the call and lose the ones after it."
+  (when-let* ((tmux (drgnx-tty--env-get env "TMUX"))
+              ((not (string-empty-p tmux)))
+              (socket (car (split-string tmux ",")))
+              ((not (string-empty-p socket)))
+              (lines (drgnx-tty--command-lines
+                      (list "tmux" "-S" socket
+                            "display" "-p" "#{version}|#{client_termname}|#{client_termfeatures}|#{client_termtype}"
+                            ";" "show" "-sq" "set-clipboard"
+                            ";" "show" "-sq" "extended-keys"
+                            ";" "show" "-sq" "extended-keys-format"
+                            ";" "show" "-sq" "focus-events"
+                            ";" "show" "-gq" "allow-passthrough")
+                      1 (list (cons "TMUX" tmux))))
+              (head (split-string (car lines) "|"))
+              ((>= (length head) 4)))
+    (let ((rest (cdr lines))
+          (nonempty (lambda (s) (and s (not (string-empty-p s)) s))))
+      (list :version (funcall nonempty (nth 0 head))
+            :set-clipboard (drgnx-tty--tmux-line-value rest "set-clipboard")
+            :allow-passthrough (drgnx-tty--tmux-line-value rest "allow-passthrough")
+            :extended-keys (drgnx-tty--tmux-line-value rest "extended-keys")
+            :extended-keys-format (drgnx-tty--tmux-line-value rest "extended-keys-format")
+            :focus-events (drgnx-tty--tmux-line-value rest "focus-events")
+            :rgb (and (member "RGB" (split-string (nth 2 head) ",")) t)
+            :outer-term (funcall nonempty (nth 1 head))
+            :client-termtype (funcall nonempty (nth 3 head))))))
+
+(defun drgnx-tty--tmux-at-least-p (version major minor)
+  "Non-nil when tmux VERSION (\"3.4\", \"3.3a\", \"next-3.5\") is MAJOR.MINOR or later; nil when it is unknown."
+  (when (and version (string-match "\\([0-9]+\\)\\.\\([0-9]+\\)" version))
+    (let ((ma (string-to-number (match-string 1 version))) (mi (string-to-number (match-string 2 version))))
+      (or (> ma major) (and (= ma major) (>= mi minor))))))
+
+(defun drgnx-tty-tmux-conf-lines (options)
+  "The lines to add to ~/.tmux.conf for what OPTIONS (`drgnx-tty-tmux-options') shows missing, in this order:
+set-clipboard, extended-keys, allow-passthrough (tmux 3.3 and later, and only while set-clipboard is not on:
+it is the second way for a copy to get through), focus-events, true colour for the terminal around tmux.
+Nothing is written anywhere.  nil without OPTIONS or with nothing missing.
+
+extended-keys-format csi-u is not suggested: Emacs alone doesn't decode it; drgnx's decoder makes it equivalent
+to the default format, so it gains nothing."
+  (when options
+    (let ((on (lambda (key) (member (plist-get options key) '("on" "always")))))
+      (delq nil
+            (list (unless (equal (plist-get options :set-clipboard) "on") "set -s set-clipboard on")
+                  (unless (funcall on :extended-keys) "set -s extended-keys on")
+                  (when (and (not (equal (plist-get options :set-clipboard) "on"))
+                             (not (member (plist-get options :allow-passthrough) '("on" "all")))
+                             (drgnx-tty--tmux-at-least-p (plist-get options :version) 3 3))
+                    "set -g allow-passthrough on")
+                  (unless (funcall on :focus-events) "set -g focus-events on")
+                  (when-let* (((not (plist-get options :rgb)))
+                              (outer (plist-get options :outer-term))
+                              ((not (string-empty-p outer))))
+                    (format "set -as terminal-features ',%s:RGB'" outer)))))))
+
+;;;; This terminal
+
+(defun drgnx-tty--read-report ()
+  "terminal-report.eld from the state dir (written for each terminal frame), nil when missing, unreadable or
+not a plist.  Emacs's reader evaluates nothing (it has no read-time evaluation), so a planted file is only data."
+  (let ((file (expand-file-name "terminal-report.eld" (drgnx-state-dir))))
+    (when-let* ((data (ignore-errors
+                        (with-temp-buffer
+                          (insert-file-contents file)
+                          (read (current-buffer)))))
+                ((and (consp data) (plistp data))))
+      data)))
+
+(defun drgnx-tty-facts (&optional frame)
+  "The terminal FRAME's client runs in (this Emacs's own when FRAME is nil):
+\(:in-terminal BOOL :term :identity :colorterm :terminfo :tmux :ssh :report).
+Everything comes from the client's environment (`drgnx-tty-env'), never the daemon's.  :in-terminal is nil
+when TERM is unset or dumb, and the terminal's other facts are then nil too.  Inside tmux, the identity's
+:outer is tmux's #{client_termtype} when it names a terminal, else the environment's hint.  :report is the
+last terminal-report.eld."
+  (let* ((env (drgnx-tty-env frame))
+         (term (drgnx-tty--get env "TERM"))
+         (in (and term (not (equal term "dumb")) t))
+         (tmux (and in (drgnx-tty-tmux-options env)))
+         (identity (and in (drgnx-tty-identify env)))
+         (outer (car (drgnx-tty--from-answer
+                      (and (plist-get tmux :client-termtype)
+                           (concat "\eP>|" (plist-get tmux :client-termtype) "\e\\"))))))
+    (when (and outer (not (eq outer 'tmux)) (eq (plist-get identity :id) 'tmux))
+      (setq identity (plist-put identity :outer outer)))
+    (list :in-terminal in
+          :term term
+          :identity identity
+          :colorterm (drgnx-tty--get env "COLORTERM")
+          :terminfo (and in (drgnx-tty-terminfo-p term env) t)
+          :tmux tmux
+          :ssh (and (or (drgnx-tty--get env "SSH_CONNECTION") (drgnx-tty--get env "SSH_TTY")) t)
+          :report (drgnx-tty--read-report))))
+
+;;;; Onboarding
+
+(defun drgnx-tty--fix-lines (row)
+  "ROW's fixes that are config lines (not \"none: …\")."
+  (seq-remove (lambda (fix) (string-prefix-p "none" fix)) (mapcar #'cdr (plist-get row :fixes))))
+
+(defun drgnx-tty-onboard-note (&optional id)
+  "One paragraph for onboarding: the terminals drgnx works best in and, with ID, that terminal's row — what
+works, what does not, and the lines that fix it."
+  (let* ((rows (seq-filter (lambda (row)
+                             (and (or (plist-get row :kkp) (plist-get row :mok)) (plist-get row :osc52)))
+                           (delq nil (mapcar #'drgnx-tty-terminal drgnx-tty-best-order))))
+         (names (mapcar (lambda (row) (plist-get row :name)) rows))
+         (kkp-only (mapcar (lambda (row) (plist-get row :name))
+                           (seq-remove (lambda (row) (drgnx-tty-mok-confirmed-p (plist-get row :id))) rows)))
+         (best (format "drgnx works best in %s: they send \
+C-S- chords and the other shortcuts, and copy to your computer's clipboard, over SSH as well (OSC 52).%s Each \
+keeps some C-S- chords for itself; docs/guide/terminal.md gives the line that frees them."
+                       (if (cdr names) (concat (string-join (butlast names) ", ") ", or " (car (last names))) (car names))
+                       (if kkp-only
+                           (format " In %s, C-g cannot stop busy Lisp (they use the kitty keyboard protocol)."
+                                   (if (cdr kkp-only)
+                                       (concat (string-join (butlast kkp-only) ", ") " and " (car (last kkp-only)))
+                                     (car kkp-only)))
+                         "")))
+         (row (and id (drgnx-tty-terminal id))))
+    (if (not row)
+        (concat best (if id " drgnx does not know this terminal: F1 (VS Code keys) and the palette, or M-x, reach \
+every command." ""))
+      (let* ((unconfirmed (plist-get row :unconfirmed))
+             (say (lambda (text &rest cells)
+                    (if (seq-some (lambda (cell) (memq cell unconfirmed)) cells) (concat text " (unconfirmed)") text)))
+             (keys (or (plist-get row :kkp) (plist-get row :mok)))
+             (works (delq nil (list (and (plist-get row :kkp)
+                                         (funcall say "every shortcut (kitty keyboard protocol)" :kkp))
+                                    (and (not (plist-get row :kkp)) (plist-get row :mok)
+                                         (funcall say "C-S- chords (modifyOtherKeys)" :mok))
+                                    (and (plist-get row :osc52) (funcall say "copy to the clipboard (OSC 52)" :osc52))
+                                    (and (plist-get row :truecolor) (funcall say "true colour" :truecolor))
+                                    (and (plist-get row :mouse) (funcall say "the mouse" :mouse)))))
+             (lacks (delq nil (list (and (not keys) (funcall say "no C-S- chords" :kkp :mok))
+                                    (and (not (plist-get row :osc52))
+                                         (funcall say "no OSC 52 copy to the clipboard" :osc52))
+                                    (and (not (plist-get row :truecolor)) (funcall say "no true colour" :truecolor))
+                                    (and (not (plist-get row :mouse)) (funcall say "no mouse" :mouse)))))
+             (takes (plist-get row :takes))
+             (fixes (drgnx-tty--fix-lines row)))
+        (concat best " In " (plist-get row :name) ": "
+                (if works (concat (string-join works ", ") (if (cdr works) " work" " works")) "little works")
+                (if lacks (concat "; " (string-join lacks ", ")) "")
+                "."
+                (if takes
+                    (funcall say (format " It keeps %d shortcut%s for itself (%s%s)" (length takes) (if (cdr takes) "s" "")
+                                         (string-join (seq-take takes 3) ", ") (if (nthcdr 3 takes) ", …" ""))
+                             :takes)
+                  "")
+                (if takes "." "")
+                (if fixes (concat " Fixes: " (string-join fixes "; ") ".") "")
+                (if keys "" " F1 (VS Code keys) and the palette, or M-x, reach every command."))))))
+
+(provide 'drgnx-tty)
+;;; drgnx-tty.el ends here

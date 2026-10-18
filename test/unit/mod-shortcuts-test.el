@@ -321,7 +321,40 @@ the usage counts go there, never the user's), no usage counted, and every bindin
       (should (eq (condition-case nil (call-interactively #'drgnx-shortcuts-filter) (quit 'quit)) 'quit)))
     (should (equal (drgnx-shortcuts-test--shown) '(sc-c)))))
 
+(defmacro drgnx-shortcuts-test--on-terminal (caps &rest body)
+  "BODY with the selected frame a terminal frame with CAPS (nil: a graphical frame); the active profile's fallback
+table is the terminal's, as the layer would have put it there for a legacy terminal."
+  (declare (indent 1))
+  `(let ((params (make-hash-table :test #'equal)) (caps ,caps))
+     (cl-flet ((rebuild (&rest _)               ; what the layer does at every key apply
+                 (when (and caps (eq (plist-get caps :keys) 'legacy))
+                   (puthash '(kx-sc . drgnx-tty-fallback-table)
+                            (drgnx-tty-fallback-for-terminal (drgnx-tty-fallback-active-table) caps) params))))
+       (when caps (puthash '(kx-sc . drgnx-tty-caps) caps params))
+       (rebuild)
+       ;; the layer's advice on `drgnx-keys-apply', here as the test's own (the real one is there only after ui/terminal's
+       ;; setup ran in the session)
+       (advice-add 'drgnx-keys-apply :after #'rebuild '((name . kx-sc-rebuild)))
+       (unwind-protect
+           (cl-letf (((symbol-function 'drgnx-tty-fallback-apply) #'rebuild)
+                     ((symbol-function 'frame-terminal) (lambda (&optional _) 'kx-sc))
+                     ((symbol-function 'display-graphic-p) (lambda (&optional _) (null caps)))
+                     ((symbol-function 'terminal-parameter) (lambda (term p) (gethash (cons term p) params)))
+                     ((symbol-function 'set-terminal-parameter) (lambda (term p v) (puthash (cons term p) v params))))
+             ,@body)
+         (advice-remove 'drgnx-keys-apply 'kx-sc-rebuild)))))
+
+(defun drgnx-shortcuts-test--mark-echo (id)
+  "The help-echo of the † on command ID's line, or nil without one."
+  (with-current-buffer "*drgnx keyboard shortcuts*"
+    (save-excursion
+      (goto-char (point-min))
+      (when-let* ((m (text-property-search-forward 'drgnx-shortcuts-id id #'eq))
+                  (pos (progn (goto-char (prop-match-beginning m)) (search-forward "†" (prop-match-end m) t))))
+        (get-text-property (1- pos) 'help-echo)))))
+
 (ert-deftest drgnx-shortcuts/terminal-mark ()
+  ;; a graphical frame (and batch's, which has no terminal caps): the static rule, a terminal without kkp
   (dolist (k '("C-S-p" "s-k" "C-/" "C-." "C-1" "C-x C-S-a" "H-a"))
     (should (equal (list k nil) (list k (drgnx-shortcuts-terminal-p k)))))
   (dolist (k '("C-c a" "C-k C-s" "M-x" "C-_" "C-@" "<f5>" "C-]" "RET" "S-<f4>"))
@@ -331,7 +364,54 @@ the usage counts go there, never the user's), no usage counted, and every bindin
     (should (string-match-p "C-S-t†" (drgnx-shortcuts-test--line 'sc-t)))
     (should-not (string-search "†" (drgnx-shortcuts-test--line 'sc-a)))
     (with-current-buffer "*drgnx keyboard shortcuts*"
-      (should (string-search "a terminal cannot send" (buffer-string))))))
+      (should (string-search "a terminal cannot send" (buffer-string))))
+    ;; a graphical frame says the same, and names no terminal key
+    (drgnx-shortcuts-test--on-terminal nil
+      (should-not (drgnx-shortcuts-terminal-p "C-S-t"))
+      (drgnx-shortcuts--redraw)
+      (should (string-match-p "C-S-t†" (drgnx-shortcuts-test--line 'sc-t)))
+      (should (equal (drgnx-shortcuts-test--mark-echo 'sc-t) "A terminal cannot send this key (a graphical frame can)")))
+    ;; a terminal frame whose terminal sends it (kkp): not marked
+    (drgnx-shortcuts-test--on-terminal '(:id kitty :keys kkp :folded nil)
+      (should (drgnx-shortcuts-terminal-p "C-S-t"))
+      (should (drgnx-shortcuts-terminal-p "s-k"))      ; kkp sends it all but the keys the keyboard lacks
+      (drgnx-shortcuts--redraw)
+      (should-not (string-search "†" (drgnx-shortcuts-test--line 'sc-t))))
+    ;; a legacy terminal: marked, and the mark names what to press here
+    (drgnx-shortcuts-test--on-terminal '(:id vte :keys legacy :folded nil)
+      (should-not (drgnx-shortcuts-terminal-p "C-S-t"))
+      (should (drgnx-shortcuts-terminal-p "C-c a"))
+      (drgnx-shortcuts--redraw)
+      (should (string-match-p "C-S-t†" (drgnx-shortcuts-test--line 'sc-t)))
+      (should-not (string-search "†" (drgnx-shortcuts-test--line 'sc-a)))
+      (should (string-search "here: Alt+Shift+T" (drgnx-shortcuts-test--mark-echo 'sc-t)))
+      ;; where Alt+Shift+T is taken, the F6 form
+      (with-temp-buffer
+        (use-local-map (let ((m (make-sparse-keymap))) (define-key m (key-parse "M-T") #'ignore) m))
+        (should (string-search "here: F6 t" (drgnx-shortcuts--terminal-note "C-S-t"))))
+      ;; without the layer the mark says there is nothing to press
+      (let ((drgnx-tty-fallback nil))
+        (should (string-search "no fallback" (drgnx-shortcuts--terminal-note "C-S-t")))))))
+
+(ert-deftest drgnx-shortcuts/sets-the-terminal-fallback-of-a-marked-row ()
+  (drgnx-shortcuts-test--with
+    (drgnx-shortcuts)
+    (drgnx-shortcuts-test--on-terminal '(:id vte :keys legacy :folded nil)
+      (with-current-buffer "*drgnx keyboard shortcuts*"
+        (goto-char (point-min))
+        (goto-char (prop-match-beginning (text-property-search-forward 'drgnx-shortcuts-id 'sc-t #'eq)))
+        (cl-letf (((symbol-function 'read-string) (lambda (prompt &rest _) (should (string-search "C-S-t" prompt)) "M-Z")))
+          (drgnx-shortcuts-set-tty-fallback))
+        (should (equal (plist-get (drgnx-keys-read-user) :tty-fallback) '(("C-S-t" . "M-Z"))))
+        ;; the row now shows the key chosen (the layer rebuilt the terminal's table, as it does at every key apply)
+        (should (string-search "here: Alt+Shift+Z" (drgnx-shortcuts-test--mark-echo 'sc-t)))
+        ;; a key the layer cannot use is refused with its reason
+        (cl-letf (((symbol-function 'read-string) (lambda (&rest _) "M-x")))
+          (should (string-search "reserved" (cadr (should-error (drgnx-shortcuts-set-tty-fallback) :type 'user-error)))))
+        ;; a row whose keys a terminal can send has nothing to set
+        (goto-char (point-min))
+        (goto-char (prop-match-beginning (text-property-search-forward 'drgnx-shortcuts-id 'sc-a #'eq)))
+        (should (string-search "nothing" (cadr (should-error (drgnx-shortcuts-set-tty-fallback) :type 'user-error))))))))
 
 (ert-deftest drgnx-shortcuts/profile-switch ()
   (drgnx-shortcuts-test--with

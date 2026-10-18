@@ -331,6 +331,8 @@ While a button is held in the panel, wait for the release: rows never move under
   (drgnx-signal-subscribe 'frame-changed #'drgnx-buffers--refresh)           ; another window: its buffers
   (drgnx-signal-subscribe 'tabs-changed #'drgnx-buffers--refresh)
   (add-function :after after-focus-change-function #'drgnx-buffers--focus-changed '((name . drgnx-buffers)))
+  (drgnx-modules-push-undo "after-focus-change-function drgnx-buffers"
+                           (lambda () (remove-function after-focus-change-function 'drgnx-buffers)))
   (add-hook 'drgnx-git-changed-functions
             (lambda (_root) (when-let* ((b (get-buffer drgnx-buffers-buffer-name)))
                               (with-current-buffer b (jit-lock-refontify))))))

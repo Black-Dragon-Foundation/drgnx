@@ -45,7 +45,7 @@
         state text, at real, settled_at real, choice text)"
        "create index if not exists card_job on card(job, state)")
     ;; M12f: what happened (the event log), who is working (the agent registry), what the user reviewed (core/drgnx-coord.el)
-    (5 "create table if not exists event (id integer primary key, at real, agent text, job text, task text, kind text,
+    (5 "create table if not exists event (id integer primary key autoincrement, at real, agent text, job text, task text, kind text,
         summary text, data text)"
        "create index if not exists event_at on event(at)"
        "create index if not exists event_agent on event(agent, id)"

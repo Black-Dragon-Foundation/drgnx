@@ -163,7 +163,8 @@
             (prin1 (list :version 2 :frames (list (drgnx-persist-state) '(:role custom :restore (drgnx-persist-test--rebuild "j1"))
                                                   '(:role custom :restore (drgnx-persist-test--gone 1))))
                    (current-buffer)))
-          (cl-letf (((symbol-function 'drgnx-persist-test--rebuild) (lambda (&rest args) (push args called))))
+          (cl-letf (((symbol-function 'drgnx-persist-test--rebuild) (lambda (&rest args) (push args called)))
+                    ((symbol-function 'drgnx-persist--gui-frame) #'selected-frame))   ; a job window needs a graphical display
             (drgnx-persist-restore file))
           (should (equal called '(("j1")))))
       (set-frame-parameter nil 'drgnx-persist-restore nil)
@@ -249,6 +250,7 @@
           (progn
             (set-frame-parameter nil 'drgnx-frame-role 'aux)     ; whatever role earlier tests left: it must stay
             (cl-letf (((symbol-function 'drgnx-persist-test--rebuild) (lambda (&rest _) (cl-incf rebuilt) nil))
+                      ((symbol-function 'drgnx-persist--gui-frame) #'selected-frame)
                       ((symbol-function 'drgnx-persist--restore-frame) (lambda (_st) (cl-incf restored)))
                       ((symbol-function 'select-frame-set-input-focus) #'ignore))
               (drgnx-persist-restore))
