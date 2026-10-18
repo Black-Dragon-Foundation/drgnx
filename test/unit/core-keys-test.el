@@ -9,9 +9,13 @@
 (defconst drgnx-keys-test--defaults (copy-keymap global-map)
   "Emacs' own bindings, as `drgnx-keys' snapshots them.")
 
+(defvar drgnx-keys-test--later-stages nil
+  "Non-nil: `drgnx-keys-test--with-core-commands' also sets up the idle, first-frame, first-file and first-input modules.")
+
 (defmacro drgnx-keys-test--with-core-commands (&rest body)
   "BODY with a registry holding the core commands (core + core/basics) and the two replace commands
-that took VS Code's C-S-h and F2 (the rest of the replace module is not modelled here), nothing else."
+that took VS Code's C-S-h and F2 (the rest of the replace module is not modelled here), nothing else — and with
+`drgnx-keys-test--later-stages', the commands of the later stages' modules whose packages need nothing installed."
   `(let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
          (drgnx-commands-problems nil) (drgnx-modules--table nil) (drgnx-modules--report nil)
          (ring-bell-function ring-bell-function) (use-dialog-box use-dialog-box)
@@ -21,6 +25,10 @@ that took VS Code's C-S-h and F2 (the rest of the replace module is not modelled
      (drgnx-modules-run 'startup)
      (drgnx-command-define 'replace-in-files :category "Search" :title "Replace in Files" :command #'ignore :doc "test")
      (drgnx-command-define 'rename-symbol :category "Search" :title "Rename Symbol" :command #'ignore :doc "test")
+     (when drgnx-keys-test--later-stages
+       ;; A module that needs a package (magit, avy, …) stays out whatever this machine has installed.
+       (cl-letf (((symbol-function 'locate-library) (lambda (&rest _) nil)))
+         (dolist (stage (cdr drgnx-modules-stages)) (drgnx-modules-run stage))))
      ,@body))
 
 (defun drgnx-keys-test--resolve (layers &rest args)
@@ -631,7 +639,11 @@ that took VS Code's C-S-h and F2 (the rest of the replace module is not modelled
   (should (equal (drgnx-keys--mac-cmd "C-M-S-c") "M-s-C"))
   (should (equal (drgnx-keys--mac-cmd "C-S-x" t) "C-S-x"))
   (should (equal (drgnx-keys--mac-cmd "C-S-s-x" t) "C-s-X"))
-  (should (equal (drgnx-keys--mac-cmd "C-k C-S-p") "s-k s-P")))
+  (should (equal (drgnx-keys--mac-cmd "C-k C-S-p") "s-k s-P"))
+  ;; M12a-26: the letter check does not depend on `case-fold-search' (a capital is not a lower-case letter)
+  (dolist (key '("C-S-X" "C-S-x" "S-s-X" "C-M-S-c"))
+    (should (equal (let ((case-fold-search t)) (drgnx-keys--mac-cmd key))
+                   (let ((case-fold-search nil)) (drgnx-keys--mac-cmd key))))))
 
 (ert-deftest drgnx-keys/vscode-on-macos-has-no-conflicts ()
   ;; Against Emacs' macOS defaults (ns-win's s- keys): no two commands on one key, no problem, and the
@@ -713,8 +725,13 @@ that took VS Code's C-S-h and F2 (the rest of the replace module is not modelled
     (ai-edit-done "C-c C-c" drgnx-ai-edit-review-mode-map) (ai-edit-reject "C-c C-k" drgnx-ai-edit-review-mode-map)
     (work-view "C-k t" nil) (work-open "RET" drgnx-work-mode-map) (work-toggle "TAB" drgnx-work-mode-map)
     (work-refresh "g" drgnx-work-mode-map) (work-filter "f" drgnx-work-mode-map)
-    (work-hide-merged "m" drgnx-work-mode-map))
-  "The VS Code profile's resolved keys on Linux before M12a gave it its macOS keys: (ID KEY MAP).")
+    (work-hide-merged "m" drgnx-work-mode-map)
+    (diff-toggle-layout "s" drgnx-diff-mode-map) (diff-toggle-file "TAB" drgnx-diff-mode-map)
+    (diff-next-file "n" drgnx-diff-mode-map) (diff-prev-file "p" drgnx-diff-mode-map)
+    (diff-visit "RET" drgnx-diff-mode-map) (review-visit "RET" drgnx-review-mode-map)
+    (review-show-diff "d" drgnx-review-mode-map))
+  "The VS Code profile's resolved keys on Linux before M12a gave it its macOS keys: (ID KEY MAP).
+The commands of modules that need no installed package are in it, the later stages' too (diff, review).")
 
 (ert-deftest drgnx-keys/linux-is-unchanged ()
   ;; The macOS work changes nothing on Linux but the keys of the commands it added — and the views
@@ -722,6 +739,7 @@ that took VS Code's C-S-h and F2 (the rest of the replace module is not modelled
   (let* ((new '(view-explorer view-search replace-in-files rename-symbol   ; M12a's views took four of the keys
                               quit preferences edit-line-start edit-line-end edit-buffer-start edit-buffer-end edit-word-left
                               edit-word-right edit-delete-word-back edit-delete-line-back))
+         (drgnx-keys-test--later-stages t)
          (r (drgnx-keys-test--resolve '((vscode app editing window)) :platform 'linux)))
     (should (equal (mapcar (lambda (b) (list (plist-get b :id) (plist-get b :key) (plist-get b :map)))
                            (seq-remove (lambda (b) (memq (plist-get b :id) new)) (plist-get r :bindings)))

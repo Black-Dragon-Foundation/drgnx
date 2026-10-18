@@ -103,19 +103,20 @@ cannot be read (never an error or a prompt)."
 and Cmd+Shift+letter as the capital letter, as GNU Emacs' NS port sends it (S-s-p is s-P; Shift stays
 on named keys and other characters: C-S-s-<right>).  The modifiers stay in the order keys are written
 in (A-C-H-M-S-s): C-M-b is M-s-b, C-M-S-c is M-s-C."
-  (mapconcat (lambda (event)
-               (if (string-match "\\`\\(\\(?:[ACHMSs]-\\)*\\)\\(.+\\)\\'" event)
-                   (let* ((base (match-string 2 event)) (mods (split-string (match-string 1 event) "-" t)))
-                     (unless keep-ctrl
-                       (when (member "C" mods) (setq mods (cons "s" (remove "C" mods)))))
-                     (when (and (member "S" mods) (member "s" mods) (string-match-p "\\`[a-z]\\'" base))
-                       (setq mods (remove "S" mods) base (upcase base)))
-                     (concat (mapconcat (lambda (m) (concat m "-"))
-                                        (seq-filter (lambda (m) (member m mods)) '("A" "C" "H" "M" "S" "s"))
-                                        "")
-                             base))
-                 event))
-             (split-string key " ") " "))
+  (let ((case-fold-search nil))   ; a capital is not a lower-case letter, whatever the user's setting
+    (mapconcat (lambda (event)
+                 (if (string-match "\\`\\(\\(?:[ACHMSs]-\\)*\\)\\(.+\\)\\'" event)
+                     (let* ((base (match-string 2 event)) (mods (split-string (match-string 1 event) "-" t)))
+                       (unless keep-ctrl
+                         (when (member "C" mods) (setq mods (cons "s" (remove "C" mods)))))
+                       (when (and (member "S" mods) (member "s" mods) (string-match-p "\\`[a-z]\\'" base))
+                         (setq mods (remove "S" mods) base (upcase base)))
+                       (concat (mapconcat (lambda (m) (concat m "-"))
+                                          (seq-filter (lambda (m) (member m mods)) '("A" "C" "H" "M" "S" "s"))
+                                          "")
+                               base))
+                   event))
+               (split-string key " ") " ")))
 
 (defun drgnx-keys--entry (entry spec platform)
   "ENTRY (ID KEY… [:map M] [:mac K…] [:everywhere K…]) or (ID :none [REASON] [:mac K…]) of SPEC → plist
