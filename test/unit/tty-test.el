@@ -406,3 +406,8 @@ cat %s\n"
   ;; without the list, as before
   (should-not (drgnx-tty-unsendable '("C-S-p") 'mok))
   (should (equal (drgnx-tty-unsendable '("C-S-p") 'legacy drgnx-tty-tmux-folded-chords) '("C-S-p"))))
+
+(ert-deftest drgnx-tty/a-folded-chord-in-a-key-sequence-is-unsendable ()
+  ;; "C-k C-S-p" needs C-S-p as its second key: tmux at level 1 sends C-p there
+  (should (equal (drgnx-tty-unsendable '("C-k C-S-p" "C-k C-p" "C-S-p C-k" "C-x C-f") 'mok drgnx-tty-tmux-folded-chords)
+                 '("C-k C-S-p" "C-S-p C-k"))))

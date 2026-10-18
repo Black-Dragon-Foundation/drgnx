@@ -63,12 +63,12 @@ strings; the real frame is not touched), an empty cache and no terminal to ask: 
 
 (ert-deftest drgnx-tty-frames/only-the-identity-is-cached ()
   ;; two terminals of one kind: asked once, but each has its own keys and colours, read again on every call
-  (drgnx-tty-frames-test--terminal '((tty-mode-set-strings . ("\e[>4;1m")) (drgnx-tty-mok-decoded . t)) '("TERM=xterm-kitty")
+  (drgnx-tty-frames-test--terminal '((tty-mode-set-strings . ("\e[>4;1m")) (drgnx-tty-mok-decoded . t)) '("TERM=xterm-256color" "TERM_PROGRAM=WezTerm")
     (should (eq (plist-get (drgnx-tty-frame-caps) :keys) 'mok))
     (let ((drgnx-tty-frames-test--term 'kx-b))
       (cl-letf (((symbol-function 'display-color-cells) (lambda (&optional _) 16777216)))
         (let ((caps (drgnx-tty-frame-caps)))
-          (should (eq (plist-get caps :id) 'kitty))
+          (should (eq (plist-get caps :id) 'wezterm))
           (should (eq (plist-get caps :keys) 'legacy))
           (should (eq (plist-get caps :colors) 16777216)))))
     (should (= asked 1))
@@ -559,3 +559,35 @@ types `infocmp' was asked about."
       (cl-letf (((symbol-function 'terminal-live-p) (lambda (_t) nil)))
         (should-not (drgnx-tty-frames--tmux-setup (selected-frame))))
       (should (= calls 0)))))
+
+(ert-deftest drgnx-tty-frames/a-hung-tmux-is-asked-once-per-terminal ()
+  ;; a tmux that does not answer costs its 1 s once, not once per frame or setup step
+  (drgnx-tty-frames-test--terminal nil drgnx-tty-frames-test--tmux-env
+    (drgnx-tty-frames-test--with-tmux nil
+      (let ((drgnx-tty-frames-tmux-ttl 0))
+        (should-not (drgnx-tty-frames--tmux-options (selected-frame)))
+        (should-not (drgnx-tty-frames--tmux-options (selected-frame)))
+        (should-not (drgnx-tty-frames--tmux-options (selected-frame)))
+        (should (= calls 1))))))
+
+(ert-deftest drgnx-tty-frames/the-tmux-level-setting-reaches-open-terminals ()
+  ;; changing `drgnx-tty-tmux-mok-level' takes effect in the tmux windows already open, both ways
+  (let (sent (refreshed 0) (drgnx-tty-tmux-mok-level 1))
+    (cl-letf (((symbol-function 'send-string-to-terminal) (lambda (s &optional _) (push s sent)))
+              ((symbol-function 'drgnx-tty-frames-refresh-report) (lambda (_f) (setq refreshed (1+ refreshed))))
+              ((symbol-function 'drgnx-tty-frames--tty-frames) (lambda () (list (selected-frame)))))
+      (drgnx-tty-frames-test--terminal '((tty-mode-set-strings . ("\e[>4;1m" "\e[?2004h"))
+                                         (tty-mode-reset-strings . ("\e[>4m")))
+          drgnx-tty-frames-test--tmux-env
+        (drgnx-tty-frames-test--with-tmux '(:extended-keys "on")
+          (let ((drgnx-tty-frames-tmux-ttl 0))
+            (customize-set-variable 'drgnx-tty-tmux-mok-level 2)
+            (should (equal sent '("\e[>4;2m")))
+            (should (eq (plist-get (drgnx-tty-frame-caps) :c-g) 'waits))
+            ;; back to 1: level 1 is asked again, level 2's resume string is dropped
+            (customize-set-variable 'drgnx-tty-tmux-mok-level 1)
+            (should (equal sent '("\e[>4;1m" "\e[>4;2m")))
+            (should (equal (terminal-parameter nil 'tty-mode-set-strings) '("\e[>4;1m" "\e[?2004h")))
+            (should (eq (plist-get (drgnx-tty-frame-caps) :c-g) 'always))
+            (should (= refreshed 2))))))
+    (set-default 'drgnx-tty-tmux-mok-level 1)))

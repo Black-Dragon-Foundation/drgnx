@@ -299,5 +299,97 @@ a fake `tmux' printing TMUX-OUT on PATH (the display line, then NAME VALUE optio
     (should (eq (plist-get (drgnx-tty-frame-caps) :keys) 'legacy))
     (should (eq (plist-get (drgnx-tty-frame-caps) :c-g) 'always))))
 
+;;;; A known terminal's row decides (re-review of the fix round)
+
+(ert-deftest drgnx-tty-keys/a-known-terminals-row-decides-between-mok-and-kkp ()
+  ;; Alacritty: Emacs's DA2 test turned modifyOtherKeys on, but the row says it has none (kkp only): the request is
+  ;; withdrawn, the terminal is not mok, and kkp is wanted.  Ghostty: its row's :mok is unconfirmed (and probably
+  ;; level 2 only), its kkp is confirmed: kkp too.  WezTerm and xterm: confirmed mok, asked for
+  (let ((drgnx-tty-use-kkp t))
+    (dolist (case '(("TERM=alacritty" "ALACRITTY_SOCKET=/tmp/a") ("TERM=xterm-ghostty")))
+      (drgnx-tty-keys-test--terminal drgnx-tty-keys-test--asked case ""
+        (drgnx-tty-frames--keys-setup (selected-frame))
+        (should (equal sent '("\e[>4m")))
+        (should-not (drgnx-tty-frames-mok-asked-p 'kx-a))
+        (should (eq (plist-get (drgnx-tty-frame-caps) :keys) 'legacy))
+        (let (asked)
+          (drgnx-tty-keys--enable-guard (lambda (&rest _) (setq asked t)))
+          (should asked)))
+      ;; Emacs did not ask: drgnx does not either
+      (drgnx-tty-keys-test--terminal nil case ""
+        (drgnx-tty-frames--keys-setup (selected-frame))
+        (should-not sent)
+        (should (eq (plist-get (drgnx-tty-frame-caps) :keys) 'legacy))))
+    ;; even with the request standing (a stale one), the caps never say mok for such a row
+    (drgnx-tty-keys-test--terminal (cons '(drgnx-tty-mok-decoded . t) drgnx-tty-keys-test--asked) '("TERM=alacritty") ""
+      (should (eq (plist-get (drgnx-tty-frame-caps) :keys) 'legacy)))
+    (drgnx-tty-keys-test--terminal nil '("TERM=xterm-256color" "TERM_PROGRAM=WezTerm") ""
+      (drgnx-tty-frames--keys-setup (selected-frame))
+      (should (equal sent '("\e[>4;1m")))
+      (should (eq (plist-get (drgnx-tty-frame-caps) :keys) 'mok)))))
+
+(ert-deftest drgnx-tty-keys/kkp-setup-guard-needs-kkp-s-private-functions ()
+  ;; kkp--terminal-setup is private: advised only where it exists, else a problem says so; a failed setup pops the
+  ;; flags unless kkp is known to be active
+  (let ((dir (make-temp-file "drgnx-fake-kkp" t))
+        (load-path nil) (drgnx-hooks-problems nil))
+    (setq load-path (cons dir load-path))
+    (drgnx-tty-keys-test--unload-kkp)
+    (unwind-protect
+        (progn
+          (write-region (replace-regexp-in-string "(defun kkp--terminal-setup () nil)\n" "" drgnx-tty-keys-test--fake-kkp)
+                        nil (expand-file-name "kkp.el" dir) nil 'silent)
+          (drgnx-tty-keys-test--modules
+           (drgnx-modules-run 'startup)
+           (should-not (advice-member-p #'drgnx-tty-keys--kkp-setup-guard 'kkp--terminal-setup))
+           (should (seq-some (lambda (p) (string-match-p "kkp--terminal-setup" p)) drgnx-hooks-problems))))
+      (drgnx-tty-keys-test--unload-kkp)
+      (delete-directory dir t)))
+  ;; the failure path with kkp's `kkp--active-p' missing: the flags are popped all the same
+  (drgnx-tty-keys-test--terminal nil '("TERM=xterm-kitty") ""
+    (let ((drgnx-hooks-problems nil))
+      (should-not (fboundp 'kkp--active-p))
+      (drgnx-tty-keys--kkp-setup-guard (lambda (&rest _) (error "boom")))
+      (should (equal sent '("\e[<u")))
+      (should (string-match-p "kkp did not finish" (car drgnx-hooks-problems))))))
+
+(ert-deftest drgnx-tty-keys/a-failed-report-does-not-undo-kkp ()
+  ;; kkp is on; writing the report fails (a full disk, say): kkp stays on and the problem is recorded
+  (drgnx-tty-keys-test--terminal nil '("TERM=xterm-kitty") ""
+    (let ((drgnx-hooks-problems nil))
+      (cl-letf (((symbol-function 'drgnx-tty-frames-refresh-report) (lambda (_f) (error "disk full"))))
+        (drgnx-tty-keys--kkp-on))
+      (should (terminal-parameter nil 'drgnx-tty-kkp))
+      (should (string-match-p "disk full" (car drgnx-hooks-problems))))))
+
+(ert-deftest drgnx-tty-keys/a-declined-terminal-stays-declined ()
+  ;; kkp re-checks on every focus-in; a terminal drgnx declined once (use-kkp nil at that time) is not asked later,
+  ;; so the setting applies to terminal windows opened afterwards, as documented
+  (let (asked)
+    (drgnx-tty-keys-test--terminal nil '("TERM=xterm-kitty") ""
+      (let ((drgnx-tty-use-kkp nil))
+        (drgnx-tty-keys--enable-guard (lambda (&rest _) (setq asked t))))
+      (should-not asked)
+      (let ((drgnx-tty-use-kkp t))
+        (drgnx-tty-keys--enable-guard (lambda (&rest _) (setq asked t))))
+      (should-not asked))
+    ;; a terminal opened after the setting changed is asked
+    (drgnx-tty-keys-test--terminal nil '("TERM=xterm-kitty") ""
+      (let ((drgnx-tty-use-kkp t))
+        (drgnx-tty-keys--enable-guard (lambda (&rest _) (setq asked t))))
+      (should asked))))
+
+(ert-deftest drgnx-tty-keys/a-late-kkp-reply-after-the-pop-is-swallowed ()
+  ;; the confirmation (CSI ? N u) of a setup drgnx popped may still arrive: it must not type M-[ ? 5 u
+  (drgnx-tty-keys-test--terminal nil '("TERM=xterm-kitty") ""
+    (let ((drgnx-hooks-problems nil))
+      (drgnx-tty-keys--kkp-setup-guard (lambda (&rest _) (error "boom")))
+      (dolist (n '(0 5 31))
+        (let ((def (lookup-key input-decode-map (format "\e[?%du" n))))
+          (should (functionp def))
+          (should (equal (funcall def nil) []))))
+      ;; other replies are left alone
+      (should (numberp (lookup-key input-decode-map "\e[?32u"))))))
+
 (provide 'mod-tty-keys-test)
 ;;; mod-tty-keys-test.el ends here

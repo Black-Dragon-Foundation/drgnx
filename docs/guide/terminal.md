@@ -87,14 +87,16 @@ helps.
 `C-S-p`, `` C-` ``, `C-.` and the other chords of your profile reach drgnx only through a key protocol: a plain
 terminal sends `C-S-p` as `C-p`, and `C-.` not at all. drgnx turns on one protocol in each terminal window:
 
-- **modifyOtherKeys**, wherever the terminal has it: xterm, WezTerm, Ghostty, and tmux with `extended-keys on`.
+- **modifyOtherKeys**, wherever the terminal has it: xterm, WezTerm, and tmux with `extended-keys on`.
   drgnx asks the terminal for it when Emacs did not, and decodes every chord (Emacs alone decodes only a few, so
   `C-S-p` would type text). Under tmux drgnx reads `extended-keys` and asks tmux for it when it is `on` or
   `always`. When it is `off`, or tmux is too old to have the option (before 3.2), the window counts as plain.
   Every chord arrives except `s-` and `H-` keys, and inside tmux the ones tmux folds into others (`C-S-p` as `C-p`,
   see [drgnx inside tmux](#drgnx-inside-tmux)). This needs no package.
-- **The kitty keyboard protocol (kkp)**, only for terminals that have kkp but not modifyOtherKeys: kitty, foot,
-  Alacritty, and iTerm2 with the setting in [The fixes](#the-fixes). The `ui/terminal-keys` module uses the `kkp`
+- **The kitty keyboard protocol (kkp)**, for terminals that have kkp but no confirmed modifyOtherKeys: kitty, foot,
+  Alacritty, Ghostty, and iTerm2 with the setting in [The fixes](#the-fixes). For a terminal drgnx knows, its row
+  in the table decides, whatever Emacs's own start-up test did: Emacs asks Alacritty for modifyOtherKeys, which it
+  does not have, and drgnx takes that request back. The `ui/terminal-keys` module uses the `kkp`
   package from MELPA, pinned in drgnx's lock (`drgnx sync` installs it). When such a terminal window opens, kkp
   asks the terminal once whether it speaks the protocol (`CSI ? u`) and waits 0.2 s at most. A terminal that says
   no, or does not answer, keeps its plain keys. If the answer starts but does not finish in time (a slow SSH
@@ -205,8 +207,9 @@ set -as terminal-features ',xterm-kitty:RGB'  # true colour; the TERM of the ter
   own. Then `C-g` always works (it stays one byte and stops a runaway Lisp loop), but tmux folds some chords into
   others: `C-S-<letter>` (and `C-M-S-<letter>`) arrive as `C-<letter>`, `C-S-SPC` and `` C-` `` as `C-SPC`, `` C-S-` ``
   as `C-^` (tmux 3.7c). drgnx lists those in `terminal-report.eld` as keys this terminal cannot send (the key sheet
-  and the fallback keys cover them), and the capabilities carry them as `:folded`. `M-x customize-variable`
-  `drgnx-tty-tmux-mok-level` set to `2` asks for level 2: C-S-letter chords work natively in tmux, but `C-g` can no
+  and the fallback keys cover them once those arrive with the key-fallback layer), and the capabilities carry them as
+  `:folded`. `M-x customize-variable`
+  `drgnx-tty-tmux-mok-level` set to `2` asks for level 2 (it applies to the tmux windows already open too): C-S-letter chords work natively in tmux, but `C-g` can no
   longer stop a runaway Lisp loop (it reaches Emacs as an escape sequence; prompts and commands still take it, and
   the capabilities say `:c-g waits`, as for the kitty keyboard protocol). `extended-keys-format csi-u` (tmux 3.5 and
   later) works too, drgnx decodes it, but it gains nothing, so the lines above do not suggest it.

@@ -28,6 +28,7 @@
 (require 'drgnx-tty)
 (declare-function drgnx-tty-frame-caps "drgnx-tty-frames")
 (declare-function drgnx-tty-frames-mok-asked-p "drgnx-tty-frames")
+(declare-function drgnx-tty-frames-mok-trusted-p "drgnx-tty-frames")
 (declare-function drgnx-tty-frames-refresh-report "drgnx-tty-frames")
 (declare-function global-kkp-mode "kkp")
 (declare-function kkp--active-p "kkp")
@@ -50,21 +51,42 @@ Takes effect for terminal windows opened afterwards."
 
 (defun drgnx-tty-keys--kkp-wanted-p (terminal)
   "Non-nil when kkp may be turned on in TERMINAL: `drgnx-tty-use-kkp' is t, the terminal is not tmux (which does
-not pass kkp), modifyOtherKeys is not asked for there (by Emacs's xterm.el), and the terminal's row does not
-list modifyOtherKeys (WezTerm, Ghostty, xterm: ui/terminal asks for it)."
+not pass kkp), and modifyOtherKeys is not how it gets its chords.  A terminal drgnx knows is decided by its table
+row (`drgnx-tty-frames-mok-trusted-p': WezTerm, xterm have it; Alacritty, Ghostty, foot, kitty do not, whatever
+Emacs's DA2 test asked for); one it does not know, by whether modifyOtherKeys is asked for there."
   (and drgnx-tty-use-kkp
        (when-let* ((frame (car (frames-on-display-list terminal)))
                    (caps (drgnx-tty-frame-caps frame)))
-         (not (or (eq (plist-get caps :id) 'tmux)
-                  (drgnx-tty-frames-mok-asked-p terminal)
-                  (plist-get (drgnx-tty-terminal (plist-get caps :id)) :mok))))))
+         (let ((id (plist-get caps :id)))
+           (not (or (eq id 'tmux)
+                    (if (drgnx-tty-terminal id)
+                        (drgnx-tty-frames-mok-trusted-p id)
+                      (drgnx-tty-frames-mok-asked-p terminal))))))))
 
 (defun drgnx-tty-keys--enable-guard (enable &rest args)
-  "Around `kkp-enable-in-terminal': ask the terminal (ARGS: the terminal) only where kkp is wanted."
+  "Around `kkp-enable-in-terminal': ask the terminal (ARGS: the terminal) only where kkp is wanted.  kkp calls
+this again at every focus-in of a terminal that did not set up; a terminal declined once (terminal parameter
+`drgnx-tty-kkp-declined') stays declined, so `drgnx-tty-use-kkp' changed later applies to terminal windows opened
+afterwards, as its docstring says."
   (let ((terminal (or (car args) (frame-terminal))))
-    (when (condition-case err (drgnx-tty-keys--kkp-wanted-p terminal)
+    (unless (terminal-parameter terminal 'drgnx-tty-kkp-declined)
+      (if (condition-case err (drgnx-tty-keys--kkp-wanted-p terminal)
             (error (drgnx-tty-keys--problem "%s" (error-message-string err)) nil))
-      (apply enable args))))
+          (apply enable args)
+        (when (frames-on-display-list terminal)
+          (set-terminal-parameter terminal 'drgnx-tty-kkp-declined t))))))
+
+(defun drgnx-tty-keys--swallow-replies ()
+  "The selected frame's terminal ignores kkp's replies (CSI ? FLAGS u): after a setup drgnx popped, a late
+confirmation would else type M-[ ? 5 u.  kkp reads its own replies with `read-event', which the decode map does not
+touch.  Once per terminal."
+  (unless (terminal-parameter nil 'drgnx-tty-kkp-swallow)
+    (let ((map (make-sparse-keymap)))
+      (dotimes (n 32)
+        (define-key map (format "\e[?%du" n) (lambda (_prompt) [])))
+      (set-keymap-parent input-decode-map
+                         (make-composed-keymap (delq nil (list (keymap-parent input-decode-map) map)))))
+    (set-terminal-parameter nil 'drgnx-tty-kkp-swallow t)))
 
 (defun drgnx-tty-keys--kkp-setup-guard (setup &rest args)
   "Around `kkp--terminal-setup' (the terminal answered kkp's question): when it fails half way — kkp 20260706.858
@@ -75,9 +97,10 @@ terminal's flags are popped (CSI < u), its keys stay plain, and the problem is r
         (apply setup args)
       (error
        (ignore-errors
-         (if (kkp--active-p terminal)
+         (if (and (fboundp 'kkp--active-p) (kkp--active-p terminal))
              (kkp--terminal-teardown terminal)
-           (send-string-to-terminal "\e[<u" terminal)))
+           (send-string-to-terminal "\e[<u" terminal)
+           (drgnx-tty-keys--swallow-replies)))
        (set-terminal-parameter terminal 'drgnx-tty-kkp nil)
        (drgnx-tty-keys--problem "kkp did not finish in %s (%s); its keys stay plain"
                                 (terminal-name terminal) (error-message-string err))
@@ -88,7 +111,10 @@ terminal's flags are popped (CSI < u), its keys stay plain, and the problem is r
   "`kkp-terminal-setup-complete-hook' (a frame of that terminal selected): the terminal speaks kkp now; its
 capabilities and report say so."
   (set-terminal-parameter nil 'drgnx-tty-kkp t)
-  (drgnx-tty-frames-refresh-report (selected-frame)))
+  ;; a failed report must not reach kkp's setup, whose guard would tear a working kkp down
+  (condition-case err
+      (drgnx-tty-frames-refresh-report (selected-frame))
+    (error (drgnx-tty-keys--problem "report: %s" (error-message-string err)))))
 
 (defun drgnx-tty-keys--kkp-off ()
   "`kkp-terminal-teardown-complete-hook' (suspend, the terminal's last frame closed): no kkp there now."
@@ -103,7 +129,10 @@ capabilities and report say so."
   (add-hook 'kkp-terminal-setup-complete-hook #'drgnx-tty-keys--kkp-on)
   (add-hook 'kkp-terminal-teardown-complete-hook #'drgnx-tty-keys--kkp-off)
   (advice-add 'kkp-enable-in-terminal :around #'drgnx-tty-keys--enable-guard)
-  (advice-add 'kkp--terminal-setup :around #'drgnx-tty-keys--kkp-setup-guard)
+  ;; kkp--terminal-setup is private to kkp: guarded where the pinned version has it
+  (if (fboundp 'kkp--terminal-setup)
+      (advice-add 'kkp--terminal-setup :around #'drgnx-tty-keys--kkp-setup-guard)
+    (drgnx-tty-keys--problem "kkp--terminal-setup is missing in this kkp: a setup that cannot finish is not undone"))
   (global-kkp-mode 1))
 
 (drgnx-module-define 'ui/terminal-keys

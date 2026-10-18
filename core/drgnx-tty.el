@@ -302,7 +302,9 @@ where CAPS would allow them."
   (let ((folded (mapcar #'key-parse folded)))
     (seq-remove (lambda (key)
                   (and (drgnx-tty-key-sendable-p key caps)
-                       (not (member (if (stringp key) (key-parse key) key) folded))))
+                       ;; any key of a sequence ("C-k C-S-p") may be a folded one
+                       (not (seq-some (lambda (event) (member (vector event) folded))
+                                      (if (stringp key) (key-parse key) key)))))
                 keys)))
 
 ;;;; terminfo and tmux
@@ -377,6 +379,9 @@ later); the others are the options' values as strings.  TMUX comes from ENV, the
 \(`drgnx-tty-env'; this Emacs's own when nil): the call goes to that client's server (`-S' its socket, with its
 TMUX).  nil outside tmux, or when tmux does not answer.  A nil value means unknown: an option this tmux lacks
 \(extended-keys before 3.2, allow-passthrough before 3.3, extended-keys-format before 3.5) or no client.
+The client facts (:outer-term, :rgb, :client-termtype) come from `display -p' without `-c': tmux takes the
+session's most recently active client, which is not always this Emacs's when several are attached.
+:allow-passthrough is the global (`-g') value; a per-pane `set -p' is not seen.
 The options are asked with `-q', which prints nothing for an unknown one; without it the first unknown option
 would end the call and lose the ones after it."
   (when-let* ((tmux (drgnx-tty--env-get env "TMUX"))
@@ -418,9 +423,8 @@ set-clipboard, extended-keys, allow-passthrough (tmux 3.3 and later, and only wh
 it is the second way for a copy to get through), focus-events, true colour for the terminal around tmux.
 Nothing is written anywhere.  nil without OPTIONS or with nothing missing.
 
-extended-keys-format csi-u is never suggested.  With it tmux sends C-S- chords as CSI u (\"ESC [ 112 ; 6 u\");
-Emacs decodes modifyOtherKeys (\"ESC [ 27 ; 6 ; 112 ~\", tmux's default format) but not CSI u unless the
-terminal is in the kitty keyboard protocol, which tmux does not pass on: it would lose every such key."
+extended-keys-format csi-u is not suggested: Emacs alone doesn't decode it; drgnx's decoder makes it equivalent
+to the default format, so it gains nothing."
   (when options
     (let ((on (lambda (key) (member (plist-get options key) '("on" "always")))))
       (delq nil

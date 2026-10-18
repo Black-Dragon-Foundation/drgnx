@@ -475,6 +475,9 @@ dirs) and drive the session through `harness/drgnx-tty-session.el`:
   and the clipboard go through the outer server, which is the inner tmux's terminal; `drgnx-tty-session-inner-tmux`
   runs a command on the inner server, and `drgnx-tty-session-stop` kills it first. With `:command`, that command runs in
   the inner tmux instead of Emacs (to see the bytes tmux passes on). Not with `:daemon`.
+  The inner server is not under the outer server's time budget: it ends when Emacs (its only pane) ends, and
+  `drgnx-tty-session-stop` and the sweep of sessions whose runner died kill it (its command line names the run
+  directory).
 - **Cleanup:** `drgnx-tty-session-stop` asks Emacs to exit, kills the tmux server and anything still running from the
   run directory, then removes the run and socket directories. `drgnx-tty-session-with` stops the session even when
   the test fails, and `kill-emacs-hook` stops any session a test left running. A runner killed with SIGKILL runs

@@ -93,12 +93,24 @@ seconds at most; a later answer is taken off the input by Emacs's xterm.el.  Not
         (xterm--query "\e[>0q" '(("\eP>|" . drgnx-tty-frames--xtversion-handler))))
       (terminal-parameter nil 'drgnx-tty-xtversion))))
 
+(defun drgnx-tty-frames-mok-trusted-p (id)
+  "Non-nil when a terminal of kind ID gets its chords by modifyOtherKeys.  tmux (its extended-keys decides) and
+a terminal drgnx does not know (Emacs's own request decides): yes.  A known terminal: its table row decides, and
+only a confirmed `:mok' counts.  Emacs's DA2 test also asks Alacritty, whose row has none, and Ghostty's is
+unconfirmed (and probably level 2 only): those get kkp."
+  (let ((row (and (not (eq id 'tmux)) (drgnx-tty-terminal id))))
+    (or (null row)
+        (and (plist-get row :mok) (not (memq :mok (plist-get row :unconfirmed)))))))
+
 (defun drgnx-tty-frames--keys (term)
   "How TERM's keys arrive: `kkp' when the ui/terminal-keys module turned it on (terminal parameter
-`drgnx-tty-kkp'), `mok' when modifyOtherKeys is asked for and drgnx decodes it there
-\(`drgnx-tty-frames--keys-setup'), else `legacy'."
+`drgnx-tty-kkp'), `mok' when modifyOtherKeys is asked for, drgnx decodes it there
+\(`drgnx-tty-frames--keys-setup') and the terminal's row allows it (`drgnx-tty-frames-mok-trusted-p'), else
+`legacy'."
   (cond ((terminal-parameter term 'drgnx-tty-kkp) 'kkp)
-        ((and (terminal-parameter term 'drgnx-tty-mok-decoded) (drgnx-tty-frames-mok-asked-p term)) 'mok)
+        ((and (terminal-parameter term 'drgnx-tty-mok-decoded) (drgnx-tty-frames-mok-asked-p term)
+              (drgnx-tty-frames-mok-trusted-p (plist-get (cdr (terminal-parameter term 'drgnx-tty-identity)) :id)))
+         'mok)
         (t 'legacy)))
 
 (defun drgnx-tty-frames--identity (frame)
@@ -209,7 +221,10 @@ decodes a few: C-tab, C-. …; its decodings come first).  A terminal that never
 - tmux, its TMUX known: asked for when tmux's extended-keys is on or always; else (off, or a tmux too old to
   have the option, or one that does not answer) withdrawn — tmux then sends none, the keys are legacy.
 - tmux without TMUX (a tmux on the other side of SSH): Emacs's own choice stays.
-- Another terminal whose row says modifyOtherKeys (xterm, WezTerm, Ghostty): asked for, if Emacs did not."
+- A known terminal: its row decides (`drgnx-tty-frames-mok-trusted-p'): confirmed modifyOtherKeys (xterm,
+  WezTerm) is asked for if Emacs did not; otherwise (Alacritty, Ghostty, foot, kitty: kkp, or nothing) a request
+  Emacs made is withdrawn.
+- A terminal drgnx does not know: Emacs's own choice stays."
   (let ((term (frame-terminal frame)))
     (unless (terminal-parameter term 'drgnx-tty-mok-decoded)
       (with-selected-frame frame (drgnx-tty-frames--decode-mok))
@@ -220,7 +235,9 @@ decodes a few: C-tab, C-. …; its decodings come first).  A terminal that never
                    (drgnx-tty-frames--ask-mok frame)
                  (drgnx-tty-frames--withdraw-mok term)))
               ((eq id 'tmux))
-              ((plist-get (drgnx-tty-terminal id) :mok) (drgnx-tty-frames--ask-mok frame)))))))
+              ((null (drgnx-tty-terminal id)))
+              ((drgnx-tty-frames-mok-trusted-p id) (drgnx-tty-frames--ask-mok frame))
+              (t (drgnx-tty-frames--withdraw-mok term)))))))
 
 ;;;; The report
 
@@ -385,10 +402,12 @@ shows.")
 (defun drgnx-tty-frames--tmux-options (frame &optional id)
   "tmux's options (`drgnx-tty-tmux-options') for FRAME's client, when it is inside tmux and tmux answers; else
 nil.  ID is the terminal's id when the caller has it (else `drgnx-tty-frames--identity' finds it).  Kept in
-the terminal parameter `drgnx-tty-tmux' for `drgnx-tty-frames-tmux-ttl' seconds."
+the terminal parameter `drgnx-tty-tmux' for `drgnx-tty-frames-tmux-ttl' seconds; a tmux that gave no answer (it
+hung for its 1 s, or is too old to say) is remembered as such until the terminal goes away, so a hung server costs
+that second once, not once per window or setup step."
   (let* ((term (frame-terminal frame))
          (kept (terminal-parameter term 'drgnx-tty-tmux)))
-    (if (and kept (< (- (float-time) (car kept)) drgnx-tty-frames-tmux-ttl))
+    (if (and kept (or (null (cdr kept)) (< (- (float-time) (car kept)) drgnx-tty-frames-tmux-ttl)))
         (cdr kept)
       (let ((options (and (eq (or id (plist-get (drgnx-tty-frames--identity frame) :id)) 'tmux)
                           (drgnx-tty-tmux-options (drgnx-tty-env frame)))))
@@ -422,7 +441,17 @@ or exits.  Nothing when tmux keeps the focus events (`off') or this is no tmux."
 into C-<letter>: they are reported as not sendable in tmux and the fallback keys cover them.
 2: C-S-letter chords work natively in tmux, but C-g can no longer stop a runaway Lisp loop (the terminal's
 capabilities say `:c-g waits', as for kitty's keyboard protocol); prompts and commands still take it."
-  :type '(choice (const :tag "1: C-g always works" 1) (const :tag "2: C-S-letter chords, C-g waits" 2)) :group 'drgnx)
+  :type '(choice (const :tag "1: C-g always works" 1) (const :tag "2: C-S-letter chords, C-g waits" 2))
+  :group 'drgnx :initialize #'custom-initialize-default
+  :set (lambda (sym val) (set-default sym val) (drgnx-tty-frames-tmux-level-apply)))
+
+(defun drgnx-tty-frames-tmux-level-apply ()
+  "Make the tmux terminals already open follow `drgnx-tty-tmux-mok-level': asked tmux again, then the keys step."
+  (dolist (f (drgnx-tty-frames--tty-frames))
+    (let ((term (frame-terminal f)))
+      (when (eq (plist-get (drgnx-tty-frames--identity f) :id) 'tmux)
+        (set-terminal-parameter term 'drgnx-tty-tmux nil)
+        (drgnx-tty-frames--tmux-setup f)))))
 
 (defvar drgnx-tty-frames--csi-u-map nil "The keymap `drgnx-tty-frames--csi-u-map' returns, made once.")
 
@@ -439,19 +468,24 @@ as CSI 27 ; M ; K ~ (Shift, Meta, Control)."
 (defun drgnx-tty-frames--tmux-keys (frame)
   "Under tmux with `extended-keys' on or always, after modifyOtherKeys was asked for (level 1): ask for
 `drgnx-tty-tmux-mok-level' when that is 2 (default 1: nothing to do) so C-S- chords arrive, once per terminal and
-kept for a resume; the report is written again (C-g now waits).  With
-`extended-keys-format csi-u', the terminal also decodes that form."
+kept for a resume; back to 1, level 1 is asked again and level 2's resume string dropped.  The report is written
+again either way (C-g waits at level 2).  With `extended-keys-format csi-u', the terminal also decodes that form."
   (let* ((term (frame-terminal frame))
          (options (drgnx-tty-frames--tmux-options frame))
          (level-1 "\e[>4;1m") (level-2 "\e[>4;2m"))
     (when (and (terminal-live-p term) (member (plist-get options :extended-keys) '("on" "always")))
       (let ((set (terminal-parameter term 'tty-mode-set-strings)))
-        (when (and (eql drgnx-tty-tmux-mok-level 2) (member level-1 set) (not (member level-2 set)))
-          (send-string-to-terminal level-2 term)
-          ;; last in the list: a resume sends it after level 1
-          (set-terminal-parameter term 'tty-mode-set-strings (append set (list level-2)))
-          (set-terminal-parameter term 'drgnx-tty-mok-level 2)
-          (drgnx-tty-frames-refresh-report frame)))
+        (cond ((and (eql drgnx-tty-tmux-mok-level 2) (member level-1 set) (not (member level-2 set)))
+               (send-string-to-terminal level-2 term)
+               ;; last in the list: a resume sends it after level 1
+               (set-terminal-parameter term 'tty-mode-set-strings (append set (list level-2)))
+               (set-terminal-parameter term 'drgnx-tty-mok-level 2)
+               (drgnx-tty-frames-refresh-report frame))
+              ((and (not (eql drgnx-tty-tmux-mok-level 2)) (member level-2 set))
+               (send-string-to-terminal level-1 term)
+               (set-terminal-parameter term 'tty-mode-set-strings (remove level-2 set))
+               (set-terminal-parameter term 'drgnx-tty-mok-level nil)
+               (drgnx-tty-frames-refresh-report frame))))
       (when-let* (((equal (plist-get options :extended-keys-format) "csi-u"))
                   ((not (terminal-parameter term 'drgnx-tty-csi-u)))
                   (map (drgnx-tty-frames--csi-u-map)))
