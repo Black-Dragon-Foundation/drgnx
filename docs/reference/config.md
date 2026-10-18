@@ -40,6 +40,34 @@ Your own layouts; the built-in ones are not stored.
 | `* :px :panel` | natnum or null | no |  |
 | `* :px :right` | natnum or null | no |  |
 
+## drgnx.lock.eld
+
+Folder: config. Format: 1. Read: when it changes. On a mistake: the defaults.
+
+Every installed package, pinned by drgnx sync.  A mistake in it stops the sync, and drgnx never replaces the file.
+
+| Key | Type | Required | What |
+| --- | --- | --- | --- |
+| `:packages` | list of (NAME :version :archive :kind :file :sha256 :size :requires :summary) | yes | What is installed: one entry per package |
+| `:from-shipped` | boolean | no | Copied from the lock drgnx ships; the first sync completes it |
+
+## packages.eld
+
+Folder: config. Format: 1. Read: at start. On a mistake: the defaults.
+
+The packages you want besides the modules', their sources and archives.  Read at each drgnx sync; a mistake in it stops the sync (nothing is applied or replaced).
+
+| Key | Type | Required | What |
+| --- | --- | --- | --- |
+| `:packages` | list of symbol | no | Packages to install besides the modules' |
+| `:git` | alist of symbol to plist | no | Packages no archive has, installed from their repository |
+| `:git * :url` | string | no | Where the repository is |
+| `:git * :rev` | string | no | A branch, a tag or a commit |
+| `:git * :commit` | string | no | The commit to install |
+| `:git * :lisp-dir` | string | no | Where the package's files are |
+| `:archives` | alist of string to string | no | The archives: name and URL or directory |
+| `:archive-priorities` | alist of string to number | no | Which archive wins: name and priority |
+
 ## projects.eld
 
 Folder: config. Format: 1. Read: when it changes. On a mistake: its last good copy, else the defaults.
