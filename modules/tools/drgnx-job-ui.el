@@ -16,6 +16,7 @@
 (require 'button)
 (require 'drgnx-modules)
 (require 'drgnx-registry)
+(require 'drgnx-timer)
 
 (declare-function drgnx-hub-call "drgnx-hub")
 (declare-function drgnx-hub-call-sync "drgnx-hub")
@@ -236,6 +237,10 @@ else a message.  A failed osascript says so once.  Never a prompt."
   (drgnx-hub-call-sync "job/stop" (list :id id))
   (message "Job %s stopped" id))
 
+(defun drgnx-job-ui--idle-recount ()
+  "Count again, once the hub's client is loaded: the 60 s idle timer's function."
+  (when (featurep 'drgnx-hub) (drgnx-job-ui--recount)))
+
 (drgnx-module-define 'tools/jobs
                      :doc "Jobs: agents through a plan you approve — cards, clashes, the badge; shown in the Work cockpit."
                      :stage 'startup :requires '(tools/agents)
@@ -243,7 +248,7 @@ else a message.  A failed osascript says so once.  Never a prompt."
                      (lambda ()
                        (drgnx-job-ui-badge-mode 1)
                        ;; counted again now and then once the hub's client is here (the Agents mirror loads it)
-                       (run-with-idle-timer 60 t (lambda () (when (featurep 'drgnx-hub) (drgnx-job-ui--recount))))
+                       (drgnx-timer-start 'job-ui-recount-idle 60 #'drgnx-job-ui--idle-recount :repeat t :idle t)
                        (when (fboundp 'drgnx-wb-place) (drgnx-wb-place "\\`\\*plan jobs\\*\\'" 'editor))
                        (pcase-dolist (`(,id ,title ,fn ,doc)
                                       '((job-show "Show Job in Work…" drgnx-job-ui-show "The Work cockpit filtered to a job: what needs you, its tasks, its decisions")
