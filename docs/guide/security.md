@@ -10,7 +10,12 @@ here ever asks you a question; you trust a folder when you choose to.
 - drgnx's own folders: its checkout, its config dir (`~/.config/drgnx/`) and its packages dir, and the Lisp
   files Emacs itself came with.
 - The folders you trusted with **Trust This Folder**. They are kept in `~/.local/state/drgnx/trusted-folders.eld`,
-  so they stay trusted in the next session.
+  so they stay trusted in the next session. A file drgnx cannot use trusts none of its folders: one that cannot be
+  read, one with a mistake (`:folders` must be a list of folder names), and one a newer drgnx wrote. A message
+  names the file and the reason, once each time the file changes. Trust This Folder copies a file it cannot use
+  aside (`trusted-folders.eld.bak-…`, the newest three kept) before it writes a new one, and refuses to change a
+  newer drgnx's file. Two Emacs sessions trusting folders at once both keep theirs. A folder in the file that
+  Trust This Folder would refuse (below) is not trusted.
 - Anything you put in Emacs's own `trusted-content` option. drgnx only adds to it; `:all` trusts everything.
 
 Every other folder is untrusted, including the projects you open, until you trust them.
@@ -25,7 +30,9 @@ A folder that holds far more than one project is never trusted: `/`, your home f
 and the temp folder. A file lying directly in one of them has to move into a project folder first.
 
 Or use the palette: **File: Trust This Folder**, and **File: Untrust This Folder** to take it back (drgnx's own
-folders stay trusted). Trusting a folder takes effect at once in its open files: their checkers run and their
+folders stay trusted). Untrusting always takes effect at once. When `trusted-folders.eld` cannot be changed (it
+cannot be used, or a newer drgnx wrote it), the message says the folder is untrusted for this session only, and
+why. Trusting a folder takes effect at once in its open files: their checkers run and their
 shorthands come back, without reopening them.
 
 ## What is held back in an untrusted folder
