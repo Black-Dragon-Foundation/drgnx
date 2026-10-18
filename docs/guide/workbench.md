@@ -233,6 +233,17 @@ first and every other buffer after them: it sorts, it never hides one (the order
 category, in `completion-category-overrides`; a `display-sort-function` of your own there stays). A help or results buffer shown from a window opens that
 window's panel; nothing moves in the other window. drgnx never places or sizes a window: your window manager does.
 
+**Several monitors.** Move to Monitor… (palette · the window's right-click menu, shown only when more than one
+monitor is known), Move to Next Monitor and Move to Previous Monitor (palette; they wrap round) move the window you
+are in to another monitor. The picker lists the monitors as the window manager names them, numbered left to right:
+`2 — DP-2, 2560×1440, right of 1`. A command never waits for the window manager (the picker alone waits,
+for the list, a few seconds at most): it says "Moving…" and then "Moved to monitor 2 (DP-2)", or why it could not, in the echo area. The
+commands exist only in graphical windows and work on sway, i3, Hyprland, niri, KWin and plain X11 or macOS; on GNOME
+(which does not let apps move their windows) and on other Wayland compositors they say so and name the key that does
+(on GNOME, Super+Shift+→ or ←). A window manager moves only the window that has focus, so a move is refused with a
+plain message while another app has it. None of the three has a key by default (`:none` in every profile): bind them
+in your key profile or use the palette.
+
 ### Popups
 
 Short-lived buffers — a transient menu, which-key's hints, `*Completions*`, the calendar — show in one **popup
