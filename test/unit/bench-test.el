@@ -49,3 +49,18 @@
       (drgnx-bench--put nil :explorer-expand (drgnx-bench--ms nil (lambda () (+ 1 1))))
       (should (= 0 (plist-get (plist-get drgnx-bench--gc :explorer-expand) :gcs))))
     (should (equal '("gc: none inside any measurement") (drgnx-bench-gc-notes '(:gc (:a (:gcs 0 :ms 0.0))))))))
+
+(ert-deftest drgnx-bench/key-p95-is-the-median-of-five-rounds ()
+  ;; DEFERRED M3c-11: one slow round (a GC, another process) must not decide the verdict.
+  (should (= 3 (drgnx-bench--median '(5 1 3 100 2))))
+  (should (= 2.5 (drgnx-bench--median '(1 2 3 4))))
+  (with-temp-buffer
+    (insert (make-string 2000 ?\n))
+    (goto-char (point-min))
+    (let ((n 0))
+      (cl-letf (((symbol-function 'redisplay) #'ignore))
+        (let ((v (drgnx-bench--p95 (lambda () (forward-line 1) (setq n (1+ n))) 20)))
+          (should (numberp v))))
+      ;; five rounds of 20 presses, the point back at the start between them
+      (should (= 100 n))
+      (should (= 1 (point))))))

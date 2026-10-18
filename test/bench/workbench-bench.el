@@ -1,7 +1,7 @@
 ;;; workbench-bench.el --- In-session part of `drgnx test --bench' -*- lexical-binding: t -*-
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 ;; Loaded into a GUI session of config=drgnx by harness/drgnx-bench.el.  Every measurement
-;; includes a full redisplay; one-off operations are the median of 3 runs, key presses the p95
+;; includes a full redisplay; one-off operations are the median of 3 runs, key presses the median of 5 rounds of the p95
 ;; of 300.  treemacs runs like-for-like: no file watching, no follow, git off (on for both tools
 ;; in the two git rows).
 
@@ -39,19 +39,35 @@ The GCs that ran inside the median run are kept in `drgnx-bench--last-gc'."
       (setq drgnx-bench--last-gc (list :gcs (nth 1 run) :ms (nth 2 run)))
       (car run))))
 
-(defun drgnx-bench--p95 (step n)
+(defun drgnx-bench--median (xs)
+  "The median of the numbers XS (the mean of the middle two for an even count)."
+  (let* ((v (vconcat (sort (copy-sequence xs) #'<))) (n (length v)))
+    (if (cl-oddp n) (aref v (/ n 2)) (/ (+ (aref v (1- (/ n 2))) (aref v (/ n 2))) 2.0))))
+
+(defun drgnx-bench--p95-round (step n)
   "p95 ms of STEP followed by a full redisplay, over N steps; an error if the point did not move
 (a no-op would look fast)."
-  (let ((p0 (point)) (g0 gcs-done) (e0 gc-elapsed) ts)
+  (let ((p0 (point)) ts)
     (dotimes (_ n)
       (let ((t0 (float-time)))
         (funcall step)
         (redisplay t)
         (push (* 1000.0 (- (float-time) t0)) ts)))
-    (setq drgnx-bench--last-gc (list :gcs (- gcs-done g0) :ms (* 1000.0 (- gc-elapsed e0))))
     (when (< (count-lines p0 (point)) (/ n 2))
       (error "the selection moved %d rows for %d presses" (count-lines p0 (point)) n))
     (nth (floor (* 0.95 (1- n))) (sort ts #'<))))
+
+(defun drgnx-bench--p95 (step n &optional rounds)
+  "The median of ROUNDS (5) p95s of N presses of STEP (see `drgnx-bench--p95-round'); the point goes
+back to where it started before each round, so a round never runs out of rows.  One slow round — a
+GC, another process — then does not decide the number."
+  (let ((p0 (point)) (g0 gcs-done) (e0 gc-elapsed) ps)
+    (dotimes (_ (or rounds 5))
+      (goto-char p0)
+      (push (drgnx-bench--p95-round step n) ps))
+    (goto-char p0)
+    (setq drgnx-bench--last-gc (list :gcs (- gcs-done g0) :ms (* 1000.0 (- gc-elapsed e0))))
+    (drgnx-bench--median ps)))
 
 (defmacro drgnx-bench--try (tool metric &rest body)
   "BODY's value, or nil with the error noted (a tool that cannot do something is not compared)."
