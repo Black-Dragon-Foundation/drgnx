@@ -962,6 +962,9 @@ fy with a newer fa 2.0.  Returns (FX FY FA-1.0-ENTRY)."
 (ert-deftest drgnx-pkg/compat-version-files-are-not-native-compiled ()
   ;; M10-13: compat-29.el etc. need their siblings at compile time and load only on an old Emacs: skipped
   ;; like -pkg/-autoloads, so a sync does not warn about them.
+  (unless (and (fboundp 'native-comp-available-p) (native-comp-available-p))
+    ;; the step binds `native-comp-eln-load-path', which an Emacs without it lacks (a sync never runs the step there)
+    (ert-skip "needs an Emacs with native compilation (Homebrew's has none)"))
   (drgnx-pkg-test--with root
     (let ((dir (concat root "compat-1.0/")) (compiled nil) (drgnx-pkg-native-compile t) (drgnx-pkg--warnings nil))
       (make-directory dir t)

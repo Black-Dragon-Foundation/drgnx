@@ -183,29 +183,31 @@ in `applied'."
    (should-error (drgnx-keys-edit-undo) :type 'user-error)))
 
 (ert-deftest drgnx-keys-edit/rewriting-keeps-mac-keys-and-none-reasons ()
+  ;; edits on Linux keep the :mac keys as they are (on a Mac they go to the :mac keys: …/on-a-mac-edits-go-to-…)
   (drgnx-keys-edit-test--with-dir
-   (drgnx-keys-edit-test--put
-    "(:bind ((palette \"C-c p\" \"C-c q\" :mac \"s-p\")\n (quit :none \"only on a Mac\" :mac \"s-q\")))\n")
-   (drgnx-keys-edit-unbind 'palette "C-c q")
-   (should (equal (alist-get 'palette (plist-get (drgnx-keys-read-user) :bind)) '("C-c p" :mac "s-p")))
-   (drgnx-keys-edit-bind 'palette "C-c z")
-   (should (equal (alist-get 'palette (plist-get (drgnx-keys-read-user) :bind)) '("C-c z" :mac "s-p")))
-   ;; a key given to a :none entry drops the :none and keeps :mac; the reason is kept while it has no keys
-   (drgnx-keys-edit-add 'quit "s-w")
-   (should (equal (alist-get 'quit (plist-get (drgnx-keys-read-user) :bind)) '("s-w" :mac "s-q")))
-   (drgnx-keys-edit-test--put "(:bind ((quit :none \"only on a Mac\" :mac (\"s-q\" \"s-w\"))))\n")
-   (drgnx-keys-edit-unbind 'quit "s-w")
-   (should (equal (alist-get 'quit (plist-get (drgnx-keys-read-user) :bind)) '(:none "only on a Mac" :mac "s-q")))
-   (drgnx-keys-edit-unbind 'quit "s-q")
-   (should (memq 'quit (plist-get (drgnx-keys-read-user) :unbind)))
-   (drgnx-keys-edit-test--put
-    "(:bind ((palette \"C-c p\" \"C-c q\" :mac \"s-p\")))\n")
-   ;; no keys left anywhere: not bound at all
-   (drgnx-keys-edit-unbind 'palette "C-c p")
-   (drgnx-keys-edit-unbind 'palette "C-c q")
-   (drgnx-keys-edit-unbind 'palette "s-p")
-   (should-not (assq 'palette (plist-get (drgnx-keys-read-user) :bind)))
-   (should (memq 'palette (plist-get (drgnx-keys-read-user) :unbind)))))
+   (cl-letf (((symbol-function 'drgnx-platform) (lambda () 'linux)))
+     (drgnx-keys-edit-test--put
+      "(:bind ((palette \"C-c p\" \"C-c q\" :mac \"s-p\")\n (quit :none \"only on a Mac\" :mac \"s-q\")))\n")
+     (drgnx-keys-edit-unbind 'palette "C-c q")
+     (should (equal (alist-get 'palette (plist-get (drgnx-keys-read-user) :bind)) '("C-c p" :mac "s-p")))
+     (drgnx-keys-edit-bind 'palette "C-c z")
+     (should (equal (alist-get 'palette (plist-get (drgnx-keys-read-user) :bind)) '("C-c z" :mac "s-p")))
+     ;; a key given to a :none entry drops the :none and keeps :mac; the reason is kept while it has no keys
+     (drgnx-keys-edit-add 'quit "s-w")
+     (should (equal (alist-get 'quit (plist-get (drgnx-keys-read-user) :bind)) '("s-w" :mac "s-q")))
+     (drgnx-keys-edit-test--put "(:bind ((quit :none \"only on a Mac\" :mac (\"s-q\" \"s-w\"))))\n")
+     (drgnx-keys-edit-unbind 'quit "s-w")
+     (should (equal (alist-get 'quit (plist-get (drgnx-keys-read-user) :bind)) '(:none "only on a Mac" :mac "s-q")))
+     (drgnx-keys-edit-unbind 'quit "s-q")
+     (should (memq 'quit (plist-get (drgnx-keys-read-user) :unbind)))
+     (drgnx-keys-edit-test--put
+      "(:bind ((palette \"C-c p\" \"C-c q\" :mac \"s-p\")))\n")
+     ;; no keys left anywhere: not bound at all
+     (drgnx-keys-edit-unbind 'palette "C-c p")
+     (drgnx-keys-edit-unbind 'palette "C-c q")
+     (drgnx-keys-edit-unbind 'palette "s-p")
+     (should-not (assq 'palette (plist-get (drgnx-keys-read-user) :bind)))
+     (should (memq 'palette (plist-get (drgnx-keys-read-user) :unbind))))))
 
 (ert-deftest drgnx-keys-edit/on-a-mac-edits-go-to-the-mac-keys ()
   (drgnx-keys-edit-test--with-dir

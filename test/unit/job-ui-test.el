@@ -135,9 +135,9 @@
       (should (equal drgnx-job-ui--badge "")))))
 
 (ert-deftest drgnx-job-ui/a-new-card-notifies-once ()
+  ;; when and what is sent, whatever the platform: the send itself (osascript on macOS, D-Bus elsewhere) is stubbed
   (let ((sent nil) (drgnx-job-ui-notify t) (drgnx-job-ui--notified (make-hash-table :test #'equal)))
-    (cl-letf (((symbol-function 'drgnx-job-ui--desktop-p) (lambda () t))
-              ((symbol-function 'notifications-notify) (lambda (&rest args) (push args sent)))
+    (cl-letf (((symbol-function 'drgnx-job-ui--send) (lambda (title body) (push (list :title title :body body) sent)))
               ((symbol-function 'drgnx-hub-call) #'ignore))
       (drgnx-job-ui--event "card" '(:id 11 :job "j1" :kind "budget" :title "spent 1.2 of 1.0 USD: paused"))
       (should-not sent)                                     ; never inside the hub's event handler (D-Bus may hang)
