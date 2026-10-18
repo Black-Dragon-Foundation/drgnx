@@ -183,16 +183,10 @@ lambda or not)."
 
 (defconst drgnx-lint-timers--not-yet
   '(("modules/tools/drgnx-agents-ui.el" 3)
-    ("modules/tools/drgnx-ai-ui.el" 3)
-    ("modules/tools/drgnx-job-ui.el" 1)
     ("modules/tools/drgnx-live.el" 2)
     ("modules/tools/drgnx-replace.el" 3)
-    ("modules/ui/drgnx-quickhelp.el" 5)
-    ("modules/ui/drgnx-start.el" 1)
     ("modules/ui/drgnx-statusbar.el" 1)
     ("modules/ui/drgnx-topline.el" 1)
-    ("modules/ui/drgnx-tty-fallback-layer.el" 1)
-    ("modules/ui/drgnx-tty-popups.el" 1)
     ("wb/drgnx-explorer.el" 4)
     ("wb/drgnx-outline.el" 1)
     ("wb/drgnx-signal.el" 1))

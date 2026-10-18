@@ -209,4 +209,19 @@
           (mapc #'cancel-timer (append timer-list timer-idle-list)))
       (delete-directory state t))))
 
+(ert-deftest drgnx-job-ui/events-recount-once-and-the-module-owns-the-recount ()
+  ;; a burst of job events is one recount a second later; once the module is off, a pending recount never runs
+  (let ((drgnx-modules--runs (list (list 'tools/jobs 'tools/jobs))) (n 0))
+    (drgnx-test-with-clock ()
+      (cl-letf (((symbol-function 'drgnx-job-ui--recount) (lambda () (cl-incf n))))
+        (dotimes (_ 5) (drgnx-job-ui--schedule-recount))
+        (should (equal (mapcar #'car (drgnx-timer-pending)) '(job-ui-recount)))
+        (should (eq (cadar (drgnx-timer-pending)) 'tools/jobs))
+        (drgnx-test-advance 1.1)
+        (should (= n 1))
+        (drgnx-job-ui--schedule-recount)
+        (should (= 1 (drgnx-timer-cancel-owner 'tools/jobs)))   ; the module is turned off
+        (drgnx-test-advance 2)
+        (should (= n 1))))))
+
 ;;; job-ui-test.el ends here

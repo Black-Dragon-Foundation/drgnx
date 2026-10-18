@@ -22,6 +22,7 @@
 (require 'button)
 (require 'drgnx-registry)
 (require 'drgnx-face-state)
+(require 'drgnx-timer)
 (declare-function drgnx-face-glyph "drgnx-face")
 (declare-function drgnx-surfaces-key "drgnx-surfaces")
 (declare-function drgnx-surfaces-run "drgnx-surfaces")
@@ -67,7 +68,6 @@
   "The buttons: a registry command ID (or `dismiss'), the label and the help text.  A command that is not there
 \(its module is off) has no button.")
 
-(defvar drgnx-start--timer nil "The idle timer that shows the page after a start's first window, or nil.")
 (defvar drgnx-start--after-file nil
   "Non-nil when the editor used last showed a file (or the first-run Welcome) at the previous `editor-changed' (a
 boolean, not the buffer).")
@@ -223,7 +223,6 @@ Always returns nil, so it can be a hook function."
 
 (defun drgnx-start--first-frame-run ()
   "The idle timer's function, a moment after a start's first window: show the page for the selected frame."
-  (setq drgnx-start--timer nil)
   (drgnx-start-maybe-show))
 
 (defun drgnx-start--on-first-frame ()
@@ -232,8 +231,7 @@ hook (the files asked for and the restored layout come first).  A daemon's own f
 clients are left to `server-after-make-frame-hook'.  The timer waits a second, after the Welcome's (0.5 s), which
 comes first on a first run."
   (unless (or noninteractive (and (daemonp) (not (display-graphic-p))))
-    (when (timerp drgnx-start--timer) (cancel-timer drgnx-start--timer))
-    (setq drgnx-start--timer (run-with-idle-timer 1 nil #'drgnx-start--first-frame-run))))
+    (drgnx-timer-start 'start-first-frame 1 #'drgnx-start--first-frame-run :idle t :owner 'ui/face)))
 
 (defun drgnx-start--no-file-tabs-p ()
   "Non-nil when the editor window used last holds no tab that visits a file."
@@ -270,15 +268,15 @@ Going to `*scratch*' from anything else is the user's own doing and stays."
     (drgnx-signal-subscribe 'editor-changed #'drgnx-start--on-editor-changed)))
 
 (defun drgnx-start-teardown ()
-  "Take the page off every hook, the bus and the timer (what `drgnx-start-setup' added; the command stays)."
+  "Take the page off every hook and the bus (what `drgnx-start-setup' added; the command stays).  Its timer
+belongs to ui/face's run and ends with it."
   (remove-hook 'drgnx-persist-after-restore-functions #'drgnx-start-maybe-show)
   (remove-hook 'server-after-make-frame-hook #'drgnx-start-maybe-show)
   (remove-hook 'drgnx-first-gui-frame-hook #'drgnx-start--on-first-frame)
   (remove-hook 'window-setup-hook #'drgnx-start--on-first-frame)
   (when (fboundp 'drgnx-signal-unsubscribe)
     (drgnx-signal-unsubscribe 'editor-changed #'drgnx-start--on-editor-changed))
-  (when (timerp drgnx-start--timer) (cancel-timer drgnx-start--timer))
-  (setq drgnx-start--timer nil drgnx-start--after-file nil))
+  (setq drgnx-start--after-file nil))
 
 (provide 'drgnx-start)
 ;;; drgnx-start.el ends here
