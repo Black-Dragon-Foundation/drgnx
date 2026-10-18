@@ -161,27 +161,33 @@ bytes) past `drgnx-hub-client-max-queued'?"
   (message "drgnx hub: a client stopped reading; its connection is closed")
   (delete-process conn))
 
+(defun drgnx-hub--enqueue (conn line)
+  "Put LINE in CONN's queue — unless CONN stopped reading (`drgnx-hub--client-stuck-p'): it is dropped instead (its
+Emacs connects again)."
+  (if (drgnx-hub--client-stuck-p conn (string-bytes line)) (drgnx-hub--drop conn)
+    (process-put conn :queue (cons line (process-get conn :queue)))
+    (process-put conn :queued-bytes (+ (or (process-get conn :queued-bytes) 0) (string-bytes line)))))
+
+(defun drgnx-hub--drain (conn)
+  "Write CONN's queue, in order — unless a write to it is already in progress below (it writes what comes)."
+  (unless (process-get conn :sending)
+    (unwind-protect
+        (let (lines)
+          (while (and (process-live-p conn) (setq lines (nreverse (process-get conn :queue))))
+            (process-put conn :queue nil)
+            (process-put conn :queued-bytes 0)
+            (dolist (l lines)
+              (process-put conn :sending (float-time))       ; (each line: a write that makes progress is not stuck)
+              (drgnx-hub--send-line conn l))))
+      (process-put conn :sending nil))))
+
 (defun drgnx-hub--answer (conn object)
   "Send OBJECT to CONN, a client of this hub.  A write to a client that does not read fast enough waits, and runs
 timers and filters meanwhile: what comes for it then is queued (written in order once the write is done), never
-written one level deeper.  A client that stopped reading (`drgnx-hub--client-stuck-p') is dropped instead (its Emacs
-connects again).  Hub side only: a client's nested `drgnx-hub-call' is legitimate."
-  (let ((line (concat (json-serialize (drgnx-hub--jsonable object)) "\n")))
-    (cond
-     ((not (process-get conn :sending))
-      (unwind-protect
-          (let ((lines (list line)))
-            (while (and lines (process-live-p conn))
-              (dolist (l lines)
-                (process-put conn :sending (float-time))       ; (each line: a write that makes progress is not stuck)
-                (drgnx-hub--send-line conn l))
-              (setq lines (nreverse (process-get conn :queue)))
-              (process-put conn :queue nil)
-              (process-put conn :queued-bytes 0)))
-        (process-put conn :sending nil)))
-     ((drgnx-hub--client-stuck-p conn (string-bytes line)) (drgnx-hub--drop conn))
-     (t (process-put conn :queue (cons line (process-get conn :queue)))
-        (process-put conn :queued-bytes (+ (or (process-get conn :queued-bytes) 0) (string-bytes line)))))))
+written one level deeper.  A client that stopped reading (`drgnx-hub--client-stuck-p') is dropped instead.  Hub side
+only: a client's nested `drgnx-hub-call' is legitimate."
+  (drgnx-hub--enqueue conn (concat (json-serialize (drgnx-hub--jsonable object)) "\n"))
+  (drgnx-hub--drain conn))
 
 (defun drgnx-hub--drop-stuck ()
   "Drop the clients that stopped reading even when nothing more comes for them (the hub's tick)."
@@ -522,8 +528,13 @@ for an agent that is not here (or exited) stays queued."
                                               (list :id id :result r)))))))))
 
 (defun drgnx-hub--broadcast (event data)
+  "Send EVENT with DATA to every subscriber: queued for each first, then written — so while one waits (a slow
+reader), a newer event never reaches another before this one."
   (setq drgnx-hub--subscribers (seq-filter #'process-live-p drgnx-hub--subscribers))
-  (dolist (c drgnx-hub--subscribers) (drgnx-hub--answer c (list :event (symbol-name event) :data data))))
+  (let ((line (concat (json-serialize (drgnx-hub--jsonable (list :event (symbol-name event) :data data))) "\n"))
+        (subscribers drgnx-hub--subscribers))
+    (dolist (c subscribers) (drgnx-hub--enqueue c line))
+    (dolist (c subscribers) (drgnx-hub--drain c))))
 
 (defun drgnx-hub--ping-socket (socket)
   "Does a hub answer on SOCKET?  (At most a second.)  One where it is not private to this user is never asked."

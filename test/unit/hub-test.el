@@ -199,6 +199,59 @@ to OR-LOG, OPENROUTER_API_KEY unset."
         (ignore-errors (signal-process sub 'SIGCONT))
         (delete-process sub)))))
 
+(defun drgnx-hub-test--reader (out delay)
+  "A subscriber in a child Emacs that sleeps DELAY s per chunk it reads, and on a `done' event writes all it got to
+OUT and exits."
+  (make-process
+   :name "reader" :noquery t :buffer nil
+   :command (list (expand-file-name invocation-name invocation-directory) "--batch" "-Q" "--eval"
+                  (format "(let* ((got nil) (tail \"\") (done nil)
+                                  (c (make-network-process :name \"s\" :family 'local :service %S :coding 'binary
+                                       :filter (lambda (_p s) (push s got) (sleep-for %s)
+                                                 (when (string-search \"\\\"done\\\"\" (concat tail s)) (setq done t))
+                                                 (setq tail (substring (concat tail s) (max 0 (- (+ (length tail) (length s)) 32))))))))
+                             (process-send-string c \"{\\\"id\\\":0,\\\"method\\\":\\\"subscribe\\\"}\\n\")
+                             (while (not done) (accept-process-output nil 0.1))
+                             (let ((coding-system-for-write 'binary)) (write-region (apply #'concat (nreverse got)) nil %S))
+                             (kill-emacs 0))"
+                          (drgnx-hub-socket) delay out))))
+
+(defun drgnx-hub-test--got (out)
+  "The `test' events' numbers in what a reader wrote to OUT, in the order it got them."
+  (with-temp-buffer
+    (insert-file-contents out)
+    (cl-loop for line in (split-string (buffer-string) "\n" t)
+             for json = (json-parse-string line :object-type 'plist)
+             when (equal (plist-get json :event) "test") collect (plist-get (plist-get json :data) :n))))
+
+(ert-deftest drgnx-hub/every-subscriber-gets-events-in-order-beside-a-slow-one ()
+  ;; while a write to a slow subscriber waits, a newer event must not reach another subscriber before an older one
+  ;; (a mirror skips what is older than what it has: it would lose it)
+  (drgnx-hub-test--with
+    (drgnx-hub-serve (drgnx-hub-socket))
+    (let* ((fast-out (concat root "fast.txt")) (slow-out (concat root "slow.txt"))
+           (fast (drgnx-hub-test--reader fast-out 0)) (slow nil)
+           (big (make-string (* 1024 1024) ?b)) (small (make-string 200 ?s)) (n 0) (timers nil)
+           (send (lambda (blob) (run-at-time 0 nil (lambda () (drgnx-hub--broadcast 'test (list :n (cl-incf n) :blob blob)))))))
+      (unwind-protect
+          (progn
+            (should (drgnx-hub-test--wait (lambda () (= (length drgnx-hub--subscribers) 1)) 10))
+            (setq slow (drgnx-hub-test--reader slow-out 0.002))           ; subscribed second: written to first
+            (should (drgnx-hub-test--wait (lambda () (= (length drgnx-hub--subscribers) 2)) 10))
+            (push (run-at-time 0 0.05 (lambda () (funcall send small))) timers)
+            (push (run-at-time 0 0.5 (lambda () (funcall send big))) timers)
+            (drgnx-hub-test--wait #'ignore 2)
+            (mapc #'cancel-timer timers)
+            (drgnx-hub-test--wait #'ignore 0.1)
+            (drgnx-hub--broadcast 'done nil)
+            (should (drgnx-hub-test--wait (lambda () (not (or (process-live-p fast) (process-live-p slow)))) 30))
+            (should (> n 20))
+            (should (equal (drgnx-hub-test--got slow-out) (number-sequence 1 n)))
+            (should (equal (drgnx-hub-test--got fast-out) (number-sequence 1 n))))
+        (mapc #'cancel-timer timers)
+        (delete-process fast)
+        (when slow (delete-process slow))))))
+
 (ert-deftest drgnx-hub/a-slow-subscriber-is-kept-and-gets-everything-in-order ()
   ;; a live reader that is merely slow (big snapshots, a busy editor) makes writes wait: what comes meanwhile is
   ;; queued for it, never a reason to drop it

@@ -67,7 +67,8 @@ coordination server's `coord/notify` checks the same. One JSON object per line:
 Errors: `{"id", "error": {"message"}}`. A line that is not JSON is answered with an error too when its `"id"` can be
 read (otherwise it is dropped); a line over 1 MiB closes its connection. A client that reads slowly is never dropped for it: once its
 socket's buffer is full, `process-send-string` waits and runs timers and filters meanwhile, and what comes for that
-client then is queued and written in order after the write (`drgnx-hub--answer`; never a write one level deeper, which
+client then is queued and written in order after the write (`drgnx-hub--enqueue`, `drgnx-hub--drain`; a broadcast
+queues its event for every subscriber before it writes to any, so a newer event never reaches one before an older; never a write one level deeper, which
 would nest until `excessive-lisp-nesting` lands anywhere in the hub). A client that stopped reading (a suspended
 Emacs) is dropped (logged) when its queue passes `drgnx-hub-client-max-queued` (16 MiB) or one write to it waits longer
 than `drgnx-hub-client-stuck-after` (10 s; checked also on the hub's tick, when nothing more comes for it); its Emacs
