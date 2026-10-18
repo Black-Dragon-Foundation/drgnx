@@ -117,6 +117,26 @@ never prints before the output. `emacsclient_bin` is that Emacs's `emacsclient` 
 ([opening.md](../guide/opening.md)). `test --install` limits each image to an hour with `timeout`, else `gtimeout`.
 `test/unit/bin-test.el` covers it with fake Emacs scripts.
 
+## TOML (`drgnx-toml.el`)
+
+A minimal reader and a writer that changes one table only, for config files drgnx edits but does not own (the
+agent settings pages use it on Codex's `config.toml`).
+
+| Function | Does |
+| --- | --- |
+| `drgnx-toml-parse STRING` | The whole file as an alist in file order: tables are alists, arrays vectors (arrays of tables are vectors of alists), `t` / `:false`, numbers, strings; dates stay as text. Comments, bare/quoted/dotted keys, `[a.b]`, `[[a.b]]`, basic/literal/multi-line strings, inline tables and multi-line arrays are read. A syntax error signals `drgnx-toml-error` with data `(LINE MESSAGE)`. |
+| `drgnx-toml-table-region STRING PATH` | `(BEG . END)` (0-based) of `[PATH]` and its sub-tables (`[PATH.x]`), up to the last key line; blank lines and comments after it belong to what follows. nil when absent. |
+| `drgnx-toml-set-table STRING PATH ALIST` | STRING with that region replaced by fresh text (nested alists as inline tables), added at the end when absent (after a blank line), removed when ALIST is nil. |
+| `drgnx-toml-set-array-entry STRING PATH PRED ALIST` | The same for the first `[[PATH]]` entry PRED (called with the entry as an alist) accepts; appended when none is. |
+| `drgnx-toml-encode-value VALUE` | One value as TOML text. |
+
+Every byte outside the changed region stays as it was: comments, order, unknown keys, spacing, line ends. PATH is a
+list of keys, so dotted and quoted names (`("projects" "/p")`) work. A table that is defined some other way than by
+its own header (dotted keys in a parent table, an inline table, an array of tables, or a header split into
+pieces) is read but never written: the writer signals `drgnx-toml-error` with the line, so a caller reports it
+and writes nothing. Text drgnx writes is re-encoded (a date becomes a quoted string; comments inside the replaced
+table go), which is why callers keep one backup per write.
+
 ## Doctor (`drgnx-doctor.el`)
 
 `bin/drgnx doctor [--json] [--dev]` asks the Emacs drgnx will use (see above) whether this
