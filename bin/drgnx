@@ -114,7 +114,8 @@ check_emacs() { # the CI check (core/drgnx-check.el); exec'd, see ui_exec
         -l drgnx-check -f drgnx-check-cli -- "$@"
 }
 
-test_batch_emacs() { # SIGPIPE ignored, as the hub runs (tests serve one in-process): a test may fail, never end the run
+test_batch_emacs() { # [FUNCTION ARGS…] — SIGPIPE ignored, as the hub runs (tests serve one in-process): a test may fail, never end the run
+  local fn="${1:-drgnx-run-ert-batch}"; shift || true   # --find-polluter runs its own entry point of the runner
   trap '' PIPE
   # The unit tier never reaches the user's desktop: dbus.el connects to the bus in the C environment (a dead
   # address, so nothing answers), no display or compositor socket, a runtime directory of its own.
@@ -125,7 +126,7 @@ test_batch_emacs() { # SIGPIPE ignored, as the hub runs (tests serve one in-proc
        DBUS_SESSION_BUS_ADDRESS=unix:path=/nonexistent/drgnx-unit-test XDG_RUNTIME_DIR="$run" \
        "$(emacs_bin)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/harness" -L "$here/core" -L "$here/wb" \
        -l "$here/harness/run-ert.el" \
-       -f drgnx-run-ert-batch "${DRGNX_TEST_DIR:-$here/test/unit}"
+       -f "$fn" "${@:-${DRGNX_TEST_DIR:-$here/test/unit}}"
 }
 
 test_batch() { run_in_tmp test_batch_emacs; }
@@ -246,17 +247,31 @@ cmd_test() {
   case "${1:-}" in
     "") test_batch ;;
     # batch flags, in any order: --one-process (every test file in one Emacs: hunting a leak across files),
-    # --leaks (the leak census, harness/run-ert.el: report only)
-    --one-process|--leaks)
+    # --leaks (the leak census, harness/run-ert.el: report only), --shuffle[=SEED] (each file's tests in a random order
+    # the seed fixes), --find-polluter TEST [FILE…] (last: takes the rest; bisects the tests before TEST)
+    --one-process|--leaks|--shuffle|--shuffle=*|--find-polluter)
+      local polluter=()
       while [ $# -gt 0 ]; do
         case "$1" in
           --one-process) export DRGNX_TEST_ONE_PROCESS=1 ;;
           --leaks) export DRGNX_TEST_LEAKS=1 ;;
-          *) echo "usage: drgnx test [--one-process] [--leaks]" >&2; exit 2 ;;
+          --shuffle) export DRGNX_TEST_SHUFFLE="$((RANDOM * 32768 + RANDOM))" ;;
+          --shuffle=*)   # a seed is a word: letters, digits, . _ - (it ends up in a file name and a command line)
+            [[ "${1#--shuffle=}" =~ ^[A-Za-z0-9._-]+$ ]] || { echo "usage: drgnx test --shuffle[=SEED] (SEED: letters, digits, . _ -)" >&2; exit 2; }
+            export DRGNX_TEST_SHUFFLE="${1#--shuffle=}" ;;
+          --find-polluter)
+            shift; polluter=("$@")
+            [ ${#polluter[@]} -gt 0 ] && [[ "${polluter[0]}" != -* ]] || { echo "usage: drgnx test --find-polluter TEST [FILE…]" >&2; exit 2; }
+            break ;;
+          *) echo "usage: drgnx test [--one-process] [--leaks] [--shuffle[=SEED]] | drgnx test [--shuffle=SEED] --find-polluter TEST [FILE…]" >&2; exit 2 ;;
         esac
         shift
       done
-      test_batch ;;
+      if [ ${#polluter[@]} -gt 0 ]; then
+        run_in_tmp test_batch_emacs drgnx-run-ert-find-polluter-batch "${DRGNX_TEST_DIR:-$here/test/unit}" "${polluter[@]}"
+      else
+        test_batch
+      fi ;;
     --install) shift; test_install "$@" ;;
     --tty) test_tty ;;
     --ui) run_in_tmp ui_exec test-ui ;;
@@ -266,7 +281,7 @@ cmd_test() {
     --soak) shift; run_in_tmp ui_exec test-soak "${1:-30}" ;;
     --container) shift; test_container "$@" ;;
     --podman) shift; DRGNX_CONTAINER=podman test_container "$@" ;;
-    *) echo "usage: drgnx test [--one-process] [--leaks] | drgnx test [--ui | --tty | --scenario [--config C] | --bench | --perf [--audit] | --soak [MIN] | --container [--ui | --tty [--fedora 44|45]] | --install [NAME…]]" >&2; exit 2 ;;
+    *) echo "usage: drgnx test [--one-process] [--leaks] [--shuffle[=SEED]] | drgnx test [--shuffle=SEED] --find-polluter TEST [FILE…] | drgnx test [--ui | --tty | --scenario [--config C] | --bench | --perf [--audit] | --soak [MIN] | --container [--ui | --tty [--fedora 44|45]] | --install [NAME…]]" >&2; exit 2 ;;
   esac
 }
 
@@ -505,10 +520,13 @@ usage: drgnx PATH…             open folders and files in drgnx, like code . (d
        drgnx build             byte-compile drgnx (core, wb, modules); native compilation follows on load
        drgnx doctor [--json] [--dev]
                                is this machine ready for drgnx? (--dev: also the tools to develop it)
-       drgnx test [--one-process] [--leaks]
+       drgnx test [--one-process] [--leaks] [--shuffle[=SEED]]
                                batch tests, each test file in an Emacs of its own
                                (--one-process: all in one Emacs, to find a leak across files;
-                               --leaks: the leak census, which names each leak's test and source file)
+                               --leaks: the leak census, which names each leak's test and source file;
+                               --shuffle: each file's tests in a random order, the seed printed and kept)
+       drgnx test [--shuffle=SEED] --find-polluter TEST [FILE…]
+                               which test before TEST makes it fail? (halves them, in one Emacs per run)
        drgnx test --ui         GUI tests in a headless session (mutter)
        drgnx test --tty        terminal tests: Emacs in private tmux servers (needs tmux; docs/develop/harness.md)
        drgnx test --bench      the workbench vs treemacs and ibuffer, timed in a GUI session
