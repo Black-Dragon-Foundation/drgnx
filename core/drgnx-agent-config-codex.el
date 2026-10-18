@@ -8,12 +8,14 @@
 ;; Where things live (checked against codex 0.163.0):
 ;; - User settings: CODEX_HOME/config.toml (CODEX_HOME, else ~/.codex).  Project settings: ROOT/.codex/config.toml and
 ;;   ROOT/.codex/hooks.json, which Codex reads only when the project is trusted (`[projects."ROOT"]' with
-;;   `trust_level = "trusted"' in the user's config.toml); an untrusted project's files are not read here, only noted.
+;;   `trust_level = "trusted"' in the user's config.toml); an untrusted project's files are still read and shown (items carry :inactive and a note says why), because trust
+;;   gates the effect, not the display.
 ;; - MCP servers: `[mcp_servers.NAME]' with `command', `args', `env' (stdio) or `url', `bearer_token_env_var',
 ;;   `http_headers', `env_http_headers' (streamable HTTP; `sse' does not exist), and `enabled', `startup_timeout_sec',
 ;;   `enabled_tools' and more, which drgnx keeps when it edits a server.  `http_headers' (literal values) and
-;;   `env_http_headers' (header -> the NAME of an environment variable) both go into the spec's :headers, so the
-;;   secret walk sees them; :env-headers names the ones that came from the environment.
+;;   `env_http_headers' (header -> the NAME of an environment variable) are kept apart: :headers holds the literal
+;;   values (secrets), :env-headers the header names and :env-header-vars the variable names in the same order (names,
+;;   not secrets, so they show as they are; a value that cannot be a variable name is also put in :headers, masked).
 ;; - Hooks: CODEX_HOME/hooks.json and ROOT/.codex/hooks.json, shaped like Claude Code's (`hooks' -> event -> groups with
 ;;   `matcher' and `hooks'); also inline `[[hooks.EVENT]]' tables in config.toml, shown read-only.
 ;; - Skills: SKILL.md files under ~/.agents/skills and ROOT/.agents/skills; off by an `[[skills.config]]' entry of the
@@ -35,6 +37,9 @@
 (require 'drgnx-agent-config)
 (require 'drgnx-toml)
 (require 'drgnx-agent-config-claude)
+
+(defconst drgnx-agent-config-codex--ignored "Codex ignores it until the project is trusted"
+  "Why the items of an untrusted project do nothing.")
 
 (defvar drgnx-agent-config-codex--texts nil
   "While reading: file name -> its text (or nil), for the line numbers of the items.")
@@ -169,8 +174,10 @@
             :args (drgnx-agent-config-claude--strings (funcall get "args"))
             :env (drgnx-agent-config-claude--string-alist (funcall get "env"))
             :url url
-            :headers (append literal from-env)
+            :headers (append literal
+                             (cl-remove-if (lambda (p) (string-match-p "\\`[A-Za-z_][A-Za-z0-9_]*\\'" (cdr p))) from-env))
             :env-headers (mapcar #'car from-env)
+            :env-header-vars (mapcar #'cdr from-env)
             :bearer-env (drgnx-agent-config-claude--str (funcall get "bearer_token_env_var"))))))
 
 (defun drgnx-agent-config-codex--server-items (parsed from file)
@@ -294,19 +301,21 @@ BILLING is `subscription' or `openrouter'.  :key-where says where the key is kep
       (dolist (scope (if root '(user project) '(user)))
         (let* ((config (drgnx-agent-config-codex--config-file scope root))
                (hooks (drgnx-agent-config-codex--hooks-file scope root))
-               (read-p (or (eq scope 'user) trusted)))
-          (if (not read-p)
-              (dolist (file (list config hooks))
-                (when (file-regular-p file)
-                  (push (format "%s: Codex ignores it until the project is trusted" file) notes)))
-            (let ((parsed (drgnx-agent-config-codex--load-toml config)))
-              (when (eq scope 'user) (setq user-config parsed))
-              (add (drgnx-agent-config-codex--server-items parsed scope config))
-              (add (drgnx-agent-config-codex--hook-items
-                    (drgnx-agent-config-claude--get (drgnx-agent-config-codex--load-json hooks) "hooks")
-                    scope hooks nil))
-              (add (drgnx-agent-config-codex--hook-items
-                    (drgnx-agent-config-codex--table parsed "hooks") scope config t))))))
+               (ignored (and (eq scope 'project) (not trusted)))
+               (parsed (drgnx-agent-config-codex--load-toml config))
+               (new (append (drgnx-agent-config-codex--server-items parsed scope config)
+                            (drgnx-agent-config-codex--hook-items
+                             (drgnx-agent-config-claude--get (drgnx-agent-config-codex--load-json hooks) "hooks")
+                             scope hooks nil)
+                            (drgnx-agent-config-codex--hook-items
+                             (drgnx-agent-config-codex--table parsed "hooks") scope config t))))
+          (when (eq scope 'user) (setq user-config parsed))
+          (when ignored
+            (dolist (item new) (plist-put item :inactive drgnx-agent-config-codex--ignored))
+            (dolist (file (list config hooks))
+              (when (file-regular-p file)
+                (push (format "%s: %s" file drgnx-agent-config-codex--ignored) notes))))
+          (add new)))
       ;; skills
       (let ((entries (drgnx-agent-config-codex--skill-entries user-config)))
         (dolist (scope (if root '(user project) '(user)))
@@ -417,10 +426,13 @@ drgnx does not model.  Signals when SPEC is not a server Codex can run."
        (unless (drgnx-agent-config-codex--texts-p (plist-get spec :headers)) (error "A header value must be text"))
        (unless (or (null (plist-get spec :bearer-env)) (stringp (plist-get spec :bearer-env)))
          (error "The bearer token variable must be a name"))
+       (unless (and (cl-every #'stringp (plist-get spec :env-headers))
+                    (cl-every #'stringp (plist-get spec :env-header-vars))
+                    (= (length (plist-get spec :env-headers)) (length (plist-get spec :env-header-vars))))
+         (error "A header read from the environment needs the name of its variable"))
        (let* ((env-names (plist-get spec :env-headers))
-              (headers (plist-get spec :headers))
-              (literal (cl-remove-if (lambda (p) (member (car p) env-names)) headers))
-              (from-env (cl-remove-if-not (lambda (p) (member (car p) env-names)) headers)))
+              (literal (cl-remove-if (lambda (p) (member (car p) env-names)) (plist-get spec :headers)))
+              (from-env (cl-mapcar #'cons env-names (plist-get spec :env-header-vars))))
          (append (list (cons "url" url))
                  (and (plist-get spec :bearer-env) (list (cons "bearer_token_env_var" (plist-get spec :bearer-env))))
                  (and literal (list (cons "http_headers" literal)))
@@ -434,6 +446,34 @@ drgnx does not model.  Signals when SPEC is not a server Codex can run."
   (if (and (eq scope 'project) (not (drgnx-agent-config-codex-trusted-p root)))
       "; Codex ignores it until the project is trusted"
     ""))
+
+(defun drgnx-agent-config-codex--set-enabled (text name enabled)
+  "TEXT with the `enabled' key of `[mcp_servers.NAME]' set to ENABLED, as a change of that one key: a missing key is
+added under the header (switching off) or left missing (switching on), a `true' or `false' there changes its word
+only.  Comments, quotes and spacing stay.  Returns nil when the table is not shaped so (no plain header, `enabled'
+written some other way): the caller then rebuilds the table."
+  (when-let* ((region (drgnx-toml-table-region text (list "mcp_servers" name)))
+              (beg (car region))
+              (own (substring text beg (cdr region)))
+              (quoted (regexp-quote name))
+              ((string-match (format "\\`[ \t]*\\[[ \t]*mcp_servers[ \t]*\\.[ \t]*\\(?:%s\\|\"%s\"\\)[ \t]*\\][ \t]*\\(?:#[^\n]*\\)?\r?\n"
+                                     quoted quoted)
+                             own)))
+    (let* ((header-end (match-end 0))
+           (body (substring own header-end))
+           (keys-end (or (string-match "^[ \t]*\\[" body) (length body)))
+           (keys (substring body 0 keys-end))
+           (word (if enabled "true" "false")))
+      (cond
+       ((string-match "^\\([ \t]*enabled[ \t]*=[ \t]*\\)\\(?:true\\|false\\)\\(?:[ \t]*\\(?:#[^\n]*\\)?\\)?\r?$" keys)
+        (let ((start (+ beg header-end (match-end 1))))
+          (concat (substring text 0 start) word
+                  (substring text (+ start (if (string-prefix-p "true" (substring keys (match-end 1))) 4 5))))))
+       ((string-match-p "^[ \t]*enabled\\>" keys) nil)
+       (enabled text)
+       (t (concat (substring text 0 (+ beg header-end))
+                  "enabled = false" (if (string-suffix-p "\r\n" (substring own 0 header-end)) "\r\n" "\n")
+                  (substring text (+ beg header-end))))))))
 
 (defun drgnx-agent-config-codex--write-mcp (op item scope root)
   "Add, edit, remove or switch the MCP server ITEM in SCOPE; returns the result."
@@ -467,11 +507,12 @@ drgnx does not model.  Signals when SPEC is not a server Codex can run."
             (drgnx-toml-set-table text (list "mcp_servers" name) nil))
            ('toggle
             (unless here (error "%s is not in this file" name))
-            (drgnx-toml-set-table
-             text (list "mcp_servers" name)
-             (if (plist-get item :enabled)
-                 (drgnx-agent-config-codex--put-key (cdr here) "enabled" :false)
-               (drgnx-agent-config-codex--drop-keys (cdr here) '("enabled")))))
+            (or (drgnx-agent-config-codex--set-enabled text name (not (plist-get item :enabled)))
+                (drgnx-toml-set-table
+                 text (list "mcp_servers" name)
+                 (if (plist-get item :enabled)
+                     (drgnx-agent-config-codex--put-key (cdr here) "enabled" :false)
+                   (drgnx-agent-config-codex--drop-keys (cdr here) '("enabled"))))))
            (_ (error "No such operation"))))))
     (list :ok t :note (format "Wrote %s%s" file (drgnx-agent-config-codex--untrusted-note scope root)))))
 
@@ -567,7 +608,8 @@ event and matcher keeps its place."
         (error "A hook needs a command")))
     (drgnx-agent-config-claude--modify
      file (lambda (value) (drgnx-agent-config-codex--hooks-update value previous (and (memq op '(add edit)) spec))))
-    (list :ok t :note (format "Wrote %s%s" file (drgnx-agent-config-codex--untrusted-note scope root)))))
+    (list :ok t :note (format "Wrote %s%s; Codex may ask to re-approve changed hooks" file
+                              (drgnx-agent-config-codex--untrusted-note scope root)))))
 
 ;;;; Writing skills
 
@@ -625,10 +667,12 @@ event and matcher keeps its place."
 
 (defun drgnx-agent-config-codex-add-openrouter (model)
   "Write `[model_providers.openrouter]' and `[profiles.openrouter]' (for MODEL) into the user's config.toml.
-Run as `codex --profile openrouter'; the default stays the ChatGPT login.  Keys the two tables hold beyond the ones
-drgnx sets stay.  Returns (:ok t :note STRING) or (:error STRING)."
+Run as `codex --profile openrouter'; the default stays the ChatGPT login.  A provider table that exists keeps
+every key it has (a different `base_url' or `env_key' is the user's, and the note says so); only `wire_api = \"chat\"',
+which 0.163 refuses, becomes `responses'.  The profile gets `model_provider' and `model'.  Returns
+\(:ok t :note STRING) or (:error STRING)."
   (condition-case err
-      (let ((file (drgnx-agent-config-codex--config-file 'user nil)))
+      (let ((file (drgnx-agent-config-codex--config-file 'user nil)) kept chat)
         (drgnx-agent-config-codex--check-model model)
         (drgnx-agent-config-codex--modify-toml
          file
@@ -636,14 +680,25 @@ drgnx sets stay.  Returns (:ok t :note STRING) or (:error STRING)."
            (let* ((parsed (drgnx-toml-parse text))
                   (provider (drgnx-agent-config-codex--table parsed "model_providers" "openrouter"))
                   (profile (drgnx-agent-config-codex--table parsed "profiles" "openrouter")))
+             (setq kept nil chat nil)
              (dolist (pair drgnx-agent-config-codex--openrouter-provider)
-               (setq provider (drgnx-agent-config-codex--put-key provider (car pair) (cdr pair))))
+               (let ((existing (assoc (car pair) provider)))
+                 (cond ((null existing)
+                        (setq provider (drgnx-agent-config-codex--put-key provider (car pair) (cdr pair))))
+                       ((and (equal (car pair) "wire_api") (equal (cdr existing) "chat"))
+                        (setq chat t provider (drgnx-agent-config-codex--put-key provider "wire_api" (cdr pair))))
+                       ((and (member (car pair) '("base_url" "env_key")) (not (equal (cdr existing) (cdr pair))))
+                        (push (car pair) kept)))))
              (setq profile (drgnx-agent-config-codex--put-key profile "model_provider" "openrouter")
                    profile (drgnx-agent-config-codex--put-key profile "model" model))
              (drgnx-toml-set-table
               (drgnx-toml-set-table text '("model_providers" "openrouter") provider)
               '("profiles" "openrouter") profile))))
-        (list :ok t :note (format "Added the OpenRouter route to %s: run it as codex --profile openrouter, with OPENROUTER_API_KEY set in the environment" file)))
+        (list :ok t
+              :note (concat (format "Added the OpenRouter route to %s: run it as codex --profile openrouter, with OPENROUTER_API_KEY set in the environment" file)
+                            (and kept (format ". Kept your own %s in [model_providers.openrouter] (they differ from OpenRouter's)"
+                                              (mapconcat #'identity (nreverse kept) " and ")))
+                            (and chat ". Changed wire_api from chat to responses: Codex 0.163 refuses chat"))))
     (error (list :error (drgnx-agent-config-codex--error-text err nil)))))
 
 ;;;; The generic write

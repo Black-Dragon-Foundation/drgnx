@@ -106,17 +106,17 @@
           (should (plist-get d :enabled))
           (should (equal (plist-get d :spec)
                          '(:type stdio :command "npx" :args ("-y" "docs-mcp") :env (("TOKEN" . "abc12345"))
-                                 :url nil :headers nil :env-headers nil :bearer-env nil))))
+                                 :url nil :headers nil :env-headers nil :env-header-vars nil :bearer-env nil))))
         (let ((r (drgnx-agent-config-codex-test--item items 'mcp "remote")))
           (should (= (plist-get r :line) 11))
           (should (eq (plist-get (plist-get r :spec) :type) 'http))
-          ;; both header tables are in :headers, so the secret walk sees them
-          (should (equal (plist-get (plist-get r :spec) :headers)
-                         '(("X-Api-Key" . "hunter2hunter2") ("X-Org" . "ORG_ENV"))))
+          ;; literal headers are secrets; the headers read from the environment are only names
+          (should (equal (plist-get (plist-get r :spec) :headers) '(("X-Api-Key" . "hunter2hunter2"))))
           (should (equal (plist-get (plist-get r :spec) :env-headers) '("X-Org")))
+          (should (equal (plist-get (plist-get r :spec) :env-header-vars) '("ORG_ENV")))
           (should (equal (plist-get (plist-get r :spec) :bearer-env) "REMOTE_TOKEN"))
           (should (member "hunter2hunter2" (drgnx-agent-config-secrets (plist-get r :spec))))
-          (should (member "ORG_ENV" (drgnx-agent-config-secrets (plist-get r :spec)))))
+          (should-not (member "ORG_ENV" (drgnx-agent-config-secrets (plist-get r :spec)))))
         (let ((p (drgnx-agent-config-codex-test--item items 'mcp "proj")))
           (should (eq (plist-get p :from) 'project))
           (should (equal (plist-get p :file) (expand-file-name ".codex/config.toml" root))))
@@ -135,7 +135,7 @@
         (let ((items (plist-get (drgnx-agent-config-read 'codex nil) :items)))
           (should (equal (drgnx-agent-config-codex-test--names items 'mcp) '("docs" "remote"))))))))
 
-(ert-deftest drgnx-agent-config-codex/untrusted-project-is-noted-not-read ()
+(ert-deftest drgnx-agent-config-codex/untrusted-project-is-shown-inactive ()
   (drgnx-agent-config-test-env
     (drgnx-agent-config-codex-test--put (drgnx-agent-config-codex-test--config) "model = \"gpt-5\"\n")
     (let ((pconfig (expand-file-name ".codex/config.toml" root))
@@ -145,21 +145,35 @@
        phooks "{\"hooks\": {\"Stop\": [{\"hooks\": [{\"type\": \"command\", \"command\": \"echo stop\"}]}]}}")
       (should-not (drgnx-agent-config-codex-trusted-p root))
       (let ((read (drgnx-agent-config-read 'codex root)))
-        (should-not (plist-get read :items))
+        (should (equal (mapcar (lambda (i) (plist-get i :name)) (plist-get read :items)) '("proj" "Stop")))
+        (dolist (i (plist-get read :items))
+          (should (equal (plist-get i :inactive) "Codex ignores it until the project is trusted"))
+          (should-not (plist-get i :readonly)))
         (should-not (plist-get read :problems))
         (should (cl-some (lambda (n) (and (string-search pconfig n)
                                           (string-search "Codex ignores it until the project is trusted" n)))
                          (plist-get read :notes))))
-      ;; an unparsable file of an untrusted project is not read, so it is not a problem either
+      ;; an unparsable file of an untrusted project is a problem like any other
       (drgnx-agent-config-codex-test--put pconfig "[broken\n")
-      (should-not (plist-get (drgnx-agent-config-read 'codex root) :problems))
+      (should (equal (mapcar #'car (plist-get (drgnx-agent-config-read 'codex root) :problems)) (list pconfig)))
       ;; trusted: read
       (drgnx-agent-config-codex-test--put pconfig "[mcp_servers.proj]\ncommand = \"proj-cmd\"\n")
       (drgnx-agent-config-codex-test--trust root)
       (should (drgnx-agent-config-codex-trusted-p root))
       (let ((read (drgnx-agent-config-read 'codex root)))
         (should (equal (mapcar (lambda (i) (plist-get i :name)) (plist-get read :items)) '("proj" "Stop")))
+        (should-not (cl-some (lambda (i) (plist-get i :inactive)) (plist-get read :items)))
         (should-not (plist-get read :notes))))))
+
+(ert-deftest drgnx-agent-config-codex/a-project-server-written-untrusted-does-not-vanish ()
+  (drgnx-agent-config-test-env
+    (should (plist-get (drgnx-agent-config-codex-test--write
+                        'add (drgnx-agent-config-codex-test--mcp "p" '(:type stdio :command "x")) 'project root)
+                       :ok))
+    (let ((item (drgnx-agent-config-codex-test--item (plist-get (drgnx-agent-config-read 'codex root) :items) 'mcp "p")))
+      (should item)
+      (should (plist-get item :inactive))
+      (should (plist-get (drgnx-agent-config-codex-test--write 'remove item 'project root) :ok)))))
 
 (ert-deftest drgnx-agent-config-codex/trust-is-the-trusted-level-of-this-project ()
   (drgnx-agent-config-test-env
@@ -228,8 +242,9 @@
         (should (plist-get (drgnx-agent-config-codex-test--write
                             'add (drgnx-agent-config-codex-test--mcp
                                   "web" '(:type http :url "https://example.com/mcp"
-                                                :headers (("X-Key" . "k1k1k1k1") ("X-Org" . "ORG_ENV"))
-                                                :env-headers ("X-Org") :bearer-env "WEB_TOKEN"))
+                                                :headers (("X-Key" . "k1k1k1k1"))
+                                                :env-headers ("X-Org") :env-header-vars ("ORG_ENV")
+                                                :bearer-env "WEB_TOKEN"))
                             'user root)
                            :ok))
         (let ((web (cdr (assoc "web" (cdr (assoc "mcp_servers" (drgnx-toml-parse (drgnx-agent-config-codex-test--text config))))))))
@@ -333,6 +348,32 @@
                           (plist-get (drgnx-agent-config-read 'codex root) :items) 'mcp "a")
                          :enabled)))))
 
+(ert-deftest drgnx-agent-config-codex/mcp-toggle-changes-only-the-enabled-key ()
+  (drgnx-agent-config-test-env
+    (let* ((config (drgnx-agent-config-codex-test--config))
+           (text (concat "# top\n[mcp_servers.a]  # the a server\ncommand = 'c'   # single quoted\n"
+                         "args = [ \"x\",   \"y\" ]\nenv = { B = \"1\" }   # env\n\n[mcp_servers.a.extra]\nk = 1\n\n[tui]\nz = 2\n"))
+           (item (lambda (enabled) (list :kind 'codex :section 'mcp :name "a" :enabled enabled
+                                         :spec '(:type stdio :command "c")))))
+      (drgnx-agent-config-codex-test--put config text)
+      ;; off: one line is added under the header, nothing else moves
+      (should (plist-get (drgnx-agent-config-codex-test--write 'toggle (funcall item t) 'user root) :ok))
+      (let ((off (drgnx-agent-config-codex-test--text config)))
+        (should (equal off (replace-regexp-in-string "the a server\n" "the a server\nenabled = false\n" text t t)))
+        ;; on: only the value changes
+        (should (plist-get (drgnx-agent-config-codex-test--write 'toggle (funcall item nil) 'user root) :ok))
+        (should (equal (drgnx-agent-config-codex-test--text config)
+                       (replace-regexp-in-string "enabled = false" "enabled = true" off t t))))
+      ;; a key that is there with a comment after it: just the word changes
+      (drgnx-agent-config-codex-test--put config "[mcp_servers.a]\ncommand = \"c\"\nenabled   =   true   # yes\n")
+      (drgnx-agent-config-codex-test--write 'toggle (funcall item t) 'user root)
+      (should (equal (drgnx-agent-config-codex-test--text config)
+                     "[mcp_servers.a]\ncommand = \"c\"\nenabled   =   false   # yes\n"))
+      ;; CRLF files stay CRLF
+      (drgnx-agent-config-codex-test--put config "[mcp_servers.a]\r\ncommand = \"c\"\r\n")
+      (drgnx-agent-config-codex-test--write 'toggle (funcall item t) 'user root)
+      (should (equal (drgnx-agent-config-read-text config) "[mcp_servers.a]\r\nenabled = false\r\ncommand = \"c\"\r\n")))))
+
 (ert-deftest drgnx-agent-config-codex/unparsable-toml-never-written ()
   (drgnx-agent-config-test-env
     (let* ((config (drgnx-agent-config-codex-test--config))
@@ -359,6 +400,39 @@
                                   :error)))
       (should-not (file-exists-p (concat config ".drgnx-bak"))))))
 
+(ert-deftest drgnx-agent-config-codex/a-file-changed-meanwhile-is-read-again-once ()
+  (drgnx-agent-config-test-env
+    (let* ((config (drgnx-agent-config-codex-test--config))
+           (calls 0)
+           (limit 1)
+           (meddle (lambda (orig file &rest args)
+                     (when (and (equal (file-truename file) (file-truename config)) (<= (setq calls (1+ calls)) limit))
+                       (drgnx-agent-config-codex-test--put
+                        config (format "# other program, change %d\n[mcp_servers.theirs]\ncommand = \"t\"\n" calls)))
+                     (apply orig file args))))
+      (drgnx-agent-config-codex-test--put config "[mcp_servers.a]\ncommand = \"c\"\n")
+      (advice-add 'drgnx-agent-config-write-text :around meddle)
+      (unwind-protect
+          (progn
+            ;; one change: the second try works on the new content
+            (let ((r (drgnx-agent-config-codex-test--write
+                      'add (drgnx-agent-config-codex-test--mcp "b" '(:type stdio :command "x")) 'user root)))
+              (should (plist-get r :ok))
+              (should (= calls 2))
+              (let ((text (drgnx-agent-config-codex-test--text config)))
+                (should (string-search "# other program, change 1" text))
+                (should (string-search "[mcp_servers.theirs]" text))
+                (should (string-search "[mcp_servers.b]" text))))
+            ;; two changes: refused, and what the other program wrote stays
+            (setq calls 0 limit 2)
+            (let ((r (drgnx-agent-config-codex-test--write
+                      'add (drgnx-agent-config-codex-test--mcp "c2" '(:type stdio :command "x")) 'user root)))
+              (should (string-search "changed by another program" (or (plist-get r :error) "")))
+              (should (= calls 2))
+              (should (equal (drgnx-agent-config-codex-test--text config)
+                             "# other program, change 2\n[mcp_servers.theirs]\ncommand = \"t\"\n"))))
+        (advice-remove 'drgnx-agent-config-write-text meddle)))))
+
 (ert-deftest drgnx-agent-config-codex/errors-never-carry-the-config-data ()
   (drgnx-agent-config-test-env
     (drgnx-agent-config-codex-test--put (drgnx-agent-config-codex-test--config) "model = \"x\"\n")
@@ -370,7 +444,44 @@
     (let ((r (drgnx-agent-config-codex-test--write
               'add (drgnx-agent-config-codex-test--mcp "b" '(:type stdio :command "xx-supersecret-9" :env (("K" . ?z)))) 'user root)))
       (should (plist-get r :error))
-      (should-not (string-search "supersecret" (plist-get r :error))))))
+      (should-not (string-search "supersecret" (plist-get r :error))))
+    ;; headers: a value that is not text, and a header read from the environment without its variable
+    (let ((r (drgnx-agent-config-codex-test--write
+              'add (drgnx-agent-config-codex-test--mcp
+                    "h" '(:type http :url "https://example.test/m" :headers (("Authorization" . "Bearer sk-hhhhsecret12345") ("X" . 7))))
+              'user root)))
+      (should (plist-get r :error))
+      (should-not (string-search "hhhhsecret" (plist-get r :error))))
+    (let ((r (drgnx-agent-config-codex-test--write
+              'add (drgnx-agent-config-codex-test--mcp
+                    "h" '(:type http :url "https://example.test/m" :headers (("Authorization" . "Bearer sk-hhhhsecret12345"))
+                                :env-headers ("X-Org")))
+              'user root)))
+      (should (plist-get r :error))
+      (should-not (string-search "hhhhsecret" (plist-get r :error))))))
+
+(ert-deftest drgnx-agent-config-codex/env-header-names-are-not-secrets-but-values-are ()
+  (drgnx-agent-config-test-env
+    (drgnx-agent-config-codex-test--put
+     (drgnx-agent-config-codex-test--config)
+     (concat "[mcp_servers.r]\nurl = \"https://example.com/mcp\"\n"
+             "http_headers = { \"X-Real\" = \"literalvalue99\" }\n"
+             "env_http_headers = { \"X-Api-Key\" = \"MY_API_KEY\", \"X-Wrong\" = \"sk-abcdefghijklmnopqrstuvwx\" }\n"))
+    (let* ((item (drgnx-agent-config-codex-test--item (plist-get (drgnx-agent-config-read 'codex root) :items) 'mcp "r"))
+           (spec (plist-get item :spec))
+           (secrets (drgnx-agent-config-secrets spec)))
+      (should (equal (plist-get spec :env-headers) '("X-Api-Key" "X-Wrong")))
+      (should (equal (plist-get spec :env-header-vars) '("MY_API_KEY" "sk-abcdefghijklmnopqrstuvwx")))
+      ;; the variable name shows as it is, even when the header's own name looks secret
+      (should-not (member "MY_API_KEY" secrets))
+      (should (member "literalvalue99" secrets))
+      ;; a value that cannot be a variable name is masked (it was put there by mistake)
+      (should (member "sk-abcdefghijklmnopqrstuvwx" secrets))
+      ;; and it all round-trips
+      (let ((before (drgnx-agent-config-codex-test--text (drgnx-agent-config-codex-test--config))))
+        (should (plist-get (drgnx-agent-config-codex-test--write 'edit item 'user root) :ok))
+        (should (equal (drgnx-toml-parse (drgnx-agent-config-codex-test--text (drgnx-agent-config-codex-test--config)))
+                       (drgnx-toml-parse before)))))))
 
 ;;;; Hooks
 
@@ -401,7 +512,9 @@
            (hook (lambda (cmd &optional timeout)
                    (list :kind 'codex :section 'hook :name "x" :enabled t
                          :spec (list :event "PreToolUse" :matcher "Bash" :command cmd :timeout timeout)))))
-      (should (plist-get (drgnx-agent-config-codex-test--write 'add (funcall hook "echo a" 3) 'user root) :ok))
+      (let ((r (drgnx-agent-config-codex-test--write 'add (funcall hook "echo a" 3) 'user root)))
+        (should (plist-get r :ok))
+        (should (string-search "re-approve" (plist-get r :note))))
       (should (plist-get (drgnx-agent-config-codex-test--write 'add (funcall hook "echo b") 'user root) :ok))
       (let ((items (plist-get (drgnx-agent-config-read 'codex root) :items)))
         (should (equal (mapcar (lambda (i) (plist-get (plist-get i :spec) :command)) items) '("echo a" "echo b"))))
@@ -590,6 +703,31 @@
       ;; a bad model name is refused
       (dolist (bad '("" "a b" "x\ny" "m\"q"))
         (should (plist-get (drgnx-agent-config-codex-add-openrouter bad) :error))))))
+
+(ert-deftest drgnx-agent-config-codex/openrouter-keeps-the-users-url-and-key-name ()
+  (drgnx-agent-config-test-env
+    (let ((config (drgnx-agent-config-codex-test--config)))
+      (drgnx-agent-config-codex-test--put
+       config (concat "[model_providers.openrouter]\nname = \"Mine\"\nbase_url = \"https://proxy.example/v1\"\n"
+                      "env_key = \"MY_OR_KEY\"\nwire_api = \"chat\"\n"))
+      (let ((r (drgnx-agent-config-codex-add-openrouter "openai/gpt-5")))
+        (should (plist-get r :ok))
+        (should (string-search "base_url" (plist-get r :note)))
+        (should (string-search "env_key" (plist-get r :note)))
+        (should (string-search "wire_api" (plist-get r :note)))
+        (should-not (string-search "proxy.example" (plist-get r :note)))
+        (should-not (string-search "MY_OR_KEY" (plist-get r :note))))
+      (let ((provider (cdr (assoc "openrouter" (cdr (assoc "model_providers" (drgnx-toml-parse (drgnx-agent-config-codex-test--text config))))))))
+        (should (equal provider '(("name" . "Mine") ("base_url" . "https://proxy.example/v1")
+                                  ("env_key" . "MY_OR_KEY") ("wire_api" . "responses")))))
+      ;; a wire_api that is not chat stays; nothing to say about the others
+      (drgnx-agent-config-codex-test--put
+       config (concat "[model_providers.openrouter]\nbase_url = \"https://openrouter.ai/api/v1\"\nwire_api = \"other\"\n"))
+      (let ((r (drgnx-agent-config-codex-add-openrouter "openai/gpt-5")))
+        (should-not (string-search "base_url" (plist-get r :note)))
+        (should-not (string-search "wire_api" (plist-get r :note))))
+      (should (equal (cdr (assoc "wire_api" (cdr (assoc "openrouter" (cdr (assoc "model_providers" (drgnx-toml-parse (drgnx-agent-config-codex-test--text config))))))))
+                     "other")))))
 
 (ert-deftest drgnx-agent-config-codex/openrouter-route-in-a-new-file ()
   (drgnx-agent-config-test-env

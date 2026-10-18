@@ -241,10 +241,10 @@ and `-add-openrouter`. Formats checked against codex 0.163.0. Credential files (
 | What | Where |
 | --- | --- |
 | User settings | `CODEX_HOME/config.toml` (`$CODEX_HOME`, else `~/.codex`). |
-| Project settings | `ROOT/.codex/config.toml` and `ROOT/.codex/hooks.json`, read only when `(drgnx-agent-config-codex-trusted-p ROOT)`: the user's config has `[projects."ROOT"]` with `trust_level = "trusted"` for ROOT or its repository root. Otherwise they are not read; `:notes` says "FILE: Codex ignores it until the project is trusted". |
-| MCP servers | `[mcp_servers.NAME]`: `command`/`args`/`env` (stdio), `url`/`bearer_token_env_var`/`http_headers`/`env_http_headers` (streamable HTTP; no `sse`), `enabled`. `http_headers` and `env_http_headers` both land in the spec's `:headers` (so the secret walk sees them); `:env-headers` lists the ones that name an environment variable. |
+| Project settings | `ROOT/.codex/config.toml` and `ROOT/.codex/hooks.json`, read only when `(drgnx-agent-config-codex-trusted-p ROOT)`: the user's config has `[projects."ROOT"]` with `trust_level = "trusted"` for ROOT or its repository root. Otherwise they are still read and shown: each item carries `:inactive "Codex ignores it until the project is trusted"` and `:notes` names the file, because trust gates the effect, not the display (drgnx matches ROOT, its real path and the nearest folder with a `.git`; a git worktree has a `.git` of its own, so only its own path counts here, and whether Codex also honours the main checkout's entry is not verified). |
+| MCP servers | `[mcp_servers.NAME]`: `command`/`args`/`env` (stdio), `url`/`bearer_token_env_var`/`http_headers`/`env_http_headers` (streamable HTTP; no `sse`), `enabled`. `:headers` holds the literal `http_headers` values (secrets, masked); `env_http_headers` give `:env-headers` (header names) and `:env-header-vars` (the variable names, same order): names are not secrets, so the page shows them as "from $NAME" unmasked. A value there that cannot be a variable name is also put in `:headers`, so it is masked. |
 | Hooks | `hooks.json` of the Codex home and of ROOT/.codex (editable, shaped like Claude Code's); inline `[[hooks.EVENT]]` in a config.toml are shown read-only with a note to edit hooks.json. |
-| Skills | `~/.agents/skills`, `ROOT/.agents/skills`; off by a `[[skills.config]]` entry (`path` of the skill's `SKILL.md` or directory, `enabled = false`) in the user's config.toml. |
+| Skills | `~/.agents/skills`, `ROOT/.agents/skills`; off by a `[[skills.config]]` entry (`path` of the skill's `SKILL.md` or directory, `enabled = false`) in the user's config.toml (the state is read from the user's config only, not from a project's). |
 | Rules | `CODEX_HOME/AGENTS.md`, `ROOT/AGENTS.md`. |
 
 Writing: a TOML write parses the file first (one that does not parse, or has a duplicate table, is never written), builds
@@ -252,7 +252,7 @@ the new text with `drgnx-toml-set-table` / `-set-array-entry` (nothing outside t
 a replaced table do not survive: the backup has them), checks it parses, and goes through `-write-text` with what it read
 as EXPECT (one retry when Codex changed the file meanwhile). A server table is rebuilt from the existing one with only the
 modelled keys replaced, so `startup_timeout_sec`, `enabled_tools` and other keys stay; a rename is one write. A hook edit
-keeps the hook object's other members (`statusMessage`, `async`) and its group's. Toggling an MCP server sets `enabled`;
+keeps the hook object's other members (`statusMessage`, `async`) and its group's. Toggling an MCP server changes only its `enabled` key in the text (a word swapped or one line added under the header; comments and value forms stay; a table that is not shaped so is rebuilt);
 toggling a skill adds, changes or removes its `[[skills.config]]` entry (an entry with other keys only has `enabled`
 changed). A project write in an untrusted project works and says Codex ignores it until the project is trusted.
 
@@ -261,7 +261,7 @@ Routes: `(:profile "codex" ... :billing subscription)`, "its own CLI with your C
 `:billing openrouter` and `:launch "codex --profile NAME"`. `(drgnx-agent-config-codex-add-openrouter MODEL)` writes
 `[model_providers.openrouter]` (`name`, `base_url = "https://openrouter.ai/api/v1"`, `env_key = "OPENROUTER_API_KEY"`,
 `wire_api = "responses"`: 0.163 refuses `chat`) and `[profiles.openrouter]` (`model_provider`, `model`) into the user's
-config.toml, keeping other keys of those two tables; the default stays the ChatGPT login. `-openrouter-snippet MODEL` is
+config.toml, keeping other keys of those two tables (a `base_url` or `env_key` that differs from OpenRouter's is the user's: kept, and the note says so; only `wire_api = "chat"` is changed); the default stays the ChatGPT login. `-openrouter-snippet MODEL` is
 the same two tables as text to paste.
 
 ## Doctor (`drgnx-doctor.el`)
