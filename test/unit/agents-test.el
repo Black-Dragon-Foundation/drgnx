@@ -2,6 +2,8 @@
 (require 'ert)
 (require 'drgnx-agents)
 (require 'drgnx-paths)
+(require 'drgnx-timer)
+(load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
 
 (defconst drgnx-agents-test--mock (expand-file-name "test/fixtures/mock-acp.el" drgnx-dir))
 
@@ -270,12 +272,50 @@
 
 (ert-deftest drgnx-agents/stop-answers-pending-writes-too ()
   (let* ((answers nil)
-         (s (drgnx-agents--make :status 'busy :acp-id "x" :reviews (list '(:id 9 :path "/tmp/x" :content "y")))))
+         (s (drgnx-agents--make :status 'busy :acp-id "x" :id "s-writes" :reviews (list '(:id 9 :path "/tmp/x" :content "y")))))
     (cl-letf (((symbol-function 'drgnx-acp-respond) (lambda (_c id _r &optional err) (push (list id err) answers)))
               ((symbol-function 'drgnx-acp-notify) #'ignore))
-      (drgnx-agents-stop s)
-      (should-not (drgnx-agent-session-reviews s))
-      (should (equal (car answers) '(9 (:code -32003 :message "the turn was stopped")))))))
+      (unwind-protect
+          (progn
+            (drgnx-agents-stop s)
+            (should-not (drgnx-agent-session-reviews s))
+            (should (equal (car answers) '(9 (:code -32003 :message "the turn was stopped")))))
+        (drgnx-timer-cancel '(agents-stop . "s-writes"))))))
+
+(ert-deftest drgnx-agents/a-stop-that-is-never-answered-ends-the-turn-then-frees-the-queue ()
+  ;; A-29: these deadlines were raw timers that outlived the test and fired in the next one, on a session with no
+  ;; connection (`wrong-type-argument drgnx-acp-conn nil').  They are keyed layer timers now, and a session whose
+  ;; agent is gone is `exited', not an error.
+  (let ((drgnx-timer-errors nil)
+        (s (drgnx-agents--make :status 'busy :acp-id "x" :id "s-stop" :turn 4 :queue '("later"))))
+    (cl-letf (((symbol-function 'drgnx-acp-notify) #'ignore))
+      (drgnx-test-with-clock ()
+        (drgnx-agents-stop s)
+        (drgnx-agents-stop s)                                ; a second stop replaces the first, never stacks
+        (should (= (length (cl-remove-if-not (lambda (e) (eq (car-safe (car e)) 'agents-stop)) (drgnx-timer-pending))) 1))
+        (drgnx-test-advance 0.8)
+        (should (eq (drgnx-agent-session-status s) 'busy))
+        (drgnx-test-advance 0.2)
+        (should (eq (drgnx-agent-session-status s) 'exited))
+        (should (eql (drgnx-agent-session-draining s) 4))
+        (should (drgnx-timer-active-p '(agents-drain . "s-stop")))
+        (drgnx-test-advance 10)
+        (should-not (drgnx-agent-session-draining s))
+        (should-not (drgnx-timer-active-p '(agents-drain . "s-stop")))
+        (should-not drgnx-timer-errors)))))
+
+(ert-deftest drgnx-agents/a-turn-that-answers-before-the-deadline-keeps-its-session ()
+  (let ((drgnx-timer-errors nil)
+        (s (drgnx-agents--make :status 'busy :acp-id "x" :id "s-late" :turn 4)))
+    (cl-letf (((symbol-function 'drgnx-acp-notify) #'ignore))
+      (drgnx-test-with-clock ()
+        (drgnx-agents-stop s)
+        (setf (drgnx-agent-session-turn s) 5)                ; the stopped turn ended and another began
+        (drgnx-test-advance 1)
+        (should (eq (drgnx-agent-session-status s) 'busy))
+        (should-not (drgnx-agent-session-draining s))
+        (should-not (drgnx-timer-active-p '(agents-drain . "s-late")))
+        (should-not drgnx-timer-errors)))))
 
 (ert-deftest drgnx-agents/a-session-that-was-never-made-is-never-prompted ()
   (let* ((sent nil) (s (drgnx-agents--make :status 'idle :acp-id nil)))

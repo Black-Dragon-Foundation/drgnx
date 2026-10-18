@@ -507,7 +507,15 @@ connection struct.
   `drgnx-acp--watchdog` (CONN PROC) reports an agent that died without its sentinel being called. `drgnx-acp--exited`
   and `drgnx-acp-stop` cancel the key; two connections have two keys. A watchdog that fails stops after
   `drgnx-timer-failure-limit` failures and is named in `drgnx-timer-errors`, instead of failing every half second. The
-  0.05 s tick that reads the last of a dead agent's stderr is a deferral out of a sentinel and stays raw.
+  0.05 s tick that reads the last of a dead agent's stderr is the key `(acp-exit . PROCESS)`
+  (`drgnx-acp--report-exit`, one-shot, :core): the wait for the pipe is in `with-local-quit`, and a failing on-exit
+  handler is recorded in `drgnx-timer-errors` while the stderr process and input buffer are still cleaned up.
+- **Agent sessions.** Stop's two deadlines are the keys `(agents-stop . SESSION-ID)` (0.9 s: an agent that did not
+  answer the cancel has its turn ended anyway) and `(agents-drain . SESSION-ID)` (10 s more: the held messages go
+  if the late answer never came), functions `drgnx-agents--stop-deadline` and `drgnx-agents--drain-deadline`, both
+  :core. A second Stop replaces the pending deadline instead of stacking another. A session with no live agent
+  connection when the deadline ends its turn becomes `exited` (the old raw timer signalled
+  `wrong-type-argument drgnx-acp-conn nil`).
 - **Hub.** `hub-tick` (every 2 s, repeating) keeps its own `with-demoted-errors`: its steps' transient errors (a busy
   `work.db`) never reach the failure limit. `hub-deliver` is `drgnx-timer-soon` 0.1 s: a burst of session changes
   delivers once. `(hub-flush . SESSION-ID)` is `drgnx-timer-soon` 0.05 s: one `agent` flush per session per burst.

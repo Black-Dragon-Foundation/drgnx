@@ -131,17 +131,19 @@ last of its stderr has arrived (never waiting here: this runs in a sentinel).  O
       (dolist (cb cbs)
         (condition-case err (funcall cb (cons nil (list :code -32000 :message "the agent exited")))
           (error (drgnx-acp--note conn "callback error: %s" (error-message-string err))))))
-    (let ((status (process-exit-status proc)))
-      (run-at-time 0.05 nil
-                   (lambda ()
-                     ;; in a timer (not the sentinel): read what is left on the stderr pipe, briefly
-                     (when-let* ((e (drgnx-acp-conn-stderr-process conn)))
-                       (when (process-live-p e) (ignore-errors (accept-process-output e 0.1 nil t))))
-                     (unwind-protect
-                         (when-let* ((h (drgnx-acp-conn-on-exit conn))) (funcall h conn status (drgnx-acp-conn-stderr conn)))
-                       ;; nothing left behind
-                       (when-let* ((e (drgnx-acp-conn-stderr-process conn))) (when (process-live-p e) (delete-process e)))
-                       (when (buffer-live-p (drgnx-acp-conn-input-buffer conn)) (kill-buffer (drgnx-acp-conn-input-buffer conn)))))))))
+    (drgnx-timer-start (cons 'acp-exit proc) 0.05 #'drgnx-acp--report-exit
+                       :args (list conn (process-exit-status proc)) :owner :core)))
+
+(defun drgnx-acp--report-exit (conn status)
+  "Tell CONN's on-exit handler the agent ended with STATUS, once the last of its stderr has arrived.
+Runs in a timer (not the sentinel) because it waits for the stderr pipe; leaves nothing behind
+whatever the handler does."
+  (when-let* ((e (drgnx-acp-conn-stderr-process conn)))
+    (when (process-live-p e) (with-local-quit (ignore-errors (accept-process-output e 0.1 nil t)))))
+  (unwind-protect
+      (when-let* ((h (drgnx-acp-conn-on-exit conn))) (funcall h conn status (drgnx-acp-conn-stderr conn)))
+    (when-let* ((e (drgnx-acp-conn-stderr-process conn))) (when (process-live-p e) (delete-process e)))
+    (when (buffer-live-p (drgnx-acp-conn-input-buffer conn)) (kill-buffer (drgnx-acp-conn-input-buffer conn)))))
 
 (defun drgnx-acp-request (conn method params callback)
   "Send request METHOD with PARAMS; CALLBACK gets (RESULT . ERROR) when the agent answers.  Returns the id."
