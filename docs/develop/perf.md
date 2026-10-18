@@ -92,7 +92,7 @@ several runs, range shown):
 | terminal-typing (`cat` echoing) | 1.3–1.8 ms | 3.5–4.9 ms | 4.0–12.5 ms | none |
 | terminal-output (`seq 1 2000` in a loop, in the panel) | 1.8–2.7 ms | 4.1–6.0 ms | 23–68 ms | 9–10 collections, ~46 ms each, ~460 ms in all |
 
-Budgets (`test/perf/budgets.eld`): terminal-typing p95 6 ms, max 13 ms; terminal-output p95 6 ms, max 50 ms (provisional, below). Typing into
+Budgets (`test/perf/budgets.eld`): terminal-typing p95 7 ms, max 13 ms; terminal-output p95 6 ms, max 50 ms (provisional, below). Typing into
 a terminal costs about what typing into a file does.
 
 **Where the output garbage comes from.** Eat's terminal emulation allocates about 470 bytes for every text segment it
@@ -128,7 +128,7 @@ What remains is an eat output batch of 20 to 60 ms (under load) that a key waits
 timer) made the p95 worse, because each slice redraws the terminal. **terminal-output's max budget is provisional**: 50 ms
 is the ceiling, not a measurement (ten runs per arm, a busy machine, worst 49.4). The failures it can still give come from
 the length of eat's output batches, not from GC (DEFERRED M12e-5-1: throttle or slice eat's output without the redraw cost).
-terminal-typing's p95 is 6 ms: the worst of 16 runs with the module active (1.9 to 6.4, load 3 to 6).
+terminal-typing's p95 is 7 ms: the worst of 16 runs with the module active (1.9 to 6.4, load 3 to 6), rounded up.
 
 ## Tuning (and why)
 
