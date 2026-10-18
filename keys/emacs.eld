@@ -173,6 +173,7 @@
         (terminal-new-eshell :none "in the palette")
         (terminal-copy :none "C-c C-e, then M-w (eat's Emacs mode)")
         (terminal-paste :none "C-y (eat's own)")
+        (shell-reload-environment :none "in the palette")
         (go-quick-open :none "C-x p f (stock)")
         (search-project :none "C-x p g (stock)")
         (search-semantic "C-c s s")

@@ -89,6 +89,34 @@ case "$INSIDE_EMACS" in *eat*) ;; *) export EDITOR=vim ;; esac
 string match -q '*eat*' -- "$INSIDE_EMACS"; or set -gx EDITOR vim
 ```
 
+## Your PATH in drgnx
+
+drgnx started by systemd, launchd or the macOS app gets their environment, not your login shell's: no `~/.local/bin`,
+mise shims or `~/.cargo/bin` on `PATH`. So at every start drgnx asks your login shell once, in the background:
+`$SHELL -l -i -c` printing its environment between two markers (what your rc files or prompt theme print around
+them is ignored). From that it takes:
+
+- `PATH`: your shell's directories first, then those of this Emacs that your shell does not have; `exec-path`
+  follows, so `M-x compile`, language servers and agents find the same programs as your terminal;
+- `MANPATH` and `INFOPATH`;
+- the names in the setting `drgnx-shell-env-extra-names` (set it in your `config.el`), when you want more.
+
+**Never a key.** A provider's key variable (`OPENROUTER_API_KEY`, …) and any name with `KEY`, `TOKEN`, `SECRET`,
+`PASSWORD`, `PASSPHRASE` or `CREDENTIAL` in it is not taken, also when you list it: keys come from the keyring (see
+[AI](ai.md)).
+
+**It never waits on your shell.** The shell's input is closed at once (an rc file that reads input gets nothing),
+and a shell that has not answered after `drgnx-shell-env-timeout` (5 s) is stopped; drgnx then keeps the environment
+it had and says so in one line in `*Messages*`: "drgnx: your login shell's environment was not read (…)". The reason
+never includes the shell's output.
+
+**After you change your rc file**, run **Shell: Reload Environment** (palette): it asks your shell again and says
+which names changed. When `PATH` changed and the [hub](agents.md#the-hub-and-the-gateway) runs, the hub gets the new
+`PATH` too: the agents and jobs it starts from then on find the new programs (running ones keep theirs).
+
+**Turning it off:** `DRGNX_NO_SHELL_ENV=1` in drgnx's environment (tests and CI; the harness sets it). It is also off
+in batch Emacs and on Windows.
+
 ## If your prompt theme drops eat's prompt marks
 
 Eat finds the prompt by marks it adds around `PS1` (zsh, bash) and by the functions `__eat_precmd` and

@@ -173,6 +173,7 @@
         (terminal-new-eshell :none "in the palette")
         (terminal-copy "C-S-c" :map (eat . eat-mode-map) :mac "s-c")
         (terminal-paste "C-S-v" :map (eat . eat-mode-map) :mac "s-v")
+        (shell-reload-environment :none "in the palette")
         (go-quick-open "C-p")
         (search-project :none "C-S-f is View: Search; the palette")
         (search-semantic "C-k C-f")

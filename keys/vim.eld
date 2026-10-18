@@ -174,6 +174,7 @@
         (terminal-new-eshell :none "in the palette")
         (terminal-copy "C-S-c" :map (eat . eat-mode-map) :mac "s-c")
         (terminal-paste "C-S-v" :map (eat . eat-mode-map) :mac "s-v")
+        (shell-reload-environment :none "in the palette")
         (go-quick-open "SPC f p")
         (search-project "SPC s p")
         (search-semantic "SPC s i")

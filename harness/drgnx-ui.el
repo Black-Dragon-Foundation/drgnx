@@ -213,6 +213,7 @@ MONITORS: how many virtual monitors of SIZE (default 1)."
                 ;; no language server per fixture project (12 pyrights in one scenario run); a test that wants
                 ;; one sets this to "" in its session
                 "DRGNX_NO_LANGUAGE_SERVERS=1"
+                "DRGNX_NO_SHELL_ENV=1"     ; the session's PATH, never the login shell's (a test clears it)
                 ;; drgnx's own config and state stay in the run dir: a session never reads the
                 ;; user's ~/.config/drgnx or writes ~/.local/state (XDG_CACHE_HOME stays: font and
                 ;; shader caches would be rebuilt on every start).
