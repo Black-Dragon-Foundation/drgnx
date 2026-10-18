@@ -560,7 +560,8 @@ says logged in when HOME has .logged-in (FAKE_OLD_CLAUDE: an old CLI that has no
   `(let* ((root (file-name-as-directory (make-temp-file "drgnx-claude" t)))
           (bin (concat root "bin/")) (tpl (concat root "tpl/")) (home (concat root "home/")) (calls (concat root "calls"))
           (real-path (getenv "PATH"))
-          (basics (mapcar #'executable-find '("sh" "bash" "env" "cat" "cp" "mkdir" "sleep" "setsid" "date")))
+          ;; the ones this system has (macOS: no setsid; detached jobs use perl there)
+          (basics (delq nil (mapcar #'executable-find '("sh" "bash" "env" "cat" "cp" "mkdir" "sleep" "setsid" "perl" "date"))))
           (log-line (lambda (name) (format "printf '%%s\\n' \"%s $*\" >> %s\n" name calls)))
           (process-environment (append (list (concat "HOME=" home) (concat "DRGNX_CONFIG_DIR=" root "config")
                                              (concat "XDG_STATE_HOME=" root "state") "DRGNX_JOBS_LAUNCHER=detached"
