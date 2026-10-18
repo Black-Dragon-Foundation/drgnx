@@ -5,6 +5,7 @@
 (require 'ert)
 (require 'drgnx)
 (require 'drgnx-tty-fallback)
+(require 'drgnx-tty-recommend)          ; `drgnx-tty--fallback-hint': the recommendation says the same keys
 (load (expand-file-name "modules/ui/drgnx-tty-frames" drgnx-dir) nil t)
 (load (expand-file-name "modules/ui/drgnx-tty-fallback-layer" drgnx-dir) nil t)
 

@@ -4,6 +4,7 @@
 (require 'ert)
 (require 'cl-lib)
 (require 'drgnx)
+(require 'drgnx-chrome)                 ; `drgnx-chrome-mode' is special when a test binds it
 (load (expand-file-name "modules/ui/drgnx-tty-layout" drgnx-dir) nil t)
 
 (defmacro drgnx-tty-layout-test--running (command &rest body)

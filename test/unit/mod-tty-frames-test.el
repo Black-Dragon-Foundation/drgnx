@@ -373,8 +373,11 @@ types `infocmp' was asked about."
   (should (memq 'drgnx-git-ignored (plist-get (alist-get 'git drgnx-tty-frames-state-faces) :attribute-faces))))
 
 (ert-deftest drgnx-tty-frames/every-face-of-the-state-table-is-defined ()
-  (dolist (lib '(drgnx-git drgnx-chrome drgnx-review drgnx-work-ui))
+  (dolist (lib '(drgnx-git drgnx-chrome))
     (require lib))
+  ;; modules, not on the load path: loaded by file, as their own tests do
+  (dolist (lib '("modules/tools/drgnx-review" "modules/tools/drgnx-work-ui"))
+    (load (expand-file-name lib drgnx-dir) nil t))
   (pcase-dolist (`(,_ . ,spec) drgnx-tty-frames-state-faces)
     (dolist (f (plist-get spec :faces))
       (should (facep f)))))
