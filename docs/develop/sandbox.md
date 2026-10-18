@@ -606,18 +606,20 @@ merged), the next task's snapshot first runs
 `drgnx-job-snapshot-make REPO FOLDER BASE DONE` makes the store, or fetches into it, and then the task's `.git`. It is
 asynchronous, like every step here (separate processes with a deadline, so the hub never waits). DONE gets one of:
 
-- `(:mode snapshot :read nil)`: a copy-on-write copy of the store. On Linux it uses `cp -a --reflink=always` (btrfs,
+- `(:mode snapshot :read nil :start START)`: a copy-on-write copy of the store. On Linux it uses `cp -a --reflink=always` (btrfs,
   XFS). On macOS it uses `cp -c -a` (clonefile, APFS). The store is inside the repository, so the copy is on the same
   filesystem.
-- `(:mode clone :read DIRS)`: the fallback without copy-on-write (tmpfs, ext4, network filesystems, HFS+). It runs
+- `(:mode clone :read DIRS :start START)`: the fallback without copy-on-write (tmpfs, ext4, network filesystems, HFS+). It runs
   `git clone -q --shared --no-checkout --single-branch --no-tags --template= --branch BASE STORE FOLDER`. DIRS is the
   store's `objects`, which the sandbox mounts read-only. Never the user's.
 - `(:error MSG)`: BASE is not a branch name, REPO is not a repository, FOLDER exists and is not empty, or the store
   failed twice.
 
 In both modes, the task's config is the store's whitelist again, with `core.bare false`. Then
-`cat-file -e refs/heads/BASE^{commit}` checks the copy. Nothing is checked out: the sandbox's first step checks out
-`job/ID-N` at BASE in the empty folder.
+`rev-parse --verify -q refs/heads/BASE^{commit}` checks the copy, before any agent has it, and its answer is START:
+the task's start, the commit it forks from (40 or 64 hex digits). The caller keeps START with the task. Its bundles
+and fetches are checked against it, not against BASE's later tip, which moves as other tasks merge. Nothing is
+checked out: the sandbox's first step checks out `job/ID-N` at BASE in the empty folder.
 
 The caller keeps DIRS with the task, in the hub's state, never in the folder. At bind time it checks them against
 `drgnx-job-snapshot-read-dirs REPO BASE`, which is derived from the repository. Once an agent has had a folder, its
@@ -703,15 +705,16 @@ ever runs with the agent's own power, in the agent's own git.
 
 Without a sandbox a step does not run: it ends with `(:error "… no sandbox …")`, never as a plain process. Only a job
 the user let run unsandboxed passes UNSANDBOXED, and its steps then run plainly with the same overrides and
-environment (but the hub's `PATH`).
+environment (but the hub's `PATH`). Such a step starts with `drgnx-sandbox-vc-trusted` let-bound to t, around that
+one process start alone, so the VC guard lets the hub's own step into the task folder. Nothing else binds it.
 
 | Function | What it runs | DONE gets |
 |---|---|---|
 | `drgnx-job-snapshot-checkout FOLDER BRANCH BASE DONE &optional UNSANDBOXED` | inside, FOLDER writable: `git checkout -q -f -B BRANCH refs/heads/BASE` | `t`, `(:error MSG)` |
-| `drgnx-job-snapshot-bundle FOLDER BASE BRANCH OUT DONE &optional UNSANDBOXED` | inside, FOLDER read-only, only OUT writable: `git bundle create -q /run/drgnx/out/task.bundle refs/heads/BASE..refs/heads/BRANCH` | `(:bundle FILE)`, `(:empty)` (no commits), `(:error MSG)` |
+| `drgnx-job-snapshot-bundle FOLDER BASE BRANCH OUT DONE &optional UNSANDBOXED START` | inside, FOLDER read-only, only OUT writable: `git bundle create -q /run/drgnx/out/task.bundle START..refs/heads/BRANCH` (without START, the folder's `refs/heads/BASE`, which the agent can move) | `(:bundle FILE)`, `(:empty)` (no commits), `(:error MSG)` |
 | `drgnx-job-snapshot-fetch REPO BUNDLE BRANCH BASE DONE` | outside, in the trusted REPO only (below) | `(:fetched COMMIT)`, `(:error MSG)` |
 | `drgnx-job-snapshot-review-folder REPO BRANCH FOLDER DONE &optional UNSANDBOXED JOB` | a fresh snapshot of BRANCH, then the checkout inside | `drgnx-job-snapshot-make`'s result, `(:error MSG)` |
-| `drgnx-job-snapshot-refresh-base REPO FOLDER BASE DONE &optional UNSANDBOXED` | a bundle of BASE from REPO, fetched inside, FOLDER writable | `t`, `(:error MSG)` |
+| `drgnx-job-snapshot-refresh-base REPO FOLDER BASE DONE &optional UNSANDBOXED` | a bundle of BASE from REPO, fetched inside, FOLDER writable | `(:refreshed COMMIT)`: the task's new start; `(:error MSG)` |
 
 **OUT** is a directory the hub made, where no agent writes: never inside a session's directory (`s/SID/out` is
 refused as a bind source, since a live agent could swap it for a link), but for example inside the job's own
@@ -720,18 +723,23 @@ before each bundle step.
 
 **The bundle is data.** A bundle is a pack and a list of refs. Reading one runs nothing of the agent's: no config, no
 hooks. `drgnx-job-snapshot-fetch` treats it as hostile input and refuses, with the reason:
-1. a BUNDLE that is not there, is a link, or is not a regular file (a FIFO would hang git);
+1. a BUNDLE that is not there, is a link, is not a regular file (a FIFO would hang git), or is larger than
+   `drgnx-job-snapshot-bundle-max` (1 GiB; the checks run outside, without the memory cap);
 2. heads (`git bundle list-heads`) that are anything but one line, `HEX refs/heads/BRANCH`: a second ref (an agent's
    `refs/heads/main`) would otherwise be written into the user's repository;
 3. a bundle `git bundle verify` rejects (a prerequisite the repository does not have);
 4. an object `fsckObjects` rejects: the fetch runs with `-c transfer.fsckObjects=true -c fetch.fsckObjects=true`
    (the user's own `fetch.fsckObjects=false` would otherwise win);
-5. a BRANCH that does not descend from REPO's BASE (`merge-base --is-ancestor`): its earlier value is put back
-   (`update-ref`), or it is deleted when it was new.
+5. a commit that does not descend from BASE (`merge-base --is-ancestor`). BASE is the task's START, a commit the hub
+   recorded. A branch name also works, but it means that branch's tip now: once another task merged into `job/ID`,
+   a parallel task's work no longer descends from it, though it merges cleanly.
 
-The fetch itself is `git -C REPO fetch -q --no-tags --no-write-fetch-head --no-recurse-submodules BUNDLE
-+refs/heads/BRANCH:refs/heads/BRANCH`, with the hub's overrides. `refs/heads/job/ID-N` in the main repository is
-written only by the hub, and the reviewer, the clash scan and the merge read it there.
+The fetch brings the objects alone, without writing a ref: `git -C REPO fetch -q --no-tags --no-write-fetch-head
+--no-recurse-submodules --no-auto-gc BUNDLE refs/heads/BRANCH`, with the hub's overrides. Only once every check passed
+does `update-ref refs/heads/BRANCH COMMIT OLD` write the branch, and only if it is still OLD (empty: it must not
+exist). A refused commit is never on the branch, so nothing needs putting back. A branch that cannot be read (not
+"missing", but a git failure) is a failure. `refs/heads/job/ID-N` in the main repository is written only by the hub,
+and the reviewer, the clash scan and the merge read it there.
 
 **The reviewer** gets a fresh snapshot (`drgnx-job-snapshot-review-folder`): a store of `job/ID-N` made from the main
 repository after the fetch (`job~ID-N.base.git`), a copy of it, and `job/ID-N` checked out inside. It holds only what
@@ -742,7 +750,8 @@ passed through the bundle, objects and one ref: none of the implementer's config
 `refs/heads/job/ID` from the main repository into a private directory of its own,
 `<repo>/.claude/worktrees/.drgnx-base-XXXX/`, and a step inside the sandbox fetches it into the folder's repository
 (the directory read-only). The directory is removed afterwards. The bundle holds all of `job/ID`'s history: the same
-objects as the job's store.
+objects as the job's store. DONE gets `(:refreshed COMMIT)`, the commit read from the hub's own bundle. That is the
+task's new START: its later bundles and fetches are checked against it.
 
 **Cost** (drgnx's own repository cloned on tmpfs, real bwrap and the memory cap's scope, load about 3; three runs
 each):
@@ -911,7 +920,9 @@ temporary file and rename, and its gap is below.
 
 ### After each turn
 
-`(drgnx-job-worktree-check REPO ID N BASE DONE)` asks whether `job/ID-N/work` still descends from BASE. It runs two
+`(drgnx-job-worktree-check REPO ID N BASE DONE)` asks whether `job/ID-N/work` still descends from BASE: the task's
+start (a commit the hub recorded, 40 or 64 hex digits) or a branch. Check a running task against its start. A
+branch's tip moves as other tasks merge, and a parallel task's branch does not descend from it. It runs two
 gits in the main repository, whose config the agent cannot write, each as a process of its own with the deadline
 `drgnx-job-worktree-timeout`:
 1. `for-each-ref` reads the branch. Its `%(symref)` must be empty and its object name 40 or 64 hex digits. A link in

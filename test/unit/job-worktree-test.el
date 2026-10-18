@@ -233,6 +233,23 @@ source is PATH or one of its parents, or nil when none is."
     ;; no branch at all
     (should (equal (drgnx-job-worktree-test--check repo "7" 2 "job/7") '(nil nil)))))
 
+(ert-deftest drgnx-job-worktree/check-against-the-start-survives-a-moved-base ()
+  "Another task merged and job/7 moved on: the check against the task's own start (a commit) still passes, where
+the one against job/7's tip would not.  A start that is no commit fails the check."
+  (drgnx-job-worktree-test--with
+    (should (equal (drgnx-job-worktree-test--add repo folder "7" 1 "job/7") '(:name "7-1")))
+    (let ((start (drgnx-job-worktree-test--git repo "rev-parse" "job/7")))
+      (write-region "mine\n" nil (concat folder "/MINE") nil 'silent)
+      (drgnx-job-worktree-test--git folder "add" "MINE")
+      (drgnx-job-worktree-test--git folder "commit" "-q" "-m" "mine")
+      ;; another task's merge: job/7 moves past the start
+      (let ((other (drgnx-job-worktree-test--git repo "commit-tree" "job/7^{tree}" "-p" "job/7" "-m" "other")))
+        (drgnx-job-worktree-test--git repo "update-ref" "refs/heads/job/7" other))
+      (let ((tip (drgnx-job-worktree-test--git repo "rev-parse" "job/7-1/work")))
+        (should (equal (drgnx-job-worktree-test--check repo "7" 1 "job/7") '(nil nil)))
+        (should (equal (drgnx-job-worktree-test--check repo "7" 1 start) (list t tip)))
+        (should-not (eq t (car (drgnx-job-worktree-test--check repo "7" 1 (make-string 40 ?0)))))))))
+
 (ert-deftest drgnx-job-worktree/check-never-blocks ()
   "The objects are the agent's: a FIFO planted as the tip's loose object blocks git in open(), never the hub."
   (drgnx-job-worktree-test--with

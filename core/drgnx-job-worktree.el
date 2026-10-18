@@ -355,8 +355,9 @@ has exited, it leaves the state clean."
           (error nil))))))
 
 (defun drgnx-job-worktree-check (repo id n base done &optional job)
-  "Does task N of job ID's branch still descend from BASE (a branch)?  Asynchronous: DONE is called with two
-arguments, RESULT and TIP:
+  "Does task N of job ID's branch still descend from BASE?  BASE is the task's start, the commit its worktree was
+made at (40 or 64 hex digits, recorded by the hub), or a branch, whose tip moves as other tasks merge: check a
+running task against its start.  Asynchronous: DONE is called with two arguments, RESULT and TIP:
   t, TIP     it does; TIP is the commit checked (40 or 64 hex digits): merge TIP, never the branch's name;
   nil, nil   it does not: rewound, replaced, a symbolic ref or a link, not an object name, or no branch;
   (:error MSG), nil   git failed or took longer than `drgnx-job-worktree-timeout': a failure, never a pass.
@@ -391,7 +392,7 @@ is not called."
                (let ((tip (cdr r)))
                  (condition-case e
                      (drgnx-job-worktree--run
-                      repo (funcall git-argv "merge-base" "--is-ancestor" (concat "refs/heads/" base) tip) job
+                      repo (funcall git-argv "merge-base" "--is-ancestor" (drgnx-job-snapshot--rev base) tip) job
                       (lambda (m)
                         (pcase (car m)
                           (0 (funcall done t tip))
