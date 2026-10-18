@@ -38,7 +38,7 @@
 (declare-function drgnx-agent-session-reviews "drgnx-agents")
 (declare-function drgnx-agents-sessions "drgnx-agents")
 (declare-function drgnx-hub-call "drgnx-hub")
-(declare-function drgnx-job-ui-status "drgnx-job-ui")
+(declare-function drgnx-job-ui-needs-you "drgnx-job-ui")
 (declare-function drgnx-agents-ui-view "drgnx-agents-ui")
 (declare-function flymake--mode-line-counter "flymake")
 (declare-function flymake-running-backends "flymake")
@@ -806,12 +806,11 @@ changed: drgnx's own segments are worked out once per change of their state, not
     (if (buffer-live-p source) (pop-to-buffer source) (message "drgnx: the last test run has no output to show"))))
 
 (defun drgnx-statusbar--cards-waiting ()
-  "How many things of jobs wait on you: the job badge's count (\" ⚑N\"), 0 when there is none."
-  (let ((b (and (boundp 'drgnx-job-ui--badge) drgnx-job-ui--badge)))
-    (or (and (stringp b) (string-match "[0-9]+" b) (string-to-number (match-string 0 b))) 0)))
+  "How many things of jobs wait on you: C8's one count (`drgnx-job-ui-needs-you'); 0 when it is not known."
+  (or (and (fboundp 'drgnx-job-ui-needs-you) (drgnx-job-ui-needs-you)) 0))
 
 (defun drgnx-statusbar--seg-jobs ()
-  "`◎ 2 jobs' (running, as the hub last said) and `⚑N' when cards of jobs wait on you (the job badge)."
+  "`◎ 2 jobs' (running, as the hub last said) and `⚑N' when cards of jobs wait on you (`drgnx-job-ui-needs-you')."
   (drgnx-statusbar--state-text
    'jobs
    (lambda ()
@@ -1106,8 +1105,8 @@ Click the language in the status bar for it.  A command: it asks; the bar itself
                                   :help "Problems in this file; click to list them")
   (drgnx-statusbar-define-segment 'tests :fn #'drgnx-statusbar--seg-tests :click #'drgnx-statusbar--click-tests
                                   :help "The last test run; click for its output")
-  (drgnx-statusbar-define-segment 'jobs :fn #'drgnx-statusbar--seg-jobs :click 'drgnx-job-ui-status
-                                  :help "Jobs; click for their status")
+  (drgnx-statusbar-define-segment 'jobs :fn #'drgnx-statusbar--seg-jobs :click 'drgnx-cockpit-show-jobs
+                                  :help "Jobs; click for what they need of you")
   (drgnx-statusbar-define-segment 'agents :fn #'drgnx-statusbar--seg-agents :click 'drgnx-agents-ui-view
                                   :help "Agents busy or waiting on you; click for the Agents tab")
   (drgnx-statusbar-define-segment 'modal :fn #'drgnx-statusbar--seg-modal :help "Modal editing state")

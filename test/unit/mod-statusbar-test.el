@@ -9,7 +9,9 @@
 (require 'drgnx-git)
 (load (expand-file-name "modules/core/drgnx-basics" drgnx-dir) nil t)   ; New Untitled
 (load (expand-file-name "modules/ui/drgnx-start" drgnx-dir) nil t)      ; the start page's mode
+(load (expand-file-name "modules/tools/drgnx-job-ui" drgnx-dir) nil t)  ; C8's one count of what needs you
 (defvar drgnx-job-ui--badge)
+(defvar drgnx-job-ui--needs-you)
 (defvar compilation-arguments)
 (defvar flymake-mode)
 (defvar eglot--cached-server)
@@ -909,7 +911,7 @@ Segments a, b, c are defined: their text is A, B, C."
   (drgnx-statusbar-test--with
     (drgnx-statusbar-test--state
       (drgnx-statusbar--define-defaults)
-      (let ((drgnx-job-ui--badge "") (asked 0)
+      (let ((drgnx-job-ui--badge "") (drgnx-job-ui--needs-you nil) (asked 0)
             (answer '(:jobs [(:id "a" :status "running") (:id "b" :status "running") (:id "c" :status "done")])))
         (cl-letf (((symbol-function 'force-mode-line-update) #'ignore)
                   ((symbol-function 'drgnx-hub-call)
@@ -925,8 +927,8 @@ Segments a, b, c are defined: their text is A, B, C."
           (should (equal (drgnx-statusbar-test--seg 'jobs) "◎ 2 jobs"))
           (dotimes (_ 10) (drgnx-statusbar-test--seg 'jobs))
           (should (= asked 1))                            ; redisplay never asks
-          ;; cards waiting (the job badge's count) come after
-          (setq drgnx-job-ui--badge " ⚑3")
+          ;; cards waiting (C8's count, set with the badge) come after
+          (setq drgnx-job-ui--badge " ⚑3" drgnx-job-ui--needs-you 3)
           (should (equal (drgnx-statusbar-test--seg 'jobs) "◎ 2 jobs ⚑3"))
           (setq answer '(:jobs [(:id "a" :status "running") (:id "c" :status "done")]))
           (drgnx-statusbar--hub-event "card" '(:id 1 :job "a"))
@@ -941,9 +943,22 @@ Segments a, b, c are defined: their text is A, B, C."
           (drgnx-statusbar--hub-event "job" '(:id "a"))
           (drgnx-statusbar--refresh-now)
           (should (equal (drgnx-statusbar-test--seg 'jobs) "◎ 1 job ⚑3"))
-          (setq drgnx-job-ui--badge "")
+          (setq drgnx-job-ui--badge "" drgnx-job-ui--needs-you nil)
           (drgnx-statusbar--hub-gone)
           (should-not (drgnx-statusbar-test--seg 'jobs)))))))
+
+(ert-deftest drgnx-statusbar/cards-waiting-reads-the-job-count-not-the-badge ()
+  ;; the jobs segment shows C8's one count (`drgnx-job-ui-needs-you'), never a number read back from the badge's text;
+  ;; a click on it opens What Needs You of every job
+  (drgnx-statusbar-test--with
+    (drgnx-statusbar-test--state
+      (drgnx-statusbar--define-defaults)
+      (let ((drgnx-job-ui--badge " ⚑99") (needs 3))
+        (cl-letf (((symbol-function 'drgnx-job-ui-needs-you) (lambda () needs)))
+          (should (equal (drgnx-statusbar-test--seg 'jobs) "⚑3"))
+          (setq needs nil drgnx-job-ui--badge " ⚑98")      ; the badge's text moves the memo, the count is not known
+          (should-not (drgnx-statusbar-test--seg 'jobs))))
+      (should (eq (plist-get (gethash 'jobs drgnx-statusbar--segments) :click) 'drgnx-cockpit-show-jobs)))))
 
 (ert-deftest drgnx-statusbar/a-test-summary-never-breaks-the-compilation ()
   (drgnx-statusbar-test--with
@@ -1065,7 +1080,7 @@ Segments a, b, c are defined: their text is A, B, C."
     (drgnx-statusbar-test--state
       (drgnx-statusbar--define-defaults)
       (let ((drgnx-statusbar-left '(misc)) (drgnx-statusbar-right nil)
-            (drgnx-job-ui--badge " ⚑2") (mode-line-process nil) (defining-kbd-macro nil)
+            (drgnx-job-ui--badge " ⚑2") (drgnx-job-ui--needs-you 2) (mode-line-process nil) (defining-kbd-macro nil)
             (global-mode-string (list "" '(:eval (drgnx-job-ui--badge-segment)))))
         (cl-letf (((symbol-function 'drgnx-job-ui--badge-segment) (lambda () drgnx-job-ui--badge))
                   ;; a batch Emacs formats every mode-line construct as "": strings and :eval forms, as a frame would

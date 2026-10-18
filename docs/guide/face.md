@@ -125,7 +125,7 @@ Status Bar** (View menu, palette); `drgnx-statusbar-mode` is the switch.
 | `branch` | `⑂ main ↑2 ↓1`: the branch, and how many commits it is ahead of and behind its upstream (a count of 0 is left out) | the repository status |
 | `problems` | `✓` when flymake finds nothing, `◐` while a checker has not reported yet, `● 3` (dimmed) when it finds only notes, else `⚠ 1 2`: the errors, then the warnings, each in its own colour | the problems list |
 | `tests` | `✓ tests 41/41` or `× tests 2 failed`: the last test run | its output |
-| `jobs` | `◎ 2 jobs` while jobs run, and `⚑1` when cards of jobs wait on you | job status |
+| `jobs` | `◎ 2 jobs` while jobs run, and `⚑1` when cards of jobs wait on you | What Needs You, every job's |
 | `agents` | `◎ 1 busy`, and `◐ 1 waiting on you` (in the error colour) when something waits for your answer | the Agents tab |
 | `modal` | the modal-editing state (`NORMAL`, `INSERT` …), when that module is loaded | |
 | `misc` | what stock Emacs shows beside the file: evil's state tag (`<N>`, Vim profile, until drgnx's modal module shows it in `modal`), the last key and command of **Show Keys As I Type** (keycast), a keyboard macro being recorded (`● Rec`), `Narrowed`, `Remote: host`, the buffer's process (`:run`), the function point is in (`which-function-mode`), and what other packages add to `mode-line-misc-info` and `global-mode-string` (the clock, a battery, other modules' marks) without the job badge | |
@@ -171,7 +171,8 @@ linter) redraws the bars a moment later: flymake has no hook for it, so the bar 
 
 **Jobs.** `◎ 2 jobs` counts the jobs the hub says are running (asked when the mode starts or the first hub event
 arrives, then when a job or a card changes — one question at a time, never on redisplay; nothing while there is no
-hub). `⚑1` is the job badge's count of cards and messages waiting on you.
+hub). `⚑1` is the jobs' one count of cards and messages waiting on you (`drgnx-job-ui-needs-you`, the number the
+badge shows too). A click opens What Needs You for every job in the Work cockpit.
 
 **Waiting on you.** The number in `◐ 1 waiting on you` is the sum of `drgnx-statusbar-waiting-functions`: each
 returns how many things wait for you. drgnx counts the agents' permission requests and edits to review; a module of
