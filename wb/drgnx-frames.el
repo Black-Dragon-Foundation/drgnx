@@ -76,20 +76,26 @@ Sorts, never filters: every buffer stays a candidate."
     (dolist (n names) (push n (if (gethash (if (consp n) (car n) n) mine) first rest)))
     (nconc (nreverse first) (nreverse rest))))
 
-(defun drgnx-frames--buffer-table ()
-  "The buffer-name completion table, its candidates shown by `drgnx-frames--order'."
-  (lambda (string predicate action)
-    (if (eq action 'metadata)
-        `(metadata (category . buffer)
-                   (display-sort-function . ,#'drgnx-frames--order)
-                   (cycle-sort-function . ,#'drgnx-frames--order))
-      (complete-with-action action #'internal-complete-buffer string predicate))))
+;; The order rides on the `buffer' completion category: `read-buffer-to-switch' (C-x b) swaps in its own
+;; table, but the category, and so its overrides, stay.
+(defconst drgnx-frames--sort-overrides
+  `((display-sort-function . ,#'drgnx-frames--order) (cycle-sort-function . ,#'drgnx-frames--order))
+  "The `buffer' category's entries the mode adds to `completion-category-overrides'.")
 
-(defun drgnx-frames-read-buffer (prompt &optional def require-match predicate)
-  "`read-buffer-function': like `read-buffer', with this window's buffers listed first."
-  (let ((completion-ignore-case (or read-buffer-completion-ignore-case completion-ignore-case)))
-    (completing-read prompt (drgnx-frames--buffer-table) predicate require-match nil 'buffer-name-history
-                     (if (bufferp def) (buffer-name def) (if (consp def) (car def) def)))))
+(defun drgnx-frames--sort-overrides (on)
+  "Add (ON) or take away (nil) the buffer order in `completion-category-overrides'; a user's own
+`display-sort-function' for the category stays, and so do their other entries."
+  (let* ((entry (assq 'buffer completion-category-overrides)) (rest (cdr entry)))
+    (if on
+        (unless (assq 'display-sort-function rest)
+          (setq completion-category-overrides
+                (cons (cons 'buffer (append drgnx-frames--sort-overrides rest))
+                      (assq-delete-all 'buffer (copy-sequence completion-category-overrides)))))
+      (when (eq (cdr (assq 'display-sort-function rest)) #'drgnx-frames--order)
+        (let ((left (seq-remove (lambda (c) (member c drgnx-frames--sort-overrides)) rest)))
+          (setq completion-category-overrides
+                (if left (cons (cons 'buffer left) (assq-delete-all 'buffer (copy-sequence completion-category-overrides)))
+                  (assq-delete-all 'buffer (copy-sequence completion-category-overrides)))))))))
 
 ;;;; New windows
 
@@ -132,11 +138,11 @@ Sorts, never filters: every buffer stays a candidate."
   "Several windows: the main one, auxiliary ones (editor-only), each with its buffers."
   :global t :group 'drgnx
   (if drgnx-frames-mode
-      (progn (unless read-buffer-function (setq read-buffer-function #'drgnx-frames-read-buffer))   ; a user's own stays
+      (progn (drgnx-frames--sort-overrides t)
              (add-hook 'delete-frame-functions #'drgnx-frames--deleted)
              (add-hook 'drgnx-first-gui-frame-hook #'drgnx-frames-mark-main -10)   ; before the restore
              (drgnx-frames-mark-main))                ; a frame that exists already (not a daemon's terminal)
-    (when (eq read-buffer-function #'drgnx-frames-read-buffer) (setq read-buffer-function nil))
+    (drgnx-frames--sort-overrides nil)
     (remove-hook 'delete-frame-functions #'drgnx-frames--deleted)
     (remove-hook 'drgnx-first-gui-frame-hook #'drgnx-frames-mark-main)))
 

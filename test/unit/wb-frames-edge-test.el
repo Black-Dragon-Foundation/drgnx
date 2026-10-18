@@ -57,38 +57,73 @@ frames: `main' (w1, tabs a b), `aux' (w2, tabs c b), `hidden' (w3, tabs d; not a
     (should (equal (drgnx-chrome-tabs w1) (list a)))
     (should (equal (drgnx-chrome-tabs w2) (list c c)))))
 
-(ert-deftest drgnx-frames/switch-buffer-lists-this-windows-buffers-first-and-drops-none ()
-  ;; DEFERRED M3e-2: C-x b is sorted, not filtered: the window's buffers first, every other buffer after,
-  ;; each part in the order Emacs gave.
+;; DEFERRED M3e-2: C-x b is sorted, not filtered: the window's buffers first, every other buffer after,
+;; each part in the order Emacs gave.  The order rides on the `buffer' completion category, which
+;; `read-buffer-to-switch' (C-x b) keeps when it swaps in its own table.
+(ert-deftest drgnx-frames/order-puts-this-windows-buffers-first-and-drops-none ()
   (let ((mine (generate-new-buffer "frames-mine")) (other (generate-new-buffer "frames-other"))
         (also (generate-new-buffer "frames-also")))
     (unwind-protect
         (cl-letf (((symbol-function 'drgnx-frame-buffers) (lambda (&optional _) (list also mine))))
           (should (equal (drgnx-frames--order (list "frames-other" "frames-mine" "frames-zzz" "frames-also"))
-                         '("frames-mine" "frames-also" "frames-other" "frames-zzz")))
-          (let* ((table (drgnx-frames--buffer-table))
-                 (meta (completion-metadata "" table nil)))
-            (should (eq (completion-metadata-get meta 'display-sort-function) #'drgnx-frames--order))
-            (should (eq (completion-metadata-get meta 'category) 'buffer))
-            ;; nothing is filtered out
-            (dolist (b (list mine other also)) (should (member (buffer-name b) (all-completions "" table))))
-            (should (equal (all-completions "frames-m" table) '("frames-mine")))))
+                         '("frames-mine" "frames-also" "frames-other" "frames-zzz"))))
       (mapc #'kill-buffer (list mine other also)))))
 
-(ert-deftest drgnx-frames/the-mode-sets-read-buffer-function-unless-the-user-has-one ()
+(defun drgnx-frames-edge--switch-metadata (&optional fn)
+  "The `display-sort-function' and category the minibuffer of `read-buffer-to-switch' has, and its candidates."
+  (let (seen (executing-kbd-macro t))     ; else batch reads the minibuffer from stdin and runs no setup hook
+    (catch 'drgnx-frames-edge-done
+      (minibuffer-with-setup-hook
+          (lambda ()
+            (let ((meta (completion-metadata "" minibuffer-completion-table nil)))
+              (setq seen (list (completion-metadata-get meta 'display-sort-function)
+                               (completion-metadata-get meta 'category)
+                               (all-completions "" minibuffer-completion-table))))
+            (throw 'drgnx-frames-edge-done nil))
+        (if fn (funcall fn) (read-buffer-to-switch "Switch to buffer: "))))
+    seen))
+
+(ert-deftest drgnx-frames/the-real-switch-reader-sorts-and-filters-nothing ()
+  (let ((was drgnx-frames-mode) (mine (generate-new-buffer "frames-mine")) (other (generate-new-buffer "frames-other"))
+        (completion-category-overrides nil) (read-buffer-function nil))
+    (unwind-protect
+        (cl-letf (((symbol-function 'drgnx-frame-buffers) (lambda (&optional _) (list mine))))
+          (drgnx-frames-mode 1)
+          (dolist (fn (list nil (lambda () (read-buffer "Kill buffer: ")) (lambda () (call-interactively #'switch-to-buffer))))
+            (let ((seen (drgnx-frames-edge--switch-metadata fn)))
+              (should (eq (nth 0 seen) #'drgnx-frames--order))
+              (should (eq (nth 1 seen) 'buffer))
+              (dolist (b (list mine other)) (should (member (buffer-name b) (nth 2 seen))))))
+          (drgnx-frames-mode -1)
+          (should-not (car (drgnx-frames-edge--switch-metadata))))
+      (drgnx-frames-mode (if was 1 -1))
+      (mapc #'kill-buffer (list mine other)))))
+
+(ert-deftest drgnx-frames/the-mode-keeps-a-users-buffer-category-entry ()
   (let ((was drgnx-frames-mode))
     (unwind-protect
         (progn
+          ;; the user's styles stay, and the order joins them; off takes only ours away
+          (let ((completion-category-overrides '((buffer (styles basic)) (file (styles partial-completion)))))
+            (drgnx-frames-mode 1)
+            (should (equal (alist-get 'styles (alist-get 'buffer completion-category-overrides)) '(basic)))
+            (should (eq (alist-get 'display-sort-function (alist-get 'buffer completion-category-overrides))
+                        #'drgnx-frames--order))
+            (should (alist-get 'file completion-category-overrides))
+            (drgnx-frames-mode -1)
+            (should (equal completion-category-overrides
+                           '((buffer (styles basic)) (file (styles partial-completion))))))
+          ;; the user's own order function stays
+          (let ((completion-category-overrides '((buffer (display-sort-function . identity)))))
+            (drgnx-frames-mode 1)
+            (should (eq (alist-get 'display-sort-function (alist-get 'buffer completion-category-overrides)) 'identity))
+            (drgnx-frames-mode -1)
+            (should (eq (alist-get 'display-sort-function (alist-get 'buffer completion-category-overrides)) 'identity)))
+          ;; no read-buffer-function of ours any more
           (let ((read-buffer-function nil))
             (drgnx-frames-mode 1)
-            (should (eq read-buffer-function #'drgnx-frames-read-buffer))
-            (drgnx-frames-mode -1)
-            (should-not read-buffer-function))
-          (let ((read-buffer-function #'ignore))
-            (drgnx-frames-mode 1)
-            (should (eq read-buffer-function #'ignore))        ; the user's own stays
-            (drgnx-frames-mode -1)
-            (should (eq read-buffer-function #'ignore))))
+            (should-not read-buffer-function)
+            (drgnx-frames-mode -1)))
       (drgnx-frames-mode (if was 1 -1)))))
 
 (provide 'wb-frames-edge-test)

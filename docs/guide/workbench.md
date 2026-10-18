@@ -202,7 +202,8 @@ Every frame (OS window) is its own workbench. The first one is the **main** wind
 the palette (Vim `SPC w n` / `SPC w g`). Each window has its **own buffers** — the tabs of its groups; the main window
 also has the open files that are a tab nowhere — and the Buffers panel lists those of the window you work in;
 Buffers: Show All Windows (palette · `SPC b a`) lists all. `C-x b` lists the buffers of the window you work in
-first and every other buffer after them: it sorts, it never hides one (a `read-buffer-function` of your own stays). A help or results buffer shown from a window opens that
+first and every other buffer after them: it sorts, it never hides one (the order is set on the `buffer` completion
+category, in `completion-category-overrides`; a `display-sort-function` of your own there stays). A help or results buffer shown from a window opens that
 window's panel; nothing moves in the other window. drgnx never places or sizes a window: your window manager does.
 
 ### Popups
