@@ -559,8 +559,10 @@ cheap. The library needs nothing but Emacs (the recorder is reached through `fbo
 
 ### Epochs
 
-`(drgnx-epoch-define NAME &key per redisplay doc)` makes a counter. `per` is nil (one global counter), `buffer`
-(a base plus one count per buffer, weak on the buffer) or `object` (an `equal` table of counts). `(drgnx-epoch NAME
+`(drgnx-epoch-define NAME &key per redisplay watch doc)` declares a counter. `per` is nil (one global counter),
+`buffer` (a base plus one count per buffer, weak on the buffer) or `object` (an `equal` table of counts: one fixnum per
+distinct object for as long as the epoch is defined, so key it by ids; it is never weak on the key, because a collected
+key would take its count back to 0 and a memo could see a value again). `(drgnx-epoch NAME
 &optional OBJECT)` is a fixnum: for a per epoch the base plus the object's own count, so either bump moves it;
 without OBJECT, a `buffer` epoch gives its base and an `object` epoch the total of every bump. Counters wrap at the
 fixnum limit. `(drgnx-epoch-bump NAME &optional OBJECT)` returns the new value; with `:redisplay t` it also calls
@@ -570,11 +572,22 @@ fixnum limit. `(drgnx-epoch-bump NAME &optional OBJECT)` returns the new value; 
 expanded, so a typo fails the build; define the epoch above its first use in the file (`drgnx-epoch-define` with a
 literal name is noted at expansion), or `require` the file that does. A computed NAME is checked at run time.
 
-`(drgnx-epoch-watch NAME VARIABLES)` bumps NAME when one of VARIABLES is set (`add-variable-watcher`). The watcher
-`drgnx-memo--watcher` reacts to `set`, `makunbound` and `defvaralias` only, never to `let` or `unlet`: a dynamic
-binding is undone at once, and counting it would move the epoch twice per rebinding. A buffer-local set bumps that
-buffer's own count (the watcher's WHERE); a global set (`setq-default`) bumps the base, which moves every buffer's
-value. `drgnx-memo--watched` maps each variable to its epochs.
+`:watch VARIABLES` (or `(drgnx-epoch-watch NAME VARIABLES)`) declares the variables whose setting bumps NAME;
+nothing is watched until a module activates the epoch (below). The watcher `drgnx-memo--watcher`
+(`add-variable-watcher`) reacts to `set`, `makunbound` and `defvaralias`, never to a reported `let` or `unlet`.
+Emacs does not report every binding as a `let`, so the watcher also skips a `set` of an atom `eq` to the value
+it replaces (a cons is never skipped: an in-place edit keeps its head). What that means for a per-buffer variable
+such as `tab-width`, `indent-tabs-mode` or `buffer-file-coding-system`:
+
+- already local in the buffer: `let` and `unlet` are reported as such and ignored;
+- not local in the buffer: a `let` binds the *default*, and Emacs 30 reports the binding and the unbinding as a
+  `set` with no buffer. Bound to the value it already has, nothing moves. Bound to a *different* value, each of the two
+  reports is a global `set`: it bumps the base and moves every buffer's epoch, twice per `let`. A consumer's watched
+  list must not include a per-buffer variable that other code often rebinds to other values (Task 16 checks its list
+  against this);
+- a buffer-local set bumps that buffer's own count (the watcher's WHERE); a global set (`setq-default`) bumps the base.
+
+`drgnx-memo--watched` maps each variable that is watched now to its epochs.
 
 **What is watched is a closed list**, each entry tested. A watcher costs about 0.2 µs per set (a `setq` of an unwatched
 variable 0.011 µs; an empty watcher costs 0.066 µs), so it goes on variables that change rarely. **Hot values stay plain
@@ -589,7 +602,7 @@ keycast's keys, the window's start and width. The memo compares them for free.
 (drgnx-memo window-badge (selected-window) (build-the-badge))
 ```
 
-`drgnx-memo-define` (a macro, `eval-and-compile`: put it at the top level of a file) takes an unquoted NAME and
+`drgnx-memo-define` (a macro, `eval-and-compile`: a declaration at the top level of a file) takes an unquoted NAME and
 `:on` `window`, `buffer`, `frame` or nil (one global slot). The key forms are evaluated where `drgnx-memo` is used;
 they may refer to `object`. The table is weak on the object. `(drgnx-memo NAME OBJECT BUILD)` evaluates each key form
 once. When every value is `eq` to the stored one it returns the stored value and conses nothing; otherwise it runs
@@ -599,18 +612,34 @@ hit). `(drgnx-memo-forget NAME &optional OBJECT)` drops one object's value, or a
 
 ### Caches
 
-`(drgnx-cache-define NAME &key key cap doc)`: `key` `object` is a weak `eq` table; a get checks `buffer-live-p`,
+`(drgnx-cache-define NAME &key key cap doc)` (a declaration, at the top level): `key` `object` is a weak `eq` table; a get checks `buffer-live-p`,
 `window-live-p`, `frame-live-p` or `process-live-p` and drops a dead entry. `key` `string` is an `equal` table with an
 LRU; `cap` is required and positive. A get stamps the entry; a put past the cap evicts the oldest stamp (a scan of the
 table, on put only). `drgnx-cache-get`, `-put`, `-remove` and `-size` take the NAME and the key. **Every cache has a
 cap or is weak**; the docstring or `:doc` says which event or cap bounds it.
 
-### Ownership, census and the soak
+### Declarations, activation and ownership
 
-Each definition pushes an undo (`"epoch NAME"`, `"memo NAME"`, `"cache NAME"`, `"epoch-watch NAME VARIABLE"`) when a
-module's setup makes it, so turning the module off removes the definition and the watchers that are still its own.
-An epoch keeps its count across a redefinition, so a memo never sees a value it saw before. The definitions are
-listed in `drgnx-memo--registry`, which the fingerprint reads (`test --leaks` names a definition a test leaves).
+`drgnx-epoch-define`, `drgnx-memo-define` and `drgnx-cache-define` are **declarations, like `defvar`**: they go at
+the top level of a file (`core/` or `modules/`), run once at load, and are never undone. They have to be
+declarations: `drgnx-epoch` and `drgnx-memo` read them when the code that uses them is expanded or compiled, and a
+definition inside a `:setup` runs once at load from source but once per setup when compiled
+(`eval-and-compile`). They are listed in `drgnx-memo--registry` and `drgnx-memo-census`, and the fingerprint does not
+treat them as owned registrations. An epoch keeps its count across a redefinition.
+
+What a module **owns** is what has a global effect, and it takes it in its `:setup` with one call:
+
+```elisp
+(drgnx-memo-activate 'git 'statusbar-bar 'git-status)   ; epochs, memos and caches declared above
+```
+
+For an epoch it installs the declared variable watchers (the first activation does; an epoch two modules activate
+keeps them until the last is off). For a memo or a cache it records that its contents are emptied. Each step pushes
+its undo (`drgnx-modules-push-undo`), so turning the module off removes its watchers and empties its memos and
+caches, and turning it on again activates afresh. An epoch's count is not reset. The call does nothing recorded
+outside a `:setup`, and an undeclared name signals. The fingerprint reads the live watches
+(`drgnx-memo--watched`), so a test that leaves one is named by `test --leaks`.
+
 `(drgnx-memo-census)` returns `((NAME KIND SIZE CAP) …)` for every memo and cache; `bin/drgnx test --soak` prints it
 after each round and fails when a cache's SIZE passes its CAP. Tests: `test/unit/core-memo-test.el` (prefix
 `drgnx-memo/`; the 0-allocation tests byte-compile the library's functions in place first, because the tests run on

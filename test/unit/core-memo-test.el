@@ -8,16 +8,21 @@
 
 ;;;; Fixtures: defined at the top level, in order, so that the literal names below expand
 
-(drgnx-epoch-define 'drgnx-memo-test-g :doc "A global epoch.")
-(drgnx-epoch-define 'drgnx-memo-test-b :per 'buffer)
+(drgnx-epoch-define 'drgnx-memo-test-g :doc "A global epoch." :watch '(drgnx-memo-test-var))
+(drgnx-epoch-define 'drgnx-memo-test-b :per 'buffer :watch '(drgnx-memo-test-lvar))
+(drgnx-epoch-define 'drgnx-memo-test-look :per 'buffer :watch '(tab-width indent-tabs-mode))
+(drgnx-epoch-define 'drgnx-memo-test-own :per 'buffer :watch '(drgnx-memo-test-ownvar))
+(drgnx-epoch-define 'drgnx-memo-test-al :watch '(drgnx-memo-test-av))
 (drgnx-epoch-define 'drgnx-memo-test-o :per 'object)
 (drgnx-epoch-define 'drgnx-memo-test-r :redisplay t)
 (drgnx-epoch-define 'drgnx-memo-test-rb :per 'buffer :redisplay t)
 
 (defvar drgnx-memo-test-var 0 "A watched global variable.")
 (defvar-local drgnx-memo-test-lvar 0 "A watched buffer-local variable.")
-(drgnx-epoch-watch 'drgnx-memo-test-g '(drgnx-memo-test-var))
-(drgnx-epoch-watch 'drgnx-memo-test-b '(drgnx-memo-test-lvar))
+(defvar drgnx-memo-test-ownvar 0)
+(defvar drgnx-memo-test-av 0)
+(defvar drgnx-memo-test-base 0)
+(drgnx-cache-define 'drgnx-memo-test-own-cache :key 'string :cap 2)
 
 (drgnx-memo-define drgnx-memo-test-a :keys ((car object) (cdr object)) :doc "A global slot keyed on a cons.")
 (drgnx-memo-define drgnx-memo-test-w :on window :keys ((window-start object) (drgnx-epoch 'drgnx-memo-test-g)))
@@ -72,6 +77,13 @@ allocates: the smallest delta of `memory-use-counts' over three warm runs, minus
          (drgnx-modules--features nil) (drgnx-modules--left nil))
      ,@body))
 
+(defmacro drgnx-memo-test--active (names &rest body)
+  "BODY with the declared NAMES (a form giving a list) activated by a module's setup, which is torn down after."
+  (declare (indent 1))
+  `(drgnx-memo-test--with-module (list :setup (lambda () (apply #'drgnx-memo-activate ,names)))
+     (drgnx-memo-test--on)
+     (unwind-protect (progn ,@body) (drgnx-module-teardown 'test/a))))
+
 (defun drgnx-memo-test--on () (drgnx-modules--run-one 'test/a (alist-get 'test/a drgnx-modules--table) 'startup))
 
 (defun drgnx-memo-test--size (name)
@@ -87,25 +99,26 @@ allocates: the smallest delta of `memory-use-counts' over three warm runs, minus
     (should (= (+ v 2) (drgnx-epoch-bump 'drgnx-memo-test-g)))))
 
 (ert-deftest drgnx-memo/per-buffer-base-and-own ()
-  (with-temp-buffer
-    (let ((a (current-buffer)) (b (generate-new-buffer " *drgnx-memo-b*")))
-      (unwind-protect
-          (let ((a0 (drgnx-epoch 'drgnx-memo-test-b a)) (b0 (drgnx-epoch 'drgnx-memo-test-b b)))
-            (drgnx-epoch-bump 'drgnx-memo-test-b a)               ; its own count
-            (should (= (1+ a0) (drgnx-epoch 'drgnx-memo-test-b a)))
-            (should (= b0 (drgnx-epoch 'drgnx-memo-test-b b)))
-            (drgnx-epoch-bump 'drgnx-memo-test-b)                 ; the base: every buffer
-            (should (= (+ a0 2) (drgnx-epoch 'drgnx-memo-test-b a)))
-            (should (= (1+ b0) (drgnx-epoch 'drgnx-memo-test-b b)))
-            ;; a global set of the watched buffer-local variable moves every buffer's epoch
-            (setq-default drgnx-memo-test-lvar 5)
-            (should (= (+ a0 3) (drgnx-epoch 'drgnx-memo-test-b a)))
-            (should (= (+ b0 2) (drgnx-epoch 'drgnx-memo-test-b b)))
-            ;; a local set moves only that buffer's
-            (with-current-buffer a (setq drgnx-memo-test-lvar 9))
-            (should (= (+ a0 4) (drgnx-epoch 'drgnx-memo-test-b a)))
-            (should (= (+ b0 2) (drgnx-epoch 'drgnx-memo-test-b b))))
-        (kill-buffer b)))))
+  (drgnx-memo-test--active '(drgnx-memo-test-b)
+    (with-temp-buffer
+      (let ((a (current-buffer)) (b (generate-new-buffer " *drgnx-memo-b*")))
+        (unwind-protect
+            (let ((a0 (drgnx-epoch 'drgnx-memo-test-b a)) (b0 (drgnx-epoch 'drgnx-memo-test-b b)))
+              (drgnx-epoch-bump 'drgnx-memo-test-b a)               ; its own count
+              (should (= (1+ a0) (drgnx-epoch 'drgnx-memo-test-b a)))
+              (should (= b0 (drgnx-epoch 'drgnx-memo-test-b b)))
+              (drgnx-epoch-bump 'drgnx-memo-test-b)                 ; the base: every buffer
+              (should (= (+ a0 2) (drgnx-epoch 'drgnx-memo-test-b a)))
+              (should (= (1+ b0) (drgnx-epoch 'drgnx-memo-test-b b)))
+              ;; a global set of the watched buffer-local variable moves every buffer's epoch
+              (setq-default drgnx-memo-test-lvar 5)
+              (should (= (+ a0 3) (drgnx-epoch 'drgnx-memo-test-b a)))
+              (should (= (+ b0 2) (drgnx-epoch 'drgnx-memo-test-b b)))
+              ;; a local set moves only that buffer's
+              (with-current-buffer a (setq drgnx-memo-test-lvar 9))
+              (should (= (+ a0 4) (drgnx-epoch 'drgnx-memo-test-b a)))
+              (should (= (+ b0 2) (drgnx-epoch 'drgnx-memo-test-b b))))
+          (kill-buffer b))))))
 
 (ert-deftest drgnx-memo/per-object-total-moves-with-any-object ()
   (let ((total (drgnx-epoch 'drgnx-memo-test-o))
@@ -156,41 +169,70 @@ allocates: the smallest delta of `memory-use-counts' over three warm runs, minus
 ;;;; Watchers
 
 (ert-deftest drgnx-memo/watchers-bump-on-setq-and-makunbound ()
-  (let ((v (drgnx-epoch 'drgnx-memo-test-g)))
-    (setq drgnx-memo-test-var 1)
-    (should (= (1+ v) (drgnx-epoch 'drgnx-memo-test-g)))
-    (setq drgnx-memo-test-var 2)
-    (should (= (+ v 2) (drgnx-epoch 'drgnx-memo-test-g)))
-    (unwind-protect
-        (progn (makunbound 'drgnx-memo-test-var)
-               (should (= (+ v 3) (drgnx-epoch 'drgnx-memo-test-g))))
+  (drgnx-memo-test--active '(drgnx-memo-test-g)
+    (let ((v (drgnx-epoch 'drgnx-memo-test-g)))
+      (setq drgnx-memo-test-var 1)
+      (should (= (1+ v) (drgnx-epoch 'drgnx-memo-test-g)))
+      (setq drgnx-memo-test-var 2)
+      (should (= (+ v 2) (drgnx-epoch 'drgnx-memo-test-g)))
+      (unwind-protect
+          (progn (makunbound 'drgnx-memo-test-var)
+                 (should (= (+ v 3) (drgnx-epoch 'drgnx-memo-test-g))))
+        (setq drgnx-memo-test-var 0)))))
+
+(ert-deftest drgnx-memo/a-set-to-the-value-it-has-does-not-bump ()
+  (drgnx-memo-test--active '(drgnx-memo-test-g)
+    (setq drgnx-memo-test-var 4)
+    (let ((v (drgnx-epoch 'drgnx-memo-test-g)))
+      (setq drgnx-memo-test-var 4)
+      (should (= v (drgnx-epoch 'drgnx-memo-test-g)))
+      (setq drgnx-memo-test-var (list 4))                         ; a new cons is a change
+      (should (= (1+ v) (drgnx-epoch 'drgnx-memo-test-g)))
+      (setq drgnx-memo-test-var (cons 1 2))                       ; and a cons is never skipped
+      (should (= (+ v 2) (drgnx-epoch 'drgnx-memo-test-g)))
       (setq drgnx-memo-test-var 0))))
 
 (ert-deftest drgnx-memo/watchers-ignore-let ()
-  (let ((v (drgnx-epoch 'drgnx-memo-test-g)))
-    (let ((drgnx-memo-test-var 7))
-      (should (= v (drgnx-epoch 'drgnx-memo-test-g)))
-      (with-temp-buffer
-        (setq-local drgnx-memo-test-lvar 3)
-        (let ((drgnx-memo-test-lvar 4)) (should (= 4 drgnx-memo-test-lvar)))))
-    (should (= v (drgnx-epoch 'drgnx-memo-test-g)))))
+  (drgnx-memo-test--active '(drgnx-memo-test-g drgnx-memo-test-b drgnx-memo-test-look)
+    (let ((other (generate-new-buffer " *drgnx-memo-other*")))
+      (unwind-protect
+          (with-temp-buffer
+            (let ((here (current-buffer)))
+              ;; a global variable
+              (let ((g (drgnx-epoch 'drgnx-memo-test-g)))
+                (let ((drgnx-memo-test-var 7)) (should (= g (drgnx-epoch 'drgnx-memo-test-g))))
+                (should (= g (drgnx-epoch 'drgnx-memo-test-g))))
+              ;; a per-buffer variable already local in the buffer: let and unlet
+              (setq-local drgnx-memo-test-lvar 3)
+              (let ((b (drgnx-epoch 'drgnx-memo-test-b here)))
+                (let ((drgnx-memo-test-lvar 4)) (should (= 4 drgnx-memo-test-lvar)))
+                (should (= b (drgnx-epoch 'drgnx-memo-test-b here))))
+              ;; per-buffer variables NOT local in a buffer, bound to the value they have: Emacs reports these as a
+              ;; `set' with WHERE nil; the epoch of neither buffer moves
+              (dolist (buf (list here other))
+                (with-current-buffer buf (kill-local-variable 'drgnx-memo-test-lvar)))
+              (let ((b1 (drgnx-epoch 'drgnx-memo-test-b here)) (b2 (drgnx-epoch 'drgnx-memo-test-b other))
+                    (l1 (drgnx-epoch 'drgnx-memo-test-look here)) (l2 (drgnx-epoch 'drgnx-memo-test-look other)))
+                (dolist (buf (list here other))
+                  (with-current-buffer buf
+                    (let ((drgnx-memo-test-lvar (default-value 'drgnx-memo-test-lvar))) nil)
+                    (let ((tab-width tab-width)) nil)
+                    (let ((indent-tabs-mode indent-tabs-mode)) nil)))
+                (should (= b1 (drgnx-epoch 'drgnx-memo-test-b here)))
+                (should (= b2 (drgnx-epoch 'drgnx-memo-test-b other)))
+                (should (= l1 (drgnx-epoch 'drgnx-memo-test-look here)))
+                (should (= l2 (drgnx-epoch 'drgnx-memo-test-look other)))
+                ;; a real change still moves it: a local set only that buffer, the default every buffer
+                (with-current-buffer here (setq-local tab-width (+ 3 tab-width)))
+                (should (= (1+ l1) (drgnx-epoch 'drgnx-memo-test-look here)))
+                (should (= l2 (drgnx-epoch 'drgnx-memo-test-look other))))))
+        (kill-buffer other)))))
 
-(ert-deftest drgnx-memo/watch-is-undone-with-the-module ()
-  (drgnx-memo-test--with-module
-      (list :setup (lambda ()
-                     (drgnx-epoch-define 'drgnx-memo-test-m)
-                     (drgnx-epoch-watch 'drgnx-memo-test-m '(drgnx-memo-test-mvar drgnx-memo-test-var))))
-    (drgnx-memo-test--on)
-    (should (memq #'drgnx-memo--watcher (get-variable-watchers 'drgnx-memo-test-mvar)))
-    (let ((v (drgnx-epoch 'drgnx-memo-test-g)))
-      (should-not (drgnx-module-teardown 'test/a))
-      (should-not (memq #'drgnx-memo--watcher (get-variable-watchers 'drgnx-memo-test-mvar)))
-      ;; a variable another epoch still watches keeps its watcher
-      (should (memq #'drgnx-memo--watcher (get-variable-watchers 'drgnx-memo-test-var)))
-      (setq drgnx-memo-test-var 0)
-      (should (= (1+ v) (drgnx-epoch 'drgnx-memo-test-g))))
-    (should-error (drgnx-epoch (identity 'drgnx-memo-test-m)))
-    (should-not (assq 'drgnx-memo-test-mvar drgnx-memo--watched))))
+(ert-deftest drgnx-memo/defvaralias-bumps ()
+  (drgnx-memo-test--active '(drgnx-memo-test-al)
+    (let ((v (drgnx-epoch 'drgnx-memo-test-al)))
+      (defvaralias 'drgnx-memo-test-av 'drgnx-memo-test-base)
+      (should (= (1+ v) (drgnx-epoch 'drgnx-memo-test-al))))))
 
 ;;;; Memos
 
@@ -360,37 +402,63 @@ allocates: the smallest delta of `memory-use-counts' over three warm runs, minus
 
 ;;;; Ownership
 
-(ert-deftest drgnx-memo/definitions-push-their-undo ()
+(ert-deftest drgnx-memo/a-module-turned-off-leaves-no-watcher-and-no-contents ()
+  (drgnx-memo-forget 'drgnx-memo-test-a)
+  (let ((obj (cons 1 2)) (labels '("cache drgnx-memo-test-own-cache" "memo drgnx-memo-test-a" "epoch drgnx-memo-test-own")))
+    (drgnx-memo-test--with-module
+        (list :setup (lambda ()
+                       (drgnx-memo-activate 'drgnx-memo-test-own 'drgnx-memo-test-a 'drgnx-memo-test-own-cache)))
+      (dotimes (round 2)                                       ; on, off, and on again
+        (let ((v (drgnx-epoch 'drgnx-memo-test-own)))
+          (should-not (memq #'drgnx-memo--watcher (get-variable-watchers 'drgnx-memo-test-ownvar)))
+          (drgnx-memo-test--on)
+          (should (equal labels (mapcar #'car (alist-get 'test/a drgnx-modules--stacks))))
+          (should (memq #'drgnx-memo--watcher (get-variable-watchers 'drgnx-memo-test-ownvar)))
+          (should (assq 'drgnx-memo-test-ownvar drgnx-memo--watched))   ; what the fingerprint reads
+          (setq drgnx-memo-test-ownvar (+ 10 round))               ; a different value each round: a change
+          (should (= (1+ v) (drgnx-epoch 'drgnx-memo-test-own)))
+          (should (equal '(a) (drgnx-memo drgnx-memo-test-a obj (list 'a))))
+          (drgnx-cache-put 'drgnx-memo-test-own-cache "k" 1)
+          (should (= 1 (drgnx-memo-test--size 'drgnx-memo-test-a)))
+          (should-not (drgnx-module-teardown 'test/a))
+          (should-not (memq #'drgnx-memo--watcher (get-variable-watchers 'drgnx-memo-test-ownvar)))
+          (should-not (assq 'drgnx-memo-test-ownvar drgnx-memo--watched))
+          (should-not (assq 'drgnx-memo-test-own drgnx-memo--active))
+          (setq drgnx-memo-test-ownvar 99)                        ; no longer watched
+          (should (= (1+ v) (drgnx-epoch 'drgnx-memo-test-own)))
+          (should (= 0 (drgnx-memo-test--size 'drgnx-memo-test-a)))
+          (should (= 0 (drgnx-cache-size 'drgnx-memo-test-own-cache)))
+          (should (equal '(b) (drgnx-memo drgnx-memo-test-a obj (list 'b))))   ; built again
+          (drgnx-memo-forget 'drgnx-memo-test-a))))))
+
+(ert-deftest drgnx-memo/an-epoch-two-activations-hold-until-the-last-is-off ()
+  (drgnx-memo-test--with-module
+      (list :setup (lambda () (drgnx-memo-activate 'drgnx-memo-test-own) (drgnx-memo-activate 'drgnx-memo-test-own)))
+    (drgnx-memo-test--on)
+    (should (= 2 (cdr (assq 'drgnx-memo-test-own drgnx-memo--active))))
+    (should-not (drgnx-module-teardown 'test/a))
+    (should-not (get-variable-watchers 'drgnx-memo-test-ownvar))
+    (should-not drgnx-memo--active)))
+
+(ert-deftest drgnx-memo/activating-what-is-not-declared-signals ()
+  (should-error (drgnx-memo-activate 'drgnx-memo-test-nothing-declared)))
+
+(ert-deftest drgnx-memo/definitions-are-declarations-not-owned ()
   (drgnx-memo-test--with-module
       (list :setup (lambda ()
-                     (drgnx-epoch-define 'drgnx-memo-test-own :per 'buffer)
-                     (eval '(drgnx-memo-define drgnx-memo-test-own-memo :on buffer :keys ((point))) t)
-                     (drgnx-cache-define 'drgnx-memo-test-own-cache :key 'string :cap 2)))
-    (let ((labels '("epoch drgnx-memo-test-own" "memo drgnx-memo-test-own-memo" "cache drgnx-memo-test-own-cache")))
-      (drgnx-memo-test--on)
-      (should (equal labels (mapcar (lambda (l) (and (gethash l drgnx-memo--registry) l)) labels)))
-      (should (equal labels (reverse (mapcar #'car (alist-get 'test/a drgnx-modules--stacks)))))
-      (should (= 0 (drgnx-epoch 'drgnx-memo-test-own (current-buffer))))
-      (drgnx-cache-put 'drgnx-memo-test-own-cache "k" 1)
-      (should-not (drgnx-module-teardown 'test/a))
-      (dolist (l labels) (should-not (gethash l drgnx-memo--registry)))
-      (should-not (get 'drgnx-memo-test-own-memo 'drgnx-memo--def))
-      (should-not (get 'drgnx-memo-test-own-cache 'drgnx-cache--def))
-      (should-error (drgnx-epoch (identity 'drgnx-memo-test-own)))
-      (should-error (drgnx-cache-get 'drgnx-memo-test-own-cache "k")))))
-
-(ert-deftest drgnx-memo/an-undo-after-a-redefinition-leaves-the-new-definition ()
-  (drgnx-memo-test--with-module
-      (list :setup (lambda () (drgnx-cache-define 'drgnx-memo-test-redef :key 'string :cap 2)))
+                     (drgnx-epoch-define 'drgnx-memo-test-decl :per 'buffer)
+                     (drgnx-cache-define 'drgnx-memo-test-decl-cache :key 'string :cap 2)))
     (drgnx-memo-test--on)
-    (let ((old (get 'drgnx-memo-test-redef 'drgnx-cache--def)))
-      (drgnx-cache-define 'drgnx-memo-test-redef :key 'string :cap 5)   ; someone else redefines it
-      (should-not (eq old (get 'drgnx-memo-test-redef 'drgnx-cache--def)))
-      (drgnx-module-teardown 'test/a)
-      (should (= 5 (nth 3 (assq 'drgnx-memo-test-redef (drgnx-memo-census)))))
-      (drgnx-memo--undefine (get 'drgnx-memo-test-redef 'drgnx-cache--def)))))
+    (unwind-protect
+        (progn (should-not (alist-get 'test/a drgnx-modules--stacks))   ; nothing recorded
+               (should-not (drgnx-module-teardown 'test/a))
+               (should (get 'drgnx-memo-test-decl 'drgnx-epoch--def))     ; and still declared
+               (should (gethash "cache drgnx-memo-test-decl-cache" drgnx-memo--registry)))
+      (drgnx-memo--undefine (get 'drgnx-memo-test-decl 'drgnx-epoch--def))
+      (drgnx-memo--undefine (get 'drgnx-memo-test-decl-cache 'drgnx-cache--def)))))
 
-(ert-deftest drgnx-memo/the-registry-joins-the-fingerprint ()
-  (should (memq 'drgnx-memo--registry drgnx-modules-fingerprint-registries)))
+(ert-deftest drgnx-memo/the-live-watches-join-the-fingerprint ()
+  (should (memq 'drgnx-memo--watched drgnx-modules-fingerprint-registries))
+  (should-not (memq 'drgnx-memo--registry drgnx-modules-fingerprint-registries)))
 
 ;;; core-memo-test.el ends here
