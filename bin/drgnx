@@ -157,8 +157,14 @@ client() { # emacsclient to drgnx's server ($DRGNX_SERVER_NAME, default drgnx); 
   "$(emacsclient_bin)" -a false -s "${DRGNX_SERVER_NAME:-drgnx}" "$@"
 }
 
-open_start() { # start drgnx's daemon (the systemd unit when it is enabled), wait ≤ 10 s for its server
-  local name="${DRGNX_SERVER_NAME:-drgnx}" log i
+open_wait() { # seconds to wait for a starting daemon: $DRGNX_OPEN_WAIT, default 30 (a cold start natively compiles)
+  local w="${DRGNX_OPEN_WAIT:-30}"
+  if [[ "$w" =~ ^[0-9]+$ ]] && ((w > 0)); then printf '%s' "$w"; else printf 30; fi
+}
+
+open_start() { # start drgnx's daemon (the systemd unit when it is enabled), wait for its server (open_wait)
+  local name="${DRGNX_SERVER_NAME:-drgnx}" log i wait
+  wait="$(open_wait)"
   if [[ "$name" == drgnx ]] && command -v systemctl >/dev/null 2>&1 && systemctl --user is-enabled --quiet drgnx 2>/dev/null; then
     systemctl --user start drgnx || return 1
   else
@@ -172,11 +178,12 @@ open_start() { # start drgnx's daemon (the systemd unit when it is enabled), wai
            "$(emacs_bin)" --bg-daemon="$name" --init-directory="$here/init" </dev/null >"$log" 2>&1
     fi
   fi
-  for ((i = 0; i < 100; i++)); do
+  for ((i = 0; i < wait * 10; i++)); do
     client -e t >/dev/null 2>&1 && return 0
+    if ((i == wait * 10 / 3)); then echo "drgnx: drgnx is still starting (waiting up to $wait s)…" >&2; fi
     sleep 0.1
   done
-  echo "drgnx: drgnx did not start within 10 s (its messages: ${log:-journalctl --user -u drgnx}; try: drgnx doctor)" >&2
+  echo "drgnx: drgnx did not start within $wait s (its messages: ${log:-journalctl --user -u drgnx}; try: drgnx doctor)" >&2
   return 1
 }
 

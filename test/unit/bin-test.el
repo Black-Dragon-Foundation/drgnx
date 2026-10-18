@@ -154,7 +154,8 @@ logging to PATHLOG), CONFIG (a DRGNX_CONFIG_DIR) and ENV (the environment lists 
 
 (defun drgnx-bin-test--open-fakes (dir pathdir)
   "Fake `emacs', `emacsclient' and `systemctl' in PATHDIR.  State files in DIR: running (the server
-answers), gui (a window is open), enabled (the systemd unit is).  emacsclient logs each call to
+answers), gui (a window is open), enabled (the systemd unit is), delay (seconds the daemon takes to answer
+once started, or `never'; absent: at once).  emacsclient logs each call to
 client.log, one line per call, every argument followed by \\037; emacs and systemctl log theirs."
   (let ((f (lambda (name) (shell-quote-argument (expand-file-name name dir)))))
     (dolist (spec `(("emacsclient"
@@ -168,8 +169,14 @@ case \"$last\" in
 esac"
                               (funcall f "client.log") (funcall f "client.log") (funcall f "running")
                               (funcall f "gui") (funcall f "running")))
-                    ("emacs" ,(format "echo \"$*\" >> %s\ncase \"$*\" in *--bg-daemon=*) touch %s ;; esac"
-                                      (funcall f "emacs.log") (funcall f "running")))
+                    ("emacs" ,(format "echo \"$*\" >> %s
+case \"$*\" in *--bg-daemon=*)
+  d=0; [ -f %s ] && d=$(cat %s)
+  if [ \"$d\" = 0 ]; then touch %s
+  elif [ \"$d\" != never ]; then (sleep \"$d\"; touch %s) >/dev/null 2>&1 & fi ;;
+esac"
+                                      (funcall f "emacs.log") (funcall f "delay") (funcall f "delay")
+                                      (funcall f "running") (funcall f "running")))
                     ("systemctl" ,(format "echo \"$*\" >> %s
 case \"$*\" in *is-enabled*) [ -f %s ] ;; *start*) touch %s ;; esac"
                                           (funcall f "systemctl.log") (funcall f "enabled") (funcall f "running")))))
@@ -247,6 +254,21 @@ case \"$*\" in *is-enabled*) [ -f %s ] ;; *start*) touch %s ;; esac"
                            (drgnx-bin-test--c "-n" "-c")
                            (drgnx-bin-test--c "-n" "-e" "(drgnx-session-raise)")
                            (drgnx-bin-test--c "-n" "-e" drgnx-bin-test--load-keys)))))))
+
+(ert-deftest drgnx-bin/open-waits-for-a-slow-daemon ()
+  ;; DRGNX_OPEN_WAIT seconds (30 by default) for the daemon; it says so a third of the way in (10 s of 30).
+  (drgnx-bin-test--with-open
+    (write-region "2" nil (expand-file-name "delay" dir))
+    (let ((r (drgnx-bin-test--call drgnx-bin-test--bin (cons "DRGNX_OPEN_WAIT=3" env) "open")))
+      (should (eql 0 (car r)))
+      (should (string-search "still starting" (cdr r)))
+      (should (file-exists-p (expand-file-name "running" dir))))
+    ;; a daemon that never answers: the wait is DRGNX_OPEN_WAIT, and the message names it
+    (delete-file (expand-file-name "running" dir))
+    (write-region "never" nil (expand-file-name "delay" dir))
+    (let ((r (drgnx-bin-test--call drgnx-bin-test--bin (cons "DRGNX_OPEN_WAIT=1" env) "open")))
+      (should (eql 1 (car r)))
+      (should (string-search "did not start within 1 s" (cdr r))))))
 
 (ert-deftest drgnx-session/the-systemd-unit-is-started-when-enabled ()
   (drgnx-bin-test--with-open
