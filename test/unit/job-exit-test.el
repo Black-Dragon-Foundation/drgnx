@@ -57,10 +57,11 @@ whoever reads one — a process of any kind — takes the word away.  The holder
           drgnx-job-exit-test--credential-files))
 
 (defun drgnx-job-exit-test--unread-p (canary)
-  "Is the word still in CANARY's FIFO (a (PATH . HOLDER))?  Looking takes it out and puts it back."
+  "Is the word still in CANARY's FIFO (a (PATH . HOLDER))?  Looking takes it out and puts it back.
+An `x' goes in first, so the read never waits on an empty FIFO (POSIX dd: macOS's has no iflag=nonblock)."
   (equal (with-temp-buffer
            (call-process "sh" nil t nil "-c"
-                         "exec 3<>\"$1\"; w=$(dd bs=6 count=1 iflag=nonblock <&3 2>/dev/null); printf '%s' \"$w\" >&3; printf '%s' \"$w\""
+                         "exec 3<>\"$1\"; printf x >&3; w=$(dd bs=7 count=1 <&3 2>/dev/null); w=${w%x}; printf '%s' \"$w\" >&3; printf '%s' \"$w\""
                          "sh" (car canary))
            (buffer-string))
          "canary"))
@@ -75,7 +76,7 @@ whoever reads one — a process of any kind — takes the word away.  The holder
       (unwind-protect
           (progn
             (should (seq-every-p #'drgnx-job-exit-test--unread-p canaries))
-            (call-process "timeout" nil nil nil "5" "head" "-c" "3" (car (car canaries)))
+            (call-process "dd" nil nil nil (concat "if=" (car (car canaries))) "bs=3" "count=1")   ; no `timeout' on macOS; the word is there
             (should-not (drgnx-job-exit-test--unread-p (car canaries)))
             (should (drgnx-job-exit-test--unread-p (cadr canaries))))
         (drgnx-job-exit-test--release canaries)))))
