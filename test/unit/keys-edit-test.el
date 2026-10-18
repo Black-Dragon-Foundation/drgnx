@@ -7,9 +7,10 @@
 in `applied'."
   `(let* ((dir (make-temp-file "drgnx-keys-edit" t))
           (process-environment (cons (concat "DRGNX_CONFIG_DIR=" dir) process-environment))
-          (drgnx-keys-last (list :bindings nil)) (drgnx-keys-problems nil) (drgnx-keys-edit--undo nil) (applied 0))
+          (drgnx-keys-last (list :bindings nil)) (drgnx-keys-problems nil) (applied 0))
      (unwind-protect
-         (cl-letf (((symbol-function 'drgnx-keys-apply) (lambda () (cl-incf applied) drgnx-keys-last)))
+         (cl-letf (((symbol-function 'drgnx-keys-apply) (lambda () (cl-incf applied) drgnx-keys-last))
+                   ((symbol-function 'drgnx-surfaces-refresh) #'ignore))
            (ignore applied)
            ,@body)
        (delete-directory dir t))))
@@ -105,7 +106,6 @@ in `applied'."
    (should-error (drgnx-keys-edit-undo) :type 'user-error)   ; nothing more to undo
    ;; a file that did not exist is removed again
    (delete-file (drgnx-keys-file))
-   (setq drgnx-keys-edit--undo nil)
    (drgnx-keys-edit-bind 'palette "C-c p")
    (should (file-exists-p (drgnx-keys-file)))
    (drgnx-keys-edit-undo)
@@ -143,6 +143,132 @@ in `applied'."
    (drgnx-keys-edit-reset 'a)
    (should (equal (plist-get (drgnx-keys-read-user) :bind) '((c "C-c c"))))
    (should (string-search ";; keep me" (drgnx-keys-edit-test--text)))))
+
+(defun drgnx-keys-edit-test--bindings (&rest triples)
+  "A `drgnx-keys-last' with bindings from (ID KEY MAP) triples."
+  (list :bindings (mapcar (lambda (tr) (list :id (nth 0 tr) :key (nth 1 tr) :map (nth 2 tr))) triples)))
+
+;;;; Fix round 1
+
+(ert-deftest drgnx-keys-edit/undo-refused-after-a-later-change ()
+  ;; something else (the profile switch, a hand edit, another session) wrote keys.eld since: undo must not erase it
+  (drgnx-keys-edit-test--with-dir
+   (drgnx-keys-edit-test--put drgnx-keys-edit-test--sample)
+   (drgnx-keys-edit-bind 'open-file "C-c f")
+   (let ((later (concat (drgnx-keys-edit-test--text) ";; edited by hand\n")))
+     (drgnx-keys-edit-test--put later)
+     (let ((err (should-error (drgnx-keys-edit-undo) :type 'user-error)))
+       (should (string-search "changed" (cadr err))))
+     (should (equal (drgnx-keys-edit-test--text) later)))
+   ;; a file this writer created, then changed by someone else, is not deleted either
+   (delete-file (drgnx-keys-file))
+   (drgnx-keys-edit-bind 'palette "C-c p")
+   (drgnx-keys-edit-test--put (concat (drgnx-keys-edit-test--text) ";; mine\n"))
+   (should-error (drgnx-keys-edit-undo) :type 'user-error)
+   (should (file-exists-p (drgnx-keys-file)))))
+
+(ert-deftest drgnx-keys-edit/undo-copy-survives-a-restart ()
+  (drgnx-keys-edit-test--with-dir
+   (drgnx-keys-edit-test--put drgnx-keys-edit-test--sample)
+   (drgnx-keys-edit-bind 'open-file "C-c f")
+   (let ((saved (with-temp-buffer (insert-file-contents (concat (drgnx-keys-file) ".undo")) (read (current-buffer)))))
+     (should (equal (plist-get saved :old) drgnx-keys-edit-test--sample))
+     (should (equal (plist-get saved :new) (drgnx-keys-edit-test--text))))
+   ;; the state is in that file only: a new session (nothing in memory) undoes from it
+   (drgnx-keys-edit-undo)
+   (should (equal (drgnx-keys-edit-test--text) drgnx-keys-edit-test--sample))
+   (should-not (file-exists-p (concat (drgnx-keys-file) ".undo")))
+   ;; an unreadable undo copy is not trusted
+   (write-region "(:old" nil (concat (drgnx-keys-file) ".undo") nil 'silent)
+   (should-error (drgnx-keys-edit-undo) :type 'user-error)))
+
+(ert-deftest drgnx-keys-edit/rewriting-keeps-mac-keys-and-none-reasons ()
+  (drgnx-keys-edit-test--with-dir
+   (drgnx-keys-edit-test--put
+    "(:bind ((palette \"C-c p\" \"C-c q\" :mac \"s-p\")\n (quit :none \"only on a Mac\" :mac \"s-q\")))\n")
+   (drgnx-keys-edit-unbind 'palette "C-c q")
+   (should (equal (alist-get 'palette (plist-get (drgnx-keys-read-user) :bind)) '("C-c p" :mac "s-p")))
+   (drgnx-keys-edit-bind 'palette "C-c z")
+   (should (equal (alist-get 'palette (plist-get (drgnx-keys-read-user) :bind)) '("C-c z" :mac "s-p")))
+   ;; a key given to a :none entry drops the :none and keeps :mac; the reason is kept while it has no keys
+   (drgnx-keys-edit-add 'quit "s-w")
+   (should (equal (alist-get 'quit (plist-get (drgnx-keys-read-user) :bind)) '("s-w" :mac "s-q")))
+   (drgnx-keys-edit-test--put "(:bind ((quit :none \"only on a Mac\" :mac (\"s-q\" \"s-w\"))))\n")
+   (drgnx-keys-edit-unbind 'quit "s-w")
+   (should (equal (alist-get 'quit (plist-get (drgnx-keys-read-user) :bind)) '(:none "only on a Mac" :mac "s-q")))
+   (drgnx-keys-edit-unbind 'quit "s-q")
+   (should (memq 'quit (plist-get (drgnx-keys-read-user) :unbind)))
+   (drgnx-keys-edit-test--put
+    "(:bind ((palette \"C-c p\" \"C-c q\" :mac \"s-p\")))\n")
+   ;; no keys left anywhere: not bound at all
+   (drgnx-keys-edit-unbind 'palette "C-c p")
+   (drgnx-keys-edit-unbind 'palette "C-c q")
+   (drgnx-keys-edit-unbind 'palette "s-p")
+   (should-not (assq 'palette (plist-get (drgnx-keys-read-user) :bind)))
+   (should (memq 'palette (plist-get (drgnx-keys-read-user) :unbind)))))
+
+(ert-deftest drgnx-keys-edit/on-a-mac-edits-go-to-the-mac-keys ()
+  (drgnx-keys-edit-test--with-dir
+   (cl-letf (((symbol-function 'drgnx-platform) (lambda () 'macos)))
+     (drgnx-keys-edit-test--put "(:bind ((palette \"C-c p\" :mac \"s-p\")))\n")
+     (drgnx-keys-edit-add 'palette "s-o")
+     (should (equal (alist-get 'palette (plist-get (drgnx-keys-read-user) :bind)) '("C-c p" :mac ("s-p" "s-o"))))
+     (drgnx-keys-edit-bind 'palette "s-k")
+     (should (equal (alist-get 'palette (plist-get (drgnx-keys-read-user) :bind)) '("C-c p" :mac "s-k")))
+     (should (drgnx-keys-edit-unbind 'palette "s-k"))   ; the key the editor shows
+     (should (equal (alist-get 'palette (plist-get (drgnx-keys-read-user) :bind)) '("C-c p" :mac ()))))))
+
+(ert-deftest drgnx-keys-edit/unbind-with-the-resolved-map ()
+  ;; the entry has no :map, the command resolves to one (its own or its profile's): the editor row carries that map
+  (drgnx-keys-edit-test--with-dir
+   (drgnx-keys-edit-test--put "(:bind ((foo \"C-c f\" \"C-c g\")))\n")
+   (setq drgnx-keys-last (drgnx-keys-edit-test--bindings '(foo "C-c f" (org . org-mode-map))
+                                                         '(foo "C-c g" (org . org-mode-map))))
+   (should-not (drgnx-keys-edit-unbind 'foo "C-c f" 'other-map))   ; another place: not this key
+   (should (drgnx-keys-edit-unbind 'foo "C-c f" '(org . org-mode-map)))
+   (should (equal (alist-get 'foo (plist-get (drgnx-keys-read-user) :bind)) '("C-c g")))))
+
+(ert-deftest drgnx-keys-edit/a-symlinked-keys-eld-stays-a-symlink ()
+  (drgnx-keys-edit-test--with-dir
+   (let ((real (expand-file-name "real.eld" dir)))
+     (write-region drgnx-keys-edit-test--sample nil real nil 'silent)
+     (make-symbolic-link real (drgnx-keys-file))
+     (drgnx-keys-edit-bind 'open-file "C-c f")
+     (should (file-symlink-p (drgnx-keys-file)))
+     (should (string-search "open-file" (with-temp-buffer (insert-file-contents real) (buffer-string))))
+     (drgnx-keys-edit-undo)
+     (should (file-symlink-p (drgnx-keys-file)))
+     (should (equal (with-temp-buffer (insert-file-contents real) (buffer-string)) drgnx-keys-edit-test--sample)))))
+
+(ert-deftest drgnx-keys-edit/replace-and-add-are-one-write-and-one-undo-step ()
+  (drgnx-keys-edit-test--with-dir
+   (drgnx-keys-edit-test--put drgnx-keys-edit-test--sample)
+   ;; add keeps the keys it has, including those only the last resolution knows
+   (setq drgnx-keys-last (drgnx-keys-edit-test--bindings '(save "C-s" nil)))
+   (should (drgnx-keys-edit-add 'save "C-x C-s"))
+   (should (equal (alist-get 'save (plist-get (drgnx-keys-read-user) :bind)) '("C-s" "C-x C-s")))
+   (should-not (drgnx-keys-edit-add 'save "C-s"))         ; already there: no write
+   (let ((n applied))
+     (should (drgnx-keys-edit-replace 'save "C-s" "C-c s"))
+     (should (= applied (1+ n))))
+   (should (equal (alist-get 'save (plist-get (drgnx-keys-read-user) :bind)) '("C-c s" "C-x C-s")))
+   (should-not (drgnx-keys-edit-replace 'save "C-z" "C-c z"))   ; it does not have that key
+   (drgnx-keys-edit-undo)                                   ; the one step
+   (should (equal (alist-get 'save (plist-get (drgnx-keys-read-user) :bind)) '("C-s" "C-x C-s")))
+   ;; the same validation as bind
+   (should-error (drgnx-keys-edit-replace 'save "C-s" "not a key (") :type 'user-error)
+   (should-error (drgnx-keys-edit-add 'save "not a key (") :type 'user-error)
+   ;; and the same refusal of a file that does not read
+   (drgnx-keys-edit-test--put "(:bind")
+   (should-error (drgnx-keys-edit-add 'save "C-c s") :type 'user-error)
+   (should-error (drgnx-keys-edit-replace 'save "C-s" "C-c s") :type 'user-error)
+   (should (equal (drgnx-keys-edit-test--text) "(:bind"))))
+
+(ert-deftest drgnx-keys-edit/adding-unbind-to-a-file-without-one-leaves-no-blank-line ()
+  (drgnx-keys-edit-test--with-dir
+   (drgnx-keys-edit-test--put "(:layers ((emacs editing))\n :bind ((a \"C-c a\"))\n)\n")
+   (drgnx-keys-edit-unbind 'a "C-c a")
+   (should (equal (drgnx-keys-edit-test--text) "(:layers ((emacs editing))\n :bind ()\n :unbind (a)\n)\n"))))
 
 (provide 'keys-edit-test)
 ;;; keys-edit-test.el ends here

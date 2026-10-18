@@ -6,8 +6,8 @@
 ;; The writer behind the Keyboard Shortcuts editor (docs/guide/shortcuts.md).  It changes the entries of
 ;; keys.eld's `:bind' and `:unbind' lists one at a time and touches nothing else: comments, `:layers', the
 ;; other entries and the layout stay as the user wrote them.  A file that does not read as a keys.eld is
-;; reported and never written.  Every write keeps the previous text for one `drgnx-keys-edit-undo' and
-;; applies the keys at once.  See docs/guide/keys.md.
+;; reported and never written.  Every write keeps the previous and the new text in keys.eld.undo for one
+;; `drgnx-keys-edit-undo' (refused when keys.eld has changed since) and applies the keys at once.  See docs/guide/keys.md.
 
 ;;; Code:
 (require 'cl-lib)
@@ -15,14 +15,13 @@
 (require 'subr-x)
 (require 'drgnx-keys)
 
-(defvar drgnx-keys-edit--undo nil
-  "How to undo the last write: nil, `absent' (keys.eld did not exist), or the text it had.")
-
 (defconst drgnx-keys-edit--header
   ";; drgnx keys (docs/guide/keys.md): :layers — profile stack, :bind — (ID KEY… [:map M]),\n;; :unbind — (ID…)\n"
   "The comment a new keys.eld starts with.")
 
-(defun drgnx-keys-edit--undo-file () (concat (drgnx-keys-file) ".undo"))
+(defun drgnx-keys-edit--undo-file ()
+  "keys.eld.undo: the text before and after the last change made here, as (:old TEXT-or-:absent :new TEXT)."
+  (concat (drgnx-keys-file) ".undo"))
 
 ;;;; Reading and writing the text
 
@@ -43,9 +42,10 @@
                   ((not (proper-list-p (plist-get form :unbind))) ":unbind is not a list")))))
     (error (format "it cannot be read (%s)" (error-message-string err)))))
 
-(defun drgnx-keys-edit--write (text)
-  "Replace keys.eld by TEXT through a temp file, so a stale buffer is never asked about."
-  (let* ((file (drgnx-keys-file))
+(defun drgnx-keys-edit--write-file (file text)
+  "Replace FILE by TEXT through a temp file, so a stale buffer is never asked about.  A symlink FILE is written
+through, so it stays a link."
+  (let* ((file (file-truename file))
          (tmp (progn (make-directory (file-name-directory file) t)
                      (make-temp-file (expand-file-name ".keys-" (file-name-directory file))))))
     (condition-case err
@@ -91,7 +91,9 @@ else return nil when there is none."
       (let* ((start (drgnx-keys-edit--open t)) (close (1- (scan-sexps start 1))))
         (goto-char close)
         (let ((empty (save-excursion (skip-chars-backward " \t\n") (= (point) (1+ start)))))
-          (insert (if empty "" "\n ") (format "%s ()" key)))
+          (if (and (not empty) (save-excursion (skip-chars-backward " \t") (bolp)))
+              (progn (beginning-of-line) (insert (format " %s ()\n" key)))   ; the paren has its own line
+            (insert (if empty "" "\n ") (format "%s ()" key))))
         (drgnx-keys-edit--value key))))
 
 (defun drgnx-keys-edit--elements (key)
@@ -146,17 +148,75 @@ else return nil when there is none."
               (t (let ((col (save-excursion (goto-char (nth 0 (car elems))) (current-column))))
                    (insert "\n" (make-string col ?\s) text))))))))
 
-(defun drgnx-keys-edit--entry-text (id keys map)
-  (format "(%S %s%s)" id (mapconcat #'prin1-to-string keys " ") (if map (format " :map %S" map) "")))
+
+;;;; Entries: (ID KEY… [:none [REASON]] [:map M] [:mac KEY…])
+
+(defun drgnx-keys-edit--entry-text (id keys none opts)
+  "The text of an entry: ID, KEYS (or NONE, the `:none' part, when there are none), then the plist OPTS."
+  (format "(%S%s%s)" id
+          (mapconcat (lambda (x) (concat " " (prin1-to-string x))) (or keys none) "")
+          (mapconcat (lambda (x) (concat " " (prin1-to-string x))) opts "")))
+
+(defun drgnx-keys-edit--options (plist map mac)
+  "PLIST (an entry's options) without :map and :mac, then :map MAP when non-nil, then :mac when MAC is a list
+(`:absent' means the entry has none)."
+  (append (cl-loop for (k v) on plist by #'cddr unless (memq k '(:map :mac)) append (list k v))
+          (and map (list :map map))
+          (and (listp mac) (list :mac (if (= (length mac) 1) (car mac) mac)))))
+
+(defun drgnx-keys-edit--current (id)
+  "What keys.eld (in the buffer) and the last resolution say about ID: a plist
+:entry (non-nil when keys.eld has an entry), :main (its keys), :mac (the list after :mac, or `:absent'),
+:none (the `:none [REASON]' part), :plist (its other options), :map (the place of its keys: the entry's :map, else the
+resolved one), :keep-map (the :map to write back)."
+  (let ((entry (seq-find (lambda (e) (eq (drgnx-keys-edit--element-id (nth 2 e)) id))
+                         (car (drgnx-keys-edit--elements :bind)))))
+    (if entry
+        (let ((tail (cdr (nth 2 entry))) keys none)
+          (while (stringp (car tail)) (push (pop tail) keys))
+          (when (eq (car tail) :none)
+            (push (pop tail) none)
+            (when (stringp (car tail)) (push (pop tail) none)))
+          (unless (cl-evenp (length tail))
+            (user-error "%s: the entry for %s is not understood — fix it first (it was not changed)"
+                        (abbreviate-file-name (drgnx-keys-file)) id))
+          (list :entry t :main (nreverse keys) :none (nreverse none)
+                :mac (if (plist-member tail :mac) (ensure-list (plist-get tail :mac)) :absent)
+                :plist tail :keep-map (plist-get tail :map)
+                :map (or (plist-get tail :map) (plist-get (car (drgnx-keys-edit--resolved id)) :map))))
+      (let ((b (drgnx-keys-edit--resolved id)))
+        (list :main (mapcar (lambda (x) (plist-get x :key)) b) :mac :absent
+              :map (plist-get (car b) :map) :keep-map (plist-get (car b) :map))))))
+
+(defun drgnx-keys-edit--write-map (cur)
+  "The :map to write for the entry CUR describes: its own, else (with no entry) the one its keys resolved to."
+  (if (plist-get cur :entry) (plist-get cur :keep-map) (plist-get cur :map)))
+
+(defun drgnx-keys-edit--resolved (id)
+  (seq-filter (lambda (b) (eq (plist-get b :id) id)) (plist-get drgnx-keys-last :bindings)))
+
+(defun drgnx-keys-edit--commit (id cur main mac map)
+  "Write ID's entry with keys MAIN, :mac list MAC and place MAP; with no key left, put ID in :unbind."
+  (let ((none (or (plist-get cur :none) (list :none))))
+    (cond ((or main (consp mac))
+           (drgnx-keys-edit--remove :unbind id)
+           (drgnx-keys-edit--put :bind id (drgnx-keys-edit--entry-text
+                                           id main none (drgnx-keys-edit--options (plist-get cur :plist) map mac))))
+          (t (drgnx-keys-edit--remove :bind id)
+             (drgnx-keys-edit--put :unbind id (format "%S" id))))))
 
 ;;;; Changing keys.eld
+
+(defun drgnx-keys-edit--read (file)
+  (with-temp-buffer (insert-file-contents file) (buffer-string)))
 
 (defun drgnx-keys-edit--modify (fn)
   "Run FN in a buffer holding keys.eld's text (a header if there is none) and write the result.
 A file that does not read, or a result that does not, is a `user-error' and nothing is written.  Keeps the
-previous text for `drgnx-keys-edit-undo', applies the keys, and returns non-nil; nil when nothing changed."
-  (let* ((file (drgnx-keys-file)) (existed (file-exists-p file))
-         (old (if existed (with-temp-buffer (insert-file-contents file) (buffer-string)) drgnx-keys-edit--header)))
+previous and the new text in keys.eld.undo for `drgnx-keys-edit-undo', applies the keys, and returns non-nil;
+nil when nothing changed."
+  (let* ((file (file-truename (drgnx-keys-file))) (existed (file-exists-p file))
+         (old (if existed (drgnx-keys-edit--read file) drgnx-keys-edit--header)))
     (when-let* ((why (drgnx-keys-edit--check old)))
       (user-error "%s %s — fix it first (it was not changed)" (abbreviate-file-name file) why))
     (let ((new (with-temp-buffer
@@ -167,9 +227,10 @@ previous text for `drgnx-keys-edit-undo', applies the keys, and returns non-nil;
       (unless (equal new old)
         (when-let* ((why (drgnx-keys-edit--check new)))
           (error "drgnx keys.eld writer produced a file that %s" why))
-        (when existed (with-temp-file (drgnx-keys-edit--undo-file) (insert old)))
-        (setq drgnx-keys-edit--undo (if existed old 'absent))
-        (drgnx-keys-edit--write new)
+        (drgnx-keys-edit--write-file
+         (drgnx-keys-edit--undo-file)
+         (let ((print-length nil) (print-level nil)) (prin1-to-string (list :old (if existed old :absent) :new new))))
+        (drgnx-keys-edit--write-file file new)
         (drgnx-keys-edit--applied)
         t))))
 
@@ -179,54 +240,95 @@ previous text for `drgnx-keys-edit-undo', applies the keys, and returns non-nil;
     (drgnx-keys-apply)
     (when (fboundp 'drgnx-surfaces-refresh) (drgnx-surfaces-refresh))))
 
-(defun drgnx-keys-edit--keys-of (id)
-  "The (KEY . MAP) pairs ID has now: its entry in keys.eld (point in that buffer), else the last resolution."
-  (let ((entry (seq-find (lambda (e) (eq (drgnx-keys-edit--element-id (nth 2 e)) id))
-                         (car (drgnx-keys-edit--elements :bind)))))
-    (if entry
-        (let* ((form (nth 2 entry)) (rest (cdr form)) keys)
-          (while (stringp (car rest)) (push (pop rest) keys))
-          (mapcar (lambda (k) (cons k (plist-get rest :map))) (nreverse keys)))
-      (cl-loop for b in (plist-get drgnx-keys-last :bindings)
-               when (eq (plist-get b :id) id) collect (cons (plist-get b :key) (plist-get b :map))))))
-
 (defun drgnx-keys-edit--check-id (id)
   (unless (and id (symbolp id)) (user-error "%S is not a command id" id)))
+
+(defun drgnx-keys-edit--check-key (key)
+  (unless (and (stringp key) (key-valid-p key)) (user-error "%S is not a key" key)))
 
 (defun drgnx-keys-edit--same-key-p (a b)
   (or (equal a b) (ignore-errors (equal (key-parse a) (key-parse b)))))
 
+(defun drgnx-keys-edit--mac-slot-p (cur)
+  "Non-nil if on this machine ID's keys are the entry's :mac keys (macOS, and the entry has :mac)."
+  (and (eq (drgnx-platform) 'macos) (listp (plist-get cur :mac))))
+
+(defun drgnx-keys-edit--change (id map compute)
+  "Change ID's keys: COMPUTE gets (MAIN MAC) and returns (MAIN MAC) or nil for no change.
+MAP, when given, must be the place of ID's keys (the editor's \"where\")."
+  (drgnx-keys-edit--modify
+   (lambda ()
+     (let ((cur (drgnx-keys-edit--current id)))
+       (when (or (null map) (equal map (plist-get cur :map)))
+         (when-let* ((new (funcall compute (plist-get cur :main) (plist-get cur :mac))))
+           (drgnx-keys-edit--commit id cur (car new) (cadr new) (drgnx-keys-edit--write-map cur))))))))
+
+(defun drgnx-keys-edit--without (keys key) (seq-remove (lambda (k) (drgnx-keys-edit--same-key-p k key)) keys))
+
+(defun drgnx-keys-edit--has (keys key) (seq-some (lambda (k) (drgnx-keys-edit--same-key-p k key)) keys))
+
 ;;;###autoload
 (defun drgnx-keys-edit-bind (id keys &optional map)
-  "Give command ID the key or keys KEYS (a string or a list of strings) in keys.eld, replacing its entry.
-MAP is the keymap symbol or (FEATURE . KEYMAP) the keys belong to, nil for global.  Returns non-nil if written."
+  "Give command ID the key or keys KEYS (a string or a list of strings) in keys.eld, replacing its keys.
+On macOS, for an entry that has a `:mac' list, the :mac keys are replaced instead.  Its other options (`:mac' on
+other systems, a `:none' reason) are kept.  MAP is the keymap symbol or (FEATURE . KEYMAP) the keys belong to, nil
+for global.  Returns non-nil if written."
   (drgnx-keys-edit--check-id id)
   (let ((keys (ensure-list keys)))
-    (unless (and keys (seq-every-p (lambda (k) (and (stringp k) (key-valid-p k))) keys))
-      (user-error "%S is not a key or a list of keys" keys))
+    (unless keys (user-error "%S is not a key or a list of keys" keys))
+    (mapc #'drgnx-keys-edit--check-key keys)
     (drgnx-keys-edit--modify
      (lambda ()
-       (drgnx-keys-edit--remove :unbind id)
-       (drgnx-keys-edit--put :bind id (drgnx-keys-edit--entry-text id keys map))))))
+       (let ((cur (drgnx-keys-edit--current id)))
+         (if (drgnx-keys-edit--mac-slot-p cur)
+             (drgnx-keys-edit--commit id cur (plist-get cur :main) keys map)
+           (drgnx-keys-edit--commit id cur keys (plist-get cur :mac) map)))))))
+
+;;;###autoload
+(defun drgnx-keys-edit-add (id key &optional map)
+  "Give command ID the key KEY as well, keeping the keys it has (those of keys.eld or of the last resolution).
+MAP is the place of its keys (see `drgnx-keys-edit-unbind'); for a command with no keys yet it is the place of KEY.
+Returns non-nil if written, nil when ID has KEY already."
+  (drgnx-keys-edit--check-id id)
+  (drgnx-keys-edit--check-key key)
+  (drgnx-keys-edit--modify
+   (lambda ()
+     (let ((cur (drgnx-keys-edit--current id)))
+       (unless (and (plist-get cur :map) map (not (equal map (plist-get cur :map))))
+         (let ((main (plist-get cur :main)) (mac (plist-get cur :mac)))
+           (unless (or (drgnx-keys-edit--has main key) (and (listp mac) (drgnx-keys-edit--has mac key)))
+             (if (drgnx-keys-edit--mac-slot-p cur)
+                 (setq mac (append mac (list key)))
+               (setq main (append main (list key))))
+             (drgnx-keys-edit--commit id cur main mac (or (drgnx-keys-edit--write-map cur) map)))))))))
+
+;;;###autoload
+(defun drgnx-keys-edit-replace (id old-key new-key &optional map)
+  "Give command ID NEW-KEY in place of OLD-KEY, keeping its other keys, in one write (one undo step).
+MAP is the place of the keys (see `drgnx-keys-edit-unbind').  Returns non-nil if written, nil when ID does not
+have OLD-KEY."
+  (drgnx-keys-edit--check-id id)
+  (drgnx-keys-edit--check-key new-key)
+  (drgnx-keys-edit--change
+   id map
+   (lambda (main mac)
+     (cl-flet ((swap (keys) (delete-dups
+                             (mapcar (lambda (k) (if (drgnx-keys-edit--same-key-p k old-key) new-key k)) keys))))
+       (when (or (drgnx-keys-edit--has main old-key) (and (listp mac) (drgnx-keys-edit--has mac old-key)))
+         (list (swap main) (if (listp mac) (swap mac) mac)))))))
 
 ;;;###autoload
 (defun drgnx-keys-edit-unbind (id key &optional map)
-  "Take KEY (in MAP when given) away from command ID.
-The keys ID keeps are written as its keys.eld entry; with none left ID goes into :unbind.  Returns non-nil if
-written; nil when ID does not have KEY."
+  "Take KEY away from command ID.
+The keys ID keeps are written as its keys.eld entry (its `:mac' keys and other options stay); with none left ID
+goes into :unbind.  MAP, when given, must be the place of ID's keys: its entry's `:map', else the one it resolved
+to.  Returns non-nil if written; nil when ID does not have KEY."
   (drgnx-keys-edit--check-id id)
-  (drgnx-keys-edit--modify
-   (lambda ()
-     (let* ((now (drgnx-keys-edit--keys-of id))
-            (rest (seq-remove (lambda (p) (and (drgnx-keys-edit--same-key-p (car p) key)
-                                               (or (null map) (equal (cdr p) map))))
-                              now)))
-       (unless (= (length rest) (length now))
-         (if rest
-             (progn (drgnx-keys-edit--remove :unbind id)
-                    (drgnx-keys-edit--put :bind id (drgnx-keys-edit--entry-text id (mapcar #'car rest) (cdr (car rest)))))
-           (drgnx-keys-edit--remove :bind id)
-           (drgnx-keys-edit--put :unbind id (symbol-name id))))))))
+  (drgnx-keys-edit--change
+   id map
+   (lambda (main mac)
+     (let ((main2 (drgnx-keys-edit--without main key)) (mac2 (if (listp mac) (drgnx-keys-edit--without mac key) mac)))
+       (unless (and (equal main main2) (equal mac mac2)) (list main2 mac2))))))
 
 ;;;###autoload
 (defun drgnx-keys-edit-reset (id)
@@ -243,15 +345,26 @@ written; nil when ID does not have KEY."
 
 ;;;###autoload
 (defun drgnx-keys-edit-undo ()
-  "Put keys.eld back as it was before the last change made here (one step)."
-  (unless drgnx-keys-edit--undo (user-error "Nothing to undo in keys.eld"))
-  (if (eq drgnx-keys-edit--undo 'absent)
-      (when (file-exists-p (drgnx-keys-file)) (delete-file (drgnx-keys-file)))
-    (drgnx-keys-edit--write drgnx-keys-edit--undo))
-  (when (file-exists-p (drgnx-keys-edit--undo-file)) (delete-file (drgnx-keys-edit--undo-file)))
-  (setq drgnx-keys-edit--undo nil)
-  (drgnx-keys-edit--applied)
-  t)
+  "Put keys.eld back as it was before the last change made here (one step).
+Refused, with nothing written, when keys.eld is no longer what that change wrote (something else changed it
+since)."
+  (let* ((undo (drgnx-keys-edit--undo-file))
+         (saved (and (file-exists-p undo)
+                     (condition-case nil (car (read-from-string (drgnx-keys-edit--read undo))) (error nil)))))
+    (cond ((not (file-exists-p undo)) (user-error "Nothing to undo in keys.eld"))
+          ((not (and (proper-list-p saved) (stringp (plist-get saved :new))
+                     (or (stringp (plist-get saved :old)) (eq (plist-get saved :old) :absent))))
+           (user-error "The undo copy %s cannot be read; keys.eld was not changed" (abbreviate-file-name undo))))
+    (let* ((file (file-truename (drgnx-keys-file)))
+           (now (and (file-exists-p file) (drgnx-keys-edit--read file))))
+      (unless (equal now (plist-get saved :new))
+        (user-error "keys.eld changed since that edit; it was not undone"))
+      (if (eq (plist-get saved :old) :absent)
+          (delete-file file)
+        (drgnx-keys-edit--write-file file (plist-get saved :old)))
+      (delete-file undo)
+      (drgnx-keys-edit--applied)
+      t)))
 
 (provide 'drgnx-keys-edit)
 ;;; drgnx-keys-edit.el ends here
