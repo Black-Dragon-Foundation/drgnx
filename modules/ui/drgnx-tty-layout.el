@@ -32,6 +32,7 @@
 (require 'drgnx-wb)
 (declare-function drgnx-wb-area-show "drgnx-area")
 (declare-function drgnx-wb-area-window "drgnx-area")
+(declare-function drgnx-chrome-apply "drgnx-chrome")
 
 (defcustom drgnx-tty-layout-columns 120
   "Columns a new terminal window needs to show the sidebar (a narrower one starts with the editor alone; the
@@ -232,7 +233,9 @@ fraction, except one you resized (`drgnx-tty-layout--notice-drags'), which keeps
            (breadcrumb (and (< lines drgnx-tty-layout--breadcrumb-lines) 'off))
            (same (equal (frame-parameter frame 'drgnx-tty-layout-size) (cons columns lines))))
       (unless (eq (frame-parameter frame 'drgnx-chrome-breadcrumb) breadcrumb)
-        (set-frame-parameter frame 'drgnx-chrome-breadcrumb breadcrumb))
+        (set-frame-parameter frame 'drgnx-chrome-breadcrumb breadcrumb)
+        ;; the parameter alone redraws nothing: the chrome reads it now
+        (when (bound-and-true-p drgnx-chrome-mode) (drgnx-chrome-apply frame)))
       (when opening (set-frame-parameter frame 'drgnx-tty-layout-withheld (list 'dock 'panel)))
       (unless same (set-frame-parameter frame 'drgnx-tty-layout-size (cons columns lines)))
       (when (and (not same) (>= columns drgnx-tty-layout--min-columns) (>= lines drgnx-tty-layout--min-lines))

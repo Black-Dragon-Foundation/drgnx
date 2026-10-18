@@ -21,6 +21,7 @@
 (require 'drgnx-surfaces)
 (require 'drgnx-keys)
 (require 'drgnx-keys-edit)
+(require 'drgnx-tty-fallback)
 
 (defcustom drgnx-shortcuts-chord-wait 1.0
   "Seconds to wait, after the first key recorded, for the second key of a chord."
@@ -58,16 +59,36 @@
   (if (eq layer 'user) "keys.eld"
     (or (plist-get (alist-get layer drgnx-keys-profiles) :name) (symbol-name layer))))
 
+(defun drgnx-shortcuts--tty-caps ()
+  "What drgnx found about the selected frame's terminal when it opened, or nil on a graphical frame and on a
+terminal not set up (nothing is asked of it here)."
+  (let ((frame (selected-frame)))
+    (and (not (display-graphic-p frame)) (terminal-parameter (frame-terminal frame) 'drgnx-tty-caps))))
+
 (defun drgnx-shortcuts-terminal-p (key)
-  "Non-nil if a terminal can send KEY: not with Super, Hyper or Alt, C-S- on a character, or C- on a character
-other than a letter, @ [ \\ ] ^ _ ? or space (a terminal without the kitty keyboard protocol sends none of those)."
-  (seq-every-p (lambda (ev)
-                 (let ((mods (event-modifiers ev)) (base (event-basic-type ev)))
-                   (not (or (seq-intersection mods '(super hyper alt))
-                            (and (memq 'control mods) (characterp base)
-                                 (or (memq 'shift mods)
-                                     (not (or (<= ?a base ?z) (memq base '(?@ ?\[ ?\\ ?\] ?^ ?_ ?? ?\s))))))))))
-               (key-parse key)))
+  "Non-nil if a terminal can send KEY.  On a terminal frame, this terminal (what it can do: kitty keyboard
+protocol, modifyOtherKeys or neither, `drgnx-tty-frame-sends-p'); elsewhere a terminal without the kitty keyboard
+protocol: not with Super, Hyper or Alt, C-S- on a character, or C- on a character other than a letter, @ [ \\ ] ^
+_ ? or space."
+  (if (drgnx-shortcuts--tty-caps)
+      (drgnx-tty-frame-sends-p (selected-frame) key)
+    (seq-every-p (lambda (ev)
+                   (let ((mods (event-modifiers ev)) (base (event-basic-type ev)))
+                     (not (or (seq-intersection mods '(super hyper alt))
+                              (and (memq 'control mods) (characterp base)
+                                   (or (memq 'shift mods)
+                                       (not (or (<= ?a base ?z) (memq base '(?@ ?\[ ?\\ ?\] ?^ ?_ ?? ?\s))))))))))
+                 (key-parse key))))
+
+(defun drgnx-shortcuts--terminal-note (key)
+  "The hover text of KEY's terminal mark: that a terminal cannot send it and, on a terminal frame, what to press
+here (`drgnx-tty-sendable-key': the Alt+Shift key, or F6 then the key), or that this terminal has no fallback."
+  (concat "A terminal cannot send this key (a graphical frame can)"
+          (when (drgnx-shortcuts--tty-caps)
+            (let ((here (drgnx-tty-sendable-key (selected-frame) key)))
+              (if (equal here key)
+                  "; no fallback is on in this terminal"
+                (format "; here: %s" (drgnx-tty-fallback-label here)))))))
 
 (defun drgnx-shortcuts--starts-with-p (key prefix)
   "Non-nil if KEY is PREFIX or starts with it (keys compared parsed)."
@@ -179,7 +200,7 @@ conflict of the resolution."
   (mapconcat (lambda (k) (concat (propertize (car k) 'face 'drgnx-shortcuts-key)
                                  (unless (drgnx-shortcuts-terminal-p (car k))
                                    (propertize "†" 'face 'drgnx-shortcuts-warning
-                                               'help-echo "A terminal cannot send this key (a graphical frame can)"))))
+                                               'help-echo (drgnx-shortcuts--terminal-note (car k))))))
              keys ", "))
 
 (defun drgnx-shortcuts--pad (s width)
@@ -224,7 +245,7 @@ conflict of the resolution."
             (drgnx-shortcuts--toggle-text 'conflicts "Conflicts") "  "
             (drgnx-shortcuts--toggle-text 'no-key "No key") "  "
             (drgnx-shortcuts--toggle-text 'changed "Changed by me") "\n"
-            (propertize "! a key conflict (hover for which)   † a terminal cannot send this key\n\n"
+            (propertize "! a key conflict (hover for which)   † a terminal cannot send this key (hover: what to press here)\n\n"
                         'face 'drgnx-shortcuts-dim)
             (propertize (format "  %s %s %s %s\n" (drgnx-shortcuts--pad "Command" 46) (drgnx-shortcuts--pad "Keys" 26)
                                 (drgnx-shortcuts--pad "Source" 12) "Where")
@@ -427,6 +448,21 @@ has several), or gives them to a command without keys; `add' adds them to its ke
 (defun drgnx-shortcuts-toggle-changed () "Show only commands you changed in keys.eld, or all." (interactive)
        (drgnx-shortcuts--toggle 'changed))
 
+(defun drgnx-shortcuts-set-tty-fallback ()
+  "Choose the Alt+Shift key a terminal that cannot send this command's key sends instead (keys.eld :tty-fallback)."
+  (interactive)
+  (let* ((row (drgnx-shortcuts--row (drgnx-shortcuts--id-at-point)))
+         (chords (seq-uniq (mapcan (lambda (k) (unless (drgnx-shortcuts-terminal-p (car k)) (drgnx-tty-fallback-chords (list (car k)))))
+                                   (plist-get row :keys))
+                           #'equal)))
+    (unless chords (user-error "%s: nothing to set; a terminal sends all its keys" (plist-get row :title)))
+    (let* ((chord (if (cdr chords) (completing-read "Terminal fallback for which key: " chords nil t) (car chords)))
+           (key (string-trim (read-string (format "Alt+Shift key for %s in a terminal that cannot send it (such as M-Z): " chord)))))
+      (when (string-empty-p key) (user-error "No key given; nothing changed"))
+      (drgnx-keys-edit-set-tty-fallback chord key)
+      (message "%s: %s is %s in a terminal that cannot send it" (plist-get row :title) chord (drgnx-tty-fallback-label key))
+      (drgnx-shortcuts--redraw))))
+
 (defun drgnx-shortcuts-undo ()
   "Take back the last change to keys.eld."
   (interactive)
@@ -467,6 +503,8 @@ has several), or gives them to a command without keys; `add' adds them to its ke
                    (shortcuts-conflicts "Show Conflicts" drgnx-shortcuts-toggle-conflicts "Only commands in a key conflict")
                    (shortcuts-no-key "Show Commands Without a Key" drgnx-shortcuts-toggle-no-key "Only commands without a key")
                    (shortcuts-changed "Show Changed by Me" drgnx-shortcuts-toggle-changed "Only commands your keys.eld changes")
+                   (shortcuts-tty-fallback "Set the Terminal Fallback" drgnx-shortcuts-set-tty-fallback
+                                           "The Alt+Shift key a terminal that cannot send this key sends instead")
                    (shortcuts-undo "Undo Last Change" drgnx-shortcuts-undo "keys.eld as it was before the last change")
                    (shortcuts-reset "Reset Keybinding" drgnx-shortcuts-reset "This command's profile keys again")
                    (shortcuts-reset-all "Reset All Keybindings" drgnx-shortcuts-reset-all

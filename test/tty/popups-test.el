@@ -263,7 +263,8 @@ Lisp file in the editor."
   ;; LANG=C: the terminal does not write UTF-8.  The tab line, the breadcrumb, the Explorer and the docks' headers
   ;; show ASCII marks (x for ×, * for ●, > for › ▸, v for ▾) — no `?' and no \uXXXX escapes — and, on 31.1, so does
   ;; a child frame's border (+ - |)
-  (drgnx-tty-session-with (s :size "100x30" :env '("LANG=C" "LC_ALL=C"))
+  ;; 31 lines: the menu bar takes one, and a frame under 30 lines has no breadcrumb (ui/terminal-layout)
+  (drgnx-tty-session-with (s :size "100x31" :env '("LANG=C" "LC_ALL=C"))
     (drgnx-tty-popups-test--ready s "x")
     (should (drgnx-tty-session-eval s '(drgnx-tty-popups-ascii-p)))
     (should (drgnx-tty-session-eval s '(and (memq 'drgnx-tty-popups--pre-redisplay pre-redisplay-functions) t)))

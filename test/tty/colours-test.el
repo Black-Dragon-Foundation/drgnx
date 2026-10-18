@@ -208,5 +208,40 @@ foreground and background are the same colour on this terminal, in the default t
     ;; no graph buffer was made on the way
     (should-not (drgnx-tty-session-eval s '(and (get-buffer "*work graph*") t)))))
 
+(ert-deftest drgnx-tty-colours/the-browser-pane-says-it-cannot-show-here ()
+  ;; a page needs a graphical frame: the system browser gets it (stubbed: no browser starts), once, with the reason
+  (drgnx-tty-session-with (s :daemon t)
+    (drgnx-tty-session-client s)
+    (drgnx-tty-session-wait s '(fboundp 'drgnx-browser-open) 20)
+    (let ((r (drgnx-tty-colours-test--in-client
+              s '(let ((windows (length (window-list nil 'nomini))) opened said)
+                   (cl-letf (((symbol-function 'browse-url) (lambda (u &rest _) (push u opened)))
+                             ((symbol-function 'message) (lambda (fmt &rest args) (push (apply #'format fmt args) said))))
+                     (setq drgnx-browser--told nil)
+                     (condition-case err
+                         (progn (drgnx-browser-open "https://example.org")
+                                (list 'shown opened said (= windows (length (window-list nil 'nomini)))))
+                       (error (list 'error err))))))))
+      (should (eq (car r) 'shown))
+      (should (equal (nth 1 r) '("https://example.org")))
+      ;; whichever is true here: no WebKit in this Emacs, or WebKit but no graphical frame
+      (should (string-match-p "no WebKit\\|cannot show a web page" (car (nth 2 r))))
+      ;; no pane was made for it
+      (should (nth 3 r)))
+    (should-not (drgnx-tty-session-eval s '(and (get-buffer "*drgnx: browser*") (get-buffer-window "*drgnx: browser*") t)))))
+
+(ert-deftest drgnx-tty-colours/the-live-view-says-it-cannot-show-here ()
+  ;; the Live view is an image of the page: a text saying so, and the browser for agents is not started
+  (drgnx-tty-session-with (s :daemon t)
+    (drgnx-tty-session-client s)
+    (drgnx-tty-session-wait s '(fboundp 'drgnx-live-view) 20)
+    (let ((r (drgnx-tty-colours-test--in-client
+              s '(condition-case err (progn (call-interactively #'drgnx-live-view) 'shown)
+                   (user-error (cadr err))
+                   (error (list 'error err))))))
+      (should (stringp r))
+      (should (string-match-p "needs a graphical frame" r)))
+    (should-not (drgnx-tty-session-eval s '(or (and (drgnx-live-running) t) (and (get-buffer "*drgnx live*") t))))))
+
 (provide 'drgnx-tty-colours-test)
 ;;; colours-test.el ends here

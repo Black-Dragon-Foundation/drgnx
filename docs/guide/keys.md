@@ -248,6 +248,12 @@ profile is typed as Alt+Shift with the key where that is free (`C-S-f` as Alt+Sh
 (`C-S-p` as F6 p), always: see [Legacy terminals](terminal.md#legacy-terminals-altshift-and-f6). `:tty-fallback` in
 `keys.eld` gives a chord another Alt key, `(:tty-fallback (("C-S-p" . "M-Z")))`, if that key is free.
 
+In such a terminal every surface shows a key the way that terminal can send it: the command palette and the menus
+show `F6 p` for the palette itself and `Alt+Shift+F`'s `M-F` for Search in Project, the "next time" tips say the
+same, and the key sheet (`C-h C-k`, `C-k C-r` in VS Code keys) ends with a section, "Keys this terminal cannot send, and
+what to press here", that lists each such key with both forms. In a graphical window, and in a terminal that sends the
+key, nothing changes. The markdown cheat sheet (`drgnx-surfaces-export-markdown`) always has the profile's own keys.
+
 The Keyboard Shortcuts editor (Preferences: Keyboard Shortcuts) changes these keys for you: [shortcuts.md](shortcuts.md).
 
 ## For module authors

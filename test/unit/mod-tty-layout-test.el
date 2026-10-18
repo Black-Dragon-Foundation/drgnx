@@ -192,6 +192,26 @@ half-built dock (3 wide) and signal, as `split-window' does in a small frame."
     (drgnx-tty-layout-apply (selected-frame) t)
     (should (eq (frame-parameter nil 'drgnx-chrome-breadcrumb) 'off))))
 
+(ert-deftest drgnx-tty-layout/the-chrome-is-told-when-the-breadcrumb-changes ()
+  ;; the frame parameter alone redraws nothing: the layout asks the chrome to read it
+  (let (applied)
+    (drgnx-tty-layout-test--frame '(80 . 24)
+      (cl-letf (((symbol-function 'drgnx-chrome-apply) (lambda (&optional frame &rest _) (push frame applied)))
+                (drgnx-chrome-mode t))
+        (drgnx-tty-layout-apply (selected-frame) t)
+        (should (equal applied (list (selected-frame))))
+        (setq size '(100 . 20))
+        (drgnx-tty-layout-apply (selected-frame))      ; still under 30 lines: nothing changed
+        (should (= (length applied) 1))
+        (setq size '(100 . 40))
+        (drgnx-tty-layout-apply (selected-frame))      ; the breadcrumb is back
+        (should (= (length applied) 2))
+        ;; chrome off: nothing to apply
+        (setq size '(100 . 20) applied nil)
+        (let ((drgnx-chrome-mode nil))
+          (drgnx-tty-layout-apply (selected-frame))
+          (should-not applied))))))
+
 (ert-deftest drgnx-tty-layout/a-resize-with-the-same-size-does-nothing ()
   (drgnx-tty-layout-test--frame '(120 . 40)
     (drgnx-tty-layout-apply (selected-frame) t)

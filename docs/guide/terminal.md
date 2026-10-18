@@ -203,6 +203,9 @@ kind of terminal, ever (`terminal-report.eld` remembers it as `:hinted`).
 `terminal-report.eld` has, for each terminal, `:fallback` (the layer is on) and `:fallbacks`: every chord of your
 profile a plain terminal cannot send, as `(CHORD NATIVE-P ALT PREFIX)`, where NATIVE-P says this terminal sends it
 itself. `drgnx-tty-sendable-key` gives any key as a terminal window can type it (`M-F`, `<f6> p`, or the key itself).
+The command palette, the menus, the "next time" tips and the key sheet show keys that way, and the key sheet has a
+section, "Keys this terminal cannot send, and what to press here"; in the Keyboard Shortcuts editor `†` names the
+key to press and **Set the Terminal Fallback** (`t`) changes it ([shortcuts.md](shortcuts.md#terminal-mark)).
 
 Settings (`M-x customize-variable`):
 
@@ -297,7 +300,7 @@ set -as terminal-features ',xterm-kitty:RGB'  # true colour; the TERM of the ter
   own. Then `C-g` always works (it stays one byte and stops a runaway Lisp loop), but tmux folds some chords into
   others: `C-S-<letter>` (and `C-M-S-<letter>`) arrive as `C-<letter>`, `C-S-SPC` and `` C-` `` as `C-SPC`, `` C-S-` ``
   as `C-^` (tmux 3.7c). drgnx lists those in `terminal-report.eld` as keys this terminal cannot send (the key sheet
-  and the fallback keys cover them once those arrive with the key-fallback layer), and the capabilities carry them as
+  lists them with what to press instead: Alt+Shift or F6 then the key), and the capabilities carry them as
   `:folded`. `M-x customize-variable` `drgnx-tty-tmux-mok-level` set to `2` asks for level 2 (it applies to the
   tmux windows already open too): C-S-letter chords work natively in tmux, but `C-g` can no longer stop a runaway
   Lisp loop (it reaches Emacs as an escape sequence; prompts and commands still take it, and the capabilities say

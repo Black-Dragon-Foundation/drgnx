@@ -136,6 +136,17 @@
     (drgnx-tty-layout-test--resize s "120x40")
     (should (drgnx-tty-session-wait s '(null (frame-parameter nil 'drgnx-chrome-breadcrumb)) 5))))
 
+(ert-deftest drgnx-tty-layout/no-breadcrumb-below-30-lines ()
+  ;; the chrome reads the frame's parameter: the editor window has no breadcrumb row in a short terminal
+  (drgnx-tty-session-with (s :size "80x24")
+    (drgnx-tty-layout-test--ready s)
+    (should (drgnx-tty-session-wait s '(= 0 (window-header-line-height (drgnx-wb-editor-window))) 5))
+    ;; the tab line stays
+    (drgnx-tty-session-wait-screen s "\\*scratch\\* ×")
+    ;; room again: the row is back
+    (drgnx-tty-layout-test--resize s "120x40")
+    (should (drgnx-tty-session-wait s '(> (window-header-line-height (drgnx-wb-editor-window)) 0) 5))))
+
 (ert-deftest drgnx-tty-layout/a-short-terminal-shows-nothing-until-it-has-room ()
   ;; wide enough for the sidebar by its setting, too few lines for anything
   (drgnx-tty-session-with (s :size "80x24")

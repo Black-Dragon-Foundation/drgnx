@@ -21,6 +21,9 @@ opens every page in your system browser (`browse-url`) and says why once; the Br
 instead of a page. Test Report and Agent's Page work the same way: they start the server and open the address, in
 whichever browser applies.
 
+A terminal window cannot show a page either, even in an Emacs with WebKit: the page opens in your system browser, and
+the message says so once.
+
 ## Test Report
 
 **Browser: Test Report** looks in the project (not into `node_modules` or dot-directories) for the newest

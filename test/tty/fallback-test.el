@@ -86,6 +86,22 @@
         (should (= before (drgnx-tty-session-eval s count))))
       (should (= 1 (seq-count (lambda (id) (eq id 'vte)) (drgnx-tty-session-eval s '(plist-get (drgnx-tty--read-report) :hinted))))))))
 
+(ert-deftest drgnx-tty-fallback/the-shared-surfaces-show-the-keys-this-terminal-sends ()
+  ;; the key sheet and a command's key, asked in a VTE client's frame
+  (drgnx-tty-session-with (s :daemon t :keys 'vscode :size "120x28" :options '(("set" "-s" "extended-keys" "off")))
+    (let* ((c (drgnx-tty-fallback-test--legacy s))
+           (frame (drgnx-tty-keys-test--frame c))
+           (key '(let ((cmd (drgnx-commands-get 'view-search)))
+                   (drgnx-surfaces-key cmd))))
+      (should (equal (drgnx-tty-session-eval s `(with-selected-frame ,frame ,key)) "M-F"))
+      (let ((sheet (drgnx-tty-session-eval
+                    s `(with-selected-frame ,frame
+                         (drgnx-surfaces-cheatsheet)
+                         (prog1 (with-current-buffer "*drgnx keys*" (buffer-string)) (kill-buffer "*drgnx keys*"))))))
+        (should (string-match-p "Keys this terminal cannot send, and what to press here" sheet))
+        (should (string-match-p "C-S-p +Command Palette +F6 p" sheet))
+        (should (string-match-p "C-S-f +[^\n]*Alt\\+Shift\\+F, or F6 f" sheet))))))
+
 (ert-deftest drgnx-tty-fallback/alt-shift-e-focuses-the-explorer ()
   (drgnx-tty-session-with (s :daemon t :keys 'vscode :size "120x28" :options '(("set" "-s" "extended-keys" "off")))
     (let* ((c (drgnx-tty-fallback-test--legacy s))
