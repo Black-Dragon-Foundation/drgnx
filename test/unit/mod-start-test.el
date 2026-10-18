@@ -26,6 +26,10 @@
         (setf (drgnx-cmd-bound (drgnx-commands-get id))
               (unless (eq (car keys) :none) (mapcar (lambda (k) (cons k nil)) keys)))))))
 
+(defun drgnx-start-test--fresh-scratch ()
+  "`*scratch*' as Emacs starts it: empty, not modified (the tests share it)."
+  (with-current-buffer (get-scratch-buffer-create) (erase-buffer) (set-buffer-modified-p nil)))
+
 (defmacro drgnx-start-test--with (profile &rest body)
   "BODY with a registry of its own holding the commands the page names (keys as PROFILE binds the three), a state
 directory in a temp dir, the persist/server/signal hooks kept away from the rest of the process, and the selected
@@ -42,6 +46,7 @@ window showing `*scratch*'.  `y-or-n-p' and every `read-*' fail: nothing here ma
           (drgnx-signal--editor-window nil) (drgnx-start--timer nil)
           (old (window-buffer (selected-window))))
      (cl-letf (((symbol-function 'drgnx-face--ascii-frame-p) (lambda (_frame) nil))   ; the batch terminal is not UTF-8
+               ((symbol-function 'drgnx-onboard--welcome-due-p) (lambda () nil))      ; no first-run Welcome in the way
                ((symbol-function 'y-or-n-p) (lambda (&rest _) (error "asked y-or-n-p")))
                ((symbol-function 'yes-or-no-p) (lambda (&rest _) (error "asked yes-or-no-p")))
                ((symbol-function 'read-string) (lambda (&rest _) (error "asked read-string")))
@@ -57,8 +62,10 @@ window showing `*scratch*'.  `y-or-n-p' and every `read-*' fail: nothing here ma
        (drgnx-command-define 'open-folder :title "Open Folder…" :category "File" :command #'drgnx-start-test-folder)
        (drgnx-command-define 'work-graph :title "Show Work as Graph" :category "Work" :command #'drgnx-start-test-graph)
        (drgnx-start-test--bind ,profile)
+       (drgnx-start-test--fresh-scratch)
        (set-window-buffer (selected-window) (get-scratch-buffer-create))
        (unwind-protect (progn ,@body)
+         (drgnx-start-test--fresh-scratch)
          (when-let* ((b (get-buffer "*drgnx start*"))) (kill-buffer b))
          (set-window-buffer (selected-window) old)
          (delete-directory tmp t)))))
@@ -232,6 +239,77 @@ absolute local name expanded against a remote folder) passes; everything else, \
       (drgnx-start--on-editor-changed (get-scratch-buffer-create))
       (should (equal (buffer-name (window-buffer (selected-window))) "*drgnx start*")))))
 
+(defun drgnx-start-test--shown-p ()
+  "Non-nil when the selected window shows the start page."
+  (equal (buffer-name (window-buffer (selected-window))) "*drgnx start*"))
+
+(ert-deftest drgnx-start/a-typed-scratch-keeps-the-page-away ()
+  (drgnx-start-test--with 'vscode
+    (let ((noninteractive nil) (scratch (get-scratch-buffer-create)))
+      (with-current-buffer scratch (insert "(+ 1 2)"))        ; the user's own text
+      ;; the startup path
+      (drgnx-start--first-frame-run)
+      (drgnx-start-maybe-show)
+      (should (eq (window-buffer (selected-window)) scratch))
+      ;; the last-file-closed path
+      (with-temp-buffer (setq buffer-file-name (expand-file-name "x.el" temporary-file-directory))
+                        (drgnx-start--on-editor-changed (current-buffer)))
+      (drgnx-start--on-editor-changed scratch)
+      (should (eq (window-buffer (selected-window)) scratch))
+      ;; erased, it is empty again; and drgnx's initial text, even modified, still counts as untouched
+      (with-current-buffer scratch (erase-buffer) (set-buffer-modified-p nil))
+      (drgnx-start-maybe-show)
+      (should (drgnx-start-test--shown-p))
+      (set-window-buffer (selected-window) scratch)
+      (let ((initial-scratch-message ";; hello \\[save-buffer]"))
+        (with-current-buffer scratch
+          (erase-buffer) (insert (substitute-command-keys initial-scratch-message)) (set-buffer-modified-p t))
+        (drgnx-start-maybe-show)
+        (should (drgnx-start-test--shown-p))))))
+
+(ert-deftest drgnx-start/another-file-tab-still-open-does-nothing ()
+  (drgnx-start-test--with 'vscode
+    (let ((noninteractive nil) (w (selected-window)))
+      (with-temp-buffer
+        (setq buffer-file-name (expand-file-name "x.el" temporary-file-directory))
+        (let ((file (current-buffer)))
+          (set-window-parameter w 'drgnx-tabs (list file))
+          (drgnx-start--on-editor-changed file)               ; a file was shown
+          (set-window-buffer w (get-scratch-buffer-create))   ; a tab closed, another file tab is left
+          (drgnx-start--on-editor-changed (get-scratch-buffer-create))
+          (should-not (drgnx-start-test--shown-p))
+          (set-window-parameter w 'drgnx-tabs nil))))))
+
+(ert-deftest drgnx-start/going-to-scratch-by-hand-does-nothing ()
+  (drgnx-start-test--with 'vscode
+    (let ((noninteractive nil))
+      (drgnx-start--on-editor-changed (get-buffer-create "*Messages*"))   ; from a buffer that is no file
+      (drgnx-start--on-editor-changed (get-scratch-buffer-create))
+      (should-not (drgnx-start-test--shown-p))
+      (should-not (get-buffer "*drgnx start*")))))
+
+(ert-deftest drgnx-start/the-welcome-comes-first ()
+  (drgnx-start-test--with 'vscode
+    (cl-letf (((symbol-function 'drgnx-onboard--welcome-due-p) (lambda () t)))
+      (drgnx-start-maybe-show)
+      (should-not (drgnx-start-test--shown-p))
+      (should-not (get-buffer "*drgnx start*")))
+    (cl-letf (((symbol-function 'drgnx-onboard--welcome-due-p) (lambda () nil)))   ; it ran: the page may show
+      (drgnx-start-maybe-show)
+      (should (drgnx-start-test--shown-p)))))
+
+(ert-deftest drgnx-start/a-dedicated-window-and-a-child-frame-are-skipped ()
+  (drgnx-start-test--with 'vscode
+    (let ((w (selected-window)))
+      (set-window-dedicated-p w t)
+      (unwind-protect (progn (drgnx-start-maybe-show) (should-not (drgnx-start-test--shown-p)))
+        (set-window-dedicated-p w nil)))
+    (cl-letf (((symbol-function 'frame-parent) (lambda (&optional _frame) (selected-frame))))
+      (drgnx-start-maybe-show)
+      (should-not (drgnx-start-test--shown-p)))
+    (drgnx-start-maybe-show)                                  ; neither: it shows
+    (should (drgnx-start-test--shown-p))))
+
 (ert-deftest drgnx-start/setup-is-idempotent-and-teardown-removes-it ()
   (drgnx-start-test--with 'vscode
     (drgnx-start-setup)
@@ -242,11 +320,14 @@ absolute local name expanded against a remote folder) passes; everything else, \
     (should (= 1 (cl-count #'drgnx-start--on-first-frame window-setup-hook)))
     (should (= 1 (cl-count #'drgnx-start--on-editor-changed (alist-get 'editor-changed drgnx-signal--subscribers))))
     (should (drgnx-commands-get 'start-page))
-    (drgnx-start--on-first-frame)                             ; an owned, single timer
-    (let ((first drgnx-start--timer))
-      (should (timerp first))
+    (drgnx-start--on-first-frame)                             ; batch: no timer
+    (should-not drgnx-start--timer)
+    (let ((noninteractive nil))                               ; an owned, single timer
       (drgnx-start--on-first-frame)
-      (should-not (memq first timer-idle-list)))
+      (let ((first drgnx-start--timer))
+        (should (timerp first))
+        (drgnx-start--on-first-frame)
+        (should-not (memq first timer-idle-list))))
     (drgnx-start-teardown)
     (should-not (memq #'drgnx-start-maybe-show drgnx-persist-after-restore-functions))
     (should-not (memq #'drgnx-start-maybe-show server-after-make-frame-hook))

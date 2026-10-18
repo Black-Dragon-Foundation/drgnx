@@ -137,11 +137,11 @@ The keys are read from the registry now, so a changed profile shows when the pag
 
 (defun drgnx-start--buffer ()
   "The page's buffer, made if needed and drawn again from the registry."
-  (let ((buf (get-buffer-create drgnx-start-buffer-name)))
+  ;; from "/", never the current buffer's folder, which may be remote (a remote *scratch*): expanding "~" there asks that host
+  (let* ((default-directory "/") (buf (get-buffer-create drgnx-start-buffer-name)))
     (with-current-buffer buf
       (unless (derived-mode-p 'drgnx-start-mode) (drgnx-start-mode))
-      ;; not the scratch buffer's, which may be a remote folder: expanding "~" there would ask that host
-      (setq default-directory (let ((default-directory "/")) (expand-file-name "~/")))
+      (setq default-directory (expand-file-name "~/"))
       (drgnx-start--render))
     buf))
 
@@ -159,21 +159,42 @@ The keys are read from the registry now, so a changed profile shows when the pag
                               (not (window-minibuffer-p w))))
                 (window-list frame 'nomini))))
 
+(defun drgnx-start--untouched-scratch-p (buffer)
+  "Non-nil when BUFFER is `*scratch*' as Emacs made it: not modified, empty,
+or still holding `initial-scratch-message'.  Text the user typed there is theirs: it keeps the window.
+Only a buffer under 2000 characters is compared."
+  (and (equal (buffer-name buffer) "*scratch*")
+       (with-current-buffer buffer
+         (or (not (buffer-modified-p))
+             (zerop (buffer-size))
+             (and (stringp initial-scratch-message) (< (buffer-size) 2000)
+                  (string= (string-trim (buffer-substring-no-properties (point-min) (point-max)))
+                           (string-trim (substitute-command-keys initial-scratch-message))))))))
+
 (defun drgnx-start--empty-p (window)
-  "Non-nil when WINDOW shows nothing worth keeping on screen: `*scratch*'.  A file, or any other buffer, is kept."
-  (equal (buffer-name (window-buffer window)) "*scratch*"))
+  "Non-nil when WINDOW shows nothing worth keeping on screen: an untouched `*scratch*'.
+A file, any other buffer, or a scratch with the user's own text is kept."
+  (drgnx-start--untouched-scratch-p (window-buffer window)))
+
+(defun drgnx-start--welcome-due-p ()
+  "Non-nil while the first-run Welcome is due (`drgnx-onboard--welcome-due-p'): it comes first, the page waits.
+Run from \"/\": the state file's directory must not be worked out from a remote buffer's folder."
+  (and (fboundp 'drgnx-onboard--welcome-due-p)
+       (let ((default-directory "/")) (drgnx-onboard--welcome-due-p))))
 
 (defun drgnx-start-maybe-show (&optional frame)
   "Show the start page in FRAME's editor window used last, when that window shows `*scratch*' and the page was not
 dismissed.  FRAME defaults to the selected frame.  It changes that one window's buffer: it never splits, never
 selects another window, never asks and never signals (it runs from hooks, so a failure is said in *Messages*).
-Reads only face.eld.  Always returns nil, so it can be a hook function."
+Reads only face.eld (and, while the first-run Welcome may be due, onboarding's state file).
+Always returns nil, so it can be a hook function."
   (let ((frame (or frame (selected-frame))))
     (condition-case err
         (when-let* (((frame-live-p frame)) ((not (frame-parent frame)))
                     (window (drgnx-start--window frame))
                     ((window-live-p window)) ((not (window-dedicated-p window)))
                     ((drgnx-start--empty-p window))
+                    ((not (drgnx-start--welcome-due-p)))
                     ((not (drgnx-start-dismissed-p))))
           (set-window-buffer window (drgnx-start--buffer)))
       (error (message "drgnx: the start page did not show: %s" (error-message-string err))))
@@ -206,10 +227,11 @@ Reads only face.eld.  Always returns nil, so it can be a hook function."
 (defun drgnx-start--on-first-frame ()
   "From `drgnx-first-gui-frame-hook' and `window-setup-hook': show the page from an idle timer, never inside the
 hook (the files asked for and the restored layout come first).  A daemon's own frame has no window to fill: its
-clients are left to `server-after-make-frame-hook'."
-  (unless (and (daemonp) (not (display-graphic-p)))
+clients are left to `server-after-make-frame-hook'.  The timer waits a second, after the Welcome's (0.5 s), which
+comes first on a first run."
+  (unless (or noninteractive (and (daemonp) (not (display-graphic-p))))
     (when (timerp drgnx-start--timer) (cancel-timer drgnx-start--timer))
-    (setq drgnx-start--timer (run-with-idle-timer 0.5 nil #'drgnx-start--first-frame-run))))
+    (setq drgnx-start--timer (run-with-idle-timer 1 nil #'drgnx-start--first-frame-run))))
 
 (defun drgnx-start--no-file-tabs-p ()
   "Non-nil when the editor window used last holds no tab that visits a file."

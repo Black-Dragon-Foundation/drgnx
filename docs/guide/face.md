@@ -255,7 +255,8 @@ Graph**, **All Keys** and **Don't show this again**. `Tab` and `Shift-Tab` move 
 one. A button whose command is not there (its module is off) is left out.
 
 It shows itself only where nothing is lost: in the editor window you used last, and only when that window shows
-`*scratch*` — never over a file, and never by splitting a window, moving focus to another window or asking you
+`*scratch*` that you have not typed in — never over a file or your own text, never while the first-run Welcome is
+still to come (it goes first), and never by splitting a window, moving focus to another window or asking you
 anything. It looks at that when drgnx's first window opens (a moment after, once the files you asked for and your saved
 layout are there), when a new window opens on a running drgnx (`emacsclient -c`), and when the last
 file tab of the editor closes. Going to `*scratch*` yourself, with files still open, leaves it alone. In a terminal it
