@@ -298,10 +298,11 @@ usage: drgnx PATH…             open folders and files in drgnx, like code . (d
        drgnx test --install [NAME…]
                                install.sh end to end in fresh distribution containers (slow;
                                names: fedora-44 debian-trixie ubuntu-26.04 fedora-45 archlinux)
-       drgnx sync [--offline] [--seed DIR] [--prune]
+       drgnx sync [--offline] [--seed DIR] [--prune [--dry-run]]
                                install the packages drgnx needs (the only thing that installs);
                                --offline: from the lock and the cache; --seed: copy another elpa first;
-                               --prune: remove the packages the manifest no longer needs (listed)
+                               --prune: remove the packages the manifest no longer needs (listed);
+                               --prune --dry-run: only list them
        drgnx upgrade           newest packages; the previous generation comes back if they break
        drgnx rollback [N]      the packages of generation N (default: the one before)
        drgnx generations | lock
