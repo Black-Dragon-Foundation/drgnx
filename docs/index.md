@@ -50,6 +50,6 @@ How drgnx is built, tested and measured.
 - [Agent coordination](develop/coordination.md): jobs, tasks and leases, the decision log, messages, the MCP tools (and the identity and limits of agents outside drgnx), delivery.
 - [The Work cockpit's model](develop/cockpit.md): one model of specs, plans, tasks, agents, jobs and reviews from the live store; what happened, the timeline; each agent's edits (async git, regular files only).
 - [The job sandbox](develop/sandbox.md): what a job agent can see — the spec, what it refuses, the bubblewrap argv
-  and why each flag, and the Seatbelt profile on macOS.
+  and why each flag, the Seatbelt profile on macOS, and phase 2's network relay.
 
 Docs are updated in the same commit as the code they describe.
