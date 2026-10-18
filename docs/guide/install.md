@@ -103,9 +103,10 @@ it. `bootstrap` asks on your terminal (`/dev/tty`), even when the script itself 
   never reads or prints the file. Without it, `bootstrap` asks for the bundle's passphrase on the terminal.
 - **`--chezmoi URL`** takes a chezmoi source repository instead of a drgnx configuration (your dotfiles). `bootstrap`
   shows `chezmoi diff` first and applies only after a separate yes.
-- **`--yes`** is passed on: it confirms the announced `age`/`chezmoi` install and nothing else. Editing a shell
-  startup file, the desktop entry, a commit in the configuration directory and `chezmoi apply` still wait for you, or
-  are skipped with the command to run.
+- **`--yes`** is passed on: it confirms the announced `age`/`chezmoi` install, the key import and `chezmoi init`, and
+  nothing else. Editing a shell startup file, the desktop entry, a commit in the configuration directory, `chezmoi
+  apply` and replacing a key your keyring holds still wait for you, or are skipped with the command to run
+  ([second-machine.md](second-machine.md#one-command-drgnx-bootstrap)).
 - An existing `~/.config/drgnx` is never overwritten: `bootstrap` stops and says how to move it aside.
 
 ## Per platform

@@ -87,10 +87,65 @@ asks before it changes anything:
 
    with your remote as URL (`--chezmoi URL` when chezmoi manages the config). install.sh takes an https URL or a
    local path, so with no remote, or an ssh one, the command says `YOUR-REPO-URL`; a user name or password in the
-   remote is never shown. See [install.md](install.md#on-a-second-machine).
+   remote is never shown. See [install.md](install.md#on-a-second-machine) and [One command](#one-command-drgnx-bootstrap).
 
 With `--non-interactive` the step only reports where the config comes from and the command: it moves, makes and
 exports nothing.
+
+## One command: drgnx bootstrap
+
+On the new machine, `curl … install.sh | bash -s -- --config URL` installs drgnx and hands over to `drgnx bootstrap
+--config URL` ([install.md](install.md#on-a-second-machine)). On a machine that has drgnx already, run that yourself:
+
+```sh
+drgnx bootstrap --config https://example.org/you/drgnx-config.git
+drgnx bootstrap --config https://example.org/you/drgnx-config.git --dry-run   # what each step would do; changes nothing
+drgnx bootstrap --step shell                                                  # one step (--step repeats)
+```
+
+It runs these steps in order and prints one line for each: `ok` (nothing to do), `changed`, `skipped` (with the
+command that does it) or `failed` (with the problem). It exits 1 when a step failed, 2 for a wrong option. A second
+run changes nothing. A failed `preflight`, `config` or `sync` stops the steps after it; the others go on.
+
+| Step | What it does | Asks |
+| --- | --- | --- |
+| `preflight` | the OS, `git` (missing: failed), `age` when there is or may be a `secrets.age`, the keyring; moves the [machine-local files](#machine-local-files-from-older-installs) of an older install to the data dir | nothing |
+| `config` | `--config URL`: a missing or empty `~/.config/drgnx` (machine-local files moved first) gets `git clone URL`; a clone of the same URL is left as it is (`git -C ~/.config/drgnx pull` updates it: bootstrap never pulls); anything else stops it: "~/.config/drgnx already holds a configuration (…): move it aside (mv ~/.config/drgnx ~/.config/drgnx.before) and run this again", and nothing is touched. `--chezmoi URL`: see below. Neither: says what the config dir is. `--step config` alone also moves the machine-local files | for chezmoi |
+| `keys` | the keys of `secrets.age` into the keyring ([below](#your-provider-keys-secretsage)): with `--identity FILE`, or age's passphrase on the terminal. No `secrets.age`: ok; no keyring: skipped; no terminal and no identity: skipped with the command. A key the keyring holds differently is kept (failed, naming the host) unless you pass `--replace` | "Import the provider keys of secrets.age…?"; age's install |
+| `sync` | the packages of your configuration's lock (`drgnx sync`); a pinned package nobody serves fails, named | nothing |
+| `onboard` | `drgnx onboard --non-interactive`: records what is set up, changes nothing ([onboarding.md](onboarding.md)) | nothing |
+| `desktop` | onboarding's Daemon and Desktop step: the systemd service and desktop entry (Linux) or the drgnx app (macOS); installed already: ok | its own questions |
+| `shell` | the rc line of your shell ([shell.md](shell.md)) | "Add this line to ~/.zshrc?" |
+| `doctor` | `drgnx doctor`, which must be green: no FAIL, and a WARN only for `security` (an Emacs fix not released yet); anything else fails, naming the checks | nothing |
+
+**Questions** are asked on the terminal only. Without one (stdin not a terminal) nothing is asked: what would be
+asked is skipped, with its command. **`--yes`** answers yes for the announced age or chezmoi install, the key import
+and `chezmoi init` — never for the rc line, the desktop entry, `chezmoi apply` or `--replace`, which are skipped with
+their commands.
+
+**age or chezmoi missing.** When the keys need age (or `--chezmoi` needs chezmoi) and it is not installed, bootstrap
+prints the install line — "As root: sudo dnf install -y age" (the package manager it finds), `brew install age` on
+macOS — and asks before it runs it; sudo asks for your password on the terminal. A no fails the step with the line
+to run yourself. Nothing else is installed, and nothing else runs as root.
+
+**chezmoi.** `drgnx bootstrap --chezmoi URL` takes your dotfiles' chezmoi repository instead of a drgnx
+configuration: `chezmoi init URL` (asked; `--yes` confirms it), then `chezmoi diff` is shown, then `chezmoi apply`
+runs only after a second yes, and never under `--yes`. chezmoi runs without a terminal (`--no-tty`): if your
+templates ask questions, or a file is encrypted with a passphrase, the step fails and says to run `chezmoi init URL`
+or `chezmoi apply` yourself. A chezmoi source dir that holds another repository is never replaced.
+
+**The URL** is an https URL or an absolute path that exists. `http://`, `ssh://`, `git@host:path`, `file://`,
+`ext::`, a relative path and a URL with a user name or password are refused (exit 2) without showing the value; use
+a git credential helper for a private repository. git runs without your hooks, templates and commit signing, over
+https or a local path only, never asks for a password, and is stopped after two minutes. A clone goes into a new
+directory beside the config dir and is renamed into place only when it worked, so a failed or stopped clone leaves
+nothing behind. **`--identity FILE`** must be a file only you can read (`chmod 600`); bootstrap passes its path to
+age and never reads it.
+
+**How the terminal is used.** sudo's password and age's passphrase are typed on your terminal, which a program
+drgnx's Emacs starts does not have. So for those two the run stops, `bin/drgnx` runs the command (only an age or
+chezmoi install line of drgnx's own, or `drgnx secrets import`), and the run goes on from that step with the answers
+you gave; you see one run.
 
 ## The doctor's check
 

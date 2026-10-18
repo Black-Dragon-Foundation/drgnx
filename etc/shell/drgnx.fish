@@ -46,6 +46,7 @@ if not set -q _drgnx_sourced
     complete -c drgnx -n __fish_use_subcommand -a help -d 'Show drgnx usage'
     complete -c drgnx -n __fish_use_subcommand -a shell -d 'Add the drgnx line to your shell rc file'
     complete -c drgnx -n __fish_use_subcommand -a secrets -d 'Provider keys to a second machine'
+    complete -c drgnx -n __fish_use_subcommand -a bootstrap -d 'Set this machine up from your configuration'
 
     # Commands that take no file: no file names after them.
     complete -c drgnx -n '__fish_seen_subcommand_from doctor build upgrade rollback generations lock macos-app check test hub' -f
@@ -135,6 +136,15 @@ if not set -q _drgnx_sourced
     complete -c drgnx -n '__fish_seen_subcommand_from secrets; and __fish_seen_subcommand_from export' -l recipient -x -d 'age recipient'
     complete -c drgnx -n '__fish_seen_subcommand_from secrets; and __fish_seen_subcommand_from import ls' -l identity -r -d 'age identity file'
     complete -c drgnx -n '__fish_seen_subcommand_from secrets; and __fish_seen_subcommand_from import' -l replace -d 'Overwrite a different key in the keyring'
+
+    # bootstrap
+    complete -c drgnx -n '__fish_seen_subcommand_from bootstrap' -l config -r -d 'Your configuration repository (https or a path)'
+    complete -c drgnx -n '__fish_seen_subcommand_from bootstrap' -l chezmoi -r -d 'A chezmoi source repository instead'
+    complete -c drgnx -n '__fish_seen_subcommand_from bootstrap' -l identity -r -d 'age identity file for secrets.age'
+    complete -c drgnx -n '__fish_seen_subcommand_from bootstrap' -l step -x -a 'preflight config keys sync onboard desktop shell doctor' -d 'Run only this step'
+    complete -c drgnx -n '__fish_seen_subcommand_from bootstrap' -l dry-run -d 'Say what each step would do, change nothing'
+    complete -c drgnx -n '__fish_seen_subcommand_from bootstrap' -l yes -d 'Confirm the age/chezmoi install and the key import'
+    complete -c drgnx -n '__fish_seen_subcommand_from bootstrap' -l replace -d 'Overwrite a different key in the keyring'
 
     # Inside eat only.  The prompt-end mark is bash and zsh only: fish cannot add it without redefining fish_prompt.
     if string match -q '*eat*' -- "$INSIDE_EMACS"; and set -q EAT_SHELL_INTEGRATION_DIR

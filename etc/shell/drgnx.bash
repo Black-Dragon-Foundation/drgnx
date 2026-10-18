@@ -12,8 +12,9 @@ case ${BASH_SOURCE[0]-} in
   */*) _drgnx_dir=$PWD/${BASH_SOURCE[0]%/*} ;;
   *) _drgnx_dir=$PWD ;;
 esac
-_drgnx_commands='open doctor build test ui macos-app sync upgrade rollback generations lock bisect service-unit onboard check fmt work hub job search keys safe help shell secrets'
+_drgnx_commands='open doctor build test ui macos-app sync upgrade rollback generations lock bisect service-unit onboard check fmt work hub job search keys safe help shell secrets bootstrap'
 _drgnx_steps='environment look-and-keys projects ai search agents daemon portability finish'
+_drgnx_bootstrap_steps='preflight config keys sync onboard desktop shell doctor'
 _drgnx_presets='minimal ide full-ai'
 _drgnx_uis='start frame stop ls reap state shot click keys type measure mcp test-ui test-ui-session'
 _drgnx_installs='fedora-44 debian-trixie ubuntu-26.04 fedora-45 archlinux'
@@ -39,7 +40,7 @@ _drgnx() {
     fi
   else
     case $prev in   # the value of an option
-      --step) if [[ $cmd == onboard ]]; then words=$_drgnx_steps; fi ;;
+      --step) if [[ $cmd == onboard ]]; then words=$_drgnx_steps; elif [[ $cmd == bootstrap ]]; then words=$_drgnx_bootstrap_steps; fi ;;
       --preset) if [[ $cmd == onboard ]]; then words=$_drgnx_presets; fi ;;
       --shell) if [[ $cmd == shell ]]; then words='zsh bash fish'; fi ;;
       --config) if [[ $cmd == test ]]; then words='drgnx gryphn'; elif [[ $cmd == ui ]]; then words='minimal drgnx gryphn'; fi ;;
@@ -81,6 +82,7 @@ _drgnx() {
           'secrets export') words='--recipient' ;;
           'secrets import') words='--identity --replace' ;;
           'secrets ls') words='--identity' ;;
+          'bootstrap '*) words='--config --chezmoi --identity --step --dry-run --yes --replace' ;;
         esac
       elif [[ $n -eq 2 ]]; then   # the word after the command
         case $cmd in

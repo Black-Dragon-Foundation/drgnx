@@ -6,6 +6,7 @@
 (require 'cl-lib)
 (require 'drgnx)
 (require 'drgnx-onboard)
+(require 'drgnx-bootstrap)
 (require 'seq)
 (require 'subr-x)
 
@@ -168,12 +169,15 @@ PRE is run before the completion file is sourced (set -u, ...)."
       (let ((text (drgnx-shell-completion-test--read (expand-file-name name drgnx-shell-completion-test--shell-dir))))
         (dolist (w (append steps presets))
           (should (drgnx-shell-completion-test--mentions-p shell text w)))))
-    ;; the bootstrap steps arrive with `drgnx bootstrap' (Task 12 removes the guard)
-    (when (boundp 'drgnx-bootstrap-steps)
-      (pcase-dolist (`(,shell . ,name) drgnx-shell-completion-test--files)
-        (let ((text (drgnx-shell-completion-test--read (expand-file-name name drgnx-shell-completion-test--shell-dir))))
-          (dolist (w (symbol-value 'drgnx-bootstrap-steps))
-            (should (drgnx-shell-completion-test--mentions-p shell text (if (symbolp w) (symbol-name w) w)))))))))
+    ;; the bootstrap steps
+    (pcase-dolist (`(,shell . ,name) drgnx-shell-completion-test--files)
+      (let ((text (drgnx-shell-completion-test--read (expand-file-name name drgnx-shell-completion-test--shell-dir))))
+        (dolist (w drgnx-bootstrap-steps)
+          (should (drgnx-shell-completion-test--mentions-p shell text (symbol-name w))))))
+    (dolist (shell '(bash zsh fish))
+      (when (drgnx-shell-completion-test--exe shell)
+        (should (equal (list shell (drgnx-shell-completion-test--candidates shell "drgnx bootstrap --step "))
+                       (list shell (drgnx-shell-completion-test--sorted (mapcar #'symbol-name drgnx-bootstrap-steps)))))))))
 
 ;;;; Each shell completes
 

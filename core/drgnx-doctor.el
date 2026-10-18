@@ -465,6 +465,18 @@ MODEL), as a sentence, or nil."
 (defun drgnx-doctor-exit-code (results)
   (if (seq-some (lambda (r) (eq (plist-get r :status) 'fail)) results) 1 0))
 
+(defconst drgnx-doctor-green-warnings '(security)
+  "The checks whose WARN still counts as green (`drgnx-doctor-green-p'): only what no user can fix today (an Emacs
+release with the fixes is not out).  Never widened without the user.")
+
+(defun drgnx-doctor-green-p (results)
+  "Non-nil when RESULTS (`drgnx-doctor-run') are green: no `fail', and a `warn' only from a check named in
+`drgnx-doctor-green-warnings'.  `info' is green.  `drgnx bootstrap' ends with this."
+  (not (seq-some (lambda (r) (pcase (plist-get r :status)
+                               ('fail t)
+                               ('warn (not (memq (plist-get r :name) drgnx-doctor-green-warnings)))))
+                 results)))
+
 (defun drgnx-doctor-cli ()
   "Batch entry: `drgnx doctor [--json] [--dev]'."
   (let* ((args (prog1 command-line-args-left (setq command-line-args-left nil)))

@@ -31,6 +31,7 @@ commands=(
   'help:usage'
   'shell:add the drgnx line to your shell rc file'
   'secrets:provider keys to a second machine'
+  'bootstrap:set this machine up from your configuration'
 )
 
 if (( CURRENT == 2 )); then
@@ -166,6 +167,13 @@ case $cmd in
         ls) _arguments '--identity[age identity file]:file:_files' ;;
       esac
     fi ;;
+  bootstrap)
+    _arguments '(--chezmoi)--config[your configuration repository (https or a path)]:url or directory:_files -/' \
+      '(--config)--chezmoi[a chezmoi source repository instead]:url or directory:_files -/' \
+      '--identity[age identity file for secrets.age]:file:_files' \
+      '*--step[run only this step]:step:(preflight config keys sync onboard desktop shell doctor)' \
+      '--dry-run[say what each step would do, change nothing]' '--yes[confirm the age/chezmoi install and the key import]' \
+      '--replace[overwrite a different key in the keyring]' ;;
   *)
     _files ;;
 esac

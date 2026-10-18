@@ -24,7 +24,7 @@ Using drgnx.
 - [Live view](guide/live.md): watch the browser your agents drive, live, and take it over.
 - [Keyboard Shortcuts editor](guide/shortcuts.md): every command with its keys; record new ones, see conflicts, filter, undo.
 - [Editor features vs VS Code, Zed and Cursor](guide/editor-matrix.md): what drgnx has, where it is described, its GUI test and perf workload.
-- [A second machine](guide/second-machine.md): what travels (the whole config dir), what stays on this machine (the data, state and cache dirs), paths written `~/…`, the doctor's `portable-config` check.
+- [A second machine](guide/second-machine.md): what travels (the whole config dir), what stays on this machine (the data, state and cache dirs), paths written `~/…`, the doctor's `portable-config` check, provider keys in `secrets.age`, the one command `drgnx bootstrap`.
 - [Your shell](guide/shell.md): the one line for zsh, bash and fish — `drgnx` completion, eat's shell integration in the terminal, why an idle shell never blocks quit, `EDITOR`, your login shell's `PATH` in drgnx, prompt themes, fish's limits.
 
 ## Reference

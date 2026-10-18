@@ -432,6 +432,49 @@ cmd_secrets() { # export|import|ls — provider keys through age (docs/guide/sec
   return "$rc"
 }
 
+bootstrap_dir=""
+cmd_bootstrap() { # [--config URL | --chezmoi URL] [--identity FILE] [--step NAME]… [--dry-run] [--yes] [--replace]
+  # This machine set up from your configuration (core/drgnx-bootstrap.el; docs/guide/second-machine.md).  What needs
+  # this terminal — sudo for the announced age/chezmoi install, age's passphrase — Emacs cannot run (its children
+  # have no terminal): it stops with exit 10 and the command in DIR/argv; this runs it if it is one of the few below,
+  # writes DIR/rc (and DIR/out), and runs bootstrap again, which goes on from that step.
+  local rc=0 n=0 w out joined
+  local -a words
+  DRGNX_STDIN_TTY=""; if [ -t 0 ]; then DRGNX_STDIN_TTY=1; fi   # questions (and the keyring) only from a terminal
+  export DRGNX_STDIN_TTY
+  bootstrap_dir="$(mktemp -d "${TMPDIR:-/tmp}/drgnx-bootstrap.XXXXXX")"
+  trap 'rm -rf -- "$bootstrap_dir"' EXIT
+  while :; do
+    rc=0
+    DRGNX_BOOTSTRAP_HANDBACK="$bootstrap_dir" "$(emacs_bin)" --batch -Q --eval '(setq load-prefer-newer t)' \
+      -L "$here/core" -L "$here/wb" -l drgnx-bootstrap -f drgnx-bootstrap-cli -- "$@" || rc=$?
+    [ "$rc" -eq 10 ] || return "$rc"
+    n=$((n + 1))
+    if [ "$n" -gt 8 ] || [ ! -f "$bootstrap_dir/argv" ]; then
+      echo "drgnx bootstrap: stopped (no command to run, or too many)" >&2; return 1
+    fi
+    words=()
+    while IFS= read -r w; do
+      case "$w" in ""|*[[:space:]]*) echo "drgnx bootstrap: refused a command it does not know (nothing was run)" >&2; return 1 ;; esac
+      words+=("$w")
+    done <"$bootstrap_dir/argv"
+    rm -f -- "$bootstrap_dir/argv" "$bootstrap_dir/out"
+    joined="${words[*]-}"
+    rc=0
+    case "$joined" in   # the recipes' root lines (drgnx-onboard-install-recipes) and the passphrase import, nothing else
+      "sudo dnf install -y age"|"sudo dnf install -y chezmoi"|"sudo apt-get install -y age"|\
+      "sudo pacman -S --noconfirm age"|"sudo pacman -S --noconfirm chezmoi")
+        "${words[@]}" || rc=$? ;;
+      "secrets import"|"secrets import --replace")
+        out="$(cmd_secrets "${words[@]:1}")" || rc=$?   # its lines are hosts and what happened to them, never a key
+        [ -z "$out" ] || printf '%s\n' "$out"
+        printf '%s\n' "$out" >"$bootstrap_dir/out" ;;
+      *) echo "drgnx bootstrap: refused a command it does not know (nothing was run)" >&2; return 1 ;;
+    esac
+    printf '%s\n' "$rc" >"$bootstrap_dir/rc"
+  done
+}
+
 usage() {
   cat <<'USAGE'
 usage: drgnx PATH…             open folders and files in drgnx, like code . (docs/guide/opening.md)
@@ -497,7 +540,11 @@ usage: drgnx PATH…             open folders and files in drgnx, like code . (d
        drgnx secrets export [--recipient R]… | import [--identity FILE] [--replace] | ls [--identity FILE]
                                your provider keys to a second machine: secrets.age (age), then into its
                                keyring (a passphrase, or age keys; docs/guide/second-machine.md)
-       drgnx safe              Emacs with drgnx's core only: no modules, no packages
+       drgnx bootstrap [--config URL | --chezmoi URL] [--identity FILE] [--step NAME]… [--dry-run] [--yes] [--replace]
+                               this machine from your configuration: preflight, config (cloned into an
+                               empty config dir), keys, sync, onboard, desktop, shell, doctor; asks before
+                               keys, desktop and shell (--yes: never the rc line or the desktop entry)
+       drgnx safe             Emacs with drgnx's core only: no modules, no packages
        drgnx bisect [-- CMD…]  find the module that breaks (CMD fails, or you say so)
        drgnx service-unit [DIR]
                                the systemd user unit (printed, or written to DIR; never installed)
@@ -560,6 +607,7 @@ case "${1:-help}" in
   open) shift; cmd_open "$@" ;;
   macos-app) "$(emacs_bin)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" -l drgnx-macos -f drgnx-macos-cli ;;
   secrets) shift; cmd_secrets "$@" ;;
+  bootstrap) shift; cmd_bootstrap "$@" ;;
   help|-h|--help) usage ;;
   *) if [[ "$1" == . || "$1" == .. || "$1" == */* || -e "$1" ]]; then cmd_open "$@"; exit; fi   # drgnx PATH…
      echo "drgnx: unknown command '$1' (try: drgnx help)" >&2; exit 2 ;;
