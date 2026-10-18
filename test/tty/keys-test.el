@@ -141,8 +141,9 @@ quits only that (\"[Quit]\"), as it would for a person, who presses it again."
     (drgnx-tty-keys-test--ran s 'drgnx-lang-quick-fix "C-.")))
 
 (ert-deftest drgnx-tty-keys/c-s-chords-under-modify-other-keys ()
-  ;; no kkp in this session: modifyOtherKeys is ui/terminal's and needs no package
-  (drgnx-tty-session-with (s :daemon t :keys 'vscode)
+  ;; no kkp in this session: modifyOtherKeys is ui/terminal's and needs no package.  28 lines: the layout
+  ;; (ui/terminal-layout) shows the panel from 30 lines, and the chords below open it
+  (drgnx-tty-session-with (s :daemon t :keys 'vscode :size "120x28")
     (should (eq (drgnx-tty-session-eval s '(plist-get (alist-get 'ui/terminal-keys (drgnx-modules-report)) :status))
                 'missing-packages))
     ;; a client inside tmux, its TMUX naming the session's own server, whose extended-keys is on
@@ -223,7 +224,8 @@ sets `kx-returned' when it ends (C-g ends it early)."
 
 (ert-deftest drgnx-tty-keys/c-s-chords-under-kkp ()
   (drgnx-tty-keys-test--need-kkp)
-  (drgnx-tty-session-with (s :daemon t :keys 'vscode :env (drgnx-tty-keys-test--env))
+  ;; 28 lines: the layout (ui/terminal-layout) shows the panel from 30 lines, and the chords below open it
+  (drgnx-tty-session-with (s :daemon t :keys 'vscode :size "120x28" :env (drgnx-tty-keys-test--env))
     (should (eq (drgnx-tty-session-eval s '(plist-get (alist-get 'ui/terminal-keys (drgnx-modules-report)) :status)) 'ok))
     (drgnx-tty-session-eval s (drgnx-tty-keys-test--kkp-yes drgnx-tty-keys-test--kitty))
     (let ((c (drgnx-tty-session-client s :env '("TERM=xterm-256color"))))
