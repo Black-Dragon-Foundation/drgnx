@@ -11,6 +11,7 @@
 
 ;;; Code:
 (require 'cl-lib)
+(require 'seq)
 (require 'subr-x)
 (require 'drgnx-modules)
 (require 'drgnx-registry)
@@ -139,6 +140,12 @@ has not answered).  The empty line after the last newline has none."
     (when (and drgnx-blame-mode (not (eql drgnx-blame--bol (line-beginning-position))))
       (with-demoted-errors "drgnx blame: %S" (drgnx-blame--update)))))
 
+(defun drgnx-blame--release-timer ()
+  "Cancel the idle timer when no buffer but this one has inline blame (this one is going: off or killed)."
+  (unless (seq-some (lambda (b) (and (not (eq b (current-buffer))) (buffer-local-value 'drgnx-blame-mode b))) (buffer-list))
+    (when (timerp drgnx-blame--timer) (cancel-timer drgnx-blame--timer))
+    (setq drgnx-blame--timer nil)))
+
 (define-minor-mode drgnx-blame-mode
   "Inline blame: who last changed the current line, when, and the commit's subject, at its end."
   :lighter nil
@@ -149,12 +156,15 @@ has not answered).  The empty line after the last newline has none."
         (add-hook 'after-change-functions #'drgnx-blame--forget nil t)
         (add-hook 'after-save-hook #'drgnx-blame--forget nil t)
         (add-hook 'after-revert-hook #'drgnx-blame--forget nil t)
+        (add-hook 'kill-buffer-hook #'drgnx-blame--release-timer nil t)
         (unless (timerp drgnx-blame--timer)
           (setq drgnx-blame--timer (run-with-idle-timer drgnx-blame-delay t #'drgnx-blame--tick))))
     (remove-hook 'post-command-hook #'drgnx-blame--follow t)
     (remove-hook 'after-change-functions #'drgnx-blame--forget t)
     (remove-hook 'after-save-hook #'drgnx-blame--forget t)
     (remove-hook 'after-revert-hook #'drgnx-blame--forget t)
+    (remove-hook 'kill-buffer-hook #'drgnx-blame--release-timer t)
+    (drgnx-blame--release-timer)
     (drgnx-blame--stop)
     (drgnx-blame--hide)))
 
