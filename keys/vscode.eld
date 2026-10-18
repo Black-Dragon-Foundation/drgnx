@@ -81,7 +81,7 @@
         (ai-accept :none "Tab while a suggestion shows; the palette")
         (ai-accept-word "C-<right>" :map drgnx-ai-ghost-showing-map)
         (ai-accept-line :none "the palette")
-        (ai-dismiss "<escape>" :map drgnx-ai-ghost-showing-map)
+        (ai-dismiss "C-g" :map drgnx-ai-ghost-showing-map)
         (ai-complete-toggle :none "in the palette")
         (ai-edit "C-k C-e")
         (ai-edit-apply-hunk "C-c C-a" :map drgnx-ai-edit-review-mode-map :mac "C-c C-a")
@@ -213,7 +213,7 @@
         (close-tab "C-w" "C-<f4>" :mac "s-w")
         (next-tab "C-<next>" :mac "M-s-<right>")
         (previous-tab "C-<prior>" :mac "M-s-<left>")
-        (toggle-panel "C-`" "M-j" :mac ("C-`" "M-j"))   ; s-` is macOS' next window
+        (toggle-panel "C-`" "M-j" :everywhere "C-j" :mac ("C-`" "M-j"))   ; s-` is macOS' next window
         (focus-panel :none "in the palette")
         (toggle-right-dock "C-M-b")
         (focus-editor :none "C-1 focuses group 1 (the editor, with one group)")
@@ -306,4 +306,5 @@
         (cockpit-edits-previous-file "p")
         (cockpit-edits-visit "RET")
         (cockpit-edits-next-hunk "TAB")
-        (cockpit-edits-previous-hunk "<backtab>")))
+        (cockpit-edits-previous-hunk "<backtab>")
+        (ai-stop :none "in the palette")))

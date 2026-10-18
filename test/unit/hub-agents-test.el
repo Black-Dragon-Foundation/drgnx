@@ -99,4 +99,74 @@
         (let ((id (plist-get (car (read-from-string (car sessions))) :id)))
           (should (drgnx-hub-agents-test--wait (lambda () (eq (plist-get (drgnx-hub-agents-test--snapshot id) :status) 'idle)))))))))
 
+(ert-deftest drgnx-hub-agents/sessions-resume-in-a-new-hub ()
+  ;; a hub's sessions are its children and end with it: the next hub resumes each (ACP session/load) under the same
+  ;; id, idle, with its history; one whose agent cannot load sessions ends and is not tried again
+  (drgnx-hub-agents-test--with
+    (let* ((state (concat root "mock-state"))
+           (mock (cdr (assoc "mock" drgnx-agents-profiles)))
+           (drgnx-agents-profiles
+            (list (cons "mock" (plist-put (copy-sequence mock) :env (list (concat "MOCK_ACP_STATE=" state))))
+                  (cons "mock-noload" (plist-put (copy-sequence mock) :env (list (concat "MOCK_ACP_STATE=" state) "MOCK_ACP_NO_LOAD=1")))))
+           (file (expand-file-name "hub/sessions.eld" (drgnx-state-dir)))
+           (saved (lambda () (and (file-exists-p file) (with-temp-buffer (insert-file-contents file) (read (current-buffer)))))))
+      (make-directory state t)
+      (let* ((id (drgnx-hub-agents-test--start))
+             (gone (plist-get (drgnx-hub-call-sync "agents/start" (list :profile "mock-noload" :cwd temporary-file-directory)) :id)))
+        (drgnx-hub-call-sync "agents/send" (list :id id :text "remember me"))
+        (should (drgnx-hub-agents-test--wait (lambda () (string-search "You said: remember me" (drgnx-hub-agents-test--text id)))))
+        (should (drgnx-hub-agents-test--wait (lambda () (= (length (funcall saved)) 2))))
+        ;; the hub ends (its sessions with it); another starts
+        (drgnx-hub-disconnect)
+        (drgnx-hub-stop)
+        (dolist (s drgnx-agents--sessions) (drgnx-agents-kill s))
+        (setq drgnx-agents--sessions nil)
+        (drgnx-hub-serve (drgnx-hub-socket))
+        (should (drgnx-hub-agents-test--wait (lambda () (eq (plist-get (drgnx-hub-agents-test--snapshot id) :status) 'idle))))
+        (should (string-search "You said: remember me" (drgnx-hub-agents-test--text id)))
+        (should (drgnx-hub-agents-test--wait (lambda () (eq (plist-get (drgnx-hub-agents-test--snapshot gone) :status) 'exited))))
+        (should (drgnx-hub-agents-test--wait (lambda () (equal (mapcar (lambda (e) (plist-get e :id)) (funcall saved)) (list id)))))
+        ;; and it works on
+        (drgnx-hub-call-sync "agents/send" (list :id id :text "still here"))
+        (should (drgnx-hub-agents-test--wait (lambda () (string-search "You said: still here" (drgnx-hub-agents-test--text id)))))))))
+
+(ert-deftest drgnx-hub-agents/odd-kept-sessions-never-stop-the-hub ()
+  ;; a sessions.eld that is an improper list, or names a profile that is gone, never stops a hub from starting
+  (drgnx-hub-agents-test--with
+    (let ((file (expand-file-name "hub/sessions.eld" (drgnx-state-dir))))
+      (dolist (text '("(1 . 2)" "((:id \"s-gone\" :profile \"no such profile\" :cwd \"/\" :acp-id \"x\") . 3)"
+                      "((:id \"s-gone\" :profile \"no such profile\" :cwd \"/\" :acp-id \"x\"))"))
+        (drgnx-hub-disconnect) (drgnx-hub-stop)
+        (write-region text nil file nil 'silent)
+        (drgnx-hub-serve (drgnx-hub-socket))
+        (should (drgnx-hub-call-sync "ping" nil)))
+      (should (drgnx-hub-agents-test--wait (lambda () (eq (plist-get (drgnx-hub-agents-test--snapshot "s-gone") :status) 'exited)))))))
+
+(ert-deftest drgnx-hub-agents/a-resumed-session-keeps-its-name-and-a-job-s-is-not-kept ()
+  ;; messages and spend follow a session's name: a resumed one keeps it (not a fresh "p · d"); a job's agent is
+  ;; never in sessions.eld (the job starts its task again)
+  (drgnx-hub-agents-test--with
+    (let* ((state (concat root "mock-state"))
+           (mock (cdr (assoc "mock" drgnx-agents-profiles)))
+           (drgnx-agents-profiles (list (cons "mock" (plist-put (copy-sequence mock) :env (list (concat "MOCK_ACP_STATE=" state))))))
+           (file (expand-file-name "hub/sessions.eld" (drgnx-state-dir)))
+           (saved (lambda () (and (file-exists-p file) (with-temp-buffer (insert-file-contents file) (read (current-buffer)))))))
+      (make-directory state t)
+      (let* ((first (drgnx-hub-agents-test--start)) (second (drgnx-hub-agents-test--start))
+             (name (plist-get (drgnx-hub-agents-test--snapshot second) :name)))
+        (should (string-suffix-p "<2>" name))
+        (drgnx-hub-call-sync "agents/kill" (list :id first))
+        (drgnx-coord-job-create :id "j" :tasks '((:n 1 :title "one")))
+        (let ((job-agent (drgnx-agents-start "mock" temporary-file-directory nil "j")))
+          (should (drgnx-hub-agents-test--wait (lambda () (eq (drgnx-agent-session-status job-agent) 'idle))))
+          (should (drgnx-hub-agents-test--wait (lambda () (equal (mapcar (lambda (e) (plist-get e :id)) (funcall saved)) (list second))))))
+        (drgnx-hub-disconnect)
+        (drgnx-hub-stop)
+        (dolist (s drgnx-agents--sessions) (drgnx-agents-kill s))
+        (setq drgnx-agents--sessions nil)
+        (drgnx-hub-serve (drgnx-hub-socket))
+        (should (drgnx-hub-agents-test--wait (lambda () (eq (plist-get (drgnx-hub-agents-test--snapshot second) :status) 'idle))))
+        (should (equal (plist-get (drgnx-hub-agents-test--snapshot second) :name) name))
+        (should (= (length (drgnx-agents-sessions)) 1))))))
+
 ;;; hub-agents-test.el ends here

@@ -550,6 +550,9 @@ Returns (RESULT PROMPTS)."
 (defun drgnx-onboard-test--slurp (file)
   (if (file-exists-p file) (with-temp-buffer (insert-file-contents file) (buffer-string)) ""))
 
+;; Kept at load time: the macro below stubs it, the tests of the offers put it back.
+(defconst drgnx-onboard-test--offers (symbol-function 'drgnx-onboard--agents-offers))
+
 (defmacro drgnx-onboard-test--claude (platform &rest body)
   "BODY on PLATFORM (`macos' or `linux') with a temp HOME and a PATH of fakes only (the basic tools linked in): nothing
 is installed — `brew install --cask claude-code', `curl … | bash' (the Linux installer: a fake script), `brew install
@@ -603,7 +606,9 @@ says logged in when HOME has .logged-in (FAKE_OLD_CLAUDE: an old CLI that has no
             (concat (funcall log-line "curl")
                     "echo 'mkdir -p $HOME/.local/bin; cp " tpl "claude $HOME/.local/bin/claude; echo Installed'\n"))
            (drgnx-onboard-test--script (concat bin "dnf") "exit 0\n")
-           (cl-letf (((symbol-function 'drgnx-platform) (lambda () ,platform)))
+           ;; the agent defaults are asked after a good check (their own tests below turn the question back on)
+           (cl-letf (((symbol-function 'drgnx-platform) (lambda () ,platform))
+                     ((symbol-function 'drgnx-onboard--agents-offers) #'ignore))
              ,@body))
        (dolist (j (drgnx-jobs-list)) (drgnx-jobs-stop (plist-get j :id)))
        (when-let* ((b (get-buffer "*Claude login*")))
@@ -706,7 +711,7 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
          (should (process-live-p (get-buffer-process b)))
          (should (equal (car (last (process-command (get-buffer-process b)))) (concat bin "claude")))   ; term runs it through a shell
          (should (equal (buffer-local-value 'header-line-format b)
-                        "Type /login, finish in the browser, then press Done in the Welcome")))
+                        "Type /login, finish in the browser, then press Return on the Agents row in the Welcome (Done)")))
        ;; the user logged in and presses Done (runs the step again): the agent is checked, no second terminal
        (write-region "" nil (concat home ".logged-in"))
        (let ((r (drgnx-onboard--agents-step '(:interactive t))))
@@ -897,11 +902,13 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
 (ert-deftest drgnx-onboard/on-a-mac-look-and-keys-asks-about-option-once ()
   (drgnx-onboard-test--with root
     (let ((asked nil) (answer t) (opts '(:preset full-ai :keys "VS Code" :theme modus-vivendi)))
-      (cl-letf (((symbol-function 'y-or-n-p) (lambda (p) (push p asked) answer))
+      (cl-letf (((symbol-function 'completing-read)
+                 (lambda (p &rest _) (push p asked) (if answer "types characters" "Meta")))
                 ((symbol-function 'drgnx-onboard--packages-to-install) #'ignore)
                 ((symbol-function 'drgnx-platform) (lambda () 'macos)))
         (let ((r (drgnx-onboard--look-step `(:interactive t :options ,opts))))
-          (should (equal asked '("Do you type @ # { [ with Option? (German, French, … keyboards) ")))
+          (should (= 1 (length asked)))
+          (should (string-match-p "@ # { \\[" (car asked)))
           (should (eq (plist-get (drgnx-keys-read-user) :mac-option) 'characters))
           (should (string-match-p "Option types characters" (cadr r))))
         (setq asked nil answer nil)
@@ -918,10 +925,118 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
         (drgnx-onboard--look-step '(:interactive t :options (:preset full-ai :keys "Emacs" :theme modus-vivendi)))
         (should-not asked))
       ;; Linux: never asked
-      (cl-letf (((symbol-function 'y-or-n-p) (lambda (p) (push p asked) t))
+      (cl-letf (((symbol-function 'completing-read) (lambda (p &rest _) (push p asked) "Meta"))
                 ((symbol-function 'drgnx-onboard--packages-to-install) #'ignore))
         (drgnx-onboard--look-step `(:interactive t :options ,opts))
         (should-not asked)))))
+
+(ert-deftest drgnx-onboard/option-question-shows-the-current-choice ()
+  ;; M12a-80: the question names both answers and offers the saved one on Return (Meta before anything is saved)
+  (drgnx-onboard-test--with root
+    (let ((seen nil) (answer "Meta") (opts '(:preset full-ai :keys "VS Code" :theme modus-vivendi)))
+      (cl-letf (((symbol-function 'completing-read)
+                 (lambda (prompt choices &optional _p _r _i _h def &rest _) (push (list prompt choices def) seen) answer))
+                ((symbol-function 'drgnx-onboard--packages-to-install) #'ignore)
+                ((symbol-function 'drgnx-platform) (lambda () 'macos)))
+        (drgnx-onboard--look-step `(:interactive t :options ,opts))
+        (should (equal (nth 1 (car seen)) '("types characters" "Meta")))
+        (should (equal (nth 2 (car seen)) "Meta"))
+        (should (string-match-p "types characters, Meta" (nth 0 (car seen))))
+        (should (eq (plist-get (drgnx-keys-read-user) :mac-option) 'meta))
+        ;; saved as characters: the next run offers that on Return
+        (setq answer "types characters")
+        (drgnx-onboard--look-step `(:interactive t :options ,opts))
+        (should (eq (plist-get (drgnx-keys-read-user) :mac-option) 'characters))
+        (drgnx-onboard--look-step `(:interactive t :options ,opts))
+        (should (equal (nth 2 (car seen)) "types characters"))))))
+
+(ert-deftest drgnx-onboard/chat-check-in-batch-offers-no-restart ()
+  ;; gptel installed, module extra/llm on, gptel not loaded yet: in batch the Finish step never offers a restart, so
+  ;; the result says it loads at the next start; a restart is needed only when this run turned the module on or
+  ;; installed the package.
+  (drgnx-onboard-test--with root
+    (let ((drgnx-onboard--restart-needed nil))
+      (should-not (featurep 'gptel))
+      (make-directory (expand-file-name "gptel-0.9.9" (drgnx-elpa-dir)) t)
+      (drgnx-modules-write-state (list :disabled nil))
+      ;; batch, module already on
+      (should noninteractive)
+      (let ((r (drgnx-onboard--chat-module '(:interactive nil))))
+        (should (car r))
+        (should (string-search "loads at drgnx's next start" (cdr r)))
+        (should-not (string-search "Finish" (cdr r)))
+        (should-not drgnx-onboard--restart-needed))
+      ;; the app, module already on: nothing changed by this run, nothing to restart for
+      (let ((noninteractive nil) (r nil))
+        (setq r (drgnx-onboard--chat-module '(:interactive t)))
+        (should (string-search "loads at drgnx's next start" (cdr r)))
+        (should-not (string-search "Finish" (cdr r)))
+        (should-not drgnx-onboard--restart-needed))
+      ;; the app, this run turns the module on: the restart is offered
+      (drgnx-modules-write-state (list :disabled '(extra/llm)))
+      (cl-letf (((symbol-function 'y-or-n-p) (lambda (_) t)))
+        (let ((noninteractive nil) (r nil))
+          (setq r (drgnx-onboard--chat-module '(:interactive t)))
+          (should (string-search "the Finish step offers it" (cdr r)))
+          (should drgnx-onboard--restart-needed)))
+      ;; batch, this run turns it on: no Finish offer is promised
+      (setq drgnx-onboard--restart-needed nil)
+      (drgnx-modules-write-state (list :disabled '(extra/llm)))
+      (cl-letf (((symbol-function 'y-or-n-p) (lambda (_) t)))
+        (let ((r (drgnx-onboard--chat-module '(:interactive t))))
+          (should (string-search "loads at drgnx's next start" (cdr r)))
+          (should-not (string-search "Finish" (cdr r))))))))
+
+;; M12a-74: the restart asks its save questions first, detaches the waiter only after they are answered, then quits.
+(ert-deftest drgnx-onboard/restart-detaches-after-the-questions ()
+  (let ((events nil))
+    (cl-letf (((symbol-function 'drgnx-onboard--restart-spawn) (lambda (_line) (push 'detach events)))
+              ((symbol-function 'kill-emacs) (lambda (&rest _) (push 'kill events))))
+      ;; a "no": nothing detached, nothing killed
+      (cl-letf (((symbol-function 'drgnx-session-quit-confirm) (lambda () (push 'confirm events) nil)))
+        (drgnx-onboard--restart)
+        (should (equal (reverse events) '(confirm))))
+      ;; C-g in a question: it leaves through the signal, nothing detached, nothing killed
+      (setq events nil)
+      (cl-letf (((symbol-function 'drgnx-session-quit-confirm) (lambda () (push 'confirm events) (signal 'quit nil))))
+        (should (eq 'quit (condition-case nil (progn (drgnx-onboard--restart) 'ran) (quit 'quit))))
+        (should (equal (reverse events) '(confirm))))
+      ;; a "yes": confirm, then detach, then kill-emacs
+      (setq events nil)
+      (cl-letf (((symbol-function 'drgnx-session-quit-confirm) (lambda () (push 'confirm events) t)))
+        (drgnx-onboard--restart)
+        (should (equal (reverse events) '(confirm detach kill)))))))
+
+;; A drgnx running as a systemd service dies with its whole cgroup (KillMode=control-group): a `setsid' waiter
+;; started from it is killed with it and never reopens drgnx.  There the waiter runs as its own transient unit.
+(ert-deftest drgnx-onboard/restart-waiter-outlives-a-systemd-service ()
+  (let ((detached nil) (calls nil) (rc 0))
+    (cl-letf (((symbol-function 'drgnx-jobs--detach) (lambda (line) (push line detached)))
+              ((symbol-function 'executable-find) (lambda (p &rest _) (and (equal p "systemd-run") "/usr/bin/systemd-run")))
+              ((symbol-function 'call-process)
+               (lambda (program _in _out _display &rest args) (push (cons program args) calls) rc)))
+      (let ((line "i=$((i+1)); echo 100%; exec '/x y/bin/drgnx' open"))
+        ;; not under systemd (no INVOCATION_ID): the detached waiter, no systemd-run
+        (let ((process-environment (cons "XDG_RUNTIME_DIR=/run/user/1" (cons "INVOCATION_ID" process-environment))))
+          (drgnx-onboard--restart-spawn line)
+          (should (equal detached (list line)))
+          (should-not calls))
+        ;; under a unit: its own transient unit, killing only the waiter's main process; $ and % escaped for ExecStart
+        (setq detached nil)
+        (let ((process-environment (append '("INVOCATION_ID=abc" "XDG_RUNTIME_DIR=/run/user/1") process-environment)))
+          (drgnx-onboard--restart-spawn line)
+          (should-not detached)
+          (let ((c (car calls)))
+            (should (equal (car c) "systemd-run"))
+            (should (member "--user" c))
+            (should (member "--collect" c))
+            (should (member "KillMode=process" c))
+            (should (string-prefix-p (format "--unit=drgnx-restart-%d" (emacs-pid)) (seq-find (lambda (a) (string-prefix-p "--unit=" a)) c)))
+            (should (equal (last c 3) (list "sh" "-c" "i=$$((i+1)); echo 100%%; exec '/x y/bin/drgnx' open"))))
+          ;; systemd-run failing: falls back to the detached waiter
+          (setq calls nil rc 1)
+          (drgnx-onboard--restart-spawn line)
+          (should (equal detached (list line))))))))
 
 (ert-deftest drgnx-onboard/new-modules-need-a-restart-and-finish-offers-it ()
   ;; Packages installed into a running drgnx load at its next start: Look and Keys says so, and Finish (in the
@@ -934,7 +1049,9 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
                 ((symbol-function 'drgnx-doctor-run) (lambda (&rest _) nil))
                 ((symbol-function 'drgnx-doctor-facts) #'ignore)
                 ((symbol-function 'drgnx-jobs--detach) (lambda (line) (push line lines)))
-                ((symbol-function 'drgnx-session-quit) (lambda () (cl-incf quit))))
+                ((symbol-function 'drgnx-session-quit-confirm) (lambda () t))
+                ((symbol-function 'drgnx-onboard--under-systemd-p) #'ignore)
+                ((symbol-function 'kill-emacs) (lambda (&rest _) (cl-incf quit))))
         (let ((r (drgnx-onboard--look-step '(:interactive t :options (:preset full-ai :keys "Emacs" :theme modus-vivendi)))))
           (should (string-match-p "restart drgnx to load the new modules" (cadr r))))
         (should drgnx-onboard--restart-needed)
@@ -967,11 +1084,191 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
         ;; on a Mac it says how to open drgnx next time (Linux: not)
         (should-not (string-search "Spotlight" (cadr (drgnx-onboard--finish-step '(:interactive nil)))))
         (cl-letf (((symbol-function 'drgnx-platform) (lambda () 'macos)))
-          (should (string-search "next time open drgnx with Spotlight (⌘Space, type \"drgnx\") or Launchpad"
-                                 (cadr (drgnx-onboard--finish-step '(:interactive nil))))))))))
+          (let ((drgnx-macos-app-dir (file-name-as-directory (make-temp-file "drgnx-apps" t))))
+            (unwind-protect
+                (progn
+                  (make-directory (expand-file-name "drgnx.app" drgnx-macos-app-dir))
+                  (should (string-search "next time open drgnx with Spotlight (⌘Space, type \"drgnx\") or Launchpad"
+                                         (cadr (drgnx-onboard--finish-step '(:interactive nil))))))
+              (delete-directory drgnx-macos-app-dir t))))))))
+
+(ert-deftest drgnx-onboard/finish-names-spotlight-only-with-the-app ()
+  ;; M12a-76: Spotlight finds drgnx.app; without the app the sentence would send you to a search that finds nothing
+  (let ((drgnx-macos-app-dir (file-name-as-directory (make-temp-file "drgnx-apps" t))) (drgnx-onboard--restart-needed nil))
+    (unwind-protect
+        (cl-letf (((symbol-function 'drgnx-platform) (lambda () 'macos)))
+          (should-not (string-search "Spotlight" (cadr (drgnx-onboard--finish-step '(:interactive nil)))))
+          (make-directory (expand-file-name "drgnx.app" drgnx-macos-app-dir))
+          (should (string-search "Spotlight" (cadr (drgnx-onboard--finish-step '(:interactive nil))))))
+      (delete-directory drgnx-macos-app-dir t))))
 
 (ert-deftest drgnx-onboard/the-agents-step-and-its-docs ()
   (should (string-match-p "Claude" (plist-get (alist-get 'agents drgnx-onboard--steps) :doc)))
   (should (eq (plist-get (alist-get 'agents drgnx-onboard--steps) :run) #'drgnx-onboard--agents-step)))
+
+(defun drgnx-onboard-test--adapter-in-local-bin (root home)
+  "Put the adapter where this Emacs's PATH does not reach: ROOT's tpl copy into HOME/.local/bin."
+  (make-directory (concat home ".local/bin") t)
+  (copy-file (concat root "tpl/claude-agent-acp") (concat home ".local/bin/claude-agent-acp") t)
+  (set-file-modes (concat home ".local/bin/claude-agent-acp") #o755)
+  (concat home ".local/bin"))
+
+(ert-deftest drgnx-ai-onboard/brew-dir-is-appended-to-path ()
+  ;; A directory onboarding finds a tool in goes behind the PATH you have, never in front of a program you chose.
+  (drgnx-onboard-test--claude 'macos
+    (let ((dir (drgnx-onboard-test--adapter-in-local-bin root home)))
+      (should (equal (drgnx-onboard--on-path 'claude-agent-acp) dir))
+      (should (equal (car exec-path) bin))
+      (should (equal (car (last exec-path)) dir))
+      (should (equal (getenv "PATH") (concat bin path-separator dir))))))
+
+(require 'drgnx-hub)                    ; so a stub of `drgnx-hub-running-p' is not replaced by the load
+
+(ert-deftest drgnx-ai-onboard/path-added-with-a-hub-says-hub-stop ()
+  ;; The hub keeps the PATH it started with: when the step added a directory and a hub runs, the result says so.
+  (drgnx-onboard-test--claude 'macos
+    (drgnx-onboard-test--have bin "claude")
+    (write-region "" nil (concat home ".logged-in"))
+    (drgnx-onboard-test--adapter-in-local-bin root home)
+    (cl-letf (((symbol-function 'drgnx-hub-running-p) (lambda () t)))
+      (let ((r (drgnx-onboard--agents-step '(:interactive nil))))
+        (should (eq (car r) 'ok))
+        (should (string-match-p "the hub keeps its old PATH: drgnx hub stop" (cadr r)))))
+    ;; no hub: no word of it; nothing added (the directory is on the PATH now): no word either
+    (setq exec-path (list bin) process-environment (cons (concat "PATH=" bin) process-environment))
+    (cl-letf (((symbol-function 'drgnx-hub-running-p) (lambda () nil)))
+      (should-not (string-match-p "hub" (cadr (drgnx-onboard--agents-step '(:interactive nil))))))
+    (cl-letf (((symbol-function 'drgnx-hub-running-p) (lambda () t)))
+      (setq exec-path (list bin (concat home ".local/bin")))
+      (setenv "PATH" (concat bin path-separator home ".local/bin"))
+      (should-not (string-match-p "hub" (cadr (drgnx-onboard--agents-step '(:interactive nil))))))))
+
+(ert-deftest drgnx-ai-onboard/the-install-question-explains-the-vs-code-claude ()
+  ;; The install question says why a claude inside a VS Code extension does not count, only when claude is missing.
+  (drgnx-onboard-test--claude 'macos
+    (let ((asked (drgnx-onboard-test--asked '(("\\`Set up Claude Code" . nil)))))
+      (cl-letf (((symbol-function 'y-or-n-p) (car asked))) (drgnx-onboard--agents-step '(:interactive t)))
+      (should (string-match-p "VS Code extension.*does not count" (car (car (cdr asked)))))
+      (should (string-match-p "brew install --cask claude-code" (car (car (cdr asked))))))
+    ;; claude there, the adapter missing: no word of VS Code
+    (drgnx-onboard-test--have bin "claude" "npm")
+    (let ((asked (drgnx-onboard-test--asked '(("\\`Set up Claude Code" . nil)))))
+      (cl-letf (((symbol-function 'y-or-n-p) (car asked))) (drgnx-onboard--agents-step '(:interactive t)))
+      (should-not (string-match-p "VS Code" (car (car (cdr asked))))))))
+
+;; M12a-48, -49, -50: the Agents step's smaller corners
+
+(ert-deftest drgnx-ai-onboard/quit-during-auth-status-kills-it ()
+  ;; C-g while `claude auth status' is being waited for leaves nothing running, and quits on
+  (drgnx-onboard-test--claude 'macos
+    (drgnx-onboard-test--script (concat bin "slow-claude") "exec sleep 30\n")
+    (cl-letf (((symbol-function 'drgnx-onboard--wait) (lambda (&rest _) (signal 'quit nil))))
+      (should (eq 'quit (condition-case nil (drgnx-onboard--claude-login-state (concat bin "slow-claude")) (quit 'quit)))))
+    (should-not (seq-some (lambda (p) (and (string-prefix-p "drgnx-claude-auth" (process-name p)) (process-live-p p))) (process-list)))))
+
+(ert-deftest drgnx-ai-onboard/non-homebrew-npm-on-macos-uses-local-prefix ()
+  ;; A Node that is not Homebrew's has a global directory that is not yours (EACCES): the adapter goes to ~/.local
+  (drgnx-onboard-test--claude 'macos
+    (let ((other (concat root "other/")))
+      (drgnx-onboard-test--have bin "claude")
+      (write-region "" nil (concat home ".logged-in"))
+      (make-directory other t)
+      (copy-file (concat tpl "npm") (concat other "npm") t)
+      (setq exec-path (list bin other))
+      (setenv "PATH" (concat bin path-separator other))
+      (let* ((asked (drgnx-onboard-test--asked '(("\\`Set up Claude Code" . t))))
+             (r (cl-letf (((symbol-function 'y-or-n-p) (car asked))) (drgnx-onboard--agents-step '(:interactive t)))))
+        (should (string-match-p "npm install -g --prefix ~/.local @zed-industries/claude-agent-acp" (car (car (cdr asked)))))
+        (should (eq (car r) 'ok)))
+      (should (string-match-p (format "npm install -g --prefix %s.local @zed-industries/claude-agent-acp" home)
+                              (drgnx-onboard-test--slurp calls)))
+      (should (file-executable-p (concat home ".local/bin/claude-agent-acp"))))))
+
+(ert-deftest drgnx-ai-onboard/failed-claude-installer-names-the-command ()
+  ;; A failed Linux installer run ends with the command to try in a terminal, as the adapter's does
+  (drgnx-onboard-test--claude 'linux
+    (drgnx-onboard-test--script (concat bin "curl") "echo 'echo installer broke; exit 7'\n")
+    (let* ((asked (drgnx-onboard-test--asked '(("\\`Set up Claude Code" . t))))
+           (r (cl-letf (((symbol-function 'y-or-n-p) (car asked))) (drgnx-onboard--agents-step '(:interactive t)))))
+      (should (eq (car r) 'fail))
+      (should (string-match-p "or in a terminal: curl -fsSL https://claude.ai/install.sh | bash" (cadr r))))))
+
+;; M6-1: the Agents step offers the MCP servers agents get and a default profile
+
+(defun drgnx-onboard-test--offers-answers (profile coordination search)
+  "Stubs for the questions: (COMPLETING-READ-STUB . Y-OR-N-STUB) answering PROFILE, COORDINATION and SEARCH; they
+record the prompts and the default in the lists they return as the cars of (PROMPTS . DEFAULTS)."
+  (let ((prompts (list nil)) (defaults (list nil)))
+    (list (lambda (prompt _choices &optional _p _r _i _h def &rest _) (push prompt (car prompts)) (push def (car defaults)) profile)
+          (lambda (prompt) (push prompt (car prompts)) (if (string-match-p "search" prompt) search coordination))
+          prompts defaults)))
+
+(ert-deftest drgnx-ai-onboard/agents-offer-mcp-servers-and-a-default-profile ()
+  (drgnx-onboard-test--claude 'macos
+    (drgnx-onboard-test--installed
+     (write-region "" nil (concat home ".logged-in"))
+     (let* ((a (drgnx-onboard-test--offers-answers "claude (Ollama)" t t))
+            (file (expand-file-name "agents.eld" (drgnx-user-dir)))
+            (r (cl-letf (((symbol-function 'drgnx-onboard--agents-offers) drgnx-onboard-test--offers)
+                         ((symbol-function 'completing-read) (nth 0 a)) ((symbol-function 'y-or-n-p) (nth 1 a)))
+                 (drgnx-onboard--agents-step '(:interactive t)))))
+       (should (eq (car r) 'ok))
+       (should (string-match-p "default agent profile: claude (Ollama)" (cadr r)))
+       (should (string-match-p "coordination, search" (cadr r)))
+       (should (equal (car (car (nth 3 a))) "claude"))        ; Return alone: the built-in claude profile
+       (let ((saved (drgnx-onboard-test--read file)))
+         (should (equal (plist-get saved :default) "claude (Ollama)"))
+         (should (equal (plist-get saved :mcp) '(coordination search))))
+       (should (equal (drgnx-agents-default-profile) "claude (Ollama)"))
+       ;; the next run offers what was chosen
+       (let ((b (drgnx-onboard-test--offers-answers "claude (Ollama)" t nil)))
+         (cl-letf (((symbol-function 'drgnx-onboard--agents-offers) drgnx-onboard-test--offers)
+                   ((symbol-function 'completing-read) (nth 0 b)) ((symbol-function 'y-or-n-p) (nth 1 b)))
+           (should (string-match-p "tools for agents: coordination\\'" (cadr (drgnx-onboard--agents-step '(:interactive t))))))
+         (should (equal (car (car (nth 3 b))) "claude (Ollama)")))
+       ;; the sessions started now get both servers; one agent, one search server for its own project
+       (let ((s (drgnx-agents--make :id "s1" :name "s1" :cwd root)))
+         (should (equal (mapcar (lambda (e) (plist-get e :name)) (drgnx-agents--mcp-servers s)) '("drgnx")))
+         (drgnx-agents-set-setting :mcp '(coordination search))
+         (let ((servers (drgnx-agents--mcp-servers s)))
+           (should (equal (mapcar (lambda (e) (plist-get e :name)) servers) '("drgnx" "drgnx-search")))
+           (should (equal (aref (plist-get (aref servers 1) :args) (1- (length (plist-get (aref servers 1) :args))))
+                          (directory-file-name root)))))))))
+
+(ert-deftest drgnx-ai-onboard/agent-defaults-are-never-asked-without-interaction ()
+  (drgnx-onboard-test--claude 'macos
+    (drgnx-onboard-test--installed
+     (write-region "" nil (concat home ".logged-in"))
+     (cl-letf (((symbol-function 'drgnx-onboard--agents-offers) drgnx-onboard-test--offers)
+               ((symbol-function 'completing-read) (lambda (&rest _) (error "asked")))
+               ((symbol-function 'y-or-n-p) (lambda (&rest _) (error "asked"))))
+       (let ((r (drgnx-onboard--agents-step '(:interactive nil))))
+         (should (eq (car r) 'ok))
+         (should-not (string-match-p "default agent profile" (cadr r)))))
+     (should-not (file-exists-p (expand-file-name "agents.eld" (drgnx-user-dir))))
+     ;; and the servers stay as before: the coordination tools only
+     (should (equal (drgnx-agents-mcp-names) '(coordination)))
+     (should (equal (drgnx-agents-default-profile) "claude")))))
+
+(ert-deftest drgnx-ai-onboard/agent-defaults-keep-the-rest-of-agents-eld ()
+  (drgnx-onboard-test--claude 'macos
+    (let ((file (expand-file-name "agents.eld" (drgnx-user-dir))) (a (drgnx-onboard-test--offers-answers "mine" nil nil)))
+      (write-region ";; my agents\n(:profiles ((\"mine\" :command (\"x\"))) :routes nil)\n" nil file nil 'silent)
+      (cl-letf (((symbol-function 'completing-read) (nth 0 a)) ((symbol-function 'y-or-n-p) (nth 1 a)))
+        (should (string-match-p "tools for agents: none" (funcall drgnx-onboard-test--offers))))
+      (let ((text (drgnx-onboard-test--slurp file)))
+        (should (string-prefix-p ";; my agents" text))
+        (let ((saved (drgnx-onboard-test--read file)))
+          (should (equal (plist-get saved :default) "mine"))
+          (should (plist-member saved :mcp))
+          (should-not (plist-get saved :mcp))
+          (should (equal (plist-get saved :profiles) '(("mine" :command ("x")))))
+          (should (plist-member saved :routes))))
+      (should (equal (drgnx-agents--mcp-servers (drgnx-agents--make :id "s1" :name "s1" :cwd root)) []))
+      ;; a file that cannot be read is not touched; the result says so
+      (write-region "(:profiles" nil file nil 'silent)
+      (cl-letf (((symbol-function 'completing-read) (lambda (&rest _) "claude")) ((symbol-function 'y-or-n-p) (nth 1 a)))
+        (should (string-match-p "agents.eld cannot be read" (funcall drgnx-onboard-test--offers))))
+      (should (equal (drgnx-onboard-test--slurp file) "(:profiles")))))
 
 ;;; onboard-test.el ends here

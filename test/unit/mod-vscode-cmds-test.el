@@ -133,8 +133,6 @@
     (should (equal (plist-get spec :packages) '(multiple-cursors)))
     (should (eq (plist-get spec :stage) 'idle))))
 
-;;; mod-vscode-cmds-test.el ends here
-
 ;; From the old UI list ("unbounded closed-files list"): the list behind Reopen Closed Tab keeps the newest 30,
 ;; each file once.
 (ert-deftest drgnx-vsc/the-closed-files-list-is-bounded ()
@@ -158,3 +156,5 @@
             (should (= (length drgnx-basics--closed) 30))
             (should (= 1 (seq-count (lambda (f) (equal f again)) drgnx-basics--closed)))))
       (mapc #'delete-file files))))
+
+;;; mod-vscode-cmds-test.el ends here

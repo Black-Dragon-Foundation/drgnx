@@ -1,5 +1,6 @@
 ;;; ai-ghost-test.el --- batch tests: ghost-text completion and the Tab arbiter -*- lexical-binding: t -*-
 (require 'ert)
+(require 'auth-source)
 (require 'drgnx)
 (load (expand-file-name "modules/tools/drgnx-ai-ui" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/mock-llm" drgnx-dir) nil t)
@@ -130,10 +131,90 @@ LLM answering SPEC; `o' found running."
      (should-not (eq (key-binding [C-right]) 'drgnx-ai-accept-word))
      (drgnx-ai-ghost--show "abc")
      (should (eq (key-binding [C-right]) 'drgnx-ai-accept-word))
-     (should (eq (key-binding [escape]) 'drgnx-ai-dismiss))
+     (should (eq (key-binding (kbd "C-g")) 'drgnx-ai-dismiss))
      (drgnx-ai-dismiss)
      (should-not (drgnx-ai-ghost-text))
      (should-not (eq (key-binding [C-right]) 'drgnx-ai-accept-word)))))
+
+(ert-deftest drgnx-ai-ghost/esc-x-still-meta-while-showing ()
+  ;; a binding on <escape> would take ESC x's ESC (it dismissed, then inserted x): dismiss is on C-g only
+  (drgnx-ai-ghost-test--keys
+   (with-temp-buffer
+     (emacs-lisp-mode)
+     (drgnx-ai-ghost-mode 1)
+     (let ((meta-x (key-binding (kbd "ESC x"))))
+       (should meta-x)
+       (drgnx-ai-ghost--show "abc")
+       (should-not (eq (key-binding [escape]) 'drgnx-ai-dismiss))
+       (should (eq (key-binding (kbd "ESC x")) meta-x))             ; ESC is still Meta while it shows
+       (should (eq (key-binding (kbd "C-g")) 'drgnx-ai-dismiss))
+       (drgnx-ai-dismiss)
+       (should (eq (key-binding (kbd "C-g")) 'keyboard-quit))))))
+
+(ert-deftest drgnx-ai-ghost/the-pause-asks-nothing-in-evil-s-normal-state ()
+  ;; evil is not loaded here: its variables are set buffer-locally by hand
+  (drgnx-ai-ghost-test--with '((:path "/api/generate" :body "{\"response\":\"(message name)\"}"))
+    (setq-local evil-local-mode t)
+    (setq-local evil-state 'normal)
+    (drgnx-ai-ghost--trigger)
+    (should-not drgnx-ai-ghost--request)
+    (setq-local evil-state 'visual)
+    (drgnx-ai-ghost--trigger)
+    (should-not drgnx-ai-ghost--request)
+    (setq-local evil-state 'insert)                                    ; typing: it asks
+    (drgnx-ai-ghost--trigger)
+    (should (drgnx-ai-ghost-test--wait (lambda () (drgnx-ai-ghost-text))))
+    (drgnx-ai-ghost--clear)
+    (setq-local evil-state 'emacs)
+    (drgnx-ai-ghost--trigger)
+    (should (drgnx-ai-ghost-test--wait (lambda () (drgnx-ai-ghost-text))))))
+
+(ert-deftest drgnx-ai-ghost/revert-under-suggestion-tab-indents ()
+  ;; a revert, an agent or a process changes the buffer while a suggestion shows: no command ran, so nothing cleared it
+  (with-temp-buffer
+    (emacs-lisp-mode)
+    (drgnx-ai-ghost-mode 1)
+    (insert "(foo\nbar)")
+    (goto-char 5)
+    (drgnx-ai-ghost--show "abc")
+    (save-excursion (goto-char (point-min)) (insert ";; changed elsewhere\n"))
+    (should-not (eq (drgnx-ai-tab-command) 'drgnx-ai-accept))        ; Tab indents
+    (should-not (drgnx-ai-ghost-text)))
+  (with-temp-buffer
+    (emacs-lisp-mode)
+    (drgnx-ai-ghost-mode 1)
+    (insert "(foo)")
+    (drgnx-ai-ghost--show "abc def")
+    (let ((was (buffer-string)))
+      (save-excursion (goto-char (point-min)) (insert "x"))
+      (drgnx-ai-accept)
+      (drgnx-ai-accept-word)
+      (should (equal (buffer-string) (concat "x" was)))               ; nothing inserted
+      (should-not (drgnx-ai-ghost-text))))
+  ;; unchanged: accepting works, and what is left of the suggestion still accepts
+  (with-temp-buffer
+    (emacs-lisp-mode)
+    (drgnx-ai-ghost-mode 1)
+    (drgnx-ai-ghost--show "abc def")
+    (should (eq (drgnx-ai-tab-command) 'drgnx-ai-accept))
+    (drgnx-ai-accept-word)
+    (should (eq (drgnx-ai-tab-command) 'drgnx-ai-accept))
+    (drgnx-ai-accept)
+    (should (equal (buffer-string) "abc def"))))
+
+(ert-deftest drgnx-ai-ghost/c-right-on-a-stale-suggestion-moves-by-word ()
+  ;; the key was taken from the showing map; the suggestion went stale, so it does what C-<right> does without it
+  (with-temp-buffer
+    (emacs-lisp-mode)
+    (drgnx-ai-ghost-mode 1)
+    (insert "foo bar baz")
+    (goto-char (point-min))
+    (drgnx-ai-ghost--show "abc")
+    (save-excursion (goto-char (point-max)) (insert " changed"))
+    (drgnx-ai-accept-word)
+    (should-not (drgnx-ai-ghost-text))
+    (should (= (point) 4))                                              ; after "foo", nothing inserted
+    (should (equal (buffer-string) "foo bar baz changed"))))
 
 (ert-deftest drgnx-ai-ghost/any-other-command-clears-it ()
   (with-temp-buffer

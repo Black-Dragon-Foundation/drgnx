@@ -48,7 +48,7 @@ cannot be read (never an error or a prompt)."
       (and (consp m) (symbolp (car m)) (car m) (symbolp (cdr m)) (cdr m))))
 
 (defun drgnx-keys--entry-error (entry)
-  "Why ENTRY is not (ID KEY… [:map M] [:mac K…]) or (ID :none [REASON] [:mac K…]); nil if it is."
+  "Why ENTRY is not (ID KEY… [:map M] [:mac K…] [:everywhere K…]) or (ID :none [REASON] [:mac K…]); nil if it is."
   (cond ((not (and (consp entry) (symbolp (car entry)) (proper-list-p entry))) "not a list (ID KEY…)")
         ((eq (cadr entry) :none)
          (let ((rest (if (stringp (nth 2 entry)) (nthcdr 3 entry) (nthcdr 2 entry))))
@@ -57,10 +57,15 @@ cannot be read (never an error or a prompt)."
                   (format "%S after :none (only a reason and :mac KEYS may follow it)" rest)))))
         (t (let ((rest (cdr entry)))
              (while (stringp (car rest)) (pop rest))
-             (cond ((eq rest (cdr entry)) "no keys (write (ID :none \"reason\") for none)")
+             (cond ((and (eq rest (cdr entry)) (not (plist-member rest :everywhere)))
+                    "no keys (write (ID :none \"reason\") for none)")
                    ((or (cl-oddp (length rest))
-                        (not (seq-every-p (lambda (k) (memq k '(:map :mac))) (cl-loop for k in rest by #'cddr collect k))))
-                    (format "%S is not a key (keys are strings; only :map and :mac may follow them)" (car rest)))
+                        (not (seq-every-p (lambda (k) (memq k '(:map :mac :everywhere))) (cl-loop for k in rest by #'cddr collect k))))
+                    (format "%S is not a key (keys are strings; only :map, :mac and :everywhere may follow them)" (car rest)))
+                   ((and (plist-member rest :everywhere)
+                         (not (seq-every-p (lambda (k) (and (stringp k) (= 1 (length (ignore-errors (key-parse k))))))
+                                           (ensure-list (plist-get rest :everywhere)))))
+                    (format ":everywhere %S is not a one-stroke key or a list of them" (plist-get rest :everywhere)))
                    ((and (plist-member rest :map) (not (drgnx-keys--map-spec-p (plist-get rest :map))))
                     (format ":map %S is not a keymap symbol or (FEATURE . KEYMAP)" (plist-get rest :map)))
                    ((and (plist-member rest :mac)
@@ -100,25 +105,27 @@ cannot be read (never an error or a prompt)."
 and Cmd+Shift+letter as the capital letter, as GNU Emacs' NS port sends it (S-s-p is s-P; Shift stays
 on named keys and other characters: C-S-s-<right>).  The modifiers stay in the order keys are written
 in (A-C-H-M-S-s): C-M-b is M-s-b, C-M-S-c is M-s-C."
-  (mapconcat (lambda (event)
-               (if (string-match "\\`\\(\\(?:[ACHMSs]-\\)*\\)\\(.+\\)\\'" event)
-                   (let* ((base (match-string 2 event)) (mods (split-string (match-string 1 event) "-" t)))
-                     (unless keep-ctrl
-                       (when (member "C" mods) (setq mods (cons "s" (remove "C" mods)))))
-                     (when (and (member "S" mods) (member "s" mods) (string-match-p "\\`[a-z]\\'" base))
-                       (setq mods (remove "S" mods) base (upcase base)))
-                     (concat (mapconcat (lambda (m) (concat m "-"))
-                                        (seq-filter (lambda (m) (member m mods)) '("A" "C" "H" "M" "S" "s"))
-                                        "")
-                             base))
-                 event))
-             (split-string key " ") " "))
+  (let ((case-fold-search nil))   ; a capital is not a lower-case letter, whatever the user's setting
+    (mapconcat (lambda (event)
+                 (if (string-match "\\`\\(\\(?:[ACHMSs]-\\)*\\)\\(.+\\)\\'" event)
+                     (let* ((base (match-string 2 event)) (mods (split-string (match-string 1 event) "-" t)))
+                       (unless keep-ctrl
+                         (when (member "C" mods) (setq mods (cons "s" (remove "C" mods)))))
+                       (when (and (member "S" mods) (member "s" mods) (string-match-p "\\`[a-z]\\'" base))
+                         (setq mods (remove "S" mods) base (upcase base)))
+                       (concat (mapconcat (lambda (m) (concat m "-"))
+                                          (seq-filter (lambda (m) (member m mods)) '("A" "C" "H" "M" "S" "s"))
+                                          "")
+                               base))
+                   event))
+               (split-string key " ") " ")))
 
 (defun drgnx-keys--entry (entry spec platform)
-  "ENTRY (ID KEY… [:map M] [:mac K…]) or (ID :none [REASON] [:mac K…]) of SPEC → plist (:keys :map
-:profile-map).  On macOS, :mac's keys replace the others (`:mac ()': none there); without it a :mac-cmd
-profile's C- becomes s-.  Every macOS key has Cmd+Shift+letter as macOS sends it (`S-s-w' is s-W).
-The keymap used is the entry's, else the command's, else the profile's."
+  "ENTRY (ID KEY… [:map M] [:mac K…] [:everywhere K…]) or (ID :none [REASON] [:mac K…]) of SPEC → plist
+(:keys [:everywhere] :map :profile-map).  :everywhere's keys are also in :keys; they also go in the override
+keymap (`drgnx-keys--set-everywhere').  On macOS, :mac's keys replace the others, :everywhere's too
+(`:mac ()': none there); without it a :mac-cmd profile's C- becomes s-.  Every macOS key has Cmd+Shift+letter
+as macOS sends it (`S-s-w' is s-W).  The keymap used is the entry's, else the command's, else the profile's."
   (let ((rest (cdr entry)) keys)
     (cl-flet ((mac (opts) (mapcar (lambda (k) (drgnx-keys--mac-cmd k t)) (ensure-list (plist-get opts :mac)))))
       (if (eq (car rest) :none)
@@ -126,11 +133,15 @@ The keymap used is the entry's, else the command's, else the profile's."
             (list :keys (and (eq platform 'macos) (mac opts)) :profile-map (plist-get spec :map)))
         (while (stringp (car rest)) (push (pop rest) keys))
         (setq keys (nreverse keys))
-        (when (eq platform 'macos)
-          (setq keys (cond ((plist-member rest :mac) (mac rest))
-                           ((plist-get spec :mac-cmd) (mapcar #'drgnx-keys--mac-cmd keys))
-                           (t (mapcar (lambda (k) (drgnx-keys--mac-cmd k t)) keys)))))
-        (list :keys keys :map (plist-get rest :map) :profile-map (plist-get spec :map))))))
+        (let ((everywhere (ensure-list (plist-get rest :everywhere))))
+          (when (eq platform 'macos)
+            (if (plist-member rest :mac)
+                (setq keys (mac rest) everywhere nil)
+              (let ((f (if (plist-get spec :mac-cmd) #'drgnx-keys--mac-cmd (lambda (k) (drgnx-keys--mac-cmd k t)))))
+                (setq keys (mapcar f keys) everywhere (mapcar f everywhere)))))
+          (append (list :keys (append keys everywhere))
+                  (and everywhere (list :everywhere everywhere))
+                  (list :map (plist-get rest :map) :profile-map (plist-get spec :map))))))))
 
 (defun drgnx-keys--lookup (map key)
   "KEY in MAP, ignoring command remapping (which depends on the current buffer)."
@@ -167,15 +178,15 @@ KIND `same-key', `claim' (a key another layer uses natively) or `prefix'."
   (let ((cmds (make-hash-table :test #'eq)) (assign (make-hash-table :test #'eq))
         (rank 0) claims defaults-claim problems bindings conflicts)
     (dolist (c commands) (puthash (drgnx-cmd-id c) c cmds))
-    (cl-flet ((take (entry spec layer where)
+    (cl-flet ((take (entry spec layer where &optional no-everywhere)
                 (if-let* ((why (drgnx-keys--entry-error entry)))
                     (push (format "%s: %S: %s" where entry why) problems)
                   (let ((c (gethash (car entry) cmds)))
                     (cond ((null c) (when (eq layer 'user)
                                       (push (format "%s: no command %s (in :bind)" where (car entry)) problems)))
-                          (t (puthash (car entry) (append (list :layer layer :rank rank)
-                                                          (drgnx-keys--entry entry spec platform))
-                                      assign)))))))
+                          (t (let ((a (append (list :layer layer :rank rank)
+                                              (drgnx-keys--entry entry spec platform))))
+                               (puthash (car entry) (if no-everywhere (plist-put a :everywhere nil) a) assign))))))))
       ;; Each command takes its keys from the last layer covering its scope.
       (if-let* ((why (drgnx-keys--layers-error layers)))
           (push (format "key layers %S: %s" layers why) problems)
@@ -186,7 +197,10 @@ KIND `same-key', `claim' (a key another layer uses natively) or `prefix'."
                 (dolist (entry (plist-get spec :bind))
                   (when (or (not (consp entry)) (not (gethash (car entry) cmds))
                             (memq (drgnx-cmd-scope (gethash (car entry) cmds)) scopes))
-                    (take entry spec profile (format "key profile %s" profile))))
+                    ;; :everywhere keys override the modes' own: only for a profile that owns the editing keys
+                    ;; (another profile's editing layer keeps its C-j in Org, lisp-interaction, …).
+                    (take entry spec profile (format "key profile %s" profile)
+                          (and (not (memq 'editing scopes)) (seq-some (lambda (l) (memq 'editing (cdr l))) layers)))))
                 (pcase-dolist (`(,scope ,key ,desc) (plist-get spec :claims))
                   (when (memq scope scopes) (push (list :key key :claim desc :layer profile :rank rank) claims)))
                 (when (and (plist-get spec :claims-defaults) (memq 'editing scopes))
@@ -204,9 +218,17 @@ KIND `same-key', `claim' (a key another layer uses natively) or `prefix'."
       (when-let* ((a (gethash (drgnx-cmd-id c) assign)))
         (dolist (k (plist-get a :keys))
           (if (key-valid-p k)
-              (push (list :id (drgnx-cmd-id c) :key k :map (or (plist-get a :map) (drgnx-cmd-map c) (plist-get a :profile-map))
-                          :layer (plist-get a :layer) :rank (plist-get a :rank))
-                    bindings)
+              (let* ((map (or (plist-get a :map) (drgnx-cmd-map c) (plist-get a :profile-map)))
+                     (everywhere (and (member k (plist-get a :everywhere))
+                                      (or (eq (cdr (drgnx-commands--keymap-spec map)) 'global-map)
+                                          (progn (push (format "%s: %s is :everywhere in %s; only keys of the global keymap can be"
+                                                               (drgnx-cmd-id c) k (cdr (drgnx-commands--keymap-spec map)))
+                                                       problems)
+                                                 nil)))))
+                (push (append (list :id (drgnx-cmd-id c) :key k :map map
+                                    :layer (plist-get a :layer) :rank (plist-get a :rank))
+                              (and everywhere (list :everywhere t)))
+                      bindings))
             (push (format "%s: \"%s\" is not a valid key" (drgnx-cmd-id c) k) problems)))))
     (setq bindings (nreverse bindings))
     (cl-flet ((mapsym (b) (cdr (drgnx-commands--keymap-spec (plist-get b :map))))
@@ -242,7 +264,23 @@ KIND `same-key', `claim' (a key another layer uses natively) or `prefix'."
                       conflicts)
                 (dolist (l losers) (puthash l t gone))))))
         (setq bindings (seq-remove (lambda (b) (gethash b gone)) bindings)))
-      ;; Keys other layers use natively (claims), Emacs' defaults, and prefixes in the target keymap.
+      ;; An :everywhere key beats the same key in every other keymap: where one of those is as high a layer
+      ;; (keys.eld's), the mode keeps it and the key is only global; either way, the sheet says so.
+      (dolist (b (seq-filter (lambda (b) (plist-get b :everywhere)) bindings))
+        (let* ((parsed (drgnx-keys--parse (plist-get b :key)))
+               (rivals (seq-filter (lambda (r) (and (not (eq (mapsym r) (mapsym b)))
+                                                    (equal (drgnx-keys--parse (plist-get r :key)) parsed)))
+                                   bindings))
+               (top (and rivals (seq-reduce (lambda (w r) (if (> (plist-get r :rank) (plist-get w :rank)) r w))
+                                            rivals (car rivals))))
+               (b-wins (and top (> (plist-get b :rank) (plist-get top :rank)))))
+          (when rivals
+            (unless b-wins (setf (plist-get b :everywhere) nil))
+            (push (list :key (plist-get b :key) :map (mapsym top) :kind 'same-key
+                        :winner (party (if b-wins b top))
+                        :losers (mapcar #'party (if b-wins rivals (cons b (remq top rivals)))))
+                  conflicts))))
+      ;; Keys other layers use natively (claims),Emacs' defaults, and prefixes in the target keymap.
       (dolist (b (copy-sequence bindings))
         (let* ((key (plist-get b :key)) (rank (plist-get b :rank)) (parsed (drgnx-keys--parse key))
                (rivals (seq-filter (lambda (cl) (and (equal (drgnx-keys--parse (plist-get cl :key)) parsed)
@@ -274,8 +312,9 @@ KIND `same-key', `claim' (a key another layer uses natively) or `prefix'."
                           :losers (if b-wins them (cons (party b) (remq top-party them))))
                     conflicts)
               (unless b-wins (setq bindings (remq b bindings))))))))
-    (list :bindings (mapcar (lambda (b) (list :id (plist-get b :id) :key (plist-get b :key)
-                                              :map (plist-get b :map) :layer (plist-get b :layer)))
+    (list :bindings (mapcar (lambda (b) (append (list :id (plist-get b :id) :key (plist-get b :key)
+                                                      :map (plist-get b :map) :layer (plist-get b :layer))
+                                                (and (plist-get b :everywhere) (list :everywhere t))))
                             bindings)
           :conflicts (nreverse conflicts)
           :problems (nreverse problems))))
@@ -386,7 +425,34 @@ is lifted first (and remembered).  Returns what was lifted, \"COMMAND (PREFIX)\"
       (let* ((map (symbol-value mapsym)) (now (drgnx-keys--lookup map key)))
         (when (if (eq ours :prefix) (or (null now) (equal now '(keymap))) (equal now ours))
           (drgnx-keys--set map key prev)))))
+  (drgnx-keys--set-everywhere nil)
   (setq drgnx-keys--applied nil))
+
+(defvar drgnx-keys--everywhere-map (make-sparse-keymap)
+  "The keys of `:everywhere' entries; above every major and minor mode map, so a profile's key works in any mode.")
+(defvar drgnx-keys--everywhere-on nil "Non-nil while `drgnx-keys--everywhere-map' has keys (its switch in the alist).")
+(defvar drgnx-keys--everywhere-alist (list (cons 'drgnx-keys--everywhere-on drgnx-keys--everywhere-map))
+  "The entry `emulation-mode-map-alists' holds (as this symbol) while there are `:everywhere' keys.")
+
+(defun drgnx-keys--everywhere-filter (command)
+  "COMMAND, except in the minibuffer: there C-j and its like are the minibuffer's."
+  (and (not (minibufferp)) command))
+
+(defun drgnx-keys--set-everywhere (bindings)
+  "Make the keys of BINDINGS that are `:everywhere' work in every mode: they go in a keymap on
+`emulation-mode-map-alists', ahead of the major and minor mode maps.  No such BINDINGS: the keymap is
+emptied and leaves the list, so a profile switch leaves nothing behind."
+  (setcdr drgnx-keys--everywhere-map nil)
+  (setq drgnx-keys--everywhere-on nil)
+  (dolist (b bindings)
+    (when-let* (((plist-get b :everywhere))
+                (cmd (drgnx-commands-get (plist-get b :id))))
+      (define-key drgnx-keys--everywhere-map (key-parse (plist-get b :key))
+                  `(menu-item "" ,(drgnx-cmd-command cmd) :filter drgnx-keys--everywhere-filter))
+      (setq drgnx-keys--everywhere-on t)))
+  (if drgnx-keys--everywhere-on
+      (add-to-list 'emulation-mode-map-alists 'drgnx-keys--everywhere-alist)
+    (setq emulation-mode-map-alists (delq 'drgnx-keys--everywhere-alist emulation-mode-map-alists))))
 
 (defun drgnx-keys--apply-binding (b cmd generation)
   "Bind resolution binding B (command CMD) now, or when its keymap's feature loads.  A late binding
@@ -437,6 +503,7 @@ Never prompts: problems are collected in `drgnx-keys-last'.  Returns the resolut
             (let ((cmd (drgnx-commands-get (plist-get b :id))))
               (setf (drgnx-cmd-bound cmd) (append (drgnx-cmd-bound cmd) (list (cons (plist-get b :key) (plist-get b :map)))))
               (drgnx-keys--apply-binding b cmd drgnx-keys--generation)))
+          (drgnx-keys--set-everywhere (plist-get r :bindings))
           (setq drgnx-keys-last (append (list :layers layers
                                               :problems (append (reverse drgnx-keys-problems) (plist-get r :problems)))
                                         r))))
@@ -514,15 +581,16 @@ French, … layouts; Option+← / → still move by word) or `meta' — in keys.
   (drgnx-keys--save-key :mac-option option)
   (when drgnx-keys-last (drgnx-keys-apply)))
 
-(defun drgnx-keys--save-key (key data)
-  "Write DATA as KEY's value into keys.eld: only that value changes; comments and layout stay."
-  (let* ((file (drgnx-keys-file))
+(defun drgnx-keys--save-key (key data &optional file header)
+  "Write DATA as KEY's value into keys.eld (FILE: another .eld, started with HEADER): only that value changes;
+comments and layout stay."
+  (let* ((file (or file (drgnx-keys-file)))
          (value (prin1-to-string data))
          (text (with-temp-buffer
                  (if (file-exists-p file)
                      (insert-file-contents file)
-                   (insert ";; drgnx keys (docs/guide/keys.md): :layers — profile stack, :bind — (ID KEY… [:map M]),\n"
-                           ";; :unbind — (ID…)\n"))
+                   (insert (or header (concat ";; drgnx keys (docs/guide/keys.md): :layers — profile stack, :bind — (ID KEY… [:map M]),\n"
+                                              ";; :unbind — (ID…)\n"))))
                  (set-syntax-table emacs-lisp-mode-syntax-table)
                  (goto-char (point-min))
                  (forward-comment (buffer-size))

@@ -893,6 +893,16 @@ S: the session whose request waits (it goes back to work once answered, or, gone
     (drgnx-job--changed (plist-get m :job))
     t))
 
+(defun drgnx-job-dismiss (mid)
+  "The user dismisses message MID — a message that needs no answer: it is acted on, nothing is sent back.  Only a
+job's own message to the user can be dismissed: an agent's message to another agent must still be delivered."
+  (let ((m (or (drgnx-coord-message mid) (user-error "No message %s" mid))))
+    (unless (and (equal (plist-get m :recipient) "user") (plist-get m :job))
+      (user-error "Not a message of a job to the user"))
+    (drgnx-coord-mark mid "acted")
+    (drgnx-job--changed (plist-get m :job))
+    t))
+
 (defvar drgnx-job--gated (make-hash-table :test #'equal) "Session id → the log version it was last told of at the gate.")
 
 (defun drgnx-job-enforced-p (s)

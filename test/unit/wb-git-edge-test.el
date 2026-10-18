@@ -112,5 +112,58 @@
     (drgnx-git-edge--drain)
     (should-not (seq-filter (lambda (p) (string-prefix-p "drgnx-git" (process-name p))) (process-list)))))
 
+(defun drgnx-git-edge--until-ended (proc)
+  "Block until PROC has exited without reading any process output, as a loaded machine can; return PROC.
+`call-process' waits without reading other processes' output or running sentinels; the exit is noticed."
+  (let ((n 0))
+    (while (and (process-live-p proc) (< (setq n (1+ n)) 100)) (call-process "sleep" nil nil nil "0.05"))
+    proc))
+
+(defun drgnx-git-edge--git-ends-first (proc)
+  "After `make-process': a git run (PROC) is over, unread, before its caller goes on."
+  (if (string-prefix-p "drgnx-git" (process-name proc)) (drgnx-git-edge--until-ended proc) proc))
+
+(defun drgnx-git-edge--no-procs ()
+  "No git status process (or its stderr pipe) is left."
+  (drgnx-git-edge--drain)
+  (should-not (seq-filter (lambda (p) (string-prefix-p "drgnx-git" (process-name p))) (process-list))))
+
+(ert-deftest drgnx-git/a-waited-refresh-reads-a-git-that-ended-before-the-wait ()
+  ;; The stress test's failure under load: git was gone before the wait first looked, its output still in
+  ;; the pipe and its sentinel not yet run.  The wait went on while the process was live, so it returned
+  ;; at once with the run unread (the old :files, a nil status).  It waits until the run is read.
+  (skip-unless (executable-find "git"))
+  (drgnx-git-edge--with dir
+    (drgnx-git-edge--commit dir "a.txt")
+    (write-region "x\n" nil (expand-file-name "new.txt" dir) nil 'silent)
+    (advice-add 'make-process :filter-return #'drgnx-git-edge--git-ends-first)
+    (unwind-protect (drgnx-git-refresh dir t)
+      (advice-remove 'make-process #'drgnx-git-edge--git-ends-first))
+    (should (eq (drgnx-git-status (expand-file-name "new.txt" dir)) 'untracked))
+    (should-not (plist-get (gethash dir drgnx-git--repos) :proc))
+    (drgnx-git-edge--no-procs)))
+
+(ert-deftest drgnx-git/a-late-sentinel-does-not-end-a-newer-wait ()
+  ;; A run that ended unread (an automatic refresh, or a wait that gave up) is replaced by a waited one.
+  ;; Its sentinel, run during that wait, cleared the newer run's :proc: the wait stopped with the older
+  ;; run's files.  A slow git (a wrapper that sleeps first) keeps the newer run going meanwhile.
+  (skip-unless (and (executable-find "git") (executable-find "sh")))
+  (drgnx-git-edge--with dir
+    (drgnx-git-edge--commit dir "a.txt")
+    (let ((bin (expand-file-name "slow-bin" (make-temp-file "drgnx-git-slow" t))))
+      (unwind-protect
+          (progn
+            (make-directory bin)
+            (write-region (format "#!/bin/sh\nsleep 0.5\nexec %s \"$@\"\n" (shell-quote-argument (executable-find "git")))
+                          nil (expand-file-name "git" bin) nil 'silent)
+            (set-file-modes (expand-file-name "git" bin) #o755)
+            (drgnx-git-edge--until-ended (progn (drgnx-git-refresh dir) (plist-get (gethash dir drgnx-git--repos) :proc)))
+            (write-region "x\n" nil (expand-file-name "new.txt" dir) nil 'silent)
+            (let ((exec-path (cons bin exec-path))) (drgnx-git-refresh dir t))
+            (should (eq (drgnx-git-status (expand-file-name "new.txt" dir)) 'untracked))
+            (should-not (plist-get (gethash dir drgnx-git--repos) :proc))
+            (drgnx-git-edge--no-procs))
+        (delete-directory (file-name-directory bin) t)))))
+
 (provide 'wb-git-edge-test)
 ;;; wb-git-edge-test.el ends here

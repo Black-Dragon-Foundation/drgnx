@@ -43,7 +43,7 @@ running turn — it ends within a second, pending permission requests are answer
 rejected, and queued messages wait (Deliver Queued Messages, `C-c C-d`, sends them; Edit Queued Message changes or
 removes one before it is sent). If the agent answers the cancel late, its last words are dropped and nothing new
 is sent until that answer came — never two turns at once. Answer Agent picks an option for a pending permission. Take Over Agent Session resumes a session by its id
-(the agent replays it), when the agent can load sessions. The **context** column shows how full the agent's
+(the agent replays it), when the agent can load sessions (otherwise the new session ends and says why). The **context** column shows how full the agent's
 context is (from the agent's `usage_update`, or usage in its answer). The **Last** column shows how long ago the
 agent last did something (`30s`, `5m`, `2h`, `3d`), as this Emacs saw it. While the list is on screen, it is redrawn every 30
 seconds so the ages stay current, and the cursor stays on its row. When the list is not shown, nothing runs. The Agent layout ([layouts.md](layouts.md)) puts this list on the right and the chat of the agent that
@@ -66,14 +66,18 @@ edits included; both need absolute paths.
 
 Background work that must survive a closed frame, a restart of Emacs or an interrupted chat runs as a **job**: a
 systemd user unit (`systemd-run --user`) where systemd runs your session, else its own process group (the detached
-launcher: `setsid`, or on macOS, which has no `setsid`, the perl every Mac has). Each job has
+launcher: `setsid`, or on macOS, which has no `setsid`, the perl every Mac has; with neither, starting a job says
+"Detached jobs need setsid or perl" and creates nothing). Each job has
 a directory under `~/.local/state/drgnx/jobs/` (its command, log, pid and exit code), so any Emacs lists it in the
-Agents tab (running, exited N, stopped, gone), shows its log (Show Job Log) and stops it (Stop Job). A job's pid is
+Agents tab (running, exited N, stopped, gone), shows its log (Show Job Log) and stops it (Stop Job: under systemd it returns once the job's unit is down, but after
+`drgnx-jobs-stop-wait` seconds, 3 by default, at the latest; a job that ignores TERM is left to systemd, which kills it
+after 90 s). A job's pid is
 trusted only within the boot that started it and for the process it started (a pid reused after a reboot is "gone",
-never signalled). A job can be memory-capped (`:memory-max "1G"` in `drgnx-jobs-start`: systemd's `MemoryMax`, no swap;
+never signalled). Under systemd the job's wrapper line passes through the unit's ExecStart, which reads `$$` as `$`, so drgnx doubles
+every `$` in it: the `pid` file holds the job shell's real pid, and the job reads as running and can be stopped. A job can be memory-capped (`:memory-max "1G"` in `drgnx-jobs-start`: systemd's `MemoryMax`, no swap;
 `:nice 10` lowers its priority (`Nice=`); the detached launcher can do neither and ignores both). `:no-wait t`
 returns without waiting for the job's pid (the boot and start time that make it trustworthy are stamped from a short
-timer): for callers in a timer that must not block, such as drgnx starting the local AI runner again. Sessions and jobs started on a task get it as `DRGNX_TASK`, and the commits they make are
+timer, or at once when Emacs exits first): for callers in a timer that must not block, such as drgnx starting the local AI runner again. Sessions and jobs started on a task get it as `DRGNX_TASK`, and the commits they make are
 recorded for it ([Work tracker](work.md)).
 
 ## The hub and the gateway
@@ -91,9 +95,10 @@ own login, which drgnx only launches and never reads.
 
 The **hub** is a background process (a durable job: it outlives the Emacs that started it, and a later Emacs finds
 it again). The first agent that needs it starts it; `drgnx hub start|stop|status [--json]` manages it by hand. Keys
-reach it from its environment, from auth-source files that never ask, or from the command you ran (a key in
-`~/.authinfo.gpg` is read then) — and stay in its memory; tokens are kept only as hashes, so a restarted hub still
-takes them; an agent's token is revoked when it exits. The hub keeps the environment, `PATH` included, of the Emacs
+reach it over its private socket from the Emacs or `drgnx hub start` that starts or uses it (never through its
+environment), from auth-source files that never ask, or from the command you ran (a key in `~/.authinfo.gpg` is read
+then) — and stay in its memory (a restarted hub gets them again when Emacs reconnects to it); tokens are kept only as hashes, so a restarted hub still
+takes them; an agent's token is revoked when it exits, or once the Emacs that started it is gone (a crash). The hub keeps the environment, `PATH` included, of the Emacs
 that started it: when an agent's program was installed while a hub ran (onboarding's Agents step, say), run
 `drgnx hub stop` (its durable sessions end), so the hub the next durable session starts finds the program.
 With no hub to be had, an agent goes to its provider directly and says so. The Agents list's **Via**
@@ -106,7 +111,25 @@ you close Emacs, and the next Emacs shows it again in the Agents tab — its who
 requests and edits to review — and drives it the same way (send, Stop, answer, review). Emacs mirrors the hub's
 sessions when it is idle whenever a hub is running (and looks again every 30 s); it never starts a hub for that.
 Durable sessions live as long as the hub: if the hub ends (`drgnx hub stop`, a crash), its sessions end too, and the
-Agents tab shows them as exited.
+Agents tab shows them as exited. The next hub (the next durable session, an agent that needs the gateway, or `drgnx
+hub start`) resumes them when their agent can load sessions: each comes back idle with its history,
+though a turn that was running when the hub ended is lost; a job's agents are not resumed (the job starts their
+tasks again).
+
+## What agents get
+
+Every agent drgnx starts gets MCP servers in its ACP `session/new`: the **coordination tools** (see below) by default,
+and, when you ask for it, the **search tool** (`drgnx search mcp`, [search.md](search.md#the-mcp-tool)) for the project
+the agent works in. `agents.eld` holds the choice, next to `:profiles`:
+
+```elisp
+(:default "claude"                   ; what New Agent Session… offers on Return
+ :mcp (coordination search))         ; the servers; absent: coordination only; () gives none
+```
+
+Onboarding's Agents step asks for both and writes them without touching the rest of the file (comments stay); you can
+edit them by hand too. The search tool lets an agent read the indexed code of any of your projects, so it is off until
+you say yes.
 
 ## Working together
 

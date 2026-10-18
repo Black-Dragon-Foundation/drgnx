@@ -276,7 +276,7 @@ exists is connected to (asynchronously)."
 
 (defun drgnx-agents-ui-new-durable (profile)
   "Start an agent session of PROFILE in this project, held by the hub: it keeps working when Emacs closes."
-  (interactive (list (completing-read "Durable agent profile: " (drgnx-agents-profile-names) nil t)))
+  (interactive (list (completing-read "Durable agent profile: " (drgnx-agents-profile-names) nil t nil nil (drgnx-agents-default-profile))))
   (require 'drgnx-agents-mirror)
   (drgnx-hub-ensure)
   (drgnx-agents-mirror-sync)
@@ -285,7 +285,7 @@ exists is connected to (asynchronously)."
 
 (defun drgnx-agents-ui-new (profile)
   "Start an agent session of PROFILE in this project."
-  (interactive (list (completing-read "Agent profile: " (drgnx-agents-profile-names) nil t)))
+  (interactive (list (completing-read "Agent profile: " (drgnx-agents-profile-names) nil t nil nil (drgnx-agents-default-profile))))
   (drgnx-agents-ui-transcript (drgnx-agents-start profile (drgnx-agents-ui--cwd))))
 
 (defun drgnx-agents-ui-send (text)
@@ -305,7 +305,7 @@ exists is connected to (asynchronously)."
 
 (defun drgnx-agents-ui-take-over (profile session-id)
   "Resume the agent session SESSION-ID with PROFILE here."
-  (interactive (list (completing-read "Agent profile: " (drgnx-agents-profile-names) nil t) (read-string "Session id: ")))
+  (interactive (list (completing-read "Agent profile: " (drgnx-agents-profile-names) nil t nil nil (drgnx-agents-default-profile)) (read-string "Session id: ")))
   (drgnx-agents-ui-transcript (drgnx-agents-take-over profile (drgnx-agents-ui--cwd) session-id)))
 
 (defun drgnx-agents-ui-answer ()

@@ -1,6 +1,7 @@
 ;;; mod-extras-test.el --- batch tests: modules that need packages -*- lexical-binding: t -*-
 (require 'ert)
 (require 'drgnx)
+(defvar features)                                      ; a test that loads packages gives the feature list back
 
 (defconst drgnx-extras-test--modules
   '(("extra/drgnx-jump" extra/jump (avy) (go-jump))
@@ -40,7 +41,8 @@
 
 (ert-deftest drgnx-extras/with-packages-they-run ()
   (skip-unless (file-directory-p drgnx-extras-test--elpa))
-  (let ((load-path (append load-path (seq-filter #'file-directory-p (directory-files drgnx-extras-test--elpa t "\\`[^.]"))))
+  (let ((features features)       ; the packages these modules load (gptel, magit, …) are not left "loaded" for later tests
+        (load-path (append load-path (seq-filter #'file-directory-p (directory-files drgnx-extras-test--elpa t "\\`[^.]"))))
         ;; extra/llm points gptel at the `chat' role's OpenRouter step (a key: a fake one, never sent)
         (process-environment (cons "OPENROUTER_API_KEY=sk-or-fake" process-environment)))
     (drgnx-extras-test--fresh

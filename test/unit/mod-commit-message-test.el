@@ -175,3 +175,12 @@
       (should (string-search "unstaged" amend-all)))))
 
 ;;; mod-commit-message-test.el ends here
+
+(ert-deftest drgnx-commit-message/the-projects-remote-route-is-asked-about-in-the-command ()
+  ;; a project's .drgnx/ai.eld may send the chat role to a remote provider: the user is asked first, once
+  (drgnx-commit-message-test--in "" "Add b"
+    (let (order)
+      (cl-letf (((symbol-function 'drgnx-ai-confirm-project-route) (lambda () (push 'asked order) t))
+                ((symbol-function 'drgnx-ai-request) (lambda (&rest _) (push 'requested order) nil)))
+        (drgnx-commit-message-generate))
+      (should (equal (reverse order) '(asked requested))))))

@@ -50,6 +50,7 @@
 (ert-deftest drgnx-jobs-systemd/the-wrapper-line-is-the-last-argument-whole ()
   (let* ((line "p='/a b/pid'; echo $$ > \"$p\"; foo 'it'\\''s' > \"$l\" 2>&1 & wait $!")
          (a (drgnx-jobs-systemd-test--args "j" "/w" line nil nil "2G" 10)))
-    (should (equal (last a 3) (list "sh" "-c" line)))))
+    ;; whole: one argument, not split or quoted; systemd would expand a `$', so each is doubled (JOBS-2)
+    (should (equal (last a 3) (list "sh" "-c" (string-replace "$" "$$" line))))))
 
 ;;; jobs-systemd-args-test.el ends here

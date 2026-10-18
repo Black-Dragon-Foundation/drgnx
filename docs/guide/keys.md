@@ -36,7 +36,7 @@ The onboarding flow will ask which one you want (VS Code preselected).
 | Focus Explorer / Buffers | palette / `C-k e` | `C-x M-e` / `C-x C-b` | `SPC E` / `SPC ,` |
 | View: Explorer / View: Search | `C-S-e` / `C-S-f` | palette / palette | palette / `SPC /` |
 | Replace in Files | `C-S-h` | `C-c s r` | `SPC s r` |
-| Toggle Panel / Right Dock | ``C-` `` / `C-M-b` | — / — | `SPC j` / `SPC R` |
+| Toggle Panel / Right Dock | ``C-` ``, `C-j` / `C-M-b` | — / — | `SPC j` / `SPC R` |
 | Close Tab / Next / Previous | `C-<f4>` / `C-<next>` / `C-<prior>` | — / Emacs' `C-x <right>` / `C-x <left>` | `SPC b d` / `SPC b n` / `SPC b p` |
 | Split Editor Right / Down | ``C-\`` / ``C-k C-\`` | Emacs' `C-x 3` / `C-x 2` | `SPC w v` / `SPC w s` |
 | Focus Group 1–3 / Move Editor to Next Group | `C-1`–`C-3` / `C-M-<right>` | `C-x o` / — | `SPC 1`–`SPC 3` / `SPC w m` |
@@ -125,10 +125,11 @@ Cmd+X and Cmd+Z are Emacs' own Mac keys (copy, paste, cut, undo). The Emacs and 
 **Modifier keys.** With the VS Code profile (also as the app layer under Emacs or Vim editing) drgnx sets, on a Mac:
 Cmd is `s-` (super), the **left Option is Meta** (`M-`: Option+← moves by word, Option+Cmd+→ is next tab), and the
 **right Option types characters** (`@ # { [ €`). Other Mac apps type characters with either Option, which on German,
-French and many other layouts is how you type `@ # { [`: so on a Mac, Look and Keys asks once "Do you type @ # { [
-with Option? (German, French, … keyboards)". **Yes:** the left Option types characters too, for ordinary keys, and
+French and many other layouts is how you type `@ # { [`: so on a Mac, Look and Keys asks "Left Option key (types
+characters: @ # { [ on German, French, … keyboards)", offering your saved answer on Return (Meta before you have
+answered). **Types characters:** the left Option types characters too, for ordinary keys, and
 stays Meta for the arrows and other function keys and the mouse — Option+← / → still move by word
-(`ns-alternate-modifier` is `(:ordinary none :function meta :mouse meta)`); **no:** the left Option is Meta, as above.
+(`ns-alternate-modifier` is `(:ordinary none :function meta :mouse meta)`); **Meta:** the left Option is Meta, as above.
 The answer is saved in `keys.eld` as `:mac-option characters` or `:mac-option meta` (edit it there too); without
 interaction (`drgnx onboard --non-interactive`) nothing changes. Switching to the Emacs or Vim profile puts back what
 was there. (GNU Emacs' `ns-` variables and the Mac port's `mac-` ones are both handled.)
@@ -179,6 +180,16 @@ cannot be bound, a prefix it replaces) joins the list and the report then.
 - `:map` is a keymap symbol or `(FEATURE . KEYMAP)` for a keymap that exists once FEATURE is loaded.
 - `:mac` gives a different key on macOS: `(palette "C-c p" :mac "s-p")`; `:mac ()` is no key there, and
   `(quit :none "reason" :mac "s-q")` a key only there.
+- `:everywhere` names keys that must work in every mode: ``(toggle-panel "C-`" :everywhere "C-j")`` binds `C-j`
+  as usual and also in a keymap that comes before every major and minor mode map, so lisp-interaction or Org mode
+  cannot take it. Use it for one-stroke keys of the global keymap only; the minibuffer keeps its own keys.
+  Switching profiles or applying keys again removes the keymap. On macOS an entry with `:mac` has no `:everywhere`
+  keys there; without `:mac` they become Cmd keys like the others. A binding of the same key in a mode's keymap
+  from `keys.eld` (or a higher layer) wins in that mode, and the key sheet lists the conflict.
+  With the VS Code keys `C-j` toggles the panel everywhere, which also replaces Org's `C-j`, lisp-interaction's
+  `eval-print-last-sexp`, ielm's and term's; to keep a mode's `C-j`, write ``(toggle-panel "C-`" "M-j")`` in
+  `keys.eld`. It applies only when the profile also owns the editing keys: with "Emacs editing + VS Code app keys"
+  or Vim editing, `C-j` stays the editing layer's in modes and Toggle Panel has it only where Emacs' global key was.
 - A mistake never breaks startup: an unreadable file, an unknown command or an invalid key is a problem on the key
   sheet and in the doctor, and everything else still applies.
 - Keyboard Profile… rewrites only `:layers` and keeps the rest of the file.

@@ -17,6 +17,8 @@
 (require 'subr-x)
 (require 'drgnx-paths)
 
+(declare-function package-built-in-p "package")
+
 (defconst drgnx-doctor-install-hint
   "run the installer: curl -fsSL https://raw.githubusercontent.com/Black-Dragon-Foundation/drgnx/main/install.sh | bash  (see docs/guide/install.md)"
   "How to get a suitable Emacs.")
@@ -92,23 +94,40 @@ PLATFORM (`linux' or `macos'): only run on that platform, as `drgnx-platform' sa
   (require 'drgnx-macos)
   (list :macos-app (file-directory-p (expand-file-name "drgnx.app" drgnx-macos-app-dir))
         :brew (and (or (executable-find "brew") (seq-some #'file-executable-p drgnx-doctor--brew-programs)) t)
-        :drgnx-on-path (drgnx-doctor--drgnx-on-path)))
+        :drgnx-on-path (drgnx-doctor--drgnx-on-path)
+        :shell-profile (drgnx-doctor--shell-profile)))
+
+(defun drgnx-doctor--shell-profile ()
+  "The login profile the user's shell reads and install.sh writes the PATH line to: ~/.zprofile for zsh (macOS's
+default; it never reads ~/.profile), else ~/.profile.  With SHELL unset or empty (a daemon the app started):
+~/.zprofile when it exists, then ~/.profile."
+  (let ((shell (or (getenv "SHELL") "")))
+    (cond ((string-suffix-p "/zsh" shell) "~/.zprofile")
+          ((and (string-empty-p shell) (file-exists-p (expand-file-name "~/.zprofile"))) "~/.zprofile")
+          (t "~/.profile"))))
 
 (defun drgnx-doctor--drgnx-on-path ()
   "Does Terminal find the drgnx command?  It is on this Emacs's PATH; or — a daemon the app started lacks
-~/.local/bin on its PATH — ~/.local/bin/drgnx is there and a line of ~/.zprofile (not a comment) puts ~/.local/bin
-on PATH."
+~/.local/bin on its PATH — ~/.local/bin/drgnx is there and a line of the shell's profile
+(`drgnx-doctor--shell-profile', not a comment) puts ~/.local/bin on PATH: `PATH=…' or, in zsh, `path=(…)' / `path+=(…)'."
   (or (and (executable-find "drgnx") t)
-      (let ((zprofile (expand-file-name "~/.zprofile")))
+      (let ((profile (expand-file-name (drgnx-doctor--shell-profile))) (case-fold-search nil))
         (and (file-exists-p (expand-file-name "~/.local/bin/drgnx"))
-             (file-readable-p zprofile)
-             (with-temp-buffer
-               (insert-file-contents zprofile)
-               (re-search-forward (rx bol (* (not (any "#\n"))) "PATH=" (* nonl)
-                                      (or "$HOME" "${HOME}" "~" (literal (directory-file-name (expand-file-name "~"))))
-                                      "/.local/bin")
-                                  nil t))
+             (file-regular-p profile) (file-readable-p profile)
+             ;; a profile that cannot be read is skipped quietly (the facts are gathered outside any condition-case)
+             (ignore-errors
+               (with-temp-buffer
+                 (insert-file-contents profile)
+                 (re-search-forward (rx bol (* (not (any "#\n"))) (or "PATH=" (seq "path" (? "+") "=(")) (* nonl)
+                                        (or "$HOME" "${HOME}" "~" (literal (directory-file-name (expand-file-name "~"))))
+                                        "/.local/bin")
+                                    nil t)))
              t))))
+
+(defun drgnx-doctor--gui-from-features (features)
+  "The graphical toolkit (`pgtk', `x11' or `ns') named in the build FEATURES string, or nil."
+  (when (string-match "\\(PGTK\\|X11\\|NS\\)" features)
+    (intern (downcase (match-string 1 features)))))
 
 (defun drgnx-doctor-facts ()
   "Facts about the running Emacs and this machine."
@@ -119,15 +138,16 @@ on PATH."
            :native-compiles (if native (drgnx-doctor--native-compiles) "not built with native compilation")
            :treesit (and (fboundp 'treesit-available-p) (treesit-available-p))
            :gui (cond ((featurep 'pgtk) 'pgtk) ((featurep 'ns) 'ns) ((featurep 'x) 'x)
-                      ((string-match-p "\\(PGTK\\|X11\\|NS\\)" system-configuration-features)
-                       (intern (downcase (match-string 1 system-configuration-features)))))
+                      (t (drgnx-doctor--gui-from-features system-configuration-features)))
            :git (and (executable-find "git") t)
            :mutter (and (executable-find "mutter") t)
            :dbus-run-session (and (executable-find "dbus-run-session") t)
            :magick (and (executable-find "magick") t)
            :pgtk-emacs (or (featurep 'pgtk) (and (executable-find "emacs-pgtk") t))
            :keys-report (drgnx-doctor--keys-report)
+           :wb-report (drgnx-doctor--state-file "wb-report.eld")
            :modules-report (drgnx-doctor--state-file "modules-report.eld")
+           :modules-report-time (drgnx-doctor--state-file-time "modules-report.eld")
            :onboarding (drgnx-doctor--state-file "onboarding.eld")
            :packages (condition-case err (progn (require 'drgnx-pkg) (drgnx-pkg-status))
                        (error (list :error (error-message-string err))))
@@ -142,11 +162,27 @@ on PATH."
            :vram (ignore-errors (require 'drgnx-ai-probe) (drgnx-ai-vram)))
      (and (eq (drgnx-platform) 'macos) (drgnx-doctor--macos-facts)))))
 
+(defun drgnx-doctor--state-path (name)
+  "The file NAME in the state dir."
+  (expand-file-name (concat "drgnx/" name) (or (getenv "XDG_STATE_HOME") "~/.local/state")))
+
 (defun drgnx-doctor--state-file (name)
   "The .eld file NAME the last drgnx session wrote in the state dir, read, or nil."
-  (let ((file (expand-file-name (concat "drgnx/" name) (or (getenv "XDG_STATE_HOME") "~/.local/state"))))
+  (let ((file (drgnx-doctor--state-path name)))
     (when (file-readable-p file)
       (ignore-errors (with-temp-buffer (insert-file-contents file) (read (current-buffer)))))))
+
+(defun drgnx-doctor--state-file-time (name)
+  "When the state file NAME was last written (seconds since the epoch), or nil."
+  (when-let* ((attrs (file-attributes (drgnx-doctor--state-path name))))
+    (float-time (file-attribute-modification-time attrs))))
+
+(defun drgnx-doctor--age (time)
+  "TIME (seconds since the epoch) as how long ago: \"N min ago\", \"N h ago\" or \"N d ago\"."
+  (let ((s (max 0 (- (float-time) time))))
+    (cond ((< s 3600) (format "%d min ago" (floor s 60)))
+          ((< s 172800) (format "%d h ago" (floor s 3600)))
+          (t (format "%d d ago" (floor s 86400))))))
 
 (defun drgnx-doctor--keys-report ()
   "The key report the last drgnx session wrote (keys-report.eld in the state dir), or nil."
@@ -202,24 +238,35 @@ on PATH."
                               (let* ((r (plist-get f :modules-report))
                                      (failed (seq-filter (lambda (m) (eq (plist-get (cdr m) :status) 'failed)) r))
                                      (waiting (seq-filter (lambda (m) (eq (plist-get (cdr m) :status) 'missing-packages)) r))
-                                     (problems (seq-filter (lambda (m) (plist-get (cdr m) :problems)) r)))
-                                (cond ((null r) (list 'info "no module report yet — start drgnx once" nil))
-                                      (failed (list 'fail (mapconcat (lambda (m) (format "%s: %s" (car m) (plist-get (cdr m) :error))) failed "; ")
-                                                    "see Preferences: Modules; turn the module off there or report the error"))
-                                      (waiting (list 'warn (format "waiting for packages: %s"
-                                                                   (mapconcat (lambda (m) (format "%s (%s)" (car m)
-                                                                                                  (mapconcat #'symbol-name (plist-get (cdr m) :missing) " ")))
-                                                                              waiting ", "))
-                                                     "drgnx sync installs them (M5); until then these modules stay off"))
-                                      (problems (list 'warn (mapconcat (lambda (m) (format "%s: %s" (car m) (string-join (plist-get (cdr m) :problems) "; ")))
-                                                                       problems "; ")
-                                                      "see the module's documentation"))
-                                      (t (list 'ok (format "%d modules ok" (length r)) nil))))))
+                                     (problems (seq-filter (lambda (m) (plist-get (cdr m) :problems)) r))
+                                     (off (seq-count (lambda (m) (eq (plist-get (cdr m) :status) 'disabled)) r))
+                                     (time (plist-get f :modules-report-time))
+                                     (res
+                                      (cond ((null r) (list 'info "no module report yet — start drgnx once" nil))
+                                            (failed (list 'fail (mapconcat (lambda (m) (format "%s: %s" (car m) (plist-get (cdr m) :error))) failed "; ")
+                                                          "see Preferences: Modules; turn the module off there or report the error"))
+                                            (waiting (list 'warn (format "waiting for packages: %s"
+                                                                         (mapconcat (lambda (m) (format "%s (%s)" (car m)
+                                                                                                        (mapconcat #'symbol-name (plist-get (cdr m) :missing) " ")))
+                                                                                    waiting ", "))
+                                                           "drgnx sync installs them (M5); until then these modules stay off"))
+                                            (problems (list 'warn (mapconcat (lambda (m) (format "%s: %s" (car m) (string-join (plist-get (cdr m) :problems) "; ")))
+                                                                             problems "; ")
+                                                            "see the module's documentation"))
+                                            (t (list 'ok (format "%d ok, %d off" (- (length r) off) off) nil)))))
+                                ;; the report is from the last session: say how old it is
+                                (if (and time (not (eq (car res) 'info)))
+                                    (list (car res) (format "%s (from the last session, %s)" (nth 1 res) (drgnx-doctor--age time))
+                                          (nth 2 res))
+                                  res))))
 
 (drgnx-doctor-define 'packages :group "drgnx" :doc "The packages drgnx needs are installed (drgnx sync), with a lock"
                      :check (lambda (f)
                               (let* ((p (plist-get f :packages))
-                                     (missing (seq-difference (plist-get p :manifest) (plist-get p :installed))))
+                                     ;; a package this Emacs ships (eglot, …) needs no install, as `drgnx sync' knows
+                                     (missing (progn (require 'package)
+                                                     (seq-remove #'package-built-in-p
+                                                                 (seq-difference (plist-get p :manifest) (plist-get p :installed))))))
                                 (cond ((plist-get p :error) (list 'fail (plist-get p :error) "fix or remove the file named; drgnx sync rewrites the lock"))
                                       (missing (list 'warn (format "not installed: %s" (mapconcat #'symbol-name missing " "))
                                                      "drgnx sync installs them (their modules wait until then)"))
@@ -227,7 +274,7 @@ on PATH."
                                        (list 'warn "no lock (drgnx.lock.eld)" "drgnx sync writes it; commit it with your configuration"))
                                       ((null (plist-get p :manifest)) (list 'ok "no packages needed" nil))
                                       (t (list 'ok (format "%d packages installed, locked; %d generations"
-                                                           (length (plist-get p :installed)) (plist-get p :generations))
+                                                           (length (plist-get p :installed)) (or (plist-get p :generations) 0))
                                                nil))))))
 
 (drgnx-doctor-define 'onboarding :group "drgnx" :doc "The onboarding steps (drgnx onboard, Help → Welcome)"
@@ -321,6 +368,14 @@ MODEL), as a sentence, or nil."
                                                            (mapconcat (lambda (l) (symbol-name (car l))) (plist-get r :layers) " < "))
                                                nil))))))
 
+(drgnx-doctor-define 'display-rules :group "drgnx" :doc "drgnx's entry in display-buffer-alist is still there (from the last session)"
+                     :check (lambda (f)
+                              (let ((r (plist-get f :wb-report)))
+                                (cond ((null r) (list 'info "no workbench report yet — start drgnx once" nil))
+                                      ((plist-get r :display-buffer-entry) (list 'ok "buffers are placed by drgnx's rules" nil))
+                                      (t (list 'warn "drgnx's entry in display-buffer-alist is gone: something set the variable after startup, so buffers are no longer placed by the rules"
+                                               "use (add-to-list 'display-buffer-alist …) instead of setq in your configuration, or restart drgnx"))))))
+
 (drgnx-doctor-define 'macos-app :group "drgnx" :platform 'macos :doc "The drgnx app in ~/Applications (Finder, Spotlight, the Dock)"
                      :check (lambda (f)
                               (if (plist-get f :macos-app) (list 'ok "the drgnx app is installed" nil)
@@ -332,11 +387,12 @@ MODEL), as a sentence, or nil."
                                 (list 'warn "Homebrew not found" "install Homebrew (https://brew.sh), or run the installer again"))))
 
 (drgnx-doctor-define 'drgnx-on-path :group "drgnx" :platform 'macos
-                     :doc "The drgnx command is on PATH (for Terminal): on this PATH, or ~/.local/bin/drgnx with ~/.zprofile's PATH line"
+                     :doc "The drgnx command is on PATH (for Terminal): on this PATH, or ~/.local/bin/drgnx with the PATH line of your shell's profile (~/.zprofile for zsh, else ~/.profile)"
                      :check (lambda (f)
                               (if (plist-get f :drgnx-on-path) (list 'ok "drgnx is on PATH" nil)
                                 (list 'warn "drgnx is not on PATH: Terminal does not find the command"
-                                      "add ~/.local/bin to PATH: echo 'export PATH=\"$HOME/.local/bin:$PATH\"' >> ~/.zprofile  (then open a new Terminal)"))))
+                                      (format "add ~/.local/bin to PATH: echo 'export PATH=\"$HOME/.local/bin:$PATH\"' >> %s  (then open a new Terminal)"
+                                              (or (plist-get f :shell-profile) "~/.zprofile"))))))
 
 (dolist (tool '((ui-mutter :mutter "mutter" "the headless compositor of drgnx test --ui" linux)
                 (ui-dbus :dbus-run-session "dbus-run-session" "a private D-Bus per test session" linux)

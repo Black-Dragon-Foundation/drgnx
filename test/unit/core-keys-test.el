@@ -1,5 +1,6 @@
 ;;; core-keys-test.el --- batch tests: key profiles, layers and conflicts -*- lexical-binding: t -*-
 (require 'ert)
+(defvar features)                                      ; bound dynamically below
 (require 'drgnx)
 
 (defconst drgnx-keys-test--profiles
@@ -9,11 +10,33 @@
 (defconst drgnx-keys-test--defaults (copy-keymap global-map)
   "Emacs' own bindings, as `drgnx-keys' snapshots them.")
 
+(defvar drgnx-keys-test--later-stages nil
+  "Non-nil: `drgnx-keys-test--with-core-commands' also sets up the idle, first-frame, first-file and first-input modules.")
+
+(defvar drgnx-agents-request-functions)
+(defvar drgnx-agents-changed-functions)
+(defvar drgnx-wb--areas)
+(defvar drgnx-layouts-pane-fillers)
+(defvar drgnx-layouts-shapes)
+(defvar drgnx-persist-state-functions)
+(defvar drgnx-persist-after-restore-functions)
+
 (defmacro drgnx-keys-test--with-core-commands (&rest body)
   "BODY with a registry holding the core commands (core + core/basics) and the two replace commands
-that took VS Code's C-S-h and F2 (the rest of the replace module is not modelled here), nothing else."
+that took VS Code's C-S-h and F2 (the rest of the replace module is not modelled here), nothing else — and with
+`drgnx-keys-test--later-stages', the commands of the later stages' modules whose packages need nothing installed.
+What those modules hook into (find-file, the agents, the panel tabs, the layouts' pane fillers, the persist hooks)
+is undone after BODY."
   `(let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
          (drgnx-commands-problems nil) (drgnx-modules--table nil) (drgnx-modules--report nil)
+         (find-file-hook find-file-hook)
+         (drgnx-agents-request-functions (bound-and-true-p drgnx-agents-request-functions))
+         (drgnx-agents-changed-functions (bound-and-true-p drgnx-agents-changed-functions))
+         (drgnx-wb--areas (copy-tree (bound-and-true-p drgnx-wb--areas)))
+         (drgnx-layouts-pane-fillers (copy-tree (bound-and-true-p drgnx-layouts-pane-fillers)))
+         (drgnx-layouts-shapes (copy-tree (bound-and-true-p drgnx-layouts-shapes)))
+         (drgnx-persist-state-functions (bound-and-true-p drgnx-persist-state-functions))
+         (drgnx-persist-after-restore-functions (bound-and-true-p drgnx-persist-after-restore-functions))
          (ring-bell-function ring-bell-function) (use-dialog-box use-dialog-box)
          (use-short-answers use-short-answers) (inhibit-startup-screen inhibit-startup-screen))
      (drgnx--core-commands)
@@ -21,6 +44,11 @@ that took VS Code's C-S-h and F2 (the rest of the replace module is not modelled
      (drgnx-modules-run 'startup)
      (drgnx-command-define 'replace-in-files :category "Search" :title "Replace in Files" :command #'ignore :doc "test")
      (drgnx-command-define 'rename-symbol :category "Search" :title "Rename Symbol" :command #'ignore :doc "test")
+     (when drgnx-keys-test--later-stages
+       ;; A module that needs a package (magit, avy, websocket, …) stays out whatever this machine has installed.
+       ;; (Another test file's packages cannot be loaded here: each file runs in an Emacs of its own.)
+       (cl-letf (((symbol-function 'locate-library) (lambda (&rest _) nil)))
+         (dolist (stage (cdr drgnx-modules-stages)) (drgnx-modules-run stage))))
      ,@body))
 
 (defun drgnx-keys-test--resolve (layers &rest args)
@@ -490,6 +518,144 @@ that took VS Code's C-S-h and F2 (the rest of the replace module is not modelled
        (drgnx-keys-choose-profile "VS Code"))
      (should (string-search (format "%d conflict" (length (drgnx-keys-conflict-lines))) said)))))
 
+;;;; Keys that work in every mode (M3c-1)
+
+(ert-deftest drgnx-keys/everywhere-key-beats-mode-maps ()
+  ;; `:everywhere KEYS' on an entry also puts the keys in an override keymap on `emulation-mode-map-alists':
+  ;; C-j is lisp-interaction mode's (eval-print-last-sexp) otherwise.  Re-applying without the flag removes it.
+  (drgnx-keys-test--live
+   (let ((panel (drgnx-cmd-command (drgnx-commands-get 'toggle-panel))))
+     (with-temp-buffer
+       (lisp-interaction-mode)
+       (drgnx-keys-test--write-user '(:layers ((emacs app editing window)) :bind ((toggle-panel "C-c j" :everywhere "C-j"))))
+       (drgnx-keys-apply)
+       (should (null (plist-get drgnx-keys-last :problems)))
+       (should (eq (key-binding (kbd "C-j")) panel))
+       (should (eq (key-binding (kbd "C-c j")) panel))
+       (should (eq (keymap-lookup global-map "C-j") panel))
+       (should (memq 'drgnx-keys--everywhere-alist emulation-mode-map-alists))
+       ;; not in the minibuffer, where C-j means something else: the layer steps aside, the local map answers
+       (cl-letf (((symbol-function 'minibufferp) (lambda (&rest _) t)))
+         (should (eq (key-binding (kbd "C-j")) 'eval-print-last-sexp)))
+       (should (eq (plist-get (car (seq-filter (lambda (b) (equal (plist-get b :key) "C-j")) (plist-get drgnx-keys-last :bindings)))
+                              :everywhere)
+                   t))
+       ;; Applying again with the flag keeps one layer, not two.
+       (drgnx-keys-apply)
+       (should (= 1 (length (seq-filter (lambda (m) (eq m 'drgnx-keys--everywhere-alist)) emulation-mode-map-alists))))
+       ;; Without the flag the mode's key is back, and the override layer is gone.
+       (drgnx-keys-test--write-user '(:layers ((emacs app editing window)) :bind ((toggle-panel "C-c j"))))
+       (drgnx-keys-apply)
+       (should (eq (key-binding (kbd "C-j")) 'eval-print-last-sexp))
+       (should-not (memq 'drgnx-keys--everywhere-alist emulation-mode-map-alists))
+       (should (equal (cdr drgnx-keys--everywhere-map) nil))))))
+
+(ert-deftest drgnx-keys/vscode-c-j-toggles-the-panel-in-every-mode ()
+  ;; VS Code's Toggle Panel (C-j) is not shadowed by lisp-interaction or Org mode; the Emacs profile leaves it alone.
+  (drgnx-keys-test--live
+   (let ((panel (drgnx-cmd-command (drgnx-commands-get 'toggle-panel))))
+     (drgnx-keys-use '((vscode app editing window)))
+     (with-temp-buffer
+       (lisp-interaction-mode)
+       (should (eq (key-binding (kbd "C-j")) panel))
+       (drgnx-keys-use '((emacs app editing window)))
+       (should (eq (key-binding (kbd "C-j")) 'eval-print-last-sexp))
+       (should-not (memq 'drgnx-keys--everywhere-alist emulation-mode-map-alists)))
+     (with-temp-buffer
+       (require 'org)
+       (org-mode)
+       (drgnx-keys-use '((vscode app editing window)))
+       (should (eq (key-binding (kbd "C-j")) panel))))))
+
+(ert-deftest drgnx-keys/everywhere-is-a-valid-entry-option ()
+  (should-not (drgnx-keys--entry-error '(toggle-panel "C-`" :everywhere "C-j")))
+  (should-not (drgnx-keys--entry-error '(toggle-panel "C-`" :everywhere ("C-j" "C-M-j") :mac "s-j")))
+  (should (drgnx-keys--entry-error '(toggle-panel "C-`" :everywhere 5)))
+  (should (drgnx-keys--entry-error '(toggle-panel "C-`" :everywhere))))
+
+(ert-deftest drgnx-keys/everywhere-keys-follow-mac-like-the-others ()
+  ;; On macOS they become Cmd keys; an entry's own :mac replaces them with the others.
+  (let ((profiles '((p :mac-cmd t :bind ((toggle-panel "C-`" :everywhere "C-j") (palette "C-p" :everywhere "C-i" :mac "s-p"))))))
+    (should (equal (drgnx-keys--entry '(toggle-panel "C-`" :everywhere "C-j") (cdar profiles) 'macos)
+                   '(:keys ("s-`" "s-j") :everywhere ("s-j") :map nil :profile-map nil)))
+    (should (equal (drgnx-keys--entry '(palette "C-p" :everywhere "C-i" :mac "s-p") (cdar profiles) 'macos)
+                   '(:keys ("s-p") :map nil :profile-map nil)))
+    (should (equal (plist-get (drgnx-keys--entry '(toggle-panel "C-`" :everywhere "C-j") (cdar profiles) 'linux) :everywhere)
+                   '("C-j")))))
+
+(ert-deftest drgnx-keys/everywhere-entry-needs-one-stroke-keys ()
+  ;; A key alone is an entry (m2); a chord would make its first key a prefix in every mode and in the minibuffer (m3).
+  (should-not (drgnx-keys--entry-error '(toggle-panel :everywhere "C-j")))
+  (should (drgnx-keys--entry-error '(toggle-panel "C-`" :everywhere "C-k j")))
+  (should (drgnx-keys--entry-error '(toggle-panel "C-`" :everywhere ("C-j" "C-k j"))))
+  (should (drgnx-keys--entry-error '(toggle-panel))))
+
+(ert-deftest drgnx-keys/everywhere-in-a-mode-map-is-a-problem ()
+  ;; The override layer is global: an :everywhere key bound in a mode keymap says so instead of leaking out.
+  (let ((r (drgnx-keys-test--resolve '((vscode app editing window))
+                                     :user '(:bind ((toggle-panel "C-`" :everywhere "C-j" :map org-mode-map))))))
+    (should (seq-find (lambda (p) (string-search ":everywhere" p)) (plist-get r :problems)))
+    (should-not (seq-find (lambda (b) (plist-get b :everywhere)) (plist-get r :bindings)))))
+
+(ert-deftest drgnx-keys/user-mode-map-key-beats-everywhere ()
+  ;; I1: keys.eld binds C-j in a mode map: that wins there, the profile's global C-j stays, and the sheet says so.
+  (drgnx-keys-test--live
+   (drgnx-keys-test--write-user '(:bind ((palette "C-j" :map lisp-interaction-mode-map))))
+   (drgnx-keys-use '((vscode app editing window)))
+   (let ((palette (drgnx-cmd-command (drgnx-commands-get 'palette)))
+         (panel (drgnx-cmd-command (drgnx-commands-get 'toggle-panel)))
+         (c (drgnx-keys-test--conflict drgnx-keys-last "C-j")))
+     (with-temp-buffer
+       (lisp-interaction-mode)
+       (should (eq (key-binding (kbd "C-j")) palette)))
+     (with-temp-buffer
+       (fundamental-mode)
+       (should (eq (key-binding (kbd "C-j")) panel)))
+     (should-not (memq 'drgnx-keys--everywhere-alist emulation-mode-map-alists))
+     (should c)
+     (should (eq (plist-get c :kind) 'same-key))
+     (should (eq (plist-get (plist-get c :winner) :id) 'palette))
+     (should (eq (plist-get (car (plist-get c :losers)) :id) 'toggle-panel)))))
+
+(ert-deftest drgnx-keys/everywhere-beats-a-lower-mode-map-key-and-says-so ()
+  ;; The profile's rank above a lower layer's mode-map key: the override stays, and the shadowing is a conflict.
+  (let* ((profiles '((a :bind ((palette "C-j" :map lisp-interaction-mode-map)))
+                     (b :bind ((toggle-panel "C-`" :everywhere "C-j")))))
+         (r (drgnx-keys-test--with-core-commands
+             (drgnx-keys-resolve :commands (drgnx-commands-all) :profiles profiles :defaults drgnx-keys-test--defaults
+                                 :layers '((a app editing window) (b app editing window))))))
+    (should (seq-find (lambda (b) (plist-get b :everywhere)) (plist-get r :bindings)))
+    (should (eq (plist-get (plist-get (drgnx-keys-test--conflict r "C-j") :winner) :id) 'toggle-panel))))
+
+(ert-deftest drgnx-keys/everywhere-only-where-the-profile-owns-editing ()
+  ;; I2: a stack whose editing keys come from another profile keeps that profile's C-j in modes; Toggle Panel's
+  ;; C-j is then the global binding only.  The pure VS Code stack has it everywhere.
+  (cl-flet ((everywhere (layers) (seq-find (lambda (b) (plist-get b :everywhere))
+                                           (plist-get (drgnx-keys-test--resolve layers) :bindings))))
+    (should (everywhere '((vscode app editing window))))
+    (dolist (layers '(((emacs editing) (vscode app window)) ((vim editing) (vscode app window))))
+      (should-not (everywhere layers))
+      (should (member "C-j" (drgnx-keys-test--keys (drgnx-keys-test--resolve layers) 'toggle-panel))))
+    ;; an editing layer above the VS Code keys keeps C-j altogether (as before)
+    (should-not (everywhere '((vscode app window) (emacs editing)))))
+  (drgnx-keys-test--live
+   (with-temp-buffer
+     (lisp-interaction-mode)
+     (drgnx-keys-use '((emacs editing) (vscode app window)))
+     (should (eq (key-binding (kbd "C-j")) 'eval-print-last-sexp))
+     (should-not (memq 'drgnx-keys--everywhere-alist emulation-mode-map-alists))
+     (should (eq (keymap-lookup global-map "C-j") (drgnx-cmd-command (drgnx-commands-get 'toggle-panel)))))))
+
+(ert-deftest drgnx-keys/restore-removes-the-everywhere-layer ()
+  (drgnx-keys-test--live
+   (drgnx-keys-use '((vscode app editing window)))
+   (should (memq 'drgnx-keys--everywhere-alist emulation-mode-map-alists))
+   (should (cdr drgnx-keys--everywhere-map))
+   (drgnx-keys--restore)
+   (should-not (memq 'drgnx-keys--everywhere-alist emulation-mode-map-alists))
+   (should-not (cdr drgnx-keys--everywhere-map))
+   (should-not drgnx-keys--everywhere-on)))
+
 ;;;; macOS (M12a)
 
 (defun drgnx-keys-test--on (r key &optional global)
@@ -566,7 +732,11 @@ that took VS Code's C-S-h and F2 (the rest of the replace module is not modelled
   (should (equal (drgnx-keys--mac-cmd "C-M-S-c") "M-s-C"))
   (should (equal (drgnx-keys--mac-cmd "C-S-x" t) "C-S-x"))
   (should (equal (drgnx-keys--mac-cmd "C-S-s-x" t) "C-s-X"))
-  (should (equal (drgnx-keys--mac-cmd "C-k C-S-p") "s-k s-P")))
+  (should (equal (drgnx-keys--mac-cmd "C-k C-S-p") "s-k s-P"))
+  ;; M12a-26: the letter check does not depend on `case-fold-search' (a capital is not a lower-case letter)
+  (dolist (key '("C-S-X" "C-S-x" "S-s-X" "C-M-S-c"))
+    (should (equal (let ((case-fold-search t)) (drgnx-keys--mac-cmd key))
+                   (let ((case-fold-search nil)) (drgnx-keys--mac-cmd key))))))
 
 (ert-deftest drgnx-keys/vscode-on-macos-has-no-conflicts ()
   ;; Against Emacs' macOS defaults (ns-win's s- keys): no two commands on one key, no problem, and the
@@ -603,7 +773,7 @@ that took VS Code's C-S-h and F2 (the rest of the replace module is not modelled
     (modules-toggle "RET" drgnx-modules-list-mode-map) (keyboard-profile "C-k C-p" nil) (open-file "C-o" nil)
     (save-file "C-s" nil) (file-save-as "C-S-s" nil) (file-new "C-n" nil) (file-reopen-tab "C-S-t" nil)
     (file-new-window "C-S-n" nil) (file-close-window "C-q" nil) (view-escape "<escape>" nil)
-    (toggle-panel "C-`" nil) (toggle-panel "M-j" nil) (toggle-right-dock "C-M-b" nil)
+    (toggle-panel "C-`" nil) (toggle-panel "M-j" nil) (toggle-panel "C-j" nil) (toggle-right-dock "C-M-b" nil)
     (split-editor-right "C-\\" nil) (split-editor-down "C-k C-\\" nil) (close-group-editors "C-k w" nil)
     (focus-group-1 "C-1" nil) (focus-group-1 "M-1" nil) (focus-group-2 "C-2" nil) (focus-group-2 "M-2" nil)
     (focus-group-3 "C-3" nil) (focus-group-3 "M-3" nil) (move-editor-to-next-group "C-M-<right>" nil)
@@ -642,7 +812,7 @@ that took VS Code's C-S-h and F2 (the rest of the replace module is not modelled
     (agents-reply "RET" drgnx-agents-transcript-mode-map)
     (agents-review-done "C-c C-c" drgnx-agents-review-mode-map)
     (agents-review-reject "C-c C-k" drgnx-agents-review-mode-map)
-    (ai-accept-word "C-<right>" drgnx-ai-ghost-showing-map) (ai-dismiss "<escape>" drgnx-ai-ghost-showing-map)
+    (ai-accept-word "C-<right>" drgnx-ai-ghost-showing-map) (ai-dismiss "C-g" drgnx-ai-ghost-showing-map)
     (ai-tab "TAB" drgnx-ai-ghost-mode-map) (ai-edit "C-k C-e" nil)
     (ai-edit-apply-hunk "C-c C-a" drgnx-ai-edit-review-mode-map)
     (ai-edit-done "C-c C-c" drgnx-ai-edit-review-mode-map) (ai-edit-reject "C-c C-k" drgnx-ai-edit-review-mode-map)
@@ -658,15 +828,41 @@ that took VS Code's C-S-h and F2 (the rest of the replace module is not modelled
     (cockpit-comment "c" drgnx-cockpit-edits-mode-map) (cockpit-edits-next-file "n" drgnx-cockpit-edits-mode-map)
     (cockpit-edits-previous-file "p" drgnx-cockpit-edits-mode-map) (cockpit-edits-next-hunk "TAB" drgnx-cockpit-edits-mode-map)
     (cockpit-edits-previous-hunk "<backtab>" drgnx-cockpit-edits-mode-map) (cockpit-edits-visit "RET" drgnx-cockpit-edits-mode-map)
-    (cockpit-answer "A" drgnx-cockpit-map))
-  "The VS Code profile's resolved keys on Linux before M12a gave it its macOS keys: (ID KEY MAP).")
+    (cockpit-answer "A" drgnx-cockpit-map)
+    (diff-toggle-layout "s" drgnx-diff-mode-map) (diff-toggle-file "TAB" drgnx-diff-mode-map)
+    (diff-next-file "n" drgnx-diff-mode-map) (diff-prev-file "p" drgnx-diff-mode-map)
+    (diff-visit "RET" drgnx-diff-mode-map) (review-visit "RET" drgnx-review-mode-map)
+    (review-show-diff "d" drgnx-review-mode-map))
+  "The VS Code profile's resolved keys on Linux before M12a gave it its macOS keys: (ID KEY MAP).
+The commands of modules that need no installed package are in it, the later stages' too (diff, review).")
+
+(ert-deftest drgnx-keys/the-later-stages-leave-no-global-hooks-or-pane-fillers ()
+  ;; Setting the modules up for the snapshot must not stay: a registered browser pane made the next layouts test
+  ;; open a third editor group, the persist hooks changed every later restore.
+  (require 'drgnx-persist)
+  (let ((fillers (copy-tree (bound-and-true-p drgnx-layouts-pane-fillers)))
+        (shapes (copy-tree (bound-and-true-p drgnx-layouts-shapes)))
+        (state-fns (copy-sequence drgnx-persist-state-functions))
+        (after-fns (copy-sequence drgnx-persist-after-restore-functions))
+        (drgnx-keys-test--later-stages t))
+    (drgnx-keys-test--with-core-commands (ignore))
+    (should (equal (bound-and-true-p drgnx-layouts-pane-fillers) fillers))
+    (should (equal (bound-and-true-p drgnx-layouts-shapes) shapes))
+    (should (equal drgnx-persist-state-functions state-fns))
+    (should (equal drgnx-persist-after-restore-functions after-fns))))
 
 (ert-deftest drgnx-keys/linux-is-unchanged ()
   ;; The macOS work changes nothing on Linux but the keys of the commands it added — and the views
   ;; that took C-S-e, C-S-f, C-S-h and F2 (see `drgnx-keys/views-took-their-keys').
   (let* ((new '(view-explorer view-search replace-in-files rename-symbol   ; M12a's views took four of the keys
+                              ;; the later stages' modules from M11c-1: replace, layouts, browser, shortcuts
+                              replace-in-file replace-all replace-this replace-next replace-prev replace-bar-close
+                              layout-next browser-go keyboard-shortcuts shortcuts-change shortcuts-add shortcuts-filter
+                              shortcuts-record-filter shortcuts-conflicts shortcuts-no-key shortcuts-changed
+                              shortcuts-undo shortcuts-reset shortcuts-reset-all shortcuts-profile
                               quit preferences edit-line-start edit-line-end edit-buffer-start edit-buffer-end edit-word-left
                               edit-word-right edit-delete-word-back edit-delete-line-back))
+         (drgnx-keys-test--later-stages t)
          (r (drgnx-keys-test--resolve '((vscode app editing window)) :platform 'linux)))
     (should (equal (mapcar (lambda (b) (list (plist-get b :id) (plist-get b :key) (plist-get b :map)))
                            (seq-remove (lambda (b) (memq (plist-get b :id) new)) (plist-get r :bindings)))

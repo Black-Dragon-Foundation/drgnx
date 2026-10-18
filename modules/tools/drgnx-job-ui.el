@@ -112,7 +112,11 @@
       (dolist (side (drgnx-job-ui--v (plist-get d :sides)))
         (insert (format "  %s: %s\n" (plist-get side :label) (plist-get side :text))))
       (let ((rec (drgnx-job-ui--v (plist-get d :recommendation))))
-        (insert (cond ((null rec) "  The reviewer is reading both sides…\n")
+        (insert (cond ((and (null rec) (drgnx-job-ui--v (plist-get d :reviewer-gone)))
+                       "  No reviewer is coming — pick a side yourself, or Discuss to start one again.\n")
+                      ((and (null rec) (drgnx-job-ui--v (plist-get d :no-recommendation)))
+                       "  The reviewer gave no recommendation — pick a side yourself, or Discuss.\n")
+                      ((null rec) "  The reviewer is reading both sides…\n")
                       (t (format "  The reviewer recommends %s: %s\n" (or (drgnx-job-ui--v (plist-get rec :side)) "neither")
                                  (plist-get rec :why)))))))
     (insert "  ")
@@ -132,7 +136,9 @@
         (let ((id (plist-get m :id)))
           (insert (format "  from %s (%s): %s\n  " (plist-get m :sender) (plist-get m :state)
                           (replace-regexp-in-string "[\n\r]+" " ⏎ " (format "%s" (plist-get m :text)))))
-          (drgnx-job-ui--button "Reply…" (lambda () (drgnx-job-ui--reply job id)))
+          (unless (equal (plist-get m :state) "acted")      ; dismissed or answered: nothing more to do
+            (drgnx-job-ui--button "Reply…" (lambda () (drgnx-job-ui--reply job id)))
+            (drgnx-job-ui--button "Dismiss" (lambda () (drgnx-job-ui--dismiss job id))))
           (insert "\n"))))))
 
 (defun drgnx-job-ui--insert-log (_job s)
@@ -189,10 +195,22 @@
     (condition-case err
         (progn (drgnx-job-ui--hub)
                (drgnx-hub-call "job/status" (list :id job :decisions t)
-                               (lambda (r e) (if (or e (not r)) (drgnx-job-ui--no-hub job (or e "no answer"))
-                                               (drgnx-job-ui--draw job r)
-                                               (ignore-errors (drgnx-hub-connect))))))   ; events again, after a hub came back
+                               (lambda (r e) (cond
+                                              ;; "No job ID": the hub's own error text for an unknown job (job/status in
+                                              ;; core/drgnx-hub.el); change both together
+                                              ((and (stringp e) (string-prefix-p "No job " e)) (drgnx-job-ui--gone job))
+                                              ((or e (not r)) (drgnx-job-ui--no-hub job (or e "no answer")))
+                                              (t (drgnx-job-ui--draw job r)
+                                                 (ignore-errors (drgnx-hub-connect)))))))   ; events again, after a hub came back
       (error (drgnx-job-ui--no-hub job (error-message-string err))))))
+
+(defun drgnx-job-ui--gone (job)
+  "The hub does not know JOB (it was deleted, or this window outlived it): close its window — its frame when it
+has one of its own — and forget its buffers, instead of looking again every 10 s."
+  (when-let* ((f (seq-find (lambda (f) (equal (frame-parameter f 'drgnx-job) job)) (frame-list)))
+              ((cdr (frame-list))))
+    (delete-frame f))
+  (drgnx-job-ui--forget job))
 
 (defun drgnx-job-ui--hub-gone ()
   "`drgnx-hub-disconnect-functions': every open job window says the hub is gone (and looks for it again)."
@@ -225,13 +243,40 @@
                  ("discuss" (read-string "Ask the reviewer: ")))))
       (drgnx-job-ui--hub)
       (drgnx-hub-call "job/card" (list :card (plist-get card :id) :action action :arg arg)
-                      (lambda (_r err) (when err (message "drgnx: %s" err)) (drgnx-job-ui--schedule job))))))
+                      (lambda (_r err)
+                        (when err (message "drgnx: %s" err))
+                        (drgnx-job-ui--schedule job)
+                        (when (and (not err) (equal action "discuss")) (drgnx-job-ui--show-reviewer job (plist-get card :id))))))))
+
+(defun drgnx-job-ui--show-reviewer (job card)
+  "Open the transcript of the reviewer on CARD of JOB (the hub says which session: the card's data)."
+  (drgnx-hub-call "job/status" (list :id job)
+                  (lambda (r err)
+                    (let* ((c (seq-find (lambda (c) (equal (plist-get c :id) card)) (drgnx-job-ui--v (plist-get r :cards))))
+                           (sid (drgnx-job-ui--v (plist-get (drgnx-job-ui--v (plist-get c :data)) :reviewer))))
+                      (cond (err (message "drgnx: %s" err))
+                            (sid (drgnx-job-ui--open-transcript sid t)))))))
+
+(defun drgnx-job-ui--open-transcript (id retry)
+  "Show agent ID's transcript; one that is not mirrored here yet (a reviewer just started) is tried again once (RETRY)."
+  (condition-case err (drgnx-job-ui--transcript id)
+    (user-error (if retry (run-at-time 1 nil #'drgnx-job-ui--open-transcript id nil)
+                  (message "drgnx: %s" (error-message-string err))))))
 
 (defun drgnx-job-ui--reply (job message)
   (let ((text (read-string "Reply: ")))
     (drgnx-job-ui--hub)
     (drgnx-hub-call "job/reply" (list :message message :text text)
                     (lambda (_r err) (when err (message "drgnx: %s" err)) (drgnx-job-ui--schedule job)))))
+
+(defun drgnx-job-ui--dismiss (job message)
+  "MESSAGE of JOB needs no answer: acted on, so the window and the badge stop showing it."
+  (drgnx-job-ui--hub)
+  (drgnx-hub-call "job/dismiss" (list :message message)
+                  (lambda (_r err)
+                    (when err (message "drgnx: %s" err))
+                    (drgnx-job-ui--schedule job)
+                    (drgnx-job-ui--schedule-recount))))
 
 (defun drgnx-job-ui--open-tree (job)
   "The job's worktree (its branch, job/JOB) in Dired."
@@ -300,9 +345,13 @@
 (defun drgnx-job-ui--frame-deleted (frame)
   "A job window closed: its buffers go; the job goes on."
   (when-let* ((job (frame-parameter frame 'drgnx-job)))
-    (dolist (part '(tasks cards log))
-      (when-let* ((b (get-buffer (drgnx-job-ui--buffer-name job part)))) (kill-buffer b))
-      (remhash (cons job part) drgnx-job-ui--drawn))))
+    (drgnx-job-ui--forget job)))
+
+(defun drgnx-job-ui--forget (job)
+  "Kill JOB's window buffers and what was drawn in them."
+  (dolist (part '(tasks cards log))
+    (when-let* ((b (get-buffer (drgnx-job-ui--buffer-name job part)))) (kill-buffer b))
+    (remhash (cons job part) drgnx-job-ui--drawn)))
 
 ;;;; The badge and notifications: nobody has to watch the window
 
@@ -371,10 +420,24 @@ jobs only — and the job with the newest card."
       (puthash id t drgnx-job-ui--notified)
       (let ((body (format "%s — %s" (plist-get data :job) (plist-get data :title))))
         ;; later, not in the hub's event handler: a D-Bus call that hangs must not hold the filter
-        (run-at-time 0 nil (lambda ()
-                             (if (drgnx-job-ui--desktop-p)
-                                 (with-demoted-errors "drgnx: %S" (notifications-notify :title "drgnx: a job needs you" :body body))
-                               (message "drgnx: a job needs you — %s" body))))))))
+        (run-at-time 0 nil (lambda () (with-demoted-errors "drgnx: %S" (drgnx-job-ui--send "drgnx: a job needs you" body))))))))
+
+(defun drgnx-job-ui--send (title body)
+  "Tell the user TITLE and BODY where the platform has a notification: macOS through `osascript' (a process that
+never waits; a fixed script, the text only as arguments to it: nothing of it is script, no shell), elsewhere D-Bus;
+else a message.  A failed osascript says so once.  Never a prompt."
+  (cond ((and (eq system-type 'darwin) (executable-find "osascript"))
+         (make-process :name "drgnx-notify" :noquery t :connection-type 'pipe
+                       :command (list "osascript" "-e" "on run argv"
+                                      "-e" "display notification (item 1 of argv) with title (item 2 of argv)"
+                                      "-e" "end run" "--"
+                                      (replace-regexp-in-string "[\n\r]+" " " body) (replace-regexp-in-string "[\n\r]+" " " title))
+                       :sentinel (lambda (p _event)
+                                   (when (and (memq (process-status p) '(exit signal)) (/= 0 (process-exit-status p)))
+                                     (message "drgnx: the macOS notification failed (%s — %s)" title body)))))
+        ((and (not (memq system-type '(darwin windows-nt))) (drgnx-job-ui--desktop-p))
+         (notifications-notify :title title :body body))
+        (t (message "%s — %s" title body))))
 
 (declare-function notifications-notify "notifications")
 

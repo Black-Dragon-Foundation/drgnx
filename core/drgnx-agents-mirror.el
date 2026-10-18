@@ -29,9 +29,12 @@
 (defun drgnx-agents-mirror--fetching-p (id) (not (eq (gethash id drgnx-agents-mirror--fetching :none) :none)))
 
 (defun drgnx-agents-mirror--read (text)
-  "The Lisp object TEXT holds, as a one-element list; nil if TEXT is unreadable.  One damaged record from the
-hub is skipped (and said so), never allowed to stop the records after it."
-  (condition-case err (list (car (read-from-string text)))
+  "The record TEXT holds (a non-empty list), as a one-element list; nil if TEXT is unreadable, empty or of another
+type.  One damaged record from the hub is skipped (and said so), never allowed to stop the records after it."
+  (condition-case err
+      (let ((v (car (read-from-string text))))
+        (cond ((consp v) (list v))
+              (v (message "drgnx: skipped a record from the hub that is not a list (a %s)" (type-of v)) nil)))
     (error (message "drgnx: skipped an unreadable record from the hub (%s)" (error-message-string err)) nil)))
 
 (defun drgnx-agents-mirror--apply-snapshot (snap)
@@ -79,9 +82,8 @@ hub is skipped (and said so), never allowed to stop the records after it."
        ;; a transcript on its way: the event waits for it
        ((drgnx-agents-mirror--fetching-p id)
         (puthash id (cons (cons event data) (gethash id drgnx-agents-mirror--fetching)) drgnx-agents-mirror--fetching))
-       ;; older than what the mirror has
-       ((and (gethash id drgnx-agents-mirror--seq) (<= seq (gethash id drgnx-agents-mirror--seq))
-             (equal event "agent-entries")))
+       ;; older than what the mirror has (a snapshot or entries that waited for the transcript, numbered before it)
+       ((and (gethash id drgnx-agents-mirror--seq) (<= seq (gethash id drgnx-agents-mirror--seq))))
        ((equal event "agent")
         (when-let* ((snap (drgnx-agents-mirror--read (plist-get data :lisp))))
           (pcase-let ((`(,m . ,new) (drgnx-agents-mirror--apply-snapshot (car snap))))

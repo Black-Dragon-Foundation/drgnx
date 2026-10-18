@@ -44,14 +44,14 @@ The exit code is 1 when a step failed. `drgnx doctor` reports onboarding too.
 | Step | What it does |
 |---|---|
 | Check the Environment | git (required), ripgrep, fd, podman, mise, a GPU tool, the Symbols Nerd Font — each found or missing, with how to get it for your system. **On a Mac** the fixes are Homebrew commands (`brew install ripgrep`, `brew install fd`, `brew install podman` and then `podman machine init`, `brew install mise`, `brew install --cask font-symbols-only-nerd-font`); git comes with the Xcode Command Line Tools (`xcode-select --install`), which get a row of their own — they also bring the C compiler that builds tree-sitter grammars; the GPU row is always fine (Apple silicon: models use the shared memory). The font is looked up in Emacs itself when drgnx has a window, else with `fc-list`; when neither can tell (a Mac has no `fc-list`), the font shows as "could not check", not as missing |
-| Look and Keys | the key profile (VS Code, Emacs, Vim, combinations), a colour theme, and the module preset: **minimal** (the workbench and built-in modules), **ide** (plus the package-backed editing modules — not AI), **full-ai** (everything; a fresh install is full-ai, the default answer — a mix of your own is kept unless you pick a preset). Your own module choices outside `extra/` stay. **On a Mac with VS Code's keys** it also asks "Do you type @ # { [ with Option? (German, French, … keyboards)" — yes makes the left Option type characters (Option+←/→ still move by word), no keeps it Meta ([keys.md](keys.md#on-a-mac)); saved in `keys.eld`, never asked with `--non-interactive`. Change any of it later: Preferences: Keyboard Profile, Color Theme, Modules. **Then the packages:** when the modules now on need packages that are not installed, run interactively it asks "Install the packages for full-ai now (about N MB)?" — the size is the sum of the downloads your lock (or, before your first sync, the [lock drgnx ships](packages.md#the-lock-drgnx-ships-your-first-sync)) records, left out when it does not know one; Git clones are not counted. Yes runs `drgnx sync` as a drgnx job with its own log, its row showing the package it is at ("installing magit-4.3.8… — C-g stops"); a sync that fails makes the step warn with why, the log, and to run `drgnx sync` again; `WARNING … no longer served; installed …` lines in its log are not failures (a shipped version the archives dropped, replaced by the current one — [packages.md](packages.md#the-lock-drgnx-ships-your-first-sync)). The modules and packages load at drgnx's next start: when it installed packages or changed the preset, the result says "restart drgnx to load the new modules", and the Finish step offers the restart. With `--non-interactive`, or when you say no, nothing is installed and the result says to run `drgnx sync` |
+| Look and Keys | the key profile (VS Code, Emacs, Vim, combinations), a colour theme, and the module preset: **minimal** (the workbench and built-in modules), **ide** (plus the package-backed editing modules — not AI), **full-ai** (everything; a fresh install is full-ai, the default answer — a mix of your own is kept unless you pick a preset). Your own module choices outside `extra/` stay. **On a Mac with VS Code's keys** it also asks "Left Option key (types characters: @ # { [ on German, French, … keyboards) (types characters, Meta)" — **types characters** makes the left Option type them (Option+←/→ still move by word), **Meta** keeps it Meta ([keys.md](keys.md#on-a-mac)); Return alone gives the answer saved in `keys.eld` (Meta before you have answered), so running the step again shows your current choice; never asked with `--non-interactive`. Change any of it later: Preferences: Keyboard Profile, Color Theme, Modules. **Then the packages:** when the modules now on need packages that are not installed, run interactively it asks "Install the packages for full-ai now (about N MB)?" — the size is the sum of the downloads your lock (or, before your first sync, the [lock drgnx ships](packages.md#the-lock-drgnx-ships-your-first-sync)) records, left out when it does not know one; Git clones are not counted. Yes runs `drgnx sync` as a drgnx job with its own log, its row showing the package it is at ("installing magit-4.7.1… — C-g stops"); a sync that fails makes the step warn with why, the log, and to run `drgnx sync` again; `WARNING … no longer served; installed …` lines in its log are not failures (a shipped version the archives dropped, replaced by the current one — [packages.md](packages.md#the-lock-drgnx-ships-your-first-sync)). The modules and packages load at drgnx's next start: when it installed packages or changed the preset, the result says "restart drgnx to load the new modules", and the Finish step offers the restart. With `--non-interactive`, or when you say no, nothing is installed and the result says to run `drgnx sync` |
 | Import Projects | finds git repositories under `~/workspace`, `~/code`, `~/src`, `~/projects`, `~/git` (or `--roots`) and in gryphn's `~/.config/gryphn/projects.tsv`; you pick (empty: all; `(none)`: none; several are separated by a comma, or by `;` or `|` when a path has a comma — the prompt says which). Each goes on the **board**; you choose which projects also bring their open TODOs (`--todos`: all of them; default: none) |
-| AI Providers | finds the model runners running here (Ollama, llama.cpp, LM Studio, vLLM, … — [ai.md](ai.md)) and the providers you have a key for, picks a model for each role (Inline Completion prefers a code model; Edit and Chat prefer OpenRouter when it has a key), makes one test call per role and keeps the roles that answered — a role you chose that still answers stays. It also reports the GPU's free memory (on a Mac: two thirds of the RAM, which Apple silicon shares with the GPU). **When nothing answers, it sets AI up** ([below](#setting-ai-up)); run again, it asks whether to keep what works or change it. With `--non-interactive` it installs, downloads and asks nothing: it reports what it found and the commands that would set AI up. Change a role later: AI: Choose Provider/Model |
+| AI Providers | finds the model runners running here (Ollama, llama.cpp, LM Studio, vLLM, … — [ai.md](ai.md)) and the providers you have a key for, picks a model for each role (Inline Completion prefers a code model; Edit and Chat prefer OpenRouter when it has a key), makes one test call per role and sets only the roles that answered — a role you chose that still answers stays; a provider that does not answer changes nothing in `ai.eld`, and the look-around and the three calls share eight seconds: the three calls start together and are waited for once, so a model that is slow to load gets the whole of what is left, not a third. A role whose call has not answered by then reads "not tested (out of time)" — it is neither counted as asked nor as failed, the step warns, and the interactive step does not offer "Set up AI with" because of it (run it again once the model is loaded). It also reports the GPU's free memory (on a Mac: two thirds of the RAM, which Apple silicon shares with the GPU). **When nothing answers, it sets AI up** ([below](#setting-ai-up)); run again, it asks whether to keep what works or change it. With `--non-interactive` it installs, downloads and asks nothing: it reports what it found and the commands that would set AI up. Change a role later: AI: Choose Provider/Model |
 | Semantic Search | the same as **Set Up Semantic Search** ([search.md](search.md)). Run interactively (Help → Welcome) it finds an embedding model, tests it with one call and starts indexing the current project in the background — or, when that index is current, runs a test query. With `--non-interactive` it only reports: whether an embedding model is running (and how to start TEI or Ollama if not), and how many of the projects drgnx knows have an index; it starts nothing |
 | Agents | sets up **Claude Code** for the agent panel ([below](#setting-claude-code-up)): `claude`, Node and the `claude-agent-acp` adapter installed if missing (asked first), your own login in a terminal, the `claude` agent profile started and checked. With `--non-interactive` it installs nothing and lists the commands that would set it up |
 | Daemon and Desktop | first asks once: "Keep drgnx running in the background when you close its last window? (recommended, like VS Code)" — yes keeps it running (reopening is instant), no quits it with its last window ([opening.md](opening.md#keep-running-or-quit)); saved in `~/.config/drgnx/session.eld`, changed later with Preferences: Keep drgnx Running in the Background. With `--non-interactive` nothing is asked: the choice made before stays, else drgnx keeps running. Then, **on macOS:** the drgnx app — if `~/Applications/drgnx.app` is missing, it offers to install it ([opening.md](opening.md#on-macos-the-drgnx-app)); with `--non-interactive` it installs nothing and says how (`drgnx macos-app`). No systemd, no desktop entry, nothing starts at login. **On Linux:** writes `~/.config/drgnx/systemd/drgnx.service` and `~/.config/drgnx/applications/drgnx.desktop` and prints how to install them (and `EDITOR`/`VISUAL`); run interactively, it installs them into `~/.config/systemd/user/` and `~/.local/share/applications/` if you say yes. The result says the choice and where to change it |
 | Portability | lists chezmoi and age; setting up a second machine is documented with the platforms milestone |
-| Finish | runs `drgnx doctor` and says what is left. When a step turned modules on or installed packages in this drgnx, it asks (in the drgnx app) "Restart drgnx now? Your windows come back." — yes starts `drgnx open` in the background, once this drgnx has ended, and quits (offering to save changed files first); no: the result says "Quit drgnx (⌘Q on a Mac) and open it again to load your modules". From `drgnx onboard` nothing is asked |
+| Finish | runs `drgnx doctor` and says what is left; on a Mac with the drgnx app in `~/Applications` it adds how to open drgnx next time (Spotlight, Launchpad, the Dock) — without the app that sentence is left out. When a step turned modules on or installed packages in this drgnx, it asks (in the drgnx app) "Restart drgnx now? Your windows come back." — yes first asks what quitting asks (save changed files, losing unsaved changes, stopping programs still running — a no or `C-g` there keeps drgnx running and starts nothing), then starts `drgnx open` in the background, to run once this drgnx has ended, and quits (when drgnx runs as the `drgnx` systemd service, that waiter runs as its own short-lived user unit, `drgnx-restart-<pid>`, so stopping the service does not stop it); no: the result says "Quit drgnx (⌘Q on a Mac) and open it again to load your modules". From `drgnx onboard` nothing is asked |
 
 ## Setting AI up
 
@@ -64,7 +64,7 @@ AI (`edit`) and Chat (`chat`), one embedding when it set the `embed` role, and A
 project (its own retrievers, then the chat model) — and says which answered.
 
 **Ollama or LM Studio (local).** First it says, in one question, everything it would run and about how much it would
-download; nothing happens until you say yes.
+download (on a re-run, only the models the server does not list yet count); nothing happens until you say yes.
 
 | | macOS | Linux |
 |---|---|---|
@@ -82,8 +82,9 @@ gets the same models as GGUF files from Hugging Face (`lmstudio-community/Qwen2.
 goes first in its role in `~/.config/drgnx/ai.eld`; what the role had stays behind it as a fallback.
 
 Every command runs as a drgnx job with its own log. While the step works, its row in the Welcome says what it is
-doing — "Starting Ollama…", the download's last log line, "Testing every feature…" — always with "— C-g stops", and
-Ctrl+G (`C-g`) stops it. A download that fails says which model, why (the log's last line), where the log is, and to run the
+doing — "Starting Ollama…", the download's last log line (without colour codes or progress redraws), "Testing every feature…" — always with "— C-g stops", and
+Ctrl+G (`C-g`) stops it. A model download, like the package sync, has no time limit (other commands give up after an
+hour): `C-g` is how you stop a slow one, and in `drgnx onboard` Ctrl-C stops the job it waits on. A download that fails says which model, why (the log's last line), where the log is, and to run the
 step again — a new run starts from the top, skips what is installed and running, and `ollama pull` / `lms get` skip
 what is already downloaded.
 
@@ -97,12 +98,16 @@ daemon starts — only once you open a window — and nothing is ever asked.
 **Chat needs its module.** Chat is gptel, module `extra/llm`, which the `minimal` and `ide` presets leave off. The
 step checks it: run interactively it asks "Turn on Chat (module extra/llm)?", turns it on and, when gptel is not in
 drgnx's packages yet, installs it (`drgnx sync` as a job, as Look and Keys does); Chat then works from the next start
-(the result says so, and the Finish step offers the restart). A module that is on with gptel not installed yet is
-reported with "run drgnx sync"; with `--non-interactive` an off module is reported as "Chat needs module extra/llm
+(the result says so, and in the app the Finish step offers the restart; in `drgnx onboard` it says "loads at drgnx's
+next start", since Finish offers nothing there). A module that is already on with gptel installed but not loaded yet
+says the same, and asks for no restart. A module that is on with gptel not installed yet is reported with "run drgnx
+sync"; with `--non-interactive` an off module is reported as "Chat needs module extra/llm
 (Preferences: Modules)" and the step warns.
 
 **OpenRouter (cloud key).** In the drgnx app it asks for your key (`read-passwd`: never shown, never written to a file
-or log) and keeps it in the macOS Keychain or your Linux keyring ([ai.md](ai.md#keys)); then Inline Completion gets
+or log; the string you type is cleared once it is stored, but drgnx keeps one copy of the key in memory for the session) and keeps it in the macOS Keychain or your Linux keyring
+([ai.md](ai.md#keys)); when `OPENROUTER_API_KEY` is set in the environment, that key wins over the stored one, and the
+result says so; then Inline Completion gets
 `qwen/qwen-2.5-coder-32b-instruct` and Edit and Chat `openrouter/auto`. OpenRouter has no embeddings here: semantic
 search needs a local model or TEI, and the Semantic Search step says how. `drgnx onboard` runs in batch Emacs and
 never reads the Keychain or keyring, so there it asks for no key: set `OPENROUTER_API_KEY` for the CLI, or run the
@@ -113,27 +118,29 @@ step in the drgnx app.
 The Agents step makes the built-in `claude` agent profile work: Claude Code through `claude-agent-acp`, signed in
 with **your own Claude login** (subscription or API key) — drgnx never reads Claude's tokens or credentials files.
 Only a `claude` on your `PATH` (or in `~/.local/bin`) counts: the copy bundled in a VS Code extension is not used.
-When something is missing it asks once, listing every command, and runs nothing until you say yes:
+When something is missing it asks once, listing every command, and runs nothing until you say yes (when `claude`
+itself is missing the question also says that a `claude` inside a VS Code extension does not count):
 
 | | macOS | Linux |
 |---|---|---|
 | Claude Code (`claude`) | `brew install --cask claude-code` | Claude's official installer, `curl -fsSL https://claude.ai/install.sh \| bash` (into `~/.local/bin`, no `sudo`) |
 | Node.js, for the adapter (only when `claude-agent-acp` is missing too) | `brew install node` | your distro's package — `sudo dnf install nodejs npm`, `sudo apt-get install nodejs npm` or `sudo pacman -S nodejs npm` — which needs `sudo`: drgnx copies the command for you to run in a terminal and waits for `npm` to show up (up to ten minutes; `C-g` stops) |
-| The adapter (`claude-agent-acp`) | `npm install -g @zed-industries/claude-agent-acp` | `npm install -g --prefix ~/.local @zed-industries/claude-agent-acp` (no `sudo`: a system Node's global directory is not yours) |
+| The adapter (`claude-agent-acp`) | `npm install -g @zed-industries/claude-agent-acp` (with Homebrew's Node; any other Node, which has a global directory that is not yours, gets `--prefix ~/.local` as on Linux) | `npm install -g --prefix ~/.local @zed-industries/claude-agent-acp` (no `sudo`: a system Node's global directory is not yours) |
 
 The commands that need no password run as drgnx jobs with a log and progress in the Welcome (`C-g` stops them). If
 one fails, the result says why (the log's last line), where the log is, and how to retry — run the step again, or
-the command in a terminal; a new run skips what is installed. Where the adapter or Node ends up outside your
-`PATH` (`~/.local/bin`, or beside Homebrew), drgnx adds that directory to the `PATH` of the running Emacs and says so;
-put it in your shell's `PATH` too for the next start. The agent panel's sessions run in drgnx itself and see it at
+the command in a terminal (for Claude's installer on Linux and the adapter the result names that command); a new
+run skips what is installed. `C-g` while the login is being checked ends the check and stops the step. Where the adapter or Node ends up outside your
+`PATH` (`~/.local/bin`, or beside Homebrew), drgnx adds that directory to the end of the `PATH` of the running Emacs (a program you chose earlier on the
+`PATH` keeps winning) and says so; put it in your shell's `PATH` too for the next start. The agent panel's sessions run in drgnx itself and see it at
 once; the **hub** (durable sessions, [agents.md](agents.md#the-hub-and-the-gateway)) keeps the `PATH` it started with:
-if one ran before this step (`drgnx hub status`), run `drgnx hub stop` — it ends the hub's durable sessions — and the
+when the step added a directory and a hub runs, its result says so; run `drgnx hub stop` — it ends the hub's durable sessions — and the
 next durable session starts a hub that finds the new programs.
 
 **The login.** The step asks `claude auth status` (exit status and its `loggedIn` answer only). When Claude Code is
 not logged in — or this `claude` has no `auth status`, in which case drgnx cannot tell and offers the login anyway —
 it asks to open a terminal running `claude`. The terminal's header line says **Type /login, finish in the browser,
-then press Done in the Welcome**. The step does not wait for you: it ends as "info", and when you are logged in, press
+then press Return on the Agents row in the Welcome (Done)**. The step does not wait for you: it ends as "info", and when you are logged in, press
 Return on its row in the Welcome (that is Done — it runs the step again) and it goes on. Declining the offer when
 drgnx could not tell still checks the agent; the result says the login was not verified. It never fails the step on
 that alone.
@@ -143,6 +150,14 @@ your `agents.eld` says), sends the ACP `initialize` request, waits up to ten sec
 again — `ok` when it answers; otherwise the step fails, saying whether the program ended at once (with the end of
 its error output) or did not answer. Then Agents: New Agent Session… starts it in the agent panel
 ([agents.md](agents.md)).
+
+**The defaults for your agents.** Once the check is `ok`, run interactively, the step asks three more things and
+saves the answers in `agents.eld` ([agents.md](agents.md#what-agents-get)): the **default agent profile** (what Agents:
+New Agent Session… offers on Return; Return alone keeps the one you have), whether the agents drgnx starts get its
+**coordination tools** (tasks, messages, the decision log; on until you say otherwise) and whether they get its
+**search tool** too (off: it lets an agent read the indexed code of all your projects). The result names the answers.
+Running the step again shows your current answers. An `agents.eld` that cannot be read is left alone and the result says
+so. `drgnx onboard --non-interactive` asks nothing and changes nothing.
 
 With `--non-interactive` nothing is installed, no terminal opens, no question is asked: the step is "info" and lists
 exactly the commands that would set it up; when everything is installed it only checks the login and the agent.
