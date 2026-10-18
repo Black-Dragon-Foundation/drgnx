@@ -16,6 +16,7 @@
 (require 'seq)
 (require 'drgnx-paths)
 (require 'drgnx-groups)
+(require 'drgnx-timer)
 
 (defcustom drgnx-persist-restore-on-start t
   "Restore the last workbench layout at the first graphical frame."
@@ -191,7 +192,6 @@ no remote files, only safe local variables, no large-file question; nil if it ca
           (and (file-exists-p file) (ignore-errors (find-file-noselect file)))))))
 
 (defvar drgnx-persist--pending nil "Tabs still to visit: list of (WINDOW FILES).")
-(defvar drgnx-persist--timer nil)
 
 (defun drgnx-persist--set-tabs (w files)
   "W's tabs: the visited ones among FILES, in FILES' order (plus what W shows)."
@@ -201,14 +201,9 @@ no remote files, only safe local variables, no large-file question; nil if it ca
                             (append bufs (list (window-buffer w)))))))
 
 (defun drgnx-persist--visit-pending ()
-  "Visit the next restored tab (one per idle tick); nil when none is left."
+  "Visit the next restored tab (the layer's idle steps call this: `persist-visit'); nil when none is left."
   (let ((entry (car drgnx-persist--pending)))
-    (cond
-     ((null entry)
-      (when (timerp drgnx-persist--timer) (cancel-timer drgnx-persist--timer))
-      (setq drgnx-persist--timer nil)
-      nil)
-     (t
+    (when entry
       (pcase-let ((`(,w ,todo ,files) entry))
         (if (or (null todo) (not (window-live-p w)))
             (pop drgnx-persist--pending)
@@ -216,18 +211,7 @@ no remote files, only safe local variables, no large-file question; nil if it ca
           (setcar (cdr entry) (cdr todo))
           (drgnx-persist--set-tabs w files)
           (drgnx-chrome-apply (window-frame w))))
-      t))))
-
-(defvar drgnx-persist--step-timer nil "The one-shot idle timer that visits the next tab later in the same pause.")
-
-(defun drgnx-persist--idle-step ()
-  "Visit the next restored tab and, while some are left, the next one 0.2 s later in the same pause.  A repeating
-idle timer runs once per pause (`drgnx-persist--timer' starts each pause's run), so each step arms a one-shot at
-the current idle time plus 0.2 s.  Typing ends the pause and with it the run; the next pause starts it again."
-  (when (timerp drgnx-persist--step-timer) (cancel-timer drgnx-persist--step-timer))
-  (setq drgnx-persist--step-timer
-        (and (drgnx-persist--visit-pending) drgnx-persist--pending (current-idle-time)
-             (run-with-idle-timer (time-add (current-idle-time) 0.2) nil #'drgnx-persist--idle-step))))
+      t)))
 
 (defun drgnx-persist--main-state (frames)
   "The state of FRAMES that goes into the selected frame: the one saved with `:role main', else the first that
@@ -332,8 +316,9 @@ input focus back after the other windows are made, unless KEEP-FOCUS (a restore 
                                            (set-window-prev-buffers g nil)
                                            (drgnx-persist--set-tabs g files)
                                            (list g (seq-remove (lambda (f) (equal f (plist-get spec :shown))) files) files)))))
-          (when (and drgnx-persist--pending (not (timerp drgnx-persist--timer)))
-            (setq drgnx-persist--timer (run-with-idle-timer 0.2 t #'drgnx-persist--idle-step)))))
+          (when (and drgnx-persist--pending (not (drgnx-timer-active-p 'persist-visit)))
+            ;; not :interruptible: a file visit aborted half-way is not safe to repeat
+            (drgnx-timer-idle-steps 'persist-visit 0.2 #'drgnx-persist--visit-pending :owner :core))))
     ;; Docks and panel come back whatever happened above: sizes first (clamped), then shown.
     (let ((left (plist-get state :left)) (panel (plist-get state :panel)) (right (plist-get state :right)))
       (set-frame-parameter nil 'drgnx-persist-extra (plist-get state :extra))
@@ -447,7 +432,8 @@ graphical frame, and at each emacsclient window that opens when no other one is 
     (remove-hook 'kill-emacs-hook #'drgnx-persist--on-exit)
     (remove-hook 'delete-frame-functions #'drgnx-persist--on-delete-frame)
     (advice-remove 'server-delete-client #'drgnx-persist--before-client-delete)
-    (remove-hook 'drgnx-first-gui-frame-hook #'drgnx-persist--on-start)))
+    (remove-hook 'drgnx-first-gui-frame-hook #'drgnx-persist--on-start)
+    (drgnx-timer-cancel 'persist-visit)))
 
 (provide 'drgnx-persist)
 ;;; drgnx-persist.el ends here

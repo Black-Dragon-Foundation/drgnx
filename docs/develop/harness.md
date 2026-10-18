@@ -725,6 +725,56 @@ kkp tests and the kitty exit test run there too; without it they skip.
 accounting, in the parallel phase) when tmux is installed; `--no-gui` leaves it out. The `Terminal tier` workflow runs
 the two container runs nightly ([ci.md](ci.md)).
 
+## Virtual time
+
+`test/fixtures/clock-fixture.el` runs Emacs's own timer lists on a clock the test moves, so no test waits in real time
+for a timer. Load it with `(load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)`.
+
+```elisp
+(drgnx-test-with-clock ()                 ; or (drgnx-test-with-clock (:allow-pending t) ...)
+  (run-at-time 1 1 #'tick)
+  (drgnx-test-advance 3)                  ; tick ran at 1, 2 and 3
+  (run-with-idle-timer 0.2 nil #'step)
+  (drgnx-test-idle 2.5 :input-at 1.0))    ; one pause; you type 1 s into it
+```
+
+- **The macro.** The body runs with `timer-list` and `timer-idle-list` bound to nil, so every timer it starts, whoever
+  starts it, lands in lists of its own and the real ones are untouched. `float-time` and `current-time` without an
+  argument return virtual time (with an argument they are Emacs's own); `current-idle-time` is nil outside a pause and
+  the pause's length inside one; `input-pending-p` is nil, or t after `:input-at`. Virtual time starts 10^6 s after
+  the real time, so a real wait (`sleep-for`, `accept-process-output`) never finds a virtual timer ripe. Timers made
+  by `run-at-time` are stamped by Emacs from the real clock; a `:before` advice on `timer--activate` moves them onto
+  the virtual clock, so a timer made at virtual *v* with delay *d* is due at *v* + *d*, also after an advance (a delay
+  of 2 ms or more is rounded to the millisecond: Emacs stamps the timer a few microseconds before the advice runs).
+  Before the lists are swapped, the macro advises and unadvises each primitive it advises once, on scratch lists: Emacs 31
+  compiles a native advice trampoline on the first `advice-add` of a primitive, and logging that compile arms
+  `undo-auto--boundary-timer`. That timer, and any like it armed during the body, is cancelled by the macro (it is
+  Emacs's, not the code under test's), so it never counts as pending.
+  Nesting is an error. The times a test passes (`SECS` of advance and idle, `:input-at`) are snapped the same way: a
+  number within a microsecond of a whole millisecond is that exact millisecond, so `run-at-time 0.3` then
+  `drgnx-test-advance 0.3` always fires (0.3 is not exact in binary). `(float-time nil)` is the real time, `(float-time)`
+  virtual. A real-stamped timer with a delay over 500,000 s is not moved; idle timers are never moved (nothing runs
+  them in a batch real wait; the `--ui` tier has a real command loop).
+- **`drgnx-test-advance SECS`** moves virtual time forward, running each wall timer that comes due, in order, repeats
+  included (a timer is run by `timer-event-handler` while still on the list: popping it first makes the handler treat
+  it as cancelled).
+- **`drgnx-test-idle SECS`** is one pause: every idle timer is a candidate again, as when Emacs goes idle; each runs
+  once, in time order, the pause clock moving to its time (a repeating idle timer runs once per pause). A one-shot a
+  timer arms at `(time-add (current-idle-time) D)` runs again while due within the pause. Wall timers due in the
+  pause run too. From `:input-at` the pause ends and `input-pending-p` is t until the call returns. More than 1,000
+  firings in one pause is an error (a busy loop).
+- **The end.** A timer still pending when the body ends fails the test, naming the layer's timers as `(KEY OWNER KIND)`
+  (`drgnx-timer-pending`, when the timer layer is loaded) and then the raw functions; `:allow-pending t` allows it.
+  Then `drgnx-timer-reset` runs, when bound. The timer layer's seams (`drgnx-timer--now`, `drgnx-timer--idle-time`,
+  `drgnx-timer--input-pending-p`), when defined, follow the same clock, pause and input.
+- **What stays real:** `time-since`, `(time-subtract nil ...)` and `format-time-string` with no time read the real
+  clock; a test of code that uses them uses real time. `drgnx-test-real-time` is the real time as a float, for waits
+  and reports. `sleep-for`, `sit-for` and `accept-process-output` do not move virtual time (the test-determinism
+  design adds that).
+- **The contract with the timer layer** ([core.md](core.md), Timers): the layer's three seams follow the virtual
+  clock; a delay counts from the virtual start; one `drgnx-test-idle` call is one pause; pending layer timers are named
+  and cleared at the end.
+
 ## Modal tests
 
 Loading evil cannot be undone in a process (its hooks and advice stay), and ERT runs tests by name, so the tests that

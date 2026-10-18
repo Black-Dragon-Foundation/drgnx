@@ -573,3 +573,38 @@
           (should-not (drgnx-doctor-check 'checkout-clean (list :checkout-init (drgnx-doctor--checkout-init dir))))
           (should-not (drgnx-doctor-check 'checkout-clean nil)))
       (delete-directory dir t))))
+(ert-deftest drgnx-doctor/timers-ok-without-a-report ()
+  (let ((r (drgnx-doctor-check 'timers (drgnx-doctor-test--facts))))
+    (should (eq (car r) 'ok))
+    (should (equal (nth 1 r) "no timer stopped")))
+  (should (eq 'ok (car (drgnx-doctor-check 'timers (drgnx-doctor-test--facts
+                                                    :timers-report '((:file "timers-report.eld" :stopped nil :time 1.0))))))))
+
+(ert-deftest drgnx-doctor/timers-lists-stopped-timers ()
+  ;; the fact reads the session's and the hub's reports from the state dir; the check names each stopped timer
+  (let* ((state (make-temp-file "drgnx-state" t))
+         (process-environment (cons (concat "XDG_STATE_HOME=" state) process-environment))
+         (write (lambda (name report)
+                  (let ((file (expand-file-name (concat "drgnx/" name) state)))
+                    (with-temp-file file (prin1 report (current-buffer)))
+                    (set-file-times file (time-subtract nil 7200))))))
+    (unwind-protect
+        (progn
+          (should-not (drgnx-doctor--timers-report))
+          (make-directory (expand-file-name "drgnx" state))
+          (funcall write "timers-report.eld"
+                   '(:stopped ((:key hub-tick :owner :core :fn drgnx-hub--tick :error "Boom" :failures 3 :stopped t
+                                     :time 1.0))))
+          (funcall write "hub-timers-report.eld"
+                   '(:stopped ((:key (acp-watch . "#<process x>") :owner :core :fn drgnx-acp--watch :error "dead"
+                                     :failures 3 :stopped t :time 2.0))))
+          (let* ((facts (drgnx-doctor--timers-report))
+                 (r (drgnx-doctor-check 'timers (drgnx-doctor-test--facts :timers-report facts))))
+            (should (= 2 (length facts)))
+            (should (eq (car r) 'warn))
+            (should (string-search "hub-tick (drgnx-hub--tick): Boom" (nth 1 r)))
+            (should (string-search "acp-watch" (nth 1 r)))
+            (should (string-search "(drgnx-acp--watch): dead" (nth 1 r)))
+            (should (string-search "from the last session, 2 h ago" (nth 1 r)))
+            (should (equal (nth 2 r) "report the error; drgnx starts the timer again at the next start"))))
+      (delete-directory state t))))

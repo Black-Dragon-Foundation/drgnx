@@ -241,8 +241,8 @@ own at that moment. To keep data of your own in the saved state, add a function 
 that returns a plist of namespaced keys (`:mymodule-thing`) with readable values only; one that returns anything else
 is left out (said once) without costing the other functions' keys.
 
-Each group's shown file opens at once and its other tabs open while you are idle, one every 0.2 s in the same pause (typing
-stops them until your next pause); nothing asks anything at start (no
+Each group's shown file opens at once and its other tabs open while you are idle, all within the first pause (typing
+stops them until your next pause, which carries on with the rest); nothing asks anything at start (no
 remote files are touched, only safe local variables, no large-file question). Files that no longer exist are skipped,
 sizes are clamped to the frame, window parameters in the file are ignored (drgnx saves none), and a state in another
 format is ignored. Save / Restore Workbench Layout are in the palette. Only graphical windows save and restore — a
@@ -419,8 +419,8 @@ Not yet: file nesting, icons (an icon theme is a module, M4), problems decoratio
 - **Owned windows.** Code running from a timer or a follower may move only windows that show its own buffer, and
   says so with `drgnx-wb-with-owned-windows`; the harness's jank guard records any other window move made from a
   timer or a window change hook (invariant I9). Two lints (`test/unit/lint-buffers-timers-test.el`) keep the habits behind it: the
-  workbench follows on the bus's edges, never from `run-with-timer`/`run-at-time` (an allow-list names the
-  exceptions and why), and an internal ` *…*` buffer is made with `inhibit-buffer-hooks`, so no follower hears of it.
+  workbench follows on the bus's edges, never from `run-with-timer`/`run-at-time` or a wall-clock
+  `drgnx-timer-*` (an allow-list names the exceptions and why), and an internal ` *…*` buffer is made with `inhibit-buffer-hooks`, so no follower hears of it.
 - **Explorer** (`wb/drgnx-explorer.el`) and **Buffers** (`wb/drgnx-buffers.el`) are **virtual lists**: the buffer
   holds plain text, inserted in one go; a vector holds what each line is (path, depth, folder or file — or the
   buffer); faces are painted by jit-lock for the rows on screen only. Expanding a folder inserts its rows after the

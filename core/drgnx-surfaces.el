@@ -14,6 +14,7 @@
 (require 'drgnx-registry)
 (require 'drgnx-modules-record)
 (require 'drgnx-modules-helpers)
+(require 'drgnx-timer)
 (require 'drgnx-paths)
 (require 'easymenu)
 (require 'seq)
@@ -128,7 +129,6 @@ An error in one is swallowed (it never breaks the command).  The usage counter i
 COUNT is all runs; each (DAY . N) is N runs on day DAY (`time-to-days') for the last 7 days.")
 (defvar drgnx-surfaces--usage-dirty nil "Non-nil when the counts differ from the file.")
 (defvar drgnx-surfaces--usage-saved nil "`float-time' of the last write, or nil.")
-(defvar drgnx-surfaces--usage-timer nil "The pending idle timer that writes the counts.")
 
 (defun drgnx-shortcuts-usage-file ()
   "Where the palette's run counts are kept: command-usage.eld in drgnx's state dir."
@@ -179,12 +179,11 @@ Sets `drgnx-surfaces--usage-bad' when something was left out."
 
 (defun drgnx-surfaces--usage-arm ()
   "Make sure an idle timer will write the counts, no sooner than the interval after the last write."
-  (unless (timerp drgnx-surfaces--usage-timer)
+  (unless (drgnx-timer-active-p 'surfaces-usage)
     (let ((wait (if drgnx-surfaces--usage-saved
                     (- drgnx-surfaces--usage-flush-interval (- (float-time) drgnx-surfaces--usage-saved))
                   0)))
-      (setq drgnx-surfaces--usage-timer
-            (run-with-idle-timer (max 2 wait) nil #'drgnx-surfaces--usage-flush)))))
+      (drgnx-timer-soon 'surfaces-usage (max 2 wait) #'drgnx-surfaces--usage-flush :idle t :owner :core))))
 
 (defun drgnx-surfaces--count-run (id)
   "Count one run of command ID in memory (no file write; that waits for idle).  A `drgnx-surfaces-run-functions' member."
@@ -199,8 +198,7 @@ Sets `drgnx-surfaces--usage-bad' when something was left out."
 
 (defun drgnx-surfaces--usage-flush (&optional force)
   "Write the counts if they changed, at most once a minute unless FORCE (exit).  Never prompts or signals."
-  (when (and force (timerp drgnx-surfaces--usage-timer)) (cancel-timer drgnx-surfaces--usage-timer))
-  (setq drgnx-surfaces--usage-timer nil)
+  (when force (drgnx-timer-cancel 'surfaces-usage))
   (when (and drgnx-surfaces--usage-dirty drgnx-surfaces--usage)
     (if (and (not force) drgnx-surfaces--usage-saved
              (< (- (float-time) drgnx-surfaces--usage-saved) drgnx-surfaces--usage-flush-interval))

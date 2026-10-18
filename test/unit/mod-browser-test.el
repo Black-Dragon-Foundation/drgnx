@@ -9,6 +9,7 @@
 (load (expand-file-name "modules/tools/drgnx-agents-ui" drgnx-dir) nil t)
 (load (expand-file-name "modules/tools/drgnx-layouts" drgnx-dir) nil t)
 (load (expand-file-name "modules/tools/drgnx-browser" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
 
 (defvar drgnx-browser-test--urls nil "URLs the stubbed WebKit was asked for.")
 
@@ -129,7 +130,7 @@
          (new (expand-file-name "playwright-report/index.html" root))
          (trace (expand-file-name "test-results/a/trace.zip" root))
          (junk (expand-file-name "node_modules/x/playwright-report/index.html" root))
-         jobs polls (msgs nil))
+         jobs (msgs nil))
     (unwind-protect
         (progn
           (drgnx-browser-test--touch old 3600)
@@ -148,8 +149,6 @@
                     ((symbol-function 'drgnx-jobs-list) (lambda () nil))
                     ((symbol-function 'drgnx-jobs-log) (lambda (&rest _) "Serving HTML report at http://localhost:9323. Press Ctrl+C to quit.\n"))
                     ((symbol-function 'drgnx-jobs-get) (lambda (&rest _) (list :status 'running)))
-                    ((symbol-function 'run-with-timer) (lambda (_s _r fn &rest _) (push fn polls) 'timer))
-                    ((symbol-function 'cancel-timer) #'ignore)
                     ((symbol-function 'drgnx-browser-open) (lambda (url &optional keep) (push (if keep url (list :steals-focus url)) msgs))))
             (let ((default-directory root))
               (drgnx-browser-test-report))
@@ -158,7 +157,8 @@
             (should (equal (plist-get (nth 2 (car jobs)) :cwd) root))
             (should (plist-get (nth 2 (car jobs)) :no-wait))
             (should (null msgs))                                 ; nothing opened before the server speaks
-            (funcall (car polls))
+            (should (drgnx-timer-active-p '(browser-watch . "job-1")))   ; the server is waited for, by a poll
+            (should (drgnx-browser--watch-tick "job-1"))
             (should (equal msgs '("http://localhost:9323")))
             ;; a trace goes to show-trace
             (setq jobs nil)
@@ -166,6 +166,7 @@
             (let ((default-directory root))
               (drgnx-browser-test-report))
             (should (equal (cadr (car jobs)) (list "npx" "playwright" "show-trace" trace "--port" "0")))))
+      (drgnx-timer-cancel '(browser-watch . "job-1"))
       (delete-directory root t))))
 
 (ert-deftest drgnx-browser/test-report-says-what-is-missing ()
@@ -314,7 +315,6 @@
           (drgnx-browser-test--with-jobs
             (cl-letf (((symbol-function 'executable-find) (lambda (&rest _) "/usr/bin/npx"))
                       ((symbol-function 'drgnx-jobs-start) (lambda (&rest _) (setq started t) "new"))
-                      ((symbol-function 'run-with-timer) (lambda (&rest _) 'timer))
                       ((symbol-function 'drgnx-browser--root) (lambda () "/tmp/drgnx-pw/"))
                       ((symbol-function 'drgnx-browser-newest)
                        (lambda (_) (list :kind 'report :path (file-name-as-directory root)))))
@@ -325,53 +325,52 @@
               (should (equal (sort units #'string<) '("drgnx-job-lost" "drgnx-job-old"))))))
       (delete-directory root t))))
 
+(defun drgnx-browser-test--advance (secs)
+  "Advance the virtual clock SECS, collecting what the timers say."
+  (drgnx-browser-test--messages (lambda () (drgnx-test-advance secs))))
+
 (ert-deftest drgnx-browser/the-watcher-gives-up-and-stops-the-server ()
   ;; The timer never blocks: the server's unit is stopped with --no-block through a process, not a synchronous stop.
-  (let (fns cancelled commands)
+  (let (commands)
     (drgnx-browser-test--with-jobs
-      (cl-letf (((symbol-function 'drgnx-jobs-log) (lambda (&rest _) ""))
-                ((symbol-function 'run-with-timer) (lambda (_s _r fn &rest _) (push fn fns) (intern (format "timer-%d" (length fns)))))
-                ((symbol-function 'cancel-timer) (lambda (tm) (push tm cancelled)))
-                ((symbol-function 'make-process) (lambda (&rest args) (push (plist-get args :command) commands) nil)))
-        ;; a second Test Report on the same job does not stack a second watcher
-        (drgnx-browser--watch-job "old")
-        (drgnx-browser--watch-job "old")
-        (should (equal cancelled '(timer-1)))
-        (let ((fn (car fns)))
-          (dotimes (_ 120) (funcall fn))
+      (drgnx-test-with-clock ()
+        (cl-letf (((symbol-function 'drgnx-jobs-log) (lambda (&rest _) ""))
+                  ((symbol-function 'make-process) (lambda (&rest args) (push (plist-get args :command) commands) nil)))
+          ;; a second Test Report on the same job does not stack a second watcher
+          (drgnx-browser--watch-job "old")
+          (drgnx-browser--watch-job "old")
+          (should (= 1 (seq-count (lambda (e) (equal (car e) '(browser-watch . "old"))) (drgnx-timer-pending))))
+          (drgnx-browser-test--advance 59)
           (should-not commands)
-          (let ((m (drgnx-browser-test--messages fn)))
+          (let ((m (drgnx-browser-test--advance 1.5)))
             (should (string-match-p "did not print an address" (car m))))
           (should (equal commands '(("systemctl" "--user" "stop" "--no-block" "drgnx-job-old"))))
           (should-not stopped)                          ; `drgnx-jobs-stop' waits for systemd: not from a timer
           (should-not units)
-          (should (memq 'timer-2 cancelled)))))))
+          (should-not (drgnx-timer-active-p '(browser-watch . "old"))))))))
 
 (ert-deftest drgnx-browser/an-error-in-the-watcher-ends-the-timer ()
-  (let (fn cancelled (drgnx-browser--watchers nil))
-    (drgnx-browser-test--with-jobs
+  (drgnx-browser-test--with-jobs
+    (drgnx-test-with-clock ()
       (cl-letf (((symbol-function 'drgnx-jobs-log) (lambda (&rest _) ""))
-                ((symbol-function 'drgnx-jobs-get) (lambda (&rest _) (error "the job store is broken")))
-                ((symbol-function 'run-with-timer) (lambda (_s _r f &rest _) (setq fn f) 'timer))
-                ((symbol-function 'cancel-timer) (lambda (tm) (push tm cancelled))))
+                ((symbol-function 'drgnx-jobs-get) (lambda (&rest _) (error "the job store is broken"))))
         (drgnx-browser--watch-job "j")
-        (let ((m (drgnx-browser-test--messages fn)))     ; no error escapes the timer
+        (let ((m (drgnx-browser-test--advance 0.5)))     ; no error escapes the timer
           (should (string-match-p "the job store is broken" (car m))))
-        (should (equal cancelled '(timer)))))))
+        (should-not (drgnx-timer-active-p '(browser-watch . "j")))))))
 
 (ert-deftest drgnx-browser/a-lost-job-is-waited-for-and-an-ended-one-is-not ()
-  (let (fn cancelled (status 'gone))
+  (let ((status 'gone))
     (drgnx-browser-test--with-jobs
-      (cl-letf (((symbol-function 'drgnx-jobs-log) (lambda (&rest _) ""))
-                ((symbol-function 'drgnx-jobs-get) (lambda (&rest _) (list :id "j" :status status)))
-                ((symbol-function 'run-with-timer) (lambda (_s _r f &rest _) (setq fn f) 'timer))
-                ((symbol-function 'cancel-timer) (lambda (tm) (push tm cancelled))))
-        (drgnx-browser--watch-job "j")
-        (funcall fn) (funcall fn)                 ; `gone' can be a job systemd runs: no giving up yet
-        (should-not cancelled)
-        (setq status 'exited)
-        (drgnx-browser-test--messages fn)
-        (should cancelled)))))
+      (drgnx-test-with-clock ()
+        (cl-letf (((symbol-function 'drgnx-jobs-log) (lambda (&rest _) ""))
+                  ((symbol-function 'drgnx-jobs-get) (lambda (&rest _) (list :id "j" :status status))))
+          (drgnx-browser--watch-job "j")
+          (drgnx-browser-test--advance 1)           ; `gone' can be a job systemd runs: no giving up yet
+          (should (drgnx-timer-active-p '(browser-watch . "j")))
+          (setq status 'exited)
+          (drgnx-browser-test--advance 0.5)
+          (should-not (drgnx-timer-active-p '(browser-watch . "j"))))))))
 
 (ert-deftest drgnx-browser/a-timer-open-keeps-the-focus ()
   (drgnx-browser-test--with

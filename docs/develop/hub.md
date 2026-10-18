@@ -115,6 +115,8 @@ inherits: a hub whose parent is gone exits (checked each second), so an interrup
 
 ## Events
 
+The hub's own timers are layer timers keyed `hub-tick`, `hub-deliver`, `(hub-flush . ID)`, `hub-events` and `hub-exit` ([core.md](core.md#the-acp-watchdog-and-the-hubs-timers)): a burst of session changes delivers once, and `events` go at most every `drgnx-hub-events-interval`.
+
 The hub turns what happens into events in the store's event log ([coordination.md](coordination.md), `event`):
 
 - **Native sessions** (`drgnx-hub--session-events`, on each change of a session):

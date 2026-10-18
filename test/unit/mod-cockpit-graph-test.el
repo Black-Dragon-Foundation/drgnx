@@ -17,8 +17,8 @@
 the fixture's."
   (declare (indent 0))
   `(drgnx-cockpit-fixture-with
-     (let ((drgnx-cockpit-graph-current-filter nil) (drgnx-cockpit--draws 0) (drgnx-cockpit--timer nil)
-           (drgnx-cockpit--check-timer nil) (drgnx-cockpit--last-error nil)
+     (let ((drgnx-cockpit-graph-current-filter nil) (drgnx-cockpit--draws 0)
+           (drgnx-cockpit--last-error nil)
            ;; no search for silent worktrees unless a test asks for one
            (drgnx-cockpit--silent nil) (drgnx-cockpit--silent-n 0) (drgnx-cockpit--silent-at (float-time))
            (drgnx-cockpit--silent-running nil)
@@ -30,16 +30,16 @@ the fixture's."
                  (delete-other-windows)
                  (set-window-buffer (selected-window) g)
                  ,@body)
-             (when (timerp drgnx-cockpit--timer) (cancel-timer drgnx-cockpit--timer))
+             (drgnx-timer-cancel 'cockpit-redraw)
              (kill-buffer g)
-             (should-not (timerp drgnx-cockpit--check-timer))       ; the buffer owned it
+             (should-not (drgnx-timer-active-p 'cockpit-check))     ; the buffer owned it
              (drgnx-cockpit-fixture-wait (lambda () (not drgnx-cockpit--silent-running)))
              (set-window-configuration config)))))))
 
 (defun drgnx-cockpit-graph-test--tick ()
   "Run the redraw on its way now (as its timer would)."
-  (should (timerp drgnx-cockpit--timer))
-  (cancel-timer drgnx-cockpit--timer)
+  (should (drgnx-timer-active-p 'cockpit-redraw))
+  (drgnx-timer-cancel 'cockpit-redraw)
   (drgnx-cockpit--tick))
 
 (defun drgnx-cockpit-graph-test--goto (id)
@@ -270,7 +270,7 @@ the fixture's."
       (should (= drgnx-cockpit--draws (1+ n)))
       ;; a transcript's chunks never schedule one
       (drgnx-cockpit--hub-event "agent-entries" '(:id "s-1"))
-      (should-not drgnx-cockpit--timer)
+      (should-not (drgnx-timer-active-p 'cockpit-redraw))
       ;; a patch: an outline line that did not change keeps its text (and the window its point)
       (with-current-buffer g (drgnx-cockpit-graph-test--goto (concat "spec:" spec)))
       (let ((pt (window-point (get-buffer-window g))))
@@ -288,7 +288,7 @@ the fixture's."
       (drgnx-coord-force-status "jx#4" "running" "s-1")
       (dotimes (_ 5) (drgnx-cockpit--hub-event "job" '(:id "jx")))
       (drgnx-cockpit-schedule)
-      (should-not drgnx-cockpit--timer)                        ; nothing on its way
+      (should-not (drgnx-timer-active-p 'cockpit-redraw))                        ; nothing on its way
       (should (= n drgnx-cockpit--draws))
       (should (buffer-local-value 'drgnx-cockpit--stale g))
       ;; shown again: it catches up
@@ -298,11 +298,11 @@ the fixture's."
       (should (= (1+ n) drgnx-cockpit--draws))
       (should-not (buffer-local-value 'drgnx-cockpit--stale g))
       (drgnx-cockpit--on-show (selected-window))                ; shown again, nothing missed: nothing to do
-      (should-not drgnx-cockpit--timer)
+      (should-not (drgnx-timer-active-p 'cockpit-redraw))
       ;; a redraw on its way when the graph is hidden draws nothing: it only notes the graph is stale
       (drgnx-coord-force-status "jx#4" "done" "s-1")
       (drgnx-cockpit-schedule)
-      (should (timerp drgnx-cockpit--timer))
+      (should (drgnx-timer-active-p 'cockpit-redraw))
       (set-window-buffer (selected-window) (get-buffer "*scratch*"))
       (drgnx-cockpit-graph-test--tick)
       (should (= (1+ n) drgnx-cockpit--draws))
@@ -467,22 +467,22 @@ the fixture's."
 (ert-deftest drgnx-cockpit-graph/writes-of-other-processes-show ()
   (drgnx-cockpit-graph-test--with
     (drgnx-cockpit-graph-redraw)
-    (should (timerp drgnx-cockpit--check-timer))                       ; started with the buffer
+    (should (drgnx-timer-active-p 'cockpit-check))                       ; started with the buffer
     (drgnx-cockpit--check)
-    (should-not drgnx-cockpit--timer)                                   ; nothing written: nothing to do
+    (should-not (drgnx-timer-active-p 'cockpit-redraw))                                   ; nothing written: nothing to do
     ;; another process (a second connection) writes the store
     (let ((db2 (sqlite-open (drgnx-work-db-file))))
       (unwind-protect (sqlite-execute db2 "update jtask set status = 'running' where id = 'jx#4'")
         (sqlite-close db2)))
     (drgnx-cockpit--check)
     (drgnx-cockpit--check)
-    (should (timerp drgnx-cockpit--timer))                              ; one redraw on its way
+    (should (drgnx-timer-active-p 'cockpit-redraw))                              ; one redraw on its way
     (let ((n drgnx-cockpit--draws))
       (drgnx-cockpit-graph-test--tick)
       (should (= (1+ n) drgnx-cockpit--draws)))
     (with-current-buffer g (drgnx-cockpit-graph-test--goto (format "task:%s#4" plan)) (should (looking-at ".*running")))
     (drgnx-cockpit--check)
-    (should-not drgnx-cockpit--timer)))
+    (should-not (drgnx-timer-active-p 'cockpit-redraw))))
 
 (ert-deftest drgnx-cockpit-graph/silent-worktrees-show-as-not-reporting ()
   (drgnx-cockpit-graph-test--with

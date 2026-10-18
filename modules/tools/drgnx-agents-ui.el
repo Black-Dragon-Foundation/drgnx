@@ -17,6 +17,7 @@
 (require 'diff-mode)
 (require 'drgnx-modules)
 (require 'drgnx-registry)
+(require 'drgnx-timer)
 (require 'drgnx-trust)
 (require 'drgnx-agents)
 (require 'drgnx-jobs)
@@ -440,7 +441,7 @@ name from a local session is rejected without a look at it."
                        ;; the hub's sessions (they outlive this Emacs), once Emacs is idle
                        (run-with-idle-timer 3 nil #'drgnx-agents-ui--maybe-mirror)
                        ;; …and again later: a hub started (or restarted) since is picked up
-                       (run-with-idle-timer 30 t #'drgnx-agents-ui--maybe-mirror)
+                       (drgnx-timer-start 'agents-ui-mirror 30 #'drgnx-agents-ui--maybe-mirror :repeat t :idle t)
                        (when (fboundp 'drgnx-wb-define-tab)
                          (drgnx-wb-define-tab 'right 'agents :title "Agents" :placeholder #'drgnx-agents-ui-list-buffer))
                        (when (fboundp 'drgnx-wb-place)
