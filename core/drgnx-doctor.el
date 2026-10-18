@@ -17,6 +17,8 @@
 (require 'subr-x)
 (require 'drgnx-paths)
 
+(declare-function package-built-in-p "package")
+
 (defconst drgnx-doctor-install-hint
   "run the installer: curl -fsSL https://raw.githubusercontent.com/Black-Dragon-Foundation/drgnx/main/install.sh | bash  (see docs/guide/install.md)"
   "How to get a suitable Emacs.")
