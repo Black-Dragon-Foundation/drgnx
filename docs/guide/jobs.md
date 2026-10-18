@@ -152,3 +152,22 @@ against a hub in a child process), `job-cards-test.el` (cards and their actions)
 `job-ui-test.el` and `test/ui/job-window-test.el` (the window, the badge, notifications), `job-exit-test.el` (a
 four-task job end to end with automatic start, no credential file opened under a fake HOME, closing the window);
 the perf workload `job-window` ([perf.md](../develop/perf.md)). Developer details: [coordination.md](../develop/coordination.md#jobs).
+
+## MCP tools and provider errors
+
+- **MCP tools ask.** A job's agent may use drgnx's own coordination tools (`mcp__drgnx__…`: messages, decisions,
+  task status) without asking. A tool from any other MCP server — the servers in your own Claude Code configuration,
+  a project's, a plugin's — waits for you as a **permission card**, whatever kind the agent gives the call: such a
+  server can reach your mail, a database, anything. **Allow** on the card is the only way through; nothing an agent
+  says (a message to you, an escalation, its tool's input) answers it, and Reject refuses the call. drgnx tells its
+  own server apart by the tool's name (`mcp__drgnx__` and a name with no further `__`) and, where Claude Code names
+  the server (`_meta.claudeCode.mcpServer`), by that server being `drgnx` from the agent's session (source
+  `dynamic`); a server of yours that is also called `drgnx` asks too. A call whose tool cannot be named at all asks.
+  Other calls of the kind `other` (loading a skill, a to-do list) are allowed as before. A tool that Claude Code
+  itself allows from your settings (`permissions.allow`) never asks anyone, drgnx included.
+- **A provider's limit in the error's data.** Besides the message (and a dead agent's stderr), drgnx reads the
+  JSON-RPC error's `data` — a string, or an object's `message`, `details` and `reason` — for a provider at its
+  limit (an agent may answer `Internal error` with the provider's `429 Too Many Requests` in `data`).
+
+Tests: `test/unit/job-mcp-policy-test.el` (drgnx's server allowed, a user's server asks, a denial blocks, an agent
+cannot approve its own request; the limit in an error's data).
