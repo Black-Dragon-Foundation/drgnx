@@ -405,15 +405,38 @@ aimed at (their changes are not collateral), LAST-INPUT the time of the last eve
 (defvar drgnx-guard--timer-fn)          ; drgnx's no-prompt guard, when loaded
 
 
+(defconst drgnx-uitest-settle-timeout 5.0
+  "Seconds `drgnx-uitest-run' waits for the session to settle on an idle machine.")
+
+(defconst drgnx-uitest-settle-scale-max 8.0
+  "Largest factor `drgnx-uitest-settle-scale' gives (a stuck session still ends).")
+
+(defun drgnx-uitest-settle-scale (&optional load cpus env)
+  "Factor to stretch the settle timeout by on a loaded machine.
+`DRGNX_UITEST_SETTLE_SCALE' (or ENV, a string) overrides it with a positive number.  Otherwise it
+is the 1-minute load average LOAD over the number of CPUS (defaults: this machine's), at least 1
+and at most `drgnx-uitest-settle-scale-max': on a machine with a core to spare, 1."
+  (let ((forced (let ((v (or env (getenv "DRGNX_UITEST_SETTLE_SCALE"))))
+                  (and v (string-match-p "\\`[0-9]+\\(\\.[0-9]+\\)?\\'" v) (string-to-number v)))))
+    (if (and forced (> forced 0))
+        (float forced)
+      (let ((load (or load (car (ignore-errors (load-average t)))))
+            (cpus (max 1 (or cpus (num-processors)))))
+        (if (numberp load)
+            (min drgnx-uitest-settle-scale-max (max 1.0 (/ (float load) cpus)))
+          1.0)))))
+
 (defun drgnx-uitest-run (events &optional timeout)
-  "Deliver EVENTS paced, wait until settled or TIMEOUT seconds (default 5), return the jank report.
+  "Deliver EVENTS paced, wait until settled or TIMEOUT seconds, return the jank report.
+TIMEOUT defaults to `drgnx-uitest-settle-timeout' times `drgnx-uitest-settle-scale' (a loaded
+machine settles slower); an explicit TIMEOUT is used as given.
 For ERT tests inside a session: a nested command loop runs the events as commands,
 with redisplay between them, while the test waits.  The plist has :settled."
   (drgnx-uitest-measure-begin)
   (dolist (ev events)
     (when (mouse-event-p ev) (drgnx-uitest--note-target (posn-window (event-start ev)))))
   (drgnx-uitest-enqueue events)
-  (setq drgnx-uitest--run-deadline (+ (float-time) (or timeout 5))
+  (setq drgnx-uitest--run-deadline (+ (float-time) (or timeout (* drgnx-uitest-settle-timeout (drgnx-uitest-settle-scale))))
         drgnx-uitest--run-settled nil)
   (let ((watch (run-with-timer drgnx-uitest-tick drgnx-uitest-tick #'drgnx-uitest--run-watch)))
     (unwind-protect

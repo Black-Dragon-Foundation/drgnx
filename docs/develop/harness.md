@@ -107,7 +107,10 @@ skip redisplay and hide the very jank we want to see.
 - **Settled** = no queued or unread input and nothing visibly changed for 300 ms (`drgnx-uitest-quiet`).
 
 In GUI ERT tests, `(drgnx-uitest-run EVENTS)` delivers the events and waits until settled: it runs a nested
-command loop (`recursive-edit`), so the events execute as real commands while the test waits.
+command loop (`recursive-edit`), so the events execute as real commands while the test waits. Its default timeout is 5 s times
+`(drgnx-uitest-settle-scale)`: the 1-minute load average per CPU (at least 1, at most 8), so a loaded machine
+settles slower without a failing test; `DRGNX_UITEST_SETTLE_SCALE=N` sets the factor, and an explicit
+TIMEOUT argument is never scaled.
 
 ## Jank report
 

@@ -45,3 +45,34 @@
     (should-not (drgnx-uitest-settled-p 0.3))
     (let ((drgnx-uitest-record--t0 (- (float-time) 1)))
       (should (drgnx-uitest-settled-p 0.3)))))
+
+(ert-deftest drgnx-uitest/settle-scale-follows-the-load-per-core ()
+  ;; M4-13/M5-6: a loaded machine settles slower; the 5 s default stretches with it.
+  (should (= (drgnx-uitest-settle-scale 0.5 4 "") 1.0))        ; idle
+  (should (= (drgnx-uitest-settle-scale 3.9 4 "") 1.0))        ; a core to spare: never shorter
+  (should (= (drgnx-uitest-settle-scale 8.0 4 "") 2.0))        ; two runnable tasks per core
+  (should (= (drgnx-uitest-settle-scale 400.0 4 "") drgnx-uitest-settle-scale-max)) ; bounded
+  (should (= (drgnx-uitest-settle-scale nil 4 "") (drgnx-uitest-settle-scale (car (load-average t)) 4 "")))
+  (should (>= (drgnx-uitest-settle-scale) 1.0)))
+
+(ert-deftest drgnx-uitest/settle-scale-env-overrides ()
+  (should (= (drgnx-uitest-settle-scale 0.1 4 "3") 3.0))
+  (should (= (drgnx-uitest-settle-scale 0.1 4 "1.5") 1.5))
+  (should (= (drgnx-uitest-settle-scale 8.0 4 "0.5") 0.5))     ; a lower factor is allowed: the user asked
+  (should (= (drgnx-uitest-settle-scale 8.0 4 "0") 2.0))       ; zero and junk are ignored
+  (should (= (drgnx-uitest-settle-scale 8.0 4 "fast") 2.0))
+  (let ((process-environment (cons "DRGNX_UITEST_SETTLE_SCALE=4" process-environment)))
+    (should (= (drgnx-uitest-settle-scale 0.1 4) 4.0))))
+
+(ert-deftest drgnx-uitest/run-deadline-uses-the-scaled-default ()
+  (let (deadline)
+    (cl-letf (((symbol-function 'drgnx-uitest-settle-scale) (lambda (&rest _) 3.0))
+              ((symbol-function 'drgnx-uitest-measure-begin) #'ignore)
+              ((symbol-function 'drgnx-uitest-enqueue) #'ignore)
+              ((symbol-function 'recursive-edit) (lambda () (setq deadline drgnx-uitest--run-deadline)))
+              ((symbol-function 'drgnx-uitest-measure-end) (lambda () nil)))
+      (let ((t0 (float-time)))
+        (drgnx-uitest-run nil)
+        (should (< 14.9 (- deadline t0) 15.5))                 ; 5 s * 3
+        (drgnx-uitest-run nil 2)
+        (should (< 1.9 (- deadline t0) 2.5))))))                ; an explicit timeout is not scaled
