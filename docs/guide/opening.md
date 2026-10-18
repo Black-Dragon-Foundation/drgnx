@@ -57,6 +57,23 @@ first) or kill its buffer. Closing its tab is not enough: the buffer stays open,
 no display (over ssh, on a console; never on a Mac) the file opens in the terminal you ran the command in, and waits
 there. `--wait` takes files only; a folder, or no path, is an error (exit 2) before drgnx is asked.
 
+## From drgnx's terminal
+
+In drgnx's own terminal (New Terminal, [shell.md](shell.md)) the same commands reach *this* drgnx — the one the
+terminal runs in — and open in the frame you are typing in:
+
+```sh
+drgnx .                  # this folder becomes the Explorer's first folder
+drgnx 'My "File" café.py' # the file opens in an editor next to the terminal
+git commit               # the message opens in drgnx; save it and press C-x # to finish the commit
+```
+
+No new window is ever made from there, not even when drgnx shows only a terminal frame, and no other drgnx is asked
+or started. `drgnx open --wait FILE` (an `EDITOR` of your own) waits for `C-x #` in this drgnx too. `git commit` uses
+the terminal's `GIT_EDITOR`, which points at this drgnx's server ([shell.md](shell.md#editor-git-and-drgnx-reach-the-emacs-hosting-the-terminal));
+`cd` in the shell moves the terminal's directory with it, so `C-x C-f` in the terminal starts in the folder the shell
+is in.
+
 ## On macOS: the drgnx app
 
 On a Mac, drgnx is also an app: **drgnx** in `~/Applications` (the Applications folder in your home folder), so
@@ -130,9 +147,13 @@ their own, so they never reach your drgnx); a server named anything but `drgnx` 
 to the front with `(drgnx-session-raise)`, has it read the AI keys once per start (`drgnx-ai-load-keys-soon`: from
 a timer, [ai.md](ai.md#keys)), sends files as file arguments and each folder as
 `(drgnx-session-open-folder "…")`. Every call but `--wait`'s file call has `-n` (no waiting); with no display,
-`--wait` is just `emacsclient -t -- FILE…`. The daemon starts detached (`setsid`, else `perl` on macOS) as
+`--wait` is just `emacsclient -t -- FILE…`. In drgnx's terminal (`INSIDE_EMACS` names eat and `DRGNX_SERVER_NAME`
+is set: the terminal's Emacs's socket) none of that runs: the files and folders go straight to that server, with
+neither `-c` nor `-t`, so they open in its selected frame. The daemon starts detached (`setsid`, else `perl` on macOS) as
 `emacs --bg-daemon=drgnx --init-directory=<checkout>/init`. The close button's `delete-frame` event and Close Window
 run `drgnx-session-close-frame`; Quit drgnx runs `drgnx-session-quit`. Code: `core/drgnx-session.el`; tests:
 `test/unit/session-test.el`, `test/unit/bin-test.el` (fake `emacs`, `emacsclient` and `systemctl`, and one real
 headless `open --check`), and the live scenario `test/live/drgnx-session-keep-or-quit-test.el` (a daemon session:
 `bin/drgnx open` with a file and a folder with a space and an accent, then the last window closed in each mode).
+From drgnx's terminal: `test/unit/terminal-bin-test.el` (the emacsclient calls inside and outside eat) and the live
+`test/live/drgnx-terminal-test.el` (zsh in eat: `cd` followed, `drgnx` with odd names, `git commit`, the key split).

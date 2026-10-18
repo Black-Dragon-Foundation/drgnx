@@ -337,7 +337,34 @@ open_check() { # CI: start the daemon if needed, print its Emacs version, stop i
   fi
 }
 
+open_here() { # [--wait] [--] [PATH…] — in drgnx's own terminal: open in the drgnx hosting it, in its selected frame
+  local wait="" p dir files=() dirs=()
+  if [[ "${1:-}" == --wait ]]; then wait=1; shift; fi
+  [[ "${1:-}" == -- ]] && shift
+  for p in "$@"; do   # as cmd_open: absolute, from here; a folder is the Explorer's, a file an editor's
+    if [[ -d "$p" ]]; then
+      dirs+=("$(CDPATH='' cd -- "$p" && pwd)")
+    else
+      dir="$(dirname -- "$p")"
+      if [[ -d "$dir" ]]; then dir="$(CDPATH='' cd -- "$dir" && pwd)"; elif [[ "$dir" != /* ]]; then dir="$PWD/$dir"; fi
+      files+=("${dir%/}/$(basename -- "$p")")
+    fi
+  done
+  if [[ -n "$wait" ]]; then
+    if ((${#dirs[@]})) || ! ((${#files[@]})); then
+      echo "drgnx: open --wait opens files, not folders: it returns when you are done with them (C-x #)" >&2; return 2
+    fi
+    client -- "${files[@]}" >/dev/null; return   # until C-x #
+  fi
+  if ((${#files[@]})); then client -n -- "${files[@]}" >/dev/null || return 1; fi
+  for p in ${dirs[@]+"${dirs[@]}"}; do
+    client -n -e "(drgnx-session-open-folder \"$(elisp_string "$p")\")" >/dev/null || return 1
+  done
+}
+
 cmd_open() { # [--check] [--wait] [PATH…] — open PATHs (none: the windows as you left them) in drgnx, like code .
+  # In drgnx's terminal (eat; DRGNX_SERVER_NAME is its Emacs's socket): that drgnx, never a new window or frame
+  if [[ "${INSIDE_EMACS:-}" == *eat* && -n "${DRGNX_SERVER_NAME:-}" && "${1:-}" != --check ]]; then open_here "$@"; return; fi
   if [[ "${1:-}" == --check ]]; then open_check; return; fi
   local wait=""
   if [[ "${1:-}" == --wait ]]; then wait=1; shift; fi
