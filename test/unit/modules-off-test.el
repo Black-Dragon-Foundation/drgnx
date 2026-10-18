@@ -141,38 +141,46 @@ and answered yes."
      (drgnx-modules-turn-on 'test/a)
      (should-not (string-search "stays loaded" (aref (row 'test/a) 5))))))
 
+(defun drgnx-modules-off-test--press (module)
+  "Put point on MODULE's row in the Modules list and run the command bound to RET there."
+  (with-current-buffer (drgnx-modules-list)
+    (goto-char (point-min))
+    (while (and (not (eobp)) (not (eq (tabulated-list-get-id) module))) (forward-line 1))
+    (should (eq (tabulated-list-get-id) module))
+    (drgnx-modules-list-toggle)))
+
 (ert-deftest drgnx-modules-off/the-command-asks-once ()
   (drgnx-modules-off-test--with
    (drgnx-modules-off-test--define 'test/b)
    (drgnx-modules-off-test--define 'test/a :requires '(test/b))
    (drgnx-modules-off-test--define 'test/c :requires '(test/b))
    (drgnx-modules-run 'startup)
-   (let ((row 'test/b))
-     (cl-letf (((symbol-function 'tabulated-list-get-id) (lambda (&rest _) row)))
-       ;; No: nothing happens.
-       (cl-letf (((symbol-function 'y-or-n-p) (lambda (p) (push p drgnx-modules-off-test--prompts) nil)))
-         (drgnx-modules-list-toggle))
-       (should (equal (length drgnx-modules-off-test--prompts) 1))
-       (should (eq (drgnx-modules-off-test--status 'test/b) 'ok))
-       (should-not (drgnx-modules-off-test--disabled))
-       ;; Yes: once, naming the dependents; they and the module go.
-       (setq drgnx-modules-off-test--prompts nil)
-       (drgnx-modules-list-toggle)
-       (should (equal (length drgnx-modules-off-test--prompts) 1))
-       (should (string-match-p "\\`Also turn off test/[ac], test/[ac]\\? \\'" (car drgnx-modules-off-test--prompts)))
-       (dolist (m '(test/a test/b test/c)) (should (eq (drgnx-modules-off-test--status m) 'off)))
-       ;; The same row again turns it on, without a question.
-       (setq drgnx-modules-off-test--prompts nil)
-       (drgnx-modules-list-toggle)
-       (should-not drgnx-modules-off-test--prompts)
-       (should (eq (drgnx-modules-off-test--status 'test/b) 'ok))
-       ;; A dependent that went with it is turned on by the same key, then off again without asking.
-       (setq row 'test/c)
-       (drgnx-modules-list-toggle)
-       (should (eq (drgnx-modules-off-test--status 'test/c) 'ok))
-       (drgnx-modules-list-toggle)
-       (should-not drgnx-modules-off-test--prompts)
-       (should (drgnx-module-disabled-p 'test/c))))))
+   (unwind-protect
+       (progn
+         ;; No: nothing happens.
+         (cl-letf (((symbol-function 'y-or-n-p) (lambda (p) (push p drgnx-modules-off-test--prompts) nil)))
+           (drgnx-modules-off-test--press 'test/b))
+         (should (equal (length drgnx-modules-off-test--prompts) 1))
+         (should (eq (drgnx-modules-off-test--status 'test/b) 'ok))
+         (should-not (drgnx-modules-off-test--disabled))
+         ;; Yes: once, naming the dependents; they and the module go.
+         (setq drgnx-modules-off-test--prompts nil)
+         (drgnx-modules-off-test--press 'test/b)
+         (should (equal (length drgnx-modules-off-test--prompts) 1))
+         (should (string-match-p "\\`Also turn off test/[ac], test/[ac]\\? \\'" (car drgnx-modules-off-test--prompts)))
+         (dolist (m '(test/a test/b test/c)) (should (eq (drgnx-modules-off-test--status m) 'off)))
+         ;; The same row again turns it on, without a question.
+         (setq drgnx-modules-off-test--prompts nil)
+         (drgnx-modules-off-test--press 'test/b)
+         (should-not drgnx-modules-off-test--prompts)
+         (should (eq (drgnx-modules-off-test--status 'test/b) 'ok))
+         ;; A dependent that went with it is turned on by the same key, then off again without asking.
+         (drgnx-modules-off-test--press 'test/c)
+         (should (eq (drgnx-modules-off-test--status 'test/c) 'ok))
+         (drgnx-modules-off-test--press 'test/c)
+         (should-not drgnx-modules-off-test--prompts)
+         (should (drgnx-module-disabled-p 'test/c)))
+     (kill-buffer "*drgnx modules*"))))
 
 (ert-deftest drgnx-modules-off/onboarding-toggle-still-means-next-start ()
   (drgnx-modules-off-test--with
