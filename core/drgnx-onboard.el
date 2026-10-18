@@ -202,6 +202,8 @@ the Xcode Command Line Tools.  :fix is the one for this platform."
 (declare-function drgnx-keys-set-mac-option "drgnx-keys")
 (declare-function drgnx-keys--save-key "drgnx-keys")
 (declare-function drgnx-keys--user "drgnx-keys")
+(declare-function drgnx-modal-prepare "drgnx-modal-choose")
+(declare-function drgnx-modal-wait-text "drgnx-modal-choose")
 
 (defun drgnx-onboard--current-keys ()
   "The name of the key preset keys.eld uses now, or nil."
@@ -246,8 +248,13 @@ current choice as the default) — with no option and no question, the current c
                                                                                 (and (not cur-preset) '("keep")))
                                                               (if cur-preset (symbol-name cur-preset) "keep"))))
                                 (unless (equal s "keep") (intern s))))))
+         ;; a stack waiting for its engine (drgnx sync) is the answer Return keeps
+         (pending (car (rassoc (plist-get (drgnx-keys-read-user) :pending-layers) drgnx-keys-presets)))
          (keys (or (plist-get o :keys)
-                   (and ask (drgnx-onboard--choose "Keys" (mapcar #'car drgnx-keys-presets) (or cur-keys "VS Code")))))
+                   (and ask (drgnx-onboard--choose (if (eq (drgnx-platform) 'macos)
+                                                       "With VS Code app keys on a Mac, Vim keeps Ctrl and VS Code uses Cmd: no clashes\nKeys"
+                                                     "Keys")
+                                                   (mapcar #'car drgnx-keys-presets) (or pending cur-keys "VS Code")))))
          (theme (or (plist-get o :theme)
                     (and ask (let ((s (drgnx-onboard--choose "Color theme" (append (mapcar #'symbol-name (custom-available-themes)) '("keep"))
                                                              "keep")))
@@ -260,10 +267,17 @@ current choice as the default) — with no option and no question, the current c
                                                         '("types characters" "Meta")
                                                         (if (eq (plist-get (drgnx-keys-read-user) :mac-option) 'characters) "types characters" "Meta"))
                                  "types characters")
-                          'characters 'meta))))
+                          'characters 'meta)))
+         (modal nil))
     (when (and preset (not (eq preset cur-preset))) (drgnx-onboard-apply-preset preset))
-    (when (and layers (not (equal keys cur-keys)))
-      (if (and (not noninteractive) (fboundp 'drgnx-keys-apply)) (drgnx-keys-use layers t) (drgnx-keys--save-layers layers)))
+    ;; A Vim stack switches only once its engine is loaded: asked to install it when interactive, else it waits
+    (when (and layers (or (not (equal keys cur-keys)) pending))
+      (require 'drgnx-modal-choose)
+      (setq modal (drgnx-modal-prepare layers ask))
+      (when (memq modal '(ready started installed))
+        (if (and (not noninteractive) (fboundp 'drgnx-keys-apply))
+            (progn (drgnx-keys-use layers) (drgnx-keys--save-layers layers))
+          (drgnx-keys--save-layers layers))))
     (when option
       (if (and (not noninteractive) (fboundp 'drgnx-keys-apply)) (drgnx-keys-set-mac-option option) (drgnx-keys--save-key :mac-option option)))
     (when theme
@@ -279,9 +293,12 @@ current choice as the default) — with no option and no question, the current c
            ;; a running drgnx loads modules and packages at its start only
            (restart (or (eq done 'ok) (and preset (not (eq preset cur-preset))))))
       (when restart (setq drgnx-onboard--restart-needed t))
-      (list (if (consp done) 'warn 'ok)
+      (list (if (or (consp done) (consp modal)) 'warn 'ok)
             (format "modules: %s; keys: %s%s%s; %s%s"
-                    (or preset cur-preset "as they are") (or keys cur-keys "as they are")
+                    (or preset cur-preset "as they are")
+                    (cond ((memq modal '(nil ready started installed)) (or keys cur-keys "as they are"))
+                          ((and (eq modal 'pending) (eq done 'ok)) (format "%s from the next start" keys))
+                          (t (drgnx-modal-wait-text keys modal)))
                     (pcase option
                       ('characters "; Option types characters (Option+←/→ still move by word)")
                       ('meta "; Option is Meta (Option+←/→ move by word)")
