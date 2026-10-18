@@ -3,6 +3,7 @@
 (require 'drgnx)
 (require 'drgnx-ai-client)                                  ; loaded here: the command's lazy require would undo the mock
 (load (expand-file-name "test/fixtures/git-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
 (load (expand-file-name "modules/tools/drgnx-commit-message" drgnx-dir) nil t)
 
 (unless (fboundp 'git-commit-mode)                         ; magit's commit buffer, when magit is not here
@@ -173,6 +174,15 @@
       (should-not (string-search "staged now" reword))
       (should (string-search "head change" amend-all))
       (should (string-search "unstaged" amend-all)))))
+
+(ert-deftest drgnx-commit-message/turning-it-off-cancels-the-request ()
+  (let ((cancelled nil))
+    (cl-letf (((symbol-function 'drgnx-ai-cancel) (lambda (r) (push r cancelled))))
+      (drgnx-test-with-modules '(tools/commit-message) :strict t
+                               (should (drgnx-commands-get 'git-generate-commit-message))
+                               (setq drgnx-commit-message--request 'pending)))
+    (should (equal cancelled '(pending)))
+    (should-not drgnx-commit-message--request)))
 
 ;;; mod-commit-message-test.el ends here
 

@@ -258,9 +258,15 @@ master); its findings land in the Review tab."
       (drgnx-review--changed s)                            ; ready already: the prompt goes now
       s)))
 
+(defun drgnx-review--teardown ()
+  "Turned off: the Review tab is closed.  Runs stay: their agents are the user's sessions."
+  (dolist (b (buffer-list))
+    (when (provided-mode-derived-p (buffer-local-value 'major-mode b) 'drgnx-review-mode)
+      (let ((kill-buffer-query-functions nil)) (kill-buffer b)))))
+
 (drgnx-module-define 'tools/review
                      :doc "Review Branch: the review route's agent reads this branch's diff; findings in the Review tab."
-                     :stage 'idle :requires '(tools/diff)
+                     :stage 'idle :requires '(tools/diff) :teardown #'drgnx-review--teardown
                      :setup
                      (lambda ()
                        (add-hook 'drgnx-agents-request-functions #'drgnx-review--request)

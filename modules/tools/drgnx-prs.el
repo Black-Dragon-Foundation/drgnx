@@ -200,9 +200,15 @@ newest first at each level.  Every PR appears once, a cycle cut where it is foun
   (when (fboundp 'forge-topic-completion-at-point)
     (add-hook 'completion-at-point-functions #'forge-topic-completion-at-point nil t)))
 
+(defun drgnx-prs--teardown ()
+  "Turned off: the Pull Requests tab is closed."
+  (dolist (b (buffer-list))
+    (when (provided-mode-derived-p (buffer-local-value 'major-mode b) 'drgnx-prs-mode)
+      (let ((kill-buffer-query-functions nil)) (kill-buffer b)))))
+
 (drgnx-module-define 'tools/prs
                      :doc "The Pull Requests tab on forge: stacks, forge's review view, Changes in the diff view, # in commits."
-                     :stage 'idle :packages '(forge) :requires '(tools/diff)
+                     :stage 'idle :packages '(forge) :requires '(tools/diff) :teardown #'drgnx-prs--teardown
                      :setup
                      (lambda ()
                        (add-hook 'git-commit-setup-hook #'drgnx-prs--commit-setup)
