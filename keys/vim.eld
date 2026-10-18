@@ -13,7 +13,7 @@
          :default-map (evil . evil-normal-state-map)
          :maps ((drgnx-modal-leader-map normal visual motion panels)
                 (drgnx-modal-panel-map panels)
-                ((evil . evil-normal-state-map) normal)
+                ((evil . evil-normal-state-map) normal visual)
                 ((evil . evil-visual-state-map) visual)
                 ((evil . evil-motion-state-map) normal visual motion)
                 ((evil . evil-insert-state-map) insert)))
