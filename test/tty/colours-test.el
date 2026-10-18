@@ -16,10 +16,20 @@
   "The colours the newest client frame of SESS shows."
   (drgnx-tty-session-eval sess `(display-color-cells (car ,drgnx-tty-colours-test--clients))))
 
+(defun drgnx-tty-colours-test--types (sess)
+  "The terminal types of SESS's client frames, newest first."
+  (drgnx-tty-session-eval sess `(mapcar (lambda (f) (tty-type (frame-terminal f))) ,drgnx-tty-colours-test--clients)))
+
+(defun drgnx-tty-colours-test--setting (sess value)
+  "Set `drgnx-tty-true-colour' to VALUE in SESS's daemon."
+  (drgnx-tty-session-eval sess `(progn (setq drgnx-tty-true-colour ',value) t)))
+
 (ert-deftest drgnx-tty-colours/colorterm-from-the-client ()
-  ;; the daemon has no COLORTERM: each client's own decides, and one never changes another
+  ;; the daemon has no COLORTERM: each client's own decides, and one never changes another.  The session's
+  ;; terminal is tmux-256color, which is not a known true-colour terminal: the setting says to go by COLORTERM.
   (drgnx-tty-session-with (s :daemon t)
     (should-not (drgnx-tty-session-eval s '(getenv "COLORTERM")))
+    (drgnx-tty-colours-test--setting s t)
     (let ((a (drgnx-tty-session-client s :env '("COLORTERM=truecolor"))))
       (should (= (drgnx-tty-colours-test--cells s) 16777216))
       (let ((b (drgnx-tty-session-client s)))
@@ -27,12 +37,31 @@
         (should (equal (drgnx-tty-session-eval
                         s `(mapcar (lambda (f) (display-color-cells f)) ,drgnx-tty-colours-test--clients))
                        '(256 16777216 256)))      ; B, A, and the session's own first client
+        ;; a tmux-256color client with COLORTERM=truecolor is a tmux-direct frame, the others keep their TERM
+        (should (equal (drgnx-tty-colours-test--types s) '("tmux-256color" "tmux-direct" "tmux-256color")))
         (should (drgnx-tty-session-find b "\\*scratch\\*"))
         (should (drgnx-tty-session-find a "\\*scratch\\*"))))))
+
+(ert-deftest drgnx-tty-colours/the-setting-decides-which-clients-are-swapped ()
+  (drgnx-tty-session-with (s :daemon t)
+    ;; known (the default): a terminal drgnx knows has true colour (kitty) is; an unknown one and tmux are not
+    (should (eq (drgnx-tty-session-eval s 'drgnx-tty-true-colour) 'known))
+    (drgnx-tty-session-client s :env '("TERM=xterm-256color" "COLORTERM=truecolor" "KITTY_WINDOW_ID=1"))
+    (should (= (drgnx-tty-colours-test--cells s) 16777216))
+    (drgnx-tty-session-client s :env '("TERM=xterm-256color" "COLORTERM=truecolor"))
+    (should (= (drgnx-tty-colours-test--cells s) 256))
+    (drgnx-tty-session-client s :env '("COLORTERM=truecolor"))
+    (should (= (drgnx-tty-colours-test--cells s) 256))
+    (should (equal (cl-subseq (drgnx-tty-colours-test--types s) 0 3) '("tmux-256color" "xterm-256color" "xterm-direct")))
+    ;; nil: never
+    (drgnx-tty-colours-test--setting s nil)
+    (drgnx-tty-session-client s :env '("TERM=xterm-256color" "COLORTERM=truecolor" "KITTY_WINDOW_ID=1"))
+    (should (= (drgnx-tty-colours-test--cells s) 256))))
 
 (ert-deftest drgnx-tty-colours/colorterm-24bit-is-true-colour ()
   ;; Emacs reads COLORTERM=truecolor only; 24bit means the same to the terminal
   (drgnx-tty-session-with (s :daemon t)
+    (drgnx-tty-colours-test--setting s t)
     (drgnx-tty-session-client s :env '("TERM=xterm-256color" "COLORTERM=24bit"))
     (should (= (drgnx-tty-colours-test--cells s) 16777216))
     ;; the client's environment still says what it said
@@ -76,7 +105,7 @@ foreground and background are the same colour on this terminal, in the default t
   (drgnx-tty-session-with (s :daemon t)
     (pcase-dolist (`(,cells ,env) '((8 ("TERM=xterm"))
                                     (256 ("TERM=xterm-256color"))
-                                    (16777216 ("TERM=xterm-256color" "COLORTERM=truecolor"))))
+                                    (16777216 ("TERM=xterm-256color" "COLORTERM=truecolor" "KITTY_WINDOW_ID=1"))))
       (drgnx-tty-session-client s :env env)
       (should (= (drgnx-tty-colours-test--cells s) cells))
       ;; the faces the groups of states are made of are loaded, so the check is not empty
@@ -152,6 +181,14 @@ foreground and background are the same colour on this terminal, in the default t
                                (string-match-p "\\`✓ TODO t" (drgnx-work-ui--line '(:kind todo :title "t" :status "done")))
                                (string-match-p "\\`○ TODO t" (drgnx-work-ui--line '(:kind todo :title "t")))))
                      '(0 0 0 0 0)))
+      ;; ignored files have no letter: their face differs from the default in an attribute that is not a colour
+      (should (equal (drgnx-tty-colours-test--in-client
+                      s `(mapcar (lambda (f)
+                                   (seq-some (lambda (a)
+                                               (not (equal (face-attribute f a nil t) (face-attribute 'default a nil t))))
+                                             ',drgnx-tty-colours-test--attributes))
+                                 (plist-get (alist-get 'git drgnx-tty-frames-state-faces) :attribute-faces)))
+                     '(t)))
       ;; and every face of the table is a face
       (should (drgnx-tty-colours-test--in-client
                s '(seq-every-p (lambda (g) (seq-every-p #'facep (plist-get (cdr g) :faces))) drgnx-tty-frames-state-faces))))))

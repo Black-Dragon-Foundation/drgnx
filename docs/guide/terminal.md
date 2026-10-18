@@ -230,19 +230,25 @@ terminal; on 256 colours it is approximated, on 8 colours only the basic ones re
 
 - **True colour from each window.** Emacs reads `COLORTERM` from the environment the Emacs daemon was started with,
   not from the terminal you attach from, so a daemon started without it shows 256 colours in every window. drgnx
-  reads the `COLORTERM` your `emacsclient` sends: when it is `truecolor` or `24bit` and your `TERM` has no true
-  colour of its own, drgnx opens that window with the `-direct` entry of the same terminal (`xterm-256color` gives
-  `xterm-direct`, `tmux-256color` gives `tmux-direct`), if the machine running the daemon has that terminfo entry.
-  Windows without `COLORTERM` keep what their `TERM` says, so two windows of one daemon can differ.
-  Terminals whose `TERM` has no `-direct` entry (`screen-256color`, `xterm-kitty`) do not get this; there, start the
-  daemon with `COLORTERM=truecolor` (every window of it then has true colour), or install a terminfo entry with
-  `RGB`, or set `TERM=xterm-direct` where the terminal can take it. The `-direct` entries send colours in the
-  standard colon form; if a terminal draws wrong colours with it, start the daemon with `COLORTERM=truecolor`, which
-  uses the older semicolon form.
+  reads the `COLORTERM` your `emacsclient` sends: when it is `truecolor` or `24bit`, your terminal is one the table
+  above lists with true colour, and your `TERM` has no true colour of its own, drgnx opens that window with the
+  `-direct` entry of the same terminal (`xterm-256color` gives `xterm-direct`, `tmux-256color` gives `tmux-direct`),
+  if the machine running the daemon has that terminfo entry; if Emacs cannot load it, the window opens as before.
+  The setting `drgnx-tty-true-colour` (`M-x customize-variable`) chooses which windows: `known` (the default)
+  as above, `t` for any window whose `COLORTERM` says so (also terminals the table does not list, and tmux, whose
+  outer terminal decides whether colours get through), `nil` for none. Windows without `COLORTERM` keep what their
+  `TERM` says, so two windows of one daemon can differ.
+  Terminals whose `TERM` has no `-direct` entry (`screen-256color`, `xterm-kitty`) do not get this; there, install
+  a terminfo entry with `RGB`, or set `TERM=xterm-direct` where the terminal can take it, or start the daemon with
+  `COLORTERM=truecolor`: that forces true colour on **every** window of that daemon, including those of terminals
+  that have only 256 colours, which then draw wrong colours. The `-direct` entries send colours in the standard
+  colon form; if a terminal draws wrong colours with it, the daemon's `COLORTERM=truecolor` uses the older
+  semicolon form.
 - **Over SSH** a terminal-specific `TERM` without its terminfo entry on the remote machine gives 8 colours. The
   fixes are in the SSH section above.
 - **Nothing is told by colour alone.** On 8 colours drgnx still tells states apart: git status by its letter at the
-  edge of an Explorer row (`M` changed, `A` added, `U` untracked, `D` deleted, `C` conflict), a review finding by its
+  edge of an Explorer row (`M` changed, `A` added, `U` untracked, `D` deleted, `C` conflict; ignored files, which have
+  no letter, are italic), a review finding by its
   severity word, the shown tab by its weight or inverse video, and Work items by their glyph and words. Each of
   these faces is checked on 8, 256 and 24-bit terminals: none draws its text in its own background colour.
   `drgnx-tty-frames-state-faces` lists them with the cue each relies on.

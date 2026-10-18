@@ -177,16 +177,20 @@ strings; the real frame is not touched), an empty cache and no terminal to ask: 
 ;;;; Colours
 
 (defmacro drgnx-tty-frames-test--terminfos (have &rest body)
-  "BODY with only the terminal types HAVE (a list) having a true-colour terminfo, nothing cached, and the
-daemon's own COLORTERM unset."
+  "BODY with only the terminal types HAVE (a list) having a true-colour terminfo, nothing cached, the daemon's own
+COLORTERM unset and `drgnx-tty-true-colour' t (the terminal need not be a known one).  `asked' lists the
+types `infocmp' was asked about."
   (declare (indent 1))
   `(let ((drgnx-tty-frames--direct-cache (make-hash-table :test #'equal))
-         (process-environment (cons "COLORTERM" process-environment)))
-     (cl-letf (((symbol-function 'executable-find) (lambda (&rest _) "/bin/infocmp"))
-               ((symbol-function 'call-process)
-                (lambda (_prog _in _out _disp &rest args)
-                  (insert (if (member (car (last args)) ,have) "kx|term,\n\tRGB,\n\tcolors#0x1000000,\n" "kx|term,\n\tcolors#0x100,\n"))
-                  0)))
+         (drgnx-tty-true-colour t)
+         (process-environment (cons "COLORTERM" process-environment))
+         (asked nil))
+     (cl-letf (((symbol-function 'drgnx-tty--command-lines)
+                (lambda (command &rest _)
+                  (push (car (last command)) asked)
+                  (if (member (car (last command)) ,have)
+                      (list "kx|term," "\tcolors#0x1000000," "\tRGB,")
+                    (list "kx|term," "\tcolors#0x100,")))))
        ,@body)))
 
 (ert-deftest drgnx-tty-frames/a-truecolor-client-gets-the-direct-terminfo ()
@@ -211,24 +215,63 @@ daemon's own COLORTERM unset."
     (let ((process-environment (cons "COLORTERM=truecolor" process-environment)))
       (should (equal (drgnx-tty-frames--true-colour-type "xterm-256color" '("COLORTERM=truecolor")) "xterm-256color")))))
 
-(ert-deftest drgnx-tty-frames/infocmp-is-asked-once-per-type ()
-  (let ((asked 0))
-    (drgnx-tty-frames-test--terminfos '("xterm-direct")
-      (let ((real (symbol-function 'call-process)))
-        (cl-letf (((symbol-function 'call-process) (lambda (&rest args) (cl-incf asked) (apply real args))))
-          (dotimes (_ 3) (drgnx-tty-frames--true-colour-type "xterm-256color" '("COLORTERM=truecolor")))
-          (should (= asked 2)))))))      ; xterm-256color and xterm-direct
+(ert-deftest drgnx-tty-frames/true-colour-means-what-emacs-means-by-it ()
+  ;; term.c: the RGB flag, or setf24 and setb24 together; not Tc, not setrgbf, not a numeric RGB#
+  (let ((drgnx-tty-frames--direct-cache (make-hash-table :test #'equal)))
+    (cl-letf (((symbol-function 'drgnx-tty--command-lines)
+               (lambda (command &rest _)
+                 (pcase (car (last command))
+                   ("a" (list "a|x," "\tRGB,"))
+                   ("b" (list "b|x," "\tsetf24=\\E[38;2m," "\tsetb24=\\E[48;2m,"))
+                   ("c" (list "c|x," "\tsetf24=\\E[38;2m,"))
+                   ("d" (list "d|x," "\tTc,"))
+                   ("e" (list "e|x," "\tsetrgbf=\\E[38;2m,"))
+                   ("f" (list "f|x," "\tRGB#8/8/8,"))
+                   (_ nil)))))
+      (should (drgnx-tty-frames--terminfo-true-colour-p "a"))
+      (should (drgnx-tty-frames--terminfo-true-colour-p "b"))
+      (dolist (type '("c" "d" "e" "f" "g"))
+        (should-not (drgnx-tty-frames--terminfo-true-colour-p type))))))
 
-(ert-deftest drgnx-tty-frames/a-failing-infocmp-or-none-leaves-the-type ()
-  (let ((drgnx-tty-frames--direct-cache (make-hash-table :test #'equal)))
-    (cl-letf (((symbol-function 'executable-find) (lambda (&rest _) nil)))
-      (should (equal (drgnx-tty-frames--true-colour-type "xterm-256color" '("COLORTERM=truecolor")) "xterm-256color"))))
-  (let ((drgnx-tty-frames--direct-cache (make-hash-table :test #'equal)))
-    (cl-letf (((symbol-function 'executable-find) (lambda (&rest _) "/bin/infocmp"))
-              ((symbol-function 'call-process) (lambda (&rest _) 1)))
+(ert-deftest drgnx-tty-frames/infocmp-is-asked-once-per-type-and-through-the-bounded-runner ()
+  (drgnx-tty-frames-test--terminfos '("xterm-direct")
+    (dotimes (_ 3) (drgnx-tty-frames--true-colour-type "xterm-256color" '("COLORTERM=truecolor")))
+    (should (equal (sort (copy-sequence asked) #'string<) '("xterm-256color" "xterm-direct")))))
+
+(ert-deftest drgnx-tty-frames/the-runner-is-given-a-timeout-and-the-bare-command ()
+  (let ((drgnx-tty-frames--direct-cache (make-hash-table :test #'equal)) seen)
+    (cl-letf (((symbol-function 'drgnx-tty--command-lines) (lambda (&rest args) (setq seen args) nil)))
+      (drgnx-tty-frames--terminfo-true-colour-p "xterm-256color"))
+    (should (equal (car seen) '("infocmp" "-x" "-1" "xterm-256color")))
+    (should (numberp (cadr seen)))))
+
+(ert-deftest drgnx-tty-frames/no-infocmp-leaves-the-type ()
+  (let ((drgnx-tty-frames--direct-cache (make-hash-table :test #'equal)) (drgnx-tty-true-colour t))
+    (cl-letf (((symbol-function 'drgnx-tty--command-lines) (lambda (&rest _) nil)))
       (should (equal (drgnx-tty-frames--true-colour-type "xterm-256color" '("COLORTERM=truecolor")) "xterm-256color")))))
 
-(ert-deftest drgnx-tty-frames/the-frame-is-created-with-the-direct-type-and-never-fails-for-it ()
+(ert-deftest drgnx-tty-frames/the-setting-decides-which-terminals-are-swapped ()
+  (let ((env '("TERM=xterm-256color" "COLORTERM=truecolor")))
+    ;; known (the default): only a terminal drgnx's table says has true colour
+    (drgnx-tty-frames-test--terminfos '("xterm-direct")
+      (let ((drgnx-tty-true-colour 'known))
+        (should (equal (drgnx-tty-frames--true-colour-type "xterm-256color" env) "xterm-256color"))   ; unknown terminal
+        (should (equal (drgnx-tty-frames--true-colour-type "xterm-256color" (cons "KITTY_WINDOW_ID=1" env)) "xterm-direct"))
+        ;; Terminal.app and tmux (its outer terminal decides) are not known to have it
+        (should (equal (drgnx-tty-frames--true-colour-type "xterm-256color" (cons "TERM_PROGRAM=Apple_Terminal" env))
+                       "xterm-256color"))))
+    ;; t: COLORTERM alone
+    (drgnx-tty-frames-test--terminfos '("xterm-direct")
+      (let ((drgnx-tty-true-colour t))
+        (should (equal (drgnx-tty-frames--true-colour-type "xterm-256color" env) "xterm-direct"))))
+    ;; nil: never, and nothing is asked
+    (drgnx-tty-frames-test--terminfos '("xterm-direct")
+      (let ((drgnx-tty-true-colour nil))
+        (should (equal (drgnx-tty-frames--true-colour-type "xterm-256color" (cons "KITTY_WINDOW_ID=1" env)) "xterm-256color"))
+        (should-not asked)))
+    (should (eq (default-value 'drgnx-tty-true-colour) 'known))))
+
+(ert-deftest drgnx-tty-frames/the-frame-is-created-with-the-direct-type ()
   (let* ((proc (make-pipe-process :name "kx-colours" :noquery t)) seen)
     (unwind-protect
         (drgnx-tty-frames-test--terminfos '("xterm-direct")
@@ -243,30 +286,57 @@ daemon's own COLORTERM unset."
             (should (equal seen (list "/dev/pts/9" "xterm-256color" proc)))))
       (delete-process proc))))
 
-(ert-deftest drgnx-tty-frames/true-colour-is-asked-for-at-frame-creation ()
+(ert-deftest drgnx-tty-frames/a-direct-type-emacs-cannot-load-falls-back-to-the-asked-one ()
+  ;; infocmp and Emacs's tgetent can see different terminfo databases: the client keeps its frame
+  (let* ((proc (make-pipe-process :name "kx-colours" :noquery t)) tried)
+    (unwind-protect
+        (drgnx-tty-frames-test--terminfos '("xterm-direct")
+          (process-put proc 'env '("TERM=xterm-256color" "COLORTERM=truecolor"))
+          (should (eq (drgnx-tty-frames--create-tty-frame
+                       (lambda (_tty type _proc)
+                         (push type tried)
+                         (if (equal type "xterm-direct") (error "Unknown terminal type") 'frame))
+                       "/dev/pts/9" "xterm-256color" proc)
+                      'frame))
+          (should (equal (reverse tried) '("xterm-direct" "xterm-256color")))
+          ;; an error with the type as asked is not retried, and is the caller's
+          (setq tried nil)
+          (should-error (drgnx-tty-frames--create-tty-frame (lambda (_tty type _proc) (push type tried) (error "No frame"))
+                                                            "/dev/pts/9" "xterm-256color" proc))
+          (should (equal (reverse tried) '("xterm-direct" "xterm-256color")))
+          ;; a frame the failed call already made (an error in a frame hook) is not made a second time
+          (setq tried nil)
+          (cl-letf (((symbol-function 'frame-list) (let ((n 0)) (lambda () (if (= (cl-incf n) 1) '(f1) '(f1 f2))))))
+            (should-error (drgnx-tty-frames--create-tty-frame (lambda (_tty type _proc) (push type tried) (error "Hook failed"))
+                                                              "/dev/pts/9" "xterm-256color" proc)))
+          (should (equal tried '("xterm-direct"))))
+      (delete-process proc))))
+
+(ert-deftest drgnx-tty-frames/true-colour-is-asked-for-once-server-is-loaded ()
   (funcall (plist-get (alist-get 'ui/terminal drgnx-modules--table) :setup))
-  (when (fboundp 'server-create-tty-frame)
-    (should (advice-member-p #'drgnx-tty-frames--create-tty-frame 'server-create-tty-frame))))
+  (require 'server)
+  (should (advice-member-p #'drgnx-tty-frames--create-tty-frame 'server-create-tty-frame)))
 
-(ert-deftest drgnx-tty-frames/the-state-table-names-each-group-its-faces-and-its-cue ()
-  (should (equal (mapcar #'car drgnx-tty-frames-state-faces) '(git review tabs work)))
-  (pcase-dolist (`(,group . ,spec) drgnx-tty-frames-state-faces)
-    (should (symbolp group))
-    (should (memq (plist-get spec :cue) '(letter word attribute label)))
-    (should (stringp (plist-get spec :doc)))
-    (should (consp (plist-get spec :faces)))
-    (dolist (f (plist-get spec :faces))
-      (should (string-prefix-p "drgnx-" (symbol-name f))))))
-
-(ert-deftest drgnx-tty-frames/every-face-of-the-state-table-is-defined ()
-  (dolist (lib '(drgnx-git drgnx-chrome drgnx-review drgnx-work-ui))
-    (require lib))
-  (pcase-dolist (`(,_ . ,spec) drgnx-tty-frames-state-faces)
-    (dolist (f (plist-get spec :faces))
-      (should (facep f)))))
+(ert-deftest drgnx-tty-frames/a-daemon-loading-server-after-init-gets-the-advice ()
+  ;; a daemon loads server.el after init: the module's setup runs before there is a function to advise
+  (let* ((emacs (expand-file-name invocation-name invocation-directory))
+         (advised (lambda ()
+                    (and (advice-member-p #'drgnx-tty-frames--create-tty-frame 'server-create-tty-frame) t)))
+         (form `(progn (require 'drgnx)
+                       (load ,(expand-file-name "modules/ui/drgnx-tty-frames" drgnx-dir) nil t)
+                       (funcall (plist-get (alist-get 'ui/terminal drgnx-modules--table) :setup))
+                       (let ((before (list (featurep 'server) (funcall ,advised))))
+                         (require 'server)
+                         (princ (format "%S" (list before (funcall ,advised)))))))
+         (out (with-temp-buffer
+                (call-process emacs nil t nil "--batch" "-Q" "-L" (expand-file-name "core" drgnx-dir)
+                              "-L" (expand-file-name "wb" drgnx-dir) "-L" (expand-file-name "harness" drgnx-dir)
+                              "-L" drgnx-dir "--eval" "(setq load-prefer-newer t)" "--eval" (prin1-to-string form))
+                (buffer-string))))
+    (should (equal out "((nil nil) t)"))))
 
 (defun drgnx-tty-frames-test--status-column (graphic)
-  "The :align-to expression of the Explorer's status letter for a modified file, GRAPHIC or not."
+  "The :align-to expression of the Explorer's status letter for a modified file, with the selected frame GRAPHIC or not."
   (require 'drgnx-explorer)
   (with-temp-buffer
     (insert "  name.txt\n")
@@ -277,8 +347,34 @@ daemon's own COLORTERM unset."
     (let ((s (overlay-get (car (overlays-in (point-min) (point-max))) 'after-string)))
       (list (plist-get (cdr (get-text-property 0 'display s)) :align-to) (substring-no-properties s)))))
 
-(ert-deftest drgnx-tty-frames/the-git-letter-keeps-off-the-last-column-of-a-terminal-window ()
+(ert-deftest drgnx-tty-frames/the-git-letter-keeps-off-the-last-column-whoever-paints-it ()
   ;; a terminal window has no fringe: its last column shows the truncation `$', so a letter put at the edge
-  ;; (right - 2) is lost and the git state is told by colour alone
+  ;; (right - 2) is lost.  The overlay is painted once into a buffer every frame shows: a graphical frame being
+  ;; the selected one when it is painted must not decide.
   (should (equal (drgnx-tty-frames-test--status-column nil) '((- right 3) " M")))
-  (should (equal (drgnx-tty-frames-test--status-column t) '((- right 2) " M"))))
+  (should (equal (drgnx-tty-frames-test--status-column t) '((- right 3) " M"))))
+
+(ert-deftest drgnx-tty-frames/ignored-files-are-told-by-more-than-colour ()
+  (require 'drgnx-git)
+  (should-not (equal (face-attribute 'drgnx-git-ignored :slant nil t) (face-attribute 'default :slant nil t))))
+
+(ert-deftest drgnx-tty-frames/the-state-table-names-each-group-its-faces-and-its-cue ()
+  (should (equal (mapcar #'car drgnx-tty-frames-state-faces) '(git review tabs work)))
+  (pcase-dolist (`(,group . ,spec) drgnx-tty-frames-state-faces)
+    (should (symbolp group))
+    (should (memq (plist-get spec :cue) '(letter word attribute label)))
+    (should (stringp (plist-get spec :doc)))
+    (should (consp (plist-get spec :faces)))
+    (dolist (f (append (plist-get spec :faces) (plist-get spec :attribute-faces)))
+      (should (string-prefix-p "drgnx-" (symbol-name f))))
+    (dolist (f (plist-get spec :attribute-faces))
+      (should (memq f (plist-get spec :faces)))))
+  ;; ignored files have no letter: their cue is an attribute
+  (should (memq 'drgnx-git-ignored (plist-get (alist-get 'git drgnx-tty-frames-state-faces) :attribute-faces))))
+
+(ert-deftest drgnx-tty-frames/every-face-of-the-state-table-is-defined ()
+  (dolist (lib '(drgnx-git drgnx-chrome drgnx-review drgnx-work-ui))
+    (require lib))
+  (pcase-dolist (`(,_ . ,spec) drgnx-tty-frames-state-faces)
+    (dolist (f (plist-get spec :faces))
+      (should (facep f)))))

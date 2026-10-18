@@ -405,52 +405,87 @@ now.  (The server runs this hook outside a minibuffer and isearch: `server-goto-
 
 ;;;; Colours
 
-;; Emacs's terminal setup (`init_tty' in term.c, 30.2 and 31.1) takes 24-bit colour from the terminfo (`RGB', `Tc',
-;; `setf24') or from COLORTERM=truecolor, and it reads COLORTERM with C's getenv: the *daemon's* environment, not
-;; the environment `emacsclient' sent (`server-create-tty-frame' only binds that in Lisp).  And the frame
-;; parameter `tty-color-mode' cannot raise the colours (its modes are 8, none and "as set up"), so the frame has
-;; to be created with the right terminfo: when the client says COLORTERM=truecolor (or 24bit) and its TERM has no
-;; true colour, the frame is created as the `-direct' variant of that TERM (xterm-256color gives xterm-direct,
-;; tmux-256color gives tmux-direct), whose terminfo has `RGB', if the daemon's machine has that terminfo.
+;; Emacs's terminal setup (`init_tty' in term.c, 30.2 and 31.1) takes 24-bit colour from the terminfo (the `RGB'
+;; flag, or `setf24' with `setb24') or from COLORTERM=truecolor, and it reads COLORTERM with C's getenv: the
+;; *daemon's* environment, not the environment `emacsclient' sent (`server-create-tty-frame' only binds that in
+;; Lisp).  And the frame parameter `tty-color-mode' cannot raise the colours (its modes are 8, none and "as set
+;; up"), so the frame has to be created with the right terminfo: when the client says COLORTERM=truecolor (or
+;; 24bit) and its TERM has no true colour, the frame is created as the `-direct' variant of that TERM
+;; (xterm-256color gives xterm-direct, tmux-256color gives tmux-direct), whose terminfo has `RGB', if the
+;; daemon's machine has that terminfo.
+
+(defcustom drgnx-tty-true-colour 'known
+  "Which terminal windows get true colour when their client says COLORTERM=truecolor (or 24bit).
+`known': those whose terminal drgnx's table says has it (`drgnx-tty-terminals', :truecolor); `t': any, on the
+client's word alone; nil: none (Emacs's own choice stays).  A window gets it by being created with the `-direct'
+variant of its TERM, when that terminfo exists on the machine running the daemon."
+  :type '(choice (const :tag "Terminals known to have it" known) (const :tag "Whenever COLORTERM says so" t)
+                 (const :tag "Never" nil))
+  :group 'drgnx)
+
+(defconst drgnx-tty-frames--infocmp-timeout 2 "Seconds `infocmp' may take.")
 
 (defvar drgnx-tty-frames--direct-cache (make-hash-table :test #'equal)
-  "Terminal type → whether its terminfo has true colour (RGB, Tc or setrgbf), asked of infocmp once.")
+  "Terminal type → whether its terminfo has true colour as Emacs reads it, asked of infocmp once.")
 
 (defun drgnx-tty-frames--terminfo-true-colour-p (type)
-  "Whether the terminfo of terminal type TYPE (on this machine) says true colour: RGB, Tc or setrgbf.  Asked of
-`infocmp' once per type; nil when there is no such terminfo or no infocmp."
+  "Whether the terminfo of terminal type TYPE (on this machine) has true colour as Emacs's term.c reads it: the
+`RGB' flag, or `setf24' together with `setb24'.  Asked of `infocmp' (bounded: `drgnx-tty--command-lines') once per
+type; nil when there is no such terminfo or no infocmp."
   (let ((hit (gethash type drgnx-tty-frames--direct-cache 'unknown)))
     (if (not (eq hit 'unknown)) hit
       (puthash type
-               (and (stringp type) (not (string-empty-p type)) (executable-find "infocmp")
-                    (with-temp-buffer
-                      (and (eq 0 (condition-case nil (call-process "infocmp" nil t nil "-x" "-1" type) (error nil)))
-                           (re-search-backward "^[ \t]+\\(RGB\\|Tc\\|setrgbf=[^,]+\\)," nil t)
-                           t)))
+               (and (stringp type) (not (string-empty-p type))
+                    (when-let* ((lines (drgnx-tty--command-lines (list "infocmp" "-x" "-1" type)
+                                                                 drgnx-tty-frames--infocmp-timeout)))
+                      (let ((has (lambda (re) (seq-some (lambda (l) (string-match-p re l)) lines))))
+                        (or (funcall has "\\`[ \t]+RGB,")
+                            (and (funcall has "\\`[ \t]+setf24=") (funcall has "\\`[ \t]+setb24=")))))
+                    t)
                drgnx-tty-frames--direct-cache))))
+
+(defun drgnx-tty-frames--client-wants-true-colour-p (env)
+  "Whether the client with ENV (\"K=V\" strings) may get true colour: it says COLORTERM=truecolor or 24bit, and
+`drgnx-tty-true-colour' allows it (for `known': its terminal's row says `:truecolor')."
+  (let ((ct (getenv-internal "COLORTERM" env)))
+    (and (stringp ct) (member (downcase ct) '("truecolor" "24bit"))
+         (pcase drgnx-tty-true-colour
+           ('t t)
+           ('known (let ((alist (mapcar (lambda (var) (cons var (let ((v (getenv-internal var env))) (and (stringp v) v))))
+                                        drgnx-tty-env-variables)))
+                     (plist-get (drgnx-tty-terminal (plist-get (drgnx-tty-identify alist) :id)) :truecolor)))))))
 
 (defun drgnx-tty-frames--true-colour-type (type env)
   "The terminal type to create a client's frame with: TYPE, or its `-direct' variant when the client (ENV, its
-\"K=V\" environment) says COLORTERM=truecolor or 24bit, TYPE's terminfo has no true colour, the daemon's own
+\"K=V\" environment) may get true colour (`drgnx-tty-true-colour'), TYPE's terminfo has none, the daemon's own
 COLORTERM is not truecolor already (then every frame has it) and the variant's terminfo has."
-  (let ((ct (getenv-internal "COLORTERM" env)))
-    (or (and (stringp ct) (member (downcase ct) '("truecolor" "24bit"))
-             (not (equal (downcase (or (getenv "COLORTERM") "")) "truecolor"))
-             (stringp type)
-             (not (drgnx-tty-frames--terminfo-true-colour-p type))
-             (seq-find #'drgnx-tty-frames--terminfo-true-colour-p
-                       (list (concat (string-remove-suffix "-256color" type) "-direct") (concat type "-direct"))))
-        type)))
+  (or (and (stringp type) drgnx-tty-true-colour
+           (drgnx-tty-frames--client-wants-true-colour-p env)
+           (not (equal (downcase (or (getenv "COLORTERM") "")) "truecolor"))
+           (not (drgnx-tty-frames--terminfo-true-colour-p type))
+           (seq-find #'drgnx-tty-frames--terminfo-true-colour-p
+                     (list (concat (string-remove-suffix "-256color" type) "-direct") (concat type "-direct"))))
+      type))
 
 (defun drgnx-tty-frames--create-tty-frame (fn tty type proc &rest args)
-  "Around `server-create-tty-frame': create the frame as a true-colour terminal where the client asked for one
-(`drgnx-tty-frames--true-colour-type').  Never signals because of that: any trouble creates it as asked."
-  (apply fn tty (or (ignore-errors (drgnx-tty-frames--true-colour-type type (process-get proc 'env))) type)
-         proc args))
+  "Around `server-create-tty-frame': create the frame as a true-colour terminal where the client may get one
+(`drgnx-tty-frames--true-colour-type').  Never costs the client its frame: if Emacs cannot load the other type
+(infocmp and Emacs can see different terminfo databases) and made no frame on the way, the frame is created as
+asked."
+  (let ((wanted (or (ignore-errors (drgnx-tty-frames--true-colour-type type (process-get proc 'env))) type)))
+    (if (equal wanted type)
+        (apply fn tty type proc args)
+      (let ((before (frame-list)))
+        (condition-case err
+            (apply fn tty wanted proc args)
+          (error (if (seq-difference (frame-list) before)
+                     (signal (car err) (cdr err))      ; a frame exists already (an error in a frame hook)
+                   (apply fn tty type proc args))))))))
 
 (defconst drgnx-tty-frames-state-faces
   '((git :faces (drgnx-git-modified drgnx-git-added drgnx-git-deleted drgnx-git-conflict drgnx-git-ignored)
-         :cue letter :doc "The status letter (M, A, U, D, C) at the row's edge in the Explorer")
+         :attribute-faces (drgnx-git-ignored)
+         :cue letter :doc "The status letter (M, A, U, D, C) at the row's edge in the Explorer; ignored files, which have none, are italic")
     (review :faces (drgnx-review-critical drgnx-review-important drgnx-review-minor)
             :cue word :doc "The severity word that starts a finding's line")
     (tabs :faces (drgnx-chrome-tab drgnx-chrome-tab-current)
@@ -458,7 +493,8 @@ COLORTERM is not truecolor already (then every frame has it) and the variant's t
     (work :faces (drgnx-work-ui-spec drgnx-work-ui-done drgnx-work-ui-stale drgnx-work-ui-branch)
           :cue label :doc "The glyph and the words of a node's line (warning sign, merged, the branch in brackets)"))
   "The faces that mark a state, by group, and the cue besides colour that tells the state on an 8-colour terminal:
-`letter', `word' and `label' are in the text on the screen; `attribute' is in the faces themselves.")
+`letter', `word' and `label' are in the text on the screen; `attribute' is in the faces themselves.  :attribute-faces
+are the faces of a group that rely on an attribute because their state has no text.")
 
 (drgnx-module-define 'ui/terminal
                      :doc "Terminal windows: what each terminal can do, asked once; the mouse; editor-only EDITOR frames."
@@ -473,7 +509,8 @@ COLORTERM is not truecolor already (then every frame has it) and the variant's t
                               (add-hook 'server-after-make-frame-hook #'drgnx-tty-frames--after-make-frame)
                               (advice-add 'drgnx-chrome-close-tab :around #'drgnx-tty-frames--close-tab)
                               (advice-add 'drgnx-chrome--close-clicked :around #'drgnx-tty-frames--close-clicked)
-                              (when (fboundp 'server-create-tty-frame)
+                              ;; a daemon loads server.el after init: there is nothing to advise yet
+                              (with-eval-after-load 'server
                                 (advice-add 'server-create-tty-frame :around #'drgnx-tty-frames--create-tty-frame))
                               ;; a terminal Emacs set up before this module ran (`emacs -nw' sets its own up after init)
                               (when (terminal-parameter nil 'terminal-initted)
