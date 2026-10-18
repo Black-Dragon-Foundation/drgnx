@@ -951,8 +951,8 @@ is refreshed if it is shown."
                                (error (message "Could not move %s to the trash: %s"
                                                (file-name-nondirectory path)
                                                (if (string-empty-p why) (string-trim event) why)))))
-                           (when (get-buffer drgnx-explorer-buffer-name)
-                             (ignore-errors (drgnx-explorer--refresh-dir dir))))))
+                           (when-let* ((explorer (get-buffer drgnx-explorer-buffer-name))) ; its rows are buffer-local
+                             (with-current-buffer explorer (ignore-errors (drgnx-explorer--refresh-dir dir)))))))
             t)
         (error (kill-buffer out) nil)))))
 
