@@ -110,6 +110,11 @@ on PATH."
                                   nil t))
              t))))
 
+(defun drgnx-doctor--gui-from-features (features)
+  "The graphical toolkit (`pgtk', `x11' or `ns') named in the build FEATURES string, or nil."
+  (when (string-match "\\(PGTK\\|X11\\|NS\\)" features)
+    (intern (downcase (match-string 1 features)))))
+
 (defun drgnx-doctor-facts ()
   "Facts about the running Emacs and this machine."
   (let ((native (and (fboundp 'native-comp-available-p) (native-comp-available-p))))
@@ -119,8 +124,7 @@ on PATH."
            :native-compiles (if native (drgnx-doctor--native-compiles) "not built with native compilation")
            :treesit (and (fboundp 'treesit-available-p) (treesit-available-p))
            :gui (cond ((featurep 'pgtk) 'pgtk) ((featurep 'ns) 'ns) ((featurep 'x) 'x)
-                      ((string-match-p "\\(PGTK\\|X11\\|NS\\)" system-configuration-features)
-                       (intern (downcase (match-string 1 system-configuration-features)))))
+                      (t (drgnx-doctor--gui-from-features system-configuration-features)))
            :git (and (executable-find "git") t)
            :mutter (and (executable-find "mutter") t)
            :dbus-run-session (and (executable-find "dbus-run-session") t)

@@ -54,6 +54,14 @@
     (should (equal (plist-get f :version) emacs-version))
     (should (memq (plist-get f :native-available) '(t nil)))))
 
+(ert-deftest drgnx-doctor/gui-fallback-reads-its-own-match ()
+  ;; A match an earlier caller left behind must not be what the build-features fallback reads.
+  (string-match "z" "zz")
+  (should (eq (drgnx-doctor--gui-from-features "A X11 B") 'x11))
+  (string-match "z" "zz")
+  (should (eq (drgnx-doctor--gui-from-features "PGTK THREADS") 'pgtk))
+  (should-not (drgnx-doctor--gui-from-features "THREADS")))
+
 (defconst drgnx-doctor-test--bin
   (expand-file-name "../../bin/drgnx" (file-name-directory (or load-file-name buffer-file-name))))
 
