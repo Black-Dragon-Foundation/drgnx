@@ -66,9 +66,9 @@
   (expand-file-name "../../bin/drgnx" (file-name-directory (or load-file-name buffer-file-name))))
 
 (defun drgnx-doctor-test--run (&rest args)
-  "Run bin/drgnx ARGS; return (EXIT . OUTPUT)."
+  "Run bin/drgnx ARGS; return (EXIT . STDOUT) — stderr is dropped (a --json run is read as JSON)."
   (with-temp-buffer
-    (cons (apply #'call-process drgnx-doctor-test--bin nil t nil args) (buffer-string))))
+    (cons (apply #'call-process drgnx-doctor-test--bin nil '(t nil) nil args) (buffer-string))))
 
 (ert-deftest drgnx-doctor/cli-without-emacs ()
   (let* ((process-environment (cons "DRGNX_EMACS=/no/such/emacs" process-environment))
@@ -77,13 +77,24 @@
     (should (string-search "install.sh" (cdr r)))))
 
 (ert-deftest drgnx-doctor/cli-with-this-emacs ()
-  (let* ((process-environment (cons (concat "DRGNX_EMACS=" (expand-file-name invocation-name invocation-directory))
-                                    process-environment))
-         (r (drgnx-doctor-test--run "doctor")))
-    (should (string-search "native-compilation" (cdr r)))
-    (should-not (string-search "ui-mutter" (cdr r)))
-    (should (string-search "ui-mutter" (cdr (drgnx-doctor-test--run "doctor" "--dev"))))
-    (should (eq (aref (string-trim (cdr (drgnx-doctor-test--run "doctor" "--json"))) 0) ?\[))))
+  ;; The Emacs may talk on stderr (a warning, a deprecation notice): the --json output is stdout only.
+  (let* ((dir (make-temp-file "drgnx-doctor-wrap" t))
+         (wrapper (expand-file-name "emacs-noisy" dir))
+         (process-environment (cons (concat "DRGNX_EMACS=" wrapper) process-environment)))
+    (unwind-protect
+        (progn
+          (with-temp-file wrapper
+            (insert "#!/bin/sh\necho 'noise on stderr' >&2\nexec "
+                    (shell-quote-argument (expand-file-name invocation-name invocation-directory)) " \"$@\"\n"))
+          (set-file-modes wrapper #o755)
+          (let ((r (drgnx-doctor-test--run "doctor")))
+            (should (string-search "native-compilation" (cdr r)))
+            (should-not (string-search "noise on stderr" (cdr r)))
+            (should-not (string-search "ui-mutter" (cdr r))))
+          (should (string-search "ui-mutter" (cdr (drgnx-doctor-test--run "doctor" "--dev"))))
+          (let ((out (cdr (drgnx-doctor-test--run "doctor" "--json"))))
+            (should (plist-get (aref (json-parse-string (string-trim out) :object-type 'plist) 0) :name))))
+      (delete-directory dir t))))
 
 (ert-deftest drgnx-doctor/dev-needs-a-pgtk-emacs ()
   (should (eq (drgnx-doctor-test--status 'ui-pgtk (drgnx-doctor-test--facts :pgtk-emacs t)) 'ok))
