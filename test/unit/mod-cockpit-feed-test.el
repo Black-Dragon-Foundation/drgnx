@@ -595,4 +595,16 @@ stopped (`drgnx-agents-stop' fails the test).  The feed's buffers are killed aft
       (dolist (row '("(cockpit-answer \"A\")" "(cockpit-happened :none " "(cockpit-timeline :none "))
         (should (string-search row text))))))
 
+(ert-deftest drgnx-cockpit-feed/loads-alone-in-a-fresh-emacs ()
+  ;; the modules directory loads cockpit-feed before drgnx-cockpit.el (alphabetical): it must not need the graph's keymap then
+  (let* ((emacs (expand-file-name invocation-name invocation-directory))
+         (feed (expand-file-name "modules/tools/drgnx-cockpit-feed.el" drgnx-dir))
+         (out (with-temp-buffer
+                (cons (call-process emacs nil t nil "--batch" "-Q" "-L" (expand-file-name "core" drgnx-dir)
+                                    "--eval" (format "(load %S nil t)" feed)
+                                    "--eval" "(message \"loaded %S\" (featurep 'drgnx-cockpit-feed))")
+                      (buffer-string)))))
+    (should (eql (car out) 0))
+    (should (string-search "loaded t" (cdr out)))))
+
 ;;; mod-cockpit-feed-test.el ends here

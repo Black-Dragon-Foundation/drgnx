@@ -268,9 +268,6 @@ as many lines as its tallest window shows below its head and above its last line
   (let ((m (make-sparse-keymap))) (set-keymap-parent m special-mode-map) m)
   "Keys of every cockpit buffer — the graph, what happened, the timeline (from the key profiles: A answers).")
 
-;; the graph's keys get A too
-(set-keymap-parent drgnx-cockpit-graph-mode-map drgnx-cockpit-map)
-
 (defvar drgnx-cockpit-happened-mode-map (let ((m (make-sparse-keymap))) (set-keymap-parent m drgnx-cockpit-map) m)
   "What happened's keys: A answers; RET or a click follows a line.")
 

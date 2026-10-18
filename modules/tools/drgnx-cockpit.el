@@ -740,6 +740,10 @@ or nil: any."
 ;; what happened, questions everywhere, the timeline (drgnx-cockpit-feed.el, beside this file)
 (unless (featurep 'drgnx-cockpit-feed)
   (load (expand-file-name "drgnx-cockpit-feed" (file-name-directory (or load-file-name buffer-file-name))) nil t))
+;; the graph's keys get the cockpit's (A answers); here, not in the feed, which may load first (the modules directory
+;; loads files alphabetically)
+(defvar drgnx-cockpit-map)
+(set-keymap-parent drgnx-cockpit-graph-mode-map drgnx-cockpit-map)
 (declare-function drgnx-cockpit-feed--setup "drgnx-cockpit-feed")
 (declare-function drgnx-cockpit-cards--schedule "drgnx-cockpit-cards")
 (declare-function drgnx-cockpit-feed-tell-statusbar "drgnx-cockpit-feed")
