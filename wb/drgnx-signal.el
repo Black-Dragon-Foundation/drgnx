@@ -101,6 +101,15 @@ last lets go.  A subscription made before the first module's, by code that recor
 
 (defvar drgnx-signal--posted nil "Events posted since the last flush (`drgnx-signal-post').")
 
+(defvar drgnx-signal--dirty nil
+  "The parts of the state the next flush rebuilds: `set' (buffers and names), `modified'.
+Set by the raw-hook functions below; a flush with the mode off rebuilds both.")
+
+(defvar drgnx-signal--seen-buffer nil
+  "The current buffer at the last `post-command-hook'; with the next two, what it looked like then.")
+(defvar drgnx-signal--seen-modified nil "Whether `drgnx-signal--seen-buffer' was modified (t or nil).")
+(defvar drgnx-signal--seen-name nil "The name of `drgnx-signal--seen-buffer'.")
+
 (defun drgnx-signal-post (event)
   "Emit EVENT at the next flush, once however often it is posted (a tab set changed, …)."
   (cl-pushnew event drgnx-signal--posted)
@@ -108,16 +117,26 @@ last lets go.  A subscription made before the first module's, by code that recor
 
 (defun drgnx-signal--frame () (selected-frame))
 
+(defvar drgnx-signal-mode)
+
 (defun drgnx-signal--flush ()
-  "Compare the state with the last flush and emit the edges."
+  "Compare the state with the last flush and emit the edges.
+Only the parts in `drgnx-signal--dirty' are rebuilt: `set' (the user buffers and their names), `modified'
+\(their flags; a new set needs them too).  The mode off, no hook says what changed, so all of it is rebuilt."
   (setq drgnx-signal--timer nil)
   (when (drgnx-signal-editor-window-p (selected-window))
     (setq drgnx-signal--editor-window (selected-window)))
   (let* ((editor (when-let* ((w (drgnx-signal-editor-window))) (window-buffer w)))
-         (set (seq-filter #'drgnx-signal-user-buffer-p (buffer-list)))
-         (modified (mapcar (lambda (b) (cons b (buffer-modified-p b))) set))
-         (names (mapcar (lambda (b) (cons b (buffer-name b))) set))
-         (old drgnx-signal--state))
+         (old drgnx-signal--state)
+         (dirty (prog1 (if (and old drgnx-signal-mode) drgnx-signal--dirty '(set modified))
+                  (setq drgnx-signal--dirty nil)))
+         (set-dirty (memq 'set dirty))
+         (modified-dirty (or set-dirty (memq 'modified dirty)))
+         (set (if set-dirty (seq-filter #'drgnx-signal-user-buffer-p (buffer-list)) (plist-get old :set)))
+         (modified (if modified-dirty
+                       (mapcar (lambda (b) (cons b (buffer-modified-p b))) set)
+                     (plist-get old :modified)))
+         (names (if set-dirty (mapcar (lambda (b) (cons b (buffer-name b))) set) (plist-get old :names))))
     (setq drgnx-signal--state (list :editor editor :set set :modified modified :names names
                                     :frame (drgnx-signal--frame)
                                     :point (when-let* ((w (drgnx-signal-editor-window))) (window-point w))))
@@ -131,10 +150,12 @@ last lets go.  A subscription made before the first module's, by code that recor
     (let ((posted (reverse drgnx-signal--posted)))
       (setq drgnx-signal--posted nil)
       (dolist (e posted) (drgnx-signal--emit e nil)))
-    (unless (and (drgnx-signal--same-set-p set (plist-get old :set))
-                 (drgnx-signal--same-names-p names (plist-get old :names)))
+    (when (and set-dirty
+               (not (and (drgnx-signal--same-set-p set (plist-get old :set))
+                         (drgnx-signal--same-names-p names (plist-get old :names)))))
       (drgnx-signal--emit 'buffer-set-changed set))
-    (when-let* ((was (let ((h (make-hash-table :test #'eq :size (length set))))
+    (when-let* ((modified-dirty)
+                (was (let ((h (make-hash-table :test #'eq :size (length set))))
                        (pcase-dolist (`(,b . ,m) (plist-get old :modified)) (puthash b (if m 'yes 'no) h))
                        h))
                 (flipped (seq-filter (lambda (b) (when-let* ((m (gethash b was)))
@@ -160,22 +181,78 @@ that fails is recorded, like a subscriber)."
   (unless (timerp drgnx-signal--timer)
     (setq drgnx-signal--timer (run-with-idle-timer drgnx-signal-delay nil #'drgnx-signal--flush))))
 
+(defun drgnx-signal--mark (part)
+  "Note that the flush has to rebuild PART."
+  (unless (memq part drgnx-signal--dirty) (push part drgnx-signal--dirty)))
+
+(defun drgnx-signal--set-dirty (&rest _)
+  "`buffer-list-update-hook': a buffer was created, killed, selected or renamed."
+  (drgnx-signal--mark 'set)
+  (drgnx-signal--schedule))
+
+(defun drgnx-signal--mode-changed (&rest _)
+  "`after-change-major-mode-hook': a buffer's major mode (and so maybe its place in the set) changed.
+Internal buffers (a leading space) are skipped: mode calls in temporary buffers are no change."
+  (unless (string-prefix-p " " (buffer-name))
+    (drgnx-signal--set-dirty)))
+
+(defun drgnx-signal--modified-dirty (&rest _)
+  "`first-change-hook', `after-save-hook', `after-revert-hook': a modified flag changed."
+  (drgnx-signal--mark 'modified)
+  (drgnx-signal--schedule))
+
+(defun drgnx-signal--killed (&rest _)
+  "`kill-buffer-hook': the buffer leaves the set (and the cache of `drgnx-signal--post-command')."
+  (when (eq (current-buffer) drgnx-signal--seen-buffer) (setq drgnx-signal--seen-buffer nil))
+  (drgnx-signal--mark 'set)
+  (drgnx-signal--mark 'modified)
+  (drgnx-signal--schedule))
+
+(defun drgnx-signal--post-command ()
+  "`post-command-hook': undo back to the saved state and `set-buffer-modified-p' run no buffer hook, so
+compare the current buffer's modified flag and name with the cached ones.  Nothing else: no buffer list."
+  (let ((buf (current-buffer))
+        (modified (and (buffer-modified-p) t))
+        (name (buffer-name)))
+    (if (eq buf drgnx-signal--seen-buffer)
+        (progn (unless (eq modified drgnx-signal--seen-modified) (drgnx-signal--mark 'modified))
+               (unless (equal name drgnx-signal--seen-name) (drgnx-signal--mark 'set)))
+      ;; Another buffer than last time: compare with what the last flush saw of it.
+      (let ((state drgnx-signal--state))
+        (when-let* ((m (assq buf (plist-get state :modified))))
+          (unless (eq (cdr m) modified) (drgnx-signal--mark 'modified)))
+        (when-let* ((n (assq buf (plist-get state :names))))
+          (unless (equal (cdr n) name) (drgnx-signal--mark 'set))))
+      (setq drgnx-signal--seen-buffer buf))
+    (setq drgnx-signal--seen-modified modified
+          drgnx-signal--seen-name name)
+    (drgnx-signal--schedule)))
+
 (defconst drgnx-signal--hooks
-  '(window-selection-change-functions buffer-list-update-hook
-                                      first-change-hook after-save-hook after-revert-hook kill-buffer-hook
-                                      ;; Undo back to the saved state, `set-buffer-modified-p' and `rename-buffer' run no buffer
-                                      ;; hook: every command arms the (cheap, idle) flush too.
-                                      post-command-hook)
-  "The raw hooks the bus listens to.")
+  '((window-selection-change-functions . drgnx-signal--schedule)
+    (buffer-list-update-hook . drgnx-signal--set-dirty)
+    (first-change-hook . drgnx-signal--modified-dirty)
+    (after-save-hook . drgnx-signal--modified-dirty)
+    (after-save-hook . drgnx-signal--set-dirty)                  ; `write-file' under the buffer's own name
+    (after-change-major-mode-hook . drgnx-signal--mode-changed)  ; `dired-mode' on an existing buffer
+    (after-revert-hook . drgnx-signal--modified-dirty)
+    (kill-buffer-hook . drgnx-signal--killed)
+    (post-command-hook . drgnx-signal--post-command))
+  "The raw hooks the bus listens to, each with its named function (the mode adds and removes them).
+`after-save-hook' has two: the flags, and the set (a saved non-file buffer becomes a file buffer, with no
+rename or new buffer).  `after-change-major-mode-hook' covers a mode change on an existing buffer.")
 
 (define-minor-mode drgnx-signal-mode
   "The workbench change bus: raw window and buffer hooks become deduplicated edges."
   :global t :group 'drgnx
-  (dolist (h drgnx-signal--hooks)
-    (if drgnx-signal-mode (add-hook h #'drgnx-signal--schedule) (remove-hook h #'drgnx-signal--schedule)))
+  (pcase-dolist (`(,hook . ,fn) drgnx-signal--hooks)
+    (if drgnx-signal-mode (add-hook hook fn) (remove-hook hook fn)))
   (if drgnx-signal-mode (add-hook 'window-buffer-change-functions #'drgnx-signal--windows)
     (remove-hook 'window-buffer-change-functions #'drgnx-signal--windows))
-  (when drgnx-signal-mode (drgnx-signal--schedule)))
+  (setq drgnx-signal--seen-buffer nil)
+  (when drgnx-signal-mode
+    (setq drgnx-signal--dirty '(set modified))
+    (drgnx-signal--schedule)))
 
 (provide 'drgnx-signal)
 ;;; drgnx-signal.el ends here
