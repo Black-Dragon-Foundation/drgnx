@@ -17,9 +17,24 @@
 ;; Every step is an asynchronous process with a deadline: the hub never waits.  Every git here runs with no hooks
 ;; and no fsmonitor, no templates and only the file protocol.  After DONE is called, nothing outside the sandbox runs
 ;; git in the folder again: its `.git' is the agent's.  See docs/develop/sandbox.md ("Git: snapshot mode").
+;;
+;; Then, inside the sandbox: the checkout, and at each turn's end a bundle of the task's commits into a directory
+;; only that step may write.  Outside, in the trusted repository, the bundle is data: checked (a regular file, one
+;; ref), verified, fetched with fsckObjects, and kept only when it descends from the base.  The reviewer gets a fresh
+;; snapshot of the fetched branch; a merge-conflict retry gets the new base as a bundle, fetched inside.
 
 ;;; Code:
+(require 'cl-lib)
 (require 'subr-x)
+(require 'drgnx-sandbox)
+
+;; drgnx-sandbox-vc.el: the VC guard's exemption, let-bound around the hub's own unsandboxed steps alone
+(defvar drgnx-sandbox-vc-trusted)
+
+(defcustom drgnx-job-snapshot-bundle-max (* 1024 1024 1024)
+  "The largest task bundle, in bytes, the hub reads (`drgnx-job-snapshot-fetch'); a larger one is refused unread.
+Its checks and its fetch run outside the sandbox, without the memory cap."
+  :type 'integer :group 'drgnx)
 
 (defcustom drgnx-job-snapshot-timeout 300
   "Seconds one step of a task's snapshot (the store's clone or fetch, the copy, the clone) may take; then it fails."
@@ -342,12 +357,15 @@ config the store's whitelist, not bare; BASE checked.  DONE gets the result plis
                     (write-region (drgnx-job-snapshot--config-text entries entries nil) nil
                                   (expand-file-name "config" git) nil 'silent)
                     (drgnx-job-snapshot--run
-                     folder (drgnx-job-snapshot--git (list "cat-file" "-e" (format "refs/heads/%s^{commit}" base))) job
+                     folder (drgnx-job-snapshot--git (list "rev-parse" "--verify" "-q" (format "refs/heads/%s^{commit}" base))) job
                      (drgnx-job-snapshot--then
                       (lambda (why) (funcall fail (if (eq why :stopped) why (format "the base %s is not in the copy" base))))
-                      (lambda (_)
-                        (funcall done (list :mode (if cow 'snapshot 'clone)
-                                            :read (and (not cow) (list (expand-file-name "objects" store))))))))))))))))
+                      (lambda (out)
+                        (let ((start (string-trim out)))
+                          (unless (drgnx-job-snapshot--commit-p start) (error "the base %s is not in the copy" base))
+                          (funcall done (list :mode (if cow 'snapshot 'clone)
+                                              :read (and (not cow) (list (expand-file-name "objects" store)))
+                                              :start start))))))))))))))
       (error (funcall fail (error-message-string e))))))
 
 ;;;; Making a task's snapshot
@@ -359,6 +377,14 @@ config the store's whitelist, not bare; BASE checked.  DONE gets the result plis
 (defun drgnx-job-snapshot--base-ok-p (base)
   (and (stringp base) (< 0 (length base) 256) (not (string-prefix-p "-" base))
        (not (string-match-p "[[:space:][:cntrl:]~^:?*\\[\\\\]\\|\\.\\.\\|//\\|/\\'\\|\\.lock\\'" base))))
+
+(defun drgnx-job-snapshot--commit-p (s)
+  "Is S a full object name (40 or 64 hex digits): a commit the hub recorded, such as a task's start?"
+  (and (stringp s) (string-match-p "\\`\\(?:[0-9a-f]\\{40\\}\\|[0-9a-f]\\{64\\}\\)\\'" s)))
+
+(defun drgnx-job-snapshot--rev (base)
+  "BASE as git takes it: a recorded commit (`drgnx-job-snapshot--commit-p') as it is, a branch as refs/heads/BASE."
+  (if (drgnx-job-snapshot--commit-p base) base (concat "refs/heads/" base)))
 
 (defun drgnx-job-snapshot--choose (repo job done)
   "DONE gets t when REPO's snapshots are copy-on-write copies, nil when shared clones, `:stopped' when JOB was
@@ -377,10 +403,12 @@ stopped; the first time on a filesystem it is probed by a process of its own."
 (defun drgnx-job-snapshot-make (repo folder base done &optional job)
   "Give the task folder FOLDER (empty or missing) a `.git' of its own, holding BASE (a branch of REPO) and what it
 reaches, nothing else.  Asynchronous: DONE is called later with
-  (:mode snapshot :read nil)   a copy-on-write copy of the job's store (`drgnx-job-snapshot-store-dir'),
-  (:mode clone :read DIRS)     a shared clone of the store, without copy-on-write; DIRS (the store's objects) must be
-                               mounted read-only,
+  (:mode snapshot :read nil :start START)   a copy-on-write copy of the job's store (`drgnx-job-snapshot-store-dir'),
+  (:mode clone :read DIRS :start START)     a shared clone of the store, without copy-on-write; DIRS (the store's
+                                            objects) must be mounted read-only,
   (:error MSG).
+START is the commit BASE was in the copy (40 or 64 hex digits), read before any agent had the folder: the task's
+start.  Keep it with the task: its bundles and fetches are checked against it, not against BASE's later tip.
 The store is made, or BASE fetched into it, first; a failure there is tried once more (a git of the user's may have
 been writing BASE).  Keep the result with the task, and check DIRS against `drgnx-job-snapshot-read-dirs'.  JOB:
 stopping it ends the steps, and DONE is not called.  Nothing is checked out: the sandbox does it.  From DONE on, run
@@ -429,6 +457,249 @@ no git in FOLDER outside the sandbox."
                                                   (if (eq cow :stopped)
                                                       (funcall finish :stopped)
                                                     (funcall attempt cow 2))))))))))))))))
+
+;;;; Inside the sandbox: the checkout, the bundle, the base's refresh
+
+(defconst drgnx-job-snapshot--step-overrides
+  '("-c" "core.hooksPath=/dev/null" "-c" "core.fsmonitor=false" "-c" "core.pager=cat" "-c" "core.editor=false")
+  "Given to every git of drgnx's own steps in a task folder: the folder's hooks, fsmonitor, pager and editor are the
+agent's, and drgnx's steps run none of them, even inside the sandbox.")
+
+(defconst drgnx-job-snapshot--step-env
+  '(("PATH" . "/usr/local/bin:/usr/bin:/bin") ("HOME" . "/nonexistent") ("GIT_CONFIG_NOSYSTEM" . "1")
+    ("GIT_CONFIG_GLOBAL" . "/dev/null") ("GIT_TERMINAL_PROMPT" . "0") ("GIT_ALLOW_PROTOCOL" . "file")
+    ("GIT_LFS_SKIP_SMUDGE" . "1") ("LC_ALL" . "C"))
+  "The whole environment of a step: no home, no global or system git config, no prompt, only local transfers, and
+Git LFS's pointers left as they are (a task's store has no LFS content, and the step has no network).")
+
+(defconst drgnx-job-snapshot--out-inside "/run/drgnx/out"
+  "Where a bundle step's OUT is inside bwrap.  Seatbelt has no mounts: there OUT is at its own path.")
+
+(defun drgnx-job-snapshot--out-path (out unsandboxed)
+  "OUT as the bundle step sees it."
+  (if (or unsandboxed (eq (drgnx-sandbox-backend) 'seatbelt)) out drgnx-job-snapshot--out-inside))
+
+(cl-defun drgnx-job-snapshot-step-spec (folder &key writable out read)
+  "The sandbox spec of one of the hub's git steps in task folder FOLDER: the system's reads (always there), FOLDER
+read-only, or read-write when WRITABLE; OUT (a directory the hub made, where no agent writes) read-write at
+`drgnx-job-snapshot--out-inside' (its own path on macOS); READ (the store's objects a shared clone borrows) read-only;
+no home, no network, the environment `drgnx-job-snapshot--step-env', started in FOLDER."
+  (let ((folder (directory-file-name (expand-file-name folder)))
+        (out (and out (directory-file-name (expand-file-name out))))
+        (mac (eq (drgnx-sandbox-backend) 'seatbelt)))
+    (drgnx-sandbox-spec
+     :read (append read (unless writable (list folder)))
+     :write (append (and writable (list folder)) (and out mac (list out)))
+     :binds (and out (not mac) (list (list 'rw out drgnx-job-snapshot--out-inside)))
+     :env drgnx-job-snapshot--step-env
+     :chdir folder
+     :net 'isolated)))
+
+(defun drgnx-job-snapshot--repo-of (folder)
+  "The repository of task folder FOLDER, `<repo>/.claude/worktrees/NAME', from its name alone; nil when it is not one."
+  (let ((dir (directory-file-name (expand-file-name folder))))
+    (and (string-match "\\`\\(.+\\)/\\.claude/worktrees/[^/]+\\'" dir) (match-string 1 dir))))
+
+(defun drgnx-job-snapshot--step-read (folder base)
+  "What a step in FOLDER at BASE reads besides FOLDER: the objects of its job's store, which a shared clone borrows
+\(in a copy-on-write copy the same objects are already there).  Derived from FOLDER's name and BASE, never from the
+folder's alternates, which are the agent's."
+  (when-let* ((repo (drgnx-job-snapshot--repo-of folder)))
+    (drgnx-job-snapshot-read-dirs repo base)))
+
+(defun drgnx-job-snapshot--step (folder spec-args args unsandboxed done)
+  "Run git ARGS (with `drgnx-job-snapshot--step-overrides') in FOLDER: inside `drgnx-job-snapshot-step-spec' FOLDER
+SPEC-ARGS, or plainly when UNSANDBOXED (a job the user let run without a sandbox; the same overrides and environment,
+but the hub's PATH).  DONE gets (EXIT . OUTPUT), or (:refused . WHY) when the step cannot start (no sandbox, a
+refused spec) — then nothing ran; always after this returned."
+  (let ((argv (append '("git") drgnx-job-snapshot--step-overrides args)))
+    (condition-case e
+        (if unsandboxed
+            (let ((process-environment (append (cl-loop for (name . value) in drgnx-job-snapshot--step-env
+                                                        unless (equal name "PATH") collect (concat name "=" value))
+                                               process-environment))
+                  ;; the hub's own step, with its overrides: the VC guard lets this one start, and nothing else
+                  (drgnx-sandbox-vc-trusted t))
+              (drgnx-job-snapshot--run folder argv nil
+                                       (lambda (r)
+                                         (funcall done (if (eq (car r) :timeout)
+                                                           (cons :timeout (format "timed out after %s s" drgnx-job-snapshot-timeout))
+                                                         (cons (car r) (string-trim (concat (cadr r) "\n" (cddr r)))))))))
+          (drgnx-sandbox-run (apply #'drgnx-job-snapshot-step-spec folder spec-args) argv done))
+      (error (run-at-time 0 nil done (cons :refused (error-message-string e)))))))
+
+(defun drgnx-job-snapshot--step-then (fail ok)
+  "A DONE for `drgnx-job-snapshot--step': exit 0 calls OK with the output, anything else FAIL with why."
+  (lambda (r)
+    (condition-case e
+        (if (eql 0 (car r))
+            (funcall ok (cdr r))
+          (funcall fail (cond ((eq (car r) :refused) (cdr r))
+                              ((string-empty-p (cdr r)) (format "exit %s" (car r)))
+                              (t (cdr r)))))
+      (error (funcall fail (error-message-string e))))))
+
+(defun drgnx-job-snapshot--names-ok (done names)
+  "Non-nil when every one of NAMES is a branch name (`drgnx-job-snapshot--base-ok-p'); else DONE gets (:error MSG)
+later, and this is nil."
+  (let ((bad (seq-find (lambda (n) (not (drgnx-job-snapshot--base-ok-p n))) names :none)))
+    (if (eq bad :none) t
+      (drgnx-job-snapshot--later done (list :error (format "not a branch name: %S" bad)))
+      nil)))
+
+(defun drgnx-job-snapshot-checkout (folder branch base done &optional unsandboxed)
+  "In task folder FOLDER, check BRANCH out at BASE (`git checkout -q -f -B BRANCH BASE'), inside the sandbox
+\(`drgnx-job-snapshot-step-spec', FOLDER writable), or plainly when UNSANDBOXED.  Asynchronous: DONE gets t or
+\(:error MSG).  Without a sandbox nothing runs: never a plain fallback."
+  (when (drgnx-job-snapshot--names-ok done (list branch base))
+    (drgnx-job-snapshot--step
+     folder (list :writable t :read (drgnx-job-snapshot--step-read folder base))
+     (list "checkout" "-q" "-f" "-B" branch (concat "refs/heads/" base)) unsandboxed
+     (drgnx-job-snapshot--step-then (lambda (why) (funcall done (list :error (format "the checkout of %s: %s" branch why))))
+                                    (lambda (_) (funcall done t))))))
+
+(defun drgnx-job-snapshot-bundle (folder base branch out done &optional unsandboxed start)
+  "Bundle the task's commits, START..BRANCH of FOLDER, into OUT/task.bundle, inside the sandbox: FOLDER read-only and
+only OUT writable (`drgnx-job-snapshot-step-spec'), or plainly when UNSANDBOXED.  START is the task's start, the
+commit the hub recorded (`drgnx-job-snapshot-make''s :start); without it, the folder's BASE, which the agent can move.
+BASE (the job's branch) also names the store whose objects a shared clone borrows.  OUT is a directory the hub made
+where no agent writes.  An earlier OUT/task.bundle is removed first.  Asynchronous: DONE gets (:bundle FILE),
+\(:empty) when BRANCH has no commits over START, or (:error MSG).  The bundle is the agent's data: hand it to
+`drgnx-job-snapshot-fetch', which checks it."
+  (let* ((out (directory-file-name (file-truename out)))
+         (file (expand-file-name "task.bundle" out))
+         (fail (lambda (why) (funcall done (list :error (format "the bundle of %s: %s" branch why))))))
+    (cond ((not (drgnx-job-snapshot--names-ok done (list base branch))))
+          ((and start (not (drgnx-job-snapshot--commit-p start)))
+           (drgnx-job-snapshot--later done (list :error (format "not a commit: %S" start))))
+          ((not (file-directory-p out)) (drgnx-job-snapshot--later done (list :error (format "%s is not a directory" out))))
+          ((condition-case e
+               (progn (when (file-attributes file) (delete-file file)) nil) ; a link is removed, never followed
+             (error (drgnx-job-snapshot--later done (list :error (format "the bundle of %s: %s" branch (error-message-string e)))))))
+          (t
+           (drgnx-job-snapshot--step
+            folder (list :out out :read (drgnx-job-snapshot--step-read folder base))
+            (list "bundle" "create" "-q" (concat (drgnx-job-snapshot--out-path out unsandboxed) "/task.bundle")
+                  (format "%s..refs/heads/%s" (or start (concat "refs/heads/" base)) branch))
+            unsandboxed
+            (lambda (r)
+              (cond ((eql 0 (car r)) (funcall done (list :bundle file)))
+                    ((and (integerp (car r)) (string-match-p "Refusing to create empty bundle" (cdr r)))
+                     (funcall done '(:empty)))
+                    (t (funcall (drgnx-job-snapshot--step-then fail #'ignore) r)))))))))
+
+(defconst drgnx-job-snapshot--fetch-overrides
+  '("-c" "transfer.fsckObjects=true" "-c" "fetch.fsckObjects=true")
+  "fsck every object a bundle brings: `fetch.fsckObjects' too, as the user's own may turn it off and it wins.")
+
+(defun drgnx-job-snapshot-fetch (repo bundle branch base done)
+  "Fetch BUNDLE (a task's `drgnx-job-snapshot-bundle') into REPO, the trusted repository, as refs/heads/BRANCH.  It
+runs outside the sandbox, in REPO only; the bundle is data.  BASE is what the branch must descend from: the task's
+start, the commit the hub recorded (`drgnx-job-snapshot-make''s :start), or a branch of REPO (its tip now, which
+moves as other tasks merge).  Refused, with why:
+- BUNDLE a link, not a regular file, or larger than `drgnx-job-snapshot-bundle-max';
+- a bundle whose heads (`bundle list-heads') are anything but refs/heads/BRANCH;
+- a bundle `bundle verify' rejects (its prerequisites not in REPO);
+- an object `fsckObjects' rejects;
+- a commit that does not descend from BASE.
+The objects are fetched first, without a ref; refs/heads/BRANCH is written only once all passed, and only if it is
+still what it was (`update-ref' with its old value).  Asynchronous: DONE gets (:fetched COMMIT) or (:error MSG)."
+  (let* ((repo (directory-file-name (file-truename repo)))
+         (bundle (expand-file-name bundle))
+         (attrs (file-attributes bundle))
+         (ref (concat "refs/heads/" branch))
+         (fail (lambda (why) (drgnx-job-snapshot--later done (list :error (format "the bundle of %s is refused: %s" branch why)))))
+         ;; git ARGS in REPO; THEN gets STDOUT on exit 0 (else FAIL), or RAW the whole (EXIT STDOUT . STDERR)
+         (git (lambda (args then &optional raw)
+                (condition-case e
+                    (drgnx-job-snapshot--run repo (drgnx-job-snapshot--git args) nil
+                                             (if raw
+                                                 (lambda (r) (condition-case e (funcall then r) (error (funcall fail (error-message-string e)))))
+                                               (drgnx-job-snapshot--then fail then)))
+                  (error (funcall fail (error-message-string e)))))))
+    (cond ((not (drgnx-job-snapshot--names-ok done (list branch))))
+          ((not (or (drgnx-job-snapshot--commit-p base) (drgnx-job-snapshot--names-ok done (list base)))))
+          ((not (and attrs (eq (aref (file-attribute-modes attrs) 0) ?-)))
+           (funcall fail (format "%s is not there, or a link or not a regular file" bundle)))
+          ((> (file-attribute-size attrs) drgnx-job-snapshot-bundle-max)
+           (funcall fail (format "it is larger than drgnx-job-snapshot-bundle-max: %d bytes" (file-attribute-size attrs))))
+          (t
+           (let (hex old heads verify old-ref fetch descends)
+             ;; each step names the next; a failing step ends in FAIL
+             (setq heads (lambda (text)
+                           (let ((lines (split-string text "\n" t "[ \t\r]+")))
+                             (if (not (and (= (length lines) 1)
+                                           (string-match "\\`\\([0-9a-f]\\{40\\}\\|[0-9a-f]\\{64\\}\\) \\(.+\\)\\'" (car lines))
+                                           (equal (match-string 2 (car lines)) ref)))
+                                 (funcall fail (format "its heads are more than %s, or another: %s" ref (string-join lines ", ")))
+                               (setq hex (match-string 1 (car lines)))
+                               (funcall git (list "bundle" "verify" "-q" bundle) verify))))
+                   verify (lambda (_) (funcall git (list "rev-parse" "--verify" "-q" ref) old-ref t))
+                   ;; exit 1: no such branch yet; anything else is a failure, never "none"
+                   old-ref (lambda (r)
+                             (pcase (car r)
+                               (0 (setq old (string-trim (cadr r)))
+                                  (unless (drgnx-job-snapshot--commit-p old) (error "%s is not a commit: %S" ref old)))
+                               (1 (setq old ""))
+                               (_ (error "%s cannot be read: %s" ref (cddr r))))
+                             ;; the objects alone: no ref is written yet
+                             (funcall git (append drgnx-job-snapshot--fetch-overrides
+                                                  (list "fetch" "-q" "--no-tags" "--no-write-fetch-head" "--no-recurse-submodules"
+                                                        "--no-auto-gc" bundle ref))
+                                      fetch))
+                   fetch (lambda (_) (funcall git (list "merge-base" "--is-ancestor" (drgnx-job-snapshot--rev base) hex) descends t))
+                   descends (lambda (r)
+                              (pcase (car r)
+                                (0 (funcall git (list "update-ref" ref hex old) (lambda (_) (funcall done (list :fetched hex)))))
+                                (1 (funcall fail (format "%s does not descend from %s" branch base)))
+                                (_ (funcall fail (format "cannot tell whether %s descends from %s: %s" branch base (cddr r)))))))
+             (funcall git (list "bundle" "list-heads" bundle) heads))))))
+
+(defun drgnx-job-snapshot-review-folder (repo branch folder done &optional unsandboxed job)
+  "Give the reviewer's FOLDER a fresh snapshot of BRANCH, after its bundle was fetched into REPO: a store of BRANCH
+made from REPO (`drgnx-job-snapshot-make': `<BRANCH>.base.git'), a copy of it, and BRANCH checked out inside the
+sandbox (plainly when UNSANDBOXED).  It holds only what passed through the bundle — none of the implementer's config
+or hooks.  JOB as for `drgnx-job-snapshot-make'.  DONE gets the result of `drgnx-job-snapshot-make' or (:error MSG)."
+  (drgnx-job-snapshot-make
+   repo folder branch
+   (lambda (made)
+     (if (eq (car-safe made) :error)
+         (funcall done made)
+       (drgnx-job-snapshot-checkout folder branch branch (lambda (r) (funcall done (if (eq r t) made r))) unsandboxed)))
+   job))
+
+(defun drgnx-job-snapshot-refresh-base (repo folder base done &optional unsandboxed)
+  "For a merge-conflict retry: bring REPO's BASE into task folder FOLDER's repository.  The hub bundles BASE from
+REPO (trusted) into a directory of its own under `.claude/worktrees/', and a step inside the sandbox fetches it
+into FOLDER (`drgnx-job-snapshot-step-spec', FOLDER writable, the bundle read-only), or plainly when UNSANDBOXED.
+The directory is removed after.  Asynchronous: DONE gets (:refreshed COMMIT), COMMIT the BASE brought (read from
+the hub's own bundle): the task's new start, for its later bundles and fetches; or (:error MSG)."
+  (when (drgnx-job-snapshot--names-ok done (list base))
+    (condition-case e
+        (let* ((repo (directory-file-name (file-truename repo)))
+               (parent (expand-file-name ".claude/worktrees/" repo))
+               (dir (progn (make-directory parent t) (make-temp-file (expand-file-name ".drgnx-base-" parent) t)))
+               (file (expand-file-name "base.bundle" dir))
+               (ref (concat "refs/heads/" base))
+               (finish (lambda (result) (drgnx-job-snapshot--rm dir nil (lambda () (funcall done result)))))
+               (fail (lambda (why) (funcall finish (list :error (format "the refresh of %s: %s" base why))))))
+          (drgnx-job-snapshot--run
+           repo (drgnx-job-snapshot--git (list "bundle" "create" "-q" file ref)) nil
+           (drgnx-job-snapshot--then
+            fail
+            (lambda (_)
+              (drgnx-job-snapshot--run
+               repo (drgnx-job-snapshot--git (list "bundle" "list-heads" file)) nil
+               (drgnx-job-snapshot--then
+                fail
+                (lambda (heads)
+                  (let ((hex (car (split-string heads " "))))
+                    (unless (drgnx-job-snapshot--commit-p hex) (error "no commit in the base's bundle: %S" heads))
+                    (drgnx-job-snapshot--step
+                     folder (list :writable t :read (cons dir (drgnx-job-snapshot--step-read folder base)))
+                     (list "fetch" "-q" "--no-tags" "--no-write-fetch-head" file (format "+%s:%s" ref ref)) unsandboxed
+                     (drgnx-job-snapshot--step-then fail (lambda (_) (funcall finish (list :refreshed hex)))))))))))))
+      (error (drgnx-job-snapshot--later done (list :error (error-message-string e)))))))
 
 ;;;; Bounded: what a snapshot takes, and its removal
 
