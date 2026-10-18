@@ -166,6 +166,85 @@ list element); `(drgnx-schema-uses-form-p SCHEMA FORM)` says whether a form occu
 this file and derives its JSON Schema output from the same schema data; it does not define another. `number`, `map`,
 `natnum` and `any` are here for it.
 
+## Config files: drgnx-config (`drgnx-config.el`)
+
+Every config file drgnx keeps has one definition, and is read, applied and written through this layer. It requires
+only `cl-lib`, `subr-x`, `drgnx-paths`, `drgnx-file` and `drgnx-schema`, so the `emacs --batch -Q` hub loads it.
+
+**Define.** `(drgnx-config-define NAME &key file dir shape version schema default reload last-good max-bytes migrate
+header doc)` returns NAME:
+- `:dir` is `config` (`drgnx-user-dir`, the default), `state` (`drgnx-state-dir`) or `project` (`ROOT/.drgnx/`:
+  untrusted, read-only, no last good copy, 64 KiB).
+- `:shape` is `plist` (the default) or `alist`, and the `:schema`'s head must be the same. The schema is validated
+  when the file is defined (`drgnx-schema-validate`).
+- `:version` is the format this drgnx writes (1). `:reload` is `mtime` (the default: a get costs one stat, and a
+  changed file is applied at once) or `start` (read at the first get, then only on `drgnx-config-reread`). Use
+  `start` only where applying a change mid-session is unsafe.
+- `:last-good` (t) applies the last good copy on a mistake. `:max-bytes` (1 MiB) caps reads and writes.
+- `:migrate` is `((FROM . FN)…)`; `:header` is the comment a new file starts with (default
+  `;; drgnx: FILE (docs/reference/config.md)`); `:doc` is one line for the reference.
+- Defined in a module's setup, it is undone at teardown: the previous definition comes back, or NAME is undefined,
+  unless NAME was defined again since. Core files define theirs at load. `(drgnx-config-undefine NAME)` takes one
+  out. `drgnx-config--defs` is in the teardown census.
+
+**Get.** `(drgnx-config-get NAME &optional KEY ROOT)` gives the applied value, or KEY's value in it. A KEY the file
+does not have (not `plist-member`, not `assoc`) gives the default's. The value is shared: do not change it. A file
+is applied when it is `ok`, `newer` or `migrated`; an absent file applies `:default`. `(drgnx-config-read NAME
+&optional ROOT)` reads fresh and applies nothing: `(:status :data :problem :version :unknown-keys :file :stamp)`.
+`(drgnx-config-file NAME &optional ROOT)` is the path. When a re-read (or our write) changes the applied value,
+`drgnx-config-changed-functions` runs with NAME (no prompts, each function guarded). Code that draws from a value
+caches it and listens there instead of getting it per redisplay.
+
+**The fallback.** A file with a mistake is never applied, in whole or in part. Its last good copy is, when
+`:last-good` is t and the copy still reads well; else the default. Last good copies are kept per machine in
+`<state>/config-good/NAME.eld`, written when a good read has a new stamp and its text differs. A mistake is one
+problem: `(drgnx-config-problem NAME &optional ROOT)` gives `(:name :file :text :line :column)`,
+`(drgnx-config-problems)` every current one (from what was applied, no I/O). Each mistake is said once: one
+`*Messages*` line ("drgnx: FILE: TEXT (line L) — using its last good copy", or "the defaults") until design 5's
+`drgnx-notify` exists, then a `fail` condition of the `config` source.
+
+**Versions.** A plist file's `:version` is its format; a missing one means 1, and an alist file is always 1. The
+rule for authors: **add a key, never change one.** Unknown keys are kept, so a new key needs no new format. Bump
+the version only for a change of shape or meaning, and add a `:migrate` step from the old one.
+- An older file is migrated in memory and applied (`migrated`). Only a user's write, or Migrate Config File…, writes
+  it back: the old file is backed up first (`NAME.bak-…`), and the new one gets this format's `:version`. Nothing
+  automatic writes a version change, so a machine that only starts never migrates a shared folder.
+- A newer file is applied when it fits our schema (`newer`), and is read-only here. One that does not fit is a
+  mistake.
+- A plist file whose first element is not a keyword is format 0: only a definition with a `(0 . FN)` step reads it.
+
+**Writers.** `(drgnx-config-set NAME KEY VALUE &optional ROOT)`, `(drgnx-config-unset NAME KEY)` and
+`(drgnx-config-update NAME FN &key root (timeout 1.0))` return the new applied value. Each is a
+`drgnx-file-update`: the lock, a fresh read, FN on the data (migrated when the file is older; nil when it is absent,
+not the default), the write.
+- They refuse a file with a mistake and a newer one with `drgnx-config-refused` (a `user-error`, and a `file-error` so its text prints without quotes; a handler for
+  `file-error` catches it too), and leave it as it
+  was: "FILE has a mistake at line L: TEXT — fix it (Preferences: Open Config File…) or reset it; it was not
+  changed", or "FILE was written by a newer drgnx (format V; this one writes W): update drgnx here; …". A project
+  file is read-only (an `error`).
+- FN's result must fit the schema, else an `error`: it is the caller's bug. A result `equal` to the data writes
+  nothing.
+- **The surgical render.** Only the top-level plist keys or alist entries (keyed by their `car`) that changed are
+  touched in the text. A changed one has its value (or entry) replaced, printed with `prin1`, or `pp` indented to
+  its column when it is wider than 70 columns. A removed one goes with its blanks up to the next item (the last one
+  takes the blanks before it). A new one goes after the item before it in the new data, past that item's own
+  comment, else first. Comments, layout and unknown keys stay byte for byte; **comments inside a replaced value are
+  lost.** Items keep their places: a result that moves items the file has is an `error`, never a rewrite of the
+  whole file. An absent file gets the header and the data pretty-printed, `:version` first for a plist. The write's
+  read-back (`drgnx-file-write`'s `:text` check) refuses a text that does not read back as the new data.
+- From timers, filters and sentinels, pass `:timeout 0` and catch `drgnx-file-busy` (the next run writes).
+
+**Commands** (Preferences, in the palette): Open Config File… (`drgnx-config-open`, at the mistake's line and column),
+Reset Config File… (`drgnx-config-reset`: asks, keeps a backup, writes the header and the default; refused in batch;
+`drgnx-config--reset` does it without asking) and Migrate Config File… (`drgnx-config-migrate`, for a `migrated`
+file). The name is completed over the defined files, those with a mistake first.
+
+**Tests** load `test/fixtures/config-fixture.el`. `(drgnx-test-with-config BODY…)` points the config and state
+folders at a fresh temp root (`drgnx-test-config-root`), and sets the definitions, the applied state, the problems
+said and `drgnx-config-changed-functions` back afterwards. `(drgnx-test-config-put NAME TEXT &optional ROOT)`
+replaces a file as an editor would (a new inode, so its stamp changes), and `(drgnx-test-config-text NAME &optional
+ROOT)` reads it.
+
 ## Staged hooks (`drgnx-hooks.el`)
 
 Work that need not happen at startup hangs on a stage and runs once, when the stage is first reached:

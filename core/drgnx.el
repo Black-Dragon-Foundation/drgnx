@@ -23,6 +23,7 @@
 (autoload 'drgnx-ai--on-first-window "drgnx-ai-probe")
 (require 'drgnx-gc)
 (require 'drgnx-session)
+(require 'drgnx-config)
 
 (defgroup drgnx nil "drgnx, a workbench-first Emacs framework." :group 'convenience)
 
@@ -56,6 +57,7 @@ the start."
   (drgnx-onboard-register-commands)
   (drgnx-session-register-commands)
   (drgnx-modal-register-commands)
+  (drgnx-config-register-commands)
   (drgnx-command-define 'palette :category "View" :title "Command Palette"
                         :command #'drgnx-palette :menu '("View") :doc "Every command by name, with its key")
   (drgnx-command-define 'keys-sheet :category "Help" :title "Keyboard Shortcuts"
