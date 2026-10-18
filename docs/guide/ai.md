@@ -234,7 +234,8 @@ environment variable.
 Agent profiles can take their provider from the registry; the key is resolved when the agent starts:
 
 - **claude** — Claude Code through `claude-agent-acp` with its own login (a subscription, kept in Claude Code's own
-  files). drgnx only launches it; it never reads its login. Keys in Emacs's environment are not passed on (below).
+  files, or the Anthropic key or Bedrock/Vertex switches in your environment). drgnx only launches it; it never reads
+  its login. Other vendors' keys in Emacs's environment are not passed on (below).
 - **claude (OpenRouter)** — Claude Code on OpenRouter: `ANTHROPIC_BASE_URL=https://openrouter.ai/api`,
   `ANTHROPIC_AUTH_TOKEN` = your OpenRouter key, `ANTHROPIC_API_KEY` empty.
 - **claude (Ollama)** — Claude Code on a local Ollama model.
@@ -257,11 +258,15 @@ these variables, so a model in that file's `env` would override them (the Claude
 Moonshot and DeepSeek carry no `:price`, so the gateway cannot price their answers and counts their spend as zero (a
 job's budget does not stop them). Give the provider a `:price (IN . OUT)` in your `ai.eld` to count it.
 
-**Agents do not inherit your keys.** Whatever Emacs's environment holds, an agent gets only the variables of its own
-route (its provider key or the gateway's token, the model names). The others -- every vendor key and route variable,
-`drgnx-agents-scrubbed-env` -- are unset for it, so a Kimi agent never sees your DeepSeek or OpenRouter key. A login
-lives in the agent's own files, so the plain `claude` profile keeps working. If you relied on one of these variables
-for it (an `ANTHROPIC_API_KEY`, a `CLAUDE_CODE_OAUTH_TOKEN`, the Bedrock or Vertex switches), remove it from
+**Agents do not inherit other vendors' keys.** Whatever Emacs's environment holds, an agent gets only the variables
+of its own route (its provider key or the gateway's token, the model names). The others -- every vendor key and route
+variable, `drgnx-agents-scrubbed-env` -- are unset for it, so a Kimi agent never sees your DeepSeek or OpenRouter key,
+and a Claude agent never sees `OPENAI_API_KEY`. A profile with no `:ai` route is your own login, and keeps its own
+agent's names from the environment (`drgnx-agents-own-env`, found from the profile's command): Claude Code
+`ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL`, the model names, `CLAUDE_CODE_OAUTH_TOKEN` and the
+Bedrock and Vertex switches (the `AWS_*` and `GOOGLE_APPLICATION_CREDENTIALS` they need are never scrubbed); Codex
+`OPENAI_API_KEY` and `OPENAI_BASE_URL`; Gemini `GEMINI_API_KEY` and `GOOGLE_API_KEY`. A profile with a route (Kimi,
+DeepSeek, OpenRouter, Ollama) gets none of these, only its route's. To pass any other variable on, remove it from
 `drgnx-agents-scrubbed-env` (Customize), or set it in the profile's `:env`.
 
 In `agents.eld`, `:ai claude-openrouter`, `claude-ollama`, `claude-moonshot` or `claude-deepseek` gives any profile

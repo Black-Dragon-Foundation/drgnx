@@ -354,16 +354,39 @@ returned that is not a string.")
     "DEEPSEEK_API_KEY" "GEMINI_API_KEY" "GOOGLE_API_KEY")
   "Keys never inherited by agents: variables of Emacs's environment that an agent does not get.
 An agent gets the variables of its own route (the provider key or the gateway token, the model names) and
-nothing else from this list, so a Kimi agent never sees your DeepSeek or OpenRouter key.  An agent's login (a
-subscription, say) lives in its own files, not in these variables.  To pass one on, remove it from this list (or set
-it in the profile's `:env')."
+nothing else from this list, so a Kimi agent never sees your DeepSeek or OpenRouter key.  A profile without a
+route (`:ai') is the user's own login and also keeps its own vendor's names (`drgnx-agents-own-env').  To pass
+another one on, remove it from this list (or set it in the profile's `:env')."
   :type '(repeat string) :group 'drgnx)
 
-(defun drgnx-agents--scrub (env)
+(defcustom drgnx-agents-own-env
+  '((claude "ANTHROPIC_API_KEY" "ANTHROPIC_AUTH_TOKEN" "ANTHROPIC_BASE_URL" "ANTHROPIC_MODEL"
+            "ANTHROPIC_SMALL_FAST_MODEL" "ANTHROPIC_DEFAULT_HAIKU_MODEL" "ANTHROPIC_DEFAULT_SONNET_MODEL"
+            "ANTHROPIC_DEFAULT_OPUS_MODEL" "ANTHROPIC_DEFAULT_FABLE_MODEL" "CLAUDE_CODE_SUBAGENT_MODEL"
+            "CLAUDE_CODE_OAUTH_TOKEN" "CLAUDE_CODE_USE_BEDROCK" "CLAUDE_CODE_USE_VERTEX")
+    (codex "OPENAI_API_KEY" "OPENAI_BASE_URL")
+    (gemini "GEMINI_API_KEY" "GOOGLE_API_KEY"))
+  "Each agent's own credentials and switches: (AGENT NAME…).  A profile without an `:ai' route runs on the user's
+own login, so the names of its agent (by its command: claude, codex, gemini) are exempt from
+`drgnx-agents-scrubbed-env' for it, and only for it.  `AWS_*' and `GOOGLE_APPLICATION_CREDENTIALS' are not scrubbed
+at all."
+  :type '(alist :key-type symbol :value-type (repeat string)) :group 'drgnx)
+
+(defun drgnx-agents--command-agent (command)
+  "Which agent in `drgnx-agents-own-env' the profile COMMAND (a list) starts, or nil: the first of claude, codex
+and gemini that a program or argument's file name contains."
+  (let ((words (mapcar #'file-name-nondirectory (seq-filter #'stringp command))))
+    (seq-find (lambda (agent) (seq-some (lambda (w) (string-search (symbol-name agent) w)) words))
+              (mapcar #'car drgnx-agents-own-env))))
+
+(defun drgnx-agents--scrub (env &optional profile)
   "ENV (\"NAME=value\"…) followed by a bare-name entry (it unsets the variable) for each of
-`drgnx-agents-scrubbed-env' that ENV does not set itself; ENV's own entries come first and so win."
-  (let ((set (mapcar (lambda (e) (car (split-string e "="))) env)))
-    (append env (seq-remove (lambda (name) (member name set)) drgnx-agents-scrubbed-env))))
+`drgnx-agents-scrubbed-env' that ENV does not set itself; ENV's own entries come first and so win.  PROFILE (a
+profile's options) without an `:ai' route keeps its agent's own names (`drgnx-agents-own-env')."
+  (let* ((set (mapcar (lambda (e) (car (split-string e "="))) env))
+         (own (and profile (not (plist-get profile :ai))
+                   (cdr (assq (drgnx-agents--command-agent (plist-get profile :command)) drgnx-agents-own-env)))))
+    (append env (seq-remove (lambda (name) (or (member name set) (member name own))) drgnx-agents-scrubbed-env))))
 
 (defun drgnx-agents--env (s)
   "The environment S's agent gets: its profile's, its provider's — the gateway's address and a token when the hub
@@ -391,7 +414,8 @@ can carry it, else the provider's (keys resolved now, never kept) — DRGNX_TASK
                                        (if (stringp e) (setq extra (append extra (list e)))
                                          (message "drgnx agents: an environment function returned %S, not a NAME=value string; ignored" e)))))
                                  nil))
-             extra))))
+             extra))
+   (cdr (drgnx-agents-profile (drgnx-agent-session-profile s)))))
 
 (defvar drgnx-agents-coordination t
   "Non-nil: every agent gets drgnx's coordination tools (an MCP server, docs/develop/coordination.md).")

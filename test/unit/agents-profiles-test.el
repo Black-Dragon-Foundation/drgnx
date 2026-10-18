@@ -181,7 +181,11 @@ value (a recognisable prefix; the values themselves are never shown)."
 
 (ert-deftest drgnx-agents-profiles/agents-see-only-their-own-routes-key ()
   (drgnx-agents-profiles-test--with
-    (let ((expected '(("claude") ("claude (Kimi)" "ANTHROPIC_AUTH_TOKEN") ("claude (DeepSeek)" "ANTHROPIC_AUTH_TOKEN")
+    (let ((expected '(("claude" "ANTHROPIC_AUTH_TOKEN" "ANTHROPIC_BASE_URL" "ANTHROPIC_DEFAULT_FABLE_MODEL"
+                       "ANTHROPIC_DEFAULT_HAIKU_MODEL" "ANTHROPIC_DEFAULT_OPUS_MODEL" "ANTHROPIC_DEFAULT_SONNET_MODEL"
+                       "ANTHROPIC_MODEL" "ANTHROPIC_SMALL_FAST_MODEL" "CLAUDE_CODE_OAUTH_TOKEN"
+                       "CLAUDE_CODE_SUBAGENT_MODEL" "CLAUDE_CODE_USE_BEDROCK" "CLAUDE_CODE_USE_VERTEX")
+                      ("claude (Kimi)" "ANTHROPIC_AUTH_TOKEN") ("claude (DeepSeek)" "ANTHROPIC_AUTH_TOKEN")
                       ("claude (Kimi via OpenRouter)" "ANTHROPIC_AUTH_TOKEN")
                       ("claude (DeepSeek via OpenRouter)" "ANTHROPIC_AUTH_TOKEN")
                       ("claude (OpenRouter)" "ANTHROPIC_AUTH_TOKEN") ("claude (Ollama)"))))
@@ -195,11 +199,42 @@ value (a recognisable prefix; the values themselves are never shown)."
              (own (equal (drgnx-agents-profiles-test--var env "ANTHROPIC_AUTH_TOKEN") "fake-moon-key")))
         (should own)))))
 
+(ert-deftest drgnx-agents-profiles/a-login-profile-keeps-its-own-vendors-credentials-only ()
+  ;; no `:ai' route: the user's own login, which may come from the environment — but only that vendor's
+  (drgnx-agents-profiles-test--with
+    (let ((process-environment (cons "ANTHROPIC_API_KEY=fake-anthropic-key" process-environment))
+          (drgnx-agents-profiles
+           '(("cx" :command ("/opt/bin/codex-acp")) ("gm" :command ("gemini" "--experimental-acp")))))
+      (let* ((claude (drgnx-agents-profiles-test--inherited (drgnx-agents-profiles-test--env "claude")))
+             (codex (drgnx-agents-profiles-test--inherited (drgnx-agents-profiles-test--env "cx")))
+             (gemini (drgnx-agents-profiles-test--inherited (drgnx-agents-profiles-test--env "gm")))
+             (claude-keeps (and (member "ANTHROPIC_API_KEY" claude) (member "CLAUDE_CODE_USE_BEDROCK" claude)
+                                (member "CLAUDE_CODE_OAUTH_TOKEN" claude) (member "ANTHROPIC_BASE_URL" claude) t))
+             (claude-others (seq-intersection claude '("MOONSHOT_API_KEY" "DEEPSEEK_API_KEY" "OPENROUTER_API_KEY"
+                                                       "OPENAI_API_KEY" "GEMINI_API_KEY" "GOOGLE_API_KEY")))
+             (codex-ok (equal codex '("OPENAI_API_KEY" "OPENAI_BASE_URL")))
+             (gemini-ok (equal gemini '("GEMINI_API_KEY" "GOOGLE_API_KEY"))))
+        (should claude-keeps) (should-not claude-others) (should codex-ok) (should gemini-ok)))
+    ;; …and a profile with a route gets its route's key and none of the exemptions: the Moonshot one sees neither
+    ;; the exported Anthropic key (its token is the Moonshot key) nor the Moonshot key by name
+    (let* ((process-environment (cons "ANTHROPIC_API_KEY=fake-anthropic-key" process-environment))
+           (seen (drgnx-agents-profiles-test--inherited (drgnx-agents-profiles-test--env "claude (Kimi)")))
+           (only-route (equal seen '("ANTHROPIC_AUTH_TOKEN")))
+           (token-moon (equal (drgnx-agents-profiles-test--var (drgnx-agents-profiles-test--env "claude (Kimi)")
+                                                               "ANTHROPIC_AUTH_TOKEN")
+                              "fake-moon-key")))
+      (should only-route) (should token-moon))))
+
 (ert-deftest drgnx-agents-profiles/a-variable-taken-off-the-list-is-passed-on ()
   (drgnx-agents-profiles-test--with
     (let ((drgnx-agents-scrubbed-env (remove "OPENAI_API_KEY" drgnx-agents-scrubbed-env)))
-      (let ((seen (drgnx-agents-profiles-test--inherited (drgnx-agents-profiles-test--env "claude"))))
-        (should (equal seen '("OPENAI_API_KEY")))))))
+      (let* ((seen (drgnx-agents-profiles-test--inherited (drgnx-agents-profiles-test--env "claude")))
+             (passed (and (member "OPENAI_API_KEY" seen) t)))
+        (should passed)))
+    ;; with the list as it is, a Claude agent does not get the OpenAI key
+    (let* ((seen (drgnx-agents-profiles-test--inherited (drgnx-agents-profiles-test--env "claude")))
+           (passed (and (member "OPENAI_API_KEY" seen) t)))
+      (should-not passed))))
 
 (ert-deftest drgnx-agents-profiles/the-hub-registers-the-profiles-provider-and-model ()
   ;; a started agent on a Kimi profile is registered with the gateway as one provider and the profile's model

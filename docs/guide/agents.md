@@ -123,7 +123,8 @@ Like the other provider profiles they go through the gateway when a hub is avail
 the key. Without a key the session does not start and the message names the variable and the keyring host to put it
 under. Each session gets its route in its own environment (`ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, the model
 names); drgnx writes nothing to `~/.claude/settings.json`, so the plain `claude` profile keeps using your login. No
-agent inherits the other vendors' keys from Emacs's environment (`drgnx-agents-scrubbed-env`). The API keys are billed
+agent inherits the other vendors' keys from Emacs's environment (`drgnx-agents-scrubbed-env`; the plain `claude`
+profile keeps Claude Code's own variables). The API keys are billed
 per token; Kimi's coding membership is a different endpoint these profiles do not use. Moonshot and DeepSeek have no
 `:price`, so the gateway counts their spend as zero. Details and the model names: [AI](ai.md#agents).
 
