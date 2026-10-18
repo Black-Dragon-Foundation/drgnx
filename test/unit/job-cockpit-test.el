@@ -233,6 +233,52 @@ show (`drgnx-cockpit-edit-source', `drgnx-cockpit-file-diff'), or HASH."
         (should (equal (plist-get (drgnx-coord-card cid) :state) "open"))
         (should-not (equal (drgnx-job-run-test--status id 1) "done"))))))
 
+(ert-deftest drgnx-job-cockpit/gate-needs-the-task-branch ()
+  ;; the gate looks at the worktree, the merge takes the branch job/ID-N: while they differ (an agent committed on the
+  ;; branch, then checked out something else) nothing merges; a look leaves the card's data alone
+  (drgnx-job-run-test--with "# One\n\n### Task 1: first\n"
+    (let* ((id (plist-get (drgnx-job-cockpit-test--call "job/propose" :plan plan :gate "review+accept") :id))
+           (tid (concat id "#1")) (tree nil) (agent nil))
+      (drgnx-job-approve id)
+      (should (drgnx-job-run-test--wait (lambda () (let ((c (drgnx-job-cockpit-test--gate-card id))) (and c (string-search "0 of 1" (plist-get c :title))))) 40))
+      (setq tree (drgnx-job--task-tree id 1) agent (plist-get (drgnx-coord-task tid) :agent))
+      (let ((data (plist-get (drgnx-job-cockpit-test--gate-card id) :data)))
+        (should-not (seq-difference (seq-filter #'keywordp data) '(:gate :agent :message))))
+      (drgnx-job-run-test--git tree "checkout" "-q" "-b" "decoy")
+      (write-region "decoy\n" nil (concat tree "decoy.txt") nil 'silent)
+      (drgnx-job-run-test--git tree "add" "decoy.txt")
+      (drgnx-job-run-test--git tree "commit" "-q" "-m" "decoy")
+      (should (drgnx-job-run-test--wait (lambda () (string-search "not at the tip of its branch" (plist-get (drgnx-job-cockpit-test--gate-card id) :title))) 15))
+      (drgnx-job-cockpit-test--accept agent "task.txt")
+      (drgnx-job-cockpit-test--accept agent "decoy.txt")
+      (drgnx-job-run-test--wait (lambda () nil) 3)
+      (should (string-search "not at the tip of its branch" (plist-get (drgnx-job-cockpit-test--gate-card id) :title)))
+      (should-not (equal (drgnx-job-run-test--status id 1) "done"))
+      ;; back on its branch: what it shows is what merges — task.txt, accepted
+      (drgnx-job-run-test--git tree "checkout" "-q" (format "job/%s-1" id))
+      (should (drgnx-job-run-test--wait (lambda () (equal (drgnx-job-run-test--status id 1) "done")) 20))
+      (should-not (string-search "decoy" (drgnx-job-run-test--git repo "log" "--format=%s" (concat "job/" id)))))))
+
+(ert-deftest drgnx-job-cockpit/a-pass-merges-only-the-task-branch ()
+  ;; with the gate `review' too: a pass for a worktree that is not at its branch's tip is a card, not a merge
+  (drgnx-job-run-test--with "# One\n\n### Task 1: first\n"
+    (let* ((drgnx-job-max-agents 0) (id (drgnx-job-propose plan :gate 'review)) (tid (concat id "#1")) (tree nil))
+      (drgnx-job-approve id)
+      (setq tree (drgnx-job--task-tree id 1))
+      (drgnx-job--git repo "worktree" "add" "-q" "-b" (format "job/%s-1" id) tree (concat "job/" id))
+      (dolist (f '("work" "decoy"))
+        (when (equal f "decoy") (drgnx-job-run-test--git tree "checkout" "-q" "-b" "decoy"))
+        (write-region f nil (concat tree f ".txt") nil 'silent)
+        (drgnx-job-run-test--git tree "add" (concat f ".txt"))
+        (drgnx-job-run-test--git tree "commit" "-q" "-m" f))
+      (drgnx-coord-force-status tid "in-review" nil)
+      (drgnx-job--reviewed id tid 'pass)
+      (should-not (gethash tid drgnx-job--busy))
+      (let ((card (seq-find (lambda (c) (equal (plist-get c :kind) "review")) (drgnx-coord-cards id "open"))))
+        (should card)
+        (should (string-search "not at the tip of its branch" (plist-get card :title))))
+      (should (equal (drgnx-job-run-test--status id 1) "needs-input")))))
+
 (ert-deftest drgnx-job-cockpit/gate-merge-as-it-is-stays-the-user-s ()
   (drgnx-job-run-test--with "# One\n\n### Task 1: first\n"
     (let* ((id (plist-get (drgnx-job-cockpit-test--call "job/propose" :plan plan :gate "review+accept") :id)))

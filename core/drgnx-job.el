@@ -307,27 +307,44 @@ ends it (DONE is not called; TASK is no longer busy).  The process."
   (ignore-errors (with-temp-buffer (insert-file-contents file nil 0 4096)
                                    (string-trim (buffer-substring (point-min) (line-end-position))))))
 
-(defun drgnx-job-git-head (dir)
-  "The commit DIR's git checkout is at (HEAD), read from the repository's files — no git process, so it costs nothing
-on an agent's change — or nil (not a checkout, a remote name, a ref it cannot find).  A linked worktree's `.git' file
-and `commondir', loose refs and `packed-refs' are followed."
+(defun drgnx-job--gitdirs (dir)
+  "(GITDIR . COMMONDIR) of DIR's git checkout, read from its files (a linked worktree's `.git' file and `commondir'
+followed), or nil — also for a remote (TRAMP) name."
   (when-let* (((stringp dir)) ((not (string-match-p "\\`/[^/|:]+[:|]" dir)))   ; never a remote (TRAMP) name
               (top (locate-dominating-file dir ".git"))
               (dotgit (expand-file-name ".git" top))
               (gitdir (if (file-directory-p dotgit) dotgit
                         (let ((line (drgnx-job--first-line dotgit)))
-                          (and line (string-match "\\`gitdir: *\\(.+\\)" line) (expand-file-name (match-string 1 line) top)))))
-              (head (drgnx-job--first-line (expand-file-name "HEAD" gitdir))))
-    (if (not (string-match "\\`ref: *\\(refs/.+\\)" head))
-        (and (string-match-p "\\`[0-9a-f]\\{40,64\\}\\'" head) head)
-      (let* ((ref (match-string 1 head))
-             (common (let ((c (drgnx-job--first-line (expand-file-name "commondir" gitdir)))) (if c (expand-file-name c gitdir) gitdir)))
-             (sha (or (drgnx-job--first-line (expand-file-name ref gitdir)) (drgnx-job--first-line (expand-file-name ref common))
-                      (ignore-errors
-                        (with-temp-buffer
-                          (insert-file-contents (expand-file-name "packed-refs" common))
-                          (and (re-search-forward (concat "^\\([0-9a-f]+\\) " (regexp-quote ref) "$") nil t) (match-string 1)))))))
-        (and sha (string-match-p "\\`[0-9a-f]\\{40,64\\}\\'" sha) sha)))))
+                          (and line (string-match "\\`gitdir: *\\(.+\\)" line) (expand-file-name (match-string 1 line) top))))))
+    (cons gitdir (let ((c (drgnx-job--first-line (expand-file-name "commondir" gitdir)))) (if c (expand-file-name c gitdir) gitdir)))))
+
+(defun drgnx-job--ref-sha (dirs ref)
+  "The commit REF (`refs/…') names in the checkout of DIRS (`drgnx-job--gitdirs'): loose refs, then `packed-refs';
+nil when it cannot be found."
+  (let ((sha (or (drgnx-job--first-line (expand-file-name ref (car dirs))) (drgnx-job--first-line (expand-file-name ref (cdr dirs)))
+                 (ignore-errors
+                   (with-temp-buffer
+                     (insert-file-contents (expand-file-name "packed-refs" (cdr dirs)))
+                     (and (re-search-forward (concat "^\\([0-9a-f]+\\) " (regexp-quote ref) "$") nil t) (match-string 1)))))))
+    (and sha (string-match-p "\\`[0-9a-f]\\{40,64\\}\\'" sha) sha)))
+
+(defun drgnx-job-git-head (dir)
+  "The commit DIR's git checkout is at (HEAD), read from the repository's files — no git process, so it costs nothing
+on an agent's change — or nil (not a checkout, a remote name, a ref it cannot find).  A linked worktree's `.git' file
+and `commondir', loose refs and `packed-refs' are followed."
+  (when-let* ((dirs (drgnx-job--gitdirs dir)) (head (drgnx-job--first-line (expand-file-name "HEAD" (car dirs)))))
+    (if (string-match "\\`ref: *\\(refs/.+\\)" head) (drgnx-job--ref-sha dirs (match-string 1 head))
+      (and (string-match-p "\\`[0-9a-f]\\{40,64\\}\\'" head) head))))
+
+(defun drgnx-job--off-branch (id task)
+  "Why TASK's worktree of job ID is not what a merge of its branch takes — its HEAD is not the tip of `job/ID-N' (an
+agent checked something else out) — as a line for a card, or nil when it is.  Read from the repository's files."
+  (let* ((tree (drgnx-job--task-tree id (plist-get task :n))) (branch (format "job/%s-%d" id (plist-get task :n)))
+         (dirs (drgnx-job--gitdirs tree)) (head (drgnx-job-git-head tree))
+         (tip (and dirs (drgnx-job--ref-sha dirs (concat "refs/heads/" branch)))))
+    (unless (and head (equal head tip))
+      (format "its worktree is not at the tip of its branch %s (HEAD %s, the branch %s): what was looked at is not what would merge"
+              branch (if head (substring head 0 8) "unknown") (if tip (substring tip 0 8) "missing")))))
 
 (defun drgnx-job--repo (job) (plist-get (drgnx-coord-job job) :repo))
 (defun drgnx-job--job-tree (job) (expand-file-name (format ".claude/worktrees/%s/" job) (drgnx-job--repo job)))
@@ -637,7 +654,13 @@ work that is no longer the task's."
    :data (pcase verdict ('pass (list :verdict 'pass)) (`(fail . ,_) (list :verdict 'fail))))
   (let* ((job (drgnx-coord-job id)) (data (plist-get job :data)) (task (drgnx-coord-task task-id)))
     (pcase verdict
-      ('pass (if (eq (plist-get data :gate) 'review+accept) (drgnx-job--accept-gate id task) (drgnx-job--merge id task)))
+      ('pass (cond
+              ;; the reviewer read the worktree; the merge takes the branch: they must be the same commit
+              ((drgnx-job--off-branch id task)
+               (drgnx-job--card id task-id "review" (format "passed review, but %s: Merge as it is merges the branch"
+                                                            (drgnx-job--off-branch id task))))
+              ((eq (plist-get data :gate) 'review+accept) (drgnx-job--accept-gate id task))
+              (t (drgnx-job--merge id task))))
       (`(fail . ,reasons)
        (let ((fails (1+ (alist-get task-id (plist-get data :fails) 0 nil #'equal))))
          (setf (alist-get task-id (plist-get data :fails) nil nil #'equal) fails)
@@ -723,11 +746,17 @@ to an error) no longer counts.")
   (when-let* ((e (gethash cid drgnx-job--gate-checks)))
     (< (- (float-time) (cdr e)) (* 4 drgnx-cockpit-git-timeout))))
 
+(defvar drgnx-job--gate-looked (make-hash-table :test #'equal)
+  "Gate card id → (JOB STATE AT DIRTY): its last look — what it depended on (`drgnx-job--gate-state'), when it began,
+whether the worktree was not clean.  In the hub's memory, not the card's data, so a look that finds nothing new
+writes nothing and sends no event; a hub that restarts looks again.  Forgotten with its card or its job.")
+
 (defun drgnx-job--gate-forget (id)
   "Job ID ended (stopped or done): its looks no longer count."
-  (let ((gone nil))
-    (maphash (lambda (cid e) (when (equal (car e) id) (push cid gone))) drgnx-job--gate-checks)
-    (dolist (cid gone) (remhash cid drgnx-job--gate-checks))))
+  (dolist (table (list drgnx-job--gate-checks drgnx-job--gate-looked))
+    (let ((gone nil))
+      (maphash (lambda (cid e) (when (equal (car e) id) (push cid gone))) table)
+      (dolist (cid gone) (remhash cid table)))))
 
 (defun drgnx-job--accept-gate (id task)
   "TASK of job ID passed review under the gate review+accept: a `review' card says it waits on you (it does until
@@ -747,15 +776,12 @@ whichever agent it is (`drgnx-job--launch-task') — else where it forked from t
 (defun drgnx-job--mtime (file) (file-attribute-modification-time (file-attributes file)))
 
 (defun drgnx-job--gate-state (id task agent)
-  "What the gate's answer for TASK of job ID depends on, as a hash (kept in the card's data): AGENT's review marks,
-the commit the task's worktree is at, and its working tree as far as reading two dates shows it — the index's (a
-revert in the edits rewrites it) and the worktree folder's (a file made or deleted there)."
-  (let* ((tree (drgnx-job--task-tree id (plist-get task :n)))
-         (dotgit (expand-file-name ".git" tree))
-         (gitdir (if (file-directory-p dotgit) dotgit
-                   (let ((line (drgnx-job--first-line dotgit)))
-                     (and line (string-match "\\`gitdir: *\\(.+\\)" line) (expand-file-name (match-string 1 line) tree))))))
+  "What the gate's answer for TASK of job ID depends on, as a hash: AGENT's review marks, the commit the task's
+worktree is at and its branch's tip (`drgnx-job--off-branch'), and its working tree as far as reading two dates shows
+it — the index's (a revert in the edits rewrites it) and the worktree folder's (a file made or deleted there)."
+  (let* ((tree (drgnx-job--task-tree id (plist-get task :n))) (gitdir (car (drgnx-job--gitdirs tree))))
     (secure-hash 'sha1 (prin1-to-string (list (and agent (drgnx-coord-review-marks agent)) (drgnx-job-git-head tree)
+                                              (drgnx-job--off-branch id task)
                                               (and gitdir (drgnx-job--mtime (expand-file-name "index" gitdir)))
                                               (drgnx-job--mtime tree))))))
 
@@ -764,20 +790,24 @@ revert in the edits rewrites it) and the worktree folder's (a file made or delet
 seen by no date `drgnx-job--gate-state' reads.")
 
 (defun drgnx-job--gate-check (id cid &optional again)
-  "Look (git, asynchronously) at whether every file of gate card CID's task is accepted and its worktree clean,
-unless a look runs or — AGAIN, the hub's tick — nothing it depends on changed since the last
-\(`drgnx-job--gate-state'; a worktree that was not clean: every `drgnx-job--gate-dirty-again' s).  Then
+  "Look (git, asynchronously) at whether every file of gate card CID's task is accepted and its worktree clean and at
+its branch's tip, unless a look runs or — AGAIN, the hub's tick — nothing it depends on changed since the last
+\(`drgnx-job--gate-state'; a worktree that was not clean: every `drgnx-job--gate-dirty-again' s).  A worktree that is
+not at its branch's tip (`drgnx-job--off-branch') is not looked at: what it shows is not what would merge.  Then
 `drgnx-job--gate-answer'."
   (when-let* ((card (drgnx-coord-card cid)) ((equal (plist-get card :state) "open")) ((not (drgnx-job--gate-busy-p cid)))
               (task (drgnx-coord-task (plist-get card :task))))
-    (let* ((data (plist-get card :data)) (agent (plist-get data :agent)) (state (drgnx-job--gate-state id task agent)))
-      (when (or (not again) (not (equal state (plist-get data :gate-key)))
-                (and (plist-get data :dirty) (>= (- (float-time) (or (plist-get data :gate-at) 0)) drgnx-job--gate-dirty-again)))
-        (drgnx-coord-card-set cid :data (plist-put (plist-put (copy-sequence data) :gate-key state) :gate-at (float-time)))
+    (let* ((agent (plist-get (plist-get card :data) :agent)) (state (drgnx-job--gate-state id task agent))
+           (last (gethash cid drgnx-job--gate-looked)))
+      (when (or (not again) (not (equal state (nth 1 last)))
+                (and (nth 3 last) (>= (- (float-time) (nth 2 last)) drgnx-job--gate-dirty-again)))
+        (puthash cid (list id state (float-time) (nth 3 last)) drgnx-job--gate-looked)
         (puthash cid (cons id (float-time)) drgnx-job--gate-checks)
         (let ((answer (lambda (r) (remhash cid drgnx-job--gate-checks)
                         (with-demoted-errors "drgnx job: %S" (drgnx-job--gate-answer id cid r state)))))
-          (condition-case err (drgnx-job--accepted (drgnx-job--gate-source id task agent) agent answer)
+          (condition-case err
+              (if-let* ((off (drgnx-job--off-branch id task))) (funcall answer (list :off off))
+                (drgnx-job--accepted (drgnx-job--gate-source id task agent) agent answer))
             (error (funcall answer (list :error (error-message-string err))))))))))
 
 (defun drgnx-job--accepted (source agent done)
@@ -825,8 +855,12 @@ settled meanwhile (Merge as it is, Back to an agent, Drop) or a job no longer ru
   (when-let* ((card (drgnx-coord-card cid)) ((equal (plist-get card :state) "open"))
               ((equal (plist-get (drgnx-coord-job id) :status) "running"))
               (task (drgnx-coord-task (plist-get card :task))))
-    (let* ((data (plist-get card :data)) (err (plist-get r :error)) (n (plist-get r :accepted)) (m (plist-get r :files))
-           (title (cond (err (format "waiting on your review: its files cannot be listed (%s)" err))
+    (let* ((data (plist-get card :data)) (err (or (plist-get r :error) (plist-get r :off)))
+           (n (plist-get r :accepted)) (m (plist-get r :files))
+           (title (cond ((plist-get r :off)
+                         (format "waiting on your review: %s (check out its branch again, or Merge as it is merges the branch)"
+                                 (plist-get r :off)))
+                        (err (format "waiting on your review: its files cannot be listed (%s)" err))
                         ((eql m 0) "waiting on your review: no changed file to accept (Merge as it is, or Back to an agent)")
                         ((plist-get r :dirty)
                          (format "waiting on your review: %d of %d files accepted; its worktree has uncommitted changes (commit or discard them, or Merge as it is)" n m))
@@ -837,11 +871,12 @@ settled meanwhile (Merge as it is, Back to an agent, Drop) or a job no longer ru
         (drgnx-job--gate-check id cid))                       ; changed while it looked: look again, never merge on it
        ((and (not err) (> m 0) (>= n m) (not (plist-get r :dirty)))
         (when (drgnx-coord-card-settle cid "accepted")
+          (remhash cid drgnx-job--gate-looked)
           (when-let* ((msg (plist-get data :message))) (drgnx-coord-mark msg "acted"))
           (drgnx-job--merge id task)))
        (t
-        (unless (eq (and (plist-get r :dirty) t) (plist-get data :dirty))
-          (drgnx-coord-card-set cid :data (plist-put (copy-sequence data) :dirty (and (plist-get r :dirty) t))))
+        (when-let* ((last (gethash cid drgnx-job--gate-looked)))   ; in the hub's memory: the card's data stays as it is
+          (setf (nth 3 last) (and (plist-get r :dirty) t)))
         (unless (equal title (plist-get card :title))
           (drgnx-coord-card-set cid :title title)
           (drgnx-job--broadcast 'card (list :id cid :job id :task (plist-get task :id) :kind "review" :title title)))))

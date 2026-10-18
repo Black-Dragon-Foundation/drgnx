@@ -162,6 +162,10 @@ The details:
 - **A clean worktree.** Only commits are merged, so the task merges only when its worktree has nothing uncommitted
   or untracked (`git status` is empty). A file you reverted in its edits, or a new file nobody committed, makes the
   card say "its worktree has uncommitted changes": commit or discard them, or use **Merge as it is**.
+- **At its branch's tip.** The edits show the task's worktree, and a merge takes its branch `job/ID-N`. While the
+  worktree's HEAD is not that branch's tip (something else was checked out there), the card says so and nothing
+  merges: check its branch out again, or use **Merge as it is**, which merges the branch. A review that passes
+  under either gate is held the same way, as a `review` card, since the reviewer read the worktree.
 - **What counts as accepted.** A file counts only while it is unchanged since you accepted it: the mark's hash must
   be the hash of the file's diff now. A file changed again (a new commit in the task's branch) needs accepting again.
   A renamed file is its old name deleted and its new name added: accept the new name, and a deleted file too.
