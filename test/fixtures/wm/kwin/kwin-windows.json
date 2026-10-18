@@ -1,0 +1,34 @@
+[
+ {
+  "pid": 296,
+  "caption": "drgnx - workbench",
+  "output": "Virtual-0",
+  "fullScreen": false,
+  "normalWindow": true,
+  "resourceClass": "emacs-pgtk",
+  "internalId": "{764ae6db-39c8-4d78-9829-1f70289ad521}",
+  "geometry": {
+   "x": 260,
+   "y": 0,
+   "width": 760,
+   "height": 824
+  },
+  "active": false
+ },
+ {
+  "pid": 877,
+  "caption": "other emacs",
+  "output": "Virtual-0",
+  "fullScreen": false,
+  "normalWindow": true,
+  "resourceClass": "emacs-pgtk",
+  "internalId": "{ef6315b6-0d8d-4c12-9c7d-c62803361a07}",
+  "geometry": {
+   "x": 260,
+   "y": 8,
+   "width": 760,
+   "height": 824
+  },
+  "active": true
+ }
+]

@@ -1,0 +1,118 @@
+[
+  {
+    "id": 0,
+    "name": "DP-1",
+    "description": "Dell Inc. DELL U2720Q ABC1234",
+    "make": "Dell Inc.",
+    "model": "DELL U2720Q",
+    "serial": "ABC1234",
+    "width": 2560,
+    "height": 1440,
+    "physicalWidth": 600,
+    "physicalHeight": 340,
+    "refreshRate": 59.998,
+    "x": 0,
+    "y": 0,
+    "activeWorkspace": {
+      "id": 1,
+      "name": "1"
+    },
+    "specialWorkspace": {
+      "id": 0,
+      "name": ""
+    },
+    "reserved": [
+      0,
+      0,
+      0,
+      0
+    ],
+    "scale": 1.0,
+    "transform": 0,
+    "focused": true,
+    "dpmsStatus": true,
+    "vrr": false,
+    "solitary": "0",
+    "solitaryBlockedBy": [
+      "notOpaque"
+    ],
+    "activelyTearing": false,
+    "tearingBlockedBy": [
+      "notTearing"
+    ],
+    "directScanoutTo": "0",
+    "directScanoutBlockedBy": [
+      "user"
+    ],
+    "disabled": false,
+    "currentFormat": "XRGB8888",
+    "mirrorOf": "none",
+    "availableModes": [
+      "2560x1440@59.99800Hz"
+    ],
+    "colorManagementPreset": "srgb",
+    "sdrBrightness": 1.0,
+    "sdrSaturation": 1.0,
+    "sdrMinLuminance": 0.2,
+    "sdrMaxLuminance": 80,
+    "hardwareCursorsInUse": true
+  },
+  {
+    "id": 1,
+    "name": "HDMI-A-1",
+    "description": "LG Electronics LG ULTRAFINE 0x0001A2B3",
+    "make": "LG Electronics",
+    "model": "LG ULTRAFINE",
+    "serial": "0x0001A2B3",
+    "width": 1920,
+    "height": 1080,
+    "physicalWidth": 600,
+    "physicalHeight": 340,
+    "refreshRate": 59.998,
+    "x": 2560,
+    "y": 0,
+    "activeWorkspace": {
+      "id": 2,
+      "name": "2"
+    },
+    "specialWorkspace": {
+      "id": 0,
+      "name": ""
+    },
+    "reserved": [
+      0,
+      0,
+      0,
+      0
+    ],
+    "scale": 1.0,
+    "transform": 0,
+    "focused": false,
+    "dpmsStatus": true,
+    "vrr": false,
+    "solitary": "0",
+    "solitaryBlockedBy": [
+      "notOpaque"
+    ],
+    "activelyTearing": false,
+    "tearingBlockedBy": [
+      "notTearing"
+    ],
+    "directScanoutTo": "0",
+    "directScanoutBlockedBy": [
+      "user"
+    ],
+    "disabled": false,
+    "currentFormat": "XRGB8888",
+    "mirrorOf": "none",
+    "availableModes": [
+      "1920x1080@59.99800Hz"
+    ],
+    "colorManagementPreset": "srgb",
+    "sdrBrightness": 1.0,
+    "sdrSaturation": 1.0,
+    "sdrMinLuminance": 0.2,
+    "sdrMaxLuminance": 80,
+    "hardwareCursorsInUse": true
+  }
+]
