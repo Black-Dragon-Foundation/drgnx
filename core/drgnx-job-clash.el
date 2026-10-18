@@ -273,7 +273,13 @@ of the job hears; its reviewer ends."
     (pcase (plist-get d :rule)
       ("contradiction"
        (funcall decide :kind "replaces" :subject (plist-get d :subject) :replaces (plist-get other :decision)
-                :reason (format "the user chose %s" side)))
+                :reason (format "the user chose %s" side))
+       ;; the side chosen, if it is only proposed, is recorded: no `proposed' card for it after this one
+       (when-let* ((chosen (seq-find (lambda (x) (equal (plist-get x :label) side)) sides))
+                   (p (seq-find (lambda (x) (and (eql (plist-get x :n) (plist-get chosen :decision)) (equal (plist-get x :status) "proposed")))
+                                (drgnx-coord-decisions-since 0 job))))
+         (funcall decide :kind (plist-get p :kind) :subject (plist-get p :subject) :task (plist-get p :task) :paths (plist-get p :paths)
+                  :replaces (plist-get p :n) :reason "the user recorded it")))
       ("proposed"
        (let ((p (seq-find (lambda (x) (eql (plist-get x :n) (plist-get first :decision))) (drgnx-coord-decisions-since 0 job))))
          (if (equal side "A")

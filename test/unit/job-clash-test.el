@@ -74,6 +74,17 @@
     (should (equal (mapcar (lambda (c) (plist-get (plist-get c :data) :rule)) (drgnx-job-clash-test--cards id "clash"))
                    '("contradiction")))))
 
+(ert-deftest drgnx-job-clash/picking-the-proposed-side-leaves-no-second-card ()
+  (drgnx-job-clash-test--running drgnx-job-clash-test--two
+    (drgnx-job-clash-test--decide id "wont-build" "the importer" "s-b" :task (concat id "#2"))
+    (drgnx-job-clash-test--decide id "build" "the importer" "s-a" :task (concat id "#2"))     ; proposed
+    (drgnx-job-clash-scan id)
+    (let ((card (car (drgnx-job-clash-test--cards id "clash"))))
+      (should (equal (plist-get (plist-get card :data) :rule) "contradiction"))
+      (drgnx-job-card-act (plist-get card :id) "pick-a"))                          ; A: the build
+    (drgnx-job-clash-scan id)
+    (should-not (drgnx-job-clash-test--cards id "clash"))))
+
 (ert-deftest drgnx-job-clash/a-task-that-touches-what-will-not-be-built-waits ()
   (drgnx-job-run-test--with "# One\n\n### Task 1: one\n\nTouch the legacy code.\n"
     (let* ((id (drgnx-job-propose plan)))
