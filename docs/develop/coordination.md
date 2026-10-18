@@ -130,6 +130,11 @@ reports what it does with four more tools. Their events feed the Work cockpit:
 **Identity.**
 - **drgnx's own agents:** `DRGNX_AGENT`, trusted as before. drgnx sets it in the environment of the server it gives
   each session, and nothing checks it. Binding it to a token, as the gateway binds an agent's key, is deferred.
+- **Sandboxed job agents:** their identity comes from their socket. The agent's `drgnx` entry is a bridge to its
+  session's own `mcp.sock`, with no environment. The hub starts the server outside the sandbox, sets `DRGNX_AGENT`,
+  `DRGNX_JOB` and `DRGNX_TASK` from the session, and splices it to the connection ([hub.md](hub.md#per-session-sockets)).
+  Nothing inside the sandbox names the agent, and a `DRGNX_AGENT` set there reaches no server, so no agent can claim
+  to be another. Agents outside the sandbox keep the path above.
 - **Agents outside drgnx:** when `DRGNX_AGENT` is empty and `DRGNX_AGENT_KIND` is set (a short lower-case name:
   `claude`, `codex`, `zed`…), the server speaks for an agent outside drgnx, as `ext:KIND:PID-HASH`. PID is the
   agent's process: the server's parent (`(alist-get 'ppid (process-attributes (emacs-pid)))`). HASH is 6 hex digits

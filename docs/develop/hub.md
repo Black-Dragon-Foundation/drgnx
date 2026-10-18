@@ -159,6 +159,41 @@ history into the transcript and the session is idle; an editor that reconnects f
 session whose agent cannot load sessions (no `loadSession`, or an error) ends and says why, and so leaves the file.
 What was in flight is gone: a turn that was running, the queue, a pending permission or edit.
 
+## Per-session sockets
+
+A sandboxed session's agent reaches drgnx's MCP servers through a dir of its own, served by the hub
+(`core/drgnx-sandbox-mcp.el`). The agent's side, the bridge, is in [sandbox.md](sandbox.md#mcp-through-a-socket).
+
+- **Where.** `(drgnx-sandbox-mcp-dir SID)` is `s/SID` beside the hub's socket: `$XDG_RUNTIME_DIR/drgnx/s/SID`, or
+  `s/SID` beside the hub socket's fallback place. These are the dirs of `drgnx-sandbox-sessions-dirs`, so the sandbox
+  may bind it as its `:run` (`/run/drgnx` inside on Linux, its own path on macOS). Each level is made by
+  `drgnx-hub--private-dir`: mode 0700, this user's, never a link. SID is a name (letters, digits, `-`, `_`), never a
+  path. A socket's path there must fit 103 bytes, or there is no dir.
+- **Sockets.** `(drgnx-sandbox-mcp-open S &optional SEARCH)` listens on `mcp.sock` (coordination) and, when SEARCH
+  is given, on `search.sock`. SEARCH is the project's root; for a snapshot job pass the repository, never the task
+  folder, because the search server runs git in its root. It sets S's `mcp-dir` and returns the dir. `hub.sock` is
+  kept in the same dir for the hub protocol's agent class, which is not served yet.
+- **One server per connection, outside the sandbox.** The hub starts the server of `drgnx-coord-mcp-server-spec`
+  (or `drgnx-search-mcp-server-spec`) as a child of its own. Its environment is the hub's, with `DRGNX_AGENT` = S's
+  id, `DRGNX_JOB` and `DRGNX_TASK` = S's, and the data-dir variables set from the spec. The hub's own
+  `DRGNX_AGENT`, `DRGNX_AGENT_KIND`, `DRGNX_JOB` and `DRGNX_TASK` are unset. The server works in the session's dir,
+  never in the task folder: the coordination server runs git where it starts. Its stdio is spliced to the
+  connection. **The socket a connection comes in on is the identity.**
+- **Every byte from the socket is hostile.** Lines are split linearly (`drgnx-mcp-bridge--feed`). A line over
+  `drgnx-mcp-bridge-max-line` (16 MiB), or one that is not a JSON object, closes the connection and ends its server,
+  unforwarded. Writes either way go through the hub clients' queue (`drgnx-hub--enqueue`): a side that stops reading
+  for `drgnx-hub-client-stuck-after` seconds, or past `drgnx-hub-client-max-queued` bytes, is dropped. A socket
+  serves at most `drgnx-sandbox-mcp-max-connections` (4) connections at once; more are closed as they come.
+- **Ends.** A connection that closes ends its server; a server that ends closes its connection. The session's end
+  (its agent exits, or `drgnx-agents-kill`) calls `(drgnx-sandbox-mcp-close S)`: every server and connection, the
+  listeners and the dir go.
+- **What the agent gets.** `(drgnx-sandbox-mcp-server-specs S INSIDE-DIR)` gives the `mcpServers` entries `drgnx`
+  and, when `search.sock` listens, `drgnx-search`. Each runs `drgnx-mcp-bridge-command` on its socket in INSIDE-DIR,
+  with an empty `env`. `drgnx-agents--mcp-servers` gives them instead of the stdio servers when S's `mcp-dir` is set.
+  Every other session, interactive agents included, keeps the stdio servers.
+
+Tests: `test/unit/sandbox-mcp-test.el` (`drgnx-sandbox-mcp/`).
+
 ## Registrations
 
 `gateway/register` returns a token of 64 hex digits (32 bytes of `/dev/urandom`). The hub keeps

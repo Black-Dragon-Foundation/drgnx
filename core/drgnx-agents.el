@@ -22,7 +22,8 @@
 
 (cl-defstruct (drgnx-agent-session (:constructor drgnx-agents--make) (:copier nil))
   name profile cwd conn acp-id (status 'starting) entries queue (mode 'queue) capabilities usage commands
-  permissions reviews stderr exit stopping paused turn draining task via gateway id job remote)
+  permissions reviews stderr exit stopping paused turn draining task via gateway id job remote
+  mcp-dir)                              ; a sandboxed session's own socket dir (drgnx-sandbox-mcp.el), or nil
 
 (defvar drgnx-agents-profiles nil
   "Alist NAME → plist (:command LIST :env (\"NAME=value\"…) :mode queue|steer|interrupt).  Read from
@@ -395,6 +396,7 @@ a task whose provider failed to the next profile (drgnx-job.el).  Called in the 
                                                  (drgnx-agent-session-exit s) status
                                                  (drgnx-agent-session-stderr s) stderr)
                                            (drgnx-agents--release-gateway s)
+                                           (drgnx-agents--close-mcp s)
                                            (drgnx-agents--changed s)))))
     (setf (drgnx-agent-session-conn s) conn (drgnx-agent-session-mode s) (or (plist-get profile :mode) 'queue))
     (drgnx-acp-request conn "initialize"
@@ -669,9 +671,25 @@ so no `_meta' at all, for any other."
 
 (declare-function drgnx-search-mcp-server-spec "drgnx-search-mcp")
 
+(declare-function drgnx-sandbox-mcp-server-specs "drgnx-sandbox-mcp" (s inside-dir))
+(declare-function drgnx-sandbox-mcp-inside-dir "drgnx-sandbox-mcp" (s))
+(declare-function drgnx-sandbox-mcp-close "drgnx-sandbox-mcp" (s))
+
 (defun drgnx-agents--mcp-servers (s)
   "The `mcpServers' S's agent gets: the coordination tools, as S's name, and the search tool for S's project when
-agents.eld asks for it (`drgnx-agents-mcp-names')."
+agents.eld asks for it (`drgnx-agents-mcp-names').  A sandboxed session (its `mcp-dir' set by
+`drgnx-sandbox-mcp-open') gets bridges to its own sockets instead: the hub runs the servers outside, as S."
+  (if (drgnx-agent-session-mcp-dir s)
+      (progn (require 'drgnx-sandbox-mcp)
+             (vconcat (drgnx-sandbox-mcp-server-specs s (drgnx-sandbox-mcp-inside-dir s))))
+    (drgnx-agents--stdio-mcp-servers s)))
+
+(defun drgnx-agents--close-mcp (s)
+  "S's agent is gone: its own MCP sockets close and their servers end (`drgnx-sandbox-mcp-close')."
+  (when (drgnx-agent-session-mcp-dir s) (drgnx-sandbox-mcp-close s)))
+
+(defun drgnx-agents--stdio-mcp-servers (s)
+  "The servers S's agent starts itself (`drgnx-agents--mcp-servers')."
   (let ((names (drgnx-agents-mcp-names)))
     (vconcat
      (and drgnx-agents-coordination (memq 'coordination names)
@@ -954,6 +972,7 @@ is `interrupt'."
     (drgnx-agents--remote s "agents/kill" nil) (cl-return-from drgnx-agents-kill))
   (when-let* ((c (drgnx-agent-session-conn s))) (drgnx-acp-stop c))
   (drgnx-agents--release-gateway s)
+  (drgnx-agents--close-mcp s)
   (setf (drgnx-agent-session-status s) 'exited)
   (drgnx-agents--changed s))
 
