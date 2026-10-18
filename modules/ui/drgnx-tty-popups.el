@@ -213,8 +213,9 @@ without tty child frames.  A session with graphical windows only, or UTF-8 termi
         (error (push (format "ui/terminal-popups: %s" (error-message-string err)) drgnx-hooks-problems))))))
 
 (defun drgnx-tty-popups--frame-deleted (frame)
-  "`delete-frame-functions': once it is gone, the terminals left decide the borders and the hooks again."
-  (unless (frame-parent frame)
+  "`delete-frame-functions': once it is gone, the terminals left decide the borders and the hooks again.
+A killed terminal's frames are dead when this runs (`frame-parent' signals on them): they count as top-level."
+  (unless (and (frame-live-p frame) (frame-parent frame))
     (run-at-time 0 nil (lambda ()
                          (let ((inhibit-interaction t))
                            (condition-case nil

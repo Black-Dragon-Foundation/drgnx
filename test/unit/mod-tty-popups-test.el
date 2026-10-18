@@ -294,3 +294,17 @@ of them non-UTF-8."
       (should-not called))))
 
 ;;; mod-tty-popups-test.el ends here
+
+(ert-deftest drgnx-tty-popups/a-killed-terminal-s-frames-are-dead-when-the-delete-hook-runs ()
+  ;; Killing a terminal runs `delete-frame-functions' with frames that are already dead, and `frame-parent'
+  ;; signals on those.  Batch Emacs cannot make a dead frame, so `frame-live-p' and `frame-parent' are
+  ;; stubbed the way Emacs behaves for one.
+  (let ((dead (list 'dead-frame)) (scheduled nil))
+    (cl-letf (((symbol-function 'frame-live-p) (lambda (f) (not (eq f dead))))
+              ((symbol-function 'frame-parent)
+               (lambda (&optional f) (if (eq f dead) (signal 'wrong-type-argument (list 'frame-live-p f)) nil)))
+              ((symbol-function 'run-at-time) (lambda (&rest _) (setq scheduled t))))
+      (should-not (condition-case err (progn (drgnx-tty-popups--frame-deleted dead) nil) (error err)))
+      ;; a live top-level frame still schedules the update
+      (drgnx-tty-popups--frame-deleted (selected-frame))
+      (should scheduled))))
