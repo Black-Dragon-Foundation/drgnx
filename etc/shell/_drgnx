@@ -1,0 +1,3 @@
+#compdef drgnx
+# Completion for drgnx: files and folders (drgnx PATH opens them).
+_files

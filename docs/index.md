@@ -24,6 +24,7 @@ Using drgnx.
 - [Live view](guide/live.md): watch the browser your agents drive, live, and take it over.
 - [Keyboard Shortcuts editor](guide/shortcuts.md): every command with its keys; record new ones, see conflicts, filter, undo.
 - [Editor features vs VS Code, Zed and Cursor](guide/editor-matrix.md): what drgnx has, where it is described, its GUI test and perf workload.
+- [Your shell](guide/shell.md): the one line for zsh, bash and fish — `drgnx` completion, eat's shell integration in the terminal, why an idle shell never blocks quit, `EDITOR`, prompt themes, fish's limits.
 
 ## Reference
 
