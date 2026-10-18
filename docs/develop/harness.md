@@ -24,7 +24,11 @@ how every drgnx UI change is developed and verified.
 `harness/run-ert.el` runs a suite — a directory, or test files (a shard) — and writes a JSON summary
 (`{"total","passed","failed","failures":[{"name","condition"}],"tests":[{"name","result","file","seconds"}]}`) to
 `$DRGNX_TEST_RESULTS` when set; the summary is the source of truth for GUI runs, whose exit status is only
-pass/fail. `$DRGNX_TEST_SELECTOR` (an ERT selector, e.g. `(tag :timing)`) picks the tests a run takes.
+pass/fail. `$DRGNX_TEST_SELECTOR` (an ERT selector, e.g. `(tag :timing)`) picks the tests a run takes. A string selector (a regexp on
+test names, e.g. `"^drgnx-ui-ui/"`) also decides which files are loaded: a run of one Emacs (`test --ui`'s session,
+`--scenario`'s session, `--one-process`) loads only the files that define a test the regexp matches, as the per-file
+tiers start an Emacs only for those. Before, `test --ui` with a selector ran the whole GUI tier (M12f-A3-1); the
+selector is passed into the scenario session too.
 
 ### One Emacs per test file
 
@@ -330,7 +334,9 @@ covers Emacs' drawing area only (no GTK menu or tool bar).
 
 ## Emacs-side API
 
-Functions the CLI and MCP server call through `emacsclient -s <session socket> -e`; each returns JSON text:
+Functions the CLI and MCP server call through `emacsclient -s <session socket> -e`; each returns JSON text. Each is sent
+as `(drgnx-uitest-api-as "ID" FORM)`, which evaluates FORM only when the session's own id is ID and otherwise returns
+`{"refused": "this session is S, not ID"}`:
 
 | Function | Returns |
 |---|---|
@@ -376,16 +382,39 @@ the error names it: `action 2 (:keys "bad"): …`; later actions are not sent. `
 
 ## Ownership and cleanup
 
-**Session ids are never reused.** A session's id is `drgnx-ui-N-HEX`: N one above the highest in the state root
-(and the runtime directory's Wayland displays), HEX six hex digits from the pid, the time and a counter; the run
-directory `ROOT/<id>` claims it (creating it fails when it exists, and the next id is drawn). Ids used to be the
-lowest free `drgnx-ui-N`, so a stopped session's name came back for the next start — and agents in other worktrees,
-sharing the state root, twice drove each other's sessions. Now an id names one session only: once it is stopped,
-every command given that id is refused ("no harness session"). The socket's directory is the id without
-`drgnx-ui-` (a socket path holds 108 bytes); runs of the old `drgnx-ui-N` shape (an older checkout's) are not
-addressed or reaped from here. **Once, after updating** (when no older checkout runs sessions any more), clean up the
-old-shape ones by hand: `systemctl --user list-units 'drgnx-ui-*'`, then `systemctl --user stop drgnx-ui-N` for each
-unit without a `-HEX` suffix, and delete the `drgnx-ui-N` run directories (no suffix) under the state root.
+**Session ids are never reused.** A session's id is `drgnx-ui-N-HEX` (`drgnx-ui-test-N-HEX` for a test tier's own
+session): N, for people, is one above the highest of `ROOT/counter`, the names in the state root and the runtime
+directory's Wayland displays, and the tombstones in `ROOT/ended/`, and is written back to `ROOT/counter`; HEX is six hex digits
+from the pid, the time and a counter. Uniqueness is the hex and the claim: the run directory `ROOT/<id>` claims the
+id (creating it fails when it exists, and the next id is drawn). Ids used to be the lowest free `drgnx-ui-N`, so a
+stopped session's name came back for the next start — and agents in other worktrees, sharing the state root, twice
+drove each other's sessions. Now an id names one session only. **Address only a session you started** (the id
+`ui_start` / `ui start` returned); never type an id you did not get that way, such as `drgnx-ui-1`. The socket's
+directory is the id without `drgnx-ui-` (a socket path holds 108 bytes).
+
+A **tombstone** says when a session ended: `stop` writes `ROOT/ended/<id>.eld`,
+`(:ended "2026-10-18T22:44:07+0530" :reason stopped :by PID :worktree DIR)` (reason `stopped`, or `reaped` for
+`reap`), before it removes the run. Tombstones older than 7 days (`drgnx-ui-tombstone-days`) are pruned by `start` and
+`stop`; a pruned id is only unknown, never reused. The **owner** is in session.json: `:id` (the name) and
+`:owner (:kind K :worktree DIR :pid PID :client TOKEN)`, K being `cli`, `mcp` (the MCP server), `test` (a test tier's
+session, and any session started under `DRGNX_TEST_ISOLATED=1`) or `check` (`DRGNX_CHECK=1`, which `bin/drgnx check`
+gives its jobs, wins over `test`). Each MCP server makes a random 16-hex-digit token when it starts and `ui_start`
+records it as `:client`. `drgnx ui ls` and `ui_list` show each row's `owner` and `yours` (this MCP client's token, or,
+for the CLI, a `cli` session of this checkout).
+
+Every command that takes an id checks it first (`drgnx-ui-own-session`), in this order, and refuses (an error
+starting `refused`) with:
+
+| Refusal | Why, and what to do |
+|---|---|
+| `harness upgraded: ids are drgnx-ui-N-xxxxxx; start a new session (drgnx ui start)` | a legacy `drgnx-ui-N` id (or a session started before the upgrade, which does not know `drgnx-uitest-api-as`): start a new session. `reap` still stops legacy ones, so it cleans them up |
+| `<id> is not a drgnx harness session (drgnx-ui-N-HEX)` | not a session id at all (`server`, a path, …) |
+| `<id> ended at TIME (stopped\|reaped); ids are never reused: start a new session` | the id's tombstone exists: that session is gone for good |
+| `no harness session <id> (see ui_list)` | no run directory: a typo, a pruned tombstone, or another state root |
+| `<id>: its session.json names another session` / `says mutter, but it has a private runtime directory` | session.json (the session's Emacs can write it) does not match the id, run directory or compositor the harness computed |
+| `<id> belongs to another client (KIND, WORKTREE, pid PID); pass adopt: true to drive it` | an MCP tool addressed a session another MCP client started (`ui_list` shows `yours`). Pass `adopt: true` to drive it anyway; the adoption (`:client`, `:at`) is appended to `:adopted` in session.json. The CLI has no client token and is not checked |
+| `<id> has no live socket (stopped or crashed? see ui_list)` | the session is not running; `stop` it |
+| `this session is S, not ID` | the session's own check: every form `drgnx-ui-call` sends is `(drgnx-uitest-api-as "ID" FORM)`, and a session answers only when its id (`DRGNX_UI_NAME`, `drgnx-uitest-session-id`) is ID, so no socket path reaches another session |
 
 Only sessions this harness created can be addressed. A name must match `drgnx-ui-N-HEX`, its run directory must
 exist under the state root (`$DRGNX_UI_STATE`, default `$XDG_STATE_HOME/drgnx/ui`), and its socket must be the
@@ -404,7 +433,7 @@ signalled), and a Wayland display only when no process serves it any more. `reap
 current state root — run directories, plus live units whose command line points into it — and leaves sessions
 of other state roots alone. Units also end on their own after 30 minutes (`RuntimeMaxSec=1800`) and are
 capped at 3 GB (`MemoryMax`). A detached session (no systemd: a container, or `DRGNX_UI_LAUNCHER=detached`) has the same time cap, from `timeout -k 10` (also `DRGNX_UI_MAX_RUNTIME`), and a 16 GB virtual-memory `ulimit` (generous on purpose: a GL stack maps a lot; it is a limit per process, not a cap on the whole group like `MemoryMax`). A systemd stop kills what is left after 10 s (`TimeoutStopSec`; systemd's default is 90). A test process that is ended (`DRGNX_UI_STOP_ON_EXIT`) first tells all its units to stop without waiting (`systemctl stop --no-block`), then stops each session in turn, so the stops overlap; one session takes 18 s at the very most (asking Emacs to exit: 8 s, then the unit: 10 s), within the 25 s `bin/drgnx check` gives an ended job. The slow exit seen under load (more than 45 s) was not reproduced on a quiet machine; this bounds it, it does not explain it. A failed `drgnx test --ui` or `--scenario` run keeps its run directory
-(`drgnx-ui-test-PID-N`, with `session.log`) for debugging, for 7 days: `reap` and the next test run delete older
+(`drgnx-ui-test-N-HEX`, or the older `drgnx-ui-test-PID-N`, with `session.log`) for debugging, for 7 days: `reap` and the next test run delete older
 ones.
 
 ## Containers
@@ -555,8 +584,8 @@ claude mcp add -s user drgnx-ui -- /path/to/drgnx/bin/drgnx ui mcp
 | `ui_start` | `config` (minimal, gryphn, a directory), `size`, `daemon`, `monitors` (virtual monitors of that size, for multi-window tests), `compositor` (`mutter`, `sway`, `x11`, `i3`, `kwin`, `niri`; default mutter or `$DRGNX_UI_COMPOSITOR`) | the session (name, socket, ready) |
 | `ui_wm` | `session` | read only: `{wm: "sway"\|"i3", tree}` — the session's own WM tree (`get_tree`); `{wm: "kwin"\|"niri"}` (no tree); `{wm: "none"}` under mutter and bare X11 |
 | `ui_frame` | `session` (a daemon session) | `{exit, output, client_ms, visible_ms, hooks}` |
-| `ui_stop` | `session` | `{stopped}` |
-| `ui_list` | — | sessions of the state root |
+| `ui_stop` | `session`, `adopt`? | `{stopped}` (another client's session needs `adopt`) |
+| `ui_list` | — | sessions of the state root, each with its `owner` and `yours` |
 | `ui_state` | `session` | frame, windows, minibuffer, child frames, busy |
 | `ui_screenshot` | `session`, `path`? | an image block (PNG, child frames composited) + path and window map |
 | `ui_click` | `session`, `x`+`y` or `buffer`+`text`, `button`?, `count`?, `hold_ms`? | jank report |
@@ -568,6 +597,8 @@ claude mcp add -s user drgnx-ui -- /path/to/drgnx/bin/drgnx ui mcp
 | `ui_diff` | `session` (diffs against the state the previous `ui_state`/`ui_diff` saw), or `a` and `b` | `changes`: `{window, field, old, new}` (also a field only one of the states has), windows `added`/`removed` |
 | `ui_record` | `session`, `action` (`start` / `stop`) | `stop`: the jank report of everything between (input, timers, redisplays) |
 | `ui_perf` | `session`, `workload`, `audit`? | a perf workload's numbers: input latency, GC, frames, redisplay ([perf.md](perf.md)) |
+
+Every tool that takes `session` also takes `adopt` (boolean): see the refusals under [Ownership and cleanup](#ownership-and-cleanup).
 
 A typical agent loop: `ui_start` → `ui_screenshot` (look) → `ui_click`/`ui_keys` (act; read the jank report) →
 `ui_screenshot` (check) → `ui_stop`. Every tool resolves its session through the ownership rules above, so a

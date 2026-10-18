@@ -13,6 +13,9 @@
 (require 'cl-lib)
 (require 'drgnx-jank-guard)
 
+(defvar drgnx-uitest-session-id nil
+  "This session's id (DRGNX_UI_NAME, set by harness/init/prelude.el): `drgnx-uitest-api-as' runs only for it.")
+
 (defvar drgnx-uitest-tick 0.04 "Seconds between two delivered input events.")
 (defvar drgnx-uitest-quiet 0.3
   "Seconds without delivered input or visible change after which the session counts as settled.")
@@ -616,6 +619,17 @@ prints as raw bytes; decode it so non-ASCII text survives emacsclient."
 
 (defun drgnx-uitest--windows ()
   (vconcat (mapcar #'drgnx-uitest--window-info (window-list (drgnx-uitest-root-frame) 'nomini))))
+
+(defmacro drgnx-uitest-api-as (id &rest body)
+  "Evaluate BODY when this session's id (`drgnx-uitest-session-id') is ID.  Otherwise return the JSON
+{\"refused\": \"this session is S, not ID\"} (`drgnx-ui-parse-reply' makes it a refusal).  `drgnx-ui-call' wraps every
+form in it, so no socket path reaches a session other than the one whose id the caller was given."
+  (declare (indent 1))
+  (let ((want (make-symbol "id")))
+    `(let ((,want ,id))
+       (if (equal ,want drgnx-uitest-session-id)
+           (progn ,@body)
+         (drgnx-uitest--json (list :refused (format "this session is %s, not %s" drgnx-uitest-session-id ,want)))))))
 
 (defun drgnx-uitest-api-state ()
   "Frame, windows, minibuffer, child frames and busy flag, as JSON."

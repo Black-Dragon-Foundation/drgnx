@@ -26,16 +26,19 @@ their processes end.  The runner calls this after every test."
   "Load every *-test.el under DIR (or the files of the list DIR: a shard), run all tests, write a JSON
 summary to RESULTS-FILE.  Return t if every test passed."
   (advice-add 'ert-run-test :after (lambda (&rest _) (drgnx-run-ert-drain-events)) '((name . drgnx-run-ert-drain)))
-  (let* ((load-failures
-          (cl-loop for file in (drgnx-run-ert--files dir)
+  (let* ((selector (let ((s (getenv "DRGNX_TEST_SELECTOR"))) (and s (not (string-empty-p s)) (car (read-from-string s)))))
+         (load-failures
+          ;; only the files that can hold a selected test: a narrowed run of one Emacs (a session, --one-process)
+          ;; loads nothing else (M12f-A3-1, as `drgnx-run-ert-files' does)
+          (cl-loop for file in (cl-remove-if-not (lambda (f) (drgnx-run-ert--file-selected-p f selector))
+                                                 (drgnx-run-ert--files dir))
                    ;; a file that does not read or load costs its tests: the run fails and says which file
                    for err = (condition-case err (progn (load file nil t) nil) (error err) (quit err))
                    when err collect (progn (message "drgnx: test file %s did not load: %S" file err)
                                            (list :name (concat "load " (file-name-nondirectory file))
                                                  :condition (format "%S" err)))))
          ;; which tests: all, or DRGNX_TEST_SELECTOR (an ERT selector; bin/drgnx check runs :timing ones alone)
-         (stats (ert-run-tests-batch (let ((s (getenv "DRGNX_TEST_SELECTOR")))
-                                       (if (and s (not (string-empty-p s))) (car (read-from-string s)) t))))
+         (stats (ert-run-tests-batch (if selector selector t)))
          (tests nil) (known-red nil) (failures nil))
     (cl-loop
      for test across (ert--stats-tests stats)
