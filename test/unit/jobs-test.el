@@ -300,11 +300,26 @@ killing the starter's whole process group does not take the job along."
   ;; M12a-44: Emacs exiting before the poll fires still leaves :boot and :start (the hook runs once)
   (drgnx-jobs-test--no-wait
    (let ((hooks kill-emacs-hook))
-     (should (= (length hooks) 1))
+     (should (memq #'drgnx-jobs--stamp-at-exit hooks))
      (write-region (number-to-string (emacs-pid)) nil (expand-file-name "pid" dir) nil 'silent)
      (should-not (drgnx-jobs-test--stamped-p dir))
      (mapc #'funcall hooks)
-     (should-not kill-emacs-hook)                                 ; once: the hook removed itself
-     (should-not (drgnx-timer-active-p key))                      ; … and the poll with it
+     (should-not (drgnx-timer-active-p key))                      ; the poll ended with it
+     (funcall #'drgnx-jobs--stamp-at-exit)                        ; a second exit stamps nothing again
+     (should (= 1 (length (seq-filter (lambda (k) (eq k :boot)) (drgnx-jobs--read (expand-file-name "job.eld" dir))))))
      (should (drgnx-jobs-test--stamped-p dir))
      (should (equal (plist-get (drgnx-jobs--read (expand-file-name "job.eld" dir)) :boot) (drgnx-jobs--boot-id))))))
+
+(ert-deftest drgnx-jobs/no-wait-adds-one-exit-hook ()
+  ;; T9-1: one named hook however many jobs, and none of their polls left behind
+  (drgnx-jobs-test--no-wait
+   (let ((ids (list id (drgnx-jobs-start "stamp2" '("true") :no-wait t) (drgnx-jobs-start "stamp3" '("true") :no-wait t))))
+     (unwind-protect
+         (progn
+           (dolist (i ids)
+             (write-region (number-to-string (emacs-pid)) nil (expand-file-name "pid" (drgnx-jobs--dir i)) nil 'silent))
+           (drgnx-test-advance 0.05)
+           (should (= 1 (cl-count #'drgnx-jobs--stamp-at-exit kill-emacs-hook)))
+           (should-not (seq-find (lambda (e) (eq (car-safe (car e)) 'jobs-stamp)) (drgnx-timer-pending)))
+           (dolist (i ids) (should (drgnx-jobs-test--stamped-p (drgnx-jobs--dir i)))))
+       (dolist (i (cdr ids)) (delete-directory (drgnx-jobs--dir i) t))))))

@@ -64,7 +64,6 @@ own (`(drgnx-job-ui-show ID)') restores as the cockpit filtered to that job."
 (defvar drgnx-job-ui--badge "" "The mode line's badge: \" ⚑N\" while N things of jobs need you, else empty.")
 (defvar drgnx-job-ui--badge-job nil "The job with the newest card: the one the badge opens.")
 (defvar drgnx-job-ui--notified (make-hash-table :test #'equal) "Card ids already notified.")
-(defvar drgnx-job-ui--recount-timer nil)
 (defvar drgnx-job-ui--desktop :unknown "Whether desktop notifications can be sent (asked once).")
 
 (defvar drgnx-job-ui-badge-map
@@ -146,8 +145,7 @@ for redisplay code (the status bar's jobs segment)."
 
 (defun drgnx-job-ui--schedule-recount ()
   "Count again within a second (once, however many events)."
-  (unless (timerp drgnx-job-ui--recount-timer)
-    (setq drgnx-job-ui--recount-timer (run-at-time 1 nil (lambda () (setq drgnx-job-ui--recount-timer nil) (drgnx-job-ui--recount))))))
+  (drgnx-timer-soon 'job-ui-recount 1 #'drgnx-job-ui--recount :owner 'tools/jobs))
 
 (defun drgnx-job-ui--event (event data)
   "`drgnx-hub-event-functions' (while the badge is on): a job or a card changed — count again; a new card notifies."

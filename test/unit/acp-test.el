@@ -198,6 +198,35 @@
             (should-not (eq status 'none)))
         (drgnx-acp-stop conn)))))
 
+(ert-deftest drgnx-acp/the-exit-report-is-a-keyed-timer ()
+  (drgnx-acp-test--timed
+    (let* ((status 'none) (conn (drgnx-acp-test--sleeper :on-exit (lambda (_c s _e) (setq status s))))
+           (key (cons 'acp-exit (drgnx-acp-conn-process conn))))
+      (unwind-protect
+          (progn
+            (should-not (drgnx-timer-active-p key))
+            (drgnx-acp-test--kill conn)
+            (drgnx-test-advance 0.5)                         ; the watchdog notices
+            (should (drgnx-timer-active-p key))
+            (should (eq status 'none))
+            (drgnx-test-advance 0.1)
+            (should-not (drgnx-timer-active-p key))
+            (should-not (eq status 'none)))
+        (drgnx-acp-stop conn)))))
+
+(ert-deftest drgnx-acp/a-failing-exit-handler-is-recorded-and-the-cleanup-still-runs ()
+  (drgnx-acp-test--timed
+    (let* ((conn (drgnx-acp-test--sleeper :on-exit (lambda (&rest _) (error "Boom"))))
+           (stderr (drgnx-acp-conn-stderr-process conn)))
+      (unwind-protect
+          (progn
+            (drgnx-acp-test--kill conn)
+            (drgnx-test-advance 0.7)
+            (should (= (length drgnx-timer-errors) 1))
+            (should (equal (plist-get (car drgnx-timer-errors) :fn) 'drgnx-acp--report-exit))
+            (should-not (process-live-p stderr)))
+        (drgnx-acp-stop conn)))))
+
 (ert-deftest drgnx-acp/a-failing-watchdog-stops-after-three ()
   (drgnx-acp-test--timed
     (let ((conn (drgnx-acp-test--sleeper)) (key nil))

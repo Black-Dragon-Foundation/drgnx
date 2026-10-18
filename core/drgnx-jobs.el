@@ -131,19 +131,11 @@ Signals a `user-error' (before anything is created) when the detached launcher h
     ;; the pid trustworthy later (a pid from before a reboot may be another process)
     (let ((deadline (+ (float-time) 2)) (pidf (expand-file-name "pid" dir)))
       (if no-wait
-          (let ((key (cons 'jobs-stamp id)) on-exit)
-            ;; the poll stamps once the pid is there, or gives up after 2 s.  When Emacs exits first, this hook
-            ;; ends the poll and stamps (waiting out the deadline for the pid at most); a poll that ended
-            ;; already leaves nothing to do, so a job is stamped once
-            (setq on-exit (lambda ()
-                            (remove-hook 'kill-emacs-hook on-exit)
-                            (when (drgnx-timer-active-p key)
-                              (while (and (not (file-exists-p pidf)) (< (float-time) deadline))
-                                (sleep-for 0.02))
-                              (drgnx-timer-cancel key)
-                              (drgnx-jobs--stamp-anyway dir))))
-            (add-hook 'kill-emacs-hook on-exit)
-            (drgnx-timer-poll key 0.05 #'drgnx-jobs--stamp-when-ready :deadline 2
+          (progn
+            ;; the poll stamps once the pid is there, or gives up after 2 s; when Emacs exits first,
+            ;; `drgnx-jobs--stamp-at-exit' stamps the jobs whose poll is still pending
+            (add-hook 'kill-emacs-hook #'drgnx-jobs--stamp-at-exit)
+            (drgnx-timer-poll (cons 'jobs-stamp id) 0.05 #'drgnx-jobs--stamp-when-ready :deadline 2
                               :on-timeout #'drgnx-jobs--stamp-anyway :args (list dir) :owner :core))
         (while (and (not (file-exists-p pidf)) (< (float-time) deadline)) (sleep-for 0.02))
         (drgnx-jobs--stamp dir)))
@@ -154,6 +146,19 @@ Signals a `user-error' (before anything is created) when the detached launcher h
   (when (file-exists-p (expand-file-name "pid" dir))
     (drgnx-jobs--stamp-anyway dir)
     t))
+
+(defun drgnx-jobs--stamp-at-exit ()
+  "On `kill-emacs-hook': stamp the jobs whose pid poll is still pending, waiting 2 s in all for their pids.
+A job whose poll ended is not in the layer's table, so none is stamped twice."
+  (let ((deadline (+ (float-time) 2)))
+    (dolist (entry (drgnx-timer-pending))
+      (let ((key (car entry)))
+        (when (eq (car-safe key) 'jobs-stamp)
+          (let ((dir (drgnx-jobs--dir (cdr key))))
+            (while (and (not (file-exists-p (expand-file-name "pid" dir))) (< (float-time) deadline))
+              (sleep-for 0.02))
+            (drgnx-timer-cancel key)
+            (drgnx-jobs--stamp-anyway dir)))))))
 
 (defun drgnx-jobs--stamp-anyway (dir)
   "Stamp the job in DIR if it can be; the job's directory may be gone by now (a removed job)."

@@ -16,6 +16,7 @@
 (require 'subr-x)
 (require 'drgnx-modules)
 (require 'drgnx-registry)
+(require 'drgnx-timer)
 
 (declare-function xwidget-webkit-browse-url "xwidget")
 (declare-function xwidget-webkit-goto-url "xwidget")
@@ -231,30 +232,30 @@ with `systemctl --user stop --no-block' started as a process, a job without a un
         (when-let* ((pid (plist-get job :pid)) ((eq (plist-get job :status) 'running)))
           (ignore-errors (signal-process (- pid) 'SIGTERM)))))))
 
-(defvar drgnx-browser--watchers nil "Alist job id → the timer waiting for that job's address.")
-
 (defun drgnx-browser--watch-job (id)
   "Open the server URL of job ID in the pane once the job's log has it.
 Looked at every half second, 60 s at most; never waits."
-  (let ((timer nil) (tries 0))
-    (when-let* ((old (assoc id drgnx-browser--watchers))) (cancel-timer (cdr old)))
-    (setq timer
-          (run-with-timer
-           0.5 0.5
-           (lambda ()
-             ;; A timer: an error ends the wait (it would repeat every half second), and nothing here blocks.
-             (condition-case err
-                 (let ((url (ignore-errors (drgnx-browser--log-url (drgnx-jobs-log id 4000))))
-                       (status (plist-get (drgnx-jobs-get id) :status)))
-                   (cond (url (cancel-timer timer) (drgnx-browser-open url t))
-                         ;; `gone' can be a job systemd runs, so only the clock or an ended job ends the wait
-                         ((or (> (cl-incf tries) 120) (memq status '(exited stopped)))
-                          (cancel-timer timer)
-                          (when (> tries 120) (drgnx-browser--stop-job-later id))
-                          (message "drgnx: the Playwright server did not print an address (Show Job Log: playwright)"))))
-               (error (cancel-timer timer)
-                      (message "drgnx: Test Report stopped waiting for the Playwright server: %s" (error-message-string err)))))))
-    (setf (alist-get id drgnx-browser--watchers nil nil #'equal) timer)))
+  (drgnx-timer-poll (cons 'browser-watch id) 0.5 #'drgnx-browser--watch-tick :deadline 60
+                    :on-timeout #'drgnx-browser--watch-timeout :args (list id)))
+
+(defun drgnx-browser--watch-tick (id)
+  "The poll of `drgnx-browser--watch-job': non-nil when it is over (opened, the job ended, or an error).
+An error ends the wait (it would repeat every half second), and nothing here blocks."
+  (condition-case err
+      (let ((url (ignore-errors (drgnx-browser--log-url (drgnx-jobs-log id 4000))))
+            (status (plist-get (drgnx-jobs-get id) :status)))
+        (cond (url (drgnx-browser-open url t) t)
+              ;; `gone' can be a job systemd runs, so only the clock or an ended job ends the wait
+              ((memq status '(exited stopped))
+               (message "drgnx: the Playwright server did not print an address (Show Job Log: playwright)")
+               t)))
+    (error (message "drgnx: Test Report stopped waiting for the Playwright server: %s" (error-message-string err))
+           t)))
+
+(defun drgnx-browser--watch-timeout (id)
+  "Job ID printed no address in 60 s: stop it and say so."
+  (drgnx-browser--stop-job-later id)
+  (message "drgnx: the Playwright server did not print an address (Show Job Log: playwright)"))
 
 (defun drgnx-browser--stop-others (keep root)
   "Stop the Playwright servers of ROOT other than job KEEP (a new report replaces the older servers)."
@@ -263,7 +264,7 @@ Looked at every half second, 60 s at most; never waits."
       (when (and (equal (plist-get j :name) "playwright") (not (equal (plist-get j :id) keep))
                  (equal (file-name-as-directory (expand-file-name (or (plist-get j :cwd) ""))) dir)
                  (not (memq (plist-get j :status) '(exited stopped))))
-        (when-let* ((w (assoc (plist-get j :id) drgnx-browser--watchers))) (cancel-timer (cdr w)))
+        (drgnx-timer-cancel (cons 'browser-watch (plist-get j :id)))
         (drgnx-browser--stop-job (plist-get j :id))))))
 
 (defun drgnx-browser-test-report ()

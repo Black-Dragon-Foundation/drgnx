@@ -47,7 +47,7 @@ pgtk Emacs does: its geometry only, no name, make, model or serial)."
           (drgnx-monitors-test--current (or (plist-get opts :current) 0))
           (drgnx-monitors-test--moves nil) (drgnx-monitors-test--calls nil) (drgnx-monitors-test--places nil)
           (sequence (plist-get opts :sequence)) (frame-sequence (plist-get opts :frame-sequence))
-          (drgnx-monitors--count nil) (drgnx-monitors--pending nil) (drgnx-monitors--timer nil)
+          (drgnx-monitors--count nil) (drgnx-monitors--pending nil)
           (drgnx-monitors--force nil) (drgnx-monitors--list-gen 0)
           (drgnx-monitors--stamps (make-hash-table :test #'eq :weakness 'key))
           (drgnx-monitors--gens (make-hash-table :test #'eq :weakness 'key))
@@ -94,7 +94,7 @@ pgtk Emacs does: its geometry only, no name, make, model or serial)."
                     ((symbol-function 'message)
                      (lambda (fmt &rest args) (when fmt (push (apply #'format fmt args) messages)) nil)))
             (unwind-protect (progn ,@body)
-              (when (timerp drgnx-monitors--timer) (cancel-timer drgnx-monitors--timer))
+              (drgnx-timer-cancel 'monitors-refresh)
               (modify-frame-parameters frame '((drgnx-monitor))))))))))
 
 (defun drgnx-monitors-test--move (frame target)
@@ -235,8 +235,7 @@ pgtk Emacs does: its geometry only, no name, make, model or serial)."
                                 (let ((start (float-time)))
                                   (dotimes (_ 10) (drgnx-monitors--focus-changed))
                                   (should (< (- (float-time) start) 0.1)))
-                                (should (= 1 (length (seq-filter (lambda (tm) (eq (timer--function tm) #'drgnx-monitors--run-pending))
-                                                                 timer-idle-list))))
+                                (should (drgnx-timer-active-p 'monitors-refresh))                 ; one key: the ten calls made one timer
                                 (let ((start (float-time)))
                                   (drgnx-monitors--run-pending)
                                   (should (< (- (float-time) start) 0.1))      ; the adapter answers 0.2 s later: nothing waited for it
@@ -252,7 +251,7 @@ pgtk Emacs does: its geometry only, no name, make, model or serial)."
                                 (drgnx-monitors--run-pending)
                                 (accept-process-output nil 0.4)
                                 (should (= 1 (plist-get drgnx-monitors-test--calls :frame-monitor)))
-                                (should (timerp drgnx-monitors--timer))
+                                (should (drgnx-timer-active-p 'monitors-refresh))
                                 (should (memq frame drgnx-monitors--pending))
                                 ;; 11 s later: one more
                                 (puthash frame (- (float-time) 11) drgnx-monitors--stamps)
@@ -370,8 +369,7 @@ pgtk Emacs does: its geometry only, no name, make, model or serial)."
                               (drgnx-monitors-test--with-fake ()
                                 (puthash frame (float-time) drgnx-monitors--stamps)         ; refreshed just now
                                 (dotimes (_ 10) (drgnx-monitors--monitors-changed nil))
-                                (should (= 1 (length (seq-filter (lambda (tm) (eq (timer--function tm) #'drgnx-monitors--run-pending))
-                                                                 timer-idle-list))))
+                                (should (drgnx-timer-active-p 'monitors-refresh))                 ; one key: the ten calls made one timer
                                 (should-not drgnx-monitors-test--calls)                      ; nothing ran in the hook itself
                                 (drgnx-monitors--run-pending)
                                 (should (drgnx-platform-test--await (lambda () drgnx-monitors--count)))
@@ -400,7 +398,7 @@ pgtk Emacs does: its geometry only, no name, make, model or serial)."
                                              :frame-monitor (lambda (&rest _) (error "frame bug")))
                                (lambda ()
                                  (drgnx-platform-test--with-frame 'pgtk '("SIGMON=1")
-                                   (let ((drgnx-monitors--pending nil) (drgnx-monitors--timer nil) (drgnx-monitors--force nil)
+                                   (let ((drgnx-monitors--pending nil) (drgnx-monitors--force nil)
                                          (drgnx-monitors--count nil) (drgnx-monitors--list-gen 0) (inhibit-interaction t)
                                          (drgnx-monitors--stamps (make-hash-table :test #'eq :weakness 'key))
                                          (drgnx-monitors--gens (make-hash-table :test #'eq :weakness 'key)))
@@ -413,7 +411,7 @@ pgtk Emacs does: its geometry only, no name, make, model or serial)."
                                                   (drgnx-monitors--run-pending)
                                                   (should (drgnx-platform-test--await (lambda () drgnx-monitors--count)))
                                                   (should (= drgnx-monitors--count 3)))   ; Emacs' own count
-                                         (when (timerp drgnx-monitors--timer) (cancel-timer drgnx-monitors--timer)))))))))
+                                         (drgnx-timer-cancel 'monitors-refresh))))))))
 
 (drgnx-platform-test--deftest drgnx-monitors/focus-schedules-the-frames-that-have-focus ()
                               (drgnx-monitors-test--with-fake ()

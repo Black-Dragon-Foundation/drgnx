@@ -412,7 +412,12 @@ timer and non-nil for an idle one (once per pause), as in `run-at-time` and `run
   the key `gc-idle`, the job stamp poll `(jobs-stamp . ID)`, the usage write `surfaces-usage`).
   Module repeats are keyed this way: `tools/agents` owns `agents-ui-mirror` (idle, every 30 s) and `tools/jobs` owns
   `job-ui-recount-idle` (idle, every 60 s), so a second setup replaces the timer instead of stacking another, and
-  turning the module off ends it.
+  turning the module off ends it. Timers started later (from a command or a hook) name their module with `:owner`:
+  `ui/face` owns quick help's `quickhelp-timeout`, `-unmap`, `-look` and `-hover` and the start page's
+  `start-first-frame`, `ui/terminal-popups` the debounced `tty-popups-show`, `ui/terminal` the per-frame
+  `(tty-fallback-hint . FRAME)`, `tools/jobs` the coalesced `job-ui-recount`, `tools/ai` the `ai-probe` one-shot; the
+  ghost-text pause is an idle debounce `(ai-ghost . BUFFER)` owned by the buffer, and an Ask's search limit
+  `(ai-grep . PROCESS)` by the search process (its sentinel cancels it). With no run of the owner nothing starts.
 
 ### What the fire wrapper guarantees
 
@@ -507,7 +512,15 @@ connection struct.
   `drgnx-acp--watchdog` (CONN PROC) reports an agent that died without its sentinel being called. `drgnx-acp--exited`
   and `drgnx-acp-stop` cancel the key; two connections have two keys. A watchdog that fails stops after
   `drgnx-timer-failure-limit` failures and is named in `drgnx-timer-errors`, instead of failing every half second. The
-  0.05 s tick that reads the last of a dead agent's stderr is a deferral out of a sentinel and stays raw.
+  0.05 s tick that reads the last of a dead agent's stderr is the key `(acp-exit . PROCESS)`
+  (`drgnx-acp--report-exit`, one-shot, :core): the wait for the pipe is in `with-local-quit`, and a failing on-exit
+  handler is recorded in `drgnx-timer-errors` while the stderr process and input buffer are still cleaned up.
+- **Agent sessions.** Stop's two deadlines are the keys `(agents-stop . SESSION-ID)` (0.9 s: an agent that did not
+  answer the cancel has its turn ended anyway) and `(agents-drain . SESSION-ID)` (10 s more: the held messages go
+  if the late answer never came), functions `drgnx-agents--stop-deadline` and `drgnx-agents--drain-deadline`, both
+  :core. A second Stop replaces the pending deadline instead of stacking another. A session with no live agent
+  connection when the deadline ends its turn becomes `exited` (the old raw timer signalled
+  `wrong-type-argument drgnx-acp-conn nil`).
 - **Hub.** `hub-tick` (every 2 s, repeating) keeps its own `with-demoted-errors`: its steps' transient errors (a busy
   `work.db`) never reach the failure limit. `hub-deliver` is `drgnx-timer-soon` 0.1 s: a burst of session changes
   delivers once. `(hub-flush . SESSION-ID)` is `drgnx-timer-soon` 0.05 s: one `agent` flush per session per burst.

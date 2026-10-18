@@ -18,6 +18,7 @@
 (require 'subr-x)
 (require 'drgnx-paths)
 (require 'drgnx-acp)
+(require 'drgnx-timer)
 (require 'drgnx-agent-config)          ; `drgnx-agent-config-vendor-env'
 
 (cl-defstruct (drgnx-agent-session (:constructor drgnx-agents--make) (:copier nil))
@@ -728,9 +729,10 @@ turn Stop's deadline ended lets the held messages go."
       (unless (eq (drgnx-agent-session-status s) 'exited) (setf (drgnx-agent-session-status s) 'idle))
       (when (and (equal reason "cancelled") (not interrupt)) (setf (drgnx-agent-session-paused s) t))
       (when (drgnx-agent-session-task s) (with-demoted-errors "drgnx work: %S" (run-hook-with-args 'drgnx-agents-task-functions s 'turn-end)))
-      (unless (drgnx-acp-live-p (drgnx-agent-session-conn s))   ; the agent died: the queue waits
-        (setf (drgnx-agent-session-status s) 'exited
-              (drgnx-agent-session-stderr s) (drgnx-acp-conn-stderr (drgnx-agent-session-conn s))))
+      (let ((conn (drgnx-agent-session-conn s)))
+        (unless (and conn (drgnx-acp-live-p conn))   ; the agent died (or is gone): the queue waits
+          (setf (drgnx-agent-session-status s) 'exited
+                (drgnx-agent-session-stderr s) (and conn (drgnx-acp-conn-stderr conn)))))
       (when (cdr r) (with-demoted-errors "drgnx agents: %S" (run-hook-with-args 'drgnx-agents-error-functions s (cdr r))))
       (drgnx-agents--changed s)
       (drgnx-agents--next s)))))
@@ -825,16 +827,22 @@ is `interrupt'."
     (drgnx-acp-notify (drgnx-agent-session-conn s) "session/cancel" (list :sessionId (drgnx-agent-session-acp-id s)))
     ;; an agent that does not answer the cancel in time: this turn ends here anyway; its late answer
     ;; (and chunks) are then dropped, and nothing new is sent until it came (or 10 s passed)
-    (let ((turn (drgnx-agent-session-turn s)))
-      (run-at-time 0.9 nil
-                   (lambda ()
-                     (when (and (eq (drgnx-agent-session-status s) 'busy) (eql (drgnx-agent-session-turn s) turn))
-                       (drgnx-agents--turn-ended s '((:stopReason "cancelled")) turn)
-                       (setf (drgnx-agent-session-draining s) turn)
-                       (run-at-time 10 nil (lambda ()
-                                             (when (eql (drgnx-agent-session-draining s) turn)
-                                               (setf (drgnx-agent-session-draining s) nil)
-                                               (drgnx-agents--next s))))))))))
+    (drgnx-timer-start (cons 'agents-stop (drgnx-agent-session-id s)) 0.9 #'drgnx-agents--stop-deadline
+                       :args (list s (drgnx-agent-session-turn s)) :owner :core)))
+
+(defun drgnx-agents--stop-deadline (s turn)
+  "The Stop of S's TURN got no answer in time: end the turn here and hold the queue 10 s more, or until its late answer."
+  (when (and (eq (drgnx-agent-session-status s) 'busy) (eql (drgnx-agent-session-turn s) turn))
+    (drgnx-agents--turn-ended s '((:stopReason "cancelled")) turn)
+    (setf (drgnx-agent-session-draining s) turn)
+    (drgnx-timer-start (cons 'agents-drain (drgnx-agent-session-id s)) 10 #'drgnx-agents--drain-deadline
+                       :args (list s turn) :owner :core)))
+
+(defun drgnx-agents--drain-deadline (s turn)
+  "The stopped TURN of S never answered: let the held messages go."
+  (when (eql (drgnx-agent-session-draining s) turn)
+    (setf (drgnx-agent-session-draining s) nil)
+    (drgnx-agents--next s)))
 
 (cl-defun drgnx-agents-kill (s)
   "End session S's agent process."

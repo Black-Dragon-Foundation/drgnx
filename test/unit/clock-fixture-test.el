@@ -207,6 +207,29 @@
     ;; and the fixture works again
     (drgnx-test-with-clock () (should (>= (- (drgnx-test-clock-now) (drgnx-test-real-time)) 999999)))))
 
+(ert-deftest drgnx-clock/a-cold-advice-trampoline-arms-nothing-in-the-virtual-lists ()
+  "Emacs 31 native-compiles a primitive's advice trampoline when it is first advised, and logging that compile arms
+`undo-auto--boundary-timer'; the fixture compiles them before it swaps the lists, so the body starts clean."
+  (skip-unless (and (fboundp 'native-comp-available-p) (native-comp-available-p)
+                    (boundp 'comp-installed-trampolines-h)))
+  (let* ((dir (make-temp-file "drgnx-clock-eln" t))
+         (native-comp-eln-load-path (list (file-name-as-directory dir)))   ; no trampoline cached on disk either
+         (comp-installed-trampolines-h (make-hash-table :test #'eq))      ; and none installed in this process
+         (undo-auto-current-boundary-timer nil))
+    (unwind-protect
+        (drgnx-test-with-clock ()
+          (should-not timer-list)
+          (should-not timer-idle-list))
+      (when (timerp undo-auto-current-boundary-timer) (cancel-timer undo-auto-current-boundary-timer))
+      (delete-directory dir t))))
+
+(ert-deftest drgnx-clock/the-undo-boundary-timer-is-not-the-bodys ()
+  (let ((undo-auto-current-boundary-timer nil))
+    (drgnx-test-with-clock ()
+      (setq undo-auto-current-boundary-timer (run-at-time 10 nil #'undo-auto--boundary-timer))
+      (cancel-timer (run-at-time 5 nil #'ignore)))   ; the fixture drops Emacs's timer, so nothing is pending
+    (should-not undo-auto-current-boundary-timer)))
+
 (ert-deftest drgnx-clock/nesting-is-an-error ()
   (should-error (drgnx-test-with-clock () (drgnx-test-with-clock () nil)))
   (should-not drgnx-test--active)

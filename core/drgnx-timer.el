@@ -228,8 +228,8 @@ client has only the initial one)."
   "Call ENTRY's FN with its ARGS, in `save-match-data', a buffer owner current; catch every error.
 RECORD non-nil and a module owner: FN runs as the module's code (`drgnx-modules--record-call').  A success resets
 the failure count and returns FN's value; an error goes to `drgnx-timer--failed' (the entry's failure count is then
-above 0) and the value is nil.  The debugger opens only with `debug-on-error' and a frame to show it in (`drgnx-timer--debugger-p'):
-never in batch or in a daemon with no client."
+above 0) and the value is nil.  The debugger opens only with `debug-on-error' and a frame to show it in
+\(`drgnx-timer--debugger-p'): never in batch or in a daemon with no client."
   (let ((fn (drgnx-timer--entry-fn entry)) (args (drgnx-timer--entry-args entry))
         (owner (drgnx-timer--entry-owner entry))
         (debug-on-error (and debug-on-error (drgnx-timer--debugger-p))))
