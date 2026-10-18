@@ -448,8 +448,10 @@
     (unwind-protect
         (let ((trash-directory (expand-file-name "trash" dir)))      ; not created yet: its parent's device counts
           (should-not (drgnx-explorer--trash-cross-device-p (expand-file-name "x" dir)))
-          (cl-letf (((symbol-function 'file-attribute-device-number)
-                     (let ((n 0)) (lambda (_a) (cl-incf n)))))       ; every call another device
+          ;; every call another device (`file-attributes', not the inlined `file-attribute-device-number': a compiled
+          ;; drgnx-explorer never calls the latter)
+          (cl-letf (((symbol-function 'file-attributes)
+                     (let ((n 0)) (lambda (&rest _) (let ((a (make-list 12 nil))) (setf (nth 11 a) (cl-incf n)) a)))))
             (should (drgnx-explorer--trash-cross-device-p (expand-file-name "x" dir))))
           (should-not (drgnx-explorer--trash-cross-device-p "/ssh:nohost.invalid:/x")))
       (delete-directory dir t))))
