@@ -20,8 +20,8 @@ bottom panel too: open the panel (Toggle Panel) and pick **Work**. The layout do
 goes back to where you came from: the layout you were in, or, if you had not picked a layout yet, the exact
 arrangement you had. Zen Mode (module `ui/look`) still works on its own.
 
-**Browser:** the web page pane comes with the next part of this work (the browser pane). Until then, Browser shows
-the editor alone with every area hidden.
+**Browser:** the editor with a web page beside it ([browser.md](browser.md)), every other area hidden. In an Emacs
+without WebKit the right half says so and pages open in your system browser.
 
 ## Switching
 
@@ -58,5 +58,5 @@ are open.
 Layouts are data: `drgnx-layouts` holds the built-in ones as `(NAME :left VIEW :right TAB :panel TAB :editor
 SHAPE)`. For an area, `nil` hides it and `keep` leaves it as it was. Editor shapes are registered in
 `drgnx-layouts-shapes` (SHAPE → a function of the editor window). drgnx ships `one`, `editor+agent` and `zen`, and
-the browser pane adds `editor+browser`. A shape that is not registered arranges as `one`. `drgnx-layouts-apply`
+the browser pane (module `tools/browser`) adds `editor+browser`. A shape that is not registered arranges as `one`. `drgnx-layouts-apply`
 switches the selected window's layout.

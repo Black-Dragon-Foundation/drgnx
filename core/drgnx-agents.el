@@ -94,14 +94,14 @@ agents.eld (config dir) and the built-in ones; never holds secrets (keys come fr
        (drgnx-agents--add s (list :type 'user :text (or (plist-get (plist-get u :content) :text) "")))))
     ("tool_call"
      (let ((e (list :type 'tool :id (plist-get u :toolCallId) :title (plist-get u :title) :kind (plist-get u :kind)
-                    :status (plist-get u :status) :content (plist-get u :content)))
+                    :status (plist-get u :status) :content (plist-get u :content) :rawInput (plist-get u :rawInput)))
            (parent (plist-get (plist-get u :_meta) :parentToolCallId)))
        (if-let* ((p (and parent (drgnx-agents--find-tool s parent))))
            (plist-put p :children (append (plist-get p :children) (list e)))
          (drgnx-agents--add s e))))
     ("tool_call_update"
      (when-let* ((e (drgnx-agents--find-tool s (plist-get u :toolCallId))))
-       (dolist (k '(:status :title :content)) (when (plist-member u k) (plist-put e k (plist-get u k))))))
+       (dolist (k '(:status :title :content :rawInput)) (when (plist-member u k) (plist-put e k (plist-get u k))))))
     ("plan"
      (let ((last (seq-find (lambda (e) (eq (plist-get e :type) 'plan)) (reverse (drgnx-agent-session-entries s)))))
        (if (and last (not (plist-get last :done))) (plist-put last :entries (plist-get u :entries))

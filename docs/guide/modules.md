@@ -134,5 +134,6 @@ key profile ([keys.md](keys.md)); faces inherit theme faces (no colours). See [c
 | `extra/windows` | idle | Pick Window: a letter on every window, type it to go there (needs ace-window) |
 | `extra/magit` | idle | Source Control opens magit (needs magit) |
 | `extra/completion` | idle | vertical minibuffer lists, any-order matching, completion popups as you type (needs vertico, orderless, marginalia, corfu) |
+| `tools/browser` | idle | the browser pane ([browser.md](browser.md)): a web page beside the editor (WebKit, else your system browser), Browser: Test Report (Playwright), Browser: Agent's Page |
 
 The `extra/` modules wait until their packages are installed; Preferences: Modules says which.
