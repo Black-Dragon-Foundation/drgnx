@@ -18,9 +18,9 @@ drgnx never edits your rc files on its own; you add the line.
 
 What the line does:
 
-- **Tab completion for `drgnx`** (files and folders; subcommands and options arrive with the CLI's own completion).
-  In zsh the directory with `_drgnx` goes on `fpath` (a `compinit` that runs later finds it; one that already ran gets
-  `compdef _drgnx drgnx`). In bash it is `complete -F _drgnx drgnx`. In fish, `complete -c drgnx` lines.
+- **Tab completion for `drgnx`** (see below). In zsh the directory with `_drgnx` goes on `fpath` (a `compinit` that
+  runs later finds it; one that already ran gets `compdef _drgnx drgnx`). In bash it is `complete -F _drgnx drgnx`.
+  In fish, `complete -c drgnx` lines.
 - **Inside drgnx's terminal only**, eat's shell integration: eat learns the directory you are in (the terminal's
   `default-directory` follows `cd`), where each prompt starts, whether the last command failed (the margin mark), and
   whether a command is running. In zsh and bash the line sources the integration file that comes with eat. Eat
@@ -36,6 +36,26 @@ What it never does:
 **Cost:** measured with `zsh -i -c exit` and `bash -i -c exit` (20 runs each, interleaved, median), the line adds
 less than a millisecond (0.2 ms in zsh 5.9, under 0.15 ms in bash 5.3). The test `drgnx-shell-files/startup-cost`
 holds it under 5 ms.
+
+## What completes
+
+`drgnx <TAB>` offers the commands (`open`, `onboard`, `doctor`, `test`, `sync`, `work`, `job`, `search`, ...) and the
+files and folders of the current directory, since `drgnx PATH` opens them. `drgnx -<TAB>` offers `-h` and `--help`.
+After a command, `-<TAB>` offers that command's options (`drgnx onboard --<TAB>`, `drgnx test --<TAB>`, `drgnx doctor
+--<TAB>`), and the commands that have subcommands offer them (`drgnx work <TAB>`: `record`, `scan`, `status`;
+likewise `hub`, `job`, `search`, `keys` and `ui`). Options that take a value complete it:
+
+- `drgnx onboard --step` the step ids, `--preset` the presets (`minimal`, `ide`, `full-ai`), `--keys` the key profiles
+  (the names of the files in the checkout's `keys/`, found when you press TAB);
+- `drgnx test --config` and `drgnx ui start --config` the configurations, `drgnx test --install` the distribution
+  images;
+- paths (`--roots`, `--seed`, `--repo`, `--board`, ...) complete as files and folders.
+
+The lists are written into the three files (`_drgnx` for zsh, `drgnx.bash`, `drgnx.fish`), so TAB starts no Emacs and
+runs no program: the only thing read is the `keys/` folder for `--keys`. They cannot go stale unnoticed: a test reads
+`bin/drgnx` and fails when a command or option of `drgnx help` is missing from any of the three files, and checks the
+onboarding steps and presets against the ones the code defines. A new command or option in `bin/drgnx` is added to
+those three files in the same change.
 
 ## The integration is on by default inside the terminal
 

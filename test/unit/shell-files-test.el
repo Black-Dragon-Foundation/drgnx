@@ -97,8 +97,12 @@ ARGS replace the shell's usual arguments before the script."
                     ('fish "function complete; echo \"complete $argv\"; builtin complete $argv; end")))
            (r (drgnx-shell-files-test--run shell (format "%s; %s" count (drgnx-shell-files-test--source shell 2)))))
       (should (equal (list shell (nth 0 r) (nth 2 r)) (list shell 0 "")))
-      (should (= 1 (seq-count (lambda (l) (string-match-p "\\`\\(compdef _drgnx drgnx\\|complete .*drgnx\\)" l))
-                              (split-string (nth 1 r) "\n" t)))))
+      ;; the second sourcing registers nothing more: as many registrations as one sourcing makes (fish makes many)
+      (let ((once (drgnx-shell-files-test--run shell (format "%s; %s" count (drgnx-shell-files-test--source shell 1))))
+            (registrations (lambda (r) (seq-count (lambda (l) (string-match-p "\\`\\(compdef _drgnx drgnx\\|complete .*drgnx\\)" l))
+                                                  (split-string (nth 1 r) "\n" t)))))
+        (should (> (funcall registrations once) 0))
+        (should (= (funcall registrations once) (funcall registrations r)))))
     (when (eq shell 'zsh)
       (let ((r (drgnx-shell-files-test--run shell (format "%s; print -r -- ${(j: :)fpath}" (drgnx-shell-files-test--source shell 2)))))
         ;; the directory is in fpath once: two pieces around it
@@ -119,7 +123,7 @@ ARGS replace the shell's usual arguments before the script."
       (should (string-match-p "-F _drgnx drgnx" (nth 1 r))))
     (when (memq 'fish have)
       (let ((r (drgnx-shell-files-test--run 'fish (format "%s; complete -c drgnx" (drgnx-shell-files-test--source 'fish)))))
-        (should (string-match-p "\\`complete drgnx" (nth 1 r)))))))
+        (should (string-match-p "^complete drgnx" (nth 1 r)))))))   ; fish lists the newest registration first
 
 (ert-deftest drgnx-shell-files/eat-integration-only-inside-eat ()
   (let ((integ (make-temp-file "drgnx-eat" t)))
@@ -163,8 +167,8 @@ ARGS replace the shell's usual arguments before the script."
     (should (string-search "\e]51;e;G\e\\" (nth 1 r)))
     (should (string-search "\e]51;e;H;0\e\\\e]51;e;J\e\\\e]51;e;A;" (nth 1 r)))))
 
-(defun drgnx-shell-files-test--run-in-mode (shell pre args dir)
-  "Run SHELL with PRE before sourcing its file from DIR, outside eat and inside it.
+(defun drgnx-shell-files-test--run-in-mode (shell pre args dir &optional post)
+  "Run SHELL with PRE before sourcing its file from DIR, outside eat and inside it; POST runs last.
 Returns ((OUT-EXIT OUT STDERR) (IN-EXIT IN STDERR)); inside, a marker file stands for eat's integration."
   (let ((integ (make-temp-file "drgnx-eat" t))
         (file (expand-file-name (nth 1 (assq shell drgnx-shell-files-test--shells)) dir)))
@@ -172,7 +176,8 @@ Returns ((OUT-EXIT OUT STDERR) (IN-EXIT IN STDERR)); inside, a marker file stand
         (progn
           (with-temp-file (expand-file-name (symbol-name shell) integ) (insert "__drgnx_marker=hit\n"))
           (let* ((show (if (eq shell 'zsh) "print -r --" "echo"))
-                 (script (format "%s; source '%s'; %s \"marker=${__drgnx_marker-unset}\"" pre file show)))
+                 (script (format "%s; source '%s'; %s \"marker=${__drgnx_marker-unset}\"%s" pre file show
+                                 (if post (concat "; " post) ""))))
             (list (drgnx-shell-files-test--run shell script nil nil args)
                   (drgnx-shell-files-test--run shell script (list "INSIDE_EMACS=31.1,eat" (concat "EAT_SHELL_INTEGRATION_DIR=" integ))
                                                nil args))))
@@ -186,13 +191,20 @@ Returns ((OUT-EXIT OUT STDERR) (IN-EXIT IN STDERR)); inside, a marker file stand
         (progn
           (make-directory dir t)
           (dolist (f (directory-files drgnx-shell-files-test--dir t "\\`[^.]")) (copy-file f dir))
+          ;; each case: shell, what runs first, the shell's arguments, what runs last and the output that adds.
+          ;; bash: the completion function runs too (zsh's, which needs a terminal, is in shell-completion-test.el)
           (dolist (c '((zsh "setopt nounset" nil) (zsh "setopt nounset errexit" nil) (zsh "emulate sh -c 'true'" nil)
                        (zsh "setopt ksh_arrays sh_word_split" nil) (zsh "true" nil)
-                       (bash "set -u" nil) (bash "set -eu" nil) (bash "true" ("--norc" "--noprofile" "--posix" "-i" "-c"))))
-            (pcase-let* ((`(,shell ,pre ,args) c)
-                         (`(,out ,in) (drgnx-shell-files-test--run-in-mode shell pre args dir)))
-              (should (equal (list c (nth 0 out) (nth 1 out) (nth 2 out)) (list c 0 "marker=unset\n" "")))
-              (should (equal (list c (nth 0 in) (nth 1 in) (nth 2 in)) (list c 0 "marker=hit\n" "")))))
+                       (zsh "autoload -Uz compinit; compinit -D -u; setopt nounset" nil
+                            "print -r -- \"comp=$_comps[drgnx]\"" "comp=_drgnx\n")
+                       (bash "set -u" nil "COMP_WORDS=(drgnx o); COMP_CWORD=1; _drgnx; echo \"reply=${COMPREPLY[*]}\"" "reply=open onboard\n")
+                       (bash "set -eu" nil "COMP_WORDS=(drgnx o); COMP_CWORD=1; _drgnx; echo \"reply=${COMPREPLY[*]}\"" "reply=open onboard\n")
+                       (bash "true" ("--norc" "--noprofile" "--posix" "-i" "-c")
+                             "COMP_WORDS=(drgnx o); COMP_CWORD=1; _drgnx; echo \"reply=${COMPREPLY[*]}\"" "reply=open onboard\n")))
+            (pcase-let* ((`(,shell ,pre ,args ,post ,more) c)
+                         (`(,out ,in) (drgnx-shell-files-test--run-in-mode shell pre args dir post)))
+              (should (equal (list c (nth 0 out) (nth 1 out) (nth 2 out)) (list c 0 (concat "marker=unset\n" more) "")))
+              (should (equal (list c (nth 0 in) (nth 1 in) (nth 2 in)) (list c 0 (concat "marker=hit\n" more) "")))))
           ;; zsh under emulate sh: the whole sourcing happens in sh emulation
           (let* ((file (expand-file-name "drgnx.zsh" dir))
                  (r (drgnx-shell-files-test--run 'zsh (format "emulate sh -c \"source '%s'\"; print -r -- \"first=$fpath[1]\"" file))))

@@ -5,11 +5,99 @@
 [[ -n ${_drgnx_sourced-} ]] && return 0
 _drgnx_sourced=1
 
-# Completion: drgnx's commands, then file names.
+# Completion: drgnx's commands and their options, then file names.  Static lists, kept honest by a test that reads
+# bin/drgnx (test/unit/shell-completion-test.el); only --keys looks at the disk (a glob of keys/*.eld at TAB time).
+case ${BASH_SOURCE[0]-} in
+  /*) _drgnx_dir=${BASH_SOURCE[0]%/*} ;;
+  */*) _drgnx_dir=$PWD/${BASH_SOURCE[0]%/*} ;;
+  *) _drgnx_dir=$PWD ;;
+esac
+_drgnx_commands='open doctor build test ui macos-app sync upgrade rollback generations lock bisect service-unit onboard check fmt work hub job search keys safe help'
+_drgnx_steps='environment look-and-keys projects ai search agents daemon portability finish'
+_drgnx_presets='minimal ide full-ai'
+_drgnx_uis='start frame stop ls reap state shot click keys type measure mcp test-ui test-ui-session'
+_drgnx_installs='fedora-44 debian-trixie ubuntu-26.04 fedora-45 archlinux'
+
 _drgnx() {
+  local n=${COMP_CWORD-0} cur=${COMP_WORDS[${COMP_CWORD-0}]-} prev= cmd= sub= words= w f i
   COMPREPLY=()
+  if [[ $n -gt 0 ]]; then prev=${COMP_WORDS[n-1]-}; fi
+  if [[ $n -ge 2 ]]; then cmd=${COMP_WORDS[1]-}; fi
+  if [[ $n -ge 3 ]]; then sub=${COMP_WORDS[2]-}; fi
+
+  if [[ $n -le 1 ]]; then   # the command, or a file or folder to open
+    if [[ $cur == -* ]]; then
+      words='-h --help'
+    else
+      words=$_drgnx_commands
+      for f in "$cur"*; do
+        if [[ -e $f ]]; then
+          if [[ -d $f ]]; then f=$f/; fi
+          COMPREPLY+=("$f")
+        fi
+      done
+    fi
+  else
+    case $prev in   # the value of an option
+      --step) if [[ $cmd == onboard ]]; then words=$_drgnx_steps; fi ;;
+      --preset) if [[ $cmd == onboard ]]; then words=$_drgnx_presets; fi ;;
+      --config) if [[ $cmd == test ]]; then words='drgnx gryphn'; elif [[ $cmd == ui ]]; then words='minimal drgnx gryphn'; fi ;;
+      --keys)
+        if [[ $cmd == onboard ]]; then
+          for f in "$_drgnx_dir"/../../keys/*.eld; do
+            if [[ -e $f ]]; then
+              f=${f##*/}
+              words+=" ${f%.eld}"
+            fi
+          done
+        fi ;;
+    esac
+    if [[ -z $words ]]; then
+      if [[ $cur == -* ]]; then
+        case "$cmd $sub" in
+          'open '*) words='--check --wait' ;;
+          'doctor '*) words='--json --dev' ;;
+          'test '*) words='--ui --scenario --config --bench --perf --audit --soak --container --install' ;;
+          'sync '*) words='--offline --seed' ;;
+          'lock '*) words='--ship' ;;
+          'onboard '*) words='--non-interactive --again --preset --keys --theme --roots --todos --step' ;;
+          'check '*) words='--no-perf --no-gui --jobs --shards' ;;
+          'fmt '*) words='--check' ;;
+          'work record') words='--task' ;;
+          'work scan') words='--board' ;;
+          'work status') words='--json' ;;
+          'hub '*) words='--json' ;;
+          'job propose') words='--repo --budget --auto' ;;
+          'job approve' | 'job resume') words='--budget' ;;
+          'job status') words='--json' ;;
+          'search index') words='--rebuild' ;;
+          'search query') words='-k' ;;
+          'keys diff') words='--against' ;;
+          'ui start') words='--config --size --daemon' ;;
+          'ui click') words='--buffer --text --button --count --hold-ms' ;;
+        esac
+      elif [[ $n -eq 2 ]]; then   # the word after the command
+        case $cmd in
+          work) words='record scan status' ;;
+          hub) words='start stop status' ;;
+          job) words='propose approve resume stop status' ;;
+          search) words='index query mcp' ;;
+          keys) words='diff' ;;
+          ui) words=$_drgnx_uis ;;
+        esac
+      elif [[ $cmd == test ]]; then   # test --install NAME…
+        for ((i = 2; i < n; i++)); do
+          if [[ ${COMP_WORDS[i]-} == --install ]]; then words=$_drgnx_installs; fi
+        done
+      fi
+    fi
+  fi
+  for w in $words; do
+    if [[ $w == "$cur"* ]]; then COMPREPLY+=("$w"); fi
+  done
+  return 0
 }
-complete -o default -F _drgnx drgnx
+complete -o default -o filenames -F _drgnx drgnx
 
 # Inside eat only: its integration file is what makes a prompt clear "a program is running".  Eat refuses to
 # enable itself twice, so a line of your own that sources it is harmless.
