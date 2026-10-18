@@ -529,7 +529,7 @@ stopped (`drgnx-agents-stop' fails the test).  The feed's buffers are killed aft
         (drgnx-job-ui-note-jobs (list (list :id "jx" :status "running" :messages nil
                                             :cards (list (list :id cid :kind "ask" :title "go?")))))
         (drgnx-statusbar--refresh-now)
-        (should (equal (funcall seg 'jobs) "⚑1"))
+        (should (equal (funcall seg 'jobs) (concat (drgnx-statusbar--glyph 'flag "#") "1")))   ; ⚑1
         (should-not (string-search "waiting on you" (or (funcall seg 'agents) "")))))))
 
 (ert-deftest drgnx-cockpit-feed/terminals-get-the-same-text-in-ascii ()
