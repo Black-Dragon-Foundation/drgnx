@@ -14,6 +14,7 @@
 (require 'subr-x)
 (require 'drgnx-modules)
 (require 'drgnx-registry)
+(require 'drgnx-face-state)
 (defvar flymake-show-diagnostics-at-end-of-line)
 (defvar display-line-numbers-width-start)
 (defvar display-line-numbers-grow-only)
@@ -23,6 +24,9 @@
 (declare-function drgnx-topline-setup "drgnx-topline")
 (declare-function drgnx-start-setup "drgnx-start")
 (declare-function drgnx-tty-popups-ascii-p "drgnx-tty-popups")
+(declare-function drgnx-platform-wm "drgnx-platform-wm")
+(declare-function x-change-window-property "xfns.c")
+(declare-function x-delete-window-property "xfns.c")
 
 (defgroup drgnx-face nil
   "How drgnx looks: the frame, the buffers, the glyphs."
@@ -45,7 +49,8 @@
       ((or 'drgnx-face-dividers 'drgnx-face-divider-width) (drgnx-face--apply-dividers))
       ('drgnx-face-line-numbers-modes (drgnx-face--apply-line-numbers))
       ('drgnx-face-inline-problems (drgnx-face--apply-inline-problems))
-      ('drgnx-face-line-spacing (drgnx-face--apply-line-spacing)))))
+      ('drgnx-face-line-spacing (drgnx-face--apply-line-spacing))
+      ((or 'drgnx-face-title-bar 'drgnx-face-gtk-theme) (drgnx-face--apply-title-all)))))
 
 (defcustom drgnx-face-menu-bar nil
   "Non-nil: show Emacs's menu bar (hidden, the commands are in the palette,
@@ -79,6 +84,20 @@ Toggle for this session with the command Toggle Menu Bar."
   "Extra pixels between lines (nil: the default).  A number such as 2 or 3 is calmer for reading code."
   :type '(choice (const :tag "Default" nil) (natnum :tag "Pixels"))
   :set #'drgnx-face--set :group 'drgnx-face)
+
+(defcustom drgnx-face-title-bar 'dark
+  "The window's title bar (graphical frames): `dark' (the system's own title bar in its dark variant while the theme
+is dark, light while it is light), `system' (leave it as the desktop has it), or `drgnx' (drgnx draws it in the top
+line; never under a tiling window manager, and only where drgnx knows the window manager).
+GTK reads its theme variant once, at launch: on GTK without X11 (Wayland), a change here shows after a restart of
+drgnx (`systemctl --user restart drgnx'); on X11 and on a Mac it applies at once."
+  :type '(choice (const :tag "System title bar, dark variant" dark) (const :tag "System title bar, untouched" system)
+                 (const :tag "Drawn by drgnx" drgnx))
+  :set #'drgnx-face--set :group 'drgnx-face)
+
+(defcustom drgnx-face-gtk-theme "Adwaita"
+  "The GTK theme whose dark (or light) variant the title bar uses: GTK_THEME becomes NAME:dark when drgnx starts."
+  :type 'string :set #'drgnx-face--set :group 'drgnx-face)
 
 (defcustom drgnx-face-glyphs
   '((handle "⠿" . "::") (close "✕" . "x") (branch "⑂" . "Y") (warning "⚠" . "!") (ok "✓" . "+")
@@ -114,11 +133,13 @@ FRAME defaults to the selected one.  nil when NAME is unknown."
     (vertical-scroll-bars . ,(if (eq drgnx-face-scroll-bars 'native) 'right nil))))
 
 (defun drgnx-face-apply-frame (&optional frame)
-  "Give FRAME (default: the selected one) the menu bar and scroll bars the settings ask for.
+  "Give FRAME (default: the selected one) the menu bar, scroll bars and title bar the settings ask for.
 On `after-make-frame-functions'; a child frame (a popup) is left alone."
   (let ((frame (or frame (selected-frame))))
     (when (and (frame-live-p frame) (not (frame-parent frame)))
-      (modify-frame-parameters frame (drgnx-face--frame-params)))))
+      (modify-frame-parameters frame (drgnx-face--frame-params))
+      (drgnx-face--apply-title frame)
+      (drgnx-face--sync-state))))   ; the first graphical frame of a daemon is where the variant first becomes known
 
 (defun drgnx-face--apply-frames ()
   "The settings on every open frame, and on the frames made later (`default-frame-alist')."
@@ -144,6 +165,92 @@ Turning them off leaves `window-divider-mode' alone unless this module turned it
     (when drgnx-face--dividers-owned
       (setq drgnx-face--dividers-owned nil)
       (window-divider-mode -1))))
+
+;;;; Title bar
+
+(defconst drgnx-face--tiling-wms '(sway i3 hyprland niri)
+  "Window managers under which drgnx never draws the title bar: they tile windows and have none of their own.")
+
+(defvar drgnx-face--wm-noted nil
+  "Non-nil once the message that the window manager is unknown (so no drawn title bar) has been shown.")
+
+(defun drgnx-face--gui-system (frame)
+  "The window system of FRAME (`x', `pgtk', `ns', `w32') when it is graphical; nil for a terminal or a non-frame."
+  (and (framep frame) (display-graphic-p frame) (window-system frame)))
+
+(defun drgnx-face-title-variant (&optional frame)
+  "The title bar's GTK or macOS variant for FRAME (default: the selected one): `dark' or `light' as the frame's
+background is, or nil when `drgnx-face-title-bar' is `system' (the desktop's own choice) or the background is unknown.
+`drgnx' uses the same variant: it is the title bar when drgnx does not draw it."
+  (when (memq drgnx-face-title-bar '(dark drgnx))
+    (let ((mode (frame-parameter (or frame (selected-frame)) 'background-mode)))
+      (and (memq mode '(dark light)) mode))))
+
+(defun drgnx-face--drawn-wanted-p (frame)
+  "Non-nil when FRAME's title bar is to be drawn by drgnx: the setting is `drgnx', FRAME is graphical and the window
+manager is known and does not tile.  Not known (`drgnx-platform-wm' is missing) says so once and gives nil."
+  (and (eq drgnx-face-title-bar 'drgnx) (drgnx-face--gui-system frame)
+       (if (fboundp 'drgnx-platform-wm)
+           (not (memq (drgnx-platform-wm frame) drgnx-face--tiling-wms))
+         (unless drgnx-face--wm-noted
+           (setq drgnx-face--wm-noted t)
+           (message "drgnx: the window manager is not known here, so the title bar stays the system's, in its dark variant"))
+         nil)))
+
+(defvar drgnx-face--drawn (make-hash-table :test #'eq :weakness 'key)
+  "Frame -> t for the frames whose title bar drgnx draws.  Weak on the frame, so a closed frame leaves nothing behind.
+A hash table, not a frame parameter: `frame-parameter' builds the whole parameter list to answer, and the top line asks
+on every redisplay.")
+
+(defun drgnx-face-drawn-title-p (&optional frame)
+  "Non-nil when drgnx draws FRAME's title bar (default: the selected frame): the frame is undecorated by this setting.
+Reads what `drgnx-face--apply-title' decided when the frame was made or the setting changed, and allocates nothing,
+so the top line may ask on every redisplay."
+  (gethash (or frame (selected-frame)) drgnx-face--drawn))
+
+(defun drgnx-face--x-variant (frame variant)
+  "On X11, give FRAME the GTK window property _GTK_THEME_VARIANT VARIANT; nil takes back what this module set."
+  (cond (variant
+         (when (fboundp 'x-change-window-property)
+           (x-change-window-property "_GTK_THEME_VARIANT" (symbol-name variant) frame 'UTF8_STRING 8 t))
+         (set-frame-parameter frame 'drgnx-face-gtk-variant t))
+        ((frame-parameter frame 'drgnx-face-gtk-variant)
+         (when (fboundp 'x-delete-window-property) (x-delete-window-property "_GTK_THEME_VARIANT" frame))
+         (set-frame-parameter frame 'drgnx-face-gtk-variant nil))))
+
+(defun drgnx-face--apply-title (frame)
+  "FRAME's title bar as `drgnx-face-title-bar' asks, on a graphical frame.
+X11: the window property GTK reads.  macOS: `ns-appearance'.  GTK without X11 (pgtk): nothing now, GTK reads
+GTK_THEME once, when drgnx starts (bin/drgnx and the systemd unit set it from face.eld).  A drawn title bar makes
+the frame undecorated."
+  (when-let* ((system (drgnx-face--gui-system frame)))
+    (let ((variant (drgnx-face-title-variant frame)) (drawn (drgnx-face--drawn-wanted-p frame)))
+      (pcase system
+        ('x (drgnx-face--x-variant frame variant))
+        ('ns (modify-frame-parameters frame `((ns-appearance . ,variant) (ns-transparent-titlebar . ,(and variant t))))))
+      (when (or drawn (gethash frame drgnx-face--drawn))
+        (if drawn (puthash frame t drgnx-face--drawn) (remhash frame drgnx-face--drawn))
+        (modify-frame-parameters frame `((undecorated . ,drawn)))))))
+
+(defun drgnx-face--sync-state ()
+  "Keep `:variant' and `:gtk-theme' in face.eld as the launchers need them (bin/drgnx, the systemd unit), written only
+when they changed.  The variant is that of a graphical frame; with none, or a background not known, nothing is written."
+  (when-let* ((frame (seq-find (lambda (f) (and (not (frame-parent f)) (drgnx-face--gui-system f))) (frame-list))))
+    (let ((variant (drgnx-face-title-variant frame)) (state (drgnx-face-state-read)))
+      (when (or variant (eq drgnx-face-title-bar 'system))
+        (unless (and (eq (plist-get state :variant) variant) (equal (plist-get state :gtk-theme) drgnx-face-gtk-theme))
+          (drgnx-face-state-write (plist-put (plist-put (copy-sequence state) :variant variant)
+                                             :gtk-theme drgnx-face-gtk-theme)))))))
+
+(defun drgnx-face--apply-title-all ()
+  "The title bar on every open frame, and the state the launchers read."
+  (dolist (f (frame-list)) (unless (frame-parent f) (drgnx-face--apply-title f)))
+  (drgnx-face--sync-state)
+  (force-mode-line-update t))   ; the top line shows its window controls only on a drawn title bar
+
+(defun drgnx-face--on-theme (&optional _theme)
+  "On `enable-theme-functions': the new theme may have changed the background, so the variant."
+  (drgnx-face--apply-title-all))
 
 ;;;; Buffers
 
@@ -229,9 +336,11 @@ F10's `menu-bar-open' has no menu to open on a toolkit frame whose bar is hidden
   (when (fboundp 'drgnx-topline-setup) (drgnx-topline-setup))   ; the top line (drgnx-topline.el)
   (when (fboundp 'drgnx-start-setup) (drgnx-start-setup))   ; the start page (drgnx-start.el)
   (add-hook 'after-make-frame-functions #'drgnx-face-apply-frame)
+  (add-hook 'enable-theme-functions #'drgnx-face--on-theme)
   (add-hook 'after-change-major-mode-hook #'drgnx-face-line-numbers-maybe)
   (setq drgnx-face--active t)
   (drgnx-face--apply-frames)
+  (drgnx-face--sync-state)
   (drgnx-face--apply-dividers)
   (drgnx-face--apply-line-numbers)
   (drgnx-face--apply-inline-problems)
@@ -247,6 +356,8 @@ F10's `menu-bar-open' has no menu to open on a toolkit frame whose bar is hidden
                                  (drgnx-face-line-numbers-modes . "modes whose files show line numbers")
                                  (drgnx-face-inline-problems . "nil, short (default) or t: problems at the end of the line")
                                  (drgnx-face-line-spacing . "extra pixels between lines")
+                                 (drgnx-face-title-bar . "dark (default), system or drgnx: the window's title bar")
+                                 (drgnx-face-gtk-theme . "the GTK theme whose dark variant the title bar uses")
                                  (drgnx-face-glyphs . "the glyphs drgnx draws, each with an ASCII form")
                                  (drgnx-statusbar-left . "status bar segments on the left, in order")
                                  (drgnx-statusbar-right . "status bar segments on the right, in order")

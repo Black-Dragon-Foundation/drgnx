@@ -195,7 +195,7 @@ after a reboot does not hold it, and of two commands taking over the same stale 
 enables it. A daemon that fails is restarted after 2 seconds and
 started at most 3 times a minute (after that, `systemctl --user reset-failed drgnx`), so a second drgnx holding the
 server name does not loop. The unit runs the Emacs that ran the command — `$DRGNX_EMACS`, default `emacs` — by its full path
-(quoted for systemd, so paths with spaces work). Choose another one when you write the unit, e.g.
+(quoted for systemd, so paths with spaces work). Once drgnx has run with a window, the unit also carries `Environment=GTK_THEME=Adwaita:dark` (the dark title bar, [the face](face.md#the-title-bar)). Choose another one when you write the unit, e.g.
 `DRGNX_EMACS=emacs-pgtk drgnx service-unit DIR` on Fedora where `emacs` may be another build. To run it next to your current Emacs daemon:
 
 ```sh

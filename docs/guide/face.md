@@ -30,6 +30,43 @@ and the settings above put them back.
 `(menu-bar-mode 1)` in `config.el` is overridden on every frame made after it, so use `setopt` as above. With the
 module off (Preferences: Modules), nothing of this runs after startup and `(menu-bar-mode 1)` brings the bar back.
 
+## The title bar
+
+The window's title bar is the system's own, in its dark variant: it keeps your window manager's drag, snap and
+resize, and it no longer shows a light bar over a dark editor. The variant follows the theme: a dark theme asks for
+the dark bar, a light theme for the light one, so changing the theme in Preferences changes the bar too.
+
+| Setting | Default | What it does |
+|---|---|---|
+| `drgnx-face-title-bar` | `dark` | `dark`: the system's title bar in the variant of your theme. `system`: drgnx leaves the title bar alone. `drgnx`: drgnx draws the title bar itself (see below). |
+| `drgnx-face-gtk-theme` | `"Adwaita"` | The GTK theme whose dark (or light) variant the bar uses: GTK is started with `GTK_THEME=Adwaita:dark`. Give the name of a GTK theme you have installed, without a variant: drgnx adds `:dark` or `:light`. Letters, digits and `. _ + -` only. |
+
+What happens depends on where drgnx runs:
+
+- **Linux, X11:** the window gets the `_GTK_THEME_VARIANT` property, at once and again when the theme changes.
+- **Linux, Wayland (GTK without X11, `emacs-pgtk`):** GTK reads its theme once, when the daemon starts, and Emacs
+  cannot change that afterwards. So drgnx writes the variant to `face.eld` in its state directory (a theme change
+  updates it) and starts the daemon with `GTK_THEME` set from it: `drgnx open` does this when it starts the
+  daemon (a `GTK_THEME` already in your environment wins), and `drgnx service-unit` puts
+  `Environment=GTK_THEME=Adwaita:dark` in the unit it writes. The first start of a fresh install, before drgnx has
+  seen a theme, has the system's bar; every start after that is dark. A unit you installed earlier does not change
+  by itself: write it again with `drgnx service-unit DIR` and reload systemd. The desktop entry runs `emacsclient`
+  against the running daemon, so it follows the daemon. Changing the setting or the theme to the other variant shows
+  after the next start of the daemon (`systemctl --user restart drgnx`).
+- **macOS:** the frame gets `ns-appearance` (`dark` or `light`) and a transparent title bar, at once. The system menu
+  bar stays the system's.
+- **A terminal** has no title bar; nothing is done.
+
+`drgnx` draws the title bar itself: the frame has no system decoration, and the top line gets minimise, maximise and
+close buttons at its right end and moves the window when you drag its empty part. It is meant for desktops that
+draw a heavy title bar of their own. It is never used under a tiling window manager (sway, i3, Hyprland, niri), which
+has no title bars to replace, and only where drgnx knows the window manager; where it does not, the title bar
+stays the system's, dark, and a message says so once.
+
+To undo all of it, `(setopt drgnx-face-title-bar 'system)` in `config.el`: on X11 and macOS the bar goes back at
+once; on Wayland restart the daemon, and write the service unit again if you installed one (it then has no
+`GTK_THEME` line). To drop it for good, turn the module `ui/face` off.
+
 ## The buffers
 
 | Setting | Default | What it does |
@@ -181,10 +218,9 @@ commands` and the palette opens. A command with no key of its own in your profil
 cannot send is shown the way it can be typed (the same form the palette and the key sheet show). When the frame is
 too narrow for the hint, the hint goes first and the place is cut with an ellipsis last: the line never wraps.
 
-When drgnx draws the window's title itself (a frame without its own title bar, a setting of the face that arrives
-with window titles) the right end has `– ▢ ✕` (minimise, maximise, close) and the empty part of the line moves the
-window when you drag it. With your window manager's own title bar those buttons would be a second set, so they are
-not there; until that setting exists they never are.
+When drgnx draws the window's title itself (`drgnx-face-title-bar` set to `drgnx`: [the title bar](#the-title-bar))
+the right end has `– ▢ ✕` (minimise, maximise, close) and the empty part of the line moves the window when you drag
+it. With the system's own title bar (the default) those buttons would be a second set, so they are not there.
 
 The line is Emacs's tab bar with no tabs, since drgnx has no workspaces. It only reads what is already known: the
 branch from the file's version-control text (never by running git), and the project from the same cache the breadcrumb

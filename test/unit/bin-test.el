@@ -331,6 +331,39 @@ case \"$*\" in *is-enabled*) [ -f %s ] ;; *start*) touch %s ;; esac"
         (should (>= (- (float-time) start) 0.9)))
       (should (string-search "--bg-daemon=" (drgnx-bin-test--slurp (expand-file-name "emacs.log" dir)))))))
 
+(ert-deftest drgnx-bin/open-exports-gtk-theme ()
+  ;; The daemon is started with GTK_THEME from face.eld (read with sed, no Emacs), so GTK's title bar is dark from the first
+  ;; frame; a value the caller already has wins.  A fake emacs records the variable it was started with.
+  (drgnx-bin-test--with-open
+    (let ((log (expand-file-name "gtk.log" dir))
+          (face (expand-file-name "state/drgnx/face.eld" dir))
+          (fake (expand-file-name "emacs" pathdir)))
+      (write-region (format "#!/bin/sh\necho \"${GTK_THEME-unset}\" >> '%s'\ntouch '%s'\n" log (expand-file-name "running" dir))
+                    nil fake)
+      (set-file-modes fake #o755)
+      (make-directory (file-name-directory face) t)
+      (let ((start (lambda (&rest extra)
+                     (delete-file (expand-file-name "running" dir))
+                     (should (eql 0 (car (drgnx-bin-test--call drgnx-bin-test--bin
+                                                               (append (or extra (list "GTK_THEME")) env) "open"))))
+                     (prog1 (drgnx-bin-test--slurp log) (delete-file log)))))
+        (write-region "(:start-dismissed t :variant dark :gtk-theme \"Adwaita\")" nil face)
+        (should (equal (funcall start) "Adwaita:dark\n"))
+        (write-region "(:variant light :gtk-theme \"Adwaita-dark\")" nil face)
+        (should (equal (funcall start) "Adwaita-dark:light\n"))
+        ;; the caller's own value wins
+        (write-region "(:variant dark :gtk-theme \"Adwaita\")" nil face)
+        (should (equal (funcall start "GTK_THEME=HighContrast") "HighContrast\n"))
+        ;; `system' (no variant), no theme, a name that is no plain name, no file: GTK is left alone
+        (write-region "(:variant nil :gtk-theme \"Adwaita\")" nil face)
+        (should (equal (funcall start) "unset\n"))
+        (write-region "(:variant dark)" nil face)
+        (should (equal (funcall start) "unset\n"))
+        (write-region "(:variant dark :gtk-theme \"a b;rm\")" nil face)
+        (should (equal (funcall start) "unset\n"))
+        (delete-file face)
+        (should (equal (funcall start) "unset\n"))))))
+
 (ert-deftest drgnx-bin/the-daemon-log-is-appended-to ()
   ;; A second start (or the losing one of two) must not wipe what the first one said.
   (drgnx-bin-test--with-open

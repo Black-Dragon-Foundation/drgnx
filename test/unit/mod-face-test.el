@@ -5,30 +5,35 @@
 
 (defvar drgnx-face-test--mode-calls nil "The arguments `window-divider-mode' was called with (newest first).")
 (defvar drgnx-face-test--spec-calls nil "The (FACE SPEC TYPE) `face-spec-set' was called with (newest first).")
+(defvar drgnx-face-test--state nil "The temp directory that is the state directory while a test runs.")
 
 (defmacro drgnx-face-test--with (&rest body)
   "BODY with the module's hooks, frame defaults and settings kept away from the rest of the test process.
 `window-divider-mode' and `face-spec-set' are stubs that record their calls (the divider variables are rebound), so
 setup changes neither the dividers nor the faces of the test process."
   (declare (indent 0))
-  `(let ((drgnx-face-test--mode-calls nil) (drgnx-face-test--spec-calls nil)
-         (window-divider-mode nil)
-         (window-divider-default-places window-divider-default-places)
-         (window-divider-default-right-width window-divider-default-right-width)
-         (window-divider-default-bottom-width window-divider-default-bottom-width)
-         (drgnx-face--dividers-owned nil)
-         (drgnx-face-dividers drgnx-face-dividers) (drgnx-face-divider-width drgnx-face-divider-width)
-         (drgnx-face--line-spacing-saved nil) (drgnx-face--flymake-waiting nil)
-         (default-frame-alist (copy-alist default-frame-alist))
-         (after-make-frame-functions nil)
-         (after-change-major-mode-hook nil)
-         (drgnx-face--active nil)
-         (drgnx-face-menu-bar drgnx-face-menu-bar) (drgnx-face-scroll-bars drgnx-face-scroll-bars)
-         (drgnx-face-line-spacing drgnx-face-line-spacing)
-         (drgnx-face-line-numbers-modes drgnx-face-line-numbers-modes)
-         (drgnx-face-inline-problems drgnx-face-inline-problems)
-         (line-spacing line-spacing)
-         (drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil))
+  `(let* ((drgnx-face-test--state (make-temp-file "drgnx-face-test" t))   ; face.eld goes here, never to ~
+          (process-environment (cons (concat "XDG_STATE_HOME=" drgnx-face-test--state) process-environment))
+          (drgnx-face-test--mode-calls nil) (drgnx-face-test--spec-calls nil)
+          (window-divider-mode nil)
+          (window-divider-default-places window-divider-default-places)
+          (window-divider-default-right-width window-divider-default-right-width)
+          (window-divider-default-bottom-width window-divider-default-bottom-width)
+          (drgnx-face--dividers-owned nil)
+          (drgnx-face-dividers drgnx-face-dividers) (drgnx-face-divider-width drgnx-face-divider-width)
+          (drgnx-face--line-spacing-saved nil) (drgnx-face--flymake-waiting nil)
+          (default-frame-alist (copy-alist default-frame-alist))
+          (after-make-frame-functions nil)
+          (after-change-major-mode-hook nil)
+          (drgnx-face--active nil)
+          (drgnx-face-title-bar drgnx-face-title-bar) (drgnx-face-gtk-theme drgnx-face-gtk-theme)
+          (drgnx-face--wm-noted nil) (enable-theme-functions nil)
+          (drgnx-face-menu-bar drgnx-face-menu-bar) (drgnx-face-scroll-bars drgnx-face-scroll-bars)
+          (drgnx-face-line-spacing drgnx-face-line-spacing)
+          (drgnx-face-line-numbers-modes drgnx-face-line-numbers-modes)
+          (drgnx-face-inline-problems drgnx-face-inline-problems)
+          (line-spacing line-spacing)
+          (drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil))
      (cl-letf (((symbol-function 'drgnx-topline-setup) #'ignore)   ; the top line turns the tab bar on: mod-topline-test.el
                ((symbol-function 'window-divider-mode)
                 (lambda (&optional arg) (push arg drgnx-face-test--mode-calls) (setq window-divider-mode (and arg (> arg 0)))))
@@ -36,6 +41,7 @@ setup changes neither the dividers nor the faces of the test process."
                 (lambda (face spec &optional type) (push (list face spec type) drgnx-face-test--spec-calls))))
        (unwind-protect (progn ,@body)
          (define-key global-map [remap menu-bar-open] nil)
+         (delete-directory drgnx-face-test--state t)
          (setq drgnx-face--active nil)))))
 
 (defun drgnx-face-test--setup ()
@@ -340,5 +346,177 @@ setup changes neither the dividers nor the faces of the test process."
     (should (search-forward "(unless (eq system-type 'darwin)" nil t))     ; not on a Mac: its menu bar is the system's
     (should (search-forward "(push '(menu-bar-lines . 0) default-frame-alist)" nil t))
     (should (search-forward "(push '(vertical-scroll-bars . nil) default-frame-alist)" nil t))))
+
+;;;; The title bar
+
+(defmacro drgnx-face-test--frame (system mode &rest body)
+  "BODY with the selected frame a graphical frame of window system SYSTEM (nil: a terminal) whose background is MODE.
+The frame is the batch one; its parameters are put back afterwards."
+  (declare (indent 2))
+  `(let ((old-mode (frame-parameter nil 'background-mode)))
+     (cl-letf (((symbol-function 'drgnx-face--gui-system) (lambda (_f) ,system)))
+       (set-frame-parameter nil 'background-mode ,mode)
+       (unwind-protect (progn ,@body)
+         (modify-frame-parameters nil `((background-mode . ,old-mode) (ns-appearance) (ns-transparent-titlebar)
+                                        (undecorated) (drgnx-face-gtk-variant)))
+         (clrhash drgnx-face--drawn)))))
+
+(ert-deftest drgnx-face/title-follows-the-theme ()
+  (drgnx-face-test--with
+    (drgnx-face-test--frame 'pgtk 'dark
+      (should (eq drgnx-face-title-bar 'dark))
+      (should (eq (drgnx-face-title-variant) 'dark))
+      (set-frame-parameter nil 'background-mode 'light)
+      (should (eq (drgnx-face-title-variant) 'light))
+      (should (eq (drgnx-face-title-variant (selected-frame)) 'light))
+      (let ((drgnx-face-title-bar 'system)) (should-not (drgnx-face-title-variant)))
+      (let ((drgnx-face-title-bar 'drgnx)) (should (eq (drgnx-face-title-variant) 'light))))))
+
+(ert-deftest drgnx-face/x11-sets-the-gtk-variant ()
+  (drgnx-face-test--with
+    (drgnx-face-test--frame 'x 'dark
+      (let (calls)
+        (cl-letf (((symbol-function 'x-change-window-property)
+                   (lambda (&rest args) (push args calls)))
+                  ((symbol-function 'x-delete-window-property)
+                   (lambda (&rest args) (push (cons 'delete args) calls))))
+          (drgnx-face-apply-frame (selected-frame))
+          (should (equal (car calls) (list "_GTK_THEME_VARIANT" "dark" (selected-frame) 'UTF8_STRING 8 t)))
+          ;; a light theme: the light variant
+          (set-frame-parameter nil 'background-mode 'light)
+          (drgnx-face-apply-frame (selected-frame))
+          (should (equal (nth 1 (car calls)) "light"))
+          ;; `system' takes it away again, once
+          (setq calls nil)
+          (let ((drgnx-face-title-bar 'system))
+            (drgnx-face-apply-frame (selected-frame))
+            (should (equal calls (list (list 'delete "_GTK_THEME_VARIANT" (selected-frame)))))
+            (setq calls nil)
+            (drgnx-face-apply-frame (selected-frame))
+            (should-not calls)))))))
+
+(ert-deftest drgnx-face/pgtk-and-terminals-set-nothing-at-run-time ()
+  (drgnx-face-test--with
+    (let (calls)
+      (cl-letf (((symbol-function 'x-change-window-property) (lambda (&rest args) (push args calls))))
+        (drgnx-face-test--frame 'pgtk 'dark          ; GTK reads GTK_THEME once, at launch
+          (drgnx-face-apply-frame (selected-frame))
+          (should-not (frame-parameter nil 'ns-appearance)))
+        (drgnx-face-test--frame nil 'dark
+          (drgnx-face-apply-frame (selected-frame))
+          (should-not (frame-parameter nil 'ns-appearance)))
+        (should-not calls)))))
+
+(ert-deftest drgnx-face/macos-sets-ns-appearance ()
+  (drgnx-face-test--with
+    (drgnx-face-test--frame 'ns 'dark
+      (drgnx-face-apply-frame (selected-frame))
+      (should (eq (frame-parameter nil 'ns-appearance) 'dark))
+      (should (eq (frame-parameter nil 'ns-transparent-titlebar) t))
+      (set-frame-parameter nil 'background-mode 'light)
+      (drgnx-face-apply-frame (selected-frame))
+      (should (eq (frame-parameter nil 'ns-appearance) 'light))
+      (let ((drgnx-face-title-bar 'system))
+        (drgnx-face-apply-frame (selected-frame))
+        (should-not (frame-parameter nil 'ns-appearance))
+        (should-not (frame-parameter nil 'ns-transparent-titlebar))))))
+
+(ert-deftest drgnx-face/drawn-title-never-under-a-tiling-wm ()
+  (drgnx-face-test--with
+    (let ((drgnx-face-title-bar 'drgnx))
+      (dolist (wm '(sway i3 hyprland niri))
+        (drgnx-face-test--frame 'pgtk 'dark
+          (cl-letf (((symbol-function 'drgnx-platform-wm) (lambda (&optional _f) wm))
+                    ((symbol-function 'x-change-window-property) #'ignore))
+            (drgnx-face-apply-frame (selected-frame))
+            (should-not (drgnx-face-drawn-title-p))
+            (should-not (frame-parameter nil 'undecorated)))))
+      ;; a stacking one: the frame is undecorated and says so
+      (drgnx-face-test--frame 'pgtk 'dark
+        (cl-letf (((symbol-function 'drgnx-platform-wm) (lambda (&optional _f) 'mutter)))
+          (drgnx-face-apply-frame (selected-frame))
+          (should (drgnx-face-drawn-title-p))
+          (should (drgnx-face-drawn-title-p (selected-frame)))
+          (should (eq (frame-parameter nil 'undecorated) t))
+          ;; back to the system's: decorated again
+          (let ((drgnx-face-title-bar 'dark))
+            (drgnx-face-apply-frame (selected-frame))
+            (should-not (drgnx-face-drawn-title-p))
+            (should-not (frame-parameter nil 'undecorated)))))
+      ;; a terminal has no title bar to draw
+      (drgnx-face-test--frame nil 'dark
+        (cl-letf (((symbol-function 'drgnx-platform-wm) (lambda (&optional _f) 'mutter)))
+          (drgnx-face-apply-frame (selected-frame))
+          (should-not (drgnx-face-drawn-title-p)))))))
+
+(ert-deftest drgnx-face/drawn-title-needs-the-wm-known ()
+  (drgnx-face-test--with
+    (let ((drgnx-face-title-bar 'drgnx) (messages nil))
+      (drgnx-face-test--frame 'x 'dark
+        (cl-letf (((symbol-function 'drgnx-platform-wm) nil)
+                  ((symbol-function 'x-change-window-property) (lambda (&rest a) (push a messages)))
+                  ((symbol-function 'message) (lambda (fmt &rest args) (push (apply #'format fmt args) messages))))
+          (should-not (fboundp 'drgnx-platform-wm))
+          (drgnx-face-apply-frame (selected-frame))
+          (drgnx-face-apply-frame (selected-frame))
+          (should-not (drgnx-face-drawn-title-p))
+          (should-not (frame-parameter nil 'undecorated))
+          ;; dark is used instead, and the reason is said once
+          (should (= 2 (cl-count-if (lambda (m) (equal (car-safe m) "_GTK_THEME_VARIANT")) messages)))
+          (let ((said (seq-filter #'stringp messages)))
+            (should (= 1 (length said)))
+            (should (string-match-p "window manager" (car said)))))))))
+
+(ert-deftest drgnx-face/drawn-title-is-read-from-the-frame-never-worked-out ()
+  ;; the top line asks on every redisplay: no window manager lookup, no message
+  (drgnx-face-test--with
+    (drgnx-face-test--frame 'pgtk 'dark
+      (cl-letf (((symbol-function 'drgnx-platform-wm) (lambda (&optional _) (error "asked the window manager")))
+                ((symbol-function 'message) (lambda (&rest _) (error "said something"))))
+        (let ((drgnx-face-title-bar 'drgnx))
+          (should-not (drgnx-face-drawn-title-p)))
+        (puthash (selected-frame) t drgnx-face--drawn)
+        (should (drgnx-face-drawn-title-p))))))
+
+(ert-deftest drgnx-face/the-theme-and-the-setting-write-the-state-and-reapply ()
+  (drgnx-face-test--with
+    (drgnx-face-state-write '(:start-dismissed t))
+    (let (props)
+      (drgnx-face-test--frame 'x 'dark
+        (cl-letf (((symbol-function 'x-change-window-property) (lambda (_p v &rest _) (push v props)))
+                  ((symbol-function 'x-delete-window-property) #'ignore))
+          (drgnx-face-test--setup)
+          (should (memq #'drgnx-face--on-theme enable-theme-functions))
+          (let ((state (drgnx-face-state-read)))             ; what the module wrote, beside what was there
+            (should (eq (plist-get state :variant) 'dark))
+            (should (equal (plist-get state :gtk-theme) "Adwaita"))
+            (should (plist-get state :start-dismissed)))
+          (should (equal (drgnx-face-state-gtk-theme) "Adwaita:dark"))
+          ;; a light theme
+          (set-frame-parameter nil 'background-mode 'light)
+          (run-hook-with-args 'enable-theme-functions 'some-theme)
+          (should (equal (car props) "light"))
+          (should (equal (drgnx-face-state-gtk-theme) "Adwaita:light"))
+          ;; the setting
+          (setopt drgnx-face-title-bar 'system)
+          (should-not (drgnx-face-state-gtk-theme))
+          (should (plist-get (drgnx-face-state-read) :start-dismissed))
+          (setopt drgnx-face-title-bar 'dark drgnx-face-gtk-theme "Adwaita-dark")
+          (should (equal (drgnx-face-state-gtk-theme) "Adwaita-dark:light")))))))
+
+(ert-deftest drgnx-face/a-terminal-never-writes-the-title-state ()
+  (drgnx-face-test--with
+    (drgnx-face-test--frame nil 'dark
+      (drgnx-face-test--setup)
+      (setopt drgnx-face-title-bar 'system)
+      (setopt drgnx-face-title-bar 'dark)
+      (should-not (file-exists-p (drgnx-face-state-file))))))
+
+(ert-deftest drgnx-face/the-title-settings-are-reachable ()
+  (should (custom-variable-p 'drgnx-face-title-bar))
+  (should (custom-variable-p 'drgnx-face-gtk-theme))
+  (let ((settings (plist-get (alist-get 'ui/face drgnx-modules--table) :settings)))
+    (should (assq 'drgnx-face-title-bar settings))
+    (should (assq 'drgnx-face-gtk-theme settings))))
 
 ;;; mod-face-test.el ends here

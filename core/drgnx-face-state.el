@@ -35,5 +35,18 @@ state directory's \"~\" would ask that host."
       (rename-file tmp file t))
     plist))
 
+;; The title bar (M12f A2) keeps `:variant' (`dark', `light' or nil) and `:gtk-theme' (a theme name such as "Adwaita") here
+;; so that the launchers can start GTK in the right variant before any frame exists: bin/drgnx reads the file with `sed'
+;; (open_start) and `drgnx-pkg-service-unit' reads it with `drgnx-face-state-gtk-theme'.
+
+(defun drgnx-face-state-gtk-theme ()
+  "The value for GTK_THEME that the state asks for, \"NAME:dark\" or \"NAME:light\", or nil.
+nil when there is no variant (the setting is `system'), no theme name, or a name that is not a plain one: it ends up
+in a unit file and in an environment variable, so only letters, digits and . _ + - are accepted.  Never signals."
+  (let* ((state (drgnx-face-state-read)) (variant (plist-get state :variant)) (theme (plist-get state :gtk-theme)))
+    (and (memq variant '(dark light)) (stringp theme)
+         (string-match-p "\\`[A-Za-z0-9._+-]+\\'" theme)
+         (format "%s:%s" theme variant))))
+
 (provide 'drgnx-face-state)
 ;;; drgnx-face-state.el ends here
