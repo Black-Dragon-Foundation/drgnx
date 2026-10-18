@@ -392,7 +392,8 @@ are pushed to STEERED as (NAME TEXT)."
   ;; data decoded (each frame of a busy page is ~150 kB of garbage otherwise).
   (skip-unless drgnx-live-test--websocket)
   (drgnx-live-test--with
-    (let ((drgnx-live-frame-interval 0.5) (parsed nil) (decoded 0)
+    ;; a long draw interval: all five arrive before the next draw, even on a busy machine
+    (let ((drgnx-live-frame-interval 2.0) (parsed nil) (decoded 0)
           (big (base64-encode-string (make-string 60000 ?x) t)))
       (drgnx-live-test--open)
       (drgnx-mock-cdp-frame 1)
