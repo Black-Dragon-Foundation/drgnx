@@ -97,7 +97,7 @@ GC, another process — then does not decide the number."
     (setq drgnx-explorer-git nil)               ; like treemacs: git off, then on for the git rows
     (setq r (drgnx-bench--put r :explorer-first
                               (drgnx-bench--try "drgnx" "first"
-                                                (drgnx-bench--ms (lambda () (drgnx-wb-hide-sidebar) (clrhash drgnx-explorer--cache)
+                                                (drgnx-bench--ms (lambda () (drgnx-wb-hide-sidebar) (drgnx-cache--clear 'explorer-listing)
                                                                    (clrhash drgnx-explorer--expanded)
                                                                    (when (get-buffer drgnx-explorer-buffer-name) (kill-buffer drgnx-explorer-buffer-name)))
                                                                  (lambda () (drgnx-explorer-set-roots (list root)) (drgnx-wb-show-sidebar))))))
@@ -105,27 +105,27 @@ GC, another process — then does not decide the number."
     (setq r (drgnx-bench--put r :explorer-first-git
                               (drgnx-bench--try "drgnx" "first with git"
                                                 (unwind-protect
-                                                    (drgnx-bench--ms (lambda () (drgnx-wb-hide-sidebar) (clrhash drgnx-explorer--cache)
-                                                                       (clrhash drgnx-explorer--expanded) (clrhash drgnx-git--repos)
+                                                    (drgnx-bench--ms (lambda () (drgnx-wb-hide-sidebar) (drgnx-cache--clear 'explorer-listing)
+                                                                       (clrhash drgnx-explorer--expanded) (drgnx-cache--clear 'git-status)
                                                                        (drgnx-bench--no-git-timer) (setq drgnx-explorer-git t)
                                                                        (when (get-buffer drgnx-explorer-buffer-name) (kill-buffer drgnx-explorer-buffer-name)))
                                                                      (lambda () (drgnx-explorer-set-roots (list root)) (drgnx-wb-show-sidebar)
                                                                        (drgnx-git-refresh (file-name-as-directory root) t)
                                                                        (unless (drgnx-git-status (expand-file-name "d000/f000.txt" root))
-                                                                         (error "no git status was read: %S %s" (gethash (file-name-as-directory root) drgnx-git--repos) (with-current-buffer (get-buffer-create " *drgnx git errors*") (buffer-substring-no-properties (max 1 (- (point-max) 300)) (point-max)))))))
+                                                                         (error "no git status was read: %S %s" (drgnx-cache-get 'git-status (file-name-as-directory root)) (with-current-buffer (get-buffer-create " *drgnx git errors*") (buffer-substring-no-properties (max 1 (- (point-max) 300)) (point-max)))))))
                                                   (drgnx-bench--no-git-timer) (setq drgnx-explorer-git nil)))))
     (setq r (drgnx-bench--put r :git-status
                               (drgnx-bench--try "drgnx" "git status"
-                                                (drgnx-bench--ms (lambda () (clrhash drgnx-git--repos))
+                                                (drgnx-bench--ms (lambda () (drgnx-cache--clear 'git-status))
                                                                  (lambda ()
                                                                    (drgnx-git-refresh (file-name-as-directory root) t)
                                                                    (unless (drgnx-git-status (expand-file-name "d000/f000.txt" root))
-                                                                     (error "no git status was read: %S %s" (gethash (file-name-as-directory root) drgnx-git--repos) (with-current-buffer (get-buffer-create " *drgnx git errors*") (buffer-substring-no-properties (max 1 (- (point-max) 300)) (point-max))))))))))
+                                                                     (error "no git status was read: %S %s" (drgnx-cache-get 'git-status (file-name-as-directory root)) (with-current-buffer (get-buffer-create " *drgnx git errors*") (buffer-substring-no-properties (max 1 (- (point-max) 300)) (point-max))))))))))
     (setq r (drgnx-bench--put r :explorer-expand
                               (drgnx-bench--try "drgnx" "expand"
                                                 (drgnx-bench--ms (lambda () (when (drgnx-explorer--expanded-p big)
                                                                               (drgnx-explorer-toggle-at (funcall row big)))
-                                                                   (clrhash drgnx-explorer--cache))     ; read the disk, like treemacs
+                                                                   (drgnx-cache--clear 'explorer-listing))     ; read the disk, like treemacs
                                                                  (lambda () (drgnx-explorer-toggle-at (funcall row big)))))))
     ;; With git: the status is known (read in the background); the new rows are painted with it.
     (setq r (drgnx-bench--put r :explorer-expand-git
@@ -136,7 +136,7 @@ GC, another process — then does not decide the number."
                                                       (drgnx-git-refresh (file-name-as-directory root) t)
                                                       (drgnx-bench--ms (lambda () (when (drgnx-explorer--expanded-p big)
                                                                                     (drgnx-explorer-toggle-at (funcall row big)))
-                                                                         (clrhash drgnx-explorer--cache))
+                                                                         (drgnx-cache--clear 'explorer-listing))
                                                                        (lambda () (drgnx-explorer-toggle-at (funcall row big)))))
                                                   (drgnx-bench--no-git-timer) (setq drgnx-explorer-git nil)))))
     (setq r (drgnx-bench--put r :explorer-reveal

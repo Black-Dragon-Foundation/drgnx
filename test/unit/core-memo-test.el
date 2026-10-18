@@ -362,6 +362,14 @@ allocates: the smallest delta of `memory-use-counts' over three warm runs, minus
     (drgnx-cache-remove 'drgnx-memo-test-s "c")
     (should (= 2 (drgnx-cache-size 'drgnx-memo-test-s)))))
 
+(ert-deftest drgnx-memo/cache-keys-lists-the-keys-without-stamping ()
+  (drgnx-memo-test--with-cache 'drgnx-memo-test-s (list :key 'string :cap 3)
+    (should-not (drgnx-cache-keys 'drgnx-memo-test-s))
+    (dolist (k '("a" "b" "c")) (drgnx-cache-put 'drgnx-memo-test-s k k))
+    (should (equal '("a" "b" "c") (sort (drgnx-cache-keys 'drgnx-memo-test-s) #'string<)))
+    (drgnx-cache-put 'drgnx-memo-test-s "d" "d")                       ; "a" is still the oldest: listing stamped nothing
+    (should (equal '("b" "c" "d") (sort (drgnx-cache-keys 'drgnx-memo-test-s) #'string<)))))
+
 (ert-deftest drgnx-memo/a-string-cache-get-allocates-nothing ()
   (drgnx-memo-test--with-cache 'drgnx-memo-test-s (list :key 'string :cap 3)
     (drgnx-cache-put 'drgnx-memo-test-s "a" 1)

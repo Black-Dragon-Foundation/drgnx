@@ -155,6 +155,7 @@
                                              :command #'drgnx-wb-focus-editor :map 'drgnx-wb-dock-map :doc "From the sidebar back to the editor")
                        ;; The Explorer.
                        (require 'drgnx-explorer)
+                       (drgnx-memo-activate 'git-status 'explorer-listing) ; capped caches: emptied on teardown
                        (drgnx-explorer-setup)
                        (drgnx-command-define 'focus-explorer :category "View" :title "Focus Explorer" :scope 'window
                                              :command #'drgnx-explorer-focus :menu '("View") :doc "Show the sidebar and move focus to the file tree")

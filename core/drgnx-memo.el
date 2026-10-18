@@ -400,6 +400,12 @@ key drops its entry."
            (dolist (k dead) (remhash k table))))
     (hash-table-count table)))
 
+(defun drgnx-cache-keys (name)
+  "The keys cache NAME holds now, as a fresh list in no order (a pass over the table: not for redisplay paths).
+A string cache's keys are not stamped; an object cache's dead keys are dropped first."
+  (drgnx-cache-size name)
+  (let (keys) (maphash (lambda (k _) (push k keys)) (drgnx-memo--def-table (drgnx-cache--def name))) keys))
+
 ;;;; Census
 
 (defun drgnx-memo-census ()
