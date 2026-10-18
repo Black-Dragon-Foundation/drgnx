@@ -141,6 +141,18 @@ Agents tab, no agent session, no layout state and a temp config dir (layouts.eld
       (should-not (drgnx-wb-area-window 'panel))
       (should (= 1 (length (drgnx-groups-list)))))))
 
+(ert-deftest drgnx-layouts/bars-from-the-table ()
+  "A find bar is a window of role `bar' in the store's role table (tools/replace defines it)."
+  (drgnx-layouts-test--with
+    (let ((w (split-window nil -4 'above)))
+      (set-window-parameter w 'drgnx-role 'bar)
+      (drgnx-state-undefine-role 'bar)
+      (drgnx-layouts--close-bars)
+      (should (window-live-p w))                       ; `bar' not defined: an editor window, kept
+      (drgnx-state-define-role 'bar)
+      (drgnx-layouts--close-bars)
+      (should-not (window-live-p w)))))
+
 (ert-deftest drgnx-layouts/switching-loses-nothing ()
   (drgnx-layouts-test--with
     (setq drgnx-agents--sessions (list (drgnx-agents--make :id "a1" :name "alpha" :status 'idle)))

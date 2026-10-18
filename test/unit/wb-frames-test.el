@@ -67,17 +67,22 @@ visible, without parent."
 (ert-deftest drgnx-frames/the-bus-tells-when-the-window-or-tabs-change ()
   ;; I2: switching to another frame, or a tab set changing, re-renders frame-scoped lists.
   (drgnx-test-with-state
-    (let ((seen nil))
-      (drgnx-signal-subscribe 'frame-changed (lambda (_) (push 'frame seen)))
-      (drgnx-signal-subscribe 'tabs-changed (lambda (_) (push 'tabs seen)))
-      (drgnx-signal--flush)
-      (setq seen nil)
-      (cl-letf (((symbol-function 'drgnx-signal--frame) (lambda () 'another)))
-        (drgnx-signal--flush))
-      (should (memq 'frame seen))
-      (drgnx-signal-post 'tabs-changed)
-      (drgnx-signal--flush)
-      (should (memq 'tabs seen)))))
+    (let ((seen nil) (was-on drgnx-signal-mode))
+      (unwind-protect
+          (progn
+            (drgnx-signal-mode 1)                       ; the bus listens to the store's `selected-changed'
+            (drgnx-signal-subscribe 'frame-changed (lambda (_) (push 'frame seen)))
+            (drgnx-signal-subscribe 'tabs-changed (lambda (_) (push 'tabs seen)))
+            (drgnx-signal--flush)
+            (setq seen nil)
+            (drgnx-state--emit 'selected-changed (list :frame (selected-frame) :window (selected-window)
+                                                       :old-window nil :old-frame 'another))
+            (drgnx-signal--flush)
+            (should (memq 'frame seen))
+            (drgnx-signal-post 'tabs-changed)
+            (drgnx-signal--flush)
+            (should (memq 'tabs seen)))
+        (unless was-on (drgnx-signal-mode -1))))))
 
 (defmacro drgnx-frames-test--terminal (daemon terminal &rest body)
   "BODY with every frame a visible, parentless text frame on a terminal named TERMINAL; `daemonp' DAEMON."

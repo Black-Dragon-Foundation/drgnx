@@ -9,7 +9,7 @@
   "BODY with fresh pane, section, area and rule tables, one editor window and the docks hidden."
   `(let ((drgnx-pane--kinds nil) (drgnx-pane-backend 'areas) (drgnx-wb--sections nil)
          (drgnx-wb--areas (copy-tree drgnx-wb--areas)) (drgnx-rules--table (copy-sequence drgnx-rules--table))
-         (drgnx-signal--editor-window nil) (drgnx-wb-unrouted nil)
+         (drgnx-wb-unrouted nil)
          (display-buffer-alist nil) (display-buffer-overriding-action '(nil)))
      (delete-other-windows)
      (set-frame-parameter nil 'drgnx-wb-areas nil)

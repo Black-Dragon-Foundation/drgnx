@@ -25,15 +25,12 @@
 (defface drgnx-chrome-crumb '((t :inherit shadow)) "The folders of a breadcrumb." :group 'drgnx)
 
 (defun drgnx-chrome--role (w)
-  "W's chrome role: `editor', `dock', `area', `lane', or nil (left alone)."
-  (let ((role (window-parameter w 'drgnx-role)))
-    (cond ((window-minibuffer-p w) nil)
-          ((frame-parent (window-frame w)) nil)   ; child frames: posframe, corfu, eldoc-box keep theirs
-          ((window-parameter w 'drgnx-popup) 'lane)
-          ((eq role 'popup) 'lane)
-          ((eq role 'dock) 'dock)
-          ((memq role '(panel right)) 'area)
-          ((drgnx-signal-editor-window-p w) 'editor))))
+  "W's chrome role: `editor', `dock', `area', `lane', or nil (left alone).
+From W's role in the state store (`drgnx-state-window-role'): an editor window is `editor', a role of the
+role table has its `:chrome' (`drgnx-state-define-role'), anything else is left alone."
+  (unless (frame-parent (window-frame w))   ; child frames: posframe, corfu, eldoc-box keep theirs
+    (let ((role (drgnx-state-window-role w)))
+      (if (eq role 'editor) 'editor (drgnx-state-role-chrome role)))))
 
 ;;;; Tabs
 
@@ -264,12 +261,14 @@ those are previews)."
   :global t :group 'drgnx
   (if drgnx-chrome-mode
       (progn
-        (add-hook 'drgnx-signal-window-functions #'drgnx-chrome-apply)
+        (with-suppressed-warnings ((obsolete drgnx-signal-window-functions)) ; until chrome subscribes to `windows-changed'
+          (add-hook 'drgnx-signal-window-functions #'drgnx-chrome-apply))
         (add-hook 'kill-buffer-hook #'drgnx-chrome--killed)
         (dolist (e '(editor-changed buffer-set-changed modified-changed))
           (drgnx-signal-subscribe e #'drgnx-chrome--refresh))
         (drgnx-chrome--refresh))
-    (remove-hook 'drgnx-signal-window-functions #'drgnx-chrome-apply)
+    (with-suppressed-warnings ((obsolete drgnx-signal-window-functions))
+      (remove-hook 'drgnx-signal-window-functions #'drgnx-chrome-apply))
     (remove-hook 'kill-buffer-hook #'drgnx-chrome--killed)
     (dolist (e '(editor-changed buffer-set-changed modified-changed))
       (drgnx-signal-unsubscribe e #'drgnx-chrome--refresh))

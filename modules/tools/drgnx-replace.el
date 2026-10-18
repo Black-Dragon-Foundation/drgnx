@@ -1589,7 +1589,10 @@ The find bar's button; not a command of its own (it needs the bar)."
 (drgnx-module-define 'tools/replace
                      :doc "Search and replace across files: text through ripgrep or git grep, symbols through the language server."
                      :stage 'idle
-                     :setup (lambda () (drgnx-replace--define-section) (drgnx-replace--define-commands)))
+                     :setup (lambda ()
+                              (drgnx-replace--define-section)
+                              (drgnx-replace--define-commands)
+                              (drgnx-state-define-role 'bar))) ; the find bar's window: no editor, no chrome
 
 (provide 'drgnx-replace)
 ;;; drgnx-replace.el ends here

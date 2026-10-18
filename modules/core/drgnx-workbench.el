@@ -54,6 +54,7 @@
                      :setup
                      (lambda ()
                        (require 'drgnx-wb)
+                       (drgnx-state-mode 1)    ; the state store first: the bus follows its window events
                        (drgnx-signal-mode 1)
                        ;; Where buffers go.
                        (require 'drgnx-rules)

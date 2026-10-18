@@ -3,12 +3,16 @@
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 
 ;;; Commentary:
-;; The only subscriber to Emacs' raw window and buffer hooks.  A raw hook does no work: it arms
-;; one idle flush.  The flush compares the state with the last one and emits edges only —
-;; `editor-changed' (the buffer of the most recently used editor window), `editor-point-changed'
-;; (that window's point moved, in the same buffer; data: the buffer), `buffer-set-changed'
-;; (the set of user buffers: files and directories) and `modified-changed' (buffers whose
-;; modified flag flipped).  Internal buffers (names starting with a space) never count.
+;; The subscription API for workbench edges.  Window answers come from the workbench state store
+;; (`drgnx-state.el'): the most recently used editor window, whether a window is an editor window, and what
+;; changed in a frame's windows.  The bus itself listens to Emacs' buffer hooks only.  A raw hook does no work:
+;; it arms one idle flush, which the store's idle lane shares.  The flush observes the selected frame
+;; (`drgnx-state-sync'), makes the store's waiting idle calls, then compares the buffer state with the last
+;; flush and emits edges only — `editor-changed' (the buffer of the selected frame's MRU editor window, when it
+;; is not the one sent last), `editor-point-changed' (that window's point moved, in the same buffer; data: the
+;; buffer), `frame-changed' (the store saw another frame become the selected one), `buffer-set-changed' (the
+;; set of user buffers: files and directories) and `modified-changed' (buffers whose modified flag flipped).
+;; Internal buffers (names starting with a space) never count.
 ;; Followers (the Explorer's reveal, the Buffers panel) subscribe here and never to hooks, so a
 ;; focus change, a background buffer or a burst of events cannot make them fire.
 ;; See docs/guide/workbench.md.
@@ -17,13 +21,15 @@
 (require 'cl-lib)
 (require 'seq)
 (require 'drgnx-modules-record)
+(require 'drgnx-state)                  ; also `drgnx-signal-delay' and `drgnx-signal-errors'
 
-(defvar drgnx-signal-delay 0.05 "Idle seconds before raw events are flushed as edges.")
 (defvar drgnx-signal--subscribers nil "Alist EVENT → list of functions, in subscription order.")
-(defvar drgnx-signal--state nil "The state at the last flush: (:editor :set :modified :names :frame :point).")
-(defvar drgnx-signal--timer nil "The armed idle flush, or nil.")
-(defvar drgnx-signal--editor-window nil "The most recently selected editor window.")
-(defvar drgnx-signal-errors nil "Recent subscriber errors (newest first).")
+(defvar drgnx-signal--state nil "The buffer state at the last flush: (:set :modified :names :point).")
+(defvar drgnx-signal--timer nil "The armed idle flush, or nil (the store's idle lane arms it too).")
+(defvar drgnx-signal--editor nil
+  "The buffer the bus's `editor-changed' subscribers got last (the store has the window).")
+(defvar drgnx-signal--switched nil
+  "The frame the store saw become the selected one since the last flush, or nil: the next `frame-changed'.")
 
 (defvar drgnx-signal--owners nil
   "Subscriptions made from module setups: a list of (EVENT FN COUNT FOREIGN), COUNT the modules holding
@@ -63,18 +69,17 @@ last lets go.  A subscription made before the first module's, by code that recor
            (eq (buffer-local-value 'major-mode buffer) 'dired-mode))))
 
 (defun drgnx-signal-editor-window-p (window)
-  "Non-nil if WINDOW is an editor window: not the minibuffer, a side window, a dock or a find bar."
-  (and (window-live-p window)
-       (not (window-minibuffer-p window))
-       (not (window-parameter window 'window-side))
-       (not (memq (window-parameter window 'drgnx-role) '(dock panel bar)))))
+  "Non-nil if WINDOW is an editor window: its role in the state store is `editor' (`drgnx-state-window-role').
+Not the minibuffer, a package's side window or a window of a role in the store's role table — a dock, an
+area, a popup lane, a find bar (once tools/replace defined `bar'), …"
+  (eq (drgnx-state-window-role window) 'editor))
 
 (defun drgnx-signal-editor-window ()
-  "The most recently used editor window (falls back to any editor window of the selected frame)."
-  (if (and (window-live-p drgnx-signal--editor-window)
-           (eq (window-frame drgnx-signal--editor-window) (selected-frame)))
-      drgnx-signal--editor-window
-    (seq-find #'drgnx-signal-editor-window-p (window-list nil 'nomini))))
+  "The selected frame's most recently used editor window, from the state store (`drgnx-state-editor-window').
+When the store has none — the frame not observed yet, or its editor deleted since — the frame is observed now
+\(`drgnx-state-sync').  Nil when the frame has no editor window or is no workbench frame."
+  (or (drgnx-state-editor-window)
+      (progn (drgnx-state-sync) (drgnx-state-editor-window))))
 
 (defun drgnx-signal--call (event fn data)
   "Call FN with DATA; an error is recorded in `drgnx-signal-errors' (under EVENT), never raised."
@@ -115,18 +120,22 @@ Set by the raw-hook functions below; a flush with the mode off rebuilds both.")
   (cl-pushnew event drgnx-signal--posted)
   (drgnx-signal--schedule))
 
-(defun drgnx-signal--frame () (selected-frame))
-
 (defvar drgnx-signal-mode)
 
 (defun drgnx-signal--flush ()
-  "Compare the state with the last flush and emit the edges.
-Only the parts in `drgnx-signal--dirty' are rebuilt: `set' (the user buffers and their names), `modified'
-\(their flags; a new set needs them too).  The mode off, no hook says what changed, so all of it is rebuilt."
+  "The idle flush: observe the selected frame (`drgnx-state-sync') and make the store's waiting idle calls,
+then compare the buffer state with the last flush and emit the edges.
+`editor-changed' gets the buffer of the selected frame's MRU editor window, only when it is not the one sent
+last: two windows on one buffer are one edge.  Only the parts in `drgnx-signal--dirty' are rebuilt: `set'
+\(the user buffers and their names), `modified' (their flags; a new set needs them too).  The mode off, no hook
+says what changed, so all of it is rebuilt."
   (setq drgnx-signal--timer nil)
-  (when (drgnx-signal-editor-window-p (selected-window))
-    (setq drgnx-signal--editor-window (selected-window)))
-  (let* ((editor (when-let* ((w (drgnx-signal-editor-window))) (window-buffer w)))
+  (drgnx-state-sync)
+  (drgnx-state--deliver-idle)
+  (let* ((window (drgnx-signal-editor-window))
+         (editor (and window (window-buffer window)))
+         (last drgnx-signal--editor)
+         (switched (prog1 drgnx-signal--switched (setq drgnx-signal--switched nil)))
          (old drgnx-signal--state)
          (dirty (prog1 (if (and old drgnx-signal-mode) drgnx-signal--dirty '(set modified))
                   (setq drgnx-signal--dirty nil)))
@@ -137,16 +146,16 @@ Only the parts in `drgnx-signal--dirty' are rebuilt: `set' (the user buffers and
                        (mapcar (lambda (b) (cons b (buffer-modified-p b))) set)
                      (plist-get old :modified)))
          (names (if set-dirty (mapcar (lambda (b) (cons b (buffer-name b))) set) (plist-get old :names))))
-    (setq drgnx-signal--state (list :editor editor :set set :modified modified :names names
-                                    :frame (drgnx-signal--frame)
-                                    :point (when-let* ((w (drgnx-signal-editor-window))) (window-point w))))
-    (unless (eq editor (plist-get old :editor))
+    (setq drgnx-signal--state (list :set set :modified modified :names names
+                                    :point (and window (window-point window)))
+          drgnx-signal--editor editor)
+    (unless (eq editor last)
       (drgnx-signal--emit 'editor-changed editor))
-    (when (and old editor (eq editor (plist-get old :editor))
+    (when (and old editor (eq editor last)
                (not (eql (plist-get drgnx-signal--state :point) (plist-get old :point))))
       (drgnx-signal--emit 'editor-point-changed editor))
-    (when (and old (not (eq (plist-get old :frame) (plist-get drgnx-signal--state :frame))))
-      (drgnx-signal--emit 'frame-changed (plist-get drgnx-signal--state :frame)))
+    (when (frame-live-p switched)
+      (drgnx-signal--emit 'frame-changed switched))
     (let ((posted (reverse drgnx-signal--posted)))
       (setq drgnx-signal--posted nil)
       (dolist (e posted) (drgnx-signal--emit e nil)))
@@ -166,15 +175,44 @@ Only the parts in `drgnx-signal--dirty' are rebuilt: `set' (the user buffers and
 (defvar drgnx-signal-window-functions nil
   "Called with a frame, synchronously, when its windows or their buffers changed — before they are
 drawn.  For window *setup* only (chrome: a new window must not be drawn once without it); anything
-that follows the user's work subscribes to the edges instead.")
+that follows the user's work subscribes to the edges instead.  Run from the state store's observation
+\(its `windows-changed' event, `now' lane), which new code subscribes to instead.")
+(make-obsolete-variable 'drgnx-signal-window-functions
+                        "subscribe to the state store's `windows-changed' on the `now' lane (`drgnx-state-subscribe')."
+                        "M12f")
 
-(defun drgnx-signal--windows (frame-or-window)
-  "From `window-buffer-change-functions': set up the windows now, flush the edges later (a function
-that fails is recorded, like a subscriber)."
-  (when (framep frame-or-window)
+(defun drgnx-signal--windows (frame)
+  "Set up FRAME's windows now (`drgnx-signal-window-functions'; a function that fails is recorded, like a
+subscriber), flush the edges later."
+  (with-suppressed-warnings ((obsolete drgnx-signal-window-functions))
     (run-hook-wrapped 'drgnx-signal-window-functions
-                      (lambda (fn) (drgnx-signal--call 'window-functions fn frame-or-window) nil)))
+                      (lambda (fn) (drgnx-signal--call 'window-functions fn frame) nil)))
   (drgnx-signal--schedule))
+
+;; What the bus takes from the state store (`now' lane: inside the observation, before the frame is drawn).
+
+(defun drgnx-signal--windows-changed (data)
+  "The store's `windows-changed': run `drgnx-signal-window-functions' with the frame."
+  (drgnx-signal--windows (plist-get data :frame)))
+
+(defun drgnx-signal--editor-changed (_data)
+  "The store's `editor-changed': a frame's MRU editor window or its buffer changed, so arm the flush (it sends
+the bus's `editor-changed' when the selected frame's editor shows another buffer)."
+  (drgnx-signal--schedule))
+
+(defun drgnx-signal--selected-changed (data)
+  "The store's `selected-changed': arm the flush; when another frame became the selected one, the flush
+sends `frame-changed' with it."
+  (unless (eq (plist-get data :frame) (plist-get data :old-frame))
+    (setq drgnx-signal--switched (plist-get data :frame)))
+  (drgnx-signal--schedule))
+
+(defconst drgnx-signal--store-events
+  '((windows-changed . drgnx-signal--windows-changed)
+    (editor-changed . drgnx-signal--editor-changed)
+    (selected-changed . drgnx-signal--selected-changed))
+  "The state store's events the bus follows, each with its named function (the mode subscribes them on the
+`now' lane, and unsubscribes them).")
 
 (defun drgnx-signal--schedule (&rest _)
   "Raw hooks land here: arm one idle flush, nothing else."
@@ -229,8 +267,7 @@ compare the current buffer's modified flag and name with the cached ones.  Nothi
     (drgnx-signal--schedule)))
 
 (defconst drgnx-signal--hooks
-  '((window-selection-change-functions . drgnx-signal--schedule)
-    (buffer-list-update-hook . drgnx-signal--set-dirty)
+  '((buffer-list-update-hook . drgnx-signal--set-dirty)
     (first-change-hook . drgnx-signal--modified-dirty)
     (after-save-hook . drgnx-signal--modified-dirty)
     (after-save-hook . drgnx-signal--set-dirty)                  ; `write-file' under the buffer's own name
@@ -240,16 +277,17 @@ compare the current buffer's modified flag and name with the cached ones.  Nothi
     (post-command-hook . drgnx-signal--post-command))
   "The raw hooks the bus listens to, each with its named function (the mode adds and removes them).
 `after-save-hook' has two: the flags, and the set (a saved non-file buffer becomes a file buffer, with no
-rename or new buffer).  `after-change-major-mode-hook' covers a mode change on an existing buffer.")
+rename or new buffer).  `after-change-major-mode-hook' covers a mode change on an existing buffer.  Window
+changes come from the state store (`drgnx-signal--store-events').")
 
 (define-minor-mode drgnx-signal-mode
-  "The workbench change bus: raw window and buffer hooks become deduplicated edges."
+  "The workbench change bus: raw buffer hooks and the state store's window events become deduplicated edges."
   :global t :group 'drgnx
   (pcase-dolist (`(,hook . ,fn) drgnx-signal--hooks)
     (if drgnx-signal-mode (add-hook hook fn) (remove-hook hook fn)))
-  (if drgnx-signal-mode (add-hook 'window-buffer-change-functions #'drgnx-signal--windows)
-    (remove-hook 'window-buffer-change-functions #'drgnx-signal--windows))
-  (setq drgnx-signal--seen-buffer nil)
+  (pcase-dolist (`(,event . ,fn) drgnx-signal--store-events)
+    (if drgnx-signal-mode (drgnx-state-subscribe event fn :lane 'now) (drgnx-state-unsubscribe event fn)))
+  (setq drgnx-signal--seen-buffer nil drgnx-signal--switched nil)
   (when drgnx-signal-mode
     (setq drgnx-signal--dirty '(set modified))
     (drgnx-signal--schedule)))

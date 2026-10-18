@@ -367,9 +367,31 @@ gives the same statuses and commands with the recorder as without it.
 
 ## The change bus (`wb/drgnx-signal.el`)
 
-`drgnx-signal-mode` listens to the raw window and buffer hooks and emits deduplicated edges after an idle delay
-(`drgnx-signal-delay`). A flush reads the buffer list only for what a hook said changed. `drgnx-signal--dirty` holds
-the parts to rebuild, and each part has a named raw-hook function that sets it:
+The bus is the subscription API for workbench edges (`drgnx-signal-subscribe`); window answers come from the
+workbench state store (next section). `drgnx-signal-editor-window` is the store's `drgnx-state-editor-window`: the
+selected frame's MRU editor, per frame and right at once (when the store has none — the frame not observed yet, or
+its editor deleted since — it observes the frame first). `drgnx-signal-editor-window-p` is true when
+`drgnx-state-window-role` is `editor`: the role table decides, so a module's own strip defines its role
+(tools/replace defines `bar`, the find bar, in its setup). `drgnx-wb-show-in-editor` and the layouts choose the
+editor with `drgnx-state-use-editor`.
+
+`drgnx-signal-mode` listens to the raw buffer hooks, and on the store's `now` lane to `windows-changed`,
+`editor-changed` and `selected-changed` (`drgnx-signal--store-events`); it emits deduplicated edges after an idle
+delay (`drgnx-signal-delay`). There is one idle flush, `drgnx-signal--flush`, for the bus and the store: the store's
+idle lane arms it too. It observes the selected frame (`drgnx-state-sync`), makes the store's waiting idle calls
+(`drgnx-state--deliver-idle`), then compares the buffer state:
+
+- `editor-changed` gets the *buffer* of the selected frame's MRU editor, only when it is not the one it sent last
+  (`drgnx-signal--editor`): `C-x o` between two windows on one buffer is the store's `editor-changed`, not the bus's,
+  so Explorer, Outline and Buffers react as before.
+- `frame-changed` (data: the frame) follows the store's `selected-changed` when another frame became the selected
+  one; only the store's hooks see a frame switch.
+- `drgnx-signal-window-functions` (obsolete: subscribe to `windows-changed` on the `now` lane) run from the store's
+  observation, before the frame is drawn, as they did from `window-buffer-change-functions`.
+
+The bus no longer adds to `window-selection-change-functions` or `window-buffer-change-functions`. The flush reads
+the buffer list only for what a hook said changed. `drgnx-signal--dirty` holds the parts to rebuild, and each part
+has a named raw-hook function that sets it:
 
 | Hook | Function | Sets |
 |---|---|---|
@@ -841,18 +863,19 @@ is drawn: for cheap reactions only. It may update a mode line, set a window para
 timer, or choose the editor (`drgnx-state-use-editor`, which emits its own `editor-changed`). It never moves a
 window, scans buffers or calls a process. A change it makes waits for the next observation, and the jank guard
 counts a window it moves. `idle` (the default) queues the call: one per FN, event, frame and kind (the data's
-`:kind`), with the last data. One one-shot idle timer (`drgnx-signal-delay`, 0.05 s) makes them, oldest first; the
-handler reads the records then. Every call binds `inhibit-interaction`, so a subscriber that prompts gets an error.
+`:kind`), with the last data. The bus's idle flush (`drgnx-signal--flush`, `drgnx-signal-delay`, 0.05 s) makes
+them, oldest first, after observing the selected frame; the store has no timer of its own. The handler reads the
+records then. Every call binds `inhibit-interaction`, so a subscriber that prompts gets an error.
 An error is recorded in `drgnx-signal-errors` as `"EVENT FN: message"` (newest first, at most 20), never raised.
 Subscribers of one event run in subscription order.
 
 **The fixture** (`test/fixtures/state-fixture.el`): `(drgnx-test-with-state BODY…)` runs BODY with a fresh store
 and bus and the store's hooks off. It saves every bound variable listed in `drgnx-state-test--variables` (the
-store's tables, its subscribers, idle queue and timer, `drgnx-signal--subscribers`, `--state`, `--posted`,
-`--timer`, `--editor-window`, `drgnx-signal-errors`) and restores them with `set` afterwards, never `let`; timers are
-cancelled on the way in and out. A batch test delivers the idle lane by calling `drgnx-state--deliver-idle`. A task that adds store or bus state adds its variable there. `(drgnx-test-use-editor WINDOW)` makes WINDOW
-the MRU editor through `drgnx-state-use-editor` (and, until the bus reads the store, sets
-`drgnx-signal--editor-window`). Tests never set bus internals by hand. Tests: `test/unit/wb-state-test.el`, `test/unit/wb-state-events-test.el`
+store's tables, its subscribers and idle queue, `drgnx-signal--subscribers`, `--state`, `--posted`, `--timer`,
+`--editor`, `--switched`, `drgnx-signal-errors`) and restores them with `set` afterwards, never `let`; timers are
+cancelled on the way in and out. A batch test delivers the idle lane by calling `drgnx-signal--flush` (or only
+`drgnx-state--deliver-idle`). A task that adds store or bus state adds its variable there. `(drgnx-test-use-editor
+WINDOW)` makes WINDOW the MRU editor through `drgnx-state-use-editor`. Tests never set bus internals by hand. Tests: `test/unit/wb-state-test.el`, `test/unit/wb-state-events-test.el`
 (one per event, the lanes, `:cause`); the terminal tier's `test/tty/state-test.el` (a split made by a timer is seen
 with no command run; two clients: per-frame editors, a resized terminal); the GUI tier's `test/ui/state-ui-test.el`
 (with `now` subscribers on, splits, `C-x o`, a popup and a frame resize leave no jank-guard entry from the store; a

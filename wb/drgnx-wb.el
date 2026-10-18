@@ -188,7 +188,7 @@ Like VS Code's Ctrl+Shift+F;
   "Show BUFFER in the most recently used editor window, never splitting; SELECT it if asked."
   (let ((w (drgnx-wb-editor-window)))
     (set-window-buffer w buffer)
-    (setq drgnx-signal--editor-window w)
+    (drgnx-state-use-editor w)
     (when select (select-window w))
     w))
 

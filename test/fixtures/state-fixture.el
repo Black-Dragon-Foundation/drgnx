@@ -1,7 +1,5 @@
 ;;; state-fixture.el --- for tests: a fresh workbench state store and bus, restored by value -*- lexical-binding: t -*-
-(require 'drgnx-state)
-
-(defvar drgnx-signal--editor-window)
+(require 'drgnx-signal)                 ; the bus, and the store it reads
 
 (defvar drgnx-state-test--variables
   '((drgnx-state--frames . (make-hash-table :test 'eq :weakness 'key))
@@ -12,19 +10,19 @@
     (drgnx-state--now . nil)                                   ; Task 5: subscribers, idle calls, selection
     (drgnx-state--idle . nil)
     (drgnx-state--queue . nil)
-    (drgnx-state--idle-timer . nil)
     (drgnx-state--selected-frame . nil)
     (drgnx-state--watching . nil)
     (drgnx-signal--subscribers . nil)
     (drgnx-signal--state . nil)
     (drgnx-signal--posted . nil)
-    (drgnx-signal--timer . nil)
-    (drgnx-signal--editor-window . nil)
+    (drgnx-signal--timer . nil)                                ; Task 10: the one idle flush, store and bus
+    (drgnx-signal--editor . nil)
+    (drgnx-signal--switched . nil)
     (drgnx-signal-errors . nil))
   "Alist VARIABLE → FORM: the store and bus state `drgnx-test-with-state' saves by value and sets to FORM's
 value for its body (only the variables that are bound).  Each task that adds store or bus state adds it here.")
 
-(defvar drgnx-state-test--timers '(drgnx-signal--timer drgnx-state--idle-timer)
+(defvar drgnx-state-test--timers '(drgnx-signal--timer)
   "Variables of `drgnx-state-test--variables' that hold a timer: cancelled on the way in and out, and nil
 afterwards (a cancelled timer left in the variable would keep the bus from arming a new one).")
 
@@ -59,10 +57,8 @@ never `let' (a function BODY calls that sets one globally must not leak past the
   `(drgnx-state-test--call (lambda () ,@body)))
 
 (defun drgnx-test-use-editor (window)
-  "Make WINDOW its frame's MRU editor for a test (`drgnx-state-use-editor'); return WINDOW.
-Until the bus reads the store, also the bus's own `drgnx-signal--editor-window'."
+  "Make WINDOW its frame's MRU editor for a test (`drgnx-state-use-editor'); return WINDOW."
   (drgnx-state-use-editor window)
-  (when (boundp 'drgnx-signal--editor-window) (setq drgnx-signal--editor-window window))
   window)
 
 (provide 'state-fixture)

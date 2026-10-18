@@ -291,10 +291,9 @@ Returns an alist NAME → window, NAME one of buffers explorer outline g1 g2 pan
       (should-not (drgnx-state-use-editor (alist-get 'panel ws)))
       (should-not (drgnx-state-use-editor (minibuffer-window)))
       (should (eq g2 (drgnx-state-editor-window f)))
-      ;; the fixture helper does the same (and, until the bus moves, sets its variable)
+      ;; the fixture helper does the same
       (should (eq g1 (drgnx-test-use-editor g1)))
-      (should (eq g1 (drgnx-state-editor-window f)))
-      (should (eq g1 drgnx-signal--editor-window)))))
+      (should (eq g1 (drgnx-state-editor-window f))))))
 
 (ert-deftest drgnx-state/same-buffer-other-window-is-a-new-editor ()
   (drgnx-state-test--with
