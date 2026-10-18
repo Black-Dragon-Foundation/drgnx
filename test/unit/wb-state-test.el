@@ -481,7 +481,12 @@ Returns an alist NAME → window, NAME one of buffers explorer outline g1 g2 pan
                                           drgnx-state--on-window-state-change drgnx-state--post-command
                                           drgnx-state--pre-command drgnx-state--frame-made drgnx-state--frame-deleted
                                           drgnx-state-sync drgnx-state-frame-kind drgnx-state-workbench-frame-p
-                                          drgnx-state--put drgnx-state--error))
+                                          drgnx-state--put drgnx-state--error
+                                          ;; Task 5: the diff and the delivery run inside the observation
+                                          drgnx-state--diff drgnx-state--emit drgnx-state--call drgnx-state--wants
+                                          drgnx-state--queue-call drgnx-state--deliver-idle drgnx-state--cause
+                                          drgnx-state--frame-plist drgnx-state--size-plist drgnx-state--win-of
+                                          drgnx-state--same-shown-p drgnx-state--editors drgnx-state--minus))
          (defs (let (acc)
                  (dolist (file '("wb/drgnx-state.el" "core/drgnx-frame-kind.el") acc)
                    (with-temp-buffer

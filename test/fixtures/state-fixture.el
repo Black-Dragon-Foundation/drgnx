@@ -9,6 +9,11 @@
     (drgnx-state--roles . (copy-sequence drgnx-state--roles)) ; the roles defined so far (built-ins, loaded code)
     (drgnx-state--in-command . nil)
     (drgnx-state-mode . nil)
+    (drgnx-state--now . nil)                                   ; Task 5: subscribers, idle calls, selection
+    (drgnx-state--idle . nil)
+    (drgnx-state--queue . nil)
+    (drgnx-state--idle-timer . nil)
+    (drgnx-state--selected-frame . nil)
     (drgnx-signal--subscribers . nil)
     (drgnx-signal--state . nil)
     (drgnx-signal--posted . nil)
@@ -18,7 +23,7 @@
   "Alist VARIABLE → FORM: the store and bus state `drgnx-test-with-state' saves by value and sets to FORM's
 value for its body (only the variables that are bound).  Each task that adds store or bus state adds it here.")
 
-(defvar drgnx-state-test--timers '(drgnx-signal--timer)
+(defvar drgnx-state-test--timers '(drgnx-signal--timer drgnx-state--idle-timer)
   "Variables of `drgnx-state-test--variables' that hold a timer: cancelled on the way in and out, and nil
 afterwards (a cancelled timer left in the variable would keep the bus from arming a new one).")
 
