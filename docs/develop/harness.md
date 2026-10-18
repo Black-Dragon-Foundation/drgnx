@@ -12,6 +12,7 @@ how every drgnx UI change is developed and verified.
 | `bin/drgnx test --scenario [--config C]` | behaviour scenarios in `test/scenario/` inside a session of configuration C (default `drgnx`; `gryphn` is skipped where that config is absent) | the host (needs mutter) |
 | `bin/drgnx test --container` | the batch tier in a `fedora:45` container (Emacs 31.1, drgnx's baseline); `DRGNX_TEST_IMAGE` / `DRGNX_TEST_GUI_IMAGE` use a prebuilt image ([ci.md](ci.md)) | podman, docker or nerdctl |
 | `bin/drgnx test --container --ui` | the GUI tier in a container (mutter renders without a GPU) | podman, docker or nerdctl |
+| `bin/drgnx test --tty` / `--container --tty [--fedora 44 or 45]` | the terminal tier in `test/tty/`: drgnx in Emacs sessions inside private tmux servers — see [Terminal tier](#terminal-tier) | the host (needs tmux); a container |
 | `bin/drgnx test --ui` | GUI ERT suites in `test/ui/` inside a headless session, then live ERT suites in `test/live/` (batch Emacs starting real sessions) | the host (needs mutter) |
 | `bin/drgnx test --bench` | the workbench timed against treemacs and ibuffer in a GUI session on a 25k-file project — see [workbench.md](../guide/workbench.md#performance) | the host (needs mutter); treemacs from `$DRGNX_BENCH_ELPA` |
 | `bin/drgnx test --perf` / `--soak [MIN]` | input latency, frames, GC, startup and memory against budgets; the memory soak — see [perf.md](perf.md) | the host (needs mutter) |
@@ -454,7 +455,11 @@ dirs) and drive the session through `harness/drgnx-tty-session.el`:
 
 - **Session:** a run directory prepared as for a GUI session (`drgnx-ui-prepare-run`: generated init, its own server
   socket), named `drgnx-tty-PID-N`. Its Emacs runs in a pane of a **private tmux server**, `tmux -L drgnx-tty-PID-N
-  -f /dev/null`, with `TMUX_TMPDIR` in the run directory, so the socket is under it too. Without `:daemon` the pane
+  -f /dev/null`, with `TMUX_TMPDIR` in the run directory, so the socket is under it too. The run directory is under
+  `$DRGNX_UI_STATE` when that is set, else under a short private directory of its own, `tUID` in the temp directory
+  (`drgnx-tty-session-state-root`, not the GUI sessions' `$XDG_STATE_HOME/drgnx/ui`): a Unix socket path holds about 107
+  bytes, and `RUN/tmux-UID/NAME` with a 7-digit PID twice in NAME passed that under a long home or a test run's nested
+  temp directories. Without `:daemon` the pane
   runs `emacs -nw`. With `:daemon`, window 0 runs `emacs --fg-daemon` and window 1 runs `emacsclient -t`.
   `drgnx-tty-session-client SESS :env ENV :args ARGS` opens more clients, each in its own window, with extra
   variables (`TERM=…`) and emacsclient arguments (files, `-e FORM`). `drgnx-tty-session-pty-start` opens a client
@@ -497,12 +502,19 @@ dirs) and drive the session through `harness/drgnx-tty-session.el`:
   shows what OSC 52 copied (`-clipboard`), and `-pane-flags` reports the pane's mouse and key modes. The inner Emacs's
   state comes through its socket (`-eval`, `-wait`).
 
-Run it (until `bin/drgnx test --tty` exists):
+Run it:
 
 ```
-emacs --batch -Q --eval '(setq load-prefer-newer t)' -L harness -L core -L wb -l harness/run-ert.el \
-  -f drgnx-run-ert-batch "$PWD/test/tty"
+bin/drgnx test --tty                          # on the host (needs tmux)
+bin/drgnx test --container --tty              # in a Fedora 45 container, Emacs 31.1
+bin/drgnx test --container --tty --fedora 44  # Fedora 44, Emacs 30.2
 ```
 
-In a container, use `test/container/Containerfile.tty`. `--build-arg FEDORA=44` gives Emacs 30.2 and `45` gives 31.1;
-the image has tmux, plus kitty and mutter for the exit test. Run it with the GUI tier's security options.
+`bin/drgnx test --tty` is `drgnx-run-ert-batch` on `test/tty`, every file in an Emacs of its own like the unit tier,
+SIGPIPE ignored, in a temp directory of its own; the environment is the caller's (the sessions start theirs with
+`env -i`). `DRGNX_TEST_SELECTOR` narrows it. In a container the image `drgnx-test-tty:fNN` is built from
+`test/container/Containerfile.tty` with `--build-arg FEDORA=NN`; the image has tmux, plus kitty and mutter for the exit
+test. It runs with the GUI tier's security options (`seccomp=unconfined`, `label=disable`) and `--memory 3g`.
+`DRGNX_TEST_TTY_IMAGE` uses a prebuilt image. `bin/drgnx check` runs the tier as the `tty` job (a GUI job for the memory
+accounting, in the parallel phase) when tmux is installed; `--no-gui` leaves it out. The `Terminal tier` workflow runs
+the two container runs nightly ([ci.md](ci.md)).

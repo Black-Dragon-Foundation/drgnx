@@ -1,0 +1,29 @@
+# Nightly and on demand: the terminal test tier — Emacs in tmux sessions, on Fedora 44 (Emacs 30.2) and
+# Fedora 45 (Emacs 31.1), in test/container/Containerfile.tty. docs/develop/ci.md
+name: Terminal tier
+
+on:
+  schedule:
+    - cron: "47 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tty:
+    name: Terminal tests (Fedora ${{ matrix.fedora }}, tmux)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        fedora: [44, 45]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Terminal tier in test/container/Containerfile.tty
+        env:
+          DRGNX_CONTAINER: podman
+        run: bin/drgnx test --container --tty --fedora ${{ matrix.fedora }}

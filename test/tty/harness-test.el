@@ -73,7 +73,9 @@
         run name)
     (drgnx-tty-session-with (s :config "minimal")
       (setq run (plist-get s :run) name (plist-get s :name))
-      (should (string-prefix-p (file-name-as-directory run) (plist-get s :tmux)))
+      ;; the tmux socket is beside the session's own short socket directory (see the test below)
+      (should (string-prefix-p (file-name-directory (directory-file-name (file-name-directory (plist-get s :socket))))
+                               (plist-get s :tmux)))
       (should (file-exists-p (plist-get s :tmux)))
       (should-not (file-exists-p (expand-file-name name default-dir)))
       (let ((home (drgnx-tty-session-eval s '(getenv "HOME"))))
@@ -82,6 +84,30 @@
                            (directory-file-name (expand-file-name (concat "~" (user-login-name))))))))
     (should-not (file-exists-p run))
     (should-not (file-exists-p (expand-file-name name default-dir)))))
+
+(ert-deftest drgnx-tty-harness/a-session-with-a-seven-digit-pid-has-a-short-socket-path ()
+  ;; TTY-SOCK-1: the tmux socket is TMUX_TMPDIR/tmux-UID/NAME, and NAME holds the owner's PID: a 7-digit PID and a
+  ;; test run's nested temp dirs still fit a Unix socket path (~107 bytes) under the default state root...
+  (let ((drgnx-tty-session--owner 9999999))
+    (drgnx-tty-session-with (s :command "sleep 30")
+      (should (string-prefix-p "drgnx-tty-9999999-" (plist-get s :name)))
+      (should (string-prefix-p (file-name-as-directory (drgnx-tty-session-state-root)) (plist-get s :run)))
+      (should (< (length (plist-get s :tmux)) 100))
+      (should (file-exists-p (plist-get s :tmux)))
+      (should (equal (drgnx-tty-session-tmux s "display-message" "-p" "ok") '(0 . "ok\n"))))))
+
+(ert-deftest drgnx-tty-harness/a-long-state-root-still-gets-a-tmux-socket ()
+  ;; ...and under a state root of the caller's own, however long: the socket is not under the run directory
+  (let* ((root (expand-file-name (concat (make-string 90 ?x) "/state") temporary-file-directory))
+         (process-environment (cons (concat "DRGNX_UI_STATE=" root) process-environment)))
+    (unwind-protect
+        (drgnx-tty-session-with (s :command "sleep 30")
+          (should (string-prefix-p (file-name-as-directory root) (plist-get s :run)))
+          (should (> (length (plist-get s :run)) 100))
+          (should (< (length (plist-get s :tmux)) 100))
+          (should (file-exists-p (plist-get s :tmux)))
+          (should (equal (drgnx-tty-session-tmux s "display-message" "-p" "ok") '(0 . "ok\n"))))
+      (delete-directory (file-name-directory (directory-file-name root)) t))))
 
 (defun drgnx-tty-harness-test--tmux-argvs (fn)
   "Call FN; every argv it ran (call-process, make-process) that runs tmux."

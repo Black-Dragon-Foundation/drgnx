@@ -262,6 +262,17 @@ starts from it."
       (setq ok (and (file-exists-p ready) (ignore-errors (drgnx-tty-session-eval sess t 5))))
       (unless ok (sleep-for 0.1)))))
 
+(defun drgnx-tty-session-state-root ()
+  "The directory holding tty sessions' run directories: $DRGNX_UI_STATE when set, else a short private one,
+tUID in `temporary-file-directory'.  A session's tmux socket is RUN/tmux-UID/NAME, NAME holding the owner's PID
+\(up to 7 digits) twice; under `drgnx-ui-state-root' (a long home, or a test run's nested temp directories)
+that passed the ~107 bytes a Unix socket path holds, and the Explorer's breadcrumb of the fixtures no longer fit
+the screen (TTY-SOCK-1)."
+  (let ((base (getenv "DRGNX_UI_STATE")))
+    (if (and base (not (string-empty-p base)))
+        (drgnx-ui-state-root)
+      (drgnx-ui-private-tmp-dir (format "t%d" (user-uid)) "it holds the terminal sessions"))))
+
 (cl-defun drgnx-tty-session-start (&key size config daemon term env keys options command nested)
   "Start a tty session; return its plist once the inner Emacs answers on its socket (30 s).
 SIZE \"120x40\" (default) or any WxH; CONFIG \"drgnx\" (default), \"minimal\" or a directory; TERM the
@@ -278,13 +289,19 @@ commands on the inner server.  Not with DAEMON.  With COMMAND, that runs in the 
 Sessions whose owning Emacs died are removed first (`drgnx-tty-session--sweep').
 The plist has the `drgnx-ui' keys plus :tmux (the server's socket), :target (the pane) and :term."
   (let* ((size (or size "120x40"))
-         (root (drgnx-ui-state-root))
+         (root (drgnx-tty-session-state-root))
          (_ (make-directory root t))
          (_ (drgnx-tty-session--sweep root))
          (name (drgnx-tty-session--next-name root))
          (sess (drgnx-ui-prepare-run name (if command "minimal" (or config "drgnx")) size root (and daemon t)))
          (run (plist-get sess :run))
-         (tmux (expand-file-name (format "tmux-%d/%s" (user-uid) name) run)))
+         ;; The tmux socket lives beside the session's socket directory (RUNTIME/drgnx-ui/HASH/tmux-UID/NAME: short and
+         ;; private), not under RUN: a state root of a test's own (DRGNX_UI_STATE) or a long home, and a 7-digit PID
+         ;; twice in the name, passed the ~107 bytes a Unix socket path holds (TTY-SOCK-1).  HASH/tmux-UID stays
+         ;; (empty, the server removes its socket) for the next session: removing it could race with another
+         ;; session's server starting in it.
+         (tmux-dir (directory-file-name (file-name-directory (directory-file-name (file-name-directory (plist-get sess :socket))))))
+         (tmux (expand-file-name (format "tmux-%d/%s" (user-uid) name) tmux-dir)))
     (when (and nested daemon)
       (drgnx-ui--fail "%s: :nested runs Emacs in the inner tmux: not with :daemon" name))
     (when (> (length tmux) 100)
@@ -292,7 +309,7 @@ The plist has the `drgnx-ui' keys plus :tmux (the server's socket), :target (the
     ;; plist-put on this (non-empty) plist changes it in place: the list of live sessions sees every key
     (plist-put sess :tmux tmux)
     (plist-put sess :term (or term "tmux-256color"))
-    (plist-put sess :tmux-env (append (drgnx-tty-session--env sess) (list (concat "TMUX_TMPDIR=" run))))
+    (plist-put sess :tmux-env (append (drgnx-tty-session--env sess) (list (concat "TMUX_TMPDIR=" tmux-dir))))
     (push sess drgnx-tty-session--live)
     (condition-case err
         (pcase-let ((`(,w ,h) (split-string size "x")))

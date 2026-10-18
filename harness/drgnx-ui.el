@@ -127,22 +127,26 @@ EXIT is the symbol `timeout' when the process had to be killed."
         (drgnx-ui--fail "config %S: no init.el in %s" config dir))
       (directory-file-name (file-truename dir)))))
 
+(defun drgnx-ui-private-tmp-dir (name what)
+  "The directory NAME in `temporary-file-directory', made private (mode 0700) if it is not there; it is checked
+to be yours.  WHAT says what it holds, for the error."
+  (let ((dir (expand-file-name name temporary-file-directory)))
+    (drgnx-ui--make-private-dir dir)
+    ;; /tmp is shared: anyone may have made this name first (or a symlink to elsewhere)
+    (let ((attrs (file-attributes dir 'integer)))
+      (unless (and (eq (file-attribute-type attrs) t)
+                   (eql (file-attribute-user-id attrs) (user-uid))
+                   (equal (file-attribute-modes attrs) "drwx------"))
+        (drgnx-ui--fail "%s must be a directory of yours with mode 0700 (%s)" dir what)))
+    dir))
+
 (defun drgnx-ui-runtime-dir ()
   "$XDG_RUNTIME_DIR, or a private fallback where it is unset (containers): the sessions'
 Wayland displays and server sockets live here."
   (let ((xdg (getenv "XDG_RUNTIME_DIR")))
     (if (and xdg (not (string-empty-p xdg)))
         (directory-file-name xdg)
-      (let ((dir (expand-file-name (format "drgnx-ui-%d" (user-uid)) temporary-file-directory)))
-        (drgnx-ui--make-private-dir dir)
-        ;; /tmp is shared: anyone may have made this name first (or a symlink to elsewhere)
-        (let ((attrs (file-attributes dir 'integer)))
-          (unless (and (eq (file-attribute-type attrs) t)
-                       (eql (file-attribute-user-id attrs) (user-uid))
-                       (equal (file-attribute-modes attrs) "drwx------"))
-            (drgnx-ui--fail "%s must be a directory of yours with mode 0700 (it holds the sessions' sockets)"
-                            dir)))
-        dir))))
+      (drgnx-ui-private-tmp-dir (format "drgnx-ui-%d" (user-uid)) "it holds the sessions' sockets"))))
 
 (defun drgnx-ui-socket-dir (name &optional root)
   "Directory for session NAME's server socket: short, private, keyed by the state ROOT.

@@ -183,6 +183,7 @@ case \"$*\" in *--bg-daemon=*)
 esac"
                                       (funcall f "emacs.log") (funcall f "delay") (funcall f "delay")
                                       (funcall f "running") (funcall f "running")))
+                    ("infocmp" "exit 0")      ; the terminal's description is known (a terminal frame checks it)
                     ("systemctl" ,(format "echo \"$*\" >> %s
 case \"$*\" in *is-enabled*) [ -f %s ] ;; *start*) touch %s ;; esac"
                                           (funcall f "systemctl.log") (funcall f "enabled") (funcall f "running")))))
@@ -199,12 +200,13 @@ case \"$*\" in *is-enabled*) [ -f %s ] ;; *start*) touch %s ;; esac"
   (dolist (n names) (write-region "" nil (expand-file-name n dir))))
 
 (defmacro drgnx-bin-test--with-open (&rest body)
-  "BODY in `drgnx-bin-test--with-setup' with the open fakes; ENV names the test's server."
+  "BODY in `drgnx-bin-test--with-setup' with the open fakes; ENV names the test's server.  A local terminal
+with a display: `drgnx open' stays graphical (the unit tier has no DISPLAY, and a terminal is chosen without one)."
   (declare (indent 0))
   `(drgnx-bin-test--with-setup ()
      (drgnx-bin-test--open-fakes dir pathdir)
      (let ((env (append (list (concat "DRGNX_SERVER_NAME=" drgnx-bin-test--server)
-                              (concat "XDG_STATE_HOME=" dir "/state"))
+                              (concat "XDG_STATE_HOME=" dir "/state") "DISPLAY=:99" "SSH_CONNECTION" "SSH_TTY")
                         env)))
        ,@body)))
 
@@ -485,7 +487,7 @@ case \"$*\" in *is-enabled*) [ -f %s ] ;; *start*) touch %s ;; esac"
           (should (string-search "--wait opens files" (cdr r)))))
       (should-not (drgnx-bin-test--client-calls dir))
       (unless (eq system-type 'darwin)          ; a Mac always has its display
-        (should (eql 0 (car (drgnx-bin-test--call drgnx-bin-test--bin (append env '("DISPLAY" "WAYLAND_DISPLAY"))
+        (should (eql 0 (car (drgnx-bin-test--call drgnx-bin-test--bin (append '("DISPLAY" "WAYLAND_DISPLAY") env)
                                                   "open" "--wait" file))))
         (should (equal (drgnx-bin-test--client-calls dir)
                        (list (drgnx-bin-test--p "-e" "t") (drgnx-bin-test--c "-t" "--" file))))))))

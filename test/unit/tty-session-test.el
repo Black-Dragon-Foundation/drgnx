@@ -77,6 +77,24 @@
         (drgnx-tty-session--sweep "/nonexistent-root"))
       (should-not removed))))
 
+(ert-deftest drgnx-tty-session/the-default-state-root-is-short-and-private ()
+  ;; TTY-SOCK-1: the tmux socket is RUN/tmux-UID/NAME, with a 7-digit PID twice in NAME; a long state root passed ~107 bytes
+  (let* ((tmp (make-temp-file "drgnx-ttyroot" t))
+         (temporary-file-directory (file-name-as-directory tmp))
+         (process-environment (cons "DRGNX_UI_STATE" process-environment)))
+    (unwind-protect
+        (let ((root (drgnx-tty-session-state-root)))
+          (should (equal root (expand-file-name (format "t%d" (user-uid)) tmp)))
+          (should (equal (file-attribute-modes (file-attributes root)) "drwx------"))
+          (should (equal (drgnx-tty-session-state-root) root))            ; again: the same directory, no error
+          ;; a directory of that name that is not private is refused, not used
+          (set-file-modes root #o755)
+          (should-error (drgnx-tty-session-state-root) :type 'drgnx-ui-error)
+          ;; a root of the caller's choice wins
+          (let ((process-environment (cons "DRGNX_UI_STATE=/some/root" process-environment)))
+            (should (equal (drgnx-tty-session-state-root) "/some/root"))))
+      (delete-directory tmp t))))
+
 ;;; tty-session-test.el ends here
 
 (ert-deftest drgnx-tty-session/encodes-named-keys ()

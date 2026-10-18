@@ -119,6 +119,20 @@
     (should (member "DRGNX_TEST_SELECTOR=(tag :timing)" (plist-get (seq-find (lambda (j) (equal (plist-get j :name) "unit-timing")) jobs) :env)))
     (should-not (member "perf" (mapcar (lambda (j) (plist-get j :name)) (drgnx-check-plan :root drgnx-dir :unit-shards 1 :live-shards 1))))))
 
+(ert-deftest drgnx-check/the-plan-holds-the-tty-tier-where-tmux-is ()
+  ;; the terminal tier runs `bin/drgnx test --tty' (each file in an Emacs of its own, as every shard), counted as a
+  ;; GUI job for memory (each session is an Emacs in a tmux server), in the parallel phase; not without tmux or --no-gui
+  (let* ((jobs (drgnx-check-plan :root drgnx-dir :tty t))
+         (tty (seq-find (lambda (j) (equal (plist-get j :name) "tty")) jobs)))
+    (should tty)
+    (should (equal (plist-get tty :command) (list (expand-file-name "bin/drgnx" drgnx-dir) "test" "--tty")))
+    (should (plist-get tty :gui))
+    (should (eql (plist-get tty :phase) 2))
+    (should (eql (plist-get tty :timeout) (alist-get 'tty drgnx-check-timeouts)))
+    (should-not (seq-find (lambda (e) (string-prefix-p "DRGNX_TEST_ONE_PROCESS" e)) (plist-get tty :env))))
+  (should-not (seq-find (lambda (j) (equal (plist-get j :name) "tty")) (drgnx-check-plan :root drgnx-dir :tty nil)))
+  (should-not (seq-find (lambda (j) (equal (plist-get j :name) "tty")) (drgnx-check-plan :root drgnx-dir :tty t :gui nil))))
+
 (ert-deftest drgnx-check/the-unit-shards-start-without-the-users-desktop ()
   ;; dbus.el connects with the C environment: the shard process gets a dead bus and no display or compositor
   (dolist (n '("unit-1" "unit-timing"))

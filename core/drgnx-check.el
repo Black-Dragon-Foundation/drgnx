@@ -16,7 +16,7 @@
 (require 'drgnx-paths)
 
 (defconst drgnx-check-timeouts
-  '((build . 300) (unit . 900) (ui . 900) (live . 1500) (scenario . 1500) (bench . 1200) (perf . 2400))
+  '((build . 300) (unit . 900) (ui . 900) (tty . 1500) (live . 1500) (scenario . 1500) (bench . 1200) (perf . 2400))
   "Seconds before a job of each kind is ended (each tier has its own, shorter, timeouts inside).")
 
 ;;;; Memory and shards
@@ -76,9 +76,9 @@ so a test cannot reach the user's desktop.  `bin/drgnx test' sets the same, plus
 own (XDG_RUNTIME_DIR); here the runner (harness/run-ert.el) gives each shard that one inside Emacs, which is
 enough for everything but dbus.el: it reads the process's own environment.")
 
-(cl-defun drgnx-check-plan (&key (root drgnx-dir) (unit-shards 4) (live-shards 2) perf (gui t) dir)
+(cl-defun drgnx-check-plan (&key (root drgnx-dir) (unit-shards 4) (live-shards 2) perf (gui t) (tty (and (executable-find "tmux") t)) dir)
   "The jobs of a check of the checkout ROOT: (:name :phase :command :gui :env :timeout)…  DIR: where shard
-results go (default: none)."
+results go (default: none).  TTY (default: tmux is installed): with GUI, the terminal tier, `bin/drgnx test --tty'."
   (let* ((bin (expand-file-name "bin/drgnx" root))
          (durations (drgnx-check-durations))
          (paths (list "-L" (expand-file-name "harness" root) "-L" (expand-file-name "core" root) "-L" (expand-file-name "wb" root)))
@@ -108,6 +108,9 @@ results go (default: none)."
     (when gui
       ;; the session test's 110 s default is too tight beside the parallel shards (a session boots slower under load)
       (push (funcall job "ui" 2 'ui (list bin "ui" "test-ui-session") :gui t :env (list "DRGNX_UI_TEST_TIMEOUT=300")) jobs)
+      ;; the terminal tier: Emacs sessions in private tmux servers, a file at a time in an Emacs of its own (the runner
+      ;; does that, as for a unit shard).  A GUI job for the memory accounting: one session is an Emacs of its own.
+      (when tty (push (funcall job "tty" 2 'tty (list bin "test" "--tty") :gui t) jobs))
       (cl-loop for files in (drgnx-check-shard (directory-files-recursively (expand-file-name "test/live" root) "-test\\.el\\'")
                                                live-shards durations)
                for i from 1
