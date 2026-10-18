@@ -307,6 +307,6 @@
         (cockpit-edits-visit "RET")
         (cockpit-edits-next-hunk "TAB")
         (cockpit-edits-previous-hunk "<backtab>")
-        (ai-stop :none "in the palette")
         (cockpit-needs-you :none "the status bar's jobs, the badge; the palette")
-        (cockpit-decisions :none "the right dock's tab; the palette")))
+        (cockpit-decisions :none "the right dock's tab; the palette")
+        (ai-stop :none "in the palette")))
