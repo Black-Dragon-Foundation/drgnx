@@ -375,6 +375,7 @@ What "nothing moves on its own" means, each pinned by a test in a GUI session wi
 | I9 | No window moved from a timer or a window change hook except the caller's own | every report's `guard_violations` = 0 |
 | I10 | Each step settles within 250 ms, without oscillation | `drgnx-inv/i1-i9-i10-explorer-and-buffers-flows` |
 | I11 | Under a tiling window manager, a resize the WM makes goes to the editors: docks and panel keep their pixel size | `drgnx-wm/i11-docks-keep-their-size-when-the-wm-resizes`, `drgnx-wm/popups-under-tiling-leave-no-trace` (`test/live/drgnx-tiling-test.el`, sway tier: `bin/drgnx test --container --ui --compositor sway`) |
+| I12 | Across monitors, drgnx moves a window only when asked (Move to Monitor, Next, Previous) and in the restore of auxiliary windows; a restore moves no other window and no other app | `drgnx-wm/move-to-monitor-2-and-back`, `drgnx-wm/a-fullscreen-window-stays-fullscreen-on-its-new-monitor`, `drgnx-wm/restore-puts-the-aux-window-back-on-its-monitor`, `drgnx-wm/a-missing-monitor-on-restore-is-skipped`, `drgnx-wm/a-restore-under-sway-moves-nothing-else`, `drgnx-wm/mutter-explains-and-moves-nothing` (`test/live/drgnx-wm-test.el`; see Tests) |
 
 Two Emacs behaviours the workbench corrects so that these hold: `balance-windows` on a whole frame (finder calls
 it) balances only the editors, and a package calling `display-buffer-in-side-window` directly still gets the place
@@ -392,3 +393,20 @@ by real key presses: no focus taken, width identical over 10 hide/show cycles, t
 the ten Explorer and Buffers scenarios of [scenarios.md](../develop/scenarios.md), plus two for live updates (a folder
 appearing during a held click; a folder appearing while browsing), are green on drgnx (`bin/drgnx test
 --scenario --config drgnx`; driver `test/scenario/drivers/drgnx.el`).
+
+### Moving windows between monitors, live
+
+`test/live/drgnx-wm-test.el` runs the move and restore commands against a real window manager, two monitors of
+1280x800 each, config `drgnx`, a temporary state root, in the harness's own compositor only (never yours). Each test
+runs in the tier that names its compositor and is skipped in the others:
+
+| Tier | Run | Tests |
+|---|---|---|
+| sway | `bin/drgnx test --container --ui --compositor sway` | all but the mutter one: move to monitor 2 and back, fullscreen kept, restore, a missing monitor, a restore moves nothing else |
+| x11 (Xvfb, no window manager) | `... --compositor x11` | move and back, fullscreen kept, restore |
+| i3 | `... --compositor i3` | move and back |
+| mutter (the default) | `bin/drgnx test --container --ui` | the command explains that GNOME cannot be driven, names its own key, and moves nothing |
+
+Narrow a run with `DRGNX_TEST_SELECTOR='"^drgnx-wm/"'`. Under sway the session's seat has no keyboard, so Emacs never
+hears the focus-in event a focused window gets; the move tests deliver it themselves (sway's own focus, in its
+tree, is the real one).
