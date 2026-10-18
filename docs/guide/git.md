@@ -19,6 +19,7 @@ until it is done. Review Branch, the Pull Requests tab and Blame: Show Commit of
 | `n` / `p` | Diff: Next File / Previous File | the next or previous file's header |
 | `RET` | Diff: Open File at Line | the file as it is now, at the line of point |
 | — | Diff: Collapse All / Expand All | file headers only, or every file |
+| `g` | (revert buffer) | run git again for the same changes |
 
 Each file's header shows its name, `old → new` for a rename, `(new)`, `(deleted)` or `(binary)` (a deleted binary file is `(deleted, binary)`), and its counts
 (`+12 −3`). A file whose hunks have more than 2000 lines (`drgnx-diff-fold-lines`) starts folded and is drawn only
@@ -67,7 +68,7 @@ VERDICT: fail
 Severities are `critical`, `important` and `minor`. The panel's **Review** tab lists the findings worst first,
 under a line such as `feature vs main · 2 findings · fail`. That line says "Reviewing…" while the agent works, says
 when the reviewer gave no verdict, and adds "(HEAD has moved since)" when you committed after the review began.
-`RET` opens a finding's line; `d` (Review: Show Branch Diff) opens the branch's diff at that file. The reviewer is
+`g` in the tab draws it again. `RET` opens a finding's line; `d` (Review: Show Branch Diff) opens the branch's diff at that file. The reviewer is
 an ordinary agent session: its transcript is in the agents view. Review Branch refuses a branch with nothing to
 review, and a repository without a base branch.
 

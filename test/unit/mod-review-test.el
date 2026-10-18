@@ -136,4 +136,16 @@
         (drgnx-review-test--answer s drgnx-review-test--answer)
         (should (equal killed (list s)))))))
 
+(ert-deftest drgnx-review/revert-buffer-redraws ()
+  ;; M11b-4: g (revert-buffer) in the tab draws it again
+  (drgnx-review-test--branch
+    (drgnx-review-branch)
+    (drgnx-review--changed s)
+    (drgnx-review-test--answer s drgnx-review-test--answer)
+    (with-current-buffer "*drgnx review*"
+      (let ((inhibit-read-only t)) (erase-buffer))
+      (should (string-empty-p (buffer-string)))
+      (revert-buffer nil t)
+      (should (string-search "feature vs main · 3 findings · fail" (buffer-string))))))
+
 ;;; mod-review-test.el ends here

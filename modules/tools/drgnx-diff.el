@@ -333,12 +333,17 @@
                            (kill-buffer out) (kill-buffer err)))))
     (setq drgnx-diff--proc p)))
 
+(defun drgnx-diff--revert (_ignore-auto _noconfirm)
+  "`revert-buffer-function': run the diff of this view's source again."
+  (when drgnx-diff--source (drgnx-diff--load)))
+
 (defvar drgnx-diff-mode-map (make-sparse-keymap) "Keys come from the key profiles (diff-* commands).")
 
 (define-derived-mode drgnx-diff-mode special-mode "Diff"
   "A diff view: split or unified, files folded and opened, RET opens the file at the line."
   (require 'diff-mode)                                   ; its faces
   (setq-local truncate-lines t)
+  (setq-local revert-buffer-function #'drgnx-diff--revert)
   (setq drgnx-diff-layout (or drgnx-diff-layout drgnx-diff-default-layout))
   (add-hook 'window-size-change-functions #'drgnx-diff--resized nil t))
 

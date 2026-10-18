@@ -319,4 +319,23 @@ new file mode 100644
     (should (re-search-forward "2 b +│ +2 d" nil t))
     (should (re-search-forward "No newline at end of file" nil t))))
 
+(ert-deftest drgnx-diff/revert-buffer-redraws ()
+  ;; M11b-4: g (revert-buffer) runs the diff again
+  (drgnx-git-test-with-repo
+    (drgnx-git-test-write repo "a.txt" "one\n")
+    (drgnx-git-test repo "add" "-A") (drgnx-git-test repo "commit" "-q" "-m" "a")
+    (drgnx-git-test-write repo "a.txt" "two\n")
+    (let ((buf (drgnx-diff-show 'working repo)))
+      (unwind-protect
+          (with-current-buffer buf
+            (drgnx-diff-test--wait buf)
+            (should (string-search "two" (buffer-string)))
+            (drgnx-git-test-write repo "a.txt" "three\n")
+            (revert-buffer nil t)
+            (should (string-search "Loading…" (buffer-string)))
+            (drgnx-diff-test--wait buf)
+            (should (string-search "three" (buffer-string)))
+            (should-not (string-search "two" (buffer-string))))
+        (kill-buffer buf)))))
+
 ;;; mod-diff-test.el ends here

@@ -133,7 +133,8 @@ End with VERDICT: pass or VERDICT: fail." base))
 
 (define-derived-mode drgnx-review-mode special-mode "Review"
   "The findings of Review Branch: RET opens the line."
-  (setq-local truncate-lines t))
+  (setq-local truncate-lines t)
+  (setq-local revert-buffer-function (lambda (_ignore-auto _noconfirm) (drgnx-review-refresh))))
 
 (defun drgnx-review--buffer ()
   (or (get-buffer "*drgnx review*")
