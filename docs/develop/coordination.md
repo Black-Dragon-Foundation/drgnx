@@ -68,6 +68,16 @@ and drgnx's data and state dirs). Without `DRGNX_AGENT` it only reads. Messages 
 A held write answers `HELD: the decision log moved on — read these changes, then retry with seen_version N.` and
 the changes as JSON. After a write the server tells the hub (`coord/notify`, never waiting) so delivery is prompt.
 
+## What this does not protect against
+
+The same Unix user is no security boundary. Anything running as the user — an agent, a command an agent ran, a
+process it started — can connect to the hub's socket and call `agents/permission` (the answer a permission request
+waits for), open `work.db` and write to it directly, or start a coordination server with `DRGNX_AGENT=user` (or any
+other agent's id) and write as that identity. The checks above — freshness, who may change a task, who may answer
+what, the message limits — stop mistakes and runaway loops among cooperating agents; they do not stop an agent that
+means to go around them. The real boundary is the sandbox an agent runs in — one that keeps it away from the hub's
+socket and from the state and data directories — not drgnx's own access rules.
+
 ## Delivery (the hub)
 
 `drgnx-hub--deliver` runs on `coord/notify` and every 2 s:
