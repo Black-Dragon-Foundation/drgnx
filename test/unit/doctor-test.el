@@ -37,8 +37,9 @@
 
 (ert-deftest drgnx-doctor/dev-checks-only-with-dev ()
   (let ((names (lambda (results) (mapcar (lambda (r) (plist-get r :name)) results))))
-    (should-not (memq 'ui-mutter (funcall names (drgnx-doctor-run (drgnx-doctor-test--facts) nil))))
-    (should (memq 'ui-mutter (funcall names (drgnx-doctor-run (drgnx-doctor-test--facts :mutter nil) t))))))
+    ;; ui-magick: a dev check on every platform (ui-mutter is Linux-only)
+    (should-not (memq 'ui-magick (funcall names (drgnx-doctor-run (drgnx-doctor-test--facts) nil))))
+    (should (memq 'ui-magick (funcall names (drgnx-doctor-run (drgnx-doctor-test--facts :magick nil) t))))))
 
 (ert-deftest drgnx-doctor/report-and-exit-code ()
   (let* ((results (drgnx-doctor-run (drgnx-doctor-test--facts :version "29.4") nil))
@@ -73,8 +74,8 @@
                                     process-environment))
          (r (drgnx-doctor-test--run "doctor")))
     (should (string-search "native-compilation" (cdr r)))
-    (should-not (string-search "ui-mutter" (cdr r)))
-    (should (string-search "ui-mutter" (cdr (drgnx-doctor-test--run "doctor" "--dev"))))
+    (should-not (string-search "ui-magick" (cdr r)))                  ; a dev check on every platform
+    (should (string-search "ui-magick" (cdr (drgnx-doctor-test--run "doctor" "--dev"))))
     (should (eq (aref (string-trim (cdr (drgnx-doctor-test--run "doctor" "--json"))) 0) ?\[))))
 
 (ert-deftest drgnx-doctor/dev-needs-a-pgtk-emacs ()

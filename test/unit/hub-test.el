@@ -137,7 +137,8 @@ to OR-LOG, OPENROUTER_API_KEY unset."
       (should (= rc 0)))
     (should (drgnx-hub-running-p))                    ; the starter is gone; the hub serves
     (let* ((pid (plist-get (drgnx-hub-call-sync "status" nil) :pid))
-           (cmdline (with-temp-buffer (insert-file-contents-literally (format "/proc/%d/cmdline" pid)) (buffer-string))))
+           (cmdline (or (alist-get 'args (process-attributes pid))           ; no /proc on macOS
+                        (shell-command-to-string (format "ps -ww -o command= -p %d" pid)))))
       (should (/= pid (emacs-pid)))
       (should (string-search "drgnx-hub-main" cmdline))
       ;; keys sent over the socket: in the hub's memory only
