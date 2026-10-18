@@ -1174,6 +1174,10 @@ cursor to the target output when a window is moved with `--id', and this cannot 
 (declare-function dbus-unregister-object "dbus" (object))
 (declare-function dbus-call-method-asynchronously "dbus" (bus service path interface method handler &rest args))
 
+(defun drgnx-platform-kwin--js-string (s)
+  "S as a JavaScript string literal: JSON, with U+2028 and U+2029 escaped (older JavaScript ends a line there)."
+  (replace-regexp-in-string "[\u2028\u2029]" (lambda (c) (format "\\u%04x" (aref c 0))) (json-encode-string s) t t))
+
 (defconst drgnx-platform-kwin--no-dbus
   '("this Emacs has no D-Bus support" . "use an Emacs built with D-Bus (the installer's builds have it)"))
 
@@ -1202,7 +1206,7 @@ fallback when no name matches) and either :active t (the active window, which mu
 :caption (the window of :pid with that caption, else the only normal window of :pid).
 The reply is an array of screens or of windows (the shape of test/fixtures/wm/kwin/), or {\"ok\":true} or
 {\"error\":MESSAGE}."
-  (let ((str #'json-encode-string))
+  (let ((str #'drgnx-platform-kwin--js-string))
     (concat
      "(function () {\n"
      "function reply(x) { callDBus(" (funcall str (plist-get args :service)) ", " (funcall str (plist-get args :path))
@@ -1266,12 +1270,13 @@ ends with an error.  Script, reply object and temporary file are gone by the tim
       (let* ((n (cl-incf drgnx-platform-kwin--counter))
              (name (format "drgnx-%d-%d" (emacs-pid) n))
              (ms (max 1 (round (* 1000 timeout))))
-             (object nil) (file nil) (timer nil) (sent nil) (done nil)
+             (object nil) (file nil) (timer nil) (sent nil) (done nil) (serials nil) (on-error nil)
              (finish
               (lambda (result)
                 (unless done
                   (setq done t)
                   (when timer (cancel-timer timer))
+                  (when on-error (remove-hook 'dbus-event-error-functions on-error))
                   (when object (ignore-errors (dbus-unregister-object object)))
                   (when sent
                     (ignore-errors
@@ -1279,14 +1284,21 @@ ends with an error.  Script, reply object and temporary file are gone by the tim
                                                        "unloadScript" nil name :timeout ms)))
                   (when file (ignore-errors (delete-file file)))
                   (drgnx-platform--later (lambda () (funcall cb result)))))))
+        ;; A D-Bus error reply (KWin is not running, no such method) does not reach the handler of an
+        ;; asynchronous call: dbus.el runs `dbus-event-error-functions' with the event, whose serial is that of
+        ;; the call.  This call's function is in the hook until `finish' removes it.
+        (setq on-error (lambda (event err)
+                         (when (and (not done) (eq (nth 1 event) :session) (memq (nth 3 event) serials))
+                           (funcall finish (list :error (format "KWin: %s" (string-join (mapcar (lambda (x) (format "%s" x)) (cdr err)) ": ")))))))
+        (add-hook 'dbus-event-error-functions on-error)
         (condition-case err
-            (let* ((service (dbus-get-unique-name :session))
+            (let* ((service (dbus-get-unique-name :session)) ; the first use opens the session connection (local, no round trip to a name owner)
                    (path (format "/org/drgnx/Wm%d" n))
                    (script (drgnx-platform-kwin--script
                             kind (append (list :service service :path path) args))))
               (setq object (dbus-register-method
                             :session service path "org.drgnx.Wm" "Reply"
-                            (lambda (json) (funcall finish (drgnx-platform-kwin--parse json)) t)
+                            (lambda (json) (funcall finish (drgnx-platform-kwin--parse json)) :ignore)
                             t))
               (setq timer (run-at-time timeout nil
                                        (lambda ()
@@ -1294,15 +1306,18 @@ ends with an error.  Script, reply object and temporary file are gone by the tim
               (setq file (let ((coding-system-for-write 'utf-8-unix))
                            (make-temp-file "drgnx-kwin-" nil ".js" script)))
               (setq sent t)
-              (dbus-call-method-asynchronously
-               :session "org.kde.KWin" "/Scripting" "org.kde.kwin.Scripting" "loadScript"
-               (lambda (id)
-                 (if (not (and (integerp id) (>= id 0)))
-                     (funcall finish (list :error "KWin could not load the script"))
-                   (dbus-call-method-asynchronously
-                    :session "org.kde.KWin" (format "/Scripting/Script%d" id) "org.kde.kwin.Script" "run"
-                    nil :timeout ms)))
-               file name :timeout ms))
+              (push (nth 2 (dbus-call-method-asynchronously
+                            :session "org.kde.KWin" "/Scripting" "org.kde.kwin.Scripting" "loadScript"
+                            (lambda (id)
+                              (unless done
+                                (if (not (and (integerp id) (>= id 0)))
+                                    (funcall finish (list :error "KWin could not load the script"))
+                                  (push (nth 2 (dbus-call-method-asynchronously
+                                                :session "org.kde.KWin" (format "/Scripting/Script%d" id)
+                                                "org.kde.kwin.Script" "run" nil :timeout ms))
+                                        serials))))
+                            file name :timeout ms))
+                    serials))
           (error (funcall finish (list :error (error-message-string err)))))))
     nil))
 

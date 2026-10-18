@@ -5,10 +5,13 @@
 (require 'drgnx-paths)
 (require 'drgnx-platform)
 
-;; Every test runs under `drgnx-platform-test--deftest' (platform-test.el): no session, no bus.  Here D-Bus is a
-;; stub inside that macro: `dbus-call-method-asynchronously' records the calls and plays KWin, the others record
-;; what the adapter registers.  `dbus-call-method', `dbus-register-service' and `dbus-unregister-service' are
-;; SYNCHRONOUS (they wait for the bus), so any call to one of them fails a test.
+;; Every test runs under `drgnx-platform-test--deftest' (platform-test.el): no session, no bus.  Inside it the
+;; real dbus.el runs, with its own registry (`dbus-registered-objects-table', a fresh table per test), so
+;; `dbus-register-method' and `dbus-unregister-object' are the real ones.  Only what would reach a bus is stubbed:
+;; `dbus-get-unique-name', `dbus-call-method-asynchronously' (records the calls and plays KWin) and
+;; `dbus-call-method', which is SYNCHRONOUS (it waits for the bus): it only records that it was called, and every
+;; test using the macro below fails when it was.  `dbus-register-service', `dbus-unregister-service' and
+;; `dbus-list-names' end in it, so a change that makes the adapter register a service name fails the tests.
 
 (unless (featurep 'platform-test)
   (load (expand-file-name "test/unit/platform-test.el" drgnx-dir) nil t))
@@ -18,61 +21,72 @@
     (insert-file-contents (expand-file-name (concat "test/fixtures/wm/kwin/" name) drgnx-dir))
     (buffer-string)))
 
-(defvar drgnx-platform-kwin-test--calls nil "The recorded D-Bus calls, oldest last: (SERVICE PATH METHOD ARGS).")
-(defvar drgnx-platform-kwin-test--unregistered nil "Objects passed to `dbus-unregister-object'.")
-(defvar drgnx-platform-kwin-test--registered nil "Objects returned by `dbus-register-method' that are still registered.")
+(defvar drgnx-platform-kwin-test--calls nil "The recorded D-Bus calls, oldest last: (SERVICE PATH METHOD ARGS SERIAL).")
+(defvar drgnx-platform-kwin-test--sync-calls nil "Calls of the synchronous `dbus-call-method'.")
 (defvar drgnx-platform-kwin-test--script nil "The text of the script file when KWin was told to run it.")
 (defvar drgnx-platform-kwin-test--script-file nil "The script file's name.")
+(defvar drgnx-platform-kwin-test--reply-return nil "What the last `Reply' handler returned.")
+(defvar drgnx-platform-kwin-test--fail-load nil "Non-nil: KWin answers loadScript with a D-Bus error (an error event).")
+(defvar drgnx-platform-kwin-test--held-load nil "Non-nil: loadScript's reply is held back; set to the handler.")
+
+(defun drgnx-platform-kwin-test--entries ()
+  "The `Reply' methods registered now: entries (nil SERVICE PATH HANDLER)."
+  (gethash (list :method :session "org.drgnx.Wm" "Reply") dbus-registered-objects-table))
 
 (defmacro drgnx-platform-kwin-test--with-kwin (answer &rest body)
-  "Run BODY with D-Bus stubbed.  KWin loads a script (id 7) and runs it; ANSWER (a function of the script text
-or nil for \"never answers\") gives the JSON the script reports by calling `Reply'.  The temporary directory is
-empty again afterwards (checked by the tests that care)."
+  "Run BODY with D-Bus stubbed as described above.  KWin loads a script (id 7) and runs it; ANSWER (a function
+of the script text, or nil for \"never answers\") gives the JSON the script reports by calling `Reply'.  The
+temporary directory is private to the test."
   (declare (indent 1))
-  `(let* ((drgnx-platform-kwin-test--calls nil) (drgnx-platform-kwin-test--unregistered nil)
-          (drgnx-platform-kwin-test--registered nil) (drgnx-platform-kwin-test--script nil)
-          (drgnx-platform-kwin-test--script-file nil)
+  `(let* ((drgnx-platform-kwin-test--calls nil) (drgnx-platform-kwin-test--sync-calls nil)
+          (drgnx-platform-kwin-test--script nil) (drgnx-platform-kwin-test--script-file nil)
+          (drgnx-platform-kwin-test--reply-return nil) (drgnx-platform-kwin-test--fail-load nil)
+          (drgnx-platform-kwin-test--held-load nil)
+          (dbus-registered-objects-table (make-hash-table :test 'equal))
+          (dbus-event-error-functions nil)
           (tmp (make-temp-file "drgnx-kwin-test" t)) (temporary-file-directory (file-name-as-directory tmp))
-          (answer ,answer) (handlers nil))
+          (answer ,answer) (serial 0))
      (unwind-protect
          (cl-letf (((symbol-function 'drgnx-platform-kwin--dbus-p) (lambda () t))
                    ((symbol-function 'dbus-get-unique-name) (lambda (&rest _) ":1.99"))
-                   ((symbol-function 'dbus-register-service) (lambda (&rest _) (error "synchronous dbus-register-service")))
-                   ((symbol-function 'dbus-unregister-service) (lambda (&rest _) (error "synchronous dbus-unregister-service")))
-                   ((symbol-function 'dbus-register-method)
-                    (lambda (_bus service path interface method handler &optional dont-register)
-                      (unless dont-register (error "dbus-register-method would register a service (synchronous)"))
-                      (push (list service path interface method handler) handlers)
-                      (let ((object (list (list :method :session interface method) (list service path handler))))
-                        (push object drgnx-platform-kwin-test--registered)
-                        object)))
-                   ((symbol-function 'dbus-unregister-object)
-                    (lambda (object)
-                      (push object drgnx-platform-kwin-test--unregistered)
-                      (setq drgnx-platform-kwin-test--registered (delq object drgnx-platform-kwin-test--registered))
-                      t))
+                   ((symbol-function 'dbus-call-method)
+                    (lambda (&rest args) (push args drgnx-platform-kwin-test--sync-calls) (error "synchronous dbus-call-method")))
                    ((symbol-function 'dbus-call-method-asynchronously)
                     (lambda (bus service path interface method handler &rest args)
                       (should (eq bus :session))
                       (should (memq :timeout args))
-                      (setq args (cl-loop for (a . rest) on args until (eq a :timeout) collect a))
+                      (setq args (cl-loop for (a . _rest) on args until (eq a :timeout) collect a))
+                      (setq serial (1+ serial))
                       (setq drgnx-platform-kwin-test--calls
-                            (append drgnx-platform-kwin-test--calls (list (list service path method args))))
+                            (append drgnx-platform-kwin-test--calls (list (list service path method args serial))))
                       (should (equal service "org.kde.KWin"))
-                      (cond
-                       ((equal method "loadScript")
-                        (setq drgnx-platform-kwin-test--script-file (car args)
-                              drgnx-platform-kwin-test--script
-                              (with-temp-buffer (insert-file-contents (car args)) (buffer-string)))
-                        (when handler (run-at-time 0 nil handler 7)))
-                       ((equal method "run")
-                        (should (equal path "/Scripting/Script7"))
-                        (when-let* ((json (and answer (funcall answer drgnx-platform-kwin-test--script))))
-                          ;; the script calls back into Emacs at the registered object
-                          (let ((h (car handlers)))
-                            (run-at-time 0 nil (lambda () (funcall (nth 4 h) json)))))))
-                      nil)))
-           ,@body)
+                      (let ((this serial))
+                        (cond
+                         ((equal method "loadScript")
+                          (setq drgnx-platform-kwin-test--script-file (car args)
+                                drgnx-platform-kwin-test--script
+                                (with-temp-buffer (insert-file-contents (car args)) (buffer-string)))
+                          (cond (drgnx-platform-kwin-test--fail-load
+                                 ;; dbus.el hands an error reply to `dbus-event-error-functions', not to the handler
+                                 (run-at-time 0 nil #'run-hook-with-args 'dbus-event-error-functions
+                                              (list 'dbus-event :session 3 this "org.freedesktop.DBus" ":1.99" "/"
+                                                    "org.freedesktop.DBus" "org.freedesktop.DBus.Error.ServiceUnknown" nil)
+                                              '(dbus-error "org.freedesktop.DBus.Error.ServiceUnknown"
+                                                           "The name org.kde.KWin was not provided")))
+                                (drgnx-platform-kwin-test--held-load
+                                 (setq drgnx-platform-kwin-test--held-load handler))
+                                (handler (run-at-time 0 nil handler 7))))
+                         ((equal method "run")
+                          (should (equal path "/Scripting/Script7"))
+                          (when-let* ((json (and answer (funcall answer drgnx-platform-kwin-test--script))))
+                            ;; the script calls back into Emacs at the registered object
+                            (run-at-time 0 nil
+                                         (lambda ()
+                                           (setq drgnx-platform-kwin-test--reply-return
+                                                 (funcall (nth 3 (car (drgnx-platform-kwin-test--entries))) json))))))))
+                      (list :serial bus serial))))
+           (prog1 (progn ,@body)
+             (should-not drgnx-platform-kwin-test--sync-calls)))
        (delete-directory tmp t))))
 
 (defun drgnx-platform-kwin-test--methods ()
@@ -86,6 +100,7 @@ empty again afterwards (checked by the tests that care)."
     (accept-process-output nil 0.2)
     (should (= 1 (length results)))
     (car results)))
+
 
 ;;;; The script text (pure)
 
@@ -210,8 +225,8 @@ empty again afterwards (checked by the tests that care)."
                                 (should (equal (drgnx-platform-kwin-test--methods) '("loadScript" "run" "unloadScript")))
                                 (should (equal (nth 3 (nth 2 drgnx-platform-kwin-test--calls))
                                                (list (nth 1 (nth 3 (nth 0 drgnx-platform-kwin-test--calls))))))
-                                (should (= 1 (length drgnx-platform-kwin-test--unregistered)))
-                                (should-not drgnx-platform-kwin-test--registered)
+                                (should-not (drgnx-platform-kwin-test--entries))
+                                (should-not dbus-event-error-functions)
                                 (should drgnx-platform-kwin-test--script-file)
                                 (should-not (file-exists-p drgnx-platform-kwin-test--script-file))
                                 (should-not (directory-files temporary-file-directory nil directory-files-no-dot-files-regexp))
@@ -223,7 +238,10 @@ empty again afterwards (checked by the tests that care)."
                                 (should (null (drgnx-platform-kwin-test--ask
                                                (lambda (cb) (drgnx-platform-kwin--monitors (drgnx-platform-ctx nil 2.0) cb)))))
                                 (should (equal (drgnx-platform-kwin-test--methods) '("loadScript" "run" "unloadScript")))
-                                (should (= 1 (length drgnx-platform-kwin-test--unregistered)))
+                                (should-not (drgnx-platform-kwin-test--entries))
+                                (should-not dbus-event-error-functions)
+                                ;; the reply method answers :ignore (an empty reply), not a value
+                                (should (eq :ignore drgnx-platform-kwin-test--reply-return))
                                 (should-not (file-exists-p drgnx-platform-kwin-test--script-file))))
 
 (drgnx-platform-test--deftest drgnx-platform-kwin/two-calls-at-once-do-not-share-a-reply ()
@@ -233,16 +251,67 @@ empty again afterwards (checked by the tests that care)."
                                     (drgnx-platform-kwin--monitors ctx (lambda (r) (push (cons 'a r) results)))
                                     (drgnx-platform-kwin--monitors ctx (lambda (r) (push (cons 'b r) results)))
                                     (should (drgnx-platform-test--await (lambda () (= 4 (length drgnx-platform-kwin-test--calls))) 3))
-                                    (setq handlers (reverse drgnx-platform-kwin-test--registered))
+                                    (setq handlers (reverse (drgnx-platform-kwin-test--entries)))
                                     ;; each call has its own object path, so answering one leaves the other pending
                                     (should (= 2 (length handlers)))
-                                    (should-not (equal (nth 1 (cadr (nth 0 handlers))) (nth 1 (cadr (nth 1 handlers)))))
-                                    (funcall (nth 2 (cadr (nth 1 handlers))) "[]")
+                                    (should-not (equal (nth 2 (nth 0 handlers)) (nth 2 (nth 1 handlers))))
+                                    (funcall (nth 3 (nth 1 handlers)) "[]")
                                     (should (drgnx-platform-test--await (lambda () results) 2))
                                     (should (equal results '((b))))
-                                    (funcall (nth 2 (cadr (nth 0 handlers))) "[]")
+                                    (funcall (nth 3 (nth 0 handlers)) "[]")
                                     (should (drgnx-platform-test--await (lambda () (= 2 (length results))) 2))
-                                    (should-not drgnx-platform-kwin-test--registered)))))
+                                    (should-not (drgnx-platform-kwin-test--entries))))))
+
+;; A D-Bus error reply (KWin is not running) does not reach an asynchronous call's handler; dbus.el runs
+;; `dbus-event-error-functions' with an event whose serial is the call's.
+(drgnx-platform-test--deftest drgnx-platform-kwin/a-dbus-error-reply-is-reported-at-once ()
+                              (drgnx-platform-kwin-test--with-kwin nil
+                                (setq drgnx-platform-kwin-test--fail-load t)
+                                (let* ((start (float-time))
+                                       (r (drgnx-platform-kwin-test--ask
+                                           (lambda (cb) (drgnx-platform-kwin--monitors (drgnx-platform-ctx nil 5.0) cb)))))
+                                  (should (< (- (float-time) start) 2))
+                                  (should (equal r '(:error "KWin: org.freedesktop.DBus.Error.ServiceUnknown: The name org.kde.KWin was not provided")))
+                                  ;; cleaned up as after any end
+                                  (should (equal (drgnx-platform-kwin-test--methods) '("loadScript" "unloadScript")))
+                                  (should-not (drgnx-platform-kwin-test--entries))
+                                  (should-not dbus-event-error-functions)
+                                  (should-not (file-exists-p drgnx-platform-kwin-test--script-file)))))
+
+(drgnx-platform-test--deftest drgnx-platform-kwin/an-error-for-another-call-is-not-ours ()
+                              (drgnx-platform-kwin-test--with-kwin nil
+                                (let ((results nil))
+                                  (drgnx-platform-kwin--monitors (drgnx-platform-ctx nil 0.4) (lambda (r) (push r results)))
+                                  (should (drgnx-platform-test--await (lambda () (= 2 (length drgnx-platform-kwin-test--calls))) 3))
+                                  (should (= 1 (length dbus-event-error-functions)))
+                                  ;; another serial, another bus: ignored
+                                  (run-hook-with-args 'dbus-event-error-functions (list 'dbus-event :session 3 99 "x" "y" "/" "i" "m" nil) '(dbus-error "n" "m"))
+                                  (run-hook-with-args 'dbus-event-error-functions (list 'dbus-event :system 3 1 "x" "y" "/" "i" "m" nil) '(dbus-error "n" "m"))
+                                  (should-not results)
+                                  (should (drgnx-platform-test--await (lambda () results) 3))
+                                  (should (string-match-p "did not answer" (cadr (car results)))))))
+
+(drgnx-platform-test--deftest drgnx-platform-kwin/nothing-runs-after-a-deadline ()
+                              (drgnx-platform-kwin-test--with-kwin (lambda (_s) "[]")
+                                (setq drgnx-platform-kwin-test--held-load t)    ; loadScript's reply comes late
+                                (let ((r (drgnx-platform-kwin-test--ask
+                                          (lambda (cb) (drgnx-platform-kwin--monitors (drgnx-platform-ctx nil 0.3) cb)))))
+                                  (should (eq :error (car r))))
+                                (should (functionp drgnx-platform-kwin-test--held-load))
+                                (funcall drgnx-platform-kwin-test--held-load 7)  ; the late reply
+                                (accept-process-output nil 0.1)
+                                ;; no `run' was sent for a script the call has given up on
+                                (should (equal (drgnx-platform-kwin-test--methods) '("loadScript" "unloadScript")))))
+
+;;;; Strings in the script
+
+(drgnx-platform-test--deftest drgnx-platform-kwin/line-separators-are-escaped-in-the-script ()
+                              (let* ((args (list :service ":1.5" :path "/p" :pid 1 :screen "S" :geometry '(0 0 1 1)
+                                                 :caption (concat "a" (string #x2028) "b" (string #x2029) "c")))
+                                     (s (drgnx-platform-kwin--script 'move args)))
+                                (should-not (string-match-p (string #x2028) s))
+                                (should-not (string-match-p (string #x2029) s))
+                                (should (string-match-p (regexp-quote "\"a\\u2028b\\u2029c\"") s))))
 
 ;;;; No D-Bus
 

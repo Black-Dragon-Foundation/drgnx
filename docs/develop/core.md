@@ -245,7 +245,10 @@ name would make two calls share a reply. The script, the object and the temporar
 success, error and deadline alike. `:monitors` lists `workspace.screens`; `:move` (the command) moves the active
 window and only if it is Emacs' (by pid); `:place` (restore) finds Emacs' window by pid and the frame's title (else
 the only normal window of that pid). Without D-Bus support or a session bus, `:can-move` says so with a fix. It
-has no `:frame-monitor` yet, so the monitor a frame is on is unknown there. Not run on a real Plasma session.
+has no `:frame-monitor` yet, so the monitor a frame is on is unknown there. A D-Bus error reply (KWin not running) ends
+the call at once with that error; a silent KWin ends it at the deadline. KWin has no window id Emacs can read, so
+`:place` cannot tell apart two frames of one Emacs with the same title: it may move the wrong one. Not run on a real
+Plasma session.
 
 **Another compositor** (river, Wayfire, labwc, Cosmic, ...): call `drgnx-platform-define-adapter` from your
 config. A new name goes before `x11` (so an adapter for an X window manager such as bspwm, awesome or xmonad
