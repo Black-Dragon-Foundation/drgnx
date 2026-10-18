@@ -39,23 +39,71 @@ MIDWAY (a function of the id) is called once the job is running, its tasks not d
   (drgnx-job-run-test--with drgnx-job-exit-test--four
     (drgnx-job-exit-test--run plan repo)))
 
+(defconst drgnx-job-exit-test--credential-files '(".claude/.credentials.json" ".codex/auth.json" ".config/gh/hosts.yml")
+  "The subscription CLIs' logins, relative to HOME.")
+
+(defun drgnx-job-exit-test--canaries (home)
+  "FIFOs for the credential files under HOME, each with the word `canary' in it (held open by a shell so it stays):
+whoever reads one — a process of any kind — takes the word away.  The holders, to `drgnx-job-exit-test--unread-p'."
+  (mapcar (lambda (f)
+            (let ((path (concat home f)) (ready nil))
+              (make-directory (file-name-directory path) t)
+              (call-process "mkfifo" nil nil nil path)
+              (let ((p (make-process :name "canary" :noquery t :connection-type 'pipe
+                                     :command (list "sh" "-c" "exec 3<>\"$1\"; printf canary >&3; echo ready; read x" "sh" path)
+                                     :filter (lambda (_p out) (when (string-search "ready" out) (setq ready t))))))
+                (should (drgnx-job-run-test--wait (lambda () ready) 5))
+                (cons path p))))
+          drgnx-job-exit-test--credential-files))
+
+(defun drgnx-job-exit-test--unread-p (canary)
+  "Is the word still in CANARY's FIFO (a (PATH . HOLDER))?  Looking takes it out and puts it back."
+  (equal (with-temp-buffer
+           (call-process "sh" nil t nil "-c"
+                         "exec 3<>\"$1\"; w=$(dd bs=6 count=1 iflag=nonblock <&3 2>/dev/null); printf '%s' \"$w\" >&3; printf '%s' \"$w\""
+                         "sh" (car canary))
+           (buffer-string))
+         "canary"))
+
+(defun drgnx-job-exit-test--release (canaries)
+  (dolist (c canaries) (when (process-live-p (cdr c)) (delete-process (cdr c)))))
+
+(ert-deftest drgnx-job-exit/a-process-reading-a-credential-file-is-seen ()
+  ;; the guard of the next test works for any process, not only this Emacs
+  (drgnx-job-run-test--with "# One\n\n### Task 1: one\n"
+    (let ((canaries (drgnx-job-exit-test--canaries (concat root "home/"))))
+      (unwind-protect
+          (progn
+            (should (seq-every-p #'drgnx-job-exit-test--unread-p canaries))
+            (call-process "timeout" nil nil nil "5" "head" "-c" "3" (car (car canaries)))
+            (should-not (drgnx-job-exit-test--unread-p (car canaries)))
+            (should (drgnx-job-exit-test--unread-p (cadr canaries))))
+        (drgnx-job-exit-test--release canaries)))))
+
 (ert-deftest drgnx-job-exit/no-credential-file-is-opened ()
-  ;; the subscription CLIs' logins under a fake HOME: drgnx (this Emacs, the hub here) never touches them
+  ;; the subscription CLIs' logins under a fake HOME: drgnx — this Emacs, the hub here and every process it starts —
+  ;; never touches them.  This Emacs: a file name handler on the file names (wherever they are); the others: FIFOs.
   (drgnx-job-run-test--with drgnx-job-exit-test--four
     (let* ((home (concat root "home/")) (opened nil)
-           (creds (mapcar (lambda (f) (concat home f)) '(".claude/.credentials.json" ".codex/auth.json" ".config/gh/hosts.yml")))
+           (canaries (drgnx-job-exit-test--canaries home))
            (process-environment (cons (concat "HOME=" home) process-environment))
            (handler (lambda (op &rest args)
                       (push (cons op args) opened)
                       (let ((inhibit-file-name-handlers (cons 'drgnx-job-exit-test--watch inhibit-file-name-handlers))
                             (inhibit-file-name-operation op))
-                        (apply op args)))))
-      (dolist (f creds) (make-directory (file-name-directory f) t) (write-region "secret" nil f nil 'silent))
-      (defalias 'drgnx-job-exit-test--watch handler)
-      (let ((file-name-handler-alist (cons (cons (concat "\\`" (regexp-quote home) "\\.\\(claude\\|codex\\|config/gh\\)/") 'drgnx-job-exit-test--watch)
-                                           file-name-handler-alist)))
-        (drgnx-job-exit-test--run plan repo))
-      (should-not opened))))
+                        (if (and (stringp (car args)) (string-prefix-p home (expand-file-name (car args))))
+                            (apply op args)
+                          (signal 'file-missing (list "credential file" (car args))))))))   ; never the real one
+      (unwind-protect
+          (progn
+            (defalias 'drgnx-job-exit-test--watch handler)
+            (let ((file-name-handler-alist
+                   (cons (cons "/\\.\\(?:claude/\\.credentials\\.json\\|codex/auth\\.json\\|config/gh/hosts\\.yml\\)\\'" 'drgnx-job-exit-test--watch)
+                         file-name-handler-alist)))
+              (drgnx-job-exit-test--run plan repo))
+            (should-not opened)
+            (should (seq-every-p #'drgnx-job-exit-test--unread-p canaries)))
+        (drgnx-job-exit-test--release canaries)))))
 
 (ert-deftest drgnx-job-exit/closing-the-window-leaves-agents-running ()
   (drgnx-job-run-test--with "# One\n\n### Task 1: one\n"
