@@ -15,10 +15,11 @@
 (require 'subr-x)
 (require 'drgnx-mcp)
 (require 'drgnx-coord)
-(require 'drgnx-work)
 (require 'drgnx-paths)
 
 (declare-function drgnx-hub-socket "drgnx-hub")
+(declare-function drgnx-work--status-rows "drgnx-work")
+(declare-function drgnx-work--json-row "drgnx-work")
 
 (defun drgnx-coord-mcp--me ()
   (let ((a (getenv "DRGNX_AGENT")))
@@ -165,7 +166,8 @@ error, nothing is sent.  The hub is asked only when the cheap checks fail."
       ("work_status" :description "The work tracker's plans: what `drgnx work status --json' gives, one object per plan (tasks, steps, todos as [done, all], commits, branch, merged)"
        :schema ,(funcall s nil)
        ;; drgnx-mcp--json decodes json-serialize's UTF-8 bytes, so a non-ASCII title reaches the agent intact
-       :call ,(lambda (_a) (vconcat (mapcar #'drgnx-work--json-row (drgnx-work--status-rows)))))
+       :call ,(lambda (_a) (require 'drgnx-work)   ; loaded on first use: every agent starts this server
+                (vconcat (mapcar #'drgnx-work--json-row (drgnx-work--status-rows)))))
       ("escalate" :description "Ask the user to decide something (a clash, a question): queued for them (the job window shows it); go on with what does not depend on it"
        :schema ,(funcall s `(("subject" "string" "What it is about") ("text" "string" "What needs deciding") ,seen)
                          '("subject" "text" "seen_version"))
