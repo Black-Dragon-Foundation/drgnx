@@ -88,6 +88,10 @@ or the next command that registers.
 
 ## Forwarding
 
+The token is checked as soon as the request's head is whole (`drgnx-http-parse-head`): one that is not a registration
+gets 401 at once, before the body (up to 32 MB) is waited for; a good token's body is kept as a list of pieces and
+joined when its last piece came.
+
 Only Anthropic Messages paths are forwarded — `/v1/messages`, `/v1/messages/count_tokens`, `/v1/models[/ID]`, with
 a query, never `..` — and the URL built must keep the provider's host: a path cannot send the key elsewhere (404
 otherwise). A provider can be carried when it has `:messages t` (it serves Anthropic's Messages API at its URL without `/v1`

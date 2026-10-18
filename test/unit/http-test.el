@@ -25,6 +25,16 @@
                  '(:error 413)))
   (should (equal (drgnx-http-parse-request (concat "POST / HTTP/1.1\r\nX: " (make-string (* 70 1024) ?a))) '(:error 431))))
 
+(ert-deftest drgnx-http/the-head-is-read-before-the-body ()
+  (should-not (drgnx-http-parse-head "POST / HTTP/1.1\r\nContent-"))
+  (let ((h (drgnx-http-parse-head "POST /v1/messages HTTP/1.1\r\nContent-Length: 10\r\nX-Api-Key: t\r\n\r\n01")))
+    (should (equal (plist-get h :path) "/v1/messages"))
+    (should (equal (drgnx-http-header h "x-api-key") "t"))
+    (should (= (plist-get h :length) 10))
+    (should (= (plist-get h :body-start) (string-search "01" "POST /v1/messages HTTP/1.1\r\nContent-Length: 10\r\nX-Api-Key: t\r\n\r\n01"))))
+  (should (equal (drgnx-http-parse-head "garbage\r\n\r\n") '(:error 400)))
+  (should (equal (drgnx-http-parse-head (format "POST / HTTP/1.1\r\nContent-Length: %d\r\n\r\n" (1+ drgnx-http-max-body))) '(:error 413))))
+
 (defconst drgnx-http-test--stream
   (concat "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"m\",\"usage\":{\"input_tokens\":12,\"output_tokens\":1}}}\n\n"
           "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"hi\"}}\n\n"

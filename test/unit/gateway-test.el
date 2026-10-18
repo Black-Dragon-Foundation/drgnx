@@ -252,6 +252,27 @@ the gateway told."
         (unless (member (file-name-nondirectory f) '("or.log"))
           (should-not (string-search "sk-mem-only" (with-temp-buffer (set-buffer-multibyte nil) (insert-file-contents-literally f) (buffer-string)))))))))
 
+(ert-deftest drgnx-gateway/bad-token-refused-before-body ()
+  ;; the head says 5 MB follow; the token is wrong: the answer comes at once, not after (or without) the body
+  (drgnx-gw-test--with '((:path "/api/v1/messages" :body "{}")) '()
+    (let* ((got "") (c (open-network-stream "gw-test" nil "127.0.0.1" port :coding 'binary)))
+      (set-process-filter c (lambda (_p s) (setq got (concat got s))))
+      (process-send-string c "POST /v1/messages HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer nope\r\nContent-Length: 5000000\r\n\r\n{")
+      (should (drgnx-gw-test--settle (lambda () (string-prefix-p "HTTP/1.1 401" got)) 3))
+      (delete-process c))
+    (should (equal (drgnx-gw-test--log or-log) ""))
+    ;; a good token still waits for its whole body, which may come in pieces
+    (let* ((token (drgnx-gateway-register '(:chain ((openrouter . nil)))))
+           (got "") (c (open-network-stream "gw-test" nil "127.0.0.1" port :coding 'binary)))
+      (set-process-filter c (lambda (_p s) (setq got (concat got s))))
+      (process-send-string c (format "POST /v1/messages HTTP/1.1\r\nAuthorization: Bearer %s\r\nContent-Length: 10\r\n\r\n01234" token))
+      (accept-process-output nil 0.3)
+      (should (equal got ""))
+      (process-send-string c "56789")
+      (should (drgnx-gw-test--settle (lambda () (string-prefix-p "HTTP/1.1 200" got)) 5))
+      (should (string-search "0123456789" (drgnx-gw-test--log or-log)))
+      (delete-process c))))
+
 (defun drgnx-gw-test--fake-curl (root)
   "A `curl' that only keeps its stdin (the config) in ROOT/curl.config; the directory to put first on `exec-path'."
   (let ((dir (concat root "fakebin/")) (file (concat root "fakebin/curl")))

@@ -14,10 +14,11 @@
 (defconst drgnx-http-max-body (* 32 1024 1024) "The largest request body taken (bytes).")
 (defconst drgnx-http-max-head (* 64 1024) "The largest request head taken (bytes).")
 
-(defun drgnx-http-parse-request (bytes)
-  "The request in BYTES (unibyte), when all of it came: (:method :path :headers ((NAME . VALUE)…) :body :rest),
-NAME in lower case, REST the bytes after it.  nil while it is incomplete; (:error STATUS) when it cannot be taken:
-400 malformed, 411 a chunked body, 413 a body over `drgnx-http-max-body', 431 a head over `drgnx-http-max-head'."
+(defun drgnx-http-parse-head (bytes)
+  "The head of the request in BYTES (unibyte), once all of it came, before the body: (:method :path :headers
+((NAME . VALUE)…) :length BODY-BYTES :body-start INDEX).  nil while it is incomplete; (:error STATUS) when it cannot
+be taken: 400 malformed, 411 a chunked body, 413 a body over `drgnx-http-max-body', 431 a head over
+`drgnx-http-max-head'."
   (let ((end (string-search "\r\n\r\n" bytes)))
     (cond
      ((and (not end) (> (length bytes) drgnx-http-max-head)) '(:error 431))
@@ -34,17 +35,24 @@ NAME in lower case, REST the bytes after it.  nil while it is incomplete; (:erro
                                                 (cons (downcase (match-string 1 l)) (match-string 2 l))))
                                             (cdr lines))))
                  (te (cdr (assoc "transfer-encoding" headers)))
-                 (cl (cdr (assoc "content-length" headers)))
-                 (len (if cl (string-to-number cl) 0))
-                 (body-start (+ end 4)))
+                 (cl (cdr (assoc "content-length" headers))))
             (cond
              ((and te (string-match-p "chunked" te)) '(:error 411))
              ((and cl (not (string-match-p "\\`[0-9]+\\'" cl))) '(:error 400))
-             ((> len drgnx-http-max-body) '(:error 413))
-             ((< (- (length bytes) body-start) len) nil)
+             ((> (if cl (string-to-number cl) 0) drgnx-http-max-body) '(:error 413))
              (t (list :method method :path path :headers headers
-                      :body (substring bytes body-start (+ body-start len))
-                      :rest (substring bytes (+ body-start len))))))))))))
+                      :length (if cl (string-to-number cl) 0) :body-start (+ end 4)))))))))))
+
+(defun drgnx-http-parse-request (bytes)
+  "The request in BYTES (unibyte), when all of it came: (:method :path :headers ((NAME . VALUE)…) :body :rest),
+NAME in lower case, REST the bytes after it.  nil while it is incomplete; (:error STATUS) as for
+`drgnx-http-parse-head'."
+  (let ((head (drgnx-http-parse-head bytes)))
+    (if (or (null head) (plist-get head :error)) head
+      (let* ((start (plist-get head :body-start)) (stop (+ start (plist-get head :length))))
+        (when (>= (length bytes) stop)
+          (list :method (plist-get head :method) :path (plist-get head :path) :headers (plist-get head :headers)
+                :body (substring bytes start stop) :rest (substring bytes stop)))))))
 
 (defun drgnx-http-header (request name)
   "REQUEST's header NAME (lower case), or nil."

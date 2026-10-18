@@ -114,16 +114,34 @@ it, through its sentinel, the request upstream), never an error in a filter."
     (run-at-time 0.05 nil (lambda () (when (process-live-p conn) (delete-process conn))))))
 
 (defun drgnx-gateway--filter (conn bytes)
+  "Take BYTES of CONN's request.  Once its head is whole a token that is no registration is refused at once, before
+the body (up to 32 MB) is waited for; the body's pieces are kept in a list and joined when the last one came."
   (unless (process-get conn :request)
-    (let* ((buf (concat (or (process-get conn :buf) "") bytes))
-           (req (drgnx-http-parse-request buf)))
-      (process-put conn :buf buf)
-      (cond ((null req))
-            ((plist-get req :error)
-             (process-put conn :request req)
-             (drgnx-gateway--respond conn (plist-get req :error) "invalid_request_error" "the request cannot be taken"))
-            (t (process-put conn :request req) (process-put conn :buf nil)
-               (drgnx-gateway--guarded conn (lambda () (drgnx-gateway--handle conn req))))))))
+    (if-let* ((need (process-get conn :need)))
+        (progn (process-put conn :chunks (cons bytes (process-get conn :chunks)))
+               (process-put conn :size (+ (process-get conn :size) (length bytes)))
+               (when (>= (process-get conn :size) need) (drgnx-gateway--request-whole conn)))
+      (let* ((buf (concat (or (process-get conn :buf) "") bytes))
+             (head (drgnx-http-parse-head buf)))
+        (cond ((null head) (process-put conn :buf buf))
+              ((plist-get head :error)
+               (process-put conn :request head)
+               (drgnx-gateway--respond conn (plist-get head :error) "invalid_request_error" "the request cannot be taken"))
+              ((not (drgnx-gateway--registration head))
+               (process-put conn :request head)
+               (drgnx-gateway--respond conn 401 "authentication_error" "not a drgnx gateway token"))
+              (t (process-put conn :buf nil)
+                 (process-put conn :need (+ (plist-get head :body-start) (plist-get head :length)))
+                 (process-put conn :chunks (list buf))
+                 (process-put conn :size (length buf))
+                 (when (>= (length buf) (process-get conn :need)) (drgnx-gateway--request-whole conn))))))))
+
+(defun drgnx-gateway--request-whole (conn)
+  "All of CONN's request came: parse it and handle it."
+  (let ((req (drgnx-http-parse-request (apply #'concat (nreverse (process-get conn :chunks))))))
+    (process-put conn :chunks nil)
+    (process-put conn :request req)
+    (drgnx-gateway--guarded conn (lambda () (drgnx-gateway--handle conn req)))))
 
 (defun drgnx-gateway--guarded (conn fn)
   "Run FN; an error answers CONN 500 and closes it (never an agent left waiting)."
@@ -148,9 +166,13 @@ it, through its sentinel, the request upstream), never an error in a filter."
     (or (and auth (string-match "\\`Bearer +\\(.+\\)\\'" auth) (match-string 1 auth))
         (drgnx-http-header req "x-api-key"))))
 
+(defun drgnx-gateway--registration (req)
+  "The registration REQ's token belongs to, or nil."
+  (when-let* ((token (drgnx-gateway--token req)))
+    (gethash (drgnx-gateway--hash token) drgnx-gateway--registrations)))
+
 (defun drgnx-gateway--handle (conn req)
-  (let* ((token (drgnx-gateway--token req))
-         (reg (and token (gethash (drgnx-gateway--hash token) drgnx-gateway--registrations))))
+  (let ((reg (drgnx-gateway--registration req)))
     (cond
      ((not reg) (drgnx-gateway--respond conn 401 "authentication_error" "not a drgnx gateway token"))
      ;; the path is appended to the provider's URL: nothing that could change where the key goes
