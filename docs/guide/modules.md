@@ -41,10 +41,18 @@ Your choices live in `~/.config/drgnx/modules.eld` (`$DRGNX_CONFIG_DIR`):
 
 `:enabled` is absent until a module that is off until chosen is turned on, and is kept as it is when drgnx writes
 the file (a bootstrap or onboarding that writes modules.eld keeps it too). `:theme` is the colour theme Color Theme
-picked (ui/look writes it). modules.eld is format 2; an older drgnx keeps a backup and runs its defaults. An older format is migrated when it is read; a field that is not what drgnx
-expects (a typo) is dropped with a message in `*Messages*`; an unreadable file, or one from a newer drgnx, is
-reported and ignored (modules use their defaults) — never an error at start — and before drgnx next writes the
-file it keeps yours as `modules.eld.bak-<time>`.
+picked (ui/look writes it). modules.eld is format 2. An older format (the first, a bare list of disabled modules, or
+format 1) is read as it is and written as format 2 the next time drgnx changes the file, after a backup
+(`modules.eld.bak-<time>`). A file from a newer drgnx is used when it fits what this drgnx knows, but is never changed.
+A file with a mistake (it does not read, or a field is not what drgnx expects, say `:disabled` that is not a list of
+modules) is not used: the last copy that read well applies, or the defaults, and one notice says where the mistake is
+(Preferences: Open Config File… opens it there) — never an error at start. While it has a mistake drgnx does not
+write it: turning a module on or off, onboarding and Color Theme say why and change nothing, so what you typed is
+never lost. Your comments and keys of your own stay as they are when drgnx changes the file; two Emacs changing it
+at once both keep their change.
+
+The Next start column of Preferences: Modules shows what the file says now, so a change made in another Emacs shows
+at once; a module you turn off or on here takes effect at the next start. The file is listed in the generated [config reference](../reference/config.md).
 
 ## Modules that are off until chosen
 
@@ -57,7 +65,8 @@ default is turned off through `:disabled` as before. `drgnx bisect` leaves an of
 enabled. The shipped lock still lists its packages, so a fresh install that chooses the module before its first sync
 gets verified versions; once a sync has rewritten your own lock from what is installed, the module's packages are not
 in it until they are installed. From Lisp:
-`(drgnx-module-default-off-p MODULE)`, `(drgnx-module-disabled-p MODULE)` and `(drgnx-modules-set-enabled MODULE ON)`.
+`(drgnx-module-default-off-p MODULE)`, `(drgnx-module-disabled-p MODULE)`, `(drgnx-modules-set-enabled MODULE ON)` and,
+for any other change to the file, `(drgnx-modules-update-state FN)` (FN gets the file as it is and returns the new plist).
 
 ## Your own code: config.el
 

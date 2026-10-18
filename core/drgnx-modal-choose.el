@@ -53,9 +53,11 @@
         (drgnx-modules-set-enabled module on)
       ;; Not defined in this process (`drgnx onboard' loads no modules): an engine's module is off until chosen,
       ;; so :enabled is its switch, as `drgnx-modules-set-enabled' writes it.
-      (let ((state (copy-sequence (drgnx-modules-read-state))))
-        (setq state (plist-put state :enabled (append (remq module (plist-get state :enabled)) (and on (list module)))))
-        (drgnx-modules-write-state (plist-put state :disabled (remq module (plist-get state :disabled))))))))
+      (drgnx-modules-update-state
+       (lambda (state)
+         (drgnx-modules--put-list
+          (drgnx-modules--put-list state :enabled (append (remq module (plist-get state :enabled)) (and on (list module))))
+          :disabled (remq module (plist-get state :disabled))))))))
 
 (defun drgnx-modal-set-module (layers)
   "Turn on the module of the engine LAYERS need (it runs from the next start, or now through
@@ -192,7 +194,9 @@ Switch to LAYERS only on `ready', `started' or `installed'.  Those also set the 
                   ;; a session without modules (drgnx safe): its keys never become Vim's without evil
                   (t (list 'fail "modules are off in this session (drgnx safe)" nil))))
            ((not (drgnx-modal--can-ask-p interactive))
-            ;; keys.eld first: a failure there (an unreadable file) leaves the module as it was
+            ;; keys.eld first: a failure there (an unreadable file) leaves the module as it was; a modules.eld that
+            ;; refuses a write is found before keys.eld changes
+            (drgnx-config-ensure-writable 'modules)
             (drgnx-keys--save-key :pending-layers layers)
             (drgnx-modal-set-module layers)
             (drgnx-modal--write-report)

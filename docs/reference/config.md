@@ -40,6 +40,20 @@ Your own layouts; the built-in ones are not stored.
 | `* :px :panel` | natnum or null | no |  |
 | `* :px :right` | natnum or null | no |  |
 
+## modules.eld
+
+Folder: config. Format: 2. Read: at start. On a mistake: its last good copy, else the defaults.
+
+Which modules run, their flags, external modules.
+
+| Key | Type | Required | What |
+| --- | --- | --- | --- |
+| `:disabled` | list of symbol | no | Modules you turned off |
+| `:enabled` | list of symbol | no | Modules that are off until chosen, chosen on |
+| `:flags` | alist of symbol to list of symbol | no | Module flags |
+| `:external` | list of any | no | External modules (each is checked when it loads) |
+| `:theme` | symbol | no | The colour theme onboarding chose |
+
 ## projects.eld
 
 Folder: config. Format: 1. Read: when it changes. On a mistake: its last good copy, else the defaults.
