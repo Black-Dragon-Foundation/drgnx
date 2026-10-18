@@ -15,6 +15,7 @@
 (require 'cl-lib)
 (require 'seq)
 (require 'subr-x)
+(require 'drgnx-timer)
 (require 'drgnx-coord)
 (require 'drgnx-agents)
 (require 'drgnx-gateway)
@@ -274,6 +275,10 @@ fails, its stderr after it (where a hook's refusal and `fatal:' are)."
             (cons exit (string-trim (buffer-string)))))
       (delete-file err))))
 
+(defun drgnx-job--git-timed-out (p)
+  "The deadline of the git process P (`drgnx-job--git-async'): mark it timed out and end it."
+  (when (process-live-p p) (process-put p :timed-out t) (delete-process p)))
+
 (defun drgnx-job--git-async (dir args done &optional job task)
   "Run git ARGS in DIR in a process of its own, never blocking the hub; DONE is called with (EXIT . OUTPUT), as
 `drgnx-job--git' gives it (stderr mixed into OUTPUT), from the process's sentinel once git has ended.  A git that takes
@@ -282,11 +287,10 @@ ends it (DONE is not called; TASK is no longer busy).  The process."
   (let* ((out (generate-new-buffer " *drgnx-git*" t))
          (default-directory (file-name-as-directory dir))
          (process-environment (cons "GIT_TERMINAL_PROMPT=0" process-environment))   ; never a prompt in the hub
-         (timer nil)
          (p (make-process :name "drgnx-git" :buffer out :noquery t :connection-type 'pipe :command (cons "git" args)
                           :sentinel (lambda (p _event)
                                       (unless (process-live-p p)
-                                        (when timer (cancel-timer timer))
+                                        (drgnx-timer-cancel (cons 'job-git-timeout p))
                                         (let ((exit (process-exit-status p))
                                               (text (string-trim (with-current-buffer out (buffer-string)))))
                                           (kill-buffer out)
@@ -297,8 +301,7 @@ ends it (DONE is not called; TASK is no longer busy).  The process."
                                                                                               (if (string-empty-p text) "" (concat ": " text))))
                                                                      (cons exit text))))))))))))
     (process-put p :job job)
-    (setq timer (run-at-time drgnx-job-git-timeout nil
-                             (lambda () (when (process-live-p p) (process-put p :timed-out t) (delete-process p)))))
+    (drgnx-timer-start (cons 'job-git-timeout p) drgnx-job-git-timeout #'drgnx-job--git-timed-out :args (list p) :owner p)
     (ignore-errors (process-send-eof p))               ; like call-process: git (a hook) reads nothing
     p))
 

@@ -413,13 +413,17 @@ with BODY."
   ;; once the wait is over.
   (drgnx-ai-onboard-test--with-mac nil
     (should noninteractive)
-    (let ((before kill-emacs-hook) (during nil) (r nil))
+    (let ((before kill-emacs-hook) (during nil) (r nil) (progress nil)
+          (progress-p (lambda () (seq-find (lambda (e) (eq (car-safe (car e)) 'onboard-progress)) (drgnx-timer-pending)))))
       (run-at-time 1 nil (lambda ()
-                           (setq during kill-emacs-hook)
+                           (setq during kill-emacs-hook progress (funcall progress-p))
                            (dolist (f (seq-difference kill-emacs-hook before)) (funcall f))))   ; what exiting runs
       (setq r (drgnx-onboard--job "Sleeping" (list "sleep" "30") 15))
       (should (> (length during) (length before)))
       (should (equal kill-emacs-hook before))
+      (should progress)                                   ; the progress repeat ran in the timer layer, owned by :core
+      (should (eq (cadr progress) :core))
+      (should-not (funcall progress-p))                   ; and ended with the wait
       (should (eq (car r) 'fail))
       (should-not (seq-find (lambda (j) (eq (plist-get j :status) 'running)) (drgnx-jobs-list))))))
 

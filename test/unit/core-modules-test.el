@@ -90,6 +90,7 @@
                             :setup (let ((s stage)) (lambda () (push s ran)))))
      (cl-letf (((symbol-function 'run-with-idle-timer) #'ignore))   ; no timer left to fire later
        (drgnx-modules-start cfg))
+     (drgnx-timer-reset)                                              ; the layer's keys for the stubbed timers
      (run-hooks 'drgnx-first-file-hook)
      (should (equal ran '(first-file)))
      (run-hooks 'drgnx-first-gui-frame-hook 'drgnx-first-input-hook)
@@ -260,8 +261,11 @@
        (setq log nil timers (sort timers (lambda (a b) (< (car a) (car b)))))
        (should (= (length timers) 4))
        (should (apply #'< (mapcar #'car timers)))
+       (should (= (length (drgnx-timer-pending)) 4))               ; four keys in the timer layer, owned by :core
+       (should (drgnx-timer-active-p '(modules-idle-step . 0)))
        (pcase-dolist (`(,_ ,fn ,args) timers) (apply fn args) (push '| log))
-       (should (equal (reverse log) '(external | i1 | i2 | (after idle) report |)))))))
+       (should (equal (reverse log) '(external | i1 | i2 | (after idle) report |)))
+       (should-not (drgnx-timer-pending))))))                      ; one-shots: nothing left
 
 (ert-deftest drgnx-modules/a-load-error-names-the-file-that-failed ()
   ;; M4-9: an error inside a library the module file loads names that library, not only the module.

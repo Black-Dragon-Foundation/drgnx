@@ -23,6 +23,7 @@
 (require 'drgnx-hooks)
 (require 'drgnx-pkg-activate)
 (require 'drgnx-modules-record)
+(require 'drgnx-timer)
 (require 'drgnx-modules-helpers)
 
 (defvar drgnx-modules--table nil "Alist NAME → plist (:doc :stage … :file), in definition order.")
@@ -271,6 +272,10 @@ never stops Emacs — nothing is installed (the module waits for the package, as
                                     (cond (wanted 'missing-packages) (err 'failed) (t 'ok)) err wanted)))))))
    (plist-get (drgnx-modules-read-state) :external)))
 
+(defun drgnx-modules--idle-step (step)
+  "One step of the idle stage (`drgnx-modules-start'): call STEP."
+  (funcall step))
+
 (defun drgnx-modules-start (dir)
   "Load the modules in DIR, run the startup stage now and the others when their moment comes."
   (drgnx-modules-load-directory dir)
@@ -284,7 +289,11 @@ never stops Emacs — nothing is installed (the module waits for the package, as
                         (list (lambda ()
                                 (when ran (run-hook-with-args 'drgnx-modules-after-stage-functions 'idle))
                                 (drgnx-modules-write-report))))))
-    (seq-do-indexed (lambda (step i) (run-with-idle-timer (+ 1 (* 0.05 i)) nil step)) steps))
+    ;; Emacs-lifetime startup work with no module to own it: `:core'.
+    (seq-do-indexed (lambda (step i)
+                      (drgnx-timer-start (cons 'modules-idle-step i) (+ 1 (* 0.05 i)) #'drgnx-modules--idle-step
+                                         :idle t :args (list step) :owner :core))
+                    steps))
   (pcase-dolist (`(,hook . ,stage) '((drgnx-first-gui-frame-hook . first-frame) (drgnx-first-file-hook . first-file)
                                      (drgnx-first-input-hook . first-input)))
     (add-hook hook (lambda () (drgnx-modules-run stage))))
