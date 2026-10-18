@@ -284,6 +284,20 @@
       (should (eq (drgnx-coord-events-prune-daily) t))
       (should-not (drgnx-coord-events)))))
 
+(ert-deftest drgnx-coord-events/prune-daily-never-signals-whatever-fails ()
+  (drgnx-coord-events-test--with
+    ;; not only a locked database: any error (a full disk, a corrupt file) is a message, never a signal out of a tick
+    (cl-letf (((symbol-function 'drgnx-coord-events-prune) (lambda (&rest _) (error "Disk full"))))
+      (should-not (drgnx-coord-events-prune-daily)))
+    (cl-letf (((symbol-function 'drgnx-coord--meta) (lambda (&rest _) (signal 'sqlite-error '("file is not a database")))))
+      (should-not (drgnx-coord-events-prune-daily)))))
+
+(ert-deftest drgnx-coord-events/deep-data-reads-back-whole ()
+  (drgnx-coord-events-test--with
+    (let* ((deep '(:a (1 (2 (3 (4 (5 (6 (7 (8 "deep"))))))))))
+           (id (drgnx-coord-event-add :agent "a" :kind "edit" :summary "x" :data deep)))
+      (should (equal (plist-get (car (drgnx-coord-events :since (1- id))) :data) deep)))))
+
 (ert-deftest drgnx-coord-events/telemetry-is-best-effort-when-the-db-is-busy ()
   (drgnx-coord-events-test--with
     (drgnx-coord-agent-register :id "s-1")

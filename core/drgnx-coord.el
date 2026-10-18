@@ -83,12 +83,13 @@ read other than it is.")
   (or (stringp v) (numberp v) (symbolp v) (and (proper-list-p v) (seq-every-p #'drgnx-coord--datum-p v))))
 
 (defun drgnx-coord--data-print (data)
-  "DATA, a plist of strings, numbers, symbols and lists of those, printed small; an error for anything else.  Over
+  "DATA, a plist of strings, numbers, symbols and lists of those, printed small; an error for anything else.  A list
+of more than 100 elements keeps its first 100 and ends in the symbol `...' (`print-length'); any depth is kept.  Over
 `drgnx-coord--data-max' characters it is (:truncated t :size N) instead."
   (unless (and (proper-list-p data) (cl-evenp (length data))
                (cl-loop for (k v) on data by #'cddr always (and (symbolp k) (drgnx-coord--datum-p v))))
     (error "Event data must be a plist of strings, numbers, symbols and lists of those: %S" data))
-  (let ((text (let ((print-length 100) (print-level 6) (print-escape-newlines t)) (prin1-to-string data))))
+  (let ((text (let ((print-length 100) (print-escape-newlines t)) (prin1-to-string data))))
     (if (> (length text) drgnx-coord--data-max) (format "(:truncated t :size %d)" (length text)) text)))
 
 (cl-defun drgnx-coord--event (db &key agent job task kind summary data at)
@@ -126,22 +127,23 @@ test runs) that must never fail the work it describes.  A bad KIND or DATA still
    (lambda () (drgnx-coord-event-add :agent agent :job job :task task :kind kind :summary summary :data data :at at))))
 
 (cl-defun drgnx-coord-events-prune (&key before)
-  "Forget the events older than BEFORE (a time; default `drgnx-coord-event-retention-days' ago), except questions,
-answers and decisions: how many."
+  "Forget the events older than BEFORE (seconds since the epoch, as `float-time' gives; default
+`drgnx-coord-event-retention-days' ago), except questions, answers and decisions: how many."
   (let ((cut (or before (- (float-time) (* 86400 drgnx-coord-event-retention-days)))))
     (drgnx-coord--tx
      (lambda (db)
        (sqlite-execute db "delete from event where at < ? and kind not in ('question', 'answer', 'decision')" (list (float cut)))))))
 
 (defun drgnx-coord-events-prune-daily ()
-  "`drgnx-coord-events-prune' unless it ran in the last 24 hours: t when it ran.  Never signals (a locked database waits
-for the next call): for a periodic tick."
-  (drgnx-coord--best-effort
-   (lambda ()
-     (when (> (- (float-time) (string-to-number (or (drgnx-coord--meta (drgnx-work-db) "event-pruned") "0"))) 86400)
-       (drgnx-coord-events-prune)
-       (sqlite-execute (drgnx-work-db) "insert or replace into meta values ('event-pruned', ?)" (list (number-to-string (float-time))))
-       t))))
+  "`drgnx-coord-events-prune' unless it ran in the last 24 hours: t when it ran.  Never signals — a locked database
+waits for the next call, any other error is a message — for a periodic tick (the hub's)."
+  (condition-case err
+      (when (> (- (float-time) (string-to-number (or (drgnx-coord--meta (drgnx-work-db) "event-pruned") "0"))) 86400)
+        (drgnx-coord-events-prune)
+        (sqlite-execute (drgnx-work-db) "insert or replace into meta values ('event-pruned', ?)" (list (number-to-string (float-time))))
+        t)
+    (error (unless (drgnx-coord--busy-p err) (message "drgnx coord: pruning events: %s" (error-message-string err)))
+           nil)))
 
 (defvar read-eval)                      ; so the let below binds it dynamically in compiled code
 

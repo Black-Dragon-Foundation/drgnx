@@ -87,9 +87,14 @@ branch's fork point (`git diff --merge-base`) or HEAD is used.
 `--merge-base` needs git 2.30 or later.
 
 - **`drgnx-cockpit-changed-files`** runs `git diff -z --numstat --summary` against the base, then
-  `git ls-files -z --others`, and answers `((:file :added :removed :status new|modified|deleted)…)` or
-  `(:error MSG)`.
-  - It lists at most `drgnx-cockpit-changed-files-max` (500) files, then `(:more N)` for the rest.
+  `git ls-files -z --others`, and answers `((:file :added :removed :status new|modified|deleted)…)`,
+  `(:too-large BYTES)` or `(:error MSG)`.
+  - It checks at most `drgnx-cockpit-changed-files-max` (500) files and lists those of them it may show, then
+    `(:more N)` for the rest, so its sentinel stays bounded however many files are refused.
+  - Each of git's two lists is capped at `drgnx-cockpit-diff-max-bytes` (1 MB) while git writes; past it the answer is
+    `(:too-large BYTES)`. A silent worktree whose list is too large is still found, with `:changed` nil.
+  - The names on `--summary` lines, which git C-quotes even under `-z` (a quote, a backslash, a control character),
+    are unquoted before they are matched.
   - It counts untracked files' lines until `drgnx-cockpit-count-bytes-max` (1 MB) has been read. After that, `:added`
     is nil.
   - A source without a folder is an error answer, not a signal.
@@ -115,7 +120,7 @@ have changes against their merge-base with `drgnx-cockpit-main-branches`, leavin
 - every job's worktrees.
 
 Each one found is an agent of `:reporting silent`, with the plan and ledger the tracker has for its branch. At most
-three git processes run at a time.
+three git processes run at a time (their stderr pipes aside); the rest wait in a queue that drains as each ends.
 
 ## Cost
 

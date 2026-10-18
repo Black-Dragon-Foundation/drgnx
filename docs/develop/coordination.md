@@ -58,8 +58,8 @@ working from the old one. So the shared state is explicit, versioned, and **enfo
   nothing. `edit`, `test`, `start`, `stop`, `review`, `accept`, `revert`, `answer` and `comment` are written by their
   own sources through `drgnx-coord-event-add`.
 - **What `data` may hold:** small, readable data — a plist of strings, numbers, symbols and lists of those; anything
-  else (a buffer, a function, a hash table) is an error. It is printed with `print-length` 100 and `print-level` 6;
-  over 4096 characters only `(:truncated t :size N)` is kept. It is read back with `read-eval` off. An `edit` event
+  else (a buffer, a function, a hash table) is an error. It is printed with `print-length` 100 (a longer list keeps its
+  first 100 elements and ends in the symbol `...`) at any depth; over 4096 characters only `(:truncated t :size N)` is kept. It is read back with `read-eval` off. An `edit` event
   carries a path, a hash and line counts — never file contents or environment values.
 - **Questions:** one model for everything that waits on the user. A `question` event is a message to `user` that asks
   (`drgnx-coord-send` with `:question` — `ask_user` — or an escalation, a text starting `[escalation]`, from drgnx's own
@@ -67,9 +67,10 @@ working from the old one. So the shared state is explicit, versioned, and **enfo
   they say; data `(:message ID …)`) or an `ask` card (data `(:card ID)`). An `answer` event closes
   it: its `data` holds `(:question EVENT-ID)`. Settling an `ask` card writes that answer itself (by `user`);
   `drgnx-coord-open-questions` lists the questions with no answer.
-- **Retention:** `drgnx-coord-events-prune` (`:before`, default `drgnx-coord-event-retention-days`, 30) forgets older
-  events except `question`, `answer` and `decision`. `drgnx-coord-events-prune-daily` runs it at most once in 24 hours
-  (stamp in `meta` as `event-pruned`) and never signals: meant for a periodic tick.
+- **Retention:** `drgnx-coord-events-prune` (`:before`, seconds since the epoch; default
+  `drgnx-coord-event-retention-days`, 30, ago) forgets older events except `question`, `answer` and `decision`.
+  `drgnx-coord-events-prune-daily` runs it at most once in 24 hours (stamp in `meta` as `event-pruned`) and never
+  signals (a locked database waits for the next call, any other error is a message): meant for a periodic tick.
 - **Busy database:** `work.db` opens with a 5-second busy timeout, so a writer waits for another Emacs's write lock for up
   to 5 seconds. After that SQLite reports the database locked. Claims, cards, messages, decisions and
   `drgnx-coord-event-add` then signal (the change did not happen: say so). Telemetry — `drgnx-coord-agent-seen` and

@@ -55,7 +55,8 @@ merge-base with it."
   :type 'number :group 'drgnx-cockpit)
 
 (defcustom drgnx-cockpit-diff-max-bytes 1048576
-  "The biggest file, and the biggest diff of one file, the cockpit shows; above it the diff is \"too large\"."
+  "The biggest file, and the biggest diff of one file, the cockpit shows; above it the diff is \"too large\".  Also
+the most bytes git's list of changed or untracked files may take (`drgnx-cockpit-changed-files')."
   :type 'natnum :group 'drgnx-cockpit)
 
 (defcustom drgnx-cockpit-count-bytes-max 1048576
@@ -64,7 +65,7 @@ the files past it show no count."
   :type 'natnum :group 'drgnx-cockpit)
 
 (defcustom drgnx-cockpit-changed-files-max 500
-  "The most files `drgnx-cockpit-changed-files' lists; the rest are counted, as (:more N)."
+  "The most files `drgnx-cockpit-changed-files' checks, and so lists; the rest are counted, as (:more N)."
   :type 'natnum :group 'drgnx-cockpit)
 
 (declare-function drgnx-face-glyph "drgnx-face")
@@ -86,8 +87,8 @@ the files past it show no count."
 ;;;; Plan files the tracker has not scanned (read, never written)
 
 (defvar drgnx-cockpit--plan-cache (make-hash-table :test #'equal)
-  "Plan file → (MTIME TITLE ((N TITLE LINE)…)): a file's entry is replaced when its time changes; at 64 files the
-cache is emptied (it holds only the plans of jobs the tracker never scanned).")
+  "Plan file → (MTIME TITLE ((N TITLE LINE)…)): a file's entry is replaced when its time changes; a 65th file
+empties the cache first (it holds only the plans of jobs the tracker never scanned).")
 
 (defun drgnx-cockpit--plan-file (file)
   "(TITLE ((N TITLE LINE)…)) of plan FILE from its `# ' title and `### Task N' headings, or nil (remote, unreadable).
@@ -106,7 +107,7 @@ Cached by modification time."
                               (push (list (string-to-number (match-string 1)) (string-trim (match-string 2)) line) tasks)))
                        (forward-line 1) (setq line (1+ line)))
                      (list title (nreverse tasks))))))
-          (when (>= (hash-table-count drgnx-cockpit--plan-cache) 64) (clrhash drgnx-cockpit--plan-cache))   ; bounded
+          (when (and (not hit) (>= (hash-table-count drgnx-cockpit--plan-cache) 64)) (clrhash drgnx-cockpit--plan-cache))   ; bounded
           (puthash file (cons mtime v) drgnx-cockpit--plan-cache)
           v)))))
 
@@ -136,7 +137,8 @@ order, DEPS hash task → (DEP…), CARDS ((ID JOB TASK TITLE AT)…).  A done j
                    (sqlite-select db (concat "select t.id, t.job, t.n, t.title, t.status, t.agent from jtask t join job j on j.id = t.job"
                                              open " order by t.job, t.n desc")))
       (push (list id n title status agent) (gethash job tasks)))
-    (pcase-dolist (`(,task ,dep) (sqlite-select db "select task, dep from jdep order by task, dep desc"))
+    (pcase-dolist (`(,task ,dep) (sqlite-select db (concat "select d.task, d.dep from jdep d join jtask t on t.id = d.task join job j on j.id = t.job"
+                                                           open " order by d.task, d.dep desc")))
       (push dep (gethash task deps)))
     (list jobs tasks deps
           (sqlite-select db (concat "select c.id, c.job, c.task, c.title, c.at from card c join job j on j.id = c.job"
@@ -574,42 +576,46 @@ past `drgnx-cockpit-git-timeout'.  git takes pathspecs literally, no optional lo
     (drgnx-cockpit--later done (list :error (format "%s is remote: the cockpit never runs git there" dir))))
    ((not (file-directory-p dir)) (drgnx-cockpit--later done (list :error (format "%s is not a folder" dir))))
    (t
-    (condition-case err
-        (let* ((default-directory (file-name-as-directory dir))
-               (process-environment (append '("GIT_OPTIONAL_LOCKS=0" "GIT_TERMINAL_PROMPT=0") process-environment))
-               (out (generate-new-buffer " *drgnx-cockpit-git*" t))
-               (errbuf (generate-new-buffer " *drgnx-cockpit-git-err*" t))
-               (timer nil)
-               (p (make-process
-                   :name "drgnx-cockpit-git" :buffer out :stderr errbuf :noquery t :connection-type 'pipe
-                   :coding 'utf-8-unix :command (append '("git" "-c" "core.quotePath=false" "--literal-pathspecs") args)
-                   :filter
-                   (lambda (p s)
-                     (let ((n (+ (or (process-get p :bytes) 0) (string-bytes s))))
-                       (process-put p :bytes n)
-                       (cond ((and limit (> n limit)) (process-put p :too-large n) (delete-process p))
-                             ((buffer-live-p (process-buffer p))
-                              (with-current-buffer (process-buffer p) (goto-char (point-max)) (insert s))))))
-                   :sentinel
-                   (lambda (p _)
-                     (unless (process-live-p p)
-                       (when timer (cancel-timer timer))
-                       (let ((r (cond
-                                 ((process-get p :too-large) (list :too-large (process-get p :too-large)))
-                                 ((process-get p :timed-out)
-                                  (list :error (format "git %s did not finish in %s s" (car args) drgnx-cockpit-git-timeout)))
-                                 (t (list :exit (process-exit-status p)
-                                          :out (if (buffer-live-p out) (with-current-buffer out (buffer-string)) "")
-                                          :err (if (buffer-live-p errbuf) (with-current-buffer errbuf (string-trim (buffer-string))) ""))))))
-                         (when (buffer-live-p out) (kill-buffer out))
-                         (when (buffer-live-p errbuf) (let ((kill-buffer-query-functions nil)) (kill-buffer errbuf)))
-                         (drgnx-cockpit--call done r)))))))
-          (when-let* ((ep (get-buffer-process errbuf))) (set-process-sentinel ep #'ignore))
-          (setq timer (run-at-time drgnx-cockpit-git-timeout nil
-                                   (lambda () (when (process-live-p p) (process-put p :timed-out t) (delete-process p)))))
-          (ignore-errors (process-send-eof p))
-          p)
-      (error (drgnx-cockpit--later done (list :error (error-message-string err))))))))
+    (let ((out (generate-new-buffer " *drgnx-cockpit-git*" t))
+          (errbuf (generate-new-buffer " *drgnx-cockpit-git-err*" t)))
+      (condition-case err
+          (let* ((default-directory (file-name-as-directory dir))
+                 (process-environment (append '("GIT_OPTIONAL_LOCKS=0" "GIT_TERMINAL_PROMPT=0") process-environment))
+                 (timer nil)
+                 (p (make-process
+                     :name "drgnx-cockpit-git" :buffer out :stderr errbuf :noquery t :connection-type 'pipe
+                     :coding 'utf-8-unix :command (append '("git" "-c" "core.quotePath=false" "--literal-pathspecs") args)
+                     :filter
+                     (lambda (p s)
+                       (let ((n (+ (or (process-get p :bytes) 0) (string-bytes s))))
+                         (process-put p :bytes n)
+                         (cond ((and limit (> n limit)) (process-put p :too-large n) (delete-process p))
+                               ((buffer-live-p (process-buffer p))
+                                (with-current-buffer (process-buffer p) (goto-char (point-max)) (insert s))))))
+                     :sentinel
+                     (lambda (p _)
+                       (unless (process-live-p p)
+                         (when timer (cancel-timer timer))
+                         (let ((r (cond
+                                   ((process-get p :too-large) (list :too-large (process-get p :too-large)))
+                                   ((process-get p :timed-out)
+                                    (list :error (format "git %s did not finish in %s s" (car args) drgnx-cockpit-git-timeout)))
+                                   (t (list :exit (process-exit-status p)
+                                            :out (if (buffer-live-p out) (with-current-buffer out (buffer-string)) "")
+                                            :err (if (buffer-live-p errbuf) (with-current-buffer errbuf (string-trim (buffer-string))) ""))))))
+                           (when (buffer-live-p out) (kill-buffer out))
+                           (when (buffer-live-p errbuf) (let ((kill-buffer-query-functions nil)) (kill-buffer errbuf)))
+                           (drgnx-cockpit--call done r)))))))
+            (when-let* ((ep (get-buffer-process errbuf))) (set-process-sentinel ep #'ignore))
+            (setq timer (run-at-time drgnx-cockpit-git-timeout nil
+                                     (lambda () (when (process-live-p p) (process-put p :timed-out t) (delete-process p)))))
+            (ignore-errors (process-send-eof p))
+            p)
+        (error
+         ;; git could not start: its buffers go too (and a stderr pipe made before the failure with them)
+         (let ((kill-buffer-query-functions nil))
+           (dolist (b (list out errbuf)) (when (buffer-live-p b) (kill-buffer b))))
+         (drgnx-cockpit--later done (list :error (error-message-string err)))))))))
 
 (defun drgnx-cockpit--failed (r)
   "nil when git's answer R went well, else (:error MESSAGE) — or R itself when it is (:too-large N)."
@@ -622,9 +628,24 @@ past `drgnx-cockpit-git-timeout'.  git takes pathspecs literally, no optional lo
   (let ((base (plist-get source :base)))
     (cond ((null base) (list "HEAD")) ((plist-get source :merge-base) (list "--merge-base" base)) (t (list base)))))
 
+(defun drgnx-cockpit--unquote (name)
+  "NAME as git wrote it, C-quoted (`\"t\\tab\"') when it holds a quote, a backslash or a control character (octal
+escapes are bytes, read as UTF-8), else as it is."
+  (if (not (and (> (length name) 1) (string-prefix-p "\"" name) (string-suffix-p "\"" name))) name
+    (let ((s (encode-coding-string (substring name 1 -1) 'utf-8)) (i 0) (bytes nil))
+      (while (< i (length s))
+        (let ((c (aref s i)))
+          (if (or (/= c ?\\) (>= (1+ i) (length s))) (progn (push c bytes) (setq i (1+ i)))
+            (let ((e (aref s (1+ i))))
+              (if (and (<= ?0 e ?7) (<= (+ i 4) (length s)))
+                  (progn (push (string-to-number (substring s (1+ i) (+ i 4)) 8) bytes) (setq i (+ i 4)))
+                (push (pcase e (?a ?\a) (?b ?\b) (?t ?\t) (?n ?\n) (?v ?\v) (?f ?\f) (?r ?\r) (_ e)) bytes)
+                (setq i (+ i 2)))))))
+      (decode-coding-string (apply #'unibyte-string (nreverse bytes)) 'utf-8))))
+
 (defun drgnx-cockpit--numstat (text)
   "`git diff -z --numstat --summary' TEXT as ((:file :added :removed :status)…): NUL-ended records, then the summary's
-lines (`create mode', `delete mode')."
+lines (`create mode', `delete mode'), whose names git C-quotes even under -z (`drgnx-cockpit--unquote')."
   (let* ((end (cl-position ?\0 text :from-end t))
          (files (cl-loop for rec in (and end (split-string (substring text 0 end) "\0" t))
                          when (string-match "\\`\\([0-9]+\\|-\\)\t\\([0-9]+\\|-\\)\t\\(\\(?:.\\|\n\\)*\\)\\'" rec)
@@ -636,7 +657,7 @@ lines (`create mode', `delete mode')."
     (dolist (f files) (puthash (plist-get f :file) f byname))
     (dolist (l (and end (split-string (substring text (1+ end)) "\n" t)))
       (when (string-match "\\` \\(create\\|delete\\) mode [0-7]+ \\(.*\\)\\'" l)
-        (when-let* ((f (gethash (match-string 2 l) byname)))
+        (when-let* ((f (gethash (drgnx-cockpit--unquote (match-string 2 l)) byname)))
           (plist-put f :status (if (equal (match-string 1 l) "create") 'new 'deleted)))))
     files))
 
@@ -671,10 +692,12 @@ be read."
 (defun drgnx-cockpit-changed-files (source callback)
   "Ask git, asynchronously, what SOURCE (`drgnx-cockpit-edit-source') changed: `git diff --numstat' against its base
 \(its merge-base when :merge-base), only its :paths when it has them, plus its untracked files.  Returns at once; CALLBACK
-gets, from the sentinel, ((:file :added :removed :status new|modified|deleted)…), or (:error MESSAGE).  Only regular
-files inside the folder are listed (`drgnx-cockpit--file-ok'): never a device, FIFO, socket or a link out of it.  At
-most `drgnx-cockpit-changed-files-max' are listed, then (:more N) for the rest; untracked files' lines are counted
-until `drgnx-cockpit-count-bytes-max' bytes are read (after that :added is nil)."
+gets, from the sentinel, ((:file :added :removed :status new|modified|deleted)…), (:too-large BYTES) when git's
+list of changed or untracked files passes `drgnx-cockpit-diff-max-bytes' (git is ended then), or (:error MESSAGE).
+Only regular files inside the folder are listed (`drgnx-cockpit--file-ok'): never a device, FIFO, socket or a link out
+of it.  At most `drgnx-cockpit-changed-files-max' are checked, those of them that may be shown listed, then (:more N)
+for the rest; untracked files' lines are counted until `drgnx-cockpit-count-bytes-max' bytes are read (after that
+:added is nil)."
   (let ((dir (plist-get source :dir)) (paths (plist-get source :paths)))
     (if (not (stringp dir))
         (drgnx-cockpit--later callback (list :error (format "no folder to compare: %S" dir)))
@@ -687,7 +710,9 @@ until `drgnx-cockpit-count-bytes-max' bytes are read (after that :added is nil).
               dir (append '("ls-files" "-z" "--others" "--exclude-standard" "--") paths)
               (lambda (r2)
                 (if-let* ((bad (drgnx-cockpit--failed r2))) (funcall callback bad)
-                  (funcall callback (drgnx-cockpit--changed dir files (split-string (plist-get r2 :out) "\0" t)))))))))))))
+                  (funcall callback (drgnx-cockpit--changed dir files (split-string (plist-get r2 :out) "\0" t)))))
+              drgnx-cockpit-diff-max-bytes))))
+       drgnx-cockpit-diff-max-bytes))))
 
 (defun drgnx-cockpit--changed (dir files untracked)
   "FILES (`drgnx-cockpit--numstat') and the UNTRACKED names of DIR as `drgnx-cockpit-changed-files' answers them.
@@ -695,17 +720,17 @@ DIR is local (git ran there) and the names are git's own, relative to it: no fil
   (let* ((file-name-handler-alist nil)
          (truedir (file-name-as-directory (file-truename dir)))
          (known (make-hash-table :test #'equal)) (new (make-hash-table :test #'equal)) (memo (make-hash-table :test #'equal))
-         (budget drgnx-cockpit-count-bytes-max) (shown 0) (out nil))
+         (budget drgnx-cockpit-count-bytes-max) (checked 0) (out nil))
     (dolist (f files) (puthash (plist-get f :file) t known))
     (let ((extra nil))
       (dolist (f untracked)
         (unless (gethash f known) (puthash f t new) (push (list :file f :added nil :removed 0 :status 'new) extra)))
       (setq files (append files (nreverse extra))))
     (with-temp-buffer
-      (while (and files (< shown drgnx-cockpit-changed-files-max))
+      (while (and files (< checked drgnx-cockpit-changed-files-max))   ; checked, shown or not: a bounded sentinel
         (let* ((f (pop files)) (ok (drgnx-cockpit--file-ok dir (plist-get f :file) truedir memo)))
+          (setq checked (1+ checked))
           (when ok
-            (setq shown (1+ shown))
             (when (and (eq ok t) (> budget 0) (gethash (plist-get f :file) new))
               (let* ((abs (expand-file-name (plist-get f :file) dir)) (size (file-attribute-size (file-attributes abs))))
                 (when (and size (<= size budget))
@@ -800,8 +825,9 @@ whose main checkout is MAIN; nil when it has none."
 \(no registered agent, none of SESSIONS, no job's worktree): `git worktree list --porcelain' per root, then each
 candidate's changes against its merge-base with the main branch (`drgnx-cockpit-main-branches').  Returns at once;
 CALLBACK gets, from a sentinel, a list of agents (:id \"silent:DIR\" :name :reporting silent :state \"not reporting\"
-:cwd :worktree :branch :base :changed N :plan PLAN-ID :ledger FILE) — the plan and ledger when the work tracker has
-one for its branch — and (:error MESSAGE :root ROOT) for a root git could not read (a remote one is never touched).
+:cwd :worktree :branch :base :changed N :plan PLAN-ID :ledger FILE) — :changed nil when git's list of its files was
+too large; the plan and ledger when the work tracker has one for its branch — and (:error MESSAGE :root ROOT) for a
+root git could not read (a remote one is never touched).
 At most `drgnx-cockpit--git-jobs' git processes run at a time."
   (let ((taken (drgnx-cockpit--taken sessions)) (found nil) (pending (length roots)) (queue nil) (running 0))
     (cl-labels ((root-done () (when (zerop (cl-decf pending))
@@ -817,13 +843,14 @@ At most `drgnx-cockpit--git-jobs' git processes run at a time."
                        (list :dir d :base base :merge-base (and base t))
                        (lambda (files)
                          (unwind-protect
-                             (when (and files (not (keywordp (car files))))
+                             (when (and files (or (plist-get files :too-large) (not (keywordp (car files)))))
                                (let ((ledger (drgnx-cockpit--ledger main w)))
                                  (push (list :id (concat "silent:" (directory-file-name d))
                                              :name (or (plist-get w :branch) (file-name-nondirectory (directory-file-name d)))
                                              :reporting 'silent :state "not reporting" :cwd d :worktree d
                                              :branch (plist-get w :branch) :base base
-                                             :changed (cl-loop for f in files sum (if (plist-get f :file) 1 (or (plist-get f :more) 0)))
+                                             :changed (and (not (plist-get files :too-large))
+                                                           (cl-loop for f in files sum (if (plist-get f :file) 1 (or (plist-get f :more) 0))))
                                              :plan (car ledger) :ledger (cdr ledger))
                                        found)))
                            (funcall rel) (funcall on-done)))))))
