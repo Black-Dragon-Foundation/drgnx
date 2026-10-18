@@ -8,7 +8,7 @@
 
 (defun drgnx-run-ert-test--batch (dir results &rest env)
   "Run the suite in DIR in a fresh batch Emacs (harness on the load path); return its exit code."
-  (let ((process-environment (append (cons (concat "DRGNX_TEST_RESULTS=" results) env) process-environment)))
+  (let ((process-environment (append (cons (concat "DRGNX_TEST_RESULTS=" results) env) (list "DRGNX_TEST_SELECTOR") process-environment)))
     (call-process (expand-file-name invocation-name invocation-directory) nil nil nil
                   "--batch" "-Q" "-L" (file-name-directory (locate-library "run-ert.el"))
                   "-l" (locate-library "run-ert.el") "-f" "drgnx-run-ert-batch" dir)))
@@ -46,7 +46,7 @@
         (progn
           (write-region "(require 'ert)\n(ert-deftest bad/unbalanced () (should t)\n" nil (expand-file-name "unbalanced-test.el" tmp) nil 'silent)
           (write-region "(require 'ert)\n(ert-deftest fine/ok () (should t))\n" nil (expand-file-name "fine-test.el" tmp) nil 'silent)
-          (let* ((process-environment (cons (concat "DRGNX_TEST_RESULTS=" results) process-environment))
+          (let* ((process-environment (append (list (concat "DRGNX_TEST_RESULTS=" results) "DRGNX_TEST_SELECTOR") process-environment))
                  (code nil)
                  (out (with-temp-buffer
                         (setq code (call-process (expand-file-name invocation-name invocation-directory) nil t nil
@@ -149,7 +149,7 @@
         (progn
           (with-temp-file (concat tmp "one-test.el") (insert "(require 'ert)\n(ert-deftest shard-one () (should t))\n"))
           (with-temp-file (concat tmp "two-test.el") (insert "(require 'ert)\n(ert-deftest shard-two () (should t))\n"))
-          (should (eql 0 (let ((process-environment (cons (concat "DRGNX_TEST_RESULTS=" results) process-environment)))
+          (should (eql 0 (let ((process-environment (append (list (concat "DRGNX_TEST_RESULTS=" results) "DRGNX_TEST_SELECTOR") process-environment)))
                            (call-process (expand-file-name invocation-name invocation-directory) nil nil nil
                                          "--batch" "-Q" "-L" (file-name-directory (locate-library "run-ert.el"))
                                          "-l" (locate-library "run-ert.el") "-f" "drgnx-run-ert-batch"

@@ -113,7 +113,8 @@ As File → Open Folder… it asks for DIR; bin/drgnx's call never asks."
   "The live processes whose end Emacs would ask about (`process-query-on-exit-flag'): terminals, shells, servers
 you started — not drgnx's own background helpers.  The terminal module, when it is there, first brings its
 terminals' flags up to date (a shell at a prompt does not ask)."
-  (when (fboundp 'drgnx-terminal-eat-refresh-query-flags) (funcall 'drgnx-terminal-eat-refresh-query-flags))
+  (when (fboundp 'drgnx-terminal-eat-refresh-query-flags)
+    (ignore-errors (funcall 'drgnx-terminal-eat-refresh-query-flags)))   ; a failing refresh never stops the question
   (seq-filter (lambda (p) (and (process-live-p p) (process-query-on-exit-flag p))) (process-list)))
 
 (defun drgnx-session-quit-confirm ()

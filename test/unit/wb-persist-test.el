@@ -177,11 +177,13 @@
         (progn
           (cl-letf (((symbol-function 'display-graphic-p) (lambda (&optional _) t))
                     ((symbol-function 'frame-edges) (lambda (&rest _) '(10 20 810 620)))
-                    ((symbol-function 'frame-pixel-width) (lambda (&rest _) 800))
-                    ((symbol-function 'frame-pixel-height) (lambda (&rest _) 600)))
+                    ((symbol-function 'frame-pixel-width) (lambda (&rest _) 800))       ; the native size is not what is kept:
+                    ((symbol-function 'frame-pixel-height) (lambda (&rest _) 600))      ; `set-frame-size' sets the text area
+                    ((symbol-function 'frame-text-width) (lambda (&rest _) 790))
+                    ((symbol-function 'frame-text-height) (lambda (&rest _) 590)))
             (set-frame-parameter nil 'drgnx-persist-restore '(drgnx-persist-test--rebuild "j1"))
             (should (equal (drgnx-persist-state)
-                           '(:role custom :restore (drgnx-persist-test--rebuild "j1") :geometry (10 20 800 600)))))
+                           '(:role custom :restore (drgnx-persist-test--rebuild "j1") :geometry (10 20 790 590)))))
           (set-frame-parameter nil 'drgnx-persist-restore nil)
           (with-temp-file file
             (prin1 (list :version 2 :frames (list (drgnx-persist-state)
@@ -191,6 +193,7 @@
           (cl-letf (((symbol-function 'drgnx-persist-test--rebuild) (lambda (&rest _) frame))
                     ((symbol-function 'display-graphic-p) (lambda (&optional _) t))
                     ((symbol-function 'select-frame-set-input-focus) #'ignore)
+                    ((symbol-function 'display-monitor-attributes-list) (lambda (&optional _) '(((workarea 0 0 1920 1080)))))
                     ((symbol-function 'set-frame-position) (lambda (f x y) (push (list f x y) placed)))
                     ((symbol-function 'set-frame-size) (lambda (f w h &optional pixelwise) (push (list f w h pixelwise) sized))))
             (drgnx-persist-restore file))
@@ -198,6 +201,57 @@
           (should (equal sized (list (list frame 700 500 t)))))
       (set-frame-parameter nil 'drgnx-persist-restore nil)
       (delete-file file))))
+
+(defmacro drgnx-persist-test--with-monitors (areas &rest body)
+  "BODY with the display's monitors having the work AREAS ((X Y WIDTH HEIGHT)…); `placed' and `sized' collect what
+`drgnx-persist--place-frame' does to a frame."
+  (declare (indent 1))
+  `(let (placed sized)
+     (cl-letf (((symbol-function 'display-monitor-attributes-list)
+                (lambda (&optional _) (mapcar (lambda (a) (list (cons 'workarea a))) ,areas)))
+               ((symbol-function 'set-frame-position) (lambda (f x y) (push (list x y) placed)))
+               ((symbol-function 'set-frame-size) (lambda (f w h &optional pixelwise) (push (list w h pixelwise) sized))))
+       ,@body)))
+
+(ert-deftest drgnx-persist/a-saved-position-is-used-only-where-a-monitor-is ()
+  ;; I4: a monitor that was unplugged leaves a position nobody can reach; the window manager places the window
+  ;; then, and a size is never bigger than the work area.
+  (drgnx-persist-test--with-monitors '((0 0 1920 1080) (1920 0 1280 1024))
+    (drgnx-persist--place-frame (selected-frame) '(2000 40 700 500))                ; on the second monitor
+    (should (equal placed '((2000 40)))) (should (equal sized '((700 500 t))))
+    (setq placed nil sized nil)
+    (drgnx-persist--place-frame (selected-frame) '(5000 40 700 500))                ; on none
+    (should-not placed) (should (equal sized '((700 500 t))))
+    (setq placed nil sized nil)
+    (drgnx-persist--place-frame (selected-frame) '(100 50 4000 3000))               ; too big for its monitor
+    (should (equal placed '((100 50)))) (should (equal sized '((1820 1030 t))))     ; the work area less the offset
+    (setq placed nil sized nil)
+    (drgnx-persist--place-frame (selected-frame) '(-300 20 700 500))                ; left of everything
+    (should-not placed)))
+
+(ert-deftest drgnx-persist/a-closed-job-window-never-replaces-the-workbench-save ()
+  ;; M2: closing a window that rebuilds itself, as the last graphical one, must not write a file holding only it
+  (drgnx-persist-test--with dir
+    (let ((f (selected-frame)))
+      (set-frame-parameter f 'drgnx-persist-restore '(ignore))
+      (unwind-protect
+          (cl-letf (((symbol-function 'display-graphic-p) (lambda (&optional _) t)))
+            (drgnx-persist--on-delete-frame f)
+            (should-not (file-exists-p drgnx-persist-file)))
+        (set-frame-parameter f 'drgnx-persist-restore nil)))))
+
+(ert-deftest drgnx-persist/a-file-of-only-job-windows-leaves-the-selected-frame-alone ()
+  (drgnx-persist-test--with dir
+    (let ((rebuilt 0) (restored 0))
+      (with-temp-file drgnx-persist-file
+        (prin1 '(:version 2 :frames ((:role custom :restore (drgnx-persist-test--rebuild "j1")))) (current-buffer)))
+      (cl-letf (((symbol-function 'drgnx-persist-test--rebuild) (lambda (&rest _) (cl-incf rebuilt) nil))
+                ((symbol-function 'drgnx-persist--restore-frame) (lambda (_st) (cl-incf restored)))
+                ((symbol-function 'select-frame-set-input-focus) #'ignore))
+        (drgnx-persist-restore))
+      (should (= rebuilt 1))
+      (should (= restored 0))
+      (should-not (frame-parameter nil 'drgnx-frame-role)))))
 
 (ert-deftest drgnx-persist/the-file-lists-every-window ()
   ;; Format 2: one entry per window (the main one first); format 1 files (one window) still restore.

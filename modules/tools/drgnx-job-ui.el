@@ -196,6 +196,8 @@
         (progn (drgnx-job-ui--hub)
                (drgnx-hub-call "job/status" (list :id job :decisions t)
                                (lambda (r e) (cond
+                                              ;; "No job ID": the hub's own error text for an unknown job (job/status in
+                                              ;; core/drgnx-hub.el); change both together
                                               ((and (stringp e) (string-prefix-p "No job " e)) (drgnx-job-ui--gone job))
                                               ((or e (not r)) (drgnx-job-ui--no-hub job (or e "no answer")))
                                               (t (drgnx-job-ui--draw job r)

@@ -137,4 +137,21 @@ graphical one comes first."
     (drgnx-persist-edge-test--with-frames (list first 'child 'gui-2)
       (should (equal (drgnx-persist--frames) (list first 'gui-2))))))
 
+(ert-deftest drgnx-persist-edge/saved-widths-are-fitted-only-when-the-area-is-the-same-size ()
+  "I3: the saved pixel widths correct a rounding of a few pixels; in a frame of another size they would be wrong
+(20/20 columns coming back as 20/60), so a group further than two characters from its saved width is left as
+`window-state-put' made it."
+  (drgnx-persist-edge-test--with dir
+    (let ((first (selected-window)))
+      (drgnx-groups-split-right)
+      (let* ((groups (drgnx-groups-list)) (w (window-pixel-width (car groups))))
+        (should (= 2 (length groups)))
+        ;; a rounding away: fitted
+        (drgnx-persist--fit-groups (list (list :px (- w 1)) (list :px 10)))
+        (should (= (window-pixel-width (car groups)) (- w 1)))
+        ;; a different frame: left alone
+        (drgnx-persist--fit-groups (list (list :px (+ w 20)) (list :px 10)))
+        (should (= (window-pixel-width (car groups)) (- w 1)))
+        (ignore first)))))
+
 ;;; wb-persist-edge-test.el ends here

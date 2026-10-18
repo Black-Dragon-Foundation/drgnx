@@ -308,7 +308,6 @@ of `save-some-buffers'), ASKED (confirmations) and EVENTS (newest first: `save',
           (drgnx-session-start-server)
           (should-not started))))))
 
-;;; session-test.el ends here
 
 (ert-deftest drgnx-session/running-programs-refreshes-terminal-query-flags-first ()
   ;; A terminal's flag is set by its module (a shell asks, an idle prompt does not); the quit question asks the module
@@ -321,3 +320,12 @@ of `save-some-buffers'), ASKED (confirmations) and EVENTS (newest first: `save',
                      (lambda () (set-process-query-on-exit-flag p t))))
             (should (memq p (drgnx-session--running-programs)))))
       (delete-process p))))
+
+(ert-deftest drgnx-session/a-failing-terminal-refresh-does-not-stop-the-quit-question ()
+  (let ((p (make-process :name "drgnx-session-test-term2" :command '("sleep" "30") :noquery nil)))
+    (unwind-protect
+        (cl-letf (((symbol-function 'drgnx-terminal-eat-refresh-query-flags) (lambda () (error "eat is gone"))))
+          (should (memq p (drgnx-session--running-programs))))
+      (delete-process p))))
+
+;;; session-test.el ends here

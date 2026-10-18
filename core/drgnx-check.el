@@ -72,8 +72,9 @@ far.  DURATIONS: alist file → seconds (a file it lacks weighs 1)."
   '("DBUS_SESSION_BUS_ADDRESS=unix:path=/nonexistent/drgnx-unit-test"
     "DISPLAY" "WAYLAND_DISPLAY" "SWAYSOCK" "I3SOCK" "HYPRLAND_INSTANCE_SIGNATURE" "NIRI_SOCKET")
   "The environment of a unit shard (bare names are unset): a dead session bus and no display or compositor,
-so a test cannot reach the user's desktop.  `bin/drgnx test' sets the same (harness/run-ert.el binds it
-inside Emacs too, but dbus.el reads the process's own environment).")
+so a test cannot reach the user's desktop.  `bin/drgnx test' sets the same, plus a runtime directory of its
+own (XDG_RUNTIME_DIR); here the runner (harness/run-ert.el) gives each shard that one inside Emacs, which is
+enough for everything but dbus.el: it reads the process's own environment.")
 
 (cl-defun drgnx-check-plan (&key (root drgnx-dir) (unit-shards 4) (live-shards 2) perf (gui t) dir)
   "The jobs of a check of the checkout ROOT: (:name :phase :command :gui :env :timeout)…  DIR: where shard
