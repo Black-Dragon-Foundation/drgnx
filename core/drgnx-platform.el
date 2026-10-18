@@ -1150,6 +1150,8 @@ cursor to the target output when a window is moved with `--id', and this cannot 
 
 (drgnx-platform-define-adapter
  'hyprland :monitors #'drgnx-platform-wm--hypr-monitors-fn
+ ;; Emacs' own answer (its geometry matches a monitor's): Next, Previous and restore need the current monitor
+ :frame-monitor #'drgnx-platform--emacs-frame-monitor
  :move #'drgnx-platform-wm--hypr-move :place #'drgnx-platform-wm--hypr-place)
 (drgnx-platform-define-adapter
  'niri :monitors #'drgnx-platform-wm--niri-monitors-fn

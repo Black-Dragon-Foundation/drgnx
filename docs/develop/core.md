@@ -240,7 +240,7 @@ the core's watchdog never fires first. Messages: "sway: swaymsg is not installed
 managers' container tier, nested in a headless sway with its one output, where its output list, a restore's placement,
 a command's move to that output and the refusal of an unknown output are checked — the move between two outputs is
 not). Monitors come from `hyprctl -j monitors` (mode size divided by the scale, so the geometry is the
-logical one Emacs sees) and `niri msg --json outputs`. The monitor a frame is on is Emacs' own answer for niri
+logical one Emacs sees) and `niri msg --json outputs`. The monitor a frame is on is Emacs' own answer for both
 (`frame-monitor-attributes`, matched by geometry). A command move acts on the focused window only when its pid
 is Emacs' and the frame has focus (`frame-focus-state`); otherwise `(:error "drgnx moves only its own window while
 it has focus: ...")`. A restore sets the frame's `title` to `drgnx [placing PID-N]`, looks the window up by Emacs'

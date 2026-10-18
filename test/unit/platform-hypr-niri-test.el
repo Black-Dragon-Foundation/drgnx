@@ -436,5 +436,17 @@ DIR/NAME with SWAP-FROM replaced by that title (what the window manager would re
                                     (should (equal (plist-get fm :geometry) '(1280 0 1280 800)))
                                     (should (equal (plist-get fm :name) ""))))))
 
+(drgnx-platform-test--deftest drgnx-platform-wm/hyprland-says-which-monitor-from-emacs-own-geometry ()
+                              ;; final review I2 (M12c-12-3): without it Next, Previous and restore cannot work there
+                              (drgnx-platform-test--with-frame 'pgtk '("HYPRLAND_INSTANCE_SIGNATURE=h" "WAYLAND_DISPLAY=w")
+                                (cl-letf (((symbol-function 'frame-monitor-attributes)
+                                           (lambda (&optional _) '((name . "Unknown") (geometry 1920 0 2560 1440) (workarea 1920 0 2560 1440)))))
+                                  (let (fm)
+                                    (should (eq 'hyprland (drgnx-platform-wm frame)))
+                                    (drgnx-platform-frame-monitor frame (lambda (m) (setq fm (or m 'none))))
+                                    (should (drgnx-platform-test--await (lambda () fm)))
+                                    (should (equal (plist-get fm :geometry) '(1920 0 2560 1440)))
+                                    (should (equal (plist-get fm :name) ""))))))
+
 (provide 'platform-hypr-niri-test)
 ;;; platform-hypr-niri-test.el ends here
