@@ -255,6 +255,35 @@
           (should (plist-get (drgnx-agents--on-request s "fs/write_text_file" (list :path f) 5) :error)))
       (delete-file f))))
 
+(ert-deftest drgnx-agents/reads-refuse-fifos-devices-remote-paths-and-big-files ()
+  ;; fs/read_text_file is served by the hub, outside any sandbox: a FIFO would block it inside a process filter, a
+  ;; device may never end, a remote path reaches TRAMP (a connection, a password prompt), a huge file fills it
+  (skip-unless (executable-find "mkfifo"))
+  (let* ((dir (make-temp-file "drgnx-read" t)) (fifo (expand-file-name "fifo" dir)) (big (expand-file-name "big" dir))
+         (s (drgnx-agents--make :cwd dir)) (writer nil)
+         (err (lambda (path) (plist-get (drgnx-agents--on-request s "fs/read_text_file" (list :path path) 1) :error)))
+         (real (symbol-function 'tramp-file-name-handler)))
+    (unwind-protect
+        (progn
+          (should (eql 0 (call-process "mkfifo" nil nil nil fifo)))
+          ;; were the FIFO opened, this writer lets it go after 2 s: the test fails instead of hanging
+          (setq writer (start-process "drgnx-fifo-writer" nil "sh" "-c" (format "sleep 2; echo x > %s" (shell-quote-argument fifo))))
+          (let ((t0 (float-time)))
+            (should (funcall err fifo))
+            (should (< (- (float-time) t0) 1)))
+          (should (funcall err "/dev/null"))
+          (write-region (make-string (1+ drgnx-agents-read-max) ?x) nil big nil 'silent)
+          (should (funcall err big))
+          (cl-letf (((symbol-function 'tramp-file-name-handler)       ; any remote operation but naming the host
+                     (lambda (op &rest args) (if (eq op 'file-remote-p) (apply real op args) (error "Touched a remote file: %s" op)))))
+            (should (funcall err "/ssh:nobody@example.invalid:/x"))
+            (should (funcall err "/sudo::/etc/shadow")))
+          ;; a regular file up to the cap is still read
+          (write-region "ok\n" nil big nil 'silent)
+          (should (equal (plist-get (plist-get (drgnx-agents--on-request s "fs/read_text_file" (list :path big) 2) :result) :content) "ok\n")))
+      (when (process-live-p writer) (delete-process writer))
+      (delete-directory dir t))))
+
 (ert-deftest drgnx-agents/stop-answers-pending-writes-too ()
   (let* ((answers nil)
          (s (drgnx-agents--make :status 'busy :acp-id "x" :reviews (list '(:id 9 :path "/tmp/x" :content "y")))))

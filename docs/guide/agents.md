@@ -60,7 +60,9 @@ session's project). Apply the hunks you want (`C-c C-a` on a hunk — diff-mode;
 (`C-c C-c`) writes the copy to the file — a new file is created — and the agent hears the edit was made. **Reject**
 (`C-c C-k`), or closing the diff, writes nothing and tells the agent it was refused. Done refuses while the file has
 unsaved changes in Emacs. Reads (`fs/read_text_file`, also a range of lines) get the file as it is in Emacs, unsaved
-edits included; both need absolute paths.
+edits included; both need absolute paths. A read is served only for a local path (never a remote, TRAMP one) and,
+when no buffer visits it, only for a regular file of at most 10 MiB (`drgnx-agents-read-max`): a FIFO or a device is
+refused, never opened.
 
 ## Durable jobs
 

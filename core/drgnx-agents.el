@@ -146,6 +146,21 @@ that cannot be read is a `user-error' and is not changed."
   "PATH is a real absolute path (not ~, not relative)."
   (and (stringp path) (file-name-absolute-p path) (not (string-prefix-p "~" path))))
 
+(defconst drgnx-agents-read-max (* 10 1024 1024)
+  "The largest file served to an agent's fs/read_text_file, in bytes (10 MiB): a bigger one is refused, never read.")
+
+(defun drgnx-agents--read-problem (path)
+  "Why the hub will not read the local PATH for an agent (a message), or nil (also when PATH does not exist): not a
+regular file — a FIFO would block the hub in a process filter, a device may never end; only a mode string starting
+with \"-\" counts, as `file-attribute-type' calls a FIFO a file — or bigger than `drgnx-agents-read-max'.  Checked
+with no file name handlers."
+  (let* ((file-name-handler-alist nil)
+         (attrs (and (file-attributes path) (or (file-attributes (file-truename path)) '(nil)))))   ; a link: its target
+    (cond ((null attrs) nil)
+          ((not (string-prefix-p "-" (or (file-attribute-modes attrs) ""))) (format "%s is not a regular file" path))
+          ((> (file-attribute-size attrs) drgnx-agents-read-max)
+           (format "%s is bigger than %d bytes" path drgnx-agents-read-max)))))
+
 (defun drgnx-agents--lines (text line limit)
   "TEXT from LINE (1-based) for LIMIT lines (both optional: ACP's ranged read)."
   (if (not (or line limit)) text
@@ -177,11 +192,17 @@ a task whose provider failed to the next profile (drgnx-job.el).  Called in the 
      (drgnx-agents--changed s)
      :deferred)
     ("fs/read_text_file"
-     (let* ((path (plist-get params :path)) (buf (and (drgnx-agents--path-ok-p path) (find-buffer-visiting path))))
+     ;; local files only (no TRAMP: `file-remote-p' names the host without connecting); an open buffer as it is,
+     ;; else a regular file up to `drgnx-agents-read-max', read with no file name handlers
+     (let* ((path (plist-get params :path)) (local (and (drgnx-agents--path-ok-p path) (not (file-remote-p path))))
+            (buf (and local (find-buffer-visiting path))) (problem (and local (not buf) (drgnx-agents--read-problem path))))
        (cond ((not (drgnx-agents--path-ok-p path)) (list :error '(:code -32602 :message "an absolute path is needed")))
+             ((not local) (list :error (list :code -32602 :message (format "%s is remote: only local files are served" path))))
+             (problem (list :error (list :code -32002 :message problem)))
              ((or buf (file-readable-p path))
               (list :result (list :content (drgnx-agents--lines (if buf (with-current-buffer buf (buffer-substring-no-properties (point-min) (point-max)))
-                                                                  (with-temp-buffer (insert-file-contents path) (buffer-string)))
+                                                                  (let ((file-name-handler-alist nil))
+                                                                    (with-temp-buffer (insert-file-contents path nil 0 drgnx-agents-read-max) (buffer-string))))
                                                                 (plist-get params :line) (plist-get params :limit)))))
              (t (list :error (list :code -32002 :message (format "%s is not readable" path)))))))
     ((and "fs/write_text_file" (guard (not (and (drgnx-agents--path-ok-p (plist-get params :path)) (stringp (plist-get params :content))))))
