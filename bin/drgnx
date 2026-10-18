@@ -144,8 +144,10 @@ test_container() { # [--ui [--compositor C]] — the batch (or GUI) tier inside 
   if [ "${1:-}" = --ui ]; then
     image=drgnx-test-gui:f45; file=Containerfile.gui; cmd=(bin/drgnx test --ui); prebuilt="${DRGNX_TEST_GUI_IMAGE:-}"
     if [ "${2:-}" = --compositor ]; then ui_compositor_ok "${3:-}" || return 2; cmd+=(--compositor "$3"); fi
-    # --memory: a GUI run (sessions, compositors, the X11 Emacs) must never push the host into the OOM killer
-    args=(--memory 6g --security-opt seccomp=unconfined --security-opt label=disable)
+    # --memory: a GUI run (sessions, compositors, the X11 Emacs) must never push the host into the OOM killer;
+    # --memory-swap the same: no swap on top.  DRGNX_TEST_GUI_MEMORY (default 3g) for a bigger run
+    local mem="${DRGNX_TEST_GUI_MEMORY:-3g}"
+    args=(--memory "$mem" --memory-swap "$mem" --security-opt seccomp=unconfined --security-opt label=disable)
     mount="$here:/src:ro"
     if [ -n "${DRGNX_UI_COMPOSITOR:-}" ]; then args+=(-e "DRGNX_UI_COMPOSITOR=$DRGNX_UI_COMPOSITOR"); fi
   fi
@@ -408,7 +410,8 @@ usage: drgnx PATH…             open folders and files in drgnx, like code . (d
        drgnx test --scenario [--config drgnx|gryphn|DIR]
                                behaviour scenarios in a session of that configuration
        drgnx test --container [--ui [--compositor C]]
-                               the same inside a fedora:45 / Emacs 31.1 container (GUI: capped at 6 GB)
+                               the same inside a fedora:45 / Emacs 31.1 container (GUI: capped at 3 GB, no swap;
+                               DRGNX_TEST_GUI_MEMORY overrides)
                                (podman, else docker, else nerdctl; DRGNX_CONTAINER overrides)
        drgnx test --install [NAME…]
                                install.sh end to end in fresh distribution containers (slow;

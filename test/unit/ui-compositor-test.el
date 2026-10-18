@@ -9,11 +9,12 @@
 (defconst drgnx-ui-compositor-test--fakes
   '(("sway" . "exit 0")
     ;; the args and the WM variables a client saw, as its JSON reply
-    ("swaymsg" . "printf '{\"args\":\"%s\",\"swaysock\":\"%s\",\"i3sock\":\"%s\"}' \"$*\" \"${SWAYSOCK-unset}\" \"${I3SOCK-unset}\"")
+    ;; (the command "fail" fails as swaymsg does: not JSON on stdout, the reason on stderr, exit 2)
+    ("swaymsg" . "for last; do :; done; if [ \"$last\" = fail ]; then printf 'not json'; echo boom >&2; exit 2; fi
+printf '{\"args\":\"%s\",\"swaysock\":\"%s\",\"i3sock\":\"%s\"}' \"$*\" \"${SWAYSOCK-unset}\" \"${I3SOCK-unset}\"")
     ("i3-msg" . "printf '{\"args\":\"%s\",\"swaysock\":\"%s\",\"i3sock\":\"%s\"}' \"$*\" \"${SWAYSOCK-unset}\" \"${I3SOCK-unset}\"")
-    ;; the root window's property of the display it was asked about
-    ("xprop" . "printf 'I3_SOCKET_PATH(UTF8_STRING) = \"/root-of%s\"\\n' \"$2\"")
-    ("Xvfb" . "exit 0") ("xrandr" . "exit 0") ("i3" . "exit 0") ("emacs-lucid" . "exit 0"))
+    ("Xvfb" . "exit 0") ("xrandr" . "exit 0") ("i3" . "exit 0") ("emacs-lucid" . "exit 0")
+    ("setpriv" . "exit 0") ("dbus-run-session" . "exit 0"))
   "Fake programs: (NAME . SHELL BODY).")
 
 (defun drgnx-ui-compositor-test--fake-bin (dir &optional names)
@@ -112,38 +113,94 @@ paths no WM serves."
       (drgnx-ui-stop "drgnx-ui-1")
       (should-not (file-exists-p xdg)))))
 
+(defun drgnx-ui-compositor-test--dead-pid ()
+  "The pid of a process that has ended."
+  (let ((p (make-process :name "dead" :command '("true") :noquery t)))
+    (while (process-live-p p) (accept-process-output p 0.01))
+    (process-id p)))
+
 (ert-deftest drgnx-ui-compositor/x11-picks-a-free-display-and-two-monitors ()
   (drgnx-ui-compositor-test--with
     ;; :90 has a lock, :91 a socket: taken by an X server we do not know
     (write-region "" nil (expand-file-name ".X90-lock" xdir))
     (write-region "" nil (expand-file-name ".X11-unix/X91" xdir))
+    ;; :92 is reserved by a session whose run directory is gone (it crashed): taken over
+    (make-directory (expand-file-name "92" (drgnx-ui--display-reservations)) t)
+    (write-region "/nonexistent/drgnx-ui-9" nil (expand-file-name "92/owner" (drgnx-ui--display-reservations)))
     (let* ((s (drgnx-ui-prepare-run "drgnx-ui-1" nil "1024x768" root nil 2 "x11"))
+           (run (plist-get s :run))
            (argv (drgnx-ui-compositor-argv s))
-           (script (nth 2 argv)))
+           (script (nth 4 argv)))
       (should (equal (plist-get s :display) ":92"))
-      (should (equal (seq-take argv 2) '("sh" "-c")))
-      (should (string-search "Xvfb :92 -noreset " script))
+      (should (equal (drgnx-ui--reservation-owner 92) run))
+      (should (equal (seq-take argv 4) '("dbus-run-session" "--" "sh" "-c")))   ; a bus of its own
+      (should (string-search "setpriv --pdeathsig KILL Xvfb :92 -noreset " script))
+      (should (string-search (concat "-auth " (expand-file-name "Xauthority" run)) script))
+      (should (string-search (concat "-displayfd 3 ") script))
+      (should (string-search (concat "3>" (expand-file-name "xvfb.ready" run)) script))
       (should (string-search "-screen 0 2048x768x24" script))
       (should (string-match-p "--setmonitor XVFB-1 1024/[0-9]+x768/[0-9]+\\+0\\+0 screen" script))
       (should (string-match-p "--setmonitor XVFB-2 1024/[0-9]+x768/[0-9]+\\+1024\\+0 none" script))
-      (should (string-search (concat (drgnx-ui-x11-emacs-bin) " --init-directory "
-                                     (expand-file-name "init" (plist-get s :run)))
+      (should (string-search (concat (drgnx-ui-x11-emacs-bin) " --init-directory " (expand-file-name "init" run))
                              script))
       (should-not (string-search "i3" script))
-      (should (member "DISPLAY=:92" (drgnx-ui-session-env s)))
-      (should (equal (drgnx-ui--display-env s) '("DISPLAY=:92" "WAYLAND_DISPLAY")))
-      ;; the next session does not take :92 before its Xvfb runs
+      ;; the cookie: only the session's programs reach the display
+      (let ((xa (expand-file-name "Xauthority" run)))
+        (should (= (file-modes xa) #o600))
+        (should (= (file-attribute-size (file-attributes xa)) 46))
+        (should (string-search "MIT-MAGIC-COOKIE-1" (with-temp-buffer (insert-file-contents-literally xa) (buffer-string)))))
+      (let ((env (drgnx-ui-session-env s))
+            (xdg (drgnx-ui-session-runtime-dir "drgnx-ui-1")))
+        (should (member "DISPLAY=:92" env))
+        (should (member (concat "XAUTHORITY=" (expand-file-name "Xauthority" run)) env))
+        ;; never the caller's runtime directory (its bus, its Wayland display)
+        (should (member (concat "XDG_RUNTIME_DIR=" xdg) env))
+        (should-not (member (concat "XDG_RUNTIME_DIR=" runtime) env))
+        (should (= (file-modes xdg) #o700))
+        (should-not (seq-find (lambda (kv) (string-prefix-p "WAYLAND_DISPLAY" kv)) env)))
+      (should (equal (drgnx-ui--display-env s)
+                     (list "DISPLAY=:92" (concat "XAUTHORITY=" (expand-file-name "Xauthority" run)) "WAYLAND_DISPLAY")))
+      ;; the next session does not take :92 before its Xvfb runs; nor does one of another state root
       (let* ((s2 (drgnx-ui-prepare-run "drgnx-ui-2" nil "1024x768" root nil 1 "i3"))
-             (script2 (nth 2 (drgnx-ui-compositor-argv s2)))
+             (script2 (nth 4 (drgnx-ui-compositor-argv s2)))
              (conf (expand-file-name "i3.conf" (plist-get s2 :run))))
         (should (equal (plist-get s2 :display) ":93"))
-        (should (string-search (concat "i3 -c " conf) script2))
-        (should (member (concat "ipc-socket " (drgnx-ui--i3-socket s2)) (drgnx-ui-compositor-test--lines conf)))
+        (should (string-search (concat "setpriv --pdeathsig KILL i3 -c " conf) script2))
+        (should (member (concat "ipc-socket " (drgnx-ui--i3-socket "drgnx-ui-2")) (drgnx-ui-compositor-test--lines conf)))
         (should-not (seq-find (lambda (l) (string-match-p "\\`bar\\_>" l)) (drgnx-ui-compositor-test--lines conf))))
-      ;; stop removes the lock and socket a killed Xvfb left, when no process serves the display
+      (should (equal (plist-get (drgnx-ui-prepare-run "drgnx-ui-1" nil "800x600" (expand-file-name "other" root)
+                                                      nil nil "x11")
+                                :display)
+                     ":94"))
+      ;; stop removes the socket and lock its own Xvfb left when it was killed, and the reservation
+      (write-region (number-to-string (drgnx-ui-compositor-test--dead-pid)) nil (expand-file-name "xvfb.pid" run))
       (dolist (f (drgnx-ui--x11-files 92)) (write-region "" nil f))
       (drgnx-ui-stop "drgnx-ui-1")
-      (should-not (seq-some #'file-exists-p (drgnx-ui--x11-files 92))))))
+      (should-not (seq-some #'file-exists-p (drgnx-ui--x11-files 92)))
+      (should-not (drgnx-ui--reservation-owner 92))
+      ;; a session whose Xvfb never ran leaves the files of :93 alone (not its own), gives the number back
+      (dolist (f (drgnx-ui--x11-files 93)) (write-region "" nil f))
+      (drgnx-ui-stop "drgnx-ui-2")
+      (should (seq-every-p #'file-exists-p (drgnx-ui--x11-files 93)))
+      (should-not (drgnx-ui--reservation-owner 93)))))
+
+(ert-deftest drgnx-ui-compositor/a-forged-display-is-never-cleaned-or-used ()
+  ;; session.json is not trusted: a display the harness did not reserve for that session is neither used for a
+  ;; frame nor cleaned up, even with a dead xvfb.pid
+  (drgnx-ui-compositor-test--with
+    (write-region "" nil (expand-file-name ".X11-unix/X91" xdir))
+    (write-region "" nil (expand-file-name ".X5-lock" xdir))
+    (dolist (forged '(":91" ":5"))
+      (let* ((s (drgnx-ui-prepare-run "drgnx-ui-3" nil "800x600" root nil nil "x11"))
+             (run (plist-get s :run))
+             (json (expand-file-name "session.json" run))
+             (sess (plist-put (drgnx-ui--read-json json) :display forged)))
+        (drgnx-ui--write json (drgnx-ui--json sess))
+        (write-region (number-to-string (drgnx-ui-compositor-test--dead-pid)) nil (expand-file-name "xvfb.pid" run))
+        (should-error (drgnx-ui--display-env sess) :type 'drgnx-ui-error)
+        (drgnx-ui-stop "drgnx-ui-3")))
+    (should (file-exists-p (expand-file-name ".X11-unix/X91" xdir)))
+    (should (file-exists-p (expand-file-name ".X5-lock" xdir)))))
 
 (ert-deftest drgnx-ui-compositor/a-missing-compositor-says-the-container-command ()
   (drgnx-ui-compositor-test--with
@@ -169,31 +226,75 @@ paths no WM serves."
     (let ((process-environment (cons "DRGNX_UI_COMPOSITOR=sway" process-environment)))
       (should (equal (plist-get (drgnx-ui-prepare-run "drgnx-ui-1" nil "800x600" root) :compositor) "sway")))))
 
+(defun drgnx-ui-compositor-test--socket (path)
+  "A listening Unix socket at PATH (a fake WM's); the server process."
+  (make-network-process :name "fake-wm" :server t :family 'local :service path :noquery t))
+
 (ert-deftest drgnx-ui-compositor/ui-wm-never-reads-the-callers-swaysock ()
   (drgnx-ui-compositor-test--with
     (let* ((s (drgnx-ui-prepare-run "drgnx-ui-1" nil "1280x800" root nil 2 "sway"))
-           (sock (expand-file-name "sway-ipc.1000.42.sock" (plist-get s :xdg_runtime_dir)))
-           (server (make-network-process :name "fake-sway" :server t :family 'local :service sock :noquery t)))
+           (sock (drgnx-ui--sway-socket "drgnx-ui-1"))
+           (s2 (drgnx-ui-prepare-run "drgnx-ui-2" nil "1280x800" root nil 2 "i3"))
+           (sock2 (drgnx-ui--i3-socket "drgnx-ui-2"))
+           (servers (list (drgnx-ui-compositor-test--socket sock) (drgnx-ui-compositor-test--socket sock2))))
       (unwind-protect
-          (let ((tree (plist-get (drgnx-ui-wm s) :tree)))
-            (should (equal (plist-get (drgnx-ui-wm s) :wm) "sway"))
-            (should (equal (plist-get tree :args) (concat "-s " sock " -t get_tree -r")))
-            (should (equal (plist-get tree :swaysock) "unset"))
-            (should (equal (plist-get tree :i3sock) "unset"))
+          (progn
+            ;; sway listens where the session's env pins it
+            (should (member (concat "SWAYSOCK=" sock) (drgnx-ui-session-env s)))
+            (should (equal (file-name-directory sock) (file-name-as-directory (plist-get s :xdg_runtime_dir))))
+            (let ((tree (plist-get (drgnx-ui-wm s) :tree)))
+              (should (equal (plist-get (drgnx-ui-wm s) :wm) "sway"))
+              (should (equal (plist-get tree :args) (concat "-s " sock " -t get_tree -r")))
+              (should (equal (plist-get tree :swaysock) "unset"))
+              (should (equal (plist-get tree :i3sock) "unset")))
             (should (equal (plist-get (drgnx-ui-wm-command s "output HEADLESS-2 disable") :args)
-                           (concat "-s " sock " -r -- output HEADLESS-2 disable"))))
-        (delete-process server)))
-    ;; i3: the socket of the session's own display's root window
-    (let* ((s (drgnx-ui-prepare-run "drgnx-ui-2" nil "1280x800" root nil 2 "i3"))
-           (tree (plist-get (drgnx-ui-wm s) :tree)))
-      (should (equal (plist-get tree :args) (format "-s /root-of%s -t get_tree" (plist-get s :display))))
-      (should (equal (plist-get tree :i3sock) "unset")))
+                           (concat "-s " sock " -r -- output HEADLESS-2 disable")))
+            ;; a failure says what the tool printed on stderr
+            (should (string-search "boom" (cadr (should-error (drgnx-ui-wm-command s "fail") :type 'drgnx-ui-error))))
+            ;; i3: the socket its i3.conf names, not anything on the display
+            (let ((tree (plist-get (drgnx-ui-wm s2) :tree)))
+              (should (equal (plist-get tree :args) (concat "-s " sock2 " -t get_tree")))
+              (should (equal (plist-get tree :i3sock) "unset")))
+            ;; session.json says nothing about where the socket is: a forged runtime dir is not followed
+            (should (equal (plist-get (plist-get (drgnx-ui-wm (plist-put (copy-sequence s) :xdg_runtime_dir "/nonexistent"))
+                                                 :tree)
+                                      :args)
+                           (concat "-s " sock " -t get_tree -r")))
+            ;; a symlink in the socket's place is refused, even to a real socket
+            (let ((s5 (drgnx-ui-prepare-run "drgnx-ui-5" nil "800x600" root nil nil "sway")))
+              (make-symbolic-link sock (drgnx-ui--sway-socket "drgnx-ui-5"))
+              (should-error (drgnx-ui-wm s5) :type 'drgnx-ui-error)))
+        (mapc #'delete-process servers)))
     ;; no WM to read
     (should (equal (drgnx-ui-wm (drgnx-ui-prepare-run "drgnx-ui-3" nil "800x600" root)) '(:wm "none")))
     (should (equal (drgnx-ui-wm (drgnx-ui-prepare-run "drgnx-ui-4" nil "800x600" root nil nil "x11")) '(:wm "none")))
     ;; a sway session whose sway has not started has no socket: an error, never another sway
-    (should-error (drgnx-ui-wm (drgnx-ui-prepare-run "drgnx-ui-5" nil "800x600" root nil nil "sway"))
+    (should-error (drgnx-ui-wm (drgnx-ui-prepare-run "drgnx-ui-6" nil "800x600" root nil nil "sway"))
                   :type 'drgnx-ui-error)))
+
+(ert-deftest drgnx-ui-compositor/a-test-run-gets-a-scope-where-systemd-is ()
+  (should (equal (drgnx-ui--test-run-argv "drgnx-ui-test-1-2" 110 nil "S") '("setsid" "-w" "sh" "-c" "S")))
+  (let ((argv (drgnx-ui--test-run-argv "drgnx-ui-test-1-2" 110 t "S")))
+    (should (equal (seq-take argv 4) '("systemd-run" "--user" "--scope" "--quiet")))
+    (should (equal (cadr (member "--unit" argv)) "drgnx-ui-test-1-2"))
+    (should (member "MemoryMax=3G" argv))
+    (should (member "RuntimeMaxSec=170" argv))
+    (should (equal (last argv 5) '("setsid" "-w" "sh" "-c" "S")))))
+
+(ert-deftest drgnx-ui-compositor/a-bad-selector-fails-before-a-session-starts ()
+  (let ((process-environment (cons "DRGNX_TEST_SELECTOR=(or \"^a/\"" process-environment)))
+    (cl-letf (((symbol-function 'drgnx-ui-run-ert-session) (lambda (&rest _) (error "A session was started"))))
+      (should (string-search "not an ERT selector"
+                             (cadr (should-error (drgnx-ui-run-ui-session-tests) :type 'drgnx-ui-error)))))))
+
+(ert-deftest drgnx-ui-compositor/pgrep-patterns-are-quoted-for-ere ()
+  (let ((s "/tmp/a.b+c(d)[e]{f}|g^$\\h*?"))
+    (should (equal (drgnx-ui--ere-quote s) "/tmp/a\\.b\\+c\\(d\\)\\[e\\]\\{f\\}\\|g\\^\\$\\\\h\\*\\?"))
+    ;; grep -E agrees: the quoted pattern matches the string itself
+    (should (eq 0 (with-temp-buffer
+                    (insert s)
+                    (call-process-region (point-min) (point-max) "grep" nil nil nil "-qE" "--"
+                                         (concat "^" (drgnx-ui--ere-quote s) "$")))))))
 
 (ert-deftest drgnx-ui-compositor/the-mcp-lists-ui-wm-and-compositor ()
   (let* ((tools (append (plist-get (plist-get (drgnx-ui-mcp-handle '(:jsonrpc "2.0" :id 1 :method "tools/list")) :result)
@@ -237,16 +338,27 @@ paths no WM serves."
           (set-file-modes (expand-file-name "podman" path) #o755)
           (let ((r (drgnx-ui-compositor-test--bin-call
                     dir (list (concat "PATH=" path ":/usr/bin:/bin") "DRGNX_CONTAINER=podman" "DRGNX_TEST_GUI_IMAGE=an-image"
-                              "DRGNX_TEST_SELECTOR=\"^drgnx-wm/\"" "DRGNX_UI_COMPOSITOR=x11")
+                              "DRGNX_TEST_SELECTOR=\"^drgnx-wm/\"" "DRGNX_UI_COMPOSITOR=x11" "DRGNX_TEST_GUI_MEMORY")
                     "test" "--container" "--ui" "--compositor" "sway")))
             (should (eql (car r) 0)))
           (let* ((args (split-string (with-temp-buffer (insert-file-contents log) (buffer-string)) "\n" t))
                  (run (cdr (member "run" args))))
             (should run)
-            (should (equal (cadr (member "--memory" run)) "6g"))
+            ;; 3 GB and no swap on top
+            (should (equal (cadr (member "--memory" run)) "3g"))
+            (should (equal (cadr (member "--memory-swap" run)) "3g"))
             (dolist (kv '("DRGNX_TEST_SELECTOR=\"^drgnx-wm/\"" "DRGNX_UI_COMPOSITOR=x11"))
               (should (equal (nth (1- (or (seq-position run kv) 0)) run) "-e")))
             (should (equal (last run 5) '("bin/drgnx" "test" "--ui" "--compositor" "sway"))))
+          ;; DRGNX_TEST_GUI_MEMORY overrides both
+          (delete-file log)
+          (drgnx-ui-compositor-test--bin-call
+           dir (list (concat "PATH=" path ":/usr/bin:/bin") "DRGNX_CONTAINER=podman" "DRGNX_TEST_GUI_IMAGE=an-image"
+                     "DRGNX_TEST_GUI_MEMORY=5g")
+           "test" "--container" "--ui")
+          (let ((run (cdr (member "run" (split-string (with-temp-buffer (insert-file-contents log) (buffer-string)) "\n" t)))))
+            (should (equal (cadr (member "--memory" run)) "5g"))
+            (should (equal (cadr (member "--memory-swap" run)) "5g")))
           ;; a compositor the harness does not know is refused before any container runs
           (delete-file log)
           (should (eql 2 (car (drgnx-ui-compositor-test--bin-call
