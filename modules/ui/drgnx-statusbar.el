@@ -1,4 +1,4 @@
-;;; drgnx-statusbar.el --- The status bar: a quiet line of segments in place of the raw mode line -*- lexical-binding: t -*-
+;;; drgnx-statusbar.el --- The status bar: quiet segments in place of the raw mode line -*- lexical-binding: t -*-
 
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -216,7 +216,9 @@ Within `drgnx-statusbar-retry-seconds' of the last record nothing is formatted: 
 
 (defun drgnx-statusbar--run-width (segs sep)
   "Columns of the texts in SEGS (an alist ID → text) joined by SEP."
-  (if segs (+ (apply #'+ (mapcar (lambda (s) (string-width (cdr s))) segs)) (* (string-width sep) (1- (length segs)))) 0))
+  (if segs
+      (+ (apply #'+ (mapcar (lambda (s) (string-width (cdr s))) segs)) (* (string-width sep) (1- (length segs))))
+    0))
 
 (defun drgnx-statusbar--total (left right)
   "Columns of the bar with these LEFT and RIGHT segments: a pad on each side and at least two between."
@@ -244,7 +246,8 @@ First the segments of `drgnx-statusbar-drop-order' go, then the branch is cut to
         (setq left (assq-delete-all id (copy-sequence left)) right (assq-delete-all id (copy-sequence right))))))
   (when (> (drgnx-statusbar--total left right) width)
     (setq left (or (drgnx-statusbar--cut-branch left right width drgnx-statusbar--branch-min) left)))
-  (while (and (> (drgnx-statusbar--total left right) width) (or right (seq-find (lambda (s) (not (eq (car s) 'branch))) left)))
+  (while (and (> (drgnx-statusbar--total left right) width)
+              (or right (seq-find (lambda (s) (not (eq (car s) 'branch))) left)))
     (if right
         (setq right (butlast right))
       (let ((last (car (last (seq-remove (lambda (s) (eq (car s) 'branch)) left)))))
@@ -266,7 +269,8 @@ source window's buffer current."
     (with-current-buffer (or buf (current-buffer))
       (let* ((drgnx-statusbar--window w)
              (drgnx-statusbar--left-sep (drgnx-statusbar--separator))
-             (texts (lambda (ids) (delq nil (mapcar (lambda (id) (when-let* ((s (drgnx-statusbar--text id))) (cons id s))) ids))))
+             (texts (lambda (ids)
+                      (delq nil (mapcar (lambda (id) (when-let* ((s (drgnx-statusbar--text id))) (cons id s))) ids))))
              (left (unless compact (funcall texts drgnx-statusbar-left)))
              (right (funcall texts (if compact drgnx-statusbar-compact drgnx-statusbar-right)))
              (fitted (drgnx-statusbar--fit left right (max width 0))))
@@ -292,8 +296,9 @@ source window's buffer current."
     (or (null mru) (eq w mru))))
 
 (defcustom drgnx-statusbar-modes '(prog-mode text-mode conf-mode)
-  "Major modes (and the modes derived from them) whose buffers get the status bar; so does any buffer that visits a file.
-Every other buffer (Magit, Dired, help, Info, shells, compilation, drgnx's own panes) keeps its own mode line."
+  "Major modes (and the modes derived from them) whose buffers get the status bar.
+So does any buffer that visits a file.  Every other buffer (Magit, Dired, help, Info, shells, compilation, drgnx's
+own panes) keeps its own mode line."
   :type '(repeat symbol) :set #'drgnx-statusbar--set :group 'drgnx-statusbar)
 
 (defun drgnx-statusbar--own-mode-line-p ()
@@ -334,7 +339,8 @@ Weak on the window, so a deleted window's entry goes with it; emptied when the m
       (point-min) (point-max) major-mode vc-mode buffer-file-coding-system indent-tabs-mode tab-width
       defining-kbd-macro mode-line-process default-directory (and mark-active (mark t))
       (drgnx-statusbar--selected-p w)
-      (bound-and-true-p flymake-mode) (bound-and-true-p flymake--mode-line-counter-cache) (drgnx-statusbar--flymake-backends)
+      (bound-and-true-p flymake-mode) (bound-and-true-p flymake--mode-line-counter-cache)
+      (drgnx-statusbar--flymake-backends)
       (bound-and-true-p eglot--managed-mode) (bound-and-true-p eglot--cached-server) (drgnx-statusbar--eglot-live-p)
       (drgnx-statusbar--indent-width)
       (bound-and-true-p drgnx-modal-state) (bound-and-true-p drgnx-job-ui--badge) (bound-and-true-p drgnx-face-glyphs)
@@ -370,7 +376,8 @@ to show, it compares and allocates nothing."
                     (setq g (cdr g)))
                   found))
            (let ((s (string-trim (or (drgnx-statusbar--construct-text
-                                      (seq-remove (lambda (e) (member e drgnx-statusbar-misc-exclude)) global-mode-string))
+                                      (seq-remove (lambda (e) (member e drgnx-statusbar-misc-exclude))
+                                                  global-mode-string))
                                      ""))))
              (unless (string-empty-p s) s))))))
 
@@ -503,7 +510,8 @@ Only the last `drgnx-statusbar--test-scan-bytes' characters are searched."
         (dolist (spec drgnx-statusbar-test-count-regexps)
           (goto-char (point-max))
           (when (re-search-backward (car spec) best-pos t)   ; only a later line than the best so far
-            (let* ((group (lambda (k) (when-let* ((g (plist-get (cdr spec) k)) (s (match-string g))) (string-to-number s))))
+            (let* ((group (lambda (k)
+                            (when-let* ((g (plist-get (cdr spec) k)) (s (match-string g))) (string-to-number s))))
                    (passed (funcall group :passed)) (failed (funcall group :failed)) (total (funcall group :total)))
               (when passed
                 (setq best-pos (point)
@@ -580,7 +588,8 @@ does the first event after the hub connects (the count is not known yet: the hub
   (drgnx-statusbar--set-jobs nil))
 
 (defvar drgnx-statusbar--git-branches (make-hash-table :test #'equal)
-  "Repository root → the branch plist the bars were last redrawn for (one entry per repository git has read).")
+  "Repository root → the branch plist the bars were last redrawn for (one entry per repository git has read).
+Emptied when `drgnx-statusbar-mode' turns off.")
 
 (defun drgnx-statusbar--git-changed (&optional root &rest _)
   "On `drgnx-git-changed-functions' (ROOT's status was read): redraw the bars (debounced) when ROOT's branch or its
@@ -592,13 +601,16 @@ ahead and behind counts are not what the bars last drew; a status run that chang
       (drgnx-statusbar-refresh))))
 
 (defvar drgnx-statusbar-git-ask-seconds 5
-  "Seconds before the status bar asks drgnx's git cache again about the same folder.")
-(defvar drgnx-statusbar--git-asked nil "(REPOSITORY-OR-FOLDER . TIME) of the last time the bar asked the git cache to read.")
+  "Seconds before the status bar asks drgnx's git cache again about the same repository.
+A file whose repository is not known yet counts by its folder.")
+(defvar drgnx-statusbar--git-asked nil
+  "(REPOSITORY-OR-FOLDER . TIME) of the last time the bar asked the git cache to read.")
 
 (defun drgnx-statusbar--ask-git (&rest _)
   "On `editor-changed' (the signal bus, when Emacs is idle; never redisplay): have drgnx's git cache read the
-repository of the editor's file, at most every `drgnx-statusbar-git-ask-seconds' for one repository (one folder while its repository is unknown).  The answer comes back
-through `drgnx-git-changed-functions' and redraws the bars.  A remote file asks nothing."
+repository of the editor's file, at most every `drgnx-statusbar-git-ask-seconds' for one repository (one folder
+while its repository is unknown).  The answer comes back through `drgnx-git-changed-functions' and redraws the
+bars.  A remote file asks nothing."
   (when-let* (((fboundp 'drgnx-git-refresh))
               (w (and (fboundp 'drgnx-wb-editor-window) (drgnx-wb-editor-window)))
               (file (buffer-local-value 'buffer-file-name (window-buffer w)))
@@ -750,8 +762,11 @@ changed: drgnx's own segments are worked out once per change of their state, not
      (let* ((running drgnx-statusbar--jobs-state) (cards (drgnx-statusbar--cards-waiting))
             (text (string-join
                    (delq nil (list (and running (> running 0)
-                                        (format "%s %d job%s" (drgnx-statusbar--glyph 'busy) running (if (= running 1) "" "s")))
-                                   (and (> cards 0) (propertize (format "%s%d" (drgnx-statusbar--glyph 'flag "#") cards) 'face 'warning))))
+                                        (format "%s %d job%s" (drgnx-statusbar--glyph 'busy) running
+                                                (if (= running 1) "" "s")))
+                                   (and (> cards 0)
+                                        (propertize (format "%s%d" (drgnx-statusbar--glyph 'flag "#") cards)
+                                                    'face 'warning))))
                    " ")))
        (unless (string-empty-p text) text)))
    (and (boundp 'drgnx-job-ui--badge) drgnx-job-ui--badge)))
@@ -796,7 +811,8 @@ changed: drgnx's own segments are worked out once per change of their state, not
               (text (string-join
                      (delq nil (list (and (> busy 0) (format "%s %d busy" (drgnx-statusbar--glyph 'busy) busy))
                                      (and (> waiting 0)
-                                          (propertize (format "%s %d waiting on you" (drgnx-statusbar--glyph 'waiting) waiting)
+                                          (propertize (format "%s %d waiting on you"
+                                                              (drgnx-statusbar--glyph 'waiting) waiting)
                                                       'face 'drgnx-statusbar-waiting))))
                      " ")))
          (unless (string-empty-p text) text))))))
@@ -822,7 +838,8 @@ a keyboard macro being recorded, narrowing, and a remote directory."
                                  (propertize (format "%s Rec" (drgnx-statusbar--glyph 'dot)) 'face 'error))
                             (and (buffer-narrowed-p) "Narrowed")
                             (when-let* (((stringp default-directory))
-                                        (host (file-remote-p default-directory 'host))   ; parses the name, no connection
+                                        ;; parses the name, no connection
+                                        (host (file-remote-p default-directory 'host))
                                         ((not (string-empty-p host))))
                               (format "Remote: %s" host))
                             (drgnx-statusbar--construct-text mode-line-process)
@@ -848,7 +865,8 @@ a keyboard macro being recorded, narrowing, and a remote directory."
       (format "LSP%s %s"
               (if-let* ((name (drgnx-statusbar--lsp-name server))) (concat ": " name) "")
               (cond ((null server) (drgnx-statusbar--glyph 'circle))
-                    ((and (fboundp 'jsonrpc-running-p) (not (jsonrpc-running-p server))) (drgnx-statusbar--glyph 'close))
+                    ((and (fboundp 'jsonrpc-running-p) (not (jsonrpc-running-p server)))
+                     (drgnx-statusbar--glyph 'close))
                     (t (drgnx-statusbar--glyph 'dot)))))))
 
 (defvar-local drgnx-statusbar--line-cache nil
@@ -879,7 +897,9 @@ a change of the text (or of the narrowing) counts again from the top."
       (let* ((bol (pos-bol))
              (col (if (> (- pt bol) 2000) (- pt bol) (current-column))))   ; a minified line: characters, not columns
         (format "Ln %d, Col %d%s" (drgnx-statusbar--line-at bol) (1+ col)
-                (if (and (drgnx-statusbar--selected-p w) (use-region-p)) (format " (%d selected)" (abs (- (mark t) pt))) ""))))))
+                (if (and (drgnx-statusbar--selected-p w) (use-region-p))
+                    (format " (%d selected)" (abs (- (mark t) pt)))
+                  ""))))))
 
 (defun drgnx-statusbar--indent-width ()
   "The indentation width the `indent' segment shows: `tab-width' with tabs, else the first of
