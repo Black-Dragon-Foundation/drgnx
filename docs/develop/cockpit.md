@@ -523,7 +523,9 @@ side is in [jobs.md](../guide/jobs.md#a-job-in-the-work-cockpit).
   `drgnx-cockpit-cards--stale`, and the kinds' `:on-show` catches up.
 - **Ownership.** The hooks (`drgnx-hub-event-functions`, `drgnx-hub-disconnect-functions`) and both timers belong to
   the parts' buffers: the last one killed removes them. The setup adds three global hook functions (the filter, the
-  saved state, the restore), which module teardown should take out. The visibility check and the stale flag are what
+  saved state, the restore); `drgnx-cockpit-cards--teardown` takes them out, kills both parts and cancels both timers
+  (idempotent). `drgnx-cockpit--teardown` runs it and the edits' teardown: the module's off path, which module
+  teardown calls (drgnx's modules have no runtime off yet). The visibility check and the stale flag are what
   C5 and C7 use, for the workbench state store to replace.
 - **Kept in `drgnx-job-ui.el`:** the Plan Job commands (`job-show` is now "Show Job in Work…"), the ⚑ badge mode for
   those without the status bar (a click: `drgnx-job-ui-show` of the newest card's job, else

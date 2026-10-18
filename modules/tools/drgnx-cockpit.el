@@ -39,6 +39,7 @@
 (declare-function drgnx-cockpit-graph--ascii-p "drgnx-cockpit-graph")
 (declare-function drgnx-cockpit-edits--setup "drgnx-cockpit-edits")
 (declare-function drgnx-cockpit-edits-pane-buffer "drgnx-cockpit-edits")
+(declare-function drgnx-cockpit-edits--teardown "drgnx-cockpit-edits")
 (declare-function drgnx-work-ui--metrics "drgnx-work-ui")
 (declare-function drgnx-work-ui--colour "drgnx-work-ui")
 (declare-function drgnx-work-nodes "drgnx-work-db")
@@ -746,6 +747,7 @@ or nil: any."
 (unless (featurep 'drgnx-cockpit-cards)
   (load (expand-file-name "drgnx-cockpit-cards" (file-name-directory (or load-file-name buffer-file-name))) nil t))
 (declare-function drgnx-cockpit-cards--setup "drgnx-cockpit-cards")
+(declare-function drgnx-cockpit-cards--teardown "drgnx-cockpit-cards")
 
 ;;;; The module
 
@@ -766,6 +768,13 @@ or nil: any."
   (drgnx-cockpit-edits--setup)
   (drgnx-cockpit-feed--setup)            ; kinds `happened' (right) and `timeline' (bottom), A everywhere
   (drgnx-cockpit-cards--setup))          ; kinds `needs-you' and `decisions' (right, stacked with `happened')
+
+(defun drgnx-cockpit--teardown ()
+  "tools/cockpit's off path: undo what its parts' setups left global — agents' edits panes, What needs you and the
+decision log with their three global hook functions.  drgnx's modules have no runtime off yet (a module turned off
+stops at the next start): module teardown calls this."
+  (drgnx-cockpit-edits--teardown)
+  (drgnx-cockpit-cards--teardown))
 
 (drgnx-module-define 'tools/cockpit
                      :doc "The Work cockpit: the Work graph — specs, plans, tasks, agents, jobs and reviews; drawn in windows, an outline in terminals; what jobs need of you and their decisions."

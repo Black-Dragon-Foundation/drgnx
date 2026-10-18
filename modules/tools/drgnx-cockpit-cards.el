@@ -502,5 +502,18 @@ filter of the graph, the filter in the saved workbench."
   (add-hook 'drgnx-persist-state-functions #'drgnx-cockpit-cards--persist-state)
   (add-hook 'drgnx-persist-after-restore-functions #'drgnx-cockpit-cards--adopt))
 
+(defun drgnx-cockpit-cards--teardown ()
+  "Undo the cards' part of the module: take out the three global hook functions `drgnx-cockpit-cards--setup' added,
+kill both parts (the last one's `kill-buffer-hook' takes out the hub hooks and cancels the timers; done here too, in
+case no part lives) and forget nothing else — the filter is the graph's.  Idempotent."
+  (remove-hook 'drgnx-cockpit-filter-functions #'drgnx-cockpit-cards--job-node-p)
+  (remove-hook 'drgnx-persist-state-functions #'drgnx-cockpit-cards--persist-state)
+  (remove-hook 'drgnx-persist-after-restore-functions #'drgnx-cockpit-cards--adopt)
+  (mapc #'kill-buffer (drgnx-cockpit-cards--buffers))
+  (remove-hook 'drgnx-hub-event-functions #'drgnx-cockpit-cards--hub-event)
+  (remove-hook 'drgnx-hub-disconnect-functions #'drgnx-cockpit-cards--hub-gone)
+  (dolist (tm (list drgnx-cockpit-cards--timer drgnx-cockpit-cards--retry)) (when (timerp tm) (cancel-timer tm)))
+  (setq drgnx-cockpit-cards--timer nil drgnx-cockpit-cards--retry nil drgnx-cockpit-cards--stale nil))
+
 (provide 'drgnx-cockpit-cards)
 ;;; drgnx-cockpit-cards.el ends here

@@ -402,4 +402,31 @@ after — they owned their hooks and timers."
         (should (with-temp-buffer (insert-file-contents (expand-file-name (format "keys/%s.eld" profile) drgnx-dir))
                                   (search-forward (format "(%s " id) nil t)))))))
 
+(ert-deftest drgnx-cockpit-cards/the-module-s-teardown-leaves-nothing ()
+  ;; every global hook the setup adds has an owner: the module's teardown takes them out, kills both parts (their
+  ;; hub hooks go with the last) and cancels both timers
+  (let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
+        (drgnx-pane--kinds nil) (drgnx-cockpit-filter-functions nil)
+        (drgnx-persist-state-functions nil) (drgnx-persist-after-restore-functions nil)
+        (drgnx-hub-event-functions nil) (drgnx-hub-disconnect-functions nil)
+        (drgnx-cockpit-cards--timer nil) (drgnx-cockpit-cards--retry nil))
+    (cl-letf (((symbol-function 'drgnx-pane--call) #'ignore))
+      (drgnx-cockpit--setup))
+    (drgnx-cockpit-cards-buffer)
+    (drgnx-cockpit-decisions-buffer)
+    (setq drgnx-cockpit-cards--timer (run-at-time 60 nil #'ignore) drgnx-cockpit-cards--retry (run-at-time 60 nil #'ignore))
+    (should (memq #'drgnx-cockpit-cards--job-node-p drgnx-cockpit-filter-functions))
+    (should (memq #'drgnx-cockpit-cards--hub-event drgnx-hub-event-functions))
+    (drgnx-cockpit--teardown)
+    (should-not (memq #'drgnx-cockpit-cards--job-node-p drgnx-cockpit-filter-functions))
+    (should-not (memq #'drgnx-cockpit-cards--persist-state drgnx-persist-state-functions))
+    (should-not (memq #'drgnx-cockpit-cards--adopt drgnx-persist-after-restore-functions))
+    (should-not (memq #'drgnx-cockpit-cards--hub-event drgnx-hub-event-functions))
+    (should-not (memq #'drgnx-cockpit-cards--hub-gone drgnx-hub-disconnect-functions))
+    (should-not (get-buffer drgnx-cockpit-cards-buffer-name))
+    (should-not (get-buffer drgnx-cockpit-decisions-buffer-name))
+    (should-not (timerp drgnx-cockpit-cards--timer))
+    (should-not (timerp drgnx-cockpit-cards--retry))
+    (drgnx-cockpit--teardown)))                        ; twice: nothing to do, no error
+
 ;;; mod-cockpit-cards-test.el ends here
