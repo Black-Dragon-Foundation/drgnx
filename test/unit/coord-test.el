@@ -58,6 +58,40 @@
         (should (seq-every-p (lambda (task) (member (plist-get task :agent) '("a" "b"))) (drgnx-coord-tasks "race"))))
       (mapc #'kill-buffer outs))))
 
+(ert-deftest drgnx-coord/concurrent-held-writes-and-hub-writes ()
+  ;; two Emacs processes write the held-count (read, then write) in a loop while this one writes decisions: the work
+  ;; database waits for its lock (busy_timeout) — nobody fails with "database is locked"
+  (drgnx-coord-test--with
+    (drgnx-coord-version)                                                      ; this Emacs has the database open (WAL)
+    (let* ((outs nil) (procs nil) (written 0)
+           (start (lambda (agent)
+                    (let ((b (generate-new-buffer " *held*" t)))
+                      (push b outs)
+                      (make-process :name agent :buffer b :noquery t
+                                    :command (list (expand-file-name invocation-name invocation-directory) "--batch" "-Q"
+                                                   "--eval" "(setq load-prefer-newer t)"
+                                                   "-L" (expand-file-name "core" drgnx-dir) "-l" "drgnx-coord"
+                                                   "--eval" (format "(princ (condition-case e
+                                                                              (progn (dotimes (i 150) (drgnx-coord-note-held %S (= 0 (%% i 2)))) \"DONE\\n\")
+                                                                            (error (format \"ERR:%%S\\n\" e))))"
+                                                                    agent))))))
+           (deadline (+ (float-time) 60)))
+      (unwind-protect
+          (progn
+            (setq procs (list (funcall start "a") (funcall start "b")))
+            (while (and (seq-some #'process-live-p procs) (< (float-time) deadline))
+              (drgnx-coord-decide :kind "build" :subject (format "s%d" written) :reason "r" :author "user" :seen (drgnx-coord-version))
+              (setq written (1+ written))
+              (accept-process-output nil 0.005))
+            (should-not (seq-some #'process-live-p procs))
+            (should (> written 5))                                             ; the writes did overlap the children's
+            (accept-process-output nil 0.1)
+            (dolist (b outs)
+              (should (string-prefix-p "DONE" (with-current-buffer b (buffer-string)))))
+            (should (= written (length (drgnx-coord-decisions-since 0)))))
+        (dolist (p procs) (when (process-live-p p) (kill-process p)))
+        (mapc #'kill-buffer outs)))))
+
 (ert-deftest drgnx-coord/a-stale-version-is-held-with-every-change ()
   (drgnx-coord-test--with
     (let ((v0 (drgnx-coord-version)))
