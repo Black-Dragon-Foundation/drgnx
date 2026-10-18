@@ -199,4 +199,13 @@
                 (should-not (find-buffer-visiting outside)))))
         (delete-file outside)))))
 
+(ert-deftest drgnx-review/refresh-is-a-registered-command ()
+  ;; M11b-13: g and the palette run it, so it is in the registry
+  (let ((drgnx-agents-request-functions nil) (drgnx-agents-changed-functions nil))   ; the module's setup adds hooks
+    (funcall (plist-get (cdr (assq 'tools/review drgnx-modules--table)) :setup)))
+  (let ((cmd (drgnx-commands-get 'review-refresh)))
+    (should cmd)
+    (should (equal (drgnx-commands-label cmd) "Source Control: Review: Refresh"))
+    (should (eq (drgnx-cmd-command cmd) 'drgnx-review-refresh))))
+
 ;;; mod-review-test.el ends here

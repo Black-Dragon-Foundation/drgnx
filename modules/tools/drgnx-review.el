@@ -259,6 +259,7 @@ master); its findings land in the Review tab."
                        (pcase-dolist (`(,id ,title ,fn ,doc)
                                       '((review-branch "Review Branch" drgnx-review-branch "An agent reviews this branch before you push")
                                         (review-view "Review: Show Findings" drgnx-review-view "The Review tab")
+                                        (review-refresh "Review: Refresh" drgnx-review-refresh "Draw the Review tab again")
                                         (review-visit "Review: Open Finding" drgnx-review-visit "The finding's file, at its line")
                                         (review-show-diff "Review: Show Branch Diff" drgnx-review-show-diff "The reviewed changes in the diff view")))
                          (drgnx-command-define id :category "Source Control" :title title :command fn :doc doc))))

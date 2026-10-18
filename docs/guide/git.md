@@ -68,7 +68,7 @@ VERDICT: fail
 Severities are `critical`, `important` and `minor`. The panel's **Review** tab lists the findings worst first,
 under a line such as `feature vs main · 2 findings · fail`. That line says "Reviewing…" while the agent works, says
 when the reviewer gave no verdict, and adds "(HEAD has moved since)" when you committed after the review began.
-`g` in the tab draws it again. `RET` opens a finding's line (a path that leads outside the repository is refused); `d` (Review: Show Branch Diff) opens the branch's diff at that file, up to the commit that was reviewed (not where HEAD is now). The reviewer is
+`g` in the tab (Review: Refresh) draws it again. `RET` opens a finding's line (a path that leads outside the repository is refused); `d` (Review: Show Branch Diff) opens the branch's diff at that file, up to the commit that was reviewed (not where HEAD is now). The reviewer is
 an ordinary agent session: its transcript is in the agents view. Review Branch refuses a branch with nothing to
 review, and a repository without a base branch.
 

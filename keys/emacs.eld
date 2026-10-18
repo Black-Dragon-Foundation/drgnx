@@ -58,6 +58,7 @@
         (git-generate-commit-message :none "the palette")
         (review-branch :none "the palette")
         (review-view :none "the palette")
+        (review-refresh :none "the palette")
         (review-visit "RET" :map drgnx-review-mode-map)
         (review-show-diff "d" :map drgnx-review-mode-map)
         (prs-view :none "the palette")

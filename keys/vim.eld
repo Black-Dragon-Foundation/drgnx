@@ -59,6 +59,7 @@
         (git-generate-commit-message :none "the palette")
         (review-branch "SPC g R")
         (review-view :none "the palette")
+        (review-refresh :none "the palette")
         (review-visit "RET" :map drgnx-review-mode-map)
         (review-show-diff "d" :map drgnx-review-mode-map)
         (prs-view "SPC g p")
