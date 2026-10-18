@@ -173,3 +173,112 @@ strings; the real frame is not touched), an empty cache and no terminal to ask: 
   (let ((xterm-mouse-mode nil) (drgnx-tty-mouse t))
     (drgnx-tty-frames-mouse-apply)
     (should-not xterm-mouse-mode)))
+
+;;;; Colours
+
+(defmacro drgnx-tty-frames-test--terminfos (have &rest body)
+  "BODY with only the terminal types HAVE (a list) having a true-colour terminfo, nothing cached, and the
+daemon's own COLORTERM unset."
+  (declare (indent 1))
+  `(let ((drgnx-tty-frames--direct-cache (make-hash-table :test #'equal))
+         (process-environment (cons "COLORTERM" process-environment)))
+     (cl-letf (((symbol-function 'executable-find) (lambda (&rest _) "/bin/infocmp"))
+               ((symbol-function 'call-process)
+                (lambda (_prog _in _out _disp &rest args)
+                  (insert (if (member (car (last args)) ,have) "kx|term,\n\tRGB,\n\tcolors#0x1000000,\n" "kx|term,\n\tcolors#0x100,\n"))
+                  0)))
+       ,@body)))
+
+(ert-deftest drgnx-tty-frames/a-truecolor-client-gets-the-direct-terminfo ()
+  (drgnx-tty-frames-test--terminfos '("xterm-direct" "tmux-direct")
+    (should (equal (drgnx-tty-frames--true-colour-type "xterm-256color" '("COLORTERM=truecolor")) "xterm-direct"))
+    (should (equal (drgnx-tty-frames--true-colour-type "tmux-256color" '("TERM=x" "COLORTERM=24bit")) "tmux-direct"))
+    (should (equal (drgnx-tty-frames--true-colour-type "xterm-256color" '("COLORTERM=TrueColor")) "xterm-direct"))
+    ;; a type without the suffix
+    (should (equal (drgnx-tty-frames--true-colour-type "xterm" '("COLORTERM=truecolor")) "xterm-direct"))))
+
+(ert-deftest drgnx-tty-frames/anything-else-is-left-as-it-is ()
+  (drgnx-tty-frames-test--terminfos '("xterm-direct" "foot")
+    ;; no COLORTERM, or another value
+    (should (equal (drgnx-tty-frames--true-colour-type "xterm-256color" nil) "xterm-256color"))
+    (should (equal (drgnx-tty-frames--true-colour-type "xterm-256color" '("COLORTERM=yes")) "xterm-256color"))
+    (should (equal (drgnx-tty-frames--true-colour-type "xterm-256color" '("COLORTERM")) "xterm-256color"))
+    ;; a terminfo that has true colour already is Emacs's to use
+    (should (equal (drgnx-tty-frames--true-colour-type "foot" '("COLORTERM=truecolor")) "foot"))
+    ;; no direct variant on this machine
+    (should (equal (drgnx-tty-frames--true-colour-type "screen-256color" '("COLORTERM=truecolor")) "screen-256color"))
+    ;; the daemon has COLORTERM=truecolor itself: every frame has true colour already
+    (let ((process-environment (cons "COLORTERM=truecolor" process-environment)))
+      (should (equal (drgnx-tty-frames--true-colour-type "xterm-256color" '("COLORTERM=truecolor")) "xterm-256color")))))
+
+(ert-deftest drgnx-tty-frames/infocmp-is-asked-once-per-type ()
+  (let ((asked 0))
+    (drgnx-tty-frames-test--terminfos '("xterm-direct")
+      (let ((real (symbol-function 'call-process)))
+        (cl-letf (((symbol-function 'call-process) (lambda (&rest args) (cl-incf asked) (apply real args))))
+          (dotimes (_ 3) (drgnx-tty-frames--true-colour-type "xterm-256color" '("COLORTERM=truecolor")))
+          (should (= asked 2)))))))      ; xterm-256color and xterm-direct
+
+(ert-deftest drgnx-tty-frames/a-failing-infocmp-or-none-leaves-the-type ()
+  (let ((drgnx-tty-frames--direct-cache (make-hash-table :test #'equal)))
+    (cl-letf (((symbol-function 'executable-find) (lambda (&rest _) nil)))
+      (should (equal (drgnx-tty-frames--true-colour-type "xterm-256color" '("COLORTERM=truecolor")) "xterm-256color"))))
+  (let ((drgnx-tty-frames--direct-cache (make-hash-table :test #'equal)))
+    (cl-letf (((symbol-function 'executable-find) (lambda (&rest _) "/bin/infocmp"))
+              ((symbol-function 'call-process) (lambda (&rest _) 1)))
+      (should (equal (drgnx-tty-frames--true-colour-type "xterm-256color" '("COLORTERM=truecolor")) "xterm-256color")))))
+
+(ert-deftest drgnx-tty-frames/the-frame-is-created-with-the-direct-type-and-never-fails-for-it ()
+  (let* ((proc (make-pipe-process :name "kx-colours" :noquery t)) seen)
+    (unwind-protect
+        (drgnx-tty-frames-test--terminfos '("xterm-direct")
+          (process-put proc 'env '("TERM=xterm-256color" "COLORTERM=truecolor"))
+          (should (eq (drgnx-tty-frames--create-tty-frame (lambda (&rest args) (setq seen args) 'frame)
+                                                          "/dev/pts/9" "xterm-256color" proc '((a . b)))
+                      'frame))
+          (should (equal seen (list "/dev/pts/9" "xterm-direct" proc '((a . b)))))
+          ;; the decision itself failing creates the frame as asked
+          (cl-letf (((symbol-function 'drgnx-tty-frames--true-colour-type) (lambda (&rest _) (error "Broken"))))
+            (drgnx-tty-frames--create-tty-frame (lambda (&rest args) (setq seen args)) "/dev/pts/9" "xterm-256color" proc)
+            (should (equal seen (list "/dev/pts/9" "xterm-256color" proc)))))
+      (delete-process proc))))
+
+(ert-deftest drgnx-tty-frames/true-colour-is-asked-for-at-frame-creation ()
+  (funcall (plist-get (alist-get 'ui/terminal drgnx-modules--table) :setup))
+  (when (fboundp 'server-create-tty-frame)
+    (should (advice-member-p #'drgnx-tty-frames--create-tty-frame 'server-create-tty-frame))))
+
+(ert-deftest drgnx-tty-frames/the-state-table-names-each-group-its-faces-and-its-cue ()
+  (should (equal (mapcar #'car drgnx-tty-frames-state-faces) '(git review tabs work)))
+  (pcase-dolist (`(,group . ,spec) drgnx-tty-frames-state-faces)
+    (should (symbolp group))
+    (should (memq (plist-get spec :cue) '(letter word attribute label)))
+    (should (stringp (plist-get spec :doc)))
+    (should (consp (plist-get spec :faces)))
+    (dolist (f (plist-get spec :faces))
+      (should (string-prefix-p "drgnx-" (symbol-name f))))))
+
+(ert-deftest drgnx-tty-frames/every-face-of-the-state-table-is-defined ()
+  (dolist (lib '(drgnx-git drgnx-chrome drgnx-review drgnx-work-ui))
+    (require lib))
+  (pcase-dolist (`(,_ . ,spec) drgnx-tty-frames-state-faces)
+    (dolist (f (plist-get spec :faces))
+      (should (facep f)))))
+
+(defun drgnx-tty-frames-test--status-column (graphic)
+  "The :align-to expression of the Explorer's status letter for a modified file, GRAPHIC or not."
+  (require 'drgnx-explorer)
+  (with-temp-buffer
+    (insert "  name.txt\n")
+    (cl-letf (((symbol-function 'drgnx-git-status) (lambda (_) 'modified))
+              ((symbol-function 'display-graphic-p) (lambda (&rest _) graphic)))
+      (let ((drgnx-explorer-git t))
+        (drgnx-explorer--git-decorate (point-min) (1- (point-max)) "/x/name.txt" nil 3)))
+    (let ((s (overlay-get (car (overlays-in (point-min) (point-max))) 'after-string)))
+      (list (plist-get (cdr (get-text-property 0 'display s)) :align-to) (substring-no-properties s)))))
+
+(ert-deftest drgnx-tty-frames/the-git-letter-keeps-off-the-last-column-of-a-terminal-window ()
+  ;; a terminal window has no fringe: its last column shows the truncation `$', so a letter put at the edge
+  ;; (right - 2) is lost and the git state is told by colour alone
+  (should (equal (drgnx-tty-frames-test--status-column nil) '((- right 3) " M")))
+  (should (equal (drgnx-tty-frames-test--status-column t) '((- right 2) " M"))))

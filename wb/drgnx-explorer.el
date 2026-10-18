@@ -147,7 +147,8 @@ buffer, and they keep both in step.")
         (when mark
           (let ((o (make-overlay eol eol)))
             (overlay-put o 'drgnx-git t)
-            (overlay-put o 'after-string (concat (propertize " " 'display '(space :align-to (- right 2)))
+            ;; a terminal window has no fringe: its last column shows the truncation `$', so one more column stays free
+            (overlay-put o 'after-string (concat (propertize " " 'display `(space :align-to (- right ,(if (display-graphic-p) 2 3))))
                                                  (propertize mark 'face face)))))))
     (ignore bol)))
 

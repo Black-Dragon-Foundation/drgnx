@@ -223,6 +223,30 @@ take OSC 52 (GNOME Terminal, Ptyxis) keeps the copy inside drgnx.
   (terminals already open follow at once); then `C-y` asks the terminal for its clipboard first. With it off,
   drgnx leaves alone a read you turned on through Emacs's own `xterm-extra-capabilities`.
 
+## Colours
+
+A terminal shows 8, 256 or 16 million (true colour) colours. The theme looks as in a graphical window on a true-colour
+terminal; on 256 colours it is approximated, on 8 colours only the basic ones remain.
+
+- **True colour from each window.** Emacs reads `COLORTERM` from the environment the Emacs daemon was started with,
+  not from the terminal you attach from, so a daemon started without it shows 256 colours in every window. drgnx
+  reads the `COLORTERM` your `emacsclient` sends: when it is `truecolor` or `24bit` and your `TERM` has no true
+  colour of its own, drgnx opens that window with the `-direct` entry of the same terminal (`xterm-256color` gives
+  `xterm-direct`, `tmux-256color` gives `tmux-direct`), if the machine running the daemon has that terminfo entry.
+  Windows without `COLORTERM` keep what their `TERM` says, so two windows of one daemon can differ.
+  Terminals whose `TERM` has no `-direct` entry (`screen-256color`, `xterm-kitty`) do not get this; there, start the
+  daemon with `COLORTERM=truecolor` (every window of it then has true colour), or install a terminfo entry with
+  `RGB`, or set `TERM=xterm-direct` where the terminal can take it. The `-direct` entries send colours in the
+  standard colon form; if a terminal draws wrong colours with it, start the daemon with `COLORTERM=truecolor`, which
+  uses the older semicolon form.
+- **Over SSH** a terminal-specific `TERM` without its terminfo entry on the remote machine gives 8 colours. The
+  fixes are in the SSH section above.
+- **Nothing is told by colour alone.** On 8 colours drgnx still tells states apart: git status by its letter at the
+  edge of an Explorer row (`M` changed, `A` added, `U` untracked, `D` deleted, `C` conflict), a review finding by its
+  severity word, the shown tab by its weight or inverse video, and Work items by their glyph and words. Each of
+  these faces is checked on 8, 256 and 24-bit terminals: none draws its text in its own background colour.
+  `drgnx-tty-frames-state-faces` lists them with the cue each relies on.
+
 ## What a terminal window lacks
 
 - **Images:** the commit graph, image previews and other pictures need a graphical window; in a terminal they say so.
