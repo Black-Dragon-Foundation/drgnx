@@ -93,6 +93,26 @@ provider `o' served by a mock answering ANSWER, its LOG."
         (should-not (get-buffer "*AI answer*"))
         (should-not drgnx-ai--active)))))
 
+(ert-deftest drgnx-ai-ask/a-grep-without-gnu-long-options-still-finds-code ()
+  ;; macOS' BSD grep: no ripgrep, and a grep whose --exclude/--exclude-dir do not work like GNU's (here: refused)
+  (drgnx-ai-ask-test--with "ok"
+    (let* ((real (executable-find "grep")) (bin (concat root "bin/")))
+      (make-directory bin t)
+      (write-region (format "#!/bin/sh\nfor a in \"$@\"; do case \"$a\" in --*) echo \"grep: unrecognized option $a\" >&2; exit 2;; esac; done\nexec %s \"$@\"\n" real)
+                    nil (concat bin "grep") nil 'silent)
+      (set-file-modes (concat bin "grep") #o755)
+      (make-directory (concat root "proj/.git") t)
+      (write-region "FROBNICATE_TOKEN=hidden-env-value\n" nil (concat root "proj/.env") nil 'silent)
+      (let ((orig (symbol-function 'executable-find))
+            (exec-path (cons bin exec-path))
+            (process-environment (cons (concat "PATH=" bin ":" (getenv "PATH")) process-environment)))
+        (cl-letf (((symbol-function 'executable-find) (lambda (name &rest r) (and (not (equal name "rg")) (apply orig name r)))))
+          (drgnx-ai-ask "where do we frobnicate?" (concat root "proj/"))))
+      (should (drgnx-ai-ask-test--answer))
+      (let ((sent (with-temp-buffer (insert-file-contents log) (buffer-string))))
+        (should (string-search "(twist widget)" sent))
+        (should-not (string-search "hidden-env-value" sent))))))
+
 (ert-deftest drgnx-ai-ask/hidden-files-never-reach-the-model ()
   ;; .env, .git and other dot files: never searched, with ripgrep or with grep
   (dolist (rg (if (executable-find "rg") '(t nil) '(nil)))

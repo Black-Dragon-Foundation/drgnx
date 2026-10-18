@@ -401,9 +401,11 @@ when the project has one.")
                   (append (list "rg" "--no-heading" "--line-number" "--ignore-case" "--max-count" "5" "--max-columns" "300")
                           (seq-mapcat (lambda (k) (list "-e" k)) kws) (list "."))
                 ;; as ripgrep does: never a dot file or directory (.env, .git, .authinfo) — what is found goes to a
-                ;; model (".?*": the starting "." itself is searched)
-                (append (list "grep" "-rIn" "-i" "-m" "5" "--exclude=.*" "--exclude-dir=.?*")
-                        (seq-mapcat (lambda (k) (list "-e" k)) kws) (list ".")))))
+                ;; model.  find prunes them (".?*": the starting "." itself is searched) and runs grep with options
+                ;; BSD grep (macOS) has too: its --exclude/--exclude-dir are not GNU's
+                (append (list "find" "." "(" "-name" ".?*" "-prune" ")" "-o" "-type" "f" "-exec"
+                              "grep" "-InHi" "-m" "5")
+                        (seq-mapcat (lambda (k) (list "-e" k)) kws) (list "{}" "+")))))
     (if (null kws) (progn (kill-buffer out) (funcall done nil))
       (let ((default-directory (file-name-as-directory root)))
         (make-process
