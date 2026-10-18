@@ -500,4 +500,251 @@ its alternates', `cat-file --batch-all-objects --batch')."
         (should (plist-get (drgnx-job-snapshot-test--wait-for (lambda () r)) :error))
         (should (file-directory-p (concat elsewhere "7-3/.git")))))))
 
+;;;; Inside the sandbox: the checkout, the bundle, the base's refresh
+
+(defun drgnx-job-snapshot-test--await (fn &optional secs)
+  "Call FN with a DONE and wait for it: what DONE got, or `:timeout'."
+  (let ((got :timeout) (deadline (+ (float-time) (or secs 30))))
+    (funcall fn (lambda (r) (setq got r)))
+    (while (and (eq got :timeout) (< (float-time) deadline)) (accept-process-output nil 0.05))
+    got))
+
+(defvar drgnx-job-snapshot-test--sandbox-ok 'unknown)
+
+(defun drgnx-job-snapshot-test--unsandboxed ()
+  "Non-nil where the real sandbox cannot run (a container, no bwrap): the steps then run plainly, as for a job the
+user let run unsandboxed.  Here the steps run inside bwrap."
+  (when (eq drgnx-job-snapshot-test--sandbox-ok 'unknown)
+    (setq drgnx-job-snapshot-test--sandbox-ok (and (plist-get (drgnx-sandbox-check) :ok) t)))
+  (not drgnx-job-snapshot-test--sandbox-ok))
+
+(defun drgnx-job-snapshot-test--task (repo folder)
+  "FOLDER's snapshot of REPO at job/7, checked out at job/7-1 (the agent's part, by the test's git)."
+  (should (memq (car (drgnx-job-snapshot-test--make repo folder "job/7")) '(:mode)))
+  (drgnx-job-snapshot-test--checkout folder "job/7-1" "job/7"))
+
+(defun drgnx-job-snapshot-test--commit (folder n)
+  "N commits in FOLDER on its branch, as the agent makes them."
+  (dotimes (i n)
+    (write-region (format "work %d\n" i) nil (concat folder "WORK") nil 'silent)
+    (drgnx-job-snapshot-test--git folder "add" "WORK")
+    (drgnx-job-snapshot-test--git folder "commit" "-q" "-m" (format "work %d" i))))
+
+(defun drgnx-job-snapshot-test--fetch (repo bundle)
+  (drgnx-job-snapshot-test--await (lambda (d) (drgnx-job-snapshot-fetch repo bundle "job/7-1" "job/7" d))))
+
+(defun drgnx-job-snapshot-test--ref (dir ref)
+  "REF's commit in DIR, or nil."
+  (ignore-errors (drgnx-job-snapshot-test--git dir "rev-parse" "--verify" "-q" ref)))
+
+(ert-deftest drgnx-job-snapshot/checkout-happens-inside ()
+  "The checkout and the bundle are steps of `drgnx-sandbox-run' (stubbed and recorded): the folder writable only for
+the checkout, no home, no network, git's global and system config off, the folder's hooks and fsmonitor off.  No
+sandbox means no step, never a plain run."
+  (drgnx-job-snapshot-test--with
+    (let ((calls nil) (out (concat root "out")))
+      (make-directory out)
+      (should (eq (car (drgnx-job-snapshot-test--make repo folder "job/7")) :mode))
+      (cl-letf (((symbol-function 'drgnx-sandbox-run)
+                 (lambda (spec argv done &optional _) (push (list spec argv) calls) (run-at-time 0 nil done '(0 . "")))))
+        (should (eq (drgnx-job-snapshot-test--await (lambda (d) (drgnx-job-snapshot-checkout folder "job/7-1" "job/7" d))) t))
+        (drgnx-job-snapshot-test--await (lambda (d) (drgnx-job-snapshot-bundle folder "job/7" "job/7-1" out d))))
+      (should (= (length calls) 2))
+      (let* ((dir (directory-file-name folder))
+             (checkout (car (last calls))) (spec (car checkout)) (env (plist-get spec :env)))
+        (should (equal (plist-get spec :write) (list dir)))
+        (should-not (member dir (plist-get spec :read)))
+        (should (equal (plist-get spec :chdir) dir))
+        (should (eq (plist-get spec :net) 'isolated))
+        (should-not (plist-get spec :home))
+        (should (equal (cdr (assoc "HOME" env)) "/nonexistent"))
+        (should (equal (cdr (assoc "GIT_CONFIG_NOSYSTEM" env)) "1"))
+        (should (equal (cdr (assoc "GIT_CONFIG_GLOBAL" env)) "/dev/null"))
+        (should (equal (cadr checkout)
+                       '("git" "-c" "core.hooksPath=/dev/null" "-c" "core.fsmonitor=false" "-c" "core.pager=cat"
+                         "-c" "core.editor=false" "checkout" "-q" "-f" "-B" "job/7-1" "refs/heads/job/7")))
+        ;; the bundle: the folder read-only, only OUT writable
+        (let ((spec (car (car calls))))
+          (should-not (plist-get spec :write))
+          (should (member dir (plist-get spec :read)))
+          (should (equal (plist-get spec :binds) (list (list 'rw (directory-file-name (file-truename out)) "/run/drgnx/out"))))
+          (should (equal (last (cadr (car calls)) 4)
+                         '("create" "-q" "/run/drgnx/out/task.bundle" "refs/heads/job/7..refs/heads/job/7-1")))))
+      ;; fail closed: without a sandbox the step is refused, and nothing is checked out
+      (cl-letf (((symbol-function 'drgnx-sandbox-wrap)
+                 (lambda (&rest _) (signal 'drgnx-sandbox-refused (list "no sandbox on this system")))))
+        (let ((r (drgnx-job-snapshot-test--await (lambda (d) (drgnx-job-snapshot-checkout folder "job/7-1" "job/7" d)))))
+          (should (eq (car-safe r) :error))
+          (should (string-match-p "no sandbox" (cadr r)))))
+      (should-not (file-exists-p (concat folder "README"))))))
+
+(ert-deftest drgnx-job-snapshot/checkout-happens-inside-the-real-sandbox ()
+  "The checkout runs in bwrap: README appears in the folder.  Skipped where the sandbox cannot run."
+  (drgnx-job-snapshot-test--with
+    (when (drgnx-job-snapshot-test--unsandboxed) (ert-skip "the sandbox cannot run here (drgnx-sandbox-check)"))
+    (should (eq (car (drgnx-job-snapshot-test--make repo folder "job/7")) :mode))
+    (should (eq (drgnx-job-snapshot-test--await (lambda (d) (drgnx-job-snapshot-checkout folder "job/7-1" "job/7" d))) t))
+    (should (equal (with-temp-buffer (insert-file-contents (concat folder "README")) (buffer-string)) "two\n"))
+    (should (equal (drgnx-job-snapshot-test--git folder "symbolic-ref" "HEAD") "refs/heads/job/7-1"))))
+
+(ert-deftest drgnx-job-snapshot/bundle-round-trip ()
+  "Two commits made in the task come back as job/7-1 in the main repository, both modes."
+  (drgnx-job-snapshot-test--with
+    (let ((out (concat root "out")) (plain (drgnx-job-snapshot-test--unsandboxed)))
+      (make-directory out)
+      (drgnx-job-snapshot-test--both-modes
+        (should (eq (car (drgnx-job-snapshot-test--make repo folder "job/7")) :mode))
+        (should (eq (drgnx-job-snapshot-test--await
+                     (lambda (d) (drgnx-job-snapshot-checkout folder "job/7-1" "job/7" d plain)))
+                    t))
+        (drgnx-job-snapshot-test--commit folder 2)
+        (let ((r (drgnx-job-snapshot-test--await (lambda (d) (drgnx-job-snapshot-bundle folder "job/7" "job/7-1" out d plain))))
+              (tip (drgnx-job-snapshot-test--ref folder "job/7-1")))
+          (should (equal r (list :bundle (expand-file-name "task.bundle" (file-truename out)))))
+          (should (equal (drgnx-job-snapshot-test--fetch repo (cadr r)) (list :fetched tip)))
+          (should (equal (drgnx-job-snapshot-test--ref repo "refs/heads/job/7-1") tip))
+          (should (equal (drgnx-job-snapshot-test--git repo "log" "--format=%s" "job/7..job/7-1") "work 1\nwork 0")))
+        (drgnx-job-snapshot-test--git repo "branch" "-D" "job/7-1")))))
+
+(ert-deftest drgnx-job-snapshot/empty-bundle-means-no-commits ()
+  (drgnx-job-snapshot-test--with
+    (let ((out (concat root "out")) (plain (drgnx-job-snapshot-test--unsandboxed)))
+      (make-directory out)
+      (drgnx-job-snapshot-test--task repo folder)
+      ;; a stale bundle of an earlier turn never stands for this one
+      (write-region "stale" nil (concat out "/task.bundle") nil 'silent)
+      (should (equal (drgnx-job-snapshot-test--await (lambda (d) (drgnx-job-snapshot-bundle folder "job/7" "job/7-1" out d plain)))
+                     '(:empty)))
+      (should-not (file-exists-p (concat out "/task.bundle"))))))
+
+(ert-deftest drgnx-job-snapshot/bundle-refusals ()
+  "Refused, and the main repository's job/7-1 is as it was: a link for task.bundle, a second ref, a branch that does
+not descend from the base, a malformed object (fsckObjects).  The bundles are made by the test, as an agent would."
+  (drgnx-job-snapshot-test--with
+    (let* ((out (concat root "out/")) (bundle (concat out "task.bundle")) (base (drgnx-job-snapshot-test--ref repo "job/7"))
+           (refused (lambda (why)
+                      (let ((r (drgnx-job-snapshot-test--fetch repo bundle)))
+                        (ert-info ((format "%S" r))
+                          (should (eq (car-safe r) :error))
+                          (should (string-match-p why (cadr r))))))))
+      (make-directory out)
+      (drgnx-job-snapshot-test--task repo folder)
+      (drgnx-job-snapshot-test--commit folder 1)
+      ;; a link to a good bundle
+      (drgnx-job-snapshot-test--git folder "bundle" "create" "-q" (concat root "real.bundle") "refs/heads/job/7..refs/heads/job/7-1")
+      (make-symbolic-link (concat root "real.bundle") bundle)
+      (funcall refused "link or not a regular file")
+      (should-not (drgnx-job-snapshot-test--ref repo "refs/heads/job/7-1"))
+      (delete-file bundle)
+      ;; a second ref: main would be written too
+      (drgnx-job-snapshot-test--git folder "branch" "main" "job/7-1")
+      (drgnx-job-snapshot-test--git folder "bundle" "create" "-q" bundle "^refs/heads/job/7" "refs/heads/job/7-1" "refs/heads/main")
+      (let ((main (drgnx-job-snapshot-test--ref repo "main")))
+        (funcall refused "more than refs/heads/job/7-1")
+        (should (equal (drgnx-job-snapshot-test--ref repo "main") main)))
+      (should-not (drgnx-job-snapshot-test--ref repo "refs/heads/job/7-1"))
+      (delete-file bundle)
+      ;; not descending from the base: the earlier job/7-1 is put back, or none stays when there was none
+      (let ((orphan (drgnx-job-snapshot-test--git folder "commit-tree" "job/7^{tree}" "-m" "orphan")))
+        (drgnx-job-snapshot-test--git folder "update-ref" "refs/heads/job/7-1" orphan)
+        (drgnx-job-snapshot-test--git folder "bundle" "create" "-q" bundle "refs/heads/job/7..refs/heads/job/7-1")
+        (drgnx-job-snapshot-test--git repo "branch" "job/7-1" "job/7")
+        (funcall refused "does not descend from job/7")
+        (should (equal (drgnx-job-snapshot-test--ref repo "refs/heads/job/7-1") base))
+        (drgnx-job-snapshot-test--git repo "branch" "-D" "job/7-1")
+        (funcall refused "does not descend from job/7")
+        (should-not (drgnx-job-snapshot-test--ref repo "refs/heads/job/7-1")))
+      (delete-file bundle)
+      ;; a malformed commit (a bad date): fsckObjects refuses it, even where the user's config turns fetch's fsck off
+      (let* ((tree (drgnx-job-snapshot-test--git folder "rev-parse" "job/7^{tree}"))
+             (bad (with-temp-buffer
+                    (insert (format "tree %s\nparent %s\nauthor bad <x> notanumber +0000\ncommitter t <t@t> 1 +0000\n\nbad\n" tree base))
+                    (let ((default-directory folder))
+                      (call-process-region (point-min) (point-max) "git" t t nil "hash-object" "-t" "commit" "--literally" "-w" "--stdin"))
+                    (string-trim (buffer-string)))))
+        (drgnx-job-snapshot-test--git folder "update-ref" "refs/heads/job/7-1" bad)
+        (drgnx-job-snapshot-test--git folder "bundle" "create" "-q" bundle "refs/heads/job/7..refs/heads/job/7-1")
+        (drgnx-job-snapshot-test--git repo "config" "fetch.fsckObjects" "false")
+        (funcall refused "fsck\\|bad date")
+        (should-not (drgnx-job-snapshot-test--ref repo "refs/heads/job/7-1"))))))
+
+(ert-deftest drgnx-job-snapshot/fetch-runs-no-agent-hooks-or-config ()
+  "The folder's core.fsmonitor and its hooks (post-merge, reference-transaction) would touch a canary: neither the
+bundle step nor the fetch outside ever runs them.  Last, the test's own git in the folder shows the plant works."
+  (drgnx-job-snapshot-test--with
+    (let* ((out (concat root "out")) (canary (concat root "canary")) (plain (drgnx-job-snapshot-test--unsandboxed))
+           (touch (format "#!/bin/sh\ntouch %s\n" (shell-quote-argument canary))))
+      (make-directory out)
+      (drgnx-job-snapshot-test--task repo folder)
+      (drgnx-job-snapshot-test--commit folder 1)
+      (make-directory (concat folder ".git/hooks") t)
+      (dolist (hook '("post-merge" "reference-transaction" "post-checkout" "pre-auto-gc"))
+        (let ((file (concat folder ".git/hooks/" hook)))
+          (write-region touch nil file nil 'silent)
+          (set-file-modes file #o755)))
+      (write-region touch nil (concat root "fsmonitor") nil 'silent)
+      (set-file-modes (concat root "fsmonitor") #o755)
+      (drgnx-job-snapshot-test--git folder "config" "--file" ".git/config" "core.fsmonitor" (concat root "fsmonitor"))
+      (let ((r (drgnx-job-snapshot-test--await (lambda (d) (drgnx-job-snapshot-bundle folder "job/7" "job/7-1" out d plain)))))
+        (should (eq (car r) :bundle))
+        (should (eq (car (drgnx-job-snapshot-test--fetch repo (cadr r))) :fetched)))
+      (should-not (file-exists-p canary))
+      ;; the plant is real: git run plainly in the folder runs it
+      (drgnx-job-snapshot-test--git folder "status" "--short")
+      (should (file-exists-p canary)))))
+
+(ert-deftest drgnx-job-snapshot/reviewer-snapshot-has-no-agent-config ()
+  "The reviewer's folder comes from a store of job/7-1 made from the main repository after the fetch: the
+implementer's config, hooks and secrets never reach it; job/7-1 is checked out."
+  (drgnx-job-snapshot-test--with
+    (let ((out (concat root "out")) (review (concat repo ".claude/worktrees/7-1-review/"))
+          (plain (drgnx-job-snapshot-test--unsandboxed)))
+      (make-directory out)
+      (drgnx-job-snapshot-test--task repo folder)
+      (drgnx-job-snapshot-test--commit folder 1)
+      (make-directory (concat folder ".git/hooks") t)
+      (write-region "#!/bin/sh\necho HOOK-CANARY\n" nil (concat folder ".git/hooks/post-checkout") nil 'silent)
+      (drgnx-job-snapshot-test--git folder "config" "--file" ".git/config" "core.fsmonitor" "/bin/false")
+      (drgnx-job-snapshot-test--git folder "config" "--file" ".git/config" "agent.token" "SECRET-CANARY")
+      (let ((r (drgnx-job-snapshot-test--await (lambda (d) (drgnx-job-snapshot-bundle folder "job/7" "job/7-1" out d plain)))))
+        (should (eq (car (drgnx-job-snapshot-test--fetch repo (cadr r))) :fetched)))
+      (let ((r (drgnx-job-snapshot-test--await (lambda (d) (drgnx-job-snapshot-review-folder repo "job/7-1" review d plain)))))
+        (should (eq (car r) :mode)))
+      (should (file-directory-p (concat repo ".claude/worktrees/job~7-1.base.git")))
+      (should (equal (drgnx-job-snapshot-test--git review "symbolic-ref" "HEAD") "refs/heads/job/7-1"))
+      (should (equal (with-temp-buffer (insert-file-contents (concat review "WORK")) (buffer-string)) "work 0\n"))
+      (let ((config (drgnx-job-snapshot-test--config review)) (seen (drgnx-job-snapshot-test--seen review)))
+        (should-not (string-match-p "fsmonitor\\|agent\\.token" config))
+        (should-not (string-match-p "SECRET-CANARY\\|HOOK-CANARY" seen))))))
+
+(ert-deftest drgnx-job-snapshot/refresh-base-fetches-inside ()
+  "A merge-conflict retry: the new job/7 is bundled from the main repository and fetched by a step inside the
+sandbox (stubbed: it records the spec, then runs the git plainly), the bundle's directory read-only, then removed."
+  (drgnx-job-snapshot-test--with
+    (let ((calls nil))
+      (drgnx-job-snapshot-test--task repo folder)
+      (write-region "three\n" nil (concat repo "README") nil 'silent)
+      (drgnx-job-snapshot-test--git repo "commit" "-q" "-am" "three")
+      (drgnx-job-snapshot-test--git repo "branch" "-f" "job/7" "main")
+      (cl-letf (((symbol-function 'drgnx-sandbox-run)
+                 (lambda (spec argv done &optional _)
+                   (push (list spec argv (file-exists-p (car (last argv 2)))) calls)
+                   (let ((r (with-temp-buffer
+                              (let ((default-directory (file-name-as-directory (plist-get spec :chdir))))
+                                (cons (apply #'call-process (car argv) nil t nil (cdr argv)) (buffer-string))))))
+                     (run-at-time 0 nil done r)))))
+        (should (eq (drgnx-job-snapshot-test--await (lambda (d) (drgnx-job-snapshot-refresh-base repo folder "job/7" d))) t)))
+      (should (= (length calls) 1))
+      (pcase-let ((`(,spec ,argv ,there) (car calls)))
+        (should there)
+        (should (equal (plist-get spec :write) (list (directory-file-name folder))))
+        (should (member (directory-file-name (file-name-directory (car (last argv 2)))) (plist-get spec :read)))
+        (should (eq (plist-get spec :net) 'isolated))
+        (should (equal (last argv 6) (list "fetch" "-q" "--no-tags" "--no-write-fetch-head" (car (last argv 2))
+                                           "+refs/heads/job/7:refs/heads/job/7"))))
+      (should (equal (drgnx-job-snapshot-test--ref folder "job/7") (drgnx-job-snapshot-test--ref repo "job/7")))
+      ;; the bundle's directory goes
+      (should (drgnx-job-snapshot-test--wait-for
+               (lambda () (null (directory-files (concat repo ".claude/worktrees/") nil "\\`\\.drgnx-base-"))))))))
+
 ;;; job-snapshot-test.el ends here

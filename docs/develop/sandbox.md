@@ -666,26 +666,100 @@ Nothing else is carried:
 
 The clone's local upload-pack reads the user's own repository config, which is trusted.
 
-**Inside the sandbox**, git runs what the task's config and checkout name:
-- checkout runs `filter.lfs.*` and the hooks under a relative `core.hooksPath` (`post-checkout`);
-- `bundle create` runs none.
-
-drgnx's own sandboxed steps should still pass `-c core.hooksPath=/dev/null -c core.fsmonitor=false -c core.pager=cat
--c core.editor=false`, with `GIT_CONFIG_GLOBAL=/dev/null` and `GIT_CONFIG_NOSYSTEM=1`. Then an agent's config only
-ever runs with the agent's own power.
+**Inside the sandbox**, the agent's own git runs what the task's config and checkout name: `filter.lfs.*`, and the
+hooks under a relative `core.hooksPath`. drgnx's own steps there (below) run none of them.
 
 After DONE, nothing outside the sandbox runs git in the folder again (the VC guard enforces it).
 
 **Limits:**
-- **Git LFS repositories do not check out yet.** LFS content (`.git/lfs/objects`) is not in the store.
-  - The task's config has the LFS filter (with `filter.lfs.required`) but no remote and no `lfs.url`, so
-    `git-lfs smudge` has no endpoint even with network. The checkout likely aborts.
-  - A checkout with `GIT_LFS_SKIP_SMUDGE=1` would leave pointer files instead.
+- **Git LFS: a task gets pointer files.** LFS content (`.git/lfs/objects`) is not in the store, and the task's
+  config has the LFS filter but no remote and no `lfs.url`, so `git-lfs smudge` would have no endpoint even with
+  network. drgnx's steps therefore run with `GIT_LFS_SKIP_SMUDGE=1`: LFS files are left as their pointers. With
+  `git-lfs` inside (a system path), an agent that leaves a pointer unchanged commits it as it was (the clean filter
+  passes a pointer through), so the work comes back intact; an agent that needs the content cannot have it yet.
+  Without `git-lfs` inside, `filter.lfs.required` makes the checkout fail, as it would for the user.
 - Submodules' git directories are not copied. A task gets empty submodule directories.
 - On macOS, `cp -c` may fall back to a full copy without failing on a filesystem without clonefile. The probe then
   answers yes. For a store this costs little (it holds BASE alone).
 - The store's time and disk grow with BASE's reachable history. A very large repository pays seconds once per job,
   not per task.
+
+### Inside, and back out: the checkout and the bundle
+
+Once the folder's `.git` is the agent's, the hub's git steps on it run **inside the sandbox**, as short steps of
+`drgnx-sandbox-run` (so under the memory cap). Their spec is `(drgnx-job-snapshot-step-spec FOLDER &key writable out
+read)`:
+- the system's reads, FOLDER read-only, or read-write when WRITABLE;
+- OUT, when given, read-write at `/run/drgnx/out` (at its own path on macOS, which has no mounts);
+- READ read-only: the objects of the job's store, which a shared clone borrows. The hub derives them from the
+  folder's name and the base (`drgnx-job-snapshot-read-dirs`), never from the folder's alternates file;
+- no home, `:net isolated`, and only this environment: `PATH=/usr/local/bin:/usr/bin:/bin`, `HOME=/nonexistent`,
+  `GIT_CONFIG_NOSYSTEM=1`, `GIT_CONFIG_GLOBAL=/dev/null`, `GIT_TERMINAL_PROMPT=0`, `GIT_ALLOW_PROTOCOL=file`,
+  `GIT_LFS_SKIP_SMUDGE=1`, `LC_ALL=C`.
+
+Every step's git gets `-c core.hooksPath=/dev/null -c core.fsmonitor=false -c core.pager=cat -c core.editor=false`.
+The folder's config is the agent's: even inside, drgnx's steps run none of its programs, so an agent's config only
+ever runs with the agent's own power, in the agent's own git.
+
+Without a sandbox a step does not run: it ends with `(:error "… no sandbox …")`, never as a plain process. Only a job
+the user let run unsandboxed passes UNSANDBOXED, and its steps then run plainly with the same overrides and
+environment (but the hub's `PATH`).
+
+| Function | What it runs | DONE gets |
+|---|---|---|
+| `drgnx-job-snapshot-checkout FOLDER BRANCH BASE DONE &optional UNSANDBOXED` | inside, FOLDER writable: `git checkout -q -f -B BRANCH refs/heads/BASE` | `t`, `(:error MSG)` |
+| `drgnx-job-snapshot-bundle FOLDER BASE BRANCH OUT DONE &optional UNSANDBOXED` | inside, FOLDER read-only, only OUT writable: `git bundle create -q /run/drgnx/out/task.bundle refs/heads/BASE..refs/heads/BRANCH` | `(:bundle FILE)`, `(:empty)` (no commits), `(:error MSG)` |
+| `drgnx-job-snapshot-fetch REPO BUNDLE BRANCH BASE DONE` | outside, in the trusted REPO only (below) | `(:fetched COMMIT)`, `(:error MSG)` |
+| `drgnx-job-snapshot-review-folder REPO BRANCH FOLDER DONE &optional UNSANDBOXED JOB` | a fresh snapshot of BRANCH, then the checkout inside | `drgnx-job-snapshot-make`'s result, `(:error MSG)` |
+| `drgnx-job-snapshot-refresh-base REPO FOLDER BASE DONE &optional UNSANDBOXED` | a bundle of BASE from REPO, fetched inside, FOLDER writable | `t`, `(:error MSG)` |
+
+**OUT** is a directory the hub made, where no agent writes: never inside a session's directory (`s/SID/out` is
+refused as a bind source, since a live agent could swap it for a link), but for example inside the job's own
+directory under the state directory. An earlier `task.bundle` there is removed (a link is removed, never followed)
+before each bundle step.
+
+**The bundle is data.** A bundle is a pack and a list of refs. Reading one runs nothing of the agent's: no config, no
+hooks. `drgnx-job-snapshot-fetch` treats it as hostile input and refuses, with the reason:
+1. a BUNDLE that is not there, is a link, or is not a regular file (a FIFO would hang git);
+2. heads (`git bundle list-heads`) that are anything but one line, `HEX refs/heads/BRANCH`: a second ref (an agent's
+   `refs/heads/main`) would otherwise be written into the user's repository;
+3. a bundle `git bundle verify` rejects (a prerequisite the repository does not have);
+4. an object `fsckObjects` rejects: the fetch runs with `-c transfer.fsckObjects=true -c fetch.fsckObjects=true`
+   (the user's own `fetch.fsckObjects=false` would otherwise win);
+5. a BRANCH that does not descend from REPO's BASE (`merge-base --is-ancestor`): its earlier value is put back
+   (`update-ref`), or it is deleted when it was new.
+
+The fetch itself is `git -C REPO fetch -q --no-tags --no-write-fetch-head --no-recurse-submodules BUNDLE
++refs/heads/BRANCH:refs/heads/BRANCH`, with the hub's overrides. `refs/heads/job/ID-N` in the main repository is
+written only by the hub, and the reviewer, the clash scan and the merge read it there.
+
+**The reviewer** gets a fresh snapshot (`drgnx-job-snapshot-review-folder`): a store of `job/ID-N` made from the main
+repository after the fetch (`job~ID-N.base.git`), a copy of it, and `job/ID-N` checked out inside. It holds only what
+passed through the bundle, objects and one ref: none of the implementer's config or hooks, so an implementer's
+`core.fsmonitor` can never run in the reviewer's sandbox.
+
+**A merge-conflict retry** (`drgnx-job-snapshot-refresh-base`) gets the new `job/ID` the same way. The hub bundles
+`refs/heads/job/ID` from the main repository into a private directory of its own,
+`<repo>/.claude/worktrees/.drgnx-base-XXXX/`, and a step inside the sandbox fetches it into the folder's repository
+(the directory read-only). The directory is removed afterwards. The bundle holds all of `job/ID`'s history: the same
+objects as the job's store.
+
+**Cost** (drgnx's own repository cloned on tmpfs, real bwrap and the memory cap's scope, load about 3; three runs
+each):
+
+| Commits | Create inside | Verify and fetch outside | Total |
+|---|---|---|---|
+| 1 | 38–43 ms | 22–27 ms | 60–66 ms |
+| 5 | 33–44 ms | 24–34 ms | 57–78 ms |
+| 50 | 44–49 ms | 33–34 ms | 76–82 ms |
+
+Most of the step inside is the sandbox's start (the scope and bwrap, about 30 ms), not git.
+
+**Limits:**
+- macOS: a step needs the session's `:profile-file` for its Seatbelt profile, which the step spec does not give
+  yet. On macOS the steps are refused until the job's session supplies one.
+- Between the hub's check of `task.bundle` and git opening it, only something that can write OUT could swap it.
+  No sandbox has OUT once the bundle step has ended.
 
 ### Bounded
 
