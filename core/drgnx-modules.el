@@ -8,7 +8,7 @@
 ;; `first-input' — under its own error guard, timed.  It may require other modules, need packages
 ;; (it waits, reported, until they are installed: Emacs never installs anything by itself), have
 ;; flags, doctor checks and settings.  The user's choices live in modules.eld in the user dir
-;; (`drgnx-user-dir'): disabled modules, flags, external modules; older formats are migrated, an
+;; (`drgnx-user-dir'): disabled modules, enabled ones (those that are off until chosen), flags, external modules; older formats are migrated, an
 ;; unreadable file is reported and ignored.  Preferences: Modules lists every module with its
 ;; status and turns modules on and off.  See docs/guide/modules.md.
 
@@ -26,13 +26,16 @@
 (defconst drgnx-modules-stages '(startup idle first-frame first-file first-input))
 (defconst drgnx-modules-state-version 1 "Format of modules.eld.")
 
-(cl-defun drgnx-module-define (name &key doc stage setup requires packages flags doctor settings)
+(cl-defun drgnx-module-define (name &key doc stage setup requires packages flags doctor settings (default 'on))
   "Define module NAME (a symbol like lang/python).
 DOC: one line.  STAGE: one of `drgnx-modules-stages' (default startup).  SETUP: a function.
 REQUIRES: modules that must have run.  PACKAGES: features that must be loadable (else the module
 waits, reported as missing-packages).  FLAGS: the flags it understands (`drgnx-module-flag-p').
-DOCTOR: a function returning problem strings.  SETTINGS: alist VARIABLE → doc."
-  (let ((entry (list :doc doc :stage (or stage 'startup) :setup setup :requires requires :packages packages
+DOCTOR: a function returning problem strings.  SETTINGS: alist VARIABLE → doc.  DEFAULT: `on' (the
+module runs unless the user turned it off) or `off' (it stays off, with its packages, until chosen:
+modules.eld :enabled, `drgnx-modules-set-enabled')."
+  (unless (memq default '(on off)) (error "drgnx-module-define %s: :default must be on or off, not %S" name default))
+  (let ((entry (list :default default :doc doc :stage (or stage 'startup) :setup setup :requires requires :packages packages
                      :flags flags :doctor doctor :settings settings :file load-file-name)))
     (if (assq name drgnx-modules--table)
         (setf (alist-get name drgnx-modules--table) entry)
@@ -56,9 +59,12 @@ backed up before drgnx writes it.")
 malformed external entry is kept (written back unchanged) and listed as failed."
   (let ((out (list :version drgnx-modules-state-version))
         (d (plist-get state :disabled)) (f (plist-get state :flags)) (x (plist-get state :external))
-        (theme (plist-get state :theme)))
+        (e (plist-get state :enabled)) (theme (plist-get state :theme)))
     (if (and (listp d) (seq-every-p #'symbolp d)) (setq out (plist-put out :disabled d))
       (message "drgnx: modules.eld :disabled must be a list of modules; ignored"))
+    (when (plist-member state :enabled)               ; absent stays absent
+      (if (and (listp e) (seq-every-p #'symbolp e)) (setq out (plist-put out :enabled e))
+        (message "drgnx: modules.eld :enabled must be a list of modules; ignored")))
     (if (and (listp f) (seq-every-p (lambda (e) (and (consp e) (symbolp (car e)) (listp (cdr e)))) f))
         (setq out (plist-put out :flags f))
       (message "drgnx: modules.eld :flags must be ((MODULE FLAG …) …); ignored"))
@@ -105,7 +111,7 @@ malformed external entry is kept (written back unchanged) and listed as failed."
         (message "drgnx: kept your previous modules.eld as %s" bak))
       (setq drgnx-modules--state-foreign nil))
     (with-temp-file file
-      (insert ";; drgnx modules: what you turned off, module flags, external modules (docs/guide/modules.md).\n")
+      (insert ";; drgnx modules: what you turned off or on, module flags, external modules (docs/guide/modules.md).\n")
       (let ((print-length nil) (print-level nil)) (pp (plist-put state :version drgnx-modules-state-version) (current-buffer))))
     (setq drgnx-modules--state nil)
     state))
@@ -114,7 +120,29 @@ malformed external entry is kept (written back unchanged) and listed as failed."
   "Non-nil if the user turned FLAG on for MODULE."
   (memq flag (alist-get module (plist-get (drgnx-modules-read-state) :flags))))
 
-(defun drgnx-module-disabled-p (module) (memq module (plist-get (drgnx-modules-read-state) :disabled)))
+(defun drgnx-module-default-off-p (module)
+  "Non-nil if MODULE is defined `:default off': off until the user (or a key profile) chooses it."
+  (eq (plist-get (alist-get module drgnx-modules--table) :default) 'off))
+
+(defun drgnx-module-disabled-p (module &optional default)
+  "Non-nil if MODULE does not run: in modules.eld :disabled, or its default (DEFAULT when given, else
+the one it was defined with) is `off' and it is not in :enabled.  :disabled wins."
+  (let ((state (drgnx-modules-read-state)))
+    (or (memq module (plist-get state :disabled))
+        (and (eq (or default (if (drgnx-module-default-off-p module) 'off 'on)) 'off)
+             (not (memq module (plist-get state :enabled)))))))
+
+(defun drgnx-modules-set-enabled (module on)
+  "Choose MODULE on (ON non-nil: in :enabled, out of :disabled) or off (out of :enabled; a module that
+is on by default goes into :disabled) in modules.eld.  Returns the new state."
+  (let* ((state (copy-sequence (drgnx-modules-read-state)))
+         (enabled (remq module (plist-get state :enabled)))
+         (disabled (remq module (plist-get state :disabled))))
+    (cond (on (setq enabled (append enabled (list module))))
+          ((not (drgnx-module-default-off-p module)) (setq disabled (append disabled (list module)))))
+    (when (or enabled (plist-member state :enabled)) (setq state (plist-put state :enabled enabled)))
+    (drgnx-modules-write-state (plist-put state :disabled disabled))
+    (drgnx-modules-read-state)))
 
 ;;;; Running
 
@@ -278,7 +306,7 @@ never stops Emacs — nothing is installed (the module waits for the package, as
         `[("Module" 26 t) ("Status" 18 t)
           ("Stage" 12 ,(drgnx-modules--sort-by 2 (lambda (s) (or (seq-position drgnx-modules-stages (intern s)) 99))))
           ("ms" 5 ,(drgnx-modules--sort-by 3 (lambda (s) (if (string-empty-p s) -1 (string-to-number s)))))
-          ("Next start" 18 t) ("About" 0 nil)]
+          ("Next start" 32 t) ("About" 0 nil)]
         tabulated-list-padding 1)
   (tabulated-list-init-header))
 
@@ -305,7 +333,11 @@ never stops Emacs — nothing is installed (the module waits for the package, as
                                         ('nil "not run yet") (_ (symbol-name st)))
                                  (symbol-name (or (plist-get (cdr m) :stage) (plist-get r :stage) 'load))
                                  (format "%s" (or (plist-get r :ms) ""))
-                                 (if (drgnx-module-disabled-p name) "off at next start" "on")
+                                 (cond ((not (drgnx-module-disabled-p name)) "on")
+                                       ((and (drgnx-module-default-off-p name)
+                                             (not (memq name (plist-get (drgnx-modules-read-state) :disabled))))
+                                        "off (chosen by the key profile)")
+                                       (t "off at next start"))
                                  (or (plist-get (cdr m) :doc)
                                      (if (string-prefix-p "external/" (symbol-name name)) (drgnx-modules--external-about name) ""))))))
           ;; The table, and what only the report knows: external modules, files that failed to load.
@@ -324,10 +356,12 @@ never stops Emacs — nothing is installed (the module waits for the package, as
     b))
 
 (defun drgnx-modules-toggle (module)
-  "Turn MODULE off at the next start, or back on."
-  (let* ((state (copy-sequence (drgnx-modules-read-state))) (off (plist-get state :disabled)))
-    (drgnx-modules-write-state (plist-put state :disabled (if (memq module off) (remq module off) (append off (list module)))))
-    (when-let* ((b (get-buffer "*drgnx modules*"))) (with-current-buffer b (tabulated-list-print t)))))
+  "Turn MODULE off at the next start, or back on (a module that is off until chosen: in or out of :enabled)."
+  (if (drgnx-module-default-off-p module)
+      (drgnx-modules-set-enabled module (and (drgnx-module-disabled-p module) t))
+    (let* ((state (copy-sequence (drgnx-modules-read-state))) (off (plist-get state :disabled)))
+      (drgnx-modules-write-state (plist-put state :disabled (if (memq module off) (remq module off) (append off (list module)))))))
+  (when-let* ((b (get-buffer "*drgnx modules*"))) (with-current-buffer b (tabulated-list-print t))))
 
 (defun drgnx-modules-list-toggle ()
   "Turn the module on this row off at the next start, or back on."

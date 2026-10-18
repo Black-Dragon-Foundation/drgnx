@@ -35,13 +35,26 @@ Your choices live in `~/.config/drgnx/modules.eld` (`$DRGNX_CONFIG_DIR`):
 ```elisp
 (:version 1
  :disabled (ui/zen lang/python)          ; modules that do not run
+ :enabled (editor/evil)                  ; modules that are off until chosen, and were (below)
  :flags ((ui/popups +childframe)))       ; module flags
 ```
 
-`:theme` is the colour theme Color Theme picked (ui/look writes it). An older format is migrated when it is read; a
+`:enabled` is absent until a module that is off until chosen is turned on, and is kept as it is when drgnx writes
+the file (a bootstrap or onboarding that writes modules.eld keeps it too). `:theme` is the colour theme Color Theme picked (ui/look writes it). An older format is migrated when it is read; a
 field that is not what drgnx expects (a typo) is dropped with a message in `*Messages*`; an unreadable file, or one
 from a newer drgnx, is reported and ignored (modules use their defaults) — never an error at start — and before drgnx
 next writes the file it keeps yours as `modules.eld.bak-<time>`.
+
+## Modules that are off until chosen
+
+A module defined with `:default 'off` does not run, and its `:packages` are neither synced nor loaded, until it is in
+`:enabled`; nothing installs or loads for it before that. The Vim key stack (the evil module) is the first. Who turns
+such a module on: the key profile that needs it (choosing a Vim key stack in onboarding or Preferences), or you —
+Preferences: Modules says `off (chosen by the key profile)` in its Next start column and `RET` on the row adds it to
+`:enabled` (and again, removes it). `:disabled` always wins: a module in both lists stays off. A module that is on by
+default is turned off through `:disabled` as before. `drgnx bisect` leaves an off-until-chosen module out unless it is
+enabled, and the shipped lock still pins its packages so that choosing it later installs verified versions. From Lisp:
+`(drgnx-module-default-off-p MODULE)`, `(drgnx-module-disabled-p MODULE)` and `(drgnx-modules-set-enabled MODULE ON)`.
 
 ## Your own code: config.el
 
@@ -82,6 +95,7 @@ never replaces drgnx's: it is registered as `gryphn/<id>`, its key bound where t
   :requires '(core/workbench)            ; modules that must have run (in the same stage: they run first)
   :packages '(example-mode)              ; features that must be loadable
   :flags '(+fancy)                       ; (drgnx-module-flag-p 'tools/example '+fancy)
+  :default 'on                           ; or 'off: off until chosen (below); `on' when left out
   :doctor (lambda () (unless (executable-find "example") '("the example program is not installed")))
   :settings '((example-width . "Width of the example pane"))
   :setup

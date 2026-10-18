@@ -1,0 +1,169 @@
+;;; modules-default-off-test.el --- batch tests: modules that are off until chosen -*- lexical-binding: t -*-
+;; Everything in temp dirs: a temp configuration and state dir, a temp modules dir; never the user's.
+(require 'ert)
+(require 'drgnx-paths)
+(require 'drgnx-modules)
+(require 'drgnx-pkg)
+
+(defvar drgnx-modules-default-off-test--ran nil "Modules whose setup ran.")
+
+(defmacro drgnx-modules-default-off-test--with (root &rest body)
+  "BODY with ROOT a temp dir holding config/, state/ and mods/ (two module files: test/off, test/on)."
+  (declare (indent 1))
+  `(let* ((,root (file-name-as-directory (make-temp-file "drgnx-default-off" t)))
+          (process-environment (append (list (concat "DRGNX_CONFIG_DIR=" ,root "config")
+                                             (concat "DRGNX_DATA_DIR=" ,root "data")
+                                             (concat "XDG_STATE_HOME=" ,root "state"))
+                                       process-environment))
+          (drgnx-modules--table nil) (drgnx-modules--report nil) (drgnx-modules--state nil)
+          (drgnx-modules-default-off-test--ran nil))
+     (make-directory (concat ,root "config") t)
+     (make-directory (concat ,root "mods/test") t)
+     (write-region "(drgnx-module-define 'test/off :default 'off :packages '(pkg-off) :setup #'ignore)\n"
+                   nil (concat ,root "mods/test/drgnx-off.el") nil 'silent)
+     (write-region "(drgnx-module-define 'test/on :packages '(pkg-on) :setup #'ignore)\n"
+                   nil (concat ,root "mods/test/drgnx-on.el") nil 'silent)
+     (unwind-protect (progn ,@body)
+       (delete-directory ,root t))))
+
+(defun drgnx-modules-default-off-test--define ()
+  "Define test/off (default off) and test/on, whose setups are recorded, in the table."
+  (drgnx-module-define 'test/off :default 'off
+                       :setup (lambda () (push 'test/off drgnx-modules-default-off-test--ran)))
+  (drgnx-module-define 'test/on
+                       :setup (lambda () (push 'test/on drgnx-modules-default-off-test--ran))))
+
+(defun drgnx-modules-default-off-test--status (name)
+  (plist-get (alist-get name (drgnx-modules-report)) :status))
+
+(ert-deftest drgnx-modules-default-off/manifest-skips-it-until-enabled ()
+  (drgnx-modules-default-off-test--with root
+    (let ((dir (concat root "mods")))
+      (drgnx-modules-load-directory dir)
+      (should (eq (plist-get (alist-get 'test/off drgnx-modules--table) :default) 'off))
+      (should (eq (plist-get (alist-get 'test/on drgnx-modules--table) :default) 'on))
+      (should (equal (drgnx-pkg-manifest dir) '(pkg-on)))
+      (drgnx-modules-set-enabled 'test/off t)
+      (should (equal (drgnx-pkg-manifest dir) '(pkg-off pkg-on)))
+      (drgnx-modules-set-enabled 'test/off nil)
+      (should (equal (drgnx-pkg-manifest dir) '(pkg-on))))))
+
+(ert-deftest drgnx-modules-default-off/specs-are-read-never-run ()
+  (drgnx-modules-default-off-test--with root
+    (should (equal (drgnx-pkg--module-specs (concat root "mods"))
+                   '((test/off :packages (pkg-off) :default off) (test/on :packages (pkg-on) :default on))))
+    (should (equal (drgnx-pkg--module-packages (concat root "mods"))
+                   '((test/off pkg-off) (test/on pkg-on))))
+    (should-not drgnx-modules--table)))
+
+(ert-deftest drgnx-modules-default-off/it-does-not-run-until-enabled ()
+  (drgnx-modules-default-off-test--with root
+    (drgnx-modules-default-off-test--define)
+    (should (drgnx-module-default-off-p 'test/off))
+    (should-not (drgnx-module-default-off-p 'test/on))
+    (should-not (drgnx-module-default-off-p 'test/unknown))
+    (drgnx-modules-run 'startup)
+    (should (eq (drgnx-modules-default-off-test--status 'test/off) 'disabled))
+    (should (eq (drgnx-modules-default-off-test--status 'test/on) 'ok))
+    (drgnx-modules-set-enabled 'test/off t)
+    (setq drgnx-modules--report nil)
+    (drgnx-modules-run 'startup)
+    (should (eq (drgnx-modules-default-off-test--status 'test/off) 'ok))))
+
+(ert-deftest drgnx-modules-default-off/disabled-wins-over-enabled ()
+  (drgnx-modules-default-off-test--with root
+    (drgnx-modules-default-off-test--define)
+    (drgnx-modules-write-state '(:version 1 :disabled (test/off) :enabled (test/off)))
+    (should (drgnx-module-disabled-p 'test/off))
+    (drgnx-modules-run 'startup)
+    (should (eq (drgnx-modules-default-off-test--status 'test/off) 'disabled))
+    (should (equal (drgnx-pkg-manifest (concat root "mods")) '(pkg-on)))))
+
+(ert-deftest drgnx-modules-default-off/an-explicit-default-argument-wins ()
+  (drgnx-modules-default-off-test--with root
+    (should-not (drgnx-module-disabled-p 'test/x))
+    (should (drgnx-module-disabled-p 'test/x 'off))
+    (should-not (drgnx-module-disabled-p 'test/x 'on))
+    (drgnx-modules-write-state '(:version 1 :enabled (test/x)))
+    (should-not (drgnx-module-disabled-p 'test/x 'off))))
+
+(ert-deftest drgnx-modules-default-off/modules-list-says-off-until-chosen ()
+  (drgnx-modules-default-off-test--with root
+    (drgnx-modules-default-off-test--define)
+    (cl-flet ((next-start (name) (aref (cadr (assq name (drgnx-modules--entries))) 4)))
+      (should (equal (next-start 'test/off) "off (chosen by the key profile)"))
+      (should (equal (next-start 'test/on) "on"))
+      (drgnx-modules-toggle 'test/off)                       ; flips :enabled, not :disabled
+      (should (memq 'test/off (plist-get (drgnx-modules-read-state) :enabled)))
+      (should-not (plist-get (drgnx-modules-read-state) :disabled))
+      (should (equal (next-start 'test/off) "on"))
+      (drgnx-modules-toggle 'test/off)
+      (should-not (plist-get (drgnx-modules-read-state) :enabled))
+      (should-not (plist-get (drgnx-modules-read-state) :disabled))
+      (should (equal (next-start 'test/off) "off (chosen by the key profile)"))
+      ;; a default-on module still toggles :disabled
+      (drgnx-modules-toggle 'test/on)
+      (should (memq 'test/on (plist-get (drgnx-modules-read-state) :disabled)))
+      (should (equal (next-start 'test/on) "off at next start")))))
+
+(ert-deftest drgnx-modules-default-off/set-enabled-returns-the-state ()
+  (drgnx-modules-default-off-test--with root
+    (drgnx-modules-default-off-test--define)
+    (drgnx-modules-write-state '(:version 1 :disabled (test/off test/on)))
+    (let ((s (drgnx-modules-set-enabled 'test/off t)))
+      (should (equal (plist-get s :enabled) '(test/off)))
+      (should (equal (plist-get s :disabled) '(test/on))))   ; removed from :disabled, the other kept
+    ;; a default-on module: nil adds it to :disabled
+    (let ((s (drgnx-modules-set-enabled 'test/on nil)))
+      (should (memq 'test/on (plist-get s :disabled)))
+      (should (equal (plist-get s :enabled) '(test/off))))
+    (should (drgnx-module-disabled-p 'test/on))))
+
+(ert-deftest drgnx-modules-default-off/ship-lock-still-wants-it ()
+  (drgnx-modules-default-off-test--with root
+    (write-region (prin1-to-string '(:version 1 :packages ((pkg-on :version "1.0"))))
+                  nil (concat root "config/drgnx.lock.eld") nil 'silent)
+    (let ((err (should-error (drgnx-pkg-ship-lock (concat root "mods")) :type 'drgnx-pkg-error)))
+      (should (string-match-p "\\bpkg-off\\b" (cadr err))))))
+
+;; With FAILS always true bisect tries every candidate on, then every candidate off, and stops: the
+;; second try's :disabled list is the candidates.
+(defun drgnx-modules-default-off-test--bisect-candidates (root)
+  (let (seen)
+    (drgnx-pkg-bisect (lambda (cfg)
+                        (push (plist-get (with-temp-buffer
+                                           (insert-file-contents (expand-file-name "modules.eld" cfg))
+                                           (read (current-buffer)))
+                                         :disabled)
+                              seen)
+                        t)
+                      :modules-dir (concat root "mods"))
+    (sort (copy-sequence (car seen)) #'string<)))
+
+(ert-deftest drgnx-modules-default-off/bisect-leaves-it-out ()
+  (drgnx-modules-default-off-test--with root
+    (should (equal (drgnx-modules-default-off-test--bisect-candidates root) '(test/on)))
+    (drgnx-modules-set-enabled 'test/off t)
+    (should (equal (drgnx-modules-default-off-test--bisect-candidates root) '(test/off test/on)))))
+
+(ert-deftest drgnx-modules-default-off/an-old-modules-eld-reads ()
+  (drgnx-modules-default-off-test--with root
+    (write-region "(:version 1 :disabled (a/b) :theme tango)\n" nil (concat root "config/modules.eld") nil 'silent)
+    (let ((s (drgnx-modules-read-state)))
+      (should (equal (plist-get s :disabled) '(a/b)))
+      (should-not (plist-member s :enabled))
+      (drgnx-modules-write-state s)
+      (setq drgnx-modules--state nil)
+      (should-not (plist-member (drgnx-modules-read-state) :enabled))
+      (should-not (string-match-p ":enabled" (with-temp-buffer (insert-file-contents (concat root "config/modules.eld"))
+                                                               (buffer-string)))))
+    ;; :enabled reads, validates like :disabled, and is written back unchanged
+    (write-region "(:version 1 :enabled (test/off))\n" nil (concat root "config/modules.eld") nil 'silent)
+    (setq drgnx-modules--state nil)
+    (should (equal (plist-get (drgnx-modules-read-state) :enabled) '(test/off)))
+    (write-region "(:version 1 :enabled (\"oops\"))\n" nil (concat root "config/modules.eld") nil 'silent)
+    (setq drgnx-modules--state nil)
+    (should-not (plist-member (drgnx-modules-read-state) :enabled))))
+
+(provide 'modules-default-off-test)
+;;; modules-default-off-test.el ends here
