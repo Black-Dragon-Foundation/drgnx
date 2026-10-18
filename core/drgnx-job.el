@@ -711,7 +711,8 @@ role.  Everything else — network (fetch), outward commands, paths outside the 
 
 (defun drgnx-job--inside-p (path tree)
   "Is PATH inside TREE, once `..' and symlinks are resolved?"
-  (and (stringp path) (file-in-directory-p (file-truename (expand-file-name path tree)) (file-truename tree))))
+  (and (stringp path) (not (file-remote-p path))     ; never TRAMP: a connection (a prompt) from the hub
+       (file-in-directory-p (file-truename (expand-file-name path tree)) (file-truename tree))))
 
 (defun drgnx-job-policy (role tool tree)
   "`allow' or `ask': the policy of ROLE (a string) for the ACP TOOL call (its :kind, :title, :locations) of an agent
@@ -931,18 +932,21 @@ reviewer, or the request has no reject option)."
 (defun drgnx-job--write-inside (path content tree)
   "Write CONTENT (UTF-8) to PATH in the worktree TREE without the race of a check, then a write.  PATH is resolved
 here — every link, the last one too — and refused (an error) when that is outside TREE: a link swapped in after the
-policy's check.  CONTENT goes into a temp file made in that directory, renamed over the file (which keeps its modes;
-a reader never sees half of it).  Checked again after the rename: a directory swapped meanwhile is an error (Emacs has
-no openat, so that window stays open).  No file name handlers."
+policy's check — and when the file exists but is not writable (the rename would replace it anyway).  CONTENT goes
+into a temp file made in that directory, renamed over the file: it keeps its modes, a new file gets 0666 less the
+umask (as `write-region' gives), and a reader never sees half of it.  Checked again after the rename: a directory
+swapped meanwhile is an error (Emacs has no openat, so that window stays open).  No file name handlers."
   (let* ((file-name-handler-alist nil)
          (target (file-truename (expand-file-name path tree))))
     (unless (file-in-directory-p target (file-truename tree))
       (error "%s leads out of the worktree (%s)" path target))
-    (let* ((modes (file-modes target))
+    (when (and (file-exists-p target) (not (file-writable-p target)))
+      (error "%s is not writable" path))
+    (let* ((modes (or (file-modes target) (logand #o666 (default-file-modes))))
            (tmp (let ((coding-system-for-write 'utf-8-unix))
                   (make-temp-file (expand-file-name ".drgnx-write-" (file-name-directory target)) nil nil content))))
       (condition-case err
-          (progn (when modes (set-file-modes tmp modes))
+          (progn (set-file-modes tmp modes)
                  (rename-file tmp target t))
         (error (ignore-errors (delete-file tmp)) (signal (car err) (cdr err)))))
     (unless (equal (file-truename target) target)

@@ -202,4 +202,28 @@
       (should (= (file-modes (concat wt "run.sh")) #o755))
       (should (equal (directory-files wt nil "\\`[^.]\\|\\.drgnx") '("link.sh" "run.sh"))))))
 
+(ert-deftest drgnx-job/a-new-file-gets-the-usual-modes-and-a-read-only-one-is-refused ()
+  ;; the temp file is made 0600: a new file gets what `write-region' would give (0666 less the umask); a file the
+  ;; agent could not write before (0444) is not replaced by the rename
+  (drgnx-job-policy-test--with
+    (let ((s (drgnx-agents--make :id "s-w" :name "w" :profile "mock" :cwd wt :task (concat job "#1") :job job)))
+      (should (equal (drgnx-job--request s "fs/write_text_file" (list :path (concat wt "new.txt") :content "x\n") 1) '(:result nil)))
+      (should (= (file-modes (concat wt "new.txt")) (logand #o666 (default-file-modes))))
+      (write-region "keep\n" nil (concat wt "ro.txt") nil 'silent)
+      (set-file-modes (concat wt "ro.txt") #o444)
+      (should-error (drgnx-job--request s "fs/write_text_file" (list :path (concat wt "ro.txt") :content "x\n") 2))
+      (should (equal (with-temp-buffer (insert-file-contents (concat wt "ro.txt")) (buffer-string)) "keep\n"))
+      (should (equal (directory-files wt nil "\\.drgnx") nil)))))
+
+(ert-deftest drgnx-job/a-remote-write-path-never-reaches-tramp ()
+  ;; the policy's check resolved the path with file name handlers on: /ssh:… made the hub connect
+  (drgnx-job-policy-test--with
+    (let ((s (drgnx-agents--make :id "s-w" :name "w" :profile "mock" :cwd wt :task (concat job "#1") :job job))
+          (real (symbol-function 'tramp-file-name-handler)))
+      (cl-letf (((symbol-function 'tramp-file-name-handler)
+                 (lambda (op &rest args) (if (eq op 'file-remote-p) (apply real op args) (error "Touched a remote file: %s" op)))))
+        (should-not (drgnx-job--request s "fs/write_text_file" (list :path "/ssh:nobody@example.invalid:/x" :content "x\n") 1))
+        (should (eq (drgnx-job-policy "implement" (list :kind "edit" :locations (vector '(:path "/ssh:nobody@example.invalid:/x"))) wt)
+                    'ask))))))
+
 ;;; job-policy-test.el ends here
