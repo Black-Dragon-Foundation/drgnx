@@ -336,7 +336,9 @@
   ;; no /proc children file (macOS): one scan of the process table per refresh pass, never dispatched to TRAMP
   (drgnx-terminal-test--shell "sleep 30 &\nread x"
     (should (drgnx-terminal-test--wait-until (lambda () (drgnx-terminal-test--children proc))))
-    (let* ((idle (drgnx-terminal-new default-directory)) (idle-proc (get-buffer-process idle))
+    (let* ((idle (let ((process-environment (cons (concat "SHELL=" (drgnx-terminal-test--script dir "read x")) process-environment)))
+                   (drgnx-terminal-new dir)))
+           (idle-proc (get-buffer-process idle))
            (scans 0) (dirs nil)
            (list-fn (symbol-function 'list-system-processes)) (attr-fn (symbol-function 'process-attributes))
            (readable-fn (symbol-function 'file-readable-p)))
