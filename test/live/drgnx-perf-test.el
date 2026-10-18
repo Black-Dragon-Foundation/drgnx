@@ -14,6 +14,19 @@
                                          (let ((buf (current-buffer)))
                                            (add-hook 'pre-redisplay-functions (lambda (w) (when (eq (window-buffer w) buf) (sleep-for 0.03)))))
                                          (drgnx-uitest--json (list :ok t)))" (concat root "f.txt")))
+          ;; under load the hook can run before f.txt is in the selected window, and the probe would count nothing:
+          ;; show it there and wait for a redisplay that has run with it
+          (let ((deadline (+ (float-time) 15)) shown)
+            (while (and (not shown) (< (float-time) deadline))
+              (setq shown (eq t (plist-get
+                                 (drgnx-ui-call sess (format "(progn (switch-to-buffer (get-file-buffer %S)) (redisplay t)
+                                                                (drgnx-uitest--json (list :ok (if (eq (window-buffer (selected-window))
+                                                                                                      (get-file-buffer %S))
+                                                                                                  t :false))))"
+                                                             (concat root "f.txt") (concat root "f.txt")))
+                                 :ok)))
+              (unless shown (sleep-for 0.2)))
+            (should shown))
           (drgnx-ui-measure sess nil)
           (drgnx-ui-call sess "(progn (drgnx-perf-begin) (drgnx-uitest--json (list :ok t)))")
           (drgnx-ui-measure sess (list (list :type "abcdef")))
