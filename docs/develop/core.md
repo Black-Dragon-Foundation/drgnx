@@ -104,8 +104,8 @@ settings, doctor checks, more stages and the modules index come with M4.
 
 ## Modal core (`drgnx-modal.el`)
 
-The engine-neutral half of modal editing; evil plugs into it (a later module), meow could. Nothing in it needs
-evil, and `test/unit/modal-core-test.el` drives it with a fake engine.
+The engine-neutral half of modal editing; evil plugs into it (the `editor/evil` module, below), another engine could.
+Nothing in it needs evil, and `test/unit/modal-core-test.el` drives it with a fake engine.
 
 - **Maps.** `drgnx-modal-leader-map` holds the leader keys (`SPC …`, `C-w …`), `drgnx-modal-panel-map` the keys
   that exist only in panels. Both are emulation maps (`drgnx-modal--leader-alist`, `drgnx-modal--panel-alist`),
@@ -164,6 +164,54 @@ for those layers, however often the keys are applied again (Toggle Modal Editing
 - **Commands.** `modal-leader` (Leader Menu) reads the leader's `SPC` submap as a transient map from any state.
   `panel-next` / `panel-previous` (Next / Previous Row, bound in the panel map) run the panel's own `<down>` /
   `<up>` binding, else `next-line` / `previous-line`, so a panel keeps its row movement.
+
+## Choosing a modal stack (`drgnx-modal-choose.el`)
+
+A key stack with a modal profile (Vim) needs its engine, and the engine's module is off until chosen.
+`drgnx-modal-prepare LAYERS &optional INTERACTIVE` is what Keyboard Profile… and onboarding's Look and Keys call before
+they switch, and it returns `ready` (no engine needed, or it is loaded, or it is installed and this process runs no modules: the CLI), `started`, `installed` (one
+question, then `drgnx sync` as a job, then a start), `declined`, `pending` or `(fail REASON LOG)`. It turns the engine's
+module on (`drgnx-modal-set-module`, which also turns every other engine module off for a stack without a modal profile;
+the table is `drgnx-modal-engine-modules`) and asks only when INTERACTIVE and `(drgnx-guard-automatic-p)` is nil; anything
+else records `:pending-layers` in keys.eld without asking and writes `keys-report.eld` (only when keys were applied in this
+process). The question, the sync and the start run inside `unwind-protect`, so a quit or an error turns the module back off
+unless it was on before. `drgnx-modal-apply-pending` runs at the end of `drgnx-init`, after `drgnx-keys-apply`, and
+switches a pending stack whose engine has loaded (it never asks and catches its errors). The caller switches the keys only
+on `ready`, `started` or `installed`, and saves the layers after the engine runs, so keys.eld never names a Vim stack
+without evil. `drgnx-modal-engine-start-now` runs the module mid-session through `drgnx-modules--run-one`; going back to
+another stack stops the engine but evil stays loaded until the restart (module teardown owns unloading).
+
+## The Vim engine (`modules/editor/drgnx-evil.el`)
+
+Module `editor/evil` (`:default 'off`, startup stage; packages `evil`, `evil-collection`). `drgnx-evil-setup` sets
+`evil-want-keybinding` nil and `evil-want-C-u-scroll` t before `(require 'evil)`, then `drgnx-evil--settings` applies the
+module defaults with `setopt` (`evil-undo-system` `undo-redo`, `evil-search-module` `evil-search`, `evil-want-minibuffer`
+nil, `evil-mode-line-format` nil; the user's `setopt` in config.el runs later), registers the engine with
+`drgnx-modal-define-engine` and the command Toggle Modal Editing, and calls `drgnx-modal-sync-engine`. `drgnx-evil-start`
+and `-stop` are exact opposites and the only owners of what the engine adds (hooks, advice, variable watchers, saved
+variables); a failing start undoes what it did.
+
+- **States.** The core's `drgnx-modal-panel-modes` and `-form-modes` start in emacs state and `-input-modes` in insert
+  state (`drgnx-evil--initial-states`, set again when the mode's library loads and when a list grows); every state
+  entry hook calls `drgnx-evil--sync`, which passes the state to `drgnx-modal-set-state`.
+- **Cursor and terminal.** `drgnx-evil--cursors-on` gives each state a shape from `drgnx-evil--cursor-vars`, never a colour,
+  keeps a variable the user set, and panels keep their own cursor. On 31.1 `xterm-update-cursor` is `type` while the
+  engine runs, also for terminal frames already live (`drgnx-evil--xterm`).
+- **evil-collection and unimpaired.** Registered per mode when the mode's library loads (`drgnx-evil-collection-modes`,
+  the flag `no-collection`); the unimpaired keys follow the engine; multiple cursors switch to emacs state through
+  `drgnx-evil--mc-hooks`.
+- **Insert-state keys.** `drgnx-evil--insert-bindings` is on only in the pure Vim stack (`drgnx-modal-sync-functions` calls
+  `drgnx-evil--insert-for-layers`), via `evil-disable-insert-state-bindings`.
+- **Ex commands and window keys.** `drgnx-evil-ex-routes` (`:w`, `:wa`, `:e`) are redefined with `evil-ex-define-cmd`, keeping
+  evil's argument properties; evil's quit and split commands are `:around` advice (`drgnx-evil--advice-pairs`) that call
+  evil's own when the workbench is off.
+- **AI.** `drgnx-evil--ghost-inhibit` is on `drgnx-ai-ghost-inhibit-functions` (ghost text asks in insert and emacs state
+  only) and `drgnx-evil--selection` is `drgnx-modal-selection-function` (the visual selection, a block widened to its lines).
+- **Which-key.** The built-in which-key is turned on, with transient maps shown, while the engine runs, and put back at stop.
+- **Order.** `drgnx-modal-order-alists` runs after the engine starts and on `evil-local-mode-hook`, because evil pushes its
+  maps onto `emulation-mode-map-alists`.
+
+Tests load the real evil from `DRGNX_MODAL_ELPA` and run in their own Emacs ([harness.md](harness.md)).
 
 ## Build (`drgnx-build.el`)
 

@@ -135,7 +135,8 @@ views, and the other lists and transcripts. Vim's own keys do not reach them, so
   `h` / `l` collapse and expand in the Explorer.
 - **The leader and windows.** `SPC …` (`SPC f f`, `SPC SPC`) and `C-w h` / `j` / `k` / `l` work in a panel as in an
   editor, so you can leave a panel by key.
-- **Escape.** `<escape>` in the Explorer goes back to the editor, as Back to the Editor does.
+- **Escape.** `<escape>` in the sidebar (Explorer, Buffers, Outline) goes back to the editor, as Back to the Editor
+  does, in every key profile. The right dock (Work, Agents) has no Escape: `C-w l` reaches it and `C-w h` comes back.
 - **Refresh.** `g` refreshes the Diff, Review and Pull Requests views, as without Vim keys.
 - **Search and type-ahead.** `/` filters the Explorer and Buffers panel (the text you type is the minibuffer's, so
   `SPC` types a space). A letter that nothing binds in the Explorer, the panel keys or the leader jumps to the next

@@ -89,10 +89,13 @@ drgnx's leader map (`SPC …`), which the Vim engine plugs into its normal, visu
 ## Vim keys
 
 Choosing a Vim key stack turns the `editor/evil` module on (it is off until then; nothing is installed or loaded for
-VS Code or Emacs keys). It runs [evil](https://github.com/emacs-evil/evil) as the editing engine:
+VS Code or Emacs keys). It runs [evil](https://github.com/emacs-evil/evil) as the editing engine; the leader keys, the
+state indicator and the panels' keys belong to drgnx's own engine-neutral modal core, so another engine can plug in
+later (Meow is the candidate):
 
 - **States.** Editors start in *normal* state; `i`, `a`, `o` … enter *insert*, `v`, `V`, `C-v` enter *visual*
-  (characters, lines, a block), `R` *replace*. `Esc` goes back to normal; `C-g` works in every state.
+  (characters, lines, a block), `R` *replace*, `C-z` *Emacs* state (Emacs' own keys, until `C-z` again). `Esc` goes
+  back to normal; `C-g` works in every state.
 - **Indicator.** The mode line starts with the state — ` NORMAL `, ` INSERT `, ` VISUAL `, ` V-LINE `, ` V-BLOCK `,
   ` REPLACE `, ` EMACS ` — in colours the theme gives (faces `drgnx-modal-normal`, `-insert`, `-visual`, `-emacs`).
 - **Cursor.** A box in normal state, a bar in insert and Emacs state, a hollow box in visual, an underline in replace.
@@ -280,7 +283,9 @@ quitting; `:cq` and `:wqa` never end Emacs either. In the sidebar or the panel (
 `:q` and `C-w c` go back to the editor you used last and never close a group. The ex commands `:w`, `:wa` and `:e` are the
 data `drgnx-evil-ex-routes`; evil's `:q`, `:wq`, `:x`, `:qa`, `:wqa`, `:cq`, `:sp`, `:vs` and `C-w s/v/c` are advised while the
 engine runs (`drgnx-evil--advice-pairs`), and evil's own again when Vim editing stops (a command you defined meanwhile
-is kept). With the `core/workbench` module off, all of them are evil's own. Vim's other ex commands are untouched. In a
+is kept). With the `core/workbench` module off, all of them are evil's own. Vim's other ex commands are untouched, and so
+are evil's other window keys and commands (`C-w o` `x` `r` `H` `J` `K` `L`, `:new`, `:bd`): they act on raw Emacs
+windows, not on editor groups, and can leave the workbench's arrangement (`C-w h` `j` `k` `l` `s` `v` `c` are drgnx's, above). In a
 VS Code or Emacs stack Focus Left/Right/Above/Below and the problem commands have no keys (VS Code's `F8` /
 `Shift+F8` go to the next / previous problem); they are in the palette.
 

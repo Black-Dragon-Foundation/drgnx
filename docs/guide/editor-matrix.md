@@ -28,6 +28,7 @@ profile's; every command is also in the palette.
 | A web page beside the editor; Playwright reports | `tools/browser` | [browser.md](browser.md) | `drgnx-ui-m11c1/replace-layouts-shortcuts` (without WebKit) | — |
 | Watch and take over the agents' browser | `tools/live` | [live.md](live.md) | `drgnx-ui-m11c1/replace-layouts-shortcuts` (a mock browser) | live-view |
 | Keyboard Shortcuts editor (record chords, conflicts, filters) | Keyboard Shortcuts `C-k C-s` | [shortcuts.md](shortcuts.md) | `drgnx-ui-m11c1/replace-layouts-shortcuts` | — |
+| Vim editing (states, leader keys, ex commands, panels, Vim next to VS Code's keys) | `editor/evil`, chosen with Keyboard Profile… | [keys.md](keys.md#vim-keys) | `drgnx-ui-modal/*` and `drgnx-live-modal/quit-keeps-the-daemon` (live tier, own sessions) | typing-evil, motions-evil, explorer-evil |
 
 Not yet: agent settings pages, remote editing (TRAMP), VS Code settings import, Reopen Closed Tab, agent modes and
 checkpoints, @-context, side chats — they come in the next milestones.
