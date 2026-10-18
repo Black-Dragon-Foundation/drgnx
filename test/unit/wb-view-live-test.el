@@ -311,6 +311,27 @@ computed from any read is reached exactly at the 8th check."
       (should (= 0 (drgnx-view-live-test--stat v :full-draws)))
       (drgnx-view-live-test--ok v))))
 
+(ert-deftest drgnx-view-live/a-mark-during-a-chain-arms-nothing ()
+  "A mark while a slice chain runs arms no throttle draw beside the continuation: the next slice takes it, so one view
+never draws two slices in one gap (review T4-I1)."
+  (drgnx-view-live-test--with (v :render #'drgnx-view-live-test--render :slice (/ 8.0 2048) :key-test 'eq)
+    (let ((throttle (cons 'drgnx-view (current-buffer))) (more (cons 'drgnx-view-more (current-buffer))))
+      (drgnx-view-live-test--rows v 1000)
+      (drgnx-view-dirty v t)
+      (drgnx-timer-cancel throttle)                       ; as if it had fired: it starts the chain
+      (drgnx-view-live-test--ticking (/ 1.0 2048)
+        (drgnx-view--draw-buffer (current-buffer))
+        (should (drgnx-timer-active-p more))
+        (puthash 'tail "appended mid-chain" drgnx-view-live-test--model)
+        (drgnx-view-append v '(tail))
+        (should-not (drgnx-timer-active-p throttle))
+        (drgnx-test-advance 0))
+      (should-not (drgnx-timer-active-p more))
+      (should-not (drgnx-timer-active-p throttle))
+      (should-not (drgnx-view-pending-p v))
+      (should (eq 'tail (aref (drgnx-view--keys v) 1000)))
+      (drgnx-view-live-test--ok v))))
+
 (ert-deftest drgnx-view-live/a-reset-removes-rows-in-slices ()
   "A reset of 300 rows deletes them a row at a time across slices; between slices the view is consistent."
   (drgnx-view-live-test--with (v :render #'drgnx-view-live-test--render :slice 0.004 :key-test 'eq)

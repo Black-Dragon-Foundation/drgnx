@@ -7,8 +7,8 @@
 ;; (`drgnx-view-define') says how a row is rendered (RENDER), how it grows at its end (GROW) and how the view pulls
 ;; changes from its model (SYNC).  Code that changes the model only MARKS the view: a mark is a hash put or a queue
 ;; push plus a timer arm, cheap enough for a process filter.  The draw runs from that timer, only while a window on
-;; a visible frame shows the buffer, in slices that all views share (`drgnx-view-slice' per gap, stopped by input),
-;; visible rows first.  A draw first folds the structural marks into the row vectors (no buffer change), then works
+;; a visible frame shows the buffer, in slices (at most `drgnx-view-slice' each, stopped by input; views ripe in
+;; one timer pass share a deadline while it is unspent), visible rows first.  A draw first folds the structural marks into the row vectors (no buffer change), then works
 ;; row by row: a dirty row is deleted and inserted again at its integer start, a growing row gets only its new
 ;; characters, a new row is inserted, a removed row deleted.  Nothing is applied by erasing a region, undo is off,
 ;; and no row has a marker: row starts are integers, relative to START.  Window start and point stay on their row.
@@ -25,7 +25,8 @@
 (declare-function drgnx-gc-gap "drgnx-gc" ())
 
 (defcustom drgnx-view-slice 0.004
-  "The longest slice, in seconds, a view type may ask for: all views together draw at most this long per gap."
+  "The longest slice, in seconds, a view type may ask for.  Views ripe in one timer pass share an unspent deadline;
+one that finds it spent starts its own slice."
   :type 'number :group 'drgnx)
 
 (defcustom drgnx-view-delay 0.1
@@ -205,11 +206,13 @@ hidden) arms its draw."
 
 (defun drgnx-view--arm (view)
   "Arm VIEW's draw: the timer `(drgnx-view . BUFFER)', DELAY after the first mark of a burst, at most once per DELAY
-\(a DELAY of 0: at the next timer pass).  Nothing while VIEW's SYNC runs (that draw takes the marks), for a view
-no longer attached, or for a stale view that is still hidden: showing it arms the draw."
+\(a DELAY of 0: at the next timer pass).  Nothing while VIEW's SYNC runs (that draw takes the marks), while a
+slice chain's continuation `(drgnx-view-more . BUFFER)' is pending (its next slice takes them), for a view no longer
+attached, or for a stale view that is still hidden: showing it arms the draw."
   (let ((buffer (drgnx-view--buffer view)))
     (when (and (not (eq view drgnx-view--syncing))
                (buffer-live-p buffer) (eq view (buffer-local-value 'drgnx-view buffer))
+               (not (drgnx-timer-active-p (cons 'drgnx-view-more buffer)))
                (or (not (drgnx-view--stale view)) (drgnx-view-shown-p view)))
       (setf (drgnx-view--stale view) nil)
       (let ((delay (or (drgnx-view-type-delay (drgnx-view--type view)) drgnx-view-delay)))
@@ -393,11 +396,11 @@ An AFTER that is neither appends KEYS.  A key already shown or pending is left w
   (let ((n (length string))) (and (> n 0) (eq (aref string (1- n)) ?\n))))
 
 (defun drgnx-view--row-p (r)
-  "Non-nil if R is a row's text: a string ending in a newline, or (BODY . SUFFIX) whose concatenation does."
+  "Non-nil if R is a row's text: a string ending in a newline, or (BODY . SUFFIX) whose SUFFIX ends in one (so text
+GROW puts after BODY never lands after the newline)."
   (if (stringp r)
       (drgnx-view--newline-end-p r)
-    (and (consp r) (stringp (car r)) (stringp (cdr r))
-         (drgnx-view--newline-end-p (if (equal (cdr r) "") (car r) (cdr r))))))
+    (and (consp r) (stringp (car r)) (stringp (cdr r)) (drgnx-view--newline-end-p (cdr r)))))
 
 (defun drgnx-view--render (view key)
   "KEY's row text in VIEW, or its error row (recorded) when RENDER signals or returns no row."
@@ -760,8 +763,10 @@ or everything; work left re-arms `(drgnx-view-more . BUFFER)' at 0; when no view
                  (cl-incf (aref stats 4))
                  (when (> rows (aref stats 5)) (aset stats 5 rows)))
                (if (drgnx-view--cut view)
-                   (drgnx-timer-start (cons 'drgnx-view-more buffer) 0 #'drgnx-view--draw-buffer
-                                      :args (list buffer) :owner buffer)
+                   (progn
+                     (drgnx-timer-cancel (cons 'drgnx-view buffer))   ; a mark made during this draw: the chain takes it
+                     (drgnx-timer-start (cons 'drgnx-view-more buffer) 0 #'drgnx-view--draw-buffer
+                                        :args (list buffer) :owner buffer))
                  (drgnx-view--pass-over))))))))
 
 (defun drgnx-view--pass-over ()
@@ -951,10 +956,10 @@ starts; allocates nothing."
                  (delq nil (mapcar (lambda (b) (let ((v (buffer-local-value 'drgnx-view b))) (and (drgnx-view-p v) v)))
                                    (buffer-list)))))
       (let ((stats (drgnx-view--stats v)))
-        (dotimes (i (length sum))
-          (aset sum i (if (eq (aref drgnx-view--stat-names i) :max-slice-rows)
-                          (max (aref sum i) (aref stats i))
-                        (+ (aref sum i) (aref stats i)))))))
+        (dotimes (j (length sum))
+          (aset sum j (if (eq (aref drgnx-view--stat-names j) :max-slice-rows)
+                          (max (aref sum j) (aref stats j))
+                        (+ (aref sum j) (aref stats j)))))))
     (while (> i 0)
       (setq i (1- i) plist (cons (aref drgnx-view--stat-names i) (cons (aref sum i) plist))))
     plist))
