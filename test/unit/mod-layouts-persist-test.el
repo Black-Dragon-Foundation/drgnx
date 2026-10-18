@@ -185,6 +185,66 @@ window, and the persist hooks as the layouts module wires them.  Prompts signal 
       (drgnx-layouts-apply 'editor)
       (should (= 1 (length (drgnx-groups-list)))))))
 
+(ert-deftest drgnx-layouts/browser-pane-before-its-module-sets-up ()
+  "The browser module sets up after the layouts' restore: the pane is marked without it, and filled once it registers."
+  (drgnx-layouts-persist-test--with
+    (let ((drgnx-layouts-shapes (copy-sequence drgnx-layouts-shapes))
+          (drgnx-layouts-pane-fillers (copy-sequence drgnx-layouts-pane-fillers)))
+      (drgnx-browser--register-shape)
+      (drgnx-layouts-apply 'browser)
+      (drgnx-persist-save)
+      (setq drgnx-layouts-pane-fillers (assq-delete-all 'browser drgnx-layouts-pane-fillers)) ; a fresh Emacs
+      (drgnx-layouts-persist-test--restart)
+      (let ((pane (cadr (drgnx-groups-list))))
+        (should (eq (window-parameter pane 'drgnx-layouts-pane) 'browser))   ; marked, nothing to fill it with yet
+        (drgnx-browser--register-shape)                                       ; the browser module's setup
+        (should (equal (buffer-name (window-buffer pane)) "*drgnx: browser*"))
+        (should (eq (drgnx-browser--pane) pane))
+        (should (= 2 (length (drgnx-groups-list)))))
+      (drgnx-layouts-apply 'editor)
+      (should (= 1 (length (drgnx-groups-list)))))))
+
+(ert-deftest drgnx-layouts/an-old-single-pane-is-still-read ()
+  "A workbench saved with `:pane' (one spec, before `:panes') still brings its pane back."
+  (drgnx-layouts-persist-test--with
+    (drgnx-layouts-apply 'agent)
+    (drgnx-persist-save)
+    (drgnx-layouts-persist-test--edit-state :panes nil)
+    (drgnx-layouts-persist-test--edit-state :pane '(1 . agent))
+    (drgnx-layouts-persist-test--restart)
+    (should (eq (window-parameter (cadr (drgnx-groups-list)) 'drgnx-layouts-pane) 'agent))))
+
+(ert-deftest drgnx-layouts/arrangement-keeps-groups-tabs-and-files-after-restart ()
+  "A remembered arrangement comes back with each group's tabs and shown file, opening the files that are not open."
+  (drgnx-layouts-persist-test--with
+    (let* ((dir (file-name-as-directory (make-temp-file "drgnx-lp-files" t)))
+           (files (mapcar (lambda (n) (expand-file-name n dir)) '("a.txt" "b.txt" "c.txt"))))
+      (unwind-protect
+          (progn
+            (dolist (f files) (write-region "x\n" nil f nil 'silent))
+            (drgnx-layouts-apply 'editor)
+            (switch-to-buffer (find-file-noselect (nth 0 files)))
+            (find-file-noselect (nth 1 files))
+            (drgnx-persist--set-tabs (selected-window) (list (nth 0 files) (nth 1 files)))
+            (drgnx-groups-split-right)
+            (set-window-buffer (selected-window) (find-file-noselect (nth 2 files)))
+            (select-window (car (drgnx-groups-list)))
+            (drgnx-layouts-apply 'zen)
+            (drgnx-layouts-apply 'agent)           ; Editor's arrangement is remembered
+            (drgnx-persist-save)
+            (dolist (f files) (when-let* ((b (get-file-buffer f))) (kill-buffer b)))
+            (drgnx-layouts-persist-test--restart)
+            (dolist (f files) (when-let* ((b (get-file-buffer f))) (kill-buffer b)))
+            (should-not (get-file-buffer (nth 1 files)))
+            (drgnx-layouts-apply 'editor)
+            (let ((groups (drgnx-groups-list)))
+              (should (= 2 (length groups)))
+              (should (equal (buffer-file-name (window-buffer (car groups))) (nth 0 files)))
+              (should (equal (buffer-file-name (window-buffer (cadr groups))) (nth 2 files)))
+              (should (equal (mapcar #'buffer-file-name (drgnx-chrome-tabs (car groups))) (list (nth 0 files) (nth 1 files))))))
+        (dolist (f files) (when-let* ((b (get-file-buffer f))) (kill-buffer b)))
+        (delete-directory dir t)))))
+
 (ert-deftest drgnx-layouts/arrangements-after-restart ()
   "Each layout's last arrangement survives a restart, not only the current layout's name."
   (drgnx-layouts-persist-test--with
@@ -215,8 +275,7 @@ window, and the persist hooks as the layouts module wires them.  Prompts signal 
       (drgnx-layouts-persist-test--restart)
       (should (eq (drgnx-layouts-current) 'editor))
       (should (= 1 (length (drgnx-groups-list))))
-      (should-not (window-parameter (selected-window) 'foo))
-      (should (= 1 (length (drgnx-groups-list)))))
+      (should-not (window-parameter (selected-window) 'foo)))
     ;; a damaged arrangement is no arrangement: the layout is built as if never left
     (drgnx-layouts-persist-test--edit-state :arrangements '((agent :main (leaf) :left 5 :pane (1 . agent))
                                                             (zen :main (leaf junk)) (browser :main (leaf) :left (:px 99999999))))

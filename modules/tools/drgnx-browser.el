@@ -35,7 +35,8 @@
 (declare-function drgnx-agent-session-name "drgnx-agents")
 (declare-function drgnx-agent-session-entries "drgnx-agents")
 (defvar drgnx-layouts-shapes)
-(defvar drgnx-layouts-pane-fillers)
+(declare-function drgnx-layouts--mark-pane "drgnx-layouts")
+(declare-function drgnx-layouts-define-pane "drgnx-layouts")
 (defvar xwidget-webkit-last-session-buffer)
 
 (defvar drgnx-browser--told nil "Non-nil once the message about the missing WebKit has been shown.")
@@ -100,10 +101,8 @@ shown again by the Browser layout.")
          (pane (or (seq-find (lambda (w) (eq (window-parameter w 'drgnx-layouts-pane) 'browser)) (window-list nil 'nomini))
                    (with-selected-window editor
                      (let ((w (if (fboundp 'drgnx-groups--split) (drgnx-groups--split 'right) (split-window editor nil 'right))))
-                       (set-window-parameter w 'drgnx-layouts-pane 'browser)
-                       (set-window-parameter w 'drgnx-tabs nil)
-                       (set-window-parameter w 'drgnx-tab-history nil)
-                       w)))))
+                       (require 'drgnx-layouts)
+                       (drgnx-layouts--mark-pane (cons w 'browser)))))))
     (if select (select-window pane) (when (window-live-p editor) (select-window editor)))
     pane))
 
@@ -166,7 +165,7 @@ The pane takes the focus, unless KEEP-FOCUS (a timer opening a page must not mov
   "Teach the layouts the `editor+browser' shape, and how to fill the pane found again after a restart."
   (require 'drgnx-layouts)
   (setf (alist-get 'editor+browser drgnx-layouts-shapes) #'drgnx-browser--shape)
-  (setf (alist-get 'browser drgnx-layouts-pane-fillers) #'drgnx-browser--fill))
+  (drgnx-layouts-define-pane 'browser #'drgnx-browser--fill))
 
 ;;;; Test Report
 

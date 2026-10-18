@@ -32,6 +32,8 @@
 (declare-function drgnx-chrome-apply "drgnx-chrome")
 (declare-function drgnx-persist--strip "drgnx-persist")
 (declare-function drgnx-persist--clamp "drgnx-persist")
+(declare-function drgnx-persist--visit "drgnx-persist")
+(declare-function drgnx-persist--set-tabs "drgnx-persist")
 (declare-function drgnx-replace--bar-clear "drgnx-replace")
 (declare-function drgnx-agents-sessions "drgnx-agents")
 (declare-function drgnx-agent-session-status "drgnx-agents")
@@ -98,23 +100,31 @@ arranges as `one'.")
           :px (if w (if (eq area 'right) (window-pixel-width w) (window-pixel-height w))
                 (frame-parameter nil (intern (format "drgnx-wb-%s-px" area)))))))
 
-(defun drgnx-layouts--pane-spec ()
-  "The selected frame's layout pane as (INDEX . KIND): INDEX is its place among the editor groups,
-KIND `agent' or `browser'.  Nil when there is none."
-  (let ((i 0) spec)
+(defun drgnx-layouts--pane-specs ()
+  "The selected frame's layout panes as a list of (INDEX . KIND): INDEX is a pane's place among the editor
+groups, KIND `agent' or `browser'."
+  (let ((i 0) specs)
     (dolist (g (drgnx-groups-list))
-      (when-let* ((kind (window-parameter g 'drgnx-layouts-pane))) (setq spec (cons i kind)))
+      (when-let* ((kind (window-parameter g 'drgnx-layouts-pane))) (push (cons i kind) specs))
       (cl-incf i))
-    spec))
+    (nreverse specs)))
+
+(defun drgnx-layouts--group-specs ()
+  "Each editor group's tab files and shown file, in order: what a restart needs to open them again."
+  (mapcar (lambda (g)
+            (list :tabs (and (fboundp 'drgnx-chrome-tabs) (delq nil (mapcar #'buffer-file-name (drgnx-chrome-tabs g))))
+                  :shown (buffer-file-name (window-buffer g))))
+          (drgnx-groups-list)))
 
 (defun drgnx-layouts--snapshot ()
   "The selected frame's arrangement: the editor area (groups, tabs, points) and each area shown, tab and size.
 :writable is the editor area again as a state that can be written to a file (no window parameters, so
-:pane says which group is the chat or browser pane): what a restart keeps."
+:panes says which groups are the chat or browser pane, :groups their files): what a restart keeps."
   (let ((dock (car (drgnx-wb--dock-windows))))
     (list :main (drgnx-layouts--with-kept-parameters (window-state-get (window-main-window)))
           :writable (window-state-get (window-main-window) t)
-          :pane (drgnx-layouts--pane-spec)
+          :panes (drgnx-layouts--pane-specs)
+          :groups (drgnx-layouts--group-specs)
           :left (list :shown (and dock t) :view (drgnx-wb-sidebar-view)
                       :px (if dock (window-pixel-width dock) (frame-parameter nil 'drgnx-wb-dock-px)))
           :panel (drgnx-layouts--area-snapshot 'panel)
@@ -190,24 +200,57 @@ after a restart (`drgnx-layouts--mark-pane') is filled this way; the browser mod
   (set-window-buffer pane (drgnx-layouts--agent-buffer)))
 
 (defun drgnx-layouts--mark-pane (spec &optional fill)
-  "Mark the editor group SPEC = (INDEX . KIND) names as the layout's pane of that kind (a restart leaves
-no window parameters), so the next layout removes it; FILL it with the kind's content.  Nothing
-happens for a SPEC that names no group or a kind without a filler."
-  (when-let* (((consp spec)) ((natnump (car spec))) (kind (cdr spec)) ((symbolp kind))
-              (filler (alist-get kind drgnx-layouts-pane-fillers))
-              (pane (nth (car spec) (drgnx-groups-list))))
+  "Mark the editor group SPEC = (INDEX . KIND) names (INDEX may be a window) as the layout's pane of that
+kind (a restart leaves no window parameters), so the next layout removes it.  FILL it with the kind's
+content when the kind has a filler (the kind's module may set up later: `drgnx-layouts-define-pane').
+Nothing happens for a SPEC that names no group.  Returns the pane."
+  (when-let* (((consp spec)) (kind (cdr spec)) ((symbolp kind))
+              (pane (if (windowp (car spec)) (car spec) (and (natnump (car spec)) (nth (car spec) (drgnx-groups-list)))))
+              ((window-live-p pane)))
     (set-window-parameter pane 'drgnx-layouts-pane kind)
     (set-window-parameter pane 'drgnx-tabs nil)
     (set-window-parameter pane 'drgnx-tab-history nil)
-    (when fill (funcall filler pane))))
+    (when-let* ((fill) (filler (alist-get kind drgnx-layouts-pane-fillers))) (funcall filler pane))
+    pane))
+
+(defun drgnx-layouts-define-pane (kind filler)
+  "Teach the layouts a pane of KIND: FILLER (a function of the pane window) fills it.  Panes of KIND already
+marked in a live frame (found again after a restart before this module set up) are filled now."
+  (setf (alist-get kind drgnx-layouts-pane-fillers) filler)
+  (dolist (f (frame-list))
+    (dolist (w (window-list f 'nomini))
+      (when (eq (window-parameter w 'drgnx-layouts-pane) kind) (ignore-errors (funcall filler w))))))
+
+(defun drgnx-layouts--panes-of (value)
+  "VALUE (a list of (INDEX . KIND), or one such pair as older workbenches saved) as a clean list of pairs."
+  (let ((l (if (and (consp value) (natnump (car value))) (list value) value)))
+    (and (proper-list-p l)
+         (seq-filter (lambda (s) (and (consp s) (natnump (car s)) (cdr s) (symbolp (cdr s)))) l))))
+
+(defun drgnx-layouts--groups-of (value)
+  "VALUE (a saved `:groups') as a clean list of (:tabs FILES :shown FILE) plists, one per group."
+  (and (proper-list-p value)
+       (mapcar (lambda (s)
+                 (let ((tabs (and (proper-list-p s) (cl-evenp (length s)) (plist-get s :tabs)))
+                       (shown (and (proper-list-p s) (cl-evenp (length s)) (plist-get s :shown))))
+                   (list :tabs (and (proper-list-p tabs) (seq-filter #'stringp tabs)) :shown (and (stringp shown) shown))))
+               value)))
+
+(defun drgnx-layouts--reopen-groups (specs)
+  "Open the files of the saved group SPECS that are not open and put each group's shown file and tabs back
+(the window state names buffers, which a new Emacs does not have).  Never asks anything."
+  (cl-loop for g in (drgnx-groups-list) for spec in specs
+           do (let ((files (seq-take (plist-get spec :tabs) 50)))
+                (dolist (f files) (drgnx-persist--visit f))
+                (when-let* ((b (drgnx-persist--visit (plist-get spec :shown))) ((not (eq b (window-buffer g)))))
+                  (set-window-buffer g b))
+                (drgnx-persist--set-tabs g files))))
 
 (defun drgnx-layouts--editor+agent (editor)
   "EDITOR with the current agent's chat to its right, in a group of its own (marked as the layout's pane)."
   (select-window editor)
   (let ((pane (drgnx-groups--split 'right)))
-    (set-window-parameter pane 'drgnx-layouts-pane 'agent)
-    (set-window-parameter pane 'drgnx-tabs nil)
-    (set-window-parameter pane 'drgnx-tab-history nil)
+    (drgnx-layouts--mark-pane (cons pane 'agent))
     (set-window-buffer pane (drgnx-layouts--agent-buffer))
     (select-window editor)
     pane))
@@ -278,7 +321,8 @@ without asking or visiting anything unsafe, marks and fills its pane, and return
         (let ((window-restore-killed-buffer-windows #'ignore) (non-essential t)
               (enable-local-variables :safe) (large-file-warning-threshold nil))
           (window-state-put (plist-get snap :main) (window-main-window) 'safe)
-          (drgnx-layouts--mark-pane (plist-get snap :pane) t)
+          (drgnx-layouts--reopen-groups (plist-get snap :groups))
+          (dolist (p (plist-get snap :panes)) (drgnx-layouts--mark-pane p t))
           t)
       (error (message "drgnx: a saved layout arrangement was not restored: %s" (error-message-string err)) nil))))
 
@@ -412,15 +456,15 @@ was picked yet, to the arrangement you had)."
 (defun drgnx-layouts--arrangement-state (snap)
   "SNAP as the saved workbench keeps it: the editor area as the state that can be written, no buffers."
   (let ((out (list :main (if (plist-member snap :writable) (plist-get snap :writable) (plist-get snap :main)))))
-    (dolist (k '(:left :panel :right :pane) out)
+    (dolist (k '(:left :panel :right :panes :groups) out)
       (setq out (append out (list k (plist-get snap k)))))))
 
 (defun drgnx-layouts--persist-state ()
-  "The selected frame's layout for `drgnx-persist-state-functions': (:layout NAME :pane SPEC
+  "The selected frame's layout for `drgnx-persist-state-functions': (:layout NAME :panes SPECS
 :arrangements ALIST :previous NAME :zen-return ARRANGEMENT) — the current layout, which group is its pane
 and each layout's last arrangement — or nothing before any layout was applied."
   (when-let* ((name (drgnx-layouts-current)))
-    (list :layout name :pane (drgnx-layouts--pane-spec)
+    (list :layout name :panes (drgnx-layouts--pane-specs)
           :arrangements (mapcar (lambda (e) (cons (car e) (drgnx-layouts--arrangement-state (cdr e))))
                                 (frame-parameter nil 'drgnx-layouts-state))
           :previous (frame-parameter nil 'drgnx-layouts-previous)
@@ -431,7 +475,8 @@ and each layout's last arrangement — or nothing before any layout was applied.
   "A saved arrangement SNAP made safe to use (the file may be crafted): its window state without
 parameters, its sizes clamped, marked `:fill' (read from a file); nil when it is not one."
   (when (and (proper-list-p snap) (cl-evenp (length snap)) (consp (plist-get snap :main)))
-    (let ((out (list :fill t :main (drgnx-persist--strip (plist-get snap :main)) :pane (plist-get snap :pane))))
+    (let ((out (list :fill t :main (drgnx-persist--strip (plist-get snap :main)) :panes (drgnx-layouts--panes-of (or (plist-get snap :panes) (plist-get snap :pane)))
+                     :groups (drgnx-layouts--groups-of (plist-get snap :groups)))))
       (catch 'bad
         (dolist (area '((:left 0.5 . width) (:panel 0.7 . height) (:right 0.5 . width)) out)
           (let ((spec (plist-get snap (car area))))
@@ -451,7 +496,8 @@ arrangement.  A layout that no longer exists is ignored.  Never prompts."
         (when (and name (symbolp name) (alist-get name (drgnx-layouts--all)))
           (set-frame-parameter frame 'drgnx-layouts-current name)
           (drgnx-layouts--zen-margins nil name)
-          (drgnx-layouts--mark-pane (plist-get extra :pane) t)
+          (dolist (p (drgnx-layouts--panes-of (or (plist-get extra :panes) (plist-get extra :pane))))
+            (drgnx-layouts--mark-pane p t))
           (set-frame-parameter frame 'drgnx-layouts-state
                                (and (proper-list-p arrangements)
                                     (delq nil (mapcar (lambda (e)

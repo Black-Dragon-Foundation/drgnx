@@ -60,8 +60,9 @@ and is your current layout again at the next start, so Next Layout carries on fr
 again. The windows themselves come back as the workbench was; nothing is rearranged. The chat beside the editor
 (Agent) and the web page pane (Browser) are still the layout's pane: the next layout takes them away, and Open URL
 uses the same pane. The last arrangement of each other layout is saved too (its groups, sizes, docks, the panel's
-tab), so going back to it after a restart brings it back as you left it. Files are opened again by name; a buffer
-that was not a file is not, and its window shows another buffer. An arrangement that cannot be put back is built
+tab, and each group's tabs and shown file), so going back to it after a restart brings it back as you left it. The files
+are opened again by name (nothing is asked, local files only, at most 50 tabs per group); a buffer that was not a file is
+not, and its window shows another buffer. An arrangement that cannot be put back is built
 fresh, with a message. A layout that no longer exists (a deleted one of yours) is ignored. Only the main window's
 layout is kept.
 
@@ -71,9 +72,10 @@ Layouts are data: `drgnx-layouts` holds the built-in ones as `(NAME :left VIEW :
 SHAPE)`. For an area, `nil` hides it and `keep` leaves it as it was. Editor shapes are registered in
 `drgnx-layouts-shapes` (SHAPE → a function of the editor window). drgnx ships `one`, `editor+agent` and `zen`, and
 the browser pane (module `tools/browser`) adds `editor+browser`. A shape that is not registered arranges as `one`.
-A shape that makes a pane marks its window with the parameter `drgnx-layouts-pane` (the kind, a symbol) and registers
-`drgnx-layouts-pane-fillers` (KIND → a function of the pane window that fills it), so the pane is found and filled
-again after a restart. `drgnx-layouts-apply`
+A shape that makes a pane marks its window with `drgnx-layouts--mark-pane` (a window and the kind, a symbol) and
+registers the kind with `(drgnx-layouts-define-pane KIND FILLER)` (FILLER: a function of the pane window that fills
+it), so the pane is found and filled again after a restart. A pane found again before its module has set up is
+marked at once and filled when the module calls `drgnx-layouts-define-pane`. `drgnx-layouts-apply`
 switches the selected window's layout. To keep your own data in the saved workbench, add a function to
 `drgnx-persist-state-functions` (no argument, returns a plist for the selected frame) and read it back in a
 `drgnx-persist-after-restore-functions` function from the frame parameter `drgnx-persist-extra`.
