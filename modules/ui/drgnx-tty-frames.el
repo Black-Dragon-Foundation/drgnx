@@ -54,6 +54,7 @@
 (declare-function xterm-mouse-tracking-enable-sequence "xt-mouse")
 (declare-function xterm-mouse-tracking-disable-sequence "xt-mouse")
 (declare-function drgnx-tty-clip-setup "drgnx-tty-clipboard")
+(declare-function drgnx-tty-layout-apply "drgnx-tty-layout")
 
 (defvar drgnx-tty-frames-query-timeout 0.2
   "Seconds to wait for a terminal's answer to XTVERSION (a late answer is still taken off the input).")
@@ -398,7 +399,9 @@ now.  (The server runs this hook outside a minibuffer and isearch: `server-goto-
       (when (frame-parameter frame 'drgnx-tty-editor-only)
         (drgnx-tty-frames--guard "editor frame" #'drgnx-tty-frames--editor-only frame))
       (when (fboundp 'drgnx-chrome-apply)
-        (drgnx-tty-frames--guard "tabs" #'drgnx-chrome-apply frame t)))))
+        (drgnx-tty-frames--guard "tabs" #'drgnx-chrome-apply frame t))
+      (when (fboundp 'drgnx-tty-layout-apply)
+        (drgnx-tty-frames--guard "layout" #'drgnx-tty-layout-apply frame t)))))
 
 (drgnx-module-define 'ui/terminal
                      :doc "Terminal windows: what each terminal can do, asked once; the mouse; editor-only EDITOR frames."

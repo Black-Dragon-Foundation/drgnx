@@ -186,6 +186,22 @@ Terminal Windows** (palette: "mouse"); it saves the choice. The same is the sett
 `drgnx-tty-mouse` (`M-x customize-variable`): `nil` leaves the mouse to the terminal. On Emacs 31 the
 setting also overrides Emacs's own default of turning the mouse on in terminals.
 
+## Small terminals
+
+A terminal has the size it has, so drgnx lays the workbench out by it. A new terminal window shows the **sidebar**
+when it is at least 120 columns wide and the **panel** when it has at least 30 lines; a smaller one starts with the
+editor alone, and the right dock stays hidden as in a graphical window. The docks are fractions of the terminal, so
+they follow it when it changes: the sidebar is a quarter of the columns (at least 20), the right dock 30% (at least
+24), the panel 30% of the lines (at least 6).
+
+When the terminal grows, a dock its size had kept away comes (an 80x24 window that becomes 120x40 shows the sidebar
+and the panel), unless you opened or closed that dock yourself in the meantime. When it shrinks, a dock you opened
+stays open, only smaller. Below 40 columns or 12 lines drgnx shows and resizes nothing — a split tmux pane, a window
+dragged to a sliver — and the editor stays; the docks come back at the next size that has room. A window that cannot
+fit a dock never shows an error. The two sizes are the settings `drgnx-tty-layout-columns` (120) and
+`drgnx-tty-layout-lines` (30) (`M-x customize-variable`). A window opened for one file (`emacsclient -t FILE`) shows
+the editor only and is left alone.
+
 ## Clipboard
 
 Copying in drgnx puts the text on your computer's clipboard through OSC 52 when the terminal takes it (the table's

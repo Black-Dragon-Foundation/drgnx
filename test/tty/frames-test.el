@@ -77,7 +77,8 @@ once TEXT is on its screen."
                         s `(mapcar (lambda (f) (list (frame-parameter f 'drgnx-tty-editor-only)
                                                      (and (drgnx-wb--dock-windows f) t)))
                                    ,drgnx-tty-frames-test--clients))
-                       '((t nil) (nil t) (nil nil))))
+                       ;; the session's own client (120x40) opened its sidebar: ui/terminal-layout
+                       '((t nil) (nil t) (nil t))))
         ;; Close Tab ends the edit: the client returns, as `code --wait' does
         (drgnx-tty-session-eval s `(let ((f (car ,drgnx-tty-frames-test--clients)))
                                      (with-selected-frame f

@@ -239,6 +239,11 @@ groups, tab line, breadcrumb, panel and status bar, and the first one is the mai
 frame never is). A client that asked for a file (`emacsclient -t FILE`, git's `EDITOR`) shows the editor only and
 returns when you close the file's tab or press `C-x #`. See [terminal.md](terminal.md).
 
+**In a small terminal.** A new terminal window shows the sidebar from 120 columns and the panel from 30 lines; the
+docks are fractions of the terminal (a quarter of the columns for the sidebar, 30% of the lines for the panel) and
+follow its size. They come when it grows (unless you toggled them), never close when it shrinks, and below 40x12
+nothing is shown or resized. See [Small terminals](terminal.md#small-terminals).
+
 ### Popups
 
 Short-lived buffers — a transient menu, which-key's hints, `*Completions*`, the calendar — show in one **popup
