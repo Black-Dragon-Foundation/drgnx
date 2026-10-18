@@ -41,6 +41,16 @@
       (with-current-buffer (find-file-noselect g) (should (eq major-mode 'markdown-mode))
                            (should markdown-fontify-code-blocks-natively) (should markdown-enable-math)))))
 
+(defcustom drgnx-markdown-test-fake-option 'standard "A stand-in for a package's option." :type 'symbol)
+(defcustom drgnx-markdown-test-fake-other 'standard "A second stand-in." :type 'symbol)
+
+(ert-deftest drgnx-markdown/an-option-the-user-set-is-left-alone ()
+  (let ((drgnx-markdown-test-fake-option 'user) (drgnx-markdown-test-fake-other 'standard))
+    (drgnx-markdown--set-option 'drgnx-markdown-test-fake-option 'module)
+    (drgnx-markdown--set-option 'drgnx-markdown-test-fake-other 'module)
+    (should (eq drgnx-markdown-test-fake-option 'user))
+    (should (eq drgnx-markdown-test-fake-other 'module))))
+
 (ert-deftest drgnx-markdown/turned-off-the-options-and-file-modes-are-back ()
   (skip-unless (drgnx-markdown-test--available-p))
   (let ((load-path (append load-path (seq-filter #'file-directory-p (directory-files drgnx-markdown-test--elpa t "\\`markdown-mode-")))))

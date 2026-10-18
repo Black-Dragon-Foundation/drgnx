@@ -19,6 +19,7 @@
   (load (expand-file-name "drgnx-grammars" (file-name-directory (or load-file-name buffer-file-name))) nil t))
 (defvar eglot-server-programs)
 (defvar warning-minimum-level)
+(defvar eglot--servers-by-project)
 (declare-function eglot--maybe-activate-editing-mode "eglot")
 (declare-function eglot--major-modes "eglot")
 (declare-function eglot-ensure "eglot")
@@ -274,6 +275,26 @@ is set non-empty (headless test sessions).  A remote file only looks at what Ope
         (drgnx-lang--maybe-eglot-remote buffer-file-name)
       (when (drgnx-lang-server-available-p) (eglot-ensure)))))
 
+(defun drgnx-lang--set-option (var value)
+  "Set the option VAR to VALUE for as long as the module is on, unless something set it already.
+The module sets options when their library loads, after the user's config.el: a value that differs from the standard
+one is the user's (or a theme's, or Customize's) and wins.  The module's undo puts back what it replaced."
+  (let ((standard (get var 'standard-value)))
+    (when (or (not (default-boundp var)) (null standard)
+              (equal (default-value var) (eval (car standard) t)))
+      (drgnx-module-set var value))))
+
+(defun drgnx-lang--shutdown-servers ()
+  "Stop every running language server, for the module's teardown: no prompt, and short timeouts so that a server that
+does not answer cannot hold Emacs up.  The buffers stay.  Servers started by hand are stopped too: they cannot be told
+from the module's own."
+  (when (and (featurep 'eglot) (boundp 'eglot--servers-by-project) (hash-table-p eglot--servers-by-project)
+             (fboundp 'eglot-shutdown))
+    (let ((servers nil))
+      (maphash (lambda (_ list) (setq servers (append list servers))) eglot--servers-by-project)
+      (dolist (server servers)
+        (with-demoted-errors "drgnx lang: stopping a language server: %S" (eglot-shutdown server nil 0.5 t))))))
+
 (defun drgnx-lang-rename ()
   "Rename the symbol at point everywhere (a language server is needed)."
   (interactive)
@@ -302,6 +323,7 @@ is set non-empty (headless test sessions).  A remote file only looks at what Ope
 (drgnx-module-define 'lang/eglot
                      :doc "Language servers when installed, tree-sitter modes when the grammar is, definitions, references, rename, hover."
                      :stage 'startup
+                     :teardown #'drgnx-lang--shutdown-servers
                      :setup
                      (lambda ()
                        (drgnx-lang-remap-modes)
@@ -310,10 +332,10 @@ is set non-empty (headless test sessions).  A remote file only looks at what Ope
                        (eval-after-load 'eglot
                          (drgnx-modules-with-owner
                            (drgnx-lang--install-eglot-guards)
-                           (drgnx-module-set 'eglot-sync-connect nil)       ; a slow server never blocks opening the file
-                           (drgnx-module-set 'eglot-autoshutdown t)))       ; a server goes with its project's last buffer
+                           (drgnx-lang--set-option 'eglot-sync-connect nil)       ; a slow server never blocks opening the file
+                           (drgnx-lang--set-option 'eglot-autoshutdown t)))       ; a server goes with its project's last buffer
                        (eval-after-load 'xref
-                         (drgnx-modules-with-owner (drgnx-module-set 'xref-prompt-for-identifier nil)))
+                         (drgnx-modules-with-owner (drgnx-lang--set-option 'xref-prompt-for-identifier nil)))
                        (pcase-dolist (`(,id ,title ,fn ,doc)
                                       '((code-definition "Go to Definition" xref-find-definitions "Jump to where the symbol is defined")
                                         (code-references "Find References" xref-find-references "Every use of the symbol (in the panel)")

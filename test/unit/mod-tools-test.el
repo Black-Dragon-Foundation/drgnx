@@ -83,12 +83,12 @@
 (ert-deftest drgnx-lang/eglot-connects-in-the-background ()
   (require 'xref)
   (let ((sync eglot-sync-connect) (prompt xref-prompt-for-identifier))
-    (setq eglot-sync-connect 3 xref-prompt-for-identifier t)
+    (setq eglot-sync-connect 3 xref-prompt-for-identifier (eval (car (get 'xref-prompt-for-identifier 'standard-value)) t))
     (unwind-protect
         (progn
           (drgnx-test-with-modules '(lang/eglot) :strict t
                                    (should-not eglot-sync-connect)
                                    (should-not xref-prompt-for-identifier))
           (should (eql eglot-sync-connect 3))                ; and the teardown puts them back
-          (should (eq xref-prompt-for-identifier t)))
+          (should xref-prompt-for-identifier))
       (setq eglot-sync-connect sync xref-prompt-for-identifier prompt))))
