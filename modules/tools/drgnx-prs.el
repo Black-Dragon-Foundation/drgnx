@@ -124,7 +124,13 @@ newest first at each level.  Every PR appears once, a cycle cut where it is foun
   (setq tabulated-list-entries (drgnx-prs--entries))
   (tabulated-list-print t)
   (when (null tabulated-list-entries)
-    (let ((inhibit-read-only t)) (goto-char (point-max)) (insert "\n " drgnx-prs--placeholder "\n"))))
+    (let ((inhibit-read-only t) (hidden (and (listp drgnx-prs--all) (length drgnx-prs--all))))
+      (goto-char (point-max))
+      (insert "\n "
+              (if (and hidden (> hidden 0))                 ; they are all merged or closed, and hidden
+                  (format "No open pull requests — %d closed (Pull Requests: Show Closed lists them)." hidden)
+                drgnx-prs--placeholder)
+              "\n"))))
 
 (defun drgnx-prs--toplevel (dir)
   (with-temp-buffer

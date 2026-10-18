@@ -159,4 +159,19 @@
     (should (= 2000 (length s)))
     (should (< (- (float-time) t0) 0.25))))
 
+(ert-deftest drgnx-prs/only-closed-message ()
+  ;; M11b-10: only merged and closed pull requests: the tab says how many are hidden, not that there are none
+  (drgnx-prs-test--with (list (drgnx-prs-test--pr 2 "main" "f" 'merged) (drgnx-prs-test--pr 3 "main" "g" 'closed))
+    (drgnx-prs-view)
+    (let ((text (with-current-buffer "*drgnx pull requests*" (buffer-string))))
+      (should (string-search "No open pull requests — 2 closed" text))
+      (should (string-search "Pull Requests: Show Closed" text))
+      (should-not (string-search "No pull requests here yet" text)))
+    (with-current-buffer "*drgnx pull requests*" (drgnx-prs-toggle-closed))
+    (should (= 2 (length (drgnx-prs-test--rows))))
+    (should-not (string-search "No open pull requests" (with-current-buffer "*drgnx pull requests*" (buffer-string)))))
+  (drgnx-prs-test--with nil
+    (drgnx-prs-view)
+    (should (string-search "No pull requests here yet" (with-current-buffer "*drgnx pull requests*" (buffer-string))))))
+
 ;;; mod-prs-test.el ends here

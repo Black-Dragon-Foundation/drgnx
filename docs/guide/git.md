@@ -77,7 +77,7 @@ review, and a repository without a base branch.
 The **Pull Requests** tab (right dock) lists this repository's pull requests from forge's local database (module
 `tools/prs`, package `forge`). Each row shows its number, title, author, state (`open`, `draft`, `merged`,
 `closed`) and last update. A pull request whose base is another one's branch sits under it, as a stack (`└ `).
-Merged and closed ones are hidden until **Pull Requests: Show Closed**.
+Merged and closed ones are hidden until **Pull Requests: Show Closed**; when only those exist, the tab says "No open pull requests — N closed".
 
 - `RET` (Pull Requests: Open) opens forge's view of it: the reviews, comments and commits.
 - `d` (Pull Requests: Show Changes) fetches its head (`refs/pull/N/head` into `refs/pullreqs/N`) and shows it
