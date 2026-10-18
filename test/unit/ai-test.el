@@ -348,6 +348,35 @@ Keychain and keyring are never reached."
         (should-error (drgnx-ai-store-key 'openrouter "sk-or-test-123") :type 'user-error)
         (should-not (file-exists-p (concat log "security.argv")))))))      ; the fake on the path was not run
 
+(ert-deftest drgnx-ai/refused-hook-without-probe-loaded ()
+  ;; a process that only loaded the client (a search, a script) still starts the runner again when nothing listens
+  (let ((out (with-temp-buffer
+               (call-process (expand-file-name invocation-name invocation-directory) "/dev/null" t nil
+                             "--batch" "-Q" "-L" (expand-file-name "core" drgnx-dir) "--eval" "(require 'drgnx-ai-client)"
+                             "--eval" "(princ (list (featurep 'drgnx-ai-probe) (and (memq 'drgnx-ai--refused drgnx-ai-refused-functions) t) (fboundp 'drgnx-ai--refused)))")
+               (buffer-string))))
+    (should (equal out "(nil t t)"))))
+
+(ert-deftest drgnx-ai/an-answer-stamps-no-rate-limit ()
+  ;; the first-window look finding the server up must not hold back the restart a refused request asks for a
+  ;; moment later; only a look that finds it down counts toward the once-a-minute limit
+  (let ((noninteractive nil) (drgnx-ai--ensure-time nil) (drgnx-ai--ensure-looking nil)
+        (up t) (started nil))
+    (cl-letf (((symbol-function 'drgnx-ai-managed) (lambda () '(ollama :start ("ollama" "serve") :name "Ollama")))
+              ((symbol-function 'drgnx-ai-probe)
+               (lambda (callback &optional _ids) (let ((drgnx-ai-detected `((ollama :up ,up)))) (funcall callback))))
+              ((symbol-function 'run-at-time) (lambda (_time _repeat fn &rest args) (apply fn args) nil))
+              ((symbol-function 'drgnx-ai--start-local) (lambda (id &rest _) (push id started))))
+      (drgnx-ai-ensure-local)                                  ; the first-window look: it answers
+      (should-not drgnx-ai--ensure-time)
+      (should-not started)
+      (setq up nil)
+      (drgnx-ai--refused 'ollama)                              ; …so a refusal right after is not held back
+      (should (equal started '(ollama)))
+      (should drgnx-ai--ensure-time)
+      (drgnx-ai--refused 'ollama)                              ; a second one within the minute is
+      (should (equal started '(ollama))))))
+
 (ert-deftest drgnx-ai/agent-profiles-get-their-environment-when-they-start ()
   (drgnx-ai-test--with root
     (let ((process-environment (cons "OPENROUTER_API_KEY=sk-or-test" process-environment)))

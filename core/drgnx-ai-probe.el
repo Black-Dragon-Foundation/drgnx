@@ -145,23 +145,29 @@ not GPU memory); else the first GPU's when nvidia-smi is there; else nil."
   (with-temp-file (drgnx-ai-local-file)
     (let ((print-length nil)) (prin1 (list :managed (list provider :start command :name name)) (current-buffer)))))
 
+(defvar drgnx-ai--ensure-looking nil
+  "When (`float-time') a look of `drgnx-ai-ensure-local' began and has no answer yet: another one waits for it.")
+
 (defun drgnx-ai--ensure-due-p ()
   (and (not noninteractive)
-       (or (null drgnx-ai--ensure-time) (>= (- (float-time) drgnx-ai--ensure-time) drgnx-ai-ensure-interval))))
+       (or (null drgnx-ai--ensure-time) (>= (- (float-time) drgnx-ai--ensure-time) drgnx-ai-ensure-interval))
+       (not (and drgnx-ai--ensure-looking (< (- (float-time) drgnx-ai--ensure-looking) 10)))))
 
 (defun drgnx-ai-ensure-local ()
   "Start the local runner onboarding set up (`drgnx-ai-managed') again when its address does not answer and no
-drgnx job runs it already: the address is asked in the background and this returns at once.  Never prompts; at
-most once a minute; never in batch.  One message says what happens.  LM Studio without its lms command: the
-message says to open LM Studio."
+drgnx job runs it already: the address is asked in the background and this returns at once.  Never prompts; a
+look that finds it down starts it at most once a minute (one that finds it up counts for nothing); never in batch.
+One message says what happens.  LM Studio without its lms command: the message says to open LM Studio."
   (when-let* (((drgnx-ai--ensure-due-p)) (m (drgnx-ai-managed)))
-    (setq drgnx-ai--ensure-time (float-time))
+    (setq drgnx-ai--ensure-looking (float-time))
     (let ((id (car m)) (command (plist-get (cdr m) :start)) (name (or (plist-get (cdr m) :name) (symbol-name (car m)))))
       (drgnx-ai-probe
        (lambda ()
+         (setq drgnx-ai--ensure-looking nil)
          ;; the probe's callback runs in a curl sentinel: the start is a timer's (the launcher's call-process
          ;; never runs under the sentinel's inhibit-quit), and does not wait for the job's pid
          (unless (plist-get (alist-get id drgnx-ai-detected) :up)
+           (setq drgnx-ai--ensure-time (float-time))
            (run-at-time 0 nil #'drgnx-ai--start-local id command name)))
        (list id)))))
 
@@ -183,8 +189,6 @@ timer: never waits for the job (`:no-wait'), never asks."
 (defun drgnx-ai--refused (id)
   "`drgnx-ai-refused-functions': nothing listened at ID — the runner drgnx keeps running is started again."
   (when (and (drgnx-ai--ensure-due-p) (eq id (car (drgnx-ai-managed)))) (drgnx-ai-ensure-local)))
-
-(add-hook 'drgnx-ai-refused-functions #'drgnx-ai--refused)
 
 (defun drgnx-ai--on-first-window ()
   "`drgnx-first-gui-frame-hook': the local runner looked at a moment after the first window shows, from an idle

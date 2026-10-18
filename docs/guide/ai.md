@@ -163,7 +163,9 @@ The local runner onboarding set up (`drgnx-ai-managed`, kept in `ai-local.eld` i
 again when it is down: `drgnx-ai-ensure-local` asks its address in the background and, when nothing answers and no
 drgnx job runs it, starts it as a drgnx job with one message ("Starting Ollama…"). It runs a moment after the first
 window opens (never at daemon start) and when a request finds nothing listening there (`drgnx-ai-refused-functions`),
-at most once a minute, never in batch, never asking anything.
+never in batch, never asking anything. A look that finds the server down starts it at most once a minute; a look
+that finds it up counts for nothing, so a refusal a moment later still restarts it. The refusal is heard even in a
+process that never loaded the probe (a search, a script).
 
 A request walks its role's chain: a provider without its key or the capability (chat, fill in the middle) is
 skipped; no answer, an error status (429, 5xx …) or an answer that does not parse moves on to the next. The feature

@@ -126,6 +126,11 @@ or a number that is not finite."
 onboarding set up is started again from here (`drgnx-ai-ensure-local').  Called from a process sentinel: never
 prompt or wait.")
 
+;; hooked here, where the functions run: a process that never loaded the probe (a search, a script) loads it on the
+;; first refusal
+(autoload 'drgnx-ai--refused "drgnx-ai-probe")
+(add-hook 'drgnx-ai-refused-functions #'drgnx-ai--refused)
+
 (cl-defun drgnx-ai-request (role kind payload callback &key (timeout 30) chain interactive)
   "Ask ROLE's providers (or CHAIN's: ((PROVIDER . MODEL)…)), in order, for a KIND answer (`chat': PAYLOAD
 (:messages [(:role :content)…]); `fim': (:prefix :suffix :max-tokens); `embed': (:inputs [STRING…])).  CALLBACK
