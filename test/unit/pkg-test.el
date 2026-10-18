@@ -924,4 +924,17 @@ fy with a newer fa 2.0.  Returns (FX FY FA-1.0-ENTRY)."
       (should (equal (sort compiled #'string<) '("compat-macs.el" "compat.el")))
       (should-not drgnx-pkg--warnings))))
 
+(ert-deftest drgnx-pkg/soft-pin-fallback-keeps-newer-versions ()
+  ;; M12a-55: the dropped pin's archive offers fa 1.0 only; fb needs fa 2.0, which another archive has.  The entry
+  ;; archive's desc goes first, it does not replace the others: fb installs, it is not MISSING.
+  (drgnx-pkg-test--with root
+    (let* ((fx (drgnx-pkg-test--archive (concat root "fx") '((fa "1.0") (fb "1.0" ((fa "2.0"))))))
+           (fy (drgnx-pkg-test--archive (concat root "fy") '((fa "2.0")))))
+      (drgnx-pkg-test--ship (list (drgnx-pkg-test--entry fx 'fa "1.0") (drgnx-pkg-test--entry fx 'fb "1.0" '((fa "2.0")))))
+      (drgnx-pkg-test--want root 'fb)
+      (let ((r (drgnx-pkg-test--sync root :archives `(("fx" . ,fx) ("fy" . ,fy)))))
+        (should (plist-get r :ok))
+        (should-not (plist-get r :missing)))
+      (should (equal (drgnx-pkg-test--installed) '("fa-2.0" "fb-1.0"))))))
+
 ;;; pkg-test.el ends here

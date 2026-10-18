@@ -792,7 +792,9 @@ warning), never a missing package."
                                                  (alist-get name package-archive-contents))))
                                (push (list name why) dropped)
                                (setq pins (assq-delete-all name pins))
-                               (when d (setf (alist-get name package-archive-contents) (list d)))))
+                               ;; first, not alone: a dependent may need a newer version than that archive has
+                               (when d (setf (alist-get name package-archive-contents)
+                                             (cons d (delete d (alist-get name package-archive-contents)))))))
                            t)))
                 (dolist (desc plan)
                   (drgnx-pkg--progress "installing %s" (package-desc-full-name desc))
