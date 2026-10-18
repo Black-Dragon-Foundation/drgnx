@@ -50,6 +50,41 @@
     (let ((json (json-parse-string (drgnx-doctor-json results) :object-type 'plist)))
       (should (equal (plist-get (aref json 0) :status) "fail")))))
 
+(ert-deftest drgnx-doctor/job-sandbox-ok ()
+  "In the Agents group: the back end, its version, and whether agents run under the memory cap."
+  (should (equal (plist-get (alist-get 'job-sandbox drgnx-doctor--checks) :group) "Agents"))
+  (let ((r (drgnx-doctor-check 'job-sandbox (drgnx-doctor-test--facts
+                                             :sandbox '(:ok t :backend bwrap :version "0.12.0" :scope t :memory-max "4G")))))
+    (should (eq (car r) 'ok))
+    (should (string-prefix-p "bwrap 0.12.0 ok" (nth 1 r)))
+    (should (string-search "memory cap 4G" (nth 1 r))))
+  (let ((r (drgnx-doctor-check 'job-sandbox (drgnx-doctor-test--facts
+                                             :sandbox '(:ok t :backend bwrap :version "0.12.0" :scope nil :memory-max "4G")))))
+    (should (eq (car r) 'ok))
+    (should (string-search "no memory cap" (nth 1 r))))
+  (should (equal (nth 1 (drgnx-doctor-check 'job-sandbox (drgnx-doctor-test--facts :sandbox '(:ok t :backend seatbelt))))
+                 "sandbox-exec ok"))
+  ;; the fact is the sandbox's own check
+  (require 'drgnx-sandbox)
+  (cl-letf (((symbol-function 'drgnx-doctor--search) #'ignore)
+            ((symbol-function 'drgnx-sandbox-check) (lambda () '(:ok t :backend bwrap :version "9.9"))))
+    (should (equal (plist-get (plist-get (drgnx-doctor-facts) :sandbox) :version) "9.9"))))
+
+(ert-deftest drgnx-doctor/job-sandbox-problem ()
+  "A sandbox that cannot run is a warning with its reason and fix: jobs do not start, the rest of drgnx works."
+  (let ((r (drgnx-doctor-check 'job-sandbox (drgnx-doctor-test--facts
+                                             :sandbox '(:ok nil :backend bwrap :reason "bubblewrap (bwrap) is not installed"
+                                                            :fix "sudo dnf install bubblewrap")))))
+    (should (eq (car r) 'warn))
+    (should (string-search "bubblewrap (bwrap) is not installed" (nth 1 r)))
+    (should (string-search "jobs" (nth 1 r)))
+    (should (equal (nth 2 r) "sudo dnf install bubblewrap")))
+  (should (eq (car (drgnx-doctor-check 'job-sandbox (drgnx-doctor-test--facts :sandbox '(:error "boom")))) 'warn))
+  (require 'drgnx-sandbox)
+  (cl-letf (((symbol-function 'drgnx-doctor--search) #'ignore)
+            ((symbol-function 'drgnx-sandbox-check) (lambda () (error "Boom"))))
+    (should (equal (plist-get (drgnx-doctor-facts) :sandbox) '(:error "Boom")))))
+
 (ert-deftest drgnx-doctor/facts-from-this-emacs ()
   (let ((f (cl-letf (((symbol-function 'drgnx-doctor--search) #'ignore)) (drgnx-doctor-facts))))
     (should (equal (plist-get f :version) emacs-version))

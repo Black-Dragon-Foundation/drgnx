@@ -5,9 +5,10 @@ process from reaching what the user can reach: the hub's socket (and with it the
 repositories, the Emacs server, D-Bus. So each job agent's **whole process tree** runs inside a boundary the kernel
 enforces: bubblewrap on Linux, Seatbelt on macOS. The agent's command line is wrapped; everything it starts is inside.
 
-This page describes `core/drgnx-sandbox.el`: the spec, what it refuses, and the bubblewrap command line it becomes.
-The code is pure. It builds data and an argv and runs nothing; the tests assert the argv element by element, and two
-smoke tests run it under the real bwrap where bwrap can run (`test/unit/sandbox-test.el`).
+This page describes `core/drgnx-sandbox.el`: the spec, what it refuses, and the bubblewrap command line it becomes;
+then the check, the toolchain roots, the memory cap and the short sandboxed steps. The spec and the argv are pure
+data: the tests assert the argv element by element, and three smoke tests run it under the real bwrap where bwrap can
+run (`test/unit/sandbox-test.el`). The check and `drgnx-sandbox-run` start processes, never blocking.
 
 ## What is inside, and what is not
 
@@ -33,7 +34,8 @@ holds only the spec's variables.
 ## The spec
 
 `(drgnx-sandbox-spec &rest PROPS)` returns a plist. Every path goes through `file-truename` (links resolved, no
-trailing slash), so a link planted in the task folder cannot widen a bind. `:net` defaults to `shared`.
+trailing slash), so a link planted in the task folder cannot widen a bind. `:net` defaults to `shared`, and
+`:memory-max` to `drgnx-sandbox-memory-max` (an explicit nil means no cap).
 
 | Key | Value | Linux |
 |---|---|---|
@@ -50,7 +52,7 @@ trailing slash), so a link planted in the task folder cannot widen a bind. `:net
 | `:net` | `shared` or `isolated` | `--share-net` only for `shared` |
 | `:proxy`, `:gateway` | ports | macOS, phase 2 |
 | `:tmp`, `:profile-file` | paths | macOS: the session's `TMPDIR`, where the profile is written |
-| `:memory-max` | string | the memory cap |
+| `:memory-max` | a size (`4G`, `512M`, `50%`) or nil | the memory cap: a systemd scope in front (see below) |
 
 ## What is refused
 
@@ -169,6 +171,111 @@ or `sandbox-exec` (root's only, see above), else nil. `(drgnx-sandbox-wrap SPEC 
   mode 0600, as a new file, and the command line is `/usr/bin/sandbox-exec -f FILE COMMAND…`.
 - **Neither**: `drgnx-sandbox-refused`. A missing sandbox is never a silent fallback to the bare command.
 
+Where there is a memory cap (below), its scope comes first: `systemd-run … -- bwrap … -- COMMAND`.
+
+## The check
+
+Before a job's first agent starts, the hub asks whether the sandbox works here. A missing or broken one stops the job
+with a card that says why and how to fix it; the doctor shows the same answer.
+
+- `(drgnx-sandbox-check-async DONE)` is the hub's: it never blocks and never prompts. Its probes run side by side as
+  processes of their own, each for at most `drgnx-sandbox-check-timeout` seconds (5), and DONE gets the answer. With
+  an answer kept, or when no probe can run (no program), DONE is called before it returns; a call while a check runs
+  waits for that one.
+- `(drgnx-sandbox-check)` is the same, synchronous, for the doctor and the CLI: it waits for the async one.
+- The answer: `(:ok BOOL :backend SYM :version STRING :reason STRING :fix STRING :scope BOOL)`. `:fix` is nil where
+  nothing can be done here; `:scope` says whether a systemd user manager answers (the memory cap).
+- It is kept in `drgnx-sandbox--checked` until `drgnx-sandbox-check-reset`, which also forgets the programs found.
+  A check that runs looks for its programs again (`drgnx-sandbox-program-reset`), so a bubblewrap installed while the
+  hub runs is seen at the next check rather than never.
+
+The probes (`drgnx-sandbox--probes`), all run by the hub:
+
+| Probe | Linux | macOS |
+|---|---|---|
+| `:probe` | the argv every agent gets (`drgnx-sandbox-bwrap-argv` of an empty spec) around `/usr/bin/true` | `sandbox-exec -p '(version 1)(allow default)' /usr/bin/true` |
+| `:version` | `bwrap --version` | — |
+| `:scope` | `systemd-run --user --scope --quiet -p MemoryMax=64M -p MemorySwapMax=0 -- /usr/bin/true`, with the trusted systemd-run | — |
+
+The probe is the real argv, not a smaller one, so whatever an agent's start would trip on (`--proc` without a pid
+namespace, `--disable-userns` without a user namespace) fails the check first.
+
+`(drgnx-sandbox--explain STDERR)` turns a failure into `(REASON . FIX)`:
+
+| When | Reason | Fix |
+|---|---|---|
+| `/run/.containerenv` or `/.dockerenv` exists | inside a container | none |
+| no bwrap (STDERR nil) | bubblewrap is not installed, or not where only root can change it | by `/etc/os-release`'s ID, then ID_LIKE: `sudo dnf install bubblewrap`, `sudo apt install bubblewrap`, `sudo pacman -S bubblewrap`, `sudo zypper install bubblewrap`, else "with your package manager" |
+| `setting up uid map: Permission denied` | AppArmor restricts unprivileged user namespaces (Ubuntu 23.10 and later) | load Ubuntu's `bwrap-userns-restrict` profile |
+| bwrap's "user namespaces" message | the kernel does not allow unprivileged user namespaces | the sysctl that allows them |
+| anything else | its first line | run the probe by hand |
+
+A probe that hangs is ended at the timeout, and the reason says so. The container case comes first: inside one, any
+failure is "inside a container", and `bin/drgnx test --container` skips the real-bwrap tests with it.
+
+## Toolchain roots
+
+An agent needs the user's compilers, linters and test runners, many of which live under `~`. Binding `~` is refused,
+so `(drgnx-sandbox-toolchain-roots PATH-DIRS HOME)` finds the read-only roots under HOME that the `PATH` entries
+there need, as sorted true names. Each `PATH` dir inside HOME, its links resolved, gives its install root:
+
+| `PATH` entry | Root |
+|---|---|
+| `…/mise/installs/TOOL/VER/bin` (any mise data dir under `~`) | `…/mise/installs/TOOL/VER` |
+| `~/.cargo/bin` | `~/.cargo/bin`, and `~/.rustup/toolchains` where it exists (cargo's proxies run them) |
+| `~/.rustup/toolchains/…` | `~/.rustup/toolchains` |
+| `~/go/bin` | `~/go/bin` |
+| `~/.nvm/versions/node/V/bin` | `~/.nvm/versions/node/V` |
+| a link (`~/bin` → `~/tools/bin`) | its target, by the same rules |
+| anything else (`~/.local/bin`) | the dir itself |
+
+Each link inside such a dir (`~/.local/bin/python` → mise's python, `~/.local/bin/claude` → its versioned binary)
+adds the root of what it leads to: the target dir, or the dir holding the target file, by the same rules. A root
+inside another is left to the outer one; dirs outside HOME are the system's reads already.
+
+Never a root: HOME or a parent of it; `~/.local`, `~/.local/share`, `~/.local/state`, `~/.config` and `~/.cache`
+(they hold drgnx's own dirs and every tool's config); anything in `~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.kube`,
+`~/.docker` or `~/.password-store`. A `PATH` dir that would be one of these is skipped with its links. Validation
+refuses the drgnx dirs again when the spec is built.
+
+Bin dirs rather than whole tool homes keep the credentials beside them out: `~/.cargo/credentials.toml` is not
+inside `~/.cargo/bin`. Those inside a root are hidden: `(drgnx-sandbox-toolchain-hide ROOTS)` is the `:hide` list,
+each name of `drgnx-sandbox-secret-files` (`.npmrc`, npm's global `etc/npmrc`, `.yarnrc.yml`, `.pypirc`, `.netrc`,
+`.git-credentials`, `.env`, `credentials*`, `auth.json`) relative to each root, where it exists, as its true name.
+
+## The memory cap
+
+The whole command can run in a systemd scope, so that one agent's build cannot run the session out of memory. This
+is an operational guard, not a security boundary.
+
+- `drgnx-sandbox-memory-max` (default `"4G"`; nil for none) is a spec's `:memory-max` unless the spec gives one.
+  Validation takes only a size: digits with `K`, `M`, `G` or `T`, or a percentage.
+- `(drgnx-sandbox-memory-prefix SPEC)` is `(SYSTEMD-RUN "--user" "--scope" "--quiet" "-p" "MemoryMax=M" "-p"
+  "MemorySwapMax=0" "--")`, with the trusted systemd-run (`drgnx-sandbox-program`, never one found on `PATH`
+  first). It is nil when `:memory-max` is nil, or when the last check found no user manager that answers (`:scope`),
+  or has not run: it never starts a process itself.
+- `drgnx-sandbox-wrap` puts it first. A scope keeps stdin, stdout and stderr; systemd-run execs the command, so
+  ending the process ends the agent.
+
+## Short sandboxed steps
+
+`(drgnx-sandbox-run SPEC ARGV DONE &optional TIMEOUT)` runs ARGV inside SPEC (through `drgnx-sandbox-wrap`, so under
+the memory cap) as a process of its own, started in `/` with stdin closed, and returns the process. It is for the
+hub's short steps (a checkout, a bundle) and never blocks. DONE gets `(EXIT . OUTPUT)`, stdout and stderr together
+and trimmed, or `(:timeout . MSG)` when it ran past TIMEOUT seconds (default `drgnx-job-git-timeout`) and was ended.
+A refused spec signals `drgnx-sandbox-refused`, and nothing runs.
+
+## Cost
+
+Measured on Fedora 44 (bubblewrap 0.12.0, systemd 259), 20 runs of `/usr/bin/true` each, from a batch Emacs:
+
+| Command | Median | Range |
+|---|---|---|
+| the generated bwrap argv | 7.0 ms | 6.5–7.9 ms |
+| the memory cap's scope, then the argv | 23.3 ms | 14.9–30.3 ms |
+
+The check runs its probes side by side once per hub start, so it costs about as much as the scope.
+
 ## Limits
 
 - **Resolution and mounting are two steps.** The spec's paths are resolved and checked when the argv is built;
@@ -181,8 +288,15 @@ or `sandbox-exec` (root's only, see above), else nil. `(drgnx-sandbox-wrap SPEC 
   - sources the hub made itself, in directories only the hub writes, are safe.
 - **Toolchains under `/run`** (NixOS's and Guix's `/run/current-system`) are hidden by `--tmpfs /run`. Their `PATH`
   entries do not resolve inside yet.
-- **The program is found once.** A bubblewrap installed while the hub runs is seen after
-  `drgnx-sandbox-program-reset`.
+- **The program is found once per check.** A bubblewrap installed while the hub runs is seen at the next check that
+  runs: after `drgnx-sandbox-check-reset`, or when the hub checks again.
+- **Toolchains that write under `~`** (mise's shims and state, rustup updating, go's module cache) fail read-only.
+  Their caches belong in the private home (`CARGO_HOME`, `GOMODCACHE` pointing there). rustup's proxies in
+  `~/.cargo/bin` read `~/.rustup/settings.toml`, which is not bound: the agent's environment needs
+  `RUSTUP_TOOLCHAIN`. mise's shims (`…/mise/shims`) run mise itself, which reads its config: put mise's
+  `installs/…/bin` on `PATH` (mise's activation does) rather than the shims.
+- **Secret files are looked for at fixed places** in each root (`drgnx-sandbox-secret-files`), not throughout a
+  toolchain's tree.
 
 
 ## MCP through a socket
