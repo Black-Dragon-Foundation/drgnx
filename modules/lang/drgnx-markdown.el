@@ -18,10 +18,6 @@
 (require 'drgnx-registry)
 (require 'drgnx-jobs)
 
-(defvar markdown-fontify-code-blocks-natively)
-(defvar markdown-enable-math)
-(defvar markdown-header-scaling)
-(defvar markdown-display-remote-images)
 (defvar shr-blocked-images)
 (declare-function markdown-view-mode "markdown-mode")
 (declare-function shr-insert-document "shr")
@@ -151,11 +147,23 @@ replaces one still running), never waiting for it."
     (when (called-interactively-p 'any) (display-buffer buf '(display-buffer-in-direction (direction . right))))
     buf))
 
+(defun drgnx-markdown--set-option (var value)
+  "Set the option VAR to VALUE for as long as the module is on, unless something set it already.
+The module sets options when their library loads, after the user's config.el: a value that differs from the standard
+one is the user's (or a theme's, or Customize's) and wins.  The module's undo puts back what it replaced."
+  (let ((standard (get var 'standard-value)))
+    (when (or (not (default-boundp var)) (null standard)
+              (equal (default-value var) (eval (car standard) t)))
+      (drgnx-module-set var value))))
+
 (defun drgnx-markdown--setup ()
-  (setq markdown-fontify-code-blocks-natively t
-        markdown-enable-math t
-        markdown-header-scaling t
-        markdown-display-remote-images nil)
+  ;; Set once markdown-mode is loaded: set before, the undo would leave the options unbound under the package
+  (eval-after-load 'markdown-mode
+    (drgnx-modules-with-owner
+      (drgnx-markdown--set-option 'markdown-fontify-code-blocks-natively t)
+      (drgnx-markdown--set-option 'markdown-enable-math t)
+      (drgnx-markdown--set-option 'markdown-header-scaling t)
+      (drgnx-markdown--set-option 'markdown-display-remote-images nil)))
   (autoload 'markdown-mode "markdown-mode" nil t)
   (autoload 'gfm-mode "markdown-mode" nil t)
   (add-to-list 'auto-mode-alist '("\\.\\(?:md\\|markdown\\|mkd\\|mdx\\)\\'" . markdown-mode))

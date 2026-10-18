@@ -3,6 +3,7 @@
 (require 'drgnx)
 (require 'drgnx-area)
 (require 'eglot)
+(load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
 (dolist (m '("lang/drgnx-lang" "tools/drgnx-vc" "tools/drgnx-terminal" "tools/drgnx-search" "org/drgnx-org"))
   (load (expand-file-name (concat "modules/" m) drgnx-dir) nil t))
 
@@ -81,7 +82,14 @@
       (delete-directory dir t))))
 
 (ert-deftest drgnx-lang/eglot-connects-in-the-background ()
-  (let ((eglot-sync-connect 3) (prog-mode-hook nil) (major-mode-remap-alist nil) (xref-prompt-for-identifier t)
-        (drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil))
-    (funcall (plist-get (alist-get 'lang/eglot drgnx-modules--table) :setup))
-    (should-not eglot-sync-connect)))
+  (require 'xref)
+  (let ((sync eglot-sync-connect) (prompt xref-prompt-for-identifier))
+    (setq eglot-sync-connect 3 xref-prompt-for-identifier (eval (car (get 'xref-prompt-for-identifier 'standard-value)) t))
+    (unwind-protect
+        (progn
+          (drgnx-test-with-modules '(lang/eglot) :strict t
+                                   (should-not eglot-sync-connect)
+                                   (should-not xref-prompt-for-identifier))
+          (should (eql eglot-sync-connect 3))                ; and the teardown puts them back
+          (should xref-prompt-for-identifier))
+      (setq eglot-sync-connect sync xref-prompt-for-identifier prompt))))

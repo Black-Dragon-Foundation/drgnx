@@ -17,8 +17,7 @@
 (load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
 
 (defconst drgnx-teardown--not-yet
-  '((lang/eglot :until 17) (lang/grammars :until 17) (lang/markdown :until 17)
-    (extra/blame :until 18) (extra/booster :until 18) (extra/completion :until 18) (extra/debug :until 18)
+  '((extra/blame :until 18) (extra/booster :until 18) (extra/completion :until 18) (extra/debug :until 18)
     (extra/format :until 18) (extra/guides :until 18) (extra/hunks :until 18) (extra/jump :until 18)
     (extra/keycast :until 18) (extra/llm :until 18) (extra/magit :until 18) (extra/mc :until 18)
     (extra/undo :until 18) (extra/wgrep :until 18) (extra/windows :until 18)

@@ -137,7 +137,7 @@ buffers of those languages switch to their tree-sitter modes when it is done."
   (dolist (e drgnx-grammars-modes)
     (pcase-let ((`(,lang ,mode ,ts ,re) e))
       (when (and (memq lang langs) (fboundp ts) (treesit-language-available-p lang))
-        (when mode (setf (alist-get mode major-mode-remap-alist) ts))
+        (when mode (drgnx-module-alist-put 'major-mode-remap-alist mode ts))
         (when re (add-to-list 'auto-mode-alist (cons re ts)))
         (dolist (b (buffer-list))
           (with-current-buffer b

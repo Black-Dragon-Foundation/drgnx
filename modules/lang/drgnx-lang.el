@@ -19,9 +19,9 @@
   (load (expand-file-name "drgnx-grammars" (file-name-directory (or load-file-name buffer-file-name))) nil t))
 (defvar eglot-server-programs)
 (defvar warning-minimum-level)
+(defvar eglot--servers-by-project)
 (declare-function eglot--maybe-activate-editing-mode "eglot")
 (declare-function eglot--major-modes "eglot")
-(defvar xref-prompt-for-identifier)
 (declare-function eglot-ensure "eglot")
 (declare-function eglot-rename "eglot")
 (declare-function eglot-current-server "eglot")
@@ -29,15 +29,12 @@
 (declare-function eglot-format-buffer "eglot")
 (declare-function eldoc-doc-buffer "eldoc")
 
-(defvar eglot-sync-connect)
-(defvar eglot-autoshutdown)
-
 (defun drgnx-lang-remap-modes ()
   "Use the tree-sitter mode of every language whose grammar is installed."
   (when (fboundp 'treesit-language-available-p)
     (pcase-dolist (`(,lang ,mode ,ts . ,_) drgnx-grammars-modes)
       (when (and mode (treesit-language-available-p lang) (fboundp ts))
-        (setf (alist-get mode major-mode-remap-alist) ts)))))
+        (drgnx-module-alist-put 'major-mode-remap-alist mode ts)))))
 
 (defun drgnx-lang--program (contact)
   "The program CONTACT (an `eglot-server-programs' value) runs, or nil.  A function (such as
@@ -250,7 +247,8 @@ function the remote guard is built on."
     (display-warning 'drgnx-lang "This eglot has no `eglot--maybe-activate-editing-mode': the guard that keeps remote buffers from reaching the host on a mode change is off" :warning)))
 
 (defun drgnx-lang--teardown-eglot-guards ()
-  "Take the eglot hooks and advice of the module's setup away (tests; modules switch off at the next start)."
+  "Take the eglot hooks and advice `drgnx-lang--install-eglot-guards' put away, for a caller that installed them
+outside the module's setup (a test).  The module's own teardown removes the ones its setup made."
   (remove-hook 'eglot-connect-hook #'drgnx-lang--no-remote-autoreconnect)
   (remove-hook 'eglot-connect-hook #'drgnx-lang--attach-buffers)
   (remove-hook 'after-init-hook #'drgnx-lang--report-missing-activation)
@@ -276,6 +274,26 @@ is set non-empty (headless test sessions).  A remote file only looks at what Ope
     (if (file-remote-p buffer-file-name)
         (drgnx-lang--maybe-eglot-remote buffer-file-name)
       (when (drgnx-lang-server-available-p) (eglot-ensure)))))
+
+(defun drgnx-lang--set-option (var value)
+  "Set the option VAR to VALUE for as long as the module is on, unless something set it already.
+The module sets options when their library loads, after the user's config.el: a value that differs from the standard
+one is the user's (or a theme's, or Customize's) and wins.  The module's undo puts back what it replaced."
+  (let ((standard (get var 'standard-value)))
+    (when (or (not (default-boundp var)) (null standard)
+              (equal (default-value var) (eval (car standard) t)))
+      (drgnx-module-set var value))))
+
+(defun drgnx-lang--shutdown-servers ()
+  "Stop every running language server, for the module's teardown: no prompt, and short timeouts so that a server that
+does not answer cannot hold Emacs up.  The buffers stay.  Servers started by hand are stopped too: they cannot be told
+from the module's own."
+  (when (and (featurep 'eglot) (boundp 'eglot--servers-by-project) (hash-table-p eglot--servers-by-project)
+             (fboundp 'eglot-shutdown))
+    (let ((servers nil))
+      (maphash (lambda (_ list) (setq servers (append list servers))) eglot--servers-by-project)
+      (dolist (server servers)
+        (with-demoted-errors "drgnx lang: stopping a language server: %S" (eglot-shutdown server nil 0.5 t))))))
 
 (defun drgnx-lang-rename ()
   "Rename the symbol at point everywhere (a language server is needed)."
@@ -305,14 +323,19 @@ is set non-empty (headless test sessions).  A remote file only looks at what Ope
 (drgnx-module-define 'lang/eglot
                      :doc "Language servers when installed, tree-sitter modes when the grammar is, definitions, references, rename, hover."
                      :stage 'startup
+                     :teardown #'drgnx-lang--shutdown-servers
                      :setup
                      (lambda ()
                        (drgnx-lang-remap-modes)
                        (add-hook 'prog-mode-hook #'drgnx-lang--maybe-eglot)
-                       (with-eval-after-load 'eglot (drgnx-lang--install-eglot-guards))
-                       (setq xref-prompt-for-identifier nil
-                             eglot-sync-connect nil                 ; a slow server never blocks opening the file
-                             eglot-autoshutdown t)                  ; a server goes with its project's last buffer
+                       ;; The options are set once their library is loaded: set before, the undo would leave them unbound
+                       (eval-after-load 'eglot
+                         (drgnx-modules-with-owner
+                           (drgnx-lang--install-eglot-guards)
+                           (drgnx-lang--set-option 'eglot-sync-connect nil)       ; a slow server never blocks opening the file
+                           (drgnx-lang--set-option 'eglot-autoshutdown t)))       ; a server goes with its project's last buffer
+                       (eval-after-load 'xref
+                         (drgnx-modules-with-owner (drgnx-lang--set-option 'xref-prompt-for-identifier nil)))
                        (pcase-dolist (`(,id ,title ,fn ,doc)
                                       '((code-definition "Go to Definition" xref-find-definitions "Jump to where the symbol is defined")
                                         (code-references "Find References" xref-find-references "Every use of the symbol (in the panel)")
