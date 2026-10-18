@@ -74,12 +74,59 @@ What a node opens:
 | Node | Opens |
 |---|---|
 | Spec, plan, TODO | its file at its line |
-| Task | its plan at its heading. A read-only task opens there too, and the echo area names **Start Job from Plan…** (`job-start`), which starts a job. The graph never creates a job or edits a plan file by itself. |
-| Agent | its transcript when its session is in this Emacs; otherwise the echo area says what it is doing |
+| Task | the edits of the agent working on it ([below](#an-agents-edits)). A task nobody works on opens its plan at its heading. A read-only one opens there too, and the echo area names **Start Job from Plan…** (`job-start`), which starts a job. The graph never creates a job or edits a plan file by itself. |
+| Agent | its edits ([below](#an-agents-edits)) |
 | Job, review | the job's window |
 
 The filter keeps the nodes it matches and their ancestors (a task keeps its plan and spec). The first line says
 what it keeps.
+
+## An agent's edits
+
+Long transcripts hide what an agent actually changed. Click a task or an agent in the graph (or select it and
+press `RET`) and that agent's file changes since it started open in the editor area, as a live diff. The pane is
+`agent-edits`, and its buffer is `*edits: AGENT*`.
+
+- **One section per changed file.** A header line comes first: `FILE +A −B`, then `new` or `deleted`, then its
+  review mark (`✓ accepted`, or `changed since accepted`). The file's diff follows, with diff-mode's colours and keys:
+  `TAB` moves by hunk and `RET` opens the file at that line.
+- **The header line** at the top names the agent and counts the files changed and the files you accepted. It also
+  says what the changes are compared against, and whether the agent is stopped.
+- **Since it started.** A job's agent is compared with its task's base. A chat session is compared with where it
+  started. An outside agent is compared with its registered base, and only the files it reported are shown. A
+  silent worktree is compared with where it forked from the main branch.
+  ([Where the edits are](../develop/cockpit.md#edits).)
+
+| Key | Command | Does |
+|---|---|---|
+| `n`, `p` | Next / Previous Changed File (`cockpit-edits-next-file`, `cockpit-edits-previous-file`) | moves to the next or previous file's header line |
+| `a` | Accept File (`cockpit-accept-file`) | marks the file accepted with the hash of the diff you see. The mark counts toward the task's merge gate. It never merges or commits anything. When the agent changes the file again, the mark becomes pending and the header says `changed since accepted`. |
+| `r` | Revert File… (`cockpit-revert-file`) | asks the agent to undo its changes to the file. The message `[revert] please undo your changes to FILE` is queued for it and never interrupts it. One case is different: when the agent is **stopped** and the file is in **its own worktree**, you are asked once for that file, and then the file is put back as the base has it (`git checkout BASE -- FILE`, or deleted when it is new). The main checkout is never touched. |
+| `c` | Comment on Line… (`cockpit-comment`) | asks for a comment and queues `[comment] FILE:LINE: TEXT` for the agent. LINE is the file's line that the diff line at point stands for. |
+| `g` | | lists the changes again and diffs every file |
+
+The keys are the same in the VS Code, Emacs and Vim profiles: the buffer starts in Emacs state under evil.
+
+**How a message reaches the agent.** It is always queued. Sending a message never cancels the agent's work.
+- A session of this Emacs gets it when its turn ends, even when the session is set to interrupt.
+- A hub session gets it through the hub (`agents/send`): queued, or steered into its turn when it can be steered.
+- Any other agent gets it through the coordination store's queue: a hub session set to interrupt, a job's agent
+  elsewhere, or an outside agent. The hub delivers it as a new turn when the agent is free, and an outside agent reads
+  it with `read_inbox`.
+
+Each accept, revert and comment is also an event (`accept`, `revert`, `comment`) in the agent's history.
+
+**Live.** The pane follows the agent while it shows:
+- File watches on the agent's folder and on the folders of its changed files see each write. At most
+  `drgnx-cockpit-edits-watch-max` (32) folders are watched.
+- The edits an outside agent reports through its MCP server are seen too: the pane looks at the store every
+  `drgnx-cockpit-edits-check-interval` (2 s).
+- Only the files that changed are diffed again, at most once per `drgnx-cockpit-edits-delay` (0.3 s), however often
+  the agent writes. Only their sections of the buffer are replaced.
+- Your point and the window's scroll stay on the same file and line. No window moves.
+- A file the pane does not list yet makes it list the changes again, at most every 2 s.
+- A hidden pane only notes what changed. It catches up when it shows.
+- Remote (TRAMP) folders are never touched: such an agent's pane says so, with no git and no watch.
 
 ## When it redraws
 
@@ -124,6 +171,8 @@ The options:
 - `drgnx-cockpit-graph-states`: each state's face and mark.
 - `drgnx-cockpit-open-functions`: what opening a node of each kind does.
 - `drgnx-cockpit-redraw-delay` (0.5 s), `drgnx-cockpit-check-interval` (3 s), `drgnx-cockpit-silent-interval` (45 s).
+- An agent's edits: `drgnx-cockpit-edits-delay` (0.3 s), `drgnx-cockpit-edits-check-interval` (2 s),
+  `drgnx-cockpit-edits-watch-max` (32).
 
 Faces, all inheriting your theme's:
 
@@ -135,6 +184,10 @@ Faces, all inheriting your theme's:
 | `drgnx-cockpit-blocked` | `warning` | pending and failed work, blocks lines |
 | `drgnx-cockpit-edge` | `shadow` | lines, column titles, details |
 | `drgnx-cockpit-kind` | `bold` | kind words |
+| `drgnx-cockpit-edits-file` | `bold` | a changed file's name on its header line |
+| `drgnx-cockpit-edits-added`, `drgnx-cockpit-edits-removed` | `success`, `error` | the `+A` and `−B` counts |
+| `drgnx-cockpit-edits-accepted`, `drgnx-cockpit-edits-changed` | `success`, `warning` | `✓ accepted`, `changed since accepted` |
+| `drgnx-cockpit-edits-note` | `shadow` | `new`, `deleted`, a diff on its way or too large to show |
 | `drgnx-cockpit-focus` | `highlight` | the selected node's stroke: its background colour, or, when that stands out less than 3:1 from the default background, its foreground, else the text colour |
 
 The drawing takes every colour from these faces and `default`. When a face has no colour, it uses the window's

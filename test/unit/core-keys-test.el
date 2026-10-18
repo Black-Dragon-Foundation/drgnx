@@ -652,7 +652,11 @@ that took VS Code's C-S-h and F2 (the rest of the replace module is not modelled
     ;; M12f: the Work graph's keys
     (cockpit-filter "f" drgnx-cockpit-graph-mode-map) (cockpit-open "RET" drgnx-cockpit-graph-mode-map)
     (cockpit-open-in-plan "o" drgnx-cockpit-graph-mode-map) (cockpit-refresh "g" drgnx-cockpit-graph-mode-map)
-    (cockpit-next "TAB" drgnx-cockpit-graph-mode-map) (cockpit-previous "<backtab>" drgnx-cockpit-graph-mode-map))
+    (cockpit-next "TAB" drgnx-cockpit-graph-mode-map) (cockpit-previous "<backtab>" drgnx-cockpit-graph-mode-map)
+    ;; M12f: an agent's edits
+    (cockpit-accept-file "a" drgnx-cockpit-edits-mode-map) (cockpit-revert-file "r" drgnx-cockpit-edits-mode-map)
+    (cockpit-comment "c" drgnx-cockpit-edits-mode-map) (cockpit-edits-next-file "n" drgnx-cockpit-edits-mode-map)
+    (cockpit-edits-previous-file "p" drgnx-cockpit-edits-mode-map))
   "The VS Code profile's resolved keys on Linux before M12a gave it its macOS keys: (ID KEY MAP).")
 
 (ert-deftest drgnx-keys/linux-is-unchanged ()

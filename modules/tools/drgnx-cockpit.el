@@ -25,6 +25,8 @@
 ;; the layout, the drawing and the outline sit beside this file
 (unless (featurep 'drgnx-cockpit-graph)
   (load (expand-file-name "drgnx-cockpit-graph" (file-name-directory (or load-file-name buffer-file-name))) nil t))
+(unless (featurep 'drgnx-cockpit-edits)                 ; each agent's edits, beside it too
+  (load (expand-file-name "drgnx-cockpit-edits" (file-name-directory (or load-file-name buffer-file-name))) nil t))
 
 (declare-function drgnx-cockpit-graph-layout "drgnx-cockpit-graph")
 (declare-function drgnx-cockpit-graph-outline "drgnx-cockpit-graph")
@@ -35,6 +37,8 @@
 (declare-function drgnx-cockpit-graph--elements "drgnx-cockpit-graph")
 (declare-function drgnx-cockpit-graph--print "drgnx-cockpit-graph")
 (declare-function drgnx-cockpit-graph--ascii-p "drgnx-cockpit-graph")
+(declare-function drgnx-cockpit-edits--setup "drgnx-cockpit-edits")
+(declare-function drgnx-cockpit-edits-pane-buffer "drgnx-cockpit-edits")
 (declare-function drgnx-work-ui--metrics "drgnx-work-ui")
 (declare-function drgnx-work-ui--colour "drgnx-work-ui")
 (declare-function drgnx-work-nodes "drgnx-work-db")
@@ -70,7 +74,7 @@ repository the store knows); a work-tracker scan starts one too."
 
 (defcustom drgnx-cockpit-open-functions
   '((spec . drgnx-cockpit--open-file) (plan . drgnx-cockpit--open-file) (todo . drgnx-cockpit--open-file)
-    (task . drgnx-cockpit--open-task) (agent . drgnx-cockpit--open-agent) (job . drgnx-cockpit--open-job)
+    (task . drgnx-cockpit-edits-open-task) (agent . drgnx-cockpit-edits-open-agent) (job . drgnx-cockpit--open-job)
     (review . drgnx-cockpit--open-job))
   "What opening a node of the Work graph does, by its kind: KIND → a function of the node.  A kind not listed opens
 its file, when it has one."
@@ -612,8 +616,9 @@ say what it is; with N, N nodes on (back when negative).  RET opens it."
   (drgnx-cockpit--show-file (plist-get node :path) (plist-get node :line)))
 
 (defun drgnx-cockpit--open-task (node)
-  "Open task NODE: its plan at its heading (its edits, once the cockpit shows them), else its job.  A plan task no
-job runs is read-only here: it opens in its plan, and Start Job from Plan is named, never run."
+  "Open task NODE: its plan at its heading, else its job (a task an agent works on opens its edits first:
+`drgnx-cockpit-edits-open-task').  A plan task no job runs is read-only here: it opens in its plan, and Start Job from
+Plan is named, never run."
   (cond ((plist-get node :path)
          (prog1 (drgnx-cockpit--open-file node)
            (when (plist-get node :readonly)
@@ -739,7 +744,10 @@ their ancestors; each empty: any."
                    (cockpit-refresh "Draw Graph Again" drgnx-cockpit-graph-refresh "Read the store again and draw the Work graph")
                    (cockpit-next "Select Next Node" drgnx-cockpit-graph-select-next "The next node, in column order; RET opens it")
                    (cockpit-previous "Select Previous Node" drgnx-cockpit-graph-select-previous "The previous node; RET opens it")))
-    (drgnx-command-define id :category "Work" :title title :command fn :doc doc :map 'drgnx-cockpit-graph-mode-map)))
+    (drgnx-command-define id :category "Work" :title title :command fn :doc doc :map 'drgnx-cockpit-graph-mode-map))
+  ;; an agent's edits (drgnx-cockpit-edits.el): a task or an agent of the graph opens them
+  (drgnx-pane-define-kind 'agent-edits :title " EDITS" :home 'editor :buffer #'drgnx-cockpit-edits-pane-buffer)
+  (drgnx-cockpit-edits--setup))
 
 (drgnx-module-define 'tools/cockpit
                      :doc "The Work cockpit: the Work graph — specs, plans, tasks, agents, jobs and reviews; drawn in windows, an outline in terminals."

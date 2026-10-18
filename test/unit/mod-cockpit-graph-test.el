@@ -205,37 +205,43 @@ the fixture's."
     (drgnx-cockpit-graph-redraw t)
     (let ((opened (lambda () (list (buffer-file-name (window-buffer (selected-window)))
                                    (with-selected-window (selected-window) (line-number-at-pos)))))
-          (jobs nil) (msg nil))
+          (jobs nil) (msg nil) (edits nil)
+          (edits-of (lambda (a) (if (consp a) (plist-get a :id) a))))
       (cl-letf (((symbol-function 'drgnx-job-ui-show) (lambda (id) (push id jobs)))
+                ((symbol-function 'drgnx-cockpit-edits-show) (lambda (agent) (push (funcall edits-of agent) edits)))
                 ((symbol-function 'message) (lambda (fmt &rest args) (setq msg (and fmt (apply #'format fmt args))))))
         ;; RET: a spec or plan → its file at its line
         (with-current-buffer g (drgnx-cockpit-graph-test--goto (concat "plan:" plan)))
         (with-selected-window (get-buffer-window g) (call-interactively #'drgnx-cockpit-graph-open))
         (should (equal (funcall opened) (list plan 1)))
-        ;; a plan task no job runs: read-only — open in plan, and Start Job is named, never done
+        ;; a plan task no job runs and nobody works on: read-only — open in plan, and Start Job is named, never done
         (set-window-buffer (selected-window) g) (setq msg nil)
-        (with-current-buffer g (drgnx-cockpit-graph-test--goto (format "task:%s#5" plan)))
+        (with-current-buffer g (drgnx-cockpit-graph-test--goto (format "task:%s#1" plan)))
         (with-selected-window (get-buffer-window g) (call-interactively #'drgnx-cockpit-graph-open))
-        (should (equal (funcall opened) (list plan (plan-line 5))))
+        (should (equal (funcall opened) (list plan (plan-line 1))))
         (should (string-match-p "read-only.*Start Job from Plan" msg))
         (should-not jobs)
-        ;; a job → its window; an agent with no session here says so
+        ;; a task an agent works on (the chat on plan task 5): that agent's edits
         (set-window-buffer (selected-window) g)
+        (with-current-buffer g (drgnx-cockpit-graph-test--goto (format "task:%s#5" plan)))
+        (with-selected-window (get-buffer-window g) (call-interactively #'drgnx-cockpit-graph-open))
+        (should (equal edits '("s-2")))
+        ;; a job → its window; an agent → its edits
         (with-current-buffer g (drgnx-cockpit-graph-test--goto "job:jx"))
         (with-selected-window (get-buffer-window g) (call-interactively #'drgnx-cockpit-graph-open))
         (should (equal jobs '("jx")))
         (with-current-buffer g (drgnx-cockpit-graph-test--goto "agent:s-1"))
         (with-selected-window (get-buffer-window g) (call-interactively #'drgnx-cockpit-graph-open))
-        (should (string-match-p "claude · jx#2" msg))
+        (should (equal edits '("s-1" "s-2")))
         ;; o on an agent: the plan line of its task
         (with-current-buffer g (drgnx-cockpit-graph-test--goto "agent:s-2"))
         (with-selected-window (get-buffer-window g) (drgnx-cockpit-graph-open-in-plan (drgnx-cockpit--node-here)))
         (should (equal (funcall opened) (list plan (plan-line 5))))
-        ;; a click on an outline line opens it
+        ;; a click on an outline line opens it (task 2, which s-1 works on: its edits)
         (set-window-buffer (selected-window) g)
         (let ((pos (with-current-buffer g (drgnx-cockpit-graph-test--goto (format "task:%s#2" plan)) (point))))
           (drgnx-cockpit-graph-click (list 'mouse-1 (list (get-buffer-window g) pos '(0 . 0) 0))))
-        (should (equal (funcall opened) (list plan (plan-line 2))))
+        (should (equal edits '("s-1" "s-1" "s-2")))
         ;; a click on a box of the drawing (its hot spot) opens it
         (when (image-type-available-p 'svg)
           (set-window-buffer (selected-window) g)

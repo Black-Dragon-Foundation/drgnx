@@ -213,3 +213,116 @@ why a change touches as few bands as it can.
   the selection survives a model change; the focus stroke stands out (3:1);
 - silent worktrees as agents "not reporting", each once (a remote repository or agent folder never asked about);
 - the keys in every profile.
+
+## An agent's edits (`drgnx-cockpit-edits.el`)
+
+`modules/tools/drgnx-cockpit-edits.el` draws one agent's edits as a live diff: pane kind `agent-edits` (home
+`editor`), buffer `*edits: ID*` in `drgnx-cockpit-edits-mode` (from `diff-mode`). The graph's openers for tasks and
+agents (`drgnx-cockpit-edits-open-task`, `drgnx-cockpit-edits-open-agent` in `drgnx-cockpit-open-functions`) pass the
+model's agent plist, so a silent worktree keeps its folder and base. The user's side is in
+[cockpit.md](../guide/cockpit.md#an-agents-edits).
+
+### The buffer
+
+- **Sections.** Each file is one section: its header line, its diff and a blank line. The whole section carries the
+  text property `drgnx-cockpit-edits-file`, whose value is the file's string from `drgnx-cockpit-edits--files` (the
+  same object for the whole section, so a section ends where the property changes).
+- **Finding a section** walks the property changes, one step per section.
+- **Header faces.** diff-mode's last font-lock keyword gives every other line `diff-context`. The header's parts carry
+  `drgnx-cockpit-edits-face`, and a matcher placed before diff-mode's keywords
+  (`drgnx-cockpit-edits--fontify-headers`) copies it to `face`. diff-mode's keywords then leave those lines alone.
+  `font-lock-face` covers buffers without font-lock.
+- **diff-mode, adjusted:**
+  - its read-only key map (`diff-mode-read-only`) is off, and that map sits under the mode's own instead;
+  - its change tracking (hunk-header fixing after hand edits) is unregistered;
+  - `diff-refine` and `diff-font-lock-syntax` are off, because each would read files or run diff during redisplay.
+- **No undo** (`buffer-disable-undo`), no dir-local variables, and `default-directory` is the agent's folder when it
+  is local, so `RET` opens the file.
+
+### Live updates
+
+The pane never polls a file. Three things name the files that changed:
+
+1. **File watches** (`file-notify-add-watch`, `change`) on the agent's folder and its changed files' folders, at most
+   `drgnx-cockpit-edits-watch-max`, only local ones. They are updated after each round. A watch event costs a prefix
+   test and a hash lookup: it marks the file dirty and schedules a tick. Paths in `.git` and outside the folder are
+   ignored.
+2. **Reported edits.** `drgnx-cockpit-edits--check` runs every `drgnx-cockpit-edits-check-interval` seconds while the
+   pane shows. It compares `data_version` and `total_changes`, one query. When they moved, it reads the agent's `edit`
+   events after the last id it saw. Their paths, cut to the folder with no remote name expanded, mark files dirty. Review
+   marks set elsewhere redraw their headers.
+3. **g** marks every file dirty and asks for a listing.
+
+A file the pane does not list makes it list again (`drgnx-cockpit-changed-files`, with a fresh
+`drgnx-cockpit-edit-source`, so an outside agent's newly reported paths count). Listing happens at most every 2 s.
+
+**Ticks and rounds.**
+- One owned one-shot timer runs the tick, `drgnx-cockpit-edits-delay` after the first change. A tick on a hidden pane
+  only marks it stale; `window-buffer-change-functions` and `drgnx-cockpit-edits-show` catch up.
+- A tick while a round runs is put off. Otherwise it starts a round: the listing when due, then the dirty files' diffs
+  (`drgnx-cockpit-file-diff`), at most 3 git processes at a time.
+- The round's diffs are shown together when the last one is back. A long round, the first load of many files, shows
+  what came back every `drgnx-cockpit-edits-delay`.
+- So 50 writes a second give at most one patch per 0.3 s.
+
+**Patching** (`drgnx-cockpit-edits--patch`):
+- Before the change, each window's point and start are kept as (file, line in its section, column). The buffer's
+  own point is kept the same way.
+- Only the sections whose diff changed are replaced. The diff's SHA-1 decides: an unchanged diff draws nothing.
+- After the change, the windows' point and start are put back on the same file and line, inside
+  `drgnx-wb-with-owned-windows`. A window that is already right is not touched.
+- A file gone from the list loses its section, and a new one gets a section at the end.
+- From no files to some, or to an error, the buffer is drawn anew.
+
+**Owners.** The buffer owns its tick, flush and check timers and its watches. Its `kill-buffer-hook` cancels them
+and removes the watches. A git callback for a killed buffer does nothing. The caches are buffer-local and pruned with
+the files: `drgnx-cockpit-edits--info` holds counts, hash and note per file, never diff text, because the buffer
+holds that.
+
+### Accept, revert, comment
+
+- **Accept** writes `drgnx-coord-review-mark AGENT FILE "accepted" SHA1-OF-THE-DIFF` and an `accept` event. When a
+  diff later comes back with another hash, the mark becomes `pending`. That write is best effort, because it runs from
+  a sentinel. It never calls the hub, merges or commits. C9's merge gate reads the marks.
+- **Send.** Revert requests and comments are queued, never an interruption:
+  - a session of this Emacs: `drgnx-agents-send`, with the session's mode set to `queue` for the call when it is
+    `interrupt`;
+  - a hub mirror not set to interrupt: `drgnx-agents-send`, which is the hub's `agents/send`;
+  - anything else: `drgnx-coord-send` to the agent's id, which the hub delivers when the agent is free and an outside
+    agent reads with `read_inbox`.
+- **Direct revert** (`drgnx-cockpit-edits--direct-p`) needs all of these:
+  - the source is `:stopped` and `:own-worktree`;
+  - its folder is local and a linked worktree (its top has a `.git` file, so it is never the main checkout);
+  - the file passes `drgnx-cockpit--file-ok`.
+
+  Then, after `yes-or-no-p` naming the file:
+  - `git checkout BASE -- FILE`, BASE being the merge-base when the source says `:merge-base`;
+  - or `delete-file` when `git cat-file -e BASE:./FILE` says the base has no such file.
+
+  A `revert` event follows (`:direct t`; a request is `:requested t`).
+- **Comment** reads the text (a command, so it may ask) and queues `[comment] FILE:LINE: TEXT`.
+  - LINE is the new-side line of the diff line at point: the hunk's `+N` plus the context and added lines before it.
+  - A `comment` event follows.
+
+### Cost
+
+Batch, drgnx's steady GC settings, a 2,000-line file rewritten 30 times, point and window in its middle:
+- the patch: 1.4 ms p50, 2.8 ms p95;
+- the whole round, git included (asynchronous, so typing goes on meanwhile): 11.7 ms p50, 27.6 ms p95.
+
+### Tests
+
+`test/unit/mod-cockpit-edits-test.el` (prefix `drgnx-cockpit-edits/`) runs on the cockpit fixture's outside agent. It
+records file watches instead of making real ones: in batch Emacs, a real watch's event waits in an input queue that
+nothing reads, and no process sentinel runs while it waits. It covers:
+- the files with their counts, the header faces under diff-mode's, `n`/`p`, a reported file listed at the next look,
+  watched folders, and a remote folder (an error line, no git, no watch);
+- 50 writes in a second: at most 4 patches, the last write shown, point and window start on the same file, line and
+  column, no window moved;
+- accept, and a change that makes the mark pending;
+- accept never merging or committing;
+- revert: queued while the agent runs, queued for a session set to interrupt, queued for a stopped agent in the main
+  checkout; done in its own worktree, after asking, when it is stopped; nothing done when you say no;
+- comments queued, the line a diff line stands for, the hub routes;
+- the graph opening an agent's edits from a task or an agent;
+- the keys in every profile.
