@@ -25,6 +25,20 @@ how every drgnx UI change is developed and verified.
 `$DRGNX_TEST_RESULTS` when set; the summary is the source of truth for GUI runs, whose exit status is only
 pass/fail. `$DRGNX_TEST_SELECTOR` (an ERT selector, e.g. `(tag :timing)`) picks the tests a run takes.
 
+### Native trampolines
+
+A test that `cl-letf`s a primitive (`buffer-list`, `message`, …) makes Emacs compile a native trampoline, which it
+writes to the first writable directory of `native-comp-eln-load-path` — by default the user's
+`~/.config/emacs/eln-cache`, fixed when Emacs started, before the runner swaps HOME. The runner puts a directory of
+drgnx's first in that list and drops the user's own eln-cache from it (so a test neither writes nor reads there), and
+exports it as `$DRGNX_TEST_ELN_DIR`: every Emacs of the run (a test that runs the runner, `check`'s shards) uses the
+same one, so each trampoline is compiled once. `native-comp-enable-subr-trampolines` set to a directory would not do:
+Emacs looks for an existing trampoline only along `native-comp-eln-load-path`. The directory is
+`$XDG_CACHE_HOME/drgnx/test-eln/EMACS-VERSION/` (`~/.cache/…`, read before HOME is swapped), kept between runs: a full
+unit run compiles ~60 trampolines at ~0.2 s each, which would cost every run 12–15 s. It is drgnx's own and holds only
+trampolines (~1 MB); delete it at any time. When it cannot be made, the run's temp directory (`eln/`) is used.
+`$DRGNX_TEST_ELN_DIR` set from outside (an absolute path) chooses another.
+
 `/tmp` is RAM on many machines, so a test run leaves nothing there. `bin/drgnx test` (every tier) and `bin/drgnx check`
 run in a `$TMPDIR` of their own — a fresh `mktemp -d` (`drgnx-run.XXXXXX`, made absolute) below the caller's `$TMPDIR` or
 `/tmp`, so `temporary-file-directory` and the native compiler's libgccjit files land in it too — and remove it on every

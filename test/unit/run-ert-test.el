@@ -252,3 +252,64 @@
           (should-not (seq-remove (lambda (f) (member f '("drgnx-run.abcdef" "drgnx-run.ghijkl")))
                                   (directory-files parent nil directory-files-no-dot-files-regexp))))
       (delete-directory tmp t))))
+
+(defun drgnx-run-ert-test--eln-probe (suite probe)
+  "Write into SUITE a test file that `cl-letf's `buffer-list' (a native trampoline) and writes to PROBE what the
+runner gave it: DRGNX_TEST_ELN_DIR and the first effective directory of `native-comp-eln-load-path'."
+  (with-temp-file (expand-file-name "eln-test.el" suite)
+    (insert (format "(require 'ert)\n(require 'cl-lib)\n(ert-deftest eln-probe ()\n  (cl-letf (((symbol-function 'buffer-list) (lambda (&rest _) nil))) (buffer-list))\n  (with-temp-file %S (prin1 (list (getenv \"DRGNX_TEST_ELN_DIR\") (car native-comp-eln-load-path)) (current-buffer))))\n"
+                    probe))))
+
+(defun drgnx-run-ert-test--run-suite (suite &rest env)
+  "Run SUITE with the batch runner in a fresh Emacs with ENV; return its exit code."
+  (let ((process-environment (append env (list "DRGNX_TEST_SELECTOR" "DRGNX_TEST_RESULTS") process-environment)))
+    (call-process (expand-file-name invocation-name invocation-directory) nil nil nil
+                  "--batch" "-Q" "-L" (file-name-directory (locate-library "run-ert.el"))
+                  "-l" (locate-library "run-ert.el") "-f" "drgnx-run-ert-batch" suite)))
+
+(ert-deftest drgnx-run-ert/trampolines-stay-in-the-run ()
+  ;; A test that `cl-letf's a primitive compiles a native trampoline.  Emacs writes it to the first writable
+  ;; directory of `native-comp-eln-load-path' — the user's ~/.config/emacs/eln-cache, which the runner's own
+  ;; HOME swap comes too late to change.  The runner puts drgnx's directory first: nothing lands in the home
+  ;; the Emacs started with.
+  (skip-unless (and (fboundp 'native-comp-available-p) (native-comp-available-p)))
+  (let* ((tmp (file-name-as-directory (make-temp-file "drgnx-eln" t)))
+         (home (expand-file-name "home" tmp)) (suite (expand-file-name "suite" tmp))
+         (eln (expand-file-name "eln/" tmp)) (probe (expand-file-name "probe" tmp)))
+    (unwind-protect
+        (progn
+          (make-directory home) (make-directory suite)
+          (drgnx-run-ert-test--eln-probe suite probe)
+          (should (eql 0 (drgnx-run-ert-test--run-suite suite (concat "HOME=" home) "XDG_CONFIG_HOME"
+                                                        (concat "DRGNX_TEST_ELN_DIR=" eln))))
+          (should (equal (file-name-as-directory (cadr (car (read-from-string (with-temp-buffer (insert-file-contents probe) (buffer-string))))))
+                         eln))
+          (should (directory-files-recursively eln "\\`subr--trampoline-.*_buffer_list_"))
+          (should-not (directory-files-recursively home "\\`subr--trampoline-")))
+      (delete-directory tmp t))))
+
+(ert-deftest drgnx-run-ert/children-share-the-eln-dir ()
+  ;; Every Emacs of a run (per-file processes, check shards, a test that runs the runner) uses one directory, so
+  ;; a trampoline is compiled once: the runner exports it as DRGNX_TEST_ELN_DIR, and a runner given one uses it.
+  (skip-unless (and (fboundp 'native-comp-available-p) (native-comp-available-p)))
+  (let* ((tmp (file-name-as-directory (make-temp-file "drgnx-eln" t)))
+         (suite (expand-file-name "suite" tmp)) (probe (expand-file-name "probe" tmp))
+         (given (expand-file-name "given-eln/" tmp))
+         (read-probe (lambda () (car (read-from-string (with-temp-buffer (insert-file-contents probe) (buffer-string)))))))
+    (unwind-protect
+        (progn
+          (make-directory suite)
+          (drgnx-run-ert-test--eln-probe suite probe)
+          ;; given: passed through as it is, and first in the child's load path
+          (should (eql 0 (drgnx-run-ert-test--run-suite suite (concat "DRGNX_TEST_ELN_DIR=" given))))
+          (should (equal (mapcar #'file-name-as-directory (funcall read-probe)) (list given given)))
+          ;; not given: the runner picks one, exports it and puts it first
+          (should (eql 0 (drgnx-run-ert-test--run-suite suite "DRGNX_TEST_ELN_DIR" (concat "XDG_CACHE_HOME=" tmp "cache"))))
+          (pcase-let ((`(,exported ,first) (funcall read-probe)))
+            (should (stringp exported))
+            (should (equal (file-name-as-directory exported) (file-name-as-directory first)))))
+      (delete-directory tmp t)))
+  ;; this run too
+  (when (getenv "DRGNX_TEST_ISOLATED")
+    (should (equal (file-name-as-directory (getenv "DRGNX_TEST_ELN_DIR"))
+                   (file-name-as-directory (car native-comp-eln-load-path))))))

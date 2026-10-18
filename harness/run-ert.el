@@ -115,6 +115,36 @@ drgnx-run.XXXXXX, a real directory (no symlink) of the user's."
          (eql (file-attribute-user-id (file-attributes given 'integer)) (user-uid))
          (expand-file-name given))))
 
+(defun drgnx-run-ert--eln-dir ()
+  "Where this run's native trampolines go: DRGNX_TEST_ELN_DIR when the run that started this one gave it (so every
+Emacs of a run shares one), else drgnx's own cache for this Emacs version under the user's XDG cache — kept between
+runs, because a unit run `cl-letf's ~60 primitives at ~0.2 s of compiling each.  Read before HOME is swapped."
+  (let ((given (getenv "DRGNX_TEST_ELN_DIR")) (cache (getenv "XDG_CACHE_HOME")))
+    (file-name-as-directory
+     (if (and given (file-name-absolute-p given))
+         (expand-file-name given)
+       (expand-file-name (format "drgnx/test-eln/%s/" emacs-version)
+                         (if (and cache (file-name-absolute-p cache)) cache "~/.cache"))))))
+
+(defvar native-comp-eln-load-path)
+
+(defun drgnx-run-ert--use-eln-dir (dir fallback user-cache)
+  "Compile native trampolines into DIR (FALLBACK when DIR cannot be made or written): first in
+`native-comp-eln-load-path', which loses USER-CACHE, the user's own eln-cache, so a test neither writes nor reads
+there.  Emacs writes a trampoline (a `cl-letf' of a primitive) to the first writable directory of that list, and
+looks for one only along it (`native-comp-enable-subr-trampolines' set to a directory would not be searched).
+Return the directory, or nil without native compilation."
+  (when (and (fboundp 'native-comp-available-p) (native-comp-available-p))
+    (let ((dir (if (ignore-errors (make-directory dir t) (file-writable-p dir))
+                   dir
+                 (make-directory fallback t)
+                 fallback)))
+      (setq native-comp-eln-load-path
+            (cons dir (cl-remove-if (lambda (d) (equal (file-name-as-directory (expand-file-name d invocation-directory))
+                                                       user-cache))
+                                    native-comp-eln-load-path)))
+      dir)))
+
 (defun drgnx-run-ert-batch ()
   "Batch entry point: run the suite in the remaining arguments — a directory, or test files (a shard) —
 exit 0 or 1."
@@ -123,6 +153,9 @@ exit 0 or 1."
         load-path (mapcar (lambda (d) (if (stringp d) (expand-file-name d) d)) load-path))
   (let* ((args (prog1 (mapcar #'expand-file-name command-line-args-left) (setq command-line-args-left nil)))
          (dir (if (and (= (length args) 1) (file-directory-p (car args))) (car args) args))
+         ;; native trampolines: drgnx's directory, never the user's ~/.config/emacs/eln-cache (both before HOME changes)
+         (eln (drgnx-run-ert--eln-dir))
+         (user-eln (file-name-as-directory (expand-file-name "eln-cache/" user-emacs-directory)))
          ;; The suite never sees the user's drgnx config, packages, state or cache.
          ;; `bin/drgnx test' makes a directory of its own, DRGNX_RUN_TMP, and removes it: used as it is (so
          ;; paths stay short), never deleted here.  Anything else the variable holds — empty (the current
@@ -136,6 +169,7 @@ exit 0 or 1."
          ;; removing OWN below, or from `kill-emacs-hook' when the run dies, leaves nothing in /tmp.
          (temporary-file-directory (file-name-as-directory tmp))
          (_ (when own (add-hook 'kill-emacs-hook (lambda () (ignore-errors (delete-directory own t))))))
+         (eln (drgnx-run-ert--use-eln-dir eln (expand-file-name "eln/" tmp) user-eln))
          ;; …nor anything else under ~ (HOME is a temp dir; the user's ELPA stays readable for the
          ;; tests that load packages from it, read-only, through DRGNX_USER_ELPA)
          (elpa (expand-file-name "~/.config/emacs/elpa"))
@@ -145,6 +179,8 @@ exit 0 or 1."
                             ("XDG_STATE_HOME" . "state") ("XDG_CACHE_HOME" . "cache") ("HOME" . "home")
                             ("TMPDIR" . ".")))
                   (list "DRGNX_TEST_ISOLATED=1")
+                  ;; …every Emacs this run starts compiles its trampolines into the same directory, once
+                  (and eln (list (concat "DRGNX_TEST_ELN_DIR=" eln)))
                   ;; …a test that runs the runner or bin/drgnx again must not reuse (and delete) this directory
                   (list "DRGNX_RUN_TMP")
                   ;; …nor start a durable hub that would outlive it (the hub's own tests unset this)
