@@ -75,3 +75,26 @@ visible, without parent."
     (drgnx-signal-post 'tabs-changed)
     (drgnx-signal--flush)
     (should (memq 'tabs seen))))
+
+(defmacro drgnx-frames-test--terminal (daemon terminal &rest body)
+  "BODY with every frame a visible, parentless text frame on a terminal named TERMINAL; `daemonp' DAEMON."
+  (declare (indent 2))
+  `(cl-letf (((symbol-function 'daemonp) (lambda () ,daemon))
+             ((symbol-function 'display-graphic-p) (lambda (&optional _) nil))
+             ((symbol-function 'frame-visible-p) (lambda (_) t))
+             ((symbol-function 'frame-parent) (lambda (&optional _) nil))
+             ((symbol-function 'frame-terminal) (lambda (&optional _) 'kx-terminal))
+             ((symbol-function 'terminal-name) (lambda (&optional _) ,terminal)))
+     ,@body))
+
+(ert-deftest drgnx-frames/a-daemon-s-client-terminal-frame-is-a-workbench ()
+  ;; `emacsclient -t' (and `emacs -nw') get the workbench: a text frame is a window like a graphical one
+  (drgnx-frames-test--terminal "drgnx" "/dev/pts/3"
+    (should (drgnx-frames--workbench-p (selected-frame))))
+  (drgnx-frames-test--terminal nil "/dev/tty"
+    (should (drgnx-frames--workbench-p (selected-frame)))))
+
+(ert-deftest drgnx-frames/the-daemon-s-initial-frame-is-not ()
+  ;; the daemon's own frame (F1, on its initial terminal) is nobody's window
+  (drgnx-frames-test--terminal "drgnx" "initial_terminal"
+    (should-not (drgnx-frames--workbench-p (selected-frame)))))

@@ -109,6 +109,21 @@ tmux does not pass the kitty keyboard protocol, so `s-` keys do not arrive insid
 Onboarding suggests `EDITOR='emacsclient -s drgnx -t'`: `git commit` and other programs that open an editor then
 open it in drgnx, in the terminal you ran them from.
 
+A client that opens a file this way (`emacsclient -t FILE`) gets the **editor only**: no sidebar, panel or right
+dock, so the commit message has the whole terminal. Save it (`C-s`), then close its tab (Close Tab, or the tab's
+`×`) or press `C-x #`: the edit ends and the program that opened it goes on, as with `code --wait`. Closing the tab
+does not save for you; an unsaved change stays in the open buffer. `emacsclient -t` without a file (and `drgnx -t`)
+opens the whole workbench.
+
+## What drgnx asks the terminal
+
+When a terminal window opens, drgnx works out which terminal it is from that client's own environment (in a
+daemon, never the daemon's) and asks the terminal its name and version once (XTVERSION), waiting 0.2 s at most;
+a terminal that does not answer just stays unnamed. A second window of the same terminal asks nothing. What it
+found — how keys arrive (kitty keyboard protocol, modifyOtherKeys, or neither), OSC 52, colours, the mouse — and the
+keys of your profile this terminal cannot send are written to `terminal-report.eld` in drgnx's state directory
+(`~/.local/state/drgnx/`), one entry per terminal device, for the doctor and the key sheet.
+
 ## Clipboard
 
 Copying in drgnx puts the text on your computer's clipboard through OSC 52 when the terminal takes it (the table's

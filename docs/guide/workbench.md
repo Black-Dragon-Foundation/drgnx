@@ -233,6 +233,11 @@ first and every other buffer after them: it sorts, it never hides one (the order
 category, in `completion-category-overrides`; a `display-sort-function` of your own there stays). A help or results buffer shown from a window opens that
 window's panel; nothing moves in the other window. drgnx never places or sizes a window: your window manager does.
 
+**In a terminal.** A terminal window — `emacsclient -t`, `emacs -nw` — is a workbench window too: the same docks,
+groups, tab line, breadcrumb, panel and status bar, and the first one is the main window (a daemon's own hidden
+frame never is). A client that asked for a file (`emacsclient -t FILE`, git's `EDITOR`) shows the editor only and
+returns when you close the file's tab or press `C-x #`. See [terminal.md](terminal.md).
+
 ### Popups
 
 Short-lived buffers — a transient menu, which-key's hints, `*Completions*`, the calendar — show in one **popup

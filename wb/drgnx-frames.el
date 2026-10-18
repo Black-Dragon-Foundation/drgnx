@@ -16,8 +16,10 @@
 (require 'drgnx-groups)
 
 (defun drgnx-frames--workbench-p (f)
-  "F is a frame the workbench works in: live, visible, not a child frame, not a daemon's terminal frame."
-  (and (frame-live-p f) (frame-visible-p f) (not (frame-parent f)) (or (display-graphic-p f) (not (daemonp)))))
+  "F is a frame the workbench works in: live, visible, not a child frame, not the daemon's initial frame
+(a client's terminal frame, or `emacs -nw''s, is one)."
+  (and (frame-live-p f) (frame-visible-p f) (not (frame-parent f))
+       (not (and (daemonp) (equal (terminal-name (frame-terminal f)) "initial_terminal")))))
 
 (defun drgnx-frames--main ()
   (seq-find (lambda (f) (and (frame-live-p f) (eq (frame-parameter f 'drgnx-frame-role) 'main))) (frame-list)))
@@ -141,8 +143,10 @@ Sorts, never filters: every buffer stays a candidate."
       (progn (drgnx-frames--sort-overrides t)
              (add-hook 'delete-frame-functions #'drgnx-frames--deleted)
              (add-hook 'drgnx-first-gui-frame-hook #'drgnx-frames-mark-main -10)   ; before the restore
+             (add-hook 'after-make-frame-functions #'drgnx-frames-mark-main)      ; a client's terminal frame too
              (drgnx-frames-mark-main))                ; a frame that exists already (not a daemon's terminal)
     (drgnx-frames--sort-overrides nil)
+    (remove-hook 'after-make-frame-functions #'drgnx-frames-mark-main)
     (remove-hook 'delete-frame-functions #'drgnx-frames--deleted)
     (remove-hook 'drgnx-first-gui-frame-hook #'drgnx-frames-mark-main)))
 
