@@ -1,0 +1,329 @@
+;;; cockpit-model-test.el --- batch tests: the Work cockpit's model of specs, plans, tasks, agents, jobs, reviews -*- lexical-binding: t -*-
+(require 'ert)
+(require 'cl-lib)
+(load (expand-file-name "test/fixtures/cockpit-fixture" drgnx-dir) nil t)   ; a project, a job, worktrees, events
+(require 'drgnx-cockpit-model)
+
+(defun drgnx-cockpit-model-test--node (model id)
+  (seq-find (lambda (n) (equal (plist-get n :id) id)) (plist-get model :nodes)))
+
+(defun drgnx-cockpit-model-test--edge-p (model from to kind)
+  (seq-some (lambda (e) (and (equal (plist-get e :from) from) (equal (plist-get e :to) to) (eq (plist-get e :kind) kind)))
+            (plist-get model :edges)))
+
+(defun drgnx-cockpit-model-test--agent (model id)
+  (seq-find (lambda (a) (equal (plist-get a :id) id)) (plist-get model :agents)))
+
+(ert-deftest drgnx-cockpit-model/spec-plan-task-agent-chain ()
+  (drgnx-cockpit-fixture-with
+    (let* ((m (drgnx-cockpit-model :sessions sessions))
+           (s (concat "spec:" spec)) (p (concat "plan:" plan)) (t2 (format "task:%s#2" plan)) (t5 (format "task:%s#5" plan)))
+      (should (eq (plist-get (drgnx-cockpit-model-test--node m s) :kind) 'spec))
+      (let ((pn (drgnx-cockpit-model-test--node m p)))
+        (should (eq (plist-get pn :kind) 'plan))
+        (should (equal (plist-get pn :title) "M99 — the plan"))
+        (should (equal (plist-get pn :path) plan)))
+      (should (drgnx-cockpit-model-test--edge-p m p s 'derives))
+      (dolist (n '(1 2 3 4 5 6))
+        (let ((tn (drgnx-cockpit-model-test--node m (format "task:%s#%d" plan n))))
+          (should (eq (plist-get tn :kind) 'task))
+          (should (equal (plist-get tn :line) (plan-line n)))
+          (should (drgnx-cockpit-model-test--edge-p m (plist-get tn :id) p 'implements))))
+      ;; the job task is the plan task: one node, the job's state
+      (let ((tn (drgnx-cockpit-model-test--node m t2)))
+        (should (equal (plist-get tn :job) "jx"))
+        (should (equal (plist-get tn :state) "running"))
+        (should (equal (plist-get tn :agent) "s-1")))
+      (should-not (drgnx-cockpit-model-test--node m "jx#2"))
+      (should (eq (plist-get (drgnx-cockpit-model-test--node m "job:jx") :kind) 'job))
+      (should (drgnx-cockpit-model-test--edge-p m "job:jx" p 'implements))
+      ;; who is on what: a job's agent, a native chat on a plan task, an outside agent with its own label
+      (should (drgnx-cockpit-model-test--edge-p m t2 "agent:s-1" 'assigned))
+      (should (eq (plist-get (drgnx-cockpit-model-test--node m "agent:s-1") :reporting) 'job))
+      (should (drgnx-cockpit-model-test--edge-p m t5 "agent:s-2" 'assigned))
+      (should (eq (plist-get (drgnx-cockpit-model-test--node m "agent:s-2") :reporting) 'native))
+      (let ((o (drgnx-cockpit-model-test--node m "agent:ext:claude-code:42")))
+        (should (eq (plist-get o :reporting) 'outside))
+        (should (equal (plist-get o :label) "jx#4")))
+      ;; an outside agent's task is a label of its own: never joined to a job or plan task
+      (should-not (seq-some (lambda (e) (equal (plist-get e :to) "agent:ext:claude-code:42")) (plist-get m :edges)))
+      (should (equal (plist-get (drgnx-cockpit-model-test--agent m "ext:claude-code:42") :task) nil))
+      ;; every edge joins two nodes of the model
+      (dolist (e (plist-get m :edges))
+        (should (drgnx-cockpit-model-test--node m (plist-get e :from)))
+        (should (drgnx-cockpit-model-test--node m (plist-get e :to)))))))
+
+(ert-deftest drgnx-cockpit-model/needs-and-blocks-from-job-deps ()
+  (drgnx-cockpit-fixture-with
+    (let ((t2 (format "task:%s#2" plan)) (t3 (format "task:%s#3" plan)) (t4 (format "task:%s#4" plan)))
+      (let ((m (drgnx-cockpit-model :sessions sessions)))
+        (should (drgnx-cockpit-model-test--edge-p m t3 t2 'needs))
+        (should (drgnx-cockpit-model-test--edge-p m t4 t2 'needs))
+        (should (drgnx-cockpit-model-test--edge-p m t2 t3 'blocks))
+        (should (drgnx-cockpit-model-test--edge-p m t2 t4 'blocks))
+        (should-not (drgnx-cockpit-model-test--edge-p m t3 t4 'needs)))
+      ;; done: still needed, no longer blocking
+      (drgnx-coord-force-status "jx#2" "done" "s-1")
+      (let ((m (drgnx-cockpit-model :sessions sessions)))
+        (should (drgnx-cockpit-model-test--edge-p m t3 t2 'needs))
+        (should-not (drgnx-cockpit-model-test--edge-p m t2 t3 'blocks))
+        (should (equal (plist-get (drgnx-cockpit-model-test--node m t3) :state) "ready"))))))
+
+(ert-deftest drgnx-cockpit-model/plan-only-tasks-are-read-only ()
+  (drgnx-cockpit-fixture-with
+    (let ((m (drgnx-cockpit-model :sessions sessions)))
+      (dolist (n '(1 5 6))
+        (let ((tn (drgnx-cockpit-model-test--node m (format "task:%s#%d" plan n))))
+          (should (plist-get tn :readonly))
+          (should-not (plist-get tn :job))))
+      (dolist (n '(2 3 4))
+        (let ((tn (drgnx-cockpit-model-test--node m (format "task:%s#%d" plan n))))
+          (should-not (plist-get tn :readonly))
+          (should (equal (plist-get tn :job) "jx"))))
+      ;; the ledger (in worktree wt-b) says task 1 is complete
+      (should (equal (plist-get (drgnx-cockpit-model-test--node m (format "task:%s#1" plan)) :state) "done")))
+    ;; a job whose plan the tracker never scanned: its tasks come from the plan file's headings, read only
+    (let* ((other (concat repo "elsewhere/q.md")))
+      (drgnx-cockpit-fixture-write other "# Q plan\n\n### Task 1: first\n\n### Task 2: second\n")
+      (let ((attrs (file-attributes other)))
+        (drgnx-coord-job-create :id "jq" :title "Q" :plan other :repo repo :tasks '((:n 2 :title "second" :role "implement")))
+        (let ((m (drgnx-cockpit-model)))
+          (should (plist-get (drgnx-cockpit-model-test--node m (format "task:%s#1" other)) :readonly))
+          (should (equal (plist-get (drgnx-cockpit-model-test--node m (format "task:%s#1" other)) :line) 3))
+          (should (equal (plist-get (drgnx-cockpit-model-test--node m (format "task:%s#2" other)) :job) "jq"))
+          (should (equal (plist-get (drgnx-cockpit-model-test--node m (concat "plan:" other)) :title) "Q plan")))
+        ;; never written
+        (should (equal (file-attribute-modification-time (file-attributes other)) (file-attribute-modification-time attrs)))))))
+
+(ert-deftest drgnx-cockpit-model/the-board-is-one-more-source ()
+  (drgnx-cockpit-fixture-with
+    (let ((read nil))
+      (cl-letf* ((orig (symbol-function 'insert-file-contents))
+                 ((symbol-function 'insert-file-contents)
+                  (lambda (file &rest args) (push (expand-file-name file) read) (apply orig file args))))
+        (let* ((m (drgnx-cockpit-model :sessions sessions))
+               (todo (seq-find (lambda (n) (eq (plist-get n :kind) 'todo)) (plist-get m :nodes))))
+          (should todo)
+          (should (equal (plist-get todo :title) "Write the docs"))
+          (should (equal (plist-get todo :path) board))
+          (should (plist-get todo :readonly))
+          (should (drgnx-cockpit-model-test--edge-p m (plist-get todo :id) (concat "plan:" plan) 'implements))))
+      ;; the model reads nothing outside the fixture: never ~/org/board.org
+      (should (seq-every-p (lambda (f) (string-prefix-p root f)) read))
+      (should (equal drgnx-projects-board-file board)))))
+
+(ert-deftest drgnx-cockpit-model/waiting-from-questions-and-cards ()
+  (drgnx-cockpit-fixture-with
+    (let* ((m (drgnx-cockpit-model :sessions sessions))
+           (t3 (format "task:%s#3" plan)) (t4 (format "task:%s#4" plan)))
+      ;; s-1 escalated: its node waits
+      (should (plist-get (drgnx-cockpit-model-test--node m "agent:s-1") :waiting))
+      (should (plist-get (drgnx-cockpit-model-test--agent m "s-1") :waiting))
+      ;; the ask card on jx#3 was answered, then reopened: it waits again (no question event is open for it)
+      (should (plist-get (drgnx-cockpit-model-test--node m t3) :waiting))
+      (should-not (plist-get (drgnx-cockpit-model-test--node m t4) :waiting))
+      (should-not (plist-get (drgnx-cockpit-model-test--node m "agent:s-2") :waiting))
+      (should (= (length (plist-get m :questions)) 2))
+      (should (member t3 (mapcar (lambda (q) (plist-get q :node)) (plist-get m :questions))))
+      ;; a permission the session waits on is waiting too
+      (let ((m2 (drgnx-cockpit-model :sessions (list (append (list :permissions '((:id 1 :title "write a.el"))) (cadr sessions))))))
+        (should (plist-get (drgnx-cockpit-model-test--node m2 "agent:s-2") :waiting)))
+      ;; answered: no longer waiting
+      (let ((q (seq-find (lambda (q) (equal (plist-get q :agent) "s-1")) (plist-get m :questions))))
+        (drgnx-coord-event-add :agent "user" :job "jx" :kind "answer" :summary "this way" :data (list :question (plist-get q :id))))
+      (let ((card (plist-get (car (drgnx-coord-cards "jx" "open")) :id)))
+        (drgnx-coord-card-settle card "bar"))
+      (let ((m (drgnx-cockpit-model :sessions sessions)))
+        (should-not (plist-get (drgnx-cockpit-model-test--node m "agent:s-1") :waiting))
+        (should-not (plist-get (drgnx-cockpit-model-test--node m t3) :waiting))
+        (should-not (plist-get m :questions))))))
+
+(ert-deftest drgnx-cockpit-model/filter-keeps-ancestors ()
+  (drgnx-cockpit-fixture-with
+    (let* ((m (drgnx-cockpit-model :sessions sessions))
+           (s (concat "spec:" spec)) (p (concat "plan:" plan)) (t2 (format "task:%s#2" plan)) (t3 (format "task:%s#3" plan))
+           (ids (lambda (model) (mapcar (lambda (n) (plist-get n :id)) (plist-get model :nodes)))))
+      ;; one agent: its node, its task, the plan, the spec — nothing else
+      (let ((f (drgnx-cockpit-filter m '(:agent "s-1"))))
+        (should (equal (sort (funcall ids f) #'string<) (sort (list "agent:s-1" t2 p s) #'string<)))
+        (should (drgnx-cockpit-model-test--edge-p f t2 "agent:s-1" 'assigned))
+        (should-not (drgnx-cockpit-model-test--edge-p f t2 t3 'blocks))
+        (should (equal (mapcar (lambda (a) (plist-get a :id)) (plist-get f :agents)) '("s-1"))))
+      ;; states: the ready ones and their ancestors
+      (let ((f (drgnx-cockpit-filter m '(:states ("pending")))))
+        (should (member t3 (funcall ids f)))
+        (should (member p (funcall ids f)))
+        (should-not (member t2 (funcall ids f))))
+      ;; a milestone: what lies under a plan or spec that names it
+      (should (member t3 (funcall ids (drgnx-cockpit-filter m '(:milestone "m99")))))
+      (should-not (funcall ids (drgnx-cockpit-filter m '(:milestone "M42"))))
+      ;; the filter hook drops nodes
+      (let ((drgnx-cockpit-filter-functions (list (lambda (n _f) (not (eq (plist-get n :kind) 'todo))))))
+        (should-not (seq-find (lambda (n) (eq (plist-get n :kind) 'todo)) (plist-get (drgnx-cockpit-filter m nil) :nodes))))
+      ;; a node kind added by the hook
+      (let* ((drgnx-cockpit-node-functions
+              (list (lambda (model) (list :nodes (list (list :id "pr:1" :kind 'pr :title "PR 1"))
+                                          :edges (list (list :from "pr:1" :to (concat "plan:" plan) :kind 'implements))))))
+             (m (drgnx-cockpit-model :sessions sessions)))
+        (should (drgnx-cockpit-model-test--node m "pr:1"))
+        (should (drgnx-cockpit-model-test--edge-p m "pr:1" p 'implements))))))
+
+(ert-deftest drgnx-cockpit-model/happened-is-one-line-per-event ()
+  (drgnx-cockpit-fixture-with
+    (drgnx-coord-event-add :agent "s-1" :job "jx" :task "jx#2" :kind "test" :summary "fail"
+                           :data '(:command "make test" :passed 10 :failed 2))
+    (let* ((lines (drgnx-cockpit-happened "s-1")) (texts (mapcar (lambda (l) (plist-get l :text)) lines)))
+      (should (equal (mapcar (lambda (l) (plist-get l :kind)) lines)
+                     '("claim" "status" "decision" "edit" "test" "question" "test")))
+      (dolist (l lines)
+        (should (stringp (plist-get l :text)))
+        (should-not (string-match-p "\n" (plist-get l :text)))
+        (should (<= (length (plist-get l :text)) 200))
+        (should (numberp (plist-get l :at))))
+      (should (string-match-p "the parser" (nth 2 texts)))
+      (should (string-match-p "2 files" (nth 3 texts)))
+      (should (string-match-p "a\\.el" (nth 3 texts)))
+      (should (string-match-p "12/12 ✓" (nth 4 texts)))
+      (should (string-match-p "which way" (nth 5 texts)))
+      (should-not (string-match-p "\\[escalation\\]" (nth 5 texts)))
+      (should (string-match-p "10/12" (nth 6 texts)))
+      ;; a job task's events lead to its node
+      (should (equal (plist-get (plist-get (nth 1 lines) :target) :node) (format "task:%s#2" plan)))
+      ;; newest last, at most LIMIT
+      (should (equal (mapcar (lambda (l) (plist-get l :kind)) (drgnx-cockpit-happened "s-1" 2)) '("question" "test"))))
+    ;; the timeline: every agent's events as chips, oldest first, after SINCE
+    (let* ((chips (drgnx-cockpit-timeline)) (last-id (plist-get (car (last chips)) :id)))
+      (should (> (length chips) 10))
+      (should (equal (sort (mapcar (lambda (c) (plist-get c :at)) chips) #'<) (mapcar (lambda (c) (plist-get c :at)) chips)))
+      (dolist (c chips) (should (stringp (plist-get c :label))) (should (<= (length (plist-get c :label)) 40)))
+      (should (seq-find (lambda (c) (equal (plist-get c :label) "T2 running")) chips))
+      (should (seq-find (lambda (c) (and (equal (plist-get c :kind) "question") (string-match-p "asks you" (plist-get c :label)))) chips))
+      (should-not (drgnx-cockpit-timeline :since last-id))
+      (drgnx-coord-force-status "jx#2" "done" "s-1")
+      (should (equal (mapcar (lambda (c) (plist-get c :label)) (drgnx-cockpit-timeline :since last-id)) '("T2 ✓"))))))
+
+(ert-deftest drgnx-cockpit-model/edit-sources-per-kind-of-agent ()
+  (drgnx-cockpit-fixture-with
+    ;; a job's agent: its task worktree, the job branch where it forked
+    (let ((src (drgnx-cockpit-edit-source "s-1" sessions)))
+      (should (equal (plist-get src :dir) tree))
+      (should (equal (plist-get src :base) "job/jx"))
+      (should (plist-get src :merge-base))
+      (should (plist-get src :own-worktree))
+      (should-not (plist-get src :stopped)))
+    ;; gone from the hub: stopped
+    (should (plist-get (drgnx-cockpit-edit-source "s-1" (cdr sessions)) :stopped))
+    ;; a native session: its cwd, the HEAD at its first event
+    (let ((src (drgnx-cockpit-edit-source "s-2" sessions)))
+      (should (equal (plist-get src :dir) repo))
+      (should (equal (plist-get src :base) sha))
+      (should-not (plist-get src :merge-base))
+      (should-not (plist-get src :own-worktree)))
+    ;; an outside agent: its registered folder and base, the paths it reported
+    (let ((src (drgnx-cockpit-edit-source "ext:claude-code:42")))
+      (should (equal (plist-get src :dir) wt-a))
+      (should (equal (plist-get src :base) sha))
+      (should (equal (plist-get src :paths) '("README" "new.txt")))
+      (should (plist-get src :own-worktree))
+      (should-not (plist-get src :stopped)))
+    (drgnx-coord-event-add :agent "ext:claude-code:42" :kind "stop" :summary "ended")
+    (should (plist-get (drgnx-cockpit-edit-source "ext:claude-code:42") :stopped))
+    ;; a silent worktree: the worktree and its merge-base with main
+    (let ((src (drgnx-cockpit-edit-source (concat "silent:" (directory-file-name wt-b)))))
+      (should (equal (plist-get src :dir) wt-b))
+      (should (equal (plist-get src :base) "main"))
+      (should (plist-get src :merge-base))
+      (should (plist-get src :own-worktree)))
+    (should-not (drgnx-cockpit-edit-source "nobody"))))
+
+(ert-deftest drgnx-cockpit-model/silent-worktrees-are-found ()
+  (drgnx-cockpit-fixture-with
+    (let (got)
+      (drgnx-cockpit-silent-worktrees (list repo) (lambda (agents) (setq got (list agents))) sessions)
+      (should-not got)                                  ; nothing waited for in the caller
+      (should (drgnx-cockpit-fixture-wait (lambda () got)))
+      (let ((agents (car got)))
+        ;; wt-a has an outside agent registered in it; the main checkout is the user's; wt-b is silent
+        (should (= (length agents) 1))
+        (let ((a (car agents)))
+          (should (equal (plist-get a :id) (concat "silent:" (directory-file-name wt-b))))
+          (should (eq (plist-get a :reporting) 'silent))
+          (should (equal (plist-get a :branch) "wt-b"))
+          (should (equal (plist-get a :base) "main"))
+          (should (equal (plist-get a :plan) (concat "plan:" plan)))
+          (should (string-suffix-p "progress.md" (plist-get a :ledger)))
+          (should (> (plist-get a :changed) 0))
+          ;; it joins the model when given
+          (let ((m (drgnx-cockpit-model :sessions sessions :silent agents)))
+            (should (eq (plist-get (drgnx-cockpit-model-test--node m (concat "agent:" (plist-get a :id))) :reporting) 'silent))
+            (should (drgnx-cockpit-model-test--edge-p m (concat "plan:" plan) (concat "agent:" (plist-get a :id)) 'assigned))))))
+    ;; a remote root: an error entry, never a TRAMP call
+    (let (got)
+      (cl-letf (((symbol-function 'tramp-file-name-handler) (lambda (&rest _) (error "TRAMP was called"))))
+        (drgnx-cockpit-silent-worktrees '("/ssh:somehost:/x/") (lambda (agents) (setq got (list agents))))
+        (should (drgnx-cockpit-fixture-wait (lambda () got) 2))
+        (should (plist-get (caar got) :error))))))
+
+(ert-deftest drgnx-cockpit-model/changed-files-and-diff-are-async ()
+  (drgnx-cockpit-fixture-with
+    (let ((made 0) files diff remote)
+      (cl-letf* ((orig (symbol-function 'make-process))
+                 ((symbol-function 'make-process) (lambda (&rest args) (cl-incf made) (apply orig args)))
+                 ((symbol-function 'call-process) (lambda (&rest _) (error "call-process in the caller")))
+                 ((symbol-function 'process-file) (lambda (&rest _) (error "process-file in the caller"))))
+        (let ((src (drgnx-cockpit-edit-source "ext:claude-code:42")))
+          (drgnx-cockpit-changed-files src (lambda (r) (setq files (list r))))
+          (drgnx-cockpit-file-diff src "README" (lambda (r) (setq diff (list r))))
+          (drgnx-cockpit-changed-files (list :dir "/ssh:somehost:/x/" :base "HEAD") (lambda (r) (setq remote (list r)))))
+        (should (> made 0))
+        (should-not files) (should-not diff)            ; the answers come later, from the sentinel
+        (should (drgnx-cockpit-fixture-wait (lambda () (and files diff remote)))))
+      (let ((r (car files)))
+        (should (equal (seq-find (lambda (f) (equal (plist-get f :file) "README")) r)
+                       '(:file "README" :added 1 :removed 0 :status modified)))
+        (should (equal (seq-find (lambda (f) (equal (plist-get f :file) "new.txt")) r)
+                       '(:file "new.txt" :added 1 :removed 0 :status new)))
+        (should (= (length r) 2)))
+      (should (string-match-p "^\\+more$" (car diff)))
+      (should (plist-get (car remote) :error)))
+    ;; the silent worktree, against its merge-base with main: a committed new file and an untracked ledger
+    (let (files)
+      (drgnx-cockpit-changed-files (drgnx-cockpit-edit-source (concat "silent:" (directory-file-name wt-b)))
+                                   (lambda (r) (setq files (list r))))
+      (should (drgnx-cockpit-fixture-wait (lambda () files)))
+      (should (equal (seq-find (lambda (f) (equal (plist-get f :file) "b.txt")) (car files))
+                     '(:file "b.txt" :added 1 :removed 0 :status new)))
+      (should (seq-find (lambda (f) (string-suffix-p "progress.md" (plist-get f :file))) (car files))))
+    ;; an untracked file's diff
+    (let (diff)
+      (drgnx-cockpit-file-diff (drgnx-cockpit-edit-source "ext:claude-code:42") "new.txt" (lambda (r) (setq diff (list r))))
+      (should (drgnx-cockpit-fixture-wait (lambda () diff)))
+      (should (string-match-p "^\\+new$" (car diff))))))
+
+(ert-deftest drgnx-cockpit-model/only-regular-files-inside-and-a-size-cap ()
+  (drgnx-cockpit-fixture-with
+    ;; a link to a device, a link out of the worktree, a FIFO: never listed, never read
+    (drgnx-cockpit-fixture-write (concat root "secret.txt") "secret\n")
+    (make-symbolic-link "/dev/zero" (concat wt-a "zero"))
+    (make-symbolic-link (concat root "secret.txt") (concat wt-a "key"))
+    (call-process "mkfifo" nil nil nil (concat wt-a "pipe"))
+    (drgnx-cockpit-fixture-write (concat wt-a "big.txt") (make-string 300 ?x))
+    (let ((src (list :dir wt-a :base sha)) files diffs)
+      (drgnx-cockpit-changed-files src (lambda (r) (setq files (list r))))
+      (should (drgnx-cockpit-fixture-wait (lambda () files)))
+      (should (equal (sort (mapcar (lambda (f) (plist-get f :file)) (car files)) #'string<) '("README" "big.txt" "new.txt")))
+      (let ((drgnx-cockpit-diff-max-bytes 200))
+        (dolist (f '("zero" "key" "pipe" "../../../../secret.txt" "big.txt" "README"))
+          (drgnx-cockpit-file-diff src f (lambda (r) (push (cons f r) diffs))))
+        (should (drgnx-cockpit-fixture-wait (lambda () (= (length diffs) 6)))))
+      (dolist (f '("zero" "key" "pipe" "../../../../secret.txt"))
+        (should (plist-get (cdr (assoc f diffs)) :error)))
+      (should (equal (cdr (assoc "big.txt" diffs)) '(:too-large 300)))
+      (should (string-match-p "^\\+more$" (cdr (assoc "README" diffs))))
+      ;; a diff over the cap is too large too, though the file is small
+      (let ((drgnx-cockpit-diff-max-bytes 20) diff)
+        (drgnx-cockpit-file-diff src "README" (lambda (r) (setq diff (list r))))
+        (should (drgnx-cockpit-fixture-wait (lambda () diff)))
+        (should (plist-get (car diff) :too-large))))))
+
+;;; cockpit-model-test.el ends here
