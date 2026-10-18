@@ -239,12 +239,18 @@ about) and keeps the tests within their time limits."
     (let* ((fast-out (concat root "fast.txt")) (slow-out (concat root "slow.txt"))
            (fast (drgnx-hub-test--reader fast-out 0)) (slow nil)
            (big (drgnx-hub-test--blob 1 ?b)) (small (make-string 200 ?s)) (n 0) (timers nil)
-           (send (lambda (blob) (run-at-time 0 nil (lambda () (drgnx-hub--broadcast 'test (list :n (cl-incf n) :blob blob)))))))
+           ;; nothing after STOP, whoever has control then: on macOS the hub writes hardly faster than these timers
+           ;; make events (~400 KB/s), its drain goes on while new ones come, and the test's own 2 s would never end
+           ;; (the queue grew for 200 s, to its 16 MiB limit)
+           (stop 0)
+           (send (lambda (blob) (run-at-time 0 nil (lambda () (when (< (float-time) stop)
+                                                                (drgnx-hub--broadcast 'test (list :n (cl-incf n) :blob blob))))))))
       (unwind-protect
           (progn
             (should (drgnx-hub-test--wait (lambda () (= (length drgnx-hub--subscribers) 1)) 10))
             (setq slow (drgnx-hub-test--reader slow-out 0.002))           ; subscribed second: written to first
             (should (drgnx-hub-test--wait (lambda () (= (length drgnx-hub--subscribers) 2)) 10))
+            (setq stop (+ (float-time) 2))
             (push (run-at-time 0 0.05 (lambda () (funcall send small))) timers)
             (push (run-at-time 0 0.5 (lambda () (funcall send big))) timers)
             (drgnx-hub-test--wait #'ignore 2)
@@ -394,11 +400,17 @@ about) and keeps the tests within their time limits."
                                            (kill-emacs 0))"
                                         (drgnx-hub-socket) out))))
            (big (drgnx-hub-test--blob 1 ?b)) (small (make-string 200 ?s)) (n 0) (timers nil)
-           (send (lambda (blob) (run-at-time 0 nil (lambda () (drgnx-hub--broadcast 'test (list :n (cl-incf n) :blob blob)))))))
+           ;; nothing after STOP, whoever has control then: on macOS the hub writes hardly faster than these timers
+           ;; make events (~400 KB/s), its drain goes on while new ones come, and the test's own 2 s would never end
+           ;; (the queue grew for 200 s, to its 16 MiB limit)
+           (stop 0)
+           (send (lambda (blob) (run-at-time 0 nil (lambda () (when (< (float-time) stop)
+                                                                (drgnx-hub--broadcast 'test (list :n (cl-incf n) :blob blob))))))))
       (unwind-protect
           (progn
             (should (drgnx-hub-test--wait (lambda () drgnx-hub--subscribers) 10))
             (let ((conn (car drgnx-hub--subscribers)))
+              (setq stop (+ (float-time) 2))
               (push (run-at-time 0 0.05 (lambda () (funcall send small))) timers)
               (push (run-at-time 0 0.5 (lambda () (funcall send big))) timers)
               (drgnx-hub-test--wait #'ignore 2)
