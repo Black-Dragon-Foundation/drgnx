@@ -58,10 +58,10 @@ and drgnx's data and state dirs). Without `DRGNX_AGENT` it only reads. Messages 
 | `list_agents` | the job's agents and their tasks |
 | `send_message {to, text, seen_version}` | queue a message (never interrupts) |
 | `read_inbox` | unread messages (they become read) |
-| `ack {id}` | acted on |
+| `ack {id}` | acted on (only a message addressed to the caller) |
 | `read_decisions {since}` | the log since a version, and the current version (recorded as the agent's `seen`) |
 | `record_decision {kind, subject, task?, paths?, reason, replaces?, seen_version}` | current inside its own task, else proposed |
-| `claim_task`, `update_task`, `complete_task` `{task, …, seen_version}` | the lease and the status |
+| `claim_task`, `update_task`, `complete_task` `{task, …, seen_version}` | the lease and the status; `update_task` takes `running`, `needs-input`, `in-review` (and `failed` outside a job), nothing else |
 | `task_status {job?}` | the job's tasks |
 | `escalate {subject, text, seen_version}` | a message to `user`, queued (the job window, M9b.4, shows it; until then nothing does) |
 

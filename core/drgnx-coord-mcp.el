@@ -79,7 +79,10 @@
                              (drgnx-coord-mcp--jsonable msgs))))
       ("ack" :description "Say you acted on a message"
        :schema ,(funcall s '(("id" "integer" "The message's id")) '("id"))
-       :call ,(lambda (a) (drgnx-coord-mcp--me)
+       :call ,(lambda (a)
+                (let ((m (drgnx-coord-message (plist-get a :id))))
+                  (unless (and m (equal (plist-get m :recipient) (drgnx-coord-mcp--me)))
+                    (error "No message %s for you" (plist-get a :id))))
                 (drgnx-coord-mark (plist-get a :id) "acted") (drgnx-coord-mcp--notify-hub) "acted"))
       ("read_decisions" :description "The decision log since a version (0: all), and the current version"
        :schema ,(funcall s '(("since" "integer" "The last version you read (0 for all)")))
@@ -106,9 +109,12 @@
        :schema ,(funcall s `(("task" "string" "The task's id") ("status" "string" "The new status") ,seen)
                          '("task" "status" "seen_version"))
        :call ,(lambda (a)
-                ;; in a job, a task is done when its review passed and it is merged: never by its agent's word
-                (when (and (getenv "DRGNX_JOB") (not (member (plist-get a :status) '("running" "needs-input" "in-review"))))
-                  (error "In a job, a task's status is running, needs-input or in-review (complete_task); review and merge make it done"))
+                ;; in a job, a task is done when its review passed and it is merged: never by its agent's word; outside
+                ;; one an agent may also fail it, and complete_task finishes it
+                (let ((job (getenv "DRGNX_JOB")))
+                  (unless (member (plist-get a :status) (append '("running" "needs-input" "in-review") (and (not job) '("failed"))))
+                    (error (if job "In a job, a task's status is running, needs-input or in-review (complete_task); review and merge make it done"
+                             "A task's status is running, needs-input, in-review or failed (complete_task finishes it)"))))
                 (drgnx-coord-mcp--write
                  (drgnx-coord-set-status (plist-get a :task) (drgnx-coord-mcp--me) (plist-get a :status)
                                          (drgnx-coord-mcp--seen a)))))
