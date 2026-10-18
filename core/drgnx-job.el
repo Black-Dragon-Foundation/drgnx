@@ -554,10 +554,34 @@ goes to the user.  The merge itself is a git process of its own (a hook may be s
      ((gethash tid drgnx-job--busy))                                  ; being merged
      ((eql 0 (car (drgnx-job--git tree "merge-base" "--is-ancestor" branch "HEAD")))   ; merged before
       (drgnx-coord-force-status tid "done" (plist-get task :agent)))
+     ((drgnx-job--merging-p id) (drgnx-job--merge-later id tid) (drgnx-job--changed id))   ; one merge at a time
      (t (drgnx-job--git-async tree (list "merge" "--no-ff" "-q" "-m" (format "Merge %s: %s" tid (plist-get task :title)) branch)
                               (lambda (merged) (drgnx-job--merged id task merged)) id tid)
         (puthash tid "merging" drgnx-job--busy)
         (drgnx-job--changed id)))))
+
+(defvar drgnx-job--merge-queue (make-hash-table :test #'equal)
+  "Job id → its task ids whose merge waits (busy \"queued\"), in order: one git merge at a time in a job's worktree —
+two at once fail on its HEAD (\"cannot lock ref\").")
+(defvar drgnx-job--merge-retried (make-hash-table :test #'equal)
+  "Task id → t once its merge failed without a conflict and was queued again.")
+
+(defun drgnx-job--merging-p (id)
+  "Does a git merge run in job ID's worktree?"
+  (seq-some (lambda (task) (equal (gethash (plist-get task :id) drgnx-job--busy) "merging")) (drgnx-coord-tasks id)))
+
+(defun drgnx-job--merge-later (id tid)
+  "Merge TID into job ID's branch after the merges before it (`drgnx-job--merge-next')."
+  (puthash tid "queued" drgnx-job--busy)
+  (unless (member tid (gethash id drgnx-job--merge-queue))
+    (puthash id (append (gethash id drgnx-job--merge-queue) (list tid)) drgnx-job--merge-queue)))
+
+(defun drgnx-job--merge-next (id)
+  "Start the merge that waits first in job ID's queue, unless one runs."
+  (unless (drgnx-job--merging-p id)
+    (when-let* ((tid (pop (gethash id drgnx-job--merge-queue))))
+      (remhash tid drgnx-job--busy)
+      (drgnx-job--merge id (drgnx-coord-task tid)))))
 
 (defun drgnx-job--merged (id task merged)
   "TASK of job ID was merged by git (MERGED: (EXIT . OUTPUT)): done; or, aborted, the user's."
@@ -568,10 +592,15 @@ goes to the user.  The merge itself is a git process of its own (a hook may be s
       (let ((files (split-string (cdr (drgnx-job--git tree "diff" "--name-only" "--diff-filter=U")) "\n" t)))
         (unless (eql 0 (car (drgnx-job--git tree "merge" "--abort")))
           (drgnx-job--git tree "reset" "--merge"))             ; no merge to abort (git was cut off before it began one)
-        (drgnx-job--card id tid "merge-conflict"
-                         (if files
-                             (format "merging into job/%s conflicts in: %s" id (string-join files ", "))
-                           (format "merge failed: %s" (cdr merged))))))   ; no conflict: a hook, git's own refusal
+        (cond (files (drgnx-job--card id tid "merge-conflict"
+                                      (format "merging into job/%s conflicts in: %s" id (string-join files ", "))))
+              ;; no conflict (a lock another git held, a hook): once more, after what merges now — then the user
+              ((and (integerp (car merged)) (not (gethash tid drgnx-job--merge-retried)))
+               (puthash tid t drgnx-job--merge-retried)
+               (drgnx-job--merge-later id tid))
+              (t (remhash tid drgnx-job--merge-retried)
+                 (drgnx-job--card id tid "merge-failed" (format "merge failed: %s" (cdr merged)))))))
+    (drgnx-job--merge-next id)
     (drgnx-job--step-later id)
     (drgnx-job--changed id)))
 
@@ -797,6 +826,7 @@ S: the session whose request waits (it goes back to work once answered, or, gone
     ("write" '(("reject" "Reject")))
     ("merge-conflict" '(("retry" "Let the agent resolve it") ("merge" "Merge again (I resolved it)") ("drop" "Drop the task")
                         ("open" "Open the job's worktree")))
+    ("merge-failed" '(("merge" "Merge again") ("drop" "Drop the task") ("open" "Open the job's worktree")))   ; no conflict
     ("review" '(("accept" "Merge as it is") ("retry" "Back to an agent") ("drop" "Drop the task")))
     ((or "fallback" "agent" "stalled") (append (and (plist-get (plist-get card :data) :review) '(("review" "Review now")))   ; a finished task
                                                '(("retry" "Retry") ("drop" "Drop the task"))))
@@ -979,6 +1009,8 @@ back in review, with the work of the agent that did it."
   (dolist (p (process-list))                       ; its worktree adds and merges end too; resume starts them again
     (when (and (process-get p :job) (equal (process-get p :job) id) (process-live-p p))
       (process-put p :stopped t) (delete-process p)))
+  (dolist (tid (gethash id drgnx-job--merge-queue)) (remhash tid drgnx-job--busy))   ; the merges that waited too
+  (remhash id drgnx-job--merge-queue)
   (dolist (s (drgnx-agents-sessions))
     (when (and (equal (drgnx-agent-session-job s) id) (not (eq (drgnx-agent-session-status s) 'exited)))
       (drgnx-agents-kill s)))

@@ -133,7 +133,10 @@ the clash is moot by then). Prompts of sessions that ended before they were free
 `complete_task` from an agent of a job (`DRGNX_JOB` set) puts the task `in-review`, not `done`, and `update_task`
 there takes only `running`, `needs-input` and `in-review`; the reviewer's verdict decides (`drgnx-job--reviewed`, `drgnx-job--merge`: the merge is a git process of its own, the task shows `merging` meanwhile
 (`drgnx-job--busy`, in the hub's memory only: a restart finds the store's `in-review` and the "merged before" check);
-a merge that fails with no unmerged files gets a `merge-conflict` card titled `merge failed: <git output>`;
+one merge at a time in a job's worktree — two at once fail on its HEAD (`cannot lock ref`), so a task whose review passes
+while another merges waits, `queued` (`drgnx-job--merge-queue`; stopping the job empties it); a merge that fails with
+no unmerged files is no conflict: it goes once more after what merges then, and fails again into a `merge-failed` card
+titled `merge failed: <git output>` (Merge again, Drop, Open — no agent is sent to resolve a conflict);
 `drgnx-job--git`, the short synchronous reads, returns stderr after stdout when git fails; the job's own worktree at
 approval is still made synchronously, for the command that asked). A card (`drgnx-job--card`) is a `card` row — one open per task and kind, actions by
 kind (`drgnx-job-card-actions`), acted on once through `job/card` (`drgnx-job-card-act`: settled first, so a second
