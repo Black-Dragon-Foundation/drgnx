@@ -27,7 +27,7 @@ The onboarding flow will ask which one you want (VS Code preselected).
 | Command Palette | `C-S-p`, `F1` | `C-S-p` | `SPC SPC` |
 | Keyboard Shortcuts (key sheet) | `C-k C-r` | `C-h C-k` | `SPC ?` |
 | Keyboard Profile… | `C-k C-p` | — | `SPC h k` |
-| Leader Menu (the `SPC` keys from any state) | — | — | `M-SPC` |
+| Leader Menu (the `SPC` keys from any state; in the Vim profile `M-SPC` replaces Emacs' `cycle-spacing`) | — | — | `M-SPC` |
 | Next / Previous Row (in a panel: lists, tables, transcripts) | `<down>` / `<up>` | `<down>` / `<up>` | `j` / `k` |
 | Preferences: Keyboard Shortcuts (the editor) | `C-k C-s` | — | `SPC h s` |
 | Open File… | `C-o` | `C-x C-f` | `SPC f f` |

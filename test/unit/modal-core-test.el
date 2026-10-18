@@ -134,20 +134,27 @@
       (setq-default mode-line-format before))))
 
 (ert-deftest drgnx-modal/alists-order ()
+  ;; The ghost and everywhere alists have a fixed place whether or not they exist yet: unbound symbols in
+  ;; the list are skipped by Emacs, and a later add-to-list finds them already there.
   (let ((emulation-mode-map-alists '(evil-mode-map-alist drgnx-ai-ghost--emulation other drgnx-modal--leader-alist)))
     (drgnx-modal-order-alists)
     (should (equal emulation-mode-map-alists
-                   '(drgnx-modal--leader-alist drgnx-modal--panel-alist drgnx-ai-ghost--emulation
-                                               evil-mode-map-alist other)))
+                   '(drgnx-keys--everywhere-alist drgnx-modal--leader-alist drgnx-modal--panel-alist
+                                                  drgnx-ai-ghost--emulation evil-mode-map-alist other)))
+    (let ((once emulation-mode-map-alists))
+      (drgnx-modal-order-alists)
+      (should (equal emulation-mode-map-alists once)))))
+
+(ert-deftest drgnx-modal/alists-keep-their-place-when-the-ghost-comes-late ()
+  (let ((emulation-mode-map-alists '(evil-mode-map-alist other)))
     (drgnx-modal-order-alists)
-    (should (equal emulation-mode-map-alists
-                   '(drgnx-modal--leader-alist drgnx-modal--panel-alist drgnx-ai-ghost--emulation
-                                               evil-mode-map-alist other))))
-  (let ((emulation-mode-map-alists '(evil-mode-map-alist drgnx-keys--everywhere-alist)))
+    (should-not (memq 'drgnx-ai-ghost--emulation (cdr (memq 'evil-mode-map-alist emulation-mode-map-alists))))
+    (add-to-list 'emulation-mode-map-alists 'drgnx-ai-ghost--emulation)
+    (should (= 1 (seq-count (lambda (e) (eq e 'drgnx-ai-ghost--emulation)) emulation-mode-map-alists)))
     (drgnx-modal-order-alists)
     (should (equal emulation-mode-map-alists
                    '(drgnx-keys--everywhere-alist drgnx-modal--leader-alist drgnx-modal--panel-alist
-                                                  evil-mode-map-alist)))))
+                                                  drgnx-ai-ghost--emulation evil-mode-map-alist other)))))
 
 (ert-deftest drgnx-modal/selection-prefers-the-engine ()
   (with-temp-buffer
@@ -188,6 +195,44 @@
     (should (null (drgnx-modal-sync-engine '((vscode app editing window)))))
     (should (equal log '(stop start)))))
 
+(ert-deftest drgnx-modal/sync-orders-the-alists-after-a-start ()
+  (let ((drgnx-modal-engines nil) (drgnx-modal-running nil) (drgnx-keys-profiles drgnx-modal-test--profiles)
+        (emulation-mode-map-alists '(other)))
+    (drgnx-modal-define-engine 'evil :start (lambda () (push 'evil-mode-map-alist emulation-mode-map-alists)))
+    (drgnx-modal-sync-engine '((vim editing)))
+    (should (equal emulation-mode-map-alists
+                   '(drgnx-keys--everywhere-alist drgnx-modal--leader-alist drgnx-modal--panel-alist
+                                                  drgnx-ai-ghost--emulation evil-mode-map-alist other)))))
+
+(ert-deftest drgnx-modal/stopping-the-engine-leaves-no-modal-keys-behind ()
+  ;; Vim -> VS Code at runtime: SPC types a space again, in every buffer, and the indicator goes.
+  (drgnx-modal-test--with-leader
+    (let ((drgnx-modal-engines nil) (drgnx-modal-running nil) (drgnx-keys-profiles drgnx-modal-test--profiles)
+          (before (default-value 'mode-line-format)) (buf (generate-new-buffer " *modal-stop*")))
+      (unwind-protect
+          (progn
+            (drgnx-modal-define-engine 'evil :start #'drgnx-modal-indicator-on :stop #'ignore)
+            (drgnx-modal-sync-engine '((vim editing)))
+            (with-current-buffer buf (drgnx-modal-set-state 'normal)
+                                 (should (drgnx-modal-test--leader-p)))
+            (drgnx-modal-sync-engine '((vscode app editing window)))
+            (with-current-buffer buf
+              (should (null drgnx-modal-state))
+              (should-not (drgnx-modal-test--leader-p))
+              (should (eq (key-binding " ") #'self-insert-command)))
+            (should-not (member '(:eval (drgnx-modal-mode-line)) (default-value 'mode-line-format))))
+        (kill-buffer buf)
+        (setq-default mode-line-format before)))))
+
+(ert-deftest drgnx-modal/a-failed-stop-leaves-the-states ()
+  (let ((drgnx-modal-engines nil) (drgnx-modal-running nil) (drgnx-keys-profiles drgnx-modal-test--profiles))
+    (drgnx-modal-define-engine 'evil :start #'ignore :stop (lambda () (error "boom")))
+    (drgnx-modal-sync-engine '((vim editing)))
+    (with-temp-buffer
+      (drgnx-modal-set-state 'normal)
+      (drgnx-modal-sync-engine '((vscode app editing window)))
+      (should (eq drgnx-modal-state 'normal)))))
+
 (ert-deftest drgnx-modal/sync-without-a-registered-engine-is-quiet ()
   (let ((drgnx-modal-engines nil) (drgnx-modal-running nil) (drgnx-keys-profiles drgnx-modal-test--profiles))
     (should (null (drgnx-modal-sync-engine '((vim editing)))))
@@ -221,6 +266,59 @@
       (should (= (line-number-at-pos) 2))
       (drgnx-modal-panel-previous)
       (should (= (line-number-at-pos) 1)))))
+
+(ert-deftest drgnx-modal/panel-moves-name-the-command-that-ran ()
+  (with-temp-buffer
+    (insert "a\nb")
+    (goto-char (point-min))
+    (let ((this-command 'drgnx-modal-panel-next))
+      (drgnx-modal-panel-next)
+      (should (eq this-command 'next-line)))
+    (drgnx-modal-test-panel-mode)
+    (use-local-map (let ((m (make-sparse-keymap)))
+                     (keymap-set m "<down>" #'drgnx-modal-test-down)
+                     m))
+    (let ((this-command 'drgnx-modal-panel-next) (drgnx-modal-test--count 0))
+      (drgnx-modal-panel-next)
+      (should (eq this-command 'drgnx-modal-test-down)))))
+
+(ert-deftest drgnx-modal/initial-state-by-buffer-kind ()
+  (let ((drgnx-modal-form-modes '(drgnx-modal-test-form-mode)))
+    (with-temp-buffer (should (eq (drgnx-modal-initial-state) 'normal)))
+    (with-temp-buffer (drgnx-modal-test-form-mode) (should (eq (drgnx-modal-initial-state) 'emacs)))
+    (with-temp-buffer (drgnx-modal-test-panel-mode) (should (eq (drgnx-modal-initial-state) 'emacs)))
+    (let ((drgnx-modal-input-modes '(fundamental-mode)))
+      (with-temp-buffer (should (eq (drgnx-modal-initial-state) 'insert))))))
+
+(ert-deftest drgnx-modal/a-form-never-starts-in-normal ()
+  (drgnx-modal-test--with-leader
+    (let ((drgnx-modal-form-modes '(drgnx-modal-test-form-mode)))
+      (with-temp-buffer
+        (drgnx-modal-test-form-mode)
+        (drgnx-modal-init-buffer)
+        (should (eq drgnx-modal-state 'emacs))
+        (should-not (drgnx-modal-test--leader-p))))))
+
+(ert-deftest drgnx-modal/a-major-mode-change-needs-init-buffer ()
+  ;; The switches are buffer-local and die with the major mode; an engine calls `drgnx-modal-init-buffer'.
+  (drgnx-modal-test--with-leader
+    (with-temp-buffer
+      (drgnx-modal-init-buffer)
+      (should (drgnx-modal-test--leader-p))
+      (text-mode)
+      (should (null drgnx-modal-state))
+      (drgnx-modal-init-buffer)
+      (should (drgnx-modal-test--leader-p)))))
+
+(ert-deftest drgnx-modal/indicator-on-skips-a-non-list-mode-line ()
+  (let ((before (default-value 'mode-line-format)))
+    (unwind-protect
+        (progn (setq-default mode-line-format "custom")
+               (drgnx-modal-indicator-on)
+               (should (equal (default-value 'mode-line-format) "custom"))
+               (drgnx-modal-indicator-off)
+               (should (equal (default-value 'mode-line-format) "custom")))
+      (setq-default mode-line-format before))))
 
 (ert-deftest drgnx-modal/leader-menu-reads-the-leader ()
   (drgnx-modal-test--with-leader

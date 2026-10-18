@@ -107,12 +107,14 @@ evil, and `test/unit/modal-core-test.el` drives it with a fake engine.
 - **Maps.** `drgnx-modal-leader-map` holds the leader keys (`SPC …`, `C-w …`), `drgnx-modal-panel-map` the keys
   that exist only in panels. Both are emulation maps (`drgnx-modal--leader-alist`, `drgnx-modal--panel-alist`),
   switched per buffer; `drgnx-modal-order-alists` puts them in front of the engine's in
-  `emulation-mode-map-alists` (after `drgnx-keys--everywhere-alist`, before the AI ghost text's), and an engine
-  calls it again after it adds its own keymaps.
+  `emulation-mode-map-alists` after `drgnx-keys--everywhere-alist` and before the AI ghost text's (those two
+  have their place whether or not they exist yet), and `drgnx-modal-sync-engine` calls it after an engine starts.
 - **State.** An engine calls `(drgnx-modal-set-state STATE)` on every change (`normal insert visual visual-line
   visual-block replace motion operator emacs`, nil when no engine runs in the buffer). The leader map is on in
   `normal`, `motion` and the visual states, and in a panel's `emacs` state; the panel map only in a panel's `emacs`
-  state. Panels, forms and input buffers are told apart by `drgnx-modal-panel-modes`, `-form-modes` (fields you
+  state. The switches are buffer-local and are dropped with the major mode, so an engine calls
+  `drgnx-modal-init-buffer` (the buffer's `drgnx-modal-initial-state`: emacs in forms and panels, insert in input
+  buffers, else normal) in every buffer when it starts and after each major-mode change. Panels, forms and input buffers are told apart by `drgnx-modal-panel-modes`, `-form-modes` (fields you
   type in: no modal keys) and `-input-modes` (shells and message buffers: start in insert or emacs state), with
   `drgnx-modal-panel-p`, `-form-p` and `-input-p`.
 - **Indicator.** `(drgnx-modal-mode-line)` returns the state name (` NORMAL `, ` V-LINE `, …) in
@@ -123,7 +125,8 @@ evil, and `test/unit/modal-core-test.el` drives it with a fake engine.
   `(BEG . END)` from it, else from the active region, else nil.
 - **Engines.** `(drgnx-modal-define-engine NAME :module M :start F :stop F)` registers one. A key profile asks for
   an engine with a top-level `:modal (:engine NAME :leader KEYS :default-map … :maps …)` (keys/vim.eld);
-  `drgnx-modal-sync-engine` starts the engine the current layers need (once) and stops any other, and
+  `drgnx-modal-sync-engine` starts the engine the current layers need (once) and stops any other (a stop clears every buffer's state and
+  removes the indicator, so `SPC` types a space again; an engine's start turns the indicator on), and
   `drgnx-modal-running` names it. `:maps` says, per keymap, the states a key bound there must also work in
   (the key resolver reads it); `drgnx-modal-where` names a map for the key sheet.
 - **Commands.** `modal-leader` (Leader Menu) reads the leader's `SPC` submap as a transient map from any state.

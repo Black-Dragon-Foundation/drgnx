@@ -302,6 +302,7 @@
         (shortcuts-reset-all "R" :map (drgnx-shortcuts . drgnx-shortcuts-mode-map))
         (shortcuts-profile "p" :map (drgnx-shortcuts . drgnx-shortcuts-mode-map))
         (ai-stop :none "in the palette")
+        ;; M-SPC replaces Emacs' cycle-spacing (the Leader Menu's doc says so on the key sheet).
         (modal-leader "M-SPC" :map global-map)
         (panel-next "j")
         (panel-previous "k"))
