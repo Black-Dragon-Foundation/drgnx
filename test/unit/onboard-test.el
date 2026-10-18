@@ -1071,4 +1071,22 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
       (should (eq 'quit (condition-case nil (drgnx-onboard--claude-login-state (concat bin "slow-claude")) (quit 'quit)))))
     (should-not (seq-some (lambda (p) (and (string-prefix-p "drgnx-claude-auth" (process-name p)) (process-live-p p))) (process-list)))))
 
+(ert-deftest drgnx-ai-onboard/non-homebrew-npm-on-macos-uses-local-prefix ()
+  ;; A Node that is not Homebrew's has a global directory that is not yours (EACCES): the adapter goes to ~/.local
+  (drgnx-onboard-test--claude 'macos
+    (let ((other (concat root "other/")))
+      (drgnx-onboard-test--have bin "claude")
+      (write-region "" nil (concat home ".logged-in"))
+      (make-directory other t)
+      (copy-file (concat tpl "npm") (concat other "npm") t)
+      (setq exec-path (list bin other))
+      (setenv "PATH" (concat bin path-separator other))
+      (let* ((asked (drgnx-onboard-test--asked '(("\\`Set up Claude Code" . t))))
+             (r (cl-letf (((symbol-function 'y-or-n-p) (car asked))) (drgnx-onboard--agents-step '(:interactive t)))))
+        (should (string-match-p "npm install -g --prefix ~/.local @zed-industries/claude-agent-acp" (car (car (cdr asked)))))
+        (should (eq (car r) 'ok)))
+      (should (string-match-p (format "npm install -g --prefix %s.local @zed-industries/claude-agent-acp" home)
+                              (drgnx-onboard-test--slurp calls)))
+      (should (file-executable-p (concat home ".local/bin/claude-agent-acp"))))))
+
 ;;; onboard-test.el ends here

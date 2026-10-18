@@ -576,6 +576,19 @@ Claude Code's parts (`drgnx-onboard--agents-step').")
                                           (and brew (expand-file-name name (file-name-directory brew))))
                                     (mapcar (lambda (d) (expand-file-name name d)) (plist-get check :dirs))))))))
 
+(defun drgnx-onboard--npm-outside-brew-p ()
+  "Is the npm found a Node that is not Homebrew's (not beside brew)?  No npm yet: nil — Homebrew's Node comes first."
+  (when-let* ((npm (executable-find "npm")))
+    (not (equal (file-name-directory npm) (and-let* ((brew (drgnx-onboard--brew))) (file-name-directory brew))))))
+
+(defun drgnx-onboard--platform-job (tool)
+  "TOOL's :job command on this platform (nil when it has none).  The adapter on macOS goes to ~/.local when the npm
+is not Homebrew's: a system Node's global directory is not yours (EACCES)."
+  (let ((job (plist-get (plist-get (alist-get tool drgnx-onboard-install-recipes) (if (eq (drgnx-platform) 'macos) :macos :linux)) :job)))
+    (if (and job (eq tool 'claude-agent-acp) (eq (drgnx-platform) 'macos) (drgnx-onboard--npm-outside-brew-p))
+        (append (seq-take job 3) '("--prefix" "~/.local") (nthcdr 3 job))
+      job)))
+
 (defun drgnx-onboard--up-p (provider)
   "Does PROVIDER's address answer now?  One probe of it (a second at most); `drgnx-ai-detected' has what it found."
   (let ((done nil))
@@ -666,7 +679,7 @@ job on either platform.  Every run starts from the top: nothing is resumed from 
          (name (plist-get r :name))
          (there (lambda () (or (drgnx-onboard--program tool)
                                (and (plist-get r :provider) (drgnx-onboard--up-p (plist-get r :provider))))))
-         (job (plist-get (plist-get r (if (eq (drgnx-platform) 'macos) :macos :linux)) :job)))
+         (job (drgnx-onboard--platform-job tool)))
     (cond
      ((not (plist-get ctx :interactive)) (list 'fail (format "%s is not installed (nothing is installed without asking)" name) nil))
      ((funcall there) 'ok)
@@ -1023,7 +1036,7 @@ Code extension's own copy does not count), Node (only when the adapter is missin
   "The command that installs TOOL here, as text: Homebrew's, the installer's, npm's, the one to run in a terminal."
   (let* ((r (alist-get tool drgnx-onboard-install-recipes))
          (p (plist-get r (if (eq (drgnx-platform) 'macos) :macos :linux)))
-         (job (plist-get p :job)))
+         (job (drgnx-onboard--platform-job tool)))
     (cond ((plist-get p :install) (string-join (plist-get p :install) " "))
           ((equal (seq-take job 2) '("bash" "-c")) (nth 2 job))
           (job (string-join job " "))

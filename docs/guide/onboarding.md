@@ -125,7 +125,7 @@ itself is missing the question also says that a `claude` inside a VS Code extens
 |---|---|---|
 | Claude Code (`claude`) | `brew install --cask claude-code` | Claude's official installer, `curl -fsSL https://claude.ai/install.sh \| bash` (into `~/.local/bin`, no `sudo`) |
 | Node.js, for the adapter (only when `claude-agent-acp` is missing too) | `brew install node` | your distro's package — `sudo dnf install nodejs npm`, `sudo apt-get install nodejs npm` or `sudo pacman -S nodejs npm` — which needs `sudo`: drgnx copies the command for you to run in a terminal and waits for `npm` to show up (up to ten minutes; `C-g` stops) |
-| The adapter (`claude-agent-acp`) | `npm install -g @zed-industries/claude-agent-acp` | `npm install -g --prefix ~/.local @zed-industries/claude-agent-acp` (no `sudo`: a system Node's global directory is not yours) |
+| The adapter (`claude-agent-acp`) | `npm install -g @zed-industries/claude-agent-acp` (with Homebrew's Node; any other Node, which has a global directory that is not yours, gets `--prefix ~/.local` as on Linux) | `npm install -g --prefix ~/.local @zed-industries/claude-agent-acp` (no `sudo`: a system Node's global directory is not yours) |
 
 The commands that need no password run as drgnx jobs with a log and progress in the Welcome (`C-g` stops them). If
 one fails, the result says why (the log's last line), where the log is, and how to retry — run the step again, or
