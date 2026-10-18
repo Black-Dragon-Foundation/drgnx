@@ -101,9 +101,16 @@ server, a hook, a skill, a rules file, and a settings.json env that overrides th
   (should (drgnx-m11c2-ui-test--wait (lambda () (zerop (hash-table-count drgnx-agent-settings--running))) 30))
   (redisplay t))
 
+(defun drgnx-m11c2-ui-test--show (buffer)
+  "BUFFER in the one window of the selected frame, which is selected; the window."
+  (let ((win (frame-root-window)))
+    (set-window-buffer win buffer)
+    (select-window win)
+    win))
+
 (defun drgnx-m11c2-ui-test--settings-part (shots)
   "The Claude page, two MCP Tests and the Codex page; SHOTS the screenshot directory."
-  (let ((display-buffer-overriding-action '(display-buffer-same-window)) (drgnx-agent-check-timeout 2))
+  (let ((display-buffer-overriding-action '(display-buffer-same-window)) (drgnx-agent-check-timeout 2) (win nil))
     (drgnx-agent-config-test-env
       (let ((drgnx-agents-profiles nil))
         (unwind-protect
@@ -123,7 +130,7 @@ server, a hook, a skill, a rules file, and a settings.json env that overrides th
                   (should (string-search "ANTHROPIC_BASE_URL" text)))
                 (should (string-search "command not found" (drgnx-m11c2-ui-test--item-line "github")))
                 (should (string-search "Test (runs the command)" (drgnx-m11c2-ui-test--item-line "PreToolUse Bash")))
-                (set-window-buffer (selected-window) (current-buffer))
+                (setq win (drgnx-m11c2-ui-test--show (current-buffer)))
                 (goto-char (point-min))
                 (redisplay t)
                 (drgnx-m11c2-ui-test--shot shots "m11c2-claude-page.png")
@@ -135,8 +142,8 @@ server, a hook, a skill, a rules file, and a settings.json env that overrides th
                 (should (string-search "timed out" (drgnx-m11c2-ui-test--item-line "mock-hang")))
                 (should-not (string-search drgnx-m11c2-ui-test--secret (buffer-substring-no-properties (point-min) (point-max))))
                 (drgnx-m11c2-ui-test--goto-item "mock-ok")
-                (set-window-point (selected-window) (point))
-                (recenter 3)
+                (set-window-point win (point))
+                (set-window-start win (save-excursion (forward-line -3) (point)))   ; the servers at the top
                 (redisplay t)
                 (drgnx-m11c2-ui-test--shot shots "m11c2-mcp-test.png"))
               ;; 3. the Codex page
@@ -147,6 +154,7 @@ server, a hook, a skill, a rules file, and a settings.json env that overrides th
                     (should (string-search word text)))
                   (should-not (string-search drgnx-m11c2-ui-test--secret text)))
                 (should (string-search "command not found" (drgnx-m11c2-ui-test--item-line "docs")))
+                (drgnx-m11c2-ui-test--show (current-buffer))
                 (goto-char (point-min))
                 (redisplay t)
                 (drgnx-m11c2-ui-test--shot shots "m11c2-codex-page.png")))
