@@ -47,6 +47,47 @@ Anything still in the config dir afterwards has its own copy in the data dir, wh
 -r "$c/emacs" "$d/emacs"`, and the same for `systemd` and `applications`), then delete the config dir's. Until then
 `drgnx` still reads the old `emacs` record when the data dir has none.
 
+## Making your config portable
+
+Onboarding's **Portability** step (Help → Welcome, or `drgnx onboard --step portability`) does this for you, and
+asks before it changes anything:
+
+1. **Where your config comes from.** A git repository of its own (the config dir is the top of the work tree), with
+   its remote; chezmoi, when `chezmoi source-path ~/.config/drgnx` says it manages it; or neither.
+2. **A git repository, when you say yes.** When the config dir is neither, the step first moves the machine-local
+   files above to the data dir. If a file holds a key in plain text, it stops there: the step warns, names the
+   file and commits nothing; move the key to your keyring ([ai.md](ai.md#keys)) and run the step again. Otherwise
+   it asks "Make ~/.config/drgnx a git repository (you push it to a remote of your choice)?" — yes runs `git init`,
+   `git add` (never the machine-local items) and one commit, "drgnx configuration". That is all: drgnx never adds a
+   remote, never pushes and never commits again. Add a remote and push yourself:
+
+   ```sh
+   git -C ~/.config/drgnx remote add origin https://example.org/you/drgnx-config.git
+   git -C ~/.config/drgnx push -u origin HEAD
+   ```
+
+   Without a git identity (`user.name`, `user.email`) the commit cannot be made: the repository stays initialised
+   and the step says how to set the identity and commit.
+3. **chezmoi.** With chezmoi installed and the config dir not in it, the step says how to add it: `chezmoi add
+   ~/.config/drgnx`. Add `secrets.age` as a plain file, not with `--encrypt`: it is encrypted already. drgnx runs
+   nothing of chezmoi's here but `chezmoi source-path`.
+4. **Your keys.** In drgnx's window, when your keyring holds a provider key, it asks "Export your provider keys to
+   secrets.age, encrypted with a passphrase?" — yes installs age if it is missing (asked, like every install) and
+   opens the Export Keys terminal ([below](#your-provider-keys-secretsage)). Commit `secrets.age` with the rest
+   yourself. `drgnx onboard` on a terminal never opens the keyring here; it names `drgnx secrets export`.
+5. **The next machine's command:**
+
+   ```sh
+   curl -fsSL https://raw.githubusercontent.com/Black-Dragon-Foundation/drgnx/main/install.sh | bash -s -- --config URL
+   ```
+
+   with your remote as URL (`--chezmoi URL` when chezmoi manages the config). install.sh takes an https URL or a
+   local path, so with no remote, or an ssh one, the command says `YOUR-REPO-URL`; a user name or password in the
+   remote is never shown. See [install.md](install.md#on-a-second-machine).
+
+With `--non-interactive` the step only reports where the config comes from and the command: it moves, makes and
+exports nothing.
+
 ## The doctor's check
 
 `drgnx doctor`'s `portable-config` line says whether the config dir can travel as it is:

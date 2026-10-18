@@ -388,11 +388,6 @@ locked version.  BYTES: the downloads' size from the lock, nil when it does not 
 
 ;;;; Steps 4–6, 8: what is there (completed by later milestones)
 
-(defun drgnx-onboard--detect (programs then)
-  (lambda (_ctx)
-    (let ((found (seq-filter #'executable-find programs)))
-      (list 'info (format "%s; %s" (if found (concat "found: " (string-join found ", ")) "nothing found") then)))))
-
 ;;;; Step 4: AI providers
 
 (defvar drgnx-ai-detected)
@@ -1360,6 +1355,146 @@ last, the shell integration line."
           (list 'ok (format "installed; start it with: systemctl --user enable --now drgnx")))
       (list 'info (format "written (not installed): %s and %s. To install: %s" unit desktop how)))))
 
+;;;; Step 8: portability
+
+(declare-function drgnx-portable-move-machine-local "drgnx-portable")
+(declare-function drgnx-portable-config-problems "drgnx-portable")
+(declare-function drgnx-secrets-keyring-p "drgnx-secrets")
+(declare-function drgnx-secrets--entries "drgnx-secrets")
+(declare-function drgnx-secrets--wipe-entries "drgnx-secrets")
+(declare-function drgnx-secrets-export-keys "drgnx-secrets")
+(defvar drgnx-portable-machine-local)
+(defvar drgnx-portable-install-url)
+
+(defun drgnx-onboard--call (program &rest args)
+  "Run PROGRAM with ARGS (stdin empty, no terminal prompt): (EXIT . OUTPUT), OUTPUT trimmed; nil when PROGRAM
+cannot run."
+  (with-temp-buffer
+    (let* ((process-environment (cons "GIT_TERMINAL_PROMPT=0" process-environment))
+           (exit (condition-case nil (apply #'call-process program nil t nil args) (file-error nil))))
+      (and (integerp exit) (cons exit (string-trim (buffer-string)))))))
+
+(defun drgnx-onboard--git-remote (dir)
+  "The remote of the git repository DIR: origin's URL, else the first remote's; nil without one."
+  (let ((origin (drgnx-onboard--call "git" "-C" dir "remote" "get-url" "origin")))
+    (if (eql (car origin) 0) (cdr origin)
+      (let ((first (car (split-string (or (cdr (drgnx-onboard--call "git" "-C" dir "remote")) "") "\n" t))))
+        (and first (cdr (drgnx-onboard--call "git" "-C" dir "remote" "get-url" first)))))))
+
+(defun drgnx-onboard--chezmoi ()
+  "chezmoi's program, or nil (`drgnx-onboard-install-recipes': on the path or in ~/.local/bin)."
+  (drgnx-onboard--program 'chezmoi))
+
+(defun drgnx-onboard--config-source ()
+  "Where the config dir comes from: (git . REMOTE-OR-NIL) when it is a git work tree of its own, (chezmoi .
+SOURCE) when chezmoi manages it (`chezmoi source-path DIR', read-only), else (none)."
+  (let* ((dir (directory-file-name (drgnx-user-dir)))
+         (top (and (file-directory-p dir) (executable-find "git")
+                   (drgnx-onboard--call "git" "-C" dir "rev-parse" "--show-toplevel")))
+         (chezmoi (drgnx-onboard--chezmoi))
+         (source (and chezmoi (drgnx-onboard--call chezmoi "source-path" dir))))
+    (cond ((and (eql (car top) 0) (equal (file-truename (cdr top)) (file-truename dir)))
+           (cons 'git (drgnx-onboard--git-remote dir)))
+          ((and (eql (car source) 0) (not (string-empty-p (cdr source)))) (cons 'chezmoi (cdr source)))
+          (t (list 'none)))))
+
+(defun drgnx-onboard--https-remote (remote)
+  "REMOTE as install.sh takes it — an https URL, any user or password left out — or nil."
+  (when (and remote (string-match "\\`https://\\(?:[^/@]*@\\)?\\([^/@[:space:][:cntrl:]]+/[^[:space:][:cntrl:]]*\\)\\'" remote))
+    (concat "https://" (match-string 1 remote))))
+
+(defun drgnx-onboard--remote-label (remote)
+  "REMOTE to show: the https form (no password), or REMOTE when it is not https (an ssh remote holds none)."
+  (or (drgnx-onboard--https-remote remote) remote))
+
+(defun drgnx-onboard--keys-to-export-p ()
+  "Non-nil when this machine's keyring holds a provider key that secrets.age would carry.  It opens the keyring,
+so only in drgnx's window (never batch: `drgnx onboard' says the command instead); the keys read are wiped."
+  (and (not noninteractive)
+       (require 'drgnx-secrets)
+       (drgnx-secrets-keyring-p)
+       (condition-case nil
+           (let ((entries (drgnx-secrets--entries))) (drgnx-secrets--wipe-entries entries) t)
+         (error nil))))
+
+(defun drgnx-onboard--make-repo (dir)
+  "git init DIR, add everything but the machine-local items, one commit.  Returns (STATUS SENTENCE)."
+  (let* ((shown (drgnx-portable-path dir))
+         (init (drgnx-onboard--call "git" "-C" dir "init" "-q"))
+         (add (and (eql (car init) 0)
+                   (apply #'drgnx-onboard--call "git" "-C" dir "add" "-A" "--" "."
+                          (mapcar (lambda (i) (concat ":(exclude)" (directory-file-name i))) drgnx-portable-machine-local))))
+         (commit (and (eql (car add) 0) (drgnx-onboard--call "git" "-C" dir "commit" "-q" "-m" "drgnx configuration"))))
+    (cond ((not (eql (car init) 0)) (list 'warn (format "git init failed in %s: %s" shown (cdr init))))
+          ((not (eql (car add) 0)) (list 'warn (format "made %s a git repository, but git add failed: %s" shown (cdr add))))
+          ((not (eql (car commit) 0))
+           (list 'info (format "made %s a git repository; the commit needs your git identity: git config --global user.name \"Your Name\"; git config --global user.email you@example.org; then: git -C %s commit -m \"drgnx configuration\""
+                               shown shown)))
+          (t (list 'ok (format "made %s a git repository with one commit; add a remote of your choice and push it (drgnx never pushes)" shown))))))
+
+(defun drgnx-onboard--portability-step (ctx)
+  "Step 8 (docs/guide/second-machine.md): where the config comes from (`drgnx-onboard--config-source') and the next
+machine's command.  Interactive, a config dir that is no repository: the machine-local items move to the data dir,
+then, with no key in plain text, it asks to make the dir a git repository (one commit; never a remote, a push or a
+later commit).  chezmoi installed: how to add the dir (drgnx runs nothing of chezmoi's but `source-path').
+Interactive in drgnx's window, with a key in the keyring: asks to export the keys (age installed first), in a
+terminal.  Without interaction it only reports."
+  (require 'drgnx-portable)
+  (let* ((ask (plist-get ctx :interactive))
+         (dir (directory-file-name (drgnx-user-dir)))
+         (shown (drgnx-portable-path dir))
+         (source (drgnx-onboard--config-source))
+         (status 'ok) (parts nil)
+         (say (lambda (st text)
+                (push text parts)
+                (when (> (cl-position st '(ok info warn)) (cl-position status '(ok info warn))) (setq status st)))))
+    (pcase source
+      (`(git . ,remote)
+       (funcall say (if remote 'ok 'info)
+                (if remote (format "config: %s is a git repository (remote %s)" shown (drgnx-onboard--remote-label remote))
+                  (format "config: %s is a git repository with no remote: add one of your choice and push it" shown))))
+      (`(chezmoi . ,src) (funcall say 'ok (format "config: chezmoi manages %s (source %s)" shown (drgnx-portable-path src))))
+      (_
+       (if (not (and ask (file-directory-p dir) (executable-find "git")))
+           (funcall say 'info (format "config: %s is not a git repository%s" shown
+                                      (if ask "" " (run this step interactively to make it one)")))
+         (let* ((moved (drgnx-portable-move-machine-local))
+                (gone (mapcar #'car (seq-filter (lambda (m) (memq (cdr m) '(moved dropped))) moved)))
+                (kept (mapcar #'car (seq-filter (lambda (m) (eq (cdr m) 'kept)) moved)))
+                (problems (drgnx-portable-config-problems))
+                (keys (plist-get problems :keys)) (unchecked (plist-get problems :unchecked)))
+           (when gone
+             (funcall say 'ok (format "moved to the data dir: %s" (string-join (mapcar #'directory-file-name gone) ", "))))
+           (when kept
+             (funcall say 'info (format "%s stays: the data dir has a different copy (compare them, then delete the config dir's)"
+                                        (string-join (mapcar #'directory-file-name kept) ", "))))
+           (cond (keys (funcall say 'warn (format "a key in plain text in %s: never committed: move the key to your keyring first (docs/guide/ai.md), then run this step again"
+                                                  (string-join keys ", "))))
+                 (unchecked (funcall say 'warn (format "could not read %s: never committed: make it readable, then run this step again"
+                                                       (string-join unchecked ", "))))
+                 ((y-or-n-p (format "Make %s a git repository (you push it to a remote of your choice)? " shown))
+                  (apply say (drgnx-onboard--make-repo dir)))
+                 (t (funcall say 'info (format "config: %s is not a git repository" shown))))))))
+    (when (and (not (eq (car source) 'chezmoi)) (drgnx-onboard--chezmoi))
+      (funcall say 'ok (format "chezmoi: to keep it with your dotfiles, chezmoi add %s (secrets.age as a plain file, not --encrypt: it is encrypted already)" shown)))
+    (cond ((not ask))
+          ((not (drgnx-onboard--keys-to-export-p))
+           (funcall say 'ok "keys: drgnx secrets export (on a terminal) carries your provider keys, encrypted, in secrets.age"))
+          ((not (y-or-n-p "Export your provider keys to secrets.age, encrypted with a passphrase? "))
+           (funcall say 'ok "keys: not exported (Portability: Export Keys does it later)"))
+          (t (let ((age (drgnx-onboard--install 'age ctx)))
+               (if (not (eq age 'ok))
+                   (funcall say 'warn (format "keys: not exported, %s" (cadr age)))
+                 (require 'drgnx-secrets)
+                 (drgnx-secrets-export-keys)
+                 (funcall say 'info "keys: finish in the terminal (age asks for a passphrase); then copy or push secrets.age with the config")))))
+    (let* ((remote (cdr source))
+           (url (and (memq (car source) '(git chezmoi))
+                     (drgnx-onboard--https-remote (if (eq (car source) 'chezmoi) (drgnx-onboard--git-remote remote) remote)))))
+      (funcall say 'ok (format "next machine: curl -fsSL %s | bash -s -- %s %s" drgnx-portable-install-url
+                               (if (eq (car source) 'chezmoi) "--chezmoi" "--config") (or url "YOUR-REPO-URL"))))
+    (list status (string-join (nreverse parts) "; "))))
+
 ;;;; Step 9: finish
 
 (declare-function drgnx-doctor-run "drgnx-doctor")
@@ -1440,8 +1575,8 @@ modules on or installed packages here, in the drgnx app (CTX interactive): asked
                            :doc "Keep running in the background or quit when the last window closes; macOS: the drgnx app; Linux: the systemd user service, the desktop entry and EDITOR — installed only if you say so"
                            :run #'drgnx-onboard--daemon-step)
 (drgnx-onboard-define-step 'portability :order 80 :title "Portability"
-                           :doc "chezmoi and age for your configuration and secrets on a second machine"
-                           :run (drgnx-onboard--detect '("chezmoi" "age") "setting up a second machine is documented with the platforms milestone (M12)"))
+                           :doc "Where your config comes from, a git repository of it (asked), your provider keys exported to secrets.age (asked), and the command that sets up your next machine"
+                           :run #'drgnx-onboard--portability-step)
 (drgnx-onboard-define-step 'finish :order 90 :title "Finish"
                            :doc "drgnx doctor: what is left to fix"
                            :run #'drgnx-onboard--finish-step)
