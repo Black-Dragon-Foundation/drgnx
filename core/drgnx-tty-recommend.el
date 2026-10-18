@@ -41,6 +41,10 @@ Ordered by what is best for C-g, from the table in `drgnx-tty-terminals': the te
 (WezTerm, Ghostty, xterm) before the kitty keyboard protocol ones (foot, kitty).  If foot's row ever says
 modifyOtherKeys, it is already ahead of kitty.
 
+On image-based Fedora the Fedora packages go through `rpm-ostree install' (the same packages as dnf, so the same
+index check); WezTerm and foot have Flatpaks on Flathub, but a Flatpak terminal runs its shell inside the
+sandbox, where drgnx and emacsclient are not, so they are not suggested; kitty and Ghostty have none.
+
 Package names were checked against the distributions' indexes on 2026-10-18: Arch (extra) has kitty, foot, ghostty,
 wezterm and xterm; Fedora 44 has kitty, foot and xterm; Debian 13 and Ubuntu 26.04 have kitty, foot and xterm;
 Homebrew has the casks kitty, ghostty and wezterm.  The RHEL clones (Rocky, Alma) have kitty only in EPEL, which is
@@ -51,6 +55,10 @@ not on by default, and Amazon Linux has none: both get the download pages.")
 (defconst drgnx-tty--os-release-files '("/etc/os-release" "/usr/lib/os-release")
   "Where Linux keeps its identity, in the order of the os-release specification.")
 
+(defconst drgnx-tty-ostree-file "/run/ostree-booted"
+  "Exists on an image-based system (Fedora Silverblue, Kinoite, Bazzite…): the system is read-only, dnf cannot
+install, `rpm-ostree' layers a package instead.")
+
 (defun drgnx-tty--os-field (key)
   "The value of KEY= in the current buffer (an os-release file), unquoted, or nil."
   (goto-char (point-min))
@@ -59,11 +67,13 @@ not on by default, and Amazon Linux has none: both get the download pages.")
       (and (not (string-empty-p value)) value))))
 
 (defun drgnx-tty-os (&optional os-release-file)
-  "Which system this is: (:system `linux' or `macos' :ids (ID ID_LIKE…)).
+  "Which system this is: (:system `linux' or `macos' :ostree BOOL :ids (ID ID_LIKE…)).
+:ostree is non-nil on an image-based Linux (`drgnx-tty-ostree-file' exists).
 The ids come from OS-RELEASE-FILE (default /etc/os-release, else /usr/lib/os-release), lower case, nil on macOS
 or when there is no readable file."
   (let ((system (drgnx-platform)))
     (list :system system
+          :ostree (and (eq system 'linux) (file-exists-p drgnx-tty-ostree-file) t)
           :ids (when-let* (((eq system 'linux))
                            (file (or os-release-file (seq-find #'file-readable-p drgnx-tty--os-release-files)))
                            ((file-readable-p file)))
@@ -93,7 +103,10 @@ Never runs it."
            (pkg (lambda (key) (plist-get entry key))))
       (pcase family
         ('macos (when-let* ((cask (funcall pkg :cask))) (concat "brew install --cask " cask)))
-        ('fedora (if-let* ((p (funcall pkg :dnf))) (concat "sudo dnf install " p) (funcall pkg :url)))
+        ('fedora (if-let* ((p (funcall pkg :dnf)))
+                     ;; image-based: `rpm-ostree install' layers the package (it asks for a restart)
+                     (concat (if (plist-get os :ostree) "rpm-ostree install " "sudo dnf install ") p)
+                   (funcall pkg :url)))
         ('debian (if-let* ((p (funcall pkg :apt))) (concat "sudo apt install " p) (funcall pkg :url)))
         ('arch (if-let* ((p (funcall pkg :arch))) (concat "sudo pacman -S " p) (funcall pkg :url)))
         (_ (funcall pkg :url))))))
@@ -160,6 +173,8 @@ only when there is none, the first two install commands.  Read-only."
                             ".")))))
       (list :installed installed :install install
             :text (string-join (append (list "This terminal cannot send C-S- chords and the like.") lines
+                                       (and (seq-some (lambda (choice) (string-prefix-p "rpm-ostree" (cdr choice))) install)
+                                            (list "(rpm-ostree layers the package: restart to use it.)"))
                                        (list "Until then: Alt+Shift or F6 then the key."))
                                " ")))))
 

@@ -5,7 +5,7 @@ works depends on the terminal. A terminal has to send the shortcuts (`C-S-p`, ``
 computer's clipboard, show true colour and report the mouse. This page lists what each common terminal can do,
 the shortcuts it keeps for itself, and the line that fixes what is missing.
 
-**Works best:** kitty, foot, Ghostty, and WezTerm with one setting. They send `C-S-` chords and the other shortcuts,
+**Works best:** kitty, WezTerm, foot, Ghostty and Alacritty. They send `C-S-` chords and the other shortcuts,
 and copy to the clipboard, over SSH as well. Each keeps some `C-S-` chords for itself; [the fixes](#the-fixes) free
 them. In any terminal, **F1** opens the command palette (VS Code keys) and `M-x` works in every
 profile, so every command can still be reached.
@@ -54,8 +54,8 @@ helps.
   `ctrl+shift`) take `C-S-p` (the palette) among others. Add `clear_all_shortcuts yes` to `kitty.conf` before your
   own `map` lines. Or free one chord with a `map` that has no action, such as `map kitty_mod+t`. kitty then passes
   the chord to drgnx.
-- **WezTerm:** `config.enable_kitty_keyboard = true` in `wezterm.lua` (off by default). Its default bindings take
-  `C-S-p` (its own command palette) and more. `config.disable_default_key_bindings = true` frees them all.
+- **WezTerm:** no setting needed for keys: it sends modifyOtherKeys, which drgnx turns on. Its default bindings take
+  `C-S-p` (its own command palette) and more. `config.disable_default_key_bindings = true` in `wezterm.lua` frees them all.
 - **foot:** no setting needed for modifyOtherKeys, since foot speaks kkp. To free a chord, set its action to `none`
   in `foot.ini` under `[key-bindings]`, for example `search-start=none`.
 - **Ghostty:** `keybind = ctrl+shift+t=unbind` frees a chord. `ghostty +list-keybinds --default` lists the defaults.
@@ -145,6 +145,11 @@ command for your system, for the first two. **drgnx never installs anything**: i
 | xterm | `sudo dnf install xterm` | `sudo apt install xterm` | `sudo pacman -S xterm` | none |
 | foot (Wayland) | `sudo dnf install foot` | `sudo apt install foot` | `sudo pacman -S foot` | none |
 | kitty | `sudo dnf install kitty` | `sudo apt install kitty` | `sudo pacman -S kitty` | `brew install --cask kitty` |
+
+On an image-based Fedora (Silverblue, Kinoite, Bazzite; drgnx sees `/run/ostree-booted`) the Fedora packages are
+`rpm-ostree install xterm`, `rpm-ostree install foot` and `rpm-ostree install kitty` (a restart finishes it); `dnf` is
+never suggested there. WezTerm and foot have Flatpaks on Flathub, but a Flatpak terminal runs its shell inside the
+sandbox, where drgnx is not, so drgnx does not suggest them.
 
 Other systems, and the RHEL clones (Rocky, Alma: kitty is only in EPEL) and Amazon Linux, get each terminal's download
 page. The commands were checked against the distributions' package indexes on 2026-10-18. A distribution derived from

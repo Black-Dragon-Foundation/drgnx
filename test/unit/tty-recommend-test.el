@@ -11,12 +11,15 @@
 (defun drgnx-tty-rec-test--os-file (name)
   (expand-file-name (concat "test/fixtures/os-release/" name) drgnx-tty-rec-test--root))
 
-(defun drgnx-tty-rec-test--os (name)
-  "The OS plist for fixture NAME, as a Linux."
+(defun drgnx-tty-rec-test--os (name &optional ostree)
+  "The OS plist for fixture NAME, as a Linux; image-based (rpm-ostree) when OSTREE."
   (let ((system-type 'gnu/linux))
-    (drgnx-tty-os (drgnx-tty-rec-test--os-file name))))
+    (cl-letf (((symbol-function 'file-exists-p)
+               (let ((orig (symbol-function 'file-exists-p)))
+                 (lambda (f) (if (equal f drgnx-tty-ostree-file) ostree (funcall orig f))))))
+      (drgnx-tty-os (drgnx-tty-rec-test--os-file name)))))
 
-(defconst drgnx-tty-rec-test--macos '(:system macos :ids nil))
+(defconst drgnx-tty-rec-test--macos '(:system macos :ostree nil :ids nil))
 
 (defmacro drgnx-tty-rec-test--with-path (names &rest body)
   "BODY with only the fake executables NAMES on PATH and exec-path; each appends its name to `calls'.
@@ -51,23 +54,23 @@ NAMES may be empty.  A fixed set of variables is cleared: display, SSH."
     "amazon-2023" "unknown"))
 
 (ert-deftest drgnx-tty-recommend/os-from-os-release ()
-  (should (equal (drgnx-tty-rec-test--os "fedora-45") '(:system linux :ids ("fedora"))))
-  (should (equal (drgnx-tty-rec-test--os "debian-13") '(:system linux :ids ("debian"))))
-  (should (equal (drgnx-tty-rec-test--os "ubuntu-26.04") '(:system linux :ids ("ubuntu" "debian"))))
-  (should (equal (drgnx-tty-rec-test--os "linuxmint") '(:system linux :ids ("linuxmint" "ubuntu" "debian"))))
-  (should (equal (drgnx-tty-rec-test--os "arch") '(:system linux :ids ("arch"))))
-  (should (equal (drgnx-tty-rec-test--os "endeavouros") '(:system linux :ids ("endeavouros" "arch"))))
-  (should (equal (drgnx-tty-rec-test--os "nobara-42") '(:system linux :ids ("nobara" "rhel" "centos" "fedora"))))
-  (should (equal (drgnx-tty-rec-test--os "rocky-9") '(:system linux :ids ("rocky" "rhel" "centos" "fedora"))))
-  (should (equal (drgnx-tty-rec-test--os "amazon-2023") '(:system linux :ids ("amzn" "fedora"))))
-  (should (equal (drgnx-tty-rec-test--os "unknown") '(:system linux :ids ("plan9"))))
+  (should (equal (drgnx-tty-rec-test--os "fedora-45") '(:system linux :ostree nil :ids ("fedora"))))
+  (should (equal (drgnx-tty-rec-test--os "debian-13") '(:system linux :ostree nil :ids ("debian"))))
+  (should (equal (drgnx-tty-rec-test--os "ubuntu-26.04") '(:system linux :ostree nil :ids ("ubuntu" "debian"))))
+  (should (equal (drgnx-tty-rec-test--os "linuxmint") '(:system linux :ostree nil :ids ("linuxmint" "ubuntu" "debian"))))
+  (should (equal (drgnx-tty-rec-test--os "arch") '(:system linux :ostree nil :ids ("arch"))))
+  (should (equal (drgnx-tty-rec-test--os "endeavouros") '(:system linux :ostree nil :ids ("endeavouros" "arch"))))
+  (should (equal (drgnx-tty-rec-test--os "nobara-42") '(:system linux :ostree nil :ids ("nobara" "rhel" "centos" "fedora"))))
+  (should (equal (drgnx-tty-rec-test--os "rocky-9") '(:system linux :ostree nil :ids ("rocky" "rhel" "centos" "fedora"))))
+  (should (equal (drgnx-tty-rec-test--os "amazon-2023") '(:system linux :ostree nil :ids ("amzn" "fedora"))))
+  (should (equal (drgnx-tty-rec-test--os "unknown") '(:system linux :ostree nil :ids ("plan9"))))
   ;; no readable file: still Linux, no ids
   (should (equal (let ((system-type 'gnu/linux))
                    (drgnx-tty-os (drgnx-tty-rec-test--os-file "no-such-file")))
-                 '(:system linux :ids nil)))
+                 '(:system linux :ostree nil :ids nil)))
   ;; macOS comes from the platform, never from a file
   (should (equal (let ((system-type 'darwin)) (drgnx-tty-os (drgnx-tty-rec-test--os-file "fedora-45")))
-                 '(:system macos :ids nil))))
+                 '(:system macos :ostree nil :ids nil))))
 
 (ert-deftest drgnx-tty-recommend/install-commands-per-os ()
   (let ((cmd (lambda (term os) (drgnx-tty-install-command term os))))
@@ -244,6 +247,29 @@ NAMES may be empty.  A fixed set of variables is cleared: display, SSH."
       ;; macOS needs no display variable
       (let ((system-type 'darwin))
         (should (drgnx-tty-capable-terminal-argv))))))
+
+(ert-deftest drgnx-tty-recommend/image-based-fedora-never-gets-dnf ()
+  ;; Silverblue, Kinoite and the like: /run/ostree-booted exists; dnf cannot install there
+  (let ((os (drgnx-tty-rec-test--os "fedora-45" t)))
+    (should (eq (plist-get os :ostree) t))
+    (should-not (plist-get (drgnx-tty-rec-test--os "fedora-45") :ostree))
+    (should (equal (drgnx-tty-install-command 'kitty os) "rpm-ostree install kitty"))
+    (should (equal (drgnx-tty-install-command 'foot os) "rpm-ostree install foot"))
+    (should (equal (drgnx-tty-install-command 'xterm os) "rpm-ostree install xterm"))
+    ;; no Fedora package: the download page, as on a normal Fedora
+    (should (equal (drgnx-tty-install-command 'wezterm os) "https://wezterm.org/installation.html"))
+    (should (equal (drgnx-tty-install-command 'ghostty os) "https://ghostty.org/docs/install/binary"))
+    (dolist (term (mapcar #'car drgnx-tty-capable-terminals))
+      (should-not (string-match-p "dnf" (drgnx-tty-install-command term os))))
+    (drgnx-tty-rec-test--with-path nil
+      (let ((rec (drgnx-tty-recommendation '(:keys legacy) os)))
+        (should (equal (plist-get rec :install)
+                       '((xterm . "rpm-ostree install xterm") (foot . "rpm-ostree install foot"))))
+        (should-not (string-match-p "dnf" (plist-get rec :text)))
+        (should (string-match-p "restart" (plist-get rec :text))))))
+  ;; other systems are not affected by the flag
+  (should (equal (drgnx-tty-install-command 'kitty (plist-put (drgnx-tty-rec-test--os "ubuntu-26.04") :ostree t))
+                 "sudo apt install kitty")))
 
 (ert-deftest drgnx-tty-recommend/finds-macos-apps ()
   (let ((apps (make-temp-file "drgnx-rec-apps" t)))

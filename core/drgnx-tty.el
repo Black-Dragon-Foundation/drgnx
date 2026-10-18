@@ -153,7 +153,7 @@ server inherited from its first client (stale when another terminal attached sin
                  "C-S-f" "C-S-x" "C-S-SPC" "C-S-<left>" "C-S-<right>" "C-S-<up>" "C-S-<down>" "C-S-z"
                  "s-c" "s-v" "s-m" "s-n" "s--" "s-=" "s-0" "s-t" "s-w" "s-1" "s-2" "s-3" "s-4" "s-5" "s-6" "s-7"
                  "s-8" "s-9" "s-r" "s-h" "s-k" "s-f" "S-s-t" "S-s-[" "S-s-]")
-         :fixes ((kkp . "config.enable_kitty_keyboard = true   (in wezterm.lua; off by default)")
+         :fixes ((kkp . "none: WezTerm has modifyOtherKeys, which drgnx uses; no setting is needed")
                  (takes . "config.disable_default_key_bindings = true   (in wezterm.lua; then bind only what you want)"))
          :unconfirmed (:truecolor :mouse)
          :verified nil :source "https://wezterm.org/config/key-encoding.html")
@@ -406,9 +406,13 @@ last terminal-report.eld."
 (defun drgnx-tty-onboard-note (&optional id)
   "One paragraph for onboarding: the terminals drgnx works best in and, with ID, that terminal's row — what
 works, what does not, and the lines that fix it."
-  (let* ((best "drgnx works best in kitty, foot, Ghostty, or WezTerm with enable_kitty_keyboard on: they send \
+  (let* ((names (mapcar (lambda (row) (plist-get row :name))
+                        (seq-filter (lambda (row) (and (or (plist-get row :kkp) (plist-get row :mok)) (plist-get row :osc52)))
+                                    drgnx-tty-terminals)))
+         (best (format "drgnx works best in %s, or %s: they send \
 C-S- chords and the other shortcuts, and copy to your computer's clipboard, over SSH as well (OSC 52). Each \
-keeps some C-S- chords for itself; docs/guide/terminal.md gives the line that frees them.")
+keeps some C-S- chords for itself; docs/guide/terminal.md gives the line that frees them."
+                       (string-join (butlast names) ", ") (car (last names))))
          (row (and id (drgnx-tty-terminal id))))
     (if (not row)
         (concat best (if id " drgnx does not know this terminal: F1 (VS Code keys) and the palette, or M-x, reach \
