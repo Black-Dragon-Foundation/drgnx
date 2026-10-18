@@ -40,7 +40,7 @@ stopped (`drgnx-agents-stop' fails the test).  The feed's buffers are killed aft
            (should-not drgnx-cockpit-feed--buffers)
            (should-not (timerp drgnx-cockpit-feed--timer))
            (should-not (timerp drgnx-cockpit-feed--check-timer))
-           (should-not (memq #'drgnx-cockpit-feed--hub-event drgnx-hub-event-functions))
+           (should-not (memq #'drgnx-cockpit-feed--hub-event (bound-and-true-p drgnx-hub-event-functions)))
            (should-not (memq #'drgnx-cockpit-feed--agent-changed drgnx-agents-changed-functions))
            (set-window-configuration config))))))
 
