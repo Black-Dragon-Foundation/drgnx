@@ -20,11 +20,15 @@
 ;;   crash-once  crashes when .mock-crashed is not in its directory (then makes it): the next agent works
 ;;   coord TOOL JSON  starts the first server of its mcpServers (session/new) and calls TOOL with the JSON arguments;
 ;;               says "coord: TEXT" (the tool's answer)
+;;   meta        says "meta: JSON", the _meta its session/new or session/load got ("meta: none" without one)
+;;   mode        says "mode: MODE", the mode session/set_mode last set ("mode: unset" before one)
 ;;   anything else: "You said: …" in two chunks
 ;; Usage comes as a usage_update (:used :size 1000) at the end of each turn (claude-agent-acp's shape).
 ;; MOCK_ACP_NO_LOAD / MOCK_ACP_NO_STEER turn off session/load and steering; MOCK_ACP_STEER_FAILS
 ;; answers steering with an error; MOCK_ACP_LATE_CANCEL=SECS answers a cancel that late ("end_turn").
 ;; MOCK_ACP_RATE_LIMIT answers every prompt with error 429 (a provider at its limit).
+;; MOCK_ACP_SET_MODE_FAILS answers session/set_mode with an error; MOCK_ACP_SET_MODE_SLOW=SECS sets the mode and
+;; answers that late.
 (require 'cl-lib)
 (require 'subr-x)
 
@@ -35,6 +39,16 @@
 (defvar mock--tokens nil "Alist session → tokens in context.")
 (defvar mock--sessions 0)
 (defvar mock--mcp nil "Alist session → the mcpServers it was given.")
+(defvar mock--meta nil "Alist session → the _meta its session/new or session/load got, or `none'.")
+(defvar mock--mode nil "Alist session → the mode session/set_mode set.")
+(defvar mock--line nil "The JSON line being handled.")
+
+(defun mock--line-meta ()
+  "The _meta of the request being handled, its arrays kept (the line read again), or `none'."
+  (let ((params (plist-get (json-parse-string mock--line :object-type 'plist :array-type 'array :null-object :null
+                                              :false-object :false)
+                           :params)))
+    (if (plist-member params :_meta) (plist-get params :_meta) 'none)))
 
 (defun mock--mcp-call (sid tool args)
   "Call TOOL with ARGS (JSON text) on SID's first MCP server; its answer's text, or nil."
@@ -171,6 +185,12 @@ decision log, complete the task; say what happened."
       (mock--task sid (match-string 1 text) text))
      ((string-match "\\`coord \\([a-z_]+\\) ?\\(.*\\)\\'" text)
       (mock--coord sid (match-string 1 text) (match-string 2 text)))
+     ((string-match-p "\\`meta\\'" text)
+      (let ((meta (alist-get sid mock--meta 'none nil #'equal)))
+        (mock--steps sid (list (cons 0 (lambda () (mock--say sid (concat "meta: " (if (eq meta 'none) "none" (json-serialize meta))))))))))
+     ((string-match-p "\\`mode\\'" text)
+      (let ((mode (alist-get sid mock--mode "unset" nil #'equal)))
+        (mock--steps sid (list (cons 0 (lambda () (mock--say sid (concat "mode: " mode))))))))
      ((string-match-p "crash" text)
       (message "mock crashed") (sleep-for 0.1)
       (kill-emacs 3))
@@ -246,7 +266,8 @@ decision log, complete the task; say what happened."
                               :authMethods [])))
      ((equal method "session/new")
       (let ((sid (format "mock-%d-%d" (emacs-pid) (cl-incf mock--sessions))))
-        (setf (alist-get sid mock--mcp nil nil #'equal) (plist-get params :mcpServers))
+        (setf (alist-get sid mock--mcp nil nil #'equal) (plist-get params :mcpServers)
+              (alist-get sid mock--meta nil nil #'equal) (mock--line-meta))
         (mock--respond id (list :sessionId sid))
         (run-at-time 0.01 nil (lambda () (mock--update sid '(:sessionUpdate "available_commands_update"
                                                                             :availableCommands [(:name "compact" :description "Compact the context")
@@ -258,7 +279,8 @@ decision log, complete the task; say what happened."
                (f (mock--state-file sid))
                (hist (or (alist-get sid mock--history nil nil #'equal)
                          (and f (file-readable-p f) (with-temp-buffer (insert-file-contents f) (read (current-buffer)))))))
-          (setf (alist-get sid mock--history nil nil #'equal) hist)
+          (setf (alist-get sid mock--history nil nil #'equal) hist
+                (alist-get sid mock--meta nil nil #'equal) (mock--line-meta))
           (dolist (u hist) (mock--update sid u t))
           (mock--respond id nil))))
      ((equal method "session/prompt") (mock--prompt id params))
@@ -276,6 +298,12 @@ decision log, complete the task; say what happened."
               (text (string-join (delq nil (mapcar (lambda (b) (plist-get b :text)) (plist-get params :prompt))) " ")))
           (mock--say sid (format "steered: %s " text))
           (when id (mock--respond id nil)))))
+     ((equal method "session/set_mode")
+      (let ((sid (plist-get params :sessionId)) (mode (plist-get params :modeId)) (slow (getenv "MOCK_ACP_SET_MODE_SLOW")))
+        (cond ((getenv "MOCK_ACP_SET_MODE_FAILS") (mock--error id -32603 "setPermissionMode failed"))
+              (slow (run-at-time (string-to-number slow) nil
+                                 (lambda () (setf (alist-get sid mock--mode nil nil #'equal) mode) (mock--respond id nil))))
+              (t (setf (alist-get sid mock--mode nil nil #'equal) mode) (mock--respond id nil)))))
      (id (mock--error id -32601 (format "%s: no such method" method))))))
 
 (defvar mock--buf "")
@@ -288,6 +316,7 @@ decision log, complete the task; say what happened."
                           (let ((line (substring mock--buf 0 (match-beginning 0))))
                             (setq mock--buf (substring mock--buf (match-end 0)))
                             (unless (string-blank-p line)
+                              (setq mock--line line)
                               (mock--handle (json-parse-string line :object-type 'plist :array-type 'list :null-object nil :false-object :false))))))
               :sentinel (lambda (_p _e) (kill-emacs 0)))
 (while t (accept-process-output nil 0.05))

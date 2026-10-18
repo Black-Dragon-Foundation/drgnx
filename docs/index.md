@@ -11,7 +11,7 @@ Using drgnx.
 - [Keys](guide/keys.md): VS Code, Emacs and Vim key profiles, the Mac keys (⌘P, ⌘⇧P, …), layers, keys.eld, conflicts.
 - [Modules](guide/modules.md): stages, packages, flags, modules.eld, Preferences: Modules, writing a module.
 - [Packages](guide/packages.md): `drgnx sync`, the lock, the cache, generations, rollback, upgrade, safe mode, bisect.
-- [Agents](guide/agents.md): agents over ACP, input that queues and never cancels, the Agents tab, edit review, durable jobs, agents outside drgnx that report to it, plans ↔ board.
+- [Agents](guide/agents.md): agents over ACP, input that queues and never cancels, the Agents tab, edit review, durable jobs, what a job's Claude ignores of your settings, agents outside drgnx that report to it, plans ↔ board.
 - [AI](guide/ai.md): one provider registry (OpenRouter and local runners), roles with fallback, keys read from the environment or auth-source, stored only in your Keychain or keyring when you ask, agent profiles.
 - [Jobs](guide/jobs.md): agents through a plan — proposal, approval, worktrees, a policy, review and merge, budget, fallback; `drgnx job`.
 - [Semantic Search](guide/search.md): find code by meaning — `#` in the palette, the index, what is never indexed, `.drgnx/search.eld`, privacy.
