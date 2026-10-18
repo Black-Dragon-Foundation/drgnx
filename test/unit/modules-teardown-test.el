@@ -269,7 +269,8 @@
              (should (eq (drgnx-modules-teardown-test--status 'test/a) 'off))
              (drgnx-modules-teardown-test--run 'test/a)
              (should (eq (drgnx-modules-teardown-test--status 'test/a) 'ok)))
-           (should (= (length (alist-get 'test/a drgnx-modules--stacks)) 2)))
+           ;; its own two undos and the safety net's two for the same hook and timer (each undo checks first)
+           (should (= (length (alist-get 'test/a drgnx-modules--stacks)) 4)))
        (drgnx-module-teardown 'test/a)
        (cancel-function-timers #'drgnx-modules-teardown-test--tick)))))
 
