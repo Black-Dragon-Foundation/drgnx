@@ -611,7 +611,9 @@ Old kept test runs go too (`drgnx-ui--remove-old-test-runs'), and the eln cache 
       (`(0 ,out) (drgnx-ui-parse-reply out))
       (`(,_ ,out) (drgnx-ui--fail "%s" (string-trim out))))))
 
-(defconst drgnx-ui-drag-max-steps 1000 "The most movement events one drag may be asked for.")
+(defconst drgnx-ui-drag-max-steps 200
+  "The most movement events one drag may be asked for.  They go out one per 40 ms tick, so 200
+take about 8 s — what fits the 10 s the measurement waits for input to be delivered and settle.")
 
 (defun drgnx-ui--drag-point (value what)
   "VALUE as a frame pixel (X . Y) of non-negative integers: a cons, a list or array of two, or an

@@ -107,10 +107,17 @@ skip redisplay and hide the very jank we want to see.
   `mouse-movement` events on the straight line to TO, then `drag-mouse-N` from FROM to TO (or a plain `mouse-N`
   when both are the same pixel). FROM may be on any part of a window — text, header line, tab line, mode line,
   fringe, window divider — and keeps its `posn-area`, so a tab row or a divider can be dragged; the movements
-  are what `track-mouse` consumers (`mouse-drag-vertical-line`, drag-and-drop code) read. The harness places each
-  movement and the release against the layout *as it is when the event is delivered*, so a drag that resizes
-  windows under the pointer behaves as with a real mouse. Run one with
+  are what `track-mouse` consumers (`mouse-drag-vertical-line`, drag-and-drop code) read. Movements are sent
+  even when nothing is tracking the mouse: then each runs as the `ignore` command and updates `last-command`,
+  as real pointer motion does. The harness API (`drgnx-uitest-api-drag`, so `ui_drag` and the `drag` action)
+  always asks for lazy events (`:lazy t`): it places each movement and the release against the layout *as it is
+  when the event is delivered*, so a drag that resizes windows under the pointer behaves as with a real mouse
+  (a release on the pressed text position is a plain `mouse-N`, as for a click); the pure function without
+  `:lazy` makes its posns at once. One movement goes out per 40 ms tick, so `steps` is capped at 200 (about
+  8 s, inside the 10 s a measurement waits). Run one with
   `bin/drgnx ui measure S '[{"drag":{"from":[401,100],"to":[601,100],"steps":6}}]'` or the MCP tool `ui_drag`.
+  Every mouse event symbol the harness makes (clicks too) carries `event-kind` `mouse-click`, which Emacs needs
+  to look a press on a header line, mode line or divider up under its area (`[header-line down-mouse-1]`).
 - **Keys** use `kbd` syntax (`"C-x b"`, `"M-x"`, `"RET"`); typed text is one event per character.
 - **Settled** = no queued or unread input and nothing visibly changed for 300 ms (`drgnx-uitest-quiet`).
 
@@ -321,7 +328,7 @@ claude mcp add -s user drgnx-ui -- /path/to/drgnx/bin/drgnx ui mcp
 | `ui_state` | `session` | frame, windows, minibuffer, child frames, busy |
 | `ui_screenshot` | `session`, `path`? | an image block (PNG, child frames composited) + path and window map |
 | `ui_click` | `session`, `x`+`y` or `buffer`+`text`, `button`?, `count`?, `hold_ms`? | jank report |
-| `ui_drag` | `session`, `from_x`, `from_y`, `to_x`, `to_y`, `steps`? (1–1000, default 8), `button`? | jank report; bad or missing coordinates are an error, never a drag from 0,0 |
+| `ui_drag` | `session`, `from_x`, `from_y`, `to_x`, `to_y`, `steps`? (1–200, default 8), `button`? | jank report; bad or missing coordinates are an error, never a drag from 0,0 |
 | `ui_keys` | `session`, `keys` (kbd syntax) | jank report |
 | `ui_type` | `session`, `text` (a newline is the Return key) | jank report |
 | `ui_wait` | `session`, `quiet_ms`?, `timeout_ms`? | `{settled}` |

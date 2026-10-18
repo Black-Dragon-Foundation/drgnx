@@ -35,8 +35,8 @@
             :from_y (:type "integer" :minimum 0)
             :to_x (:type "integer" :minimum 0 :description "Frame pixel where the button is released")
             :to_y (:type "integer" :minimum 0)
-            :steps (:type "integer" :minimum 1 :maximum 1000
-                          :description "Mouse-movement events along the straight line (default 8)")
+            :steps (:type "integer" :minimum 1 :maximum 200
+                          :description "Mouse-movement events along the straight line (default 8, at most 200: one per 40 ms tick, and a measurement waits 10 s)")
             :button (:type "integer" :enum [1 2 3])))
 
 (defconst drgnx-ui-mcp--report
@@ -70,7 +70,7 @@ guard_violations (window moves from timers).")
                               drgnx-ui-mcp--report)
          :inputSchema (drgnx-ui-mcp--schema (append drgnx-ui-mcp--session drgnx-ui-mcp--click) '("session")))
    (list :name "ui_drag"
-         :description (concat "Drag: press at frame pixel from_x,from_y, move to to_x,to_y in steps (mouse-movement events, one per 40 ms tick), release. The press may be on any part of a window — text, header line, tab line, mode line, fringe, divider — so a tab or a window divider can be dragged. Waits until the UI settles. "
+         :description (concat "Drag: press at frame pixel from_x,from_y, move to to_x,to_y in steps (mouse-movement events, one per 40 ms tick; at most 200 steps, about 8 s), release. The press may be on any part of a window — text, header line, tab line, mode line, fringe, divider — so a tab or a window divider can be dragged. Waits until the UI settles. "
                               drgnx-ui-mcp--report)
          :inputSchema (drgnx-ui-mcp--schema (append drgnx-ui-mcp--session drgnx-ui-mcp--drag)
                                             '("session" "from_x" "from_y" "to_x" "to_y")))

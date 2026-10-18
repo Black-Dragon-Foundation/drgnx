@@ -104,18 +104,30 @@ folding is never clicked.  Signals if there is no such occurrence."
   "Input events that type TEXT (a newline is the Return key, as typed — not C-j)."
   (mapcar (lambda (c) (if (eq c ?\n) 'return c)) text))
 
+(defun drgnx-uitest--mouse-event-head (stem button)
+  "The event symbol STEM-mouse-BUTTON (STEM \"down\", \"drag\", \"double\", \"double-down\") or,
+with STEM nil, mouse-BUTTON.  Every mouse event the harness makes takes its symbol from here.
+Emacs gives a click on a mode line, header line, tab line, divider, fringe or margin its area as
+a key prefix (`[header-line down-mouse-1]') only for a symbol with the `event-kind' property
+`mouse-click'.  Real input sets it the first time a symbol is made; a symbol interned here
+never went through that, so a press on a header line would run the text area's binding —
+for whichever events happened to be made first."
+  (let ((head (intern (if stem (format "%s-mouse-%d" stem button) (format "mouse-%d" button)))))
+    (put head 'event-kind 'mouse-click)
+    head))
+
 (defun drgnx-uitest-click-events (posn &optional button count hold)
   "Input events for clicking at POSN.
 BUTTON is 1-3 (default 1), COUNT 1 or 2, HOLD seconds between press and release.  The
 release is resolved when delivered (`drgnx-uitest--release-event'): a click, or a drag if
 the text under the pointer changed meanwhile, as Emacs does for real input."
   (let* ((b (or button 1))
-         (single (append (list (list (intern (format "down-mouse-%d" b)) posn))
+         (single (append (list (list (drgnx-uitest--mouse-event-head "down" b) posn))
                          (and hold (> hold 0) (list (cons 'drgnx-uitest-pause hold)))
                          (list (list 'drgnx-uitest-release b posn)))))
     (if (eql count 2)
-        (append single (list (list (intern (format "double-down-mouse-%d" b)) posn 2)
-                             (list (intern (format "double-mouse-%d" b)) posn 2)))
+        (append single (list (list (drgnx-uitest--mouse-event-head "double-down" b) posn 2)
+                             (list (drgnx-uitest--mouse-event-head "double" b) posn 2)))
       single)))
 
 (defun drgnx-uitest--posn-frame-xy (posn)
@@ -132,16 +144,6 @@ tab line, mode line, dividers and scroll bars.  A posn on no window is already f
               ((memq area '(left-fringe right-fringe left-margin right-margin))
                (cons (+ (car edges) (car xy)) (+ (cdr origin) (cdr xy))))
               (t (cons (+ (car edges) (car xy)) (+ (nth 1 edges) (cdr xy)))))))))
-
-(defun drgnx-uitest--mouse-event-head (stem button)
-  "The event symbol STEM-mouse-BUTTON (\"down\", \"drag\") or, with STEM nil, mouse-BUTTON.
-Emacs gives a click on a mode line, header line, tab line, divider, fringe or margin its area as
-a key prefix (`[header-line down-mouse-1]') only for a symbol with the `event-kind' property
-`mouse-click'.  Real input sets it the first time a symbol is made; a symbol interned here
-never went through that, so a bare press on a header line would run the text area's binding."
-  (let ((head (intern (if stem (format "%s-mouse-%d" stem button) (format "mouse-%d" button)))))
-    (put head 'event-kind 'mouse-click)
-    head))
 
 (cl-defun drgnx-uitest-drag-events (from to &key button steps lazy)
   "Input events for dragging BUTTON (1-3, default 1) from posn FROM to posn TO.
@@ -190,11 +192,28 @@ the release is a drag from START, else a click."
                                  (+ (cdr origin) (cdr (posn-x-y start)))
                                  (window-frame win)))
                 start)))
+    (drgnx-uitest--release-for button start end)))
+
+(defun drgnx-uitest--release-for (button start end)
+  "The release event of BUTTON pressed at posn START and released at posn END: a drag from START
+if a text-area press now lies in another window or at another buffer position, else a click."
+  (let ((win (posn-window start)))
     (if (and (windowp win) (null (posn-area start))
              (or (not (eq (posn-window end) win))
                  (not (eql (posn-point end) (posn-point start)))))
-        (list (intern (format "drag-mouse-%d" button)) start end)
-      (list (intern (format "mouse-%d" button)) end))))
+        (list (drgnx-uitest--mouse-event-head "drag" button) start end)
+      (list (drgnx-uitest--mouse-event-head nil button) end))))
+
+(defun drgnx-uitest--drag-end-event (button start end)
+  "The release of a drag of BUTTON from posn START, resolved against posn END as it is now.
+Like a click's release (`drgnx-uitest--release-for') for a press on text: if the pointer is back
+on the pressed buffer position and window, it is a plain click.  A press on any other part of a
+window (header line, tab line, mode line, divider, fringe) or on no window is always a drag —
+the drag was asked for between two different pixels."
+  (let ((win (posn-window start)))
+    (if (and (windowp win) (null (posn-area start)))
+        (drgnx-uitest--release-for button start end)
+      (list (drgnx-uitest--mouse-event-head "drag" button) start end))))
 
 (defun drgnx-uitest-enqueue (events)
   "Queue EVENTS for paced delivery; return the queue length."
@@ -221,8 +240,8 @@ the release is a drag from START, else a click."
         ;; a drag's movements and release are placed against the layout as it is now
         ('drgnx-uitest-move (setq ev (list 'mouse-movement (drgnx-uitest-posn (nth 1 ev) (nth 2 ev)))))
         ('drgnx-uitest-drag-end
-         (setq ev (list (drgnx-uitest--mouse-event-head "drag" (nth 1 ev)) (nth 2 ev)
-                        (drgnx-uitest-posn (nth 3 ev) (nth 4 ev))))))
+         (setq ev (drgnx-uitest--drag-end-event (nth 1 ev) (nth 2 ev)
+                                                (drgnx-uitest-posn (nth 3 ev) (nth 4 ev))))))
       (setq unread-command-events (append unread-command-events (list ev))
             drgnx-uitest--last-delivery (float-time))))))
 

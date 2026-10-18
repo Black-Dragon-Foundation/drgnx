@@ -86,14 +86,98 @@
       (should (equal (mapcar #'car events)
                      '(down-mouse-1 drgnx-uitest-move drgnx-uitest-move drgnx-uitest-move drgnx-uitest-drag-end)))
       (should (equal (car (last events)) (list 'drgnx-uitest-drag-end 1 from 35 5))))
-    (let ((drgnx-uitest--queue (list '(drgnx-uitest-move 15 5) '(drgnx-uitest-drag-end 3 start 35 5)))
-          (unread-command-events nil) (drgnx-uitest--timer 'dummy))
+    (let* ((start (list (selected-frame) nil '(1 . 1) 0)) ; a press on no window
+           (drgnx-uitest--queue (list '(drgnx-uitest-move 15 5) (list 'drgnx-uitest-drag-end 3 start 35 5)))
+           (unread-command-events nil) (drgnx-uitest--timer 'dummy))
       (drgnx-uitest--tick)
       (drgnx-uitest--tick)
       (should (equal unread-command-events
                      (list (list 'mouse-movement (drgnx-uitest-posn 15 5))
-                           (list 'drag-mouse-3 'start (drgnx-uitest-posn 35 5)))))
+                           (list 'drag-mouse-3 start (drgnx-uitest-posn 35 5)))))
       (setq unread-command-events nil))))
+
+(ert-deftest drgnx-uitest/a-lazy-drag-from-a-header-line-stays-a-drag ()
+  (drgnx-uitest-input-test--in-window t
+    (let* ((top (nth 1 (window-pixel-edges)))
+           (from (drgnx-uitest-input-test--posn 5 top))
+           (events (drgnx-uitest-drag-events from (drgnx-uitest-input-test--posn 5 (+ top 12)) :steps 2 :lazy t))
+           (drgnx-uitest--queue events) (unread-command-events nil) (drgnx-uitest--timer 'dummy))
+      (should (eq (posn-area from) 'header-line))
+      (dotimes (_ 4) (drgnx-uitest--tick))
+      (should (equal (mapcar #'car unread-command-events) '(down-mouse-1 mouse-movement mouse-movement drag-mouse-1)))
+      (should (eq (posn-area (cadr (car unread-command-events))) 'header-line))
+      (should (null (posn-area (cadr (nth 2 unread-command-events)))))
+      ;; a header line has no text position to still be on: the release is always the drag
+      (should (eq (cadr (car (last unread-command-events))) from))
+      (setq unread-command-events nil))))
+
+(ert-deftest drgnx-uitest/a-lazy-release-on-the-pressed-text-is-a-click ()
+  ;; as for a click (`drgnx-uitest--release-event'): the same buffer position and window
+  (drgnx-uitest-input-test--in-window nil
+    (insert (make-string 70 ?x))
+    (redisplay t)
+    (let* ((y (nth 1 (window-pixel-edges)))            ; the first line, which has the text
+           (from (drgnx-uitest-input-test--posn 5 y))
+           (drgnx-uitest--queue (list (list 'drgnx-uitest-drag-end 1 from 5 y)
+                                      (list 'drgnx-uitest-drag-end 1 from 35 y)))
+           (unread-command-events nil) (drgnx-uitest--timer 'dummy))
+      (drgnx-uitest--tick)
+      (drgnx-uitest--tick)
+      (should (eq (car (nth 0 unread-command-events)) 'mouse-1))
+      (should (eq (car (nth 1 unread-command-events)) 'drag-mouse-1))   ; another position: a drag
+      (setq unread-command-events nil))))
+
+(ert-deftest drgnx-uitest/clicks-find-the-area-binding-whatever-ran-before ()
+  ;; Emacs prefixes [header-line ...] only for symbols of kind mouse-click; clicks must not depend on
+  ;; a drag (or real input) having made the symbols first.
+  (dolist (stem '("down" "drag" "double" "double-down" nil))
+    (dolist (b '(1 2 3 4 5))
+      (put (intern (if stem (format "%s-mouse-%d" stem b) (format "mouse-%d" b))) 'event-kind nil)))
+  (drgnx-uitest-input-test--in-window t
+    (let* ((map (make-sparse-keymap))
+           (top (nth 1 (window-pixel-edges)))
+           (posn (drgnx-uitest-input-test--posn 5 top)))
+      (define-key map [header-line down-mouse-1] #'ignore)
+      (define-key map [header-line mouse-1] #'ignore)
+      (define-key map [header-line double-down-mouse-1] #'ignore)
+      (define-key map [header-line double-mouse-1] #'ignore)
+      (use-local-map map)
+      (should (eq (posn-area posn) 'header-line))
+      (dolist (ev (drgnx-uitest-click-events posn 1 2))
+        (let ((ev (if (eq (car ev) 'drgnx-uitest-release)
+                      (drgnx-uitest--release-event (nth 1 ev) (nth 2 ev))
+                    ev)))
+          (let* ((unread-command-events (list ev))
+                 (keys (read-key-sequence nil)))
+            (should (eq (aref keys 0) 'header-line))
+            (should (key-binding keys)))))
+      ;; the unprepared event is looked up in the text area instead: the failure this guards against
+      (put 'down-mouse-1 'event-kind nil)
+      (let ((unread-command-events (list (list 'down-mouse-1 posn))))
+        (should-not (eq (aref (read-key-sequence nil) 0) 'header-line))))))
+
+(ert-deftest drgnx-uitest/a-posn-is-turned-into-a-frame-pixel-by-area ()
+  (drgnx-uitest-input-test--in-window t
+    (let* ((win (selected-window))
+           (edges (window-pixel-edges win))
+           (left (nth 0 edges)) (top (nth 1 edges)) (bottom (nth 3 edges))
+           (text-top (cdr (drgnx-uitest--text-origin win)))
+           (body-left (car (drgnx-uitest--text-origin win))))
+      ;; real posns of this window round-trip: text, header line, mode line
+      (dolist (xy (list (cons (+ body-left 3) (+ text-top 2)) (cons 7 top) (cons 6 (1- bottom))))
+        (should (equal (drgnx-uitest--posn-frame-xy (drgnx-uitest-input-test--posn (car xy) (cdr xy))) xy)))
+      (should (eq (posn-area (drgnx-uitest-input-test--posn 6 (1- bottom))) 'mode-line))
+      ;; areas a character-cell frame has none of: posns as a graphical frame reports them
+      (should (equal (drgnx-uitest--posn-frame-xy (list win 'left-fringe '(3 . 10) 0))   ; x from the window's left edge, y from the text
+                     (cons (+ left 3) (+ text-top 10))))
+      (should (equal (drgnx-uitest--posn-frame-xy (list win 'right-fringe '(3 . 10) 0))
+                     (cons (+ left 3) (+ text-top 10))))
+      (should (equal (drgnx-uitest--posn-frame-xy (list win 'right-divider '(2 . 100) 0)) ; both from the window's top left
+                     (cons (+ left 2) (+ top 100))))
+      (should (equal (drgnx-uitest--posn-frame-xy (list win 'mode-line '(40 . 0) 0))
+                     (cons (+ left 40) top)))
+      ;; a posn on no window is frame-relative already
+      (should (equal (drgnx-uitest--posn-frame-xy (list (selected-frame) nil '(9 . 8) 0)) '(9 . 8))))))
 
 (ert-deftest drgnx-uitest/window-ids-are-stable ()
   (let ((w (selected-window)))
