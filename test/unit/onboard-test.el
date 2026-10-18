@@ -348,7 +348,12 @@ one.  Returns (RESULT PROMPTS PROGRAMS INSTALLED): the questions asked, the prog
       (drgnx-onboard-test--repo (concat ws "alpha") '("TODO.md" . "- [ ] one\n- [ ] two\n"))
       (drgnx-onboard-test--repo (concat ws "beta"))
       (let ((r (drgnx-onboard-run :non-interactive t :options `(:preset ide :roots (,ws) :todos t))))
-        (should-not (seq-find (lambda (s) (eq (cadr s) 'fail)) r))
+        (should-not (seq-find (lambda (s) (and (eq (cadr s) 'fail)
+                                               ;; an Emacs built without native compilation (Homebrew's) fails
+                                               ;; that doctor check, and nothing else
+                                               (not (and (not (native-comp-available-p)) (eq (car s) 'finish)
+                                                         (string-search "1 failed (native-compilation)" (nth 2 s))))))
+                              r))
         (should (equal (mapcar #'car r) (drgnx-onboard-steps))))
       (let ((board (drgnx-onboard-test--board)))
         (should (string-match-p "^\\* alpha" board))

@@ -188,6 +188,7 @@
 (ert-deftest drgnx-pkg/native-code-goes-to-drgnx-own-cache ()
   ;; Never into the user's other Emacs (~/.config/emacs/eln-cache): sync compiles into the data dir,
   ;; where sessions look first.
+  (skip-unless (native-comp-available-p))                ; Homebrew's Emacs (macOS CI) has no native compilation
   (drgnx-pkg-test--with root
     (let ((arch (drgnx-pkg-test--archive (concat root "arch") '((fa "1.0")))) (dirs nil)
           (drgnx-pkg-native-compile t))
@@ -549,6 +550,7 @@
 
 (ert-deftest drgnx-pkg/compile-failures-are-reported ()
   ;; M5-9: a package that does not byte-compile (or natively compile) still installs, and the sync says so.
+  (skip-unless (native-comp-available-p))                ; the native half needs native compilation
   (drgnx-pkg-test--with root
     (let ((arch (drgnx-pkg-test--archive (concat root "arch")
                                          '((fa "1.0") (fbad "1.0" nil "(eval-when-compile (error \"fixture fails to compile\"))"))))
