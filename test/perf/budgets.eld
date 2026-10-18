@@ -18,4 +18,11 @@
  (diff-scrolling (:input :p95) 16) (diff-scrolling (:input :max) 50)
  (replace-typing (:input :p95) 16) (replace-typing (:input :max) 50)
  (live-view (:input :p95) 16) (live-view (:input :max) 50)
+ ;; eat (2026-10-18, load 3-5, medians of three runs of the workload's own three repeats): terminal-typing p95 4.2-4.8 ms,
+ ;; max 6.4-12.5; terminal-output p95 4.4-6.0, max 23-68 (a GC of ~46 ms lands in the typing: 9-10 collections per run).
+ ;; The p95 rows are the measured p95 rounded up; terminal-typing's max is the worst measured, rounded up.
+ ;; terminal-output's max is PROVISIONAL: the ceiling (50 ms), which the measurements straddle: a perf finding (eat's
+ ;; output garbage), not a budget; see docs/develop/perf.md.
+ (terminal-typing (:input :p95) 5) (terminal-typing (:input :max) 13)
+ (terminal-output (:input :p95) 6) (terminal-output (:input :max) 50)
  (redisplay (:redisplay :p95) 16))

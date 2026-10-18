@@ -27,6 +27,8 @@ DRGNX_PERF_WAIT=S           how long --perf waits for a quiet machine before giv
 | typing-with-ghost | the typing workload with ghost text on: a mock model answers every pause at once, the pause shortened to 10 ms so each key asks and the next cancels (checked: it asked) | input latency |
 | replace-typing | 22 characters into the fixture while the Search view lists 10k matches in 100 files: the first key starts the search (checked: at least 5 keys typed while it streamed, all 10k listed) | input latency |
 | live-view | the typing workload's 186 characters while the Live view, beside the file, shows a mock browser's JPEG frames as wide as the view asked for (as Chrome sends them), 30 a second, each sent once the last was acknowledged (the mock runs in the same Emacs, so its message and websocket frame are made once; without ImageMagick the frames are a few bytes no decoder takes, so drawing costs less) (checked: frames were drawn) | input latency |
+| terminal-typing | 6 × 20 characters (`echo hello world 123`) typed into an eat terminal in the panel running `cat` (no shell, so no shell configuration; the tty echoes every key and eat draws it) | input latency |
+| terminal-output | the same 120 characters typed into the fixture while an eat terminal in the panel streams `seq 1 2000` in a loop (checked: the terminal's process is alive, its window is shown and its text changed while typing) | input latency |
 | frames | 5 new frames until drawn | frame time |
 | redisplay | 30 forced redisplays of the fixture | redisplay time |
 | startup | a drgnx daemon (isolated: its own HOME and drgnx dirs, the harness's environment allowlist) until its server answers (a daemon that never answers fails), 4 starts, the first dropped | server-ready time, modules' time |
@@ -79,6 +81,24 @@ Run `--perf` on its own: no other test tiers, agents or builds at the same time.
 | daemon server ready | — | 206 ms (modules 24 ms) |
 | RSS | 147 MB | 218 MB |
 | key resolution (startup) | 82 ms | 20 ms |
+
+## The terminal (eat), 2026-10-18
+
+Measured on this machine at load 2.5–5 (other builds ran; each figure is the workload's median of three repeats, over
+several runs, range shown):
+
+| | input p50 | input p95 | input max | GC while typing |
+|---|---|---|---|---|
+| terminal-typing (`cat` echoing) | 1.3–1.8 ms | 3.5–4.9 ms | 4.0–12.5 ms | none |
+| terminal-output (`seq 1 2000` in a loop, in the panel) | 1.8–2.7 ms | 4.1–6.0 ms | 23–68 ms | 9–10 collections, ~46 ms each, ~460 ms in all |
+
+Budgets (`test/perf/budgets.eld`): terminal-typing p95 5 ms, max 13 ms; terminal-output p95 6 ms. Typing into a terminal
+costs about what typing into a file does. While a terminal floods output, eat allocates fast enough (about 600 MB of
+garbage over the 120 keys, with the 64 MB GC threshold) for a collection every ~0.35 s, and one lasting ~46 ms
+(a 225 MB heap) lands on a keystroke often enough that the max sits around the 50 ms ceiling (46–52 ms on a quieter
+machine, up to 68 ms under load). terminal-output's max budget is therefore **provisional** at the ceiling (50 ms):
+it will fail some runs until eat's output garbage or the collection pause is reduced — a perf finding, not a budget to
+raise. A smaller scrollback (`eat-term-scrollback-size`) does not change it.
 
 ## Tuning (and why)
 

@@ -177,6 +177,41 @@ for agents, the Live view open, and the session functions it uses."
         (fset 'drgnx-jobs-get drgnx-perf--jobs-get))
       t)))
 
+(defun drgnx-perf-run--terminal-setup-form (command &rest switches)
+  "The terminal workloads' setup: eat (from the user's packages if need be) and the session functions they use.
+The eat terminal runs COMMAND with SWITCHES directly: no shell, so no shell configuration is involved."
+  (prin1-to-string
+   `(progn
+      (unless (require 'eat nil t)
+        (let* ((elpa (expand-file-name (or (getenv "DRGNX_USER_ELPA") "~/.config/emacs/elpa")))
+               (dir (car (last (and (file-directory-p elpa) (directory-files elpa t "\\`eat-[0-9.]+\\'"))))))
+          (unless dir (error "The terminal workloads need the eat package"))
+          (add-to-list 'load-path dir)
+          (require 'eat)))
+      (defvar drgnx-perf--term nil "The terminal's buffer.")
+      (defvar drgnx-perf--term-tick 0 "The terminal buffer's modification tick when the keys began.")
+      (defun drgnx-perf--term-open ()
+        (let ((buf (generate-new-buffer "*eat-perf*")))
+          (with-current-buffer buf (eat-mode))
+          (eat-exec buf "perf" (executable-find ,command) nil ',switches)
+          (set-process-query-on-exit-flag (get-buffer-process buf) nil)
+          (setq drgnx-perf--term buf)))
+      (defun drgnx-perf--term-show ()
+        "The terminal in the panel (the display rules choose where), the editor window selected."
+        (let ((win (selected-window)))
+          (display-buffer drgnx-perf--term)
+          (select-window win)))
+      (defun drgnx-perf--term-teardown ()
+        (when (buffer-live-p drgnx-perf--term)
+          (let ((proc (get-buffer-process drgnx-perf--term)) (kill-buffer-query-functions nil))
+            (kill-buffer drgnx-perf--term)
+            (let ((d (+ (float-time) 3)))   ; wait for the process to be gone
+              (while (and proc (process-live-p proc) (< (float-time) d)) (accept-process-output nil 0.05)))))
+        (setq drgnx-perf--term nil)
+        t)
+      (drgnx-perf--term-open)
+      t)))
+
 (defun drgnx-perf-run--workloads ()
   "The workloads: (NAME :setup FORM :each FORM :actions ACTIONS :check FORM :measure FORM :teardown FORM :repeat N).
 Every workload runs three times (medians are kept); :each runs before each repeat, :check after it (an
@@ -308,6 +343,22 @@ error if it does not hold)."
        :actions ,(make-list 6 (funcall type "(let ((x 1)) (message \"%s\" x)) "))
        :check "(drgnx-perf--live-check)"
        :teardown ,(concat "(progn (drgnx-perf--live-teardown) " kill-fixture ")"))
+      ;; typing in an eat terminal (cat: the tty echoes every key, eat draws it)
+      (terminal-typing
+       :setup ,(drgnx-perf-run--terminal-setup-form "cat")
+       :each "(progn (pop-to-buffer drgnx-perf--term) (select-window (get-buffer-window drgnx-perf--term)) t)"
+       :actions ,(make-list 6 (funcall type "echo hello world 123"))
+       :check "(and (process-live-p (get-buffer-process drgnx-perf--term)) t)"
+       :teardown "(drgnx-perf--term-teardown)")
+      ;; typing in the fixture while a terminal in the panel streams output (seq 1 2000, in a loop)
+      (terminal-output
+       :setup ,(drgnx-perf-run--terminal-setup-form "sh" "-c" "while :; do seq 1 2000; done")
+       :each ,(concat "(progn (drgnx-wb-focus-editor) " (drgnx-perf-run--visit-fixture-form)
+                      " (drgnx-perf--term-show) (setq drgnx-perf--term-tick (buffer-chars-modified-tick drgnx-perf--term)) t)")
+       :actions ,(make-list 6 (funcall type "echo hello world 123"))
+       :check "(and (process-live-p (get-buffer-process drgnx-perf--term)) (get-buffer-window drgnx-perf--term)
+                    (> (buffer-chars-modified-tick drgnx-perf--term) drgnx-perf--term-tick) t)"   ; output streamed while typing
+       :teardown ,(concat "(progn (drgnx-perf--term-teardown) " kill-fixture ")"))
       (frames :measure "(list :frame (drgnx-perf-frame-ms 5))")
       (redisplay :each ,(drgnx-perf-run--visit-fixture-form) :measure "(list :redisplay (drgnx-perf-redisplay-ms 30))" :teardown ,kill-fixture)
       (startup :daemon t)
