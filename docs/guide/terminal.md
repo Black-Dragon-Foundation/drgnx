@@ -120,6 +120,42 @@ drgnx reads it as `` C-S-` `` (New Terminal). On other layouts, use the palette 
 Without the `kkp` package, `ui/terminal-keys` waits and the doctor's module check names it
 (`ui/terminal-keys (kkp)`); modifyOtherKeys works as above.
 
+## Get the full keys
+
+A terminal can send `C-S-` chords and the other shortcuts in three ways. They are listed best first, and drgnx uses
+the best one the window has:
+
+1. **A GUI frame** (`drgnx` opens one): every key, no protocol needed.
+2. **A terminal with a key protocol.** modifyOtherKeys is preferred: **WezTerm**, **Ghostty** and **xterm** have it,
+   and `C-g` keeps stopping busy Lisp there (WezTerm needs no setting for it). The kitty keyboard protocol is used
+   only where it is the only protocol, such as **kitty** and **foot**; it works, but `C-g` cannot stop busy Lisp
+   there (see [Keys](#keys)). foot's modifyOtherKeys support is unconfirmed, so it is counted with kitty.
+3. **A legacy terminal** (GNOME Terminal, Ptyxis, Terminal.app, the Linux console, tmux without `extended-keys`):
+   hold **Alt+Shift** with the key, or press **F6** and then the key (the fallback layer), or use F1 and the palette.
+
+When a window has only the third way, drgnx tells you which terminal would give it the second. It lists the ones
+you already have first ("kitty is installed: run `drgnx -t` from kitty"). If none is installed, it prints the install
+command for your system, for the first two. **drgnx never installs anything**: it reads your `PATH` (and, on macOS,
+`/Applications`) and `/etc/os-release`, and prints.
+
+| Terminal | Fedora | Debian, Ubuntu | Arch | macOS |
+|---|---|---|---|---|
+| WezTerm | [download](https://wezterm.org/installation.html) | [download](https://wezterm.org/installation.html) | `sudo pacman -S wezterm` | `brew install --cask wezterm` |
+| Ghostty | [download](https://ghostty.org/docs/install/binary) | [download](https://ghostty.org/docs/install/binary) | `sudo pacman -S ghostty` | `brew install --cask ghostty` |
+| xterm | `sudo dnf install xterm` | `sudo apt install xterm` | `sudo pacman -S xterm` | none |
+| foot (Wayland) | `sudo dnf install foot` | `sudo apt install foot` | `sudo pacman -S foot` | none |
+| kitty | `sudo dnf install kitty` | `sudo apt install kitty` | `sudo pacman -S kitty` | `brew install --cask kitty` |
+
+Other systems, and the RHEL clones (Rocky, Alma: kitty is only in EPEL) and Amazon Linux, get each terminal's download
+page. The commands were checked against the distributions' package indexes on 2026-10-18. A distribution derived from
+one of these (Linux Mint, Nobara, EndeavourOS) gets its parent's commands. For two packages to install, drgnx prefers
+the ones it has a package command for over download pages, in the order above.
+
+**Open `drgnx -t` in one of them.** Off by default. Set **`drgnx-tty-open-in`** (`M-x customize-variable`) to `auto`
+(the first installed terminal of the table that fits your display: foot needs Wayland, xterm X11) or to one terminal
+(`wezterm`, `ghostty`, `xterm`, `foot`, `kitty`), and `drgnx -t` starts it with drgnx inside. Over SSH, or with no
+display, it does nothing and `drgnx -t` runs in the terminal you are in.
+
 ## SSH
 
 Run drgnx on the remote machine and attach from your terminal: `ssh box -t emacsclient -s drgnx -t`. Keys, mouse and
