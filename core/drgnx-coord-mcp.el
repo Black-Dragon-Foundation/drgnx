@@ -79,14 +79,17 @@ sessions when it runs, else the job's tasks that have an agent."
       (delq nil (mapcar (lambda (task) (and (plist-get task :agent) (list :agent (plist-get task :agent) :task (plist-get task :id))))
                         (drgnx-coord-tasks job))))))
 
-(defun drgnx-coord-mcp--check-recipient (to)
-  "TO is \"user\", an agent of this job's tasks, or a session the hub runs (by id or name): else an error, nothing is
-sent."
-  (let ((sessions (drgnx-coord-mcp--hub-agents)))
-    (unless (or (equal to "user")
-                (and (listp sessions) (seq-some (lambda (s) (member to (list (plist-get s :id) (plist-get s :name)))) sessions))
-                (seq-some (lambda (task) (equal to (plist-get task :agent))) (drgnx-coord-tasks (getenv "DRGNX_JOB"))))
-      (error "No agent \"%s\" (list_agents names them; \"user\" is the user)" to))))
+(defun drgnx-coord-mcp--resolve-recipient (to)
+  "The identity a message to TO is stored under: \"user\", an agent of this job's tasks, or the id of the hub session
+TO names (by id or name; an agent's identity is its session id, so inbox, ack and replies find the message).  Else an
+error, nothing is sent.  The hub is asked only when the cheap checks fail."
+  (or (and (equal to "user") to)
+      (and (seq-some (lambda (task) (equal to (plist-get task :agent))) (drgnx-coord-tasks (getenv "DRGNX_JOB"))) to)
+      (let ((sessions (drgnx-coord-mcp--hub-agents)))
+        (or (and (listp sessions)
+                 (plist-get (seq-find (lambda (s) (member to (list (plist-get s :id) (plist-get s :name)))) sessions) :id))
+            (error "No agent \"%s\" (list_agents names them; \"user\" is the user)%s" to
+                   (if (listp sessions) "" " - no hub answered, so only the job's task agents are known"))))))
 
 (defun drgnx-coord-mcp--seen (args)
   (or (plist-get args :seen_version) (error "seen_version is required: call read_decisions first")))
@@ -99,10 +102,11 @@ sent."
        :call ,(lambda (_a) (drgnx-coord-mcp--jsonable (drgnx-coord-mcp--agents))))
       ("send_message" :description "Send a message to another agent (or \"user\"); it is queued and never interrupts them"
        :schema ,(funcall s `(("to" "string" "The recipient") ("text" "string" "The message") ,seen) '("to" "text" "seen_version"))
-       :call ,(lambda (a) (drgnx-coord-mcp--check-recipient (plist-get a :to))
-                (drgnx-coord-mcp--write
-                 (drgnx-coord-send :job (getenv "DRGNX_JOB") :sender (drgnx-coord-mcp--me) :recipient (plist-get a :to)
-                                   :text (plist-get a :text) :seen (drgnx-coord-mcp--seen a)))))
+       :call ,(lambda (a)
+                (let ((to (drgnx-coord-mcp--resolve-recipient (plist-get a :to))))
+                  (drgnx-coord-mcp--write
+                   (drgnx-coord-send :job (getenv "DRGNX_JOB") :sender (drgnx-coord-mcp--me) :recipient to
+                                     :text (plist-get a :text) :seen (drgnx-coord-mcp--seen a))))))
       ("read_inbox" :description "Messages to you not read yet (they become read)"
        :schema ,(funcall s nil)
        :call ,(lambda (_a) (let ((msgs (drgnx-coord-inbox (drgnx-coord-mcp--me) '("queued" "delivered"))))

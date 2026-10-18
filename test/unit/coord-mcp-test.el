@@ -151,6 +151,38 @@
       (should (string-search "\"ok\":true" (funcall send (list :to "claude · x" :text "hi" :seen_version 0))))  ; by name
       (should-error (funcall send (list :to "s-9" :text "hi" :seen_version 0))))))
 
+(ert-deftest drgnx-coord-mcp/a-message-sent-by-session-name-is-the-session-s-by-id ()
+  ;; the recipient's identity is its session id: inbox, ack and a reply must find a message sent to its name
+  (drgnx-coord-mcp-test--with-hub '((:id "s-1" :name "claude · x" :job "j" :task nil))
+    (let ((send (drgnx-coord-mcp-test--tool-fn "send_message")))
+      (should (string-search "\"ok\":true" (funcall send (list :to "claude · x" :text "by name" :seen_version 0))))
+      (let ((m (car (drgnx-coord-inbox "s-1"))))
+        (should (equal (plist-get m :text) "by name"))
+        (should (equal (plist-get m :sender) "a"))
+        (should-not (drgnx-coord-inbox "claude · x"))
+        ;; as s-1: read, ack, and a reply marks a message acted
+        (let ((process-environment (cons "DRGNX_AGENT=s-1" process-environment)))
+          (should (string-search "by name" (json-serialize (funcall (drgnx-coord-mcp-test--tool-fn "read_inbox") nil))))
+          (should (equal (plist-get (drgnx-coord-message (plist-get m :id)) :state) "read"))
+          (should (equal (funcall (drgnx-coord-mcp-test--tool-fn "ack") (list :id (plist-get m :id))) "acted")))
+        (should (equal (plist-get (drgnx-coord-message (plist-get m :id)) :state) "acted"))))
+    ;; a reply to a message sent by name marks it acted
+    (let ((send (drgnx-coord-mcp-test--tool-fn "send_message")))
+      (funcall send (list :to "claude · x" :text "again" :seen_version 0))
+      (let ((m (car (seq-filter (lambda (x) (equal (plist-get x :text) "again")) (drgnx-coord-inbox "s-1")))))
+        (drgnx-coord-mark (plist-get m :id) "read")
+        (drgnx-coord-send :job "j" :sender "s-1" :recipient "a" :text "done" :seen (drgnx-coord-version))
+        (should (equal (plist-get (drgnx-coord-message (plist-get m :id)) :state) "acted"))))))
+
+(ert-deftest drgnx-coord-mcp/the-hub-is-asked-only-when-the-cheap-checks-fail ()
+  (drgnx-coord-mcp-test--with-hub '((:id "s-1" :name "x" :job "j" :task nil))
+    (let ((send (drgnx-coord-mcp-test--tool-fn "send_message")))
+      (funcall send (list :to "user" :text "hi" :seen_version 0))
+      (funcall send (list :to "t1" :text "hi" :seen_version 0))          ; the task's agent
+      (should-not calls)
+      (funcall send (list :to "s-1" :text "hi" :seen_version 0))
+      (should (equal calls '("agents/list"))))))
+
 (ert-deftest drgnx-coord-mcp/update-task-outside-a-job-takes-only-known-statuses ()
   (drgnx-coord-mcp-test--with '("DRGNX_AGENT=a")           ; no DRGNX_JOB: a lone agent
     (drgnx-coord-mcp-test--tool proc "claim_task" (list :task "j#1" :seen_version (drgnx-coord-version)))
