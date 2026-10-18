@@ -213,7 +213,7 @@
         (close-tab "C-w" "C-<f4>" :mac "s-w")
         (next-tab "C-<next>" :mac "M-s-<right>")
         (previous-tab "C-<prior>" :mac "M-s-<left>")
-        (toggle-panel "C-`" "M-j" :mac ("C-`" "M-j"))   ; s-` is macOS' next window
+        (toggle-panel "C-`" "M-j" :everywhere "C-j" :mac ("C-`" "M-j"))   ; s-` is macOS' next window
         (focus-panel :none "in the palette")
         (toggle-right-dock "C-M-b")
         (focus-editor :none "C-1 focuses group 1 (the editor, with one group)")

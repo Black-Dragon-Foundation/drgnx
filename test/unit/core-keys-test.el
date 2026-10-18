@@ -522,6 +522,23 @@ that took VS Code's C-S-h and F2 (the rest of the replace module is not modelled
        (should-not (memq 'drgnx-keys--everywhere-alist emulation-mode-map-alists))
        (should (equal (cdr drgnx-keys--everywhere-map) nil))))))
 
+(ert-deftest drgnx-keys/vscode-c-j-toggles-the-panel-in-every-mode ()
+  ;; VS Code's Toggle Panel (C-j) is not shadowed by lisp-interaction or Org mode; the Emacs profile leaves it alone.
+  (drgnx-keys-test--live
+   (let ((panel (drgnx-cmd-command (drgnx-commands-get 'toggle-panel))))
+     (drgnx-keys-use '((vscode app editing window)))
+     (with-temp-buffer
+       (lisp-interaction-mode)
+       (should (eq (key-binding (kbd "C-j")) panel))
+       (drgnx-keys-use '((emacs app editing window)))
+       (should (eq (key-binding (kbd "C-j")) 'eval-print-last-sexp))
+       (should-not (memq 'drgnx-keys--everywhere-alist emulation-mode-map-alists)))
+     (with-temp-buffer
+       (require 'org)
+       (org-mode)
+       (drgnx-keys-use '((vscode app editing window)))
+       (should (eq (key-binding (kbd "C-j")) panel))))))
+
 (ert-deftest drgnx-keys/everywhere-is-a-valid-entry-option ()
   (should-not (drgnx-keys--entry-error '(toggle-panel "C-`" :everywhere "C-j")))
   (should-not (drgnx-keys--entry-error '(toggle-panel "C-`" :everywhere ("C-j" "C-M-j") :mac "s-j")))
@@ -651,7 +668,7 @@ that took VS Code's C-S-h and F2 (the rest of the replace module is not modelled
     (modules-toggle "RET" drgnx-modules-list-mode-map) (keyboard-profile "C-k C-p" nil) (open-file "C-o" nil)
     (save-file "C-s" nil) (file-save-as "C-S-s" nil) (file-new "C-n" nil) (file-reopen-tab "C-S-t" nil)
     (file-new-window "C-S-n" nil) (file-close-window "C-q" nil) (view-escape "<escape>" nil)
-    (toggle-panel "C-`" nil) (toggle-panel "M-j" nil) (toggle-right-dock "C-M-b" nil)
+    (toggle-panel "C-`" nil) (toggle-panel "M-j" nil) (toggle-panel "C-j" nil) (toggle-right-dock "C-M-b" nil)
     (split-editor-right "C-\\" nil) (split-editor-down "C-k C-\\" nil) (close-group-editors "C-k w" nil)
     (focus-group-1 "C-1" nil) (focus-group-1 "M-1" nil) (focus-group-2 "C-2" nil) (focus-group-2 "M-2" nil)
     (focus-group-3 "C-3" nil) (focus-group-3 "M-3" nil) (move-editor-to-next-group "C-M-<right>" nil)
