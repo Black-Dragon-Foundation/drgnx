@@ -357,6 +357,33 @@ was picked yet, to the arrangement you had)."
                    (layout-pick "Layout…" drgnx-layouts-pick "Switch to a layout by name")))
     (drgnx-command-define id :category "View" :title title :command fn :doc doc :scope 'window)))
 
+;;;; Survive a restart
+
+(defvar drgnx-persist-state-functions)
+(defvar drgnx-persist-after-restore-functions)
+
+(defun drgnx-layouts--persist-state ()
+  "The selected frame's layout for `drgnx-persist-state-functions': (:layout NAME), or nothing."
+  (when-let* ((name (drgnx-layouts-current))) (list :layout name)))
+
+(defun drgnx-layouts--adopt (frame)
+  "Make the layout saved with FRAME's restored workbench its current one, without arranging anything
+(the windows came back as they were).  A layout that no longer exists is ignored.  Never prompts."
+  (when (and (frame-live-p frame) (null (frame-parameter frame 'drgnx-layouts-current)))
+    (let ((name (plist-get (frame-parameter frame 'drgnx-persist-extra) :layout)))
+      (when (and name (symbolp name) (alist-get name (drgnx-layouts--all)))
+        (with-selected-frame frame
+          (set-frame-parameter frame 'drgnx-layouts-current name)
+          (drgnx-layouts--zen-margins nil name))))))
+
+(defun drgnx-layouts--wire-persist ()
+  "Keep the current layout in the saved workbench and take it back after a restart.  A frame restored
+before this ran (the module sets up at idle) is adopted now."
+  (require 'drgnx-persist)
+  (add-hook 'drgnx-persist-state-functions #'drgnx-layouts--persist-state)
+  (add-hook 'drgnx-persist-after-restore-functions #'drgnx-layouts--adopt)
+  (mapc #'drgnx-layouts--adopt (frame-list)))
+
 (drgnx-module-define 'tools/layouts
                      :doc "Layouts: Agent, Editor, Zen, Browser and your own; one key cycles."
                      :stage 'idle :requires '(core/workbench)
@@ -365,6 +392,7 @@ was picked yet, to the arrangement you had)."
                        (require 'drgnx-area)
                        (require 'drgnx-groups)
                        (require 'drgnx-persist)
+                       (drgnx-layouts--wire-persist)
                        (drgnx-layouts--define-commands)))
 
 (provide 'drgnx-layouts)

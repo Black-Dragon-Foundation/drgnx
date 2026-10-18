@@ -190,7 +190,7 @@ open in the **other group** — the one you used last besides this one — never
 When Emacs exits, the workbench of every window is saved to `$XDG_STATE_HOME/drgnx/workbench.eld`
 (`~/.local/state/…`) — with a daemon, when you close its last client (`C-x C-c`), every window of that client — and
 the other windows are opened again at start (your window manager places them; the first one is the main window): the
-left dock, the panel and its tab, the right dock — each with its pixel size — the editor groups with their sizes, tabs and
+left dock (and the sidebar view it shows, Explorer or Search), the panel and its tab, the right dock — each with its pixel size — the layout you were in ([layouts.md](layouts.md#after-a-restart)), the editor groups with their sizes, tabs and
 shown files, and the Explorer's folders. At the first graphical frame it comes back as it was
 (`drgnx-persist-restore-on-start`) — with a daemon, in the first `emacsclient -c` frame, once the server has shown its `*scratch*` there (the restored files replace it); closing the last graphical
 frame saves too. It also comes back **whenever a window opens after none**: a daemon that keeps running after its

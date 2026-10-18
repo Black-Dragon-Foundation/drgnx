@@ -4,7 +4,7 @@
 
 ;;; Commentary:
 ;; The layout you leave is the layout you find: the left dock, the panel (and its tab), the right
-;; dock — each with its pixel size — the editor groups with their sizes, tabs and shown files, and
+;; dock — each with its pixel size — the sidebar view, the editor groups with their sizes, tabs and shown files, and
 ;; the Explorer's folders.  Saved when Emacs exits (only from a graphical session: a batch run
 ;; never writes your state) to $XDG_STATE_HOME/drgnx/workbench.eld; restored at the first
 ;; graphical frame, and again whenever a window opens after none (a daemon that keeps running after
@@ -25,6 +25,13 @@
   "Functions called with the frame after the saved workbench was restored into it — at the first
 graphical frame, and whenever a window opens after none (a daemon that kept running).  Use it to show
 what a client asked for in front.  Nothing here may prompt or block; an error is reported, not raised."
+  :type 'hook :group 'drgnx)
+
+(defcustom drgnx-persist-state-functions nil
+  "Functions called with no argument, in the frame being saved, that each return a plist of extra
+keys to keep in that frame's state (the layouts module keeps `:layout').  After the restore they
+are in the frame parameter `drgnx-persist-extra', readable by `drgnx-persist-after-restore-functions'.
+Nothing here may prompt; an error leaves that function's keys out."
   :type 'hook :group 'drgnx)
 
 (defvar drgnx-persist-file nil "The state file; nil means $XDG_STATE_HOME/drgnx/workbench.eld.")
@@ -54,7 +61,7 @@ what a client asked for in front.  Nothing here may prompt or block; an error is
   (with-selected-frame (or frame (selected-frame))
     (let ((dock (car (drgnx-wb--dock-windows))))
       (list :role (if (fboundp 'drgnx-frame-role) (drgnx-frame-role) 'main)
-            :left (list :shown (and dock t)
+            :left (list :shown (and dock t) :view (drgnx-wb-sidebar-view)
                         :px (if dock (window-pixel-width dock) (frame-parameter nil 'drgnx-wb-dock-px)))
             :panel (drgnx-persist--area 'panel)
             :right (drgnx-persist--area 'right)
@@ -63,7 +70,17 @@ what a client asked for in front.  Nothing here may prompt or block; an error is
             :groups (mapcar (lambda (g) (list :tabs (or (nth 2 (assq g drgnx-persist--pending))   ; still loading
                                                         (delq nil (mapcar #'buffer-file-name (drgnx-chrome-tabs g))))
                                               :shown (buffer-file-name (window-buffer g))))
-                            (drgnx-groups-list))))))
+                            (drgnx-groups-list))
+            :extra (drgnx-persist--extra)))))
+
+(defun drgnx-persist--extra ()
+  "The plist the functions of `drgnx-persist-state-functions' return, joined (the selected frame's)."
+  (let (extra)
+    (run-hook-wrapped 'drgnx-persist-state-functions
+                      (lambda (fn)
+                        (condition-case nil (setq extra (append extra (funcall fn))) (error nil))
+                        nil))
+    extra))
 
 (defun drgnx-persist--frames ()
   "The windows to save: the main (or selected graphical) one first, then the other graphical ones."
@@ -204,6 +221,9 @@ visited now, its other tabs at idle (never a question at start)."
             (setq drgnx-persist--timer (run-with-idle-timer 0.2 t #'drgnx-persist--visit-pending)))))
     ;; Docks and panel come back whatever happened above: sizes first (clamped), then shown.
     (let ((left (plist-get state :left)) (panel (plist-get state :panel)) (right (plist-get state :right)))
+      (set-frame-parameter nil 'drgnx-persist-extra (plist-get state :extra))
+      (when (symbolp (plist-get left :view))          ; an unknown view falls back to the Explorer when shown
+        (set-frame-parameter nil 'drgnx-wb-view (plist-get left :view)))
       (set-frame-parameter nil 'drgnx-wb-dock-px (drgnx-persist--clamp (plist-get left :px) (* 0.5 (frame-pixel-width))))
       (set-frame-parameter nil 'drgnx-wb-panel-px (drgnx-persist--clamp (plist-get panel :px) (* 0.7 (frame-pixel-height))))
       (set-frame-parameter nil 'drgnx-wb-right-px (drgnx-persist--clamp (plist-get right :px) (* 0.5 (frame-pixel-width))))

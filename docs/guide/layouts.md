@@ -53,10 +53,19 @@ Your layouts are kept in `~/.config/drgnx/layouts.eld` (`$DRGNX_CONFIG_DIR` when
 next Emacs too. The first time you use one in a new Emacs, its windows show the buffers of the same names if they
 are open.
 
+## After a restart
+
+The layout you were in is saved with the workbench ([workbench.md](workbench.md#the-layout-survives-a-restart))
+and is your current layout again at the next start, so Next Layout carries on from it and Zen centres the text
+again. The windows themselves come back as the workbench was; nothing is rearranged. A layout that no longer
+exists (a deleted one of yours) is ignored. Only the main window's layout is kept.
+
 ## For module authors
 
 Layouts are data: `drgnx-layouts` holds the built-in ones as `(NAME :left VIEW :right TAB :panel TAB :editor
 SHAPE)`. For an area, `nil` hides it and `keep` leaves it as it was. Editor shapes are registered in
 `drgnx-layouts-shapes` (SHAPE → a function of the editor window). drgnx ships `one`, `editor+agent` and `zen`, and
 the browser pane (module `tools/browser`) adds `editor+browser`. A shape that is not registered arranges as `one`. `drgnx-layouts-apply`
-switches the selected window's layout.
+switches the selected window's layout. To keep your own data in the saved workbench, add a function to
+`drgnx-persist-state-functions` (no argument, returns a plist for the selected frame) and read it back in a
+`drgnx-persist-after-restore-functions` function from the frame parameter `drgnx-persist-extra`.
