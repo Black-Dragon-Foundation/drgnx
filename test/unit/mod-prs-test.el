@@ -2,6 +2,7 @@
 (require 'ert)
 (require 'drgnx)
 (load (expand-file-name "test/fixtures/git-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
 (load (expand-file-name "modules/tools/drgnx-diff" drgnx-dir) nil t)
 (load (expand-file-name "modules/tools/drgnx-prs" drgnx-dir) nil t)
 
@@ -173,5 +174,17 @@
   (drgnx-prs-test--with nil
     (drgnx-prs-view)
     (should (string-search "No pull requests here yet" (with-current-buffer "*drgnx pull requests*" (buffer-string))))))
+
+(ert-deftest drgnx-prs/turning-it-off-closes-the-tab-and-takes-the-hook ()
+  ;; forge is not installed everywhere: the library is faked, so the module sets up and tears down as shipped.
+  (let ((locate (symbol-function 'locate-library)) buf)
+    (cl-letf (((symbol-function 'locate-library)
+               (lambda (name &rest args) (if (equal name "forge") "forge.el" (apply locate name args)))))
+      (drgnx-test-with-modules '(tools/prs) :strict t
+                               (should (memq 'drgnx-prs--commit-setup (and (boundp 'git-commit-setup-hook) (symbol-value 'git-commit-setup-hook))))
+                               (should (drgnx-commands-get 'prs-view))
+                               (setq buf (with-current-buffer (generate-new-buffer "*drgnx pull requests*") (drgnx-prs-mode) (current-buffer)))))
+    (should-not (buffer-live-p buf))
+    (should-not (memq 'drgnx-prs--commit-setup (and (boundp 'git-commit-setup-hook) (symbol-value 'git-commit-setup-hook))))))
 
 ;;; mod-prs-test.el ends here

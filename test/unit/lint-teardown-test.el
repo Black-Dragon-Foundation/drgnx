@@ -17,9 +17,7 @@
 (load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
 
 (defconst drgnx-teardown--not-yet
-  '((tools/diff :until 21) (tools/review :until 21) (tools/prs :until 21) (tools/vc :until 21)
-    (tools/commit-message :until 21) (tools/terminal :until 21)
-    (editor/clipboard :until 22) (tools/agent-settings :until 22) (tools/remote :until 22) (ui/terminal :until 22)
+  '((editor/clipboard :until 22) (tools/agent-settings :until 22) (tools/remote :until 22) (ui/terminal :until 22)
     (ui/terminal-keys :until 22) (ui/terminal-layout :until 22) (ui/terminal-popups :until 22))
   "Shipped modules not yet converted to turn off cleanly: (MODULE :until BATCH), BATCH the number of the
 migration batch that converts it and takes it off.  The dynamic check and the raw-forms lint skip them.")

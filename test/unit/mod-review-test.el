@@ -4,6 +4,7 @@
 (require 'drgnx-agents)
 (require 'drgnx-job)
 (load (expand-file-name "test/fixtures/git-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
 (load (expand-file-name "modules/tools/drgnx-diff" drgnx-dir) nil t)
 (load (expand-file-name "modules/tools/drgnx-review" drgnx-dir) nil t)
 
@@ -201,12 +202,21 @@
 
 (ert-deftest drgnx-review/refresh-is-a-registered-command ()
   ;; M11b-13: g and the palette run it, so it is in the registry
-  (let ((drgnx-agents-request-functions nil) (drgnx-agents-changed-functions nil))   ; the module's setup adds hooks
-    (funcall (plist-get (cdr (assq 'tools/review drgnx-modules--table)) :setup)))
-  (let ((cmd (drgnx-commands-get 'review-refresh)))
-    (should cmd)
-    (should (equal (drgnx-commands-label cmd) "Source Control: Review: Refresh"))
-    (should (eq (drgnx-cmd-command cmd) 'drgnx-review-refresh))))
+  (drgnx-test-with-modules '(tools/review) :strict t
+                           (let ((cmd (drgnx-commands-get 'review-refresh)))
+                             (should cmd)
+                             (should (equal (drgnx-commands-label cmd) "Source Control: Review: Refresh"))
+                             (should (eq (drgnx-cmd-command cmd) 'drgnx-review-refresh)))))
+
+(ert-deftest drgnx-review/turning-it-off-closes-the-tab-and-takes-the-hooks ()
+  (let (buf)
+    (drgnx-test-with-modules '(tools/review) :strict t
+                             (should (memq 'drgnx-review--request drgnx-agents-request-functions))
+                             (should (memq 'drgnx-review--changed drgnx-agents-changed-functions))
+                             (setq buf (drgnx-review--buffer)))
+    (should-not (buffer-live-p buf))
+    (should-not (memq 'drgnx-review--request drgnx-agents-request-functions))
+    (should-not (memq 'drgnx-review--changed drgnx-agents-changed-functions))))
 
 (ert-deftest drgnx-review/visit-refuses-a-symlink-out-of-the-repository ()
   ;; m6: a link inside the repository that leads outside it is outside too
@@ -244,5 +254,19 @@
   (let ((run (list :root "/nonexistent-drgnx-root/" :head "abc")))
     (drgnx-review--check-head run)                      ; no error
     (should-not (process-live-p (plist-get run :checking)))))
+
+(ert-deftest drgnx-review/turning-it-off-kills-the-reviewers-and-forgets-the-runs ()
+  ;; The hooks that confine a reviewer go with the module, so its running sessions go too.
+  (let* ((killed nil) (running (drgnx-agents--make :id "rev-run" :name "r1" :status 'idle :conn 'fake))
+         (answered (drgnx-agents--make :id "rev-done" :name "r2" :status 'idle :conn 'fake))
+         (drgnx-agents--sessions (list running answered)))
+    (cl-letf (((symbol-function 'drgnx-agents-kill) (lambda (x) (push x killed))))
+      (drgnx-test-with-modules '(tools/review) :strict t
+                               (puthash "rev-run" (list :root "/x/" :state 'reviewing) drgnx-review--runs)
+                               (puthash "rev-done" (list :root "/x/" :state 'done) drgnx-review--runs)
+                               (setq drgnx-review--current "rev-run")))
+    (should (equal killed (list running)))
+    (should (zerop (hash-table-count drgnx-review--runs)))
+    (should-not drgnx-review--current)))
 
 ;;; mod-review-test.el ends here

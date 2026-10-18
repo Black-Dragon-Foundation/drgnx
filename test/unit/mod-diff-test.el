@@ -2,6 +2,7 @@
 (require 'ert)
 (require 'drgnx)
 (load (expand-file-name "test/fixtures/git-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
 (load (expand-file-name "modules/tools/drgnx-diff" drgnx-dir) nil t)
 
 (defconst drgnx-diff-test--two-files
@@ -337,5 +338,17 @@ new file mode 100644
             (should (string-search "three" (buffer-string)))
             (should-not (string-search "two" (buffer-string))))
         (kill-buffer buf)))))
+
+(ert-deftest drgnx-diff/turning-it-off-closes-the-views ()
+  ;; Off: the diff views are gone with their commands; a buffer of another mode stays.
+  (let ((other (generate-new-buffer "*drgnx diff other*")) buf)
+    (unwind-protect
+        (progn
+          (drgnx-test-with-modules '(tools/diff)
+            (should (drgnx-commands-get 'diff-working))
+            (setq buf (with-current-buffer (generate-new-buffer "*drgnx diff test*") (drgnx-diff-mode) (current-buffer))))
+          (should-not (buffer-live-p buf))
+          (should (buffer-live-p other)))
+      (kill-buffer other))))
 
 ;;; mod-diff-test.el ends here
