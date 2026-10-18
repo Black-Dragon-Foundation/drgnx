@@ -271,7 +271,9 @@ Keychain and keyring are never reached."
 (ert-deftest drgnx-ai/files-epa-decrypts-are-not-quiet ()
   ;; anything epa would decrypt asks for a passphrase: .gpg, and its backups (.gpg~, .gpg.~N~)
   (should (equal (drgnx-ai--quiet-sources '("~/.authinfo" "~/.authinfo.gpg" "~/.authinfo.gpg~" "~/.authinfo.gpg.~3~"))
-                 '("~/.authinfo"))))
+                 '("~/.authinfo")))
+  ;; …and a .plist source: auth-source opens it as a plstore, whose secret part GnuPG decrypts
+  (should (equal (drgnx-ai--quiet-sources '("~/.authinfo.plist" "~/.netrc")) '("~/.netrc"))))
 
 (ert-deftest drgnx-ai/plist-secret-sources-are-not-quiet ()
   ;; auth-sources may hold plists: (:source (:secrets "Login")) is the Secret Service, whatever the keyring's name

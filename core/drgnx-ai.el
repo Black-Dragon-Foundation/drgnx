@@ -212,12 +212,12 @@ or string naming one, or a plist entry whose `:source' is one (`(:source (:secre
 (defvar epa-file-name-regexp)
 
 (defun drgnx-ai--quiet-sources (sources)
-  "SOURCES that can be read without asking anything: plain file names (a file epa decrypts — .gpg, and its backups
-by `epa-file-name-regexp' —, the Keychain or a keyring may prompt; a plist entry is not known to be quiet, so it is
-left out)."
+  "SOURCES that can be read without asking anything: plain file names, but not one epa decrypts (.gpg, and its
+backups: `epa-file-name-regexp'), nor a .plist one (auth-source opens it as a plstore, whose secret part GnuPG
+decrypts); the Keychain or a keyring may prompt; a plist entry is not known to be quiet, so it is left out."
   (require 'epa-hook)
   (seq-filter (lambda (s) (and (stringp s) (not (string-suffix-p ".gpg" s)) (not (string-match-p epa-file-name-regexp s))
-                               (not (drgnx-ai--secret-source-p s))))
+                               (not (string-suffix-p ".plist" s)) (not (drgnx-ai--secret-source-p s))))
               sources))
 
 (defvar auth-sources)
