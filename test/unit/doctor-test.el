@@ -208,6 +208,15 @@
             (should (< 7190 age 7300))))
       (delete-directory state t))))
 
+(ert-deftest drgnx-doctor/display-buffer-alist-entry-missing-warns ()
+  (let ((check (lambda (report) (drgnx-doctor-check 'display-rules (drgnx-doctor-test--facts :wb-report report)))))
+    (should (eq (car (funcall check nil)) 'info))
+    (should (eq (car (funcall check '(:display-buffer-entry t))) 'ok))
+    (let ((r (funcall check '(:display-buffer-entry nil))))
+      (should (eq (car r) 'warn))
+      (should (string-search "display-buffer-alist" (nth 1 r)))
+      (should (string-search "display-buffer-alist" (nth 2 r))))))
+
 (ert-deftest drgnx-doctor/builtin-in-manifest-is-not-missing ()
   ;; eglot ships with Emacs: a manifest that names it needs no install.
   (should (eq (car (drgnx-doctor-check 'packages (drgnx-doctor-test--facts :packages '(:manifest (eglot) :installed () :lock t))))

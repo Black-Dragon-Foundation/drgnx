@@ -173,3 +173,31 @@
      (should (eq resize-mini-windows 'grow-only)))
    (should-not resize-mini-windows))
   (should-not (memq #'drgnx-rules--minibuffer-setup minibuffer-setup-hook)))
+
+(ert-deftest drgnx-rules/report-says-entry-missing-after-a-setq ()
+  ;; M3c-10 (d): a user `setq' of `display-buffer-alist' after startup drops drgnx's entry silently; the
+  ;; session's report says so, and the doctor reads it.
+  (drgnx-rules-test--with
+   (should (eq (plist-get (drgnx-rules-report) :display-buffer-entry) t))
+   (setq display-buffer-alist nil)
+   (should (plist-member (drgnx-rules-report) :display-buffer-entry))
+   (should-not (plist-get (drgnx-rules-report) :display-buffer-entry))))
+
+(ert-deftest drgnx-rules/the-report-is-written-after-init-to-the-state-dir ()
+  (let* ((state (make-temp-file "drgnx-rules-state" t))
+         (process-environment (cons (concat "XDG_STATE_HOME=" state) process-environment)))
+    (unwind-protect
+        (drgnx-rules-test--with
+         (should (memq #'drgnx-rules--write-report emacs-startup-hook))
+         (drgnx-rules--write-report)
+         (let ((file (expand-file-name "drgnx/wb-report.eld" state)))
+           (should (file-readable-p file))
+           (should (eq (plist-get (with-temp-buffer (insert-file-contents file) (read (current-buffer)))
+                                  :display-buffer-entry)
+                       t))
+           (setq display-buffer-alist nil)
+           (drgnx-rules--write-report)
+           (should-not (plist-get (with-temp-buffer (insert-file-contents file) (read (current-buffer)))
+                                  :display-buffer-entry))))
+      (delete-directory state t))
+    (should-not (memq #'drgnx-rules--write-report emacs-startup-hook))))

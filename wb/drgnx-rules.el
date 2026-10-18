@@ -15,6 +15,7 @@
 (require 'cl-lib)
 (require 'seq)
 (require 'drgnx-wb)
+(require 'drgnx-paths)
 
 (defvar drgnx-rules--table nil
   "Rules, tried first to last: (MATCHER PLACE . PROPS).  `drgnx-wb-place' puts new ones first.")
@@ -180,7 +181,9 @@ left and right docks run the frame's full height, the panel sits under the edito
           (unless (assq p window-persistent-parameters) (push (cons p t) window-persistent-parameters)))
         (advice-add 'display-buffer-in-side-window :around #'drgnx-rules--side-window)
         (advice-add 'balance-windows :around #'drgnx-rules--balance)
-        (add-hook 'minibuffer-setup-hook #'drgnx-rules--minibuffer-setup))
+        (add-hook 'minibuffer-setup-hook #'drgnx-rules--minibuffer-setup)
+        (add-hook 'emacs-startup-hook #'drgnx-rules--write-report))
+    (remove-hook 'emacs-startup-hook #'drgnx-rules--write-report)
     (advice-remove 'display-buffer-in-side-window #'drgnx-rules--side-window)
     (advice-remove 'balance-windows #'drgnx-rules--balance)
     (remove-hook 'minibuffer-setup-hook #'drgnx-rules--minibuffer-setup)
@@ -189,6 +192,23 @@ left and right docks run the frame's full height, the panel sits under the edito
           (seq-remove (lambda (c) (memq (car c) drgnx-rules--persistent)) window-persistent-parameters))
     (pcase-dolist (`(,var . ,val) drgnx-rules--saved) (set var val))
     (setq drgnx-rules--saved nil)))
+
+;;;; The report for `drgnx doctor'
+
+(defun drgnx-rules-report ()
+  "What the doctor needs to know about the rules now: (:time … :display-buffer-entry t-or-nil)."
+  (list :time (format-time-string "%FT%T%z")
+        :display-buffer-entry (and (member drgnx-rules--entry display-buffer-alist) t)))
+
+(defun drgnx-rules--write-report ()
+  "Write `drgnx-rules-report' to wb-report.eld in the state dir (after init, on `emacs-startup-hook': a user
+`setq' of `display-buffer-alist' in the configuration has run by then).  Never prompts; an error is ignored."
+  (ignore-errors
+    (let* ((file (expand-file-name "wb-report.eld" (drgnx-state-dir)))
+           (tmp (progn (make-directory (file-name-directory file) t)
+                       (make-temp-file (expand-file-name ".wb-report-" (file-name-directory file))))))
+      (with-temp-file tmp (prin1 (drgnx-rules-report) (current-buffer)))
+      (rename-file tmp file t))))
 
 (defun drgnx-wb-show-unrouted ()
   "List the buffers no rule matched (each one is a rule to add)."

@@ -131,6 +131,7 @@ on PATH."
            :magick (and (executable-find "magick") t)
            :pgtk-emacs (or (featurep 'pgtk) (and (executable-find "emacs-pgtk") t))
            :keys-report (drgnx-doctor--keys-report)
+           :wb-report (drgnx-doctor--state-file "wb-report.eld")
            :modules-report (drgnx-doctor--state-file "modules-report.eld")
            :modules-report-time (drgnx-doctor--state-file-time "modules-report.eld")
            :onboarding (drgnx-doctor--state-file "onboarding.eld")
@@ -352,6 +353,14 @@ MODEL), as a sentence, or nil."
                                       (t (list 'ok (format "no key conflicts (%s)"
                                                            (mapconcat (lambda (l) (symbol-name (car l))) (plist-get r :layers) " < "))
                                                nil))))))
+
+(drgnx-doctor-define 'display-rules :group "drgnx" :doc "drgnx's entry in display-buffer-alist is still there (from the last session)"
+                     :check (lambda (f)
+                              (let ((r (plist-get f :wb-report)))
+                                (cond ((null r) (list 'info "no workbench report yet — start drgnx once" nil))
+                                      ((plist-get r :display-buffer-entry) (list 'ok "buffers are placed by drgnx's rules" nil))
+                                      (t (list 'warn "drgnx's entry in display-buffer-alist is gone: something set the variable after startup, so buffers are no longer placed by the rules"
+                                               "use (add-to-list 'display-buffer-alist …) instead of setq in your configuration, or restart drgnx"))))))
 
 (drgnx-doctor-define 'macos-app :group "drgnx" :platform 'macos :doc "The drgnx app in ~/Applications (Finder, Spotlight, the Dock)"
                      :check (lambda (f)
