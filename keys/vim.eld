@@ -305,7 +305,8 @@
         ;; M-SPC replaces Emacs' cycle-spacing (the Leader Menu's doc says so on the key sheet).
         (modal-leader "M-SPC" :map global-map)
         (panel-next "j")
-        (panel-previous "k"))
+        (panel-previous "k")
+        (modal-toggle "SPC u m"))
  :claims ((editing "C-o" "jump back")
           (editing "C-w" "window commands (prefix)")
           (editing "C-v" "visual block")

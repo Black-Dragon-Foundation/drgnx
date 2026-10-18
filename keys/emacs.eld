@@ -293,4 +293,5 @@
         (ai-stop :none "in the palette")
         (modal-leader :none "with Vim keys (M-SPC)")
         (panel-next :none "<down>")
-        (panel-previous :none "<up>")))
+        (panel-previous :none "<up>")
+        (modal-toggle :none "with Vim keys")))

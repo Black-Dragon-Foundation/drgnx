@@ -61,6 +61,28 @@ else the command's own, else the profile's.
 "—" means the profile has no key for it; every command is always in the palette. Vim's keys are leader keys in
 evil's normal state. On **macOS** the VS Code profile uses Cmd (`s-`) as VS Code does there — see below.
 
+## Vim keys
+
+Choosing a Vim key stack turns the `editor/evil` module on (it is off until then; nothing is installed or loaded for
+VS Code or Emacs keys). It runs [evil](https://github.com/emacs-evil/evil) as the editing engine:
+
+- **States.** Editors start in *normal* state; `i`, `a`, `o` … enter *insert*, `v`, `V`, `C-v` enter *visual*
+  (characters, lines, a block), `R` *replace*. `Esc` goes back to normal; `C-g` works in every state.
+- **Indicator.** The mode line starts with the state — ` NORMAL `, ` INSERT `, ` VISUAL `, ` V-LINE `, ` V-BLOCK `,
+  ` REPLACE `, ` EMACS ` — in colours the theme gives (faces `drgnx-modal-normal`, `-insert`, `-visual`, `-emacs`).
+- **Cursor.** A box in normal state, a bar in insert and Emacs state, a hollow box in visual, an underline in replace.
+  Only the shape: the colour is the theme's `cursor` face. Panels (the Explorer, Buffers, lists, tables, transcripts)
+  keep the cursor they set — mostly none. In a terminal Emacs 31.1 draws the shape too (`xterm-update-cursor`, set
+  while Vim editing runs, in Xterm-compatible terminals); Emacs 30.2 has no cursor shapes in terminals.
+- **Panels are in Emacs state.** They keep their own keys and get `SPC` leader and `j` / `k` for rows; forms (the
+  Search/Replace view) take typed text and have no Vim keys.
+- **Inputs are in insert state.** Shells (eshell, comint, term, eat) and commit messages start where you type.
+  The minibuffer is never modal.
+- **Leader Menu.** `M-SPC` from any state, and `SPC` in normal state, show the leader's keys in a which-key popup.
+- **Toggle Modal Editing** (`SPC u m`, the palette) turns Vim editing off and on for this session; the key stack
+  stays as it is, and a restart or a change of stack follows the stack again.
+- **Caps Lock as Esc** is the operating system's job (a keyboard setting), not drgnx's.
+
 ## On a Mac
 
 Keys are written the Emacs way: `s-` is Cmd ⌘, `M-` Option ⌥, `C-` Ctrl ⌃, `S-` Shift ⇧; `s-k s-s` is ⌘K then ⌘S. The
