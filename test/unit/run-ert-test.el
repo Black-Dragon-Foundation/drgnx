@@ -8,7 +8,11 @@
 
 (defun drgnx-run-ert-test--batch (dir results &rest env)
   "Run the suite in DIR in a fresh batch Emacs (harness on the load path); return its exit code."
-  (let ((process-environment (append (cons (concat "DRGNX_TEST_RESULTS=" results) env) process-environment)))
+  (let ((process-environment (append (cons (concat "DRGNX_TEST_RESULTS=" results) env)
+                                     (list "DRGNX_TEST_SELECTOR")           ; not this run's selector
+                                     process-environment))
+        ;; never a buffer's deleted directory, which call-process refuses
+        (default-directory (if (file-directory-p default-directory) default-directory temporary-file-directory)))
     (call-process (expand-file-name invocation-name invocation-directory) nil nil nil
                   "--batch" "-Q" "-L" (file-name-directory (locate-library "run-ert.el"))
                   "-l" (locate-library "run-ert.el") "-f" "drgnx-run-ert-batch" dir)))
@@ -96,6 +100,7 @@
   ;; waits Emacs runs no process sentinel (timers still run).  The runner drains the queue after each test.
   (require 'filenotify)
   (let* ((dir (make-temp-file "drgnx-watch" t))
+         (default-directory (file-name-as-directory dir))   ; the process below needs an existing directory
          (w (file-notify-add-watch dir '(change) #'ignore)))
     (unwind-protect
         (progn
@@ -118,7 +123,9 @@
         (progn
           (with-temp-file (concat tmp "one-test.el") (insert "(require 'ert)\n(ert-deftest shard-one () (should t))\n"))
           (with-temp-file (concat tmp "two-test.el") (insert "(require 'ert)\n(ert-deftest shard-two () (should t))\n"))
-          (should (eql 0 (let ((process-environment (cons (concat "DRGNX_TEST_RESULTS=" results) process-environment)))
+          (should (eql 0 (let ((process-environment (append (list (concat "DRGNX_TEST_RESULTS=" results) "DRGNX_TEST_SELECTOR")
+                                                            process-environment))
+                               (default-directory tmp))
                            (call-process (expand-file-name invocation-name invocation-directory) nil nil nil
                                          "--batch" "-Q" "-L" (file-name-directory (locate-library "run-ert.el"))
                                          "-l" (locate-library "run-ert.el") "-f" "drgnx-run-ert-batch"
@@ -137,7 +144,8 @@
           (with-temp-file (concat tmp "sel-test.el")
             (insert "(require 'ert)\n(ert-deftest sel-fast () :tags '(:timing) (should t))\n(ert-deftest sel-plain () (should t))\n"))
           (let ((process-environment (append (list (concat "DRGNX_TEST_RESULTS=" results) "DRGNX_TEST_SELECTOR=(tag :timing)")
-                                             process-environment)))
+                                             process-environment))
+                (default-directory tmp))
             (call-process (expand-file-name invocation-name invocation-directory) nil nil nil
                           "--batch" "-Q" "-L" (file-name-directory (locate-library "run-ert.el"))
                           "-l" (locate-library "run-ert.el") "-f" "drgnx-run-ert-batch" (concat tmp "sel-test.el")))
