@@ -131,7 +131,8 @@ Unix socket paths are limited to ~108 bytes; the hash keeps two state roots (say
   XDG_RUNTIME_DIR GRYPHN_EMACS_DIR DRGNX_UITEST_SETTLE_SCALE` + `DRGNX_UI_*`), `auth-sources` is nil.
 - Your drgnx files are never touched: a session gets its own `DRGNX_CONFIG_DIR` (`RUN/drgnx-config`) and
   `XDG_STATE_HOME` (`RUN/state`), so it neither reads `~/.config/drgnx` (keys.eld, …) nor writes
-  `~/.local/state` (the key report). `XDG_CACHE_HOME` is kept: font and shader caches would be rebuilt every start.
+  `~/.local/state` (the key report). Caches too: `XDG_CACHE_HOME` and `MESA_SHADER_CACHE_DIR` are under `RUN/xdg/cache`
+  for every compositor, so nothing (fontconfig, Mesa's shader cache) is written to `~/.cache`; they are rebuilt every start.
 - No language servers: `DRGNX_NO_LANGUAGE_SERVERS=1`, so a scenario's fixture projects do not each start one (a run
   once had 12 pyrights); a test that needs a server sets it to "" in its session.
 - Deterministic look: no startup screen, no blinking cursor, no bell, no dialog boxes.
@@ -297,18 +298,18 @@ Output is JSON on stdout; errors go to stderr with exit status 1. Arguments and 
 caller's locale (without a UTF-8 locale Emacs passes the arguments on as raw bytes; the CLI decodes them).
 
 ```sh
-bin/drgnx ui start [--config minimal|gryphn|DIR] [--size 1600x900]   # → {"name":"drgnx-ui-1", …, "ready":{…}}
+bin/drgnx ui start [--config minimal|gryphn|DIR] [--size 1600x900]   # → {"name":"drgnx-ui-1-3f9a0c", …, "ready":{…}}
 bin/drgnx ui start --compositor sway --monitors 2 [--daemon]         # see Compositors
-bin/drgnx ui wm drgnx-ui-1                       # the session's own sway/i3 tree (read only; kwin/niri: name only)
+bin/drgnx ui wm drgnx-ui-1-3f9a0c                       # the session's own sway/i3 tree (read only; kwin/niri: name only)
 bin/drgnx ui ls                                  # sessions of this state root
-bin/drgnx ui state drgnx-ui-1                    # frame, windows, child frames
-bin/drgnx ui shot drgnx-ui-1 [out.png]           # screenshot, child frames composited
-bin/drgnx ui click drgnx-ui-1 300 200 [--button 1] [--count 2] [--hold-ms 300]
-bin/drgnx ui click drgnx-ui-1 --buffer treemacs-mode --text README.md
-bin/drgnx ui keys drgnx-ui-1 "C-x b"             # kbd syntax
-bin/drgnx ui type drgnx-ui-1 "hello"
-bin/drgnx ui measure drgnx-ui-1 '[{"keys":"C-x 2"},{"x":10,"y":10}]'
-bin/drgnx ui stop drgnx-ui-1 | bin/drgnx ui reap
+bin/drgnx ui state drgnx-ui-1-3f9a0c                    # frame, windows, child frames
+bin/drgnx ui shot drgnx-ui-1-3f9a0c [out.png]           # screenshot, child frames composited
+bin/drgnx ui click drgnx-ui-1-3f9a0c 300 200 [--button 1] [--count 2] [--hold-ms 300]
+bin/drgnx ui click drgnx-ui-1-3f9a0c --buffer treemacs-mode --text README.md
+bin/drgnx ui keys drgnx-ui-1-3f9a0c "C-x b"             # kbd syntax
+bin/drgnx ui type drgnx-ui-1-3f9a0c "hello"
+bin/drgnx ui measure drgnx-ui-1-3f9a0c '[{"keys":"C-x 2"},{"x":10,"y":10}]'
+bin/drgnx ui stop drgnx-ui-1-3f9a0c | bin/drgnx ui reap
 ```
 
 Input commands wait until the session settles and print the jank report. `click` takes X and Y as non-negative
@@ -320,7 +321,16 @@ the error names it: `action 2 (:keys "bad"): …`; later actions are not sent. `
 
 ## Ownership and cleanup
 
-Only sessions this harness created can be addressed. A name must match `drgnx-ui-N`, its run directory must
+**Session ids are never reused.** A session's id is `drgnx-ui-N-HEX`: N one above the highest in the state root
+(and the runtime directory's Wayland displays), HEX six hex digits from the pid, the time and a counter; the run
+directory `ROOT/<id>` claims it (creating it fails when it exists, and the next id is drawn). Ids used to be the
+lowest free `drgnx-ui-N`, so a stopped session's name came back for the next start — and agents in other worktrees,
+sharing the state root, twice drove each other's sessions. Now an id names one session only: once it is stopped,
+every command given that id is refused ("no harness session"). The socket's directory is the id without
+`drgnx-ui-` (a socket path holds 108 bytes); runs of the old `drgnx-ui-N` shape (an older checkout's) are not
+addressed or reaped from here.
+
+Only sessions this harness created can be addressed. A name must match `drgnx-ui-N-HEX`, its run directory must
 exist under the state root (`$DRGNX_UI_STATE`, default `$XDG_STATE_HOME/drgnx/ui`), and its socket must be the
 one the harness assigned; the `name` and `run` in its session.json must be the ones the harness computed (the
 session's Emacs can write that file, and a forged name would point frames and WM calls at another session). Anything
@@ -331,7 +341,7 @@ never make it start a new Emacs daemon (as `ALTERNATE_EDITOR=""` would).
 the layout is saved as on a real exit), then ends the session and removes its run and socket directories and mutter's
 Wayland socket. It only ever
 stops what belongs to the current state root: a systemd unit only if its command line names this root's run
-directory (unit names are global — another checkout may run `drgnx-ui-1` too), a detached process group only if
+directory (unit names are global — another checkout may run a session of the same id, however unlikely), a detached process group only if
 one of its members names the run directory (a stale `pgid` file may point at a reused id; ids 0 and 1 are never
 signalled), and a Wayland display only when no process serves it any more. `reap` does that for every session of the
 current state root — run directories, plus live units whose command line points into it — and leaves sessions

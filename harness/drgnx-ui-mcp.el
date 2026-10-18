@@ -21,7 +21,7 @@
         :required (vconcat required)))
 
 (defconst drgnx-ui-mcp--session
-  '(:session (:type "string" :description "Session name from ui_start / ui_list, e.g. drgnx-ui-1")))
+  '(:session (:type "string" :description "Session name from ui_start / ui_list, e.g. drgnx-ui-1-3f9a0c; ids are never reused")))
 
 (defconst drgnx-ui-mcp--click
   '(:x (:type "integer") :y (:type "integer")

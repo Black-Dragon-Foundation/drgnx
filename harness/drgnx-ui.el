@@ -4,7 +4,7 @@
 
 ;;; Commentary:
 ;; The harness controller, run in batch Emacs by `drgnx ui …', `drgnx test --ui' and the
-;; MCP server.  A session `drgnx-ui-N' is GUI Emacs under `mutter --headless' in its own
+;; MCP server.  A session `drgnx-ui-N-HEX' is GUI Emacs under `mutter --headless' in its own
 ;; dbus session (or headless sway, Xvfb, Xvfb with i3: `drgnx-ui-compositors'), launched as a
 ;; transient systemd user unit.  It is reached only through
 ;; its own server socket inside its run directory; nothing here talks to any other
@@ -18,7 +18,8 @@
 
 (defconst drgnx-ui-harness-dir (file-name-directory (or load-file-name buffer-file-name)))
 (defconst drgnx-ui-repo-dir (file-name-directory (directory-file-name drgnx-ui-harness-dir)))
-(defconst drgnx-ui-name-regexp "\\`drgnx-ui-[0-9]+\\'")
+(defconst drgnx-ui-name-regexp "\\`drgnx-ui-[0-9]+-[0-9a-f]\\{6\\}\\'"
+  "A session id: drgnx-ui-N-HEX (`drgnx-ui-next-name').  Never reused, so an id names one session only.")
 (defconst drgnx-ui-keep-env
   '("HOME" "USER" "LOGNAME" "LANG" "LC_ALL" "PATH" "GRYPHN_EMACS_DIR" "DRGNX_STARTUP_TRACE"
     "DRGNX_UITEST_SETTLE_SCALE")
@@ -446,11 +447,13 @@ Wayland displays and server sockets live here."
 
 (defun drgnx-ui-socket-dir (name &optional root)
   "Directory for session NAME's server socket: short, private, keyed by the state ROOT.
-Unix socket paths are limited to ~108 bytes, so sockets never live under ROOT itself."
+Unix socket paths are limited to ~108 bytes, so sockets never live under ROOT itself, and the directory is NAME
+without its \"drgnx-ui-\" (the socket inside it has the whole NAME)."
   (let* ((runtime (drgnx-ui-runtime-dir))
          (root (directory-file-name (expand-file-name (or root (drgnx-ui-state-root))))))
-    (expand-file-name name (expand-file-name (substring (md5 root) 0 8)
-                                             (expand-file-name "drgnx-ui" runtime)))))
+    (expand-file-name (string-remove-prefix "drgnx-ui-" name)
+                      (expand-file-name (substring (md5 root) 0 8)
+                                        (expand-file-name "drgnx-ui" runtime)))))
 
 (defun drgnx-ui--make-private-dir (dir)
   "Create DIR and missing parents, each mode 0700 (server-start refuses anything else)."
@@ -564,13 +567,16 @@ a later entry wins, so one of those would move a session out of its run director
                 ;; one sets this to "" in its session
                 "DRGNX_NO_LANGUAGE_SERVERS=1"
                 ;; drgnx's own config and state stay in the run dir: a session never reads the
-                ;; user's ~/.config/drgnx or writes ~/.local/state (XDG_CACHE_HOME stays: font and
-                ;; shader caches would be rebuilt on every start).
+                ;; user's ~/.config/drgnx or writes ~/.local/state.
                 (concat "DRGNX_CONFIG_DIR=" (expand-file-name "drgnx-config" (plist-get sess :run)))
                 (concat "XDG_STATE_HOME=" (expand-file-name "state" (plist-get sess :run)))
                 ;; …and its packages: never the user's ~/.local/share/drgnx (M5 review I9)
                 (concat "DRGNX_DATA_DIR=" (expand-file-name "drgnx-data" (plist-get sess :run))))
           (pcase (plist-get sess :compositor)
+            ;; mutter and the session's Emacs keep their font and GL shader caches in the run dir, never ~/.cache
+            ;; (rebuilt on every start: a test never writes the user's home)
+            ("mutter" (list (concat "XDG_CACHE_HOME=" (drgnx-ui--session-cache sess))
+                            (concat "MESA_SHADER_CACHE_DIR=" (expand-file-name "mesa" (drgnx-ui--session-cache sess)))))
             ;; wlroots without a GPU, a seat or input devices; one output per monitor
             ;; (sway takes SWAYSOCK as the path to listen on, and gives it to its children)
             ;; niri: the same sway, with one output, runs niri (its winit backend: one window, one output)
@@ -598,7 +604,7 @@ a later entry wins, so one of those would move a session out of its run director
           extra))
 
 (defun drgnx-ui--session-cache (sess)
-  "RUN/xdg/cache: the cache directory of SESS's KWin or niri (and of what renders with GL in it), never ~/.cache."
+  "RUN/xdg/cache: the cache directory of SESS's mutter, KWin or niri (and of what renders with GL in it), never ~/.cache."
   (expand-file-name "xdg/cache" (plist-get sess :run)))
 
 (defun drgnx-ui-env-argv (env)
@@ -638,15 +644,29 @@ a later entry wins, so one of those would move a session out of its run director
 (defun drgnx-ui-unit-active-p (name)
   (eq 0 (car (drgnx-ui--run "systemctl" "--user" "is-active" "--quiet" name))))
 
+(defvar drgnx-ui--name-counter 0 "Makes each id this process draws differ, even within one clock tick.")
+
+(defun drgnx-ui--highest-n (dir)
+  "The highest N of a drgnx-ui-N or drgnx-ui-N-HEX entry in DIR, or 0."
+  (let ((n 0))
+    (dolist (f (and (file-directory-p dir) (directory-files dir nil "\\`drgnx-ui-[0-9]+\\(?:-[0-9a-f]\\{6\\}\\)?\\'")) n)
+      (setq n (max n (string-to-number (substring f (length "drgnx-ui-"))))))))
+
 (defun drgnx-ui-next-name (root)
-  "The first drgnx-ui-N free in ROOT, as a unit, and as a Wayland display."
-  (let ((n 1))
-    (while (let ((name (format "drgnx-ui-%d" n)))
-             (or (file-exists-p (expand-file-name name root))
-                 (file-exists-p (expand-file-name name (drgnx-ui-runtime-dir)))
-                 (drgnx-ui-unit-active-p name)))
-      (cl-incf n))
-    (format "drgnx-ui-%d" n)))
+  "A new session id drgnx-ui-N-HEX for ROOT: N one above the highest in ROOT and the runtime directory, HEX six
+hex digits from this pid, the time and a counter.  Ids are never reused (HARNESS-SESS-2: agents in other worktrees
+addressed each other's sessions when a stopped session's drgnx-ui-N came back).  One taken as a run directory, a
+Wayland display or a unit is skipped; the run directory claims it (`drgnx-ui-prepare-run' fails when it exists)."
+  (let ((n (1+ (max (drgnx-ui--highest-n root) (drgnx-ui--highest-n (drgnx-ui-runtime-dir)))))
+        name)
+    (while (progn (setq name (format "drgnx-ui-%d-%s" n
+                                     (substring (md5 (format "%d %.9f %d" (emacs-pid) (float-time)
+                                                             (cl-incf drgnx-ui--name-counter)))
+                                                0 6)))
+                  (or (file-exists-p (expand-file-name name root))
+                      (file-exists-p (expand-file-name name (drgnx-ui-runtime-dir)))
+                      (drgnx-ui-unit-active-p name))))
+    name))
 
 (defun drgnx-ui-claim-run (config size root &optional daemon monitors compositor)
   "Prepare a session's run in ROOT under the first free name.  Several processes may start sessions at
@@ -843,7 +863,7 @@ refusing a session the harness cannot own"
 
 (defun drgnx-ui--check-name (name)
   (unless (and (stringp name) (string-match-p drgnx-ui-name-regexp name))
-    (drgnx-ui--refuse "%S is not a drgnx harness session (drgnx-ui-N)" name)))
+    (drgnx-ui--refuse "%S is not a drgnx harness session (drgnx-ui-N-HEX)" name)))
 
 (defun drgnx-ui--stop-group (pgid run)
   "TERM process group PGID if it is RUN's session, KILL it if it is still there after 2 s."
@@ -936,7 +956,7 @@ and socket directories."
   "Sessions of this state root, as a vector of plists."
   (let ((root (drgnx-ui-state-root)))
     (vconcat
-     (cl-loop for name in (and (file-directory-p root) (directory-files root nil "\\`drgnx-ui-[0-9]+\\'"))
+     (cl-loop for name in (and (file-directory-p root) (directory-files root nil drgnx-ui-name-regexp))
               for file = (expand-file-name "session.json" (expand-file-name name root))
               when (file-exists-p file)
               collect (let ((s (drgnx-ui--read-json file)))
@@ -950,7 +970,7 @@ and socket directories."
 (defun drgnx-ui-reap-targets (root units cmdline-fn)
   "Sessions of state ROOT: its run dirs, plus live UNITS whose command line points into it.
 Units of other state roots (another checkout, a test run) are left alone."
-  (let ((names (and (file-directory-p root) (directory-files root nil "\\`drgnx-ui-[0-9]+\\'"))))
+  (let ((names (and (file-directory-p root) (directory-files root nil drgnx-ui-name-regexp))))
     (dolist (line (split-string units "\n" t))
       (let ((name (string-remove-suffix ".service" (car (split-string line)))))
         (when (and (string-match-p drgnx-ui-name-regexp name)

@@ -39,7 +39,7 @@
 
 (ert-deftest drgnx-ui-mcp/foreign-sessions-refused ()
   (drgnx-ui-mcp-test--with-state
-    (dolist (session '("server" "../../emacs/server" "drgnx-ui-1"))
+    (dolist (session '("server" "../../emacs/server" "drgnx-ui-1-00000a"))
       (let ((r (drgnx-ui-mcp-test--call "ui_state" (list :session session))))
         (should (eq (plist-get r :isError) t))
         (should (string-search "refused" (drgnx-ui-mcp-test--text r)))))))

@@ -56,7 +56,7 @@ paths no WM serves."
 (ert-deftest drgnx-ui-compositor/mutter-argv-is-unchanged ()
   (drgnx-ui-compositor-test--with
     (dolist (monitors '(nil 2))
-      (let* ((name (if monitors "drgnx-ui-2" "drgnx-ui-1"))
+      (let* ((name (if monitors "drgnx-ui-2-00000a" "drgnx-ui-1-00000a"))
              (s (drgnx-ui-prepare-run name nil "1024x768" root nil monitors))
              (env (drgnx-ui-session-env s)))
         (should (equal (plist-get s :compositor) "mutter"))
@@ -73,7 +73,7 @@ paths no WM serves."
 
 (ert-deftest drgnx-ui-compositor/sway-config-places-outputs-side-by-side ()
   (drgnx-ui-compositor-test--with
-    (let* ((s (drgnx-ui-prepare-run "drgnx-ui-1" nil "1280x800" root nil 2 "sway"))
+    (let* ((s (drgnx-ui-prepare-run "drgnx-ui-1-00000a" nil "1280x800" root nil 2 "sway"))
            (conf (expand-file-name "sway.conf" (plist-get s :run)))
            (lines (drgnx-ui-compositor-test--lines conf))
            (exec (seq-find (lambda (l) (string-prefix-p "exec " l)) lines)))
@@ -87,7 +87,7 @@ paths no WM serves."
       (should-not (string-search "--fg-daemon" exec))
       (should-not (seq-find (lambda (l) (string-match-p "\\`\\(include\\|bar\\)\\_>\\|~" l)) lines)))
     ;; a daemon session: no frame until a client asks
-    (let ((s (drgnx-ui-prepare-run "drgnx-ui-2" nil "1280x800" root t nil "sway")))
+    (let ((s (drgnx-ui-prepare-run "drgnx-ui-2-00000a" nil "1280x800" root t nil "sway")))
       (should (string-search "--fg-daemon; swaymsg exit"
                              (seq-find (lambda (l) (string-prefix-p "exec " l))
                                        (drgnx-ui-compositor-test--lines
@@ -95,7 +95,7 @@ paths no WM serves."
 
 (ert-deftest drgnx-ui-compositor/sway-has-its-own-runtime-dir ()
   (drgnx-ui-compositor-test--with
-    (let* ((s (drgnx-ui-prepare-run "drgnx-ui-1" nil "1280x800" root nil 2 "sway"))
+    (let* ((s (drgnx-ui-prepare-run "drgnx-ui-1-00000a" nil "1280x800" root nil 2 "sway"))
            (xdg (plist-get s :xdg_runtime_dir))
            (env (drgnx-ui-session-env s)))
       (should (file-directory-p xdg))
@@ -110,12 +110,12 @@ paths no WM serves."
       (write-region "" nil (expand-file-name "wayland-1" xdg))
       (should (equal (drgnx-ui--display-env s) (list "WAYLAND_DISPLAY=wayland-1" (concat "XDG_RUNTIME_DIR=" xdg) "DISPLAY")))
       ;; stop removes it: no sway serves it
-      (drgnx-ui-stop "drgnx-ui-1")
+      (drgnx-ui-stop "drgnx-ui-1-00000a")
       (should-not (file-exists-p xdg)))))
 
 (ert-deftest drgnx-ui-compositor/kwin-runs-virtual-outputs-with-its-own-runtime-and-config ()
   (drgnx-ui-compositor-test--with
-    (let* ((s (drgnx-ui-prepare-run "drgnx-ui-1" nil "1280x800" root nil 2 "kwin"))
+    (let* ((s (drgnx-ui-prepare-run "drgnx-ui-1-00000a" nil "1280x800" root nil 2 "kwin"))
            (run (plist-get s :run))
            (xdg (plist-get s :xdg_runtime_dir))
            (env (drgnx-ui-session-env s)))
@@ -140,10 +140,10 @@ paths no WM serves."
       (should-error (drgnx-ui--display-env s) :type 'drgnx-ui-error)
       (write-region "" nil (expand-file-name "wayland-1" xdg))
       (should (equal (drgnx-ui--display-env s) (list "WAYLAND_DISPLAY=wayland-1" (concat "XDG_RUNTIME_DIR=" xdg) "DISPLAY")))
-      (drgnx-ui-stop "drgnx-ui-1")
+      (drgnx-ui-stop "drgnx-ui-1-00000a")
       (should-not (file-exists-p xdg)))
     ;; a daemon: Emacs has no frame until a client asks; one output by default
-    (let ((argv (drgnx-ui-compositor-argv (drgnx-ui-prepare-run "drgnx-ui-2" nil "800x600" root t nil "kwin"))))
+    (let ((argv (drgnx-ui-compositor-argv (drgnx-ui-prepare-run "drgnx-ui-2-00000a" nil "800x600" root t nil "kwin"))))
       (should (equal (cadr (member "--output-count" argv)) "1"))
       (should (string-suffix-p " --fg-daemon" (car (last argv)))))))
 
@@ -152,7 +152,7 @@ paths no WM serves."
   ;; emacsclient of `ui frame' carries the allowlist and the session's display, nothing else of the caller's
   (drgnx-ui-compositor-test--with
     (dolist (c '("kwin" "niri" "sway" "x11"))
-      (let* ((s (drgnx-ui-prepare-run (format "drgnx-ui-%d" (1+ (seq-position '("kwin" "niri" "sway" "x11") c)))
+      (let* ((s (drgnx-ui-prepare-run (format "drgnx-ui-%d-00000a" (1+ (seq-position '("kwin" "niri" "sway" "x11") c)))
                                       nil "1280x800" root nil nil c))
              (xdg (plist-get s :xdg_runtime_dir))
              (caller '("SWAYSOCK=/user/sway.sock" "I3SOCK=/user/i3.sock" "NIRI_SOCKET=/user/niri.sock"
@@ -180,7 +180,7 @@ paths no WM serves."
 
 (ert-deftest drgnx-ui-compositor/niri-runs-nested-in-sway-with-one-output ()
   (drgnx-ui-compositor-test--with
-    (let* ((s (drgnx-ui-prepare-run "drgnx-ui-1" nil "1280x800" root nil nil "niri"))
+    (let* ((s (drgnx-ui-prepare-run "drgnx-ui-1-00000a" nil "1280x800" root nil nil "niri"))
            (run (plist-get s :run))
            (xdg (plist-get s :xdg_runtime_dir))
            (conf (expand-file-name "sway.conf" run))
@@ -214,19 +214,19 @@ paths no WM serves."
       (should (equal (drgnx-ui--display-env s) (list "WAYLAND_DISPLAY=wayland-2" (concat "XDG_RUNTIME_DIR=" xdg) "DISPLAY"))))
     ;; niri has one output here: two monitors are refused before anything is made
     (should (string-match-p "one output"
-                            (cadr (should-error (drgnx-ui-prepare-run "drgnx-ui-2" nil "1280x800" root nil 2 "niri")
+                            (cadr (should-error (drgnx-ui-prepare-run "drgnx-ui-2-00000a" nil "1280x800" root nil 2 "niri")
                                                 :type 'drgnx-ui-error))))
-    (should-not (file-exists-p (expand-file-name "drgnx-ui-2" root)))))
+    (should-not (file-exists-p (expand-file-name "drgnx-ui-2-00000a" root)))))
 
 (ert-deftest drgnx-ui-compositor/kwin-and-niri-take-only-plain-paths ()
   (drgnx-ui-compositor-test--with
     ;; KWin splits its session command at spaces
     (let ((process-environment (cons "DRGNX_EMACS=/opt/my emacs/emacs" process-environment)))
-      (should-error (drgnx-ui-prepare-run "drgnx-ui-1" nil "800x600" root nil nil "kwin") :type 'drgnx-ui-error))
+      (should-error (drgnx-ui-prepare-run "drgnx-ui-1-00000a" nil "800x600" root nil nil "kwin") :type 'drgnx-ui-error))
     ;; niri's config holds the run directory in a string
     (let ((odd (make-temp-file "duic\"q" t)))
       (unwind-protect
-          (should-error (drgnx-ui-prepare-run "drgnx-ui-2" nil "800x600" odd nil nil "niri") :type 'drgnx-ui-error)
+          (should-error (drgnx-ui-prepare-run "drgnx-ui-2-00000a" nil "800x600" odd nil nil "niri") :type 'drgnx-ui-error)
         (delete-directory odd t)))))
 
 (defun drgnx-ui-compositor-test--dead-pid ()
@@ -242,8 +242,8 @@ paths no WM serves."
     (write-region "" nil (expand-file-name ".X11-unix/X91" xdir))
     ;; :92 is reserved by a session whose run directory is gone (it crashed): taken over
     (make-directory (expand-file-name "92" (drgnx-ui--display-reservations)) t)
-    (write-region "/nonexistent/drgnx-ui-9" nil (expand-file-name "92/owner" (drgnx-ui--display-reservations)))
-    (let* ((s (drgnx-ui-prepare-run "drgnx-ui-1" nil "1024x768" root nil 2 "x11"))
+    (write-region "/nonexistent/drgnx-ui-9-00000a" nil (expand-file-name "92/owner" (drgnx-ui--display-reservations)))
+    (let* ((s (drgnx-ui-prepare-run "drgnx-ui-1-00000a" nil "1024x768" root nil 2 "x11"))
            (run (plist-get s :run))
            (argv (drgnx-ui-compositor-argv s))
            (script (nth 4 argv)))
@@ -268,7 +268,7 @@ paths no WM serves."
         (should (= (file-attribute-size (file-attributes xa)) 46))
         (should (string-search "MIT-MAGIC-COOKIE-1" (with-temp-buffer (insert-file-contents-literally xa) (buffer-string)))))
       (let ((env (drgnx-ui-session-env s))
-            (xdg (drgnx-ui-session-runtime-dir "drgnx-ui-1")))
+            (xdg (drgnx-ui-session-runtime-dir "drgnx-ui-1-00000a")))
         (should (member "DISPLAY=:92" env))
         (should (member (concat "XAUTHORITY=" (expand-file-name "Xauthority" run)) env))
         ;; never the caller's runtime directory (its bus, its Wayland display)
@@ -279,14 +279,14 @@ paths no WM serves."
       (should (equal (drgnx-ui--display-env s)
                      (list "DISPLAY=:92" (concat "XAUTHORITY=" (expand-file-name "Xauthority" run)) "WAYLAND_DISPLAY")))
       ;; the next session does not take :92 before its Xvfb runs; nor does one of another state root
-      (let* ((s2 (drgnx-ui-prepare-run "drgnx-ui-2" nil "1024x768" root nil 1 "i3"))
+      (let* ((s2 (drgnx-ui-prepare-run "drgnx-ui-2-00000a" nil "1024x768" root nil 1 "i3"))
              (script2 (nth 4 (drgnx-ui-compositor-argv s2)))
              (conf (expand-file-name "i3.conf" (plist-get s2 :run))))
         (should (equal (plist-get s2 :display) ":93"))
         (should (string-search (concat "setpriv --pdeathsig KILL i3 -c " conf) script2))
-        (should (member (concat "ipc-socket " (drgnx-ui--i3-socket "drgnx-ui-2")) (drgnx-ui-compositor-test--lines conf)))
+        (should (member (concat "ipc-socket " (drgnx-ui--i3-socket "drgnx-ui-2-00000a")) (drgnx-ui-compositor-test--lines conf)))
         (should-not (seq-find (lambda (l) (string-match-p "\\`bar\\_>" l)) (drgnx-ui-compositor-test--lines conf))))
-      (should (equal (plist-get (drgnx-ui-prepare-run "drgnx-ui-1" nil "800x600" (expand-file-name "other" root)
+      (should (equal (plist-get (drgnx-ui-prepare-run "drgnx-ui-1-00000a" nil "800x600" (expand-file-name "other" root)
                                                       nil nil "x11")
                                 :display)
                      ":94"))
@@ -295,12 +295,12 @@ paths no WM serves."
       (write-region (number-to-string (drgnx-ui-compositor-test--dead-pid)) nil (expand-file-name "xvfb.pid" run))
       (write-region "92\n" nil (expand-file-name "xvfb.ready" run))
       (dolist (f (drgnx-ui--x11-files 92)) (write-region "" nil f))
-      (drgnx-ui-stop "drgnx-ui-1")
+      (drgnx-ui-stop "drgnx-ui-1-00000a")
       (should-not (seq-some #'file-exists-p (drgnx-ui--x11-files 92)))
       (should-not (drgnx-ui--reservation-owner 92))
       ;; a session whose Xvfb never ran leaves the files of :93 alone (not its own), gives the number back
       (dolist (f (drgnx-ui--x11-files 93)) (write-region "" nil f))
-      (drgnx-ui-stop "drgnx-ui-2")
+      (drgnx-ui-stop "drgnx-ui-2-00000a")
       (should (seq-every-p #'file-exists-p (drgnx-ui--x11-files 93)))
       (should-not (drgnx-ui--reservation-owner 93)))))
 
@@ -311,7 +311,7 @@ paths no WM serves."
     (write-region "" nil (expand-file-name ".X11-unix/X91" xdir))
     (write-region "" nil (expand-file-name ".X5-lock" xdir))
     (dolist (forged '(":91" ":5"))
-      (let* ((s (drgnx-ui-prepare-run "drgnx-ui-3" nil "800x600" root nil nil "x11"))
+      (let* ((s (drgnx-ui-prepare-run "drgnx-ui-3-00000a" nil "800x600" root nil nil "x11"))
              (run (plist-get s :run))
              (json (expand-file-name "session.json" run))
              (sess (plist-put (drgnx-ui--read-json json) :display forged)))
@@ -319,7 +319,7 @@ paths no WM serves."
         (write-region (number-to-string (drgnx-ui-compositor-test--dead-pid)) nil (expand-file-name "xvfb.pid" run))
         (write-region (substring forged 1) nil (expand-file-name "xvfb.ready" run))
         (should-error (drgnx-ui--display-env sess) :type 'drgnx-ui-error)
-        (drgnx-ui-stop "drgnx-ui-3")))
+        (drgnx-ui-stop "drgnx-ui-3-00000a")))
     (should (file-exists-p (expand-file-name ".X11-unix/X91" xdir)))
     (should (file-exists-p (expand-file-name ".X5-lock" xdir)))))
 
@@ -327,13 +327,13 @@ paths no WM serves."
   ;; Xvfb failed to bind :N (another server took it after the reservation): its pid is dead and xvfb.ready is
   ;; empty — the files on :N are the other server's, and stay
   (drgnx-ui-compositor-test--with
-    (let* ((s (drgnx-ui-prepare-run "drgnx-ui-1" nil "800x600" root nil nil "x11"))
+    (let* ((s (drgnx-ui-prepare-run "drgnx-ui-1-00000a" nil "800x600" root nil nil "x11"))
            (run (plist-get s :run)))
       (should (equal (plist-get s :display) ":90"))
       (write-region (number-to-string (drgnx-ui-compositor-test--dead-pid)) nil (expand-file-name "xvfb.pid" run))
       (write-region "" nil (expand-file-name "xvfb.ready" run))
       (dolist (f (drgnx-ui--x11-files 90)) (write-region "" nil f))
-      (drgnx-ui-stop "drgnx-ui-1")
+      (drgnx-ui-stop "drgnx-ui-1-00000a")
       (should (seq-every-p #'file-exists-p (drgnx-ui--x11-files 90)))
       (should-not (drgnx-ui--reservation-owner 90)))))           ; the number is given back all the same
 
@@ -345,7 +345,7 @@ paths no WM serves."
            inner)
       (make-directory a) (make-directory b)
       (make-directory (expand-file-name "95" dir) t)
-      (write-region "/nonexistent/drgnx-ui-9" nil (expand-file-name "95/owner" dir))
+      (write-region "/nonexistent/drgnx-ui-9-00000a" nil (expand-file-name "95/owner" dir))
       ;; both found 95 stale; B tries while A is inside the takeover (between delete and its owner write)
       (should (drgnx-ui--reservation-stale-p 95))
       (let ((orig (symbol-function 'drgnx-ui--write)))
@@ -368,31 +368,31 @@ paths no WM serves."
 (ert-deftest drgnx-ui-compositor/a-session-json-naming-another-session-is-refused ()
   ;; the session's Emacs can write its session.json: a forged :name or :run must not steer frames or WM calls
   (drgnx-ui-compositor-test--with
-    (let* ((s (drgnx-ui-prepare-run "drgnx-ui-1" nil "800x600" root nil nil "sway"))
+    (let* ((s (drgnx-ui-prepare-run "drgnx-ui-1-00000a" nil "800x600" root nil nil "sway"))
            (json (expand-file-name "session.json" (plist-get s :run)))
            (server (drgnx-ui-compositor-test--socket (plist-get s :socket))))
       (unwind-protect
           (progn
-            (should (equal (plist-get (drgnx-ui-own-session "drgnx-ui-1") :name) "drgnx-ui-1"))
-            (dolist (forged (list (list :name "drgnx-ui-7")
-                                  (list :name "../00000000/drgnx-ui-1")
-                                  (list :run (expand-file-name "drgnx-ui-7" root))))
+            (should (equal (plist-get (drgnx-ui-own-session "drgnx-ui-1-00000a") :name) "drgnx-ui-1-00000a"))
+            (dolist (forged (list (list :name "drgnx-ui-7-00000a")
+                                  (list :name "../00000000/drgnx-ui-1-00000a")
+                                  (list :run (expand-file-name "drgnx-ui-7-00000a" root))))
               (drgnx-ui--write json (drgnx-ui--json (apply #'plist-put (copy-sequence s) forged)))
-              (should-error (drgnx-ui-own-session "drgnx-ui-1") :type 'drgnx-ui-refused)))
+              (should-error (drgnx-ui-own-session "drgnx-ui-1-00000a") :type 'drgnx-ui-refused)))
         (delete-process server)))))
 
 (ert-deftest drgnx-ui-compositor/odd-paths-never-reach-a-wm-config ()
   (drgnx-ui-compositor-test--with
     ;; a newline in a path would add a line to sway's config
     (let ((process-environment (cons (concat "DRGNX_EMACS=/opt/e\nexec rm -rf x/emacs") process-environment)))
-      (should-error (drgnx-ui-prepare-run "drgnx-ui-1" nil "800x600" root nil nil "sway") :type 'drgnx-ui-error))
+      (should-error (drgnx-ui-prepare-run "drgnx-ui-1-00000a" nil "800x600" root nil nil "sway") :type 'drgnx-ui-error))
     ;; an i3 socket path i3 cannot take as it is: the start fails and gives its display number back
     (let* ((odd (make-temp-file "/tmp/duic sp" t))
            (process-environment (cons (concat "XDG_RUNTIME_DIR=" odd) process-environment)))
       (unwind-protect
           (progn
             (set-file-modes odd #o700)
-            (should-error (drgnx-ui-prepare-run "drgnx-ui-2" nil "800x600" root nil nil "i3") :type 'drgnx-ui-error)
+            (should-error (drgnx-ui-prepare-run "drgnx-ui-2-00000a" nil "800x600" root nil nil "i3") :type 'drgnx-ui-error)
             (should-not (drgnx-ui--reservation-owner 90)))
         (delete-directory odd t)))))
 
@@ -414,14 +414,14 @@ paths no WM serves."
                    ("i3" . "i3 is not installed here: run bin/drgnx test --container --ui --compositor i3")
                    ("kwin" . "kwin_wayland is not installed here: run bin/drgnx test --container --ui --compositor kwin")
                    ("niri" . "sway is not installed here: run bin/drgnx test --container --ui --compositor niri")))
-        (let ((err (should-error (drgnx-ui-prepare-run "drgnx-ui-1" nil nil root nil nil (car c)) :type 'drgnx-ui-error)))
+        (let ((err (should-error (drgnx-ui-prepare-run "drgnx-ui-1-00000a" nil nil root nil nil (car c)) :type 'drgnx-ui-error)))
           (should (equal (cadr err) (cdr c)))))
       (let ((exec-path (list (expand-file-name "few" root) (expand-file-name "nothing" root))))
         (delete-file (expand-file-name "few/Xvfb" root))
-        (should (equal (cadr (should-error (drgnx-ui-prepare-run "drgnx-ui-1" nil nil root nil nil "x11")))
+        (should (equal (cadr (should-error (drgnx-ui-prepare-run "drgnx-ui-1-00000a" nil nil root nil nil "x11")))
                        "Xvfb is not installed here: run bin/drgnx test --container --ui --compositor x11")))
-      (should-error (drgnx-ui-prepare-run "drgnx-ui-1" nil nil root nil nil "weston") :type 'drgnx-ui-error)
-      (should-not (file-exists-p (expand-file-name "drgnx-ui-1" root))))))   ; nothing was made
+      (should-error (drgnx-ui-prepare-run "drgnx-ui-1-00000a" nil nil root nil nil "weston") :type 'drgnx-ui-error)
+      (should-not (file-exists-p (expand-file-name "drgnx-ui-1-00000a" root))))))   ; nothing was made
 
 (ert-deftest drgnx-ui-compositor/the-default-comes-from-the-environment ()
   (dolist (c '(("sway" . "sway") ("x11" . "x11") ("i3" . "i3") ("kwin" . "kwin") ("niri" . "niri")
@@ -432,7 +432,7 @@ paths no WM serves."
       (should (equal (drgnx-ui-default-compositor) (cdr c)))))
   (drgnx-ui-compositor-test--with
     (let ((process-environment (cons "DRGNX_UI_COMPOSITOR=sway" process-environment)))
-      (should (equal (plist-get (drgnx-ui-prepare-run "drgnx-ui-1" nil "800x600" root) :compositor) "sway")))))
+      (should (equal (plist-get (drgnx-ui-prepare-run "drgnx-ui-1-00000a" nil "800x600" root) :compositor) "sway")))))
 
 (defun drgnx-ui-compositor-test--socket (path)
   "A listening Unix socket at PATH (a fake WM's); the server process."
@@ -440,10 +440,10 @@ paths no WM serves."
 
 (ert-deftest drgnx-ui-compositor/ui-wm-never-reads-the-callers-swaysock ()
   (drgnx-ui-compositor-test--with
-    (let* ((s (drgnx-ui-prepare-run "drgnx-ui-1" nil "1280x800" root nil 2 "sway"))
-           (sock (drgnx-ui--sway-socket "drgnx-ui-1"))
-           (s2 (drgnx-ui-prepare-run "drgnx-ui-2" nil "1280x800" root nil 2 "i3"))
-           (sock2 (drgnx-ui--i3-socket "drgnx-ui-2"))
+    (let* ((s (drgnx-ui-prepare-run "drgnx-ui-1-00000a" nil "1280x800" root nil 2 "sway"))
+           (sock (drgnx-ui--sway-socket "drgnx-ui-1-00000a"))
+           (s2 (drgnx-ui-prepare-run "drgnx-ui-2-00000a" nil "1280x800" root nil 2 "i3"))
+           (sock2 (drgnx-ui--i3-socket "drgnx-ui-2-00000a"))
            (servers (list (drgnx-ui-compositor-test--socket sock) (drgnx-ui-compositor-test--socket sock2))))
       (unwind-protect
           (progn
@@ -469,18 +469,18 @@ paths no WM serves."
                                       :args)
                            (concat "-s " sock " -t get_tree -r")))
             ;; a symlink in the socket's place is refused, even to a real socket
-            (let ((s5 (drgnx-ui-prepare-run "drgnx-ui-5" nil "800x600" root nil nil "sway")))
-              (make-symbolic-link sock (drgnx-ui--sway-socket "drgnx-ui-5"))
+            (let ((s5 (drgnx-ui-prepare-run "drgnx-ui-5-00000a" nil "800x600" root nil nil "sway")))
+              (make-symbolic-link sock (drgnx-ui--sway-socket "drgnx-ui-5-00000a"))
               (should-error (drgnx-ui-wm s5) :type 'drgnx-ui-error)))
         (mapc #'delete-process servers)))
     ;; no WM to read
-    (should (equal (drgnx-ui-wm (drgnx-ui-prepare-run "drgnx-ui-3" nil "800x600" root)) '(:wm "none")))
-    (should (equal (drgnx-ui-wm (drgnx-ui-prepare-run "drgnx-ui-4" nil "800x600" root nil nil "x11")) '(:wm "none")))
+    (should (equal (drgnx-ui-wm (drgnx-ui-prepare-run "drgnx-ui-3-00000a" nil "800x600" root)) '(:wm "none")))
+    (should (equal (drgnx-ui-wm (drgnx-ui-prepare-run "drgnx-ui-4-00000a" nil "800x600" root nil nil "x11")) '(:wm "none")))
     ;; KWin and niri are named; their window lists are not read
-    (should (equal (drgnx-ui-wm (drgnx-ui-prepare-run "drgnx-ui-7" nil "800x600" root nil nil "kwin")) '(:wm "kwin")))
-    (should (equal (drgnx-ui-wm (drgnx-ui-prepare-run "drgnx-ui-8" nil "800x600" root nil nil "niri")) '(:wm "niri")))
+    (should (equal (drgnx-ui-wm (drgnx-ui-prepare-run "drgnx-ui-7-00000a" nil "800x600" root nil nil "kwin")) '(:wm "kwin")))
+    (should (equal (drgnx-ui-wm (drgnx-ui-prepare-run "drgnx-ui-8-00000a" nil "800x600" root nil nil "niri")) '(:wm "niri")))
     ;; a sway session whose sway has not started has no socket: an error, never another sway
-    (should-error (drgnx-ui-wm (drgnx-ui-prepare-run "drgnx-ui-6" nil "800x600" root nil nil "sway"))
+    (should-error (drgnx-ui-wm (drgnx-ui-prepare-run "drgnx-ui-6-00000a" nil "800x600" root nil nil "sway"))
                   :type 'drgnx-ui-error)))
 
 (ert-deftest drgnx-ui-compositor/a-test-run-gets-a-scope-where-systemd-is ()
