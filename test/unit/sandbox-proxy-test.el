@@ -52,6 +52,19 @@ with REPLY, if any."
   (let ((c (drgnx-sandbox-proxy-test--connect proxy (format "CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n" authority authority))))
     (prog1 (drgnx-sandbox-proxy-test--status c) (delete-process c))))
 
+(defvar drgnx-sandbox-proxy-test--eval nil "A form's text the proxy evaluates before its entry, or nil.")
+
+(defun drgnx-sandbox-proxy-test--start (hosts sock)
+  "`drgnx-sandbox-proxy-start' for job \"job-1\", with `drgnx-sandbox-proxy-test--eval' run first in the proxy."
+  (if (not drgnx-sandbox-proxy-test--eval) (drgnx-sandbox-proxy-start "job-1" hosts sock)
+    (let* ((command (drgnx-sandbox-proxy-command hosts sock)) (i (cl-position "-f" command :test #'equal))
+           (p (make-process :name "proxy" :noquery t :connection-type 'pipe :coding 'utf-8-unix
+                            :command (append (cl-subseq command 0 i) (list "--eval" drgnx-sandbox-proxy-test--eval)
+                                             (nthcdr i command))
+                            :filter #'drgnx-sandbox-proxy--hub-filter :sentinel #'ignore)))
+      (process-put p :job "job-1")
+      p)))
+
 (defmacro drgnx-sandbox-proxy-test--with (hosts pins &rest body)
   "BODY with `up' (a local upstream), `port' (its port), `sock' and `proxy' (started for job \"job-1\" with HOSTS, a
 form that may use `port') and `denied' (the reports, oldest first).  PINS are names pinned to 127.0.0.1."
@@ -64,7 +77,7 @@ form that may use `port') and `denied' (the reports, oldest first).  PINS are na
      (ignore port)
      (unwind-protect
          (progn
-           (setq proxy (drgnx-sandbox-proxy-start "job-1" ,hosts sock))
+           (setq proxy (drgnx-sandbox-proxy-test--start ,hosts sock))
            (should (drgnx-sandbox-proxy-test--wait (lambda () (process-get proxy :ready))))
            ,@body)
        (when (processp proxy) (delete-process proxy))
@@ -107,22 +120,29 @@ form that may use `port') and `denied' (the reports, oldest first).  PINS are na
     (should (= 200 (drgnx-sandbox-proxy-test--try sock (format "up.test:%d" port))))
     (should (= 200 (drgnx-sandbox-proxy-test--try sock (format "UP.Test.:%d" port))))
     (dolist (a (list (format "other.test:%d" port) (format "up.test.attacker:%d" port) (format "xup.test:%d" port)
-                     (format "up.test:%d" (1+ port)) (format "127.0.0.1:%d" port)))
+                     (format "up.test:%d" (1+ port)) (format "127.0.0.1:%d" port) (format "93.184.216.34:%d" port)))
       (should (= 403 (drgnx-sandbox-proxy-test--try sock a))))
     ;; listed, but the name resolves to loopback and nothing pins it there: refused, and no card (Allow cannot help)
     (should (= 403 (drgnx-sandbox-proxy-test--try sock (format "localhost:%d" port))))
+    ;; a loopback literal is refused as private, never offered on a card; a public one not listed is
+    (should (drgnx-sandbox-proxy-test--wait (lambda () (= 5 (length denied)))))
+    (accept-process-output nil 0.2)
     (should (equal (mapcar #'cadr denied)
                    (list (format "other.test:%d" port) (format "up.test.attacker:%d" port) (format "xup.test:%d" port)
-                         (format "up.test:%d" (1+ port)) (format "127.0.0.1:%d" port))))
+                         (format "up.test:%d" (1+ port)) (format "93.184.216.34:%d" port))))
     ;; the upstream saw the two allowed connections only
     (should (= 2 (length drgnx-sandbox-proxy-test--conns)))))
 
 (ert-deftest drgnx-sandbox-proxy/literal-addresses-need-listing ()
-  ;; a private address is reached only when the allowlist names that very address
+  ;; a private address is reached only when the allowlist names that very address; any other is refused as private,
+  ;; with no `denied' line, so no card can offer a one-click Allow of the user's loopback or the metadata address
   (drgnx-sandbox-proxy-test--with (list (format "127.0.0.1:%d" port)) nil
     (should (= 200 (drgnx-sandbox-proxy-test--try sock (format "127.0.0.1:%d" port))))
-    (should (= 403 (drgnx-sandbox-proxy-test--try sock (format "[::ffff:127.0.0.1]:%d" port))))
-    (should (= 403 (drgnx-sandbox-proxy-test--try sock (format "127.0.0.2:%d" port))))))
+    (dolist (a (list (format "[::ffff:127.0.0.1]:%d" port) (format "127.0.0.2:%d" port) (format "0.0.0.0:%d" port)
+                     "169.254.169.254:80" (format "[::1]:%d" port) "10.0.0.1:443" "[fe80::1]:443"))
+      (should (= 403 (drgnx-sandbox-proxy-test--try sock a))))
+    (should (drgnx-sandbox-proxy-test--wait (lambda () (equal (process-get proxy :said) "refused [fe80:0:0:0:0:0:0:1]:443 private"))))
+    (should-not denied)))
 
 (ert-deftest drgnx-sandbox-proxy/no-tls-termination ()
   ;; after the 200 the bytes are spliced as they are: the upstream sees the client's own ClientHello (a TLS record,
@@ -169,7 +189,39 @@ form that may use `port') and `denied' (the reports, oldest first).  PINS are na
     (should (= 200 (drgnx-sandbox-proxy-test--try sock (format "b.a.up.test:%d" port))))
     (dolist (h '("up.test" "evilup.test" "a.up.test.evil"))
       (should (= 403 (drgnx-sandbox-proxy-test--try sock (format "%s:%d" h port)))))
-    (should (= 403 (drgnx-sandbox-proxy-test--try sock (format "a.up.test:%d" (1+ port)))))))
+    (should (= 403 (drgnx-sandbox-proxy-test--try sock (format "a.up.test:%d" (1+ port)))))
+    ;; a wildcard is never a target: it would reach the apex, or ask the user for a wildcard grant
+    (should (= 403 (drgnx-sandbox-proxy-test--try sock (format "*.up.test:%d" port))))
+    (should (= 403 (drgnx-sandbox-proxy-test--try sock (format "*.other.test:%d" port))))
+    (should (drgnx-sandbox-proxy-test--wait (lambda () (= 4 (length denied)))))
+    (accept-process-output nil 0.2)
+    (should (equal (mapcar #'cadr denied)
+                   (list (format "up.test:%d" port) (format "evilup.test:%d" port) (format "a.up.test.evil:%d" port)
+                         (format "a.up.test:%d" (1+ port)))))
+    (should (= 2 (length drgnx-sandbox-proxy-test--conns)))))
+
+(ert-deftest drgnx-sandbox-proxy/a-head-has-a-deadline ()
+  ;; a client that never finishes its head is answered 403 and closed once the deadline passes
+  (let ((drgnx-sandbox-proxy-test--eval "(setq drgnx-sandbox-proxy-head-timeout 0.5)"))
+    (drgnx-sandbox-proxy-test--with (list (format "up.test:%d" port)) '("up.test")
+      (let ((c (drgnx-sandbox-proxy-test--connect sock (format "CONNECT up.test:%d HTTP/1.1\r\n" port))))
+        (should (eql 403 (drgnx-sandbox-proxy-test--status c)))
+        (should (drgnx-sandbox-proxy-test--wait (lambda () (not (process-live-p c))) 5))
+        (should-not drgnx-sandbox-proxy-test--conns)))))
+
+(ert-deftest drgnx-sandbox-proxy/connections-are-capped ()
+  ;; past the cap a new connection is answered 403 at once; a closed one frees its place
+  (let ((drgnx-sandbox-proxy-test--eval "(setq drgnx-sandbox-proxy-max-connections 3)"))
+    (drgnx-sandbox-proxy-test--with (list (format "up.test:%d" port)) '("up.test")
+      (let ((held (list (drgnx-sandbox-proxy-test--connect sock "CONNECT ")
+                        (drgnx-sandbox-proxy-test--connect sock "CONNECT ")
+                        (drgnx-sandbox-proxy-test--connect sock "CONNECT "))))
+        (accept-process-output nil 0.3)
+        (should (= 403 (drgnx-sandbox-proxy-test--try sock (format "up.test:%d" port))))
+        (should (cl-every (lambda (c) (equal (process-get c :in) "")) held))
+        (delete-process (car held))
+        (should (drgnx-sandbox-proxy-test--wait (lambda () (eql 200 (drgnx-sandbox-proxy-test--try sock (format "up.test:%d" port))))))
+        (mapc #'delete-process held)))))
 
 (ert-deftest drgnx-sandbox-proxy/allow-takes-effect-on-retry ()
   (drgnx-sandbox-proxy-test--with nil '("up.test")

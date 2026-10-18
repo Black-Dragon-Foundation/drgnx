@@ -10,7 +10,9 @@
 ;;
 ;; It answers `CONNECT host:port' only.  A target on the job's allowlist gets `200' and the bytes are spliced both
 ;; ways as they are: TLS stays end to end.  Everything else gets `403': other methods, a bad request line, a head
-;; larger than `drgnx-sandbox-proxy-max-head', a target not listed.  A target not listed is said once on stdout,
+;; larger than `drgnx-sandbox-proxy-max-head' or later than `drgnx-sandbox-proxy-head-timeout', a wildcard target, a
+;; connection past `drgnx-sandbox-proxy-max-connections', a target not listed.  An address literal that is not public
+;; and not listed says `refused HOST:PORT private' instead of `denied', so that no card offers it.  A target not listed is said once on stdout,
 ;; `denied HOST:PORT', so that the hub can ask the user with a card.
 ;;
 ;; Names are matched exactly after normalization (`drgnx-sandbox-proxy-normalize'); `*.example.com:443' matches
@@ -42,6 +44,12 @@ HOST-PORT and proxy.  HOST-PORT is normalized (`drgnx-sandbox-proxy-normalize'),
 `drgnx-sandbox-proxy-allow' as it is.")
 
 (defconst drgnx-sandbox-proxy-max-head 8192 "The largest request head, in bytes, the line and headers: a longer one gets 403.")
+
+(defvar drgnx-sandbox-proxy-head-timeout 10
+  "Seconds a client has to send its whole request head: then it gets 403.")
+
+(defvar drgnx-sandbox-proxy-max-connections 64
+  "The most client connections a proxy keeps at once: one more is answered 403 at once.")
 
 (defconst drgnx-sandbox-proxy--max-early 65536
   "The most bytes a client may send after its head before the upstream is connected: more closes the connection.")
@@ -97,12 +105,13 @@ a letter, so that no name is one a resolver would read as an address."
   "TEXT, `HOST:PORT' or `*.NAME:PORT', parsed: (KEY NAME PORT ADDRESS), else nil.
 KEY is the normalized text, NAME the host name (nil for an address), ADDRESS the address vector with PORT for an
 address literal (an IPv6 one in brackets).  A name in Unicode becomes its IDNA ASCII form, unless REQUEST: a
-request's target must already be ASCII.  A wildcard needs a name of two labels or more."
+request's target must already be ASCII.  A wildcard needs a name of two labels or more, and is never a REQUEST's
+target (it would reach the apex, or ask the user for a wildcard grant)."
   (let ((case-fold-search nil))
     (when (and (stringp text) (string-match "\\`\\(\\*\\.\\)?\\(\\[[^]]*\\]\\|[^]:[]*\\):\\([^:]*\\)\\'" text))
       (let ((wild (match-beginning 1)) (host (match-string 2 text))
             (port (drgnx-sandbox-proxy--port (match-string 3 text))))
-        (when port
+        (when (and port (not (and wild request)))
           (let ((addr (drgnx-sandbox-proxy--literal host)))
             (cond
              (addr
@@ -245,9 +254,14 @@ documentation, benchmarking, multicast or reserved."
          (line (substring head 0 (string-search "\r\n" head)))
          (target (and (string-match "\\`CONNECT \\([!-~]+\\) HTTP/1\\.[01]\\'" line)
                       (drgnx-sandbox-proxy--parse (match-string 1 line) t))))
+    (when (process-get conn :timer) (cancel-timer (process-get conn :timer)))
     (pcase-let ((`(,key ,name ,port ,addr) target))
       (cond
        ((null target) (drgnx-sandbox-proxy--refuse conn))
+       ;; an address that is not public is reached only when listed itself: never offered on a card
+       ((and addr (not (drgnx-sandbox-proxy--public-p addr)) (not (drgnx-sandbox-proxy--allowed-p key name port)))
+        (drgnx-sandbox-proxy--say-once (format "refused %s private" key))
+        (drgnx-sandbox-proxy--refuse conn))
        ((not (drgnx-sandbox-proxy--allowed-p key name port))
         (drgnx-sandbox-proxy--say-once (concat "denied " key))
         (drgnx-sandbox-proxy--refuse conn))
@@ -278,6 +292,19 @@ documentation, benchmarking, multicast or reserved."
                    ((or end (> (length head) drgnx-sandbox-proxy-max-head)) (drgnx-sandbox-proxy--refuse conn))
                    (t (process-put conn :head head))))))
     (error (drgnx-sandbox-proxy--close conn))))
+
+(defun drgnx-sandbox-proxy--head-expired (conn)
+  "Answer CONN 403 when it still has not sent its whole head."
+  (when (and (process-live-p conn) (null (process-get conn :phase))) (drgnx-sandbox-proxy--refuse conn)))
+
+(defun drgnx-sandbox-proxy--accept (_server conn _message)
+  "Take the new client CONN: 403 at once past `drgnx-sandbox-proxy-max-connections', else a deadline for its head."
+  (process-put conn :client t)
+  (let ((n 0))
+    (dolist (p (process-list)) (when (and (process-get p :client) (process-live-p p)) (setq n (1+ n))))
+    (if (> n drgnx-sandbox-proxy-max-connections) (drgnx-sandbox-proxy--refuse conn)
+      (process-put conn :timer (run-at-time drgnx-sandbox-proxy-head-timeout nil
+                                            #'drgnx-sandbox-proxy--head-expired conn)))))
 
 (defun drgnx-sandbox-proxy--client-sentinel (conn event)
   "Close CONN's upstream once CONN has ended."
@@ -330,14 +357,15 @@ line on stderr on a bad argument, 1 when it cannot listen."
         (setq server
               (if (equal where "tcp")
                   (make-network-process :name "drgnx-sandbox-proxy" :server t :host "127.0.0.1" :service t
-                                        :family 'ipv4 :noquery t :coding 'binary
+                                        :family 'ipv4 :noquery t :coding 'binary :log #'drgnx-sandbox-proxy--accept
                                         :filter #'drgnx-sandbox-proxy--client-filter
                                         :sentinel #'drgnx-sandbox-proxy--client-sentinel)
                 (let ((modes (file-attribute-modes (file-attributes where))))
                   (when (and modes (eq (aref modes 0) ?s)) (delete-file where)))
                 (with-file-modes #o700
                   (make-network-process :name "drgnx-sandbox-proxy" :server t :family 'local :service where
-                                        :noquery t :coding 'binary :filter #'drgnx-sandbox-proxy--client-filter
+                                        :noquery t :coding 'binary :log #'drgnx-sandbox-proxy--accept
+                                        :filter #'drgnx-sandbox-proxy--client-filter
                                         :sentinel #'drgnx-sandbox-proxy--client-sentinel))))
       (error (drgnx-sandbox-proxy--die 1 (format "cannot listen: %s" (error-message-string err)))))
     (send-string-to-terminal (if (equal where "tcp") (format "ready %d\n" (process-contact server :service)) "ready\n"))

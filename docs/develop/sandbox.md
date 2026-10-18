@@ -914,9 +914,12 @@ drgnx-sandbox-proxy-denied-functions                ; called with (JOB HOST-PORT
 and from then on the bytes are spliced both ways as they are: TLS is not terminated, the agent's ClientHello reaches
 the server, and the server's certificate the agent. Everything else gets `403` and the connection is closed: another
 method (plain `GET http://…` too), a request line that is not `CONNECT TARGET HTTP/1.x`, a head (line and headers)
-over `drgnx-sandbox-proxy-max-head` (8 KiB), and a target not on the list. Only the last is said on stdout, as
-`denied HOST:PORT`, once per target and proxy; the hub turns it into a `network` card. A bad request or another
-method gets no card, since **Allow** could not help it. A listed target that cannot be reached gets `502`.
+over `drgnx-sandbox-proxy-max-head` (8 KiB) or not complete within `drgnx-sandbox-proxy-head-timeout` (10 s), a
+wildcard target (`CONNECT *.example.com:443`), a connection past `drgnx-sandbox-proxy-max-connections` (64 at once),
+and a target not on the list. Only the last is said on stdout, as `denied HOST:PORT`, once per target and proxy; the
+hub turns it into a `network` card. A bad request, another method or a wildcard gets no card: **Allow** could not
+help the first two, and the agent must never be able to ask for a wildcard grant. A listed target that cannot be
+reached gets `502`.
 
 **Matching.** Entries and targets are compared after normalization (`drgnx-sandbox-proxy-normalize`), exactly:
 
@@ -934,8 +937,10 @@ method gets no card, since **Allow** could not help it. A listed target that can
 (`:remote`): there is no second resolution for DNS to answer differently. Of the answer it keeps the public
 addresses only. When DNS answers only private, shared, loopback, link-local, multicast or reserved ones (IPv6's
 mapped, NAT64 and 6to4 forms are judged by the IPv4 inside), the target gets `403` and stdout says `refused
-HOST:PORT private`: a name the user allowed on a card cannot lead to the user's own `127.0.0.1` services. Such an
-address is reached only when the allowlist names the address itself (`127.0.0.1:8443`), or through a name pinned in
+HOST:PORT private`: a name the user allowed on a card cannot lead to the user's own `127.0.0.1` services. An address
+literal that is not public (`127.0.0.1`, `0.0.0.0`, `169.254.169.254`, `[::1]`) and not listed gets the same `403`
+and `refused` line, never a `denied` one, so no card offers a one-click **Allow** of it. Such an address is reached
+only when the allowlist names the address itself (`127.0.0.1:8443`, from configuration), or through a name pinned in
 `drgnx-sandbox-proxy-pinned-addresses` (`(("registry.corp" . "10.0.0.5"))`): a company registry, a test's local
 upstream. Pinning resolves only; the name must still be on the list.
 
@@ -948,6 +953,6 @@ filter acts only on `ready` and on a `denied` line whose target is already norma
 
 **Limits.** No TLS termination means no inspection: an allowed host gets whatever the agent sends it. A name is
 resolved with the blocking `getaddrinfo`, which stalls the job's other connections for that time (one proxy per job,
-so never another job's). There is no idle timeout for a client that never finishes its head, and no cap on a job's
-connections: on Linux only the job's own agent reaches the socket (on macOS any local process can reach the
-port, as with the gateway). Unicode entries are not NFC-normalized before encoding.
+so never another job's). A spliced connection has no idle timeout: it stays until either side closes, within the cap
+of 64. On macOS any local process can reach the port, as with the gateway. Unicode entries are not NFC-normalized
+before encoding.
