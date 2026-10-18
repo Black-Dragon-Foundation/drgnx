@@ -42,7 +42,7 @@
           (t s))))
 
 (defun drgnx-diff-parse (text)
-  "TEXT (git diff output) as a list of files (:old :new :status :hunks).  A hunk is (:old-start :old-len :new-start
+  "TEXT (git diff output) as a list of files (:old :new :status :binary :hunks).  A hunk is (:old-start :old-len :new-start
 :new-len :header :lines), its lines (CHAR . TEXT) with CHAR one of + - space \\."
   (let (files file hunks hunk lines (old-left 0) (new-left 0))
     (cl-flet ((end-hunk () (when hunk (push (plist-put hunk :lines (nreverse lines)) hunks) (setq hunk nil lines nil)))
@@ -71,7 +71,11 @@
          ((string-prefix-p "deleted file mode" l) (plist-put file :status 'deleted))
          ((string-prefix-p "rename from " l) (plist-put file :old (substring l 12)) (plist-put file :status 'renamed))
          ((string-prefix-p "rename to " l) (plist-put file :new (substring l 10)) (plist-put file :status 'renamed))
-         ((string-prefix-p "Binary files " l) (plist-put file :status 'binary))
+         ((string-prefix-p "Binary files " l)       ; the status stays (deleted, added, ...); no ---/+++ lines name a missing side
+          (plist-put file :binary t)
+          (pcase (plist-get file :status)
+            ('deleted (plist-put file :new nil))
+            ('added (plist-put file :old nil))))
          ((string-prefix-p "--- " l) (plist-put file :old (drgnx-diff--path (substring l 4))))
          ((string-prefix-p "+++ " l) (plist-put file :new (drgnx-diff--path (substring l 4))))))
       (end-hunk) (end-file))
@@ -87,13 +91,12 @@
   (apply #'+ (mapcar (lambda (h) (length (plist-get h :lines))) (plist-get file :hunks))))
 
 (defun drgnx-diff--name (file)
-  (let ((old (plist-get file :old)) (new (plist-get file :new)))
+  (let* ((old (plist-get file :old)) (new (plist-get file :new)) (bin (plist-get file :binary)))
     (pcase (plist-get file :status)
-      ('renamed (format "%s → %s" old new))
-      ('deleted (format "%s (deleted)" old))
-      ('added (format "%s (new)" new))
-      ('binary (format "%s (binary)" (or new old)))
-      (_ (or new old)))))
+      ('renamed (format "%s → %s%s" old new (if bin " (binary)" "")))
+      ('deleted (format "%s (deleted%s)" old (if bin ", binary" "")))
+      ('added (format "%s (new%s)" new (if bin ", binary" "")))
+      (_ (if bin (format "%s (binary)" (or new old)) (or new old))))))
 
 (defun drgnx-diff--counts (file)
   (let ((a 0) (d 0))

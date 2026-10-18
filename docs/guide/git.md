@@ -20,7 +20,7 @@ until it is done. Review Branch, the Pull Requests tab and Blame: Show Commit of
 | `RET` | Diff: Open File at Line | the file as it is now, at the line of point |
 | — | Diff: Collapse All / Expand All | file headers only, or every file |
 
-Each file's header shows its name, `old → new` for a rename, `(new)`, `(deleted)` or `(binary)`, and its counts
+Each file's header shows its name, `old → new` for a rename, `(new)`, `(deleted)` or `(binary)` (a deleted binary file is `(deleted, binary)`), and its counts
 (`+12 −3`). A file whose hunks have more than 2000 lines (`drgnx-diff-fold-lines`) starts folded and is drawn only
 when you open it, so a big diff shows at once. A 10k-line diff draws in well under a second in either layout. The
 split layout fits the window, cutting long lines with `…`; it is drawn again when the window's width changes. The

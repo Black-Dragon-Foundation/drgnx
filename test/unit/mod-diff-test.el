@@ -275,4 +275,27 @@ new file mode 100644
           (kill-buffer buf)))
       (drgnx-git-test repo "config" "--unset" (car setting)))))
 
+;; deferred pass (M11b-1..)
+(ert-deftest drgnx-diff/parse-deleted-binary-keeps-deleted ()
+  (let* ((files (drgnx-diff-parse
+                 (concat "diff --git a/gone.bin b/gone.bin\ndeleted file mode 100644\nindex 1..0000000\n"
+                         "Binary files a/gone.bin and /dev/null differ\n"
+                         "diff --git a/new.bin b/new.bin\nnew file mode 100644\nindex 0000000..1\n"
+                         "Binary files /dev/null and b/new.bin differ\n")))
+         (gone (car files)) (new (cadr files)))
+    (should (eq (plist-get gone :status) 'deleted))
+    (should (plist-get gone :binary))
+    (should-not (plist-get gone :new))
+    (should (equal (plist-get gone :old) "gone.bin"))
+    (should (eq (plist-get new :status) 'added))
+    (should (plist-get new :binary))
+    (should-not (plist-get new :old))
+    (let ((s (drgnx-diff-test--render (concat "diff --git a/gone.bin b/gone.bin\ndeleted file mode 100644\n"
+                                              "Binary files a/gone.bin and /dev/null differ\n")
+                                      'unified)))
+      (should (string-search "gone.bin (deleted, binary)" s)))
+    ;; a deleted binary file has no new path to open
+    (drgnx-diff-test--in "diff --git a/gone.bin b/gone.bin\ndeleted file mode 100644\nBinary files a/gone.bin and /dev/null differ\n" 'unified
+      (should (string-match-p "deleted" (cadr (should-error (drgnx-diff-visit) :type 'user-error)))))))
+
 ;;; mod-diff-test.el ends here
