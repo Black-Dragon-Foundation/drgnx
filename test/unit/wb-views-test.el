@@ -149,3 +149,16 @@
    (let ((editor (selected-window)))
      (drgnx-wb-show-view 'search)
      (should (eq (selected-window) editor)))))
+
+(ert-deftest drgnx-wb-views/focusing-a-section-of-another-view-switches-to-it ()
+  ;; Focus Explorer while the Search view shows: the Explorer view comes back, its tree focused (no error).
+  (drgnx-wb-views-test--with-real-names
+   (drgnx-wb-show-view 'search)
+   (drgnx-wb-focus-section 'explorer)
+   (should (eq (drgnx-wb-sidebar-view) 'explorer))
+   (should (eq (selected-window) (drgnx-wb-section-window 'explorer)))
+   ;; and back, with the sidebar hidden first
+   (drgnx-wb-hide-sidebar)
+   (drgnx-wb-focus-section 'search)
+   (should (eq (drgnx-wb-sidebar-view) 'search))
+   (should (eq (selected-window) (drgnx-wb-section-window 'search)))))

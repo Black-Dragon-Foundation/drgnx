@@ -160,9 +160,11 @@ Like VS Code's Ctrl+Shift+F; clicking a sidebar tab (`drgnx-wb-show-view') keeps
   (select-window (drgnx-wb-editor-window)))
 
 (defun drgnx-wb-focus-section (name)
-  "Show the dock if needed and focus its section NAME."
-  (drgnx-wb-show-sidebar)
-  (select-window (drgnx-wb-section-window name)))
+  "Show the dock if needed, in the view section NAME belongs to, and focus NAME.
+A section of another view switches the sidebar to that view."
+  (let ((spec (alist-get name drgnx-wb--sections)))
+    (if spec (drgnx-wb-show-view (or (plist-get spec :view) 'explorer)) (drgnx-wb-show-sidebar))
+    (select-window (drgnx-wb-section-window name))))
 
 (provide 'drgnx-wb)
 ;;; drgnx-wb.el ends here

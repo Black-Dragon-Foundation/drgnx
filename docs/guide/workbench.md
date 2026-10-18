@@ -26,7 +26,8 @@ treemacs; see
 
 The sidebar has **views**, like VS Code's activity bar: **View: Explorer** shows the Buffers panel, the Explorer
 and the Outline; **View: Search** shows the Search view. The two commands show their view and move focus to it (the Explorer's
-file tree, the Search view), like VS Code's `Ctrl+Shift+E` and `Ctrl+Shift+F`. Swapping the view another way (a
+file tree, the Search view), like VS Code's `Ctrl+Shift+E` and `Ctrl+Shift+F`.
+Focus Explorer, Focus Outline and the like also switch the sidebar to their view first. Swapping the view another way (a
 sidebar tab) swaps the sections in place, at the same width, and leaves focus where it was (a focus inside the
 sidebar moves to the new view's first section); with the sidebar hidden it shows it. Hiding and showing the sidebar brings back the view it had.
 
