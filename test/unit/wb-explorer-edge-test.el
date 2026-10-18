@@ -1,5 +1,7 @@
 ;;; wb-explorer-edge-test.el --- batch tests: the Explorer's edge cases (DEFERRED fix pass) -*- lexical-binding: t -*-
 (require 'ert)
+(require 'drgnx-paths)
+(load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)
 (require 'drgnx-explorer)
 (require 'drgnx-buffers)
 (require 'drgnx-outline)
@@ -15,24 +17,25 @@
 (defmacro drgnx-explorer-edge--with (root &rest body)
   "BODY with a fixture ROOT and the Explorer rooted there (the dock not shown)."
   (declare (indent 1))
-  `(let* ((,root (file-name-as-directory (make-temp-file "drgnx-explorer" t)))
-          (drgnx-wb--sections nil) (drgnx-signal--editor-window nil) (drgnx-explorer--pressed nil)
-          (drgnx-explorer--selection nil) (drgnx-explorer--anchor nil) (drgnx-explorer--focused-before nil)
-          (drgnx-explorer--clipboard nil)
-          (drgnx-explorer-compact-folders nil))     ; one row per folder; the joined rows have their own tests
-     (unwind-protect
-         (progn
-           (drgnx-explorer-edge--tree ,root '("README.md" "docs/guide.md" "docs/sub/" "src/app/main.py" "tests/test_main.py"))
-           (delete-other-windows)
-           (drgnx-explorer-setup)
-           (drgnx-explorer-set-roots (list ,root))
-           ,@body)
-       (setq drgnx-explorer--find nil)
-       (drgnx-wb-hide-sidebar)
-       (delete-other-windows)
-       (drgnx-explorer-set-roots nil)
-       (when (get-buffer drgnx-explorer-buffer-name) (kill-buffer drgnx-explorer-buffer-name))
-       (delete-directory ,root t))))
+  `(drgnx-test-with-state
+     (let* ((,root (file-name-as-directory (make-temp-file "drgnx-explorer" t)))
+            (drgnx-wb--sections nil) (drgnx-explorer--pressed nil)
+            (drgnx-explorer--selection nil) (drgnx-explorer--anchor nil) (drgnx-explorer--focused-before nil)
+            (drgnx-explorer--clipboard nil)
+            (drgnx-explorer-compact-folders nil))     ; one row per folder; the joined rows have their own tests
+       (unwind-protect
+           (progn
+             (drgnx-explorer-edge--tree ,root '("README.md" "docs/guide.md" "docs/sub/" "src/app/main.py" "tests/test_main.py"))
+             (delete-other-windows)
+             (drgnx-explorer-setup)
+             (drgnx-explorer-set-roots (list ,root))
+             ,@body)
+         (setq drgnx-explorer--find nil)
+         (drgnx-wb-hide-sidebar)
+         (delete-other-windows)
+         (drgnx-explorer-set-roots nil)
+         (when (get-buffer drgnx-explorer-buffer-name) (kill-buffer drgnx-explorer-buffer-name))
+         (delete-directory ,root t)))))
 
 (defmacro drgnx-explorer-edge--answering (answers &rest body)
   "BODY with prompts answered from ANSWERS; the trash in a temp dir."
@@ -299,19 +302,20 @@
 (ert-deftest drgnx-explorer-edge/losing-focus-ends-both-panels-presses ()
   ;; M3b-16: focus lost mid-press (Wayland): the release never comes.
   (drgnx-explorer-edge--with root
-    (let ((drgnx-signal--subscribers nil) (drgnx-buffers--pressed nil) (drgnx-buffers--pending nil))
-      (drgnx-buffers-setup)
-      (drgnx-wb-show-sidebar)
-      (drgnx-explorer-edge--press (drgnx-wb-section-window 'explorer))
-      (setq drgnx-buffers--pressed t)
-      (cl-letf (((symbol-function 'frame-focus-state) (lambda (&rest _) t)))
-        (funcall after-focus-change-function))                ; focus moved within Emacs: still held
-      (should drgnx-explorer--pressed)
-      (should drgnx-buffers--pressed)
-      (cl-letf (((symbol-function 'frame-focus-state) (lambda (&rest _) nil)))
-        (funcall after-focus-change-function))                ; Emacs lost focus
-      (should-not drgnx-explorer--pressed)
-      (should-not drgnx-buffers--pressed))
+    (drgnx-test-with-state
+      (let ((drgnx-buffers--pressed nil) (drgnx-buffers--pending nil))
+        (drgnx-buffers-setup)
+        (drgnx-wb-show-sidebar)
+        (drgnx-explorer-edge--press (drgnx-wb-section-window 'explorer))
+        (setq drgnx-buffers--pressed t)
+        (cl-letf (((symbol-function 'frame-focus-state) (lambda (&rest _) t)))
+          (funcall after-focus-change-function))                ; focus moved within Emacs: still held
+        (should drgnx-explorer--pressed)
+        (should drgnx-buffers--pressed)
+        (cl-letf (((symbol-function 'frame-focus-state) (lambda (&rest _) nil)))
+          (funcall after-focus-change-function))                ; Emacs lost focus
+        (should-not drgnx-explorer--pressed)
+        (should-not drgnx-buffers--pressed)))
     (when (get-buffer drgnx-buffers-buffer-name) (kill-buffer drgnx-buffers-buffer-name))))
 
 ;;; wb-explorer-edge-test.el ends here

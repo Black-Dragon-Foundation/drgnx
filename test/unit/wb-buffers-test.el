@@ -1,28 +1,30 @@
 ;;; wb-buffers-test.el --- batch tests: the Buffers panel -*- lexical-binding: t -*-
 (require 'ert)
+(require 'drgnx-paths)
+(load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)
 (require 'drgnx-buffers)
 
 (defmacro drgnx-buffers-test--with (dir &rest body)
   "BODY with a fresh bus, an empty Buffers panel shown in the dock, and a temp DIR for files."
   (declare (indent 1))
-  `(let* ((,dir (make-temp-file "drgnx-buffers" t))
-          (drgnx-signal--subscribers nil) (drgnx-signal--state nil) (drgnx-signal--editor-window nil)
-          (drgnx-wb--sections nil) (drgnx-buffers--order nil) (drgnx-buffers--signature nil)
-          (drgnx-buffers--renders 0))
-     (unwind-protect
-         (progn
-           (delete-other-windows)
-           (drgnx-buffers-setup)
-           (drgnx-signal--flush)
-           (drgnx-wb-show-sidebar)
-           ,@body)
-       (drgnx-wb-hide-sidebar)
-       (delete-other-windows)
-       (dolist (b (buffer-list))
-         (when (and (buffer-file-name b) (string-prefix-p ,dir (buffer-file-name b)))
-           (with-current-buffer b (set-buffer-modified-p nil)) (kill-buffer b)))
-       (when (get-buffer drgnx-buffers-buffer-name) (kill-buffer drgnx-buffers-buffer-name))
-       (delete-directory ,dir t))))
+  `(drgnx-test-with-state
+     (let* ((,dir (make-temp-file "drgnx-buffers" t))
+            (drgnx-wb--sections nil) (drgnx-buffers--order nil) (drgnx-buffers--signature nil)
+            (drgnx-buffers--renders 0))
+       (unwind-protect
+           (progn
+             (delete-other-windows)
+             (drgnx-buffers-setup)
+             (drgnx-signal--flush)
+             (drgnx-wb-show-sidebar)
+             ,@body)
+         (drgnx-wb-hide-sidebar)
+         (delete-other-windows)
+         (dolist (b (buffer-list))
+           (when (and (buffer-file-name b) (string-prefix-p ,dir (buffer-file-name b)))
+             (with-current-buffer b (set-buffer-modified-p nil)) (kill-buffer b)))
+         (when (get-buffer drgnx-buffers-buffer-name) (kill-buffer drgnx-buffers-buffer-name))
+         (delete-directory ,dir t)))))
 
 (defun drgnx-buffers-test--open (dir name)
   (let ((f (expand-file-name name dir)))

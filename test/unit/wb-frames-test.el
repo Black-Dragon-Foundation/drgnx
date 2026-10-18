@@ -1,6 +1,8 @@
 ;;; wb-frames-test.el --- batch tests: frame roles, saving every window, the bus's frame edges -*- lexical-binding: t -*-
 ;; Batch Emacs has one frame: frame lists are mocked here; real frames are tested live.
 (require 'ert)
+(require 'drgnx-paths)
+(load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)
 (require 'drgnx-frames)
 (require 'drgnx-persist)
 
@@ -64,17 +66,18 @@ visible, without parent."
 
 (ert-deftest drgnx-frames/the-bus-tells-when-the-window-or-tabs-change ()
   ;; I2: switching to another frame, or a tab set changing, re-renders frame-scoped lists.
-  (let ((drgnx-signal--subscribers nil) (drgnx-signal--state nil) (seen nil))
-    (drgnx-signal-subscribe 'frame-changed (lambda (_) (push 'frame seen)))
-    (drgnx-signal-subscribe 'tabs-changed (lambda (_) (push 'tabs seen)))
-    (drgnx-signal--flush)
-    (setq seen nil)
-    (cl-letf (((symbol-function 'drgnx-signal--frame) (lambda () 'another)))
-      (drgnx-signal--flush))
-    (should (memq 'frame seen))
-    (drgnx-signal-post 'tabs-changed)
-    (drgnx-signal--flush)
-    (should (memq 'tabs seen))))
+  (drgnx-test-with-state
+    (let ((seen nil))
+      (drgnx-signal-subscribe 'frame-changed (lambda (_) (push 'frame seen)))
+      (drgnx-signal-subscribe 'tabs-changed (lambda (_) (push 'tabs seen)))
+      (drgnx-signal--flush)
+      (setq seen nil)
+      (cl-letf (((symbol-function 'drgnx-signal--frame) (lambda () 'another)))
+        (drgnx-signal--flush))
+      (should (memq 'frame seen))
+      (drgnx-signal-post 'tabs-changed)
+      (drgnx-signal--flush)
+      (should (memq 'tabs seen)))))
 
 (defmacro drgnx-frames-test--terminal (daemon terminal &rest body)
   "BODY with every frame a visible, parentless text frame on a terminal named TERMINAL; `daemonp' DAEMON."

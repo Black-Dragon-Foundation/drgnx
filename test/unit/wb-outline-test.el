@@ -1,25 +1,28 @@
 ;;; wb-outline-test.el --- batch tests: the Outline section -*- lexical-binding: t -*-
 (require 'ert)
+(require 'drgnx-paths)
+(load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)
 (require 'drgnx-outline)
 
 (defmacro drgnx-outline-test--with (src &rest body)
   "BODY with SRC an elisp buffer in the editor and the Outline shown in the dock."
   (declare (indent 1))
-  `(let ((drgnx-wb--sections nil) (drgnx-signal--subscribers nil) (drgnx-signal--editor-window nil)
-         (,src (generate-new-buffer "outline-src.el")))
-     (delete-other-windows)
-     (with-current-buffer ,src
-       (insert "(defun alpha () 1)\n(defvar beta 2)\n\n\n(defun gamma () 3)\n")
-       (emacs-lisp-mode))
-     (switch-to-buffer ,src)
-     (setq drgnx-signal--editor-window (selected-window))
-     (drgnx-outline-setup)
-     (drgnx-wb-show-sidebar)
-     (unwind-protect (progn (drgnx-outline-refresh) ,@body)
-       (drgnx-wb-hide-sidebar)
+  `(drgnx-test-with-state
+     (let ((drgnx-wb--sections nil)
+           (,src (generate-new-buffer "outline-src.el")))
        (delete-other-windows)
-       (kill-buffer ,src)
-       (when (get-buffer drgnx-outline-buffer-name) (kill-buffer drgnx-outline-buffer-name)))))
+       (with-current-buffer ,src
+         (insert "(defun alpha () 1)\n(defvar beta 2)\n\n\n(defun gamma () 3)\n")
+         (emacs-lisp-mode))
+       (switch-to-buffer ,src)
+       (drgnx-test-use-editor (selected-window))
+       (drgnx-outline-setup)
+       (drgnx-wb-show-sidebar)
+       (unwind-protect (progn (drgnx-outline-refresh) ,@body)
+         (drgnx-wb-hide-sidebar)
+         (delete-other-windows)
+         (kill-buffer ,src)
+         (when (get-buffer drgnx-outline-buffer-name) (kill-buffer drgnx-outline-buffer-name))))))
 
 (defun drgnx-outline-test--names ()
   (with-current-buffer drgnx-outline-buffer-name
@@ -91,7 +94,7 @@
   ;; DEFERRED M3d-6: the definition the editor's point is in is marked in the Outline with an overlay; the
   ;; Outline's own point (the user's selection in it) never moves.
   (drgnx-outline-test--with src
-    (let* ((drgnx-signal--state nil) (editor (selected-window)) (outline (get-buffer drgnx-outline-buffer-name))
+    (let* ((editor (selected-window)) (outline (get-buffer drgnx-outline-buffer-name))
            (marked (lambda () (with-current-buffer outline
                                 (when-let* ((o (seq-find (lambda (o) (overlay-get o 'drgnx-outline-current))
                                                          (overlays-in (point-min) (point-max)))))
