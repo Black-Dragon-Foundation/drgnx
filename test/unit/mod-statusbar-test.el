@@ -7,6 +7,8 @@
 (load (expand-file-name "modules/ui/drgnx-face" drgnx-dir) nil t)
 (load (expand-file-name "modules/ui/drgnx-statusbar" drgnx-dir) nil t)
 (require 'drgnx-git)
+(load (expand-file-name "modules/core/drgnx-basics" drgnx-dir) nil t)   ; New Untitled
+(load (expand-file-name "modules/ui/drgnx-start" drgnx-dir) nil t)      ; the start page's mode
 (defvar drgnx-job-ui--badge)
 (defvar compilation-arguments)
 (defvar flymake-mode)
@@ -295,6 +297,44 @@ Segments a, b, c are defined: their text is A, B, C."
       (let ((drgnx-statusbar-modes '(special-mode)))
         (drgnx-statusbar-test--in-buffer #'special-mode
           (should (string-match-p "A · B" (drgnx-statusbar-mode-line))))))))
+
+(ert-deftest drgnx-statusbar/an-untitled-buffer-gets-the-bar-in-any-language ()
+  "New Untitled opens a buffer in `fundamental-mode' with no file: it is an editor all the same (VS Code bars it)."
+  (drgnx-statusbar-test--with
+    (let ((b (save-window-excursion (drgnx-basics-new-untitled))) (old (window-buffer (selected-window))))
+      (unwind-protect
+          (progn
+            (set-window-buffer (selected-window) b)
+            (with-current-buffer b
+              (should (eq major-mode 'fundamental-mode))
+              (should (string-match-p "A · B" (drgnx-statusbar-mode-line)))
+              (python-mode)                              ; Change Language Mode keeps it an Untitled editor
+              (should (string-match-p "A · B" (drgnx-statusbar-mode-line)))
+              (special-mode)                             ; whatever the mode
+              (should (string-match-p "A · B" (drgnx-statusbar-mode-line)))))
+        (set-window-buffer (selected-window) old)
+        (kill-buffer b)))))
+
+(ert-deftest drgnx-statusbar/the-start-page-has-a-quiet-bar ()
+  "The first screen never shows the raw mode line: the start page gets the left side of the bar, no position."
+  (drgnx-statusbar-test--with
+    (drgnx-statusbar-test--state
+      (let ((drgnx-statusbar-quiet '(a)))
+        (drgnx-statusbar-test--in-buffer #'drgnx-start-mode
+          (let ((inhibit-read-only t)) (insert (make-string 11 ?\n)))
+          (let ((line (drgnx-statusbar-mode-line)))
+            (should (stringp line))
+            (should (string-match-p "A" line))
+            (should-not (string-match-p "B\\|C" line))   ; nothing else of the left side, no right side
+            (let ((shown (format-mode-line line)))
+              (should-not (string-match-p "%\\|L[0-9]\\|(drgnx-start)\\|Ln " shown)))))
+        ;; with the default segments: still a bar (never the stock line), and no line and column
+        (drgnx-statusbar--define-defaults)
+        (let ((drgnx-statusbar-quiet (default-value 'drgnx-statusbar-quiet)))
+          (should-not (memq 'position drgnx-statusbar-quiet))
+          (drgnx-statusbar-test--in-buffer #'drgnx-start-mode
+            (should (stringp (drgnx-statusbar-mode-line)))
+            (should-not (string-match-p "Ln " (drgnx-statusbar-mode-line)))))))))
 
 (ert-deftest drgnx-statusbar/the-bar-asks-for-a-redraw-when-point-moves-or-the-text-changes ()
   (let ((calls 0) (posted nil) (drgnx-statusbar--last (make-vector 5 nil)))

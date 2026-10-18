@@ -267,12 +267,14 @@ when they changed.  The variant is that of a graphical frame; with none, or a ba
 ;;;; Buffers
 
 (defun drgnx-face--numbers-wanted-p ()
-  "Non-nil when this buffer is code or configuration that visits a file."
-  (and buffer-file-name drgnx-face-line-numbers-modes
-       (apply #'derived-mode-p drgnx-face-line-numbers-modes)))
+  "Non-nil when this buffer is code or configuration that visits a file, or an Untitled editor (any mode)."
+  (or (bound-and-true-p drgnx-untitled-p)
+      (and buffer-file-name drgnx-face-line-numbers-modes
+           (apply #'derived-mode-p drgnx-face-line-numbers-modes))))
 
 (defun drgnx-face-line-numbers-maybe ()
-  "Line numbers in this buffer when it is code visiting a file; the number column never changes width while typing.
+  "Line numbers in this buffer when it is code visiting a file or an Untitled editor; the number column never changes
+width while typing.
 On `after-change-major-mode-hook'."
   (when (drgnx-face--numbers-wanted-p)
     (setq-local display-line-numbers-width-start t
@@ -388,6 +390,8 @@ F10's `menu-bar-open' has no menu to open on a toolkit frame whose bar is hidden
                                  (drgnx-statusbar-place . "editors (default) or frame: where the status bar is")
                                  (drgnx-statusbar-indent-vars . "variables the indentation segment reads")
                                  (drgnx-statusbar-modes . "modes (besides file buffers) that get the status bar")
+                                 (drgnx-statusbar-quiet-modes . "modes that get the quiet bar (the start page)")
+                                 (drgnx-statusbar-quiet . "the quiet bar's segments, on the left")
                                  (drgnx-quickhelp-hover . "quick help when the mouse rests on a symbol")
                                  (drgnx-quickhelp-delay . "seconds the mouse rests before quick help shows")
                                  (drgnx-quickhelp-max-lines . "most lines of docs on the card")

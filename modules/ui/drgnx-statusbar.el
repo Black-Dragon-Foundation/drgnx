@@ -104,6 +104,10 @@ The branch is cut with an ellipsis instead, and only after these are gone."
   "The segments the other editor groups show (the most recently used one shows the whole bar)."
   :type '(repeat symbol) :set #'drgnx-statusbar--set :group 'drgnx-statusbar)
 
+(defcustom drgnx-statusbar-quiet '(branch agents jobs tests misc)
+  "The segments of the quiet bar (`drgnx-statusbar-quiet-modes': the start page), on the left, in order."
+  :type '(repeat symbol) :set #'drgnx-statusbar--set :group 'drgnx-statusbar)
+
 (defcustom drgnx-statusbar-place 'editors
   "Where the bar is: `editors' (in each editor window) or `frame' (one bar across the frame's bottom).
 `frame' arrives with the grid (drgnx-grid-mode); until that is on, the bar stays in the editor windows."
@@ -262,8 +266,8 @@ First the segments of `drgnx-statusbar-drop-order' go, then the branch is cut to
 
 (defun drgnx-statusbar-render (width &optional compact)
   "The status bar as a propertized string of at most WIDTH columns for the window being drawn.
-COMPACT: only the segments of `drgnx-statusbar-compact' (on the right).  The segment functions run with the
-source window's buffer current."
+COMPACT: only the segments of `drgnx-statusbar-compact' (on the right); `quiet': only those of
+`drgnx-statusbar-quiet' (on the left).  The segment functions run with the source window's buffer current."
   (let* ((w (drgnx-statusbar-source-window))
          (buf (and (window-live-p w) (window-buffer w))))
     (with-current-buffer (or buf (current-buffer))
@@ -271,8 +275,10 @@ source window's buffer current."
              (drgnx-statusbar--left-sep (drgnx-statusbar--separator))
              (texts (lambda (ids)
                       (delq nil (mapcar (lambda (id) (when-let* ((s (drgnx-statusbar--text id))) (cons id s))) ids))))
-             (left (unless compact (funcall texts drgnx-statusbar-left)))
-             (right (funcall texts (if compact drgnx-statusbar-compact drgnx-statusbar-right)))
+             (left (cond ((eq compact 'quiet) (funcall texts drgnx-statusbar-quiet))
+                         ((not compact) (funcall texts drgnx-statusbar-left))))
+             (right (unless (eq compact 'quiet)
+                      (funcall texts (if compact drgnx-statusbar-compact drgnx-statusbar-right))))
              (fitted (drgnx-statusbar--fit left right (max width 0))))
         (setq left (car fitted) right (cdr fitted))
         (let* ((l (drgnx-statusbar--join left drgnx-statusbar--left-sep))
@@ -297,7 +303,7 @@ source window's buffer current."
 
 (defcustom drgnx-statusbar-modes '(prog-mode text-mode conf-mode)
   "Major modes (and the modes derived from them) whose buffers get the status bar.
-So does any buffer that visits a file.  Every other buffer (Magit, Dired, help, Info, shells, compilation, drgnx's
+So does any buffer that visits a file, and an Untitled editor.  Every other buffer (Magit, Dired, help, Info, shells, compilation, drgnx's
 own panes) keeps its own mode line."
   :type '(repeat symbol) :set #'drgnx-statusbar--set :group 'drgnx-statusbar)
 
@@ -306,9 +312,22 @@ own panes) keeps its own mode line."
   (and (local-variable-p 'mode-line-format) mode-line-format t))
 
 (defun drgnx-statusbar--wanted-p ()
-  "Non-nil when the current buffer gets the status bar: it visits a file or is code, text or configuration."
+  "Non-nil when the current buffer gets the status bar: it visits a file, is an Untitled editor (New Untitled, in any
+mode) or is code, text or configuration."
   (and (not (drgnx-statusbar--own-mode-line-p))
-       (or buffer-file-name (and drgnx-statusbar-modes (apply #'derived-mode-p drgnx-statusbar-modes)))))
+       (or buffer-file-name (bound-and-true-p drgnx-untitled-p)
+           (and drgnx-statusbar-modes (apply #'derived-mode-p drgnx-statusbar-modes)))))
+
+(defcustom drgnx-statusbar-quiet-modes '(drgnx-start-mode)
+  "Major modes (and the modes derived from them) whose buffers get the quiet bar: the segments of
+`drgnx-statusbar-quiet' on the left and nothing on the right (no line and column).  The start page is one: the first
+screen never shows Emacs's raw mode line."
+  :type '(repeat symbol) :set #'drgnx-statusbar--set :group 'drgnx-statusbar)
+
+(defun drgnx-statusbar--quiet-p ()
+  "Non-nil when the current buffer gets the quiet bar (`drgnx-statusbar-quiet-modes')."
+  (and drgnx-statusbar-quiet-modes (not (drgnx-statusbar--own-mode-line-p))
+       (apply #'derived-mode-p drgnx-statusbar-quiet-modes)))
 
 (defun drgnx-statusbar--escape (s)
   "S with every `%' doubled (keeping the properties): in a mode line, `%' starts a construct such as `%b'."
@@ -345,6 +364,7 @@ Weak on the window, so a deleted window's entry goes with it; emptied when the m
       (drgnx-statusbar--indent-width)
       (bound-and-true-p drgnx-modal-state) (bound-and-true-p drgnx-job-ui--badge) (bound-and-true-p drgnx-face-glyphs)
       drgnx-statusbar-left drgnx-statusbar-right drgnx-statusbar-compact drgnx-statusbar-drop-order
+      drgnx-statusbar-quiet
       global)
     "What a window's bar depends on, evaluated in its buffer with W the window, WIDTH its width, COMPACT whether it
 shows the compact bar and GLOBAL the text of `global-mode-string'.  Compared with `eql' (GLOBAL, the last, with
@@ -394,15 +414,19 @@ to show, it compares and allocates nothing."
 
 (defun drgnx-statusbar-mode-line ()
   "The `:eval' of an editor window's mode line.
-In a buffer that visits a file or is code, text or configuration (`drgnx-statusbar-modes'): the full bar in the most
-recently used editor window, the compact one in the others.  In a buffer whose own `mode-line-format' is nil: nothing.
-In any other buffer: the stock mode line.  An error shows nothing and is recorded once, never on every redisplay."
+In a buffer that visits a file, is an Untitled editor or is code, text or configuration (`drgnx-statusbar-modes'): the
+full bar in the most recently used editor window, the compact one in the others.  In the start page
+\(`drgnx-statusbar-quiet-modes'): the quiet bar.  In a buffer whose own `mode-line-format' is nil: nothing.  In any
+other buffer: the stock mode line.  An error shows nothing and is recorded once, never on every redisplay."
   (condition-case err
       (cond ((and (local-variable-p 'mode-line-format) (null mode-line-format)) nil)
             ((drgnx-statusbar--wanted-p)
              (let* ((w (selected-window))       ; the window being drawn (a mode line is drawn with it selected)
                     (drgnx-statusbar--window w))
                (drgnx-statusbar--bar w (window-total-width w) (not (drgnx-statusbar--mru-editor-p w)))))
+            ((drgnx-statusbar--quiet-p)
+             (let* ((w (selected-window)) (drgnx-statusbar--window w))
+               (drgnx-statusbar--bar w (window-total-width w) 'quiet)))
             (t (remhash (selected-window) drgnx-statusbar--memo)   ; no bar here now: keep no buffer alive for it
                (or mode-line-format (default-value 'mode-line-format))))
     (error (drgnx-statusbar--note-error 'host err) nil)))

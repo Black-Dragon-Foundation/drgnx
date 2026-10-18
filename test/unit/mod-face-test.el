@@ -2,6 +2,8 @@
 (require 'ert)
 (require 'drgnx)
 (load (expand-file-name "modules/ui/drgnx-face" drgnx-dir) nil t)
+(load (expand-file-name "modules/core/drgnx-basics" drgnx-dir) nil t)   ; New Untitled
+(defvar drgnx-untitled-p)
 
 (defvar drgnx-face-test--mode-calls nil "The arguments `window-divider-mode' was called with (newest first).")
 (defvar drgnx-face-test--spec-calls nil "The (FACE SPEC TYPE) `face-spec-set' was called with (newest first).")
@@ -132,6 +134,22 @@ setup changes neither the dividers nor the faces of the test process."
       (setq buffer-file-name (expand-file-name "x.yml" temporary-file-directory))
       (yaml-ts-mode)
       (should (bound-and-true-p display-line-numbers-mode)))))
+
+(ert-deftest drgnx-face/an-untitled-buffer-has-line-numbers-in-any-language ()
+  "New Untitled (VS Code's New File) numbers its lines like a file, before and after Change Language Mode."
+  (drgnx-face-test--with
+    (drgnx-face-test--setup)
+    (let ((b (save-window-excursion (drgnx-basics-new-untitled))))
+      (unwind-protect
+          (with-current-buffer b
+            (should-not buffer-file-name)
+            (should (bound-and-true-p display-line-numbers-mode))
+            (python-mode)                                ; Change Language Mode: the buffer is still Untitled
+            (should drgnx-untitled-p)
+            (should (bound-and-true-p display-line-numbers-mode))
+            (text-mode)                                  ; prose too: VS Code numbers every Untitled editor
+            (should (bound-and-true-p display-line-numbers-mode)))
+        (kill-buffer b)))))
 
 (ert-deftest drgnx-face/line-numbers-modes-is-a-setting ()
   (drgnx-face-test--with

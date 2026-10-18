@@ -81,7 +81,7 @@ once; on Wayland restart the daemon, and write the service unit again if you ins
 
 | Setting | Default | What it does |
 |---|---|---|
-| `drgnx-face-line-numbers-modes` | `(prog-mode conf-mode yaml-mode yaml-ts-mode)` | Files in these modes (or modes derived from them) show line numbers. Prose, `*scratch*` and buffers without a file do not. |
+| `drgnx-face-line-numbers-modes` | `(prog-mode conf-mode yaml-mode yaml-ts-mode)` | Files in these modes (or modes derived from them) show line numbers. Prose, `*scratch*` and buffers without a file do not, except an editor made with **New Untitled** (`Untitled-1` …), which has them in any language, as in VS Code. |
 | `drgnx-face-inline-problems` | `short` | Problems from the language server or flymake at the end of their line: `nil` (only underlined), `short` (the first problem, shortened) or `t` (all of them). Needs an Emacs whose flymake has `flymake-show-diagnostics-at-end-of-line` (30.1 and later). |
 
 The number column is as wide as the file needs when it opens; it never narrows, and widens only when the file needs
@@ -139,10 +139,12 @@ Status Bar** (View menu, palette); `drgnx-statusbar-mode` is the switch.
 | `language` | `YAML`, `Python`, `Emacs Lisp` | **Change Language Mode**: pick another major mode for the buffer |
 
 The most recently used editor window shows the whole bar; the other editor groups show `drgnx-statusbar-compact`
-(position and language). The bar is for the buffers you edit: a buffer that visits a file, or is code, text or
-configuration (`drgnx-statusbar-modes`: `prog-mode`, `text-mode`, `conf-mode` and what derives from them). Every other
-buffer (Magit, Dired, help, Info, a shell, compilation, drgnx's own panes) keeps its own mode line, and a buffer whose
-own `mode-line-format` is nil keeps none. In a narrow window the bar never wraps: segments go in the order of
+(position and language). The bar is for the buffers you edit: a buffer that visits a file, an editor made with
+**New Untitled** (in whatever language you give it), or a buffer that is code, text or configuration
+(`drgnx-statusbar-modes`: `prog-mode`, `text-mode`, `conf-mode` and what derives from them). The start page gets a
+quiet bar: only the left side (`drgnx-statusbar-quiet`: branch, agents, jobs, tests and `misc`), no line and column,
+for the modes in `drgnx-statusbar-quiet-modes`. Every other buffer (Magit, Dired, help, Info, a shell, compilation,
+drgnx's own panes) keeps its own mode line, and a buffer whose own `mode-line-format` is nil keeps none. In a narrow window the bar never wraps: segments go in the order of
 `drgnx-statusbar-drop-order` (line endings first), and the branch is cut with an ellipsis, never dropped. The glyphs
 come from `drgnx-face-glyphs`, so a terminal that is not UTF-8 shows ASCII (` | ` between segments instead of ` · `).
 
@@ -195,7 +197,9 @@ and a segment of your own that has not called `(drgnx-statusbar-refresh t)`.
 | `drgnx-statusbar-compact` | `(position language)` | what the other editor groups show |
 | `drgnx-statusbar-place` | `editors` | `editors`; `frame` (one bar across the frame) arrives with the grid |
 | `drgnx-statusbar-indent-vars` | the common indent offsets | the variables `indent` reads, first bound one wins |
-| `drgnx-statusbar-modes` | `(prog-mode text-mode conf-mode)` | the modes (besides file buffers) that get the bar |
+| `drgnx-statusbar-modes` | `(prog-mode text-mode conf-mode)` | the modes (besides file buffers and Untitled editors) that get the bar |
+| `drgnx-statusbar-quiet-modes` | `(drgnx-start-mode)` | the modes that get the quiet bar |
+| `drgnx-statusbar-quiet` | `(branch agents jobs tests misc)` | the quiet bar's segments, on the left |
 | `drgnx-statusbar-misc-exclude` | the job badge | entries of `global-mode-string` that `misc` leaves out |
 | `drgnx-statusbar-test-command-regexp` | `\_<test\_>` | a compilation whose command matches is a test run |
 | `drgnx-statusbar-test-count-regexps` | ERT's and `bin/drgnx test --ui`'s summary lines | where the counts come from |
@@ -310,7 +314,8 @@ An empty editor tells you nothing, so drgnx fills it. **`*drgnx start*`** says w
 three keys that open everything (the files, the commands, all keys — the same ones the top line shows, from the
 active profile: `C-p`, `C-S-p` and `C-k C-r` in VS Code's) and has four buttons: **Open a Folder…**, **Open the Work
 Graph**, **All Keys** and **Don't show this again**. `Tab` and `Shift-Tab` move between the buttons, `Return` presses
-one. A button whose command is not there (its module is off) is left out.
+one. A button whose command is not there (its module is off) is left out. Its bottom line is the status bar's quiet
+form (the branch, agents, jobs and tests, nothing about a cursor position), never Emacs's raw mode line.
 
 It shows itself only where nothing is lost: in the editor window you used last, and only when that window shows
 `*scratch*` that you have not typed in — never over a file or your own text, never while the first-run Welcome is
