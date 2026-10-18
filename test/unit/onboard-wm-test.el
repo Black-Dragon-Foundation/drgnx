@@ -14,7 +14,8 @@
   "BODY with step 7's result in `result' and the programs run in `programs'; ENV (\"K=V\" strings) on top of no
 display, no window manager, no SSH.  Linux, Fedora 45 (no Hyprland package there), without interaction."
   (declare (indent 1))
-  `(let* ((root (file-name-as-directory (make-temp-file "drgnx-onboard-wm" t)))
+  `(let* ((system-type 'gnu/linux)        ; a Linux session (batch Emacs on macOS is the macOS adapter)
+          (root (file-name-as-directory (make-temp-file "drgnx-onboard-wm" t)))
           (process-environment (append ,env
                                        (list (concat "DRGNX_CONFIG_DIR=" root "config") (concat "XDG_STATE_HOME=" root "state")
                                              (concat "DRGNX_DATA_DIR=" root "data") (concat "PATH=" root "bin")

@@ -21,7 +21,8 @@
   "Run BODY with ENV (a list of \"K=V\") as the only window-manager variables, an empty temp bin first on PATH
 and `exec-path' (`drgnx-doctor-wm-test--tool' adds to it), a dead session bus and no D-Bus call."
   (declare (indent 1))
-  `(let* ((dir (make-temp-file "drgnx-doctor-wm" t))
+  `(let* ((system-type 'gnu/linux)        ; a Linux session (batch Emacs on macOS is the macOS adapter)
+          (dir (make-temp-file "drgnx-doctor-wm" t))
           (drgnx-doctor-wm-test--bin (expand-file-name "bin" dir))
           (drgnx-doctor-wm-test--log (expand-file-name "log" dir))
           (exec-path (list drgnx-doctor-wm-test--bin))

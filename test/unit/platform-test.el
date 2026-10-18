@@ -13,8 +13,10 @@
 
 (defmacro drgnx-platform-test--isolated (&rest body)
   "Run BODY without the session the tests run in: no window-manager variable, a runtime dir and a session bus
-that do not exist, no X root-window property and no D-Bus call (they signal).  Every test runs under it."
-  `(let ((process-environment
+that do not exist, no X root-window property and no D-Bus call (they signal).  Every test runs under it.
+The tests fake a Linux session, so `system-type' is gnu/linux (batch Emacs on macOS is the macOS adapter)."
+  `(let ((system-type 'gnu/linux)
+         (process-environment
           (append drgnx-platform-test--unset-vars
                   '("XDG_RUNTIME_DIR=/nonexistent/drgnx-test-xdg"
                     "DBUS_SESSION_BUS_ADDRESS=unix:path=/nonexistent/drgnx-test")
