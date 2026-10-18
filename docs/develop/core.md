@@ -353,6 +353,29 @@ it and 28.2 ms without (5 runs each, within the runs' noise); the budget is 5 ms
 `test/unit/modules-record-test.el` covers it, including `startup-is-unchanged`: the shipped modules' startup stage
 gives the same statuses and commands with the recorder as without it.
 
+## The change bus (`wb/drgnx-signal.el`)
+
+`drgnx-signal-mode` listens to the raw window and buffer hooks and emits deduplicated edges after an idle delay
+(`drgnx-signal-delay`). A flush reads the buffer list only for what a hook said changed. `drgnx-signal--dirty` holds
+the parts to rebuild, and each part has a named raw-hook function that sets it:
+
+| Hook | Function | Sets |
+|---|---|---|
+| `buffer-list-update-hook` (a buffer made, killed, selected or renamed) | `drgnx-signal--set-dirty` | `set` |
+| `first-change-hook`, `after-save-hook`, `after-revert-hook` | `drgnx-signal--modified-dirty` | `modified` |
+| `kill-buffer-hook` | `drgnx-signal--killed` | `set` and `modified` |
+| `post-command-hook` | `drgnx-signal--post-command` | nothing, unless the current buffer's modified flag or name differs from the cached one |
+
+`set` rebuilds `:set` and `:names` (and `:modified` with them, since the buffers changed); `modified` rebuilds
+`:modified`. A part that is not dirty keeps its cached value, so a keystroke that changed no buffer costs the
+post-command comparison and a flush that compares only the editor window and its point (a median of about 5 µs with 300
+buffers, byte-compiled, against 479 µs when every flush scanned them). Undo back to the saved state and
+`set-buffer-modified-p` run no hook, which is what the comparison is for; it covers the current buffer, and a buffer
+that becomes current is compared with what the last flush saw of it (one `assq`, no buffer list). With the mode off
+nothing says what changed, so a flush called directly (tests, the bench) rebuilds everything. The edges and what they
+mean are unchanged. The hooks are added by the mode, so the mode owns them; a module that needs the bus turns the mode
+on (see "Global modes are owned by the first module that turns them on" in the safety net above).
+
 ## Build (`drgnx-build.el`)
 
 `bin/drgnx build` byte-compiles `core/`, `wb/` and `modules/` in place (`.elc` files are not tracked); with native

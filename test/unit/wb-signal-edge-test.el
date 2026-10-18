@@ -37,4 +37,141 @@ busy machine is not judged."
       (when (timerp drgnx-signal--timer) (cancel-timer drgnx-signal--timer))
       (delete-directory dir t))))
 
+;;; Dirty flags (PERF-M2): a flush rebuilds only what a hook said changed.
+
+(defmacro drgnx-signal-edge--with-hooks (events-var &rest body)
+  "BODY with a fresh bus, the mode on (its real hooks) and the starting state flushed.
+Every emission is pushed onto EVENTS-VAR as (EVENT . DATA)."
+  (declare (indent 1))
+  `(let ((drgnx-signal--subscribers nil) (drgnx-signal--state nil) (drgnx-signal-errors nil)
+         (drgnx-signal--timer nil) (drgnx-signal--dirty nil) (drgnx-signal--seen-buffer nil)
+         (was-on drgnx-signal-mode) (,events-var nil)
+         (dir (make-temp-file "drgnx-signal-edge" t)))
+     (unwind-protect
+         (progn
+           (drgnx-signal-mode 1)
+           (dolist (e '(buffer-set-changed modified-changed))
+             (let ((e e)) (drgnx-signal-subscribe e (lambda (data) (push (cons e data) ,events-var)))))
+           (drgnx-signal--flush)
+           (setq ,events-var nil)
+           ,@body)
+       (unless was-on (drgnx-signal-mode -1))
+       (when (timerp drgnx-signal--timer) (cancel-timer drgnx-signal--timer))
+       (dolist (b (buffer-list))
+         (when (and (buffer-file-name b) (string-prefix-p dir (buffer-file-name b)))
+           (with-current-buffer b (set-buffer-modified-p nil)) (kill-buffer b)))
+       (delete-directory dir t))))
+
+(defun drgnx-signal-edge--file (dir name)
+  (let ((f (expand-file-name name dir))) (write-region "x\n" nil f nil 'silent) (find-file-noselect f)))
+
+(defun drgnx-signal-edge--keystroke ()
+  "What a keystroke does to the bus: the real `post-command-hook', then the idle flush."
+  (run-hooks 'post-command-hook)
+  (drgnx-signal--flush))
+
+(ert-deftest drgnx-signal-edge/a-keystroke-with-nothing-dirty-reads-no-buffer-list ()
+  (drgnx-signal-edge--with-hooks events
+    (let ((a (drgnx-signal-edge--file dir "a.txt")) (calls 0) (real (symbol-function 'buffer-list)))
+      (drgnx-signal--flush)
+      (with-current-buffer a
+        (cl-letf (((symbol-function 'buffer-list) (lambda (&rest args) (cl-incf calls) (apply real args))))
+          ;; Redefining a primitive may compile a trampoline (native compilation), which makes buffers
+          ;; and so dirties the set: take that flush before counting.
+          (drgnx-signal-edge--keystroke)
+          (setq calls 0 events nil)
+          (dotimes (_ 3) (drgnx-signal-edge--keystroke))))
+      (should (= calls 0))
+      (should (null events)))))
+
+(ert-deftest drgnx-signal-edge/undo-to-saved-still-flips-modified ()
+  (drgnx-signal-edge--with-hooks events
+    (let ((a (drgnx-signal-edge--file dir "a.txt")))
+      (drgnx-signal--flush)
+      (with-current-buffer a
+        (buffer-enable-undo)
+        (undo-boundary)
+        (insert "more")
+        (drgnx-signal-edge--keystroke)
+        (should (equal (cdr (assq 'modified-changed events)) (list a)))
+        (setq events nil)
+        (undo-boundary)
+        (let ((last-command nil) (this-command 'undo)) (undo))
+        (should-not (buffer-modified-p))                ; back to the saved state: no hook ran
+        (drgnx-signal-edge--keystroke)
+        (should (equal (cdr (assq 'modified-changed events)) (list a)))))))
+
+(ert-deftest drgnx-signal-edge/set-buffer-modified-p-is-still-seen ()
+  (drgnx-signal-edge--with-hooks events
+    (let ((a (drgnx-signal-edge--file dir "a.txt")))
+      (drgnx-signal--flush)
+      (with-current-buffer a
+        (drgnx-signal-edge--keystroke)
+        (set-buffer-modified-p t)
+        (drgnx-signal-edge--keystroke)
+        (should (equal (cdr (assq 'modified-changed events)) (list a)))
+        (setq events nil)
+        (set-buffer-modified-p nil)
+        (drgnx-signal-edge--keystroke)
+        (should (equal (cdr (assq 'modified-changed events)) (list a)))))))
+
+(ert-deftest drgnx-signal-edge/a-rename-is-still-seen ()
+  "The hook alone sees it (no `post-command-hook' runs): `rename-buffer' runs `buffer-list-update-hook'."
+  (drgnx-signal-edge--with-hooks events
+    (let ((a (drgnx-signal-edge--file dir "a.txt")))
+      (drgnx-signal--flush)
+      (setq events nil)
+      (with-current-buffer a (rename-buffer "renamed.txt"))
+      (drgnx-signal--flush)
+      (should (memq a (cdr (assq 'buffer-set-changed events)))))))
+
+(ert-deftest drgnx-signal-edge/a-kill-is-still-seen ()
+  (drgnx-signal-edge--with-hooks events
+    (let ((a (drgnx-signal-edge--file dir "a.txt")))
+      (drgnx-signal--flush)
+      (setq events nil)
+      (kill-buffer a)
+      (drgnx-signal--flush)
+      (should (assq 'buffer-set-changed events))
+      (should-not (memq a (cdr (assq 'buffer-set-changed events)))))))
+
+(ert-deftest drgnx-signal-edge/each-hook-marks-its-part ()
+  "Named raw-hook functions, one per kind of change; none of them is a lambda."
+  (drgnx-signal-edge--with-hooks events
+    (pcase-dolist (`(,hook ,fn ,parts)
+                   '((buffer-list-update-hook drgnx-signal--set-dirty (set))
+                     (first-change-hook drgnx-signal--modified-dirty (modified))
+                     (after-save-hook drgnx-signal--modified-dirty (modified))
+                     (after-revert-hook drgnx-signal--modified-dirty (modified))
+                     (kill-buffer-hook drgnx-signal--killed (set modified))))
+      (should (memq fn (default-value hook)))
+      (setq drgnx-signal--dirty nil)
+      (funcall fn)
+      (should (equal (sort (copy-sequence drgnx-signal--dirty) (function string<)) (sort (copy-sequence parts) (function string<)))))
+    (drgnx-signal-mode -1)
+    (should-not (memq 'drgnx-signal--set-dirty (default-value 'buffer-list-update-hook)))
+    (should-not (memq 'drgnx-signal--killed (default-value 'kill-buffer-hook)))))
+
+(ert-deftest drgnx-signal-edge/a-keystroke-flush-with-300-buffers-is-cheap ()
+  "A keystroke that changed no buffer: the hook and the flush take a median of 50 µs at most with 300 buffers
+\(479 µs when the flush scanned them all)."
+  :tags '(:timing)
+  (drgnx-signal-edge--with-hooks events
+    (let ((bufs nil))
+      (unwind-protect
+          (progn
+            (dotimes (i 300)
+              (with-current-buffer (generate-new-buffer (format "edge-%d" i))
+                (setq buffer-file-name (expand-file-name (format "edge-%d.txt" i) dir))
+                (push (current-buffer) bufs)))
+            (drgnx-signal--flush)
+            (with-current-buffer (car bufs)
+              (drgnx-signal-edge--keystroke)
+              (let ((samples nil))
+                (dotimes (_ 200)
+                  (let ((t0 (float-time))) (drgnx-signal-edge--keystroke) (push (- (float-time) t0) samples)))
+                (setq samples (sort samples #'<))
+                (should (< (nth 100 samples) 50e-6)))))
+        (dolist (b bufs) (with-current-buffer b (set-buffer-modified-p nil) (setq buffer-file-name nil)) (kill-buffer b))))))
+
 ;;; wb-signal-edge-test.el ends here

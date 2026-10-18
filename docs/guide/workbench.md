@@ -305,7 +305,8 @@ Not yet: file nesting, icons (an icon theme is a module, M4), problems decoratio
 ## How it works
 
 - **The change bus** (`wb/drgnx-signal.el`) is the only code that listens to Emacs' window and buffer hooks. A
-  hook only arms an idle flush; the flush compares the state with the previous one and emits **edges**:
+  hook only arms an idle flush (and notes which part changed: the buffer set, or the modified flags); the flush rebuilds
+  only that part, compares the state with the previous one and emits **edges**:
   `editor-changed` (the file in the editor you used last), `editor-point-changed` (its cursor moved), `buffer-set-changed`, `modified-changed`. Followers
   subscribe to these, never to hooks — so a focus change, a background buffer or a burst of events cannot make
   them fire. Internal buffers (names starting with a space) never count. A follower (or a window-setup function)
