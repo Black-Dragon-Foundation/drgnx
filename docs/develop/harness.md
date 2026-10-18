@@ -477,3 +477,15 @@ DRGNX_MODAL_ELPA="$PWD/.claude/tmp/modal-elpa" bin/drgnx test
 The first sync installs the known-good lock (every locked package), so it takes a few minutes and about 1 GB of
 disk; the versions are the ones in `etc/drgnx.lock.eld`. In a container you run by hand, mount the directory read-only and set
 the variable inside (`-v …/data/elpa:/elpa:ro -e DRGNX_MODAL_ELPA=/elpa`).
+
+The success list of Vim keys runs end to end in the live tier (`bin/drgnx test --ui`, second half), not in the GUI
+tier's shared minimal session: evil and drgnx's startup cannot be undone in one Emacs, and later GUI tests would run
+under them. `test/live/drgnx-modal-ui-test.el` (`drgnx-ui-modal/…`: editing, the leader, panels, the state indicator
+and cursor, inputs, the mixed stack) and `test/live/drgnx-modal-daemon-test.el` (`drgnx-live-modal/…`: `:q`, `ZZ`,
+`:qa` in a daemon that keeps running) each start a session of config `drgnx` per test. `test/fixtures/modal-session.el`
+loads evil there from `DRGNX_MODAL_ELPA` (a session inherits it), starts the engine with `drgnx-modal-engine-start-now`,
+applies the key stack, and presses keys through the harness queue (`drgnx-ui-measure`, one event per 40 ms tick); each
+test prints a line summing its jank reports. Screenshots (`modal-normal.png`, `modal-visual-line.png`,
+`modal-explorer.png`, `modal-explorer-leader.png`) go to `$DRGNX_TEST_SHOTS` when set — the UI evidence of a run —
+else to the run's temp directory. To run only these: `DRGNX_TEST_SELECTOR='"^drgnx-\\(ui\\|live\\)-modal/"'` with
+`bin/drgnx test --ui` (the GUI half still runs all of `test/ui`).

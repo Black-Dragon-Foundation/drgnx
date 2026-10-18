@@ -269,7 +269,7 @@ commands, so the workbench keeps its editor groups, tabs and layout (the key tip
 | `:wq`, `:x`, `ZZ` | Save when the buffer changed, then what `:q` does |
 | `:qa`, `:cq` | Close Window |
 | `:wqa`, `:xa` | Save All, then Close Window |
-| `C-w h` `j` `k` `l` | Focus Left / Below / Above / Right (editor groups and the sidebar and panel docks) |
+| `C-w h` `j` `k` `l` | Focus Left / Below / Above / Right (editor groups, the sidebar, the panel and the right dock: `C-w l` reaches Work and Agents, `C-w h` comes back) |
 | `g d`, `g r`, `K` | Go to Definition, Find References, Show Hover |
 | `g t`, `g T` | Next Tab, Previous Tab |
 | `] d`, `[ d` | Next Problem, Previous Problem (the next error or warning in this file) |
