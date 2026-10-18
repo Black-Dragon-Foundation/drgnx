@@ -28,7 +28,8 @@ A job's control room — its own window on a graphical display, so it can sit on
 - **left — tasks and agents:** each task's status, profile and what it waits on; the budget, spent against the limit;
   the agents at work, each with **Transcript** and **Message…**;
 - **middle — what needs you:** the cards, each with its actions as buttons (a clash shows both sides and the
-  reviewer's recommendation; **Accept the reviewer** is there only when it recommended a side), then the messages agents sent you, each with **Reply…**;
+  reviewer's recommendation; **Accept the reviewer** is there only when it recommended a side; a clash whose reviewer
+  was lost twice says so), then the messages agents sent you, each with **Reply…**;
 - **right — the decision log,** newest first: replaced decisions dimmed, disputed ones (in an open clash) marked.
 
 It follows the hub's events and redraws only what changed (at most twice a second). Closing it stops nothing; it

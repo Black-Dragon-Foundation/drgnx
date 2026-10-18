@@ -136,6 +136,20 @@ decided build / won't build on one subject (decisions A-N and B-N), the clash sc
           (should-not (drgnx-job-clash--reviewer card)))))))
 
 
+(ert-deftest drgnx-job-clash/a-reviewer-lost-twice-is-marked-gone ()
+  (let ((process-environment (cons "MOCK_ACP_CLASH_SLOW=1" process-environment)))
+    (drgnx-job-clash-review-test--clash
+      (let ((data (lambda () (plist-get (drgnx-coord-card card) :data))))
+        (should-not (plist-get (funcall data) :reviewer-gone))
+        (drgnx-agents-kill (drgnx-job-clash--reviewer card))
+        (drgnx-job-clash-scan id)                                              ; a second reviewer
+        (should-not (plist-get (funcall data) :reviewer-gone))
+        (drgnx-agents-kill (drgnx-job-clash--reviewer card))
+        (drgnx-job-clash-scan id)                                              ; none is coming
+        (should (plist-get (funcall data) :reviewer-gone))
+        (drgnx-job-card-act card "discuss" "anyone there?")                    ; Discuss starts one again
+        (should-not (plist-get (funcall data) :reviewer-gone))))))
+
 (ert-deftest drgnx-job-clash/discussing-can-change-the-recommendation ()
   (drgnx-job-clash-review-test--clash
     (should (drgnx-job-run-test--wait (lambda () (drgnx-job-clash-review-test--recommendation card)) 15))

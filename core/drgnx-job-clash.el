@@ -224,18 +224,23 @@ long clash when it has a route."
          (s (drgnx-agents-start profile (drgnx-job--job-tree job) nil job)) (sid (drgnx-agent-session-id s)))
     (puthash (cons job card) (1+ (gethash (cons job card) drgnx-job-clash--starts 0)) drgnx-job-clash--starts)
     (puthash sid (list :clash card) drgnx-job--reviewers)
-    (drgnx-coord-card-set card :data (plist-put (copy-sequence (plist-get (drgnx-coord-card card) :data)) :reviewer sid))   ; Discuss opens its transcript
+    (drgnx-coord-card-set card :data (plist-put (plist-put (copy-sequence (plist-get (drgnx-coord-card card) :data)) :reviewer sid)   ; Discuss opens its transcript
+                                                :reviewer-gone nil))
     (puthash sid (drgnx-job-clash--prompt card asks) drgnx-job--prompts)
     (drgnx-job--session-changed s)
     s))
 
 (defun drgnx-job-clash--ensure-reviewers (job)
   "Every open clash of JOB without a recommendation has a reviewer: started at most twice per hub run (once, then
-once more if it is lost — a restarted hub's included)."
+once more if it is lost — a restarted hub's included).  After that the card says `:reviewer-gone'."
   (dolist (c (drgnx-coord-cards job "open"))
     (when (and (equal (plist-get c :kind) "clash") (not (plist-get (plist-get c :data) :recommendation))
-               (not (drgnx-job-clash--reviewer (plist-get c :id))) (< (gethash (cons job (plist-get c :id)) drgnx-job-clash--starts 0) 2))
-      (drgnx-job-clash--start-reviewer job (plist-get c :id)))))
+               (not (drgnx-job-clash--reviewer (plist-get c :id))))
+      (if (< (gethash (cons job (plist-get c :id)) drgnx-job-clash--starts 0) 2)
+          (drgnx-job-clash--start-reviewer job (plist-get c :id))
+        (unless (plist-get (plist-get c :data) :reviewer-gone)
+          (drgnx-coord-card-set (plist-get c :id) :data (plist-put (copy-sequence (plist-get c :data)) :reviewer-gone t))
+          (drgnx-job--changed job))))))
 
 (defun drgnx-job-clash--recommendation (s)
   "Reviewer S's last answer's recommendation: (:side \"A\"|\"B\"|nil :why TEXT), or nil when it gave none."
