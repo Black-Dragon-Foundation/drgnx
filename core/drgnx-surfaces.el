@@ -189,6 +189,9 @@ The next write keeps a file with something left out as a backup (`drgnx-surfaces
     (setq drgnx-surfaces--usage-dirty t)
     (drgnx-surfaces--usage-arm)))
 
+(defvar drgnx-surfaces--usage-last-error nil
+  "The text of the last write error said, so a lasting error is said once; nil after a good write.")
+
 (defun drgnx-surfaces--usage-flush (&optional force)
   "Write the counts if they changed, at most once a minute unless FORCE (exit).  Never prompts or signals.
 A busy lock (another drgnx writing) keeps the counts dirty and tries again later, quietly; the timer's write does not
@@ -210,10 +213,13 @@ backup before it is replaced."
                                    (unless (equal old (drgnx-surfaces--usage-clean old))
                                      (drgnx-file-backup file))
                                    rows)
-                                 :on-unreadable 'backup :timeout (if force 1.0 0))
-              (setq drgnx-surfaces--usage-dirty nil))
+                                 :on-unreadable 'backup :private t :timeout (if force 1.0 0))
+              (setq drgnx-surfaces--usage-dirty nil drgnx-surfaces--usage-last-error nil))
           (drgnx-file-busy (drgnx-surfaces--usage-arm))
-          (error (message "drgnx: the usage counts were not saved: %s" (error-message-string err))
+          (error (let ((text (error-message-string err)))   ; said once, again only when the text changes
+                   (unless (equal text drgnx-surfaces--usage-last-error)
+                     (setq drgnx-surfaces--usage-last-error text)
+                     (message "drgnx: the usage counts were not saved: %s" text)))
                  (drgnx-surfaces--usage-arm)))))))
 
 (add-hook 'drgnx-surfaces-run-functions #'drgnx-surfaces--count-run)

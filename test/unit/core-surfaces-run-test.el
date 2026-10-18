@@ -14,7 +14,7 @@
           (drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
           (drgnx-commands-problems nil)
           (drgnx-surfaces--usage nil) (drgnx-surfaces--usage-dirty nil)
-          (drgnx-surfaces--usage-saved nil))
+          (drgnx-surfaces--usage-saved nil) (drgnx-surfaces--usage-last-error nil))
      (unwind-protect
          (progn
            (drgnx-command-define 'run-cmd :title "Run" :category "Test" :command #'drgnx-test--run-cmd)
@@ -218,6 +218,7 @@
      (drgnx-surfaces--usage-flush)
      (should (= 1 (length (funcall baks))))
      (should (= 2 (cadr (assq 'run-cmd (drgnx-surfaces--usage-read file)))))
+     (should (= #o600 (logand #o777 (file-modes file))))   ; private
      ;; no temp or lock file is left
      (should-not (directory-files dir nil "\\`\\.[^.]")))))
 
@@ -230,5 +231,19 @@
      (should (= 3 (drgnx-surfaces-usage-count 'a-cmd)))
      (should (= 2 (drgnx-surfaces-usage-week 'a-cmd)))
      (should (= 9 (drgnx-surfaces-usage-count 'run-cmd))))))
+
+(ert-deftest drgnx-surfaces/a-lasting-write-error-is-said-once ()
+  (drgnx-test--with-usage
+   (let ((said nil) (err "first"))
+     (cl-letf (((symbol-function 'message) (lambda (&rest a) (push a said)))
+               ((symbol-function 'drgnx-file-update) (lambda (&rest _) (error "%s" err))))
+       (drgnx-surfaces--count-run 'run-cmd)
+       (dotimes (_ 3) (setq drgnx-surfaces--usage-saved nil) (drgnx-surfaces--usage-flush))
+       (should (= 1 (length said)))                          ; three failures, one message
+       (should drgnx-surfaces--usage-dirty)
+       (should (drgnx-timer-active-p 'surfaces-usage))       ; still re-armed
+       (setq err "second" drgnx-surfaces--usage-saved nil)
+       (drgnx-surfaces--usage-flush)
+       (should (= 2 (length said)))))))                      ; a changed text is said again
 
 ;;; core-surfaces-run-test.el ends here
