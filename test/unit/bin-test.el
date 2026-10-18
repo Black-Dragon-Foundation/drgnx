@@ -254,6 +254,32 @@ case \"$*\" in *is-enabled*) [ -f %s ] ;; *start*) touch %s ;; esac"
           (should (string-search "unknown command 'frobnicate'" (cdr r))))
         (should-not (drgnx-bin-test--client-calls dir))))))
 
+(ert-deftest drgnx-bin/open-wait-returns-when-you-are-done ()
+  ;; drgnx as $EDITOR: `drgnx open --wait FILE' is emacsclient without -n, so it returns when you are done with
+  ;; FILE (C-x #).  A folder cannot be waited on; without a display (ssh, a console) it waits in this terminal.
+  (drgnx-bin-test--with-open
+    (drgnx-bin-test--touch dir "running" "gui")
+    (let ((file (expand-file-name "COMMIT_EDITMSG" dir)) (gui (append env '("DISPLAY=:99"))))
+      (let ((drgnx-bin-test--cwd dir))
+        (should (equal (drgnx-bin-test--call drgnx-bin-test--bin gui "open" "--wait" "COMMIT_EDITMSG") '(0 . ""))))
+      (should (equal (drgnx-bin-test--client-calls dir)
+                     (list (drgnx-bin-test--c "-e" "t")
+                           (drgnx-bin-test--c "-e" "(drgnx-session-gui-frame-p)")
+                           (drgnx-bin-test--c "-n" "-e" "(drgnx-session-raise)")
+                           (drgnx-bin-test--c "-n" "-e" drgnx-bin-test--load-keys)
+                           (drgnx-bin-test--c "--" file))))
+      (delete-file (expand-file-name "client.log" dir))
+      (dolist (args `(("open" "--wait" ,dir) ("open" "--wait") ("open" "--wait" ,file ,dir)))
+        (let ((r (apply #'drgnx-bin-test--call drgnx-bin-test--bin gui args)))
+          (should (eql 2 (car r)))
+          (should (string-search "--wait opens files" (cdr r)))))
+      (should-not (drgnx-bin-test--client-calls dir))
+      (unless (eq system-type 'darwin)          ; a Mac always has its display
+        (should (eql 0 (car (drgnx-bin-test--call drgnx-bin-test--bin (append env '("DISPLAY" "WAYLAND_DISPLAY"))
+                                                  "open" "--wait" file))))
+        (should (equal (drgnx-bin-test--client-calls dir)
+                       (list (drgnx-bin-test--c "-e" "t") (drgnx-bin-test--c "-t" "--" file))))))))
+
 (ert-deftest drgnx-bin/open-check-stops-only-a-daemon-it-started ()
   (drgnx-bin-test--with-open
     (let ((r (drgnx-bin-test--call drgnx-bin-test--bin env "open" "--check")))

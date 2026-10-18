@@ -201,8 +201,10 @@ open_check() { # CI: start the daemon if needed, print its Emacs version, stop i
   fi
 }
 
-cmd_open() { # [--check] [PATH…] — open PATHs (none: the windows as you left them) in drgnx, like code .
+cmd_open() { # [--check] [--wait] [PATH…] — open PATHs (none: the windows as you left them) in drgnx, like code .
   if [[ "${1:-}" == --check ]]; then open_check; return; fi
+  local wait=""
+  if [[ "${1:-}" == --wait ]]; then wait=1; shift; fi
   [[ "${1:-}" == -- ]] && shift
   local p dir files=() dirs=()
   for p in "$@"; do   # absolute, from here; a folder is the Explorer's, a file (new or not) an editor's
@@ -214,12 +216,19 @@ cmd_open() { # [--check] [PATH…] — open PATHs (none: the windows as you left
       files+=("${dir%/}/$(basename -- "$p")")
     fi
   done
+  if [[ -n "$wait" ]] && { ((${#dirs[@]})) || ! ((${#files[@]})); }; then
+    echo "drgnx: open --wait opens files, not folders: it returns when you are done with them (C-x #)" >&2; return 2
+  fi
   client -e t >/dev/null 2>&1 || open_start || return 1
+  if [[ -n "$wait" && "$(uname -s)" != Darwin && -z "${DISPLAY:-}" && -z "${WAYLAND_DISPLAY:-}" ]]; then
+    client -t -- "${files[@]}"; return   # no display (ssh, a console): in this terminal
+  fi
   if [[ "$(client -e '(drgnx-session-gui-frame-p)' 2>/dev/null)" != t ]]; then
     client -n -c >/dev/null || return 1
   fi
   client -n -e '(drgnx-session-raise)' >/dev/null 2>&1 || true
   client -n -e "(progn (require 'drgnx-ai) (drgnx-ai-load-keys-soon))" >/dev/null 2>&1 || true   # once per daemon, from a timer
+  if [[ -n "$wait" ]]; then client -- "${files[@]}" >/dev/null; return; fi   # no -n: until C-x # (drgnx as $EDITOR)
   if ((${#files[@]})); then client -n -- "${files[@]}" >/dev/null || return 1; fi
   for p in ${dirs[@]+"${dirs[@]}"}; do
     client -n -e "(drgnx-session-open-folder \"$(elisp_string "$p")\")" >/dev/null || return 1
@@ -230,6 +239,7 @@ usage() {
   cat <<'USAGE'
 usage: drgnx PATH…             open folders and files in drgnx, like code . (docs/guide/opening.md)
        drgnx open [PATH…]      the same; no PATH: drgnx with your windows (started in the background if needed)
+       drgnx open --wait FILE… open FILEs and return when you are done with them (C-x #): drgnx as $EDITOR
        drgnx open --check      start drgnx's daemon if needed, print its Emacs version, stop it if this started it
        drgnx macos-app         macOS: install drgnx.app into ~/Applications (Finder, Spotlight, Dock, Open With)
        drgnx build             byte-compile drgnx (core, wb, modules); native compilation follows on load

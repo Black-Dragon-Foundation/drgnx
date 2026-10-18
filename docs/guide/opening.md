@@ -9,6 +9,7 @@ drgnx some/dir               # that folder
 drgnx file.py "My Project"   # a file in an editor and a folder; quote names with spaces
 drgnx open                   # drgnx with the windows as you left them
 drgnx open -- -odd-name.txt  # anything after -- is a path, even when it starts with -
+drgnx open --wait notes.md   # returns when you are done with the file: drgnx as $EDITOR
 ```
 
 `drgnx` lives in `~/.local/bin`; "command not found" means that is not on your PATH yet — open a new terminal window
@@ -37,6 +38,20 @@ open as a directory listing. A **file** opens in the editor. drgnx started by ha
 
 Inside drgnx, **File → Open Folder…** (palette; `C-k C-o` in the VS Code profile, `SPC f o` in Vim's) asks for a
 folder and shows it the same way.
+
+## Waiting for you: drgnx as `$EDITOR`
+
+`drgnx open --wait FILE…` opens the files like `drgnx FILE…` and returns only when you are done with them, as
+`code --wait` does — so git, crontab and other tools can use drgnx as their editor:
+
+```sh
+export EDITOR='drgnx open --wait' VISUAL='drgnx open --wait'
+```
+
+You are done with a file when you press `C-x #` in it (Emacs' "done with this server buffer"; it offers to save
+first) or kill its buffer. Closing its tab is not enough: the buffer stays open, so the command keeps waiting. With
+no display (over ssh, on a console; never on a Mac) the file opens in the terminal you ran the command in, and waits
+there. `--wait` takes files only; a folder, or no path, is an error (exit 2) before drgnx is asked.
 
 ## On macOS: the drgnx app
 
@@ -108,7 +123,8 @@ their own, so they never reach your drgnx); a server named anything but `drgnx` 
 `(drgnx-session-gui-frame-p)` whether a window is open, opens one with `emacsclient -c` only when none is, brings it
 to the front with `(drgnx-session-raise)`, has it read the AI keys once per start (`drgnx-ai-load-keys-soon`: from
 a timer, [ai.md](ai.md#keys)), sends files as file arguments and each folder as
-`(drgnx-session-open-folder "…")`. The daemon starts detached (`setsid`, else `perl` on macOS) as
+`(drgnx-session-open-folder "…")`. Every call but `--wait`'s file call has `-n` (no waiting); with no display,
+`--wait` is just `emacsclient -t -- FILE…`. The daemon starts detached (`setsid`, else `perl` on macOS) as
 `emacs --bg-daemon=drgnx --init-directory=<checkout>/init`. The close button's `delete-frame` event and Close Window
 run `drgnx-session-close-frame`; Quit drgnx runs `drgnx-session-quit`. Code: `core/drgnx-session.el`; tests:
 `test/unit/session-test.el`, `test/unit/bin-test.el` (fake `emacs`, `emacsclient` and `systemctl`, and one real
