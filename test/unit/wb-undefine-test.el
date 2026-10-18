@@ -10,7 +10,8 @@
   "BODY with fresh registries (copies of the real ones), one editor window and no cleanup stacks."
   `(let ((drgnx-wb--sections nil) (drgnx-wb--areas (copy-tree drgnx-wb--areas))
          (drgnx-rules--table (copy-sequence drgnx-rules--table)) (drgnx-rules--places (copy-sequence drgnx-rules--places))
-         (drgnx-signal--subscribers nil) (drgnx-signal--editor-window nil)
+         (drgnx-signal--subscribers nil) (drgnx-signal--owners nil) (drgnx-signal--editor-window nil)
+         (drgnx-module--claims (make-hash-table :test 'equal)) (drgnx-rules--missing nil)
          (drgnx-modules--stacks nil) (drgnx-modules--current nil))
      (delete-other-windows)
      (set-frame-parameter nil 'drgnx-wb-areas nil)
@@ -192,7 +193,7 @@
        (drgnx-signal-subscribe 'editor-changed f)
        (drgnx-signal-subscribe 'editor-changed g)
        (drgnx-signal-subscribe 'buffer-set-changed f))
-     (should (= 2 (length (alist-get 'test/b drgnx-modules--stacks))))
+     (should (= 4 (length (alist-get 'test/b drgnx-modules--stacks))))   ; one release per call
      (should (equal (alist-get 'editor-changed drgnx-signal--subscribers) (list g f)))
      (should-not (drgnx-wb-undefine-test--teardown 'test/b))
      (should (equal (alist-get 'editor-changed drgnx-signal--subscribers) (list g)))
@@ -200,6 +201,107 @@
      ;; Outside a setup nothing is recorded.
      (drgnx-signal-subscribe 'editor-changed f)
      (should-not (alist-get 'test/b drgnx-modules--stacks)))))
+
+;;;; Two modules, one target: either teardown order ends where it started
+
+(defconst drgnx-wb-undefine-test--orders '((test/a test/b) (test/b test/a)))
+
+(ert-deftest drgnx-wb-undefine/two-modules-one-section-either-order ()
+  (dolist (order drgnx-wb-undefine-test--orders)
+    (drgnx-wb-undefine-test--with
+     (drgnx-wb-undefine-test--sections)
+     (let ((before (alist-get 'top drgnx-wb--sections)))
+       (dolist (m '(test/a test/b))
+         (drgnx-wb-undefine-test--setup m
+           (drgnx-wb-define-section 'top :slot 5 :title (symbol-name m) :buffer (drgnx-wb-undefine-test--buffer "*drgnx-test-top*"))
+           (drgnx-wb-define-section 'fresh :slot 6 :title (symbol-name m) :buffer (drgnx-wb-undefine-test--buffer "*drgnx-test-top*"))))
+       (should (equal (plist-get (alist-get 'top drgnx-wb--sections) :title) "test/b"))
+       (should-not (drgnx-wb-undefine-test--teardown (car order)))
+       (should (alist-get 'top drgnx-wb--sections))                     ; the other module's stays until it is off
+       (should-not (drgnx-wb-undefine-test--teardown (cadr order)))
+       (should (eq (alist-get 'top drgnx-wb--sections) before))
+       (should-not (assq 'fresh drgnx-wb--sections))))))
+
+(ert-deftest drgnx-wb-undefine/two-modules-one-tab-either-order ()
+  (dolist (order drgnx-wb-undefine-test--orders)
+    (drgnx-wb-undefine-test--with
+     (drgnx-wb-define-area 'right :side 'right :size 30)
+     (drgnx-wb-define-tab 'right 'theirs :title "Theirs")
+     (let ((before (alist-get 'theirs (plist-get (alist-get 'right drgnx-wb--areas) :tabs))))
+       (dolist (m '(test/a test/b))
+         (drgnx-wb-undefine-test--setup m
+           (drgnx-wb-define-tab 'right 'theirs :title (symbol-name m))
+           (drgnx-wb-define-tab 'right 'fresh :title (symbol-name m))))
+       (dolist (m order) (should-not (drgnx-wb-undefine-test--teardown m)))
+       (should (eq (alist-get 'theirs (plist-get (alist-get 'right drgnx-wb--areas) :tabs)) before))
+       (should (equal (drgnx-wb-undefine-test--tab-names 'right) '(theirs)))))))
+
+(ert-deftest drgnx-wb-undefine/restored-tab-replaces-the-placeholder-in-a-shown-window ()
+  (drgnx-wb-undefine-test--with
+   (drgnx-wb-define-area 'right :side 'right :size 30)
+   (drgnx-wb-define-tab 'right 'mine :title "Theirs" :placeholder (drgnx-wb-undefine-test--buffer "*drgnx-test-notes*"))
+   (drgnx-wb-undefine-test--setup 'test/t
+     (drgnx-wb-define-tab 'right 'mine :title "Mine" :placeholder (drgnx-wb-undefine-test--buffer "*drgnx-test-mine*")))
+   (let ((w (drgnx-wb-area-show 'right 'mine)))
+     (should (eq (window-buffer w) (get-buffer "*drgnx-test-mine*")))
+     (drgnx-wb-undefine-test--teardown 'test/t)
+     (should (eq (drgnx-wb-area-window 'right) w))
+     (should (eq (window-buffer w) (get-buffer "*drgnx-test-notes*"))))))
+
+(ert-deftest drgnx-wb-undefine/two-modules-one-rule-either-order ()
+  (dolist (order drgnx-wb-undefine-test--orders)
+    (drgnx-wb-undefine-test--with
+     (let ((n (length drgnx-rules--table)))
+       (drgnx-wb-place "\\`\\*r\\*\\'" 'panel :tab 'help)
+       (dolist (m '(test/a test/b))
+         (drgnx-wb-undefine-test--setup m
+           (drgnx-wb-place "\\`\\*r\\*\\'" 'right :tab m)
+           (drgnx-wb-place '(foo-mode) 'right :tab m)))
+       (dolist (m order) (should-not (drgnx-wb-undefine-test--teardown m)))
+       (should (equal (drgnx-wb-rule-for "*r*") '(panel :tab help)))
+       (should (= (1+ n) (length drgnx-rules--table)))
+       (should-not (drgnx-wb-unplace '(foo-mode)))))))
+
+(ert-deftest drgnx-wb-undefine/two-modules-one-place-either-order ()
+  (dolist (order drgnx-wb-undefine-test--orders)
+    (drgnx-wb-undefine-test--with
+     (let ((theirs (lambda (&rest _) nil)))
+       (drgnx-wb-define-place 'theirs theirs)
+       (dolist (m '(test/a test/b))
+         (let ((fn (lambda (&rest _) m)))
+           (drgnx-wb-undefine-test--setup m
+             (drgnx-wb-define-place 'theirs fn)
+             (drgnx-wb-define-place 'fresh fn))))
+       (dolist (m order) (should-not (drgnx-wb-undefine-test--teardown m)))
+       (should (eq (alist-get 'theirs drgnx-rules--places) theirs))
+       (should-not (assq 'fresh drgnx-rules--places))))))
+
+(ert-deftest drgnx-wb-undefine/subscription-is-held-until-the-last-module-lets-go ()
+  (dolist (order drgnx-wb-undefine-test--orders)
+    (drgnx-wb-undefine-test--with
+     (let ((f (lambda (_) nil)))
+       (dolist (m '(test/a test/b))
+         (drgnx-wb-undefine-test--setup m (drgnx-signal-subscribe 'editor-changed f)))
+       (should (equal (alist-get 'editor-changed drgnx-signal--subscribers) (list f)))
+       (drgnx-wb-undefine-test--teardown (car order))
+       (should (equal (alist-get 'editor-changed drgnx-signal--subscribers) (list f)))   ; the other still needs it
+       (drgnx-wb-undefine-test--teardown (cadr order))
+       (should-not (alist-get 'editor-changed drgnx-signal--subscribers))
+       (should-not drgnx-signal--owners)))))
+
+(ert-deftest drgnx-wb-undefine/a-rule-naming-an-undefined-place-falls-back-to-the-editor ()
+  (drgnx-wb-undefine-test--with
+   (let ((messages nil) (buf (get-buffer-create "*drgnx-test-notes*")))
+     (drgnx-wb-undefine-test--setup 'test/p
+       (drgnx-wb-define-place 'gone (lambda (&rest _) (error "should not run")))
+       (drgnx-wb-place "\\`\\*drgnx-test-notes\\*\\'" 'gone))
+     (drgnx-wb-undefine-place 'gone)
+     (cl-letf (((symbol-function 'message) (lambda (&rest a) (push a messages))))
+       (let ((w (drgnx-rules--display buf nil)))
+         (should (window-live-p w))
+         (should (drgnx-signal-editor-window-p w)))
+       (drgnx-rules--display buf nil))
+     (should (= 1 (length messages))))))
 
 (ert-deftest drgnx-wb-undefine/focus-function-is-recorded ()
   (drgnx-wb-undefine-test--with

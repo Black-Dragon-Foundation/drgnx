@@ -14,7 +14,7 @@
 (require 'cl-lib)
 (require 'seq)
 (require 'drgnx-signal)
-(require 'drgnx-modules-record)
+(require 'drgnx-modules-helpers)
 
 (defcustom drgnx-wb-dock-columns 32
   "Width of the left dock, in columns, the first time it shows (later: the width it had)."
@@ -48,17 +48,22 @@ follower is not a jank-guard violation (invariant I9).")
 :on-focus FUNCTION-OF-THE-WINDOW, run when `drgnx-wb-focus-section' focuses it,
 :view SYMBOL, the sidebar view the section belongs to, default `explorer').
 A function title is asked each time the dock shows (a panel's filter stays in its title).
-Called from a module's setup, the definition records its undo: `drgnx-wb-undefine-section', or the
-section it replaced put back — either only while the section is still the one defined here."
-  (let ((previous (assq name drgnx-wb--sections)))
-    (setq previous (and previous (cdr previous)))
+Called from a module's setup, the definition claims the section and records its undo: the section
+it replaced put back, or `drgnx-wb-undefine-section' — only while the section is still the one defined
+here.  Two modules defining the same section may be torn down in either order (`drgnx-module--claim')."
+  (let ((rec (drgnx-modules--recording-p)) (old (let ((cell (assq name drgnx-wb--sections))) (and cell (list (cdr cell))))))   ; (SPEC) or nil
     (setf (alist-get name drgnx-wb--sections) spec)
-    (drgnx-modules-push-undo
-     (format "section %s" name)
-     (lambda ()
-       (when (eq (alist-get name drgnx-wb--sections) spec)
-         (drgnx-wb-undefine-section name)
-         (when previous (setf (alist-get name drgnx-wb--sections) previous)))))
+    (when rec
+      (let* ((target (list 'section name)) (box (drgnx-module--claim target old)))
+        (drgnx-modules-push-undo
+         (format "section %s" name)
+         (lambda ()
+           (drgnx-module--release
+            target box
+            (lambda () (eq (alist-get name drgnx-wb--sections) spec))
+            (lambda (prev)
+              (drgnx-wb-undefine-section name)
+              (when prev (setf (alist-get name drgnx-wb--sections) (car prev)))))))))
     name))
 
 (defun drgnx-wb-undefine-section (name)

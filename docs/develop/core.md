@@ -147,15 +147,18 @@ stack — the code that knows what it changed knows how to change it back):
 
 The workbench's registries push their own undo, so a module that defines a section, a tab, a rule, a place or a
 bus subscription in its setup leaves none behind. Each undo changes the entry only while it is still the one this
-module defined; a definition that replaced an entry puts the previous one back instead of removing it.
+module defined; a definition that replaced an entry puts the previous one back instead of removing it. Each
+definition claims its target with the helpers' claims (`drgnx-module--claim`, `drgnx-module--release`: a section by
+name, a tab by area and name, a rule by matcher, a place by name), so two modules that define the same one end where
+they started whichever is torn down first.
 
 | Define | Undo (also callable on its own) | Open panes |
 |---|---|---|
 | `drgnx-wb-define-section` | `(drgnx-wb-undefine-section NAME)` | the section's dock window closes (focus leaves it first); the dock keeps its other sections. A restored previous section shows again the next time the dock is shown. |
-| `drgnx-wb-define-tab` | `(drgnx-wb-undefine-tab AREA TAB)` | where the area shows the tab it shows the next tab in the same window (the one before for the last tab), or hides when it was the only one; the tab row is redrawn and the frame's saved buffer for the tab dropped. |
+| `drgnx-wb-define-tab` | `(drgnx-wb-undefine-tab AREA TAB)` | where the area shows the tab it shows the next tab in the same window (the one before for the last tab), or hides when it was the only one; the tab row is redrawn and the frame's saved buffer for the tab dropped. A restored tab replaces the module's placeholder in a window that shows it. |
 | `drgnx-wb-place` | `(drgnx-wb-unplace MATCHER)` (`equal`) | none: rules decide only where a buffer goes next. |
-| `drgnx-wb-define-place` | `(drgnx-wb-undefine-place PLACE)` | none. Remove the rules that name a place first: a rule naming an undefined place raises "no place". |
-| `drgnx-signal-subscribe` | `drgnx-signal-unsubscribe` | none. Recorded only when the function was not subscribed yet, so a second subscription of the same function is not the module's to remove. |
+| `drgnx-wb-define-place` | `(drgnx-wb-undefine-place PLACE)` | none. A rule that still names an undefined place sends its buffers to the editor, with a one-time message. |
+| `drgnx-signal-subscribe` | `drgnx-signal-unsubscribe` | none. A count per (event, function): each module's subscription holds it and the last release unsubscribes. A function already subscribed by code that records nothing (a mode, the user) is never unsubscribed by a module. A subscription re-made outside a setup (a mode switched off and on by the user) while a module holds one is unsubscribed with the module's last release. |
 
 The `add-function` on `after-focus-change-function` (Explorer and Buffers panel) pushes its `remove-function`
 beside it, by the advice's name. Areas (`drgnx-wb-define-area`) are not undone: they belong to the workbench.
