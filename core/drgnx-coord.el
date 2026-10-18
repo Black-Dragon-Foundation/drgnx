@@ -44,8 +44,11 @@
     v))
 
 (defun drgnx-coord--held (db seen)
-  "nil when SEEN is the current version; else (:held t :version V :changes DECISIONS)."
+  "nil when SEEN is the current version; else (:held t :version V :changes DECISIONS).  A SEEN the log has not reached
+is an error: nothing was read at a version that does not exist."
   (let ((v (string-to-number (or (drgnx-coord--meta db "log-version") "0"))))
+    (when (and seen (> seen v))
+      (error "seen_version %d is from the future: the decision log is at %d (call read_decisions)" seen v))
     (when (and seen (> v seen))
       (list :held t :version v :changes (drgnx-coord--decisions-since db seen)))))
 

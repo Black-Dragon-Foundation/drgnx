@@ -106,6 +106,18 @@
       (should (plist-get (drgnx-coord-claim (drgnx-coord-test--id 1) "a" (drgnx-coord-version)) :ok))
       (should (equal (drgnx-coord-test--status 1) "claimed")))))
 
+(ert-deftest drgnx-coord/seen-version-ahead-rejected ()
+  ;; a seen_version the log has not reached is no claim to have read it: nothing is written
+  (drgnx-coord-test--with
+    (let ((ahead (+ (drgnx-coord-version) 5)))
+      (should-error (drgnx-coord-claim (drgnx-coord-test--id 1) "a" ahead))
+      (should-error (drgnx-coord-send :job "j" :sender "a" :recipient "b" :text "x" :seen ahead))
+      (should-error (drgnx-coord-decide :kind "build" :subject "z" :reason "r" :author "a" :seen ahead))
+      (should-error (drgnx-coord-set-status (drgnx-coord-test--id 1) "a" "running" ahead))
+      (should (equal (drgnx-coord-test--status 1) "ready"))
+      (should-not (drgnx-coord-inbox "b"))
+      (should (= (drgnx-coord-version) 0)))))
+
 (ert-deftest drgnx-coord/done-readies-the-dependents ()
   (drgnx-coord-test--with
     (let ((t1 (drgnx-coord-test--id 1)) (t2 (drgnx-coord-test--id 2)))

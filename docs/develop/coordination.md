@@ -33,7 +33,8 @@ working from the old one. So the shared state is explicit, versioned, and **enfo
   own decision; one agent records at most `drgnx-coord-decision-rate` (6) a minute.
 - **Freshness is enforced:** every write — claim, status, decision, message — takes the version its author last read
   (`seen`). Behind: nothing is written, and the answer is `(:held t :version V :changes DECISIONS)` with every change
-  since.
+  since. A `seen` ahead of the log is an error ("seen_version … is from the future"), never a pass: nothing was read at
+  a version that does not exist yet.
 - **Messages:** states only move forward. A reply (the recipient writing back to the sender) marks what it answers
   `acted`. Limits against chatty loops: an agent's undelivered queue holds `drgnx-coord-queue-limit` (20); one
   agent sends another at most `drgnx-coord-pair-rate` (6) a minute. Beyond either a message is `held` with its
