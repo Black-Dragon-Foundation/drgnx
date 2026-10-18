@@ -216,7 +216,7 @@ own configuration directory (agents.eld, ai.eld) in a temp dir too."
     (let ((json (drgnx-agent-config-claude-json-file))
           (item (drgnx-agent-config-claude-test--mcp
                  "github" '(:type stdio :command "npx" :args ("-y" "@x/github")))))
-      (drgnx-agent-config-claude-test--put json "{\n  \"numStartups\": 1,\n  \"mcpServers\": {\"github\": {\"command\": \"old\"}}\n}\n")
+      (drgnx-agent-config-claude-test--put json "{\n  \"numStartups\": 1,\n  \"mcpServers\": {}\n}\n")
       (should (plist-get (drgnx-agent-config-claude-test--write 'add item 'user root) :ok))
       (should (equal (drgnx-agent-config-test-argv)
                      '("claude mcp add-json github {\"type\":\"stdio\",\"command\":\"npx\",\"args\":[\"-y\",\"@x/github\"]} --scope user")))
@@ -226,6 +226,7 @@ own configuration directory (agents.eld, ai.eld) in a temp dir too."
       (should (plist-get (drgnx-agent-config-claude-test--write 'remove item 'user root) :ok))
       (should (equal (car (last (drgnx-agent-config-test-argv))) "claude mcp remove github --scope user"))
       ;; edit = remove, then add
+      (drgnx-agent-config-claude-test--put json "{\n  \"numStartups\": 1,\n  \"mcpServers\": {\"github\": {\"command\": \"old\"}}\n}\n")
       (let ((before (length (drgnx-agent-config-test-argv)))
             (edited (drgnx-agent-config-claude-test--mcp "github" '(:type stdio :command "npx" :args ("-y" "@x/github2")))))
         (should (plist-get (drgnx-agent-config-claude-test--write 'edit edited 'user root) :ok))
@@ -628,5 +629,191 @@ own configuration directory (agents.eld, ai.eld) in a temp dir too."
       (should-not (cl-some (lambda (f) (string-match-p "credentials" f)) opened))
       (should (cl-some (lambda (f) (string-suffix-p "settings.json" f)) opened)))))
 
+
+;;;; Fix round 1: no lost configuration
+
+(defun drgnx-agent-config-claude-test--fake-claude (script)
+  "Put a fake `claude' with the shell SCRIPT first on the path (use inside the env macro); return its directory."
+  (let ((bin (expand-file-name "bin2" drgnx-agent-config-test--dir)))
+    (drgnx-agent-config-claude-test--put (expand-file-name "claude" bin) (concat "#!/bin/sh\n" script))
+    (set-file-modes (expand-file-name "claude" bin) #o755)
+    (setq exec-path (cons bin exec-path))
+    bin))
+
+(ert-deftest drgnx-agent-config-claude/failed-cli-edit-puts-the-entry-back ()
+  (drgnx-agent-config-claude-test-env
+    (let* ((exec-path exec-path)
+           (json (drgnx-agent-config-claude-json-file))
+           (before (concat "{\n  \"numStartups\": 1,\n  \"mcpServers\": {\"github\": {\"type\": \"stdio\","
+                           " \"command\": \"npx\", \"args\": [\"-y\", \"old\"]}}\n}\n"))
+           (after (drgnx-agent-config-claude-test--put (expand-file-name "after.json" drgnx-agent-config-test--dir)
+                                                       "{\n  \"numStartups\": 1,\n  \"mcpServers\": {}\n}\n"))
+           (edited (drgnx-agent-config-claude-test--mcp "github" '(:type stdio :command "npx" :args ("-y" "new")))))
+      (drgnx-agent-config-claude-test--put json before)
+      ;; remove works (and really removes), add-json fails
+      (drgnx-agent-config-claude-test--fake-claude
+       (format "case \"$2\" in remove) cp '%s' '%s'; exit 0;; *) exit 1;; esac\n" after json))
+      (let ((result (drgnx-agent-config-claude-test--write 'edit edited 'user root)))
+        (should (string-match-p "the change failed; the previous entry was put back" (plist-get result :error))))
+      (let ((value (drgnx-agent-config-claude-test--value json)))
+        (should (equal (drgnx-agent-config-claude-test--get value "mcpServers" "github" "args") ["-y" "old"]))
+        (should (= (drgnx-agent-config-claude-test--get value "numStartups") 1))))))
+
+(ert-deftest drgnx-agent-config-claude/backup-is-kept-while-a-restore-is-unconfirmed ()
+  (drgnx-agent-config-claude-test-env
+    (let* ((exec-path exec-path)
+           (drgnx-agent-config-claude--unrestored nil)
+           (json (drgnx-agent-config-claude-json-file))
+           (before "{\n  \"mcpServers\": {\"github\": {\"command\": \"npx\"}}\n}\n")
+           (bad (drgnx-agent-config-claude-test--put (expand-file-name "bad.json" drgnx-agent-config-test--dir)
+                                                     "{\"mcpServers\": {},}\n")))
+      (drgnx-agent-config-claude-test--put json before)
+      ;; remove leaves a file nothing can be merged into; add-json fails
+      (drgnx-agent-config-claude-test--fake-claude
+       (format "case \"$2\" in remove) cp '%s' '%s'; exit 0;; *) exit 1;; esac\n" bad json))
+      (let ((result (drgnx-agent-config-claude-test--write
+                     'edit (drgnx-agent-config-claude-test--mcp "github" '(:command "other")) 'user root)))
+        (should (string-match-p "\\.drgnx-bak" (plist-get result :error)))
+        (should-not (string-match-p "put back" (plist-get result :error))))
+      (should (equal (drgnx-agent-config-claude-test--text (concat json ".drgnx-bak")) before))
+      ;; the next command line write does not overwrite that backup
+      (drgnx-agent-config-claude-test--write 'add (drgnx-agent-config-claude-test--mcp "more" '(:command "m")) 'user root)
+      (should (equal (drgnx-agent-config-claude-test--text (concat json ".drgnx-bak")) before)))))
+
+(ert-deftest drgnx-agent-config-claude/no-backup-when-the-cli-cannot-run ()
+  (drgnx-agent-config-claude-test-env
+    (let ((exec-path '("/nonexistent")) (json (drgnx-agent-config-claude-json-file)))
+      (drgnx-agent-config-claude-test--put json "{\"numStartups\": 1}\n")
+      (drgnx-agent-config-claude-test--write 'add (drgnx-agent-config-claude-test--mcp "x" '(:command "c")) 'user root)
+      (should-not (file-exists-p (concat json ".drgnx-bak"))))))
+
+(ert-deftest drgnx-agent-config-claude/edits-keep-members-drgnx-does-not-model ()
+  (drgnx-agent-config-claude-test-env
+    (let ((json (drgnx-agent-config-claude-json-file))
+          (mcp (expand-file-name ".mcp.json" root))
+          (entry (concat "{\"type\": \"http\", \"url\": \"https://old.example.com/mcp\","
+                         " \"oauth\": {\"clientId\": \"cid\"}, \"headersHelper\": \"./helper.sh\"}")))
+      (drgnx-agent-config-claude-test--put json (format "{\"numStartups\": 1, \"mcpServers\": {\"web\": %s}}\n" entry))
+      (drgnx-agent-config-claude-test--put mcp (format "{\"mcpServers\": {\"web\": %s}}\n" entry))
+      (dolist (scope '(user project))
+        (let ((result (drgnx-agent-config-claude-test--write
+                       'edit (drgnx-agent-config-claude-test--mcp
+                              "web" '(:type http :url "https://new.example.com/mcp" :headers (("X-Id" . "7"))))
+                       scope root))
+              (server (drgnx-agent-config-claude-test--get
+                       (drgnx-agent-config-claude-test--value (if (eq scope 'user) json mcp)) "mcpServers" "web")))
+          (should (plist-get result :ok))
+          (should (equal (drgnx-agent-config-claude-test--get server "url") "https://new.example.com/mcp"))
+          (should (equal (drgnx-agent-config-claude-test--get server "oauth" "clientId") "cid"))
+          (should (equal (drgnx-agent-config-claude-test--get server "headersHelper") "./helper.sh"))
+          (should (equal (drgnx-agent-config-claude-test--get server "headers" "X-Id") "7"))
+          (should (equal (mapcar #'car server) '(type url oauth headersHelper headers)))))
+      ;; no command line was involved: the extras could not have gone with it safely
+      (should-not (drgnx-agent-config-test-argv))
+      ;; a member the edit no longer has is removed (http -> stdio)
+      (drgnx-agent-config-claude-test--write 'edit (drgnx-agent-config-claude-test--mcp "web" '(:type stdio :command "c")) 'project root)
+      (let ((server (drgnx-agent-config-claude-test--get (drgnx-agent-config-claude-test--value mcp) "mcpServers" "web")))
+        (should-not (assoc "url" (mapcar (lambda (c) (cons (symbol-name (car c)) (cdr c))) server)))
+        (should (equal (drgnx-agent-config-claude-test--get server "command") "c"))
+        (should (equal (drgnx-agent-config-claude-test--get server "oauth" "clientId") "cid"))))))
+
+(ert-deftest drgnx-agent-config-claude/hook-edits-keep-members-drgnx-does-not-model ()
+  (drgnx-agent-config-claude-test-env
+    (let ((settings (expand-file-name "settings.json" (drgnx-agent-config-home 'claude))))
+      (drgnx-agent-config-claude-test--put
+       settings (concat "{\"hooks\": {\"PreToolUse\": [{\"matcher\": \"Bash\", \"hooks\": [{\"type\": \"command\","
+                        " \"command\": \"echo a\", \"timeout\": 3, \"statusMessage\": \"Checking\", \"async\": true}]}]}}\n"))
+      (let ((original (car (cl-remove-if-not (lambda (i) (eq (plist-get i :section) 'hook))
+                                             (plist-get (drgnx-agent-config-read 'claude root) :items)))))
+        ;; in place: the command changes, the timeout goes, the rest stays
+        (should (plist-get (drgnx-agent-config-claude-test--write
+                            'edit (drgnx-agent-config-claude-test--hook "PreToolUse" "Bash" "echo b" nil original) 'user root)
+                           :ok))
+        (let ((hook (aref (drgnx-agent-config-claude-test--get
+                           (aref (drgnx-agent-config-claude-test--get (drgnx-agent-config-claude-test--value settings)
+                                                                      "hooks" "PreToolUse") 0)
+                           "hooks")
+                          0)))
+          (should (equal (drgnx-agent-config-claude-test--get hook "command") "echo b"))
+          (should (equal (drgnx-agent-config-claude-test--get hook "statusMessage") "Checking"))
+          (should (eq (drgnx-agent-config-claude-test--get hook "async") t))
+          (should-not (assoc "timeout" (mapcar (lambda (c) (cons (symbol-name (car c)) (cdr c))) hook))))
+        ;; moved to another event: the hook's own members go with it
+        (let ((moved (car (cl-remove-if-not (lambda (i) (eq (plist-get i :section) 'hook))
+                                            (plist-get (drgnx-agent-config-read 'claude root) :items)))))
+          (should (plist-get (drgnx-agent-config-claude-test--write
+                              'edit (drgnx-agent-config-claude-test--hook "Stop" nil "echo b" nil moved) 'user root)
+                             :ok)))
+        (let ((hook (aref (drgnx-agent-config-claude-test--get
+                           (aref (drgnx-agent-config-claude-test--get (drgnx-agent-config-claude-test--value settings)
+                                                                      "hooks" "Stop") 0)
+                           "hooks")
+                          0)))
+          (should (equal (drgnx-agent-config-claude-test--get hook "statusMessage") "Checking"))
+          (should (eq (drgnx-agent-config-claude-test--get hook "async") t)))))))
+
+(ert-deftest drgnx-agent-config-claude/skill-on-removes-only-the-offs-that-matter ()
+  (drgnx-agent-config-claude-test-env
+    (let* ((claude-home (drgnx-agent-config-home 'claude))
+           (user (expand-file-name "settings.json" claude-home))
+           (project (expand-file-name ".claude/settings.json" root))
+           (local (expand-file-name ".claude/settings.local.json" root))
+           (skill (lambda () (drgnx-agent-config-claude-test--item
+                              (plist-get (drgnx-agent-config-read 'claude root) :items) 'skill "alpha")))
+           (overrides (lambda (file) (drgnx-agent-config-claude-test--get (drgnx-agent-config-claude-test--value file)
+                                                                          "skillOverrides" "alpha"))))
+      (drgnx-agent-config-claude-test--put (expand-file-name "skills/alpha/SKILL.md" claude-home)
+                                           "---\nname: alpha\ndescription: A\n---\n")
+      ;; local off, project name-only, user off: only local's off makes it off
+      (drgnx-agent-config-claude-test--put user "{\"skillOverrides\": {\"alpha\": \"off\", \"zeta\": \"off\"}}\n")
+      (drgnx-agent-config-claude-test--put project "{\"skillOverrides\": {\"alpha\": \"name-only\"}}\n")
+      (drgnx-agent-config-claude-test--put local "{\"skillOverrides\": {\"alpha\": \"off\"}}\n")
+      (should-not (plist-get (funcall skill) :enabled))
+      (let ((result (drgnx-agent-config-claude-test--write 'toggle (funcall skill) nil root)))
+        (should (plist-get result :ok))
+        (should (string-match-p (regexp-quote local) (plist-get result :note)))
+        (should-not (string-match-p (regexp-quote user) (plist-get result :note))))
+      (should (equal (funcall overrides project) "name-only"))
+      (should (equal (funcall overrides user) "off"))
+      (should (plist-get (funcall skill) :enabled))
+      ;; local off, user off: both go (the user's would make it off again), zeta stays
+      (drgnx-agent-config-claude-test--put project "{}\n")
+      (drgnx-agent-config-claude-test--put local "{\"skillOverrides\": {\"alpha\": \"off\"}}\n")
+      (let ((result (drgnx-agent-config-claude-test--write 'toggle (funcall skill) nil root)))
+        (should (string-match-p (regexp-quote local) (plist-get result :note)))
+        (should (string-match-p (regexp-quote user) (plist-get result :note))))
+      (should-not (funcall overrides user))
+      (should (equal (drgnx-agent-config-claude-test--get (drgnx-agent-config-claude-test--value user) "skillOverrides" "zeta") "off"))
+      ;; off while a higher file says name-only: written, with a warning
+      (drgnx-agent-config-claude-test--put local "{\"skillOverrides\": {\"alpha\": \"name-only\"}}\n")
+      (let ((result (drgnx-agent-config-claude-test--write 'toggle (funcall skill) 'user root)))
+        (should (plist-get result :ok))
+        (should (string-match-p "name-only" (plist-get result :note)))
+        (should (string-match-p (regexp-quote local) (plist-get result :note))))
+      (should (equal (funcall overrides local) "name-only"))
+      ;; a file that does not parse stops the switch before anything is written
+      (drgnx-agent-config-claude-test--put user "{\"skillOverrides\": {\"alpha\": \"off\"}}\n")
+      (drgnx-agent-config-claude-test--put local "{\"skillOverrides\": {\"alpha\": \"off\",}}\n")
+      (let* ((item (plist-put (copy-sequence (funcall skill)) :enabled nil))
+             (before (drgnx-agent-config-claude-test--text user))
+             (result (drgnx-agent-config-claude-test--write 'toggle item nil root)))
+        (should (plist-get result :error))
+        (should (equal (drgnx-agent-config-claude-test--text user) before))))))
+
+(ert-deftest drgnx-agent-config-claude/names-the-cli-cannot-take-say-why ()
+  (drgnx-agent-config-claude-test-env
+    (let ((result (drgnx-agent-config-claude-test--write
+                   'add (drgnx-agent-config-claude-test--mcp "my server" '(:command "x")) 'user root)))
+      (should (string-match-p "digits, .\\.., " (plist-get result :error)))
+      (should (string-match-p "Claude Code" (plist-get result :error))))))
+
+(ert-deftest drgnx-agent-config-claude/model-helpers-are-public ()
+  (should (fboundp 'drgnx-agent-config-save-backup))
+  (drgnx-agent-config-claude-test-env
+    (let ((file (drgnx-agent-config-claude-test--put (expand-file-name "x.json" home) "{\n    \"a\": 1\n}\n")))
+      (should (equal (drgnx-agent-config-json-read-text file (drgnx-agent-config-claude-test--text file))
+                     (drgnx-agent-config-json-read file)))
+      (drgnx-agent-config-save-backup file)
+      (should (file-exists-p (concat file ".drgnx-bak"))))))
 (provide 'agent-config-claude-test)
 ;;; agent-config-claude-test.el ends here

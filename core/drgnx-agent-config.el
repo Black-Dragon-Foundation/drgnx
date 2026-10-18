@@ -95,7 +95,7 @@ CALLBACK gets (:ok t :note STRING) or (:error STRING): at once for a file, later
   "A new private temp file next to FILE."
   (make-temp-file (concat (file-name-directory file) ".drgnx-tmp-")))
 
-(defun drgnx-agent-config--save-backup (file)
+(defun drgnx-agent-config-save-backup (file)
   "Copy FILE to FILE.drgnx-bak (replacing the last backup), atomically, with FILE's modes."
   (let ((tmp (drgnx-agent-config--temp-file file)))
     (unwind-protect
@@ -108,6 +108,8 @@ CALLBACK gets (:ok t :note STRING) or (:error STRING): at once for a file, later
           (set-file-modes tmp (file-modes file))
           (rename-file tmp (concat file ".drgnx-bak") t))
       (when (file-exists-p tmp) (delete-file tmp)))))
+
+(defalias 'drgnx-agent-config--save-backup #'drgnx-agent-config-save-backup)
 
 (defun drgnx-agent-config--make-private-dirs (dir)
   "Make DIR and the parents that are missing, each new one with modes 0700."
@@ -139,7 +141,7 @@ FILE.  A symbolic link is written through.  Parent directories that are missing 
     (unless (and exists (equal text current))
       (when verify (funcall verify text))
       (drgnx-agent-config--make-private-dirs (file-name-directory file))
-      (when exists (drgnx-agent-config--save-backup file))
+      (when exists (drgnx-agent-config-save-backup file))
       (let ((tmp (drgnx-agent-config--temp-file file)))
         (unwind-protect
             (progn
@@ -192,13 +194,17 @@ blank file is (:value nil :indent 2).  A file that does not parse signals `drgnx
 data (FILE LINE MESSAGE).  N is the file's indent in spaces (2 when unknown, or for tabs)."
   (if (not (file-exists-p file))
       (list :value nil :indent 2)
-    (let* ((text (drgnx-agent-config-read-text file))
-           (value (drgnx-agent-config--json-parse file text))
-           (indent (if (string-match "^\\([ \t]+\\)[^ \t\r\n]" text)
-                       (let ((lead (match-string 1 text)))
-                         (if (eq (aref lead 0) ?\t) 2 (length lead)))
-                     2)))
-      (list :value value :indent indent))))
+    (drgnx-agent-config-json-read-text file (drgnx-agent-config-read-text file))))
+
+(defun drgnx-agent-config-json-read-text (file text)
+  "TEXT, the content of the JSON file FILE, as (:value VALUE :indent N): `drgnx-agent-config-json-read' for a text
+already read (so a caller can keep the very text its value comes from).  FILE is for the error data only."
+  (let ((value (drgnx-agent-config--json-parse file text))
+        (indent (if (string-match "^\\([ \t]+\\)[^ \t\r\n]" text)
+                    (let ((lead (match-string 1 text)))
+                      (if (eq (aref lead 0) ?\t) 2 (length lead)))
+                  2)))
+    (list :value value :indent indent)))
 
 (defun drgnx-agent-config--json-type (value)
   "A description of VALUE's type that shows none of its content."

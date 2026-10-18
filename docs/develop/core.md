@@ -158,6 +158,7 @@ An item is a plist `(:kind :section mcp|hook|skill :name :from user|project|loca
 | `-write-text FILE TEXT CHECK [VERIFY [EXPECT]]` | EXPECT (the text, or the modification time, seen when the caller read FILE): a FILE that differs now signals `drgnx-agent-config-changed` and nothing is touched (Claude Code rewrites `~/.claude.json` often). CHECK (called with FILE's current text) must not signal, else nothing is touched; VERIFY the same with TEXT. TEXT equal to what FILE holds is not written and the backup stays. Then FILE is copied to `FILE.drgnx-bak` (exactly one backup, with FILE's modes), TEXT goes to a temp file next to FILE with FILE's modes (0600 for a new file) and is renamed over it. A symlink is written through; directories it has to make get 0700. The TOML writes use it too. |
 | `-secrets SPEC`, `-mask-text TEXT SECRETS` | Every env and header value, and the value of any key matching token, secret, key, password or authorization (case-insensitive; every string inside a list or object under such a key), longer than 3 characters. Also, in `:args`, `:url`, a hook's `:command` and every other string, only the secret part of: `NAME=VALUE` / `--flag=VALUE` with a secret-ish name, `Bearer`/`Basic`/`Token` values, `Authorization:` values, URL userinfo and secret-ish query parameters, well-known token shapes (`sk-`, `ghp_`, `github_pat_`, `xox?-`, `AKIA`, `AIza`, JWTs), the argument after a secret-ish flag, `-p`, `-H`/`--header` and `-e`/`--env`, and 24+ character `:url` path segments. `-mask-text` replaces each by `••••` and keeps the context. |
 | `-cheap-status ITEM` | `(ok . DETAIL)`, `missing-command`, `no-url` or `unreadable`, from files and `exec-path` only: nothing is run. The detail is masked like any text shown (a URL keeps its host and path, not its secrets). |
+| `-save-backup FILE`, `-json-read-text FILE TEXT` | The one-backup copy used by `-write-text` (public: a CLI write takes its own backup first); `-json-read` for a text already read. |
 | `-skills-in DIR FROM KIND`, `-new-skill DIR NAME DESCRIPTION` | Items for `DIR/*/SKILL.md` (name and description from the front matter); creates a skill, refusing an existing name. |
 
 JSON that is tab-indented is re-written with 2 spaces; arrays are always written one entry per line.
@@ -189,7 +190,17 @@ How a write goes (`-write 'claude OP ITEM SCOPE ROOT CALLBACK`; for an edit ITEM
 - **`.mcp.json`, hooks and `skillOverrides`** are edited directly (key order and indent kept). Switching a skill off
   writes `"off"` into the user's settings (a project skill: the project-local settings, private); switching it on removes
   an `"off"` from every settings file that has one.
-- A server name is letters, digits, `.`, `-` and `_` and cannot start with `-` (it is a command-line argument).
+- An edit keeps the members of an entry drgnx does not edit (an MCP server's `oauth` or `headersHelper`, a hook's
+  `statusMessage` or `async`): they are merged into the existing object. An MCP entry that has such members is edited
+  directly, not through the CLI, so nothing is dropped. If an edit's `remove` worked and its `add-json` failed, the old
+  entry is put back by a direct write ("the change failed; the previous entry was put back"); only if that fails too does
+  the message point to the backup, which the next command line write then leaves alone until the name is written again.
+  The backup is taken only when `claude` will run.
+- Switching a skill on removes the `"off"` from the settings files that make it off (local, then project, then user, up
+  to the first other value) and names them; every file is parsed before one is written. Switching it off warns when a
+  higher-priority file sets another value.
+- A server name is letters, digits, `.`, `-` and `_` and cannot start with `-` or `.` (it is a command-line argument);
+  other names (spaces) are a drgnx limit: edit them in Claude Code.
 - Errors name the file and line, never the entry's data (values are masked with `-secrets` besides).
 
 `(drgnx-agent-config-claude-routes ROOT)` lists one route per Claude Code profile (command `claude-agent-acp`) with its

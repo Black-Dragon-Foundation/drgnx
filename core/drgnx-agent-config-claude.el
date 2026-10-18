@@ -202,7 +202,28 @@
 (defun drgnx-agent-config-claude--check-name (name)
   "Signal unless NAME can be an MCP server name (and cannot be read as a flag)."
   (unless (and (stringp name) (string-match-p "\\`[A-Za-z0-9_][A-Za-z0-9_.-]*\\'" name))
-    (error "A server name is letters, digits, - and _ (it cannot start with -)")))
+    (error "drgnx handles server names of letters, digits, '.', '-' and '_' (not starting with '-' or '.'); a name with other characters, such as spaces, is a drgnx limit: edit that server in Claude Code")))
+
+(defconst drgnx-agent-config-claude--mcp-members '("type" "command" "args" "env" "url" "headers")
+  "The members of an MCP server entry drgnx edits; any other (oauth, headersHelper, …) is kept as it is.")
+
+(defconst drgnx-agent-config-claude--hook-members '("type" "command" "timeout")
+  "The members of a hook drgnx edits; any other (statusMessage, async, shell, …) is kept as it is.")
+
+(defun drgnx-agent-config-claude--merge-members (existing new keys)
+  "The object EXISTING with the members KEYS (strings) taken from the object NEW: one NEW lacks is removed,
+every other member of EXISTING stays where it is."
+  (let ((object existing))
+    (dolist (key keys object)
+      (let ((cell (drgnx-agent-config-claude--cell new key)))
+        (setq object (if cell
+                         (drgnx-agent-config-claude--set object (list key) (cdr cell))
+                       (drgnx-agent-config-claude--del object (list key))))))))
+
+(defun drgnx-agent-config-claude--extra-members-p (object keys)
+  "Non-nil when the object OBJECT has a member that is not in KEYS."
+  (and (drgnx-agent-config-claude--alist-p object)
+       (cl-some (lambda (c) (not (member (drgnx-agent-config-claude--keystr (car c)) keys))) object)))
 
 ;;;; Reading
 
@@ -456,8 +477,9 @@ its files often, so a refused write is tried once more with the new content.  A 
   (let ((attempt 0) done)
     (while (not done)
       (setq attempt (1+ attempt))
+      ;; one read: the value and the text EXPECT is checked against are the same version of the file
       (let* ((text (and (file-exists-p file) (drgnx-agent-config-read-text file)))
-             (read (drgnx-agent-config-json-read file))
+             (read (if text (drgnx-agent-config-json-read-text file text) (list :value nil :indent 2)))
              (value (plist-get read :value)))
         (unless (or (null value) (drgnx-agent-config-claude--alist-p value))
           (error "The file does not hold a JSON object"))
@@ -474,10 +496,11 @@ its files often, so a refused write is tried once more with the new content.  A 
     (hasClaudeMdExternalIncludesWarningShown . :false))
   "What Claude Code files for a project it has not met yet.")
 
-(defun drgnx-agent-config-claude--merge-entry (file scope root name entry &optional old-name)
+(defun drgnx-agent-config-claude--merge-entry (file scope root name entry &optional old-name replace)
   "Put the server NAME (the JSON object ENTRY; nil removes it) into the MCP servers of SCOPE (user, local or
 project) in FILE, re-reading FILE just before and changing nothing else in it.  OLD-NAME is the entry that ENTRY
-replaces when the server is renamed.  Returns FILE."
+replaces when the server is renamed.  The members of the existing entry that drgnx does not edit (oauth,
+headersHelper, …) are kept, unless REPLACE.  Returns FILE."
   (drgnx-agent-config-claude--modify
    file
    (lambda (value)
@@ -486,71 +509,107 @@ replaces when the server is renamed.  Returns FILE."
                         (or (cl-find-if (lambda (k) (drgnx-agent-config-claude--cell projects k))
                                         (drgnx-agent-config-claude--project-keys root))
                             (drgnx-agent-config-claude--project-key root)))))
-            (keys (if key (list "projects" key "mcpServers") (list "mcpServers"))))
+            (keys (if key (list "projects" key "mcpServers") (list "mcpServers")))
+            (servers (apply #'drgnx-agent-config-claude--get value keys))
+            (renamed (and old-name (not (equal old-name name))))
+            (base (or (cdr (drgnx-agent-config-claude--cell servers name))
+                      (and renamed (cdr (drgnx-agent-config-claude--cell servers old-name)))))
+            (entry (if (and entry (not replace) (drgnx-agent-config-claude--alist-p base))
+                       (drgnx-agent-config-claude--merge-members base entry drgnx-agent-config-claude--mcp-members)
+                     entry)))
        (when (and entry key (not (drgnx-agent-config-claude--cell (drgnx-agent-config-claude--get value "projects") key)))
          (setq value (drgnx-agent-config-claude--set value (list "projects" key) drgnx-agent-config-claude--project-defaults)))
-       (when (and old-name (not (equal old-name name)))
+       (when renamed
          (setq value (drgnx-agent-config-claude--del value (append keys (list old-name)))))
        (if entry
            (drgnx-agent-config-claude--set value (append keys (list name)) entry)
          (drgnx-agent-config-claude--del value (append keys (list name))))))))
 
-(defun drgnx-agent-config-claude--has-server-p (file scope root name)
-  "Non-nil when FILE has the MCP server NAME in SCOPE."
+(defun drgnx-agent-config-claude--server-cell (file scope root name)
+  "The member (NAME . ENTRY) of the MCP servers of SCOPE in FILE, or nil."
   (let* ((value (plist-get (drgnx-agent-config-json-read file) :value))
          (servers (if (eq scope 'local)
                       (let ((projects (drgnx-agent-config-claude--get value "projects")))
                         (cl-some (lambda (k) (drgnx-agent-config-claude--get projects k "mcpServers"))
                                  (drgnx-agent-config-claude--project-keys root)))
                     (drgnx-agent-config-claude--get value "mcpServers"))))
-    (and (drgnx-agent-config-claude--cell servers name) t)))
+    (drgnx-agent-config-claude--cell servers name)))
+
+(defvar drgnx-agent-config-claude--unrestored nil
+  "Entries a failed claude edit removed and drgnx could not put back: ((FILE . NAME)…).  While a file is in it, its
+backup (the only copy of the entry) is not replaced by the next command line write.")
+
+(defun drgnx-agent-config-claude--forget-unrestored (file name)
+  "NAME was written to FILE again: its backup need not be kept any longer."
+  (setq drgnx-agent-config-claude--unrestored
+        (cl-remove-if (lambda (p) (and (equal (car p) file) (equal (cdr p) name)))
+                      drgnx-agent-config-claude--unrestored)))
 
 ;;;; Writing through the claude command
 
-(defun drgnx-agent-config-claude--cli (argvs dir finish)
+(defun drgnx-agent-config-claude--cli (argvs dir finish &optional completed)
   "Run each of ARGVS (argument lists for `claude') in DIR, one after the other, asynchronously.
-FINISH gets nil when all succeeded, else a failure: (missing), (start), (exit N) or (timeout)."
-  (if (null argvs)
-      (funcall finish nil)
-    (let ((program (executable-find "claude")))
-      (if (not program)
-          (funcall finish '(missing))
-        (let* ((default-directory dir)
-               (buffer (generate-new-buffer " *drgnx-claude*" t))
-               (done nil) timer process
-               (end (lambda (failure)
-                      (unless done
-                        (setq done t)
-                        (when timer (cancel-timer timer))
-                        (when (buffer-live-p buffer) (kill-buffer buffer))
-                        (if failure
-                            (funcall finish failure)
-                          (drgnx-agent-config-claude--cli (cdr argvs) dir finish))))))
-          (condition-case nil
-              (progn
-                (setq process
-                      (make-process :name "drgnx-claude" :buffer buffer :command (cons program (car argvs))
-                                    :connection-type 'pipe :noquery t
-                                    :sentinel (lambda (p _event)
-                                                (when (memq (process-status p) '(exit signal))
-                                                  (funcall end (unless (and (eq (process-status p) 'exit)
-                                                                            (zerop (process-exit-status p)))
-                                                                 (list 'exit (process-exit-status p))))))))
-                (ignore-errors (process-send-eof process))
-                (setq timer (run-at-time drgnx-agent-config-claude-cli-timeout nil
-                                         (lambda ()
-                                           (funcall end '(timeout))
-                                           (when (process-live-p process) (delete-process process))))))
-            (error (funcall end '(start)))))))))
+FINISH gets (FAILURE COMPLETED): FAILURE is nil when all succeeded, else (missing), (start), (exit N) or (timeout);
+COMPLETED is how many of ARGVS had succeeded."
+  (let ((completed (or completed 0)))
+    (if (null argvs)
+        (funcall finish nil completed)
+      (let ((program (executable-find "claude")))
+        (if (not program)
+            (funcall finish '(missing) completed)
+          (let* ((default-directory dir)
+                 (buffer (generate-new-buffer " *drgnx-claude*" t))
+                 (done nil) timer process
+                 (end (lambda (failure)
+                        (unless done
+                          (setq done t)
+                          (when timer (cancel-timer timer))
+                          (when (buffer-live-p buffer) (kill-buffer buffer))
+                          (if failure
+                              (funcall finish failure completed)
+                            (drgnx-agent-config-claude--cli (cdr argvs) dir finish (1+ completed)))))))
+            (condition-case nil
+                (progn
+                  (setq process
+                        (make-process :name "drgnx-claude" :buffer buffer :command (cons program (car argvs))
+                                      :connection-type 'pipe :noquery t
+                                      :sentinel (lambda (p _event)
+                                                  (when (memq (process-status p) '(exit signal))
+                                                    (funcall end (unless (and (eq (process-status p) 'exit)
+                                                                              (zerop (process-exit-status p)))
+                                                                   (list 'exit (process-exit-status p))))))))
+                  (ignore-errors (process-send-eof process))
+                  (setq timer (run-at-time drgnx-agent-config-claude-cli-timeout nil
+                                           (lambda ()
+                                             (funcall end '(timeout))
+                                             (when (process-live-p process) (delete-process process))))))
+              (error (funcall end '(start))))))))))
 
-(defun drgnx-agent-config-claude--cli-error (failure edit)
-  "The message for FAILURE of a claude command (EDIT: it was a remove followed by an add)."
-  (concat (pcase (car failure)
-            ('missing "The claude command was not found: install Claude Code or put it on PATH")
-            ('start "The claude command could not be started")
-            ('timeout (format "The claude command did not finish within %s seconds" drgnx-agent-config-claude-cli-timeout))
-            (_ (format "The claude command failed (exit status %s)" (cadr failure))))
-          (if edit "; the server may be gone, the file's backup (.drgnx-bak) has the previous entry" "")))
+(defun drgnx-agent-config-claude--cli-error (failure)
+  "The message for FAILURE of a claude command."
+  (pcase (car failure)
+    ('missing "The claude command was not found: install Claude Code or put it on PATH")
+    ('start "The claude command could not be started")
+    ('timeout (format "The claude command did not finish within %s seconds" drgnx-agent-config-claude-cli-timeout))
+    (_ (format "The claude command failed (exit status %s)" (cadr failure)))))
+
+(defun drgnx-agent-config-claude--cli-result (failure completed op file scope root name old old-cell)
+  "The result of the claude commands ARGVS for OP on NAME (OLD: the entry an edit replaces, OLD-CELL: what it held
+before): when an edit's remove worked and its add did not, the old entry is put back by a direct write."
+  (cond
+   ((null failure)
+    (drgnx-agent-config-claude--forget-unrestored file name)
+    (list :ok t :note (format "%s %s (%s scope)" name (pcase op ('add "added") ('edit "changed") (_ "removed")) scope)))
+   ((and (eq op 'edit) old-cell (>= completed 1))
+    (let ((reason (drgnx-agent-config-claude--cli-error failure)))
+      (if (condition-case nil
+              (progn (drgnx-agent-config-claude--merge-entry file scope root old (cdr old-cell) nil t) t)
+            (error nil))
+          (list :error (format "%s: the change failed; the previous entry was put back" reason))
+        (push (cons file old) drgnx-agent-config-claude--unrestored)
+        (list :error (format "%s, and putting the previous entry back failed: the server is gone from %s, its backup (%s.drgnx-bak) has the entry"
+                             reason file file)))))
+   (t (list :error (drgnx-agent-config-claude--cli-error failure)))))
 
 (defun drgnx-agent-config-claude--write-mcp (op item scope root callback)
   "Add, edit or remove the MCP server ITEM in SCOPE.  Returns the result for a direct write, nil when the claude
@@ -566,36 +625,42 @@ command is running (CALLBACK is called with its result)."
     (drgnx-agent-config-claude--check-name name)
     (when (and (eq op 'edit) (not (equal old name))) (drgnx-agent-config-claude--check-name old))
     (let* ((entry (and (memq op '(add edit)) (drgnx-agent-config-claude--spec-json (plist-get item :spec))))
-           (secret (and entry (drgnx-agent-config-secrets (plist-get item :spec)))))
-      (when (and (eq scope 'project) (eq op 'add) (drgnx-agent-config-claude--has-server-p file scope root name))
-        (error "%s is already in this file" name))
+           ;; `drgnx-agent-config-secrets' leaves out values of 3 characters or fewer (the model's rule): such a
+           ;; value is not kept off the command line.
+           (secret (and entry (drgnx-agent-config-secrets (plist-get item :spec))))
+           (old-cell (and (memq op '(edit remove)) (not (eq scope 'project))
+                          (drgnx-agent-config-claude--server-cell file scope root old)))
+           ;; the entry has members drgnx does not edit: a command line would drop them
+           (extras (and (eq op 'edit) old-cell
+                        (drgnx-agent-config-claude--extra-members-p (cdr old-cell) drgnx-agent-config-claude--mcp-members))))
+      (when (and (eq op 'add) (drgnx-agent-config-claude--server-cell file scope root name))
+        (error "%s is already in this scope" name))
       (cond
-       ;; a file edit: .mcp.json, or .claude.json when a secret would be on the command line
-       ((or (eq scope 'project) secret)
-        (when (and (eq op 'add) (not (eq scope 'project)) (drgnx-agent-config-claude--has-server-p file scope root name))
-          (error "%s is already in this scope" name))
+       ;; a file edit: .mcp.json, or .claude.json when a command line would show a secret or drop members
+       ((or (eq scope 'project) secret extras)
         (drgnx-agent-config-claude--merge-entry file scope root name entry (and (eq op 'edit) old))
+        (when entry (drgnx-agent-config-claude--forget-unrestored file name))
         (list :ok t :note (if (eq scope 'project)
                               (format "Wrote %s" file)
-                            (format "Wrote %s directly (the server has a secret, which would show on a command line). Restart running Claude sessions to pick this up"
-                                    file))))
+                            (format "Wrote %s directly (%s). Restart running Claude sessions to pick this up" file
+                                    (if secret "the server has a secret, which would show on a command line"
+                                      "the entry has settings drgnx does not edit, which are kept")))))
        (t
-        (when (file-exists-p file) (drgnx-agent-config--save-backup file))
-        (let ((argvs (append (and (or (eq op 'remove)
-                                      (and (eq op 'edit) (drgnx-agent-config-claude--has-server-p file scope root old)))
+        (let ((argvs (append (and (or (eq op 'remove) old-cell)
                                   (list (list "mcp" "remove" old "--scope" scope-name)))
                              (and entry
                                   (list (list "mcp" "add-json" name
                                               (decode-coding-string (json-serialize entry) 'utf-8)
                                               "--scope" scope-name))))))
+          ;; one backup, only when the command will run, and not over an entry that is not back yet
+          (when (and argvs (executable-find "claude") (file-exists-p file)
+                     (not (assoc file drgnx-agent-config-claude--unrestored)))
+            (drgnx-agent-config-save-backup file))
           (drgnx-agent-config-claude--cli
            argvs (file-name-as-directory (expand-file-name (or root "~")))
-           (lambda (failure)
+           (lambda (failure completed)
              (funcall callback
-                      (if failure
-                          (list :error (drgnx-agent-config-claude--cli-error failure (and (eq op 'edit) (> (length argvs) 1))))
-                        (list :ok t :note (format "%s %s (%s scope)" name (pcase op ('add "added") ('edit "changed") (_ "removed"))
-                                                  scope-name))))))
+                      (drgnx-agent-config-claude--cli-result failure completed op file scope root name old old-cell))))
           nil))))))
 
 ;;;; Writing hooks
@@ -605,15 +670,19 @@ command is running (CALLBACK is called with its result)."
   (equal (or (drgnx-agent-config-claude--str (drgnx-agent-config-claude--get group "matcher")) "")
          (or matcher "")))
 
-(defun drgnx-agent-config-claude--hook-json (spec)
-  "The hook object for the hook SPEC."
-  (append (list (cons 'type "command") (cons 'command (plist-get spec :command)))
-          (and (numberp (plist-get spec :timeout)) (list (cons 'timeout (plist-get spec :timeout))))))
+(defun drgnx-agent-config-claude--hook-json (spec &optional existing)
+  "The hook object for the hook SPEC: the members drgnx edits taken from SPEC, the others from the object EXISTING."
+  (let ((hook (append (list (cons 'type "command") (cons 'command (plist-get spec :command)))
+                      (and (numberp (plist-get spec :timeout)) (list (cons 'timeout (plist-get spec :timeout)))))))
+    (if (drgnx-agent-config-claude--alist-p existing)
+        (drgnx-agent-config-claude--merge-members existing hook drgnx-agent-config-claude--hook-members)
+      hook)))
 
 (defun drgnx-agent-config-claude--hooks-update (value old new)
   "The settings VALUE with the hook OLD (a spec: :event :matcher :command; nil for none) replaced by NEW (a spec;
-nil for none).  A hook whose event and matcher stay the same keeps its place."
-  (let ((in-place nil))
+nil for none).  A hook whose event and matcher stay the same keeps its place; the members of a hook drgnx does not
+edit (statusMessage, async, …) stay with it."
+  (let ((in-place nil) (removed nil))
     (when old
       (let* ((event (plist-get old :event))
              (found nil)
@@ -634,10 +703,10 @@ nil for none).  A hook whose event and matcher stay the same keeps its place."
                          (cond ((null pos) group)
                                (same-place
                                 (setq found t in-place t)
-                                (setf (nth pos hooks) (drgnx-agent-config-claude--hook-json new))
+                                (setf (nth pos hooks) (drgnx-agent-config-claude--hook-json new (nth pos hooks)))
                                 (drgnx-agent-config-claude--set group '("hooks") (vconcat hooks)))
                                (t
-                                (setq found t)
+                                (setq found t removed (nth pos hooks))
                                 (setq hooks (append (take pos hooks) (nthcdr (1+ pos) hooks)))
                                 (and hooks (drgnx-agent-config-claude--set group '("hooks") (vconcat hooks)))))))
                      (append (drgnx-agent-config-claude--get value "hooks" event) nil)))))
@@ -652,7 +721,7 @@ nil for none).  A hook whose event and matcher stay the same keeps its place."
              (matcher (plist-get new :matcher))
              (groups (append (drgnx-agent-config-claude--get value "hooks" event) nil))
              (pos (cl-position-if (lambda (g) (drgnx-agent-config-claude--matcher= g matcher)) groups))
-             (hook (drgnx-agent-config-claude--hook-json new)))
+             (hook (drgnx-agent-config-claude--hook-json new removed)))
         (if pos
             (setf (nth pos groups)
                   (drgnx-agent-config-claude--set (nth pos groups) '("hooks")
@@ -691,27 +760,60 @@ user's for a user or plugin skill, the project-local one for a project skill); r
               (list :ok t :note (format "Created %s"
                                         (drgnx-agent-config-new-skill
                                          dir name (or (plist-get (plist-get item :spec) :description) ""))))))
-      ('toggle
-       (let* ((target (or scope (if (eq (plist-get item :from) 'project) 'local 'user)))
-              (file (drgnx-agent-config-claude--settings-file target root)))
-         (unless file (error "This scope needs a project"))
-         (if (plist-get item :enabled)
-             (drgnx-agent-config-claude--modify
-              file (lambda (value) (drgnx-agent-config-claude--set value (list "skillOverrides" name) "off")))
-           ;; on: an "off" goes wherever it is set
-           (dolist (s '(user project local))
-             (let ((f (drgnx-agent-config-claude--settings-file s root)))
-               (when (and f (file-regular-p f)
-                          (equal (drgnx-agent-config-claude--get
-                                  (plist-get (drgnx-agent-config-json-read f) :value) "skillOverrides" name)
-                                 "off"))
-                 (drgnx-agent-config-claude--modify
-                  f (lambda (value)
-                      (let ((without (drgnx-agent-config-claude--del value (list "skillOverrides" name))))
-                        (if (drgnx-agent-config-claude--get without "skillOverrides") without
-                          (drgnx-agent-config-claude--del without '("skillOverrides"))))))))))
-         (list :ok t :note (format "%s is now %s" name (if (plist-get item :enabled) "off" "on")))))
+      ('toggle (drgnx-agent-config-claude--toggle-skill item scope root))
       (_ (error "Only adding a skill and switching one on or off are supported")))))
+
+(defun drgnx-agent-config-claude--toggle-skill (item scope root)
+  "Switch the skill ITEM off (an \"off\" in the settings file SCOPE) or on (the \"off\" that makes it off removed).
+Every settings file is parsed before one is written.  Settings of the three scopes are read local, project, user: the
+first that names the skill wins.  Switching on removes the \"off\" of the files that make the skill off and stops at
+the first other value; a name-only or user-invocable-only value is never changed."
+  (let* ((name (plist-get item :name))
+         (order '(local project user))
+         (files (mapcar (lambda (s) (cons s (drgnx-agent-config-claude--settings-file s root))) order))
+         (values (mapcar (lambda (p)
+                           (cons (car p)
+                                 (drgnx-agent-config-claude--str
+                                  (and (cdr p) (file-regular-p (cdr p))
+                                       (drgnx-agent-config-claude--get
+                                        (plist-get (drgnx-agent-config-json-read (cdr p)) :value) "skillOverrides" name)))))
+                         files))
+         (written nil))
+    (cl-flet ((write-file (file function)
+                (condition-case err
+                    (progn (drgnx-agent-config-claude--modify file function) (push file written))
+                  (error (if written
+                             (error "%s; already changed: %s"
+                                    (drgnx-agent-config-claude--error-text err item) (mapconcat #'identity (reverse written) ", "))
+                           (signal (car err) (cdr err)))))))
+      (if (plist-get item :enabled)
+          (let* ((target (or scope (if (eq (plist-get item :from) 'project) 'local 'user)))
+                 (file (cdr (assq target files)))
+                 (higher (cl-remove-if-not (lambda (s) (let ((v (cdr (assq s values)))) (and v (not (equal v "off")))))
+                                           (take (cl-position target order) order))))
+            (unless file (error "This scope needs a project"))
+            (write-file file (lambda (value) (drgnx-agent-config-claude--set value (list "skillOverrides" name) "off")))
+            (list :ok t
+                  :note (concat (format "%s is now off (%s)" name file)
+                                (mapconcat (lambda (s)
+                                             (format ". Warning: %s sets it to %s, which wins: it stays listed"
+                                                     (cdr (assq s files)) (cdr (assq s values))))
+                                           higher ""))))
+        (let (chain)
+          (catch 'stop
+            (dolist (s order)
+              (let ((v (cdr (assq s values))))
+                (cond ((null v))
+                      ((equal v "off") (push (cdr (assq s files)) chain))
+                      (t (throw 'stop nil))))))
+          (dolist (file (reverse chain))
+            (write-file file (lambda (value)
+                               (let ((without (drgnx-agent-config-claude--del value (list "skillOverrides" name))))
+                                 (if (drgnx-agent-config-claude--get without "skillOverrides") without
+                                   (drgnx-agent-config-claude--del without '("skillOverrides")))))))
+          (list :ok t :note (if chain
+                                (format "%s is now on: removed \"off\" from %s" name (mapconcat #'identity (reverse chain) ", "))
+                              (format "%s is not switched off in any settings file" name))))))))
 
 ;;;; The generic write
 
