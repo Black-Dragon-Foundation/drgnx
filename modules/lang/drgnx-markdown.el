@@ -161,13 +161,18 @@ replaces one still running), never waiting for it."
   (add-to-list 'auto-mode-alist '("\\.\\(?:md\\|markdown\\|mkd\\|mdx\\)\\'" . markdown-mode))
   (add-to-list 'auto-mode-alist '("/README\\.md\\'" . gfm-mode)))
 
+(defun drgnx-markdown--define-command ()
+  "Register Markdown: Open Preview; its key (any profile's) binds in markdown-mode's keymap only."
+  (drgnx-command-define 'markdown-preview :category "Markdown" :title "Markdown: Open Preview"
+                        :command #'drgnx-markdown-preview :map '(markdown-mode . markdown-mode-map)
+                        :doc "This file rendered beside it, after each save"))
+
 (drgnx-module-define 'lang/markdown
                      :doc "Markdown (READMEs as GFM): code blocks in their language, math; a preview, Mermaid diagrams through mmdc."
                      :stage 'startup :packages '(markdown-mode)
                      :setup (lambda ()
                               (drgnx-markdown--setup)
-                              (drgnx-command-define 'markdown-preview :category "Markdown" :title "Markdown: Open Preview"
-                                                    :command #'drgnx-markdown-preview :doc "This file rendered beside it, after each save")))
+                              (drgnx-markdown--define-command)))
 
 (provide 'drgnx-markdown)
 ;;; drgnx-markdown.el ends here

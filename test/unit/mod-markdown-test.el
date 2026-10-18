@@ -109,4 +109,16 @@
           (should (drgnx-markdown-test--wait (lambda () (string-search "made" (with-current-buffer p (buffer-string))))))
           (should-not (string-search "WARNING" (with-current-buffer p (buffer-string)))))))))
 
+(ert-deftest drgnx-markdown/the-preview-key-is-local-to-markdown-mode ()
+  ;; M11a-1: the command carries the keymap, so the VS Code profile's C-S-v binds in markdown-mode-map, not globally.
+  (drgnx-markdown-test--with
+    (let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil))
+      (drgnx-markdown--define-command)
+      (let* ((profiles (drgnx-keys-load-profiles (expand-file-name "keys" drgnx-dir)))
+             (r (drgnx-keys-resolve :commands (drgnx-commands-all) :profiles profiles :layers '((vscode app editing window))
+                                    :defaults (copy-keymap global-map)))
+             (b (seq-find (lambda (b) (eq (plist-get b :id) 'markdown-preview)) (plist-get r :bindings))))
+        (should (equal (plist-get b :key) "C-S-v"))
+        (should (equal (plist-get b :map) '(markdown-mode . markdown-mode-map)))))))
+
 ;;; mod-markdown-test.el ends here

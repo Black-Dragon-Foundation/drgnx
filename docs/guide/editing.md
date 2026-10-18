@@ -73,7 +73,7 @@ can add to the header the same way: `drgnx-chrome-header-tail`).
 ## Markdown
 
 Markdown files open in markdown-mode — READMEs as GitHub Flavored Markdown — with code blocks highlighted in their
-own language, math marked, headings scaled, and remote pictures not fetched. **Markdown: Open Preview** (C-S-v in the
+own language, math marked, headings scaled, and remote pictures not fetched. **Markdown: Open Preview** (C-S-v in markdown buffers only, in the
 VS Code profile) renders the file beside it and again after each save: through `pandoc` (or `cmark-gfm`, `cmark`,
 `markdown` — the first installed; tables, task lists and links as GitHub shows them), else markdown-mode's own view.
 The conversion runs in the background (typing never waits for it); local pictures show, pictures on the network do
