@@ -9,7 +9,7 @@
 ;; been idle `drgnx-gc-idle-seconds', so the pauses fall where nobody waits.  See docs/develop/perf.md.
 
 ;;; Code:
-(require 'seq)
+(require 'drgnx-timer)
 
 (defvar drgnx-gc-cons-threshold (* 64 1024 1024) "Bytes allocated between collections once started.")
 (defvar drgnx-gc-idle-seconds 8 "Collect after this long without input.")
@@ -25,8 +25,7 @@ only while it is early-init's startup value (a user's own is kept)."
   (unless (bound-and-true-p gcmh-mode)
     (when (> gc-cons-threshold drgnx-gc--starting-above)
       (setq gc-cons-threshold drgnx-gc-cons-threshold gc-cons-percentage 0.1))
-    (unless (seq-find (lambda (tm) (eq (timer--function tm) #'drgnx-gc--idle)) timer-idle-list)
-      (run-with-idle-timer drgnx-gc-idle-seconds t #'drgnx-gc--idle))))
+    (drgnx-timer-start 'gc-idle drgnx-gc-idle-seconds #'drgnx-gc--idle :repeat t :idle t :owner :core)))
 
 (provide 'drgnx-gc)
 ;;; drgnx-gc.el ends here

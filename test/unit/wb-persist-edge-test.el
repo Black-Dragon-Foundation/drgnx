@@ -1,6 +1,7 @@
 ;;; wb-persist-edge-test.el --- batch tests: restoring the workbench, edge cases -*- lexical-binding: t -*-
 (require 'ert)
 (require 'drgnx-persist)
+(require 'drgnx-timer)
 
 (defmacro drgnx-persist-edge-test--with (dir &rest body)
   "BODY with rules and chrome on, one editor window, files in DIR, a state file."
@@ -16,8 +17,7 @@
      (drgnx-rules-mode 1)
      (drgnx-chrome-mode 1)
      (unwind-protect (progn ,@body)
-       (when (timerp drgnx-persist--timer) (cancel-timer drgnx-persist--timer))
-       (setq drgnx-persist--timer nil)
+       (drgnx-timer-cancel 'persist-visit)
        (drgnx-chrome-mode -1)
        (drgnx-rules-mode -1)
        (drgnx-wb-area-hide 'panel)

@@ -372,7 +372,7 @@ attempt), a stale lock taken; then `drgnx-file-busy' (data (TARGET HOLDER)).  Ne
   (when (equal (drgnx-file--owner (car held)) (cdr held))
     (drgnx-file--locally (delete-directory (car held) t))))
 
-(cl-defun drgnx-file-update (file fn &key on-unreadable (timeout 1.0) max-bytes header pretty render)
+(cl-defun drgnx-file-update (file fn &key on-unreadable (timeout 1.0) max-bytes header pretty render private)
   "Change FILE under its lock: the data now in it.
 Takes the lock (TIMEOUT seconds, default 1; 0 from timers, filters and sentinels: one attempt, then
 `drgnx-file-busy'), reads FILE fresh, and calls FN with a deep copy of its data (nil when it is absent), so FN may
@@ -380,7 +380,8 @@ change it in place.  When FN's result is `equal' to the data, nothing is written
 `drgnx-file-write' under MAX-BYTES (the read limit too): as the text RENDER returns when given — (funcall RENDER
 OLD-TEXT DATA NEW), DATA as read — else printed whole with HEADER and PRETTY.  An unreadable FILE
 signals `drgnx-file-refused' and is left untouched; with ON-UNREADABLE `backup' (state files only) it is copied aside
-by `drgnx-file-backup' and FN gets nil.  The lock is released whatever happens."
+by `drgnx-file-backup' and FN gets nil.  PRIVATE is `drgnx-file-write''s: 0600 for a new file, an old one loses its
+group and other bits.  The lock is released whatever happens."
   (let* ((target (drgnx-file--target file))
          (held (drgnx-file--lock target timeout)))
     (unwind-protect
@@ -393,7 +394,7 @@ by `drgnx-file-backup' and FN gets nil.  The lock is released whatever happens."
             (setq old nil))
           (let ((new (funcall fn (copy-tree data t))))
             (unless (equal new data)
-              (drgnx-file-write target new :header (and (not render) header) :pretty pretty :max-bytes max-bytes
+              (drgnx-file-write target new :header (and (not render) header) :pretty pretty :max-bytes max-bytes :private private
                                 :text (and render (funcall render old data new))))
             new))
       (drgnx-file--unlock held))))

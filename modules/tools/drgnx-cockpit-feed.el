@@ -21,6 +21,7 @@
 (require 'subr-x)
 (require 'button)
 (require 'text-property-search)
+(require 'drgnx-timer)
 (require 'drgnx-cockpit-model)
 (eval-when-compile (require 'drgnx-agents))     ; its session struct's places (`cl-letf' of a mode)
 
@@ -68,8 +69,6 @@
   :group 'drgnx-cockpit)
 
 (defvar drgnx-cockpit-feed--buffers nil "The feed's live buffers (what happened, the timeline): they own its hooks.")
-(defvar drgnx-cockpit-feed--timer nil "The update on its way: one at a time.")
-(defvar drgnx-cockpit-feed--check-timer nil "The repeating look at the store, while a feed buffer lives.")
 (defvar drgnx-cockpit-feed--waiting nil
   "(KEY QUESTIONS . TOTAL): `drgnx-cockpit-feed--waiting-pair' for the store at KEY.")
 (defvar drgnx-cockpit-feed--told nil "The waiting count the status bar was last told of (`drgnx-cockpit-feed-tell-statusbar').")
@@ -163,9 +162,10 @@ transcript links).  It changes when this Emacs or another process writes the sto
 `drgnx-cockpit-check-interval' s (idempotent)."
   (add-hook 'drgnx-hub-event-functions #'drgnx-cockpit-feed--hub-event)
   (add-hook 'drgnx-agents-changed-functions #'drgnx-cockpit-feed--agent-changed)
-  (unless (timerp drgnx-cockpit-feed--check-timer)
-    (setq drgnx-cockpit-feed--check-timer
-          (run-with-timer drgnx-cockpit-check-interval drgnx-cockpit-check-interval #'drgnx-cockpit-feed--check))))
+  ;; One look for all the feed's buffers, so `:core' owns it; the last buffer's `drgnx-cockpit-feed--unwatch' ends it.
+  (unless (drgnx-timer-active-p 'cockpit-feed-check)
+    (drgnx-timer-start 'cockpit-feed-check drgnx-cockpit-check-interval #'drgnx-cockpit-feed--check
+                       :repeat drgnx-cockpit-check-interval :owner :core)))
 
 (defun drgnx-cockpit-feed--unwatch ()
   "A feed buffer is killed (its `kill-buffer-hook'): release its marker; the last one takes the hooks and timers."
@@ -174,8 +174,8 @@ transcript links).  It changes when this Emacs or another process writes the sto
   (unless drgnx-cockpit-feed--buffers
     (remove-hook 'drgnx-hub-event-functions #'drgnx-cockpit-feed--hub-event)
     (remove-hook 'drgnx-agents-changed-functions #'drgnx-cockpit-feed--agent-changed)
-    (dolist (tm (list drgnx-cockpit-feed--timer drgnx-cockpit-feed--check-timer)) (when (timerp tm) (cancel-timer tm)))
-    (setq drgnx-cockpit-feed--timer nil drgnx-cockpit-feed--check-timer nil)))
+    (drgnx-timer-cancel 'cockpit-feed-update)
+    (drgnx-timer-cancel 'cockpit-feed-check)))
 
 (defun drgnx-cockpit-feed--hub-event (event _data)
   "`drgnx-hub-event-functions': a job, a card, an agent or a lease changed — the feed updates soon."
@@ -208,13 +208,11 @@ meanwhile, only while one shows (a hidden one updates when it shows).  Cheap: ca
   (when drgnx-cockpit-feed--buffers
     (if (not (drgnx-cockpit-feed--visible))
         (dolist (b drgnx-cockpit-feed--buffers) (with-current-buffer b (setq drgnx-cockpit-feed--stale t)))
-      (unless (timerp drgnx-cockpit-feed--timer)
-        (setq drgnx-cockpit-feed--timer
-              (run-at-time (or delay drgnx-cockpit-redraw-delay) nil #'drgnx-cockpit-feed--tick))))))
+      (drgnx-timer-soon 'cockpit-feed-update (or delay drgnx-cockpit-redraw-delay) #'drgnx-cockpit-feed--tick
+                        :owner :core))))
 
 (defun drgnx-cockpit-feed--tick ()
   "The scheduled update (a timer): each shown feed buffer appends what is new; a hidden one is marked stale."
-  (setq drgnx-cockpit-feed--timer nil)
   (drgnx-cockpit--call
    (lambda ()
      (let ((key (drgnx-cockpit-feed--key-now)) (open nil) (open-known nil)

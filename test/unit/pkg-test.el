@@ -391,11 +391,14 @@
               ((symbol-function 'drgnx-guard-mode) #'ignore) ((symbol-function 'drgnx-hooks-install) #'ignore)
               ((symbol-function 'drgnx--core-commands) #'ignore) ((symbol-function 'drgnx-keys-apply) #'ignore)
               ((symbol-function 'drgnx-surfaces-refresh) #'ignore))
-      (drgnx-init)
-      (should-not calls)
-      (setenv "DRGNX_SAFE" nil)
-      (drgnx-init)
-      (should (equal (sort calls (lambda (a b) (string< a b))) '(modules packages))))))
+      (unwind-protect
+          (progn
+            (drgnx-init)
+            (should-not calls)
+            (setenv "DRGNX_SAFE" nil)
+            (drgnx-init)
+            (should (equal (sort calls (lambda (a b) (string< a b))) '(modules packages))))
+        (drgnx-timer-cancel 'gc-idle)))))
 
 ;;;; Review fixes (M5 final review)
 

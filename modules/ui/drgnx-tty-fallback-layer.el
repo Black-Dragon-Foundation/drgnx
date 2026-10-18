@@ -20,6 +20,7 @@
 (require 'drgnx-hooks)
 (require 'drgnx-tty)
 (require 'drgnx-tty-fallback)
+(require 'drgnx-timer)
 (declare-function drgnx-tty-frames-refresh-report "drgnx-tty-frames")
 (declare-function drgnx-tty-frames--tty-frames "drgnx-tty-frames")
 (declare-function drgnx-tty-frames--update-report "drgnx-tty-frames")
@@ -198,7 +199,8 @@ terminal-report.eld (:hinted); `drgnx-tty-fallback-hint' nil says nothing.  Show
 appears (the server's own message would cover it, and kkp's answer may still turn the layer off), as a message:
 never a prompt (`drgnx-tty-fallback--show-hint')."
   (when (and drgnx-tty-fallback-hint (fboundp 'drgnx-tty-frames--update-report))
-    (run-with-timer 0.5 nil #'drgnx-tty-fallback--show-hint frame (or (plist-get caps :id) 'unknown))))
+    (drgnx-timer-start (cons 'tty-fallback-hint frame) 0.5 #'drgnx-tty-fallback--show-hint
+                       :args (list frame (or (plist-get caps :id) 'unknown)) :owner 'ui/terminal)))
 
 ;;;; Rebuilding
 

@@ -49,6 +49,13 @@ nothing here reaches Tramp, and nothing prompts or visits a buffer. Errors: `drg
 `drgnx-file-update` with `:on-unreadable 'backup`. Reports and other files rewritten whole use `drgnx-file-write`
 with `:fsync nil`. Text files drgnx writes (unit files, desktop entries, exports) use `drgnx-file-write-text`.
 
+**job.eld.** A durable job's `jobs/ID/job.eld` is a plist of plain data in one form: `drgnx-jobs-start` writes it with
+`drgnx-file-write` (text properties on the name and command are dropped first), `drgnx-jobs--read` reads it with
+`drgnx-file-read` (nil for a missing or unreadable file), and the stamp (`drgnx-jobs--stamp`: `:boot` and `:start`) is
+`drgnx-file-update` with `:timeout 0` from the poll, `1.0` from `kill-emacs-hook`, `inhibit-interaction` bound. A busy lock
+skips the stamp; an unreadable job.eld is left alone and the error becomes one `message`; the stamp never creates a
+missing job.eld or its directory. Files written by older versions (one `prin1` form) read unchanged.
+
 **Reading.** `(drgnx-file-read-bounded FILE &key max-bytes)` gives the file's text decoded as UTF-8, or nil when it
 does not exist. It refuses, in this order:
 - a remote name (`/method:host:…`): "a remote file";
@@ -378,10 +385,15 @@ command as "Category: Title" with its key and description beside it, through the
 **Run hook and usage counter.** `drgnx-surfaces-run` (what the palette and the menus call) runs
 `drgnx-surfaces-run-functions` with the command id after the command ran; an error in a member is swallowed. The
 first member counts the run: in memory only, so a run costs nothing noticeable. The counts are written at idle, at
-most once a minute and at exit, never prompting, to `command-usage.eld` in the state dir
+most once a minute and at exit, never prompting (one idle timer under the key `surfaces-usage`, `drgnx-timer-soon`
+with `:idle t`: a burst of runs makes one write per pause; the exit hook cancels it and writes), to `command-usage.eld` in the state dir
 (`drgnx-shortcuts-usage-file`): `((ID COUNT (DAY . N)…)…)`, with the per-day counts (`time-to-days`) of the last 7
 days. The file stays on your machine; it feeds the suggestions of the Keyboard Shortcuts editor ("you ran X 12
 times this week; give it a key?"). Read it with `drgnx-surfaces-usage-count` and `drgnx-surfaces-usage-week`.
+The file goes through the file layer: the write is `drgnx-file-update` with `:on-unreadable 'backup` and `:timeout 0`
+(the exit write waits up to a second), so a busy lock (another drgnx writing) keeps the counts dirty and the timer tries
+again, quietly. A file that cannot be read, or has malformed entries, is copied aside once (`NAME.bak-…`) before the next
+write replaces it; any other failure is one message. The last writer wins.
 
 **Removing what a command added.** The palette, the key sheet, the cheat sheet and the right-click menu are computed
 from the registry on each use, so an undefined command is gone from them at once. The menu bar and which-key are
@@ -560,6 +572,17 @@ AGENTS.md asks of every global hook and advice ("named, with an owner", no lambd
   `-alist-put`, `-face-spec`) makes its change inside `drgnx-modules--quietly`. A raw call is a fallback; use the
   helper.
 
+### A run's end
+
+A module's setup run has a token (`drgnx-modules--runs`). It ends when the module is turned off, when its setup is
+rolled back, and when its setup runs again while the token is still there (a `:teardown 'restart` module run again).
+`drgnx-modules--end-run MODULE` drops the token and then calls each function of `drgnx-modules-run-end-functions`
+with MODULE, under `condition-case` and with `inhibit-interaction` t; a failure becomes a problem
+`"run end: FN: MESSAGE"` in the teardown's, the rollback's or the new run's problems, and the next function still
+runs. `drgnx-timer.el` adds `drgnx-timer-cancel-owner` at load: **a module's layer timers die before its `:teardown`
+runs**, whether the setup, deferred work (`drgnx-modules-with-owner`) or a later hook with `:owner` started them,
+and their keys leave the table. A timer owned by a buffer or a process is not the module's and stays.
+
 ### The safety net: what a setup reaches through Emacs's own doors
 
 Code a setup reaches that does not push its own undo — wb modes, the setup functions of `wb/` libraries, packages'
@@ -574,12 +597,11 @@ no call goes through the net; what stays is two properties `advice-remove` leave
 | `add-hook` on a hook's global value | the function was not on it before | `remove-hook`, if it is still there |
 | `advice-add` | `advice-member-p` was nil before | `advice-remove`, if still there |
 | `add-to-list` on a list's global value | the element was not a member before (same test as `add-to-list`) | remove that one element, if still a member; others' additions stay |
-| a new timer (`timer-list`, `timer-idle-list` compared before and after) | it is not one of Emacs's own (below) | `cancel-timer`, if still pending |
+| a new timer (`timer-list`, `timer-idle-list` compared before and after) | its function is a symbol defined under `drgnx-dir` (a layer timer is skipped: its run token owns it; anything else is *left*, below) | `cancel-timer`, if still pending |
 | a global minor mode newly in `global-minor-modes` | it was off before | `(MODE -1)`, if still on; pushed after everything the setup pushed, so modes go off first and their own off code runs before the hook and timer undos. This is the one break in last in, first out: a mode goes off before undos the setup pushed after turning it on |
 | a feature newly in `features` | always | none: kept for the report, `(drgnx-modules-features-of MODULE)` |
 
-Labels read `hook HOOK FN`, `advice SYMBOL FN`, `list VAR ELEMENT`, `timer FN`, `mode MODE` (`a lambda` for an
-anonymous function), cut to 100 characters. The undos make teardown and rollback complete for these doors.
+Labels read `hook HOOK FN`, `advice SYMBOL FN`, `list VAR ELEMENT`, `timer FN`, `mode MODE`, cut to 100 characters. The undos make teardown and rollback complete for these doors.
 
 The net's undos are unconditional: they check that the thing is still there, not whether another module still
 needs it. So a change made by a claim-aware API — one whose undo hands over to another module's claim (the helpers
@@ -595,11 +617,15 @@ What it does **not** record:
 - **`add-to-list` on `global-minor-modes` or `local-minor-modes`**: Emacs 31's `define-minor-mode` keeps them that
   way; the modes are compared after the setup instead.
 - **A drgnx helper's own changes** (`drgnx-modules--quietly`, above).
-- **Emacs's own timers.** Emacs's libraries start singleton timers lazily from code a setup calls (an edit starts
-  undo's boundary timer, a buffer's jit-lock its context timer) and keep them in a variable; cancelled, they would
-  stay dead for the session (undo boundaries for process output would stop). A timer whose function is defined
-  under `lisp-directory` (or preloaded), or that sits in one of `drgnx-modules--emacs-timer-variables` (jit-lock's
-  lambdas), is left alone.
+- **Timers drgnx did not make are left, and listed.** The net cancels a timer only when its function is a symbol
+  defined under `drgnx-dir`. Anything else — Emacs, an ELPA package, a user's module outside `drgnx-dir`, a lambda —
+  may be a library's singleton, started lazily from code a setup calls (an edit starts undo's boundary timer, a buffer's
+  jit-lock its context timer) and kept in a variable; cancelled, it would stay dead for the session (undo boundaries
+  for process output would stop). Such a timer stays pending, and the module's report says so: `:left`, a list of
+  `"timer FN (FILE)"` (FILE is where FN is defined, `no file` when it is not) or `"timer a lambda"`, newest first. It
+  is cleared when the module's run starts and is in `modules-report.eld`. Read it as "this module's setup started
+  these, and turning it off did not stop them": a line for a function that is the module's own means the module should
+  start it through `drgnx-timer-start`, which ends it with the run.
 - **Global modes are owned by the first module that turns them on.** "Newly on" is all the net sees: when module
   A turns `drgnx-signal-mode` on and B relies on it, tearing A down turns it off. Modes a module shares go through
   an option (`drgnx-module-set`, claim-aware) or B's `:teardown`/`requires`. And a mode a setup turns *off* is not
@@ -630,8 +656,10 @@ safety net — what BODY changes is recorded onto the module, as in its setup. U
 
 ```elisp
 (eval-after-load 'drgnx-ai-ui (drgnx-modules-with-owner (add-to-list 'drgnx-ai-retrievers #'my-retriever t)))
-(run-with-idle-timer 1 nil (drgnx-modules-with-owner (my-mode 1)))
 ```
+
+A timer needs no wrapper: `(drgnx-timer-start 'my-key 1 #'my-fn :idle t)` in a setup is owned by that module run by
+default, and its one-shot runs as the module's code, recorded the same way ([Timers](#timers), below).
 
 Not `(with-eval-after-load 'x (drgnx-modules-with-owner …))`: there the form is evaluated only when `x` loads, so
 it names no module, and its function is never called. Once the module is turned off, rolled back, or run again
@@ -646,6 +674,186 @@ brings a collection forward (65–73 µs measured so); 41 setups × 75 µs ≈ 3
 it and 28.2 ms without (5 runs each, within the runs' noise); the budget is 5 ms across all setups.
 `test/unit/modules-record-test.el` covers it, including `startup-is-unchanged`: the shipped modules' startup stage
 gives the same statuses and commands with the recorder as without it.
+
+## Timers
+
+### Keys and owners (`drgnx-timer.el`)
+
+A timer that outlives the current command goes through one door:
+
+```elisp
+(drgnx-timer-start KEY SECS FN &key repeat idle args owner)   ; → KEY, or nil when OWNER is gone already
+(drgnx-timer-start 'my-key 1 #'my-fn :idle t)                 ; in a setup: owned by that module run
+(drgnx-timer-start (cons 'my-check buf) 30 #'my-check :repeat 30 :owner buf)
+```
+
+FN (with ARGS) runs after SECS, or after SECS of idleness with `:idle t`. `:repeat` is a number of seconds for a wall
+timer and non-nil for an idle one (once per pause), as in `run-at-time` and `run-with-idle-timer`. Then
+`(drgnx-timer-cancel KEY)`, `(drgnx-timer-active-p KEY)` and `(drgnx-timer-cancel-owner OWNER)` (→ how many).
+
+- **The key.** A second start of a KEY cancels its pending timer first, whatever started it: a setup run twice keeps
+  one timer. KEY is a symbol named after its site (`hub-tick`, `persist-visit`), or `(SYMBOL . OBJECT)` for one timer
+  per buffer, process or root, OBJECT a symbol, number, string, buffer, process, frame or window. Keys are compared
+  with `equal`, so a struct or a list would hash by contents that change (a connection struct whose stderr grows):
+  anything else signals `wrong-type-argument`. Key a timer by the process, never by its connection struct.
+- **The function** is a symbol (`list-timers`, the fingerprint and the errors name it); a lambda, a closure or an
+  `apply-partially` signals `wrong-type-argument`.
+- **The owner.** nil (the default) is the module whose setup or `drgnx-modules-with-owner` code runs now, with its
+  run token, else `:core`. A module symbol (`:owner 'tools/agents-ui`, from a hook function that runs later) takes
+  the module's current run; a module with no run refuses the start (nil, nothing started). A buffer owns its timers
+  until it is killed: its first timer adds `drgnx-timer--buffer-killed` to the buffer's own `kill-buffer-hook`
+  (permanent-local, as is its key list `drgnx-timer--buffer-keys`; no global hook). A process owns them while it
+  lives; its sentinel (or the job runner) must call `(drgnx-timer-cancel-owner PROCESS)` when it dies, which also
+  forgets the last runs of its `:min-interval` keys. `:core` lives as long as Emacs (the hub tick, the idle GC under
+  the key `gc-idle`, the job stamp poll `(jobs-stamp . ID)`, the usage write `surfaces-usage`).
+  Module repeats are keyed this way: `tools/agents` owns `agents-ui-mirror` (idle, every 30 s) and `tools/jobs` owns
+  `job-ui-recount-idle` (idle, every 60 s), so a second setup replaces the timer instead of stacking another, and
+  turning the module off ends it. Timers started later (from a command or a hook) name their module with `:owner`:
+  `ui/face` owns quick help's `quickhelp-timeout`, `-unmap`, `-look` and `-hover` and the start page's
+  `start-first-frame`, `ui/terminal-popups` the debounced `tty-popups-show`, `ui/terminal` the per-frame
+  `(tty-fallback-hint . FRAME)`, `tools/jobs` the coalesced `job-ui-recount`, `tools/ai` the `ai-probe` one-shot; the
+  ghost-text pause is an idle debounce `(ai-ghost . BUFFER)` owned by the buffer, and an Ask's search limit
+  `(ai-grep . PROCESS)` by the search process (its sentinel cancels it). With no run of the owner nothing starts.
+
+### What the fire wrapper guarantees
+
+Every layer timer's Emacs function is `drgnx-timer--fire` with the entry as its argument. At each firing, in order:
+
+1. A timer whose key now holds another entry (replaced or cancelled while it was ripe) does nothing.
+2. An owner that is gone (a module turned off, rolled back or run again; a dead buffer or process) drops the entry:
+   FN is never called for it. A buffer made with `inhibit-buffer-hooks` runs no `kill-buffer-hook`, so its timers
+   go here, at their next firing.
+3. A one-shot leaves the table before FN runs, so FN may start its key again.
+4. FN runs in `save-match-data`, with a buffer owner current. A one-shot `drgnx-timer-start` owned by a module runs
+   as the module's code (`drgnx-modules--record-call`, as `drgnx-modules-with-owner` work does): what it changes is
+   undone when the module is turned off. A repeating timer and every firing of the primitives (debounce, soon,
+   poll, idle steps, their ON-TIMEOUT and ON-DONE) do not install the safety net, so they must not register hooks,
+   advice or global modes.
+5. Every error is caught: pushed on `drgnx-timer-errors` (newest first, at most 50 plists
+   `(:key :owner :fn :error :failures :stopped :time)`) and shown once as `drgnx: timer KEY failed: MESSAGE`. A
+   success resets the count. A timer that would run again (repeating, a poll, idle steps) stops at its
+   `drgnx-timer-failure-limit`-th failure in a row (3): it is cancelled, its record says `:stopped t`, and
+   `timers-report.eld` in the state dir (`drgnx-timer-report-file`; the hub writes `hub-timers-report.eld`) is
+   rewritten, buffers and processes in it written as their printed names. The doctor's `timers` check lists what
+   stopped in the last session. The debugger opens only with `debug-on-error` and a frame to show it: never in batch
+   or a daemon with no client. Nothing on these paths prompts.
+
+`(drgnx-timer-describe TIMER)` → `(:key K :owner O :kind KIND :fn FN)` for a layer timer (O without the run token),
+else nil; `(drgnx-timer-pending)` → `(KEY OWNER KIND)` for every live key; `(drgnx-timer-reset)` cancels them all
+(tests and the census). The layer never cancels a timer it did not make.
+
+### The primitives: debounce, soon, poll, idle steps
+
+Four calls cover the idioms a hand-written timer used to. Each takes a KEY, an `:owner` (default as in
+`drgnx-timer-start`) and a named function, returns KEY (nil when the owner is gone already), and fires through
+`drgnx-timer--fire`, so the owner check, the error record and the failure limit are the same.
+
+```elisp
+(drgnx-timer-debounce KEY SECS FN &key args idle owner)
+(drgnx-timer-soon KEY SECS FN &key args idle min-interval owner)
+(drgnx-timer-poll KEY INTERVAL FN &key deadline on-timeout args owner)
+(drgnx-timer-idle-steps KEY SECS STEP &key args budget interruptible owner on-done)
+```
+
+| The old idiom | Use |
+|---|---|
+| cancel the timer and start it again on every event | `drgnx-timer-debounce` |
+| `(unless (timerp X) (setq X (run-at-time …)))` | `drgnx-timer-soon` |
+| a minimum interval between runs | `drgnx-timer-soon … :min-interval` |
+| a lambda that looks "every N s" until something is true | `drgnx-timer-poll … :deadline` |
+| "keep going while idle", a step at a time | `drgnx-timer-idle-steps` |
+| `run-at-time 0 nil` out of a process filter or sentinel | stays raw |
+
+- **Debounce.** FN runs with the last call's ARGS once SECS pass with no further call. While one is pending a call
+  only stores ARGS and, for a wall debounce, the time (`drgnx-timer--now`): it makes no timer, does not look at the
+  owner again and, for `:idle t`, reads no clock (an idle debounce arms one idle timer once; input resets idleness,
+  so calls only store ARGS). A wall timer that fires earlier than SECS after the last call waits the remainder, in a
+  new timer made from a delay. SECS and IDLE are those of the call that armed it. A call on a key that holds another
+  kind of timer replaces it. The pending path costs 4 conses (the `&key` list) and one float per call under
+  byte-compilation, no vector cell: `drgnx-timer-prim/debounce-while-pending-makes-no-timer` and
+  `…/an-idle-debounce-reads-no-clock` assert it.
+- **Soon.** FN runs once, SECS after the first call of a burst, with that call's ARGS; a call while pending does
+  nothing and returns KEY. With `:min-interval` the delay is `max(SECS, LAST + MIN-INTERVAL - now)`, LAST being when
+  the key's previous run began; a clock that stepped back never makes the wait longer than MIN-INTERVAL. LAST is
+  in `drgnx-timer--last-run` (key → `(TIME . OWNER)`), kept only for keys that have a MIN-INTERVAL;
+  `drgnx-timer-cancel`, `-cancel-owner` (a module's run end and a process owner's sentinel call it), `-reset` and
+  the killing of the buffer that owns the key or is its OBJECT remove it. A key `(SYMBOL . FRAME)` or
+  `(SYMBOL . WINDOW)` under a `:core` owner keeps its entry until one of those. `:idle t` with `:min-interval` mixes
+  a wall-clock LAST with an idle delay: use it only if that is what you want. A live view uses it as its draw throttle (one key for the mark, another, plain `drgnx-timer-start`, for the
+  continuation, so the interval never delays the next slice).
+- **Poll.** `:deadline` is required: a positive number of seconds from the call, or the call signals
+  `(wrong-type-argument numberp DEADLINE)` at once. Every INTERVAL FN runs with ARGS; non-nil ends the poll. At the
+  first firing at or past the deadline ON-TIMEOUT runs with ARGS instead (once) and the poll ends. An owner that
+  goes ends it with no ON-TIMEOUT; the failure limit ends it and calls ON-TIMEOUT once.
+- **Idle steps.** For work that must finish soon after the user stops but never while they type. The *pause starter*
+  is a repeating idle timer at SECS; after a firing that leaves work and saw no input, the *chain*, a one-shot idle
+  timer SECS further into the same pause, carries on, so a pause long enough finishes all the steps. A firing calls
+  STEP at least once, and again while it returns non-nil, no input is pending and BUDGET (default
+  `drgnx-timer-step-budget`, 8 ms) is not spent. STEP returning nil cancels both timers, drops the key and runs
+  ON-DONE. Input pending cancels the chain and the starter resumes SECS into the next pause (a stale chain is
+  cancelled when the starter fires, so it never delays it). `:interruptible t` runs each step in `while-no-input`;
+  an aborted step counts as input and runs again in the next pause (leave it off for steps that are unsafe to
+  abort). A step that signals ends its firing with no chain; the failure limit stops the key with no ON-DONE
+  (`drgnx-timer-errors` and the doctor's `timers` check show it). Drawing never uses idle steps.
+
+All four read the clock only through `drgnx-timer--now` and schedule by delays, so the clock fixture drives them:
+`test/unit/core-timer-primitives-test.el` (`drgnx-timer-prim/`).
+
+### The ACP watchdog and the hub's timers
+
+The agent connection and the hub are the layer's first core users; their keys are by process or name, never by the
+connection struct.
+
+- **ACP.** `drgnx-acp-start` starts the key `(acp-watchdog . PROCESS)`, repeating every 0.5 s, whose function
+  `drgnx-acp--watchdog` (CONN PROC) reports an agent that died without its sentinel being called. `drgnx-acp--exited`
+  and `drgnx-acp-stop` cancel the key; two connections have two keys. A watchdog that fails stops after
+  `drgnx-timer-failure-limit` failures and is named in `drgnx-timer-errors`, instead of failing every half second. The
+  0.05 s tick that reads the last of a dead agent's stderr is the key `(acp-exit . PROCESS)`
+  (`drgnx-acp--report-exit`, one-shot, :core): the wait for the pipe is in `with-local-quit`, and a failing on-exit
+  handler is recorded in `drgnx-timer-errors` while the stderr process and input buffer are still cleaned up.
+- **Agent sessions.** Stop's two deadlines are the keys `(agents-stop . SESSION-ID)` (0.9 s: an agent that did not
+  answer the cancel has its turn ended anyway) and `(agents-drain . SESSION-ID)` (10 s more: the held messages go
+  if the late answer never came), functions `drgnx-agents--stop-deadline` and `drgnx-agents--drain-deadline`, both
+  :core. A second Stop replaces the pending deadline instead of stacking another. A session with no live agent
+  connection when the deadline ends its turn becomes `exited` (the old raw timer signalled
+  `wrong-type-argument drgnx-acp-conn nil`).
+- **Hub.** `hub-tick` (every 2 s, repeating) keeps its own `with-demoted-errors`: its steps' transient errors (a busy
+  `work.db`) never reach the failure limit. `hub-deliver` is `drgnx-timer-soon` 0.1 s: a burst of session changes
+  delivers once. `(hub-flush . SESSION-ID)` is `drgnx-timer-soon` 0.05 s: one `agent` flush per session per burst.
+  `hub-events` is `drgnx-timer-soon` `drgnx-hub-events-interval`: `events` go at most that often. `hub-exit` is the
+  `shutdown` request's exit 0.1 s later (`drgnx-hub--exit-now` with the exit function that was set when it came); a
+  hub stopped meanwhile cancels it. `drgnx-hub-stop` cancels all of them. The hub's `coord/notify` deferrals
+  (`run-at-time 0`) stay raw. `drgnx-hub-main` sets `drgnx-timer-report-file` to `hub-timers-report.eld`, so a timer
+  the hub stops is written beside, not over, the editor's report.
+
+### The clock seams
+
+The layer reads time and input only through `drgnx-timer--now` (`float-time`), `drgnx-timer--idle-time`
+(`current-idle-time`) and `drgnx-timer--input-pending-p` (`input-pending-p`): plain functions, never `defsubst`, so
+the clock fixture ([harness.md](harness.md#virtual-time)) overrides them and the layer follows virtual time. It
+schedules by delays only (SECS is seconds from now, handed to `run-at-time` or `run-with-idle-timer` as is), never by
+an absolute time computed from a clock read, which the fixture would shift twice. It reads `drgnx-timer--now` only
+for differences (the debounce remainder, the throttle, the poll deadline, the step budget) and to stamp `:time` on an
+error record.
+`(drgnx-timer-now)` is the public clock for code outside the layer (notices, drawing). `drgnx-timer/the-clock-fixture-drives-the-seams`
+checks the seams against the fixture; `test/unit/core-timer-test.el` covers the rest, all on the virtual clock.
+
+### The rule and its lint
+
+> A timer that outlives the current command goes through `drgnx-timer-*` with a key, an owner and a named function;
+> debounce, coalesce, throttle, poll and idle work use the primitives. `run-at-time 0 nil` deferrals out of filters
+> and sentinels may stay raw. A timer function that waits wraps the wait in `with-local-quit`.
+
+`drgnx-lint/timers-go-through-the-layer` (`test/unit/lint-buffers-timers-test.el`) holds the rule in `modules/` and
+`wb/`. It fails for a lambda, closure or `apply-partially` as the function of `run-at-time`, `run-with-timer`,
+`run-with-idle-timer`, `timer-create`, `timer-set-function` or any `drgnx-timer-*` call, and for a raw
+`run-at-time`, `run-with-timer`, `run-with-idle-timer`, `timer-set-time` or `timer-set-idle-time` unless its delay is
+the literal `0` and its repeat is nil or absent (`(run-at-time 0 nil FN …)` passes, lambda or not). Sites that
+predate the layer are counted per file in `drgnx-lint-timers--not-yet`; the lint compares each file's number of
+violations with its count, so a new raw timer fails ("use `drgnx-timer-*`") and so does a migrated one that leaves
+the count too high ("lower the count"). See [check.md](check.md#lints-on-the-source). The follow-path lint
+(`drgnx-lint/no-timers-in-workbench-follow-paths`) counts a `drgnx-timer-start`, `-soon`, `-debounce` or `-poll`
+form without `:idle t` as a timer start in `wb/`.
 
 ## Modal core (`drgnx-modal.el`)
 
@@ -1094,6 +1302,12 @@ pre-release version is compared without its `-…`/`+…` suffix. Tests: `test/u
 The **Desktop** group's `window-manager` row reads the fact `:window-manager`, `(drgnx-platform-doctor-facts
 &optional FRAME)` (see [Window managers](#window-managers-drgnx-platformel)); onboarding step 7 shows the same row
 for the selected frame. Tests: `test/unit/doctor-wm-test.el`, `test/unit/onboard-wm-test.el`.
+
+`timers` (group drgnx) reads the fact `:timers-report`: `timers-report.eld` and `hub-timers-report.eld` from the
+state dir (`drgnx-doctor--timers-report`), which the last session and the last hub rewrite each time a timer stops
+after failing 3 times in a row ([Timers](#timers)). OK "no timer stopped"; else WARN `KEY (FN): ERROR; …` with the
+report's age, fix "report the error; drgnx starts the timer again at the next start". A report stays until the next
+stop rewrites it, so an old one shows its age.
 
 ## Window managers (`drgnx-platform.el`)
 
