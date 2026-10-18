@@ -378,6 +378,36 @@ which misses them."
       (customize-set-variable 'drgnx-tty-mouse val))
     (message "Mouse in terminal windows: %s" (if val "on" "off"))))
 
+;;;; Check This Terminal
+
+(declare-function drgnx-doctor-terminal-facts "drgnx-doctor")
+(declare-function drgnx-doctor-run "drgnx-doctor")
+(declare-function drgnx-doctor-format "drgnx-doctor")
+
+(defun drgnx-tty-frames-terminal-check ()
+  "Show the doctor's Terminal group for the selected terminal window in `*drgnx terminal*': computed from
+that window's capabilities and its client's environment, not from this process's.  A graphical window says to run
+it in a terminal window, or `drgnx doctor' in a shell."
+  (interactive)
+  (let ((frame (selected-frame)))
+    (if (display-graphic-p frame)
+        (message "This is a graphical window: run Check This Terminal in a terminal window, or `drgnx doctor' in a shell")
+      (require 'drgnx-doctor)
+      (let* ((caps (drgnx-tty-frame-caps frame))
+             ;; the chords this terminal cannot send, with the keys that stand for them (what the fallback layer installs)
+             (rows (mapcar (pcase-lambda (`(,chord . ,row)) (list chord nil (plist-get row :alt) (plist-get row :prefix)))
+                           (drgnx-tty-fallback-for-terminal (drgnx-tty-fallback-active-table) caps)))
+             (facts (list :version emacs-version
+                          :terminal (drgnx-doctor-terminal-facts frame :caps caps :fallbacks rows)))
+             (text (drgnx-doctor-format (drgnx-doctor-run facts nil "Terminal"))))
+        (with-current-buffer (get-buffer-create "*drgnx terminal*")
+          (let ((inhibit-read-only t))
+            (erase-buffer)
+            (insert text "\n"))
+          (special-mode)
+          (goto-char (point-min))
+          (pop-to-buffer (current-buffer)))))))
+
 ;;;; EDITOR frames
 
 (defun drgnx-tty-frames--visit ()
@@ -681,6 +711,10 @@ are the faces of a group that rely on an attribute because their state has no te
                                                     :title "Toggle Mouse in Terminal Windows" :scope 'window
                                                     :command #'drgnx-tty-frames-toggle-mouse
                                                     :doc "Mouse clicks, wheel and drags in terminal windows on or off")
+                              (drgnx-command-define 'terminal-check :category "Help"
+                                                    :title "Check This Terminal" :scope 'window
+                                                    :command #'drgnx-tty-frames-terminal-check
+                                                    :doc "What this terminal window can do and lacks, with the line that fixes each (the doctor's Terminal group)")
                               (add-hook 'tty-setup-hook #'drgnx-tty-frames-setup)
                               (add-hook 'server-visit-hook #'drgnx-tty-frames--visit)
                               (add-hook 'server-after-make-frame-hook #'drgnx-tty-frames--after-make-frame)

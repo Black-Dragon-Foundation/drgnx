@@ -456,6 +456,52 @@ terminal; on 256 colours it is approximated, on 8 colours only the basic ones re
   these faces is checked on 8, 256 and 24-bit terminals: none draws its text in its own background colour.
   `drgnx-tty-frames-state-faces` lists them with the cue each relies on.
 
+## Check this terminal
+
+`drgnx doctor`, run in a terminal, has a Terminal group; **Check This Terminal** (Help, in the palette; no key) shows
+the same group inside drgnx for the terminal window you are in, in `*drgnx terminal*`. In a graphical window it says to
+run it in a terminal window, or `drgnx doctor` in a shell. Outside a terminal the doctor prints one line, `not run from a
+terminal`. Nothing prompts, nothing is installed, and inside tmux the only process is `tmux show` (1 second at most).
+This is what Ptyxis (GNOME's VTE terminal) gives:
+
+```
+OK    terminal             GNOME Terminal, Ptyxis (VTE) (TERM=xterm-256color), terminfo found
+OK    terminal-mouse       mouse reports are on: clicks, the wheel and drags work
+WARN  terminal-keys        neither the kitty keyboard protocol nor modifyOtherKeys: this terminal cannot send C-S- chords and the like
+      chord  native  fallback     prefix
+      C-S-p  no      Alt+Shift+P  F6 p
+      C-.    no      —            F6 .
+      fix: This terminal cannot send C-S- chords and the like. To get every key, install a terminal that sends them
+           (drgnx never installs one for you): xterm: sudo dnf install xterm; foot: sudo dnf install foot. …
+WARN  terminal-clipboard   copy stays in drgnx: nothing carries OSC 52 to your clipboard
+      fix: none: VTE does not take OSC 52 (GNOME VTE issue 2495); copy stays in drgnx
+INFO  terminal-popups      popups in the bottom lane; 31.1 has floating ones
+```
+
+- **`terminal`:** which terminal this is (from the environment; inside tmux, tmux and the terminal around it), its
+  `TERM`, and whether a terminfo entry for it exists here. A terminal drgnx does not know is `INFO`: F1 and the palette
+  reach every command.
+- **`terminal-colours`:** true colour, or how many colours; a terminal that has true colour but runs at 256 is told
+  to set `COLORTERM=truecolor`.
+- **`terminal-mouse`**, **`terminal-clipboard`:** from the terminal's row in the table above; the fix is that row's
+  line (`none: …` where no setting helps).
+- **`terminal-keys`:** the kitty keyboard protocol, modifyOtherKeys or neither. For a terminal that sends neither, the
+  table lists every shortcut of your key profile it cannot send: whether the terminal sends it itself (`native`), the
+  Alt+Shift key that stands for it (`—` where that key is in use or reserved) and the F6 form (see [Legacy
+  terminals](#legacy-terminals-altshift-and-f6)). The fix names the capable terminals you have installed, or else the
+  install command for your system. With no window of this terminal opened in drgnx yet, the table says `open drgnx in
+  this terminal once to list them`.
+- **`terminal-tmux`** (inside tmux only): `OK`, or a warning naming what tmux lacks (copy, keys, focus, true colour) with
+  the fix `add to ~/.tmux.conf: LINE; LINE…, then run tmux source ~/.tmux.conf` ([the lines](#drgnx-inside-tmux)). drgnx
+  never edits `~/.tmux.conf`. For a tmux on the other side of SSH, which drgnx cannot ask, an `INFO` with the full list
+  to check there.
+- **`terminal-ssh`** (over SSH only): whether this machine has your terminal's terminfo entry; if not, the fixes from
+  [SSH](#ssh).
+- **`terminal-popups`:** `popups in the bottom lane; 31.1 has floating ones` on Emacs 30.2.
+
+The doctor describes the newest window of the same kind of terminal that drgnx has opened (the capabilities it measured
+are in `terminal-report.eld`); Check This Terminal measures the window you are in.
+
 ## What a terminal window lacks
 
 - **Images:** the commit graph, image previews and other pictures need a graphical window; in a terminal they say so.

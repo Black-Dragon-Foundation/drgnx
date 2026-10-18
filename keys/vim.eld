@@ -175,6 +175,7 @@
         (terminal-new "SPC t n")
         (explorer-terminal-here :none "the Explorer's right-click menu")
         (terminal-toggle-mouse :none "the palette")
+        (terminal-check :none "the palette")
         (go-quick-open "SPC f p")
         (search-project "SPC s p")
         (search-semantic "SPC s i")
