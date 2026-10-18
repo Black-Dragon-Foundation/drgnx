@@ -546,6 +546,76 @@ the count too high ("lower the count"). See [check.md](check.md#lints-on-the-sou
 (`drgnx-lint/no-timers-in-workbench-follow-paths`) counts a `drgnx-timer-start`, `-soon`, `-debounce` or `-poll`
 form without `:idle t` as a timer start in `wb/`.
 
+## Epochs, memos and caches (`drgnx-memo.el`)
+
+Code that runs on redisplay or per keystroke only reads what is cached. Three tools keep the cache honest and
+cheap. The library needs nothing but Emacs (the recorder is reached through `fboundp`), so batch processes load it.
+
+| Use | When | Cost of a read |
+| --- | --- | --- |
+| **Epoch** | Something several results depend on changes now and then, and a hook or a variable set tells you when. | 0 allocation |
+| **Memo** | One result per window, buffer, frame or (no object) per session, rebuilt only when its inputs changed. | a hit allocates 0 |
+| **Cache** | Many results by key: per buffer, window, frame or process, or by string, kept within a cap. | a string hit stamps with `setcdr`, 0 |
+
+### Epochs
+
+`(drgnx-epoch-define NAME &key per redisplay doc)` makes a counter. `per` is nil (one global counter), `buffer`
+(a base plus one count per buffer, weak on the buffer) or `object` (an `equal` table of counts). `(drgnx-epoch NAME
+&optional OBJECT)` is a fixnum: for a per epoch the base plus the object's own count, so either bump moves it;
+without OBJECT, a `buffer` epoch gives its base and an `object` epoch the total of every bump. Counters wrap at the
+fixnum limit. `(drgnx-epoch-bump NAME &optional OBJECT)` returns the new value; with `:redisplay t` it also calls
+`force-mode-line-update` (every window for a global, base or object bump, that buffer's for a buffer's).
+
+`drgnx-epoch` is a macro. A quoted literal NAME that is not defined signals `No epoch NAME` when the form is
+expanded, so a typo fails the build; define the epoch above its first use in the file (`drgnx-epoch-define` with a
+literal name is noted at expansion), or `require` the file that does. A computed NAME is checked at run time.
+
+`(drgnx-epoch-watch NAME VARIABLES)` bumps NAME when one of VARIABLES is set (`add-variable-watcher`). The watcher
+`drgnx-memo--watcher` reacts to `set`, `makunbound` and `defvaralias` only, never to `let` or `unlet`: a dynamic
+binding is undone at once, and counting it would move the epoch twice per rebinding. A buffer-local set bumps that
+buffer's own count (the watcher's WHERE); a global set (`setq-default`) bumps the base, which moves every buffer's
+value. `drgnx-memo--watched` maps each variable to its epochs.
+
+**What is watched is a closed list**, each entry tested. A watcher costs about 0.2 µs per set (a `setq` of an unwatched
+variable 0.011 µs; an empty watcher costs 0.066 µs), so it goes on variables that change rarely. **Hot values stay plain
+`eq` memo keys and are never watched**: point, `buffer-chars-modified-tick`, `default-directory`, `mode-line-process`,
+keycast's keys, the window's start and width. The memo compares them for free.
+
+### Memos
+
+```elisp
+(drgnx-memo-define window-badge :on window
+  :keys ((window-point object) (buffer-chars-modified-tick) (drgnx-epoch 'git)))
+(drgnx-memo window-badge (selected-window) (build-the-badge))
+```
+
+`drgnx-memo-define` (a macro, `eval-and-compile`: put it at the top level of a file) takes an unquoted NAME and
+`:on` `window`, `buffer`, `frame` or nil (one global slot). The key forms are evaluated where `drgnx-memo` is used;
+they may refer to `object`. The table is weak on the object. `(drgnx-memo NAME OBJECT BUILD)` evaluates each key form
+once. When every value is `eq` to the stored one it returns the stored value and conses nothing; otherwise it runs
+BUILD, writes the values into the object's vector with `aset` (made on the first miss) and returns BUILD's value.
+Keys compare with `eq`: use fixnums, symbols, objects and epochs, not fresh strings, lists or floats (those never
+hit). `(drgnx-memo-forget NAME &optional OBJECT)` drops one object's value, or all.
+
+### Caches
+
+`(drgnx-cache-define NAME &key key cap doc)`: `key` `object` is a weak `eq` table; a get checks `buffer-live-p`,
+`window-live-p`, `frame-live-p` or `process-live-p` and drops a dead entry. `key` `string` is an `equal` table with an
+LRU; `cap` is required and positive. A get stamps the entry; a put past the cap evicts the oldest stamp (a scan of the
+table, on put only). `drgnx-cache-get`, `-put`, `-remove` and `-size` take the NAME and the key. **Every cache has a
+cap or is weak**; the docstring or `:doc` says which event or cap bounds it.
+
+### Ownership, census and the soak
+
+Each definition pushes an undo (`"epoch NAME"`, `"memo NAME"`, `"cache NAME"`, `"epoch-watch NAME VARIABLE"`) when a
+module's setup makes it, so turning the module off removes the definition and the watchers that are still its own.
+An epoch keeps its count across a redefinition, so a memo never sees a value it saw before. The definitions are
+listed in `drgnx-memo--registry`, which the fingerprint reads (`test --leaks` names a definition a test leaves).
+`(drgnx-memo-census)` returns `((NAME KIND SIZE CAP) …)` for every memo and cache; `bin/drgnx test --soak` prints it
+after each round and fails when a cache's SIZE passes its CAP. Tests: `test/unit/core-memo-test.el` (prefix
+`drgnx-memo/`; the 0-allocation tests byte-compile the library's functions in place first, because the tests run on
+source and an interpreted call conses).
+
 ## Modal core (`drgnx-modal.el`)
 
 The engine-neutral half of modal editing; evil plugs into it (the `editor/evil` module, below), another engine could.
