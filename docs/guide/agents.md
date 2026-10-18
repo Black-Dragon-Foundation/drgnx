@@ -181,8 +181,9 @@ you say yes.
 ## Jobs and your Claude settings
 
 A [job](jobs.md)'s agent works unwatched, in a repository you may not have written, so nothing in a settings file may
-let it act without asking. When a job runs a profile on Claude Code's adapter (told by the package of the program
-it starts, `@agentclientprotocol/claude-agent-acp`, not by its name), its `session/new` and `session/load` carry
+let it act without asking. When a job runs a profile on Claude Code's adapter (when either the package of the
+program it starts, `@agentclientprotocol/claude-agent-acp`, or a file name in its command says so: a pnpm, volta,
+asdf or mise shim counts by its name), its `session/new` and `session/load` carry
 options for the adapter (`_meta.claudeCode.options`, `drgnx-agents-job-claude-options`), and that session's Claude
 **ignores**:
 
@@ -200,8 +201,9 @@ options for the adapter (`_meta.claudeCode.options`, `drgnx-agents-job-claude-op
 
 The policy tier makes Claude ignore the deny and ask rules of those files too, so drgnx copies them into it: the
 **deny and ask rules** of your user, project and local settings still apply (an allow rule is never copied). drgnx
-reads those files when the session starts: only regular files (not links) inside the task's folder for the project
-and local ones, up to 1 MB, that parse as JSON; any other is skipped. `CLAUDE.md`, skills and agent definitions still
+reads those files when the session starts: regular files up to 1 MB that parse as JSON — your user settings file
+may be a link (as stow or home-manager make it), while the project and local ones must be plain files inside the
+task's folder, never links; any other is skipped. `CLAUDE.md`, skills and agent definitions still
 load (which settings files Claude reads is left as it is: they are content, and the permission check bounds what they
 can make the agent do). Claude Code's own sandbox is off in a job: drgnx's is the boundary.
 
@@ -213,8 +215,9 @@ bypass mode, the `default` mode and the MCP lock hold either way.
 
 Tests: `test/unit/agents-claude-options-test.el` (what job sessions send through `session/new` and `session/load`,
 the mode set before any turn and a refusal ending the session, deny and ask rules copied and allow rules never,
-settings files that are links or do not parse skipped, nothing for your sessions, for other agents or for a program
-that only has claude in its name, a repository's bypass settings and `.mcp.json` changing nothing sent, an
+the folder's settings files that are links or do not parse skipped and a linked user file followed, nothing for your
+sessions or other agents, the lock for a shim install and for a program that only has claude in its name, a
+repository's bypass settings and `.mcp.json` changing nothing sent, an
 environment value JSON cannot carry ending the start without showing it).
 
 ## Working together

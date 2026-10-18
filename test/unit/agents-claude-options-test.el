@@ -140,17 +140,40 @@ taken from the defconst."
       (should (eq (drgnx-agents-claude-options-test--meta s) 'none))
       (should (equal (drgnx-agents-claude-options-test--ask s "mode") "mode: unset")))))
 
-(ert-deftest drgnx-agents-claude-options/claude-by-name-only-is-not-claude ()
-  ;; A program whose name says claude but that is not the adapter's package gets no options: the identity comes from
-  ;; the adapter's package.json (`drgnx-agents-claude-adapter'), never from a file name.
+(ert-deftest drgnx-agents-claude-options/claude-by-name-only-gets-the-lock ()
+  ;; A program whose package drgnx cannot tell but whose name says claude is locked all the same: the lock fails
+  ;; closed (another agent ignores _meta.claudeCode; at worst its set_mode fails and the session ends).
   (drgnx-agents-claude-options-test--with nil
     (let ((drgnx-agents-profiles
            (list (list "named" :command (list "sh" (expand-file-name "test/fixtures/mock-acp-stdin.sh" drgnx-dir)
                                               (expand-file-name invocation-name invocation-directory) "--batch" "-Q"
                                               "--eval" "(ignore 'claude-agent-acp)"
-                                              "-l" (expand-file-name "test/fixtures/mock-acp.el" drgnx-dir))))))
-      (should (eq (drgnx-agents-claude-options-test--meta (drgnx-agents-start "named" temporary-file-directory nil "j1"))
-                  'none)))))
+                                              "-l" (expand-file-name "test/fixtures/mock-acp.el" drgnx-dir))
+                       :env (list (concat "MOCK_ACP_STATE=" state))))))
+      (let ((s (drgnx-agents-start "named" temporary-file-directory nil "j1")))
+        (should (equal (drgnx-agents-claude-options-test--meta s)
+                       (drgnx-agents-claude-options-test--expected (list :MOCK_ACP_STATE state :DRGNX_JOB "j1"))))
+        (should (equal (drgnx-agents-claude-options-test--ask s "mode") "mode: default"))))))
+
+(ert-deftest drgnx-agents-claude-options/a-shim-install-gets-the-lock ()
+  ;; pnpm, volta, asdf and mise put a shell shim on the PATH, with no package.json drgnx can find beside it: the
+  ;; built-in profile's bare `claude-agent-acp' is still Claude's.
+  (drgnx-agents-claude-options-test--with nil
+    (let* ((shims (file-name-as-directory (expand-file-name "shims" root)))
+           (shim (expand-file-name "claude-agent-acp" shims))
+           (exec-path (cons shims (seq-remove (lambda (d) (string-prefix-p root (or d ""))) exec-path))))
+      (make-directory shims t)
+      (write-region (format "#!/bin/sh\nexec sh %s %s --batch -Q -l %s\n"
+                            (shell-quote-argument (expand-file-name "test/fixtures/mock-acp-stdin.sh" drgnx-dir))
+                            (shell-quote-argument (expand-file-name invocation-name invocation-directory))
+                            (shell-quote-argument (expand-file-name "test/fixtures/mock-acp.el" drgnx-dir)))
+                    nil shim nil 'silent)
+      (set-file-modes shim #o755)
+      (should-not (drgnx-agents--claude-adapter-p '("claude-agent-acp")))   ; the package cannot be told
+      (let ((s (drgnx-agents-start "claude" temporary-file-directory nil "j1")))
+        (should (equal (drgnx-agents-claude-options-test--meta s)
+                       (drgnx-agents-claude-options-test--expected (list :MOCK_ACP_STATE state :DRGNX_JOB "j1"))))
+        (should (equal (drgnx-agents-claude-options-test--ask s "mode") "mode: default"))))))
 
 (ert-deftest drgnx-agents-claude-options/a-repos-settings-change-nothing-sent ()
   ;; A repository that pre-allows everything and brings its own MCP server: the options sent are the same as in a
@@ -221,6 +244,17 @@ taken from the defconst."
       (should (equal (drgnx-agents-claude-options-test--meta (drgnx-agents-start "claude" repo nil "j1"))
                      (drgnx-agents-claude-options-test--expected (list :MOCK_ACP_STATE state :DRGNX_JOB "j1")))))))
 
+(ert-deftest drgnx-agents-claude-options/a-linked-user-settings-file-is-followed ()
+  ;; Dotfile managers (stow, home-manager) link ~/.claude/settings.json: its deny rules still apply.  The folder's
+  ;; files are still never followed (`settings-files-that-are-not-plain-are-not-read').
+  (drgnx-agents-claude-options-test--with nil
+    (let ((target (expand-file-name "dotfiles/claude/settings.json" root)))
+      (drgnx-agents-claude-options-test--write target "{\"permissions\":{\"deny\":[\"Bash(git push:*)\"],\"allow\":[\"Bash(*)\"]}}")
+      (make-symbolic-link target (expand-file-name "settings.json" config))
+      (should (equal (drgnx-agents-claude-options-test--meta (drgnx-agents-start "claude" temporary-file-directory nil "j1"))
+                     (drgnx-agents-claude-options-test--expected (list :MOCK_ACP_STATE state :DRGNX_JOB "j1")
+                                                                 '("Bash(git push:*)")))))))
+
 (ert-deftest drgnx-agents-claude-options/nothing-runs-before-the-mode-is-set ()
   ;; set_mode answers a second late: the session is not idle until then, and a message sent at once runs after it.
   (drgnx-agents-claude-options-test--with '("MOCK_ACP_SET_MODE_SLOW=1")
@@ -252,15 +286,19 @@ taken from the defconst."
                   s))))
       (should-not idle)
       (should (= prompts 0))
-      (should (seq-find (lambda (e) (and (eq (plist-get e :type) 'error) (string-search "permission mode" (plist-get e :text))))
-                        (drgnx-agent-session-entries s))))))
+      (let ((errors (seq-filter (lambda (e) (eq (plist-get e :type) 'error)) (drgnx-agent-session-entries s))))
+        (should (= (length errors) 1))                  ; the agent's exit adds no second one
+        (should (string-search "permission mode" (plist-get (car errors) :text)))))))
 
 (ert-deftest drgnx-agents-claude-options/an-env-value-json-cannot-carry-fails-the-start ()
   ;; A value that is not valid UTF-8 cannot be sent: the session ends with a message that never shows the value.
   (drgnx-agents-claude-options-test--with (list (concat "DRGNX_RAW=sk-secret" (string (unibyte-char-to-multibyte 128))))
     (let ((s (drgnx-agents-start "claude" temporary-file-directory nil "j1")))
       (should (drgnx-agents-claude-options-test--wait (lambda () (eq (drgnx-agent-session-status s) 'exited))))
-      (should (seq-find (lambda (e) (eq (plist-get e :type) 'error)) (drgnx-agent-session-entries s)))
+      (sleep-for 0.8)                                   ; the agent's exit fails what was pending
+      (let ((errors (seq-filter (lambda (e) (eq (plist-get e :type) 'error)) (drgnx-agent-session-entries s))))
+        (should (= (length errors) 1))
+        (should (string-search "could not send session/new" (plist-get (car errors) :text))))
       (should-not (seq-find (lambda (e) (string-search "sk-secret" (format "%s" (plist-get e :text))))
                             (drgnx-agent-session-entries s)))
       (should-not (seq-find (lambda (l) (string-search "sk-secret" l)) (drgnx-acp-conn-log (drgnx-agent-session-conn s)))))))

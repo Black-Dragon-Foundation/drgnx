@@ -586,14 +586,21 @@ tier, so they still apply.  `settingSources' is left to the adapter, so CLAUDE.m
 docs/guide/agents.md, \"Jobs and your Claude settings\".")
 
 (defun drgnx-agents--claude-adapter-p (command)
-  "Does the profile COMMAND (a list) run Claude Code's ACP adapter?  Told by the package.json of the program it
-starts (`drgnx-agents-command', `drgnx-agents--adapter-package': the maintained package or the deprecated one), never
-by a file name, so a wrapper or a program that only has claude in its name is not the adapter."
+  "Does the profile COMMAND (a list) run Claude Code's ACP adapter, by the package.json of the program it starts
+\(`drgnx-agents-command', `drgnx-agents--adapter-package': the maintained package or the deprecated one)?  Nil when
+drgnx cannot tell the package (a shim of pnpm, volta, asdf or mise; a wrapper): see `drgnx-agents--runs-claude-p'."
   (let ((program (and (stringp (car command)) (executable-find (car (drgnx-agents-command command))))))
     (and program
          (member (plist-get (drgnx-agents--adapter-package program) :name)
                  (list drgnx-agents-claude-package drgnx-agents-claude-old-package))
          t)))
+
+(defun drgnx-agents--runs-claude-p (command)
+  "Does the profile COMMAND run Claude Code, so a job session of it gets Claude's lock (`drgnx-agents--session-meta')?
+When either its program's package (`drgnx-agents--claude-adapter-p') or a file name in it
+\(`drgnx-agents--command-agent') says so: the test fails closed, as another agent ignores `_meta.claudeCode' and at
+worst refuses the `default' mode, which ends its session."
+  (or (drgnx-agents--claude-adapter-p command) (eq (drgnx-agents--command-agent command) 'claude)))
 
 (defun drgnx-agents--env-object (env)
   "ENV (\"NAME=value\" strings, and bare names that unset) as the agent's process sees it, a plist (:NAME VALUE…):
@@ -627,24 +634,24 @@ the agent's to write, and are read only as these strings."
 
 (defun drgnx-agents--claude-deny-ask (env cwd)
   "The deny and ask rules of Claude's user settings (settings.json in CLAUDE_CONFIG_DIR as ENV sets it, else
-~/.claude) and of CWD's project and local settings (.claude/settings.json, .claude/settings.local.json), as
-\(DENY . ASK), without duplicates."
+~/.claude; a link there is followed, as dotfile managers make one) and of CWD's project and local settings
+\(.claude/settings.json, .claude/settings.local.json; never through a link), as (DENY . ASK), without duplicates."
   (let* ((config (let ((process-environment (append env process-environment)))
                    (or (getenv "CLAUDE_CONFIG_DIR") (expand-file-name "~/.claude"))))
-         (all (list (drgnx-agents--claude-rules (expand-file-name "settings.json" config))
+         (all (list (drgnx-agents--claude-rules (file-truename (expand-file-name "settings.json" config)))
                     (drgnx-agents--claude-rules (expand-file-name ".claude/settings.json" cwd) cwd)
                     (drgnx-agents--claude-rules (expand-file-name ".claude/settings.local.json" cwd) cwd))))
     (cons (delete-dups (apply #'append (mapcar #'car all))) (delete-dups (apply #'append (mapcar #'cdr all))))))
 
 (defun drgnx-agents--session-meta (s env)
   "The `_meta' S's session/new and session/load carry: for a session of a job whose profile runs Claude Code's
-adapter (`drgnx-agents--claude-adapter-p'), (:claudeCode (:options OPTS)), OPTS being
+adapter (`drgnx-agents--runs-claude-p'), (:claudeCode (:options OPTS)), OPTS being
 `drgnx-agents-job-claude-options' with the deny and ask rules of the user's and S's folder's Claude settings added
 to its policy tier's permissions (`drgnx-agents--claude-deny-ask'; never an allow rule) and `:env', ENV (the
 \"NAME=value\" strings S's agent was started with) as the agent's process sees it (`drgnx-agents--env-object'); nil,
 so no `_meta' at all, for any other."
   (and (drgnx-agent-session-job s)
-       (drgnx-agents--claude-adapter-p (plist-get (cdr (drgnx-agents-profile (drgnx-agent-session-profile s))) :command))
+       (drgnx-agents--runs-claude-p (plist-get (cdr (drgnx-agents-profile (drgnx-agent-session-profile s))) :command))
        (let* ((options (copy-tree drgnx-agents-job-claude-options))
               (managed (plist-get options :managedSettings))
               (rules (drgnx-agents--claude-deny-ask env (drgnx-agent-session-cwd s)))
@@ -735,11 +742,20 @@ the commits each turn makes are recorded for it.  JOB: the coordination job it b
 
 (defun drgnx-agents--request (s method params callback)
   "Send request METHOD with PARAMS to S's agent, CALLBACK as in `drgnx-acp-request'.  Params that cannot be
-written as JSON (an environment value that is not valid UTF-8) end S, with a message that never shows them."
+written as JSON (an environment value that is not valid UTF-8) end S, with a message that never shows them.  Once
+drgnx ended S (`drgnx-agents-kill'), CALLBACK is not called: the agent's exit fails what was pending, and S has
+said why already."
   (condition-case nil
-      (drgnx-acp-request (drgnx-agent-session-conn s) method params callback)
-    (error (drgnx-agents--add s (list :type 'error :text (format "drgnx could not send %s to the agent: a value in it (an environment variable of the profile?) cannot be written as JSON" method)))
-           (drgnx-agents-kill s))))
+      (drgnx-acp-request (drgnx-agent-session-conn s) method params
+                         (lambda (r) (unless (eq (drgnx-agent-session-status s) 'exited) (funcall callback r))))
+    (error (drgnx-agents--end s (format "drgnx could not send %s to the agent: a value in it (an environment variable of the profile?) cannot be written as JSON" method)))))
+
+(defun drgnx-agents--end (s text)
+  "End S, saying TEXT once: S is `exited' before its agent is stopped, so what the stop fails is not reported again
+\(`drgnx-agents--request')."
+  (drgnx-agents--add s (list :type 'error :text text))
+  (setf (drgnx-agent-session-status s) 'exited)
+  (drgnx-agents-kill s))
 
 (defun drgnx-agents--pin-mode (s pin then)
   "With PIN (a job session of Claude Code's adapter, `drgnx-agents--session-meta'), set S's permission mode to
@@ -750,9 +766,8 @@ turn in a mode its settings chose (acceptEdits, auto, or a resumed session's).  
      s "session/set_mode" (list :sessionId (drgnx-agent-session-acp-id s) :modeId "default")
      (lambda (r)
        (if (not (cdr r)) (funcall then s)
-         (drgnx-agents--add s (list :type 'error :text (format "the agent's permission mode could not be set to default (%s): the session ends"
-                                                               (or (plist-get (cdr r) :message) (cdr r)))))
-         (drgnx-agents-kill s))))))
+         (drgnx-agents--end s (format "the agent's permission mode could not be set to default (%s): the session ends"
+                                      (or (plist-get (cdr r) :message) (cdr r)))))))))
 
 (defun drgnx-agents-take-over (profile cwd session-id &optional task id name job)
   "Resume the agent session SESSION-ID (from another client, or one that ended) with PROFILE in CWD:
