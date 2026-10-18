@@ -34,7 +34,7 @@ without WebKit the right half says so and pages open in your system browser.
 
 Switching back to a layout brings back the arrangement you left it in, not a fresh one: the sizes of the sidebar
 and docks, the tabs they showed, your editor groups with their tabs, and the place in each file. Each window
-remembers this for itself, for as long as Emacs runs.
+remembers this for itself, and keeps it across a restart ([After a restart](#after-a-restart)).
 
 A layout only moves, shows and hides things. It never closes a file, stops an agent or ends a process. Going to
 Zen hides your other editor groups, and going back brings them back. That includes leaving Zen for a layout you have
@@ -57,15 +57,23 @@ are open.
 
 The layout you were in is saved with the workbench ([workbench.md](workbench.md#the-layout-survives-a-restart))
 and is your current layout again at the next start, so Next Layout carries on from it and Zen centres the text
-again. The windows themselves come back as the workbench was; nothing is rearranged. A layout that no longer
-exists (a deleted one of yours) is ignored. Only the main window's layout is kept.
+again. The windows themselves come back as the workbench was; nothing is rearranged. The chat beside the editor
+(Agent) and the web page pane (Browser) are still the layout's pane: the next layout takes them away, and Open URL
+uses the same pane. The last arrangement of each other layout is saved too (its groups, sizes, docks, the panel's
+tab), so going back to it after a restart brings it back as you left it. Files are opened again by name; a buffer
+that was not a file is not, and its window shows another buffer. An arrangement that cannot be put back is built
+fresh, with a message. A layout that no longer exists (a deleted one of yours) is ignored. Only the main window's
+layout is kept.
 
 ## For module authors
 
 Layouts are data: `drgnx-layouts` holds the built-in ones as `(NAME :left VIEW :right TAB :panel TAB :editor
 SHAPE)`. For an area, `nil` hides it and `keep` leaves it as it was. Editor shapes are registered in
 `drgnx-layouts-shapes` (SHAPE → a function of the editor window). drgnx ships `one`, `editor+agent` and `zen`, and
-the browser pane (module `tools/browser`) adds `editor+browser`. A shape that is not registered arranges as `one`. `drgnx-layouts-apply`
+the browser pane (module `tools/browser`) adds `editor+browser`. A shape that is not registered arranges as `one`.
+A shape that makes a pane marks its window with the parameter `drgnx-layouts-pane` (the kind, a symbol) and registers
+`drgnx-layouts-pane-fillers` (KIND → a function of the pane window that fills it), so the pane is found and filled
+again after a restart. `drgnx-layouts-apply`
 switches the selected window's layout. To keep your own data in the saved workbench, add a function to
 `drgnx-persist-state-functions` (no argument, returns a plist for the selected frame) and read it back in a
 `drgnx-persist-after-restore-functions` function from the frame parameter `drgnx-persist-extra`.

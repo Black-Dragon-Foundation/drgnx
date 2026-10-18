@@ -150,17 +150,22 @@ The pane takes the focus, unless KEEP-FOCUS (a timer opening a page must not mov
         (insert "\nThis Emacs has no WebKit, so pages open in your system browser; see docs/guide/browser.md.\n")))
     (current-buffer)))
 
+(defun drgnx-browser--fill (pane)
+  "Show the last page (else a hint) in PANE."
+  (set-window-buffer pane (if (buffer-live-p drgnx-browser--buffer) drgnx-browser--buffer (drgnx-browser--placeholder))))
+
 (defun drgnx-browser--shape (editor)
   "The Browser layout's shape: EDITOR with the browser pane to its right (the last page, else a hint)."
   (let ((pane (with-selected-window editor (drgnx-browser--pane))))
-    (set-window-buffer pane (if (buffer-live-p drgnx-browser--buffer) drgnx-browser--buffer (drgnx-browser--placeholder)))
+    (drgnx-browser--fill pane)
     (select-window editor)
     pane))
 
 (defun drgnx-browser--register-shape ()
-  "Teach the layouts the `editor+browser' shape."
+  "Teach the layouts the `editor+browser' shape, and how to fill the pane found again after a restart."
   (require 'drgnx-layouts)
-  (setf (alist-get 'editor+browser drgnx-layouts-shapes) #'drgnx-browser--shape))
+  (setf (alist-get 'editor+browser drgnx-layouts-shapes) #'drgnx-browser--shape)
+  (setf (alist-get 'browser drgnx-layouts-pane-fillers) #'drgnx-browser--fill))
 
 ;;;; Test Report
 
