@@ -125,7 +125,7 @@ itself is missing the question also says that a `claude` inside a VS Code extens
 |---|---|---|
 | Claude Code (`claude`) | `brew install --cask claude-code` | Claude's official installer, `curl -fsSL https://claude.ai/install.sh \| bash` (into `~/.local/bin`, no `sudo`) |
 | Node.js, for the adapter (only when `claude-agent-acp` is missing too) | `brew install node` | your distro's package — `sudo dnf install nodejs npm`, `sudo apt-get install nodejs npm` or `sudo pacman -S nodejs npm` — which needs `sudo`: drgnx copies the command for you to run in a terminal and waits for `npm` to show up (up to ten minutes; `C-g` stops) |
-| The adapter (`claude-agent-acp`) | `npm install -g @zed-industries/claude-agent-acp` (with Homebrew's Node; any other Node, which has a global directory that is not yours, gets `--prefix ~/.local` as on Linux) | `npm install -g --prefix ~/.local @zed-industries/claude-agent-acp` (no `sudo`: a system Node's global directory is not yours) |
+| The adapter (`claude-agent-acp`) | `npm install -g @agentclientprotocol/claude-agent-acp` (with Homebrew's Node; any other Node, which has a global directory that is not yours, gets `--prefix ~/.local` as on Linux) | `npm install -g --prefix ~/.local @agentclientprotocol/claude-agent-acp` (no `sudo`: a system Node's global directory is not yours) |
 
 The commands that need no password run as drgnx jobs with a log and progress in the Welcome (`C-g` stops them). If
 one fails, the result says why (the log's last line), where the log is, and how to retry — run the step again, or
@@ -149,9 +149,13 @@ that alone.
 your `agents.eld` says), sends the ACP `initialize` request, waits up to ten seconds for the answer and stops it
 again — `ok` when it answers; otherwise the step fails, saying whether the program ended at once (with the end of
 its error output) or did not answer. Then Agents: New Agent Session… starts it in the agent panel
-([agents.md](agents.md)).
+([agents.md](agents.md)). The adapter is not pinned: npm installs the latest version. When the adapter that answered
+is the deprecated `@zed-industries/claude-agent-acp`, which earlier drgnx versions installed, or
+`@agentclientprotocol/claude-agent-acp` older than 0.93.0, the step ends `warn`. The result gives the command to run
+in a terminal ([agents.md](agents.md#sessions)). The step installs and removes nothing for this, even
+interactively. The old adapter keeps working until you run the command.
 
-**The defaults for your agents.** Once the check is `ok`, run interactively, the step asks three more things and
+**The defaults for your agents.** Once the check passes (`ok`, or `warn` for an old adapter), run interactively, the step asks three more things and
 saves the answers in `agents.eld` ([agents.md](agents.md#what-agents-get)): the **default agent profile** (what Agents:
 New Agent Session… offers on Return; Return alone keeps the one you have), whether the agents drgnx starts get its
 **coordination tools** (tasks, messages, the decision log; on until you say otherwise) and whether they get its
@@ -202,7 +206,7 @@ twice, the CLI; the Agents step on a pretend Mac and a pretend Linux with fake `
 mock ACP agent as `claude-agent-acp`, on a PATH of fakes only: the commands in order and asked once, nothing run
 without interaction or a yes, Linux's installer and the `sudo` Node left to you, a VS Code extension's `claude` not
 counting, the login terminal and its header, a `claude` with no `auth status`, the profile answering, dying and
-silent, an npm failure and its retry), `test/unit/macos-test.el` (the applet's quoting, the document types, the app built with fake
+silent, an npm failure and its retry, the maintained adapter installed, a deprecated adapter still checked and warned about with its command, npm not run), `test/unit/macos-test.el` (the applet's quoting, the document types, the app built with fake
 `osacompile`/`plutil`/`codesign`/`lsregister`), `test/unit/ai-onboard-test.el` (the AI step against a mock model server: roles set and tested, a working choice kept, nothing running; setting AI up on a pretend Mac with fake `brew`, `ollama`, `lms`, `open`, `sysctl` and `security`, the fake servers being the mock: the room and the models for it, Ollama and LM Studio installed, started, downloaded, every feature tested, LM Studio without `lms`, the OpenRouter key into the Keychain and none asked in the CLI, a failed download and the run after it, nothing installed without interaction, the progress row, Chat's module asked for or reported, the runner started again when it is down or refuses — not when it answers or a job runs it, at most once a minute, never in batch) and `test/live/drgnx-onboard-test.el` (a fresh GUI
 session onboards non-interactively; the board has the projects and TODOs, no step or doctor check fails, Welcome
 opens in the editor, a second run changes nothing).

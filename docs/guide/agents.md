@@ -23,10 +23,27 @@ Mac) opens the Agents tab. Profiles live in
 the agent advertises steering — sent as `_session/steering`; if the agent refuses, the message is queued instead) or
 `interrupt` (stop the turn, then send). A profile whose program is not installed gives a session that says so. Keys and tokens are
 never written there — the agent reads them from its environment or its own login. The built-in `claude` profile
-runs the unmodified `claude-agent-acp` (npm package `@zed-industries/claude-agent-acp`) when it is installed, with
+runs the unmodified `claude-agent-acp` (npm package `@agentclientprotocol/claude-agent-acp`) when it is installed, with
 your own Claude login. Onboarding's Agents step installs Claude Code, Node and that adapter if they are missing
 (asked first), opens a terminal for the login and checks that the profile starts
 ([onboarding.md](onboarding.md#setting-claude-code-up)); to check it again later, run Onboarding: Agents.
+
+**Which adapter runs.** The deprecated package `@zed-industries/claude-agent-acp` (frozen at 0.23.1, which drgnx
+installed before) installs a program of the same name. It never tells drgnx which MCP server a tool comes from, so the
+jobs permission check can only go by the tool's name. A profile whose command is the bare `claude-agent-acp` (the
+built-in ones) runs the first `claude-agent-acp` on the `PATH` that belongs to `@agentclientprotocol/claude-agent-acp`,
+read from the `package.json` the program links into; failing that, the first one on the `PATH`. When that is the
+deprecated package it still runs, and the first time in each Emacs a message says how to move. `drgnx doctor`
+warns about it too (check `claude-adapter`, which also wants version 0.93.0 or newer). The one-line fix replaces it
+in the same npm prefix:
+
+```sh
+npm uninstall -g --prefix PREFIX @zed-industries/claude-agent-acp && npm install -g --prefix PREFIX @agentclientprotocol/claude-agent-acp
+```
+
+The doctor and the message fill in `PREFIX`. The old package is removed first because npm will not install a program
+over another package's. drgnx never runs this command for you: until you do, the old adapter keeps working. A
+command given as a path (`:command ("/opt/x/claude-agent-acp")`) runs exactly that program.
 
 A session's **transcript** (RET on its row; opens in the editor) shows:
 
@@ -170,6 +187,10 @@ run it, with the plan's own encoding and line endings — and leaves alone a pla
 - `test/unit/agents-test.el` — sessions: a turn's transcript, queueing during a turn (delivered in order, never
   cancelling), steering (and its fallback), Stop within a second, permissions, tool calls, plans and subagents, a
   dying agent, Take Over, `/compact`.
+- `test/unit/agents-adapter-test.el` — which adapter runs, from fake npm prefixes with `package.json` files only (no
+  npm, no agent): the maintained package wins wherever it is on the `PATH`, the deprecated one still runs and says so
+  once with its fix, an old version, a copy instead of a link, a program of no known package, other commands left
+  alone, sessions and jobs starting the chosen program, and the doctor's fact.
 - `test/unit/jobs-test.el`, `test/unit/agents-ui-test.el` (the transcript, the list, hunk-by-hunk review),
   `test/unit/plans-sync-test.el`, `test/live/drgnx-agents-test.el` (queue, Stop and the dock in a GUI session).
 - `test/unit/agents-parity-test.el` — slash commands, context %, `/compact` lowering it: against the mock, or against

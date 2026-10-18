@@ -84,6 +84,32 @@ PLATFORM (`linux' or `macos'): only run on that platform, as `drgnx-platform' sa
       (progn (require 'drgnx-search-setup) (drgnx-search-doctor-facts (drgnx-search-setup--roots)))
     (error (list :error (error-message-string err)))))
 
+(declare-function drgnx-agents-claude-adapter "drgnx-agents")
+(declare-function drgnx-agents-adapter-problem "drgnx-agents")
+(defvar drgnx-agents-claude-package)
+
+(defun drgnx-doctor--claude-adapter ()
+  "The fact of the `claude-adapter' check: the adapter the claude profiles would run (`drgnx-agents-claude-adapter':
+its package read from its package.json, never run), nil when none is installed, or (:error MESSAGE)."
+  (condition-case err
+      (progn (require 'drgnx-agents) (drgnx-agents-claude-adapter))
+    (error (list :error (error-message-string err)))))
+
+(defun drgnx-doctor--claude-adapter-check (a)
+  "The `claude-adapter' check of the fact A (`drgnx-doctor--claude-adapter')."
+  (require 'drgnx-agents)
+  (let ((problem (and (plist-get a :name) (drgnx-agents-adapter-problem a))))
+    (cond ((plist-get a :error) (list 'warn (format "could not check: %s" (plist-get a :error)) "run drgnx doctor again"))
+          ((null a) (list 'info "not installed: the claude agent profiles need it"
+                          "drgnx onboard --step agents (or Help → Welcome → Agents) installs it"))
+          (problem (list 'warn (car problem) (cdr problem)))
+          ((not (plist-get a :name))
+           (list 'warn (format "%s belongs to no npm package drgnx knows: it cannot tell whether it is %s"
+                               (abbreviate-file-name (plist-get a :program)) drgnx-agents-claude-package)
+                 (format "npm install -g %s, and remove the other claude-agent-acp" drgnx-agents-claude-package)))
+          (t (list 'ok (format "%s %s (%s)" (plist-get a :name) (plist-get a :version) (abbreviate-file-name (plist-get a :program)))
+                   nil)))))
+
 (defvar drgnx-macos-app-dir)
 
 (defconst drgnx-doctor--brew-programs '("/opt/homebrew/bin/brew" "/usr/local/bin/brew")
@@ -159,6 +185,7 @@ default; it never reads ~/.profile), else ~/.profile.  With SHELL unset or empty
            ;; whether a key is set, from the environment only: the doctor never opens auth-source (it may prompt)
            :ai-keys (let ((k (getenv "OPENROUTER_API_KEY"))) (and k (not (string-empty-p k)) '(openrouter)))
            :ai-complete (ignore-errors (require 'drgnx-ai) (cdr (car (drgnx-ai-role 'complete))))
+           :claude-adapter (drgnx-doctor--claude-adapter)
            :vram (ignore-errors (require 'drgnx-ai-probe) (drgnx-ai-vram)))
      (and (eq (drgnx-platform) 'macos) (drgnx-doctor--macos-facts)))))
 
@@ -232,6 +259,10 @@ default; it never reads ~/.profile), else ~/.profile.  With SHELL unset or empty
                      :check (lambda (f)
                               (if (plist-get f :git) (list 'ok "git found" nil)
                                 (list 'warn "git not found" "install git with your package manager"))))
+
+(drgnx-doctor-define 'claude-adapter :group "Tools"
+                     :doc "The Claude Code adapter the claude agent profiles run: @agentclientprotocol/claude-agent-acp 0.93.0 or newer"
+                     :check (lambda (f) (drgnx-doctor--claude-adapter-check (plist-get f :claude-adapter))))
 
 (drgnx-doctor-define 'modules :group "drgnx" :doc "Modules that failed or wait for packages (from the last session)"
                      :check (lambda (f)

@@ -600,7 +600,10 @@ says logged in when HOME has .logged-in (FAKE_OLD_CLAUDE: an old CLI that has no
                     "[ \"$1 $2\" = 'install -g' ] || exit 0\nshift 2; d=" bin "\n"
                     "if [ \"$1\" = --prefix ]; then d=\"$2/bin\"; mkdir -p \"$d\"; shift 2; fi\n"
                     "[ -n \"$FAKE_NPM_FAIL\" ] && { echo 'npm ERR! code EACCES'; exit 243; }\n"
-                    "cp " tpl "claude-agent-acp \"$d/claude-agent-acp\"\n"))
+                    "cp " tpl "claude-agent-acp \"$d/claude-agent-acp\"\n"
+                    ;; the package it was asked for, where npm puts it: PREFIX/lib/node_modules/PKG
+                    "p=\"$d/../lib/node_modules/$1\"; mkdir -p \"$p\"\n"
+                    "printf '{\"name\": \"%s\", \"version\": \"0.93.0\"}' \"$1\" > \"$p/package.json\"\n"))
            (drgnx-onboard-test--script
             (concat bin "curl")
             (concat (funcall log-line "curl")
@@ -637,7 +640,7 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
       ;; without interaction: nothing installed, the commands said, no job
       (let ((r (drgnx-onboard--agents-step '(:interactive nil))))
         (should (eq (car r) 'info))
-        (should (string-match-p "brew install --cask claude-code; brew install node; npm install -g @zed-industries/claude-agent-acp"
+        (should (string-match-p "brew install --cask claude-code; brew install node; npm install -g @agentclientprotocol/claude-agent-acp"
                                 (cadr r)))
         (should-not (string-match-p "gry" (cadr r))))
       (should (equal (split-string (drgnx-onboard-test--slurp calls) "\n" t) nil))
@@ -646,13 +649,39 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
       (write-region "" nil (concat home ".logged-in"))
       (let ((r (cl-letf (((symbol-function 'y-or-n-p) (car asked))) (drgnx-onboard--agents-step '(:interactive t)))))
         (should (equal (length (car (cdr asked))) 1))
-        (should (string-match-p "brew install --cask claude-code; brew install node; npm install -g @zed-industries/claude-agent-acp"
+        (should (string-match-p "brew install --cask claude-code; brew install node; npm install -g @agentclientprotocol/claude-agent-acp"
                                 (car (car (cdr asked)))))
         (should (equal r (list 'ok (cadr r))))
         (should (string-match-p "claude profile" (cadr r))))
       (should (equal (seq-take (split-string (drgnx-onboard-test--slurp calls) "\n" t) 3)
                      '("brew install --cask claude-code" "brew install node"
-                       "npm install -g @zed-industries/claude-agent-acp"))))))
+                       "npm install -g @agentclientprotocol/claude-agent-acp")))
+      ;; C2-3: what was installed is the maintained package, and it is what the profiles run
+      (should (equal (plist-get (drgnx-agents-claude-adapter) :name) "@agentclientprotocol/claude-agent-acp")))))
+
+(ert-deftest drgnx-onboard/the-onboarding-package-is-the-maintained-adapter ()
+  (should (equal drgnx-onboard-claude-package drgnx-agents-claude-package)))
+
+(ert-deftest drgnx-onboard/a-deprecated-adapter-keeps-working-and-the-step-says-how-to-move ()
+  ;; C2-3: the deprecated @zed-industries package installed earlier: the profile is checked with it, the step warns
+  ;; with the command — and nothing is installed or removed without that command
+  (drgnx-onboard-test--claude 'linux
+    (drgnx-onboard-test--installed
+     (let ((pkg (concat root "lib/node_modules/@zed-industries/claude-agent-acp/")))
+       (make-directory pkg t)
+       (write-region "{\"name\": \"@zed-industries/claude-agent-acp\", \"version\": \"0.23.1\"}" nil (concat pkg "package.json"))
+       (write-region "" nil (concat home ".logged-in"))
+       (dolist (ctx '((:interactive nil) (:interactive t)))
+         (let ((r (cl-letf (((symbol-function 'y-or-n-p) (lambda (p) (error "Unexpected question: %s" p))))
+                    (drgnx-onboard--agents-step ctx))))
+           (should (eq (car r) 'warn))
+           (should (string-match-p "claude profile answered" (cadr r)))                 ; it still works
+           (should (string-search "@zed-industries/claude-agent-acp" (cadr r)))
+           (should (string-search "npm uninstall -g --prefix" (cadr r)))
+           (should (string-search "&& npm install -g --prefix" (cadr r)))))
+       (should-not (string-match-p "^npm" (drgnx-onboard-test--slurp calls)))   ; npm never ran
+       (should (file-executable-p (concat bin "claude-agent-acp")))
+       (should (file-exists-p (concat pkg "package.json")))))))
 
 (ert-deftest drgnx-onboard/claude-missing-says-no-and-nothing-is-installed ()
   (drgnx-onboard-test--claude 'macos
@@ -667,7 +696,7 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
     (let* ((asked (drgnx-onboard-test--asked '(("\\`Set up Claude Code" . t))))
            (drgnx-onboard-app-wait 10)
            (r0 (drgnx-onboard--agents-step '(:interactive nil))))
-      (should (string-match-p "curl -fsSL https://claude.ai/install.sh | bash; sudo dnf install nodejs npm; npm install -g --prefix ~/.local @zed-industries/claude-agent-acp"
+      (should (string-match-p "curl -fsSL https://claude.ai/install.sh | bash; sudo dnf install nodejs npm; npm install -g --prefix ~/.local @agentclientprotocol/claude-agent-acp"
                               (cadr r0)))
       (write-region "" nil (concat home ".logged-in"))
       ;; Node needs sudo: shown and copied, then the step waits for npm to appear — here a moment later
@@ -677,7 +706,7 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
         (should (equal r (list 'ok (cadr r)))))
       (should (file-executable-p (concat home ".local/bin/claude")))           ; the official installer's place
       (should (file-executable-p (concat home ".local/bin/claude-agent-acp")))  ; npm --prefix ~/.local: no sudo
-      (should (string-match-p (format "npm install -g --prefix %s.local @zed-industries/claude-agent-acp" home)
+      (should (string-match-p (format "npm install -g --prefix %s.local @agentclientprotocol/claude-agent-acp" home)
                               (drgnx-onboard-test--slurp calls))))))
 
 (ert-deftest drgnx-onboard/a-vs-code-extensions-claude-does-not-count ()
@@ -758,7 +787,7 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
         (should (eq (car r) 'fail))
         (should (string-match-p "EACCES" (cadr r)))                  ; why: the log's last line
         (should (string-match-p "run this step again" (cadr r)))      ; how to retry
-        (should (string-match-p "in a terminal: npm install -g @zed-industries/claude-agent-acp" (cadr r)))
+        (should (string-match-p "in a terminal: npm install -g @agentclientprotocol/claude-agent-acp" (cadr r)))
         (should (string-match-p "log: " (cadr r))))
       ;; Claude Code and Node were installed; the retry installs only the adapter
       (should (file-executable-p (concat bin "claude")))
@@ -1178,9 +1207,9 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
       (setenv "PATH" (concat bin path-separator other))
       (let* ((asked (drgnx-onboard-test--asked '(("\\`Set up Claude Code" . t))))
              (r (cl-letf (((symbol-function 'y-or-n-p) (car asked))) (drgnx-onboard--agents-step '(:interactive t)))))
-        (should (string-match-p "npm install -g --prefix ~/.local @zed-industries/claude-agent-acp" (car (car (cdr asked)))))
+        (should (string-match-p "npm install -g --prefix ~/.local @agentclientprotocol/claude-agent-acp" (car (car (cdr asked)))))
         (should (eq (car r) 'ok)))
-      (should (string-match-p (format "npm install -g --prefix %s.local @zed-industries/claude-agent-acp" home)
+      (should (string-match-p (format "npm install -g --prefix %s.local @agentclientprotocol/claude-agent-acp" home)
                               (drgnx-onboard-test--slurp calls)))
       (should (file-executable-p (concat home ".local/bin/claude-agent-acp"))))))
 

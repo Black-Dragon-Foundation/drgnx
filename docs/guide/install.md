@@ -197,7 +197,11 @@ one line per check, `OK`, `WARN` or `FAIL`, with a fix under anything that is no
 pgtk Emacs; on a Mac, which has no mutter, D-Bus or pgtk, only ImageMagick). On a Mac the doctor also checks that the
 drgnx app is installed (fix: `drgnx macos-app`), that Homebrew is there (also looked for in `/opt/homebrew/bin` and
 `/usr/local/bin`, in case it is not on PATH) and that the `drgnx` command is on PATH (fix: add `~/.local/bin` to PATH in
-your shell's profile, `~/.zprofile` for zsh or, with `SHELL` unset, when it exists; else `~/.profile`) — each only a warning. Details: [core.md](../develop/core.md#doctor-drgnx-doctorel).
+your shell's profile, `~/.zprofile` for zsh or, with `SHELL` unset, when it exists; else `~/.profile`) — each only a warning.
+The `claude-adapter` check reads the `package.json` of the Claude Code adapter that the `claude` agent profiles would
+run, without running it. It wants `@agentclientprotocol/claude-agent-acp` 0.93.0 or newer. The deprecated
+`@zed-industries/claude-agent-acp`, an older version, or a program of no package drgnx knows is a warning, with the
+one-line command that fixes it ([agents.md](agents.md#sessions)). No adapter is only a notice. Details: [core.md](../develop/core.md#doctor-drgnx-doctorel).
 
 ## Uninstall
 
@@ -214,7 +218,8 @@ On macOS, also `rm -rf ~/Applications/drgnx.app`, and if you want them gone:
   `openrouter.ai` in Keychain Access);
 - what onboarding installed, each only if it did: `brew uninstall ollama` (models: `ollama rm NAME` first, or
   `~/.ollama`), `brew uninstall --cask lm-studio` (models in `~/.lmstudio`), `npm uninstall -g
-  @zed-industries/claude-agent-acp`, `brew uninstall node`, `brew uninstall --cask claude-code`.
+  @agentclientprotocol/claude-agent-acp` (or `@zed-industries/claude-agent-acp`, the deprecated package earlier
+  versions installed; add `--prefix ~/.local` if it is there), `brew uninstall node`, `brew uninstall --cask claude-code`.
 
 A source-built Emacs: `make uninstall` in the build directory (`~/.cache/drgnx/build/emacs-31.1`, or under `$XDG_CACHE_HOME` if you set it) before deleting the cache (or
 remove `~/.local/bin/emacs*`, `~/.local/share/emacs`, `~/.local/libexec/emacs`). A packaged Emacs: remove it

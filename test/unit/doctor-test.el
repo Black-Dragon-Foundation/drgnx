@@ -407,3 +407,33 @@
           (let ((process-environment (cons "SHELL=/bin/bash" process-environment)))   ; a set SHELL still decides
             (should (equal (drgnx-doctor--shell-profile) "~/.profile"))))
       (delete-directory home t))))
+
+(ert-deftest drgnx-doctor/the-claude-adapter-must-be-the-maintained-package ()
+  ;; C2-3: the deprecated adapter never says which MCP server a tool is from
+  (let* ((old '(:program "/p/bin/claude-agent-acp" :name "@zed-industries/claude-agent-acp" :version "0.23.1" :prefix "/p"))
+         (new '(:program "/q/bin/claude-agent-acp" :name "@agentclientprotocol/claude-agent-acp" :version "0.93.0" :prefix "/q"))
+         (check (lambda (a) (drgnx-doctor-check 'claude-adapter (drgnx-doctor-test--facts :claude-adapter a)))))
+    (let ((r (funcall check old)))
+      (should (eq (car r) 'warn))
+      (should (string-search "deprecated" (nth 1 r)))
+      (should (string-search "0.23.1" (nth 1 r)))
+      (should (equal (nth 2 r) (concat "npm uninstall -g --prefix /p @zed-industries/claude-agent-acp"
+                                       " && npm install -g --prefix /p @agentclientprotocol/claude-agent-acp"))))
+    (let ((r (funcall check new)))
+      (should (eq (car r) 'ok))
+      (should (string-search "@agentclientprotocol/claude-agent-acp 0.93.0" (nth 1 r))))
+    (should (eq (car (funcall check (plist-put (copy-sequence new) :version "1.2.0"))) 'ok))
+    (let ((r (funcall check (plist-put (copy-sequence new) :version "0.59.0"))))
+      (should (eq (car r) 'warn))
+      (should (equal (nth 2 r) "npm install -g --prefix /q @agentclientprotocol/claude-agent-acp@latest")))
+    ;; a program of no package drgnx knows: it cannot tell, so it warns
+    (let ((r (funcall check '(:program "/r/claude-agent-acp"))))
+      (should (eq (car r) 'warn))
+      (should (string-search "/r/claude-agent-acp" (nth 1 r)))
+      (should (string-search "npm install -g @agentclientprotocol/claude-agent-acp" (nth 2 r))))
+    ;; none: only a notice (the agent panel is optional); never a failure, so the doctor's exit stays 0
+    (let ((r (funcall check nil)))
+      (should (eq (car r) 'info))
+      (should (string-search "drgnx onboard --step agents" (nth 2 r))))
+    (should (eq (car (funcall check '(:error "boom"))) 'warn))
+    (should (= 0 (drgnx-doctor-exit-code (drgnx-doctor-run (drgnx-doctor-test--facts :version "31.2" :claude-adapter old) nil))))))

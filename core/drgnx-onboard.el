@@ -506,8 +506,10 @@ is still loading) reads \"not tested\" and counts as neither asked nor failed."
 
 ;;;; Step 4: setting AI up — Ollama, LM Studio or OpenRouter
 
-(defconst drgnx-onboard-claude-package "@zed-industries/claude-agent-acp"
-  "The npm package of the Claude Code adapter (binary `claude-agent-acp') drgnx's `claude' agent profile runs.")
+(defconst drgnx-onboard-claude-package "@agentclientprotocol/claude-agent-acp"
+  "The npm package of the Claude Code adapter (binary `claude-agent-acp') drgnx's `claude' agent profile runs: the
+maintained one (`drgnx-agents-claude-package'), not the deprecated @zed-industries package.  Not pinned: npm installs
+the latest; the doctor checks the version.")
 
 (defconst drgnx-onboard-install-recipes
   `((ollama :name "Ollama" :provider ollama
@@ -1046,6 +1048,9 @@ step ran before: keep it or change it.  Without interaction: what was found, and
   "The header line of the terminal Claude Code's login happens in.")
 
 (declare-function drgnx-agents-profile "drgnx-agents")
+(declare-function drgnx-agents-command "drgnx-agents")
+(declare-function drgnx-agents-claude-adapter "drgnx-agents")
+(declare-function drgnx-agents-adapter-problem "drgnx-agents")
 (declare-function drgnx-acp-start "drgnx-acp")
 (declare-function drgnx-acp-request "drgnx-acp")
 (declare-function drgnx-acp-stop "drgnx-acp")
@@ -1126,7 +1131,7 @@ end: a program you chose earlier on the PATH keeps winning."
          (answer nil) (ended nil) (conn nil))
     (drgnx-onboard--say "Starting the claude profile's agent…")
     (condition-case err
-        (setq conn (drgnx-acp-start command :cwd (drgnx-state-dir)
+        (setq conn (drgnx-acp-start (drgnx-agents-command command) :cwd (drgnx-state-dir)
                                     :on-exit (lambda (_c status stderr) (setq ended (cons status stderr)))))
       (error (setq answer (cons nil (list :message (error-message-string err))))))
     (unwind-protect
@@ -1209,14 +1214,17 @@ then ends `info', waiting for you to run it again (Done).  A login that cannot b
       (pcase-let ((`(,ok . ,text) (drgnx-onboard--claude-profile)))
         (if (not ok)
             (list 'fail (format "Claude Code is installed, but %s — run claude-agent-acp in a terminal to see why, then this step again" text))
-          (list (if unknown 'info 'ok)
-                (format "Claude Code is installed%s; %s — Agents: New Agent Session… starts it%s%s"
-                        (if unknown ", but drgnx could not tell whether it is logged in (run claude and type /login if it is not)" ", logged in")
-                        text
-                        (if added (format " (added %s to this Emacs's PATH: add it to your shell's PATH too%s)" (string-join added ", ")
-                                          (if (drgnx-onboard--hub-running-p) "; the hub keeps its old PATH: drgnx hub stop, then start a durable session again" ""))
-                          "")
-                        (if (and interactive (not unknown)) (concat "; " (drgnx-onboard--agents-offers)) "")))))))))
+          ;; the deprecated adapter (or one too old) works, but says nothing of MCP servers: the command that moves it
+          (let ((problem (drgnx-agents-adapter-problem (drgnx-agents-claude-adapter))))
+            (list (cond (problem 'warn) (unknown 'info) (t 'ok))
+                  (format "Claude Code is installed%s; %s%s — Agents: New Agent Session… starts it%s%s"
+                          (if unknown ", but drgnx could not tell whether it is logged in (run claude and type /login if it is not)" ", logged in")
+                          text
+                          (if problem (format "; but %s — run in a terminal: %s" (car problem) (cdr problem)) "")
+                          (if added (format " (added %s to this Emacs's PATH: add it to your shell's PATH too%s)" (string-join added ", ")
+                                            (if (drgnx-onboard--hub-running-p) "; the hub keeps its old PATH: drgnx hub stop, then start a durable session again" ""))
+                            "")
+                          (if (and interactive (not unknown)) (concat "; " (drgnx-onboard--agents-offers)) ""))))))))))
 
 (defun drgnx-onboard--agents-step (ctx)
   "Claude Code for the agent panel: `claude' (a VS Code extension's bundled copy does not count), Node and the

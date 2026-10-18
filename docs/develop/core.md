@@ -143,6 +143,14 @@ PATH, `/opt/homebrew/bin/brew` or `/usr/local/bin/brew`; the doctor may run with
 `drgnx-on-path` (fix: `~/.local/bin` in the shell's profile: `~/.zprofile` for zsh (or, with `SHELL` unset, when it exists), else `~/.profile`, as
 `drgnx-doctor--shell-profile` says; the same rule as `install.sh`).
 
+`claude-adapter` (group Tools): the fact is `drgnx-agents-claude-adapter` (`drgnx-agents.el`), the adapter that the
+claude profiles would run, with the name, version and npm prefix read from the `package.json` it links into. The
+adapter is never run. The judgement is `drgnx-agents-adapter-problem`, the same one the onboarding Agents step and
+the agent start use. The maintained package at `drgnx-agents-claude-min-version` (0.93.0) or newer is OK. The
+deprecated `@zed-industries/claude-agent-acp`, an older version, or a program of no known package is WARN, with a
+fix in the adapter's own prefix. None is INFO. Tests: `test/unit/doctor-test.el` and
+`test/unit/agents-adapter-test.el`.
+
 ## Tests
 
 Batch: `test/unit/core-*-test.el`. The batch runner (`harness/run-ert.el`) gives the suite a temp HOME and drgnx
