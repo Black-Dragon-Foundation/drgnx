@@ -48,15 +48,20 @@ code to DIR/exit (143 when stopped); with HEAD, the git HEAD it ended at to DIR/
             (if head "git rev-parse HEAD > \"$h\" 2>/dev/null" ":")
             (mapconcat #'shell-quote-argument command " "))))
 
+(defvar drgnx-jobs--boot-id-cache nil "This boot's id once found: it cannot change while this Emacs runs.")
+
 (defun drgnx-jobs--boot-id ()
   "This boot's id: Linux's boot_id; on macOS the boot session's UUID (`sysctl -n kern.bootsessionuuid' — not
-kern.boottime, which moves when the clock is set); nil when there is none."
-  (ignore-errors
-    (if (eq system-type 'darwin)
-        (with-temp-buffer
-          (and (eql 0 (call-process "sysctl" nil t nil "-n" "kern.bootsessionuuid"))
-               (let ((id (string-trim (buffer-string)))) (and (not (string-empty-p id)) id))))
-      (string-trim (with-temp-buffer (insert-file-contents "/proc/sys/kernel/random/boot_id") (buffer-string))))))
+kern.boottime, which moves when the clock is set); nil when there is none.  Asked once per Emacs: on macOS it
+is a process, and `drgnx-jobs-get' wants it for every live job."
+  (or drgnx-jobs--boot-id-cache
+      (setq drgnx-jobs--boot-id-cache
+            (ignore-errors
+              (if (eq system-type 'darwin)
+                  (with-temp-buffer
+                    (and (eql 0 (call-process "sysctl" nil t nil "-n" "kern.bootsessionuuid"))
+                         (let ((id (string-trim (buffer-string)))) (and (not (string-empty-p id)) id))))
+                (string-trim (with-temp-buffer (insert-file-contents "/proc/sys/kernel/random/boot_id") (buffer-string))))))))
 
 (defvar drgnx-jobs--setsid (executable-find "setsid")
   "setsid(1) where the system has it (Linux; macOS has none).")

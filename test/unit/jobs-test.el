@@ -86,10 +86,11 @@
                  (with-temp-file sysctl (insert "#!/bin/sh\n[ \"$*\" = \"-n kern.bootsessionuuid\" ] || exit 1\n" body))
                  (set-file-modes sysctl #o755))))
     (unwind-protect
-        (let ((exec-path (list bin)) (system-type 'darwin)
+        (let ((exec-path (list bin)) (system-type 'darwin) (drgnx-jobs--boot-id-cache nil)   ; found ids are kept: ask afresh each time
               (process-environment (cons (concat "PATH=" bin path-separator (getenv "PATH")) process-environment)))
           (funcall fake "echo '  9D3B5C2E-1F4A-4B6C-8E7D-0A1B2C3D4E5F  '\n")
           (should (equal (drgnx-jobs--boot-id) "9D3B5C2E-1F4A-4B6C-8E7D-0A1B2C3D4E5F"))
+          (setq drgnx-jobs--boot-id-cache nil)
           (funcall fake "exit 3\n")
           (should-not (drgnx-jobs--boot-id))
           (funcall fake "echo\n")
@@ -209,3 +210,14 @@
            (should (memq (drgnx-jobs-test--status id) '(stopped exited gone)))
            (should-not (eql 0 (call-process "systemctl" nil nil nil "--user" "--quiet" "is-active" (concat "drgnx-job-" id)))))
        (when id (call-process "systemctl" nil nil nil "--user" "stop" (concat "drgnx-job-" id)))))))
+
+;;;; Deferred pass B, batch 9
+
+(ert-deftest drgnx-jobs/boot-id-asked-once ()
+  ;; M12a-8: on macOS the boot id is a `sysctl' process; every `drgnx-jobs-get' of a live job asks for it
+  (let ((drgnx-jobs--boot-id-cache nil) (system-type 'darwin) (calls 0))
+    (cl-letf (((symbol-function 'call-process)
+               (lambda (program &rest _) (when (equal program "sysctl") (cl-incf calls) (insert "UUID-1\n")) 0)))
+      (should (equal (drgnx-jobs--boot-id) "UUID-1"))
+      (should (equal (drgnx-jobs--boot-id) "UUID-1"))
+      (should (= calls 1)))))
