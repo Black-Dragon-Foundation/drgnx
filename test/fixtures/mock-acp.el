@@ -67,7 +67,14 @@ decision log, complete the task; say what happened."
                                                 (shell-quote-argument task) file file (shell-quote-argument (concat "work for " task)))))
   (let* ((d (mock--mcp-call sid "read_decisions" "{\"since\":0}"))
          (v (or (ignore-errors (plist-get (json-parse-string d :object-type 'plist) :version)) 0))
-         (r (mock--mcp-call sid "complete_task" (format "{\"task\":%S,\"seen_version\":%d}" task v))))
+         (r (mock--mcp-call sid "complete_task" (format "{\"task\":%S,\"seen_version\":%d}" task v)))
+         (tries 0))
+    ;; like a real agent: a held write (the decision log moved on) is read and retried at the version it names, and so is
+    ;; a call that got no answer in time — a task never ends open because a decision came in meanwhile
+    (while (and (< (cl-incf tries) 4) (or (null r) (string-prefix-p "HELD:" r)))
+      (let ((held (and r (string-match "seen_version \\([0-9]+\\)" r) (string-to-number (match-string 1 r)))))
+        (setq r (mock--mcp-call sid "complete_task" (format "{\"task\":%S,\"seen_version\":%d}" task
+                                                            (or held (ignore-errors (plist-get (json-parse-string (mock--mcp-call sid "read_decisions" "{\"since\":0}") :object-type 'plist) :version)) 0))))))
     (mock--steps sid (list (cons 0 (lambda () (mock--say sid (format "task done: %s" r))))))))
 
 (defun mock--coord (sid tool args)

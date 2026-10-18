@@ -28,7 +28,16 @@ MIDWAY (a function of the id) is called once the job is running, its tasks not d
              (lambda () (or both (setq both (and (file-directory-p (drgnx-job--task-tree id 1)) (file-directory-p (drgnx-job--task-tree id 2))
                                                  (not (file-directory-p (drgnx-job--task-tree id 3)))))))
              15))
-    (should (drgnx-job-run-test--wait (lambda () (equal (plist-get (drgnx-coord-job id) :status) "done")) 90))
+    (let ((done (drgnx-job-run-test--wait (lambda () (equal (plist-get (drgnx-coord-job id) :status) "done")) 90)))
+      ;; a job that does not finish says where it stands (the failure carries it): the tasks, the open cards, what each session last said
+      (unless done (ert-fail (list :tasks (mapcar (lambda (task) (list (plist-get task :n) (plist-get task :status) (plist-get task :agent)))
+                                                  (drgnx-coord-tasks id))
+                                   :cards (mapcar (lambda (c) (list (plist-get c :kind) (plist-get c :task) (plist-get c :title)))
+                                                  (drgnx-coord-cards id "open"))
+                                   :sessions (mapcar (lambda (s)
+                                                       (list (drgnx-agent-session-id s) (drgnx-agent-session-task s) (drgnx-agent-session-status s)
+                                                             (let ((said (drgnx-job-clash--said s))) (substring said (max 0 (- (length said) 300))))))
+                                                     drgnx-agents--sessions)))))
     ;; task 3 started from the job branch with task 1 merged
     (should (string-search (format "work for %s#1" id) (drgnx-job-run-test--git repo "log" "--format=%s" (format "job/%s-3" id))))
     (should (= 4 (length (split-string (drgnx-job-run-test--git repo "log" "--merges" "--format=%s" (concat "job/" id)) "\n" t))))
