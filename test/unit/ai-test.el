@@ -199,55 +199,57 @@ Keychain and keyring are never reached."
   (drgnx-ai-test--with root
     (let ((plain (concat root "authinfo")) (auth-source-do-cache t))
       (with-temp-file plain (insert ""))
-      (let ((auth-sources (list plain)))
+      (let ((auth-sources (list plain)) (auth-source-netrc-cache nil))   ; the file's parse cache: this test's own
         (should-not (drgnx-ai-key 'openrouter))
         (should-not (auth-source-search :host "openrouter.ai" :max 1 :create nil)))   ; another caller's miss: cached
       (with-temp-file plain (insert "machine openrouter.ai password sk-or-test-123\n"))
-      (setq auth-source-netrc-cache nil)                         ; the file's parse cache (not the search cache, which stays)
-      (let ((auth-sources (list plain)))
+      ;; a fresh parse cache (not the search cache, which stays)
+      (let ((auth-sources (list plain)) (auth-source-netrc-cache nil))
         (should (equal (drgnx-ai-key 'openrouter) "sk-or-test-123"))
         (clrhash drgnx-ai--keys)
-        (with-temp-file plain (insert "machine openrouter.ai password sk-or-new-789\n"))   ; replaced: the old one is not served
-        (setq auth-source-netrc-cache nil)
+        (with-temp-file plain (insert "machine openrouter.ai password sk-or-new-789\n")))   ; replaced: the old one is not served
+      (let ((auth-sources (list plain)) (auth-source-netrc-cache nil))
         (should (equal (drgnx-ai-key 'openrouter) "sk-or-new-789"))))))
 
 (ert-deftest drgnx-ai/a-batch-emacs-never-searches-the-keychain-even-when-asked ()
   (drgnx-ai-test--with root
     (dolist (system '(darwin gnu/linux))
-      (let ((system-type system) (searched nil) (noninteractive t)
-            (auth-sources (list "/tmp/drgnx-plain-authinfo" 'macos-keychain-internet 'default "secrets:Login")))
+      (let* ((plain (concat root "authinfo")) (system-type system) (searched nil) (noninteractive t)
+             (auth-sources (list plain 'macos-keychain-internet 'default "secrets:Login")))
         (cl-letf (((symbol-function 'auth-source-search)
                    (lambda (&rest _) (push auth-sources searched) nil)))
           (should-not (drgnx-ai-key 'openrouter t))
-          (should (equal searched '(("/tmp/drgnx-plain-authinfo")))))
+          (should (equal searched (list (list plain)))))
         ;; …while an interactive Emacs does add it
-        (setq searched nil noninteractive nil auth-sources (list "/tmp/drgnx-plain-authinfo"))
+        (setq searched nil noninteractive nil auth-sources (list plain))
         (cl-letf (((symbol-function 'auth-source-search)
-                   (lambda (&rest _) (push auth-sources searched) nil)))
+                   (lambda (&rest _) (push auth-sources searched) nil))
+                  ((symbol-function 'drgnx-ai--dbus-session-p) (lambda () t)))
           (should-not (drgnx-ai-key 'openrouter t))
-          (should (equal searched (list (list "/tmp/drgnx-plain-authinfo" (drgnx-ai--secret-source))))))))))
+          (should (equal searched (list (list plain (drgnx-ai--secret-source))))))))))
 
 (ert-deftest drgnx-ai/drgnxs-own-store-is-searched-beside-other-keychain-entries-once ()
   (drgnx-ai-test--with root
     (dolist (system '(darwin gnu/linux))
-      (let ((system-type system) (noninteractive nil) (searched nil)
+      (let ((plain (concat root "authinfo")) (system-type system) (noninteractive nil) (searched nil)
             (own (if (eq system 'darwin) 'macos-keychain-internet 'default)))
         (cl-letf (((symbol-function 'auth-source-search)
-                   (lambda (&rest _) (push auth-sources searched) nil)))
+                   (lambda (&rest _) (push auth-sources searched) nil))
+                  ((symbol-function 'drgnx-ai--dbus-session-p) (lambda () t)))
           ;; an unrelated Keychain/Secret Service entry does not stand in for drgnx's own
-          (let ((auth-sources (list "/tmp/drgnx-plain-authinfo" 'macos-keychain-generic
-                                    "macos-keychain-internet:/tmp/other.keychain" "secrets:session")))
+          (let ((auth-sources (list plain 'macos-keychain-generic
+                                    (concat "macos-keychain-internet:" root "other.keychain") "secrets:session")))
             (drgnx-ai-key 'openrouter t)
             (should (equal (car searched) (append auth-sources (list own)))))
           ;; already there: not added twice
-          (let ((auth-sources (list "/tmp/drgnx-plain-authinfo" own)))
+          (let ((auth-sources (list plain own)))
             (drgnx-ai-key 'openrouter t)
-            (should (equal (car searched) (list "/tmp/drgnx-plain-authinfo" own)))))))))
+            (should (equal (car searched) (list plain own)))))))))
 
 (ert-deftest drgnx-ai/background-reads-never-open-the-keychain ()
   (drgnx-ai-test--with root
     (dolist (system '(darwin gnu/linux))
-      (let ((system-type system) (searched nil)
+      (let ((plain (concat root "authinfo")) (system-type system) (searched nil)
             (auth-sources '("~/.authinfo.gpg" macos-keychain-internet macos-keychain-generic "macos-keychain-internet:login"
                             default "secrets:Login")))
         (cl-letf (((symbol-function 'auth-source-search)
@@ -255,9 +257,9 @@ Keychain and keyring are never reached."
                      (and (or (memq 'macos-keychain-internet auth-sources) (memq 'default auth-sources)) (list (list :secret "from-keychain"))))))
           (should-not (drgnx-ai-key 'openrouter nil))
           (should-not searched)                                  ; nothing left to search: not even asked
-          (setq auth-sources (append auth-sources '("/tmp/drgnx-plain-authinfo")))
+          (setq auth-sources (append auth-sources (list plain)))
           (should-not (drgnx-ai-key 'openrouter nil))
-          (should (equal searched '(("/tmp/drgnx-plain-authinfo")))))))))
+          (should (equal searched (list (list plain)))))))))
 
 (ert-deftest drgnx-ai/a-denied-keychain-says-so ()
   (drgnx-ai-test--with root
