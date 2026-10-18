@@ -16,8 +16,10 @@
   (if (eq system-type 'darwin) 'macos 'linux))
 
 (defun drgnx-user-dir ()
-  "The user's drgnx configuration: $DRGNX_CONFIG_DIR, else ~/.config/drgnx/."
-  (file-name-as-directory (expand-file-name (or (getenv "DRGNX_CONFIG_DIR") "~/.config/drgnx"))))
+  "The user's drgnx configuration: $DRGNX_CONFIG_DIR, else ~/.config/drgnx/.  An empty variable counts as unset, as
+in bin/drgnx and install.sh (\"${VAR:-…}\"), so all three pick the same dir."
+  (let ((dir (getenv "DRGNX_CONFIG_DIR")))
+    (file-name-as-directory (expand-file-name (if (member dir '(nil "")) "~/.config/drgnx" dir)))))
 
 (defun drgnx-state-dir ()
   "drgnx state: $XDG_STATE_HOME/drgnx/ (default ~/.local/state/drgnx/)."

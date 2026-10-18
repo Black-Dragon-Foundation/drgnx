@@ -128,6 +128,7 @@ if not set -q _drgnx_sourced
     complete -c drgnx -n '__fish_seen_subcommand_from secrets; and not __fish_seen_subcommand_from export import ls' -f -a ls -d 'The hosts in secrets.age'
     complete -c drgnx -n '__fish_seen_subcommand_from secrets; and __fish_seen_subcommand_from export' -l recipient -x -d 'age recipient'
     complete -c drgnx -n '__fish_seen_subcommand_from secrets; and __fish_seen_subcommand_from import ls' -l identity -r -d 'age identity file'
+    complete -c drgnx -n '__fish_seen_subcommand_from secrets; and __fish_seen_subcommand_from import' -l replace -d 'Overwrite a different key in the keyring'
 
     # Inside eat only.  The prompt-end mark is bash and zsh only: fish cannot add it without redefining fish_prompt.
     if string match -q '*eat*' -- "$INSIDE_EMACS"; and set -q EAT_SHELL_INTEGRATION_DIR

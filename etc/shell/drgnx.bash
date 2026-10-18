@@ -76,7 +76,8 @@ _drgnx() {
           'ui start') words='--config --size --daemon' ;;
           'ui click') words='--buffer --text --button --count --hold-ms' ;;
           'secrets export') words='--recipient' ;;
-          'secrets import' | 'secrets ls') words='--identity' ;;
+          'secrets import') words='--identity --replace' ;;
+          'secrets ls') words='--identity' ;;
         esac
       elif [[ $n -eq 2 ]]; then   # the word after the command
         case $cmd in

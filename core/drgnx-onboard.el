@@ -541,7 +541,7 @@ is still loading) reads \"not tested\" and counts as neither asked nor failed."
              :macos (:install ("brew" "install" "chezmoi"))
              ;; Debian and Ubuntu do not package chezmoi: its own installer, into ~/.local/bin (no sudo)
              :linux (:by-program (("dnf" . "sudo dnf install -y chezmoi")
-                                  ("apt-get" . "sh -c \"$(curl -fsLS get.chezmoi.io)\" -- -b ~/.local/bin")
+                                  ("apt-get" . "sh -c \"$(curl -fsLS https://get.chezmoi.io)\" -- -b ~/.local/bin")
                                   ("pacman" . "sudo pacman -S --noconfirm chezmoi")))))
   "How onboarding sets up a local model runner: ID → plist.  :check — it is there when its :program is found (lms
 also in ~/.lmstudio/bin, where LM Studio puts it; :dirs: more directories) or its :provider's address answers.
@@ -740,7 +740,11 @@ job on either platform.  Every run starts from the top: nothing is resumed from 
              (open (if (eq tool 'lmstudio) " and open it" "")))
         (if shell
             (progn (kill-new shell)
-                   (drgnx-onboard--say (format "Run in a terminal (copied): %s — it asks for your password (sudo); waiting for %s…" shell name)))
+                   (drgnx-onboard--say (format "Run in a terminal (copied): %s%s; waiting for %s…" shell
+                                               ;; Ollama's installer runs sudo itself (:sudo); chezmoi's never does
+                                               (if (or (plist-get l :sudo) (string-match-p "\\_<sudo\\_>" shell))
+                                                   " — it asks for your password (sudo)" "")
+                                               name)))
           (browse-url (plist-get l :page))
           (drgnx-onboard--say (format "Install %s from %s%s%s; waiting for it…" name (plist-get l :page) open
                                       (if (eq tool 'lmstudio) " (Developer → Start Server)" ""))))

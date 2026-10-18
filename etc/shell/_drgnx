@@ -151,7 +151,8 @@ case $cmd in
       shift words; (( CURRENT-- ))
       case $sub in
         export) _arguments '*--recipient[age recipient]:recipient:' ;;
-        import|ls) _arguments '--identity[age identity file]:file:_files' ;;
+        import) _arguments '--identity[age identity file]:file:_files' '--replace[overwrite a different key in the keyring]' ;;
+        ls) _arguments '--identity[age identity file]:file:_files' ;;
       esac
     fi ;;
   *)

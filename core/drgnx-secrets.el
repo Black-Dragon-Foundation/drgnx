@@ -58,28 +58,49 @@
 
 ;;;; The bundle
 
+(defconst drgnx-secrets-max-size (* 1024 1024)
+  "The largest secrets.age, and the most plaintext, drgnx reads (bytes): a key bundle is a few hundred.")
+
+(defconst drgnx-secrets-max-key 4096 "The longest key a bundle may hold (characters).")
+
+(defun drgnx-secrets--entry-problem (e hosts)
+  "Why bundle entry E is not one, or nil; HOSTS are the hosts of the entries before it.  Never shows a value."
+  (cond ((not (and (proper-list-p e) (= (length e) 6) (eq (nth 0 e) :provider) (eq (nth 2 e) :host) (eq (nth 4 e) :key)))
+         "an entry that is not (:provider ID :host HOST :key KEY)")
+        ((not (and (nth 1 e) (symbolp (nth 1 e)))) "a provider that is not a name")
+        ;; a host is printed (ls, import's lines): letters, digits, dots and dashes only, so it cannot fake a line
+        ((not (and (stringp (nth 3 e)) (<= (length (nth 3 e)) 253) (string-match-p "\\`[A-Za-z0-9.-]+\\'" (nth 3 e))))
+         "a host that is not a host name")
+        ((member (nth 3 e) hosts) "the same host twice")
+        ;; a key goes to the keyring as is: no spaces or control characters (NUL, ESC, CR, LF), no unbounded length
+        ((not (and (stringp (nth 5 e)) (string-match-p "\\`[[:graph:]]+\\'" (nth 5 e))))
+         "a key that is empty or holds spaces or control characters")
+        ((> (length (nth 5 e)) drgnx-secrets-max-key) "a key that is too long")))
+
 (defun drgnx-secrets--parse (text)
   "The entries of the key bundle TEXT, a list of (:provider ID :host HOST :key KEY); else a `user-error'.
-TEXT must be exactly (:version 1 :keys ENTRIES), each key a one-line non-empty string.  The error never shows
-TEXT."
-  (let ((bad (lambda () (user-error "secrets.age is not a drgnx key bundle (wrong file, damaged, or from another drgnx version); nothing was changed")))
-        form end)
+TEXT must be exactly (:version 1 :keys ENTRIES): a host a host name, each once; a key printable characters with no
+space, at most `drgnx-secrets-max-key' long.  The error says what is wrong by name and never shows TEXT."
+  (let ((bad (lambda (why)
+               (user-error "secrets.age is not a drgnx key bundle (%s); nothing was changed" why)))
+        form end problem hosts)
+    (when (> (length text) drgnx-secrets-max-size) (funcall bad "too large"))
     (condition-case nil
         (setq form (read-from-string text) end (cdr form) form (car form))
-      (error (funcall bad)))
-    (unless (and (string-blank-p (substring text end))
-                 (proper-list-p form) (= (length form) 4)
-                 (eq (nth 0 form) :version) (eql (nth 1 form) 1)
-                 (eq (nth 2 form) :keys) (proper-list-p (nth 3 form))
-                 (seq-every-p (lambda (e)
-                                (and (proper-list-p e) (= (length e) 6)
-                                     (eq (nth 0 e) :provider) (symbolp (nth 1 e)) (nth 1 e)
-                                     (eq (nth 2 e) :host) (stringp (nth 3 e)) (not (string-empty-p (nth 3 e)))
-                                     (eq (nth 4 e) :key) (stringp (nth 5 e)) (not (string-empty-p (nth 5 e)))
-                                     (not (string-match-p "[\n\r]" (nth 5 e)))))
-                              (nth 3 form)))
-      (when (proper-list-p form) (ignore-errors (drgnx-secrets--wipe-entries (and (proper-list-p (nth 3 form)) (nth 3 form)))))
-      (funcall bad))
+      (error (funcall bad "wrong file, damaged, or not age's output")))
+    (setq problem
+          (cond ((not (string-blank-p (substring text end))) "more text after the bundle")
+                ((not (and (proper-list-p form) (= (length form) 4) (eq (nth 0 form) :version) (eq (nth 2 form) :keys)
+                           (proper-list-p (nth 3 form))))
+                 "not a bundle")
+                ((not (eql (nth 1 form) 1)) "from another drgnx version")
+                (t (seq-some (lambda (e) (prog1 (drgnx-secrets--entry-problem e hosts)
+                                           (when (proper-list-p e) (push (plist-get e :host) hosts))))
+                             (nth 3 form)))))
+    (when problem
+      (when (and (proper-list-p form) (proper-list-p (nth 3 form)))
+        (ignore-errors (drgnx-secrets--wipe-entries (seq-filter #'proper-list-p (nth 3 form)))))
+      (funcall bad problem))
     (nth 3 form)))
 
 (defun drgnx-secrets--entries ()
@@ -120,12 +141,12 @@ only when age succeeded (age writes FILE.new, renamed over it).  A passphrase ne
 program Emacs starts never has: from Lisp, without RECIPIENTS, age fails and nothing changes; `drgnx secrets
 export' runs age in bin/drgnx's pipe instead (`drgnx-secrets-cli-run')."
   (let* ((age (drgnx-secrets--age))
-         (entries (drgnx-secrets--entries))
          (file (drgnx-secrets-file))
          (new (concat file ".new"))
          (args (append '("-e") (if recipients (mapcan (lambda (r) (list "-r" r)) recipients) '("-p")) (list "-o" new)))
-         (text nil) (status nil))
+         (entries nil) (text nil) (status nil))
     (drgnx-secrets--confirm-replace)
+    (setq entries (drgnx-secrets--entries))
     (make-directory (file-name-directory file) t)
     (when (file-exists-p new) (delete-file new))
     (unwind-protect
@@ -133,12 +154,19 @@ export' runs age in bin/drgnx's pipe instead (`drgnx-secrets-cli-run')."
           (setq text (drgnx-secrets--print entries))
           (setq status (drgnx-ai--run-with-stdin age args text)))
       (drgnx-secrets--wipe text)
+      (drgnx-secrets--wipe-entries entries)
       (unless (eql status 0) (when (file-exists-p new) (delete-file new))))
     (unless (eql status 0)
       (user-error "age did not encrypt the keys (%s); %s is unchanged"
                   (if (eq status 'timeout) "no answer" (format "exit %s" status)) (abbreviate-file-name file)))
     (rename-file new file t)
     (mapcar (lambda (e) (plist-get e :host)) entries)))
+
+(defun drgnx-secrets--identity-warning (identity)
+  "A warning when the age identity file IDENTITY can be read by users other than its owner, else nil."
+  (let ((modes (file-modes (expand-file-name identity))))
+    (when (and modes (/= 0 (logand modes #o077)))
+      (format "%s can be read by other users: chmod 600 %s" identity (shell-quote-argument identity)))))
 
 (cl-defun drgnx-secrets-decrypt (&key identity)
   "The plaintext of secrets.age, by `age -d' with IDENTITY (a file), else a passphrase.
@@ -147,8 +175,12 @@ The output is gathered from a pipe by a filter, never a buffer or a file; the ca
 which a program Emacs starts never has (see `drgnx-secrets-export'): it fails, and bin/drgnx's pipe does it."
   (let* ((age (drgnx-secrets--age))
          (file (drgnx-secrets-file))
-         (chunks nil) (err nil) proc errproc)
+         (chunks nil) (size 0) (err nil) proc errproc)
     (unless (file-exists-p file) (user-error "No secrets.age in %s" (abbreviate-file-name (drgnx-user-dir))))
+    (when (> (or (file-attribute-size (file-attributes file)) 0) drgnx-secrets-max-size)
+      (user-error "%s is too large for a key bundle; nothing was read" (abbreviate-file-name file)))
+    (when-let* ((warning (and identity (drgnx-secrets--identity-warning identity))))
+      (drgnx-secrets--say "drgnx secrets: %s" warning))
     (unwind-protect
         (progn
           (setq errproc (make-pipe-process :name "drgnx-age-err" :buffer nil :noquery t :coding 'utf-8-unix
@@ -157,13 +189,19 @@ which a program Emacs starts never has (see `drgnx-secrets-export'): it fails, a
                                    :command (append (list age "-d") (and identity (list "-i" (expand-file-name identity)))
                                                     (list file))
                                    :coding 'no-conversion :stderr errproc
-                                   :filter (lambda (_p s) (push s chunks)) :sentinel #'ignore))
+                                   :filter (lambda (p s)
+                                             (setq size (+ size (length s)))
+                                             (if (> size drgnx-secrets-max-size)
+                                                 (progn (drgnx-secrets--wipe s) (delete-process p))
+                                               (push s chunks)))
+                                   :sentinel #'ignore))
           (process-send-eof proc)
           (let ((deadline (+ (float-time) 600)))
             (while (and (process-live-p proc) (< (float-time) deadline))
               (accept-process-output proc 0.1)))
           (while (accept-process-output errproc 0.05))
-          (cond ((process-live-p proc) (user-error "age did not answer; nothing was read"))
+          (cond ((> size drgnx-secrets-max-size) (user-error "age gave more than a key bundle holds; nothing was changed"))
+                ((process-live-p proc) (user-error "age did not answer; nothing was read"))
                 ((not (eql (process-exit-status proc) 0))
                  (user-error "age could not decrypt %s: %s" (abbreviate-file-name file)
                              (let ((why (string-trim (string-join (reverse err) ""))))
@@ -181,9 +219,10 @@ which a program Emacs starts never has (see `drgnx-secrets-export'): it fails, a
         msg
       (symbol-name (car err)))))
 
-(defun drgnx-secrets--import-text (text)
-  "Store the keys of bundle TEXT in the keyring; see `drgnx-secrets-import'.  TEXT is not wiped here."
-  (let ((entries (drgnx-secrets--parse text)) stored same unknown failed)
+(defun drgnx-secrets--import-text (text &optional replace)
+  "Store the keys of bundle TEXT in the keyring; see `drgnx-secrets-import' (REPLACE as there).  TEXT is not wiped
+here."
+  (let ((entries (drgnx-secrets--parse text)) stored same differs unknown failed)
     (unwind-protect
         (dolist (e entries)
           (let* ((id (plist-get e :provider)) (host (plist-get e :host))
@@ -191,13 +230,17 @@ which a program Emacs starts never has (see `drgnx-secrets-export'): it fails, a
             (if (not (and p (plist-get p :key-env) (equal (drgnx-secrets--host p) host)))
                 (push host unknown)
               (condition-case err
-                  (if (equal (drgnx-ai--stored-key host) (plist-get e :key))
-                      (push host same)
-                    (drgnx-ai-store-key id (copy-sequence (plist-get e :key)))
-                    (push host stored))
+                  (let ((held (drgnx-ai--stored-key host)))
+                    (unwind-protect
+                        (cond ((equal held (plist-get e :key)) (push host same))
+                              ((and held (not replace)) (push host differs))   ; never lose a key without --replace
+                              (t (drgnx-ai-store-key id (copy-sequence (plist-get e :key)))
+                                 (push host stored)))
+                      (drgnx-secrets--wipe held)))
                 (error (push (cons host (drgnx-secrets--reason err (plist-get e :key))) failed))))))
       (drgnx-secrets--wipe-entries entries))
-    (list :stored (nreverse stored) :same (nreverse same) :unknown (nreverse unknown) :failed (nreverse failed))))
+    (list :stored (nreverse stored) :same (nreverse same) :differs (nreverse differs) :unknown (nreverse unknown)
+          :failed (nreverse failed))))
 
 (defun drgnx-secrets--import-ready (&optional from-stdin)
   "Nil when an import can go ahead, else (:skipped REASON).  FROM-STDIN: the bundle comes from a pipe, not the file."
@@ -206,15 +249,18 @@ which a program Emacs starts never has (see `drgnx-secrets-export'): it fails, a
         ((and (not from-stdin) (not (file-exists-p (drgnx-secrets-file))))
          (list :skipped (format "no secrets.age in %s: nothing to import" (abbreviate-file-name (drgnx-user-dir)))))))
 
-(cl-defun drgnx-secrets-import (&key identity)
+(cl-defun drgnx-secrets-import (&key identity replace)
   "Put the keys of secrets.age into this machine's keyring (decrypted with IDENTITY; a passphrase only through
-bin/drgnx's pipe, see `drgnx-secrets-decrypt').  Returns (:stored HOSTS :same HOSTS :unknown HOSTS :failed ((HOST . REASON)…)): an entry whose
+bin/drgnx's pipe, see `drgnx-secrets-decrypt').
+Returns (:stored HOSTS :same HOSTS :differs HOSTS :unknown HOSTS :failed ((HOST . REASON)…)): an entry whose
 provider is not known here, or whose host differs here, is unknown and not stored; a key the keyring already holds
-is the same; a key the keyring refused is failed.  Without a keyring or secrets.age: (:skipped REASON), and age is
-not run.  A bundle that does not decrypt or parse stores nothing (a `user-error')."
+is the same; where the keyring holds a different key, that key is kept and the host differs — unless REPLACE (the
+user asked for it: `--replace'), which stores the bundle's; a key the keyring refused is failed.  Without a keyring
+or secrets.age: (:skipped REASON), and age is not run.  A bundle that does not decrypt or parse stores nothing (a
+`user-error')."
   (or (drgnx-secrets--import-ready)
       (let ((text (drgnx-secrets-decrypt :identity identity)))
-        (unwind-protect (drgnx-secrets--import-text text)
+        (unwind-protect (drgnx-secrets--import-text text replace)
           (drgnx-secrets--wipe text)))))
 
 (defun drgnx-secrets--hosts (text)
@@ -251,26 +297,31 @@ not run.  A bundle that does not decrypt or parse stores nothing (a `user-error'
     (princ (concat (apply #'format fmt args) "\n"))))
 
 (defun drgnx-secrets--print-import (r)
-  "Print import result R, one host a line; the exit code (1 when any failed or nothing could be imported)."
+  "Print import result R, one host a line; the exit code (1 when any failed or differs, or nothing could be imported)."
   (if (eq (car r) :skipped)
       (progn (drgnx-secrets--say "drgnx secrets: %s" (cadr r)) 1)
     (dolist (h (plist-get r :stored)) (drgnx-secrets--say "stored   %s" h))
     (dolist (h (plist-get r :same)) (drgnx-secrets--say "same     %s" h))
+    (dolist (h (plist-get r :differs))
+      (drgnx-secrets--say "differs  %s  (your keyring's key is kept: drgnx secrets import --replace to overwrite it)" h))
     (dolist (h (plist-get r :unknown)) (drgnx-secrets--say "unknown  %s  (no provider with this address here: not stored)" h))
     (dolist (f (plist-get r :failed)) (drgnx-secrets--say "failed   %s  %s" (car f) (cdr f)))
-    (if (plist-get r :failed) 1 0)))
+    (if (or (plist-get r :failed) (plist-get r :differs)) 1 0)))
 
 (defun drgnx-secrets--read-stdin ()
-  "The bundle on standard input (bin/drgnx's pipe from age), or a `user-error' when age gave nothing."
+  "The bundle on standard input (bin/drgnx's pipe from age), or a `user-error' when age gave nothing.
+Its size is checked by `drgnx-secrets--parse'."
   (condition-case nil (read-from-minibuffer "")
     (end-of-file (user-error "age gave nothing to read (a wrong passphrase or a damaged file?): nothing was changed"))))
 
 (defun drgnx-secrets-cli-run (args)
-  "Run `drgnx secrets' ARGS: export [--recipient R]… | import [--identity FILE] | ls [--identity FILE].
-The exit code: 0 done, 1 failed, 2 a usage error, 3 needs a terminal or age.  10: with a passphrase, the checks
-passed and bin/drgnx runs age in its pipeline, which runs this again with DRGNX_SECRETS_PIPE set: `bundle' (export:
-print the bundle on stdout, into age) or `stdin' (import, ls: the plaintext arrives from age on stdin)."
-  (let* ((sub (car args)) (rest (cdr args)) recipients identity bad
+  "Run `drgnx secrets' ARGS: export [--recipient R]… | import [--identity FILE] [--replace] | ls [--identity FILE].
+The exit code: 0 done, 1 failed (or a key differs), 2 a usage error, 3 needs a terminal or age.  10: with a
+passphrase, the checks passed and bin/drgnx runs age in its pipeline, which runs this again with
+DRGNX_SECRETS_PIPE set: `bundle' (export: print the bundle on stdout, into age) or `stdin' (import, ls: the
+plaintext arrives from age on stdin).  The halves run only on a terminal and without --recipient/--identity: the
+bundle goes nowhere but into age."
+  (let* ((sub (car args)) (rest (cdr args)) recipients identity replace bad
          (pipe (getenv "DRGNX_SECRETS_PIPE"))
          (tty (equal (getenv "DRGNX_STDIN_TTY") "1"))
          (drgnx-secrets--say-on-stderr (equal pipe "bundle")))
@@ -278,45 +329,54 @@ print the bundle on stdout, into age) or `stdin' (import, ls: the plaintext arri
       (pcase (pop rest)
         ((and "--recipient" (guard (and rest (equal sub "export")))) (push (pop rest) recipients))
         ((and "--identity" (guard (and rest (member sub '("import" "ls")) (not identity)))) (setq identity (pop rest)))
+        ((and "--replace" (guard (equal sub "import"))) (setq replace t))
         (_ (setq bad t))))
     (setq recipients (nreverse recipients))
     (condition-case err
         (cond
-         ((or bad (not (member sub '("export" "import" "ls"))))
-          (drgnx-secrets--say "usage: drgnx secrets export [--recipient R]… | import [--identity FILE] | ls [--identity FILE]")
+         ((or bad (not (member sub '("export" "import" "ls")))
+              ;; the halves of bin/drgnx's pipeline, and nothing else
+              (and pipe (not (and tty (not recipients) (not identity)
+                                  (or (and (equal pipe "bundle") (equal sub "export"))
+                                      (and (equal pipe "stdin") (member sub '("import" "ls"))))))))
+          (drgnx-secrets--say "usage: drgnx secrets export [--recipient R]… | import [--identity FILE] [--replace] | ls [--identity FILE]")
           2)
          ((not (or tty recipients identity))
           (drgnx-secrets--say "drgnx secrets: needs a terminal (for age's passphrase), or %s"
                               (if (equal sub "export") "--recipient R" "--identity FILE"))
           3)
-         ;; the halves of bin/drgnx's pipeline
-         ((and (equal pipe "bundle") (equal sub "export"))
-          (let ((text (drgnx-secrets--print (drgnx-secrets--entries))))
-            (unwind-protect (princ text) (drgnx-secrets--wipe text)))
+         ((equal pipe "bundle")
+          (let* ((entries (drgnx-secrets--entries)) (text nil))
+            (unwind-protect (princ (setq text (drgnx-secrets--print entries)))
+              (drgnx-secrets--wipe text)
+              (drgnx-secrets--wipe-entries entries)))
           0)
-         ((and (equal pipe "stdin") (member sub '("import" "ls")))
+         ((equal pipe "stdin")
           (if (and (equal sub "import") (drgnx-secrets--import-ready t))
               (drgnx-secrets--print-import (drgnx-secrets--import-ready t))
             (let ((text (drgnx-secrets--read-stdin)))
               (unwind-protect
-                  (if (equal sub "import") (drgnx-secrets--print-import (drgnx-secrets--import-text text))
+                  (if (equal sub "import") (drgnx-secrets--print-import (drgnx-secrets--import-text text replace))
                     (dolist (h (drgnx-secrets--hosts text)) (drgnx-secrets--say "%s" h))
                     0)
                 (drgnx-secrets--wipe text)))))
          ((not (executable-find "age")) (drgnx-secrets--say "drgnx secrets: %s" (drgnx-secrets--age-missing)) 3)
          ((equal sub "export")
+          ;; replacing secrets.age asks first, and only a terminal can answer
+          (when (and (not tty) (file-exists-p (drgnx-secrets-file)))
+            (user-error "secrets.age exists: run on a terminal to replace it (nothing exported)"))
           (if recipients
               (let ((hosts (drgnx-secrets-export :recipients recipients)))
                 (drgnx-secrets--say "drgnx secrets: wrote %s (keys of %s)" (abbreviate-file-name (drgnx-secrets-file))
                                     (string-join hosts ", "))
                 0)
             ;; a passphrase: the checks and the question here, before age asks anything; then bin/drgnx's pipe
-            (drgnx-secrets--entries)
+            (drgnx-secrets--wipe-entries (drgnx-secrets--entries))
             (drgnx-secrets--confirm-replace)
             10))
          ((equal sub "import")
           (cond ((drgnx-secrets--import-ready) (drgnx-secrets--print-import (drgnx-secrets--import-ready)))
-                (identity (drgnx-secrets--print-import (drgnx-secrets-import :identity identity)))
+                (identity (drgnx-secrets--print-import (drgnx-secrets-import :identity identity :replace replace)))
                 (t 10)))
          (t
           (cond ((not (file-exists-p (drgnx-secrets-file)))
@@ -356,7 +416,14 @@ Eat when it can run here, else `term'.  This Emacs runs nothing of age's: age as
                   (pop-to-buffer b)
                   b))))
     (with-current-buffer buf (setq header-line-format header))
+    (when-let* ((proc (get-buffer-process buf)))
+      (add-function :after (process-sentinel proc) #'drgnx-secrets--forget-keys))
     buf))
+
+(defun drgnx-secrets--forget-keys (proc _event)
+  "When PROC (a secrets terminal) has ended, clear Emacs's record of recent keys (`recent-keys', C-h l): the
+passphrase was typed there.  A sentinel: no prompt."
+  (unless (process-live-p proc) (clear-this-command-keys)))
 
 (defun drgnx-secrets-export-keys ()
   "Export this machine's provider keys to secrets.age, in a terminal (age asks for a passphrase there)."
