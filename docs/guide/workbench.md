@@ -226,7 +226,7 @@ was full screen or maximized), and the other windows go back to it after a resta
 drgnx move a window (see [Several monitors](#several-windows)). The monitor is found by its serial, else its
 name, else its place, never by the number it had; if it is not connected any more, the window stays where your window
 manager opened it and drgnx says so in one message ("1 window's monitor is not connected (DELL U2720Q); the window
-manager placed it"). The main window, editor-only windows and job windows are never moved. This happens after the
+manager placed it"). The main window, windows opened for `$EDITOR` (terminal and EDITOR frames) and job windows are never moved. This happens after the
 layout is back, in the background, with a few seconds' limit: a window manager that does not answer costs nothing but
 one message. Where drgnx cannot tell which monitor a window is on (GNOME, other Wayland compositors, a terminal) nothing is
 saved and nothing is moved.

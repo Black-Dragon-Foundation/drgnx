@@ -338,8 +338,9 @@ burst of calls; moves nothing."
 (defun drgnx-monitors--state ()
   "The selected frame's monitor and fullscreen state for `drgnx-persist-state-functions'; nil when no monitor is known.
 Reads frame parameters only: no window-manager call while saving."
-  (when-let* ((mon (frame-parameter nil 'drgnx-monitor)) ((consp mon)))
-    (list :monitors-monitor (drgnx-monitors--identity mon)
+  (when-let* ((mon (frame-parameter nil 'drgnx-monitor)) ((consp mon))
+              (identity (drgnx-monitors--identity mon)))
+    (list :monitors-monitor identity
           :monitors-fullscreen (frame-parameter nil 'fullscreen))))
 
 (defun drgnx-monitors--to-place ()
@@ -389,24 +390,27 @@ focus for a moment.  The first failure ends it, said once."
             (error (message "drgnx: monitors: %s" (error-message-string err)))))))))
 
 (defun drgnx-monitors--placing (frames monitors)
-  "FRAMES, restored windows, are matched to MONITORS (the listing, or (:error MESSAGE)) and placed."
-  (if (drgnx-monitors--error-p monitors)
-      (message "drgnx: could not put %s back on their monitors (%s); the window manager placed them"
-               (drgnx-monitors--windows (length frames)) (cadr monitors))
-    (let (jobs gone)
-      (dolist (f frames)
-        (let ((hit (drgnx-platform-match-monitor (drgnx-monitors--saved f) monitors)))
-          (if hit (push (list f hit) jobs) (push f gone))))
-      (when gone
-        (message (if (cdr gone)
-                     "drgnx: %d windows' monitors are not connected (%s); the window manager placed them"
-                   "drgnx: %d window's monitor is not connected (%s); the window manager placed it")
-                 (length gone)
-                 (mapconcat #'identity
-                            (delete-dups (mapcar (lambda (f) (drgnx-monitors--saved-name (drgnx-monitors--saved f)))
-                                                 (nreverse gone)))
-                            ", ")))
-      (drgnx-monitors--place-next (nreverse jobs)))))
+  "FRAMES, restored windows, are matched to MONITORS (the listing, or (:error MESSAGE)) and placed.
+A window closed while the listing was awaited is not counted."
+  (setq frames (seq-filter #'frame-live-p frames))
+  (when frames
+    (if (drgnx-monitors--error-p monitors)
+        (message "drgnx: could not put %s back on their monitors (%s); the window manager placed them"
+                 (drgnx-monitors--windows (length frames)) (cadr monitors))
+      (let (jobs gone)
+        (dolist (f frames)
+          (let ((hit (drgnx-platform-match-monitor (drgnx-monitors--saved f) monitors)))
+            (if hit (push (list f hit) jobs) (push f gone))))
+        (when gone
+          (message (if (cdr gone)
+                       "drgnx: %d windows' monitors are not connected (%s); the window manager placed them"
+                     "drgnx: %d window's monitor is not connected (%s); the window manager placed it")
+                   (length gone)
+                   (mapconcat #'identity
+                              (delete-dups (mapcar (lambda (f) (drgnx-monitors--saved-name (drgnx-monitors--saved f)))
+                                                   (nreverse gone)))
+                              ", ")))
+        (drgnx-monitors--place-next (nreverse jobs))))))
 
 (defun drgnx-monitors--place-restored (_frame)
   "`drgnx-persist-after-restore-functions': put each restored auxiliary window back on the monitor it was on.

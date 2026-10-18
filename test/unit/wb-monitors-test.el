@@ -628,5 +628,32 @@ restored frame answers, default `ok'; `hang': never answers)."
                                         (dolist (p '(drgnx-frame-role drgnx-persist-extra drgnx-persist-restored))
                                           (set-frame-parameter nil p nil))))))))
 
+(drgnx-platform-test--deftest drgnx-monitors/a-window-closed-while-waiting-is-not-reported ()
+                              (drgnx-monitors-test--with-fake (:delay 0.1 :monitors '((:name "DP-1" :geometry (0 0 1920 1080))))
+                                (drgnx-monitors-test--with-fake-frames
+                                  (let ((gone (drgnx-monitors-test--fake "gone" 'aux (drgnx-monitors-test--extra drgnx-monitors-test--dell))))
+                                    (drgnx-monitors--place-restored (selected-frame))
+                                    (setq drgnx-monitors-test--fakes (assq-delete-all gone drgnx-monitors-test--fakes))   ; closed meanwhile
+                                    (drgnx-platform-test--await (lambda () (plist-get drgnx-monitors-test--calls :monitors)) 1)
+                                    (drgnx-platform-test--await (lambda () nil) 0.3)
+                                    (should-not messages)
+                                    (should-not drgnx-monitors-test--places)))))
+
+(drgnx-platform-test--deftest drgnx-monitors/a-monitor-listing-that-never-answers-gives-up-with-one-message ()
+                              (drgnx-monitors-test--with-fake (:delay 30)
+                                (let ((drgnx-platform-restore-timeout 0.3) (drgnx-platform-watchdog-margin 0.1))
+                                  (drgnx-monitors-test--with-fake-frames
+                                    (drgnx-monitors-test--fake "a" 'aux (drgnx-monitors-test--extra drgnx-monitors-test--dell))
+                                    (drgnx-monitors--place-restored (selected-frame))
+                                    (should (drgnx-platform-test--await (lambda () messages) 2))
+                                    (should (= 1 (length messages)))
+                                    (should (string-match-p "timed out" (car messages)))
+                                    (should-not drgnx-monitors-test--places)))))
+
+(drgnx-platform-test--deftest drgnx-monitors/the-state-is-nil-for-an-empty-identity ()
+                              (drgnx-monitors-test--with-fake ()
+                                (set-frame-parameter nil 'drgnx-monitor '(:number 1 :label "1"))
+                                (should-not (drgnx-monitors--state))))
+
 (provide 'wb-monitors-test)
 ;;; wb-monitors-test.el ends here
