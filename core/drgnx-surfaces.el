@@ -10,7 +10,9 @@
 
 ;;; Code:
 
+(require 'cl-lib)
 (require 'drgnx-registry)
+(require 'drgnx-modules-record)
 (require 'drgnx-paths)
 (require 'easymenu)
 (require 'seq)
@@ -187,26 +189,120 @@ Sets `drgnx-surfaces--usage-bad' when something was left out."
   '(("File" . file) ("Edit" . edit) ("Options" . options) ("Buffers" . buffer) ("Tools" . tools) ("Help" . help-menu))
   "Menu-bar names Emacs already defines, with their menu-bar keys.")
 
+(defvar drgnx-surfaces--menu-items nil
+  "What `drgnx-surfaces-build-menus' put in the menu bar, newest first: `drgnx-surfaces--menu-rec's.")
+
+(cl-defstruct (drgnx-surfaces--menu-rec (:constructor drgnx-surfaces--menu-rec-make) (:copier nil))
+  "One menu-bar item the registry added, with what undoing it takes."
+  id cmd
+  root names title   ; where easy-menu put it: the menu keymap, the submenu path under it, the item name
+  raw old            ; a same-named item it replaced: its cons cell and that cell's old binding
+  ours)              ; the binding it added (the cell's cdr), to see whether someone else changed it since
+
+(defvar drgnx-surfaces--menu-created nil
+  "Submenus the registry's items made, as (ROOT . NAMES), deepest and newest first; each goes
+again once it is empty (the item that made it may leave before the others that share it).")
+
+(defun drgnx-surfaces--menu-root (cmd)
+  "CMD's menu path as (ROOT . NAMES): the menu-bar keymap to add to, and the submenus under it.
+Always the GLOBAL menu bar: easy-menu's nil map means the buffer's local one."
+  (let* ((path (drgnx-cmd-menu cmd))
+         (builtin (cdr (assoc (car path) drgnx-surfaces--builtin-menus))))
+    (if builtin
+        (cons (lookup-key global-map (vector 'menu-bar builtin)) (cdr path))
+      (cons (lookup-key global-map [menu-bar]) path))))
+
+(defun drgnx-surfaces--menu-submenu (root names)
+  "The submenu of ROOT at path NAMES, or nil when it does not exist (`easy-menu-get-map' would make it)."
+  (let ((m root))
+    (while (and names (keymapp m))
+      (setq m (easy-menu-lookup-name m (pop names))))
+    (and (keymapp m) m)))
+
+(defun drgnx-surfaces--menu-add (cmd item)
+  "Add ITEM, CMD's menu entry, to the menu bar.  The first time, remember what was there before."
+  (pcase-let* ((`(,root . ,names) (drgnx-surfaces--menu-root cmd))
+               (rec (seq-find (lambda (r) (eq (drgnx-surfaces--menu-rec-id r) (drgnx-cmd-id cmd)))
+                              drgnx-surfaces--menu-items)))
+    (unless rec
+      (let* ((live (cl-loop for n from (length names) downto 0
+                            when (drgnx-surfaces--menu-submenu root (seq-take names n)) return n))
+             (sym (easy-menu-intern (drgnx-cmd-title cmd)))
+             (raw (and (= live (length names))
+                       (assq sym (cdr (drgnx-surfaces--menu-submenu root names))))))
+        (setq rec (drgnx-surfaces--menu-rec-make :id (drgnx-cmd-id cmd) :cmd cmd :root root :names names
+                                                 :title (drgnx-cmd-title cmd) :raw raw :old (cdr raw)))
+        (push rec drgnx-surfaces--menu-items)
+        (cl-loop for n from (1+ live) to (length names)
+                 do (push (cons root (seq-take names n)) drgnx-surfaces--menu-created))))
+    (easy-menu-add-item root names item)
+    (setf (drgnx-surfaces--menu-rec-ours rec)
+          (cdr (assq (easy-menu-intern (drgnx-cmd-title cmd))
+                     (cdr (drgnx-surfaces--menu-submenu root names)))))))
+
+(defun drgnx-surfaces--menu-undo (rec)
+  "Put the menu bar back as it was before REC's item: the replaced item, or the item gone and
+the submenus the registry made, once empty.  What someone else changed since stays."
+  (let* ((root (drgnx-surfaces--menu-rec-root rec)) (names (drgnx-surfaces--menu-rec-names rec))
+         (title (drgnx-surfaces--menu-rec-title rec)) (raw (drgnx-surfaces--menu-rec-raw rec))
+         (leaf (drgnx-surfaces--menu-submenu root names))
+         (cell (and leaf (assq (easy-menu-intern title) (cdr leaf)))))
+    (when (and cell (eq (cdr cell) (drgnx-surfaces--menu-rec-ours rec)))
+      (if raw
+          (setcdr raw (drgnx-surfaces--menu-rec-old rec))
+        (easy-menu-remove-item root names title)))
+    (setq drgnx-surfaces--menu-created
+          (seq-remove (lambda (made)
+                        (let ((sub (drgnx-surfaces--menu-submenu (car made) (cdr made))))
+                          (when (or (null sub) (not (seq-some #'consp (cdr sub))))
+                            (when sub (easy-menu-remove-item (car made) (butlast (cdr made)) (car (last (cdr made)))))
+                            t)))
+                      drgnx-surfaces--menu-created))))
+
+(defun drgnx-surfaces--menu-retract ()
+  "Take every item `drgnx-surfaces-build-menus' added out of the menu bar again, newest first."
+  (while drgnx-surfaces--menu-items
+    (drgnx-surfaces--menu-undo (pop drgnx-surfaces--menu-items))))
+
 (defun drgnx-surfaces-build-menus ()
-  "Put every registry entry with a :menu path into the menu bar (idempotent)."
+  "Put every registry entry with a :menu path into the menu bar (idempotent).  A command no
+longer registered (a module torn down) leaves the menu bar as it was before it came."
+  (when (seq-some (lambda (r) (not (eq (drgnx-commands-get (drgnx-surfaces--menu-rec-id r))
+                                       (drgnx-surfaces--menu-rec-cmd r))))
+                  drgnx-surfaces--menu-items)
+    (drgnx-surfaces--menu-retract))
   (dolist (cmd (drgnx-commands-all))
     (when (and (drgnx-cmd-menu cmd) (drgnx-surfaces--showable-p cmd))
-      (let* ((path (drgnx-cmd-menu cmd))
-             (builtin (cdr (assoc (car path) drgnx-surfaces--builtin-menus)))
-             (item (vector (drgnx-cmd-title cmd) (drgnx-surfaces--item-command cmd)
-                           :help (or (drgnx-cmd-doc cmd) "")
-                           :keys (drgnx-surfaces-key cmd))))
-        ;; Always the GLOBAL menu bar: easy-menu's nil map means the buffer's local one.
-        (if builtin
-            (easy-menu-add-item (lookup-key global-map (vector 'menu-bar builtin)) (cdr path) item)
-          (easy-menu-add-item (lookup-key global-map [menu-bar]) path item))))))
+      (drgnx-surfaces--menu-add cmd (vector (drgnx-cmd-title cmd) (drgnx-surfaces--item-command cmd)
+                                            :help (or (drgnx-cmd-doc cmd) "")
+                                            :keys (drgnx-surfaces-key cmd))))))
 
 ;;;; Right-click menus
 
 (defvar drgnx-surfaces-contexts nil "Alist CONTEXT → predicate taking the click event.")
 
 (defun drgnx-surfaces-define-context (context predicate)
-  (setf (alist-get context drgnx-surfaces-contexts) predicate))
+  "Define right-click CONTEXT as PREDICATE, a function of the click event.
+Defined by a module's setup, it is undone with the module: the context it replaced comes back,
+or it goes (`drgnx-surfaces-undefine-context'), unless someone defined it again since."
+  (let* ((old (assq context drgnx-surfaces-contexts)) (old-predicate (cdr old)))
+    (setf (alist-get context drgnx-surfaces-contexts) predicate)
+    (when (drgnx-modules--recording-p)
+      (drgnx-modules-push-undo
+       (format "context %s" context)
+       (lambda ()
+         (when (eq (alist-get context drgnx-surfaces-contexts) predicate)
+           (if old
+               (setf (alist-get context drgnx-surfaces-contexts) old-predicate)
+             (drgnx-surfaces-undefine-context context))))))
+    predicate))
+
+(defun drgnx-surfaces-undefine-context (context)
+  "Remove right-click CONTEXT; the commands that name it no longer show in that menu.
+Returns CONTEXT when it was defined, else nil."
+  (when (assq context drgnx-surfaces-contexts)
+    (setf (alist-get context drgnx-surfaces-contexts nil 'remove) nil)
+    context))
 
 (drgnx-surfaces-define-context 'region (lambda (_) (use-region-p)))
 (drgnx-surfaces-define-context 'code (lambda (_) (derived-mode-p 'prog-mode)))

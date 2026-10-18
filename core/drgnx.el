@@ -72,6 +72,14 @@
                         :command #'drgnx-keys-choose-profile :menu '("Options")
                         :doc "VS Code, Emacs or Vim keys, or Emacs/Vim editing with VS Code app keys"))
 
+(defun drgnx--after-teardown ()
+  "Once a batch of module teardowns is done: keys, menus and which-key labels follow the registry.
+`drgnx-keys-apply' puts back Emacs's own bindings first, then binds what the registry still holds."
+  (drgnx-keys-apply)
+  (drgnx-surfaces-refresh))
+
+(add-hook 'drgnx-modules-after-teardown-functions #'drgnx--after-teardown)
+
 (defun drgnx-init ()
   "Boot drgnx: guard, staged hooks, core commands, modules, keys, then the generated surfaces.
 The steady GC threshold is set at the end, also when a step fails (early-init deferred collection)."

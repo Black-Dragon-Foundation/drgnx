@@ -69,6 +69,19 @@ Redefining an id replaces it. **Keys come from key profiles** ([keys.md](../guid
 are in its `bound` slot, which every surface reads. The entries keep the ids of the gryphn layer's registry, which
 this is ported from.
 
+**Undefining.** `(drgnx-command-undefine ID)` removes a command from the table and the order (it returns ID, or nil
+when there was none). A `drgnx-command-define` made by a module's setup pushes its own undo (see "Teardown" under Modules):
+if the table still holds that very definition, the one it replaced comes back (keeping its bound keys and its place
+in the order), or the command goes when it replaced none. Definitions of one id form a chain, so the undos are safe in
+any order: tearing down the first of two modules that defined an id leaves the second one's entry alone and the second
+one's teardown does not bring the first one back; a definition made outside a setup (a user's `config.el`) is never
+touched. A library a setup `require`s registers for itself and stays until restart.
+
+**How keys and menus follow.** The registry is the one source: after a batch of teardowns
+`drgnx-modules-after-teardown-functions` runs `drgnx--after-teardown`, which calls `drgnx-keys-apply` (it puts back
+Emacs's own bindings first, then binds what the registry still holds, so a removed command's keys are free again and
+nothing a user bound is touched) and `drgnx-surfaces-refresh`.
+
 ## Surfaces (`drgnx-surfaces.el`, `drgnx-palette.el`)
 
 Generated from the registry, never written by hand, showing the keys of the active key profiles: the menu bar,
@@ -84,6 +97,18 @@ most once a minute and at exit, never prompting, to `command-usage.eld` in the s
 (`drgnx-shortcuts-usage-file`): `((ID COUNT (DAY . N)…)…)`, with the per-day counts (`time-to-days`) of the last 7
 days. The file stays on your machine; it feeds the suggestions of the Keyboard Shortcuts editor ("you ran X 12
 times this week; give it a key?"). Read it with `drgnx-surfaces-usage-count` and `drgnx-surfaces-usage-week`.
+
+**Removing what a command added.** The palette, the key sheet, the cheat sheet and the right-click menu are computed
+from the registry on each use, so an undefined command is gone from them at once. The menu bar and which-key are
+written, so they are undone explicitly. `drgnx-surfaces-build-menus` remembers what it added: for each item the
+binding it replaced (if any) and the submenus it had to create. When a registered command is no longer the one it
+added (undefined, or defined again), it takes all of its items out in reverse order and adds the current ones
+again, so the menu bar ends exactly as it was before the command came: a replaced item is put back in its place, a
+submenu made for the item is removed once empty, and an item someone else replaced or removed since is left alone.
+`drgnx-surfaces-apply-which-key` already removes its previous labels on every refresh. Right-click contexts:
+`(drgnx-surfaces-undefine-context CONTEXT)` removes one; `drgnx-surfaces-define-context` called from a setup
+pushes an undo that puts back the predicate it replaced (or removes the context), unless the context was defined
+again since.
 
 ## Modules (`drgnx-modules.el`)
 
