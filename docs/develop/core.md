@@ -114,7 +114,8 @@ evil, and `test/unit/modal-core-test.el` drives it with a fake engine.
   `normal`, `motion` and the visual states, and in a panel's `emacs` state; the panel map only in a panel's `emacs`
   state. The switches are buffer-local and are dropped with the major mode, so an engine calls
   `drgnx-modal-init-buffer` (the buffer's `drgnx-modal-initial-state`: emacs in forms and panels, insert in input
-  buffers, else normal) in every buffer when it starts and after each major-mode change. Panels, forms and input buffers are told apart by `drgnx-modal-panel-modes`, `-form-modes` (fields you
+  buffers, else normal) in every buffer when it starts and after each major-mode change (or mirrors its own state with
+`drgnx-modal-set-state`; the minibuffer is never modal: `drgnx-modal-init-buffer` leaves it alone). Panels, forms and input buffers are told apart by `drgnx-modal-panel-modes`, `-form-modes` (fields you
   type in: no modal keys) and `-input-modes` (shells and message buffers: start in insert or emacs state), with
   `drgnx-modal-panel-p`, `-form-p` and `-input-p`.
 - **Indicator.** `(drgnx-modal-mode-line)` returns the state name (` NORMAL `, ` V-LINE `, …) in
@@ -127,7 +128,8 @@ evil, and `test/unit/modal-core-test.el` drives it with a fake engine.
   an engine with a top-level `:modal (:engine NAME :leader KEYS :default-map … :maps …)` (keys/vim.eld);
   `drgnx-modal-sync-engine` starts the engine the current layers need (once) and stops any other (a stop clears every buffer's state and
   removes the indicator, so `SPC` types a space again; an engine's start turns the indicator on), and
-  `drgnx-modal-running` names it. `:maps` says, per keymap, the states a key bound there must also work in
+  `drgnx-modal-running` names it. `drgnx-modal-suspended` (one element: the layers at the time) keeps the engine off
+for those layers, however often the keys are applied again (Toggle Modal Editing); other layers end it. `:maps` says, per keymap, the states a key bound there must also work in
   (the key resolver reads it); `drgnx-modal-where` names a map for the key sheet.
 - **Commands.** `modal-leader` (Leader Menu) reads the leader's `SPC` submap as a transient map from any state.
   `panel-next` / `panel-previous` (Next / Previous Row, bound in the panel map) run the panel's own `<down>` /

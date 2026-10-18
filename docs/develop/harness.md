@@ -449,6 +449,13 @@ result) and `known_red` (name, summary, trace) — see [scenarios.md](scenarios.
 
 ## Modal tests
 
+Loading evil cannot be undone in a process (its hooks and advice stay), and ERT runs tests by name, so the tests that
+load evil live in `test/unit/isolated/*.el` — no `-test.el` suffix, so the main run skips them — and run in a fresh
+batch Emacs: `modal-isolated-test.el` has one test per file (`drgnx-evil/own-process`,
+`drgnx-modal-fixture/own-process`) that starts the runner on it (`drgnx-modal-test-isolated-result`, memory-capped,
+the child's output in the failure). To run one file directly: `bin/drgnx`'s runner command with the file as the
+argument and `DRGNX_TEST_SELECTOR='"^drgnx-evil/"'`.
+
 The tests of modal editing run against the real evil. They load it from a package directory named by
 `DRGNX_MODAL_ELPA` (`test/fixtures/modal-elpa.el`): evil, goto-chg and evil-collection (and annalist, for an
 evil-collection that needs it) as the directories `drgnx sync` makes. The fixture only reads that directory.

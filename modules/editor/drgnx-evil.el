@@ -46,19 +46,21 @@
 (declare-function evil-set-initial-state "evil-core")
 (declare-function evil-insert-state "evil-states")
 (declare-function which-key-mode "which-key")
+(declare-function xterm--init-update-cursor "term/xterm")
+(declare-function xterm--update-cursor-type "term/xterm")
 
 ;;;; Settings
 
 (defun drgnx-evil--settings ()
-  "Set evil's defaults (before it loads): no evil-collection auto-keys (`evil-want-keybinding' must be nil
-for evil-collection), Emacs' `undo-redo', C-u scrolls, evil's own search, no evil in the minibuffer, no evil
-mode-line tag (drgnx's indicator replaces it).  Users override these in config.el with `setopt'."
-  (setq evil-want-keybinding nil
-        evil-undo-system 'undo-redo
-        evil-want-C-u-scroll t
-        evil-search-module 'evil-search
-        evil-want-minibuffer nil
-        evil-mode-line-format nil))
+  "Set evil's defaults after it loaded, with `setopt' so evil's own setters run (C-u binding, undo functions,
+search keys): Emacs' `undo-redo', C-u scrolls, evil's own search, no evil in the minibuffer, no evil mode-line
+tag (drgnx's indicator replaces it).  Users override these in config.el with `setopt', which runs later.
+`evil-want-keybinding' (nil: evil-collection brings the keys) is read when evil loads, so it is set before."
+  (setopt evil-undo-system 'undo-redo
+          evil-want-C-u-scroll t
+          evil-search-module 'evil-search
+          evil-want-minibuffer nil
+          evil-mode-line-format nil))
 
 ;;;; Cursor
 
@@ -109,8 +111,27 @@ colour is the theme's `cursor' face.")
   (pcase-dolist (`(,var . ,old) drgnx-evil--saved) (set var old))
   (setq drgnx-evil--saved nil))
 
+(defvar drgnx-evil--cursor-defaults nil
+  "Alist of evil's cursor variables → the value evil gave them, noted when it loaded (before any user setting).")
+
+(defun drgnx-evil--note-cursor-defaults ()
+  (pcase-dolist (`(,var . ,_) drgnx-evil--cursor-vars)
+    (unless (assq var drgnx-evil--cursor-defaults)
+      (push (cons var (symbol-value var)) drgnx-evil--cursor-defaults))))
+
 (defun drgnx-evil--cursors-on ()
-  (pcase-dolist (`(,var . ,fn) drgnx-evil--cursor-vars) (drgnx-evil--save var fn)))
+  "Put drgnx's cursor function in each of evil's cursor variables that still holds evil's own value: one the
+user set (`setopt' in config.el) is theirs."
+  (drgnx-evil--note-cursor-defaults)
+  (pcase-dolist (`(,var . ,fn) drgnx-evil--cursor-vars)
+    (when (equal (symbol-value var) (alist-get var drgnx-evil--cursor-defaults))
+      (set var fn))))
+
+(defun drgnx-evil--cursor-vars-back ()
+  "Give evil's own value back to the variables drgnx set (not to one the user changed meanwhile)."
+  (pcase-dolist (`(,var . ,fn) drgnx-evil--cursor-vars)
+    (when (and (boundp var) (eq (symbol-value var) fn))
+      (set var (alist-get var drgnx-evil--cursor-defaults)))))
 
 (defun drgnx-evil--cursors-back ()
   "Give every buffer the cursor it had before evil."
@@ -124,11 +145,31 @@ colour is the theme's `cursor' face.")
 
 (defvar drgnx-evil--active nil "Non-nil while the engine runs (the after-load forms check it).")
 
+(defun drgnx-evil--xterm-frames ()
+  "The live terminal frames whose terminal ran Emacs' xterm initialisation (it ran before the option was set,
+so it did not install the cursor hook)."
+  (seq-filter (lambda (f)
+                (let ((init (terminal-parameter (frame-terminal f) 'terminal-initted)))
+                  (and (not (display-graphic-p f)) (symbolp init) init
+                       (string-match-p "\\`terminal-init-\\(xterm\\|tmux\\|screen\\|rxvt\\|alacritty\\|foot\\|kitty\\|st\\|vte\\|iterm\\)"
+                                       (symbol-name init)))))
+              (frame-list)))
+
 (defun drgnx-evil--xterm ()
-  "Let Emacs 31.1 draw the cursor shape in an Xterm-compatible terminal (30.2 has no such option: there the
-cursor stays the terminal's own).  Only the variable is set here: terminals starting later read it."
+  "Let Emacs 31.1 draw the cursor shape (`type': the shape only, no colour sequences) in Xterm-compatible
+terminals; 30.2 has no such option and the cursor stays the terminal's own.  A terminal that initialised
+before the option was set is set up now, unless the cursor hook is installed already."
   (when (and drgnx-evil--active (boundp 'xterm-update-cursor))
-    (drgnx-evil--save 'xterm-update-cursor t)))
+    (drgnx-evil--save 'xterm-update-cursor 'type)
+    (when (and (fboundp 'xterm--init-update-cursor) (not (memq 'xterm--post-command-hook (default-value 'post-command-hook))))
+      (dolist (f (drgnx-evil--xterm-frames))
+        (with-selected-frame f (ignore-errors (xterm--init-update-cursor)))))))
+
+(defun drgnx-evil--xterm-reset ()
+  "Show the default cursor shape in the terminals again (the option is still set here)."
+  (when (and (boundp 'xterm-update-cursor) xterm-update-cursor (fboundp 'xterm--update-cursor-type))
+    (dolist (f (drgnx-evil--xterm-frames))
+      (with-selected-frame f (ignore-errors (xterm--update-cursor-type))))))
 
 ;;;; State into the core
 
@@ -183,10 +224,22 @@ package does not win)."
           (when (and drgnx-evil--active (fboundp 'evil-set-initial-state))
             (evil-set-initial-state mode state)))))))
 
+(defconst drgnx-evil--mode-lists
+  '((drgnx-modal-panel-modes . emacs) (drgnx-modal-form-modes . emacs) (drgnx-modal-input-modes . insert))
+  "The core's lists of modes and the evil state each starts in: panels and forms keep their own keys (emacs
+state), inputs take typing (insert state).")
+
 (defun drgnx-evil--initial-states ()
-  "Panels and forms start in emacs state (they keep their own keys), inputs in insert state."
-  (dolist (m (append drgnx-modal-panel-modes drgnx-modal-form-modes)) (drgnx-evil--initial m 'emacs))
-  (dolist (m drgnx-modal-input-modes) (drgnx-evil--initial m 'insert)))
+  "Set the initial state of every mode in the core's lists."
+  (pcase-dolist (`(,var . ,state) drgnx-evil--mode-lists)
+    (dolist (m (symbol-value var)) (drgnx-evil--initial m state))))
+
+(defun drgnx-evil--watch (symbol newval operation _where)
+  "Variable watcher of the core's mode lists: a mode added later (a module that loads after the engine
+started) gets its initial state too."
+  (when (and drgnx-evil--active (eq operation 'set) (fboundp 'evil-set-initial-state))
+    (let ((state (alist-get symbol drgnx-evil--mode-lists)))
+      (dolist (m newval) (drgnx-evil--initial m state)))))
 
 (defun drgnx-evil--insert ()
   "Enter insert state (the commit message buffer, where you type at once)."
@@ -218,10 +271,18 @@ inputs, `drgnx-evil--initial-states'): on `after-change-major-mode-hook', after 
 
 (defun drgnx-evil-start ()
   "Turn Vim editing on: evil's mode, the initial states, the hooks into the core, cursor shapes, the indicator,
-which-key and the terminal cursor; then every live buffer gets its state."
+which-key and the terminal cursor; then every live buffer gets its state.  If a step fails everything done so
+far is undone and the error is signalled again."
+  (condition-case err
+      (drgnx-evil--start)
+    (error (ignore-errors (drgnx-evil-stop))
+           (signal (car err) (cdr err)))))
+
+(defun drgnx-evil--start ()
   (setq drgnx-evil--active t)
   (drgnx-evil--cursors-on)
   (drgnx-evil--initial-states)
+  (dolist (cell drgnx-evil--mode-lists) (add-variable-watcher (car cell) #'drgnx-evil--watch))
   (dolist (hook drgnx-evil--entry-hooks) (add-hook hook #'drgnx-evil--sync))
   (add-hook 'git-commit-setup-hook #'drgnx-evil--insert)
   (add-hook 'evil-local-mode-hook #'drgnx-modal-order-alists)
@@ -239,6 +300,7 @@ which-key and the terminal cursor; then every live buffer gets its state."
   "Turn Vim editing off: evil's mode, the hooks, every buffer's state, the cursors, the indicator, which-key."
   (setq drgnx-evil--active nil)
   (when (fboundp 'evil-mode) (evil-mode -1))
+  (dolist (cell drgnx-evil--mode-lists) (remove-variable-watcher (car cell) #'drgnx-evil--watch))
   (dolist (hook drgnx-evil--entry-hooks) (remove-hook hook #'drgnx-evil--sync))
   (remove-hook 'git-commit-setup-hook #'drgnx-evil--insert)
   (remove-hook 'evil-local-mode-hook #'drgnx-modal-order-alists)
@@ -247,6 +309,8 @@ which-key and the terminal cursor; then every live buffer gets its state."
   (dolist (buf (buffer-list))
     (with-current-buffer buf (drgnx-modal-set-state nil)))
   (drgnx-evil--cursors-back)
+  (drgnx-evil--cursor-vars-back)
+  (drgnx-evil--xterm-reset)
   (drgnx-evil--restore)
   (drgnx-modal-indicator-off)
   (drgnx-evil--which-key-back))
@@ -254,28 +318,33 @@ which-key and the terminal cursor; then every live buffer gets its state."
 ;;;; Command
 
 (defun drgnx-evil-toggle ()
-  "Turn Vim editing off, or back on, for this session.  The key stack is not changed (a later switch of stack
-or a restart follows it again)."
+  "Turn Vim editing off, or back on, for this session.  The key stack is not changed.  Off holds through every
+later application of the keys (`drgnx-modal-suspended'); another stack ends it."
   (interactive)
-  (cond ((eq drgnx-modal-running 'evil)
-         ;; layers whose profile has no modal engine: the core stops evil and clears every buffer
-         (drgnx-modal-sync-engine '((emacs)))
-         (message "Modal editing is off for this session; the key stack is unchanged"))
-        ((drgnx-modal-sync-engine) (message "Modal editing is on"))
-        (t (message "The key stack has no Vim keys: choose Vim keys (Keyboard Profile…)"))))
+  (if (eq drgnx-modal-running 'evil)
+      (progn (setq drgnx-modal-suspended (list (drgnx-modal-current-layers)))
+             (drgnx-modal-sync-engine)                  ; the core stops evil and clears every buffer
+             (message "Modal editing is off for this session (the key stack is unchanged); M-SPC u m turns it on"))
+    (setq drgnx-modal-suspended nil)
+    (cond ((drgnx-modal-sync-engine) (message "Modal editing is on"))
+          ((drgnx-modal-engine-for (drgnx-modal-current-layers))
+           (message "Modal editing did not start: see the *Messages* buffer"))
+          (t (message "The key stack has no Vim keys: choose Vim keys (Keyboard Profile…)")))))
 
 (defun drgnx-evil-doctor ()
   "Problem strings: the key stack wants evil and evil is not running."
   (let ((want (ignore-errors (drgnx-modal-engine-for (drgnx-modal-current-layers)))))
-    (when (and (eq want 'evil) (not (eq drgnx-modal-running 'evil)))
+    (when (and (eq want 'evil) (not (eq drgnx-modal-running 'evil)) (not drgnx-modal-suspended))
       (list "the key stack needs Vim editing (evil) but evil is not running: turn on Modal Editing, or see `drgnx doctor'"))))
 
 ;;;; Module
 
 (defun drgnx-evil-setup ()
   "Set evil's defaults, load it, register the engine, and start it when the key layers need it."
-  (drgnx-evil--settings)
+  (setq evil-want-keybinding nil)
   (require 'evil)
+  (drgnx-evil--note-cursor-defaults)
+  (drgnx-evil--settings)
   (drgnx-modal-define-engine 'evil :module 'editor/evil :start #'drgnx-evil-start :stop #'drgnx-evil-stop)
   (drgnx-command-define 'modal-toggle :category "Edit" :title "Toggle Modal Editing"
                         :command #'drgnx-evil-toggle :scope 'app

@@ -72,15 +72,21 @@ VS Code or Emacs keys). It runs [evil](https://github.com/emacs-evil/evil) as th
   ` REPLACE `, ` EMACS ` — in colours the theme gives (faces `drgnx-modal-normal`, `-insert`, `-visual`, `-emacs`).
 - **Cursor.** A box in normal state, a bar in insert and Emacs state, a hollow box in visual, an underline in replace.
   Only the shape: the colour is the theme's `cursor` face. Panels (the Explorer, Buffers, lists, tables, transcripts)
-  keep the cursor they set — mostly none. In a terminal Emacs 31.1 draws the shape too (`xterm-update-cursor`, set
-  while Vim editing runs, in Xterm-compatible terminals); Emacs 30.2 has no cursor shapes in terminals.
+  keep the cursor they set — mostly none. In a terminal, Emacs 31.1 draws the shape too: while Vim editing runs
+  drgnx sets `xterm-update-cursor` to `type` (the shape only, never the colour) and sets up a terminal that was
+  already running; it works in Xterm-compatible terminals, and the default shape returns when Vim editing stops.
+  Emacs 30.2 has no cursor shapes in terminals.
 - **Panels are in Emacs state.** They keep their own keys and get `SPC` leader and `j` / `k` for rows; forms (the
   Search/Replace view) take typed text and have no Vim keys.
 - **Inputs are in insert state.** Shells (eshell, comint, term, eat) and commit messages start where you type.
   The minibuffer is never modal.
 - **Leader Menu.** `M-SPC` from any state, and `SPC` in normal state, show the leader's keys in a which-key popup.
 - **Toggle Modal Editing** (`SPC u m`, the palette) turns Vim editing off and on for this session; the key stack
-  stays as it is, and a restart or a change of stack follows the stack again.
+  stays as it is. It stays off however often the keys are applied again, until you toggle it on, choose another
+  key stack, or restart. With it off, `SPC` types a space again; `M-SPC u m` is the way back.
+- **Your settings win.** The module sets evil's defaults (`evil-undo-system` `undo-redo`, `evil-want-C-u-scroll`,
+  `evil-search-module` `evil-search`, no evil in the minibuffer) before your `config.el`, so your `setopt` is last. A
+  cursor variable you set (`evil-normal-state-cursor` …) is kept.
 - **Caps Lock as Esc** is the operating system's job (a keyboard setting), not drgnx's.
 
 ## On a Mac

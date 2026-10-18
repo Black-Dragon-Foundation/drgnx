@@ -310,6 +310,36 @@
       (drgnx-modal-init-buffer)
       (should (drgnx-modal-test--leader-p)))))
 
+(ert-deftest drgnx-modal/init-buffer-leaves-the-minibuffer-alone ()
+  (with-temp-buffer
+    (cl-letf (((symbol-function 'minibufferp) (lambda (&rest _) t)))
+      (should (null (drgnx-modal-init-buffer)))
+      (should (null drgnx-modal-state)))))
+
+(ert-deftest drgnx-modal/a-suspended-engine-stays-off-until-the-layers-change ()
+  (let ((drgnx-modal-engines nil) (drgnx-modal-running nil) (drgnx-modal-suspended nil)
+        (drgnx-keys-profiles drgnx-modal-test--profiles) (log nil))
+    (drgnx-modal-define-engine 'evil :start (lambda () (push 'start log)) :stop (lambda () (push 'stop log)))
+    (should (eq (drgnx-modal-sync-engine '((vim editing))) 'evil))
+    (setq drgnx-modal-suspended (list '((vim editing))))
+    (should (null (drgnx-modal-sync-engine '((vim editing)))))
+    (should (null (drgnx-modal-sync-engine '((vim editing)))))   ; a later keys apply: still off
+    (should (equal log '(stop start)))
+    (should (equal drgnx-modal-suspended '(((vim editing)))))
+    (should (null (drgnx-modal-sync-engine '((vscode app editing window)))))   ; other layers: no longer suspended
+    (should (null drgnx-modal-suspended))
+    (should (eq (drgnx-modal-sync-engine '((vim editing))) 'evil))))
+
+(ert-deftest drgnx-modal/suspended-follows-the-current-layers ()
+  (let ((drgnx-modal-engines nil) (drgnx-modal-running nil) (drgnx-keys-profiles drgnx-modal-test--profiles)
+        (drgnx-keys--session-layers '((vim editing))) (drgnx-modal-suspended nil))
+    (drgnx-modal-define-engine 'evil :start #'ignore :stop #'ignore)
+    (should (eq (drgnx-modal-sync-engine) 'evil))
+    (setq drgnx-modal-suspended (list (drgnx-modal-current-layers)))
+    (should (null (drgnx-modal-sync-engine)))
+    (setq drgnx-keys--session-layers '((vim app editing window)))
+    (should (eq (drgnx-modal-sync-engine) 'evil))))
+
 (ert-deftest drgnx-modal/indicator-on-skips-a-non-list-mode-line ()
   (let ((before (default-value 'mode-line-format)))
     (unwind-protect

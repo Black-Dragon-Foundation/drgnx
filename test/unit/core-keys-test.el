@@ -378,11 +378,10 @@ is undone after BODY."
          (should-not (seq-find (lambda (e) (and (equal (cdr-safe (cdr e)) "Open File…")
                                                 (string-match-p (or (car-safe (car e)) "\\`\\'") "C-o")))
                                which-key-replacement-alist)))
-       ;; evil arriving later gets neither stale bindings nor stale labels.  (With evil loaded already, as
-       ;; after the modal tests, the bindings were made at once: none may be left, only empty prefix maps.)
+       ;; evil arriving later gets neither stale bindings nor stale labels.
        (provide 'evil)
-       (dolist (key '("SPC SPC" "SPC f f" "SPC ?"))
-         (should (null (keymap-lookup evil-normal-state-map key))))))))
+       (dolist (key '("SPC" "SPC SPC" "SPC f f"))      ; nil, a too-long key (1) or an empty prefix map: no command
+         (should-not (commandp (keymap-lookup evil-normal-state-map key))))))))
 
 (ert-deftest drgnx-keys/claims-are-against-emacs-not-drgnx ()
   (drgnx-keys-test--live

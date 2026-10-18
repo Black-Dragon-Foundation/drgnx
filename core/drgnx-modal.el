@@ -88,8 +88,10 @@ else normal.  Engines share it so they agree."
 (defun drgnx-modal-init-buffer ()
   "Put this buffer in its `drgnx-modal-initial-state'.  The switches are buffer-local and are dropped with
 the major mode, so an engine calls this for each buffer when it starts and after every major-mode change
-\(`after-change-major-mode-hook').  Returns the state."
-  (drgnx-modal-set-state (drgnx-modal-initial-state)))
+\(`after-change-major-mode-hook').  A minibuffer is never modal: nothing is set there and the value is nil.
+Returns the state."
+  (unless (minibufferp)
+    (drgnx-modal-set-state (drgnx-modal-initial-state))))
 
 (defun drgnx-modal-where (mapsym)
   "How a key bound in MAPSYM is described next to its command: \"\" for the leader map (the keys are
@@ -202,13 +204,22 @@ functions of no arguments that turn the engine on and off.  Returns NAME."
     (with-current-buffer buf (drgnx-modal-set-state nil)))
   (drgnx-modal-indicator-off))
 
+(defvar drgnx-modal-suspended nil
+  "Non-nil while the user has turned modal editing off for this session (Toggle Modal Editing): a list of one
+element, the key layers in force at that moment.  `drgnx-modal-sync-engine' starts no engine for those same
+layers; other layers clear it.")
+
 (defun drgnx-modal-sync-engine (&optional layers)
   "Start the registered engine LAYERS (default `drgnx-modal-current-layers') need, once, and stop any other.
 After a stop every buffer's state is cleared and the indicator removed (SPC types a space again); after a
-start the emulation maps are put in order.  An engine's start function turns the indicator on and calls
-`drgnx-modal-init-buffer' in each buffer.  Returns the engine running, or nil.  An engine whose module is
-not installed is not started."
-  (let* ((want (drgnx-modal-engine-for (or layers (drgnx-modal-current-layers))))
+start the emulation maps are put in order.  An engine's start function turns the indicator on and puts each
+buffer in its state: by `drgnx-modal-init-buffer', or by mirroring its own state through `drgnx-modal-set-state'.
+While `drgnx-modal-suspended' holds these same layers no engine is wanted; with other layers the suspension
+ends.  Returns the engine running, or nil.  An engine whose module is not installed is not started."
+  (let* ((layers (or layers (drgnx-modal-current-layers)))
+         (_ (when (and drgnx-modal-suspended (not (equal (car drgnx-modal-suspended) layers)))
+              (setq drgnx-modal-suspended nil)))
+         (want (and (not drgnx-modal-suspended) (drgnx-modal-engine-for layers)))
          (want (and want (assq want drgnx-modal-engines) want)))
     (unless (eq want drgnx-modal-running)
       (when drgnx-modal-running

@@ -38,5 +38,40 @@ Nothing is written there."
      (let ((load-path (append dirs load-path)))
        ,@body)))
 
+;;; Tests that load evil run in their own Emacs.  Loading evil cannot be undone in a process (its hooks and advice on
+;;; `keyboard-quit', `select-window', `read-key-sequence' stay), and `drgnx-evil/' sorts before most of the suite, so
+;;; the files under test/unit/isolated/ (no `-test.el' suffix: the main run skips them) run in a fresh batch Emacs,
+;;; started by one in-suite test per file.
+
+(defvar drgnx-dir)
+
+(defun drgnx-modal-test-run-isolated (file selector)
+  "Run the tests of FILE (relative to the checkout) chosen by SELECTOR in a fresh batch Emacs through the runner.
+Memory-capped by systemd-run when it works.  Returns (EXIT-CODE . OUTPUT)."
+  (let* ((emacs (expand-file-name invocation-name invocation-directory))
+         (dir (file-name-as-directory (expand-file-name drgnx-dir)))
+         (args (list "--batch" "-Q" "--eval" "(setq load-prefer-newer t)"
+                     "-L" (concat dir "harness") "-L" (concat dir "core") "-L" (concat dir "wb")
+                     "-l" (concat dir "harness/run-ert.el") "-f" "drgnx-run-ert-batch"
+                     (expand-file-name file dir)))
+         (process-environment (append (list (concat "DRGNX_TEST_SELECTOR=" (prin1-to-string selector)) "DRGNX_TEST_RESULTS")
+                                      process-environment))
+         (cap (and (executable-find "systemd-run")
+                   (zerop (call-process "systemd-run" nil nil nil "--user" "--scope" "-q" "true"))
+                   '("systemd-run" "--user" "--scope" "-q" "-p" "MemoryMax=1G" "-p" "MemorySwapMax=0" "--"))))
+    (with-temp-buffer
+      (let ((code (apply #'call-process (if cap (car cap) emacs) nil t nil
+                         (append (cdr cap) (and cap (list emacs)) args))))
+        (cons code (buffer-string))))))
+
+(defun drgnx-modal-test-isolated-result (file selector)
+  "Run FILE's tests (SELECTOR) in their own Emacs; nil when they passed, else the child's output (the tail of it)."
+  (pcase-let ((`(,code . ,out) (drgnx-modal-test-run-isolated file selector)))
+    (cond ((not (eql code 0)) (format "exit %S\n%s" code (if (> (length out) 8000)
+                                                             (concat (substring out 0 3000) "\n[…]\n" (substring out -5000))
+                                                           out)))
+          ((string-match-p "Ran 0 tests" out) (format "no test ran\n%s" out))
+          (t nil))))
+
 (provide 'modal-elpa)
 ;;; modal-elpa.el ends here

@@ -1,4 +1,4 @@
-;;; mod-evil-test.el --- batch tests: editor/evil, evil as drgnx's Vim engine (states, indicator, cursor, toggle) -*- lexical-binding: t -*-
+;;; mod-evil-isolated.el --- batch tests (own Emacs, test/unit/modal-isolated-test.el): editor/evil, evil as drgnx's Vim engine (states, indicator, cursor, toggle) -*- lexical-binding: t -*-
 ;; Needs the real evil: DRGNX_MODAL_ELPA (docs/develop/harness.md, "Modal tests"); without it those tests skip.
 ;; Everything runs in a temp configuration, state dir and HOME; the module table, the engine registry and the
 ;; mode line are put back after each test.
@@ -125,16 +125,15 @@ stopped.  Evil's packages are not on `load-path' here."
 
 ;;;; Off until chosen
 
-(ert-deftest drgnx-evil/off-by-default ()
+;; Named to sort first: ERT runs by name and evil cannot be unloaded, so this must run before any test loads it.
+(ert-deftest drgnx-evil/00-off-by-default ()
+  (when (featurep 'evil) (ert-skip "evil is loaded already: this test needs a process that has not loaded it"))
   (drgnx-evil-test--config '((vim app editing window)) nil
-    (let ((before (featurep 'evil)) (ran nil))
-      (cl-letf (((symbol-function 'drgnx-evil-setup) (lambda () (setq ran t))))
-        (should (drgnx-module-default-off-p 'editor/evil))
-        (should (eq (drgnx-evil-test--run) 'disabled))
-        (should-not ran)
-        (should-not drgnx-modal-running)
-        (should (eq before (featurep 'evil)))
-        (should-not (assq 'evil drgnx-modal-engines))))))
+    (should (drgnx-module-default-off-p 'editor/evil))
+    (should (eq (drgnx-evil-test--run) 'disabled))
+    (should-not (featurep 'evil))
+    (should-not drgnx-modal-running)
+    (should-not (assq 'evil drgnx-modal-engines))))
 
 (ert-deftest drgnx-evil/vim-stack-starts-evil ()
   (drgnx-evil-test--running
@@ -412,23 +411,35 @@ stopped.  Evil's packages are not on `load-path' here."
 
 (ert-deftest drgnx-evil/the-terminal-follows-the-cursor-where-emacs-can ()
   (drgnx-evil-test--running
-    ;; as on Emacs 31.1 with term/xterm loaded, where the option exists (30.2 has none: nothing to set)
-    (cl-progv '(xterm-update-cursor) '(nil)
-      (unwind-protect
-          (progn
+    ;; as on Emacs 31.1, where the option exists (30.2 has none: nothing to set).  Shape only (`type'): no colour.
+    (let ((inits nil) (updates 0))
+      (cl-progv '(xterm-update-cursor) '(nil)
+        (cl-letf (((symbol-function 'xterm--init-update-cursor) (lambda () (push (selected-frame) inits)))
+                  ((symbol-function 'xterm--update-cursor-type) (lambda () (cl-incf updates)))
+                  ((symbol-function 'drgnx-evil--xterm-frames) (lambda () (list (selected-frame)))))
+          (unwind-protect
+              (progn
+                (drgnx-evil-stop)
+                (setq features (delq 'term/xterm features))
+                (drgnx-evil-start)
+                (should-not xterm-update-cursor)      ; the library loads later: set when it does
+                (should-not inits)
+                (provide 'term/xterm)
+                (should (eq xterm-update-cursor 'type))
+                (should (= (length inits) 1))         ; a terminal already up is set up for it
+                (drgnx-evil-stop)
+                (should (> updates 0))                ; …and shows the default shape again
+                (should-not xterm-update-cursor)
+                (drgnx-evil-start)                    ; the library is loaded already: set at once
+                (should (eq xterm-update-cursor 'type))
+                (should (= (length inits) 2))
+                (drgnx-evil-stop)
+                (add-hook 'post-command-hook 'xterm--post-command-hook)
+                (drgnx-evil-start)                    ; the hook is installed already: no second setup
+                (should (= (length inits) 2)))
+            (remove-hook 'post-command-hook 'xterm--post-command-hook)
             (drgnx-evil-stop)
-            (setq features (delq 'term/xterm features))
-            (drgnx-evil-start)
-            (should-not xterm-update-cursor)      ; the library loads later: set when it does
-            (provide 'term/xterm)
-            (should (eq xterm-update-cursor t))
-            (drgnx-evil-stop)
-            (should-not xterm-update-cursor)
-            (drgnx-evil-start)                    ; the library is loaded already: set at once
-            (should (eq xterm-update-cursor t))
-            (drgnx-evil-stop)
-            (should-not xterm-update-cursor))
-        (setq features (delq 'term/xterm features))))))
+            (setq features (delq 'term/xterm features))))))))
 
 ;;;; Settings, toggle, doctor, rows
 
@@ -446,6 +457,16 @@ stopped.  Evil's packages are not on `load-path' here."
       (should-not evil-want-minibuffer)
       (should-not evil-mode-line-format))))
 
+(ert-deftest drgnx-evil/settings-go-through-setopt ()
+  ;; evil's :set functions run: C-u scrolls only when the option's setter has bound it
+  (drgnx-modal-test-with-evil
+    (drgnx-evil-test--config '((vim app editing window)) t
+      (require 'evil)
+      (setopt evil-want-C-u-scroll nil)
+      (should-not (eq (keymap-lookup evil-motion-state-map "C-u") #'evil-scroll-up))
+      (should (eq (drgnx-evil-test--run) 'ok))
+      (should (eq (keymap-lookup evil-motion-state-map "C-u") #'evil-scroll-up)))))
+
 (ert-deftest drgnx-evil/toggle-turns-the-engine-off-and-on ()
   (drgnx-evil-test--running
     (drgnx-evil-test--buffer b #'prog-mode
@@ -454,11 +475,97 @@ stopped.  Evil's packages are not on `load-path' here."
       (should-not drgnx-modal-running)
       (should-not (bound-and-true-p evil-mode))
       (should-not drgnx-modal-state)
-      (should (= 1 (length (drgnx-evil-doctor))))    ; the stack still wants evil
+      (should-not (drgnx-evil-doctor))                 ; off on purpose is no problem
       (drgnx-evil-toggle)
       (should (eq drgnx-modal-running 'evil))
       (should (eq drgnx-modal-state 'normal))
       (should-not (drgnx-evil-doctor)))))
+
+(ert-deftest drgnx-evil/doctor-says-when-the-stack-wants-evil-and-it-is-not-running ()
+  (drgnx-evil-test--running
+    (drgnx-evil-stop)
+    (setq drgnx-modal-running nil)
+    (should (= 1 (length (drgnx-evil-doctor))))))
+
+(ert-deftest drgnx-evil/toggle-survives-a-keys-apply ()
+  (drgnx-evil-test--running
+    (drgnx-evil-toggle)
+    (should drgnx-modal-suspended)
+    (should-not (drgnx-modal-sync-engine))                ; what every drgnx-keys-apply ends with
+    (should-not (drgnx-modal-sync-engine))
+    (should-not drgnx-modal-running)
+    (should-not (bound-and-true-p evil-mode))
+    (should (eq (drgnx-modal-sync-engine '((vim editing))) 'evil))   ; other layers: back on
+    (should-not drgnx-modal-suspended)
+    (drgnx-evil-toggle)
+    (should-not drgnx-modal-running)
+    (drgnx-evil-toggle)                                   ; the way back
+    (should (eq drgnx-modal-running 'evil))
+    (should-not drgnx-modal-suspended)))
+
+(ert-deftest drgnx-evil/toggle-says-why-it-did-not-start ()
+  (let ((msgs nil))
+    (cl-letf (((symbol-function 'message) (lambda (fmt &rest args) (push (apply #'format fmt args) msgs))))
+      (drgnx-evil-test--running
+        (drgnx-evil-stop)
+        (setq drgnx-modal-running nil)
+        (cl-letf (((symbol-function 'drgnx-evil-start) (lambda () (error "boom"))))
+          (drgnx-evil-toggle))
+        (should (seq-some (lambda (m) (string-search "did not start" m)) msgs))
+        (should-not (seq-some (lambda (m) (string-search "no Vim keys" m)) msgs))))
+    (setq msgs nil)
+    (cl-letf (((symbol-function 'message) (lambda (fmt &rest args) (push (apply #'format fmt args) msgs))))
+      (drgnx-modal-test-with-evil
+        (drgnx-evil-test--config '((vscode app editing window)) t
+          (should (eq (drgnx-evil-test--run) 'ok))
+          (drgnx-evil-toggle)
+          (should-not drgnx-modal-running)
+          (should (seq-some (lambda (m) (string-search "no Vim keys" m)) msgs)))))))
+
+(ert-deftest drgnx-evil/a-failing-start-rolls-back ()
+  (drgnx-evil-test--with
+    (require 'evil)
+    (cl-letf (((symbol-function 'drgnx-evil--which-key-on) (lambda () (error "boom"))))
+      (should-error (drgnx-evil-start)))
+    (should-not (bound-and-true-p evil-mode))
+    (should-not (memq 'drgnx-evil--sync evil-normal-state-entry-hook))
+    (should-not (memq 'drgnx-evil--init-buffer after-change-major-mode-hook))
+    (should-not (member '(:eval (drgnx-modal-mode-line)) (default-value 'mode-line-format)))))
+
+(ert-deftest drgnx-evil/a-users-cursor-setting-is-kept ()
+  (drgnx-evil-test--running
+    (let ((default (alist-get 'evil-normal-state-cursor drgnx-evil--cursor-defaults)))
+      (unwind-protect
+          (progn
+            (drgnx-evil-stop)
+            (should (equal evil-insert-state-cursor (alist-get 'evil-insert-state-cursor drgnx-evil--cursor-defaults)))
+            (setq evil-normal-state-cursor 'hbar)         ; the user's, set while the engine is off
+            (drgnx-evil-start)
+            (should (eq evil-normal-state-cursor 'hbar))  ; not replaced
+            (should (eq evil-insert-state-cursor #'drgnx-evil--cursor-bar))
+            (drgnx-evil-stop)
+            (should (eq evil-normal-state-cursor 'hbar))
+            (should (equal evil-insert-state-cursor (alist-get 'evil-insert-state-cursor drgnx-evil--cursor-defaults)))
+            (drgnx-evil-start)
+            (setq evil-insert-state-cursor 'hollow)       ; set while the engine runs
+            (drgnx-evil-stop)
+            (should (eq evil-insert-state-cursor 'hollow)))
+        (setq evil-normal-state-cursor default
+              evil-insert-state-cursor (alist-get 'evil-insert-state-cursor drgnx-evil--cursor-defaults))))))
+
+(define-derived-mode drgnx-evil-test-late-mode nil "Late" "A panel mode some module adds after the engine started.")
+
+(ert-deftest drgnx-evil/a-panel-mode-added-later-is-a-panel ()
+  (drgnx-evil-test--running
+    (drgnx-evil-test--buffer b #'drgnx-evil-test-late-mode
+      (should (eq drgnx-modal-state 'normal)))
+    (unwind-protect
+        (progn
+          (add-to-list 'drgnx-modal-panel-modes 'drgnx-evil-test-late-mode)
+          (drgnx-evil-test--buffer b #'drgnx-evil-test-late-mode
+            (should (eq drgnx-modal-state 'emacs))
+            (should drgnx-modal--panel-on)))
+      (setq drgnx-modal-panel-modes (delq 'drgnx-evil-test-late-mode drgnx-modal-panel-modes)))))
 
 (ert-deftest drgnx-evil/modal-toggle-is-a-command-while-the-engine-is-loaded ()
   (drgnx-evil-test--running
@@ -478,5 +585,5 @@ stopped.  Evil's packages are not on `load-path' here."
     (dolist (name '(vscode emacs))
       (should (eq (cadr (assq 'modal-toggle (plist-get (alist-get name profiles) :bind))) :none)))))
 
-(provide 'mod-evil-test)
-;;; mod-evil-test.el ends here
+(provide 'mod-evil-isolated)
+;;; mod-evil-isolated.el ends here
