@@ -473,8 +473,8 @@ case \"$*\" in *is-enabled*) [ -f %s ] ;; *start*) touch %s ;; esac"
       (let ((drgnx-bin-test--cwd dir))
         (should (equal (drgnx-bin-test--call drgnx-bin-test--bin gui "open" "--wait" "COMMIT_EDITMSG") '(0 . ""))))
       (should (equal (drgnx-bin-test--client-calls dir)
-                     (list (drgnx-bin-test--c "-e" "t")
-                           (drgnx-bin-test--c "-e" "(drgnx-session-gui-frame-p)")
+                     (list (drgnx-bin-test--p "-e" "t")
+                           (drgnx-bin-test--p "-e" "(drgnx-session-gui-frame-p)")
                            (drgnx-bin-test--c "-n" "-e" "(drgnx-session-raise)")
                            (drgnx-bin-test--c "-n" "-e" drgnx-bin-test--load-keys)
                            (drgnx-bin-test--c "--" file))))
@@ -488,7 +488,7 @@ case \"$*\" in *is-enabled*) [ -f %s ] ;; *start*) touch %s ;; esac"
         (should (eql 0 (car (drgnx-bin-test--call drgnx-bin-test--bin (append env '("DISPLAY" "WAYLAND_DISPLAY"))
                                                   "open" "--wait" file))))
         (should (equal (drgnx-bin-test--client-calls dir)
-                       (list (drgnx-bin-test--c "-e" "t") (drgnx-bin-test--c "-t" "--" file))))))))
+                       (list (drgnx-bin-test--p "-e" "t") (drgnx-bin-test--c "-t" "--" file))))))))
 
 (ert-deftest drgnx-bin/open-check-stops-only-a-daemon-it-started ()
   (drgnx-bin-test--with-open
@@ -601,6 +601,58 @@ case \"$*\" in *is-enabled*) [ -f %s ] ;; *start*) touch %s ;; esac"
   (write-region (concat "#!/bin/sh\n" body "\n") nil file nil 'silent)
   (set-file-modes file #o755)
   file)
+
+(ert-deftest drgnx-bin/the-unit-tier-starts-emacs-without-the-users-desktop ()
+  ;; The C environment of the batch Emacs decides where dbus.el connects (a Lisp `setenv' does not reach it):
+  ;; a dead session bus, no display or compositor, a runtime directory of its own (mode 700, in the run's TMPDIR).
+  (let* ((dir (make-temp-file "drgnx-bin-tmp" t))
+         (parent (expand-file-name "parent" dir))
+         (seen (expand-file-name "seen" dir))
+         (emacs (drgnx-bin-test--fake-emacs
+                 (expand-file-name "fake-emacs" dir)
+                 (format "echo \"$DBUS_SESSION_BUS_ADDRESS|${DISPLAY-unset}|${WAYLAND_DISPLAY-unset}|${SWAYSOCK-unset}|${I3SOCK-unset}|${HYPRLAND_INSTANCE_SIGNATURE-unset}|${NIRI_SOCKET-unset}|$XDG_RUNTIME_DIR|$TMPDIR\" > %s; ls -ld \"$XDG_RUNTIME_DIR\" >> %s" seen seen)))
+         (drgnx-bin-test--cwd dir))
+    (unwind-protect
+        (progn
+          (make-directory parent)
+          (should (eql 0 (car (drgnx-bin-test--call
+                               drgnx-bin-test--bin
+                               (drgnx-bin-test--env dir parent (concat "DRGNX_EMACS=" emacs)
+                                                    "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus" "DISPLAY=:0"
+                                                    "WAYLAND_DISPLAY=wayland-0" "SWAYSOCK=/run/sway" "I3SOCK=/run/i3"
+                                                    "HYPRLAND_INSTANCE_SIGNATURE=abc" "NIRI_SOCKET=/run/niri"
+                                                    "XDG_RUNTIME_DIR=/run/user/1000")
+                               "test"))))
+          (let* ((lines (split-string (drgnx-bin-test--slurp seen) "\n" t))
+                 (v (split-string (car lines) "|")))
+            (should (equal (seq-take v 7)
+                           '("unix:path=/nonexistent/drgnx-unit-test" "unset" "unset" "unset" "unset" "unset" "unset")))
+            (should (equal (nth 7 v) (concat (nth 8 v) "/run")))
+            (should (string-prefix-p "drwx------" (nth 1 lines)))))
+      (delete-directory dir t))))
+
+(ert-deftest drgnx-bin/a-container-run-forwards-the-test-selector ()
+  ;; A narrowed `bin/drgnx test --container' stays narrow inside the container.
+  (let* ((dir (make-temp-file "drgnx-bin-tmp" t))
+         (log (expand-file-name "rt.log" dir))
+         (rt (drgnx-bin-test--fake-emacs (expand-file-name "fake-rt" dir)
+                                         (format "for a in \"$@\"; do echo \"$a\" >> %s; done" log)))
+         (drgnx-bin-test--cwd dir))
+    (unwind-protect
+        (dolist (selector '("\"foo/bar\"" nil))
+          (when (file-exists-p log) (delete-file log))
+          (should (eql 0 (car (drgnx-bin-test--call
+                               drgnx-bin-test--bin
+                               (list (concat "HOME=" dir) (concat "DRGNX_CONFIG_DIR=" dir "/config")
+                                     (concat "DRGNX_CONTAINER=" rt) "DRGNX_TEST_IMAGE=an-image"
+                                     (if selector (concat "DRGNX_TEST_SELECTOR=" selector) "DRGNX_TEST_SELECTOR"))
+                               "test" "--container"))))
+          (let ((args (split-string (drgnx-bin-test--slurp log) "\n" t)))
+            (should (member "run" args))
+            (if selector
+                (should (member (concat "DRGNX_TEST_SELECTOR=" selector) args))
+              (should-not (seq-find (lambda (a) (string-prefix-p "DRGNX_TEST_SELECTOR" a)) args)))))
+      (delete-directory dir t))))
 
 (ert-deftest drgnx-bin/a-relative-tmpdir-is-made-absolute ()
   ;; the child (and what it starts) must see absolute TMPDIR and DRGNX_RUN_TMP, whatever the caller's TMPDIR

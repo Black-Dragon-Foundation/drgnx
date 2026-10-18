@@ -40,6 +40,14 @@ is `tmp/` in its run dir (so, without `$XDG_RUNTIME_DIR`, the session sockets' f
 `$DRGNX_TEST_DIR` runs a smaller suite than `test/unit` (the tests of this cleanup use it). Tests still delete what they
 make (`unwind-protect` and `delete-directory … t`); the directory is the net under them.
 
+The batch unit tier never reaches the user's desktop. `bin/drgnx test` and the unit shards of `bin/drgnx check` start
+Emacs with `DBUS_SESSION_BUS_ADDRESS=unix:path=/nonexistent/drgnx-unit-test` (dbus.el connects with the process's own
+environment, which a Lisp `setenv` does not reach, so a test that loads it would otherwise talk to the real session bus)
+and without `DISPLAY`, `WAYLAND_DISPLAY`, `SWAYSOCK`, `I3SOCK`, `HYPRLAND_INSTANCE_SIGNATURE` and `NIRI_SOCKET`; the runner
+binds the same inside Emacs and gives `XDG_RUNTIME_DIR` a private directory (mode 700) in the run's temp directory. A test
+that needs a bus, a display or a runtime directory sets its own with `process-environment`. The GUI tiers run their own
+session and are not changed. `bin/drgnx test --container` passes `$DRGNX_TEST_SELECTOR` into the container.
+
 A GUI run's ERT suite executes inside the session (`DRGNX_UI_TEST` names the suite directory), writes its
 summary to `DRGNX_UI_RESULTS` and exits. mutter turns any nonzero Emacs exit code into `1`, so the runner
 trusts the summary, not the code. The run is killed (whole process group) after `DRGNX_UI_TEST_TIMEOUT`

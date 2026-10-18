@@ -89,6 +89,19 @@ summary to RESULTS-FILE.  Return t if every test passed."
 
 (defvar project-list-file)
 
+(defconst drgnx-run-ert--dead-bus "unix:path=/nonexistent/drgnx-unit-test"
+  "The session bus address a unit test sees: no listener, so nothing reaches the user's desktop.")
+
+(defconst drgnx-run-ert--desktop-variables
+  '("DISPLAY" "WAYLAND_DISPLAY" "SWAYSOCK" "I3SOCK" "HYPRLAND_INSTANCE_SIGNATURE" "NIRI_SOCKET")
+  "Variables that point a program at the user's display or compositor; unset for the unit tier.")
+
+(defun drgnx-run-ert--private-dir (dir)
+  "Make DIR (mode 700) and return it."
+  (make-directory dir t)
+  (set-file-modes dir #o700)
+  dir)
+
 (defun drgnx-run-ert--given-tmp ()
   "The directory bin/drgnx made for this run (DRGNX_RUN_TMP), or nil: it must be absolute, named
 drgnx-run.XXXXXX, a real directory (no symlink) of the user's."
@@ -138,6 +151,12 @@ exit 0 or 1."
                   (list (format "DRGNX_HUB_PARENT_PID=%d" (emacs-pid)))
                   ;; …nor the user's provider keys: no test may reach a paid model (bare names unset them)
                   (list "OPENROUTER_API_KEY" "ANTHROPIC_API_KEY" "ANTHROPIC_AUTH_TOKEN" "OPENAI_API_KEY")
+                  ;; …nor the user's desktop: no display, no compositor socket, no session bus, a private
+                  ;; runtime directory (bin/drgnx and `drgnx check' do the same for the process itself: dbus.el
+                  ;; connects with the C environment, which this binding does not reach)
+                  (list (concat "DBUS_SESSION_BUS_ADDRESS=" drgnx-run-ert--dead-bus)
+                        (concat "XDG_RUNTIME_DIR=" (drgnx-run-ert--private-dir (expand-file-name "run" tmp))))
+                  drgnx-run-ert--desktop-variables
                   (and (getenv "DRGNX_USER_ELPA") (list (concat "DRGNX_USER_ELPA=" (getenv "DRGNX_USER_ELPA"))))
                   (and (not (getenv "DRGNX_USER_ELPA")) (file-directory-p elpa) (list (concat "DRGNX_USER_ELPA=" elpa)))
                   process-environment))

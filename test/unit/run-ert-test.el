@@ -91,6 +91,16 @@
     (should (string-prefix-p (file-truename temporary-file-directory) (file-truename (getenv v)))))
   (should (string-prefix-p (file-truename temporary-file-directory) (file-truename project-list-file))))
 
+(ert-deftest drgnx-run-ert/unit-tests-never-see-the-users-desktop ()
+  ;; A test that loads dbus.el, opens a frame or talks to a compositor must not reach the user's session.
+  (skip-unless (getenv "DRGNX_TEST_ISOLATED"))
+  (dolist (v '("DISPLAY" "WAYLAND_DISPLAY" "SWAYSOCK" "I3SOCK" "HYPRLAND_INSTANCE_SIGNATURE" "NIRI_SOCKET"))
+    (should-not (getenv v)))
+  (should (equal (getenv "DBUS_SESSION_BUS_ADDRESS") "unix:path=/nonexistent/drgnx-unit-test"))
+  (let ((run (getenv "XDG_RUNTIME_DIR")))
+    (should (string-prefix-p (file-truename temporary-file-directory) (file-truename run)))
+    (should (= #o700 (file-modes run)))))
+
 (ert-deftest drgnx-run-ert/a-file-watch-event-does-not-stop-later-sentinels ()
   ;; Batch Emacs has no command loop: a file-notify event waits in the input queue for ever, and while input
   ;; waits Emacs runs no process sentinel (timers still run).  The runner drains the queue after each test.

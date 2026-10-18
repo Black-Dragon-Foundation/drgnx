@@ -68,6 +68,13 @@ far.  DURATIONS: alist file → seconds (a file it lacks weighs 1)."
 
 (defun drgnx-check--emacs () (or (getenv "DRGNX_EMACS") (expand-file-name invocation-name invocation-directory)))
 
+(defconst drgnx-check-unit-env
+  '("DBUS_SESSION_BUS_ADDRESS=unix:path=/nonexistent/drgnx-unit-test"
+    "DISPLAY" "WAYLAND_DISPLAY" "SWAYSOCK" "I3SOCK" "HYPRLAND_INSTANCE_SIGNATURE" "NIRI_SOCKET")
+  "The environment of a unit shard (bare names are unset): a dead session bus and no display or compositor,
+so a test cannot reach the user's desktop.  `bin/drgnx test' sets the same (harness/run-ert.el binds it
+inside Emacs too, but dbus.el reads the process's own environment).")
+
 (cl-defun drgnx-check-plan (&key (root drgnx-dir) (unit-shards 4) (live-shards 2) perf (gui t) dir)
   "The jobs of a check of the checkout ROOT: (:name :phase :command :gui :env :timeout)…  DIR: where shard
 results go (default: none)."
@@ -86,13 +93,15 @@ results go (default: none)."
              do (push (funcall job name 2 'unit
                                (append (list (drgnx-check--emacs) "--batch" "-Q" "--eval" "(setq load-prefer-newer t)")
                                        paths (list "-l" run-ert "-f" "drgnx-run-ert-batch") files)
-                               :env (cons "DRGNX_TEST_SELECTOR=(not (tag :timing))" (funcall results name)))
+                               :env (append (list "DRGNX_TEST_SELECTOR=(not (tag :timing))") (funcall results name)
+                                            drgnx-check-unit-env))
                       jobs))
     ;; the unit tests that measure time, alone once the parallel phase is over
     (push (funcall job "unit-timing" 3 'unit
                    (append (list (drgnx-check--emacs) "--batch" "-Q" "--eval" "(setq load-prefer-newer t)")
                            paths (list "-l" run-ert "-f" "drgnx-run-ert-batch" (expand-file-name "test/unit" root)))
-                   :env (cons "DRGNX_TEST_SELECTOR=(tag :timing)" (funcall results "unit-timing")))
+                   :env (append (list "DRGNX_TEST_SELECTOR=(tag :timing)") (funcall results "unit-timing")
+                                drgnx-check-unit-env))
           jobs)
     (when gui
       ;; the session test's 110 s default is too tight beside the parallel shards (a session boots slower under load)

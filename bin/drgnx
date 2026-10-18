@@ -116,8 +116,14 @@ check_emacs() { # the CI check (core/drgnx-check.el); exec'd, see ui_exec
 
 test_batch_emacs() { # SIGPIPE ignored, as the hub runs (tests serve one in-process): a test may fail, never end the run
   trap '' PIPE
+  # The unit tier never reaches the user's desktop: dbus.el connects to the bus in the C environment (a dead
+  # address, so nothing answers), no display or compositor socket, a runtime directory of its own.
+  # (The runner binds the same inside Emacs, for Lisp code and the children it starts.)
+  local run="${TMPDIR:-/tmp}/run"; mkdir -p -m 700 "$run"
   # DRGNX_TEST_DIR: a smaller suite (the test of the temp-dir cleanup runs one)
-  exec "$(emacs_bin)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/harness" -L "$here/core" -L "$here/wb" \
+  exec env -u DISPLAY -u WAYLAND_DISPLAY -u SWAYSOCK -u I3SOCK -u HYPRLAND_INSTANCE_SIGNATURE -u NIRI_SOCKET \
+       DBUS_SESSION_BUS_ADDRESS=unix:path=/nonexistent/drgnx-unit-test XDG_RUNTIME_DIR="$run" \
+       "$(emacs_bin)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/harness" -L "$here/core" -L "$here/wb" \
        -l "$here/harness/run-ert.el" \
        -f drgnx-run-ert-batch "${DRGNX_TEST_DIR:-$here/test/unit}"
 }
@@ -146,6 +152,8 @@ test_container() { # [--ui] — the batch (or GUI) tier inside a fedora:45 / Ema
   else
     "$rt" build -q -t "$image" -f "$here/test/container/$file" "$here/test/container" >/dev/null
   fi
+  # a narrowed run stays narrow inside the container: the selector goes in with its value
+  if [ -n "${DRGNX_TEST_SELECTOR:-}" ]; then args+=(-e "DRGNX_TEST_SELECTOR=$DRGNX_TEST_SELECTOR"); fi
   "$rt" run --rm ${args[@]+"${args[@]}"} -v "$mount" -w /src "$image" "${cmd[@]}"
 }
 
@@ -350,7 +358,7 @@ cmd_open() { # [--check] [--wait] [PATH…] — open PATHs (none: the windows as
   trap open_unlock EXIT; trap 'exit 130' INT TERM; trap 'exit 129' HUP    # the lock never outlives this command
   open_lock
   if [[ -n "$wait" && "$(uname -s)" != Darwin && -z "${DISPLAY:-}" && -z "${WAYLAND_DISPLAY:-}" ]]; then
-    client -e t >/dev/null 2>&1 || open_start || return 1
+    probe -e t >/dev/null 2>&1 || open_start || return 1
     open_unlock
     client -t -- "${files[@]}"; return   # no display (ssh, a console): in this terminal
   fi

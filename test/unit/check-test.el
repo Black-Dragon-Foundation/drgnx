@@ -119,6 +119,16 @@
     (should (member "DRGNX_TEST_SELECTOR=(tag :timing)" (plist-get (seq-find (lambda (j) (equal (plist-get j :name) "unit-timing")) jobs) :env)))
     (should-not (member "perf" (mapcar (lambda (j) (plist-get j :name)) (drgnx-check-plan :root drgnx-dir :unit-shards 1 :live-shards 1))))))
 
+(ert-deftest drgnx-check/the-unit-shards-start-without-the-users-desktop ()
+  ;; dbus.el connects with the C environment: the shard process gets a dead bus and no display or compositor
+  (dolist (n '("unit-1" "unit-timing"))
+    (let ((env (plist-get (seq-find (lambda (j) (equal (plist-get j :name) n)) (drgnx-check-plan :root drgnx-dir)) :env)))
+      (should (member "DBUS_SESSION_BUS_ADDRESS=unix:path=/nonexistent/drgnx-unit-test" env))
+      (dolist (v '("DISPLAY" "WAYLAND_DISPLAY" "SWAYSOCK" "I3SOCK" "HYPRLAND_INSTANCE_SIGNATURE" "NIRI_SOCKET"))
+        (should (member v env)))))
+  (let ((env (plist-get (seq-find (lambda (j) (equal (plist-get j :name) "live-1")) (drgnx-check-plan :root drgnx-dir)) :env)))
+    (should-not (member "WAYLAND_DISPLAY" env))))        ; the GUI tiers run their own session
+
 (ert-deftest drgnx-check/the-ui-job-gets-a-longer-timeout-under-parallel-load ()
   ;; CHK-4: the session test's own 110 s default is too tight next to the parallel shards
   (let ((ui (seq-find (lambda (j) (equal (plist-get j :name) "ui")) (drgnx-check-plan :root drgnx-dir))))
