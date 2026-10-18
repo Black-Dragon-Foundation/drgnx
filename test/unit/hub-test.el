@@ -252,6 +252,39 @@ OUT and exits."
         (delete-process fast)
         (when slow (delete-process slow))))))
 
+(ert-deftest drgnx-hub/a-client-beneath-a-stopped-one-is-kept ()
+  ;; a write to a stopped client B blocks on top of one to a live client A: A's write cannot go on meanwhile, so only
+  ;; the innermost write (B's) is judged; B goes, A stays and gets all of it
+  (drgnx-hub-test--with
+    (drgnx-hub-serve (drgnx-hub-socket))
+    (let* ((out (concat root "a.txt")) (a-proc (drgnx-hub-test--reader out 0.001)) (b-proc nil) (a nil) (b nil)
+           (drgnx-hub-client-stuck-after 1) (rescue nil))
+      (unwind-protect
+          (progn
+            (should (drgnx-hub-test--wait (lambda () (= (length drgnx-hub--subscribers) 1)) 10))
+            (setq a (car drgnx-hub--subscribers))
+            (setq b-proc (make-process
+                          :name "stuck-sub" :noquery t :buffer nil
+                          :command (list (expand-file-name invocation-name invocation-directory) "--batch" "-Q" "--eval"
+                                         (format "(let ((c (make-network-process :name \"s\" :family 'local :service %S :filter #'ignore)))
+                                                    (process-send-string c \"{\\\"id\\\":0,\\\"method\\\":\\\"subscribe\\\"}\\n\")
+                                                    (while t (accept-process-output nil 1)))"
+                                                 (drgnx-hub-socket)))))
+            (should (drgnx-hub-test--wait (lambda () (= (length drgnx-hub--subscribers) 2)) 10))
+            (setq b (car drgnx-hub--subscribers))
+            (signal-process b-proc 'SIGSTOP)
+            (setq rescue (run-at-time 9 nil (lambda () (signal-process b-proc 'SIGCONT))))
+            (run-at-time 0 nil (lambda () (drgnx-hub--answer a (list :event "test" :data (list :n 1 :blob (make-string (* 4 1024 1024) ?a))))))
+            (run-at-time 0.2 nil (lambda () (drgnx-hub--answer b (list :event "test" :data (list :n 1 :blob (make-string (* 4 1024 1024) ?b))))))
+            (should (drgnx-hub-test--wait (lambda () (not (process-live-p b))) 6))
+            (should (process-live-p a))
+            (drgnx-hub--answer a '(:event "done" :data nil))
+            (should (drgnx-hub-test--wait (lambda () (not (process-live-p a-proc))) 20))
+            (should (equal (drgnx-hub-test--got out) '(1))))
+        (when (timerp rescue) (cancel-timer rescue))
+        (when b-proc (ignore-errors (signal-process b-proc 'SIGCONT)) (delete-process b-proc))
+        (delete-process a-proc)))))
+
 (ert-deftest drgnx-hub/a-slow-subscriber-is-kept-and-gets-everything-in-order ()
   ;; a live reader that is merely slow (big snapshots, a busy editor) makes writes wait: what comes meanwhile is
   ;; queued for it, never a reason to drop it

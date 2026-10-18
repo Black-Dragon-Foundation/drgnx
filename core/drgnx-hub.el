@@ -150,12 +150,18 @@ connection is closed (its Emacs connects again).  One snapshot can carry whole f
 connection is closed."
   :type 'number :group 'drgnx)
 
+(defvar drgnx-hub--writing nil
+  "The hub's writes in progress, innermost first: a write that waits runs timers and filters, which may write to
+another client on top of it — the ones beneath cannot go on meanwhile.")
+
 (defun drgnx-hub--client-stuck-p (conn &optional more)
-  "Has CONN stopped reading: its current write older than `drgnx-hub-client-stuck-after', or its queue (with MORE
-bytes) past `drgnx-hub-client-max-queued'?"
+  "Has CONN stopped reading: its write the innermost one in progress (one beneath it cannot go on, so it is not
+judged) and older than `drgnx-hub-client-stuck-after', or its queue (with MORE bytes) past
+`drgnx-hub-client-max-queued'?"
   (let ((since (process-get conn :sending)))
-    (and since (or (> (- (float-time) since) drgnx-hub-client-stuck-after)
-                   (> (+ (or (process-get conn :queued-bytes) 0) (or more 0)) drgnx-hub-client-max-queued)))))
+    (and since (eq conn (car drgnx-hub--writing))
+         (or (> (- (float-time) since) drgnx-hub-client-stuck-after)
+             (> (+ (or (process-get conn :queued-bytes) 0) (or more 0)) drgnx-hub-client-max-queued)))))
 
 (defun drgnx-hub--drop (conn)
   (message "drgnx hub: a client stopped reading; its connection is closed")
@@ -177,8 +183,11 @@ Emacs connects again)."
             (process-put conn :queue nil)
             (process-put conn :queued-bytes 0)
             (dolist (l lines)
-              (process-put conn :sending (float-time))       ; (each line: a write that makes progress is not stuck)
-              (drgnx-hub--send-line conn l))))
+              (let ((drgnx-hub--writing (cons conn drgnx-hub--writing)))
+                (process-put conn :sending (float-time))     ; (each line: a write that makes progress is not stuck)
+                (drgnx-hub--send-line conn l))
+              ;; a write beneath this one goes on now: its clock starts again
+              (when-let* ((below (car drgnx-hub--writing))) (process-put below :sending (float-time))))))
       (process-put conn :sending nil))))
 
 (defun drgnx-hub--answer (conn object)
@@ -190,9 +199,10 @@ only: a client's nested `drgnx-hub-call' is legitimate."
   (drgnx-hub--drain conn))
 
 (defun drgnx-hub--drop-stuck ()
-  "Drop the clients that stopped reading even when nothing more comes for them (the hub's tick)."
-  (dolist (p (process-list))
-    (when (and (process-get p :sending) (process-live-p p) (drgnx-hub--client-stuck-p p)) (drgnx-hub--drop p))))
+  "Drop the client that stopped reading even when nothing more comes for it (the hub's tick): the innermost write
+in progress is the only one judged (`drgnx-hub--client-stuck-p')."
+  (when-let* ((c (car drgnx-hub--writing)))
+    (when (and (process-live-p c) (drgnx-hub--client-stuck-p c)) (drgnx-hub--drop c))))
 
 (defconst drgnx-hub--max-line (* 1024 1024)
   "The longest request line the hub reads (characters): a longer one closes its connection.")
