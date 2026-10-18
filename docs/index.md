@@ -22,6 +22,7 @@ Using drgnx.
 - [Layouts](guide/layouts.md): Agent, Editor, Zen and Browser, and your own; one key cycles them, and switching back restores what you left.
 - [Browser pane](guide/browser.md): a web page beside the editor (WebKit), Test Report for Playwright, and an agent's page with its screenshot.
 - [Live view](guide/live.md): watch the browser your agents drive, live, and take it over.
+- [Remote editing](guide/remote.md): Open Remote… (ssh hosts, podman containers), the status-line segment, Reconnect, language servers on the host.
 - [Keyboard Shortcuts editor](guide/shortcuts.md): every command with its keys; record new ones, see conflicts, filter, undo.
 - [Editor features vs VS Code, Zed and Cursor](guide/editor-matrix.md): what drgnx has, where it is described, its GUI test and perf workload.
 

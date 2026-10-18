@@ -278,6 +278,8 @@
         (live-stop-browser :none "the palette")
         (live-view :none "the palette")
         (live-take-over "C-c C-c" :map (drgnx-live . drgnx-live-mode-map))
+        (remote-open :none "the palette and the status-bar remote")
+        (remote-reconnect :none "the palette and the status-bar remote")
         (keyboard-shortcuts "C-k C-s")
         (shortcuts-change "RET" :map (drgnx-shortcuts . drgnx-shortcuts-mode-map))
         (shortcuts-add "a" :map (drgnx-shortcuts . drgnx-shortcuts-mode-map))

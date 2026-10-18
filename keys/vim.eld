@@ -279,6 +279,8 @@
         (live-stop-browser :none "the palette")
         (live-view :none "the palette")
         (live-take-over "C-c C-c" :map (drgnx-live . drgnx-live-mode-map))
+        (remote-open "SPC r o")
+        (remote-reconnect "SPC r r")
         (keyboard-shortcuts "SPC h s")
         (shortcuts-change "RET" :map (drgnx-shortcuts . drgnx-shortcuts-mode-map))
         (shortcuts-add "a" :map (drgnx-shortcuts . drgnx-shortcuts-mode-map))

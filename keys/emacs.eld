@@ -278,6 +278,8 @@
         (live-stop-browser :none "the palette")
         (live-view :none "the palette")
         (live-take-over "C-c C-c" :map (drgnx-live . drgnx-live-mode-map))
+        (remote-open :none "C-x C-f /ssh:… works as always; the palette")
+        (remote-reconnect :none "the palette and the status-line remote")
         (keyboard-shortcuts :none "the palette and the Options menu; C-h C-k is the key sheet")
         (shortcuts-change "RET" :map (drgnx-shortcuts . drgnx-shortcuts-mode-map))
         (shortcuts-add "a" :map (drgnx-shortcuts . drgnx-shortcuts-mode-map))
