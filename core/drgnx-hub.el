@@ -151,9 +151,14 @@ connection is closed (its Emacs connects again).  One snapshot can carry whole f
   :type 'integer :group 'drgnx)
 
 (defcustom drgnx-hub-client-stuck-after 10
-  "Seconds one write to a hub client may wait before the client counts as stopped (a suspended Emacs) and its
-connection is closed."
+  "Seconds a write to a hub client may make no progress before the client counts as stopped (a suspended Emacs)
+and its connection is closed.  A line goes out `drgnx-hub--piece' characters at a time, each one progress."
   :type 'number :group 'drgnx)
+
+(defconst drgnx-hub--piece 8192
+  "Characters of a line the hub writes to a client at a time: a long line to a client that reads, slowly, is
+progress, never a stopped client.  A write that fills the client's socket waits 20 ms before it tries again, and
+macOS's local sockets hold 8 KB: a snapshot of a few MB takes seconds there.")
 
 (defvar drgnx-hub--writing nil
   "The hub's writes in progress, innermost first: a write that waits runs timers and filters, which may write to
@@ -189,9 +194,13 @@ Emacs connects again)."
             (process-put conn :queued-bytes 0)
             (dolist (l lines)
               (let ((t0 (float-time)))
-                (let ((drgnx-hub--writing (cons conn drgnx-hub--writing)))
-                  (process-put conn :sending t0)             ; (each line: a write that makes progress is not stuck)
-                  (drgnx-hub--send-line conn l))
+                (let ((drgnx-hub--writing (cons conn drgnx-hub--writing)) (i 0) (n (length l)))
+                  ;; a piece at a time, each one progress: a write that makes progress is not stuck
+                  (while (and (< i n) (process-live-p conn))
+                    (process-put conn :sending (float-time))
+                    (drgnx-hub--send-line conn (if (and (= i 0) (<= n drgnx-hub--piece)) l
+                                                 (substring l i (min n (+ i drgnx-hub--piece)))))
+                    (setq i (+ i drgnx-hub--piece))))
                 ;; a write beneath this one could not go on meanwhile: it gets back the time this one took (only that:
                 ;; a stopped client beneath writes to others still ends)
                 (when-let* ((below (car drgnx-hub--writing)) (since (process-get below :sending)))
