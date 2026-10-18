@@ -1001,7 +1001,7 @@ step ran before: keep it or change it.  Without interaction: what was found, and
 (defvar drgnx-onboard-agent-wait 10 "Seconds the claude profile's agent has to answer the ACP initialize.")
 (defvar drgnx-onboard-login-wait 15 "Seconds `claude auth status' has to answer.")
 
-(defconst drgnx-onboard-login-header "Type /login, finish in the browser, then press Done in the Welcome"
+(defconst drgnx-onboard-login-header "Type /login, finish in the browser, then press Return on the Agents row in the Welcome (Done)"
   "The header line of the terminal Claude Code's login happens in.")
 
 (declare-function drgnx-agents-profile "drgnx-agents")
@@ -1159,7 +1159,10 @@ started and asked ACP initialize.  Without interaction nothing is installed: the
                      (sudo (if (seq-some (lambda (tool) (string-prefix-p "sudo " (drgnx-onboard--install-text tool))) missing)
                                " (the sudo one is for you to run in a terminal: it asks for your password)" "")))
                 (if (not (and (plist-get ctx :interactive)
-                              (y-or-n-p (format "Set up Claude Code: %s%s? " commands sudo))))
+                              (y-or-n-p (format "Set up Claude Code: %s%s%s? " commands sudo
+                                                (if (memq 'claude missing)
+                                                    " (a claude inside a VS Code extension does not count: drgnx needs its own on your PATH)"
+                                                  "")))))
                     (list 'info (format "Claude Code is not set up%s — to set it up: %s%s%s"
                                         (if (plist-get ctx :interactive) "" " (nothing is installed without asking)") commands sudo
                                         (if (memq 'claude missing) "; then log in: run claude and type /login" "")))

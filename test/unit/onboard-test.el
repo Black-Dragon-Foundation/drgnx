@@ -706,7 +706,7 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
          (should (process-live-p (get-buffer-process b)))
          (should (equal (car (last (process-command (get-buffer-process b)))) (concat bin "claude")))   ; term runs it through a shell
          (should (equal (buffer-local-value 'header-line-format b)
-                        "Type /login, finish in the browser, then press Done in the Welcome")))
+                        "Type /login, finish in the browser, then press Return on the Agents row in the Welcome (Done)")))
        ;; the user logged in and presses Done (runs the step again): the agent is checked, no second terminal
        (write-region "" nil (concat home ".logged-in"))
        (let ((r (drgnx-onboard--agents-step '(:interactive t))))
@@ -1047,5 +1047,18 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
       (setq exec-path (list bin (concat home ".local/bin")))
       (setenv "PATH" (concat bin path-separator home ".local/bin"))
       (should-not (string-match-p "hub" (cadr (drgnx-onboard--agents-step '(:interactive nil))))))))
+
+(ert-deftest drgnx-ai-onboard/the-install-question-explains-the-vs-code-claude ()
+  ;; The install question says why a claude inside a VS Code extension does not count, only when claude is missing.
+  (drgnx-onboard-test--claude 'macos
+    (let ((asked (drgnx-onboard-test--asked '(("\\`Set up Claude Code" . nil)))))
+      (cl-letf (((symbol-function 'y-or-n-p) (car asked))) (drgnx-onboard--agents-step '(:interactive t)))
+      (should (string-match-p "VS Code extension.*does not count" (car (car (cdr asked)))))
+      (should (string-match-p "brew install --cask claude-code" (car (car (cdr asked))))))
+    ;; claude there, the adapter missing: no word of VS Code
+    (drgnx-onboard-test--have bin "claude" "npm")
+    (let ((asked (drgnx-onboard-test--asked '(("\\`Set up Claude Code" . nil)))))
+      (cl-letf (((symbol-function 'y-or-n-p) (car asked))) (drgnx-onboard--agents-step '(:interactive t)))
+      (should-not (string-match-p "VS Code" (car (car (cdr asked))))))))
 
 ;;; onboard-test.el ends here

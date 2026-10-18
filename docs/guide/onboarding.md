@@ -118,7 +118,8 @@ step in the drgnx app.
 The Agents step makes the built-in `claude` agent profile work: Claude Code through `claude-agent-acp`, signed in
 with **your own Claude login** (subscription or API key) — drgnx never reads Claude's tokens or credentials files.
 Only a `claude` on your `PATH` (or in `~/.local/bin`) counts: the copy bundled in a VS Code extension is not used.
-When something is missing it asks once, listing every command, and runs nothing until you say yes:
+When something is missing it asks once, listing every command, and runs nothing until you say yes (when `claude`
+itself is missing the question also says that a `claude` inside a VS Code extension does not count):
 
 | | macOS | Linux |
 |---|---|---|
@@ -138,7 +139,7 @@ next durable session starts a hub that finds the new programs.
 **The login.** The step asks `claude auth status` (exit status and its `loggedIn` answer only). When Claude Code is
 not logged in — or this `claude` has no `auth status`, in which case drgnx cannot tell and offers the login anyway —
 it asks to open a terminal running `claude`. The terminal's header line says **Type /login, finish in the browser,
-then press Done in the Welcome**. The step does not wait for you: it ends as "info", and when you are logged in, press
+then press Return on the Agents row in the Welcome (Done)**. The step does not wait for you: it ends as "info", and when you are logged in, press
 Return on its row in the Welcome (that is Done — it runs the step again) and it goes on. Declining the offer when
 drgnx could not tell still checks the agent; the result says the login was not verified. It never fails the step on
 that alone.
