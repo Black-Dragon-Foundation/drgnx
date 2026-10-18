@@ -2,14 +2,19 @@
 ;; Stdio:  emacs --batch -Q -l mock-mcp.el -f drgnx-mock-mcp-main MODE [MARKER]
 ;; MARKER is any text: it is on the command line, so a test finds the process (and its children) by it.  MODE:
 ;;   ok          answers initialize and tools/list (the tools mock_echo and mock_add); tells on stderr who it is
-;;               ("mock-mcp ready pid=N ppid=N parent=ARGS")
+;;               ("mock-mcp ready pid=N ppid=N cwd=DIR parent=ARGS")
 ;;   hang        reads and never answers
 ;;   crash       says "mock-mcp: fatal: cannot open its database" on stderr and exits 3 before reading
 ;;   flood       never answers: fills stdout and stderr with junk, forever
-;;   echo-env    answers like ok, prints its whole environment on stderr and names a tool NAME=VALUE for every
-;;               variable called MOCK_SECRET*
+;;   echo-env    answers like ok, prints on stderr its command line ("args: …") and the variables of its environment
+;;               called MOCK_* or API_KEY, and names a tool NAME=VALUE for every variable called MOCK_SECRET*
+;;   error       answers initialize with a JSON-RPC error whose message is 800 characters long
+;;   oom         kills itself with SIGKILL when the first request comes
 ;;   fork-child  starts a second mock (hang, same MARKER) and then hangs
 ;; HTTP:  (drgnx-mock-mcp-http-start MODE) -> PORT, served by the Emacs that calls it (the test), on 127.0.0.1.
+;;   error-body  500 with a body that has 195 characters, the text of the Authorization header (a token), and more
+;;   echo-path   404 with a body that says the path it was asked for
+;;   legacy-sse  405 for every POST (a server of the old SSE transport)
 ;;   ok          Streamable HTTP: initialize answers JSON with Mcp-Session-Id; notifications answer 202; tools/list
 ;;               answers an SSE stream (chunked) that is left open; a request without the session id gets 400
 ;;   needs-login 401 with WWW-Authenticate for everything
@@ -62,16 +67,22 @@
                                      when (string-prefix-p "MOCK_SECRET" e) collect e)
                             drgnx-mock-mcp--tools)
                   drgnx-mock-mcp--tools)))
-    (message "mock-mcp ready pid=%d ppid=%s parent=%s" (emacs-pid) ppid
+    (message "mock-mcp ready pid=%d ppid=%s cwd=%s parent=%s" (emacs-pid) ppid default-directory
              (alist-get 'args (and ppid (process-attributes ppid))))
     (when (equal mode "echo-env")
-      (dolist (e process-environment) (message "env: %s" e)))
+      (message "args: %S" command-line-args)
+      (dolist (e process-environment)
+        (when (string-match-p "\\`\\(MOCK_\\|API_KEY=\\)" e) (message "env: %s" e))))
     (condition-case nil
         (while t
           (let* ((line (read-from-minibuffer ""))
                  (msg (and (not (string-blank-p line))
                            (ignore-errors (json-parse-string line :object-type 'plist :null-object nil :false-object nil))))
                  (reply (and msg (drgnx-mock-mcp--answer msg tools))))
+            (when (and msg (equal mode "oom") (plist-get msg :id)) (signal-process (emacs-pid) 'SIGKILL))
+            (when (and msg (equal mode "error") (equal (plist-get msg :method) "initialize"))
+              (setq reply (list :jsonrpc "2.0" :id (plist-get msg :id)
+                                :error (list :code -32000 :message (make-string 800 ?e)))))
             (when reply
               (princ (drgnx-mock-mcp--json reply))
               (terpri))))
@@ -93,7 +104,7 @@
        (start-process "mock-mcp-child" nil (expand-file-name invocation-name invocation-directory)
                       "--batch" "-Q" "-l" drgnx-mock-mcp--file "-f" "drgnx-mock-mcp-main" "hang" (or marker ""))
        (while t (sleep-for 1)))
-      ((or "ok" "echo-env") (drgnx-mock-mcp--serve mode))
+      ((or "ok" "echo-env" "error" "oom") (drgnx-mock-mcp--serve mode))
       (_ (message "mock-mcp: no such mode: %s" mode) (kill-emacs 2)))))
 
 ;;;; HTTP
@@ -122,6 +133,14 @@ reply; KEEP-OPEN: leave the connection open."
     (push (list :mode mode :method method :path path :headers headers :json json) drgnx-mock-mcp-http-requests)
     (pcase mode
       ("hang" nil)
+      ("legacy-sse" (drgnx-mock-mcp-http--send proc "405 Method Not Allowed" nil "use GET"))
+      ("echo-path" (drgnx-mock-mcp-http--send proc "404 Not Found" '(("Content-Type" . "text/plain"))
+                                              (concat "no such path: " path)))
+      ("error-body"
+       (drgnx-mock-mcp-http--send
+        proc "500 Internal Server Error" '(("Content-Type" . "text/plain"))
+        (concat (make-string 195 ?x) (replace-regexp-in-string "\\`Bearer " "" (or (cdr (assoc "authorization" headers)) ""))
+                " and then more text after the token")))
       ("needs-login"
        (drgnx-mock-mcp-http--send
         proc "401 Unauthorized"

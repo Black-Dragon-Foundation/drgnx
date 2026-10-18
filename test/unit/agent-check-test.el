@@ -64,10 +64,12 @@
   (drgnx-agent-check-test--wait (lambda (cb) (drgnx-agent-check-mcp item root cb))))
 
 (defmacro drgnx-agent-check-test-env (&rest body)
-  "BODY in the agent settings fixture (temp state dir), with the HTTP mock stopped afterwards."
+  "BODY in the agent settings fixture (temp state dir), no systemd scope (the user's manager is not touched),
+with the HTTP mock stopped afterwards."
   (declare (indent 0))
-  `(drgnx-agent-config-test-env
-     (unwind-protect (progn ,@body) (drgnx-mock-mcp-http-stop))))
+  `(let ((process-environment (cons "DRGNX_JOBS_LAUNCHER=detached" process-environment)))
+     (drgnx-agent-config-test-env
+       (unwind-protect (progn ,@body) (drgnx-mock-mcp-http-stop)))))
 
 (ert-deftest drgnx-agent-check/mcp-ok-lists-tools ()
   (drgnx-agent-check-test-env
@@ -109,18 +111,23 @@
           (should (string-search how (plist-get r :error))))))))
 
 (ert-deftest drgnx-agent-check/hanging-server-times-out ()
+  ;; three servers that never answer, tested at the same time
   (drgnx-agent-check-test-env
-    (let ((drgnx-agent-check-timeout 2))
-      (dolist (mode '("hang" "fork-child"))
-        (let* ((marker (drgnx-agent-check-test--marker))
-               (r (drgnx-agent-check-test--mcp (drgnx-agent-check-test--stdio-item mode marker) root)))
-          (should (eq (plist-get r :status) 'timeout))
-          (should (< (plist-get r :time) 8))
-          (should (drgnx-agent-check-test--gone-p marker))))
-      ;; an HTTP server that never answers
-      (let* ((port (drgnx-mock-mcp-http-start "hang"))
-             (r (drgnx-agent-check-test--mcp (drgnx-agent-check-test--http-item port) root)))
-        (should (eq (plist-get r :status) 'timeout))))))
+    (let* ((drgnx-agent-check-timeout 1)
+           (markers (list (drgnx-agent-check-test--marker) (drgnx-agent-check-test--marker)))
+           (port (drgnx-mock-mcp-http-start "hang"))
+           (results (make-vector 3 nil))
+           (items (list (drgnx-agent-check-test--stdio-item "hang" (nth 0 markers))
+                        (drgnx-agent-check-test--stdio-item "fork-child" (nth 1 markers))
+                        (drgnx-agent-check-test--http-item port)))
+           (deadline (+ (float-time) 30)))
+      (dotimes (i 3)
+        (let ((i i)) (drgnx-agent-check-mcp (nth i items) root (lambda (r) (aset results i r)))))
+      (while (and (cl-some #'null results) (< (float-time) deadline)) (accept-process-output nil 0.05))
+      (dotimes (i 3)
+        (should (eq (plist-get (aref results i) :status) 'timeout))
+        (should (< (plist-get (aref results i) :time) 8)))
+      (dolist (marker markers) (should (drgnx-agent-check-test--gone-p marker))))))
 
 (ert-deftest drgnx-agent-check/the-editing-emacs-ends-a-check-that-does-not-end ()
   ;; the child's own timeout is 3 s; the grace period is made negative so this Emacs ends it after 1 s
@@ -228,7 +235,7 @@
     (let* ((marker (drgnx-agent-check-test--marker))
            (r (drgnx-agent-check-test--mcp (drgnx-agent-check-test--stdio-item "ok" marker) root))
            (stderr (plist-get r :stderr)))
-      (should (string-match "ppid=\\([0-9]+\\) parent=\\(.*\\)" stderr))
+      (should (string-match "ppid=\\([0-9]+\\) cwd=.* parent=\\(.*\\)" stderr))
       (should-not (equal (string-to-number (match-string 1 stderr)) (emacs-pid)))
       (should (string-search "drgnx-agent-check-main" (match-string 2 stderr)))
       ;; this Emacs started nothing but the check's Emacs: the server is not its child
@@ -355,6 +362,295 @@
                                  (insert-file-contents (expand-file-name "agent-checks.eld" (drgnx-state-dir)))
                                  (buffer-string)))))
                  2)))))
+
+;;;; Fix round 1
+
+(ert-deftest drgnx-agent-check/the-process-table-is-read-from-proc ()
+  (skip-unless (file-readable-p "/proc/self/stat"))
+  (let* ((rows (drgnx-agent-check--proc-rows))
+         (mine (assq (emacs-pid) rows))
+         (attrs (process-attributes (emacs-pid))))
+    (should mine)
+    (should (equal (nth 1 mine) (alist-get 'ppid attrs)))
+    (should (equal (nth 2 mine) (alist-get 'pgrp attrs)))
+    (should (equal (nth 3 mine) (alist-get 'sess attrs)))
+    ;; a process called "a) S 1 2 3 (b" does not confuse the reader
+    (let* ((proc (make-process :name "x" :command '("sleep" "30") :noquery t))
+           (row (assq (process-id proc) (drgnx-agent-check--proc-rows))))
+      (unwind-protect
+          (should (equal (nth 1 row) (emacs-pid)))
+        (delete-process proc)))
+    (should (memq (emacs-pid) (drgnx-agent-check--tree (emacs-pid))))))
+
+(ert-deftest drgnx-agent-check/the-tree-includes-children-and-groups ()
+  (let* ((proc (make-process :name "x" :command '("sh" "-c" "sleep 3175 & sleep 3175") :noquery t))
+         (pid (process-id proc)))
+    (unwind-protect
+        (progn
+          (sleep-for 0.5)
+          (should (>= (length (drgnx-agent-check--tree pid)) 3))
+          (drgnx-agent-check--kill-tree pid)
+          (should (drgnx-agent-check-test--gone-p "sleep 3175")))
+      (ignore-errors (delete-process proc)))))
+
+(ert-deftest drgnx-agent-check/a-named-scope-where-systemd-is ()
+  (let ((process-environment (cons "DRGNX_JOBS_LAUNCHER=systemd" process-environment)))
+    (should (member "--unit=drgnx-check-test" (drgnx-agent-check--wrap '("emacs") "drgnx-check-test")))
+    (should (string-prefix-p "drgnx-check-" (drgnx-agent-check--unit)))
+    (should-not (string= (drgnx-agent-check--unit) (drgnx-agent-check--unit))))
+  (let ((process-environment (cons "DRGNX_JOBS_LAUNCHER=detached" process-environment)))
+    (should-not (drgnx-agent-check--unit))))
+
+(ert-deftest drgnx-agent-check/an-http-error-body-is-masked-before-it-is-cut ()
+  (drgnx-agent-check-test-env
+    ;; the token starts at offset 195 of the body, so cutting first would leave its first five characters
+    (let* ((port (drgnx-mock-mcp-http-start "error-body"))
+           (r (drgnx-agent-check-test--mcp
+               (drgnx-agent-check-test--http-item port '(("Authorization" . "Bearer tok-abcdef123456"))) root)))
+      (should (eq (plist-get r :status) 'failed))
+      (should (string-search "HTTP 500" (plist-get r :error)))
+      (should (string-search "••••" (plist-get r :error)))
+      (should-not (string-search "tok-" (plist-get r :error)))
+      (should-not (string-search "abcdef" (plist-get r :error))))))
+
+(ert-deftest drgnx-agent-check/expansion-uses-the-environment-and-remembers-what-it-used ()
+  (let ((process-environment (append '("MOCK_EXP_A=value-of-a" "MOCK_EXP_SHORT=ab" "MOCK_EXP_EMPTY=") process-environment))
+        (drgnx-agent-check--expanded nil) (drgnx-agent-check--unset nil))
+    (should (equal (drgnx-agent-check--expand "x-${MOCK_EXP_A}-y") "x-value-of-a-y"))
+    (should (equal (drgnx-agent-check--expand "${MOCK_EXP_NOPE:-fallback}") "fallback"))
+    (should (equal (drgnx-agent-check--expand "${MOCK_EXP_EMPTY:-fallback}") "fallback"))
+    ;; no value, no default: left as written and named
+    (should (equal (drgnx-agent-check--expand "${MOCK_EXP_NOPE}") "${MOCK_EXP_NOPE}"))
+    (should (equal drgnx-agent-check--unset '("MOCK_EXP_NOPE")))
+    ;; $VAR is Gemini's, not Claude Code's
+    (should (equal (drgnx-agent-check--expand "$MOCK_EXP_A/x") "$MOCK_EXP_A/x"))
+    (should (equal (drgnx-agent-check--expand "$MOCK_EXP_A/x" t) "value-of-a/x"))
+    (should (equal (drgnx-agent-check--expand "${MOCK_EXP_A}" t) "value-of-a"))
+    (should (equal (cdr (assoc "MOCK_EXP_A" drgnx-agent-check--expanded)) "value-of-a"))
+    (should (equal (drgnx-agent-check--expand 'not-text) 'not-text))
+    ;; the spec: Claude Code and Gemini expand, Codex does not
+    (let ((spec (list :command "${MOCK_EXP_A}" :args ["--x=${MOCK_EXP_A}"] :url "http://h/${MOCK_EXP_A}"
+                      :env '(("K" . "${MOCK_EXP_A}")) :headers '(("H" . "${MOCK_EXP_A}")))))
+      (let ((e (drgnx-agent-check--expand-spec 'claude spec)))
+        (should (equal (plist-get e :command) "value-of-a"))
+        (should (equal (plist-get e :args) '("--x=value-of-a")))
+        (should (equal (plist-get e :url) "http://h/value-of-a"))
+        (should (equal (plist-get e :env) '(("K" . "value-of-a"))))
+        (should (equal (plist-get e :headers) '(("H" . "value-of-a")))))
+      (should (eq (drgnx-agent-check--expand-spec 'codex spec) spec)))))
+
+(ert-deftest drgnx-agent-check/an-expanded-value-is-masked-in-a-plain-argument ()
+  (drgnx-agent-check-test-env
+    (let* ((process-environment (cons "MOCK_PLAIN=plainvalue12345" process-environment))
+           (marker (drgnx-agent-check-test--marker))
+           (item (drgnx-agent-check-test--stdio-item "echo-env" marker))
+           (item (progn (plist-put (plist-get item :spec) :args
+                                   (append (plist-get (plist-get item :spec) :args) (list "--plain=${MOCK_PLAIN}")))
+                        item))
+           (r (drgnx-agent-check-test--mcp item root)))
+      (should (eq (plist-get r :status) 'ok))
+      ;; the server got the value (it is in its command line) and the result does not show it
+      (should (string-search "--plain=••••" (plist-get r :stderr)))
+      (should-not (string-search "plainvalue12345" (prin1-to-string r))))))
+
+(ert-deftest drgnx-agent-check/an-expanded-value-is-masked-in-the-url-path ()
+  (drgnx-agent-check-test-env
+    (let* ((process-environment (cons "MOCK_PATHVAL=pathvalue987" process-environment))
+           (port (drgnx-mock-mcp-http-start "echo-path"))
+           (item (list :kind 'claude :section 'mcp :name "remote" :file "/f"
+                       :spec (list :type 'http :url (format "http://127.0.0.1:%d/mcp/${MOCK_PATHVAL}" port))))
+           (r (drgnx-agent-check-test--mcp item root)))
+      (should (eq (plist-get r :status) 'failed))
+      (should (string-search "no such path: /mcp/••••" (plist-get r :error)))
+      (should-not (string-search "pathvalue987" (prin1-to-string r))))))
+
+(ert-deftest drgnx-agent-check/an-unset-variable-is-named-in-the-result ()
+  (drgnx-agent-check-test-env
+    (let* ((port (drgnx-mock-mcp-http-start "echo-path"))
+           (item (list :kind 'gemini :section 'mcp :name "remote" :file "/f"
+                       :spec (list :type 'http :url (format "http://127.0.0.1:%d/$MOCK_SURELY_UNSET/x" port))))
+           (r (drgnx-agent-check-test--mcp item root)))
+      (should (equal (plist-get r :unset) '("MOCK_SURELY_UNSET")))
+      (should (string-search "MOCK_SURELY_UNSET" (plist-get r :error))))))
+
+(ert-deftest drgnx-agent-check/headers-from-environment-variables ()
+  (drgnx-agent-check-test-env
+    (let* ((process-environment (append '("MOCK_BEARER_VAR=bearer-value-777" "MOCK_HDR_VAR=header-value-888")
+                                        process-environment))
+           (port (drgnx-mock-mcp-http-start "ok"))
+           (item (list :kind 'codex :section 'mcp :name "remote" :file "/f"
+                       :spec (list :type 'http :url (format "http://127.0.0.1:%d/mcp" port)
+                                   :bearer-env "MOCK_BEARER_VAR"
+                                   :env-headers '("X-Mock" "X-Unset") :env-header-vars '("MOCK_HDR_VAR" "MOCK_NOT_SET"))))
+           (r (drgnx-agent-check-test--mcp item root))
+           (headers (plist-get (car (last drgnx-mock-mcp-http-requests)) :headers)))
+      (should (eq (plist-get r :status) 'ok))
+      (should (equal (cdr (assoc "authorization" headers)) "Bearer bearer-value-777"))
+      (should (equal (cdr (assoc "x-mock" headers)) "header-value-888"))
+      (should-not (assoc "x-unset" headers))
+      (let ((sets (drgnx-agent-check--secret-sets item (list :headers '(("Authorization" . "Bearer bearer-value-777"))))))
+        (should (member "bearer-value-777" (car sets)))))
+    ;; Kimi: the variable of bearerTokenEnvVar; a header written out is not replaced
+    (setq drgnx-mock-mcp-http-requests nil)
+    (let* ((process-environment (cons "MOCK_KIMI_VAR=kimi-token-555" process-environment))
+           (port (drgnx-mock-mcp-http-start "ok"))
+           (item (list :kind 'kimi :section 'mcp :name "remote" :file "/f"
+                       :spec (list :type 'http :url (format "http://127.0.0.1:%d/mcp" port)
+                                   :bearer-env "MOCK_KIMI_VAR")))
+           (r (drgnx-agent-check-test--mcp item root)))
+      (should (eq (plist-get r :status) 'ok))
+      (should (equal (cdr (assoc "authorization" (plist-get (car (last drgnx-mock-mcp-http-requests)) :headers)))
+                     "Bearer kimi-token-555")))
+    (let* ((process-environment (cons "MOCK_KIMI_VAR=kimi-token-555" process-environment))
+           (port (drgnx-mock-mcp-http-start "ok"))
+           (item (list :kind 'kimi :section 'mcp :name "remote" :file "/f"
+                       :spec (list :type 'http :url (format "http://127.0.0.1:%d/mcp" port)
+                                   :headers '(("authorization" . "Bearer written-out-1")) :bearer-env "MOCK_KIMI_VAR"))))
+      (setq drgnx-mock-mcp-http-requests nil)
+      (drgnx-agent-check-test--mcp item root)
+      (should (equal (cdr (assoc "authorization" (plist-get (car (last drgnx-mock-mcp-http-requests)) :headers)))
+                     "Bearer written-out-1")))))
+
+(ert-deftest drgnx-agent-check/kimi-server-runs-in-its-own-directory ()
+  (drgnx-agent-check-test-env
+    (make-directory (expand-file-name "sub/dir" root) t)
+    (let* ((marker (drgnx-agent-check-test--marker))
+           (item (drgnx-agent-check-test--stdio-item "ok" marker nil 'kimi))
+           (item (progn (plist-put (plist-get item :spec) :cwd "sub/dir") item))
+           (r (drgnx-agent-check-test--mcp item root)))
+      (should (eq (plist-get r :status) 'ok))
+      (should (string-match "cwd=\\(.*\\) parent=" (plist-get r :stderr)))
+      (should (equal (file-truename (match-string 1 (plist-get r :stderr)))
+                     (file-name-as-directory (file-truename (expand-file-name "sub/dir" root))))))
+    ;; one that does not exist is said so
+    (let* ((item (drgnx-agent-check-test--stdio-item "ok" "m" nil 'kimi))
+           (item (progn (plist-put (plist-get item :spec) :cwd "nowhere") item))
+           (r (drgnx-agent-check-test--mcp item root)))
+      (should (eq (plist-get r :status) 'failed))
+      (should (string-search "does not exist" (plist-get r :error))))))
+
+(ert-deftest drgnx-agent-check/a-hook-finds-the-project-directory-in-its-environment ()
+  (drgnx-agent-check-test-env
+    (dolist (case '((claude "$CLAUDE_PROJECT_DIR" nil) (kimi "$CLAUDE_PROJECT_DIR" nil)
+                    (gemini "$GEMINI_PROJECT_DIR" "$CLAUDE_PROJECT_DIR") (codex "x" nil)))
+      (let* ((item (list :kind (car case) :section 'hook :name "h" :file "/f"
+                         :spec (list :event "Stop" :command (format "printf '%%s|%%s' \"%s\" \"%s\"" (nth 1 case) (or (nth 2 case) "")))))
+             (r (drgnx-agent-check-test--wait (lambda (cb) (drgnx-agent-check-hook item root cb))))
+             (dir (directory-file-name (expand-file-name root))))
+        (pcase (car case)
+          ((or 'claude 'kimi) (should (equal (plist-get r :stdout) (concat dir "|"))))
+          ('gemini (should (equal (plist-get r :stdout) (concat dir "|" dir))))
+          (_ (should (equal (plist-get r :stdout) "x|"))))))))
+
+(ert-deftest drgnx-agent-check/an-sse-server-is-told-from-the-answer ()
+  (drgnx-agent-check-test-env
+    (let* ((port (drgnx-mock-mcp-http-start "legacy-sse"))
+           (sse (drgnx-agent-check-test--mcp
+                 (plist-put (drgnx-agent-check-test--http-item port) :spec
+                            (list :type 'sse :url (format "http://127.0.0.1:%d/sse" port)))
+                 root))
+           (http (drgnx-agent-check-test--mcp (drgnx-agent-check-test--http-item port) root)))
+      (should (eq (plist-get sse :status) 'failed))
+      (should (string-search "HTTP 405" (plist-get sse :error)))
+      (should (string-search "old-style SSE" (plist-get sse :error)))
+      (should (string-search "HTTP 405" (plist-get http :error)))
+      (should-not (string-search "old-style SSE" (plist-get http :error))))))
+
+(ert-deftest drgnx-agent-check/a-remote-project-is-refused ()
+  (let ((mcp nil) (hook nil))
+    (should-not (drgnx-agent-check-mcp (drgnx-agent-check-test--stdio-item "ok" "m") "/ssh:nowhere:/srv/p/"
+                                       (lambda (r) (setq mcp r))))
+    (should-not (drgnx-agent-check-hook (list :kind 'claude :section 'hook :name "h" :file "/f"
+                                              :spec (list :event "Stop" :command "true"))
+                                        "/ssh:nowhere:/srv/p/" (lambda (r) (setq hook r))))
+    (should (eq (plist-get mcp :status) 'failed))
+    (should (string-search "remote" (plist-get mcp :error)))
+    (should-not (plist-get hook :exit))
+    (should (string-search "remote" (plist-get hook :error)))))
+
+(ert-deftest drgnx-agent-check/a-refused-connection-is-told ()
+  (drgnx-agent-check-test-env
+    (let* ((port (drgnx-mock-mcp-http-start "ok")))
+      (drgnx-mock-mcp-http-stop)
+      (let ((r (drgnx-agent-check-test--mcp (drgnx-agent-check-test--http-item port) root)))
+        (should (eq (plist-get r :status) 'failed))
+        (should (string-search "Cannot connect" (plist-get r :error)))))))
+
+(ert-deftest drgnx-agent-check/a-long-error-from-the-server-is-cut ()
+  (drgnx-agent-check-test-env
+    (let ((r (drgnx-agent-check-test--mcp (drgnx-agent-check-test--stdio-item "error" (drgnx-agent-check-test--marker)) root)))
+      (should (eq (plist-get r :status) 'failed))
+      (should (string-search "initialize: eee" (plist-get r :error)))
+      (should (< (length (plist-get r :error)) 540)))))
+
+(ert-deftest drgnx-agent-check/a-killed-server-mentions-the-memory-limit ()
+  (drgnx-agent-check-test-env
+    (let ((r (drgnx-agent-check-test--mcp (drgnx-agent-check-test--stdio-item "oom" (drgnx-agent-check-test--marker)) root)))
+      (should (eq (plist-get r :status) 'failed))
+      (should (string-search "signal 9" (plist-get r :error)))
+      (should (string-search "512M" (plist-get r :error))))))
+
+(ert-deftest drgnx-agent-check/masking-covers-overlaps-and-other-forms ()
+  ;; two secrets that overlap are one range: no end of either stays
+  (should (equal (drgnx-agent-config-mask-text "x abcdefghi y" '("abcdef" "defghi")) "x •••• y"))
+  (should (equal (drgnx-agent-config-mask-text "abcdefghi" '("defghi" "abcdef")) "••••"))
+  (should (equal (drgnx-agent-config-mask-text "a-secret-b-secret" '("secret")) "a-••••-b-••••"))
+  (should (equal (drgnx-agent-config-mask-text "nothing" '("secret")) "nothing"))
+  (should (equal (drgnx-agent-config-mask-text "keep" nil) "keep"))
+  (should-not (drgnx-agent-config-mask-text nil '("secret")))
+  ;; the forms of a secret
+  (let ((forms (drgnx-agent-check--forms "pa ss/w\"rd&é")))
+    (should (member "pa ss/w\"rd&é" forms))
+    (should (member "pa%20ss%2Fw%22rd%26%C3%A9" forms))
+    (should (member "pa ss/w\\\"rd&é" forms)))
+  (should (member "pä ss" (drgnx-agent-check--forms "p%C3%A4%20ss")))
+  (let ((sets (drgnx-agent-check--secret-sets
+               (list :spec (list :env '(("API_KEY" . "a b/c-secret")))))))
+    (should (member "a%20b%2Fc-secret" (car sets))))
+  (should (equal (drgnx-agent-config-mask-text "q=a%20b%2Fc-secret" (car (drgnx-agent-check--secret-sets
+                                                                          (list :spec (list :env '(("API_KEY" . "a b/c-secret")))))))
+                 "q=••••")))
+
+(ert-deftest drgnx-agent-check/only-text-of-a-server-is-masked ()
+  (let ((r (drgnx-agent-check--mask-result '(:status failed :exit 4321 :error "failed 4321" :tools ("failed_tool")) '("failed" "4321"))))
+    (should (eq (plist-get r :status) 'failed))
+    (should (eql (plist-get r :exit) 4321))
+    (should (equal (plist-get r :error) "•••• ••••"))
+    (should (equal (plist-get r :tools) '("••••_tool"))))
+  ;; the tool names are masked with the strong secrets only
+  (let ((r (drgnx-agent-check--mask-result '(:error "prod_x" :tools ("prod_query")) '("prod") '("other-value"))))
+    (should (equal (plist-get r :error) "••••_x"))
+    (should (equal (plist-get r :tools) '("prod_query")))))
+
+(ert-deftest drgnx-agent-check/short-plain-values-stay-in-tool-names ()
+  (let* ((process-environment (append '("MOCK_TOKEN_ENV=tok-from-this-emacs-1" "XDG_SESSION_TYPE=wayland"
+                                        "MOCK_DB_URL=postgres://dbuser:dbpassw0rd@host/db" "GITHUB_PAT=ghp-short"
+                                        "PATH_OF_ALL=notasecretvalue")
+                                      process-environment))
+         (item (list :kind 'claude :section 'mcp :name "m" :file "/f"
+                     :spec (list :env '(("MODE" . "prod") ("TARGET_NAME" . "staging-eu") ("API_KEY" . "abc")
+                                        ("SHORT_TOKEN" . "tk12")))))
+         (sets (drgnx-agent-check--secret-sets item)))
+    ;; a plain name, a short value: hidden in errors and stderr, not in tool names
+    (should (member "prod" (car sets)))
+    (should-not (member "prod" (cdr sets)))
+    ;; a long value, or a name that says secret: hidden everywhere
+    (should (member "staging-eu" (cdr sets)))
+    (should (member "tk12" (cdr sets)))
+    ;; this Emacs's own environment: by name (pat, session…) and the userinfo of URLs
+    (should (member "tok-from-this-emacs-1" (cdr sets)))
+    (should (member "ghp-short" (cdr sets)))
+    (should (member "dbpassw0rd" (car sets)))
+    (should-not (member "notasecretvalue" (car sets)))
+    (should (member "wayland" (car sets)))
+    (should-not (member "wayland" (cdr sets)))))
+
+(ert-deftest drgnx-agent-check/output-is-cleaned ()
+  (should (equal (drgnx-agent-check--clean "a\e[31mred\e[0m b\e]0;title\a c\r\nd\re\001f\tg") "ared b c\nd\nef\tg"))
+  (should (equal (drgnx-agent-check--clean (decode-coding-string "ok\xff\xfe!" 'utf-8-unix)) "ok��!"))
+  (should (equal (drgnx-agent-check--clean nil) ""))
+  ;; a secret cut in two by an escape sequence is found once the sequence is gone
+  (should (equal (drgnx-agent-config-mask-text (drgnx-agent-check--clean "sec\e[0mret1") '("secret1")) "••••")))
 
 (provide 'agent-check-test)
 ;;; agent-check-test.el ends here

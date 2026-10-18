@@ -299,8 +299,10 @@ and `.` (Gemini's policy rules misread an underscore).
 The two checks of the agent settings pages. Both run the user's configured command, so they run only from a command
 (Test, Test all), never from a timer, hook or sentinel, and never in the editing Emacs. Tests use the mock server in
 `test/fixtures/mock-mcp.el` only (stdio modes `ok`, `hang`, `crash`, `flood`, `echo-env`, `fork-child` as
-`emacs --batch -Q -l mock-mcp.el -f drgnx-mock-mcp-main MODE MARKER`; an HTTP one, `drgnx-mock-mcp-http-start MODE`
-with `ok`, `needs-login` and `hang`, served by the test Emacs); never the user's servers, hooks or agent homes.
+`emacs --batch -Q -l mock-mcp.el -f drgnx-mock-mcp-main MODE MARKER`, plus `error` and `oom`; an HTTP one,
+`drgnx-mock-mcp-http-start MODE` with `ok`, `needs-login`, `hang`, `error-body`, `echo-path` and `legacy-sse`, served by
+the test Emacs); never the user's servers, hooks or agent homes. The tests run with `DRGNX_JOBS_LAUNCHER=detached`, so
+they never create a scope in the user's systemd manager.
 
 | Function | Does |
 | --- | --- |
@@ -311,9 +313,26 @@ with `ok`, `needs-login` and `hang`, served by the test Emacs); never the user's
 | `(drgnx-agent-check-sample-event KIND EVENT ROOT)` | The event as an alist. Claude Code and Kimi Code: `session_id`, `transcript_path`, `cwd`, `hook_event_name` and per event `tool_name` `Bash` with `tool_input` `{"command": "echo drgnx-hook-test"}` (and `tool_response`, `prompt`, `source`, `trigger`, … as the event has them). Codex: the same plus `model` and `turn_id`. Gemini: its own events (`BeforeTool` with `run_shell_command`, `BeforeAgent` with `prompt`, …) and `timestamp`. The Codex and Gemini fields are the builder's table from their documentation, not checked against a running agent. |
 | `(drgnx-agent-check-remember ITEM RESULT)`, `(drgnx-agent-check-last ITEM)` | The last result per `(KIND SECTION NAME FILE)` in `(drgnx-state-dir)/agent-checks.eld` (0600), masked, with `:at` (the time). |
 
-Secrets: every string a check hands back is masked with the item's secrets (`drgnx-agent-config-secrets`) and with the
-values of this Emacs's own secret-looking environment variables (a server may print its whole environment), masked
-before an output is cut to its limit. The only file written is `agent-checks.eld`; the child Emacs writes nothing.
+Ending a check: the child Emacs and the scope it runs in are named (`systemd-run --scope --unit=drgnx-check-PID-N`); at
+the timeout this Emacs runs `systemctl --user kill --signal=KILL` on the scope as an asynchronous process, so the editing
+Emacs does not stop (11 ms longest stall measured). Where there is no systemd (or `systemctl` fails) it ends the process
+tree: parent, group and session links are read from `/proc/PID/stat` (45 ms for 640 processes; `process-attributes`
+needs 320 ms), the tree is stopped, found again until it does not change, then killed. The child ends its server the same way.
+
+Secrets: every string a check hands back is masked, in the members `:error`, `:stderr`, `:stdout` and `:tools` (not the
+status, the time or the exit code), with the item's secrets (`drgnx-agent-config-secrets`); the values `${VAR}` (and
+Gemini's `$VAR`) were replaced by; the variables a spec names for a bearer token or a header (Codex `bearer_token_env_var`
+and `env_http_headers`, Kimi `bearerTokenEnvVar`, sent as `Authorization: Bearer VALUE` and the named headers when set);
+and this Emacs's own secret-looking environment (variable names with token, secret, key, password, cred, cookie, dsn, pat,
+pass, auth or session in them, and the userinfo of URL values), because a server may print its environment. Each secret
+is also hidden percent-encoded, percent-decoded and JSON-escaped. Overlapping matches are one range
+(`drgnx-agent-config-mask-text`). A short value (4 to 7 characters) with a plain name (`MODE=prod`) is hidden in errors
+and stderr but not in tool names. Output is cleaned first (escape sequences, control characters, bytes that are not UTF-8),
+then masked, then cut to its limit, so a secret is never split by an escape or cut in two. An HTTP error body is masked
+before its first 200 characters are shown, and a JSON-RPC error is cut to 500. A project on a remote host (TRAMP) is
+refused. Hooks get `CLAUDE_PROJECT_DIR` (Claude Code, Kimi Code, Gemini) and `GEMINI_PROJECT_DIR` (Gemini). An unset
+`${VAR}` with no default is passed as written and named in the result (`:unset`, and in `:error` when the check failed).
+The only file written is `agent-checks.eld`; the child Emacs writes nothing.
 
 ## Doctor (`drgnx-doctor.el`)
 

@@ -11,7 +11,7 @@
 ;;   headers never reach a command line or a file.  The child starts the server (or POSTs to its URL), does the MCP
 ;;   `initialize' / `notifications/initialized' / `tools/list' round and prints one JSON result.  It ends at
 ;;   `drgnx-agent-check-timeout' and takes the server's whole process tree with it; this Emacs ends the child 5
-;;   seconds later if it did not.
+;;   seconds later if it did not (the named systemd scope killed through `systemctl', else the process tree).
 ;; - `drgnx-agent-check-hook' runs the hook's command with `sh -c' in the project, the sample event of its kind on
 ;;   stdin, for the hook's own timeout (60 s without one), in the same memory cap.
 ;;
@@ -24,6 +24,7 @@
 (require 'subr-x)
 (require 'json)
 (require 'url-parse)
+(require 'url-util)
 (require 'drgnx-agent-config)
 (require 'drgnx-paths)
 (require 'drgnx-jobs)
@@ -42,6 +43,8 @@
 (defconst drgnx-agent-check--stderr-capture 65536
   "Characters of a server's stderr read, to be masked before they are cut to the limit.")
 (defconst drgnx-agent-check--hook-limit 16384 "Characters of a hook's stdout, and of its stderr, kept in a result.")
+(defconst drgnx-agent-check--error-limit 500 "Characters of an error message kept in a result.")
+(defconst drgnx-agent-check--body-limit 200 "Characters of an HTTP error body shown in an error message.")
 (defconst drgnx-agent-check--junk-limit 262144 "Bytes a server may print that are not JSON-RPC before the check gives up.")
 (defconst drgnx-agent-check--message-limit 4194304 "Bytes of one message of a server, or of an HTTP answer.")
 (defconst drgnx-agent-check--capture-limit 1048576 "Bytes of a child's output this Emacs keeps.")
@@ -51,12 +54,34 @@
 
 ;;;; Process trees
 
+(defun drgnx-agent-check--proc-rows ()
+  "A list (PID PPID PGRP SESSION) for every process: read from /proc where there is one (a few milliseconds),
+else from `process-attributes' (a few hundred)."
+  (if (file-readable-p "/proc/self/stat")
+      (let (rows)
+        (with-temp-buffer
+          (dolist (name (directory-files "/proc" nil "\\`[0-9]+\\'"))
+            (when (ignore-errors
+                    (erase-buffer)
+                    (insert-file-contents (concat "/proc/" name "/stat"))
+                    t)
+              (goto-char (point-max))
+              ;; the name of the process is in parentheses and may hold anything: find the last one
+              (when (and (search-backward ")" nil t)
+                         (looking-at ")[ ]+[A-Za-z][ ]+\\(-?[0-9]+\\)[ ]+\\(-?[0-9]+\\)[ ]+\\(-?[0-9]+\\)"))
+                (push (list (string-to-number name) (string-to-number (match-string 1))
+                            (string-to-number (match-string 2)) (string-to-number (match-string 3)))
+                      rows)))))
+        rows)
+    (let (rows)
+      (dolist (p (list-system-processes))
+        (when-let* ((a (ignore-errors (process-attributes p))))
+          (push (list p (alist-get 'ppid a) (alist-get 'pgrp a) (alist-get 'sess a)) rows)))
+      rows)))
+
 (defun drgnx-agent-check--tree (pid)
   "PID and every process that belongs to it: its descendants and the members of the groups and sessions it leads."
-  (let ((rows nil) (set (list pid)) (changed t))
-    (dolist (p (list-system-processes))
-      (when-let* ((a (ignore-errors (process-attributes p))))
-        (push (list p (alist-get 'ppid a) (alist-get 'pgrp a) (alist-get 'sess a)) rows)))
+  (let ((rows (drgnx-agent-check--proc-rows)) (set (list pid)) (changed t))
     (while changed
       (setq changed nil)
       (dolist (r rows)
@@ -78,28 +103,110 @@
             (setq tree now))))
       (dolist (p tree) (ignore-errors (signal-process p 'SIGKILL))))))
 
+(defvar drgnx-agent-check--unit-counter 0)
+
+(defun drgnx-agent-check--unit ()
+  "A new name for a systemd scope, or nil where systemd does not run the session."
+  (and (eq (drgnx-jobs-launcher) 'systemd)
+       (format "drgnx-check-%d-%d" (emacs-pid) (cl-incf drgnx-agent-check--unit-counter))))
+
+(defun drgnx-agent-check--kill-unit (unit proc)
+  "End everything in the systemd scope UNIT without waiting for it; the process tree of PROC instead where
+`systemctl' does not do it."
+  (let ((tree (lambda () (when (process-live-p proc) (drgnx-agent-check--kill-tree (process-id proc))))))
+    (if (not (executable-find "systemctl"))
+        (funcall tree)
+      (make-process :name "drgnx-check-kill" :connection-type 'pipe :noquery t
+                    :command (list "systemctl" "--user" "kill" "--signal=KILL" (concat unit ".scope"))
+                    :sentinel (lambda (p _e)
+                                (unless (or (process-live-p p) (eql 0 (process-exit-status p)))
+                                  (funcall tree)))))))
+
 ;;;; Masking, results, the last results
 
+(defconst drgnx-agent-check--core-name-re
+  "token\\|secret\\|key\\|password\\|passwd\\|authorization\\|cred\\|cookie\\|dsn\\|\\(?:\\`\\|_\\)pat\\(?:_\\|\\'\\)"
+  "Variable and header names (lower case) that hold secrets.")
+
+(defconst drgnx-agent-check--broad-name-re (concat drgnx-agent-check--core-name-re "\\|pass\\|auth\\|session")
+  "Names that may hold secrets: the environment's variables with these names are hidden from output.")
+
+(defconst drgnx-agent-check--masked-keys '(:error :stderr :stdout :tools)
+  "The members of a result that are masked; the others (status, time, exit code) are not text of a server.")
+
+(defun drgnx-agent-check--weak-p (name value)
+  "Non-nil when VALUE is short and NAME does not look like a secret: it may be a plain word."
+  (and (< (length value) 8) (not (string-match-p drgnx-agent-check--core-name-re (downcase name)))))
+
+(defun drgnx-agent-check--forms (secret)
+  "SECRET and its percent-encoded, percent-decoded and JSON-escaped forms (those of four characters or more)."
+  (cl-remove-if (lambda (s) (or (not (stringp s)) (< (length s) 4)))
+                (delete-dups
+                 (list secret
+                       (ignore-errors (url-hexify-string secret))
+                       (ignore-errors (decode-coding-string (url-unhex-string secret) 'utf-8))
+                       (ignore-errors (decode-coding-string (substring (json-serialize (vector secret)) 2 -2) 'utf-8))))))
+
 (defun drgnx-agent-check--environment-secrets ()
-  "The values of the variables of this Emacs's environment that look like secrets."
-  (cl-loop for entry in process-environment
-           when (and (string-match "\\`\\([^=]+\\)=\\(.\\{4,\\}\\)\\'" entry)
-                     (string-match-p "token\\|secret\\|key\\|password\\|passwd\\|authorization"
-                                     (downcase (match-string 1 entry))))
-           collect (match-string 2 entry)))
+  "The environment of this Emacs: ((NAME . VALUE)…) of the variables that look like secrets, and the secret
+parts (userinfo, key parameters) of URLs in the others."
+  (let (out)
+    (dolist (entry process-environment)
+      (when (string-match "\\`\\([^=]+\\)=\\(.\\{4,\\}\\)\\'" entry)
+        (let ((name (match-string 1 entry)) (value (match-string 2 entry)))
+          (cond ((string-match-p drgnx-agent-check--broad-name-re (downcase name)) (push (cons name value) out))
+                ((string-search "://" value)
+                 (dolist (s (ignore-errors (drgnx-agent-config-secrets (list :url value))))
+                   (push (cons name s) out)))))))
+    out))
+
+(defun drgnx-agent-check--secret-sets (item &optional expanded-spec pairs extra)
+  "(ALL . STRONG): the strings to hide in the output of checking ITEM, and those of them to hide in tool names too.
+EXPANDED-SPEC: the spec with the references the agent expands replaced; PAIRS: the (NAME . VALUE) of those
+references; EXTRA: more secrets.  A short value with a plain name (`MODE=prod') is hidden in errors and
+stderr but not in the names of tools."
+  (let* ((spec (plist-get item :spec))
+         (values (append (ignore-errors (drgnx-agent-config-secrets spec))
+                         (and expanded-spec (ignore-errors (drgnx-agent-config-secrets expanded-spec)))
+                         (cl-remove-if-not (lambda (v) (> (length v) 3)) (mapcar #'cdr pairs))
+                         extra))
+         (weak nil) (strong nil))
+    (dolist (p (append (plist-get spec :env) (plist-get spec :headers)
+                       (plist-get expanded-spec :env) (plist-get expanded-spec :headers) pairs))
+      (when (and (stringp (cdr p)) (drgnx-agent-check--weak-p (drgnx-agent-config-json-keystr (car p)) (cdr p)))
+        (push (cdr p) weak)))
+    (dolist (v extra) (setq weak (delete v weak)))
+    (dolist (p (drgnx-agent-check--environment-secrets))
+      (if (drgnx-agent-check--weak-p (car p) (cdr p)) (push (cdr p) weak) (push (cdr p) values)))
+    (setq strong (cl-set-difference (delete-dups values) weak :test #'equal))
+    (cons (delete-dups (mapcan #'drgnx-agent-check--forms (append strong weak)))
+          (delete-dups (mapcan #'drgnx-agent-check--forms strong)))))
 
 (defun drgnx-agent-check--secrets (item)
   "Every string to hide in the output of checking ITEM."
-  (delete-dups (append (ignore-errors (drgnx-agent-config-secrets (plist-get item :spec)))
-                       (drgnx-agent-check--environment-secrets))))
+  (car (drgnx-agent-check--secret-sets item)))
 
-(defun drgnx-agent-check--mask-result (result secrets)
-  "RESULT (a plist) with every string in it masked with SECRETS."
+(defun drgnx-agent-check--mask-result (result secrets &optional tool-secrets)
+  "RESULT (a plist) with the text in its `drgnx-agent-check--masked-keys' masked with SECRETS (the tool names
+with TOOL-SECRETS when given)."
   (cl-loop for (key value) on result by #'cddr
-           append (list key (cond ((stringp value) (drgnx-agent-config-mask-text value secrets))
+           append (list key
+                        (if (not (memq key drgnx-agent-check--masked-keys))
+                            value
+                          (let ((secrets (if (and (eq key :tools) tool-secrets) tool-secrets secrets)))
+                            (cond ((stringp value) (drgnx-agent-config-mask-text value secrets))
                                   ((and (consp value) (cl-every #'stringp value))
                                    (mapcar (lambda (s) (drgnx-agent-config-mask-text s secrets)) value))
-                                  (t value)))))
+                                  (t value)))))))
+
+(defun drgnx-agent-check--clean (text)
+  "TEXT without terminal escape sequences and control characters (newlines and tabs stay), and with a replacement
+character for bytes that are not valid UTF-8."
+  (let ((text (replace-regexp-in-string "[\x3fff80-\x3fffff]" "�" (or text ""))))
+    (setq text (replace-regexp-in-string "\e\\][^\a\e]*\\(?:\a\\|\e\\\\\\)" "" text))
+    (setq text (replace-regexp-in-string "\e\\[[0-9;?]*[ -/]*[@-~]" "" text))
+    (setq text (replace-regexp-in-string "\r\n?" "\n" text))
+    (replace-regexp-in-string "[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]" "" text)))
 
 (defun drgnx-agent-check--cut (text limit)
   "TEXT at most LIMIT characters, with a note when it was cut."
@@ -135,7 +242,8 @@
 
 (defun drgnx-agent-check-remember (item result)
   "Keep RESULT as the last result of checking ITEM, masked, with the time (`:at')."
-  (let* ((masked (drgnx-agent-check--mask-result result (drgnx-agent-check--secrets item)))
+  (let* ((sets (drgnx-agent-check--secret-sets item))
+         (masked (drgnx-agent-check--mask-result result (car sets) (cdr sets)))
          (masked (if (plist-member masked :at) masked (append masked (list :at (float-time)))))
          (key (drgnx-agent-check--key item))
          (all (cons (cons key masked) (assoc-delete-all key (drgnx-agent-check--read-all))))
@@ -166,6 +274,7 @@
 (defvar drgnx-agent-check--overflow nil "Child: non-nil once the server printed too much.")
 (defvar drgnx-agent-check--stderr "" "Child: the server's stderr (the first part).")
 (defvar drgnx-agent-check--next-id 0 "Child: the last request id.")
+(defvar drgnx-agent-check--child-secrets nil "Child: every string to hide in what it says.")
 
 (defun drgnx-agent-check--fail (status format-string &rest args)
   "End the check with STATUS and the message FORMAT-STRING."
@@ -210,6 +319,15 @@
       (process-send-string proc (concat (decode-coding-string (json-serialize object) 'utf-8) "\n"))
     (error nil)))
 
+(defun drgnx-agent-check--ended (proc)
+  "Why PROC ended, as words."
+  (if (eq (process-status proc) 'signal)
+      (if (eql (process-exit-status proc) 9)
+          (format "killed by signal 9; the check's memory limit is %s, which may be the reason"
+                  drgnx-agent-check--memory)
+        (format "killed by signal %d" (process-exit-status proc)))
+    (format "exit code %d" (process-exit-status proc))))
+
 (defun drgnx-agent-check--await (proc id)
   "The message with ID that PROC's stdout delivers; fails when the server ends, floods or does not answer."
   (let (found)
@@ -223,10 +341,7 @@
          ((not (process-live-p proc))
           (drgnx-agent-check--drain)
           (unless (cl-find id drgnx-agent-check--messages :key (lambda (m) (plist-get m :id)) :test #'equal)
-            (drgnx-agent-check--fail 'failed "The server ended (%s) before it answered."
-                                     (if (eq (process-status proc) 'signal)
-                                         (format "killed by signal %d" (process-exit-status proc))
-                                       (format "exit code %d" (process-exit-status proc))))))
+            (drgnx-agent-check--fail 'failed "The server ended (%s) before it answered." (drgnx-agent-check--ended proc))))
          (t (drgnx-agent-check--check-deadline)
             (accept-process-output nil 0.05)))))
     (setq drgnx-agent-check--messages (delq found drgnx-agent-check--messages))
@@ -271,6 +386,8 @@
         (progn
           (unless (and (stringp command) (not (string-empty-p command)))
             (drgnx-agent-check--fail 'failed "The server has no command."))
+          (unless (file-directory-p root)
+            (drgnx-agent-check--fail 'failed "The server's working directory %s does not exist." root))
           (setq proc (condition-case nil
                          (make-process :name "drgnx-check-server" :command (cons command args) :connection-type 'pipe
                                        :noquery t :coding 'utf-8-unix :stderr err
@@ -360,6 +477,30 @@
     (list :tls tls :host (url-host u) :port (or (url-portspec u) (if tls 443 80))
           :path (let ((f (url-filename u))) (if (string-empty-p f) "/" f)))))
 
+(defun drgnx-agent-check--http-connect (target)
+  "A connection to TARGET: opened without waiting and polled until the deadline, so a host that does not answer
+is told as such."
+  (let* ((tls (plist-get target :tls))
+         (proc (condition-case err
+                   (open-network-stream "drgnx-check-http" nil (plist-get target :host) (plist-get target :port)
+                                        :type (if tls 'tls 'plain) :nowait t :coding 'binary)
+                 (error (drgnx-agent-check--fail 'failed "Cannot connect: %s" (error-message-string err))))))
+    (unless (processp proc)
+      (drgnx-agent-check--fail 'failed "Cannot connect%s."
+                               (if tls " (a TLS certificate that cannot be checked is refused)" "")))
+    (set-process-query-on-exit-flag proc nil)
+    (while (eq (process-status proc) 'connect)
+      (when (> (float-time) drgnx-agent-check--deadline)
+        (ignore-errors (delete-process proc))
+        (drgnx-agent-check--fail 'timeout "No connection to %s:%d within %s seconds."
+                                 (plist-get target :host) (plist-get target :port) drgnx-agent-check--limit))
+      (accept-process-output nil 0.05))
+    (unless (eq (process-status proc) 'open)
+      (ignore-errors (delete-process proc))
+      (drgnx-agent-check--fail 'failed "Cannot connect to %s:%d%s." (plist-get target :host) (plist-get target :port)
+                               (if tls " (a TLS certificate that cannot be checked is refused)" "")))
+    proc))
+
 (defun drgnx-agent-check--http-post (target headers object id)
   "POST the JSON-RPC OBJECT to TARGET with HEADERS ((NAME . VALUE)…); the parsed answer (see `-http-parse')."
   (let* ((body (json-serialize object))
@@ -372,15 +513,8 @@
                    (mapconcat (lambda (h) (format "%s: %s\r\n" (car h) (cdr h))) headers "")
                    "\r\n"))
          (raw "") (answer nil)
-         (proc (condition-case err
-                   (open-network-stream "drgnx-check-http" nil (plist-get target :host) (plist-get target :port)
-                                        :type (if (plist-get target :tls) 'tls 'plain) :coding 'binary)
-                 (error (drgnx-agent-check--fail 'failed "Cannot connect: %s" (error-message-string err))))))
-    (unless (processp proc)
-      (drgnx-agent-check--fail 'failed "Cannot connect%s."
-                               (if (plist-get target :tls) " (a TLS certificate that cannot be checked is refused)" "")))
+         (proc (drgnx-agent-check--http-connect target)))
     (set-process-coding-system proc 'binary 'binary)
-    (set-process-query-on-exit-flag proc nil)
     (set-process-filter proc (lambda (_p s) (when (< (length raw) drgnx-agent-check--message-limit)
                                               (setq raw (concat raw s)))))
     (set-process-sentinel proc #'ignore)
@@ -400,6 +534,12 @@
                                  (drgnx-agent-check--fail 'failed "The server closed the connection without an answer."))))))
           answer)
       (ignore-errors (delete-process proc)))))
+
+(defun drgnx-agent-check--body-note (text)
+  "The start of the HTTP error body TEXT for an error message: cleaned and masked, then cut."
+  (let ((text (string-trim (drgnx-agent-config-mask-text (drgnx-agent-check--clean text)
+                                                         drgnx-agent-check--child-secrets))))
+    (if (string-empty-p text) "" (concat ": " (substring text 0 (min drgnx-agent-check--body-limit (length text)))))))
 
 (defun drgnx-agent-check--http (spec)
   "Connect to the server of SPEC (an alist), test it; the tool names."
@@ -424,9 +564,8 @@
                 ((not (<= 200 status 299))
                  (drgnx-agent-check--fail
                   'failed "%s: HTTP %d %s%s%s" what status (plist-get answer :reason)
-                  (let ((text (string-trim (plist-get answer :text))))
-                    (if (string-empty-p text) "" (concat ": " (substring text 0 (min 200 (length text))))))
-                  (if (and (eq type 'sse) (memq status '(404 405)))
+                  (drgnx-agent-check--body-note (plist-get answer :text))
+                  (if (and (equal type "sse") (memq status '(404 405)))
                       " (this looks like an old-style SSE server; the check speaks Streamable HTTP only)" "")))
                 (t
                  (when-let* ((s (cdr (assoc "mcp-session-id" reply-headers)))) (setq session s))
@@ -455,7 +594,8 @@
   (let* ((start (float-time))
          (spec (ignore-errors (json-parse-string (read-from-minibuffer "") :object-type 'alist :array-type 'list
                                                  :null-object nil :false-object nil)))
-         (secrets (alist-get 'secrets spec))
+         (drgnx-agent-check--child-secrets (alist-get 'secrets spec))
+         (tool-secrets (or (alist-get 'tool_secrets spec) drgnx-agent-check--child-secrets))
          (drgnx-agent-check--limit (or (alist-get 'timeout spec) drgnx-agent-check-timeout))
          (drgnx-agent-check--deadline (+ start drgnx-agent-check--limit))
          (result
@@ -468,14 +608,18 @@
                                (drgnx-agent-check--stdio spec))))
             (drgnx-agent-check-failure (list :status (cadr err) :error (nth 2 err)))
             (error (list :status 'failed :error (error-message-string err))))))
-    (let ((masked (drgnx-agent-check--mask-result
-                   (append (list :status (symbol-name (plist-get result :status)))
-                           (and (plist-get result :tools) (list :tools (plist-get result :tools)))
-                           (and (plist-get result :error) (list :error (plist-get result :error)))
-                           (list :stderr drgnx-agent-check--stderr :time (- (float-time) start)))
-                   secrets)))
-      ;; cut after masking: a secret must not be cut in two and half of it shown
+    ;; clean (so no escape sequence splits a secret), then mask, then cut (so no secret is cut in two)
+    (let* ((clean (lambda (s) (drgnx-agent-check--clean s)))
+           (masked (drgnx-agent-check--mask-result
+                    (append (list :status (symbol-name (plist-get result :status)))
+                            (and (plist-get result :tools)
+                                 (list :tools (mapcar clean (plist-get result :tools))))
+                            (and (plist-get result :error) (list :error (funcall clean (plist-get result :error))))
+                            (list :stderr (funcall clean drgnx-agent-check--stderr) :time (- (float-time) start)))
+                    drgnx-agent-check--child-secrets tool-secrets)))
       (plist-put masked :stderr (drgnx-agent-check--cut (plist-get masked :stderr) drgnx-agent-check--stderr-limit))
+      (when (plist-get masked :error)
+        (plist-put masked :error (drgnx-agent-check--cut (plist-get masked :error) drgnx-agent-check--error-limit)))
       (princ (decode-coding-string
               (json-serialize (cl-loop for (k v) on masked by #'cddr
                                        append (list k (if (eq k :tools) (vconcat v) v))))
@@ -485,40 +629,79 @@
 
 ;;;; The editing Emacs's side
 
-(defun drgnx-agent-check--wrap (argv)
-  "ARGV, run in a systemd scope with a memory cap where systemd runs the session."
+(defun drgnx-agent-check--wrap (argv &optional unit)
+  "ARGV, run in a systemd scope (named UNIT) with a memory cap where systemd runs the session."
   (if (eq (drgnx-jobs-launcher) 'systemd)
-      (append (list "systemd-run" "--user" "--scope" "-q" "-p" (concat "MemoryMax=" drgnx-agent-check--memory)
-                    "-p" "MemorySwapMax=0" "--")
+      (append (list "systemd-run" "--user" "--scope" "-q")
+              (and unit (list (concat "--unit=" unit)))
+              (list "-p" (concat "MemoryMax=" drgnx-agent-check--memory) "-p" "MemorySwapMax=0" "--")
               argv)
     argv))
 
-(defun drgnx-agent-check--mcp-argv ()
+(defun drgnx-agent-check--mcp-argv (&optional unit)
   "The command line of the child Emacs of an MCP Test: nothing of the server is on it."
   (drgnx-agent-check--wrap
    (list (expand-file-name invocation-name invocation-directory) "--batch" "-Q" "-L" drgnx-agent-check--dir
-         "--eval" "(setq load-prefer-newer t)" "-l" "drgnx-agent-check" "-f" "drgnx-agent-check-main")))
+         "--eval" "(setq load-prefer-newer t)" "-l" "drgnx-agent-check" "-f" "drgnx-agent-check-main")
+   unit))
 
-(defun drgnx-agent-check--expand (text)
-  "TEXT with the `${VAR}' and `${VAR:-default}' references the agent expands replaced."
-  (if (stringp text)
-      (replace-regexp-in-string
-       "\\${\\([A-Za-z_][A-Za-z0-9_]*\\)\\(?::-\\([^}]*\\)\\)?}"
-       (lambda (m) (or (getenv (match-string 1 m)) (match-string 2 m) m))
-       text t t)
-    text))
+(defvar drgnx-agent-check--expanded nil
+  "While a spec is expanded: the (NAME . VALUE) of every reference replaced by a value of the environment.")
+(defvar drgnx-agent-check--unset nil
+  "While a spec is expanded: the names of the variables a reference named that are not set (and have no default).")
+
+(defun drgnx-agent-check--expand (text &optional bare)
+  "TEXT with the `${VAR}' and `${VAR:-default}' references the agent expands replaced (BARE: `$VAR' too).
+The values used are kept in `drgnx-agent-check--expanded' (they are secrets), the names with no value in
+`drgnx-agent-check--unset'."
+  (if (not (stringp text))
+      text
+    (replace-regexp-in-string
+     (if bare
+         "\\$\\(?:{\\([A-Za-z_][A-Za-z0-9_]*\\)\\(?::-\\([^}]*\\)\\)?}\\|\\([A-Za-z_][A-Za-z0-9_]*\\)\\)"
+       "\\$\\(?:{\\([A-Za-z_][A-Za-z0-9_]*\\)\\(?::-\\([^}]*\\)\\)?}\\)")
+     (lambda (m)
+       (let* ((name (or (match-string 1 m) (match-string 3 m)))
+              (default (match-string 2 m))
+              (value (getenv name)))
+         (cond ((and value (not (string-empty-p value)))
+                (push (cons name value) drgnx-agent-check--expanded)
+                value)
+               (default default)
+               (t (cl-pushnew name drgnx-agent-check--unset :test #'equal)
+                  m))))
+     text t t)))
 
 (defun drgnx-agent-check--expand-spec (kind spec)
-  "SPEC with `${VAR}' expanded in the places Claude Code and Gemini expand it; other agents' SPEC as it is."
+  "SPEC with the references expanded in the places Claude Code (`${VAR}') and Gemini (`$VAR' too) expand them;
+the SPEC of other agents as it is."
   (if (not (memq kind '(claude gemini)))
       spec
-    (let ((pairs (lambda (alist) (mapcar (lambda (p) (cons (car p) (drgnx-agent-check--expand (cdr p)))) alist))))
-      (list :command (drgnx-agent-check--expand (plist-get spec :command))
-            :args (mapcar #'drgnx-agent-check--expand (append (plist-get spec :args) nil))
-            :env (funcall pairs (plist-get spec :env))
-            :url (drgnx-agent-check--expand (plist-get spec :url))
-            :headers (funcall pairs (plist-get spec :headers))
-            :type (plist-get spec :type)))))
+    (let* ((bare (eq kind 'gemini))
+           (one (lambda (x) (drgnx-agent-check--expand x bare)))
+           (pairs (lambda (alist) (mapcar (lambda (p) (cons (car p) (funcall one (cdr p)))) alist))))
+      (append (list :command (funcall one (plist-get spec :command))
+                    :args (mapcar one (append (plist-get spec :args) nil))
+                    :env (funcall pairs (plist-get spec :env))
+                    :url (funcall one (plist-get spec :url))
+                    :headers (funcall pairs (plist-get spec :headers)))
+              spec))))
+
+(defun drgnx-agent-check--env-headers (spec)
+  "The headers the agent builds from environment variables of SPEC (Codex's `bearer_token_env_var' and
+`env_http_headers', Kimi's `bearerTokenEnvVar'): ((NAME . VALUE)…) for the variables that are set."
+  (let (out)
+    (when-let* ((var (plist-get spec :bearer-env))
+                ((stringp var))
+                (value (getenv var))
+                ((not (string-empty-p value))))
+      (push (cons "Authorization" (concat "Bearer " value)) out))
+    (cl-mapc (lambda (header var)
+               (when-let* ((value (and (stringp header) (stringp var) (getenv var)))
+                           ((not (string-empty-p value))))
+                 (push (cons header value) out)))
+             (plist-get spec :env-headers) (plist-get spec :env-header-vars))
+    (nreverse out)))
 
 (defun drgnx-agent-check--object (alist)
   "ALIST ((NAME . VALUE)…) as a hash table for JSON."
@@ -526,15 +709,16 @@
     (dolist (p alist table)
       (puthash (drgnx-agent-config-json-keystr (car p)) (format "%s" (cdr p)) table))))
 
-(defun drgnx-agent-check--finish (callback result secrets)
+(defun drgnx-agent-check--finish (callback result secrets &optional tool-secrets)
   "Call CALLBACK with RESULT masked with SECRETS; a failure in it never reaches the caller."
   (condition-case err
-      (funcall callback (drgnx-agent-check--mask-result result secrets))
+      (funcall callback (drgnx-agent-check--mask-result result secrets tool-secrets))
     (error (ignore-errors (message "Agent check: %s" (drgnx-agent-config-mask-text (error-message-string err) secrets))))))
 
-(cl-defun drgnx-agent-check--start (argv &key input dir env limit done)
-  "Run ARGV (a list) with INPUT on its stdin, in DIR with ENV added, ended after LIMIT seconds.  DONE is called once
-with the process, the output, the errors, `timed-out' (non-nil when LIMIT ended it) and the time.  The process."
+(cl-defun drgnx-agent-check--start (argv &key input dir env limit unit done)
+  "Run ARGV (a list) with INPUT on its stdin, in DIR with ENV added, ended after LIMIT seconds (everything in the
+systemd scope UNIT, else the process tree).  DONE is called once with the process, the output, the errors,
+`timed-out' (non-nil when LIMIT ended it) and the time.  The process."
   (let* ((start (float-time)) (out "") (err "") (timed-out nil) (finished nil)
          (default-directory (file-name-as-directory (expand-file-name (or dir default-directory))))
          (process-environment (append env process-environment))
@@ -560,7 +744,9 @@ with the process, the output, the errors, `timed-out' (non-nil when LIMIT ended 
                                (lambda ()
                                  (unless finished
                                    (setq timed-out t)
-                                   (drgnx-agent-check--kill-tree (process-id proc))
+                                   (if unit
+                                       (drgnx-agent-check--kill-unit unit proc)
+                                     (drgnx-agent-check--kill-tree (process-id proc)))
                                    ;; the sentinel finishes; this is for a process that is already gone
                                    (unless (process-live-p proc) (funcall finish))))))
       (when input
@@ -568,15 +754,16 @@ with the process, the output, the errors, `timed-out' (non-nil when LIMIT ended 
         (ignore-errors (process-send-eof proc)))
       proc)))
 
-(defun drgnx-agent-check--mcp-result (out err timed-out time limit kind name secrets)
+(defun drgnx-agent-check--mcp-result (out err timed-out time limit kind name secrets &optional unset)
   "The result of an MCP Test from what the child Emacs printed (OUT), said (ERR) and did (TIMED-OUT, TIME in
-seconds): the child's own result when it printed one, else what is known without it.  ERR is masked with SECRETS
-before it is cut."
+seconds): the child's own result when it printed one, else what is known without it.  ERR is cleaned and masked
+with SECRETS before it is cut.  UNSET: names of variables the spec refers to that this Emacs does not have."
   (let* ((parsed (when-let* ((line (car (last (split-string out "\n" t "[ \t\r]+")))))
                    (and (string-prefix-p "{" line) (drgnx-agent-check--parse line))))
          (status (and parsed (intern (or (plist-get parsed :status) "failed"))))
-         (stderr (drgnx-agent-check--cut (drgnx-agent-config-mask-text (string-trim err) secrets)
-                                         drgnx-agent-check--stderr-limit))
+         (stderr (drgnx-agent-check--cut
+                  (drgnx-agent-config-mask-text (string-trim (drgnx-agent-check--clean err)) secrets)
+                  drgnx-agent-check--stderr-limit))
          (result
           (cond
            ((memq status '(ok failed needs-login timeout))
@@ -591,45 +778,76 @@ before it is cut."
             (list :status 'timeout :error (format "No answer within %s seconds; the check was stopped." limit)
                   :stderr stderr :time time))
            (t (list :status 'failed :error "The check ended without a result." :stderr stderr :time time)))))
+    (when unset
+      (let ((names (string-join (reverse unset) ", ")))
+        (unless (eq (plist-get result :status) 'ok)
+          (setq result (plist-put result :error
+                                  (format "%s Not set in this Emacs's environment: %s."
+                                          (or (plist-get result :error) "") names))))
+        (setq result (append result (list :unset (reverse unset))))))
     (cl-loop for (k v) on result by #'cddr unless (null v) append (list k v))))
+
+(defun drgnx-agent-check--refuse-remote (root callback failure)
+  "When ROOT is on a remote host, call CALLBACK with FAILURE (a result) and return non-nil."
+  (when (and root (file-remote-p root))
+    (funcall callback failure)
+    t))
 
 (defun drgnx-agent-check-mcp (item root callback)
   "Test the MCP server ITEM in a separate Emacs; the process.  ROOT is the project (the server's working directory).
-CALLBACK gets (:status ok|failed|needs-login|timeout :tools NAMES :error STRING :stderr STRING :time FLOAT), masked."
-  (let* ((kind (plist-get item :kind))
-         (spec (plist-get item :spec))
-         (expanded (drgnx-agent-check--expand-spec kind spec))
-         (secrets (delete-dups (append (drgnx-agent-check--secrets item)
-                                       (drgnx-agent-check--secrets (list :spec expanded)))))
-         (type (or (plist-get spec :type)
-                   (cond ((plist-get spec :command) 'stdio) ((plist-get spec :url) 'http))))
-         (limit drgnx-agent-check-timeout)
-         (input (decode-coding-string
-                 (json-serialize
-                  (append (list :type (symbol-name (or type 'stdio))
-                                :root (expand-file-name (or root default-directory))
-                                :timeout limit
-                                :protocol drgnx-agent-check--protocol
-                                :secrets (vconcat secrets)
-                                :env (drgnx-agent-check--object (plist-get expanded :env))
-                                :headers (drgnx-agent-check--object (plist-get expanded :headers))
-                                :args (vconcat (mapcar (lambda (a) (format "%s" a)) (plist-get expanded :args))))
-                          (and (plist-get expanded :command) (list :command (plist-get expanded :command)))
-                          (and (plist-get expanded :url) (list :url (plist-get expanded :url)))))
-                 'utf-8))
-         (name (plist-get item :name)))
-    (condition-case failure
-        (drgnx-agent-check--start
-         (drgnx-agent-check--mcp-argv)
-         :input (concat input "\n") :dir root :limit (+ limit drgnx-agent-check--grace)
-         :done
-         (lambda (_proc out err timed-out time)
-           (drgnx-agent-check--finish
-            callback (drgnx-agent-check--mcp-result out err timed-out time limit kind name secrets) secrets)))
-      (error (drgnx-agent-check--finish
-              callback (list :status 'failed :error (concat "The check could not start: " (error-message-string failure)))
-              secrets)
-             nil))))
+CALLBACK gets (:status ok|failed|needs-login|timeout :tools NAMES :error STRING :stderr STRING :time FLOAT), masked,
+and `:unset' (names) when the spec refers to variables this Emacs does not have."
+  (unless (drgnx-agent-check--refuse-remote
+           root callback
+           (list :status 'failed :error "Test runs on this machine only; the project is on a remote host."))
+    (let* ((drgnx-agent-check--expanded nil)
+           (drgnx-agent-check--unset nil)
+           (kind (plist-get item :kind))
+           (spec (plist-get item :spec))
+           (expanded (drgnx-agent-check--expand-spec kind spec))
+           (explicit (mapcar (lambda (h) (downcase (drgnx-agent-config-json-keystr (car h)))) (plist-get expanded :headers)))
+           (env-headers (cl-remove-if (lambda (h) (member (downcase (car h)) explicit)) (drgnx-agent-check--env-headers spec)))
+           (expanded (append (list :headers (append (plist-get expanded :headers) env-headers)) expanded))
+           (sets (drgnx-agent-check--secret-sets item expanded drgnx-agent-check--expanded))
+           (secrets (car sets))
+           (tool-secrets (cdr sets))
+           (unset drgnx-agent-check--unset)
+           (type (or (plist-get spec :type)
+                     (cond ((plist-get spec :command) 'stdio) ((plist-get spec :url) 'http))))
+           (limit drgnx-agent-check-timeout)
+           (cwd (plist-get spec :cwd))
+           (server-dir (expand-file-name (if (and (stringp cwd) (not (string-empty-p cwd))) cwd "")
+                                         (or root default-directory)))
+           (unit (drgnx-agent-check--unit))
+           (input (decode-coding-string
+                   (json-serialize
+                    (append (list :type (symbol-name (or type 'stdio))
+                                  :root server-dir
+                                  :timeout limit
+                                  :protocol drgnx-agent-check--protocol
+                                  :secrets (vconcat secrets)
+                                  :tool_secrets (vconcat tool-secrets)
+                                  :env (drgnx-agent-check--object (plist-get expanded :env))
+                                  :headers (drgnx-agent-check--object (plist-get expanded :headers))
+                                  :args (vconcat (mapcar (lambda (a) (format "%s" a)) (plist-get expanded :args))))
+                            (and (plist-get expanded :command) (list :command (plist-get expanded :command)))
+                            (and (plist-get expanded :url) (list :url (plist-get expanded :url)))))
+                   'utf-8))
+           (name (plist-get item :name)))
+      (condition-case failure
+          (drgnx-agent-check--start
+           (drgnx-agent-check--mcp-argv unit)
+           :input (concat input "\n") :dir root :limit (+ limit drgnx-agent-check--grace) :unit unit
+           :done
+           (lambda (_proc out err timed-out time)
+             (drgnx-agent-check--finish
+              callback
+              (drgnx-agent-check--mcp-result out err timed-out time limit kind name secrets unset)
+              secrets tool-secrets)))
+        (error (drgnx-agent-check--finish
+                callback (list :status 'failed :error (concat "The check could not start: " (error-message-string failure)))
+                secrets)
+               nil)))))
 
 ;;;; Hooks
 
@@ -688,44 +906,57 @@ fields.  The tool is always a Bash command that echoes `drgnx-hook-test'."
           ((eq (plist-get spec :timeout-unit) 'ms) (/ timeout 1000.0))
           (t timeout))))
 
-(defun drgnx-agent-check--hook-argv (_item)
+(defun drgnx-agent-check--hook-argv (_item &optional unit)
   "The command line of a hook run: the hook's command travels in the environment, not in the command line."
   (drgnx-agent-check--wrap
-   (list "sh" "-c" "c=$DRGNX_HOOK_COMMAND; unset DRGNX_HOOK_COMMAND; eval \"$c\"")))
+   (list "sh" "-c" "c=$DRGNX_HOOK_COMMAND; unset DRGNX_HOOK_COMMAND; eval \"$c\"")
+   unit))
+
+(defun drgnx-agent-check--hook-environment (kind root)
+  "The variables a hook of agent KIND finds in its environment that name the project."
+  (let ((dir (directory-file-name (expand-file-name (or root default-directory)))))
+    (pcase kind
+      ((or 'claude 'kimi) (list (concat "CLAUDE_PROJECT_DIR=" dir)))
+      ('gemini (list (concat "GEMINI_PROJECT_DIR=" dir) (concat "CLAUDE_PROJECT_DIR=" dir)))
+      (_ nil))))
 
 (defun drgnx-agent-check-hook (item root callback)
   "Run the hook ITEM for real, in ROOT, with the sample event on stdin; the process.
 CALLBACK gets (:exit N :stdout S :stderr S :time F), masked; a hook that ran out of time has :exit nil and :timeout t."
-  (let* ((spec (plist-get item :spec))
-         (kind (plist-get item :kind))
-         (secrets (drgnx-agent-check--secrets item))
-         (limit (drgnx-agent-check--hook-timeout item))
-         (event (json-serialize (drgnx-agent-check-sample-event kind (plist-get spec :event) root)
-                                :false-object :false)))
-    (condition-case failure
-        (drgnx-agent-check--start
-         (drgnx-agent-check--hook-argv item)
-         :input (concat (decode-coding-string event 'utf-8) "\n") :dir root :limit limit
-         :env (list (concat "DRGNX_HOOK_COMMAND=" (or (plist-get spec :command) "")))
-         :done
-         (lambda (proc out err timed-out time)
-           (let* ((masked-out (drgnx-agent-config-mask-text out secrets))
-                  (masked-err (drgnx-agent-config-mask-text err secrets))
-                  (status (process-status proc))
-                  (code (process-exit-status proc))
-                  (exit (cond (timed-out nil) ((eq status 'signal) (+ 128 code)) (t code))))
-             (drgnx-agent-check--finish
-              callback
-              (append (list :exit exit
-                            :stdout (drgnx-agent-check--cut masked-out drgnx-agent-check--hook-limit)
-                            :stderr (drgnx-agent-check--cut masked-err drgnx-agent-check--hook-limit)
-                            :time time)
-                      (and timed-out (list :timeout t)))
-              secrets))))
-      (error (drgnx-agent-check--finish
-              callback (list :exit nil :error (concat "The hook could not be started: " (error-message-string failure)))
-              secrets)
-             nil))))
+  (unless (drgnx-agent-check--refuse-remote
+           root callback
+           (list :exit nil :error "Test runs on this machine only; the project is on a remote host."))
+    (let* ((spec (plist-get item :spec))
+           (kind (plist-get item :kind))
+           (secrets (drgnx-agent-check--secrets item))
+           (limit (drgnx-agent-check--hook-timeout item))
+           (unit (drgnx-agent-check--unit))
+           (event (json-serialize (drgnx-agent-check-sample-event kind (plist-get spec :event) root)
+                                  :false-object :false)))
+      (condition-case failure
+          (drgnx-agent-check--start
+           (drgnx-agent-check--hook-argv item unit)
+           :input (concat (decode-coding-string event 'utf-8) "\n") :dir root :limit limit :unit unit
+           :env (cons (concat "DRGNX_HOOK_COMMAND=" (or (plist-get spec :command) ""))
+                      (drgnx-agent-check--hook-environment kind root))
+           :done
+           (lambda (proc out err timed-out time)
+             (let* ((status (process-status proc))
+                    (code (process-exit-status proc))
+                    (exit (cond (timed-out nil) ((eq status 'signal) (+ 128 code)) (t code)))
+                    (shown (lambda (text)
+                             (drgnx-agent-check--cut
+                              (drgnx-agent-config-mask-text (drgnx-agent-check--clean text) secrets)
+                              drgnx-agent-check--hook-limit))))
+               (drgnx-agent-check--finish
+                callback
+                (append (list :exit exit :stdout (funcall shown out) :stderr (funcall shown err) :time time)
+                        (and timed-out (list :timeout t)))
+                secrets))))
+        (error (drgnx-agent-check--finish
+                callback (list :exit nil :error (concat "The hook could not be started: " (error-message-string failure)))
+                secrets)
+               nil)))))
 
 (provide 'drgnx-agent-check)
 ;;; drgnx-agent-check.el ends here

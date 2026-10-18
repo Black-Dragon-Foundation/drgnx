@@ -499,11 +499,31 @@ A value like \"Bearer abc\" also gives the bare \"abc\"."
     (nreverse out)))
 
 (defun drgnx-agent-config-mask-text (text secrets)
-  "TEXT with every string of SECRETS replaced by `drgnx-agent-config-mask'."
+  "TEXT with every string of SECRETS replaced by `drgnx-agent-config-mask'.
+Matches that overlap (\"abcdef\" and \"defghi\" in \"abcdefghi\") are one range, replaced once, so no end of either
+stays."
   (when text
-    (dolist (s (sort (copy-sequence secrets) (lambda (a b) (> (length a) (length b)))) text)
-      (unless (string-empty-p s)
-        (setq text (string-replace s drgnx-agent-config-mask text))))))
+    (let ((ranges nil) (out nil) (pos 0))
+      (dolist (s secrets)
+        (when (and (stringp s) (not (string-empty-p s)))
+          (let ((from 0) (hit nil))
+            (while (setq hit (string-search s text from))
+              (push (cons hit (+ hit (length s))) ranges)
+              (setq from (1+ hit))))))
+      (if (null ranges)
+          text
+        (setq ranges (sort ranges (lambda (a b) (< (car a) (car b)))))
+        (let ((beg (caar ranges)) (end (cdar ranges)))
+          (dolist (r (cdr ranges))
+            (if (< (car r) end)
+                (setq end (max end (cdr r)))
+              (push (substring text pos beg) out)
+              (push drgnx-agent-config-mask out)
+              (setq pos end beg (car r) end (cdr r))))
+          (push (substring text pos beg) out)
+          (push drgnx-agent-config-mask out)
+          (push (substring text end) out))
+        (apply #'concat (nreverse out))))))
 
 ;;;; Status without running anything
 
