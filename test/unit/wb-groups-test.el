@@ -1,25 +1,28 @@
 ;;; wb-groups-test.el --- batch tests: editor groups -*- lexical-binding: t -*-
 (require 'ert)
+(require 'drgnx-paths)
+(load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)
 (require 'drgnx-groups)
 
 (defmacro drgnx-groups-test--with (dir &rest body)
   "BODY with rules and chrome on, one editor window showing DIR/a.txt."
   (declare (indent 1))
-  `(let ((,dir (file-name-as-directory (make-temp-file "drgnx-groups" t)))
-         (drgnx-signal--editor-window nil) (display-buffer-alist nil))
-     (delete-other-windows)
-     (set-window-parameter (selected-window) 'drgnx-tabs nil)
-     (set-window-prev-buffers (selected-window) nil)
-     (drgnx-rules-mode 1)
-     (drgnx-chrome-mode 1)
-     (unwind-protect
-         (progn (switch-to-buffer (drgnx-groups-test--file ,dir "a.txt")) (drgnx-chrome-apply nil t) ,@body)
-       (drgnx-chrome-mode -1)
-       (drgnx-rules-mode -1)
+  `(drgnx-test-with-state
+     (let ((,dir (file-name-as-directory (make-temp-file "drgnx-groups" t)))
+           (display-buffer-alist nil))
        (delete-other-windows)
-       (dolist (b (buffer-list))
-         (when (and (buffer-file-name b) (string-prefix-p ,dir (buffer-file-name b))) (kill-buffer b)))
-       (delete-directory ,dir t))))
+       (set-window-parameter (selected-window) 'drgnx-tabs nil)
+       (set-window-prev-buffers (selected-window) nil)
+       (drgnx-rules-mode 1)
+       (drgnx-chrome-mode 1)
+       (unwind-protect
+           (progn (switch-to-buffer (drgnx-groups-test--file ,dir "a.txt")) (drgnx-chrome-apply nil t) ,@body)
+         (drgnx-chrome-mode -1)
+         (drgnx-rules-mode -1)
+         (delete-other-windows)
+         (dolist (b (buffer-list))
+           (when (and (buffer-file-name b) (string-prefix-p ,dir (buffer-file-name b))) (kill-buffer b)))
+         (delete-directory ,dir t)))))
 
 (defun drgnx-groups-test--file (dir name)
   (let ((f (expand-file-name name dir))) (write-region "x\n" nil f nil 'silent) (find-file-noselect f)))
