@@ -47,8 +47,9 @@ machine at any time.
    when your shell is zsh) — only when you answer yes; with `--yes` it only prints the line and that file.
 9. **Checks** it all: runs `drgnx doctor` with the Emacs it found or installed — after the app and the PATH line, so
    it checks what is there. On a Mac `drgnx` counts as on PATH when `~/.local/bin/drgnx` exists and your shell's
-   profile (`~/.zprofile` for zsh, else `~/.profile`) puts `~/.local/bin` on PATH (what a new Terminal sees), also in
-   a drgnx the app started, whose own PATH lacks it.
+   profile (`~/.zprofile` for zsh, else `~/.profile`) puts `~/.local/bin` on PATH (`export PATH=…`, or in zsh
+   `path=(… ~/.local/bin …)` / `path+=(…)`; what a new Terminal sees), also in a drgnx the app started, whose own PATH
+   lacks it.
 10. **macOS: opens drgnx** (the app just installed), so the first start's Welcome takes over — only in a desktop
    session: not over SSH, and not under `--yes` without a terminal.
 

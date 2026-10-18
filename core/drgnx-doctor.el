@@ -103,14 +103,14 @@ default; it never reads ~/.profile), else ~/.profile."
 (defun drgnx-doctor--drgnx-on-path ()
   "Does Terminal find the drgnx command?  It is on this Emacs's PATH; or — a daemon the app started lacks
 ~/.local/bin on its PATH — ~/.local/bin/drgnx is there and a line of the shell's profile
-(`drgnx-doctor--shell-profile', not a comment) puts ~/.local/bin on PATH."
+(`drgnx-doctor--shell-profile', not a comment) puts ~/.local/bin on PATH: `PATH=…' or, in zsh, `path=(…)' / `path+=(…)'."
   (or (and (executable-find "drgnx") t)
-      (let ((profile (expand-file-name (drgnx-doctor--shell-profile))))
+      (let ((profile (expand-file-name (drgnx-doctor--shell-profile))) (case-fold-search nil))
         (and (file-exists-p (expand-file-name "~/.local/bin/drgnx"))
              (file-readable-p profile)
              (with-temp-buffer
                (insert-file-contents profile)
-               (re-search-forward (rx bol (* (not (any "#\n"))) "PATH=" (* nonl)
+               (re-search-forward (rx bol (* (not (any "#\n"))) (or "PATH=" (seq "path" (? "+") "=(")) (* nonl)
                                       (or "$HOME" "${HOME}" "~" (literal (directory-file-name (expand-file-name "~"))))
                                       "/.local/bin")
                                   nil t))

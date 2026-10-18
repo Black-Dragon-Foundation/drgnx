@@ -204,6 +204,22 @@
               ((symbol-function 'file-executable-p) #'ignore))
       (should (equal (plist-get (drgnx-doctor--macos-facts) :shell-profile) "~/.profile")))))
 
+(ert-deftest drgnx-doctor/drgnx-on-path-also-counts-zsh-path-arrays ()
+  (let* ((home (file-name-as-directory (make-temp-file "drgnx-doctor-home" t)))
+         (process-environment (append (list (concat "HOME=" home) "SHELL=/bin/zsh") process-environment)))
+    (unwind-protect
+        (cl-letf (((symbol-function 'executable-find) (lambda (&rest _) nil)))
+          (make-directory (concat home ".local/bin") t)
+          (write-region "" nil (concat home ".local/bin/drgnx"))
+          (dolist (line '("path=(~/.local/bin $path)" "path=($HOME/.local/bin $path)" "path+=(~/.local/bin)"
+                          "path=(/opt/x/bin ${HOME}/.local/bin $path)" "typeset -U path; path+=(\"$HOME/.local/bin\")"))
+            (write-region (concat line "\n") nil (concat home ".zprofile"))
+            (should (drgnx-doctor--drgnx-on-path)))
+          (dolist (line '("# path=(~/.local/bin $path)" "path=(/opt/x/bin $path)" "export PATH=/usr/bin"))
+            (write-region (concat line "\n") nil (concat home ".zprofile"))
+            (should-not (drgnx-doctor--drgnx-on-path))))
+      (delete-directory home t))))
+
 (ert-deftest drgnx-doctor/key-conflicts ()
   ;; The doctor reads the report the last drgnx session wrote (batch Emacs loads no modules).
   (let ((check (lambda (report) (drgnx-doctor-check 'key-conflicts (drgnx-doctor-test--facts :keys-report report)))))
