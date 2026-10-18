@@ -317,6 +317,14 @@
     (drgnx-pkg-service-unit (concat root "units"))
     (should (file-exists-p (concat root "units/drgnx.service")))))
 
+(ert-deftest drgnx-pkg/the-service-unit-stops-restarting-when-another-drgnx-holds-the-name ()
+  ;; M12a-30: Restart=on-failure looped when another drgnx held the server name.
+  (drgnx-pkg-test--with root
+    (let ((unit (drgnx-pkg-service-unit)))
+      (should (string-match-p "^Restart=on-failure$" unit))
+      (should (string-match-p "^RestartSec=2$" unit))
+      (should (string-match-p "\\`\\[Unit\\]\n\\(.*\n\\)*StartLimitIntervalSec=60\n\\(.*\n\\)*StartLimitBurst=3\n\\(.*\n\\)*\\[Service\\]" unit)))))
+
 (ert-deftest drgnx-pkg/the-cli-parses-its-commands ()
   (let (calls)
     (cl-letf (((symbol-function 'drgnx-pkg-sync) (lambda (&rest a) (push (cons 'sync a) calls) '(:ok t)))

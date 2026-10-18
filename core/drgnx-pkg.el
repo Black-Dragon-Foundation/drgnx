@@ -926,11 +926,12 @@ double quotes, with \\ and \" escaped, when it has spaces or quotes."
 $DRGNX_EMACS); written to DIR/drgnx.service when DIR is given.  Never installed or enabled: that is the
 user's step (docs/guide/packages.md)."
   (let* ((emacs (expand-file-name invocation-name invocation-directory))
-         (unit (concat "[Unit]\nDescription=drgnx (Emacs daemon)\nDocumentation=https://github.com/Black-Dragon-Foundation/drgnx\n\n"
+         (unit (concat "[Unit]\nDescription=drgnx (Emacs daemon)\nDocumentation=https://github.com/Black-Dragon-Foundation/drgnx\n"
+                       "StartLimitIntervalSec=60\nStartLimitBurst=3\n\n"      ; a held server name stops the restarts
                        "[Service]\nType=notify\n"
                        (format "ExecStart=%s --fg-daemon=drgnx %s\n" (drgnx-pkg--systemd-word emacs)
                                (drgnx-pkg--systemd-word (concat "--init-directory=" (expand-file-name "init" drgnx-dir))))
-                       "Restart=on-failure\n\n[Install]\nWantedBy=default.target\n")))
+                       "Restart=on-failure\nRestartSec=2\n\n[Install]\nWantedBy=default.target\n")))
     (when dir
       (make-directory dir t)
       (write-region unit nil (expand-file-name "drgnx.service" dir) nil 'silent))

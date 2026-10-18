@@ -176,7 +176,7 @@ after a reboot does not hold it, and of two commands taking over the same stale 
 
 `drgnx service-unit` prints a systemd user unit (`Type=notify`, `emacs --fg-daemon=drgnx
 --init-directory=<checkout>/init`); `drgnx service-unit DIR` writes `DIR/drgnx.service`. drgnx never installs or
-enables it. The unit runs the Emacs that ran the command — `$DRGNX_EMACS`, default `emacs` — by its full path
+enables it. A daemon that fails is restarted after 2 seconds, at most 3 times a minute, so a second drgnx holding the server name does not loop. The unit runs the Emacs that ran the command — `$DRGNX_EMACS`, default `emacs` — by its full path
 (quoted for systemd, so paths with spaces work). Choose another one when you write the unit, e.g.
 `DRGNX_EMACS=emacs-pgtk drgnx service-unit DIR` on Fedora where `emacs` may be another build. To run it next to your current Emacs daemon:
 
