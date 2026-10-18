@@ -381,10 +381,23 @@ jobs only — and the job with the newest card."
       (puthash id t drgnx-job-ui--notified)
       (let ((body (format "%s — %s" (plist-get data :job) (plist-get data :title))))
         ;; later, not in the hub's event handler: a D-Bus call that hangs must not hold the filter
-        (run-at-time 0 nil (lambda ()
-                             (if (drgnx-job-ui--desktop-p)
-                                 (with-demoted-errors "drgnx: %S" (notifications-notify :title "drgnx: a job needs you" :body body))
-                               (message "drgnx: a job needs you — %s" body))))))))
+        (run-at-time 0 nil (lambda () (with-demoted-errors "drgnx: %S" (drgnx-job-ui--send "drgnx: a job needs you" body))))))))
+
+(defun drgnx-job-ui--applescript-string (s)
+  "S as an AppleScript string literal (one line: backslashes and quotes escaped)."
+  (concat "\"" (replace-regexp-in-string "[\\\"]" "\\\\\\&" (replace-regexp-in-string "[\n\r]+" " " s)) "\""))
+
+(defun drgnx-job-ui--send (title body)
+  "Tell the user TITLE and BODY where the platform has a notification: macOS through `osascript' (a process that
+never waits; the text is one argument, no shell), elsewhere D-Bus; else a message.  Never a prompt."
+  (cond ((and (eq system-type 'darwin) (executable-find "osascript"))
+         (make-process :name "drgnx-notify" :noquery t :connection-type 'pipe
+                       :command (list "osascript" "-e"
+                                      (format "display notification %s with title %s"
+                                              (drgnx-job-ui--applescript-string body) (drgnx-job-ui--applescript-string title)))))
+        ((and (not (memq system-type '(darwin windows-nt))) (drgnx-job-ui--desktop-p))
+         (notifications-notify :title title :body body))
+        (t (message "%s — %s" title body))))
 
 (declare-function notifications-notify "notifications")
 

@@ -185,4 +185,31 @@
   ;; once the hub has marked it acted, the recount gives 0
   (should (= 0 (car (drgnx-job-ui--count '((:id "j1" :status "running" :cards :null :messages ((:id 3 :state "acted")))))))))
 
+;; M9b4-14: the notification goes where the platform has one.
+(ert-deftest drgnx-job-ui/notify-backend-choice ()
+  (let ((made nil) (said nil))
+    (cl-letf (((symbol-function 'make-process) (lambda (&rest args) (push args made) 'proc))
+              ((symbol-function 'message) (lambda (fmt &rest args) (push (apply #'format fmt args) said)))
+              ((symbol-function 'executable-find) (lambda (c &rest _) (and (equal c "osascript") "/usr/bin/osascript")))
+              ((symbol-function 'drgnx-job-ui--desktop-p) (lambda () nil))
+              ((symbol-function 'notifications-notify) (lambda (&rest _) (push 'dbus made))))
+      ;; macOS: osascript, asynchronously, the text escaped as an AppleScript string (one argv element: no shell)
+      (let ((system-type 'darwin))
+        (drgnx-job-ui--send "drgnx: a job needs you" "j1 — say \"hi\" \\ now\nnext"))
+      (should (= 1 (length made)))
+      (should (equal (plist-get (car made) :command)
+                     '("osascript" "-e" "display notification \"j1 — say \\\"hi\\\" \\\\ now next\" with title \"drgnx: a job needs you\"")))
+      (should-not said)
+      ;; macOS without osascript, Linux without D-Bus, Windows: the message
+      (setq made nil)
+      (cl-letf (((symbol-function 'executable-find) #'ignore))
+        (let ((system-type 'darwin)) (drgnx-job-ui--send "t" "b")))
+      (dolist (type '(gnu/linux windows-nt)) (let ((system-type type)) (drgnx-job-ui--send "t" "b")))
+      (should-not made)
+      (should (= 3 (length said)))
+      ;; Linux with D-Bus: notifications
+      (cl-letf (((symbol-function 'drgnx-job-ui--desktop-p) (lambda () t)))
+        (let ((system-type 'gnu/linux)) (drgnx-job-ui--send "t" "b")))
+      (should (equal made '(dbus))))))
+
 ;;; job-ui-test.el ends here
