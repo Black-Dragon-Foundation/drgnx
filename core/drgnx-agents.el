@@ -409,13 +409,14 @@ the commits each turn makes are recorded for it.  JOB: the coordination job it b
                                      (drgnx-agents--next s))))))))
     s))
 
-(defun drgnx-agents-take-over (profile cwd session-id &optional task id)
+(defun drgnx-agents-take-over (profile cwd session-id &optional task id name)
   "Resume the agent session SESSION-ID (from another client, or one that ended) with PROFILE in CWD:
 its history is replayed into the transcript.  Needs an agent that can load sessions: when it cannot, the session
-ends and says why.  TASK as in `drgnx-agents-start'; ID, the session's own id when it keeps one (a hub resuming its
-sessions)."
+ends and says why.  TASK as in `drgnx-agents-start'; ID and NAME, the session's own when it keeps them (a hub
+resuming its sessions: messages and spend follow them)."
   (let ((s (drgnx-agents--new profile cwd task)))
     (when id (setf (drgnx-agent-session-id s) id))
+    (when (stringp name) (setf (drgnx-agent-session-name s) name))
     (setf (drgnx-agent-session-acp-id s) session-id)
     (drgnx-agents--start-safely
      s (lambda ()

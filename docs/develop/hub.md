@@ -103,9 +103,10 @@ inherits: a hub whose parent is gone exits (checked each second), so an interrup
 ## Sessions across a restart
 
 On each change to a session the hub keeps `<state>/hub/sessions.eld` (mode 0600, written like registrations.eld,
-only when it differs): `(:id :profile :cwd :acp-id :task)` of each live session the agent made, oldest first —
+only when it differs): `(:id :name :profile :cwd :acp-id :task)` of each live session the agent made, oldest first —
 not a job's (a job frees the task of an agent the hub took with it and starts it again). A hub that starts, once it
-serves, resumes each with `drgnx-agents-take-over` (ACP `session/load`) under its own id: the agent replays the
+serves, resumes each with `drgnx-agents-take-over` (ACP `session/load`) under its own id and name (messages and
+spend follow them); a file that is not a list of sessions is logged and resumes none: the agent replays the
 history into the transcript and the session is idle; an editor that reconnects fetches it again (`agents/get`). A
 session whose agent cannot load sessions (no `loadSession`, or an error) ends and says why, and so leaves the file.
 What was in flight is gone: a turn that was running, the queue, a pending permission or edit.

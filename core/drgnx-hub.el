@@ -392,10 +392,11 @@ fetched a transcript keeps only the events after it.")
 (defvar drgnx-hub--saved-sessions nil "What `drgnx-hub--save-sessions' last wrote (or the hub read at start).")
 
 (defun drgnx-hub--resumable ()
-  "The sessions a next hub resumes, oldest first: (:id :profile :cwd :acp-id :task) of each live one the agent made.
-A job's agents are not among them: a job frees the task of an agent the hub took with it, and starts it again."
+  "The sessions a next hub resumes, oldest first: (:id :name :profile :cwd :acp-id :task) of each live one the agent
+made.  A job's agents are not among them: a job frees the task of an agent the hub took with it, and starts it again."
   (delq nil (mapcar (lambda (s) (and (drgnx-agent-session-acp-id s) (not (drgnx-agent-session-job s))
-                                     (list :id (drgnx-agent-session-id s) :profile (drgnx-agent-session-profile s)
+                                     (list :id (drgnx-agent-session-id s) :name (drgnx-agent-session-name s)
+                                           :profile (drgnx-agent-session-profile s)
                                            :cwd (drgnx-agent-session-cwd s) :acp-id (drgnx-agent-session-acp-id s)
                                            :task (drgnx-agent-session-task s))))
                     (reverse (drgnx-hub--live-sessions)))))
@@ -408,18 +409,22 @@ A job's agents are not among them: a job frees the task of an agent the hub took
       (setq drgnx-hub--saved-sessions now))))
 
 (defun drgnx-hub--resume-sessions ()
-  "Resume the sessions the previous hub kept (`drgnx-agents-take-over': ACP session/load), each under its own id; one
-whose agent cannot load it ends (and so leaves the file)."
+  "Resume the sessions the previous hub kept (`drgnx-agents-take-over': ACP session/load), each under its own id and
+name; one whose agent cannot load it ends (and so leaves the file).  A file that does not read as a list of sessions
+is logged: it never stops the hub from starting."
   (let* ((file (drgnx-hub--sessions-file))
          (saved (and (file-readable-p file)
                      (condition-case err (with-temp-buffer (insert-file-contents file) (read (current-buffer)))
                        (error (message "drgnx hub: %s cannot be read (%s): no session resumed" file (error-message-string err))
                               nil)))))
+    (unless (proper-list-p saved)
+      (message "drgnx hub: %s is not a list of sessions: none resumed" file)
+      (setq saved nil))
     (setq drgnx-hub--saved-sessions saved)
-    (dolist (e (and (listp saved) saved))
+    (dolist (e saved)
       (with-demoted-errors "drgnx hub: a session not resumed: %S"
         (drgnx-agents-take-over (plist-get e :profile) (plist-get e :cwd) (plist-get e :acp-id) (plist-get e :task)
-                                (plist-get e :id))))))
+                                (plist-get e :id) (plist-get e :name))))))
 
 (defun drgnx-hub--agent-changed (s)
   "Session S changed: tell subscribers soon (one message per burst of changes)."
