@@ -202,6 +202,20 @@ LLM answering SPEC; `o' found running."
     (drgnx-ai-accept)
     (should (equal (buffer-string) "abc def"))))
 
+(ert-deftest drgnx-ai-ghost/c-right-on-a-stale-suggestion-moves-by-word ()
+  ;; the key was taken from the showing map; the suggestion went stale, so it does what C-<right> does without it
+  (with-temp-buffer
+    (emacs-lisp-mode)
+    (drgnx-ai-ghost-mode 1)
+    (insert "foo bar baz")
+    (goto-char (point-min))
+    (drgnx-ai-ghost--show "abc")
+    (save-excursion (goto-char (point-max)) (insert " changed"))
+    (drgnx-ai-accept-word)
+    (should-not (drgnx-ai-ghost-text))
+    (should (= (point) 4))                                              ; after "foo", nothing inserted
+    (should (equal (buffer-string) "foo bar baz changed"))))
+
 (ert-deftest drgnx-ai-ghost/any-other-command-clears-it ()
   (with-temp-buffer
     (emacs-lisp-mode)

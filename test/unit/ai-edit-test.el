@@ -262,6 +262,14 @@
           (drgnx-ai-stop)
           (should (string-match-p "nothing" (car said))))))))
 
+(ert-deftest drgnx-ai-edit/a-request-that-fails-to-start-is-not-left-stoppable ()
+  (let ((drgnx-ai--active nil) (said nil))
+    (should-error (drgnx-ai--track (lambda (_done) (error "cannot start"))))
+    (should-not drgnx-ai--active)
+    (cl-letf (((symbol-function 'message) (lambda (fmt &rest args) (push (apply #'format fmt args) said))))
+      (drgnx-ai-stop))
+    (should (string-match-p "nothing" (car said)))))
+
 (ert-deftest drgnx-ai-edit/a-finished-request-is-no-longer-stoppable ()
   (drgnx-ai-edit-test--with "(defun a ()\n  10)\n"
     (with-temp-buffer

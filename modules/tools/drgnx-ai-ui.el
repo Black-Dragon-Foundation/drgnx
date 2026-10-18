@@ -170,8 +170,12 @@ process changed it and no command cleared the suggestion."
 (defun drgnx-ai-accept-word ()
   "Insert the suggestion's next word."
   (interactive)
-  (when-let* ((text drgnx-ai-ghost--text))
-    (drgnx-ai--accept-part (if (string-match "\\`\\W*\\w+" text) (match-end 0) (length text)))))
+  (if (drgnx-ai-ghost--stale-p)
+      ;; the key came from the showing map, which no longer applies: do what it does without a suggestion
+      (let ((cmd (key-binding [C-right])))
+        (call-interactively (if (and cmd (not (eq cmd 'drgnx-ai-accept-word))) cmd #'right-word)))
+    (when-let* ((text drgnx-ai-ghost--text))
+      (drgnx-ai--accept-part (if (string-match "\\`\\W*\\w+" text) (match-end 0) (length text))))))
 
 (defun drgnx-ai-accept-line ()
   "Insert the suggestion up to its line's end."
@@ -236,7 +240,10 @@ request.  Until DONE is called or `drgnx-ai-stop' runs, the request is in `drgnx
   (let* ((entry (list nil))
          (done (lambda () (setq drgnx-ai--active (delq entry drgnx-ai--active)))))
     (push entry drgnx-ai--active)
-    (setcar entry (funcall start done))
+    ;; a start that signals leaves nothing stoppable behind
+    (condition-case err
+        (setcar entry (funcall start done))
+      (error (funcall done) (signal (car err) (cdr err))))
     entry))
 
 (defun drgnx-ai-stop ()
