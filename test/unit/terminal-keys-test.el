@@ -165,3 +165,9 @@
     (drgnx-terminal-keys-test--eat-buffer
      (should (drgnx-commands-available-p (drgnx-commands-get 'terminal-copy)))
      (should (drgnx-commands-available-p (drgnx-commands-get 'terminal-paste))))))
+
+(ert-deftest drgnx-terminal-keys/the-emacs-profile-says-how-eat-copies-and-pastes ()
+  ;; semi-char mode sends M-w to the shell: copying is eat's Emacs mode first
+  (let ((bind (plist-get (alist-get 'emacs (drgnx-keys-load-profiles (expand-file-name "keys" drgnx-dir))) :bind)))
+    (should (equal (assq 'terminal-paste bind) '(terminal-paste :none "C-y (eat's own)")))
+    (should (equal (assq 'terminal-copy bind) '(terminal-copy :none "C-c C-e, then M-w (eat's Emacs mode)")))))
