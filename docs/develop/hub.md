@@ -122,12 +122,15 @@ child, and a hub's own sessions are the hub's), and the hub drops those whose ow
 zombie counts as gone) when it starts and on each tick (2 s) — a crashed editor never unregisters its agents' tokens.
 A registration without an owner stays until it is unregistered. A pid the system has given to a new process since
 keeps its registrations until that one ends too. Keys sent in `keys` live in the hub's
-memory only (`drgnx-gateway-set-key`), never in a file. `drgnx-hub-ensure` (a command, the CLI's `drgnx hub start`)
+memory only (`drgnx-gateway-set-key`, and `drgnx-ai--keys` for the agents it starts), never in a file. `drgnx-hub-ensure` (a command, the CLI's `drgnx hub start`)
 hands the hub the keys its Emacs already holds, asking no one (`drgnx-hub--held-keys`: a provider's environment
 variable, else a key loaded this session), with `gateway/keys` after the hub answers, and `drgnx-hub-connect` does so again with each new subscription: a
 restarted hub has no key a command gave its predecessor (a `.gpg` one) until an editor connects again — the Agents
-module's idle timer looks every 30 s — and its requests until then fail over or answer "no key". The hub itself finds
-others only in quiet auth-source files.
+module's idle timer looks every 30 s — and its requests until then fail over or answer "no key". The hub never looks a key up where that may ask
+(a `.gpg` file, the Keychain, a keyring): an agent it starts (`agents/start`, a job's, a resumed one) uses the keys
+editors handed over, its environment or quiet auth-source files (`drgnx-ai-key` without INTERACTIVE), and with none for
+any provider of its chain it does not start: "No key for openrouter in the drgnx hub: an editor hands its keys over
+when it connects (or run `drgnx hub start' where the key is set)".
 
 ## Forwarding
 

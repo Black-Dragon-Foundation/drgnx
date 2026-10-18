@@ -294,10 +294,13 @@ is unregistered.  How many went."
 (defun drgnx-hub-serving-p () "Is this Emacs the hub?" (and drgnx-hub--server (process-live-p drgnx-hub--server) t))
 
 (defun drgnx-hub--set-keys (keys)
-  "KEYS (:PROVIDER KEY…), from a client: kept in the gateway's memory only (never written anywhere)."
+  "KEYS (:PROVIDER KEY…), from a client: kept in memory only (never written anywhere) — the gateway's, and the keys
+this Emacs found (`drgnx-ai--keys'), which the agents the hub starts read without looking anywhere that may ask."
   (cl-loop for (k v) on keys by #'cddr
            when (and (keywordp k) (stringp v) (not (string-empty-p v)))
-           do (drgnx-gateway-set-key (intern (substring (symbol-name k) 1)) v)))
+           do (let ((id (intern (substring (symbol-name k) 1))))
+                (drgnx-gateway-set-key id v)
+                (puthash id v drgnx-ai--keys))))
 
 (defun drgnx-hub-register (params)
   "Register an agent with the gateway: PARAMS (:job :task :agent :chain ((PROVIDER MODEL)…) :budget :keys (:PROVIDER

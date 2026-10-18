@@ -261,18 +261,31 @@ a task whose provider failed to the next profile (drgnx-job.el).  Called in the 
   "Non-nil: agents on OpenRouter, Ollama or Anthropic profiles talk to the hub's gateway (a token, never a key);
 without a hub they go to the provider directly.")
 
+(defun drgnx-agents--in-hub-p ()
+  "Is this Emacs the hub?  A daemon: it never looks a key up where that may ask."
+  (and (fboundp 'drgnx-hub-serving-p) (drgnx-hub-serving-p)))
+
 (defun drgnx-agents--gateway (s kind)
   "Register S's agent (profile KIND) with the hub's gateway: (:url :token), or nil when no hub can be had (S then
-goes direct, and says so)."
+goes direct, and says so).  In the hub, keys are only those editors handed over (and the environment, quiet
+auth-source files): with none for any provider of the chain, a `user-error' says how one comes."
+  (when (drgnx-agents--in-hub-p)
+    (let ((chain (drgnx-ai-agent-gateway-chain kind)))
+      (unless (seq-some (lambda (st) (or (not (plist-get (drgnx-ai-provider (car st)) :key-env)) (drgnx-ai-key (car st))))
+                        chain)
+        (user-error "No key for %s in the drgnx hub: an editor hands its keys over when it connects (or run `drgnx hub start' where the key is set)"
+                    (mapconcat (lambda (st) (symbol-name (car st))) chain ", ")))))
   (condition-case err
       (progn
         (require 'drgnx-hub)
         (unless (drgnx-hub-serving-p) (drgnx-hub-ensure))
         (let* ((chain (drgnx-ai-agent-gateway-chain kind))
-               ;; keys this command can read (also from sources that ask) travel to the hub's memory
-               (keys (cl-loop for (id . _) in chain
-                              for key = (and (plist-get (drgnx-ai-provider id) :key-env) (drgnx-ai-key id t))
-                              when key append (list (intern (concat ":" (symbol-name id))) key)))
+               ;; keys this command can read (also from sources that ask) travel to the hub's memory — never in the
+               ;; hub, which has what editors gave it
+               (keys (unless (drgnx-agents--in-hub-p)
+                       (cl-loop for (id . _) in chain
+                                for key = (and (plist-get (drgnx-ai-provider id) :key-env) (drgnx-ai-key id t))
+                                when key append (list (intern (concat ":" (symbol-name id))) key))))
                (params (list :task (drgnx-agent-session-task s) :job (drgnx-agent-session-job s)
                              :agent (drgnx-agent-session-name s)
                              :owner (emacs-pid)   ; its agent is this Emacs's child: gone with it, its token goes too
@@ -309,7 +322,7 @@ can carry it, else the provider's (keys resolved now, never kept) — DRGNX_TASK
   (append (plist-get (cdr (drgnx-agents-profile (drgnx-agent-session-profile s))) :env)
           (when-let* ((kind (plist-get (cdr (drgnx-agents-profile (drgnx-agent-session-profile s))) :ai)))
             (require 'drgnx-ai)
-            (drgnx-ai-agent-env (list :kind kind) t
+            (drgnx-ai-agent-env (list :kind kind) (not (drgnx-agents--in-hub-p))
                                 (and drgnx-agents-use-gateway (memq kind drgnx-ai-gateway-kinds)
                                      (drgnx-agents--gateway s kind))))
           (and (drgnx-agent-session-task s) (list (concat "DRGNX_TASK=" (drgnx-agent-session-task s))))
