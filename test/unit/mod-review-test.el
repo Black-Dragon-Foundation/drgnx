@@ -35,6 +35,12 @@
                 (list (list :type 'user :text "[drgnx review] …") (list :type 'agent :text text :done t) (list :type 'stop :stop "end_turn" :done t))))
   (drgnx-review--changed s))
 
+(defun drgnx-review-test--wait-head ()
+  "Wait for the background check of HEAD the tab starts."
+  (let ((deadline (+ (float-time) 10)) (run (gethash drgnx-review--current drgnx-review--runs)))
+    (while (and (process-live-p (plist-get run :checking)) (< (float-time) deadline)) (accept-process-output nil 0.05))
+    (accept-process-output nil 0.05)))
+
 (defun drgnx-review-test--tab () (with-current-buffer "*drgnx review*" (buffer-string)))
 
 (ert-deftest drgnx-review/parse-findings-and-verdict ()
@@ -94,6 +100,7 @@
     (drgnx-git-test-write repo "c.el" "c\n")
     (drgnx-git-test repo "add" "-A") (drgnx-git-test repo "commit" "-q" "-m" "c")
     (drgnx-review-refresh)
+    (drgnx-review-test--wait-head)
     (should (string-search "HEAD has moved" (drgnx-review-test--tab)))))
 
 (ert-deftest drgnx-review/ret-opens-the-finding ()
@@ -147,5 +154,29 @@
       (should (string-empty-p (buffer-string)))
       (revert-buffer nil t)
       (should (string-search "feature vs main · 3 findings · fail" (buffer-string))))))
+
+(ert-deftest drgnx-review/show-diff-uses-reviewed-sha ()
+  ;; M11b-5: the branch diff is the one the reviewer saw, not wherever HEAD is now
+  (drgnx-review-test--branch
+    (drgnx-review-branch)
+    (drgnx-review--changed s)
+    (drgnx-review-test--answer s drgnx-review-test--answer)
+    (let ((reviewed (drgnx-git-test repo "rev-parse" "HEAD")) (source nil))
+      (drgnx-git-test-write repo "c.el" "c\n")
+      (drgnx-git-test repo "add" "-A") (drgnx-git-test repo "commit" "-q" "-m" "c")
+      (cl-letf (((symbol-function 'drgnx-diff-show) (lambda (src &rest _) (setq source src))))
+        (with-current-buffer "*drgnx review*" (drgnx-review-show-diff)))
+      (should (equal source (list 'range "main" (string-trim reviewed)))))))
+
+(ert-deftest drgnx-review/summary-never-runs-git-itself ()
+  ;; M11b-5: drawing the tab starts no synchronous git
+  (drgnx-review-test--branch
+    (drgnx-review-branch)
+    (drgnx-review--changed s)
+    (drgnx-review-test--answer s drgnx-review-test--answer)
+    (cl-letf (((symbol-function 'call-process) (lambda (&rest _) (error "synchronous process"))))
+      (drgnx-review-refresh))
+    (drgnx-review-test--wait-head)
+    (should-not (string-search "HEAD has moved" (drgnx-review-test--tab)))))
 
 ;;; mod-review-test.el ends here

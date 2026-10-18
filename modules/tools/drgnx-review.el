@@ -140,11 +140,32 @@ End with VERDICT: pass or VERDICT: fail." base))
   (or (get-buffer "*drgnx review*")
       (with-current-buffer (get-buffer-create "*drgnx review*") (drgnx-review-mode) (current-buffer))))
 
+(defun drgnx-review--check-head (run)
+  "Ask git in the background where HEAD is now; the answer lands in RUN's :now and the tab is drawn again when
+that changes whether HEAD has moved.  One check at a time; the summary never runs git itself."
+  (unless (process-live-p (plist-get run :checking))
+    (let* ((out (generate-new-buffer " *drgnx-review head*" t)) (default-directory (plist-get run :root)))
+      (plist-put run :checking
+                 (make-process
+                  :name "drgnx-review-head" :buffer out :noquery t :connection-type 'pipe
+                  :command '("git" "rev-parse" "HEAD")
+                  :sentinel (lambda (proc _event)
+                              (unless (process-live-p proc)
+                                (let ((now (and (eql 0 (process-exit-status proc)) (with-current-buffer out (string-trim (buffer-string))))))
+                                  (kill-buffer out)
+                                  (when (and now (not (equal now (plist-get run :now))))
+                                    (let ((was (drgnx-review--moved-p run)))
+                                      (plist-put run :now now)
+                                      (unless (eq was (drgnx-review--moved-p run))
+                                        (when (equal (gethash drgnx-review--current drgnx-review--runs) run) (drgnx-review--draw)))))))))))))
+
+(defun drgnx-review--moved-p (run)
+  (and (plist-get run :now) (not (equal (plist-get run :now) (plist-get run :head)))))
+
 (defun drgnx-review--summary (run)
   (let* ((result (plist-get run :result)) (n (length (plist-get result :findings)))
          (head (format "%s vs %s" (plist-get run :branch) (plist-get run :base)))
-         (moved (let ((now (drgnx-review--git (plist-get run :root) "rev-parse" "HEAD")))
-                  (if (and now (not (equal now (plist-get run :head)))) "  (HEAD has moved since)" ""))))
+         (moved (if (drgnx-review--moved-p run) "  (HEAD has moved since)" "")))
     (concat head " · "
             (cond ((eq (plist-get run :state) 'reviewing) "Reviewing…")
                   ((plist-get run :stopped) "the reviewer stopped before answering — see its transcript")
@@ -155,6 +176,10 @@ End with VERDICT: pass or VERDICT: fail." base))
 (defun drgnx-review-refresh ()
   "Draw the Review tab again."
   (interactive)
+  (drgnx-review--draw)
+  (when-let* ((run (drgnx-review--run))) (drgnx-review--check-head run)))
+
+(defun drgnx-review--draw ()
   (with-current-buffer (drgnx-review--buffer)
     (let ((inhibit-read-only t) (run (and drgnx-review--current (gethash drgnx-review--current drgnx-review--runs))))
       (erase-buffer)
@@ -197,7 +222,7 @@ End with VERDICT: pass or VERDICT: fail." base))
   (interactive)
   (let ((run (or (drgnx-review--run) (user-error "No review yet")))
         (f (get-text-property (point) 'drgnx-review-finding)))
-    (drgnx-diff-show (list 'range (plist-get run :base) "HEAD") (plist-get run :root) (plist-get f :path))))
+    (drgnx-diff-show (list 'range (plist-get run :base) (or (plist-get run :head) "HEAD")) (plist-get run :root) (plist-get f :path))))
 
 (defun drgnx-review-branch (&optional base)
   "Review Branch — an agent (the review route) reviews this branch against BASE (default: origin/HEAD, main or
