@@ -108,6 +108,8 @@
         (file-reopen-tab :none "in the palette")
         (file-new-window :none "C-x 5 2 (stock)")
         (file-close-window :none "C-x 5 0 (stock)")
+        (trust-folder :none "the palette; click \"restricted\" in the mode line")
+        (untrust-folder :none "the palette")
         (go-recent :none "C-x b (stock)")
         (go-symbol-project :none "C-M-. (stock)")
         (go-back :none "M-, (stock)")
