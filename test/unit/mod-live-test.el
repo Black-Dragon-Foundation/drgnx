@@ -488,3 +488,12 @@ are pushed to STEERED as (NAME TEXT)."
         (delete-other-windows win)))))
 
 ;;; mod-live-test.el ends here
+
+(ert-deftest drgnx-live/command-labels-say-live-once ()
+  ;; The palette shows "Category: Title": the titles must not repeat the category.
+  (let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil))
+    (drgnx-live--define-commands)
+    (should (equal (mapcar (lambda (id) (drgnx-commands-label (drgnx-commands-get id)))
+                           '(live-start-browser live-stop-browser live-view live-take-over))
+                   '("Live: Start Browser for Agents" "Live: Stop Browser for Agents" "Live: Watch Agents' Browser"
+                     "Live: Take Over / Hand Back")))))

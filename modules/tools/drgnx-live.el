@@ -613,21 +613,24 @@ go to the page; other keys (C-…, M-…) stay Emacs's.")
 
 ;;;; Module
 
+(defun drgnx-live--define-commands ()
+  (pcase-dolist (`(,id ,title ,fn ,doc)
+                 '((live-start-browser "Start Browser for Agents" drgnx-live-start-browser
+                                       "A headless browser agents started from now on drive (their Playwright MCP)")
+                   (live-stop-browser "Stop Browser for Agents" drgnx-live-stop-browser
+                                      "Stop the browser for agents and delete its throwaway profile")
+                   (live-view "Watch Agents' Browser" drgnx-live-view "The page agents work on, live")
+                   (live-take-over "Take Over / Hand Back" drgnx-live-take-over
+                                   "Your clicks and keys go to the page (the agent is told), or hand it back")))
+    (drgnx-command-define id :category "Live" :title title :command fn :doc doc :scope 'window
+                          :map (and (eq id 'live-take-over) '(drgnx-live . drgnx-live-mode-map)))))
+
 (defun drgnx-live--setup ()
   "Give agents the browser's endpoint, stop the browser when Emacs ends, define the commands."
   (require 'drgnx-agents)
   (add-hook 'drgnx-agents-env-functions #'drgnx-live--agent-env)
   (add-hook 'kill-emacs-hook #'drgnx-live--cleanup)
-  (pcase-dolist (`(,id ,title ,fn ,doc)
-                 '((live-start-browser "Live: Start Browser for Agents" drgnx-live-start-browser
-                                       "A headless browser agents started from now on drive (their Playwright MCP)")
-                   (live-stop-browser "Live: Stop Browser for Agents" drgnx-live-stop-browser
-                                      "Stop the browser for agents and delete its throwaway profile")
-                   (live-view "Live: Watch Agents' Browser" drgnx-live-view "The page agents work on, live")
-                   (live-take-over "Live: Take Over / Hand Back" drgnx-live-take-over
-                                   "Your clicks and keys go to the page (the agent is told), or hand it back")))
-    (drgnx-command-define id :category "Live" :title title :command fn :doc doc :scope 'window
-                          :map (and (eq id 'live-take-over) '(drgnx-live . drgnx-live-mode-map)))))
+  (drgnx-live--define-commands))
 
 (drgnx-module-define 'tools/live
                      :doc "Live: watch and take over the browser drgnx starts for agents (CDP screencast)."
