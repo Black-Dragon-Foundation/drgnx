@@ -74,8 +74,8 @@ queues its event for every subscriber before it writes to any, so a newer event 
 would nest until `excessive-lisp-nesting` lands anywhere in the hub). A client that stopped reading (a suspended
 Emacs) is dropped (logged) when its queue passes `drgnx-hub-client-max-queued` (16 MiB) or one write to it waits longer
 than `drgnx-hub-client-stuck-after` (10 s; checked also on the hub's tick, when nothing more comes for it). Only
-the innermost write in progress is judged (`drgnx-hub--writing`): one beneath it cannot go on meanwhile, and its clock
-starts again when the one above returns; its Emacs
+the innermost write in progress is judged (`drgnx-hub--writing`): one beneath it cannot go on meanwhile, so it gets
+back the time each write above it took (only that: a stopped client beneath writes to others is still dropped); its Emacs
 connects again (the Agents module's idle timer, the job window's refresh) — meanwhile it shows the hub's sessions as
 ended.
 Snapshots and transcript entries travel as **printed Lisp** (`lisp`,

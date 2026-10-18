@@ -186,11 +186,14 @@ Emacs connects again)."
             (process-put conn :queue nil)
             (process-put conn :queued-bytes 0)
             (dolist (l lines)
-              (let ((drgnx-hub--writing (cons conn drgnx-hub--writing)))
-                (process-put conn :sending (float-time))     ; (each line: a write that makes progress is not stuck)
-                (drgnx-hub--send-line conn l))
-              ;; a write beneath this one goes on now: its clock starts again
-              (when-let* ((below (car drgnx-hub--writing))) (process-put below :sending (float-time))))))
+              (let ((t0 (float-time)))
+                (let ((drgnx-hub--writing (cons conn drgnx-hub--writing)))
+                  (process-put conn :sending t0)             ; (each line: a write that makes progress is not stuck)
+                  (drgnx-hub--send-line conn l))
+                ;; a write beneath this one could not go on meanwhile: it gets back the time this one took (only that:
+                ;; a stopped client beneath writes to others still ends)
+                (when-let* ((below (car drgnx-hub--writing)) (since (process-get below :sending)))
+                  (process-put below :sending (+ since (- (float-time) t0))))))))
       (process-put conn :sending nil))))
 
 (defun drgnx-hub--answer (conn object)
