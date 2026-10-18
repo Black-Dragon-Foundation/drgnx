@@ -49,6 +49,17 @@ After the restore the keys are in the frame parameter `drgnx-persist-extra', rea
 (defun drgnx-persist--file ()
   (or drgnx-persist-file (expand-file-name "workbench.eld" (drgnx-state-dir))))
 
+(defun drgnx-persist--terminal-frame-p (&optional frame)
+  "Non-nil if FRAME (default: the selected one) is a terminal window: text, on a real terminal.  Batch Emacs's
+frame and a daemon's first one are on the initial terminal and are not."
+  (and (not (display-graphic-p frame))
+       (not (equal (terminal-name (frame-terminal frame)) "initial_terminal"))))
+
+(defun drgnx-persist--graphical-only ()
+  "Say that layouts belong to graphical windows (what Save / Restore Workbench Layout answer in a terminal)."
+  (message "Layouts are saved and restored from graphical windows")
+  nil)
+
 (defun drgnx-persist--area (area)
   (let ((w (drgnx-wb-area-window area)))
     (list :shown (and w t) :tab (drgnx-wb-area-tab area)
@@ -138,15 +149,18 @@ other object); otherwise that function is skipped and said once, and the others'
 
 (defun drgnx-persist-save (&optional file frames)
   "Write the workbench of FRAMES (default: every window, the main one first) to FILE (default:
-`drgnx-persist-file').  Tabs not visited yet (restored at idle) are kept."
+`drgnx-persist-file').  Tabs not visited yet (restored at idle) are kept.  Called from a terminal window
+\(and with no FRAMES) it writes nothing: a terminal session never overwrites the desktop layout."
   (interactive)
-  (let ((file (or file (drgnx-persist--file)))
-        (state (list :version drgnx-persist-version
-                     :frames (mapcar #'drgnx-persist-state (or frames (drgnx-persist--frames))))))
-    (make-directory (file-name-directory file) t)
-    (with-temp-file file
-      (let ((print-length nil) (print-level nil)) (prin1 state (current-buffer))))
-    file))
+  (if (and (null frames) (drgnx-persist--terminal-frame-p))
+      (drgnx-persist--graphical-only)
+    (let ((file (or file (drgnx-persist--file)))
+          (state (list :version drgnx-persist-version
+                       :frames (mapcar #'drgnx-persist-state (or frames (drgnx-persist--frames))))))
+      (make-directory (file-name-directory file) t)
+      (with-temp-file file
+        (let ((print-length nil) (print-level nil)) (prin1 state (current-buffer))))
+      file)))
 
 (defun drgnx-persist--read (file)
   (when (file-readable-p file)
@@ -207,11 +221,19 @@ is a workbench (not a window that rebuilds itself); nil when there are only such
 (defun drgnx-persist-restore (&optional file)
   "Bring back the workbench saved in FILE — the selected frame gets the main window's layout (the state
 saved with `:role main', wherever it stands in the file), every other window is made again; non-nil if a
-state was restored.  A window that rebuilds itself (a job window) is rebuilt by its function and, when the
-display still has room, put back at its saved pixel position and size (a terminal start does not treat it
-differently yet).  Each group's shown file is visited now, its other tabs at
-idle (never a question at start)."
+state was restored.  A window that rebuilds itself (a job window) is rebuilt by its function, on the
+graphical display, and, when the display still has room, put back at its saved pixel position and size.
+Each group's shown file is visited now, its other tabs at idle (never a question at start).
+From a terminal window the layout goes into the first graphical frame; with none, nothing is restored."
   (interactive)
+  (if (not (drgnx-persist--terminal-frame-p))
+      (drgnx-persist--restore file)
+    (if-let* ((gui (drgnx-persist--gui-frame)))
+        (with-selected-frame gui (drgnx-persist--restore file))
+      (drgnx-persist--graphical-only))))
+
+(defun drgnx-persist--restore (file)
+  "`drgnx-persist-restore' in the selected frame, which is not a terminal window."
   (let* ((file (or file (drgnx-persist--file))) (state (drgnx-persist--read file))
          (frames (pcase (plist-get state :version)
                    (1 (list state))
@@ -238,7 +260,9 @@ idle (never a question at start)."
                     (cond
                      ((and (consp restore) (fboundp (car restore)))
                       (condition-case err
-                          (let ((frame (apply (car restore) (cdr restore))) (g (drgnx-persist--geometry st)))
+                          (let ((frame (with-selected-frame (or (drgnx-persist--gui-frame) (selected-frame)) ; its display, never a text frame
+                                         (apply (car restore) (cdr restore))))
+                                (g (drgnx-persist--geometry st)))
                             (when (and g (frame-live-p frame) (display-graphic-p frame))
                               (drgnx-persist--place-frame frame g)))
                         (error (message "drgnx: a window was not restored: %s" (error-message-string err)))))
@@ -311,9 +335,9 @@ none, leaves that group as it is."
                 (ignore-errors (window-resize g (- px (window-pixel-width g)) t nil t)))))
 
 (defun drgnx-persist--gui-frame ()
-  "The graphical frame to restore into or save from (a daemon's F1 is not one)."
+  "The graphical frame to restore into or save from (a daemon's F1 is not one, nor is a child frame)."
   (if (display-graphic-p (selected-frame)) (selected-frame)
-    (seq-find #'display-graphic-p (frame-list))))
+    (seq-find (lambda (f) (and (display-graphic-p f) (not (frame-parent f)))) (frame-list))))
 
 (defun drgnx-persist--on-exit ()
   "Save from a graphical frame only (a batch run must never write the user's state)."
@@ -329,7 +353,7 @@ windows left (\[save-buffers-kill-terminal] in the last client), save every one 
   (unless noframe
     (let ((gui (seq-filter (lambda (f) (and (frame-live-p f) (display-graphic-p f) (not (frame-parent f)))) (frame-list))))
       (when (and gui (seq-every-p (lambda (f) (eq (frame-parameter f 'client) proc)) gui))
-        (ignore-errors (drgnx-persist-save))
+        (ignore-errors (drgnx-persist-save nil (drgnx-persist--frames)))   ; a terminal window may be the selected one
         (setq drgnx-persist--saved-at-exit t)))))
 
 (defun drgnx-persist--on-delete-frame (frame)

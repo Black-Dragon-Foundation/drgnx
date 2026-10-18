@@ -223,8 +223,15 @@ is left out (said once) without costing the other functions' keys.
 Each group's shown file opens at once and its other tabs open while you are idle; nothing asks anything at start (no
 remote files are touched, only safe local variables, no large-file question). Files that no longer exist are skipped,
 sizes are clamped to the frame, window parameters in the file are ignored (drgnx saves none), and a state in another
-format is ignored. Save / Restore Workbench Layout are in the palette. Only a graphical session saves — a batch run
-never writes your state.
+format is ignored. Save / Restore Workbench Layout are in the palette. Only graphical windows save and restore — a
+batch run never writes your state.
+
+**Terminal windows** (`emacs -nw`, `emacsclient -t`) open with the default layout for their size
+([terminal.md](terminal.md)) and neither save nor restore: a terminal session never overwrites the layout of your
+desktop windows. Save / Restore Workbench Layout, run in a terminal window, do nothing and say "Layouts are saved and
+restored from graphical windows"; Restore, when a graphical window is open too (a daemon with both), restores into that
+window instead. A job window comes back on the graphical display only, never laid out over a terminal window; with no graphical
+window, it is not restored.
 
 ### Several windows
 
