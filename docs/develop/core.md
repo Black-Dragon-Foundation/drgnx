@@ -267,8 +267,10 @@ so restore may use it. The method lives under Emacs' unique bus name at an objec
 name would make two calls share a reply. The script, the object and the temporary file (mode 0600) are removed on
 success, error and deadline alike. `:monitors` lists `workspace.screens`; `:move` (the command) refuses a frame without focus,
 as every adapter does, and moves KWin's active window only if it is Emacs' (by pid) and this very frame (its caption:
-the frame's title, else its name), so never another frame of this Emacs; `:place` (restore) finds Emacs' window by
-pid and the frame's title (else the only normal window of that pid). KWin places a new window when it first shows
+the frame's title, else its name), so never another frame of this Emacs; `:place` (restore) sets the frame's `title` to
+`drgnx [placing PID-N]` (as sway, Hyprland and niri do), finds Emacs' window by pid and that title (else the only
+normal window of that pid) from 0.1 s on, tries again while KWin does not know the title yet, and puts the title back
+in every case — so a main window showing the same buffer (the same default title) is never the one moved. KWin places a new window when it first shows
 it, which can come after a restore's move: so `:place` checks Emacs' own answer at 0.1, 0.3, 0.7, 1.5 and 3 s and
 moves again while the frame is elsewhere, within the restore deadline ("KWin keeps the window on another screen; it
 was not placed" when it never gets there). Without D-Bus support or a session bus, `:can-move` says so with a fix. The
@@ -276,8 +278,7 @@ monitor a frame is on is Emacs' own answer (`frame-monitor-attributes`, matched 
 Previous need it, and so does the monitor a restore saves. `:timeout` goes right after the handler in every
 `dbus-call-method-asynchronously`: dbus.el sends a `:timeout` placed after the method's arguments as one more
 argument, and the call fails ("Wrong type argument: D-Bus, :timeout"). A D-Bus error reply (KWin not running) ends
-the call at once with that error; a silent KWin ends it at the deadline. KWin has no window id Emacs can read, so
-`:place` cannot tell apart two frames of one Emacs with the same title: it may move the wrong one. Run against
+the call at once with that error; a silent KWin ends it at the deadline. Run against
 `kwin_wayland --virtual` with two outputs (`test/live/drgnx-wm-other-test.el`); not run on a full Plasma session.
 
 **Another compositor** (river, Wayfire, labwc, Cosmic, ...): call `drgnx-platform-define-adapter` from your

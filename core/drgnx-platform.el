@@ -1382,26 +1382,50 @@ never another frame of this Emacs, such as the main one."
        callback))))
 
 (defun drgnx-platform-kwin--place (ctx monitor callback)
-  "Move CTX's frame (found by Emacs' pid and the frame's title) to MONITOR: the restore path, any window.
+  "Move CTX's frame to MONITOR: the restore path, any window.  The window is found by Emacs' pid and a title only it
+has meanwhile: the frame's `title' is \"drgnx [placing PID-N]\" from the first try on (Emacs titles a frame after
+its buffer, so the main window may have the same caption) and is put back however the placement ends.  The first
+try waits for the first poll time, so the title has reached KWin; KWin not knowing the title yet is tried again.
 KWin places a new window where it likes when it first shows it, and that can come after a move made at once (a
 restored window is placed as it is made): so after each move Emacs' own answer (`frame-monitor-attributes') is
 checked at `drgnx-platform-wm--hn-poll-times', and the move made again while the frame is elsewhere, all within
 CTX's one deadline."
-  (let* ((frame (plist-get ctx :frame)) (start (float-time)) (end (+ start (plist-get ctx :timeout)))
+  (let* ((frame (or (plist-get ctx :frame) (selected-frame))) (start (float-time))
+         (end (+ start (plist-get ctx :timeout)))
          (want (drgnx-platform--geometry monitor))
+         (old-title (frame-parameter frame 'title))
+         (title (format "drgnx [placing %d-%d]" (emacs-pid) (cl-incf drgnx-platform-wm--hn-placing-counter)))
+         (done nil)
+         (finish (lambda (r)
+                   (unless done
+                     (setq done t)
+                     (when (frame-live-p frame) (set-frame-parameter frame 'title old-title))
+                     (funcall callback r))))
          (there (lambda () (ignore-errors (equal (append (alist-get 'geometry (frame-monitor-attributes frame)) nil) want)))))
-    (cl-labels ((try (times)
+    (cl-labels ((later (times fn)
+                  ;; FN at the next poll time, or nil when there is none left before the deadline
+                  (when (and times (< (+ start (car times)) end))
+                    (run-at-time (max 0 (- (+ start (car times)) (float-time))) nil
+                                 (lambda () (cond (done)
+                                                  ((not (frame-live-p frame)) (funcall finish (list :error "the window was closed")))
+                                                  (t (funcall fn)))))))
+                (try (times)
                   (drgnx-platform-kwin--send
                    (plist-put (copy-sequence ctx) :timeout (max 0.05 (- end (float-time)))) monitor
-                   (list :caption (frame-parameter frame 'name))
-                   (lambda (r) (if (drgnx-platform--error-p r) (funcall callback r) (check times)))))
+                   (list :caption title)
+                   (lambda (r)
+                     (cond ((not (drgnx-platform--error-p r)) (check times))
+                           ;; the new title has not reached KWin yet
+                           ((and (string-match-p "no window of this Emacs" (cadr r))
+                                 (later times (lambda () (try (cdr times))))))
+                           (t (funcall finish r))))))
                 (check (times)
-                  (cond ((funcall there) (funcall callback 'ok))
-                        ((or (null times) (>= (+ start (car times)) end))
-                         (funcall callback (list :error "KWin keeps the window on another screen; it was not placed")))
-                        (t (run-at-time (max 0 (- (+ start (car times)) (float-time))) nil
-                                        (lambda () (if (funcall there) (funcall callback 'ok) (try (cdr times)))))))))
-      (try drgnx-platform-wm--hn-poll-times))))
+                  (cond ((funcall there) (funcall finish 'ok))
+                        ((later times (lambda () (if (funcall there) (funcall finish 'ok) (try (cdr times))))))
+                        (t (funcall finish (list :error "KWin keeps the window on another screen; it was not placed"))))))
+      (set-frame-parameter frame 'title title)
+      (unless (later drgnx-platform-wm--hn-poll-times (lambda () (try (cdr drgnx-platform-wm--hn-poll-times))))
+        (funcall finish (list :error "KWin: no time left to place the window"))))))
 
 (drgnx-platform-define-adapter
  'kwin :status 'verified :tool nil

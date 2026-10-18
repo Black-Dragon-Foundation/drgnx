@@ -223,10 +223,35 @@ temporary directory is private to the test."
                                       (should (eq r 'ok))
                                       (should (= 1 (seq-count (lambda (m) (equal m "loadScript")) (drgnx-platform-kwin-test--methods))))))
                                   (should (string-match-p (format "\\b%d\\b" (emacs-pid)) drgnx-platform-kwin-test--script))
-                                  (should (string-match-p (regexp-quote "\"drgnx - workbench\"") drgnx-platform-kwin-test--script))
+                                  ;; by its temporary title, never the frame's name (another frame may show the same buffer)
+                                  (should (string-match-p (regexp-quote (format "\"drgnx [placing %d-" (emacs-pid))) drgnx-platform-kwin-test--script))
+                                  (should-not (string-match-p (regexp-quote "\"drgnx - workbench\"") drgnx-platform-kwin-test--script))
                                   (should (string-match-p "windowList" drgnx-platform-kwin-test--script))
                                   (should (string-match-p "sendClientToScreen" drgnx-platform-kwin-test--script))
                                   (should-not (string-match-p "activeWindow" drgnx-platform-kwin-test--script)))))
+
+(drgnx-platform-test--deftest drgnx-platform-kwin/a-restore-never-picks-the-main-window-showing-the-same-buffer ()
+                              ;; final review I3: main and aux both titled "a.txt" (Emacs titles a frame after its
+                              ;; buffer); the script must look for the aux by a title only it has while it is placed
+                              (let ((monitor (list :name "Virtual-1" :geometry '(1280 0 1280 800)))
+                                    (frame (selected-frame)) (old (frame-parameter (selected-frame) 'title)) (seen nil))
+                                (unwind-protect
+                                    (progn
+                                      (set-frame-parameter frame 'title "a.txt")
+                                      (dolist (reply-json '("{\"ok\":true}" "{\"error\":\"KWin has no such screen\"}"))
+                                        (setq seen nil)
+                                        (drgnx-platform-kwin-test--with-kwin (lambda (_s) (push (frame-parameter frame 'title) seen) reply-json)
+                                          (cl-letf (((symbol-function 'frame-monitor-attributes) (lambda (&optional _) '((geometry 1280 0 1280 800)))))
+                                            (let ((r (drgnx-platform-kwin-test--ask
+                                                      (lambda (cb) (drgnx-platform-kwin--place (drgnx-platform-ctx frame 5.0) monitor cb)))))
+                                              (should (if (equal reply-json "{\"ok\":true}") (eq r 'ok) (eq :error (car-safe r))))))
+                                          ;; while the script ran the frame had the unique title, and the script looked for it
+                                          (should (string-match-p "\\`drgnx \\[placing [0-9]+-[0-9]+\\]\\'" (car seen)))
+                                          (should (string-match-p (regexp-quote (concat "\"" (car seen) "\"")) drgnx-platform-kwin-test--script))
+                                          (should-not (string-match-p "\"a\\.txt\"" drgnx-platform-kwin-test--script)))
+                                        ;; and the title is given back, success or not
+                                        (should (equal (frame-parameter frame 'title) "a.txt"))))
+                                  (set-frame-parameter frame 'title old))))
 
 (drgnx-platform-test--deftest drgnx-platform-kwin/place-moves-again-while-kwin-shows-the-window-elsewhere ()
                               ;; KWin places a new window when it first shows it, which can come after a move made at once
