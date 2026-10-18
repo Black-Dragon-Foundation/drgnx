@@ -91,39 +91,84 @@
                            (if (plist-get j :exit) (format "exit %s" (plist-get j :exit)) ""))))
            (drgnx-agents-ui--jobs))))
 
+;; The list is a view with no rows (`agents-list'): the view gives it the timer, the visibility check and the stale
+;; mark; its SYNC prints.  tabulated-list owns the text, so the view's START is moved to the end after each print.
+
+(defun drgnx-agents-ui--id-at (pos)
+  "The session or job id of the list line at POS (`tabulated-list-id'), or nil."
+  (get-text-property pos 'tabulated-list-id))
+
+(defun drgnx-agents-ui--pos-of (id)
+  "The start of the line of ID in the current Agents list, or nil."
+  (save-excursion
+    (goto-char (point-min))
+    (let (found)
+      (while (and (not found) (not (eobp)))
+        (if (equal (get-text-property (point) 'tabulated-list-id) id)
+            (setq found (point))
+          (goto-char (or (next-single-property-change (point) 'tabulated-list-id) (point-max)))))
+      found)))
+
+(defun drgnx-agents-ui--update-lines ()
+  "Make the current list's lines those of `tabulated-list-entries', in their order, touching only lines that differ:
+a line whose id and columns are the same stays as it is (`tabulated-list-print' with UPDATE keeps a line of the same
+id even when its columns changed, and without a sort key prints everything again).  Lines of ids no longer listed go;
+a new id gets a line where its entry stands; a line out of order is deleted and printed again at its place."
+  (let* ((entries (if (functionp tabulated-list-entries) (funcall tabulated-list-entries) tabulated-list-entries))
+         (new (make-hash-table :test #'equal)) (present (make-hash-table :test #'equal))
+         (inhibit-read-only t))
+    (dolist (e entries) (puthash (car e) t new))
+    (goto-char (point-min))
+    (while (not (eobp))
+      (puthash (get-text-property (point) 'tabulated-list-id) t present)
+      (forward-line 1))
+    (goto-char (point-min))
+    (dolist (e entries)
+      (let ((id (car e)) (cols (cadr e)) done)
+        (while (not done)
+          (let ((here (and (not (eobp)) (get-text-property (point) 'tabulated-list-id))))
+            (cond ((eobp) (funcall tabulated-list-printer id cols) (puthash id t present) (setq done t))
+                  ((equal here id)
+                   (if (equal cols (get-text-property (point) 'tabulated-list-entry))
+                       (forward-line 1)
+                     (delete-region (point) (progn (forward-line 1) (point)))
+                     (funcall tabulated-list-printer id cols))
+                   (setq done t))
+                  ((or (not (gethash here new)) (gethash id present))
+                   (remhash here present)    ; gone, or out of order: printed again at its entry
+                   (delete-region (point) (progn (forward-line 1) (point))))
+                  (t (funcall tabulated-list-printer id cols) (puthash id t present) (setq done t)))))))
+    (delete-region (point) (point-max))))
+
+(defun drgnx-agents-ui--list-print (view)
+  "SYNC of `agents-list': update the list's lines in place, each window keeping its point and start on their
+session.  Then the view's START goes to the end: the view has no rows, and the text is tabulated-list's."
+  (drgnx-view-with-kept-windows (:key-at #'drgnx-agents-ui--id-at :pos-of #'drgnx-agents-ui--pos-of)
+    (drgnx-agents-ui--update-lines))
+  (set-marker (drgnx-view--start view) (point-max)))
+
+(defun drgnx-agents-ui--list-view ()
+  "The view of the Agents list, or nil (no list, or it was made without the module)."
+  (when-let* ((b (get-buffer "*drgnx Agents*")) (view (buffer-local-value 'drgnx-view b)))
+    (and (drgnx-view-p view) view)))
+
 (defun drgnx-agents-ui-list-buffer ()
+  "The Agents list, up to date.  With the `agents-list' view type (the module is on) the view prints it."
   (let ((b (get-buffer-create "*drgnx Agents*")))
     (with-current-buffer b
       (unless (derived-mode-p 'drgnx-agents-list-mode) (drgnx-agents-list-mode))
       (setq tabulated-list-entries #'drgnx-agents-ui--entries)
-      (tabulated-list-print t))
+      (if (not (alist-get 'agents-list drgnx-view--types))  ; the type is the module's: none while it is off
+          (tabulated-list-print t t)
+        (unless (drgnx-view-p drgnx-view) (drgnx-view-attach 'agents-list))
+        (drgnx-view-touch drgnx-view)
+        (drgnx-view-draw-now drgnx-view)))
     b))
 
-(defvar drgnx-wb--owned)                ; drgnx-wb.el: windows the running code may move from a timer
-(defvar drgnx-agents-ui--tick-timer nil "Redraws the Agents list every 30 s while it is visible (its Last ages).")
-
-(defun drgnx-agents-ui--tick-update (&rest _)
-  "Run the 30 s redraw while the Agents list is visible in some window; cancel it when it is not.
-On `window-buffer-change-functions'; never asks anything."
-  (if (when-let* ((b (get-buffer "*drgnx Agents*"))) (get-buffer-window b t))
-      (unless (timerp drgnx-agents-ui--tick-timer)
-        (setq drgnx-agents-ui--tick-timer (run-with-timer 30 30 #'drgnx-agents-ui--tick)))
-    (when (timerp drgnx-agents-ui--tick-timer) (cancel-timer drgnx-agents-ui--tick-timer))
-    (setq drgnx-agents-ui--tick-timer nil)))
-
 (defun drgnx-agents-ui--tick ()
-  "Redraw the visible Agents list so its ages are current, each window's point on its row; stop when hidden."
-  (let* ((b (get-buffer "*drgnx Agents*")) (ws (and b (get-buffer-window-list b nil t))))
-    (if (not ws)
-        (drgnx-agents-ui--tick-update)
-      (with-current-buffer b
-        (let ((rows (mapcar (lambda (w) (list w (line-number-at-pos (window-point w)) (line-number-at-pos (window-start w))))
-                            ws))
-              (drgnx-wb--owned (append ws (and (boundp 'drgnx-wb--owned) drgnx-wb--owned))))  ; our own buffer's windows (jank guard, I9)
-          (tabulated-list-print t)
-          (pcase-dolist (`(,w ,pt ,start) rows)
-            (set-window-start w (save-excursion (goto-char (point-min)) (forward-line (1- start)) (point)) t)
-            (set-window-point w (save-excursion (goto-char (point-min)) (forward-line (1- pt)) (point)))))))))
+  "The 30 s tick (layer key `agents-ui-tick'): mark the Agents list so its Last ages are printed again.  The view
+prints only while the list is shown; hidden, it is marked stale and prints when shown."
+  (when-let* ((view (drgnx-agents-ui--list-view))) (drgnx-view-touch view)))
 
 (defun drgnx-agents-ui-view ()
   "Show the Agents tab in the right dock."
@@ -361,20 +406,14 @@ at once (`drgnx-view-draw-now')."
     (pop-to-buffer b)
     b))
 
-(defun drgnx-agents-ui--redraw-list ()
-  "Print the Agents list again (the layer key `agents-ui-redraw')."
-  (when-let* ((b (get-buffer "*drgnx Agents*")))
-    (with-current-buffer b (tabulated-list-print t))))
-
 (defun drgnx-agents-ui--changed (s)
-  "A session changed: note when (the list's Last column), mark its transcript's view (it draws from its own timer,
-only while shown) and print the list again at most every 0.1 s.  Called from the agent's process filter: only marks."
+  "A session changed: note when (the list's Last column) and mark its transcript's view and the list's (each draws
+from its own timer, at most every 0.1 s, only while shown).  Called from the agent's process filter: only marks."
   (puthash s (float-time) drgnx-agents-ui--last)
   (let* ((b (get-buffer (format "*agent: %s*" (drgnx-agent-session-name s))))
          (view (and b (buffer-local-value 'drgnx-view b))))
     (when (drgnx-view-p view) (drgnx-view-touch view)))
-  (when (get-buffer "*drgnx Agents*")
-    (drgnx-timer-soon 'agents-ui-redraw 0.1 #'drgnx-agents-ui--redraw-list :owner 'tools/agents)))
+  (when-let* ((view (drgnx-agents-ui--list-view))) (drgnx-view-touch view)))
 
 ;;;; Commands
 
@@ -566,8 +605,11 @@ name from a local session is rejected without a look at it."
                                           :grow #'drgnx-agents-ui--grow-row :sync #'drgnx-agents-ui--sync
                                           :delay drgnx-view-delay :slice drgnx-view-slice :follow-tail t :key-test 'eq)
                        (add-hook 'drgnx-agents-changed-functions #'drgnx-agents-ui--changed)
-                       ;; the list's Last ages: redrawn every 30 s while it is on screen, nothing otherwise
-                       (add-hook 'window-buffer-change-functions #'drgnx-agents-ui--tick-update)
+                       ;; the list: no rows, its SYNC prints it in place; drawn only while shown
+                       (drgnx-view-define 'agents-list :render #'ignore :sync #'drgnx-agents-ui--list-print
+                                          :delay drgnx-view-delay)
+                       ;; the list's Last ages: marked every 30 s (it prints only while on screen)
+                       (drgnx-timer-start 'agents-ui-tick 30 #'drgnx-agents-ui--tick :repeat t)
                        ;; the hub's sessions (they outlive this Emacs), once Emacs is idle
                        (drgnx-timer-start 'agents-ui-mirror-first 3 #'drgnx-agents-ui--maybe-mirror :idle t)
                        ;; …and again later: a hub started (or restarted) since is picked up
