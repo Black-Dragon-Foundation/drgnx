@@ -538,7 +538,13 @@ It runs no git and follows no link:
   cannot write. `rm -rf`, which never follows a link, then removes it in a process of its own.
 - It never descends into a directory the agent can write. `logs/` is moved out whole, and `logs/HEAD` comes back
   only if it is a regular file.
-- It reads `HEAD` only after moving it out, so a FIFO in its place never blocks the hub.
+- It reads `HEAD` only after moving it out, and only when it is a regular file, so a FIFO in its place never blocks
+  the hub.
+- It never renames across devices. An entry whose own device or whose directory's device differs from the trash's
+  (a btrfs subvolume the agent made) would make `rename-file` copy and delete it, opening its files. Such an entry is
+  left in place. After the rest is done, the scrub signals `drgnx-job-worktree-scrub-failed` with the names left and
+  those removed.
+- The trash is removed even when the scrub fails (`unwind-protect`).
 
 Call it at each turn end, before a review, and once more after the agent's sandbox has exited. Only then can the
 agent not plant again. While the sandbox lives, the folder belongs with the VC guard, as in snapshot mode. The user's

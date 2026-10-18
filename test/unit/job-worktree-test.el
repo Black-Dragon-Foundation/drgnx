@@ -348,6 +348,49 @@ source is PATH or one of its parents, or nil when none is."
       (should (equal (directory-files victim nil directory-files-no-dot-files-regexp) '("file")))
       (should (equal (with-temp-buffer (insert-file-contents (concat victim "file")) (buffer-string)) "mine\n"))
       (should (equal (with-temp-buffer (insert-file-contents (concat wt "HEAD")) (buffer-string))
+                     "ref: refs/heads/job/7-1/work\n"))
+      ;; a FIFO as HEAD is never opened.  A writer comes after 2 s (through a second name of the FIFO): a scrub that
+      ;; opened it would wait for it, then fail; this one is done at once, and the writer never finds a reader.
+      (let ((fifo (concat root "fifo")))
+        (should (eql 0 (call-process "mkfifo" nil nil nil fifo)))
+        (delete-file (concat wt "HEAD"))
+        (add-name-to-file fifo (concat wt "HEAD"))
+        (let ((writer (make-process :name "drgnx-worktree-test-writer" :noquery t :buffer nil
+                                    :command (list "sh" "-c" "sleep 2; printf junk > \"$1\"" "sh" fifo)))
+              (start (float-time)))
+          (unwind-protect
+              (progn
+                (should (equal (drgnx-job-worktree-scrub repo "7-1" "7" 1) '("worktrees/7-1/HEAD")))
+                (should (< (- (float-time) start) 1)))
+            (delete-process writer))))
+      (should (equal (with-temp-buffer (insert-file-contents (concat wt "HEAD")) (buffer-string))
                      "ref: refs/heads/job/7-1/work\n")))))
+
+(ert-deftest drgnx-job-worktree/scrub-never-moves-across-devices ()
+  "An entry on another device (a btrfs subvolume the agent made) is never renamed, which would copy and delete it,
+opening its files: it is a failure the scrub raises, after the rest is done and its trash removed."
+  (drgnx-job-worktree-test--with
+    (should (equal (drgnx-job-worktree-test--add repo folder "7" 1 "job/7") '(:name "7-1")))
+    (let* ((wt (concat git "/worktrees/7-1/"))
+           (real (symbol-function 'drgnx-job-worktree--device))
+           (renamed nil)
+           (real-rename (symbol-function 'rename-file)))
+      (write-region "x\n" nil (concat wt "odd") nil 'silent)
+      (make-directory (concat wt "logs/sub"))
+      (write-region "y\n" nil (concat wt "logs/sub/f") nil 'silent)
+      (write-region "z\n" nil (concat wt "MERGE_HEAD") nil 'silent)
+      (cl-letf (((symbol-function 'drgnx-job-worktree--device)
+                 (lambda (file) (if (string-match-p "/\\(?:odd\\|sub\\)\\'" file) 'elsewhere (funcall real file))))
+                ((symbol-function 'rename-file)
+                 (lambda (from to &rest args) (push from renamed) (apply real-rename from to args))))
+        (let ((err (should-error (drgnx-job-worktree-scrub repo "7-1" "7" 1) :type 'drgnx-job-worktree-scrub-failed)))
+          (should (equal (nth 2 err) '("worktrees/7-1/logs/sub" "worktrees/7-1/odd")))   ; not scrubbed
+          (should (equal (nth 3 err) '("worktrees/7-1/MERGE_HEAD")))))                  ; scrubbed
+      (should-not (cl-some (lambda (f) (string-match-p "/odd\\'" f)) renamed))
+      (should (equal (with-temp-buffer (insert-file-contents (concat wt "odd")) (buffer-string)) "x\n"))
+      (should-not (file-attributes (concat wt "MERGE_HEAD")))
+      (should (file-regular-p (concat wt "logs/HEAD")))
+      ;; the trash is removed though the scrub failed
+      (should (drgnx-job-worktree-test--wait-gone git)))))
 
 ;;; job-worktree-test.el ends here

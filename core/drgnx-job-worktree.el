@@ -251,10 +251,16 @@ repository.  Data only: nothing is made or checked on disk."
 ORIG_HEAD, the three pins, and COMMIT_EDITMSG, which each commit writes (a link there is what is dangerous).  Besides
 these, `logs/HEAD' (a regular file) and `refs/' (an empty directory, as `git worktree add' makes it).")
 
+(define-error 'drgnx-job-worktree-scrub-failed "A task's worktree could not be scrubbed")
+
 (defun drgnx-job-worktree--kind (file)
   "FILE's type, from lstat (a link is never followed): ?- a regular file, ?d a directory, ?l a link, another
 character for a FIFO, socket or device; nil when there is nothing."
   (let ((a (file-attributes file))) (and a (aref (file-attribute-modes a) 0))))
+
+(defun drgnx-job-worktree--device (file)
+  "The device FILE is on, from lstat, or nil."
+  (let ((a (file-attributes file))) (and a (file-attribute-device-number a))))
 
 (defun drgnx-job-worktree-scrub (repo name id n)
   "Remove the git state task N of job ID left in its worktree NAME of REPO that the user's git would trust; the
@@ -266,63 +272,87 @@ place of files git writes by opening them (`COMMIT_EDITMSG' → the main config)
 - In `refs/heads/job/ID-N/' and `logs/refs/heads/job/ID-N/': only `work', a regular file.
 It runs no git and follows no link: types come from lstat, and what goes is renamed — a link itself — into a
 directory the agent cannot write (`.drgnx-scrub-*' in REPO's `.git'), which `rm -rf' (it never follows a link) then
-removes in a process of its own.  HEAD is read only once moved there: a FIFO in its place never blocks the hub.
-Called while the agent's sandbox lives, the agent can plant again after it; called after the sandbox has exited, it
-leaves the state clean."
+removes in a process of its own, even when the scrub fails.  HEAD is read only once moved there and only when it
+is a regular file: a FIFO in its place never blocks the hub.  An entry on another device than the trash (a btrfs
+subvolume the agent made) is never renamed — `rename-file' would copy it, opening its files — and is left: after the
+rest is done, the scrub signals `drgnx-job-worktree-scrub-failed' with (MESSAGE FAILED REMOVED), the names left and
+those removed.  Called while the agent's sandbox lives, the agent can plant again after it; called after the sandbox
+has exited, it leaves the state clean."
   (drgnx-job-worktree--check-task id n)
   (drgnx-job-worktree--check-name name)
   (let* ((file-name-handler-alist nil)
          (git (or (drgnx-job-snapshot-common-dir repo) (error "%s is not a git repository" repo)))
          (wt (format "worktrees/%s/" name))
          (head (concat "ref: refs/heads/" (drgnx-job-worktree-branch id n)))
-         (trash nil) (count 0) (out nil)
+         (trash nil) (count 0) (out nil) (failed nil)
          (kind (lambda (rel) (drgnx-job-worktree--kind (concat git "/" rel))))
          (entries (lambda (rel) (ignore-errors (directory-files (concat git "/" rel) nil
                                                                 directory-files-no-dot-files-regexp t))))
-         ;; REL renamed into the trash (never followed); its place there
+         ;; PATH and its directory on the trash's device: a rename stays a rename (across devices, `rename-file'
+         ;; would copy and delete, opening what it copies)
+         (same-dev (lambda (path)
+                     (let ((d (drgnx-job-worktree--device trash)))
+                       (and d (equal (drgnx-job-worktree--device path) d)
+                            (equal (drgnx-job-worktree--device (file-name-directory (directory-file-name path))) d)))))
+         ;; REL renamed into the trash (never followed): its place there; nil, REL failed, when on another device
          (move (lambda (rel)
                  (unless trash (setq trash (make-temp-file (concat git "/.drgnx-scrub-") t)))
-                 (let ((to (format "%s/%d" trash (setq count (1+ count)))))
-                   (rename-file (concat git "/" rel) to)
-                   to)))
-         (drop (lambda (rel) (funcall move rel) (push rel out))))
-    (when (eq (funcall kind wt) ?d)
-      (dolist (e (funcall entries wt))
-        (let ((rel (concat wt e)))
-          (cond ((equal e "HEAD"))
-                ((member e drgnx-job-worktree--kept) (unless (eq (funcall kind rel) ?-) (funcall drop rel)))
-                ((and (equal e "refs") (eq (funcall kind rel) ?d) (null (funcall entries rel))))
-                ((and (equal e "logs") (eq (funcall kind rel) ?d))
-                 ;; never descend where the agent writes: the whole of logs/ goes, logs/HEAD comes back if regular
-                 (let ((moved (funcall move rel)))
-                   (make-directory (concat git "/" rel))
-                   (if (not (eq (drgnx-job-worktree--kind moved) ?d))
-                       (push rel out)
-                     (dolist (l (directory-files moved nil directory-files-no-dot-files-regexp t))
-                       (if (and (equal l "HEAD") (eq (drgnx-job-worktree--kind (concat moved "/HEAD")) ?-))
-                           (rename-file (concat moved "/HEAD") (concat git "/" rel "/HEAD"))
-                         (push (concat rel "/" l) out))))))
-                (t (funcall drop rel)))))
-      ;; HEAD: moved out first, read there, written anew (O_EXCL: never through a link)
-      (let* ((rel (concat wt "HEAD"))
-             (moved (and (funcall kind rel) (funcall move rel)))
-             (text (and moved (eq (drgnx-job-worktree--kind moved) ?-)
-                        (with-temp-buffer (insert-file-contents moved nil 0 256)
-                                          (string-trim (buffer-substring (point-min) (line-end-position))))))
-             (ok (and text (or (equal text head)
-                               (string-match-p "\\`\\(?:[0-9a-f]\\{40\\}\\|[0-9a-f]\\{64\\}\\)\\'" text)))))
-        (unless ok (push rel out))
-        (let ((coding-system-for-write 'utf-8-unix))
-          (write-region (concat (if ok text head) "\n") nil (concat git "/" rel) nil 'silent nil 'excl))))
-    (dolist (dir (list (format "refs/heads/job/%s-%d/" id n) (format "logs/refs/heads/job/%s-%d/" id n)))
-      (when (eq (funcall kind dir) ?d)
-        (dolist (e (funcall entries dir))
-          (unless (and (equal e "work") (eq (funcall kind (concat dir e)) ?-))
-            (funcall drop (concat dir e))))))
-    (when trash
-      (condition-case nil (drgnx-job-worktree--run git (list "rm" "-rf" "--" trash) nil #'ignore)
-        (error nil)))                   ; left: a directory the agent cannot write, removed next time by hand
-    (nreverse out)))
+                 (let ((from (concat git "/" rel)))
+                   (if (not (funcall same-dev from))
+                       (progn (push rel failed) nil)
+                     (let ((to (format "%s/%d" trash (setq count (1+ count)))))
+                       (rename-file from to)
+                       to)))))
+         (drop (lambda (rel) (when (funcall move rel) (push rel out)))))
+    (unwind-protect
+        (progn
+          (when (eq (funcall kind wt) ?d)
+            (dolist (e (funcall entries wt))
+              (let ((rel (concat wt e)))
+                (cond ((equal e "HEAD"))
+                      ((member e drgnx-job-worktree--kept) (unless (eq (funcall kind rel) ?-) (funcall drop rel)))
+                      ((and (equal e "refs") (eq (funcall kind rel) ?d) (null (funcall entries rel))))
+                      ((and (equal e "logs") (eq (funcall kind rel) ?d))
+                       ;; never descend where the agent writes: the whole of logs/ goes, logs/HEAD comes back if regular
+                       (when-let* ((moved (funcall move rel)))
+                         (make-directory (concat git "/" rel))
+                         (if (not (eq (drgnx-job-worktree--kind moved) ?d))
+                             (push rel out)
+                           (dolist (l (directory-files moved nil directory-files-no-dot-files-regexp t))
+                             (let ((path (concat moved "/" l)) (r (concat rel "/" l)))
+                               (cond ((not (funcall same-dev path)) (push r failed))
+                                     ((and (equal l "HEAD") (eq (drgnx-job-worktree--kind path) ?-))
+                                      (rename-file path (concat git "/" r)))
+                                     (t (push r out))))))))
+                      (t (funcall drop rel)))))
+            ;; HEAD: moved out first, read there, written anew (O_EXCL: never through a link)
+            (let* ((rel (concat wt "HEAD"))
+                   (present (funcall kind rel))
+                   (moved (and present (funcall move rel))))
+              (unless (and present (not moved))         ; on another device: failed, left as it is
+                (let* ((text (and moved (eq (drgnx-job-worktree--kind moved) ?-)
+                                  (with-temp-buffer (insert-file-contents moved nil 0 256)
+                                                    (string-trim (buffer-substring (point-min) (line-end-position))))))
+                       (ok (and text (or (equal text head)
+                                         (string-match-p "\\`\\(?:[0-9a-f]\\{40\\}\\|[0-9a-f]\\{64\\}\\)\\'" text)))))
+                  (unless ok (push rel out))
+                  (let ((coding-system-for-write 'utf-8-unix))
+                    (write-region (concat (if ok text head) "\n") nil (concat git "/" rel) nil 'silent nil 'excl))))))
+          (dolist (dir (list (format "refs/heads/job/%s-%d/" id n) (format "logs/refs/heads/job/%s-%d/" id n)))
+            (when (eq (funcall kind dir) ?d)
+              (dolist (e (funcall entries dir))
+                (unless (and (equal e "work") (eq (funcall kind (concat dir e)) ?-))
+                  (funcall drop (concat dir e))))))
+          (when failed
+            (setq failed (sort failed #'string<))
+            (signal 'drgnx-job-worktree-scrub-failed
+                    (list (format "on another device, so not removed: %s" (string-join failed ", ")) failed
+                          (nreverse out))))
+          (nreverse out))
+      ;; always: the trash never stays in the user's .git (but where rm cannot start)
+      (when trash
+        (condition-case nil (drgnx-job-worktree--run git (list "rm" "-rf" "--" trash) nil #'ignore)
+          (error nil))))))
 
 (defun drgnx-job-worktree-check (repo id n base done &optional job)
   "Does task N of job ID's branch still descend from BASE (a branch)?  Asynchronous: DONE is called with two
