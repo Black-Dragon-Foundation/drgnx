@@ -10,7 +10,10 @@ here ever asks you a question; you trust a folder when you choose to.
 - drgnx's own folders: its checkout, its config dir (`~/.config/drgnx/`) and its packages dir, and the Lisp
   files Emacs itself came with.
 - The folders you trusted with **Trust This Folder**. They are kept in `~/.local/state/drgnx/trusted-folders.eld`,
-  so they stay trusted in the next session.
+  so they stay trusted in the next session. A file drgnx cannot use trusts none of its folders: one that cannot be
+  read, one with a mistake (`:folders` must be a list of folder names), and one a newer drgnx wrote. Trust This
+  Folder copies a file it cannot use aside (`trusted-folders.eld.bak-…`, the newest three kept) before it writes a
+  new one, and refuses to change a newer drgnx's file. Two Emacs sessions trusting folders at once both keep theirs.
 - Anything you put in Emacs's own `trusted-content` option. drgnx only adds to it; `:all` trusts everything.
 
 Every other folder is untrusted, including the projects you open, until you trust them.

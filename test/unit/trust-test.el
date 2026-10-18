@@ -171,16 +171,121 @@ nobody trusted.  Buffers BODY opens are killed after it."
           (delete-file f)))
       (should (drgnx-trust-folder dir)))))                       ; a project folder is fine
 
-(ert-deftest drgnx-trust/an-unreadable-folders-file-is-kept-aside ()
+;;;; trusted-folders.eld: a file drgnx cannot use trusts nothing, and is never lost
+
+(defun drgnx-trust-test--put (text)
+  "Make trusted-folders.eld hold TEXT; its path."
+  (let ((file (drgnx-trust-folders-file)))
+    (make-directory (file-name-directory file) t)
+    (with-temp-file file (insert text))
+    file))
+
+(defun drgnx-trust-test--bytes (file)
+  (with-temp-buffer (set-buffer-multibyte nil) (insert-file-contents-literally file) (buffer-string)))
+
+(defun drgnx-trust-test--backups (file)
+  (directory-files (file-name-directory file) t (concat "\\`" (regexp-quote (file-name-nondirectory file)) "\\.bak")))
+
+(defun drgnx-trust-test--trusts-from-file-p (entry)
+  "Does a fresh start (the mode switched on with an empty `trusted-content') trust ENTRY?"
+  (setq trusted-content nil)
+  (drgnx-trust-mode 1)
+  (and (member entry trusted-content) t))
+
+(ert-deftest drgnx-trust/an-unreadable-file-trusts-nothing-and-is-backed-up-on-write ()
   (drgnx-trust-test--with (dir)
-    (let ((file (drgnx-trust-folders-file)) (inhibit-message t))
-      (make-directory (file-name-directory file) t)
-      (with-temp-file file (insert "(:version 1 :folders (\"/x/\""))     ; cut short
+    (let* ((text "(:version 1 :folders (\"/x/\" \"/y/\"") ; cut short
+           (file (drgnx-trust-test--put text)) (inhibit-message t))
       (should-not (drgnx-trust-folders))
+      (should-not (drgnx-trust-test--trusts-from-file-p "/x/"))
       (drgnx-trust-folder dir)
       (should (equal (drgnx-trust-folders) (list (drgnx-trust--entry dir))))
-      (should (equal (with-temp-buffer (insert-file-contents (concat file ".bak")) (buffer-string))
-                     "(:version 1 :folders (\"/x/\"")))))
+      (should-not (drgnx-trust-test--trusts-from-file-p "/x/"))
+      (let ((backups (drgnx-trust-test--backups file)))
+        (should (= (length backups) 1))
+        (should (string-match-p "\\.bak-[0-9]\\{8\\}-" (car backups)))
+        (should (equal (drgnx-trust-test--bytes (car backups)) text)))
+      (should (string-prefix-p ";; drgnx: the folders you trusted" (drgnx-trust-test--bytes file))))))
+
+(ert-deftest drgnx-trust/a-mistake-or-a-newer-file-trusts-nothing ()
+  (drgnx-trust-test--with (_dir)
+    (dolist (text '("(:version 1 :folders (\"/x/\" x))"   ; one entry is not a string
+                    "(:version 1 :folders \"/x/\")"        ; not a list
+                    "(:version 1 :folders (\"/x/\" . \"/y/\"))"
+                    "(\"/x/\")"                            ; not a plist
+                    "(:version 1)"                         ; no :folders
+                    "(:version \"1\" :folders (\"/x/\"))"
+                    "(:version 2 :folders (\"/x/\"))"))    ; a newer drgnx's
+      (drgnx-trust-test--put text)
+      (should-not (drgnx-trust-folders))
+      (should-not (drgnx-trust-test--trusts-from-file-p "/x/")))
+    ;; what older drgnx wrote, and a hand-written file with no version, keep working
+    (dolist (text '(";; drgnx: the folders you trusted (Trust This Folder; docs/guide/security.md)
+(:version 1 :folders (\"/x/\" \"/y/\"))\n"
+                    "(:folders (\"/x/\" \"/y/\"))"))
+      (drgnx-trust-test--put text)
+      (should (equal (drgnx-trust-folders) '("/x/" "/y/")))
+      (should (drgnx-trust-test--trusts-from-file-p "/x/")))))
+
+(ert-deftest drgnx-trust/a-newer-file-is-never-overwritten ()
+  (drgnx-trust-test--with (dir)
+    (let* ((text "(:version 2 :folders (\"/x/\") :except (\"/x/secret/\"))")
+           (file (drgnx-trust-test--put text)) (inhibit-message t))
+      (should-error (drgnx-trust-folder dir) :type 'user-error)
+      (should-error (drgnx-trust-untrust-folder "/x/") :type 'user-error)
+      (should (equal (drgnx-trust-test--bytes file) text))
+      (should-not (drgnx-trust-test--backups file))
+      (should-not (member (drgnx-trust--entry dir) trusted-content)))))
+
+(ert-deftest drgnx-trust/a-mistake-is-backed-up-and-unknown-keys-are-kept ()
+  (drgnx-trust-test--with (dir)
+    (let* ((text "(:version 1 :folders (\"/x/\" x))") (file (drgnx-trust-test--put text)) (inhibit-message t)
+           (e (drgnx-trust--entry dir)))
+      (drgnx-trust-folder dir)
+      (should (equal (drgnx-trust-folders) (list e)))
+      (should (equal (mapcar #'drgnx-trust-test--bytes (drgnx-trust-test--backups file)) (list text)))
+      ;; a key this drgnx does not know survives Trust and Untrust
+      (drgnx-trust-test--put "(:version 1 :folders (\"/x/\") :note \"mine\")")
+      (drgnx-trust-folder dir)
+      (drgnx-trust-untrust-folder "/x/")
+      (let ((data (car (read-from-string (drgnx-trust-test--bytes file)))))
+        (should (equal (plist-get data :note) "mine"))
+        (should (equal (plist-get data :folders) (list e)))))))
+
+(defun drgnx-trust-test--children (forms)
+  "Run each of FORMS (strings) in a child `emacs --batch' with this run's environment and load path, started
+together; wait for all under a 30 s bound.  Fails the test unless every child exits 0."
+  (let* ((at (+ (float-time) 2)) (bufs nil)
+         (procs (mapcar
+                 (lambda (form)
+                   (let ((b (generate-new-buffer " *trust-child*" t)))
+                     (push b bufs)
+                     (make-process
+                      :name "trust-child" :buffer b :noquery t
+                      :command (list (expand-file-name invocation-name invocation-directory) "--batch" "-Q"
+                                     "--eval" (format "(setq load-path '%S load-prefer-newer t)" load-path)
+                                     "--eval" "(require 'drgnx-trust)"
+                                     "--eval" (format "(progn (sleep-for (max 0 (- %f (float-time)))) %s)" at form)))))
+                 forms))
+         (deadline (+ (float-time) 30)))
+    (unwind-protect
+        (progn
+          (while (and (cl-some #'process-live-p procs) (< (float-time) deadline)) (accept-process-output nil 0.05))
+          (dolist (p procs) (should (not (process-live-p p))))
+          (cl-loop for p in procs for b in (reverse bufs)
+                   do (should (equal (list (process-exit-status p) (with-current-buffer b (buffer-string)))
+                                     (list 0 (with-current-buffer b (buffer-string)))))))
+      (mapc #'delete-process procs)
+      (mapc #'kill-buffer bufs))))
+
+(ert-deftest drgnx-trust/two-trusts-at-once-both-kept ()
+  (drgnx-trust-test--with (dir)
+    (let* ((dirs (lambda (tag) (mapcar (lambda (i) (format "%s%s-%d/" dir tag i)) (number-sequence 1 15))))
+           (form (lambda (tag) (format "(let ((inhibit-message t)) (dolist (d '%S) (drgnx-trust-folder d)))"
+                                       (funcall dirs tag)))))
+      (drgnx-trust-test--children (list (funcall form "a") (funcall form "b")))
+      (should (equal (sort (copy-sequence (drgnx-trust-folders)) #'string<)
+                     (sort (mapcar #'drgnx-trust--entry (append (funcall dirs "a") (funcall dirs "b"))) #'string<))))))
 
 (ert-deftest drgnx-trust/the-user-settings-are-kept ()
   (drgnx-trust-test--with (_dir)
