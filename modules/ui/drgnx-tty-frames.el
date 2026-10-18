@@ -14,7 +14,7 @@
 ;;   that identity is kept (`drgnx-tty-frames--cache'); the rest is read from the frame on every call.  The last
 ;;   result is in the terminal parameter `drgnx-tty-caps'.
 ;; - Keys: each terminal decodes every modifyOtherKeys key (Emacs decodes only a few, so C-S-p would type text),
-;;   and it is asked for where it arrives: xterm, WezTerm, Ghostty; tmux only with its extended-keys on.  The
+;;   and it is asked for where it arrives: xterm, WezTerm; tmux only with its extended-keys on.  The
 ;;   kitty keyboard protocol is ui/terminal-keys' (it needs the kkp package); this works without it.
 ;; - The mouse: `xterm-mouse-mode' (SGR reports) on while `drgnx-tty-mouse' is t, started from a terminal frame's
 ;;   setup, never for a graphical frame; Toggle Mouse in Terminal Windows.  The terminal's own selection is then
@@ -101,11 +101,10 @@ seconds at most; a later answer is taken off the input by Emacs's xterm.el.  Not
 (defun drgnx-tty-frames-mok-trusted-p (id)
   "Non-nil when a terminal of kind ID gets its chords by modifyOtherKeys.  tmux (its extended-keys decides) and
 a terminal drgnx does not know (Emacs's own request decides): yes.  A known terminal: its table row decides, and
-only a confirmed `:mok' counts.  Emacs's DA2 test also asks Alacritty, whose row has none, and Ghostty's is
-unconfirmed (and probably level 2 only): those get kkp."
-  (let ((row (and (not (eq id 'tmux)) (drgnx-tty-terminal id))))
-    (or (null row)
-        (and (plist-get row :mok) (not (memq :mok (plist-get row :unconfirmed)))))))
+only a confirmed `:mok' counts (`drgnx-tty-mok-confirmed-p', which the ranking and the recommendation use too).
+Emacs's DA2 test also asks Alacritty, whose row has none, and Ghostty's is unconfirmed (and probably level 2
+only): those get kkp."
+  (or (eq id 'tmux) (null (drgnx-tty-terminal id)) (drgnx-tty-mok-confirmed-p id)))
 
 (defun drgnx-tty-frames--keys (term)
   "How TERM's keys arrive: `kkp' when the ui/terminal-keys module turned it on (terminal parameter

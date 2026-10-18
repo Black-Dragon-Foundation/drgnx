@@ -87,6 +87,25 @@ strings; the real frame is not touched), an empty cache and no terminal to ask: 
       (should (equal (plist-get caps :version) "20240203")))
     (should (= asked 1))))
 
+(ert-deftest drgnx-tty-frames/every-terminal-that-gets-kkp-is-ranked-and-described-so ()
+  ;; one predicate (a confirmed :mok) decides which known terminals get modifyOtherKeys; every other capable one
+  ;; gets kkp, where C-g cannot stop busy Lisp.  The ranking, the onboarding note and the recommendation agree.
+  (require 'drgnx-tty-recommend)
+  (let* ((case-fold-search nil)
+         (note (drgnx-tty-onboard-note))
+         (limited (and (string-match "In \\([^.]*\\), C-g cannot stop busy Lisp" note) (match-string 1 note)))
+         (kkp-seen nil))
+    (should limited)
+    (dolist (id drgnx-tty-best-order)
+      (let ((trusted (drgnx-tty-frames-mok-trusted-p id))
+            (name (plist-get (drgnx-tty-terminal id) :name)))
+        (should (eq (and trusted t) (and (drgnx-tty-mok-confirmed-p id) t)))
+        (if trusted (should-not kkp-seen) (setq kkp-seen t))           ; modifyOtherKeys ones first
+        (should (eq (and trusted t) (and (drgnx-tty--keeps-c-g-p id) t)))  ; the recommendation's caveat
+        (when (string-match-p (regexp-quote name) note)                ; among the terminals the note names
+          (should (eq (not trusted) (and (string-match-p (regexp-quote name) limited) t))))))
+    (should-not (drgnx-tty-frames-mok-trusted-p 'ghostty))))
+
 (ert-deftest drgnx-tty-frames/the-report-lists-what-this-terminal-cannot-send ()
   (drgnx-tty-frames-test--state
    (let* ((vscode (alist-get 'vscode (drgnx-keys-load-profiles (expand-file-name "keys" drgnx-dir))))

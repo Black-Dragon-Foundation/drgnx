@@ -247,15 +247,25 @@ terminal keeps for itself (Emacs notation); :fixes, per missing capability, the 
 \"none: \" and why.  :unconfirmed names the cells no official page drgnx read backs (secondary sources or
 general knowledge); docs/guide/terminal.md marks them.")
 
-(defconst drgnx-tty-best-order '(wezterm ghostty xterm foot kitty alacritty)
-  "The terminals that can send every key, best first: those with modifyOtherKeys (C-g keeps stopping busy Lisp
-there) before those with only the kitty keyboard protocol (kkp: C-g stops only programs Emacs waits for).  The
-one order for the recommender (`drgnx-tty-capable-terminals') and for `drgnx-tty-onboard-note'.  If foot's row
-ever gains modifyOtherKeys it is already ahead of kitty.")
-
 (defun drgnx-tty-terminal (id)
   "The row of `drgnx-tty-terminals' for ID, nil for `unknown'."
   (seq-find (lambda (row) (eq (plist-get row :id) id)) drgnx-tty-terminals))
+
+(defun drgnx-tty-mok-confirmed-p (id)
+  "Non-nil when the row of terminal ID has modifyOtherKeys and it is not `:unconfirmed' (WezTerm, xterm).  The one
+test of whether a known terminal gets its chords by modifyOtherKeys, where C-g keeps stopping busy Lisp; every
+other capable terminal (Ghostty, whose modifyOtherKeys is unconfirmed, foot, kitty, Alacritty) gets kkp."
+  (let ((row (drgnx-tty-terminal id)))
+    (and (plist-get row :mok) (not (memq :mok (plist-get row :unconfirmed))) t)))
+
+(defconst drgnx-tty-best-order
+  (let ((order '(wezterm ghostty xterm foot kitty alacritty)))
+    (append (seq-filter #'drgnx-tty-mok-confirmed-p order) (seq-remove #'drgnx-tty-mok-confirmed-p order)))
+  "The terminals that can send every key, best first: those with confirmed modifyOtherKeys
+\(`drgnx-tty-mok-confirmed-p': C-g keeps stopping busy Lisp there) before those that get the kitty keyboard
+protocol (kkp: C-g stops only programs Emacs waits for); within each, in the order written here.  So WezTerm,
+xterm, then Ghostty, foot, kitty, Alacritty.  The one order for the recommender (`drgnx-tty-capable-terminals')
+and for `drgnx-tty-onboard-note'.  A row whose modifyOtherKeys becomes confirmed moves up by itself.")
 
 ;;;; Which keys a terminal can send
 
@@ -496,7 +506,7 @@ works, what does not, and the lines that fix it."
                            (delq nil (mapcar #'drgnx-tty-terminal drgnx-tty-best-order))))
          (names (mapcar (lambda (row) (plist-get row :name)) rows))
          (kkp-only (mapcar (lambda (row) (plist-get row :name))
-                           (seq-filter (lambda (row) (not (plist-get row :mok))) rows)))
+                           (seq-remove (lambda (row) (drgnx-tty-mok-confirmed-p (plist-get row :id))) rows)))
          (best (format "drgnx works best in %s: they send \
 C-S- chords and the other shortcuts, and copy to your computer's clipboard, over SSH as well (OSC 52).%s Each \
 keeps some C-S- chords for itself; docs/guide/terminal.md gives the line that frees them."

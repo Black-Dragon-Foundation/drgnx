@@ -136,12 +136,12 @@ NAMES may be empty.  A fixed set of variables is cleared: display, SSH."
         (should (string-match-p "Alt\\+Shift or F6 then the key" (plist-get rec :text)))))
     (drgnx-tty-rec-test--with-path nil
       (should (equal (plist-get (drgnx-tty-recommendation '(:keys legacy) (drgnx-tty-rec-test--os "arch")) :install)
-                     '((wezterm . "sudo pacman -S wezterm") (ghostty . "sudo pacman -S ghostty")))))
+                     '((wezterm . "sudo pacman -S wezterm") (xterm . "sudo pacman -S xterm")))))
     ;; only download pages for a distribution that ships none: still two
     (drgnx-tty-rec-test--with-path nil
       (should (equal (mapcar #'car (plist-get (drgnx-tty-recommendation '(:keys legacy) (drgnx-tty-rec-test--os "unknown"))
                                               :install))
-                     '(wezterm ghostty))))))
+                     '(wezterm xterm))))))
 
 (ert-deftest drgnx-tty-recommend/capable-gets-none ()
   (drgnx-tty-rec-test--with-path '("kitty")
@@ -329,10 +329,10 @@ NAMES may be empty.  A fixed set of variables is cleared: display, SSH."
       (let ((rec (drgnx-tty-recommendation '(:keys legacy) os)))
         (should (eq (car (car (plist-get rec :install))) 'xterm))
         (should (string-match-p "xterm: no clipboard copy over SSH, 256 colours" (plist-get rec :text)))))
-    ;; no caveat where xterm is not recommended
+    ;; no caveat where xterm is not recommended (macOS: no xterm cask)
     (drgnx-tty-rec-test--with-path nil
       (should-not (string-match-p "256 colours"
-                                  (plist-get (drgnx-tty-recommendation '(:keys legacy) (drgnx-tty-rec-test--os "arch"))
+                                  (plist-get (drgnx-tty-recommendation '(:keys legacy) drgnx-tty-rec-test--macos)
                                              :text)))))
   ;; `auto' picking xterm: the caller can say it
   (drgnx-tty-rec-test--with-path '("xterm")

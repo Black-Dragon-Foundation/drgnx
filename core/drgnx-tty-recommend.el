@@ -8,9 +8,9 @@
 ;; only: nothing here runs an installer, `sudo', a package manager or a terminal; it looks at PATH and, on
 ;; macOS, at the application folders, and reads /etc/os-release.  So it is safe in batch and never blocks.
 ;;
-;; - `drgnx-tty-capable-terminals': the terminals, best first.  modifyOtherKeys ones come first, because
-;;   there C-g keeps stopping busy Lisp; under the kitty keyboard protocol (kitty, foot) the terminal sends C-g
-;;   as an escape sequence, which Emacs reads only between commands.
+;; - `drgnx-tty-capable-terminals': the terminals, best first.  Confirmed modifyOtherKeys ones (WezTerm, xterm)
+;;   come first, because there C-g keeps stopping busy Lisp; under the kitty keyboard protocol (Ghostty, foot,
+;;   kitty, Alacritty) the terminal sends C-g as an escape sequence, which Emacs reads only between commands.
 ;; - `drgnx-tty-os', `drgnx-tty-install-command', `drgnx-tty-installed-capable', `drgnx-tty-recommendation'.
 ;; - `drgnx-tty-open-in' and `drgnx-tty-capable-terminal-argv': an opt-in way to let `drgnx -t' open in one.
 ;; See docs/guide/terminal.md.
@@ -149,8 +149,9 @@ Never runs it."
   (plist-get (alist-get terminal drgnx-tty-capable-terminals) :name))
 
 (defun drgnx-tty--keeps-c-g-p (terminal)
-  "Non-nil when TERMINAL has modifyOtherKeys (so C-g stops busy Lisp), by its row in `drgnx-tty-terminals'."
-  (plist-get (drgnx-tty-terminal terminal) :mok))
+  "Non-nil when TERMINAL gets its chords by modifyOtherKeys (so C-g stops busy Lisp): its row's modifyOtherKeys
+is confirmed (`drgnx-tty-mok-confirmed-p').  Ghostty's is not: it gets kkp."
+  (drgnx-tty-mok-confirmed-p terminal))
 
 (defun drgnx-tty-terminal-caveat (terminal)
   "What TERMINAL lacks that the others have, from its row in `drgnx-tty-terminals', as one phrase such as

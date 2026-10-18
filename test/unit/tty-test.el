@@ -403,7 +403,7 @@ cat %s\n"
       (should (equal names '("WezTerm" "Ghostty" "foot" "kitty" "Alacritty")))
       (should (string-match-p (regexp-quote "works best in WezTerm, Ghostty, foot, kitty, or Alacritty") note)))
     ;; the kitty keyboard protocol terminals are named with the C-g limit; the others are not
-    (should (string-match-p "In foot, kitty and Alacritty, C-g cannot stop busy Lisp" note))
+    (should (string-match-p "In Ghostty, foot, kitty and Alacritty, C-g cannot stop busy Lisp" note))
     (should (string-match-p "keeps some" note))
     (should-not (string-match-p "\n\n" note)))
   (should (string-match-p "keeps 62 shortcuts for itself" (drgnx-tty-onboard-note 'kitty)))

@@ -20,8 +20,9 @@ keeps for itself, and the line that fixes what is missing. [What a terminal wind
 lists what only a graphical window has. `drgnx doctor` run in a terminal tells you which way you are on and what would
 move you up ([Check this terminal](#check-this-terminal)).
 
-**Works best:** WezTerm, Ghostty, foot, kitty and Alacritty (modifyOtherKeys ones first: `C-g` keeps stopping busy Lisp
-there, see [Keys](#keys)). They send `C-S-` chords and the other shortcuts,
+**Works best:** WezTerm, Ghostty, foot, kitty and Alacritty (WezTerm first: it has modifyOtherKeys, where `C-g` keeps
+stopping busy Lisp; the others get the kitty keyboard protocol, where it cannot, see [Keys](#keys)). They send `C-S-`
+chords and the other shortcuts,
 and copy to the clipboard, over SSH as well. Each keeps some `C-S-` chords for itself; [the fixes](#the-fixes) free
 them.
 
@@ -162,10 +163,11 @@ A terminal can send `C-S-` chords and the other shortcuts in three ways. They ar
 the best one the window has:
 
 1. **A GUI frame** (`drgnx` opens one): every key, no protocol needed.
-2. **A terminal with a key protocol.** modifyOtherKeys is preferred: **WezTerm**, **Ghostty** and **xterm** have it,
-   and `C-g` keeps stopping busy Lisp there (WezTerm needs no setting for it). The kitty keyboard protocol is used
-   only where it is the only protocol, such as **kitty** and **foot**; it works, but `C-g` cannot stop busy Lisp
-   there (see [Keys](#keys)). foot's modifyOtherKeys support is unconfirmed, so it is counted with kitty.
+2. **A terminal with a key protocol.** modifyOtherKeys is preferred: **WezTerm** and **xterm** have it, and `C-g`
+   keeps stopping busy Lisp there (WezTerm needs no setting for it). The kitty keyboard protocol is used where
+   modifyOtherKeys is missing or unconfirmed: **Ghostty**, **foot**, **kitty** and **Alacritty**; it works, but `C-g`
+   cannot stop busy Lisp there (see [Keys](#keys)). Ghostty's and foot's modifyOtherKeys support is unconfirmed, so
+   they are counted with kitty.
 3. **A legacy terminal** (GNOME Terminal, Ptyxis, Terminal.app, the Linux console, tmux without `extended-keys`):
    hold **Alt+Shift** with the key, or press **F6** and then the key (the fallback layer, see
    [Legacy terminals](#legacy-terminals-altshift-and-f6)), or use F1 and the palette.
@@ -178,8 +180,8 @@ command for your system, for the first two. **drgnx never installs anything**: i
 | Terminal | Fedora | Debian, Ubuntu | Arch | macOS |
 |---|---|---|---|---|
 | WezTerm | [download](https://wezterm.org/installation.html) | [download](https://wezterm.org/installation.html) | `sudo pacman -S wezterm` | `brew install --cask wezterm` |
-| Ghostty | [download](https://ghostty.org/docs/install/binary) | [download](https://ghostty.org/docs/install/binary) | `sudo pacman -S ghostty` | `brew install --cask ghostty` |
 | xterm | `sudo dnf install xterm` | `sudo apt install xterm` | `sudo pacman -S xterm` | none |
+| Ghostty | [download](https://ghostty.org/docs/install/binary) | [download](https://ghostty.org/docs/install/binary) | `sudo pacman -S ghostty` | `brew install --cask ghostty` |
 | foot (Wayland) | `sudo dnf install foot` | `sudo apt install foot` | `sudo pacman -S foot` | none |
 | kitty | `sudo dnf install kitty` | `sudo apt install kitty` | `sudo pacman -S kitty` | `brew install --cask kitty` |
 | Alacritty | `sudo dnf install alacritty` | `sudo apt install alacritty` | `sudo pacman -S alacritty` | `brew install --cask alacritty` |
@@ -190,8 +192,8 @@ never suggested there. WezTerm and foot have Flatpaks on Flathub, but a Flatpak 
 sandbox, where drgnx is not, so drgnx does not suggest them.
 
 xterm is the last resort for looks: no clipboard copy over SSH and 256 colours (drgnx says so wherever it names xterm),
-but it has modifyOtherKeys, so it ranks first among the packages Fedora and Debian have. kitty, foot and Alacritty use
-the kitty keyboard protocol, so `C-g` cannot stop busy Lisp there.
+but it has modifyOtherKeys, so it ranks right after WezTerm, and first among the packages Fedora and Debian have.
+Ghostty, foot, kitty and Alacritty get the kitty keyboard protocol, so `C-g` cannot stop busy Lisp there.
 
 Other systems, and the RHEL clones (Rocky, Alma: kitty is only in EPEL) and Amazon Linux, get each terminal's download
 page. The commands were checked against the distributions' package indexes on 2026-10-18. A distribution derived from

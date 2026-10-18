@@ -3,10 +3,10 @@
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 
 ;;; Commentary:
-;; A plain terminal cannot send C-S-p, C-` or C-.: they need a key protocol.  modifyOtherKeys (xterm, WezTerm,
-;; Ghostty; tmux with extended-keys) is ui/terminal's (drgnx-tty-frames.el) and needs no package.  This module
-;; adds the kitty keyboard protocol (kkp), through MELPA's `kkp', for terminals that have kkp but not
-;; modifyOtherKeys: kitty, foot, Alacritty.
+;; A plain terminal cannot send C-S-p, C-` or C-.: they need a key protocol.  modifyOtherKeys (xterm, WezTerm;
+;; tmux with extended-keys) is ui/terminal's (drgnx-tty-frames.el) and needs no package.  This module adds the
+;; kitty keyboard protocol (kkp), through MELPA's `kkp', for terminals that have kkp but no confirmed
+;; modifyOtherKeys (`drgnx-tty-mok-confirmed-p'): kitty, foot, Alacritty, Ghostty.
 ;;
 ;; - modifyOtherKeys is preferred wherever it works (`drgnx-tty-keys--kkp-wanted-p'): with it C-g stays a plain
 ;;   byte, so it interrupts busy Lisp too.  Under kkp C-g is an escape sequence: it interrupts only while Emacs
@@ -40,8 +40,8 @@
 (defvar kkp-terminal-teardown-complete-hook)
 
 (defcustom drgnx-tty-use-kkp t
-  "Non-nil: terminals that have the kitty keyboard protocol but not modifyOtherKeys (kitty, foot, Alacritty)
-get kkp, so C-S- chords arrive; C-g there interrupts a program Emacs waits for, but not busy Lisp.
+  "Non-nil: terminals that have the kitty keyboard protocol but no confirmed modifyOtherKeys (kitty, foot,
+Alacritty, Ghostty) get kkp, so C-S- chords arrive; C-g there interrupts a program Emacs waits for, but not busy Lisp.
 Nil: kkp is never turned on; those terminals send plain keys (C-S-p arrives as C-p) and C-g always works.
 Takes effect for terminal windows opened afterwards."
   :type 'boolean :group 'drgnx)
@@ -138,7 +138,7 @@ capabilities and report say so."
   (global-kkp-mode 1))
 
 (drgnx-module-define 'ui/terminal-keys
-                     :doc "The kitty keyboard protocol (kkp) in terminals without modifyOtherKeys (kitty): C-S- chords."
+                     :doc "The kitty keyboard protocol (kkp) in terminals without confirmed modifyOtherKeys (kitty, Ghostty): C-S- chords."
                      :stage 'startup :packages '(kkp) :requires '(ui/terminal)
                      :setup #'drgnx-tty-keys--start)
 
