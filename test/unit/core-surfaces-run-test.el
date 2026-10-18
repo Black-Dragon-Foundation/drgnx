@@ -14,7 +14,7 @@
           (drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
           (drgnx-commands-problems nil)
           (drgnx-surfaces--usage nil) (drgnx-surfaces--usage-dirty nil)
-          (drgnx-surfaces--usage-saved nil) (drgnx-surfaces--usage-bad nil))
+          (drgnx-surfaces--usage-saved nil))
      (unwind-protect
          (progn
            (drgnx-command-define 'run-cmd :title "Run" :category "Test" :command #'drgnx-test--run-cmd)
@@ -131,8 +131,12 @@
      (drgnx-surfaces--usage-flush)
      (should (directory-files (file-name-directory file) nil "\\`command-usage\\.eld\\.bak-"))
      (let ((back (drgnx-surfaces--usage-read file)))
-       (should-not drgnx-surfaces--usage-bad)
        (should (equal (cdr (assq 'a-cmd back)) `(4 (,today . 1)))))
+     ;; A second write does not back the (now clean) file up again.
+     (drgnx-surfaces--count-run 'run-cmd)
+     (setq drgnx-surfaces--usage-saved nil)
+     (drgnx-surfaces--usage-flush)
+     (should (= 1 (length (directory-files (file-name-directory file) nil "\\`command-usage\\.eld\\.bak-"))))
      ;; No temp files left behind.
      (should-not (directory-files (file-name-directory file) nil "\\`command-usage\\.eld\\.[^b]")))))
 
@@ -157,5 +161,74 @@
      (drgnx-surfaces--usage-flush-at-exit)
      (should-not (drgnx-timer-active-p 'surfaces-usage))
      (should (= 1 (cadr (assq 'run-cmd (drgnx-surfaces--usage-read file))))))))
+
+;; The flush goes through the file layer (Task 20): the lock is taken without waiting, the file is private.
+(defun drgnx-test--usage-hold (file)
+  "Make FILE's lock directory, as another drgnx holds it right now; the lock's path."
+  (let ((lock (expand-file-name (concat "." (file-name-nondirectory file) ".lock") (file-name-directory file))))
+    (make-directory (file-name-directory file) t)
+    (make-directory lock)
+    (with-temp-file (expand-file-name "owner" lock)
+      (prin1 (list :pid 1 :host "another-host.invalid" :started 0.0 :time (float-time)) (current-buffer)))
+    lock))
+
+(ert-deftest drgnx-surfaces/a-busy-lock-keeps-it-dirty-and-retries ()
+  (drgnx-test--with-usage
+   (let* ((file (drgnx-shortcuts-usage-file)) (lock (drgnx-test--usage-hold file)) (said nil))
+     (drgnx-surfaces--count-run 'run-cmd)
+     (drgnx-timer-cancel 'surfaces-usage)
+     (cl-letf (((symbol-function 'message) (lambda (&rest a) (push a said))))
+       (drgnx-surfaces--usage-flush))                         ; busy: no signal, no message, no wait
+     (should-not said)
+     (should drgnx-surfaces--usage-dirty)                   ; still to write
+     (should (drgnx-timer-active-p 'surfaces-usage))        ; and re-armed
+     (should-not (file-exists-p file))
+     ;; the holder lets go: the retry writes
+     (delete-directory lock t)
+     (setq drgnx-surfaces--usage-saved nil)
+     (drgnx-surfaces--usage-flush)
+     (should-not drgnx-surfaces--usage-dirty)
+     (should (= 1 (cadr (assq 'run-cmd (drgnx-surfaces--usage-read file))))))))
+
+(ert-deftest drgnx-surfaces/a-timer-flush-waits-for-nothing-and-the-exit-flush-waits-a-second ()
+  (drgnx-test--with-usage
+   (let ((timeouts nil))
+     (cl-letf (((symbol-function 'drgnx-file-update)
+                (lambda (&rest args) (push (plist-get (cddr args) :timeout) timeouts) nil)))
+       (drgnx-surfaces--count-run 'run-cmd)
+       (drgnx-surfaces--usage-flush)
+       (drgnx-surfaces--count-run 'run-cmd)
+       (drgnx-surfaces--usage-flush-at-exit))
+     (should (equal (nreverse timeouts) '(0 1.0))))))
+
+(ert-deftest drgnx-surfaces/an-unreadable-file-is-backed-up-once ()
+  (drgnx-test--with-usage
+   (let* ((file (drgnx-shortcuts-usage-file)) (dir (file-name-directory file))
+          (text "((a-cmd 3 ") (baks (lambda () (directory-files dir t "\\`command-usage\\.eld\\.bak-"))))
+     (make-directory dir t)
+     (with-temp-file file (insert text))
+     (drgnx-surfaces--count-run 'run-cmd)
+     (drgnx-surfaces--usage-flush)
+     (should (= 1 (length (funcall baks))))
+     (should (equal (with-temp-buffer (insert-file-contents (car (funcall baks))) (buffer-string)) text))   ; its bytes kept
+     (should (= 1 (cadr (assq 'run-cmd (drgnx-surfaces--usage-read file)))))
+     ;; later writes find a readable file: no second backup
+     (drgnx-surfaces--count-run 'run-cmd)
+     (setq drgnx-surfaces--usage-saved nil)
+     (drgnx-surfaces--usage-flush)
+     (should (= 1 (length (funcall baks))))
+     (should (= 2 (cadr (assq 'run-cmd (drgnx-surfaces--usage-read file)))))
+     ;; no temp or lock file is left
+     (should-not (directory-files dir nil "\\`\\.[^.]")))))
+
+(ert-deftest drgnx-surfaces/a-file-from-the-old-writer-reads ()
+  (drgnx-test--with-usage
+   (let ((file (drgnx-shortcuts-usage-file)) (today (time-to-days nil)))
+     (make-directory (file-name-directory file) t)
+     (with-temp-file file                                  ; what the old flush printed
+       (prin1 `((a-cmd 3 (,today . 2)) (run-cmd 9)) (current-buffer)) (insert "\n"))
+     (should (= 3 (drgnx-surfaces-usage-count 'a-cmd)))
+     (should (= 2 (drgnx-surfaces-usage-week 'a-cmd)))
+     (should (= 9 (drgnx-surfaces-usage-count 'run-cmd))))))
 
 ;;; core-surfaces-run-test.el ends here

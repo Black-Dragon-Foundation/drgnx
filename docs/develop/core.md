@@ -345,6 +345,10 @@ with `:idle t`: a burst of runs makes one write per pause; the exit hook cancels
 (`drgnx-shortcuts-usage-file`): `((ID COUNT (DAY . N)…)…)`, with the per-day counts (`time-to-days`) of the last 7
 days. The file stays on your machine; it feeds the suggestions of the Keyboard Shortcuts editor ("you ran X 12
 times this week; give it a key?"). Read it with `drgnx-surfaces-usage-count` and `drgnx-surfaces-usage-week`.
+The file goes through the file layer: the write is `drgnx-file-update` with `:on-unreadable 'backup` and `:timeout 0`
+(the exit write waits up to a second), so a busy lock (another drgnx writing) keeps the counts dirty and the timer tries
+again, quietly. A file that cannot be read, or has malformed entries, is copied aside once (`NAME.bak-…`) before the next
+write replaces it; any other failure is one message. The last writer wins.
 
 **Removing what a command added.** The palette, the key sheet, the cheat sheet and the right-click menu are computed
 from the registry on each use, so an undefined command is gone from them at once. The menu bar and which-key are
