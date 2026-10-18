@@ -610,6 +610,21 @@ BUILD, writes the values into the object's vector with `aset` (made on the first
 Keys compare with `eq`: use fixnums, symbols, objects and epochs, not fresh strings, lists or floats (those never
 hit). `(drgnx-memo-forget NAME &optional OBJECT)` drops one object's value, or all.
 
+### Memo clients
+
+What redisplay reads, built once per change (PERF-L L6):
+
+| Memo | On | Rebuilt when | Epoch |
+| --- | --- | --- | --- |
+| `sticky-segment` (`drgnx-sticky.el`) | window | the window's start moves, it shows another buffer, or the epoch `sticky` of its buffer moves | `sticky` (per buffer), bumped by an edit at or above the start of a window showing the buffer |
+| `job-badge` (`drgnx-job-ui.el`) | none | `drgnx-job-ui--badge` is set to another string (the count changed) | none: the badge string is the key |
+| `live-header` (`drgnx-live.el`) | buffer | the epoch `live-tabs` of the view moves | `live-tabs` (per buffer), bumped where the tabs, the watched tab or driving change (`drgnx-live--tabs-changed`) |
+
+Each module activates its memo in its `:setup` (`drgnx-memo-activate`), so turning the module off empties it. The Live
+view bumps by hand rather than by `:watch`: its tests and its use do not wait for the module's setup, and the sites are
+all in one file. The segment and the header are read per redisplay; a hit allocates 0 (tests: `mod-sticky-test.el`,
+`job-ui-test.el`, `mod-live-test.el`).
+
 ### Caches
 
 `(drgnx-cache-define NAME &key key cap doc)` (a declaration, at the top level): `key` `object` is a weak `eq` table; a get checks `buffer-live-p`,
