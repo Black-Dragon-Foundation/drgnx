@@ -133,7 +133,7 @@ The report:
 | `echo_changes` | minibuffer/echo-area height changes (I4) |
 | `scrolls`, `redisplays` | `window-scroll-functions` calls, window redisplays |
 | `gc_count`, `gc_ms` | garbage collections during the measurement |
-| `guard_violations`, `guard` | window-moving calls made from timers (see Guard) |
+| `guard_violations`, `guard` | window-moving calls made from timers or window change hooks (see Guard) |
 | `timer_moves` | window changes made by timers (any window) |
 | `causes` | `[{cause, count}]` — every command and timer that changed something |
 | `trace` | `[{t_ms, cause, window, fields, from, to}]` in order (≤ 50): what changed, when, and why |
@@ -177,13 +177,17 @@ installs a gryphn-shaped follower and checks that `measure` reports its snap-bac
 ## Guard
 
 `harness/drgnx-jank-guard.el` is on in every session. It records (never blocks) calls to `select-window`,
-`set-window-start`, `set-window-point`, `recenter`, `split-window` and `delete-window` made **from a timer** —
-the pattern behind "the layout jumps on its own" (invariant I9). Timer context is detected by wrapping
+`set-window-start`, `set-window-point`, `recenter`, `split-window` and `delete-window` made **from a timer or a window change hook**
+— the pattern behind "the layout jumps on its own" (invariant I9). Timer context is detected by wrapping
 `timer-event-handler`; commands executed by a command loop nested inside a timer (a minibuffer opened from a
 timer, a test's `drgnx-uitest-run`) are not timer code, so `command-execute` clears the flag.
 `select-window` with NORECORD (what `with-selected-window` does) is a temporary selection and is not
-recorded. Each entry names the function, the window and the timer's function. Hook context (e.g.
-`buffer-list-update-hook`) is covered by the workbench change bus in M3.
+recorded. Each entry names the function, the window and the timer's function (or the hook and its member).
+Hooks run from C, so the guard wraps the global members of `window-configuration-change-hook`,
+`window-size-change-functions`, `window-selection-change-functions`, `window-buffer-change-functions` and
+`window-state-change-functions` when it starts, wraps later `add-hook`s to them too, and makes `remove-hook`
+find the wrapped member; turning the guard off puts the originals back. Other hooks
+(`buffer-list-update-hook`) are not wrapped; the workbench change bus covers those.
 
 ## Capture
 
@@ -324,8 +328,8 @@ results with `isError`, never a crashed server (a reply that cannot be written a
 
 - Changes made by process filters and sentinels (e.g. asynchronous git status in a file tree) are attributed to
   `other`: Emacs calls those from C, so they cannot be wrapped. Commands and timers are always named.
-- The guard sees window moves from timers, not from hooks (`buffer-list-update-hook`, …) — the workbench change
-  bus in M3 covers those.
+- The guard sees window moves from timers and from the window change hooks above, not from other hooks
+  (`buffer-list-update-hook`, …) — the workbench change bus covers those. A hook member added buffer-locally is not wrapped.
 - Input is synthetic (no real pointer hover or OS-level drag yet); clicks target the root frame.
 - Wayland via mutter only; X11 (Xvfb) and tiling WMs (sway headless) come later. macOS needs a different capture
   backend (`x-export-frames` exists only on Cairo builds).

@@ -264,7 +264,7 @@ Not yet: file nesting, icons (an icon theme is a module, M4), problems decoratio
   windows back with their roles.
 - **Owned windows.** Code running from a timer or a follower may move only windows that show its own buffer, and
   says so with `drgnx-wb-with-owned-windows`; the harness's jank guard records any other window move made from a
-  timer (invariant I9). Two lints (`test/unit/lint-buffers-timers-test.el`) keep the habits behind it: the
+  timer or a window change hook (invariant I9). Two lints (`test/unit/lint-buffers-timers-test.el`) keep the habits behind it: the
   workbench follows on the bus's edges, never from `run-with-timer`/`run-at-time` (an allow-list names the
   exceptions and why), and an internal ` *…*` buffer is made with `inhibit-buffer-hooks`, so no follower hears of it.
 - **Explorer** (`wb/drgnx-explorer.el`) and **Buffers** (`wb/drgnx-buffers.el`) are **virtual lists**: the buffer
