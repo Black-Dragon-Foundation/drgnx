@@ -162,6 +162,34 @@ open_wait() { # seconds to wait for a starting daemon: $DRGNX_OPEN_WAIT, default
   if [[ "$w" =~ ^[0-9]+$ ]] && ((w > 0)); then printf '%s' "$w"; else printf 30; fi
 }
 
+open_lock() { # one `drgnx open' at a time decides whether to start the daemon and open a window (a mkdir lock)
+  local wait stale i since lock="${XDG_STATE_HOME:-$HOME/.local/state}/drgnx/open-${DRGNX_SERVER_NAME:-drgnx}.lock"
+  mkdir -p "${lock%/*}" 2>/dev/null || return 0     # nowhere to keep a lock: go on without
+  wait="$(open_wait)"; stale=$((wait > 25 ? wait + 5 : 30))   # a holder is done within the wait; older: its owner is gone
+  for ((i = 0; i < stale * 10 + 50; i++)); do
+    if mkdir "$lock" 2>/dev/null; then date +%s >"$lock/since"; OPEN_LOCK="$lock"; return 0; fi
+    since="$(cat "$lock/since" 2>/dev/null || true)"
+    if { [[ "$since" =~ ^[0-9]+$ ]] && (($(date +%s) - since > stale)); } || ((i == stale * 10)); then
+      mv "$lock" "$lock.stale.$$" 2>/dev/null && rm -rf "$lock.stale.$$"     # one winner among those who find it stale
+    fi
+    sleep 0.1
+  done
+}
+
+open_unlock() { if [[ -n "${OPEN_LOCK:-}" ]]; then rm -rf "$OPEN_LOCK"; OPEN_LOCK=""; fi; }
+
+open_ensure_window() { # drgnx's daemon is running and has a window; under the lock, so two opens make one of each
+  local i
+  client -e t >/dev/null 2>&1 || open_start || return 1
+  if [[ "$(client -e '(drgnx-session-gui-frame-p)' 2>/dev/null)" != t ]]; then
+    client -n -c >/dev/null || return 1
+    for ((i = 0; i < 50; i++)); do   # -n returns before the window exists: the next open must see it
+      [[ "$(client -e '(drgnx-session-gui-frame-p)' 2>/dev/null)" == t ]] && break
+      sleep 0.1
+    done
+  fi
+}
+
 open_start() { # start drgnx's daemon (the systemd unit when it is enabled), wait for its server (open_wait)
   local name="${DRGNX_SERVER_NAME:-drgnx}" log i wait
   wait="$(open_wait)"
@@ -172,10 +200,10 @@ open_start() { # start drgnx's daemon (the systemd unit when it is enabled), wai
     mkdir -p "${log%/*}"
     # in its own session, outliving this shell: setsid, else perl (macOS), as core/drgnx-jobs.el does
     if command -v setsid >/dev/null 2>&1; then
-      setsid -f "$(emacs_bin)" --bg-daemon="$name" --init-directory="$here/init" </dev/null >"$log" 2>&1
+      setsid -f "$(emacs_bin)" --bg-daemon="$name" --init-directory="$here/init" </dev/null >>"$log" 2>&1
     else
       perl -MPOSIX -e 'fork and exit; POSIX::setsid(); exec @ARGV' \
-           "$(emacs_bin)" --bg-daemon="$name" --init-directory="$here/init" </dev/null >"$log" 2>&1
+           "$(emacs_bin)" --bg-daemon="$name" --init-directory="$here/init" </dev/null >>"$log" 2>&1
     fi
   fi
   for ((i = 0; i < wait * 10; i++)); do
@@ -226,13 +254,16 @@ cmd_open() { # [--check] [--wait] [PATH…] — open PATHs (none: the windows as
   if [[ -n "$wait" ]] && { ((${#dirs[@]})) || ! ((${#files[@]})); }; then
     echo "drgnx: open --wait opens files, not folders: it returns when you are done with them (C-x #)" >&2; return 2
   fi
-  client -e t >/dev/null 2>&1 || open_start || return 1
+  OPEN_LOCK=""
+  trap open_unlock EXIT; trap 'exit 130' INT TERM    # the lock never outlives this command
+  open_lock
   if [[ -n "$wait" && "$(uname -s)" != Darwin && -z "${DISPLAY:-}" && -z "${WAYLAND_DISPLAY:-}" ]]; then
+    client -e t >/dev/null 2>&1 || open_start || return 1
+    open_unlock
     client -t -- "${files[@]}"; return   # no display (ssh, a console): in this terminal
   fi
-  if [[ "$(client -e '(drgnx-session-gui-frame-p)' 2>/dev/null)" != t ]]; then
-    client -n -c >/dev/null || return 1
-  fi
+  open_ensure_window || return 1
+  open_unlock
   client -n -e '(drgnx-session-raise)' >/dev/null 2>&1 || true
   client -n -e "(progn (require 'drgnx-ai) (drgnx-ai-load-keys-soon))" >/dev/null 2>&1 || true   # once per daemon, from a timer
   if [[ -n "$wait" ]]; then client -- "${files[@]}" >/dev/null; return; fi   # no -n: until C-x # (drgnx as $EDITOR)

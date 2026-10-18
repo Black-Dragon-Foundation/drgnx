@@ -25,8 +25,10 @@ What happens:
 
 - **drgnx is not running:** it starts in the background (an Emacs daemon named `drgnx`, with the Emacs drgnx was
   installed with — see [install.md](install.md)), and the paths open as soon as it answers (it is given 30 s, or
-  `DRGNX_OPEN_WAIT` seconds, and says "still starting" after a third of that; its startup messages go to `~/.local/state/drgnx/daemon.log`). On Linux, when the systemd user unit `drgnx` is installed
-  and enabled ([packages.md](packages.md#running-drgnx-as-a-daemon)), drgnx starts that unit instead.
+  `DRGNX_OPEN_WAIT` seconds, and says "still starting" after a third of that; its startup messages are added to `~/.local/state/drgnx/daemon.log`). On Linux, when the systemd user unit `drgnx`
+  is installed and enabled ([packages.md](packages.md#running-drgnx-as-a-daemon)), drgnx starts that unit instead.
+  Two `drgnx` commands started at once make one daemon and one window: the second waits for the first (a lock,
+  `~/.local/state/drgnx/open-drgnx.lock`, dropped after 30 s if its owner died).
 - **No window is open:** a window opens, with the layout you left — groups, tabs, docks, Explorer folders
   ([workbench.md](workbench.md#the-layout-survives-a-restart)) — and the paths in front of it.
 - **A window is open:** the paths open there and the window comes to the front.
