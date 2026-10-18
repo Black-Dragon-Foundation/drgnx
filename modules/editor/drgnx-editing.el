@@ -270,12 +270,13 @@ untouched.  Only runs as a typed command, and the wait ends at the delay."
 
 (defun drgnx-editing-paste (&optional arg)
   "Paste the last copy, replacing the selection.  ARG as for `yank'.
-With nothing to paste, nothing changes."
+With nothing to paste, nothing changes.  The clipboard is read once: the first `current-kill' puts it in the
+kill ring, so a hung owner or a terminal that refuses the read costs its timeout once."
   (interactive "*P")
   (current-kill 0)                      ; signals an empty kill ring before the selection goes
   (when (use-region-p) (delete-region (region-beginning) (region-end)))
   (deactivate-mark)
-  (yank arg))
+  (let ((interprogram-paste-function nil)) (yank arg)))
 
 (drgnx-module-define 'editor/editing
                      :doc "Fold, change case, expand and shrink the selection, go to line."

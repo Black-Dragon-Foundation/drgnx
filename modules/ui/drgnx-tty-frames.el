@@ -67,7 +67,9 @@
 
 (defvar drgnx-tty-frames--cache (make-hash-table :test #'equal)
   "Identities (:id :outer :version) by kind of terminal (`drgnx-tty-frames--cache-key'): a terminal is asked
-once, not once per client.  What can differ between two clients of one kind (keys, colours) is not kept here.")
+once, not once per client.  What can differ between two clients of one kind (keys, colours) is not kept here.
+Bounded by its keys, never evicted: one per terminal kind, outer terminal, version and TERM that clients of this
+Emacs used (a handful; a terminal the environment does not name is never cached).")
 
 ;;;; What a terminal can do
 
@@ -276,9 +278,13 @@ decodes a few: C-tab, C-. …; its decodings come first).  A terminal that never
   (when-let* ((new (funcall fn (copy-sequence (or (drgnx-tty-frames--read-report-data) (list :terminals nil))))))
     (drgnx-tty-frames--save-report new)))
 
+(defconst drgnx-tty-frames-report-terminals 16
+  "How many terminals terminal-report.eld keeps: the newest, by when each was last set up or refreshed.")
+
 (defun drgnx-tty-frames-write-report (frame)
   "Add FRAME's terminal to terminal-report.eld in the state dir: (:terminals ((TTY . (:caps CAPS :unsendable
-KEYS :seen TIME)) …)), newest first, one entry per terminal device (two clients never replace each other's);
+KEYS :seen TIME)) …)), newest first, one entry per terminal device (two clients never replace each other's), the
+newest `drgnx-tty-frames-report-terminals' (16) only;
 :unsendable the active key profile's keys this terminal cannot send.  The fallback layer follows the caps first
 \(`drgnx-tty-fallback-install': on where they need it, off where not); the entry then has :fallback (on or not),
 :fallbacks (rows (CHORD NATIVE-P ALT PREFIX) for the doctor) and :fallback-problems.  The report's other keys
@@ -303,7 +309,8 @@ KEYS :seen TIME)) …)), newest first, one entry per terminal device (two client
                                             table caps (terminal-parameter (frame-terminal frame) 'drgnx-tty-fallback-table))
                                 :fallback-problems (drgnx-tty-fallback-problems table (drgnx-tty-fallback--overrides))))))
       (drgnx-tty-frames--save-report
-       (append (list :terminals (cons (cons key entry) (assoc-delete-all key (copy-sequence old))))
+       (append (list :terminals (seq-take (cons (cons key entry) (assoc-delete-all key (copy-sequence old)))
+                                          drgnx-tty-frames-report-terminals))
                (when-let* ((hinted (plist-get data :hinted))) (and (proper-list-p hinted) (list :hinted hinted))))))))
 
 (defun drgnx-tty-frames-refresh-report (frame)
@@ -632,23 +639,24 @@ variant of its TERM, when that terminfo exists on the machine running the daemon
 (defconst drgnx-tty-frames--infocmp-timeout 2 "Seconds `infocmp' may take.")
 
 (defvar drgnx-tty-frames--direct-cache (make-hash-table :test #'equal)
-  "Terminal type → whether its terminfo has true colour as Emacs reads it, asked of infocmp once.")
+  "Terminal type → whether its terminfo has true colour as Emacs reads it, from infocmp's answer.  Bounded by its
+keys, never evicted: the TERM types clients used and their `-direct' variants (a handful).  Only answers are kept:
+an infocmp that printed nothing (missing, timed out, an unknown type) is asked again at the next frame.")
 
 (defun drgnx-tty-frames--terminfo-true-colour-p (type)
   "Whether the terminfo of terminal type TYPE (on this machine) has true colour as Emacs's term.c reads it: the
-`RGB' flag, or `setf24' together with `setb24'.  Asked of `infocmp' (bounded: `drgnx-tty--command-lines') once per
-type; nil when there is no such terminfo or no infocmp."
+`RGB' flag, or `setf24' together with `setb24'.  Asked of `infocmp' (bounded: `drgnx-tty--command-lines'); its
+answer is kept per type.  Nil when there is no such terminfo or no infocmp, which is not kept."
   (let ((hit (gethash type drgnx-tty-frames--direct-cache 'unknown)))
     (if (not (eq hit 'unknown)) hit
-      (puthash type
-               (and (stringp type) (not (string-empty-p type))
-                    (when-let* ((lines (drgnx-tty--command-lines (list "infocmp" "-x" "-1" type)
-                                                                 drgnx-tty-frames--infocmp-timeout)))
-                      (let ((has (lambda (re) (seq-some (lambda (l) (string-match-p re l)) lines))))
-                        (or (funcall has "\\`[ \t]+RGB,")
-                            (and (funcall has "\\`[ \t]+setf24=") (funcall has "\\`[ \t]+setb24=")))))
-                    t)
-               drgnx-tty-frames--direct-cache))))
+      (when-let* (((and (stringp type) (not (string-empty-p type))))
+                  (lines (drgnx-tty--command-lines (list "infocmp" "-x" "-1" type) drgnx-tty-frames--infocmp-timeout)))
+        (puthash type
+                 (let ((has (lambda (re) (seq-some (lambda (l) (string-match-p re l)) lines))))
+                   (and (or (funcall has "\\`[ \t]+RGB,")
+                            (and (funcall has "\\`[ \t]+setf24=") (funcall has "\\`[ \t]+setb24=")))
+                        t))
+                 drgnx-tty-frames--direct-cache)))))
 
 (defun drgnx-tty-frames--client-wants-true-colour-p (env)
   "Whether the client with ENV (\"K=V\" strings) may get true colour: it says COLORTERM=truecolor or 24bit, and

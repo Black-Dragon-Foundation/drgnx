@@ -130,6 +130,39 @@ strings; the real frame is not touched), an empty cache and no terminal to ask: 
          (drgnx-tty-frames-write-report (selected-frame))
          (should (= (length (plist-get (drgnx-tty-frames-test--report) :terminals)) 1)))))))
 
+(ert-deftest drgnx-tty-frames/the-report-keeps-the-newest-16-terminals ()
+  ;; one entry per terminal device ever seen would grow without end: the newest 16 stay
+  (drgnx-tty-frames-test--state
+   (let ((name "kx-0"))
+     (cl-letf (((symbol-function 'drgnx-tty-frame-caps)
+                (lambda (&optional _) '(:id vte :outer nil :version "8000" :keys legacy :osc52 nil :colors 256 :mouse t)))
+               ((symbol-function 'terminal-name) (lambda (&optional _) name)))
+       (dotimes (i 19)
+         (setq name (format "kx-%d" i))
+         (drgnx-tty-frames-write-report (selected-frame)))
+       (let ((names (mapcar #'car (plist-get (drgnx-tty-frames-test--report) :terminals))))
+         (should (= (length names) 16))
+         (should (equal (car names) "kx-18"))
+         (should (equal (car (last names)) "kx-3")))
+       ;; a terminal seen again moves to the front and pushes no other out
+       (setq name "kx-5")
+       (drgnx-tty-frames-write-report (selected-frame))
+       (let ((names (mapcar #'car (plist-get (drgnx-tty-frames-test--report) :terminals))))
+         (should (= (length names) 16))
+         (should (equal (car names) "kx-5"))
+         (should (member "kx-3" names)))))))
+
+(ert-deftest drgnx-tty-frames/a-failed-infocmp-is-asked-again ()
+  ;; nothing printed (no infocmp, a timeout, a type it does not know) is not kept: the next frame asks again; an
+  ;; answer is kept
+  (let ((drgnx-tty-frames--direct-cache (make-hash-table :test #'equal)) (answer nil) (asked 0))
+    (cl-letf (((symbol-function 'drgnx-tty--command-lines) (lambda (&rest _) (cl-incf asked) answer)))
+      (should-not (drgnx-tty-frames--terminfo-true-colour-p "xterm-direct"))
+      (setq answer (list "xterm-direct|x," "\tRGB,"))
+      (should (drgnx-tty-frames--terminfo-true-colour-p "xterm-direct"))
+      (should (drgnx-tty-frames--terminfo-true-colour-p "xterm-direct"))
+      (should (= asked 2)))))
+
 (ert-deftest drgnx-tty-frames/kkp-later-rewrites-the-report ()
   ;; Task 5 turns kkp on after the terminal's setup: refreshing the report says so, and C-S-p is sendable then
   (drgnx-tty-frames-test--state

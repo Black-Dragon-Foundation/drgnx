@@ -148,8 +148,9 @@ sequence, which Emacs reads only between commands. drgnx turns on kkp's `kkp-res
 so while Emacs waits for a program (a `git` that hangs, say) the terminal sends plain keys and `C-g` stops the
 program. But `C-g` cannot stop busy Lisp (a long computation, a loop) in a kkp terminal; `terminal-report.eld`
 says so for that terminal (`:c-g waits`). To keep `C-g` working everywhere, set **`drgnx-tty-use-kkp`** to `nil`
-(`M-x customize-variable`; it applies to terminal windows opened afterwards). kitty then sends plain keys: no
-`C-S-` chords, so use F1 or the palette for those.
+(`M-x customize-variable`; it applies to terminal windows opened afterwards). kitty, foot, Alacritty and Ghostty
+are then legacy terminals: type a `C-S-` chord as Alt+Shift with the key, or F6 then the key (see
+[Legacy terminals](#legacy-terminals-altshift-and-f6)).
 
 Ctrl+Shift+`` ` `` arrives from xterm and tmux as Ctrl+Shift+`~` (the character Shift makes on a US layout);
 drgnx reads it as `` C-S-` `` (New Terminal). On other layouts, use the palette if the key does nothing.
@@ -236,7 +237,8 @@ kind of terminal, ever (`terminal-report.eld` remembers it as `:hinted`). It com
 opens, and only if the layer is still on then: a kitty has no kitty keyboard protocol for the moment before its answer
 arrives, and gets no message.
 
-`terminal-report.eld` has, for each terminal, `:fallback` (the layer is on) and `:fallbacks`: every chord of your
+`terminal-report.eld` keeps the 16 terminals set up most recently (one entry per terminal device). It has, for each
+terminal, `:fallback` (the layer is on) and `:fallbacks`: every chord of your
 profile a plain terminal cannot send, as `(CHORD NATIVE-P ALT PREFIX)`, where NATIVE-P says this terminal sends it
 itself. `drgnx-tty-sendable-key` gives any key as a terminal window can type it (`M-F`, `<f6> p`, or the key itself).
 The command palette, the menus, the "next time" tips and the key sheet show keys that way, and the key sheet has a

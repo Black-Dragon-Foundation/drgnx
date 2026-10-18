@@ -314,6 +314,16 @@
       (should-error (drgnx-editing-paste))
       (should (equal (buffer-string) "hello world")))))
 
+(ert-deftest drgnx-editing/paste-reads-the-clipboard-once ()
+  ;; a hung clipboard owner, or a terminal that refuses an OSC 52 read, costs its timeout once per paste, not twice
+  (drgnx-edit-clip-test--keys '((vscode app editing window))
+    (drgnx-edit-clip-test--buffer "hello world"
+      (let* ((reads 0) (interprogram-paste-function (lambda () (cl-incf reads) "drgnx")))
+        (drgnx-edit-clip-test--select 1 6)
+        (drgnx-editing-paste)
+        (should (= reads 1))
+        (should (equal (buffer-string) "drgnx world"))))))
+
 ;;;; The profiles
 
 (ert-deftest drgnx-editing/copy-keys-add-no-conflict ()

@@ -34,7 +34,7 @@ uninstalled afterwards."
           (drgnx-clipboard-publish-selection 'auto) (drgnx-clipboard-read-timeout 1.5)
           (drgnx-clipboard--installed nil) (drgnx-clipboard--decision nil) (drgnx-clipboard--in-command nil)
           (drgnx-clipboard--warned nil) (drgnx-clipboard--timeout-set nil)
-          (drgnx-clipboard--state nil) (drgnx-clipboard--saved-regions nil) (drgnx-clipboard--graphical-seen nil)
+          (drgnx-clipboard--state nil) (drgnx-clipboard--saved-regions nil)
           (drgnx-clipboard--generation 0))
      (make-directory drgnx-clip-test--bin t)
      (unwind-protect (progn ,@body)
@@ -291,6 +291,21 @@ uninstalled afterwards."
     (cl-letf (((symbol-function 'drgnx-clipboard--process-names) (lambda () '("klipper"))))
       (drgnx-clipboard-install)
       (should select-active-regions))))
+
+(ert-deftest drgnx-clip/a-manager-started-later-is-found-at-the-next-window ()
+  ;; each new graphical window looks again: a manager started after the first one (log in, then start CopyQ) is
+  ;; found without a restart
+  (drgnx-clip-test--env nil
+    (drgnx-clip-test--file ".config/copyq/copyq.conf" "[Options]\ncheck_selection=true\n")
+    (let ((procs '("bash")))
+      (cl-letf (((symbol-function 'drgnx-clipboard--graphical-p) (lambda (&optional _f) t))
+                ((symbol-function 'drgnx-clipboard--process-names) (lambda () procs)))
+        (drgnx-clipboard-install)
+        (should select-active-regions)
+        (setq procs '("bash" "copyq"))
+        (drgnx-clipboard--frame-hook (selected-frame))
+        (should-not select-active-regions)
+        (should (eq (plist-get (drgnx-clipboard-doctor-facts) :manager) 'copyq))))))
 
 (ert-deftest drgnx-clip/copyq-taking-the-selection-turns-publishing-off ()
   (drgnx-clip-test--env nil

@@ -240,7 +240,6 @@ Either setting is enough: `primary-to-history' puts every selection (PRIMARY) in
   (drgnx-clipboard--apply-publish))
 
 (defvar drgnx-clipboard--generation 0 "Counts the checks, so a late GPaste answer to an older one is dropped.")
-(defvar drgnx-clipboard--graphical-seen nil "Non-nil once a check has run on an X11 or Wayland frame.")
 
 (defun drgnx-clipboard-detect (&optional frame)
   "Look for a clipboard manager that syncs the selection with the clipboard, on FRAME (default: the selected one;
@@ -250,7 +249,6 @@ a second, and the setting follows it.  Never blocks, never prompts."
     (setq drgnx-clipboard--state nil)
     (if (not (drgnx-clipboard--graphical-p frame))
         (drgnx-clipboard--found nil)
-      (setq drgnx-clipboard--graphical-seen t)
       (let ((procs (drgnx-clipboard--process-names)))
         (cond ((drgnx-clipboard--klipper-p procs) (drgnx-clipboard--found 'klipper))
               ((drgnx-clipboard--copyq-p procs) (drgnx-clipboard--found 'copyq))
@@ -261,8 +259,9 @@ a second, and the setting follows it.  Never blocks, never prompts."
                       (drgnx-clipboard--found 'gpaste))))))))))
 
 (defun drgnx-clipboard--frame-hook (frame)
-  "`after-make-frame-functions': the first X11 or Wayland frame (a daemon has none at startup) starts the check."
-  (when (and (not drgnx-clipboard--graphical-seen) (drgnx-clipboard--graphical-p frame))
+  "`after-make-frame-functions': each new X11 or Wayland frame (a daemon has none at startup) checks again, so a
+manager started after the first window is found.  The check is cheap and never waits (GPaste answers later)."
+  (when (drgnx-clipboard--graphical-p frame)
     (drgnx-clipboard-detect frame)))
 
 ;;;; Publishing the selection
@@ -317,7 +316,7 @@ a second, and the setting follows it.  Never blocks, never prompts."
       (setq select-active-regions (car drgnx-clipboard--saved-regions)
             drgnx-clipboard--saved-regions nil))
     (setq drgnx-clipboard--installed nil
-          drgnx-clipboard--state nil drgnx-clipboard--graphical-seen nil)
+          drgnx-clipboard--state nil)
     (cl-incf drgnx-clipboard--generation)))
 
 ;;;; Doctor

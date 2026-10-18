@@ -249,7 +249,7 @@ window's panel; nothing moves in the other window. drgnx never places or sizes a
 
 **In a terminal.** A terminal window — `emacsclient -t`, `emacs -nw` — is a workbench window too: the same docks,
 groups, tab line, breadcrumb, panel and status bar, and the first one is the main window (a daemon's own hidden
-frame never is). A client that asked for a file (`emacsclient -t FILE`, git's `EDITOR`) shows the editor only and
+frame never is) until the daemon's first graphical window opens, which then becomes the main window. A client that asked for a file (`emacsclient -t FILE`, git's `EDITOR`) shows the editor only and
 returns when you close the file's tab or press `C-x #`. See [terminal.md](terminal.md).
 
 **In a small terminal.** A new terminal window shows the sidebar from 120 columns and the panel from 30 lines; the

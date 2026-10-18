@@ -119,6 +119,29 @@ visible, without parent."
           (drgnx-frames--made 'kx-new)
           (should (eq (gethash 'kx-new params) 'main)))))))
 
+(ert-deftest drgnx-frames/the-first-graphical-window-takes-main-from-a-terminal-one ()
+  ;; the daemon's first client was a terminal, so its frame became main; the first graphical window then becomes
+  ;; main (its buffer list has the files that are a tab nowhere; persist saves it as main), without a restore
+  (let ((params (make-hash-table)) (drgnx-frames-mode nil) (drgnx-first-gui-frame-hook nil)
+        (after-make-frame-functions nil) (delete-frame-functions nil)
+        (completion-category-overrides nil))
+    (puthash 'kx-tty 'main params)
+    (cl-letf (((symbol-function 'frame-parameter) (lambda (f p) (and (eq p 'drgnx-frame-role) (gethash f params))))
+              ((symbol-function 'set-frame-parameter) (lambda (f p v) (when (eq p 'drgnx-frame-role) (puthash f v params)))))
+      (drgnx-frames-test--fake (list 'kx-gui 'kx-tty)
+        (cl-letf (((symbol-function 'display-graphic-p) (lambda (&optional f) (eq f 'kx-gui))))
+          (drgnx-frames-mode 1)
+          (unwind-protect
+              (progn
+                (run-hooks 'drgnx-first-gui-frame-hook)
+                (should (eq (gethash 'kx-gui params) 'main))
+                (should-not (eq (gethash 'kx-tty params) 'main))
+                ;; a graphical main window stays main
+                (puthash 'kx-gui 'main params)
+                (run-hooks 'drgnx-first-gui-frame-hook)
+                (should (eq (gethash 'kx-gui params) 'main)))
+            (drgnx-frames-mode -1)))))))
+
 (ert-deftest drgnx-frames/an-editor-frame-is-never-main ()
   ;; an EDITOR frame (`emacsclient -t FILE', role `editor') is kept for one file: the next window is main
   (let ((params (make-hash-table)))

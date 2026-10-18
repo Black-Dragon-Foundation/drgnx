@@ -126,8 +126,8 @@ history) keep every change of the clipboard, and Emacs by default changes it a l
   | macOS | Untouched: Emacs has no selection timeout there (the pasteboard is read in the same process), so drgnx claims nothing. |
   | Terminal window | Nothing to bound: drgnx never reads the terminal's clipboard unless you turn that on ([terminal.md](terminal.md#clipboard)). |
 - **Selecting text does not create clipboard entries.** Some managers copy the selection (PRIMARY) into the
-  clipboard, so every mouse selection or `shift`-selection becomes a history entry. drgnx looks, once at
-  startup and without waiting, for Klipper with `SyncClipboards=true` in `klipperrc`, CopyQ with `copy_selection`
+  clipboard, so every mouse selection or `shift`-selection becomes a history entry. drgnx looks, at startup and
+  again whenever a graphical window opens (so a manager started later is found), without waiting, for Klipper with `SyncClipboards=true` in `klipperrc`, CopyQ with `copy_selection`
   or `check_selection` on, and GPaste with *synchronize clipboards* or *primary to history* on (asked from
   `gsettings` in the background, one second at most; either one alone is enough, because *primary to history* puts
   every selection into the history and *synchronize clipboards* copies it to the clipboard, which GPaste records),

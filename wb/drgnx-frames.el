@@ -55,6 +55,18 @@ may not be mapped yet)."
   (when (and (not (display-graphic-p frame)) (drgnx-frames--candidate-p frame))
     (drgnx-frames-mark-main frame)))
 
+(defun drgnx-frames--first-gui ()
+  "`drgnx-first-gui-frame-hook': the first graphical window is the main one — also when the daemon's first client
+was a terminal, whose frame took the role (`drgnx-frames--made'); that frame is auxiliary then.  The graphical
+frame need not be mapped yet: not a child frame, not an EDITOR frame is enough."
+  (let ((main (drgnx-frames--main))
+        (gui (seq-find (lambda (f) (and (frame-live-p f) (display-graphic-p f) (not (frame-parent f))
+                                        (not (eq (frame-parameter f 'drgnx-frame-role) 'editor))))
+                       (reverse (frame-list)))))
+    (when (and main gui (not (display-graphic-p main)))
+      (set-frame-parameter main 'drgnx-frame-role nil))
+    (drgnx-frames-mark-main gui)))
+
 (defun drgnx-frames-count ()
   "How many workbench windows are open."
   (seq-count #'drgnx-frames--workbench-p (frame-list)))
@@ -153,13 +165,13 @@ Sorts, never filters: every buffer stays a candidate."
   (if drgnx-frames-mode
       (progn (drgnx-frames--sort-overrides t)
              (add-hook 'delete-frame-functions #'drgnx-frames--deleted)
-             (add-hook 'drgnx-first-gui-frame-hook #'drgnx-frames-mark-main -10)   ; before the restore
+             (add-hook 'drgnx-first-gui-frame-hook #'drgnx-frames--first-gui -10)  ; before the restore
              (add-hook 'after-make-frame-functions #'drgnx-frames--made)      ; a client's terminal frame too
              (drgnx-frames-mark-main))                ; a frame that exists already (not a daemon's terminal)
     (drgnx-frames--sort-overrides nil)
     (remove-hook 'after-make-frame-functions #'drgnx-frames--made)
     (remove-hook 'delete-frame-functions #'drgnx-frames--deleted)
-    (remove-hook 'drgnx-first-gui-frame-hook #'drgnx-frames-mark-main)))
+    (remove-hook 'drgnx-first-gui-frame-hook #'drgnx-frames--first-gui)))
 
 (provide 'drgnx-frames)
 ;;; drgnx-frames.el ends here
