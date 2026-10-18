@@ -285,3 +285,23 @@
         (drgnx-persist--on-new-frame (selected-frame))
         (should (equal seen (list (list (selected-frame) (list (expand-file-name "a.txt" dir))))))
         (should (eq (window-buffer (selected-window)) asked))))))
+
+(ert-deftest drgnx-persist/extras-a-bad-result-costs-only-its-own-keys ()
+  ;; A state function returning a buffer, a non-list or an odd list is skipped (and said once); the
+  ;; others' keys are saved and workbench.eld stays readable.
+  (drgnx-persist-test--with dir
+    (let* ((drgnx-persist--extra-reported nil) (told nil)
+           (drgnx-persist-state-functions
+            (list (lambda () (list :a 1))
+                  (lambda () (list :buf (current-buffer)))
+                  (lambda () 'junk)
+                  (lambda () (list :odd))
+                  (lambda () (error "boom"))
+                  (lambda () (list :b 2)))))
+      (cl-letf (((symbol-function 'message) (lambda (fmt &rest args) (push (apply #'format fmt args) told))))
+        (drgnx-persist-save)
+        (drgnx-persist-save))
+      (let ((extra (plist-get (car (plist-get (drgnx-persist--read drgnx-persist-file) :frames)) :extra)))
+        (should (equal extra '(:a 1 :b 2))))
+      (should (= 4 (length told)))                      ; each bad function once, not once per save
+      (should (string-match-p "state function" (car told))))))

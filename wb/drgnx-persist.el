@@ -24,14 +24,19 @@
 (defcustom drgnx-persist-after-restore-functions nil
   "Functions called with the frame after the saved workbench was restored into it — at the first
 graphical frame, and whenever a window opens after none (a daemon that kept running).  Use it to show
-what a client asked for in front.  Nothing here may prompt or block; an error is reported, not raised."
+what a client asked for in front.  Only that one frame: the other windows of a saved workbench (aux
+frames) are made again without calling it, though their extras are in `drgnx-persist-extra' too.
+Nothing here may prompt or block; an error is reported, not raised."
   :type 'hook :group 'drgnx)
 
 (defcustom drgnx-persist-state-functions nil
   "Functions called with no argument, in the frame being saved, that each return a plist of extra
-keys to keep in that frame's state (the layouts module keeps `:layout').  After the restore they
-are in the frame parameter `drgnx-persist-extra', readable by `drgnx-persist-after-restore-functions'.
-Nothing here may prompt; an error leaves that function's keys out."
+keys to keep in that frame's state (the layouts module keeps `:layout', `:pane', `:arrangements',
+`:previous' and `:zen-return').  Keys share one plist, so namespace yours (`:mymodule-thing').  What a
+function returns must be a plist that can be read back (symbols, numbers, strings, lists — no buffers,
+markers or windows); otherwise that function is left out, said once, and the others' keys are kept.
+After the restore the keys are in the frame parameter `drgnx-persist-extra', readable by
+`drgnx-persist-after-restore-functions'.  Nothing here may prompt; an error leaves that function's keys out."
   :type 'hook :group 'drgnx)
 
 (defvar drgnx-persist-file nil "The state file; nil means $XDG_STATE_HOME/drgnx/workbench.eld.")
@@ -73,13 +78,24 @@ Nothing here may prompt; an error leaves that function's keys out."
                             (drgnx-groups-list))
             :extra (drgnx-persist--extra)))))
 
+(defvar drgnx-persist--extra-reported nil
+  "The state functions already reported as failing or returning something unusable (said once each).")
+
 (defun drgnx-persist--extra ()
-  "The plist the functions of `drgnx-persist-state-functions' return, joined (the selected frame's)."
+  "The plist the functions of `drgnx-persist-state-functions' return, joined (the selected frame's).
+A function's result counts only if it is a proper plist that can be read back (no buffer, marker or
+other object); otherwise that function is skipped and said once, and the others' keys are kept."
   (let (extra)
-    (run-hook-wrapped 'drgnx-persist-state-functions
-                      (lambda (fn)
-                        (condition-case nil (setq extra (append extra (funcall fn))) (error nil))
-                        nil))
+    (run-hook-wrapped
+     'drgnx-persist-state-functions
+     (lambda (fn)
+       (let ((r (condition-case err (funcall fn) (error (cons 'drgnx-persist-error (error-message-string err))))))
+         (cond ((and (proper-list-p r) (cl-evenp (length r)) (readablep r)) (setq extra (append extra r)))
+               ((memq fn drgnx-persist--extra-reported))
+               (t (push fn drgnx-persist--extra-reported)
+                  (message "drgnx: state function %S left out of the saved workbench: %s" fn
+                           (if (eq (car-safe r) 'drgnx-persist-error) (cdr r) "not a plist that can be read back")))))
+       nil))
     extra))
 
 (defun drgnx-persist--frames ()

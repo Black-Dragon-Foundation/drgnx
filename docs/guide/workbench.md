@@ -200,7 +200,10 @@ frame saves too. It also comes back **whenever a window opens after none**: a da
 last window closed ([opening.md](opening.md#keep-running-or-quit)) gives the next `drgnx open` or `emacsclient -c` the saved layout again (a second window opened while one is
 already open is never restored over; a frame is restored once). A file that client asked for is shown in
 front afterwards (the server switches to it after the restore); add a function to `drgnx-persist-after-restore-functions` (called with the restored frame, after
-every restore, never prompting) to do something of your own at that moment. Each group's shown file opens at once and its other tabs open while you are idle; nothing asks
+every restore, never prompting; the other windows of a saved workbench are not passed to it) to do something of your own at that moment. To
+keep data of your own in the saved state, add a function to `drgnx-persist-state-functions` that returns a plist of
+namespaced keys (`:mymodule-thing`) with readable values only; one that returns anything else is left out (said
+once) without costing the other functions' keys. Each group's shown file opens at once and its other tabs open while you are idle; nothing asks
 anything at start (no remote files are touched, only safe local variables, no large-file question). Files that no
 longer exist are skipped, sizes are clamped to the frame, window parameters in the file are ignored (drgnx saves
 none), and a state in another format is ignored. Save / Restore
