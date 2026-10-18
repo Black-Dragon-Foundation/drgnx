@@ -162,3 +162,14 @@
    (drgnx-wb-focus-section 'search)
    (should (eq (drgnx-wb-sidebar-view) 'search))
    (should (eq (selected-window) (drgnx-wb-section-window 'search)))))
+
+(ert-deftest drgnx-wb-views/a-section-s-on-focus-runs-when-it-is-focused ()
+  (drgnx-wb-views-test--with-real-names
+   (let ((seen nil))
+     (drgnx-wb-define-section 'search :slot 0 :view 'search :title "SEARCH"
+                              :buffer (lambda () (get-buffer-create "*drgnx-views-search*"))
+                              :on-focus (lambda (w) (push w seen)))
+     (drgnx-wb-show-view 'search)
+     (should-not seen)                                  ; showing is not focusing
+     (call-interactively #'drgnx-wb-view-search)
+     (should (equal seen (list (drgnx-wb-section-window 'search)))))))

@@ -44,6 +44,7 @@ follower is not a jank-guard violation (invariant I9).")
 (defun drgnx-wb-define-section (name &rest spec)
   "Define dock section NAME: SPEC is (:slot N :title STRING-OR-FUNCTION-RETURNING-ONE
 :buffer FUNCTION-RETURNING-A-BUFFER :height FRACTION-OF-THE-DOCK :on-show FUNCTION-OF-THE-WINDOW
+:on-focus FUNCTION-OF-THE-WINDOW, run when `drgnx-wb-focus-section' focuses it,
 :view SYMBOL, the sidebar view the section belongs to, default `explorer').
 A function title is asked each time the dock shows (a panel's filter stays in its title)."
   (setf (alist-get name drgnx-wb--sections) spec)
@@ -161,10 +162,12 @@ Like VS Code's Ctrl+Shift+F; clicking a sidebar tab (`drgnx-wb-show-view') keeps
 
 (defun drgnx-wb-focus-section (name)
   "Show the dock if needed, in the view section NAME belongs to, and focus NAME.
-A section of another view switches the sidebar to that view."
+The section's :on-focus function then gets its window (the Search view puts point in its query field)."
   (let ((spec (alist-get name drgnx-wb--sections)))
     (if spec (drgnx-wb-show-view (or (plist-get spec :view) 'explorer)) (drgnx-wb-show-sidebar))
-    (select-window (drgnx-wb-section-window name))))
+    (let ((w (drgnx-wb-section-window name)))
+      (select-window w)
+      (when-let* ((fn (plist-get spec :on-focus))) (funcall fn w)))))
 
 (provide 'drgnx-wb)
 ;;; drgnx-wb.el ends here

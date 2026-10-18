@@ -686,7 +686,13 @@ next match, or replace it in the Replace field.")
 (defun drgnx-replace--define-section ()
   "Put the Search view in the sidebar (its `search' view)."
   (drgnx-wb-define-section 'search :view 'search :slot 0 :title " SEARCH" :buffer #'drgnx-replace--view-buffer
-                           :on-show (lambda (_w) (drgnx-replace--on-show))))
+                           :on-show (lambda (_w) (drgnx-replace--on-show))
+                           :on-focus #'drgnx-replace--focus-find))
+
+(defun drgnx-replace--focus-find (window)
+  "The Search view focused in WINDOW by its key (VS Code's Ctrl+Shift+F): point in the find field."
+  (with-current-buffer (window-buffer window)
+    (set-window-point window (widget-field-start (drgnx-replace--widget 'find)))))
 
 (defun drgnx-replace--view-buffer ()
   "The Search view's buffer, drawn the first time."

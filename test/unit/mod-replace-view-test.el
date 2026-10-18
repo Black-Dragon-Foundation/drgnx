@@ -157,6 +157,19 @@ bar's keymaps), one editor window, no view or bar left over."
         (should (eq (get-text-property (- (point) 1) 'face) 'drgnx-replace-new))
         (should (eq (get-text-property (- (point) 4) 'face) 'drgnx-replace-old))))))
 
+(ert-deftest drgnx-replace/view-search-puts-point-in-the-find-field ()
+  ;; VS Code's Ctrl+Shift+F: the Search view, focused, the cursor in its query field, wherever it was before.
+  (drgnx-replace-view-test--with
+    (call-interactively #'drgnx-wb-view-search)
+    (let ((w (drgnx-wb-section-window 'search)))
+      (should (eq (selected-window) w))
+      (with-selected-window w (goto-char (point-max)))  ; the cursor left in the results
+      (select-window (drgnx-wb-editor-window))
+      (call-interactively #'drgnx-wb-view-search)
+      (should (eq (selected-window) w))
+      (with-current-buffer (drgnx-replace-view-test--view)
+        (should (eq (widget-field-at (window-point w)) (drgnx-replace--widget 'find)))))))
+
 (ert-deftest drgnx-replace/ticks-choose-what-is-written ()
   (drgnx-replace-view-test--with
     (drgnx-git-test-with-repo
