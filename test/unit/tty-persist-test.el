@@ -53,11 +53,13 @@ window (its terminal is \"/dev/pts/9\").  `messages' collects what `message' say
 
 (ert-deftest drgnx-persist/a-terminal-restore-goes-into-the-graphical-window ()
   ;; the user's ruling (2026-10-18): Restore Workbench Layout typed in a terminal window, while a graphical window
-  ;; is open, restores into that window and says so in the terminal; the terminal frame's layout is not touched
+  ;; is open, restores into that window and says so in the terminal; the terminal frame's layout is not touched, and
+  ;; focus stays where it is (the user may be over SSH, or in the terminal on purpose)
   (tty-persist-test--with dir
     (tty-persist-test--write drgnx-persist-file '(:version 2 :frames ((:role main :groups ((:tabs nil))))))
-    (let (restored-in)
+    (let (restored-in focused)
       (cl-letf (((symbol-function 'drgnx-persist--gui-frame) (lambda () 'gui-frame))
+                ((symbol-function 'select-frame-set-input-focus) (lambda (f &rest _) (push f focused)))
                 ((symbol-function 'select-frame) (lambda (f &optional _) (push f selected) f))
                 ((symbol-function 'frame-live-p) (lambda (f) (and f t)))
                 ((symbol-function 'set-frame-parameter) #'ignore)
@@ -65,6 +67,7 @@ window (its terminal is \"/dev/pts/9\").  `messages' collects what `message' say
                  (lambda (_st) (setq restored-in (car selected)) t)))
         (should (drgnx-persist-restore))
         (should (eq restored-in 'gui-frame))
+        (should-not focused)
         (should (equal messages '("Restored into the graphical window")))))))
 
 (defmacro tty-persist-test--with-home (dir &rest body)

@@ -235,13 +235,15 @@ says so); with none, nothing is restored (a terminal window keeps the default la
   (interactive)
   (cond ((not (drgnx-persist--terminal-frame-p)) (drgnx-persist--restore file))
         ((drgnx-persist--gui-frame)
-         (when (with-selected-frame (drgnx-persist--gui-frame) (drgnx-persist--restore file))
+         ;; focus stays in the terminal: the user may be over SSH, or there on purpose
+         (when (with-selected-frame (drgnx-persist--gui-frame) (drgnx-persist--restore file t))
            (message "Restored into the graphical window")
            t))
         (t (drgnx-persist--graphical-only))))
 
-(defun drgnx-persist--restore (file)
-  "`drgnx-persist-restore' in the selected frame, which is not a terminal window."
+(defun drgnx-persist--restore (file &optional keep-focus)
+  "`drgnx-persist-restore' in the selected frame, which is not a terminal window.  The selected frame gets the
+input focus back after the other windows are made, unless KEEP-FOCUS (a restore asked for from a terminal)."
   (let* ((file (or file (drgnx-persist--file))) (state (drgnx-persist--read file))
          (frames (pcase (plist-get state :version)
                    (1 (list state))
@@ -279,7 +281,7 @@ says so); with none, nothing is restored (a terminal window keeps the default la
                 (when-let* ((f (ignore-errors (make-frame '((drgnx-frame-role . aux))))))
                   (condition-case err (with-selected-frame f (drgnx-persist--restore-frame st))
                     (error (message "drgnx: a window's layout was not restored: %s" (error-message-string err)))))))
-          (when (frame-live-p home) (select-frame-set-input-focus home))))
+          (when (and (not keep-focus) (frame-live-p home)) (select-frame-set-input-focus home))))
       t))))
 
 (defun drgnx-persist--restore-frame (state)

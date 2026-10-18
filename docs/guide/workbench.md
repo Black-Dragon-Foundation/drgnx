@@ -231,7 +231,7 @@ batch run never writes your state.
 layout of your desktop windows. Save Workbench Layout, run in a terminal window, does nothing and says "Layouts are
 saved and restored from graphical windows". Restore Workbench Layout, run in a terminal window while a graphical
 window is open, restores the saved layout into that graphical window (not into the terminal) and says "Restored into
-the graphical window"; with no graphical window open, it does nothing and gives the same message as Save. A job window
+the graphical window"; focus stays in the terminal (you may be over SSH). With no graphical window open, it does nothing and gives the same message as Save. A job window
 comes back on the graphical display only, never laid out over a terminal window; with no graphical window, it is not
 restored.
 

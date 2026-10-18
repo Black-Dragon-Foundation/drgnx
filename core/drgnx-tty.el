@@ -265,7 +265,9 @@ other capable terminal (Ghostty, whose modifyOtherKeys is unconfirmed, foot, kit
 \(`drgnx-tty-mok-confirmed-p': C-g keeps stopping busy Lisp there) before those that get the kitty keyboard
 protocol (kkp: C-g stops only programs Emacs waits for); within each, in the order written here.  So WezTerm,
 xterm, then Ghostty, foot, kitty, Alacritty.  The one order for the recommender (`drgnx-tty-capable-terminals')
-and for `drgnx-tty-onboard-note'.  A row whose modifyOtherKeys becomes confirmed moves up by itself.")
+and for `drgnx-tty-onboard-note'.  A row whose modifyOtherKeys becomes confirmed moves up by itself.  xterm
+ranks above foot and kitty only by this rule: foot's modifyOtherKeys is unconfirmed (its documentation does not
+describe it), so foot stays with the kkp terminals; on systems that package xterm, xterm is the second suggestion.")
 
 ;;;; Which keys a terminal can send
 
