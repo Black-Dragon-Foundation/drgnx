@@ -123,6 +123,13 @@ stopped.  Evil's packages are not on `load-path' here."
                  (if (stringp v) v "")))
              (default-value 'mode-line-format) ""))
 
+(defun drgnx-evil-test--fresh (&rest features)
+  "Fail with a clear message when one of FEATURES is loaded already: the test needs a process that has not loaded it
+(each such test has its own isolated file, started by its own wrapper in modal-isolated-test.el)."
+  (dolist (f features)
+    (when (featurep f)
+      (ert-fail (format "precondition: `%s' is loaded already; this test needs a fresh Emacs (its own isolated file)" f)))))
+
 ;;;; Off until chosen
 
 ;; Named to sort first: ERT runs by name and evil cannot be unloaded, so this must run before any test loads it.

@@ -12,6 +12,14 @@
   (should (null (drgnx-modal-test-isolated-result "test/unit/isolated/mod-evil-more-isolated.el"
                                                   "^drgnx-evil-more/"))))
 
+(ert-deftest drgnx-evil-flag/own-process ()
+  (should (null (drgnx-modal-test-isolated-result "test/unit/isolated/mod-evil-flag-isolated.el"
+                                                  "^drgnx-evil-flag/"))))
+
+(ert-deftest drgnx-evil-lazy/own-process ()
+  (should (null (drgnx-modal-test-isolated-result "test/unit/isolated/mod-evil-lazy-isolated.el"
+                                                  "^drgnx-evil-lazy/"))))
+
 (ert-deftest drgnx-modal-fixture/own-process ()
   (should (null (drgnx-modal-test-isolated-result "test/unit/isolated/modal-fixture-isolated.el"
                                                   "^drgnx-modal-fixture/"))))

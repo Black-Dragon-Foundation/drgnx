@@ -91,8 +91,14 @@ VS Code or Emacs keys). It runs [evil](https://github.com/emacs-evil/evil) as th
 - **Insert-state keys.** In the pure Vim stack insert state has Vim's keys: `C-w` deletes a word, `C-r` pastes a
   register, `C-v` quotes, `C-a`, `C-e`, `C-y`, `C-t`, `C-d`, `C-n`, `C-p`, `C-o` … When another profile's layer is
   mixed in (VS Code's app and window keys with Vim's editing, say) those keys stay Emacs' own, so the other
-  profile's keys keep working while you type; switching back to the pure stack restores them. A key you rebound in
-  `evil-insert-state-map` is never touched.
+  profile's keys keep working while you type; switching back to the pure stack restores them. Replace state (`R`)
+  keeps Vim's keys in a mixed stack. A key you rebound in `evil-insert-state-map` is never touched.
+- **Unimpaired keys.** evil-collection adds Vim unimpaired's bracket pairs in normal state: `[b` `]b` previous / next
+  buffer, `[e` `]e` move the line (or selection) up / down, `[q` `]q` and `[l` `]l` previous / next error (`[Q` `]Q`
+  first / last), `[n` `]n` previous / next conflict marker, `[p` `]p` paste above / below, `[ SPC` `] SPC` insert a
+  blank line above / below, and in visual state `[u` `]u` URL encode / decode and `[6` `]6` base64 encode / decode.
+  They are on while Vim editing runs and off when it stops. Setting `evil-collection-want-unimpaired-p` to nil in
+  `config.el` turns them off for good.
 - **Multiple cursors** (the `multiple-cursors` package) run in Emacs state, because Vim's keys would act on one cursor
   at a time; when they end the buffer returns to the state it was in (normal when it was a visual one).
 - **Your settings win.** The module sets evil's defaults (`evil-undo-system` `undo-redo`, `evil-want-C-u-scroll`,

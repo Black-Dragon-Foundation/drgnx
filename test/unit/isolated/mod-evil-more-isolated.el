@@ -1,6 +1,8 @@
 ;;; mod-evil-more-isolated.el --- batch tests (own Emacs, test/unit/modal-isolated-test.el): evil-collection per mode, insert-state keys by stack, multiple cursors -*- lexical-binding: t -*-
 ;; Needs the real evil and evil-collection: DRGNX_MODAL_ELPA (docs/develop/harness.md, "Modal tests"); without it
 ;; those tests skip.  The macros come from mod-evil-isolated.el (its tests are defined too, never selected here).
+;; Tests that need a process where evil-collection or a library is not loaded yet have their own files
+;; (mod-evil-flag-isolated.el, mod-evil-lazy-isolated.el).
 (require 'ert)
 (require 'cl-lib)
 (require 'drgnx)
@@ -9,17 +11,11 @@
 (load (expand-file-name "test/unit/isolated/mod-evil-isolated" drgnx-dir) nil t)
 
 (defvar evil-insert-state-map)
-(defvar evil-collection-mode-list)
-(defvar drgnx-modules--state)
+(defvar evil-collection-want-unimpaired-p)
+(defvar global-evil-collection-unimpaired-mode)
 (defvar drgnx-evil-collection-modes)
 (declare-function dired "dired")
 (declare-function multiple-cursors-mode "multiple-cursors-core")
-
-(defun drgnx-evil-more-test--flag-no-collection (root)
-  "In the temp configuration under ROOT: editor/evil is chosen and has the flag no-collection."
-  (write-region "(:version 1 :enabled (editor/evil) :flags ((editor/evil no-collection)))\n" nil
-                (concat root "config/modules.eld") nil 'silent)
-  (setq drgnx-modules--state nil))
 
 (defun drgnx-evil-more-test--key (map key)
   "What KEY is in MAP itself (evil's own lookup: remaps and prefix maps included), nil when unbound."
@@ -35,47 +31,6 @@
 
 ;;;; evil-collection
 
-;; Named to sort first: ERT runs by name, evil-collection cannot be unloaded, and the first test that starts the
-;; engine registers it.  dired is loaded already in this process (the Explorer needs it); ediff is not.
-(ert-deftest drgnx-evil-more/00-flag-keeps-collection-keys-out ()
-  (drgnx-evil-test--with
-    (drgnx-evil-more-test--flag-no-collection root)
-    (should (drgnx-module-flag-p 'editor/evil 'no-collection))
-    (should (featurep 'dired))
-    (should-not (featurep 'ediff))
-    (should (eq (drgnx-evil-test--run) 'ok))
-    (should (eq drgnx-modal-running 'evil))
-    (should-not (featurep 'evil-collection))
-    (should-not (featurep 'evil-collection-dired))
-    (require 'ediff)
-    (should-not (featurep 'evil-collection-ediff))
-    (let ((buf (dired (file-name-as-directory (concat root "home")))))
-      (unwind-protect
-          (save-window-excursion
-            (switch-to-buffer buf)
-            (should-not (eq (key-binding "j") 'dired-next-line)))
-        (kill-buffer buf)))))
-
-(ert-deftest drgnx-evil-more/collection-waits-for-each-mode ()
-  (should-not (featurep 'info))
-  (drgnx-evil-test--running
-    (should (featurep 'evil-collection))
-    ;; dired is loaded: its keys are in at once
-    (should (featurep 'evil-collection-dired))
-    (let ((buf (dired (file-name-as-directory (concat root "home")))))
-      (unwind-protect
-          (save-window-excursion
-            (switch-to-buffer buf)
-            (should (eq evil-state 'normal))
-            (should (eq (key-binding "j") 'dired-next-line)))
-        (kill-buffer buf)))
-    ;; the others wait for their library
-    (should-not (featurep 'evil-collection-info))
-    (should-not (featurep 'evil-collection-magit))
-    (require 'info)
-    (should (featurep 'evil-collection-info))
-    (should-not (featurep 'evil-collection-magit))))
-
 (ert-deftest drgnx-evil-more/drgnx-modes-are-not-in-the-collection ()
   (drgnx-evil-test--running
     (should drgnx-evil-collection-modes)
@@ -85,6 +40,27 @@
     (drgnx-evil-test--buffer b #'drgnx-explorer-mode
       (should (eq drgnx-modal-state 'emacs))
       (should (eq evil-state 'emacs)))))
+
+(ert-deftest drgnx-evil-more/unimpaired-follows-the-engine ()
+  (drgnx-evil-test--running
+    (should (bound-and-true-p global-evil-collection-unimpaired-mode))
+    (drgnx-evil-test--buffer b #'text-mode
+      (should (eq (key-binding "]b") 'evil-next-buffer)))
+    (should (null (drgnx-modal-sync-engine '((emacs)))))
+    (should-not (bound-and-true-p global-evil-collection-unimpaired-mode))
+    (drgnx-evil-test--buffer b #'text-mode
+      (should-not (eq (key-binding "]b") 'evil-next-buffer)))
+    (should (eq (drgnx-modal-sync-engine '((vim app editing window))) 'evil))
+    (should (bound-and-true-p global-evil-collection-unimpaired-mode))
+    (drgnx-evil-test--buffer b #'text-mode
+      (should (eq (key-binding "]b") 'evil-next-buffer)))))
+
+(ert-deftest drgnx-evil-more/unimpaired-stays-off-when-not-wanted ()
+  (drgnx-evil-test--running
+    (should (null (drgnx-modal-sync-engine '((emacs)))))
+    (let ((evil-collection-want-unimpaired-p nil))
+      (should (eq (drgnx-modal-sync-engine '((vim app editing window))) 'evil))
+      (should-not (bound-and-true-p global-evil-collection-unimpaired-mode)))))
 
 ;;;; Insert-state keys
 

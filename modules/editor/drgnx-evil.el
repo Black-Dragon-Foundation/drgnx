@@ -43,6 +43,8 @@
 (defvar xterm-update-cursor)
 (defvar git-commit-setup-hook)
 (defvar evil-disable-insert-state-bindings)
+(defvar evil-collection-want-unimpaired-p)
+(defvar global-evil-collection-unimpaired-mode)
 (defvar multiple-cursors-mode-enabled-hook)
 (defvar multiple-cursors-mode-disabled-hook)
 (declare-function evil-mode "evil-core")
@@ -50,6 +52,7 @@
 (declare-function evil-update-insert-state-bindings "evil-maps")
 (declare-function evil-emacs-state "evil-states")
 (declare-function evil-collection-init "evil-collection")
+(declare-function global-evil-collection-unimpaired-mode "evil-collection-unimpaired")
 (declare-function evil-set-initial-state "evil-core")
 (declare-function evil-insert-state "evil-states")
 (declare-function which-key-mode "which-key")
@@ -90,6 +93,17 @@ flag `no-collection' is on.  Only the registration happens now: each mode's keys
             (progn (evil-collection-init todo)
                    (setq drgnx-evil--collection-done (append todo drgnx-evil--collection-done)))
           (message "drgnx: evil-collection is not installed: third-party modes keep their own keys"))))))
+
+(defun drgnx-evil--unimpaired (on)
+  "evil-collection's unimpaired keys (`[b' `]b' `[e' `]e' `[q' `]q' `[ SPC' …) are a global minor mode its init turns
+on.  They belong to Vim editing: off with the engine (SPC and the brackets are Emacs' own again), back on when it
+restarts, unless `evil-collection-want-unimpaired-p' is nil."
+  (when (fboundp 'global-evil-collection-unimpaired-mode)
+    (cond ((and on (bound-and-true-p evil-collection-want-unimpaired-p)
+                (not (bound-and-true-p global-evil-collection-unimpaired-mode)))
+           (global-evil-collection-unimpaired-mode 1))
+          ((and (not on) (bound-and-true-p global-evil-collection-unimpaired-mode))
+           (global-evil-collection-unimpaired-mode -1)))))
 
 ;;;; Insert-state keys
 
@@ -352,6 +366,7 @@ far is undone and the error is signalled again."
   (drgnx-evil--cursors-on)
   (drgnx-evil--initial-states)
   (drgnx-evil--collection)
+  (drgnx-evil--unimpaired t)
   (drgnx-evil--insert-bindings (not (drgnx-modal-mixed-p (drgnx-modal-current-layers))))
   (add-hook 'drgnx-modal-sync-functions #'drgnx-evil--insert-for-layers)
   (eval-after-load 'multiple-cursors-core #'drgnx-evil--mc-hooks-on)
@@ -376,6 +391,7 @@ far is undone and the error is signalled again."
   (remove-hook 'drgnx-modal-sync-functions #'drgnx-evil--insert-for-layers)
   (when (fboundp 'evil-update-insert-state-bindings) (drgnx-evil--insert-bindings t))
   (drgnx-evil--mc-hooks nil)
+  (drgnx-evil--unimpaired nil)
   (dolist (cell drgnx-evil--mode-lists) (remove-variable-watcher (car cell) #'drgnx-evil--watch))
   (dolist (hook drgnx-evil--entry-hooks) (remove-hook hook #'drgnx-evil--sync))
   (remove-hook 'git-commit-setup-hook #'drgnx-evil--insert)
