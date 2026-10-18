@@ -94,6 +94,29 @@ known: no preset, so nothing running on this machine counts; no OpenRouter key."
       (should (string-match-p "did not answer" (cadr r)))
       (should (equal before (drgnx-ai-onboard-test--slurp (concat root "config/ai.eld")))))))
 
+;; A project's ai.eld routes roles for that project only: the roles onboarding writes into the user's ai.eld start
+;; from the user's own chain, never from the project's.
+(defun drgnx-ai-onboard-test--user-chain (root role)
+  (alist-get role (plist-get (with-temp-buffer (insert-file-contents (concat root "config/ai.eld")) (read (current-buffer))) :roles)))
+
+(ert-deftest drgnx-ai-onboard/a-projects-route-never-reaches-the-global-ai-eld ()
+  (drgnx-ai-onboard-test--with
+    (make-directory (concat root "proj/.drgnx") t)
+    (with-temp-file (concat root "proj/.drgnx/ai.eld")
+      (prin1 '(:version 1 :roles ((chat (theirs . "paid/m")) (edit (theirs . "paid/m")) (complete (theirs . "paid/m")))) (current-buffer)))
+    (let ((default-directory (concat root "proj/")))
+      ;; the project's route is what the roles use here …
+      (should (equal (drgnx-ai-role 'chat) '((theirs . "paid/m"))))
+      (let ((r (drgnx-onboard--ai-found '(:interactive nil))))
+        (should (memq (car r) '(ok warn)))
+        ;; … but what the step wrote into ai.eld is the found provider on the user's own chain
+        (dolist (role '(complete edit chat))
+          (should-not (assq 'theirs (drgnx-ai-onboard-test--user-chain root role)))
+          (should (assq 'o (drgnx-ai-onboard-test--user-chain root role)))))
+      (drgnx-onboard--put-first 'chat '(o . "llama3:8b"))
+      (should-not (assq 'theirs (drgnx-ai-onboard-test--user-chain root 'chat)))
+      (should (equal (car (drgnx-ai-onboard-test--user-chain root 'chat)) '(o . "llama3:8b"))))))
+
 ;;;; Setting AI up: the room, the models, Ollama, LM Studio, OpenRouter
 
 (defun drgnx-ai-onboard-test--script (file text)

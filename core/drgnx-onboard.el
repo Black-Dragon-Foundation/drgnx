@@ -401,6 +401,7 @@ locked version.  BYTES: the downloads' size from the lock, nil when it does not 
 (declare-function drgnx-ai-vram "drgnx-ai-probe")
 (declare-function drgnx-ai-model-vram "drgnx-ai-probe")
 (declare-function drgnx-ai-role "drgnx-ai")
+(declare-function drgnx-ai-user-role "drgnx-ai")
 (declare-function drgnx-ai-set-role "drgnx-ai")
 (declare-function drgnx-ai-key "drgnx-ai")
 (declare-function drgnx-ai-provider "drgnx-ai")
@@ -464,7 +465,7 @@ probe and the three calls share `drgnx-onboard-ai-test-budget' seconds."
                  (yes (and (>= left 1) (drgnx-onboard--ai-test role step ctx (ceiling left)))))
             (when yes
               (cl-incf answered)
-              (unless usable (drgnx-ai-set-role role (cons step (drgnx-ai-role role)))))
+              (unless usable (drgnx-ai-set-role role (cons step (drgnx-ai-user-role role)))))
             (push (format "%s: %s/%s %s" role (car step) (cdr step) (if yes "answered" "did not answer")) lines)))))
     (unless key
       (push "OpenRouter: run this step again → Change → openrouter (keeps the key in your Keychain or keyring); for the command line: OPENROUTER_API_KEY" lines))
@@ -818,7 +819,7 @@ serve' keeps running as one; `lms server start' starts LM Studio's and ends) —
 
 (defun drgnx-onboard--put-first (role step)
   "STEP (PROVIDER . MODEL) first in ROLE's chain in ai.eld; the role's other providers stay behind it."
-  (drgnx-ai-set-role role (cons step (seq-remove (lambda (s) (eq (car s) (car step))) (drgnx-ai-role role)))))
+  (drgnx-ai-set-role role (cons step (seq-remove (lambda (s) (eq (car s) (car step))) (drgnx-ai-user-role role)))))
 
 (defconst drgnx-onboard--ask-question "Where is the onboarding greeting defined?"
   "What onboarding asks Ask the Codebase about its test project.")
