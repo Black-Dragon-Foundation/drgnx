@@ -5,6 +5,7 @@
 (require 'cl-lib)
 (require 'drgnx)
 (require 'drgnx-registry)
+(require 'drgnx-explorer)
 (require 'eglot)
 (require 'python)
 (load (expand-file-name "test/fixtures/tramp-mock" drgnx-dir) nil t)
@@ -632,6 +633,132 @@ is attached by the next start (a Reconnect) and one of another host never is."
           (should (eq (nth 1 (car warned)) :error))                  ; logged, no window pops up
           (should (string-match-p "eglot--maybe-activate-editing-mode" (nth 2 (car warned))))
           (should-not (advice-member-p #'drgnx-lang--guard-eglot-activation 'eglot--maybe-activate-editing-mode)))
+      (drgnx-lang--teardown-eglot-guards))))
+
+(ert-deftest drgnx-remote/the-warning-waits-for-startup-and-never-shows-a-window ()
+  ;; before `after-init-time' (and in a real session) `display-warning' keeps the warning and shows it at the global level
+  (let ((drgnx-lang--eglot-warned nil) (orig (symbol-function 'fboundp)) (after-init-hook nil)
+        (delayed-warnings-list nil) (warning-minimum-level :warning))
+    (when (get-buffer "*Warnings*") (kill-buffer "*Warnings*"))
+    (unwind-protect
+        (cl-letf (((symbol-function 'fboundp)
+                   (lambda (s) (and (not (eq s 'eglot--maybe-activate-editing-mode)) (funcall orig s)))))
+          (drgnx-lang--teardown-eglot-guards)
+          (let ((after-init-time nil) (noninteractive nil))
+            (drgnx-lang--install-eglot-guards)
+            (should-not delayed-warnings-list)                        ; nothing kept for the end of startup
+            (should (memq #'drgnx-lang--report-missing-activation after-init-hook)))
+          (drgnx-lang--report-missing-activation)                      ; what the hook does, with the real display-warning
+          (should-not (memq #'drgnx-lang--report-missing-activation after-init-hook))
+          (should (eq warning-minimum-level :warning))                 ; the caller's level is back
+          (should-not (get-buffer-window "*Warnings*" t))              ; logged, no window
+          (should (with-current-buffer "*Warnings*"
+                    (string-match-p "eglot--maybe-activate-editing-mode" (buffer-string)))))
+      (when (get-buffer "*Warnings*") (kill-buffer "*Warnings*"))
+      (drgnx-lang--teardown-eglot-guards))))
+
+(ert-deftest drgnx-remote/a-project-under-the-remote-home-is-attached ()
+  "The project may name its root the way the user typed it (`/method:host:~/proj/'); file names are expanded."
+  (drgnx-remote-test--with
+    (let* ((home (file-name-as-directory (expand-file-name "home" dir)))
+           (process-environment (cons (concat "HOME=" home) process-environment))
+           (tramp-histfile-override nil)                                ; its default names a file under the home
+           (prog-mode-hook (list #'drgnx-lang--maybe-eglot)) (eglot-sync-connect nil) (python-mode-hook nil)
+           (project-find-functions (list (lambda (_dir) (cons 'transient "/drgnx-mock::~/proj/"))))
+           (root (expand-file-name "/drgnx-mock::~/proj/")) a b)
+      (make-directory (expand-file-name "proj" home) t)
+      (dolist (n '("a.py" "b.py")) (with-temp-file (expand-file-name (concat "proj/" n) home) (insert "x = 1\n")))
+      (drgnx-lang-probe-remote root)
+      (let ((drgnx-lang--user-command t))                          ; the user's command visits the file
+        (setq a (find-file-noselect "/drgnx-mock::~/proj/a.py")))
+      (setq b (find-file-noselect "/drgnx-mock::~/proj/b.py"))     ; opened by something else: skipped
+      (drgnx-remote-test--wait-for-server a)
+      (should (string-match-p "~/proj" (project-root (eglot--project (with-current-buffer a (eglot-current-server))))))
+      (should (drgnx-remote-test--managed-p a))                    ; on connect
+      (should (drgnx-remote-test--managed-p b))
+      (setq explorer-roots (list root) drgnx-remote--roots (list (cons (file-remote-p root) (list :root root))))
+      (dolist (buf (list a b)) (with-current-buffer buf (eglot--managed-mode -1)))
+      (drgnx-remote-reconnect (file-remote-p root))                ; and through Reconnect
+      (with-timeout (15 (error "not attached after Reconnect: %S" messages))
+        (while (not (and (drgnx-remote-test--managed-p a) (drgnx-remote-test--managed-p b)))
+          (accept-process-output nil 0.1))))))
+
+(defmacro drgnx-remote-test--counting-activation (&rest body)
+  "BODY with `eglot--maybe-activate-editing-mode' replaced, below the guard, by a function that records the buffer
+\(or fails in a buffer named \"bad\") in `calls'."
+  (declare (indent 0))
+  `(let* ((calls nil)
+          (count (lambda (_orig &rest _) (push (buffer-name) calls) (when (equal (buffer-name) "bad") (error "bad buffer")))))
+     (advice-remove 'eglot--maybe-activate-editing-mode #'drgnx-lang--guard-eglot-activation)
+     (advice-add 'eglot--maybe-activate-editing-mode :around count)
+     (advice-add 'eglot--maybe-activate-editing-mode :around #'drgnx-lang--guard-eglot-activation)
+     (unwind-protect (progn ,@body)
+       (advice-remove 'eglot--maybe-activate-editing-mode count))))
+
+(defun drgnx-remote-test--fake-buffer (name file mode)
+  "A buffer NAME that looks like it visits FILE in MODE; nothing is read."
+  (with-current-buffer (generate-new-buffer name)
+    (setq buffer-file-name file default-directory (file-name-directory file) major-mode mode)
+    (current-buffer)))
+
+(ert-deftest drgnx-remote/attaching-lets-through-the-servers-project-only ()
+  (drgnx-remote-test--with
+    (let* ((root (drgnx-remote-test--root dir))
+           (mine (drgnx-remote-test--fake-buffer "mine" (concat root "a.py") 'python-mode))
+           (other (drgnx-remote-test--fake-buffer "other" "/ssh:elsewhere:/srv/p/c.py" 'python-mode)))
+      (drgnx-remote-test--counting-activation
+        (setq drgnx-tramp-mock-sends 0)
+        (let ((drgnx-lang--attaching (file-name-as-directory root)))
+          (with-current-buffer mine (eglot--maybe-activate-editing-mode))
+          (should (equal calls '("mine")))
+          (with-current-buffer other (eglot--maybe-activate-editing-mode))     ; another host: skipped
+          (should (equal calls '("mine")))
+          ;; a timer that fires inside the attaching is not part of it, for either buffer
+          (drgnx-remote--timer-without-command
+           (lambda (_)
+             (with-current-buffer other (eglot--maybe-activate-editing-mode))
+             (with-current-buffer mine (eglot--maybe-activate-editing-mode)))
+           nil)
+          (should (equal calls '("mine"))))
+        (should (= drgnx-tramp-mock-sends 0))))))
+
+(ert-deftest drgnx-remote/attaching-skips-other-modes-and-survives-a-bad-buffer ()
+  (drgnx-remote-test--with
+    (let* ((root (drgnx-remote-test--root dir))
+           (bad (drgnx-remote-test--fake-buffer "bad" (concat root "a.py") 'python-mode))
+           (good (drgnx-remote-test--fake-buffer "good" (concat root "b.py") 'python-mode))
+           (text (drgnx-remote-test--fake-buffer "text" (concat root "c.txt") 'text-mode))
+           (other (drgnx-remote-test--fake-buffer "other" "/ssh:elsewhere:/srv/p/c.py" 'python-mode)))
+      (drgnx-remote-test--counting-activation
+        (cl-letf (((symbol-function 'eglot--project) (lambda (_s) (cons 'transient root)))
+                  ((symbol-function 'eglot--major-modes) (lambda (_s) '(python-mode))))
+          (drgnx-lang--attach-buffers 'a-server))
+        (should (equal (sort (copy-sequence calls) #'string<) '("bad" "good")))   ; "text" and "other" left alone
+        (ignore bad good text other)))))
+
+(ert-deftest drgnx-remote/a-sentinel-of-the-explorer-lists-nothing ()
+  "The Explorer's trash sentinel refreshes a folder; it is not the user's command that happens to wait."
+  (let* ((dir (file-name-as-directory (make-temp-file "drgnx-gio" t))) (file (expand-file-name "f.txt" dir))
+         (sentinel nil) (seen 'unset))
+    (write-region "" nil file nil 'silent)
+    (get-buffer-create drgnx-explorer-buffer-name)
+    (unwind-protect
+        (cl-letf (((symbol-function 'executable-find) (lambda (&rest _) "/usr/bin/gio"))
+                  ((symbol-function 'make-process) (lambda (&rest args) (setq sentinel (plist-get args :sentinel)) 'proc))
+                  ((symbol-function 'drgnx-explorer--refresh-dir)
+                   (lambda (_d) (setq seen drgnx-explorer--remote-reads))))
+          (should (drgnx-explorer--gio-trash file))
+          (let ((drgnx-explorer--remote-reads t))                    ; the user's listing is waiting for the host
+            (funcall sentinel 'proc "finished\n"))
+          (should (null seen)))
+      (kill-buffer drgnx-explorer-buffer-name)
+      (delete-directory dir t))))
+
+(ert-deftest drgnx-remote/the-attach-hook-goes-last ()
+  (let ((eglot-connect-hook '(first-hook)))
+    (unwind-protect
+        (progn (drgnx-lang--install-eglot-guards)
+               (should (eq (car (last eglot-connect-hook)) 'drgnx-lang--attach-buffers)))
       (drgnx-lang--teardown-eglot-guards))))
 
 ;;;; The fixture

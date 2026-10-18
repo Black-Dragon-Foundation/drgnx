@@ -20,6 +20,7 @@
 (defvar eglot-server-programs)
 (defvar warning-minimum-level)
 (declare-function eglot--maybe-activate-editing-mode "eglot")
+(declare-function eglot--major-modes "eglot")
 (defvar xref-prompt-for-identifier)
 (declare-function eglot-ensure "eglot")
 (declare-function eglot-rename "eglot")
@@ -192,7 +193,8 @@ command of the user's (eglot calls it from the server process's sentinel, and TR
     nil))
 
 (defvar drgnx-lang--attaching nil
-  "The server whose buffers `drgnx-lang--attach-buffers' is attaching, or nil; the eglot guard lets those through.")
+  "While `drgnx-lang--attach-buffers' attaches the buffers of a remote server, the expanded root of its project (a
+directory name); nil otherwise.  The eglot guard lets through the buffers whose file is under it, and no others.")
 
 (defun drgnx-lang--guard-eglot-activation (activate &rest args)
   "Around advice of `eglot--maybe-activate-editing-mode' (eglot's `after-change-major-mode-hook' function): call
@@ -201,24 +203,27 @@ for a remote buffer that is a round trip (about forty TRAMP calls).  Nothing is 
 that visits the file, eglot attaches the buffer to the running server as usual.  Eglot's own loop over all buffers
 when a server has answered runs in a process filter, so it is skipped for remote buffers too; the buffers of a
 server's project are attached by `drgnx-lang--attach-buffers' (which binds `drgnx-lang--attaching')."
-  (when (or drgnx-lang--attaching
+  (when (or (and drgnx-lang--attaching buffer-file-name (string-prefix-p drgnx-lang--attaching buffer-file-name))
             (drgnx-lang--user-command-p)
             (not (file-remote-p default-directory)))
     (apply activate args)))
 
 (defun drgnx-lang--attach-buffers (server)
   "Attach the unmanaged buffers under the remote project of SERVER to it (`eglot-connect-hook', and a start that
-finds the server running).  The buffers are chosen by a prefix test on their file names, with no I/O, so those
-of other hosts stay as they are."
+finds the server running).  The buffers are chosen by a prefix test on their file names against the project root
+\(expanded: the project may say `/method:host:~/proj/', the file names never do) and by the major modes of the
+server, with no I/O, so those of other hosts stay as they are.  One buffer that fails does not stop the others."
   (when-let* (((fboundp 'eglot--maybe-activate-editing-mode))
               (root (ignore-errors (project-root (eglot--project server))))
-              ((file-remote-p root)))
-    (let ((root (file-name-as-directory root)) (drgnx-lang--attaching server))
+              ((file-remote-p root))
+              (modes (condition-case nil (eglot--major-modes server) (error t)))) ; t: no accessor, no filter
+    (let ((drgnx-lang--attaching (file-name-as-directory (expand-file-name root))))
       (dolist (buffer (buffer-list))
         (with-current-buffer buffer
-          (when (and buffer-file-name (string-prefix-p root buffer-file-name)
-                     (not (bound-and-true-p eglot--managed-mode)))
-            (eglot--maybe-activate-editing-mode)))))))
+          (when (and buffer-file-name (string-prefix-p drgnx-lang--attaching buffer-file-name)
+                     (not (bound-and-true-p eglot--managed-mode))
+                     (or (eq modes t) (apply #'derived-mode-p modes)))
+            (with-demoted-errors "Remote: language server: %S" (eglot--maybe-activate-editing-mode))))))))
 
 (defvar drgnx-lang--eglot-warned nil "Was the missing eglot function reported?")
 
@@ -226,20 +231,29 @@ of other hosts stay as they are."
   "Put the remote guards on eglot (after it is loaded): no automatic reconnect of a remote server, no attaching of
 a remote buffer from outside a command, and the attaching of a server's project after it answered."
   (add-hook 'eglot-connect-hook #'drgnx-lang--no-remote-autoreconnect)
-  (add-hook 'eglot-connect-hook #'drgnx-lang--attach-buffers)
+  (add-hook 'eglot-connect-hook #'drgnx-lang--attach-buffers t)   ; after the other connect hooks
   (advice-add 'eglot-reconnect :around #'drgnx-lang--guard-reconnect)
   (if (fboundp 'eglot--maybe-activate-editing-mode)
       (advice-add 'eglot--maybe-activate-editing-mode :around #'drgnx-lang--guard-eglot-activation)
     (unless drgnx-lang--eglot-warned
       (setq drgnx-lang--eglot-warned t)
-      ;; logged to *Warnings* without a window popping up: this runs at startup, nobody is asked
-      (let ((warning-minimum-level :error))
-        (display-warning 'drgnx-lang "This eglot has no `eglot--maybe-activate-editing-mode': the guard that keeps remote buffers from reaching the host on a mode change is off" :warning)))))
+      ;; Before `after-init-time' a warning is kept and shown later at the global level, with a window: wait for it
+      (if after-init-time
+          (drgnx-lang--report-missing-activation)
+        (add-hook 'after-init-hook #'drgnx-lang--report-missing-activation)))))
+
+(defun drgnx-lang--report-missing-activation ()
+  "Log, in *Warnings* and without showing it (this runs at startup, nobody is asked), that this eglot lacks the
+function the remote guard is built on."
+  (remove-hook 'after-init-hook #'drgnx-lang--report-missing-activation)
+  (let ((warning-minimum-level :error))
+    (display-warning 'drgnx-lang "This eglot has no `eglot--maybe-activate-editing-mode': the guard that keeps remote buffers from reaching the host on a mode change is off" :warning)))
 
 (defun drgnx-lang--teardown-eglot-guards ()
   "Take the eglot hooks and advice of the module's setup away (tests; modules switch off at the next start)."
   (remove-hook 'eglot-connect-hook #'drgnx-lang--no-remote-autoreconnect)
   (remove-hook 'eglot-connect-hook #'drgnx-lang--attach-buffers)
+  (remove-hook 'after-init-hook #'drgnx-lang--report-missing-activation)
   (advice-remove 'eglot-reconnect #'drgnx-lang--guard-reconnect)
   (advice-remove 'eglot--maybe-activate-editing-mode #'drgnx-lang--guard-eglot-activation))
 

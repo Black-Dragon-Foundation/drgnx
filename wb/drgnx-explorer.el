@@ -933,18 +933,19 @@ is refreshed if it is shown."
              :name "drgnx-gio-trash" :command (list "gio" "trash" "--" path) :buffer out
              :connection-type 'pipe :noquery t
              :sentinel (lambda (_proc event)
-                         (let ((why (if (buffer-live-p out) (string-trim (with-current-buffer out (buffer-string))) "")))
-                           (when (buffer-live-p out) (kill-buffer out))
-                           (condition-case nil
-                               (progn
-                                 (unless (string-prefix-p "finished" event)
-                                   (drgnx-explorer--trash-sync path))
-                                 (drgnx-explorer--close-buffers (list path)))
-                             (error (message "Could not move %s to the trash: %s"
-                                             (file-name-nondirectory path)
-                                             (if (string-empty-p why) (string-trim event) why)))))
-                         (when (get-buffer drgnx-explorer-buffer-name)
-                           (ignore-errors (drgnx-explorer--refresh-dir dir)))))
+                         (let ((drgnx-explorer--remote-reads nil)) ; a sentinel is not the command that happens to wait
+                           (let ((why (if (buffer-live-p out) (string-trim (with-current-buffer out (buffer-string))) "")))
+                             (when (buffer-live-p out) (kill-buffer out))
+                             (condition-case nil
+                                 (progn
+                                   (unless (string-prefix-p "finished" event)
+                                     (drgnx-explorer--trash-sync path))
+                                   (drgnx-explorer--close-buffers (list path)))
+                               (error (message "Could not move %s to the trash: %s"
+                                               (file-name-nondirectory path)
+                                               (if (string-empty-p why) (string-trim event) why)))))
+                           (when (get-buffer drgnx-explorer-buffer-name)
+                             (ignore-errors (drgnx-explorer--refresh-dir dir))))))
             t)
         (error (kill-buffer out) nil)))))
 
