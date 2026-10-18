@@ -160,6 +160,16 @@
         (drgnx-smooth--setup))
       (should (equal used '(ultra pixel))))))
 
+(load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
+(ert-deftest drgnx-smooth/turning-the-module-off-turns-scrolling-off ()
+  (let (on-inside)
+    (cl-letf (((symbol-function 'display-graphic-p) (lambda (&rest _) t)))
+      (drgnx-test-with-modules '(ui/smooth) :strict t
+                               (setq on-inside (or pixel-scroll-precision-mode (bound-and-true-p ultra-scroll-mode)))))
+    (should on-inside)
+    (should-not pixel-scroll-precision-mode)
+    (should-not (bound-and-true-p ultra-scroll-mode))))
+
 (ert-deftest drgnx-smooth/a-daemon-s-first-frame-gets-it ()
   ;; the first-frame stage runs before the new graphical frame is selected (a daemon's terminal frame still is)
   (load (expand-file-name "modules/ui/drgnx-smooth" drgnx-dir) nil t)

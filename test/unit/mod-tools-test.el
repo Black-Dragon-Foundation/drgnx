@@ -58,11 +58,12 @@
       (drgnx-wb-area-hide 'panel)
       (delete-directory dir t))))
 
+(load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
 (ert-deftest drgnx-org/the-org-commands-are-registered ()
-  (let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil))
-    (funcall (plist-get (alist-get 'org/org drgnx-modules--table) :setup))
-    (should (drgnx-commands-get 'org-capture))
-    (should (drgnx-commands-get 'org-agenda))))
+  (drgnx-test-with-modules '(org/org) :strict t
+                           (should (drgnx-commands-get 'org-capture))
+                           (should (drgnx-commands-get 'org-agenda)))
+  (should-not (drgnx-commands-get 'org-capture)))
 
 (ert-deftest drgnx-lang/server-alternatives-count-and-never-prompt ()
   ;; eglot's own entries are often (eglot-alternatives …) functions: the first installed one counts;
