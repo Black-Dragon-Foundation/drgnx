@@ -20,6 +20,7 @@
 (require 'drgnx-hooks)
 (require 'drgnx-pkg-activate)
 (require 'drgnx-modules-record)
+(require 'drgnx-modules-helpers)
 
 (defvar drgnx-modules--table nil "Alist NAME → plist (:doc :stage … :file), in definition order.")
 (defvar drgnx-modules--report nil "Alist NAME → plist (:stage :ms :status :error :missing).")
