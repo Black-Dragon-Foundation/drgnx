@@ -18,8 +18,20 @@
 
 (defun drgnx-tramp-mock--count (&rest _) (setq drgnx-tramp-mock-sends (1+ drgnx-tramp-mock-sends)))
 
+(defvar drgnx-tramp-mock--saved nil
+  "What `drgnx-tramp-mock-setup' changed, as it was before: a plist; nil while the mock is not set up.")
+
 (defun drgnx-tramp-mock-setup ()
-  "Add the method `drgnx-mock' and count what is sent.  Safe to call again.  No file under the home is written."
+  "Add the method `drgnx-mock' and count what is sent.  Safe to call again; `drgnx-tramp-mock-teardown' puts back
+everything changed here.  No file under the home is written."
+  (unless drgnx-tramp-mock--saved
+    (setq drgnx-tramp-mock--saved
+          (list :syntax (alist-get 'default tramp-method-regexp-alist)
+                :method (assoc "drgnx-mock" tramp-methods)
+                :hosts tramp-default-host-alist
+                :verbose tramp-verbose
+                :persistency tramp-persistency-file-name
+                :inhibit-cache remote-file-name-inhibit-cache)))
   ;; TRAMP's method names are letters and digits only; this one has a hyphen, so the syntax is rebuilt to allow it
   (setf (alist-get 'default tramp-method-regexp-alist)
         (rx (| (literal tramp-default-method-marker) (>= 2 (any alnum "-")))))
@@ -37,10 +49,20 @@
   (advice-add 'tramp-send-command :before #'drgnx-tramp-mock--count))
 
 (defun drgnx-tramp-mock-teardown ()
-  "Close every connection and stop counting."
+  "Close every connection, stop counting and put back what the setup changed."
   (advice-remove 'tramp-maybe-open-connection #'drgnx-tramp-mock--count)
   (advice-remove 'tramp-send-command #'drgnx-tramp-mock--count)
-  (ignore-errors (tramp-cleanup-all-connections)))
+  (ignore-errors (tramp-cleanup-all-connections))
+  (when-let* ((saved drgnx-tramp-mock--saved))
+    (setq drgnx-tramp-mock--saved nil)
+    (setf (alist-get 'default tramp-method-regexp-alist) (plist-get saved :syntax))
+    (tramp-change-syntax 'default)
+    (setq tramp-methods (assoc-delete-all "drgnx-mock" tramp-methods))
+    (when-let* ((method (plist-get saved :method))) (push method tramp-methods))
+    (setq tramp-default-host-alist (plist-get saved :hosts)
+          tramp-verbose (plist-get saved :verbose)
+          tramp-persistency-file-name (plist-get saved :persistency)
+          remote-file-name-inhibit-cache (plist-get saved :inhibit-cache))))
 
 (defun drgnx-tramp-mock-name (dir)
   "The mock-remote file name of the local DIR: \"/drgnx-mock::DIR\"."

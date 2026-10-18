@@ -58,37 +58,64 @@
 
 ;;;; Language servers on a remote host
 ;; Nothing here reaches a remote by itself.  `drgnx-lang-probe-remote' runs only from the user's commands (Open
-;; Remote…, Reconnect); the hook below reads what it found, and starts eglot only on a connection that is up.
+;; Remote…, Reconnect); the hook below reads what it found.  A server starts only inside such a command or a command
+;; of the user's that visits the file (`drgnx-lang--user-command'), at once and never from eglot's deferred
+;; post-command connect, and eglot never reconnects it by itself: a login that nobody asked for could prompt.
 
 (declare-function tramp-dissect-file-name "tramp")
 (declare-function tramp-get-connection-process "tramp")
+(declare-function eglot--guess-contact "eglot")
+(declare-function eglot--connect "eglot")
+(declare-function eglot--project "eglot")
+(declare-function project-root "project")
+(declare-function eieio-oref "eieio-core")
+(declare-function eieio-oset "eieio-core")
+(defvar eglot--managed-mode)
+(defvar eglot-connect-timeout)
 
 (defvar drgnx-lang--remote-servers (make-hash-table :test #'equal)
   "Connection (\"/ssh:HOST:\") → what `drgnx-lang-probe-remote' found there: ((MODES . PROGRAM-or-nil)…).")
 (defvar drgnx-lang--remote-wanted (make-hash-table :test #'equal)
   "Connection → ((MODES . NAME)…): the program each entry looks for, found or not (the hint names it).")
 (defvar drgnx-lang--remote-hinted nil "(CONNECTION . MODE) of the hints already given (one each).")
+(defvar drgnx-lang--remote-pending nil
+  "((PROJECT-ROOT . CONTACT) . TIME) of the servers just started: a server registers when it has answered, and a
+second buffer of the same project must not start another meanwhile.")
 
-(defun drgnx-lang--wanted (contact)
-  "The program CONTACT looks for, found or not; for `eglot-alternatives' the first alternative it tries."
-  (let ((asked nil))
-    (cl-letf (((symbol-function 'executable-find) (lambda (name &rest _) (push name asked) nil)))
-      (or (drgnx-lang--program contact) (car (last asked))))))
+(defvar drgnx-lang--user-command nil
+  "Non-nil while a command the user ran is executing: t, then `started' once a server was started in it (one per
+command).  tools/remote keeps it from `pre-command-hook' and `post-command-hook'; nil in a timer, a process filter or
+sentinel and a hook that runs between commands, where nothing may reach a remote.")
+
+(defun drgnx-lang--names (contact)
+  "The program names CONTACT may run, in the order it tries them; a function (`eglot-alternatives') is asked with
+`executable-find' answering nothing, so that every name it looks for is seen without any I/O."
+  (if (functionp contact)
+      (let ((asked nil))
+        (cl-letf (((symbol-function 'executable-find) (lambda (name &rest _) (push name asked) nil)))
+          (let ((prog (drgnx-lang--program contact))) (or (nreverse asked) (and prog (list prog))))))
+    (when-let* ((prog (drgnx-lang--program contact))) (list prog))))
+
+(defun drgnx-lang--remote-which (names)
+  "The ones of NAMES that are on the PATH of the host of `default-directory', asked in one shell call."
+  (when names
+    (with-temp-buffer
+      (process-file "sh" nil t nil "-c"
+                    (concat "for p in " (mapconcat #'shell-quote-argument names " ")
+                            "; do command -v \"$p\" >/dev/null 2>&1 && echo \"$p\"; done"))
+      (split-string (buffer-string) "\n" t))))
 
 (defun drgnx-lang-probe-remote (root)
-  "Look up, on the host of the remote folder ROOT, the program of every `eglot-server-programs' entry (TRAMP
-keeps `executable-find' answers per connection); remember the result for that connection and return it:
-((MODES . PROGRAM-or-nil)…).  This may open the connection, so it is only for the user's commands."
+  "Look up, on the host of the remote folder ROOT, the program of every `eglot-server-programs' entry (one shell
+call for all of them); remember the result for that connection and return it: ((MODES . PROGRAM-or-nil)…).  This
+may open the connection, so it is only for the user's commands."
   (require 'eglot)
-  (let* ((default-directory root) (key (file-remote-p root)) (asked (make-hash-table :test #'equal)) result wanted)
-    (dolist (entry eglot-server-programs)
-      (let* ((contact (cdr entry)) (prog (drgnx-lang--program contact))
-             (found (and prog (or (functionp contact)          ; a function looked on the host itself
-                                  (with-memoization (gethash prog asked) (and (executable-find prog t) t))))))
-        (push (cons (car entry) (and found prog)) result)
-        (push (cons (car entry) (or prog (drgnx-lang--wanted contact))) wanted)))
-    (puthash key (nreverse result) drgnx-lang--remote-servers)
-    (puthash key (nreverse wanted) drgnx-lang--remote-wanted)
+  (let* ((default-directory root) (key (file-remote-p root))
+         (entries (mapcar (lambda (e) (cons (car e) (drgnx-lang--names (cdr e)))) eglot-server-programs))
+         (found (drgnx-lang--remote-which (delete-dups (apply #'append (mapcar #'cdr entries))))))
+    (puthash key (mapcar (lambda (e) (cons (car e) (seq-find (lambda (n) (member n found)) (cdr e)))) entries)
+             drgnx-lang--remote-servers)
+    (puthash key (mapcar (lambda (e) (cons (car e) (cadr e))) entries) drgnx-lang--remote-wanted)
     (gethash key drgnx-lang--remote-servers)))
 
 (defun drgnx-lang--remote-live-p (file)
@@ -96,19 +123,64 @@ keeps `executable-find' answers per connection); remember the result for that co
   (and (featurep 'tramp)
        (ignore-errors (process-live-p (tramp-get-connection-process (tramp-dissect-file-name file))))))
 
+(defun drgnx-lang--remote-entries (file)
+  "What the probe found for the major mode of the buffer visiting the remote FILE: the matching
+`drgnx-lang--remote-servers' entries; nil when its connection was never probed."
+  (when-let* ((result (gethash (file-remote-p file) drgnx-lang--remote-servers)))
+    (seq-filter (lambda (e) (seq-some (lambda (m) (derived-mode-p (if (consp m) (car m) m))) (ensure-list (car e))))
+                result)))
+
+(defun drgnx-lang--remote-pending-p (key)
+  "Was a server for KEY started in the last `eglot-connect-timeout' seconds (30 without it)?"
+  (let ((limit (or (and (boundp 'eglot-connect-timeout) eglot-connect-timeout) 30)))
+    (setq drgnx-lang--remote-pending
+          (seq-filter (lambda (p) (< (- (float-time) (cdr p)) limit)) drgnx-lang--remote-pending))
+    (assoc key drgnx-lang--remote-pending)))
+
+(defun drgnx-lang-start-remote-server (&optional buffer)
+  "Start now the language server for the remote code BUFFER (default: the current one), when the probe found one
+for its mode, its connection is up and no server manages it.  Returns non-nil when it started one.  For the user's
+commands only (Open Remote…, Reconnect, a command that visits the file): it uses the connection, and TRAMP may ask."
+  (with-current-buffer (or buffer (current-buffer))
+    (when-let* ((file buffer-file-name)
+                ((file-remote-p file))
+                ((not (bound-and-true-p eglot--managed-mode)))
+                (entries (drgnx-lang--remote-entries file))
+                ((seq-some #'cdr entries))
+                ((drgnx-lang--remote-live-p file)))
+      (require 'eglot)
+      (condition-case err
+          (let* ((contact (eglot--guess-contact))
+                 (key (cons (project-root (nth 1 contact)) (nth 3 contact))))
+            (unless (drgnx-lang--remote-pending-p key)
+              (push (cons key (float-time)) drgnx-lang--remote-pending)
+              (apply #'eglot--connect contact)
+              t))
+        (error (message "No language server started for %s: %s" (file-name-nondirectory file) (error-message-string err))
+               nil)))))
+
+(defun drgnx-lang--no-remote-autoreconnect (server)
+  "In `eglot-connect-hook': a server whose project is remote is never reconnected by eglot.  Eglot does it from the
+server process's sentinel, and TRAMP would log in again there, from nowhere.  (The slot holds the timer of the
+first seconds, or t; a buffer-local `eglot-autoreconnect' does not reach it.)"
+  (when (ignore-errors (file-remote-p (project-root (eglot--project server))))
+    (with-no-warnings                   ; eglot's private slot: the compiler checks it against whichever eglot it sees
+      (let ((timer (eieio-oref server 'inhibit-autoreconnect)))
+        (when (timerp timer) (cancel-timer timer)))
+      (eieio-oset server 'inhibit-autoreconnect t))))
+
 (defun drgnx-lang--maybe-eglot-remote (file)
-  "The code buffer of the remote FILE: eglot when the probe found a server there and the connection is up; a
-one-time hint when the probe found none; nothing when the connection was never probed."
-  (when-let* ((key (file-remote-p file))
-              (result (gethash key drgnx-lang--remote-servers))
-              (entries (seq-filter (lambda (e) (seq-some (lambda (m) (derived-mode-p (if (consp m) (car m) m)))
-                                                         (ensure-list (car e))))
-                                   result)))
-    (cond ((seq-some #'cdr entries) (when (drgnx-lang--remote-live-p file) (eglot-ensure)))
-          ((not (member (cons key major-mode) drgnx-lang--remote-hinted))
-           (push (cons key major-mode) drgnx-lang--remote-hinted)
+  "The code buffer of the remote FILE: a server when the probe found one here and a command of the user is running
+(`drgnx-lang--user-command'; one per command); a one-time hint when the probe found none; nothing otherwise."
+  (when-let* ((entries (drgnx-lang--remote-entries file)))
+    (cond ((seq-some #'cdr entries)
+           (when (eq drgnx-lang--user-command t)
+             (setq drgnx-lang--user-command 'started)
+             (drgnx-lang-start-remote-server)))
+          ((not (member (cons (file-remote-p file) major-mode) drgnx-lang--remote-hinted))
+           (push (cons (file-remote-p file) major-mode) drgnx-lang--remote-hinted)
            (message "No language server for %s on %s: install %s there" major-mode (file-remote-p file 'host)
-                    (or (alist-get (car (car entries)) (gethash key drgnx-lang--remote-wanted) nil nil #'equal)
+                    (or (alist-get (car (car entries)) (gethash (file-remote-p file) drgnx-lang--remote-wanted) nil nil #'equal)
                         "one"))))))
 
 (defun drgnx-lang--maybe-eglot ()
@@ -151,6 +223,8 @@ is set non-empty (headless test sessions).  A remote file only looks at what Ope
                      (lambda ()
                        (drgnx-lang-remap-modes)
                        (add-hook 'prog-mode-hook #'drgnx-lang--maybe-eglot)
+                       (with-eval-after-load 'eglot
+                         (add-hook 'eglot-connect-hook #'drgnx-lang--no-remote-autoreconnect))
                        (setq xref-prompt-for-identifier nil
                              eglot-sync-connect nil                 ; a slow server never blocks opening the file
                              eglot-autoshutdown t)                  ; a server goes with its project's last buffer

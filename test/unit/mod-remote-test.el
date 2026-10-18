@@ -6,6 +6,7 @@
 (require 'drgnx)
 (require 'drgnx-registry)
 (require 'eglot)
+(require 'python)
 (load (expand-file-name "test/fixtures/tramp-mock" drgnx-dir) nil t)
 (load (expand-file-name "modules/lang/drgnx-lang" drgnx-dir) nil t)
 (load (expand-file-name "modules/tools/drgnx-remote" drgnx-dir) nil t)
@@ -20,7 +21,7 @@
 
 (defmacro drgnx-remote-test--with (&rest body)
   "BODY with the mock method set up, `dir' a temp directory holding `bin/drgnx-lsp' (a language server the \"remote\"
-finds) and `src/', no roots, no probes, no hints, the language-server switch off the environment, and everything
+finds: test/fixtures/lsp-stub.sh) and `src/', no roots, no probes, no hints, the language-server switch off the environment, and everything
 closed afterwards.  The servers eglot knows are four invented ones, so the machine's own tools do not decide a
 test: python-mode runs `drgnx-lsp', python-ts-mode the first found of two, rust-mode one nobody has, c-mode a
 choice of two nobody has."
@@ -38,14 +39,21 @@ choice of two nobody has."
           (drgnx-lang--remote-servers (make-hash-table :test #'equal))
           (drgnx-lang--remote-wanted (make-hash-table :test #'equal))
           (drgnx-lang--remote-hinted nil)
+          (drgnx-lang--remote-pending nil)
+          (drgnx-lang--user-command nil)
+          (drgnx-remote-may-prompt nil)
           (explorer-roots nil)
           (messages nil))
      (make-directory bin) (make-directory (expand-file-name "src" dir))
-     (drgnx-remote-test--script bin "drgnx-lsp" "exit 0")
+     (copy-file (expand-file-name "test/fixtures/lsp-stub.sh" drgnx-dir) (expand-file-name "drgnx-lsp" bin))
+     (set-file-modes (expand-file-name "drgnx-lsp" bin) #o755)
      (drgnx-tramp-mock-setup)
      (cl-letf (((symbol-function 'drgnx-explorer-roots) (lambda () explorer-roots))
                ((symbol-function 'message) (lambda (fmt &rest args) (when fmt (push (apply #'format fmt args) messages)) nil)))
        (unwind-protect (progn ,@body)
+         (when (boundp 'eglot--servers-by-project)
+           (maphash (lambda (_ servers) (dolist (s servers) (ignore-errors (eglot-shutdown s nil 1 t))))
+                    eglot--servers-by-project))
          (dolist (b (buffer-list))
            (when (and (buffer-file-name b) (file-remote-p (buffer-file-name b)))
              (with-current-buffer b (set-buffer-modified-p nil))
@@ -87,6 +95,7 @@ choice of two nobody has."
           (with-temp-file (expand-file-name "extra.conf" ssh) (insert "Host x\nInclude nested.conf\nHost y # comment\n"))
           (with-temp-file (expand-file-name "nested.conf" ssh) (insert "Host never\n"))
           (with-temp-file (expand-file-name "conf.d/one.conf" ssh) (insert "Host z\n"))
+          (make-directory (expand-file-name "conf.d/folder.conf" ssh))            ; a glob also matches a folder: not a config
           (should (equal (drgnx-remote-ssh-hosts) '("a" "b" "f" "g" "x" "y" "z"))))
       (delete-directory home t))))
 
@@ -95,17 +104,19 @@ choice of two nobody has."
     (unwind-protect (should-not (drgnx-remote-ssh-hosts)) (delete-directory home t))))
 
 (ert-deftest drgnx-remote/containers-from-podman ()
-  (let* ((bin (make-temp-file "drgnx-podman" t))
+  (let* ((sleep (executable-find "sleep")) (bin (make-temp-file "drgnx-podman" t))
          (exec-path (list bin)) (process-environment (cons (concat "PATH=" bin) process-environment)))
     (unwind-protect
         (progn
           (should-not (drgnx-remote-containers))                         ; no podman: nil
           (drgnx-remote-test--script bin "podman" "[ \"$*\" = 'ps --format {{.Names}}' ] && printf 'web\\ndb\\n'")
           (should (equal (drgnx-remote-containers) '("web" "db")))
-          (drgnx-remote-test--script bin "podman" "exec sleep 30")            ; a podman that hangs: nil after the limit
-          (let ((drgnx-remote-podman-timeout 0.3) (start (float-time)))
+          (drgnx-remote-test--script bin "podman" (concat "exec " sleep " 30"))   ; a podman that hangs: nil at the limit
+          (let ((drgnx-remote-podman-timeout 0.5) (start (float-time)))
             (should-not (drgnx-remote-containers))
-            (should (< (- (float-time) start) 5))))
+            (should (>= (- (float-time) start) 0.5))
+            (should (< (- (float-time) start) 3))
+            (should-not (seq-filter (lambda (p) (string-prefix-p "drgnx-podman" (process-name p))) (process-list)))))
       (delete-directory bin t))))
 
 ;;;; Open Remote…
@@ -136,6 +147,18 @@ choice of two nobody has."
 
 ;;;; Language servers on the remote side
 
+(ert-deftest drgnx-remote/probe-is-one-shell-call ()
+  ;; forty more entries: asking the host once per program and PATH folder would be hundreds of round trips
+  (drgnx-remote-test--with
+    (let ((eglot-server-programs (append eglot-server-programs
+                                         (cl-loop for i below 40 collect (cons (intern (format "x%d-mode" i))
+                                                                               (list (format "drgnx-none-%d" i))))))
+          (root (drgnx-remote-test--root dir)))
+      (should (file-directory-p root))                                  ; the connection's own set-up is not the probe's
+      (setq drgnx-tramp-mock-sends 0)
+      (drgnx-lang-probe-remote root)
+      (should (< drgnx-tramp-mock-sends 8)))))
+
 (ert-deftest drgnx-remote/probe-finds-and-misses ()
   (drgnx-remote-test--with
     (let* ((root (drgnx-remote-test--root dir)) (result (drgnx-lang-probe-remote root)))
@@ -147,19 +170,80 @@ choice of two nobody has."
       (should-not (cdr (assq 'c-mode result)))
       (should (equal (cdr (assq 'c-mode (gethash (file-remote-p root) drgnx-lang--remote-wanted))) "drgnx-nope-1")))))
 
-(ert-deftest drgnx-remote/eglot-starts-when-the-probe-found-it ()
+(ert-deftest drgnx-remote/a-server-starts-in-a-users-command-only ()
   (drgnx-remote-test--with
-    (let* ((root (drgnx-remote-test--root dir)) (started 0)
+    (let* ((root (drgnx-remote-test--root dir)) (connects 0)
            (b (drgnx-remote-test--code-buffer (concat root "app.py"))))
       (drgnx-lang-probe-remote root)
-      (cl-letf (((symbol-function 'eglot-ensure) (lambda () (cl-incf started))))
-        (with-current-buffer b (drgnx-lang--maybe-eglot))
-        (should (= started 1))
-        (should-not messages)
-        ;; the connection is lost: nothing automatic tries to reach it again, the user's Reconnect does
-        (drgnx-remote-test--lose root)
-        (with-current-buffer b (drgnx-lang--maybe-eglot))
-        (should (= started 1))))))
+      (cl-letf (((symbol-function 'eglot--connect) (lambda (&rest _) (cl-incf connects))))
+        (with-current-buffer b
+          (drgnx-lang--maybe-eglot)                                   ; a timer, a process, a restored session
+          (should (= connects 0))
+          (let ((drgnx-lang--user-command t))                         ; a command of the user is running
+            (drgnx-lang--maybe-eglot)
+            (should (= connects 1))
+            (should (eq drgnx-lang--user-command 'started))
+            (drgnx-lang--maybe-eglot)                                 ; one start per command
+            (should (= connects 1)))
+          (drgnx-remote-test--lose root)                              ; the connection is lost: even a command waits
+          (setq drgnx-lang--remote-pending nil)
+          (let ((drgnx-lang--user-command t)) (drgnx-lang--maybe-eglot))
+          (should (= connects 1)))
+        (should-not messages)))))
+
+(ert-deftest drgnx-remote/visiting-outside-a-command-starts-nothing ()
+  (drgnx-remote-test--with
+    (let* ((root (drgnx-remote-test--root dir)) (connects 0) (prog-mode-hook nil) (python-mode-hook nil)
+           (visit (lambda (name) (let ((before drgnx-tramp-mock-sends))
+                                   (kill-buffer (find-file-noselect (concat root name)))
+                                   (- drgnx-tramp-mock-sends before)))))
+      (dolist (n '("warm.py" "a.py" "b.py" "c.py")) (with-temp-file (expand-file-name n (concat dir "src")) (insert "x = 1\n")))
+      (drgnx-lang-probe-remote root)
+      (funcall visit "warm.py")
+      (let ((plain (funcall visit "a.py")))                         ; what a visit costs by itself
+        (cl-letf (((symbol-function 'eglot--connect) (lambda (&rest _) (cl-incf connects))))
+          (setq prog-mode-hook (list #'drgnx-lang--maybe-eglot)) ; python-mode or python-ts-mode: both are prog modes
+          (should (= (funcall visit "b.py") plain))                  ; the hook adds nothing
+          (should (= connects 0))
+          (let ((drgnx-lang--user-command t))                         ; the user's command visits a file: one start
+            (funcall visit "c.py")
+            (should (= connects 1))))))))
+
+(ert-deftest drgnx-remote/a-remote-server-is-never-reconnected-by-eglot ()
+  ;; eglot reconnects a server that dies after `eglot-autoreconnect' seconds from its process sentinel, and TRAMP
+  ;; would log in again there: a prompt, from nowhere.  A real (stub) server on the mock host.
+  (drgnx-remote-test--with
+    (let* ((root (drgnx-remote-test--root dir)) (connects 0) (prog-mode-hook nil) (python-mode-hook nil)
+           (eglot-autoreconnect 1) (eglot-sync-connect nil)
+           (eglot-connect-hook (cons #'drgnx-lang--no-remote-autoreconnect eglot-connect-hook))
+           (wait (lambda (secs) (let ((end (+ (float-time) secs))) (while (< (float-time) end) (accept-process-output nil 0.1))))))
+      (with-temp-file (expand-file-name "src/app.py" dir) (insert "x = 1\n"))
+      (drgnx-lang-probe-remote root)
+      (advice-add 'eglot--connect :before (lambda (&rest _) (cl-incf connects)) '((name . drgnx-remote-test)))
+      (unwind-protect
+          (with-current-buffer (find-file-noselect (concat root "app.py"))
+            (should (or (drgnx-lang-start-remote-server) (error "not started: %S" messages)))
+            (with-timeout (15 (error "the stub server did not connect: %S" messages))
+              (while (not (eglot-current-server)) (accept-process-output nil 0.1)))
+            (let ((server (eglot-current-server)))
+              (should (eq (eieio-oref server 'inhibit-autoreconnect) t))   ; not the timer eglot set
+              (funcall wait 1.5)                                         ; past the 1 s window: eglot would reconnect
+              (kill-process (jsonrpc--process server))
+              (with-timeout (5 (error "the server did not die")) (while (jsonrpc-running-p server) (accept-process-output nil 0.1)))
+              (setq drgnx-tramp-mock-sends 0)
+              (funcall wait 1.5)
+              (should (= connects 1))
+              (should (= drgnx-tramp-mock-sends 0))))
+        (advice-remove 'eglot--connect 'drgnx-remote-test)))))
+
+(ert-deftest drgnx-remote/the-reconnect-hook-leaves-local-servers-alone ()
+  (let ((server (make-symbol "local-server")) (set nil))
+    (cl-letf (((symbol-function 'eglot--project) (lambda (_) '(transient . "/tmp/")))
+              ((symbol-function 'project-root) (lambda (p) (cdr p)))
+              ((symbol-function 'eieio-oref) (lambda (&rest _) 'timer-not-touched))
+              ((symbol-function 'eieio-oset) (lambda (&rest _) (setq set t))))
+      (drgnx-lang--no-remote-autoreconnect server)
+      (should-not set))))
 
 (ert-deftest drgnx-remote/hint-when-not-installed ()
   (drgnx-remote-test--with
@@ -167,7 +251,7 @@ choice of two nobody has."
            (b (drgnx-remote-test--code-buffer (concat root "app.py"))))
       (delete-file (expand-file-name "drgnx-lsp" bin))
       (drgnx-lang-probe-remote root)
-      (cl-letf (((symbol-function 'eglot-ensure) (lambda () (cl-incf started))))
+      (cl-letf (((symbol-function 'eglot--connect) (lambda (&rest _) (cl-incf started))))
         (with-current-buffer b (drgnx-lang--maybe-eglot) (drgnx-lang--maybe-eglot))
         (should (= started 0))
         (should (equal messages '("No language server for python-mode on localhost: install drgnx-lsp there")))   ; once
@@ -185,8 +269,8 @@ choice of two nobody has."
            (b (drgnx-remote-test--code-buffer (concat root "app.py"))))
       (should (file-directory-p root))                                   ; connected by the user's command
       (setq drgnx-tramp-mock-sends 0)
-      (cl-letf (((symbol-function 'eglot-ensure) (lambda () (cl-incf started))))
-        (with-current-buffer b (drgnx-lang--maybe-eglot)))
+      (cl-letf (((symbol-function 'eglot--connect) (lambda (&rest _) (cl-incf started))))
+        (let ((drgnx-lang--user-command t)) (with-current-buffer b (drgnx-lang--maybe-eglot))))
       (should (= drgnx-tramp-mock-sends 0))                              ; never probed: nothing sent, nothing started
       (should (= started 0))
       (should-not messages)
@@ -251,9 +335,10 @@ choice of two nobody has."
            (vec (tramp-dissect-file-name root)))
       (with-temp-file (expand-file-name "src/app.py" dir) (insert "print(1)\n"))
       (cl-letf (((symbol-function 'drgnx-session-open-folder) (lambda (d) (setq explorer-roots (list d))))
-                ((symbol-function 'eglot-ensure) (lambda () (cl-incf started))))
+                ((symbol-function 'eglot--connect) (lambda (&rest _) (cl-incf started))))
         (drgnx-remote-open-folder root)
-        (let ((b (find-file-noselect file)))
+        (let* ((b (find-file-noselect file))
+               (terminal (let ((default-directory root)) (start-file-process "drgnx-keep" nil "sleep" "60"))))
           (with-current-buffer b
             (goto-char (point-max)) (insert "print(2)\n") (goto-char 4)
             (should (buffer-modified-p)))
@@ -268,7 +353,20 @@ choice of two nobody has."
             (should (= (point) 4)))
           (should (process-live-p (tramp-get-connection-process vec)))
           (should (eq (get-text-property 0 'face (drgnx-remote-segment)) 'drgnx-remote-connected))
+          (should (process-live-p terminal))                           ; what else runs on the host is not killed
+          (delete-process terminal)
           (should (= started 1)))))))
+
+(ert-deftest drgnx-remote/open-starts-servers-for-the-code-already-open ()
+  (drgnx-remote-test--with
+    (let* ((root (drgnx-remote-test--root dir)) (connects 0) (prog-mode-hook nil) (python-mode-hook nil))
+      (with-temp-file (expand-file-name "src/app.py" dir) (insert "x = 1\n"))
+      (cl-letf (((symbol-function 'drgnx-session-open-folder) (lambda (d) (setq explorer-roots (list d))))
+                ((symbol-function 'eglot--connect) (lambda (&rest _) (cl-incf connects))))
+        (find-file-noselect (concat root "app.py"))                  ; opened by typing the path: nothing started
+        (should (= connects 0))
+        (drgnx-remote-open-folder root)
+        (should (= connects 1))))))
 
 (ert-deftest drgnx-remote/reconnect-shuts-servers-down-without-killing-buffers ()
   (drgnx-remote-test--with
@@ -309,10 +407,80 @@ choice of two nobody has."
           (should (equal (drgnx-cmd-title (drgnx-commands-get 'remote-open)) "Open Remote…"))
           (should (equal (drgnx-cmd-title (drgnx-commands-get 'remote-reconnect)) "Reconnect"))
           (should (= 1 (seq-count (lambda (e) (and (consp e) (eq (car e) :eval))) global-mode-string))))
+      (drgnx-remote--teardown)
       (setq global-mode-string nil))
     (dolist (profile '("vscode" "emacs" "vim"))
       (let ((text (with-temp-buffer (insert-file-contents (expand-file-name (format "keys/%s.eld" profile) drgnx-dir)) (buffer-string))))
         (dolist (id '("remote-open" "remote-reconnect"))
           (should (string-match-p (concat "(" id " ") text)))))))
+
+;;;; Nothing asks from nowhere
+
+(ert-deftest drgnx-remote/a-prompt-outside-a-command-is-refused ()
+  (let* ((ran nil) (drgnx-lang--user-command nil) (drgnx-remote-may-prompt nil)
+         (ask (lambda (&rest _) (setq ran t))))
+    (should-error (drgnx-remote--guard-prompt ask 'proc 'vec) :type 'remote-file-error)
+    (should-not ran)
+    (let ((drgnx-lang--user-command t)) (drgnx-remote--guard-prompt ask 'proc 'vec))   ; a command: C-x C-f /ssh:HOST:
+    (should ran)
+    (setq ran nil)
+    (let ((drgnx-remote-may-prompt t)) (drgnx-remote--guard-prompt ask 'proc 'vec))   ; Open Remote…, Reconnect
+    (should ran)))
+
+(ert-deftest drgnx-remote/the-commands-may-prompt ()
+  (drgnx-remote-test--with
+    (let ((root (drgnx-remote-test--root dir)) (seen nil))
+      (cl-letf (((symbol-function 'drgnx-session-open-folder) (lambda (_) (push (cons 'open drgnx-remote-may-prompt) seen)))
+                ((symbol-function 'drgnx-lang-probe-remote) (lambda (_) (push (cons 'probe drgnx-remote-may-prompt) seen) nil)))
+        (drgnx-remote-open-folder root)
+        (should (equal seen '((probe . t) (open . t))))
+        (should-not drgnx-remote-may-prompt)))))
+
+(ert-deftest drgnx-remote/the-flag-follows-the-users-commands ()
+  (let ((drgnx-lang--user-command nil))
+    (drgnx-remote--command-start)
+    (should (eq drgnx-lang--user-command t))
+    (drgnx-remote--command-end)
+    (should-not drgnx-lang--user-command)
+    (drgnx-remote--command-start)
+    (cl-letf (((symbol-function 'minibuffer-depth) (lambda () 1)))     ; a key in the minibuffer: the outer command goes on
+      (drgnx-remote--command-end))
+    (should (eq drgnx-lang--user-command t))
+    (drgnx-remote--command-failed)                                    ; an error or C-g ends it too
+    (should-not drgnx-lang--user-command)))
+
+(ert-deftest drgnx-remote/the-module-puts-everything-back ()
+  (let ((global-mode-string nil) (pre pre-command-hook) (post post-command-hook) (err command-error-function)
+        (drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
+        (actions '(tramp-action-password tramp-action-yesno tramp-action-yn tramp-action-otp-password)))
+    (unwind-protect
+        (progn
+          (drgnx-remote--setup)
+          (drgnx-remote--setup)                                        ; twice: still once
+          (should (= 1 (length global-mode-string)))
+          (should (memq #'drgnx-remote--command-start pre-command-hook))
+          (should (memq #'drgnx-remote--command-end post-command-hook))
+          (dolist (a actions) (should (advice-member-p #'drgnx-remote--guard-prompt a))))
+      (drgnx-remote--teardown))
+    (should-not global-mode-string)
+    (should (equal pre-command-hook pre))
+    (should (equal post-command-hook post))
+    (should (equal command-error-function err))
+    (dolist (a actions) (should-not (advice-member-p #'drgnx-remote--guard-prompt a)))))
+
+;;;; The fixture
+
+(ert-deftest drgnx-remote/the-mock-puts-tramp-back ()
+  (let ((regexp tramp-method-regexp) (methods (copy-sequence tramp-methods)) (hosts tramp-default-host-alist)
+        (verbose tramp-verbose) (file tramp-persistency-file-name))
+    (drgnx-tramp-mock-setup)
+    (should (tramp-tramp-file-p "/drgnx-mock::/tmp/x"))
+    (drgnx-tramp-mock-teardown)
+    (should-not (tramp-tramp-file-p "/drgnx-mock::/tmp/x"))
+    (should (equal tramp-method-regexp regexp))
+    (should (equal tramp-methods methods))
+    (should (equal tramp-default-host-alist hosts))
+    (should (equal tramp-verbose verbose))
+    (should (equal tramp-persistency-file-name file))))
 
 ;;; mod-remote-test.el ends here

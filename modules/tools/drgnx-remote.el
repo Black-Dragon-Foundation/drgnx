@@ -10,7 +10,10 @@
 ;;
 ;; Everything that reaches a remote is a command the user ran: Open Remote…, Reconnect, a typed ssh path.
 ;; Nothing automatic does — the segment and the hook only read the process table and what the commands stored;
-;; ssh asks its questions (host keys, passwords) only from those commands.  See docs/guide/remote.md.
+;; ssh asks its questions (host keys, passwords) only from those commands: while the module is on, TRAMP's password,
+;; yes/no and one-time-password questions are refused unless a command of the user is running
+;; (`drgnx-lang--user-command', kept from `pre-command-hook' and `post-command-hook') or one of these commands
+;; bound `drgnx-remote-may-prompt'.  See docs/guide/remote.md.
 
 ;;; Code:
 (require 'cl-lib)
@@ -26,7 +29,9 @@
 (declare-function drgnx-explorer-roots "drgnx-explorer")
 (declare-function drgnx-lang-probe-remote "drgnx-lang")
 (declare-function drgnx-lang--remote-live-p "drgnx-lang")
-(declare-function drgnx-lang--maybe-eglot "drgnx-lang")
+(declare-function drgnx-lang-start-remote-server "drgnx-lang")
+(defvar drgnx-lang--user-command)
+(defvar drgnx-lang--remote-pending)
 (declare-function tramp-dissect-file-name "tramp")
 (declare-function tramp-cleanup-connection "tramp-cmds")
 (declare-function eglot-shutdown "eglot")
@@ -41,6 +46,9 @@
 
 (defface drgnx-remote-lost '((t :inherit warning))
   "The remote segment while its connection is down (Reconnect brings it back)." :group 'drgnx)
+
+(defvar drgnx-remote-may-prompt nil
+  "Non-nil while Open Remote… or Reconnect run: TRAMP may ask for a password, a host key or a code.")
 
 (defvar drgnx-remote--roots nil
   "Alist CONNECTION (\"/ssh:HOST:\") → (:root DIR): the folders Open Remote… opened, the newest first.")
@@ -68,7 +76,7 @@
   (let* ((ssh (file-name-as-directory (expand-file-name "~/.ssh")))
          (config (expand-file-name "config" ssh))
          (included (mapcan (lambda (line)
-                             (mapcan (lambda (pattern) (file-expand-wildcards (expand-file-name pattern ssh)))
+                             (mapcan (lambda (pattern) (seq-filter #'file-regular-p (file-expand-wildcards (expand-file-name pattern ssh))))
                                      (split-string line "[ \t]+" t)))
                            (drgnx-remote--config-lines config "^[ \t]*include[ \t=]+\\([^#\n]*\\)"))))
     (delete-dups (append (drgnx-remote--config-hosts config) (mapcan #'drgnx-remote--config-hosts included)))))
@@ -102,10 +110,12 @@
 (defun drgnx-remote-open-folder (dir)
   "Show the remote folder DIR as the Explorer's first folder, remember its connection and look for the language
 servers on its host.  Opens the connection if it is not up (the user ran the command that got us here)."
-  (let ((root (file-name-as-directory (expand-file-name dir))))
+  (let* ((drgnx-remote-may-prompt t)
+         (root (file-name-as-directory (expand-file-name dir))))
     (drgnx-session-open-folder root)
     (drgnx-remote--remember root)
     (drgnx-lang-probe-remote root)
+    (drgnx-remote--start-servers (file-remote-p root))
     (force-mode-line-update t)
     root))
 
@@ -120,7 +130,8 @@ servers on its host.  Opens the connection if it is not up (the user ran the com
 Explorer folder.  ssh asks for host keys and passwords here, as it does for `C-x C-f /ssh:HOST:'."
   (interactive)
   (require 'tramp)
-  (let* ((choice (completing-read "Open remote: "
+  (let* ((drgnx-remote-may-prompt t)
+         (choice (completing-read "Open remote: "
                                   (append (mapcar (lambda (h) (concat "ssh: " h)) (drgnx-remote-ssh-hosts))
                                           (mapcar (lambda (c) (concat "podman: " c)) (drgnx-remote-containers))
                                           (list "Other host…"))
@@ -205,6 +216,12 @@ folder of it, else its home."
                                (provided-mode-derived-p (buffer-local-value 'major-mode b) 'prog-mode)))
               (buffer-list)))
 
+(defun drgnx-remote--start-servers (key)
+  "Start a language server in the code buffers of the connection KEY that the probe found one for."
+  (setq drgnx-lang--remote-pending nil)
+  (dolist (b (drgnx-remote--code-buffers key))
+    (drgnx-lang-start-remote-server b)))
+
 (defun drgnx-remote--servers (key)
   "The eglot servers running on the connection KEY."
   (when (and (featurep 'eglot) (boundp 'eglot--servers-by-project))
@@ -221,17 +238,16 @@ servers without closing their buffers, close the connection, open it again by re
 servers again and start them in its code buffers.  Buffers, their unsaved changes and point stay."
   (interactive (list (drgnx-remote--pick)))
   (require 'tramp)
-  (let* ((key (or key (drgnx-remote--pick))) (host (file-remote-p key 'host))
-         (root (drgnx-remote--root key)) (code (drgnx-remote--code-buffers key)))
+  (let* ((drgnx-remote-may-prompt t) (key (or key (drgnx-remote--pick))) (host (file-remote-p key 'host))
+         (root (drgnx-remote--root key)))
     (dolist (server (drgnx-remote--servers key))
       (with-demoted-errors "Remote: language server: %S" (eglot-shutdown server nil 2 t)))
-    (tramp-cleanup-connection (tramp-dissect-file-name key) t t)
+    (tramp-cleanup-connection (tramp-dissect-file-name key) t t t)   ; keep other processes (shells) of the host
     (condition-case err (file-directory-p root)
       (error (user-error "Cannot reconnect to %s: %s" host (error-message-string err))))
     (unless (drgnx-lang--remote-live-p key) (user-error "Cannot reconnect to %s" host))
     (drgnx-lang-probe-remote root)
-    (dolist (b code)
-      (when (buffer-live-p b) (with-current-buffer b (drgnx-lang--maybe-eglot))))
+    (drgnx-remote--start-servers key)
     (force-mode-line-update t)
     (message "Reconnected to %s" host)))
 
@@ -239,13 +255,51 @@ servers again and start them in its code buffers.  Buffers, their unsaved change
 
 (defconst drgnx-remote--mode-line-entry '(:eval (drgnx-remote--mode-line)))
 
+(defconst drgnx-remote--prompt-functions
+  '(tramp-action-password tramp-action-yesno tramp-action-yn tramp-action-otp-password)
+  "What TRAMP calls to ask the user something while it logs in.")
+
+(defun drgnx-remote--guard-prompt (ask &rest args)
+  "Around advice of `drgnx-remote--prompt-functions': call ASK (with ARGS) while a command of the user is running or
+one of the Remote commands asked for it (`drgnx-remote-may-prompt'); otherwise refuse, so that a login nobody asked
+for (a timer, a sentinel, a language server) fails with an error instead of freezing Emacs on a hidden question."
+  (if (or drgnx-remote-may-prompt drgnx-lang--user-command)
+      (apply ask args)
+    (signal 'remote-file-error
+            (list "A remote asked a question outside of a command of yours; use Reconnect or Open Remote…"))))
+
+(defun drgnx-remote--command-start ()
+  "In `pre-command-hook': a command of the user starts."
+  (setq drgnx-lang--user-command t))
+
+(defun drgnx-remote--command-end ()
+  "In `post-command-hook': the command is done (a key in the minibuffer is not the outer command's end)."
+  (when (zerop (minibuffer-depth)) (setq drgnx-lang--user-command nil)))
+
+(defun drgnx-remote--command-failed (&rest _)
+  "Before `command-error-function': a command that ends in an error or C-g runs no `post-command-hook'."
+  (setq drgnx-lang--user-command nil))
+
 (defun drgnx-remote--setup ()
-  "Define the commands and put the segment on the mode line."
+  "Define the commands, put the segment on the mode line, follow the user's commands and guard TRAMP's questions."
   (drgnx-command-define 'remote-open :category "Remote" :title "Open Remote…" :command #'drgnx-remote-open
                         :doc "Edit on another machine: pick an ssh host or a podman container, then a folder")
   (drgnx-command-define 'remote-reconnect :category "Remote" :title "Reconnect" :command #'drgnx-remote-reconnect
-                        :doc "Bring a lost remote connection back; buffers, changes and language servers continue")
-  (add-to-list 'global-mode-string drgnx-remote--mode-line-entry t))
+                        :doc "Bring a lost remote connection back; buffers and changes stay, language servers start again")
+  (add-to-list 'global-mode-string drgnx-remote--mode-line-entry t)
+  (add-hook 'pre-command-hook #'drgnx-remote--command-start)
+  (add-hook 'post-command-hook #'drgnx-remote--command-end)
+  (add-function :before command-error-function #'drgnx-remote--command-failed)
+  (dolist (f drgnx-remote--prompt-functions) (advice-add f :around #'drgnx-remote--guard-prompt)))
+
+(defun drgnx-remote--teardown ()
+  "Undo `drgnx-remote--setup' except the commands (modules are switched off at the next start; tests use this)."
+  (setq global-mode-string (delete drgnx-remote--mode-line-entry global-mode-string))
+  (remove-hook 'pre-command-hook #'drgnx-remote--command-start)
+  (remove-hook 'post-command-hook #'drgnx-remote--command-end)
+  (remove-function command-error-function #'drgnx-remote--command-failed)
+  (dolist (f drgnx-remote--prompt-functions) (advice-remove f #'drgnx-remote--guard-prompt))
+  (setq drgnx-lang--user-command nil))
 
 (drgnx-module-define 'tools/remote
                      :doc "Open Remote… (ssh hosts, podman containers), a status-line segment, Reconnect, language servers on the remote side"
