@@ -69,7 +69,9 @@ systemd user unit (`systemd-run --user`) where systemd runs your session, else i
 launcher: `setsid`, or on macOS, which has no `setsid`, the perl every Mac has; with neither, starting a job says
 "Detached jobs need setsid or perl" and creates nothing). Each job has
 a directory under `~/.local/state/drgnx/jobs/` (its command, log, pid and exit code), so any Emacs lists it in the
-Agents tab (running, exited N, stopped, gone), shows its log (Show Job Log) and stops it (Stop Job). A job's pid is
+Agents tab (running, exited N, stopped, gone), shows its log (Show Job Log) and stops it (Stop Job: under systemd it returns once the job's unit is down, but after
+`drgnx-jobs-stop-wait` seconds, 3 by default, at the latest; a job that ignores TERM is left to systemd, which kills it
+after 90 s). A job's pid is
 trusted only within the boot that started it and for the process it started (a pid reused after a reboot is "gone",
 never signalled). Under systemd the job's wrapper line passes through the unit's ExecStart, which reads `$$` as `$`, so drgnx doubles
 every `$` in it: the `pid` file holds the job shell's real pid, and the job reads as running and can be stopped. A job can be memory-capped (`:memory-max "1G"` in `drgnx-jobs-start`: systemd's `MemoryMax`, no swap;

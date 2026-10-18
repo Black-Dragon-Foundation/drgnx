@@ -97,7 +97,8 @@ keys) is the job's too, and is kept nowhere: not in its state files, not in a co
 (\"1G\"): the systemd launcher caps the job's memory (MemoryMax, no swap); NICE (10) lowers its priority
 (Nice=); the detached launcher can do neither and ignores both.  NO-WAIT: return without waiting (up to
 two seconds) for the job's pid — its boot and start time are stamped from a short timer once the pid file
-appears, or when Emacs exits first — for callers that must not block (a timer started from a sentinel)."
+appears, or when Emacs exits first — for callers that must not block (a timer started from a sentinel).
+Signals a `user-error' (before anything is created) when the detached launcher has neither setsid nor perl."
   (let* ((id (drgnx-jobs--new-id)) (dir (drgnx-jobs--dir id))
          (cwd (expand-file-name (or cwd default-directory)))
          (launcher (drgnx-jobs-launcher))
@@ -194,26 +195,31 @@ appears, or when Emacs exits first — for callers that must not block (a timer 
         (insert-file-contents f)
         (buffer-substring (max (point-min) (- (point-max) (or max 20000))) (point-max))))))
 
-(defvar drgnx-jobs-stop-wait 3
-  "Seconds `drgnx-jobs-stop' waits for a systemd job's process to go before it returns.")
+(defcustom drgnx-jobs-stop-wait 3
+  "Seconds `drgnx-jobs-stop' waits for a systemd job's unit to go down before it returns.
+A job that ignores TERM keeps its unit \"deactivating\" until systemd kills it (90 s): Stop returns after this
+long and leaves that to systemd."
+  :type 'number :group 'drgnx)
 
-(defun drgnx-jobs--await-gone (pid unit)
-  "Wait up to `drgnx-jobs-stop-wait' seconds for process PID (or, without one, systemd UNIT) to end."
-  (let ((deadline (+ (float-time) drgnx-jobs-stop-wait)))
-    (while (and (< (float-time) deadline)
-                (if pid (process-attributes pid)
-                  (eql 0 (call-process "systemctl" nil nil nil "--user" "--quiet" "is-active" unit))))
-      (sleep-for 0.05))))
+(defun drgnx-jobs--unit-down-p (unit)
+  "Non-nil when systemd UNIT is neither active nor on its way down (inactive, failed, or gone)."
+  (not (member (with-temp-buffer
+                 (call-process "systemctl" nil t nil "--user" "is-active" unit)
+                 (string-trim (buffer-string)))
+               '("active" "activating" "deactivating" "reloading"))))
 
 (defun drgnx-jobs-stop (id)
   "Stop job ID (its whole process group, or its unit).  A systemd unit is asked to stop without waiting for it
 \(`systemctl stop' would hold this for the unit's TimeoutStopSec, 90 s, while a process of the job ignores TERM):
-this returns once the job's own process is gone, or after `drgnx-jobs-stop-wait' seconds."
+this returns once the whole unit is down, so the job's children are gone too, or after `drgnx-jobs-stop-wait'
+seconds."
   (let ((job (drgnx-jobs-get id)))
     (when (eq (plist-get job :status) 'running)
       (if (eq (plist-get job :launcher) 'systemd)
-          (progn (call-process "systemctl" nil nil nil "--user" "--no-block" "stop" (plist-get job :unit))
-                 (drgnx-jobs--await-gone (plist-get job :pid) (plist-get job :unit)))
+          (let ((unit (plist-get job :unit)) (deadline (+ (float-time) drgnx-jobs-stop-wait)))
+            (call-process "systemctl" nil nil nil "--user" "--no-block" "stop" unit)
+            (while (and (< (float-time) deadline) (not (drgnx-jobs--unit-down-p unit)))
+              (sleep-for 0.05)))
         ;; only a pid verified as the job's (status `running' checked the boot and the start time)
         (when-let* ((pid (plist-get job :pid))) (signal-process (- pid) 'SIGTERM))))))
 

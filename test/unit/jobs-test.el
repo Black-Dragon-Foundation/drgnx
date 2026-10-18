@@ -51,10 +51,12 @@ killing the starter's whole process group does not take the job along."
           (starter (make-process
                     :name "drgnx-jobs-starter" :noquery t :connection-type 'pipe :buffer nil
                     :command (list (expand-file-name invocation-name invocation-directory)
-                                   "--batch" "-Q" "-L" (file-name-directory (locate-library "drgnx-jobs")) "-l" "drgnx-jobs"
+                                   "--batch" "-Q" "-L" (file-name-directory (locate-library "drgnx-jobs"))
+                                   "-l" "drgnx-jobs"
                                    "--eval" (format "(setq drgnx-jobs--setsid %S)" drgnx-jobs--setsid)
                                    "--eval" (format (concat "(progn (write-region (drgnx-jobs-start \"test\" "
-                                                            "'(\"sh\" \"-c\" \"sleep 4; echo done\")) nil %S) (sleep-for 60))")
+                                                            "'(\"sh\" \"-c\" \"sleep 4; echo done\")) "
+                                                            "nil %S) (sleep-for 60))")
                                                     idfile))))
           (spid (process-id starter)) id)
      (unwind-protect
@@ -309,3 +311,39 @@ killing the starter's whole process group does not take the job along."
              (should (< (- (float-time) t0) 8)))
            (should-not (eq (drgnx-jobs-test--status id) 'running)))
        (when id (call-process "systemctl" nil nil nil "--user" "kill" "--signal=SIGKILL" (concat "drgnx-job-" id)))))))
+
+(defun drgnx-jobs-test--unit-state (id)
+  (with-temp-buffer
+    (call-process "systemctl" nil t nil "--user" "is-active" (concat "drgnx-job-" id))
+    (string-trim (buffer-string))))
+
+(ert-deftest drgnx-jobs/stop-returns-once-the-whole-unit-is-down ()
+  ;; fix round 1: the wrapper shell ends at once on TERM, but a child needing a moment to clean up is still in the
+  ;; unit; a caller restarting the work right after Stop must not overlap it
+  (skip-unless (drgnx-jobs-test--systemd-p))
+  (drgnx-jobs-test--with
+   (let ((process-environment (cons "DRGNX_JOBS_LAUNCHER=systemd" process-environment)) (drgnx-jobs-stop-wait 3) id)
+     (unwind-protect
+         (progn
+           (setq id (drgnx-jobs-start
+                     "tidy" '("sh" "-c" "trap 'sleep 1; exit 0' TERM; while :; do sleep 0.1; done")))
+           (should (eq (drgnx-jobs-test--status id) 'running))
+           (let ((t0 (float-time)))
+             (drgnx-jobs-stop id)
+             (should (< (- (float-time) t0) 3.5)))
+           (should-not (member (drgnx-jobs-test--unit-state id) '("active" "activating" "deactivating"))))
+       (when id (call-process "systemctl" nil nil nil "--user" "kill" "--signal=SIGKILL" (concat "drgnx-job-" id)))))))
+
+(ert-deftest drgnx-jobs/a-systemd-job-keeps-its-dollars ()
+  ;; systemd's ExecStart reads `$$' and `${NAME}' itself: the user's command gets its own `$$' (the shell's pid) and
+  ;; `${HOME}' as written, run under a real unit
+  (skip-unless (drgnx-jobs-test--systemd-p))
+  (drgnx-jobs-test--with
+   (let ((process-environment (cons "DRGNX_JOBS_LAUNCHER=systemd" process-environment)) id)
+     (unwind-protect
+         (progn
+           (setq id (drgnx-jobs-start "dollars" '("sh" "-c" "echo \"pid=$$ home=${HOME}\"")))
+           (should (drgnx-jobs-test--wait (lambda () (eq (drgnx-jobs-test--status id) 'exited))))
+           (should (string-match "\\`pid=\\([0-9]+\\) home=\\(.*\\)\n?\\'" (drgnx-jobs-log id)))
+           (should (equal (match-string 2 (drgnx-jobs-log id)) (getenv "HOME"))))
+       (when id (call-process "systemctl" nil nil nil "--user" "stop" (concat "drgnx-job-" id)))))))
