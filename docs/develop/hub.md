@@ -34,7 +34,10 @@ User docs: [Agents → The hub and the gateway](../guide/agents.md#the-hub-and-t
 dir), else `<state>/hub/hub-HASH.sock`; a path over 103 bytes (macOS's limit, the closing NUL included in 104; Linux
 allows 107) — a deep state dir — moves to `drgnx-hub-UID/` in the temporary directory. The bytes are counted as the
 system sees the name, encoded (`file-name-coding-system`: macOS decomposes "é" into 3 bytes).
-Its directory is mode 0700 and must be the user's own. One JSON object per line:
+Its directory is mode 0700 and must be the user's own. A client checks the same before it pings, connects or sends
+anything (`drgnx-hub--untrusted`): the directory a real directory (not a link) of the user's with no access for
+others, and the socket the user's. Otherwise it refuses ("Not connecting to the drgnx hub: … is open to other users")
+and never hands over keys — on the `/tmp` fallback another local user could have made the directory first. One JSON object per line:
 
 | Request (`{"id", "method", "params"}`) | Result |
 |---|---|

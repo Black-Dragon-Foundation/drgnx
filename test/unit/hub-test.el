@@ -470,12 +470,45 @@ to OR-LOG, OPENROUTER_API_KEY unset."
       (should-not (file-exists-p socket))
       (should-not (file-exists-p (concat socket ".lock"))))))
 
+(ert-deftest drgnx-hub/a-socket-not-private-to-the-user-is-never-used ()
+  ;; whatever answers on the socket gets this Emacs's keys: a socket whose directory is open to others (or not the
+  ;; user's, or the socket itself not the user's) is never pinged, connected to or given anything
+  (drgnx-hub-test--with
+    (let* ((run (concat root "run")) (process-environment (cons (concat "XDG_RUNTIME_DIR=" run) process-environment))
+           (socket (drgnx-hub-socket)) (dir (file-name-directory socket)) (got "") (uid (user-uid)))
+      (make-directory dir t)
+      (puthash 'openrouter "sk-fake-loaded" drgnx-ai--keys)
+      (let ((listener (make-network-process :name "foreign-hub" :family 'local :server t :service socket :noquery t
+                                            :filter (lambda (c s) (setq got (concat got s))
+                                                      ;; it answers pings as a hub would
+                                                      (when (string-search "ping" s)
+                                                        (process-send-string c "{\"id\":0,\"result\":{\"pid\":1}}\n"))))))
+        (unwind-protect
+            (progn
+              (set-file-modes dir #o777)
+              (should-not (drgnx-hub-running-p))
+              (should (string-match-p "mode 777" (cadr (should-error (drgnx-hub-connect)))))
+              (should-error (drgnx-hub-call "status" nil #'ignore))
+              ;; the directory private, but not this user's (as another user's would be)
+              (set-file-modes dir #o700)
+              (cl-letf (((symbol-function 'user-uid) (lambda () (1+ uid))))
+                (should-not (drgnx-hub-running-p))
+                (should-error (drgnx-hub-connect)))
+              (drgnx-hub-test--wait #'ignore 0.3)
+              (should-not (string-search "sk-fake" got))
+              (should-not (string-search "gateway/keys" got))
+              (should-not (string-search "subscribe" got))
+              ;; and once it is the user's own and private, it is used
+              (should (drgnx-hub-running-p)))
+          (delete-process listener))))))
+
 (ert-deftest drgnx-hub/without-a-runtime-dir-the-socket-is-short-and-private ()
   (drgnx-hub-test--with
     (let ((process-environment (cons "XDG_RUNTIME_DIR" process-environment)))
       (should (string-prefix-p (drgnx-state-dir) (drgnx-hub-socket)))
       (drgnx-hub-serve (drgnx-hub-socket))
       (should (drgnx-hub-call-sync "ping" nil))
+      (should (equal (file-modes (file-name-directory (drgnx-hub-socket))) #o700))
       (drgnx-hub-disconnect) (drgnx-hub-stop))
     ;; a state dir so deep the socket path would pass the system's limit (103 bytes on macOS, 107 on Linux)
     (let* ((deep (concat root (make-string 120 ?d) "/"))

@@ -70,6 +70,19 @@ the state dir."
     (error "%s belongs to another user" dir))
   (set-file-modes dir #o700))
 
+(defun drgnx-hub--untrusted (socket)
+  "Why this Emacs must not use SOCKET (it would hand its keys to whatever answers there), or nil: its directory must
+be a directory (not a link) of this user's with no access for others (0700), and the socket, when there, this
+user's.  Nothing else can then have made it.  A directory not there yet is no reason: nothing listens in it."
+  (let* ((dir (directory-file-name (file-name-directory socket)))
+         (d (file-attributes dir)) (s (file-attributes socket)))
+    (cond ((null d) nil)
+          ((not (eq (file-attribute-type d) t)) (format "%s is not a directory" dir))
+          ((not (eql (file-attribute-user-id d) (user-uid))) (format "%s belongs to another user" dir))
+          ((/= 0 (logand (file-modes dir 'nofollow) #o077))
+           (format "%s is open to other users (mode %o; it must be 700)" dir (file-modes dir 'nofollow)))
+          ((and s (not (eql (file-attribute-user-id s) (user-uid)))) (format "%s belongs to another user" socket)))))
+
 (defun drgnx-hub--lock (socket) (concat socket ".lock"))
 
 (defun drgnx-hub--lock-pid (socket)
@@ -463,8 +476,8 @@ for an agent that is not here (or exited) stays queued."
   (dolist (c drgnx-hub--subscribers) (drgnx-hub--answer c (list :event (symbol-name event) :data data))))
 
 (defun drgnx-hub--ping-socket (socket)
-  "Does a hub answer on SOCKET?  (At most a second.)"
-  (when (file-exists-p socket)
+  "Does a hub answer on SOCKET?  (At most a second.)  One where it is not private to this user is never asked."
+  (when (and (file-exists-p socket) (not (drgnx-hub--untrusted socket)))
     (condition-case nil
         (let* ((got nil)
                (c (make-network-process :name "drgnx-hub-probe" :family 'local :service socket :noquery t
@@ -564,8 +577,12 @@ when it cannot start for any other reason."
 ;;;; The client side
 
 (defun drgnx-hub--connect-socket (filter)
-  (make-network-process :name "drgnx-hub-client" :family 'local :service (drgnx-hub-socket) :noquery t
-                        :coding 'utf-8-unix :filter filter))
+  "A connection to the hub's socket — never one that is not private to this user (`drgnx-hub--untrusted')."
+  (let ((socket (drgnx-hub-socket)))
+    (when-let* ((why (drgnx-hub--untrusted socket)))
+      (error "Not connecting to the drgnx hub: %s" why))
+    (make-network-process :name "drgnx-hub-client" :family 'local :service socket :noquery t
+                          :coding 'utf-8-unix :filter filter)))
 
 (defun drgnx-hub--client-filter (conn chunk)
   (drgnx-hub--lines conn chunk
