@@ -145,7 +145,7 @@ server inherited from its first client (stale when another terminal attached sin
          :fixes ((mok . "none: kitty speaks its own keyboard protocol (kkp), which drgnx uses instead")
                  (takes . "clear_all_shortcuts yes   (in kitty.conf, before your own map lines; `map kitty_mod+t' with no action frees one chord)"))
          :unconfirmed (:mok :mouse)
-         :verified "kitty 0.48.2: kkp, OSC 52 copy, true colour (test/tty/kitty-test.el)"
+         :verified "partly: kitty 0.48.2's kkp, OSC 52 copy and true colour (test/tty/kitty-test.el); not its mouse reports or shortcuts"
          :source "https://sw.kovidgoyal.net/kitty/conf/")
     (:id wezterm :name "WezTerm"
          :kkp nil :mok t :osc52 t :truecolor t :mouse t

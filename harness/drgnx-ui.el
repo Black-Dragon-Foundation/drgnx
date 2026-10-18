@@ -205,11 +205,24 @@ MONITORS: how many virtual monitors of SIZE (default 1)."
 (defvar drgnx-ui-session-extra-env nil
   "\"K=V\" strings added to the environment of the sessions started while this is bound, after the session's own
 variables (a later entry wins): a test puts a package's directory on the daemon's load path with EMACSLOADPATH
-\(`drgnx-tty-session-kitty-start').  Nil for every session the CLI and the MCP server start.")
+\(`drgnx-tty-session-kitty-start').  Nil for every session the CLI and the MCP server start.  Only names in
+`drgnx-ui-session-extra-env-names' are taken; anything else signals.")
+
+(defconst drgnx-ui-session-extra-env-names '("EMACSLOADPATH")
+  "The variables `drgnx-ui-session-extra-env' may set.  Not HOME, DISPLAY, the bus, XDG_RUNTIME_DIR or TMPDIR:
+a later entry wins, so one of those would move a session out of its run directory or onto the user's desktop.")
+
+(defun drgnx-ui--check-extra-env (env)
+  "ENV (\"K=V\" strings) when every name is in `drgnx-ui-session-extra-env-names'; else signal."
+  (dolist (kv env env)
+    (let ((name (and (stringp kv) (string-match "\\`\\([^=]+\\)=" kv) (match-string 1 kv))))
+      (unless (member name drgnx-ui-session-extra-env-names)
+        (drgnx-ui--fail "drgnx-ui-session-extra-env: %S is not one of %s" kv
+                        (string-join drgnx-ui-session-extra-env-names ", "))))))
 
 (defun drgnx-ui-session-env (sess &optional extra)
-  "Environment (\"K=V\" strings) for SESS: the allowlist, the session's variables, `drgnx-ui-session-extra-env',
-EXTRA."
+  "Environment (\"K=V\" strings) for SESS: the allowlist, the session's variables, `drgnx-ui-session-extra-env'
+\(checked: `drgnx-ui--check-extra-env'), EXTRA."
   (append (delq nil (mapcar (lambda (k) (let ((v (getenv k))) (and v (concat k "=" v))))
                             drgnx-ui-keep-env))
           (list (concat "DRGNX_UI_NAME=" (plist-get sess :name))
@@ -230,7 +243,7 @@ EXTRA."
                 (concat "XDG_STATE_HOME=" (expand-file-name "state" (plist-get sess :run)))
                 ;; …and its packages: never the user's ~/.local/share/drgnx (M5 review I9)
                 (concat "DRGNX_DATA_DIR=" (expand-file-name "drgnx-data" (plist-get sess :run))))
-          drgnx-ui-session-extra-env
+          (drgnx-ui--check-extra-env drgnx-ui-session-extra-env)
           extra))
 
 (defun drgnx-ui-env-argv (env)

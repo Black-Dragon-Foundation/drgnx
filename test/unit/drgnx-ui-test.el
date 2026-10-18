@@ -394,6 +394,11 @@ the real ones belong to sessions running next to the tests (bin/drgnx check's li
         (should (member "EMACSLOADPATH=/elpa/kkp:" (drgnx-ui-launch-argv s)))
         ;; the caller's EXTRA still comes last
         (should (equal (last (drgnx-ui-session-env s '("EMACSLOADPATH=/other:"))) '("EMACSLOADPATH=/other:"))))
+      ;; only names on the allow-list: nothing can move the session's home, display, bus or temp dir
+      (dolist (kv '("HOME=/x" "DISPLAY=:0" "DBUS_SESSION_BUS_ADDRESS=x" "XDG_RUNTIME_DIR=/x" "TMPDIR=/x" "no-equals"))
+        (let ((drgnx-ui-session-extra-env (list kv)))
+          (should-error (drgnx-ui-session-env s) :type 'drgnx-ui-error)
+          (should-error (drgnx-ui-launch-argv s) :type 'drgnx-ui-error)))
       (drgnx-ui-stop "drgnx-ui-1"))))
 
 (ert-deftest drgnx-ui/a-session-has-a-temp-dir-in-its-run-dir ()

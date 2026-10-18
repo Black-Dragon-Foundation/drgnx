@@ -183,3 +183,10 @@
           (should (string-match-p "DRGNX_USER_ELPA" (drgnx-tty-session-packages-hint '(corfu compat)))))
       (delete-directory elpa t)
       (delete-file lock))))
+
+(ert-deftest drgnx-tty-session/a-kitty-session-s-bus-is-its-own ()
+  ;; the bus kitty and the keyboard's Emacs get is the session's (dbus-run-session's): never none, never the caller's
+  (let ((process-environment (cons "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1/bus" process-environment)))
+    (should (equal (drgnx-tty-session--session-bus "unix:path=/tmp/dbus-x" "drgnx-ui-1") "unix:path=/tmp/dbus-x"))
+    (should-error (drgnx-tty-session--session-bus nil "drgnx-ui-1") :type 'drgnx-ui-error)
+    (should-error (drgnx-tty-session--session-bus "unix:path=/run/user/1/bus" "drgnx-ui-1") :type 'drgnx-ui-error)))

@@ -149,7 +149,7 @@ env_eval() { # FORM — evaluate with harness/drgnx-env.el loaded, print the res
 test_container() { # [--ui | --tty [--fedora 44|45]] — the batch (GUI, terminal) tier inside a fedora:45 / Emacs 31.1 container
   # DRGNX_TEST_IMAGE / DRGNX_TEST_GUI_IMAGE / DRGNX_TEST_TTY_IMAGE: use that image (CI pulls a prebuilt one) instead of building it
   # --tty --fedora 44 runs the terminal tier on Fedora 44's Emacs 30.2 (default 45: Emacs 31.1)
-  local rt mount image file prebuilt="${DRGNX_TEST_IMAGE:-}" args=() cmd=(bin/drgnx test) build=() tier="" fedora=""
+  local rt mount image file elpa prebuilt="${DRGNX_TEST_IMAGE:-}" args=() cmd=(bin/drgnx test) build=() tier="" fedora=""
   while (($#)); do
     case "$1" in
       --ui|--tty)
@@ -179,7 +179,10 @@ test_container() { # [--ui | --tty [--fedora 44|45]] — the batch (GUI, termina
     mount="$here:/src:ro"
     # packages the key and popup tests load (kkp, corfu), read-only; without them those tests skip
     if [ -n "${DRGNX_USER_ELPA:-}" ] && [ -d "$DRGNX_USER_ELPA" ]; then
-      args+=(-v "$(cd "$DRGNX_USER_ELPA" && pwd):/elpa:ro" -e DRGNX_USER_ELPA=/elpa)
+      elpa="$(cd "$DRGNX_USER_ELPA" && pwd)"
+      # a `:' would split -v's SOURCE:TARGET:OPTIONS (and could add options)
+      case "$elpa" in *:*) echo "drgnx: DRGNX_USER_ELPA must not contain ':' (it is mounted with -v): $elpa" >&2; return 2 ;; esac
+      args+=(-v "$elpa:/elpa:ro" -e DRGNX_USER_ELPA=/elpa)
     fi
   fi
   echo "container runtime: $rt" >&2

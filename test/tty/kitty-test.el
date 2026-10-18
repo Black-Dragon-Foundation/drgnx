@@ -96,7 +96,9 @@ afterwards.  (cdr SPEC) :kkp t: skip unless kkp is there; :size: kitty's size in
     (should-not (drgnx-tty-session-eval s '(active-minibuffer-window)))
     (drgnx-tty-session-kitty-key s "f6")
     (drgnx-tty-keys-test--ran s 'kx-f6 "<f6>")
-    ;; no hint: none was recorded for kitty, none was said
+    ;; no hint: none was recorded for kitty, none was said — after the moment it would have come (0.5 s), so the
+    ;; check cannot pass early
+    (sleep-for 1)
     (let ((hint (drgnx-tty-session-eval s '(drgnx-tty-fallback-hint-text))))
       (should-not (memq 'kitty (plist-get (drgnx-tty-session-eval s '(drgnx-tty--read-report)) :hinted)))
       (should-not (drgnx-tty-session-eval s `(with-current-buffer "*Messages*" (string-search ,hint (buffer-string)))))

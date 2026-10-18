@@ -332,7 +332,13 @@ terminal, as when a person types the command; else /dev/null and a pipe) → (EX
         (should (string-search "-e DRGNX_USER_ELPA=/elpa" run)))
       (delete-file log)
       (should (eql 0 (car (call '("test" "--container" "--tty") `(,rt ("DRGNX_TEST_TTY_IMAGE") ("DRGNX_USER_ELPA"))))))
-      (should-not (string-search "/elpa" (tty-bin-test--slurp log))))))
+      (should-not (string-search "/elpa" (tty-bin-test--slurp log)))
+      ;; a `:' would split -v's SOURCE:TARGET:OPTIONS: refused, nothing run
+      (let ((colon (expand-file-name "el:pa" dir)))
+        (make-directory colon)
+        (delete-file log)
+        (should (eql 2 (car (call '("test" "--container" "--tty") `(,rt ("DRGNX_TEST_TTY_IMAGE") ("DRGNX_USER_ELPA" . ,colon))))))
+        (should-not (file-exists-p log))))))
 
 (ert-deftest drgnx-bin/the-tty-workflow-runs-both-fedoras-like-the-gui-one ()
   (let ((yml (tty-bin-test--slurp (expand-file-name ".github/workflows/tty.yml" tty-bin-test--root)))

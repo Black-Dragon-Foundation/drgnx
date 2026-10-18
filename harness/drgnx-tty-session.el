@@ -735,6 +735,15 @@ the keyboard is there.")
         (drgnx-ui--fail "%s: %s within 30s:\n%s" (plist-get sess :name) what (drgnx-tty-session--log sess log)))
       (sleep-for 0.1))))
 
+(defun drgnx-tty-session--session-bus (bus name)
+  "BUS, session NAME's own bus (its Emacs's DBUS_SESSION_BUS_ADDRESS); signal when it has none or it is the
+caller's own: kitty and the keyboard's Emacs never reach the user's bus."
+  (cond ((not (and (stringp bus) (not (string-empty-p bus))))
+         (drgnx-ui--fail "%s: the session's Emacs has no session bus" name))
+        ((equal bus (getenv "DBUS_SESSION_BUS_ADDRESS"))
+         (drgnx-ui--fail "%s: the session's bus is the caller's own (%s), not one of its own" name bus))
+        (t bus)))
+
 (cl-defun drgnx-tty-session-kitty-start (&key size env)
   "Start a kitty session: a drgnx daemon under headless mutter (`drgnx-ui-start', with ENV, extra \"K=V\"
 strings, in its environment) and kitty on that display running `emacsclient -t' on the daemon's socket.  SIZE
@@ -756,7 +765,7 @@ session's own bus: never the user's display or bus.  Before it, a batch Emacs gi
           (when (> (length (plist-get sess :kitty)) 100)
             (drgnx-ui--fail "%s: kitty's socket path is too long for a Unix socket: %s"
                             (plist-get sess :name) (plist-get sess :kitty)))
-          (unless (stringp bus) (drgnx-ui--fail "%s: the session's Emacs has no session bus" (plist-get sess :name)))
+          (setq bus (drgnx-tty-session--session-bus bus (plist-get sess :name)))
           (dolist (d '("home" "xdg/config" "xdg/data" "xdg/cache")) (make-directory (expand-file-name d run) t))
           (plist-put sess :kitty-env (drgnx-tty-session--env
                                       sess (list (concat "WAYLAND_DISPLAY=" (plist-get sess :name))
