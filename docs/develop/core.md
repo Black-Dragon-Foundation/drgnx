@@ -235,6 +235,18 @@ cursor to the target output on a restore too; that cannot be turned off). A hypr
 arguments at spaces and commas, so a monitor name with whitespace, `,` or `;` is refused there; if the silent move fails after
 the window was focused, the window that had the focus gets it back (best effort, a call of its own).
 
+**KWin** (Plasma 6, status `reported`) has no tool, so the adapter loads a JavaScript file into KWin through its
+scripting D-Bus API (`org.kde.KWin` `/Scripting` `loadScript`, then `run` on `/Scripting/Script<id>`) and the script
+answers with `callDBus` to a `Reply(s)` method Emacs registers for the length of the call. Only Emacs' own
+`dbus.el` is used (no `qdbus`), and only `dbus-call-method-asynchronously` with the call's deadline as `:timeout`,
+so restore may use it. The method lives under Emacs' unique bus name at an object path of its own per call:
+`dbus-register-service` and `dbus-unregister-service` wait for the bus (RequestName, ReleaseName) and a well-known
+name would make two calls share a reply. The script, the object and the temporary file (mode 0600) are removed on
+success, error and deadline alike. `:monitors` lists `workspace.screens`; `:move` (the command) moves the active
+window and only if it is Emacs' (by pid); `:place` (restore) finds Emacs' window by pid and the frame's title (else
+the only normal window of that pid). Without D-Bus support or a session bus, `:can-move` says so with a fix. It
+has no `:frame-monitor` yet, so the monitor a frame is on is unknown there. Not run on a real Plasma session.
+
 **Another compositor** (river, Wayfire, labwc, Cosmic, ...): call `drgnx-platform-define-adapter` from your
 config. A new name goes before `x11` (so an adapter for an X window manager such as bspwm, awesome or xmonad
 wins over plain X) and before the catch-alls `tty`, `other-wayland` and `none`; its `:detect` is tried after the

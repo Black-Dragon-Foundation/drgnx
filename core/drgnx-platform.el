@@ -1152,5 +1152,207 @@ cursor to the target output when a window is moved with `--id', and this cannot 
  'niri :monitors #'drgnx-platform-wm--niri-monitors-fn
  :move #'drgnx-platform-wm--niri-move :place #'drgnx-platform-wm--niri-place)
 
+;;;; KWin (KDE Plasma 6): its scripting API over D-Bus
+;;
+;; KWin has no command-line tool that lists or moves windows, so the adapter loads a small JavaScript file
+;; into KWin (`/Scripting loadScript', then `run' on the script object) and the script reports back with
+;; `callDBus' to a method Emacs registers for the length of the call.  Only Emacs' own `dbus.el' is used (no
+;; `qdbus', no shell) and every D-Bus call is `dbus-call-method-asynchronously' with the call's deadline as
+;; its `:timeout': nothing here blocks, so restore may use it.  The `Reply' method is registered under Emacs'
+;; unique bus name (`dbus-get-unique-name'), at an object path of its own per call: a well-known name such as
+;; org.drgnx.Wm<PID> would need `dbus-register-service' and `dbus-unregister-service', which wait for the bus
+;; (RequestName, ReleaseName), and one path per call lets two calls run at once without sharing a reply.
+;; Everything a call made (script, object, file) is undone on success, error and deadline alike.
+;;
+;; Facts: KWin 6.7.5 ran headless (`kwin_wayland --virtual') in podman and the scripts' replies are recorded
+;; in test/fixtures/wm/kwin/.  Not run on a real Plasma session, nor with a unique name as the reply's
+;; destination: status `reported'.  KWin 5 (another scripting API) is not supported.
+
+(require 'json)
+(declare-function dbus-get-unique-name "dbusbind.c" (bus))
+(declare-function dbus-register-method "dbus" (bus service path interface method handler &optional dont-register-service))
+(declare-function dbus-unregister-object "dbus" (object))
+(declare-function dbus-call-method-asynchronously "dbus" (bus service path interface method handler &rest args))
+
+(defconst drgnx-platform-kwin--no-dbus
+  '("this Emacs has no D-Bus support" . "use an Emacs built with D-Bus (the installer's builds have it)"))
+
+(defconst drgnx-platform-kwin--no-bus
+  '("Emacs has no D-Bus session bus here"
+    . "start Emacs from the Plasma session (DBUS_SESSION_BUS_ADDRESS must name its session bus)"))
+
+(defvar drgnx-platform-kwin--counter 0 "Counts the calls, for their script names and object paths.")
+
+(defun drgnx-platform-kwin--dbus-p ()
+  "Non-nil when this Emacs was built with D-Bus."
+  (featurep 'dbusbind))
+
+(defun drgnx-platform-kwin--can-move (_ctx)
+  "t when D-Bus and the session bus are there, else (REASON . FIX)."
+  (cond ((not (drgnx-platform-kwin--dbus-p)) drgnx-platform-kwin--no-dbus)
+        ((not (and (require 'dbus nil t) (ignore-errors (dbus-get-unique-name :session))))
+         drgnx-platform-kwin--no-bus)
+        (t t)))
+
+(defun drgnx-platform-kwin--script (kind args)
+  "The KWin JavaScript for KIND: `screens', `windows' or `move'.  Pure.
+ARGS (a plist): :service and :path, where the script reports (`callDBus' of Reply, with a JSON string);
+for `move' also :pid, :screen (an output name, may be \"\"), :geometry (X Y W H of the target screen, the
+fallback when no name matches) and either :active t (the active window, which must be the window of :pid) or
+:caption (the window of :pid with that caption, else the only normal window of :pid).
+The reply is an array of screens or of windows (the shape of test/fixtures/wm/kwin/), or {\"ok\":true} or
+{\"error\":MESSAGE}."
+  (let ((str #'json-encode-string))
+    (concat
+     "(function () {\n"
+     "function reply(x) { callDBus(" (funcall str (plist-get args :service)) ", " (funcall str (plist-get args :path))
+     ", \"org.drgnx.Wm\", \"Reply\", JSON.stringify(x)); }\n"
+     "function box(g) { return { x: g.x, y: g.y, width: g.width, height: g.height }; }\n"
+     "try {\n"
+     (pcase kind
+       ('screens
+        (concat "reply(workspace.screens.map(function (s) {\n"
+                "  return { name: s.name, manufacturer: s.manufacturer, model: s.model,\n"
+                "           serialNumber: s.serialNumber, geometry: box(s.geometry) };\n"
+                "}));\n"))
+       ('windows
+        (concat "reply(workspace.windowList().map(function (w) {\n"
+                "  return { pid: w.pid, caption: w.caption, output: w.output ? w.output.name : null,\n"
+                "           fullScreen: w.fullScreen, normalWindow: w.normalWindow,\n"
+                "           resourceClass: w.resourceClass, internalId: String(w.internalId),\n"
+                "           geometry: box(w.frameGeometry), active: workspace.activeWindow === w };\n"
+                "}));\n"))
+       ('move
+        (concat
+         "var w = null;\n"
+         (if (plist-get args :active)
+             (concat "w = workspace.activeWindow;\n"
+                     (format "if (!w || w.pid !== %d) { reply({ error: \"the active window is not this Emacs\" }); return; }\n"
+                             (plist-get args :pid)))
+           (concat (format "var mine = workspace.windowList().filter(function (x) { return x.pid === %d && x.normalWindow; });\n"
+                           (plist-get args :pid))
+                   "var named = mine.filter(function (x) { return x.caption === "
+                   (funcall str (or (plist-get args :caption) "")) "; });\n"
+                   "w = named.length > 0 ? named[0] : (mine.length === 1 ? mine[0] : null);\n"
+                   "if (!w) { reply({ error: \"KWin has no window of this Emacs with that caption\" }); return; }\n"))
+         "var want = " (funcall str (or (plist-get args :screen) "")) ";\n"
+         (format "var geo = [%s];\n" (mapconcat (lambda (n) (format "%d" n)) (plist-get args :geometry) ", "))
+         "var screens = workspace.screens;\nvar s = null;\n"
+         "for (var i = 0; i < screens.length && !s; i++) { if (want !== \"\" && screens[i].name === want) s = screens[i]; }\n"
+         "for (var j = 0; j < screens.length && !s; j++) {\n"
+         "  var g = screens[j].geometry;\n"
+         "  if (geo.length === 4 && g.x === geo[0] && g.y === geo[1] && g.width === geo[2] && g.height === geo[3]) s = screens[j];\n"
+         "}\n"
+         "if (!s) { reply({ error: \"KWin has no such screen\" }); return; }\n"
+         "workspace.sendClientToScreen(w, s);\n"
+         "reply({ ok: true });\n"))
+       (_ (error "No KWin script called %S" kind)))
+     "} catch (e) { reply({ error: String(e) }); }\n"
+     "})();\n")))
+
+(defun drgnx-platform-kwin--parse (json)
+  "The Lisp value of the script's reply JSON: plists, lists, nil for null and false."
+  (condition-case nil
+      (json-parse-string json :object-type 'plist :array-type 'list :null-object nil :false-object nil)
+    (error (list :error "KWin's script answered something unreadable"))))
+
+(defun drgnx-platform-kwin--run (kind args timeout callback)
+  "Run the script KIND (with ARGS plus the reply address) in KWin; call CALLBACK once, later, with the parsed
+reply or (:error MESSAGE).  TIMEOUT seconds bound every step: when KWin has not answered by then the call
+ends with an error.  Script, reply object and temporary file are gone by the time CALLBACK runs."
+  (let ((cb (drgnx-platform--once callback)) (can (drgnx-platform-kwin--can-move nil)))
+    (if (not (eq can t))
+        (drgnx-platform--refuse cb (list :error (drgnx-platform--reason can)))
+      (let* ((n (cl-incf drgnx-platform-kwin--counter))
+             (name (format "drgnx-%d-%d" (emacs-pid) n))
+             (ms (max 1 (round (* 1000 timeout))))
+             (object nil) (file nil) (timer nil) (sent nil) (done nil)
+             (finish
+              (lambda (result)
+                (unless done
+                  (setq done t)
+                  (when timer (cancel-timer timer))
+                  (when object (ignore-errors (dbus-unregister-object object)))
+                  (when sent
+                    (ignore-errors
+                      (dbus-call-method-asynchronously :session "org.kde.KWin" "/Scripting" "org.kde.kwin.Scripting"
+                                                       "unloadScript" nil name :timeout ms)))
+                  (when file (ignore-errors (delete-file file)))
+                  (drgnx-platform--later (lambda () (funcall cb result)))))))
+        (condition-case err
+            (let* ((service (dbus-get-unique-name :session))
+                   (path (format "/org/drgnx/Wm%d" n))
+                   (script (drgnx-platform-kwin--script
+                            kind (append (list :service service :path path) args))))
+              (setq object (dbus-register-method
+                            :session service path "org.drgnx.Wm" "Reply"
+                            (lambda (json) (funcall finish (drgnx-platform-kwin--parse json)) t)
+                            t))
+              (setq timer (run-at-time timeout nil
+                                       (lambda ()
+                                         (funcall finish (list :error (format "KWin did not answer within %s s" timeout))))))
+              (setq file (let ((coding-system-for-write 'utf-8-unix))
+                           (make-temp-file "drgnx-kwin-" nil ".js" script)))
+              (setq sent t)
+              (dbus-call-method-asynchronously
+               :session "org.kde.KWin" "/Scripting" "org.kde.kwin.Scripting" "loadScript"
+               (lambda (id)
+                 (if (not (and (integerp id) (>= id 0)))
+                     (funcall finish (list :error "KWin could not load the script"))
+                   (dbus-call-method-asynchronously
+                    :session "org.kde.KWin" (format "/Scripting/Script%d" id) "org.kde.kwin.Script" "run"
+                    nil :timeout ms)))
+               file name :timeout ms))
+          (error (funcall finish (list :error (error-message-string err)))))))
+    nil))
+
+(defun drgnx-platform-kwin--reply-error (reply)
+  "REPLY if it is an error answer, else nil: an (:error MESSAGE) plist from the script or the runner."
+  (and (drgnx-platform--error-p reply) reply))
+
+(defun drgnx-platform-kwin--monitors (ctx callback)
+  "CALLBACK with KWin's screens as monitor plists (:name :make :model :serial :geometry), or (:error MESSAGE)."
+  (drgnx-platform-kwin--run
+   'screens nil (plist-get ctx :timeout)
+   (lambda (reply)
+     (funcall callback
+              (or (drgnx-platform-kwin--reply-error reply)
+                  (mapcar (lambda (s)
+                            (let ((g (plist-get s :geometry)))
+                              (list :name (or (plist-get s :name) "")
+                                    :make (or (plist-get s :manufacturer) "")
+                                    :model (or (plist-get s :model) "")
+                                    :serial (or (plist-get s :serialNumber) "")
+                                    :geometry (list (plist-get g :x) (plist-get g :y)
+                                                    (plist-get g :width) (plist-get g :height)))))
+                          reply))))))
+
+(defun drgnx-platform-kwin--send (ctx monitor extra callback)
+  "Run the move script for MONITOR with EXTRA script arguments; CALLBACK gets `ok' or (:error MESSAGE)."
+  (drgnx-platform-kwin--run
+   'move (append (list :pid (emacs-pid) :screen (or (plist-get monitor :name) "")
+                       :geometry (drgnx-platform--geometry monitor))
+                 extra)
+   (plist-get ctx :timeout)
+   (lambda (reply)
+     (funcall callback (cond ((drgnx-platform-kwin--reply-error reply))
+                             ((eq (plist-get reply :ok) t) 'ok)
+                             (t (list :error "KWin's script did not report a move")))))))
+
+(defun drgnx-platform-kwin--move (ctx monitor callback)
+  "Move the active window, which must be Emacs', to MONITOR: the path of a command the user typed."
+  (drgnx-platform-kwin--send ctx monitor (list :active t) callback))
+
+(defun drgnx-platform-kwin--place (ctx monitor callback)
+  "Move CTX's frame (found by Emacs' pid and the frame's title) to MONITOR: the restore path, any window."
+  (drgnx-platform-kwin--send
+   ctx monitor (list :caption (frame-parameter (plist-get ctx :frame) 'name)) callback))
+
+(drgnx-platform-define-adapter
+ 'kwin :status 'reported :tool nil
+ :monitors #'drgnx-platform-kwin--monitors
+ :move #'drgnx-platform-kwin--move :place #'drgnx-platform-kwin--place
+ :can-move #'drgnx-platform-kwin--can-move)
+
 (provide 'drgnx-platform)
 ;;; drgnx-platform.el ends here
