@@ -151,7 +151,12 @@ stopped (`drgnx-agents-stop' fails the test).  The feed's buffers are killed aft
     (should (eq (drgnx-cockpit-feed--footer-key "silent:/work/wt-b") 'silent))
     (let ((text (drgnx-cockpit-feed--footer-text "silent:/work/wt-b" 'silent)))
       (should (string-search "not reporting — add drgnx on its settings page" text))
-      (should-not (string-search "an outside agent" text)))))
+      (should-not (string-search "an outside agent" text)))
+    ;; a terminal that does not write UTF-8 gets ASCII
+    (cl-letf (((symbol-function 'drgnx-cockpit-graph--ascii-p) #'always))
+      (let ((text (drgnx-cockpit-feed--footer-text "silent:/work/wt-b" 'silent)))
+        (should (string-search "not reporting - add drgnx on its settings page" text))
+        (should-not (string-match-p "[^[:ascii:]]" text))))))
 
 (ert-deftest drgnx-cockpit-feed/answer-routes-by-kind-of-agent ()
   (drgnx-cockpit-feed-test--with

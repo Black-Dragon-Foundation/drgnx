@@ -423,6 +423,8 @@ A `completing-read' answer is the first candidate that starts with it.  The prom
                                        :map '(drgnx-agent-settings . drgnx-agent-settings-mode-map) :layer profile))))
             (should (seq-find (lambda (b) (and (eq (plist-get b :id) 'agent-settings-here) (equal (plist-get b :key) ",")))
                               (plist-get r :bindings)))
+            (should (seq-find (lambda (b) (and (eq (plist-get b :id) 'agent-settings-report) (equal (plist-get b :key) "R")))
+                              (plist-get r :bindings)))
             ;; no new conflict, no problem
             (should (equal (plist-get r :conflicts) (alist-get profile before)))
             (should-not (plist-get r :problems))))
@@ -689,5 +691,38 @@ A `completing-read' answer is the first candidate that starts with it.  The prom
       (goto-char (point-min))
       (search-forward "[Remove drgnx]")
       (should (button-at (1- (point)))))))
+
+;;;; Fix round 1
+
+(ert-deftest drgnx-agent-settings/report-keeps-an-existing-gemini-or-kimi-file ()
+  ;; the file has other settings (written as drgnx writes JSON): they stay, and taking drgnx out gives the file back
+  (drgnx-agent-settings-test--env
+    (dolist (case (list (list 'gemini (expand-file-name "settings.json" (expand-file-name ".gemini" (getenv "GEMINI_CLI_HOME")))
+                              "{\n  \"theme\": \"dark\",\n  \"mcpServers\": {\n    \"docs\": {\n      \"command\": \"npx\",\n      \"args\": [\n        \"-y\",\n        \"docs\"\n      ]\n    }\n  },\n  \"general\": {\n    \"vimMode\": true\n  }\n}\n")
+                        (list 'kimi (expand-file-name "mcp.json" (getenv "KIMI_CODE_HOME"))
+                              "{\n  \"mcpServers\": {\n    \"docs\": {\n      \"command\": \"npx\",\n      \"args\": [\n        \"-y\",\n        \"docs\"\n      ]\n    }\n  }\n}\n")))
+      (pcase-let ((`(,kind ,file ,text) case))
+        (drgnx-agent-settings-test--write file text)
+        (with-current-buffer (drgnx-agent-settings-open kind root)
+          (drgnx-agent-settings-test--answering (list t t)
+            (call-interactively #'drgnx-agent-settings-report)
+            (let ((after (drgnx-agent-settings-test--read file)))
+              (should (string-search "\"drgnx\"" after))
+              (should (string-search "\"docs\": {\n      \"command\": \"npx\",\n      \"args\": [\n        \"-y\",\n        \"docs\"\n      ]\n    }" after))
+              (when (eq kind 'gemini)
+                (should (string-search "\"theme\": \"dark\"" after))
+                (should (string-search "\"general\": {\n    \"vimMode\": true\n  }" after))))
+            (should (string-search "Reports to drgnx: yes" (buffer-string)))
+            (call-interactively #'drgnx-agent-settings-report))
+          (should (equal (drgnx-agent-settings-test--read file) text)))))))
+
+(ert-deftest drgnx-agent-settings/a-disabled-drgnx-server-is-not-reporting ()
+  (drgnx-agent-settings-test--env
+    (drgnx-agent-settings-test--write
+     (expand-file-name "config.toml" (getenv "CODEX_HOME"))
+     "[mcp_servers.drgnx]\ncommand = \"/x/bin/drgnx\"\nargs = [\"coord\", \"mcp\", \"--kind\", \"codex\"]\nenabled = false\n")
+    (with-current-buffer (drgnx-agent-settings-open 'codex root)
+      (should (string-search "Reports to drgnx: no (disabled)" (buffer-string)))
+      (should-not (string-search "Reports to drgnx: yes" (buffer-string))))))
 
 ;;; mod-agent-settings-test.el ends here

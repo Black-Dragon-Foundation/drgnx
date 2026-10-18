@@ -384,7 +384,7 @@ reports from), `outside' or `none'."
                                                   (lambda (_) (drgnx-cockpit-feed--transcript agent))
                                                   'help-echo "Every message, tool call and permission of this agent"))
             ('outside (propertize "no transcript: an outside agent" 'face 'drgnx-cockpit-edge))
-            ('silent (propertize "not reporting — add drgnx on its settings page" 'face 'drgnx-cockpit-edge))
+            ('silent (propertize (drgnx-cockpit-feed--glyphs "not reporting — add drgnx on its settings page") 'face 'drgnx-cockpit-edge))
             (_ (propertize "no transcript in this Emacs" 'face 'drgnx-cockpit-edge)))
           "\n"
           (drgnx-cockpit-feed--button (drgnx-cockpit-feed--glyphs "Reply… (queues, never interrupts)")

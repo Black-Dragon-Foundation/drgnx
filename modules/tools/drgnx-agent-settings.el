@@ -269,7 +269,9 @@
   "\"Reports to drgnx: yes/no\" with the button that adds or removes the coordination server."
   (let ((on (drgnx-agent-settings--reporting-item)))
     (insert (propertize "Reports to drgnx: " 'face 'drgnx-agent-settings-dim)
-            (if on (propertize "yes" 'face 'drgnx-agent-settings-ok) "no")
+            (cond ((null on) "no")
+                  ((plist-get on :enabled) (propertize "yes" 'face 'drgnx-agent-settings-ok))
+                  (t (propertize "no (disabled)" 'face 'drgnx-agent-settings-warning)))
             "  ")
     (drgnx-agent-settings--button (if on "[Remove drgnx]" "[Add drgnx]") #'drgnx-agent-settings-report
                                   (if on "Take the coordination server out of this agent's settings"

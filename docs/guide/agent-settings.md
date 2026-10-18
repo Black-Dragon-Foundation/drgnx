@@ -85,7 +85,7 @@ The same keys in every key profile (VS Code, Emacs, Vim):
 | `o` | Open Its File | the file this line comes from, at its line |
 | `r` | OpenRouter Restrictions… | which providers OpenRouter may use, and whether they may keep data |
 | `TAB` | Other Agent… | another agent's page, for the same project |
-| (button) | Report to drgnx | add the `drgnx` MCP server to the agent's user settings, or take it out (see below) |
+| `R` | Report to drgnx | add the `drgnx` MCP server to the agent's user settings, or take it out (see below) |
 
 Every row has buttons for the same commands, and every section has **[Add…]** (Skills: **[New Skill…]**; MCP
 Servers: **[Test All]** too).
@@ -93,11 +93,12 @@ Servers: **[Test All]** too).
 ## Report to drgnx
 
 Under the rules and project, the page says **Reports to drgnx: yes** or **no**, with a button, **[Add drgnx]** or
-**[Remove drgnx]** (also Agents: Report to drgnx in the palette, run on the page; the `r` key is OpenRouter
-Restrictions, so this command has no key). An agent that runs outside drgnx, in a terminal or another editor, shows
-in the Work cockpit ([cockpit.md](cockpit.md)) only when it has drgnx's coordination server. The button adds an MCP
-server called `drgnx` to the agent's **user** settings: `bin/drgnx coord mcp --kind KIND`, the same server drgnx's own
-agents are given. It asks first and names the file. Nothing is written without it, and opening the page never writes.
+**[Remove drgnx]** (also `R`, or Agent Settings: Report to drgnx in the palette, which is offered on the page). A
+`drgnx` server that is switched off shows **no (disabled)**. An agent that runs outside drgnx, in a terminal or
+another editor, shows in the Work cockpit ([cockpit.md](cockpit.md)) only when it has drgnx's coordination server.
+The button adds an MCP server called `drgnx` to the agent's **user** settings: `bin/drgnx coord mcp --kind KIND`, the
+same server drgnx's own agents are given. It asks first and names the file. Nothing is written without it, and
+opening the page never writes.
 
 - Claude Code: through its `claude mcp add-json drgnx … --scope user` (and `claude mcp remove` to take it out).
 - Codex: a `[mcp_servers.drgnx]` table in `config.toml`; the rest of the file stays as it is.
