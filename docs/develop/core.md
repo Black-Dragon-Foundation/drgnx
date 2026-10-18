@@ -155,6 +155,10 @@ Check This Terminal (`ui/terminal`) runs the same group with the selected termin
 client's environment. A detail of several lines (the key table) is printed indented. See
 [terminal.md](../guide/terminal.md#check-this-terminal).
 
+The **Desktop** group's `window-manager` row reads the fact `:window-manager`, `(drgnx-platform-doctor-facts
+&optional FRAME)` (see [Window managers](#window-managers-drgnx-platformel)); onboarding step 7 shows the same row
+for the selected frame. Tests: `test/unit/doctor-wm-test.el`, `test/unit/onboard-wm-test.el`.
+
 ## Window managers (`drgnx-platform.el`)
 
 Emacs cannot move a frame to another monitor by itself under Wayland, and a tiling window manager ignores
@@ -296,6 +300,16 @@ Keys: `:detect` (fn ENV WINDOW-SYSTEM), `:title`, `:tool` (program or nil), `:ve
 (`verified` = tested against the real thing, `reported` = from documentation), `:monitors` and `:frame-monitor`
 (fn CTX CALLBACK), `:move` and `:place` (fn CTX MONITOR CALLBACK; `:place` defaults to `:move`), `:can-move`
 (fn CTX -> `t` or `(REASON . FIX)`), `:doctor` (fn ENV -> plist `:monitors`, `:answers`; synchronous).
+
+**The doctor.** `(drgnx-platform-doctor-facts &optional FRAME)` -> `(:wm :title :version :monitors :tool :tool-found
+:answers :can-move :status :frame-positions :desktop)`, for `drgnx doctor` and commands only (synchronous). FRAME
+defaults to the selected frame (batch: the process environment); a terminal frame or batch is placed by its
+environment, and over SSH (`SSH_CONNECTION`, `SSH_TTY`) or without a display `:wm` is `none`. The version comes from
+the adapter's `:version` argv, the program's own version flag with no IPC (`sway --version`, `i3 --version`,
+`Hyprland --version`, `niri --version`, `kwin_wayland --version`); then at most one read-only query, the adapter's
+`:doctor` (sway and i3 `get_outputs`, `hyprctl -j monitors`, `niri msg --json outputs`, Mutter's `DisplayConfig`,
+`xrandr --listmonitors` in batch), skipped when the tool is missing or the version call timed out; each within
+`drgnx-platform-doctor-timeout`. `x11` has no `:tool`: it moves frames by position, and xrandr only counts monitors.
 
 Tests use `test/fixtures/wm/fake-wm.sh`, linked as `swaymsg`, `i3-msg`, `hyprctl` and `niri` into a temp bin: it logs
 its arguments, prints the recorded reply a regexp picks (`DRGNX_FAKE_WM_MAP`) and can sleep or fail.

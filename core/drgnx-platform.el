@@ -541,16 +541,16 @@ connection has been made yet).  The doctor reports the daemon's session."
  :doctor (lambda (_env) (list :monitors nil :answers nil)))
 
 (drgnx-platform-define-adapter
- 'sway :title "sway" :tool "swaymsg" :version '("swaymsg" "-t" "get_version") :status 'verified
+ 'sway :title "sway" :tool "swaymsg" :version '("sway" "--version") :status 'verified
  :detect (drgnx-platform--wayland-var "SWAYSOCK"))
 (drgnx-platform-define-adapter
- 'hyprland :title "Hyprland" :tool "hyprctl" :version '("hyprctl" "version") :status 'reported
+ 'hyprland :title "Hyprland" :tool "hyprctl" :version '("Hyprland" "--version") :status 'reported
  :detect (drgnx-platform--wayland-var "HYPRLAND_INSTANCE_SIGNATURE"))
 (drgnx-platform-define-adapter
  'niri :title "niri" :tool "niri" :version '("niri" "--version") :status 'reported
  :detect (drgnx-platform--wayland-var "NIRI_SOCKET"))
 (drgnx-platform-define-adapter
- 'kwin :title "KDE Plasma (KWin)" :status 'verified
+ 'kwin :title "KDE Plasma (KWin)" :version '("kwin_wayland" "--version") :status 'verified
  :detect (drgnx-platform--wayland-desktop "KDE"))
 
 (drgnx-platform-define-adapter
@@ -562,11 +562,12 @@ connection has been made yet).  The doctor reports the daemon's session."
  :doctor #'drgnx-platform--gnome-doctor)
 
 (drgnx-platform-define-adapter
- 'i3 :title "i3" :tool "i3-msg" :version '("i3-msg" "-t" "get_version") :status 'verified
+ 'i3 :title "i3" :tool "i3-msg" :version '("i3" "--version") :status 'verified
  :detect #'drgnx-platform--i3-detect)
 
 (drgnx-platform-define-adapter
- 'x11 :title "X11" :tool "xrandr" :version '("xrandr" "--version") :status 'verified
+ ;; no :tool: X11 moves a frame by its position; xrandr only counts the monitors for the doctor
+ 'x11 :title "X11" :status 'verified
  :detect (lambda (env ws) (and (eq (drgnx-platform--effective-ws env ws) 'x)
                                (not (drgnx-platform--wayland-p env ws))))
  :monitors #'drgnx-platform--emacs-monitors :frame-monitor #'drgnx-platform--emacs-frame-monitor
@@ -1407,6 +1408,76 @@ CTX's one deadline."
  :frame-monitor #'drgnx-platform--emacs-frame-monitor
  :move #'drgnx-platform-kwin--move :place #'drgnx-platform-kwin--place
  :can-move #'drgnx-platform-kwin--can-move)
+
+;;;; The doctor's facts (the Desktop row): synchronous, for `drgnx doctor' and commands only
+
+(defun drgnx-platform--env-strings (env)
+  "The window-manager variables ENV (a function VAR -> value) has, as \"K=V\" strings."
+  (delq nil (mapcar (lambda (v) (when-let* ((x (funcall env v))) (concat v "=" x))) drgnx-platform-env-vars)))
+
+(defun drgnx-platform--query-doctor (argv parse)
+  "A :doctor function: the one read-only query ARGV with the session's variables, the monitors PARSE reads from
+its reply, within `drgnx-platform-doctor-timeout'."
+  (lambda (env)
+    (let ((r (drgnx-platform-call-sync argv :env (drgnx-platform--env-strings env))))
+      (list :monitors (and (eq (car r) 'ok) (ignore-errors (funcall parse (cdr r))))
+            :answers (list (cons (string-join argv " ")
+                                 (if (eq (car r) 'ok) "answered" (format "%s: %s" (car r) (string-trim (cdr r))))))))))
+
+(drgnx-platform-define-adapter
+ 'sway :doctor (drgnx-platform--query-doctor '("swaymsg" "-t" "get_outputs") #'drgnx-platform-wm--sway-monitors))
+(drgnx-platform-define-adapter
+ 'i3 :doctor (drgnx-platform--query-doctor '("i3-msg" "-t" "get_outputs") #'drgnx-platform-wm--sway-monitors))
+(drgnx-platform-define-adapter
+ 'hyprland :doctor (drgnx-platform--query-doctor '("hyprctl" "-j" "monitors") #'drgnx-platform-wm--hypr-monitors))
+(drgnx-platform-define-adapter
+ 'niri :doctor (drgnx-platform--query-doctor '("niri" "msg" "--json" "outputs") #'drgnx-platform-wm--niri-monitors))
+
+(defun drgnx-platform-doctor-facts (&optional frame)
+  "What the doctor's Desktop row says about FRAME's window manager (default: the selected frame; in batch Emacs,
+the process environment): (:wm NAME :title STR :version STR-or-nil :monitors N-or-nil :tool STR-or-nil :tool-found
+BOOL :answers BOOL :can-move t-or-(REASON . FIX) :status verified|reported :frame-positions BOOL :desktop STR-or-nil).
+A terminal frame (and batch) is placed by its environment (WAYLAND_DISPLAY, DISPLAY, the WM variables); over SSH
+\(SSH_CONNECTION or SSH_TTY) or without a display, :wm is `none'.  The version comes from the program's local
+version flag (no IPC); then at most one read-only window-manager query (the adapter's :doctor), skipped when the
+tool is missing or the version call timed out.  Each takes at most `drgnx-platform-doctor-timeout' seconds.
+:answers is nil when that query (or the version call) did not answer.  Never prompts, never installs."
+  (let* ((frame (or frame (and (not noninteractive) (selected-frame))))
+         (graphic (and frame (frame-live-p frame) (display-graphic-p frame)))
+         (env (drgnx-platform-env frame))
+         (wm (cond (graphic (drgnx-platform-wm frame))
+                   ((or (funcall env "SSH_CONNECTION") (funcall env "SSH_TTY")) 'none)
+                   (t (drgnx-platform-detect env nil))))
+         (spec (drgnx-platform-adapter wm))
+         (title (or (plist-get spec :title) (symbol-name wm)))
+         (tool (plist-get spec :tool))
+         (tool-found (and tool (executable-find tool) t))
+         (vargv (plist-get spec :version))
+         (vr (and vargv (executable-find (car vargv))
+                  (drgnx-platform-call-sync vargv :env (drgnx-platform--env-strings env))))
+         (version (and (eq (car vr) 'ok) (string-match "[0-9]+\\(?:\\.[0-9]+\\)+" (cdr vr))
+                       (match-string 0 (cdr vr))))
+         (doctor (and (not (eq (car vr) 'timeout)) (or (null tool) tool-found) (plist-get spec :doctor)))
+         (d (and doctor (condition-case err (funcall doctor env)
+                          (error (list :answers (list (cons "doctor" (error-message-string err))))))))
+         (monitors (or (and (plist-get d :monitors) (length (plist-get d :monitors)))
+                       (and graphic (length (display-monitor-attributes-list frame)))))
+         (can (condition-case err
+                  (let ((fn (plist-get spec :can-move)))
+                    (cond
+                     ;; from a terminal or batch: the frame-position adapters' one condition (a graphical frame)
+                     ;; holds for the desktop's own windows
+                     ((and fn (not graphic) (eq fn #'drgnx-platform--graphic-can-move)) t)
+                     (fn (funcall fn (list :frame frame :env env :wm wm :timeout drgnx-platform-doctor-timeout)))
+                     ((plist-get spec :move) t)
+                     (t (cons (format "drgnx has no adapter to move windows here (%s)" title) nil))))
+                (error (cons (format "the window-manager adapter failed: %s" (error-message-string err)) nil)))))
+    (list :wm wm :title title :version version :monitors monitors :tool tool :tool-found tool-found
+          :answers (and (not (eq (car vr) 'timeout))
+                        (seq-every-p (lambda (a) (equal (cdr a) "answered")) (plist-get d :answers)))
+          :can-move can :status (plist-get spec :status)
+          :frame-positions (eq (plist-get spec :move) #'drgnx-platform--move-by-position)
+          :desktop (funcall env "XDG_CURRENT_DESKTOP"))))
 
 (provide 'drgnx-platform)
 ;;; drgnx-platform.el ends here

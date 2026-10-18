@@ -50,7 +50,8 @@ frame with CAPS (nil: none known).  Linux, Fedora 45, no installed terminal, not
     (should (string-search "WezTerm" message))
     (should (string-search (drgnx-tty-onboard-note) message))
     (should (string-search "keeps running in the background" message))
-    (should (string-suffix-p (drgnx-tty-onboard-note) message))
+    ;; the terminal part ends where the desktop part (the window manager, M12c) begins
+    (should (string-search (concat (drgnx-tty-onboard-note) "; desktop: ") message))
     (should-not (string-search "cannot send C-S- chords and the like" message))))
 
 (ert-deftest drgnx-onboard/run-in-a-terminal-shows-its-row ()
@@ -68,8 +69,9 @@ frame with CAPS (nil: none known).  Linux, Fedora 45, no installed terminal, not
     (should (string-search "This terminal cannot send C-S- chords and the like." message))
     ;; the recommender's first two choices on Fedora (xterm, foot); kitty is the one onboarding names in its paragraph
     (should (string-search "sudo dnf install foot" message))
-    (should (string-suffix-p (plist-get (drgnx-tty-recommendation '(:keys legacy) (tty-onboard-test--fedora-45)) :text)
-                             message))
+    (should (string-search (concat (plist-get (drgnx-tty-recommendation '(:keys legacy) (tty-onboard-test--fedora-45)) :text)
+                                   "; desktop: ")
+                           message))
     (should-not (seq-intersection programs '("dnf" "sudo" "rpm-ostree" "apt" "pacman" "brew")))
     (should-not (seq-find (lambda (p) (and (stringp p) (string-match-p "dnf\\|install" p))) programs))))
 
