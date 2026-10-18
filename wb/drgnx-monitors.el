@@ -11,8 +11,9 @@
 ;; list, because a prompt can never be opened from a timer or a callback.
 ;;
 ;; The mode keeps what the workbench knows about the monitors: the frame parameter `drgnx-monitor' (the
-;; monitor a window is on, absent where the adapter knows none) and `drgnx-monitors--count'.  Both are
-;; refreshed asynchronously after a move, and through one idle timer (1 s) when monitors are plugged or unplugged (once per burst, whatever
+;; monitor a window is on, absent where the adapter knows none: the window manager's monitor, with its name and
+;; serial, even where the adapter answers with Emacs' geometry) and `drgnx-monitors--count'.  After a move the
+;; monitor is the one moved to and the count is refreshed; both are refreshed asynchronously through one idle timer (1 s) when monitors are plugged or unplugged (once per burst, whatever
 ;; the last refresh) and when a window gains focus or is moved (at most once per window every 10 s; a refresh held back
 ;; by that limit is deferred, not dropped).  Replies of an older query never overwrite a newer one.  See docs/guide/workbench.md.
 
@@ -97,8 +98,12 @@ TARGET is a number, `next' or `previous' (they wrap round from CURRENT, the moni
                    (if (drgnx-monitors--error-p r)
                        (funcall callback r)
                      (when (frame-live-p frame)
+                       ;; the window manager's monitor, with its name and serial; Emacs' own answer may still be
+                       ;; the old monitor for a moment (the compositor's enter event comes later), so the frame is
+                       ;; not asked again now: it counts as refreshed, and the next refresh waits the interval
                        (drgnx-monitors--set-monitor frame mon)
-                       (drgnx-monitors-refresh frame))
+                       (puthash frame (float-time) drgnx-monitors--stamps)
+                       (drgnx-monitors--fetch-count frame))
                      (funcall callback (list :ok (format "Moved to %s" (drgnx-monitors--name mon)))))))))))))
 
 (defun drgnx-monitors--move (frame target callback &optional monitors can)
@@ -212,15 +217,37 @@ nil rather than a removed parameter: Emacs cannot delete a frame parameter, and 
   (puthash frame (1+ (gethash frame drgnx-monitors--gens 0)) drgnx-monitors--gens)
   (set-frame-parameter frame 'drgnx-monitor monitor))
 
+(defun drgnx-monitors--anonymous-p (mon)
+  "Non-nil when MON names no monitor: no name, make, model or serial (Emacs' own answer under pgtk)."
+  (seq-every-p (lambda (k) (let ((v (plist-get mon k))) (or (null v) (equal v ""))))
+               '(:name :make :model :serial)))
+
 (defun drgnx-monitors--fetch-monitor (frame)
-  "Ask the adapter which monitor FRAME is on; the answer is dropped when a newer query was started meanwhile."
+  "Ask the adapter which monitor FRAME is on; the answer is dropped when a newer query was started meanwhile.
+An answer that names no monitor (Emacs' own geometry) is resolved against the window manager's list, so what is kept
+and saved has the monitor's name, make, model and serial; while the frame stays on the monitor already known (the
+same geometry), that one is kept as it is."
   (let ((gen (1+ (gethash frame drgnx-monitors--gens 0))))
     (puthash frame gen drgnx-monitors--gens)
     (puthash frame (float-time) drgnx-monitors--stamps)
-    (drgnx-platform-frame-monitor
-     frame (lambda (mon)
-             (when (and (frame-live-p frame) (eql gen (gethash frame drgnx-monitors--gens)))
-               (set-frame-parameter frame 'drgnx-monitor mon))))))
+    (cl-flet ((current-p () (and (frame-live-p frame) (eql gen (gethash frame drgnx-monitors--gens))))
+              (geometry (m) (drgnx-platform--geometry m)))
+      (drgnx-platform-frame-monitor
+       frame (lambda (mon)
+               (when (current-p)
+                 (let ((old nil))
+                   (cond ((or (null mon) (not (drgnx-monitors--anonymous-p mon)))
+                          (set-frame-parameter frame 'drgnx-monitor mon))
+                         ((and (consp (setq old (frame-parameter frame 'drgnx-monitor)))
+                               (equal (geometry old) (geometry mon))))   ; still there: keep it
+                         (t (drgnx-platform-monitors
+                             frame (lambda (mons)
+                                     (when (current-p)
+                                       (set-frame-parameter
+                                        frame 'drgnx-monitor
+                                        (or (and (not (drgnx-monitors--error-p mons))
+                                                 (seq-find (lambda (m) (equal (geometry m) (geometry mon))) mons))
+                                            mon))))))))))))))
 
 (defun drgnx-monitors--fetch-count (frame)
   "Ask the adapter how many monitors there are (Emacs' own count where it cannot list them); the answer is

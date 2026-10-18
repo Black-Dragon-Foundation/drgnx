@@ -39,7 +39,8 @@
 the fake takes to answer), :move-reply (default `ok'), :current (index of the monitor the frame is on),
 :sequence (a list of (DELAY . MONITORS) the fake's successive monitor listings follow), :frame-sequence (the same
 for the monitor the frame is on: (DELAY . INDEX)), :move-delay (seconds a move takes), :place-reply (what placing a
-restored frame answers, default `ok'; `hang': never answers)."
+restored frame answers, default `ok'; `hang': never answers), :emacs-answer (the frame's monitor is answered as
+pgtk Emacs does: its geometry only, no name, make, model or serial)."
   (declare (indent 1))
   `(let* ((opts (list ,@opts)) (monitors (or (plist-get opts :monitors) drgnx-monitors-test--two))
           (delay (or (plist-get opts :delay) 0))
@@ -65,7 +66,13 @@ restored frame answers, default `ok'; `hang': never answers)."
                              (drgnx-monitors-test--count :frame-monitor)
                              (let ((step (if frame-sequence (pop frame-sequence) (cons delay drgnx-monitors-test--current))))
                                (drgnx-monitors-test--later
-                                (car step) (lambda () (funcall cb (copy-tree (nth (cdr step) monitors)))))))
+                                (car step)
+                                (lambda ()
+                                  (let ((m (copy-tree (nth (cdr step) monitors))))
+                                    (funcall cb (if (plist-get opts :emacs-answer)
+                                                    (list :name "" :make "" :model "" :serial ""
+                                                          :geometry (plist-get m :geometry))
+                                                  m)))))))
             :move (lambda (_ctx mon cb)
                     (setq drgnx-monitors-test--moves
                           (append drgnx-monitors-test--moves (list (plist-get mon :name))))
@@ -292,6 +299,53 @@ restored frame answers, default `ok'; `hang': never answers)."
                                 (drgnx-monitors-mode -1)))
 
 ;;;; Races, storms and the rest of the review round
+
+(defconst drgnx-monitors-test--twins
+  '((:name "DP-1" :make "Dell" :model "U2723QE" :serial "AAA" :geometry (0 0 2560 1440))
+    (:name "DP-2" :make "Dell" :model "U2723QE" :serial "BBB" :geometry (2560 0 2560 1440)))
+  "Two identical monitors but for their serials.")
+
+(drgnx-platform-test--deftest drgnx-monitors/the-saved-monitor-is-the-wms-not-emacs-geometry ()
+                              ;; final review I1: Emacs answers pgtk geometry only; what is kept (and saved) is the
+                              ;; window manager's monitor with that geometry, so a restore can match by serial
+                              (drgnx-monitors-test--with-fake (:monitors drgnx-monitors-test--twins :current 1 :emacs-answer t)
+                                (drgnx-monitors-refresh frame)
+                                (should (drgnx-platform-test--await
+                                         (lambda () (equal (plist-get (frame-parameter frame 'drgnx-monitor) :serial) "BBB"))))
+                                (let ((saved (plist-get (drgnx-monitors--state) :monitors-monitor)))
+                                  (should (equal (plist-get saved :serial) "BBB"))
+                                  ;; the next day the twins are listed the other way round: the serial finds BBB at 0
+                                  (should (equal (plist-get (drgnx-platform-match-monitor
+                                                             saved '((:name "DP-1" :make "Dell" :model "U2723QE" :serial "BBB" :geometry (0 0 2560 1440))
+                                                                     (:name "DP-2" :make "Dell" :model "U2723QE" :serial "AAA" :geometry (2560 0 2560 1440))))
+                                                            :geometry)
+                                                 '(0 0 2560 1440)))
+                                  ;; its place shifted (another scale on the laptop): still found, by serial
+                                  (should (equal (plist-get (drgnx-platform-match-monitor
+                                                             saved '((:name "eDP-1" :geometry (0 0 1920 1200))
+                                                                     (:name "DP-2" :make "Dell" :model "U2723QE" :serial "BBB" :geometry (1920 0 2560 1440))))
+                                                            :name)
+                                                 "DP-2")))
+                                ;; an answer that already names its monitor is kept as it is: no extra listing
+                                (let ((calls (plist-get drgnx-monitors-test--calls :monitors)))
+                                  (drgnx-monitors--fetch-monitor frame)
+                                  (accept-process-output nil 0.2)
+                                  (should (equal (plist-get (frame-parameter frame 'drgnx-monitor) :serial) "BBB"))
+                                  (should (eql calls (plist-get drgnx-monitors-test--calls :monitors))))))
+
+(drgnx-platform-test--deftest drgnx-monitors/a-stale-answer-right-after-a-move-does-not-undo-it ()
+                              ;; final review I1: Emacs may still say the old monitor just after the move (the
+                              ;; compositor's enter event comes later); the move's own monitor is what is kept
+                              (drgnx-monitors-test--with-fake (:monitors drgnx-monitors-test--twins :emacs-answer t
+                                                                         :frame-sequence '((0 . 0) (0 . 0) (0 . 0)))
+                                (should (eq 'ok (drgnx-monitors-test--move frame 2)))
+                                (accept-process-output nil 0.3)
+                                (should (equal (plist-get (frame-parameter frame 'drgnx-monitor) :serial) "BBB"))
+                                ;; the focus and move events the move causes wait for the refresh interval
+                                (drgnx-monitors--focus-changed)
+                                (drgnx-monitors--run-pending)
+                                (accept-process-output nil 0.3)
+                                (should (equal (plist-get (frame-parameter frame 'drgnx-monitor) :serial) "BBB"))))
 
 (drgnx-platform-test--deftest drgnx-monitors/an-older-count-reply-arriving-last-does-not-overwrite-the-newer
   ()

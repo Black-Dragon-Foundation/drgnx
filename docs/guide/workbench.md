@@ -237,7 +237,9 @@ restored.
 
 **Monitors.** Each window also remembers the monitor it was on (its make, model, serial, name and place, and whether it
 was full screen or maximized), and the other windows go back to it after a restart, on the window managers that let
-drgnx move a window (see [Several monitors](#several-windows)). The monitor is found by its serial, else its
+drgnx move a window (see [Several monitors](#several-windows)). Where Emacs itself knows only a window's place (on
+Wayland), drgnx asks the window manager which of its monitors is there, so the serial and name are what is
+remembered; after a move it keeps the monitor it moved the window to. The monitor is found by its serial, else its
 name, else its place, never by the number it had; if it is not connected any more, the window stays where your window
 manager opened it and drgnx says so in one message ("1 window's monitor is not connected (DELL U2720Q); the window
 manager placed it"). The main window, windows opened for `$EDITOR` (terminal and EDITOR frames) and job windows are never moved. This happens after the
