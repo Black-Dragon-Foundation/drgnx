@@ -266,6 +266,18 @@ AGENTS.md asks of every global hook and advice ("named, with an owner", no lambd
   `-alist-put`, `-face-spec`) makes its change inside `drgnx-modules--quietly`. A raw call is a fallback; use the
   helper.
 
+#### Subscribe, don't hook
+
+A module does not add its own function to `window-buffer-change-functions`, `window-size-change-functions`,
+`window-state-change-functions` or `window-configuration-change-hook` (globally or buffer-locally), and does not call
+`get-buffer-window` with a second argument to find out whether a buffer shows. The workbench state store watches the
+windows once and tells subscribers what changed; a module subscribes to the events it needs. The lint
+`drgnx-lint/modules-subscribe-instead-of-window-hooks` (`test/unit/lint-state-test.el`) reads every file under
+`modules/` and fails on such a site that `test/lint-state-allowed.eld` does not name. Each entry there is
+`(:file F :what W :why STRING :until TASK)`: the sites that exist today, each with the task that moves it. The task
+that moves a site deletes its line, because `drgnx-lint/no-stale-allowlist-entries` fails on an entry that matches
+nothing. A new site is not added to the list; it subscribes instead.
+
 ### The safety net: what a setup reaches through Emacs's own doors
 
 Code a setup reaches that does not push its own undo — wb modes, the setup functions of `wb/` libraries, packages'
