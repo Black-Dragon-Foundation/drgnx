@@ -897,11 +897,13 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
 (ert-deftest drgnx-onboard/on-a-mac-look-and-keys-asks-about-option-once ()
   (drgnx-onboard-test--with root
     (let ((asked nil) (answer t) (opts '(:preset full-ai :keys "VS Code" :theme modus-vivendi)))
-      (cl-letf (((symbol-function 'y-or-n-p) (lambda (p) (push p asked) answer))
+      (cl-letf (((symbol-function 'completing-read)
+                 (lambda (p &rest _) (push p asked) (if answer "types characters" "Meta")))
                 ((symbol-function 'drgnx-onboard--packages-to-install) #'ignore)
                 ((symbol-function 'drgnx-platform) (lambda () 'macos)))
         (let ((r (drgnx-onboard--look-step `(:interactive t :options ,opts))))
-          (should (equal asked '("Do you type @ # { [ with Option? (German, French, … keyboards) ")))
+          (should (= 1 (length asked)))
+          (should (string-match-p "@ # { \\[" (car asked)))
           (should (eq (plist-get (drgnx-keys-read-user) :mac-option) 'characters))
           (should (string-match-p "Option types characters" (cadr r))))
         (setq asked nil answer nil)
@@ -918,10 +920,30 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
         (drgnx-onboard--look-step '(:interactive t :options (:preset full-ai :keys "Emacs" :theme modus-vivendi)))
         (should-not asked))
       ;; Linux: never asked
-      (cl-letf (((symbol-function 'y-or-n-p) (lambda (p) (push p asked) t))
+      (cl-letf (((symbol-function 'completing-read) (lambda (p &rest _) (push p asked) "Meta"))
                 ((symbol-function 'drgnx-onboard--packages-to-install) #'ignore))
         (drgnx-onboard--look-step `(:interactive t :options ,opts))
         (should-not asked)))))
+
+(ert-deftest drgnx-onboard/option-question-shows-the-current-choice ()
+  ;; M12a-80: the question names both answers and offers the saved one on Return (Meta before anything is saved)
+  (drgnx-onboard-test--with root
+    (let ((seen nil) (answer "Meta") (opts '(:preset full-ai :keys "VS Code" :theme modus-vivendi)))
+      (cl-letf (((symbol-function 'completing-read)
+                 (lambda (prompt choices &optional _p _r _i _h def &rest _) (push (list prompt choices def) seen) answer))
+                ((symbol-function 'drgnx-onboard--packages-to-install) #'ignore)
+                ((symbol-function 'drgnx-platform) (lambda () 'macos)))
+        (drgnx-onboard--look-step `(:interactive t :options ,opts))
+        (should (equal (nth 1 (car seen)) '("types characters" "Meta")))
+        (should (equal (nth 2 (car seen)) "Meta"))
+        (should (string-match-p "types characters, Meta" (nth 0 (car seen))))
+        (should (eq (plist-get (drgnx-keys-read-user) :mac-option) 'meta))
+        ;; saved as characters: the next run offers that on Return
+        (setq answer "types characters")
+        (drgnx-onboard--look-step `(:interactive t :options ,opts))
+        (should (eq (plist-get (drgnx-keys-read-user) :mac-option) 'characters))
+        (drgnx-onboard--look-step `(:interactive t :options ,opts))
+        (should (equal (nth 2 (car seen)) "types characters"))))))
 
 (ert-deftest drgnx-onboard/chat-check-in-batch-offers-no-restart ()
   ;; gptel installed, module extra/llm on, gptel not loaded yet: in batch the Finish step never offers a restart, so

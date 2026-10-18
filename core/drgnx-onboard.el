@@ -256,7 +256,11 @@ current choice as the default) — with no option and no question, the current c
          ;; on a Mac with VS Code's keys drgnx sets the modifiers: the left Option is Meta unless it types characters
          (option (and ask (eq (drgnx-platform) 'macos)
                       (assq 'vscode (or layers (plist-get (drgnx-keys-read-user) :layers) drgnx-keys-layers))
-                      (if (y-or-n-p "Do you type @ # { [ with Option? (German, French, … keyboards) ") 'characters 'meta))))
+                      (if (equal (drgnx-onboard--choose "Left Option key (types characters: @ # { [ on German, French, … keyboards)"
+                                                        '("types characters" "Meta")
+                                                        (if (eq (plist-get (drgnx-keys-read-user) :mac-option) 'characters) "types characters" "Meta"))
+                                 "types characters")
+                          'characters 'meta))))
     (when (and preset (not (eq preset cur-preset))) (drgnx-onboard-apply-preset preset))
     (when (and layers (not (equal keys cur-keys)))
       (if (and (not noninteractive) (fboundp 'drgnx-keys-apply)) (drgnx-keys-use layers t) (drgnx-keys--save-layers layers)))
