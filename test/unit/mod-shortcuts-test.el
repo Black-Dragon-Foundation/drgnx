@@ -123,9 +123,9 @@ the usage counts go there, never the user's), no usage counted, and every bindin
     (should (equal (length (drgnx-shortcuts-test--shown)) (length drgnx-shortcuts-test--commands)))))
 
 (ert-deftest drgnx-shortcuts/where-names-the-modal-maps ()
-  ;; The Vim profile's keys: the leader map reads "leader" (not the keymap's name), the others as the modal core
-  ;; names them; any other keymap as before.
-  (should (equal (drgnx-shortcuts--where 'drgnx-modal-leader-map) "leader"))
+  ;; The Vim profile's keys: the leader map reads where it works (not the keymap's name), the others as the modal
+  ;; core names them; any other keymap as before.
+  (should (equal (drgnx-shortcuts--where 'drgnx-modal-leader-map) "normal, visual, motion state and panels"))
   (should (equal (drgnx-shortcuts--where 'drgnx-modal-panel-map) "panels"))
   (should (equal (drgnx-shortcuts--where '(evil . evil-motion-state-map)) "motion state"))
   (should (equal (drgnx-shortcuts--where 'evil-normal-state-map) "normal state"))

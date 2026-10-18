@@ -197,7 +197,10 @@ one line per check, `OK`, `WARN` or `FAIL`, with a fix under anything that is no
 pgtk Emacs; on a Mac, which has no mutter, D-Bus or pgtk, only ImageMagick). On a Mac the doctor also checks that the
 drgnx app is installed (fix: `drgnx macos-app`), that Homebrew is there (also looked for in `/opt/homebrew/bin` and
 `/usr/local/bin`, in case it is not on PATH) and that the `drgnx` command is on PATH (fix: add `~/.local/bin` to PATH in
-your shell's profile, `~/.zprofile` for zsh or, with `SHELL` unset, when it exists; else `~/.profile`) — each only a warning. Details: [core.md](../develop/core.md#doctor-drgnx-doctorel).
+your shell's profile, `~/.zprofile` for zsh or, with `SHELL` unset, when it exists; else `~/.profile`) — each only a warning. With Vim keys the `modal` check warns when the stack needs evil and it is not
+installed or not running (fix: `drgnx sync`, then restart, or choose another Keyboard Profile…), says when Vim waits for `drgnx sync`, and on
+GNOME notes that Alt+Space opens the window menu before drgnx sees it (Settings → Keyboard → Keyboard Shortcuts → Windows; the Leader
+Menu is on `M-SPC`, which replaces Emacs' `cycle-spacing`). Details: [core.md](../develop/core.md#doctor-drgnx-doctorel).
 
 ## Uninstall
 

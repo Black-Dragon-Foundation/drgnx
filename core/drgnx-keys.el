@@ -698,15 +698,42 @@ Code's C-k chords over kill-line) are one line."
     (mapcar (lambda (g) (if (cddr g) (drgnx-keys--group-text (reverse (cdr g))) (drgnx-keys-conflict-text (cadr g))))
             (reverse groups))))
 
+(defvar drgnx-modal-running)
+(declare-function drgnx-modal-engine-for "drgnx-modal")
+(declare-function drgnx-modal-default-notes "drgnx-modal")
+
+(defvar drgnx-modal-suspended)
+
+(defun drgnx-keys--report-modal ()
+  "The report's `:modal': (:engine ENGINE :running BOOL :pending LAYERS).  ENGINE is the modal engine the stack in
+force needs (nil without one, and nil while the user has turned modal editing off for these layers: the engine is
+not wanted, not missing), RUNNING whether it runs, PENDING the layers a non-interactive choice of Vim keys left
+waiting for `drgnx sync' (`:pending-layers' in keys.eld, read as data; nil when none)."
+  (let* ((layers (plist-get drgnx-keys-last :layers))
+         (engine (and (fboundp 'drgnx-modal-engine-for)
+                      (not (and (bound-and-true-p drgnx-modal-suspended) (equal (car drgnx-modal-suspended) layers)))
+                      (ignore-errors (drgnx-modal-engine-for layers)))))
+    (list :engine engine :running (and engine (eq engine drgnx-modal-running) t)
+          :pending (let ((drgnx-keys-problems nil)) (plist-get (drgnx-keys-read-user) :pending-layers)))))
+
+(defun drgnx-keys--leader-menu-key ()
+  "The key the Leader Menu is on in the global map (\"M-SPC\" in the Vim profile), or nil."
+  (when-let* ((cmd (drgnx-commands-get 'modal-leader)))
+    (car (seq-find (lambda (b) (eq (cdr (drgnx-commands--keymap-spec (cdr b))) 'global-map)) (drgnx-cmd-bound cmd)))))
+
 (defun drgnx-keys--write-report ()
-  "Write the conflicts and problems to the state dir for `drgnx doctor' (never prompts)."
+  "Write the conflicts and problems to the state dir for `drgnx doctor' (never prompts).  The conflicts end with the
+modal core's notes (`drgnx-modal-default-notes'); `:modal' says which engine the stack needs and whether it runs."
   (condition-case err
       (let* ((file (expand-file-name "keys-report.eld" (drgnx-state-dir)))
              (tmp (progn (make-directory (file-name-directory file) t)
                          (make-temp-file (expand-file-name ".keys-report-" (file-name-directory file))))))
         (with-temp-file tmp
           (prin1 (list :time (format-time-string "%FT%T%z") :layers (plist-get drgnx-keys-last :layers)
-                       :conflicts (drgnx-keys-conflict-lines) :problems (plist-get drgnx-keys-last :problems))
+                       :conflicts (append (drgnx-keys-conflict-lines)
+                                          (and (fboundp 'drgnx-modal-default-notes) (drgnx-modal-default-notes)))
+                       :problems (plist-get drgnx-keys-last :problems)
+                       :modal (drgnx-keys--report-modal) :leader-menu-key (drgnx-keys--leader-menu-key))
                  (current-buffer)))
         (rename-file tmp file t))
     (error (push (format "cannot write the key report: %s" (error-message-string err))
