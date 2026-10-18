@@ -42,7 +42,6 @@
 (declare-function drgnx-work-ui--metrics "drgnx-work-ui")
 (declare-function drgnx-work-ui--colour "drgnx-work-ui")
 (declare-function drgnx-work-nodes "drgnx-work-db")
-(declare-function drgnx-agents-ui-transcript "drgnx-agents-ui")
 (declare-function drgnx-agents-sessions "drgnx-agents")
 (declare-function drgnx-job-ui-show "drgnx-job-ui")
 (declare-function drgnx-agent-session-remote "drgnx-agents")
@@ -625,15 +624,6 @@ Plan is named, never run."
              (message "%s is read-only here: no job runs it.  Start Job from Plan… (job-start) starts one"
                       (or (plist-get node :title) (plist-get node :id))))))
         (t (drgnx-cockpit--open-job node))))
-
-(defun drgnx-cockpit--open-agent (node)
-  "Open agent NODE: its transcript when its session is in this Emacs, else say what it is doing."
-  (let ((s (and (fboundp 'drgnx-agents-sessions)
-                (seq-find (lambda (s) (equal (or (drgnx-agent-session-remote s) (drgnx-agent-session-id s)) (plist-get node :agent)))
-                          (drgnx-agents-sessions)))))
-    (if (and s (fboundp 'drgnx-agents-ui-transcript)) (drgnx-agents-ui-transcript s)
-      (message "%s: %s, %s — no transcript in this Emacs" (plist-get node :title) (or (plist-get node :reporting) "agent")
-               (or (plist-get node :state) "")))))
 
 (defun drgnx-cockpit--open-job (node)
   "Open NODE's job: its window (tasks, what needs you, decisions)."

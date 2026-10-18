@@ -91,7 +91,8 @@ press `RET`) and that agent's file changes since it started open in the editor a
   review mark (`✓ accepted`, or `changed since accepted`). The file's diff follows, with diff-mode's colours and keys:
   `TAB` moves by hunk and `RET` opens the file at that line.
 - **The header line** at the top names the agent and counts the files changed and the files you accepted. It also
-  says what the changes are compared against, and whether the agent is stopped.
+  says what the changes are compared against, whether the agent is known to be stopped, and the keys (`a accept ·
+  r revert · c comment · n/p files`).
 - **Since it started.** A job's agent is compared with its task's base. A chat session is compared with where it
   started. An outside agent is compared with its registered base, and only the files it reported are shown. A
   silent worktree is compared with where it forked from the main branch.
@@ -100,19 +101,45 @@ press `RET`) and that agent's file changes since it started open in the editor a
 | Key | Command | Does |
 |---|---|---|
 | `n`, `p` | Next / Previous Changed File (`cockpit-edits-next-file`, `cockpit-edits-previous-file`) | moves to the next or previous file's header line |
-| `a` | Accept File (`cockpit-accept-file`) | marks the file accepted with the hash of the diff you see. The mark counts toward the task's merge gate. It never merges or commits anything. When the agent changes the file again, the mark becomes pending and the header says `changed since accepted`. |
-| `r` | Revert File… (`cockpit-revert-file`) | asks the agent to undo its changes to the file. The message `[revert] please undo your changes to FILE` is queued for it and never interrupts it. One case is different: when the agent is **stopped** and the file is in **its own worktree**, you are asked once for that file, and then the file is put back as the base has it (`git checkout BASE -- FILE`, or deleted when it is new). The main checkout is never touched. |
+| `a` | Accept File (`cockpit-accept-file`) | marks the file accepted with the hash of the diff you see. The mark counts toward the task's merge gate. It never merges or commits anything. When the agent changes the file again, the header says `changed since accepted`: the mark keeps the hash you accepted, and the merge gate compares it with the diff's. |
+| `r` | Revert File… (`cockpit-revert-file`) | asks the agent to undo its changes to the file. The message `[revert] please undo your changes to FILE` is queued for it and never interrupts it. See below for the one case where the file is put back here. |
 | `c` | Comment on Line… (`cockpit-comment`) | asks for a comment and queues `[comment] FILE:LINE: TEXT` for the agent. LINE is the file's line that the diff line at point stands for. |
 | `g` | | lists the changes again and diffs every file |
 
 The keys are the same in the VS Code, Emacs and Vim profiles: the buffer starts in Emacs state under evil.
 
+**Read-only.** diff-mode's commands that would write a file or this buffer are refused here, from keys and menus
+alike: applying a hunk or the whole diff (`C-c C-a`, `C-c RET a`), reversing, killing or splitting hunks, ediff,
+converting the format, fixing whitespace, change-log entries, narrowing and undo. They say that `r` and `c` are the
+way to act on an agent's change.
+
+**When `r` puts a file back itself.** Only when all of these hold. Anything else is a request to the agent.
+- The folder is a worktree that is the agent's alone and that drgnx can name:
+  - a job's task worktree, the `.claude/worktrees/JOB-N/` that drgnx made for that task;
+  - or the worktree an outside agent registered (not just the folder it runs in), when no other agent works there.
+
+  A chat session's folder, a silent worktree and the main checkout are never touched, even in a linked worktree
+  where you may be working.
+- The agent is known to have stopped. For a job's agent, its session (here or the hub's) has exited **and** its task
+  is no longer claimed, running or waiting for input. For an outside agent, it reported that it stopped. Not being
+  among the sessions proves nothing.
+- git can name the base. The base is resolved to a commit first, and the file is looked up in it. If git fails,
+  nothing is changed: a failure is never taken to mean that the file is new.
+
+You are then asked exactly what will happen, with the names shown safely and the folder shortened:
+- `Put FILE back as abc12345 has it, in WORKTREE, discarding the agent's changes?`
+- or, for a file the base does not have: `Delete new file FILE in WORKTREE (the agent's own worktree)?`
+
 **How a message reaches the agent.** It is always queued. Sending a message never cancels the agent's work.
-- A session of this Emacs gets it when its turn ends, even when the session is set to interrupt.
-- A hub session gets it through the hub (`agents/send`): queued, or steered into its turn when it can be steered.
-- Any other agent gets it through the coordination store's queue: a hub session set to interrupt, a job's agent
-  elsewhere, or an outside agent. The hub delivers it as a new turn when the agent is free, and an outside agent reads
-  it with `read_inbox`.
+
+| Agent | The message |
+|---|---|
+| a live session of this Emacs | waits in its queue for the end of its turn, even when the session is set to interrupt |
+| a live hub session | goes through the hub (`agents/send`): queued, or steered into its turn when it can be steered; one set to interrupt gets a message in the store instead |
+| an exited session, a job's agent elsewhere, an outside agent | a message in the store: the hub gives it to the agent as a new turn when it is free (and is told at once), and an outside agent reads it with `read_inbox` |
+| a silent worktree | nothing: nobody reads messages there, and you are told so |
+
+A message the store holds back (the agent's queue is full) is said as held, and no event is written.
 
 Each accept, revert and comment is also an event (`accept`, `revert`, `comment`) in the agent's history.
 
@@ -124,7 +151,9 @@ Each accept, revert and comment is also an event (`accept`, `revert`, `comment`)
 - Only the files that changed are diffed again, at most once per `drgnx-cockpit-edits-delay` (0.3 s), however often
   the agent writes. Only their sections of the buffer are replaced.
 - Your point and the window's scroll stay on the same file and line. No window moves.
-- A file the pane does not list yet makes it list the changes again, at most every 2 s.
+- A file the pane does not list yet makes it list the changes again, at most every 2 s. While the pane shows, it
+  also lists them every `drgnx-cockpit-edits-check-interval`, so a first write in a folder nobody watches yet shows
+  without `g`.
 - A hidden pane only notes what changed. It catches up when it shows.
 - Remote (TRAMP) folders are never touched: such an agent's pane says so, with no git and no watch.
 

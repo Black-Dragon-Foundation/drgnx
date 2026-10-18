@@ -496,7 +496,7 @@ a remote DIR, and a remote root or path is left out: no remote name is expanded.
     (delete-dups (nreverse paths))))
 
 (defun drgnx-cockpit-edit-source (agent &optional sessions)
-  "Where AGENT's edits are: (:dir :base :merge-base :paths :own-worktree :stopped), or nil for an agent unknown.
+  "Where AGENT's edits are: (:kind :dir :base :merge-base :paths :own-worktree :stopped …), or nil for an agent unknown.
 AGENT: an id, or an agent of the model (`drgnx-cockpit-model').  SESSIONS: the hub's snapshots — an agent of a job or
 a native session not among them is :stopped.
 - a job's agent: its task worktree; the base its registry row names, else the job branch (`job/ID') where it forked
@@ -504,7 +504,11 @@ a native session not among them is :stopped.
 - a native session: its cwd; the base its registry row names, else the HEAD its first event carries (:head);
 - an outside agent: its registered worktree (or cwd) and base, and the paths it reported (:paths, relative to :dir);
 - a silent worktree (`silent:DIR'): the worktree and its merge-base with the main branch.
-:own-worktree: the folder is the agent's alone (a job's task worktree, or a linked worktree no other agent works in)."
+:own-worktree: the folder is the agent's alone (a job's task worktree, or a linked worktree no other agent works in).
+:kind is `job', `native', `outside' or `silent'.  A job's agent also has :job and :task (its job task's id) and
+:job-worktree t when :dir is the worktree drgnx makes for that task (`.claude/worktrees/JOB-N/' of the job's repository,
+from its jtask row); an outside agent has :registered-worktree t when its registry row names a worktree, not only a
+cwd."
   (let* ((plist (and (consp agent) agent)) (id (if plist (plist-get plist :id) agent))
          (session (seq-find (lambda (s) (equal (plist-get s :id) id)) sessions))
          (exited (and session (equal (drgnx-cockpit--status (plist-get session :status)) "exited")))
@@ -524,28 +528,28 @@ a native session not among them is :stopped.
     (cond
      ((not (stringp id)) nil)
      ((or (eq (plist-get plist :reporting) 'silent) (string-prefix-p "silent:" id))
-      (list :dir (drgnx-cockpit--dir (or (plist-get plist :worktree) (substring id (length "silent:"))))
+      (list :kind 'silent :dir (drgnx-cockpit--dir (or (plist-get plist :worktree) (substring id (length "silent:"))))
             :base (or (plist-get plist :base) (car drgnx-cockpit-main-branches)) :merge-base t :paths nil
             :own-worktree t :stopped nil))
      ((or jt (and session (plist-get session :job)))
       (let* ((job (or (nth 1 jt) (plist-get session :job)))
              (n (or (nth 2 jt) (let ((tk (plist-get session :task))) (and tk (string-match "#\\([0-9]+\\)\\'" tk) (string-to-number (match-string 1 tk))))))
              (repo (plist-get (drgnx-coord-job job) :repo))
-             (dir (or (and (stringp repo) n (not (drgnx-cockpit--remote-p repo))
-                           (drgnx-cockpit--dir (expand-file-name (format ".claude/worktrees/%s-%d/" job n) repo)))
-                      (drgnx-cockpit--dir (plist-get session :cwd)))))
-        (list :dir dir :base (or (plist-get row :base) (concat "job/" job)) :merge-base (not (plist-get row :base)) :paths nil
+             (made (and (stringp repo) n (not (drgnx-cockpit--remote-p repo))
+                        (drgnx-cockpit--dir (expand-file-name (format ".claude/worktrees/%s-%d/" job n) repo))))
+             (dir (or made (drgnx-cockpit--dir (plist-get session :cwd)))))
+        (list :kind 'job :job job :task (car jt) :job-worktree (and made jt t) :dir dir :base (or (plist-get row :base) (concat "job/" job)) :merge-base (not (plist-get row :base)) :paths nil
               :own-worktree t :stopped (if sessions (or (null session) exited) (equal life "stop")))))
      ((and row (not session) (or (string-prefix-p "ext:" id) (plist-get row :kind)))
       (let ((dir (drgnx-cockpit--dir (or (plist-get row :worktree) (plist-get row :cwd)))))
-        (list :dir dir :base (plist-get row :base) :merge-base nil
+        (list :kind 'outside :registered-worktree (and (plist-get row :worktree) t) :dir dir :base (plist-get row :base) :merge-base nil
               :paths (and dir (drgnx-cockpit--reported-paths id dir))
               :own-worktree (and dir (drgnx-cockpit--linked-worktree-p dir) (not (funcall others dir)) t)
               :stopped (equal life "stop"))))
      ((or session row)
       (let ((dir (drgnx-cockpit--dir (or (plist-get session :cwd) (plist-get row :cwd))))
             (first (plist-get (car (drgnx-coord-events :agent id :limit 1)) :data)))
-        (list :dir dir :base (or (plist-get row :base) (plist-get first :head) (plist-get first :base)) :merge-base nil :paths nil
+        (list :kind 'native :dir dir :base (or (plist-get row :base) (plist-get first :head) (plist-get first :base)) :merge-base nil :paths nil
               :own-worktree (and dir (drgnx-cockpit--linked-worktree-p dir) (not (funcall others dir))
                                  (not (seq-some (lambda (s) (and (not (equal (plist-get s :id) id))
                                                                  (equal (drgnx-cockpit--dir (plist-get s :cwd)) dir)))

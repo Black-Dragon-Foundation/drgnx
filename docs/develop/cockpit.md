@@ -68,8 +68,8 @@ matches a node whose title or path contains it, or one of its ancestors' (case i
 
 ## Edits
 
-`(drgnx-cockpit-edit-source AGENT &optional SESSIONS)` returns `(:dir :base :merge-base :paths :own-worktree
-:stopped)`:
+`(drgnx-cockpit-edit-source AGENT &optional SESSIONS)` returns `(:kind :dir :base :merge-base :paths :own-worktree
+:stopped …)`, `:kind` being `job`, `native`, `outside` or `silent`:
 
 | Agent | `:dir` | `:base` |
 |---|---|---|
@@ -78,7 +78,11 @@ matches a node whose title or path contains it, or one of its ancestors' (case i
 | outside | its registered worktree (or cwd), with `:paths` it reported, relative to it | its registry `base` |
 | silent (`silent:DIR`) | the worktree | the main branch, as a merge-base |
 
-A job agent's task comes from its session's `:task`, else the task it holds and works on.
+A job agent's task comes from its session's `:task`, else the task it holds and works on. Its source also has `:job`,
+`:task` (the jtask id) and `:job-worktree t` when `:dir` is the `.claude/worktrees/JOB-N/` that drgnx makes for that
+task (from the job's repository and a jtask row), not a session's cwd. An outside agent's has `:registered-worktree t`
+when its registry row names a worktree, not only a cwd. `:stopped` is a hint for display (an agent missing from
+SESSIONS counts as stopped); anything that acts on it needs positive evidence (see the edits' direct revert).
 
 **Two exact bases are still to come.** A job agent's registry `base` should be the task's HEAD at its start, and a
 native session's `start` event should carry `:head`. Until their writers record them (the hub, C3), the job
@@ -238,6 +242,16 @@ model's agent plist, so a silent worktree keeps its folder and base. The user's 
   - `diff-refine` and `diff-font-lock-syntax` are off, because each would read files or run diff during redisplay.
 - **No undo** (`buffer-disable-undo`), no dir-local variables, and `default-directory` is the agent's folder when it
   is local, so `RET` opens the file.
+- **Nothing writes from here.** The mode map remaps diff-mode's commands that write a file or the buffer to
+  `drgnx-cockpit-edits-read-only` (a `user-error` naming `r` and `c`). Remapping covers keys and menus alike:
+  - apply a hunk or the buffer, `diff-revert-and-kill-hunk` (Emacs 31), ediff, delete trailing whitespace, change-log
+    entries, wiggle;
+  - reverse, kill a hunk or a file, kill applied hunks or junk, split, convert the format, ignore whitespace, refresh,
+    fix up, narrow, and `undo`/`diff-undo`.
+
+  A test walks diff-mode's key maps: every `diff-` command they reach is either a motion, visit or view, or refused.
+- **The header line** is text cached at each patch: the agent, counts, base, "stopped" (positive evidence only) and
+  the keys (`a accept · r revert · c comment · n/p files`).
 
 ### Live updates
 
@@ -251,7 +265,9 @@ The pane never polls a file. Three things name the files that changed:
    pane shows. It compares `data_version` and `total_changes`, one query. When they moved, it reads the agent's `edit`
    events after the last id it saw. Their paths, cut to the folder with no remote name expanded, mark files dirty. Review
    marks set elsewhere redraw their headers.
-3. **g** marks every file dirty and asks for a listing.
+3. **A periodic listing.** The same check marks a listing due each time, so a first write in a folder nobody
+   watches yet (and no event names) shows. The listing is still rate-limited to one per 2 s.
+4. **g** marks every file dirty and asks for a listing.
 
 A file the pane does not list makes it list again (`drgnx-cockpit-changed-files`, with a fresh
 `drgnx-cockpit-edit-source`, so an outside agent's newly reported paths count). Listing happens at most every 2 s.
@@ -281,26 +297,46 @@ holds that.
 
 ### Accept, revert, comment
 
-- **Accept** writes `drgnx-coord-review-mark AGENT FILE "accepted" SHA1-OF-THE-DIFF` and an `accept` event. When a
-  diff later comes back with another hash, the mark becomes `pending`. That write is best effort, because it runs from
-  a sentinel. It never calls the hub, merges or commits. C9's merge gate reads the marks.
-- **Send.** Revert requests and comments are queued, never an interruption:
-  - a session of this Emacs: `drgnx-agents-send`, with the session's mode set to `queue` for the call when it is
+- **Accept** writes `drgnx-coord-review-mark AGENT FILE "accepted" SHA1-OF-THE-DIFF` and an `accept` event. Nothing
+  is written when the diff changes later: the header derives `changed since accepted` from the hashes, and the merge
+  gate (C9) compares the mark's hash with the current diff's. It never calls the hub, merges or commits.
+- **Send** (`drgnx-cockpit-edits--queue`, the same routes as `drgnx-cockpit-feed--queue` in the cockpit's feed; one
+  function once both are merged). Revert requests and comments are queued, never an interruption:
+  - a silent worktree: a `user-error` (nobody reads messages there);
+  - a live session of this Emacs: `drgnx-agents-send`, with the session's mode set to `queue` for the call when it is
     `interrupt`;
-  - a hub mirror not set to interrupt: `drgnx-agents-send`, which is the hub's `agents/send`;
-  - anything else: `drgnx-coord-send` to the agent's id, which the hub delivers when the agent is free and an outside
-    agent reads with `read_inbox`.
-- **Direct revert** (`drgnx-cockpit-edits--direct-p`) needs all of these:
-  - the source is `:stopped` and `:own-worktree`;
+  - a live hub mirror not set to interrupt: `drgnx-agents-send`, which is the hub's `agents/send`;
+  - anything else (a mirror set to interrupt, an exited or failed session, a job's agent elsewhere, an outside agent):
+    `drgnx-coord-send` to the agent's id, then `coord/notify` to the hub when its socket exists. The hub delivers it
+    when the agent is free; an outside agent reads it with `read_inbox`. A held message is said, and no event is
+    written.
+- **Direct revert** (`drgnx-cockpit-edits--direct-p`) needs all of these; anything else is a request:
+  - the source's kind allows it: `job` with `:job-worktree` (the task worktree drgnx made, with its jtask row), or
+    `outside` with `:registered-worktree` and `:own-worktree`. Never `native` or `silent`: the user may work in a
+    chat session's linked worktree;
   - its folder is local and a linked worktree (its top has a `.git` file, so it is never the main checkout);
-  - the file passes `drgnx-cockpit--file-ok`.
+  - the file passes `drgnx-cockpit--file-ok`;
+  - positive evidence that the agent stopped (`drgnx-cockpit-edits--stopped-p`):
+    - a job's agent: its session here (or the hub's mirror) has status `exited` or `failed`, **and** its jtask is not
+      `claimed`, `running` or `needs-input`;
+    - an outside agent: its last start/stop event is a stop.
 
-  Then, after `yes-or-no-p` naming the file:
-  - `git checkout BASE -- FILE`, BASE being the merge-base when the source says `:merge-base`;
-  - or `delete-file` when `git cat-file -e BASE:./FILE` says the base has no such file.
+    Absence from the sessions never counts.
 
-  A `revert` event follows (`:direct t`; a request is `:requested t`).
-- **Comment** reads the text (a command, so it may ask) and queues `[comment] FILE:LINE: TEXT`.
+  Then the plan comes first (`drgnx-cockpit-edits--revert-plan`). It signals when git fails, so a failure is never
+  taken for "absent":
+  - BASE is the merge-base when the source says `:merge-base`;
+  - `git rev-parse --verify BASE^{commit}` gives the commit;
+  - `git ls-tree --name-only COMMIT -- FILE` decides: empty output means the file is new.
+
+  Then the exact question, with names masked by `drgnx-wb-display-name` and the folder abbreviated:
+  - `Put F back as abc12345 has it, in WT, discarding the agent's changes? `
+  - or `Delete new file F in WT (the agent's own worktree)? `
+
+  Then `git checkout COMMIT -- FILE`, or `delete-file` (a regular file only), and a `revert` event (`:direct t :to
+  COMMIT`; a request is `:requested t`).
+- **Comment** reads the text (a command, so it may ask) and queues `[comment] FILE:LINE: TEXT`. File names in
+  prompts, messages and echoes are masked (`drgnx-wb-display-name`).
   - LINE is the new-side line of the diff line at point: the hunk's `+N` plus the context and added lines before it.
   - A `comment` event follows.
 
@@ -319,10 +355,17 @@ nothing reads, and no process sentinel runs while it waits. It covers:
   watched folders, and a remote folder (an error line, no git, no watch);
 - 50 writes in a second: at most 4 patches, the last write shown, point and window start on the same file, line and
   column, no window moved;
-- accept, and a change that makes the mark pending;
+- accept, and a change shown as `changed since accepted` (the mark keeps its hash);
 - accept never merging or committing;
 - revert: queued while the agent runs, queued for a session set to interrupt, queued for a stopped agent in the main
-  checkout; done in its own worktree, after asking, when it is stopped; nothing done when you say no;
-- comments queued, the line a diff line stands for, the hub routes;
+  checkout; done in an outside agent's registered worktree after the exact question when it said it stopped; nothing
+  done when you say no;
+- a native session stopped in a linked worktree: queued, never asked;
+- a job's task worktree: queued while no session proves the agent stopped, or while its task still runs; put back,
+  after the exact questions, once its mirror exited and its task is done;
+- a git failure (no such base): an error before any question, nothing deleted;
+- a silent worktree: no message (said); a first write in a new folder shows without `g`; the header's key hint;
+- diff-mode's writing commands refused (every `diff-` command its maps reach checked; `C-c C-a`, `C-c RET a` signal);
+- comments queued, the line a diff line stands for, the hub routes (an exited mirror gets a message in the store);
 - the graph opening an agent's edits from a task or an agent;
 - the keys in every profile.
