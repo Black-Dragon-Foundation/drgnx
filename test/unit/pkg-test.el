@@ -955,4 +955,45 @@ fy with a newer fa 2.0.  Returns (FX FY FA-1.0-ENTRY)."
         (should (member "fa: shipped 1.0 is older than 2.0 needs; installed 2.0" (plist-get r :warnings))))
       (should (equal (drgnx-pkg-test--installed) '("fa-2.0" "fc-1.1"))))))
 
+(ert-deftest drgnx-pkg/sync-prune-removes-what-left-the-manifest ()
+  ;; M5-5: a plain sync keeps a package that left the manifest; `sync --prune' removes it (and only it, not what
+  ;; the manifest still requires), says so, and the generation before keeps the rollback.
+  (drgnx-pkg-test--with root
+    (let ((arch (drgnx-pkg-test--archive (concat root "arch") '((fa "1.0") (fb "1.0" ((fa "1.0"))) (fc "1.0")))))
+      (drgnx-pkg-test--want root 'fb 'fc)
+      (drgnx-pkg-test--sync root :archives `(("fx" . ,arch)))
+      (should (equal (drgnx-pkg-test--installed) '("fa-1.0" "fb-1.0" "fc-1.0")))
+      (drgnx-pkg-test--want root 'fb)
+      (let ((r (drgnx-pkg-test--sync root :archives `(("fx" . ,arch)))))   ; plain: nothing removed
+        (should (plist-get r :ok))
+        (should-not (plist-get r :pruned)))
+      (should (equal (drgnx-pkg-test--installed) '("fa-1.0" "fb-1.0" "fc-1.0")))
+      (let* ((before (drgnx-pkg-current-generation))
+             (r (drgnx-pkg-test--sync root :archives `(("fx" . ,arch)) :prune t)))
+        (should (plist-get r :ok))
+        (should (equal (plist-get r :pruned) '(fc)))
+        (should (equal (drgnx-pkg-test--installed) '("fa-1.0" "fb-1.0")))
+        (should-not (assq 'fc (drgnx-pkg-read-lock)))
+        (should (string-match-p "^pruned: fc$" (with-output-to-string (drgnx-pkg--report r))))
+        (drgnx-pkg-rollback before)
+        (should (equal (drgnx-pkg-test--installed) '("fa-1.0" "fb-1.0" "fc-1.0")))))))
+
+(ert-deftest drgnx-pkg/sync-prune-removes-nothing-while-something-is-missing ()
+  ;; A sync that could not install everything prunes nothing.
+  (drgnx-pkg-test--with root
+    (let ((arch (drgnx-pkg-test--archive (concat root "arch") '((fa "1.0") (fc "1.0")))))
+      (drgnx-pkg-test--want root 'fa 'fc)
+      (drgnx-pkg-test--sync root :archives `(("fx" . ,arch)))
+      (drgnx-pkg-test--want root 'fa 'fnone)
+      (let ((r (drgnx-pkg-test--sync root :archives `(("fx" . ,arch)) :prune t)))
+        (should-not (plist-get r :ok))
+        (should-not (plist-get r :pruned)))
+      (should (equal (drgnx-pkg-test--installed) '("fa-1.0" "fc-1.0"))))))
+
+(ert-deftest drgnx-pkg/the-cli-reads-sync-prune ()
+  (let (calls)
+    (cl-letf (((symbol-function 'drgnx-pkg-sync) (lambda (&rest a) (push a calls) '(:ok t))))
+      (with-output-to-string (should (eql (drgnx-pkg-cli-run '("sync" "--prune")) 0)))
+      (should (equal (car calls) '(:prune t))))))
+
 ;;; pkg-test.el ends here

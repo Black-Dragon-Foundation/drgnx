@@ -739,11 +739,31 @@ than V2 needs\")."
     (when (seq-intersection old installed)
       (with-temp-file file (prin1 (seq-difference old installed) (current-buffer))))))
 
-(cl-defun drgnx-pkg-sync (&key (archives nil archives-given) offline upgrade seed modules-dir)
+(defun drgnx-pkg--prune (manifest)
+  "Delete from the packages directory being built (`package-user-dir') every package that MANIFEST neither
+names nor needs, through the requirements of the installed ones; the names deleted, sorted."
+  (setq package-alist nil)
+  (package-load-all-descriptors)
+  (let (keep doomed)
+    (cl-labels ((visit (name)
+                  (unless (memq name keep)
+                    (push name keep)
+                    (when-let* ((d (cadr (assq name package-alist))))
+                      (dolist (r (package-desc-reqs d)) (visit (car r)))))))
+      (mapc #'visit manifest))
+    (pcase-dolist (`(,name . ,descs) package-alist)
+      (unless (memq name keep)
+        (push name doomed)
+        (dolist (d descs) (package-delete d t t))))
+    (sort doomed (lambda (a b) (string< a b)))))
+
+(cl-defun drgnx-pkg-sync (&key (archives nil archives-given) offline upgrade seed modules-dir prune)
   "Install the manifest into the packages directory.  ARCHIVES: alist (NAME . URL-or-DIR) — when not
 given, `drgnx-pkg-archives'; nil: none; OFFLINE: only the lock and the cache; UPGRADE: the archives'
 newest versions, not the lock's; SEED: a directory of installed packages to copy first (another
-Emacs's elpa); MODULES-DIR: where modules live.  Returns (:ok :installed :missing :generation :warnings).
+Emacs's elpa); MODULES-DIR: where modules live; PRUNE: also remove the installed packages the manifest
+no longer names or needs (hand-installed ones too), when nothing is missing — a generation of the state
+before is kept first, for `drgnx rollback'.  Returns (:ok :installed :pruned :missing :generation :warnings).
 A failed download or install, a hash mismatch, a busy or unreadable lock is a `drgnx-pkg-error' and
 changes nothing; packages that cannot be had are reported (the rest is installed, the lock kept).  With no
 lock yet (a new user) and no SEED, the shipped lock (`drgnx-pkg-shipped-lock-file') is copied to the user's
@@ -751,7 +771,7 @@ first; until a sync writes the lock, a shipped pin nobody serves falls back to t
 warning), never a missing package."
   (let* ((manifest (drgnx-pkg-manifest modules-dir))
          (staging (drgnx-pkg--staging))
-         (missing (list nil)) (drgnx-pkg--warnings nil) lock installed new-entries generation)
+         (missing (list nil)) (drgnx-pkg--warnings nil) lock installed new-entries generation pruned)
     (drgnx-pkg--with-sync-lock
       (unless (or upgrade seed) (drgnx-pkg--start-from-shipped-lock))   ; seeded versions are the user's choice
       (setq lock (drgnx-pkg-read-lock))                 ; unreadable → error before anything changes
@@ -811,6 +831,9 @@ warning), never a missing package."
                     (push (cons (car p) (format "needs %s, which cannot be installed" (car dep))) (car missing))
                   (drgnx-pkg--progress "installing %s from Git" (car p))
                   (push (drgnx-pkg--git-install p) new-entries) (push (car p) installed))))
+            (when (and prune (not (car missing)))
+              (setq pruned (drgnx-pkg--prune manifest))
+              (when pruned (drgnx-pkg-snapshot "before prune")))
             ;; Everything arrived: the new directory goes in, without package.el's copy of the
             ;; archives' contents (fetched again by the next sync).
             (dolist (f '("archives" "unused-quickstart.el" "unused-quickstart.elc"))
@@ -834,7 +857,7 @@ warning), never a missing package."
                              (drgnx-pkg--desc-entry d nil nil)))))   ; seeded, or installed by hand
                    package-alist))
           (setq generation (drgnx-pkg-snapshot (if upgrade "upgrade" "sync"))))))
-    (list :ok (null (car missing)) :installed (nreverse installed) :missing (nreverse (car missing))
+    (list :ok (null (car missing)) :installed (nreverse installed) :pruned pruned :missing (nreverse (car missing))
           :generation generation :warnings (reverse drgnx-pkg--warnings))))
 
 ;;;; Upgrade with a smoke test
@@ -963,6 +986,8 @@ user's step (docs/guide/packages.md)."
 (defun drgnx-pkg--report (r)
   (when (plist-get r :installed)
     (drgnx-pkg--print "installed: %s" (mapconcat #'symbol-name (plist-get r :installed) " ")))
+  (when (plist-get r :pruned)
+    (drgnx-pkg--print "pruned: %s" (mapconcat #'symbol-name (plist-get r :pruned) " ")))
   (pcase-dolist (`(,name . ,why) (plist-get r :missing)) (drgnx-pkg--print "MISSING %s: %s" name why))
   (dolist (w (plist-get r :warnings)) (drgnx-pkg--print "WARNING %s" w))
   (when (plist-get r :generation) (drgnx-pkg--print "generation %d" (plist-get r :generation)))
@@ -979,7 +1004,8 @@ user's step (docs/guide/packages.md)."
              (pcase (pop flags)
                ("--offline" (setq opts (append opts (list :offline t))))
                ("--seed" (setq opts (append opts (list :seed (pop flags)))))
-               (f (drgnx-pkg--error "unknown sync option %s (--offline, --seed DIR)" f))))
+               ("--prune" (setq opts (append opts (list :prune t))))
+               (f (drgnx-pkg--error "unknown sync option %s (--offline, --seed DIR, --prune)" f))))
            (let ((r (let ((drgnx-pkg-verbose t)) (apply #'drgnx-pkg-sync opts))))
              (drgnx-pkg--report r)
              (if (plist-get r :ok) 0 1))))
@@ -1030,7 +1056,7 @@ user's step (docs/guide/packages.md)."
            (if dir (drgnx-pkg--print "wrote %s (not installed: see docs/guide/packages.md)" (expand-file-name "drgnx.service" (car dir)))
              (princ unit)))
          0)
-        (_ (drgnx-pkg--print "usage: drgnx sync [--offline] [--seed DIR] | upgrade | rollback [N] | generations | lock [--ship] | bisect [-- CMD…] | service-unit [DIR]")
+        (_ (drgnx-pkg--print "usage: drgnx sync [--offline] [--seed DIR] [--prune] | upgrade | rollback [N] | generations | lock [--ship] | bisect [-- CMD…] | service-unit [DIR]")
            2))
     (drgnx-pkg-error (drgnx-pkg--print "drgnx: %s" (cadr err)) 1)
     (error (drgnx-pkg--print "drgnx: unexpected error: %s" (error-message-string err)) 1)))

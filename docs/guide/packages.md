@@ -8,6 +8,7 @@ every downloaded file is kept in a cache, and each sync leaves a **generation** 
 drgnx sync                  install what drgnx needs (from the archives, the cache and the lock)
 drgnx sync --offline        only the lock and the cache — no network
 drgnx sync --seed DIR       first copy the packages of another Emacs (e.g. ~/.config/emacs/elpa), then sync
+drgnx sync --prune          also remove the packages the manifest no longer needs (listed; rollback restores them)
 drgnx upgrade               the newest versions; if they break, the previous generation comes back
 drgnx rollback [N]          the packages of generation N (default: the one before the current one)
 drgnx generations           the generations kept (five)
@@ -51,7 +52,7 @@ byte-compiles, compiles to native code ahead of time (when your Emacs has native
 at startup. A download or an install that fails stops the sync with nothing changed, and a file that did not
 install is removed from the cache. A download or a lock write that stops half way (an error, `C-g`) leaves no
 partial file; what a killed sync left (`*.part` in the cache, `.drgnx.lock.eld.tmp-*`) the next sync removes. A file that does not compile (byte or native) is not a failure: the package is
-installed, runs that file less compiled, and the sync prints a `WARNING` line naming the package and the file (compat's per-version files, `compat-29.el` and the like, load only on an older Emacs and are not compiled to native code, so they never warn). Sync never removes a package: one installed by hand stays and is locked too.
+installed, runs that file less compiled, and the sync prints a `WARNING` line naming the package and the file (compat's per-version files, `compat-29.el` and the like, load only on an older Emacs and are not compiled to native code, so they never warn). A plain sync never removes a package: one that left the manifest (a module turned off) or was installed by hand stays and is locked too. `drgnx sync --prune` removes them: every installed package the manifest does not name and no package of the manifest requires — hand-installed ones included. It is never automatic, it lists what it removed (`pruned: …`), it removes nothing while a package is missing, and it first keeps a generation of the state before, so `drgnx rollback` brings them back.
 
 ### Packages from Git
 
