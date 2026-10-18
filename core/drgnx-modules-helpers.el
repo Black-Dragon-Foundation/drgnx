@@ -15,8 +15,9 @@
 (require 'drgnx-modules-record)
 
 (defun drgnx-module--set-option (var value)
-  "Set the default value of VAR to VALUE through its custom setter, else `set-default'."
-  (funcall (or (get var 'custom-set) #'set-default) var value))
+  "Set the default value of VAR to VALUE through its custom setter, else `set-default'.
+Quietly: a setter that adds a hook or turns a global mode on is undone by the claim, not by the safety net."
+  (drgnx-modules--quietly (funcall (or (get var 'custom-set) #'set-default) var value)))
 
 ;;; Claims: two modules may change the same target
 
@@ -113,7 +114,7 @@ what the user customized or a theme set (kept apart from the default spec), stay
 wiped.  Two modules that set the same FACE may be torn down in either order."
   (let ((rec (drgnx-modules--recording-p))
         (old (get face 'face-defface-spec)))
-    (face-spec-set face spec 'face-defface-spec)
+    (drgnx-modules--quietly (face-spec-set face spec 'face-defface-spec))
     (when rec
       (let* ((target (list 'face face))
              (box (drgnx-module--claim target old)))
@@ -123,7 +124,7 @@ wiped.  Two modules that set the same FACE may be torn down in either order."
            (drgnx-module--release
             target box
             (lambda () (equal (get face 'face-defface-spec) spec))
-            (lambda (prev) (face-spec-set face prev 'face-defface-spec)))))))))
+            (lambda (prev) (drgnx-modules--quietly (face-spec-set face prev 'face-defface-spec))))))))))
 
 (defconst drgnx-module--pointer-event-regexp
   "\\`\\(?:[ACHMSs]-\\)*\\(?:down-\\|drag-\\|double-\\|triple-\\)?\\(?:mouse\\|wheel\\)-"
@@ -175,7 +176,6 @@ be torn down in either order."
 
 ;;; Hooks and advice: named functions, paired with their removal
 
-(defvar drgnx-module--in-helper)   ; defined in drgnx-modules-record, which the recording net reads
 
 (defvar drgnx-module--releasers (make-hash-table :test 'equal)
   "(MODULE . TARGET) → the release functions of that module's live claims, newest first.
@@ -189,7 +189,7 @@ on the hook before stays).  Outside a setup this only runs ADD.  The undo can al
 \(`drgnx-module--paired-remove'); it runs once."
   (let* ((rec (drgnx-modules--recording-p))
          (old (and rec (funcall present-p))))
-    (let ((drgnx-module--in-helper t)) (funcall add))
+    (drgnx-modules--quietly (funcall add))
     (when rec
       (let* ((box (drgnx-module--claim target old))
              (key (cons drgnx-modules--current target))

@@ -208,39 +208,57 @@ AGENTS.md asks of every global hook and advice ("named, with an owner", no lambd
   the hook before the module added it stays. `drgnx-module-unhook` and `drgnx-module-unadvise` drop the calling
   module's own claim early (its teardown then has nothing left to do); another module's claim keeps the function in
   place. Outside a setup the helper adds and records nothing; a name is a symbol, never a lambda.
-- The safety net of the cleanup stack records raw `add-hook` and `advice-add` calls a setup makes. It skips the
-  helpers' own calls: `drgnx-module--in-helper` is bound to non-nil while a helper calls them, and the net's
-  `:around` advice records nothing then (the variable is defined in `drgnx-modules-record.el`, where the net
-  reads it). A raw call is a fallback; use the helper.
+- The safety net of the cleanup stack (below) records raw `add-hook` and `advice-add` calls a setup makes. It
+  skips the helpers' own changes: every claim-aware helper (these two, and `drgnx-module-set`,
+  `-alist-put`, `-face-spec`) makes its change inside `drgnx-modules--quietly`. A raw call is a fallback; use the
+  helper.
 
 ### The safety net: what a setup reaches through Emacs's own doors
 
 Code a setup reaches that does not push its own undo — wb modes, the setup functions of `wb/` libraries, packages'
 mode functions — is recorded anyway. For each setup's extent only (`drgnx-modules--with-recorder`, inside
 `drgnx-modules--run-setup`), drgnx advises four functions and removes the advice in `unwind-protect`, also after
-an error, a quit or a throw. Outside a setup nothing is advised and nothing costs anything.
+an error, a quit or a throw (a second quit during the removal is held off). Outside a setup nothing is advised and
+no call goes through the net; what stays is two properties `advice-remove` leaves on each advised symbol's plist
+(`function-documentation`, `defalias-fset-function`), which change nothing.
 
 | What the setup does | Recorded when | Undo (each checks first) |
 |---|---|---|
 | `add-hook` on a hook's global value | the function was not on it before | `remove-hook`, if it is still there |
 | `advice-add` | `advice-member-p` was nil before | `advice-remove`, if still there |
 | `add-to-list` on a list's global value | the element was not a member before (same test as `add-to-list`) | remove that one element, if still a member; others' additions stay |
-| a new timer (`timer-list`, `timer-idle-list` compared before and after) | always | `cancel-timer`, if still pending |
-| a global minor mode newly in `global-minor-modes` | it was off before | `(MODE -1)`, if still on; pushed last, so modes go off first and their own off code runs before the hook and timer undos |
+| a new timer (`timer-list`, `timer-idle-list` compared before and after) | it is not one of Emacs's own (below) | `cancel-timer`, if still pending |
+| a global minor mode newly in `global-minor-modes` | it was off before | `(MODE -1)`, if still on; pushed after everything the setup pushed, so modes go off first and their own off code runs before the hook and timer undos. This is the one break in last in, first out: a mode goes off before undos the setup pushed after turning it on |
 | a feature newly in `features` | always | none: kept for the report, `(drgnx-modules-features-of MODULE)` |
 
 Labels read `hook HOOK FN`, `advice SYMBOL FN`, `list VAR ELEMENT`, `timer FN`, `mode MODE` (`a lambda` for an
-anonymous function). The undos make teardown and rollback complete for these doors. An undo that a drgnx API
-also pushes (the same hook, recorded twice) is harmless: the second finds nothing to do.
+anonymous function), cut to 100 characters. The undos make teardown and rollback complete for these doors.
+
+The net's undos are unconditional: they check that the thing is still there, not whether another module still
+needs it. So a change made by a claim-aware API — one whose undo hands over to another module's claim (the helpers
+above) — must not also be recorded by the net: such an API makes its change inside `drgnx-modules--quietly`, which
+binds `drgnx-module--in-helper` (the three advices record nothing) and marks the timers and global modes started
+in its extent as seen, for nobody. Then a mode that module A's option turned on stays on while module B's claim on
+the option stands. A plain `drgnx-modules-push-undo` next to a raw call (an unconditional undo too) may be
+recorded twice; that is harmless, since the second finds nothing to do.
 
 What it does **not** record:
 
 - **Buffer-local changes**: `add-hook … nil t`, a buffer-local list value. Buffers own those.
 - **`add-to-list` on `global-minor-modes` or `local-minor-modes`**: Emacs 31's `define-minor-mode` keeps them that
   way; the modes are compared after the setup instead.
-- **A drgnx helper's own calls**: the paired hook and advice helpers bind `drgnx-module--in-helper` while they call
-  `add-hook` and `advice-add`, and push their own undo, which respects what other modules still claim. A second,
-  unconditional undo from the net would remove a function another module still needs.
+- **A drgnx helper's own changes** (`drgnx-modules--quietly`, above).
+- **Emacs's own timers.** Emacs's libraries start singleton timers lazily from code a setup calls (an edit starts
+  undo's boundary timer, a buffer's jit-lock its context timer) and keep them in a variable; cancelled, they would
+  stay dead for the session (undo boundaries for process output would stop). A timer whose function is defined
+  under `lisp-directory` (or preloaded), or that sits in one of `drgnx-modules--emacs-timer-variables` (jit-lock's
+  lambdas), is left alone.
+- **Global modes are owned by the first module that turns them on.** "Newly on" is all the net sees: when module
+  A turns `drgnx-signal-mode` on and B relies on it, tearing A down turns it off. Modes a module shares go through
+  an option (`drgnx-module-set`, claim-aware) or B's `:teardown`/`requires`. And a mode a setup turns *off* is not
+  turned back on at teardown.
+- **Timer callbacks that fire inside a setup** (`sit-for`, `accept-process-output`) run with the module current,
+  so what they change is recorded onto it.
 - **The top level of a library the setup loads** (hooks, advice, list entries): it registers for itself and stays
   (`drgnx-modules--recording-p`). Timers and global modes are found by comparing lists, so one that a library
   starts at its top level while the setup loads it *is* recorded onto the setup — a library that does that is
@@ -275,9 +293,10 @@ late `eval-after-load` or idle step of a turned-off module never runs and an off
 work twice. Evaluated outside a setup, it just runs BODY. Each call installs the safety net for its extent (about
 20 µs): for one-off work, not for a hook that runs on every command.
 
-**Cost.** The safety net around a setup costs about 20 µs (byte-compiled, 30.2: four `advice-add` and
-`advice-remove`, two snapshots and their comparison). The shipped startup stage (16 modules, batch) took 29.4 ms
-with it and 28.2 ms without (5 runs each, within the runs' noise); the budget is 5 ms across all setups.
+**Cost.** The safety net around a setup costs 16–22 µs (byte-compiled, 30.2: four `advice-add` and
+`advice-remove`, two snapshots and their comparison), and up to about 70 µs in runs where the garbage it makes
+brings a collection forward (65–73 µs measured so); 41 setups × 75 µs ≈ 3 ms at worst. The shipped startup stage (16 modules, batch) took 29.4 ms with
+it and 28.2 ms without (5 runs each, within the runs' noise); the budget is 5 ms across all setups.
 `test/unit/modules-record-test.el` covers it, including `startup-is-unchanged`: the shipped modules' startup stage
 gives the same statuses and commands with the recorder as without it.
 

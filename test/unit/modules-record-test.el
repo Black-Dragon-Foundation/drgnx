@@ -14,6 +14,11 @@
 (defun drgnx-modules-record-test-advice-2 (orig x) "Advice: ten more." (+ 10 (funcall orig x)))
 (define-minor-mode drgnx-modules-record-test-a-mode "A global mode for these tests." :global t)
 (define-minor-mode drgnx-modules-record-test-b-mode "Another global mode for these tests." :global t)
+(define-minor-mode drgnx-modules-record-test-opt-mode "A global mode an option turns on and off." :global t)
+(defcustom drgnx-modules-record-test-opt nil
+  "An option whose setter turns `drgnx-modules-record-test-opt-mode' on or off (as `custom-set-minor-mode')."
+  :type 'boolean :group 'drgnx
+  :set (lambda (sym v) (set-default sym v) (drgnx-modules-record-test-opt-mode (if v 1 -1))))
 
 (defmacro drgnx-modules-record-test--with (&rest body)
   "BODY with a fresh module table, report, state, stacks, runs and features, an empty config dir, and the
@@ -23,7 +28,9 @@ test hook, list and modes as they were after."
           (drgnx-modules--table nil) (drgnx-modules--report nil) (drgnx-modules--state nil)
           (drgnx-modules--stacks nil) (drgnx-modules--runs nil) (drgnx-modules--features nil)
           (drgnx-modules-record-test-hook nil) (drgnx-modules-record-test-list nil)
-          (drgnx-modules-record-test-ran nil))
+          (drgnx-modules-record-test-ran nil)
+          (drgnx-module--claims (make-hash-table :test 'equal))
+          (drgnx-module--releasers (make-hash-table :test 'equal)))
      (unwind-protect (progn ,@body)
        (drgnx-modules-record-test-a-mode -1) (drgnx-modules-record-test-b-mode -1)
        (delete-directory cfg t))))
@@ -347,5 +354,86 @@ Returns (STATUSES COMMANDS STACKS), STACKS the number of modules with a cleanup 
     (should (> (length (cadr with)) 20))
     (should (> (nth 2 with) 5))                         ; the recorder did run
     (should (equal (take 2 with) (take 2 without)))))
+
+(ert-deftest drgnx-modules-record/emacs-own-timers-are-left-alone ()
+  ;; Emacs's libraries keep singleton timers in variables and start them lazily from code a setup calls (an edit
+  ;; starts undo's boundary timer, a buffer's jit-lock its context timer).  Cancelled, they would stay dead for the
+  ;; session: undo boundaries for process output would stop.
+  (require 'jit-lock)
+  (drgnx-modules-record-test--with
+   (dolist (var '(undo-auto-current-boundary-timer jit-lock-context-timer))
+     (when (timerp (symbol-value var)) (cancel-timer (symbol-value var)))
+     (set var nil))
+   (let ((buf (generate-new-buffer " drgnx-undo")))
+     (unwind-protect
+         (progn
+           (drgnx-module-define 'test/a :doc "a"
+                                :setup (lambda ()
+                                         (with-current-buffer buf (buffer-enable-undo) (insert "a"))
+                                         (let ((jit-lock-contextually t)) (with-temp-buffer (jit-lock-mode 1)))))
+           (drgnx-modules-record-test--run 'test/a)
+           (should (timerp undo-auto-current-boundary-timer))
+           (should (timerp jit-lock-context-timer))
+           (should-not (drgnx-modules-record-test--labels 'test/a))
+           (should-not (drgnx-module-teardown 'test/a))     ; torn down at once, well inside undo's 10 s
+           (should (drgnx-modules-record-test--timer-p undo-auto-current-boundary-timer))
+           (should (drgnx-modules-record-test--timer-p jit-lock-context-timer)))
+       (kill-buffer buf)))))
+
+(ert-deftest drgnx-modules-record/a-helpers-mode-stays-while-another-module-claims-it ()
+  ;; Module a turns a mode on through an option's setter, b sets the same option: tearing a down leaves the mode
+  ;; on (b's claim stands); tearing b down too turns it off.  The net records nothing of a helper's own change.
+  (drgnx-modules-record-test--with
+   (unwind-protect
+       (progn
+         (drgnx-module-define 'test/a :doc "a" :setup (lambda () (drgnx-module-set 'drgnx-modules-record-test-opt t)))
+         (drgnx-module-define 'test/b :doc "b" :setup (lambda () (drgnx-module-set 'drgnx-modules-record-test-opt t)))
+         (drgnx-modules-record-test--run 'test/a)
+         (drgnx-modules-record-test--run 'test/b)
+         (should drgnx-modules-record-test-opt-mode)
+         (should (equal (drgnx-modules-record-test--labels 'test/a) '("option drgnx-modules-record-test-opt")))
+         (should-not (drgnx-module-teardown 'test/a))
+         (should drgnx-modules-record-test-opt-mode)
+         (should-not (drgnx-module-teardown 'test/b))
+         (should-not drgnx-modules-record-test-opt-mode)
+         (should-not drgnx-modules-record-test-opt))
+     (drgnx-modules-record-test-opt-mode -1)
+     (set-default 'drgnx-modules-record-test-opt nil))))
+
+(ert-deftest drgnx-modules-record/a-helpers-hook-is-recorded-once ()
+  ;; Two modules add the same function through the paired helper: one entry each (the helper's), and either
+  ;; teardown keeps the function while the other module still claims it.
+  (drgnx-modules-record-test--with
+   (dolist (m '(test/a test/b))
+     (drgnx-module-define m :doc "m"
+                          :setup (lambda () (drgnx-module--hook-add 'drgnx-modules-record-test-hook
+                                                                    #'drgnx-modules-record-test-fn nil))))
+   (drgnx-modules-record-test--run 'test/a)
+   (drgnx-modules-record-test--run 'test/b)
+   (should (= (length (drgnx-modules-record-test--labels 'test/a)) 1))
+   (should (= (length (drgnx-modules-record-test--labels 'test/b)) 1))
+   (should-not (drgnx-module-teardown 'test/a))
+   (should (memq #'drgnx-modules-record-test-fn drgnx-modules-record-test-hook))
+   (should-not (drgnx-module-teardown 'test/b))
+   (should-not drgnx-modules-record-test-hook)))
+
+(ert-deftest drgnx-modules-record/add-to-list-compares-as-add-to-list-does ()
+  ;; `add-to-list' calls COMPARE with the new element first: "abc" is not a prefix of "ab", so it is added.
+  (drgnx-modules-record-test--with
+   (setq drgnx-modules-record-test-list (list "ab"))
+   (drgnx-module-define 'test/a :doc "a"
+                        :setup (lambda () (add-to-list 'drgnx-modules-record-test-list "abc" nil #'string-prefix-p)))
+   (drgnx-modules-record-test--run 'test/a)
+   (should (equal drgnx-modules-record-test-list '("abc" "ab")))
+   (should (= (length (drgnx-modules-record-test--labels 'test/a)) 1))
+   (should-not (drgnx-module-teardown 'test/a))
+   (should (equal drgnx-modules-record-test-list '("ab")))))
+
+(ert-deftest drgnx-modules-record/labels-are-short ()
+  (drgnx-modules-record-test--with
+   (drgnx-module-define 'test/a :doc "a"
+                        :setup (lambda () (add-to-list 'drgnx-modules-record-test-list (make-string 500 ?x))))
+   (drgnx-modules-record-test--run 'test/a)
+   (should (<= (length (car (drgnx-modules-record-test--labels 'test/a))) 120))))
 
 ;;; modules-record-test.el ends here
