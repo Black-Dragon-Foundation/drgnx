@@ -171,5 +171,143 @@ be torn down in either order."
               (lambda () (equal (drgnx-module--own-binding map key) def))
               (lambda (prev) (define-key map key prev (null prev)))))))))))
 
+;;; Hooks and advice: named functions, paired with their removal
+
+(defvar drgnx-module--in-helper nil
+  "Non-nil (dynamically bound) while a paired helper itself calls `add-hook' or `advice-add'.
+The safety net that records raw `add-hook' and `advice-add' calls during a setup skips them: the
+helper already made the claim, and a second, unconditional undo would break the either-order rule.")
+
+(defvar drgnx-module--releasers (make-hash-table :test 'equal)
+  "(MODULE . TARGET) → the release functions of that module's live claims, newest first.
+MODULE is the one whose setup made the claim (`drgnx-modules--current').
+`drgnx-module-unhook' and `drgnx-module-unadvise' run them to undo early.")
+
+(defun drgnx-module--paired-add (target label present-p add remove)
+  "Run ADD, claim TARGET for the module whose setup runs and push the undo that runs REMOVE when no claim is left.
+PRESENT-P: whether the addition is there already (the claim remembers it, so a function that was
+on the hook before stays).  Outside a setup this only runs ADD.  The undo can also run early
+\(`drgnx-module--paired-remove'); it runs once."
+  (let* ((rec (drgnx-modules--recording-p))
+         (old (and rec (funcall present-p))))
+    (let ((drgnx-module--in-helper t)) (funcall add))
+    (when rec
+      (let* ((box (drgnx-module--claim target old))
+             (key (cons drgnx-modules--current target))
+             (done nil)
+             (release nil))
+        (setq release
+              (lambda ()
+                (unless done
+                  (setq done t)
+                  (if-let* ((rest (delq release (gethash key drgnx-module--releasers))))
+                      (puthash key rest drgnx-module--releasers)
+                    (remhash key drgnx-module--releasers))
+                  (drgnx-module--release target box (lambda () t)
+                                         (lambda (prev) (unless prev (funcall remove)))))))
+        (push release (gethash key drgnx-module--releasers))
+        (drgnx-modules-push-undo label release)))))
+
+(defun drgnx-module--paired-remove (module target remove)
+  "Undo the additions at TARGET of the module whose setup runs (else MODULE) now.
+When it made none, run REMOVE unless another claim stands."
+  (let ((releasers (gethash (cons (or drgnx-modules--current module) target) drgnx-module--releasers)))
+    (if releasers
+        (dolist (release (copy-sequence releasers)) (funcall release))
+      (unless (gethash target drgnx-module--claims) (funcall remove)))))
+
+(defun drgnx-module--hook-add (hook fn depth)
+  "Add FN to HOOK (each, when a list) with DEPTH; see `drgnx-module--paired-add'."
+  (dolist (h (if (listp hook) hook (list hook)))
+    (drgnx-module--paired-add
+     (list 'hook h fn) (format "hook %s %s" h fn)
+     (lambda () (and (default-boundp h) (memq fn (default-value h)) t))
+     (lambda () (add-hook h fn depth))
+     (lambda () (remove-hook h fn)))))
+
+(defun drgnx-module--hook-remove (hook fn module)
+  "Remove FN from HOOK (each, when a list) for MODULE now."
+  (dolist (h (if (listp hook) hook (list hook)))
+    (drgnx-module--paired-remove module (list 'hook h fn) (lambda () (remove-hook h fn)))))
+
+(defun drgnx-module--advice-add (symbol how fn name)
+  "Advise SYMBOL with FN (named NAME); see `drgnx-module--paired-add'."
+  (drgnx-module--paired-add
+   (list 'advice symbol fn) (format "advice %s %s" symbol fn)
+   (lambda () (and (advice-member-p fn symbol) t))
+   (lambda () (advice-add symbol how fn `((name . ,name))))
+   (lambda () (advice-remove symbol fn))))
+
+(defun drgnx-module--advice-remove (symbol fn module)
+  "Remove FN from SYMBOL's advice for MODULE now."
+  (drgnx-module--paired-remove module (list 'advice symbol fn) (lambda () (advice-remove symbol fn))))
+
+(defvar drgnx-module--file-modules (make-hash-table :test 'equal) "File → the module its `drgnx-module-define' names.")
+
+(defun drgnx-module--file-module ()
+  "The module the file being loaded or compiled defines, read from its `drgnx-module-define'."
+  (let ((file (or (macroexp-file-name) byte-compile-current-file load-file-name buffer-file-name)))
+    (or (and file (gethash file drgnx-module--file-modules))
+        (let ((found (and file (file-readable-p file)
+                          (with-temp-buffer
+                            (insert-file-contents file)
+                            (and (re-search-forward "(drgnx-module-define[ \t\n]+'\\([^ \t\n()]+\\)" nil t)
+                                 (intern (match-string 1)))))))
+          (unless found
+            (error "Cannot tell the module of %s: give `:module NAME' (the file has no drgnx-module-define)" file))
+          (puthash file found drgnx-module--file-modules)))))
+
+(defun drgnx-module--options (body)
+  "Split BODY into leading `:module' and `:depth' pairs and the rest: (MODULE DEPTH . REST).
+MODULE is a symbol (an optional quote is dropped); it defaults to the file's module."
+  (let (module depth)
+    (while (memq (car-safe body) '(:module :depth))
+      (if (eq (car body) :module) (setq module (cadr body)) (setq depth (cadr body)))
+      (setq body (cddr body)))
+    (when (eq (car-safe module) 'quote) (setq module (cadr module)))
+    `(,(or module (drgnx-module--file-module)) ,depth . ,body)))
+
+(defun drgnx-module--function-name (module name)
+  "The symbol `drgnx-MODULE--NAME', the named function a helper defines."
+  (intern (format "drgnx-%s--%s" module name)))
+
+(defmacro drgnx-module-hook (hook name arglist &rest body)
+  "Define `drgnx-<module>--NAME' as (lambda ARGLIST BODY...) and add it to HOOK; the undo removes it.
+HOOK is evaluated: a hook symbol, or a list of them.  The module is the one the file's
+`drgnx-module-define' names, or `:module NAME' (a symbol) first in BODY; `:depth N' there is
+passed to `add-hook'.  Running it again changes nothing.  The undo removes the function only when
+no other claim on it stands (two modules adding the same function tear down in either order), and
+keeps it when it was on the hook before.  `drgnx-module-unhook' removes it early."
+  (declare (indent 3) (debug (form symbolp sexp body)))
+  (pcase-let* ((`(,module ,depth . ,rest) (drgnx-module--options body))
+               (fn (drgnx-module--function-name module name)))
+    `(progn (defun ,fn ,arglist ,@rest)
+            (drgnx-module--hook-add ,hook ',fn ,depth))))
+
+(defmacro drgnx-module-unhook (hook name &rest options)
+  "Remove the function `drgnx-module-hook' defined as NAME from HOOK (each, when a list) now.
+OPTIONS: `:module NAME' as for `drgnx-module-hook'.  The module's own claim is dropped, so its
+teardown has nothing left to do; another module's claim keeps the function on the hook."
+  (declare (indent 2) (debug (form symbolp &rest sexp)))
+  (pcase-let ((`(,module) (drgnx-module--options options)))
+    `(drgnx-module--hook-remove ,hook ',(drgnx-module--function-name module name) ',module)))
+
+(defmacro drgnx-module-advice (symbol how name arglist &rest body)
+  "Define `drgnx-<module>--NAME' as (lambda ARGLIST BODY...) and advise SYMBOL with it, HOW.
+SYMBOL and HOW are evaluated.  The advice is named NAME (`advice-add' property).  Module, claims and
+undo as for `drgnx-module-hook'; `drgnx-module-unadvise' removes it early."
+  (declare (indent 4) (debug (form form symbolp sexp body)))
+  (pcase-let* ((`(,module ,_depth . ,rest) (drgnx-module--options body))
+               (fn (drgnx-module--function-name module name)))
+    `(progn (defun ,fn ,arglist ,@rest)
+            (drgnx-module--advice-add ,symbol ,how ',fn ',name))))
+
+(defmacro drgnx-module-unadvise (symbol name &rest options)
+  "Remove the advice `drgnx-module-advice' defined as NAME from SYMBOL now.
+OPTIONS: `:module NAME'.  See `drgnx-module-unhook'."
+  (declare (indent 2) (debug (form symbolp &rest sexp)))
+  (pcase-let ((`(,module) (drgnx-module--options options)))
+    `(drgnx-module--advice-remove ,symbol ',(drgnx-module--function-name module name) ',module)))
+
 (provide 'drgnx-modules-helpers)
 ;;; drgnx-modules-helpers.el ends here

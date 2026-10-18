@@ -22,14 +22,16 @@
   `(let ((drgnx-modules--current 'test/h)
          (drgnx-modules--setup-load load-file-name)
          (drgnx-modules--stacks nil)
-         (drgnx-module--claims (make-hash-table :test 'equal)))
+         (drgnx-module--claims (make-hash-table :test 'equal))
+         (drgnx-module--releasers (make-hash-table :test 'equal)))
      ,@body))
 
 (defmacro drgnx-modules-helpers-test--two-modules (&rest body)
   "BODY with fresh stacks and claims; run parts of it as a module with `--as'."
   `(let ((drgnx-modules--setup-load load-file-name)
          (drgnx-modules--stacks nil)
-         (drgnx-module--claims (make-hash-table :test 'equal)))
+         (drgnx-module--claims (make-hash-table :test 'equal))
+         (drgnx-module--releasers (make-hash-table :test 'equal)))
      ,@body))
 
 (defmacro drgnx-modules-helpers-test--as (module &rest body)
@@ -344,3 +346,209 @@
              (should (equal (get 'drgnx-modules-helpers-test-face 'face-defface-spec) old)))))
       (put 'drgnx-modules-helpers-test-face 'theme-face nil)
       (face-spec-set 'drgnx-modules-helpers-test-face old 'face-defface-spec))))
+
+;;;; drgnx-module-hook, drgnx-module-advice
+
+(defvar drgnx-modules-helpers-test--hook nil "A hook the paired helpers add to.")
+(defvar drgnx-modules-helpers-test--hook2 nil "A second hook.")
+(defvar drgnx-modules-helpers-test--seen nil "Values the hook watcher saw `drgnx-module--in-helper' have.")
+
+(defun drgnx-modules-helpers-test--target (x) "A function to advise." (list 'target x))
+
+(defun drgnx-modules-helpers-test--on-hook-p (fn &optional hook)
+  (and (memq fn (default-value (or hook 'drgnx-modules-helpers-test--hook))) t))
+
+(defmacro drgnx-modules-helpers-test--clean (&rest body)
+  "BODY with the test hooks empty and the target unadvised, restored afterwards."
+  `(let ((drgnx-modules-helpers-test--hook nil) (drgnx-modules-helpers-test--hook2 nil))
+     (unwind-protect (progn ,@body)
+       (advice-mapc (lambda (f _) (advice-remove 'drgnx-modules-helpers-test--target f))
+                    'drgnx-modules-helpers-test--target))))
+
+(ert-deftest drgnx-module-hook/defines-a-named-function-and-adds-it ()
+  (drgnx-modules-helpers-test--clean
+   (drgnx-modules-helpers-test--in-setup
+    (drgnx-module-hook 'drgnx-modules-helpers-test--hook greet (x) :module test/h (list 'hi x))
+    (should (fboundp 'drgnx-test/h--greet))
+    (should (equal (drgnx-test/h--greet 1) '(hi 1)))
+    (should (drgnx-modules-helpers-test--on-hook-p 'drgnx-test/h--greet))
+    (should (= (length (alist-get 'test/h drgnx-modules--stacks)) 1)))))
+
+(ert-deftest drgnx-module-hook/teardown-removes-it ()
+  (drgnx-modules-helpers-test--clean
+   (drgnx-modules-helpers-test--in-setup
+    (drgnx-module-hook 'drgnx-modules-helpers-test--hook greet () :module test/h nil)
+    (drgnx-modules-helpers-test--undo)
+    (should-not (drgnx-modules-helpers-test--on-hook-p 'drgnx-test/h--greet))
+    (should-not (alist-get 'test/h drgnx-modules--stacks))
+    (should (zerop (hash-table-count drgnx-module--claims))))))
+
+(ert-deftest drgnx-module-hook/unhook-removes-early ()
+  (drgnx-modules-helpers-test--clean
+   (drgnx-modules-helpers-test--in-setup
+    (drgnx-module-hook 'drgnx-modules-helpers-test--hook greet () :module test/h nil)
+    (drgnx-module-unhook 'drgnx-modules-helpers-test--hook greet :module test/h)
+    (should-not (drgnx-modules-helpers-test--on-hook-p 'drgnx-test/h--greet))
+    (should (zerop (hash-table-count drgnx-module--claims)))
+    ;; The teardown later is quiet and changes nothing.
+    (add-hook 'drgnx-modules-helpers-test--hook 'ignore)
+    (drgnx-modules-helpers-test--undo)
+    (should (equal drgnx-modules-helpers-test--hook '(ignore))))))
+
+(ert-deftest drgnx-module-hook/twice-is-once ()
+  (drgnx-modules-helpers-test--clean
+   (drgnx-modules-helpers-test--in-setup
+    (dotimes (_ 2)
+      (drgnx-module-hook 'drgnx-modules-helpers-test--hook greet () :module test/h nil))
+    (should (= (length drgnx-modules-helpers-test--hook) 1))
+    (drgnx-modules-helpers-test--undo)
+    (should-not drgnx-modules-helpers-test--hook)
+    (should (zerop (hash-table-count drgnx-module--claims))))))
+
+(ert-deftest drgnx-module-hook/a-list-of-hooks ()
+  (drgnx-modules-helpers-test--clean
+   (drgnx-modules-helpers-test--in-setup
+    (drgnx-module-hook '(drgnx-modules-helpers-test--hook drgnx-modules-helpers-test--hook2)
+        greet () :module test/h nil)
+    (should (drgnx-modules-helpers-test--on-hook-p 'drgnx-test/h--greet))
+    (should (drgnx-modules-helpers-test--on-hook-p 'drgnx-test/h--greet 'drgnx-modules-helpers-test--hook2))
+    (drgnx-module-unhook 'drgnx-modules-helpers-test--hook2 greet :module test/h)
+    (should (drgnx-modules-helpers-test--on-hook-p 'drgnx-test/h--greet))
+    (should-not (drgnx-modules-helpers-test--on-hook-p 'drgnx-test/h--greet 'drgnx-modules-helpers-test--hook2))
+    (drgnx-modules-helpers-test--undo)
+    (should-not drgnx-modules-helpers-test--hook)
+    (should-not drgnx-modules-helpers-test--hook2))))
+
+(ert-deftest drgnx-module-hook/depth-is-passed ()
+  (drgnx-modules-helpers-test--clean
+   (let ((drgnx-modules-helpers-test--hook '(ignore)))
+     (drgnx-modules-helpers-test--in-setup
+      (drgnx-module-hook 'drgnx-modules-helpers-test--hook greet () :depth 90 :module test/h nil)
+      (should (equal drgnx-modules-helpers-test--hook '(ignore drgnx-test/h--greet)))
+      (drgnx-modules-helpers-test--undo)
+      (should (equal drgnx-modules-helpers-test--hook '(ignore)))))))
+
+(ert-deftest drgnx-module-hook/keeps-what-was-already-there ()
+  (drgnx-modules-helpers-test--clean
+   (defun drgnx-test/h--greet () nil)
+   (add-hook 'drgnx-modules-helpers-test--hook 'drgnx-test/h--greet)
+   (drgnx-modules-helpers-test--in-setup
+    (drgnx-module-hook 'drgnx-modules-helpers-test--hook greet () :module test/h nil)
+    (drgnx-modules-helpers-test--undo)
+    (should (drgnx-modules-helpers-test--on-hook-p 'drgnx-test/h--greet)))))
+
+(ert-deftest drgnx-module-hook/outside-a-setup-adds-and-records-nothing ()
+  (drgnx-modules-helpers-test--clean
+   (let ((drgnx-modules--stacks nil) (drgnx-module--claims (make-hash-table :test 'equal)))
+     (drgnx-module-hook 'drgnx-modules-helpers-test--hook greet () :module test/h nil)
+     (should (drgnx-modules-helpers-test--on-hook-p 'drgnx-test/h--greet))
+     (should-not drgnx-modules--stacks)
+     (should (zerop (hash-table-count drgnx-module--claims)))
+     (drgnx-module-unhook 'drgnx-modules-helpers-test--hook greet :module test/h)
+     (should-not drgnx-modules-helpers-test--hook))))
+
+(ert-deftest drgnx-module-hook/two-modules-one-function-either-order ()
+  (dolist (order '((a b) (b a)))
+    (drgnx-modules-helpers-test--clean
+     (drgnx-modules-helpers-test--two-modules
+      (dolist (m '(a b))
+        (drgnx-modules-helpers-test--as m
+          (drgnx-module-hook 'drgnx-modules-helpers-test--hook shared () :module test/h nil)))
+      (should (= (length drgnx-modules-helpers-test--hook) 1))
+      (drgnx-modules-helpers-test--down (car order))
+      (should (drgnx-modules-helpers-test--on-hook-p 'drgnx-test/h--shared))
+      (drgnx-modules-helpers-test--down (cadr order))
+      (should-not drgnx-modules-helpers-test--hook)
+      (should (zerop (hash-table-count drgnx-module--claims)))))))
+
+(ert-deftest drgnx-module-hook/unhook-by-one-module-leaves-the-other ()
+  (drgnx-modules-helpers-test--clean
+   (drgnx-modules-helpers-test--two-modules
+    (dolist (m '(a b))
+      (drgnx-modules-helpers-test--as m
+        (drgnx-module-hook 'drgnx-modules-helpers-test--hook shared () :module test/h nil)))
+    (drgnx-modules-helpers-test--as 'a
+      (drgnx-module-unhook 'drgnx-modules-helpers-test--hook shared :module test/h))
+    (should (drgnx-modules-helpers-test--on-hook-p 'drgnx-test/h--shared))
+    (drgnx-modules-helpers-test--down 'a)          ; its undo already ran: nothing left to do
+    (should (drgnx-modules-helpers-test--on-hook-p 'drgnx-test/h--shared))
+    (drgnx-modules-helpers-test--down 'b)
+    (should-not drgnx-modules-helpers-test--hook))))
+
+(ert-deftest drgnx-module-hook/the-recording-net-is-told-to-skip-the-helper ()
+  ;; `drgnx-module--in-helper' is non-nil exactly while the helper itself calls add-hook/advice-add.
+  (drgnx-modules-helpers-test--clean
+   (let ((drgnx-modules-helpers-test--seen nil))
+     (add-variable-watcher 'drgnx-modules-helpers-test--hook
+                           (lambda (&rest _) (push drgnx-module--in-helper drgnx-modules-helpers-test--seen)))
+     (unwind-protect
+         (drgnx-modules-helpers-test--in-setup
+          (drgnx-module-hook 'drgnx-modules-helpers-test--hook greet () :module test/h nil)
+          (should (equal drgnx-modules-helpers-test--seen '(t)))
+          (should-not drgnx-module--in-helper))
+       (dolist (w (get-variable-watchers 'drgnx-modules-helpers-test--hook))
+         (remove-variable-watcher 'drgnx-modules-helpers-test--hook w))))))
+
+(ert-deftest drgnx-module-hook/the-module-comes-from-the-files-module-define ()
+  (let ((file (make-temp-file "drgnx-hook-test" nil ".el" "(drgnx-module-define 'editor/zed\n :doc \"x\")\n")))
+    (unwind-protect
+        (let ((load-file-name file))
+          (should (equal (cadr (macroexpand '(drgnx-module-hook 'h greet () nil)))
+                         '(defun drgnx-editor/zed--greet () nil))))
+      (delete-file file))))
+
+(ert-deftest drgnx-module-hook/no-module-is-an-error ()
+  (let ((file (make-temp-file "drgnx-hook-test" nil ".el" ";; no module here\n")))
+    (unwind-protect
+        (let ((load-file-name file))
+          (should-error (macroexpand '(drgnx-module-hook 'h greet () nil))))
+      (delete-file file))))
+
+(ert-deftest drgnx-module-advice/is-named-and-removed ()
+  (drgnx-modules-helpers-test--clean
+   (drgnx-modules-helpers-test--in-setup
+    (drgnx-module-advice 'drgnx-modules-helpers-test--target :filter-return wrap (r)
+      :module test/h (list 'wrapped r))
+    (should (equal (drgnx-modules-helpers-test--target 1) '(wrapped (target 1))))
+    (should (advice-member-p 'drgnx-test/h--wrap 'drgnx-modules-helpers-test--target))
+    (should (advice-member-p 'wrap 'drgnx-modules-helpers-test--target))
+    (drgnx-modules-helpers-test--undo)
+    (should-not (advice-member-p 'drgnx-test/h--wrap 'drgnx-modules-helpers-test--target))
+    (should (equal (drgnx-modules-helpers-test--target 1) '(target 1)))
+    (should (zerop (hash-table-count drgnx-module--claims))))))
+
+(ert-deftest drgnx-module-advice/unadvise-removes-early-and-twice-is-once ()
+  (drgnx-modules-helpers-test--clean
+   (drgnx-modules-helpers-test--in-setup
+    (dotimes (_ 2)
+      (drgnx-module-advice 'drgnx-modules-helpers-test--target :filter-return wrap (r)
+        :module test/h (list 'wrapped r)))
+    (drgnx-module-unadvise 'drgnx-modules-helpers-test--target wrap :module test/h)
+    (should-not (advice-member-p 'drgnx-test/h--wrap 'drgnx-modules-helpers-test--target))
+    (drgnx-modules-helpers-test--undo)
+    (should (equal (drgnx-modules-helpers-test--target 1) '(target 1))))))
+
+(ert-deftest drgnx-module-advice/two-modules-one-advice-either-order ()
+  (dolist (order '((a b) (b a)))
+    (drgnx-modules-helpers-test--clean
+     (drgnx-modules-helpers-test--two-modules
+      (dolist (m '(a b))
+        (drgnx-modules-helpers-test--as m
+          (drgnx-module-advice 'drgnx-modules-helpers-test--target :filter-return shared (r)
+            :module test/h (list 'wrapped r))))
+      (drgnx-modules-helpers-test--down (car order))
+      (should (advice-member-p 'drgnx-test/h--shared 'drgnx-modules-helpers-test--target))
+      (should (equal (drgnx-modules-helpers-test--target 1) '(wrapped (target 1))))
+      (drgnx-modules-helpers-test--down (cadr order))
+      (should-not (advice-member-p 'drgnx-test/h--shared 'drgnx-modules-helpers-test--target))
+      (should (zerop (hash-table-count drgnx-module--claims)))))))
+
+(ert-deftest drgnx-module-advice/keeps-advice-that-was-already-there ()
+  (drgnx-modules-helpers-test--clean
+   (defun drgnx-test/h--wrap (r) (list 'wrapped r))
+   (advice-add 'drgnx-modules-helpers-test--target :filter-return 'drgnx-test/h--wrap)
+   (drgnx-modules-helpers-test--in-setup
+    (drgnx-module-advice 'drgnx-modules-helpers-test--target :filter-return wrap (r)
+      :module test/h (list 'wrapped r))
+    (drgnx-modules-helpers-test--undo)
+    (should (advice-member-p 'drgnx-test/h--wrap 'drgnx-modules-helpers-test--target)))))

@@ -180,6 +180,34 @@ or another module put there since. Outside a setup a helper only makes the chang
   undo overwrites that change. Do not mutate a value you gave `drgnx-module-set`.
 - Outside a setup the helpers make the change and nothing else (no label, closure or claim).
 
+#### Hooks and advice: `drgnx-module-hook` and `drgnx-module-advice`
+
+A global hook function or advice a module adds goes through a paired helper (Doom's `add-hook!` and `defadvice!`
+shape). It defines the function with a name and an owner, adds it, and pushes its removal, which is what
+AGENTS.md asks of every global hook and advice ("named, with an owner", no lambdas).
+
+```elisp
+(drgnx-module-hook 'find-file-hook maybe ()           ; defines drgnx-editor/blame--maybe
+  (drgnx-blame--check))
+(drgnx-module-hook '(text-mode-hook prog-mode-hook) enable () :depth 90 (drgnx-blame-mode 1))
+(drgnx-module-advice 'save-buffer :after refresh (&rest _) (drgnx-blame--refresh))
+(drgnx-module-unhook 'find-file-hook maybe)           ; early, e.g. when a mode turns off
+```
+
+- The function is `drgnx-<module>--<NAME>`, the module being the one the file's `drgnx-module-define` names (read from
+  the file at macro-expansion time) or `:module NAME` (a symbol) first in the body. `:depth N` there goes to
+  `add-hook`. HOOK is evaluated: a symbol or a list of symbols. The advice is also named `NAME` (the `advice-add`
+  property); SYMBOL and HOW are evaluated.
+- Running a helper again changes nothing. The undo takes the function off only when no claim on it is left: the
+  helpers use the claims of the section above (target: the hook and the function, or the advised symbol and the
+  function), so two modules adding the same named function tear down in either order, and a function that was on
+  the hook before the module added it stays. `drgnx-module-unhook` and `drgnx-module-unadvise` drop the calling
+  module's own claim early (its teardown then has nothing left to do); another module's claim keeps the function in
+  place. Outside a setup the helper adds and records nothing; a name is a symbol, never a lambda.
+- The safety net of the cleanup stack records raw `add-hook` and `advice-add` calls a setup makes. It skips the
+  helpers' own calls: `drgnx-module--in-helper` is bound to non-nil while a helper calls them, and the net's
+  `:around` advice records nothing then. A raw call is a fallback; use the helper.
+
 ## Build (`drgnx-build.el`)
 
 `bin/drgnx build` byte-compiles `core/`, `wb/` and `modules/` in place (`.elc` files are not tracked); with native
