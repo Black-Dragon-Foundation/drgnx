@@ -296,6 +296,16 @@ steps and a damaged progress file never stops onboarding. `drgnx-onboard-state` 
 `drgnx-onboard--write-state` (the Welcome's first-start marker) is a plain `drgnx-file-write`. Tests:
 `test/unit/onboard-test.el`.
 
+`face.eld` (state folder, a plist, `core/drgnx-face-state.el`) is a config file read by two programs: drgnx, and
+`bin/drgnx`, which finds `:variant` and `:gtk-theme` in it with `sed` before any Emacs runs. So it is printed with `prin1`
+on one line (a comment header on a new file names neither key), and the schema stays as wide as what M12f-a wrote:
+no version key, unknown keys allowed. A change is `drgnx-face-state-put PLIST [TIMEOUT]` (sets those keys, keeps the
+rest) or `drgnx-face-state-update FN`, both a `drgnx-file-update` with `:on-unreadable 'backup`: under the lock, on a
+fresh read, nothing written when nothing changed, and a file that is unreadable or not a plist is copied aside to
+`face.eld.bak-<time>` before it is started again. `drgnx-face-state-write` (replace the whole plist) stays for callers
+that mean it. The theme hook passes TIMEOUT 0 and skips when `drgnx-file-busy`; a failure becomes one message.
+`drgnx-face-state-read` is `drgnx-file-read`, never signals. Tests: `test/unit/face-state-test.el`.
+
 ## Staged hooks (`drgnx-hooks.el`)
 
 Work that need not happen at startup hangs on a stage and runs once, when the stage is first reached:

@@ -218,6 +218,7 @@ off), or inside a session, the mode is read as it is and never switched: an off 
     drgnx-projects
     drgnx-agents
     drgnx-onboard
+    drgnx-face-state
     )
   "The core features whose loading defines config files, for the `config-files' check.")
 

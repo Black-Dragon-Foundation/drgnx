@@ -22,6 +22,18 @@ Agent profiles, the MCP servers agents get, OpenRouter restrictions and job rout
 | `:openrouter` | not an OpenRouter restriction (:only :ignore :data-collection :zdr) | no | Which providers OpenRouter may use |
 | `:routes` | alist of symbol to string or list of string | no | Which profiles do each job role: a list of names, or one name |
 
+## face.eld
+
+Folder: state. Format: 1. Read: when it changes. On a mistake: its last good copy, else the defaults.
+
+What the face remembers between runs: the title bar's variant, its GTK theme (read by bin/drgnx) and the start page's dismissal.
+
+| Key | Type | Required | What |
+| --- | --- | --- | --- |
+| `:variant` | symbol or null | no | The title bar's variant: dark, light or nil |
+| `:gtk-theme` | string or null | no | The GTK theme the launchers start GTK with |
+| `:start-dismissed` | boolean or null | no | t once "Don't show this again" was chosen |
+
 ## layouts.eld
 
 Folder: config. Format: 1. Read: when it changes. On a mistake: its last good copy, else the defaults.
