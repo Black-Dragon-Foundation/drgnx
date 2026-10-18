@@ -68,14 +68,21 @@ says which fallback was taken.")
   (let ((a (getenv "DRGNX_AGENT")) (k (getenv "DRGNX_AGENT_KIND")))
     (and (or (null a) (string-empty-p a)) k (not (string-empty-p k)) (drgnx-coord-mcp--valid-kind k))))
 
+(defconst drgnx-coord-mcp--id-regexp "\\`[A-Za-z0-9][A-Za-z0-9._:-]\\{0,63\\}\\'"
+  "What DRGNX_AGENT may be: ASCII letters, digits and . _ : - (not first), at most 64 characters.")
+
 (defun drgnx-coord-mcp--identity ()
   "Who this server speaks for: DRGNX_AGENT (drgnx's own agents), else ext:KIND:PID-HASH for an agent outside drgnx —
 PID its process, this server's parent, HASH its start time (see `drgnx-coord-mcp--parent' for the fallbacks) — else
-nil (it only reads).  Never from a tool's arguments.  Never \"user\", in any case: that is the user, whose messages
-the hub gives agents as the user's answers (`drgnx-hub--message-prompt') — an error."
+nil (it only reads).  Never from a tool's arguments.  An error when DRGNX_AGENT is \"user\", in any case: that is
+the user, whose messages the hub gives agents as the user's (`drgnx-hub--message-prompt'); and when it is not a
+plain ASCII id (`drgnx-coord-mcp--id-regexp'): a newline or `]' would break out of the hub's header, a lookalike of
+\"user\" would read as the user."
   (let ((a (getenv "DRGNX_AGENT")))
     (when (and a (equal (downcase (string-trim a)) "user"))
       (error "\"user\" is the user: no agent speaks as the user (DRGNX_AGENT=%s)" a))
+    (when (and a (not (string-empty-p a)) (not (let ((case-fold-search nil)) (string-match-p drgnx-coord-mcp--id-regexp a))))
+      (error "DRGNX_AGENT is not a plain id (letters, digits and . _ : - only, at most 64): %S" a))
     (if (and a (not (string-empty-p a))) a
       (when-let* ((kind (drgnx-coord-mcp--outside-kind)))
         (format "ext:%s:%s" kind (plist-get (drgnx-coord-mcp--parent) :tag))))))
@@ -584,7 +591,8 @@ error, nothing is sent.  The hub is asked only when the cheap checks fail."
   (drgnx-mcp-serve "drgnx" (drgnx-coord-mcp-tools)))
 
 (defun drgnx-coord-mcp-server-spec (agent &rest props)
-  "The ACP `mcpServers' entry that gives AGENT (its session's name) the coordination tools.  PROPS: :job, :task."
+  "The ACP `mcpServers' entry that gives AGENT (its session's id, s-XXXXXXXX) the coordination tools.  PROPS: :job,
+:task."
   ;; the agent starts this with the default SIGPIPE (libuv resets it): the command ignores it itself
   (let ((command (drgnx-command-ignoring-sigpipe
                   (list (expand-file-name invocation-name invocation-directory)

@@ -144,8 +144,9 @@ Messages never interrupt: an agent gets one as a new turn once it is free (not w
 stopped it), and each goes queued → delivered → read → acted on. A message is only text to the agent that gets it,
 quoted and marked as coming from another agent: it never answers a permission request, never approves anything,
 never changes a setting. Your own answers and messages (a reply to a job's agent, an answer from the Work cockpit)
-reach it as yours: `[message from the user #N — the user's answer]`, naming the question they answer when drgnx
-knows it, and unquoted. No agent can send as the user. Two agents writing to each other too fast, or a full queue, holds the rest. Agents of a job
+reach it as yours, unquoted: `[message from the user #N — the user's message]`, or `[message from the user #N — the
+user's answer to your question #Q]` and the question's words on a quoted line when drgnx knows which question it
+answers. No agent can send as the user. Two agents writing to each other too fast, or a full queue, holds the rest. Agents of a job
 hear about that job's new decisions (once per change); a plain chat session is never woken for them. A task an
 agent claimed is a lease, kept while the agent runs and while the task waits on you; if the agent is gone for 15
 minutes the task is free again (the job window, M9b.4, will show it; messages and escalations to you wait there

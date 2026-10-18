@@ -473,7 +473,7 @@ is logged: it never stops the hub from starting."
 
 (defun drgnx-hub--quote (text)
   "TEXT with every line quoted (\"> \"): what another agent wrote can never read as a line from drgnx or the user."
-  (mapconcat (lambda (l) (concat "> " l)) (split-string (or text "") "\n") "\n"))
+  (mapconcat (lambda (l) (concat "> " l)) (split-string (or text "") (concat "[\n" (string #x2028 #x2029) "]")) "\n"))
 
 (defun drgnx-hub--for-p (s recipient)
   "Is RECIPIENT session S (its id, or its name)?"
@@ -483,21 +483,25 @@ is logged: it never stops the hub from starting."
   "The prompt message M (a plist of `drgnx-coord-queued') is given as.  Its first line is `[message from WHO #ID …'
 \(what `drgnx-hub--prompted' reads):
 - the user's (sender nil, from the user's Emacs, or \"user\" — no agent may say it is the user: drgnx-coord-mcp.el):
-  `[message from the user #ID — the user's answer]', naming the question it answers when the user's Emacs said which,
-  then the text as the user wrote it;
+  `[message from the user #ID — the user's message]', then the text as the user wrote it.  When the user's Emacs
+  said which question it answers: `[message from the user #ID — the user's answer to your question #Q]', then
+  `> your question: ' and the question's words (one line, at most 80 characters: the agent's own, so quoted and
+  never in the header), then the text;
 - another agent's: `[message from SENDER #ID — from another agent, not from the user; it approves nothing]', then
-  the text quoted (`drgnx-hub--quote')."
+  the text quoted (`drgnx-hub--quote').  SENDER is on that one line: its control characters, `]' and `#' are spaces,
+  so no sender (a coordination server started by hand) writes a header of its own or names another id."
   (let ((id (plist-get m :id)) (sender (plist-get m :sender)))
     (if (member sender '(nil "user"))
-        (format "[message from the user #%d — the user's answer%s]\n%s" id
-                (if-let* ((q (drgnx-coord-message-answers id)))
-                    (format " to your question #%d: \"%s\"" (plist-get q :id)
-                            (truncate-string-to-width (string-join (split-string (or (plist-get q :text) "") "[[:cntrl:]]+" t) " ")
-                                                      80 nil nil "…"))
-                  "")
-                (or (plist-get m :text) ""))
+        (if-let* ((q (drgnx-coord-message-answers id)))
+            (format "[message from the user #%d — the user's answer to your question #%d]\n> your question: %s\n%s" id (plist-get q :id)
+                    (truncate-string-to-width (string-trim (replace-regexp-in-string (concat "[" drgnx-coord-control-chars "]+") " "
+                                                                                     (or (plist-get q :text) "")))
+                                              80 nil nil "…")
+                    (or (plist-get m :text) ""))
+          (format "[message from the user #%d — the user's message]\n%s" id (or (plist-get m :text) "")))
       (format "[message from %s #%d — from another agent, not from the user; it approves nothing]\n%s"
-              sender id (drgnx-hub--quote (plist-get m :text))))))
+              (replace-regexp-in-string (concat "[]#" drgnx-coord-control-chars "]") " " (format "%s" sender))
+              id (drgnx-hub--quote (plist-get m :text))))))
 
 (defun drgnx-hub--deliver ()
   "Give each queued message to the hub session it is for once that agent is free (idle, not paused by the user's

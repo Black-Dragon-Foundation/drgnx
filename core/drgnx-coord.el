@@ -63,10 +63,11 @@ is an error: nothing was read at a version that does not exist."
 
 (defconst drgnx-coord--summary-max 200 "The longest event summary, in characters.")
 
-(defconst drgnx-coord-control-chars (concat "\0-\37\177-" (string #x9f #x61c #x200e #x200f #x202a ?- #x202e #x2066 ?- #x2069))
+(defconst drgnx-coord-control-chars (concat "\0-\37\177-" (string #x9f #x61c #x200e #x200f #x202a ?- #x202e #x2066 ?- #x2069
+                                                                  #x2028 #x2029))
   "Characters an agent's text must not carry, as the inside of a regexp bracket: the C0 controls, DEL, the C1
-controls and the BiDi controls (the Arabic letter mark, marks, embeddings, overrides, isolates) that make text
-read other than it is.")
+controls, the BiDi controls (the Arabic letter mark, marks, embeddings, overrides, isolates) that make text
+read other than it is, and the line and paragraph separators (U+2028, U+2029) that start a line a reader sees.")
 
 (defun drgnx-coord--one-line (text)
   "TEXT as one line of at most `drgnx-coord--summary-max' characters (`drgnx-coord-control-chars' become spaces)."
@@ -507,9 +508,12 @@ from ID's recipient to \"user\" — nil for another agent's message, for a quest
 message's event was pruned."
   (when-let* ((m (drgnx-coord-message id))
               ((equal (or (plist-get m :sender) "user") "user"))
-              (e (seq-find (lambda (e) (eql (plist-get (plist-get e :data) :message) id))
-                           (nreverse (drgnx-coord-events :agent "user" :kinds '("message")))))
-              (q (drgnx-coord-message (plist-get (plist-get e :data) :answers))))
+              ;; its event, found in SQL: the data `drgnx-coord-send' printed starts (:message ID …)
+              (data (caar (sqlite-select (drgnx-work-db)
+                                         "select data from event where agent = 'user' and kind = 'message' and data like ?
+                                          order by id desc limit 1"
+                                         (list (format "(:message %d %%" id)))))
+              (q (drgnx-coord-message (plist-get (car (read-from-string data)) :answers))))
     (and (equal (plist-get q :sender) (plist-get m :recipient)) (equal (plist-get q :recipient) "user") q)))
 
 (defun drgnx-coord-queued ()
