@@ -152,7 +152,7 @@ its error output) or did not answer. Then Agents: New Agent Session… starts it
 ([agents.md](agents.md)). The adapter is not pinned: npm installs the latest version. When the adapter that answered
 is the deprecated `@zed-industries/claude-agent-acp`, which earlier drgnx versions installed, or
 `@agentclientprotocol/claude-agent-acp` older than 0.93.0, the step ends `warn`. The result gives the command to run
-in a terminal ([agents.md](agents.md#sessions)). The step installs and removes nothing for this, even
+in a terminal, or what to do when the adapter is not in a global npm prefix ([agents.md](agents.md#sessions)). The step installs and removes nothing for this, even
 interactively. The old adapter keeps working until you run the command.
 
 **The defaults for your agents.** Once the check passes (`ok`, or `warn` for an old adapter), run interactively, the step asks three more things and

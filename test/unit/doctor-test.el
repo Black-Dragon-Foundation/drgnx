@@ -430,7 +430,12 @@
     (let ((r (funcall check '(:program "/r/claude-agent-acp"))))
       (should (eq (car r) 'warn))
       (should (string-search "/r/claude-agent-acp" (nth 1 r)))
-      (should (string-search "npm install -g @agentclientprotocol/claude-agent-acp" (nth 2 r))))
+      (should (string-search "@agentclientprotocol/claude-agent-acp 0.93.0 or newer" (nth 2 r)))
+      (should (string-search "the tool that installed it" (nth 2 r))))
+    ;; a known package outside a global npm prefix (pnpm, volta, a project): advice, no npm -g command
+    (let ((r (funcall check (plist-put (copy-sequence old) :prefix nil))))
+      (should (eq (car r) 'warn))
+      (should-not (string-match-p "npm uninstall" (nth 2 r))))
     ;; none: only a notice (the agent panel is optional); never a failure, so the doctor's exit stays 0
     (let ((r (funcall check nil)))
       (should (eq (car r) 'info))

@@ -147,8 +147,11 @@ PATH, `/opt/homebrew/bin/brew` or `/usr/local/bin/brew`; the doctor may run with
 claude profiles would run, with the name, version and npm prefix read from the `package.json` it links into. The
 adapter is never run. The judgement is `drgnx-agents-adapter-problem`, the same one the onboarding Agents step and
 the agent start use. The maintained package at `drgnx-agents-claude-min-version` (0.93.0) or newer is OK. The
-deprecated `@zed-industries/claude-agent-acp`, an older version, or a program of no known package is WARN, with a
-fix in the adapter's own prefix. None is INFO. Tests: `test/unit/doctor-test.el` and
+deprecated `@zed-industries/claude-agent-acp`, an older version, or a program of no known package is WARN. The fix
+is an npm command in the adapter's own global prefix, or `drgnx-agents-adapter-advice` when there is none (pnpm,
+volta, a project's `node_modules`). None is INFO. A `package.json` is read only when it is a regular file of at most
+64 KiB (`drgnx-agents--package-json-max`; a FIFO would block the read); otherwise it is no known package. A
+pre-release version is compared without its `-…`/`+…` suffix. Tests: `test/unit/doctor-test.el` and
 `test/unit/agents-adapter-test.el`.
 
 ## Tests

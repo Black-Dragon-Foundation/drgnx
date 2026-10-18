@@ -1220,7 +1220,7 @@ then ends `info', waiting for you to run it again (Done).  A login that cannot b
                   (format "Claude Code is installed%s; %s%s — Agents: New Agent Session… starts it%s%s"
                           (if unknown ", but drgnx could not tell whether it is logged in (run claude and type /login if it is not)" ", logged in")
                           text
-                          (if problem (format "; but %s — run in a terminal: %s" (car problem) (cdr problem)) "")
+                          (if problem (format "; but %s — to move to the maintained adapter: %s" (car problem) (cdr problem)) "")
                           (if added (format " (added %s to this Emacs's PATH: add it to your shell's PATH too%s)" (string-join added ", ")
                                             (if (drgnx-onboard--hub-running-p) "; the hub keeps its old PATH: drgnx hub stop, then start a durable session again" ""))
                             "")

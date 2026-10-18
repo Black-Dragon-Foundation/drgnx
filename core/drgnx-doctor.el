@@ -86,6 +86,7 @@ PLATFORM (`linux' or `macos'): only run on that platform, as `drgnx-platform' sa
 
 (declare-function drgnx-agents-claude-adapter "drgnx-agents")
 (declare-function drgnx-agents-adapter-problem "drgnx-agents")
+(declare-function drgnx-agents-adapter-advice "drgnx-agents")
 (defvar drgnx-agents-claude-package)
 
 (defun drgnx-doctor--claude-adapter ()
@@ -106,7 +107,7 @@ its package read from its package.json, never run), nil when none is installed, 
           ((not (plist-get a :name))
            (list 'warn (format "%s belongs to no npm package drgnx knows: it cannot tell whether it is %s"
                                (abbreviate-file-name (plist-get a :program)) drgnx-agents-claude-package)
-                 (format "npm install -g %s, and remove the other claude-agent-acp" drgnx-agents-claude-package)))
+                 (drgnx-agents-adapter-advice a)))
           (t (list 'ok (format "%s %s (%s)" (plist-get a :name) (plist-get a :version) (abbreviate-file-name (plist-get a :program)))
                    nil)))))
 

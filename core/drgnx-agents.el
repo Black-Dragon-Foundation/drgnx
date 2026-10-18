@@ -58,13 +58,19 @@ agents.eld (config dir) and the built-in ones; never holds secrets (keys come fr
 (defconst drgnx-agents-claude-min-version "0.93.0"
   "The oldest `drgnx-agents-claude-package' the doctor accepts: the version verified to send the tool's `mcpServer'.")
 
+(defconst drgnx-agents--package-json-max 65536
+  "The largest package.json drgnx reads, in bytes: the adapter's is about 2 KB; a bigger one is no package it knows.")
+
 (defun drgnx-agents--package-json (dir)
-  "(NAME . VERSION) of the package.json in DIR, or nil when there is none or it has no name.  VERSION may be nil."
+  "(NAME . VERSION) of the package.json in DIR, or nil when there is none, it has no name, or it is not a regular
+readable file of at most `drgnx-agents--package-json-max' bytes (a FIFO would block the read).  VERSION may be nil."
   (let ((file (expand-file-name "package.json" dir)))
-    (when (file-readable-p file)
+    (when (and (file-regular-p file) (file-readable-p file)
+               (<= (or (file-attribute-size (file-attributes file)) (1+ drgnx-agents--package-json-max))
+                   drgnx-agents--package-json-max))
       (let ((json (ignore-errors
                     (with-temp-buffer
-                      (insert-file-contents file)
+                      (insert-file-contents file nil 0 drgnx-agents--package-json-max)
                       (json-parse-buffer :object-type 'plist :null-object nil :false-object nil)))))
         (and (stringp (plist-get json :name))
              (cons (plist-get json :name) (and (stringp (plist-get json :version)) (plist-get json :version))))))))
@@ -73,14 +79,16 @@ agents.eld (config dir) and the built-in ones; never holds secrets (keys come fr
   "The npm package the adapter PROGRAM (a path) belongs to: (:name :version :prefix), or nil.  A global npm install
 links PROGRAM into the package (PREFIX/bin/claude-agent-acp → ../lib/node_modules/PKG/dist/index.js): the package is
 where the link leads, under its last node_modules.  A program that is no link (a copy, a shim) is looked up at
-../lib/node_modules/PKG beside it, the maintained package first.  :prefix is PREFIX for such a global layout, else
-nil.  Reads files only: nothing is run."
+../lib/node_modules/PKG beside it: when exactly one of the two packages is there, it is that one; with both there it
+cannot tell (nil).  :prefix is PREFIX for such a global layout, else nil (pnpm, volta, a project's node_modules).
+Reads files only: nothing is run."
   (let* ((true (file-truename program))
          (dir (if (string-match "\\`\\(.*/node_modules/\\(?:@[^/]+/\\)?[^/]+\\)/" true)
                   (match-string 1 true)
-                (seq-find (lambda (d) (drgnx-agents--package-json d))
-                          (mapcar (lambda (pkg) (expand-file-name (concat "../lib/node_modules/" pkg) (file-name-directory true)))
-                                  (list drgnx-agents-claude-package drgnx-agents-claude-old-package)))))
+                (let ((found (seq-filter #'drgnx-agents--package-json
+                                         (mapcar (lambda (pkg) (expand-file-name (concat "../lib/node_modules/" pkg) (file-name-directory true)))
+                                                 (list drgnx-agents-claude-package drgnx-agents-claude-old-package)))))
+                  (and (null (cdr found)) (car found)))))
          (json (and dir (drgnx-agents--package-json dir))))
     (when json
       (list :name (car json) :version (cdr json)
@@ -98,31 +106,45 @@ package (`drgnx-agents--adapter-package') — or nil when there is none.  Reads 
     (or (seq-find (lambda (a) (equal (plist-get a :name) drgnx-agents-claude-package)) all) (car all))))
 
 (defun drgnx-agents--npm-g (a verb package)
-  "The command `npm VERB -g PACKAGE' in adapter A's npm prefix (when known), as text."
-  (let ((prefix (and (plist-get a :prefix) (abbreviate-file-name (directory-file-name (plist-get a :prefix))))))
-    (format "npm %s -g%s %s" verb
-            (cond ((null prefix) "")
-                  ((string-prefix-p "~/" prefix) (concat " --prefix ~/" (shell-quote-argument (substring prefix 2))))
-                  (t (concat " --prefix " (shell-quote-argument prefix))))
+  "The command `npm VERB -g --prefix PREFIX PACKAGE' in adapter A's npm prefix, as text.  A prefix in HOME is
+written with `~' unquoted, for the shell to expand; the rest of it is quoted."
+  (let ((prefix (abbreviate-file-name (directory-file-name (plist-get a :prefix)))))
+    (format "npm %s -g --prefix %s %s" verb
+            (cond ((equal prefix "~") "~")
+                  ((string-prefix-p "~/" prefix) (concat "~/" (shell-quote-argument (substring prefix 2))))
+                  (t (shell-quote-argument prefix)))
             package)))
 
+(defun drgnx-agents-adapter-advice (a)
+  "What to do about adapter A when drgnx can name no global npm prefix for it (an unknown package, pnpm, volta, a
+project's node_modules): a sentence, not a command."
+  (format "replace %s with %s %s or newer, using the tool that installed it (drgnx can name no global npm prefix for it)"
+          (abbreviate-file-name (plist-get a :program)) drgnx-agents-claude-package drgnx-agents-claude-min-version))
+
+(defun drgnx-agents--version-ok-p (version)
+  "Is VERSION (a string or nil) `drgnx-agents-claude-min-version' or newer?  A pre-release or build suffix
+\(-rc.1, +build) is dropped first: 0.93.1-rc.1 counts as 0.93.1.  What cannot be read is not new enough."
+  (and (stringp version)
+       (ignore-errors (not (version< (replace-regexp-in-string "[-+].*\\'" "" version) drgnx-agents-claude-min-version)))))
+
 (defun drgnx-agents-adapter-problem (a)
-  "What is wrong with the adapter A (`drgnx-agents-claude-adapter'), as (WHY . FIX), FIX one shell command line; nil
-when A is the maintained package at `drgnx-agents-claude-min-version' or newer, or when drgnx cannot tell A's package.
-The deprecated package is replaced in its own prefix: uninstalled first, as npm will not install over another
-package's program."
-  (let ((name (plist-get a :name)) (version (plist-get a :version)))
+  "What is wrong with the adapter A (`drgnx-agents-claude-adapter'), as (WHY . FIX); nil when A is the maintained
+package at `drgnx-agents-claude-min-version' or newer, or when drgnx cannot tell A's package.  FIX is one shell
+command line in A's global npm prefix — the deprecated package uninstalled first there, as npm will not install
+over another package's program — or, with no such prefix, `drgnx-agents-adapter-advice'."
+  (let ((name (plist-get a :name)) (version (plist-get a :version)) (prefix (plist-get a :prefix)))
     (cond
      ((equal name drgnx-agents-claude-old-package)
       (cons (format "%s is the deprecated %s %s, which never tells drgnx which MCP server a tool comes from (the jobs permission check then goes by names only)"
                     (abbreviate-file-name (plist-get a :program)) name (or version "(no version)"))
-            (concat (drgnx-agents--npm-g a "uninstall" drgnx-agents-claude-old-package) " && "
-                    (drgnx-agents--npm-g a "install" drgnx-agents-claude-package))))
-     ((and (equal name drgnx-agents-claude-package)
-           (not (ignore-errors (not (version< version drgnx-agents-claude-min-version)))))
+            (if (not prefix) (drgnx-agents-adapter-advice a)
+              (concat (drgnx-agents--npm-g a "uninstall" drgnx-agents-claude-old-package) " && "
+                      (drgnx-agents--npm-g a "install" drgnx-agents-claude-package)))))
+     ((and (equal name drgnx-agents-claude-package) (not (drgnx-agents--version-ok-p version)))
       (cons (format "%s is %s %s, older than %s (or no version drgnx can read)"
                     (abbreviate-file-name (plist-get a :program)) name (or version "(no version)") drgnx-agents-claude-min-version)
-            (drgnx-agents--npm-g a "install" (concat drgnx-agents-claude-package "@latest")))))))
+            (if (not prefix) (drgnx-agents-adapter-advice a)
+              (drgnx-agents--npm-g a "install" (concat drgnx-agents-claude-package "@latest"))))))))
 
 (defvar drgnx-agents--old-adapter-said nil
   "Whether this Emacs has said that the claude profiles run the deprecated adapter (it says so once).")
@@ -137,7 +159,7 @@ not installed (starting it says so) is left as it is."
       (when (and (equal (plist-get a :name) drgnx-agents-claude-old-package) (not drgnx-agents--old-adapter-said))
         (setq drgnx-agents--old-adapter-said t)
         (let ((problem (drgnx-agents-adapter-problem a)))
-          (message "drgnx: %s — to move to the maintained adapter, run in a terminal: %s" (car problem) (cdr problem))))
+          (message "drgnx: %s — to move to the maintained adapter: %s" (car problem) (cdr problem))))
       (cons (plist-get a :program) (cdr command)))))
 
 (defun drgnx-agents-profile (name)

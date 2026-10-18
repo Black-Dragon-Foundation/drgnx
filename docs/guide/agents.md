@@ -41,9 +41,15 @@ in the same npm prefix:
 npm uninstall -g --prefix PREFIX @zed-industries/claude-agent-acp && npm install -g --prefix PREFIX @agentclientprotocol/claude-agent-acp
 ```
 
-The doctor and the message fill in `PREFIX`. The old package is removed first because npm will not install a program
-over another package's. drgnx never runs this command for you: until you do, the old adapter keeps working. A
-command given as a path (`:command ("/opt/x/claude-agent-acp")`) runs exactly that program.
+The doctor and the message fill in `PREFIX` (a prefix in your home folder is written `~/…`, for the shell to
+expand). The old package is removed first because npm will not install a program over another package's. drgnx
+never runs this command for you: until you do, the old adapter keeps working. An adapter that is not in a global npm
+prefix (pnpm, volta, a project's `node_modules`) gets no npm command: the advice is to replace it, with the tool that
+installed it, by `@agentclientprotocol/claude-agent-acp` 0.93.0 or newer. A pre-release version is compared without
+its suffix (`0.93.1-rc.1` counts as 0.93.1). drgnx reads only a regular `package.json` of at most 64 KiB; anything
+else counts as a program of no known package. A copy of the program (no link) with both packages beside it counts
+the same way, since drgnx cannot tell which one it came from. A command given as a path
+(`:command ("/opt/x/claude-agent-acp")`) runs exactly that program.
 
 A session's **transcript** (RET on its row; opens in the editor) shows:
 

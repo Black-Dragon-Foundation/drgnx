@@ -201,7 +201,7 @@ your shell's profile, `~/.zprofile` for zsh or, with `SHELL` unset, when it exis
 The `claude-adapter` check reads the `package.json` of the Claude Code adapter that the `claude` agent profiles would
 run, without running it. It wants `@agentclientprotocol/claude-agent-acp` 0.93.0 or newer. The deprecated
 `@zed-industries/claude-agent-acp`, an older version, or a program of no package drgnx knows is a warning, with the
-one-line command that fixes it ([agents.md](agents.md#sessions)). No adapter is only a notice. Details: [core.md](../develop/core.md#doctor-drgnx-doctorel).
+one-line command that fixes it, or advice when the adapter is not in a global npm prefix ([agents.md](agents.md#sessions)). No adapter is only a notice. Details: [core.md](../develop/core.md#doctor-drgnx-doctorel).
 
 ## Uninstall
 
