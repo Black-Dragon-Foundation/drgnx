@@ -10,10 +10,16 @@
 ;; area dragging the frame.  It exists to tell someone who has just opened drgnx where to start.
 ;;
 ;; The tab bar calls the format on its redisplay, so `drgnx-topline--line' reads cached state only: the editor's
-;; `vc-mode' text for the branch (never git), the project root the breadcrumb already cached, the keys the registry
-;; already resolved.  What it makes is memoized on what it shows (the editor buffer, its `vc-mode' text and
-;; directory, the frame and its width, the keys, the glyph forms), so a redisplay that changes nothing costs a few
-;; comparisons.  A tab-bar format of your own is never replaced.  See docs/guide/face.md ("The top line").
+;; `vc-mode' text for the branch (never git), the project root in the buffer-local cache the breadcrumb keeps
+;; (`drgnx-chrome--root'; no file or process access, a miss shows `drgnx'), the keys the registry already resolved.
+;; The cache is filled off redisplay, from the change bus's `editor-changed' edge (never for a remote directory).
+;; What the line makes is memoized on what it shows (the editor buffer, its `vc-mode' text, directory and cached
+;; project, the frame and its width, the keys, the glyph forms), so a redisplay that changes nothing costs a few
+;; comparisons.  An error while making it never escapes: the line shows its mark alone for a few seconds (an
+;; empty tab bar is taken away by Emacs, which resizes every window), and nothing here then touches the frames.
+;; Only terminal frames get their number of lines decided here (a graphical frame has one, from `tab-bar-mode'),
+;; and a decision is made once, never repeated against what redisplay has done since.  A tab-bar format of your
+;; own, or a tab bar that was on before this module, is never replaced.  See docs/guide/face.md ("The top line").
 
 ;;; Code:
 (require 'subr-x)
@@ -26,7 +32,10 @@
 (declare-function drgnx-tty-sendable-key "drgnx-tty-fallback")
 (declare-function drgnx-signal-editor-window "drgnx-signal")
 (declare-function drgnx-chrome--project-root "drgnx-chrome")
+(declare-function drgnx-signal-subscribe "drgnx-signal")
+(declare-function drgnx-signal-unsubscribe "drgnx-signal")
 (defvar vc-mode)
+(defvar drgnx-chrome--root)
 
 (defgroup drgnx-topline nil
   "The top line: project and branch, the keys that open everything, window controls."
@@ -76,11 +85,26 @@ A tab-bar format you set yourself is never replaced: then the line stays off."
       (match-string 1 (substring-no-properties vc)))))
 
 (defun drgnx-topline--project (buffer)
-  "The name of BUFFER's project (the folder of its root, cached by the breadcrumb), or nil."
-  (when (fboundp 'drgnx-chrome--project-root)
-    (with-current-buffer buffer
-      (when-let* ((root (drgnx-chrome--project-root (or (buffer-file-name) default-directory))))   ; never nil: it asks `file-remote-p'
-        (file-name-nondirectory (directory-file-name root))))))
+  "The name of BUFFER's project (the folder of its root), or nil.  Reads the breadcrumb's buffer-local cache
+\(`drgnx-chrome--root') and nothing else: no project lookup, so no file access, from redisplay."
+  (when (boundp 'drgnx-chrome--root)
+    (let ((cache (buffer-local-value 'drgnx-chrome--root buffer)))
+      (when (and (consp cache) (stringp (cdr cache))
+                 (equal (car cache) (buffer-local-value 'default-directory buffer)))
+        (file-name-nondirectory (directory-file-name (cdr cache)))))))
+
+(defun drgnx-topline--note-editor (&optional buffer)
+  "Fill BUFFER's (default: the editor's) project cache, so the line can show its project.
+On the change bus's `editor-changed' edge (idle, never redisplay); never for a remote directory.  Redraws the line
+when the cache changed."
+  (let ((buffer (or buffer (and (fboundp 'drgnx-signal-editor-window)
+                                (let ((w (drgnx-signal-editor-window))) (and (window-live-p w) (window-buffer w)))))))
+    (when (and (buffer-live-p buffer) (fboundp 'drgnx-chrome--project-root))
+      (with-current-buffer buffer
+        (unless (file-remote-p default-directory)
+          (let ((before (and (boundp 'drgnx-chrome--root) drgnx-chrome--root)))
+            (drgnx-chrome--project-root (or (buffer-file-name) default-directory))
+            (unless (equal before drgnx-chrome--root) (force-mode-line-update t))))))))
 
 (defun drgnx-topline--key (cmd)
   "The key that runs registry command CMD as the active profile has it, else the key Emacs gives its command, else nil.
@@ -114,9 +138,11 @@ resolved (a new profile makes a new list), or nil."
   "A tab-bar item named KEY showing TEXT; a click runs COMMAND (a symbol) and rests on HELP."
   `(,key menu-item ,text ,(if (and command (symbolp command)) command 'ignore) :help ,(or help "")))
 
-(defun drgnx-topline--gap (key column drag)
-  "An item of spaces up to COLUMN (a number); with DRAG, pressing it drags the frame (a drawn title)."
-  (drgnx-topline--item key (propertize " " 'display `(space :align-to ,(max 0 column)) 'face 'drgnx-topline)
+(defun drgnx-topline--gap (key columns drag)
+  "An item of COLUMNS spaces; with DRAG, pressing it drags the frame (a drawn title).
+Real spaces, not an `:align-to' display property on one: the tab bar redraws only when its items are not `equal',
+and `equal' ignores text properties, so a new width would have left the old gap on the screen."
+  (drgnx-topline--item key (propertize (make-string (max 0 columns) ?\s) 'face 'drgnx-topline)
                        (and drag (fboundp 'mouse-drag-frame-move) 'mouse-drag-frame-move)
                        (and drag "Drag to move the window")))
 
@@ -176,39 +202,65 @@ left out), each one running its command.  nil when none has a key."
          (controls-w (drgnx-topline--width controls))
          (mark-w (string-width (nth 2 mark)))
          (hint (and hint (<= (+ mark-w hint-w controls-w 4) width) hint)))
-    (append (list mark)
-            (when hint (cons (drgnx-topline--gap 'drgnx-topline-gap-1 (/ (- width hint-w) 2) drawn) hint))
-            (when drawn (cons (drgnx-topline--gap 'drgnx-topline-gap-2 (- width controls-w) t) controls)))))
+    (let ((column mark-w) (items (list mark)))
+      (when hint                                         ; centred
+        (let ((gap (max 2 (- (/ (- width hint-w) 2) column))))   ; never touching the mark
+          (setq items (append items (cons (drgnx-topline--gap 'drgnx-topline-gap-1 gap drawn) hint))
+                column (+ column gap hint-w))))
+      (when drawn                                        ; at the right end
+        (setq items (append items (cons (drgnx-topline--gap 'drgnx-topline-gap-2 (- width controls-w column) t) controls))))
+      items)))
 
 ;;;; The memo: a redisplay that changes nothing reuses the line
 
 (defvar drgnx-topline--memo nil
   "(KEY . ITEMS): the items last made and what they were made from (see `drgnx-topline--line').  One entry, so
-nothing grows; a frame switch or a profile change makes it again.")
+nothing grows; a frame switch or a profile change makes it again.  The key holds the editor's buffer and the frame
+strongly, so a killed buffer or deleted frame is kept until the next redisplay replaces the entry (a few hundred
+bytes of objects that are otherwise gone; it never accumulates).")
 
-(defvar drgnx-topline--error nil "The message of the last error made while building the line, or nil.  Never shown as a message.")
+(defvar drgnx-topline--error nil
+  "The message of the error the line last failed with, or nil while it works.  Never shown as a message.
+While it is set the line shows its mark alone (for `drgnx-topline-retry-seconds') and `drgnx-topline--fit' leaves
+the frames alone.")
+
+(defvar drgnx-topline--error-at nil "When `drgnx-topline--error' was recorded (`drgnx-topline--now'), or nil.")
+
+(defvar drgnx-topline-retry-seconds 10
+  "Seconds the line shows its mark alone after an error, before it is made again.")
+
+(defun drgnx-topline--now () (float-time))
+
+(defconst drgnx-topline--fallback '((drgnx-topline-mark menu-item " drgnx" ignore :help ""))
+  "What the line shows while it is failing: not empty, because Emacs takes away a tab bar with no items.")
 
 (defun drgnx-topline--line ()
-  "The top line's tab-bar items, from cached state only (see the Commentary); memoized on what they show."
-  (let* ((frame (selected-frame))
-         (window (and (fboundp 'drgnx-signal-editor-window) (drgnx-signal-editor-window)))
-         (buffer (if (window-live-p window) (window-buffer window) (current-buffer)))
-         (width (frame-width frame))
-         (drawn (and (drgnx-topline--drawn-title-p frame) t))
-         (key (list buffer (buffer-local-value 'vc-mode buffer) (buffer-local-value 'default-directory buffer)
-                    frame width drawn
-                    (drgnx-topline--bound 'go-quick-open) (drgnx-topline--bound 'palette) (drgnx-topline--bound 'keys-sheet)
-                    (drgnx-topline--glyph 'diamond "<>") (drgnx-topline--glyph 'sep " | "))))
-    (unless (equal key (car drgnx-topline--memo))
-      (setq drgnx-topline--memo
-            (cons key (condition-case err
-                          (drgnx-topline--build buffer width drawn)
-                        ;; An error here would leave the tab bar without items, which Emacs answers by taking the
-                        ;; line away, and the line would come and go with every redisplay.  Show the mark alone, make
-                        ;; it again when what it shows changes, and keep the error for whoever looks.
-                        (error (setq drgnx-topline--error (error-message-string err))
-                               (list (drgnx-topline--item 'drgnx-topline-mark " drgnx")))))))
-    (cdr drgnx-topline--memo)))
+  "The top line's tab-bar items, from cached state only (see the Commentary); memoized on what they show.
+Everything runs under an error guard: a failure is recorded in `drgnx-topline--error' and the line shows its mark
+alone for `drgnx-topline-retry-seconds'."
+  (if (and drgnx-topline--error-at
+           (< (- (drgnx-topline--now) drgnx-topline--error-at) drgnx-topline-retry-seconds))
+      drgnx-topline--fallback
+    (condition-case err
+        (let* ((frame (selected-frame))
+               (window (and (fboundp 'drgnx-signal-editor-window) (drgnx-signal-editor-window)))
+               (buffer (if (window-live-p window) (window-buffer window) (current-buffer)))
+               (width (frame-width frame))
+               (drawn (and (drgnx-topline--drawn-title-p frame) t))
+               (key (list buffer (buffer-local-value 'vc-mode buffer) (buffer-local-value 'default-directory buffer)
+                          (and (boundp 'drgnx-chrome--root) (buffer-local-value 'drgnx-chrome--root buffer))
+                          frame width drawn
+                          (drgnx-topline--bound 'go-quick-open) (drgnx-topline--bound 'palette)
+                          (drgnx-topline--bound 'keys-sheet)
+                          (drgnx-topline--glyph 'diamond "<>") (drgnx-topline--glyph 'sep " | "))))
+          (unless (equal key (car drgnx-topline--memo))
+            (setq drgnx-topline--memo (cons key (drgnx-topline--build buffer width drawn))))
+          (setq drgnx-topline--error nil drgnx-topline--error-at nil)
+          (cdr drgnx-topline--memo))
+      ;; An error would leave the tab bar without items, which Emacs answers by taking the line away; and then
+      ;; every redisplay would give it back and take it away again.
+      (error (setq drgnx-topline--error (error-message-string err) drgnx-topline--error-at (drgnx-topline--now))
+             drgnx-topline--fallback))))
 
 (defun drgnx-topline-format ()
   "The `tab-bar-format' list that draws the top line (one function, `drgnx-topline--line')."
@@ -237,18 +289,28 @@ nil while it is off.")
 On `after-make-frame-functions' and `window-size-change-functions'; the frame keeps the state this sets
 \(`tab-bar-lines-keep-state'), so the tab bar's own updates leave it alone.  A child frame is left alone."
   (let ((frame (or frame (selected-frame))))
-    (when (and (frame-live-p frame) (not (frame-parent frame)))
-      (if (not (equal (default-value 'tab-bar-format) drgnx-topline--format))   ; the user took the tab bar over
+    (when (and (frame-live-p frame) (not (frame-parent frame))
+               (not drgnx-topline--error))                  ; while the line is failing, nothing here touches a frame
+      (cond
+       ((not (equal (default-value 'tab-bar-format) drgnx-topline--format))   ; the user took the tab bar over
+        (set-frame-parameter frame 'tab-bar-lines-keep-state nil))
+       ((display-graphic-p frame)
+        ;; A graphical frame has its one line from `tab-bar-mode'; it is never set here.  Only what a text frame's
+        ;; parameters left on it (the frame made after init takes over the initial one's) is undone, once.
+        (when (frame-parameter frame 'tab-bar-lines-keep-state)
           (set-frame-parameter frame 'tab-bar-lines-keep-state nil)
-        (set-frame-parameter frame 'tab-bar-lines-keep-state t)
-        (let ((want (drgnx-topline--lines frame)) (width (frame-width frame)))
-          (unless (eql (frame-parameter frame 'tab-bar-lines) want)
-            (set-frame-parameter frame 'tab-bar-lines want))
-          ;; The tab bar asks for its items when something changed, and a new width is not one: the hint would stay
-          ;; centred for the old one.
-          (unless (eql (frame-parameter frame 'drgnx-topline-width) width)
-            (set-frame-parameter frame 'drgnx-topline-width width)
-            (force-mode-line-update t)))))))
+          (set-frame-parameter frame 'drgnx-topline-lines nil)
+          (tab-bar--update-tab-bar-lines (list frame))))
+       (t
+        ;; A terminal frame: decide once per change of the answer.  What redisplay did to `tab-bar-lines' since is
+        ;; not undone, or the two would resize every window against each other on every redisplay.
+        (let ((want (drgnx-topline--lines frame)))
+          (unless (eq (frame-parameter frame 'tab-bar-lines-keep-state) t)
+            (set-frame-parameter frame 'tab-bar-lines-keep-state t))
+          (unless (eql (frame-parameter frame 'drgnx-topline-lines) want)
+            (set-frame-parameter frame 'drgnx-topline-lines want)
+            (set-frame-parameter frame 'tab-bar-lines want)))))
+      )))
 
 (defun drgnx-topline--fit-all ()
   "Fit every frame.  On `emacs-startup-hook' and `window-setup-hook': while init runs the frame is still the initial
@@ -259,7 +321,8 @@ text frame, whose size and parameters (the top line's among them) the window's f
   "Turn the line on (idempotent): `tab-bar-mode' with the format of `drgnx-topline-format' and no tabs."
   (unless drgnx-topline--saved
     (setq drgnx-topline--saved (list :mode tab-bar-mode :format (default-value 'tab-bar-format)
-                                     :show (default-value 'tab-bar-show))))
+                                     :show (default-value 'tab-bar-show)
+                                     :face (get 'tab-bar 'face-defface-spec))))
   (setq drgnx-topline--format (drgnx-topline-format))
   (setq-default tab-bar-format drgnx-topline--format
                 tab-bar-show t)                          ; 1 would hide the bar: it has one tab
@@ -268,6 +331,7 @@ text frame, whose size and parameters (the top line's among them) the window's f
   (add-hook 'window-size-change-functions #'drgnx-topline--fit)
   (add-hook 'emacs-startup-hook #'drgnx-topline--fit-all)
   (add-hook 'window-setup-hook #'drgnx-topline--fit-all)
+  (when (fboundp 'drgnx-signal-subscribe) (drgnx-signal-subscribe 'editor-changed #'drgnx-topline--note-editor))
   (tab-bar-mode 1)
   (drgnx-topline--fit-all))
 
@@ -277,20 +341,25 @@ text frame, whose size and parameters (the top line's among them) the window's f
   (remove-hook 'window-size-change-functions #'drgnx-topline--fit)
   (remove-hook 'emacs-startup-hook #'drgnx-topline--fit-all)
   (remove-hook 'window-setup-hook #'drgnx-topline--fit-all)
+  (when (fboundp 'drgnx-signal-unsubscribe) (drgnx-signal-unsubscribe 'editor-changed #'drgnx-topline--note-editor))
   (when drgnx-topline--saved
     (let ((saved drgnx-topline--saved) (format drgnx-topline--format))
-      (setq drgnx-topline--saved nil drgnx-topline--format nil drgnx-topline--memo nil)
+      (setq drgnx-topline--saved nil drgnx-topline--format nil drgnx-topline--memo nil
+            drgnx-topline--error nil drgnx-topline--error-at nil)
+      (when-let* ((spec (plist-get saved :face))) (face-spec-set 'tab-bar spec 'face-defface-spec))
       (dolist (f (frame-list))
         (set-frame-parameter f 'tab-bar-lines-keep-state nil)
-        (set-frame-parameter f 'drgnx-topline-width nil))
+        (set-frame-parameter f 'drgnx-topline-lines nil))
       (when (equal (default-value 'tab-bar-format) format)   ; a format the user set since stays
         (setq-default tab-bar-format (plist-get saved :format) tab-bar-show (plist-get saved :show)))
       (unless (plist-get saved :mode) (tab-bar-mode -1))
       (tab-bar--update-tab-bar-lines t))))
 
 (defun drgnx-topline--apply ()
-  "Make the line match `drgnx-topline': on unless it is off or the user has a tab-bar format of their own."
-  (if (and drgnx-topline (not (drgnx-topline--users-format-p)))
+  "Make the line match `drgnx-topline': on unless it is off, the user has a tab-bar format of their own, or the
+tab bar was already on before this module (then it is theirs)."
+  (if (and drgnx-topline (not (drgnx-topline--users-format-p))
+           (or drgnx-topline--saved (not tab-bar-mode)))
       (drgnx-topline--on)
     (drgnx-topline--off)))
 

@@ -187,9 +187,11 @@ window when you drag it. With your window manager's own title bar those buttons 
 not there; until that setting exists they never are.
 
 The line is Emacs's tab bar with no tabs, since drgnx has no workspaces. It only reads what is already known (the
-branch from the file's version-control text, never by running git), so it costs nothing when you type. A
-`tab-bar-format` of your own is never replaced: if you set one, the top line stays off, and turning the setting off
-puts back what it changed. A terminal with fewer than 20 lines shows no line at all (it needs the room).
+branch from the file's version-control text, never by running git; the project from the same cache the breadcrumb
+keeps, filled when you switch editor, so a directory it has not met yet shows `drgnx` for a moment), so it costs
+nothing when you type. If something in it fails it shows the mark alone for ten seconds rather than disappearing. A
+`tab-bar-format` of your own is never replaced, and a tab bar that was already on is yours: then the top line stays
+off. Turning the setting off puts back what it changed (the tab bar's format, its mode and its face). A terminal with fewer than 20 lines shows no line at all (it needs the room).
 
 | Setting | Default | What it does |
 |---|---|---|

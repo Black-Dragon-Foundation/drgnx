@@ -5,8 +5,11 @@
 (load (expand-file-name "modules/ui/drgnx-face" drgnx-dir) nil t)
 (load (expand-file-name "modules/ui/drgnx-topline" drgnx-dir) nil t)
 (defvar drgnx-signal--editor-window)
+(defvar drgnx-chrome--root)
 
 (defvar drgnx-topline-test--ran nil "The stub commands that ran (newest first).")
+(defvar drgnx-topline-test--wcc 0 "Runs of `window-configuration-change-hook' counted by `drgnx-topline-test--count-wcc'.")
+(defun drgnx-topline-test--count-wcc () (setq drgnx-topline-test--wcc (1+ drgnx-topline-test--wcc)))
 (defun drgnx-topline-test-files () (interactive) (push 'files drgnx-topline-test--ran))
 (defun drgnx-topline-test-palette () (interactive) (push 'palette drgnx-topline-test--ran))
 (defun drgnx-topline-test-keys () (interactive) (push 'keys drgnx-topline-test--ran))
@@ -27,6 +30,7 @@ buffer of the selected window (a temp buffer in project `proj', no git).  Faces 
   (declare (indent 1))
   `(let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
          (drgnx-topline-test--ran nil)
+         (drgnx-topline--error nil) (drgnx-topline--error-at nil)
          (drgnx-topline--memo nil) (drgnx-topline--saved nil) (drgnx-topline--format nil) (drgnx-topline--active nil)
          (drgnx-topline drgnx-topline) (drgnx-topline-min-lines drgnx-topline-min-lines)
          (drgnx-signal--editor-window nil)
@@ -34,13 +38,14 @@ buffer of the selected window (a temp buffer in project `proj', no git).  Faces 
          (tab-bar-format (default-value 'tab-bar-format)) (tab-bar-show (default-value 'tab-bar-show))
          (old (window-buffer (selected-window))))
      (cl-letf (((symbol-function 'drgnx-face--ascii-frame-p) (lambda (_frame) nil))   ; the batch terminal is not UTF-8
-               ((symbol-function 'drgnx-chrome--project-root) (lambda (_file) "/x/proj/"))
-               ((symbol-function 'face-spec-set) #'ignore))
+               ;; whatever redisplay would reach for besides the buffer-local cache: a lookup is an error here
+               ((symbol-function 'project-current) (lambda (&rest _) (error "a project lookup"))))
        (drgnx-command-define 'go-quick-open :title "Quick Open" :category "Go" :command #'drgnx-topline-test-files)
        (drgnx-command-define 'palette :title "Command Palette" :category "View" :command #'drgnx-topline-test-palette)
        (drgnx-command-define 'keys-sheet :title "Keys" :category "Help" :command #'drgnx-topline-test-keys)
        (drgnx-topline-test--bind ,profile)
        (with-temp-buffer
+         (setq-local drgnx-chrome--root (cons default-directory "/x/proj/"))   ; the breadcrumb's cache, filled
          (set-window-buffer (selected-window) (current-buffer))
          (unwind-protect (progn ,@body)
            (drgnx-topline--off)
@@ -65,9 +70,8 @@ buffer of the selected window (a temp buffer in project `proj', no git).  Faces 
     ;; no branch (no git): the project alone; no project: the name of the framework
     (setq-local vc-mode nil)
     (should (string-match-p "◆ proj +⌕" (drgnx-topline-test--text)))
-    (cl-letf (((symbol-function 'drgnx-chrome--project-root) (lambda (_file) nil)))
-      (setq drgnx-topline--memo nil)
-      (should (string-match-p "◆ drgnx +⌕" (drgnx-topline-test--text))))))
+    (setq-local drgnx-chrome--root nil)                    ; a cache miss
+    (should (string-match-p "◆ drgnx +⌕" (drgnx-topline-test--text)))))
 
 (ert-deftest drgnx-topline/emacs-profile-shows-its-keys ()
   (drgnx-topline-test--with 'emacs
@@ -159,21 +163,22 @@ buffer of the selected window (a temp buffer in project `proj', no git).  Faces 
               ((symbol-function 'frame-height) (lambda (&optional _) 5)))
       (should (= 1 (drgnx-topline--lines (selected-frame)))))))
 
-(ert-deftest drgnx-topline/a-new-width-makes-the-tab-bar-ask-again ()
-  ;; the hint is centred for the width it was made for; the tab bar does not ask for its items on a resize alone
+(ert-deftest drgnx-topline/a-new-width-gives-items-that-are-not-equal ()
+  ;; The tab bar redraws only when its items are not `equal', and `equal' ignores text properties: a gap made of one space
+  ;; with an :align-to property left the hint centred for the old width on the screen after a resize.
   (drgnx-topline-test--with 'vscode
-    (let ((updates 0) (width 80))
-      (cl-letf (((symbol-function 'force-mode-line-update) (lambda (&optional _all) (setq updates (1+ updates))))
-                ((symbol-function 'frame-width) (lambda (&optional _) width)))
-        (drgnx-topline--on)
-        (let ((n updates))
-          (drgnx-topline--fit)                              ; the same width: nothing to redo
-          (should (= n updates))
+    (let ((width 80))
+      (cl-letf (((symbol-function 'frame-width) (lambda (&optional _) width)))
+        (let ((narrow (copy-tree (drgnx-topline--line))))
           (setq width 120)
-          (drgnx-topline--fit)
-          (should (= (1+ n) updates))
-          (drgnx-topline--fit)
-          (should (= (1+ n) updates)))))))
+          (let ((wide (drgnx-topline--line)))
+            (should-not (equal-including-properties narrow wide))
+            (should-not (equal narrow wide))
+            ;; centred: the hint starts where the same number of columns is left on both sides
+            (let* ((text (mapconcat (lambda (i) (substring-no-properties (nth 2 i))) wide ""))
+                   (start (string-match "⌕" text))
+                   (hint-w (- (string-width (string-trim-right text)) start)))
+              (should (<= (abs (- start (- width hint-w start))) 1)))))))))
 
 (ert-deftest drgnx-topline/the-hint-runs-the-command ()
   (drgnx-topline-test--with 'vscode
@@ -215,23 +220,143 @@ buffer of the selected window (a temp buffer in project `proj', no git).  Faces 
           ;; the hint goes before the place is cut
           (when (< w 70) (should-not (string-match-p "⌕" text))))))))
 
-(ert-deftest drgnx-topline/a-buffer-without-a-file-asks-for-its-directory ()
-  ;; the breadcrumb's lookup asks `file-remote-p' about what it is given: a scratch buffer must not give it nil
+(ert-deftest drgnx-topline/redisplay-never-looks-a-project-up ()
+  ;; the first lookup for a directory walks the file system: it is the editor-changed edge's job, the line only reads
+  ;; the breadcrumb's cache; a miss shows the framework's name
   (drgnx-topline-test--with 'vscode
-    (let (asked)
-      (cl-letf (((symbol-function 'drgnx-chrome--project-root) (lambda (file) (setq asked file) "/x/proj/")))
+    (setq-local drgnx-chrome--root nil)
+    (should (string-match-p "◆ drgnx" (drgnx-topline-test--text)))   ; `project-current' is an error in this macro
+    (should-not drgnx-topline--error)
+    ;; the cache of another directory is not this buffer's project
+    (setq-local drgnx-chrome--root (cons "/elsewhere/" "/x/other/"))
+    (should (string-match-p "◆ drgnx" (drgnx-topline-test--text)))))
+
+(ert-deftest drgnx-topline/the-editor-edge-fills-the-cache-and-redraws ()
+  (drgnx-topline-test--with 'vscode
+    (setq-local drgnx-chrome--root nil)
+    (let ((updates 0) (asked nil))
+      (cl-letf (((symbol-function 'project-current)
+                 (lambda (&rest _) (setq asked default-directory) '(transient . "/x/proj/")))
+                ((symbol-function 'force-mode-line-update) (lambda (&optional _) (setq updates (1+ updates)))))
         (should-not buffer-file-name)
+        (drgnx-topline--note-editor (current-buffer))
+        (should (equal asked default-directory))              ; a buffer without a file: its directory
+        (should (= 1 updates))
         (should (string-match-p "◆ proj" (drgnx-topline-test--text)))
-        (should (equal asked default-directory))))))
+        ;; the same directory again: cached, so no lookup and no redraw
+        (setq asked nil)
+        (drgnx-topline--note-editor (current-buffer))
+        (should-not asked)
+        (should (= 1 updates))))))
+
+(ert-deftest drgnx-topline/a-remote-directory-is-never-looked-up ()
+  (drgnx-topline-test--with 'vscode
+    (setq-local drgnx-chrome--root nil)
+    (let ((default-directory "/ssh:nowhere:/home/"))
+      (cl-letf (((symbol-function 'project-current) (lambda (&rest _) (error "looked up a remote project")))
+                ((symbol-function 'file-remote-p) (lambda (&rest _) "/ssh:nowhere:")))
+        (drgnx-topline--note-editor (current-buffer))
+        (should-not drgnx-chrome--root)))))
+
+(ert-deftest drgnx-topline/the-editor-edge-is-subscribed-only-while-it-is-on ()
+  (drgnx-topline-test--with 'vscode
+    (let ((tab-bar-mode nil))
+      (drgnx-topline--on)
+      (should (memq #'drgnx-topline--note-editor (alist-get 'editor-changed drgnx-signal--subscribers)))
+      (drgnx-topline--off)
+      (should-not (memq #'drgnx-topline--note-editor (alist-get 'editor-changed drgnx-signal--subscribers))))))
 
 (ert-deftest drgnx-topline/an-error-never-takes-the-line-away ()
-  ;; with no items Emacs sets the tab bar's lines to 0, and the line flickers on and off with every redisplay
+  ;; with no items Emacs sets the tab bar's lines to 0, and the line flickers on and off with every redisplay.  Here the
+  ;; failure is in the key the memo is made from, the part that used to be outside the guard.
   (drgnx-topline-test--with 'vscode
-    (let ((drgnx-topline--error nil) (before (current-message)))
-      (cl-letf (((symbol-function 'drgnx-chrome--project-root) (lambda (_file) (error "no project for you"))))
+    (let ((before (current-message)) (now 100.0))
+      (cl-letf (((symbol-function 'drgnx-topline--now) (lambda () now))
+                ((symbol-function 'drgnx-face-drawn-title-p) (lambda (&optional _) (error "no title for you"))))
         (should (equal (substring-no-properties (nth 2 (car (drgnx-topline--line)))) " drgnx"))
-        (should (equal drgnx-topline--error "no project for you"))
-        (should (equal (current-message) before))))))                 ; no message per redisplay
+        (should (equal drgnx-topline--error "no title for you"))
+        (should (equal (current-message) before))             ; no message per redisplay
+        ;; failing: the fallback, without trying again
+        (cl-letf (((symbol-function 'drgnx-face-drawn-title-p) (lambda (&optional _) (error "tried again"))))
+          (setq now 105.0)
+          (should (eq (drgnx-topline--line) drgnx-topline--fallback))
+          (should (equal drgnx-topline--error "no title for you")))
+        ;; after the retry time and with the cause gone: the line is back
+        (setq now 111.0))
+      (should (string-match-p "◆ proj" (drgnx-topline-test--text)))
+      (should-not drgnx-topline--error))))
+
+(ert-deftest drgnx-topline/a-failing-line-never-resizes-the-windows ()
+  ;; The loop that spun a session: the line failed, redisplay took the tab bar away (lines 0), the resize hook gave it back,
+  ;; every cycle resized all windows and ran window-configuration-change-hook.  Redisplay is simulated: it sets the lines
+  ;; to 0 whenever the format fails.
+  (drgnx-topline-test--with 'vscode
+    (let ((drgnx-topline-test--wcc 0) (frame (selected-frame)))
+      (cl-letf (((symbol-function 'drgnx-topline--now) (lambda () 100.0))
+                ((symbol-function 'drgnx-face-drawn-title-p) (lambda (&optional _) (error "no title for you"))))
+        (add-hook 'window-configuration-change-hook #'drgnx-topline-test--count-wcc 90)
+        (unwind-protect
+            (progn
+              (drgnx-topline--on)
+              (let ((before drgnx-topline-test--wcc))
+                (dotimes (_ 6)
+                  (drgnx-topline--line)                       ; the tab bar asks for its items: it fails
+                  (set-frame-parameter frame 'tab-bar-lines 0)   ; and takes the line away
+                  (drgnx-topline--fit frame))                 ; the resize hook
+                (should (= before drgnx-topline-test--wcc))
+                (should (= 0 (frame-parameter frame 'tab-bar-lines)))))   ; not given back
+          (remove-hook 'window-configuration-change-hook #'drgnx-topline-test--count-wcc))))))
+
+(ert-deftest drgnx-topline/redisplay-is-not-fought-with ()
+  ;; a terminal frame: the answer is decided when it changes; what redisplay did to the lines since stays
+  (drgnx-topline-test--with 'vscode
+    (cl-letf (((symbol-function 'display-graphic-p) (lambda (&optional _) nil))
+              ((symbol-function 'frame-height) (lambda (&optional _) 30)))
+      (let ((frame (selected-frame)) (sets 0))
+        (drgnx-topline--on)
+        (should (= 1 (frame-parameter frame 'tab-bar-lines)))
+        (cl-letf* ((real (symbol-function 'set-frame-parameter))
+                   ((symbol-function 'set-frame-parameter)
+                    (lambda (f p v) (when (eq p 'tab-bar-lines) (setq sets (1+ sets))) (funcall real f p v))))
+          (dolist (lines '(2 0 2))                           ; wrapped, taken away, wrapped
+            (funcall real frame 'tab-bar-lines lines)
+            (drgnx-topline--fit frame)
+            (should (= lines (frame-parameter frame 'tab-bar-lines))))
+          (should (= 0 sets)))))))
+
+(ert-deftest drgnx-topline/a-graphical-frame-is-never-given-lines ()
+  (drgnx-topline-test--with 'vscode
+    (cl-letf (((symbol-function 'display-graphic-p) (lambda (&optional _) t))
+              ((symbol-function 'frame-height) (lambda (&optional _) 5)))
+      (let ((frame (selected-frame)))
+        (drgnx-topline--on)
+        (set-frame-parameter frame 'tab-bar-lines 0)         ; redisplay took it
+        (drgnx-topline--fit frame)
+        (should (= 0 (frame-parameter frame 'tab-bar-lines)))
+        (should-not (frame-parameter frame 'tab-bar-lines-keep-state))
+        ;; what a text frame left on it (the frame made after init takes over the initial one's) is undone once
+        (set-frame-parameter frame 'tab-bar-lines-keep-state t)
+        (drgnx-topline--fit frame)
+        (should-not (frame-parameter frame 'tab-bar-lines-keep-state))
+        (should (= 1 (frame-parameter frame 'tab-bar-lines)))))))
+
+(ert-deftest drgnx-topline/the-tab-bar-faces-spec-is-put-back ()
+  ;; not stubbed: the real defface spec, changed while the line is on
+  (drgnx-topline-test--with 'vscode
+    (let ((tab-bar-mode nil) (spec (get 'tab-bar 'face-defface-spec)))
+      (drgnx-topline--apply)
+      (should-not (equal (get 'tab-bar 'face-defface-spec) spec))
+      (should (equal (get 'tab-bar 'face-defface-spec) '((t :inherit header-line :box nil))))
+      (drgnx-topline--off)
+      (should (equal (get 'tab-bar 'face-defface-spec) spec)))))
+
+(ert-deftest drgnx-topline/a-tab-bar-that-was-already-on-is-the-users ()
+  (drgnx-topline-test--with 'vscode
+    (let ((tab-bar-mode t) (before (default-value 'tab-bar-format)))
+      (drgnx-topline--apply)
+      (should (equal (default-value 'tab-bar-format) before))
+      (should-not drgnx-topline--saved)
+      (should-not (memq #'drgnx-topline--fit window-size-change-functions)))))
 
 (ert-deftest drgnx-topline/reads-cached-state-only-and-is-memoized ()
   (drgnx-topline-test--with 'vscode
