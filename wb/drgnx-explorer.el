@@ -1100,6 +1100,8 @@ is over — its release will not come here (Wayland)."
   ;; A save changes git status; so does git itself (another window, a terminal): check on focus.
   (drgnx-signal-subscribe 'modified-changed (lambda (_) (drgnx-explorer--git-refresh)))
   (add-function :after after-focus-change-function #'drgnx-explorer--focus-changed '((name . drgnx-explorer)))
+  (drgnx-modules-push-undo "after-focus-change-function drgnx-explorer"
+                           (lambda () (remove-function after-focus-change-function 'drgnx-explorer)))
   (add-hook 'drgnx-git-changed-functions #'drgnx-explorer--git-changed))
 
 (provide 'drgnx-explorer)
