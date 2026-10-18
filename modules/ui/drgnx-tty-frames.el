@@ -22,6 +22,8 @@
 ;; - `drgnx-tty-frames-write-report': terminal-report.eld in the state dir — each terminal's capabilities and
 ;;   the active profile's keys it cannot send — for the doctor and the key sheet; written whole, then renamed
 ;;   into place.  `drgnx-tty-frames-refresh-report' writes it again (ui/terminal-keys, once kkp is on).
+;; - The fallback layer (drgnx-tty-fallback-layer.el) follows each report: a terminal that cannot send C-S- chords
+;;   gets Alt+Shift with the key and F6 then the key for them; one that can loses it.
 ;; - EDITOR frames: `emacsclient -t FILE' (git's editor) shows the editor only and is never the main window;
 ;;   Close Tab (its key or the tab's ×) or C-x # ends the edit and the client returns, as `code --wait' does —
 ;;   asking to save a changed file first.  Moving the tab elsewhere does not end it.
@@ -37,6 +39,9 @@
 (require 'drgnx-registry)
 (require 'drgnx-tty)
 (require 'drgnx-wb)
+(require 'drgnx-tty-fallback)
+(declare-function drgnx-tty-fallback-install "drgnx-tty-fallback-layer")
+(declare-function drgnx-tty-fallback-setup "drgnx-tty-fallback-layer")
 (declare-function drgnx-wb-area-hide "drgnx-area")
 (declare-function drgnx-chrome-apply "drgnx-chrome")
 (declare-function server-done "server")
@@ -243,38 +248,64 @@ decodes a few: C-tab, C-. …; its decodings come first).  A terminal that never
 
 (defun drgnx-tty-frames--report-file () (expand-file-name "terminal-report.eld" (drgnx-state-dir)))
 
+(defun drgnx-tty-frames--read-report-data ()
+  "terminal-report.eld as a plist, nil when missing or broken (a broken report heals on the next write)."
+  (let ((data (ignore-errors (with-temp-buffer (insert-file-contents (drgnx-tty-frames--report-file))
+                                               (read (current-buffer))))))
+    (and (consp data) (plistp data) data)))
+
+(defun drgnx-tty-frames--save-report (data)
+  "Write DATA (a plist) as terminal-report.eld."
+  (let ((file (drgnx-tty-frames--report-file)))
+    (make-directory (file-name-directory file) t)
+    ;; written whole under a new name, then renamed: no lock on the report (whose owner would be asked about,
+    ;; a prompt in a daemon hook), and a reader sees the old report or the new one, never half of one
+    (let* ((create-lockfiles nil)
+           (tmp (make-temp-file (expand-file-name ".terminal-report-" (file-name-directory file)))))
+      (condition-case err
+          (progn
+            (with-temp-file tmp
+              (let ((print-length nil) (print-level nil))
+                (prin1 data (current-buffer))
+                (insert "\n")))
+            (rename-file tmp file t))
+        (error (ignore-errors (delete-file tmp))
+               (signal (car err) (cdr err)))))))
+
+(defun drgnx-tty-frames--update-report (fn)
+  "Call FN with terminal-report.eld's data (a fresh plist); write what it returns, when that is non-nil."
+  (when-let* ((new (funcall fn (copy-sequence (or (drgnx-tty-frames--read-report-data) (list :terminals nil))))))
+    (drgnx-tty-frames--save-report new)))
+
 (defun drgnx-tty-frames-write-report (frame)
   "Add FRAME's terminal to terminal-report.eld in the state dir: (:terminals ((TTY . (:caps CAPS :unsendable
 KEYS :seen TIME)) …)), newest first, one entry per terminal device (two clients never replace each other's);
-:unsendable the active key profile's keys this terminal cannot send.  Nothing when the terminal is gone."
+:unsendable the active key profile's keys this terminal cannot send.  The fallback layer follows the caps first
+\(`drgnx-tty-fallback-install': on where they need it, off where not); the entry then has :fallback (on or not),
+:fallbacks (rows (CHORD NATIVE-P ALT PREFIX) for the doctor) and :fallback-problems.  The report's other keys
+\(:hinted) are kept.  Nothing when the terminal is gone."
   (when-let* ((caps (drgnx-tty-frame-caps frame)))
-    (let* ((file (drgnx-tty-frames--report-file))
+    (let* ((layer (and (fboundp 'drgnx-tty-fallback-install)
+                       (drgnx-tty-frames--guard "fallback" #'drgnx-tty-fallback-install frame caps)))
+           (data (drgnx-tty-frames--read-report-data))
            (key (terminal-name (frame-terminal frame)))
            (keys (seq-uniq (delq nil (mapcar (lambda (b) (plist-get b :key))
                                              (plist-get (bound-and-true-p drgnx-keys-last) :bindings)))))
-           (read (plist-get (ignore-errors (with-temp-buffer (insert-file-contents file) (read (current-buffer))))
-                            :terminals))
+           (read (plist-get data :terminals))
            (old (and (proper-list-p read) (seq-every-p #'consp read) read))   ; a broken report heals
+           (table (drgnx-tty-fallback-active-table))
            (entry (append (list :caps caps :unsendable (drgnx-tty-unsendable keys (plist-get caps :keys) (plist-get caps :folded))
                                 :seen (format-time-string "%FT%T%z"))
                           ;; inside tmux: the lines to add to ~/.tmux.conf for what it lacks (never written)
                           (when-let* ((lines (drgnx-tty-tmux-conf-lines (drgnx-tty-frames--tmux-options frame (plist-get caps :id)))))
-                            (list :tmux-conf lines)))))
-      (make-directory (file-name-directory file) t)
-      ;; written whole under a new name, then renamed: no lock on the report (whose owner would be asked about,
-      ;; a prompt in a daemon hook), and a reader sees the old report or the new one, never half of one
-      (let* ((create-lockfiles nil)
-             (tmp (make-temp-file (expand-file-name ".terminal-report-" (file-name-directory file)))))
-        (condition-case err
-            (progn
-              (with-temp-file tmp
-                (let ((print-length nil) (print-level nil))
-                  (prin1 (list :terminals (cons (cons key entry) (assoc-delete-all key (copy-sequence old))))
-                         (current-buffer))
-                  (insert "\n")))
-              (rename-file tmp file t))
-          (error (ignore-errors (delete-file tmp))
-                 (signal (car err) (cdr err))))))))
+                            (list :tmux-conf lines))
+                          (list :fallback (and layer t)
+                                :fallbacks (drgnx-tty-fallback-report-rows
+                                            table caps (terminal-parameter (frame-terminal frame) 'drgnx-tty-fallback-table))
+                                :fallback-problems (drgnx-tty-fallback-problems table)))))
+      (drgnx-tty-frames--save-report
+       (append (list :terminals (cons (cons key entry) (assoc-delete-all key (copy-sequence old))))
+               (when-let* ((hinted (plist-get data :hinted))) (and (proper-list-p hinted) (list :hinted hinted))))))))
 
 (defun drgnx-tty-frames-refresh-report (frame)
   "Write FRAME's terminal's entry in terminal-report.eld again, from what it can do now (ui/terminal-keys calls
@@ -658,6 +689,8 @@ are the faces of a group that rely on an attribute because their state has no te
                               ;; a daemon loads server.el after init: there is nothing to advise yet
                               (with-eval-after-load 'server
                                 (advice-add 'server-create-tty-frame :around #'drgnx-tty-frames--create-tty-frame))
+                              ;; the fallback layer is rebuilt after every key apply (drgnx-tty-fallback-layer.el)
+                              (when (fboundp 'drgnx-tty-fallback-setup) (drgnx-tty-fallback-setup))
                               ;; a terminal Emacs set up before this module ran (`emacs -nw' sets its own up after init)
                               (when (terminal-parameter nil 'terminal-initted)
                                 (drgnx-tty-frames-setup))))

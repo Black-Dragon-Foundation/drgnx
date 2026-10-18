@@ -20,6 +20,7 @@
 (require 'subr-x)
 (require 'drgnx-paths)
 (require 'drgnx-tty)
+(require 'drgnx-tty-fallback)
 
 (defconst drgnx-tty--capable-entries
   '((wezterm :name "WezTerm" :binary "wezterm" :argv ("start" "--") :display any
@@ -160,10 +161,12 @@ Never runs it."
     (when lacks (format "%s: %s" (drgnx-tty--name terminal) (string-join lacks ", ")))))
 
 (defun drgnx-tty--fallback-hint ()
-  "The sentence that says how to type the keys a legacy terminal cannot send."
-  ;; TODO(Task 5b): derive the keys from `drgnx-tty-chord-prefix' (F6) when 5b's fallback layer lands; the
-  ;; variable does not exist on this branch.
-  "Until then: Alt+Shift or F6 then the key.")
+  "The sentence that says how to type the keys a legacy terminal cannot send, from the fallback layer's rules
+\(core/drgnx-tty-fallback.el): Alt+Shift where it is free, `drgnx-tty-chord-prefix' then the key always, and
+Ctrl+Shift+P, whose Alt+Shift+P a terminal's replies start with, through the prefix."
+  (format "Until then: Alt+Shift or %s then the key (%s for Ctrl+Shift+P)."
+          (drgnx-tty-fallback-label drgnx-tty-chord-prefix)
+          (drgnx-tty-fallback-label (drgnx-tty-fallback--prefix-of (aref (key-parse "C-S-p") 0) drgnx-tty-chord-prefix))))
 
 (defun drgnx-tty--install-choices (os)
   "The first two terminals to install on OS, as ((TERMINAL . COMMAND)…): those with a package command first,

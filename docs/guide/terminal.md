@@ -102,9 +102,9 @@ terminal sends `C-S-p` as `C-p`, and `C-.` not at all. drgnx turns on one protoc
   no, or does not answer, keeps its plain keys. If the answer starts but does not finish in time (a slow SSH
   link), drgnx takes the half-made change back, the window keeps its plain keys, and drgnx records the
   problem. Under kkp every key arrives, `s-` keys included.
-- **Neither** (GNOME Terminal, Ptyxis, Terminal.app, the Linux console): open the palette with **F1** (VS Code
-  keys) or `M-x`; every command is there. `terminal-report.eld` lists the keys of your profile this terminal
-  cannot send.
+- **Neither** (GNOME Terminal, Ptyxis, Terminal.app, the Linux console): Alt+Shift with the key, or F6 then the key
+  (see [Legacy terminals](#legacy-terminals-altshift-and-f6)), or the palette with **F1** (VS Code keys) or `M-x`;
+  every command is there. `terminal-report.eld` lists the keys of your profile this terminal cannot send.
 
 Each terminal window keeps its own keys: a kitty window and a Ptyxis window on the same drgnx each get what their
 terminal can send.
@@ -135,7 +135,8 @@ the best one the window has:
    only where it is the only protocol, such as **kitty** and **foot**; it works, but `C-g` cannot stop busy Lisp
    there (see [Keys](#keys)). foot's modifyOtherKeys support is unconfirmed, so it is counted with kitty.
 3. **A legacy terminal** (GNOME Terminal, Ptyxis, Terminal.app, the Linux console, tmux without `extended-keys`):
-   hold **Alt+Shift** with the key, or press **F6** and then the key (the fallback layer), or use F1 and the palette.
+   hold **Alt+Shift** with the key, or press **F6** and then the key (the fallback layer, see
+   [Legacy terminals](#legacy-terminals-altshift-and-f6)), or use F1 and the palette.
 
 When a window has only the third way, drgnx tells you which terminal would give it the second. It lists the ones
 you already have first ("kitty is installed: run `drgnx -t` from kitty"). If none is installed, it prints the install
@@ -171,6 +172,86 @@ the ones it has a package command for over download pages, in the order above.
 WezTerm, kitty and Alacritty are started through the command inside their application, and Ghostty with
 `open -na Ghostty.app --args -e …` (its own command line cannot open a window on macOS), which returns at once. Over SSH, or with no
 display, it does nothing and `drgnx -t` runs in the terminal you are in.
+
+## Legacy terminals: Alt+Shift and F6
+
+A terminal without a key protocol (GNOME Terminal, Ptyxis, Terminal.app, the Linux console) cannot send `C-S-p`,
+`C-.` and the like, and tmux at modifyOtherKeys level 1 folds `C-S-<letter>` into `C-<letter>`. Such a terminal gets
+the **fallback layer**: two more ways to type each chord it cannot send. A terminal with kkp or modifyOtherKeys, and a
+graphical window, get none, and each terminal window on one drgnx has its own (kkp turned on later takes it away).
+
+- **Alt+Shift with the key**, where it is free: **Alt+Shift+F** is Search in Project (`C-S-f`), Alt+Shift+E the
+  Explorer. It is decided when you press it: in a buffer whose mode binds that Alt+Shift key (`M-F`) itself, the mode
+  keeps it. Some chords have no Alt+Shift key, and drgnx guesses no other one for them: where Emacs uses it
+  (Alt+Shift+. is the end of the buffer, Alt+Shift+\` is `not-modified`), and where a terminal starts its replies with it.
+  **Alt+Shift+P** is `ESC P`, how a terminal begins its answer to "which terminal are you?"; an answer that arrives
+  late would otherwise open the palette and type its text. So Ctrl+Shift+P is **F6 p**, or **F1** (VS Code keys).
+- **F6 then the key**, always. F6 adds Ctrl, and Shift to a letter or Space (Ctrl with a letter needs no help):
+  F6 p is `C-S-p`, F6 . is `C-.`, F6 Enter is `C-<return>`, F6 Tab is `C-<tab>`, F6 Shift+Tab is `C-S-<tab>`. A
+  Shift+punctuation chord is typed with the character Shift makes (`` C-S-` `` is F6 ~); Enter and Backspace, which
+  a terminal sends no Shift with, take Alt for it (`C-S-<return>` is F6 Alt+Enter); `C-SPC` is F6 Ctrl+Space. While
+  F6 waits, the echo area says `Ctrl+Shift+…`; `C-g` or Esc cancels it; F6 twice is F6.
+
+The first time a kind of terminal with the layer connects, one message says so: "This terminal can't send Ctrl+Shift
+keys: use Alt+Shift (or F6 then the key). drgnx doctor has details." It is never a question, and it is said once per
+kind of terminal, ever (`terminal-report.eld` remembers it as `:hinted`).
+
+`terminal-report.eld` has, for each terminal, `:fallback` (the layer is on) and `:fallbacks`: every chord of your
+profile a plain terminal cannot send, as `(CHORD NATIVE-P ALT PREFIX)`, where NATIVE-P says this terminal sends it
+itself. `drgnx-tty-sendable-key` gives any key as a terminal window can type it (`M-F`, `<f6> p`, or the key itself).
+
+Settings (`M-x customize-variable`):
+
+- **`drgnx-tty-fallback`** (`t`): `nil` takes the layer off every terminal.
+- **`drgnx-tty-chord-prefix`** (`<f6>`). F6 because it is free in Emacs and in every drgnx profile, and every
+  terminal sends it and keeps none of it (Terminal.app with fn on a Mac keyboard). The others are taken: F1 help and
+  the palette, F2 rename and Emacs's two-column prefix, F3 and F4 keyboard macros, F5 and F9–F12 VS Code's debug and
+  go-to keys, F8 the Emacs profile's sidebar, F10 the menu (VTE keeps F10 and F11).
+- **`drgnx-tty-fallback-hint`** (`t`): `nil`, no message.
+- **`keys.eld`'s `:tty-fallback`** gives a chord another Alt key: `(:tty-fallback (("C-S-p" . "M-Z")))`. The key must
+  be one a plain terminal sends, unused by Emacs and your profile, not reserved, and not another chord's; otherwise it
+  is not used and `terminal-report.eld` says why (`:fallback-problems`).
+
+With VS Code keys (the table below is checked against the profile by a test):
+
+| Chord | Command | Alt+Shift | F6 |
+|---|---|---|---|
+| `C-S-p` | Command Palette | — | `F6 p` |
+| `C-,` | Modules | — | `F6 ,` |
+| `C-S-s` | Save As… | `Alt+Shift+S` | `F6 s` |
+| `C-S-t` | Reopen Closed Tab | `Alt+Shift+T` | `F6 t` |
+| `C-S-n` | New Window | `Alt+Shift+N` | `F6 n` |
+| `` C-` `` | Toggle Panel | — | `` F6 ` `` |
+| `C-1` | Focus First Editor Group | — | `F6 1` |
+| `C-2` | Focus Second Editor Group | — | `F6 2` |
+| `C-3` | Focus Third Editor Group | `Alt+Shift+3` | `F6 3` |
+| `C-'` | Menu for This Mode | `Alt+Shift+'` | `F6 '` |
+| `C-S-e` | Focus Explorer | `Alt+Shift+E` | `F6 e` |
+| `C-SPC` | Mark | — | `F6 Ctrl+Space` |
+| `C-M-S-c` | Copy Relative Path | — | `F6 Alt+C` |
+| `C-S-b` | Focus Buffers | `Alt+Shift+B` | `F6 b` |
+| `C-{` | Fold | — | `F6 {` |
+| `C-}` | Unfold | — | `F6 }` |
+| `C-S-a` | Select All | `Alt+Shift+A` | `F6 a` |
+| `C-S-z` | Redo | `Alt+Shift+Z` | `F6 z` |
+| `C-/` | Toggle Comment | — | `F6 /` |
+| `C-S-k` | Delete Line | `Alt+Shift+K` | `F6 k` |
+| `C-<return>` | New Line Below | — | `F6 Enter` |
+| `C-S-<return>` | New Line Above | — | `F6 Alt+Enter` |
+| `C-<backspace>` | Delete Word Left | — | `F6 Backspace` |
+| `C-S-SPC` | Show Hover | — | `F6 Space` |
+| `C-.` | Quick Fix | — | `F6 .` |
+| `C-S-m` | Problems | `Alt+Shift+M` | `F6 m` |
+| `C-S-f` | Search in Project | `Alt+Shift+F` | `F6 f` |
+| `C-S-o` | Go to Symbol | — | `F6 o` |
+| `C-<tab>` | Recent Buffers | — | `F6 Tab` |
+| `C-S-h` | Replace in Project | `Alt+Shift+H` | `F6 h` |
+| `` C-S-` `` | New Terminal | — | `F6 ~` |
+| `C-S-g` | Source Control | `Alt+Shift+G` | `F6 g` |
+| `C-=` | Zoom In | `Alt+Shift+=` | `F6 =` |
+| `C-+` | Zoom In | — | `F6 +` |
+| `C--` | Zoom Out | — | `F6 -` |
+| `C-0` | Reset Zoom | — | `F6 0` |
 
 ## SSH
 

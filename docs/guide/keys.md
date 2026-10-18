@@ -243,6 +243,11 @@ cannot be bound, a prefix it replaces) joins the list and the report then.
   writes nothing. The keys apply at once after every change. Changes made inside `drgnx-keys-edit-one-step` are one
   step (the editor's Replace: the key taken from other commands and given to this one).
 
+In a terminal that cannot send `C-S-` chords and the like (GNOME Terminal, Ptyxis, Terminal.app), each chord of the
+profile is typed as Alt+Shift with the key where that is free (`C-S-f` as Alt+Shift+F), or as F6 then the key
+(`C-S-p` as F6 p), always: see [Legacy terminals](terminal.md#legacy-terminals-altshift-and-f6). `:tty-fallback` in
+`keys.eld` gives a chord another Alt key, `(:tty-fallback (("C-S-p" . "M-Z")))`, if that key is free.
+
 The Keyboard Shortcuts editor (Preferences: Keyboard Shortcuts) changes these keys for you: [shortcuts.md](shortcuts.md).
 
 ## For module authors
