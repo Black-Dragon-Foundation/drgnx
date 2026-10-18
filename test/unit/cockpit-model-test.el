@@ -1,6 +1,7 @@
 ;;; cockpit-model-test.el --- batch tests: the Work cockpit's model of specs, plans, tasks, agents, jobs, reviews -*- lexical-binding: t -*-
 (require 'ert)
 (require 'cl-lib)
+(require 'drgnx-paths)
 (load (expand-file-name "test/fixtures/cockpit-fixture" drgnx-dir) nil t)   ; a project, a job, worktrees, events
 (require 'drgnx-cockpit-model)
 
