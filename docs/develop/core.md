@@ -233,6 +233,37 @@ again, once; a second change is reported and nothing is written. A file that doe
 and never written. Errors never show the entry's data. The hook events are the 16 `config.toml` accepts; any other
 makes Kimi Code reject the whole file, so drgnx refuses it.
 
+## Codex's settings (`drgnx-agent-config-codex.el`)
+
+The `codex` methods of the three generic functions, `drgnx-agent-config-codex-trusted-p`, `-routes`, `-openrouter-snippet`
+and `-add-openrouter`. Formats checked against codex 0.163.0. Credential files (`auth.json`) are never opened.
+
+| What | Where |
+| --- | --- |
+| User settings | `CODEX_HOME/config.toml` (`$CODEX_HOME`, else `~/.codex`). |
+| Project settings | `ROOT/.codex/config.toml` and `ROOT/.codex/hooks.json`, read only when `(drgnx-agent-config-codex-trusted-p ROOT)`: the user's config has `[projects."ROOT"]` with `trust_level = "trusted"` for ROOT or its repository root. Otherwise they are not read; `:notes` says "FILE: Codex ignores it until the project is trusted". |
+| MCP servers | `[mcp_servers.NAME]`: `command`/`args`/`env` (stdio), `url`/`bearer_token_env_var`/`http_headers`/`env_http_headers` (streamable HTTP; no `sse`), `enabled`. `http_headers` and `env_http_headers` both land in the spec's `:headers` (so the secret walk sees them); `:env-headers` lists the ones that name an environment variable. |
+| Hooks | `hooks.json` of the Codex home and of ROOT/.codex (editable, shaped like Claude Code's); inline `[[hooks.EVENT]]` in a config.toml are shown read-only with a note to edit hooks.json. |
+| Skills | `~/.agents/skills`, `ROOT/.agents/skills`; off by a `[[skills.config]]` entry (`path` of the skill's `SKILL.md` or directory, `enabled = false`) in the user's config.toml. |
+| Rules | `CODEX_HOME/AGENTS.md`, `ROOT/AGENTS.md`. |
+
+Writing: a TOML write parses the file first (one that does not parse, or has a duplicate table, is never written), builds
+the new text with `drgnx-toml-set-table` / `-set-array-entry` (nothing outside the changed table moves; comments inside
+a replaced table do not survive: the backup has them), checks it parses, and goes through `-write-text` with what it read
+as EXPECT (one retry when Codex changed the file meanwhile). A server table is rebuilt from the existing one with only the
+modelled keys replaced, so `startup_timeout_sec`, `enabled_tools` and other keys stay; a rename is one write. A hook edit
+keeps the hook object's other members (`statusMessage`, `async`) and its group's. Toggling an MCP server sets `enabled`;
+toggling a skill adds, changes or removes its `[[skills.config]]` entry (an entry with other keys only has `enabled`
+changed). A project write in an untrusted project works and says Codex ignores it until the project is trusted.
+
+Routes: `(:profile "codex" ... :billing subscription)`, "its own CLI with your ChatGPT login", then one per
+`[profiles.NAME]` whose `model_provider` is OpenRouter (the id `openrouter` or a `base_url` on openrouter.ai) with
+`:billing openrouter` and `:launch "codex --profile NAME"`. `(drgnx-agent-config-codex-add-openrouter MODEL)` writes
+`[model_providers.openrouter]` (`name`, `base_url = "https://openrouter.ai/api/v1"`, `env_key = "OPENROUTER_API_KEY"`,
+`wire_api = "responses"`: 0.163 refuses `chat`) and `[profiles.openrouter]` (`model_provider`, `model`) into the user's
+config.toml, keeping other keys of those two tables; the default stays the ChatGPT login. `-openrouter-snippet MODEL` is
+the same two tables as text to paste.
+
 ## Doctor (`drgnx-doctor.el`)
 
 `bin/drgnx doctor [--json] [--dev]` asks the Emacs drgnx will use (see above) whether this
