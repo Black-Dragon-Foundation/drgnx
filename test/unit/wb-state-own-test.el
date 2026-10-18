@@ -21,7 +21,7 @@
             (drgnx-pane--kinds nil) (drgnx-state--kind-owners nil) (drgnx-pane-backend 'areas)
             (drgnx-wb--sections nil) (drgnx-wb--areas (copy-tree drgnx-wb--areas))
             (drgnx-rules--table (copy-sequence drgnx-rules--table))
-            (drgnx-signal--editor-window nil) (drgnx-wb-unrouted nil)
+            (drgnx-wb-unrouted nil)
             (display-buffer-alist nil) (display-buffer-overriding-action '(nil)))
        (delete-other-windows)
        (dolist (p '(drgnx-wb-areas drgnx-wb-view drgnx-intent-by drgnx-wb-dock-px drgnx-wb-panel-px drgnx-wb-right-px))
