@@ -156,3 +156,22 @@ a keyboard key of a command.")
                            (unless (string-match-p (format "^| `%s` | %s |" (regexp-quote (symbol-name name)) stage) doc)
                              (format "%s (%s) has no row in docs/guide/modules.md" name stage)))))))
                    nil))))
+
+(defun drgnx-lint--wait-on-process-live-p (form)
+  "A message when FORM is a `drgnx-test-wait' call whose PRED mentions `process-live-p'."
+  (when (and (consp form) (eq (car form) 'drgnx-test-wait)
+             (let (hit) (drgnx-lint--walk (cadr form) (lambda (f) (when (eq f 'process-live-p) (setq hit t)))) hit))
+    "drgnx-test-wait on process-live-p (wait on the sentinel's done flag: process-live-p turns nil before it has run)"))
+
+(ert-deftest drgnx-lint/test-waits-read-a-done-flag-not-process-live-p ()
+  ;; fb4ee8c (M3b-19): `process-live-p' is nil before the sentinel has run, so a wait on it races the sentinel.
+  (should (equal (drgnx-lint--violations (drgnx-lint--files "test") #'drgnx-lint--wait-on-process-live-p) nil))
+  (let* ((dir (make-temp-file "drgnx-lint-wait" t))
+         (bad (expand-file-name "bad.el" dir)) (good (expand-file-name "good.el" dir)))
+    (unwind-protect
+        (progn
+          (with-temp-file bad (insert "(drgnx-test-wait (lambda () (not (process-live-p p))))"))
+          (with-temp-file good (insert "(drgnx-test-wait (lambda () (process-get p :done)))"))
+          (should (= (length (drgnx-lint--violations (list bad) #'drgnx-lint--wait-on-process-live-p)) 1))
+          (should-not (drgnx-lint--violations (list good) #'drgnx-lint--wait-on-process-live-p)))
+      (delete-directory dir t))))

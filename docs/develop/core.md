@@ -995,3 +995,24 @@ dirs, and unsets the provider keys (`OPENROUTER_API_KEY`, `ANTHROPIC_API_KEY`, `
 `OPENAI_API_KEY`): no test reaches a paid model. In a session: `test/live/drgnx-boot-test.el` boots `config=drgnx` and checks
 the registry, the guard (a `y-or-n-p` from a timer signals), the palette (`C-S-p`), the key sheet (F1) and the
 module report. Scenarios run against drgnx with `bin/drgnx test --scenario`; the workbench ones skip until M3.
+
+## Testing: waits (`test/fixtures/wait-fixture.el`)
+
+A test that waits for real asynchronous work (a process, its filter or sentinel) calls
+`(drgnx-test-wait PRED &key (secs 30) what)` and nothing else: no hand-rolled `accept-process-output` loops. It
+returns PRED's first non-nil value, polling with `(accept-process-output nil 0.02)` against real time.
+
+- **The deadline is generous.** It is SECS times `(drgnx-uitest-settle-scale)` (the load per core, or
+  `DRGNX_UITEST_SETTLE_SCALE`) and only bounds a failure; a pass costs what the work costs. A correctness test
+  therefore never fails because the machine is loaded.
+- **A timeout says what was live.** It signals `ert-test-failed` with
+  `(:waited-for WHAT :secs S :last-value V :processes ((NAME STATUS)…) :timers (FUNCTION…))`, so the failure names what
+  the test waited for, PRED's last value, the live processes and the pending timers. Pass `:what`.
+- **Wait on a done flag.** Have the sentinel (or filter) set `(process-put p :done t)` and wait for
+  `(process-get p :done)`. `process-live-p` turns nil before the sentinel has run, so a wait on it races the
+  sentinel (M3b-19). `drgnx-lint/test-waits-read-a-done-flag-not-process-live-p` fails for any `drgnx-test-wait`
+  under `test/` whose PRED mentions `process-live-p`.
+- **Inside the clock fixture** (`drgnx-test-with-clock`) it works unchanged: the deadline is read through
+  `drgnx-test-real-time`, and each timed `accept-process-output` advances virtual time by the real wait.
+
+Load it as the other fixtures are loaded: `(load (expand-file-name "test/fixtures/wait-fixture" drgnx-dir) nil t)`.
