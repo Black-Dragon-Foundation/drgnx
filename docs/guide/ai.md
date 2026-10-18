@@ -39,13 +39,24 @@ or a key variable of its own, so a cloned repository cannot send your code, or a
          (complete (ollama . "qwen2.5-coder:1.5b"))))
 ```
 
-`:kind` is `openai` (any OpenAI-compatible server), `ollama`, `llamacpp` or `tei`.
+`:kind` is `openai` (any OpenAI-compatible server), `ollama`, `llamacpp` or `tei` (`anthropic` too, for a provider of
+the agent gateway that speaks Anthropic's API; see below).
+
+**An `ai.eld` with a mistake** (a parenthesis missing, a `:kind` that is none of these, a `:price` that is not
+`(IN . OUT)`, a model that is not a string): your last good providers and roles are used, and drgnx says once where the
+mistake is (`Open Config File…` takes you there). Choosing a provider or model never overwrites a file it cannot read,
+and says so; an `ai.eld` written by a newer drgnx is used when it fits, but is not changed. Choosing changes only the
+role you chose: your comments, your providers and any key of your own stay as they are.
+
+A project's `.drgnx/ai.eld` is read with a limit of 64 KiB. A bigger file, or one with a mistake, is not used at all
+(there is no last good copy of a project's file: its roles are left out and drgnx says why once), and drgnx never writes it.
 
 A project's role may still name a provider that is not on this machine (OpenRouter, say): every pause in that
 repository would then make a paid call and send your code away. So the first time you run a command that uses AI
 there (Edit with AI, Ask the Codebase, Generate Commit Message, the semantic search commands), drgnx asks once whether that project may use the remote provider, and keeps
 your answer for that project root in `ai-project-routes.eld` in drgnx's state directory (delete the entry to be asked
-again; it is asked again only if the project later names a remote provider you were not asked about). The project is
+again; it is asked again only if the project later names a remote provider you were not asked about; a file that
+does not read is copied aside, as `ai-project-routes.eld.bak-…`, before your answer is written). The project is
 its real directory, so one repository reached through two paths is asked once, and a link re-pointed at another
 repository does not inherit the answer. A provider whose address has no host counts as remote. Choose Provider/Model
 changes your own `ai.eld` chain, never a copy of the project's. Until you say

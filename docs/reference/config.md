@@ -22,6 +22,34 @@ Agent profiles, the MCP servers agents get, OpenRouter restrictions and job rout
 | `:openrouter` | not an OpenRouter restriction (:only :ignore :data-collection :zdr) | no | Which providers OpenRouter may use |
 | `:routes` | alist of symbol to string or list of string | no | Which profiles do each job role: a list of names, or one name |
 
+## ai.eld
+
+Folder: config. Format: 1. Read: when it changes. On a mistake: its last good copy, else the defaults.
+
+Your AI providers and each role's chain of providers and models; never a key.
+
+| Key | Type | Required | What |
+| --- | --- | --- | --- |
+| `:providers` | alist of symbol to plist | no | Providers of your own, or presets moved (an entry replaces the preset with its id) |
+| `:providers * :name` | string | no | What the provider is called |
+| `:providers * :kind` | one of openai, ollama, llamacpp, tei, anthropic | no | How to talk to it |
+| `:providers * :url` | string | no | Its address |
+| `:providers * :key-env` | string | no | The environment variable holding its key (never the key) |
+| `:providers * :caps` | list of symbol | no | What it does: chat, fim, embed |
+| `:providers * :price` | (IN . OUT) dollars per million tokens | no | What the agent gateway counts its spend by |
+| `:providers * :messages` | boolean | no | Whether it serves Anthropic's Messages API |
+| `:roles` | alist of symbol to alist of symbol to string or null | no | Each role's chain of (PROVIDER . MODEL), tried in order |
+
+## ai.eld
+
+Folder: project. Format: 1. Read: when it changes. On a mistake: refused.
+
+A project's roles, among the providers you have: never a provider or a key of its own.
+
+| Key | Type | Required | What |
+| --- | --- | --- | --- |
+| `:roles` | alist of symbol to alist of symbol to string or null | no | The project's roles (a remote provider in a chain is asked about once) |
+
 ## layouts.eld
 
 Folder: config. Format: 1. Read: when it changes. On a mistake: its last good copy, else the defaults.

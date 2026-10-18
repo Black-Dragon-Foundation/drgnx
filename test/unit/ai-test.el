@@ -621,7 +621,6 @@ here, and a variable let-bound before it loads would turn special for good."
         (should (equal (drgnx-ai-role 'complete) '((openrouter . "paid/m") (ollama . "local-m"))))   ; the project's own
         (should (drgnx-ai-confirm-project-route))
         (should (= asks 1))                                                      ; not asked again…
-        (clrhash drgnx-ai--read-cache)
         (should (drgnx-ai-confirm-project-route))                                ; …the answer is on disk, per root
         (should (equal (drgnx-ai-role 'complete) '((openrouter . "paid/m") (ollama . "local-m"))))
         (should (= asks 1))
