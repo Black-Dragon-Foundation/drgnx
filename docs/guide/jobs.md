@@ -192,3 +192,18 @@ the perf workload `job-window` ([perf.md](../develop/perf.md)). Developer detail
 
 Tests: `test/unit/job-mcp-policy-test.el` (drgnx's servers allowed, a user's server asks, a denial blocks, an agent
 cannot approve its own request, the agents' configuration in the worktree, the limit in an error's data).
+
+## Snapshot folders: use the job window
+
+A job agent works in a folder of its own (`.claude/worktrees/ID-N/`). In the default **snapshot** mode that folder
+holds a private copy of the repository, and its `.git` belongs to the agent: its config could make git run a
+program of the agent's the moment any git of yours ran there. So drgnx refuses git in that folder for as long as the
+task's sandbox lives: version control, magit, project.el and drgnx's own tools say "no git in a job's snapshot
+folder" instead of running it, and VC ignores the folder.
+
+- **Look at the work from the job window.** Open a file of the folder from there; reading and editing files is fine.
+- **For git, use the main repository.** What the agent committed arrives there as the branch `job/ID-N` once the task
+  returns its result: `git log job/ID`, `git diff main...job/ID`. The work tracker reads the main repository too.
+- **A `git` you type in a shell** inside the folder is outside drgnx's reach. Do not run it there.
+- **Worktree mode** (opt-in) keeps your tools working once the task's agent has stopped and drgnx has scrubbed its
+  git state; while the agent runs, the folder is guarded the same way.

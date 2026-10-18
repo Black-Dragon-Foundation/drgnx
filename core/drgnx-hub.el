@@ -19,6 +19,7 @@
 (require 'drgnx-coord)
 (require 'drgnx-job)
 (require 'drgnx-job-clash)
+(require 'drgnx-sandbox-vc)
 
 (defvar drgnx-hub-event-functions nil
   "Functions called with (EVENT DATA) for each event the hub sends this Emacs (after `drgnx-hub-connect'); EVENT a
@@ -838,6 +839,7 @@ Signals an error when a hub already serves there."
 (defun drgnx-hub-main ()
   "The hub process's entry point (batch): serve until `shutdown' or SIGTERM.  Exit 3 when a hub already serves, 1
 when it cannot start for any other reason."
+  (drgnx-sandbox-vc-mode 1)                       ; the hub's own git never runs in a job's folder either
   (condition-case err
       (drgnx-hub-serve (drgnx-hub-socket))
     (error (let ((already (string-prefix-p "a hub already serves" (error-message-string err))))
