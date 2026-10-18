@@ -6,15 +6,43 @@ them the terminal still works.
 
 ## The one line
 
-Add one line to your shell's rc file, naming the file in your drgnx checkout:
+One line in your shell's rc file sources the file in your drgnx checkout:
 
 | Shell | File | The line |
 | --- | --- | --- |
-| zsh | `~/.zshrc` | `source /path/to/drgnx/etc/shell/drgnx.zsh` |
-| bash | `~/.bashrc` | `source /path/to/drgnx/etc/shell/drgnx.bash` |
-| fish | `~/.config/fish/config.fish` | `source /path/to/drgnx/etc/shell/drgnx.fish` |
+| zsh | `${ZDOTDIR:-~}/.zshrc` | `[ -r ~/drgnx/etc/shell/drgnx.zsh ] && source ~/drgnx/etc/shell/drgnx.zsh \|\| true` |
+| bash | `~/.bashrc` | `[ -r ~/drgnx/etc/shell/drgnx.bash ] && source ~/drgnx/etc/shell/drgnx.bash \|\| true` |
+| fish | `${XDG_CONFIG_HOME:-~/.config}/fish/config.fish` | `test -r ~/drgnx/etc/shell/drgnx.fish; and source ~/drgnx/etc/shell/drgnx.fish; or true` |
 
-drgnx never edits your rc files on its own; you add the line.
+The path is your checkout's (written `~/`-relative when it is under your home directory). The `-r` test keeps the
+shell silent, and the rc file's exit status 0, if the checkout is moved or removed.
+
+## Adding and removing the line
+
+```sh
+drgnx shell install            # asks, then adds the line to the rc file of your shell ($SHELL)
+drgnx shell install --shell fish
+drgnx shell install --yes      # prints the line and the file; writes nothing
+drgnx shell line               # prints just the line
+```
+
+drgnx never edits an rc file without your yes:
+
+- `drgnx shell install` shows the file and the line and asks "Add this line to ~/.zshrc? ...". Only a yes writes. Run
+  without a terminal (a pipe, a script), or with `--yes`, it prints the line to add and writes nothing.
+- It writes this to the end of the file, and nothing else: a blank line, the comment `# added by drgnx
+  (docs/guide/shell.md)`, and the line. If the file is not there, it is created (with its directory, for fish).
+- It is safe to run again: when an uncommented line of the rc file already names `etc/shell/drgnx.<shell>`, it says so
+  and changes nothing.
+- When the rc file is a symlink (a dotfiles repository), the question names both, "~/.zshrc → ~/dotfiles/zshrc", and the
+  line goes into the target; the link stays a link.
+- The shell comes from `$SHELL` (zsh, bash or fish), or `--shell NAME`. Any other shell: exit status 1, and nothing
+  to add. A usage mistake is exit status 2.
+- **Onboarding** asks the same question in step 7 (Daemon and Desktop), and with `--non-interactive` only says the
+  line to add ([onboarding.md](onboarding.md)).
+
+**To remove it,** delete the comment and the line from the rc file (`grep -n 'etc/shell/drgnx' ~/.zshrc` finds
+them). Nothing else of drgnx's is left in your shell.
 
 What the line does:
 

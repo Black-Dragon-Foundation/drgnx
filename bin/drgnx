@@ -440,6 +440,9 @@ usage: drgnx PATH…             open folders and files in drgnx, like code . (d
        drgnx bisect [-- CMD…]  find the module that breaks (CMD fails, or you say so)
        drgnx service-unit [DIR]
                                the systemd user unit (printed, or written to DIR; never installed)
+       drgnx shell install [--shell zsh|bash|fish] [--yes]
+                               add one line to your shell's rc file, after you say yes (--yes: print it,
+                               write nothing); drgnx shell line prints the line (docs/guide/shell.md)
        drgnx ui COMMAND        headless GUI Emacs sessions: start, stop, ls, reap, state, shot,
                                click, keys, type, measure (drgnx ui --help; docs/develop/harness.md)
 USAGE
@@ -485,6 +488,10 @@ case "${1:-help}" in
         shift
         "$(emacs_bin)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/harness" -L "$here/core" -L "$here/wb" \
               -l drgnx-keys-diff -f drgnx-keys-diff-cli -- "$@" ;;
+  shell) shift
+        DRGNX_STDIN_TTY=$([ -t 0 ] && echo 1 || echo 0) \
+        "$(emacs_bin)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
+              -l drgnx-shell -f drgnx-shell-cli -- "$@" ;;
   check) shift; run_in_tmp_shards check_emacs "$@" ;;
   fmt) shift
         "$(emacs_bin)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \

@@ -12,7 +12,7 @@ case ${BASH_SOURCE[0]-} in
   */*) _drgnx_dir=$PWD/${BASH_SOURCE[0]%/*} ;;
   *) _drgnx_dir=$PWD ;;
 esac
-_drgnx_commands='open doctor build test ui macos-app sync upgrade rollback generations lock bisect service-unit onboard check fmt work hub job search keys safe help'
+_drgnx_commands='open doctor build test ui macos-app sync upgrade rollback generations lock bisect service-unit onboard check fmt work hub job search keys safe help shell'
 _drgnx_steps='environment look-and-keys projects ai search agents daemon portability finish'
 _drgnx_presets='minimal ide full-ai'
 _drgnx_uis='start frame stop ls reap state shot click keys type measure mcp test-ui test-ui-session'
@@ -41,6 +41,7 @@ _drgnx() {
     case $prev in   # the value of an option
       --step) if [[ $cmd == onboard ]]; then words=$_drgnx_steps; fi ;;
       --preset) if [[ $cmd == onboard ]]; then words=$_drgnx_presets; fi ;;
+      --shell) if [[ $cmd == shell ]]; then words='zsh bash fish'; fi ;;
       --config) if [[ $cmd == test ]]; then words='drgnx gryphn'; elif [[ $cmd == ui ]]; then words='minimal drgnx gryphn'; fi ;;
       --keys)
         if [[ $cmd == onboard ]]; then
@@ -75,6 +76,8 @@ _drgnx() {
           'keys diff') words='--against' ;;
           'ui start') words='--config --size --daemon' ;;
           'ui click') words='--buffer --text --button --count --hold-ms' ;;
+          'shell install') words='--shell --yes' ;;
+          'shell line') words='--shell' ;;
         esac
       elif [[ $n -eq 2 ]]; then   # the word after the command
         case $cmd in
@@ -84,6 +87,7 @@ _drgnx() {
           search) words='index query mcp' ;;
           keys) words='diff' ;;
           ui) words=$_drgnx_uis ;;
+          shell) words='install line' ;;
         esac
       elif [[ $cmd == test ]]; then   # test --install NAME…
         for ((i = 2; i < n; i++)); do

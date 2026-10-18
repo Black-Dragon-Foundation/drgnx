@@ -9,7 +9,8 @@
   "BODY with ROOT a temp dir holding config, state, data and org dirs."
   (declare (indent 1))
   `(let* ((,root (file-name-as-directory (make-temp-file "drgnx-onboard" t)))
-          (process-environment (append (list (concat "DRGNX_CONFIG_DIR=" ,root "config")
+          (process-environment (append (list "SHELL=/bin/sh"   ; step 7's shell-integration question is not asked here (shell-rc-test.el covers it)
+                                             (concat "DRGNX_CONFIG_DIR=" ,root "config")
                                              (concat "XDG_STATE_HOME=" ,root "state")
                                              (concat "DRGNX_DATA_DIR=" ,root "data"))
                                        process-environment))

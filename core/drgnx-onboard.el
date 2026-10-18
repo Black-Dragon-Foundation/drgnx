@@ -1287,12 +1287,37 @@ keep running.  Saved (session.eld); returns the sentence for the step's result."
                              (abbreviate-file-name (drgnx-macos-install-app)) drgnx-onboard-macos-open-text)))
           (t (list 'info (format "the drgnx app is not installed — to install it into %s: drgnx macos-app" where))))))
 
+(declare-function drgnx-shell-name "drgnx-shell")
+(declare-function drgnx-shell-rc-file "drgnx-shell")
+(declare-function drgnx-shell--tilde "drgnx-shell")
+(declare-function drgnx-shell-line "drgnx-shell")
+(declare-function drgnx-shell-line-present-p "drgnx-shell")
+(declare-function drgnx-shell-install "drgnx-shell")
+
+(defun drgnx-onboard--shell-part (ctx)
+  "The shell-integration sentence of step 7 (docs/guide/shell.md): one line in the shell's rc file.
+Interactive: asked (`drgnx-shell-install'), never written without a yes; otherwise only said."
+  (require 'drgnx-shell)
+  (let ((name (drgnx-shell-name)))
+    (if (null name)
+        "shell integration: none for your shell (zsh, bash and fish have one: drgnx shell install --shell NAME)"
+      (let* ((rc (drgnx-shell--tilde (drgnx-shell-rc-file name)))
+             (line (drgnx-shell-line name)))
+        (cond ((drgnx-shell-line-present-p name) (format "shell integration: already in %s" rc))
+              ((plist-get ctx :interactive)
+               (pcase (drgnx-shell-install name :ask #'y-or-n-p)
+                 ('added (format "shell integration: added to %s (open a new terminal)" rc))
+                 ('present (format "shell integration: already in %s" rc))
+                 (_ (format "shell integration: not added; to add it: drgnx shell install"))))
+              (t (format "shell integration: add this to %s (or: drgnx shell install): %s" rc line)))))))
+
 (defun drgnx-onboard--daemon-step (ctx)
-  "Keep running or quit (asked once), then macOS: the drgnx app; Linux: the systemd unit and desktop entry."
+  "Keep running or quit (asked once), then macOS: the drgnx app; Linux: the systemd unit and desktop entry;
+last, the shell integration line."
   (let ((keep (drgnx-onboard--keep-running ctx)))
     (pcase-let ((`(,status ,message) (if (eq (drgnx-platform) 'macos) (drgnx-onboard--macos-app ctx)
                                        (drgnx-onboard--linux-desktop ctx))))
-      (list status (concat message "; " keep)))))
+      (list status (concat message "; " keep "; " (drgnx-onboard--shell-part ctx))))))
 
 (defun drgnx-onboard--linux-desktop (ctx)
   (require 'drgnx-pkg)
