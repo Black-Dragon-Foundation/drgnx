@@ -20,7 +20,7 @@
   :type 'integer :group 'drgnx)
 
 (defface drgnx-wb-close '((t :inherit shadow))
-  "The close button (✕) at the end of a title, tab row or popup header." :group 'drgnx)
+  "The close button (×) of a title, tab row or popup header." :group 'drgnx)
 
 (declare-function drgnx-face-glyph "drgnx-face")
 

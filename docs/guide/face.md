@@ -352,3 +352,4 @@ styles `window-divider` itself keeps its choice, and every colour you see comes 
 (Preferences: Color Theme). The quick help card is `drgnx-quickhelp` (inherits `tooltip`) with the symbol's name in
 `drgnx-quickhelp-title` (inherits `bold`); its border is Emacs's `child-frame-border` face. The start page uses
 `drgnx-start-title` (inherits `bold`), `drgnx-start-key` (inherits `bold`) and `drgnx-start-quiet` (inherits `shadow`).
+The × of the panes, popups and dock sections is `drgnx-wb-close` (inherits `shadow`).

@@ -271,7 +271,8 @@ prefix (`Esc x` is `M-x`) and, in the Vim profile, still leaves insert state, an
 `eshell`, `term`, `vterm`, `eat`; `drgnx-close-input-modes`), a live page you are driving and the minibuffer keep
 both keys. A mode that takes the keyboard for itself joins by adding a predicate to `drgnx-close-input-functions`. In a terminal frame `Esc` stays the Meta prefix, so use
 `q` or the × there. The left dock's sections keep `Esc` as Back to the Editor (the sidebar stays); its ×, or Close
-Pane in the palette, hides the sidebar.
+Pane in the palette, hides the sidebar. In the Vim profile, evil's normal state in a read-only buffer that is not a
+help buffer still takes `Esc` and `q` for itself until drgnx's modal module arrives; the × always works.
 
 ## Compared with treemacs, ibuffer and VS Code
 
