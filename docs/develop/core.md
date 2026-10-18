@@ -264,6 +264,32 @@ Routes: `(:profile "codex" ... :billing subscription)`, "its own CLI with your C
 config.toml, keeping other keys of those two tables (a `base_url` or `env_key` that differs from OpenRouter's is the user's: kept, and the note says so; only `wire_api = "chat"` is changed); the default stays the ChatGPT login. `-openrouter-snippet MODEL` is
 the same two tables as text to paste.
 
+## Gemini CLI's settings (`drgnx-agent-config-gemini.el`)
+
+The `gemini` methods of the three generic functions, and `drgnx-agent-config-gemini-routes` (one route: Gemini's own CLI
+with a Google login, `subscription`; the login is never read). Checked against gemini 0.64.0. It reuses the JSON object
+helpers and the error text of the Claude file (`drgnx-agent-config-claude--get`, `--set`, `--del`, …) through aliases, to be
+hoisted into `drgnx-agent-config.el` later.
+
+| What | Where |
+| --- | --- |
+| User / project settings | `HOME/settings.json` (HOME is `.gemini` under `$GEMINI_CLI_HOME`, else `~/.gemini`), `ROOT/.gemini/settings.json`. |
+| System (read only) | `$GEMINI_CLI_SYSTEM_SETTINGS_PATH` else `/etc/gemini-cli/settings.json` (macOS: `/Library/Application Support/GeminiCli`), and `system-defaults.json` (`$GEMINI_CLI_SYSTEM_DEFAULTS_PATH`). |
+| MCP servers | `mcpServers`. In 0.64.0 `url` plus `type` http or sse is current, `url` alone is Streamable HTTP (the docs say SSE), `httpUrl` is deprecated: read as http, never written. Edits write `url` + `type`. |
+| Hooks | `hooks.EVENT[]` = `{matcher, sequential, hooks: [{type, command, name, timeout}]}`; `:timeout` is in milliseconds (`:timeout-unit ms` in the spec). Off by `name` (else the command) in `hooksConfig.disabled`. |
+| Skills | `HOME/skills`, `$GEMINI_CLI_HOME-or-~/.agents/skills`, `ROOT/.gemini/skills`, `ROOT/.agents/skills`, extensions' `skills/` (read only). Off by name in `skills.disabled`, the union of all settings files. |
+| Extensions | `HOME/extensions/*/gemini-extension.json` (`mcpServers` as `extension:NAME:SERVER`) and `hooks/hooks.json`, read only. On unless `extensions/extension-enablement.json` has a rule for NAME that matches the project (last wins, `!` disables). |
+| Rules | `GEMINI.md`, or the names in `context.fileName`, in HOME and ROOT. |
+
+Gemini reads its settings files with comments (JSONC) and keeps them when it writes; drgnx cannot. A file with comments is
+read (comments ignored, line numbers kept), its items are read-only, a note says why, and it is never written. A write
+changes only the modelled members of one entry (`command`, `args`, `env`, `url`, `httpUrl`, `type`, `headers`; a hook's
+`type`, `command`, `timeout`) and keeps every other member in place (`cwd`, `trust`, `includeTools`, unknown keys); it passes
+what it read as EXPECT, so a file changed meanwhile is refused. Switching a skill off adds its name to `skills.disabled` of the
+user's settings (or the chosen file); switching it on removes it from every writable file that lists it, and is refused when
+the system settings list it. Hooks and MCP servers cannot be switched off here. A new server name is letters, digits, `-`
+and `.` (Gemini's policy rules misread an underscore).
+
 ## Doctor (`drgnx-doctor.el`)
 
 `bin/drgnx doctor [--json] [--dev]` asks the Emacs drgnx will use (see above) whether this
