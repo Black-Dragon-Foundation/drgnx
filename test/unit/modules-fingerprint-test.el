@@ -23,7 +23,14 @@
      ,@body))
 
 (defvar drgnx-fp-test-function nil "A function variable the fingerprint reads in one test.")
-(defvar drgnx-fp-test-other-hook nil "A hook the fixed list lacks.")
+(defvar fp-test-other-hook nil "A hook neither list names, and not drgnx's own (no drgnx- prefix).")
+(defvar drgnx-fp-test-derived-hook nil "A drgnx hook that only the derived list finds.")
+(defvar fp-test-aliased-hook nil "A hook with an obsolete alias.")
+(defvaralias 'fp-test-aliased-hooks 'fp-test-aliased-hook)
+(defvar fp-test-weird-functions nil "Gets a dotted list.")
+(require 'drgnx-paths)                  ; drgnx-dir, let-bound by one test
+(require 'drgnx-hooks)
+(require 'drgnx-guard)
 
 (defun drgnx-fp-test--whats (diff) (mapcar (lambda (d) (plist-get d :what)) diff))
 
@@ -176,11 +183,66 @@
   (let ((before (drgnx-modules-fingerprint t)))
     (unwind-protect
         (progn
-          (setq-default drgnx-fp-test-other-hook (list #'drgnx-fp-test-fn))
+          (setq-default fp-test-other-hook (list #'drgnx-fp-test-fn))
           (should-not (drgnx-modules-fingerprint-diff before (drgnx-modules-fingerprint)))
-          (should (equal '("hook drgnx-fp-test-other-hook +drgnx-fp-test-fn")
+          (should (equal '("hook fp-test-other-hook +drgnx-fp-test-fn")
                          (drgnx-fp-test--whats (drgnx-modules-fingerprint-diff before (drgnx-modules-fingerprint t))))))
-      (setq-default drgnx-fp-test-other-hook nil))))
+      (setq-default fp-test-other-hook nil))))
+
+(ert-deftest drgnx-fingerprint/a-leak-in-a-listed-hook-or-an-aliased-hook-is-one-line ()
+  (let ((before (drgnx-modules-fingerprint t)))
+    (unwind-protect
+        (progn
+          (add-hook 'find-file-hook #'drgnx-fp-test-fn)
+          (add-function :after after-focus-change-function #'drgnx-fp-test-fn)
+          (setq-default fp-test-aliased-hook (list #'drgnx-fp-test-fn))
+          (let ((whats (drgnx-fp-test--whats (drgnx-modules-fingerprint-diff before (drgnx-modules-fingerprint t)))))
+            (should (equal '("function-variable after-focus-change-function +drgnx-fp-test-fn"
+                             "hook find-file-hook +drgnx-fp-test-fn"
+                             "hook fp-test-aliased-hook +drgnx-fp-test-fn")
+                           (sort (copy-sequence whats) #'string<)))))
+      (remove-hook 'find-file-hook #'drgnx-fp-test-fn)
+      (remove-function after-focus-change-function #'drgnx-fp-test-fn)
+      (setq-default fp-test-aliased-hook nil))))
+
+(ert-deftest drgnx-fingerprint/a-dotted-list-in-a-hook-variable-does-not-stop-the-scan ()
+  (let ((before (drgnx-modules-fingerprint t)))
+    (unwind-protect
+        (progn
+          (setq-default fp-test-weird-functions '(a . b))
+          (setq-default fp-test-other-hook (list #'drgnx-fp-test-fn))
+          (let ((after (drgnx-modules-fingerprint t)))   ; does not signal
+            (should (equal '("hook fp-test-other-hook +drgnx-fp-test-fn")
+                           (drgnx-fp-test--whats (drgnx-modules-fingerprint-diff before after))))))
+      (setq-default fp-test-weird-functions nil fp-test-other-hook nil))))
+
+(ert-deftest drgnx-fingerprint/drgnx-hooks-come-from-the-symbols-not-a-list ()
+  (let ((names (drgnx-modules-fingerprint--hook-names)))
+    (dolist (h '(drgnx-first-file-hook drgnx-first-input-hook drgnx-guard-prompt-functions
+                                       drgnx-fp-test-derived-hook kill-buffer-hook))
+      (should (memq h names)))
+    (should-not (memq 'fp-test-other-hook names))
+    (should (memq 'after-focus-change-function (drgnx-modules-fingerprint--function-variable-names))))
+  (let ((before (drgnx-modules-fingerprint)))
+    (unwind-protect
+        (progn
+          (setq-default drgnx-fp-test-derived-hook (list #'drgnx-fp-test-fn))
+          (should (equal '("hook drgnx-fp-test-derived-hook +drgnx-fp-test-fn")
+                         (drgnx-fp-test--whats (drgnx-modules-fingerprint-diff before (drgnx-modules-fingerprint))))))
+      (setq-default drgnx-fp-test-derived-hook nil))))
+
+(ert-deftest drgnx-fingerprint/a-sibling-directory-is-not-inside-drgnx-dir ()
+  (let* ((root (file-truename (make-temp-file "fp-root" t)))
+         (drgnx-dir (expand-file-name "drgnx" root)))   ; no trailing slash
+    (unwind-protect
+        (progn
+          (make-directory (expand-file-name "drgnx/core" root) t)
+          (make-directory (expand-file-name "drgnx-other" root) t)
+          (should (equal "core/x.el"
+                         (drgnx-modules-fingerprint--normalize-file (expand-file-name "drgnx/core/x.elc" root))))
+          (should (equal (expand-file-name "drgnx-other/x.el" root)
+                         (drgnx-modules-fingerprint--normalize-file (expand-file-name "drgnx-other/x.el" root)))))
+      (delete-directory root t))))
 
 (defun drgnx-fp-test--median-ms (fn &optional n)
   "The median wall time of FN over N runs (default 21), in milliseconds."
@@ -200,6 +262,14 @@
   (let ((ms (drgnx-fp-test--median-ms (lambda () (drgnx-modules-fingerprint t)) 11)))
     (message "full fingerprint: %.3f ms (median)" ms)
     (should (< ms 50))))
+
+(ert-deftest drgnx-fingerprint/the-first-scan-of-drgnx-symbols-costs-under-20-ms ()
+  :tags '(:timing)
+  (let ((drgnx-modules-fingerprint--own nil) (t0 (float-time)))
+    (drgnx-modules-fingerprint--hook-names)
+    (let ((ms (* 1000 (- (float-time) t0))))
+      (message "first scan of drgnx-* hooks: %.2f ms" ms)
+      (should (< ms 20)))))
 
 (provide 'modules-fingerprint-test)
 ;;; modules-fingerprint-test.el ends here

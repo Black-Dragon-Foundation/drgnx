@@ -68,16 +68,19 @@ equal string still matches); anything else is compared as the object it is."
     (let* ((v (default-value hook))
            (fns (if (or (not (listp v)) (functionp v)) (list v) v))
            (key (list 'hook hook)) items)
-      (dolist (f fns)
-        (unless (or (eq f t) (null f)) (push (cons key f) items)))
+      (when (proper-list-p fns)                 ; a dotted or circular list is not a hook's value
+        (dolist (f fns)
+          (unless (or (eq f t) (null f)) (push (cons key f) items))))
       items)))
 
 (defun drgnx-modules-fingerprint--function-variable-items (var)
-  "Items for VAR, a function-valued variable: its `add-function' advice, or its value when not advised."
+  "Items for the `add-function' advice on VAR, a function-valued variable.  Its plain value is not read: the
+base function under advice is not reachable by a public function, and a value that changes when advice is added
+would report one leak as two lines."
   (when (and (default-boundp var) (default-value var))
-    (let ((v (default-value var)) (key (list 'function-variable var)) items)
-      (advice-function-mapc (lambda (f _props) (push (cons key f) items)) v)
-      (or items (and (or (symbolp v) (functionp v)) (list (cons key v)))))))
+    (let ((key (list 'function-variable var)) items)
+      (advice-function-mapc (lambda (f _props) (push (cons key f) items)) (default-value var))
+      items)))
 
 (defun drgnx-modules-fingerprint--alist-items (kind var)
   "Items for the alist VAR: its keys and their values (a value changed in place shows)."
@@ -128,30 +131,69 @@ equal string still matches); anything else is compared as the object it is."
     (dolist (tm timer-idle-list) (push (cons '(timer idle) tm) items))
     items))
 
-(defun drgnx-modules-fingerprint--hook-names ()
-  (if (and (boundp 'unload-feature-special-hooks) unload-feature-special-hooks)
-      (delete-dups (append drgnx-modules-fingerprint-hooks unload-feature-special-hooks))
-    drgnx-modules-fingerprint-hooks))
+(defvar drgnx-modules-fingerprint--own nil
+  "(HOOKS . FUNCTION-VARIABLES): the bound `drgnx-*' symbols ending in -hook, -hooks, -functions / -function.
+Read once per Emacs (`apropos-internal', in C) and again by every FULL scan; nil until then.  A library loaded
+after that, and not scanned since, is not in it (the next FULL scan adds it).")
+
+(defvar drgnx-modules-fingerprint--names nil
+  "Cache of the two name lists: (INPUTS HOOKS FUNCTION-VARIABLES), INPUTS being the lists they were made from.")
+
+(defun drgnx-modules-fingerprint--own ()
+  "`drgnx-modules-fingerprint--own', read from the obarray on first use."
+  (or drgnx-modules-fingerprint--own
+      (let (hooks fvars)
+        (dolist (s (apropos-internal "\\`drgnx-.*\\(?:-hooks?\\|-functions?\\)\\'" #'default-boundp))
+          (when (eq (indirect-variable s) s)
+            (if (string-suffix-p "-function" (symbol-name s)) (push s fvars) (push s hooks))))
+        (setq drgnx-modules-fingerprint--own (cons hooks fvars)))))
+
+(defun drgnx-modules-fingerprint--names ()
+  "(HOOKS . FUNCTION-VARIABLES) to read: the hand lists, `unload-feature-special-hooks' and drgnx's own.
+Rebuilt only when one of its inputs is a different list."
+  (let* ((own (drgnx-modules-fingerprint--own))
+         (inputs (list drgnx-modules-fingerprint-hooks
+                       (and (boundp 'unload-feature-special-hooks) unload-feature-special-hooks)
+                       drgnx-modules-fingerprint-function-variables own)))
+    (unless (and drgnx-modules-fingerprint--names
+                 (cl-every #'eq inputs (car drgnx-modules-fingerprint--names)))
+      (setq drgnx-modules-fingerprint--names
+            (list inputs
+                  (delete-dups (append (nth 0 inputs) (nth 1 inputs) (car own)))
+                  (delete-dups (append (nth 2 inputs) (cdr own))))))
+    (cdr drgnx-modules-fingerprint--names)))
+
+(defun drgnx-modules-fingerprint--hook-names () (car (drgnx-modules-fingerprint--names)))
+(defun drgnx-modules-fingerprint--function-variable-names () (cadr (drgnx-modules-fingerprint--names)))
+
+(defun drgnx-modules-fingerprint--hook-name-p (name)
+  (and (> (length name) 6)
+       (or (string-suffix-p "-hook" name) (string-suffix-p "-hooks" name) (string-suffix-p "-functions" name))))
 
 (defun drgnx-modules-fingerprint--scan ()
-  "Items for every bound hook variable's default value, every `-function' variable's advice, every advised function.
-The `mapatoms' scan: about 12 ms compiled."
-  (let (hooks advice)
+  "(:all-hooks ITEMS :advice ITEMS): every bound hook variable's default value, every `-function' variable's
+value or advice, every advised function.  A variable alias is read once, under its base name; a variable
+whose value is not what its name says is skipped.  About 12 ms compiled."
+  (let (hooks fvars advice own-hooks own-fvars)
     (mapatoms
      (lambda (s)
        (when (fboundp s)
          (advice-mapc (lambda (f _props) (push (cons (list 'advice s) f) advice)) s))
-       (when (default-boundp s)
-         (let ((name (symbol-name s)))
-           (let ((n (length name)))
-             (cond
-              ((and (> n 6)
-                    (or (string-suffix-p "-hook" name) (string-suffix-p "-hooks" name)
-                        (string-suffix-p "-functions" name)))
-               (setq hooks (nconc (drgnx-modules-fingerprint--hook-items s) hooks)))
-              ((and (> n 9) (string-suffix-p "-function" name))
-               (setq hooks (nconc (drgnx-modules-fingerprint--function-variable-items s) hooks)))))))))
-    (list :all-hooks hooks :advice advice)))
+       (when (and (default-boundp s) (eq (indirect-variable s) s))
+         (let* ((name (symbol-name s)) (own (string-prefix-p "drgnx-" name)))
+           (cond
+            ((drgnx-modules-fingerprint--hook-name-p name)
+             (when own (push s own-hooks))
+             (condition-case nil
+                 (setq hooks (nconc (drgnx-modules-fingerprint--hook-items s) hooks))
+               (error nil)))
+            ((and (> (length name) 9) (string-suffix-p "-function" name))
+             (when own (push s own-fvars))
+             (condition-case nil
+                 (setq fvars (nconc (drgnx-modules-fingerprint--function-variable-items s) fvars))
+               (error nil))))))))
+    (setq drgnx-modules-fingerprint--own (cons own-hooks own-fvars))
+    (list :all-hooks (nconc hooks fvars) :advice advice)))
 
 (defun drgnx-modules-fingerprint--full-items ()
   "The `mapatoms' scan, compiled first when it is not: interpreted it costs ~110 ms (27,000 symbols, each a trip
@@ -160,16 +202,23 @@ through the evaluator), compiled ~12 ms, and compiling it takes ~8 ms once.  A b
     (ignore-errors
       (let ((byte-compile-warnings nil) (inhibit-message t))
         (byte-compile 'drgnx-modules-fingerprint--scan))))
-  (drgnx-modules-fingerprint--scan))
+  (let* ((scan (drgnx-modules-fingerprint--scan)) (extra nil))
+    ;; a listed name the scan's suffix test would not pick (a hand-listed odd one) is still read
+    (dolist (h (drgnx-modules-fingerprint--hook-names))
+      (unless (and (drgnx-modules-fingerprint--hook-name-p (symbol-name h)) (eq (indirect-variable h) h))
+        (setq extra (nconc (ignore-errors (drgnx-modules-fingerprint--hook-items h)) extra))))
+    (when extra (setq scan (plist-put scan :all-hooks (nconc extra (plist-get scan :all-hooks)))))
+    scan))
 
 (defun drgnx-modules-fingerprint (&optional full)
   "A plist of the global state a module or a test can leave behind (see this file's commentary).
-Cheap: meant to run around every test.  With FULL, also a `mapatoms' scan of every hook variable and every
-advised function (15 to 30 ms): once per test file.  Compare two with `drgnx-modules-fingerprint-diff'."
+Cheap: meant to run around every test.  With FULL, a `mapatoms' scan of every hook variable and every advised
+function (about 12 ms): once per test file.  The diff of two full ones reads `:all-hooks', not `:hooks' and
+`:function-variables' (which it contains), so a leak is one line.  Compare two with `drgnx-modules-fingerprint-diff'."
   (let (hooks fvars regs)
     (dolist (h (drgnx-modules-fingerprint--hook-names))
       (setq hooks (nconc (drgnx-modules-fingerprint--hook-items h) hooks)))
-    (dolist (v drgnx-modules-fingerprint-function-variables)
+    (dolist (v (drgnx-modules-fingerprint--function-variable-names))
       (setq fvars (nconc (drgnx-modules-fingerprint--function-variable-items v) fvars)))
     (dolist (r drgnx-modules-fingerprint-registries)
       (setq regs (nconc (drgnx-modules-fingerprint--registry-items r) regs)))
@@ -201,7 +250,7 @@ advised function (15 to 30 ms): once per test file.  Compare two with `drgnx-mod
   "FILE as a source path: the .el of a loaded .elc; relative to `drgnx-dir' when inside it."
   (when file
     (let ((f (if (string-suffix-p ".elc" file) (substring file 0 -1) file)))
-      (if (and (boundp 'drgnx-dir) (stringp drgnx-dir) (string-prefix-p (expand-file-name drgnx-dir) f))
+      (if (and (boundp 'drgnx-dir) (stringp drgnx-dir) (file-in-directory-p f drgnx-dir))
           (file-relative-name f drgnx-dir)
         f))))
 
@@ -274,7 +323,10 @@ function, advice or timer function was defined, nil when it cannot be told (a la
 of the two fingerprints has (FULL against cheap) are skipped."
   (let (out)
     (cl-loop for (field a) on after by #'cddr
-             when (plist-member before field)
+             when (and (plist-member before field)
+                       ;; `:all-hooks' in both contains `:hooks' and `:function-variables'
+                       (not (and (memq field '(:hooks :function-variables))
+                                 (plist-member before :all-hooks) (plist-member after :all-hooks))))
              do (let ((b (plist-get before field)))
                   (setq out
                         (append
