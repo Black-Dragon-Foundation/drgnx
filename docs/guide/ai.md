@@ -39,6 +39,15 @@ or a key variable of its own, so a cloned repository cannot send your code, or a
 
 `:kind` is `openai` (any OpenAI-compatible server), `ollama`, `llamacpp` or `tei`.
 
+A project's role may still name a provider that is not on this machine (OpenRouter, say): every pause in that
+repository would then make a paid call and send your code away. So the first time you run a command that uses AI
+there (Edit with AI, Ask the Codebase), drgnx asks once whether that project may use the remote provider, and keeps
+your answer for that project root in `ai-project-routes.eld` in drgnx's state directory (delete the entry to be asked
+again; it is asked again only if the project later names a remote provider you were not asked about). Until you say
+yes, and after a no, the project's remote steps are left out of its chains: ghost text, the search index and every
+other automatic path use only the local steps (or your own `ai.eld`'s chain when none is left). Nothing is ever
+asked from a timer, hook or in batch.
+
 ## Roles
 
 | Role | Used by | Default chain |

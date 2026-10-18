@@ -497,3 +497,71 @@ here, and a variable let-bound before it loads would turn special for good."
           (should (equal gptel-backend '(backend "Ollama"))))))))
 
 ;;; ai-test.el ends here
+
+;;;; A project's route to a remote provider (M9-10)
+
+(defun drgnx-ai-test--remote-project (root)
+  "ROOT/proj routes complete to OpenRouter then Ollama, chat to OpenRouter only; returns the project dir."
+  (drgnx-ai-test--write (concat root "proj/.drgnx/ai.eld")
+                        '(:version 1 :roles ((complete (openrouter . "paid/m") (ollama . "local-m"))
+                                             (chat (openrouter . "paid/m")))))
+  (concat root "proj/"))
+
+(ert-deftest drgnx-ai/an-unconfirmed-remote-route-is-local-only-and-never-prompts ()
+  (drgnx-ai-test--with root
+    (let ((default-directory (drgnx-ai-test--remote-project root)) (asked nil))
+      (cl-letf (((symbol-function 'y-or-n-p) (lambda (&rest _) (setq asked t)))
+                ((symbol-function 'yes-or-no-p) (lambda (&rest _) (setq asked t))))
+        (should (equal (drgnx-ai-role 'complete) '((ollama . "local-m"))))      ; the remote step is left out
+        (should (equal (drgnx-ai-role 'chat) (alist-get 'chat drgnx-ai-default-roles)))   ; only remote: the user's chain
+        (should-not asked)))))
+
+(ert-deftest drgnx-ai/confirming-a-project-route-asks-once-and-remembers-per-root ()
+  (drgnx-ai-test--with root
+    (let ((default-directory (drgnx-ai-test--remote-project root)) (asks 0) (answer t) (noninteractive nil))
+      (cl-letf (((symbol-function 'y-or-n-p) (lambda (&rest _) (cl-incf asks) answer)))
+        (should (drgnx-ai-confirm-project-route))
+        (should (= asks 1))
+        (should (equal (drgnx-ai-role 'complete) '((openrouter . "paid/m") (ollama . "local-m"))))   ; the project's own
+        (should (drgnx-ai-confirm-project-route))
+        (should (= asks 1))                                                      ; not asked again…
+        (clrhash drgnx-ai--read-cache)
+        (should (= asks 1))                                                      ; …the answer is on disk, per root
+        (should (string-search (expand-file-name (concat root "proj/")) (with-temp-buffer (insert-file-contents (drgnx-ai-routes-file)) (buffer-string))))
+        ;; another project root is asked on its own
+        (make-directory (concat root "other/.drgnx") t)
+        (copy-file (concat root "proj/.drgnx/ai.eld") (concat root "other/.drgnx/ai.eld"))
+        (let ((default-directory (concat root "other/")))
+          (setq answer nil)
+          (should-not (drgnx-ai-confirm-project-route))
+          (should (= asks 2))
+          (should (equal (drgnx-ai-role 'complete) '((ollama . "local-m"))))      ; a no keeps it local…
+          (should-not (drgnx-ai-confirm-project-route))
+          (should (= asks 2)))))))                                                ; …and is not asked again
+
+(ert-deftest drgnx-ai/confirming-never-asks-in-batch-or-for-a-local-route ()
+  (drgnx-ai-test--with root
+    (let ((asks 0))
+      (cl-letf (((symbol-function 'y-or-n-p) (lambda (&rest _) (cl-incf asks) t)))
+        (let ((default-directory (drgnx-ai-test--remote-project root)) (noninteractive t))
+          (should-not (drgnx-ai-confirm-project-route))                           ; batch: no, silently
+          (should (= asks 0)))
+        (drgnx-ai-test--write (concat root "proj/.drgnx/ai.eld") '(:version 1 :roles ((complete (ollama . "m")))))
+        (let ((default-directory (concat root "proj/")) (noninteractive nil))
+          (should (drgnx-ai-confirm-project-route))                               ; nothing remote: nothing to ask
+          (should (= asks 0)))
+        (let ((default-directory root) (noninteractive nil))                      ; no project file at all
+          (should (drgnx-ai-confirm-project-route))
+          (should (= asks 0)))))))
+
+(ert-deftest drgnx-ai/a-route-to-a-new-remote-provider-is-asked-again ()
+  (drgnx-ai-test--with root
+    (let ((default-directory (drgnx-ai-test--remote-project root)) (asks 0) (noninteractive nil))
+      (cl-letf (((symbol-function 'y-or-n-p) (lambda (&rest _) (cl-incf asks) t)))
+        (drgnx-ai-confirm-project-route)
+        (drgnx-ai-test--write (concat root "proj/.drgnx/ai.eld")
+                              '(:version 1 :roles ((chat (openrouter . "paid/m") (anthropic . "x")))))
+        (set-file-times (concat root "proj/.drgnx/ai.eld") (time-add (current-time) 5))
+        (should (equal (drgnx-ai-role 'chat) '((openrouter . "paid/m"))))         ; the new one is held back
+        (drgnx-ai-confirm-project-route)
+        (should (= asks 2))))))

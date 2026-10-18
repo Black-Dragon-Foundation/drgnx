@@ -283,3 +283,14 @@ provider `o' served by a mock answering ANSWER, its LOG."
       (remove-hook 'prog-mode-hook #'drgnx-ai-ghost--maybe-enable))))
 
 ;;; ai-ask-test.el ends here
+
+(ert-deftest drgnx-ai-ask/the-command-confirms-the-roots-project-route-and-fixes-its-chain ()
+  ;; asked from the command (not the retriever's callback), for ROOT's project, whatever buffer is current
+  (drgnx-ai-ask-test--with "never"
+    (let ((asked nil) (chain nil) (default-directory (expand-file-name "~")))
+      (cl-letf (((symbol-function 'drgnx-ai-confirm-project-route) (lambda () (push default-directory asked) t))
+                ((symbol-function 'drgnx-ai-ask-request) (lambda (_q _r _cb &rest args) (setq chain (plist-get args :chain)) #'ignore))
+                ((symbol-function 'message) #'ignore))
+        (drgnx-ai-ask "q?" (concat root "proj/"))
+        (should (equal asked (list (concat root "proj/"))))
+        (should (equal chain (let ((default-directory (concat root "proj/"))) (drgnx-ai-role 'chat))))))))

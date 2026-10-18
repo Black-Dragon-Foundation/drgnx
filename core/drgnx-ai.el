@@ -112,11 +112,76 @@ ai.eld never adds or changes one: a cloned repository must not choose where your
 
 (defun drgnx-ai-provider (id) (alist-get id (drgnx-ai-providers)))
 
+;; A project's role may name a provider that is not on this machine (paid calls on every pause, your code sent
+;; away).  The user confirms that once per project, from a command they ran; until then (and after a no) only the
+;; local steps of the project's chain are used.
+(defun drgnx-ai-remote-p (id)
+  "Non-nil when provider ID is not on this machine: its address is not loopback."
+  (when-let* ((url (plist-get (drgnx-ai-provider id) :url))
+              (host (ignore-errors (url-host (url-generic-parse-url url)))))
+    (not (member (downcase host) '("localhost" "127.0.0.1" "::1" "[::1]")))))
+
+(defun drgnx-ai-routes-file ()
+  "Where the answers about projects' remote routes are kept (drgnx state): :projects ((ROOT :allow BOOL :ids IDS)…)."
+  (expand-file-name "ai-project-routes.eld" (drgnx-state-dir)))
+
+(defun drgnx-ai--project-root ()
+  "The root of the project whose .drgnx/ai.eld applies here, or nil."
+  (when-let* ((file (drgnx-ai--project-file)))
+    (file-name-directory (directory-file-name (file-name-directory file)))))
+
+(defun drgnx-ai--chain-remote-ids (chain)
+  (seq-filter #'drgnx-ai-remote-p (delete-dups (mapcar #'car chain))))
+
+(defun drgnx-ai--project-remote-ids ()
+  "The remote providers the project's roles name."
+  (drgnx-ai--chain-remote-ids
+   (apply #'append (mapcar #'cdr (plist-get (drgnx-ai--config (drgnx-ai--project-file)) :roles)))))
+
+(defun drgnx-ai--route-answer ()
+  "This project's answer (:allow BOOL :ids IDS: the remote providers it was about), or nil."
+  (when-let* ((root (drgnx-ai--project-root)))
+    (cdr (assoc root (plist-get (drgnx-ai--config (drgnx-ai-routes-file)) :projects)))))
+
+(defun drgnx-ai--allowed-remote-ids ()
+  "The remote providers the user allowed this project to use."
+  (let ((a (drgnx-ai--route-answer))) (and (plist-get a :allow) (plist-get a :ids))))
+
+(defun drgnx-ai-confirm-project-route ()
+  "Make sure the user has been asked about the remote providers this project's .drgnx/ai.eld routes roles to: once
+per project (again only for a remote provider they were not asked about), the answer kept per root in drgnx state.
+Returns non-nil when the project's routes may be used.  Asks only when a command the user ran calls it (never in
+batch); call it at the start of such a command, never from a timer, hook or process sentinel."
+  (let ((ids (drgnx-ai--project-remote-ids)) (root (drgnx-ai--project-root)))
+    (cond
+     ((null ids) t)
+     ((null (seq-difference ids (drgnx-ai--allowed-remote-ids))) t)
+     ((or noninteractive (null root)) nil)
+     ((null (seq-difference ids (plist-get (drgnx-ai--route-answer) :ids))) nil)   ; already told no
+     (t (let* ((allow (y-or-n-p (format "%s routes AI roles to %s (remote: your code leaves this machine, and it may cost money).  Use that route in this project? "
+                                        (abbreviate-file-name (drgnx-ai--project-file))
+                                        (mapconcat #'symbol-name ids ", "))))
+               (file (drgnx-ai-routes-file))
+               (conf (let ((c (drgnx-ai--config file))) (or c (list :version 1))))
+               (projects (assoc-delete-all root (copy-sequence (plist-get conf :projects)))))
+          (make-directory (file-name-directory file) t)
+          (with-temp-file file
+            (insert ";; drgnx: projects whose .drgnx/ai.eld routes a role to a remote provider, and your answer\n")
+            (let ((print-length nil) (print-level nil))
+              (pp (plist-put conf :projects (cons (list root :allow (and allow t) :ids ids) projects)) (current-buffer))))
+          (remhash file drgnx-ai--read-cache)
+          allow)))))
+
 (defun drgnx-ai-role (role)
-  "ROLE's chain ((PROVIDER . MODEL)…): the project's, else the user's, else the default."
-  (or (alist-get role (plist-get (drgnx-ai--config (drgnx-ai--project-file)) :roles))
-      (alist-get role (plist-get (drgnx-ai--config (drgnx-ai-file)) :roles))
-      (alist-get role drgnx-ai-default-roles)))
+  "ROLE's chain ((PROVIDER . MODEL)…): the project's, else the user's, else the default.  A project's steps
+that name a remote provider count only once the user allowed it (`drgnx-ai-confirm-project-route'); this never asks."
+  (let ((project (alist-get role (plist-get (drgnx-ai--config (drgnx-ai--project-file)) :roles))))
+    (when (seq-some (lambda (step) (drgnx-ai-remote-p (car step))) project)   ; the common case reads nothing more
+      (let ((allowed (drgnx-ai--allowed-remote-ids)))
+        (setq project (seq-remove (lambda (step) (and (drgnx-ai-remote-p (car step)) (not (memq (car step) allowed)))) project))))
+    (or project
+        (alist-get role (plist-get (drgnx-ai--config (drgnx-ai-file)) :roles))
+        (alist-get role drgnx-ai-default-roles))))
 
 ;;;; Keys
 

@@ -289,6 +289,7 @@ hunk by hunk before anything changes."
          ;; text typed right at either edge stays outside the region
          (s (copy-marker start t)) (e (copy-marker end))
          (text (buffer-substring-no-properties start end)))
+    (drgnx-ai-confirm-project-route)   ; a project's remote route is asked about here, in the command, once
     (message "AI edit: asking…")
     (drgnx-ai--track
      (lambda (done)
@@ -520,14 +521,17 @@ best snippets go to the `chat' role with it, the answer cites the files."
   (interactive (list (read-string "Ask the codebase: ")
                      (or (when-let* ((p (and (fboundp 'project-current) (project-current)))) (project-root p)) default-directory)))
   (let ((root (expand-file-name (or root default-directory))))
-    (message "Ask the Codebase: looking…")
-    (drgnx-ai--track
-     (lambda (done)
-       (drgnx-ai-ask-request question root
-                             (lambda (answer info snippets)
-                               (funcall done)
-                               (drgnx-ai--answer-buffer question (or answer (format "No answer: %s" (plist-get info :error))) snippets root))
-                             :interactive t)))))
+    (let* ((default-directory root)   ; the chain is the one of ROOT's project, fixed now (the answer comes later, elsewhere)
+           (_ (drgnx-ai-confirm-project-route))
+           (chain (drgnx-ai-role 'chat)))
+      (message "Ask the Codebase: looking…")
+      (drgnx-ai--track
+       (lambda (done)
+         (drgnx-ai-ask-request question root
+                               (lambda (answer info snippets)
+                                 (funcall done)
+                                 (drgnx-ai--answer-buffer question (or answer (format "No answer: %s" (plist-get info :error))) snippets root))
+                               :chain chain :interactive t))))))
 
 ;;;; Choose Provider/Model
 
