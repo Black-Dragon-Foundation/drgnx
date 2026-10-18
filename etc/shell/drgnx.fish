@@ -23,6 +23,7 @@ if not set -q _drgnx_sourced
                 set -e __drgnx_eat_ran
                 printf '\e]51;e;H;%s\e\\\\' $last
             end
+            printf '\e]51;e;J\e\\\\'
             printf '\e]51;e;A;%s;%s\e\\\\' (printf %s $hostname | base64 | string join '') (printf %s $PWD | base64 | string join '')
             printf '\e]51;e;B\e\\\\'
         end

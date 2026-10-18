@@ -44,14 +44,29 @@
   "After advice of `eat--pre-prompt' (it runs in the terminal buffer at every prompt mark): the shell reports."
   (setq drgnx-terminal-eat--integrated t))
 
+(defvar drgnx-terminal-eat--ppids nil
+  "During a refresh pass, a cons whose car is the parent pids of every process once the fallback scan ran (a hash table).")
+
+(defun drgnx-terminal-eat--ppid-table ()
+  "The parent pids of all processes, as a hash table; scanned once per refresh pass.
+Local whatever `default-directory' is: process attributes of a TRAMP directory are the remote host's."
+  (or (car drgnx-terminal-eat--ppids)
+      (let ((default-directory "/") (table (make-hash-table)))
+        (dolist (p (list-system-processes))
+          (when-let* ((ppid (alist-get 'ppid (process-attributes p))))
+            (puthash ppid t table)))
+        (when drgnx-terminal-eat--ppids (setcar drgnx-terminal-eat--ppids table))
+        table)))
+
 (defun drgnx-terminal-eat--children-p (pid)
-  "Non-nil when process PID has a child process."
-  (let ((file (format "/proc/%d/task/%d/children" pid pid)))
+  "Non-nil when local process PID has a child process."
+  (let ((default-directory "/")
+        (file (format "/proc/%d/task/%d/children" pid pid)))
     (if (file-readable-p file)
         (with-temp-buffer
           (insert-file-contents file)
           (string-match-p "[0-9]" (buffer-string)))
-      (seq-some (lambda (p) (eql (alist-get 'ppid (process-attributes p)) pid)) (list-system-processes)))))
+      (gethash pid (drgnx-terminal-eat--ppid-table)))))
 
 (defun drgnx-terminal-eat--refresh (buffer)
   "Set the query flag of BUFFER's shell from its children, when eat's shell integration is not reporting."
@@ -66,7 +81,8 @@
   "Bring the \"a program is running\" flag of every terminal shell up to date; no prompt, no waiting.
 A shell whose integration reports (eat marked a prompt) keeps eat's own flag; any other is running when it has a
 child process.  The quit question calls this before it collects the running programs."
-  (dolist (b (buffer-list)) (drgnx-terminal-eat--refresh b)))
+  (let ((drgnx-terminal-eat--ppids (list nil)))
+    (dolist (b (buffer-list)) (drgnx-terminal-eat--refresh b))))
 
 (defun drgnx-terminal-eat--refresh-before-kill ()
   "`kill-buffer-query-functions': refresh this terminal's flag before Emacs reads it; never vetoes."

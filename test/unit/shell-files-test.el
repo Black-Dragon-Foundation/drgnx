@@ -161,7 +161,44 @@ ARGS replace the shell's usual arguments before the script."
     (should (string-search "\e]51;e;B\e\\" (nth 1 r)))
     (should (string-search (format "\e]51;e;F;%s\e\\" (base64-encode-string "echo hi" t)) (nth 1 r)))
     (should (string-search "\e]51;e;G\e\\" (nth 1 r)))
-    (should (string-search "\e]51;e;H;0\e\\" (nth 1 r)))))
+    (should (string-search "\e]51;e;H;0\e\\\e]51;e;J\e\\\e]51;e;A;" (nth 1 r)))))
+
+(defun drgnx-shell-files-test--run-in-mode (shell pre args dir)
+  "Run SHELL with PRE before sourcing its file from DIR, outside eat and inside it.
+Returns ((OUT-EXIT OUT STDERR) (IN-EXIT IN STDERR)); inside, a marker file stands for eat's integration."
+  (let ((integ (make-temp-file "drgnx-eat" t))
+        (file (expand-file-name (nth 1 (assq shell drgnx-shell-files-test--shells)) dir)))
+    (unwind-protect
+        (progn
+          (with-temp-file (expand-file-name (symbol-name shell) integ) (insert "__drgnx_marker=hit\n"))
+          (let* ((show (if (eq shell 'zsh) "print -r --" "echo"))
+                 (script (format "%s; source '%s'; %s \"marker=${__drgnx_marker-unset}\"" pre file show)))
+            (list (drgnx-shell-files-test--run shell script nil nil args)
+                  (drgnx-shell-files-test--run shell script (list "INSIDE_EMACS=31.1,eat" (concat "EAT_SHELL_INTEGRATION_DIR=" integ))
+                                               nil args))))
+      (delete-directory integ t))))
+
+(ert-deftest drgnx-shell-files/strict-modes-stay-silent-and-correct ()
+  ;; unset variables are errors (nounset), POSIX and sh emulation, and a path with a space in it
+  (let* ((base (make-temp-file "drgnx shell" t))
+         (dir (file-name-as-directory (expand-file-name "my dir/shell" base))))
+    (unwind-protect
+        (progn
+          (make-directory dir t)
+          (dolist (f (directory-files drgnx-shell-files-test--dir t "\\`[^.]")) (copy-file f dir))
+          (dolist (c '((zsh "setopt nounset" nil) (zsh "setopt nounset errexit" nil) (zsh "emulate sh -c 'true'" nil)
+                       (zsh "setopt ksh_arrays sh_word_split" nil) (zsh "true" nil)
+                       (bash "set -u" nil) (bash "set -eu" nil) (bash "true" ("--norc" "--noprofile" "--posix" "-i" "-c"))))
+            (pcase-let* ((`(,shell ,pre ,args) c)
+                         (`(,out ,in) (drgnx-shell-files-test--run-in-mode shell pre args dir)))
+              (should (equal (list c (nth 0 out) (nth 1 out) (nth 2 out)) (list c 0 "marker=unset\n" "")))
+              (should (equal (list c (nth 0 in) (nth 1 in) (nth 2 in)) (list c 0 "marker=hit\n" "")))))
+          ;; zsh under emulate sh: the whole sourcing happens in sh emulation
+          (let* ((file (expand-file-name "drgnx.zsh" dir))
+                 (r (drgnx-shell-files-test--run 'zsh (format "emulate sh -c \"source '%s'\"; print -r -- \"first=$fpath[1]\"" file))))
+            (should (equal (list (nth 0 r) (nth 2 r)) (list 0 "")))
+            (should (string-search (concat "first=" (directory-file-name dir)) (nth 1 r)))))
+      (delete-directory base t))))
 
 (defun drgnx-shell-files-test--median (xs)
   "The median of the numbers XS."

@@ -332,5 +332,24 @@
                 (should (drgnx-terminal-test--wait-until (lambda () (not (process-query-on-exit-flag proc)))))))
           (delete-directory home t))))))
 
+(ert-deftest drgnx-terminal/the-fallback-scan-is-local-and-runs-once-per-pass ()
+  ;; no /proc children file (macOS): one scan of the process table per refresh pass, never dispatched to TRAMP
+  (drgnx-terminal-test--shell "sleep 30 &\nread x"
+    (should (drgnx-terminal-test--wait-until (lambda () (drgnx-terminal-test--children proc))))
+    (let* ((idle (drgnx-terminal-new default-directory)) (idle-proc (get-buffer-process idle))
+           (scans 0) (dirs nil)
+           (list-fn (symbol-function 'list-system-processes)) (attr-fn (symbol-function 'process-attributes))
+           (readable-fn (symbol-function 'file-readable-p)))
+      (cl-letf (((symbol-function 'file-readable-p)
+                 (lambda (f) (and (not (string-prefix-p "/proc/" f)) (funcall readable-fn f))))
+                ((symbol-function 'list-system-processes) (lambda () (cl-incf scans) (funcall list-fn)))
+                ((symbol-function 'process-attributes) (lambda (pid) (push default-directory dirs) (funcall attr-fn pid))))
+        (let ((default-directory "/ssh:nohost:/tmp/")) (drgnx-terminal-eat-refresh-query-flags)))
+      (should (= scans 1))
+      (should dirs)
+      (should-not (seq-some #'file-remote-p dirs))
+      (should (process-query-on-exit-flag proc))
+      (should-not (process-query-on-exit-flag idle-proc)))))
+
 (provide 'mod-terminal-test)
 ;;; mod-terminal-test.el ends here

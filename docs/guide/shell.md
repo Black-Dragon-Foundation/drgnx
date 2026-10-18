@@ -45,8 +45,12 @@ commands. That is what lets drgnx tell an idle shell from a running program:
 - **An idle shell never makes drgnx ask** "programs still running" when you quit or close the terminal. With the
   integration the shell says so at every prompt; a command running (`make`, `sleep`, `vim`) makes drgnx ask once.
 - **Without the integration** (you did not add the line, or your prompt theme dropped eat's marks, below) drgnx treats
-  a terminal as running only when its shell has a child process. A `sleep 100` is still asked about; an idle shell is
-  not. The one thing it cannot see is a shell builtin that waits (`read`, a long `while` loop in the shell itself).
+  a terminal as running only when its shell has a child process. A `sleep 100` is asked about when you close that
+  terminal; on quit it is asked about too once the session side of this lands (until then quit does not ask about a
+  shell without the integration; closing the terminal does). An idle shell is not asked about. Two limits: a shell
+  builtin that waits (`read`, a long `while` loop in the shell itself) has no child process and is not seen; and a
+  shell that keeps a helper process running all the time (zsh with powerlevel10k's `gitstatusd`, a coprocess) always
+  has a child, so without the integration it counts as running. That is one more reason to add the line.
 
 ## `EDITOR`: git and drgnx reach the Emacs hosting the terminal
 
@@ -79,8 +83,8 @@ it only knows less.
 
 Eat ships no integration for fish, so `drgnx.fish` defines two event handlers, `__drgnx_eat_preexec` and
 `__drgnx_eat_prompt`, that send what eat's zsh integration sends from `precmd` and `preexec`: the host and directory,
-the start of each prompt, the command line, that a command started, and its exit status. The one thing missing is
-the prompt-end mark: fish cannot add it without redefining `fish_prompt`, which drgnx never does. So in fish:
+the start of each prompt (and the "a new prompt is coming" mark, `J`, as eat's zsh and bash scripts send it), the command
+line, that a command started, and its exit status. The one thing missing is the prompt-end mark: fish cannot add it without redefining `fish_prompt`, which drgnx never does. So in fish:
 
 - the directory, the failed-command mark, and "a command is running" all work;
 - the prompt annotation and eat's line mode use bash and zsh's prompt-end mark and are unavailable in fish.
