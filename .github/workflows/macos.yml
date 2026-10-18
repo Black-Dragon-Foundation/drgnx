@@ -1,5 +1,5 @@
-# macOS 27 and macOS 15 (Apple silicon, pinned images). Every push to main and every pull request: the unit suite and the install
-# plan, with Homebrew's Emacs and macOS's own bash 3.2. Weekly and on demand: a real install.sh --yes, then the
+# macOS 27 (Apple silicon; GitHub names its image after its Xcode: xcode-27). Every push to main and every pull
+# request: the unit suite and the install plan, with Homebrew's Emacs and macOS's own bash 3.2. Weekly and on demand: a real install.sh --yes, then the
 # first sync from the shipped lock, the app bundle and a headless start. The GUI tier stays Linux-only.
 # docs/develop/ci.md
 name: macOS
@@ -21,15 +21,9 @@ concurrency:
 
 jobs:
   unit:
-    name: Unit suite and install plan (${{ matrix.macos.name }})
+    name: Unit suite and install plan (macOS 27)
     if: github.event_name != 'schedule'
-    strategy:
-      fail-fast: false
-      matrix:
-        macos:   # the newest macOS, and the oldest drgnx supports (GitHub names macOS 27's image after its Xcode)
-          - { runner: xcode-27, name: macOS 27 }
-          - { runner: macos-15, name: macOS 15 }
-    runs-on: ${{ matrix.macos.runner }}
+    runs-on: xcode-27
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -49,15 +43,9 @@ jobs:
           bin/drgnx test
 
   install:
-    name: Real install (${{ matrix.macos.name }})
+    name: Real install (macOS 27)
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-    strategy:
-      fail-fast: false
-      matrix:
-        macos:
-          - { runner: xcode-27, name: macOS 27 }
-          - { runner: macos-15, name: macOS 15 }
-    runs-on: ${{ matrix.macos.runner }}
+    runs-on: xcode-27
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
