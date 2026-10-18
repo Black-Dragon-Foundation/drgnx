@@ -73,6 +73,21 @@ A gryphn command whose id drgnx already has (gryphn's `view-explorer`, Toggle Si
 never replaces drgnx's: it is registered as `gryphn/<id>`, its key bound where the profile does not own it, and
 `*Messages*` says so once.
 
+### What an external module honours: `drgnx-loading-external`
+
+While drgnx loads the files of an external module, the variable `drgnx-loading-external` is `t`; it is `nil` again
+when the load ends, whether the feature loaded or failed. It is the switch for code that belongs to your key
+profiles rather than to the module: global keymap sets, fixes for the CUA keys, popper setup. An external module that
+also runs outside drgnx wraps those parts and keeps everything else:
+
+```elisp
+(unless (bound-and-true-p drgnx-loading-external)
+  (global-set-key (kbd "C-c b") #'gryphn-board))   ; skipped under drgnx: the profile binds the command
+```
+
+`bound-and-true-p` keeps the file working where drgnx is not loaded. Commands, menus and context definitions are not
+affected: they reach the registry and the palette as before.
+
 ## Writing a module
 
 ```elisp
