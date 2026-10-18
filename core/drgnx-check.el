@@ -162,7 +162,7 @@ each logging to DIR/NAME.log.  A failing phase 1 (the build) stops the rest.  Re
           (setq stop t))))
     (list :ok (seq-every-p (lambda (j) (eq (plist-get j :status) 'ok)) all) :jobs all :seconds (- (float-time) t0))))
 
-(defconst drgnx-check-grace 15
+(defconst drgnx-check-grace 25
   "Seconds a job told to end (timeout, C-c) has to clean up — its Emacs stops the sessions it started — before
 it is killed.")
 

@@ -34,7 +34,7 @@ its log to `~/.local/state/drgnx/check/<time>/<job>.log`. Its stdin is empty, so
 instead of waiting.
 
 **Ending early.** A job that overruns its time limit, or every running job when the run itself is interrupted
-(SIGTERM, or C-c in a terminal), gets TERM on its whole process group. It then has 15 s to clean up before KILL.
+(SIGTERM, or C-c in a terminal), gets TERM on its whole process group. It then has 25 s (`drgnx-check-grace`) to clean up before KILL: a session's stop takes 18 s at the very most.
 Jobs run with `DRGNX_UI_STOP_ON_EXIT=1`, and so do the `bin/drgnx test --ui/--scenario/--bench/--perf` tiers: a
 test process ended that way stops the harness sessions it started on its way out. A session whose Emacs is slow to
 exit is finished by systemd. `bin/drgnx ui start` sessions are meant to outlive the command and are never stopped

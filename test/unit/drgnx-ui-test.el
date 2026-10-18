@@ -441,6 +441,25 @@ the real ones belong to sessions running next to the tests (bin/drgnx check's li
     (drgnx-ui--own-remove "drgnx-ui-8")                                   ; a session stopped normally is forgotten
     (should-not drgnx-ui--own)))
 
+(ert-deftest drgnx-ui/ending-stops-all-own-units-without-blocking-before-it-waits ()
+  ;; CHK-2: the stops run side by side — one slow session cannot use up the grace the others need
+  (let ((drgnx-ui--own nil) (events nil))
+    (cl-letf (((symbol-function 'drgnx-ui-stop) (lambda (n) (push (list 'stop n) events)))
+              ((symbol-function 'drgnx-ui--unit-owned-p) (lambda (n run) (and (string-suffix-p n run) t)))
+              ((symbol-function 'drgnx-ui--run) (lambda (&rest args) (push (cons 'run args) events) (cons 0 ""))))
+      (drgnx-ui--own-add "drgnx-ui-7" "/tmp/root-a")
+      (drgnx-ui--own-add "drgnx-ui-8" "/tmp/root-b")
+      (let ((process-environment (cons "DRGNX_UI_STOP_ON_EXIT=1" process-environment)))
+        (drgnx-ui--stop-own-on-exit))
+      (should (equal (reverse events)
+                     '((run "systemctl" "--user" "stop" "--no-block" "drgnx-ui-8")
+                       (run "systemctl" "--user" "stop" "--no-block" "drgnx-ui-7")
+                       (stop "drgnx-ui-8") (stop "drgnx-ui-7")))))))
+
+(ert-deftest drgnx-check/the-grace-covers-a-session-stop ()
+  ;; ask-to-exit (3 s + 5 s) + TimeoutStopSec (10 s) + margin
+  (should (>= drgnx-check-grace 25)))
+
 (ert-deftest drgnx-ui/a-failed-action-ends-the-measurement-and-names-itself ()
   ;; DEFERRED M1-1: an action that fails (a bad key, a target not on screen) must not leave the
   ;; recorder's timer and hooks running in the session, and the error says which action it was

@@ -234,8 +234,8 @@ MONITORS: how many virtual monitors of SIZE (default 1)."
   (append (list "systemd-run" "--user" "--quiet" "--collect" "--unit" (plist-get sess :name)
                 ;; a session never outlives its budget: 30 min, or $DRGNX_UI_MAX_RUNTIME s (the soak)
                 "-p" (format "RuntimeMaxSec=%s" (or (getenv "DRGNX_UI_MAX_RUNTIME") "1800")) "-p" "MemoryMax=3G"
-                ;; a stop kills what is left after 10 s (default 90), inside bin/drgnx check's 15 s grace for an ended
-                ;; job: a session slow to exit under load no longer outlives the job that stops it
+                ;; a stop kills what is left after 10 s (systemd's default is 90): with ask-to-exit (8 s at most) a
+                ;; session's stop takes 18 s at the very most, within bin/drgnx check's 25 s grace for an ended job
                 "-p" "TimeoutStopSec=10" "--")
           (drgnx-ui-env-argv (drgnx-ui-session-env sess))
           (drgnx-ui-compositor-argv sess)))
@@ -275,11 +275,19 @@ session.")
 (defun drgnx-ui--own-add (name root) (push (cons name root) drgnx-ui--own))
 (defun drgnx-ui--own-remove (name) (setq drgnx-ui--own (seq-remove (lambda (e) (equal (car e) name)) drgnx-ui--own)))
 
+(defun drgnx-ui--stop-no-block (name root)
+  "Tell session NAME's systemd unit (of state ROOT) to stop, without waiting; nothing if it is not this root's unit."
+  (when (drgnx-ui--unit-owned-p name (expand-file-name name root))
+    (drgnx-ui--run "systemctl" "--user" "stop" "--no-block" name)))
+
 (defun drgnx-ui--stop-own-on-exit ()
   "`kill-emacs-hook': with DRGNX_UI_STOP_ON_EXIT set (bin/drgnx check, the test-* tiers), stop the sessions
 this process started and did not stop — it was ended early (a timeout, C-c), its own clean-up never ran.
 Without it nothing is stopped: `drgnx ui start' sessions are meant to outlive the command."
   (when (getenv "DRGNX_UI_STOP_ON_EXIT")
+    ;; every unit is told to stop first (no waiting), so the stops below run side by side
+    (dolist (e drgnx-ui--own)
+      (unless (eq (car e) :group) (ignore-errors (drgnx-ui--stop-no-block (car e) (cdr e)))))
     (dolist (e drgnx-ui--own)
       (ignore-errors
         (if (eq (car e) :group) (drgnx-ui--kill-group (cdr e))
