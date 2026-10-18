@@ -86,6 +86,43 @@ ones are counted while the view streams."
         (dolist (b (buffer-list))
           (when (and (buffer-file-name b) (string-prefix-p drgnx-perf--needles (buffer-file-name b))) (kill-buffer b)))
         (delete-directory drgnx-perf--needles t))
+      ;; replace-retype: the 10k rows listed and drawn, then the replacement typed; each view draw is timed
+      (defvar drgnx-perf--slices nil "Wall milliseconds of each `drgnx-view--draw-buffer' call since the arm.")
+      (defun drgnx-perf--slice-timed (orig buffer)
+        (let ((t0 (float-time)))
+          (prog1 (funcall orig buffer) (push (* 1000 (- (float-time) t0)) drgnx-perf--slices))))
+      (defun drgnx-perf--replace-idle ()
+        (let ((d (+ (float-time) 30)))
+          (while (and (with-current-buffer (drgnx-perf--replace-view) (drgnx-replace--busy-p)) (< (float-time) d))
+            (accept-process-output nil 0.05))))
+      (defun drgnx-perf--retype-arm ()
+        "The Search view lists the 10k matches, drawn and settled, its Replace field empty; point in that field."
+        (drgnx-replace--open :text "needle" :replace ""
+                             :origin (with-current-buffer (find-file-noselect (expand-file-name "f000.txt" drgnx-perf--needles))
+                                       (point-min-marker)))
+        (drgnx-perf--replace-idle)
+        (redisplay t)
+        (select-window (drgnx-wb-section-window 'search))
+        (goto-char (widget-field-start (drgnx-replace--widget 'replace)))
+        (setq drgnx-perf--slices nil)
+        (advice-add 'drgnx-view--draw-buffer :around #'drgnx-perf--slice-timed))
+      (defun drgnx-perf--retype-measure ()
+        "The redraw finished: each view draw's wall time since the arm."
+        (drgnx-perf--replace-idle)
+        (advice-remove 'drgnx-view--draw-buffer #'drgnx-perf--slice-timed)
+        (list :slice_ms (mapcar #'drgnx-perf--round (drgnx-perf-stats drgnx-perf--slices))))
+      (defun drgnx-perf--retype-check ()
+        "No full draw, and the rows are what a fresh render of the view's keys gives."
+        (with-current-buffer (drgnx-perf--replace-view)
+          (let ((v drgnx-view) (parts nil))
+            (dotimes (i (drgnx-view-row-count v)) (push (drgnx-replace--render-row (aref (drgnx-view--keys v) i)) parts))
+            (and (= 10100 (drgnx-view-row-count v)) (zerop (plist-get (drgnx-view-stats v) :full-draws))
+                 (not (drgnx-view--check v))
+                 (equal (buffer-substring-no-properties (drgnx-view--start v) (point-max)) (apply #'concat (nreverse parts)))
+                 t))))
+      (defun drgnx-perf--retype-teardown ()
+        (advice-remove 'drgnx-view--draw-buffer #'drgnx-perf--slice-timed)
+        (drgnx-perf--replace-teardown))
       t)))
 
 (defun drgnx-perf-run--live-setup-form ()
@@ -318,7 +355,7 @@ session functions the check and the teardown use."
 (defun drgnx-perf-run--workloads ()
   "The workloads: (NAME :setup FORM :each FORM :actions ACTIONS :check FORM :measure FORM :teardown FORM :repeat N).
 Every workload runs three times (medians are kept); :each runs before each repeat, :check after it (an
-error if it does not hold)."
+error if it does not hold).  With :actions, :measure runs after the input and its plist joins the run's."
   (let ((type (lambda (s) (list :type s))) (keys (lambda (k n) (make-list n (list :keys k))))
         (kill-fixture (format "(progn (when-let* ((b (find-buffer-visiting %S))) (with-current-buffer b (set-buffer-modified-p nil)) (kill-buffer b)) t)"
                               (or drgnx-perf-run--fixture ""))))
@@ -444,6 +481,14 @@ error if it does not hold)."
        :actions ,(make-list 2 (funcall type "(setq y 2) "))
        :check "(drgnx-perf--replace-check)"
        :teardown ,(concat "(progn (drgnx-perf--replace-teardown) " kill-fixture ")"))
+      ;; retyping the replacement over 10k listed matches: the rows are patched in place, in slices
+      (replace-retype
+       :setup ,(drgnx-perf-run--replace-setup-form)
+       :each "(progn (drgnx-perf--retype-arm) t)"
+       :actions ,(make-list 5 (funcall type "pi"))
+       :measure "(drgnx-perf--retype-measure)"
+       :check "(drgnx-perf--retype-check)"
+       :teardown "(progn (drgnx-perf--retype-teardown) t)")
       ;; typing while the Live view shows frames from a mock browser (30 a second, each once the last was acked)
       (live-view
        :setup ,(drgnx-perf-run--live-setup-form)
@@ -671,7 +716,9 @@ when a step fails."
                     (push (drgnx-perf-run--call sess measure 120) runs)
                   (drgnx-perf-run--call sess (format "(progn %s (drgnx-perf-begin) t)" (if audit "(drgnx-perf-audit-begin)" "")))
                   (drgnx-ui-measure sess actions)
-                  (push (drgnx-perf-run--call sess "(drgnx-perf-end)") runs)
+                  (push (append (drgnx-perf-run--call sess "(drgnx-perf-end)")
+                                (and measure (drgnx-perf-run--call sess measure 120)))   ; what input cannot show
+                        runs)
                   (when audit
                     (setq audit-rows (append audit-rows (append (drgnx-perf-run--call sess "(vconcat (seq-take (drgnx-perf-audit-end) 30))") nil)))))
                 (when (plist-get spec :check)

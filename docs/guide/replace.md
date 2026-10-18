@@ -20,6 +20,12 @@ installed, else `git grep` or grep, in the background. Results stream in, groupe
 a tick box and shows the change as old → new (the old text struck through). A file's box ticks or unticks all its
 matches. A click or `RET` on a row opens the file at the match.
 
+The results update in place: typing a replacement redraws each match's row with its new preview (the rows the window
+shows first), a file searched again changes only its own rows, and a new search takes the old rows out a few hundred
+at a time, never in one go; typing is never kept waiting, even over 10,000 matches. The list keeps its place: rows
+changing above the ones you look at do not scroll them away. While the Search view is hidden (another sidebar view,
+the sidebar closed) it draws nothing; it catches up when it is shown again.
+
 ## Symbol or text
 
 **Symbol** is on when point is on a name the buffer's language server can rename (Replace in Files turns it on by
@@ -77,5 +83,9 @@ palette, category Search.
 ## Tests
 
 `test/unit/mod-replace-engine-test.el` (the engine: ripgrep, git grep and grep, stale matches, symbol edits, undo) and
-`test/unit/mod-replace-view-test.el` (the view, the find bar, 10k matches streaming); `test/ui/editor-m11c1-test.el` (`drgnx test --ui`) walks the Search view with results, the find bar, the Agent and Zen layouts, the Browser layout without WebKit, the Live view on a mock browser and the Keyboard Shortcuts editor recording a chord on a graphical frame, with a screenshot of each. The perf workload
-`replace-typing` types in a file while the Search view lists 10k matches ([perf.md](../develop/perf.md)).
+`test/unit/mod-replace-view-test.el` (the view, the find bar; on the virtual clock, 10k matches streaming and a
+replacement patching their rows in slices of at most 576, a rescanned file, a new search, a hidden view, no marker per
+file; the same with real searches on the wall clock, tagged `:timing`); `test/ui/view-ui-test.el` (`drgnx test --ui`)
+types a replacement over 10k rows and checks the jank guard saw nothing; `test/ui/editor-m11c1-test.el` walks the Search view with results, the find bar, the Agent and Zen layouts, the Browser layout without WebKit, the Live view on a mock browser and the Keyboard Shortcuts editor recording a chord on a graphical frame, with a screenshot of each. The perf workload
+`replace-typing` types in a file while the Search view lists 10k matches, and `replace-retype` types a replacement
+over them ([perf.md](../develop/perf.md)).

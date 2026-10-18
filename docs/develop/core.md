@@ -416,7 +416,9 @@ timer and non-nil for an idle one (once per pause), as in `run-at-time` and `run
   `ui/face` owns quick help's `quickhelp-timeout`, `-unmap`, `-look` and `-hover` and the start page's
   `start-first-frame`, `ui/terminal-popups` the debounced `tty-popups-show`, `ui/terminal` the per-frame
   `(tty-fallback-hint . FRAME)`, `tools/jobs` the coalesced `job-ui-recount`, `tools/ai` the `ai-probe` one-shot; the
-  ghost-text pause is an idle debounce `(ai-ghost . BUFFER)` owned by the buffer, and an Ask's search limit
+  ghost-text pause is an idle debounce `(ai-ghost . BUFFER)` owned by the buffer, the Search view's typing pause
+  and its pause after a listed file changed are debounces `(replace-pause . BUFFER)` and `(replace-refresh . BUFFER)`
+  owned by the view's buffer (its rows are a view: below), and an Ask's search limit
   `(ai-grep . PROCESS)` by the search process (its sentinel cancels it). With no run of the owner nothing starts.
 
 ### What the fire wrapper guarantees
@@ -840,6 +842,15 @@ still to delete count), `(drgnx-view-pending-p VIEW)` (marks not drawn, or work 
 counts every row rendered (patched, inserted or appended, an error row too); `:rows-grown` the rows that took GROW's
 text; `:appended` the rows added; `:removed` the rows deleted. Without VIEW it sums every live view
 (`:max-slice-rows`: the largest).
+
+### Clients
+
+The Search view (`modules/tools/drgnx-replace.el`, type `replace-results`, defined with its sidebar section): DELAY 0,
+SLICE `drgnx-view-slice`, `eq` keys. A match's key is its plist; a file's header is `(drgnx-replace-file . FILE)`,
+made once per search. Arrivals append (a new file after its header) or insert after the file's last row; a new
+replacement text marks every match row dirty (headers stay); a file searched again removes its old rows and inserts
+the new ones after its header, marked dirty for its box; a new search resets the view. PATCHED updates the status
+line. Tests: `drgnx-replace/` in `test/unit/mod-replace-view-test.el`, `drgnx-view-ui/` in `test/ui/view-ui-test.el`.
 
 ### The invariant
 
