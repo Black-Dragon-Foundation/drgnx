@@ -100,25 +100,36 @@ history) keep every change of the clipboard, and Emacs by default changes it a l
 (on by default) deals with three clashes:
 
 - **Kills do not fill the history.** The line and word kills (`C-k`, `M-d`, `M-DEL`, `C-S-DEL`, `M-z`, the sexp,
-  sentence and paragraph kills, evil's `x` and `D`) stay in Emacs's kill ring; they are listed in
+  sentence and paragraph kills, evil's `x` and `D`, and drgnx's Delete Word Left and Delete to Line Start —
+  `Ctrl+Backspace` and `Cmd+Backspace` in the VS Code profile) stay in Emacs's kill ring; they are listed in
   `drgnx-clipboard-local-kills`. Everything else reaches the system clipboard as in plain Emacs: copy and cut,
   commands of other packages (Magit's copy commands, Embark's), and kills made by Lisp or a timer with no command
   running. In a terminal window the same rule decides what reaches the terminal's clipboard over OSC 52, so a
   laptop's manager is not flooded over SSH either. `C-y` still brings in what another program copied last. Setting
   `drgnx-clipboard-kills` to `all` gives Emacs's own behaviour back; code can bind `drgnx-clipboard-force` to push a
   kill whatever the command. A command's first kill decides for the whole command, and it pushes once.
-- **A clipboard owner that does not answer never freezes Emacs.** Emacs waits for ever for the program that owns
-  the clipboard; a stuck one froze the whole session. drgnx waits `drgnx-clipboard-read-timeout` seconds (1.5) —
-  it sets `x-selection-timeout` and `pgtk-selection-timeout` only while they are at Emacs's standard 0, so a value
-  you chose stays — and a paste that gets no answer comes from the kill ring, with one message per session
-  ("the clipboard owner didn't answer in 1.5 s"). macOS is untouched.
+- **A clipboard owner that does not answer cannot freeze Emacs for ever.** Emacs waits for ever for the program that
+  owns the clipboard; a stuck one froze the whole session. drgnx waits `drgnx-clipboard-read-timeout` seconds (1.5)
+  and a paste that gets no answer comes from the kill ring, with one message per session ("the clipboard owner
+  didn't answer in 1.5 s"). It sets the timeout variable only while it is at Emacs's standard 0, so a value you
+  chose stays. What is guaranteed depends on the window system; the wait is still a wait (Emacs does not take
+  input for up to 1.5 s per paste):
+
+  | Where | Guarantee |
+  |---|---|
+  | X11 (Emacs built for X) | `x-selection-timeout` bounds the read (Emacs 30 `src/xselect.c`). Read from the source; not run here. |
+  | Wayland (pgtk build) | `pgtk-selection-timeout` bounds the read (Emacs 30 `src/pgtkselect.c`, `pgtk_get_foreign_selection`). Run: in a headless compositor with a clipboard owner stopped with SIGSTOP, the read ends with an error after 1.50 s; with the timeout at 0 it never ends. An owner reached through XWayland was not tried. |
+  | macOS | Untouched: Emacs has no selection timeout there (the pasteboard is read in the same process), so drgnx claims nothing. |
+  | Terminal window | Nothing to bound: drgnx never reads the terminal's clipboard unless you turn that on ([terminal.md](terminal.md#clipboard)). |
 - **Selecting text does not create clipboard entries.** Some managers copy the selection (PRIMARY) into the
   clipboard, so every mouse selection or `shift`-selection becomes a history entry. drgnx looks, once at
   startup and without waiting, for Klipper with `SyncClipboards=true` in `klipperrc`, CopyQ with `copy_selection`
-  or `check_selection` on, and GPaste with *synchronize clipboards* and *primary to history* on (asked from
-  `gsettings` in the background, one second at most), on X11 and Wayland windows. With
-  `drgnx-clipboard-publish-selection` at `auto` (the default) it then turns `select-active-regions` off; `t` always
-  publishes selections, `nil` never does. The doctor shows what was found and what drgnx changed
+  or `check_selection` on, and GPaste with *synchronize clipboards* or *primary to history* on (asked from
+  `gsettings` in the background, one second at most; either one alone is enough, because *primary to history* puts
+  every selection into the history and *synchronize clipboards* copies it to the clipboard, which GPaste records),
+  on X11 and Wayland windows. With
+  `drgnx-clipboard-publish-selection` at `auto` (the default) it then turns `select-active-regions` off; `t` makes
+  selections publish (a setting such as `only` that already publishes stays), `nil` never does. The doctor shows what was found and what drgnx changed
   (`drgnx-clipboard-doctor-facts`).
 
 Module `editor/clipboard`. Tests: `test/unit/mod-clipboard-test.el`.

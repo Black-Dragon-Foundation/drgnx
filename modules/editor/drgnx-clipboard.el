@@ -14,7 +14,7 @@
 ;; - A clipboard owner that does not answer: reading the clipboard waits for the owner, and Emacs by default waits
 ;;   for ever.  `drgnx-clipboard-read-timeout' sets the wait (when the user did not), and a read that fails gives
 ;;   nil, so a yank pastes from the kill ring (one message per session).
-;; - Selecting text: a manager that syncs the selection (PRIMARY) with the clipboard makes every selection in Emacs
+;; - Selecting text: a manager that syncs the selection (PRIMARY) with the clipboard, or records it, makes every selection in Emacs
 ;;   a history entry.  drgnx finds Klipper, CopyQ and GPaste doing that and, with
 ;;   `drgnx-clipboard-publish-selection' `auto', turns `select-active-regions' off.
 ;;
@@ -43,10 +43,12 @@ behaviour, every kill reaches it."
   '(kill-line kill-whole-line kill-word backward-kill-word kill-sexp backward-kill-sexp kill-backward-up-list
               kill-sentence backward-kill-sentence kill-paragraph backward-kill-paragraph zap-to-char zap-up-to-char
               kill-visual-line kill-rectangle kill-comment comment-kill kill-forward-chars kill-backward-chars
-              evil-delete-line evil-delete-char evil-delete-backward-char-and-join)
+              evil-delete-line evil-delete-char evil-delete-backward-char-and-join
+              drgnx-editing-delete-word-back drgnx-editing-delete-line-back)
   "Commands whose kills stay in the kill ring when `drgnx-clipboard-kills' is `region'.
-The editing kills of Emacs (simple.el, lisp.el, paragraphs.el, newcomment.el, rect.el), and evil's x, X-like and D
-deletes.  A command not listed here, and a kill made with no command running, reaches the clipboard."
+The editing kills of Emacs (simple.el, lisp.el, paragraphs.el, newcomment.el, rect.el), evil's x, X-like and D
+deletes, and drgnx's own Delete Word Left and Delete to Line Start (they call `backward-kill-word' and `kill-line'
+but run as themselves).  A command not listed here, and a kill made with no command running, reaches the clipboard."
   :type '(repeat symbol) :group 'drgnx)
 
 (defvar drgnx-clipboard-force nil
@@ -61,7 +63,8 @@ as long as it takes).  On a timeout the paste comes from the kill ring."
 (defcustom drgnx-clipboard-publish-selection 'auto
   "Whether selecting text publishes it (PRIMARY selection), which a syncing clipboard manager records.
 `auto': off (`select-active-regions' nil) while a manager that syncs the selection with the clipboard is found
-(Klipper, CopyQ, GPaste), otherwise as it is.  t: always on.  nil: always off."
+(Klipper, CopyQ, GPaste), otherwise as it is.  t: selections publish (a value already non-nil, such as `only',
+stays).  nil: never."
   :type '(choice (const :tag "Off when a manager syncs" auto) (const :tag "Always on" t) (const :tag "Always off" nil))
   :group 'drgnx
   :initialize #'custom-initialize-default
@@ -71,8 +74,6 @@ as long as it takes).  On a timeout the paste comes from the kill ring."
 
 ;;;; Kills
 
-(defvar drgnx-clipboard--orig-cut nil "The `interprogram-cut-function' drgnx wrapped.")
-(defvar drgnx-clipboard--orig-paste nil "The `interprogram-paste-function' drgnx wrapped.")
 (defvar drgnx-clipboard--installed nil "Non-nil while the wrappers are in place.")
 (defvar drgnx-clipboard--in-command nil
   "Non-nil while a command runs (`pre-command-hook' to `post-command-hook'); between commands `this-command' is
@@ -90,33 +91,37 @@ Later kills of the same command follow it: a command such as `kill-whole-line' k
   "`post-command-hook': no command runs."
   (setq drgnx-clipboard--in-command nil drgnx-clipboard--decision nil))
 
+(defun drgnx-clipboard--command-error (&rest _)
+  "`command-error-function' (before): a command that signals skips `post-command-hook', so it ends here."
+  (drgnx-clipboard--end-command))
+
 (defun drgnx-clipboard--local-command-p ()
   "Non-nil when the running command is one of `drgnx-clipboard-local-kills'.
 `real-this-command' is the key's command; `this-command' is the target when the palette or M-x ran it."
   (or (memq this-command drgnx-clipboard-local-kills) (memq real-this-command drgnx-clipboard-local-kills)))
 
-(defun drgnx-clipboard--cut (text)
-  "`interprogram-cut-function': give TEXT to the wrapped function unless this is a local kill.
+(defun drgnx-clipboard--cut (orig text)
+  "Around `interprogram-cut-function': give TEXT to ORIG (the wrapped function) unless this is a local kill.
 The command's first kill decides for the whole command: a local kill never reaches the clipboard, any other
 reaches it once.  With no command running (a timer, a filter, Lisp) it reaches it, as in plain Emacs.
 `drgnx-clipboard-force' and `drgnx-clipboard-kills' `all' skip the decision."
-  (when drgnx-clipboard--orig-cut
+  (when orig
     (cond ((or drgnx-clipboard-force (eq drgnx-clipboard-kills 'all) (not drgnx-clipboard--in-command))
-           (funcall drgnx-clipboard--orig-cut text))
+           (funcall orig text))
           (drgnx-clipboard--decision nil)
           ((drgnx-clipboard--local-command-p)
            (setq drgnx-clipboard--decision 'blocked))
           (t (setq drgnx-clipboard--decision 'pushed)
-             (funcall drgnx-clipboard--orig-cut text)))))
+             (funcall orig text)))))
 
 (defvar drgnx-clipboard--warned nil "Non-nil once the slow-owner message was shown this session.")
 
-(defun drgnx-clipboard--paste ()
-  "`interprogram-paste-function': the wrapped function's answer; nil, with one message, when it fails
+(defun drgnx-clipboard--paste (orig)
+  "Around `interprogram-paste-function': ORIG's answer; nil, with one message, when it fails
 (an owner that did not answer in time), so the paste comes from the kill ring."
-  (when drgnx-clipboard--orig-paste
+  (when orig
     (condition-case nil
-        (funcall drgnx-clipboard--orig-paste)
+        (funcall orig)
       (error
        (unless drgnx-clipboard--warned
          (setq drgnx-clipboard--warned t)
@@ -191,8 +196,9 @@ reaches it once.  With no command running (a timer, a filter, Lisp) it reaches i
                                   "^\\(?:copy_selection\\|check_selection\\)=true\\s-*$")))
 
 (defun drgnx-clipboard--gpaste-ask (done)
-  "Ask `gsettings' (asynchronously, 1 s at most) whether GPaste syncs the selection and the clipboard; call
-DONE once with t or nil.  Without gsettings, DONE gets nil at once."
+  "Ask `gsettings' (asynchronously, 1 s at most) whether GPaste records selections; call DONE once with t or nil.
+Either setting is enough: `primary-to-history' puts every selection (PRIMARY) into the history directly, and
+`synchronize-clipboards' copies it to the clipboard, which GPaste records.  Without gsettings, DONE gets nil at once."
   (let ((program (executable-find "gsettings"))
         (keys '("synchronize-clipboards" "primary-to-history"))
         (answers nil) (procs nil) (finished nil) (timer nil))
@@ -216,7 +222,7 @@ DONE once with t or nil.  Without gsettings, DONE gets nil at once."
                                    (unless (process-live-p p)
                                      (push (cons key (equal (string-trim out) "true")) answers)
                                      (when (= (length answers) (length keys))
-                                       (finish (cl-every #'cdr answers))))))
+                                       (finish (cl-some #'cdr answers))))))
                     (error nil))
                   procs)))
         (unless (cl-every #'identity procs) (finish nil))))))
@@ -258,7 +264,9 @@ a second, and the setting follows it.  Never blocks, never prompts."
   "Set `select-active-regions' as `drgnx-clipboard-publish-selection' says (given the manager found)."
   (let* ((manager (plist-get drgnx-clipboard--state :manager))
          (mode drgnx-clipboard-publish-selection)
-         (want (cond ((eq mode t) '(t)) ((null mode) '(nil)) (manager '(nil)))))
+         (want (cond ((eq mode t) (unless select-active-regions '(t))) ; `only' already publishes: it stays
+                     ((null mode) '(nil))
+                     (manager '(nil)))))
     (cond (want
            (unless (equal (list select-active-regions) want)
              (unless drgnx-clipboard--saved-regions
@@ -275,11 +283,12 @@ a second, and the setting follows it.  Never blocks, never prompts."
 (defun drgnx-clipboard-install ()
   "Put the wrappers and the read timeout in place (once); then look for a syncing manager."
   (unless drgnx-clipboard--installed
-    (setq drgnx-clipboard--installed t
-          drgnx-clipboard--orig-cut (default-value 'interprogram-cut-function)
-          drgnx-clipboard--orig-paste (default-value 'interprogram-paste-function))
-    (set-default 'interprogram-cut-function #'drgnx-clipboard--cut)
-    (set-default 'interprogram-paste-function #'drgnx-clipboard--paste)
+    (setq drgnx-clipboard--installed t)
+    ;; advice on the global value, not a replaced value: a later `setq' of the variable or another package's wrapper
+    ;; neither loses nor strands these layers, and uninstall takes only these out
+    (add-function :around (default-value 'interprogram-cut-function) #'drgnx-clipboard--cut)
+    (add-function :around (default-value 'interprogram-paste-function) #'drgnx-clipboard--paste)
+    (add-function :before (default-value 'command-error-function) #'drgnx-clipboard--command-error)
     (add-hook 'pre-command-hook #'drgnx-clipboard--new-command)
     (add-hook 'post-command-hook #'drgnx-clipboard--end-command)
     (add-hook 'after-make-frame-functions #'drgnx-clipboard--frame-hook)
@@ -289,10 +298,9 @@ a second, and the setting follows it.  Never blocks, never prompts."
 (defun drgnx-clipboard-uninstall ()
   "Put everything back as it was."
   (when drgnx-clipboard--installed
-    (when (eq (default-value 'interprogram-cut-function) #'drgnx-clipboard--cut)
-      (set-default 'interprogram-cut-function drgnx-clipboard--orig-cut))
-    (when (eq (default-value 'interprogram-paste-function) #'drgnx-clipboard--paste)
-      (set-default 'interprogram-paste-function drgnx-clipboard--orig-paste))
+    (remove-function (default-value 'interprogram-cut-function) #'drgnx-clipboard--cut)
+    (remove-function (default-value 'interprogram-paste-function) #'drgnx-clipboard--paste)
+    (remove-function (default-value 'command-error-function) #'drgnx-clipboard--command-error)
     (remove-hook 'pre-command-hook #'drgnx-clipboard--new-command)
     (remove-hook 'post-command-hook #'drgnx-clipboard--end-command)
     (setq drgnx-clipboard--in-command nil drgnx-clipboard--decision nil)
@@ -301,7 +309,7 @@ a second, and the setting follows it.  Never blocks, never prompts."
     (when drgnx-clipboard--saved-regions
       (setq select-active-regions (car drgnx-clipboard--saved-regions)
             drgnx-clipboard--saved-regions nil))
-    (setq drgnx-clipboard--installed nil drgnx-clipboard--orig-cut nil drgnx-clipboard--orig-paste nil
+    (setq drgnx-clipboard--installed nil
           drgnx-clipboard--state nil drgnx-clipboard--graphical-seen nil)
     (cl-incf drgnx-clipboard--generation)))
 

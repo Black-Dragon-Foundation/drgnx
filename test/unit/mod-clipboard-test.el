@@ -27,12 +27,11 @@ uninstalled afterwards."
           (interprogram-cut-function (lambda (text) (push text drgnx-clip-test--pushed)))
           (interprogram-paste-function ,paste-function)
           (kill-ring nil) (kill-ring-yank-pointer nil) (kill-do-not-save-duplicates nil)
-          (pre-command-hook nil) (post-command-hook nil) (after-make-frame-functions nil)
+          (command-error-function command-error-function) (pre-command-hook nil) (post-command-hook nil) (after-make-frame-functions nil)
           (select-active-regions t) (x-selection-timeout 0) (pgtk-selection-timeout 0)
           (drgnx-clipboard-kills 'region) (drgnx-clipboard-force nil)
           (drgnx-clipboard-publish-selection 'auto) (drgnx-clipboard-read-timeout 1.5)
-          (drgnx-clipboard--installed nil) (drgnx-clipboard--orig-cut nil) (drgnx-clipboard--orig-paste nil)
-          (drgnx-clipboard--decision nil) (drgnx-clipboard--in-command nil) (drgnx-clipboard--warned nil) (drgnx-clipboard--timeout-set nil)
+          (drgnx-clipboard--installed nil)          (drgnx-clipboard--decision nil) (drgnx-clipboard--in-command nil) (drgnx-clipboard--warned nil) (drgnx-clipboard--timeout-set nil)
           (drgnx-clipboard--state nil) (drgnx-clipboard--saved-regions nil) (drgnx-clipboard--graphical-seen nil)
           (drgnx-clipboard--generation 0))
      (make-directory drgnx-clip-test--bin t)
@@ -88,22 +87,49 @@ uninstalled afterwards."
       (kill-new "from nowhere"))
     (should (equal drgnx-clip-test--pushed '("from nowhere" "from a timer" "from lisp")))))
 
-(ert-deftest drgnx-clip/the-denylist-holds-for-every-local-kill ()
+(ert-deftest drgnx-clip/a-kill-run-from-the-palette-is-judged-by-its-target ()
+  ;; this-command is the target, the real one is the palette's
   (drgnx-clip-test--env nil
     (drgnx-clipboard-install)
-    (dolist (command drgnx-clipboard-local-kills)
-      (drgnx-clip-test--as command (lambda () (kill-new "x") (kill-append "y" nil))))
-    (should-not drgnx-clip-test--pushed)
-    (dolist (command '(kill-line kill-whole-line kill-word backward-kill-word kill-sexp backward-kill-sexp kill-sentence
-                                 backward-kill-sentence kill-paragraph backward-kill-paragraph zap-to-char zap-up-to-char
-                                 kill-visual-line kill-rectangle kill-comment comment-kill kill-forward-chars
-                                 kill-backward-chars kill-backward-up-list))
-      (should (memq command drgnx-clipboard-local-kills)))
-    ;; run from the palette: this-command is the target, the real one is the palette's
     (let ((this-command 'kill-line) (real-this-command 'drgnx-palette))
       (drgnx-clipboard--new-command)
       (kill-new "x"))
     (should-not drgnx-clip-test--pushed)))
+
+(ert-deftest drgnx-clip/drgnx-kill-commands-stay-local-through-the-command-loop ()
+  ;; drgnx's own commands that kill (Delete Word Left, Delete to Line Start, Delete Line) run as themselves, not as
+  ;; kill-word: each is pressed as a key and nothing may reach the clipboard; a control (kill-region) does
+  (drgnx-clip-test--env nil
+    (drgnx-clipboard-install)
+    (save-window-excursion
+      (let ((buf (generate-new-buffer " *clip-drgnx-keys*")) (map (make-sparse-keymap)))
+        (keymap-set map "<f5>" #'drgnx-editing-delete-word-back)
+        (keymap-set map "<f6>" #'drgnx-editing-delete-line-back)
+        (keymap-set map "<f7>" #'kill-whole-line)
+        (keymap-set map "<f8>" #'kill-region)
+        (unwind-protect
+            (progn
+              (switch-to-buffer buf)
+              (use-local-map map)
+              (setq-local transient-mark-mode t)
+              (insert "alpha beta gamma\ndelta")
+              (goto-char 12)
+              (execute-kbd-macro (kbd "<f5>"))
+              (should (equal (car kill-ring) "beta "))
+              (execute-kbd-macro (kbd "<f6>"))
+              (should (equal (car kill-ring) "alpha "))
+              (execute-kbd-macro (kbd "<f7>"))
+              (should-not drgnx-clip-test--pushed)
+              (set-mark (point-min))
+              (goto-char (point-max))
+              (execute-kbd-macro (kbd "<f8>"))
+              (should (= (length drgnx-clip-test--pushed) 1)))
+          (kill-buffer buf))))))
+
+(ert-deftest drgnx-clip/every-drgnx-kill-command-is-in-the-denylist ()
+  ;; found by grepping core, wb and modules for kill-* called on text deleted as editing
+  (dolist (command '(drgnx-editing-delete-word-back drgnx-editing-delete-line-back))
+    (should (memq command drgnx-clipboard-local-kills))))
 
 (ert-deftest drgnx-clip/other-kills-stay-in-the-kill-ring ()
   (dolist (command '(kill-line kill-word backward-kill-word kill-whole-line))
@@ -282,9 +308,20 @@ uninstalled afterwards."
       (should select-active-regions)                  ; not known yet
       (should (drgnx-clip-test--wait (lambda () (not select-active-regions)) 3))
       (should (eq (plist-get (drgnx-clipboard-doctor-facts) :manager) 'gpaste))))
-  ;; one of the two settings off: not syncing
+  ;; either setting alone records a selection (primary-to-history directly, synchronize-clipboards through the clipboard)
   (drgnx-clip-test--env nil
     (drgnx-clip-test--gsettings "[ \"$3\" = primary-to-history ] && echo false || echo true")
+    (drgnx-clip-test--x11 '("bash")
+      (drgnx-clipboard-install)
+      (should (drgnx-clip-test--wait (lambda () (not select-active-regions)) 3))))
+  (drgnx-clip-test--env nil
+    (drgnx-clip-test--gsettings "[ \"$3\" = primary-to-history ] && echo true || echo false")
+    (drgnx-clip-test--x11 '("bash")
+      (drgnx-clipboard-install)
+      (should (drgnx-clip-test--wait (lambda () (not select-active-regions)) 3))))
+  ;; both off: not syncing
+  (drgnx-clip-test--env nil
+    (drgnx-clip-test--gsettings "echo false")
     (drgnx-clip-test--x11 '("bash")
       (drgnx-clipboard-install)
       (drgnx-clip-test--wait (lambda () nil) 0.5)
@@ -318,6 +355,55 @@ uninstalled afterwards."
       (drgnx-clipboard-install)
       (should-not select-active-regions))))
 
+(ert-deftest drgnx-clip/publish-t-keeps-the-users-only ()
+  ;; select-active-regions `only' (selections in the active region, not mouse-drag ones) is already publishing
+  (drgnx-clip-test--env nil
+    (setq drgnx-clipboard-publish-selection t select-active-regions 'only)
+    (drgnx-clipboard-install)
+    (should (eq select-active-regions 'only))
+    (should-not (plist-get (drgnx-clipboard-doctor-facts) :changed)))
+  (drgnx-clip-test--env nil
+    (setq drgnx-clipboard-publish-selection t select-active-regions nil)
+    (drgnx-clipboard-install)
+    (should (eq select-active-regions t))
+    (drgnx-clipboard-uninstall)
+    (should-not select-active-regions)))
+
+(ert-deftest drgnx-clip/a-wrapper-added-on-top-does-not-leave-a-swallowing-one ()
+  ;; a third party wraps the cut function after drgnx did; uninstall must take drgnx's layer out of the stack
+  (drgnx-clip-test--env nil
+    (let ((seen nil))
+      (drgnx-clipboard-install)
+      (add-function :around (default-value 'interprogram-cut-function)
+                    (lambda (orig text) (push text seen) (funcall orig text))
+                    '((name . third-party)))
+      (drgnx-clipboard-uninstall)
+      (kill-new "after")
+      (should (equal seen '("after")))
+      (should (equal drgnx-clip-test--pushed '("after")))))
+  ;; the global value replaced by someone else: their function gets the kills, uninstall leaves it be
+  (drgnx-clip-test--env nil
+    (let ((mine nil))
+      (drgnx-clipboard-install)
+      (set-default 'interprogram-cut-function (lambda (text) (push text mine)))
+      (kill-new "theirs")
+      (drgnx-clipboard-uninstall)
+      (kill-new "theirs 2")
+      (should (equal mine '("theirs 2" "theirs"))))))
+
+(ert-deftest drgnx-clip/a-command-that-errors-ends-the-command ()
+  ;; post-command-hook does not run after an error; command-error-function does
+  (drgnx-clip-test--env nil
+    (drgnx-clipboard-install)
+    (should (advice-function-member-p #'drgnx-clipboard--command-error (default-value 'command-error-function)))
+    (drgnx-clipboard--new-command)
+    (drgnx-clipboard--command-error '(error "x") "" nil)
+    (let ((this-command 'kill-line))
+      (kill-new "from a timer"))
+    (should (equal drgnx-clip-test--pushed '("from a timer")))
+    (drgnx-clipboard-uninstall)
+    (should-not (advice-function-member-p #'drgnx-clipboard--command-error (default-value 'command-error-function)))))
+
 (ert-deftest drgnx-clip/uninstall-puts-everything-back ()
   (drgnx-clip-test--env #'ignore
     (let ((cut interprogram-cut-function))
@@ -350,7 +436,7 @@ uninstalled afterwards."
       ;; enabled, the same call installs it
       (cl-letf (((symbol-function 'drgnx-module-disabled-p) (lambda (_m) nil)))
         (drgnx-modules--run-one 'editor/clipboard spec 'startup))
-      (should (eq interprogram-cut-function #'drgnx-clipboard--cut)))))
+      (should (advice-function-member-p #'drgnx-clipboard--cut interprogram-cut-function)))))
 
 (provide 'mod-clipboard-test)
 ;;; mod-clipboard-test.el ends here
