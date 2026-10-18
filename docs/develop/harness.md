@@ -321,8 +321,9 @@ the error names it: `action 2 (:keys "bad"): …`; later actions are not sent. `
 
 Only sessions this harness created can be addressed. A name must match `drgnx-ui-N`, its run directory must
 exist under the state root (`$DRGNX_UI_STATE`, default `$XDG_STATE_HOME/drgnx/ui`), and its socket must be the
-one the harness assigned. Anything else — `server`, another Emacs's socket path, `../…` — is refused, so the
-user's own Emacs can never be driven. `emacsclient` is always called with `-a false`, so a missing socket can
+one the harness assigned; the `name` and `run` in its session.json must be the ones the harness computed (the
+session's Emacs can write that file, and a forged name would point frames and WM calls at another session). Anything
+else — `server`, another Emacs's socket path, `../…` — is refused, so the user's own Emacs can never be driven. `emacsclient` is always called with `-a false`, so a missing socket can
 never make it start a new Emacs daemon (as `ALTERNATE_EDITOR=""` would).
 
 `stop` first asks the session's Emacs to exit (`emacsclient --eval (kill-emacs)`, up to 5 s — its exit hooks run, so
@@ -379,7 +380,7 @@ process group) with the same caps (`MemoryMax=3G`, `RuntimeMaxSec`) and the same
 |---|---|---|---|
 | `mutter` | `dbus-run-session -- mutter --headless --wayland --no-x11 --virtual-monitor WxH…` | pgtk, full screen | its Wayland display (named after the session) in `$XDG_RUNTIME_DIR` |
 | `sway` | `dbus-run-session -- sway -c RUN/sway.conf` with `WLR_BACKENDS=headless`, `WLR_HEADLESS_OUTPUTS=N`, `WLR_RENDERER=pixman`, `WLR_LIBINPUT_NO_DEVICES=1` (no GPU, seat or input devices) | pgtk, tiled (no `--fullscreen`), on `HEADLESS-1` | a runtime directory of its own (`$XDG_RUNTIME_DIR/drgnx-ui/<hash>/<name>-xdg`, mode 0700) for sway's IPC socket (pinned there with `SWAYSOCK=…/sway-ipc.sock`) and its Wayland display; XWayland is off, so no X display in the shared `/tmp` |
-| `x11` | `dbus-run-session -- sh -c SCRIPT`: `Xvfb :N -noreset -auth RUN/Xauthority -displayfd 3 -screen 0 (N·W)xHx24`, one `xrandr --setmonitor XVFB-k` per monitor | the X11 build (`$DRGNX_UI_X11_EMACS`, else `emacs-lucid`) | its own bus and runtime directory (as sway); a display `:N` reserved for it; only clients with its cookie (`RUN/Xauthority`, `XAUTHORITY`) can connect; no `WAYLAND_DISPLAY` |
+| `x11` | `dbus-run-session -- sh -c SCRIPT`: `Xvfb :N -noreset -auth RUN/Xauthority -displayfd 3 -screen 0 (N·W)xHx24`, one `xrandr --setmonitor XVFB-k` per monitor | the X11 build (`$DRGNX_UI_X11_EMACS`, else `emacs-lucid`) with `--no-x-resources`: it reads no `~/.Xdefaults`, `$XENVIRONMENT` or app-defaults | its own bus and runtime directory (as sway); a display `:N` reserved for it; only clients with its cookie (`RUN/Xauthority`, `XAUTHORITY`) can connect; no `WAYLAND_DISPLAY` |
 | `i3` | the same, then `i3 -c RUN/i3.conf` (no bar, no borders), focused on `XVFB-1` | the X11 build, with `I3SOCK` set as i3 sets it for its children | as x11, and i3's IPC socket in the session's socket directory (`ipc-socket` in the config) |
 
 The configs are generated per session: `sway.conf` (one `output HEADLESS-k resolution WxH position X 0` per monitor,
@@ -390,21 +391,24 @@ session's shell ends i3 and Xvfb when Emacs ends, and they die with that shell e
 `-noreset` Xvfb drops the monitors when the last client (`xrandr`) disconnects.
 
 **Paths.** The harness writes its paths into the WM configs and shell lines as they are, so they must stay plain: for
-sway, the Emacs binary, the run directory and the init directory must not contain quotes, `$` or backslashes; i3's socket
+sway, the Emacs binary, the run directory and the init directory must not contain quotes, `$`, backslashes or newlines; i3's socket
 path may hold only letters, digits and `-_./+@%:=,`. A session whose paths do not qualify fails to start and says why.
 The socket paths must also fit a socket address: the session's runtime directory is short
 (`$XDG_RUNTIME_DIR/drgnx-ui/<hash>/<name>-xdg`), and sway's socket path is refused above 100 bytes.
 
 **X displays.** A number is picked from `:90` up: free when no X lock or socket has it and `make-directory` of
 `$XDG_RUNTIME_DIR/drgnx-ui/x11/N` succeeds (atomic, shared by every state root of the user; the directory names the
-session that holds it, and one whose session is gone is taken over). Xvfb is ready when it writes the number to
+session that holds it). One whose session is gone is taken over under a lock (`x11/.lock`, made with
+`make-directory`, waited for at most 2 s, taken over when older than 10 s), and is checked again under it: of two starts
+that found it stale, only the first gets it. Xvfb is ready when it writes the number to
 `RUN/xvfb.ready` (`-displayfd`); if it exits first (another X server took the number after all), the session ends and the
 start reports it.
 
 `stop` also removes what a killed compositor leaves: the session's runtime directory once no process names its run
 directory, and for x11/i3 — only for the display the harness reserved for that session, never a number session.json
-merely names — the X socket and lock once the session's own Xvfb (`RUN/xvfb.pid`) is dead and if they are yours; then
-the reservation. `ui frame` opens the frame on the session's own display (`WAYLAND_DISPLAY` and `XDG_RUNTIME_DIR` of the
+merely names — the X socket and lock once the session's own Xvfb (`RUN/xvfb.pid`) is dead, had listened on that number (it wrote
+it to `RUN/xvfb.ready`; an Xvfb that failed to bind owned nothing) and if they are yours; then the reservation, which a
+start that fails after taking it also gives back at once. `ui frame` opens the frame on the session's own display (`WAYLAND_DISPLAY` and `XDG_RUNTIME_DIR` of the
 sway runtime directory, or `DISPLAY=:N` and its `XAUTHORITY`), never the caller's. A `test --ui` session runs in a
 transient scope (`systemd-run --user --scope`, `MemoryMax=3G`) where there is a systemd user session, stopped when the
 run ends, so nothing it started outlives it.

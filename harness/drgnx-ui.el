@@ -212,14 +212,56 @@ run directory is gone (a crashed session) is taken over."
          ((condition-case nil (progn (make-directory r) t) (file-already-exists nil))
           (drgnx-ui--write owner run)
           (setq got n))
-         ;; stale: its session's run directory is gone, or it never got an owner (a minute is plenty)
-         ((let ((o (drgnx-ui--reservation-owner n)))
-            (if o (not (file-directory-p o))
-              (< (float-time (or (file-attribute-modification-time (file-attributes r)) 0)) (- (float-time) 60))))
-          (ignore-errors (delete-directory r t))           ; then this number again…
-          (when (file-exists-p r) (cl-incf n)))            ; …unless it could not be removed
+         ((and (drgnx-ui--reservation-stale-p n) (drgnx-ui--take-over-reservation n run)) (setq got n))
          (t (cl-incf n)))))
     got))
+
+(defun drgnx-ui--reservation-stale-p (n)
+  "Non-nil if display N's reservation is stale: its session's run directory is gone, or it never got an owner
+\(a minute is plenty)."
+  (let ((r (expand-file-name (number-to-string n) (drgnx-ui--display-reservations)))
+        (o (drgnx-ui--reservation-owner n)))
+    (and (file-directory-p r)
+         (if o (not (file-directory-p o))
+           (< (float-time (or (file-attribute-modification-time (file-attributes r)) 0)) (- (float-time) 60))))))
+
+(defvar drgnx-ui--reservation-lock-wait 2.0
+  "Seconds a start waits for the reservations' lock before it skips the number it wanted.")
+
+(defun drgnx-ui--call-with-reservation-lock (fn)
+  "Call FN holding the reservations' lock (`x11/.lock', made with `make-directory'); its value, or nil when
+the lock stays taken for `drgnx-ui--reservation-lock-wait' seconds.  A lock older than 10 s is a crashed
+holder's and is taken over."
+  (let ((lock (expand-file-name ".lock" (drgnx-ui--display-reservations)))
+        (deadline (+ (float-time) drgnx-ui--reservation-lock-wait))
+        held)
+    (while (and (not held) (< (float-time) deadline))
+      (if (condition-case nil (progn (make-directory lock) t) (file-already-exists nil))
+          (setq held t)
+        (let ((mt (file-attribute-modification-time (file-attributes lock))))
+          (if (and mt (< (float-time mt) (- (float-time) 10)))
+              (ignore-errors (delete-directory lock))
+            (sleep-for 0.02)))))
+    (when held
+      (unwind-protect (funcall fn) (ignore-errors (delete-directory lock))))))
+
+(defun drgnx-ui--take-over-reservation (n run)
+  "Give the stale reservation of display N to RUN; non-nil if this call won it.  Under the reservations' lock
+the staleness is checked again, so of two starts that both found N stale only the first takes it (without
+the lock the second would delete the first's fresh reservation and take N too)."
+  (drgnx-ui--call-with-reservation-lock
+   (lambda ()
+     (let ((r (expand-file-name (number-to-string n) (drgnx-ui--display-reservations))))
+       (when (drgnx-ui--reservation-stale-p n)
+         (ignore-errors (delete-directory r t))
+         (when (condition-case nil (progn (make-directory r) t) (file-already-exists nil))
+           (drgnx-ui--write (expand-file-name "owner" r) run)
+           t))))))
+
+(defun drgnx-ui--release-display (n run)
+  "Give display N back, if RUN holds it."
+  (when (equal (drgnx-ui--reservation-owner n) run)
+    (delete-directory (expand-file-name (number-to-string n) (drgnx-ui--display-reservations)) t)))
 
 (defun drgnx-ui--own-display (display run)
   "DISPLAY's number when it is \":N\" with N ≥ 90 and reserved by RUN; else nil (session.json is not trusted)."
@@ -262,8 +304,8 @@ as Emacs, as mutter does with `--'.  Emacs is not full screen: sway tiles it.  N
 /etc/sway, no ~/.config/sway)."
   (let ((cmd (mapconcat #'shell-quote-argument (cons (drgnx-ui-emacs-bin) (drgnx-ui--emacs-args sess)) " ")))
     ;; sway reads `;' as a command separator unless the line is quoted, and expands `$'
-    (when (string-match-p "[\"'$\\]" cmd)
-      (drgnx-ui--fail "sway cannot run %s: its paths must not contain quotes, $ or backslashes" cmd))
+    (when (string-match-p "[\"'$\\\n]" cmd)
+      (drgnx-ui--fail "sway cannot run %s: its paths must not contain quotes, $, backslashes or newlines" cmd))
     ;; sway aborts when its socket path does not fit the 108 bytes of a socket address
     (let ((sock (drgnx-ui--sway-socket (plist-get sess :name) (file-name-directory (plist-get sess :run)))))
       (when (> (string-bytes sock) 100) (drgnx-ui--fail "%s is too long for sway's socket" sock)))
@@ -327,7 +369,9 @@ killed."
                  ;; as i3 gives its children: Emacs under i3 knows its WM
                  (format "export I3SOCK=%s\n" sock))
        "wm=\n")
-     (mapconcat #'shell-quote-argument (cons (drgnx-ui-x11-emacs-bin) (drgnx-ui--emacs-args sess)) " ")
+     ;; --no-x-resources: no ~/.Xdefaults, $XENVIRONMENT or app-defaults — nothing of the user's
+     (mapconcat #'shell-quote-argument
+                (cons (drgnx-ui-x11-emacs-bin) (cons "--no-x-resources" (drgnx-ui--emacs-args sess))) " ")
      "\nrc=$?\nkill $wm $xvfb 2>/dev/null\nexit $rc\n")))
 
 (defun drgnx-ui-resolve-config (config)
@@ -424,9 +468,14 @@ free X display, i3 also RUN/i3.conf."
           ((or "x11" "i3")
            (let ((n (drgnx-ui--reserve-display run)))
              (setq sess (plist-put sess :display (format ":%d" n)))
-             (drgnx-ui--write-xauthority (expand-file-name "Xauthority" run) n))
-           (when (equal compositor "i3")
-             (drgnx-ui--write (expand-file-name "i3.conf" run) (drgnx-ui-i3-config sess)))))
+             ;; a session that cannot be made gives its number back at once
+             (condition-case err
+                 (progn
+                   (drgnx-ui--write-xauthority (expand-file-name "Xauthority" run) n)
+                   (when (equal compositor "i3")
+                     (drgnx-ui--write (expand-file-name "i3.conf" run) (drgnx-ui-i3-config sess))))
+               (error (drgnx-ui--release-display n run)
+                      (signal (car err) (cdr err)))))))
         (drgnx-ui--save sess)
         sess))))
 
@@ -735,21 +784,24 @@ behind — unless a live session (perhaps of another state root) still serves it
   "Remove what a killed sway, Xvfb or i3 of session NAME (run directory RUN) leaves behind.
 The session's runtime directory goes once no process names RUN on its command line.  DISPLAY (\":N\", from
 session.json) counts only when RUN reserved it (`drgnx-ui--own-display'); its X socket and lock go only when
-the Xvfb this session started (RUN/xvfb.pid) is dead and the files are the user's, and the reservation once
-that Xvfb is gone."
+the Xvfb this session started (RUN/xvfb.pid) is dead, had listened on N (it wrote N to RUN/xvfb.ready, which
+`-displayfd' does only once it listens: an Xvfb that failed to bind owned nothing) and the files are the
+user's; the reservation goes once that Xvfb is gone."
   (let ((xdg (drgnx-ui-session-runtime-dir name)))
     (when (and (file-directory-p xdg) (not (drgnx-ui--serving-p (concat (drgnx-ui--ere-quote run) "/"))))
       (delete-directory xdg t)))
   (when-let* ((n (drgnx-ui--own-display display run)))
-    (let* ((pidf (expand-file-name "xvfb.pid" run))
-           (pid (and (file-regular-p pidf)
-                     (string-to-number (with-temp-buffer (insert-file-contents pidf) (buffer-string))))))
+    (let* ((slurp (lambda (f) (let ((f (expand-file-name f run)))
+                                (and (file-regular-p f)
+                                     (string-trim (with-temp-buffer (insert-file-contents f) (buffer-string)))))))
+           (pid (let ((p (funcall slurp "xvfb.pid"))) (and p (string-to-number p))))
+           (listened (equal (funcall slurp "xvfb.ready") (number-to-string n))))
       (unless (drgnx-ui--pid-alive-p pid)
-        (when (and pid (> pid 1))                       ; it ran: what it left is its own
+        (when (and listened pid (> pid 1))             ; it ran on N: what it left is its own
           (dolist (f (drgnx-ui--x11-files n))
             (when (eql (file-attribute-user-id (file-attributes f 'integer)) (user-uid))
               (delete-file f))))
-        (delete-directory (expand-file-name (number-to-string n) (drgnx-ui--display-reservations)) t)))))
+        (drgnx-ui--release-display n run)))))
 
 (defun drgnx-ui--ask-to-exit (socket &optional wait)
   "Ask the Emacs listening on SOCKET to exit (its kill-emacs-hook runs: the layout is saved), and wait
@@ -873,6 +925,11 @@ Old kept test runs go too (`drgnx-ui--remove-old-test-runs'), and the eln cache 
       (unless (and (equal (plist-get sess :socket) sock)
                    (string-prefix-p "s" (or (file-attribute-modes (file-attributes sock)) "")))
         (drgnx-ui--refuse "%s has no live socket (stopped or crashed? see ui_list)" name))
+      ;; the session's Emacs can write its session.json: a name or run directory other than the ones the harness
+      ;; computed would point the WM, display and frame calls at another session
+      (unless (and (equal (plist-get sess :name) name) (equal (plist-get sess :run) run))
+        (drgnx-ui--refuse "%s: its session.json names another session (%S, %S)"
+                          name (plist-get sess :name) (plist-get sess :run)))
       sess)))
 
 ;;;; Driving a session
@@ -1122,6 +1179,11 @@ functions and hook totals measured in the session."
     (when (drgnx-ui--group-ours-p pgid run)
       (drgnx-ui--run "kill" "-KILL" "--" (concat "-" pgid)))))
 
+(defun drgnx-ui--name-pattern (name)
+  "An extended regexp for `pgrep -f' matching command lines with session NAME as a path component (…/NAME/…,
+or …/NAME at a word's end), never one that merely contains NAME (…-12-3 in …-12-34)."
+  (concat "/" (drgnx-ui--ere-quote name) "(/| |$)"))
+
 (defun drgnx-ui--test-run-argv (name timeout scope script)
   "The command running a test session's SCRIPT as a process group of its own (setsid -w).  With SCOPE (a host
 with a systemd user session) it runs in a transient scope NAME.scope, capped like a session's unit: what it
@@ -1156,7 +1218,7 @@ with EXTRA-ENV (\"K=V\" strings).  Return (RC RESULTS RUN)."
     (when (eq (car r) 'timeout) (drgnx-ui--kill-group run))
     ;; whatever is left in the scope (a server whose shell was killed) goes with it
     (when scope (drgnx-ui--run "systemctl" "--user" "stop" (concat name ".scope")))
-    (drgnx-ui--run "pkill" "-KILL" "-f" name)          ; belt and braces
+    (drgnx-ui--run "pkill" "-KILL" "-f" "--" (drgnx-ui--name-pattern name))   ; belt and braces
     (drgnx-ui--remove-wayland-display name)
     (drgnx-ui--remove-compositor-files name run (plist-get sess :display))
     (delete-directory (drgnx-ui-socket-dir name) t)

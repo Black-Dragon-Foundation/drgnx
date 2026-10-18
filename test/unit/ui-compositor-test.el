@@ -141,7 +141,9 @@ paths no WM serves."
       (should (string-search "-screen 0 2048x768x24" script))
       (should (string-match-p "--setmonitor XVFB-1 1024/[0-9]+x768/[0-9]+\\+0\\+0 screen" script))
       (should (string-match-p "--setmonitor XVFB-2 1024/[0-9]+x768/[0-9]+\\+1024\\+0 none" script))
-      (should (string-search (concat (drgnx-ui-x11-emacs-bin) " --init-directory " (expand-file-name "init" run))
+      ;; nothing of the user's X resources (~/.Xdefaults, $XENVIRONMENT)
+      (should (string-search (concat (drgnx-ui-x11-emacs-bin) " --no-x-resources --init-directory "
+                                     (expand-file-name "init" run))
                              script))
       (should-not (string-search "i3" script))
       ;; the cookie: only the session's programs reach the display
@@ -172,8 +174,10 @@ paths no WM serves."
                                                       nil nil "x11")
                                 :display)
                      ":94"))
-      ;; stop removes the socket and lock its own Xvfb left when it was killed, and the reservation
+      ;; stop removes the socket and lock its own Xvfb left when it was killed (it had listened on :92: -displayfd
+      ;; wrote the number), and the reservation
       (write-region (number-to-string (drgnx-ui-compositor-test--dead-pid)) nil (expand-file-name "xvfb.pid" run))
+      (write-region "92\n" nil (expand-file-name "xvfb.ready" run))
       (dolist (f (drgnx-ui--x11-files 92)) (write-region "" nil f))
       (drgnx-ui-stop "drgnx-ui-1")
       (should-not (seq-some #'file-exists-p (drgnx-ui--x11-files 92)))
@@ -197,10 +201,95 @@ paths no WM serves."
              (sess (plist-put (drgnx-ui--read-json json) :display forged)))
         (drgnx-ui--write json (drgnx-ui--json sess))
         (write-region (number-to-string (drgnx-ui-compositor-test--dead-pid)) nil (expand-file-name "xvfb.pid" run))
+        (write-region (substring forged 1) nil (expand-file-name "xvfb.ready" run))
         (should-error (drgnx-ui--display-env sess) :type 'drgnx-ui-error)
         (drgnx-ui-stop "drgnx-ui-3")))
     (should (file-exists-p (expand-file-name ".X11-unix/X91" xdir)))
     (should (file-exists-p (expand-file-name ".X5-lock" xdir)))))
+
+(ert-deftest drgnx-ui-compositor/an-xvfb-that-never-listened-leaves-the-displays-files ()
+  ;; Xvfb failed to bind :N (another server took it after the reservation): its pid is dead and xvfb.ready is
+  ;; empty — the files on :N are the other server's, and stay
+  (drgnx-ui-compositor-test--with
+    (let* ((s (drgnx-ui-prepare-run "drgnx-ui-1" nil "800x600" root nil nil "x11"))
+           (run (plist-get s :run)))
+      (should (equal (plist-get s :display) ":90"))
+      (write-region (number-to-string (drgnx-ui-compositor-test--dead-pid)) nil (expand-file-name "xvfb.pid" run))
+      (write-region "" nil (expand-file-name "xvfb.ready" run))
+      (dolist (f (drgnx-ui--x11-files 90)) (write-region "" nil f))
+      (drgnx-ui-stop "drgnx-ui-1")
+      (should (seq-every-p #'file-exists-p (drgnx-ui--x11-files 90)))
+      (should-not (drgnx-ui--reservation-owner 90)))))           ; the number is given back all the same
+
+(ert-deftest drgnx-ui-compositor/two-starts-taking-over-one-stale-reservation-get-it-once ()
+  (drgnx-ui-compositor-test--with
+    (let* ((dir (drgnx-ui--display-reservations))
+           (a (expand-file-name "a" root)) (b (expand-file-name "b" root))
+           (drgnx-ui--reservation-lock-wait 0.2)
+           inner)
+      (make-directory a) (make-directory b)
+      (make-directory (expand-file-name "95" dir) t)
+      (write-region "/nonexistent/drgnx-ui-9" nil (expand-file-name "95/owner" dir))
+      ;; both found 95 stale; B tries while A is inside the takeover (between delete and its owner write)
+      (should (drgnx-ui--reservation-stale-p 95))
+      (let ((orig (symbol-function 'drgnx-ui--write)))
+        (cl-letf (((symbol-function 'drgnx-ui--write)
+                   (lambda (file text)
+                     (unless inner (setq inner (list (drgnx-ui--take-over-reservation 95 b))))
+                     (funcall orig file text))))
+          (should (drgnx-ui--take-over-reservation 95 a))))
+      (should (equal inner '(nil)))                             ; the lock kept B out
+      (should-not (drgnx-ui--take-over-reservation 95 b))       ; and after: 95 is A's, not stale
+      (should (equal (drgnx-ui--reservation-owner 95) a))
+      (should-not (file-exists-p (expand-file-name ".lock" dir)))
+      ;; a lock left by a crashed start (older than 10 s) does not block the next one
+      (make-directory (expand-file-name ".lock" dir))
+      (set-file-times (expand-file-name ".lock" dir) (time-subtract nil 60))
+      (delete-directory a t)
+      (should (drgnx-ui--take-over-reservation 95 b))
+      (should (equal (drgnx-ui--reservation-owner 95) b)))))
+
+(ert-deftest drgnx-ui-compositor/a-session-json-naming-another-session-is-refused ()
+  ;; the session's Emacs can write its session.json: a forged :name or :run must not steer frames or WM calls
+  (drgnx-ui-compositor-test--with
+    (let* ((s (drgnx-ui-prepare-run "drgnx-ui-1" nil "800x600" root nil nil "sway"))
+           (json (expand-file-name "session.json" (plist-get s :run)))
+           (server (drgnx-ui-compositor-test--socket (plist-get s :socket))))
+      (unwind-protect
+          (progn
+            (should (equal (plist-get (drgnx-ui-own-session "drgnx-ui-1") :name) "drgnx-ui-1"))
+            (dolist (forged (list (list :name "drgnx-ui-7")
+                                  (list :name "../00000000/drgnx-ui-1")
+                                  (list :run (expand-file-name "drgnx-ui-7" root))))
+              (drgnx-ui--write json (drgnx-ui--json (apply #'plist-put (copy-sequence s) forged)))
+              (should-error (drgnx-ui-own-session "drgnx-ui-1") :type 'drgnx-ui-refused)))
+        (delete-process server)))))
+
+(ert-deftest drgnx-ui-compositor/odd-paths-never-reach-a-wm-config ()
+  (drgnx-ui-compositor-test--with
+    ;; a newline in a path would add a line to sway's config
+    (let ((process-environment (cons (concat "DRGNX_EMACS=/opt/e\nexec rm -rf x/emacs") process-environment)))
+      (should-error (drgnx-ui-prepare-run "drgnx-ui-1" nil "800x600" root nil nil "sway") :type 'drgnx-ui-error))
+    ;; an i3 socket path i3 cannot take as it is: the start fails and gives its display number back
+    (let* ((odd (make-temp-file "/tmp/duic sp" t))
+           (process-environment (cons (concat "XDG_RUNTIME_DIR=" odd) process-environment)))
+      (unwind-protect
+          (progn
+            (set-file-modes odd #o700)
+            (should-error (drgnx-ui-prepare-run "drgnx-ui-2" nil "800x600" root nil nil "i3") :type 'drgnx-ui-error)
+            (should-not (drgnx-ui--reservation-owner 90)))
+        (delete-directory odd t)))))
+
+(ert-deftest drgnx-ui-compositor/the-belt-and-braces-kill-matches-only-its-own-run ()
+  (let ((re (drgnx-ui--name-pattern "drgnx-ui-test-12-3"))
+        (grep (lambda (re line) (with-temp-buffer
+                                  (insert line)
+                                  (eq 0 (call-process-region (point-min) (point-max) "grep" nil nil nil "-qE" "--" re))))))
+    (should (funcall grep re "sway -c /s/drgnx-ui-test-12-3/sway.conf"))
+    (should (funcall grep re "emacs --init-directory /s/drgnx-ui-test-12-3/init"))
+    (should (funcall grep re "Xvfb :90 -auth /s/drgnx-ui-test-12-3 -x"))
+    (should-not (funcall grep re "sway -c /s/drgnx-ui-test-12-34/sway.conf"))
+    (should-not (funcall grep re "vi notes-drgnx-ui-test-12-3.txt"))))
 
 (ert-deftest drgnx-ui-compositor/a-missing-compositor-says-the-container-command ()
   (drgnx-ui-compositor-test--with
