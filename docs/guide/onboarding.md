@@ -129,7 +129,8 @@ itself is missing the question also says that a `claude` inside a VS Code extens
 
 The commands that need no password run as drgnx jobs with a log and progress in the Welcome (`C-g` stops them). If
 one fails, the result says why (the log's last line), where the log is, and how to retry — run the step again, or
-the command in a terminal; a new run skips what is installed. Where the adapter or Node ends up outside your
+the command in a terminal (for Claude's installer on Linux and the adapter the result names that command); a new
+run skips what is installed. `C-g` while the login is being checked ends the check and stops the step. Where the adapter or Node ends up outside your
 `PATH` (`~/.local/bin`, or beside Homebrew), drgnx adds that directory to the end of the `PATH` of the running Emacs (a program you chose earlier on the
 `PATH` keeps winning) and says so; put it in your shell's `PATH` too for the next start. The agent panel's sessions run in drgnx itself and see it at
 once; the **hub** (durable sessions, [agents.md](agents.md#the-hub-and-the-gateway)) keeps the `PATH` it started with:

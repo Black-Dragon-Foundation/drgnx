@@ -1089,4 +1089,13 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
                               (drgnx-onboard-test--slurp calls)))
       (should (file-executable-p (concat home ".local/bin/claude-agent-acp"))))))
 
+(ert-deftest drgnx-ai-onboard/failed-claude-installer-names-the-command ()
+  ;; A failed Linux installer run ends with the command to try in a terminal, as the adapter's does
+  (drgnx-onboard-test--claude 'linux
+    (drgnx-onboard-test--script (concat bin "curl") "echo 'echo installer broke; exit 7'\n")
+    (let* ((asked (drgnx-onboard-test--asked '(("\\`Set up Claude Code" . t))))
+           (r (cl-letf (((symbol-function 'y-or-n-p) (car asked))) (drgnx-onboard--agents-step '(:interactive t)))))
+      (should (eq (car r) 'fail))
+      (should (string-match-p "or in a terminal: curl -fsSL https://claude.ai/install.sh | bash" (cadr r))))))
+
 ;;; onboard-test.el ends here

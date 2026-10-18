@@ -1130,7 +1130,7 @@ end: a program you chose earlier on the PATH keeps winning."
   (pcase-let ((`(,_ ,reason ,log) result))
     (list 'fail (concat reason
                         (unless (string-search "step again" reason) " — run this step again to retry (what is installed stays)")
-                        (when (eq tool 'claude-agent-acp) (format ", or in a terminal: %s" (drgnx-onboard--install-text tool)))
+                        (when (drgnx-onboard--platform-job tool) (format ", or in a terminal: %s" (drgnx-onboard--install-text tool)))
                         (if log (format " (log: %s)" (abbreviate-file-name log)) "")))))
 
 (defun drgnx-onboard--claude-check (ctx)
