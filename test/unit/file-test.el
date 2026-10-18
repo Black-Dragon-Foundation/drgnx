@@ -206,6 +206,18 @@
       (drgnx-file-write (expand-file-name "given.eld" dir) '(:a 1) :mode #o600)
       (should (= (file-modes (expand-file-name "given.eld" dir)) #o600)))))
 
+(ert-deftest drgnx-file/update-private-is-0600 ()
+  (drgnx-file-test--with-dir dir
+    (let ((new (expand-file-name "n.eld" dir)) (plain (expand-file-name "p.eld" dir)) (old (expand-file-name "o.eld" dir)))
+      (drgnx-file-update new (drgnx-file-test--add 'x) :private t)
+      (should (= #o600 (logand #o777 (file-modes new))))
+      (drgnx-file-update plain (drgnx-file-test--add 'x))                 ; the default is unchanged
+      (should (= #o644 (logand #o777 (file-modes plain))))
+      (drgnx-file-test--put old "(:items (a))\n")
+      (set-file-modes old #o664)
+      (drgnx-file-update old (drgnx-file-test--add 'x) :private t)       ; an old file loses group and others
+      (should (= #o600 (logand #o777 (file-modes old)))))))
+
 (ert-deftest drgnx-file/private-is-0600 ()
   (drgnx-file-test--with-dir dir
     (let ((f (expand-file-name "sub/dir/p.eld" dir)) (old (expand-file-name "old.eld" dir)))

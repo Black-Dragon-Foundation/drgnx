@@ -16,6 +16,7 @@
 (require 'drgnx-modules-helpers)
 (require 'drgnx-timer)
 (require 'drgnx-paths)
+(require 'drgnx-file)
 (require 'easymenu)
 (require 'seq)
 (require 'drgnx-tty-fallback)
@@ -134,9 +135,6 @@ COUNT is all runs; each (DAY . N) is N runs on day DAY (`time-to-days') for the 
   "Where the palette's run counts are kept: command-usage.eld in drgnx's state dir."
   (expand-file-name "command-usage.eld" (drgnx-state-dir)))
 
-(defvar drgnx-surfaces--usage-bad nil
-  "Non-nil when the usage file had something unreadable in it; it is kept as a .bak file before the next write.")
-
 (defun drgnx-surfaces--usage-entry (e)
   "E as a clean (ID COUNT (DAY . N)…) entry, or nil when it is not one.  Bad day entries are dropped."
   (when (and (consp e) (symbolp (car e)) e (natnump (cadr e)))
@@ -144,20 +142,15 @@ COUNT is all runs; each (DAY . N) is N runs on day DAY (`time-to-days') for the 
                      (seq-filter (lambda (d) (and (consp d) (integerp (car d)) (natnump (cdr d)))) (cddr e)))))
       (if (equal days (cddr e)) e `(,(car e) ,(cadr e) ,@days)))))
 
+(defun drgnx-surfaces--usage-clean (data)
+  "The alist (ID COUNT (DAY . N)…) in DATA with anything malformed left out; nil when DATA is not a list."
+  (and (proper-list-p data) (delq nil (mapcar #'drgnx-surfaces--usage-entry data))))
+
 (defun drgnx-surfaces--usage-read (file)
   "The alist (ID COUNT (DAY . N)…) in FILE, with anything malformed left out; nil when missing or unreadable.
-Sets `drgnx-surfaces--usage-bad' when something was left out."
-  (condition-case nil
-      (when (file-readable-p file)
-        (let ((data (with-temp-buffer
-                      (insert-file-contents file)
-                      (read (current-buffer)))))
-          (if (not (proper-list-p data))
-              (setq drgnx-surfaces--usage-bad t data nil)
-            (let ((clean (delq nil (mapcar #'drgnx-surfaces--usage-entry data))))
-              (unless (equal clean data) (setq drgnx-surfaces--usage-bad t))
-              clean))))
-    (error (setq drgnx-surfaces--usage-bad t) nil)))
+The next write keeps a file with something left out as a backup (`drgnx-surfaces--usage-flush')."
+  (let ((r (drgnx-file-read file)))
+    (and (eq (plist-get r :status) 'ok) (drgnx-surfaces--usage-clean (plist-get r :data)))))
 
 (defun drgnx-surfaces--usage-table ()
   "The counts, read from the file the first time."
@@ -196,32 +189,37 @@ Sets `drgnx-surfaces--usage-bad' when something was left out."
     (setq drgnx-surfaces--usage-dirty t)
     (drgnx-surfaces--usage-arm)))
 
+(defvar drgnx-surfaces--usage-last-error nil
+  "The text of the last write error said, so a lasting error is said once; nil after a good write.")
+
 (defun drgnx-surfaces--usage-flush (&optional force)
-  "Write the counts if they changed, at most once a minute unless FORCE (exit).  Never prompts or signals."
+  "Write the counts if they changed, at most once a minute unless FORCE (exit).  Never prompts or signals.
+A busy lock (another drgnx writing) keeps the counts dirty and tries again later, quietly; the timer's write does not
+wait for the lock, the exit's waits up to a second.  A file with something unreadable or malformed in it is kept as a
+backup before it is replaced."
   (when force (drgnx-timer-cancel 'surfaces-usage))
   (when (and drgnx-surfaces--usage-dirty drgnx-surfaces--usage)
     (if (and (not force) drgnx-surfaces--usage-saved
              (< (- (float-time) drgnx-surfaces--usage-saved) drgnx-surfaces--usage-flush-interval))
         (drgnx-surfaces--usage-arm)
-      (let ((file (drgnx-shortcuts-usage-file)) (rows nil) (tmp nil))
+      (let ((file (drgnx-shortcuts-usage-file)) (rows nil) (inhibit-interaction t))
         (maphash (lambda (id v) (push (cons id v) rows)) drgnx-surfaces--usage)
+        (setq rows (sort rows (lambda (a b) (string< (symbol-name (car a)) (symbol-name (car b))))))
         (setq drgnx-surfaces--usage-saved (float-time))
-        (condition-case nil
-            (let ((inhibit-message t) (coding-system-for-write 'utf-8-unix))
-              (make-directory (file-name-directory file) t)
-              ;; A file with something unreadable in it is kept before it is overwritten.
-              (when (and drgnx-surfaces--usage-bad (file-exists-p file))
-                (rename-file file (format-time-string (concat file ".bak-%Y%m%d-%H%M%S")) t))
-              (setq drgnx-surfaces--usage-bad nil)
-              ;; A temp name of its own, so two Emacs sessions never write the same one.
-              (setq tmp (make-temp-file (concat file ".")))
-              (with-temp-file tmp
-                (let ((print-length nil) (print-level nil))
-                  (prin1 (sort rows (lambda (a b) (string< (symbol-name (car a)) (symbol-name (car b))))) (current-buffer))
-                  (insert "\n")))
-              (rename-file tmp file t)
-              (setq drgnx-surfaces--usage-dirty nil))
-          (error (when (and tmp (file-exists-p tmp)) (ignore-errors (delete-file tmp)))
+        (condition-case err
+            (progn
+              (drgnx-file-update file
+                                 (lambda (old)
+                                   (unless (equal old (drgnx-surfaces--usage-clean old))
+                                     (drgnx-file-backup file))
+                                   rows)
+                                 :on-unreadable 'backup :private t :timeout (if force 1.0 0))
+              (setq drgnx-surfaces--usage-dirty nil drgnx-surfaces--usage-last-error nil))
+          (drgnx-file-busy (drgnx-surfaces--usage-arm))
+          (error (let ((text (error-message-string err)))   ; said once, again only when the text changes
+                   (unless (equal text drgnx-surfaces--usage-last-error)
+                     (setq drgnx-surfaces--usage-last-error text)
+                     (message "drgnx: the usage counts were not saved: %s" text)))
                  (drgnx-surfaces--usage-arm)))))))
 
 (add-hook 'drgnx-surfaces-run-functions #'drgnx-surfaces--count-run)
