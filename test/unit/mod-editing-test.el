@@ -48,7 +48,7 @@
 
 (ert-deftest drgnx-look/the-theme-is-remembered ()
   (let* ((cfg (make-temp-file "drgnx-cfg" t)) (process-environment (cons (concat "DRGNX_CONFIG_DIR=" cfg) process-environment))
-         (drgnx-modules--state nil) (custom-enabled-themes custom-enabled-themes))
+         (custom-enabled-themes custom-enabled-themes))
     (unwind-protect
         (progn
           (drgnx-look-load-theme 'modus-operandi)
@@ -93,10 +93,10 @@
 (ert-deftest drgnx-look/a-broken-saved-theme-leaves-color-theme ()
   ;; M4-2: the saved theme errors at start: the module still defines Color Theme (to pick another).
   (let* ((cfg (make-temp-file "drgnx-cfg" t)) (process-environment (cons (concat "DRGNX_CONFIG_DIR=" cfg) process-environment))
-         (drgnx-modules--state nil) (drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil))
+         (drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil))
     (unwind-protect
         (progn
-          (drgnx-modules-write-state '(:version 1 :theme modus-operandi))
+          (drgnx-modules-update-state (lambda (_) '(:theme modus-operandi)))
           (cl-letf (((symbol-function 'load-theme) (lambda (&rest _) (error "Theme kaputt"))))
             (funcall (plist-get (alist-get 'ui/look drgnx-modules--table) :setup)))
           (should (drgnx-commands-get 'preferences-theme)))

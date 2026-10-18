@@ -186,11 +186,11 @@ the Xcode Command Line Tools.  :fix is the one for this platform."
                 ('minimal extras)
                 ('ide (seq-filter (lambda (m) (memq m '(extra/llm))) extras))
                 ('full-ai nil)
-                (_ (user-error "Unknown preset %s (minimal, ide, full-ai)" preset))))
-         (state (drgnx-modules-read-state)))
-    (drgnx-modules-write-state
-     (plist-put (copy-sequence state) :disabled
-                (append (seq-remove (lambda (m) (memq m extras)) (plist-get state :disabled)) off)))))
+                (_ (user-error "Unknown preset %s (minimal, ide, full-ai)" preset)))))
+    (drgnx-modules-update-state
+     (lambda (state)
+       (drgnx-modules--put-list
+        state :disabled (append (seq-remove (lambda (m) (memq m extras)) (plist-get state :disabled)) off))))))
 
 (defvar drgnx-keys-presets)
 (declare-function drgnx-keys--save-layers "drgnx-keys")
@@ -271,6 +271,9 @@ current choice as the default) — with no option and no question, the current c
                                  "types characters")
                           'characters 'meta)))
          (modal nil))
+    ;; a modules.eld with a mistake (or a newer one) refuses every write to it: say so before anything changes
+    (when (or (and preset (not (eq preset cur-preset))) theme (and keys (not (equal keys cur-keys))))
+      (drgnx-config-ensure-writable 'modules))
     (when (and preset (not (eq preset cur-preset))) (drgnx-onboard-apply-preset preset))
     ;; A Vim stack switches only once its engine is loaded: asked to install it when interactive, else it waits
     (when (and layers (or (not (equal keys cur-keys)) pending))
@@ -284,7 +287,7 @@ current choice as the default) — with no option and no question, the current c
       (if (and (not noninteractive) (fboundp 'drgnx-keys-apply)) (drgnx-keys-set-mac-option option) (drgnx-keys--save-key :mac-option option)))
     (when theme
       (if (and (not noninteractive) (fboundp 'drgnx-look-load-theme)) (drgnx-look-load-theme theme)
-        (drgnx-modules-write-state (plist-put (copy-sequence (drgnx-modules-read-state)) :theme theme))))
+        (drgnx-modules-update-state (lambda (state) (plist-put (copy-sequence state) :theme theme)))))
     (let* ((pkgs (drgnx-onboard--packages-to-install))
            (bytes (plist-get pkgs :bytes))
            (done (cond ((null pkgs) 'none)

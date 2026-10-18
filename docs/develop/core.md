@@ -372,6 +372,18 @@ Emacs is idle). Each setup runs under its own error guard and is timed; a file t
 a module too. "Help: Module Report" (`drgnx-modules-show-report`) lists stage, milliseconds and errors. Flags,
 settings, doctor checks, more stages and the modules index come with M4.
 
+**modules.eld** is a config file (`drgnx-config-define 'modules`, format 2, read at start, last good copy kept; the
+reference is `docs/reference/config.md`). `(drgnx-modules-read-state)` is `(drgnx-config-get 'modules)`: what this Emacs
+applied at its start, or after its own write. Every writer goes through `(drgnx-modules-update-state FN)`
+(`drgnx-config-update`): FN gets the file as it is now, under the file's lock, so a change another Emacs (batch
+onboarding, a second daemon) just made is kept, and only the keys FN changed are written. `drgnx-modules-toggle`,
+`drgnx-modules-set-enabled`, `drgnx-modal--set-enabled`, `drgnx-onboard-apply-preset` and the theme write
+(`drgnx-look-load-theme`, onboarding) use it; a flow with a side effect before its write calls
+`(drgnx-config-ensure-writable 'modules)` first. A modules.eld with a mistake or one a newer drgnx wrote is never
+written (`drgnx-config-refused`); an older one (format 0, a bare list; format 1) is migrated in memory and written as
+format 2 by the first write, after a backup. A malformed `:external` entry is not a file mistake: that module is
+reported failed (`drgnx-modules--external-ok-p`). The Modules list reads the "Next start" column from the file, fresh.
+
 ### Teardown: the cleanup stack (`drgnx-modules-record.el`)
 
 A module can be turned off while Emacs runs. While its setup runs, `drgnx-modules--current` names it, and each call

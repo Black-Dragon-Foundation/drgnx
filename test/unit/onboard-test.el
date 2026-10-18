@@ -15,8 +15,7 @@
                                        process-environment))
           ;; the board path itself — never through `org-directory' (not special unless org is loaded)
           (drgnx-projects-board-file (concat ,root "org/board.org"))
-          (drgnx-projects-gryphn-file (concat ,root "gryphn/projects.tsv"))
-          (drgnx-modules--state nil))
+          (drgnx-projects-gryphn-file (concat ,root "gryphn/projects.tsv")))
      (make-directory (concat ,root "config") t)
      (unwind-protect (progn ,@body) (delete-directory ,root t))))
 
@@ -73,7 +72,7 @@
 
 (ert-deftest drgnx-onboard/presets-choose-the-extra-modules ()
   (drgnx-onboard-test--with root
-    (drgnx-modules-write-state '(:version 1 :disabled (ui/look) :theme tango))
+    (drgnx-modules-update-state (lambda (_) '(:disabled (ui/look) :theme tango)))
     (drgnx-onboard-apply-preset 'minimal)
     (let ((s (drgnx-modules-read-state)))
       (should (memq 'ui/look (plist-get s :disabled)))             ; the user's own choice stays
@@ -420,7 +419,7 @@ one.  Returns (RESULT PROMPTS PROGRAMS INSTALLED): the questions asked, the prog
           (mods (drgnx-modules-read-state)))
       (should (eq (cadr (car (drgnx-onboard-run :only '(look-and-keys) :non-interactive t))) 'ok))
       (should (equal (with-temp-buffer (insert-file-contents (expand-file-name "keys.eld" (drgnx-user-dir))) (buffer-string)) keys))
-      (setq drgnx-modules--state nil)
+      (drgnx-config-reread 'modules)
       (should (equal (drgnx-modules-read-state) mods)))))
 
 (ert-deftest drgnx-projects/imported-projects-stay-in-the-sessions-project-list ()
@@ -871,7 +870,7 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
       (should (equal (cdr (car (last asked))) "full-ai"))
       (should-not (drgnx-module-disabled-p 'extra/llm)))
     ;; a mix of your own: Return keeps it
-    (drgnx-modules-write-state '(:version 1 :disabled (extra/magit)))
+    (drgnx-modules-update-state (lambda (s) (plist-put (copy-sequence s) :disabled '(extra/magit))))
     (should-not (drgnx-onboard--current-preset))
     (cl-letf (((symbol-function 'completing-read)
                (lambda (_prompt _c &optional _p _r _i _h def &rest _) (or (car (ensure-list def)) "")))
@@ -996,7 +995,7 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
     (let ((drgnx-onboard--restart-needed nil))
       (should-not (featurep 'gptel))
       (make-directory (expand-file-name "gptel-0.9.9" (drgnx-elpa-dir)) t)
-      (drgnx-modules-write-state (list :disabled nil))
+      (drgnx-modules-update-state (lambda (s) (plist-put (copy-sequence s) :disabled nil)))
       ;; batch, module already on
       (should noninteractive)
       (let ((r (drgnx-onboard--chat-module '(:interactive nil))))
@@ -1011,7 +1010,7 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
         (should-not (string-search "Finish" (cdr r)))
         (should-not drgnx-onboard--restart-needed))
       ;; the app, this run turns the module on: the restart is offered
-      (drgnx-modules-write-state (list :disabled '(extra/llm)))
+      (drgnx-modules-update-state (lambda (s) (plist-put (copy-sequence s) :disabled '(extra/llm))))
       (cl-letf (((symbol-function 'y-or-n-p) (lambda (_) t)))
         (let ((noninteractive nil) (r nil))
           (setq r (drgnx-onboard--chat-module '(:interactive t)))
@@ -1019,7 +1018,7 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
           (should drgnx-onboard--restart-needed)))
       ;; batch, this run turns it on: no Finish offer is promised
       (setq drgnx-onboard--restart-needed nil)
-      (drgnx-modules-write-state (list :disabled '(extra/llm)))
+      (drgnx-modules-update-state (lambda (s) (plist-put (copy-sequence s) :disabled '(extra/llm))))
       (cl-letf (((symbol-function 'y-or-n-p) (lambda (_) t)))
         (let ((r (drgnx-onboard--chat-module '(:interactive t))))
           (should (string-search "loads at drgnx's next start" (cdr r)))
