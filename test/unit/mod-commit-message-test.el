@@ -1,6 +1,7 @@
 ;;; mod-commit-message-test.el --- batch tests: Git: Generate Commit Message — the staged diff, the chat role, no trailers -*- lexical-binding: t -*-
 (require 'ert)
 (require 'drgnx)
+(require 'drgnx-ai-client)                                  ; loaded here: the command's lazy require would undo the mock
 (load (expand-file-name "test/fixtures/git-fixture" drgnx-dir) nil t)
 (load (expand-file-name "modules/tools/drgnx-commit-message" drgnx-dir) nil t)
 
