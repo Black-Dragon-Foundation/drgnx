@@ -928,6 +928,26 @@ reviewer, or the request has no reject option)."
                                         "\nYour last tool call was refused because you had not read these."))))
       (list :result (list :outcome (list :outcome "selected" :optionId (plist-get reject :optionId)))))))
 
+(defun drgnx-job--write-inside (path content tree)
+  "Write CONTENT (UTF-8) to PATH in the worktree TREE without the race of a check, then a write.  PATH is resolved
+here — every link, the last one too — and refused (an error) when that is outside TREE: a link swapped in after the
+policy's check.  CONTENT goes into a temp file made in that directory, renamed over the file (which keeps its modes;
+a reader never sees half of it).  Checked again after the rename: a directory swapped meanwhile is an error (Emacs has
+no openat, so that window stays open).  No file name handlers."
+  (let* ((file-name-handler-alist nil)
+         (target (file-truename (expand-file-name path tree))))
+    (unless (file-in-directory-p target (file-truename tree))
+      (error "%s leads out of the worktree (%s)" path target))
+    (let* ((modes (file-modes target))
+           (tmp (let ((coding-system-for-write 'utf-8-unix))
+                  (make-temp-file (expand-file-name ".drgnx-write-" (file-name-directory target)) nil nil content))))
+      (condition-case err
+          (progn (when modes (set-file-modes tmp modes))
+                 (rename-file tmp target t))
+        (error (ignore-errors (delete-file tmp)) (signal (car err) (cdr err)))))
+    (unless (equal (file-truename target) target)
+      (error "%s: a directory on its way changed while it was written (now %s)" path (file-truename target)))))
+
 (defun drgnx-job--request (s method params id)
   "A job agent's request (`drgnx-agents-request-functions'): routine ones answered by its role's policy, writes in
 its worktree done at once; anything else waits for the user as a card (nil: the session keeps it pending)."
@@ -949,7 +969,7 @@ its worktree done at once; anything else waits for the user as a card (nil: the 
            (if (and (stringp content) (drgnx-agents--path-ok-p path) (drgnx-job--inside-p path tree)
                     (not (equal (drgnx-job--role s) "review")))
                (progn (make-directory (file-name-directory path) t)
-                      (let ((coding-system-for-write 'utf-8-unix)) (write-region content nil path nil 'silent))
+                      (drgnx-job--write-inside path content tree)
                       (list :result nil))
              (drgnx-job--card job task "write" (format "write %s" path) s (list :request id))
              nil)))))))
