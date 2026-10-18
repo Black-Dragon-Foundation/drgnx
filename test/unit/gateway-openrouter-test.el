@@ -288,7 +288,7 @@ answered is in `drgnx-gateway-openrouter-test--answer')."
                              ("(:openrouter (:zdr 1))" . ":zdr")
                              ("(:openrouter (:zdr yes))" . ":zdr")
                              ("(:openrouter (:data-collection no))" . ":data-collection")
-                             ("(:openrouter (:zdrr t))" . ":openrouter")          ; a key that is not one (the layer names the value)
+                             ("(:openrouter (:zdrr t))" . ":zdrr")                ; a key that is not one
                              ("(:openrouter \"anthropic\")" . ":openrouter")))
               (with-temp-file file (insert ";; mine\n" text "\n"))
               (let ((err (should-error (drgnx-agents--env (drgnx-gateway-openrouter-test--session)) :type 'user-error)))

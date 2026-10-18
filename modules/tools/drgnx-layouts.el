@@ -93,7 +93,7 @@ arranges as `one'.")
 (defun drgnx-layouts--user ()
   "Your layouts from layouts.eld: NAME → plist, without the entries named like a built-in layout (those stay in
 the file).  A file with a mistake gives its last good copy; with the module off, no layouts."
-  (and (gethash 'layouts drgnx-config--defs)
+  (and (drgnx-config-defined-p 'layouts)
        (seq-remove (lambda (e) (assq (car e) drgnx-layouts)) (drgnx-config-get 'layouts))))
 
 (defun drgnx-layouts--all () (append drgnx-layouts (drgnx-layouts--user)))

@@ -162,6 +162,13 @@
 
 (defun drgnx-schema-test--boom (_value) "A pred that signals." (error "boom"))
 
+(defun drgnx-schema-test--picky (_value) "A pred that explains itself." (user-error "the picky message"))
+
+(ert-deftest drgnx-schema/a-pred-that-explains-itself-is-heard ()
+  (let ((p (drgnx-schema-check '(pred drgnx-schema-test--picky "a fine value") 1)))
+    (should (equal (cdr p) "a fine value: the picky message")))
+  (should (string-search "boom" (cdr (drgnx-schema-check '(pred drgnx-schema-test--boom "x") 1)))))
+
 (ert-deftest drgnx-schema/an-improper-list-is-a-problem-not-an-error ()
   (dolist (s '((plist (:a integer)) (alist string integer) (list-of integer) (map integer)))
     (should (consp (drgnx-schema-check s '(:a . 1))))

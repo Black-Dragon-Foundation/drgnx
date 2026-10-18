@@ -65,7 +65,8 @@
     (drgnx-agents-eld-test--put "(:openrouter (:zdr yes))\n")
     (let ((p (drgnx-config-problem 'agents)))
       (should p)
-      (should (string-search "not an OpenRouter restriction" (plist-get p :text))))
+      (should (string-search "not an OpenRouter restriction" (plist-get p :text)))
+      (should (string-search ":zdr is yes" (plist-get p :text))))
     (should-error (drgnx-agents-openrouter-restrictions) :type 'user-error)
     (drgnx-agents-eld-test--put "(:openrouter (:only (\"ok\") :data-collection deny :zdr t))\n")
     (should-not (drgnx-config-problem 'agents))
@@ -114,9 +115,24 @@
       (should (equal (drgnx-job--routes) '((implement "a" "b") (review "c"))))
       (should (equal (drgnx-job-route 'implement) '("a" "b")))
       (let ((drgnx-job-routes '((implement "z")))) (should (equal (drgnx-job-route 'implement) '("z"))))
-      (drgnx-agents-eld-test--put "(:routes ((implement . \"a\")))\n")              ; not a list of names: a mistake
+      (drgnx-agents-eld-test--put "(:routes ((implement . \"a\") (review \"c\")))\n")  ; one name, dotted: the v1 form
+      (should-not (drgnx-config-problem 'agents))
+      (should (equal (drgnx-job-route 'implement) '("a")))
+      (should (equal (drgnx-job-route 'review) '("c")))
+      (drgnx-agents-eld-test--put "(:routes ((implement . 5)))\n")                  ; neither a name nor a list: a mistake
       (should (drgnx-config-problem 'agents))
       (should-not (drgnx-job--routes)))))
+
+(ert-deftest drgnx-agents-eld/a-dotted-route-keeps-the-profiles-and-openrouter-agents ()
+  ;; (ROLE . "profile") is a documented v1 form: it is never a mistake that voids the rest of the file
+  (drgnx-test-with-config
+    (drgnx-agents-eld-test--put
+     "(:profiles ((\"mine\" :command (\"x\"))) :openrouter (:only (\"anthropic\"))\n :routes ((review . \"claude\") (implement \"a\")))\n")
+    (should-not (drgnx-config-problem 'agents))
+    (should (drgnx-agents-profile "mine"))
+    (should (equal (drgnx-agents-openrouter-restrictions) '(:only ("anthropic"))))
+    (should (equal (drgnx-job-route 'review) '("claude")))
+    (should (equal (drgnx-job-route 'implement) '("a")))))
 
 (ert-deftest drgnx-agents-eld/one-stat-per-get ()
   (drgnx-test-with-config

@@ -6,7 +6,7 @@
 ;; docs/reference/config.md is generated from the config definitions (`drgnx-config-define') and their schemas, so it
 ;; cannot drift from the code.  Regenerate it after a change to a definition (docs/develop/core.md):
 ;;   emacs --batch -Q -L core -L wb -L harness -L modules/tools -l drgnx-config-doc \
-;;         --eval '(drgnx-config-doc-write "docs/reference/config.md")'
+;;         --eval '(drgnx-config-doc-regenerate "docs/reference/config.md")'
 ;; Files defined at load are reached by a `(require FEATURE)' entry of `drgnx-config-doc-sources'; files a module
 ;; defines in its setup, by a `(require FILE)' entry for the module's file and a `(setup MODULE)' entry after it.
 ;; Each port appends its own entries (one line each) and regenerates the reference.
@@ -75,9 +75,7 @@ One line per source, so ports append theirs without conflict.")
 
 (defun drgnx-config-doc-markdown ()
   "The reference of every defined config file, sorted by name, as Markdown text."
-  (let (defs)
-    (maphash (lambda (_name def) (push def defs)) drgnx-config--defs)
-    (setq defs (sort defs (lambda (a b) (string< (symbol-name (plist-get a :name)) (symbol-name (plist-get b :name))))))
+  (let ((defs (mapcar #'drgnx-config-definition (drgnx-config-names))))
     (concat "# Config files\n\n"
             "Every file drgnx keeps in its config and state folders, and the project files it reads. "
             "Generated from the definitions: do not edit; see docs/develop/core.md for how to regenerate it, "
@@ -88,6 +86,13 @@ One line per source, so ports append theirs without conflict.")
   "Write `drgnx-config-doc-markdown' to FILE (relative to the current folder), atomically, through
 `drgnx-file-write-text'."
   (drgnx-file-write-text (expand-file-name file) (drgnx-config-doc-markdown)))
+
+(defun drgnx-config-doc-regenerate (file)
+  "Define every config file (`drgnx-config-doc-load'), then write the reference to FILE (`drgnx-config-doc-write').
+The command in `docs/develop/core.md'.  Run it once in a fresh `emacs --batch -Q': a second load would set a module
+up twice."
+  (drgnx-config-doc-load)
+  (drgnx-config-doc-write file))
 
 (provide 'drgnx-config-doc)
 ;;; drgnx-config-doc.el ends here

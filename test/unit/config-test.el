@@ -345,6 +345,39 @@
       (should-error (drgnx-config-update 'drgnx-config-test #'identity) :type 'drgnx-config-refused)
       (should (equal (drgnx-test-config-text 'drgnx-config-test) text)))))
 
+(ert-deftest drgnx-config/ensure-writable-refuses-before-anything-changes ()
+  (drgnx-test-with-config
+    (drgnx-config-test--define)
+    (should-not (drgnx-config-ensure-writable 'drgnx-config-test))          ; absent: fine
+    (drgnx-test-config-put 'drgnx-config-test "(:a 1)\n")
+    (should-not (drgnx-config-ensure-writable 'drgnx-config-test))
+    (drgnx-config-test--messages
+      (dolist (text '("(:a 1 ;; c\n :b" "(:a \"x\")\n" ";; newer\n(:version 2 :a 7)\n"))
+        (drgnx-test-config-put 'drgnx-config-test text)
+        (should-error (drgnx-config-ensure-writable 'drgnx-config-test) :type 'drgnx-config-refused)
+        (should (equal (drgnx-test-config-text 'drgnx-config-test) text))
+        (should-not (drgnx-config-test--backups))))
+    (should-error (drgnx-config-ensure-writable 'drgnx-config-no-such-file) :type 'error)))
+
+(ert-deftest drgnx-config/names-and-definitions-are-public ()
+  (drgnx-test-with-config
+    (drgnx-config-test--define)
+    (drgnx-config-define 'drgnx-config-test-z :file "zz.eld" :dir 'project :schema '(plist (:c boolean "A flag"))
+                         :doc "A project file.")
+    (should (drgnx-config-defined-p 'drgnx-config-test))
+    (should-not (drgnx-config-defined-p 'drgnx-config-no-such-file))
+    (should (equal (plist-get (drgnx-config-definition 'drgnx-config-test) :file) "t.eld"))
+    (should-not (drgnx-config-definition 'drgnx-config-no-such-file))
+    (let ((all (drgnx-config-names)))
+      (should (memq 'drgnx-config-test all))
+      (should (memq 'drgnx-config-test-z all))
+      (should (equal all (sort (copy-sequence all) (lambda (a b) (string< (symbol-name a) (symbol-name b)))))))
+    (should (memq 'drgnx-config-test (drgnx-config-names '(config state))))
+    (should-not (memq 'drgnx-config-test-z (drgnx-config-names '(config state))))
+    (should (equal (cl-remove-if-not (lambda (n) (string-prefix-p "drgnx-config-test" (symbol-name n)))
+                                     (drgnx-config-names 'project))
+                   '(drgnx-config-test-z)))))
+
 (defconst drgnx-config-test--commented
   ";; my config\n(:a 1 ; the a\n :zz (keep me \"exactly\")   ;; unknown\n ;; about b\n :b \"x\")\n"
   "A file with comments and an unknown key.")

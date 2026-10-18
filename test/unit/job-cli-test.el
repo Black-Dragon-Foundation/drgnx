@@ -21,7 +21,7 @@
           (with-temp-file (concat root "config/agents.eld")   ; mock agents on every route: nothing real starts
             (prin1 `(:profiles (("mock" :command ("sh" ,(expand-file-name "test/fixtures/mock-acp-stdin.sh" drgnx-dir) ,(expand-file-name invocation-name invocation-directory) "--batch" "-Q"
                                                   "-l" ,(expand-file-name "test/fixtures/mock-acp.el" drgnx-dir))))
-                               :routes ((implement "mock") (review "mock")))
+                               :routes ((implement . "mock") (review . "mock")))
                    (current-buffer)))
           (write-region "# CLI\n\n### Task 1: one\n\n### Task 2: two\n**Depends:** Task 1\n" nil plan nil 'silent)
           (dolist (args '(("init" "-q" "-b" "main") ("add" "-A") ("commit" "-q" "-m" "start")))

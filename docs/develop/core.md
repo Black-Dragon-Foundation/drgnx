@@ -180,6 +180,12 @@ header doc)` returns NAME:
 - `:version` is the format this drgnx writes (1). `:reload` is `mtime` (the default: a get costs one stat, and a
   changed file is applied at once) or `start` (read at the first get, then only on `drgnx-config-reread`). Use
   `start` only where applying a change mid-session is unsafe.
+- Code outside the layer never touches `drgnx-config--` names. It asks: `(drgnx-config-defined-p NAME)`,
+  `(drgnx-config-definition NAME)` (the definition plist, read only) and `(drgnx-config-names &optional DIR)` (sorted;
+  DIR is `config`, `state` or `project`, or a list of them). `(drgnx-config-ensure-writable NAME &optional ROOT)` is
+  the pre-flight for a flow that ends in a write: it reads the file fresh and signals `drgnx-config-refused` when it
+  has a mistake or is newer, so call it before the flow's first side effect (Import, Save Layout As…, a settings page
+  that asks questions first) and a refusal changes nothing.
 - `:last-good` (t) applies the last good copy on a mistake. `:max-bytes` (1 MiB) caps reads and writes.
 - `:migrate` is `((FROM . FN)…)`; `:header` is the comment a new file starts with (default
   `;; drgnx: FILE (docs/reference/config.md)`); `:doc` is one line for the reference.
@@ -252,8 +258,11 @@ name, its file, folder, format, reload rule, what happens on a mistake, its `:do
 
 ```sh
 emacs --batch -Q -L core -L wb -L harness -L modules/tools -l drgnx-config-doc \
-  --eval '(drgnx-config-doc-write "docs/reference/config.md")'
+  --eval '(drgnx-config-doc-regenerate "docs/reference/config.md")'
 ```
+
+`drgnx-config-doc-regenerate` loads the sources (`drgnx-config-doc-load`) and then writes (`drgnx-config-doc-write`,
+which does not load anything). Run it once in a fresh batch Emacs; a test runs this very command and compares.
 
 `harness/drgnx-config-doc.el` finds the definitions through `drgnx-config-doc-sources`, one entry per line:
 `(require FEATURE)` for a core feature that defines files at load, `(setup MODULE)` (after a `(require FILE)` for the

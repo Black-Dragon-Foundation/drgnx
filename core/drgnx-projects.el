@@ -288,8 +288,7 @@ A file with a mistake gives its last good copy, else no projects (`drgnx-config-
 (defun drgnx-projects--refuse-bad-file ()
   "Signal `drgnx-config-refused' when projects.eld has a mistake or is newer: Import Projects changes nothing then,
 not even the board."
-  (let ((r (drgnx-config-read 'projects)))
-    (drgnx-config--refuse (plist-get r :file) r (plist-get (gethash 'projects drgnx-config--defs) :version))))
+  (drgnx-config-ensure-writable 'projects))
 
 (cl-defun drgnx-projects-import (roots &key (todos t))
   "Put the git repositories ROOTS on the board (once each); TODOS: t for every root's open TODOs, a

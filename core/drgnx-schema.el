@@ -328,7 +328,8 @@ named without its colon, in the path and to KEY-S."
          (drgnx-schema--bad rpath (format "%s is not defined" fn))
        (condition-case err
            (unless (funcall fn value) (drgnx-schema--bad rpath doc))
-         (error (drgnx-schema--bad rpath (format "%s (%s failed: %s)" doc fn (car err)))))))
+         (user-error (drgnx-schema--bad rpath (format "%s: %s" doc (error-message-string err))))
+         (error (drgnx-schema--bad rpath (format "%s (%s failed: %s)" doc fn (error-message-string err)))))))
     (_ (drgnx-schema--unknown-form schema))))
 
 (defun drgnx-schema--check (schema value rpath)

@@ -20,7 +20,7 @@ Agent profiles, the MCP servers agents get, OpenRouter restrictions and job rout
 | `:default` | string | no | The profile New Agent Session… offers |
 | `:mcp` | list of one of coordination, search | no | The MCP servers agents get |
 | `:openrouter` | not an OpenRouter restriction (:only :ignore :data-collection :zdr) | no | Which providers OpenRouter may use |
-| `:routes` | alist of symbol to list of string | no | Which profiles do each job role |
+| `:routes` | alist of symbol to string or list of string | no | Which profiles do each job role: a list of names, or one name |
 
 ## layouts.eld
 

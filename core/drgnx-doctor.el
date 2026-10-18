@@ -220,7 +220,7 @@ off), or inside a session, the mode is read as it is and never switched: an off 
   "The core features whose loading defines config files, for the `config-files' check.")
 
 (declare-function drgnx-config-read "drgnx-config")
-(defvar drgnx-config--defs)
+(declare-function drgnx-config-names "drgnx-config")
 
 (defun drgnx-doctor--config-files ()
   "The fact of the `config-files' check: (NAME :status :problem :unknown-keys :file) for every defined file that is
@@ -229,13 +229,11 @@ not a project's, from a fresh `drgnx-config-read' (it applies nothing and writes
       (progn
         (require 'drgnx-config)
         (dolist (feature drgnx-doctor-config-features) (require feature))
-        (let (names)
-          (maphash (lambda (name def) (unless (eq (plist-get def :dir) 'project) (push name names))) drgnx-config--defs)
-          (mapcar (lambda (name)
-                    (let ((r (drgnx-config-read name)))
-                      (list name :status (plist-get r :status) :problem (plist-get r :problem)
-                            :unknown-keys (plist-get r :unknown-keys) :file (plist-get r :file))))
-                  (sort names (lambda (a b) (string< (symbol-name a) (symbol-name b)))))))
+        (mapcar (lambda (name)
+                  (let ((r (drgnx-config-read name)))
+                    (list name :status (plist-get r :status) :problem (plist-get r :problem)
+                          :unknown-keys (plist-get r :unknown-keys) :file (plist-get r :file))))
+                (drgnx-config-names '(config state))))
     (error (list :error (error-message-string err)))))
 
 (defun drgnx-doctor--config-files-check (rows)

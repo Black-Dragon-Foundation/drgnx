@@ -120,6 +120,23 @@ drops what was applied from it."
   "NAME's definition; an error when there is none (the caller's bug)."
   (or (gethash name drgnx-config--defs) (error "drgnx-config: %S is not a defined config file" name)))
 
+(defun drgnx-config-defined-p (name)
+  "Whether config file NAME has a definition (a module's file only while the module is set up)."
+  (and (gethash name drgnx-config--defs) t))
+
+(defun drgnx-config-definition (name)
+  "NAME's definition, a plist (:name :file :dir :shape :version :schema :default :reload :last-good :max-bytes
+:migrate :header :doc); nil when there is none.  Read it, do not change it."
+  (gethash name drgnx-config--defs))
+
+(defun drgnx-config-names (&optional dir)
+  "The names of the defined config files, sorted.  DIR is `config', `state' or `project' (or a list of them) to
+keep only the files in those folders; nil keeps every file."
+  (let ((dirs (if (listp dir) dir (list dir))) (names nil))
+    (maphash (lambda (name def) (when (or (null dirs) (memq (plist-get def :dir) dirs)) (push name names)))
+             drgnx-config--defs)
+    (sort names (lambda (a b) (string< (symbol-name a) (symbol-name b))))))
+
 ;;;; Where files are
 
 (defun drgnx-config--path (def root)
@@ -567,6 +584,14 @@ the items cannot be matched in is written whole instead of refused."
      (signal 'drgnx-config-refused
              (list (format "%s was written by a newer drgnx (format %d; this one writes %d): update drgnx here; it was not changed"
                            (drgnx-config--shown file) (plist-get r :version) want))))))
+
+(defun drgnx-config-ensure-writable (name &optional root)
+  "Signal `drgnx-config-refused' when config file NAME (a fresh read) has a mistake or is newer than this drgnx
+writes; else nil.  Call it before the first side effect of a flow that ends in a write to NAME, so a refusal
+changes nothing at all.  Nothing is applied or written.  An undefined NAME is an `error' (the caller's bug)."
+  (let* ((def (drgnx-config--def name))
+         (file (drgnx-config--path def root)))
+    (drgnx-config--refuse file (car (drgnx-config--read def file)) (plist-get def :version))))
 
 (defun drgnx-config--versioned (def status new)
   "NEW with DEF's format as its `:version' when it is written to a plist file that was migrated, or absent."

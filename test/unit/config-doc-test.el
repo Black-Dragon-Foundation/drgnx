@@ -8,9 +8,34 @@
 (add-to-list 'load-path (expand-file-name "harness" drgnx-dir))
 (require 'drgnx-config-doc)
 
-(defconst drgnx-config-doc-test--command
-  "emacs --batch -Q -L core -L wb -L harness -L modules/tools -l drgnx-config-doc --eval '(drgnx-config-doc-write \"docs/reference/config.md\")'"
-  "The command docs/develop/core.md gives for regenerating the reference.")
+(defun drgnx-config-doc-test--command ()
+  "The command docs/develop/core.md gives for regenerating the reference, on one line."
+  (with-temp-buffer
+    (let ((coding-system-for-read 'utf-8-unix)) (insert-file-contents (expand-file-name "docs/develop/core.md" drgnx-dir)))
+    (goto-char (point-min))
+    (unless (re-search-forward "^```sh\n\\(emacs --batch [^`]*drgnx-config-doc[^`]*\\)```" nil t)
+      (ert-fail "docs/develop/core.md does not give the command that regenerates the reference"))
+    (string-trim (replace-regexp-in-string "\\\\\n[ \t]*" "" (match-string 1)))))
+
+(defun drgnx-config-doc-test--run-documented (command)
+  "Run the shell COMMAND from the checkout with HOME and XDG_* in a temp folder (tests never reach ~)."
+  (let* ((home (make-temp-file "drgnx-config-doc-home" t))
+         (default-directory drgnx-dir)
+         (buf (generate-new-buffer " *config-doc-cmd*" t))
+         (process-environment
+          (append (list (concat "HOME=" home) (concat "XDG_CONFIG_HOME=" home "/config")
+                        (concat "XDG_STATE_HOME=" home "/state") (concat "XDG_DATA_HOME=" home "/data")
+                        (concat "XDG_CACHE_HOME=" home "/cache"))
+                  process-environment))
+         (proc (make-process :name "drgnx-config-doc-cmd" :buffer buf :noquery t :command (list "sh" "-c" command)))
+         (deadline (+ (float-time) 60)))
+    (unwind-protect
+        (progn
+          (while (and (process-live-p proc) (< (float-time) deadline)) (accept-process-output proc 0.05))
+          (should (eq (process-status proc) 'exit))
+          (should (eql (process-exit-status proc) 0)))
+      (delete-directory home t)
+      (kill-buffer buf))))
 
 (defun drgnx-config-doc-test--child (form)
   "Run FORM in `emacs --batch -Q' with the doc generator loaded, from the checkout; its standard output."
@@ -29,30 +54,34 @@
     (with-current-buffer buf (buffer-string))))
 
 (ert-deftest drgnx-config-doc/the-reference-matches ()
+  ;; runs the command docs/develop/core.md gives (output swapped for a temp file), so the documented command is the one
+  ;; that works
   (let* ((tmp (make-temp-file "drgnx-config-doc" nil ".md"))
+         (documented (drgnx-config-doc-test--command))
+         (command (replace-regexp-in-string "docs/reference/config\\.md" tmp documented t t))
          (read (lambda (file)
                  (with-temp-buffer
                    (let ((coding-system-for-read 'utf-8-unix)) (insert-file-contents file))
                    (buffer-string)))))
+    (should (string-search tmp command))
+    (should (string-search "drgnx-config-doc-regenerate" documented))
     (unwind-protect
         (progn
-          (drgnx-config-doc-test--child `(progn (drgnx-config-doc-load) (drgnx-config-doc-write ,tmp)))
+          ;; a stale .elc must not hide a changed source
+          (drgnx-config-doc-test--run-documented
+           (replace-regexp-in-string "emacs --batch -Q" "emacs --batch -Q --eval '(setq load-prefer-newer t)'" command t t))
           (unless (equal (funcall read tmp) (funcall read (expand-file-name "docs/reference/config.md" drgnx-dir)))
-            (ert-fail (format "docs/reference/config.md is out of date; regenerate it with:\n  %s"
-                              drgnx-config-doc-test--command))))
+            (ert-fail (format "docs/reference/config.md is out of date; regenerate it with:\n  %s" documented))))
       (delete-file tmp))))
 
 (ert-deftest drgnx-config-doc/every-definition-has-a-doc ()
   (let ((missing (car (read-from-string
                        (drgnx-config-doc-test--child
                         '(prin1 (progn (drgnx-config-doc-load)
-                                       (let (out)
-                                         (maphash (lambda (name def)
-                                                    (unless (and (stringp (plist-get def :doc))
-                                                                 (not (string-empty-p (plist-get def :doc))))
-                                                      (push name out)))
-                                                  drgnx-config--defs)
-                                         (sort out #'string<)))))))))
+                                       (seq-remove (lambda (name)
+                                                     (let ((doc (plist-get (drgnx-config-definition name) :doc)))
+                                                       (and (stringp doc) (not (string-empty-p doc)))))
+                                                   (drgnx-config-names)))))))))
     (should-not missing)))
 
 (ert-deftest drgnx-config-doc/the-markdown-describes-a-definition ()

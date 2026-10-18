@@ -24,9 +24,11 @@
 (declare-function drgnx-gateway--restrictions-check "drgnx-gateway")
 
 (defun drgnx-agents--openrouter-ok-p (value)
-  "Whether VALUE is an `:openrouter' restriction (`drgnx-gateway--restrictions-check' accepts it)."
+  "Whether VALUE is an `:openrouter' restriction: t when `drgnx-gateway--restrictions-check' accepts it, else its
+`user-error' (the schema reports its message, which names the offending key)."
   (require 'drgnx-gateway)
-  (condition-case nil (progn (drgnx-gateway--restrictions-check value) t) (user-error nil)))
+  (drgnx-gateway--restrictions-check value)
+  t)
 
 (defconst drgnx-agents-config-schema
   '(plist (:profiles (alist string (plist (:command (list-of string) "The program and its arguments" :required t)
@@ -40,7 +42,7 @@
           (:mcp (list-of (enum coordination search)) "The MCP servers agents get")
           (:openrouter (pred drgnx-agents--openrouter-ok-p "not an OpenRouter restriction (:only :ignore :data-collection :zdr)")
                        "Which providers OpenRouter may use")
-          (:routes (alist symbol (list-of string)) "Which profiles do each job role"))
+          (:routes (alist symbol (or string (list-of string))) "Which profiles do each job role: a list of names, or one name"))
   "The schema of agents.eld.")
 
 (drgnx-config-define 'agents
