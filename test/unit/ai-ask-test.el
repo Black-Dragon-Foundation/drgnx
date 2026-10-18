@@ -4,6 +4,8 @@
 (load (expand-file-name "modules/tools/drgnx-ai-ui" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/mock-llm" drgnx-dir) nil t)
 
+(defvar drgnx-ai-ask-test--delay nil "Seconds the mock waits before it answers a chat.")
+
 (defmacro drgnx-ai-ask-test--with (answer &rest body)
   "BODY with ROOT a project (src/a.el mentions frobnicate on line 3), the `chat' and `complete' roles on
 provider `o' served by a mock answering ANSWER, its LOG."
@@ -19,7 +21,8 @@ provider `o' served by a mock answering ANSWER, its LOG."
            (write-region "(require 'x)\n\n(defun frobnicate (widget)\n  (twist widget))\n" nil (concat root "proj/src/a.el") nil 'silent)
            (write-region "(defun unrelated () nil)\n" nil (concat root "proj/src/b.el") nil 'silent)
            (with-temp-file script
-             (prin1 (list (list :path "/api/chat" :body (json-serialize (list :message (list :content ,answer))))
+             (prin1 (list (append (list :path "/api/chat" :body (json-serialize (list :message (list :content ,answer))))
+                                  (and drgnx-ai-ask-test--delay (list :delay drgnx-ai-ask-test--delay)))
                           (list :path "/api/generate" :body "{\"response\":\"ok\"}"))
                     (current-buffer)))
            (with-temp-file (concat root "config/ai.eld")
@@ -57,6 +60,38 @@ provider `o' served by a mock answering ANSWER, its LOG."
     (let ((sent (with-temp-buffer (insert-file-contents log) (buffer-string))))
       (should (string-search "(twist widget)" sent))
       (should-not (string-search "unrelated" sent)))))
+
+(defun drgnx-ai-ask-test--curls ()
+  (seq-filter (lambda (p) (and (equal (process-name p) "drgnx-ai") (process-live-p p))) (process-list)))
+
+(ert-deftest drgnx-ai-ask/stop-cancels-request ()
+  (let ((drgnx-ai-ask-test--delay 1.5))
+    (drgnx-ai-ask-test--with "frobnicate twists the widget (src/a.el:3)."
+      (let ((default-directory (concat root "proj/")) (said nil))
+        (cl-letf (((symbol-function 'message) (lambda (fmt &rest args) (push (apply #'format fmt args) said))))
+          (drgnx-ai-ask "where do we frobnicate widgets?" default-directory)
+          ;; the search runs first, then the model is asked
+          (let ((deadline (+ (float-time) 5)))
+            (while (and (not (drgnx-ai-ask-test--curls)) (< (float-time) deadline)) (accept-process-output nil 0.02)))
+          (should (= 1 (length (drgnx-ai-ask-test--curls))))
+          (should (= 1 (length drgnx-ai--active)))
+          (drgnx-ai-stop)
+          (should-not drgnx-ai--active)
+          (should-not (drgnx-ai-ask-test--curls))                         ; the process is gone
+          (accept-process-output nil 2.0)                                 ; past the mock's answer
+          (should-not (get-buffer "*AI answer*"))                         ; the callback never ran
+          (should (seq-find (lambda (m) (string-match-p "stopped" m)) said)))))))
+
+(ert-deftest drgnx-ai-ask/stop-during-the-search-asks-nothing ()
+  (drgnx-ai-ask-test--with "never"
+    (let ((default-directory (concat root "proj/")) (said nil))
+      (cl-letf (((symbol-function 'message) (lambda (fmt &rest args) (push (apply #'format fmt args) said))))
+        (drgnx-ai-ask "where do we frobnicate widgets?" default-directory)
+        (drgnx-ai-stop)                                                   ; the grep has not answered yet
+        (accept-process-output nil 1.0)
+        (should-not (drgnx-ai-ask-test--curls))
+        (should-not (get-buffer "*AI answer*"))
+        (should-not drgnx-ai--active)))))
 
 (ert-deftest drgnx-ai-ask/hidden-files-never-reach-the-model ()
   ;; .env, .git and other dot files: never searched, with ripgrep or with grep
@@ -158,7 +193,7 @@ provider `o' served by a mock answering ANSWER, its LOG."
     (unwind-protect
         (progn
           (funcall (plist-get (alist-get 'tools/ai drgnx-modules--table) :setup))
-          (dolist (id '(ai-ask ai-choose)) (should (drgnx-commands-get id))))
+          (dolist (id '(ai-ask ai-choose ai-stop)) (should (drgnx-commands-get id))))
       (remove-hook 'prog-mode-hook #'drgnx-ai-ghost--maybe-enable))))
 
 ;;; ai-ask-test.el ends here

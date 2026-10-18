@@ -289,4 +289,5 @@
         (shortcuts-undo "u" :map (drgnx-shortcuts . drgnx-shortcuts-mode-map))
         (shortcuts-reset "r" :map (drgnx-shortcuts . drgnx-shortcuts-mode-map))
         (shortcuts-reset-all "R" :map (drgnx-shortcuts . drgnx-shortcuts-mode-map))
-        (shortcuts-profile "p" :map (drgnx-shortcuts . drgnx-shortcuts-mode-map))))
+        (shortcuts-profile "p" :map (drgnx-shortcuts . drgnx-shortcuts-mode-map))
+        (ai-stop :none "in the palette")))

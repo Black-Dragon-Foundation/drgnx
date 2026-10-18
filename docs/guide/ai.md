@@ -128,6 +128,12 @@ The answer opens in `*AI answer*` with the files it drew on as links. Other ways
 its own when the search module is on. `drgnx-ai-ask-request` is the same search and question without the buffer —
 onboarding tests Ask the Codebase with it over a small temporary project.
 
+## Stopping a request
+
+**Stop AI Request** (the palette; no key by default) cancels the Edit with AI and Ask the Codebase requests in flight:
+the model's process ends and nothing opens when it would have answered. With nothing in flight it says so. It does not
+touch ghost text (any key you type drops that question) or a job an agent is running ([agents.md](agents.md)).
+
 ## Choosing a provider and model
 
 **Choose AI Provider/Model…** first looks for what runs here now (a second at most), then asks for a role and a

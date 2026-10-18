@@ -224,6 +224,31 @@ field; cycle the heading; indent."
     (setq this-command cmd)
     (call-interactively cmd)))
 
+;;;; Stopping a request
+
+(defvar drgnx-ai--active nil
+  "Entries (STOPPER) of the Edit with AI and Ask the Codebase requests in flight; STOPPER is a function that
+cancels one.  An entry leaves when its request answers or is stopped.")
+
+(defun drgnx-ai--track (start)
+  "Call START with a function DONE (call it when the request ends); START returns a function that stops the
+request.  Until DONE is called or `drgnx-ai-stop' runs, the request is in `drgnx-ai--active'."
+  (let* ((entry (list nil))
+         (done (lambda () (setq drgnx-ai--active (delq entry drgnx-ai--active)))))
+    (push entry drgnx-ai--active)
+    (setcar entry (funcall start done))
+    entry))
+
+(defun drgnx-ai-stop ()
+  "Stop the Edit with AI and Ask the Codebase requests in flight: their answers never arrive."
+  (interactive)
+  (let ((entries drgnx-ai--active))
+    (setq drgnx-ai--active nil)
+    (dolist (e entries) (when (functionp (car e)) (funcall (car e))))
+    (if entries
+        (message "AI: stopped %d request%s" (length entries) (if (cdr entries) "s" ""))
+      (message "AI: nothing to stop"))))
+
 ;;;; Inline edit, reviewed hunk by hunk
 
 (defconst drgnx-ai-edit-system
@@ -258,21 +283,26 @@ hunk by hunk before anything changes."
          (s (copy-marker start t)) (e (copy-marker end))
          (text (buffer-substring-no-properties start end)))
     (message "AI edit: asking…")
-    (drgnx-ai-request 'edit 'chat
-                      (list :messages (vector (list :role "system" :content drgnx-ai-edit-system)
-                                              (list :role "user" :content (format "Instruction: %s\n\nCode:\n%s" instruction text))))
-                      (lambda (answer info)
-                        (cond
-                         ((not answer) (message "AI edit: no answer (%s)" (plist-get info :error)))
-                         ((not (buffer-live-p buf)))
-                         ;; the answer rewrites the text that was sent: if that changed meanwhile, the review would
-                         ;; drop the newer edits
-                         ((not (equal (with-current-buffer buf (buffer-substring-no-properties s e)) text))
-                          (message "AI edit: the region changed while the model answered; run Edit with AI again"))
-                         (t (let ((new (drgnx-ai--strip-fence answer)))
-                              (when (and (string-suffix-p "\n" text) (not (string-suffix-p "\n" new))) (setq new (concat new "\n")))
-                              (drgnx-ai--edit-review buf s e new)))))
-                      :interactive t)))
+    (drgnx-ai--track
+     (lambda (done)
+       (let ((h (drgnx-ai-request
+                 'edit 'chat
+                 (list :messages (vector (list :role "system" :content drgnx-ai-edit-system)
+                                         (list :role "user" :content (format "Instruction: %s\n\nCode:\n%s" instruction text))))
+                 (lambda (answer info)
+                   (funcall done)
+                   (cond
+                    ((not answer) (message "AI edit: no answer (%s)" (plist-get info :error)))
+                    ((not (buffer-live-p buf)))
+                    ;; the answer rewrites the text that was sent: if that changed meanwhile, the review would
+                    ;; drop the newer edits
+                    ((not (equal (with-current-buffer buf (buffer-substring-no-properties s e)) text))
+                     (message "AI edit: the region changed while the model answered; run Edit with AI again"))
+                    (t (let ((new (drgnx-ai--strip-fence answer)))
+                         (when (and (string-suffix-p "\n" text) (not (string-suffix-p "\n" new))) (setq new (concat new "\n")))
+                         (drgnx-ai--edit-review buf s e new)))))
+                 :interactive t)))
+         (lambda () (drgnx-ai-cancel h)))))))
 
 (defun drgnx-ai--edit-review (buf start end new)
   "Show NEW for BUF's region START..END (markers) as a diff against a copy of BUF as it is now."
@@ -422,23 +452,25 @@ when the project has one.")
 (cl-defun drgnx-ai-ask-request (question root callback &key chain interactive)
   "Find what QUESTION is about under ROOT (`drgnx-ai-retrievers') and ask the `chat' role (or CHAIN) with the
 snippets found: CALLBACK gets (ANSWER INFO SNIPPETS), ANSWER nil when no provider answered (INFO's :error says
-why).  INTERACTIVE as for `drgnx-ai-request'.  Ask the Codebase, and onboarding's test of it."
-  (let ((left (length drgnx-ai-retrievers)) (snippets nil))
+why).  INTERACTIVE as for `drgnx-ai-request'.  Ask the Codebase, and onboarding's test of it.  Returns a function
+that stops it (CALLBACK never runs)."
+  (let ((left (length drgnx-ai-retrievers)) (snippets nil) (stopped nil) (h nil))
     (dolist (r drgnx-ai-retrievers)
       (funcall r question root
                (lambda (found)
                  (setq snippets (append snippets found))
-                 (when (zerop (setq left (1- left)))
-                   (drgnx-ai-request
-                    'chat 'chat
-                    (list :messages
-                          (vector (list :role "system" :content "Answer the question about this codebase from the excerpts given.  Cite the files you use as path:line.  Say so when the excerpts do not answer it.")
-                                  (list :role "user"
-                                        :content (concat "Question: " question "\n\nExcerpts:\n"
-                                                         (mapconcat (lambda (s) (format "--- %s:%d\n%s" (plist-get s :file) (plist-get s :line) (plist-get s :text)))
-                                                                    snippets "\n")))))
-                    (lambda (answer info) (funcall callback answer info snippets))
-                    :chain chain :interactive interactive)))))))
+                 (when (and (zerop (setq left (1- left))) (not stopped))
+                   (setq h (drgnx-ai-request
+                            'chat 'chat
+                            (list :messages
+                                  (vector (list :role "system" :content "Answer the question about this codebase from the excerpts given.  Cite the files you use as path:line.  Say so when the excerpts do not answer it.")
+                                          (list :role "user"
+                                                :content (concat "Question: " question "\n\nExcerpts:\n"
+                                                                 (mapconcat (lambda (s) (format "--- %s:%d\n%s" (plist-get s :file) (plist-get s :line) (plist-get s :text)))
+                                                                            snippets "\n")))))
+                            (lambda (answer info) (funcall callback answer info snippets))
+                            :chain chain :interactive interactive))))))
+    (lambda () (setq stopped t) (when h (drgnx-ai-cancel h)))))
 
 (defun drgnx-ai-ask (question &optional root)
   "Ask QUESTION about the project at ROOT (default: this project): what it names is looked up in the code, the
@@ -447,10 +479,13 @@ best snippets go to the `chat' role with it, the answer cites the files."
                      (or (when-let* ((p (and (fboundp 'project-current) (project-current)))) (project-root p)) default-directory)))
   (let ((root (expand-file-name (or root default-directory))))
     (message "Ask the Codebase: looking…")
-    (drgnx-ai-ask-request question root
-                          (lambda (answer info snippets)
-                            (drgnx-ai--answer-buffer question (or answer (format "No answer: %s" (plist-get info :error))) snippets root))
-                          :interactive t)))
+    (drgnx-ai--track
+     (lambda (done)
+       (drgnx-ai-ask-request question root
+                             (lambda (answer info snippets)
+                               (funcall done)
+                               (drgnx-ai--answer-buffer question (or answer (format "No answer: %s" (plist-get info :error))) snippets root))
+                             :interactive t)))))
 
 ;;;; Choose Provider/Model
 
@@ -507,6 +542,8 @@ and keep it in ai.eld (never a key)."
                                         (ai-edit-reject "Reject AI Edit" drgnx-ai-edit-reject "Drop the edit; the buffer stays"
                                                         drgnx-ai-edit-review-mode-map)
                                         (ai-ask "Ask the Codebase…" drgnx-ai-ask "A question about this project, answered from its code" nil)
+                                        (ai-stop "Stop AI Request" drgnx-ai-stop
+                                                 "Cancel the Edit with AI or Ask the Codebase request in flight" nil)
                                         (ai-choose "Choose AI Provider/Model…" drgnx-ai-choose "A role's provider and model, tested first" nil)
                                         (ai-load-keys "Load Keys" drgnx-ai-load-keys
                                                       "Read your providers' keys from the Keychain or keyring, for ghost text and the background" nil)))

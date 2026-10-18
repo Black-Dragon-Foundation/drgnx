@@ -4,6 +4,8 @@
 (load (expand-file-name "modules/tools/drgnx-ai-ui" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/mock-llm" drgnx-dir) nil t)
 
+(defvar drgnx-ai-edit-test--delay nil "Seconds the mock waits before it answers.")
+
 (defmacro drgnx-ai-edit-test--with (answer &rest body)
   "BODY with the `edit' role on provider `o' (Ollama), served by a mock answering ANSWER (a string) to every chat."
   (declare (indent 1))
@@ -16,7 +18,9 @@
          (progn
            (make-directory (concat root "config") t)
            (with-temp-file script
-             (prin1 (list (list :path "/api/chat" :body (json-serialize (list :message (list :content ,answer))))) (current-buffer)))
+             (prin1 (list (append (list :path "/api/chat" :body (json-serialize (list :message (list :content ,answer))))
+                                  (and drgnx-ai-edit-test--delay (list :delay drgnx-ai-edit-test--delay))))
+                    (current-buffer)))
            (with-temp-file (concat root "config/ai.eld")
              (prin1 `(:version 1 :providers ((o :name "O" :kind ollama :url ,(format "http://127.0.0.1:%d" port) :caps (chat fim)))
                                :roles ((edit (o . "m"))))
@@ -233,6 +237,38 @@
         (should (seq-find (lambda (m) (string-match-p "AI edit: no answer" m)) said))
         (should-not (drgnx-ai-edit-test--review 0.2))
         (should (equal (buffer-string) "x\n"))))))
+
+(defun drgnx-ai-edit-test--curls ()
+  "The live request processes."
+  (seq-filter (lambda (p) (and (equal (process-name p) "drgnx-ai") (process-live-p p))) (process-list)))
+
+(ert-deftest drgnx-ai-edit/stop-cancels-request ()
+  (let ((drgnx-ai-edit-test--delay 1.5) (said nil))
+    (drgnx-ai-edit-test--with "(defun a ()\n  10)\n"
+      (with-temp-buffer
+        (insert "(defun a ()\n  1)\n")
+        (cl-letf (((symbol-function 'message) (lambda (fmt &rest args) (push (apply #'format fmt args) said))))
+          (drgnx-ai-edit "times ten" (point-min) (point-max))
+          (should (= 1 (length (drgnx-ai-edit-test--curls))))
+          (should (= 1 (length drgnx-ai--active)))
+          (drgnx-ai-stop)
+          (should-not drgnx-ai--active)
+          (should-not (drgnx-ai-edit-test--curls))                       ; the process is gone
+          (accept-process-output nil 2.0)                                ; past the mock's answer
+          (should-not (drgnx-ai-edit-test--review 0.1))                  ; the callback never ran
+          (should-not (seq-find (lambda (m) (string-match-p "no answer" m)) said))
+          (should (seq-find (lambda (m) (string-match-p "stopped" m)) said))
+          ;; nothing in flight: it says so
+          (drgnx-ai-stop)
+          (should (string-match-p "nothing" (car said))))))))
+
+(ert-deftest drgnx-ai-edit/a-finished-request-is-no-longer-stoppable ()
+  (drgnx-ai-edit-test--with "(defun a ()\n  10)\n"
+    (with-temp-buffer
+      (insert "(defun a ()\n  1)\n")
+      (drgnx-ai-edit "times ten" (point-min) (point-max))
+      (should (drgnx-ai-edit-test--review))
+      (should-not drgnx-ai--active))))
 
 (ert-deftest drgnx-ai-edit/never-on-c-i ()
   ;; C-i is Tab in a terminal: inline edit must never take it, in any profile
