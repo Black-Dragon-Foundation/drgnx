@@ -148,6 +148,16 @@ stays running with everything open: nothing is lost. If terminals or other progr
 asks once whether to quit and stop them (no keeps everything running). A drgnx that is not a daemon has nothing to
 keep running, so closing its last window always quits (asking the same way).
 
+The keys close a window the same way. `C-x C-c` (Save Buffers Kill Terminal) and `C-x 5 0` (Delete Frame) in a
+graphical window do what its close button does: another window is open, so only this one closes; it is the last one,
+so drgnx keeps running or quits as chosen above. The keys are not rebound — the commands are remapped, so whatever
+key runs them follows — and programmatic calls to those commands are left alone. A terminal frame (`drgnx -t`) and a
+child frame (a popup) keep Emacs' behaviour. If you expect `C-x C-c` to leave a daemon running in quit mode, the
+setting says otherwise; switch it to keep running.
+
+`drgnx safe` is a debugging session: it never serves, so `drgnx PATH` does not reach it (and starts the normal
+drgnx beside it). Close it like any Emacs.
+
 Onboarding's Daemon and Desktop step asks it once ([onboarding.md](onboarding.md#the-steps)).
 Change the choice with **Preferences: Keep drgnx Running in the Background** (palette, Options menu): it switches
 between the two and says which one is on. The choice is kept in `~/.config/drgnx/session.eld` as
@@ -170,7 +180,12 @@ a timer, [ai.md](ai.md#keys)), sends files as file arguments and each folder as
 `(drgnx-session-open-folder "…")`. Every call but `--wait`'s file call has `-n` (no waiting); with no display,
 `--wait` is just `emacsclient -t -- FILE…`. The daemon starts detached (`setsid`, else `perl` on macOS) as
 `emacs --bg-daemon=drgnx --init-directory=<checkout>/init`. The close button's `delete-frame` event and Close Window
-run `drgnx-session-close-frame`; Quit drgnx runs `drgnx-session-quit`. Code: `core/drgnx-session.el`; tests:
-`test/unit/session-test.el`, `test/unit/bin-test.el` (fake `emacs`, `emacsclient` and `systemctl`, and one real
+run `drgnx-session-close-frame`, as do `C-x C-c` and `C-x 5 0` (`drgnx-session-kill-terminal`,
+`drgnx-session-delete-frame`: remaps of the stock commands); Quit drgnx runs `drgnx-session-quit`. On macOS drgnx
+ignores `XDG_RUNTIME_DIR`: a shell exports it and an app started from Finder does not, which would put the server
+socket in two places. The daemon puts it in Emacs' non-XDG directory, `emacs<uid>` under `$TMPDIR`, and `bin/drgnx`
+runs `emacsclient` with `env -u XDG_RUNTIME_DIR`, so Terminal and Finder reach the same drgnx. Code: `core/drgnx-session.el`; tests:
+`test/unit/session-test.el`, `test/unit/session-close-keys-test.el`, `test/unit/session-darwin-socket-test.el`,
+`test/unit/bin-test.el` (fake `emacs`, `emacsclient` and `systemctl`, and one real
 headless `open --check`), and the live scenario `test/live/drgnx-session-keep-or-quit-test.el` (a daemon session:
 `bin/drgnx open` with a file and a folder with a space and an accent, then the last window closed in each mode).
