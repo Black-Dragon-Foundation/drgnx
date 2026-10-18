@@ -177,3 +177,35 @@
        (should (plist-get (drgnx-jobs--read job-file) :start))
        (should (equal (plist-get (drgnx-jobs--read job-file) :boot) (drgnx-jobs--boot-id)))
        (should (eq (drgnx-jobs-test--status id) 'running))))))
+
+;;;; The systemd launcher: systemd-run's ExecStart treats `$' specially
+
+(ert-deftest drgnx-jobs/the-systemd-argv-escapes-dollars-for-execstart ()
+  ;; systemd turns `$$' into `$' (and substitutes `${NAME}'): the shell must get the wrapper's original text
+  (let* ((line (drgnx-jobs--wrapper "/tmp/j/" '("sh" "-c" "echo ${HOME} $1")))
+         (args (drgnx-jobs--systemd-args "id1" "/tmp" line nil))
+         (sent (car (last args))))
+    (should (string-search "echo $$ >" line))                       ; the wrapper does need its own pid
+    (should (equal (seq-take (last args 3) 2) '("sh" "-c")))
+    (should (equal sent (string-replace "$" "$$" line)))
+    (should (equal (string-replace "$$" "$" sent) line))))          ; systemd's unescaping gives it back
+
+(defun drgnx-jobs-test--systemd-p ()
+  (and (executable-find "systemd-run") (executable-find "systemctl")
+       (eql 0 (call-process "systemctl" nil nil nil "--user" "show-environment"))))
+
+(ert-deftest drgnx-jobs/a-systemd-job-records-its-real-pid ()
+  (skip-unless (drgnx-jobs-test--systemd-p))
+  (drgnx-jobs-test--with
+   (let ((process-environment (cons "DRGNX_JOBS_LAUNCHER=systemd" process-environment)) id)
+     (unwind-protect
+         (progn
+           (setq id (drgnx-jobs-start "sd" '("sh" "-c" "sleep 600")))
+           (let ((pid (drgnx-jobs--text (expand-file-name "pid" (drgnx-jobs--dir id)))))
+             (should (string-match-p "\\`[0-9]+\\'" pid)))
+           (should (eq (drgnx-jobs-test--status id) 'running))
+           (drgnx-jobs-stop id)
+           (should (drgnx-jobs-test--wait (lambda () (not (eq (drgnx-jobs-test--status id) 'running))) 5))
+           (should (memq (drgnx-jobs-test--status id) '(stopped exited gone)))
+           (should-not (eql 0 (call-process "systemctl" nil nil nil "--user" "--quiet" "is-active" (concat "drgnx-job-" id)))))
+       (when id (call-process "systemctl" nil nil nil "--user" "stop" (concat "drgnx-job-" id)))))))

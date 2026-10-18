@@ -72,14 +72,16 @@ leads its own process group, and setsid(2) refuses a group leader."
 (defun drgnx-jobs--systemd-args (id cwd line env &optional task memory-max nice)
   "systemd-run's arguments for job ID running LINE in CWD.  ENV (\"NAME=value\"…) travels in systemd-run's own
 environment — `--setenv=NAME' copies it from there — so no value (a key) is ever in a command line.  MEMORY-MAX
-(\"1G\"): the unit may use no more memory, and no swap.  NICE (10): its scheduling niceness."
+(\"1G\"): the unit may use no more memory, and no swap.  NICE (10): its scheduling niceness.
+LINE goes through systemd's ExecStart, which reads `$$' as `$' and substitutes `${NAME}': every `$' is doubled
+so the shell gets LINE as written (its `echo $$ > pid' records the job's real pid, not a literal `$')."
   (append (list "--user" "--quiet" "--collect" (concat "--unit=drgnx-job-" id) (concat "--working-directory=" cwd)
                 (concat "--setenv=PATH=" (or (getenv "PATH") "")) (concat "--setenv=HOME=" (or (getenv "HOME") "")))
           (and task (list (concat "--setenv=DRGNX_TASK=" task)))
           (mapcar (lambda (e) (concat "--setenv=" (car (split-string e "=")))) env)
           (and memory-max (list "-p" (concat "MemoryMax=" memory-max) "-p" "MemorySwapMax=0"))
           (and nice (list "-p" (format "Nice=%d" nice)))
-          (list "sh" "-c" line)))
+          (list "sh" "-c" (string-replace "$" "$$" line))))
 
 (cl-defun drgnx-jobs-start (name command &key cwd task env memory-max nice no-wait)
   "Run COMMAND (a list) as the durable job NAME in CWD.  Returns the job's id.  TASK (a work-tracker
