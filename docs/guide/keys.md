@@ -25,7 +25,7 @@ The onboarding flow will ask which one you want (VS Code preselected).
 | Command | VS Code | Emacs | Vim |
 |---|---|---|---|
 | Command Palette | `C-S-p`, `F1` | `C-S-p` | `SPC SPC` |
-| Keyboard Shortcuts (key sheet) | `C-k C-s` | `C-h C-k` | `SPC ?` |
+| Keyboard Shortcuts (key sheet) | `C-k C-r` | `C-h C-k` | `SPC ?` |
 | Keyboard Profile… | `C-k C-p` | — | `SPC h k` |
 | Open File… | `C-o` | `C-x C-f` | `SPC f f` |
 | Save | `C-s` | `C-x C-s` | `SPC f s` |
@@ -227,8 +227,8 @@ drgnx's own keys — or the line is explained. The Emacs keys gryphn leaves alon
 
 | gryphn | Why it is not in drgnx, or differs |
 |---|---|
-| `C-k` (kill line) | starts VS Code's chords in drgnx (`C-k C-s` key sheet, `C-k z` zen, `C-k s` save all, …); `C-S-k` deletes the line |
-| `<f1>` key sheet | `<f1>` is the palette, as in VS Code; the key sheet is `C-k C-s` (VS Code's Keyboard Shortcuts) |
+| `C-k` (kill line) | starts VS Code's chords in drgnx (`C-k C-r` key sheet, `C-k z` zen, `C-k s` save all, …); `C-S-k` deletes the line |
+| `<f1>` key sheet | `<f1>` is the palette, as in VS Code; the key sheet is `C-k C-r` (VS Code's Keyboard Shortcuts Reference) |
 | Window 4 … 9 (`M-4` … `M-9`) | drgnx numbers editor groups (`M-1` … `M-3`, `C-1` … `C-3`), not every window; `M-o` picks any window |
 
 | gryphn | Why it is not in drgnx |

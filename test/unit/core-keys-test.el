@@ -53,7 +53,7 @@
     (should-not (drgnx-keys-test--conflict r "C-o"))
     ;; …but turning a prefix into a command, or a command into a prefix, always is.
     (should (eq (plist-get (drgnx-keys-test--conflict r "<f1>") :kind) 'prefix))
-    (should (eq (plist-get (drgnx-keys-test--conflict r "C-k C-s") :kind) 'prefix))
+    (should (eq (plist-get (drgnx-keys-test--conflict r "C-k C-r") :kind) 'prefix))
     (should (null (plist-get r :problems)))))
 
 (ert-deftest drgnx-keys/emacs-editing-then-vscode-app ()
@@ -111,7 +111,7 @@
 (ert-deftest drgnx-keys/macos-cmd ()
   (let ((r (drgnx-keys-test--resolve '((vscode app editing window)) :platform 'macos)))
     (should (equal (drgnx-keys-test--keys r 'open-file) '("s-o")))
-    (should (equal (drgnx-keys-test--keys r 'keys-sheet) '("s-k s-s"))))
+    (should (equal (drgnx-keys-test--keys r 'keys-sheet) '("s-k s-r"))))
   (let ((r (drgnx-keys-test--resolve '((emacs app editing window)) :platform 'macos)))
     (should (equal (drgnx-keys-test--keys r 'open-file) '("C-x C-f")))))
 
@@ -143,7 +143,7 @@
     (drgnx-keys-test--live
      (drgnx-keys-use '((vscode app editing window)))
      (should (eq (keymap-lookup global-map "C-o") #'find-file))
-     (should (eq (keymap-lookup global-map "C-k C-s") #'drgnx-surfaces-cheatsheet))
+     (should (eq (keymap-lookup global-map "C-k C-r") #'drgnx-surfaces-cheatsheet))
      (should (eq (keymap-lookup global-map "<f1>") #'drgnx-palette))
      (drgnx-keys-use '((emacs app editing window)))
      (should (eq (keymap-lookup global-map "C-o") #'open-line))
@@ -479,7 +479,7 @@
      (should (= (length lines) 1))
      (should (string-prefix-p "C-k " (car lines)))
      (should (string-search "Keyboard Shortcuts" (car lines)))
-     (should (string-search "C-k C-s" (car lines)))
+     (should (string-search "C-k C-r" (car lines)))
      (should (string-search (format "%d keys" (length per-key)) (car lines)))
      (should (seq-find (lambda (l) (string-prefix-p "<f1> " l)) (drgnx-keys-conflict-lines))))
    (let (said)
@@ -596,7 +596,7 @@
                      '("s-L"))))))
 
 (defconst drgnx-keys-test--linux-snapshot
-  '((open-folder "C-k C-o" nil) (palette "C-S-p" nil) (palette "<f1>" nil) (keys-sheet "C-k C-s" nil) (preferences-modules "C-," nil)
+  '((open-folder "C-k C-o" nil) (palette "C-S-p" nil) (palette "<f1>" nil) (keys-sheet "C-k C-r" nil) (preferences-modules "C-," nil)
     (modules-toggle "RET" drgnx-modules-list-mode-map) (keyboard-profile "C-k C-p" nil) (open-file "C-o" nil)
     (save-file "C-s" nil) (file-save-as "C-S-s" nil) (file-new "C-n" nil) (file-reopen-tab "C-S-t" nil)
     (file-new-window "C-S-n" nil) (file-close-window "C-q" nil) (view-escape "<escape>" nil)
