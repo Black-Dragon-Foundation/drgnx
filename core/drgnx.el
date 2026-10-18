@@ -9,6 +9,7 @@
 
 ;;; Code:
 (require 'drgnx-paths)
+(require 'drgnx-file)
 (require 'drgnx-hooks)
 (require 'drgnx-guard)
 (require 'drgnx-registry)
@@ -44,12 +45,11 @@ the start."
   (interactive)
   (let ((file (drgnx-user-config-file)))
     (unless (file-exists-p file)
-      (make-directory (file-name-directory file) t)
-      (write-region ";;; config.el --- my drgnx configuration -*- lexical-binding: t -*-
+      (drgnx-file-write-text file ";;; config.el --- my drgnx configuration -*- lexical-binding: t -*-
 ;; Loaded at the end of every start, after drgnx's startup modules: settings here win.
 ;; An error is said in *Messages* and drgnx starts anyway; `drgnx safe' skips this file.
 
-" nil file nil 'silent))
+"))
     (find-file file)))
 
 (defun drgnx--core-commands ()

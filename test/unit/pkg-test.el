@@ -2,6 +2,7 @@
 ;; Everything runs offline against package archives that are local directories, in temp dirs:
 ;; never the network, the user's ELPA, ~/.local/share/drgnx or ~/.config/drgnx.
 (require 'ert)
+(require 'drgnx-file)
 (require 'drgnx-paths)
 (require 'drgnx-pkg)
 
@@ -1088,5 +1089,17 @@ fy with a newer fa 2.0.  Returns (FX FY FA-1.0-ENTRY)."
     (cl-letf (((symbol-function 'drgnx-pkg-sync) (lambda (&rest a) (push a calls) '(:ok t))))
       (with-output-to-string (should (eql (drgnx-pkg-cli-run '("sync" "--prune")) 0)))
       (should (equal (car calls) '(:prune t))))))
+
+(ert-deftest drgnx-pkg/the-service-unit-goes-through-the-file-layer ()
+  (drgnx-pkg-test--with root
+    (let* ((dir (concat root "units/more")) (file (concat dir "/drgnx.service"))
+           (calls nil) (orig (symbol-function 'drgnx-file-write-text)))
+      (cl-letf (((symbol-function 'drgnx-file-write-text)
+                 (lambda (f text &rest args) (push f calls) (apply orig f text args))))
+        (let ((unit (drgnx-pkg-service-unit dir)))
+          (should (equal calls (list file)))
+          (should (equal (with-temp-buffer (insert-file-contents file) (buffer-string)) unit))))
+      (should (equal (directory-files dir nil "\\`[^.]\\|\\`\\.[^.]") '("drgnx.service"))))))
+
 
 ;;; pkg-test.el ends here
