@@ -62,9 +62,11 @@ For producers that finish a burst of work: no input pending, idle for `drgnx-gc-
   (setq gc-cons-threshold drgnx-gc-cons-threshold gc-cons-percentage 0.1)
   (drgnx-gc--start-idle))
 
-(defun drgnx-gc--gcmh-changed (_symbol newval operation _where)
-  "Variable watcher of `gcmh-mode': gcmh does the idle collection while it is on, drgnx while it is off."
-  (when (eq operation 'set)
+(defun drgnx-gc--gcmh-changed (symbol newval operation _where)
+  "Variable watcher of `gcmh-mode': gcmh does the idle collection while it is on, drgnx while it is off.
+Acts only on a real change: loading gcmh.el sets the variable to nil, which must not overwrite the user's threshold."
+  (when (and (eq operation 'set)
+             (not (eq (and newval t) (and (default-boundp symbol) (default-value symbol) t))))
     (if newval (drgnx-timer-cancel 'gc-idle) (drgnx-gc--gcmh-off))))
 
 (define-minor-mode drgnx-gc-mode

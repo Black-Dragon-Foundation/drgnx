@@ -11,9 +11,12 @@
 ;; results by key, bounded: weak and liveness-checked when keyed by an object, an LRU with a cap when keyed by a
 ;; string.  Reads of an epoch or a memo hit allocate 0.
 ;;
-;; Every definition is recorded for the module whose setup makes it (`drgnx-modules-push-undo'), is listed in
-;; `drgnx-memo--registry' (which the fingerprint reads) and in `drgnx-memo-census' (which the soak checks against
-;; the caps).  This file needs nothing but Emacs: the recorder is reached through `fboundp', so it loads in batch
+;; A definition (`drgnx-epoch-define', `drgnx-memo-define', `drgnx-cache-define') is a DECLARATION, like `defvar':
+;; made at the top level of a file, in core/ or modules/, never undone, listed in `drgnx-memo--registry' and in
+;; `drgnx-memo-census' (which the soak checks against the caps).  What a module OWNS is what has a global effect:
+;; `drgnx-memo-activate', called in its :setup, installs the variable watchers of the epochs it names and records
+;; the undo that removes them again (and empties the memos and caches it names); the fingerprint reads the live
+;; watches (`drgnx-memo--watched').  This file needs nothing but Emacs: the recorder is reached through `fboundp', so it loads in batch
 ;; processes that never load the modules.  See docs/develop/core.md, "Epochs, memos and caches".
 
 ;;; Code:
@@ -29,8 +32,10 @@
   key cap (clock 0))              ; cache: KEY (`object' or `string'), CAP, the LRU stamp counter
 
 (defvar drgnx-memo--registry (make-hash-table :test #'equal)
-  "LABEL (\"epoch NAME\", \"memo NAME\" or \"cache NAME\") → the definition.
-The fingerprint (`drgnx-modules-fingerprint-registries') reads the labels.")
+  "LABEL (\"epoch NAME\", \"memo NAME\" or \"cache NAME\") → the definition: declarations, not owned state.")
+
+(defvar drgnx-memo--active nil
+  "Alist EPOCH-NAME → how many `drgnx-memo-activate' calls hold its watchers.")
 
 (defvar drgnx-memo--watched nil
   "Alist VARIABLE → the names of the epochs that `drgnx-memo--watcher' bumps when VARIABLE is set.")
@@ -49,23 +54,23 @@ The fingerprint (`drgnx-modules-fingerprint-registries') reads the labels.")
 
 (defun drgnx-memo--label (kind name) (format "%s %s" kind name))
 
-(defun drgnx-memo--register (prop def undo-label)
-  "Make DEF the definition of its name under symbol property PROP, list it, and record its undo."
+(defun drgnx-memo--register (prop def)
+  "Make DEF the definition of its name under symbol property PROP, and list it."
   (let ((name (drgnx-memo--def-name def)) (kind (drgnx-memo--def-kind def)))
     (put name prop def)
     (puthash (drgnx-memo--label kind name) def drgnx-memo--registry)
-    (when (fboundp 'drgnx-modules-push-undo)
-      (drgnx-modules-push-undo undo-label (lambda () (drgnx-memo--undefine def))))
     nil))
 
 (defun drgnx-memo--undefine (def)
-  "Remove DEF's definition, when it is still the one of its name.  An epoch keeps its count for a later definition."
+  "Remove DEF's definition, when it is still the one of its name (tests; a declaration is otherwise permanent).
+An epoch loses its watchers and keeps its count for a later definition."
   (when def
     (let* ((name (drgnx-memo--def-name def)) (kind (drgnx-memo--def-kind def))
            (prop (pcase kind ('epoch 'drgnx-epoch--def) ('memo 'drgnx-memo--def) (_ 'drgnx-cache--def))))
       (when (eq (get name prop) def)
         (when (eq kind 'epoch)
           (dolist (entry (copy-sequence drgnx-memo--watched)) (drgnx-memo--unwatch (car entry) name))
+          (setq drgnx-memo--active (assq-delete-all name drgnx-memo--active))
           (put name 'drgnx-epoch--last (get name 'drgnx-epoch--value))
           (put name 'drgnx-epoch--value nil))
         (put name prop nil)
@@ -84,16 +89,18 @@ The fingerprint (`drgnx-modules-fingerprint-registries') reads the labels.")
     form))
 
 (defun drgnx-epoch-define (name &rest args)
-  "Define epoch NAME and return it.  ARGS: `:per' nil, `buffer' or `object'; `:redisplay' non-nil (a bump also
+  "Define epoch NAME and return it.  ARGS: `:per' nil, `buffer' or `object'; `:watch' the variables whose
+setting bumps it (`drgnx-epoch-watch'); `:redisplay' non-nil (a bump also
 calls `force-mode-line-update': all windows for a global, object or base bump, that buffer's for a buffer's); `:doc'.
 A global epoch is one counter.  A `buffer' epoch is a base counter plus one per buffer (weak on the buffer): its value
 for a buffer is the base plus the buffer's own count, so either bump moves it.  An `object' epoch counts per object
-\(an `equal' table, weak on the value): its value for an object is the base plus the object's count, and without an
-object it is the base plus the total of all the objects' bumps.  Counters wrap at the fixnum limit.
-The undo `\"epoch NAME\"' removes the definition and its watchers while they are still this one's.  A redefinition
+\(an `equal' table: it grows by one fixnum per distinct object, so key it by ids, and it is never weak on the key — a
+collected key would take its count back to 0 and repeat a value): its value for an object is the base plus the
+object's count, and without an object it is the base plus the total of all the objects' bumps.  Counters wrap at the
+fixnum limit.  A declaration: top level, never undone; the watchers start with `drgnx-memo-activate'.  A redefinition
 goes on from the old count, so a memo never sees a value it already saw."
   (declare (compiler-macro drgnx-epoch--note-literal))
-  (drgnx-memo--options args '(:per :redisplay :doc))
+  (drgnx-memo--options args '(:per :redisplay :watch :doc))
   (let* ((per (plist-get args :per))
          (old (or (get name 'drgnx-epoch--value) (get name 'drgnx-epoch--last)))
          (start (cond ((fixnump old) old) ((vectorp old) (logand (+ (aref old 0) (aref old 1)) drgnx-epoch--fixnum-limit)) (t 0))))
@@ -103,15 +110,15 @@ goes on from the old count, so a memo never sees a value it already saw."
          (if per
              (vector start 0 (if (eq per 'buffer)
                                  (make-hash-table :test #'eq :weakness 'key)
-                               (make-hash-table :test #'equal :weakness 'value))
+                               (make-hash-table :test #'equal))
                      per)
            start))
     (put name 'drgnx-epoch--last nil)
     (put name 'drgnx-epoch--redisplay (and (plist-get args :redisplay) t))
     (drgnx-memo--register 'drgnx-epoch--def
                           (drgnx-memo--make-def :kind 'epoch :name name :per per
-                                                :redisplay (plist-get args :redisplay) :doc (plist-get args :doc))
-                          (drgnx-memo--label 'epoch name))
+                                                :redisplay (plist-get args :redisplay) :doc (plist-get args :doc)))
+    (when (plist-get args :watch) (drgnx-epoch-watch name (plist-get args :watch)))
     name))
 
 (defun drgnx-epoch--read (name object)
@@ -167,13 +174,29 @@ without it, the base.  A global epoch has one counter.  A `:redisplay' epoch als
 
 ;;;; Watchers: a set of a variable bumps its epochs
 
-(defun drgnx-memo--watcher (symbol _newval operation where)
-  "Variable watcher: a `set', `makunbound' or `defvaralias' of SYMBOL bumps its epochs; a `let' or `unlet' does not
-\(it is a dynamic binding, undone at once, and it would move every epoch on each rebinding).  For a buffer-local set
-WHERE is the buffer, whose own count moves; for a global set the base."
-  (when (memq operation '(set makunbound defvaralias))
+(defun drgnx-memo--same-p (symbol newval where)
+  "Non-nil if setting SYMBOL (in buffer WHERE, else its default) to NEWVAL leaves the value it has now."
+  (if where
+      (and (buffer-live-p where) (buffer-local-boundp symbol where) (eq newval (buffer-local-value symbol where)))
+    (and (default-boundp symbol) (eq newval (default-value symbol)))))
+
+(defun drgnx-memo--watcher (symbol newval operation where)
+  "Variable watcher: a `set', `makunbound' or `defvaralias' of SYMBOL bumps its epochs.
+A `let' or `unlet' does not (a dynamic binding, undone at once).  Emacs reports some bindings as a `set' with WHERE
+nil — the `let' of a per-buffer variable that is not local in the buffer binds the default — so a `set' of an atom
+`eq' to the value it replaces does not bump either.  A `let' to a different value of such a variable does, and moves
+every buffer.  For a buffer-local set WHERE is the buffer, whose own count moves; for a global set the base."
+  (when (and (memq operation '(set makunbound defvaralias))
+             (not (and (eq operation 'set) (atom newval) (drgnx-memo--same-p symbol newval where))))
     (dolist (name (cdr (assq symbol drgnx-memo--watched)))
       (drgnx-epoch--bump name where))))
+
+(defun drgnx-memo--watch (variable name)
+  "Epoch NAME starts watching VARIABLE."
+  (let ((entry (assq variable drgnx-memo--watched)))
+    (unless (memq name (cdr entry))
+      (if entry (setcdr entry (cons name (cdr entry))) (push (list variable name) drgnx-memo--watched))
+      (add-variable-watcher variable #'drgnx-memo--watcher))))
 
 (defun drgnx-memo--unwatch (variable name)
   "Stop epoch NAME's watch of VARIABLE; the watcher leaves VARIABLE when no epoch watches it any more."
@@ -185,17 +208,51 @@ WHERE is the buffer, whose own count moves; for a global set the base."
         (remove-variable-watcher variable #'drgnx-memo--watcher)))))
 
 (defun drgnx-epoch-watch (name variables)
-  "Bump epoch NAME whenever one of VARIABLES is set (`add-variable-watcher'; a `let' does not count).
-The watch is undone with the module whose setup made it, or with the epoch."
+  "Declare that setting one of VARIABLES bumps epoch NAME (a `let' does not count: `drgnx-memo--watcher').
+A declaration, like `:watch' of `drgnx-epoch-define': nothing is watched until `drgnx-memo-activate' names NAME."
   (unless (get name 'drgnx-epoch--def) (error "No epoch %s" name))
   (dolist (variable variables)
-    (let ((entry (assq variable drgnx-memo--watched)))
-      (unless (memq name (cdr entry))
-        (if entry (setcdr entry (cons name (cdr entry))) (push (list variable name) drgnx-memo--watched))
-        (add-variable-watcher variable #'drgnx-memo--watcher)
+    (unless (memq variable (get name 'drgnx-epoch--watch))
+      (put name 'drgnx-epoch--watch (append (get name 'drgnx-epoch--watch) (list variable)))
+      (when (assq name drgnx-memo--active) (drgnx-memo--watch variable name))))
+  nil)
+
+(defun drgnx-memo--deactivate-epoch (name)
+  "Undo one activation of epoch NAME; the last one removes its watchers."
+  (let ((cell (assq name drgnx-memo--active)))
+    (when cell
+      (if (> (cdr cell) 1)
+          (setcdr cell (1- (cdr cell)))
+        (setq drgnx-memo--active (delq cell drgnx-memo--active))
+        (dolist (variable (get name 'drgnx-epoch--watch)) (drgnx-memo--unwatch variable name))))))
+
+(defun drgnx-memo-activate (&rest names)
+  "Put the declared epochs, memos and caches NAMES to work for the module whose :setup calls this.
+An epoch's variable watchers are installed (the first activation does it; an epoch several modules activate keeps
+them until the last one is off).  A memo's and a cache's contents are emptied when the module is torn down.  Each
+step pushes its undo (`drgnx-modules-push-undo'), so turning the module off leaves no watcher and no contents, and
+turning it on again activates afresh.  Outside a setup nothing is undone: call it from a :setup.  A name that
+declares nothing signals."
+  (dolist (name names)
+    (let ((found nil))
+      (when (get name 'drgnx-epoch--def)
+        (setq found t)
+        (let ((cell (assq name drgnx-memo--active)))
+          (if cell
+              (setcdr cell (1+ (cdr cell)))
+            (push (cons name 1) drgnx-memo--active)
+            (dolist (variable (get name 'drgnx-epoch--watch)) (drgnx-memo--watch variable name))))
         (when (fboundp 'drgnx-modules-push-undo)
-          (drgnx-modules-push-undo (format "epoch-watch %s %s" name variable)
-                                   (lambda () (drgnx-memo--unwatch variable name)))))))
+          (drgnx-modules-push-undo (drgnx-memo--label 'epoch name) (lambda () (drgnx-memo--deactivate-epoch name)))))
+      (when (get name 'drgnx-memo--def)
+        (setq found t)
+        (when (fboundp 'drgnx-modules-push-undo)
+          (drgnx-modules-push-undo (drgnx-memo--label 'memo name) (lambda () (drgnx-memo-forget name)))))
+      (when (get name 'drgnx-cache--def)
+        (setq found t)
+        (when (fboundp 'drgnx-modules-push-undo)
+          (drgnx-modules-push-undo (drgnx-memo--label 'cache name) (lambda () (drgnx-cache--clear name)))))
+      (unless found (error "Nothing declared as %s" name))))
   nil)
 
 ;;;; Memos
@@ -206,15 +263,15 @@ The watch is undone with the module whose setup made it, or with the epoch."
   (unless (memq on '(nil window buffer frame)) (error "Memo %s: :on is window, buffer, frame or nil, not %S" name on))
   (drgnx-memo--register 'drgnx-memo--def
                         (drgnx-memo--make-def :kind 'memo :name name :doc doc :on on :keys keys
-                                              :table (and on (make-hash-table :test #'eq :weakness 'key)))
-                        (drgnx-memo--label 'memo name))
+                                              :table (and on (make-hash-table :test #'eq :weakness 'key))))
   name)
 
 (defmacro drgnx-memo-define (name &rest args)
   "Define memo NAME (an unquoted symbol) for `drgnx-memo'.  ARGS: `:on' window, buffer, frame or nil (one global
 slot); `:keys' a list of forms, evaluated where `drgnx-memo' is used, that may refer to the variable `object'; `:doc'.
 The table is weak on the key.  The definition is made when the code is expanded or compiled too, so `drgnx-memo' can
-read the key forms: put it at the top level of a file.  The undo is `\"memo NAME\"'."
+read the key forms: put it at the top level of a file.  A declaration, never undone; a module's :setup
+empties it on teardown with `drgnx-memo-activate'."
   (declare (indent 1))
   (drgnx-memo--options args '(:on :keys :doc))
   `(eval-and-compile
@@ -269,7 +326,8 @@ float, string or list never hits: use fixnums, symbols and objects.  An undefine
   "Define cache NAME and return it.  ARGS: `:key' `object' (a weak `eq' table: a get checks that a buffer, window,
 frame or process is live and drops a dead entry) or `string' (an `equal' table with an LRU: a get stamps the entry,
 a put past `:cap' evicts the oldest stamp); `:cap' a positive integer, required for `string'; `:doc'.
-The undo is `\"cache NAME\"'."
+A declaration, never undone; a module's :setup empties it on
+teardown with `drgnx-memo-activate'."
   (drgnx-memo--options args '(:key :cap :doc))
   (let ((key (plist-get args :key)) (cap (plist-get args :cap)))
     (unless (and name (symbolp name)) (signal 'wrong-type-argument (list 'symbolp name)))
@@ -281,8 +339,7 @@ The undo is `\"cache NAME\"'."
                                                 :cap (and (eq key 'string) cap)
                                                 :table (if (eq key 'string)
                                                            (make-hash-table :test #'equal)
-                                                         (make-hash-table :test #'eq :weakness 'key)))
-                          (drgnx-memo--label 'cache name))
+                                                         (make-hash-table :test #'eq :weakness 'key))))
     name))
 
 (defun drgnx-cache--def (name) (or (get name 'drgnx-cache--def) (error "No cache %s" name)))
@@ -323,6 +380,12 @@ key drops its entry."
             (when (> (hash-table-count table) (drgnx-memo--def-cap def)) (drgnx-cache--evict def))))
       (puthash k v table))
     v))
+
+(defun drgnx-cache--clear (name)
+  "Empty cache NAME (a module's teardown)."
+  (let ((def (get name 'drgnx-cache--def)))
+    (when def (clrhash (drgnx-memo--def-table def)))
+    nil))
 
 (defun drgnx-cache-remove (name k)
   "Drop K from cache NAME."

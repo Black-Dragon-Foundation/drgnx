@@ -73,6 +73,23 @@
     (drgnx-gc-mode -1)
     (should-not (memq 'drgnx-gc--gcmh-off gcmh-mode-off-hook))))
 
+(ert-deftest drgnx-gc/loading-gcmh-changes-nothing ()
+  ;; `define-minor-mode' sets the variable to nil when gcmh.el is loaded: not a change, the user's threshold stays.
+  (drgnx-gc-owner-test--with
+    (setq gc-cons-threshold most-positive-fixnum)
+    (drgnx-gc-setup)
+    (drgnx-timer-cancel 'gc-idle)
+    (setq gc-cons-threshold 12345 gc-cons-percentage 0.9)
+    (set 'gcmh-mode nil)                                  ; the load: unbound, then nil
+    (should (= gc-cons-threshold 12345))
+    (should (= gc-cons-percentage 0.9))
+    (should-not (drgnx-timer-active-p 'gc-idle))
+    (set 'gcmh-mode t)                                    ; a real change still acts
+    (set 'gcmh-mode t)
+    (set 'gcmh-mode nil)
+    (should (= gc-cons-threshold drgnx-gc-cons-threshold))
+    (should (drgnx-timer-active-p 'gc-idle))))
+
 (ert-deftest drgnx-gc/gcmh-on-cancels-the-idle-collection ()
   (drgnx-gc-owner-test--with
     (setq gc-cons-threshold most-positive-fixnum)
