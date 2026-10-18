@@ -9,6 +9,9 @@
 (defun drgnx-install-test--os (name)
   (expand-file-name (concat "test/fixtures/os-release/" name) drgnx-install-test--root))
 
+(defvar drgnx-install-test--stdin nil
+  "A file that install.sh reads as its standard input (nil: /dev/null).  `curl … | bash' hands it a pipe.")
+
 (defun drgnx-install-test--run (env &rest args)
   "Run install.sh ARGS with ENV (\"K=V\" strings), without a terminal (DRGNX_INSTALL_TTY=none); return
 \(EXIT . OUTPUT).  HOME is a new empty directory, deleted afterwards (ENV may name another)."
@@ -22,7 +25,7 @@
          (default-directory drgnx-install-test--root))    ; not "~/…": HOME is changed above
     (unwind-protect
         (with-temp-buffer
-          (cons (apply #'call-process "bash" nil t nil
+          (cons (apply #'call-process "bash" drgnx-install-test--stdin t nil
                        (expand-file-name "install.sh" drgnx-install-test--root) args)
                 (buffer-string)))
       (delete-directory home t))))
@@ -186,11 +189,16 @@
 (ert-deftest drgnx-install/homebrew-installer-runs-noninteractive-and-its-failure-stops-the-run ()
   ;; A fake curl hands out a Homebrew "installer" that reports its environment and fails; nothing after it
   ;; (tap, install) runs.  A download that fails is its own message.
-  (let* ((tmp (make-temp-file "drgnx-install" t)) (bin (expand-file-name "bin" tmp)))
+  ;; The installer also tries to read: run as `curl … | bash' its stdin is the script's pipe, so --yes must
+  ;; hand it /dev/null (M12a-2); the test gives install.sh a stdin that has input to take.
+  (let* ((tmp (make-temp-file "drgnx-install" t)) (bin (expand-file-name "bin" tmp))
+         (drgnx-install-test--stdin (expand-file-name "stdin" tmp)))
     (unwind-protect
         (progn
           (make-directory bin)
-          (dolist (curl '("echo 'echo HB-INSTALLER NONINTERACTIVE=$NONINTERACTIVE; exit 1'" "exit 22"))
+          (write-region "PIPED-SCRIPT-TEXT\n" nil drgnx-install-test--stdin)
+          (dolist (curl '("echo 'echo HB-INSTALLER NONINTERACTIVE=$NONINTERACTIVE; exit 1'"
+                          "exit 22"))
             (write-region (format "#!/bin/sh\n%s\n" curl) nil (expand-file-name "curl" bin))
             (set-file-modes (expand-file-name "curl" bin) #o755)
             (let ((r (drgnx-install-test--run
@@ -205,6 +213,50 @@
                   (progn (should (string-search "HB-INSTALLER NONINTERACTIVE=1" (cdr r)))
                          (should (string-search "Homebrew's installer failed" (cdr r))))
                 (should (string-search "could not download Homebrew's installer" (cdr r)))))))
+      (delete-directory tmp t))))
+
+(defun drgnx-install-test--fake-homebrew (tmp)
+  "In TMP: a fake `curl' whose Homebrew \"installer\" succeeds by creating a fake brew (answering `shellenv',
+`--prefix', anything else by printing FAKE-BREW and its arguments).  Return the environment that makes
+install.sh find that brew after the install (DRGNX_INSTALL_BREW_PATHS), starting from no Homebrew."
+  (let* ((bin (expand-file-name "bin" tmp))
+         (hb (expand-file-name "hb" tmp))
+         (installer (expand-file-name "installer.sh" tmp)))
+    (make-directory bin t)
+    (write-region (concat "mkdir -p \"$FAKE_HB_DIR\"\n"
+                          "cat > \"$FAKE_HB_DIR/brew\" <<'EOF'\n"
+                          "#!/bin/sh\n"
+                          "case \"$1\" in\n"
+                          "  shellenv) echo 'export FAKE_SHELLENV=1' ;;\n"
+                          "  --prefix) echo \"$FAKE_HB_DIR/opt\" ;;\n"
+                          "  *) echo \"FAKE-BREW $*\" ;;\n"
+                          "esac\n"
+                          "EOF\n"
+                          "chmod +x \"$FAKE_HB_DIR/brew\"\n"
+                          "echo FAKE-HB-INSTALLED\n")
+                  nil installer)
+    (write-region "#!/bin/sh\ncat \"$FAKE_HB_INSTALLER\"\n" nil (expand-file-name "curl" bin))
+    (set-file-modes (expand-file-name "curl" bin) #o755)
+    (list "DRGNX_INSTALL_BREW=none" (concat "DRGNX_INSTALL_BREW_PATHS=" hb "/brew")
+          (concat "FAKE_HB_DIR=" hb) (concat "FAKE_HB_INSTALLER=" installer)
+          (concat "PATH=" bin ":" (getenv "PATH")))))
+
+(ert-deftest drgnx-install/homebrew-installer-success-path ()
+  ;; The installer succeeds (a fake one that makes a fake brew): the brew it made is found, its shellenv
+  ;; is evaluated, the profile line is offered (--yes only prints it) and tap and install run through it.
+  (let ((tmp (make-temp-file "drgnx-install" t)))
+    (unwind-protect
+        (let ((r (drgnx-install-test--run
+                  (append (drgnx-install-test--fake-homebrew tmp) (list "SHELL=/bin/zsh") drgnx-install-test--macos)
+                  "--yes" "--source-dir" drgnx-install-test--root "--prefix" (expand-file-name "prefix" tmp))))
+          (should (= (car r) 0))
+          (should (string-search "FAKE-HB-INSTALLED" (cdr r)))
+          (should (string-search "Homebrew must be on your PATH in new terminals." (cdr r)))
+          (should (string-match-p (concat "add this to [^ ]*/\\.zprofile: eval \"\\$(" (regexp-quote tmp) "/hb/brew shellenv)\"")
+                                  (cdr r)))
+          (should (string-search "FAKE-BREW tap d12frosted/emacs-plus" (cdr r)))
+          (should (string-search "FAKE-BREW install --cask emacs-plus-app" (cdr r)))
+          (should-not (string-search "Homebrew was installed but brew was not found" (cdr r))))
       (delete-directory tmp t))))
 
 (ert-deftest drgnx-install/no-bash-4-constructs ()

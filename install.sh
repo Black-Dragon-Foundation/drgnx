@@ -335,8 +335,9 @@ install_homebrew() { # macOS without Homebrew: explained, asked, then Homebrew's
   else
     /bin/bash -c "$script" </dev/tty || die 1 "Homebrew's installer failed (above) — nothing else was installed"
   fi
-  local b
-  for b in /opt/homebrew/bin/brew /usr/local/bin/brew; do
+  local b candidates   # where its installer puts brew (DRGNX_INSTALL_BREW_PATHS, colon-separated: tests)
+  IFS=: read -r -a candidates <<<"${DRGNX_INSTALL_BREW_PATHS:-/opt/homebrew/bin/brew:/usr/local/bin/brew}"
+  for b in "${candidates[@]}"; do
     if [[ -x "$b" ]]; then BREW="$b"; break; fi
   done
   [[ -n "$BREW" ]] || die 1 "Homebrew was installed but brew was not found in /opt/homebrew/bin or /usr/local/bin — open a new terminal and run this again"
