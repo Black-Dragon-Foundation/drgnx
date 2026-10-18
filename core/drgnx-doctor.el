@@ -25,9 +25,14 @@
   "run the installer: curl -fsSL https://raw.githubusercontent.com/Black-Dragon-Foundation/drgnx/main/install.sh | bash  (see docs/guide/install.md)"
   "How to get a suitable Emacs.")
 
-(defconst drgnx-doctor-cves-fixed-in-31.2
-  "TRAMP command injection via crafted file names, Flymake running code from edited files, read-symbol-shorthands code execution on opening a file"
-  "Known security issues in Emacs up to 31.1, fixed in 31.2 (not released as of 2026-10-16).")
+(defconst drgnx-doctor-security-issues
+  '(("CVE-2026-79992" "TRAMP command injection through crafted file names" "31.1")
+    ("CVE-2026-108976" "TRAMP: the first fix left user names with ! # & , and control characters" "31.2")
+    ("CVE-2026-96442" "Flymake backends run code from the file being edited" "31.2")
+    ("CVE-2026-96269" "read-symbol-shorthands in a file's local variables redirect symbol lookup" "31.2" "31.1"))
+  "The Emacs issues the `security' check names: (ID WHAT FIXED-IN [PARTLY-FROM]).
+An issue applies below FIXED-IN; from PARTLY-FROM on, only some of its ways in are closed.  The elisp Flymake
+backend (CVE-2024-53920) is not here: every supported Emacs (30.2 and later) closes it with `trusted-content'.")
 
 (defvar drgnx-doctor--checks nil "Alist NAME → plist (:group :doc :check :dev :platform), in definition order.")
 
@@ -183,6 +188,26 @@ default; it never reads ~/.profile), else ~/.profile.  With SHELL unset or empty
   (when (string-match "\\(PGTK\\|X11\\|NS\\)" features)
     (intern (downcase (match-string 1 features)))))
 
+(declare-function drgnx-trust-mode "drgnx-trust")
+(declare-function drgnx-trust-guards-status "drgnx-trust")
+(defvar drgnx-trust-mode)
+
+(defun drgnx-doctor--trust-guards ()
+  "The facts of the `security' check: `drgnx-trust-guards-status', or (:error MESSAGE).
+A batch doctor runs in a bare Emacs where drgnx's startup has not run (its commands are not registered): it
+switches `drgnx-trust-mode' on to see which guards drgnx installs on this Emacs, and puts the mode back.
+`drgnx-trust-mode' -1 does not undo everything the mode did (the `trusted-content' entries it added stay), which
+only matters in this throwaway process.  When the mode is on, when startup ran (so a mode that is off was turned
+off), or inside a session, the mode is read as it is and never switched: an off mode is reported off."
+  (condition-case err
+      (progn
+        (require 'drgnx-trust)
+        (if (or drgnx-trust-mode (not noninteractive) (drgnx-commands-get 'trust-folder))
+            (drgnx-trust-guards-status)
+          (unwind-protect (progn (drgnx-trust-mode 1) (drgnx-trust-guards-status))
+            (drgnx-trust-mode -1))))
+    (error (list :error (error-message-string err)))))
+
 (defun drgnx-doctor-facts ()
   "Facts about the running Emacs and this machine."
   (let ((native (and (fboundp 'native-comp-available-p) (native-comp-available-p))))
@@ -215,7 +240,8 @@ default; it never reads ~/.profile), else ~/.profile.  With SHELL unset or empty
            :ai-keys (let ((k (getenv "OPENROUTER_API_KEY"))) (and k (not (string-empty-p k)) '(openrouter)))
            :ai-complete (ignore-errors (require 'drgnx-ai) (cdr (car (drgnx-ai-role 'complete))))
            :claude-adapter (drgnx-doctor--claude-adapter)
-           :vram (ignore-errors (require 'drgnx-ai-probe) (drgnx-ai-vram)))
+           :vram (ignore-errors (require 'drgnx-ai-probe) (drgnx-ai-vram))
+           :trust-guards (drgnx-doctor--trust-guards))
      (and (eq (drgnx-platform) 'macos) (drgnx-doctor--macos-facts)))))
 
 (defun drgnx-doctor--state-path (name)
@@ -277,12 +303,50 @@ default; it never reads ~/.profile), else ~/.profile.  With SHELL unset or empty
                               (if-let* ((g (plist-get f :gui))) (list 'ok (format "graphical build (%s)" g) nil)
                                 (list 'ok "terminal-only Emacs: drgnx runs in terminals (no images, one font size; popups in the bottom lane on 30.2)" nil))))
 
-(drgnx-doctor-define 'security :group "Emacs" :doc "Known security issues of this Emacs version"
+(defun drgnx-doctor--security-issues (version)
+  "The `drgnx-doctor-security-issues' that apply to Emacs VERSION, as \"ID\" or \"ID (partly fixed here)\" strings."
+  (cl-loop for (id _what fixed partly) in drgnx-doctor-security-issues
+           when (drgnx-doctor--version< version fixed)
+           collect (if (and partly (not (drgnx-doctor--version< version partly))) (format "%s (partly fixed here)" id) id)))
+
+(defun drgnx-doctor--guards-off (g)
+  "What is off in the guards status G (`drgnx-trust-guards-status'), as a list of phrases."
+  (if (not (plist-get g :mode)) (list "drgnx-trust-mode is off")
+    (delq nil
+          (list (unless (plist-get g :tramp) "TRAMP name guard")
+                (unless (plist-get g :flymake) "Flymake trust check")
+                (unless (plist-get g :eglot-safe) "eglot is not marked safe")
+                (unless (plist-get g :shorthands) "shorthands guard")
+                (unless (plist-get g :compile) "compile-output guard")
+                (unless (plist-get g :ffap) "ffap guard")
+                (unless (eq (plist-get g :remote-file-name-inhibit-auto-save-visited) t) "auto-save guard")
+                (when (plist-get g :enable-remote-dir-locals) "enable-remote-dir-locals is on")
+                (when (plist-get g :auto-revert-remote-files) "auto-revert-remote-files is on")))))
+
+(drgnx-doctor-define 'security :group "Emacs" :doc "Known security issues of this Emacs version, and whether drgnx's guards are on"
                      :check (lambda (f)
-                              (if (drgnx-doctor--version< (plist-get f :version) "31.2")
-                                  (list 'warn (format "Emacs up to 31.1 has known issues fixed in 31.2: %s" drgnx-doctor-cves-fixed-in-31.2)
-                                        "update to 31.2 when it is released; until then avoid opening untrusted files and remote paths")
-                                (list 'ok "no known issues for this version" nil))))
+                              (let* ((v (plist-get f :version))
+                                     (issues (drgnx-doctor--security-issues v))
+                                     (known (if issues (format "Emacs %s has %d known issue%s, fixed in 31.2: %s (docs/guide/security.md)"
+                                                               v (length issues) (if (cdr issues) "s" "") (string-join issues ", "))
+                                              "no known issues for this version"))
+                                     (g (plist-get f :trust-guards))
+                                     (until "until then avoid opening untrusted files and remote paths"))
+                                (cond ((plist-get g :error)
+                                       (list 'warn (format "drgnx's guards could not be read: %s" (plist-get g :error))
+                                             "see docs/guide/security.md"))
+                                      ((not (plist-member f :trust-guards))
+                                       (if issues (list 'warn known (concat "update to 31.2 when it is released; " until))
+                                         (list 'ok known nil)))
+                                      ((drgnx-doctor--guards-off g)
+                                       (list 'warn (format "drgnx's guards are off (%s); %s" (string-join (drgnx-doctor--guards-off g) ", ") known)
+                                             (concat "restart drgnx so that its startup turns the guards on (docs/guide/security.md)"
+                                                     (and issues (concat ", and update to 31.2 when it is released; " until)))))
+                                      (t (list 'ok (format "%s; drgnx's guards are on%s" known
+                                                           (if (eq (plist-get g :flymake) 'on-load)
+                                                               " (Flymake's trust check is added when Flymake loads: not verified in a batch check)"
+                                                             ""))
+                                               nil))))))
 
 (drgnx-doctor-define 'git :group "Tools" :doc "git (installing and updating drgnx)"
                      :check (lambda (f)
