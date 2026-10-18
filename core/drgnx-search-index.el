@@ -363,10 +363,12 @@ directories, lists no process."
 
 (defun drgnx-search-index-start (root &optional rebuild)
   "Index the project at ROOT in a background job (REBUILD: from scratch); returns the job's id, or nil when an
-indexer holds ROOT's lock or a job of ROOT started within the last 30 seconds (nothing starts then).  The finished index jobs of ROOT are removed first, the newest kept.
+indexer holds ROOT's lock or a job of ROOT started within the last 30 seconds (nothing starts then).  The finished
+index jobs of ROOT are removed first, the newest kept.
 The job is a batch Emacs of the running version, memory-capped at 1G and niced where the jobs run under systemd.
 Never lists the jobs (the re-index timer calls this), but a job of ROOT without an exit file costs a process query
-(under systemd a `systemctl' call) while the old jobs are reaped; a command the user runs asks `drgnx-search-index-busy-p' first."
+(under systemd a `systemctl' call) while the old jobs are reaped; a command the user runs asks
+`drgnx-search-index-busy-p' first."
   (let ((root (directory-file-name (expand-file-name root))))
     (unless (or (drgnx-search-index-running-p root) (drgnx-search-index--starting-p root))
       (drgnx-search-index--reap root)

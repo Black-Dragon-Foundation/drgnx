@@ -56,6 +56,7 @@
      (ignore-errors (drgnx-coord-note-held (drgnx-coord-mcp--me) (and (consp r) (plist-get r :held))))   ; stale twice: a card
      (prog1 (drgnx-coord-mcp--answer r) (drgnx-coord-mcp--notify-hub))))
 
+(defvar read-eval)                      ; `let'-bound in `--hub-agents': must be dynamic once compiled
 (declare-function drgnx-hub-running-p "drgnx-hub")
 (declare-function drgnx-hub-call-sync "drgnx-hub")
 

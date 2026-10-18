@@ -226,7 +226,8 @@ own does it, the hub goes on.  The summary shows it; a restart forgets it (the s
     (run-at-time 0 nil (lambda () (remhash id drgnx-job--step-pending) (with-demoted-errors "drgnx job: %S" (drgnx-job-step id))))))
 
 (defun drgnx-job--git (dir &rest args)
-  "Run git ARGS in DIR (short operations: reads, the job's worktree at approval, `merge --abort'): (EXIT . OUTPUT).  OUTPUT is git's stdout, and, when it
+  "Run git ARGS in DIR (short operations: reads, the job's worktree at approval, `merge --abort'): (EXIT . OUTPUT).
+OUTPUT is git's stdout, and, when it
 fails, its stderr after it (where a hook's refusal and `fatal:' are)."
   (let ((err (make-temp-file "drgnx-git-err")))
     (unwind-protect

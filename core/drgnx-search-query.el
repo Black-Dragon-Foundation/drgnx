@@ -245,8 +245,8 @@ EMBED (default `drgnx-ai-embed-sync') takes a vector of texts and returns a vect
 `drgnx-ai-embed-last-info' to who answered.  It waits for the provider: call this from a command the user ran.
 The question is embedded with ROOT's `embed' role (its .drgnx/ai.eld counts, not the current buffer's).
 No provider or another model than the index's: only the keyword hits; no index, no SQLite, search turned off
-for the project or a .drgnx/search.eld that cannot be read: nil.  Either way `drgnx-search-last-notice' says why, in one line — and never an error, never a
-prompt."
+for the project or a .drgnx/search.eld that cannot be read: nil.  Either way `drgnx-search-last-notice' says why, in
+one line — and never an error, never a prompt."
   (setq drgnx-search-last-notice nil)
   (when (drgnx-search--ready root)
     (let ((vector nil) (info nil))

@@ -376,10 +376,11 @@ submodule), a dot file or a file under a dot directory, a key or secret by name 
 *.pfx, *.kdbx, *.keystore, *.jks, *.asc, *.gpg, *.env, id_rsa*, id_dsa*, id_ecdsa*, id_ed25519*,
 anything containing secret or credential, and any name with netrc or authinfo as a whole component — at the start
 or after `.', `_' or `-', followed by the end, `~' or a `.' — such as .netrc, work.netrc, prod.authinfo,
-authinfo.gpg.bak, but not netrc-parser.el or a source file like netrc.el; all case-insensitively), a file over 1 MiB,
-a binary, a file in a directory whose real path (symlinks resolved) is outside the project.  A file whose path
+authinfo.gpg.bak, but not netrc-parser.el or a source file like netrc.el; all case-insensitively), a file over
+1 MiB, a binary, a file in a directory whose real path (symlinks resolved) is outside the project.  A file whose path
 contains a newline is left out (a modified one could not be hashed, and a clean one must not come and go with
-its edits), and so is a modified or untracked file whose path starts with a double quote.  The configuration then narrows the list.
+its edits), and so is a modified or untracked file whose path starts with a double
+quote.  The configuration then narrows the list.
 
 nil when ROOT is no git repository, git is missing or the project's search is `:off'.  When git
 fails, or .drgnx/search.eld is there but cannot be read (see `drgnx-search-config'), the listing signals

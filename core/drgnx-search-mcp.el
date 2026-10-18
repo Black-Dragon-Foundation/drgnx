@@ -32,7 +32,8 @@ level, so a sub-directory never makes an index of its own; an error when PATH is
         (error "%s is not inside a git project" (directory-file-name dir)))))
 
 (defun drgnx-search-mcp--line (hit)
-  "HIT (a result of `drgnx-search') as `PATH:LINE: TEXT': TEXT the chunk's first top-level line (`drgnx-search-hit-line'), LINE its number."
+  "HIT (a result of `drgnx-search') as `PATH:LINE: TEXT': TEXT the chunk's first top-level line
+(`drgnx-search-hit-line'), LINE its number."
   (pcase-let ((`(,line . ,text) (drgnx-search-hit-line hit)))
     (format "%s:%d: %s" (plist-get hit :path) line (if (> (length text) 200) (substring text 0 200) text))))
 
