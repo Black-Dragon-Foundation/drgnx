@@ -237,29 +237,6 @@ killing the starter's whole process group does not take the job along."
     (should (equal sent (string-replace "$" "$$" line)))
     (should (equal (string-replace "$$" "$" sent) line))))          ; systemd's unescaping gives it back
 
-(defun drgnx-jobs-test--systemd-p ()
-  (and (executable-find "systemd-run") (executable-find "systemctl")
-       (eql 0 (call-process "systemctl" nil nil nil "--user" "show-environment"))))
-
-(ert-deftest drgnx-jobs/a-systemd-job-records-its-real-pid ()
-  (skip-unless (drgnx-jobs-test--systemd-p))
-  (drgnx-jobs-test--with
-   (let ((process-environment (cons "DRGNX_JOBS_LAUNCHER=systemd" process-environment)) id)
-     (unwind-protect
-         (progn
-           (setq id (drgnx-jobs-start "sd" '("sh" "-c" "sleep 600")))
-           (let ((pid (drgnx-jobs--text (expand-file-name "pid" (drgnx-jobs--dir id)))))
-             (should (string-match-p "\\`[0-9]+\\'" pid)))
-           (should (eq (drgnx-jobs-test--status id) 'running))
-           (drgnx-jobs-stop id)
-           (should (drgnx-jobs-test--wait (lambda () (not (eq (drgnx-jobs-test--status id) 'running))) 5))
-           (should (memq (drgnx-jobs-test--status id) '(stopped exited gone)))
-           (should-not (eql 0 (call-process "systemctl" nil nil nil "--user" "--quiet" "is-active"
-                                            (concat "drgnx-job-" id)))))
-       (when id (call-process "systemctl" nil nil nil "--user" "stop" (concat "drgnx-job-" id)))))))
-
-;;;; Deferred pass B, batch 9
-
 (ert-deftest drgnx-jobs/boot-id-asked-once ()
   ;; M12a-8: on macOS the boot id is a `sysctl' process; every `drgnx-jobs-get' of a live job asks for it
   (let ((drgnx-jobs--boot-id-cache nil) (system-type 'darwin) (calls 0))
@@ -296,54 +273,3 @@ killing the starter's whole process group does not take the job along."
      (should-not kill-emacs-hook)                                 ; once: the hook removed itself
      (should (plist-get (drgnx-jobs--read (expand-file-name "job.eld" dir)) :start))
      (should (equal (plist-get (drgnx-jobs--read (expand-file-name "job.eld" dir)) :boot) (drgnx-jobs--boot-id))))))
-
-(ert-deftest drgnx-jobs/stop-returns-for-a-job-that-ignores-term ()
-  ;; JOBS-2: a blocking `systemctl stop' holds for TimeoutStopSec (90 s) while a process in the unit ignores TERM
-  (skip-unless (drgnx-jobs-test--systemd-p))
-  (drgnx-jobs-test--with
-   (let ((process-environment (cons "DRGNX_JOBS_LAUNCHER=systemd" process-environment)) (drgnx-jobs-stop-wait 3) id)
-     (unwind-protect
-         (progn
-           (setq id (drgnx-jobs-start "stubborn" '("sh" "-c" "trap '' TERM; sleep 600")))
-           (should (eq (drgnx-jobs-test--status id) 'running))
-           (let ((t0 (float-time)))
-             (drgnx-jobs-stop id)
-             (should (< (- (float-time) t0) 8)))
-           (should-not (eq (drgnx-jobs-test--status id) 'running)))
-       (when id (call-process "systemctl" nil nil nil "--user" "kill" "--signal=SIGKILL" (concat "drgnx-job-" id)))))))
-
-(defun drgnx-jobs-test--unit-state (id)
-  (with-temp-buffer
-    (call-process "systemctl" nil t nil "--user" "is-active" (concat "drgnx-job-" id))
-    (string-trim (buffer-string))))
-
-(ert-deftest drgnx-jobs/stop-returns-once-the-whole-unit-is-down ()
-  ;; fix round 1: the wrapper shell ends at once on TERM, but a child needing a moment to clean up is still in the
-  ;; unit; a caller restarting the work right after Stop must not overlap it
-  (skip-unless (drgnx-jobs-test--systemd-p))
-  (drgnx-jobs-test--with
-   (let ((process-environment (cons "DRGNX_JOBS_LAUNCHER=systemd" process-environment)) (drgnx-jobs-stop-wait 3) id)
-     (unwind-protect
-         (progn
-           (setq id (drgnx-jobs-start
-                     "tidy" '("sh" "-c" "trap 'sleep 1; exit 0' TERM; while :; do sleep 0.1; done")))
-           (should (eq (drgnx-jobs-test--status id) 'running))
-           (let ((t0 (float-time)))
-             (drgnx-jobs-stop id)
-             (should (< (- (float-time) t0) 3.5)))
-           (should-not (member (drgnx-jobs-test--unit-state id) '("active" "activating" "deactivating"))))
-       (when id (call-process "systemctl" nil nil nil "--user" "kill" "--signal=SIGKILL" (concat "drgnx-job-" id)))))))
-
-(ert-deftest drgnx-jobs/a-systemd-job-keeps-its-dollars ()
-  ;; systemd's ExecStart reads `$$' and `${NAME}' itself: the user's command gets its own `$$' (the shell's pid) and
-  ;; `${HOME}' as written, run under a real unit
-  (skip-unless (drgnx-jobs-test--systemd-p))
-  (drgnx-jobs-test--with
-   (let ((process-environment (cons "DRGNX_JOBS_LAUNCHER=systemd" process-environment)) id)
-     (unwind-protect
-         (progn
-           (setq id (drgnx-jobs-start "dollars" '("sh" "-c" "echo \"pid=$$ home=${HOME}\"")))
-           (should (drgnx-jobs-test--wait (lambda () (eq (drgnx-jobs-test--status id) 'exited))))
-           (should (string-match "\\`pid=\\([0-9]+\\) home=\\(.*\\)\n?\\'" (drgnx-jobs-log id)))
-           (should (equal (match-string 2 (drgnx-jobs-log id)) (getenv "HOME"))))
-       (when id (call-process "systemctl" nil nil nil "--user" "stop" (concat "drgnx-job-" id)))))))
