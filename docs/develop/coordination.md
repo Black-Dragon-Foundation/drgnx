@@ -149,7 +149,9 @@ text, decision, agent, task), the subject and a size: `long` for work against a 
 A clash card gets a **reviewer** (role `review`, or `review-long` for a long clash when it has a route) in the job's
 worktree under the review policy: `[drgnx clash CARD]`, both sides with their reasons (a long review also the last
 4000 characters each side's agent said), answered with a last line `RECOMMEND: A`, `B` or `neither: why`
-(`drgnx-job-clash--recommendation`, onto the card's data as `(:side :why)`). It stays for **Discuss** (the user's
+(`drgnx-job-clash--recommendation`, onto the card's data as `(:side :why)`; an answer with no `RECOMMEND:` line sets
+`:no-recommendation`, and the card's data names its reviewer's session as `:reviewer`, for its transcript). The card
+offers **Accept** only when the recommendation has a side. It stays for **Discuss** (the user's
 text, quoted, goes to it; a gone one is started again with it) and ends when the card is settled, or when the job is
 done (even mid-discussion). A clash without a
 recommendation whose reviewer is gone gets one more (at most two per hub run). The user's choice is a decision of

@@ -224,6 +224,7 @@ long clash when it has a route."
          (s (drgnx-agents-start profile (drgnx-job--job-tree job) nil job)) (sid (drgnx-agent-session-id s)))
     (puthash (cons job card) (1+ (gethash (cons job card) drgnx-job-clash--starts 0)) drgnx-job-clash--starts)
     (puthash sid (list :clash card) drgnx-job--reviewers)
+    (drgnx-coord-card-set card :data (plist-put (copy-sequence (plist-get (drgnx-coord-card card) :data)) :reviewer sid))   ; Discuss opens its transcript
     (puthash sid (drgnx-job-clash--prompt card asks) drgnx-job--prompts)
     (drgnx-job--session-changed s)
     s))
@@ -247,12 +248,14 @@ once more if it is lost — a restarted hub's included)."
 
 (defun drgnx-job-clash--answered (job reviewer s)
   "`drgnx-job-clash-answer-functions': the reviewer's recommendation goes on its card (accepted at once for a short
-clash when `drgnx-job-clash-auto-accept')."
+clash when `drgnx-job-clash-auto-accept'); an answer with none says so (`:no-recommendation')."
   (let* ((card (plist-get reviewer :clash)) (c (drgnx-coord-card card)) (rec (drgnx-job-clash--recommendation s)))
-    (when (and rec (equal (plist-get c :state) "open"))
-      (drgnx-coord-card-set card :data (plist-put (copy-sequence (plist-get c :data)) :recommendation rec))
+    (when (equal (plist-get c :state) "open")
+      (drgnx-coord-card-set card :data (let ((d (copy-sequence (plist-get c :data))))
+                                         (if rec (plist-put (plist-put d :recommendation rec) :no-recommendation nil)
+                                           (plist-put d :no-recommendation t))))
       (drgnx-job--changed job)
-      (when (and drgnx-job-clash-auto-accept (plist-get rec :side) (equal (plist-get (plist-get c :data) :size) "short"))
+      (when (and rec drgnx-job-clash-auto-accept (plist-get rec :side) (equal (plist-get (plist-get c :data) :size) "short"))
         (run-at-time 0 nil (lambda () (with-demoted-errors "drgnx job: %S" (drgnx-job-card-act card "accept"))))))))
 
 (defun drgnx-job-clash--settle (job card side)

@@ -65,6 +65,28 @@ decided build / won't build on one subject (decisions A-N and B-N), the clash sc
       (should-error (drgnx-job-card-act card "accept"))                          ; no side to accept
       (should (equal (plist-get (drgnx-coord-card card) :state) "open")))))
 
+(ert-deftest drgnx-job-clash/the-card-names-its-reviewer ()
+  (drgnx-job-clash-review-test--clash
+    (let ((r (drgnx-job-clash--reviewer card)))
+      (should r)
+      (should (equal (plist-get (plist-get (drgnx-coord-card card) :data) :reviewer) (drgnx-agent-session-id r))))))
+
+(ert-deftest drgnx-job-clash/accept-is-offered-only-with-a-side-to-accept ()
+  (let ((actions (lambda (card) (mapcar #'car (drgnx-job-card-actions (drgnx-coord-card card))))))
+    (drgnx-job-clash-review-test--clash
+      (should-not (member "accept" (funcall actions card)))                        ; no recommendation yet
+      (should (member "pick-a" (funcall actions card)))
+      (should (drgnx-job-run-test--wait (lambda () (drgnx-job-clash-review-test--recommendation card)) 15))
+      (should (member "accept" (funcall actions card))))                           ; side A
+    (let ((process-environment (cons "MOCK_ACP_RECOMMEND=neither: both are fine" process-environment)))
+      (drgnx-job-clash-review-test--clash
+        (should (drgnx-job-run-test--wait (lambda () (drgnx-job-clash-review-test--recommendation card)) 15))
+        (should-not (member "accept" (funcall actions card)))))                    ; neither
+    (let ((process-environment (cons "MOCK_ACP_RECOMMEND=maybe" process-environment)))
+      (drgnx-job-clash-review-test--clash
+        (should (drgnx-job-run-test--wait (lambda () (plist-get (plist-get (drgnx-coord-card card) :data) :no-recommendation)) 15))
+        (should-not (member "accept" (funcall actions card)))))))                  ; an answer with no RECOMMEND line
+
 (ert-deftest drgnx-job-clash/discuss-keeps-the-card-open ()
   (drgnx-job-clash-review-test--clash
     (should (drgnx-job-run-test--wait (lambda () (drgnx-job-clash-review-test--recommendation card)) 15))

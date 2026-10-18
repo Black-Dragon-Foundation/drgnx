@@ -661,7 +661,8 @@ S: the session whose request waits (it goes back to work once answered, or, gone
     ("review" '(("accept" "Merge as it is") ("retry" "Back to an agent") ("drop" "Drop the task")))
     ((or "fallback" "agent" "stalled") '(("retry" "Retry") ("drop" "Drop the task")))
     ("budget" '(("resume" "Resume with a budget…") ("stop" "Stop the job")))
-    ("clash" '(("accept" "Accept the reviewer") ("pick-a" "Pick A") ("pick-b" "Pick B") ("discuss" "Discuss with the reviewer…")))
+    ("clash" (append (and (plist-get (plist-get (plist-get card :data) :recommendation) :side) '(("accept" "Accept the reviewer")))   ; a side to accept
+                     '(("pick-a" "Pick A") ("pick-b" "Pick B") ("discuss" "Discuss with the reviewer…"))))
     (_ '(("dismiss" "Dismiss")))))
 
 (defun drgnx-job--retry (job task &optional note)

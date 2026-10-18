@@ -14,13 +14,15 @@
   (concat "# Four\n\n### Task 1: one\n\nIn its own file.\n\n### Task 2: two\n\nIn its own file.\n\n"
           "### Task 3: three\n**Depends:** Task 1\n\nIn its own file.\n\n### Task 4: four\n**Depends:** Task 2, Task 3\n\nIn its own file.\n"))
 
-(defun drgnx-job-exit-test--run (plan repo)
-  "Run the four-task PLAN of REPO with automatic start to the end: the job's id, after the checks along the way."
+(defun drgnx-job-exit-test--run (plan repo &optional midway)
+  "Run the four-task PLAN of REPO with automatic start to the end: the job's id, after the checks along the way.
+MIDWAY (a function of the id) is called once the job is running, its tasks not done."
   (let* ((drgnx-job-auto-start t) (drgnx-job-max-agents 3) (main (drgnx-job-run-test--git repo "rev-parse" "main"))
          (id (drgnx-job-propose plan)) (both nil))
     (should (equal (plist-get (drgnx-coord-job id) :status) "running"))                   ; started by itself
     (should (equal (drgnx-job-run-test--status id 3) "pending"))                         ; waits for task 1
     (should (equal (drgnx-job-run-test--status id 4) "pending"))
+    (when midway (funcall midway id))
     ;; tasks 1 and 2 at once, each in a worktree of its own
     (should (drgnx-job-run-test--wait
              (lambda () (or both (setq both (and (file-directory-p (drgnx-job--task-tree id 1)) (file-directory-p (drgnx-job--task-tree id 2))
@@ -70,5 +72,28 @@
       (should (memq s (drgnx-agents-sessions)))
       (should (equal (plist-get (drgnx-coord-job id) :status) "running"))
       (delete-other-windows))))
+
+(ert-deftest drgnx-job-exit/a-clash-in-the-middle-of-a-job ()
+  ;; two agents decide opposite things while the job runs: one card, a reviewer on it; the job goes on to its end and
+  ;; the reviewer ends with it
+  (drgnx-job-run-test--with drgnx-job-exit-test--four
+    (let* ((card nil)
+           (id (drgnx-job-exit-test--run
+                plan repo
+                (lambda (id)
+                  (drgnx-coord-decide :kind "build" :subject "the CSV export" :author "s-a" :task (concat id "#1") :job id
+                                      :reason "users asked" :seen (drgnx-coord-version))
+                  (drgnx-coord-decide :kind "wont-build" :subject "the csv export" :author "s-b" :task (concat id "#2") :job id
+                                      :reason "out of scope" :seen (drgnx-coord-version))
+                  (drgnx-job-clash-scan id)
+                  (setq card (car (seq-filter (lambda (c) (equal (plist-get c :kind) "clash")) (drgnx-coord-cards id "open"))))
+                  (should card)
+                  (should (stringp (plist-get (plist-get card :data) :reviewer)))
+                  (should (equal (plist-get (plist-get card :data) :reviewer)
+                                 (drgnx-agent-session-id (drgnx-job-clash--reviewer (plist-get card :id)))))))))
+      (should (= 1 (length (seq-filter (lambda (c) (equal (plist-get c :kind) "clash")) (drgnx-coord-cards id)))))
+      (should-not (drgnx-job-clash--reviewer (plist-get card :id)))
+      (should-not (seq-find (lambda (s) (and (equal (drgnx-agent-session-job s) id) (not (eq (drgnx-agent-session-status s) 'exited))))
+                            drgnx-agents--sessions)))))
 
 ;;; job-exit-test.el ends here
