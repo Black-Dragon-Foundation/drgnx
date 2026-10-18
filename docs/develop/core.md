@@ -272,6 +272,13 @@ The doctor's `config-files` check reads each non-project file fresh (`drgnx-conf
 core features that define files are listed in `drgnx-doctor-config-features`: a port appends its feature there too.
 Tests: `test/unit/config-doc-test.el` and `test/unit/doctor-test.el`.
 
+`onboarding.eld` (state folder, an alist of step → `(:status :message :time)`, `core/drgnx-onboard.el`) is the one
+state file that is not refused when it cannot be read: `drgnx-onboard--record` is a `drgnx-file-update` with
+`:on-unreadable 'backup` (the file is copied aside, the step is recorded in a new one), so two processes keep their
+steps and a damaged progress file never stops onboarding. `drgnx-onboard-state` reads through `drgnx-config-get`;
+`drgnx-onboard--write-state` (the Welcome's first-start marker) is a plain `drgnx-file-write`. Tests:
+`test/unit/onboard-test.el`.
+
 ## Staged hooks (`drgnx-hooks.el`)
 
 Work that need not happen at startup hangs on a stage and runs once, when the stage is first reached:
