@@ -33,7 +33,7 @@ nothing — the package is recorded and the module reported as waiting for it.
 Your choices live in `~/.config/drgnx/modules.eld` (`$DRGNX_CONFIG_DIR`):
 
 ```elisp
-(:version 1
+(:version 2
  :disabled (ui/zen lang/python)          ; modules that do not run
  :enabled (editor/evil)                  ; modules that are off until chosen, and were (below)
  :flags ((ui/popups +childframe)))       ; module flags
@@ -41,7 +41,7 @@ Your choices live in `~/.config/drgnx/modules.eld` (`$DRGNX_CONFIG_DIR`):
 
 `:enabled` is absent until a module that is off until chosen is turned on, and is kept as it is when drgnx writes
 the file (a bootstrap or onboarding that writes modules.eld keeps it too). `:theme` is the colour theme Color Theme
-picked (ui/look writes it). An older format is migrated when it is read; a field that is not what drgnx
+picked (ui/look writes it). modules.eld is format 2; an older drgnx keeps a backup and runs its defaults. An older format is migrated when it is read; a field that is not what drgnx
 expects (a typo) is dropped with a message in `*Messages*`; an unreadable file, or one from a newer drgnx, is
 reported and ignored (modules use their defaults) — never an error at start — and before drgnx next writes the
 file it keeps yours as `modules.eld.bak-<time>`.

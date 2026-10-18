@@ -27,7 +27,9 @@
 (defvar drgnx-modules--report nil "Alist NAME → plist (:stage :ms :status :error :missing).")
 (defvar drgnx-modules--state nil "The user's modules.eld, read once.")
 (defconst drgnx-modules-stages '(startup idle first-frame first-file first-input))
-(defconst drgnx-modules-state-version 1 "Format of modules.eld.")
+(defconst drgnx-modules-state-version 2
+  "Format of modules.eld.  2: it holds `:enabled' (format 1 had no such field).  An older drgnx reads
+a newer file as foreign (defaults, a backup before it writes) instead of dropping `:enabled'.")
 
 (cl-defun drgnx-module-define (name &key doc stage setup requires packages flags doctor settings teardown (default 'on))
   "Define module NAME (a symbol like lang/python).
@@ -84,8 +86,9 @@ malformed external entry is kept (written back unchanged) and listed as failed."
     out))
 
 (defun drgnx-modules--migrate (data)
-  "DATA from any format → the current one, or nil if it is not a modules.eld (or a newer one)."
-  (cond ((and (listp data) (keywordp (car data)) (eql (plist-get data :version) drgnx-modules-state-version))
+  "DATA from any format → the current one, or nil if it is not a modules.eld (or a newer one).
+Format 1 is format 2 without `:enabled'; it needs no change."
+  (cond ((and (listp data) (keywordp (car data)) (memql (plist-get data :version) '(1 2)))
          (drgnx-modules--valid data))
         ((and (listp data) (seq-every-p #'symbolp data))         ; version 0: the disabled modules
          (list :version drgnx-modules-state-version :disabled data))))
