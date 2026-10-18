@@ -512,12 +512,13 @@ link_drgnx() {
 }
 
 remember_emacs() { # drgnx commands run in the Emacs just installed, even when it is not `emacs' on PATH (macOS)
-  local cfg="${DRGNX_CONFIG_DIR:-$HOME/.config/drgnx}" e
+  # in drgnx's data dir: the path is this machine's, and the config dir travels to others
+  local dir="${DRGNX_DATA_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/drgnx}" e
   e="$(command -v "$EMACS_BIN" 2>/dev/null || true)"
   e="${e:-$EMACS_BIN}"
   [[ "$e" == /* ]] || warn "the Emacs ($e) is not an absolute path, which drgnx ignores: it will use the emacs on your PATH (or set DRGNX_EMACS)"
-  { mkdir -p "$cfg" && printf '%s\n' "$e" >"$cfg/emacs"; } ||
-    warn "could not record the Emacs in $cfg/emacs: drgnx will use the emacs on your PATH (or set DRGNX_EMACS)"
+  { mkdir -p "$dir" && printf '%s\n' "$e" >"$dir/emacs"; } ||
+    warn "could not record the Emacs in $dir/emacs: drgnx will use the emacs on your PATH (or set DRGNX_EMACS)"
 }
 
 offer_rc_line() { # RC LINE — add LINE to the startup file RC only if the user says yes (--yes does not count)

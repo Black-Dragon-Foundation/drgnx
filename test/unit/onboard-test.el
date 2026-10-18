@@ -234,8 +234,8 @@
     (let ((r (cl-letf (((symbol-function 'drgnx-platform) (lambda () 'linux)))
                (car (drgnx-onboard-run :only '(daemon) :non-interactive t)))))
       (should (eq (cadr r) 'info))
-      (should (file-exists-p (expand-file-name "systemd/drgnx.service" (drgnx-user-dir))))
-      (should (file-exists-p (expand-file-name "applications/drgnx.desktop" (drgnx-user-dir))))
+      (should (file-exists-p (expand-file-name "systemd/drgnx.service" (drgnx-data-dir))))
+      (should (file-exists-p (expand-file-name "applications/drgnx.desktop" (drgnx-data-dir))))
       (should (string-match-p "systemctl --user" (nth 2 r))))))
 
 (defun drgnx-onboard-test--step-7 (platform keep install)
@@ -307,8 +307,8 @@ one.  Returns (RESULT PROMPTS PROGRAMS INSTALLED): the questions asked, the prog
         (should (= 2 (length prompts)))
         (should-not installed)
         (should-not (member "systemctl" programs))                       ; said no: nothing installed
-        (should (file-exists-p (expand-file-name "systemd/drgnx.service" (drgnx-user-dir))))
-        (should (file-exists-p (expand-file-name "applications/drgnx.desktop" (drgnx-user-dir))))
+        (should (file-exists-p (expand-file-name "systemd/drgnx.service" (drgnx-data-dir))))
+        (should (file-exists-p (expand-file-name "applications/drgnx.desktop" (drgnx-data-dir))))
         (should (string-match-p "systemctl --user" (nth 2 r)))
         (should (string-search "drgnx keeps running in the background" (nth 2 r)))
         (should (equal (drgnx-onboard-test--read (drgnx-session-file)) '(:keep-running t)))))))

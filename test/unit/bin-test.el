@@ -36,6 +36,7 @@ logging to PATHLOG), CONFIG (a DRGNX_CONFIG_DIR) and ENV (the environment lists 
           (pathlog (expand-file-name "path.log" dir))
           (config (expand-file-name "config" dir))
           (env (list (concat "HOME=" dir) (concat "DRGNX_CONFIG_DIR=" config)
+                     (concat "DRGNX_DATA_DIR=" dir "/data")
                      (concat "PATH=" pathdir ":/usr/bin:/bin"))))
      (ignore pathlog config env)
      (make-directory pathdir)
@@ -112,6 +113,36 @@ logging to PATHLOG), CONFIG (a DRGNX_CONFIG_DIR) and ENV (the environment lists 
         (drgnx-bin-test--call drgnx-bin-test--bin env "build")
         (should (string-empty-p (drgnx-bin-test--slurp log)))
         (should (string-search "--batch" (drgnx-bin-test--slurp pathlog)))))))
+
+(ert-deftest drgnx-bin/the-emacs-record-moves-to-the-data-dir ()
+  ;; install.sh records the Emacs in the data dir (machine-local); the old record in the config dir still counts.
+  (drgnx-bin-test--with-setup ()
+    (let* ((data (expand-file-name "data" dir))
+           (new-log (expand-file-name "new.log" dir)) (old-log (expand-file-name "old.log" dir))
+           (new (drgnx-bin-test--fake (expand-file-name "new-emacs" dir) new-log))
+           (old (drgnx-bin-test--fake (expand-file-name "old-emacs" dir) old-log)))
+      (make-directory data)
+      (let ((run (lambda () (dolist (l (list new-log old-log pathlog)) (when (file-exists-p l) (delete-file l)))
+                   (drgnx-bin-test--call drgnx-bin-test--bin env "build"))))
+        ;; only in the data dir
+        (write-region (concat new "\n") nil (expand-file-name "emacs" data))
+        (funcall run)
+        (should (string-search new (drgnx-bin-test--slurp new-log)))
+        (should (string-empty-p (drgnx-bin-test--slurp pathlog)))
+        ;; both: the data dir's
+        (write-region (concat old "\n") nil (expand-file-name "emacs" config))
+        (funcall run)
+        (should (string-search new (drgnx-bin-test--slurp new-log)))
+        (should (string-empty-p (drgnx-bin-test--slurp old-log)))
+        ;; only in the old place
+        (delete-file (expand-file-name "emacs" data))
+        (funcall run)
+        (should (string-search old (drgnx-bin-test--slurp old-log)))
+        (should (string-empty-p (drgnx-bin-test--slurp pathlog)))
+        ;; the data dir's names an Emacs that is gone: the old record still counts
+        (write-region (concat (expand-file-name "gone-emacs" dir) "\n") nil (expand-file-name "emacs" data))
+        (funcall run)
+        (should (string-search old (drgnx-bin-test--slurp old-log)))))))
 
 (ert-deftest drgnx-bin/the-launcher-probe-prefers-newer-sources ()
   ;; `doctor --dev' loads harness/drgnx-ui.el in a batch Emacs: with a stale .elc beside it Emacs would

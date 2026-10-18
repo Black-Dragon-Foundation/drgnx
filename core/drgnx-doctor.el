@@ -18,6 +18,7 @@
 (require 'drgnx-paths)
 
 (declare-function package-built-in-p "package")
+(declare-function drgnx-portable-config-problems "drgnx-portable")
 
 (defconst drgnx-doctor-install-hint
   "run the installer: curl -fsSL https://raw.githubusercontent.com/Black-Dragon-Foundation/drgnx/main/install.sh | bash  (see docs/guide/install.md)"
@@ -159,7 +160,9 @@ default; it never reads ~/.profile), else ~/.profile.  With SHELL unset or empty
            ;; whether a key is set, from the environment only: the doctor never opens auth-source (it may prompt)
            :ai-keys (let ((k (getenv "OPENROUTER_API_KEY"))) (and k (not (string-empty-p k)) '(openrouter)))
            :ai-complete (ignore-errors (require 'drgnx-ai) (cdr (car (drgnx-ai-role 'complete))))
-           :vram (ignore-errors (require 'drgnx-ai-probe) (drgnx-ai-vram)))
+           :vram (ignore-errors (require 'drgnx-ai-probe) (drgnx-ai-vram))
+           ;; file names only: a key found in the config dir is never part of the facts
+           :portable (ignore-errors (require 'drgnx-portable) (drgnx-portable-config-problems)))
      (and (eq (drgnx-platform) 'macos) (drgnx-doctor--macos-facts)))))
 
 (defun drgnx-doctor--state-path (name)
@@ -375,6 +378,22 @@ MODEL), as a sentence, or nil."
                                       ((plist-get r :display-buffer-entry) (list 'ok "buffers are placed by drgnx's rules" nil))
                                       (t (list 'warn "drgnx's entry in display-buffer-alist is gone: something set the variable after startup, so buffers are no longer placed by the rules"
                                                "use (add-to-list 'display-buffer-alist …) instead of setq in your configuration, or restart drgnx"))))))
+
+(drgnx-doctor-define 'portable-config :group "drgnx"
+                     :doc "The config dir travels as it is: no key in plain text, no machine-local file (docs/guide/second-machine.md)"
+                     :check (lambda (f)
+                              (let* ((p (plist-get f :portable)) (keys (plist-get p :keys))
+                                     (local (plist-get p :machine-local)) (roots (plist-get p :missing-roots)))
+                                (cond ((or keys local)
+                                       (list 'warn (string-join (delq nil (list (and keys (format "a key in plain text in %s" (string-join keys ", ")))
+                                                                                (and local (format "machine-local files in the config dir: %s" (string-join local ", ")))))
+                                                                "; ")
+                                             (string-join (delq nil (list (and keys "move it to your keyring (docs/guide/ai.md#keys)")
+                                                                          (and local "drgnx bootstrap --step config moves them")))
+                                                          "; ")))
+                                      (roots (list 'info (format "not cloned on this machine: %s" (string-join roots ", "))
+                                                   "clone them to work on them here (docs/guide/second-machine.md)"))
+                                      (t (list 'ok "the config dir can travel as it is" nil))))))
 
 (drgnx-doctor-define 'macos-app :group "drgnx" :platform 'macos :doc "The drgnx app in ~/Applications (Finder, Spotlight, the Dock)"
                      :check (lambda (f)

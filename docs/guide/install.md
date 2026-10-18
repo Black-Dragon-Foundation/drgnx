@@ -185,9 +185,12 @@ drgnx keeps working on 30.2 until every target platform ships 31.1. `drgnx docto
 
 Every `drgnx` subcommand (build, doctor, test, sync, …) runs in one Emacs: `$DRGNX_EMACS` if set, else the one the
 installer recorded, else `emacs` on your PATH. The installer writes the path of the Emacs it installed or kept to
-the first line of `~/.config/drgnx/emacs` (`$DRGNX_CONFIG_DIR/emacs`); this matters on macOS, where
-`/Applications/Emacs.app/Contents/MacOS/Emacs` is usually not on PATH. If that file names something that is no
-longer an executable file, drgnx falls back to PATH's `emacs`. Edit the file, or set `DRGNX_EMACS`, to use another.
+the first line of `~/.local/share/drgnx/emacs` (drgnx's data dir: `$DRGNX_DATA_DIR/emacs`, else
+`$XDG_DATA_HOME/drgnx/emacs`); this matters on macOS, where `/Applications/Emacs.app/Contents/MacOS/Emacs` is
+usually not on PATH. The path is this machine's, so it is not in `~/.config/drgnx`, which travels to your other
+machines ([second-machine.md](second-machine.md)). Older installs wrote it to `~/.config/drgnx/emacs`: that
+file is still read when the data dir has no usable record, and `drgnx doctor` asks you to move it. If neither names
+an executable file, drgnx falls back to PATH's `emacs`. Edit the file, or set `DRGNX_EMACS`, to use another.
 
 ## drgnx doctor
 
@@ -197,7 +200,9 @@ one line per check, `OK`, `WARN` or `FAIL`, with a fix under anything that is no
 pgtk Emacs; on a Mac, which has no mutter, D-Bus or pgtk, only ImageMagick). On a Mac the doctor also checks that the
 drgnx app is installed (fix: `drgnx macos-app`), that Homebrew is there (also looked for in `/opt/homebrew/bin` and
 `/usr/local/bin`, in case it is not on PATH) and that the `drgnx` command is on PATH (fix: add `~/.local/bin` to PATH in
-your shell's profile, `~/.zprofile` for zsh or, with `SHELL` unset, when it exists; else `~/.profile`) — each only a warning. Details: [core.md](../develop/core.md#doctor-drgnx-doctorel).
+your shell's profile, `~/.zprofile` for zsh or, with `SHELL` unset, when it exists; else `~/.profile`) — each only a warning. `portable-config` warns when the config dir holds a key in plain text (it names the file,
+never the key) or a machine-local file such as the old `emacs` record, and says which `projects.eld` roots are not
+cloned on this machine (info only; [second-machine.md](second-machine.md#the-doctors-check)). Details: [core.md](../develop/core.md#doctor-drgnx-doctorel).
 
 ## Uninstall
 

@@ -5,12 +5,15 @@ here="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
 
 emacs_bin() { # the one Emacs every subcommand runs in: $DRGNX_EMACS, else the one install.sh recorded (an absolute path), else PATH's
   if [[ -n "${DRGNX_EMACS:-}" ]]; then printf '%s\n' "$DRGNX_EMACS"; return; fi
-  local file="${DRGNX_CONFIG_DIR:-$HOME/.config/drgnx}/emacs" line=""
-  if [[ -f "$file" ]]; then   # first line only, as a path: never evaluated
+  local file line
+  # the record is machine-local, so it lives in the data dir; the config dir's is where older installs wrote it
+  for file in "${DRGNX_DATA_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/drgnx}/emacs" "${DRGNX_CONFIG_DIR:-$HOME/.config/drgnx}/emacs"; do
+    [[ -f "$file" ]] || continue   # first line only, as a path: never evaluated
+    line=""
     IFS= read -r line <"$file" || true
     line="${line#"${line%%[![:space:]]*}"}"; line="${line%"${line##*[![:space:]]}"}"
     if [[ "$line" == /* && -f "$line" && -x "$line" ]]; then printf '%s\n' "$line"; return; fi
-  fi
+  done
   echo emacs
 }
 

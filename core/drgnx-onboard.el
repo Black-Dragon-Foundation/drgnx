@@ -1289,7 +1289,7 @@ keep running.  Saved (session.eld); returns the sentence for the step's result."
 
 (declare-function drgnx-shell-name "drgnx-shell")
 (declare-function drgnx-shell-rc-file "drgnx-shell")
-(declare-function drgnx-shell--tilde "drgnx-shell")
+(declare-function drgnx-portable-path "drgnx-portable")
 (declare-function drgnx-shell-line "drgnx-shell")
 (declare-function drgnx-shell-line-present-p "drgnx-shell")
 (declare-function drgnx-shell-install "drgnx-shell")
@@ -1301,7 +1301,7 @@ Interactive: asked (`drgnx-shell-install'), never written without a yes; otherwi
   (let ((name (drgnx-shell-name)))
     (if (null name)
         "shell integration: none for your shell (zsh, bash and fish have one: drgnx shell install --shell NAME)"
-      (let ((rc (drgnx-shell--tilde (drgnx-shell-rc-file name))))
+      (let ((rc (drgnx-portable-path (drgnx-shell-rc-file name))))
         (cond ((drgnx-shell-line-present-p name) (format "shell integration: already in %s" rc))
               ((plist-get ctx :interactive)
                (pcase (drgnx-shell-install name :ask #'y-or-n-p)
@@ -1321,7 +1321,7 @@ last, the shell integration line."
 
 (defun drgnx-onboard--linux-desktop (ctx)
   (require 'drgnx-pkg)
-  (let* ((dir (drgnx-user-dir))
+  (let* ((dir (drgnx-data-dir))           ; this machine's files: the config dir travels (docs/guide/second-machine.md)
          (unit (expand-file-name "systemd/drgnx.service" dir))
          (desktop (expand-file-name "applications/drgnx.desktop" dir))
          (unit-target (expand-file-name "~/.config/systemd/user/drgnx.service"))

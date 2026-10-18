@@ -12,6 +12,7 @@
 (require 'cl-lib)
 (require 'subr-x)
 (require 'drgnx-paths)
+(require 'drgnx-portable)
 
 (defconst drgnx-shell-names '(zsh bash fish) "The shells drgnx has an integration file for.")
 
@@ -34,15 +35,9 @@ ${XDG_CONFIG_HOME:-~/.config}/fish/config.fish."
      ('fish (let ((x (getenv "XDG_CONFIG_HOME"))) (if (and x (not (string-empty-p x))) x "~/.config")))
      (_ "~"))))
 
-(defun drgnx-shell--tilde (file)
-  "FILE with the home directory written \"~/\" (a name that survives the home directory being elsewhere).
-Task 9's `drgnx-portable-path' replaces this."
-  (let ((home (expand-file-name "~/")))
-    (if (string-prefix-p home file) (concat "~/" (substring file (length home))) file)))
-
 (defun drgnx-shell--word (file)
   "FILE as one shell word: \"~/\" stays unquoted so the shell expands it, the rest is backslash-quoted."
-  (let ((f (drgnx-shell--tilde file)))
+  (let ((f (drgnx-portable-path file)))
     (if (string-prefix-p "~/" f)
         (concat "~/" (shell-quote-argument (substring f 2)))
       (shell-quote-argument f))))
@@ -69,16 +64,17 @@ leaves the shell silent and the rc file's status 0."
 (cl-defun drgnx-shell-install (name &key ask)
   "Put the integration line for shell NAME into its rc file, if the user says yes.
 Returns `present' (an uncommented line names the file already: nothing happens), `added', `declined', `failed'
-(the file cannot be written: a read-only rc, say one linked into a managed store; nothing is changed) or `printed'.  ASK is a function of one question string (`y-or-n-p' in a terminal); with none, the line is printed
+(the file cannot be written: a read-only rc, say one linked into a managed store; nothing is changed) or
+`printed'.  ASK is a function of one question string (`y-or-n-p' in a terminal); with none, the line is printed
 on stdout and nothing is written.  A symlinked rc file is named with its target in the question, and the
 target is what gains the line."
   (let* ((rc (drgnx-shell-rc-file name))
          (line (drgnx-shell-line name))
          (target (if (file-symlink-p rc) (file-truename rc) rc))
-         (shown (if (equal target rc) (drgnx-shell--tilde rc)
-                  (format "%s → %s" (drgnx-shell--tilde rc) (drgnx-shell--tilde target)))))
+         (shown (if (equal target rc) (drgnx-portable-path rc)
+                  (format "%s → %s" (drgnx-portable-path rc) (drgnx-portable-path target)))))
     (cond ((drgnx-shell-line-present-p name) 'present)
-          ((null ask) (princ (format "add this to %s: %s\n" (drgnx-shell--tilde rc) line)) 'printed)
+          ((null ask) (princ (format "add this to %s: %s\n" (drgnx-portable-path rc) line)) 'printed)
           ((funcall ask (format "Add this line to %s? %s" shown line))
            (condition-case nil
                (progn
@@ -115,12 +111,12 @@ line it would add."
           (if (equal cmd "line")
               (princ (concat (drgnx-shell-line name) "\n"))
             (pcase (drgnx-shell-install name :ask (and (not yes) (equal (getenv "DRGNX_STDIN_TTY") "1") #'y-or-n-p))
-              ('present (princ (format "drgnx shell: the line is in %s already\n" (drgnx-shell--tilde (drgnx-shell-rc-file name)))))
+              ('present (princ (format "drgnx shell: the line is in %s already\n" (drgnx-portable-path (drgnx-shell-rc-file name)))))
               ('added (princ (format "drgnx shell: added to %s; open a new terminal (or: source it)\n"
-                                     (drgnx-shell--tilde (drgnx-shell-rc-file name)))))
+                                     (drgnx-portable-path (drgnx-shell-rc-file name)))))
               ('declined (princ "drgnx shell: nothing changed\n"))
               ('failed (princ (format "drgnx shell: %s cannot be written; add it by hand: %s\n"
-                                      (drgnx-shell--tilde (drgnx-shell-rc-file name)) (drgnx-shell-line name)))
+                                      (drgnx-portable-path (drgnx-shell-rc-file name)) (drgnx-shell-line name)))
                        (setq code 1))))
           code))))))
 
