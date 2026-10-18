@@ -10,6 +10,9 @@ drgnx test --soak [MIN]     the input workloads in a loop for MIN minutes (30); 
 DRGNX_STARTUP_TRACE=FILE    emacs --init-directory …/init: where startup time goes, written to FILE
 DRGNX_PERF_MAX_LOAD=N       the load average above which --perf does not judge (default: CPUs / 4, at least 3)
 DRGNX_PERF_WAIT=S           how long --perf waits for a quiet machine before giving up (180 s)
+DRGNX_PERF_ONLY=REGEXP      run only the workloads whose name matches (an Emacs regexp: `\|` for alternation): judged
+                            against their own budgets, the history is not written
+DRGNX_MODAL_ELPA=DIR        a package directory with evil (see below): adds the three evil workloads
 ```
 
 ## What is measured
@@ -30,6 +33,9 @@ DRGNX_PERF_WAIT=S           how long --perf waits for a quiet machine before giv
 | agent-settings-open | the Claude Code settings page opened and drawn (`redisplay`) against a fixture home: a 5 MB `.claude.json` (300 projects with history), 50 MCP servers and 200 skills; three runs | milliseconds until drawn (budget 150) and the processes started (budget 0: opening the page starts nothing) |
 | remote-typing | the typing workload's 186 characters in a local file while the Explorer lists a mock-method root (test/fixtures/tramp-mock.el: a real TRAMP connection to a local `sh`) and its connection is dead, the segment showing it lost (checked: nothing was sent to the remote, the connection stayed dead) | input latency |
 | typing-with-index | the typing workload's 186 characters with the search module on and the drgnx repo's semantic index loaded: the repo indexed into the session's own state dir by a stub embedder (384 numbers per chunk; no provider, no network), read into memory by one query before the keys (checked: the query cache still holds it); the index file is deleted after | input latency |
+| typing-evil | the typing workload with Vim keys: `i`, the same six strings, `<escape>` (checked: typed, back in normal state) | input latency |
+| motions-evil | a 5000-line copy of the fixture, normal state, from the middle: `j`×20, `w`×20, `}`×10, `C-d`×5, `C-u`×5 (checked: point moved) | input latency |
+| explorer-evil | the explorer workload with Vim keys: `SPC E`, `j`×10, `<escape>` | input latency |
 | frames | 5 new frames until drawn | frame time |
 | redisplay | 30 forced redisplays of the fixture | redisplay time |
 | startup | a drgnx daemon (isolated: its own HOME and drgnx dirs, the harness's environment allowlist) until its server answers (a daemon that never answers fails), 4 starts, the first dropped | server-ready time, modules' time |
@@ -42,6 +48,36 @@ redisplay — is not covered; the harness's own recorder runs inside the measure
 
 Every workload runs three times (each with its own setup, its typing fixture reused, everything it opened closed
 after it) and the median of each number is kept, so one noisy run never decides.
+
+## Vim keys (evil)
+
+The three `-evil` workloads switch the session to the Vim key stack (`editor/evil` on, the engine started, `(vim app
+editing window)`) and back to VS Code's keys afterwards. They need evil, which a checkout does not ship: set
+`DRGNX_MODAL_ELPA` to the package directory the modal tests use ([harness.md](harness.md), "Modal tests"); without it
+`--perf` prints `perf: evil workloads skipped — set DRGNX_MODAL_ELPA` and judges the rest. They run last, because evil
+cannot be unloaded from a session and the other workloads (and the memory figure) stay what they were without it.
+`drgnx test --perf` passes the variable on to the session.
+
+Their budgets are those of the stack without evil, except the Explorer's keys (p95 8 ms, the Explorer key budget of
+`harness/drgnx-bench.el`). One more rule is judged beside them: **`typing-evil` input p95 may exceed `typing` input
+p95 by at most 1 ms in the same run** (`drgnx-perf-run--relative-fails`), so evil's cost shows even when both stay
+under 16 ms.
+
+First measurements (2026-10-18, a busy machine: load 3-5, so every number is high; the budgets above are PROVISIONAL
+until a quiet-machine run pins them). Worst of 5 runs (each already the median of three): `typing-evil` p95 13.0 /
+max 19.9 ms, `motions-evil` 9.6 / 11.5 ms, `explorer-evil` 6.4 / 6.4 ms. Next to them `typing` measured 12.6-14.1 ms p95
+in the same runs, and `typing-evil` minus `typing` was between -1.1 and -0.1 ms: evil added nothing measurable.
+
+To measure only some workloads (the run is GUI-heavy), name them:
+
+```sh
+DRGNX_MODAL_ELPA=… DRGNX_PERF_ONLY='^\(typing\|typing-evil\)$' bin/drgnx test --perf
+```
+
+Only the budgets of the workloads that ran are judged, and such a run is not written to the history. Without the
+filter every budget is judged: a budget whose workload did not run is reported as "not measured" (the one exception:
+the three `-evil` rows when `DRGNX_MODAL_ELPA` is unset). Naming `typing-evil` without `typing` skips the 1 ms rule
+and the run says so; a filter that is not a valid regexp, or matches no workload, stops the run with a message.
 
 ## Budgets
 
@@ -121,7 +157,7 @@ The audit lists the hook functions that ran while the frame opened (`after-make-
 
 ## Tests
 
-`test/unit/perf-test.el` (statistics, the probes, the audit — including that it never stops a function from removing
+`test/unit/perf-modal-test.el` (the evil workloads, their budget rows, the 1 ms rule, `DRGNX_PERF_ONLY`), `test/unit/perf-test.el` (statistics, the probes, the audit — including that it never stops a function from removing
 itself — budgets, history), `test/unit/core-gc-test.el`; the workloads run with `drgnx test --perf`.
 
 ### typing-with-index: provisional budget

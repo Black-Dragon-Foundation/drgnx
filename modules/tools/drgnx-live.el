@@ -19,6 +19,7 @@
 (require 'drgnx-modules)
 (require 'drgnx-registry)
 (require 'drgnx-paths)
+(require 'drgnx-modal)
 
 (declare-function websocket-open "websocket")
 (declare-function websocket-send-text "websocket")
@@ -545,10 +546,14 @@ only the newest waits to be drawn."
 go to the page; other keys (C-…, M-…) stay Emacs's.")
 
 (define-minor-mode drgnx-live-driving-mode
-  "Your clicks, scrolling and typing in the Live view go to the page."
+  "Your clicks, scrolling and typing in the Live view go to the page.
+Under Vim keys the view's leader and panel keys are off meanwhile (`drgnx-modal-keys-off'), so SPC, j and k reach
+the page; evil's own keys are out of the way in its emacs state."
   :lighter " Driving" :keymap drgnx-live-driving-map
+  (setq drgnx-modal-keys-off drgnx-live-driving-mode)
   (when (bound-and-true-p evil-local-mode)
     (if drgnx-live-driving-mode (evil-emacs-state) (evil-change-to-previous-state)))
+  (drgnx-modal-set-state drgnx-modal-state)
   (force-mode-line-update))
 
 (defun drgnx-live--page-xy (posn)

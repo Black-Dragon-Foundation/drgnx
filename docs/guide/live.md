@@ -73,7 +73,8 @@ deleted, as when it fails to start.
   the point you clicked: the coordinates are scaled back from the image's size on screen to the page's. A drag moves
   the mouse to where you let go and is released there;
 - printable characters, `RET`, `TAB`, Backspace, Delete, Escape, the arrows, Home, End, PgUp and PgDn go to it as
-  `Input.dispatchKeyEvent`; `C-…` and `M-…` keys stay Emacs's, so the palette and `C-c C-c` still work.
+  `Input.dispatchKeyEvent`; `C-…` and `M-…` keys stay Emacs's, so the palette and `C-c C-c` still work. Under Vim keys the view's leader and panel
+  keys are off meanwhile: `SPC`, `j` and `k` type on the page.
 
 Taking over steers every busy agent using this browser with "the user is driving the browser; wait" (through the
 agent's usual steering, or queued for the end of its turn when it cannot be steered); handing back steers "the user

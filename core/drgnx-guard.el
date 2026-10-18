@@ -44,6 +44,11 @@
         (drgnx-guard--automatic "automatic code")
         ((drgnx-guard--daemon-starting-p) "daemon startup")))
 
+(defun drgnx-guard-automatic-p ()
+  "Non-nil when the code running now is automatic (a timer, `drgnx-automatic', daemon startup): nobody can answer
+a prompt, and with `drgnx-guard-mode' on one would signal."
+  (and (drgnx-guard--context) t))
+
 (defun drgnx-guard--check (fn args)
   (when-let* ((why (drgnx-guard--context)))
     (signal 'drgnx-prompt-in-automatic-path

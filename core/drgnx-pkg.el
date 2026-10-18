@@ -68,8 +68,9 @@ A write that stops half way leaves no temp file."
 
 ;;;; Manifest
 
-(defun drgnx-pkg--module-packages (dir)
-  "Alist MODULE → packages of every `drgnx-module-define' in DIR's files — read, never run."
+(defun drgnx-pkg--module-specs (dir)
+  "Alist MODULE → (:packages LIST :default on|off) of every `drgnx-module-define' in DIR's files.
+Read, never run."
   (let (out)
     (dolist (file (and (file-directory-p dir) (directory-files-recursively dir "\\.el\\'")))
       (with-temp-buffer
@@ -78,18 +79,27 @@ A write that stops half way leaves no temp file."
             (while t
               (pcase (read (current-buffer))
                 (`(drgnx-module-define (quote ,(and (pred symbolp) name)) . ,args)
-                 (push (cons name (pcase (plist-get args :packages) (`(quote ,l) l))) out))))
+                 ;; :default counts only as the literal 'off (read, never evaluated)
+                 (push (list name :packages (pcase (plist-get args :packages) (`(quote ,l) l))
+                             :default (pcase (plist-get args :default) (`(quote off) 'off) (_ 'on)))
+                       out))))
           (error nil))))                                ; end of file (or a file that does not read)
     (nreverse out)))
+
+(defun drgnx-pkg--module-packages (dir)
+  "Alist MODULE → packages of every `drgnx-module-define' in DIR's files — read, never run."
+  (mapcar (lambda (m) (cons (car m) (plist-get (cdr m) :packages))) (drgnx-pkg--module-specs dir)))
 
 (defun drgnx-pkg--packages-eld () (drgnx-pkg--read-file (expand-file-name "packages.eld" (drgnx-user-dir))))
 
 (defun drgnx-pkg-manifest (&optional modules-dir)
   "The packages drgnx needs, sorted: every enabled module's :packages (MODULES-DIR, default drgnx's
-modules/), packages.eld's :packages and :git, and those use-package :ensure asked for in a session."
-  (let ((names (append (seq-mapcat #'cdr (seq-remove (lambda (m) (drgnx-module-disabled-p (car m)))
-                                                     (drgnx-pkg--module-packages
-                                                      (or modules-dir (expand-file-name "modules" drgnx-dir)))))
+modules/; one that is off until chosen counts once modules.eld :enabled lists it), packages.eld's
+:packages and :git, and those use-package :ensure asked for in a session."
+  (let ((names (append (seq-mapcat (lambda (m) (plist-get (cdr m) :packages))
+                                   (seq-remove (lambda (m) (drgnx-module-disabled-p (car m) (plist-get (cdr m) :default)))
+                                               (drgnx-pkg--module-specs
+                                                (or modules-dir (expand-file-name "modules" drgnx-dir)))))
                        (plist-get (drgnx-pkg--packages-eld) :packages)
                        (mapcar #'car (plist-get (drgnx-pkg--packages-eld) :git))
                        (ignore-errors (drgnx-pkg--read-file (drgnx-pkg-wanted-file))))))
@@ -1051,8 +1061,11 @@ with every module off.  The user's own files are never changed."
          (state (or (drgnx-pkg--read-file (expand-file-name "modules.eld" user)) (list :version 1)))
          (off (plist-get state :disabled))
          (candidates (seq-remove (lambda (m) (memq m off))
-                                 (append (mapcar #'car (drgnx-pkg--module-packages
-                                                        (or modules-dir (expand-file-name "modules" drgnx-dir))))
+                                 (append (mapcar #'car (seq-remove   ; off until chosen and not chosen: not running, not a suspect
+                                                        (lambda (m) (and (eq (plist-get (cdr m) :default) 'off)
+                                                                         (not (memq (car m) (plist-get state :enabled)))))
+                                                        (drgnx-pkg--module-specs
+                                                         (or modules-dir (expand-file-name "modules" drgnx-dir)))))
                                          ;; external modules (modules.eld :external): turned off as external/NAME
                                          (mapcar (lambda (e) (intern (format "external/%s" (plist-get e :name))))
                                                  (plist-get state :external)))))

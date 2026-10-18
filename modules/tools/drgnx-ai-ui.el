@@ -15,6 +15,7 @@
 (require 'subr-x)
 (require 'drgnx-modules)
 (require 'drgnx-registry)
+(require 'drgnx-modal)
 (require 'drgnx-ai)
 (require 'drgnx-ai-client)
 (require 'drgnx-ai-probe)
@@ -79,9 +80,14 @@ Keychain or the keyring), or nil."
   (car (seq-find (lambda (step) (and (plist-get (drgnx-ai-provider (car step)) :key-env) (not (drgnx-ai-key (car step)))))
                  (drgnx-ai-role 'complete))))
 
+(defvar drgnx-ai-ghost-inhibit-functions nil
+  "Abnormal hook, functions of no arguments run in the buffer when a pause would ask for a suggestion: when one
+returns non-nil, nothing is asked.  A modal engine adds one that is non-nil outside its typing states (Vim's
+normal and visual state), so moving around never asks.  Runs once per pause, not per key.")
+
 (defun drgnx-ai-ghost--typing-p ()
-  "Non-nil unless evil is on and this buffer is in a state that does not type (normal, visual, …)."
-  (or (not (bound-and-true-p evil-local-mode)) (memq (bound-and-true-p evil-state) '(insert emacs))))
+  "Non-nil unless a function of `drgnx-ai-ghost-inhibit-functions' says this buffer is not typing now."
+  (not (run-hook-with-args-until-success 'drgnx-ai-ghost-inhibit-functions)))
 
 (defun drgnx-ai-ghost--trigger ()
   "Ask for a suggestion at point (the pause has come).  Says once when no provider completes."
@@ -280,11 +286,11 @@ answer came, how much of the copy is before and after it, the copy that takes th
   (if (string-match "```[^\n]*\n\\(\\(?:.\\|\n\\)*?\\)\n?```" text) (match-string 1 text) text))
 
 (defun drgnx-ai-edit (instruction start end)
-  "Edit the region START..END (the defun at point without a region) as INSTRUCTION says; review the answer
+  "Edit the selection START..END (the defun at point without one) as INSTRUCTION says; review the answer
 hunk by hunk before anything changes."
   (interactive
-   (let ((b (if (use-region-p) (cons (region-beginning) (region-end))
-              (or (bounds-of-thing-at-point 'defun) (cons (line-beginning-position) (line-end-position))))))
+   (let ((b (or (drgnx-modal-selection)       ; Vim's visual selection (whole lines in visual line), else the region
+                (bounds-of-thing-at-point 'defun) (cons (line-beginning-position) (line-end-position)))))
      (list (read-string "Edit with AI: ") (car b) (cdr b))))
   (let* ((buf (current-buffer))
          ;; text typed right at either edge stays outside the region

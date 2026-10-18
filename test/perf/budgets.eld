@@ -23,4 +23,12 @@
  (redisplay (:redisplay :p95) 16)
  ;; typing-with-index (M10-1): PROVISIONAL.  p95 22 = worst of 3 runs (12.2, 17.2, 21.1), rounded up, measured at load 7-8
  ;; (busy machine; the p95 rose with the load).  The ruled target is typing's 16 ms: a quiet-machine run pins it.
- (typing-with-index (:input :p95) 22) (typing-with-index (:input :max) 50))
+ (typing-with-index (:input :p95) 22) (typing-with-index (:input :max) 50)
+ ;; evil (Vim keys), M12d Task 13: the same budgets as the stack without it; the Explorer's keys within the bench's 8 ms.
+ ;; PROVISIONAL: these are the values M12d's brief set, not derived from measurements.  Measured on a busy machine
+ ;; (load 3-5), worst of 5 runs, all under them: typing-evil p95 13.0 / max 19.9, motions-evil 9.6 / 11.5,
+ ;; explorer-evil 6.4 / 6.4 ms.  A quiet-machine run pins them (docs/develop/perf.md).
+ ;; typing-evil p95 may also exceed typing p95 by at most 1 ms in the same run (`drgnx-perf-run--relative-fails').
+ (typing-evil (:input :p95) 16) (typing-evil (:input :max) 50)
+ (motions-evil (:input :p95) 16) (motions-evil (:input :max) 50)
+ (explorer-evil (:input :p95) 8) (explorer-evil (:input :max) 50))

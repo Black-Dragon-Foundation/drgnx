@@ -18,9 +18,11 @@
 (require 'easymenu)
 (require 'seq)
 (require 'drgnx-tty-fallback)
+(require 'cl-lib)
 
 (defvar which-key-replacement-alist)   ; which-key, when present
 (defvar drgnx-keys-last)               ; drgnx-keys (loaded after this file)
+(defvar drgnx-modal-suspended)         ; drgnx-modal
 
 (defface drgnx-sheet-heading '((t :inherit (bold font-lock-keyword-face)))
   "Category headings in the key sheet (inherits theme faces only)."
@@ -50,18 +52,42 @@ the terminal sends it, or when the terminal has no fallback layer."
                        (key-parse key) " "))))
       key))
 
+(declare-function drgnx-modal-where "drgnx-modal")
+(declare-function drgnx-modal-default-notes "drgnx-modal")
+
+(defun drgnx-surfaces--key-text (key map)
+  "KEY bound in keymap spec MAP as shown on the sheet: plain in the global map and the leader map, \"KEY (normal
+state)\" in a modal state's map (`drgnx-modal-where'), else suffixed with that keymap: \"KEY (in org)\"."
+  (let* ((mapsym (cdr (drgnx-commands--keymap-spec map)))
+         (modal (and (fboundp 'drgnx-modal-where) (drgnx-modal-where mapsym))))
+    (cond ((eq mapsym 'global-map) key)
+          ((equal modal "") key)
+          (modal (format "%s (%s)" key modal))
+          (t (format "%s (in %s)" key (string-remove-suffix "-mode-map" (string-remove-suffix "-map" (symbol-name mapsym))))))))
+
 (defun drgnx-surfaces-key (cmd &optional plain)
   "Display string for CMD's first active key, a key in a mode's keymap suffixed with that
-keymap; \"\" if none.  The key is shown as the selected frame's terminal can send it, unless PLAIN is t
-\(the markdown export: the same on every frame).  PLAIN `menu': the form that is right in every buffer (F6 then the
-key, never an Alt+Shift key a mode may rebind), for text a menu keeps while the buffer changes."
+keymap; a leader key (SPC f f) plain, a key in a modal state's map with the state (g d (normal state)); \"\" if none.
+The key is shown as the selected frame's terminal can send it, unless PLAIN is t \(the markdown export: the same on
+every frame).  PLAIN `menu': the form that is right in every buffer (F6 then the key, never an Alt+Shift key a mode
+may rebind), for text a menu keeps while the buffer changes."
   (pcase (car (drgnx-cmd-bound cmd))
     ('nil "")
     (`(,key . ,map)
-     (let ((mapsym (cdr (drgnx-commands--keymap-spec map)))
-           (key (pcase plain ('nil (drgnx-surfaces--here key)) ('menu (drgnx-surfaces--always key)) (_ key))))
-       (if (eq mapsym 'global-map) key
-         (format "%s (in %s)" key (string-remove-suffix "-mode-map" (string-remove-suffix "-map" (symbol-name mapsym)))))))))
+     (drgnx-surfaces--key-text (pcase plain ('nil (drgnx-surfaces--here key)) ('menu (drgnx-surfaces--always key)) (_ key))
+                               map))))
+
+(defun drgnx-surfaces--sheet-key (cmd &optional plain)
+  "The sheet's key column for CMD: its first key, then its other keys that work in a modal state or in panels
+\(\"SPC c d, g d (normal state)\"\).  PLAIN as for `drgnx-surfaces-key'."
+  (string-join
+   (cons (drgnx-surfaces-key cmd plain)
+         (cl-loop for (key . map) in (cdr (drgnx-cmd-bound cmd))
+                  when (let ((where (and (fboundp 'drgnx-modal-where)
+                                         (drgnx-modal-where (cdr (drgnx-commands--keymap-spec map))))))
+                         (and where (not (string-empty-p where))))
+                  collect (drgnx-surfaces--key-text (if plain key (drgnx-surfaces--here key)) map)))
+   ", "))
 
 (defun drgnx-surfaces--any-key (cmd)
   "CMD's active key, else whatever key currently runs its command; as the selected frame's terminal sends it."
@@ -390,21 +416,48 @@ Returns CONTEXT when it was defined, else nil."
 (defvar drgnx-surfaces--which-key-entries nil
   "The `which-key-replacement-alist' entries drgnx added, removed again on the next refresh.")
 
+(defun drgnx-surfaces--leader-prefix-titles (keys)
+  "Alist PREFIX → \"CATEGORY\" for the proper prefixes of two or more keys of the leader-map KEYS ((KEY . CMD)…):
+`SPC f' for `SPC f f', `SPC f s'.  CATEGORY is the most common category of the commands under the prefix (the first
+alphabetically on a tie); which-key shows it as +CATEGORY (it puts `which-key-prefix-prefix' before a prefix's
+label).  A prefix that is itself a key of KEYS is not labelled."
+  (let (prefixes)
+    (pcase-dolist (`(,key . ,cmd) keys)
+      (let ((events (split-string key " ")))
+        (cl-loop for n from 2 below (length events)
+                 do (push (drgnx-cmd-category cmd) (alist-get (string-join (seq-take events n) " ") prefixes nil nil #'equal)))))
+    (delq nil (mapcar (lambda (p)
+                        (unless (assoc (car p) keys)
+                          (let ((counts nil))
+                            (dolist (c (cdr p)) (cl-incf (alist-get c counts 0 nil #'equal)))
+                            (cons (car p) (car (car (sort counts (lambda (a b) (or (> (cdr a) (cdr b))
+                                                                                   (and (= (cdr a) (cdr b)) (string< (car a) (car b))))))))))))
+                      prefixes))))
+
 (defun drgnx-surfaces-apply-which-key ()
-  "Label every active global key in which-key with its command's title, replacing the labels of
-the previous key setup.  Keys in mode keymaps are not labelled: which-key's keymap-based labels
-write into the keymap, which would make an unbound key a prefix (which-key shows the command)."
+  "Label every active global key and every key of the leader map in which-key with its command's title, and each
+leader prefix (`SPC f') with its CATEGORY (which-key shows +CATEGORY), replacing the labels of the previous key
+setup.  Keys in other mode keymaps are not labelled: which-key's keymap-based labels write into the keymap, which
+would make an unbound key a prefix \(which-key shows the command)."
   (when (require 'which-key nil t)
     (setq which-key-replacement-alist
           (seq-remove (lambda (e) (memq e drgnx-surfaces--which-key-entries)) which-key-replacement-alist)
           drgnx-surfaces--which-key-entries nil)
-    (dolist (cmd (drgnx-commands-all))
-      (pcase-dolist (`(,key . ,map) (drgnx-cmd-bound cmd))
-        (when (eq (cdr (drgnx-commands--keymap-spec map)) 'global-map)
-          (let ((before which-key-replacement-alist))
-            (which-key-add-key-based-replacements key (drgnx-cmd-title cmd))
-            (dolist (e which-key-replacement-alist)
-              (unless (memq e before) (push e drgnx-surfaces--which-key-entries)))))))))
+    (let ((label (lambda (key title)
+                   (let ((before which-key-replacement-alist))
+                     (which-key-add-key-based-replacements key title)
+                     (dolist (e which-key-replacement-alist)
+                       (unless (memq e before) (push e drgnx-surfaces--which-key-entries))))))
+          leader)
+      (dolist (cmd (drgnx-commands-all))
+        (pcase-dolist (`(,key . ,map) (drgnx-cmd-bound cmd))
+          (pcase (cdr (drgnx-commands--keymap-spec map))
+            ('global-map (funcall label key (drgnx-cmd-title cmd)))
+            ('drgnx-modal-leader-map
+             (unless (bound-and-true-p drgnx-modal-suspended)   ; modal editing is off: the leader keys do nothing
+               (push (cons key cmd) leader) (funcall label key (drgnx-cmd-title cmd)))))))
+      (pcase-dolist (`(,prefix . ,title) (drgnx-surfaces--leader-prefix-titles leader))
+        (funcall label prefix title)))))
 
 ;;;; Cheat sheet (F1) and kb markdown
 
@@ -419,7 +472,7 @@ write into the keymap, which would make an unbound key a prefix (which-key shows
   "Rows (CATEGORY KEY TITLE MOUSE DOC) for available entries, sorted by category then title.
 Uses registry keys only (no `where-is'), so the output is the same in every Emacs session, unless HERE: then
 each KEY is shown as the selected frame's terminal sends it (the F1 sheet)."
-  (sort (mapcar (lambda (c) (list (drgnx-cmd-category c) (drgnx-surfaces-key c (not here)) (drgnx-cmd-title c)
+  (sort (mapcar (lambda (c) (list (drgnx-cmd-category c) (drgnx-surfaces--sheet-key c (not here)) (drgnx-cmd-title c)
                                   (drgnx-surfaces--mouse-path c) (or (drgnx-cmd-doc c) "")))
                 (seq-filter #'drgnx-commands-available-p (drgnx-commands-all)))
         (lambda (a b) (or (string< (car a) (car b))
@@ -448,7 +501,8 @@ no fallback layer).  Nil on a graphical frame and on a terminal that sends every
   "Show every drgnx command: key, title and where to click.  The keys are the ones this terminal can send."
   (interactive)
   ;; computed here: the keys depend on the buffer and frame the sheet is asked from, not on the help buffer
-  (let ((rows (drgnx-surfaces-sheet-rows t)) (limited (drgnx-surfaces--limited-lines)))
+  (let* ((rows (drgnx-surfaces-sheet-rows t)) (limited (drgnx-surfaces--limited-lines))
+         (width (apply #'max 24 (mapcar (lambda (r) (string-width (nth 1 r))) rows))))   ; long keys keep the columns
     (with-help-window "*drgnx keys*"
       (with-current-buffer standard-output
         (insert "drgnx keys — every command, its key and where to click.\n")
@@ -457,13 +511,15 @@ no fallback layer).  Nil on a graphical frame and on a terminal that sends every
             (unless (equal cat (car r))
               (setq cat (car r))
               (insert "\n" (propertize cat 'face 'drgnx-sheet-heading) "\n"))
-            (insert (format "  %-24s %-36s %s\n" (nth 1 r) (nth 2 r) (nth 3 r)))))
+            (insert (format "  %s %-36s %s\n" (truncate-string-to-width (nth 1 r) width nil ?\s) (nth 2 r) (nth 3 r)))))
         (when limited
           (insert "\n" (propertize "Keys this terminal cannot send, and what to press here" 'face 'drgnx-sheet-heading) "\n")
           (dolist (l limited) (insert l "\n")))
         ;; The active key profiles' conflicts and problems (drgnx-keys, docs/guide/keys.md).
         (when (fboundp 'drgnx-keys-conflict-lines)
-          (pcase-dolist (`(,title . ,lines) `(("Key conflicts (the later layer won)" . ,(drgnx-keys-conflict-lines))
+          (pcase-dolist (`(,title . ,lines) `(("Key conflicts (the later layer won)"
+                                               . ,(append (drgnx-keys-conflict-lines)
+                                                          (and (fboundp 'drgnx-modal-default-notes) (drgnx-modal-default-notes))))
                                               ("Key problems" . ,(plist-get drgnx-keys-last :problems))))
             (when lines
               (insert "\n" (propertize title 'face 'drgnx-sheet-heading) "\n")
@@ -476,10 +532,12 @@ no fallback layer).  Nil on a graphical frame and on a terminal that sends every
   (if (string-search "`" s) (format "`` %s ``" s) (format "`%s`" s)))
 
 (defun drgnx-surfaces--md-key (key)
-  "KEY as markdown: `C-c y` (in org) — code formatting around the key only."
+  "KEY as markdown: `C-c y` (in org) — code formatting around the key only.  A sheet entry with other keys
+\(\"SPC c d, g d (normal state)\") is each key in code."
   (if (string-empty-p key) ""
-    (if (string-match "\\`\\(.*?\\) \\((in .*)\\)\\'" key)
-        (format "%s %s" (drgnx-surfaces--md-code (match-string 1 key)) (match-string 2 key))
+    (if (string-match "\\`\\(.*?\\) \\((\\(?:in \\|[a-z, ]+ state\\|panels\\).*)\\)\\'" key)
+        (let ((keys (match-string 1 key)) (where (match-string 2 key)))
+          (format "%s %s" (mapconcat #'drgnx-surfaces--md-code (split-string keys ", ") ", ") where))
       (drgnx-surfaces--md-code key))))
 
 (defun drgnx-surfaces-markdown ()

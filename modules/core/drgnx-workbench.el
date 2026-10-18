@@ -104,6 +104,12 @@
                                         (view-panel-next "Next Panel Tab" drgnx-wb-panel-next-tab nil "Show the panel's next tab")
                                         (help-mode-menu "Menu for This Mode" drgnx-help-mode-menu nil "The major mode's menu, at point")))
                          (drgnx-command-define id :category "View" :title title :scope 'window :command fn :context ctx :doc doc))
+                       (pcase-dolist (`(,id ,title ,fn ,doc)
+                                      '((focus-left "Focus Left" drgnx-wb-focus-left "Move focus to the editor group or dock on the left")
+                                        (focus-right "Focus Right" drgnx-wb-focus-right "Move focus to the editor group or dock on the right")
+                                        (focus-up "Focus Above" drgnx-wb-focus-up "Move focus to the editor group or dock above")
+                                        (focus-down "Focus Below" drgnx-wb-focus-down "Move focus to the editor group or dock below")))
+                         (drgnx-command-define id :category "View" :title title :scope 'window :command fn :doc doc))
                        ;; The layout survives a restart.
                        (require 'drgnx-persist)
                        (drgnx-persist-mode 1)

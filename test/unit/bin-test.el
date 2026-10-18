@@ -691,6 +691,32 @@ macOS (no /proc there)."
               (should-not (seq-find (lambda (a) (string-prefix-p "DRGNX_TEST_SELECTOR" a)) args)))))
       (delete-directory dir t))))
 
+(ert-deftest drgnx-bin/a-container-run-gets-the-modal-elpa ()
+  ;; DRGNX_MODAL_ELPA (evil for the modal tests) is mounted read-only into the container and named there, so the
+  ;; 31.1 container runs the evil tests instead of skipping them.
+  (let* ((dir (make-temp-file "drgnx-bin-tmp" t))
+         (elpa (file-name-as-directory (expand-file-name "elpa" dir)))
+         (log (expand-file-name "rt.log" dir))
+         (rt (drgnx-bin-test--fake-emacs (expand-file-name "fake-rt" dir)
+                                         (format "for a in \"$@\"; do echo \"$a\" >> %s; done" log)))
+         (drgnx-bin-test--cwd dir))
+    (make-directory elpa)
+    (unwind-protect
+        (dolist (with '(t nil))
+          (when (file-exists-p log) (delete-file log))
+          (should (eql 0 (car (drgnx-bin-test--call
+                               drgnx-bin-test--bin
+                               (list (concat "HOME=" dir) (concat "DRGNX_CONFIG_DIR=" dir "/config")
+                                     (concat "DRGNX_CONTAINER=" rt) "DRGNX_TEST_IMAGE=an-image"
+                                     (if with (concat "DRGNX_MODAL_ELPA=" elpa) "DRGNX_MODAL_ELPA"))
+                               "test" "--container"))))
+          (let ((args (split-string (drgnx-bin-test--slurp log) "\n" t)))
+            (if with
+                (progn (should (member (concat (directory-file-name (file-truename elpa)) ":/modal-elpa:ro") args))
+                       (should (member "DRGNX_MODAL_ELPA=/modal-elpa" args)))
+              (should-not (seq-find (lambda (a) (string-search "modal-elpa" a)) args)))))
+      (delete-directory dir t))))
+
 (ert-deftest drgnx-bin/a-relative-tmpdir-is-made-absolute ()
   ;; the child (and what it starts) must see absolute TMPDIR and DRGNX_RUN_TMP, whatever the caller's TMPDIR
   (let* ((dir (make-temp-file "drgnx-bin-tmp" t))

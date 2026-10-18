@@ -35,13 +35,29 @@ Your choices live in `~/.config/drgnx/modules.eld` (`$DRGNX_CONFIG_DIR`):
 ```elisp
 (:version 1
  :disabled (ui/zen lang/python)          ; modules that do not run
+ :enabled (editor/evil)                  ; modules that are off until chosen, and were (below)
  :flags ((ui/popups +childframe)))       ; module flags
 ```
 
-`:theme` is the colour theme Color Theme picked (ui/look writes it). An older format is migrated when it is read; a
-field that is not what drgnx expects (a typo) is dropped with a message in `*Messages*`; an unreadable file, or one
-from a newer drgnx, is reported and ignored (modules use their defaults) — never an error at start — and before drgnx
-next writes the file it keeps yours as `modules.eld.bak-<time>`.
+`:enabled` is absent until a module that is off until chosen is turned on, and is kept as it is when drgnx writes
+the file (a bootstrap or onboarding that writes modules.eld keeps it too). `:theme` is the colour theme Color Theme
+picked (ui/look writes it). An older format is migrated when it is read; a field that is not what drgnx
+expects (a typo) is dropped with a message in `*Messages*`; an unreadable file, or one from a newer drgnx, is
+reported and ignored (modules use their defaults) — never an error at start — and before drgnx next writes the
+file it keeps yours as `modules.eld.bak-<time>`.
+
+## Modules that are off until chosen
+
+A module defined with `:default 'off` does not run, and its `:packages` are neither synced nor loaded, until it is in
+`:enabled`; nothing installs or loads for it before that. The Vim key stack (the evil module) is the first. Who turns
+such a module on: the key profile that needs it (choosing a Vim key stack in onboarding or Preferences), or you —
+Preferences: Modules says `off (chosen by the key profile)` in its Next start column and `RET` on the row adds it to
+`:enabled` (and again, removes it). `:disabled` always wins: a module in both lists stays off. A module that is on by
+default is turned off through `:disabled` as before. `drgnx bisect` leaves an off-until-chosen module out unless it is
+enabled. The shipped lock still lists its packages, so a fresh install that chooses the module before its first sync
+gets verified versions; once a sync has rewritten your own lock from what is installed, the module's packages are not
+in it until they are installed. From Lisp:
+`(drgnx-module-default-off-p MODULE)`, `(drgnx-module-disabled-p MODULE)` and `(drgnx-modules-set-enabled MODULE ON)`.
 
 ## Your own code: config.el
 
@@ -97,6 +113,7 @@ affected: they reach the registry and the palette as before.
   :requires '(core/workbench)            ; modules that must have run (in the same stage: they run first)
   :packages '(example-mode)              ; features that must be loadable
   :flags '(+fancy)                       ; (drgnx-module-flag-p 'tools/example '+fancy)
+  :default 'on                           ; or 'off: off until chosen (below); `on' when left out
   :doctor (lambda () (unless (executable-find "example") '("the example program is not installed")))
   :settings '((example-width . "Width of the example pane"))
   :setup
@@ -128,6 +145,7 @@ key profile ([keys.md](keys.md)); faces inherit theme faces (no colours). See [c
 | `ui/smooth` | first-frame | smooth, pixel-precise scrolling on graphical frames (ultra-scroll when installed, else Emacs's own); Toggle Smooth Scrolling ([editing.md](editing.md)) |
 | `editor/sticky` | startup | sticky scroll: the function, class or block you are in, when its start has scrolled off, after the breadcrumb (tree-sitter or indentation; drgnx's own); Toggle Sticky Scroll ([editing.md](editing.md)) |
 | `editor/clipboard` | startup | clipboard managers: line and word kills stay in the kill ring, everything else reaches the system clipboard, a clipboard owner that does not answer is given up on after 1.5 s (X11 and Wayland), selecting text stops filling the history when Klipper, CopyQ or GPaste syncs it ([editing.md](editing.md#the-system-clipboard)) |
+| `editor/evil` | startup | Vim editing (evil), off until you choose a Vim key stack: normal / insert / visual states in editors, panels and forms in Emacs state, shells and commit messages in insert state, the state in the mode line and the cursor shape per state; evil-collection's keys for Magit, Dired and other third-party modes (flag `no-collection` leaves them out); multiple cursors in Emacs state; Toggle Modal Editing (`SPC u m`) turns it off and on for the session ([keys.md](keys.md#vim-keys)) |
 | `lang/markdown` | startup | Markdown (READMEs as GitHub Flavored Markdown): code blocks in their language, math; Markdown: Open Preview (pandoc, cmark or markdown when installed), Mermaid diagrams through mmdc ([editing.md](editing.md)) |
 | `tools/vc` | startup | Source Control (the project's changes), Diff with File, Blame — on Emacs' VC |
 | `tools/diff` | idle | the diff view: working tree, staged or branch vs base; split or unified, files folded, open the file at the line ([git.md](git.md)) |

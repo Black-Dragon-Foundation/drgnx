@@ -15,9 +15,11 @@
 (require 'drgnx-surfaces)
 (require 'drgnx-palette)
 (require 'drgnx-keys)
+(require 'drgnx-modal)
 (require 'drgnx-modules)
 (require 'drgnx-pkg-activate)
 (require 'drgnx-onboard)
+(require 'drgnx-modal-choose)
 (autoload 'drgnx-ai--on-first-window "drgnx-ai-probe")
 (require 'drgnx-gc)
 (require 'drgnx-session)
@@ -52,6 +54,7 @@
   "The commands the core itself provides."
   (drgnx-onboard-register-commands)
   (drgnx-session-register-commands)
+  (drgnx-modal-register-commands)
   (drgnx-command-define 'palette :category "View" :title "Command Palette"
                         :command #'drgnx-palette :menu '("View") :doc "Every command by name, with its key")
   (drgnx-command-define 'keys-sheet :category "Help" :title "Keyboard Shortcuts"
@@ -105,6 +108,7 @@ The steady GC threshold is set at the end, also when a step fails (early-init de
               (error (message "drgnx: modules did not start: %s" (error-message-string err))))
             (drgnx--load-user-config)))
         (drgnx-keys-apply)
+        (drgnx-modal-apply-pending)                    ; a Vim stack chosen before its engine was installed
         (drgnx-surfaces-refresh))
     (drgnx-gc-setup)))
 

@@ -14,7 +14,7 @@ One line per command:
 | Command | its category and title, as in the palette |
 | Keys | its keys; `†` marks a key a terminal cannot send (see below) |
 | Source | the profile the key comes from (VS Code, Emacs, Vim), `keys.eld` when you changed it, or `package` for a key Emacs or a package bound to the command itself |
-| Where | `global`, or the view or mode the key works in (the keymap it is bound in) |
+| Where | `global`, or the view or mode the key works in (the keymap it is bound in); with Vim keys `normal, visual, motion state and panels` (the `SPC` leader keys), `panels`, or the state (`normal state`, `motion state`, `insert state` …) |
 
 A `!` at the start of a line marks a key conflict; hover over it to see with which command and where. A conflict is
 only one within the same place: the same key in two views is not.

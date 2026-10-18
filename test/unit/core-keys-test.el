@@ -111,17 +111,21 @@ is undone after BODY."
     (should (equal (plist-get (car (plist-get (drgnx-keys-test--conflict r "C-o") :losers)) :id) 'open-file))))
 
 (ert-deftest drgnx-keys/vim-editing-then-vscode-app ()
-  (let* ((r (drgnx-keys-test--resolve '((vim editing) (vscode app window))))
+  ;; The mixed preset puts Vim last: Vim's C-o wins in normal, visual and motion state, and VS Code's Open File
+  ;; keeps C-o (insert state, panels) next to its leader key.
+  (let* ((r (drgnx-keys-test--resolve '((vscode app window) (vim editing))))
          (c (drgnx-keys-test--conflict r "C-o")))
     (should (eq (plist-get c :kind) 'claim))
-    (should (equal (plist-get (car (plist-get c :losers)) :claim) "jump back"))
-    (should (equal (drgnx-keys-test--keys r 'open-file) '("C-o")))))
+    (should (equal (plist-get c :states) '(normal visual motion)))
+    (should (equal (plist-get (plist-get c :winner) :claim) "Jump Back"))
+    (should (equal (plist-get (car (plist-get c :losers)) :id) 'open-file))
+    (should (equal (drgnx-keys-test--keys r 'open-file) '("C-o" "SPC f f")))))
 
-(ert-deftest drgnx-keys/vim-commands-wait-for-evil ()
+(ert-deftest drgnx-keys/vim-commands-are-on-the-leader-map ()
   (let ((r (drgnx-keys-test--resolve '((vim app editing window)))))
     (should (equal (drgnx-keys-test--keys r 'open-file) '("SPC f f")))
     (should (equal (plist-get (seq-find (lambda (b) (eq (plist-get b :id) 'open-file)) (plist-get r :bindings)) :map)
-                   '(evil . evil-normal-state-map)))))
+                   'drgnx-modal-leader-map))))
 
 (ert-deftest drgnx-keys/user-overrides-win ()
   (let ((r (drgnx-keys-test--resolve '((vscode app editing window))
@@ -343,7 +347,7 @@ keys); every binding is undone after."
    (let ((r (drgnx-keys-resolve :commands (drgnx-commands-all) :profiles drgnx-keys-profiles
                                 :layers '((vim app editing window)) :defaults drgnx-keys-test--defaults)))
      (should (equal (plist-get (seq-find (lambda (b) (eq (plist-get b :id) 'test-git)) (plist-get r :bindings)) :map)
-                    '(evil . evil-normal-state-map))))))
+                    'drgnx-modal-leader-map)))))
 
 (ert-deftest drgnx-keys/prefix-clashes-between-drgnx-bindings ()
   (let ((r (drgnx-keys-test--resolve '((vscode app editing window)) :user '(:bind ((line-numbers "C-k"))))))
@@ -372,7 +376,8 @@ keys); every binding is undone after."
 (ert-deftest drgnx-keys/which-key-labels-follow-switches ()
   (skip-unless (require 'which-key nil t))
   (let ((which-key-replacement-alist which-key-replacement-alist)
-        (after-load-alist after-load-alist) (features features))
+        (after-load-alist after-load-alist) (features features)
+        (drgnx-keys-modal-snapshots drgnx-keys-modal-snapshots))   ; this fake evil's snapshot stays here
     (defvar evil-normal-state-map)
     (let ((evil-normal-state-map (make-sparse-keymap)))
       (drgnx-keys-test--live
@@ -387,7 +392,8 @@ keys); every binding is undone after."
                                which-key-replacement-alist)))
        ;; evil arriving later gets neither stale bindings nor stale labels.
        (provide 'evil)
-       (should (null (keymap-lookup evil-normal-state-map "SPC")))))))
+       (dolist (key '("SPC" "SPC SPC" "SPC f f"))      ; nil, a too-long key (1) or an empty prefix map: no command
+         (should-not (commandp (keymap-lookup evil-normal-state-map key))))))))
 
 (ert-deftest drgnx-keys/claims-are-against-emacs-not-drgnx ()
   (drgnx-keys-test--live
@@ -440,6 +446,20 @@ keys); every binding is undone after."
                                 :layers '((vim app editing window)) :defaults drgnx-keys-test--defaults
                                 :maps (lambda (m) (symbol-value m)))))
      (should-not (drgnx-keys-test--conflict r "g o")))))
+
+(defvar drgnx-keys-test-empty-map (make-sparse-keymap))
+
+(ert-deftest drgnx-keys/binding-into-an-empty-map-lifts-nothing ()
+  ;; `keymap-lookup' answers 1 for "SPC f f" in an empty map (SPC is unbound, not a command): no prefix is lifted or
+  ;; recorded, so the first apply records what every later one does.  A command on the prefix is still lifted.
+  (let ((drgnx-keys--applied nil))
+    (setq drgnx-keys-test-empty-map (make-sparse-keymap))
+    (should (null (drgnx-keys--bind 'drgnx-keys-test-empty-map "SPC f f" #'ignore)))
+    (should (equal drgnx-keys--applied '((drgnx-keys-test-empty-map "SPC f f" nil ignore))))
+    (setq drgnx-keys--applied nil drgnx-keys-test-empty-map (make-sparse-keymap))
+    (keymap-set drgnx-keys-test-empty-map "SPC" #'forward-char)
+    (should (equal (drgnx-keys--bind 'drgnx-keys-test-empty-map "SPC f f" #'ignore) "forward-char (SPC)"))
+    (should (equal (assoc-default "SPC" (mapcar #'cdr drgnx-keys--applied)) '(forward-char :prefix)))))
 
 (ert-deftest drgnx-keys/buffers-panel-has-a-right-click-menu ()
   ;; The keys tables say "right-click" for these; the menu must exist.
@@ -865,7 +885,8 @@ The commands of modules that need no installed package are in it, the later stag
                               agent-settings-openrouter
                               shortcuts-tty-fallback  ; M12b's terminal fallback in the Shortcuts editor
                               quit preferences edit-line-start edit-line-end edit-buffer-start edit-buffer-end edit-word-left
-                              edit-word-right edit-delete-word-back edit-delete-line-back edit-copy edit-cut edit-paste))
+                              edit-word-right edit-delete-word-back edit-delete-line-back edit-copy edit-cut edit-paste
+                              code-next-problem code-previous-problem))   ; M12d: F8 / S-F8
          (drgnx-keys-test--later-stages t)
          (r (drgnx-keys-test--resolve '((vscode app editing window)) :platform 'linux)))
     (should (equal (mapcar (lambda (b) (list (plist-get b :id) (plist-get b :key) (plist-get b :map)))

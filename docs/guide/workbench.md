@@ -126,6 +126,24 @@ mode's menu at the cursor, the menu-bar entry without the menu bar.
 
 All of these are commands in the palette and keys in every profile ([keys.md](keys.md)).
 
+### Panels with Vim keys
+
+With the Vim profile (modal editing on, [keys.md](keys.md)) the editors are in Vim's normal state, but every panel is
+in **Emacs state**: the Explorer, Buffers, Outline, Work, Agents, Diff, Review, Pull Requests, Welcome and Modules
+views, and the other lists and transcripts. Vim's own keys do not reach them, so a panel keeps its own letters.
+
+- **Rows.** `j` / `k` move down and up one row in every panel (the Explorer's own `j` / `k` and arrows do the same);
+  `h` / `l` collapse and expand in the Explorer.
+- **The leader and windows.** `SPC …` (`SPC f f`, `SPC SPC`) and `C-w h` / `j` / `k` / `l` work in a panel as in an
+  editor, so you can leave a panel by key.
+- **Escape.** `<escape>` in the sidebar (Explorer, Buffers, Outline) goes back to the editor, as Back to the Editor
+  does, in every key profile. The right dock (Work, Agents) has no Escape: `C-w l` reaches it and `C-w h` comes back.
+- **Refresh.** `g` refreshes the Diff, Review and Pull Requests views, as without Vim keys.
+- **Search and type-ahead.** `/` filters the Explorer and Buffers panel (the text you type is the minibuffer's, so
+  `SPC` types a space). A letter that nothing binds in the Explorer, the panel keys or the leader jumps to the next
+  row starting with it.
+- **No cursor box.** A panel shows no text cursor in any state, whatever state the engine passes through.
+
 ## Where buffers go
 
 Every buffer Emacs shows goes to a **place** chosen by one rules table: files, dired and anything a rule sends
@@ -192,7 +210,9 @@ Down (``C-\`` / ``C-k C-\`` · Emacs' own `C-x 3` / `C-x 2` · `SPC w v` / `SPC 
 Close Editor Group (palette · `C-x 0` · `SPC w c`; the last group stays), Close All Editors in Group (`C-k w`; the
 palette in the Emacs and Vim profiles; its tabs go, the files stay open; the group closes, or, the last one, shows
 `*scratch*`), Focus Group 1–3 (`C-1`–`C-3` · `C-x o` · `SPC 1`–`SPC 3`; one past the last makes a group to the right),
-Move Editor into Next Group (`C-M-<right>` · palette · `SPC w m`; a group left without tabs closes, as in VS Code).
+Move Editor into Next Group (`C-M-<right>` · palette · `SPC w m`; a group left without tabs closes, as in VS Code),
+Focus Left / Right / Above / Below (palette · palette · `C-w h` / `l` / `k` / `j`: the group or dock next to this window
+in that direction, docks included; at an edge nothing happens).
 Groups are numbered left to right, top to bottom. Diffs and logs (`diff-mode`, `log-view-mode`, magit's diff and log)
 open in the **other group** — the one you used last besides this one — never in a new split.
 

@@ -52,13 +52,14 @@ manual install and uninstall: [docs/guide/install.md](docs/guide/install.md). Ch
 ## Roadmap
 
 - **Done:** the test harness for agents, the installer and `drgnx doctor`, VS Code / Emacs / Vim key profiles,
-  the workbench (Explorer, Buffers, docks, panel, editor groups, several windows, layout that survives restarts),
-  modules, reproducible packages with rollback, onboarding, AI agents with queued input and edit review, the perf
-  lab, the work tracker, AI completion and inline edits with any model (local runners first), built-in semantic search,
-  terminal windows (`drgnx -t`, SSH, tmux: keys, mouse, clipboard, colours).
+  modal Vim editing on evil (M12d: states, the `SPC` leader, ex commands that keep the workbench's groups, panels and
+  AI working with it), the workbench (Explorer, Buffers, docks, panel, editor groups, several windows, layout that
+  survives restarts), modules, reproducible packages with rollback, onboarding, AI agents with queued input and edit
+  review, the perf lab, the work tracker, AI completion and inline edits with any model (local runners first),
+  built-in semantic search, terminal windows (`drgnx -t`, SSH, tmux: keys, mouse, clipboard, colours).
 - **Later:** editor amenities to match VS Code and Zed (tree-sitter, language servers, formatting, debugging,
-  multi-cursor, git gutter, a settings and shortcuts editor), platforms (tiling window managers, macOS, a Vim-style
-  modal module), then the public launch.
+  multi-cursor, git gutter, a settings and shortcuts editor), platforms (tiling window managers, macOS, a Meow modal
+  module), then the public launch.
 
 ## License
 
