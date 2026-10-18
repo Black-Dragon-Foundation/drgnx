@@ -14,9 +14,14 @@ restart, and remembers the choice in `keys.eld` (`RET` with nothing typed keeps 
 |---|---|
 | VS Code (default) | `vscode` for app, editing and window commands |
 | Emacs | `emacs` for everything |
-| Vim | `vim` for everything — its keys work once the evil module is installed (M4) |
+| Vim | `vim` for everything; choosing it turns the evil module on (see Vim keys) |
 | Emacs editing + VS Code app keys | `emacs` editing, then `vscode` app and window |
-| Vim editing + VS Code app keys | `vim` editing, then `vscode` app and window |
+| Vim editing + VS Code app keys | `vscode` app and window, then `vim` editing |
+
+The last preset puts Vim **last**: it is the later layer for editing, so Vim keeps its Ctrl keys (`C-o` jump back,
+`C-w`, `C-b`, `C-p`, `C-n`, `C-t` …) in normal and visual state, as VSCodeVim does, while VS Code's keys work in
+insert state, in panels and, on a Mac, as Cmd keys. `keys.eld` flips any single key. The `SPC` leader keys stay in
+this stack for every command, next to VS Code's own keys (see Leader keys below).
 
 The onboarding flow will ask which one you want (VS Code preselected).
 
@@ -59,7 +64,7 @@ A command that lives in a mode's keymap (like those) keeps its keymap in every p
 else the command's own, else the profile's.
 
 "—" means the profile has no key for it; every command is always in the palette. Vim's keys are leader keys in
-evil's normal state. On **macOS** the VS Code profile uses Cmd (`s-`) as VS Code does there — see below.
+drgnx's leader map (`SPC …`), which the Vim engine plugs into its normal, visual and motion states and the panels. On **macOS** the VS Code profile uses Cmd (`s-`) as VS Code does there — see below.
 
 ## Vim keys
 
@@ -105,6 +110,117 @@ VS Code or Emacs keys). It runs [evil](https://github.com/emacs-evil/evil) as th
   `evil-search-module` `evil-search`, no evil in the minibuffer) before your `config.el`, so your `setopt` is last. A
   cursor variable you set (`evil-normal-state-cursor` …) is kept.
 - **Caps Lock as Esc** is the operating system's job (a keyboard setting), not drgnx's.
+
+### Leader keys
+
+The Vim profile's commands are on the leader keys `SPC …` (and `C-w …` for windows). They live in drgnx's own
+`drgnx-modal-leader-map`, not in evil's maps, so they are known to the key sheet, the palette and the conflict report
+before evil is installed, and the engine only has to plug the map into its states. The palette is reachable in every
+state and panel: `SPC SPC` from normal, visual and motion state and panels, `C-S-p` and `F1` (Cmd+Shift+P and `F1` on a
+Mac) everywhere, so insert state is never without a way in. The leader keys of the shipped profile:
+
+| Key | Command |
+|---|---|
+| `SPC ,` | Focus Buffers |
+| `SPC /` | View: Search |
+| `SPC 1` | Focus First Editor Group |
+| `SPC 2` | Focus Second Editor Group |
+| `SPC 3` | Focus Third Editor Group |
+| `SPC ?` | Keyboard Shortcuts |
+| `SPC E` | Focus Explorer |
+| `SPC R` | Toggle Right Dock |
+| `SPC SPC` | Command Palette |
+| `SPC V` | Shrink Selection |
+| `SPC a e` | Edit with AI… |
+| `SPC a m` | LLM Menu |
+| `SPC a q` | Ask the Codebase… |
+| `SPC a s` | Send to LLM |
+| `SPC a v` | Show Agents |
+| `SPC a w` | Show Work |
+| `SPC b A` | Close All Editors |
+| `SPC b a` | Buffers: Show All Windows |
+| `SPC b b` | Recent Buffers |
+| `SPC b d` | Close Tab |
+| `SPC b i` | Full Buffer Manager |
+| `SPC b n` | Next Tab |
+| `SPC b p` | Previous Tab |
+| `SPC b u` | Close Saved Editors |
+| `SPC c R` | Rename Symbol |
+| `SPC c a` | Quick Fix |
+| `SPC c c` | Toggle Comment |
+| `SPC c d` | Go to Definition |
+| `SPC c f` | Format Document |
+| `SPC c h` | Show Hover |
+| `SPC c r` | Find References |
+| `SPC c x` | Problems |
+| `SPC c ~` | Change Case: Cycle |
+| `SPC e` | Toggle Sidebar |
+| `SPC f S` | Save All |
+| `SPC f f` | Open File… |
+| `SPC f n` | New Untitled |
+| `SPC f o` | Open Folder… |
+| `SPC f p` | Quick Open |
+| `SPC f r` | Reopen Closed Tab |
+| `SPC f s` | Save |
+| `SPC f w` | Save As… |
+| `SPC g B` | Diff: Branch vs Base |
+| `SPC g R` | Review Branch |
+| `SPC g S` | Stage Change |
+| `SPC g b` | Blame |
+| `SPC g c` | Blame: Show Commit of Line |
+| `SPC g d` | Diff with File |
+| `SPC g h` | Show Change |
+| `SPC g i` | Diff: Staged |
+| `SPC g l` | Go to Line… |
+| `SPC g p` | Pull Requests |
+| `SPC g r` | Revert Change |
+| `SPC g s` | Source Control |
+| `SPC g w` | Diff: Working Tree |
+| `SPC h k` | Keyboard Profile… |
+| `SPC h m` | Module Report |
+| `SPC h s` | Keyboard Shortcuts |
+| `SPC h t` | Color Theme |
+| `SPC j` | Toggle Panel |
+| `SPC l l` | Layout… |
+| `SPC l n` | Next Layout |
+| `SPC m` | Menu for This Mode |
+| `SPC n a` | Agenda Menu |
+| `SPC n c` | Capture |
+| `SPC o` | Focus Outline |
+| `SPC s i` | Semantic Search |
+| `SPC s j` | Jump to Text |
+| `SPC s p` | Search in Project |
+| `SPC s r` | Replace in Files |
+| `SPC s s` | Go to Symbol |
+| `SPC s y` | Go to Symbol in Project |
+| `SPC t n` | New Terminal |
+| `SPC u k` | Show Keys As I Type |
+| `SPC u l` | Toggle Line Numbers |
+| `SPC u m` | Toggle Modal Editing |
+| `SPC u p` | Next Panel Tab |
+| `SPC u t` | Undo Tree… |
+| `SPC u z` | Zen Mode |
+| `SPC v` | Expand Selection |
+| `SPC w c` | Close Editor Group |
+| `SPC w g` | Move Editor Group into New Window |
+| `SPC w m` | Move Editor into Next Group |
+| `SPC w n` | Move Editor into New Window |
+| `SPC w o` | Open Editor in New Window |
+| `SPC w s` | Split Editor Down |
+| `SPC w v` | Split Editor Right |
+| `SPC w w` | Pick Window |
+| `SPC z c` | Fold |
+| `SPC z o` | Unfold |
+
+**Mixed stacks.** In "Vim editing + VS Code app keys" the `vim` layer covers editing only, but its leader keys (and
+its other keys that exist only in modal maps, like `j` / `k` for rows in panels) are kept for every command, next to
+the key the command's own layer gives it: Open File is `C-o` and `SPC f f`. Nothing else of the Vim layer is added: its
+keys in the Explorer's or another view's own keymap stay out, and the layer that covers a command keeps its keys.
+Leader keys cannot clash with VS Code's because they exist only in the leader map.
+
+**Your own leader keys.** A `keys.eld` key that starts with the leader (`(save-file "SPC x")`) goes in the leader map
+in a Vim or mixed stack, never the global keymap (else `SPC` would stop typing a space in insert state); in a VS Code or
+Emacs stack it is an ordinary global key. Any other `keys.eld` key keeps the keymap it had.
 
 ## On a Mac
 
@@ -186,7 +302,8 @@ was there. (GNU Emacs' `ns-` variables and the Mac port's `mac-` ones are both h
 Every command has a scope: **editing** (moving, selecting, changing text), **app** (files, palette, settings) or
 **window** (splits, docks, panels). A layer is a profile plus the scopes it keys; a command takes its keys from the
 last layer that covers its scope. In "Emacs editing + VS Code app keys", Emacs keeps the editing keys and VS Code
-keys the app and window commands.
+keys the app and window commands. The one exception is a modal profile (Vim): its keys that exist only in its modal
+maps, the `SPC` leader keys above all, are kept next to the other layer's key for a command outside its scopes.
 
 Besides keying drgnx commands, a profile **claims** the keys its own editing model uses: the `emacs` layer claims
 Emacs' default bindings (`C-s` isearch, `C-o` open-line, `C-k` kill-line, …), the `vim` layer claims Vim's
@@ -224,7 +341,8 @@ cannot be bound, a prefix it replaces) joins the list and the report then.
 ```
 
 - Command ids are the registry ids (the palette shows the commands; `drgnx-commands-all` lists them).
-- `:map` is a keymap symbol or `(FEATURE . KEYMAP)` for a keymap that exists once FEATURE is loaded.
+- `:map` is a keymap symbol or `(FEATURE . KEYMAP)` for a keymap that exists once FEATURE is loaded. In a Vim or
+  mixed stack a key that starts with `SPC` (or `C-w`, the leader keys) always goes in the leader map, whatever `:map` says.
 - `:mac` gives a different key on macOS: `(palette "C-c p" :mac "s-p")`; `:mac ()` is no key there, and
   `(quit :none "reason" :mac "s-q")` a key only there.
 - `:everywhere` names keys that must work in every mode: ``(toggle-panel "C-`" :everywhere "C-j")`` binds `C-j`

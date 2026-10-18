@@ -133,6 +133,14 @@ evil, and `test/unit/modal-core-test.el` drives it with a fake engine.
   at the end of every sync, started or not. `drgnx-modal-suspended` (one element: the layers at the time) keeps the engine off
 for those layers, however often the keys are applied again (Toggle Modal Editing); other layers end it. `:maps` says, per keymap, the states a key bound there must also work in
   (the key resolver reads it); `drgnx-modal-where` names a map for the key sheet.
+- **Where keys go** (`core/drgnx-keys-modal.el`, pure, used by `drgnx-keys-resolve`). `drgnx-keys-modal-leader-p`
+  tells a leader key (`SPC f f`, `C-w h`) from the rest; `drgnx-keys-modal-key-map` binds a leader key in the
+  profile's `:map` (`drgnx-modal-leader-map`) whatever the entry says, any other key in the entry's map, the
+  command's, `:default-map`, else the profile's; `drgnx-keys-modal-states` gives the states a `:maps` keymap works
+  in; `drgnx-keys-modal-of-stack` finds the stack's modal layer (a `keys.eld` leader key goes in its leader map).
+  A modal profile's entries for commands outside its layer's scopes are **extras**: their keys in a `:maps` keymap
+  are bound next to the command's own layer's keys, never replacing them. `drgnx-keys-after-apply-functions` (abnormal
+  hook, the layers) runs at the end of every `drgnx-keys-apply`; the core adds `drgnx-modal-sync-engine` to it.
 - **Commands.** `modal-leader` (Leader Menu) reads the leader's `SPC` submap as a transient map from any state.
   `panel-next` / `panel-previous` (Next / Previous Row, bound in the panel map) run the panel's own `<down>` /
   `<up>` binding, else `next-line` / `previous-line`, so a panel keeps its row movement.

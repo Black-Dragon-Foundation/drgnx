@@ -112,11 +112,11 @@ is undone after BODY."
     (should (equal (plist-get (car (plist-get c :losers)) :claim) "jump back"))
     (should (equal (drgnx-keys-test--keys r 'open-file) '("C-o")))))
 
-(ert-deftest drgnx-keys/vim-commands-wait-for-evil ()
+(ert-deftest drgnx-keys/vim-commands-are-on-the-leader-map ()
   (let ((r (drgnx-keys-test--resolve '((vim app editing window)))))
     (should (equal (drgnx-keys-test--keys r 'open-file) '("SPC f f")))
     (should (equal (plist-get (seq-find (lambda (b) (eq (plist-get b :id) 'open-file)) (plist-get r :bindings)) :map)
-                   '(evil . evil-normal-state-map)))))
+                   'drgnx-modal-leader-map))))
 
 (ert-deftest drgnx-keys/user-overrides-win ()
   (let ((r (drgnx-keys-test--resolve '((vscode app editing window))
@@ -336,7 +336,7 @@ is undone after BODY."
    (let ((r (drgnx-keys-resolve :commands (drgnx-commands-all) :profiles drgnx-keys-profiles
                                 :layers '((vim app editing window)) :defaults drgnx-keys-test--defaults)))
      (should (equal (plist-get (seq-find (lambda (b) (eq (plist-get b :id) 'test-git)) (plist-get r :bindings)) :map)
-                    '(evil . evil-normal-state-map))))))
+                    'drgnx-modal-leader-map)))))
 
 (ert-deftest drgnx-keys/prefix-clashes-between-drgnx-bindings ()
   (let ((r (drgnx-keys-test--resolve '((vscode app editing window)) :user '(:bind ((line-numbers "C-k"))))))

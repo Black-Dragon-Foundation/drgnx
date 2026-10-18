@@ -303,5 +303,8 @@ At the end `drgnx-modal-sync-functions' are called with LAYERS."
 
 (drgnx-modal-order-alists)
 
+;; A runtime switch of the key stack starts or stops the engine it needs (once; a second add is a no-op).
+(add-hook 'drgnx-keys-after-apply-functions #'drgnx-modal-sync-engine)
+
 (provide 'drgnx-modal)
 ;;; drgnx-modal.el ends here
