@@ -60,10 +60,13 @@
 
 (ert-deftest drgnx-coord/concurrent-held-writes-and-hub-writes ()
   ;; two Emacs processes write the held-count (read, then write) in a loop while this one writes decisions: the work
-  ;; database waits for its lock (busy_timeout) — nobody fails with "database is locked"
+  ;; database waits for its lock (busy_timeout) — nobody fails with "database is locked". The overlap is made, not hoped
+  ;; for: each child reports STARTED after its first write and keeps writing until this test creates the stop file (bounded
+  ;; by an iteration/time cap so a child can never hang); the decisions are written only while both children are writing.
   (drgnx-coord-test--with
     (drgnx-coord-version)                                                      ; this Emacs has the database open (WAL)
     (let* ((outs nil) (procs nil) (written 0)
+           (stop (expand-file-name "stop-held-writers" dir))
            (start (lambda (agent)
                     (let ((b (generate-new-buffer " *held*" t)))
                       (push b outs)
@@ -71,23 +74,38 @@
                                     :command (list (expand-file-name invocation-name invocation-directory) "--batch" "-Q"
                                                    "--eval" "(setq load-prefer-newer t)"
                                                    "-L" (expand-file-name "core" drgnx-dir) "-l" "drgnx-coord"
-                                                   "--eval" (format "(princ (condition-case e
-                                                                              (progn (dotimes (i 150) (drgnx-coord-note-held %S (= 0 (%% i 2)))) \"DONE\\n\")
-                                                                            (error (format \"ERR:%%S\\n\" e))))"
-                                                                    agent))))))
-           (deadline (+ (float-time) 60)))
+                                                   "--eval" (format "(let ((i 0) (cap (+ (float-time) 20)))
+                                                                      (princ (condition-case e
+                                                                                 (progn
+                                                                                   (while (and (< i 5000) (< (float-time) cap) (not (file-exists-p %S)))
+                                                                                     (drgnx-coord-note-held %S (= 0 (%% i 2)))
+                                                                                     (setq i (1+ i))
+                                                                                     (when (= i 1) (princ \"STARTED\\n\")))
+                                                                                   \"DONE\\n\")
+                                                                               (error (format \"ERR:%%S\\n\" e)))))"
+                                                                    stop agent))))))
+           (wait (lambda (done seconds)
+                   (let ((deadline (+ (float-time) seconds)))
+                     (while (and (not (funcall done)) (< (float-time) deadline)) (accept-process-output nil 0.01))))))
       (unwind-protect
           (progn
             (setq procs (list (funcall start "a") (funcall start "b")))
-            (while (and (seq-some #'process-live-p procs) (< (float-time) deadline))
+            (funcall wait (lambda () (seq-every-p (lambda (b) (with-current-buffer b (string-match-p "STARTED" (buffer-string)))) outs)) 30)
+            (dolist (b outs)
+              (should (string-match-p "STARTED" (with-current-buffer b (buffer-string)))))
+            (dotimes (_ 30)                                                    ; the children are writing the whole time
               (drgnx-coord-decide :kind "build" :subject (format "s%d" written) :reason "r" :author "user" :seen (drgnx-coord-version))
               (setq written (1+ written))
               (accept-process-output nil 0.005))
+            (should (seq-every-p #'process-live-p procs))                      ; the writes did overlap the children's
+            (write-region "" nil stop nil 'silent)
+            (funcall wait (lambda () (not (seq-some #'process-live-p procs))) 30)
             (should-not (seq-some #'process-live-p procs))
-            (should (> written 5))                                             ; the writes did overlap the children's
             (accept-process-output nil 0.1)
             (dolist (b outs)
-              (should (string-prefix-p "DONE" (with-current-buffer b (buffer-string)))))
+              (let ((out (with-current-buffer b (buffer-string))))
+                (should-not (string-match-p "ERR" out))
+                (should (string-match-p "^DONE$" out))))
             (should (= written (length (drgnx-coord-decisions-since 0)))))
         (dolist (p procs) (when (process-live-p p) (kill-process p)))
         (mapc #'kill-buffer outs)))))
