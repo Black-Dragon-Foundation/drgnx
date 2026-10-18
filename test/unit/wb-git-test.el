@@ -134,6 +134,15 @@ build/ ignored (with build/out.o)."
     (let ((b (drgnx-git-parse-branch "# branch.oid abc\0# branch.head feature/a b\0? x\0")))
       (should (equal (plist-get b :head) "feature/a b"))
       (should-not (plist-get b :ahead)))
+    ;; an unborn branch (no commit yet)
+    (let ((b (drgnx-git-parse-branch "# branch.oid (initial)\0# branch.head master\0? x\0")))
+      (should (equal (plist-get b :head) "master"))
+      (should-not (plist-get b :ahead)))
+    ;; a branch whose upstream is gone: an upstream line, no counts
+    (let ((b (drgnx-git-parse-branch "# branch.oid abc\0# branch.head main\0# branch.upstream origin/gone\0? x\0")))
+      (should (equal (plist-get b :head) "main"))
+      (should-not (plist-get b :ahead))
+      (should-not (plist-get b :behind)))
     ;; a detached HEAD
     (let ((b (drgnx-git-parse-branch "# branch.oid abc\0# branch.head (detached)\0? x\0")))
       (should (plist-get b :detached))

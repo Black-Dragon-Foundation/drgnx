@@ -131,7 +131,7 @@ Status Bar** (View menu, palette); `drgnx-statusbar-mode` is the switch.
 | Right | Shows | Click |
 |---|---|---|
 | `lsp` | `LSP: pyright ●` (connected; the name the server gave), `LSP ○` (starting), `LSP ✕` (exited) when eglot manages the buffer | the server's events |
-| `position` | `Ln 12, Col 4`, and `(15 selected)` with a selection | go to a line |
+| `position` | `Ln 12, Col 4`, and `(15 selected)` with a selection, in the selected window only | go to a line |
 | `indent` | `Spaces: 2` or `Tab Size: 8` | tabs or spaces |
 | `encoding` | `UTF-8` | change it |
 | `eol` | `LF`, `CRLF` or `CR` | change it |
@@ -155,7 +155,7 @@ searched. Other code reports a run with `(drgnx-statusbar-note-tests PASSED FAIL
 **Branch.** The branch and its counts come from drgnx's own git cache (the one behind the file marks in the Explorer):
 one `git status` per repository, in the background, which never touches a remote, so the counts are against the
 upstream as your last fetch left it. When you switch to a file, the bar asks the cache to read that file's repository
-again, at most every 5 seconds (`drgnx-statusbar-git-ask-seconds`); the Explorer's own refreshes update it too. Until
+again, at most every 5 seconds per repository (`drgnx-statusbar-git-ask-seconds`); the Explorer's own refreshes update it too. Until
 the cache has read the repository, and for a file on a remote machine (never asked), the bar shows the branch Emacs's
 version control put in `vc-mode`, or nothing. A detached HEAD reads `⑂ (detached)`; a branch with no upstream has no
 counts.
@@ -178,7 +178,7 @@ your own can add a function and call `drgnx-statusbar-refresh` when its count ch
 The bar is redrawn after every command that moved point, changed the text or selected another window (both windows
 trade the full and the compact bar a moment later, when the most recently used editor window is settled), and when
 agents, the hub or git report a change (`drgnx-statusbar-refresh`: at most one redraw every 0.2 seconds, however many
-changes come in, and only when a count changed; git always redraws). Each window keeps the bar it last drew, with
+changes come in, and only when a count changed; git redraws when a repository's branch or its ahead and behind counts changed). Each window keeps the bar it last drew, with
 what it was drawn from (the buffer, point, the text's change count, the width, full or compact, the counts above and
 the buffer's version-control, selection, encoding, indentation width, mode, narrowing, checker and language-server state): a
 redisplay that changes none of these reuses it, so a window you do not type in costs almost nothing however often

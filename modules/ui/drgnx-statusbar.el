@@ -333,6 +333,7 @@ Weak on the window, so a deleted window's entry goes with it; emptied when the m
     '((current-buffer) (window-point w) (buffer-chars-modified-tick) drgnx-statusbar--tick width compact
       (point-min) (point-max) major-mode vc-mode buffer-file-coding-system indent-tabs-mode tab-width
       defining-kbd-macro mode-line-process default-directory (and mark-active (mark t))
+      (drgnx-statusbar--selected-p w)
       (bound-and-true-p flymake-mode) (bound-and-true-p flymake--mode-line-counter-cache) (drgnx-statusbar--flymake-backends)
       (bound-and-true-p eglot--managed-mode) (bound-and-true-p eglot--cached-server) (drgnx-statusbar--eglot-live-p)
       (drgnx-statusbar--indent-width)
@@ -578,26 +579,34 @@ does the first event after the hub connects (the count is not known yet: the hub
   (setq drgnx-statusbar--jobs-wanted nil drgnx-statusbar--jobs-pending nil)
   (drgnx-statusbar--set-jobs nil))
 
-(defun drgnx-statusbar--git-changed (&rest _)
-  "On `drgnx-git-changed-functions': redraw the bars (debounced): the branch may be another."
-  (setq drgnx-statusbar--redraw-wanted t)
-  (drgnx-statusbar-refresh))
+(defvar drgnx-statusbar--git-branches (make-hash-table :test #'equal)
+  "Repository root → the branch plist the bars were last redrawn for (one entry per repository git has read).")
+
+(defun drgnx-statusbar--git-changed (&optional root &rest _)
+  "On `drgnx-git-changed-functions' (ROOT's status was read): redraw the bars (debounced) when ROOT's branch or its
+ahead and behind counts are not what the bars last drew; a status run that changed only files redraws nothing."
+  (let ((branch (and root (fboundp 'drgnx-git-branch) (drgnx-git-branch root))))
+    (unless (equal branch (gethash root drgnx-statusbar--git-branches))
+      (puthash root branch drgnx-statusbar--git-branches)
+      (setq drgnx-statusbar--redraw-wanted t)
+      (drgnx-statusbar-refresh))))
 
 (defvar drgnx-statusbar-git-ask-seconds 5
   "Seconds before the status bar asks drgnx's git cache again about the same folder.")
-(defvar drgnx-statusbar--git-asked nil "(FOLDER . TIME) of the last time the bar asked the git cache to read.")
+(defvar drgnx-statusbar--git-asked nil "(REPOSITORY-OR-FOLDER . TIME) of the last time the bar asked the git cache to read.")
 
 (defun drgnx-statusbar--ask-git (&rest _)
   "On `editor-changed' (the signal bus, when Emacs is idle; never redisplay): have drgnx's git cache read the
-repository of the editor's file, at most every `drgnx-statusbar-git-ask-seconds' for one folder.  The answer comes back
+repository of the editor's file, at most every `drgnx-statusbar-git-ask-seconds' for one repository (one folder while its repository is unknown).  The answer comes back
 through `drgnx-git-changed-functions' and redraws the bars.  A remote file asks nothing."
   (when-let* (((fboundp 'drgnx-git-refresh))
               (w (and (fboundp 'drgnx-wb-editor-window) (drgnx-wb-editor-window)))
               (file (buffer-local-value 'buffer-file-name (window-buffer w)))
               ((not (file-remote-p file))))
-    (let ((dir (file-name-directory file)) (now (drgnx-statusbar--now)) (asked drgnx-statusbar--git-asked))
-      (unless (and asked (equal (car asked) dir) (< (- now (cdr asked)) drgnx-statusbar-git-ask-seconds))
-        (setq drgnx-statusbar--git-asked (cons dir now))
+    (let ((key (or (drgnx-git-cached-root file) (file-name-directory file)))     ; the repository, else the folder
+          (now (drgnx-statusbar--now)) (asked drgnx-statusbar--git-asked))
+      (unless (and asked (equal (car asked) key) (< (- now (cdr asked)) drgnx-statusbar-git-ask-seconds))
+        (setq drgnx-statusbar--git-asked (cons key now))
         (drgnx-git-refresh file)))))
 
 (defun drgnx-statusbar--flymake-reported (&rest _)
@@ -640,6 +649,7 @@ debounced, so the problems count follows reports that arrive while you do nothin
     (when (timerp drgnx-statusbar--refresh-timer) (cancel-timer drgnx-statusbar--refresh-timer))
     (setq drgnx-statusbar--refresh-timer nil)
     (clrhash drgnx-statusbar--memo)
+    (clrhash drgnx-statusbar--git-branches)
     (when (fboundp 'drgnx-modal-indicator-on) (drgnx-modal-indicator-on)))
   (drgnx-statusbar--bump)
   (dolist (f (frame-list)) (drgnx-chrome-apply f))
@@ -857,6 +867,10 @@ a change of the text (or of the narrowing) counts again from the top."
     (setq drgnx-statusbar--line-cache (vector tick pmin bol line))
     line))
 
+(defun drgnx-statusbar--selected-p (w)
+  "Non-nil when W is its frame's selected window (a part of the memo's key: only that window shows a selection)."
+  (and (window-live-p w) (eq w (frame-selected-window (window-frame w)))))
+
 (defun drgnx-statusbar--seg-position ()
   (let* ((w (drgnx-statusbar-source-window))
          (pt (if (eq (window-buffer w) (current-buffer)) (window-point w) (point))))
@@ -865,7 +879,7 @@ a change of the text (or of the narrowing) counts again from the top."
       (let* ((bol (pos-bol))
              (col (if (> (- pt bol) 2000) (- pt bol) (current-column))))   ; a minified line: characters, not columns
         (format "Ln %d, Col %d%s" (drgnx-statusbar--line-at bol) (1+ col)
-                (if (use-region-p) (format " (%d selected)" (abs (- (mark t) pt))) ""))))))
+                (if (and (drgnx-statusbar--selected-p w) (use-region-p)) (format " (%d selected)" (abs (- (mark t) pt))) ""))))))
 
 (defun drgnx-statusbar--indent-width ()
   "The indentation width the `indent' segment shows: `tab-width' with tabs, else the first of

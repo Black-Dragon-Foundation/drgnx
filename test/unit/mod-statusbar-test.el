@@ -539,6 +539,25 @@ Segments a, b, c are defined: their text is A, B, C."
                 (kill-buffer buf))))
         (delete-file file)))))
 
+(ert-deftest drgnx-statusbar/only-the-selected-window-shows-the-selection ()
+  (drgnx-statusbar-test--with
+    (let ((transient-mark-mode t) (other (split-window-right)))
+      (unwind-protect
+          (with-temp-buffer
+            (insert "one two three")
+            (set-window-buffer (selected-window) (current-buffer))
+            (set-window-buffer other (current-buffer))
+            (set-window-point other 5)
+            (goto-char 5) (push-mark 1 t t)
+            (should (string-match-p "(4 selected)" (drgnx-statusbar--seg-position)))
+            (should (drgnx-statusbar--selected-p (selected-window)))
+            (should-not (drgnx-statusbar--selected-p other))
+            (let ((drgnx-statusbar--window other))             ; the bar of the other window
+              (should-not (string-match-p "selected" (drgnx-statusbar--seg-position))))
+            (let ((drgnx-statusbar--window (selected-window)))
+              (should (string-match-p "(4 selected)" (drgnx-statusbar--seg-position)))))
+        (delete-window other)))))
+
 (ert-deftest drgnx-statusbar/a-selection-is-in-the-memo-key ()
   (drgnx-statusbar-test--with
     (drgnx-statusbar-test--state
@@ -578,7 +597,10 @@ Segments a, b, c are defined: their text is A, B, C."
 
 (ert-deftest drgnx-statusbar/the-bar-asks-git-to-read-the-editors-repository-at-most-every-few-seconds ()
   (let ((asked nil) (now 100.0) (drgnx-statusbar--git-asked nil) (file "/tmp/drgnx-sb-a/x.el")
+        (drgnx-git--roots (make-hash-table :test #'equal))
         (buf (generate-new-buffer " *sb-git*")))
+    (puthash "/tmp/drgnx-sb-a/" "/tmp/drgnx-sb-a/" drgnx-git--roots)
+    (puthash "/tmp/drgnx-sb-a/sub/" "/tmp/drgnx-sb-a/" drgnx-git--roots)
     (unwind-protect
         (progn
           (with-current-buffer buf (setq buffer-file-name file))
@@ -592,7 +614,10 @@ Segments a, b, c are defined: their text is A, B, C."
             (should (= 1 (length asked)))
             (setq now 106.0) (drgnx-statusbar--ask-git)                    ; later
             (should (= 2 (length asked)))
-            (with-current-buffer buf (setq buffer-file-name "/tmp/drgnx-sb-b/y.el"))   ; another folder at once
+            (with-current-buffer buf (setq buffer-file-name "/tmp/drgnx-sb-a/sub/y.el"))   ; the same repository
+            (setq now 107.0) (drgnx-statusbar--ask-git)
+            (should (= 2 (length asked)))
+            (with-current-buffer buf (setq buffer-file-name "/tmp/drgnx-sb-b/y.el"))   ; another repository (unknown) at once
             (drgnx-statusbar--ask-git)
             (should (= 3 (length asked)))
             (with-current-buffer buf (setq buffer-file-name "/ssh:host:/tmp/z.el"))    ; remote: nothing
@@ -679,6 +704,8 @@ Segments a, b, c are defined: their text is A, B, C."
          (drgnx-statusbar--agents-state nil) (drgnx-statusbar--refresh-timer nil)
          (drgnx-statusbar--redraw-wanted nil) (drgnx-statusbar--jobs-wanted nil) (drgnx-statusbar--jobs-pending nil)
          (drgnx-statusbar--state-texts (make-hash-table :test #'eq))
+         (drgnx-statusbar--git-branches (make-hash-table :test #'equal))
+         (drgnx-git--repos (make-hash-table :test #'equal))
          (drgnx-statusbar--memo (make-hash-table :test #'eq :weakness 'key))
          (drgnx-statusbar-waiting-functions (list #'drgnx-statusbar-agents-waiting)))
      (unwind-protect (progn ,@body)
@@ -986,12 +1013,20 @@ Segments a, b, c are defined: their text is A, B, C."
               (should (equal (drgnx-statusbar-test--seg 'agents) "◎ 1 busy"))
               ;; the hub's and git's change hooks go through the same debounce
               (drgnx-statusbar--hub-event "agent-entries" nil)
+              (puthash "/repo/" (list :branch '(:head "a" :ahead 1)) drgnx-git--repos)   ; a new branch state
               (drgnx-statusbar--git-changed "/repo/")
               (drgnx-statusbar--git-changed "/repo/")
               (sleep-for 0.4)
               (should (= drgnx-statusbar-test--refreshes 2))
               (should (= calls 2))                             ; git: one redraw, the agents' counts did not change
-              (should-not drgnx-statusbar--refresh-timer))
+              (should-not drgnx-statusbar--refresh-timer)
+              ;; a status run that changed only files, or failed: the same branch, no redraw
+              (drgnx-statusbar--git-changed "/repo/")
+              (should-not drgnx-statusbar--refresh-timer)
+              (puthash "/repo/" (list :branch '(:head "a" :ahead 2)) drgnx-git--repos)   ; one more commit ahead
+              (drgnx-statusbar--git-changed "/repo/")
+              (should (timerp drgnx-statusbar--refresh-timer))
+              (cancel-timer drgnx-statusbar--refresh-timer) (setq drgnx-statusbar--refresh-timer nil))
           (advice-remove 'drgnx-statusbar--refresh-now #'drgnx-statusbar-test--mark-refresh))))))
 
 (ert-deftest drgnx-statusbar/a-redisplay-that-changes-nothing-reuses-the-bar ()
@@ -1029,6 +1064,7 @@ Segments a, b, c are defined: their text is A, B, C."
                 (drgnx-statusbar-refresh t)                    ; a segment of your own says its state changed
                 (should (rebuilt-p))
                 ;; git changed: the refresh redraws, and the bars are built again (vc-mode may be another)
+                (puthash "/repo/" (list :branch '(:head "other")) drgnx-git--repos)
                 (drgnx-statusbar--git-changed "/repo/")
                 (drgnx-statusbar--refresh-now)
                 (should (rebuilt-p)) (should-not (rebuilt-p))
