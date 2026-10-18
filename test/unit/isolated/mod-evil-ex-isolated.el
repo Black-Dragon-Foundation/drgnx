@@ -20,6 +20,9 @@
 
 (defvar drgnx-evil-ex-test--calls nil "What the recorded commands ran, newest first.")
 
+(defvar drgnx-evil-ex-test--modules "(:version 1 :enabled (editor/evil))\n"
+  "The modules.eld of the temp configuration.")
+
 (defmacro drgnx-evil-ex-test--with (&rest body)
   "BODY with evil running in the Vim stack, all startup modules run, in a temp configuration and state dir.
 Window, tab and group commands are recorded in `drgnx-evil-ex-test--calls' (as (NAME ARG…)); `kill-emacs' fails."
@@ -41,7 +44,7 @@ Window, tab and group commands are recorded in `drgnx-evil-ex-test--calls' (as (
             (drgnx-evil-ex-test--calls nil))
        (make-directory (concat dir "config") t)
        (make-directory (concat dir "home") t)
-       (write-region "(:version 1 :enabled (editor/evil))\n" nil (concat dir "config/modules.eld") nil 'silent)
+       (write-region drgnx-evil-ex-test--modules nil (concat dir "config/modules.eld") nil 'silent)
        (unwind-protect
            (progn
              (drgnx--core-commands)
@@ -67,6 +70,12 @@ Window, tab and group commands are recorded in `drgnx-evil-ex-test--calls' (as (
                         (lambda (&rest _) (interactive) (push '(save) drgnx-evil-ex-test--calls)))
                        ((symbol-function 'write-file)
                         (lambda (file &rest _) (interactive "F") (push (list 'save-as file) drgnx-evil-ex-test--calls)))
+                       ((symbol-function 'drgnx-wb-focus-editor)
+                        (lambda () (interactive) (push '(focus-editor) drgnx-evil-ex-test--calls)))
+                       ((symbol-function 'revert-buffer)
+                        (lambda (&rest _) (push '(revert) drgnx-evil-ex-test--calls)))
+                       ((symbol-function 'shell-command-on-region)
+                        (lambda (_b _e cmd &rest _) (push (list 'shell cmd) drgnx-evil-ex-test--calls)))
                        ((symbol-function 'find-file)
                         (lambda (file &rest _) (interactive "F") (push (list 'find-file file) drgnx-evil-ex-test--calls))))
                ,@body))
@@ -179,15 +188,108 @@ Window, tab and group commands are recorded in `drgnx-evil-ex-test--calls' (as (
       (should (advice-member-p #'drgnx-evil-ex-quit 'evil-quit))
       (should-not (eq before 'evil-write))
       (drgnx-evil-stop)
-      (dolist (cell '((evil-quit . drgnx-evil-ex-quit) (evil-save-and-close . drgnx-evil-ex-write-quit)
-                      (evil-save-modified-and-close . drgnx-evil-ex-write-quit)
-                      (evil-window-split . drgnx-evil-ex-split-down) (evil-window-vsplit . drgnx-evil-ex-split-right)
-                      (evil-window-delete . drgnx-evil-ex-close-group) (evil-quit-all . drgnx-evil-ex-close-window)))
+      (dolist (cell drgnx-evil--advice-pairs)
         (should-not (advice-member-p (cdr cell) (car cell))))
+      (should (= (length drgnx-evil--advice-pairs) 9))
+      (dolist (cell '(evil-save-and-quit evil-quit-all-with-error-code))
+        (should (assq cell drgnx-evil--advice-pairs)))
       (should-not (advice-member-p #'drgnx-evil-ex-quit 'evil-quit))
-      (dolist (cell '(("w" . evil-write) ("wa" . evil-write-all) ("e" . evil-edit) ("sp" . evil-window-split)
-                      ("vs" . evil-window-vsplit)))
+      (dolist (cell '(("w" . evil-write) ("wa" . evil-write-all) ("e" . evil-edit)))
         (should (eq (alist-get (car cell) evil-ex-commands nil nil #'equal) (cdr cell)))))))
+
+(ert-deftest drgnx-evil-ex/bang-shell-and-special-file-arguments-are-evils ()
+  (drgnx-evil-ex-test--with
+    (let* ((file (expand-file-name "visited.txt" (make-temp-file "drgnx-evil-ex-file" t))))
+      (drgnx-evil-ex-test--buffer b #'text-mode
+        (setq buffer-file-name file)
+        (set-buffer-modified-p nil)
+        ;; :w! is evil's: it writes the visited file, not a file named "!"
+        (evil-ex-execute "w!")
+        (should (equal (drgnx-evil-ex-test--calls) `((save-as ,file))))
+        ;; :w !cmd pipes to the command
+        (evil-ex-execute "w !cat")
+        (should (equal (drgnx-evil-ex-test--calls) '((shell "cat"))))
+        ;; :e! re-reads the file (never opens a file named "!")
+        (evil-ex-execute "e!")
+        (should (equal (drgnx-evil-ex-test--calls) '((revert))))
+        ;; % is the visited file
+        (evil-ex-execute "e %")
+        (should (equal (drgnx-evil-ex-test--calls) `((find-file ,file))))
+        (evil-ex-execute (concat "w " (file-name-directory file) "other.txt"))
+        (should (equal (drgnx-evil-ex-test--calls) `((save-as ,(concat (file-name-directory file) "other.txt")))))
+        (evil-ex-execute "w %")
+        (should (equal (drgnx-evil-ex-test--calls) `((save-as ,file))))
+        ;; arguments complete as evil's own: files for :e, files or shell commands for :w, the bang is parsed
+        (dolist (row '(("e" file) ("w" file-or-shell) ("wa" nil)))
+          (let ((fn (evil-ex-completed-binding (car row))))
+            (should (eq (evil-get-command-property fn :ex-arg) (cadr row)))
+            (should (evil-get-command-property fn :ex-bang))))
+        (set-buffer-modified-p nil)
+        (setq buffer-file-name nil)))))
+
+(ert-deftest drgnx-evil-ex/sp-and-vs-open-the-file-in-the-new-group ()
+  (drgnx-evil-ex-test--with
+    (drgnx-evil-ex-test--buffer b #'text-mode
+      (evil-ex-execute "sp /tmp/one.txt")
+      (should (equal (drgnx-evil-ex-test--calls) '((split-down) (find-file "/tmp/one.txt"))))
+      (evil-ex-execute "vs /tmp/two.txt")
+      (should (equal (drgnx-evil-ex-test--calls) '((split-right) (find-file "/tmp/two.txt"))))
+      (evil-ex-execute "sp")
+      (should (equal (drgnx-evil-ex-test--calls) '((split-down)))))))
+
+(ert-deftest drgnx-evil-ex/the-quit-all-variants-never-quit-emacs ()
+  (drgnx-evil-ex-test--with
+    (drgnx-evil-ex-test--buffer b #'text-mode
+      (dolist (cmd '("qa" "quitall" "cq"))
+        (evil-ex-execute cmd)
+        (should (equal (drgnx-evil-ex-test--calls) '((close-frame)))))
+      (dolist (cmd '("wqa" "wqall" "xa" "xall"))
+        (evil-ex-execute cmd)
+        (should (equal (drgnx-evil-ex-test--calls) '((save-all) (close-frame))))))))
+
+(ert-deftest drgnx-evil-ex/q-and-close-group-in-a-dock-go-back-to-the-editor ()
+  (drgnx-evil-ex-test--with
+    (drgnx-evil-ex-test--buffer b #'text-mode
+      ;; the selected window is not one of the groups: a dock
+      (drgnx-evil-ex-test--layout (list b) (list 'a-group 'another-group)
+        (evil-ex-execute "q")
+        (should (equal (drgnx-evil-ex-test--calls) '((focus-editor))))
+        (evil-ex-execute "clo")
+        (should (equal (drgnx-evil-ex-test--calls) '((focus-editor))))
+        (execute-kbd-macro (kbd "C-w c"))
+        (should (equal (drgnx-evil-ex-test--calls) '((focus-editor))))
+        (execute-kbd-macro (kbd "Z Q"))
+        (should (equal (drgnx-evil-ex-test--calls) '((focus-editor))))))))
+
+(ert-deftest drgnx-evil-ex/without-the-workbench-evils-own-commands-run ()
+  (let ((drgnx-evil-ex-test--modules "(:version 1 :enabled (editor/evil) :disabled (core/workbench))\n"))
+    (drgnx-evil-ex-test--with
+      (should-not (drgnx-evil-ex--workbench-p))
+      (drgnx-evil-ex-test--buffer b #'text-mode
+        ;; every advice hands over to evil's own function
+        (dolist (fn '(drgnx-evil-ex-quit drgnx-evil-ex-write-quit drgnx-evil-ex-split-down drgnx-evil-ex-split-right
+                                         drgnx-evil-ex-close-group))
+          (let ((seen nil))
+            (funcall fn (lambda (&rest args) (push args seen)) 1 2)
+            (should (equal seen '((1 2))))))
+        (should-not (drgnx-evil-ex-test--calls))
+        ;; the ex command and the key reach evil's split, not a missing registry command
+        (save-window-excursion
+          (let ((n (length (window-list))))
+            (evil-ex-execute "sp")
+            (should (= (length (window-list)) (1+ n)))
+            (execute-kbd-macro (kbd "C-w v"))
+            (should (= (length (window-list)) (+ n 2)))))
+        (should-not (drgnx-evil-ex-test--calls))))))
+
+(ert-deftest drgnx-evil-ex/stop-keeps-what-the-user-defined-meanwhile ()
+  (drgnx-evil-ex-test--with
+    (evil-ex-define-cmd "w[rite]" 'ignore)         ; the user's own, after the engine started
+    (drgnx-evil-stop)
+    (should (eq (alist-get "w" evil-ex-commands nil nil #'equal) 'ignore))
+    (should (eq (alist-get "wri" evil-ex-commands nil nil #'equal) 'ignore))
+    (should (eq (alist-get "wa" evil-ex-commands nil nil #'equal) 'evil-write-all))
+    (evil-ex-define-cmd "w[rite]" 'evil-write)))   ; evil's again for the tests after this one
 
 (provide 'mod-evil-ex-isolated)
 ;;; mod-evil-ex-isolated.el ends here

@@ -239,15 +239,16 @@ commands, so the workbench keeps its editor groups, tabs and layout (the key tip
 
 | Vim | Runs |
 |---|---|
-| `:w` / `:w FILE` | Save / Save As… `FILE` (with a range, evil's own `:w`) |
-| `:wa` | Save All |
-| `:e FILE` | Open File… `FILE` (`:e` alone re-reads the file, evil's own) |
-| `:sp`, `C-w s` | Split Editor Down |
-| `:vs`, `C-w v` | Split Editor Right |
+| `:w` / `:w FILE` | Save / Save As… `FILE` (`%` and `#` as in Vim; `:w!`, `:w !cmd`, `:w >> FILE` and a range are evil's own) |
+| `:wa` | Save All (`:wa!` is evil's own) |
+| `:e FILE` | Open File… `FILE` (`:e` alone and `:e!` re-read the file, evil's own) |
+| `:sp [FILE]`, `C-w s` | Split Editor Down (`FILE` opens in the new group) |
+| `:vs [FILE]`, `C-w v` | Split Editor Right (`FILE` opens in the new group) |
 | `C-w c`, `:clo` | Close Editor Group |
 | `:q`, `ZQ` | Close Tab when the group has other tabs, else Close Editor Group when there is another group, else Close Window |
 | `:wq`, `:x`, `ZZ` | Save when the buffer changed, then what `:q` does |
-| `:qa` | Close Window |
+| `:qa`, `:cq` | Close Window |
+| `:wqa`, `:xa` | Save All, then Close Window |
 | `C-w h` `j` `k` `l` | Focus Left / Below / Above / Right (editor groups and the sidebar and panel docks) |
 | `g d`, `g r`, `K` | Go to Definition, Find References, Show Hover |
 | `g t`, `g T` | Next Tab, Previous Tab |
@@ -255,8 +256,11 @@ commands, so the workbench keeps its editor groups, tabs and layout (the key tip
 
 `:q` never quits drgnx's Emacs by itself. In the last tab of the last group it is Close Window, which closes the
 window and keeps a background drgnx running (`drgnx-keep-running`), and otherwise asks, after offering to save, before
-quitting. The ex commands are the data `drgnx-evil-ex-routes`; evil's `:q`, `:wq`, `:x`, `:qa`, `C-w s/v/c` are advised
-while the engine runs and are evil's own again when Vim editing stops. Vim's other ex commands are untouched. In a
+quitting; `:cq` and `:wqa` never end Emacs either. In the sidebar or the panel (a window that is not an editor group)
+`:q` and `C-w c` go back to the editor you used last and never close a group. The ex commands `:w`, `:wa` and `:e` are the
+data `drgnx-evil-ex-routes`; evil's `:q`, `:wq`, `:x`, `:qa`, `:wqa`, `:cq`, `:sp`, `:vs` and `C-w s/v/c` are advised while the
+engine runs (`drgnx-evil--advice-pairs`), and evil's own again when Vim editing stops (a command you defined meanwhile
+is kept). With the `core/workbench` module off, all of them are evil's own. Vim's other ex commands are untouched. In a
 VS Code or Emacs stack Focus Left/Right/Above/Below and the problem commands have no keys (VS Code's `F8` /
 `Shift+F8` go to the next / previous problem); they are in the palette.
 

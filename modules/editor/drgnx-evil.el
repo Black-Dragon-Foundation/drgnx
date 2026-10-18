@@ -258,35 +258,50 @@ before the option was set is set up now, unless the cursor hook is installed alr
 ;;;; Ex commands and Vim's window keys run drgnx's commands
 
 (defvar drgnx-evil-ex-routes
-  '(("w[rite]" . drgnx-evil-ex-write) ("wa[ll]" . save-all) ("e[dit]" . drgnx-evil-ex-edit)
-    ("sp[lit]" . split-editor-down) ("vs[plit]" . split-editor-right))
-  "Ex commands drgnx answers, as (NAME . TARGET): NAME in evil's syntax (\"w[rite]\" is w, wr … write), TARGET a
-registry command id (run the way the palette runs it, key tip included) or a command.  Installed with
-`evil-ex-define-cmd' when the engine starts and taken out when it stops.  `:q', `:wq', `:x', `:qa' and ZZ are
-not here: they reach drgnx through `drgnx-evil--advice'.")
+  '(("w[rite]" . drgnx-evil-ex-write) ("wa[ll]" . drgnx-evil-ex-save-all) ("e[dit]" . drgnx-evil-ex-edit))
+  "Ex commands drgnx answers, as (NAME . COMMAND): NAME in evil's syntax (\"w[rite]\" is w, wr … write), COMMAND a
+command that takes evil's place (it carries evil's argument properties, so `!', `%' and file completion work).
+Installed with `evil-ex-define-cmd' when the engine starts and taken out when it stops.  `:q', `:wq', `:x', `:qa',
+`:wqa', `:cq', `:sp', `:vs', ZZ and the `C-w' keys are not here: they reach drgnx through `drgnx-evil--advice-pairs'.")
 
-(defconst drgnx-evil--advice
+(defconst drgnx-evil--advice-pairs
   '((evil-quit . drgnx-evil-ex-quit)
     (evil-quit-all . drgnx-evil-ex-close-window)
+    (evil-quit-all-with-error-code . drgnx-evil-ex-close-window)
+    (evil-save-and-quit . drgnx-evil-ex-save-all-close-window)
     (evil-save-and-close . drgnx-evil-ex-write-quit)
     (evil-save-modified-and-close . drgnx-evil-ex-write-quit)
     (evil-window-split . drgnx-evil-ex-split-down)
     (evil-window-vsplit . drgnx-evil-ex-split-right)
     (evil-window-delete . drgnx-evil-ex-close-group))
-  "evil's window and quit commands and drgnx's replacement for each: `:override' advice while the engine runs.
-Evil's own would act on its windows and could quit Emacs; the workbench keeps its groups, tabs and layout.")
+  "evil's window and quit commands and drgnx's replacement for each: `:around' advice while the engine runs.  Evil's
+own would act on its windows and could quit Emacs; the workbench keeps its groups, tabs and layout.  Each replacement
+calls evil's own command when the workbench is not on (`drgnx-evil-ex--workbench-p').")
 
 (defvar drgnx-evil--ex-saved nil
-  "Alist of ex names drgnx redefined, NAME → what evil had (its function or string), or `none'.")
+  "Alist of ex names drgnx redefined, NAME → (OLD OURS): what evil had (its function or string, or `none') and what
+drgnx put there.")
 
 (defvar evil-ex-commands)
 (defvar evil-ex-argument)
 (defvar evil-ex-range)
+(defvar evil-ex-bang)
 (declare-function evil-ex-define-cmd "evil-ex")
+(declare-function evil-ex-file-arg "evil-ex")
+(declare-function evil-add-command-properties "evil-common")
 (declare-function evil-edit "evil-commands")
 (declare-function evil-write "evil-commands")
+(declare-function evil-write-all "evil-commands")
 (declare-function drgnx-chrome-tabs "drgnx-chrome")
 (declare-function drgnx-groups-list "drgnx-groups")
+
+(defun drgnx-evil-ex--workbench-p ()
+  "Non-nil when the workbench's editor groups and tabs are there (module core/workbench is on)."
+  (and (fboundp 'drgnx-groups-list) (fboundp 'drgnx-chrome-tabs) (drgnx-commands-get 'close-group) t))
+
+(defun drgnx-evil-ex--in-dock-p ()
+  "Non-nil when the selected window is not an editor group (the sidebar, the panel, a popup)."
+  (not (memq (selected-window) (drgnx-groups-list))))
 
 (defun drgnx-evil-ex--run (id &rest args)
   "Run registry command ID the way the palette does (this-command, the key tip).  With ARGS the command's
@@ -297,43 +312,86 @@ function is called with them instead of interactively (:w FILE, :e FILE), and th
       (drgnx-surfaces-run id))))
 
 (defun drgnx-evil-ex--file ()
-  "The file argument of the ex command being run, or nil when there is none."
-  (when (stringp evil-ex-argument)
-    (let ((file (string-trim evil-ex-argument)))
-      (unless (string-empty-p file) file))))
+  "The file argument of the ex command being run, `%' and `#' expanded as evil does; nil when there is none."
+  (evil-ex-file-arg))
+
+(defun drgnx-evil-ex--evils-p ()
+  "Non-nil when the ex command has something drgnx's commands do not do and evil's own does: a bang, a range,
+a shell command (`:w !cmd') or an append (`:w >> file')."
+  (or evil-ex-bang evil-ex-range
+      (and (stringp evil-ex-argument) (string-match-p "\\`\\s-*\\(!\\|>>\\)" evil-ex-argument))))
 
 (defun drgnx-evil-ex-write ()
-  "`:w' is Save, `:w FILE' is Save As FILE.  A range (`:1,5w FILE') is evil's own."
+  "`:w' is Save, `:w FILE' is Save As FILE.  `:w!', a range, `:w !cmd' and `:w >> FILE' are evil's own."
   (interactive)
-  (cond (evil-ex-range (call-interactively #'evil-write))
-        ((drgnx-evil-ex--file) (drgnx-evil-ex--run 'file-save-as (drgnx-evil-ex--file)))
-        (t (drgnx-evil-ex--run 'save-file))))
+  (if (drgnx-evil-ex--evils-p)
+      (call-interactively #'evil-write)
+    (if-let* ((file (drgnx-evil-ex--file)))
+        (drgnx-evil-ex--run 'file-save-as file)
+      (drgnx-evil-ex--run 'save-file))))
 
 (defun drgnx-evil-ex-edit ()
-  "`:e FILE' is Open File; `:e' alone (Vim re-reads the file) is evil's own."
+  "`:e FILE' is Open File; `:e' alone (Vim re-reads the file) and `:e!' are evil's own."
   (interactive)
-  (if-let* ((file (drgnx-evil-ex--file)))
+  (if-let* ((file (and (not evil-ex-bang) (drgnx-evil-ex--file))))
       (drgnx-evil-ex--run 'open-file file)
     (call-interactively #'evil-edit)))
 
-(defun drgnx-evil-ex-quit (&rest _)
-  "`:q', in the workbench: Close Tab when this group has other tabs, else Close Editor Group when there is
-another group, else Close Window (which keeps a background drgnx running, and otherwise asks before quitting)."
+(defun drgnx-evil-ex-save-all ()
+  "`:wa' is Save All (`:wa!' is evil's own, which also saves read-only buffers)."
   (interactive)
-  (drgnx-evil-ex--run (cond ((cdr (drgnx-chrome-tabs (selected-window))) 'close-tab)
+  (if (and (not evil-ex-bang) (drgnx-commands-get 'save-all))
+      (drgnx-evil-ex--run 'save-all)
+    (call-interactively #'evil-write-all)))
+
+(defun drgnx-evil-ex--quit ()
+  "`:q' in the workbench.  In a dock (the sidebar, the panel): back to the editor you used last, never closing a
+group.  In an editor group: Close Tab when it has other tabs, else Close Editor Group when there is another group,
+else Close Window (which keeps a background drgnx running, and otherwise asks before quitting)."
+  (drgnx-evil-ex--run (cond ((drgnx-evil-ex--in-dock-p) 'focus-editor)
+                            ((cdr (drgnx-chrome-tabs (selected-window))) 'close-tab)
                             ((cdr (drgnx-groups-list)) 'close-group)
                             (t 'file-close-window))))
 
-(defun drgnx-evil-ex-write-quit (&rest _)
-  "`:wq', `:x' and ZZ: save when the buffer has changes, then `drgnx-evil-ex-quit'."
-  (interactive)
-  (when (buffer-modified-p) (drgnx-evil-ex-write))
-  (drgnx-evil-ex-quit))
+(defun drgnx-evil-ex-quit (orig &rest args)
+  "Advice around `evil-quit' (`:q', `ZQ'): `drgnx-evil-ex--quit'; evil's own without the workbench."
+  (if (drgnx-evil-ex--workbench-p) (drgnx-evil-ex--quit) (apply orig args)))
 
-(defun drgnx-evil-ex-close-window (&rest _) "`:qa': Close Window." (interactive) (drgnx-evil-ex--run 'file-close-window))
-(defun drgnx-evil-ex-split-down (&rest _) "`:sp' and C-w s: Split Editor Down." (interactive) (drgnx-evil-ex--run 'split-editor-down))
-(defun drgnx-evil-ex-split-right (&rest _) "`:vs' and C-w v: Split Editor Right." (interactive) (drgnx-evil-ex--run 'split-editor-right))
-(defun drgnx-evil-ex-close-group (&rest _) "C-w c: Close Editor Group." (interactive) (drgnx-evil-ex--run 'close-group))
+(defun drgnx-evil-ex-write-quit (orig &rest args)
+  "Advice around `evil-save-and-close' and `evil-save-modified-and-close' (`:wq', `:x', ZZ): save when the buffer
+has changes, then `drgnx-evil-ex--quit'; evil's own without the workbench."
+  (if (drgnx-evil-ex--workbench-p)
+      (progn (when (buffer-modified-p) (drgnx-evil-ex-write)) (drgnx-evil-ex--quit))
+    (apply orig args)))
+
+(defun drgnx-evil-ex-close-window (_orig &rest _)
+  "Advice around `evil-quit-all' and `evil-quit-all-with-error-code' (`:qa', `:cq'): Close Window."
+  (drgnx-evil-ex--run 'file-close-window))
+
+(defun drgnx-evil-ex-save-all-close-window (_orig &rest _)
+  "Advice around `evil-save-and-quit' (`:wqa', `:xa'): Save All, then Close Window."
+  (drgnx-evil-ex-save-all)
+  (drgnx-evil-ex--run 'file-close-window))
+
+(defun drgnx-evil-ex--split (id args)
+  "Run split command ID; ARGS are evil's (COUNT FILE READ-ONLY): a FILE opens in the new group."
+  (drgnx-evil-ex--run id)
+  (when-let* ((file (nth 1 args))) (drgnx-evil-ex--run 'open-file file)))
+
+(defun drgnx-evil-ex-split-down (orig &rest args)
+  "Advice around `evil-window-split' (`:sp', `C-w s'): Split Editor Down."
+  (if (drgnx-evil-ex--workbench-p) (drgnx-evil-ex--split 'split-editor-down args) (apply orig args)))
+
+(defun drgnx-evil-ex-split-right (orig &rest args)
+  "Advice around `evil-window-vsplit' (`:vs', `C-w v'): Split Editor Right."
+  (if (drgnx-evil-ex--workbench-p) (drgnx-evil-ex--split 'split-editor-right args) (apply orig args)))
+
+(defun drgnx-evil-ex-close-group (orig &rest args)
+  "Advice around `evil-window-delete' (`C-w c', `:clo'): Close Editor Group.  In a dock it goes back to the editor
+instead; an editor group is never closed from there."
+  (cond ((not (drgnx-evil-ex--workbench-p)) (apply orig args))
+        ((drgnx-evil-ex--in-dock-p) (drgnx-evil-ex--run 'focus-editor))
+        (t (drgnx-evil-ex--run 'close-group))))
 
 (defun drgnx-evil--ex-names (spec)
   "The names `evil-ex-define-cmd' defines for SPEC: \"w[rite]\" is w, wr, wri, writ, write."
@@ -342,32 +400,31 @@ another group, else Close Window (which keeps a background drgnx running, and ot
         (cl-loop for n from 0 to (length optional) collect (concat mandatory (substring optional 0 n))))
     (list spec)))
 
-(defun drgnx-evil--ex-command (target)
-  "The command evil calls for TARGET of `drgnx-evil-ex-routes': a command as it is, a registry id (looked up when
-it runs: the module that defines it may not have run yet) through the palette's path."
-  (if (fboundp target)
-      target
-    (lambda () (interactive) (drgnx-evil-ex--run target))))
-
 (defun drgnx-evil--ex-routes (on)
-  "ON: define the ex commands of `drgnx-evil-ex-routes', noting what evil had.  Nil: give evil's definitions back."
+  "ON: define the ex commands of `drgnx-evil-ex-routes', noting what evil had, and give them evil's argument
+properties (bang, file and shell completion).  Nil: give evil's definitions back, except for a name that holds
+something else by now (the user's own `evil-ex-define-cmd')."
   (if on
-      (pcase-dolist (`(,spec . ,target) drgnx-evil-ex-routes)
-        (let ((fn (drgnx-evil--ex-command target)))
+      (progn
+        (evil-add-command-properties 'drgnx-evil-ex-write :ex-arg 'file-or-shell :ex-bang t)
+        (evil-add-command-properties 'drgnx-evil-ex-edit :ex-arg 'file :ex-bang t)
+        (evil-add-command-properties 'drgnx-evil-ex-save-all :ex-bang t)
+        (pcase-dolist (`(,spec . ,fn) drgnx-evil-ex-routes)
           (dolist (name (drgnx-evil--ex-names spec))
             (unless (assoc name drgnx-evil--ex-saved)
-              (push (cons name (if-let* ((old (assoc name evil-ex-commands))) (cdr old) 'none)) drgnx-evil--ex-saved))
+              (push (list name (if-let* ((old (assoc name evil-ex-commands))) (cdr old) 'none) fn) drgnx-evil--ex-saved))
             (evil-ex-define-cmd name fn))))
-    (pcase-dolist (`(,name . ,old) drgnx-evil--ex-saved)
-      (if (eq old 'none)
-          (setq evil-ex-commands (assoc-delete-all name evil-ex-commands))
-        (evil-ex-define-cmd name old)))
+    (pcase-dolist (`(,name ,old ,ours) drgnx-evil--ex-saved)
+      (when (eq (cdr (assoc name evil-ex-commands)) ours)
+        (if (eq old 'none)
+            (setq evil-ex-commands (assoc-delete-all name evil-ex-commands))
+          (evil-ex-define-cmd name old))))
     (setq drgnx-evil--ex-saved nil)))
 
 (defun drgnx-evil--advice (on)
-  "ON: evil's window and quit commands are `drgnx-evil--advice'.  Nil: evil's own again."
-  (pcase-dolist (`(,evil . ,ours) drgnx-evil--advice)
-    (if on (advice-add evil :override ours) (advice-remove evil ours))))
+  "ON: evil's window and quit commands are `drgnx-evil--advice-pairs'.  Nil: evil's own again."
+  (pcase-dolist (`(,evil . ,ours) drgnx-evil--advice-pairs)
+    (if on (advice-add evil :around ours) (advice-remove evil ours))))
 
 ;;;; State into the core
 
