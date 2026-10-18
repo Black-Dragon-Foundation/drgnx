@@ -185,12 +185,7 @@ lambda or not)."
     (nreverse out)))
 
 (defconst drgnx-lint-timers--not-yet
-  '(("core/drgnx-agent-check.el" 5)
-    ("core/drgnx-agent-config-claude.el" 1)
-    ("core/drgnx-ai-probe.el" 1)
-    ("core/drgnx-ai.el" 1)
-    ("core/drgnx-cockpit-model.el" 1)
-    ("core/drgnx-gateway.el" 1)
+  '(("core/drgnx-cockpit-model.el" 1)
     ("core/drgnx-job-snapshot.el" 1)
     ("core/drgnx-job.el" 1)
     ("core/drgnx-modules.el" 1)

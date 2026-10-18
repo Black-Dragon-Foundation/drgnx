@@ -27,6 +27,7 @@
 (require 'subr-x)
 (require 'url-parse)
 (require 'drgnx-agent-config)
+(require 'drgnx-timer)
 
 (declare-function drgnx-agents-profile-names "drgnx-agents")
 (declare-function drgnx-agents-profile "drgnx-agents")
@@ -486,11 +487,11 @@ COMPLETED is how many of ARGVS had succeeded."
             (funcall finish '(missing) completed)
           (let* ((default-directory dir)
                  (buffer (generate-new-buffer " *drgnx-claude*" t))
-                 (done nil) timer process
+                 (done nil) process
                  (end (lambda (failure)
                         (unless done
                           (setq done t)
-                          (when timer (cancel-timer timer))
+                          (when process (drgnx-timer-cancel (cons 'claude-cli-limit process)))
                           (when (buffer-live-p buffer) (kill-buffer buffer))
                           (if failure
                               (funcall finish failure completed)
@@ -506,11 +507,14 @@ COMPLETED is how many of ARGVS had succeeded."
                                                                               (zerop (process-exit-status p)))
                                                                    (list 'exit (process-exit-status p))))))))
                   (ignore-errors (process-send-eof process))
-                  (setq timer (run-at-time drgnx-agent-config-claude-cli-timeout nil
-                                           (lambda ()
-                                             (funcall end '(timeout))
-                                             (when (process-live-p process) (delete-process process))))))
+                  (drgnx-timer-start (cons 'claude-cli-limit process) drgnx-agent-config-claude-cli-timeout
+                                     #'drgnx-agent-config-claude--cli-limit :args (list process end) :owner process))
               (error (funcall end '(start))))))))))
+
+(defun drgnx-agent-config-claude--cli-limit (process end)
+  "The time limit of a claude command (the timer's function): END it as a timeout, then delete PROCESS."
+  (funcall end '(timeout))
+  (when (process-live-p process) (delete-process process)))
 
 (defun drgnx-agent-config-claude--cli-error (failure)
   "The message for FAILURE of a claude command."
