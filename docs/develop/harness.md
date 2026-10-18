@@ -150,6 +150,7 @@ The first argument is a list of module names (evaluated): their files are loaded
 `:requires`. An element that is a string is a file to load instead, for a fake module a test writes to a temporary
 directory. `:stages '(startup idle)` sets up every shipped module of those stages as well. The module table, report
 and state are fresh, and `DRGNX_CONFIG_DIR` is a temporary directory, so the user's `modules.eld` is never read.
+Inside BODY, `drgnx-modules--table` holds only the selected modules and the modules they require, not every module file that was loaded.
 
 - **Teardown is part of the test.** After BODY (also when BODY signals) the modules are turned off last first through
   `drgnx-module-teardown`, then `drgnx-modules-after-teardown-functions` run: every use of the helper tests the
