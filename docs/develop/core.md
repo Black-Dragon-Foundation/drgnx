@@ -359,9 +359,16 @@ OK    emacs-version        Emacs 31.1                 (30.2: WARN — works, 31.
 OK    native-compilation   native compilation works   (built without it, or libgccjit broken: FAIL)
 OK    tree-sitter          tree-sitter available
 OK    gui                  graphical build (pgtk)     (terminal-only: OK, with a note)
-WARN  security             known issues up to 31.1, fixed in 31.2 (TRAMP, Flymake, read-symbol-shorthands)
+OK    security             Emacs 31.1 has known issues, fixed in 31.2: CVE-2026-108976 (…), …; drgnx's guards are on
 OK    git                  git found
 ```
+
+`security` lists the CVEs that apply to this Emacs version (`drgnx-doctor-security-issues`: below each issue's fixed-in
+version, with a "partly fixed" note from the version that closes some ways in) and reads the guards from the
+`:trust-guards` fact, `drgnx-trust-guards-status`. In a batch doctor (a bare Emacs where drgnx's startup has not run)
+the fact gatherer switches `drgnx-trust-mode` on, reads the status and switches it off again, so the answer is about the
+guards drgnx's startup installs; run inside a session it reads the mode as it is. OK while every guard is on, WARN naming
+each guard that is off (and when the guards cannot be read); facts without `:trust-guards` are judged by version alone.
 
 Native compilation is checked by actually compiling a function, not only by asking whether it is built in. Any
 FAIL makes the exit status 1. `--dev` adds the tools for developing drgnx (mutter, dbus-run-session, ImageMagick, a

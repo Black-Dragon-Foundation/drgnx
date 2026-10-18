@@ -174,10 +174,13 @@ drgnx keeps working on 30.2 until every target platform ships 31.1. `drgnx docto
 
 ## Security
 
-- Emacs up to 31.1 has known issues that are fixed in 31.2 (not yet released): command injection through
-  crafted TRAMP file names, Flymake running code from files being edited, and code execution through
-  `read-symbol-shorthands` when opening a file. `drgnx doctor` reports this until you run 31.2. Until then,
-  avoid opening untrusted files and remote paths.
+- Emacs up to 31.1 has known issues that are fixed in 31.2 (not yet released). On 30.2: command injection through
+  crafted TRAMP file names (CVE-2026-79992, CVE-2026-108976), Flymake running code from files being edited
+  (CVE-2026-96442) and code execution through `read-symbol-shorthands` when opening a file (CVE-2026-96269). On
+  31.1: the last three (the shorthands one is only partly fixed there). `drgnx doctor`'s `security` line names
+  the ones that apply to your Emacs. It says OK while drgnx's own guards for them are on (see
+  [Trusted folders](security.md)) and WARN when one is off, so a warning that stays means a guard is missing, not
+  that you must upgrade. Until you run 31.2, avoid opening files you do not trust.
 - The installer verifies the Emacs tarball's signature, prints every root command before running it, and never
   edits shell startup files without asking.
 

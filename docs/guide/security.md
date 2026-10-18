@@ -59,3 +59,9 @@ shorthands come back, without reopening them.
 A checker that stays silent, or a shorthand that does not apply: look for **restricted** in the mode line, and trust
 the folder if you trust its files. A remote name refused by TRAMP because of an unusual user name: open it with a
 plain `user@host` (an ssh config `Host` alias works for anything ssh accepts).
+
+## Checking it
+
+`drgnx doctor` has a `security` line. It names the Emacs security issues that apply to your version (CVE numbers)
+and says OK while all of the guards above are on, or WARN naming the ones that are off. If it warns, restart drgnx:
+its startup turns the guards on.
