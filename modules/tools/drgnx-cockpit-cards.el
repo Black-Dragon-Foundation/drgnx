@@ -32,6 +32,8 @@
 (declare-function drgnx-hub-connect "drgnx-hub")
 (declare-function drgnx-agents-mirror--find "drgnx-agents-mirror")
 (declare-function drgnx-agents-ui-transcript "drgnx-agents-ui")
+(declare-function drgnx-cockpit-edits-show "drgnx-cockpit-edits")
+(declare-function drgnx-cockpit-edits--model-agent "drgnx-cockpit-edits")
 (declare-function drgnx-coord-send "drgnx-coord")
 (declare-function drgnx-coord-version "drgnx-coord")
 (declare-function drgnx-coord-message "drgnx-coord")
@@ -133,7 +135,14 @@ spaces (a dock is narrow: a button is never cut in two)."
                     (propertize (plist-get task :status) 'face (pcase (plist-get task :status)
                                                                  ((or "needs-input" "failed") 'warning) ("done" 'success) (_ 'default))))
             (format " · %s" (plist-get task :profile))
-            (if-let* ((deps (drgnx-cockpit-cards--v (plist-get task :deps)))) (format " · after %s" (mapconcat #'number-to-string deps ", ")) "")
+            ;; the hub names a dependency by its task id (JOB#N): its number is shown
+            (if-let* ((deps (drgnx-cockpit-cards--v (plist-get task :deps))))
+                (format " · after %s" (mapconcat (lambda (d) (let ((d (format "%s" d))) (if (string-match "#\\([0-9]+\\)\\'" d) (match-string 1 d) d)))
+                                                 deps ", "))
+              "")
+            (if-let* ((why (drgnx-cockpit-cards--v (plist-get task :blocked))))   ; Mark Blocked in the Work graph
+                (propertize (format " · blocked: %s" (replace-regexp-in-string "[\n\r]+" " " (format "%s" why))) 'face 'warning)
+              "")
             "\n"))
   (insert "\n" (propertize "Agents\n" 'face 'bold))
   (let ((agents (drgnx-cockpit-cards--v (plist-get s :agents))))
@@ -366,8 +375,14 @@ for the badge (`drgnx-cockpit-cards--draw-all')."
 (defun drgnx-cockpit-cards--act (job card action &optional repo)
   "The user's ACTION on CARD of JOB, through the hub (an argument asked first where the action needs one); REPO, the
 job's repository, for Open."
-  (if (equal action "open")
-      (drgnx-cockpit-cards--open-tree job repo)
+  (cond
+   ((equal action "open") (drgnx-cockpit-cards--open-tree job repo))
+   ;; the merge gate's card: the edits of the task's agent, where its files are accepted
+   ((equal action "edits")
+    (let ((agent (drgnx-cockpit-cards--v (plist-get (drgnx-cockpit-cards--v (plist-get card :data)) :agent))))
+      (unless agent (user-error "No agent is known for this task's edits"))
+      (drgnx-cockpit-edits-show (drgnx-cockpit-edits--model-agent agent))))
+   (t
     (let ((arg (pcase action
                  ("resume" (read-number "Budget for the whole job (USD): "))
                  ("discuss" (read-string "Ask the reviewer: ")))))
@@ -376,7 +391,7 @@ job's repository, for Open."
                       (lambda (_r err)
                         (when err (message "drgnx: %s" err))
                         (drgnx-cockpit-cards--changed)
-                        (when (and (not err) (equal action "discuss")) (drgnx-cockpit-cards--show-reviewer job (plist-get card :id))))))))
+                        (when (and (not err) (equal action "discuss")) (drgnx-cockpit-cards--show-reviewer job (plist-get card :id)))))))))
 
 (defun drgnx-cockpit-cards--show-reviewer (job card)
   "Open the transcript of the reviewer on CARD of JOB (the hub says which session: the card's data)."

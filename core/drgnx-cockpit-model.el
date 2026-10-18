@@ -126,12 +126,13 @@ Cached by modification time."
 
 (defun drgnx-cockpit--jobs ()
   "The jobs the model shows, newest first, with their tasks, dependencies and open ask cards — four queries, grouped
-here: (JOBS . (TASKS DEPS CARDS)), JOBS ((ID TITLE PLAN STATUS)…), TASKS hash job → ((ID N TITLE STATUS AGENT)…) in
-order, DEPS hash task → (DEP…), CARDS ((ID JOB TASK TITLE AT)…).  A done job only with
-`drgnx-cockpit-include-closed-jobs'."
+here: (JOBS . (TASKS DEPS CARDS)), JOBS ((ID TITLE PLAN STATUS DATA)…) — DATA the job's data as text when it marks a
+task blocked (:blocked, task → reason), else nil — TASKS hash job → ((ID N TITLE STATUS AGENT)…) in order, DEPS
+hash task → (DEP…), CARDS ((ID JOB TASK TITLE AT)…).  A done job only with `drgnx-cockpit-include-closed-jobs'."
   (let* ((db (drgnx-work-db))
          (open (if drgnx-cockpit-include-closed-jobs "" " where j.status is not 'done'"))
-         (jobs (sqlite-select db (concat "select j.id, j.title, j.plan, j.status from job j" open " order by j.created desc, j.id")))
+         (jobs (sqlite-select db (concat "select j.id, j.title, j.plan, j.status, case when instr(j.data, ':blocked (') > 0 then j.data end"
+                                         " from job j" open " order by j.created desc, j.id")))
          (tasks (make-hash-table :test #'equal)) (deps (make-hash-table :test #'equal)))
     (pcase-dolist (`(,id ,job ,n ,title ,status ,agent)
                    (sqlite-select db (concat "select t.id, t.job, t.n, t.title, t.status, t.agent from jtask t join job j on j.id = t.job"
@@ -208,8 +209,10 @@ never joined to a job's or a plan's.  QUESTIONS: the open questions, each with t
         (when (and (gethash src nodes) (gethash dst nodes)) (edge src dst 'derives)))
       ;; jobs (newest first: the newest job of a plan task is the one shown on it)
       (let ((deps nil) (status (make-hash-table :test #'equal)))
-        (pcase-dolist (`(,jid ,jtitle ,planf ,jstatus) (car jobs-data))
-          (let* ((pid (and planf (concat "plan:" planf))) (jnode (concat "job:" jid)))
+        (pcase-dolist (`(,jid ,jtitle ,planf ,jstatus ,jdata) (car jobs-data))
+          (let* ((pid (and planf (concat "plan:" planf))) (jnode (concat "job:" jid))
+                 ;; its tasks marked blocked (the Work graph's Mark Blocked): their own state while no agent works on them
+                 (blocked (and jdata (plist-get (let ((read-eval nil)) (ignore-errors (car (read-from-string jdata)))) :blocked))))
             ;; a plan the tracker never scanned: its headings, read only
             (when (and planf (not (gethash pid nodes)))
               (pcase (drgnx-cockpit--plan-file planf)
@@ -233,6 +236,9 @@ never joined to a job's or a plan's.  QUESTIONS: the open questions, each with t
                   (puthash tid tid jt-node)
                   (add (drgnx-cockpit--node tid 'task ttitle :state st :job jid :agent holder :jtask tid))
                   (edge tid jnode 'implements)))
+                (when-let* ((why (alist-get tid blocked nil nil #'equal)) (tn (gethash tid jt-node)))
+                  (put tn :blocked why)
+                  (when (member st '("ready" "pending")) (put tn :state "blocked")))
                 (when (gethash tid jt-node)
                   (dolist (d (gethash tid (nth 2 jobs-data))) (push (list tid d) deps))
                   (when holder
@@ -709,8 +715,9 @@ be read."
 gets, from the sentinel, ((:file :added :removed :status new|modified|deleted)…), (:too-large BYTES) when git's
 list of changed or untracked files passes `drgnx-cockpit-diff-max-bytes' (git is ended then), or (:error MESSAGE).
 Only regular files inside the folder are listed (`drgnx-cockpit--file-ok'): never a device, FIFO, socket or a link out
-of it.  At most `drgnx-cockpit-changed-files-max' are checked, those of them that may be shown listed, then (:more N)
-for the rest; untracked files' lines are counted until `drgnx-cockpit-count-bytes-max' bytes are read (after that
+of it; those refused are counted, as (:refused N), so that a change is never taken for none.  At most
+`drgnx-cockpit-changed-files-max' are checked, those of them that may be shown listed, then (:more N) for the rest;
+untracked files' lines are counted until `drgnx-cockpit-count-bytes-max' bytes are read (after that
 :added is nil)."
   (let ((dir (plist-get source :dir)) (paths (plist-get source :paths)))
     (if (not (stringp dir))
@@ -734,7 +741,7 @@ DIR is local (git ran there) and the names are git's own, relative to it: no fil
   (let* ((file-name-handler-alist nil)
          (truedir (file-name-as-directory (file-truename dir)))
          (known (make-hash-table :test #'equal)) (new (make-hash-table :test #'equal)) (memo (make-hash-table :test #'equal))
-         (budget drgnx-cockpit-count-bytes-max) (checked 0) (out nil))
+         (budget drgnx-cockpit-count-bytes-max) (checked 0) (refused 0) (out nil))
     (dolist (f files) (puthash (plist-get f :file) t known))
     (let ((extra nil))
       (dolist (f untracked)
@@ -750,9 +757,10 @@ DIR is local (git ran there) and the names are git's own, relative to it: no fil
                 (when (and size (<= size budget))
                   (setq budget (- budget size))
                   (plist-put f :added (drgnx-cockpit--lines abs)))))
-            (push f out)))))
+            (push f out))
+          (unless ok (setq refused (1+ refused))))))
     ;; the rest only counted (not checked one by one)
-    (nconc (nreverse out) (and files (list (list :more (length files)))))))
+    (nconc (nreverse out) (and (> refused 0) (list (list :refused refused))) (and files (list (list :more (length files)))))))
 
 (defun drgnx-cockpit-file-diff (source file callback)
   "Ask git, asynchronously, for FILE's diff in SOURCE (`drgnx-cockpit-edit-source') against its base — an untracked

@@ -114,6 +114,8 @@ what it spends, so the budget would not stop it.
   reviews (`drgnx-job-review-tries`) it is yours. A merge conflict is aborted (the job's branch stays clean) and
   becomes a card; a merge that fails for another reason (a hook, git's own refusal) is a card "merge failed:" with
   git's message. `drgnx-job-review` nil: finished tasks wait in review for you. Clash reviewers end with the job.
+  With the merge gate `review+accept`, a task that passed also waits for you to accept its files
+  ([below](#the-merge-gate)).
 - **The decision log is enforced:** an agent that has not read the latest decisions of its job gets its next edit
   or command refused, with the changes put in front of it at once; reading is never held, so it catches up and goes on.
 - **Budget:** what goes through the gateway is counted (a subscription agent's traffic is not). When the job's spend
@@ -135,6 +137,52 @@ what it spends, so the budget would not stop it.
   for your decision (a conflict, a failed review) stay yours; nothing merges twice.
 
 The job is **done** when every task is done (or dropped). Review the job's branch and merge it yourself.
+
+From the Work graph you can also reassign a job's task to another profile, mark it blocked, move it in the order
+ready tasks start in, and propose a job of one plan task and the tasks it needs (**Start as Job**):
+[cockpit.md](cockpit.md#changing-jobs-from-the-graph).
+
+## The merge gate
+
+`drgnx-job-merge-gate` (Customize group `drgnx-cockpit`) says what a finished task needs before it is merged into
+the job's branch:
+
+- `review` (the default): its reviewer's pass, as above.
+- `review+accept`: the pass, then every file its agent changed accepted by you. Until then the task waits on you
+  with a `review` card: "waiting on your review: N of M files accepted". **Open its edits** shows the agent's edits
+  ([cockpit.md](cockpit.md#an-agents-edits)), where `a` accepts a file. Once every file is accepted and its
+  worktree is clean, the task is merged, within the hub's next tick (2 s).
+
+The details:
+
+- **Which files.** The files are the ones its edits show: what the task changed against where its worktree started.
+  Every agent of the task counts, not only the last one. The task's first base is kept with the job, and every
+  later agent (Back to an agent, a fall-back, a reassign) is compared with it. Its edits show the same files, and
+  marks are per agent: accept them again in the new agent's edits.
+- **A clean worktree.** Only commits are merged, so the task merges only when its worktree has nothing uncommitted
+  or untracked (`git status` is empty). A file you reverted in its edits, or a new file nobody committed, makes the
+  card say "its worktree has uncommitted changes": commit or discard them, or use **Merge as it is**.
+- **At its branch's tip.** The edits show the task's worktree, and a merge takes its branch `job/ID-N`. While the
+  worktree's HEAD is not that branch's tip (something else was checked out there), the card says so and nothing
+  merges: check its branch out again, or use **Merge as it is**, which merges the branch. A review that passes
+  under either gate is held the same way, as a `review` card, since the reviewer read the worktree.
+- **What counts as accepted.** A file counts only while it is unchanged since you accepted it: the mark's hash must
+  be the hash of the file's diff now. A file changed again (a new commit in the task's branch) needs accepting again.
+  A renamed file is its old name deleted and its new name added: accept the new name, and a deleted file too.
+- **When files cannot be checked.** Some files count but can never be accepted, so the task waits:
+  - a file the edits refuse to show (a link out of the worktree, a dangling link, a submodule);
+  - a file whose diff is too large to show;
+  - the files past `drgnx-cockpit-changed-files-max`.
+
+  A task whose edits show no file at all never merges by itself either. For all of these, use **Merge as it is**.
+- **Your other actions.** Accepting never merges by itself, and the card's other actions stay yours: **Merge as it
+  is** (merge now, whatever is accepted), **Back to an agent**, **Drop the task**.
+- **Checked again.** The card looks again on the hub's tick when a mark, the task's commit, its index or its
+  worktree folder changes, and every 5 s while the worktree is not clean. Just before it merges, it checks that
+  nothing changed since the look.
+
+A job keeps the gate it was proposed with: the hub runs it, and it does not read your `config.el`. **Start Job from
+Plan…** and **Start as Job** take your option with them. `drgnx job propose` gives the hub's default, `review`.
 
 ## Your first real job
 
@@ -163,6 +211,7 @@ limit, a crashed agent), `job-policy-test.el` (the policy, writes in the worktre
 not start, a stalled turn, a reviewer's answered permission, a restart with a request waiting), `job-cli-test.el` (`drgnx job`
 against a hub in a child process), `job-cards-test.el` (cards and their actions), `job-clash-test.el` and
 `job-clash-review-test.el` (the rules, the reviewer, the user's choice), `job-gate-test.el` (the gate),
+`job-cockpit-test.el` (reassign, block, the run order and Start as Job from the Work graph; the merge gate),
 `job-ui-test.el` and `test/ui/job-window-test.el` (the window, the badge, notifications), `job-exit-test.el` (a
 four-task job end to end with automatic start, no credential file opened under a fake HOME, closing the window);
 the perf workload `job-window` ([perf.md](../develop/perf.md)). Developer details: [coordination.md](../develop/coordination.md#jobs).

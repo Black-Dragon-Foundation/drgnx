@@ -352,10 +352,23 @@ a pid.  How many went."
     ;; jobs (drgnx-job.el): every answer is the job as `drgnx-job-summary' has it
     ("job/propose"
      (let ((id (drgnx-job-propose (plist-get params :plan) :repo (drgnx-hub--value (plist-get params :repo))
-                                  :budget (drgnx-hub--value (plist-get params :budget)))))
+                                  :budget (drgnx-hub--value (plist-get params :budget))
+                                  :gate (drgnx-hub--value (plist-get params :gate)))))
        (when (and (eq (plist-get params :auto) t) (equal (plist-get (drgnx-coord-job id) :status) "proposed"))
          (drgnx-job-approve id))
        (drgnx-job-summary id)))
+    ;; Start as Job (the Work graph): task N of a plan and the tasks it needs, proposed — the plan is only read
+    ("job/start-task"
+     (let ((id (progn (unless (natnump (plist-get params :n)) (error "job/start-task wants n, a task's number"))   ; never the whole plan
+                      (drgnx-job-propose (plist-get params :plan) :only (plist-get params :n) :gate (drgnx-hub--value (plist-get params :gate))))))
+       (when (and (eq (plist-get params :auto) t) (equal (plist-get (drgnx-coord-job id) :status) "proposed"))
+         (drgnx-job-approve id))
+       (drgnx-job-summary id)))
+    ;; writing back from the Work graph: the user's, each answered with the job's summary
+    ("job/reassign" (drgnx-job-reassign (plist-get params :task) (plist-get params :profile)))
+    ("job/block" (drgnx-job-block (plist-get params :task) (drgnx-hub--value (plist-get params :reason))))
+    ("job/unblock" (drgnx-job-unblock (plist-get params :task)))
+    ("job/order" (drgnx-job-order (plist-get params :task) (plist-get params :delta)))
     ("job/approve" (drgnx-job-approve (plist-get params :id) :budget (drgnx-hub--value (plist-get params :budget)))
      (drgnx-job-summary (plist-get params :id)))
     ("job/stop" (drgnx-job-stop (plist-get params :id)) (drgnx-job-summary (plist-get params :id)))

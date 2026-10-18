@@ -14,7 +14,8 @@
   ;; as `job/status' gives it back through JSON: nil as :null, false as :false
   '(:id "j1" :title "Feature" :status "running" :repo "/r/" :budget 5.0 :spent 0.4
         :tasks ((:n 1 :title "one" :role "implement" :profile "mock" :status "running" :agent "s-a" :deps :null)
-                (:n 2 :title "two" :role "implement" :profile "mock" :status "needs-input" :agent :null :deps (1)))
+                (:n 2 :title "two" :role "implement" :profile "mock" :status "needs-input" :agent :null :deps ("j1#1")   ; task ids, as the hub has them
+                    :blocked "waits on the API"))
         :agents ((:id "s-a" :profile "mock" :task "j1#1" :status "busy" :review :false))
         :cards ((:id 7 :kind "agent" :task "j1#2" :title "its agent ended 3 times" :actions (("retry" "Retry") ("drop" "Drop the task"))
                      :data :null)
@@ -96,6 +97,7 @@ after — they owned their hooks and timers."
         (should (string-search "which one?" cards))
         (should (string-search "Task 1: one" cards))
         (should (string-search "needs-input" cards))
+        (should (string-search "after 1 · blocked: waits on the API" cards))      ; Mark Blocked in the Work graph
         (should (string-search "spent 0.40 of 5.00 USD" cards))
         (should (string-search "s-a" cards))
         (should (< (string-search "its agent ended" cards) (string-search "Task 1: one" cards))))   ; what needs you first

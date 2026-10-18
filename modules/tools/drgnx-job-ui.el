@@ -29,6 +29,7 @@
   (unless (fboundp 'drgnx-hub-call) (require 'drgnx-hub)))
 
 (defvar drgnx-job-ui-badge-mode)
+(defvar drgnx-job-merge-gate)
 
 (defun drgnx-job-ui--v (x) (unless (memq x '(:null :false)) x))
 
@@ -200,7 +201,11 @@ else a message.  A failed osascript says so once.  Never a prompt."
   (interactive (list (read-file-name "Plan: " nil nil t)))
   (drgnx-job-ui--hub)
   (drgnx-hub-ensure)
-  (drgnx-job-ui-show (plist-get (drgnx-hub-call-sync "job/propose" (list :plan (expand-file-name file)) 30) :id)))
+  (drgnx-job-ui-show (plist-get (drgnx-hub-call-sync "job/propose" (list :plan (expand-file-name file)
+                                                                         ;; the gate of this Emacs's option goes with the job
+                                                                         :gate (and (boundp 'drgnx-job-merge-gate) (symbol-name drgnx-job-merge-gate)))
+                                                     30)
+                                :id)))
 
 (defun drgnx-job-ui-approve (id)
   "Start the proposed job ID."

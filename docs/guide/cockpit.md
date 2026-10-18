@@ -32,7 +32,10 @@ A node waits while an open question, an open ask card or a permission is about i
 UTF-8 gets ASCII marks (`+ * o ! || ?`).
 
 A task that exists only in its plan file (no job runs it) is read-only here. The drawing shows it with a dashed
-border.
+border. **Start as Job** (`s`) proposes a job for it ([below](#changing-jobs-from-the-graph)).
+
+A job's task you marked blocked shows the state `blocked` (mark `⏸`, in the warning colour) while no agent works on
+it.
 
 **Silent worktrees.** A worktree with changes that no agent reports from shows as an agent of its own, `silent`,
 "not reporting": to make an agent in it report, add drgnx on its settings page
@@ -67,6 +70,10 @@ you always get the outline.
 | `f` | Filter Graph… (`cockpit-filter`) | a milestone (completion offers the specs' and plans' titles; any text in a title or path works), an agent, states, a job (it names the one shown now); empty: all |
 | `g` | Draw Graph Again (`cockpit-refresh`) | reads the store again and draws now |
 | `A` | Answer Question… (`cockpit-answer`) | answers the question about the node on this line or selected; also in What happened and the timeline (see below) |
+| `R` | Reassign Task… (`cockpit-reassign`) | a job's task to an agent of the profile you pick ([below](#changing-jobs-from-the-graph)) |
+| `b` | Mark Blocked / Unblock (`cockpit-block`) | asks why, and no agent starts on the job's task; on a blocked task, unblocks it |
+| `M-<up>`, `M-<down>` | Run Earlier / Run Later (`cockpit-run-earlier`, `cockpit-run-later`) | moves a job's task one place (a prefix argument: that many) in the order ready tasks get agents in |
+| `s` | Start as Job (`cockpit-start-as-job`) | on a plan's task no job runs: proposes a job of it and the tasks it needs |
 
 The keys are the same in the VS Code, Emacs and Vim profiles: the graph's buffer starts in Emacs state under evil.
 A click on a node (a box or an outline line) opens it too.
@@ -76,12 +83,38 @@ What a node opens:
 | Node | Opens |
 |---|---|
 | Spec, plan, TODO | its file at its line |
-| Task | the edits of the agent working on it ([below](#an-agents-edits)). A task nobody works on opens its plan at its heading. A read-only one opens there too, and the echo area names **Start Job from Plan…** (`job-start`), which starts a job. The graph never creates a job or edits a plan file by itself. |
+| Task | the edits of the agent working on it ([below](#an-agents-edits)). A task nobody works on opens its plan at its heading. A read-only one opens there too, and the echo area names **Start as Job** (`cockpit-start-as-job`, `s`), which proposes a job for it. The graph never creates a job or edits a plan file by itself. |
 | Agent | its edits ([below](#an-agents-edits)) |
 | Job, review | the cockpit filtered to the job: What needs you and its decisions ([below](#what-needs-you-and-the-decisions)) |
 
 The filter keeps the nodes it matches and their ancestors (a task keeps its plan and spec). The first line says
 what it keeps.
+
+## Changing jobs from the graph
+
+Four commands change a job from the graph. Each acts on the node on this line, else the selected one (`TAB`), else
+one you pick by name. Each is one call to the hub, which changes the job in the store; the graph and What needs
+you redraw when the hub says so. None of them writes a plan file: a job runs a copy of its plan taken when it was
+proposed.
+
+- **Reassign Task…** (`R`): a job's task goes to an agent of the profile you pick, from now on. When an agent
+  works on it, or it waits on you with a card, that agent ends and its card is settled: the task is ready for a
+  new agent, as a card's Retry does. A task not started yet just starts on that profile. A task in review is refused until
+  its review is over: its reviewer would otherwise answer about the next agent's work. Its fall-back profiles are
+  the ones after it on its role's route ([jobs.md](jobs.md#routes-and-the-estimate)), none when it is not on the route.
+- **Mark Blocked / Unblock** (`b`): asks why (kept as one line of at most 500 characters; control and bidi-control
+  characters become spaces), then no agent starts on the task until you unblock it. An agent
+  already working on it goes on. The graph shows the state `blocked`, and What needs you lists the task as blocked.
+- **Run Earlier / Run Later** (`M-<up>`, `M-<down>`): moves the task one place in its job's run order, among the
+  tasks not done. When more tasks are ready than `drgnx-job-max-agents`, the earlier ones get agents first. The
+  echo area says where the task is now.
+- **Start as Job** (`s`): on a plan's task no job runs (read-only here), proposes a job of that task and the tasks
+  it needs, directly or not. The job's title ends in `— Task N`. The cockpit shows the job and its proposal card:
+  nothing starts before you approve it, unless `drgnx-job-auto-start` is on. It takes your `drgnx-job-merge-gate`
+  with it ([jobs.md](jobs.md#the-merge-gate)).
+
+The hub has these as methods `job/reassign`, `job/block`, `job/unblock`, `job/order` and `job/start-task`
+([hub.md](../develop/hub.md)).
 
 ## An agent's edits
 

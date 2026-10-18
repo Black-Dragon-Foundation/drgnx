@@ -214,12 +214,12 @@ the fixture's."
         (with-current-buffer g (drgnx-cockpit-graph-test--goto (concat "plan:" plan)))
         (with-selected-window (get-buffer-window g) (call-interactively #'drgnx-cockpit-graph-open))
         (should (equal (funcall opened) (list plan 1)))
-        ;; a plan task no job runs and nobody works on: read-only — open in plan, and Start Job is named, never done
+        ;; a plan task no job runs and nobody works on: read-only — open in plan, and Start as Job is named, never done
         (set-window-buffer (selected-window) g) (setq msg nil)
         (with-current-buffer g (drgnx-cockpit-graph-test--goto (format "task:%s#1" plan)))
         (with-selected-window (get-buffer-window g) (call-interactively #'drgnx-cockpit-graph-open))
         (should (equal (funcall opened) (list plan (plan-line 1))))
-        (should (string-match-p "read-only.*Start Job from Plan" msg))
+        (should (string-match-p "read-only.*Start as Job" msg))
         (should-not jobs)
         ;; a task an agent works on (the chat on plan task 5): that agent's edits
         (set-window-buffer (selected-window) g)
@@ -315,7 +315,10 @@ the fixture's."
     (should (equal (plist-get (alist-get 'tools/cockpit drgnx-modules--table) :requires) '(tools/work tools/jobs)))
     (pcase-dolist (`(,id ,fn) '((cockpit-filter drgnx-cockpit-graph-filter) (cockpit-open drgnx-cockpit-graph-open)
                                 (cockpit-open-in-plan drgnx-cockpit-graph-open-in-plan) (cockpit-refresh drgnx-cockpit-graph-refresh)
-                                (cockpit-next drgnx-cockpit-graph-select-next) (cockpit-previous drgnx-cockpit-graph-select-previous)))
+                                (cockpit-next drgnx-cockpit-graph-select-next) (cockpit-previous drgnx-cockpit-graph-select-previous)
+                                (cockpit-reassign drgnx-cockpit-graph-reassign) (cockpit-block drgnx-cockpit-graph-block)
+                                (cockpit-run-earlier drgnx-cockpit-graph-run-earlier) (cockpit-run-later drgnx-cockpit-graph-run-later)
+                                (cockpit-start-as-job drgnx-cockpit-graph-start-as-job)))
       (should (eq (drgnx-cmd-command (drgnx-commands-get id)) fn))
       (should (eq (drgnx-cmd-map (drgnx-commands-get id)) 'drgnx-cockpit-graph-mode-map))))
   ;; Show Work as Graph opens this graph while tools/cockpit runs, the Work tab's older graph without it
@@ -328,10 +331,58 @@ the fixture's."
   (dolist (profile '("vscode" "emacs" "vim"))
     (let ((text (with-temp-buffer (insert-file-contents (expand-file-name (format "keys/%s.eld" profile) drgnx-dir)) (buffer-string))))
       (dolist (row (append '("(cockpit-filter \"f\")" "(cockpit-open \"RET\")" "(cockpit-open-in-plan \"o\")" "(cockpit-refresh \"g\")"
-                             "(work-graph ")
+                             "(work-graph " "(cockpit-reassign \"R\")" "(cockpit-block \"b\")" "(cockpit-run-earlier \"M-<up>\")"
+                             "(cockpit-run-later \"M-<down>\")" "(cockpit-start-as-job \"s\")")
                            (if (equal profile "vim") '("(cockpit-next \"TAB\" \"n\")" "(cockpit-previous \"<backtab>\" \"p\")")
                              '("(cockpit-next \"TAB\")" "(cockpit-previous \"<backtab>\")"))))
         (should (string-search row text))))))
+
+(ert-deftest drgnx-cockpit-graph/write-back-commands-ask-the-hub ()
+  ;; each action is one call to the hub (it changes the store); a plan task is only proposed, never run or written
+  (drgnx-cockpit-graph-test--with
+    (drgnx-coord-job-set "jx" :data (list :blocked '(("jx#3" . "waits on a name"))))
+    (drgnx-cockpit-graph-redraw t)
+    (let ((calls nil) (jobs nil) (opened nil) (answer "mock2")
+          (bytes (with-temp-buffer (insert-file-contents-literally plan) (buffer-string))))
+      (cl-letf (((symbol-function 'drgnx-cockpit-cards--hub) #'ignore)
+                ((symbol-function 'drgnx-hub-ensure) #'ignore)
+                ((symbol-function 'drgnx-hub-call)
+                 (lambda (method params callback) (push (list method params) calls)
+                   (funcall callback (list :id "j9" :status "proposed" :order [2 3 4]) nil)))
+                ((symbol-function 'drgnx-job-ui-show) (lambda (id) (push id jobs)))
+                ((symbol-function 'drgnx-cockpit-edits-show) (lambda (a) (push a opened)))
+                ((symbol-function 'drgnx-agents-profile-names) (lambda () '("mock" "mock2")))
+                ((symbol-function 'completing-read) (lambda (&rest _) answer))
+                ((symbol-function 'read-string) (lambda (&rest _) "the API is not ready"))
+                ((symbol-function 'message) #'ignore))
+        (with-current-buffer g
+          ;; a job's task: reassign, block (it is not), earlier, later
+          (drgnx-cockpit-graph-test--goto (format "task:%s#2" plan))
+          (call-interactively #'drgnx-cockpit-graph-reassign)
+          (call-interactively #'drgnx-cockpit-graph-block)
+          (call-interactively #'drgnx-cockpit-graph-run-earlier)
+          (call-interactively #'drgnx-cockpit-graph-run-later)
+          (should-error (call-interactively #'drgnx-cockpit-graph-start-as-job) :type 'user-error)
+          ;; a blocked one (the store says so, the graph shows it): the same key unblocks it
+          (drgnx-cockpit-graph-test--goto (format "task:%s#3" plan))
+          (should (equal (plist-get (drgnx-cockpit--shown-node (format "task:%s#3" plan)) :state) "blocked"))
+          (call-interactively #'drgnx-cockpit-graph-block)
+          ;; a plan's task no job runs: Start as Job proposes it (and its needs), the cockpit shows the proposal
+          (drgnx-cockpit-graph-test--goto (format "task:%s#1" plan))
+          (should-error (call-interactively #'drgnx-cockpit-graph-reassign) :type 'user-error)
+          (call-interactively #'drgnx-cockpit-graph-start-as-job))
+        ;; the merge gate's card opens the task's agent's edits, in this Emacs
+        (drgnx-cockpit-cards--act "jx" (list :id 7 :kind "review" :data (list :gate t :agent "s-1")) "edits")
+        (should (equal (mapcar (lambda (a) (if (consp a) (plist-get a :id) a)) opened) '("s-1"))))
+      (should (equal (mapcar (lambda (c) (list (car c) (plist-get (cadr c) :task) (plist-get (cadr c) :profile)
+                                               (plist-get (cadr c) :reason) (plist-get (cadr c) :delta)))
+                             (reverse calls))
+                     `(("job/reassign" "jx#2" "mock2" nil nil) ("job/block" "jx#2" nil "the API is not ready" nil)
+                       ("job/order" "jx#2" nil nil -1) ("job/order" "jx#2" nil nil 1) ("job/unblock" "jx#3" nil nil nil)
+                       ("job/start-task" nil nil nil nil))))
+      (should (equal (list (plist-get (cadr (car calls)) :plan) (plist-get (cadr (car calls)) :n)) (list plan 1)))
+      (should (equal jobs '("j9")))
+      (should (equal (with-temp-buffer (insert-file-contents-literally plan) (buffer-string)) bytes)))))
 
 (defmacro drgnx-cockpit-graph-test--drawn (&rest body)
   "BODY with the graph's windows graphical and wide enough for the drawing (skipped without SVG support)."
