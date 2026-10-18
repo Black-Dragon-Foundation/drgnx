@@ -10,7 +10,8 @@ with how to fix it — it never stops the others.
 **The first start opens the Welcome by itself.** When drgnx's first window shows and onboarding has never run on
 this machine (no `onboarding.eld`), the Welcome opens a moment later — from a timer, after your layout is back; it
 asks nothing until you run a step. It does this once: opening it leaves `onboarding.eld` behind (with no step done),
-so later starts open as you left them. Help → Welcome brings it back at any time.
+so later starts open as you left them. Help → Welcome brings it back at any time. An empty editor shows a start page
+with the three keys that open everything and a button to open a folder ([face.md](face.md#the-start-page)).
 
 **New to Emacs? (coming from VS Code)**
 

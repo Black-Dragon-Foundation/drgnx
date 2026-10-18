@@ -43,8 +43,8 @@
   "The buffers W has shown, in the order they were opened (live ones)."
   (seq-filter #'buffer-live-p (window-parameter w 'drgnx-tabs)))
 
-(defcustom drgnx-chrome-transient-tabs "\\`\\*scratch\\*\\'"
-  "Buffers that are a tab only while shown (like VS Code's welcome tab)."
+(defcustom drgnx-chrome-transient-tabs "\\`\\*scratch\\*\\'\\|\\*drgnx start\\*"
+  "Buffers that are a tab only while shown (like VS Code's welcome tab): `*scratch*' and the start page."
   :type 'regexp :group 'drgnx)
 
 (defun drgnx-chrome--note-history (w b tabs)

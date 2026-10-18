@@ -21,6 +21,7 @@
 (declare-function drgnx-statusbar-setup "drgnx-statusbar")
 (declare-function drgnx-quickhelp-setup "drgnx-quickhelp")
 (declare-function drgnx-topline-setup "drgnx-topline")
+(declare-function drgnx-start-setup "drgnx-start")
 (declare-function drgnx-tty-popups-ascii-p "drgnx-tty-popups")
 
 (defgroup drgnx-face nil
@@ -226,6 +227,7 @@ F10's `menu-bar-open' has no menu to open on a toolkit frame whose bar is hidden
   (when (fboundp 'drgnx-statusbar-setup) (drgnx-statusbar-setup))   ; the status bar (drgnx-statusbar.el)
   (when (fboundp 'drgnx-quickhelp-setup) (drgnx-quickhelp-setup))   ; quick help (drgnx-quickhelp.el)
   (when (fboundp 'drgnx-topline-setup) (drgnx-topline-setup))   ; the top line (drgnx-topline.el)
+  (when (fboundp 'drgnx-start-setup) (drgnx-start-setup))   ; the start page (drgnx-start.el)
   (add-hook 'after-make-frame-functions #'drgnx-face-apply-frame)
   (add-hook 'after-change-major-mode-hook #'drgnx-face-line-numbers-maybe)
   (setq drgnx-face--active t)

@@ -246,9 +246,30 @@ value; Open Help has the full story.
 | `drgnx-quickhelp-max-lines` | `12` | The most lines of docs the card shows (it is also kept short enough to fit beside the line). |
 | `drgnx-quickhelp-strip-lines` | `4` | Height of the strip in a terminal; a window too small to give up that many rows gets the first line in the echo area instead. |
 
+## The start page
+
+An empty editor tells you nothing, so drgnx fills it. **`*drgnx start*`** says what drgnx is in two lines, shows the
+three keys that open everything (the files, the commands, all keys — the same ones the top line shows, from the
+active profile: `C-p`, `C-S-p` and `C-k C-r` in VS Code's) and has four buttons: **Open a Folder…**, **Open the Work
+Graph**, **All Keys** and **Don't show this again**. `Tab` and `Shift-Tab` move between the buttons, `Return` presses
+one. A button whose command is not there (its module is off) is left out.
+
+It shows itself only where nothing is lost: in the editor window you used last, and only when that window shows
+`*scratch*` — never over a file, and never by splitting a window, moving focus to another window or asking you
+anything. It looks at that when drgnx's first window opens (a moment after, once the files you asked for and your saved
+layout are there), when a new window opens on a running drgnx (`emacsclient -c`), and when the last
+file tab of the editor closes. Going to `*scratch*` yourself, with files still open, leaves it alone. In a terminal it
+is the same page in the same place.
+
+**Don't show this again** keeps your choice in `face.eld` in drgnx's state directory (`:start-dismissed`) and puts
+the page away; it stays away on every later start and window. **Show Start Page** (palette, Help; no key of its own)
+brings it back whenever you want it. The page is a tab only while it is shown, like `*scratch*`
+(`drgnx-chrome-transient-tabs`), so it never lingers among your files.
+
 ## Faces
 
 drgnx draws with the theme's faces and none of its own colours: the dividers inherit `shadow`, so a theme that
 styles `window-divider` itself keeps its choice, and every colour you see comes from the theme you picked
 (Preferences: Color Theme). The quick help card is `drgnx-quickhelp` (inherits `tooltip`) with the symbol's name in
-`drgnx-quickhelp-title` (inherits `bold`); its border is Emacs's `child-frame-border` face.
+`drgnx-quickhelp-title` (inherits `bold`); its border is Emacs's `child-frame-border` face. The start page uses
+`drgnx-start-title` (inherits `bold`), `drgnx-start-key` (inherits `bold`) and `drgnx-start-quiet` (inherits `shadow`).

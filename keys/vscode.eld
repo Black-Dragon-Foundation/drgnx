@@ -296,4 +296,5 @@
         (quick-help-toggle-hover :none "the palette")
         (quick-help-close "<escape>" "q" :map drgnx-quickhelp-showing-map)
         (shortcuts-profile "p" :map (drgnx-shortcuts . drgnx-shortcuts-mode-map))
-        (ai-stop :none "in the palette")))
+        (ai-stop :none "in the palette")
+        (start-page :none "the palette; it shows itself in an empty editor")))
