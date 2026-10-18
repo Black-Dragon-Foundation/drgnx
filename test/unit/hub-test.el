@@ -113,7 +113,7 @@ to OR-LOG, OPENROUTER_API_KEY unset."
     (let ((synced nil) (write (symbol-function 'write-region)))
       (cl-letf (((symbol-function 'write-region)
                  (lambda (start end file &rest args)
-                   (when (string-match-p "registrations\\.eld-" file) (push (not write-region-inhibit-fsync) synced))
+                   (when (string-match-p "registrations\\.eld\\.tmp-" file) (push (not write-region-inhibit-fsync) synced))
                    (apply write start end file args))))
         (drgnx-hub--save-registrations))
       (should (equal synced '(t))))))
@@ -466,7 +466,9 @@ about) and keeps the tests within their time limits."
       (let ((inode (file-attribute-inode-number (file-attributes file))))
         (drgnx-hub-call-sync "gateway/register" '(:chain [["openrouter" nil]]))
         (should-not (equal (file-attribute-inode-number (file-attributes file)) inode)))
-      (should (equal (directory-files (file-name-directory file) nil "regist") '("registrations.eld")))
+      ;; the torn file was copied aside (hub-file-test.el), and no temporary file is left
+      (should (equal (directory-files (file-name-directory file) nil "regist")
+                     (list "registrations.eld" (car (directory-files (file-name-directory file) nil "\\.bak-")))))
       (should (equal (file-modes file) #o600))
       (should (= (length (with-temp-buffer (insert-file-contents file) (read (current-buffer)))) 2)))))
 

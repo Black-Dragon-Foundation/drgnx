@@ -13,6 +13,7 @@
 (require 'cl-lib)
 (require 'subr-x)
 (require 'drgnx-paths)
+(require 'drgnx-file)
 (require 'drgnx-gateway)
 (require 'drgnx-jobs)
 (require 'drgnx-agents)
@@ -253,32 +254,36 @@ With LIMIT, a line longer than LIMIT closes CONN: nothing after it is read."
 ;;;; The hub side
 
 (defun drgnx-hub--write-private (file value)
-  "Keep VALUE in FILE (mode 0600): written to a temporary file beside the old one, then renamed over it, so a hub
-that dies mid-write leaves the old file whole."
-  (let ((tmp (progn (make-directory (file-name-directory file) t)
-                    (with-file-modes #o600 (make-temp-file (concat file "-"))))))
-    (unwind-protect
-        (with-temp-buffer
-          (let ((print-length nil) (print-level nil)) (prin1 value (current-buffer)))
-          ;; on disk before the rename: atomic against a machine's crash too, not only the hub's (the directory
-          ;; itself is not synced: Emacs cannot)
-          (let ((coding-system-for-write 'utf-8-unix) (write-region-inhibit-fsync nil)) (write-region nil nil tmp nil 'silent))
-          (set-file-modes tmp #o600)
-          (rename-file tmp file t))
-      (when (file-exists-p tmp) (delete-file tmp)))))
+  "Keep VALUE in FILE (mode 0600) through the file layer: written to a temporary file beside the old one, synced,
+then renamed over it, so a hub that dies mid-write (or a machine) leaves the old file whole.  Over
+`drgnx-file-max-bytes' or not plain data is `drgnx-file-refused', and FILE is untouched."
+  (drgnx-file-write file value :private t :fsync t))
 
 (defun drgnx-hub--save-registrations ()
   "Keep the registrations (`drgnx-hub--write-private')."
   (drgnx-hub--write-private (drgnx-hub--registrations-file) (drgnx-gateway-registrations)))
 
+(defun drgnx-hub--kept-unusable (file why consequence)
+  "FILE, a kept file the hub cannot use (WHY), is copied aside (`drgnx-file-backup': the next save replaces it) and
+logged in one line with CONSEQUENCE.  Never signals: a backup that fails is said in the same line."
+  (let ((backup (condition-case err (drgnx-file-backup file) (error (format "not backed up: %s" (error-message-string err))))))
+    (message "drgnx hub: %s cannot be used (%s; kept as %s): %s" file why backup consequence)))
+
+(defun drgnx-hub--read-kept (file consequence)
+  "The data of the kept FILE, or nil when it is missing or cannot be read (`drgnx-hub--kept-unusable')."
+  (let ((r (drgnx-file-read file)))
+    (when (eq (plist-get r :status) 'unreadable)
+      (drgnx-hub--kept-unusable file (plist-get (plist-get r :problem) :text) consequence))
+    (and (eq (plist-get r :status) 'ok) (plist-get r :data))))
+
 (defun drgnx-hub--load-registrations ()
-  "Take back the registrations a previous hub kept; a file that cannot be read is logged (its agents register again)."
-  (let ((file (drgnx-hub--registrations-file)))
-    (when (file-readable-p file)
-      (condition-case err
-          (drgnx-gateway-load-registrations (with-temp-buffer (insert-file-contents file) (read (current-buffer))))
-        (error (message "drgnx hub: %s cannot be read (%s): agents registered before must register again"
-                        file (error-message-string err)))))))
+  "Take back the registrations a previous hub kept; a file that cannot be read is backed up and logged (its agents
+register again)."
+  (let* ((file (drgnx-hub--registrations-file))
+         (consequence "agents registered before must register again")
+         (data (drgnx-hub--read-kept file consequence)))
+    (condition-case err (drgnx-gateway-load-registrations data)
+      (error (drgnx-hub--kept-unusable file (error-message-string err) consequence)))))
 
 (defun drgnx-hub--prune-registrations ()
   "Drop the registrations whose owner (the pid of the Emacs that registered them: its agents are its children) is
@@ -470,14 +475,11 @@ made.  A job's agents are not among them: a job frees the task of an agent the h
 (defun drgnx-hub--resume-sessions ()
   "Resume the sessions the previous hub kept (`drgnx-agents-take-over': ACP session/load), each under its own id and
 name; one whose agent cannot load it ends (and so leaves the file).  A file that does not read as a list of sessions
-is logged: it never stops the hub from starting."
+is backed up and logged (`drgnx-hub--kept-unusable'): it never stops the hub from starting."
   (let* ((file (drgnx-hub--sessions-file))
-         (saved (and (file-readable-p file)
-                     (condition-case err (with-temp-buffer (insert-file-contents file) (read (current-buffer)))
-                       (error (message "drgnx hub: %s cannot be read (%s): no session resumed" file (error-message-string err))
-                              nil)))))
+         (saved (drgnx-hub--read-kept file "no session resumed")))
     (unless (proper-list-p saved)
-      (message "drgnx hub: %s is not a list of sessions: none resumed" file)
+      (drgnx-hub--kept-unusable file "not a list of sessions" "no session resumed")
       (setq saved nil))
     (setq drgnx-hub--saved-sessions saved)
     (dolist (e saved)
@@ -811,8 +813,7 @@ Signals an error when a hub already serves there."
     (unless (and old (> old 0) (ignore-errors (drgnx-gateway-start old)))
       (when (and old (> old 0)) (message "drgnx hub: port %d is taken; agents started before must start again" old))
       (drgnx-gateway-start))
-    (make-directory (file-name-directory file) t)
-    (write-region (number-to-string (drgnx-gateway-port)) nil file nil 'silent))
+    (drgnx-file-write-text file (number-to-string (drgnx-gateway-port))))
   (drgnx-hub--load-registrations)
   (drgnx-hub--prune-registrations)
   (add-hook 'drgnx-gateway-event-functions #'drgnx-hub--broadcast)
