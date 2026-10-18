@@ -35,7 +35,8 @@
 
 (defun drgnx-m11c2-ui-test--shot (dir name)
   "Capture the root frame into DIR and keep it as NAME in the session's temp dir; print where."
-  (let ((shot (plist-get (drgnx-uitest-capture dir) :root)) (out (expand-file-name name temporary-file-directory)))
+  (let ((shot (plist-get (drgnx-uitest-capture dir) :root))
+        (out (expand-file-name name (default-toplevel-value 'temporary-file-directory))))   ; not the remote part's
     (should (file-exists-p shot))
     (copy-file shot out t)
     (message "m11c-2 screenshot: %s" out)
@@ -180,6 +181,14 @@ session has a private one of its own, in which podman finds none of its containe
     (with-temp-buffer
       (cons (apply #'call-process "podman" nil t nil args) (string-trim (buffer-string))))))
 
+(defconst drgnx-m11c2-ui-test--remote-seconds 120
+  "Seconds Open Remote…, the lost connection and Reconnect may take together.  TRAMP suspends timers while it reads
+from the connection (its own timeouts bound that); this deadline ends any other wait.")
+
+(defun drgnx-m11c2-ui-test--no-question (prompt &rest _)
+  "`yes-or-no-p' and `y-or-n-p' in the remote part: nobody answers PROMPT in a session, so fail with it at once."
+  (error "m11c-2: a question nobody answers in a session: %s" (string-trim prompt)))
+
 (defun drgnx-m11c2-ui-test--segment ()
   "The remote segment as the current buffer's window would show it: (TEXT . FACE)."
   (let ((s (drgnx-remote-segment)))
@@ -188,7 +197,10 @@ session has a private one of its own, in which podman finds none of its containe
 (defun drgnx-m11c2-ui-test--remote-part (shots name)
   "Open Remote into the container NAME: the Explorer, the segment connected, the connection killed (lost), Reconnect
 (connected, the buffer and its change kept)."
-  (let* ((root (format "/podman:%s:/" name)) (file (concat root "tmp/m11c2-demo.txt"))
+  (let* (;; as for users, drgnx's state dir (the test's XDG_STATE_HOME, where tools/remote keeps remote auto-save
+         ;; files) is not inside the temp dir: TRAMP asks about a root-owned file's auto-save file there
+         (temporary-file-directory (file-name-as-directory (make-temp-file "drgnx-m11c2-tmp" t)))
+         (root (format "/podman:%s:/" name)) (file (concat root "tmp/m11c2-demo.txt"))
          (process-environment (drgnx-m11c2-ui-test--podman-env))
          (drgnx-remote--roots nil)
          (drgnx-lang--remote-servers (make-hash-table :test #'equal))
@@ -258,7 +270,8 @@ session has a private one of its own, in which podman finds none of its containe
       (when-let* ((b (find-buffer-visiting file))) (with-current-buffer b (set-buffer-modified-p nil)) (kill-buffer b))
       (when (get-buffer drgnx-explorer-buffer-name) (kill-buffer drgnx-explorer-buffer-name))
       (ignore-errors (tramp-cleanup-all-connections))
-      (drgnx-wb-hide-sidebar))))
+      (drgnx-wb-hide-sidebar)
+      (delete-directory temporary-file-directory t))))
 
 (ert-deftest drgnx-ui-m11c2/agent-settings-and-remote ()
   (let* ((root (drgnx-uitest-root-frame)) (shots (make-temp-file "drgnx-m11c2-shot" t))
@@ -283,7 +296,13 @@ session has a private one of its own, in which podman finds none of its containe
                                                     "registry.fedoraproject.org/fedora:44" "sleep" "600")))
               (should (eql (car run) 0))
               (setq container name)
-              (drgnx-m11c2-ui-test--remote-part shots name))))
+              ;; nobody answers a question in a session, and nothing may wait forever: either one fails the test
+              (cl-letf (((symbol-function 'yes-or-no-p) #'drgnx-m11c2-ui-test--no-question)
+                        ((symbol-function 'y-or-n-p) #'drgnx-m11c2-ui-test--no-question))
+                (with-timeout (drgnx-m11c2-ui-test--remote-seconds
+                               (ert-fail (format "m11c-2: Open Remote… into %s did not finish in %d s"
+                                                 name drgnx-m11c2-ui-test--remote-seconds)))
+                  (drgnx-m11c2-ui-test--remote-part shots name))))))
       (when container (drgnx-m11c2-ui-test--podman "rm" "-f" container))
       (with-selected-frame root
         (delete-other-windows)

@@ -92,6 +92,9 @@ file of a container that runs as root), from a visit, a daemon or a sentinel ali
   A remote buffer whose mode changes outside a command, from a timer or a revert, say, stays unattached to its language
   server until you reopen it, revert it in a command, or run Reconnect. Remote files are never restored at the next
   start, so nothing is waiting to be attached then.
+- The private auto-save folder helps only while drgnx's state directory is outside the temp directory
+  (`temporary-file-directory`), as it is by default. With `XDG_STATE_HOME` inside `$TMPDIR`, TRAMP asks again on the
+  first visit of a root-owned file; set `tramp-auto-save-directory` to a folder outside the temp directory.
 - Shell integration in a remote terminal (eat or zsh integration over TRAMP) is not built.
 - Remote folders are not restored at the next start (see the Explorer's rules in [workbench.md](workbench.md)); open
   them again with Open Remote….
@@ -103,5 +106,7 @@ file of a container that runs as root), from a visit, a daemon or a sentinel ali
 The GUI test `test/ui/editor-m11c2-test.el` (`drgnx test --ui`) starts a podman container, opens it with Open Remote…,
 and shows the Explorer on it and the segment connected; it kills the connection (the segment shows it lost) and
 reconnects (connected, the buffer and its unsaved change kept), with screenshots. Without podman that part is
-skipped. The perf workload `remote-typing` types in a local file while a dead remote root is listed in the Explorer:
+skipped. Nobody answers in a test session, so a `yes-or-no-p` or `y-or-n-p` in that part fails the test with the
+question, and the part fails after 120 s instead of waiting (TRAMP's own timeouts bound its reads, during which it
+holds timers back). The perf workload `remote-typing` types in a local file while a dead remote root is listed in the Explorer:
 p95 under 16 ms and nothing sent to the remote ([perf.md](../develop/perf.md)).
