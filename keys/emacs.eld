@@ -292,5 +292,8 @@
         (face-toggle-menu-bar :none "the palette; F10 opens the menu as text while the bar is hidden")
         (face-menu :none "F10 (remap of menu-bar-open)")
         (statusbar-toggle :none "the palette")
+        (quick-help :none "C-h . shows local help (stock); the palette")
+        (quick-help-toggle-hover :none "the palette")
+        (quick-help-close "<escape>" "q" :map drgnx-quickhelp-showing-map)
         (shortcuts-profile "p" :map (drgnx-shortcuts . drgnx-shortcuts-mode-map))
         (ai-stop :none "in the palette")))

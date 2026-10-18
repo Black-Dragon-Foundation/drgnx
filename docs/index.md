@@ -23,7 +23,7 @@ Using drgnx.
 - [Browser pane](guide/browser.md): a web page beside the editor (WebKit), Test Report for Playwright, and an agent's page with its screenshot.
 - [Live view](guide/live.md): watch the browser your agents drive, live, and take it over.
 - [Keyboard Shortcuts editor](guide/shortcuts.md): every command with its keys; record new ones, see conflicts, filter, undo.
-- [The face](guide/face.md): no light menu bar or scroll bar, thin themed dividers, line numbers in code that never shift sideways, problems at the end of their line, a status bar built from segments you can reorder, drop or add to, glyphs with an ASCII form; every choice a setting.
+- [The face](guide/face.md): no light menu bar or scroll bar, thin themed dividers, line numbers in code that never shift sideways, problems at the end of their line, a status bar built from segments you can reorder, drop or add to, glyphs with an ASCII form, quick help in a card beside the symbol (a strip in terminals); every choice a setting.
 - [Editor features vs VS Code, Zed and Cursor](guide/editor-matrix.md): what drgnx has, where it is described, its GUI test and perf workload.
 
 ## Reference

@@ -19,6 +19,7 @@
 (defvar display-line-numbers-grow-only)
 (declare-function window-divider-mode "frame")
 (declare-function drgnx-statusbar-setup "drgnx-statusbar")
+(declare-function drgnx-quickhelp-setup "drgnx-quickhelp")
 (declare-function drgnx-tty-popups-ascii-p "drgnx-tty-popups")
 
 (defgroup drgnx-face nil
@@ -221,6 +222,7 @@ F10's `menu-bar-open' has no menu to open on a toolkit frame whose bar is hidden
                         :doc "Open the menu: the menu bar when it is shown, else the same menu as text in the minibuffer (F10)")
   (define-key global-map [remap menu-bar-open] #'drgnx-face-menu)   ; F10 opens the menu as text while the bar is hidden
   (when (fboundp 'drgnx-statusbar-setup) (drgnx-statusbar-setup))   ; the status bar (drgnx-statusbar.el)
+  (when (fboundp 'drgnx-quickhelp-setup) (drgnx-quickhelp-setup))   ; quick help (drgnx-quickhelp.el)
   (add-hook 'after-make-frame-functions #'drgnx-face-apply-frame)
   (add-hook 'after-change-major-mode-hook #'drgnx-face-line-numbers-maybe)
   (setq drgnx-face--active t)
@@ -247,7 +249,11 @@ F10's `menu-bar-open' has no menu to open on a toolkit frame whose bar is hidden
                                  (drgnx-statusbar-compact . "segments the other editor groups show")
                                  (drgnx-statusbar-place . "editors (default) or frame: where the status bar is")
                                  (drgnx-statusbar-indent-vars . "variables the indentation segment reads")
-                                 (drgnx-statusbar-modes . "modes (besides file buffers) that get the status bar")))
+                                 (drgnx-statusbar-modes . "modes (besides file buffers) that get the status bar")
+                                 (drgnx-quickhelp-hover . "quick help when the mouse rests on a symbol")
+                                 (drgnx-quickhelp-delay . "seconds the mouse rests before quick help shows")
+                                 (drgnx-quickhelp-max-lines . "most lines of docs on the card")
+                                 (drgnx-quickhelp-strip-lines . "height of the quick help strip in a terminal")))
 
 (provide 'drgnx-face)
 ;;; drgnx-face.el ends here

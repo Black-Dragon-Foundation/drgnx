@@ -130,8 +130,40 @@ count its columns. One that signals an error shows nothing, is skipped for 10 se
 works, it comes back; when it fails again, it is skipped for another 10 seconds), and the message is kept in
 `drgnx-statusbar--errors` (no message per redisplay). Defining it again gives it a new chance at once.
 
+## Quick help
+
+Rest the mouse on a symbol, or press **Show Quick Help** (`C-k C-i` in the VS Code profile, `SPC k` in Vim, the
+palette in the Emacs profile, where `C-h .` keeps showing the local help at point), and a small card shows what the
+mode or the language server knows about it: its signature and docs, with three buttons — **Open Help** (the full
+documentation in the panel's Help tab: `describe-symbol` in Lisp, eldoc's documentation buffer elsewhere), **Go to
+Definition** and **Find References**. Pressing the key again while the card shows opens the Help tab.
+
+The card never covers the line you are editing. In a window it sits just below the symbol's line, inside the window
+(above the line when there is no room below), and it moves out of the way as soon as you type. In a terminal, which
+has no pop-up frames in Emacs 30, it is a strip of a few lines at the bottom of the editor: the editor gives up those
+rows while it shows and gets them back, at the same size, when it goes. Point always stays visible.
+
+It goes away when you type, run any other command, switch window or buffer, press `C-g`, `Esc` or `q` (**Close
+Quick Help**, in every profile), or click its `✕`. A card that came from hovering never eats a key: `q` or `Esc`
+put it away and then do what they always do (`q` types a q). It also goes when the mouse leaves the symbol and the
+card. Only scrolling the card itself and its buttons keep it.
+
+The docs come from Emacs's eldoc (`eldoc-documentation-functions`, which eglot feeds from the language server),
+asked with point at the symbol. Every answer is asynchronous and the card waits at most one second for a slow server,
+then shows what came; nothing you type ever waits for it. In Lisp, eldoc describes the function call around the
+symbol (so hovering a function's name in a `defun` shows `defun`'s signature) and a variable's docstring with its
+value; Open Help has the full story.
+
+| Setting | Default | What it does |
+|---|---|---|
+| `drgnx-quickhelp-hover` | `t` | Show quick help when the mouse rests on a symbol (windows only; a terminal has the key). **Toggle Quick Help on Hover** (palette) flips it for this session. |
+| `drgnx-quickhelp-delay` | `0.6` | Seconds the mouse rests on a symbol before the card shows. |
+| `drgnx-quickhelp-max-lines` | `12` | The most lines of docs the card shows (it is also kept short enough to fit beside the line). |
+| `drgnx-quickhelp-strip-lines` | `4` | Height of the strip in a terminal; a window too small to give up that many rows gets the first line in the echo area instead. |
+
 ## Faces
 
 drgnx draws with the theme's faces and none of its own colours: the dividers inherit `shadow`, so a theme that
 styles `window-divider` itself keeps its choice, and every colour you see comes from the theme you picked
-(Preferences: Color Theme).
+(Preferences: Color Theme). The quick help card is `drgnx-quickhelp` (inherits `tooltip`) with the symbol's name in
+`drgnx-quickhelp-title` (inherits `bold`); its border is Emacs's `child-frame-border` face.
