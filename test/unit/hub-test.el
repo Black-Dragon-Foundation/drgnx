@@ -104,6 +104,39 @@ to OR-LOG, OPENROUTER_API_KEY unset."
     (drgnx-hub-test--wait #'ignore 0.3)
     (should (= (length drgnx-hub--subscribers) 1))))
 
+(ert-deftest drgnx-hub/a-subscriber-that-stops-reading-is-dropped ()
+  ;; a blocked write runs timers and filters meanwhile: each new event would write to the same stuck subscriber one
+  ;; level deeper (until excessive-lisp-nesting lands anywhere in the hub); it is dropped instead, and the hub serves
+  (drgnx-hub-test--with
+    (drgnx-hub-serve (drgnx-hub-socket))
+    (let* ((sub (make-process
+                 :name "stuck-sub" :noquery t :buffer nil
+                 :command (list (expand-file-name invocation-name invocation-directory) "--batch" "-Q" "--eval"
+                                (format "(let ((c (make-network-process :name \"s\" :family 'local :service %S :filter #'ignore)))
+                                           (process-send-string c \"{\\\"id\\\":0,\\\"method\\\":\\\"subscribe\\\"}\\n\")
+                                           (while t (accept-process-output nil 1)))"
+                                        (drgnx-hub-socket)))))
+           (blob (make-string (* 64 1024) ?x))
+           (ticker nil) (rescue nil) (nested nil))
+      (unwind-protect
+          (progn
+            (should (drgnx-hub-test--wait (lambda () drgnx-hub--subscribers) 10))
+            (signal-process sub 'SIGSTOP)                                   ; it reads nothing more
+            ;; without the drop, the innermost write would wait for it forever: let it go after 4 s (the test then fails)
+            (setq rescue (run-at-time 4 nil (lambda () (signal-process sub 'SIGCONT))))
+            (setq ticker (run-at-time 0 0.05 (lambda () (run-at-time 0 nil (lambda ()
+                                                                             (condition-case err (drgnx-hub--broadcast 'test (list :blob blob))
+                                                                               (excessive-lisp-nesting (setq nested err))))))))
+            (drgnx-hub-test--wait #'ignore 1)
+            (cancel-timer ticker)
+            (should (drgnx-hub-call-sync "ping" nil))
+            (should-not (seq-filter #'process-live-p drgnx-hub--subscribers))
+            (should-not nested))
+        (when (timerp ticker) (cancel-timer ticker))
+        (when (timerp rescue) (cancel-timer rescue))
+        (ignore-errors (signal-process sub 'SIGCONT))
+        (delete-process sub)))))
+
 (ert-deftest drgnx-hub/a-restarted-hub-takes-the-same-tokens ()
   (drgnx-hub-test--with
     (drgnx-hub-serve (drgnx-hub-socket))

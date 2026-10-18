@@ -121,6 +121,18 @@ debugs errors, and without SIGPIPE ignored the write itself would)."
         (process-send-string conn (concat (json-serialize (drgnx-hub--jsonable object)) "\n"))
       (error (ignore-errors (delete-process conn))))))
 
+(defun drgnx-hub--answer (conn object)
+  "Send OBJECT to CONN, a client of this hub.  A write to a client that stopped reading waits, and runs timers and
+filters meanwhile: the next event for it would write again one level deeper each time (until `excessive-lisp-nesting'
+lands anywhere in the hub).  So a client the last message to which is still being written is dropped instead (its
+Emacs reconnects).  Hub side only: a client's nested `drgnx-hub-call' is legitimate."
+  (if (process-get conn :sending)
+      (progn (message "drgnx hub: a client stopped reading; its connection is closed")
+             (delete-process conn))
+    (process-put conn :sending t)
+    (unwind-protect (drgnx-hub--send conn object)
+      (process-put conn :sending nil))))
+
 (defconst drgnx-hub--max-line (* 1024 1024)
   "The longest request line the hub reads (characters): a longer one closes its connection.")
 
@@ -145,7 +157,7 @@ With LIMIT, a line longer than LIMIT closes CONN: nothing after it is read."
 (defun drgnx-hub--malformed (conn line)
   "LINE from CONN is not JSON: when its id can be read, it is answered with an error (its sender would wait)."
   (when (string-match "\"id\"[ \t]*:[ \t]*\\(-?[0-9]+\\)[ \t]*[,}]" line)
-    (drgnx-hub--send conn (list :id (string-to-number (match-string 1 line)) :error (list :message "not a JSON object")))))
+    (drgnx-hub--answer conn (list :id (string-to-number (match-string 1 line)) :error (list :message "not a JSON object")))))
 
 ;;;; The hub side
 
@@ -430,21 +442,21 @@ for an agent that is not here (or exited) stays queued."
 (defun drgnx-hub--serve-request (conn json)
   (let ((id (plist-get json :id)) (method (plist-get json :method)))
     (pcase method
-      ("subscribe" (cl-pushnew conn drgnx-hub--subscribers) (drgnx-hub--send conn (list :id id :result t)))
-      ("shutdown" (drgnx-hub--send conn (list :id id :result t))
+      ("subscribe" (cl-pushnew conn drgnx-hub--subscribers) (drgnx-hub--answer conn (list :id id :result t)))
+      ("shutdown" (drgnx-hub--answer conn (list :id id :result t))
        ;; the exit of this hub, as it is now: a hub stopped meanwhile cancels it (it never reaches the next one)
        (let ((exit drgnx-hub--exit-function))
          (setq drgnx-hub--exit-timer (run-at-time 0.1 nil (lambda () (setq drgnx-hub--exit-timer nil) (funcall exit))))))
       (_ (let ((r (condition-case err (drgnx-hub--method method (plist-get json :params))
                     (error (list :error (error-message-string err))))))
            ;; a notification (no id) is answered by nothing
-           (when id (drgnx-hub--send conn (if (and (consp r) (eq (car r) :error) (stringp (cadr r)) (null (cddr r)))
-                                              (list :id id :error (list :message (cadr r)))
-                                            (list :id id :result r)))))))))
+           (when id (drgnx-hub--answer conn (if (and (consp r) (eq (car r) :error) (stringp (cadr r)) (null (cddr r)))
+                                                (list :id id :error (list :message (cadr r)))
+                                              (list :id id :result r)))))))))
 
 (defun drgnx-hub--broadcast (event data)
   (setq drgnx-hub--subscribers (seq-filter #'process-live-p drgnx-hub--subscribers))
-  (dolist (c drgnx-hub--subscribers) (drgnx-hub--send c (list :event (symbol-name event) :data data))))
+  (dolist (c drgnx-hub--subscribers) (drgnx-hub--answer c (list :event (symbol-name event) :data data))))
 
 (defun drgnx-hub--ping-socket (socket)
   "Does a hub answer on SOCKET?  (At most a second.)"
