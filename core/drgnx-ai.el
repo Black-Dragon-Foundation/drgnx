@@ -8,8 +8,8 @@
 ;; (.drgnx/ai.eld); roles (complete, edit, chat, embed, agent) are fallback chains of (PROVIDER . MODEL).
 ;; Keys come from where the user keeps them — the environment, then auth-source (the macOS Keychain and the Linux
 ;; keyring included, for commands the user ran) — when they are needed.  drgnx writes a key in one place only, that
-;; Keychain or keyring, and only when the user asks (`drgnx-ai-store-key'); never in a command line, a log or a file.  Subscription CLIs (Claude Code, Codex)
-;; are only launched: their logins are theirs.  See docs/guide/ai.md.
+;; Keychain or keyring, and only when the user asks (`drgnx-ai-store-key'); never in a command line, a log or a
+;; file.  Subscription CLIs (Claude Code, Codex) are only launched: their logins are theirs.  See docs/guide/ai.md.
 
 ;;; Code:
 (require 'cl-lib)
@@ -125,12 +125,18 @@ ai.eld never adds or changes one: a cloned repository must not choose where your
   (if (eq system-type 'darwin) 'macos-keychain-internet 'default))
 
 (defun drgnx-ai--secret-source-p (s)
-  "Non-nil when auth-source entry S is the macOS Keychain or the Secret Service (it may prompt or block)."
-  (or (memq s '(macos-keychain-internet macos-keychain-generic default))
-      (and (stringp s) (or (string-prefix-p "macos-keychain-" s) (string-prefix-p "secrets:" s)))))
+  "Non-nil when auth-source entry S is the macOS Keychain or the Secret Service (it may prompt or block): a symbol
+or string naming one, or a plist entry whose `:source' is one (`(:source (:secrets \"Login\"))')."
+  (cond ((consp s)
+         (let ((source (ignore-errors (plist-get s :source))))
+           (or (eq (car-safe source) :secrets) (eq (car s) :secrets)
+               (and source (drgnx-ai--secret-source-p source)))))
+        (t (or (memq s '(macos-keychain-internet macos-keychain-generic default))
+               (and (stringp s) (or (string-prefix-p "macos-keychain-" s) (string-prefix-p "secrets:" s)))))))
 
 (defun drgnx-ai--quiet-sources (sources)
-  "SOURCES that can be read without asking anything: plain files (a .gpg file, the Keychain or a keyring may prompt)."
+  "SOURCES that can be read without asking anything: plain file names (a .gpg file, the Keychain or a keyring may
+prompt; a plist entry is not known to be quiet, so it is left out)."
   (seq-filter (lambda (s) (and (stringp s) (not (string-suffix-p ".gpg" s)) (not (drgnx-ai--secret-source-p s))))
               sources))
 
@@ -142,9 +148,11 @@ ai.eld never adds or changes one: a cloned repository must not choose where your
 (defun drgnx-ai-key (id &optional interactive)
   "The key of provider ID, or nil: its environment variable, else auth-source (host of its URL).  Only when
 INTERACTIVE (a command the user ran) are sources that may prompt (.gpg files, the Keychain, the keyring) consulted;
-the Keychain and the keyring only in an interactive Emacs (a batch Emacs, the hub, never waits on an unlock prompt).
-auth-source's own cache is not used: it is keyed by the search alone, so a miss from a source that was left out
-would hide the key for hours."
+the Keychain and the keyring only in an interactive Emacs, and the keyring only when a D-Bus session bus can be
+reached.  A batch Emacs never opens them, but a `.gpg' file it is asked to read may still ask for its passphrase on
+standard input.  With `auth-sources' nil an interactive command still gets the system's store (the Keychain, the
+keyring).  auth-source's own cache is not used: it is keyed by the search alone, so a miss from a source that was left
+out would hide the key for hours."
   (let ((p (drgnx-ai-provider id)))
     (or (and (plist-get p :key-env) (let ((v (getenv (plist-get p :key-env)))) (and v (not (string-empty-p v)) v)))
         (gethash id drgnx-ai--keys)

@@ -190,7 +190,11 @@ keyring is looked at only when a D-Bus session bus can be reached (not over a ba
 without one gets no "invalid backend spec" noise in `*Messages*`.
 
 Sources that may ask for something (`.gpg` files, the Keychain, the keyring) are only read from commands you run in
-the drgnx app or an interactive Emacs (Edit with AI, Ask the Codebase, Choose, AI: Load Keys); background features
+the drgnx app or an interactive Emacs (Edit with AI, Ask the Codebase, Choose, AI: Load Keys); a batch Emacs never
+opens the Keychain or keyring (a `.gpg` file it is asked to read can still want its passphrase on standard input).
+Entries of `auth-sources` that are plists, such as `(:source (:secrets "Login"))`, count as the stores they name. And
+even with `auth-sources` set to nil, those commands still read the system's own store (the Keychain on a Mac, the
+keyring on Linux), because that is where onboarding puts the key. Background features
 (ghost text, the hub, agents) never read them — they use the environment or a key this drgnx read earlier. So that
 they have it after a restart, `drgnx open` (which the drgnx app runs) has drgnx read the keys of the providers your
 roles name once per start, a moment after its window shows (macOS may ask whether Emacs may use the Keychain).

@@ -267,6 +267,23 @@ Keychain and keyring are never reached."
           (should-not (drgnx-ai-key 'openrouter t))
           (should (equal searched (list (list plain 'macos-keychain-internet)))))))))
 
+(ert-deftest drgnx-ai/plist-secret-sources-are-not-quiet ()
+  ;; auth-sources may hold plists: (:source (:secrets "Login")) is the Secret Service, whatever the keyring's name
+  (let ((secrets '(:source (:secrets "Login"))) (keychain '(:source "macos-keychain-internet:login" :host t))
+        (file '(:source "~/.authinfo" :host t)))
+    (should (drgnx-ai--secret-source-p secrets))
+    (should (drgnx-ai--secret-source-p keychain))
+    (should-not (drgnx-ai--secret-source-p file))
+    (should (equal (drgnx-ai--quiet-sources (list secrets "~/.authinfo")) '("~/.authinfo")))
+    (should (equal (drgnx-ai--quiet-sources (list keychain "~/.authinfo")) '("~/.authinfo"))))
+  ;; …and a batch Emacs, which skips the secret stores, skips these too
+  (drgnx-ai-test--with root
+    (let* ((plain (concat root "authinfo")) (noninteractive t) (searched nil)
+           (auth-sources (list '(:source (:secrets "Login")) '(:source "macos-keychain-internet:login") plain)))
+      (cl-letf (((symbol-function 'auth-source-search) (lambda (&rest _) (push auth-sources searched) nil)))
+        (should-not (drgnx-ai-key 'openrouter t))
+        (should (equal searched (list (list plain))))))))
+
 (ert-deftest drgnx-ai/background-reads-never-open-the-keychain ()
   (drgnx-ai-test--with root
     (dolist (system '(darwin gnu/linux))
