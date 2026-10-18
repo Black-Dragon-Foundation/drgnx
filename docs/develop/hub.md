@@ -122,7 +122,7 @@ session's token is unregistered when its agent exits or is killed. Tokens have n
 names its `owner`, the pid of the Emacs that registered it (`drgnx-agents--gateway` sends its own: the agent is its
 child, and a hub's own sessions are the hub's), and the hub drops those whose owner is gone (`drgnx-hub--alive-p`: a
 zombie counts as gone) when it starts and on each tick (2 s) — a crashed editor never unregisters its agents' tokens.
-A registration without an owner stays until it is unregistered. A pid the system has given to a new process since
+A registration without an owner (kept before owners were) or with one that is not a pid stays until it is unregistered. A pid the system has given to a new process since
 keeps its registrations until that one ends too. Keys sent in `keys` live in the hub's
 memory only (`drgnx-gateway-set-key`, and `drgnx-ai--keys` for the agents it starts), never in a file. `drgnx-hub-ensure` (a command, the CLI's `drgnx hub start`)
 hands the hub the keys its Emacs already holds, asking no one (`drgnx-hub--held-keys`: a provider's environment

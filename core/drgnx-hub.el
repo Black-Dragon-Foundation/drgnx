@@ -246,10 +246,11 @@ that dies mid-write leaves the old file whole."
 (defun drgnx-hub--prune-registrations ()
   "Drop the registrations whose owner (the pid of the Emacs that registered them: its agents are its children) is
 gone — a crashed editor never unregisters its agents' tokens; then keep the rest.  One without an owner stays until it
-is unregistered.  How many went."
+is unregistered (those kept before owners were: they are tolerated, not guessed at), as does one whose owner is not
+a pid.  How many went."
   (let ((alive (make-hash-table)) (dead nil))
     (maphash (lambda (hash reg)
-               (when-let* ((owner (plist-get reg :owner)))
+               (when-let* ((owner (plist-get reg :owner)) ((natnump owner)))
                  (unless (eq (or (gethash owner alive) (puthash owner (if (drgnx-hub--alive-p owner) 'yes 'no) alive)) 'yes)
                    (push hash dead))))
              drgnx-gateway--registrations)

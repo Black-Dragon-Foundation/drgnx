@@ -305,6 +305,23 @@ to OR-LOG, OPENROUTER_API_KEY unset."
           (should (funcall has live))
           (should-not (string-search (secure-hash 'sha256 dead2) (with-temp-buffer (insert-file-contents file) (buffer-string)))))))))
 
+(ert-deftest drgnx-hub/odd-kept-registrations-never-stop-the-hub ()
+  ;; registrations kept before owners were (none), or with an owner that is not a pid, stay — on a tick too — and
+  ;; the hub starts; a file that is not an alist is logged and the hub starts
+  (drgnx-hub-test--with
+    (let ((file (expand-file-name "hub/registrations.eld" (drgnx-state-dir))))
+      (make-directory (file-name-directory file) t)
+      (with-temp-file file (prin1 '(("h-none" :job "j" :chain ((openrouter))) ("h-junk" :owner "x" :chain ((openrouter)))) (current-buffer)))
+      (drgnx-hub-serve (drgnx-hub-socket))
+      (should (drgnx-hub-call-sync "ping" nil))
+      (drgnx-hub-test--wait #'ignore 2.5)                         ; a tick
+      (should (gethash "h-none" drgnx-gateway--registrations))
+      (should (gethash "h-junk" drgnx-gateway--registrations))
+      (drgnx-hub-disconnect) (drgnx-hub-stop)
+      (with-temp-file file (insert "((\"h\" :chain nil) . 3)"))
+      (drgnx-hub-serve (drgnx-hub-socket))
+      (should (drgnx-hub-call-sync "ping" nil)))))
+
 (ert-deftest drgnx-hub/a-second-hub-exits ()
   (drgnx-hub-test--with
     (drgnx-hub-serve (drgnx-hub-socket))
