@@ -165,6 +165,10 @@ it, through its sentinel, the request upstream), never an error in a filter."
 
 ;;;; Forwarding
 
+(defun drgnx-gateway--clean (bytes)
+  "BYTES without control characters (a header value or name must not carry a line break into curl's config)."
+  (replace-regexp-in-string "[\000-\037\177]" "" bytes t t))
+
 (defun drgnx-gateway--quote (bytes)
   "BYTES as a curl config string."
   (concat "\"" (replace-regexp-in-string
@@ -245,7 +249,7 @@ it, through its sentinel, the request upstream), never an error in a filter."
                    (make-process
                     :name "drgnx-gw-curl" :command '("curl" "-K" "-") :connection-type 'pipe :coding 'binary :noquery t
                     :buffer nil :stderr err
-                    :filter (lambda (proc bytes) (drgnx-gateway--upstream-bytes proc conn bytes scan))
+                    :filter (lambda (proc bytes) (drgnx-gateway--upstream-bytes proc conn bytes scan (null (cdr steps))))
                     :sentinel (lambda (proc _e)
                                 (unless (process-live-p proc)
                                   (when (buffer-live-p err) (kill-buffer err))
@@ -257,9 +261,10 @@ it, through its sentinel, the request upstream), never an error in a filter."
     (process-put conn :curl curl)
     (ignore-errors (process-send-string curl config) (process-send-eof curl))))
 
-(defun drgnx-gateway--upstream-bytes (curl conn bytes scan)
+(defun drgnx-gateway--upstream-bytes (curl conn bytes scan last)
   "CURL's output so far: hold it until the head is whole, then (unless it calls for the next provider) pass the
-head and every later byte to CONN."
+head and every later byte to CONN.  LAST: no provider is left, so the provider's own refusal (its status, its
+retry-after) is the answer."
   (if (process-get curl :started)
       (progn (funcall scan bytes) (when (process-live-p conn) (drgnx-gateway--write conn bytes)))
     (let ((buf (concat (or (process-get curl :buf) "") bytes)) (go t))
@@ -271,14 +276,16 @@ head and every later byte to CONN."
            (t
             (setq go nil)
             (process-put curl :status status)
-            (if (or (>= status 500) (memq status drgnx-gateway--retry-statuses))
+            (if (and (not last) (or (>= status 500) (memq status drgnx-gateway--retry-statuses)))
                 (progn (process-put curl :retry t) (delete-process curl))
               (let* ((head (substring buf 0 end)) (rest (substring buf (+ end 4)))
-                     (ctype (and (string-match "^[Cc]ontent-[Tt]ype: *\\([^\r\n]+\\)" head) (match-string 1 head))))
+                     (ctype (and (string-match "^[Cc]ontent-[Tt]ype: *\\([^\r\n]+\\)" head) (match-string 1 head)))
+                     (retry-after (and (string-match "^[Rr]etry-[Aa]fter: *\\([^\r\n]+\\)" head) (match-string 1 head))))
                 (process-put curl :started t)
                 (when (process-live-p conn)
-                  (drgnx-gateway--write conn (format "HTTP/1.1 %d OK\r\nContent-Type: %s\r\nConnection: close\r\n\r\n"
-                                                     status (or ctype "application/json")))
+                  (drgnx-gateway--write conn (format "HTTP/1.1 %d OK\r\nContent-Type: %s\r\n%sConnection: close\r\n\r\n"
+                                                     status (or ctype "application/json")
+                                                     (if retry-after (format "Retry-After: %s\r\n" (drgnx-gateway--clean retry-after)) "")))
                   (unless (string-empty-p rest) (funcall scan rest) (drgnx-gateway--write conn rest))))
               (setq buf ""))))))
       (process-put curl :buf buf))))

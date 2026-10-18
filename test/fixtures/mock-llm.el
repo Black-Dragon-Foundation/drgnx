@@ -1,7 +1,8 @@
 ;;; mock-llm.el --- a scripted HTTP server standing in for every LLM provider in tests -*- lexical-binding: t -*-
 ;; Run as its own batch Emacs (a server in the test's Emacs could not answer while the test waits on curl):
 ;;   MOCK_LLM_SERVE=1 MOCK_LLM_PORT=N MOCK_LLM_SCRIPT=FILE [MOCK_LLM_LOG=FILE] emacs --batch -Q -l mock-llm.el
-;; FILE holds a list of answers (:path PREFIX [:match REGEXP] [:status 200] [:delay SECS] [:body STRING] [:once t]):
+;; FILE holds a list of answers (:path PREFIX [:match REGEXP] [:status 200] [:delay SECS] [:body STRING]
+;; [:headers ((NAME . VALUE)…) more response headers] [:once t]):
 ;; the first whose PREFIX starts the request path and whose REGEXP (if any) matches the body answers; :once answers
 ;; once and goes; :status 0 never answers (a hanging provider); no match answers 404.  :chunks ((DELAY . TEXT)…)
 ;; streams instead (the head at once, no length; each TEXT after its DELAY; then the close — or with :no-end, the
@@ -38,8 +39,10 @@
           (run-at-time (or (plist-get entry :delay) 0) nil
                        (lambda ()
                          (when (process-live-p proc)
-                           (process-send-string proc (format "HTTP/1.1 %d X\r\nContent-Type: application/json\r\nContent-Length: %d\r\nConnection: close\r\n\r\n"
-                                                             status (length out)))
+                           (process-send-string proc (format "HTTP/1.1 %d X\r\nContent-Type: application/json\r\nContent-Length: %d\r\nConnection: close\r\n%s\r\n"
+                                                             status (length out)
+                                                             (mapconcat (lambda (h) (format "%s: %s\r\n" (car h) (cdr h)))
+                                                                        (plist-get entry :headers) "")))
                            (process-send-string proc out)
                            (process-send-eof proc)))))))))
 

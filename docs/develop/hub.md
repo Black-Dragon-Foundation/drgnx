@@ -96,7 +96,8 @@ or `x-api-key` with `:auth x-api-key`. The request's `content-type`, `accept`, `
 Any error on the way answers the agent 500 `api_error` and closes the connection; one before curl starts (no curl, a
 file that cannot be written) moves to the next provider. Nothing goes
 to the agent until the upstream's head is whole: 1xx heads are skipped; 401, 402, 408, 409, 429, 5xx, or curl ending
-first, try the next step (a `fallback` event). Once the head went out there is no fallback: the rest streams through
+first, try the next step (a `fallback` event) — except at the last step, whose own refusal is the answer: its status, its
+`Retry-After` and its body pass through. Once the head went out there is no fallback: the rest streams through
 (`Connection: close`, no length) and the connection closes when curl ends. An agent that hangs up kills its curl.
 
 Spend: `drgnx-http-usage-scanner` follows the answer — SSE `message_start`/`message_delta` usage, or one JSON body's

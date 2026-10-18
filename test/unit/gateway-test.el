@@ -132,6 +132,22 @@ the gateway told."
       (should (string-search "\"model\":\"q\"" (drgnx-gw-test--log ol-log)))
       (should (equal (plist-get (cdr (assq 'fallback events)) :why) "HTTP 429")))))
 
+(ert-deftest drgnx-gateway/last-provider-429-passed-through-with-retry-after ()
+  ;; the last provider's own refusal is the answer: its status, its retry-after and its body, not a 502
+  (drgnx-gw-test--with '((:path "/api/v1/messages" :status 429 :headers (("Retry-After" . "17")) :body "{\"error\":\"slow down\"}")) '()
+    (let* ((token (drgnx-gateway-register '(:agent "a1" :chain ((openrouter . "m1")))))
+           (r (drgnx-gw-test--request port :token token)))
+      (should (= (plist-get r :status) 429))
+      (should (string-match-p "^Retry-After: 17\r?$" (plist-get r :head)))
+      (should (string-search "slow down" (plist-get r :body)))
+      (should-not (assq 'fallback events))
+      (should (drgnx-gw-test--settle (lambda () (assq 'request events))))
+      (should (= (plist-get (cdr (assq 'request events)) :status) 429)))
+    ;; earlier ones still pass the agent on to the next provider
+    (let* ((token (drgnx-gateway-register '(:chain ((openrouter . nil) (lmstudio . nil)))))
+           (r (drgnx-gw-test--request port :token token)))
+      (should (= (plist-get r :status) 502)))))
+
 (ert-deftest drgnx-gateway/a-dead-or-failing-provider-moves-on-too ()
   (drgnx-gw-test--with '((:path "/api/v1/messages" :status 503 :body "{}"))
       '((:path "/v1/messages" :body "{\"ok\":1}"))
