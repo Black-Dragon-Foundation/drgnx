@@ -15,6 +15,7 @@
 (require 'cl-lib)
 (require 'seq)
 (require 'drgnx-paths)
+(require 'drgnx-file)
 (require 'drgnx-groups)
 (require 'drgnx-timer)
 
@@ -42,6 +43,9 @@ After the restore the keys are in the frame parameter `drgnx-persist-extra', rea
 
 (defvar drgnx-persist-file nil "The state file; nil means $XDG_STATE_HOME/drgnx/workbench.eld.")
 (defconst drgnx-persist-version 2 "Format of the state file (1: one window; 2: :frames, one per window).")
+(defconst drgnx-persist--max-bytes 4194304
+  "The largest state file drgnx writes or reads, in bytes (4 MiB: a layout with many tabs and windows is far less).")
+(define-error 'drgnx-persist-newer "workbench.eld was written by a newer drgnx" 'file-error)
 (declare-function drgnx-frame-role "drgnx-frames")
 (defvar drgnx-persist--pending)
 (defvar drgnx-explorer--roots)
@@ -164,14 +168,35 @@ session never overwrites the desktop layout."
     (let ((file (or file (drgnx-persist--file)))
           (state (list :version drgnx-persist-version
                        :frames (mapcar #'drgnx-persist-state (or frames (drgnx-persist--frames))))))
-      (make-directory (file-name-directory file) t)
-      (with-temp-file file
-        (let ((print-length nil) (print-level nil)) (prin1 state (current-buffer))))
-      file)))
+      (condition-case nil
+          (progn (drgnx-file-update file (lambda (old)
+                                           (when (drgnx-persist--newer-p old) (signal 'drgnx-persist-newer nil))
+                                           state)
+                                    :on-unreadable 'backup :max-bytes drgnx-persist--max-bytes)
+                 file)
+        (drgnx-persist-newer (message "workbench.eld was written by a newer drgnx: not saved") nil)))))
+
+(defun drgnx-persist--newer-p (data)
+  "Non-nil if DATA, the state file as read, has a `:version' above `drgnx-persist-version'."
+  (let ((v (and (proper-list-p data) (plist-get data :version))))
+    (and (integerp v) (> v drgnx-persist-version))))
+
+(defun drgnx-persist--save-quietly (&optional frames-function)
+  "`drgnx-persist-save' for hooks: nothing prompts, and an error (a busy lock, a full disk, a file that cannot be
+written) is one message, never raised.  FRAMES-FUNCTION, when given, returns the frames to save."
+  (let ((inhibit-interaction t))
+    (condition-case err (drgnx-persist-save nil (and frames-function (funcall frames-function)))
+      (error (message "drgnx: workbench.eld not saved: %s" (error-message-string err)) nil))))
 
 (defun drgnx-persist--read (file)
-  (when (file-readable-p file)
-    (ignore-errors (with-temp-buffer (insert-file-contents file) (read (current-buffer))))))
+  "FILE's state, or nil when it is absent or empty.  An unreadable file (not plain data, too deep or too big) is
+not restored: one message, and the next save keeps a backup of it."
+  (let ((r (drgnx-file-read file :max-bytes drgnx-persist--max-bytes)))
+    (if (eq (plist-get r :status) 'unreadable)
+        (progn (message "drgnx: %s cannot be read (%s): the workbench is not restored; the next save keeps a backup of it"
+                        file (plist-get (plist-get r :problem) :text))
+               nil)
+      (plist-get r :data))))
 
 (defun drgnx-persist--strip (tree)
   "The window state TREE without its window parameters: a state file must not set any (drgnx saves
@@ -356,7 +381,7 @@ none, leaves that group as it is."
 (defun drgnx-persist--on-exit ()
   "Save from a graphical frame only (a batch run must never write the user's state)."
   (when-let* ((f (drgnx-persist--gui-frame)))
-    (ignore-errors (with-selected-frame f (drgnx-persist-save)))))
+    (with-selected-frame f (drgnx-persist--save-quietly))))
 
 (defvar drgnx-persist--saved-at-exit nil
   "Non-nil when a closing client already saved every window (its frames are being deleted).")
@@ -367,7 +392,7 @@ windows left (\[save-buffers-kill-terminal] in the last client), save every one 
   (unless noframe
     (let ((gui (seq-filter (lambda (f) (and (frame-live-p f) (display-graphic-p f) (not (frame-parent f)))) (frame-list))))
       (when (and gui (seq-every-p (lambda (f) (eq (frame-parameter f 'client) proc)) gui))
-        (ignore-errors (drgnx-persist-save nil (drgnx-persist--frames)))   ; a terminal window may be the selected one
+        (drgnx-persist--save-quietly #'drgnx-persist--frames)   ; a terminal window may be the selected one
         (setq drgnx-persist--saved-at-exit t)))))
 
 (defun drgnx-persist--on-delete-frame (frame)
@@ -379,7 +404,7 @@ windows left (\[save-buffers-kill-terminal] in the last client), save every one 
                             (frame-list))))       ; a child frame (a posframe) is no window of the workbench
     (if drgnx-persist--saved-at-exit
         (setq drgnx-persist--saved-at-exit nil)
-      (ignore-errors (drgnx-persist-save nil (list frame))))))
+      (drgnx-persist--save-quietly (lambda () (list frame))))))
 
 (defun drgnx-persist--restore-into (frame)
   "Restore the saved workbench into FRAME, once per frame, then run
