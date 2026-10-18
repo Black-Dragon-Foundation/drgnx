@@ -151,7 +151,7 @@
   ;; A daemon the app started has no ~/.local/bin on its PATH: ~/.local/bin/drgnx there and ~/.zprofile putting
   ;; ~/.local/bin on PATH is what Terminal sees — ok, not a warning.
   (let* ((home (file-name-as-directory (make-temp-file "drgnx-doctor-home" t)))
-         (process-environment (cons (concat "HOME=" home) process-environment))
+         (process-environment (append (list (concat "HOME=" home) "SHELL=/bin/zsh") process-environment))
          (zprofile (concat home ".zprofile")))
     (unwind-protect
         (cl-letf (((symbol-function 'executable-find) (lambda (&rest _) nil)))
@@ -171,6 +171,38 @@
       (delete-directory home t)))
   (cl-letf (((symbol-function 'executable-find) (lambda (p &rest _) (and (equal p "drgnx") "/x/drgnx"))))
     (should (drgnx-doctor--drgnx-on-path))))
+
+(ert-deftest drgnx-doctor/drgnx-on-path-reads-the-shells-profile ()
+  ;; The profile the installer writes follows the shell: zsh reads ~/.zprofile, any other login shell ~/.profile.
+  (let* ((home (file-name-as-directory (make-temp-file "drgnx-doctor-home" t)))
+         (line "export PATH=\"$HOME/.local/bin:$PATH\"\n"))
+    (unwind-protect
+        (cl-letf (((symbol-function 'executable-find) (lambda (&rest _) nil)))
+          (make-directory (concat home ".local/bin") t)
+          (write-region "" nil (concat home ".local/bin/drgnx"))
+          (let ((process-environment (append (list (concat "HOME=" home) "SHELL=/bin/bash") process-environment)))
+            (should (equal (drgnx-doctor--shell-profile) "~/.profile"))
+            (write-region line nil (concat home ".zprofile"))
+            (should-not (drgnx-doctor--drgnx-on-path))                       ; bash never reads ~/.zprofile
+            (write-region line nil (concat home ".profile"))
+            (should (drgnx-doctor--drgnx-on-path)))
+          (delete-file (concat home ".profile"))
+          (let ((process-environment (append (list (concat "HOME=" home) "SHELL=/usr/bin/zsh") process-environment)))
+            (should (equal (drgnx-doctor--shell-profile) "~/.zprofile"))
+            (should (drgnx-doctor--drgnx-on-path))
+            (write-region line nil (concat home ".profile") nil 'silent)
+            (delete-file (concat home ".zprofile"))
+            (should-not (drgnx-doctor--drgnx-on-path))))                     ; zsh never reads ~/.profile
+      (delete-directory home t)))
+  ;; The fix names the file.
+  (let ((fix (nth 2 (drgnx-doctor-check 'drgnx-on-path (drgnx-doctor-test--facts :drgnx-on-path nil
+                                                                                 :shell-profile "~/.profile")))))
+    (should (string-search ">> ~/.profile" fix))
+    (should-not (string-search "zprofile" fix)))
+  (let ((process-environment (cons "SHELL=/bin/bash" process-environment)))
+    (cl-letf (((symbol-function 'executable-find) (lambda (&rest _) nil))
+              ((symbol-function 'file-executable-p) #'ignore))
+      (should (equal (plist-get (drgnx-doctor--macos-facts) :shell-profile) "~/.profile")))))
 
 (ert-deftest drgnx-doctor/key-conflicts ()
   ;; The doctor reads the report the last drgnx session wrote (batch Emacs loads no modules).

@@ -46,8 +46,9 @@ machine at any time.
 8. **PATH:** if `~/.local/bin` is not on your `PATH`, it offers to add one line to `~/.profile` (`~/.zprofile`
    when your shell is zsh) — only when you answer yes; with `--yes` it only prints the line and that file.
 9. **Checks** it all: runs `drgnx doctor` with the Emacs it found or installed — after the app and the PATH line, so
-   it checks what is there. On a Mac `drgnx` counts as on PATH when `~/.local/bin/drgnx` exists and `~/.zprofile`
-   puts `~/.local/bin` on PATH (what a new Terminal sees), also in a drgnx the app started, whose own PATH lacks it.
+   it checks what is there. On a Mac `drgnx` counts as on PATH when `~/.local/bin/drgnx` exists and your shell's
+   profile (`~/.zprofile` for zsh, else `~/.profile`) puts `~/.local/bin` on PATH (what a new Terminal sees), also in
+   a drgnx the app started, whose own PATH lacks it.
 10. **macOS: opens drgnx** (the app just installed), so the first start's Welcome takes over — only in a desktop
    session: not over SSH, and not under `--yes` without a terminal.
 
@@ -194,7 +195,7 @@ one line per check, `OK`, `WARN` or `FAIL`, with a fix under anything that is no
 pgtk Emacs; on a Mac, which has no mutter, D-Bus or pgtk, only ImageMagick). On a Mac the doctor also checks that the
 drgnx app is installed (fix: `drgnx macos-app`), that Homebrew is there (also looked for in `/opt/homebrew/bin` and
 `/usr/local/bin`, in case it is not on PATH) and that the `drgnx` command is on PATH (fix: add `~/.local/bin` to PATH in
-`~/.zprofile`) — each only a warning. Details: [core.md](../develop/core.md#doctor-drgnx-doctorel).
+your shell's profile, `~/.zprofile` for zsh, else `~/.profile`) — each only a warning. Details: [core.md](../develop/core.md#doctor-drgnx-doctorel).
 
 ## Uninstall
 

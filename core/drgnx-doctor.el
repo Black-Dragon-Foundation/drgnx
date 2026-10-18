@@ -92,18 +92,24 @@ PLATFORM (`linux' or `macos'): only run on that platform, as `drgnx-platform' sa
   (require 'drgnx-macos)
   (list :macos-app (file-directory-p (expand-file-name "drgnx.app" drgnx-macos-app-dir))
         :brew (and (or (executable-find "brew") (seq-some #'file-executable-p drgnx-doctor--brew-programs)) t)
-        :drgnx-on-path (drgnx-doctor--drgnx-on-path)))
+        :drgnx-on-path (drgnx-doctor--drgnx-on-path)
+        :shell-profile (drgnx-doctor--shell-profile)))
+
+(defun drgnx-doctor--shell-profile ()
+  "The login profile the user's shell reads and install.sh writes the PATH line to: ~/.zprofile for zsh (macOS's
+default; it never reads ~/.profile), else ~/.profile."
+  (if (string-suffix-p "/zsh" (or (getenv "SHELL") "")) "~/.zprofile" "~/.profile"))
 
 (defun drgnx-doctor--drgnx-on-path ()
   "Does Terminal find the drgnx command?  It is on this Emacs's PATH; or — a daemon the app started lacks
-~/.local/bin on its PATH — ~/.local/bin/drgnx is there and a line of ~/.zprofile (not a comment) puts ~/.local/bin
-on PATH."
+~/.local/bin on its PATH — ~/.local/bin/drgnx is there and a line of the shell's profile
+(`drgnx-doctor--shell-profile', not a comment) puts ~/.local/bin on PATH."
   (or (and (executable-find "drgnx") t)
-      (let ((zprofile (expand-file-name "~/.zprofile")))
+      (let ((profile (expand-file-name (drgnx-doctor--shell-profile))))
         (and (file-exists-p (expand-file-name "~/.local/bin/drgnx"))
-             (file-readable-p zprofile)
+             (file-readable-p profile)
              (with-temp-buffer
-               (insert-file-contents zprofile)
+               (insert-file-contents profile)
                (re-search-forward (rx bol (* (not (any "#\n"))) "PATH=" (* nonl)
                                       (or "$HOME" "${HOME}" "~" (literal (directory-file-name (expand-file-name "~"))))
                                       "/.local/bin")
@@ -373,11 +379,12 @@ MODEL), as a sentence, or nil."
                                 (list 'warn "Homebrew not found" "install Homebrew (https://brew.sh), or run the installer again"))))
 
 (drgnx-doctor-define 'drgnx-on-path :group "drgnx" :platform 'macos
-                     :doc "The drgnx command is on PATH (for Terminal): on this PATH, or ~/.local/bin/drgnx with ~/.zprofile's PATH line"
+                     :doc "The drgnx command is on PATH (for Terminal): on this PATH, or ~/.local/bin/drgnx with the PATH line of your shell's profile (~/.zprofile for zsh, else ~/.profile)"
                      :check (lambda (f)
                               (if (plist-get f :drgnx-on-path) (list 'ok "drgnx is on PATH" nil)
                                 (list 'warn "drgnx is not on PATH: Terminal does not find the command"
-                                      "add ~/.local/bin to PATH: echo 'export PATH=\"$HOME/.local/bin:$PATH\"' >> ~/.zprofile  (then open a new Terminal)"))))
+                                      (format "add ~/.local/bin to PATH: echo 'export PATH=\"$HOME/.local/bin:$PATH\"' >> %s  (then open a new Terminal)"
+                                              (or (plist-get f :shell-profile) "~/.zprofile"))))))
 
 (dolist (tool '((ui-mutter :mutter "mutter" "the headless compositor of drgnx test --ui" linux)
                 (ui-dbus :dbus-run-session "dbus-run-session" "a private D-Bus per test session" linux)
