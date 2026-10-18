@@ -19,7 +19,6 @@
 (defconst drgnx-teardown--not-yet
   '((core/basics :until 15) (core/workbench :until 15)
     (editor/editing :until 16) (editor/sticky :until 16) (ui/look :until 16) (ui/smooth :until 16) (org/org :until 16)
-    (lang/eglot :until 17) (lang/grammars :until 17) (lang/markdown :until 17)
     (extra/blame :until 18) (extra/booster :until 18) (extra/completion :until 18) (extra/debug :until 18)
     (extra/format :until 18) (extra/guides :until 18) (extra/hunks :until 18) (extra/jump :until 18)
     (extra/keycast :until 18) (extra/llm :until 18) (extra/magit :until 18) (extra/mc :until 18)

@@ -1,6 +1,7 @@
 ;;; mod-grammars-test.el --- batch tests: tree-sitter grammars on request — a hint, never a prompt; installs as a job -*- lexical-binding: t -*-
 (require 'ert)
 (require 'drgnx)
+(load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
 (load (expand-file-name "modules/lang/drgnx-grammars" drgnx-dir) nil t)
 
 (defmacro drgnx-grammars-test--with (&rest body)
@@ -63,6 +64,16 @@ start `python-ts-mode', which on Emacs 31 asks to install a missing grammar (in 
                 ((symbol-function 'python-ts-mode) (lambda () (setq switched (current-buffer)))))
         (drgnx-grammars--installed '(python)))
       (should (eq switched b)))))
+
+(ert-deftest drgnx-grammars/turned-off-the-remaps-and-file-modes-are-back ()
+  ;; python's grammar "is there": the setup remaps python-mode and (for yaml) adds a file mode; the teardown takes both away
+  (let ((remaps (copy-alist major-mode-remap-alist)) (modes (copy-alist auto-mode-alist)))
+    (cl-letf (((symbol-function 'treesit-language-available-p) (lambda (lang &rest _) (memq lang '(python yaml)))))
+      (drgnx-test-with-modules '(lang/grammars) :strict t
+                               (should (eq (alist-get 'python-mode major-mode-remap-alist) 'python-ts-mode))
+                               (should (eq (cdr (assoc "\\.ya?ml\\'" auto-mode-alist)) 'yaml-ts-mode))))
+    (should (equal major-mode-remap-alist remaps))
+    (should (equal auto-mode-alist modes))))
 
 (ert-deftest drgnx-grammars/a-build-that-fails-is-a-failure ()
   ;; treesit-install-language-grammar turns its errors into warnings: the job checks the grammar loads

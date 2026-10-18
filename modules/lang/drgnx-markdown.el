@@ -18,10 +18,6 @@
 (require 'drgnx-registry)
 (require 'drgnx-jobs)
 
-(defvar markdown-fontify-code-blocks-natively)
-(defvar markdown-enable-math)
-(defvar markdown-header-scaling)
-(defvar markdown-display-remote-images)
 (defvar shr-blocked-images)
 (declare-function markdown-view-mode "markdown-mode")
 (declare-function shr-insert-document "shr")
@@ -152,10 +148,13 @@ replaces one still running), never waiting for it."
     buf))
 
 (defun drgnx-markdown--setup ()
-  (setq markdown-fontify-code-blocks-natively t
-        markdown-enable-math t
-        markdown-header-scaling t
-        markdown-display-remote-images nil)
+  ;; Set once markdown-mode is loaded: set before, the undo would leave the options unbound under the package
+  (eval-after-load 'markdown-mode
+    (drgnx-modules-with-owner
+      (drgnx-module-set 'markdown-fontify-code-blocks-natively t)
+      (drgnx-module-set 'markdown-enable-math t)
+      (drgnx-module-set 'markdown-header-scaling t)
+      (drgnx-module-set 'markdown-display-remote-images nil)))
   (autoload 'markdown-mode "markdown-mode" nil t)
   (autoload 'gfm-mode "markdown-mode" nil t)
   (add-to-list 'auto-mode-alist '("\\.\\(?:md\\|markdown\\|mkd\\|mdx\\)\\'" . markdown-mode))
