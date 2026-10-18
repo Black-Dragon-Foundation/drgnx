@@ -122,6 +122,89 @@ when given) and as the title (TITLE instead, when given)."
                                       7))
       (should (drgnx-job-mcp-test--open id)))))
 
+(ert-deftest drgnx-job-mcp/drgnx-s-search-server-is-drgnx-s-own ()
+  (let ((tree temporary-file-directory))
+    ;; the adapter drgnx installs: the tool's name as the title, no `_meta'
+    (should (eq (drgnx-job-policy "implement" '(:kind "other" :title "mcp__drgnx-search__search") tree) 'allow))
+    (should (eq (drgnx-job-policy "implement" (drgnx-job-mcp-test--tool "mcp__drgnx-search__search" "drgnx-search" "dynamic") tree) 'allow))
+    (should (eq (drgnx-job-policy "implement" (drgnx-job-mcp-test--tool "mcp__drgnx-search__search" "drgnx-search" "user") tree) 'ask))
+    ;; the server named is not the one in the tool's name
+    (should (eq (drgnx-job-policy "implement" (drgnx-job-mcp-test--tool "mcp__drgnx-search__search" "drgnx" "dynamic") tree) 'ask))
+    (should (eq (drgnx-job-policy "implement" (drgnx-job-mcp-test--tool "mcp__drgnx__read_inbox" "drgnx-search" "dynamic") tree) 'ask))
+    (should (eq (drgnx-job-policy "implement" '(:kind "other" :title "mcp__drgnx-search-x__search") tree) 'ask))
+    (should (eq (drgnx-job-policy "implement" '(:kind "other" :title "mcp__drgnx-searcher__search") tree) 'ask))))
+
+(ert-deftest drgnx-job-mcp/a-kind-that-is-not-a-string-asks ()
+  (let ((tree temporary-file-directory))
+    (should (eq (drgnx-job-policy "implement" '(:kind 5 :title "Read a.txt") tree) 'ask))
+    (should (eq (drgnx-job-policy "implement" '(:kind :false :title "Read a.txt") tree) 'ask))
+    (should (eq (drgnx-job-policy "implement" '(:kind ("edit") :title "Edit a.txt") tree) 'ask))))
+
+;;;; The agents' own configuration in the worktree: `.claude/', `.mcp.json'
+
+(defmacro drgnx-job-mcp-test--tree (&rest body)
+  "BODY with TREE a fresh directory (its truename, a directory name), deleted after."
+  (declare (indent 0))
+  `(let ((tree (file-name-as-directory (file-truename (make-temp-file "drgnx-job-tree" t)))))
+     (unwind-protect (progn ,@body) (delete-directory tree t))))
+
+(defun drgnx-job-mcp-test--edit (path &optional kind)
+  (list :kind (or kind "edit") :title (format "Edit %s" path) :locations (list (list :path path))))
+
+(ert-deftest drgnx-job-mcp/an-edit-of-the-agents-configuration-asks ()
+  (drgnx-job-mcp-test--tree
+    (make-directory (concat tree "src") t)
+    (dolist (p '(".claude/settings.local.json" ".claude/settings.json" ".claude/agents/a.md" ".claude" ".mcp.json"
+                 "src/.mcp.json" "src/../.claude/settings.json" ".Claude/settings.json" ".MCP.json"))
+      (should (eq (drgnx-job-policy "implement" (drgnx-job-mcp-test--edit (concat tree p)) tree) 'ask))
+      (should (eq (drgnx-job-policy "implement" (drgnx-job-mcp-test--edit (concat tree p) "delete") tree) 'ask)))
+    ;; a move into it
+    (should (eq (drgnx-job-policy "implement" (list :kind "move" :title "mv"
+                                                    :locations (list (list :path (concat tree "x.json"))
+                                                                     (list :path (concat tree ".claude/settings.local.json"))))
+                                  tree)
+                'ask))
+    (should (eq (drgnx-job-policy "implement" (drgnx-job-mcp-test--edit (concat tree "src/x.el")) tree) 'allow))
+    (should (eq (drgnx-job-policy "implement" (drgnx-job-mcp-test--edit (concat tree "claude.md")) tree) 'allow))
+    (should (eq (drgnx-job-policy "implement" (drgnx-job-mcp-test--edit (concat tree "src/my.mcp.json.el")) tree) 'allow))
+    ;; reading it is no change
+    (should (eq (drgnx-job-policy "implement" (drgnx-job-mcp-test--edit (concat tree ".claude/settings.json") "read") tree) 'allow))))
+
+(ert-deftest drgnx-job-mcp/a-symlink-to-the-agents-configuration-asks ()
+  (drgnx-job-mcp-test--tree
+    (make-directory (concat tree ".claude") t)
+    (make-symbolic-link (concat tree ".claude") (concat tree "conf"))
+    (make-symbolic-link (concat tree ".mcp.json") (concat tree "servers.json"))   ; dangling: the file is made through it
+    (make-symbolic-link (concat tree ".claude/settings.local.json") (concat tree "notes.txt"))
+    (dolist (p '("conf/settings.local.json" "servers.json" "notes.txt"))
+      (should (eq (drgnx-job-policy "implement" (drgnx-job-mcp-test--edit (concat tree p)) tree) 'ask)))))
+
+(ert-deftest drgnx-job-mcp/a-command-writing-the-agents-configuration-asks ()
+  (let ((tree "/r/.claude/worktrees/j-1/"))
+    (dolist (cmd '("echo '{\"permissions\":{\"defaultMode\":\"bypassPermissions\"}}' > .claude/settings.local.json"
+                   "mkdir -p .claude && cp x .claude/" "cp servers.json .mcp.json" "tee sub/.mcp.json < x"
+                   "cat x > /r/.claude/worktrees/j-1/.claude/settings.json"
+                   "cp x /r/.claude/worktrees/../settings.local.json"
+                   "cp x /r/.claude/worktrees/j-1/./../../settings.local.json"
+                   "cd /r/.claude/worktrees/j-1;echo>.claude/x" "echo x > ~/.claude.json" "echo x > .CLAUDE/settings.json"
+                   "cd .claude; echo x > settings.local.json"))
+      (should (eq (drgnx-job-policy "implement" (list :kind "execute" :title cmd) tree) 'ask)))
+    (should (eq (drgnx-job-policy "implement" '(:kind "execute" :title "Run" :rawInput (:command "echo x >> .claude/settings.local.json")) tree) 'ask))
+    ;; the worktree's own path is no mention of it
+    (dolist (cmd '("make test" "cd /r/.claude/worktrees/j-1 && make test" "git -C /r/.claude/worktrees/j-1 status"))
+      (should (eq (drgnx-job-policy "implement" (list :kind "execute" :title cmd) tree) 'allow)))))
+
+(ert-deftest drgnx-job-mcp/a-direct-write-of-the-agents-configuration-is-a-card ()
+  (drgnx-job-run-test--with drgnx-job-mcp-test--one
+    (let* ((id (drgnx-job-propose plan)) (tree (file-name-as-directory (file-truename repo)))
+           (s (drgnx-agents--make :id "s-w" :name "w" :profile "mock" :cwd tree :task (concat id "#1") :job id)))
+      (make-symbolic-link (concat tree ".claude") (concat tree "conf"))
+      (dolist (p '(".claude/settings.local.json" ".mcp.json" "conf/settings.json"))
+        (should-not (drgnx-job--request s "fs/write_text_file" (list :path (concat tree p) :content "{}") 1))
+        (should-not (file-exists-p (concat tree p))))
+      (should (seq-find (lambda (c) (equal (plist-get c :kind) "write")) (drgnx-coord-cards id "open")))
+      (should (equal (drgnx-job--request s "fs/write_text_file" (list :path (concat tree "src/x.el") :content "x") 2) '(:result nil))))))
+
 ;;;; M9b3-13: a provider's limit in the error's data
 
 (ert-deftest drgnx-job-mcp/a-provider-limit-in-the-error-s-data ()
