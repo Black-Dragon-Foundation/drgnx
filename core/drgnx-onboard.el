@@ -1032,12 +1032,13 @@ Code extension's own copy does not count), Node (only when the adapter is missin
 
 (defun drgnx-onboard--on-path (tool)
   "When TOOL is installed where this Emacs's PATH does not reach (~/.local/bin, beside brew), put its directory on
-the PATH of this Emacs (the agent's `#!/usr/bin/env node' needs it): the directory added, else nil."
+the PATH of this Emacs (the agent's `#!/usr/bin/env node' needs it): the directory added, else nil.  It goes at the
+end: a program you chose earlier on the PATH keeps winning."
   (when-let* ((program (drgnx-onboard--program tool))
               (dir (directory-file-name (file-name-directory program)))
               ((not (executable-find (file-name-nondirectory program)))))
-    (add-to-list 'exec-path dir)
-    (setenv "PATH" (concat dir path-separator (getenv "PATH")))
+    (add-to-list 'exec-path dir t)
+    (setenv "PATH" (concat (getenv "PATH") path-separator dir))
     dir))
 
 (defun drgnx-onboard--claude-login-state (claude)

@@ -1011,4 +1011,20 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
   (should (string-match-p "Claude" (plist-get (alist-get 'agents drgnx-onboard--steps) :doc)))
   (should (eq (plist-get (alist-get 'agents drgnx-onboard--steps) :run) #'drgnx-onboard--agents-step)))
 
+(defun drgnx-onboard-test--adapter-in-local-bin (root home)
+  "Put the adapter where this Emacs's PATH does not reach: ROOT's tpl copy into HOME/.local/bin."
+  (make-directory (concat home ".local/bin") t)
+  (copy-file (concat root "tpl/claude-agent-acp") (concat home ".local/bin/claude-agent-acp") t)
+  (set-file-modes (concat home ".local/bin/claude-agent-acp") #o755)
+  (concat home ".local/bin"))
+
+(ert-deftest drgnx-ai-onboard/brew-dir-is-appended-to-path ()
+  ;; A directory onboarding finds a tool in goes behind the PATH you have, never in front of a program you chose.
+  (drgnx-onboard-test--claude 'macos
+    (let ((dir (drgnx-onboard-test--adapter-in-local-bin root home)))
+      (should (equal (drgnx-onboard--on-path 'claude-agent-acp) dir))
+      (should (equal (car exec-path) bin))
+      (should (equal (car (last exec-path)) dir))
+      (should (equal (getenv "PATH") (concat bin path-separator dir))))))
+
 ;;; onboard-test.el ends here

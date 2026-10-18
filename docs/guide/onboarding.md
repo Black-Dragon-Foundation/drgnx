@@ -129,8 +129,8 @@ When something is missing it asks once, listing every command, and runs nothing 
 The commands that need no password run as drgnx jobs with a log and progress in the Welcome (`C-g` stops them). If
 one fails, the result says why (the log's last line), where the log is, and how to retry — run the step again, or
 the command in a terminal; a new run skips what is installed. Where the adapter or Node ends up outside your
-`PATH` (`~/.local/bin`, or beside Homebrew), drgnx adds that directory to the `PATH` of the running Emacs and says so;
-put it in your shell's `PATH` too for the next start. The agent panel's sessions run in drgnx itself and see it at
+`PATH` (`~/.local/bin`, or beside Homebrew), drgnx adds that directory to the end of the `PATH` of the running Emacs (a program you chose earlier on the
+`PATH` keeps winning) and says so; put it in your shell's `PATH` too for the next start. The agent panel's sessions run in drgnx itself and see it at
 once; the **hub** (durable sessions, [agents.md](agents.md#the-hub-and-the-gateway)) keeps the `PATH` it started with:
 if one ran before this step (`drgnx hub status`), run `drgnx hub stop` — it ends the hub's durable sessions — and the
 next durable session starts a hub that finds the new programs.
