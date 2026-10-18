@@ -549,6 +549,9 @@ usage: drgnx PATH…             open folders and files in drgnx, like code . (d
        drgnx search query ROOT QUESTION… [-k N]
                                the best chunks as PATH:LINE: first line (the notice, if any, on stderr)
        drgnx search mcp [ROOT] serve the `search' tool to an agent over stdio (MCP; ROOT default: here)
+       drgnx coord mcp --kind KIND
+                               serve the coordination tools to an agent outside drgnx (claude, codex, zed…)
+                               over stdio (MCP), started in its project folder (docs/guide/agents.md)
        drgnx safe              Emacs with drgnx's core only: no modules, no packages
        drgnx bisect [-- CMD…]  find the module that breaks (CMD fails, or you say so)
        drgnx service-unit [DIR]
@@ -590,6 +593,16 @@ case "${1:-help}" in
                      -l drgnx-search-mcp -f drgnx-search-mcp-main -- "$@" ;;
           *) echo "usage: drgnx search index ROOT [--rebuild] | query ROOT QUESTION… [-k N] | mcp [ROOT]" >&2; exit 2 ;;
         esac ;;
+  coord) shift
+        # an agent outside drgnx: exec, so the server's parent is the agent (its identity); no cd (the folder it
+        # starts in is where the agent works); a drgnx session's identity in the agent's shell is not inherited
+        if [[ "${1:-}" == mcp && "${2:-}" == --kind && "$#" -eq 3 && "$3" =~ ^[a-z0-9][a-z0-9_-]{0,31}$ ]]; then
+          unset DRGNX_AGENT DRGNX_JOB DRGNX_TASK
+          trap '' PIPE
+          DRGNX_AGENT_KIND="$3" exec "$(emacs_bin)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
+               -l drgnx-coord-mcp -f drgnx-coord-mcp-main
+        fi
+        echo "usage: drgnx coord mcp --kind KIND   (KIND: a short lower-case name: claude, codex, zed…)" >&2; exit 2 ;;
   keys) shift
         if [[ "${1:-}" != diff ]]; then
           echo "usage: drgnx keys diff --against gryphn DIR   (or set DRGNX_GRYPHN_DIR to gryphn's emacs/ directory)" >&2

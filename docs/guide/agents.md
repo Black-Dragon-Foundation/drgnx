@@ -197,6 +197,51 @@ minutes the task is free again (the job window, M9b.4, will show it; messages an
 too). **Jobs** put several agents to work through a plan you approve, each task in its own worktree, reviewed and
 merged into the job's branch: [jobs.md](jobs.md). Developer details: [coordination.md](../develop/coordination.md).
 
+## Agents outside drgnx
+
+Agents you run outside drgnx can report to it too: Claude Code in a terminal or in Zed, Codex, gry workers and their
+subagents. Give the agent drgnx's coordination server as one more MCP server (stdio), with `KIND` set to the kind of
+agent (`claude`, `codex`, `zed`, …: a short lower-case name):
+
+- command: `<checkout>/bin/drgnx`
+- arguments: `coord mcp --kind KIND`
+
+For Claude Code, that is `claude mcp add drgnx -- <checkout>/bin/drgnx coord mcp --kind claude`. For Codex, it is a
+`[mcp_servers.drgnx]` table in `~/.codex/config.toml` with `command` and `args` set as above. Each agent's settings
+page can add it for you.
+
+The agent must start the server in its project folder. drgnx takes the folder the server starts in (its git
+worktree) as the place the agent works. A server started in your home folder, or at `/`, can say hello, but its
+file reports are refused.
+
+The agent then gets four tools to report with:
+- **hello**: who it is and where it works;
+- **report_edit**: the files it changed (paths only);
+- **report_test**: the tests it ran and how they went;
+- **ask_user**: a question that waits for you, never a prompt.
+
+It also gets the messages and the decision log, like drgnx's own agents. Its reports are recorded now, and the Work
+cockpit is where they will show. **Coming with the Work cockpit** (later in this milestone): each reporting agent
+shown with its name, folder and branch, the files it changed with their diff since it said hello, its test runs and
+its questions. You will answer a question there, and your answer will reach the agent as a message.
+
+What an outside agent cannot do:
+- **pass for another agent.** Its identity comes from its own process (`ext:KIND:PID-HASH`: its process id and when
+  that process started), never from what it says. A name it gives is only a label.
+- **touch drgnx's jobs.** It cannot claim, update or finish a job's tasks, or record decisions; it is told to report
+  its work instead. It asks you with ask_user rather than the escalate tool of drgnx's own job agents; anything else it sends you is a
+  message, never a question waiting on you, whatever it says.
+- **report a file outside the folder it was started in** (that folder's git worktree), a path with `..`, a symlink
+  that leads out, or a remote file.
+- **flood you.** It may make 20 reports and messages a minute together (`drgnx-coord-report-rate`). Past that, they
+  are held, and nothing is written. One card an hour tells you which agent is reporting too fast. Its questions and
+  messages are cut to 2,000 characters, and characters that hide or reorder text (controls, BiDi overrides) become
+  spaces.
+
+**Coming with the Work cockpit:** an agent that does not report — no drgnx server in its config, or it never says
+hello — will still show there when it works in a git worktree, with the worktree's changes and its ledger, marked
+**not reporting**.
+
 ## Plans and the board
 
 Imported plan checklists (Onboarding: Import Projects, with TODOs) remember where they came from (`:PLAN_FILE:`,

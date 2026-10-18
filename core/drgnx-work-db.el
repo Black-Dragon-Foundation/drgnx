@@ -43,7 +43,18 @@
     ;; M9b.4: what needs the user, with its actions (core/drgnx-job.el)
     (4 "create table if not exists card (id integer primary key, job text, task text, kind text, title text, data text,
         state text, at real, settled_at real, choice text)"
-       "create index if not exists card_job on card(job, state)"))
+       "create index if not exists card_job on card(job, state)")
+    ;; M12f: what happened (the event log), who is working (the agent registry), what the user reviewed (core/drgnx-coord.el)
+    (5 "create table if not exists event (id integer primary key autoincrement, at real, agent text, job text, task text, kind text,
+        summary text, data text)"
+       "create index if not exists event_at on event(at)"
+       "create index if not exists event_agent on event(agent, id)"
+       "create index if not exists event_job on event(job, id)"
+       "create index if not exists event_kind on event(kind, id)"
+       "create table if not exists agent (id text primary key, kind text, name text, cwd text, worktree text, branch text,
+        base text, plan text, task text, pid integer, started real, seen real)"
+       "create table if not exists review_mark (agent text, path text, state text, hash text, at real,
+        primary key (agent, path))"))
   "Migrations: (VERSION SQL…), applied in order to a database below VERSION.")
 
 (defconst drgnx-work-db-schema-version (car (car (last drgnx-work-db--steps))))
@@ -168,6 +179,15 @@ and the commits that implement it (newest first)."
 
 (defun drgnx-work-nodes (kind)
   (mapcar #'drgnx-work--row-node (sqlite-select (drgnx-work-db) (concat drgnx-work--select " where kind = ?") (list (symbol-name kind)))))
+
+(defun drgnx-work-nodes-of-kinds (kinds)
+  "The nodes of any of KINDS (symbols), in one query, by kind, path and order."
+  (when kinds
+    (mapcar #'drgnx-work--row-node
+            (sqlite-select (drgnx-work-db)
+                           (format "%s where kind in (%s) order by kind, path, ord, line" drgnx-work--select
+                                   (mapconcat (lambda (_) "?") kinds ", "))
+                           (mapcar #'symbol-name kinds)))))
 
 (defun drgnx-work-forget-orphan-commits ()
   "Forget the commits no edge links any more (commits belong to no file: several ledgers may name one)."

@@ -7,7 +7,7 @@ Several agents on one project share what they decide, not only what they edit. T
 **stale beliefs**: one agent changes the picture (a decision, a moved file, a feature dropped) and the others keep
 working from the old one. So the shared state is explicit, versioned, and **enforced**.
 
-## The store (`core/drgnx-coord.el`, `work.db` schema 3)
+## The store (`core/drgnx-coord.el`, `work.db` schema 5)
 
 | Table | What |
 |---|---|
@@ -17,6 +17,9 @@ working from the old one. So the shared state is explicit, versioned, and **enfo
 | `decision` | n, kind (`build` `wait` `wont-build` `replaces`), subject, task, paths, reason, author, status (`current` `proposed` `replaced`), replaces, at, ver |
 | `message` | id, job, sender, recipient, text, state (`queued` `delivered` `read` `acted` `held`), reason, at, delivered, read, acted |
 | `card` | id, job, task, kind, title, data (a printed plist: the waiting session, the request, …), state (`open` `settled`), at, settled_at, choice (schema 4) |
+| `event` | id, at, agent, job, task, kind (`drgnx-coord-event-kinds`), summary (one line, at most 200 characters), data (a printed plist) — what happened, oldest first (schema 5) |
+| `agent` | id, kind, name, cwd, worktree, branch, base, plan, task, pid, started, seen — who works, and where (schema 5) |
+| `review_mark` | agent, path, state (`accepted` `pending`), hash, at — the user's review marks on an agent's changes (schema 5) |
 | `meta` | `log-version` (the decision log's version), `seen:AGENT` (the version an agent last read) |
 
 - **Tasks:** statuses `pending ready claimed running needs-input in-review done failed dropped`. A task without
@@ -41,6 +44,48 @@ working from the old one. So the shared state is explicit, versioned, and **enfo
   reason (`queue full`, `too many between these two`); the user's own Emacs, which sends with no sender, counts as the sender
   `user` for both that limit and the replies it makes. Escalations to `user` are never held as a full queue.
 
+### Events, the registry and review marks
+
+- **Events:** `drgnx-coord-event-add` (`:agent :job :task :kind :summary :data :at`) and `drgnx-coord-events` (`:since :agent
+  :job :task :kinds :limit`, oldest first, ids after `:since`: a viewer keeps the last id and asks for what is newer;
+  indexed by `at`, `(agent, id)`, `(job, id)` and `(kind, id)`). The writers above add their event in the **same
+  transaction** as the change, so the two are there together or not at all: claim (`claim`, only when the task
+  was `ready`: a holder's renewal writes nothing), release-stale (`release`), set-status and force-status (`status`),
+  decide (`decision`), send (`message`; to `user`, `question` when asked with `:question`, as `ask_user` does, or —
+  from drgnx's own agents, never from an `ext:` one — with a text starting `[escalation]`), card-create and
+  card-settle (`card`; an `ask` card is a `question`, see below), card-set (`card`, when its state changes: a reopened
+  card shows) and job-set (`job`, when its status changes). A held write (behind the log) or a refused claim writes
+  nothing. `edit`, `test`, `start`, `stop`, `review`, `accept`, `revert`, `answer` and `comment` are written by their
+  own sources through `drgnx-coord-event-add` — for the hub's sessions and jobs (turns, edits, permissions, verdicts,
+  merges), the hub ([hub.md](hub.md#events)).
+- **What `data` may hold:** small, readable data — a plist of strings, numbers, symbols and lists of those; anything
+  else (a buffer, a function, a hash table) is an error. It is printed with `print-length` 100 (a longer list keeps its
+  first 100 elements and ends in the symbol `...`) at any depth; over 4096 characters only `(:truncated t :size N)` is kept. It is read back with `read-eval` off. An `edit` event
+  carries a path, a hash and line counts — never file contents or environment values.
+- **Questions:** one model for everything that waits on the user. A `question` event is a message to `user` that asks
+  (`drgnx-coord-send` with `:question` — `ask_user` — or an escalation, a text starting `[escalation]`, from drgnx's own
+  agents: an agent outside drgnx (`ext:…`) asks only through `ask_user`, so its messages are never questions, whatever
+  they say; data `(:message ID …)`) or an `ask` card (data `(:card ID)`). An `answer` event closes
+  it: its `data` holds `(:question EVENT-ID)`. Settling an `ask` card writes that answer itself (by `user`);
+  `drgnx-coord-open-questions` lists the questions with no answer.
+- **Retention:** `drgnx-coord-events-prune` (`:before`, seconds since the epoch; default
+  `drgnx-coord-event-retention-days`, 30, ago) forgets older events except `question`, `answer` and `decision`.
+  `drgnx-coord-events-prune-daily` runs it at most once in 24 hours (stamp in `meta` as `event-pruned`) and never
+  signals (a locked database waits for the next call, any other error is a message): meant for a periodic tick. On
+  every call it also holds the log to `drgnx-coord-event-max-rows` (100,000), the oldest going first (questions,
+  answers and decisions apart), so a busy day is bounded before the next prune. Event ids are `autoincrement`: an id is
+  never given twice, even after the newest rows were pruned.
+- **Busy database:** `work.db` opens with a 5-second busy timeout, so a writer waits for another Emacs's write lock for up
+  to 5 seconds. After that SQLite reports the database locked. Claims, cards, messages, decisions and
+  `drgnx-coord-event-add` then signal (the change did not happen: say so). Telemetry — `drgnx-coord-agent-seen` and
+  `drgnx-coord-event-add-best-effort`, for the edit and test writers — returns nil instead: losing a heartbeat or an
+  edit note must not fail the work it describes. A bad kind or bad `data` still signals.
+- **Registry:** `drgnx-coord-agent-register` (an id is required; what is not given is kept, and when the agent started;
+  `:clear` lists fields to set to NULL), `drgnx-coord-agent`, `drgnx-coord-agents`, `drgnx-coord-agent-seen` (stamps an
+  agent alive now and returns the stamp).
+- **Review marks:** `drgnx-coord-review-mark AGENT PATH STATE HASH` and `drgnx-coord-review-marks AGENT` (alist
+  path → `(:state :hash :at)`). Accepting or reverting is a review layer only: nothing in the files changes.
+
 ## The tools (`core/drgnx-mcp.el`, `core/drgnx-coord-mcp.el`)
 
 `drgnx-mcp-serve NAME TOOLS` is a small MCP server (stdio, protocol 2025-06-18: initialize, ping, tools/list,
@@ -50,7 +95,8 @@ string or a value (sent as JSON); its errors are `isError` results. `drgnx-mcp-s
 Every agent session gets the coordination server in ACP's `mcpServers` (`drgnx-agents--mcp-servers`, from
 `drgnx-coord-mcp-server-spec`): one batch Emacs per agent, its identity in its environment (`DRGNX_AGENT` = the
 session's **id**, `s-…` — a name like "claude · drgnx" repeats across hubs and editors — `DRGNX_JOB`, `DRGNX_TASK`,
-and drgnx's data and state dirs). Without `DRGNX_AGENT` it only reads. Messages are addressed to a session's id
+and drgnx's data and state dirs). Without `DRGNX_AGENT` it only reads. An agent outside drgnx sets
+`DRGNX_AGENT_KIND` instead and gets an identity of its own (below). Messages are addressed to a session's id
 (or its name).
 
 | Tool | Does |
@@ -58,8 +104,8 @@ and drgnx's data and state dirs). Without `DRGNX_AGENT` it only reads. Messages 
 | `list_agents` | the job's agents and their tasks: the hub's sessions of the job (`agents/list`, when a hub runs), else the job's tasks that have an agent |
 | `send_message {to, text, seen_version}` | queue a message (never interrupts); `to` must be `user`, an agent of the job's tasks or a session the hub runs (any job's; id or name — a name is stored as the session's id), else the tool errors and nothing is written |
 | `read_inbox` | unread messages (they become read) |
-| `ack {id}` | acted on (only a message addressed to the caller) |
-| `read_decisions {since}` | the log since a version, and the current version (recorded as the agent's `seen`) |
+| `ack {id}` | acted on (only a message addressed to the caller); the hub is told only when the state moved |
+| `read_decisions {since}` | the log since a version, and the current version (recorded as the agent's `seen`, written only when it moved) |
 | `record_decision {kind, subject, task?, paths?, reason, replaces?, seen_version}` | current inside its own task, else proposed |
 | `claim_task`, `update_task`, `complete_task` `{task, …, seen_version}` | the lease and the status; `update_task` takes `running`, `needs-input`, `in-review` (and `failed` outside a job), nothing else |
 | `task_status {job?}` | the job's tasks |
@@ -69,15 +115,107 @@ and drgnx's data and state dirs). Without `DRGNX_AGENT` it only reads. Messages 
 A held write answers `HELD: the decision log moved on — read these changes, then retry with seen_version N.` and
 the changes as JSON. After a write the server tells the hub (`coord/notify`, never waiting) so delivery is prompt.
 
+### Reports, and agents outside drgnx
+
+Every agent — drgnx's own and agents outside it (Claude Code in a terminal or Zed, Codex, gry workers, subagents) —
+reports what it does with four more tools. Their events feed the Work cockpit:
+
+| Tool | Does |
+|---|---|
+| `hello {name?, cwd?, branch?, plan?, task?}` | registers the agent (`drgnx-coord-agent-register`): kind, name, cwd, worktree (`git rev-parse --show-toplevel` of the cwd), branch (given, else the cwd's), plan, task, pid. `base` is `git rev-parse HEAD` of the cwd at its first hello, kept by later ones (taken again only when the agent shows up in another worktree). A first hello writes a `start` event. Answers `{agent, version, cwd, worktree, base}` (the identity and the decision log's version), and a `note` when the identity is a fallback |
+| `report_edit {paths, summary?}` | an `edit` event, data `(:root ROOT :paths (RELATIVE…) [:more N])`. `paths` is best an array of strings. A string takes one path per line; only a string with no newline is split on commas (so a name with a comma needs the array or lines). At most 1,000 paths; more are refused before any is looked at. Each must lie inside the agent's worktree (else its cwd), or the whole report is refused and nothing is written |
+| `report_test {command, passed?, failed?, summary?}` | a `test` event, data `(:command :passed :failed)`. The counts must be whole numbers, 0 or more. With no summary, the summary is `N passed, M failed: COMMAND` |
+| `ask_user {question, options?, task?}` | a message to `user` starting `[escalation]`, sent with `:question t`, so its event is a `question` and `drgnx-coord-open-questions` lists it. Options are an array of strings (best; `items` declared) or one per line, at most 20; an option holding a `\|` (the separator drgnx writes them with) is refused. Any line of the question starting `Options:` is dropped: that line is drgnx's to write. For one of drgnx's agents, a task it holds (`task`, else `DRGNX_TASK`) goes to `needs-input`. The answer comes back as a message (`read_inbox`) |
+
+**Identity.**
+- **drgnx's own agents:** `DRGNX_AGENT`, trusted as before. drgnx sets it in the environment of the server it gives
+  each session, and nothing checks it. Binding it to a token, as the gateway binds an agent's key, is deferred.
+- **Agents outside drgnx:** when `DRGNX_AGENT` is empty and `DRGNX_AGENT_KIND` is set (a short lower-case name:
+  `claude`, `codex`, `zed`…), the server speaks for an agent outside drgnx, as `ext:KIND:PID-HASH`. PID is the
+  agent's process: the server's parent (`(alist-get 'ppid (process-attributes (emacs-pid)))`). HASH is 6 hex digits
+  of a SHA-1 of that process's start time, to the second (`process-attributes`' `start`; the boot time it is
+  computed from jitters), so a pid used again by another process later is another agent. Both are read once, when
+  the server starts (`drgnx-coord-mcp-main`), while its parent is surely the agent.
+- **Fallbacks**, each said in `hello`'s `note`:
+  - no start time: `ext:KIND:PID`;
+  - no parent (no `ppid`, or `1`): `ext:KIND:<the server's own pid>`.
+- The identity lives only as long as the server process.
+- **No tool takes an identity:** every tool refuses an `agent`, `from`, `sender`, `as` or `identity` argument.
+  `hello`'s `name` is a label the user sees, never who the agent is.
+
+**What an outside agent may write:** only its own events and messages, within the report limit.
+- `claim_task`, `update_task`, `complete_task` and `record_decision` answer `jobs are drgnx's: report your work with
+  report_edit`.
+- `escalate` answers `ask the user with ask_user`.
+- `send_message` counts against the same limit as the reports.
+- A `task` that names a job's task (`JOB#N`) is refused in `hello` and `ask_user`.
+- Its events and messages carry no job and no task, even when `DRGNX_JOB` or `DRGNX_TASK` leaked into its
+  environment. `list_agents` and recipient lookup ignore a leaked job too.
+
+**Text.**
+- Questions and message texts (`ask_user`, `send_message`, `escalate`'s subject and text) are trimmed and cut to
+  2,000 characters; the answer of `ask_user` and `send_message` then has `cut`: how many characters were left out.
+- `drgnx-coord-control-chars` (C0 controls, DEL, the C1 controls U+0080–U+009F and the BiDi controls U+061C, U+200E–U+200F,
+  U+202A–U+202E, U+2066–U+2069) become spaces, except newline and tab.
+- Event summaries, names, branches and plans lose newlines and tabs too: one line, at most 200 characters (a name
+  at 80). C1's `drgnx-coord--one-line` strips the same set.
+
+**Paths.** The root comes from the server's process, never from an argument: the git worktree of the folder the
+agent started the server in, else that folder (`drgnx-coord-mcp--home`, found once per server). A git toplevel that is
+the home folder itself (a repository of dotfiles) counts as no worktree: the folder is taken, so projects under `~`
+work. `hello`'s `cwd` must lie inside it; a later hello without a `cwd` keeps the registered one.
+
+`report_edit` is refused outright when the root is a file system root, the home folder (`$HOME`) or a folder above
+it. That is a server started in the wrong place, and the answer says to start it in the project folder. `hello`
+still registers.
+
+A reported path is refused when it:
+- is blank or has one of `drgnx-coord-control-chars`;
+- has a `..` component;
+- is a remote (TRAMP) name such as `/ssh:host:…` or `/sudo::…`, or any absolute name whose first component holds
+  a `:` (refused before any file handler runs, so nothing connects);
+- has a `file-truename` (symlinks resolved, with `file-name-handler-alist` off) outside the root.
+
+The two sides are compared as truenames, ignoring case on macOS and Windows. An event keeps the first paths whose
+data, printed as `drgnx-coord--data-print` prints it, fits its 4,096 characters (and at most 100: a printed list
+stops there); the rest are counted as `:more`, so an edit event is never `:truncated`.
+
+**Limits.**
+- `drgnx-coord-report-rate` (20): the reports (`hello`, `report_edit`, `report_test`, `ask_user`, and an outside
+  agent's `send_message`) one agent may make in a minute.
+  - They are counted in the server's memory against `drgnx-coord-mcp--now`, which tests stub.
+  - Over the limit a report is **held**: nothing is written, not even the `seen` stamp.
+  - The answer starts `HELD: more than 20 reports a minute`.
+- The first held report tells the user with a `rate` card (`Dismiss`; data `(:agent :rate)`), at most once an hour
+  per agent.
+  - The server remembers this, and so does the store (`rate-told:AGENT` in `meta`), for a server started again.
+  - Best effort: a busy store tells nobody, and the answer still says HELD.
+- Edit and test events are telemetry (`drgnx-coord-event-add-best-effort`): a busy store answers
+  `{"ok": false, "busy": …}` and the agent goes on.
+
+**Never prompts, never blocks.** git runs as a process of its own (`make-process`). It gets `GIT_TERMINAL_PROMPT=0`,
+its stdin is closed at once, and it has no terminal. It is killed after `drgnx-coord-mcp--git-timeout` (3) seconds,
+and its answer is then nil. No tool asks anything.
+
+**The command** M11c-2's agent settings pages write is `(drgnx-coord-mcp-outside-spec KIND)` → `(:type stdio
+:command "<checkout>/bin/drgnx" :args ("coord" "mcp" "--kind" KIND))`.
+
 ## What this does not protect against
 
-The same Unix user is no security boundary. Anything running as the user — an agent, a command an agent ran, a
-process it started — can connect to the hub's socket and call `agents/permission` (the answer a permission request
-waits for), open `work.db` and write to it directly, or start a coordination server with `DRGNX_AGENT=user` (or any
-other agent's id) and write as that identity. The checks above — freshness, who may change a task, who may answer
-what, the message limits — stop mistakes and runaway loops among cooperating agents; they do not stop an agent that
-means to go around them. The real boundary is the sandbox an agent runs in — one that keeps it away from the hub's
-socket and from the state and data directories — not drgnx's own access rules.
+The same Unix user is no security boundary. Any process running as the user can get round the coordination
+server's checks. That includes an agent, a command an agent ran, and any process it started. Such a process can:
+- connect to the hub's socket and call `agents/permission` (the answer a permission request waits for);
+- open `work.db` and write to it directly;
+- start a coordination server with `DRGNX_AGENT=user` (or any other agent's id, `ext:…` ones included), or with a
+  `DRGNX_AGENT_KIND` of its choice, and write as that identity.
+
+`DRGNX_AGENT` is trusted as it is set, and an outside agent's `ext:KIND:PID-HASH` identity and its limits stop a
+confused or runaway agent. They do not stop a same-uid process that sets up its own environment. The checks above
+(freshness, who may change a task, who may answer what, the message and report limits) stop mistakes and runaway
+loops among cooperating agents. They do not stop an agent that means to go around them.
+
+The real boundary is the sandbox an agent runs in: one that keeps it away from the hub's socket and from the state
+and data directories, not drgnx's own access rules.
 
 ## Delivery (the hub)
 
@@ -187,7 +325,9 @@ replaced and the review going on (B) — and the log's delivery tells every agen
 
 ## Tests
 
-`test/unit/coord-test.el` (the store; the claim race), `coord-mcp-test.el` (the server over stdio),
+`test/unit/coord-test.el` (the store; the claim race), `coord-mcp-test.el` (the server over stdio; outside
+agents' identity from the parent, hello and its base, paths inside only, tests, questions, no job tasks, no forging
+or flooding — `drgnx-coord-mcp/outside-agents-cannot-forge-or-flood`),
 `hub-agents-test.el` (sessions in the hub; a mock agent calling a tool through its `mcpServers`),
 `agents-mirror-test.el` (mirrors, reattaching), `coord-delivery-test.el` (idle, busy, exited, peer messages,
 decisions, leases); the job tests are listed in [jobs.md](../guide/jobs.md#tests). The mock agent's `coord TOOL JSON` prompt
