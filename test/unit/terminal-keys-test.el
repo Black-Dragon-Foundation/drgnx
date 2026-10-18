@@ -64,7 +64,7 @@
     (let* ((split (drgnx-terminal-key-split)) (to-drgnx (plist-get split :to-drgnx)) (to-shell (plist-get split :to-shell)))
       (dolist (k '("C-S-p" "<f1>" "C-`" "C-c c")) (should (member k to-drgnx)))
       ;; VS Code's commandsToSkipShell: C-p (Quick Open), C-b (sidebar), C-k (every chord), C-f (Find) are drgnx's
-      (dolist (k '("C-p" "C-b" "C-k C-s" "C-k C-o" "C-f"))
+      (dolist (k '("C-p" "C-b" "C-k C-r" "C-k C-o" "C-f"))
         (should (member k to-drgnx))
         (should-not (member k to-shell)))
       (should to-shell)
@@ -82,7 +82,7 @@
     (let ((drgnx-terminal-skip-shell-keys nil))
       (drgnx-terminal-apply-keys)
       (should (member "C-p" (plist-get (drgnx-terminal-key-split) :to-shell)))
-      (should (member "C-k C-s" (plist-get (drgnx-terminal-key-split) :to-shell)))
+      (should (member "C-k C-r" (plist-get (drgnx-terminal-key-split) :to-shell)))
       (should (eq (cdr (assq 'eat--semi-char-mode minor-mode-map-alist)) eat-semi-char-mode-map))
       (drgnx-terminal-keys-test--eat-buffer
        (should (eq (drgnx-terminal-keys-test--bound-to "C-p") #'eat-self-input))
@@ -91,7 +91,7 @@
     (let ((drgnx-terminal-skip-shell-keys nil))
       (let ((lines (cdr (drgnx-terminal-cheatsheet-section))))
         (should (seq-find (lambda (l) (string-prefix-p "C-k chords goes to the shell (outside the terminal" l)) lines))
-        (should-not (seq-find (lambda (l) (string-prefix-p "C-k C-s" l)) lines))))))
+        (should-not (seq-find (lambda (l) (string-prefix-p "C-k C-r" l)) lines))))))
 
 (ert-deftest drgnx-terminal-keys/the-skip-list-leaves-the-emacs-and-vim-profiles-alone ()
   (dolist (layers '(((emacs app editing window)) ((vim app editing window))))
@@ -159,7 +159,7 @@
               ;; chords are one entry, not one line each
               (should (string-match-p "Reach drgnx: .*C-k chords" text))
               (should (string-match-p "Reach drgnx: .*C-c chords" text))
-              (should-not (string-match-p "C-k C-s" (substring text (string-match "^In the terminal$" text))))
+              (should-not (string-match-p "C-k C-r" (substring text (string-match "^In the terminal$" text))))
               (should-not (string-match-p "^  C-p goes to the shell" text))
               (should-not (string-match-p "^  C-c c goes to the shell" text))
               ;; once, also when the sheet is shown again
