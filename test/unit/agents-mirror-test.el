@@ -127,4 +127,14 @@
     (should (equal (plist-get (nth 0 (drgnx-agent-session-entries m)) :text) "one"))
     (should (equal (plist-get (nth 2 (drgnx-agent-session-entries m)) :text) "three"))))
 
+(ert-deftest drgnx-agents-mirror/a-non-list-record-is-skipped ()
+  ;; readable but of the wrong type (a number, a string, nil): never a snapshot or an entry
+  (let ((drgnx-agents--sessions nil) (inhibit-message t))
+    (should-not (drgnx-agents-mirror--read "42"))
+    (should-not (drgnx-agents-mirror--read "\"text\""))
+    (should-not (drgnx-agents-mirror--read "nil"))
+    (should (equal (drgnx-agents-mirror--read "(:id \"s\")") '((:id "s"))))
+    (drgnx-agents-mirror--event "agent" (list :id "s-n" :seq 1 :lisp "42"))
+    (should-not drgnx-agents--sessions)))
+
 ;;; agents-mirror-test.el ends here

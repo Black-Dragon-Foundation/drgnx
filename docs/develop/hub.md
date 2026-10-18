@@ -71,8 +71,8 @@ agent, job).
 = its id) filled from these events; an action on a mirror goes to the hub (`drgnx-agents--remote`, never waiting).
 A new Emacs fetches each transcript once (`agents/get`, which answers the session's change number `seq`) and keeps
 the events that arrive meanwhile, then applies only those numbered after it — events and answers come on different
-connections, so their order is not given. A record that cannot be read (a session snapshot, a transcript entry) is
-skipped with a message; it never stops the records after it.
+connections, so their order is not given. A record that cannot be read (a session snapshot, a transcript entry), or that
+is not a list (a number, a string), is skipped with a message; it never stops the records after it.
 
 One hub per socket: a second finds the first answering `ping`, or holding the lock — `SOCKET.lock/`, a directory
 made atomically with the hub's pid — and exits with status 3 (a hub too busy to answer a ping keeps its socket); a hub that cannot start for any other
