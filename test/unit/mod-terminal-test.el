@@ -314,12 +314,13 @@
                        home (if (equal shell "zsh") (format "exec %s -d -i" (executable-find shell))
                               (format "exec %s --noprofile --rcfile %s -i" (executable-find shell) rc))))
              (process-environment (append (list (concat "SHELL=" wrapper) (concat "HOME=" home) (concat "ZDOTDIR=" home)
-                                                "PS1=$ " "PROMPT=$ ")
-                                          process-environment)))
+                                                "PS1=$ " "PROMPT=$ " "HISTFILE=/dev/null")   ; no history file written into HOME as the shell dies
+                                          process-environment))
+             (shell-proc nil))
         (with-temp-file rc (insert (format "PS1='$ '\nsource '%s'\n" file)))
         (unwind-protect
             (drgnx-terminal-test--fresh t
-              (let* ((buf (drgnx-terminal-new home)) (proc (get-buffer-process buf)))
+              (let* ((buf (drgnx-terminal-new home)) (proc (setq shell-proc (get-buffer-process buf))))
                 ;; the first prompt: eat marked it, the shell is idle
                 (should (drgnx-terminal-test--wait-until (lambda () (buffer-local-value 'drgnx-terminal-eat--integrated buf))))
                 (should-not (process-query-on-exit-flag proc))
@@ -330,6 +331,8 @@
                 (should (process-query-on-exit-flag proc))
                 ;; the prompt after it clears the flag again
                 (should (drgnx-terminal-test--wait-until (lambda () (not (process-query-on-exit-flag proc)))))))
+          ;; the shell may still be dying (the cleanup killed its terminal): not before it is gone, or HOME is not empty
+          (when shell-proc (drgnx-terminal-test--wait-until (lambda () (not (process-live-p shell-proc)))))
           (delete-directory home t))))))
 
 (ert-deftest drgnx-terminal/the-fallback-scan-is-local-and-runs-once-per-pass ()
