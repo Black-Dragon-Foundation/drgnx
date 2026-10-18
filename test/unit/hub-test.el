@@ -149,6 +149,19 @@ to OR-LOG, OPENROUTER_API_KEY unset."
     (drgnx-hub-serve (drgnx-hub-socket))
     (should (drgnx-hub-call-sync "ping" nil))))
 
+(ert-deftest drgnx-hub/startup-error-exit-code ()
+  ;; 3 says "a hub already serves" (a-second-hub-exits); any other reason a hub cannot start is 1
+  (drgnx-hub-test--with
+    (let ((state (concat root "state-file")))
+      (write-region "" nil state nil 'silent)         ; a state dir that is a plain file: no socket dir under it
+      (let* ((process-environment (append (list "XDG_RUNTIME_DIR" (concat "XDG_STATE_HOME=" state)) process-environment))
+             (out (generate-new-buffer " *hub-err*" t))
+             (rc (call-process (expand-file-name invocation-name invocation-directory) nil out nil "--batch" "-Q"
+                               "-L" (expand-file-name "core" drgnx-dir) "-l" "drgnx-hub" "-f" "drgnx-hub-main")))
+        (should (= rc 1))
+        (should (string-search "drgnx hub: " (with-current-buffer out (buffer-string))))
+        (kill-buffer out)))))
+
 (ert-deftest drgnx-hub/the-hub-outlives-the-emacs-that-started-it ()
   (drgnx-hub-test--with
     (let ((rc (call-process (expand-file-name invocation-name invocation-directory) nil nil nil "--batch" "-Q"

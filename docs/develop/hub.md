@@ -75,7 +75,8 @@ connections, so their order is not given. A record that cannot be read (a sessio
 skipped with a message; it never stops the records after it.
 
 One hub per socket: a second finds the first answering `ping`, or holding the lock — `SOCKET.lock/`, a directory
-made atomically with the hub's pid — and exits with status 3 (a hub too busy to answer a ping keeps its socket). A
+made atomically with the hub's pid — and exits with status 3 (a hub too busy to answer a ping keeps its socket); a hub that cannot start for any other
+reason exits with status 1. A
 lock whose process is gone (or a zombie) is taken over. A hub removes its socket and lock when it stops, and only if
 the lock is still its own. Client side: `drgnx-hub-ensure` (start if needed; commands and the CLI only — it waits),
 `drgnx-hub-call` (asynchronous), `drgnx-hub-call-sync`, `drgnx-hub-connect` + `drgnx-hub-event-functions`. The unit

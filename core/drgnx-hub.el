@@ -458,12 +458,13 @@ Signals an error when a hub already serves there."
   (clrhash drgnx-gateway--registrations))
 
 (defun drgnx-hub-main ()
-  "The hub process's entry point (batch): serve until `shutdown' or SIGTERM.  Exit 3 when a hub already serves."
+  "The hub process's entry point (batch): serve until `shutdown' or SIGTERM.  Exit 3 when a hub already serves, 1
+when it cannot start for any other reason."
   (condition-case err
       (drgnx-hub-serve (drgnx-hub-socket))
-    (error (message "drgnx hub: %s" (if (string-prefix-p "a hub already serves" (error-message-string err))
-                                        "a hub already serves" (error-message-string err)))
-           (kill-emacs 3)))
+    (error (let ((already (string-prefix-p "a hub already serves" (error-message-string err))))
+             (message "drgnx hub: %s" (if already "a hub already serves" (error-message-string err)))
+             (kill-emacs (if already 3 1)))))
   (add-hook 'kill-emacs-hook #'drgnx-hub-stop)
   (message "drgnx hub: serving on %s, gateway on 127.0.0.1:%d" (drgnx-hub-socket) (drgnx-gateway-port))
   (while t
