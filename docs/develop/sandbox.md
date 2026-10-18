@@ -1066,3 +1066,60 @@ string for the "never in a transcript" check, `drgnx-sandbox-fixture-probe-env` 
 `drgnx-sandbox-check`'s reason where the sandbox cannot run; `:unsandboxed` as its first form skips that check (the
 probes' own test runs the mock with no sandbox and wants every probe reached, which shows the probes are real).
 The real HOME, the user's runtime directory, bus and Emacs are never touched.
+
+## Network: phase 2
+
+In phase 1 the sandbox shares the host's network (`--share-net`): the paths are closed, but abstract sockets and every
+service on the host's `127.0.0.1` stay reachable. Phase 2 gives the sandbox a network of its own: only a private
+loopback exists inside. The agent's way out is two Unix sockets the hub binds into `/run/drgnx`: the job's proxy
+(`proxy.sock`, which answers `CONNECT` only for the job's allowlist) and the gateway (`gateway.sock`, with its token
+check). The agent is told `HTTPS_PROXY=http://127.0.0.1:3128` and, for gateway profiles,
+`ANTHROPIC_BASE_URL=http://127.0.0.1:3129`; a relay inside turns those ports into the sockets. macOS has no network
+namespace and needs no relay: Seatbelt allows only the proxy's and the gateway's localhost ports.
+
+### The relay
+
+`core/drgnx-sandbox-relay.el` is a batch Emacs that listens on `127.0.0.1:PORT` for each argument `PORT=SOCKET` and
+forwards every connection, as bytes, to SOCKET:
+
+```
+emacs --batch -Q --eval "(setq load-prefer-newer t)" -L CORE -l drgnx-sandbox-relay -f drgnx-sandbox-relay-main \
+      3128=/run/drgnx/proxy.sock 3129=/run/drgnx/gateway.sock
+```
+
+`drgnx-sandbox-relay-command PAIRS` builds that argv from `((PORT . SOCKET)…)`. The sandbox does not run it alone:
+`drgnx-sandbox-relay-entry PAIRS COMMAND` wraps the agent's command in
+
+```
+/bin/sh -c '<make a FIFO in a fresh mktemp -d under $TMPDIR>; RELAY </dev/null >FIFO &
+            read -r r <FIFO; <remove the directory>; [ "$r" = ready ] || exit 1; exec "$@"' drgnx-sandbox-relay COMMAND…
+```
+
+- **Ready before the agent.** The relay writes `ready` on its stdout once every port listens, and the shell `exec`s
+  the agent only then, so the agent's first connect never finds a closed port. A relay that cannot listen (a bad
+  argument, a port in use) exits 1 with a line on stderr, the shell reads end of file, and the agent never starts:
+  the entry exits 1.
+- **The agent's stdio is the sandbox's own.** The relay's stdout is the FIFO and its stdin `/dev/null`; after the
+  `exec` the agent holds the shell's stdin and stdout, so the ACP stream never passes through the relay. The relay
+  shares the agent's stderr for its own lines (`drgnx-sandbox-relay: cannot reach SOCKET: …`).
+- **It ends with the agent.** After the `exec` the relay's parent is the agent. The relay reads its parent's pid once
+  a second (`process-attributes`) and exits 0 when it has changed, closing its connections. Under bwrap the pid
+  namespace ends it at once anyway; the check covers runs without one (the tests) and is the only cost while idle.
+- **Bytes only.** Both sides use the `binary` coding; the relay reads nothing it forwards and opens nothing but the
+  sockets of its arguments. A socket it cannot reach closes that one connection. When either side of a pair closes,
+  the relay closes the other: Emacs has no half-close, so a client that shuts down its write side to wait for an
+  answer gets none. HTTP clients through a proxy do not do that.
+- **Not a security boundary.** Anything inside can connect to the sockets directly. The proxy and the gateway, outside,
+  are the gate.
+
+`princ` is not used for `ready`: in batch Emacs it leaves a non-terminal stdout unflushed, and the shell would wait
+for ever. `send-string-to-terminal` writes and flushes it.
+
+**Cost** (Emacs 30.2, Linux, no sandbox, a fake upstream on a local socket): launch to the agent's first output
+65 ms (median of 20; a bare `emacs --batch -Q` is 60 ms), started before the agent and not in parallel with it. A
+32 MB stream through the relay ran at 19 MB/s against 17 MB/s straight to the socket: the test's own reader is the
+limit, and streamed tokens are a few KB/s. One more batch Emacs per session.
+
+Tests: `test/unit/sandbox-relay-test.el` (`drgnx-sandbox-relay/`) runs the entry around fake agents (`sh`, a batch
+Emacs that connects first thing) and a fake upstream on a socket in the test's temporary directory, on free ports of
+the host's loopback: bytes both ways, ready before the agent, many connections, and the end with the agent.
