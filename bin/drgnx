@@ -58,12 +58,42 @@ ui() { # the harness controller, in batch Emacs (harness/drgnx-ui.el)
         -l drgnx-ui -f drgnx-ui-cli -- "$@"
 }
 
-test_batch() { # SIGPIPE ignored, as the hub runs (tests serve one in-process): a test may fail, never end the run
-  ( trap '' PIPE
-    exec "$(emacs_bin)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/harness" -L "$here/core" -L "$here/wb" \
-         -l "$here/harness/run-ert.el" \
-         -f drgnx-run-ert-batch "$here/test/unit" )
+run_in_tmp() { # CMD… — run CMD with a TMPDIR of its own (so temporary-file-directory and libgccjit use it); on every exit
+  # (end, error, INT, TERM) CMD is stopped if still running and the directory removed: /tmp is RAM, a run leaves nothing there
+  RUN_TMP="$(mktemp -d "${TMPDIR:-/tmp}/drgnx-run.XXXXXX")"
+  RUN_PID=""
+  trap run_tmp_cleanup EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  local rc=0
+  ( export TMPDIR="$RUN_TMP" DRGNX_RUN_TMP="$RUN_TMP"; "$@" ) <&0 &    # not exec'd: this shell stays to clean up
+  RUN_PID=$!
+  wait "$RUN_PID" || rc=$?
+  RUN_PID=""
+  return "$rc"
 }
+
+run_tmp_cleanup() {
+  local i
+  if [[ -n "${RUN_PID:-}" ]]; then
+    kill "$RUN_PID" 2>/dev/null || true
+    for ((i = 0; i < 50; i++)); do kill -0 "$RUN_PID" 2>/dev/null || break; sleep 0.1; done
+    kill -9 "$RUN_PID" 2>/dev/null || true
+    wait "$RUN_PID" 2>/dev/null || true
+  fi
+  if [[ -n "${RUN_TMP:-}" ]]; then rm -rf -- "$RUN_TMP"; fi
+  return 0
+}
+
+test_batch_emacs() { # SIGPIPE ignored, as the hub runs (tests serve one in-process): a test may fail, never end the run
+  trap '' PIPE
+  # DRGNX_TEST_DIR: a smaller suite (the test of the temp-dir cleanup runs one)
+  exec "$(emacs_bin)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/harness" -L "$here/core" -L "$here/wb" \
+       -l "$here/harness/run-ert.el" \
+       -f drgnx-run-ert-batch "${DRGNX_TEST_DIR:-$here/test/unit}"
+}
+
+test_batch() { run_in_tmp test_batch_emacs; }
 
 env_eval() { # FORM — evaluate with harness/drgnx-env.el loaded, print the result
   "$(emacs_bin)" --batch -Q -L "$here/harness" -l drgnx-env --eval "(princ (or $1 \"\"))"
@@ -140,11 +170,11 @@ cmd_test() {
   case "${1:-}" in
     "") test_batch ;;
     --install) shift; test_install "$@" ;;
-    --ui) ui test-ui ;;
-    --scenario) shift; ui test-scenario "$@" ;;
-    --bench) ui test-bench ;;
-    --perf) shift; [ "${1:-}" = --audit ] && export DRGNX_PERF_AUDIT=1; ui test-perf ;;
-    --soak) shift; ui test-soak "${1:-30}" ;;
+    --ui) run_in_tmp ui test-ui ;;
+    --scenario) shift; run_in_tmp ui test-scenario "$@" ;;
+    --bench) run_in_tmp ui test-bench ;;
+    --perf) shift; [ "${1:-}" = --audit ] && export DRGNX_PERF_AUDIT=1; run_in_tmp ui test-perf ;;
+    --soak) shift; run_in_tmp ui test-soak "${1:-30}" ;;
     --container) shift; test_container "$@" ;;
     --podman) shift; DRGNX_CONTAINER=podman test_container "$@" ;;
     *) echo "usage: drgnx test [--ui | --scenario [--config C] | --bench | --perf [--audit] | --soak [MIN] | --container [--ui] | --install [NAME…]]" >&2; exit 2 ;;

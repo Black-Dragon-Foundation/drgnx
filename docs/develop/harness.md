@@ -25,6 +25,15 @@ how every drgnx UI change is developed and verified.
 `$DRGNX_TEST_RESULTS` when set; the summary is the source of truth for GUI runs, whose exit status is only
 pass/fail. `$DRGNX_TEST_SELECTOR` (an ERT selector, e.g. `(tag :timing)`) picks the tests a run takes.
 
+`/tmp` is RAM on many machines, so a test run leaves nothing there. `bin/drgnx test` (every tier) runs in a
+`$TMPDIR` of its own — a fresh `mktemp -d` below the caller's `$TMPDIR` or `/tmp`, so `temporary-file-directory`
+and the native compiler's libgccjit files land in it too — and removes it on every exit: the end, a failure, Ctrl-C
+or a `TERM` (the shell traps them, stops the Emacs and deletes the directory). The batch runner uses that directory
+(`$DRGNX_RUN_TMP`) as the suite's temp home, or makes its own, and also deletes it from `kill-emacs-hook`; a harness
+session's `TMPDIR` is `tmp/` in its run dir. `$DRGNX_TEST_DIR` runs a smaller suite than `test/unit` (the tests of this
+cleanup use it). Tests still delete what they make (`unwind-protect` and `delete-directory … t`); the directory is
+the net under them.
+
 A GUI run's ERT suite executes inside the session (`DRGNX_UI_TEST` names the suite directory), writes its
 summary to `DRGNX_UI_RESULTS` and exits. mutter turns any nonzero Emacs exit code into `1`, so the runner
 trusts the summary, not the code. The run is killed (whole process group) after `DRGNX_UI_TEST_TIMEOUT`

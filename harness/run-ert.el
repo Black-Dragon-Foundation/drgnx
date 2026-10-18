@@ -98,15 +98,25 @@ exit 0 or 1."
   (let* ((args (prog1 (mapcar #'expand-file-name command-line-args-left) (setq command-line-args-left nil)))
          (dir (if (and (= (length args) 1) (file-directory-p (car args))) (car args) args))
          ;; The suite never sees the user's drgnx config, packages, state or cache.
-         (tmp (make-temp-file "drgnx-unit" t))
+         ;; (`bin/drgnx test' made and removes a directory of its own, DRGNX_RUN_TMP: used as it is, so the
+         ;; paths stay as short as ever — unix sockets have ~100 bytes)
+         (tmp (let ((given (getenv "DRGNX_RUN_TMP")))
+                (if (and given (file-directory-p given)) (expand-file-name given) (make-temp-file "drgnx-unit" t))))
+         ;; Everything a test makes with `make-temp-file' (and every child process) lands in TMP too, so
+         ;; removing it below, or from `kill-emacs-hook' when the run dies, leaves nothing in /tmp.
+         (temporary-file-directory (file-name-as-directory tmp))
+         (_ (add-hook 'kill-emacs-hook (lambda () (ignore-errors (delete-directory tmp t)))))
          ;; …nor anything else under ~ (HOME is a temp dir; the user's ELPA stays readable for the
          ;; tests that load packages from it, read-only, through DRGNX_USER_ELPA)
          (elpa (expand-file-name "~/.config/emacs/elpa"))
          (process-environment
           (append (mapcar (lambda (v) (format "%s=%s" (car v) (expand-file-name (cdr v) tmp)))
                           '(("DRGNX_CONFIG_DIR" . "config") ("DRGNX_DATA_DIR" . "data")
-                            ("XDG_STATE_HOME" . "state") ("XDG_CACHE_HOME" . "cache") ("HOME" . "home")))
+                            ("XDG_STATE_HOME" . "state") ("XDG_CACHE_HOME" . "cache") ("HOME" . "home")
+                            ("TMPDIR" . ".")))
                   (list "DRGNX_TEST_ISOLATED=1")
+                  ;; …a test that runs the runner or bin/drgnx again must not reuse (and delete) this directory
+                  (list "DRGNX_RUN_TMP")
                   ;; …nor start a durable hub that would outlive it (the hub's own tests unset this)
                   (list "DRGNX_NO_HUB_START=1")
                   ;; …nor the user's provider keys: no test may reach a paid model (bare names unset them)

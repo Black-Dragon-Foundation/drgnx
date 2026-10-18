@@ -385,6 +385,16 @@ the real ones belong to sessions running next to the tests (bin/drgnx check's li
       (should (member (concat "DRGNX_DATA_DIR=" (expand-file-name "drgnx-data" (plist-get s :run))) env))
       (drgnx-ui-stop "drgnx-ui-1"))))
 
+(ert-deftest drgnx-ui/a-session-has-a-temp-dir-in-its-run-dir ()
+  ;; TMP-1: what the session's Emacs and its tests put in /tmp goes in the run dir, removed with it.
+  (drgnx-ui-test--with-state
+    (let* ((s (drgnx-ui-prepare-run "drgnx-ui-1"))
+           (tmp (expand-file-name "tmp" (plist-get s :run))))
+      (should (member (concat "TMPDIR=" tmp) (drgnx-ui-session-env s)))
+      (should (file-directory-p tmp))
+      (drgnx-ui-stop "drgnx-ui-1")
+      (should-not (file-exists-p tmp)))))
+
 (ert-deftest drgnx-ui/two-monitors ()
   ;; mutter gets one --virtual-monitor per monitor (multi-window tests).
   (drgnx-ui-test--with-state

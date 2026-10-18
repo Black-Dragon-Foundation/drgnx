@@ -2,6 +2,8 @@
 (require 'ert)
 (require 'drgnx-rules)
 
+(defvar drgnx-rules-test--dirs nil "Temp dirs `drgnx-rules-test--file' made; `drgnx-rules-test--with' removes them.")
+
 (defmacro drgnx-rules-test--with (&rest body)
   "BODY with the rules mode on, a two-section dock shown, one editor window and an empty unrouted log."
   `(let ((drgnx-wb--sections nil) (drgnx-signal--editor-window nil) (drgnx-wb-unrouted nil)
@@ -11,6 +13,7 @@
      (drgnx-wb-define-section 'bottom :slot 0 :title "BOTTOM" :buffer (lambda () (get-buffer-create "*drgnx-test-bottom*")))
      (drgnx-rules-mode 1)
      (unwind-protect (progn (drgnx-wb-show-sidebar) ,@body)
+       (while drgnx-rules-test--dirs (ignore-errors (delete-directory (pop drgnx-rules-test--dirs) t)))
        (drgnx-rules-mode -1)
        (drgnx-wb-hide-sidebar)
        (delete-other-windows)
@@ -18,7 +21,8 @@
          (when (get-buffer b) (kill-buffer b))))))
 
 (defun drgnx-rules-test--file (name)
-  (let ((f (expand-file-name name (make-temp-file "drgnx-rules" t))))
+  (let* ((dir (make-temp-file "drgnx-rules" t))
+         (f (expand-file-name name (car (push dir drgnx-rules-test--dirs)))))
     (write-region "x\n" nil f nil 'silent)
     (find-file-noselect f)))
 

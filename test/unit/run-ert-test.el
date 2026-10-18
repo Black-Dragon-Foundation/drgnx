@@ -155,3 +155,24 @@
   ;; an agent on an :ai profile in any test would start a durable hub that outlives the suite
   (skip-unless (getenv "DRGNX_TEST_ISOLATED"))
   (should (equal (getenv "DRGNX_NO_HUB_START") "1")))
+
+(ert-deftest drgnx-run-ert/a-run-that-dies-leaves-no-temp-dir-and-tests-write-below-the-run-dir ()
+  ;; TMP-1: a test's temp files land in the run's own dir; when the run ends through `kill-emacs' (a test
+  ;; that quits, a signal handled as quit) the dir is gone from the parent TMPDIR as well.
+  (let* ((tmp (file-name-as-directory (make-temp-file "drgnx-die" t)))
+         (parent (expand-file-name "parent" tmp)) (suite (expand-file-name "suite" tmp))
+         (probe (expand-file-name "probe" tmp)))
+    (unwind-protect
+        (progn
+          (make-directory parent) (make-directory suite)
+          (with-temp-file (expand-file-name "die-test.el" suite)
+            (insert (format "(require 'ert)\n(ert-deftest die-quits ()\n  (make-temp-file \"leaked\" t)\n  (write-region temporary-file-directory nil %S)\n  (kill-emacs 3))\n" probe)))
+          (let ((process-environment (append (list (concat "TMPDIR=" parent) "DRGNX_TEST_SELECTOR" "DRGNX_TEST_RESULTS")
+                                             process-environment)))
+            (should (eql 3 (call-process (expand-file-name invocation-name invocation-directory) nil nil nil
+                                         "--batch" "-Q" "-L" (file-name-directory (locate-library "run-ert.el"))
+                                         "-l" (locate-library "run-ert.el") "-f" "drgnx-run-ert-batch" suite))))
+          (should (string-prefix-p (file-name-as-directory parent)
+                                   (with-temp-buffer (insert-file-contents probe) (buffer-string))))
+          (should-not (directory-files parent nil directory-files-no-dot-files-regexp)))
+      (delete-directory tmp t))))
