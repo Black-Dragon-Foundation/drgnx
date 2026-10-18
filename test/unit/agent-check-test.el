@@ -377,6 +377,31 @@ with the HTTP mock stopped afterwards."
                                  (buffer-string)))))
                  2)))))
 
+(ert-deftest drgnx-agent-check/the-results-file-is-written-atomically-and-privately ()
+  ;; a rename that fails keeps the old file as it was and leaves no temp file; the file is for the user alone
+  (drgnx-agent-check-test-env
+    (let* ((file (expand-file-name "agent-checks.eld" (drgnx-state-dir)))
+           (a (list :kind 'claude :section 'mcp :name "a" :file nil :spec nil)) old)
+      (drgnx-agent-check-remember a (list :status 'ok :time 0.1))
+      (should (= (logand (file-modes file) #o077) 0))
+      (setq old (with-temp-buffer (insert-file-contents file) (buffer-string)))
+      (cl-letf (((symbol-function 'rename-file) (lambda (&rest _) (signal 'file-error '("Renaming" "no")))))
+        (should-error (drgnx-agent-check-remember a (list :status 'failed :time 0.2)) :type 'file-error))
+      (should (equal (with-temp-buffer (insert-file-contents file) (buffer-string)) old))
+      (should (equal (directory-files (file-name-directory file)) '("." ".." "agent-checks.eld")))
+      (drgnx-agent-check-remember a (list :status 'failed :time 0.2))
+      (should (eq (plist-get (drgnx-agent-check-last a) :status) 'failed))
+      (should (= (logand (file-modes file) #o077) 0)))))
+
+(ert-deftest drgnx-agent-check/a-results-file-with-a-mistake-reads-as-none ()
+  (drgnx-agent-check-test-env
+    (let ((file (expand-file-name "agent-checks.eld" (drgnx-state-dir))))
+      (make-directory (file-name-directory file) t)
+      (with-temp-file file (insert "(((claude mcp \"a\" nil) . (:status ok"))
+      (should-not (drgnx-agent-check-results))
+      (with-temp-file file (insert "(not an alist) junk"))
+      (should-not (drgnx-agent-check-results)))))
+
 (ert-deftest drgnx-agent-check/remembered-results-are-pruned ()
   ;; agent-checks.eld is read for every page and written for every Test: it keeps the newest 300 results, and none of
   ;; a settings file that is gone

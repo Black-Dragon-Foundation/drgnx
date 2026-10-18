@@ -14,6 +14,7 @@
 (require 'seq)
 (require 'subr-x)
 (require 'drgnx-paths)
+(require 'drgnx-file)
 
 (defconst drgnx-check-timeouts
   '((build . 300) (unit . 900) (ui . 900) (tty . 1500) (live . 1500) (scenario . 1500) (bench . 1200) (perf . 2400))
@@ -49,7 +50,9 @@ far.  DURATIONS: alist file → seconds (a file it lacks weighs 1)."
 (defun drgnx-check-durations-file () (expand-file-name "check/durations.eld" (drgnx-state-dir)))
 
 (defun drgnx-check-durations ()
-  (ignore-errors (with-temp-buffer (insert-file-contents (drgnx-check-durations-file)) (read (current-buffer)))))
+  "The seconds per test file the last runs took, an alist (FILE . SECONDS), or nil (none, or a file with a mistake)."
+  (let ((r (drgnx-file-read (drgnx-check-durations-file))))
+    (and (eq (plist-get r :status) 'ok) (listp (plist-get r :data)) (plist-get r :data))))
 
 (defun drgnx-check--save-durations (dir)
   "Seconds per test file from the shards' results in DIR, kept for the next run's balance."
@@ -61,8 +64,7 @@ far.  DURATIONS: alist file → seconds (a file it lacks weighs 1)."
         (when-let* ((file (plist-get te :file)))
           (cl-incf (alist-get file now 0 nil #'equal) (or (plist-get te :seconds) 0)))))
     (pcase-dolist (`(,file . ,secs) now) (setf (alist-get file per nil nil #'equal) secs))   ; this run's times win
-    (make-directory (file-name-directory (drgnx-check-durations-file)) t)
-    (with-temp-file (drgnx-check-durations-file) (prin1 per (current-buffer)))))
+    (drgnx-file-write (drgnx-check-durations-file) per :fsync nil)))
 
 ;;;; The plan
 

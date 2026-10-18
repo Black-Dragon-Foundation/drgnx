@@ -17,6 +17,7 @@
 (require 'seq)
 (require 'subr-x)
 (require 'drgnx-paths)
+(require 'drgnx-file)
 (require 'drgnx-tty-recommend)   ; the terminal table, tmux, the fallback keys and the recommendation (all read-only)
 (require 'drgnx-platform)        ; the window manager (the Desktop row)
 
@@ -330,9 +331,8 @@ that is not a checkout); (:error MESSAGE) when git cannot say."
 
 (defun drgnx-doctor--state-file (name)
   "The .eld file NAME the last drgnx session wrote in the state dir, read, or nil."
-  (let ((file (drgnx-doctor--state-path name)))
-    (when (file-readable-p file)
-      (ignore-errors (with-temp-buffer (insert-file-contents file) (read (current-buffer)))))))
+  (let ((r (drgnx-file-read (drgnx-doctor--state-path name))))
+    (and (eq (plist-get r :status) 'ok) (plist-get r :data))))
 
 (defun drgnx-doctor--state-file-time (name)
   "When the state file NAME was last written (seconds since the epoch), or nil."
@@ -348,9 +348,7 @@ that is not a checkout); (:error MESSAGE) when git cannot say."
 
 (defun drgnx-doctor--keys-report ()
   "The key report the last drgnx session wrote (keys-report.eld in the state dir), or nil."
-  (let ((file (expand-file-name "keys-report.eld" (drgnx-state-dir))))
-    (when (file-readable-p file)
-      (ignore-errors (with-temp-buffer (insert-file-contents file) (read (current-buffer)))))))
+  (drgnx-doctor--state-file "keys-report.eld"))
 
 ;;;; Checks
 

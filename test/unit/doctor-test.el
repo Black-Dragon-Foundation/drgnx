@@ -305,9 +305,32 @@
   (let ((process-environment (append (list "XDG_STATE_HOME=rel" "HOME=/tmp/drgnx-home") process-environment)))
     (should (equal (drgnx-doctor--state-path "x.eld") "/tmp/drgnx-home/.local/state/drgnx/x.eld"))
     (let (read)
-      (cl-letf (((symbol-function 'file-readable-p) (lambda (f) (push f read) nil)))
+      (cl-letf (((symbol-function 'drgnx-file-read) (lambda (f &rest _) (push f read) (list :status 'absent))))
         (drgnx-doctor--keys-report))
       (should (equal read '("/tmp/drgnx-home/.local/state/drgnx/keys-report.eld"))))))
+
+(ert-deftest drgnx-doctor/the-state-files-are-read-through-the-file-layer ()
+  ;; data is data; a file with a mistake, a missing one and a huge one give nil, and no reader changes the bytes
+  (let* ((state (make-temp-file "drgnx-state" t))
+         (process-environment (cons (concat "XDG_STATE_HOME=" state) process-environment))
+         (dir (expand-file-name "drgnx" state)))
+    (unwind-protect
+        (progn
+          (make-directory dir)
+          (should-not (drgnx-doctor--state-file "wb-report.eld"))
+          (should-not (drgnx-doctor--keys-report))
+          (dolist (text '("(:time \"x\"" "(:time \"x\") (:more)" "#1=(:a . #1#)"))
+            (dolist (name '("wb-report.eld" "keys-report.eld"))
+              (write-region text nil (expand-file-name name dir) nil 'silent))
+            (should-not (drgnx-doctor--state-file "wb-report.eld"))
+            (should-not (drgnx-doctor--keys-report))
+            (should (equal (with-temp-buffer (insert-file-contents (expand-file-name "wb-report.eld" dir)) (buffer-string))
+                           text)))
+          (write-region ";; note\n(:time \"x\" :display-buffer-entry t)\n" nil (expand-file-name "wb-report.eld" dir) nil 'silent)
+          (should (equal (drgnx-doctor--state-file "wb-report.eld") '(:time "x" :display-buffer-entry t)))
+          (write-region (make-string (1+ drgnx-file-max-bytes) ?\s) nil (expand-file-name "keys-report.eld" dir) nil 'silent)
+          (should-not (drgnx-doctor--keys-report)))
+      (delete-directory state t))))
 
 ;;;; search
 
