@@ -214,6 +214,8 @@ off), or inside a session, the mode is read as it is and never switched: an off 
 (defvar drgnx-doctor-config-features
   '(
     ;; one feature per line, appended below by each port
+    drgnx-projects
+    drgnx-agents
     )
   "The core features whose loading defines config files, for the `config-files' check.")
 

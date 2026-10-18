@@ -24,6 +24,10 @@
 (defvar drgnx-config-doc-sources
   '(
     ;; one entry per line, appended below by each port
+    (require drgnx-projects)
+    (require drgnx-agents)
+    (require drgnx-layouts)
+    (setup tools/layouts)
     )
   "What defines the config files of the reference: entries `(require FEATURE)' and `(setup MODULE)'.
 `(require FEATURE)' loads a core feature that defines files at load.  `(setup MODULE)' runs the setup of the module
