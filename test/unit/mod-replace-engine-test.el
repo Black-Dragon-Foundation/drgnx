@@ -287,6 +287,18 @@
         (should (= (plist-get (drgnx-replace-undo (plist-get res :undo)) :undone) 1))
         (should (equal (drgnx-replace-test--read a) "foo\n"))))))
 
+(ert-deftest drgnx-replace/a-search-tool-that-ended-already-is-no-error ()
+  ;; grep can finish before Emacs closes its input (a busy machine): the search still ends with its results, no error
+  (drgnx-git-test-with-repo
+    (drgnx-git-test-write repo "a.txt" "foo\n")
+    (let ((done nil) (got nil))
+      (cl-letf (((symbol-function 'process-send-eof)
+                 (lambda (&optional p) (error "Process %s not running: finished\n" (process-name p)))))
+        (drgnx-replace-search (drgnx-replace-test--q repo "foo")
+                              (lambda (x) (if (eq x :done) (setq done t) (setq got (append got x))))))
+      (let ((deadline (+ (float-time) 10))) (while (and (not done) (< (float-time) deadline)) (accept-process-output nil 0.05)))
+      (should done))))
+
 (ert-deftest drgnx-replace/no-rg-falls-back ()
   (let ((real (symbol-function 'executable-find)))
     (cl-letf (((symbol-function 'executable-find) (lambda (name &rest r) (unless (equal name "rg") (apply real name r)))))
