@@ -558,4 +558,40 @@ A `completing-read' answer is the first candidate that starts with it.  The prom
           (drgnx-agent-settings-refresh)
           (should (= calls 2)))))))
 
+;;;; Final review minors
+
+(ert-deftest drgnx-agent-settings/no-undo-and-test-all-draws-once ()
+  ;; the page is redrawn whole: it keeps no undo; Test All draws once after it started every server, not per server
+  (drgnx-agent-settings-test--env
+    (drgnx-agent-settings-test--counting-checks
+      (with-current-buffer (drgnx-agent-settings-open 'claude root)
+        (should (eq buffer-undo-list t))
+        (let ((draws 0))
+          (cl-letf* ((real (symbol-function 'drgnx-agent-settings--redraw))
+                     ((symbol-function 'drgnx-agent-settings--redraw) (lambda (&rest a) (cl-incf draws) (apply real a))))
+            (drgnx-agent-settings-test--answering (list t)
+              (call-interactively #'drgnx-agent-settings-test-all)))
+          (should (equal (sort started #'string<) '("docs" "github")))
+          (should (= draws 1)))))))
+
+(ert-deftest drgnx-agent-settings/the-page-works-from-its-project-not-the-callers-directory ()
+  ;; opened from a remote buffer, the page must not resolve anything against that host (a TRAMP call, and the wrong
+  ;; base): its directory is the project's, or home; a relative command is the project's
+  (drgnx-agent-settings-test--env
+    (let ((default-directory "/ssh:drgnx-never-reached:/srv/"))
+      (with-current-buffer (drgnx-agent-settings-open 'claude root)
+        (should (equal default-directory root)))
+      (with-current-buffer (drgnx-agent-settings-open 'claude nil)
+        (should (equal default-directory (expand-file-name "~/")))))
+    (let* ((bin (expand-file-name "tools/srv" root))
+           (item (lambda (spec) (list :kind 'claude :section 'mcp :name "s" :spec spec))))
+      (make-directory (file-name-directory bin) t)
+      (write-region "#!/bin/sh\n" nil bin)
+      (set-file-modes bin #o755)
+      (let ((default-directory "/nonexistent/"))
+        (should (eq (car (drgnx-agent-config-cheap-status (funcall item '(:command "./tools/srv")) root)) 'ok))
+        (should (eq (car (drgnx-agent-config-cheap-status (funcall item '(:command "./srv" :cwd "tools")) root)) 'ok))
+        (should (eq (car (drgnx-agent-config-cheap-status (funcall item '(:command "./tools/srv")) home))
+                    'missing-command))))))
+
 ;;; mod-agent-settings-test.el ends here

@@ -287,13 +287,26 @@ character for bytes that are not valid UTF-8."
   "The last remembered result of checking ITEM, or nil."
   (cdr (assoc (drgnx-agent-check--key item) (drgnx-agent-check-results))))
 
+(defconst drgnx-agent-check--kept 300 "How many results agent-checks.eld keeps (the newest, by `:at').")
+
+(defun drgnx-agent-check--prune (entries)
+  "ENTRIES ((KEY . RESULT)…, the newest first) without the results of a local settings file that is gone, and at
+most `drgnx-agent-check--kept' of them, the newest by `:at'.  The first entry (the one just written) always stays."
+  (let ((rest (cl-remove-if (lambda (e)
+                              (let ((file (nth 3 (car e))))
+                                (and (stringp file) (not (file-remote-p file)) (not (file-exists-p file)))))
+                            (cdr entries))))
+    (setq rest (sort rest (lambda (a b) (> (or (plist-get (cdr a) :at) 0) (or (plist-get (cdr b) :at) 0)))))
+    (cons (car entries) (take (1- drgnx-agent-check--kept) rest))))
+
 (defun drgnx-agent-check-remember (item result)
-  "Keep RESULT as the last result of checking ITEM, masked, with the time (`:at')."
+  "Keep RESULT as the last result of checking ITEM, masked, with the time (`:at').  The file keeps the newest
+`drgnx-agent-check--kept' results and drops those of settings files that are gone (`drgnx-agent-check--prune')."
   (let* ((sets (drgnx-agent-check--secret-sets item))
          (masked (drgnx-agent-check--mask-result result (car sets) (cdr sets)))
          (masked (if (plist-member masked :at) masked (append masked (list :at (float-time)))))
          (key (drgnx-agent-check--key item))
-         (all (cons (cons key masked) (assoc-delete-all key (drgnx-agent-check--read-all))))
+         (all (drgnx-agent-check--prune (cons (cons key masked) (assoc-delete-all key (drgnx-agent-check--read-all)))))
          (file (drgnx-agent-check--file))
          (dir (file-name-directory file))
          (temp nil))

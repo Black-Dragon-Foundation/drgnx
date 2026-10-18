@@ -355,8 +355,10 @@ with the HTTP mock stopped afterwards."
 
 (ert-deftest drgnx-agent-check/last-result-is-remembered ()
   (drgnx-agent-check-test-env
-    (let ((a (list :kind 'claude :section 'mcp :name "a" :file "/f" :spec (list :env '(("API_KEY" . "s3cret-value-xyz")))))
-          (b (list :kind 'claude :section 'mcp :name "b" :file "/f" :spec nil)))
+    (let* ((f (expand-file-name ".mcp.json" root))  ; results of a file that is gone are dropped
+           (a (list :kind 'claude :section 'mcp :name "a" :file f :spec (list :env '(("API_KEY" . "s3cret-value-xyz")))))
+           (b (list :kind 'claude :section 'mcp :name "b" :file f :spec nil)))
+      (write-region "{}" nil f)
       (should-not (drgnx-agent-check-last a))
       (drgnx-agent-check-remember a (list :status 'failed :error "boom s3cret-value-xyz" :time 0.5))
       (drgnx-agent-check-remember b (list :status 'ok :tools '("t") :time 0.1))
@@ -374,6 +376,28 @@ with the HTTP mock stopped afterwards."
                                  (insert-file-contents (expand-file-name "agent-checks.eld" (drgnx-state-dir)))
                                  (buffer-string)))))
                  2)))))
+
+(ert-deftest drgnx-agent-check/remembered-results-are-pruned ()
+  ;; agent-checks.eld is read for every page and written for every Test: it keeps the newest 300 results, and none of
+  ;; a settings file that is gone
+  (drgnx-agent-check-test-env
+    (let* ((kept (expand-file-name "kept.json" root)) (gone (expand-file-name "gone.json" root))
+           (file (expand-file-name "agent-checks.eld" (drgnx-state-dir)))
+           (key (lambda (name f) (list 'claude 'mcp name f))))
+      (write-region "{}" nil kept) (write-region "{}" nil gone)
+      (make-directory (file-name-directory file) t)
+      (with-temp-file file
+        (prin1 (cl-loop for i below 305 collect (cons (funcall key (format "s%d" i) kept) (list :status 'ok :at (float i))))
+               (current-buffer)))
+      (drgnx-agent-check-remember (list :kind 'claude :section 'mcp :name "g" :file gone) (list :status 'ok :time 0.1))
+      (delete-file gone)
+      (drgnx-agent-check-remember (list :kind 'claude :section 'mcp :name "new" :file kept) (list :status 'ok :time 0.1))
+      (let ((all (drgnx-agent-check-results)))
+        (should (= (length all) 300))
+        (should (assoc (funcall key "new" kept) all))
+        (should-not (assoc (funcall key "g" gone) all))
+        (should-not (assoc (funcall key "s5" kept) all))           ; the oldest went
+        (should (assoc (funcall key "s6" kept) all))))))
 
 ;;;; Fix round 1
 

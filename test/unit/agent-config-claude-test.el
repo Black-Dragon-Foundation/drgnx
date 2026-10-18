@@ -809,6 +809,7 @@ own configuration directory (agents.eld, ai.eld) in a temp dir too."
 
 (ert-deftest drgnx-agent-config-claude/model-helpers-are-public ()
   (should (fboundp 'drgnx-agent-config-save-backup))
+  (should-not (fboundp 'drgnx-agent-config--save-backup))     ; no private alias left over
   (drgnx-agent-config-claude-test-env
     (let ((file (drgnx-agent-config-claude-test--put (expand-file-name "x.json" home) "{\n    \"a\": 1\n}\n")))
       (should (equal (drgnx-agent-config-json-read-text file (drgnx-agent-config-claude-test--text file))

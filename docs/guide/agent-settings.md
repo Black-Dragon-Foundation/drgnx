@@ -59,7 +59,8 @@ One row per item:
   `extension`, `system` (managed settings) or `legacy` (the old kimi-cli files);
 - **status**: `off` when it is turned off, `read-only` when the page cannot edit it (plugins, extensions, managed
   settings, a Gemini file with comments), `inactive` (a Codex project file of a project Codex does not trust), the
-  file's own status (`ok`, `command not found`, `no URL`, `unreadable`), then the last Test with its age;
+  file's own status (`ok`, `command not found`, `no URL`, `unreadable`; a relative command such as `./bin/server` is
+  looked for in the server's `cwd`, else the project, else your home directory), then the last Test with its age;
 - **detail** under it: the command line or the URL, and the names of the environment variables and headers. Their
   values are never shown: an environment variable shows as `NAME=••••`, a header as `Name: ••••`.
 
@@ -134,7 +135,11 @@ what the page shows (someone changed the file), they stop with "changed on disk:
 a server and says so.
 
 The last result of each item is kept, masked, in `agent-checks.eld` in drgnx's state directory, so the page shows it
-again with its age.
+again with its age. The file keeps the newest 300 results and drops those of settings files that no longer exist.
+
+The page keeps no undo (it is drawn again whole), works in the project's directory (or your home directory when it
+shows only your own settings) whatever buffer it was opened from, and Test All draws it once after starting the
+servers, then again as each result comes.
 
 ## Tests
 

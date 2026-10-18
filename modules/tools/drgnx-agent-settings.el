@@ -451,7 +451,7 @@ and its status from the files (`:cheap', worked out from the whole ITEM).  Test 
          (names (lambda (pairs) (mapcar (lambda (p) (list (drgnx-agent-config-json-keystr (car p)))) pairs)))
          (safe (copy-sequence spec))
          (out (copy-sequence item))
-         (cheap (drgnx-agent-config-cheap-status item)))
+         (cheap (drgnx-agent-config-cheap-status item drgnx-agent-settings--root)))
     (dolist (key '(:env :headers))
       (when (plist-get safe key) (setq safe (plist-put safe key (funcall names (plist-get safe key))))))
     (dolist (key '(:command :url :description))
@@ -533,7 +533,8 @@ no longer what the page shows (what was confirmed must be what runs)."
   "An agent's routes, MCP servers, hooks and skills: add, edit, remove, turn on or off, Test."
   (setq-local truncate-lines t
               revert-buffer-function (lambda (&rest _) (drgnx-agent-settings-refresh))
-              filter-buffer-substring-function #'drgnx-agent-settings--filter-substring))
+              filter-buffer-substring-function #'drgnx-agent-settings--filter-substring)
+  (buffer-disable-undo))                ; redrawn whole: no undo to keep
 
 (defun drgnx-agent-settings--buffer (kind)
   (get-buffer-create (format "*agent settings: %s*" (drgnx-agent-config-title kind))))
@@ -548,7 +549,9 @@ no longer what the page shows (what was confirmed must be what runs)."
     (with-current-buffer buffer
       (unless (derived-mode-p 'drgnx-agent-settings-mode) (drgnx-agent-settings-mode))
       (setq drgnx-agent-settings--kind kind
-            drgnx-agent-settings--root (drgnx-agent-settings--usable-root root))
+            drgnx-agent-settings--root (drgnx-agent-settings--usable-root root)
+            ;; never the caller's (a remote buffer's would be reached for every relative name)
+            default-directory (or drgnx-agent-settings--root (expand-file-name "~/")))
       (drgnx-agent-settings--read)
       (drgnx-agent-settings--render)
       (goto-char (point-min)))
@@ -656,8 +659,9 @@ Interactively: the agent of the session at point (in the Agents list or a transc
 
 ;;;;; Test
 
-(defun drgnx-agent-settings--start-test (item)
-  "Test ITEM in its own process; the page shows the result when it comes."
+(defun drgnx-agent-settings--start-test (item &optional no-redraw)
+  "Test ITEM in its own process; the page shows the result when it comes.  NO-REDRAW: the caller draws the page
+once after starting several (Test All)."
   (let ((key (drgnx-agent-settings--ref item))
         (buffer (current-buffer))
         (root (or drgnx-agent-settings--root (expand-file-name "~/"))))
@@ -674,7 +678,7 @@ Interactively: the agent of the session at point (in the Agents list or a transc
                      (with-current-buffer buffer (drgnx-agent-settings--redraw)))))
       (error (remhash key drgnx-agent-settings--running)
              (signal (car err) (cdr err))))
-    (drgnx-agent-settings--redraw)))
+    (unless no-redraw (drgnx-agent-settings--redraw))))
 
 (defun drgnx-agent-settings--runs (item)
   "What the MCP server ITEM (as the page keeps it: masked) starts or reaches."
@@ -731,16 +735,18 @@ real, so each is tested on its own."
                                                     project "; ")))))
       (setq servers (seq-difference servers project #'eq)
             declined (length project)))
-    (when servers
-      (let ((fresh (drgnx-agent-settings--fresh-items)))
-        (dolist (i servers)
-          ;; what runs is what the page showed and was confirmed: a server changed on disk is skipped, and the
-          ;; file's own state is checked again
-          (let ((item (drgnx-agent-settings--match i fresh)))
-            (cond ((or (null item) (funcall skip-p item)
-                       (and (eq (plist-get item :from) 'project) (not (memq i project))))
-                   (cl-incf changed))
-                  (t (cl-incf started) (drgnx-agent-settings--start-test item)))))))
+    (unwind-protect
+        (when servers
+          (let ((fresh (drgnx-agent-settings--fresh-items)))
+            (dolist (i servers)
+              ;; what runs is what the page showed and was confirmed: a server changed on disk is skipped, and the
+              ;; file's own state is checked again
+              (let ((item (drgnx-agent-settings--match i fresh)))
+                (cond ((or (null item) (funcall skip-p item)
+                           (and (eq (plist-get item :from) 'project) (not (memq i project))))
+                       (cl-incf changed))
+                      (t (drgnx-agent-settings--start-test item t) (cl-incf started)))))))
+      (when (> started 0) (drgnx-agent-settings--redraw)))   ; once, for every server it started
     (message "%s%s%s%s"
              (if (> started 0) (format "Testing %d MCP server%s" started (if (= started 1) "" "s")) "No MCP server tested")
              (if skipped (format "; %d skipped (inactive or off)" (length skipped)) "")

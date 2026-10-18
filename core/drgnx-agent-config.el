@@ -118,8 +118,6 @@ CALLBACK gets (:ok t :note STRING) or (:error STRING): at once for a file, later
           (rename-file tmp (concat file ".drgnx-bak") t))
       (when (file-exists-p tmp) (delete-file tmp)))))
 
-(defalias 'drgnx-agent-config--save-backup #'drgnx-agent-config-save-backup)
-
 (defun drgnx-agent-config--make-private-dirs (dir)
   "Make DIR and the parents that are missing, each new one with modes 0700."
   (unless (file-directory-p dir)
@@ -536,16 +534,19 @@ stays."
 
 ;;;; Status without running anything
 
-(defun drgnx-agent-config--command-found-p (command)
-  "Non-nil when COMMAND is an executable file, or is found on `exec-path'."
+(defun drgnx-agent-config--command-found-p (command &optional base)
+  "Non-nil when COMMAND is an executable file (a relative one is BASE's, else the home directory's), or is found on
+`exec-path'."
   (if (string-search "/" command)
-      (file-executable-p (expand-file-name command))
+      (file-executable-p (expand-file-name command (or base "~/")))
     (and (executable-find command) t)))
 
-(defun drgnx-agent-config-cheap-status (item)
+(defun drgnx-agent-config-cheap-status (item &optional root)
   "(STATUS . DETAIL) of ITEM, from files and PATH only; nothing is run.
 STATUS is ok, missing-command (a stdio MCP server whose command is not found), no-url (an http or sse MCP server
-without one) or unreadable (the item has a :problem, or an MCP server has no usable spec)."
+without one) or unreadable (the item has a :problem, or an MCP server has no usable spec).  A relative command is
+the server's working directory's (its `:cwd', relative to ROOT), else the project ROOT's, else the home directory's
+— never the current buffer's directory."
   (let ((spec (plist-get item :spec)))
     (cond
      ((plist-get item :problem) (cons 'unreadable (plist-get item :problem)))
@@ -558,7 +559,10 @@ without one) or unreadable (the item has a :problem, or an MCP server has no usa
           ('stdio
            (if (not (and (stringp command) (not (string-empty-p command))))
                (cons 'missing-command "no command")
-             (cons (if (drgnx-agent-config--command-found-p command) 'ok 'missing-command)
+             (cons (if (drgnx-agent-config--command-found-p
+                        command (let ((cwd (plist-get spec :cwd)) (base (or root "~/")))
+                                  (if (and (stringp cwd) (not (string-empty-p cwd))) (expand-file-name cwd base) base)))
+                       'ok 'missing-command)
                    (drgnx-agent-config-mask-text command (drgnx-agent-config-secrets (list :command command))))))
           ((or 'http 'sse)
            (if (and (stringp url) (not (string-empty-p url)))
