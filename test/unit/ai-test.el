@@ -310,6 +310,18 @@ Keychain and keyring are never reached."
         (should (string-match-p "D-Bus" (cadr (should-error (drgnx-ai-store-key 'openrouter "sk-or-test-123") :type 'user-error)))))
       (should-error (drgnx-ai-store-key 'ollama "x") :type 'user-error))))                ; a local runner has no key
 
+(ert-deftest drgnx-ai/macos-read-back-asks-for-drgnx-s-entry ()
+  ;; another internet password for the host could answer first: the read-back names the account the store wrote
+  (drgnx-ai-test--with root
+    (dolist (case '((darwin "drgnx") (gnu/linux nil)))
+      (drgnx-ai-test--with-fake-store (nth 0 case) bin log
+        (let ((specs nil))
+          (cl-letf (((symbol-function 'auth-source-search)
+                     (lambda (&rest spec) (push spec specs) (list (list :secret "sk-or-test-123")))))
+            (drgnx-ai-store-key 'openrouter "sk-or-test-123"))
+          (should (equal (plist-get (car specs) :user) (nth 1 case)))
+          (should (equal (plist-get (car specs) :host) "openrouter.ai")))))))
+
 (ert-deftest drgnx-ai/security-is-the-system-one-on-macos ()
   ;; a `security' earlier on the path (a stray script, a Homebrew tool) must never get the key
   (should (equal (default-value 'drgnx-ai--security-program) "/usr/bin/security"))

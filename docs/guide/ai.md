@@ -182,7 +182,9 @@ drgnx writes a key in exactly one place: the macOS Keychain, or the Linux keyrin
 step, in the drgnx app: the key is read with `read-passwd`, never shown) or a command you run —
 never into a drgnx file, and never on a command line (it goes to the store on stdin). A Keychain that is locked
 or denies access gives an error saying so; the environment variable always works instead. drgnx never sends a key to
-a model. On a Mac the key is an internet password for `openrouter.ai`, account `drgnx`, in your login keychain:
+a model. On a Mac the key is an internet password for `openrouter.ai`, account `drgnx`, in your login keychain
+(stored with `/usr/bin/security`, never a `security` found elsewhere on your path, and read back for that account,
+so another password for the host cannot answer in its place):
 Keychain Access shows it, and `security delete-internet-password -s openrouter.ai -a drgnx` removes it. On Linux the
 keyring is looked at only when a D-Bus session bus can be reached (not over a bare SSH login, say), so a machine
 without one gets no "invalid backend spec" noise in `*Messages*`.

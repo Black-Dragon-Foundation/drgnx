@@ -197,7 +197,10 @@ later — after the window it opened shows, never inside its emacsclient call.  
   (auth-source-forget+ :host host)
   (let* ((auth-sources (list (drgnx-ai--secret-source)))
          (auth-source-do-cache nil)
-         (secret (plist-get (car (auth-source-search :host host :max 1 :create nil)) :secret)))
+         ;; the Keychain may hold other internet passwords for the host: ask for the account the store wrote
+         (secret (plist-get (car (apply #'auth-source-search :host host :max 1 :create nil
+                                        (and (eq system-type 'darwin) '(:user "drgnx"))))
+                            :secret)))
     (if (functionp secret) (funcall secret) secret)))
 
 (defun drgnx-ai--dbus-session-p ()
