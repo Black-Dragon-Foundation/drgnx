@@ -198,7 +198,9 @@ graphical window, get none, and each terminal window on one drgnx has its own (k
 
 The first time a kind of terminal with the layer connects, one message says so: "This terminal can't send Ctrl+Shift
 keys: use Alt+Shift (or F6 then the key). drgnx doctor has details." It is never a question, and it is said once per
-kind of terminal, ever (`terminal-report.eld` remembers it as `:hinted`).
+kind of terminal, ever (`terminal-report.eld` remembers it as `:hinted`). It comes half a second after the window
+opens, and only if the layer is still on then: a kitty has no kitty keyboard protocol for the moment before its answer
+arrives, and gets no message.
 
 `terminal-report.eld` has, for each terminal, `:fallback` (the layer is on) and `:fallbacks`: every chord of your
 profile a plain terminal cannot send, as `(CHORD NATIVE-P ALT PREFIX)`, where NATIVE-P says this terminal sends it

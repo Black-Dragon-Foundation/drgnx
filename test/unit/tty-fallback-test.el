@@ -460,6 +460,26 @@ binding are taken off afterwards."
         (should-not (member hint messages))
         (should-not (plist-get (tty-fallback-test--report) :hinted))))))
 
+(ert-deftest drgnx-tty-fallback/no-hint-when-kkp-comes-before-it ()
+  ;; a kitty is legacy at the moment its frame is set up and kkp a moment later (kkp's answer comes
+  ;; asynchronously; the exit test in a real kitty saw it): by the time the hint is due the layer is off again, so
+  ;; nothing is said and nothing remembered.  The bindings first: resolving them loads the modules, which would
+  ;; replace the fakes below
+  (let ((bindings (tty-fallback-test--bindings "VS Code")))
+    (tty-fallback-test--with-terminal nil '("TERM=xterm-kitty" "KITTY_WINDOW_ID=1")
+      (let ((drgnx-keys-last (list :bindings bindings))
+            (timers nil))
+        (cl-letf (((symbol-function 'run-with-timer) (lambda (_secs _repeat fn &rest args) (push (cons fn args) timers))))
+          (drgnx-tty-frames-write-report (selected-frame))
+          (should (terminal-parameter nil 'drgnx-tty-fallback))
+          (set-terminal-parameter nil 'drgnx-tty-kkp t)
+          (drgnx-tty-frames-write-report (selected-frame))
+          (should-not (terminal-parameter nil 'drgnx-tty-fallback))
+          (should timers)
+          (pcase-dolist (`(,fn . ,args) timers) (apply fn args)))
+        (should-not (member (drgnx-tty-fallback-hint-text) messages))
+        (should-not (plist-get (tty-fallback-test--report) :hinted))))))
+
 ;;;; The prefix
 
 (defmacro tty-fallback-test--reading (events &rest body)

@@ -174,28 +174,31 @@ prefix too; ESC, or no key → nothing); elsewhere the prefix key unchanged."
 
 ;;;; The hint
 
-(defun drgnx-tty-fallback--show-hint (frame text)
-  (when (frame-live-p frame)
-    (with-selected-frame frame (message "%s" text))))
+(defun drgnx-tty-fallback--show-hint (frame id)
+  "The hint for FRAME, a terminal of kind ID, when it is due: said and remembered in terminal-report.eld
+\(:hinted) unless a terminal of that kind was told before, or FRAME's terminal lost the layer meanwhile — kkp's
+answer comes after the frame is set up, so a kitty is legacy for that moment."
+  (when (and (frame-live-p frame) (terminal-parameter (frame-terminal frame) 'drgnx-tty-fallback))
+    (let (fresh)
+      (condition-case err   ; a report that cannot be written costs the hint, never the layer
+          (drgnx-tty-frames--update-report
+           (lambda (data)
+             (let ((hinted (and (proper-list-p (plist-get data :hinted)) (plist-get data :hinted))))
+               (unless (memq id hinted)
+                 (setq fresh t)
+                 (plist-put data :hinted (append hinted (list id)))))))
+        (error (setq fresh nil)
+               (push (format "ui/terminal: fallback hint: %s" (error-message-string err)) drgnx-hooks-problems)))
+      (when fresh
+        (with-selected-frame frame (message "%s" (drgnx-tty-fallback-hint-text)))))))
 
 (defun drgnx-tty-fallback--hint (frame caps)
   "Once per kind of terminal (CAPS's :id), ever: say how to type the keys it cannot send.  Remembered in
 terminal-report.eld (:hinted); `drgnx-tty-fallback-hint' nil says nothing.  Shown a moment after the frame
-appears (the server's own message would cover it), as a message: never a prompt."
-  (let ((id (or (plist-get caps :id) 'unknown)))
-    (when (and drgnx-tty-fallback-hint (fboundp 'drgnx-tty-frames--update-report))
-      (let (fresh)
-        (condition-case err   ; a report that cannot be written costs the hint, never the layer
-            (drgnx-tty-frames--update-report
-             (lambda (data)
-               (let ((hinted (and (proper-list-p (plist-get data :hinted)) (plist-get data :hinted))))
-                 (unless (memq id hinted)
-                   (setq fresh t)
-                   (plist-put data :hinted (append hinted (list id)))))))
-          (error (setq fresh nil)
-                 (push (format "ui/terminal: fallback hint: %s" (error-message-string err)) drgnx-hooks-problems)))
-        (when fresh
-          (run-with-timer 0.5 nil #'drgnx-tty-fallback--show-hint frame (drgnx-tty-fallback-hint-text)))))))
+appears (the server's own message would cover it, and kkp's answer may still turn the layer off), as a message:
+never a prompt (`drgnx-tty-fallback--show-hint')."
+  (when (and drgnx-tty-fallback-hint (fboundp 'drgnx-tty-frames--update-report))
+    (run-with-timer 0.5 nil #'drgnx-tty-fallback--show-hint frame (or (plist-get caps :id) 'unknown))))
 
 ;;;; Rebuilding
 
