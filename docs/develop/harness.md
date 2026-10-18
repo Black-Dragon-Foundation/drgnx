@@ -746,7 +746,11 @@ for a timer. Load it with `(load (expand-file-name "test/fixtures/clock-fixture"
   by `run-at-time` are stamped by Emacs from the real clock; a `:before` advice on `timer--activate` moves them onto
   the virtual clock, so a timer made at virtual *v* with delay *d* is due at *v* + *d*, also after an advance (a delay
   of 2 ms or more is rounded to the millisecond: Emacs stamps the timer a few microseconds before the advice runs).
-  Nesting is an error.
+  Nesting is an error. The times a test passes (`SECS` of advance and idle, `:input-at`) are snapped the same way: a
+  number within a microsecond of a whole millisecond is that exact millisecond, so `run-at-time 0.3` then
+  `drgnx-test-advance 0.3` always fires (0.3 is not exact in binary). `(float-time nil)` is the real time, `(float-time)`
+  virtual. A real-stamped timer with a delay over 500,000 s is not moved; idle timers are never moved (nothing runs
+  them in a batch real wait; the `--ui` tier has a real command loop).
 - **`drgnx-test-advance SECS`** moves virtual time forward, running each wall timer that comes due, in order, repeats
   included (a timer is run by `timer-event-handler` while still on the list: popping it first makes the handler treat
   it as cancelled).

@@ -81,6 +81,15 @@ as they are."
 
 ;;;; Time moves
 
+(defun drgnx-test--snap (secs)
+  "SECS as a time: a number within a microsecond of a whole millisecond becomes that exact millisecond count.
+A timer made by `run-at-time' D is due at an exact millisecond (`drgnx-test--move-to-virtual'), so the time a test
+advances by (0.3 is 0.29999999999999998 in binary) is snapped the same way and `advance D' always reaches it."
+  (if (numberp secs)
+      (let ((ms (round (* 1000 secs))))
+        (if (< (abs (- secs (/ ms 1000.0))) 1e-6) (cons ms 1000) secs))
+    secs))
+
 (defun drgnx-test--check-active ()
   (unless drgnx-test--active (error "No virtual clock: use drgnx-test-with-clock")))
 
@@ -89,7 +98,7 @@ as they are."
 A timer runs by `timer-event-handler' while still on `timer-list' (popping it first makes the handler treat it as
 cancelled), and a repeating one runs again each time it is due again within SECS."
   (drgnx-test--check-active)
-  (let ((target (time-add drgnx-test--now secs)) (runs 0) timer)
+  (let ((target (time-add drgnx-test--now (drgnx-test--snap secs))) (runs 0) timer)
     (while (and (setq timer (cl-find-if-not #'timer--triggered timer-list))
                 (not (time-less-p target (timer--time timer))))
       (when (> (cl-incf runs) 10000) (error "Timers re-arm themselves at once: a busy loop"))
@@ -107,6 +116,7 @@ run in the same order, virtual time moving with it.  From INPUT-AT seconds into 
 `input-pending-p' is t until this returns."
   (drgnx-test--check-active)
   (when drgnx-test--idle (error "drgnx-test-idle: already in a pause"))
+  (setq secs (drgnx-test--snap secs) input-at (and input-at (drgnx-test--snap input-at)))
   (let ((start drgnx-test--now) (runs 0) (end (if (and input-at (time-less-p input-at secs)) input-at secs)) done)
     (dolist (timer timer-idle-list) (setf (timer--triggered timer) nil))
     (setq drgnx-test--idle 0)
@@ -114,7 +124,7 @@ run in the same order, virtual time moving with it.  From INPUT-AT seconds into 
         (while (not done)
           (let* ((idle (cl-find-if-not #'timer--triggered timer-idle-list))
                  (wall (cl-find-if-not #'timer--triggered timer-list))
-                 (idle-at (and idle (timer--time idle)))
+                 (idle-at (and idle (drgnx-test--snap (float-time (timer--time idle)))))   ; stored truncated to a picosecond
                  (wall-at (and wall (time-subtract (timer--time wall) start)))
                  (next (cond ((and idle wall) (if (time-less-p wall-at idle-at) wall idle))
                              (t (or idle wall))))
@@ -155,9 +165,9 @@ run in the same order, virtual time moving with it.  From INPUT-AT seconds into 
                                    drgnx-test--clock-shift))
         (drgnx-test--idle nil) (drgnx-test--input nil)
         (advice (drgnx-test--advice)) names)
-    (dolist (a advice) (advice-add (nth 0 a) (nth 1 a) (nth 2 a)))
     (unwind-protect
-        (progn (funcall body)
+        (progn (dolist (a advice) (advice-add (nth 0 a) (nth 1 a) (nth 2 a)))
+               (funcall body)
                (when (and (not allow-pending) (or timer-list timer-idle-list))
                  (setq names (drgnx-test--pending-names))))
       (dolist (a advice) (advice-remove (nth 0 a) (nth 2 a)))
