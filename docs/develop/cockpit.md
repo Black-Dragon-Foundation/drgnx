@@ -9,8 +9,9 @@ questions and the timeline. The cockpit's panes only draw what it returns. It re
 
 It is batch-safe. Nothing in it prompts. The model, the filter, "what happened", the timeline and the edit sources
 are SQL reads that use the event indexes. Only git runs as a process, always asynchronously (`make-process` with a
-sentinel). git never runs on a remote (TRAMP) folder: such a folder gets an error result, decided by its name alone,
-with no file handler called.
+sentinel). git never runs on a remote (TRAMP) folder: such a folder gets an error result, decided by its name alone.
+A remote name is never expanded, made a folder name or resolved (`expand-file-name`, `file-truename`), so no file
+handler runs on it. It comes back untouched, or is left out.
 
 ## The model
 
@@ -28,6 +29,8 @@ with no file handler called.
 - **Plan tasks are the skeleton.** A job's task is joined to its plan task `task:PLAN#N` (the job's `:plan`, the
   task's `:n`). That node then carries the job's state, holder and job. When two jobs run the same plan, the newest
   one shows.
+- **Open jobs only, by default.** Done jobs are left out unless `drgnx-cockpit-include-closed-jobs` is set. The jobs,
+  their tasks, their dependencies and the open ask cards come from four queries in all, whatever the number of jobs.
 - **Read-only nodes.** A plan task that no job runs is `:readonly t`. The node offers "open in plan" and "start as
   job". Specs, plans and board TODOs are read-only too.
 - **A plan the tracker never scanned** is read from its file: its `# ` title and `### Task N` headings with their
@@ -75,15 +78,34 @@ matches a node whose title or path contains it, or one of its ancestors' (case i
 | outside | its registered worktree (or cwd), with `:paths` it reported, relative to it | its registry `base` |
 | silent (`silent:DIR`) | the worktree | the main branch, as a merge-base |
 
-- `drgnx-cockpit-changed-files` runs `git diff --numstat --summary` against the base, then lists untracked files. It
-  answers `((:file :added :removed :status new|modified|deleted)…)` or `(:error MSG)`.
-- `drgnx-cockpit-file-diff` gives one file's diff. An untracked file is diffed against `/dev/null`. It answers the
-  text, `(:too-large BYTES)` (over `drgnx-cockpit-diff-max-bytes`, 1 MB, for the file or its diff), or `(:error
-  MSG)`.
-- Both handle only regular files inside the folder. They never touch a device, FIFO or socket, or a link that leads
-  out of the folder, so a reported path cannot make the cockpit read `/dev/zero` or a file in `~`.
-- git runs with `GIT_OPTIONAL_LOCKS=0` (it never takes `index.lock` from an agent at work) and
-  `GIT_TERMINAL_PROMPT=0`. A run longer than `drgnx-cockpit-git-timeout` (30 s) is ended.
+A job agent's task comes from its session's `:task`, else the task it holds and works on.
+
+**Two exact bases are still to come.** A job agent's registry `base` should be the task's HEAD at its start, and a
+native session's `start` event should carry `:head`. Until their writers record them (the hub, C3), the job
+branch's fork point (`git diff --merge-base`) or HEAD is used.
+
+`--merge-base` needs git 2.30 or later.
+
+- **`drgnx-cockpit-changed-files`** runs `git diff -z --numstat --summary` against the base, then
+  `git ls-files -z --others`, and answers `((:file :added :removed :status new|modified|deleted)…)` or
+  `(:error MSG)`.
+  - It lists at most `drgnx-cockpit-changed-files-max` (500) files, then `(:more N)` for the rest.
+  - It counts untracked files' lines until `drgnx-cockpit-count-bytes-max` (1 MB) has been read. After that, `:added`
+    is nil.
+  - A source without a folder is an error answer, not a signal.
+- **`drgnx-cockpit-file-diff`** gives one file's diff. An untracked file is diffed against `/dev/null`. It answers the
+  text, `(:too-large BYTES)` or `(:error MSG)`.
+  - The cap, `drgnx-cockpit-diff-max-bytes` (1 MB), is checked on the file's size before git runs, and then by the
+    process filter while git writes. git is ended as soon as its output passes the cap, so a deleted 3 MB file costs
+    one chunk past the cap, never the whole file.
+- **Both read only regular files inside the folder.** They decide from `lstat` and link targets, opening nothing
+  first. They never touch a device, FIFO or socket, or a link that leads out of the folder, so a reported path cannot
+  make the cockpit read `/dev/zero` or a file in `~`.
+- **How git runs:**
+  - with `--literal-pathspecs` (a reported path is a name, never a pattern);
+  - with `GIT_OPTIONAL_LOCKS=0`, so it never takes `index.lock` from an agent at work;
+  - with `GIT_TERMINAL_PROMPT=0`;
+  - ended after `drgnx-cockpit-git-timeout` (30 s).
 
 `(drgnx-cockpit-silent-worktrees ROOTS CALLBACK &optional SESSIONS)` finds the linked worktrees of each root that
 have changes against their merge-base with `drgnx-cockpit-main-branches`, leaving out:
@@ -92,12 +114,21 @@ have changes against their merge-base with `drgnx-cockpit-main-branches`, leavin
 - worktrees a registered agent or a session works in;
 - every job's worktrees.
 
-Each one found is an agent of `:reporting silent`, with the plan and ledger the tracker has for its branch.
+Each one found is an agent of `:reporting silent`, with the plan and ledger the tracker has for its branch. At most
+three git processes run at a time.
 
 ## Cost
 
-These were measured in batch on the fixture: the model builds in about 1 ms. With 2,000 more events it still builds
-in about 1 ms, "what happened" takes 2 ms and a 300-chip timeline takes 6 ms.
+Measured in batch on the fixture, plus 150 more jobs (6 tasks each, 140 of them done) and 2,000 events:
+
+| | Time |
+|---|---|
+| The model, on the fixture alone | about 1 ms |
+| The model, 151 jobs (11 open) | 4.3 ms |
+| The model, closed jobs included (`drgnx-cockpit-include-closed-jobs`) | 15.7 ms |
+| "What happened" for one agent | 1.7 ms |
+| A 300-chip timeline | 4.4 ms |
+| The `changed-files` sentinel on 1,002 files (500 listed, 1 MB of lines counted) | about 19 ms |
 
 ## Tests
 

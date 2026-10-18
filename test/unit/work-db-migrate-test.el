@@ -65,4 +65,15 @@
     (should (equal (drgnx-work-db-spend :agent "z") '(:input 100 :output 100 :cost 9.0 :requests 1)))
     (should (equal (drgnx-work-db-spend :job "none") '(:input 0 :output 0 :cost 0.0 :requests 0)))))
 
+(ert-deftest drgnx-work-db/nodes-of-kinds-in-one-query ()
+  (drgnx-work-db-migrate-test--with
+    (drgnx-work-put-node "spec:s" :kind 'spec :title "S" :path "/s")
+    (drgnx-work-put-node "plan:p" :kind 'plan :title "P" :path "/p")
+    (drgnx-work-put-node "step:p#1.1" :kind 'step :title "do" :path "/p")
+    (drgnx-work-put-node "task:p#1" :kind 'task :title "T" :path "/p" :ord 1 :stale t)
+    (should (equal (mapcar (lambda (n) (plist-get n :id)) (drgnx-work-nodes-of-kinds '(spec plan task)))
+                   '("plan:p" "spec:s" "task:p#1")))
+    (should (eq (plist-get (car (drgnx-work-nodes-of-kinds '(task))) :stale) t))
+    (should-not (drgnx-work-nodes-of-kinds nil))))
+
 ;;; work-db-migrate-test.el ends here

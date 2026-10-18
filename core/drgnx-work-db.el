@@ -180,6 +180,15 @@ and the commits that implement it (newest first)."
 (defun drgnx-work-nodes (kind)
   (mapcar #'drgnx-work--row-node (sqlite-select (drgnx-work-db) (concat drgnx-work--select " where kind = ?") (list (symbol-name kind)))))
 
+(defun drgnx-work-nodes-of-kinds (kinds)
+  "The nodes of any of KINDS (symbols), in one query, by kind, path and order."
+  (when kinds
+    (mapcar #'drgnx-work--row-node
+            (sqlite-select (drgnx-work-db)
+                           (format "%s where kind in (%s) order by kind, path, ord, line" drgnx-work--select
+                                   (mapconcat (lambda (_) "?") kinds ", "))
+                           (mapcar #'symbol-name kinds)))))
+
 (defun drgnx-work-forget-orphan-commits ()
   "Forget the commits no edge links any more (commits belong to no file: several ledgers may name one)."
   (sqlite-execute (drgnx-work-db) "delete from node where kind = 'commit' and id not in (select src from edge)"))

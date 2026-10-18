@@ -257,12 +257,92 @@
           (let ((m (drgnx-cockpit-model :sessions sessions :silent agents)))
             (should (eq (plist-get (drgnx-cockpit-model-test--node m (concat "agent:" (plist-get a :id))) :reporting) 'silent))
             (should (drgnx-cockpit-model-test--edge-p m (concat "plan:" plan) (concat "agent:" (plist-get a :id)) 'assigned))))))
-    ;; a remote root: an error entry, never a TRAMP call
+    ;; a remote root: an error entry, and no file handler ever runs on its name
     (let (got)
-      (cl-letf (((symbol-function 'tramp-file-name-handler) (lambda (&rest _) (error "TRAMP was called"))))
+      (let ((file-name-handler-alist (list (cons "\\`/[^/|:]+:" #'drgnx-cockpit-model-test--trap))))
         (drgnx-cockpit-silent-worktrees '("/ssh:somehost:/x/") (lambda (agents) (setq got (list agents))))
-        (should (drgnx-cockpit-fixture-wait (lambda () got) 2))
-        (should (plist-get (caar got) :error))))))
+        (should (drgnx-cockpit-fixture-wait (lambda () got) 2)))
+      (should (plist-get (caar got) :error)))))
+
+(defun drgnx-cockpit-model-test--trap (op &rest args)
+  "A file handler that must never run: a remote name reached one (OP on ARGS)."
+  (error "A file handler ran: %S %S" op args))
+
+(ert-deftest drgnx-cockpit-model/remote-names-are-never-expanded ()
+  (drgnx-cockpit-fixture-with
+    (let ((remote "/ssh:somehost:/srv/proj") files diff)
+      (drgnx-coord-agent-register :id "ext:zed:7" :kind "zed" :name "Zed" :cwd remote :worktree remote :base sha
+                                  :plan "docs/plans/p.md")
+      (drgnx-coord-event-add :agent "ext:zed:7" :kind "edit" :summary "1 file" :data (list :root remote :paths '("a.el")))
+      (let ((file-name-handler-alist (list (cons "\\`/[^/|:]+:" #'drgnx-cockpit-model-test--trap)))
+            (sessions (append sessions (list (list :id "s-9" :name "far" :cwd (concat remote "/") :task "jx#9" :status 'idle)))))
+        (let ((m (drgnx-cockpit-model :sessions sessions)))
+          (should (eq (plist-get (drgnx-cockpit-model-test--node m "agent:ext:zed:7") :reporting) 'outside))
+          (should (drgnx-cockpit-model-test--node m "agent:s-9")))
+        (let ((src (drgnx-cockpit-edit-source "ext:zed:7")))
+          (should (equal (plist-get src :dir) remote))
+          (should-not (plist-get src :paths))
+          (should-not (plist-get src :own-worktree))
+          (drgnx-cockpit-changed-files src (lambda (r) (setq files (list r))))
+          (drgnx-cockpit-file-diff src "a.el" (lambda (r) (setq diff (list r)))))
+        (should (equal (plist-get (drgnx-cockpit-edit-source "s-9" sessions) :dir) (concat remote "/")))
+        (should (drgnx-cockpit-fixture-wait (lambda () (and files diff)) 2)))
+      (should (plist-get (car files) :error))
+      (should (plist-get (car diff) :error))
+      ;; no folder at all: an error answer, not a signal
+      (let (r)
+        (drgnx-cockpit-changed-files (list :dir nil) (lambda (x) (setq r (list x))))
+        (should (drgnx-cockpit-fixture-wait (lambda () r) 2))
+        (should (plist-get (car r) :error))))))
+
+(ert-deftest drgnx-cockpit-model/a-deleted-big-file-stops-at-the-cap ()
+  (drgnx-cockpit-fixture-with
+    (let ((big (concat wt-a "big.txt")))
+      (with-temp-file big (dotimes (i 40000) (insert (format "line %06d of a big file\n" i))))   ; about 1 MB
+      (drgnx-cockpit-fixture-git wt-a "add" "big.txt")
+      (drgnx-cockpit-fixture-git wt-a "commit" "-q" "-m" "big")
+      (delete-file big)
+      (let ((drgnx-cockpit-diff-max-bytes 100000) diff)
+        (drgnx-cockpit-file-diff (list :dir wt-a :base "HEAD") "big.txt" (lambda (r) (setq diff (list r))))
+        (should (drgnx-cockpit-fixture-wait (lambda () diff)))
+        (let ((n (plist-get (car diff) :too-large)))
+          (should n)
+          (should (> n 100000))
+          ;; git was ended as soon as its output passed the cap: one chunk more at most
+          (should (<= n (+ 100000 (max read-process-output-max 65536)))))))))
+
+(ert-deftest drgnx-cockpit-model/many-untracked-files-never-block ()
+  (drgnx-cockpit-fixture-with
+    (let ((text (make-string 2047 ?x)) (took nil) files)
+      (make-directory (concat wt-a "many") t)
+      (dotimes (i 1000) (write-region (concat text "\n") nil (format "%smany/f%04d.txt" wt-a i) nil 'silent))
+      (advice-add 'drgnx-cockpit--changed :around
+                  (lambda (f &rest args) (let ((t0 (float-time))) (prog1 (apply f args) (setq took (- (float-time) t0)))))
+                  '((name . drgnx-cockpit-model-test--time)))
+      (unwind-protect
+          (let ((drgnx-cockpit-count-bytes-max 10240))
+            (drgnx-cockpit-changed-files (list :dir wt-a :base sha) (lambda (r) (setq files (list r))))
+            (should (drgnx-cockpit-fixture-wait (lambda () files) 20)))
+        (advice-remove 'drgnx-cockpit--changed 'drgnx-cockpit-model-test--time))
+      (let* ((r (car files)) (listed (seq-filter (lambda (f) (plist-get f :file)) r)))
+        (should (= (length listed) drgnx-cockpit-changed-files-max))
+        (should (equal (car (last r)) (list :more (- 1002 drgnx-cockpit-changed-files-max))))
+        ;; lines counted while the byte budget lasts (5 files of 2 KB), none after
+        (should (= (seq-count (lambda (f) (plist-get f :added)) (seq-filter (lambda (f) (string-prefix-p "many/" (plist-get f :file))) listed))
+                   5))
+        (should (< took 0.1))))))
+
+(ert-deftest drgnx-cockpit-model/closed-jobs-only-when-asked ()
+  (drgnx-cockpit-fixture-with
+    (drgnx-coord-job-create :id "jold" :title "old" :plan plan :repo repo :tasks '((:n 6 :title "task 6" :role "implement")))
+    (drgnx-coord-job-set "jold" :status "done")
+    (should-not (drgnx-cockpit-model-test--node (drgnx-cockpit-model :sessions sessions) "job:jold"))
+    (should-not (plist-get (drgnx-cockpit-model-test--node (drgnx-cockpit-model :sessions sessions) (format "task:%s#6" plan)) :job))
+    (let* ((drgnx-cockpit-include-closed-jobs t) (m (drgnx-cockpit-model :sessions sessions)))
+      (should (drgnx-cockpit-model-test--node m "job:jold"))
+      (should (equal (plist-get (drgnx-cockpit-model-test--node m (format "task:%s#6" plan)) :job) "jold"))
+      ;; the open job still has its tasks
+      (should (equal (plist-get (drgnx-cockpit-model-test--node m (format "task:%s#2" plan)) :job) "jx")))))
 
 (ert-deftest drgnx-cockpit-model/changed-files-and-diff-are-async ()
   (drgnx-cockpit-fixture-with
