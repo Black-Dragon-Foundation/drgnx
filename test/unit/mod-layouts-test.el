@@ -290,6 +290,121 @@ Agents tab, no agent session, no layout state and a temp config dir (layouts.eld
     (should-not (drgnx-wb-area-window 'right))
     (should (= 2 (length (drgnx-groups-list))))))       ; until Task 6's shape: the groups as they are
 
+;;;; Shapes and pane fillers: defined through the API, removed by the module's undo
+
+(defmacro drgnx-layouts-shape-test--as-module (&rest body)
+  "BODY as the setup of module `test/shape' (its registrations record their undos), then the undone stack's
+problems.  The shape and filler registries are restored afterwards."
+  (declare (indent 0))
+  `(let ((drgnx-layouts-shapes (copy-sequence drgnx-layouts-shapes))
+         (drgnx-layouts-pane-fillers (copy-sequence drgnx-layouts-pane-fillers))
+         (drgnx-modules--stacks nil))
+     (let ((drgnx-modules--current 'test/shape) (drgnx-modules--setup-load load-file-name))
+       ,@body)))
+
+(defun drgnx-layouts-shape-test--teardown ()
+  "Undo what module `test/shape' registered; return the problems."
+  (drgnx-modules--unwind 'test/shape))
+
+(ert-deftest drgnx-layouts-shape/define-and-undefine-shape ()
+  (drgnx-layouts-shape-test--as-module
+    (should (eq (drgnx-layouts-define-shape 'test-shape #'ignore) 'test-shape))
+    (should (eq (alist-get 'test-shape drgnx-layouts-shapes) #'ignore))
+    (should (alist-get 'one drgnx-layouts-shapes))
+    (should (= 1 (length (alist-get 'test/shape drgnx-modules--stacks))))
+    ;; the public undefine removes it and leaves the built-ins
+    (drgnx-layouts-undefine-shape 'test-shape)
+    (should-not (assq 'test-shape drgnx-layouts-shapes))
+    (should (alist-get 'one drgnx-layouts-shapes))
+    ;; a second define; the module's undo removes it
+    (drgnx-layouts-define-shape 'test-shape #'ignore)
+    (should-not (drgnx-layouts-shape-test--teardown))
+    (should-not (assq 'test-shape drgnx-layouts-shapes))
+    (should (alist-get 'one drgnx-layouts-shapes))
+    ;; a define that replaces an entry puts the previous one back
+    (drgnx-layouts-define-shape 'one #'identity)
+    (should (eq (alist-get 'one drgnx-layouts-shapes) #'identity))
+    (drgnx-layouts-shape-test--teardown)
+    (should (eq (alist-get 'one drgnx-layouts-shapes) 'drgnx-layouts--one))
+    ;; the undo leaves an entry someone else has set since
+    (drgnx-layouts-define-shape 'test-shape #'ignore)
+    (drgnx-layouts-define-shape 'test-shape #'identity)
+    (setf (alist-get 'test-shape drgnx-layouts-shapes) #'car)
+    (drgnx-layouts-shape-test--teardown)
+    (should (eq (alist-get 'test-shape drgnx-layouts-shapes) #'car))))
+
+(ert-deftest drgnx-layouts-shape/an-undefined-shape-arranges-as-one ()
+  (drgnx-layouts-test--with
+    (drgnx-layouts-shape-test--as-module
+      (let ((calls 0))
+        (drgnx-layouts-define-shape 'editor+browser (lambda (_editor) (cl-incf calls)))
+        (drgnx-layouts-apply 'browser)
+        (should (= calls 1))
+        (drgnx-layouts-shape-test--teardown)
+        (drgnx-layouts-apply 'browser)
+        (should (= calls 1))                        ; the shape is gone: the groups as they are
+        (should (eq (drgnx-layouts-current) 'browser))))))   ; the layout, its intent, stays
+
+(ert-deftest drgnx-layouts-shape/undefine-pane-keeps-shown-windows ()
+  (drgnx-layouts-test--with
+    (drgnx-layouts-shape-test--as-module
+      (let* ((editor (selected-window)) (pane (drgnx-groups--split 'right)) (filled nil))
+        (drgnx-layouts--mark-pane (cons pane 'test-kind))
+        (drgnx-layouts-define-pane 'test-kind (lambda (w) (push w filled)))
+        (should (equal filled (list pane)))         ; a pane already shown is filled when the kind is defined
+        (should (alist-get 'test-kind drgnx-layouts-pane-fillers))
+        (drgnx-layouts-undefine-pane 'test-kind)
+        (should-not (assq 'test-kind drgnx-layouts-pane-fillers))
+        (should (alist-get 'agent drgnx-layouts-pane-fillers))
+        (should (window-live-p pane))                ; the window and its mark stay until the next layout
+        (should (eq (window-parameter pane 'drgnx-layouts-pane) 'test-kind))
+        (should (window-live-p editor))
+        ;; the module's undo does the same
+        (drgnx-layouts-define-pane 'test-kind #'ignore)
+        (should-not (drgnx-layouts-shape-test--teardown))
+        (should-not (assq 'test-kind drgnx-layouts-pane-fillers))
+        (should (window-live-p pane))
+        ;; turned on again: the pane that was shown is filled again
+        (setq filled nil)
+        (drgnx-layouts-define-pane 'test-kind (lambda (w) (push w filled)))
+        (should (equal filled (list pane)))
+        ;; the next layout removes the pane, whatever its kind
+        (drgnx-layouts-apply 'editor)
+        (should-not (window-live-p pane))))))
+
+(ert-deftest drgnx-layouts-shape/a-pane-define-puts-the-previous-filler-back ()
+  (drgnx-layouts-shape-test--as-module
+    (let ((agent (alist-get 'agent drgnx-layouts-pane-fillers)))
+      (drgnx-layouts-define-pane 'agent #'ignore)
+      (should (eq (alist-get 'agent drgnx-layouts-pane-fillers) #'ignore))
+      (drgnx-layouts-shape-test--teardown)
+      (should (eq (alist-get 'agent drgnx-layouts-pane-fillers) agent))
+      ;; an entry someone else set since stays
+      (drgnx-layouts-define-pane 'agent #'ignore)
+      (setf (alist-get 'agent drgnx-layouts-pane-fillers) #'identity)
+      (drgnx-layouts-shape-test--teardown)
+      (should (eq (alist-get 'agent drgnx-layouts-pane-fillers) #'identity)))))
+
+(ert-deftest drgnx-layouts-shape/browser-registers-through-the-api ()
+  ;; no module writes the shape registry itself
+  (let ((hits nil))
+    (dolist (f (directory-files-recursively (expand-file-name "modules" drgnx-dir) "\\.el\\'"))
+      (with-temp-buffer
+        (insert-file-contents f)
+        (goto-char (point-min))
+        (while (re-search-forward "(setf (alist-get [^\n]*drgnx-layouts-shapes" nil t)
+          (unless (save-excursion (beginning-of-line) (looking-at-p "[ \t]*;")) (push f hits)))))
+    (should-not hits))
+  ;; and the browser's registration is undone with the module
+  (drgnx-layouts-shape-test--as-module
+    (load (expand-file-name "modules/tools/drgnx-browser" drgnx-dir) nil t)
+    (drgnx-browser--register-shape)
+    (should (eq (alist-get 'editor+browser drgnx-layouts-shapes) 'drgnx-browser--shape))
+    (should (eq (alist-get 'browser drgnx-layouts-pane-fillers) 'drgnx-browser--fill))
+    (should-not (drgnx-layouts-shape-test--teardown))
+    (should-not (assq 'editor+browser drgnx-layouts-shapes))
+    (should-not (assq 'browser drgnx-layouts-pane-fillers))))
+
 ;;; mod-layouts-test.el ends here
 
 (ert-deftest drgnx-layouts/the-fixture-keeps-the-frame-size ()

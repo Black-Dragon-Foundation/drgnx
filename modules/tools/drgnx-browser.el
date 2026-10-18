@@ -34,9 +34,9 @@
 (declare-function drgnx-agents-ui--session "drgnx-agents-ui")
 (declare-function drgnx-agent-session-name "drgnx-agents")
 (declare-function drgnx-agent-session-entries "drgnx-agents")
-(defvar drgnx-layouts-shapes)
 (declare-function drgnx-layouts--mark-pane "drgnx-layouts")
 (declare-function drgnx-layouts-define-pane "drgnx-layouts")
+(declare-function drgnx-layouts-define-shape "drgnx-layouts")
 (defvar xwidget-webkit-last-session-buffer)
 
 (defvar drgnx-browser--told nil "Non-nil once the message about the missing WebKit has been shown.")
@@ -164,7 +164,7 @@ The pane takes the focus, unless KEEP-FOCUS (a timer opening a page must not mov
 (defun drgnx-browser--register-shape ()
   "Teach the layouts the `editor+browser' shape, and how to fill the pane found again after a restart."
   (require 'drgnx-layouts)
-  (setf (alist-get 'editor+browser drgnx-layouts-shapes) #'drgnx-browser--shape)
+  (drgnx-layouts-define-shape 'editor+browser #'drgnx-browser--shape)
   (drgnx-layouts-define-pane 'browser #'drgnx-browser--fill))
 
 ;;;; Test Report
