@@ -47,10 +47,14 @@
 
 (defun drgnx-wm-move--start (monitors saved)
   "Start a daemon session with MONITORS outputs, its layout file SAVED; return the session."
-  (let* ((s (drgnx-ui-start "drgnx" "1280x800" 60 t monitors (drgnx-ui-default-compositor)))
-         (sess (drgnx-ui-own-session (plist-get s :name))))
-    (drgnx-wm-move--eval sess (format "(progn (setq drgnx-persist-file %S) %s)" saved drgnx-wm-move--session-lisp))
-    sess))
+  (let ((s (drgnx-ui-start "drgnx" "1280x800" 60 t monitors (drgnx-ui-default-compositor))))
+    ;; the callers' `unwind-protect' starts after this returns: a failure here stops the session itself
+    (condition-case err
+        (let ((sess (drgnx-ui-own-session (plist-get s :name))))
+          (drgnx-wm-move--eval sess (format "(progn (setq drgnx-persist-file %S) %s)" saved drgnx-wm-move--session-lisp))
+          sess)
+      (error (ignore-errors (drgnx-ui-stop (plist-get s :name)))
+             (signal (car err) (cdr err))))))
 
 (defun drgnx-wm-move--open-main (sess &optional file)
   "Open the main window of SESS (`emacsclient -c'); with FILE, it shows that file.  The frame is `drgnx-wmt-main'."
@@ -239,11 +243,16 @@ Under X the window manager (or the pointer) gives Emacs the real event."
               (should (drgnx-wm-move--until
                        (lambda () (eql 2 (drgnx-wm-move--eval sess "(drgnx-wmt-monitor (drgnx-wmt-aux-frame))")))
                        5))
-              ;; the main window is where the WM put it: monitor 1
+              ;; the main window is where the WM put it: monitor 1 (and it is not the aux one the helper might pick)
+              (should (drgnx-wm-move--eval sess "(not (eq drgnx-wmt-main (drgnx-wmt-aux-frame)))"))
               (should (eql 1 (drgnx-wm-move--eval sess "(drgnx-wmt-monitor drgnx-wmt-main)")))
               (when (equal (drgnx-ui-default-compositor) "sway")
                 (should (drgnx-wm-move--until
-                         (lambda () (equal (drgnx-wm-move--wm-outputs sess) '("HEADLESS-1" "HEADLESS-2")))))))
+                         (lambda () (equal (drgnx-wm-move--wm-outputs sess) '("HEADLESS-1" "HEADLESS-2")))))
+                ;; and no size was restored: each fills its output, as sway tiles a lone window
+                (should (equal (sort (mapcar (lambda (w) (plist-get (cdr w) :rect)) (drgnx-wm-move--emacs-nodes sess))
+                                     (lambda (a b) (< (plist-get a :x) (plist-get b :x))))
+                               '((:x 0 :y 0 :width 1280 :height 800) (:x 1280 :y 0 :width 1280 :height 800))))))
           (drgnx-ui-stop (plist-get sess :name)))))))
 
 (ert-deftest drgnx-wm/a-missing-monitor-on-restore-is-skipped ()
@@ -267,7 +276,9 @@ Under X the window manager (or the pointer) gives Emacs the real event."
               (sleep-for 1)
               (let ((text (drgnx-wm-move--eval sess messages)))
                 (should (= 1 (drgnx-wm-move--count "monitor is not connected" text)))
-                (should-not (string-match-p "after-restore function\\|was not restored" text))))
+                (should-not (string-match-p "after-restore function\\|was not restored" text))
+                ;; and no error of any kind (a timer's, a process's, a callback's)
+                (should-not (string-match-p "^Error\\|error in \\|callback failed" text))))
           (drgnx-ui-stop (plist-get sess :name)))))))
 
 (defun drgnx-wm-move--count (regexp string)

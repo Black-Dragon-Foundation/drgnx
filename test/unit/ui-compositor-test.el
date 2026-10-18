@@ -376,7 +376,9 @@ paths no WM serves."
             (should (equal (plist-get (drgnx-ui-own-session "drgnx-ui-1-00000a") :name) "drgnx-ui-1-00000a"))
             (dolist (forged (list (list :name "drgnx-ui-7-00000a")
                                   (list :name "../00000000/drgnx-ui-1-00000a")
-                                  (list :run (expand-file-name "drgnx-ui-7-00000a" root))))
+                                  (list :run (expand-file-name "drgnx-ui-7-00000a" root))
+                                  ;; M12c-2-2: a sway session saying mutter would get the caller's runtime dir
+                                  (list :compositor "mutter")))
               (drgnx-ui--write json (drgnx-ui--json (apply #'plist-put (copy-sequence s) forged)))
               (should-error (drgnx-ui-own-session "drgnx-ui-1-00000a") :type 'drgnx-ui-refused)))
         (delete-process server)))))

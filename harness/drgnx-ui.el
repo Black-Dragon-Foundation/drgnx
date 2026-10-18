@@ -242,9 +242,10 @@ holder's and is taken over."
       (if (condition-case nil (progn (make-directory lock) t) (file-already-exists nil))
           (setq held t)
         (let ((mt (file-attribute-modification-time (file-attributes lock))))
-          (if (and mt (< (float-time mt) (- (float-time) 10)))
-              (ignore-errors (delete-directory lock))
-            (sleep-for 0.02)))))
+          (when (and mt (< (float-time mt) (- (float-time) 10)))
+            (ignore-errors (delete-directory lock)))
+          ;; still there (held, or an old one that cannot be removed): wait, never spin
+          (when (file-exists-p lock) (sleep-for 0.02)))))
     (when held
       (unwind-protect (funcall fn) (ignore-errors (delete-directory lock))))))
 
@@ -1044,6 +1045,11 @@ Old kept test runs go too (`drgnx-ui--remove-old-test-runs'), and the eln cache 
       (unless (and (equal (plist-get sess :name) name) (equal (plist-get sess :run) run))
         (drgnx-ui--refuse "%s: its session.json names another session (%S, %S)"
                           name (plist-get sess :name) (plist-get sess :run)))
+      ;; …or another compositor: every one but mutter has a private runtime directory, so a session.json that says
+      ;; mutter there would point frames at the caller's runtime directory (M12c-2-2)
+      (when (and (member (plist-get sess :compositor) '(nil "mutter"))
+                 (file-directory-p (drgnx-ui-session-runtime-dir name)))
+        (drgnx-ui--refuse "%s: its session.json says mutter, but it has a private runtime directory" name))
       sess)))
 
 ;;;; Driving a session
