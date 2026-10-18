@@ -52,10 +52,20 @@ git -c core.hooksPath=/dev/null -c core.fsmonitor=false clone -q --no-local --ba
 - The clone's config is then **replaced** with the whitelist.
 - A bare clone writes no reflog.
 
+The clone goes to `STORE.part`, which is renamed to `STORE` only once its config is written. A store that a stopped
+job or a crash left half-made therefore never has the final name, and its `.part` leftover is removed before the next
+build.
+
 The store is hub-only. No agent mounts it writable, and nothing of an agent's reaches it. When BASE moves (a task
-merged), the next task's snapshot first runs `fetch -q --no-tags --no-write-fetch-head REPO +refs/heads/BASE:refs/heads/BASE`
-in the store. The store's steps run one at a time: a fetch while a copy reads the store could give the copy a ref
-without its objects.
+merged), the next task's snapshot first runs
+`git --git-dir=STORE fetch -q --no-tags --no-write-fetch-head REPO +refs/heads/BASE:refs/heads/BASE`.
+- The store is always named with `--git-dir` (or `config --file STORE/config`), never found by discovery.
+  `safe.bareRepository=explicit`, git's hardening against embedded bare repositories, refuses discovery.
+  Discovery from a wrong directory would also find the user's repository instead.
+- The store's steps run one at a time: a fetch while a copy reads the store could give the copy a ref without its
+  objects.
+- Each turn is guarded. An error in any step, even a synchronous one (`.claude/worktrees` is not a directory), ends
+  it with `(:error MSG)` and frees the store for the next turn.
 
 ### The task's copy
 
@@ -133,7 +143,10 @@ ever runs with the agent's own power.
 After DONE, nothing outside the sandbox runs git in the folder again (the VC guard enforces it).
 
 **Limits:**
-- Git LFS content (`.git/lfs/objects`) is not in the store. An LFS checkout fetches it, which needs the network.
+- **Git LFS repositories do not check out yet.** LFS content (`.git/lfs/objects`) is not in the store.
+  - The task's config has the LFS filter (with `filter.lfs.required`) but no remote and no `lfs.url`, so
+    `git-lfs smudge` has no endpoint even with network. The checkout likely aborts.
+  - A checkout with `GIT_LFS_SKIP_SMUDGE=1` would leave pointer files instead.
 - Submodules' git directories are not copied. A task gets empty submodule directories.
 - On macOS, `cp -c` may fall back to a full copy without failing on a filesystem without clonefile. The probe then
   answers yes. For a store this costs little (it holds BASE alone).
@@ -147,7 +160,9 @@ removes them with `rm -rf`, which never follows a link an agent left. It takes o
 - a task folder `ID-N` (or `ID-N-review`) with a `.git` directory;
 - a store `NAME.base.git`.
 
-It refuses anything that is a link. Remove a store only after the last task that borrows from it (shared clones).
+It refuses a path with a link anywhere from the repository down: `.claude`, `worktrees` or the folder itself. The
+repository's own path is the user's, and may go through a link. Remove a store only after the last task that borrows
+from it (shared clones).
 `drgnx-job-snapshot-disk-usage DIR DONE` reports `(:bytes N :exclusive M)`:
 - N comes from `du`, which counts shared blocks in full;
 - M is what is not shared, from `btrfs filesystem du` on btrfs, and nil elsewhere.

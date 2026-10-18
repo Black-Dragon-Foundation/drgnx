@@ -372,6 +372,76 @@ its alternates', `cat-file --batch-all-objects --batch')."
           (while (and (not got) (< (float-time) deadline)) (accept-process-output nil 0.05))))
       (should (memq (plist-get got :mode) '(snapshot clone))))))
 
+(ert-deftest drgnx-job-snapshot/store-works-with-safe-bare-repository-explicit ()
+  ;; git's hardening against embedded bare repositories, in the (test's own) global config: every git on the store
+  ;; names it with --git-dir, so the second task's fetch into the store still works
+  (drgnx-job-snapshot-test--with
+    (let* ((global (concat root "gitconfig"))
+           (process-environment (cons (concat "GIT_CONFIG_GLOBAL=" global) process-environment))
+           (other (concat repo ".claude/worktrees/7-2/")))
+      (write-region "[safe]\n\tbareRepository = explicit\n" nil global nil 'silent)
+      (dolist (cow '(t nil))
+        (let ((drgnx-job-snapshot-copy-on-write cow))
+          (drgnx-job-snapshot-test--snapshot-anyway
+            (should (memq (plist-get (drgnx-job-snapshot-test--make repo folder "job/7") :mode) '(snapshot clone)))
+            ;; job/7 moves on: the fetch must reach the store (not the repository discovery would find instead)
+            (write-region (format "%s\n" cow) nil (concat repo "README") nil 'silent)
+            (drgnx-job-snapshot-test--git repo "commit" "-q" "-am" "more")
+            (drgnx-job-snapshot-test--git repo "branch" "-f" "job/7" "main")
+            (should (memq (plist-get (drgnx-job-snapshot-test--make repo other "job/7") :mode) '(snapshot clone)))
+            (should (equal (drgnx-job-snapshot-test--git other "rev-parse" "job/7")
+                           (drgnx-job-snapshot-test--git repo "rev-parse" "job/7"))))
+          (delete-directory folder t) (delete-directory other t))))))
+
+(ert-deftest drgnx-job-snapshot/a-failing-turn-releases-the-store ()
+  ;; .claude/worktrees is a file: the turn fails at once; DONE still comes later, with the error, and the store's
+  ;; queue is free again, so the next make (the cause gone) completes
+  (drgnx-job-snapshot-test--with
+    (make-directory (concat repo ".claude") t)
+    (write-region "x" nil (concat repo ".claude/worktrees") nil 'silent)
+    (let ((got :none) (early nil))
+      (drgnx-job-snapshot-make repo folder "job/7" (lambda (r) (setq got r)))
+      (setq early (not (eq got :none)))
+      (should-not early)
+      (should (drgnx-job-snapshot-test--wait-for (lambda () (not (eq got :none)))))
+      (should (plist-get got :error))
+      (should (= 0 (hash-table-count drgnx-job-snapshot--busy))))
+    (delete-file (concat repo ".claude/worktrees"))
+    (should (memq (plist-get (drgnx-job-snapshot-test--make repo folder "job/7") :mode) '(snapshot clone)))))
+
+(ert-deftest drgnx-job-snapshot/a-store-a-stopped-job-left-is-made-again ()
+  ;; the job is stopped after the store's clone, before its config is written: that store is never used as is
+  (drgnx-job-snapshot-test--with
+    (let ((drgnx-job-snapshot-copy-on-write nil) (got :none) (store (drgnx-job-snapshot-test--store repo))
+          (run (symbol-function 'drgnx-job-snapshot--run)))
+      (drgnx-job-snapshot-test--git repo "remote" "add" "origin" "https://example.invalid/r.git")
+      (cl-letf (((symbol-function 'drgnx-job-snapshot--run)
+                 (lambda (dir argv job done)
+                   (let ((p (funcall run dir argv job done)))
+                     (when (member "--list" argv)            ; what `drgnx-job-stop' does to the job's processes
+                       (process-put p :stopped t) (delete-process p))
+                     p))))
+        (drgnx-job-snapshot-make repo folder "job/7" (lambda (r) (setq got r)) "job-x")
+        (drgnx-job-snapshot-test--wait-for (lambda () (= 0 (hash-table-count drgnx-job-snapshot--busy)))))
+      (should (eq got :none))                                     ; a stopped job hears nothing
+      (should (eq (plist-get (drgnx-job-snapshot-test--make repo folder "job/7") :mode) 'clone))
+      (should-not (string-match-p "remote\\." (drgnx-job-snapshot-test--git store "config" "--file" "config" "--list")))
+      (should (equal (drgnx-job-snapshot-test--git store "config" "--file" "config" "gc.auto") "0")))))
+
+(ert-deftest drgnx-job-snapshot/run-keeps-stderr-and-leaks-nothing ()
+  (let ((got nil) (big 200000))
+    (drgnx-job-snapshot--run temporary-file-directory
+                             (list "sh" "-c" (format "head -c %d /dev/zero | tr '\\0' x >&2; exit 3" big)) nil
+                             (lambda (r) (setq got r)))
+    (should (drgnx-job-snapshot-test--wait-for (lambda () got)))
+    (should (eql (car got) 3))
+    (should (= (length (cddr got)) big)))
+  ;; a program that cannot start: an error, and no process or buffer left behind
+  (let ((procs (length (process-list))) (bufs (length (buffer-list))))
+    (should-error (drgnx-job-snapshot--run temporary-file-directory (list "drgnx-no-such-program-x") nil #'ignore))
+    (should (= (length (process-list)) procs))
+    (should (= (length (buffer-list)) bufs))))
+
 ;;;; Bounded: disk use and removal
 
 (ert-deftest drgnx-job-snapshot/disk-use-reported-and-remove-deletes-the-copy ()
@@ -404,6 +474,15 @@ its alternates', `cat-file --batch-all-objects --batch')."
           (let ((r nil))
             (drgnx-job-snapshot-remove dir (lambda (x) (setq r x)))
             (should (plist-get (drgnx-job-snapshot-test--wait-for (lambda () r)) :error))
-            (should (file-directory-p dir))))))))
+            (should (file-directory-p dir)))))
+      ;; a link anywhere below the repository: .claude/worktrees links elsewhere, the task folder itself is real
+      (let* ((elsewhere (concat root "elsewhere/")) (other (concat root "other/"))
+             (task (concat other ".claude/worktrees/7-3/")) (r nil))
+        (make-directory (concat elsewhere "7-3/.git") t)
+        (make-directory (concat other ".claude") t)
+        (make-symbolic-link (directory-file-name elsewhere) (concat other ".claude/worktrees"))
+        (drgnx-job-snapshot-remove task (lambda (x) (setq r x)))
+        (should (plist-get (drgnx-job-snapshot-test--wait-for (lambda () r)) :error))
+        (should (file-directory-p (concat elsewhere "7-3/.git")))))))
 
 ;;; job-snapshot-test.el ends here
