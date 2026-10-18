@@ -750,6 +750,11 @@ timer and non-nil for an idle one (once per pause), as in `run-at-time` and `run
   `(tty-fallback-hint . FRAME)`, `tools/jobs` the coalesced `job-ui-recount`, `tools/ai` the `ai-probe` one-shot; the
   ghost-text pause is an idle debounce `(ai-ghost . BUFFER)` owned by the buffer, and an Ask's search limit
   `(ai-grep . PROCESS)` by the search process (its sentinel cancels it). With no run of the owner nothing starts.
+  Core process timeouts are keyed by their process and owned by it, so the layer drops them when it dies: a check's
+  limit `(agent-check-limit . PROC)` with its 3 s backstop and tree kill, the hung `systemctl` kill, a `claude` command's
+  limit `(claude-cli-limit . PROC)` and the gateway's `(gateway-close . CONN)`. Three core timers have no process to own
+  them and belong to `:core`: `ai-load-keys` (once per daemon, after `drgnx open`), `ai-first-window` (the idle look at
+  the local AI runner) and a finished check's 0.1 s `(agent-check-finish . PROC)`, whose process is already dead."
 
 ### What the fire wrapper guarantees
 

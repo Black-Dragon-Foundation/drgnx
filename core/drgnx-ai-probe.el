@@ -17,6 +17,7 @@
 (require 'drgnx-ai)
 (require 'drgnx-ai-client)
 (require 'drgnx-file)
+(require 'drgnx-timer)
 
 (defvar drgnx-ai-detected nil "Alist provider → (:up BOOL :models (NAME…) :note TEXT) from the last probe.")
 
@@ -213,7 +214,7 @@ timer: never waits for the job (`:no-wait'), never asks."
 (defun drgnx-ai--on-first-window ()
   "`drgnx-first-gui-frame-hook': the local runner looked at a moment after the first window shows, from an idle
 timer — never inside the hook, never at daemon start (a daemon has no window until one is opened)."
-  (run-with-idle-timer 1 nil #'drgnx-ai-ensure-local))
+  (drgnx-timer-start 'ai-first-window 1 #'drgnx-ai-ensure-local :idle t :owner :core))
 
 (provide 'drgnx-ai-probe)
 ;;; drgnx-ai-probe.el ends here
