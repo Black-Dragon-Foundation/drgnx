@@ -84,14 +84,16 @@ known: no preset, so nothing running on this machine counts; no OpenRouter key."
 
 (ert-deftest drgnx-ai-onboard/role-written-only-after-answer ()
   ;; A provider that never answers leaves ai.eld's roles as they were, and the three test calls share one
-  ;; budget: the step ends within about 9 s, not 3 × 16.
+  ;; budget: the step ends within about the budget, not 3 ×.  Roles that ran out of time read "not tested".
   (drgnx-ai-onboard-test--with
     (let ((before (drgnx-ai-onboard-test--slurp (concat root "config/ai.eld"))) (t0 (float-time)) r)
       (cl-letf (((symbol-function 'drgnx-ai-request) (lambda (&rest _) nil)))
         (setq r (drgnx-onboard--ai-found '(:interactive nil))))
       (should (< (- (float-time) t0) 10.5))
       (should (= (nth 2 r) 0))
-      (should (string-match-p "did not answer" (cadr r)))
+      (should (= (nth 3 r) 3))
+      (should (string-match-p "not tested" (cadr r)))
+      (should-not (string-match-p "did not answer" (cadr r)))
       (should (equal before (drgnx-ai-onboard-test--slurp (concat root "config/ai.eld")))))))
 
 ;; A project's ai.eld routes roles for that project only: the roles onboarding writes into the user's ai.eld start
@@ -116,6 +118,52 @@ known: no preset, so nothing running on this machine counts; no OpenRouter key."
       (drgnx-onboard--put-first 'chat '(o . "llama3:8b"))
       (should-not (assq 'theirs (drgnx-ai-onboard-test--user-chain root 'chat)))
       (should (equal (car (drgnx-ai-onboard-test--user-chain root 'chat)) '(o . "llama3:8b"))))))
+
+;; M9-6 review I1: the three calls run side by side
+(defun drgnx-ai-onboard-test--slow-request (delay timers)
+  "A `drgnx-ai-request' whose provider answers DELAY seconds later; the timers it starts go on the list in TIMERS (a cell)."
+  (lambda (_role _kind _payload callback &rest _)
+    (push (run-at-time delay nil (lambda () (funcall callback "OK" nil))) (car timers))
+    nil))
+
+(ert-deftest drgnx-ai-onboard/the-role-tests-run-side-by-side ()
+  ;; A provider that takes 2.5 s per call answers all three roles within the budget: one wait, not three in a row.
+  (drgnx-ai-onboard-test--with
+    (let ((timers (list nil)) (t0 (float-time)) r (drgnx-onboard-ai-test-budget 8))
+      (unwind-protect
+          (cl-letf (((symbol-function 'drgnx-ai-request) (drgnx-ai-onboard-test--slow-request 2.5 timers)))
+            (setq r (drgnx-onboard--ai-found '(:interactive nil)))
+            (should (< (- (float-time) t0) 5.5))            ; three in a row: 7.5 s
+            (should (= (nth 2 r) 3))
+            (should (= (nth 3 r) 0))
+            (should (eq (car r) 'ok)))
+        (mapc #'cancel-timer (car timers))))))
+
+(ert-deftest drgnx-ai-onboard/a-slow-provider-is-not-tested-and-never-sets-ai-up ()
+  ;; Calls still waiting when the budget is up read "not tested", are not counted as asked, and the interactive step
+  ;; does not offer "Set up AI with" for them.
+  (drgnx-ai-onboard-test--with
+    (let ((timers (list nil)) (drgnx-onboard-ai-test-budget 2) r (before (drgnx-ai-onboard-test--slurp (concat root "config/ai.eld"))))
+      (unwind-protect
+          (cl-letf (((symbol-function 'drgnx-ai-request) (drgnx-ai-onboard-test--slow-request 30 timers))
+                    ((symbol-function 'completing-read) (lambda (&rest _) (error "asked")))
+                    ((symbol-function 'y-or-n-p) (lambda (&rest _) (error "asked"))))
+            (setq r (drgnx-onboard--ai-found '(:interactive t)))
+            (should (equal (list (nth 2 r) (nth 3 r)) '(0 3)))
+            (should (eq (car r) 'warn))
+            (should (string-match-p "complete: o/qwen2.5-coder:1.5b not tested" (cadr r)))
+            (let ((step (drgnx-onboard--ai-step '(:interactive t))))
+              (should (eq (car step) 'warn))
+              (should (string-match-p "not tested" (cadr step))))
+            (should (equal before (drgnx-ai-onboard-test--slurp (concat root "config/ai.eld")))))
+        (mapc #'cancel-timer (car timers))))))
+
+(ert-deftest drgnx-ai-onboard/a-provider-that-refuses-at-once-did-not-answer ()
+  (drgnx-ai-onboard-test--with
+    (cl-letf (((symbol-function 'drgnx-ai-request) (lambda (_r _k _p callback &rest _) (funcall callback nil '(:error "refused")) nil)))
+      (let ((r (drgnx-onboard--ai-found '(:interactive nil))))
+        (should (equal (list (nth 2 r) (nth 3 r)) '(0 0)))
+        (should (string-match-p "did not answer" (cadr r)))))))
 
 ;;;; Setting AI up: the room, the models, Ollama, LM Studio, OpenRouter
 

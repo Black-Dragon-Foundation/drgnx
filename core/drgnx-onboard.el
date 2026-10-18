@@ -436,37 +436,57 @@ answered within TIMEOUT seconds (default 15)."
         (condition-case nil
             (and (drgnx-ai-embed-sync (vector "hello") :timeout timeout :chain (list step) :interactive interactive) t)
           (drgnx-ai-embed-error nil))
-      (let ((fim (eq role 'complete)) (result nil))
-        (drgnx-ai-request role (if fim 'fim 'chat)
-                          (if fim (list :prefix "(defun hello ()\n  " :suffix ")\n" :max-tokens 8)
-                            (list :messages (vector (list :role "user" :content "Say OK."))))
-                          (lambda (text _info) (setq result (if text 'yes 'no)))
-                          :chain (list step) :timeout timeout :interactive interactive)
-        (drgnx-onboard--wait (lambda () result) (1+ timeout))
-        (eq result 'yes)))))
+      (let ((cell (drgnx-onboard--ai-test-start role step ctx timeout)))
+        (drgnx-onboard--wait (lambda () (car cell)) (1+ timeout))
+        (eq (car cell) 'yes)))))
+
+(defun drgnx-onboard--ai-test-start (role step ctx timeout)
+  "Start one call to STEP of the kind ROLE (complete, edit or chat) makes, without waiting: a cell whose car becomes
+`yes' (it answered), `no' (the provider refused or failed at once) or `slow' (TIMEOUT seconds went by)."
+  (let ((fim (eq role 'complete)) (cell (list nil)) (t0 (float-time)))
+    (drgnx-ai-request role (if fim 'fim 'chat)
+                      (if fim (list :prefix "(defun hello ()\n  " :suffix ")\n" :max-tokens 8)
+                        (list :messages (vector (list :role "user" :content "Say OK."))))
+                      (lambda (text _info)
+                        (setcar cell (cond (text 'yes) ((>= (- (float-time) t0) (- timeout 0.5)) 'slow) (t 'no))))
+                      :chain (list step) :timeout timeout :interactive (plist-get ctx :interactive))
+    cell))
 
 (defun drgnx-onboard--ai-found (ctx)
   "Find the providers running here, test each role with one call, and give a role without a working provider the
-one found once its call answered: (STATUS MESSAGE ANSWERED), ANSWERED how many of the three roles answered.  The
-probe and the three calls share `drgnx-onboard-ai-test-budget' seconds."
+one found once its call answered: (STATUS MESSAGE ANSWERED UNTESTED), ANSWERED how many of the three roles
+answered, UNTESTED how many could not be tried in time.  The three calls start together after the probe and are waited
+for once, within `drgnx-onboard-ai-test-budget' seconds for all; a call that has not answered by then (a model that
+is still loading) reads \"not tested\" and counts as neither asked nor failed."
   (require 'drgnx-ai-probe)
   (let* ((deadline (+ (float-time) drgnx-onboard-ai-test-budget))
          (_ (let ((done nil))
               (drgnx-ai-probe (lambda () (setq done t)))
               (drgnx-onboard--wait (lambda () done) 3)))
-         (key (drgnx-ai-key 'openrouter (plist-get ctx :interactive))) (lines nil) (answered 0) (asked 0))
-    (dolist (role '(complete edit chat))
-      (let* ((cap (if (eq role 'complete) 'fim 'chat))
-             (usable (seq-find (lambda (s) (drgnx-ai-usable-p (car s) cap (plist-get ctx :interactive))) (drgnx-ai-role role)))
-             (step (or usable (drgnx-onboard--ai-pick role cap (plist-get ctx :interactive)))))
-        (if (not step) (push (format "%s: no provider" role) lines)
-          (cl-incf asked)
-          (let* ((left (- deadline (float-time)))
-                 (yes (and (>= left 1) (drgnx-onboard--ai-test role step ctx (ceiling left)))))
-            (when yes
-              (cl-incf answered)
-              (unless usable (drgnx-ai-set-role role (cons step (drgnx-ai-user-role role)))))
-            (push (format "%s: %s/%s %s" role (car step) (cdr step) (if yes "answered" "did not answer")) lines)))))
+         (key (drgnx-ai-key 'openrouter (plist-get ctx :interactive))) (lines nil) (answered 0) (asked 0) (untested 0)
+         (plan (mapcar (lambda (role)
+                         (let* ((cap (if (eq role 'complete) 'fim 'chat))
+                                (usable (seq-find (lambda (s) (drgnx-ai-usable-p (car s) cap (plist-get ctx :interactive))) (drgnx-ai-role role)))
+                                (step (or usable (drgnx-onboard--ai-pick role cap (plist-get ctx :interactive)))))
+                           (list role usable step)))
+                       '(complete edit chat)))
+         (left (- deadline (float-time)))
+         ;; every call gets the whole of what is left, not a third: they run side by side
+         (cells (mapcar (lambda (p) (and (nth 2 p) (>= left 1) (drgnx-onboard--ai-test-start (car p) (nth 2 p) ctx (ceiling left)))) plan)))
+    (when (seq-some #'identity cells)
+      (drgnx-onboard--wait (lambda () (seq-every-p (lambda (c) (or (null c) (car c))) cells)) (1+ (ceiling left))))
+    (cl-mapc (lambda (p cell)
+               (pcase-let ((`(,role ,usable ,step) p))
+                 (if (not step) (push (format "%s: no provider" role) lines)
+                   (pcase (car cell)
+                     ('yes (cl-incf asked) (cl-incf answered)
+                           (unless usable (drgnx-ai-set-role role (cons step (drgnx-ai-user-role role)))))
+                     ('no (cl-incf asked))
+                     (_ (cl-incf untested)))
+                   (push (format "%s: %s/%s %s" role (car step) (cdr step)
+                                 (pcase (car cell) ('yes "answered") ('no "did not answer") (_ "not tested (out of time)")))
+                         lines))))
+             plan cells)
     (unless key
       (push "OpenRouter: run this step again → Change → openrouter (keeps the key in your Keychain or keyring); for the command line: OPENROUTER_API_KEY" lines))
     (let* ((vram (drgnx-ai-vram)) (model (cdr (car (drgnx-ai-role 'complete))))
@@ -477,12 +497,12 @@ probe and the three calls share `drgnx-onboard-ai-test-budget' seconds."
                         "GPU: %d MiB free, the completion model needs about %d")
                       free need)
               lines))
-      (list (cond ((zerop asked) 'info) ((and free (> need free)) 'warn) ((< answered asked) 'warn) (t 'ok))
-            (if (zerop asked)
+      (list (cond ((zerop (+ asked untested)) 'info) ((or (> untested 0) (and free (> need free)) (< answered asked)) 'warn) (t 'ok))
+            (if (zerop (+ asked untested))
                 (concat "no provider is running here and no OpenRouter key is set — start Ollama, LM Studio or llama.cpp, "
                         "or set the key; then AI: Choose Provider/Model; " (string-join (nreverse lines) "; "))
               (concat (string-join (nreverse lines) "; ") " — change any: AI: Choose Provider/Model (docs/guide/ai.md)"))
-            answered))))
+            answered untested))))
 
 ;;;; Step 4: setting AI up — Ollama, LM Studio or OpenRouter
 
@@ -984,14 +1004,17 @@ step ran before: keep it or change it.  Without interaction: what was found, and
   (let* ((again (alist-get 'ai (drgnx-onboard-state)))
          (found (drgnx-onboard--ai-found ctx))
          (working (nth 2 found))
+         (untested (nth 3 found))
          (choice (and (plist-get ctx :interactive)
-                      (if (zerop working) (drgnx-onboard--ai-ask)
+                      ;; calls that ran out of time say nothing about the provider: no \"Set up AI with\" for them
+                      (if (zerop working) (and (zerop untested) (drgnx-onboard--ai-ask))
                         (and (or again (< working 3))
                              (equal (drgnx-onboard--choose (format "AI answers for %d of 3 roles (complete, edit, chat): keep it or change it" working)
                                                            '("Keep" "Change") (if (< working 3) "Change" "Keep"))
                                     "Change")
                              (drgnx-onboard--ai-ask))))))
     (cond ((and choice (not (and (eq choice 'skip) (> working 0)))) (drgnx-onboard--ai-setup choice ctx))
+          ((and (zerop working) (> untested 0)) (list (car found) (cadr found)))
           ((zerop working)
            (if (plist-get ctx :interactive) (list (car found) (cadr found))
              (list (car found) (concat (cadr found) "; " (drgnx-onboard--ai-how)))))
