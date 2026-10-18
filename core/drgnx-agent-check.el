@@ -108,19 +108,41 @@ else from `process-attributes' (a few hundred)."
 (defun drgnx-agent-check--unit ()
   "A new name for a systemd scope, or nil where systemd does not run the session."
   (and (eq (drgnx-jobs-launcher) 'systemd)
-       (format "drgnx-check-%d-%d" (emacs-pid) (cl-incf drgnx-agent-check--unit-counter))))
+       ;; the random part: a scope left by an earlier Emacs with the same pid cannot have this name
+       (format "drgnx-check-%d-%d-%06x" (emacs-pid) (cl-incf drgnx-agent-check--unit-counter) (random #xffffff))))
+
+(defun drgnx-agent-check--safe-directory ()
+  "A directory that exists, for a process started from a timer (the current buffer's may be gone)."
+  (if (file-directory-p temporary-file-directory) temporary-file-directory "/"))
+
+(defun drgnx-agent-check--kill-scope (unit)
+  "Ask systemd to kill every process in the scope UNIT, as a process that is not waited for; that process, or
+nil when it could not be started.  A `systemctl' still running 3 seconds later is deleted."
+  (let ((default-directory (drgnx-agent-check--safe-directory)))
+    (and (executable-find "systemctl")
+         (let ((kill (ignore-errors
+                       (make-process :name "drgnx-check-kill" :connection-type 'pipe :noquery t
+                                     :command (list "systemctl" "--user" "kill" "--signal=KILL" (concat unit ".scope"))
+                                     :sentinel #'ignore))))
+           (when kill
+             (run-at-time 3 nil (lambda () (when (process-live-p kill) (ignore-errors (delete-process kill))))))
+           kill))))
 
 (defun drgnx-agent-check--kill-unit (unit proc)
-  "End everything in the systemd scope UNIT without waiting for it; the process tree of PROC instead where
-`systemctl' does not do it."
-  (let ((tree (lambda () (when (process-live-p proc) (drgnx-agent-check--kill-tree (process-id proc))))))
-    (if (not (executable-find "systemctl"))
+  "End everything in the systemd scope UNIT without waiting for it.  The process tree of PROC is ended instead
+where `systemctl' cannot be started or fails, and 3 seconds later whatever the outcome (a `systemctl' that hangs
+is deleted by `drgnx-agent-check--kill-scope')."
+  (let* ((default-directory (drgnx-agent-check--safe-directory))
+         (tree (lambda () (when (process-live-p proc) (ignore-errors (drgnx-agent-check--kill-tree (process-id proc))))))
+         (kill (drgnx-agent-check--kill-scope unit)))
+    (if (not kill)
         (funcall tree)
-      (make-process :name "drgnx-check-kill" :connection-type 'pipe :noquery t
-                    :command (list "systemctl" "--user" "kill" "--signal=KILL" (concat unit ".scope"))
-                    :sentinel (lambda (p _e)
-                                (unless (or (process-live-p p) (eql 0 (process-exit-status p)))
-                                  (funcall tree)))))))
+      (set-process-sentinel kill (lambda (p _e)
+                                   (unless (or (process-live-p p) (eql 0 (process-exit-status p)))
+                                     (funcall tree)))))
+    (run-at-time 3 nil (lambda ()
+                         (let ((default-directory (drgnx-agent-check--safe-directory)))
+                           (funcall tree))))))
 
 ;;;; Masking, results, the last results
 
@@ -134,15 +156,36 @@ else from `process-attributes' (a few hundred)."
 (defconst drgnx-agent-check--masked-keys '(:error :stderr :stdout :tools)
   "The members of a result that are masked; the others (status, time, exit code) are not text of a server.")
 
-(defun drgnx-agent-check--weak-p (name value)
-  "Non-nil when VALUE is short and NAME does not look like a secret: it may be a plain word."
-  (and (< (length value) 8) (not (string-match-p drgnx-agent-check--core-name-re (downcase name)))))
+(defun drgnx-agent-check--weak-p (name value &optional broad)
+  "Non-nil when VALUE is short and NAME does not look like a secret: it may be a plain word.  BROAD: names with
+pass, auth or session in them look like secrets too (for the names in a server's own configuration)."
+  (and (< (length value) 8)
+       (not (string-match-p (if broad drgnx-agent-check--broad-name-re drgnx-agent-check--core-name-re)
+                            (downcase name)))))
+
+(defconst drgnx-agent-check--not-secret-names
+  '("XDG_SESSION_TYPE" "XDG_SESSION_CLASS" "XDG_SESSION_ID" "XDG_SESSION_DESKTOP" "XDG_SESSION_PATH"
+    "DESKTOP_SESSION" "GDMSESSION" "SESSION_MANAGER" "DBUS_SESSION_BUS_ADDRESS" "XAUTHORITY" "ICEAUTHORITY"
+    "SSH_AUTH_SOCK")
+  "Variables of this Emacs's environment whose names match the broad list only by accident: they hold no secret.")
+
+(defun drgnx-agent-check--secret-name-p (name)
+  "Non-nil when the variable NAME of this Emacs's environment holds a secret: a name of the core list always does;
+one of the broad list (pass, auth, session…) does unless it is one of `drgnx-agent-check--not-secret-names' or
+has askpass in it."
+  (let ((lower (downcase name)))
+    (or (string-match-p drgnx-agent-check--core-name-re lower)
+        (and (string-match-p drgnx-agent-check--broad-name-re lower)
+             (not (member name drgnx-agent-check--not-secret-names))
+             (not (string-search "askpass" lower))))))
 
 (defun drgnx-agent-check--forms (secret)
-  "SECRET and its percent-encoded, percent-decoded and JSON-escaped forms (those of four characters or more)."
+  "SECRET and its percent-encoded, percent-decoded, JSON-escaped and cleaned (see `-clean') forms (those of four
+characters or more)."
   (cl-remove-if (lambda (s) (or (not (stringp s)) (< (length s) 4)))
                 (delete-dups
                  (list secret
+                       (ignore-errors (drgnx-agent-check--clean secret))
                        (ignore-errors (url-hexify-string secret))
                        (ignore-errors (decode-coding-string (url-unhex-string secret) 'utf-8))
                        (ignore-errors (decode-coding-string (substring (json-serialize (vector secret)) 2 -2) 'utf-8))))))
@@ -154,7 +197,7 @@ parts (userinfo, key parameters) of URLs in the others."
     (dolist (entry process-environment)
       (when (string-match "\\`\\([^=]+\\)=\\(.\\{4,\\}\\)\\'" entry)
         (let ((name (match-string 1 entry)) (value (match-string 2 entry)))
-          (cond ((string-match-p drgnx-agent-check--broad-name-re (downcase name)) (push (cons name value) out))
+          (cond ((drgnx-agent-check--secret-name-p name) (push (cons name value) out))
                 ((string-search "://" value)
                  (dolist (s (ignore-errors (drgnx-agent-config-secrets (list :url value))))
                    (push (cons name s) out)))))))
@@ -173,7 +216,7 @@ stderr but not in the names of tools."
          (weak nil) (strong nil))
     (dolist (p (append (plist-get spec :env) (plist-get spec :headers)
                        (plist-get expanded-spec :env) (plist-get expanded-spec :headers) pairs))
-      (when (and (stringp (cdr p)) (drgnx-agent-check--weak-p (drgnx-agent-config-json-keystr (car p)) (cdr p)))
+      (when (and (stringp (cdr p)) (drgnx-agent-check--weak-p (drgnx-agent-config-json-keystr (car p)) (cdr p) t))
         (push (cdr p) weak)))
     (dolist (v extra) (setq weak (delete v weak)))
     (dolist (p (drgnx-agent-check--environment-secrets))
@@ -319,10 +362,12 @@ character for bytes that are not valid UTF-8."
       (process-send-string proc (concat (decode-coding-string (json-serialize object) 'utf-8) "\n"))
     (error nil)))
 
+(defvar drgnx-agent-check--capped nil "Child: non-nil when the check runs in a scope with a memory cap.")
+
 (defun drgnx-agent-check--ended (proc)
   "Why PROC ended, as words."
   (if (eq (process-status proc) 'signal)
-      (if (eql (process-exit-status proc) 9)
+      (if (and (eql (process-exit-status proc) 9) drgnx-agent-check--capped)
           (format "killed by signal 9; the check's memory limit is %s, which may be the reason"
                   drgnx-agent-check--memory)
         (format "killed by signal %d" (process-exit-status proc)))
@@ -594,6 +639,7 @@ is told as such."
   (let* ((start (float-time))
          (spec (ignore-errors (json-parse-string (read-from-minibuffer "") :object-type 'alist :array-type 'list
                                                  :null-object nil :false-object nil)))
+         (drgnx-agent-check--capped (alist-get 'capped spec))
          (drgnx-agent-check--child-secrets (alist-get 'secrets spec))
          (tool-secrets (or (alist-get 'tool_secrets spec) drgnx-agent-check--child-secrets))
          (drgnx-agent-check--limit (or (alist-get 'timeout spec) drgnx-agent-check-timeout))
@@ -732,6 +778,8 @@ systemd scope UNIT, else the process tree).  DONE is called once with the proces
                       (setq finished t)
                       (when timer (cancel-timer timer))
                       (ignore-errors (delete-process err-proc))
+                      ;; whatever the scope still holds (a server's daemon) goes; a scope that is gone is no error
+                      (when unit (drgnx-agent-check--kill-scope unit))
                       (funcall done proc out err timed-out (- (float-time) start))))))
       (setq proc (make-process
                   :name "drgnx-check" :command argv :connection-type 'pipe :noquery t :coding 'utf-8-unix
@@ -744,9 +792,20 @@ systemd scope UNIT, else the process tree).  DONE is called once with the proces
                                (lambda ()
                                  (unless finished
                                    (setq timed-out t)
-                                   (if unit
-                                       (drgnx-agent-check--kill-unit unit proc)
-                                     (drgnx-agent-check--kill-tree (process-id proc)))
+                                   ;; a timer runs in any buffer: its directory may not exist, which would stop a process starting
+                                   (let ((default-directory (drgnx-agent-check--safe-directory)))
+                                     (ignore-errors
+                                       (if unit
+                                           (drgnx-agent-check--kill-unit unit proc)
+                                         (drgnx-agent-check--kill-tree (process-id proc))))
+                                     ;; the backstop of the backstop: 3 seconds later the check is over, whatever happened
+                                     (run-at-time 3 nil
+                                                  (lambda ()
+                                                    (unless finished
+                                                      (let ((default-directory (drgnx-agent-check--safe-directory)))
+                                                        (ignore-errors (drgnx-agent-check--kill-tree (process-id proc)))
+                                                        (ignore-errors (delete-process proc)))
+                                                      (funcall finish)))))
                                    ;; the sentinel finishes; this is for a process that is already gone
                                    (unless (process-live-p proc) (funcall finish))))))
       (when input
@@ -827,6 +886,7 @@ and `:unset' (names) when the spec refers to variables this Emacs does not have.
                                   :protocol drgnx-agent-check--protocol
                                   :secrets (vconcat secrets)
                                   :tool_secrets (vconcat tool-secrets)
+                                  :capped (if unit t :false)
                                   :env (drgnx-agent-check--object (plist-get expanded :env))
                                   :headers (drgnx-agent-check--object (plist-get expanded :headers))
                                   :args (vconcat (mapcar (lambda (a) (format "%s" a)) (plist-get expanded :args))))

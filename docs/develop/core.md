@@ -315,7 +315,10 @@ they never create a scope in the user's systemd manager.
 
 Ending a check: the child Emacs and the scope it runs in are named (`systemd-run --scope --unit=drgnx-check-PID-N`); at
 the timeout this Emacs runs `systemctl --user kill --signal=KILL` on the scope as an asynchronous process, so the editing
-Emacs does not stop (11 ms longest stall measured). Where there is no systemd (or `systemctl` fails) it ends the process
+Emacs does not stop (11 ms longest stall measured). The scope name has a random part. The kill is started from the
+temp directory (a timer runs in any buffer, whose directory may be gone); if `systemctl` cannot be started or fails the
+tree is ended instead; 3 seconds after the timeout the check is over whatever happened (tree ended, a hanging `systemctl`
+deleted, the callback called once). A check that ends normally also asks systemd to clear its scope and ignores the answer. Where there is no systemd (or `systemctl` fails) it ends the process
 tree: parent, group and session links are read from `/proc/PID/stat` (45 ms for 640 processes; `process-attributes`
 needs 320 ms), the tree is stopped, found again until it does not change, then killed. The child ends its server the same way.
 
@@ -323,14 +326,18 @@ Secrets: every string a check hands back is masked, in the members `:error`, `:s
 status, the time or the exit code), with the item's secrets (`drgnx-agent-config-secrets`); the values `${VAR}` (and
 Gemini's `$VAR`) were replaced by; the variables a spec names for a bearer token or a header (Codex `bearer_token_env_var`
 and `env_http_headers`, Kimi `bearerTokenEnvVar`, sent as `Authorization: Bearer VALUE` and the named headers when set);
-and this Emacs's own secret-looking environment (variable names with token, secret, key, password, cred, cookie, dsn, pat,
-pass, auth or session in them, and the userinfo of URL values), because a server may print its environment. Each secret
-is also hidden percent-encoded, percent-decoded and JSON-escaped. Overlapping matches are one range
+and this Emacs's own secret-looking environment, because a server may print its environment: a name with token, secret,
+key, password, passwd, authorization, cred, cookie, dsn or pat in it always, a name with only pass, auth or session in it
+unless it is `XDG_SESSION_TYPE`, `XDG_SESSION_CLASS`, `XDG_SESSION_ID`, `XDG_SESSION_DESKTOP`, `XDG_SESSION_PATH`,
+`DESKTOP_SESSION`, `GDMSESSION`, `SESSION_MANAGER`, `DBUS_SESSION_BUS_ADDRESS`, `XAUTHORITY`, `ICEAUTHORITY`,
+`SSH_AUTH_SOCK` or has askpass in it (`drgnx-agent-check--not-secret-names`), and the userinfo of URL values. In a
+server's own configuration the names with pass, auth or session count too. Each secret
+is also hidden percent-encoded, percent-decoded, JSON-escaped and cleaned (so a secret with a carriage return still matches). Overlapping matches are one range
 (`drgnx-agent-config-mask-text`). A short value (4 to 7 characters) with a plain name (`MODE=prod`) is hidden in errors
 and stderr but not in tool names. Output is cleaned first (escape sequences, control characters, bytes that are not UTF-8),
 then masked, then cut to its limit, so a secret is never split by an escape or cut in two. An HTTP error body is masked
 before its first 200 characters are shown, and a JSON-RPC error is cut to 500. A project on a remote host (TRAMP) is
-refused. Hooks get `CLAUDE_PROJECT_DIR` (Claude Code, Kimi Code, Gemini) and `GEMINI_PROJECT_DIR` (Gemini). An unset
+refused. A signal 9 is said to be the memory cap only when the check runs in a scope. Hooks get `CLAUDE_PROJECT_DIR` (Claude Code, Kimi Code, Gemini) and `GEMINI_PROJECT_DIR` (Gemini). An unset
 `${VAR}` with no default is passed as written and named in the result (`:unset`, and in `:error` when the check failed).
 The only file written is `agent-checks.eld`; the child Emacs writes nothing.
 

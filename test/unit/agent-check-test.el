@@ -63,12 +63,21 @@
 (defun drgnx-agent-check-test--mcp (item root)
   (drgnx-agent-check-test--wait (lambda (cb) (drgnx-agent-check-mcp item root cb))))
 
+(defun drgnx-agent-check-test--fake-systemctl (body)
+  "Put a `systemctl' that logs its arguments and then runs the shell command BODY first on the path."
+  (let ((script (expand-file-name "systemctl" (expand-file-name "bin" drgnx-agent-config-test--dir))))
+    (write-region (format "#!/bin/sh\necho \"$*\" >> '%s'\n%s\n"
+                          (expand-file-name "systemctl.log" drgnx-agent-config-test--dir) body)
+                  nil script nil 'silent)
+    (set-file-modes script #o755)))
+
 (defmacro drgnx-agent-check-test-env (&rest body)
   "BODY in the agent settings fixture (temp state dir), no systemd scope (the user's manager is not touched),
 with the HTTP mock stopped afterwards."
   (declare (indent 0))
   `(let ((process-environment (cons "DRGNX_JOBS_LAUNCHER=detached" process-environment)))
      (drgnx-agent-config-test-env
+       (drgnx-agent-check-test--fake-systemctl "exit 1")
        (unwind-protect (progn ,@body) (drgnx-mock-mcp-http-stop)))))
 
 (ert-deftest drgnx-agent-check/mcp-ok-lists-tools ()
@@ -158,8 +167,11 @@ with the HTTP mock stopped afterwards."
            (result nil) (hook-result nil) (seen nil))
       (drgnx-agent-check-mcp item root (lambda (r) (setq result r)))
       (drgnx-agent-check-hook hook root (lambda (r) (setq hook-result r)))
-      (let ((until (+ (float-time) 1.5)))
-        (while (< (float-time) until) (accept-process-output nil 0.1)))
+      ;; until both run (a loaded machine starts the child Emacs slowly)
+      (let ((until (+ (float-time) 15)))
+        (while (and (< (float-time) until)
+                    (not (and (drgnx-agent-check-test--marked marker) (drgnx-agent-check-test--marked "sleep 3174"))))
+          (accept-process-output nil 0.1)))
       ;; both are running now: look at the command line of everything this Emacs started
       (dolist (pid (drgnx-agent-check-test--descendants))
         (let ((args (or (alist-get 'args (ignore-errors (process-attributes pid))) "")))
@@ -374,12 +386,24 @@ with the HTTP mock stopped afterwards."
     (should (equal (nth 1 mine) (alist-get 'ppid attrs)))
     (should (equal (nth 2 mine) (alist-get 'pgrp attrs)))
     (should (equal (nth 3 mine) (alist-get 'sess attrs)))
-    ;; a process called "a) S 1 2 3 (b" does not confuse the reader
-    (let* ((proc (make-process :name "x" :command '("sleep" "30") :noquery t))
-           (row (assq (process-id proc) (drgnx-agent-check--proc-rows))))
+    ;; a process called "a) S 1 2 3 (b" (sleep run through a symlink with that name) does not confuse the reader
+    (let* ((dir (make-temp-file "drgnx-comm" t))
+           (link (expand-file-name "a) S 1 2 3 (b" dir))
+           (sleep (executable-find "sleep"))
+           (proc nil))
       (unwind-protect
-          (should (equal (nth 1 row) (emacs-pid)))
-        (delete-process proc)))
+          (progn
+            (make-symbolic-link sleep link)
+            (setq proc (make-process :name "x" :command (list link "30") :noquery t))
+            (sleep-for 0.2)
+            (let ((raw (with-temp-buffer (insert-file-contents (format "/proc/%d/stat" (process-id proc))) (buffer-string)))
+                  (row (assq (process-id proc) (drgnx-agent-check--proc-rows))))
+              ;; the name is really in the file, and the numbers after it are still the right ones
+              (should (string-search "(a) S 1 2 3 (b)" raw))
+              (should (equal (nth 1 row) (emacs-pid)))
+              (should (equal (nth 3 row) (process-id proc)))))
+        (when proc (delete-process proc))
+        (delete-directory dir t)))
     (should (memq (emacs-pid) (drgnx-agent-check--tree (emacs-pid))))))
 
 (ert-deftest drgnx-agent-check/the-tree-includes-children-and-groups ()
@@ -583,12 +607,11 @@ with the HTTP mock stopped afterwards."
       (should (string-search "initialize: eee" (plist-get r :error)))
       (should (< (length (plist-get r :error)) 540)))))
 
-(ert-deftest drgnx-agent-check/a-killed-server-mentions-the-memory-limit ()
+(ert-deftest drgnx-agent-check/a-killed-server-says-it-was-killed ()
   (drgnx-agent-check-test-env
     (let ((r (drgnx-agent-check-test--mcp (drgnx-agent-check-test--stdio-item "oom" (drgnx-agent-check-test--marker)) root)))
       (should (eq (plist-get r :status) 'failed))
-      (should (string-search "signal 9" (plist-get r :error)))
-      (should (string-search "512M" (plist-get r :error))))))
+      (should (string-search "signal 9" (plist-get r :error))))))
 
 (ert-deftest drgnx-agent-check/masking-covers-overlaps-and-other-forms ()
   ;; two secrets that overlap are one range: no end of either stays
@@ -642,8 +665,8 @@ with the HTTP mock stopped afterwards."
     (should (member "ghp-short" (cdr sets)))
     (should (member "dbpassw0rd" (car sets)))
     (should-not (member "notasecretvalue" (car sets)))
-    (should (member "wayland" (car sets)))
-    (should-not (member "wayland" (cdr sets)))))
+    ;; XDG_SESSION_TYPE matches the broad list by accident
+    (should-not (member "wayland" (car sets)))))
 
 (ert-deftest drgnx-agent-check/output-is-cleaned ()
   (should (equal (drgnx-agent-check--clean "a\e[31mred\e[0m b\e]0;title\a c\r\nd\re\001f\tg") "ared b c\nd\nef\tg"))
@@ -651,6 +674,156 @@ with the HTTP mock stopped afterwards."
   (should (equal (drgnx-agent-check--clean nil) ""))
   ;; a secret cut in two by an escape sequence is found once the sequence is gone
   (should (equal (drgnx-agent-config-mask-text (drgnx-agent-check--clean "sec\e[0mret1") '("secret1")) "••••")))
+
+;;;; Fix round 2
+
+(defun drgnx-agent-check-test--systemctl-log ()
+  "The lines the fake systemctl was called with."
+  (let ((log (expand-file-name "systemctl.log" drgnx-agent-config-test--dir)))
+    (and (file-exists-p log)
+         (split-string (with-temp-buffer (insert-file-contents log) (buffer-string)) "\n" t))))
+
+(defmacro drgnx-agent-check-test-with-fake-scope (systemctl-body &rest body)
+  "BODY as if the check ran in a systemd scope called drgnx-check-fake, without making one: the wrapper adds
+nothing and the fake `systemctl' (SYSTEMCTL-BODY, a shell command) is the only program that hears of the scope."
+  (declare (indent 1))
+  `(progn
+     (drgnx-agent-check-test--fake-systemctl ,systemctl-body)
+     (cl-letf (((symbol-function 'drgnx-agent-check--unit) (lambda () "drgnx-check-fake"))
+               ((symbol-function 'drgnx-agent-check--wrap) (lambda (argv &optional _unit) argv)))
+       ,@body)))
+
+(defun drgnx-agent-check-test--start-hanging (marker callback)
+  "Start a check of a hanging server (the child's own timeout is 3 s, this Emacs ends it after 1)."
+  (drgnx-agent-check-mcp (drgnx-agent-check-test--stdio-item "fork-child" marker) default-directory callback))
+
+(ert-deftest drgnx-agent-check/a-systemctl-that-hangs-does-not-hang-the-check ()
+  (drgnx-agent-check-test-env
+    (drgnx-agent-check-test-with-fake-scope "exec sleep 3176"
+      (let* ((drgnx-agent-check-timeout 3) (drgnx-agent-check--grace -2)
+             (marker (drgnx-agent-check-test--marker))
+             (calls 0) (result nil) (t0 (float-time)))
+        (drgnx-agent-check-test--start-hanging marker (lambda (r) (cl-incf calls) (setq result r)))
+        (while (and (not result) (< (float-time) (+ t0 20))) (accept-process-output nil 0.05))
+        (should (eq (plist-get result :status) 'timeout))
+        ;; the backstop (3 s after the timer at 1 s), not the 20 s of waiting
+        (should (< (- (float-time) t0) 8))
+        (should (drgnx-agent-check-test--gone-p marker))
+        ;; the hanging systemctl was deleted
+        (should (drgnx-agent-check-test--gone-p "sleep 3176"))
+        (sleep-for 0.5)
+        (should (= calls 1))))))
+
+(ert-deftest drgnx-agent-check/a-systemctl-that-cannot-be-started-falls-back-to-the-tree ()
+  (drgnx-agent-check-test-env
+    (drgnx-agent-check-test-with-fake-scope "exit 0"
+      (let* ((drgnx-agent-check-timeout 3) (drgnx-agent-check--grace -2)
+             (marker (drgnx-agent-check-test--marker))
+             (orig (symbol-function 'make-process))
+             (calls 0) (result nil) (t0 (float-time)))
+        (cl-letf (((symbol-function 'make-process)
+                   (lambda (&rest args)
+                     (if (equal (plist-get args :name) "drgnx-check-kill")
+                         (error "no process for you")
+                       (apply orig args)))))
+          (drgnx-agent-check-test--start-hanging marker (lambda (r) (cl-incf calls) (setq result r)))
+          (while (and (not result) (< (float-time) (+ t0 20))) (accept-process-output nil 0.05)))
+        (should (eq (plist-get result :status) 'timeout))
+        ;; at the timer's 1 s plus the child's start, long before the 3 s backstop
+        (should (< (plist-get result :time) 2.8))
+        (should (drgnx-agent-check-test--gone-p marker))
+        (sleep-for 0.5)
+        (should (= calls 1))))))
+
+(ert-deftest drgnx-agent-check/a-timer-in-a-buffer-with-no-directory-still-ends-the-check ()
+  (drgnx-agent-check-test-env
+    ;; systemctl exits 1: the tree is ended in its sentinel, which is the path that needs a process to start first
+    (drgnx-agent-check-test-with-fake-scope "exit 1"
+      (let* ((drgnx-agent-check-timeout 3) (drgnx-agent-check--grace -2)
+             (marker (drgnx-agent-check-test--marker))
+             (gone (generate-new-buffer " *no directory*"))
+             (calls 0) (result nil) (t0 (float-time)))
+        (with-current-buffer gone (setq default-directory "/nowhere/at/all/"))
+        (unwind-protect
+            (progn
+              (drgnx-agent-check-test--start-hanging marker (lambda (r) (cl-incf calls) (setq result r)))
+              (with-current-buffer gone
+                (while (and (not result) (< (float-time) (+ t0 20))) (accept-process-output nil 0.05))))
+          (kill-buffer gone))
+        (should (eq (plist-get result :status) 'timeout))
+        (should (< (plist-get result :time) 2.8))
+        (should (drgnx-agent-check-test--gone-p marker))
+        (should (member "--user kill --signal=KILL drgnx-check-fake.scope" (drgnx-agent-check-test--systemctl-log)))
+        (sleep-for 0.5)
+        (should (= calls 1))))))
+
+(ert-deftest drgnx-agent-check/a-finished-check-asks-systemd-to-clear-its-scope ()
+  (drgnx-agent-check-test-env
+    (drgnx-agent-check-test-with-fake-scope "exit 1"
+      (let ((r (drgnx-agent-check-test--mcp (drgnx-agent-check-test--stdio-item "ok" (drgnx-agent-check-test--marker)) root)))
+        (should (eq (plist-get r :status) 'ok))
+        (let ((until (+ (float-time) 3)))
+          (while (and (not (drgnx-agent-check-test--systemctl-log)) (< (float-time) until)) (sleep-for 0.1)))
+        (should (member "--user kill --signal=KILL drgnx-check-fake.scope" (drgnx-agent-check-test--systemctl-log)))))))
+
+(ert-deftest drgnx-agent-check/scope-names-do-not-repeat-across-emacs-sessions ()
+  (let ((process-environment (cons "DRGNX_JOBS_LAUNCHER=systemd" process-environment))
+        (drgnx-agent-check--unit-counter 0))
+    (let ((a (drgnx-agent-check--unit)))
+      (setq drgnx-agent-check--unit-counter 0)
+      (should-not (equal a (drgnx-agent-check--unit)))
+      (should (string-match-p "\\`drgnx-check-[0-9]+-[0-9]+-[0-9a-f]+\\'" a)))))
+
+(ert-deftest drgnx-agent-check/the-memory-limit-is-named-only-where-there-is-one ()
+  (drgnx-agent-check-test-env
+    ;; detached: no cap, so the message says nothing of it
+    (let ((r (drgnx-agent-check-test--mcp (drgnx-agent-check-test--stdio-item "oom" (drgnx-agent-check-test--marker)) root)))
+      (should (string-search "signal 9" (plist-get r :error)))
+      (should-not (string-search "memory" (plist-get r :error))))
+    ;; in a scope: it does
+    (drgnx-agent-check-test-with-fake-scope "exit 1"
+      (let ((r (drgnx-agent-check-test--mcp (drgnx-agent-check-test--stdio-item "oom" (drgnx-agent-check-test--marker)) root)))
+        (should (string-search "signal 9" (plist-get r :error)))
+        (should (string-search "512M" (plist-get r :error)))))))
+
+(ert-deftest drgnx-agent-check/names-from-this-emacs-that-are-not-secrets ()
+  (let* ((process-environment
+          (list "XDG_SESSION_CLASS=user" "XDG_SESSION_TYPE=wayland" "XDG_SESSION_ID=12345" "XDG_SESSION_DESKTOP=gnome"
+                "XDG_SESSION_PATH=/org/freedesktop/DisplayManager/Session1" "DESKTOP_SESSION=gnome-xorg"
+                "GDMSESSION=gnome-classic" "SESSION_MANAGER=local/host:@/tmp/.ICE-unix/1"
+                "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus" "XAUTHORITY=/run/user/1000/.auth-file"
+                "ICEAUTHORITY=/run/user/1000/.ICEauthority" "SSH_AUTH_SOCK=/run/user/1000/ssh-agent.sock"
+                "GIT_ASKPASS=/usr/lib/git-core/askpass-helper" "SSH_ASKPASS=/usr/lib/ssh/x11-ssh-askpass"
+                ;; the core list wins over every exclusion
+                "GIT_ASKPASS_TOKEN=askpass-token-value" "XDG_SESSION_KEY=session-key-value"
+                ;; broad names that are not excluded stay secrets
+                "MY_SESSION_COOKIE_X=cookie-of-mine" "CI_AUTH_FILE=/var/ci/auth-file" "APP_PASSPHRASE=hunter2hunter2"))
+         (all (car (drgnx-agent-check--secret-sets (list :spec nil)))))
+    (dolist (plain '("user" "wayland" "12345" "gnome" "gnome-xorg" "gnome-classic" "/run/user/1000/bus"
+                     "/run/user/1000/.auth-file" "/run/user/1000/.ICEauthority" "/run/user/1000/ssh-agent.sock"
+                     "/usr/lib/git-core/askpass-helper" "/usr/lib/ssh/x11-ssh-askpass"))
+      (should-not (cl-some (lambda (s) (string-search plain s)) all)))
+    (dolist (secret '("askpass-token-value" "session-key-value" "cookie-of-mine" "/var/ci/auth-file" "hunter2hunter2"))
+      (should (member secret all)))
+    ;; so a plain word in the output stays readable
+    (should (equal (drgnx-agent-config-mask-text "user wayland" all) "user wayland"))))
+
+(ert-deftest drgnx-agent-check/a-spec-name-with-pass-or-auth-is-a-secret-name ()
+  (let* ((item (list :kind 'claude :section 'mcp :name "m" :file "/f"
+                     :spec (list :env '(("DB_PASS" . "abc123") ("AUTH_MODE" . "oidc5") ("MODE" . "prod5")))))
+         (sets (drgnx-agent-check--secret-sets item)))
+    ;; names with pass and auth in them: strong, hidden in tool names too; MODE is plain: weak
+    (should (member "abc123" (cdr sets)))
+    (should (member "oidc5" (cdr sets)))
+    (should (member "prod5" (car sets)))
+    (should-not (member "prod5" (cdr sets)))))
+
+(ert-deftest drgnx-agent-check/a-secret-is-found-in-the-cleaned-output ()
+  (should (member "ab\ncd" (drgnx-agent-check--forms "ab\rcd")))
+  (should (member "ab\ncd" (drgnx-agent-check--forms "ab\r\ncd")))
+  (should (member "ab�cd" (drgnx-agent-check--forms (decode-coding-string "ab\377cd" 'utf-8-unix))))
+  (should (equal (drgnx-agent-config-mask-text (drgnx-agent-check--clean "x ab\rcd y") (drgnx-agent-check--forms "ab\rcd"))
+                 "x •••• y")))
 
 (provide 'agent-check-test)
 ;;; agent-check-test.el ends here
