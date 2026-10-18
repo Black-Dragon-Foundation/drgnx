@@ -140,3 +140,15 @@
       (should (< (/ (- (float-time) t0) 100) 0.002)))))
 
 ;;; mod-sticky-test.el ends here
+
+(ert-deftest drgnx-sticky/the-chrome-is-left-alone-while-it-is-off ()
+  ;; Turning sticky scroll on redraws the header only when the editor chrome is on: with drgnx-chrome loaded but
+  ;; off (a test session, a configuration without the workbench), the window gets no tab line or header from it.
+  (require 'drgnx-chrome)
+  (let ((drgnx-chrome-mode nil))
+    (drgnx-sticky-test--in (drgnx-sticky-test--elisp 40) #'emacs-lisp-mode
+      (dolist (p '(tab-line-format header-line-format mode-line-format)) (set-window-parameter nil p nil))
+      (drgnx-sticky-mode 1)
+      (should-not (window-parameter nil 'tab-line-format))
+      (should-not (window-parameter nil 'header-line-format))
+      (drgnx-sticky-mode -1))))

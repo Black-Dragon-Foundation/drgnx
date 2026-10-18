@@ -127,7 +127,7 @@ text above it changes)."
              (add-hook 'after-change-functions #'drgnx-sticky--after-change nil t))
     (kill-local-variable 'drgnx-chrome-header-tail)
     (remove-hook 'after-change-functions #'drgnx-sticky--after-change t))
-  (when (and (fboundp 'drgnx-chrome-apply) (get-buffer-window)) (drgnx-chrome-apply)))   ; the header shows it now
+  (when (and (bound-and-true-p drgnx-chrome-mode) (get-buffer-window)) (drgnx-chrome-apply)))   ; the header shows it now
 
 (defun drgnx-sticky--maybe ()
   "`prog-mode-hook': sticky scroll in file buffers."
