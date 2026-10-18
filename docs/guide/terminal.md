@@ -242,7 +242,8 @@ take OSC 52 (GNOME Terminal, Ptyxis) keeps the copy inside drgnx.
   terminal's clipboard (N characters); kept in drgnx") and the text stays in drgnx's kill ring. Emacs's own method
   would stop for two seconds instead.
 - **Paste:** the profile's paste key (`C-v` in the VS Code profile, `C-y` in the Emacs profile) pastes drgnx's
-  last copy, from the kill ring. To bring text in from other programs, paste with the terminal's own paste key
+  last copy, from the kill ring; in the VS Code profile `C-c` and `C-x` copy and cut a selection (see
+  [keys.md](keys.md#copy-cut-and-paste)), and the copy reaches the terminal's clipboard. To bring text in from other programs, paste with the terminal's own paste key
   (`C-S-v`, or Cmd+V on macOS). Emacs receives it as one bracketed paste: it arrives as text and none of it runs
   as a key.
 - **Reading the terminal's clipboard** is off. Most terminals refuse an OSC 52 read, kitty asks you every time, and

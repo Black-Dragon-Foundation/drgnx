@@ -42,16 +42,34 @@
   (drgnx-tty-session-with (s :keys "vscode")
     (drgnx-tty-clip-test--ready s)
     (drgnx-tty-clip-test--copy s "hello drgnx")
-    (drgnx-tty-session-eval s '(progn (switch-to-buffer (get-buffer-create "*paste*"))
-                                      ;; Task 14 binds C-v in the VS Code profile to Paste, which is `yank'
-                                      (keymap-global-set "C-v" #'yank)
-                                      t))
+    (drgnx-tty-session-eval s '(progn (switch-to-buffer (get-buffer-create "*paste*")) t))
+    ;; the VS Code profile's own paste key
+    (should (eq (drgnx-tty-session-eval s '(key-binding (kbd "C-v"))) 'drgnx-editing-paste))
     (drgnx-tty-session-key s "C-v")
     (should (equal (drgnx-tty-session-wait s '(with-current-buffer "*paste*"
                                                 (and (> (buffer-size) 0) (buffer-string))))
                    "hello drgnx"))
     ;; the terminal's clipboard was never asked for
     (should-not (drgnx-tty-session-eval s '(seq-find (lambda (w) (string-match-p "\e\\]52;[a-z]*;\\?" w)) kx-writes)))))
+
+(ert-deftest drgnx-tty-clip/ctrl-c-copies-to-the-terminal-clipboard ()
+  ;; The VS Code profile end to end: select with Shift+Right, press C-c (byte 0x03), the text is on the clipboard.
+  (drgnx-tty-session-with (s :keys "vscode")
+    (drgnx-tty-clip-test--ready s)
+    (drgnx-tty-session-eval s '(progn (switch-to-buffer (get-buffer-create "*copy*"))
+                                      (insert "hello drgnx")
+                                      (goto-char (point-min))
+                                      t))
+    (should-not (drgnx-tty-session-clipboard s))
+    (dotimes (_ 5) (drgnx-tty-session-send s "\e[1;2C"))     ; S-<right>
+    (drgnx-tty-session-wait s '(with-current-buffer "*copy*" (and (use-region-p) (= (- (region-end) (region-beginning)) 5))))
+    (drgnx-tty-session-send s "\C-c")
+    (drgnx-tty-session-wait s '(equal (car kill-ring) "hello"))
+    (let ((deadline (+ (float-time) 5)))
+      (while (and (not (drgnx-tty-session-clipboard s)) (< (float-time) deadline)) (sleep-for 0.05)))
+    (should (equal (drgnx-tty-session-clipboard s) "hello"))
+    (should (equal (drgnx-tty-session-eval s '(with-current-buffer "*copy*" (buffer-string))) "hello drgnx"))
+    (should-not (drgnx-tty-session-eval s '(with-current-buffer "*copy*" (use-region-p))))))
 
 (ert-deftest drgnx-tty-clip/bracketed-paste-arrives-as-text ()
   (drgnx-tty-session-with (s :keys "vscode")

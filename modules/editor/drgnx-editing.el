@@ -196,6 +196,49 @@
   (cond ((not (bolp)) (kill-line 0))
         ((not (bobp)) (delete-char -1))))
 
+;;;; Copy, cut and paste (the VS Code profile's C-c, C-x, C-v)
+
+(defvar drgnx-editing-region-map (make-sparse-keymap)
+  "Keys active only while the mark is active: the VS Code profile's C-c and C-x (copy and cut).
+Without a selection they stay Emacs' prefixes.")
+
+(defvar drgnx-editing--region-alist (list (cons 'mark-active drgnx-editing-region-map))
+  "`emulation-mode-map-alists' entry: `drgnx-editing-region-map' while the mark is active.")
+
+(defun drgnx-editing--region-key-p ()
+  "Non-nil if the key that ran this command is one of `drgnx-editing-region-map' (not the palette)."
+  (let ((keys (this-command-keys-vector)))
+    (and (> (length keys) 0) (eq (lookup-key drgnx-editing-region-map keys) this-command))))
+
+(defun drgnx-editing--no-selection (what)
+  "Called by a region command without a selection.  Typed as its key, give the key back to Emacs
+(an empty selection, the mark set and not moved, is not one); from the palette, say what is missing."
+  (if (not (drgnx-editing--region-key-p))
+      (user-error "Select something to %s first" what)
+    (deactivate-mark)
+    (setq prefix-arg current-prefix-arg
+          unread-command-events (append (listify-key-sequence (this-command-keys-vector))
+                                        unread-command-events))))
+
+(defun drgnx-editing-copy ()
+  "Copy the selection."
+  (interactive)
+  (if (use-region-p) (call-interactively #'kill-ring-save) (drgnx-editing--no-selection "copy")))
+
+(defun drgnx-editing-cut ()
+  "Cut the selection (in a read-only buffer, copy it)."
+  (interactive)
+  (if (use-region-p)
+      (let ((kill-read-only-ok t)) (call-interactively #'kill-region))
+    (drgnx-editing--no-selection "cut")))
+
+(defun drgnx-editing-paste (&optional arg)
+  "Paste the last copy, replacing the selection.  ARG as for `yank'."
+  (interactive "*P")
+  (when (use-region-p) (delete-region (region-beginning) (region-end)))
+  (deactivate-mark)
+  (yank arg))
+
 (drgnx-module-define 'editor/editing
                      :doc "Fold, change case, expand and shrink the selection, go to line."
                      :stage 'startup
@@ -230,9 +273,13 @@
                                         (edit-delete-word-back "Delete Word Left" drgnx-editing-delete-word-back "Delete the word before the cursor")
                                         (edit-delete-line-back "Delete to Line Start" drgnx-editing-delete-line-back "Delete from the cursor to the line's start")
                                         (go-back "Back" xref-go-back "Return to where you jumped from")
-                                        (go-forward "Forward" xref-go-forward "Undo a Back")))
+                                        (go-forward "Forward" xref-go-forward "Undo a Back")
+                                        (edit-copy "Copy" drgnx-editing-copy "Copy the selection")
+                                        (edit-cut "Cut" drgnx-editing-cut "Cut the selection")
+                                        (edit-paste "Paste" drgnx-editing-paste "Paste the last copy, replacing the selection")))
                          (drgnx-command-define id :category (if (string-prefix-p "go-" (symbol-name id)) "Go" "Edit") :title title
-                                               :command fn :scope 'editing :doc doc))))
+                                               :command fn :scope 'editing :doc doc))
+                       (add-to-list 'emulation-mode-map-alists 'drgnx-editing--region-alist)))
 
 (provide 'drgnx-editing)
 ;;; drgnx-editing.el ends here

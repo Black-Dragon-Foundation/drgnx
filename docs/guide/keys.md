@@ -69,6 +69,24 @@ protocol (kitty, foot, Alacritty). drgnx turns on one of them, modifyOtherKeys w
 arrives as `C-p`: open the palette with **F1** instead (VS Code keys; `M-x` in every profile). drgnx writes down
 which of your keys that terminal cannot send. See [terminal.md](terminal.md#keys).
 
+## Copy, cut and paste
+
+| Command | VS Code | Emacs | Vim |
+|---|---|---|---|
+| Copy / Cut / Paste (in a file) | `C-c` / `C-x` / `C-v` | `M-w` / `C-w` / `C-y` | `y` / `d` in visual state, `p` |
+
+In the VS Code profile `C-c` and `C-x` copy and cut **only while text is selected** (as Emacs's CUA mode does); with
+no selection they are Emacs's prefixes, so `C-x C-s`, `C-c C-c` in a mode and the rest work as always. A selection
+the mark leaves empty (`C-SPC` and no move) counts as none. `C-v` always pastes, replacing the selection if there is
+one, in one undo step; it no longer scrolls (PageDown does). In a read-only buffer Cut copies, and Paste says the
+buffer is read-only. The Explorer keeps its own `C-c` / `C-x` / `C-v` for files (see [workbench.md](workbench.md)):
+they are in its own keymap, which beats the global `C-v`, and the Explorer never selects text, so the selection-only
+`C-c` / `C-x` stay out of its way. On a Mac they are `s-c`, `s-x` and `s-v`.
+
+The Emacs and Vim profiles keep their own keys, and so does "Emacs editing + VS Code app keys": only the VS Code
+editing layer takes `C-c`, `C-x` and `C-v`. One edge, as in CUA mode without its delay: with a selection, `C-x C-s`
+cuts the selection first and then saves; press `C-g` (or move) to drop the selection before a prefix key.
+
 ## On a Mac
 
 Keys are written the Emacs way: `s-` is Cmd ⌘, `M-` Option ⌥, `C-` Ctrl ⌃, `S-` Shift ⇧; `s-k s-s` is ⌘K then ⌘S. The
@@ -128,8 +146,9 @@ And the Mac's text editing, as in every Mac app (Linux has VS Code's Linux keys 
 | Delete Word Left / Delete to Line Start | `C-<backspace>` / — | `M-<backspace>` / `s-<backspace>` |
 
 Line Start goes to the first non-blank character, and from there to the very start, as VS Code's Home. With Shift
-they select. Cmd+H (hide), Cmd+M (minimise), Cmd+` (next window), Cmd+Space and Cmd+Tab stay macOS'; Cmd+C, Cmd+V,
-Cmd+X and Cmd+Z are Emacs' own Mac keys (copy, paste, cut, undo). The Emacs and Vim profiles keep their own keys
+they select. Cmd+H (hide), Cmd+M (minimise), Cmd+` (next window), Cmd+Space and Cmd+Tab stay macOS'; Cmd+Z is Emacs'
+own Mac key (undo), and in the VS Code profile Cmd+C and Cmd+X copy and cut a selection and Cmd+V pastes (see
+[Copy, cut and paste](#copy-cut-and-paste)). The Emacs and Vim profiles keep their own keys
 (`C-a`, `M-f`, `0`, `w`, …).
 
 **Modifier keys.** With the VS Code profile (also as the app layer under Emacs or Vim editing) drgnx sets, on a Mac:

@@ -134,6 +134,9 @@
         (edit-word-right "C-<right>" :mac "M-<right>")
         (edit-delete-word-back "C-<backspace>" :mac "M-<backspace>")
         (edit-delete-line-back :none "VS Code has no Linux key for it" :mac "s-<backspace>")
+        (edit-copy "C-c" :map drgnx-editing-region-map)   ; only while text is selected: otherwise C-c stays Emacs' prefix
+        (edit-cut "C-x" :map drgnx-editing-region-map)    ; likewise C-x
+        (edit-paste "C-v")
         (code-quick-fix "C-.")
         (code-problems "C-S-m")
         (code-format :none "in the palette (VS Code's C-S-i is the LLM Menu here, as in gryphn)")
