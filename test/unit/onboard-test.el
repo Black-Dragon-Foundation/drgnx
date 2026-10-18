@@ -1004,8 +1004,23 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
         ;; on a Mac it says how to open drgnx next time (Linux: not)
         (should-not (string-search "Spotlight" (cadr (drgnx-onboard--finish-step '(:interactive nil)))))
         (cl-letf (((symbol-function 'drgnx-platform) (lambda () 'macos)))
-          (should (string-search "next time open drgnx with Spotlight (⌘Space, type \"drgnx\") or Launchpad"
-                                 (cadr (drgnx-onboard--finish-step '(:interactive nil))))))))))
+          (let ((drgnx-macos-app-dir (file-name-as-directory (make-temp-file "drgnx-apps" t))))
+            (unwind-protect
+                (progn
+                  (make-directory (expand-file-name "drgnx.app" drgnx-macos-app-dir))
+                  (should (string-search "next time open drgnx with Spotlight (⌘Space, type \"drgnx\") or Launchpad"
+                                         (cadr (drgnx-onboard--finish-step '(:interactive nil))))))
+              (delete-directory drgnx-macos-app-dir t))))))))
+
+(ert-deftest drgnx-onboard/finish-names-spotlight-only-with-the-app ()
+  ;; M12a-76: Spotlight finds drgnx.app; without the app the sentence would send you to a search that finds nothing
+  (let ((drgnx-macos-app-dir (file-name-as-directory (make-temp-file "drgnx-apps" t))) (drgnx-onboard--restart-needed nil))
+    (unwind-protect
+        (cl-letf (((symbol-function 'drgnx-platform) (lambda () 'macos)))
+          (should-not (string-search "Spotlight" (cadr (drgnx-onboard--finish-step '(:interactive nil)))))
+          (make-directory (expand-file-name "drgnx.app" drgnx-macos-app-dir))
+          (should (string-search "Spotlight" (cadr (drgnx-onboard--finish-step '(:interactive nil))))))
+      (delete-directory drgnx-macos-app-dir t))))
 
 (ert-deftest drgnx-onboard/the-agents-step-and-its-docs ()
   (should (string-match-p "Claude" (plist-get (alist-get 'agents drgnx-onboard--steps) :doc)))

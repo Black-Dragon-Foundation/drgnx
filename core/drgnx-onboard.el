@@ -1283,7 +1283,7 @@ nothing) — then quit (`drgnx-session-quit' offers to save first).  The layout 
   (drgnx-session-quit))
 
 (defun drgnx-onboard--finish-step (ctx)
-  "The doctor's results; on macOS, how to open drgnx next time.  When a step turned modules on or installed packages
+  "The doctor's results; on macOS with the drgnx app installed, how to open drgnx next time.  When a step turned modules on or installed packages
 here, in the drgnx app (CTX interactive): asked whether to restart drgnx now (the result is recorded first)."
   (require 'drgnx-doctor)
   (let* ((results (drgnx-doctor-run (drgnx-doctor-facts)))
@@ -1293,7 +1293,9 @@ here, in the drgnx app (CTX interactive): asked whether to restart drgnx now (th
                        (format "doctor: %d ok, %d warnings, %d failed%s — every command and its key: Keyboard Shortcuts (in the palette)%s; docs/guide/onboarding.md"
                                (funcall count 'ok) (funcall count 'warn) (length fails)
                                (if fails (concat " (" (mapconcat (lambda (r) (symbol-name (plist-get r :name))) fails ", ") ")") "")
-                               (if (eq (drgnx-platform) 'macos) (concat "; next time " drgnx-onboard-macos-open-text) "")))))
+                               (if (and (eq (drgnx-platform) 'macos)
+                                        (progn (require 'drgnx-macos) (file-directory-p (expand-file-name "drgnx.app" drgnx-macos-app-dir))))
+                                   (concat "; next time " drgnx-onboard-macos-open-text) "")))))
     (cond ((not (and drgnx-onboard--restart-needed (plist-get ctx :interactive) (not noninteractive))) result)
           ((y-or-n-p "Restart drgnx now? Your windows come back. ")
            (drgnx-onboard--record 'finish (car result) (cadr result))
