@@ -851,7 +851,8 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
     (setq drgnx-onboard-test--asked nil)
     (cl-letf (((symbol-function 'completing-read) (drgnx-onboard-test--return 'drgnx-onboard-test--asked))
               ((symbol-function 'drgnx-onboard--packages-to-install) #'ignore)
-              ((symbol-function 'custom-available-themes) (lambda () '(modus-vivendi tango))))
+              ((symbol-function 'custom-available-themes) (lambda () '(modus-vivendi tango)))
+              ((symbol-function 'drgnx-platform) (lambda () 'linux)))  ; a Mac also asks about Option (y-or-n-p)
       (drgnx-onboard--look-step '(:interactive t)))
     (pcase-let ((`(,theme ,keys ,modules) drgnx-onboard-test--asked))
       (should (equal modules (format-prompt "Modules (minimal, ide, full-ai)" "full-ai")))
@@ -920,7 +921,8 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
         (should-not asked))
       ;; Linux: never asked
       (cl-letf (((symbol-function 'y-or-n-p) (lambda (p) (push p asked) t))
-                ((symbol-function 'drgnx-onboard--packages-to-install) #'ignore))
+                ((symbol-function 'drgnx-onboard--packages-to-install) #'ignore)
+                ((symbol-function 'drgnx-platform) (lambda () 'linux)))
         (drgnx-onboard--look-step `(:interactive t :options ,opts))
         (should-not asked)))))
 
@@ -935,7 +937,8 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
                 ((symbol-function 'drgnx-doctor-run) (lambda (&rest _) nil))
                 ((symbol-function 'drgnx-doctor-facts) #'ignore)
                 ((symbol-function 'drgnx-jobs--detach) (lambda (line) (push line lines)))
-                ((symbol-function 'drgnx-session-quit) (lambda () (cl-incf quit))))
+                ((symbol-function 'drgnx-session-quit) (lambda () (cl-incf quit)))
+                ((symbol-function 'drgnx-platform) (lambda () 'linux)))  ; a Mac's finish names Spotlight
         (let ((r (drgnx-onboard--look-step '(:interactive t :options (:preset full-ai :keys "Emacs" :theme modus-vivendi)))))
           (should (string-match-p "restart drgnx to load the new modules" (cadr r))))
         (should drgnx-onboard--restart-needed)

@@ -123,16 +123,18 @@
 ;;;; Applying, switching, keys.eld
 
 (defmacro drgnx-keys-test--live (&rest body)
-  "BODY with the core commands, fresh drgnx-keys state and a temp config dir; every binding is undone after."
+  "BODY with the core commands, fresh drgnx-keys state and a temp config dir, on Linux (macOS profiles bind other
+keys); every binding is undone after."
   `(drgnx-keys-test--with-core-commands
-    (let* ((dir (make-temp-file "drgnx-keys" t))
-           (process-environment (append (list (concat "DRGNX_CONFIG_DIR=" dir) (concat "XDG_STATE_HOME=" dir "/state"))
-                                        process-environment))
-           (drgnx-keys--applied nil) (drgnx-keys--session-layers nil) (drgnx-keys-profiles nil)
-           (drgnx-keys-problems nil) (drgnx-keys-last nil))
-      (unwind-protect (progn ,@body)
-        (drgnx-keys--restore)
-        (delete-directory dir t)))))
+    (cl-letf (((symbol-function 'drgnx-platform) (lambda () 'linux)))
+      (let* ((dir (make-temp-file "drgnx-keys" t))
+             (process-environment (append (list (concat "DRGNX_CONFIG_DIR=" dir) (concat "XDG_STATE_HOME=" dir "/state"))
+                                          process-environment))
+             (drgnx-keys--applied nil) (drgnx-keys--session-layers nil) (drgnx-keys-profiles nil)
+             (drgnx-keys-problems nil) (drgnx-keys-last nil))
+        (unwind-protect (progn ,@body)
+          (drgnx-keys--restore)
+          (delete-directory dir t))))))
 
 (defun drgnx-keys-test--write-user (form)
   (make-directory (drgnx-user-dir) t)
