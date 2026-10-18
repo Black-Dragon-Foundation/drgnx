@@ -75,6 +75,18 @@ choice of two nobody has."
   "The mock-remote name of DIR's src/ folder, as TRAMP spells it once it knows the host."
   (expand-file-name (drgnx-tramp-mock-name (expand-file-name "src/" dir))))
 
+(defun drgnx-remote-test--calls (functions body)
+  "Call BODY; the FUNCTIONS (symbols) it called, newest first, each time it called one."
+  (let ((calls nil) (advices nil))
+    (unwind-protect
+        (progn (dolist (f functions)
+                 (let ((a (lambda (&rest _) (push f calls))))
+                   (push (cons f a) advices)
+                   (advice-add f :before a)))
+               (funcall body))
+      (pcase-dolist (`(,f . ,a) advices) (advice-remove f a)))
+    calls))
+
 (defun drgnx-remote-test--code-buffer (name)
   "A buffer that looks like the remote file NAME, in Python mode (nothing is read or visited)."
   (let ((b (generate-new-buffer " *drgnx-remote-code*")))
@@ -319,14 +331,41 @@ choice of two nobody has."
     (should (memq 'success (ensure-list (face-attribute 'drgnx-remote-connected :inherit))))
     (should (memq 'warning (ensure-list (face-attribute 'drgnx-remote-lost :inherit))))))
 
+(ert-deftest drgnx-remote/the-segment-is-memoized ()
+  ;; redisplay evaluates the segment for every mode line, every time: after the first, it hands back one string made
+  ;; once per (connection, up, arrows) — no remote-name parsing or lookup, no font query, no new string
+  (drgnx-remote-test--with
+    (let ((root (drgnx-remote-test--root dir)))
+      (cl-letf (((symbol-function 'drgnx-session-open-folder) (lambda (d) (setq explorer-roots (list d)))))
+        (drgnx-remote-open-folder root))
+      ;; the Explorer's remote folder, from a local buffer; then a remote buffer, whose connection is worked out once
+      (dolist (here (list temporary-file-directory root))
+        (with-temp-buffer
+          (setq default-directory here)
+          (let* ((first (drgnx-remote--mode-line))
+                 (same 0)
+                 (calls (drgnx-remote-test--calls
+                         '(file-remote-p tramp-dissect-file-name tramp-get-connection-process char-displayable-p)
+                         (lambda () (dotimes (_ 50) (when (eq (drgnx-remote--mode-line) first) (cl-incf same)))))))
+            (should (equal (substring-no-properties first) " ⇄ localhost"))
+            (should (equal (list here calls same) (list here nil 50))))))
+      ;; the connection lost: the next one says so at once
+      (drgnx-remote-test--lose root)
+      (with-temp-buffer
+        (should (eq (get-text-property 1 'face (drgnx-remote--mode-line)) 'drgnx-remote-lost))))))
+
 (ert-deftest drgnx-remote/segment-ascii-in-a-terminal ()
   (drgnx-remote-test--with
     (let ((root (drgnx-remote-test--root dir)))
       (setq explorer-roots (list root)
             drgnx-remote--roots (list (cons (file-remote-p root) (list :root root))))
+      ;; asked once per terminal (the answer is kept): forgotten here to ask again
+      (clrhash drgnx-remote--arrows)
       (cl-letf (((symbol-function 'char-displayable-p) (lambda (_) nil)))
         (should (equal (substring-no-properties (drgnx-remote-segment)) "<> localhost")))
       (cl-letf (((symbol-function 'char-displayable-p) (lambda (_) t)))
+        (should (equal (substring-no-properties (drgnx-remote-segment)) "<> localhost"))
+        (clrhash drgnx-remote--arrows)
         (should (equal (substring-no-properties (drgnx-remote-segment)) "⇄ localhost"))))))
 
 ;;;; Reconnect

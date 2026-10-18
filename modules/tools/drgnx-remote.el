@@ -35,6 +35,7 @@
 (defvar drgnx-lang--attaching)
 (defvar drgnx-explorer--remote-reads)
 (declare-function tramp-dissect-file-name "tramp")
+(declare-function tramp-get-connection-process "tramp")
 (declare-function tramp-cleanup-connection "tramp-cmds")
 (declare-function eglot-shutdown "eglot")
 (declare-function eglot--project "eglot")
@@ -118,6 +119,7 @@ servers on its host.  Opens the connection if it is not up (the user ran the com
     (drgnx-remote--remember root)
     (drgnx-lang-probe-remote root)
     (drgnx-remote--start-servers (file-remote-p root))
+    (drgnx-remote--forget (file-remote-p root))
     (force-mode-line-update t)
     root))
 
@@ -154,17 +156,72 @@ Explorer folder.  ssh asks for host keys and passwords here, as it does for `C-x
   "The connections of the Explorer's remote folders, without duplicates."
   (delete-dups (delq nil (mapcar (lambda (r) (and (stringp r) (file-remote-p r))) (drgnx-remote--explorer-roots)))))
 
+;; The segment is evaluated for every mode line on every redisplay: everything it needs is kept here, worked out again
+;; only when what it depends on changes (a buffer's name, the Explorer's folders, the connection's process).
+
+(defvar-local drgnx-remote--here-cache nil
+  "(NAME . CONNECTION): the buffer's file or folder name (the string itself, compared with `eq') and its connection.")
+
+(defvar drgnx-remote--shown-cache nil
+  "(EXPLORER-ROOTS ROOTS . CONNECTION): the connection shown for a local buffer, for these two lists (compared with
+`eq': both are replaced, never changed in place).")
+
+(defvar drgnx-remote--processes (make-hash-table :test #'equal)
+  "Connection → (PROCESS . TIME): its TRAMP connection process as last looked up, and when.  Liveness is then
+`process-live-p'; a connection that is not up is looked up again at most every two seconds (or at once after Open
+Remote… or Reconnect, which forget it).  Bounded: emptied when it holds more than 32 connections.")
+
+(defvar drgnx-remote--segments (make-hash-table :test #'equal)
+  "Connection → a vector of its four segment strings (up or lost, ⇄ or <>), each with a space before it, made once.
+Bounded: emptied when it holds more than 32 connections.")
+
+(defvar drgnx-remote--arrows (make-hash-table :test #'eq :weakness 'key)
+  "Terminal → `yes' when its frames can draw ⇄, else `no' (asked once per terminal).")
+
 (defun drgnx-remote--here ()
-  "The connection of the current buffer's file or folder, or nil."
+  "The connection of the current buffer's file or folder, or nil (worked out again when the name changes)."
   (let ((name (or buffer-file-name default-directory)))
-    (and (stringp name) (file-remote-p name))))
+    (if (and drgnx-remote--here-cache (eq (car drgnx-remote--here-cache) name))
+        (cdr drgnx-remote--here-cache)
+      (let ((key (and (stringp name) (file-remote-p name))))
+        (setq drgnx-remote--here-cache (cons name key))
+        key))))
 
 (defun drgnx-remote--shown ()
   "The connection the segment shows: the current buffer's, else the newest remembered one that has a folder in
 the Explorer."
   (or (drgnx-remote--here)
-      (let ((keys (drgnx-remote--keys)))
-        (car (seq-find (lambda (e) (member (car e) keys)) drgnx-remote--roots)))))
+      (let ((roots (and (fboundp 'drgnx-explorer-roots) (drgnx-explorer-roots))))
+        (if (and drgnx-remote--shown-cache (eq (car drgnx-remote--shown-cache) roots)
+                 (eq (cadr drgnx-remote--shown-cache) drgnx-remote--roots))
+            (cddr drgnx-remote--shown-cache)
+          (let* ((keys (drgnx-remote--keys))
+                 (key (car (seq-find (lambda (e) (member (car e) keys)) drgnx-remote--roots))))
+            (setq drgnx-remote--shown-cache (cons roots (cons drgnx-remote--roots key)))
+            key)))))
+
+(defun drgnx-remote--up-p (key)
+  "Is the connection KEY up?  The process table only (`drgnx-remote--processes')."
+  (let ((hit (gethash key drgnx-remote--processes)))
+    (or (and hit (process-live-p (car hit)))
+        (when (or (null hit) (> (- (float-time) (cdr hit)) 2))
+          (let ((proc (and (featurep 'tramp)
+                           (ignore-errors (tramp-get-connection-process (tramp-dissect-file-name key))))))
+            (when (> (hash-table-count drgnx-remote--processes) 32) (clrhash drgnx-remote--processes))
+            (puthash key (cons proc (float-time)) drgnx-remote--processes)
+            (and proc (process-live-p proc) t))))))
+
+(defun drgnx-remote--forget (key)
+  "The connection KEY was just opened again: the segment looks its process up at once."
+  (remhash key drgnx-remote--processes))
+
+(defun drgnx-remote--arrows-p ()
+  "Can the selected frame's terminal draw ⇄?  Asked once per terminal."
+  (let* ((terminal (frame-terminal)) (v (gethash terminal drgnx-remote--arrows)))
+    (unless v
+      (setq v (if (char-displayable-p ?⇄) 'yes 'no))
+      (puthash terminal v drgnx-remote--arrows))
+    (eq v 'yes)))
 
 (defun drgnx-remote-menu (event)
   "Offer Reconnect and Open Remote… (a click on the segment).  EVENT is the click."
@@ -179,21 +236,31 @@ the Explorer."
   (let ((m (make-sparse-keymap))) (define-key m [mode-line mouse-1] #'drgnx-remote-menu) m)
   "A click on the segment.")
 
+(defun drgnx-remote--strings (key)
+  "The four segment strings of the connection KEY (`drgnx-remote--segments')."
+  (or (gethash key drgnx-remote--segments)
+      (let* ((host (file-remote-p key 'host))
+             (make (lambda (up arrows)
+                     (concat " " (propertize (format "%s %s" (if arrows "⇄" "<>") host)
+                                             'face (if up 'drgnx-remote-connected 'drgnx-remote-lost)
+                                             'mouse-face 'mode-line-highlight 'local-map drgnx-remote-segment-map
+                                             'help-echo (format "%s: %s.  Click for Reconnect or Open Remote…" host
+                                                                (if up "connected" "connection lost")))))))
+        (when (> (hash-table-count drgnx-remote--segments) 32) (clrhash drgnx-remote--segments))
+        (puthash key (vector (funcall make t t) (funcall make nil t) (funcall make t nil) (funcall make nil nil))
+                 drgnx-remote--segments))))
+
+(defun drgnx-remote--mode-line ()
+  "The segment with a space before it, or \"\": a string made once (`drgnx-remote--strings'), chosen by the
+connection's state and the terminal — no I/O, no new string."
+  (if-let* ((key (drgnx-remote--shown)))
+      (aref (drgnx-remote--strings key) (+ (if (drgnx-remote--up-p key) 0 1) (if (drgnx-remote--arrows-p) 0 2)))
+    ""))
+
 (defun drgnx-remote-segment ()
   "\"⇄ HOST\" (\"<> HOST\" where the frame cannot show ⇄) while a remote folder is open or the buffer is remote:
 green while the connection is up, a warning when it is lost.  Reads the process table only — no I/O, ever."
-  (if-let* ((key (drgnx-remote--shown)))
-      (let ((up (drgnx-lang--remote-live-p key)) (host (file-remote-p key 'host)))
-        (propertize (format "%s %s" (if (char-displayable-p ?⇄) "⇄" "<>") host)
-                    'face (if up 'drgnx-remote-connected 'drgnx-remote-lost)
-                    'mouse-face 'mode-line-highlight 'local-map drgnx-remote-segment-map
-                    'help-echo (format "%s: %s.  Click for Reconnect or Open Remote…" host
-                                       (if up "connected" "connection lost"))))
-    ""))
-
-(defun drgnx-remote--mode-line ()
-  "The segment with a space before it (or nothing)."
-  (let ((s (drgnx-remote-segment))) (if (string-empty-p s) "" (concat " " s))))
+  (let ((s (drgnx-remote--mode-line))) (if (string-empty-p s) "" (substring s 1))))
 
 ;;;; Reconnect
 
@@ -251,6 +318,7 @@ servers again and start them in its code buffers.  Buffers, their unsaved change
     (unless (drgnx-lang--remote-live-p key) (user-error "Cannot reconnect to %s" host))
     (drgnx-lang-probe-remote root)
     (drgnx-remote--start-servers key)
+    (drgnx-remote--forget key)
     (force-mode-line-update t)
     (message "Reconnected to %s" host)))
 

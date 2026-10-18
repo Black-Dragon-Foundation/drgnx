@@ -32,7 +32,9 @@ on terminal frames that cannot draw the arrows):
 - **lost**: in its `warning` colour (face `drgnx-remote-lost`).
 
 It only reads whether the connection's process is alive, so it never touches the network, and a connection that dropped
-shows as lost within a moment of Emacs noticing. A click opens a short list: Reconnect, or Open Remote….
+shows as lost within a moment of Emacs noticing. A connection opened again some other way (a typed ssh path) shows as
+connected within two seconds; after Open Remote… or Reconnect, at once. The segment's text is made once per host and
+state and kept, so redrawing the status line costs nothing. A click opens a short list: Reconnect, or Open Remote….
 
 ## Reconnect
 
