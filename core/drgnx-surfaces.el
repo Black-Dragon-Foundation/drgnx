@@ -287,9 +287,9 @@ label).  A prefix that is itself a key of KEYS is not labelled."
 
 (defun drgnx-surfaces-apply-which-key ()
   "Label every active global key and every key of the leader map in which-key with its command's title, and each
-leader prefix (`SPC f') with its CATEGORY (which-key shows +CATEGORY), replacing the labels of the previous key setup.  Keys in other mode keymaps are
-not labelled: which-key's keymap-based labels write into the keymap, which would make an unbound key a prefix
-\(which-key shows the command)."
+leader prefix (`SPC f') with its CATEGORY (which-key shows +CATEGORY), replacing the labels of the previous key
+setup.  Keys in other mode keymaps are not labelled: which-key's keymap-based labels write into the keymap, which
+would make an unbound key a prefix \(which-key shows the command)."
   (when (require 'which-key nil t)
     (setq which-key-replacement-alist
           (seq-remove (lambda (e) (memq e drgnx-surfaces--which-key-entries)) which-key-replacement-alist)
