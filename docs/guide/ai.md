@@ -101,7 +101,8 @@ the suggestion. Under the Vim profile (evil), nothing is asked in normal or visu
 (insert state, or Emacs state).
 
 **Accept Suggestion Line** and **Toggle AI Completion** are in the palette. With no `complete` provider running,
-nothing is asked, and drgnx says so once; it looks for running providers again at most once a minute.
+nothing is asked, and drgnx says so once; it looks for running providers again at most once a minute. Turning
+`tools/ai` off (Preferences: Modules) takes ghost text out of the buffers that have it, with any showing suggestion.
 
 **Tab is one key for everything.** It does the first of these that applies:
 1. accept the suggestion;

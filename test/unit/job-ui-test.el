@@ -3,6 +3,7 @@
 (require 'drgnx)
 (load (expand-file-name "modules/tools/drgnx-job-ui" drgnx-dir) nil t)
 (require 'drgnx-hub)                                   ; before any stub of its functions
+(load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
 
 (defconst drgnx-job-ui-test--summary
   ;; as `job/status' gives it back through JSON: nil as :null, false as :false
@@ -21,9 +22,10 @@
                     (:n 1 :kind "build" :subject "csv" :author "s-a" :status "replaced"))))
 
 (defmacro drgnx-job-ui-test--with (&rest body)
-  "BODY with the job window's buffers of j1 cleaned up after."
+  "BODY with the job window's buffers of j1, and what a job window hooks and schedules, cleaned up after."
   (declare (indent 0))
   `(unwind-protect (progn ,@body)
+     (drgnx-job-ui--teardown)                           ; the hub's hooks and the refreshes on their way
      (clrhash drgnx-job-ui--drawn)
      (dolist (b (buffer-list)) (when (string-prefix-p "*job j1" (buffer-name b)) (kill-buffer b)))))
 
@@ -163,13 +165,23 @@
     (should (string-search "No drgnx hub" (drgnx-job-ui-test--text 'cards)))))
 
 (ert-deftest drgnx-job-ui/the-commands-are-registered ()
-  (let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil))
-    (funcall (plist-get (alist-get 'tools/jobs drgnx-modules--table) :setup))
-    (dolist (id '(job-show job-start job-approve job-status job-stop))
-      (should (drgnx-commands-get id))
-      (dolist (profile '("vscode" "emacs" "vim"))
-        (should (with-temp-buffer (insert-file-contents (expand-file-name (format "keys/%s.eld" profile) drgnx-dir))
-                                  (search-forward (format "(%s " id) nil t)))))))
+  (drgnx-test-with-modules '(tools/jobs) :strict t
+                           (dolist (id '(job-show job-start job-approve job-status job-stop))
+                             (should (drgnx-commands-get id))
+                             (dolist (profile '("vscode" "emacs" "vim"))
+                               (should (with-temp-buffer (insert-file-contents (expand-file-name (format "keys/%s.eld" profile) drgnx-dir))
+                                                         (search-forward (format "(%s " id) nil t)))))))
+
+(ert-deftest drgnx-job-ui/turned-off-it-hears-the-hub-no-more ()
+  ;; a job window hooks into the hub and schedules refreshes outside the setup: the teardown ends both
+  (drgnx-test-with-modules '(tools/jobs) :strict t
+                           (add-hook 'drgnx-hub-event-functions #'drgnx-job-ui--event)       ; as a job window does
+                           (add-hook 'drgnx-hub-disconnect-functions #'drgnx-job-ui--hub-gone)
+                           (drgnx-job-ui--schedule "j1")
+                           (drgnx-module-teardown 'tools/jobs)
+                           (should-not (memq #'drgnx-job-ui--event drgnx-hub-event-functions))
+                           (should-not (memq #'drgnx-job-ui--hub-gone drgnx-hub-disconnect-functions))
+                           (should (= 0 (hash-table-count drgnx-job-ui--timers)))))
 
 ;; From the old UI list ("stale status values after gry failures"): a status that cannot be read says nothing
 ;; instead of keeping the last count.

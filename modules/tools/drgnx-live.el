@@ -639,6 +639,8 @@ go to the page; other keys (C-…, M-…) stay Emacs's.")
 (drgnx-module-define 'tools/live
                      :doc "Live: watch and take over the browser drgnx starts for agents (CDP screencast)."
                      :stage 'idle :packages '(websocket)
+                     ;; turned off: the browser for agents stops and its profile goes, as when Emacs ends
+                     :teardown #'drgnx-live--cleanup
                      :setup #'drgnx-live--setup)
 
 (provide 'drgnx-live)
