@@ -134,7 +134,7 @@ env_eval() { # FORM — evaluate with harness/drgnx-env.el loaded, print the res
   "$(emacs_bin)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/harness" -l drgnx-env --eval "(princ (or $1 \"\"))"
 }
 
-test_container() { # [--ui] — the batch (or GUI) tier inside a fedora:45 / Emacs 31.1 container
+test_container() { # [--ui [--compositor C]] — the batch (or GUI) tier inside a fedora:45 / Emacs 31.1 container
   # DRGNX_TEST_IMAGE / DRGNX_TEST_GUI_IMAGE: use that image (CI pulls a prebuilt one) instead of building it
   local rt mount image file prebuilt="${DRGNX_TEST_IMAGE:-}" args=() cmd=(bin/drgnx test)
   rt="${DRGNX_CONTAINER:-$(env_eval '(drgnx-env-container-runtime)')}"   # set: no host Emacs needed (CI)
@@ -143,8 +143,11 @@ test_container() { # [--ui] — the batch (or GUI) tier inside a fedora:45 / Ema
   image=drgnx-test:f45; file=Containerfile
   if [ "${1:-}" = --ui ]; then
     image=drgnx-test-gui:f45; file=Containerfile.gui; cmd=(bin/drgnx test --ui); prebuilt="${DRGNX_TEST_GUI_IMAGE:-}"
-    args=(--security-opt seccomp=unconfined --security-opt label=disable)
+    if [ "${2:-}" = --compositor ]; then ui_compositor_ok "${3:-}" || return 2; cmd+=(--compositor "$3"); fi
+    # --memory: a GUI run (sessions, compositors, the X11 Emacs) must never push the host into the OOM killer
+    args=(--memory 6g --security-opt seccomp=unconfined --security-opt label=disable)
     mount="$here:/src:ro"
+    if [ -n "${DRGNX_UI_COMPOSITOR:-}" ]; then args+=(-e "DRGNX_UI_COMPOSITOR=$DRGNX_UI_COMPOSITOR"); fi
   fi
   echo "container runtime: $rt" >&2
   if [ -n "$prebuilt" ]; then
@@ -203,19 +206,27 @@ test_install() { # [NAME…] — install.sh end to end in fresh containers (slow
   ((${#failed[@]} == 0)) || { echo "install tests failed: ${failed[*]}" >&2; return 1; }
 }
 
+ui_compositor_ok() { # C — is C a compositor a GUI session can run under (harness/drgnx-ui.el)?
+  case "$1" in
+    mutter|sway|x11|i3) return 0 ;;
+    *) echo "drgnx: --compositor takes mutter, sway, x11 or i3, not '$1'" >&2; return 1 ;;
+  esac
+}
+
 cmd_test() {
   case "${1:-}" in
     "") test_batch ;;
     --one-process) export DRGNX_TEST_ONE_PROCESS=1; test_batch ;;   # every test file in one Emacs (hunting a leak across files)
     --install) shift; test_install "$@" ;;
-    --ui) run_in_tmp ui_exec test-ui ;;
+    --ui) if [ "${2:-}" = --compositor ]; then ui_compositor_ok "${3:-}" || exit 2; export DRGNX_UI_COMPOSITOR="$3"; fi
+          run_in_tmp ui_exec test-ui ;;
     --scenario) shift; run_in_tmp ui_exec test-scenario "$@" ;;
     --bench) run_in_tmp ui_exec test-bench ;;
     --perf) shift; [ "${1:-}" = --audit ] && export DRGNX_PERF_AUDIT=1; run_in_tmp ui_exec test-perf ;;
     --soak) shift; run_in_tmp ui_exec test-soak "${1:-30}" ;;
     --container) shift; test_container "$@" ;;
     --podman) shift; DRGNX_CONTAINER=podman test_container "$@" ;;
-    *) echo "usage: drgnx test [--one-process | --ui | --scenario [--config C] | --bench | --perf [--audit] | --soak [MIN] | --container [--ui] | --install [NAME…]]" >&2; exit 2 ;;
+    *) echo "usage: drgnx test [--one-process | --ui [--compositor C] | --scenario [--config C] | --bench | --perf [--audit] | --soak [MIN] | --container [--ui [--compositor C]] | --install [NAME…]]" >&2; exit 2 ;;
   esac
 }
 
@@ -387,7 +398,8 @@ usage: drgnx PATH…             open folders and files in drgnx, like code . (d
        drgnx test [--one-process]
                                batch tests, each test file in an Emacs of its own
                                (--one-process: all in one Emacs, to find a leak across files)
-       drgnx test --ui         GUI tests in a headless session (mutter)
+       drgnx test --ui [--compositor mutter|sway|x11|i3]
+                               GUI tests in a headless session (mutter; or sway, Xvfb, Xvfb with i3)
        drgnx test --bench      the workbench vs treemacs and ibuffer, timed in a GUI session
        drgnx test --perf [--audit]
                                input latency, redisplay, frames, GC, startup, memory against budgets
@@ -395,8 +407,8 @@ usage: drgnx PATH…             open folders and files in drgnx, like code . (d
        drgnx test --soak [MIN] the workloads in a loop for MIN minutes (30); memory must hold
        drgnx test --scenario [--config drgnx|gryphn|DIR]
                                behaviour scenarios in a session of that configuration
-       drgnx test --container [--ui]
-                               the same inside a fedora:45 / Emacs 31.1 container
+       drgnx test --container [--ui [--compositor C]]
+                               the same inside a fedora:45 / Emacs 31.1 container (GUI: capped at 6 GB)
                                (podman, else docker, else nerdctl; DRGNX_CONTAINER overrides)
        drgnx test --install [NAME…]
                                install.sh end to end in fresh distribution containers (slow;

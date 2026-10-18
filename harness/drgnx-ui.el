@@ -5,7 +5,8 @@
 ;;; Commentary:
 ;; The harness controller, run in batch Emacs by `drgnx ui …', `drgnx test --ui' and the
 ;; MCP server.  A session `drgnx-ui-N' is GUI Emacs under `mutter --headless' in its own
-;; dbus session, launched as a transient systemd user unit.  It is reached only through
+;; dbus session (or headless sway, Xvfb, Xvfb with i3: `drgnx-ui-compositors'), launched as a
+;; transient systemd user unit.  It is reached only through
 ;; its own server socket inside its run directory; nothing here talks to any other
 ;; Emacs.  See docs/develop/harness.md.
 
@@ -116,6 +117,138 @@ EXIT is the symbol `timeout' when the process had to be killed."
 (defun drgnx-ui-emacs-bin ()
   (or (getenv "DRGNX_EMACS") (executable-find "emacs-pgtk") "emacs"))
 
+;;;; Compositors
+
+(defconst drgnx-ui-compositors '("mutter" "sway" "x11" "i3")
+  "What a session's Emacs runs under: headless mutter (Wayland), headless sway (wlroots), Xvfb alone, or Xvfb
+with i3.")
+
+(defun drgnx-ui-default-compositor ()
+  "$DRGNX_UI_COMPOSITOR when it names one of `drgnx-ui-compositors', else \"mutter\"."
+  (let ((c (getenv "DRGNX_UI_COMPOSITOR")))
+    (if (member c drgnx-ui-compositors) c "mutter")))
+
+(defun drgnx-ui-x11-emacs-bin ()
+  "The X11 Emacs of the x11 and i3 sessions: $DRGNX_UI_X11_EMACS, else emacs-lucid (the GTK X11 build sees one
+monitor under Xvfb; the Lucid build reads the RandR 1.5 monitors `xrandr --setmonitor' makes)."
+  (let ((e (getenv "DRGNX_UI_X11_EMACS")))
+    (if (and e (not (string-empty-p e))) e (or (executable-find "emacs-lucid") "emacs-lucid"))))
+
+(defun drgnx-ui--compositor-programs (compositor)
+  "The programs COMPOSITOR's sessions start, in the order they are needed."
+  (pcase compositor
+    ("sway" '("sway" "swaymsg"))
+    ("x11" (list "Xvfb" "xrandr" (drgnx-ui-x11-emacs-bin)))
+    ("i3" (list "Xvfb" "xrandr" "i3" (drgnx-ui-x11-emacs-bin)))))
+
+(defun drgnx-ui--check-compositor (compositor)
+  "Signal `drgnx-ui-error' unless COMPOSITOR is known and its programs are on `exec-path'."
+  (unless (member compositor drgnx-ui-compositors)
+    (drgnx-ui--fail "compositor must be one of %s, got %S" (string-join drgnx-ui-compositors ", ") compositor))
+  (dolist (p (drgnx-ui--compositor-programs compositor))
+    (unless (executable-find p)
+      (drgnx-ui--fail "%s is not installed here: run bin/drgnx test --container --ui --compositor %s"
+                      (file-name-nondirectory p) compositor))))
+
+(defun drgnx-ui-sway-runtime-dir (name &optional root)
+  "Session NAME's own XDG_RUNTIME_DIR under sway (state ROOT): sway's IPC socket and Wayland display live
+there, never in the caller's runtime directory.  Next to the session's socket directory, so just as short."
+  (concat (drgnx-ui-socket-dir name root) "-xdg"))
+
+(defvar drgnx-ui--x11-dir "/tmp"
+  "Where X servers keep their locks (.XN-lock) and sockets (.X11-unix/XN); tests bind it.")
+
+(defun drgnx-ui--x11-files (n)
+  "Display N's lock and socket files."
+  (list (expand-file-name (format ".X%d-lock" n) drgnx-ui--x11-dir)
+        (expand-file-name (format ".X11-unix/X%d" n) drgnx-ui--x11-dir)))
+
+(defun drgnx-ui--free-display (root)
+  "The first X display number from 90 up (well above a desktop's own) with neither a lock nor a socket, and
+not given to another session of state ROOT (whose Xvfb may not have started yet)."
+  (let ((taken (cl-loop for f in (and (file-directory-p root)
+                                      (directory-files root t "\\`drgnx-ui-"))
+                        for json = (expand-file-name "session.json" f)
+                        for d = (and (file-exists-p json)
+                                     (plist-get (ignore-errors (drgnx-ui--read-json json)) :display))
+                        when (stringp d) collect d))
+        (n 90))
+    (while (or (member (format ":%d" n) taken) (seq-some #'file-exists-p (drgnx-ui--x11-files n)))
+      (cl-incf n))
+    n))
+
+(defun drgnx-ui--monitor-geometries (sess)
+  "SESS's monitors as (X W H), side by side from the left."
+  (let* ((size (mapcar #'string-to-number (split-string (plist-get sess :size) "x")))
+         (w (nth 0 size)) (h (nth 1 size)))
+    (cl-loop for k below (or (plist-get sess :monitors) 1) collect (list (* k w) w h))))
+
+(defun drgnx-ui--emacs-args (sess)
+  "Arguments of SESS's Emacs after the binary: its init directory, and `--fg-daemon' in a daemon session."
+  (append (list "--init-directory" (expand-file-name "init" (plist-get sess :run)))
+          (and (eq (plist-get sess :daemon) t) '("--fg-daemon"))))
+
+(defun drgnx-ui-sway-config (sess)
+  "The sway config of SESS: one output per monitor side by side, no bar, no borders, no XWayland (it would
+take an X display in the shared /tmp), and the session's Emacs, after which sway exits — sway lives as long
+as Emacs, as mutter does with `--'.  Emacs is not full screen: sway tiles it.  Nothing is included (no
+/etc/sway, no ~/.config/sway)."
+  (let ((cmd (mapconcat #'shell-quote-argument (cons (drgnx-ui-emacs-bin) (drgnx-ui--emacs-args sess)) " ")))
+    ;; sway reads `;' as a command separator unless the line is quoted, and expands `$'
+    (when (string-match-p "[\"'$\\]" cmd)
+      (drgnx-ui--fail "sway cannot run %s: its paths must not contain quotes, $ or backslashes" cmd))
+    (concat "# generated by drgnx for a harness session; do not edit\n"
+            (cl-loop for (x w h) in (drgnx-ui--monitor-geometries sess) for k from 1
+                     concat (format "output HEADLESS-%d resolution %dx%d position %d 0\n" k w h x))
+            "default_border none\n"
+            "default_floating_border none\n"
+            "xwayland disable\n"
+            ;; sway opens an exec'd program's windows on the workspace focused when it ran it, and the first
+            ;; output is not always the focused one at start
+            "focus output HEADLESS-1\n"
+            (format "exec \"%s; swaymsg exit\"\n" cmd))))
+
+(defun drgnx-ui--i3-socket (sess)
+  "Where SESS's i3 listens: in the session's private socket directory, gone with it."
+  (expand-file-name "i3" (file-name-directory (plist-get sess :socket))))
+
+(defun drgnx-ui-i3-config (sess)
+  "The i3 config of SESS: no bar, no borders, its IPC socket in the session's socket directory."
+  (concat "# i3 config version 4\n# generated by drgnx for a harness session; do not edit\n"
+          "font pango:monospace 8\n"
+          (format "ipc-socket %s\n" (drgnx-ui--i3-socket sess))
+          "default_border none\n"
+          "default_floating_border none\n"))
+
+(defun drgnx-ui--x11-script (sess)
+  "The shell script of an x11 or i3 session: Xvfb with one RandR monitor per monitor of SESS (Xvfb has one
+output, `screen'; `-noreset' keeps the monitors when a client such as xrandr disconnects), i3 for i3, then the
+X11 Emacs.  When Emacs ends, so do i3 and Xvfb."
+  (let* ((geoms (drgnx-ui--monitor-geometries sess))
+         (h (nth 2 (car geoms)))
+         (mm (lambda (px) (round (* px 25.4) 96)))
+         (i3 (equal (plist-get sess :compositor) "i3"))
+         (sock (and i3 (shell-quote-argument (drgnx-ui--i3-socket sess))))
+         (wait (lambda (test) (format "i=0; until %s; do i=$((i+1)); [ $i -ge 200 ] && break; sleep 0.05; done\n" test))))
+    (concat
+     (format "Xvfb %s -noreset -nolisten tcp -screen 0 %dx%dx24 +extension RANDR & xvfb=$!\n"
+             (plist-get sess :display) (apply #'+ (mapcar #'cadr geoms)) h)
+     (funcall wait "xrandr --listmonitors >/dev/null 2>&1")
+     (cl-loop for (x w mh) in geoms for k from 1
+              concat (format "xrandr --setmonitor XVFB-%d %d/%dx%d/%d+%d+0 %s\n"
+                             k w (funcall mm w) mh (funcall mm mh) x (if (= k 1) "screen" "none")))
+     (if i3
+         (concat (format "i3 -c %s & wm=$!\n"
+                         (shell-quote-argument (expand-file-name "i3.conf" (plist-get sess :run))))
+                 (funcall wait (format "[ -S %s ]" sock))
+                 ;; i3 starts on the output under the pointer, the middle of the screen: Emacs opens on the first
+                 (format "i3-msg -q -s %s focus output XVFB-1\n" sock)
+                 ;; as i3 gives its children: Emacs under i3 knows its WM
+                 (format "export I3SOCK=%s\n" sock))
+       "wm=\n")
+     (mapconcat #'shell-quote-argument (cons (drgnx-ui-x11-emacs-bin) (drgnx-ui--emacs-args sess)) " ")
+     "\nrc=$?\nkill $wm $xvfb 2>/dev/null\nexit $rc\n")))
+
 (defun drgnx-ui-resolve-config (config)
   "nil for the minimal config, else the external config directory (must hold init.el)."
   (unless (member config '(nil "" "minimal"))
@@ -162,13 +295,17 @@ Unix socket paths are limited to ~108 bytes, so sockets never live under ROOT it
 (defun drgnx-ui--save (sess)
   (drgnx-ui--write (expand-file-name "session.json" (plist-get sess :run)) (drgnx-ui--json sess)))
 
-(defun drgnx-ui-prepare-run (name &optional config size root daemon monitors)
+(defun drgnx-ui-prepare-run (name &optional config size root daemon monitors compositor)
   "Create the run directory for session NAME under ROOT; return the session plist.
 DAEMON non-nil: Emacs runs as a daemon (no frame until `drgnx-ui-new-frame').
-MONITORS: how many virtual monitors of SIZE (default 1)."
-  (let ((size (or size "1600x900")))
+MONITORS: how many virtual monitors of SIZE (default 1).  COMPOSITOR: one of `drgnx-ui-compositors' (nil: the
+default, `drgnx-ui-default-compositor'); sway gets a private runtime directory and RUN/sway.conf, x11 and i3 a
+free X display, i3 also RUN/i3.conf."
+  (let ((size (or size "1600x900"))
+        (compositor (or compositor (drgnx-ui-default-compositor))))
     (unless (string-match-p "\\`[0-9]+x[0-9]+\\'" size)
       (drgnx-ui--fail "size must be WxH, got %S" size))
+    (drgnx-ui--check-compositor compositor)
     (let* ((cfg (drgnx-ui-resolve-config config))
            (root (directory-file-name (expand-file-name (or root (drgnx-ui-state-root)))))
            (run (expand-file-name name root))
@@ -192,9 +329,22 @@ MONITORS: how many virtual monitors of SIZE (default 1)."
             (when (file-regular-p src) (copy-file src (expand-file-name n init) nil t)))))
       (let ((sess (list :name name :run run :socket (expand-file-name name sock) :size size
                         :config (if (member config '(nil "")) "minimal" config)
-                        :config_dir (or cfg "") :created (float-time))))
+                        :config_dir (or cfg "") :created (float-time) :compositor compositor)))
         (when daemon (setq sess (plist-put sess :daemon t)))
         (when (and (integerp monitors) (> monitors 1)) (setq sess (plist-put sess :monitors monitors)))
+        (pcase compositor
+          ("sway"
+           (let ((xdg (drgnx-ui-sway-runtime-dir name root)))
+             ;; sway's socket (sway-ipc.UID.PID.sock) must fit the 108 bytes of a socket path
+             (when (> (length xdg) 80) (drgnx-ui--fail "%s is too long for sway's sockets" xdg))
+             (when (file-directory-p xdg) (delete-directory xdg t))   ; stale, from a crashed session
+             (drgnx-ui--make-private-dir xdg)
+             (setq sess (plist-put sess :xdg_runtime_dir xdg))
+             (drgnx-ui--write (expand-file-name "sway.conf" run) (drgnx-ui-sway-config sess))))
+          ((or "x11" "i3")
+           (setq sess (plist-put sess :display (format ":%d" (drgnx-ui--free-display root))))
+           (when (equal compositor "i3")
+             (drgnx-ui--write (expand-file-name "i3.conf" run) (drgnx-ui-i3-config sess)))))
         (drgnx-ui--save sess)
         sess))))
 
@@ -207,7 +357,8 @@ MONITORS: how many virtual monitors of SIZE (default 1)."
                 (concat "TMPDIR=" (expand-file-name "tmp" (plist-get sess :run)))
                 (concat "DRGNX_UI_HARNESS=" (directory-file-name drgnx-ui-harness-dir))
                 (concat "DRGNX_UI_CONFIG=" (plist-get sess :config_dir))
-                (concat "XDG_RUNTIME_DIR=" (drgnx-ui-runtime-dir))
+                ;; sway: the session's own runtime dir, so its sockets are never the caller's
+                (concat "XDG_RUNTIME_DIR=" (or (plist-get sess :xdg_runtime_dir) (drgnx-ui-runtime-dir)))
                 (concat "DRGNX_UI_SOCKET_DIR=" (directory-file-name (file-name-directory (plist-get sess :socket))))
                 (concat "EMACS_SOCKET_NAME=" (plist-get sess :socket))
                 ;; no language server per fixture project (12 pyrights in one scenario run); a test that wants
@@ -220,18 +371,28 @@ MONITORS: how many virtual monitors of SIZE (default 1)."
                 (concat "XDG_STATE_HOME=" (expand-file-name "state" (plist-get sess :run)))
                 ;; …and its packages: never the user's ~/.local/share/drgnx (M5 review I9)
                 (concat "DRGNX_DATA_DIR=" (expand-file-name "drgnx-data" (plist-get sess :run))))
+          (pcase (plist-get sess :compositor)
+            ;; wlroots without a GPU, a seat or input devices; one output per monitor
+            ("sway" (list "WLR_BACKENDS=headless" "WLR_RENDERER=pixman" "WLR_LIBINPUT_NO_DEVICES=1"
+                          (format "WLR_HEADLESS_OUTPUTS=%d" (or (plist-get sess :monitors) 1))))
+            ((or "x11" "i3") (list (concat "DISPLAY=" (plist-get sess :display)))))
           extra))
 
 (defun drgnx-ui-env-argv (env)
   (append '("env" "-i") env))
 
 (defun drgnx-ui-compositor-argv (sess)
-  (append (list "dbus-run-session" "--" "mutter" "--headless" "--wayland" "--no-x11"
-                "--wayland-display" (plist-get sess :name))
-          (cl-loop repeat (or (plist-get sess :monitors) 1) append (list "--virtual-monitor" (plist-get sess :size)))
-          (list "--" (drgnx-ui-emacs-bin) "--init-directory" (expand-file-name "init" (plist-get sess :run)))
-          ;; A daemon has no frame until a client asks for one (`drgnx-ui-new-frame').
-          (if (eq (plist-get sess :daemon) t) '("--fg-daemon") '("--fullscreen"))))
+  "The command that runs SESS's compositor and, inside it, its Emacs."
+  (pcase (or (plist-get sess :compositor) "mutter")
+    ("sway" (list "dbus-run-session" "--" "sway" "-c" (expand-file-name "sway.conf" (plist-get sess :run))))
+    ((or "x11" "i3") (list "sh" "-c" (drgnx-ui--x11-script sess)))
+    (_
+     (append (list "dbus-run-session" "--" "mutter" "--headless" "--wayland" "--no-x11"
+                   "--wayland-display" (plist-get sess :name))
+             (cl-loop repeat (or (plist-get sess :monitors) 1) append (list "--virtual-monitor" (plist-get sess :size)))
+             (list "--" (drgnx-ui-emacs-bin) "--init-directory" (expand-file-name "init" (plist-get sess :run)))
+             ;; A daemon has no frame until a client asks for one (`drgnx-ui-new-frame').
+             (if (eq (plist-get sess :daemon) t) '("--fg-daemon") '("--fullscreen"))))))
 
 (defun drgnx-ui-launch-argv (sess)
   (append (list "systemd-run" "--user" "--quiet" "--collect" "--unit" (plist-get sess :name)
@@ -258,14 +419,14 @@ MONITORS: how many virtual monitors of SIZE (default 1)."
       (cl-incf n))
     (format "drgnx-ui-%d" n)))
 
-(defun drgnx-ui-claim-run (config size root &optional daemon monitors)
+(defun drgnx-ui-claim-run (config size root &optional daemon monitors compositor)
   "Prepare a session's run in ROOT under the first free name.  Several processes may start sessions at
 once (bin/drgnx check): a name another took between the choice and the claim — its run directory exists,
 so `drgnx-ui-prepare-run' refuses it — moves on to the next one."
   (let (sess (tries 0))
     (while (not sess)
       (condition-case err
-          (setq sess (drgnx-ui-prepare-run (drgnx-ui-next-name root) config size root daemon monitors))
+          (setq sess (drgnx-ui-prepare-run (drgnx-ui-next-name root) config size root daemon monitors compositor))
         (file-already-exists (when (> (cl-incf tries) 50) (signal (car err) (cdr err))))))
     sess))
 
@@ -300,14 +461,14 @@ Without it nothing is stopped: `drgnx ui start' sessions are meant to outlive th
 
 (add-hook 'kill-emacs-hook #'drgnx-ui--stop-own-on-exit)
 
-(defun drgnx-ui--claim-and-launch (config size root &optional daemon monitors)
+(defun drgnx-ui--claim-and-launch (config size root &optional daemon monitors compositor)
   "Claim a name in ROOT and launch the session's processes; the session plist.  Unit names are the
 user's, across state roots: one another root's session holds (systemd: \"already loaded\") is given back
 and the next name tried."
   (let (sess (refused nil))
     (unwind-protect
         (while (not sess)
-          (let* ((s (drgnx-ui-claim-run config size root daemon monitors))
+          (let* ((s (drgnx-ui-claim-run config size root daemon monitors compositor))
                  (launcher (drgnx-ui-launcher)))
             (setq s (plist-put s :launcher launcher))
             (if (equal launcher "detached")
@@ -404,14 +565,14 @@ Unit names are global; another state root may run a session with the same name."
           ""))
     (drgnx-ui-journal-tail (plist-get sess :name))))
 
-(defun drgnx-ui-start (&optional config size timeout daemon monitors)
+(defun drgnx-ui-start (&optional config size timeout daemon monitors compositor)
   "Start a session (CONFIG minimal, gryphn or a directory); return its plist once ready.
 DAEMON non-nil: run Emacs as a daemon; open frames with `drgnx-ui-new-frame'.  MONITORS: how
-many virtual monitors (default 1)."
+many virtual monitors (default 1).  COMPOSITOR: mutter, sway, x11 or i3 (nil: `drgnx-ui-default-compositor')."
   (let* ((root (drgnx-ui-state-root))
          (_ (make-directory root t))
          (_ (drgnx-ui--prune-eln-cache root))
-         (sess (drgnx-ui--claim-and-launch config size root daemon monitors))
+         (sess (drgnx-ui--claim-and-launch config size root daemon monitors compositor))
          (name (plist-get sess :name))
          (run (plist-get sess :run)))
     (drgnx-ui--own-add name root)
@@ -476,6 +637,23 @@ behind — unless a live session (perhaps of another state root) still serves it
       (let ((path (expand-file-name f (drgnx-ui-runtime-dir))))
         (when (file-exists-p path) (delete-file path))))))
 
+(defun drgnx-ui--serving-p (pattern)
+  "Non-nil while some process's command line matches PATTERN (an extended regexp)."
+  (eq 0 (car (drgnx-ui--run "pgrep" "-f" "--" pattern))))
+
+(defun drgnx-ui--remove-compositor-files (name run &optional display)
+  "Remove what a killed sway or Xvfb of session NAME (run directory RUN) leaves behind, each only when no
+process serves it: sway's runtime directory, and DISPLAY's (\":N\") X lock and socket if they are ours."
+  (let ((xdg (drgnx-ui-sway-runtime-dir name)))
+    (when (and (file-directory-p xdg)
+               (not (drgnx-ui--serving-p (concat "sway -c " (regexp-quote (expand-file-name "sway.conf" run))))))
+      (delete-directory xdg t)))
+  (when (and (stringp display) (string-match "\\`:\\([0-9]+\\)\\'" display)
+             (not (drgnx-ui--serving-p (format "Xvfb %s " display))))
+    (dolist (f (drgnx-ui--x11-files (string-to-number (match-string 1 display))))
+      (when (eql (file-attribute-user-id (file-attributes f 'integer)) (user-uid))
+        (delete-file f)))))
+
 (defun drgnx-ui--ask-to-exit (socket &optional wait)
   "Ask the Emacs listening on SOCKET to exit (its kill-emacs-hook runs: the layout is saved), and wait
 up to WAIT seconds (default 5) for its socket to go.  Never blocks longer; errors are ignored."
@@ -505,6 +683,7 @@ and socket directories."
       (when (drgnx-ui--unit-owned-p name run)
         (drgnx-ui--run "systemctl" "--user" "stop" name)))
     (drgnx-ui--remove-wayland-display name)
+    (drgnx-ui--remove-compositor-files name run (plist-get sess :display))
     (when (file-directory-p run) (delete-directory run t))
     (when (file-directory-p sock) (delete-directory sock t))
     (ignore-errors (delete-directory (file-name-directory sock))))   ; the per-root dir, once empty
@@ -698,15 +877,95 @@ in A is (:field \"removed\" :old BUFFER), only in B (:field \"added\" :new BUFFE
 (defun drgnx-ui-state (sess)
   (drgnx-ui-call sess "(drgnx-uitest-api-state)"))
 
+;;;; The session's window manager (sway, i3)
+
+(defconst drgnx-ui--wm-timeout 5 "Seconds a WM tool may take before it is killed.")
+
+(defun drgnx-ui--wm-run (program &rest args)
+  "Run PROGRAM with ARGS for at most `drgnx-ui--wm-timeout' s, without the caller's WM sockets in its
+environment; return (EXIT . STDOUT), EXIT `timeout' when it had to be killed.  Stderr is not kept."
+  (unless (executable-find program) (drgnx-ui--fail "%s is not installed here" program))
+  (let* ((process-environment (append '("SWAYSOCK" "I3SOCK") process-environment))
+         (out (generate-new-buffer " *drgnx-ui-wm*" t))
+         (err (generate-new-buffer " *drgnx-ui-wm-stderr*" t))
+         (proc (make-process :name "drgnx-ui-wm" :buffer out :stderr err :command (cons program args)
+                             :connection-type 'pipe :noquery t :coding 'utf-8-unix :sentinel #'ignore))
+         (deadline (+ (float-time) drgnx-ui--wm-timeout)))
+    (unwind-protect
+        (progn
+          (while (and (process-live-p proc) (< (float-time) deadline))
+            (accept-process-output proc 0.05))
+          (if (process-live-p proc)
+              (cons 'timeout "")
+            (while (accept-process-output proc 0))
+            (cons (process-exit-status proc) (with-current-buffer out (buffer-string)))))
+      (delete-process proc)
+      (when-let* ((p (get-buffer-process err))) (delete-process p))
+      (kill-buffer out)
+      (kill-buffer err))))
+
+(defun drgnx-ui--wm-socket (sess)
+  "SESS's own WM socket: sway's in the session's runtime directory, i3's from its display's root window
+\(I3_SOCKET_PATH).  Never the caller's $SWAYSOCK or $I3SOCK."
+  (pcase (plist-get sess :compositor)
+    ("sway"
+     (let* ((xdg (plist-get sess :xdg_runtime_dir))
+            (sock (car (and xdg (file-directory-p xdg)
+                            (directory-files xdg t "\\`sway-ipc\\..*\\.sock\\'")))))
+       (or sock (drgnx-ui--fail "%s: no sway socket in %s (has sway started?)" (plist-get sess :name) xdg))))
+    ("i3"
+     (let ((r (drgnx-ui--wm-run "xprop" "-display" (plist-get sess :display) "-root" "I3_SOCKET_PATH")))
+       (if (and (eq (car r) 0) (string-match "= \"\\(.+\\)\"" (cdr r)))
+           (match-string 1 (cdr r))
+         (drgnx-ui--fail "%s: no I3_SOCKET_PATH on display %s (has i3 started?)"
+                         (plist-get sess :name) (plist-get sess :display)))))))
+
+(defun drgnx-ui--wm-msg (sess &rest args)
+  "Run SESS's WM client (swaymsg, i3-msg) with its own socket and ARGS; return the parsed JSON reply."
+  (let* ((program (if (equal (plist-get sess :compositor) "sway") "swaymsg" "i3-msg"))
+         (r (apply #'drgnx-ui--wm-run program "-s" (drgnx-ui--wm-socket sess) args)))
+    (pcase r
+      (`(timeout . ,_) (drgnx-ui--fail "%s: %s gave no answer in %ss" (plist-get sess :name) program drgnx-ui--wm-timeout))
+      (`(,rc . ,out)
+       ;; an error (exit 2) still prints its JSON reply: the caller sees "success": false
+       (condition-case nil (drgnx-ui--parse-json out)
+         (error (drgnx-ui--fail "%s: %s failed (exit %s): %s" (plist-get sess :name) program rc (string-trim out))))))))
+
+(defun drgnx-ui-wm (sess)
+  "SESS's window-manager tree, read only: (:wm \"sway\"|\"i3\" :tree TREE) from the session's own WM, or
+\(:wm \"none\") under mutter and bare X11."
+  (pcase (plist-get sess :compositor)
+    ("sway" (list :wm "sway" :tree (drgnx-ui--wm-msg sess "-t" "get_tree" "-r")))
+    ("i3" (list :wm "i3" :tree (drgnx-ui--wm-msg sess "-t" "get_tree")))
+    (_ (list :wm "none"))))
+
+(defun drgnx-ui-wm-command (sess command)
+  "Run COMMAND (a sway or i3 command, e.g. \"output HEADLESS-2 disable\") in SESS's own WM; the parsed
+reply.  For tests only: neither the CLI nor the MCP server offers it."
+  (unless (member (plist-get sess :compositor) '("sway" "i3"))
+    (drgnx-ui--fail "%s has no window manager to command" (plist-get sess :name)))
+  (apply #'drgnx-ui--wm-msg sess (append (and (equal (plist-get sess :compositor) "sway") '("-r"))
+                                         (list "--" command))))
+
+(defun drgnx-ui--display-env (sess)
+  "The variables that point a client at SESS's own display (\"K=V\", or \"K\" to unset one of the caller's)."
+  (pcase (or (plist-get sess :compositor) "mutter")
+    ("sway"
+     (let* ((xdg (plist-get sess :xdg_runtime_dir))
+            (wl (car (and xdg (file-directory-p xdg) (directory-files xdg nil "\\`wayland-[0-9]+\\'")))))
+       (unless wl (drgnx-ui--fail "%s: sway's Wayland display is not in %s" (plist-get sess :name) xdg))
+       (list (concat "WAYLAND_DISPLAY=" wl) (concat "XDG_RUNTIME_DIR=" xdg) "DISPLAY")))
+    ((or "x11" "i3") (list (concat "DISPLAY=" (plist-get sess :display)) "WAYLAND_DISPLAY"))
+    (_ (list (concat "WAYLAND_DISPLAY=" (plist-get sess :name))
+             (concat "XDG_RUNTIME_DIR=" (drgnx-ui-runtime-dir))))))
+
 (defun drgnx-ui-new-frame (sess &optional timeout)
   "Open a frame in daemon session SESS the way a user does: `emacsclient -c'.
 Returns (:exit :output :client_ms :visible_ms :hooks) — HOOKS are the slowest frame-hook
 functions and hook totals measured in the session."
   (drgnx-ui-call sess "(drgnx-uitest-api-time-frame-hooks)")
   (let* ((before (plist-get (drgnx-ui-call sess "(drgnx-uitest-api-gui-frames)") :visible))
-         (process-environment (append (list (concat "WAYLAND_DISPLAY=" (plist-get sess :name))
-                                            (concat "XDG_RUNTIME_DIR=" (drgnx-ui-runtime-dir)))
-                                      process-environment))
+         (process-environment (append (drgnx-ui--display-env sess) process-environment))
          (t0 (float-time))
          (r (drgnx-ui--run-with-timeout (or timeout 30) (drgnx-ui--emacsclient) "-a" "false"
                                         "-s" (plist-get sess :socket) "-c" "-n"))
@@ -778,6 +1037,7 @@ with EXTRA-ENV (\"K=V\" strings).  Return (RC RESULTS RUN)."
     (when (eq (car r) 'timeout) (drgnx-ui--kill-group run))
     (drgnx-ui--run "pkill" "-KILL" "-f" name)          ; belt and braces
     (drgnx-ui--remove-wayland-display name)
+    (drgnx-ui--remove-compositor-files name run (plist-get sess :display))
     (delete-directory (drgnx-ui-socket-dir name) t)
     (ignore-errors (delete-directory (drgnx-ui-socket-dir "")))
     (list (if (eq (car r) 'timeout) 124 (car r))
@@ -797,7 +1057,11 @@ with EXTRA-ENV (\"K=V\" strings).  Return (RC RESULTS RUN)."
 runs the live suite in shards).  Return an exit code."
   (require 'drgnx-run-ert (expand-file-name "run-ert.el" drgnx-ui-harness-dir))
   (let* ((timeout (string-to-number (or (getenv "DRGNX_UI_TEST_TIMEOUT") "110")))
-         (res (drgnx-ui-run-ert-session (expand-file-name "test/ui" drgnx-ui-repo-dir) timeout))
+         (selector (getenv "DRGNX_TEST_SELECTOR"))
+         ;; a narrowed run stays narrow in the session too
+         (res (drgnx-ui-run-ert-session (expand-file-name "test/ui" drgnx-ui-repo-dir) timeout nil
+                                        (and selector (not (string-empty-p selector))
+                                             (list (concat "DRGNX_TEST_SELECTOR=" selector)))))
          (rc (nth 0 res)) (results (nth 1 res)) (run (nth 2 res))
          (ok (and (eq rc 0) results (eq (plist-get results :failed) 0))))
     (if results
@@ -918,9 +1182,10 @@ CONFIG (default drgnx) and print each scenario: green, red (known) with its trac
 ;;;; Command line
 
 (defconst drgnx-ui-usage "usage: drgnx ui COMMAND
-  start [--config minimal|drgnx|gryphn|DIR] [--size WxH] [--daemon]
-                                                      start a session (--daemon: no frame yet)
+  start [--config minimal|drgnx|gryphn|DIR] [--size WxH] [--daemon] [--monitors N]
+        [--compositor mutter|sway|x11|i3]             start a session (--daemon: no frame yet)
   frame NAME                                          open a frame in a daemon session (emacsclient -c)
+  wm NAME                                             the session's own sway or i3 tree (read only)
   stop NAME | ls | reap                               stop one / list / stop all of this state root
   state NAME                                          frame, windows, child frames
   shot NAME [PATH]                                    screenshot (child frames composited)
@@ -965,8 +1230,13 @@ a boolean flag (`drgnx-ui--boolean-flags') becomes :name t."
   (pcase-let* ((`(,pos . ,opts) (drgnx-ui--parse-args args))
                (name (car pos)))
     (pcase cmd
-      ("start" (drgnx-ui-start (plist-get opts :config) (plist-get opts :size) nil (plist-get opts :daemon)))
+      ("start" (drgnx-ui-start (plist-get opts :config) (plist-get opts :size) nil (plist-get opts :daemon)
+                               (let ((m (plist-get opts :monitors)))
+                                 (and m (if (string-match-p "\\`[1-9][0-9]*\\'" m) (string-to-number m)
+                                          (drgnx-ui--fail "--monitors needs a whole number above 0, got %S" m))))
+                               (plist-get opts :compositor)))
       ("frame" (drgnx-ui-new-frame (drgnx-ui-own-session name)))
+      ("wm" (drgnx-ui-wm (drgnx-ui-own-session name)))
       ("stop" (drgnx-ui-stop name))
       ("ls" (drgnx-ui-ls))
       ("reap" (drgnx-ui-reap))

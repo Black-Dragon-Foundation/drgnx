@@ -42,7 +42,12 @@ guard_violations (window moves from timers).")
          :inputSchema (drgnx-ui-mcp--schema '(:config (:type "string")
                                                       :size (:type "string" :description "WxH, default 1600x900")
                                                       :daemon (:type "boolean" :description "Run Emacs as a daemon: no frame until ui_frame")
-                                                      :monitors (:type "integer" :description "Virtual monitors of that size (default 1)"))))
+                                                      :monitors (:type "integer" :description "Virtual monitors of that size (default 1)")
+                                                      :compositor (:type "string" :enum ["mutter" "sway" "x11" "i3"]
+                                                                         :description "What Emacs runs under: headless mutter (default, or $DRGNX_UI_COMPOSITOR), headless sway, Xvfb (X11 Emacs), Xvfb with i3"))))
+   (list :name "ui_wm"
+         :description "Read only: the session's own window-manager tree (sway or i3 get_tree), as {wm, tree}; {wm: \"none\"} under mutter and bare X11. Never your desktop's WM."
+         :inputSchema (drgnx-ui-mcp--schema drgnx-ui-mcp--session '("session")))
    (list :name "ui_frame"
          :description "Open a frame in a daemon session the way a user does (emacsclient -c); returns exit status, client_ms, visible_ms and the slowest frame hooks."
          :inputSchema (drgnx-ui-mcp--schema drgnx-ui-mcp--session '("session")))
@@ -135,7 +140,9 @@ guard_violations (window moves from timers).")
 
 (defconst drgnx-ui-mcp--calls
   `(("ui_start" . ,(lambda (a) (drgnx-ui-mcp--text (drgnx-ui-start (plist-get a :config) (plist-get a :size) nil
-                                                                   (eq (plist-get a :daemon) t) (plist-get a :monitors)))))
+                                                                   (eq (plist-get a :daemon) t) (plist-get a :monitors)
+                                                                   (plist-get a :compositor)))))
+    ("ui_wm" . ,(lambda (a) (drgnx-ui-mcp--text (drgnx-ui-wm (drgnx-ui-mcp--own a)))))
     ("ui_frame" . ,(lambda (a) (drgnx-ui-mcp--text (drgnx-ui-new-frame (drgnx-ui-mcp--own a)))))
     ("ui_stop" . ,(lambda (a) (drgnx-ui-mcp--text (drgnx-ui-stop (plist-get a :session)))))
     ("ui_list" . ,(lambda (_) (drgnx-ui-mcp--text (drgnx-ui-ls))))
