@@ -82,8 +82,12 @@ Which profile does which role comes from `:routes` in `agents.eld` (config dir):
 
 ```elisp
 (:routes ((implement "claude" "claude (OpenRouter)")   ; the first; the rest take over when it fails
-          (review . "claude")))
+          (review "claude")))
 ```
+
+Each role's value is a list of profile names. If `agents.eld` has a mistake (a route that is not a list of names, or
+anything else in the file), no route is read from it until it is fixed: the roles use `drgnx-job-default-profile`, and
+the message that names the line is said once (Preferences: Open Config File… opens the file).
 
 A role without a route gets `drgnx-job-default-profile` ("claude"). The estimate counts
 `drgnx-job-task-tokens` (150 000 in, 15 000 out) per task at the price of the profile's provider when its traffic

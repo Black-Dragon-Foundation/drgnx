@@ -17,8 +17,37 @@
 (require 'seq)
 (require 'subr-x)
 (require 'drgnx-paths)
+(require 'drgnx-config)
 (require 'drgnx-acp)
 (require 'drgnx-agent-config)          ; `drgnx-agent-config-vendor-env'
+
+(declare-function drgnx-gateway--restrictions-check "drgnx-gateway")
+
+(defun drgnx-agents--openrouter-ok-p (value)
+  "Whether VALUE is an `:openrouter' restriction (`drgnx-gateway--restrictions-check' accepts it)."
+  (require 'drgnx-gateway)
+  (condition-case nil (progn (drgnx-gateway--restrictions-check value) t) (user-error nil)))
+
+(defconst drgnx-agents-config-schema
+  '(plist (:profiles (alist string (plist (:command (list-of string) "The program and its arguments" :required t)
+                                          (:env (list-of string) "NAME=value pairs added to its environment")
+                                          (:mode (enum queue steer interrupt) "What a message to a busy agent does")
+                                          (:ai symbol "The provider environment it gets")
+                                          (:model string "The model it asks for")
+                                          (:doc string "One line")))
+                     "Your agent profiles; the built-in ones need none")
+          (:default string "The profile New Agent Session… offers")
+          (:mcp (list-of (enum coordination search)) "The MCP servers agents get")
+          (:openrouter (pred drgnx-agents--openrouter-ok-p "not an OpenRouter restriction (:only :ignore :data-collection :zdr)")
+                       "Which providers OpenRouter may use")
+          (:routes (alist symbol (list-of string)) "Which profiles do each job role"))
+  "The schema of agents.eld.")
+
+(drgnx-config-define 'agents
+                     :file "agents.eld" :shape 'plist :version 1 :schema drgnx-agents-config-schema
+                     :default '(:profiles nil :mcp (coordination)) :reload 'mtime :last-good nil :max-bytes 262144
+                     :header ";; drgnx agents (docs/guide/agents.md)\n"
+                     :doc "Agent profiles, the MCP servers agents get, OpenRouter restrictions and job routes.")
 
 (cl-defstruct (drgnx-agent-session (:constructor drgnx-agents--make) (:copier nil))
   name profile cwd conn acp-id (status 'starting) entries queue (mode 'queue) capabilities usage commands
@@ -174,59 +203,41 @@ not installed (starting it says so) is left as it is."
 
 (defun drgnx-agents-profile (name)
   (or (assoc name drgnx-agents-profiles)
-      (assoc name (plist-get (drgnx-agents--read-file) :profiles))
+      (assoc name (drgnx-config-get 'agents :profiles))
       (assoc name drgnx-agents-builtin-profiles)
       (user-error "No agent profile %s" name)))
 
-(defun drgnx-agents--read-file (&optional strict)
-  "agents.eld's plist, or nil.  A file that does not read is nil too — or, with STRICT, a `user-error' saying why (a
-file of comments only is nil either way)."
-  (let ((f (expand-file-name "agents.eld" (drgnx-user-dir))))
-    (if (not strict)
-        (and (file-readable-p f) (ignore-errors (with-temp-buffer (insert-file-contents f) (read (current-buffer)))))
-      (when (file-exists-p f)
-        (condition-case err
-            (with-temp-buffer
-              (insert-file-contents f)
-              (goto-char (point-min))
-              (with-syntax-table emacs-lisp-mode-syntax-table (forward-comment (buffer-size)))
-              (unless (eobp) (read (current-buffer))))
-          (error (user-error "%s cannot be read (%s)" (abbreviate-file-name f) (error-message-string err))))))))
-
 (defun drgnx-agents-profile-names ()
-  (delete-dups (mapcar #'car (append drgnx-agents-profiles (plist-get (drgnx-agents--read-file) :profiles)
+  (delete-dups (mapcar #'car (append drgnx-agents-profiles (drgnx-config-get 'agents :profiles)
                                      drgnx-agents-builtin-profiles))))
 
 (defun drgnx-agents-default-profile ()
   "The profile New Agent Session offers on Return: agents.eld's `:default' when it names a profile, else claude."
-  (let ((d (plist-get (drgnx-agents--read-file) :default)))
+  (let ((d (drgnx-config-get 'agents :default)))
     (if (and (stringp d) (member d (drgnx-agents-profile-names))) d "claude")))
 
 (defun drgnx-agents-mcp-names ()
   "The MCP servers agents get, from agents.eld's `:mcp' (`coordination', `search'): the coordination tools alone
 until it says otherwise."
-  (let ((file (drgnx-agents--read-file)))
-    (if (plist-member file :mcp) (plist-get file :mcp) '(coordination))))
-
-(declare-function drgnx-keys--save-key "drgnx-keys")
+  (drgnx-config-get 'agents :mcp))
 
 (defun drgnx-agents-set-setting (key value)
   "Save VALUE as KEY (`:default', `:mcp', `:openrouter') in agents.eld: only that value changes, comments and the
-rest stay.  A file that cannot be read is a `user-error' and is not changed."
-  (require 'drgnx-keys)
-  (drgnx-keys--save-key key value (expand-file-name "agents.eld" (drgnx-user-dir)) ";; drgnx agents (docs/guide/agents.md)\n"))
+rest stay.  A file with a mistake is a `drgnx-config-refused' (a `user-error') and is not changed."
+  (drgnx-config-set 'agents key value))
 
 (declare-function drgnx-gateway-restrictions "drgnx-gateway")
 
 (defun drgnx-agents-openrouter-restrictions ()
   "Which providers OpenRouter may use for the agents' requests, from agents.eld's `:openrouter': (:only SLUGS
-:ignore SLUGS :data-collection deny|allow :zdr t), each only when set, or nil.  A file that does not read, or a value
-that is not a restriction, is a `user-error' naming it: a typo never turns a restriction off.  One setting for every
-OpenRouter route; it applies through the gateway only."
+:ignore SLUGS :data-collection deny|allow :zdr t), each only when set, or nil.  A file with a mistake (it does not read,
+or a value is not a restriction) is a `user-error' naming it: OpenRouter agents do not start until it is fixed, and a
+typo never turns a restriction off.  One setting for every OpenRouter route; it applies through the gateway only."
   (require 'drgnx-gateway)
-  (let ((file (drgnx-agents--read-file t)))
-    (unless (proper-list-p file) (user-error "agents.eld is not a list of keys and values")) ; (never shown: :env values)
-    (drgnx-gateway-restrictions (plist-get file :openrouter) t)))
+  (when-let* ((p (drgnx-config-problem 'agents)))
+    (user-error "%s has a mistake (line %s: %s): OpenRouter agents do not start until it is fixed"
+                (abbreviate-file-name (plist-get p :file)) (plist-get p :line) (plist-get p :text)))
+  (drgnx-gateway-restrictions (drgnx-config-get 'agents :openrouter) t))
 
 (defun drgnx-agents--openrouter-json (restrictions)
   "RESTRICTIONS as a hub call carries them (vectors for lists, a string for the symbol)."

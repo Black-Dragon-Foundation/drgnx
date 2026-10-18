@@ -1307,7 +1307,7 @@ record the prompts and the default in the lists they return as the cars of (PROM
       ;; a file that cannot be read is not touched; the result says so
       (write-region "(:profiles" nil file nil 'silent)
       (cl-letf (((symbol-function 'completing-read) (lambda (&rest _) "claude")) ((symbol-function 'y-or-n-p) (nth 1 a)))
-        (should (string-match-p "agents.eld cannot be read" (funcall drgnx-onboard-test--offers))))
+        (should (string-match-p "agents.eld has a mistake" (funcall drgnx-onboard-test--offers))))
       (should (equal (drgnx-onboard-test--slurp file) "(:profiles")))))
 
 ;;; onboard-test.el ends here

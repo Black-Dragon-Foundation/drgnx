@@ -19,6 +19,13 @@ Mac) opens the Agents tab. Profiles live in
             ("local" :command ("my-acp-agent" "--model" "qwen") :mode steer)))
 ```
 
+**If `agents.eld` has a mistake** (it does not read, or a value is the wrong kind: a `:command` that is not a list of
+strings, a `:mcp` name that is neither `coordination` nor `search`, an `:openrouter` value that is not a restriction),
+drgnx does not apply any of it and says where the mistake is, once. Only the built-in profiles are offered, the agents
+get the coordination tools alone, and OpenRouter agents wait until it is fixed: a restriction you wrote is never
+dropped for a typo. The settings pages and onboarding do not write to a file with a mistake; they say so. The file is
+read again at the next use after you save it, with no restart.
+
 `:command` is the agent program; `:mode` is what a message to a busy agent does: `queue` (default), `steer` (when
 the agent advertises steering — sent as `_session/steering`; if the agent refuses, the message is queued instead) or
 `interrupt` (stop the turn, then send). A profile whose program is not installed gives a session that says so. Keys and tokens are
