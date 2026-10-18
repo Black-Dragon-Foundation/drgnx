@@ -8,6 +8,8 @@
 
 ;;; Code:
 (require 'cl-lib)
+(require 'seq)
+(require 'subr-x)
 (require 'ert)
 
 (defun drgnx-run-ert-drain-events ()
@@ -170,6 +172,68 @@ the report (`drgnx-run-ert--census-guard'), never an error of the test run."
                          leaks "\n")
               "\n"))))
 
+;;;; The order of the tests
+
+;; With DRGNX_TEST_SHUFFLE=SEED (`bin/drgnx test --shuffle[=SEED]') the tests of each file run in a random order that
+;; SEED fixes, so a test that passes only after another one (a leaked hook, a variable left set) fails; the seed is
+;; printed and written to the summary.  `bin/drgnx test --find-polluter TEST' bisects such a failure (below).
+;; ERT keeps the order of a `(member …)' selector, which is how both give the tests their order.
+
+(defun drgnx-run-ert--shuffle-seed ()
+  "The seed of this run's shuffle (DRGNX_TEST_SHUFFLE, a string), or nil: tests run in ERT's order."
+  (drgnx-run-ert--env "DRGNX_TEST_SHUFFLE"))
+
+(defun drgnx-run-ert--shuffle (items seed)
+  "ITEMS (a list) in an order SEED (a string) fixes: Fisher-Yates over `random', seeded from SEED."
+  (random seed)                         ; a string seeds the generator from its contents
+  (let* ((v (vconcat items)) (i (length v)))
+    (while (> i 1)
+      (let ((j (random i)) (tmp nil))
+        (cl-decf i)
+        (setq tmp (aref v i)) (aset v i (aref v j)) (aset v j tmp)))
+    (append v nil)))
+
+(defun drgnx-run-ert--order (tests seed)
+  "The ert-test objects TESTS in the order of a run shuffled by SEED: files by name, and each file's tests (by name
+first, so the list's own order does not matter) shuffled from SEED and the file's base name, so a file has the same
+order whether it runs alone or with the others."
+  (let ((groups (make-hash-table :test #'equal)))
+    (dolist (test tests) (push test (gethash (or (ert-test-file-name test) "") groups)))
+    (mapcan (lambda (file)
+              (drgnx-run-ert--shuffle
+               (sort (gethash file groups) (lambda (a b) (string< (format "%s" (ert-test-name a)) (format "%s" (ert-test-name b)))))
+               (format "%s:%s" seed (file-name-nondirectory file))))
+            (sort (hash-table-keys groups) #'string<))))
+
+(defun drgnx-run-ert--env (var)
+  "The value of the environment variable VAR, or nil when it is unset or empty."
+  (let ((s (getenv var))) (and s (not (string-empty-p s)) s)))
+
+(defun drgnx-run-ert--selector ()
+  "The ERT selector of this run: DRGNX_TEST_SELECTOR (an ERT selector; `bin/drgnx check' runs :timing ones alone),
+else every test; with a shuffle seed, the selected tests as a `(member …)' in the shuffled order.  The Emacsen of
+--find-polluter (one process) also read DRGNX_TEST_ORDER_IN=FILE, the names of the tests to run in that order, one a
+line (a file: a whole suite's names would not fit in the environment), and DRGNX_TEST_ORDER_OUT=FILE, which writes the
+names the run would run, in that order, to FILE and runs none."
+  (let* ((s (drgnx-run-ert--env "DRGNX_TEST_SELECTOR"))
+         (selector (if s (car (read-from-string s)) t))
+         (seed (drgnx-run-ert--shuffle-seed))
+         (in (drgnx-run-ert--env "DRGNX_TEST_ORDER_IN"))
+         (out (drgnx-run-ert--env "DRGNX_TEST_ORDER_OUT")))
+    (cond
+     (in `(member ,@(mapcar #'intern (split-string (with-temp-buffer (insert-file-contents in) (buffer-string)) "\n" t))))
+     ((not (or seed out)) selector)
+     (t (let ((tests (ert-select-tests selector t)))
+          (when seed (setq tests (drgnx-run-ert--order tests seed)))
+          (if out
+              (progn (write-region (mapconcat (lambda (tt) (format "%s\n" (ert-test-name tt))) tests "") nil out nil 'silent)
+                     '(member))                 ; not nil: `ert-run-tests-batch' takes that for every test
+            `(member ,@tests)))))))
+
+(defun drgnx-run-ert--say-seed (seed)
+  "Say SEED, the shuffle seed of this run, and how to run again with it."
+  (message "drgnx: shuffle seed %s (the same order again: bin/drgnx test --shuffle=%s)" seed seed))
+
 (defun drgnx-run-ert (dir &optional results-file)
   "Load every *-test.el under DIR (or the files of the list DIR: a shard), run all tests, write a JSON
 summary to RESULTS-FILE.  Return t if every test passed."
@@ -182,9 +246,10 @@ summary to RESULTS-FILE.  Return t if every test passed."
                    when err collect (progn (message "drgnx: test file %s did not load: %S" file err)
                                            (list :name (concat "load " (file-name-nondirectory file))
                                                  :condition (format "%S" err)))))
-         ;; which tests: all, or DRGNX_TEST_SELECTOR (an ERT selector; bin/drgnx check runs :timing ones alone)
-         (stats (ert-run-tests-batch (let ((s (getenv "DRGNX_TEST_SELECTOR")))
-                                       (if (and s (not (string-empty-p s))) (car (read-from-string s)) t))))
+         ;; which tests, in which order: DRGNX_TEST_SELECTOR, DRGNX_TEST_SHUFFLE (see `drgnx-run-ert--selector')
+         (seed (drgnx-run-ert--shuffle-seed))
+         (_ (when (and seed (not drgnx-run-ert--leaks-quiet)) (drgnx-run-ert--say-seed seed)))
+         (stats (ert-run-tests-batch (drgnx-run-ert--selector)))
          (leaks (and census (drgnx-run-ert--census-finish)))
          (tests nil) (known-red nil) (failures nil))
     (cl-loop
@@ -224,6 +289,7 @@ summary to RESULTS-FILE.  Return t if every test passed."
           (t (push (list :name name :condition (format "known red, but it errored: %S" condition))
                    failures)))))))
     (setq failures (append load-failures (nreverse failures)))
+    (when (and seed failures (not drgnx-run-ert--leaks-quiet)) (drgnx-run-ert--say-seed seed)) ; again, where the failures are
     ;; the per-file Emacsen of a run say nothing: the run that started them prints one report from their summaries
     (when (and leaks (not drgnx-run-ert--leaks-quiet))
       (message "\n%s" (drgnx-run-ert-leaks-report leaks)))
@@ -239,7 +305,9 @@ summary to RESULTS-FILE.  Return t if every test passed."
                          :known_red (vconcat (nreverse known-red))
                          :tests (vconcat (nreverse tests)))
                    ;; only a run with the census on says anything about leaks
-                   (and census (list :leaks (vconcat leaks)))))
+                   (and census (list :leaks (vconcat leaks)))
+                   ;; a shuffled run says which seed it used
+                   (and seed (list :seed seed))))
           'utf-8)
          nil results-file nil 'silent)))
     (null failures)))
@@ -381,7 +449,9 @@ file passed."
          (out-dir (make-temp-file "drgnx-files" t))
          (queue (cl-loop for file in files for i from 1
                          collect (list :file file :json (expand-file-name (format "%d.json" i) out-dir))))
-         (count (length queue)) (running nil) (done nil) (t0 (float-time)))
+         (count (length queue)) (running nil) (done nil) (t0 (float-time))
+         (seed (drgnx-run-ert--shuffle-seed)))     ; the files' Emacsen inherit it; this one says it once
+    (when seed (drgnx-run-ert--say-seed seed))
     (add-hook 'kill-emacs-hook #'drgnx-run-ert--end-files)
     (unwind-protect
         (progn
@@ -421,15 +491,160 @@ file passed."
     (let ((summary (drgnx-run-ert--merge (sort done (lambda (a b) (< (cl-position (plist-get a :file) files :test #'equal)
                                                                      (cl-position (plist-get b :file) files :test #'equal))))
                                          timeout)))
+      (when seed (setq summary (append summary (list :seed seed))))
       (message "\ndrgnx: %d test files, each in an Emacs of its own: %d tests, %d as expected, %d unexpected (%.0f s)"
                count (plist-get summary :total) (plist-get summary :passed) (plist-get summary :failed) (- (float-time) t0))
       (cl-loop for f across (plist-get summary :failures) do (message "   FAILED  %s" (plist-get f :name)))
+      (when (and seed (> (plist-get summary :failed) 0)) (drgnx-run-ert--say-seed seed))
       (when (and (plist-get summary :leaks) (> (length (plist-get summary :leaks)) 0))
         (message "\n%s" (drgnx-run-ert-leaks-report (plist-get summary :leaks))))
       (when results-file
         (let ((coding-system-for-write 'utf-8-unix))
           (write-region (decode-coding-string (json-serialize summary) 'utf-8) nil results-file nil 'silent)))
       (zerop (plist-get summary :failed)))))
+
+;;;; Finding the test that breaks another
+
+;; `bin/drgnx test --find-polluter TEST [FILE…]': TEST passes alone but fails after some test before it.  The tests
+;; before TEST (in TEST's file, or in FILES, in the order a one-Emacs run gives them) are run in a fresh Emacs with
+;; TEST at the end, and the list is halved until one test is left.  Every run is an Emacs of its own with the
+;; runner's sandbox, so the bisect itself leaves nothing behind; `drgnx-run-ert--file-root' and the kill hook of the
+;; per-file runs clean up when it is interrupted.
+
+(defvar drgnx-run-ert--polluter-runs 0 "The Emacsen with tests that the bisect has run so far.")
+
+(defun drgnx-run-ert--child (files env)
+  "Run the test FILES in one fresh batch Emacs (this one's `load-path', one process, no census) with ENV, a list of
+\"VAR=VALUE\" strings and bare names to unset, ahead of this Emacs's environment.  Return (:exit N :timed-out BOOL
+:output STRING).  One that runs DRGNX_TEST_FILE_TIMEOUT seconds (default 300) is ended."
+  (let* ((tmp (let ((temporary-file-directory drgnx-run-ert--file-root)) (make-temp-file "drgnx-run." t)))
+         (out (generate-new-buffer " *drgnx-polluter*"))
+         (timeout (drgnx-run-ert--env-number "DRGNX_TEST_FILE_TIMEOUT" 300))
+         (process-environment (append env (list (concat "DRGNX_RUN_TMP=" tmp) "DRGNX_TEST_ONE_PROCESS=1"
+                                                "DRGNX_TEST_LEAKS" "DRGNX_TEST_LEAKS_QUIET")
+                                      process-environment))
+         (timed-out nil))
+    (unwind-protect
+        (let* ((p (make-process
+                   :name "drgnx-polluter" :noquery t :connection-type 'pipe :coding 'utf-8 :buffer out
+                   :command (append (list (expand-file-name invocation-name invocation-directory) "--batch" "-Q"
+                                          "--eval" (format "(setq load-prefer-newer %S load-path '%S)" load-prefer-newer load-path)
+                                          "-l" drgnx-run-ert--self "-f" "drgnx-run-ert-batch")
+                                    files)
+                   :sentinel #'ignore))
+               (deadline (+ (float-time) timeout)))
+          (process-send-eof p)
+          (push p drgnx-run-ert--file-processes)
+          (while (process-live-p p)
+            (accept-process-output p 0.05)
+            (when (> (float-time) deadline)
+              (setq timed-out t)
+              (drgnx-run-ert--end-process p)))
+          (setq drgnx-run-ert--file-processes (delq p drgnx-run-ert--file-processes))
+          (list :exit (process-exit-status p) :timed-out timed-out :output (with-current-buffer out (buffer-string))))
+      (kill-buffer out)
+      (ignore-errors (delete-directory tmp t)))))
+
+(defun drgnx-run-ert--child-error (what child)
+  "Signal a `user-error' that WHAT (a string) failed, with the tail of the output of CHILD (see `drgnx-run-ert--child')."
+  (let ((out (string-trim (plist-get child :output))))
+    (user-error "%s%s\n%s" what (if (plist-get child :timed-out) " (timed out: DRGNX_TEST_FILE_TIMEOUT)" "")
+                (if (> (length out) 1500) (concat "…" (substring out -1500)) out))))
+
+(defun drgnx-run-ert--tests-in-order (files)
+  "The names of the tests of FILES in the order a one-Emacs run runs them (shuffled by DRGNX_TEST_SHUFFLE, if set)."
+  (let ((list-file (make-temp-file (expand-file-name "order" drgnx-run-ert--file-root))))
+    (let ((child (drgnx-run-ert--child files (list (concat "DRGNX_TEST_ORDER_OUT=" list-file)
+                                                   "DRGNX_TEST_ORDER_IN" "DRGNX_TEST_SELECTOR" "DRGNX_TEST_RESULTS"))))
+      (unless (eql 0 (plist-get child :exit)) (drgnx-run-ert--child-error "listing the tests failed" child))
+      (split-string (with-temp-buffer (insert-file-contents list-file) (buffer-string)) "\n" t))))
+
+(defun drgnx-run-ert--fails-after-p (files names test)
+  "Whether TEST fails when the tests NAMES (a list of strings) run before it, all in one fresh Emacs that loads FILES."
+  (let* ((order (make-temp-file (expand-file-name "run-order" drgnx-run-ert--file-root)))
+         (json (make-temp-file (expand-file-name "run-result" drgnx-run-ert--file-root) nil ".json")))
+    (with-temp-file order (dolist (n (append names (list test))) (insert n "\n")))
+    (cl-incf drgnx-run-ert--polluter-runs)
+    (let* ((child (drgnx-run-ert--child files (list (concat "DRGNX_TEST_ORDER_IN=" order) (concat "DRGNX_TEST_RESULTS=" json)
+                                                    "DRGNX_TEST_SHUFFLE" "DRGNX_TEST_SELECTOR" "DRGNX_TEST_ORDER_OUT")))
+           (summary (drgnx-run-ert--read-summary json))
+           (entry (and summary (seq-find (lambda (e) (equal (plist-get e :name) test)) (plist-get summary :tests))))
+           (fails (and entry (equal (plist-get entry :result) "failed"))))
+      (unless entry (drgnx-run-ert--child-error (format "%s did not run (its Emacs exited %s)" test (plist-get child :exit)) child))
+      (message "drgnx: run %d: %d test%s before %s -> %s" drgnx-run-ert--polluter-runs (length names)
+               (if (= 1 (length names)) "" "s") test (if fails "it fails" "it passes"))
+      fails)))
+
+(defun drgnx-run-ert--defining-file (dir test)
+  "The test file under DIR that has `(ert-deftest TEST', or nil."
+  (let ((re (concat "(ert-deftest[ \t\n]+" (regexp-quote test) "[ \t\n()]")))
+    (seq-find (lambda (f) (with-temp-buffer (insert-file-contents f) (re-search-forward re nil t)))
+              (drgnx-run-ert--files dir))))
+
+(defun drgnx-run-ert-find-polluter (dir test files)
+  "Find, among the tests that run before the test named TEST (a string), the one after which TEST fails.  FILES (test
+files or directories) are loaded; none: the file under DIR that defines TEST.  The tests before TEST are those a
+one-Emacs run of FILES runs first (DRGNX_TEST_SHUFFLE shuffles them).  It runs TEST alone, then after all of them,
+then halves the list: at most ⌈log2 N⌉+2 runs for N tests before TEST.  It assumes one polluter.
+Return (:polluter NAME), (:alone t) when TEST fails alone, or (:clean t) when it passes after all the tests before
+it; each with :runs."
+  (let* ((drgnx-run-ert--file-root (file-name-as-directory (drgnx-run-ert--short-root)))
+         (drgnx-run-ert--polluter-runs 0)
+         (files (or (mapcan #'drgnx-run-ert--files files)
+                    (list (or (drgnx-run-ert--defining-file dir test)
+                              (user-error "no test named %s under %s" test dir)))))
+         (seed (drgnx-run-ert--shuffle-seed)))
+    (add-hook 'kill-emacs-hook #'drgnx-run-ert--end-files)
+    (when seed (drgnx-run-ert--say-seed seed))
+    (unwind-protect
+        (let* ((order (drgnx-run-ert--tests-in-order files))
+               (before (progn (unless (member test order) (user-error "%s is not among the tests of %s" test (mapconcat #'file-name-nondirectory files ", ")))
+                              (seq-take-while (lambda (n) (not (equal n test))) order)))
+               (result
+                (cond
+                 ((drgnx-run-ert--fails-after-p files nil test) (list :alone t))
+                 ((null before) (list :clean t))
+                 ((not (drgnx-run-ert--fails-after-p files before test)) (list :clean t))
+                 (t (let ((candidates before))
+                      (while (cdr candidates)
+                        (let ((first (seq-take candidates (/ (length candidates) 2))))
+                          (setq candidates (if (drgnx-run-ert--fails-after-p files first test)
+                                               first
+                                             (seq-drop candidates (length first))))))
+                      (list :polluter (car candidates)))))))
+          (append result (list :runs drgnx-run-ert--polluter-runs :before (length before))))
+      (drgnx-run-ert--end-files)
+      (remove-hook 'kill-emacs-hook #'drgnx-run-ert--end-files))))
+
+(defun drgnx-run-ert-find-polluter-batch ()
+  "Batch entry point of `bin/drgnx test --find-polluter': the remaining arguments are the directory of the suite, the
+test's name and the files (maybe none).  Exit 0 when it names the polluter or the test fails alone, 1 when the test
+passes after all the tests before it, 2 when it cannot run."
+  (setq default-directory (expand-file-name default-directory)
+        load-path (mapcar (lambda (d) (if (stringp d) (expand-file-name d) d)) load-path))
+  (let* ((dir (expand-file-name (pop command-line-args-left)))
+         (test (pop command-line-args-left))
+         (files (prog1 (mapcar #'expand-file-name command-line-args-left) (setq command-line-args-left nil)))
+         (code (condition-case err
+                   (let* ((r (drgnx-run-ert-find-polluter dir test files))
+                          (runs (plist-get r :runs))
+                          (n (format "(%d run%s)" runs (if (= runs 1) "" "s"))))
+                     (cond
+                      ((plist-get r :alone)
+                       (message "\n%s fails alone %s: it does not depend on any test before it" test n) 0)
+                      ((plist-get r :clean)
+                       (message "\n%s passes %s %s: no pollution in this order (try --shuffle, or name more FILES)"
+                                test (if (zerop (plist-get r :before)) "alone, and no test runs before it"
+                                       (format "after all %d test%s before it" (plist-get r :before)
+                                               (if (= 1 (plist-get r :before)) "" "s")))
+                                n)
+                       1)
+                      (t (message "\npolluter: %s\n  %s fails when it runs after %s and passes alone %s\n  check the pair: %s"
+                                  (plist-get r :polluter) test (plist-get r :polluter) n
+                                  (format "DRGNX_TEST_SELECTOR='(member %s %s)' bin/drgnx test --one-process" (plist-get r :polluter) test))
+                         0)))
+                 (user-error (message "drgnx: %s" (cadr err)) 2))))
+    (kill-emacs code)))
 
 (defvar project-list-file)
 

@@ -61,6 +61,9 @@ earlier file left). `bin/drgnx check`'s `unit-timing` job uses it too (16 tests 
 the variable for the tests themselves, so a test that runs the runner gets one Emacs per file unless it sets it. The
 GUI and live tiers and the tests that start an Emacs of their own keep their own runners.
 
+`bin/drgnx test --shuffle[=SEED]` shuffles each file's tests from a seed, and `--find-polluter TEST [FILE…]` bisects the
+tests before TEST down to the one that makes it fail ([check.md](check.md#the-order-of-the-tests---shuffle---find-polluter)).
+
 ### Native trampolines
 
 A test that `cl-letf`s a primitive (`buffer-list`, `message`, …) makes Emacs compile a native trampoline, which it

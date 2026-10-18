@@ -12,7 +12,7 @@
 (defun drgnx-run-ert-test--batch (dir results &rest env)
   "Run the suite in DIR in a fresh batch Emacs (harness on the load path); return its exit code."
   (let ((process-environment (append (cons (concat "DRGNX_TEST_RESULTS=" results) env)
-                                     (list "DRGNX_TEST_SELECTOR" "DRGNX_TEST_LEAKS" "DRGNX_TEST_LEAKS_ALLOWED") ; not this run's selector or census
+                                     (list "DRGNX_TEST_SELECTOR" "DRGNX_TEST_LEAKS" "DRGNX_TEST_LEAKS_ALLOWED" "DRGNX_TEST_SHUFFLE") ; not this run's selector, census or order
                                      process-environment))
         ;; never a buffer's deleted directory, which call-process refuses
         (default-directory (if (file-directory-p default-directory) default-directory temporary-file-directory)))
@@ -279,7 +279,7 @@ runner gave it: DRGNX_TEST_ELN_DIR and the first effective directory of `native-
 
 (defun drgnx-run-ert-test--run-suite (suite &rest env)
   "Run SUITE with the batch runner in a fresh Emacs with ENV; return its exit code."
-  (let ((process-environment (append env (list "DRGNX_TEST_SELECTOR" "DRGNX_TEST_RESULTS" "DRGNX_TEST_LEAKS" "DRGNX_TEST_LEAKS_ALLOWED")
+  (let ((process-environment (append env (list "DRGNX_TEST_SELECTOR" "DRGNX_TEST_RESULTS" "DRGNX_TEST_LEAKS" "DRGNX_TEST_LEAKS_ALLOWED" "DRGNX_TEST_SHUFFLE")
                                      process-environment)))
     (call-process (expand-file-name invocation-name invocation-directory) nil nil nil
                   "--batch" "-Q" "-L" (file-name-directory (locate-library "run-ert.el"))
@@ -525,7 +525,7 @@ runner gave it: DRGNX_TEST_ELN_DIR and the first effective directory of `native-
 (defun drgnx-run-ert-test--census (suite results &rest env)
   "Run SUITE with the census on; return (EXIT . OUTPUT).  The summary goes to RESULTS."
   (let ((process-environment (append (list (concat "DRGNX_TEST_RESULTS=" results) "DRGNX_TEST_LEAKS=1"
-                                           "DRGNX_TEST_SELECTOR")
+                                           "DRGNX_TEST_SELECTOR" "DRGNX_TEST_SHUFFLE")
                                      env process-environment))
         (default-directory temporary-file-directory))
     (with-temp-buffer
