@@ -22,20 +22,6 @@ Agent profiles, the MCP servers agents get, OpenRouter restrictions and job rout
 | `:openrouter` | not an OpenRouter restriction (:only :ignore :data-collection :zdr) | no | Which providers OpenRouter may use |
 | `:routes` | alist of symbol to string or list of string | no | Which profiles do each job role: a list of names, or one name |
 
-## keys.eld
-
-Folder: config. Format: 1. Read: at start. On a mistake: its last good copy, else the defaults.
-
-Your key bindings: the profile stack, entries that win over it, keys taken away.
-
-| Key | Type | Required | What |
-| --- | --- | --- | --- |
-| `:layers` | a profile stack such as ((emacs editing) (vscode app window)) | no | The key profile stack, later layers winning; omitted: the default (VS Code) |
-| `:pending-layers` | a profile stack such as ((vim app editing window)) | no | A stack waiting for its modal engine to be installed (drgnx sync) |
-| `:bind` | list of (ID KEY… [:map MAP]) | no | Command id → keys, winning over every layer |
-| `:unbind` | list of symbol | no | Command ids that get no key |
-| `:mac-option` | characters or meta | no | What the left Option key does on a Mac with VS Code's keys |
-| `:tty-fallback` | any | no | Chord → another Alt key for it, in a legacy terminal: (("C-S-p" . "M-Z")) |
 ## ai.eld
 
 Folder: config. Format: 1. Read: when it changes. On a mistake: its last good copy, else the defaults.
@@ -64,6 +50,21 @@ A project's roles, among the providers you have: never a provider or a key of it
 | --- | --- | --- | --- |
 | `:roles` | alist of symbol to alist of symbol to string or null | no | The project's roles (a remote provider in a chain is asked about once) |
 
+## keys.eld
+
+Folder: config. Format: 1. Read: at start. On a mistake: its last good copy, else the defaults.
+
+Your key bindings: the profile stack, entries that win over it, keys taken away.
+
+| Key | Type | Required | What |
+| --- | --- | --- | --- |
+| `:layers` | a profile stack such as ((emacs editing) (vscode app window)) | no | The key profile stack, later layers winning; omitted: the default (VS Code) |
+| `:pending-layers` | a profile stack such as ((vim app editing window)) | no | A stack waiting for its modal engine to be installed (drgnx sync) |
+| `:bind` | list of (ID KEY… [:map MAP]) | no | Command id → keys, winning over every layer |
+| `:unbind` | list of symbol | no | Command ids that get no key |
+| `:mac-option` | characters or meta | no | What the left Option key does on a Mac with VS Code's keys |
+| `:tty-fallback` | any | no | Chord → another Alt key for it, in a legacy terminal: (("C-S-p" . "M-Z")) |
+
 ## layouts.eld
 
 Folder: config. Format: 1. Read: when it changes. On a mistake: its last good copy, else the defaults.
@@ -82,6 +83,17 @@ Your own layouts; the built-in ones are not stored.
 | `* :px :panel` | natnum or null | no |  |
 | `* :px :right` | natnum or null | no |  |
 
+## drgnx.lock.eld
+
+Folder: config. Format: 1. Read: when it changes. On a mistake: the defaults.
+
+Every installed package, pinned by drgnx sync.  A mistake in it stops the sync, and drgnx never replaces the file.
+
+| Key | Type | Required | What |
+| --- | --- | --- | --- |
+| `:packages` | list of (NAME :version :archive :kind :file :sha256 :size :requires :summary) | yes | What is installed: one entry per package |
+| `:from-shipped` | boolean | no | Copied from the lock drgnx ships; the first sync completes it |
+
 ## modules.eld
 
 Folder: config. Format: 2. Read: at start. On a mistake: its last good copy, else the defaults.
@@ -95,16 +107,6 @@ Which modules run, their flags, external modules.
 | `:flags` | alist of symbol to list of symbol | no | Module flags |
 | `:external` | list of any | no | External modules (each is checked when it loads) |
 | `:theme` | symbol | no | The colour theme onboarding chose |
-## drgnx.lock.eld
-
-Folder: config. Format: 1. Read: when it changes. On a mistake: the defaults.
-
-Every installed package, pinned by drgnx sync.  A mistake in it stops the sync, and drgnx never replaces the file.
-
-| Key | Type | Required | What |
-| --- | --- | --- | --- |
-| `:packages` | list of (NAME :version :archive :kind :file :sha256 :size :requires :summary) | yes | What is installed: one entry per package |
-| `:from-shipped` | boolean | no | Copied from the lock drgnx ships; the first sync completes it |
 
 ## packages.eld
 
@@ -136,15 +138,6 @@ The projects drgnx knows: the work tracker and search scan their roots.
 | `:projects * :root` | home-path | yes | Its folder |
 | `:projects * :url` | string or null | no | Its remote's URL |
 
-## session.eld
-
-Folder: config. Format: 1. Read: at start. On a mistake: its last good copy, else the defaults.
-
-Whether drgnx keeps running when its last window closes (read at every start).
-
-| Key | Type | Required | What |
-| --- | --- | --- | --- |
-| `:keep-running` | boolean | no | Keep drgnx running when its last window closes |
 ## search.eld
 
 Folder: project. Format: 1. Read: when it changes. On a mistake: refused.
@@ -156,4 +149,14 @@ Narrows what a project's semantic search indexes: only these globs, not these, o
 | `:include` | list of string | no |  |
 | `:exclude` | list of string | no |  |
 | `:off` | boolean | no |  |
+
+## session.eld
+
+Folder: config. Format: 1. Read: at start. On a mistake: its last good copy, else the defaults.
+
+Whether drgnx keeps running when its last window closes (read at every start).
+
+| Key | Type | Required | What |
+| --- | --- | --- | --- |
+| `:keep-running` | boolean | no | Keep drgnx running when its last window closes |
 
