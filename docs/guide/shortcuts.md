@@ -19,6 +19,12 @@ One line per command:
 A `!` at the start of a line marks a key conflict; hover over it to see with which command and where. A conflict is
 only one within the same place: the same key in two views is not.
 
+A profile's key over one of Emacs' own keys is not a conflict: the profile chose it (VS Code's `C-k` chords take
+`C-k`, `kill-line`, as a prefix). Hover over the Where column to see what it is over ("Over Emacs' kill-line
+(C-k)"); the key sheet and the doctor list these too. The same key in your `keys.eld`, a key another active layer
+claims (the Emacs layer's keys in "Emacs editing + VS Code app keys", Vim's keys) and two drgnx commands on one
+key are conflicts.
+
 The first line shows the key profile in use, with **[Switch Profile…]**: VS Code, Emacs or Vim keys, or a
 combination. It applies at once and is kept in `keys.eld` (as Keyboard Profile… does).
 
@@ -32,7 +38,7 @@ one. The palette's counts stay on this machine (`command-usage.eld` in drgnx's s
 |---|---|
 | `RET` | Change Keybinding: record new keys for the command on the line, in place of its key (asks which one when it has several) |
 | `a` | Add Keybinding: record one more key, keeping its keys |
-| `/` | Filter by text in the title or category (empty: all) |
+| `/` | Filter by text in the title or category; the list follows as you type (empty: all; `C-g` puts back the filter you had) |
 | `k` | Record Keys (Filter): press a key or a chord; the page shows the commands on it, or on keys that start with it. Again: off |
 | `c` | Show Conflicts only (again: all) |
 | `n` | Show Commands Without a Key only |
@@ -52,8 +58,13 @@ After `RET` (or `a`), press the keys:
   one second (`drgnx-shortcuts-chord-wait`) for a second one;
 - `C-g` or `ESC` cancels, as the first or the second key; nothing is written.
 
-A key in the global keymap that starts with a character typed as is (a letter, a capital letter, `RET`) is refused:
-it would stop you typing that character. Use a modifier, or a chord that starts with one.
+In a terminal, Meta keys can't be recorded (a terminal sends `M-x` as `ESC x`, and `ESC` cancels): use a graphical
+frame, or write the key in `keys.eld`.
+
+A key in the global keymap that starts with a character typed as is (a letter, a capital letter, `RET`, `TAB`) is
+refused: it would stop you typing that character. Use a modifier, or a chord that starts with one. `C-x`, `C-c`,
+`C-h` and `ESC` alone are refused there too: every Emacs key that starts with them would go. Record a chord that
+starts with one instead (`C-c k`).
 
 If the key is taken in the same place, drgnx says by what, and asks:
 
@@ -63,7 +74,7 @@ If the key is taken in the same place, drgnx says by what, and asks:
 
 A **prefix clash** is flagged the same way: the key is the start of another command's key (recording `C-c e` when
 `C-c e C-x` is bound there), another key is the start of it, or it would replace one of Emacs' own prefixes
-(`C-x`). A key bound by Emacs or a package in that place is named too.
+(`M-g`). A key bound by Emacs or a package in that place is named too.
 
 ## Terminal mark
 

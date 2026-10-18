@@ -211,19 +211,20 @@ resolved one), :keep-map (the :map to write back)."
   (with-temp-buffer (insert-file-contents file) (buffer-string)))
 
 (defvar drgnx-keys-edit--step nil
-  "Inside `drgnx-keys-edit-one-step': t until its first write, then (OLD), keys.eld's text before that write.")
+  "Inside `drgnx-keys-edit-one-step': a cons (WRITTEN . OLD), OLD keys.eld's text before the step's first write.
+A step inside a step shares the outer one's cons.")
 
 (defmacro drgnx-keys-edit-one-step (&rest body)
   "Run BODY; the changes it makes to keys.eld are one step for `drgnx-keys-edit-undo'."
   (declare (indent 0))
-  `(let ((drgnx-keys-edit--step t)) ,@body))
+  `(let ((drgnx-keys-edit--step (or drgnx-keys-edit--step (cons nil nil)))) ,@body))
 
 (defun drgnx-keys-edit--undo-old (old)
   "The text undo goes back to: OLD, or inside `drgnx-keys-edit-one-step' the text before its first write."
-  (pcase drgnx-keys-edit--step
-    ('t (setq drgnx-keys-edit--step (list old)) old)
-    (`(,first) first)
-    (_ old)))
+  (let ((step drgnx-keys-edit--step))
+    (cond ((null step) old)
+          ((car step) (cdr step))
+          (t (setcar step t) (setcdr step old) old))))
 
 (defun drgnx-keys-edit--modify (fn)
   "Run FN in a buffer holding keys.eld's text (a header if there is none) and write the result.

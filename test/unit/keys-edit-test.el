@@ -270,5 +270,34 @@ in `applied'."
    (drgnx-keys-edit-unbind 'a "C-c a")
    (should (equal (drgnx-keys-edit-test--text) "(:layers ((emacs editing))\n :bind ()\n :unbind (a)\n)\n"))))
 
+(ert-deftest drgnx-keys-edit/one-step-is-one-undo ()
+  (drgnx-keys-edit-test--with-dir
+   ;; no keys.eld: two writes in one step, one undo and there is none again
+   (drgnx-keys-edit-one-step
+     (drgnx-keys-edit-bind 'palette "C-c p")
+     (drgnx-keys-edit-bind 'save "C-c s"))
+   (should (equal (plist-get (drgnx-keys-read-user) :bind) '((palette "C-c p") (save "C-c s"))))
+   (drgnx-keys-edit-undo)
+   (should-not (file-exists-p (drgnx-keys-file)))
+   ;; a step inside a step: undo goes back to where the outer one started
+   (drgnx-keys-edit-test--put drgnx-keys-edit-test--sample)
+   (drgnx-keys-edit-one-step
+     (drgnx-keys-edit-one-step (drgnx-keys-edit-bind 'open-file "C-c f"))
+     (drgnx-keys-edit-bind 'save "C-c s")
+     (drgnx-keys-edit-one-step (drgnx-keys-edit-bind 'palette "C-c q")))
+   (drgnx-keys-edit-undo)
+   (should (equal (drgnx-keys-edit-test--text) drgnx-keys-edit-test--sample))
+   ;; an error inside a step: keys.eld still reads, and undo takes back what the step wrote
+   (delete-file (drgnx-keys-file))
+   (should-error (drgnx-keys-edit-one-step
+                   (drgnx-keys-edit-bind 'save "C-c s")
+                   (drgnx-keys-edit-bind 'open-file "not a key ("))
+                 :type 'user-error)
+   (should (equal (plist-get (drgnx-keys-read-user) :bind) '((save "C-c s"))))
+   (should (equal (plist-get (car (read-from-string (drgnx-keys-edit--read (drgnx-keys-edit--undo-file)))) :old)
+                  :absent))
+   (drgnx-keys-edit-undo)
+   (should-not (file-exists-p (drgnx-keys-file)))))
+
 (provide 'keys-edit-test)
 ;;; keys-edit-test.el ends here

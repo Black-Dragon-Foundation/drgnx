@@ -9,7 +9,7 @@
 (defconst drgnx-shortcuts-test--commands
   '((sc-a "Test" "Open Alpha") (sc-b "Other" "Beta View Thing") (sc-c "Test" "Gamma") (sc-d "Test" "Delta")
     (sc-e "Test" "Epsilon") (sc-f "Other" "Zeta") (sc-g "Test" "Eta") (sc-n "Test" "Native One")
-    (sc-t "Test" "Theta"))
+    (sc-t "Test" "Theta") (sc-k "Test" "Kappa"))
   "(ID CATEGORY TITLE); each runs `drgnx-shortcuts-test-ID'.")
 
 (dolist (c drgnx-shortcuts-test--commands)
@@ -18,10 +18,12 @@
 (defconst drgnx-shortcuts-test--profiles
   '((alpha :name "Alpha"
            :bind ((sc-a "C-c a") (sc-b "C-c b" :map drgnx-shortcuts-test-mode-map) (sc-c "C-c c") (sc-d :none "x")
-                  (sc-e "C-c e C-x") (sc-f :none "y") (sc-g :none "z") (sc-n :none "native") (sc-t "C-S-t")))
+                  (sc-e "C-c e C-x") (sc-f :none "y") (sc-g :none "z") (sc-n :none "native") (sc-t "C-S-t")
+                  (sc-k "C-k C-q")))           ; over Emacs' kill-line (C-k): no conflict
     (beta :name "Beta"
           :bind ((sc-a "C-c z") (sc-b :none "x") (sc-c :none "x") (sc-d :none "x") (sc-e :none "x") (sc-f :none "x")
-                 (sc-g :none "x") (sc-n :none "x") (sc-t :none "x"))))
+                 (sc-g :none "x") (sc-n :none "x") (sc-t :none "x") (sc-k :none "x"))
+          :claims ((editing "C-c a" "beta's own C-c a"))))
   "Two small key profiles.")
 
 (defmacro drgnx-shortcuts-test--with (&rest body)
@@ -211,14 +213,20 @@ the usage counts go there, never the user's), no usage counted, and every bindin
     (should (plist-get (drgnx-shortcuts-test--row 'sc-d) :conflicts))
     (should (plist-get (drgnx-shortcuts-test--row 'sc-e) :conflicts))
     (should (string-prefix-p "!" (drgnx-shortcuts-test--line 'sc-e)))
-    ;; a prefix of Emacs' own keys (C-x) is flagged too
+    ;; a prefix of Emacs' own keys (M-g) is flagged too
     (drgnx-shortcuts-test--goto 'sc-g)
     (drgnx-shortcuts-test--answering ?c
-      (let ((unread-command-events (list ?\C-x))) (drgnx-shortcuts-change))
+      (let ((unread-command-events (list ?\M-g))) (drgnx-shortcuts-change))
       (should (string-search "prefix" (car asked))))
+    ;; C-x, C-c and C-h alone in the global keymap are refused, nothing asked
+    (dolist (k (list ?\C-x ?\C-c ?\C-h))
+      (drgnx-shortcuts-test--answering ?k
+        (let ((unread-command-events (list k)))
+          (should-error (drgnx-shortcuts-change) :type 'user-error))
+        (should-not asked)))
     (should-not (drgnx-shortcuts-test--keys 'sc-g))
-    ;; a plain letter, also a capital one, would stop typing everywhere
-    (dolist (k (list ?a ?A))
+    ;; a plain letter, also a capital one, RET or TAB would stop typing everywhere
+    (dolist (k (list ?a ?A ?\r ?\t))
       (let ((unread-command-events (list k)))
         (should-error (drgnx-shortcuts-change) :type 'user-error)))
     (should-not (drgnx-shortcuts-test--keys 'sc-g))))
@@ -235,7 +243,7 @@ the usage counts go there, never the user's), no usage counted, and every bindin
     (should (equal (drgnx-shortcuts-test--keys 'sc-d) '("C-c a")))
     (should-not (drgnx-shortcuts-test--keys 'sc-a))
     (should (eq (keymap-lookup global-map "C-c a") #'drgnx-shortcuts-test-sc-d))
-    (should-not (plist-get drgnx-keys-last :conflicts))
+    (should-not (seq-filter (lambda (r) (plist-get r :conflicts)) (drgnx-shortcuts--rows)))
     ;; one Undo takes the whole Replace back: Alpha has its key again
     (drgnx-shortcuts-undo)
     (should (equal (drgnx-shortcuts-test--keys 'sc-a) '("C-c a")))
@@ -262,6 +270,51 @@ the usage counts go there, never the user's), no usage counted, and every bindin
                       (plist-get drgnx-keys-last :conflicts)))
     (should (plist-get (drgnx-shortcuts-test--row 'sc-c) :conflicts))))
 
+(ert-deftest drgnx-shortcuts/emacs-defaults-are-no-conflict ()
+  (drgnx-shortcuts-test--with
+    (drgnx-shortcuts)
+    ;; a profile key over an Emacs default no layer claims: no conflict, said in the Where column's help
+    (let ((k (drgnx-shortcuts-test--row 'sc-k)))
+      (should-not (plist-get k :conflicts))
+      (should (equal (plist-get k :over) '("kill-line (C-k)"))))
+    (should-not (string-prefix-p "!" (drgnx-shortcuts-test--line 'sc-k)))
+    (drgnx-shortcuts-test--goto 'sc-k)
+    (should (string-search "Emacs' kill-line" (get-text-property (1- (pos-eol)) 'help-echo)))
+    ;; the same made by you in keys.eld: a conflict
+    (drgnx-keys-edit-bind 'sc-d "C-k C-d")
+    (drgnx-shortcuts)
+    (should (plist-get (drgnx-shortcuts-test--row 'sc-d) :conflicts))
+    (should (string-prefix-p "!" (drgnx-shortcuts-test--line 'sc-d)))
+    ;; a key an active layer claims: a conflict, also when the profile's key wins
+    (drgnx-keys-use '((beta editing) (alpha app editing window)))
+    (should (seq-find (lambda (c) (eq (plist-get c :kind) 'claim)) (plist-get drgnx-keys-last :conflicts)))
+    (should (plist-get (drgnx-shortcuts-test--row 'sc-a) :conflicts))
+    (should-not (plist-get (drgnx-shortcuts-test--row 'sc-k) :conflicts))))
+
+(ert-deftest drgnx-shortcuts/filter-as-you-type ()
+  (drgnx-shortcuts-test--with
+    (drgnx-shortcuts)
+    (set-buffer "*drgnx keyboard shortcuts*")
+    ;; each change in the minibuffer redraws the list
+    (cl-letf (((symbol-function 'read-string)
+               (lambda (&rest _)
+                 (with-temp-buffer
+                   (run-hooks 'minibuffer-setup-hook)
+                   (insert "alp")
+                   (should (equal (drgnx-shortcuts-test--shown) '(sc-a)))
+                   (insert "ha-not")
+                   (should-not (drgnx-shortcuts-test--shown))
+                   (buffer-string)))))
+      (call-interactively #'drgnx-shortcuts-filter))
+    (should-not (drgnx-shortcuts-test--shown))
+    ;; C-g puts back the filter it had
+    (drgnx-shortcuts-filter "gamma")
+    (cl-letf (((symbol-function 'read-string)
+               (lambda (&rest _)
+                 (with-temp-buffer (run-hooks 'minibuffer-setup-hook) (insert "x") (signal 'quit nil)))))
+      (should (eq (condition-case nil (call-interactively #'drgnx-shortcuts-filter) (quit 'quit)) 'quit)))
+    (should (equal (drgnx-shortcuts-test--shown) '(sc-c)))))
+
 (ert-deftest drgnx-shortcuts/terminal-mark ()
   (dolist (k '("C-S-p" "s-k" "C-/" "C-." "C-1" "C-x C-S-a" "H-a"))
     (should (equal (list k nil) (list k (drgnx-shortcuts-terminal-p k)))))
@@ -277,6 +330,10 @@ the usage counts go there, never the user's), no usage counted, and every bindin
 (ert-deftest drgnx-shortcuts/profile-switch ()
   (drgnx-shortcuts-test--with
     (drgnx-shortcuts)
+    ;; an empty answer changes nothing
+    (cl-letf (((symbol-function 'completing-read) (lambda (&rest _) "")))
+      (should-error (drgnx-shortcuts-switch-profile) :type 'user-error))
+    (should-not (file-exists-p (drgnx-keys-file)))
     (with-current-buffer "*drgnx keyboard shortcuts*"
       (goto-char (point-min))
       (should (looking-at-p ".*Alpha"))
@@ -311,13 +368,13 @@ the usage counts go there, never the user's), no usage counted, and every bindin
       (make-directory (file-name-directory (drgnx-shortcuts-usage-file)) t)
       (with-temp-file (drgnx-shortcuts-usage-file)
         (prin1 `((sc-a 60 (,today . 40))                       ; has a key
-                 (sc-g 30 (,(- today 2) . 5) (,today . 7))     ; 12 this week, no key
+                 (sc-g 30 (,(- today 2) . 5) (,today . 5))     ; 10 this week, no key
                  (sc-d 99 (,(- today 10) . 90) (,today . 9))   ; 9 this week
                  (sc-n 15 (,today . 15)))                      ; a package's key
                (current-buffer))))
     (drgnx-shortcuts)
     (with-current-buffer "*drgnx keyboard shortcuts*"
-      (should (string-match-p "You ran Test: Eta 12 times from the palette this week; give it a key\\?" (buffer-string)))
+      (should (string-match-p "You ran Test: Eta 10 times from the palette this week; give it a key\\?" (buffer-string)))
       (should-not (string-search "Delta 9" (buffer-string)))
       ;; its button records a key for it
       (goto-char (point-min))

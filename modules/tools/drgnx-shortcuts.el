@@ -88,17 +88,27 @@ other than a letter, @ [ \\ ] ^ _ ? or space (a terminal without the kitty keybo
                                   k)
                  collect (cons (key-description k) (if (eq (lookup-key global-map k) c) nil spec)))))))
 
+(defun drgnx-shortcuts--over-default-p (conflict)
+  "Non-nil if CONFLICT is a profile's key over an Emacs default no active layer claims: no conflict on the page
+(the profile chose it; there is nothing to replace).  keys.eld keys and layers' claims stay conflicts."
+  (and (not (eq (plist-get (plist-get conflict :winner) :layer) 'user))
+       (plist-get (plist-get conflict :winner) :id)
+       (seq-every-p (lambda (l) (not (or (plist-get l :id) (plist-get l :layer)))) (plist-get conflict :losers))))
+
 (defun drgnx-shortcuts--rows ()
   "One plist per registry command: :id :cmd :title :category :keys ((KEY . MAP-SPEC)…) :native :source :where
-:conflicts (TEXT…) :changed."
-  (let* ((by-id (make-hash-table :test #'eq)) (conflicts (make-hash-table :test #'eq))
+:conflicts (TEXT…) :over (the Emacs defaults its profile keys shadow) :changed."
+  (let* ((by-id (make-hash-table :test #'eq)) (conflicts (make-hash-table :test #'eq)) (over (make-hash-table :test #'eq))
          (user (drgnx-keys-read-user))
          (changed (append (mapcar #'car-safe (plist-get user :bind)) (plist-get user :unbind))))
     (dolist (b (plist-get drgnx-keys-last :bindings)) (push b (gethash (plist-get b :id) by-id)))
     (dolist (c (plist-get drgnx-keys-last :conflicts))
-      (dolist (p (cons (plist-get c :winner) (plist-get c :losers)))
-        (when-let* ((id (plist-get p :id)))
-          (cl-pushnew (drgnx-keys-conflict-text c) (gethash id conflicts) :test #'equal))))
+      (if (drgnx-shortcuts--over-default-p c)
+          (dolist (l (plist-get c :losers))
+            (cl-pushnew (plist-get l :claim) (gethash (plist-get (plist-get c :winner) :id) over) :test #'equal))
+        (dolist (p (cons (plist-get c :winner) (plist-get c :losers)))
+          (when-let* ((id (plist-get p :id)))
+            (cl-pushnew (drgnx-keys-conflict-text c) (gethash id conflicts) :test #'equal)))))
     (mapcar (lambda (cmd)
               (let* ((id (drgnx-cmd-id cmd)) (bs (reverse (gethash id by-id)))
                      (native (and (null bs) (not (memq id changed)) (drgnx-shortcuts--native-keys cmd)))
@@ -110,7 +120,7 @@ other than a letter, @ [ \\ ] ^ _ ? or space (a terminal without the kitty keybo
                                     (native "package")
                                     (t ""))
                       :where (string-join (delete-dups (mapcar (lambda (k) (drgnx-shortcuts--where (cdr k))) keys)) ", ")
-                      :conflicts (reverse (gethash id conflicts))
+                      :conflicts (reverse (gethash id conflicts)) :over (reverse (gethash id over))
                       :changed (and (memq id changed) t))))
             (drgnx-commands-all))))
 
@@ -170,7 +180,9 @@ other than a letter, @ [ \\ ] ^ _ ? or space (a terminal without the kitty keybo
             " " (drgnx-shortcuts--pad (format "%s: %s" (plist-get row :category) (plist-get row :title)) 46)
             " " (drgnx-shortcuts--pad (drgnx-shortcuts--keys-text (plist-get row :keys)) 26)
             " " (propertize (drgnx-shortcuts--pad (plist-get row :source) 12) 'face 'drgnx-shortcuts-dim)
-            " " (propertize (plist-get row :where) 'face 'drgnx-shortcuts-dim))
+            " " (apply #'propertize (plist-get row :where) 'face 'drgnx-shortcuts-dim
+                       (and (plist-get row :over)
+                            (list 'help-echo (concat "Over Emacs' " (string-join (plist-get row :over) ", "))))))
     (put-text-property start (point) 'drgnx-shortcuts-id (plist-get row :id))
     (insert "\n")))
 
@@ -304,12 +316,15 @@ Cancel.  Non-nil to go on."
           (_ nil)))))
 
 (defun drgnx-shortcuts--check-typing (key map)
-  "Refuse KEY in the global keymap when it starts with a character typed as is or with Shift: typing it would run
-the command."
-  (let ((e (aref (key-parse key) 0)))
-    (when (and (eq (drgnx-shortcuts--mapsym map) 'global-map) (characterp e) (null (remq 'shift (event-modifiers e))))
-      (user-error "%s would stop you typing %s; use a modifier (C-, M-) or a chord that starts with one"
-                  key (key-description (vector e))))))
+  "Refuse KEY in the global keymap when it starts with a character typed as is or with Shift, RET or TAB: typing
+it would run the command.  Refuse C-x, C-c, C-h and ESC alone there: every key that starts with them would go."
+  (let* ((v (key-parse key)) (e (aref v 0)))
+    (when (eq (drgnx-shortcuts--mapsym map) 'global-map)
+      (when (and (characterp e) (or (memq e '(?\r ?\t)) (null (remq 'shift (event-modifiers e)))))
+        (user-error "%s would stop you typing %s; use a modifier (C-, M-) or a chord that starts with one"
+                    key (key-description (vector e))))
+      (when (member v '([?\C-x] [?\C-c] [?\C-h] [27]))
+        (user-error "%s alone would take every key that starts with it; record a chord such as %s k" key key)))))
 
 (defun drgnx-shortcuts--record (id mode)
   "Record keys for command ID.  MODE `change' puts them in place of the row's key (a key of your choice when it
@@ -359,10 +374,26 @@ has several), or gives them to a command without keys; `add' adds them to its ke
   (drgnx-shortcuts--record (drgnx-shortcuts--id-at-point) 'add))
 
 (defun drgnx-shortcuts-filter (text)
-  "Show the commands whose title or category contains TEXT (empty: all)."
-  (interactive (list (read-string "Filter by title or category: " drgnx-shortcuts--filter)))
+  "Show the commands whose title or category contains TEXT (empty: all); the list follows as you type."
+  (interactive (list (drgnx-shortcuts--read-filter (current-buffer))))
   (setq drgnx-shortcuts--filter (and (not (string-empty-p text)) text))
   (drgnx-shortcuts--draw))
+
+(defun drgnx-shortcuts--read-filter (buf)
+  "Read the text filter, redrawing BUF at each change; C-g puts back the filter it had."
+  (let ((old (buffer-local-value 'drgnx-shortcuts--filter buf)))
+    (cl-flet ((show (text)
+                (with-current-buffer buf
+                  (setq drgnx-shortcuts--filter (and (not (string-empty-p text)) text))
+                  (drgnx-shortcuts--draw)
+                  (when-let* ((w (get-buffer-window buf))) (set-window-point w (point))))))
+      (condition-case nil
+          (minibuffer-with-setup-hook
+              (lambda ()
+                (add-hook 'after-change-functions
+                          (lambda (&rest _) (show (minibuffer-contents-no-properties))) nil t))
+            (read-string "Filter by title or category: " old))
+        (quit (show (or old "")) (signal 'quit nil))))))
 
 (defun drgnx-shortcuts-record-filter ()
   "Filter by keys: press a key or a chord to see the commands it, or keys starting with it, run.  Again: off."
@@ -406,6 +437,7 @@ has several), or gives them to a command without keys; `add' adds them to its ke
   (interactive)
   (let ((name (completing-read "Keyboard profile: " drgnx-keys-presets nil t nil nil
                                (car (rassoc (plist-get drgnx-keys-last :layers) drgnx-keys-presets)))))
+    (unless (assoc name drgnx-keys-presets) (user-error "No key profile chosen; nothing changed"))
     (drgnx-keys-use (cdr (assoc name drgnx-keys-presets)) t)
     (drgnx-shortcuts--redraw)))
 
