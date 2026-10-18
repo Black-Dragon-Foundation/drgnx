@@ -287,9 +287,23 @@ and H- keys; kkp sends every key.  Any other CAPS counts as legacy."
   (seq-every-p (lambda (event) (drgnx-tty--event-sendable-p event caps))
                (if (stringp key) (key-parse key) key)))
 
-(defun drgnx-tty-unsendable (keys caps)
-  "The KEYS (a list of `kbd' strings) a terminal with CAPS cannot send, in their order."
-  (seq-remove (lambda (key) (drgnx-tty-key-sendable-p key caps)) keys))
+(defconst drgnx-tty-tmux-folded-chords
+  (append (mapcar (lambda (c) (format "C-S-%c" c)) (number-sequence ?a ?z))
+          (mapcar (lambda (c) (format "C-M-S-%c" c)) (number-sequence ?a ?z))
+          '("C-S-SPC" "C-`" "C-S-`"))
+  "The chords tmux folds into another key at modifyOtherKeys level 1, which Emacs asks for (checked with tmux
+3.7c): C-S-<letter> and C-M-S-<letter> arrive as C-<letter> and C-M-<letter>, C-S-SPC and C-` as C-SPC, C-S-`
+as C-^.  Level 2 sends them all.  A terminal's caps carry this list as `:folded' while it applies.")
+
+(defun drgnx-tty-unsendable (keys caps &optional folded)
+  "The KEYS (a list of `kbd' strings) a terminal with CAPS cannot send, in their order.  FOLDED (a list of
+`kbd' strings, the caps' `:folded') are chords the terminal sends as another key: they count as unsendable even
+where CAPS would allow them."
+  (let ((folded (mapcar #'key-parse folded)))
+    (seq-remove (lambda (key)
+                  (and (drgnx-tty-key-sendable-p key caps)
+                       (not (member (if (stringp key) (key-parse key) key) folded))))
+                keys)))
 
 ;;;; terminfo and tmux
 
@@ -348,21 +362,79 @@ runs with (an unset variable is removed); it runs from a local directory, never 
             (when-let* ((p (get-buffer-process buf))) (delete-process p))
             (kill-buffer buf)))))))
 
+(defun drgnx-tty--tmux-line-value (lines name)
+  "The value of option NAME in LINES, tmux's `show -q' output (\"NAME VALUE\" per line), or nil."
+  (when-let* ((line (seq-find (lambda (l) (string-prefix-p (concat name " ") l)) lines)))
+    (string-trim (substring line (1+ (length name))))))
+
 (defun drgnx-tty-tmux-options (&optional env)
-  "tmux's options that decide copy and keys, and its client's terminal: (:set-clipboard STR :extended-keys STR
-:client-termtype STR), from one `tmux' call, 1 s at most.  TMUX comes from ENV, the client's environment
-(`drgnx-tty-env'; this Emacs's own when nil): the call goes to that client's server (`-S' its socket, with its
+  "tmux's options that decide copy, keys, focus and colour, and its client's terminal:
+\(:version :set-clipboard :allow-passthrough :extended-keys :extended-keys-format :focus-events :rgb
+:outer-term :client-termtype), from one `tmux' call, 1 s at most.  :version is tmux's (\"3.4\"), :outer-term
+the TERM of the terminal around tmux (#{client_termname}), :rgb non-nil when tmux sends that terminal true
+colour (#{client_termfeatures} has RGB), :client-termtype its XTVERSION name (#{client_termtype}, tmux 3.4 and
+later); the others are the options' values as strings.  TMUX comes from ENV, the client's environment
+\(`drgnx-tty-env'; this Emacs's own when nil): the call goes to that client's server (`-S' its socket, with its
 TMUX).  nil outside tmux, or when tmux does not answer.  A nil value means unknown: an option this tmux lacks
-(extended-keys before 3.2) or no #{client_termtype} (before 3.4, or no client)."
+\(extended-keys before 3.2, allow-passthrough before 3.3, extended-keys-format before 3.5) or no client.
+The options are asked with `-q', which prints nothing for an unknown one; without it the first unknown option
+would end the call and lose the ones after it."
   (when-let* ((tmux (drgnx-tty--env-get env "TMUX"))
               ((not (string-empty-p tmux)))
               (socket (car (split-string tmux ",")))
               ((not (string-empty-p socket)))
               (lines (drgnx-tty--command-lines
-                      (list "tmux" "-S" socket "show" "-sv" "set-clipboard" ";" "show" "-sv" "extended-keys"
-                            ";" "display" "-p" "#{client_termtype}")
-                      1 (list (cons "TMUX" tmux)))))
-    (list :set-clipboard (nth 0 lines) :extended-keys (nth 1 lines) :client-termtype (nth 2 lines))))
+                      (list "tmux" "-S" socket
+                            "display" "-p" "#{version}|#{client_termname}|#{client_termfeatures}|#{client_termtype}"
+                            ";" "show" "-sq" "set-clipboard"
+                            ";" "show" "-sq" "extended-keys"
+                            ";" "show" "-sq" "extended-keys-format"
+                            ";" "show" "-sq" "focus-events"
+                            ";" "show" "-gq" "allow-passthrough")
+                      1 (list (cons "TMUX" tmux))))
+              (head (split-string (car lines) "|"))
+              ((>= (length head) 4)))
+    (let ((rest (cdr lines))
+          (nonempty (lambda (s) (and s (not (string-empty-p s)) s))))
+      (list :version (funcall nonempty (nth 0 head))
+            :set-clipboard (drgnx-tty--tmux-line-value rest "set-clipboard")
+            :allow-passthrough (drgnx-tty--tmux-line-value rest "allow-passthrough")
+            :extended-keys (drgnx-tty--tmux-line-value rest "extended-keys")
+            :extended-keys-format (drgnx-tty--tmux-line-value rest "extended-keys-format")
+            :focus-events (drgnx-tty--tmux-line-value rest "focus-events")
+            :rgb (and (member "RGB" (split-string (nth 2 head) ",")) t)
+            :outer-term (funcall nonempty (nth 1 head))
+            :client-termtype (funcall nonempty (nth 3 head))))))
+
+(defun drgnx-tty--tmux-at-least-p (version major minor)
+  "Non-nil when tmux VERSION (\"3.4\", \"3.3a\", \"next-3.5\") is MAJOR.MINOR or later; nil when it is unknown."
+  (when (and version (string-match "\\([0-9]+\\)\\.\\([0-9]+\\)" version))
+    (let ((ma (string-to-number (match-string 1 version))) (mi (string-to-number (match-string 2 version))))
+      (or (> ma major) (and (= ma major) (>= mi minor))))))
+
+(defun drgnx-tty-tmux-conf-lines (options)
+  "The lines to add to ~/.tmux.conf for what OPTIONS (`drgnx-tty-tmux-options') shows missing, in this order:
+set-clipboard, extended-keys, allow-passthrough (tmux 3.3 and later, and only while set-clipboard is not on:
+it is the second way for a copy to get through), focus-events, true colour for the terminal around tmux.
+Nothing is written anywhere.  nil without OPTIONS or with nothing missing.
+
+extended-keys-format csi-u is never suggested.  With it tmux sends C-S- chords as CSI u (\"ESC [ 112 ; 6 u\");
+Emacs decodes modifyOtherKeys (\"ESC [ 27 ; 6 ; 112 ~\", tmux's default format) but not CSI u unless the
+terminal is in the kitty keyboard protocol, which tmux does not pass on: it would lose every such key."
+  (when options
+    (let ((on (lambda (key) (member (plist-get options key) '("on" "always")))))
+      (delq nil
+            (list (unless (equal (plist-get options :set-clipboard) "on") "set -s set-clipboard on")
+                  (unless (funcall on :extended-keys) "set -s extended-keys on")
+                  (when (and (not (equal (plist-get options :set-clipboard) "on"))
+                             (not (member (plist-get options :allow-passthrough) '("on" "all")))
+                             (drgnx-tty--tmux-at-least-p (plist-get options :version) 3 3))
+                    "set -g allow-passthrough on")
+                  (unless (funcall on :focus-events) "set -g focus-events on")
+                  (when-let* (((not (plist-get options :rgb)))
+                              (outer (plist-get options :outer-term))
+                              ((not (string-empty-p outer))))
+                    (format "set -as terminal-features ',%s:RGB'" outer)))))))
 
 ;;;; This terminal
 

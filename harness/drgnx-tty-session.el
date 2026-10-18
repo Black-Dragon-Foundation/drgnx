@@ -202,6 +202,38 @@ ends after $DRGNX_TTY_MAX_RUNTIME seconds (default 1800) even if no one stops it
   (list (drgnx-ui-emacs-bin) "--init-directory" (expand-file-name "init" (plist-get sess :run))
         (if daemon "--fg-daemon" "-nw")))
 
+(defconst drgnx-tty-session-nested-base
+  '("set -g default-terminal \"tmux-256color\"" "set -g status off" "set -g default-shell /bin/sh")
+  "The lines of a nested session's inner.conf before its own: a terminal type, no status line, sh as the shell.
+Nothing else, so tmux's own defaults (set-clipboard external, extended-keys off, focus-events off) are what the
+inner tmux has unless the session's lines change them.")
+
+(defun drgnx-tty-session--inner-env (sess)
+  "The environment of SESS's inner tmux: its server socket is under RUN/inner-tmux."
+  (append (plist-get sess :tmux-env) (list (concat "TMUX_TMPDIR=" (expand-file-name "inner-tmux" (plist-get sess :run))))))
+
+(defun drgnx-tty-session--nested-command (sess env lines argv)
+  "The outer pane's command of a nested SESS: a second private tmux (`tmux -L inner -f RUN/inner.conf', its
+socket under RUN/inner-tmux) running ARGV (Emacs) in its one window.  inner.conf is the base lines
+`drgnx-tty-session-nested-base' and LINES.  The outer tmux is that tmux's terminal.  Emacs gets the inner
+tmux's own TMUX and TERM, as in real use: ENV (\"K=V\" strings) is the inner tmux client's, and the inner server
+starts from it."
+  (let ((run (plist-get sess :run))
+        (conf (expand-file-name "inner.conf" (plist-get sess :run))))
+    (make-directory (expand-file-name "inner-tmux" run) t)
+    (drgnx-ui--write conf (concat (string-join (append drgnx-tty-session-nested-base lines) "\n") "\n"))
+    (plist-put sess :nested conf)
+    (drgnx-tty-session--argv
+     (append env (list (concat "TMUX_TMPDIR=" (expand-file-name "inner-tmux" run))))
+     (list "tmux" "-L" "inner" "-f" conf "new-session" "-s" "inner"
+           (mapconcat #'shell-quote-argument argv " ")))))
+
+(defun drgnx-tty-session-inner-tmux (sess &rest args)
+  "Run tmux ARGS on the inner server of the nested SESS; return (EXIT . OUTPUT)."
+  (let ((r (apply #'drgnx-ui--run-with-timeout 10
+                  (append (list "env" "-i") (drgnx-tty-session--inner-env sess) (list "tmux" "-L" "inner") args))))
+    (cons (if (eq (car r) 'timeout) 124 (car r)) (cadr r))))
+
 (defun drgnx-tty-session--client-command (sess env args)
   "A pane command: `emacsclient -t' on SESS's socket with ARGS and ENV; once it exits, its status and a shell."
   (drgnx-tty-session--argv
@@ -230,7 +262,7 @@ ends after $DRGNX_TTY_MAX_RUNTIME seconds (default 1800) even if no one stops it
       (setq ok (and (file-exists-p ready) (ignore-errors (drgnx-tty-session-eval sess t 5))))
       (unless ok (sleep-for 0.1)))))
 
-(cl-defun drgnx-tty-session-start (&key size config daemon term env keys options command)
+(cl-defun drgnx-tty-session-start (&key size config daemon term env keys options command nested)
   "Start a tty session; return its plist once the inner Emacs answers on its socket (30 s).
 SIZE \"120x40\" (default) or any WxH; CONFIG \"drgnx\" (default), \"minimal\" or a directory; TERM the
 pane's terminal type (default tmux-256color); ENV extra \"K=V\" strings for Emacs; KEYS a key profile
@@ -239,6 +271,10 @@ strings, e.g. (\"set\" \"-s\" \"extended-keys\" \"off\")) after the defaults.
 Not DAEMON: the pane runs `emacs -nw'.  DAEMON: window 0 runs `emacs --fg-daemon', window 1
 `emacsclient -t' once the daemon answers; :target is the client's pane.  COMMAND (a shell
 command, run in the run directory) replaces Emacs; start then returns once the pane exists.
+NESTED (a list of tmux config lines): the pane runs a second private tmux (`tmux -L inner -f RUN/inner.conf',
+its socket under RUN/inner-tmux) configured with those lines, and Emacs runs in that; keys, copies and the
+screen go through the outer tmux, which is the inner one's terminal.  `drgnx-tty-session-inner-tmux' runs
+commands on the inner server.  Not with DAEMON.  With COMMAND, that runs in the inner tmux instead of Emacs.
 Sessions whose owning Emacs died are removed first (`drgnx-tty-session--sweep').
 The plist has the `drgnx-ui' keys plus :tmux (the server's socket), :target (the pane) and :term."
   (let* ((size (or size "120x40"))
@@ -249,6 +285,8 @@ The plist has the `drgnx-ui' keys plus :tmux (the server's socket), :target (the
          (sess (drgnx-ui-prepare-run name (if command "minimal" (or config "drgnx")) size root (and daemon t)))
          (run (plist-get sess :run))
          (tmux (expand-file-name (format "tmux-%d/%s" (user-uid) name) run)))
+    (when (and nested daemon)
+      (drgnx-ui--fail "%s: :nested runs Emacs in the inner tmux: not with :daemon" name))
     (when (> (length tmux) 100)
       (drgnx-ui--fail "%s: the tmux socket path is too long for a Unix socket: %s" name tmux))
     ;; plist-put on this (non-empty) plist changes it in place: the list of live sessions sees every key
@@ -262,8 +300,11 @@ The plist has the `drgnx-ui' keys plus :tmux (the server's socket), :target (the
           (when keys (drgnx-tty-session--write-keys (expand-file-name "drgnx-config" run) keys))
           (drgnx-tty-session--start-server sess)
           (let* ((env (drgnx-tty-session--env sess env))
-                 (first (drgnx-tty-session--argv
-                         env (if command (list "sh" "-c" command) (drgnx-tty-session--emacs-argv sess daemon))))
+                 (first (if nested
+                            (drgnx-tty-session--nested-command
+                             sess env nested (if command (list "sh" "-c" command) (drgnx-tty-session--emacs-argv sess nil)))
+                          (drgnx-tty-session--argv
+                           env (if command (list "sh" "-c" command) (drgnx-tty-session--emacs-argv sess daemon)))))
                  (setup (append drgnx-tty-session-server-options
                                 (list (list "set" "-g" "default-terminal" (plist-get sess :term))
                                       (list "set" "-g" "default-size" size))
@@ -324,6 +365,7 @@ deleted; then its run and socket directories removed."
     (setq drgnx-tty-session--live (seq-remove (lambda (s) (equal (plist-get s :run) run)) drgnx-tty-session--live))
     (dolist (p (plist-get sess :ptys)) (ignore-errors (delete-process p)))
     (when (and socket (file-exists-p socket)) (drgnx-ui--ask-to-exit socket 3))
+    (when (plist-get sess :nested) (ignore-errors (drgnx-tty-session-inner-tmux sess "kill-server")))
     (ignore-errors (drgnx-tty-session-tmux sess "kill-server"))
     (drgnx-tty-session--kill-pattern (drgnx-tty-session--pattern (plist-get sess :name) run))
     (when (file-directory-p run) (delete-directory run t))

@@ -121,9 +121,13 @@ already asked (the cache); an answer that came after the wait (xterm.el's handle
         id))))
 
 (defun drgnx-tty-frame-caps (&optional frame)
-  "What FRAME's terminal can do: (:id :outer :version :keys kkp|mok|legacy :c-g always|waits :osc52 BOOL
-:colors N :mouse BOOL).  :c-g `waits' (under kkp): C-g interrupts only while Emacs waits for a program, not
-busy Lisp (`drgnx-tty-use-kkp' nil gives up kkp for that).  The identity is asked once per terminal
+  "What FRAME's terminal can do: (:id :outer :version :keys kkp|mok|legacy :c-g always|waits :folded KEYS
+:osc52 BOOL :colors N :mouse BOOL).  :c-g `waits' (under kkp, or tmux at modifyOtherKeys level 2): C-g
+interrupts only while Emacs waits for a program, not busy Lisp (`drgnx-tty-use-kkp' nil, or
+`drgnx-tty-tmux-mok-level' 1, gives that up).  :folded the chords this terminal sends as another key although
+`:keys' would allow them: tmux at modifyOtherKeys level 1 sends C-S-p as C-p (`drgnx-tty-tmux-folded-chords');
+`drgnx-tty-unsendable' takes the list as its third argument, and the report counts those keys as
+unsendable.  The identity is asked once per terminal
 \(`drgnx-tty-frames--identity'); keys, OSC 52, colours and the mouse are read from FRAME on every call, so kkp
 turned on later shows.  The result is also the terminal parameter `drgnx-tty-caps'.  Nil when the terminal went
 away meanwhile (killed while it was asked)."
@@ -134,7 +138,11 @@ away meanwhile (killed while it was asked)."
       (let* ((row (drgnx-tty-terminal (plist-get id :id)))
              (keys (drgnx-tty-frames--keys term))
              (caps (list :id (plist-get id :id) :outer (plist-get id :outer) :version (plist-get id :version)
-                         :keys keys :c-g (if (eq keys 'kkp) 'waits 'always)
+                         :keys keys
+                         :c-g (if (or (eq keys 'kkp) (eql (terminal-parameter term 'drgnx-tty-mok-level) 2)) 'waits 'always)
+                         :folded (and (eq (plist-get id :id) 'tmux) (eq keys 'mok)
+                                      (not (eql (terminal-parameter term 'drgnx-tty-mok-level) 2))
+                                      drgnx-tty-tmux-folded-chords)
                          :osc52 (and (or (terminal-parameter term 'xterm--set-selection) (plist-get row :osc52)) t)
                          :colors (display-color-cells frame)
                          :mouse (if row (and (plist-get row :mouse) t) t))))
@@ -208,7 +216,7 @@ decodes a few: C-tab, C-. …; its decodings come first).  A terminal that never
       (let* ((env (drgnx-tty-env frame))
              (id (plist-get (drgnx-tty-frames--identity frame) :id)))
         (cond ((and (eq id 'tmux) (cdr (assoc "TMUX" env)))
-               (if (member (plist-get (drgnx-tty-tmux-options env) :extended-keys) '("on" "always"))
+               (if (member (plist-get (drgnx-tty-frames--tmux-options frame 'tmux) :extended-keys) '("on" "always"))
                    (drgnx-tty-frames--ask-mok frame)
                  (drgnx-tty-frames--withdraw-mok term)))
               ((eq id 'tmux))
@@ -230,8 +238,11 @@ KEYS :seen TIME)) …)), newest first, one entry per terminal device (two client
            (read (plist-get (ignore-errors (with-temp-buffer (insert-file-contents file) (read (current-buffer))))
                             :terminals))
            (old (and (proper-list-p read) (seq-every-p #'consp read) read))   ; a broken report heals
-           (entry (list :caps caps :unsendable (drgnx-tty-unsendable keys (plist-get caps :keys))
-                        :seen (format-time-string "%FT%T%z"))))
+           (entry (append (list :caps caps :unsendable (drgnx-tty-unsendable keys (plist-get caps :keys) (plist-get caps :folded))
+                                :seen (format-time-string "%FT%T%z"))
+                          ;; inside tmux: the lines to add to ~/.tmux.conf for what it lacks (never written)
+                          (when-let* ((lines (drgnx-tty-tmux-conf-lines (drgnx-tty-frames--tmux-options frame (plist-get caps :id)))))
+                            (list :tmux-conf lines)))))
       (make-directory (file-name-directory file) t)
       ;; written whole under a new name, then renamed: no lock on the report (whose owner would be asked about,
       ;; a prompt in a daemon hook), and a reader sees the old report or the new one, never half of one
@@ -364,6 +375,97 @@ once it has no file left."
     (prog1 (apply close event args)
       (when (and (windowp window) (bufferp buffer)) (drgnx-tty-frames--tab-closed window buffer)))))
 
+;;;; tmux
+
+(defvar drgnx-tty-frames-tmux-ttl 2
+  "Seconds a terminal's answer from tmux (`drgnx-tty-frames--tmux-options') is reused: the report, the copy and
+the focus step of one setup share one call; a window made later asks again, so a `tmux source ~/.tmux.conf'
+shows.")
+
+(defun drgnx-tty-frames--tmux-options (frame &optional id)
+  "tmux's options (`drgnx-tty-tmux-options') for FRAME's client, when it is inside tmux and tmux answers; else
+nil.  ID is the terminal's id when the caller has it (else `drgnx-tty-frames--identity' finds it).  Kept in
+the terminal parameter `drgnx-tty-tmux' for `drgnx-tty-frames-tmux-ttl' seconds."
+  (let* ((term (frame-terminal frame))
+         (kept (terminal-parameter term 'drgnx-tty-tmux)))
+    (if (and kept (< (- (float-time) (car kept)) drgnx-tty-frames-tmux-ttl))
+        (cdr kept)
+      (let ((options (and (eq (or id (plist-get (drgnx-tty-frames--identity frame) :id)) 'tmux)
+                          (drgnx-tty-tmux-options (drgnx-tty-env frame)))))
+        (when (terminal-live-p term)
+          (set-terminal-parameter term 'drgnx-tty-tmux (cons (float-time) options)))
+        options))))
+
+(defun drgnx-tty-frames--tmux-focus (frame)
+  "Under tmux with `focus-events on', make sure FRAME's terminal asks for focus reports (CSI ? 1004 h): tmux then
+passes focus changes on, Emacs's `after-focus-change-function' runs and the Explorer refreshes its git state.
+xterm.el asks by itself for every TERM it knows; this covers the one it missed.  Reports stop when Emacs suspends
+or exits.  Nothing when tmux keeps the focus events (`off') or this is no tmux."
+  (let ((term (frame-terminal frame))
+        (on "\e[?1004h") (off "\e[?1004l"))
+    (when (and (terminal-live-p term)
+               (equal (plist-get (drgnx-tty-frames--tmux-options frame) :focus-events) "on")
+               (not (member on (terminal-parameter term 'tty-mode-set-strings))))
+      (send-string-to-terminal on term)
+      (set-terminal-parameter term 'tty-mode-set-strings (cons on (terminal-parameter term 'tty-mode-set-strings)))
+      (set-terminal-parameter term 'tty-mode-reset-strings
+                              (cons off (terminal-parameter term 'tty-mode-reset-strings))))))
+
+;; modifyOtherKeys has two levels.  Level 1, which Emacs asks for, sends only the chords a plain terminal cannot
+;; tell apart; tmux then folds C-S-<letter> (C-S-p, C-M-S-k), C-S-SPC, C-` and C-S-` into C-<letter>, C-SPC, C-@ and
+;; C-^ (checked with tmux 3.7c).  Those are `:folded' in the caps: not sendable there (the fallback keys cover them).
+;; Level 2 sends every modified key as CSI 27 ; M ; K ~ (C-g and C-x too), so those chords arrive; the price is that
+;; C-g is no longer the plain byte Emacs's quit reads, so a runaway Lisp loop is not stopped by it (`:c-g waits').
+(defcustom drgnx-tty-tmux-mok-level 1
+  "The modifyOtherKeys level drgnx asks tmux for when tmux's `extended-keys' is on or always.
+1 (default): Emacs's own level.  C-g stays one byte and always interrupts, but tmux folds C-S-<letter> chords
+into C-<letter>: they are reported as not sendable in tmux and the fallback keys cover them.
+2: C-S-letter chords work natively in tmux, but C-g can no longer stop a runaway Lisp loop (the terminal's
+capabilities say `:c-g waits', as for kitty's keyboard protocol); prompts and commands still take it."
+  :type '(choice (const :tag "1: C-g always works" 1) (const :tag "2: C-S-letter chords, C-g waits" 2)) :group 'drgnx)
+
+(defvar drgnx-tty-frames--csi-u-map nil "The keymap `drgnx-tty-frames--csi-u-map' returns, made once.")
+
+(defun drgnx-tty-frames--csi-u-map ()
+  "A keymap for `input-decode-map': CSI K ; M u, the form tmux's `extended-keys-format csi-u' sends, for the keys
+as CSI 27 ; M ; K ~ (Shift, Meta, Control)."
+  (or drgnx-tty-frames--csi-u-map
+      (setq drgnx-tty-frames--csi-u-map
+            (let ((map (make-sparse-keymap)))
+              (dolist (m (number-sequence 2 8) map)
+                (dolist (k (append '(9 13 27 127) (number-sequence 32 126)))
+                  (define-key map (format "\e[%d;%du" k m) (drgnx-tty-frames--mok-key m k))))))))
+
+(defun drgnx-tty-frames--tmux-keys (frame)
+  "Under tmux with `extended-keys' on or always, after modifyOtherKeys was asked for (level 1): ask for
+`drgnx-tty-tmux-mok-level' when that is 2 (default 1: nothing to do) so C-S- chords arrive, once per terminal and
+kept for a resume; the report is written again (C-g now waits).  With
+`extended-keys-format csi-u', the terminal also decodes that form."
+  (let* ((term (frame-terminal frame))
+         (options (drgnx-tty-frames--tmux-options frame))
+         (level-1 "\e[>4;1m") (level-2 "\e[>4;2m"))
+    (when (and (terminal-live-p term) (member (plist-get options :extended-keys) '("on" "always")))
+      (let ((set (terminal-parameter term 'tty-mode-set-strings)))
+        (when (and (eql drgnx-tty-tmux-mok-level 2) (member level-1 set) (not (member level-2 set)))
+          (send-string-to-terminal level-2 term)
+          ;; last in the list: a resume sends it after level 1
+          (set-terminal-parameter term 'tty-mode-set-strings (append set (list level-2)))
+          (set-terminal-parameter term 'drgnx-tty-mok-level 2)
+          (drgnx-tty-frames-refresh-report frame)))
+      (when-let* (((equal (plist-get options :extended-keys-format) "csi-u"))
+                  ((not (terminal-parameter term 'drgnx-tty-csi-u)))
+                  (map (drgnx-tty-frames--csi-u-map)))
+        (with-selected-frame frame
+          (set-keymap-parent input-decode-map (make-composed-keymap (delq nil (list (keymap-parent input-decode-map) map)))))
+        (set-terminal-parameter term 'drgnx-tty-csi-u t)))))
+
+(defun drgnx-tty-frames--tmux-setup (frame)
+  "The steps of a tmux terminal's setup that follow ui/terminal-keys (which asks for modifyOtherKeys): keys and
+focus.  Run by `drgnx-tty-frames-setup' after its keys step has asked for modifyOtherKeys."
+  (when (and (frame-live-p frame) (terminal-live-p (frame-terminal frame)))   ; the terminal can go while it is asked
+    (drgnx-tty-frames--guard "tmux keys" #'drgnx-tty-frames--tmux-keys frame)
+    (drgnx-tty-frames--guard "tmux focus" #'drgnx-tty-frames--tmux-focus frame)))
+
 ;;;; Each terminal frame
 
 (defun drgnx-tty-frames--guard (what fn &rest args)
@@ -385,6 +487,7 @@ failing one does not stop the next."
           (set-terminal-parameter (frame-terminal frame) 'drgnx-tty-set-up t)
           (drgnx-tty-frames--guard "capabilities" #'drgnx-tty-frames-write-report frame)))
       (drgnx-tty-frames--guard "mouse" #'drgnx-tty-frames-mouse-apply)
+      (drgnx-tty-frames--tmux-setup frame)   ; after keys (it needs modifyOtherKeys asked for), before clipboard
       (when (fboundp 'drgnx-tty-clip-setup)   ; drgnx-tty-clipboard.el: OSC 52 copy
         (drgnx-tty-frames--guard "clipboard" #'drgnx-tty-clip-setup frame))
       (when (fboundp 'drgnx-tty-popups-setup)

@@ -71,7 +71,7 @@ into a directory and set DRGNX_USER_ELPA to it, or point DRGNX_USER_ELPA at an e
 
 (defmacro drgnx-tty-keys-test--terminal (params env tmux-out &rest body)
   "BODY with a fake terminal holding PARAMS (an alist), the selected frame's client environment ENV (\"K=V\"),
-a fake `tmux' printing TMUX-OUT on PATH, and no terminal to ask.  `sent' collects what was sent to the terminal,
+a fake `tmux' printing TMUX-OUT on PATH (the display line, then NAME VALUE option lines), and no terminal to ask.  `sent' collects what was sent to the terminal,
 `reports' the report refreshes."
   (declare (indent 3))
   `(let* ((drgnx-tty-keys-test--params (copy-alist ,params))
@@ -241,7 +241,7 @@ a fake `tmux' printing TMUX-OUT on PATH, and no terminal to ask.  `sent' collect
 (ert-deftest drgnx-tty-keys/tmux-gets-modify-other-keys ()
   ;; TERM=xterm-256color inside tmux: Emacs asked tmux (DA2: version 0) and did not turn modifyOtherKeys on;
   ;; extended-keys is on, so drgnx asks for it, and decodes what tmux then sends
-  (drgnx-tty-keys-test--terminal nil '("TERM=xterm-256color" "TMUX=/tmp/kx-sock,1,0") "external\non\n"
+  (drgnx-tty-keys-test--terminal nil '("TERM=xterm-256color" "TMUX=/tmp/kx-sock,1,0") "3.4|xterm-kitty|256|\nset-clipboard external\nextended-keys on\n"
     (drgnx-tty-frames--keys-setup (selected-frame))
     (should (member "\e[>4;1m" (terminal-parameter nil 'tty-mode-set-strings)))
     (should (member "\e[>4m" (terminal-parameter nil 'tty-mode-reset-strings)))
@@ -253,16 +253,16 @@ a fake `tmux' printing TMUX-OUT on PATH, and no terminal to ask.  `sent' collect
     (should (equal sent '("\e[>4;1m")))
     (should (= (seq-count (lambda (s) (equal s "\e[>4;1m")) (terminal-parameter nil 'tty-mode-set-strings)) 1)))
   ;; always: the same
-  (drgnx-tty-keys-test--terminal nil '("TERM=xterm-256color" "TMUX=/tmp/kx-sock,1,0") "on\nalways\n"
+  (drgnx-tty-keys-test--terminal nil '("TERM=xterm-256color" "TMUX=/tmp/kx-sock,1,0") "3.4|xterm-kitty|256|\nset-clipboard on\nextended-keys always\n"
     (drgnx-tty-frames--keys-setup (selected-frame))
     (should (eq (plist-get (drgnx-tty-frame-caps) :keys) 'mok)))
   ;; TERM=tmux-256color: Emacs's term/tmux.el already asked; nothing is sent twice
-  (drgnx-tty-keys-test--terminal drgnx-tty-keys-test--asked '("TERM=tmux-256color" "TMUX=/tmp/kx-sock,1,0") "on\non\n"
+  (drgnx-tty-keys-test--terminal drgnx-tty-keys-test--asked '("TERM=tmux-256color" "TMUX=/tmp/kx-sock,1,0") "3.4|xterm-kitty|256|\nset-clipboard on\nextended-keys on\n"
     (drgnx-tty-frames--keys-setup (selected-frame))
     (should-not sent)
     (should (eq (plist-get (drgnx-tty-frame-caps) :keys) 'mok)))
   ;; a tmux on the other side of SSH (TERM=tmux-*, no TMUX): its options are unknown, Emacs's request stays
-  (drgnx-tty-keys-test--terminal drgnx-tty-keys-test--asked '("TERM=tmux-256color") "on\noff\n"
+  (drgnx-tty-keys-test--terminal drgnx-tty-keys-test--asked '("TERM=tmux-256color") "3.4|xterm-kitty|256|\nset-clipboard on\nextended-keys off\n"
     (drgnx-tty-frames--keys-setup (selected-frame))
     (should-not sent)
     (should (eq (plist-get (drgnx-tty-frame-caps) :keys) 'mok))))
@@ -272,7 +272,7 @@ a fake `tmux' printing TMUX-OUT on PATH, and no terminal to ask.  `sent' collect
   ;; term/tmux.el made is withdrawn and the terminal is legacy: the report lists C-S-p as unsendable
   (drgnx-tty-keys-test--terminal '((tty-mode-set-strings . ("\e[?2004h" "\e[>4;1m"))
                                    (tty-mode-reset-strings . ("\e[>4m" "\e[?2004l")))
-      '("TERM=tmux-256color" "TMUX=/tmp/kx-sock,1,0") "on\noff\n"
+      '("TERM=tmux-256color" "TMUX=/tmp/kx-sock,1,0") "3.4|xterm-kitty|256|\nset-clipboard on\nextended-keys off\n"
     (drgnx-tty-frames--keys-setup (selected-frame))
     (should (equal sent '("\e[>4m")))
     (should (equal (terminal-parameter nil 'tty-mode-set-strings) '("\e[?2004h")))
@@ -281,7 +281,7 @@ a fake `tmux' printing TMUX-OUT on PATH, and no terminal to ask.  `sent' collect
     (should (member "C-S-p" (drgnx-tty-unsendable '("C-S-p" "C-p") (plist-get (drgnx-tty-frame-caps) :keys)))))
   ;; a tmux whose extended-keys cannot be read (older than 3.2: the option does not exist; or no answer): it is
   ;; not known to pass modifyOtherKeys, so legacy too
-  (dolist (out '("on\n" ""))
+  (dolist (out '("3.4|xterm-kitty|256|\nset-clipboard on\n" ""))
     (drgnx-tty-keys-test--terminal drgnx-tty-keys-test--asked '("TERM=tmux-256color" "TMUX=/tmp/kx-sock,1,0") out
       (drgnx-tty-frames--keys-setup (selected-frame))
       (should (equal sent '("\e[>4m")))

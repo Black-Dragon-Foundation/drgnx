@@ -7,14 +7,19 @@
 (load (expand-file-name "modules/ui/drgnx-tty-frames" drgnx-dir) nil t)
 (load (expand-file-name "modules/ui/drgnx-tty-clipboard" drgnx-dir) nil t)
 
+(defvar drgnx-tty-clip-test--tmux nil
+  "What the fake tmux of these tests says (`drgnx-tty-frames--tmux-options'): nil is a tmux that cannot be asked.")
+
 (defmacro drgnx-tty-clip-test--terminal (id params &rest body)
   "BODY with a fake terminal kx-a of kind ID (a symbol of `drgnx-tty-terminals') holding PARAMS (an alist);
-`reports' counts the terminal-report rewrites."
+`reports' counts the terminal-report rewrites.  tmux's options are `drgnx-tty-clip-test--tmux', never a
+real tmux (this Emacs may be inside the user's)."
   (declare (indent 2))
   `(let ((table (make-hash-table :test #'equal))
          (reports 0))
      (pcase-dolist (`(,k . ,v) ,params) (puthash (cons 'kx-a k) v table))
-     (cl-letf (((symbol-function 'frame-terminal) (lambda (&optional _) 'kx-a))
+     (cl-letf (((symbol-function 'drgnx-tty-frames--tmux-options) (lambda (&rest _) drgnx-tty-clip-test--tmux))
+               ((symbol-function 'frame-terminal) (lambda (&optional _) 'kx-a))
                ((symbol-function 'terminal-name) (lambda (&optional term) (symbol-name term)))
                ((symbol-function 'terminal-live-p) (lambda (_term) t))
                ((symbol-function 'terminal-parameter)
@@ -66,6 +71,65 @@
     (cl-letf (((symbol-function 'terminal-live-p) (lambda (_t) nil)))
       (should-not (drgnx-tty-clip-setup (selected-frame))))
     (should-not (terminal-parameter nil 'xterm--set-selection))))
+
+(defmacro drgnx-tty-clip-test--copy-in-tmux (options &rest body)
+  "BODY in a fake tmux terminal whose options are OPTIONS, after `drgnx-tty-clip-setup'; `sent' is what
+reaches the terminal, newest first."
+  (declare (indent 1))
+  `(let ((drgnx-tty-clip-test--tmux ,options) sent)
+     (drgnx-tty-clip-test--terminal 'tmux nil
+       (drgnx-tty-clip-setup (selected-frame))
+       (unwind-protect
+           (cl-letf (((symbol-function 'send-string-to-terminal) (lambda (s &optional _) (push s sent))))
+             ,@body)
+         (advice-remove 'gui-backend-set-selection #'drgnx-tty-clip--guard)))))
+
+(ert-deftest drgnx-tty-clip/tmux-with-set-clipboard-on-sends-the-plain-sequence ()
+  (drgnx-tty-clip-test--copy-in-tmux '(:set-clipboard "on" :allow-passthrough "on")
+    (should (plist-get (terminal-parameter nil 'drgnx-tty-caps) :osc52))
+    (gui-backend-set-selection 'CLIPBOARD "hi")
+    (should (equal sent '("\e]52;c;aGk=\a")))))
+
+(ert-deftest drgnx-tty-clip/tmux-passthrough-wraps-the-sequence ()
+  ;; set-clipboard keeps programs out, allow-passthrough lets the sequence through: tmux's DCS wrapper, ESC doubled
+  (dolist (pass '("on" "all"))
+    (drgnx-tty-clip-test--copy-in-tmux `(:set-clipboard "external" :allow-passthrough ,pass)
+      (should (plist-get (terminal-parameter nil 'drgnx-tty-caps) :osc52))
+      (gui-backend-set-selection 'CLIPBOARD "hi")
+      (should (equal sent '("\ePtmux;\e\e]52;c;aGk=\a\e\\"))))))
+
+(ert-deftest drgnx-tty-clip/tmux-under-term-screen-sends-no-screen-dcs ()
+  ;; TERM=screen (tmux's old default) makes xterm.el wrap in screen's DCS, which tmux ignores
+  (drgnx-tty-clip-test--copy-in-tmux '(:set-clipboard "on")
+    (set-terminal-parameter nil 'terminal-initted 'terminal-init-screen)
+    (gui-backend-set-selection 'CLIPBOARD "hi")
+    (should (equal sent '("\e]52;c;aGk=\a")))))
+
+(ert-deftest drgnx-tty-clip/tmux-without-a-way-keeps-the-copy-in-drgnx ()
+  (dolist (options '((:set-clipboard "external" :allow-passthrough "off")
+                     (:set-clipboard "off")))      ; an older tmux has no allow-passthrough
+    (drgnx-tty-clip-test--copy-in-tmux options
+      (should-not (terminal-parameter nil 'xterm--set-selection))
+      (should-not (plist-get (terminal-parameter nil 'drgnx-tty-caps) :osc52))
+      (gui-backend-set-selection 'CLIPBOARD "hi")
+      (should-not sent)))
+  ;; a tmux drgnx cannot ask (TERM=tmux-* over SSH): the plain sequence, as before
+  (drgnx-tty-clip-test--copy-in-tmux nil
+    (gui-backend-set-selection 'CLIPBOARD "hi")
+    (should (equal sent '("\e]52;c;aGk=\a")))))
+
+(ert-deftest drgnx-tty-clip/a-tmux-set-up-again-follows-its-options ()
+  ;; `tmux source ~/.tmux.conf' between two windows: the second setup sees the new options
+  (let ((drgnx-tty-clip-test--tmux '(:set-clipboard "external")))
+    (drgnx-tty-clip-test--terminal 'tmux nil
+      (drgnx-tty-clip-setup (selected-frame))
+      (should-not (terminal-parameter nil 'xterm--set-selection))
+      (setq drgnx-tty-clip-test--tmux '(:set-clipboard "on"))
+      (drgnx-tty-clip-setup (selected-frame))
+      (should (eq (terminal-parameter nil 'xterm--set-selection) t))
+      (setq drgnx-tty-clip-test--tmux '(:set-clipboard "off"))
+      (drgnx-tty-clip-setup (selected-frame))
+      (should-not (terminal-parameter nil 'xterm--set-selection)))))
 
 (ert-deftest drgnx-tty-clip/read-is-off-by-default ()
   (should-not drgnx-tty-clipboard-read)

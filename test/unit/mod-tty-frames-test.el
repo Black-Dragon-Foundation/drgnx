@@ -378,3 +378,184 @@ types `infocmp' was asked about."
   (pcase-dolist (`(,_ . ,spec) drgnx-tty-frames-state-faces)
     (dolist (f (plist-get spec :faces))
       (should (facep f)))))
+
+;;; drgnx inside tmux (Task 10)
+
+(defconst drgnx-tty-frames-test--tmux-env '("TERM=tmux-256color" "TMUX=/tmp/s,1,0")
+  "A client inside tmux.")
+
+(defmacro drgnx-tty-frames-test--with-tmux (options &rest body)
+  "BODY with `drgnx-tty-tmux-options' answering OPTIONS (a plist) and `calls' counting the questions."
+  (declare (indent 1))
+  `(let ((calls 0))
+     (cl-letf (((symbol-function 'drgnx-tty-tmux-options) (lambda (&optional _env) (setq calls (1+ calls)) ,options)))
+       ,@body)))
+
+(ert-deftest drgnx-tty-frames/the-report-has-the-tmux-conf-lines ()
+  (drgnx-tty-frames-test--state
+   (let ((entry (lambda () (cdr (assoc "kx-a" (plist-get (drgnx-tty-frames-test--report) :terminals))))))
+     ;; what tmux lacks goes into the terminal's entry as the lines to add
+     (drgnx-tty-frames-test--terminal nil drgnx-tty-frames-test--tmux-env
+       (drgnx-tty-frames-test--with-tmux '(:version "3.4" :set-clipboard "external" :extended-keys "off"
+                                                    :focus-events "off" :allow-passthrough "off" :outer-term "xterm-kitty")
+         (drgnx-tty-frames-write-report (selected-frame))
+         (should (equal (plist-get (funcall entry) :tmux-conf)
+                        '("set -s set-clipboard on" "set -s extended-keys on" "set -g allow-passthrough on"
+                          "set -g focus-events on" "set -as terminal-features ',xterm-kitty:RGB'")))))
+     ;; nothing missing, or not tmux: no key
+     (drgnx-tty-frames-test--terminal nil drgnx-tty-frames-test--tmux-env
+       (drgnx-tty-frames-test--with-tmux '(:version "3.4" :set-clipboard "on" :extended-keys "on" :focus-events "on"
+                                                    :rgb t :outer-term "xterm-kitty")
+         (drgnx-tty-frames-write-report (selected-frame))
+         (should-not (plist-member (funcall entry) :tmux-conf))))
+     (drgnx-tty-frames-test--terminal nil '("TERM=xterm-kitty")
+       (drgnx-tty-frames-test--with-tmux '(:set-clipboard "off")
+         (drgnx-tty-frames-write-report (selected-frame))
+         (should-not (plist-member (funcall entry) :tmux-conf))
+         (should (= calls 0)))))))
+
+(ert-deftest drgnx-tty-frames/tmux-is-asked-once-per-setup ()
+  ;; the report, the copy and the focus step of one setup share one call; a later setup reads it again
+  (drgnx-tty-frames-test--terminal nil drgnx-tty-frames-test--tmux-env
+    (drgnx-tty-frames-test--with-tmux '(:set-clipboard "on")
+      (should (equal (drgnx-tty-frames--tmux-options (selected-frame)) '(:set-clipboard "on")))
+      (drgnx-tty-frames--tmux-options (selected-frame))
+      (should (= calls 1))
+      (let ((drgnx-tty-frames-tmux-ttl 0))
+        (drgnx-tty-frames--tmux-options (selected-frame))
+        (should (= calls 2)))))
+  (drgnx-tty-frames-test--terminal nil '("TERM=xterm-kitty")
+    (drgnx-tty-frames-test--with-tmux '(:set-clipboard "on")
+      (should-not (drgnx-tty-frames--tmux-options (selected-frame)))
+      (should (= calls 0)))))
+
+(ert-deftest drgnx-tty-frames/focus-reporting-is-on-under-tmux-with-focus-events ()
+  (let (sent)
+    (cl-letf (((symbol-function 'send-string-to-terminal) (lambda (s &optional _) (push s sent))))
+      ;; tmux forwards focus: the terminal is made to ask for it, and to stop asking when Emacs suspends or exits
+      (drgnx-tty-frames-test--terminal nil drgnx-tty-frames-test--tmux-env
+        (drgnx-tty-frames-test--with-tmux '(:focus-events "on")
+          (drgnx-tty-frames--tmux-focus (selected-frame))
+          (should (equal sent '("\e[?1004h")))
+          (should (member "\e[?1004h" (terminal-parameter nil 'tty-mode-set-strings)))
+          (should (member "\e[?1004l" (terminal-parameter nil 'tty-mode-reset-strings)))
+          ;; once is enough
+          (drgnx-tty-frames--tmux-focus (selected-frame))
+          (should (= (length sent) 1))))
+      ;; xterm.el already did it: nothing more
+      (setq sent nil)
+      (drgnx-tty-frames-test--terminal '((tty-mode-set-strings . ("\e[?1004h"))) drgnx-tty-frames-test--tmux-env
+        (drgnx-tty-frames-test--with-tmux '(:focus-events "on")
+          (drgnx-tty-frames--tmux-focus (selected-frame))
+          (should-not sent)))
+      ;; tmux keeps focus to itself, or this is no tmux: nothing
+      (drgnx-tty-frames-test--terminal nil drgnx-tty-frames-test--tmux-env
+        (drgnx-tty-frames-test--with-tmux '(:focus-events "off")
+          (drgnx-tty-frames--tmux-focus (selected-frame))
+          (should-not sent)))
+      (drgnx-tty-frames-test--terminal nil '("TERM=xterm-kitty")
+        (drgnx-tty-frames-test--with-tmux '(:focus-events "on")
+          (drgnx-tty-frames--tmux-focus (selected-frame))
+          (should-not sent))))))
+
+(ert-deftest drgnx-tty-frames/tmux-is-asked-for-modify-other-keys-level-2 ()
+  ;; level 1 (what Emacs asks for) lets tmux fold C-S-p into C-p; level 2 (the setting) sends it
+  (let (sent (refreshed 0) (drgnx-tty-tmux-mok-level 2))
+    (cl-letf (((symbol-function 'send-string-to-terminal) (lambda (s &optional _) (push s sent)))
+              ((symbol-function 'drgnx-tty-frames-refresh-report) (lambda (_f) (setq refreshed (1+ refreshed)))))
+      (drgnx-tty-frames-test--terminal '((tty-mode-set-strings . ("\e[>4;1m" "\e[?2004h"))
+                                         (tty-mode-reset-strings . ("\e[>4m")))
+          drgnx-tty-frames-test--tmux-env
+        (drgnx-tty-frames-test--with-tmux '(:extended-keys "on" :extended-keys-format "xterm")
+          (drgnx-tty-frames--tmux-keys (selected-frame))
+          (should (equal sent '("\e[>4;2m")))
+          ;; kept for a resume, after level 1
+          (should (equal (terminal-parameter nil 'tty-mode-set-strings) '("\e[>4;1m" "\e[?2004h" "\e[>4;2m")))
+          ;; the report says C-g waits now
+          (should (= refreshed 1))
+          (should (eq (terminal-parameter nil 'drgnx-tty-mok-level) 2))
+          ;; once
+          (drgnx-tty-frames--tmux-keys (selected-frame))
+          (should (= (length sent) 1))))
+      (setq sent nil)
+      ;; always counts as on
+      (drgnx-tty-frames-test--terminal '((tty-mode-set-strings . ("\e[>4;1m"))) drgnx-tty-frames-test--tmux-env
+        (drgnx-tty-frames-test--with-tmux '(:extended-keys "always")
+          (drgnx-tty-frames--tmux-keys (selected-frame))
+          (should (equal sent '("\e[>4;2m")))))
+      (setq sent nil)
+      ;; extended-keys off, or modifyOtherKeys never asked for (ui/terminal-keys withdrew it): nothing
+      (drgnx-tty-frames-test--terminal '((tty-mode-set-strings . ("\e[>4;1m"))) drgnx-tty-frames-test--tmux-env
+        (drgnx-tty-frames-test--with-tmux '(:extended-keys "off")
+          (drgnx-tty-frames--tmux-keys (selected-frame))))
+      (drgnx-tty-frames-test--terminal '((tty-mode-set-strings . ("\e[?2004h"))) drgnx-tty-frames-test--tmux-env
+        (drgnx-tty-frames-test--with-tmux '(:extended-keys "on")
+          (drgnx-tty-frames--tmux-keys (selected-frame))))
+      ;; the setting keeps Emacs's level 1
+      (drgnx-tty-frames-test--terminal '((tty-mode-set-strings . ("\e[>4;1m"))) drgnx-tty-frames-test--tmux-env
+        (drgnx-tty-frames-test--with-tmux '(:extended-keys "on")
+          (let ((drgnx-tty-tmux-mok-level 1))
+            (drgnx-tty-frames--tmux-keys (selected-frame)))))
+      (should-not sent))))
+
+(ert-deftest drgnx-tty-frames/tmux-keys-default-to-level-1-with-c-g-and-the-folded-chords ()
+  ;; level 1 is the default: nothing is sent, C-g stays a byte, and tmux's folded chords are reported
+  (should (eql (default-value 'drgnx-tty-tmux-mok-level) 1))
+  (let (sent)
+    (cl-letf (((symbol-function 'send-string-to-terminal) (lambda (s &optional _) (push s sent))))
+      (drgnx-tty-frames-test--terminal '((tty-mode-set-strings . ("\e[>4;1m")) (drgnx-tty-mok-decoded . t))
+          drgnx-tty-frames-test--tmux-env
+        (drgnx-tty-frames-test--with-tmux '(:extended-keys "on")
+          (drgnx-tty-frames--tmux-setup (selected-frame))
+          (should-not sent)
+          (let ((caps (drgnx-tty-frame-caps)))
+            (should (eq (plist-get caps :keys) 'mok))
+            (should (eq (plist-get caps :c-g) 'always))
+            (should (equal (plist-get caps :folded) drgnx-tty-tmux-folded-chords))
+            (should (member "C-S-p" (plist-get caps :folded)))
+            ;; the chords a profile binds: the folded ones are unsendable, the others arrive
+            (should (equal (drgnx-tty-unsendable '("C-S-p" "C-p" "C-." "C-M-S-k" "C-`" "C-S-<return>")
+                                                 (plist-get caps :keys) (plist-get caps :folded))
+                           '("C-S-p" "C-M-S-k" "C-`"))))
+          ;; level 2: nothing folded, C-g waits
+          (let ((drgnx-tty-tmux-mok-level 2))
+            (cl-letf (((symbol-function 'drgnx-tty-frames-refresh-report) #'ignore))
+              (drgnx-tty-frames--tmux-setup (selected-frame)))
+            (let ((caps (drgnx-tty-frame-caps)))
+              (should (eq (plist-get caps :c-g) 'waits))
+              (should-not (plist-get caps :folded))
+              (should-not (drgnx-tty-unsendable '("C-S-p") (plist-get caps :keys) (plist-get caps :folded)))))))
+      ;; not tmux: nothing folded
+      (drgnx-tty-frames-test--terminal '((tty-mode-set-strings . ("\e[>4;1m")) (drgnx-tty-mok-decoded . t))
+          '("TERM=xterm-256color" "XTERM_VERSION=XTerm(397)")
+        (should-not (plist-get (drgnx-tty-frame-caps) :folded))))))
+
+(ert-deftest drgnx-tty-frames/tmux-csi-u-keys-are-decoded ()
+  ;; extended-keys-format csi-u: tmux sends C-S-p as CSI 112 ; 6 u, which ui/terminal decodes for the other form
+  (let ((input-decode-map (make-sparse-keymap)))
+    (drgnx-tty-frames-test--terminal nil drgnx-tty-frames-test--tmux-env
+      (drgnx-tty-frames-test--with-tmux '(:extended-keys "on" :extended-keys-format "csi-u")
+        (drgnx-tty-frames--tmux-keys (selected-frame))
+        (should (equal (lookup-key input-decode-map "\e[112;6u") (kbd "C-S-p")))
+        (should (equal (lookup-key input-decode-map "\e[80;6u") (kbd "C-S-p")))
+        (should (equal (lookup-key input-decode-map "\e[46;5u") (kbd "C-.")))
+        (should (terminal-parameter nil 'drgnx-tty-csi-u))))
+    ;; the default format needs no such map
+    (let ((input-decode-map (make-sparse-keymap)))
+      (drgnx-tty-frames-test--terminal nil drgnx-tty-frames-test--tmux-env
+        (drgnx-tty-frames-test--with-tmux '(:extended-keys "on" :extended-keys-format "xterm")
+          (drgnx-tty-frames--tmux-keys (selected-frame))
+          (should (numberp (lookup-key input-decode-map "\e[112;6u"))))))))   ; unbound: no key starts there
+
+(ert-deftest drgnx-tty-frames/a-terminal-that-went-is-left-alone-by-the-tmux-steps ()
+  ;; the terminal was killed while drgnx waited for its answer: no tmux call, nothing signalled or reported
+  (drgnx-tty-frames-test--terminal nil drgnx-tty-frames-test--tmux-env
+    (drgnx-tty-frames-test--with-tmux '(:extended-keys "on" :focus-events "on")
+      (cl-letf (((symbol-function 'frame-live-p) (lambda (_f) nil))
+                ((symbol-function 'frame-terminal) (lambda (&rest _) (ert-fail "the dead frame's terminal was read"))))
+        (should-not (drgnx-tty-frames--tmux-setup (selected-frame))))
+      (should (= calls 0)))
+    (drgnx-tty-frames-test--with-tmux '(:extended-keys "on" :focus-events "on")
+      (cl-letf (((symbol-function 'terminal-live-p) (lambda (_t) nil)))
+        (should-not (drgnx-tty-frames--tmux-setup (selected-frame))))
+      (should (= calls 0)))))

@@ -467,6 +467,14 @@ dirs) and drive the session through `harness/drgnx-tty-session.el`:
   the user's tmux server is never used (a test checks every call). The server gets `set-clipboard on`, `extended-keys on`, `window-size
   manual`, `status off`, `mouse off` (the application gets the mouse bytes) and `default-shell /bin/sh`. `:options`
   adds more tmux commands for one test.
+- **Nested (tmux inside tmux):** `:nested LINES` runs a second private tmux in the pane (`tmux -L inner -f
+  RUN/inner.conf`, its socket under `RUN/inner-tmux`, which `TMUX_TMPDIR` names) with Emacs in it, the way drgnx runs in
+  real life: Emacs gets the inner tmux's own `TMUX` and `TERM`. `inner.conf` is `default-terminal`, `status off`
+  and `default-shell /bin/sh`, then LINES; the inner tmux keeps tmux's own defaults (`set-clipboard external`,
+  `extended-keys off`, `focus-events off`) unless LINES change them, so a test says what it turns on. Keys, the screen
+  and the clipboard go through the outer server, which is the inner tmux's terminal; `drgnx-tty-session-inner-tmux`
+  runs a command on the inner server, and `drgnx-tty-session-stop` kills it first. With `:command`, that command runs in
+  the inner tmux instead of Emacs (to see the bytes tmux passes on). Not with `:daemon`.
 - **Cleanup:** `drgnx-tty-session-stop` asks Emacs to exit, kills the tmux server and anything still running from the
   run directory, then removes the run and socket directories. `drgnx-tty-session-with` stops the session even when
   the test fails, and `kill-emacs-hook` stops any session a test left running. A runner killed with SIGKILL runs

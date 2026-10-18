@@ -142,15 +142,33 @@
                (should (drgnx-tty-terminfo-p "foot")))
       (delete-directory tmp t))))
 
-(defun drgnx-tty-test--fake-tmux (dir ran)
-  "A fake tmux in DIR: it writes its TMUX, its working directory and its arguments to RAN, answers `on' for
-set-clipboard, `off' for extended-keys and kitty(0.39.1) for #{client_termtype}."
+;; What the real tmux prints for the one command `drgnx-tty-tmux-options' sends: the `display -p' line
+;; (version|client_termname|client_termfeatures|client_termtype), then the `show -q' lines (NAME VALUE) of the
+;; options this tmux has.
+(defconst drgnx-tty-test--tmux-default-answer
+  "3.4|xterm-kitty|256,RGB|kitty(0.39.1)\nset-clipboard on\nextended-keys off\nfocus-events off\nallow-passthrough off\n")
+
+(defun drgnx-tty-test--fake-tmux (dir ran &optional answer)
+  "A fake tmux in DIR: it writes its TMUX, its working directory and its arguments to RAN and prints ANSWER
+\(default `drgnx-tty-test--tmux-default-answer')."
+  (write-region (or answer drgnx-tty-test--tmux-default-answer) nil (expand-file-name "tmux-answer" dir) nil 'silent)
   (write-region (format "#!/bin/sh
 { echo \"TMUX=$TMUX\"; echo \"PWD=$(pwd)\"; echo \"ARGS=$*\"; } > %s
-for a in \"$@\"; do case \"$a\" in set-clipboard) echo on;; extended-keys) echo off;; '#{client_termtype}') echo 'kitty(0.39.1)';; esac; done\n"
-                        (shell-quote-argument ran))
+cat %s\n"
+                        (shell-quote-argument ran) (shell-quote-argument (expand-file-name "tmux-answer" dir)))
                 nil (expand-file-name "tmux" dir) nil 'silent)
   (set-file-modes (expand-file-name "tmux" dir) #o755))
+
+(defun drgnx-tty-test--options-from (answer)
+  "`drgnx-tty-tmux-options' against a fake tmux that prints ANSWER."
+  (let* ((tmp (drgnx-tty-test--tmp))
+         (exec-path (list tmp))
+         (process-environment (append (list (format "PATH=%s:%s" tmp (getenv "PATH")) "TMUX=/tmp/fake,1,0")
+                                      process-environment)))
+    (unwind-protect
+        (progn (drgnx-tty-test--fake-tmux tmp (expand-file-name "ran" tmp) answer)
+               (drgnx-tty-tmux-options))
+      (delete-directory tmp t))))
 
 (ert-deftest drgnx-tty/tmux-options-with-a-fake-tmux ()
   (let* ((tmp (drgnx-tty-test--tmp))
@@ -166,9 +184,42 @@ for a in \"$@\"; do case \"$a\" in set-clipboard) echo on;; extended-keys) echo 
             (should-not (file-exists-p ran)))
           (let ((process-environment (cons "TMUX=/tmp/fake,1,0" process-environment)))
             (should (equal (drgnx-tty-tmux-options)
-                           '(:set-clipboard "on" :extended-keys "off" :client-termtype "kitty(0.39.1)")))
-            (should (file-exists-p ran))))
+                           '(:version "3.4" :set-clipboard "on" :allow-passthrough "off" :extended-keys "off"
+                                      :extended-keys-format nil :focus-events "off" :rgb t :outer-term "xterm-kitty"
+                                      :client-termtype "kitty(0.39.1)")))
+            (should (file-exists-p ran))
+            ;; one tmux call asks for everything
+            (let ((args (with-temp-buffer (insert-file-contents ran) (buffer-string))))
+              (dolist (want '("display -p" "#{version}" "#{client_termname}" "#{client_termfeatures}" "show -sq set-clipboard"
+                              "show -sq extended-keys" "show -sq extended-keys-format" "show -sq focus-events"
+                              "show -gq allow-passthrough"))
+                (should (string-match-p (regexp-quote want) args))))))
       (delete-directory tmp t))))
+
+(ert-deftest drgnx-tty/tmux-options-and-the-conf-lines ()
+  (let ((lines (lambda (answer) (drgnx-tty-tmux-conf-lines (drgnx-tty-test--options-from answer)))))
+    ;; everything off, tmux 3.2 (no allow-passthrough option, no extended-keys-format): what is missing, in order
+    (should (equal (funcall lines "3.2|xterm-256color|256|\nset-clipboard external\nextended-keys off\nfocus-events off\n")
+                   '("set -s set-clipboard on" "set -s extended-keys on" "set -g focus-events on"
+                     "set -as terminal-features ',xterm-256color:RGB'")))
+    ;; 3.4: passthrough exists too (the spelling of the version does not matter: 3.3a, next-3.5)
+    (dolist (version '("3.4" "3.3a" "next-3.5"))
+      (should (equal (funcall lines (format "%s|xterm-kitty|256|\nset-clipboard off\nextended-keys off\nfocus-events off\nallow-passthrough off\n" version))
+                     '("set -s set-clipboard on" "set -s extended-keys on" "set -g allow-passthrough on"
+                       "set -g focus-events on" "set -as terminal-features ',xterm-kitty:RGB'"))))
+    ;; everything on: nothing to add (extended-keys always is on too)
+    (should-not (funcall lines "3.7c|xterm-kitty|256,RGB,clipboard|\nset-clipboard on\nextended-keys always\nextended-keys-format xterm\nfocus-events on\nallow-passthrough on\n"))
+    ;; set-clipboard on makes passthrough unnecessary, whatever its value
+    (should-not (member "set -g allow-passthrough on"
+                        (funcall lines "3.7c|xterm-kitty|256,RGB|\nset-clipboard on\nextended-keys off\nfocus-events off\nallow-passthrough off\n")))
+    ;; a client with no terminal name has nothing to add RGB to
+    (should-not (seq-some (lambda (l) (string-match-p "terminal-features" l))
+                          (funcall lines "3.4||256|\nset-clipboard on\nextended-keys on\nfocus-events on\nallow-passthrough on\n")))
+    ;; extended-keys-format csi-u is never suggested: Emacs does not decode tmux's csi-u output (docs/guide/terminal.md)
+    (should-not (seq-some (lambda (l) (string-match-p "extended-keys-format" l))
+                          (funcall lines "3.7c|xterm-kitty|256|\nset-clipboard off\nextended-keys off\nextended-keys-format xterm\nfocus-events off\nallow-passthrough off\n")))
+    ;; no tmux options: no lines
+    (should-not (drgnx-tty-tmux-conf-lines nil))))
 
 (ert-deftest drgnx-tty/tmux-options-give-up-after-a-second ()
   (let* ((tmp (drgnx-tty-test--tmp))
@@ -241,7 +292,7 @@ for a in \"$@\"; do case \"$a\" in set-clipboard) echo on;; extended-keys) echo 
           (should (equal (plist-get (drgnx-tty-tmux-options env) :set-clipboard) "on"))
           (let ((log (with-temp-buffer (insert-file-contents ran) (buffer-string))))
             (should (string-match-p "^TMUX=/tmp/client-sock,2,0$" log))
-            (should (string-match-p "^ARGS=-S /tmp/client-sock show" log))
+            (should (string-match-p "^ARGS=-S /tmp/client-sock display" log))
             (should (string-match-p "^PWD=/$" log)))
           ;; a client outside tmux is outside tmux, even when the daemon was started in one
           (delete-file ran)
@@ -345,3 +396,13 @@ for a in \"$@\"; do case \"$a\" in set-clipboard) echo on;; extended-keys) echo 
   (should (stringp (drgnx-tty-onboard-note 'unknown))))
 
 ;;; tty-test.el ends here
+
+(ert-deftest drgnx-tty/folded-chords-are-unsendable-though-the-keys-allow-them ()
+  ;; tmux at modifyOtherKeys level 1 sends C-S-p as C-p: mok could send it, tmux does not
+  (should (drgnx-tty-key-sendable-p "C-S-p" 'mok))
+  (should (equal (drgnx-tty-unsendable '("C-S-p" "C-p" "C-." "C-M-S-k" "C-S-SPC" "C-`" "C-S-`" "C-S-<tab>") 'mok
+                                       drgnx-tty-tmux-folded-chords)
+                 '("C-S-p" "C-M-S-k" "C-S-SPC" "C-`" "C-S-`")))
+  ;; without the list, as before
+  (should-not (drgnx-tty-unsendable '("C-S-p") 'mok))
+  (should (equal (drgnx-tty-unsendable '("C-S-p") 'legacy drgnx-tty-tmux-folded-chords) '("C-S-p"))))

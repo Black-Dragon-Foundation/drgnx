@@ -80,7 +80,7 @@ helps.
   colour, try `TERM=xterm-direct` (unconfirmed). Emacs turns on modifyOtherKeys in xterm by itself.
 - **Linux console:** none for keys, copy or colour (16 colours). For the mouse, run the gpm service and
   `M-x gpm-mouse-mode` (in an Emacs built with gpm).
-- **tmux:** see [below](#tmux).
+- **tmux:** see [below](#drgnx-inside-tmux).
 
 ## Keys
 
@@ -91,7 +91,8 @@ terminal sends `C-S-p` as `C-p`, and `C-.` not at all. drgnx turns on one protoc
   drgnx asks the terminal for it when Emacs did not, and decodes every chord (Emacs alone decodes only a few, so
   `C-S-p` would type text). Under tmux drgnx reads `extended-keys` and asks tmux for it when it is `on` or
   `always`. When it is `off`, or tmux is too old to have the option (before 3.2), the window counts as plain.
-  Every chord arrives except `s-` and `H-` keys. This needs no package.
+  Every chord arrives except `s-` and `H-` keys, and inside tmux the ones tmux folds into others (`C-S-p` as `C-p`,
+  see [drgnx inside tmux](#drgnx-inside-tmux)). This needs no package.
 - **The kitty keyboard protocol (kkp)**, only for terminals that have kkp but not modifyOtherKeys: kitty, foot,
   Alacritty, and iTerm2 with the setting in [The fixes](#the-fixes). The `ui/terminal-keys` module uses the `kkp`
   package from MELPA, pinned in drgnx's lock (`drgnx sync` installs it). When such a terminal window opens, kkp
@@ -178,19 +179,47 @@ machine. Without it, Emacs falls back to 8 colours or refuses the terminal. To f
 `infocmp -x | ssh box tic -x -`. Or use `kitten ssh` in kitty, or Ghostty's `ssh-terminfo` shell integration. Or
 connect with `TERM=xterm-256color`.
 
-## tmux
+## drgnx inside tmux
 
-Inside tmux, drgnx talks to tmux, not to your terminal: tmux decides which keys and copies get through. Its defaults
-block both. Add these lines to `~/.tmux.conf` (drgnx never writes it) and run `tmux source ~/.tmux.conf`:
+Inside tmux, drgnx talks to tmux, not to your terminal: tmux decides which keys, copies and focus changes get
+through, and its defaults block most of them. drgnx reads tmux's settings when a terminal window opens (`tmux show`,
+asked of the tmux the window runs in, 1 second at most), works with what tmux allows, and writes the lines you can
+add for the rest into `terminal-report.eld`. **drgnx never writes `~/.tmux.conf`.** Add the
+lines you want yourself, then run `tmux source ~/.tmux.conf` and open a new terminal window (settings are read when
+one opens). The lines, in this order, each only if it is missing:
 
 ```
-set -s extended-keys on                      # C-S- chords, C-. … (modifyOtherKeys)
-set -s set-clipboard on                      # copy reaches your clipboard (the default, external, refuses programs)
-set -as terminal-features ',xterm-kitty:RGB' # true colour; use your terminal's TERM outside tmux
+set -s set-clipboard on                       # copy reaches your clipboard (the default, external, refuses programs)
+set -s extended-keys on                       # C-S- chords, C-. … (modifyOtherKeys)
+set -g allow-passthrough on                   # tmux 3.3 and later, if set-clipboard stays off: copy goes around tmux
+set -g focus-events on                        # drgnx sees when the window gains or loses focus
+set -as terminal-features ',xterm-kitty:RGB'  # true colour; the TERM of the terminal around tmux
 ```
+
+- **Copy** goes out as OSC 52 when `set-clipboard` is `on`. Otherwise, with `allow-passthrough on`, drgnx wraps the
+  same sequence in tmux's passthrough (`ESC P tmux;` … `ESC \`, every `ESC` doubled) and tmux hands it to the
+  terminal unchanged. With neither, the copy stays in drgnx and the terminal's capabilities say no OSC 52. The
+  terminal around tmux must take OSC 52 as well (the table above), and over SSH or a second tmux each layer needs
+  its own setting. drgnx builds the sequence itself, so it also works with `TERM=screen`, tmux's old default.
+- **Keys:** with `extended-keys on` tmux sends chords as modifyOtherKeys, and drgnx asks for **level 1**, Emacs's
+  own. Then `C-g` always works (it stays one byte and stops a runaway Lisp loop), but tmux folds some chords into
+  others: `C-S-<letter>` (and `C-M-S-<letter>`) arrive as `C-<letter>`, `C-S-SPC` and `` C-` `` as `C-SPC`, `` C-S-` ``
+  as `C-^` (tmux 3.7c). drgnx lists those in `terminal-report.eld` as keys this terminal cannot send (the key sheet
+  and the fallback keys cover them), and the capabilities carry them as `:folded`. `M-x customize-variable`
+  `drgnx-tty-tmux-mok-level` set to `2` asks for level 2: C-S-letter chords work natively in tmux, but `C-g` can no
+  longer stop a runaway Lisp loop (it reaches Emacs as an escape sequence; prompts and commands still take it, and
+  the capabilities say `:c-g waits`, as for the kitty keyboard protocol). `extended-keys-format csi-u` (tmux 3.5 and
+  later) works too, drgnx decodes it, but it gains nothing, so the lines above do not suggest it.
+- **Focus:** with `focus-events on` the window's focus changes reach drgnx, which refreshes what depends on focus (the
+  Explorer's git state).
+- **True colour:** the `terminal-features` line tells tmux the terminal around it takes 24-bit colour; Emacs also
+  needs `COLORTERM=truecolor` in the environment tmux starts it with. The line names that terminal's `TERM` (here
+  `xterm-kitty`; drgnx fills it in).
 
 tmux keeps `C-b` as its prefix. Press `C-b` twice to send it to drgnx, or set another prefix with `set -g prefix`.
-tmux does not pass the kitty keyboard protocol, so `s-` keys do not arrive inside tmux.
+tmux does not pass the kitty keyboard protocol, so `s-` keys do not arrive inside tmux. A tmux on the other side of
+SSH (`TERM=tmux-*` without `TMUX` set) is known to be tmux, but drgnx cannot ask it: copy is sent as plain OSC 52 and
+Emacs's own key choice stays.
 
 ## EDITOR
 
@@ -283,7 +312,7 @@ the editor only and is left alone.
 Copying in drgnx puts the text on your computer's clipboard through OSC 52 when the terminal takes it (the table's
 "OSC 52 copy"), over SSH as well: the sequence travels through the connection unchanged. Emacs turns this on by
 itself only when the terminal's version answer is 203 or more. drgnx also turns it on in **tmux** (which then
-needs `set -s set-clipboard on`, see above) and in a **kitty** whose answer was lower. A terminal that does not
+needs `set-clipboard on` or `allow-passthrough on`, see [drgnx inside tmux](#drgnx-inside-tmux)) and in a **kitty** whose answer was lower. A terminal that does not
 take OSC 52 (GNOME Terminal, Ptyxis) keeps the copy inside drgnx.
 
 - **Long copies:** a copy whose OSC 52 text passes `xterm-max-cut-length` (100000 characters once encoded, about
