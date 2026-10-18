@@ -292,6 +292,7 @@
         (agent-settings-new-skill "n" :map (drgnx-agent-settings . drgnx-agent-settings-mode-map))
         (agent-settings-open-file "o" :map (drgnx-agent-settings . drgnx-agent-settings-mode-map))
         (agent-settings-other "TAB" :map (drgnx-agent-settings . drgnx-agent-settings-mode-map))
+        (agent-settings-openrouter "r" :map (drgnx-agent-settings . drgnx-agent-settings-mode-map))
         (keyboard-shortcuts "C-k C-s")
         (shortcuts-change "RET" :map (drgnx-shortcuts . drgnx-shortcuts-mode-map))
         (shortcuts-add "a" :map (drgnx-shortcuts . drgnx-shortcuts-mode-map))

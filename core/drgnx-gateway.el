@@ -44,7 +44,8 @@
     (mapconcat (lambda (b) (format "%02x" b)) (buffer-string) "")))
 
 (defun drgnx-gateway-register (registration)
-  "Let an agent use the gateway: REGISTRATION (:job :task :agent :chain ((PROVIDER . MODEL)…) :budget USD).  Returns
+  "Let an agent use the gateway: REGISTRATION (:job :task :agent :chain ((PROVIDER . MODEL)…) :budget USD
+:openrouter RESTRICTIONS — `drgnx-gateway-restrictions': sent to OpenRouter steps only).  Returns
 its token (shown once: only its hash is kept)."
   (let ((token (drgnx-gateway--random-token)))
     (puthash (drgnx-gateway--hash token) registration drgnx-gateway--registrations)
@@ -199,13 +200,47 @@ the body (up to 32 MB) is waited for; the body's pieces are kept in a list and j
                 bytes t t)
           "\""))
 
-(defun drgnx-gateway--body (req model)
-  "REQ's body, its top-level \"model\" replaced by MODEL when MODEL is non-nil."
-  (let ((body (plist-get req :body)))
-    (if (or (null model) (string-empty-p body)) body
+(defun drgnx-gateway--slugs (value)
+  "The provider slugs in VALUE (a list or a vector): the strings that are plain slugs (letters, digits, . _ / -)."
+  (and (or (listp value) (vectorp value))
+       (cl-loop for s in (append value nil)
+                when (and (stringp s) (string-match-p "\\`[A-Za-z0-9][A-Za-z0-9._/-]*\\'" s)) collect s)))
+
+(defun drgnx-gateway-restrictions (raw)
+  "RAW (agents.eld's `:openrouter', or what a hub call carried: lists or vectors, strings for symbols) as the
+restrictions a registration keeps: (:only SLUGS :ignore SLUGS :data-collection deny|allow :zdr t), each only when
+set; nil when none is."
+  (when (proper-list-p raw)
+    (let* ((only (drgnx-gateway--slugs (plist-get raw :only)))
+           (ignore (drgnx-gateway--slugs (plist-get raw :ignore)))
+           (dc (let ((v (plist-get raw :data-collection))) (if (stringp v) (intern v) v)))
+           (out nil))
+      (when (eq (plist-get raw :zdr) t) (setq out (list :zdr t)))
+      (when (memq dc '(deny allow)) (setq out (nconc (list :data-collection dc) out)))
+      (when ignore (setq out (nconc (list :ignore ignore) out)))
+      (when only (setq out (nconc (list :only only) out)))
+      out)))
+
+(defun drgnx-gateway--provider-object (restrictions)
+  "The \"provider\" object for OpenRouter's request body from RESTRICTIONS (`drgnx-gateway-restrictions'), or nil.
+`allow' is OpenRouter's default and your account's settings stay in force, so it is not sent."
+  (let ((only (plist-get restrictions :only)) (ignore (plist-get restrictions :ignore)) out)
+    (when (plist-get restrictions :zdr) (setq out (list :zdr t)))
+    (when (eq (plist-get restrictions :data-collection) 'deny) (setq out (nconc (list :data_collection "deny") out)))
+    (when ignore (setq out (nconc (list :ignore (vconcat ignore)) out)))
+    (when only (setq out (nconc (list :only (vconcat only)) out)))
+    out))
+
+(defun drgnx-gateway--body (req model &optional provider)
+  "REQ's body, its top-level \"model\" replaced by MODEL when MODEL is non-nil and a top-level \"provider\" object
+added for PROVIDER (OpenRouter's restrictions, `drgnx-gateway-restrictions') when it asks for any."
+  (let ((body (plist-get req :body)) (object (drgnx-gateway--provider-object provider)))
+    (if (or (and (null model) (null object)) (string-empty-p body)) body
       (let ((json (ignore-errors (json-parse-string (decode-coding-string body 'utf-8) :object-type 'plist))))
         (if (not json) body
-          (encode-coding-string (json-serialize (plist-put json :model model)) 'utf-8))))))
+          (when model (setq json (plist-put json :model model)))
+          (when object (setq json (plist-put json :provider object)))
+          (encode-coding-string (json-serialize json) 'utf-8))))))
 
 (defun drgnx-gateway--price-cost (p input output)
   (let ((price (plist-get p :price)))
@@ -254,7 +289,7 @@ the body (up to 32 MB) is waited for; the body's pieces are kept in a list and j
   (let* ((url (concat (replace-regexp-in-string "/v1/?\\'" "" (plist-get p :url)) (plist-get req :path)))
          (_ (unless (equal (url-host (url-generic-parse-url url)) (url-host (url-generic-parse-url (plist-get p :url))))
               (error "the request would leave %s" (plist-get p :url))))
-         (body (drgnx-gateway--body req model))
+         (body (drgnx-gateway--body req model (and (eq id 'openrouter) (plist-get reg :openrouter))))
          (body-file (and (not (string-empty-p body)) (drgnx-gateway--write-body body)))
          (header (lambda (name value)
                    (concat "header = " (drgnx-gateway--quote (concat (drgnx-gateway--clean name) ": " (drgnx-gateway--clean value))) "\n")))

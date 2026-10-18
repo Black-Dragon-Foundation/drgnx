@@ -35,10 +35,14 @@
 (declare-function drgnx-ai-provider "drgnx-ai")
 (declare-function drgnx-ai-agent-gateway-chain "drgnx-ai")
 (declare-function drgnx-ai-store-key "drgnx-ai")
+(declare-function drgnx-agents-openrouter-restrictions "drgnx-agents")
+(declare-function drgnx-agents-set-setting "drgnx-agents")
 (declare-function tabulated-list-get-id "tabulated-list")
 (declare-function project-root "project")
 
 (defvar drgnx-wb--owned)                ; drgnx-wb.el: windows the running code may move from a timer
+(defvar drgnx-agents-use-gateway)       ; drgnx-agents.el
+(defvar drgnx-ai-gateway-kinds)         ; drgnx-ai.el
 (defvar drgnx-agents-ui--session)       ; drgnx-agents-ui.el: the session of a transcript buffer
 
 (defface drgnx-agent-settings-heading '((t :inherit bold)) "Headings of an agent settings page." :group 'drgnx)
@@ -295,6 +299,43 @@
           (message "The key is in your %s" (drgnx-ai-store-key id key)))
       (clear-string key))))
 
+(defconst drgnx-agent-settings--openrouter-privacy-url "https://openrouter.ai/settings/privacy"
+  "Where OpenRouter keeps the account's provider and data settings.")
+
+(defun drgnx-agent-settings--restrictions-text (restrictions)
+  "RESTRICTIONS (`drgnx-agents-openrouter-restrictions') in words."
+  (let ((only (plist-get restrictions :only)) (ignore (plist-get restrictions :ignore)))
+    (if (null restrictions) "none set (your OpenRouter account settings apply)"
+      (string-join
+       (delq nil (list (and only (concat "only " (string-join only ", ")))
+                       (and ignore (concat "never " (string-join ignore ", ")))
+                       (pcase (plist-get restrictions :data-collection)
+                         ('deny "providers that keep no data")
+                         ('allow "data collection: your account's setting"))
+                       (and (plist-get restrictions :zdr) "zero-data-retention endpoints only")))
+       " · "))))
+
+(defun drgnx-agent-settings--via-gateway-p (route)
+  "Does ROUTE's traffic go through drgnx's gateway (Claude Code profiles do, unless the gateway is turned off)?"
+  (and (plist-get route :kind) drgnx-agents-use-gateway (memq (plist-get route :kind) drgnx-ai-gateway-kinds) t))
+
+(defun drgnx-agent-settings--insert-openrouter (route)
+  "Under an OpenRouter ROUTE: the restrictions with a Change button, or why they do not apply to it."
+  (if (drgnx-agent-settings--via-gateway-p route)
+      (progn
+        (insert (propertize (concat "      OpenRouter restrictions: "
+                                    (drgnx-agent-settings--restrictions-text (drgnx-agents-openrouter-restrictions)) "  ")
+                            'face 'drgnx-agent-settings-dim))
+        (drgnx-agent-settings--button "[Change…]" #'drgnx-agent-settings-openrouter
+                                      "Which providers OpenRouter may use, and whether they may keep data")
+        (insert "\n"))
+    (insert (propertize "      This route is direct: the restriction setting applies through drgnx's gateway only; without it, your OpenRouter account settings apply: "
+                        'face 'drgnx-agent-settings-dim))
+    (drgnx-agent-settings--action-button drgnx-agent-settings--openrouter-privacy-url
+                                         (lambda () (browse-url drgnx-agent-settings--openrouter-privacy-url))
+                                         "Open OpenRouter's privacy settings in your browser")
+    (insert "\n")))
+
 (defun drgnx-agent-settings--insert-routes ()
   "One line per route: name, URL and model, where the key is, billing; notes about overrides."
   (insert "\n")
@@ -315,7 +356,9 @@
         (when-let* ((key (plist-get route :key-where)))
           (insert (propertize (concat "      key: " key) 'face 'drgnx-agent-settings-dim) "\n"))
         (when-let* ((launch (plist-get route :launch)))
-          (insert (propertize (concat "      run: " launch) 'face 'drgnx-agent-settings-dim) "\n")))))
+          (insert (propertize (concat "      run: " launch) 'face 'drgnx-agent-settings-dim) "\n"))
+        (when (eq (plist-get route :billing) 'openrouter)
+          (drgnx-agent-settings--insert-openrouter route)))))
   (dolist (note (plist-get drgnx-agent-settings--data :notes))
     (insert "  " (propertize (concat "! " note) 'face 'drgnx-agent-settings-warning) "\n")))
 
@@ -859,6 +902,33 @@ The answer may hold a secret (a token in a command line or URL): it is kept out 
   (let ((item (drgnx-agent-settings--fresh (drgnx-agent-settings--item-at-point "turn on or off"))))
     (drgnx-agent-settings--write 'toggle item (and (eq (plist-get item :section) 'mcp) (plist-get item :from)))))
 
+(defun drgnx-agent-settings--ask-slugs (prompt current)
+  "Provider slugs asked with PROMPT (comma separated; empty for none), CURRENT shown: a list of strings."
+  (let ((slugs (split-string (read-string prompt (and current (string-join current ", "))) "[ ,]+" t)))
+    (dolist (slug slugs)
+      (unless (string-match-p "\\`[A-Za-z0-9][A-Za-z0-9._/-]*\\'" slug)
+        (user-error "%S is not a provider slug (like anthropic or google-vertex); nothing was changed" slug)))
+    slugs))
+
+(defun drgnx-agent-settings-openrouter ()
+  "Choose which providers OpenRouter may use for the agents' requests, and whether they may keep data.  One setting
+for every OpenRouter route, saved in agents.eld; it applies through drgnx's gateway."
+  (interactive)
+  (drgnx-agent-settings--page)
+  (require 'drgnx-agents)
+  (let* ((old (drgnx-agents-openrouter-restrictions))
+         (only (drgnx-agent-settings--ask-slugs "Only these providers (slugs, comma separated; empty: any): " (plist-get old :only)))
+         (ignore (drgnx-agent-settings--ask-slugs "Never these providers (slugs; empty: none): " (plist-get old :ignore)))
+         (dc (intern (completing-read "Providers that keep your data: "
+                                      '("allow" "deny") nil t nil nil (symbol-name (or (plist-get old :data-collection) 'allow)))))
+         (zdr (y-or-n-p "Only zero-data-retention endpoints? "))
+         (new (append (and only (list :only only)) (and ignore (list :ignore ignore))
+                      (and (eq dc 'deny) (list :data-collection 'deny))
+                      (and zdr (list :zdr t)))))
+    (drgnx-agents-set-setting :openrouter new)
+    (drgnx-agent-settings--refresh-buffer (current-buffer))
+    (message "OpenRouter restrictions: %s (through drgnx's gateway)" (drgnx-agent-settings--restrictions-text new))))
+
 (defun drgnx-agent-settings-new-skill ()
   "Create a skill (a SKILL.md with its name and description): first where, then its name."
   (interactive)
@@ -892,6 +962,8 @@ The answer may hold a secret (a token in a command line or URL): it is kept out 
                    (agent-settings-edit "Edit…" drgnx-agent-settings-edit "Change this MCP server or hook in its file")
                    (agent-settings-remove "Remove…" drgnx-agent-settings-remove "Take this MCP server or hook out of its file")
                    (agent-settings-toggle "Turn On or Off" drgnx-agent-settings-toggle "This MCP server or skill")
+                   (agent-settings-openrouter "OpenRouter Restrictions…" drgnx-agent-settings-openrouter
+                                              "Which providers OpenRouter may use for the agents, and whether they may keep data")
                    (agent-settings-new-skill "New Skill…" drgnx-agent-settings-new-skill "A SKILL.md with its name and description")
                    (agent-settings-open-file "Open Its File" drgnx-agent-settings-open-file "The file this line comes from")
                    (agent-settings-other "Other Agent…" drgnx-agent-settings-other "Another agent's settings, same project")))

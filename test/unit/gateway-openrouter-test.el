@@ -1,0 +1,225 @@
+;;; gateway-openrouter-test.el --- batch tests: OpenRouter's provider restrictions through the gateway -*- lexical-binding: t -*-
+;; The gateway runs in the test's Emacs and a mock OpenRouter (test/fixtures/mock-llm.el) logs what it receives.
+;; Every directory is a temp one; the settings page reads the agent fixture's homes.
+(require 'ert)
+(require 'cl-lib)
+(require 'seq)
+(require 'drgnx)
+(require 'drgnx-registry)
+(require 'drgnx-keys)
+(require 'drgnx-agents)
+(require 'drgnx-gateway)
+(require 'drgnx-hub)
+(load (expand-file-name "test/fixtures/mock-llm" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/agent-config-fixture" drgnx-dir) nil t)
+(load (expand-file-name "modules/tools/drgnx-agents-ui" drgnx-dir) nil t)
+(load (expand-file-name "modules/tools/drgnx-agent-settings" drgnx-dir) nil t)
+
+(defconst drgnx-gateway-openrouter-test--restrictions
+  '(:only ("anthropic" "google-vertex") :ignore ("azure") :data-collection deny :zdr t)
+  "The restrictions most tests use.")
+
+(defmacro drgnx-gateway-openrouter-test--with (&rest body)
+  "BODY with the gateway on PORT, a mock OpenRouter (log OR-LOG) and a mock Ollama (log OL-LOG) as the `openrouter' and
+`ollama' providers, OPENROUTER_API_KEY=sk-or-test, every directory under ROOT."
+  (declare (indent 0))
+  `(let* ((root (file-name-as-directory (make-temp-file "drgnx-gw-or" t)))
+          (or-port (+ 20000 (random 10000))) (ol-port (+ 30000 (random 10000)))
+          (or-log (concat root "or.log")) (ol-log (concat root "ol.log"))
+          (process-environment (append (list (concat "DRGNX_CONFIG_DIR=" root "config") (concat "DRGNX_DATA_DIR=" root "data")
+                                             (concat "XDG_STATE_HOME=" root "state") "OPENROUTER_API_KEY=sk-or-test")
+                                       process-environment))
+          (drgnx-ai--keys (make-hash-table :test #'eq)) (auth-sources nil)
+          (drgnx-gateway--keys (make-hash-table :test #'eq)) (drgnx-gateway--registrations (make-hash-table :test #'equal))
+          (drgnx-work-db--handles nil) (mocks nil) (port nil))
+     (unwind-protect
+         (progn
+           (make-directory (concat root "config") t)
+           (with-temp-file (concat root "or.eld")
+             (prin1 '((:path "/api/v1/messages" :body "{\"content\":\"ok\",\"usage\":{\"input_tokens\":1,\"output_tokens\":2}}")) (current-buffer)))
+           (with-temp-file (concat root "ol.eld")
+             (prin1 '((:path "/v1/messages" :body "{\"content\":\"ok\",\"usage\":{\"input_tokens\":1,\"output_tokens\":2}}")) (current-buffer)))
+           (with-temp-file (concat root "config/ai.eld")
+             (prin1 `(:version 1 :providers ((openrouter :name "OpenRouter" :kind openai :url ,(format "http://127.0.0.1:%d/api/v1" or-port)
+                                                         :key-env "OPENROUTER_API_KEY" :caps (chat) :messages t)
+                                             (ollama :name "Ollama" :kind ollama :url ,(format "http://127.0.0.1:%d" ol-port) :caps (chat) :messages t)))
+                    (current-buffer)))
+           (push (drgnx-ai-test-mock-llm or-port (concat root "or.eld") or-log) mocks)
+           (push (drgnx-ai-test-mock-llm ol-port (concat root "ol.eld") ol-log) mocks)
+           (setq port (drgnx-gateway-start))
+           ,@body)
+       (drgnx-gateway-stop)
+       (mapc #'delete-process mocks)
+       (drgnx-work-db-close-all)
+       (delete-directory root t))))
+
+(defun drgnx-gateway-openrouter-test--request (port token)
+  "POST a Messages request to the gateway at PORT with TOKEN; the status once it closed."
+  (let* ((got "") (closed nil) (body "{\"model\":\"claude-x\"}")
+         (c (open-network-stream "gw-or-test" nil "127.0.0.1" port :coding 'binary)))
+    (set-process-sentinel c (lambda (_p _e) (setq closed t)))
+    (set-process-filter c (lambda (_p s) (setq got (concat got s))))
+    (process-send-string c (format "POST /v1/messages HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nAuthorization: Bearer %s\r\nContent-Length: %d\r\n\r\n%s"
+                                   token (length body) body))
+    (let ((deadline (+ (float-time) 8))) (while (and (not closed) (< (float-time) deadline)) (accept-process-output nil 0.01)))
+    (and (string-match "\\`HTTP/1\\.[01] \\([0-9]+\\)" got) (string-to-number (match-string 1 got)))))
+
+(defun drgnx-gateway-openrouter-test--log (file)
+  (if (file-exists-p file) (with-temp-buffer (insert-file-contents file) (buffer-string)) ""))
+
+(ert-deftest drgnx-gateway-openrouter/restrictions-reach-the-body ()
+  (drgnx-gateway-openrouter-test--with
+    (let ((token (drgnx-gateway-register
+                  (list :chain '((openrouter . "m1"))
+                        :openrouter (drgnx-gateway-restrictions drgnx-gateway-openrouter-test--restrictions)))))
+      (should (= (drgnx-gateway-openrouter-test--request port token) 200))
+      (let ((sent (drgnx-gateway-openrouter-test--log or-log)))
+        (should (string-search "\"model\":\"m1\"" sent))
+        (should (string-search "\"only\":[\"anthropic\",\"google-vertex\"]" sent))
+        (should (string-search "\"ignore\":[\"azure\"]" sent))
+        (should (string-search "\"data_collection\":\"deny\"" sent))
+        (should (string-search "\"zdr\":true" sent))))
+    ;; the body function alone: the provider object is top level, the model still replaced, nothing else touched
+    (let* ((req (list :body "{\"model\":\"x\",\"max_tokens\":5}"))
+           (json (json-parse-string (drgnx-gateway--body req "m1" (drgnx-gateway-restrictions drgnx-gateway-openrouter-test--restrictions))
+                                    :object-type 'plist)))
+      (should (equal (plist-get json :model) "m1"))
+      (should (equal (plist-get json :max_tokens) 5))
+      (should (equal (plist-get (plist-get json :provider) :data_collection) "deny")))
+    ;; the model of the request stays when the chain names none
+    (should (equal (plist-get (json-parse-string
+                               (drgnx-gateway--body (list :body "{\"model\":\"x\"}") nil '(:zdr t)) :object-type 'plist)
+                              :model)
+                   "x"))))
+
+(ert-deftest drgnx-gateway-openrouter/restrictions-travel-from-agents-eld-to-the-registration ()
+  ;; drgnx-agents--gateway: agents.eld's :openrouter reaches the registration of an OpenRouter agent, through the hub's
+  ;; register call, which keeps it as lists (the JSON call turns them into vectors)
+  (drgnx-gateway-openrouter-test--with
+    (let ((drgnx-agents-profiles nil) (drgnx-hub--exit-function #'drgnx-hub-stop))
+      (unwind-protect
+          (progn
+            (drgnx-hub-serve (drgnx-hub-socket))
+            (drgnx-agents-set-setting :openrouter drgnx-gateway-openrouter-test--restrictions)
+            (let ((s (drgnx-agents--make :name "t" :profile "claude (OpenRouter)" :cwd temporary-file-directory)))
+              (drgnx-agents--env s)
+              (let ((reg (cdar (drgnx-gateway-registrations))))
+                (should (equal (plist-get reg :openrouter) drgnx-gateway-openrouter-test--restrictions))))
+            (let ((json (drgnx-hub-register (list :chain '(("openrouter" nil))
+                                                  :openrouter '(:only ["a/b"] :ignore [] :data-collection "allow" :zdr :false)))))
+              (should (equal (plist-get (gethash (drgnx-gateway--hash (plist-get json :token)) drgnx-gateway--registrations)
+                                        :openrouter)
+                             '(:only ("a/b") :data-collection allow)))))
+        (drgnx-hub-disconnect)
+        (drgnx-hub-stop)))))
+
+(ert-deftest drgnx-gateway-openrouter/other-providers-untouched ()
+  (drgnx-gateway-openrouter-test--with
+    ;; an Ollama step in a registration that has restrictions: its body is the request's, only the model replaced
+    (let ((token (drgnx-gateway-register
+                  (list :chain '((ollama . "q"))
+                        :openrouter (drgnx-gateway-restrictions drgnx-gateway-openrouter-test--restrictions)))))
+      (should (= (drgnx-gateway-openrouter-test--request port token) 200))
+      (let ((sent (drgnx-gateway-openrouter-test--log ol-log)))
+        (should (string-search "\"model\":\"q\"" sent))
+        (should-not (string-search "provider" sent))
+        (should-not (string-search "zdr" sent))))
+    ;; no restrictions: OpenRouter's body has no provider object either
+    (let ((token (drgnx-gateway-register (list :chain '((openrouter . "m1"))))))
+      (should (= (drgnx-gateway-openrouter-test--request port token) 200))
+      (should-not (string-search "\"provider\"" (drgnx-gateway-openrouter-test--log or-log))))
+    ;; the body function without a provider object is what it was
+    (should (equal (drgnx-gateway--body (list :body "{\"model\":\"x\",\"a\":1}") "m1") "{\"model\":\"m1\",\"a\":1}"))
+    (should (equal (drgnx-gateway--body (list :body "{\"model\":\"x\",\"a\":1}") nil) "{\"model\":\"x\",\"a\":1}"))
+    ;; an agent whose chain has no OpenRouter step is registered without them
+    (let ((drgnx-agents-profiles nil) (drgnx-hub--exit-function #'drgnx-hub-stop))
+      (unwind-protect
+          (progn
+            (drgnx-hub-serve (drgnx-hub-socket))
+            (drgnx-agents-set-setting :openrouter drgnx-gateway-openrouter-test--restrictions)
+            (drgnx-agents--env (drgnx-agents--make :name "o" :profile "claude (Ollama)" :cwd temporary-file-directory))
+            (let ((reg (cdar (drgnx-gateway-registrations))))
+              (should reg)
+              (should-not (plist-get reg :openrouter))))
+        (drgnx-hub-disconnect)
+        (drgnx-hub-stop)))))
+
+(ert-deftest drgnx-gateway-openrouter/saved-in-agents-eld-comments-kept ()
+  (let* ((root (file-name-as-directory (make-temp-file "drgnx-gw-or" t)))
+         (process-environment (cons (concat "DRGNX_CONFIG_DIR=" root) process-environment))
+         (file (concat root "agents.eld")))
+    (unwind-protect
+        (progn
+          (should-not (drgnx-agents-openrouter-restrictions))
+          (with-temp-file file (insert ";; my agents\n(:default \"claude\"   ; the usual one\n :mcp (coordination))\n"))
+          (drgnx-agents-set-setting :openrouter drgnx-gateway-openrouter-test--restrictions)
+          (let ((text (with-temp-buffer (insert-file-contents file) (buffer-string))))
+            (should (string-search ";; my agents" text))
+            (should (string-search "; the usual one" text))
+            (should (string-search ":mcp (coordination)" text)))
+          (should (equal (drgnx-agents-default-profile) "claude"))
+          (should (equal (drgnx-agents-openrouter-restrictions) drgnx-gateway-openrouter-test--restrictions))
+          ;; saving again replaces the value only
+          (drgnx-agents-set-setting :openrouter '(:only ("anthropic") :data-collection allow))
+          (should (equal (drgnx-agents-openrouter-restrictions) '(:only ("anthropic") :data-collection allow)))
+          (should (string-search "; the usual one" (with-temp-buffer (insert-file-contents file) (buffer-string))))
+          ;; what is not a restriction is dropped when read: slugs that could break the JSON or the line, odd values
+          (drgnx-agents-set-setting :openrouter '(:only ("ok" "bad\"slug" 5) :ignore "x" :data-collection maybe :zdr maybe))
+          (should (equal (drgnx-agents-openrouter-restrictions) '(:only ("ok"))))
+          (drgnx-agents-set-setting :openrouter nil)
+          (should-not (drgnx-agents-openrouter-restrictions)))
+      (delete-directory root t))))
+
+(defun drgnx-gateway-openrouter-test--page-text (use-gateway root)
+  "The text of Claude Code's settings page for ROOT, USE-GATEWAY as `drgnx-agents-use-gateway'."
+  (let ((drgnx-agents-use-gateway use-gateway))
+    (with-current-buffer (drgnx-agent-settings-open 'claude root)
+      (prog1 (buffer-string) (kill-buffer (current-buffer))))))
+
+(ert-deftest drgnx-gateway-openrouter/direct-route-says-gateway-only ()
+  (drgnx-agent-config-test-env
+    (let ((process-environment (cons (concat "DRGNX_CONFIG_DIR=" home "cfg") process-environment))
+          (drgnx-agents-profiles nil))
+      (drgnx-agents-set-setting :openrouter drgnx-gateway-openrouter-test--restrictions)
+      ;; no gateway: the page says the setting does not apply, and where the account's settings are
+      (let ((text (drgnx-gateway-openrouter-test--page-text nil root)))
+        (should (string-search "applies through drgnx's gateway only; without it, your OpenRouter account settings apply" text))
+        (should (string-search "https://openrouter.ai/settings/privacy" text))
+        (should-not (string-search "google-vertex" text)))
+      ;; through the gateway: the restrictions are shown, with a Change button
+      (let ((text (drgnx-gateway-openrouter-test--page-text t root)))
+        (should (string-search "OpenRouter restrictions" text))
+        (should (string-search "only anthropic, google-vertex" text))
+        (should (string-search "never azure" text))
+        (should (string-search "[Change…]" text))
+        (should-not (string-search "applies through drgnx's gateway only" text))))))
+
+(ert-deftest drgnx-gateway-openrouter/the-command-asks-and-saves ()
+  (drgnx-agent-config-test-env
+    (let ((process-environment (cons (concat "DRGNX_CONFIG_DIR=" home "cfg") process-environment))
+          (drgnx-agents-profiles nil) (answers (list "anthropic, google-vertex" "azure" "deny" t)))
+      (cl-letf (((symbol-function 'read-string) (lambda (&rest _) (pop answers)))
+                ((symbol-function 'completing-read) (lambda (&rest _) (pop answers)))
+                ((symbol-function 'y-or-n-p) (lambda (&rest _) (pop answers))))
+        (with-current-buffer (drgnx-agent-settings-open 'claude root)
+          (unwind-protect
+              (progn (drgnx-agent-settings-openrouter)
+                     (should-not answers)
+                     (should (equal (drgnx-agents-openrouter-restrictions) drgnx-gateway-openrouter-test--restrictions)))
+            (kill-buffer (current-buffer))))
+        ;; a slug that is not one is refused and nothing is saved
+        (setq answers (list "bad slug!" "" "allow" nil))
+        (with-current-buffer (drgnx-agent-settings-open 'claude root)
+          (unwind-protect
+              (progn (should-error (drgnx-agent-settings-openrouter) :type 'user-error)
+                     (should (equal (drgnx-agents-openrouter-restrictions) drgnx-gateway-openrouter-test--restrictions)))
+            (kill-buffer (current-buffer))))))))
+
+(ert-deftest drgnx-gateway-openrouter/the-command-is-registered-with-keys ()
+  (drgnx-agent-settings--setup)
+  (should (drgnx-commands-get 'agent-settings-openrouter))
+  (dolist (profile '("vscode" "emacs" "vim"))
+    (let ((text (with-temp-buffer (insert-file-contents (expand-file-name (format "keys/%s.eld" profile) drgnx-dir)) (buffer-string))))
+      (should (string-match-p "(agent-settings-openrouter \"r\" :map (drgnx-agent-settings \\. drgnx-agent-settings-mode-map))" text)))))
+
+;;; gateway-openrouter-test.el ends here

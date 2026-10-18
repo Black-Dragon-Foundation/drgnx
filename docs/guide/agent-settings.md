@@ -36,6 +36,14 @@ drgnx never reads, shows or copies a key. The line says where the key is: the ag
 variable, or your Keychain or keyring. A route whose key drgnx can keep has **[Store key…]**. It asks for the key with
 the input hidden and stores it in the macOS Keychain or the Linux keyring ([ai.md](ai.md)).
 
+An OpenRouter route also shows the **OpenRouter restrictions** (which providers it may use, whether they may keep data;
+[ai.md](ai.md#openrouter-restrictions)) with **[Change…]**, the command **OpenRouter Restrictions…** (`r`). It asks for
+the providers to use only, the providers to avoid (slugs, comma separated, empty for none), whether providers may keep
+your data, and whether to use only zero-data-retention endpoints, and saves the answers as `:openrouter` in
+`agents.eld`: one setting for every OpenRouter route. The restrictions apply through drgnx's gateway. A route that goes
+direct (Codex, or no gateway) says *applies through drgnx's gateway only; without it, your OpenRouter account settings
+apply* and links to `https://openrouter.ai/settings/privacy`.
+
 A setting that overrides a route is shown in the warning colour. Examples: a Claude Code settings file whose `env`
 sets `ANTHROPIC_BASE_URL`, or a Codex `model_provider` that replaces the ChatGPT login.
 
@@ -68,6 +76,7 @@ The same keys in every key profile (VS Code, Emacs, Vim):
 | `SPC` | Turn On or Off | an MCP server (Codex, Kimi Code) or a skill (Claude Code, Codex, Gemini) |
 | `n` | New Skill… | a new `SKILL.md` with its name and description |
 | `o` | Open Its File | the file this line comes from, at its line |
+| `r` | OpenRouter Restrictions… | which providers OpenRouter may use, and whether they may keep data |
 | `TAB` | Other Agent… | another agent's page, for the same project |
 
 Every row has buttons for the same commands, and every section has **[Add…]** (Skills: **[New Skill…]**; MCP
