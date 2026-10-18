@@ -18,6 +18,7 @@
 (require 'subr-x)
 (require 'drgnx-paths)
 (require 'drgnx-acp)
+(require 'drgnx-agent-config)          ; `drgnx-agent-config-vendor-env'
 
 (cl-defstruct (drgnx-agent-session (:constructor drgnx-agents--make) (:copier nil))
   name profile cwd conn acp-id (status 'starting) entries queue (mode 'queue) capabilities usage commands
@@ -373,13 +374,9 @@ not read, no hub, or a hub that did not keep them all is a `user-error' — neve
 (the Live browser's endpoint, docs/guide/live.md).  One that fails is reported and skipped, and so is anything
 returned that is not a string.")
 
-(defcustom drgnx-agents-scrubbed-env
-  '("ANTHROPIC_API_KEY" "ANTHROPIC_AUTH_TOKEN" "ANTHROPIC_BASE_URL" "ANTHROPIC_MODEL" "ANTHROPIC_SMALL_FAST_MODEL"
-    "ANTHROPIC_DEFAULT_HAIKU_MODEL" "ANTHROPIC_DEFAULT_SONNET_MODEL" "ANTHROPIC_DEFAULT_OPUS_MODEL"
-    "ANTHROPIC_DEFAULT_FABLE_MODEL" "CLAUDE_CODE_SUBAGENT_MODEL" "CLAUDE_CODE_OAUTH_TOKEN" "CLAUDE_CODE_USE_BEDROCK"
-    "CLAUDE_CODE_USE_VERTEX" "OPENAI_API_KEY" "OPENAI_BASE_URL" "OPENROUTER_API_KEY" "MOONSHOT_API_KEY"
-    "DEEPSEEK_API_KEY" "GEMINI_API_KEY" "GOOGLE_API_KEY")
+(defcustom drgnx-agents-scrubbed-env (copy-sequence drgnx-agent-config-vendor-env)
   "Keys never inherited by agents: variables of Emacs's environment that an agent does not get.
+MCP Test and Hook Test on the Agent Settings page unset the same list (drgnx-agent-check.el).
 An agent gets the variables of its own route (the provider key or the gateway token, the model names) and
 nothing else from this list, so a Kimi agent never sees your DeepSeek or OpenRouter key.  A profile without a
 route (`:ai') is the user's own login and also keeps its own vendor's names (`drgnx-agents-own-env').  To pass

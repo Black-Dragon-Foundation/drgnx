@@ -28,6 +28,15 @@
 (defconst drgnx-agent-config-mask "••••"
   "What replaces a secret in text shown to the user.")
 
+(defconst drgnx-agent-config-vendor-env
+  '("ANTHROPIC_API_KEY" "ANTHROPIC_AUTH_TOKEN" "ANTHROPIC_BASE_URL" "ANTHROPIC_MODEL" "ANTHROPIC_SMALL_FAST_MODEL"
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL" "ANTHROPIC_DEFAULT_SONNET_MODEL" "ANTHROPIC_DEFAULT_OPUS_MODEL"
+    "ANTHROPIC_DEFAULT_FABLE_MODEL" "CLAUDE_CODE_SUBAGENT_MODEL" "CLAUDE_CODE_OAUTH_TOKEN" "CLAUDE_CODE_USE_BEDROCK"
+    "CLAUDE_CODE_USE_VERTEX" "OPENAI_API_KEY" "OPENAI_BASE_URL" "OPENROUTER_API_KEY" "MOONSHOT_API_KEY"
+    "DEEPSEEK_API_KEY" "GEMINI_API_KEY" "GOOGLE_API_KEY")
+  "The model vendors' keys and switches in Emacs's environment that what drgnx starts for an agent never inherits:
+the default of `drgnx-agents-scrubbed-env' (agents), and what MCP Test and Hook Test unset (drgnx-agent-check.el).")
+
 ;;;; Kinds and homes
 
 (defun drgnx-agent-config-title (kind)

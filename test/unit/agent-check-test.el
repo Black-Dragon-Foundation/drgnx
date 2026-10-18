@@ -566,6 +566,29 @@ with the HTTP mock stopped afterwards."
           ('gemini (should (equal (plist-get r :stdout) (concat dir "|" dir))))
           (_ (should (equal (plist-get r :stdout) "x|"))))))))
 
+(ert-deftest drgnx-agent-check/no-vendor-key-reaches-a-tested-server-or-hook ()
+  ;; the agents' scrub list applies to Test too: a project's server or hook never gets this Emacs's provider keys;
+  ;; a key the item's own spec sets still reaches it (names only are compared: values are masked anyway)
+  (drgnx-agent-check-test-env
+    (let* ((process-environment (append '("OPENROUTER_API_KEY=sk-or-leak-1234567" "DEEPSEEK_API_KEY=sk-ds-leak-7654321")
+                                        process-environment))
+           (marker (drgnx-agent-check-test--marker))
+           (r (drgnx-agent-check-test--mcp
+               (drgnx-agent-check-test--stdio-item "echo-env" marker '(("MOONSHOT_API_KEY" . "sk-own-value-111")))
+               root))
+           (names (and (string-match "env names: \\(.*\\)" (plist-get r :stderr))
+                       (split-string (match-string 1 (plist-get r :stderr)) " " t))))
+      (should (eq (plist-get r :status) 'ok))
+      (should (member "MOONSHOT_API_KEY" names))
+      (should-not (member "OPENROUTER_API_KEY" names))
+      (should-not (member "DEEPSEEK_API_KEY" names))
+      (let* ((hook (list :kind 'claude :section 'hook :name "Stop" :from 'project :file "/f"
+                         :spec (list :event "Stop" :command "env | cut -d= -f1 | grep API_KEY; echo done")))
+             (h (drgnx-agent-check-test--wait (lambda (cb) (drgnx-agent-check-hook hook root cb)))))
+        (should (string-search "done" (plist-get h :stdout)))
+        (should-not (string-search "OPENROUTER_API_KEY" (plist-get h :stdout)))
+        (should-not (string-search "DEEPSEEK_API_KEY" (plist-get h :stdout)))))))
+
 (ert-deftest drgnx-agent-check/an-sse-server-is-told-from-the-answer ()
   (drgnx-agent-check-test-env
     (let* ((port (drgnx-mock-mcp-http-start "legacy-sse"))

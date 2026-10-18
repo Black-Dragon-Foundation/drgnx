@@ -123,6 +123,12 @@ again; the message after a write says so.
 - **Hook** (**[Test (runs the command)]**): this runs the hook's command for real, in the project, with a sample
   event on its input. It asks "Run COMMAND for real?" first. The row shows its exit status.
 
+A tested server or hook gets Emacs's environment without the model vendors' keys and switches, the same list agents
+never inherit (`drgnx-agents-scrubbed-env`: `ANTHROPIC_*`, `OPENAI_*`, `OPENROUTER_API_KEY`, `MOONSHOT_API_KEY`,
+`DEEPSEEK_API_KEY`, `GEMINI_API_KEY`, `GOOGLE_API_KEY`, …), so a project's server never receives your provider keys.
+What the item sets itself (its `env`, `${VAR}` values, a bearer token from a variable) it gets; a hook also gets its
+project directory variables.
+
 What runs is what you confirmed: Test, Edit and Remove read the item from its file again, and if it is no longer
 what the page shows (someone changed the file), they stop with "changed on disk: Refresh (g)". Test All skips such
 a server and says so.

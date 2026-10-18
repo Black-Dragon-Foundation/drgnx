@@ -7,7 +7,8 @@
 ;;   crash       says "mock-mcp: fatal: cannot open its database" on stderr and exits 3 before reading
 ;;   flood       never answers: fills stdout and stderr with junk, forever
 ;;   echo-env    answers like ok, prints on stderr its command line ("args: …") and the variables of its environment
-;;               called MOCK_* or API_KEY, and names a tool NAME=VALUE for every variable called MOCK_SECRET*
+;;               called MOCK_* or API_KEY, the names (no values) of those whose name has API_KEY ("env names: A B"),
+;;               and names a tool NAME=VALUE for every variable called MOCK_SECRET*
 ;;   error       answers initialize with a JSON-RPC error whose message is 800 characters long
 ;;   oom         kills itself with SIGKILL when the first request comes
 ;;   fork-child  starts a second mock (hang, same MARKER) and then hangs
@@ -71,6 +72,12 @@
              (alist-get 'args (and ppid (process-attributes ppid))))
     (when (equal mode "echo-env")
       (message "args: %S" command-line-args)
+      (message "env names: %s" (mapconcat #'identity
+                                          (cl-loop for e in process-environment
+                                                   for name = (car (split-string e "="))
+                                                   when (and (string-search "=" e) (string-search "API_KEY" name))
+                                                   collect name)
+                                          " "))
       (dolist (e process-environment)
         (when (string-match-p "\\`\\(MOCK_\\|API_KEY=\\)" e) (message "env: %s" e))))
     (condition-case nil

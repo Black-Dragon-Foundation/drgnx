@@ -765,13 +765,23 @@ the SPEC of other agents as it is."
       (funcall callback (drgnx-agent-check--mask-result result secrets tool-secrets))
     (error (ignore-errors (message "Agent check: %s" (drgnx-agent-config-mask-text (error-message-string err) secrets))))))
 
+(defvar drgnx-agents-scrubbed-env)
+
+(defun drgnx-agent-check--scrub (env)
+  "Bare names (each unsets the variable) for the vendor keys an agent does not inherit
+\(`drgnx-agents-scrubbed-env', else `drgnx-agent-config-vendor-env'), but those ENV (\"NAME=value\"…) sets itself."
+  (let ((set (mapcar (lambda (e) (car (split-string e "="))) env)))
+    (cl-remove-if (lambda (name) (member name set))
+                  (if (boundp 'drgnx-agents-scrubbed-env) drgnx-agents-scrubbed-env drgnx-agent-config-vendor-env))))
+
 (cl-defun drgnx-agent-check--start (argv &key input dir env limit unit done)
   "Run ARGV (a list) with INPUT on its stdin, in DIR with ENV added, ended after LIMIT seconds (everything in the
-systemd scope UNIT, else the process tree).  DONE is called once with the process, the output, the errors,
-`timed-out' (non-nil when LIMIT ended it) and the time.  The process."
+systemd scope UNIT, else the process tree).  The vendor keys of Emacs's environment stay out, as for an agent
+\(`drgnx-agent-check--scrub'): a project's server or hook never gets them.  DONE is called once with the process, the
+output, the errors, `timed-out' (non-nil when LIMIT ended it) and the time.  The process."
   (let* ((start (float-time)) (out "") (err "") (timed-out nil) (finished nil)
          (default-directory (file-name-as-directory (expand-file-name (or dir default-directory))))
-         (process-environment (append env process-environment))
+         (process-environment (append env (drgnx-agent-check--scrub env) process-environment))
          (err-proc (make-pipe-process
                     :name "drgnx-check-stderr" :noquery t :coding 'utf-8-unix
                     :filter (lambda (_p s) (when (< (length err) drgnx-agent-check--capture-limit)
