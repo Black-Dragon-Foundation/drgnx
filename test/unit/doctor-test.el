@@ -383,7 +383,8 @@
           (should-not (drgnx-doctor--drgnx-on-path))                         ; a directory
           (delete-directory zprofile)
           (write-region "export PATH=\"$HOME/.local/bin:$PATH\"\n" nil zprofile)
-          (cl-letf (((symbol-function 'insert-file-contents) (lambda (&rest _) (signal 'file-error '("Reading" "denied")))))
+          (cl-letf (((symbol-function 'insert-file-contents)
+                     (lambda (&rest _) (signal 'file-error '("Reading" "denied")))))
             (should-not (drgnx-doctor--drgnx-on-path)))                      ; the read fails
           (should (drgnx-doctor--drgnx-on-path)))                            ; readable again: counted
       (delete-directory home t))))

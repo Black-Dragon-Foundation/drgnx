@@ -940,13 +940,15 @@ fy with a newer fa 2.0.  Returns (FX FY FA-1.0-ENTRY)."
   (drgnx-pkg-test--with root
     (let ((dir (concat root "compat-1.0/")) (compiled nil) (drgnx-pkg-native-compile t) (drgnx-pkg--warnings nil))
       (make-directory dir t)
-      (dolist (f '("compat.el" "compat-29.el" "compat-macs.el")) (write-region "" nil (concat dir f) nil 'silent))
+      ;; compat-27/29 are never loaded here (compat loads compat-NN only on an Emacs older than NN); compat-99 could be
+      (dolist (f '("compat.el" "compat-27.el" "compat-29.el" "compat-99.el" "compat-macs.el"))
+        (write-region "" nil (concat dir f) nil 'silent))
       (cl-letf (((symbol-function 'native-compile)
                  (lambda (f &rest _)
                    (push (file-name-nondirectory f) compiled)
-                   (when (string-match-p "compat-29" f) (error "needs its siblings")))))
+                   (when (string-match-p "compat-2" f) (error "needs its siblings")))))
         (drgnx-pkg--native-compile (list dir)))
-      (should (equal (sort compiled #'string<) '("compat-macs.el" "compat.el")))
+      (should (equal (sort compiled #'string<) '("compat-99.el" "compat-macs.el" "compat.el")))
       (should-not drgnx-pkg--warnings))))
 
 (ert-deftest drgnx-pkg/soft-pin-fallback-keeps-newer-versions ()
@@ -993,15 +995,39 @@ fy with a newer fa 2.0.  Returns (FX FY FA-1.0-ENTRY)."
         (should (plist-get r :ok))
         (should-not (plist-get r :pruned)))
       (should (equal (drgnx-pkg-test--installed) '("fa-1.0" "fb-1.0" "fc-1.0")))
-      (let* ((before (drgnx-pkg-current-generation))
-             (r (drgnx-pkg-test--sync root :archives `(("fx" . ,arch)) :prune t)))
+      ;; installed by hand after the last generation: only the "before prune" generation has it
+      (let ((hand (expand-file-name "fh-1.0/" (drgnx-elpa-dir))))
+        (make-directory hand t)
+        (write-region "(define-package \"fh\" \"1.0\" \"by hand\" nil)\n" nil (concat hand "fh-pkg.el") nil 'silent)
+        (write-region "(provide 'fh)\n" nil (concat hand "fh.el") nil 'silent))
+      (let ((r (drgnx-pkg-test--sync root :archives `(("fx" . ,arch)) :prune t)))
         (should (plist-get r :ok))
-        (should (equal (plist-get r :pruned) '(fc)))
+        (should (equal (plist-get r :pruned) '(fc fh)))
         (should (equal (drgnx-pkg-test--installed) '("fa-1.0" "fb-1.0")))
         (should-not (assq 'fc (drgnx-pkg-read-lock)))
-        (should (string-match-p "^pruned: fc$" (with-output-to-string (drgnx-pkg--report r))))
-        (drgnx-pkg-rollback before)
-        (should (equal (drgnx-pkg-test--installed) '("fa-1.0" "fb-1.0" "fc-1.0")))))))
+        (let ((out (with-output-to-string (drgnx-pkg--report r))))
+          (should (string-match-p "^pruned: fc fh$" out))
+          (should (string-match-p "restart drgnx" out))))                   ; a daemon still holds their autoloads
+      (should (equal (plist-get (cdr (nth 1 (drgnx-pkg-generations))) :note) "before prune"))
+      (drgnx-pkg-rollback)                                    ; no N: the generation before the current one
+      (should (equal (drgnx-pkg-test--installed) '("fa-1.0" "fb-1.0" "fc-1.0" "fh-1.0"))))))
+
+(ert-deftest drgnx-pkg/sync-prune-dry-run-lists-and-removes-nothing ()
+  ;; Review I3: `--prune --dry-run' says what would go.
+  (drgnx-pkg-test--with root
+    (let ((arch (drgnx-pkg-test--archive (concat root "arch") '((fa "1.0") (fb "1.0" ((fa "1.0"))) (fc "1.0")))))
+      (drgnx-pkg-test--want root 'fb 'fc)
+      (drgnx-pkg-test--sync root :archives `(("fx" . ,arch)))
+      (drgnx-pkg-test--want root 'fb)
+      (make-directory (concat root "mods") t)
+      (should (equal (drgnx-pkg-prune-candidates (concat root "mods")) '(fc)))
+      (let ((gens (drgnx-pkg-generations)) (drgnx-dir (concat root "fake-checkout/")))   ; the CLI reads its modules/
+        (make-directory (concat drgnx-dir "modules") t)
+        (should (equal (with-output-to-string (should (eql (drgnx-pkg-cli-run '("sync" "--prune" "--dry-run")) 0)))
+                       "would prune: fc\n"))
+        (should (equal (drgnx-pkg-test--installed) '("fa-1.0" "fb-1.0" "fc-1.0")))
+        (should (equal (drgnx-pkg-generations) gens))
+        (with-output-to-string (should (eql (drgnx-pkg-cli-run '("sync" "--dry-run")) 1)))))))   ; --dry-run needs --prune
 
 (ert-deftest drgnx-pkg/sync-prune-keeps-what-use-package-ensure-asked-for ()
   ;; C1: a want recorded by :ensure (or an external module) stays in the manifest after the sync that installed it,

@@ -11,6 +11,7 @@ drgnx sync                  install what drgnx needs (from the archives, the cac
 drgnx sync --offline        only the lock and the cache — no network
 drgnx sync --seed DIR       first copy the packages of another Emacs (e.g. ~/.config/emacs/elpa), then sync
 drgnx sync --prune          also remove the packages the manifest no longer needs (listed; rollback restores them)
+drgnx sync --prune --dry-run  only list what --prune would remove
 drgnx upgrade               the newest versions; if they break, the previous generation comes back
 drgnx rollback [N]          the packages of generation N (default: the one before the current one)
 drgnx generations           the generations kept (five)
@@ -55,7 +56,16 @@ byte-compiles, compiles to native code ahead of time (when your Emacs has native
 at startup. A download or an install that fails stops the sync with nothing changed, and a file that did not
 install is removed from the cache. A download or a lock write that stops half way (an error, `C-g`) leaves no
 partial file; what a killed sync left (`*.part` in the cache, `.drgnx.lock.eld.tmp-*`) the next sync removes. A file that does not compile (byte or native) is not a failure: the package is
-installed, runs that file less compiled, and the sync prints a `WARNING` line naming the package and the file (compat's per-version files, `compat-29.el` and the like, load only on an older Emacs and are not compiled to native code, so they never warn). A plain sync never removes a package: one that left the manifest (a module turned off) or was installed by hand stays and is locked too. `drgnx sync --prune` removes them: every installed package the manifest does not name and no package of the manifest requires — hand-installed ones included. It is never automatic, it lists what it removed (`pruned: …`), it removes nothing while a package is missing, and it first keeps a generation of the state before, so `drgnx rollback` brings them back.
+installed, runs that file less compiled, and the sync prints a `WARNING` line naming the package and the file (compat's per-version files for versions your Emacs already has, such as `compat-29.el` on Emacs 30, are never
+loaded and are not compiled to native code, so they never warn).
+
+A plain sync never removes a package: one that left the manifest (a module turned off) or was installed by hand
+stays and is locked too. `drgnx sync --prune` removes them: every installed package the manifest does not name and
+no package of the manifest requires — hand-installed ones included. Packages that `use-package … :ensure` or an
+external module asked for count as named. It is never automatic, it lists what it removed (`pruned: …`), it removes
+nothing while a package is missing, and it first keeps a generation of the state before, so `drgnx rollback`
+brings them back. `drgnx sync --prune --dry-run` only prints `would prune: …` (from the packages installed now and
+the current manifest) and changes nothing.
 
 ### Packages from Git
 
@@ -182,7 +192,9 @@ after a reboot does not hold it, and of two commands taking over the same stale 
 
 `drgnx service-unit` prints a systemd user unit (`Type=notify`, `emacs --fg-daemon=drgnx
 --init-directory=<checkout>/init`); `drgnx service-unit DIR` writes `DIR/drgnx.service`. drgnx never installs or
-enables it. A daemon that fails is restarted after 2 seconds, at most 3 times a minute, so a second drgnx holding the server name does not loop. The unit runs the Emacs that ran the command — `$DRGNX_EMACS`, default `emacs` — by its full path
+enables it. A daemon that fails is restarted after 2 seconds and
+started at most 3 times a minute (after that, `systemctl --user reset-failed drgnx`), so a second drgnx holding the
+server name does not loop. The unit runs the Emacs that ran the command — `$DRGNX_EMACS`, default `emacs` — by its full path
 (quoted for systemd, so paths with spaces work). Choose another one when you write the unit, e.g.
 `DRGNX_EMACS=emacs-pgtk drgnx service-unit DIR` on Fedora where `emacs` may be another build. To run it next to your current Emacs daemon:
 

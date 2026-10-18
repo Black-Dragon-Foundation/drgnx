@@ -493,8 +493,10 @@ in the packages directory itself: an .eln's name hashes its source's path."
     (dolist (dir dirs)
       (drgnx-pkg--progress "compiling %s to native code" (file-name-nondirectory (directory-file-name dir)))
       (dolist (f (directory-files dir t "\\`[^.].*\\.el\\'"))
-        ;; compat-NN.el need their siblings at compile time and load only on an old Emacs
-        (unless (string-match-p "\\(-\\(pkg\\|autoloads\\)\\|/compat-[0-9]+\\)\\.el\\'" f)
+        ;; compat-NN.el need their siblings at compile time; compat loads one only on an Emacs older than NN
+        (unless (or (string-match-p "-\\(pkg\\|autoloads\\)\\.el\\'" f)
+                    (and (string-match "/compat-\\([0-9]+\\)\\.el\\'" f)
+                         (<= (string-to-number (match-string 1 f)) emacs-major-version)))
           (condition-case err (let ((native-comp-eln-load-path (cons (drgnx-pkg-eln-dir) native-comp-eln-load-path)))
                                 (native-compile f))
             (error (drgnx-pkg--warn "%s: %s does not compile to native code (%s; it runs byte-compiled)"
@@ -733,11 +735,9 @@ than V2 needs\")."
       (mapc #'visit descs))
     (nreverse out)))
 
-(defun drgnx-pkg--prune (manifest)
-  "Delete from the packages directory being built (`package-user-dir') every package that MANIFEST neither
-names nor needs, through the requirements of the installed ones; the names deleted, sorted."
-  (setq package-alist nil)
-  (package-load-all-descriptors)
+(defun drgnx-pkg--prunable (manifest)
+  "The installed packages (`package-alist' as loaded from `package-user-dir') that MANIFEST neither names nor
+needs, through the requirements of the installed ones: ((NAME . DESCS)…), sorted by name."
   (let (keep doomed)
     (cl-labels ((visit (name)
                   (unless (memq name keep)
@@ -746,10 +746,22 @@ names nor needs, through the requirements of the installed ones; the names delet
                       (dolist (r (package-desc-reqs d)) (visit (car r)))))))
       (mapc #'visit manifest))
     (pcase-dolist (`(,name . ,descs) package-alist)
-      (unless (memq name keep)
-        (push name doomed)
-        (dolist (d descs) (package-delete d t t))))
-    (sort doomed (lambda (a b) (string< a b)))))
+      (unless (memq name keep) (push (cons name descs) doomed)))
+    (sort doomed (lambda (a b) (string< (car a) (car b))))))
+
+(defun drgnx-pkg--prune (manifest)
+  "Delete from the packages directory being built (`package-user-dir') every package that MANIFEST neither
+names nor needs; the names deleted, sorted."
+  (setq package-alist nil)
+  (package-load-all-descriptors)
+  (mapcar (lambda (p) (dolist (d (cdr p)) (package-delete d t t)) (car p)) (drgnx-pkg--prunable manifest)))
+
+(defun drgnx-pkg-prune-candidates (&optional modules-dir)
+  "What `drgnx sync --prune' would remove now: the names of the packages in the packages directory that the
+manifest (MODULES-DIR: where modules live) neither names nor needs.  Reads; changes nothing."
+  (let ((package-user-dir (drgnx-elpa-dir)) (package-alist nil) (package-directory-list nil))
+    (when (file-directory-p package-user-dir) (package-load-all-descriptors))
+    (mapcar #'car (drgnx-pkg--prunable (drgnx-pkg-manifest modules-dir)))))
 
 (cl-defun drgnx-pkg-sync (&key (archives nil archives-given) offline upgrade seed modules-dir prune)
   "Install the manifest into the packages directory.  ARCHIVES: alist (NAME . URL-or-DIR) — when not
@@ -985,23 +997,30 @@ user's step (docs/guide/packages.md)."
   (dolist (w (plist-get r :warnings)) (drgnx-pkg--print "WARNING %s" w))
   (when (plist-get r :generation) (drgnx-pkg--print "generation %d" (plist-get r :generation)))
   (when (plist-get r :error) (drgnx-pkg--print "drgnx: %s" (plist-get r :error)))
-  (when (or (plist-get r :installed) (plist-get r :restored)) (drgnx-pkg--print "%s" drgnx-pkg--restart-note)))
+  (when (or (plist-get r :installed) (plist-get r :restored) (plist-get r :pruned))
+    (drgnx-pkg--print "%s" drgnx-pkg--restart-note)))
 
 (defun drgnx-pkg-cli-run (args)
   "Run the package command ARGS (strings); the exit code."
   (condition-case err
       (pcase args
         (`("sync" . ,flags)
-         (let (opts)
+         (let (opts dry-run)
            (while flags
              (pcase (pop flags)
                ("--offline" (setq opts (append opts (list :offline t))))
                ("--seed" (setq opts (append opts (list :seed (pop flags)))))
                ("--prune" (setq opts (append opts (list :prune t))))
-               (f (drgnx-pkg--error "unknown sync option %s (--offline, --seed DIR, --prune)" f))))
-           (let ((r (let ((drgnx-pkg-verbose t)) (apply #'drgnx-pkg-sync opts))))
-             (drgnx-pkg--report r)
-             (if (plist-get r :ok) 0 1))))
+               ("--dry-run" (setq dry-run t))
+               (f (drgnx-pkg--error "unknown sync option %s (--offline, --seed DIR, --prune [--dry-run])" f))))
+           (when (and dry-run (not (plist-get opts :prune))) (drgnx-pkg--error "--dry-run goes with --prune"))
+           (if dry-run
+               (let ((names (drgnx-pkg-prune-candidates)))
+                 (drgnx-pkg--print "%s" (if names (format "would prune: %s" (mapconcat #'symbol-name names " ")) "nothing to prune"))
+                 0)
+             (let ((r (let ((drgnx-pkg-verbose t)) (apply #'drgnx-pkg-sync opts))))
+               (drgnx-pkg--report r)
+               (if (plist-get r :ok) 0 1)))))
         (`("upgrade")
          (let ((r (let ((drgnx-pkg-verbose t)) (drgnx-pkg-upgrade))))
            (drgnx-pkg--report r)
