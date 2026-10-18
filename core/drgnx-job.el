@@ -151,7 +151,10 @@ own repository).  Returns its id; nothing starts (unless `drgnx-job-auto-start')
                          :estimate (drgnx-job--estimate tasks) :budget budget
                          :unpriced-budget (and budget   ; every profile a role may fall back to, the reviewers' too
                                                (drgnx-job--unpriced-chain
-                                                (delete-dups (apply #'append (mapcar #'drgnx-job-route (if drgnx-job-review (cons 'review roles) roles)))))))))
+                                                (delete-dups (apply #'append (mapcar #'drgnx-job-route
+                                                                                     (if drgnx-job-review
+                                                                                         (append '(review) (and (alist-get 'review-long (drgnx-job--routes)) '(review-long)) roles)
+                                                                                       roles)))))))))
     (drgnx-coord-job-create :id id :title (plist-get plan :title) :plan (expand-file-name file) :repo repo
                             :tasks (mapcar (lambda (task) (list :n (plist-get task :n) :title (plist-get task :title)
                                                                 :role (plist-get task :role) :deps (plist-get task :deps)))
@@ -223,7 +226,7 @@ own does it, the hub goes on.  The summary shows it; a restart forgets it (the s
     (run-at-time 0 nil (lambda () (remhash id drgnx-job--step-pending) (with-demoted-errors "drgnx job: %S" (drgnx-job-step id))))))
 
 (defun drgnx-job--git (dir &rest args)
-  "Run git ARGS in DIR (short operations: worktrees, merges): (EXIT . OUTPUT).  OUTPUT is git's stdout, and, when it
+  "Run git ARGS in DIR (short operations: reads, the job's worktree at approval, `merge --abort'): (EXIT . OUTPUT).  OUTPUT is git's stdout, and, when it
 fails, its stderr after it (where a hook's refusal and `fatal:' are)."
   (let ((err (make-temp-file "drgnx-git-err")))
     (unwind-protect
@@ -299,8 +302,8 @@ process of its own: the agent starts when it is there."
   (let* ((n (plist-get task :n)) (tid (plist-get task :id)) (tree (drgnx-job--task-tree id n)) (repo (drgnx-job--repo id))
          (branch (format "job/%s-%d" id n)))
     (cond
-     ((file-directory-p tree) (drgnx-job--launch-task id task profile handover))
      ((gethash tid drgnx-job--busy))                               ; being made
+     ((file-directory-p tree) (drgnx-job--launch-task id task profile handover))
      (t (drgnx-job--git-async
          repo (list "worktree" "add" "-q" "-b" branch tree (concat "job/" id))
          (lambda (made)

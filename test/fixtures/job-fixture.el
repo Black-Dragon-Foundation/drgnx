@@ -43,6 +43,8 @@ profile \"mock\" on every route."
              (clrhash h))
            (when (featurep 'drgnx-job-clash) (clrhash drgnx-job-clash--starts) (clrhash drgnx-job-clash--checked))
            ,@body)
+       (dolist (p (process-list))                         ; a git of the job still running: its sentinel must not reach the next test
+         (when (string-prefix-p "drgnx-git" (process-name p)) (set-process-sentinel p #'ignore) (delete-process p)))
        (dolist (s drgnx-agents--sessions) (ignore-errors (drgnx-agents-kill s)))
        (drgnx-hub-disconnect)
        (drgnx-hub-stop)

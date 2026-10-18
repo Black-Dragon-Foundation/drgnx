@@ -257,8 +257,9 @@ clash when `drgnx-job-clash-auto-accept'); an answer with none says so (`:no-rec
   (let* ((card (plist-get reviewer :clash)) (c (drgnx-coord-card card)) (rec (drgnx-job-clash--recommendation s)))
     (when (equal (plist-get c :state) "open")
       (drgnx-coord-card-set card :data (let ((d (copy-sequence (plist-get c :data))))
-                                         (if rec (plist-put (plist-put d :recommendation rec) :no-recommendation nil)
-                                           (plist-put d :no-recommendation t))))
+                                         (cond (rec (plist-put (plist-put d :recommendation rec) :no-recommendation nil))
+                                               ((plist-get d :recommendation) d)       ; an older one stands
+                                               (t (plist-put d :no-recommendation t)))))
       (drgnx-job--changed job)
       (when (and rec drgnx-job-clash-auto-accept (plist-get rec :side) (equal (plist-get (plist-get c :data) :size) "short"))
         (run-at-time 0 nil (lambda () (with-demoted-errors "drgnx job: %S" (drgnx-job-card-act card "accept"))))))))
