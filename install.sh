@@ -331,7 +331,8 @@ install_homebrew() { # macOS without Homebrew: explained, asked, then Homebrew's
   local script
   script="$(curl -fsSL "$HOMEBREW_INSTALLER_URL")" || die 1 "could not download Homebrew's installer ($HOMEBREW_INSTALLER_URL) — nothing was installed (no network?)"
   if ((YES)); then   # nobody to answer its questions; it needs sudo to work without a password prompt
-    NONINTERACTIVE=1 /bin/bash -c "$script" || die 1 "Homebrew's installer failed (above). With --yes it cannot ask for your password: run sudo -v first, or run without --yes"
+    # </dev/null: its stdin must not be ours, which under `curl … | bash' is this script
+    NONINTERACTIVE=1 /bin/bash -c "$script" </dev/null || die 1 "Homebrew's installer failed (above). With --yes it cannot ask for your password: run sudo -v first, or run without --yes"
   else
     /bin/bash -c "$script" </dev/tty || die 1 "Homebrew's installer failed (above) — nothing else was installed"
   fi

@@ -197,7 +197,7 @@
         (progn
           (make-directory bin)
           (write-region "PIPED-SCRIPT-TEXT\n" nil drgnx-install-test--stdin)
-          (dolist (curl '("echo 'echo HB-INSTALLER NONINTERACTIVE=$NONINTERACTIVE; exit 1'"
+          (dolist (curl '("echo 'echo HB-INSTALLER NONINTERACTIVE=$NONINTERACTIVE; read x && echo GOT || echo STDIN-EOF; exit 1'"
                           "exit 22"))
             (write-region (format "#!/bin/sh\n%s\n" curl) nil (expand-file-name "curl" bin))
             (set-file-modes (expand-file-name "curl" bin) #o755)
@@ -211,6 +211,8 @@
               (should-not (string-search "emacs-plus" (substring (cdr r) (string-search "Emacs comes from Homebrew" (cdr r)))))
               (if (string-search "exit 1" curl)
                   (progn (should (string-search "HB-INSTALLER NONINTERACTIVE=1" (cdr r)))
+                         (should (string-search "STDIN-EOF" (cdr r)))
+                         (should-not (string-search "GOT" (cdr r)))
                          (should (string-search "Homebrew's installer failed" (cdr r))))
                 (should (string-search "could not download Homebrew's installer" (cdr r)))))))
       (delete-directory tmp t))))
