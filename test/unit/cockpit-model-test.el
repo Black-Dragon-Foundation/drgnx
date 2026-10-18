@@ -1,7 +1,7 @@
 ;;; cockpit-model-test.el --- batch tests: the Work cockpit's model of specs, plans, tasks, agents, jobs, reviews -*- lexical-binding: t -*-
 (require 'ert)
 (require 'cl-lib)
-(require 'drgnx-paths)
+(require 'drgnx-paths)                                ; `drgnx-dir': each test file runs in an Emacs of its own
 (load (expand-file-name "test/fixtures/cockpit-fixture" drgnx-dir) nil t)   ; a project, a job, worktrees, events
 (require 'drgnx-cockpit-model)
 
@@ -209,6 +209,9 @@
     (let ((src (drgnx-cockpit-edit-source "s-1" sessions)))
       (should (equal (plist-get src :dir) tree))
       (should (equal (plist-get src :base) "job/jx"))
+      (should (eq (plist-get src :kind) 'job))
+      (should (equal (plist-get src :task) "jx#2"))
+      (should (plist-get src :job-worktree))                     ; the worktree drgnx makes for jx#2
       (should (plist-get src :merge-base))
       (should (plist-get src :own-worktree))
       (should-not (plist-get src :stopped)))
@@ -218,6 +221,7 @@
     (let ((src (drgnx-cockpit-edit-source "s-2" sessions)))
       (should (equal (plist-get src :dir) repo))
       (should (equal (plist-get src :base) sha))
+      (should (eq (plist-get src :kind) 'native))
       (should-not (plist-get src :merge-base))
       (should-not (plist-get src :own-worktree)))
     ;; an outside agent: its registered folder and base, the paths it reported
@@ -225,6 +229,7 @@
       (should (equal (plist-get src :dir) wt-a))
       (should (equal (plist-get src :base) sha))
       (should (equal (plist-get src :paths) '("README" "new.txt")))
+      (should (eq (plist-get src :kind) 'outside))
       (should (plist-get src :own-worktree))
       (should-not (plist-get src :stopped)))
     (drgnx-coord-event-add :agent "ext:claude-code:42" :kind "stop" :summary "ended")
@@ -233,6 +238,7 @@
     (let ((src (drgnx-cockpit-edit-source (concat "silent:" (directory-file-name wt-b)))))
       (should (equal (plist-get src :dir) wt-b))
       (should (equal (plist-get src :base) "main"))
+      (should (eq (plist-get src :kind) 'silent))
       (should (plist-get src :merge-base))
       (should (plist-get src :own-worktree)))
     (should-not (drgnx-cockpit-edit-source "nobody"))))
@@ -392,7 +398,9 @@
     (let ((src (list :dir wt-a :base sha)) files diffs)
       (drgnx-cockpit-changed-files src (lambda (r) (setq files (list r))))
       (should (drgnx-cockpit-fixture-wait (lambda () files)))
-      (should (equal (sort (mapcar (lambda (f) (plist-get f :file)) (car files)) #'string<) '("README" "big.txt" "new.txt")))
+      (should (equal (sort (delq nil (mapcar (lambda (f) (plist-get f :file)) (car files))) #'string<) '("README" "big.txt" "new.txt")))
+      ;; …but counted: the merge gate must not take them for no change
+      (should (<= 2 (or (seq-some (lambda (f) (plist-get f :refused)) (car files)) 0) 3))   ; zero, key (git may skip the FIFO)
       (let ((drgnx-cockpit-diff-max-bytes 200))
         (dolist (f '("zero" "key" "pipe" "../../../../secret.txt" "big.txt" "README"))
           (drgnx-cockpit-file-diff src f (lambda (r) (push (cons f r) diffs))))

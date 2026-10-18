@@ -957,6 +957,37 @@ the adapter's `:version` argv, the program's own version flag with no IPC (`sway
 Tests use `test/fixtures/wm/fake-wm.sh`, linked as `swaymsg`, `i3-msg`, `hyprctl` and `niri` into a temp bin: it logs
 its arguments, prints the recorded reply a regexp picks (`DRGNX_FAKE_WM_MAP`) and can sleep or fail.
 
+## Pane kinds (`wb/drgnx-panes.el`)
+
+Every pane (Explorer, agents, terminal, help, …) is one data definition, a kind, made with
+`(drgnx-pane-define-kind KIND :title :buffer :placeholder :home :size :view :slot :height :fill :on-show :on-focus :stack)`.
+`:home` is `left`, `bottom`, `right` or `editor`. Callers show and find panes by kind and never use the dock, area
+or section API directly: `drgnx-pane-show` (`:buffer`, `:select`), `drgnx-pane-hide`, `drgnx-pane-toggle`,
+`drgnx-pane-focus`, `drgnx-pane-window`, `drgnx-pane-kind`, `drgnx-pane-kinds`. `drgnx-pane-show` never changes
+the selected window unless `:select` is given. `drgnx-pane-backend` (`areas`) says where kinds live; `areas` forwards
+a `left` kind to `drgnx-wb-define-section`, a `bottom` or `right` kind to `drgnx-wb-define-tab` (areas `panel` and
+`right`), an `editor` kind (its `:buffer` a name) to a `drgnx-wb-place` rule, and `:fill` to
+`drgnx-layouts-define-pane`. A backend is an entry in `drgnx-pane--backends` (the functions for `:define`, `:show`,
+`:hide`, `:window`, `:focus`); the tiled grid registers `grid` there. Switching backends and replaying the
+defined kinds into the new one is the grid's job (B3), not done here. Test: `test/unit/wb-panes-test.el`.
+
+What the `areas` backend does with the edges:
+
+- `:buffer` is a function, a buffer, or a buffer name (made when missing). A left kind ignores `show :buffer`
+  (a section's buffer is its own).
+- `hide` does nothing for a kind that is not shown: another view's left kind, or a bottom or right kind that is not
+  the area's front tab. Hiding a left kind hides the whole left dock. An editor kind has no hide (so `toggle` of
+  one that shows does nothing).
+- `drgnx-pane-window` is nil for a non-front tab and for a left kind of another view. An editor kind's window is the
+  one showing the last buffer `show` or `focus` put there on that frame (a function `:buffer` or a `show :buffer`
+  included).
+- `:size` and `:stack` are stored for the grid and not applied; the docks keep their own sizes.
+- `:on-show` runs on every `show`, for every home.
+- `show` without `:select` never moves focus. A view swap from a window inside the left dock leaves the dock
+  first, so focus ends in the editor window rather than in the new dock.
+- Redefining a kind with another home takes it out of its old dock; an editor kind's place rule goes when its
+  `:buffer` or home changes.
+
 ## Tests
 
 Batch: `test/unit/core-*-test.el`. The batch runner (`harness/run-ert.el`) gives the suite a temp HOME and drgnx

@@ -85,7 +85,9 @@ Emacs never waits, and the tab redraws when the scan is done — and after each 
 - **Start Agent on Task…** starts an agent on the task (or TODO, or plan) at point, in the plan's worktree (else
   its repository, else the plan's folder); its commits are recorded for that task.
 - **Open Plan's Worktree** adds the plan's worktree to the Explorer.
-- **Show Work as Graph** draws the specs, the plans shown (the tab's filter and hide-merged apply; each with its tasks
+- **Show Work as Graph** opens the Work cockpit's graph — specs, plans, tasks, agents, jobs and reviews, who is on
+  what and what waits on you ([cockpit.md](cockpit.md)) — when the `tools/cockpit` module runs. Without it, it draws
+  the older graph described here: the specs, the plans shown (the tab's filter and hide-merged apply; each with its tasks
   done and commits; merged ones dashed) and their branches, in three columns, with Emacs's own `svg.el` — no other
   program. Every box is a hot spot: click a spec or plan to open its file, a branch to add its worktree to the
   Explorer (a double click opens it once; the file opens from the graph's window, even when another was selected);

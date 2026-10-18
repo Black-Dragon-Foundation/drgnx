@@ -126,12 +126,13 @@ Cached by modification time."
 
 (defun drgnx-cockpit--jobs ()
   "The jobs the model shows, newest first, with their tasks, dependencies and open ask cards — four queries, grouped
-here: (JOBS . (TASKS DEPS CARDS)), JOBS ((ID TITLE PLAN STATUS)…), TASKS hash job → ((ID N TITLE STATUS AGENT)…) in
-order, DEPS hash task → (DEP…), CARDS ((ID JOB TASK TITLE AT)…).  A done job only with
-`drgnx-cockpit-include-closed-jobs'."
+here: (JOBS . (TASKS DEPS CARDS)), JOBS ((ID TITLE PLAN STATUS DATA)…) — DATA the job's data as text when it marks a
+task blocked (:blocked, task → reason), else nil — TASKS hash job → ((ID N TITLE STATUS AGENT)…) in order, DEPS
+hash task → (DEP…), CARDS ((ID JOB TASK TITLE AT)…).  A done job only with `drgnx-cockpit-include-closed-jobs'."
   (let* ((db (drgnx-work-db))
          (open (if drgnx-cockpit-include-closed-jobs "" " where j.status is not 'done'"))
-         (jobs (sqlite-select db (concat "select j.id, j.title, j.plan, j.status from job j" open " order by j.created desc, j.id")))
+         (jobs (sqlite-select db (concat "select j.id, j.title, j.plan, j.status, case when instr(j.data, ':blocked (') > 0 then j.data end"
+                                         " from job j" open " order by j.created desc, j.id")))
          (tasks (make-hash-table :test #'equal)) (deps (make-hash-table :test #'equal)))
     (pcase-dolist (`(,id ,job ,n ,title ,status ,agent)
                    (sqlite-select db (concat "select t.id, t.job, t.n, t.title, t.status, t.agent from jtask t join job j on j.id = t.job"
@@ -208,8 +209,10 @@ never joined to a job's or a plan's.  QUESTIONS: the open questions, each with t
         (when (and (gethash src nodes) (gethash dst nodes)) (edge src dst 'derives)))
       ;; jobs (newest first: the newest job of a plan task is the one shown on it)
       (let ((deps nil) (status (make-hash-table :test #'equal)))
-        (pcase-dolist (`(,jid ,jtitle ,planf ,jstatus) (car jobs-data))
-          (let* ((pid (and planf (concat "plan:" planf))) (jnode (concat "job:" jid)))
+        (pcase-dolist (`(,jid ,jtitle ,planf ,jstatus ,jdata) (car jobs-data))
+          (let* ((pid (and planf (concat "plan:" planf))) (jnode (concat "job:" jid))
+                 ;; its tasks marked blocked (the Work graph's Mark Blocked): their own state while no agent works on them
+                 (blocked (and jdata (plist-get (let ((read-eval nil)) (ignore-errors (car (read-from-string jdata)))) :blocked))))
             ;; a plan the tracker never scanned: its headings, read only
             (when (and planf (not (gethash pid nodes)))
               (pcase (drgnx-cockpit--plan-file planf)
@@ -233,6 +236,9 @@ never joined to a job's or a plan's.  QUESTIONS: the open questions, each with t
                   (puthash tid tid jt-node)
                   (add (drgnx-cockpit--node tid 'task ttitle :state st :job jid :agent holder :jtask tid))
                   (edge tid jnode 'implements)))
+                (when-let* ((why (alist-get tid blocked nil nil #'equal)) (tn (gethash tid jt-node)))
+                  (put tn :blocked why)
+                  (when (member st '("ready" "pending")) (put tn :state "blocked")))
                 (when (gethash tid jt-node)
                   (dolist (d (gethash tid (nth 2 jobs-data))) (push (list tid d) deps))
                   (when holder
@@ -509,7 +515,7 @@ a remote DIR, and a remote root or path is left out: no remote name is expanded.
     (delete-dups (nreverse paths))))
 
 (defun drgnx-cockpit-edit-source (agent &optional sessions)
-  "Where AGENT's edits are: (:dir :base :merge-base :paths :own-worktree :stopped), or nil for an agent unknown.
+  "Where AGENT's edits are: (:kind :dir :base :merge-base :paths :own-worktree :stopped …), or nil for an agent unknown.
 AGENT: an id, or an agent of the model (`drgnx-cockpit-model').  SESSIONS: the hub's snapshots — an agent of a job or
 a native session not among them is :stopped.
 - a job's agent: its task worktree; the base its registry row names, else the job branch (`job/ID') where it forked
@@ -517,7 +523,10 @@ a native session not among them is :stopped.
 - a native session: its cwd; the base its registry row names, else the HEAD its first event carries (:head);
 - an outside agent: its registered worktree (or cwd) and base, and the paths it reported (:paths, relative to :dir);
 - a silent worktree (`silent:DIR'): the worktree and its merge-base with the main branch.
-:own-worktree: the folder is the agent's alone (a job's task worktree, or a linked worktree no other agent works in)."
+:own-worktree: the folder is the agent's alone (a job's task worktree, or a linked worktree no other agent works in).
+:kind is `job', `native', `outside' or `silent'.  A job's agent also has :job and :task (its job task's id) and
+:job-worktree t when :dir is the worktree drgnx makes for that task (`.claude/worktrees/JOB-N/' of the job's repository,
+from its jtask row)."
   (let* ((plist (and (consp agent) agent)) (id (if plist (plist-get plist :id) agent))
          (session (seq-find (lambda (s) (equal (plist-get s :id) id)) sessions))
          (exited (and session (equal (drgnx-cockpit--status (plist-get session :status)) "exited")))
@@ -537,28 +546,28 @@ a native session not among them is :stopped.
     (cond
      ((not (stringp id)) nil)
      ((or (eq (plist-get plist :reporting) 'silent) (string-prefix-p "silent:" id))
-      (list :dir (drgnx-cockpit--dir (or (plist-get plist :worktree) (substring id (length "silent:"))))
+      (list :kind 'silent :dir (drgnx-cockpit--dir (or (plist-get plist :worktree) (substring id (length "silent:"))))
             :base (or (plist-get plist :base) (car drgnx-cockpit-main-branches)) :merge-base t :paths nil
             :own-worktree t :stopped nil))
      ((or jt (and session (plist-get session :job)))
       (let* ((job (or (nth 1 jt) (plist-get session :job)))
              (n (or (nth 2 jt) (let ((tk (plist-get session :task))) (and tk (string-match "#\\([0-9]+\\)\\'" tk) (string-to-number (match-string 1 tk))))))
              (repo (plist-get (drgnx-coord-job job) :repo))
-             (dir (or (and (stringp repo) n (not (drgnx-cockpit--remote-p repo))
-                           (drgnx-cockpit--dir (expand-file-name (format ".claude/worktrees/%s-%d/" job n) repo)))
-                      (drgnx-cockpit--dir (plist-get session :cwd)))))
-        (list :dir dir :base (or (plist-get row :base) (concat "job/" job)) :merge-base (not (plist-get row :base)) :paths nil
+             (made (and (stringp repo) n (not (drgnx-cockpit--remote-p repo))
+                        (drgnx-cockpit--dir (expand-file-name (format ".claude/worktrees/%s-%d/" job n) repo))))
+             (dir (or made (drgnx-cockpit--dir (plist-get session :cwd)))))
+        (list :kind 'job :job job :task (car jt) :job-worktree (and made jt t) :dir dir :base (or (plist-get row :base) (concat "job/" job)) :merge-base (not (plist-get row :base)) :paths nil
               :own-worktree t :stopped (if sessions (or (null session) exited) (equal life "stop")))))
      ((and row (not session) (or (string-prefix-p "ext:" id) (and (plist-get row :kind) (not (equal (plist-get row :kind) "job")))))
       (let ((dir (drgnx-cockpit--dir (or (plist-get row :worktree) (plist-get row :cwd)))))
-        (list :dir dir :base (plist-get row :base) :merge-base nil
+        (list :kind 'outside :dir dir :base (plist-get row :base) :merge-base nil
               :paths (and dir (drgnx-cockpit--reported-paths id dir))
               :own-worktree (and dir (drgnx-cockpit--linked-worktree-p dir) (not (funcall others dir)) t)
               :stopped (equal life "stop"))))
      ((or session row)
       (let ((dir (drgnx-cockpit--dir (or (plist-get session :cwd) (plist-get row :cwd))))
             (first (plist-get (car (drgnx-coord-events :agent id :limit 1)) :data)))
-        (list :dir dir :base (or (plist-get row :base) (plist-get first :head) (plist-get first :base)) :merge-base nil :paths nil
+        (list :kind 'native :dir dir :base (or (plist-get row :base) (plist-get first :head) (plist-get first :base)) :merge-base nil :paths nil
               :own-worktree (and dir (drgnx-cockpit--linked-worktree-p dir) (not (funcall others dir))
                                  (not (seq-some (lambda (s) (and (not (equal (plist-get s :id) id))
                                                                  (equal (drgnx-cockpit--dir (plist-get s :cwd)) dir)))
@@ -706,8 +715,9 @@ be read."
 gets, from the sentinel, ((:file :added :removed :status new|modified|deleted)…), (:too-large BYTES) when git's
 list of changed or untracked files passes `drgnx-cockpit-diff-max-bytes' (git is ended then), or (:error MESSAGE).
 Only regular files inside the folder are listed (`drgnx-cockpit--file-ok'): never a device, FIFO, socket or a link out
-of it.  At most `drgnx-cockpit-changed-files-max' are checked, those of them that may be shown listed, then (:more N)
-for the rest; untracked files' lines are counted until `drgnx-cockpit-count-bytes-max' bytes are read (after that
+of it; those refused are counted, as (:refused N), so that a change is never taken for none.  At most
+`drgnx-cockpit-changed-files-max' are checked, those of them that may be shown listed, then (:more N) for the rest;
+untracked files' lines are counted until `drgnx-cockpit-count-bytes-max' bytes are read (after that
 :added is nil)."
   (let ((dir (plist-get source :dir)) (paths (plist-get source :paths)))
     (if (not (stringp dir))
@@ -731,7 +741,7 @@ DIR is local (git ran there) and the names are git's own, relative to it: no fil
   (let* ((file-name-handler-alist nil)
          (truedir (file-name-as-directory (file-truename dir)))
          (known (make-hash-table :test #'equal)) (new (make-hash-table :test #'equal)) (memo (make-hash-table :test #'equal))
-         (budget drgnx-cockpit-count-bytes-max) (checked 0) (out nil))
+         (budget drgnx-cockpit-count-bytes-max) (checked 0) (refused 0) (out nil))
     (dolist (f files) (puthash (plist-get f :file) t known))
     (let ((extra nil))
       (dolist (f untracked)
@@ -747,9 +757,10 @@ DIR is local (git ran there) and the names are git's own, relative to it: no fil
                 (when (and size (<= size budget))
                   (setq budget (- budget size))
                   (plist-put f :added (drgnx-cockpit--lines abs)))))
-            (push f out)))))
+            (push f out))
+          (unless ok (setq refused (1+ refused))))))
     ;; the rest only counted (not checked one by one)
-    (nconc (nreverse out) (and files (list (list :more (length files)))))))
+    (nconc (nreverse out) (and (> refused 0) (list (list :refused refused))) (and files (list (list :more (length files)))))))
 
 (defun drgnx-cockpit-file-diff (source file callback)
   "Ask git, asynchronously, for FILE's diff in SOURCE (`drgnx-cockpit-edit-source') against its base — an untracked

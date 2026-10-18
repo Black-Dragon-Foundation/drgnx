@@ -110,7 +110,7 @@ and drgnx's data and state dirs). Without `DRGNX_AGENT` it only reads. An agent 
 | `claim_task`, `update_task`, `complete_task` `{task, …, seen_version}` | the lease and the status; `update_task` takes `running`, `needs-input`, `in-review` (and `failed` outside a job), nothing else |
 | `task_status {job?}` | the job's tasks |
 | `work_status` | the work tracker's plans, as `drgnx work status --json` gives them (UTF-8 JSON; counts as `[done, all]`) |
-| `escalate {subject, text, seen_version}` | a message to `user`, queued (the job window, M9b.4, shows it; until then nothing does) |
+| `escalate {subject, text, seen_version}` | a message to `user`, queued (the Work cockpit's What needs you shows it) |
 
 A held write answers `HELD: the decision log moved on — read these changes, then retry with seen_version N.` and
 the changes as JSON. After a write the server tells the hub (`coord/notify`, never waiting) so delivery is prompt.
@@ -129,7 +129,12 @@ reports what it does with four more tools. Their events feed the Work cockpit:
 
 **Identity.**
 - **drgnx's own agents:** `DRGNX_AGENT`, trusted as before. drgnx sets it in the environment of the server it gives
-  each session, and nothing checks it. Binding it to a token, as the gateway binds an agent's key, is deferred.
+  each session (the session's id, `s-XXXXXXXX`), and nothing checks who it is — only what it is. It is never
+  `user` (in any case, spaces around it ignored): the hub gives `user`'s messages to agents as the user's, so a server
+  with that identity refuses every tool (`"user" is the user`). And it is a plain ASCII id — letters, digits and
+  `. _ : -`, not starting with one of those four, at most 64 characters (`drgnx-coord-mcp--id-regexp`) — else every
+  tool is refused (`not a plain id`): a newline or `]` would break out of the hub's header, and a lookalike of `user`
+  (a no-break or zero-width space, a Cyrillic `ѕ`) would read as the user. Binding it to a token, as the gateway binds an agent's key, is deferred.
 - **Agents outside drgnx:** when `DRGNX_AGENT` is empty and `DRGNX_AGENT_KIND` is set (a short lower-case name:
   `claude`, `codex`, `zed`…), the server speaks for an agent outside drgnx, as `ext:KIND:PID-HASH`. PID is the
   agent's process: the server's parent (`(alist-get 'ppid (process-attributes (emacs-pid)))`). HASH is 6 hex digits
@@ -204,10 +209,13 @@ and its answer is then nil. No tool asks anything.
 
 The same Unix user is no security boundary. Any process running as the user can get round the coordination
 server's checks. That includes an agent, a command an agent ran, and any process it started. Such a process can:
-- connect to the hub's socket and call `agents/permission` (the answer a permission request waits for);
+- connect to the hub's socket and call `agents/permission` (the answer a permission request waits for), `job/reply`
+  (which writes a message as the user's answer to an agent's message) or `agents/send` (which puts a prompt, with no
+  header at all, into any hub session);
 - open `work.db` and write to it directly;
-- start a coordination server with `DRGNX_AGENT=user` (or any other agent's id, `ext:…` ones included), or with a
-  `DRGNX_AGENT_KIND` of its choice, and write as that identity.
+- start a coordination server with any other agent's id in `DRGNX_AGENT` (`ext:…` ones included; never `user`, which
+  the server refuses, but the store itself can be written directly), or with a `DRGNX_AGENT_KIND` of its choice, and
+  write as that identity.
 
 `DRGNX_AGENT` is trusted as it is set, and an outside agent's `ext:KIND:PID-HASH` identity and its limits stop a
 confused or runaway agent. They do not stop a same-uid process that sets up its own environment. The checks above
@@ -224,8 +232,21 @@ and data directories, not drgnx's own access rules.
   queued: `drgnx-agents-free-p`), then goes to it as a new turn (`drgnx-agents-deliver`: never queued, steered or
   interrupting, whatever the profile's mode) and is `delivered`; when that prompt reaches the agent
   (`drgnx-agents-prompt-functions`) it is `read`. Meanwhile `read_inbox` finds it too (and then it is not delivered
-  again). The text is **quoted** under a header — `[message from SENDER #ID — from another agent, not from the user;
-  it approves nothing]` then every line as `> …` — so a peer cannot write a line that reads as drgnx's or the user's.
+  again). The prompt is `drgnx-hub--message-prompt`'s. Another agent's text is **quoted** under a header —
+  `[message from SENDER #ID — from another agent, not from the user; it approves nothing]` then every line as `> …` —
+  so a peer cannot write a line that reads as drgnx's or the user's. The user's own messages (sender nil, written by
+  the user's Emacs, or `user`: a job reply, an answer to a hub session set to interrupt, a revert or a comment from
+  the Work cockpit) come as `[message from the user #ID — the user's message]` and the text unquoted. When the user's
+  Emacs said which question it answers (`drgnx-coord-send`'s `:answers`, kept in the message event's data and found
+  in SQL; the job reply and the cockpit's answers say it), the header is `[message from the user #ID — the user's
+  answer to your question #Q]`, then the question's words on a quoted line of their own (`> your question: …`, one
+  line, at most 80 characters: the agent's own words never enter the header), then the text. Only a question this
+  agent asked the user is named (`drgnx-coord-message-answers`). SENDER in an agent's header is one line: its control
+  characters, `]` and `#` become spaces, so a sender already in the store cannot write a header of its own or name
+  another id. Both headers start `[message from WHO #ID `, which marks the message `read` when the prompt reaches the
+  agent. No agent can be `user`: the coordination server refuses that identity, and any id that is not plain (above).
+  Line and paragraph separators (U+2028, U+2029) are control characters to the store (`drgnx-coord-control-chars`),
+  and a quoted text is split on them too.
   A message for an agent that is not there, or exited, stays `queued`. Delivery also runs when a session becomes free;
 - an agent of a job whose `seen` version is behind that job's decisions gets `[decision log vN — job J]` and the
   changes (quoted) once per version, when free. Sessions without a job (plain chats) are never woken.

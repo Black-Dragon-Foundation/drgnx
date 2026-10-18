@@ -257,6 +257,20 @@ the real ones belong to sessions running next to the tests (bin/drgnx check's li
 (ert-deftest drgnx-ui/act-rejects-unknown-actions ()
   (should-error (drgnx-ui-act '(:socket "/nonexistent") '(:fly 1)) :type 'drgnx-ui-error))
 
+(ert-deftest drgnx-ui/drag-actions-take-pixels-in-any-shape ()
+  ;; (:drag (:from (X . Y) :to (X . Y) :steps N)), and the same from JSON: arrays and objects
+  (should (equal (drgnx-ui--drag-spec '(:from (10 . 20) :to (110 . 20))) '(10 20 110 20 1 nil)))
+  (should (equal (drgnx-ui--drag-spec '(:from (10 . 20) :to (110 . 25) :steps 3 :button 2)) '(10 20 110 25 2 3)))
+  (should (equal (drgnx-ui--drag-spec '(:from (1 . 2) :to (3 . 4) :steps 200)) '(1 2 3 4 1 200))) ; the cap fits the wait
+  (should (equal (drgnx-ui--drag-spec '(:from [10 20] :to (110 25))) '(10 20 110 25 1 nil)))
+  (should (equal (drgnx-ui--drag-spec '(:from (:x 10 :y 20) :to (:x 1 :y 2))) '(10 20 1 2 1 nil)))
+  (dolist (bad '(nil (:from (1 . 2)) (:from (1 . 2) :to (3 . nil)) (:from (1 . 2) :to (3 . -4))
+                     (:from (1 . 2) :to (3 . 4.5)) (:from (1 . 2) :to "x") (:from (1 . 2) :to (3 . 4) :steps 0)
+                     (:from (1 . 2) :to (3 . 4) :steps 201) (:from (1 . 2) :to (3 . 4) :button 9)))
+    (should-error (drgnx-ui--drag-spec bad) :type 'drgnx-ui-error))
+  ;; an action with a bad drag fails before anything is sent to the session
+  (should-error (drgnx-ui-act '(:socket "/nonexistent") '(:drag (:from (1 . 2)))) :type 'drgnx-ui-error))
+
 (ert-deftest drgnx-ui/cli-args ()
   (should (equal (drgnx-ui--parse-args '("drgnx-ui-1-00000a" "--buffer" "*scratch*" "--hold-ms" "300"))
                  '(("drgnx-ui-1-00000a") :buffer "*scratch*" :hold_ms "300"))))

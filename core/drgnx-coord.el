@@ -63,10 +63,11 @@ is an error: nothing was read at a version that does not exist."
 
 (defconst drgnx-coord--summary-max 200 "The longest event summary, in characters.")
 
-(defconst drgnx-coord-control-chars (concat "\0-\37\177-" (string #x9f #x61c #x200e #x200f #x202a ?- #x202e #x2066 ?- #x2069))
+(defconst drgnx-coord-control-chars (concat "\0-\37\177-" (string #x9f #x61c #x200e #x200f #x202a ?- #x202e #x2066 ?- #x2069
+                                                                  #x2028 #x2029))
   "Characters an agent's text must not carry, as the inside of a regexp bracket: the C0 controls, DEL, the C1
-controls and the BiDi controls (the Arabic letter mark, marks, embeddings, overrides, isolates) that make text
-read other than it is.")
+controls, the BiDi controls (the Arabic letter mark, marks, embeddings, overrides, isolates) that make text
+read other than it is, and the line and paragraph separators (U+2028, U+2029) that start a line a reader sees.")
 
 (defun drgnx-coord--one-line (text)
   "TEXT as one line of at most `drgnx-coord--summary-max' characters (`drgnx-coord-control-chars' become spaces)."
@@ -484,11 +485,13 @@ than `drgnx-coord-decision-rate' a minute from one agent are refused.  (:ok t :n
     (list :id id :job job :sender sender :recipient recipient :text text :state state :reason reason :at at
           :delivered delivered :read read :acted acted)))
 
-(cl-defun drgnx-coord-send (&key job sender recipient text seen question)
+(cl-defun drgnx-coord-send (&key job sender recipient text seen question answers)
   "SENDER (who read the log at SEEN; nil: the user's own Emacs) sends TEXT to RECIPIENT.  (:ok t :id ID :state S) —
 held when RECIPIENT's queue is full or the two exchange too much — or (:held …) when SEEN is behind.
 A message to \"user\" is a question (its event's kind) when QUESTION is set (the ask_user tool), or when its TEXT
-starts with [escalation] and SENDER is not an agent outside drgnx (ext:…): their messages are never questions."
+starts with [escalation] and SENDER is not an agent outside drgnx (ext:…): their messages are never questions.
+ANSWERS is the id of the message (a question to the user) this one answers, kept in its event's data: see
+`drgnx-coord-message-answers'."
   (drgnx-coord--tx
    (lambda (db)
      (or (drgnx-coord--held db seen)
@@ -512,8 +515,23 @@ starts with [escalation] and SENDER is not an agent outside drgnx (ext:…): the
                                                                   (string-prefix-p "[escalation]" (or text "")))))
                                            "question" "message")
                                  :summary (if (equal recipient "user") text (format "to %s: %s" recipient text))
-                                 :data (list :message id :to recipient :state state))
+                                 :data (append (list :message id :to recipient :state state)
+                                               (and (natnump answers) (list :answers answers))))
              (list :ok t :id id :state state)))))))
+
+(defun drgnx-coord-message-answers (id)
+  "The question the user's message ID answers, when its sender named one (`drgnx-coord-send''s ANSWERS): the message
+from ID's recipient to \"user\" — nil for another agent's message, for a question of someone else's, or when the
+message's event was pruned."
+  (when-let* ((m (drgnx-coord-message id))
+              ((equal (or (plist-get m :sender) "user") "user"))
+              ;; its event, found in SQL: the data `drgnx-coord-send' printed starts (:message ID …)
+              (data (caar (sqlite-select (drgnx-work-db)
+                                         "select data from event where agent = 'user' and kind = 'message' and data like ?
+                                          order by id desc limit 1"
+                                         (list (format "(:message %d %%" id)))))
+              (q (drgnx-coord-message (plist-get (car (read-from-string data)) :answers))))
+    (and (equal (plist-get q :sender) (plist-get m :recipient)) (equal (plist-get q :recipient) "user") q)))
 
 (defun drgnx-coord-queued ()
   "Every message waiting to be delivered, oldest first."

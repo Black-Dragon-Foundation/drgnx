@@ -235,11 +235,17 @@ is a workbench (not a window that rebuilds itself); nil when there are only such
   (or (seq-find (lambda (st) (eq (plist-get st :role) 'main)) frames)
       (seq-find (lambda (st) (not (eq (plist-get st :role) 'custom))) frames)))
 
+(defvar drgnx-persist-restoring nil
+  "Non-nil while `drgnx-persist-restore' runs.  A window's function that rebuilds it (`:restore') then takes back
+only its state and arranges nothing: the restored workbench keeps its panes, sizes and focus (a job window saved
+before M12f only filters the Work cockpit to its job).")
+
 (defun drgnx-persist-restore (&optional file)
   "Bring back the workbench saved in FILE — the selected frame gets the main window's layout (the state
 saved with `:role main', wherever it stands in the file), every other window is made again; non-nil if a
-state was restored.  A window that rebuilds itself (a job window) is rebuilt by its function, on the
-graphical display, and, when the display still has room, put back at its saved pixel position and size.
+state was restored.  A window that rebuilt itself is rebuilt by its function (with `drgnx-persist-restoring'
+non-nil), on the graphical display, and, when it returns a frame and the display still has room, put back at its
+saved pixel position and size.
 Each group's shown file is visited now, its other tabs at idle (never a question at start).
 From a terminal window, the workbench is restored into the graphical window when one is open (and the terminal
 says so); with none, nothing is restored (a terminal window keeps the default layout for its size)."
@@ -255,7 +261,8 @@ says so); with none, nothing is restored (a terminal window keeps the default la
 (defun drgnx-persist--restore (file &optional keep-focus)
   "`drgnx-persist-restore' in the selected frame, which is not a terminal window.  The selected frame gets the
 input focus back after the other windows are made, unless KEEP-FOCUS (a restore asked for from a terminal)."
-  (let* ((file (or file (drgnx-persist--file))) (state (drgnx-persist--read file))
+  (let* ((drgnx-persist-restoring t)
+         (file (or file (drgnx-persist--file))) (state (drgnx-persist--read file))
          (frames (pcase (plist-get state :version)
                    (1 (list state))
                    (2 (plist-get state :frames)))))

@@ -61,10 +61,12 @@ coordination server's `coord/notify` checks the same. One JSON object per line:
 | `agents/do` `{id, op, n?, text?, item?, reject?}` | `true`: `deliver-queue`, `unqueue`, `requeue`, `review` |
 | `coord/notify` (a notification: no id, no answer) | delivery runs now ([coordination.md](coordination.md)), and the new events go out |
 | `events/since` `{since?, limit?}` | `{since, last, events: [...]}`: the events after `since` (0), oldest first, at most `limit` (200; at most 1000) |
-| `job/propose` `{plan, repo?, budget?, auto?}`, `job/approve` `{id, budget?}`, `job/stop` `{id}`, `job/resume` `{id, budget?}` | the job (`drgnx-job-summary`) |
+| `job/propose` `{plan, repo?, budget?, auto?, gate?}`, `job/approve` `{id, budget?}`, `job/stop` `{id}`, `job/resume` `{id, budget?}` | the job (`drgnx-job-summary`); `gate`: `review` or `review+accept`, kept with the job (default: the hub's `drgnx-job-merge-gate`) |
+| `job/start-task` `{plan, n, auto?, gate?}` | the job: a proposal of task `n` and the tasks it needs (Start as Job); the plan is only read |
+| `job/reassign` `{task, profile}`, `job/block` `{task, reason}`, `job/unblock` `{task}`, `job/order` `{task, delta}` | the job, after the user's change from the Work graph (job data `:profiles`, `:blocked`, `:order`); a done or dropped task is an error |
 | `job/status` `{id?, decisions?}` | the job (with its decision log when `decisions` is true), or `{jobs: [...]}` |
 | `job/card` `{card, action, arg?}` | the job, after the user's action on a card (once: a settled card is an error) |
-| `job/reply` `{message, text}` | `true`: the user's answer to an agent's message |
+| `job/reply` `{message, text}` | `true`: the user's answer to an agent's message, which reaches the agent as the user's answer to that question ([coordination.md](coordination.md#delivery-the-hub)) |
 | `job/dismiss` `{message}` | `true`: the message is acted on without an answer (the badge stops counting it) |
 
 Errors: `{"id", "error": {"message"}}`. A line that is not JSON is answered with an error too when its `"id"` can be
@@ -80,7 +82,7 @@ socket waits 20 ms before Emacs tries again, and macOS's local sockets hold 8 KB
 few MB takes seconds there (the hub writes ~400 KB/s to a client on macOS) and must not count as a stopped client. Only
 the innermost write in progress is judged by time (`drgnx-hub--writing`): one beneath it cannot go on meanwhile, so it gets
 back the time each write above it took (only that: a stopped client beneath writes to others is still dropped); its Emacs
-connects again (the Agents module's idle timer, the job window's refresh) — meanwhile it shows the hub's sessions as
+connects again (the Agents module's idle timer, the Work cockpit's What needs you refresh) — meanwhile it shows the hub's sessions as
 ended.
 Snapshots and transcript entries travel as **printed Lisp** (`lisp`,
 `entries`): JSON would lose the difference between a symbol and a string in an entry; both ends are Emacs. Events: from the gateway `request` (job, task, agent, provider, model, status, input, output, cost), `fallback`

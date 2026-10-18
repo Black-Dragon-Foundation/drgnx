@@ -346,12 +346,13 @@ error if it does not hold)."
                     :actions ,(make-list 2 (funcall type "(setq y 2) "))
                     :check "(eq (drgnx-agent-session-status drgnx-perf--agent) 'busy)"   ; typed while it streamed
                     :teardown ,(concat "(progn (ignore-errors (drgnx-agents-kill drgnx-perf--agent)) " kill-fixture ")"))
-      ;; a job's window open in its own frame, following three agents that stream (as it follows the hub's events)
-      (job-window
+      ;; the Work cockpit filtered to a job (Show Job in Work: the graph, what needs you), following three agents that
+      ;; stream (as it follows the hub's events)
+      (cockpit-cards
        :setup ,(format "(progn (setq drgnx-agents-profiles (list (list \"mock\" :command (list (expand-file-name invocation-name invocation-directory) \"--batch\" \"-Q\" \"-l\" %S))))
                               (setq drgnx-perf--agents (mapcar (lambda (n) (drgnx-agents-start \"mock\" temporary-file-directory (format \"perf#%%d\" n) \"perf\")) '(1 2 3)))
                               (let ((d (+ (float-time) 10))) (while (and (seq-some (lambda (s) (not (eq (drgnx-agent-session-status s) 'idle))) drgnx-perf--agents) (< (float-time) d)) (accept-process-output nil 0.05)))
-                              (defun drgnx-perf--job-follow (_s) (drgnx-job-ui--event \"agent\" nil))
+                              (defun drgnx-perf--job-follow (_s) (drgnx-cockpit-cards--hub-event \"agent\" nil))
                               (setq drgnx-perf--spent 0.0)
                               (defun drgnx-perf--job-summary ()   ; what the hub would answer: spend and agents change
                                 (list :id \"perf\" :title \"Perf\" :status \"running\" :repo temporary-file-directory :budget 5.0 :spent drgnx-perf--spent
@@ -367,10 +368,11 @@ error if it does not hold)."
                                                         (setq drgnx-perf--spent (+ drgnx-perf--spent 0.01))
                                                         (funcall cb (drgnx-perf--job-summary) nil))))
                               (add-hook 'drgnx-agents-changed-functions #'drgnx-perf--job-follow)
-                              (let ((home (selected-frame)) (f (drgnx-job-ui--frame \"perf\")))
-                                (with-selected-frame f (drgnx-job-ui--layout \"perf\"))
-                                (drgnx-job-ui--draw \"perf\" (drgnx-perf--job-summary))
-                                (select-frame-set-input-focus home))
+                              (setq drgnx-perf--dock (cons (and (drgnx-wb--dock-windows) t) (drgnx-wb-sidebar-view)))
+                              (let ((editor (selected-window)))
+                                (drgnx-cockpit-show-job \"perf\")
+                                (drgnx-cockpit-cards--draw \"perf\" (drgnx-perf--job-summary))
+                                (select-window editor))
                               t)"
                        (expand-file-name "test/fixtures/mock-acp.el" drgnx-ui-repo-dir))
        :each ,(concat "(progn " (drgnx-perf-run--visit-fixture-form)
@@ -381,7 +383,10 @@ error if it does not hold)."
        :teardown ,(concat "(progn (remove-hook 'drgnx-agents-changed-functions #'drgnx-perf--job-follow)"
                           " (fset 'drgnx-hub-call drgnx-perf--hub-call)"
                           " (dolist (s drgnx-perf--agents) (ignore-errors (drgnx-agents-kill s)))"
-                          " (dolist (f (frame-list)) (when (equal (frame-parameter f 'drgnx-job) \"perf\") (delete-frame f))) " kill-fixture ")"))
+                          " (ignore-errors (drgnx-pane-hide 'needs-you))"
+                          " (if (car drgnx-perf--dock) (drgnx-wb-show-view (or (cdr drgnx-perf--dock) 'explorer)) (drgnx-wb-hide-sidebar))"
+                          " (dolist (n '(\"*Needs You*\" \"*Decisions*\")) (when (get-buffer n) (kill-buffer n)))"
+                          " (setq drgnx-cockpit-graph-current-filter nil) " kill-fixture ")"))
       ;; a long code file with sticky scroll, indent guides (when installed) and smooth scrolling on
       (code-scrolling
        :setup ,(format "(progn (dolist (m '(\"editor/drgnx-sticky\" \"ui/drgnx-smooth\" \"extra/drgnx-guides\")) (load (expand-file-name (concat \"modules/\" m) %S) nil t)) (drgnx-smooth--setup) t)"

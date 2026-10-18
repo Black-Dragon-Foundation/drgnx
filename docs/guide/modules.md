@@ -129,6 +129,8 @@ affected: they reach the registry and the palette as before.
 
 `:doctor` returns the problems it finds (strings) after the module ran; they are kept with the module's status and
 `drgnx doctor` reports them as a warning. `:settings` is reserved for the Settings screen (M6) and not used yet.
+`(drgnx-module-running-p 'tools/example)` says whether a module's setup ran and went well. Another module can use
+it to take a path only while that module runs.
 
 Every command goes through the registry (`drgnx-command-define`) and gets a key — or `:none` with a reason — in each
 key profile ([keys.md](keys.md)); faces inherit theme faces (no colours). See [core.md](../develop/core.md) for the registry.
@@ -163,8 +165,9 @@ key profile ([keys.md](keys.md)); faces inherit theme faces (no colours). See [c
 | `tools/terminal` | startup | New Terminal (eshell, in the panel's Terminal tab), Open Terminal Here (Explorer) |
 | `tools/search` | startup | Quick Open (project files), Search in Project (results in the panel), Go to Symbol (file, project), Find in File, Replace in Project, Recent Buffers (consult when installed); Semantic Search, Index Project, Index Status, Set Up Semantic Search, and a re-index 30 s after a file of an indexed project is saved ([search.md](search.md)) |
 | `tools/agents` | startup | Show Agents (the right dock's Agents tab: sessions and durable jobs), New Agent Session, Send to Agent (queued while it works), Stop Agent, Take Over Agent Session, Answer Agent, edit review hunk by hunk, Show Job Log, Stop Job ([agents.md](agents.md)) |
-| `tools/jobs` | startup | Show Job Window (tasks and agents · what needs you · the decision log), Start Job from Plan, Approve Plan Job, Show Plan Jobs, Stop Plan Job ([jobs.md](jobs.md)) |
-| `tools/work` | startup | Show Work (the right dock's Work tab: specs › plans › tasks › steps, TODOs, commits, branches), Show Work as Graph (svg.el; click a box to open it), Start Agent on Task, Open Plan's Worktree ([work.md](work.md)) |
+| `tools/jobs` | startup | Show Job in Work (the Work cockpit filtered to a job: what needs you, its tasks, its decisions), Start Job from Plan, Approve Plan Job, Show Plan Jobs, Stop Plan Job; the ⚑ badge and notifications ([jobs.md](jobs.md)) |
+| `tools/work` | startup | Show Work (the right dock's Work tab: specs › plans › tasks › steps, TODOs, commits, branches), Show Work as Graph (the Work cockpit's graph when `tools/cockpit` runs, else specs, plans and branches drawn with svg.el), Start Agent on Task, Open Plan's Worktree ([work.md](work.md)) |
+| `tools/cockpit` | startup | the Work cockpit: the Work graph (pane `work-graph`, the left dock's Work view) — specs, plans, tasks, agents, jobs and reviews, who is on what, needs and blocks, what waits on you, worktrees that do not report; drawn in a wide graphical window, an outline elsewhere; Filter Graph, Open Node, Open in Plan, Draw Graph Again, Select Next/Previous Node; What needs you and Decisions (panes `needs-you`, `decisions`): every job's cards and messages, a job's log ([cockpit.md](cockpit.md)) |
 | `tools/ai` | startup | ghost-text completion in code buffers (the `complete` role), one Tab for suggestion / popup / snippet / heading / indent, Accept Suggestion (word, line), Toggle AI Completion, Edit with AI… (reviewed hunk by hunk), Ask the Codebase…, Choose AI Provider/Model… ([ai.md](ai.md)) |
 | `org/org` | startup | Capture `C-c c`, Agenda `C-c a` |
 | `extra/jump` | idle | Jump to Text (needs avy) |

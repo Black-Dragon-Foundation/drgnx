@@ -77,7 +77,10 @@
    (should (eq (drgnx-modules-test--status 'test/needs-pkg) 'missing-packages))
    (should (equal (plist-get (alist-get 'test/needs-pkg (drgnx-modules-report)) :missing) '(drgnx-no-such-package)))
    (should (eq (drgnx-modules-test--status 'test/needs-mod) 'missing-requires))
-   (should (eq (drgnx-modules-test--status 'test/off) 'disabled))))
+   (should (eq (drgnx-modules-test--status 'test/off) 'disabled))
+   ;; only a module whose setup ran and went well runs
+   (should (drgnx-module-running-p 'test/ok))
+   (dolist (m '(test/needs-pkg test/needs-mod test/off test/never-defined)) (should-not (drgnx-module-running-p m)))))
 
 (ert-deftest drgnx-modules/the-new-stages-run-on-their-hooks ()
   (drgnx-modules-test--with-config
