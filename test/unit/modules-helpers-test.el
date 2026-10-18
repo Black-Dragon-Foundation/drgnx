@@ -21,8 +21,25 @@
   "BODY as the code of module test/h's running setup; the stack is fresh."
   `(let ((drgnx-modules--current 'test/h)
          (drgnx-modules--setup-load load-file-name)
-         (drgnx-modules--stacks nil))
+         (drgnx-modules--stacks nil)
+         (drgnx-module--claims (make-hash-table :test 'equal)))
      ,@body))
+
+(defmacro drgnx-modules-helpers-test--two-modules (&rest body)
+  "BODY with fresh stacks and claims; run parts of it as a module with `--as'."
+  `(let ((drgnx-modules--setup-load load-file-name)
+         (drgnx-modules--stacks nil)
+         (drgnx-module--claims (make-hash-table :test 'equal)))
+     ,@body))
+
+(defmacro drgnx-modules-helpers-test--as (module &rest body)
+  "BODY as the code of MODULE's running setup."
+  (declare (indent 1))
+  `(let ((drgnx-modules--current ,module)) ,@body))
+
+(defun drgnx-modules-helpers-test--down (module)
+  "Tear MODULE down: run its undos now; the problems must be nil."
+  (should-not (drgnx-modules--unwind module)))
 
 (defun drgnx-modules-helpers-test--undo ()
   "Run test/h's undos now; the problems must be nil."
@@ -195,3 +212,135 @@
   (drgnx-modules-helpers-test--in-setup
    (should-error (drgnx-module-define-key 'drgnx-modules-helpers-test--opt [remap kill-line] #'ignore))
    (should-not drgnx-modules--stacks)))
+
+;;;; Two modules, one target: teardown in either order
+
+(ert-deftest drgnx-module-helpers/two-modules-set-either-order ()
+  (dolist (order '((a b) (b a)))
+    (let ((drgnx-modules-helpers-test--opt 0))
+      (drgnx-modules-helpers-test--two-modules
+       (drgnx-modules-helpers-test--as 'a (drgnx-module-set 'drgnx-modules-helpers-test--opt 1))
+       (drgnx-modules-helpers-test--as 'b (drgnx-module-set 'drgnx-modules-helpers-test--opt 2))
+       (drgnx-modules-helpers-test--down (car order))
+       (should (= (default-value 'drgnx-modules-helpers-test--opt) (if (eq (car order) 'a) 2 1)))
+       (drgnx-modules-helpers-test--down (cadr order))
+       (should (= (default-value 'drgnx-modules-helpers-test--opt) 0))
+       (should (zerop (hash-table-count drgnx-module--claims)))))))
+
+(ert-deftest drgnx-module-helpers/two-modules-set-unbound-either-order ()
+  (dolist (order '((a b) (b a)))
+    (makunbound 'drgnx-modules-helpers-test--unbound-opt)
+    (drgnx-modules-helpers-test--two-modules
+     (drgnx-modules-helpers-test--as 'a (drgnx-module-set 'drgnx-modules-helpers-test--unbound-opt 1))
+     (drgnx-modules-helpers-test--as 'b (drgnx-module-set 'drgnx-modules-helpers-test--unbound-opt 2))
+     (mapc #'drgnx-modules-helpers-test--down order)
+     (should-not (default-boundp 'drgnx-modules-helpers-test--unbound-opt)))))
+
+(ert-deftest drgnx-module-helpers/two-modules-alist-put-either-order ()
+  (dolist (order '((a b) (b a)))
+    (dolist (existing '(nil t))
+      (let* ((orig (if existing (list (cons 'k 0) (cons 'z 9)) (list (cons 'z 9))))
+             (drgnx-modules-helpers-test--alist orig))
+        (drgnx-modules-helpers-test--two-modules
+         (drgnx-modules-helpers-test--as 'a (drgnx-module-alist-put 'drgnx-modules-helpers-test--alist 'k 1))
+         (drgnx-modules-helpers-test--as 'b (drgnx-module-alist-put 'drgnx-modules-helpers-test--alist 'k 2))
+         (drgnx-modules-helpers-test--down (car order))
+         (should (= (alist-get 'k drgnx-modules-helpers-test--alist) (if (eq (car order) 'a) 2 1)))
+         (drgnx-modules-helpers-test--down (cadr order))
+         (should (equal drgnx-modules-helpers-test--alist (if existing '((k . 0) (z . 9)) '((z . 9)))))
+         (should (zerop (hash-table-count drgnx-module--claims))))))))
+
+(ert-deftest drgnx-module-helpers/two-modules-face-spec-either-order ()
+  (dolist (order '((a b) (b a)))
+    (let ((old (get 'drgnx-modules-helpers-test-face 'face-defface-spec)))
+      (drgnx-modules-helpers-test--two-modules
+       (drgnx-modules-helpers-test--as 'a (drgnx-module-face-spec 'drgnx-modules-helpers-test-face '((t :weight bold))))
+       (drgnx-modules-helpers-test--as 'b (drgnx-module-face-spec 'drgnx-modules-helpers-test-face '((t :slant italic))))
+       (drgnx-modules-helpers-test--down (car order))
+       (should (equal (get 'drgnx-modules-helpers-test-face 'face-defface-spec)
+                      (if (eq (car order) 'a) '((t :slant italic)) '((t :weight bold)))))
+       (drgnx-modules-helpers-test--down (cadr order))
+       (should (equal (get 'drgnx-modules-helpers-test-face 'face-defface-spec) old))
+       (should (zerop (hash-table-count drgnx-module--claims)))))))
+
+(ert-deftest drgnx-module-helpers/two-modules-define-key-either-order ()
+  (dolist (order '((a b) (b a)))
+    (dolist (existing '(nil t))
+      (let ((drgnx-modules-helpers-test--map (make-sparse-keymap)))
+        (when existing (define-key drgnx-modules-helpers-test--map [remap foo] #'ignore))
+        (drgnx-modules-helpers-test--two-modules
+         (drgnx-modules-helpers-test--as 'a (drgnx-module-define-key 'drgnx-modules-helpers-test--map [remap foo] #'next-line))
+         (drgnx-modules-helpers-test--as 'b (drgnx-module-define-key 'drgnx-modules-helpers-test--map [remap foo] #'previous-line))
+         (drgnx-modules-helpers-test--down (car order))
+         (should (eq (lookup-key drgnx-modules-helpers-test--map [remap foo])
+                     (if (eq (car order) 'a) #'previous-line #'next-line)))
+         (drgnx-modules-helpers-test--down (cadr order))
+         (should (eq (lookup-key drgnx-modules-helpers-test--map [remap foo]) (and existing #'ignore)))
+         (should (zerop (hash-table-count drgnx-module--claims))))))))
+
+(ert-deftest drgnx-module-helpers/two-modules-user-change-survives-both-orders ()
+  (dolist (order '((a b) (b a)))
+    (let ((drgnx-modules-helpers-test--opt 0))
+      (drgnx-modules-helpers-test--two-modules
+       (drgnx-modules-helpers-test--as 'a (drgnx-module-set 'drgnx-modules-helpers-test--opt 1))
+       (drgnx-modules-helpers-test--as 'b (drgnx-module-set 'drgnx-modules-helpers-test--opt 2))
+       (set-default 'drgnx-modules-helpers-test--opt 99)
+       (mapc #'drgnx-modules-helpers-test--down order)
+       (should (= (default-value 'drgnx-modules-helpers-test--opt) 99))))))
+
+;;;; Outside a setup, an unloaded alist, a custom setter, a customized face
+
+(ert-deftest drgnx-module-helpers/outside-a-setup-claims-nothing ()
+  (let ((drgnx-modules-helpers-test--opt 0) (drgnx-modules-helpers-test--alist nil)
+        (drgnx-modules-helpers-test--map (make-sparse-keymap))
+        (drgnx-module--claims (make-hash-table :test 'equal)))
+    (drgnx-module-set 'drgnx-modules-helpers-test--opt 1)
+    (drgnx-module-alist-put 'drgnx-modules-helpers-test--alist 'k 1)
+    (drgnx-module-define-key 'drgnx-modules-helpers-test--map [remap foo] #'ignore)
+    (should (zerop (hash-table-count drgnx-module--claims)))))
+
+(defvar drgnx-modules-helpers-test--late-alist)
+
+(ert-deftest drgnx-module-helpers/alist-put-on-an-alist-that-is-not-loaded-yet ()
+  (makunbound 'drgnx-modules-helpers-test--late-alist)
+  (drgnx-modules-helpers-test--in-setup
+   (drgnx-module-alist-put 'drgnx-modules-helpers-test--late-alist 'k 1)
+   (should (equal drgnx-modules-helpers-test--late-alist '((k . 1))))
+   (drgnx-modules-helpers-test--undo)
+   (should-not drgnx-modules-helpers-test--late-alist)))
+
+(defcustom drgnx-modules-helpers-test--sorted-alist nil
+  "An alist option whose setter sorts by key."
+  :type 'sexp
+  :set (lambda (sym val)
+         (push val drgnx-modules-helpers-test--log)
+         (set-default sym (sort (copy-sequence val) (lambda (x y) (string< (car x) (car y)))))))
+
+(ert-deftest drgnx-module-helpers/alist-put-uses-the-custom-setter ()
+  (let ((drgnx-modules-helpers-test--sorted-alist (list (cons "b" 1)))
+        (drgnx-modules-helpers-test--log nil))
+    (drgnx-modules-helpers-test--in-setup
+     (drgnx-module-alist-put 'drgnx-modules-helpers-test--sorted-alist "a" 2)
+     (should (equal drgnx-modules-helpers-test--sorted-alist '(("a" . 2) ("b" . 1))))
+     (should (= (length drgnx-modules-helpers-test--log) 1))
+     (drgnx-modules-helpers-test--undo)
+     (should (= (length drgnx-modules-helpers-test--log) 2))
+     (should (equal drgnx-modules-helpers-test--sorted-alist '(("b" . 1)))))))
+
+(ert-deftest drgnx-module-helpers/face-spec-a-customized-spec-survives ()
+  ;; A customized spec overrides the default one, so it keeps showing and is never rewritten.
+  (let ((old (get 'drgnx-modules-helpers-test-face 'face-defface-spec)))
+    (unwind-protect
+        (progn
+          (custom-set-faces '(drgnx-modules-helpers-test-face ((t :underline t))))
+          (let ((theme-spec (get 'drgnx-modules-helpers-test-face 'theme-face)))
+            (drgnx-modules-helpers-test--in-setup
+             (drgnx-module-face-spec 'drgnx-modules-helpers-test-face '((t :weight bold)))
+             (should (equal (get 'drgnx-modules-helpers-test-face 'theme-face) theme-spec))
+             (should (face-attribute 'drgnx-modules-helpers-test-face :underline nil t))
+             (drgnx-modules-helpers-test--undo)
+             (should (equal (get 'drgnx-modules-helpers-test-face 'theme-face) theme-spec))
+             (should (face-attribute 'drgnx-modules-helpers-test-face :underline nil t))
+             (should (equal (get 'drgnx-modules-helpers-test-face 'face-defface-spec) old)))))
+      (put 'drgnx-modules-helpers-test-face 'theme-face nil)
+      (face-spec-set 'drgnx-modules-helpers-test-face old 'face-defface-spec))))

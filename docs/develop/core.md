@@ -160,14 +160,25 @@ or another module put there since. Outside a setup a helper only makes the chang
   undo goes through the same setter, so a `:set` that does more than store runs again on the way back. The undo runs
   while the default value is still the one stored (what a setter stored, which can differ from VALUE).
 - `drgnx-module-alist-put` compares keys with `equal` (an `auto-mode-alist` key is a string) and replaces the alist
-  instead of changing it, so a list shared with the original value is never mutated. A hook or an advice has its
-  own helper.
+  instead of changing it, so a list shared with the original value is never mutated. It stores through the
+  variable's custom `:set` function too, and an alist that is not loaded yet counts as empty. A hook or an advice
+  has its own helper.
 - `drgnx-module-face-spec` touches only the face's default spec (`face-defface-spec`); what the user customized or a
-  theme set lives apart from it and is never touched.
+  theme set lives apart from it and is never touched. `face-spec-set` recalculates the face, so an attribute set
+  directly with `set-face-attribute` is wiped by it (at the set and again at the undo): give such a face its look
+  through the spec.
 - `drgnx-module-define-key` binds in the keymap object, never rebinding the variable, and looks at the map's own
   entry (not its parent's). A keyboard key signals an error: typed keys come from the key profiles
   (`keys/*.eld`). Allowed: `[remap CMD]`, the chrome (`menu-bar`, `tool-bar`, `tab-bar`, `tab-line`,
   `header-line`, `mode-line`, scroll bars, fringes) and any key whose last event is a mouse or wheel event.
+- **Two modules, one target.** Each helper claims its target (the option, the alist key, the face, the key in the
+  map) and remembers what it found there. Tearing the modules down in any order ends where they started: an undo
+  that is not the newest claim leaves the live value alone and hands what it found to the claim above it; the
+  newest one restores, if the value is still what it set (so a change by the user stays). A claim is dropped only
+  by its undo, so a module that is never torn down (a `restart` module) keeps its claim until restart.
+- The undo compares with `equal`: a list stored by reference and changed in place later still equals itself, so the
+  undo overwrites that change. Do not mutate a value you gave `drgnx-module-set`.
+- Outside a setup the helpers make the change and nothing else (no label, closure or claim).
 
 ## Build (`drgnx-build.el`)
 
