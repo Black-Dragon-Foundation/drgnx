@@ -160,13 +160,14 @@
 (put 'drgnx-job-policy-test--swap 'rename (symbol-function 'rename-file))
 
 (ert-deftest drgnx-job/a-link-swapped-in-after-the-check-is-never-written-through ()
-  ;; Check, then write: the policy found the path inside the worktree; a directory on its way swapped for a symlink
-  ;; before the write led it out.  The write resolves the path itself: refused (an error the agent gets).
+  ;; Check, then write: the policy found the path inside the worktree (the last check is the agent-config one, which
+  ;; fails closed on a path that is no longer inside); a directory on its way swapped for a symlink before the write
+  ;; led it out.  The write resolves the path itself: refused (an error the agent gets).
   (drgnx-job-policy-test--with
     (let* ((s (drgnx-agents--make :id "s-w" :name "w" :profile "mock" :cwd wt :task (concat job "#1") :job job))
-           (outside (concat root "outside/")) (real (symbol-function 'drgnx-job--inside-p)) (swapped nil))
+           (outside (concat root "outside/")) (real (symbol-function 'drgnx-job--agent-config-p)) (swapped nil))
       (make-directory (concat wt "sub")) (make-directory outside)
-      (cl-letf (((symbol-function 'drgnx-job--inside-p)
+      (cl-letf (((symbol-function 'drgnx-job--agent-config-p)
                  (lambda (p tree) (prog1 (funcall real p tree)
                                     (unless swapped (setq swapped t) (drgnx-job-policy-test--swap (concat wt "sub") outside))))))
         (should-error (drgnx-job--request s "fs/write_text_file" (list :path (concat wt "sub/f.txt") :content "x\n") 1)))
