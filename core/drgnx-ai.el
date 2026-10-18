@@ -229,9 +229,10 @@ decrypts); the Keychain or a keyring may prompt; a plist entry is not known to b
   "The key of provider ID, or nil: its environment variable, else auth-source (host of its URL).  Only when
 INTERACTIVE (a command the user ran) are sources that may prompt (.gpg files, the Keychain, the keyring) consulted;
 the Keychain and the keyring only in an interactive Emacs, and the keyring only when a session bus can be reached
-and a Secret Service answers on it (`drgnx-ai--secret-service-p').  A batch Emacs never opens them, but a `.gpg' file it is asked to read may still ask for its passphrase on
-standard input.  With `auth-sources' nil an interactive command still gets the system's store (the Keychain, the
-keyring).  auth-source's own cache is not used: it is keyed by the search alone, so a miss from a source that was left
+and a Secret Service answers on it (`drgnx-ai--secret-service-p').  A batch Emacs never opens them, but a `.gpg'
+file it is asked to read may still ask for its passphrase on standard input.  With `auth-sources' nil an
+interactive command still gets the system's store (the Keychain, the keyring).
+auth-source's own cache is not used: it is keyed by the search alone, so a miss from a source that was left
 out would hide the key for hours."
   (let ((p (drgnx-ai-provider id)))
     (or (and (plist-get p :key-env) (let ((v (getenv (plist-get p :key-env)))) (and v (not (string-empty-p v)) v)))

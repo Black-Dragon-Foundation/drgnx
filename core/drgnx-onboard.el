@@ -1355,8 +1355,9 @@ layout comes back with drgnx open."
     (kill-emacs)))
 
 (defun drgnx-onboard--finish-step (ctx)
-  "The doctor's results; on macOS with the drgnx app installed, how to open drgnx next time.  When a step turned modules on or installed packages
-here, in the drgnx app (CTX interactive): asked whether to restart drgnx now (the result is recorded first)."
+  "The doctor's results; on macOS with the drgnx app installed, how to open drgnx next time.  When a step turned
+modules on or installed packages here, in the drgnx app (CTX interactive): asked whether to restart drgnx now
+\(the result is recorded first)."
   (require 'drgnx-doctor)
   (let* ((results (drgnx-doctor-run (drgnx-doctor-facts)))
          (count (lambda (s) (seq-count (lambda (r) (eq (plist-get r :status) s)) results)))
