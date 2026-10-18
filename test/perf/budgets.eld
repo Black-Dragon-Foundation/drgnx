@@ -20,6 +20,7 @@
  (live-view (:input :p95) 16) (live-view (:input :max) 50)
  (agent-settings-open (:draw_ms) 150) (agent-settings-open (:processes) 0)
  (remote-typing (:input :p95) 16) (remote-typing (:input :max) 50)
+ (window-switch (:input :p95) 16) (window-switch (:input :max) 50)
  (redisplay (:redisplay :p95) 16)
  ;; typing-with-index (M10-1): PROVISIONAL.  p95 22 = worst of 3 runs (12.2, 17.2, 21.1), rounded up, measured at load 7-8
  ;; (busy machine; the p95 rose with the load).  The ruled target is typing's 16 ms: a quiet-machine run pins it.

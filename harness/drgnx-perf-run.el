@@ -315,6 +315,54 @@ session functions the check and the teardown use."
         (ignore-errors (delete-file (drgnx-search-store-file drgnx-perf--index-root))))
       t)))
 
+(defun drgnx-perf-run--window-switch-setup-form ()
+  "The window-switch workload's setup: 3 editor groups with the dock, the panel and the right dock shown, and
+the counter the check reads (a command that ends in another selected window counts one)."
+  (prin1-to-string
+   `(progn
+      (defvar drgnx-perf--ws-count 0 "Commands that ended in a different selected window.")
+      (defvar drgnx-perf--ws-last nil "The selected window after the last command.")
+      (defun drgnx-perf--ws-post ()
+        (let ((w (selected-window)))
+          (unless (eq w drgnx-perf--ws-last)
+            (setq drgnx-perf--ws-count (1+ drgnx-perf--ws-count) drgnx-perf--ws-last w))))
+      (drgnx-groups-focus-2)             ; a second group if there is one, then a third if there are two
+      (drgnx-groups-focus-3)
+      (drgnx-wb-show-sidebar)
+      (drgnx-wb-area-show 'panel)
+      (drgnx-wb-area-show 'right)
+      (add-hook 'post-command-hook #'drgnx-perf--ws-post 90)
+      t)))
+
+(defun drgnx-perf-run--window-switch-each-form ()
+  "Before each repeat: the fixture in all three groups, group 1 selected, the counter at 0."
+  (concat "(let ((groups (drgnx-groups-list)))
+     (unless (= (length groups) 3) (error \"%d editor groups, not 3\" (length groups)))
+     (select-window (car groups))
+     " (drgnx-perf-run--visit-fixture-form) "
+     (dolist (w (cdr groups)) (set-window-buffer w (current-buffer)))
+     (select-window (car groups))
+     (setq drgnx-perf--ws-count 0 drgnx-perf--ws-last (selected-window))
+     t)"))
+
+(defconst drgnx-perf-run--window-switch-teardown-form
+  "(progn
+     (remove-hook 'post-command-hook #'drgnx-perf--ws-post)
+     (drgnx-wb-area-hide 'panel)
+     (drgnx-wb-area-hide 'right)
+     (dolist (w (cdr (drgnx-groups-list))) (when (window-live-p w) (delete-window w)))
+     t)"
+  "After the workload: the hook out, the areas hidden, one editor group again.")
+
+(defun drgnx-perf-run--select (workloads)
+  "WORKLOADS limited to the names in $DRGNX_PERF_WORKLOADS (space-separated; unset or empty: all), in their own
+order.  A name that is no workload is an error: a typo must not run nothing and pass."
+  (let ((names (split-string (or (getenv "DRGNX_PERF_WORKLOADS") "") " " t)))
+    (if (null names) workloads
+      (dolist (n names)
+        (unless (assq (intern n) workloads) (error "DRGNX_PERF_WORKLOADS: no workload %S" n)))
+      (seq-filter (lambda (w) (member (symbol-name (car w)) names)) workloads))))
+
 (defun drgnx-perf-run--workloads ()
   "The workloads: (NAME :setup FORM :each FORM :actions ACTIONS :check FORM :measure FORM :teardown FORM :repeat N).
 Every workload runs three times (medians are kept); :each runs before each repeat, :check after it (an
@@ -468,6 +516,16 @@ error if it does not hold)."
        :actions ,(make-list 6 (funcall type "(let ((x 1)) (message \"%s\" x)) "))
        :check "(drgnx-perf--index-check)"
        :teardown ,(concat "(progn (drgnx-perf--index-teardown) " kill-fixture ")"))
+      ;; C-x o ×50 across 3 editor groups showing one file, the dock, panel and right dock shown: the cost of moving
+      ;; the selection, the baseline for the workbench state store's observer
+      (window-switch
+       :setup ,(drgnx-perf-run--window-switch-setup-form)
+       :each ,(drgnx-perf-run--window-switch-each-form)
+       :actions ,(make-list 50 '(:keys "C-x o"))
+       :check "(and (= drgnx-perf--ws-count 50) (= (length (drgnx-groups-list)) 3) (drgnx-wb-sidebar-showing-p)
+                    (drgnx-wb-area-window 'panel) (drgnx-wb-area-window 'right) t)"
+       :repeat 3
+       :teardown ,(concat "(progn " drgnx-perf-run--window-switch-teardown-form " " kill-fixture ")"))
       (frames :measure "(list :frame (drgnx-perf-frame-ms 5))")
       (redisplay :each ,(drgnx-perf-run--visit-fixture-form) :measure "(list :redisplay (drgnx-perf-redisplay-ms 30))" :teardown ,kill-fixture)
       (startup :daemon t)
@@ -625,9 +683,10 @@ the hook budget only (the audit adds its own cost to the other numbers)."
   "The run of `drgnx-perf-run' on a quiet machine: LIMIT the load allowed, START the load before it."
   (let* ((loads (list start))
          (drgnx-perf-run--fixture (drgnx-perf-run--make-fixture))
+         (all (drgnx-perf-run--workloads)) (selected (drgnx-perf-run--select all))
          (s (drgnx-ui-start "drgnx" "1400x800" 60)) (sess (drgnx-ui-own-session (plist-get s :name))) results)
     (unwind-protect
-        (dolist (w (drgnx-perf-run--workloads))
+        (dolist (w selected)
           (message "perf: %s…" (car w))
           (push (cons (car w) (condition-case err (drgnx-perf-run-workload sess (cdr w) audit)
                                 (error (list :error (error-message-string err)))))
@@ -655,12 +714,15 @@ the hook budget only (the audit adds its own cost to the other numbers)."
             (if (or fails errors) 1 (princ "perf audit: every hook function within its budget\n") 0))))
        (t
         (let* ((history (expand-file-name "perf-history.jsonl" (drgnx-ui-state-root)))
-               (fails (drgnx-perf-verdict results (drgnx-perf-run--budgets)))
+               (partial (/= (length selected) (length all)))   ; DRGNX_PERF_WORKLOADS: judge those, keep no history
+               (fails (drgnx-perf-verdict results (if partial (seq-filter (lambda (b) (assq (car b) results)) (drgnx-perf-run--budgets)) (drgnx-perf-run--budgets))))
                (worse (drgnx-perf-regressions history results)))
           (dolist (f fails) (princ (format "FAIL %s\n" f)))
           (dolist (r worse) (princ (format "FAIL regression: %s\n" r)))
-          (unless errors (drgnx-perf-history-append history (drgnx-perf-run--commit) results (seq-max (cons 0 (delq nil loads)))))
-          (princ (format "history: %s%s\n" history (if errors " (not written: a workload failed)" "")))
+          (unless (or errors partial) (drgnx-perf-history-append history (drgnx-perf-run--commit) results (seq-max (cons 0 (delq nil loads)))))
+          (princ (format "history: %s%s\n" history (cond (errors " (not written: a workload failed)")
+                                                         (partial " (not written: only some workloads ran)")
+                                                         (t ""))))
           (if (or fails worse errors) 1
             (princ "perf: every budget holds\n") 0)))))))
 
