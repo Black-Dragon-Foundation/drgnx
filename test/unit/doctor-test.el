@@ -174,6 +174,17 @@
       (should (eq (car r) 'warn))
       (should (string-search "no command nope" (nth 1 r))))))
 
+(ert-deftest drgnx-doctor/builtin-in-manifest-is-not-missing ()
+  ;; eglot ships with Emacs: a manifest that names it needs no install.
+  (should (eq (car (drgnx-doctor-check 'packages (drgnx-doctor-test--facts :packages '(:manifest (eglot) :installed () :lock t))))
+              'ok))
+  (should (package-built-in-p 'eglot))
+  (let ((r (drgnx-doctor-check 'packages (drgnx-doctor-test--facts
+                                          :packages '(:manifest (eglot drgnx-no-such-pkg) :installed () :lock t)))))
+    (should (eq (car r) 'warn))
+    (should (string-search "drgnx-no-such-pkg" (nth 1 r)))
+    (should-not (string-search "eglot" (nth 1 r)))))
+
 (ert-deftest drgnx-doctor/keys-report-fact ()
   (let* ((state (make-temp-file "drgnx-state" t))
          (process-environment (cons (concat "XDG_STATE_HOME=" state) process-environment)))

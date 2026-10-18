@@ -223,7 +223,10 @@ on PATH."
 (drgnx-doctor-define 'packages :group "drgnx" :doc "The packages drgnx needs are installed (drgnx sync), with a lock"
                      :check (lambda (f)
                               (let* ((p (plist-get f :packages))
-                                     (missing (seq-difference (plist-get p :manifest) (plist-get p :installed))))
+                                     ;; a package this Emacs ships (eglot, …) needs no install, as `drgnx sync' knows
+                                     (missing (progn (require 'package)
+                                                     (seq-remove #'package-built-in-p
+                                                                 (seq-difference (plist-get p :manifest) (plist-get p :installed))))))
                                 (cond ((plist-get p :error) (list 'fail (plist-get p :error) "fix or remove the file named; drgnx sync rewrites the lock"))
                                       (missing (list 'warn (format "not installed: %s" (mapconcat #'symbol-name missing " "))
                                                      "drgnx sync installs them (their modules wait until then)"))
@@ -231,7 +234,7 @@ on PATH."
                                        (list 'warn "no lock (drgnx.lock.eld)" "drgnx sync writes it; commit it with your configuration"))
                                       ((null (plist-get p :manifest)) (list 'ok "no packages needed" nil))
                                       (t (list 'ok (format "%d packages installed, locked; %d generations"
-                                                           (length (plist-get p :installed)) (plist-get p :generations))
+                                                           (length (plist-get p :installed)) (or (plist-get p :generations) 0))
                                                nil))))))
 
 (drgnx-doctor-define 'onboarding :group "drgnx" :doc "The onboarding steps (drgnx onboard, Help → Welcome)"
