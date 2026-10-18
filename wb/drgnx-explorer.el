@@ -64,23 +64,42 @@ Ask `drgnx-explorer--held-p', which knows when a release never came.")
       (string-version-lessp (downcase (car a)) (downcase (car b)))
     (cdr a)))
 
+(defvar drgnx-explorer--remote-reads nil
+  "Non-nil while a command of the user runs (set roots, Refresh, Toggle, Open): only then is a remote folder
+listed.  Otherwise a remote folder shows its cached listing, or one row saying it was not listed.")
+
+(defconst drgnx-explorer--not-listed "(not listed — Refresh)" "The one row of a remote folder nobody listed yet.")
+
+(defun drgnx-explorer--local-cache-clear ()
+  "Forget the listings of local folders: a remote one costs a round trip, and only a command re-reads it."
+  (let (local)
+    (maphash (lambda (dir _) (unless (file-remote-p dir) (push dir local))) drgnx-explorer--cache)
+    (dolist (dir local) (remhash dir drgnx-explorer--cache))))
+
 (defun drgnx-explorer-children (dir)
-  "DIR's entries as sorted (NAME . DIRP), without excluded names; cached while DIR is unchanged."
+  "DIR's entries as sorted (NAME . DIRP), without excluded names; cached while DIR is unchanged.
+A remote DIR is read only while `drgnx-explorer--remote-reads' is non-nil (a command of the user): the
+cached listing is used without asking the host, and a folder never listed has one row, \"(not listed — Refresh)\"."
   (let* ((dir (file-name-as-directory dir))
-         (mtime (file-attribute-modification-time (file-attributes dir)))
          (hit (gethash dir drgnx-explorer--cache)))
-    (if (and hit (equal (car hit) mtime))
-        (cdr hit)
-      (let (entries)
-        (dolist (e (ignore-errors (directory-files-and-attributes dir nil nil t)))
-          (let ((name (car e)) (type (file-attribute-type (cdr e))))
-            (unless (or (member name '("." "..")) (string-match-p drgnx-explorer-exclude name))
-              (push (cons name (or (eq type t)
-                                   (and (stringp type) (file-directory-p (expand-file-name name dir)))))
-                    entries))))
-        (setq entries (sort entries #'drgnx-explorer--before))
-        (puthash dir (cons mtime entries) drgnx-explorer--cache)
-        entries))))
+    (cond
+     ((and (file-remote-p dir) (not drgnx-explorer--remote-reads))
+      (if hit (cdr hit) (list (cons drgnx-explorer--not-listed nil))))
+     (t
+      (let* ((remote-file-name-inhibit-cache (if (file-remote-p dir) t remote-file-name-inhibit-cache)) ; a command lists afresh
+             (mtime (file-attribute-modification-time (file-attributes dir))))
+        (if (and hit (equal (car hit) mtime))
+            (cdr hit)
+          (let (entries)
+            (dolist (e (ignore-errors (directory-files-and-attributes dir nil nil t)))
+              (let ((name (car e)) (type (file-attribute-type (cdr e))))
+                (unless (or (member name '("." "..")) (string-match-p drgnx-explorer-exclude name))
+                  (push (cons name (or (eq type t)
+                                       (and (stringp type) (file-directory-p (expand-file-name name dir)))))
+                        entries))))
+            (setq entries (sort entries #'drgnx-explorer--before))
+            (puthash dir (cons mtime entries) drgnx-explorer--cache)
+            entries)))))))
 
 (defun drgnx-explorer--expanded-p (path) (gethash path drgnx-explorer--expanded))
 
@@ -367,7 +386,7 @@ watched — the inotify limit — is tried again)."
       (when-let* ((buf (get-buffer drgnx-explorer-buffer-name)))
         (with-current-buffer buf
           (if (> (length dirs) drgnx-explorer--splice-limit)
-              (progn (clrhash drgnx-explorer--cache) (drgnx-explorer--render))   ; a checkout: one pass
+              (progn (drgnx-explorer--local-cache-clear) (drgnx-explorer--render))   ; a checkout: one pass
             (dolist (d dirs) (drgnx-explorer--refresh-dir d)))
           (drgnx-explorer--git-refresh))))))
 
@@ -511,15 +530,17 @@ A remote file is never revealed: this runs from the change bus, where remote I/O
   "Show ROOTS (directories) in the Explorer (this ends Find)."
   (when drgnx-explorer--find (setq drgnx-explorer--find nil) (drgnx-explorer--plain-title))
   (setq drgnx-explorer--roots (mapcar (lambda (r) (file-name-as-directory (expand-file-name r))) roots))
-  (if (get-buffer drgnx-explorer-buffer-name) (drgnx-explorer--render) (drgnx-explorer--buffer)))   ; a new one renders itself
+  (let ((drgnx-explorer--remote-reads t))                  ; the user's command: a remote root is listed now
+    (if (get-buffer drgnx-explorer-buffer-name) (drgnx-explorer--render) (drgnx-explorer--buffer))))   ; a new one renders itself
 
 (defun drgnx-explorer-roots () drgnx-explorer--roots)
 
 (defun drgnx-explorer-refresh ()
   "Re-read changed folders and render again, keeping expansion and the selected row (during Find: filter again)."
   (interactive)
-  (drgnx-explorer--buffer)
-  (if drgnx-explorer--find (drgnx-explorer--find-again) (drgnx-explorer--render)))
+  (let ((drgnx-explorer--remote-reads t))                  ; the user's command: remote folders are listed again
+    (drgnx-explorer--buffer)
+    (if drgnx-explorer--find (drgnx-explorer--find-again) (drgnx-explorer--render))))
 
 ;;;; Commands
 
@@ -528,9 +549,12 @@ A remote file is never revealed: this runs from the change bus, where remote I/O
 (defun drgnx-explorer-activate (pos &optional keep-focus)
   "A folder toggles; a file opens in the editor (KEEP-FOCUS keeps the Explorer selected)."
   (when-let* ((path (drgnx-explorer-node-at pos)))
-    (if (drgnx-explorer-dir-at pos)
-        (drgnx-explorer-toggle-at pos)
-      (drgnx-wb-show-in-editor (find-file-noselect path) (not keep-focus)))))
+    (cond
+     ((equal (file-name-nondirectory path) drgnx-explorer--not-listed) (drgnx-explorer-refresh))   ; the row says so
+     ((drgnx-explorer-dir-at pos)
+      (let ((drgnx-explorer--remote-reads t)) (drgnx-explorer-toggle-at pos)))   ; a click or Open: the user's command
+     (t
+      (drgnx-wb-show-in-editor (find-file-noselect path) (not keep-focus))))))
 
 (defun drgnx-explorer-next () "Next row (ends a multi-select)."
        (interactive) (drgnx-explorer--clear-selection) (forward-line 1) (when (eobp) (forward-line -1)))
@@ -586,7 +610,7 @@ A remote file is never revealed: this runs from the change bus, where remote I/O
   (when (drgnx-explorer-dir-at (point))
     (if (and (drgnx-explorer--expanded-p (drgnx-explorer--node)) (> (drgnx-explorer-depth-at (point)) 0))
         (drgnx-explorer-next)
-      (drgnx-explorer-toggle-at (point)))))
+      (let ((drgnx-explorer--remote-reads t)) (drgnx-explorer-toggle-at (point))))))
 
 (defun drgnx-explorer-collapse ()
   "Collapse the folder at point; otherwise go to the parent folder."
@@ -604,7 +628,7 @@ A remote file is never revealed: this runs from the change bus, where remote I/O
 (defun drgnx-explorer-preview () "Open the file at point, keeping the Explorer focused."
        (interactive) (drgnx-explorer-activate (point) t))
 (defun drgnx-explorer-toggle () "Expand or collapse the folder at point."
-       (interactive) (drgnx-explorer-toggle-at (point)))
+       (interactive) (let ((drgnx-explorer--remote-reads t)) (drgnx-explorer-toggle-at (point))))
 
 (defun drgnx-explorer-focus () "Show the sidebar and focus the Explorer."
        (interactive) (drgnx-wb-focus-section 'explorer))

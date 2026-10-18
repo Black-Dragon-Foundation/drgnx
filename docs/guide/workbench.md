@@ -365,3 +365,12 @@ by real key presses: no focus taken, width identical over 10 hide/show cycles, t
 the ten Explorer and Buffers scenarios of [scenarios.md](../develop/scenarios.md), plus two for live updates (a folder
 appearing during a held click; a folder appearing while browsing), are green on drgnx (`bin/drgnx test
 --scenario --config drgnx`; driver `test/scenario/drivers/drgnx.el`).
+
+## Remote folders in the Explorer
+
+A remote folder (a TRAMP name) is listed only by a command of yours: opening it (Open Remote…), Refresh, and expanding
+or opening a folder row. A redraw that nothing of yours started, such as the one after a git status or a window change,
+shows the listing it already has and asks the host nothing; a remote folder that was never listed shows one row,
+`(not listed — Refresh)`, and Enter or a click on that row refreshes. A checkout in a local folder forgets only the
+local listings. Git decorations, inline blame, the Outline, sticky scroll and the change gutter skip remote files; see
+[remote.md](remote.md).
