@@ -17,18 +17,25 @@
 (defvar drgnx-agents-request-functions)
 (defvar drgnx-agents-changed-functions)
 (defvar drgnx-wb--areas)
+(defvar drgnx-layouts-pane-fillers)
+(defvar drgnx-persist-state-functions)
+(defvar drgnx-persist-after-restore-functions)
 
 (defmacro drgnx-keys-test--with-core-commands (&rest body)
   "BODY with a registry holding the core commands (core + core/basics) and the two replace commands
 that took VS Code's C-S-h and F2 (the rest of the replace module is not modelled here), nothing else — and with
 `drgnx-keys-test--later-stages', the commands of the later stages' modules whose packages need nothing installed.
-What those modules hook into (find-file, the agents, the panel tabs) is undone after BODY."
+What those modules hook into (find-file, the agents, the panel tabs, the layouts' pane fillers, the persist hooks)
+is undone after BODY."
   `(let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
          (drgnx-commands-problems nil) (drgnx-modules--table nil) (drgnx-modules--report nil)
          (find-file-hook find-file-hook)
          (drgnx-agents-request-functions (bound-and-true-p drgnx-agents-request-functions))
          (drgnx-agents-changed-functions (bound-and-true-p drgnx-agents-changed-functions))
          (drgnx-wb--areas (copy-tree (bound-and-true-p drgnx-wb--areas)))
+         (drgnx-layouts-pane-fillers (copy-tree (bound-and-true-p drgnx-layouts-pane-fillers)))
+         (drgnx-persist-state-functions (bound-and-true-p drgnx-persist-state-functions))
+         (drgnx-persist-after-restore-functions (bound-and-true-p drgnx-persist-after-restore-functions))
          (ring-bell-function ring-bell-function) (use-dialog-box use-dialog-box)
          (use-short-answers use-short-answers) (inhibit-startup-screen inhibit-startup-screen))
      (drgnx--core-commands)
@@ -826,6 +833,19 @@ What those modules hook into (find-file, the agents, the panel tabs) is undone a
     (review-show-diff "d" drgnx-review-mode-map))
   "The VS Code profile's resolved keys on Linux before M12a gave it its macOS keys: (ID KEY MAP).
 The commands of modules that need no installed package are in it, the later stages' too (diff, review).")
+
+(ert-deftest drgnx-keys/the-later-stages-leave-no-global-hooks-or-pane-fillers ()
+  ;; Setting the modules up for the snapshot must not stay: a registered browser pane made the next layouts test
+  ;; open a third editor group, the persist hooks changed every later restore.
+  (require 'drgnx-persist)
+  (let ((fillers (copy-tree (bound-and-true-p drgnx-layouts-pane-fillers)))
+        (state-fns (copy-sequence drgnx-persist-state-functions))
+        (after-fns (copy-sequence drgnx-persist-after-restore-functions))
+        (drgnx-keys-test--later-stages t))
+    (drgnx-keys-test--with-core-commands (ignore))
+    (should (equal (bound-and-true-p drgnx-layouts-pane-fillers) fillers))
+    (should (equal drgnx-persist-state-functions state-fns))
+    (should (equal drgnx-persist-after-restore-functions after-fns))))
 
 (ert-deftest drgnx-keys/linux-is-unchanged ()
   ;; The macOS work changes nothing on Linux but the keys of the commands it added — and the views
