@@ -2,6 +2,7 @@
 (require 'ert)
 (require 'drgnx-ai)
 (require 'drgnx-ai-probe)
+(require 'drgnx-file)
 (require 'drgnx-jobs)
 (require 'auth-source)
 (load (expand-file-name "test/fixtures/mock-llm" drgnx-dir) nil t)
@@ -725,3 +726,102 @@ here, and a variable let-bound before it loads would turn special for good."
     (should (equal [] (drgnx-ai-embed-sync [] :on-answer (lambda (i) (setq got i)))))
     (should (equal got '(:provider nil :model nil :fallbacks nil)))
     (should (equal drgnx-ai-embed-last-info got))))
+
+;;;; ai-detected.eld and ai-local.eld (config Task 22)
+
+(defun drgnx-ai-test--read-file (file)
+  (with-temp-buffer (insert-file-contents file) (buffer-string)))
+
+(defmacro drgnx-ai-test--with-answers (answers &rest body)
+  "BODY with `drgnx-ai--curl' answering at once from ANSWERS ((URL-SUBSTRING STATUS TEXT)…): no server is asked."
+  (declare (indent 1))
+  `(cl-letf (((symbol-function 'drgnx-ai--curl)
+              (lambda (url callback &rest _)
+                (let ((hit (seq-find (lambda (a) (string-search (car a) url)) ,answers)))
+                  (funcall callback (or (nth 1 hit) 0) (or (nth 2 hit) ""))))))
+     ,@body))
+
+(defun drgnx-ai-test--probe (ids)
+  "Probe IDS with the answers of `drgnx-ai-test--with-answers' (an Ollama that lists one model); the callback's count."
+  (let ((called 0))
+    (drgnx-ai-probe (lambda () (cl-incf called)) ids)
+    called))
+
+(ert-deftest drgnx-ai/a-probe-keeps-providers-another-process-found ()
+  ;; the file is merged into under its lock: a provider only another Emacs found stays in it
+  (drgnx-ai-test--with root
+    (let ((drgnx-ai-detected nil) (file (drgnx-ai-detected-file)))
+      (make-directory (file-name-directory file) t)
+      (drgnx-ai-test--write file '((vllm :up t :models ("big")) (ollama :up nil)))
+      (drgnx-ai-test--with-answers '(("/api/tags" 200 "{\"models\":[{\"name\":\"qwen:1b\"}]}"))
+        (should (= 1 (drgnx-ai-test--probe '(ollama)))))
+      (let ((saved (drgnx-ai-detected-cached)))
+        (should (equal (alist-get 'vllm saved) '(:up t :models ("big"))))             ; the other process's, kept
+        (should (equal (alist-get 'ollama saved) '(:up t :models ("qwen:1b"))))       ; this probe's, replacing the old
+        (should (= (length saved) 2)))
+      (should-not (alist-get 'vllm drgnx-ai-detected)))))                             ; this process only knows what it asked
+
+(ert-deftest drgnx-ai/an-unreadable-detected-file-is-copied-aside-and-written-again ()
+  (drgnx-ai-test--with root
+    (let ((drgnx-ai-detected nil) (file (drgnx-ai-detected-file)) (broken "((ollama :up t\n;; mine\n"))
+      (make-directory (file-name-directory file) t)
+      (write-region broken nil file nil 'silent)
+      (should-not (drgnx-ai-detected-cached))                                         ; a mistake reads as nothing
+      (drgnx-ai-test--with-answers '(("/api/tags" 200 "{\"models\":[]}"))
+        (drgnx-ai-test--probe '(ollama)))
+      (should (plist-get (alist-get 'ollama (drgnx-ai-detected-cached)) :up))
+      (let ((baks (directory-files (file-name-directory file) t "\\`ai-detected\\.eld\\.bak-")))
+        (should (= (length baks) 1))
+        (should (equal (drgnx-ai-test--read-file (car baks)) broken))))))             ; the mistake's bytes, kept
+
+(ert-deftest drgnx-ai/a-busy-lock-skips-without-a-prompt ()
+  (drgnx-ai-test--with root
+    (let* ((drgnx-ai-detected nil) (file (drgnx-ai-detected-file)) (bytes "((vllm :up t))\n")
+           (lock (expand-file-name ".ai-detected.eld.lock" (file-name-directory file)))
+           (now (float-time)) (sleeps 0) (seen nil) (messages nil))
+      (make-directory (file-name-directory file) t)
+      (write-region bytes nil file nil 'silent)
+      (make-directory lock)                                       ; another drgnx holds the file
+      (write-region (prin1-to-string (list :pid (emacs-pid) :host (system-name)
+                                           :started (drgnx-file--pid-start (emacs-pid)) :time now))
+                    nil (expand-file-name "owner" lock) nil 'silent)
+      (cl-letf (((symbol-function 'drgnx-file--now) (lambda () now))
+                ((symbol-function 'drgnx-file--sleep) (lambda (s) (cl-incf sleeps) (setq now (+ now s))))
+                ((symbol-function 'y-or-n-p) (lambda (&rest _) (ert-fail "asked")))
+                ((symbol-function 'yes-or-no-p) (lambda (&rest _) (ert-fail "asked")))
+                ((symbol-function 'read-string) (lambda (&rest _) (ert-fail "asked")))
+                ((symbol-function 'message) (lambda (fmt &rest args) (push (apply #'format fmt args) messages)))
+                ((symbol-function 'drgnx-file--lock)
+                 (let ((orig (symbol-function 'drgnx-file--lock)))
+                   (lambda (&rest args) (push inhibit-interaction seen) (apply orig args)))))
+        (drgnx-ai-test--with-answers '(("/api/tags" 200 "{\"models\":[]}"))
+          (should (= 1 (drgnx-ai-test--probe '(ollama))))))          ; the callback still runs
+      (should (equal seen '(t)))                                  ; …under inhibit-interaction
+      (should (= sleeps 0))                                       ; one attempt: no wait
+      (should (equal (drgnx-ai-test--read-file file) bytes))      ; skipped: the file is as it was
+      (should (plist-get (alist-get 'ollama drgnx-ai-detected) :up))   ; this process still knows its answers
+      (should-not messages)
+      ;; the lock is gone: the next probe writes
+      (delete-directory lock t)
+      (drgnx-ai-test--with-answers '(("/api/tags" 200 "{\"models\":[]}"))
+        (drgnx-ai-test--probe '(ollama)))
+      (let ((saved (drgnx-ai-detected-cached)))
+        (should (alist-get 'vllm saved))
+        (should (plist-get (alist-get 'ollama saved) :up))))))
+
+(ert-deftest drgnx-ai/set-managed-keeps-what-else-the-file-holds-and-reads-back ()
+  (drgnx-ai-test--with root
+    (let ((file (drgnx-ai-local-file)))
+      (should-not (drgnx-ai-managed))
+      (make-directory (file-name-directory file) t)
+      (drgnx-ai-test--write file '(:note "kept" :managed (ollama :start ("old") :name "Old")))
+      (should (equal (drgnx-ai-managed) '(ollama :start ("old") :name "Old")))
+      (drgnx-ai-set-managed 'lmstudio '("/opt/lms" "server" "start") "LM Studio")
+      (should (equal (drgnx-ai-managed) '(lmstudio :start ("/opt/lms" "server" "start") :name "LM Studio")))
+      (should (equal (plist-get (car (read-from-string (drgnx-ai-test--read-file file))) :note) "kept"))
+      ;; a mistake in the file is copied aside, not lost
+      (write-region "(:managed (ollama\n" nil file nil 'silent)
+      (should-not (drgnx-ai-managed))
+      (drgnx-ai-set-managed 'ollama '("ollama" "serve") "Ollama")
+      (should (equal (drgnx-ai-managed) '(ollama :start ("ollama" "serve") :name "Ollama")))
+      (should (= 1 (length (directory-files (file-name-directory file) nil "\\`ai-local\\.eld\\.bak-")))))))

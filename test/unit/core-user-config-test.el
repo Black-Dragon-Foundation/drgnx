@@ -1,5 +1,6 @@
 ;;; core-user-config-test.el --- batch tests: the user's config.el -*- lexical-binding: t -*-
 (require 'ert)
+(require 'drgnx-file)
 (require 'drgnx)
 
 (defmacro drgnx-user-config-test--with (dir &rest body)
@@ -45,6 +46,26 @@
             (drgnx-open-user-config)                 ; an existing file is never overwritten
             (should (equal (buffer-string) "(setq x 1)\n")))
         (when (buffer-file-name) (kill-buffer))))))
+
+(ert-deftest drgnx-user-config/the-config-template-is-written-once ()
+  (drgnx-user-config-test--with dir
+    (let ((calls nil) (orig (symbol-function 'drgnx-file-write-text)))
+      (unwind-protect
+          (cl-letf (((symbol-function 'drgnx-file-write-text)
+                     (lambda (file text &rest args) (push file calls) (apply orig file text args))))
+            (drgnx-open-user-config)
+            (should (equal calls (list (drgnx-user-config-file))))
+            (should (string-match-p "lexical-binding: t" (buffer-string)))
+            (kill-buffer)
+            (drgnx-open-user-config)             ; it exists now: not written again
+            (should (= (length calls) 1))
+            (kill-buffer)
+            (write-region "(setq x 1)\n" nil (drgnx-user-config-file) nil 'silent)
+            (drgnx-open-user-config)             ; the user's own text is never replaced
+            (should (= (length calls) 1))
+            (should (equal (buffer-string) "(setq x 1)\n")))
+        (when (buffer-file-name) (kill-buffer))))))
+
 
 (ert-deftest drgnx-user-config/the-command-is-registered ()
   (drgnx--core-commands)

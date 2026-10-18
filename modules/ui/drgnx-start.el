@@ -212,7 +212,7 @@ Always returns nil, so it can be a hook function."
 (defun drgnx-start-dismiss ()
   "Never show the start page by itself again (kept in face.eld), and put it away: its windows show `*scratch*'."
   (interactive)
-  (drgnx-face-state-write (plist-put (copy-sequence (drgnx-face-state-read)) :start-dismissed t))
+  (drgnx-face-state-put '(:start-dismissed t))
   (when-let* ((buf (get-buffer drgnx-start-buffer-name)))
     (dolist (w (get-buffer-window-list buf nil t))
       (set-window-buffer w (get-scratch-buffer-create)))

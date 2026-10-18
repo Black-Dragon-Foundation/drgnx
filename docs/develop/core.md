@@ -48,6 +48,22 @@ nothing here reaches Tramp, and nothing prompts or visits a buffer. Errors: `drg
 **Which call.** Config files go through drgnx-config, which uses this layer. State files change through
 `drgnx-file-update` with `:on-unreadable 'backup`. Reports and other files rewritten whole use `drgnx-file-write`
 with `:fsync nil`. Text files drgnx writes (unit files, desktop entries, exports) use `drgnx-file-write-text`.
+A state file whose content grants something falls back to granting nothing: trusted-folders.eld
+(`core/drgnx-trust.el`) trusts no folder when it is unreadable, has a mistake or has a newer `:version`, and its
+writer (`drgnx-trust--write`) backs up the first two and refuses the third (`user-error`), since `:on-unreadable
+'backup` covers only a file that does not read. Its reader also drops remote entries and those Trust This Folder
+refuses (`drgnx-trust--read-entry-p`: `file-remote-p` only parses, and the truenames are taken with no file name
+handlers, so a read at startup or from the palette never connects; an entry that signals is dropped), and messages
+once per change of an unusable file. The mode body reads under `condition-case`, so a bad file never keeps a guard
+off. Untrust This Folder takes effect in the session (`drgnx-trust--added`) even when the file cannot be changed.
+
+The report files in the state folder go this way: `wb-report.eld` (`drgnx-rules--write-report`, a startup hook: an
+error becomes one `message`), `agent-checks.eld` (`drgnx-agent-check-remember`, `:private t`) and `check/durations.eld`
+(`drgnx-check--save-durations`) are written with `drgnx-file-write ... :fsync nil`, so a failed write keeps the old
+report. They are read with `drgnx-file-read`: `drgnx-tty--read-report`, `drgnx-agent-check-results`,
+`drgnx-check-durations` and the doctor's `drgnx-doctor--state-file` / `drgnx-doctor--keys-report` give the data of an
+`ok` file, else nil (missing, over 1 MiB, a mistake, text after the form, not plain data). A report is rebuilt by its
+next run, so a report with a mistake is not kept aside.
 
 **job.eld.** A durable job's `jobs/ID/job.eld` is a plist of plain data in one form: `drgnx-jobs-start` writes it with
 `drgnx-file-write` (text properties on the name and command are dropped first), `drgnx-jobs--read` reads it with
@@ -100,6 +116,9 @@ written:
 
 `(drgnx-file-write-text FILE TEXT &key mode private (fsync t))` writes text with the same rules, no read back and no
 size limit: reports, units and exports are not read back through the bounded reader.
+The text files drgnx writes all use it: the markdown export (`drgnx-surfaces-export-markdown`: an old file keeps its
+modes, a new one gets 0644), the systemd unit (`drgnx-pkg-service-unit`), the Linux desktop entry, the `config.el`
+template (made only when the file is missing) and the agents' settings files and their backups (below).
 
 **The locked update.** `(drgnx-file-update FILE FN &key on-unreadable (timeout 1.0) max-bytes header pretty render)`
 takes the lock, reads the file fresh, and writes `(FN DATA)`. FN gets a deep copy of the data, so a `plist-put` in
@@ -316,6 +335,23 @@ definition appends its entry and regenerates. Every definition needs a `:doc` (a
 The doctor's `config-files` check reads each non-project file fresh (`drgnx-config-read`, writing nothing), and the
 core features that define files are listed in `drgnx-doctor-config-features`: a port appends its feature there too.
 Tests: `test/unit/config-doc-test.el` and `test/unit/doctor-test.el`.
+
+`onboarding.eld` (state folder, an alist of step → `(:status :message :time)`, `core/drgnx-onboard.el`) is the one
+state file that is not refused when it cannot be read: `drgnx-onboard--record` is a `drgnx-file-update` with
+`:on-unreadable 'backup` (the file is copied aside, the step is recorded in a new one), so two processes keep their
+steps and a damaged progress file never stops onboarding. `drgnx-onboard-state` reads through `drgnx-config-get`;
+`drgnx-onboard--write-state` (the Welcome's first-start marker) is a plain `drgnx-file-write`. Tests:
+`test/unit/onboard-test.el`.
+
+`face.eld` (state folder, a plist, `core/drgnx-face-state.el`) is a config file read by two programs: drgnx, and
+`bin/drgnx`, which finds `:variant` and `:gtk-theme` in it with `sed` before any Emacs runs. So it is printed with `prin1`
+on one line (a comment header on a new file names neither key), and the schema stays as wide as what M12f-a wrote:
+no version key, unknown keys allowed. A change is `drgnx-face-state-put PLIST [TIMEOUT]` (sets those keys, keeps the
+rest) or `drgnx-face-state-update FN`, both a `drgnx-file-update` with `:on-unreadable 'backup`: under the lock, on a
+fresh read, nothing written when nothing changed, and a file that is unreadable or not a plist is copied aside to
+`face.eld.bak-<time>` before it is started again. `drgnx-face-state-write` (replace the whole plist) stays for callers
+that mean it. The theme hook passes TIMEOUT 0 and skips when `drgnx-file-busy`; a failure becomes one message.
+`drgnx-face-state-read` is `drgnx-file-read`, never signals. Tests: `test/unit/face-state-test.el`.
 
 ## Staged hooks (`drgnx-hooks.el`)
 
@@ -1045,7 +1081,7 @@ An item is a plist `(:kind :section mcp|hook|skill :name :from user|project|loca
 | `-read KIND ROOT`, `-scopes KIND SECTION ROOT`, `-write KIND OP ITEM SCOPE ROOT CALLBACK` | Generic functions (`cl-defgeneric`, `eql` specializers on KIND) each agent file implements: everything configured as `(:rules :items :problems :routes :notes)`; where an add may go, `((SCOPE LABEL FILE)…)`; add/edit/remove/toggle with a callback getting `(:ok t :note S)` or `(:error S)`. |
 | `-json-read FILE` | `(:value V :indent N)`: objects are alists with symbol keys in file order, arrays vectors, `:null`, `:false`. A missing or blank file is `(:value nil :indent 2)`; one that does not parse signals `drgnx-agent-config-unreadable` with `(FILE LINE MESSAGE)` (a trailing comma names the comma's line). |
 | `-json-write FILE VALUE INDENT [EXPECT]` | Key order as in VALUE, INDENT spaces, a final newline; through `-write-text`, with the file's and the new text's JSON parse as checks. Unreadable files are never written. A VALUE that is not JSON is an error naming its place and type (`Not a JSON value at mcpServers.x.args (a list, expected a vector)`), never its content. |
-| `-write-text FILE TEXT CHECK [VERIFY [EXPECT]]` | EXPECT (the text, or the modification time, seen when the caller read FILE): a FILE that differs now signals `drgnx-agent-config-changed` and nothing is touched (Claude Code rewrites `~/.claude.json` often). CHECK (called with FILE's current text) must not signal, else nothing is touched; VERIFY the same with TEXT. TEXT equal to what FILE holds is not written and the backup stays. Then FILE is copied to `FILE.drgnx-bak` (exactly one backup, with FILE's modes), TEXT goes to a temp file next to FILE with FILE's modes (0600 for a new file) and is renamed over it. A symlink is written through; directories it has to make get 0700. The TOML writes use it too. |
+| `-write-text FILE TEXT CHECK [VERIFY [EXPECT]]` | EXPECT (the text, or the modification time, seen when the caller read FILE): a FILE that differs now signals `drgnx-agent-config-changed` and nothing is touched (Claude Code rewrites `~/.claude.json` often). CHECK (called with FILE's current text) must not signal, else nothing is touched; VERIFY the same with TEXT. TEXT equal to what FILE holds is not written and the backup stays. Then FILE is copied to `FILE.drgnx-bak` (exactly one backup, 0600 whatever FILE's modes: it holds the secrets of before; its temp file is owner-only before the rename), TEXT goes through `drgnx-file-write-text` (a temp file next to FILE, renamed over it) with FILE's modes (0600 for a new file). A symlink is written through; directories it has to make get 0700. The TOML writes use it too. |
 | `-secrets SPEC`, `-mask-text TEXT SECRETS` | Every env and header value, and the value of any key matching token, secret, key, password or authorization (case-insensitive; every string inside a list or object under such a key), longer than 3 characters. Also, in `:args`, `:url`, a hook's `:command` and every other string, only the secret part of: `NAME=VALUE` / `--flag=VALUE` with a secret-ish name, `Bearer`/`Basic`/`Token` values, `Authorization:` values, URL userinfo and secret-ish query parameters, well-known token shapes (`sk-`, `ghp_`, `github_pat_`, `xox?-`, `AKIA`, `AIza`, JWTs), the argument after a secret-ish flag, `-p`, `-H`/`--header` and `-e`/`--env`, and 24+ character `:url` path segments. `-mask-text` replaces each by `••••` and keeps the context. |
 | `-cheap-status ITEM [ROOT]` | `(ok . DETAIL)`, `missing-command`, `no-url` or `unreadable`, from files and `exec-path` only: nothing is run. A relative command with a slash is the spec's `cwd`'s (relative to ROOT), else ROOT's, else `~/`'s, never `default-directory`'s. The detail is masked like any text shown (a URL keeps its host and path, not its secrets). |
 | `-save-backup FILE`, `-json-read-text FILE TEXT` | The one-backup copy used by `-write-text` (public: a CLI write takes its own backup first); `-json-read` for a text already read. |
@@ -1204,7 +1240,7 @@ they never create a scope in the user's systemd manager.
 | `drgnx-agent-check-main` | Child side. stdio: starts the server in ROOT with its environment, sends `initialize` (MCP revision 2025-06-18), `notifications/initialized` and `tools/list` (every page), ends the server's whole tree (descendants, its group and session) at the end. HTTP (`http` and `sse` items; Streamable HTTP only): POSTs the same, keeps the `Mcp-Session-Id` and `MCP-Protocol-Version`, reads JSON or SSE answers (an SSE stream the server leaves open is fine). A 401 with `WWW-Authenticate` is `needs-login`, and `:error` says how to log in (`drgnx-agent-check-login-hint`: Claude `/mcp`, Codex `codex mcp login NAME`, Gemini `/mcp auth NAME`). Limits: the timeout; 256 KB of output that is not JSON-RPC (a flood); 4 MB for one message or answer; stderr 8 KB. This Emacs ends the child (and everything under it) 5 seconds after the timeout if it did not. A TLS certificate that cannot be verified is refused (the child cannot ask), so a server with a self-signed certificate fails with a message saying so. A connection that never completes is ended by the 5-second backstop above. |
 | `(drgnx-agent-check-hook ITEM ROOT CALLBACK)` | Runs the hook's command with `sh -c` in ROOT (in the same memory cap), the sample event as JSON on stdin, for the hook's timeout (Gemini's is milliseconds) or 60 seconds. The command travels in the environment (`DRGNX_HOOK_COMMAND`, unset before it runs), not on a command line. CALLBACK gets `(:exit N :stdout S :stderr S :time F)`, masked, 16 KB each; a hook that ran out of time has `:exit nil :timeout t`; one that could not start has `:exit nil :error S`. |
 | `(drgnx-agent-check-sample-event KIND EVENT ROOT)` | The event as an alist. Claude Code and Kimi Code: `session_id`, `transcript_path`, `cwd`, `hook_event_name` and per event `tool_name` `Bash` with `tool_input` `{"command": "echo drgnx-hook-test"}` (and `tool_response`, `prompt`, `source`, `trigger`, … as the event has them). Codex: the same plus `model` and `turn_id`. Gemini: its own events (`BeforeTool` with `run_shell_command`, `BeforeAgent` with `prompt`, …) and `timestamp`. The Codex and Gemini fields are the builder's table from their documentation, not checked against a running agent. |
-| `(drgnx-agent-check-remember ITEM RESULT)`, `(drgnx-agent-check-last ITEM)` | The last result per `(KIND SECTION NAME FILE)` in `(drgnx-state-dir)/agent-checks.eld` (0600), masked, with `:at` (the time). Each write keeps the newest 300 (by `:at`) and drops results whose local FILE is gone. |
+| `(drgnx-agent-check-remember ITEM RESULT)`, `(drgnx-agent-check-last ITEM)` | The last result per `(KIND SECTION NAME FILE)` in `(drgnx-state-dir)/agent-checks.eld` (0600), masked, with `:at` (the time). Each write keeps the newest 300 (by `:at`), drops results whose local FILE is gone, then drops the oldest while the printed file would pass `drgnx-file-max-bytes` (`drgnx-agent-check--fit`; the newest always stays), so the reader's cap never makes the file unreadable. |
 | `(drgnx-agent-check-results)` | Every remembered result in one read, `((KIND SECTION NAME FILE) . RESULT)…` (the settings page reads it once per drawing). |
 
 Ending a check: the child Emacs and the scope it runs in are named (`systemd-run --scope --unit=drgnx-check-PID-N`); at

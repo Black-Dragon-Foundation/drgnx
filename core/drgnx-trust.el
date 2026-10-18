@@ -17,6 +17,7 @@
 ;;; Code:
 (require 'seq)
 (require 'drgnx-paths)
+(require 'drgnx-file)
 (require 'drgnx-registry)
 
 (defvar drgnx-trust-mode)
@@ -46,28 +47,70 @@
   "drgnx's own trees (the checkout, the config dir, the packages dir) and Emacs's own Lisp."
   (delete-dups (mapcar #'drgnx-trust--entry (list drgnx-dir (drgnx-user-dir) (drgnx-elpa-dir) lisp-directory))))
 
+(defconst drgnx-trust--header ";; drgnx: the folders you trusted (Trust This Folder; docs/guide/security.md)\n"
+  "The comment line trusted-folders.eld starts with.")
+
+(defun drgnx-trust--folders-of (data)
+  "The folders DATA, trusted-folders.eld's form, lists: a list of strings (nil for no file), else `newer' when a
+newer drgnx wrote it (:version above 1), or `bad' for a mistake.  A missing :version is version 1."
+  (let ((version (and (plistp data) (plist-get data :version))) (folders (and (plistp data) (plist-get data :folders))))
+    (cond ((null data) nil)
+          ((not (plistp data)) 'bad)
+          ((and (natnump version) (> version 1)) 'newer)
+          ((not (memq version '(nil 1))) 'bad)
+          ((not (plist-member data :folders)) 'bad)
+          ((not (and (proper-list-p folders) (seq-every-p #'stringp folders))) 'bad)
+          (t folders))))
+
+(defvar drgnx-trust--told nil
+  "(STAMP WHY) of the unusable trusted-folders.eld the user was told about, so that each change is told once.")
+
+(defvar drgnx-trust--added nil
+  "The user's folders drgnx put into `trusted-content' this session (from trusted-folders.eld or Trust This
+Folder): Untrust This Folder can take them back even when the file has since become unusable.")
+
 (defun drgnx-trust--read ()
-  "trusted-folders.eld: (t . FOLDERS), (t) when there is none, nil when it cannot be read."
-  (let ((file (drgnx-trust-folders-file)))
-    (if (not (file-exists-p file)) (list t)
-      (ignore-errors
-        (let ((data (with-temp-buffer (insert-file-contents file) (read (current-buffer)))))
-          (and (plist-member data :folders) (cons t (seq-filter #'stringp (plist-get data :folders)))))))))
+  "trusted-folders.eld: (t . FOLDERS), FOLDERS nil when there is none, or (nil . WHY) when it cannot be used
+\(unreadable, a mistake, or a newer drgnx's): then it trusts nothing, never a part of it or an older copy, and a
+message says WHY once per change of the file.  Only entries `drgnx-trust--read-entry-p' accepts are kept."
+  (let* ((file (drgnx-trust-folders-file)) (r (drgnx-file-read file)) (status (plist-get r :status))
+         (folders (and (eq status 'ok) (drgnx-trust--folders-of (plist-get r :data))))
+         (why (cond ((eq status 'unreadable) (format "cannot be read: %s" (plist-get (plist-get r :problem) :text)))
+                    ((eq folders 'newer) "was written by a newer drgnx")
+                    ((eq folders 'bad) "has a mistake (:folders must be a list of folder names)"))))
+    (if (not why)
+        (progn (setq drgnx-trust--told nil) (cons t (seq-filter #'drgnx-trust--read-entry-p folders)))
+      (setq why (format "%s %s" (abbreviate-file-name file) why))
+      (unless (equal drgnx-trust--told (list (plist-get r :stamp) why))
+        (setq drgnx-trust--told (list (plist-get r :stamp) why))
+        (message "drgnx: no folder you trusted is trusted: %s" why))
+      (cons nil why))))
 
 (defun drgnx-trust-folders ()
-  "The folders the user trusted, as trusted-folders.eld holds them."
-  (cdr (drgnx-trust--read)))
+  "The folders the user trusted, as trusted-folders.eld holds them (none when it cannot be used)."
+  (let ((r (drgnx-trust--read))) (and (car r) (cdr r))))
 
-(defun drgnx-trust--write (folders)
-  "Write FOLDERS; a file that cannot be read is kept aside as .bak first, never overwritten."
-  (let* ((file (drgnx-trust-folders-file)) (dir (file-name-directory file)))
-    (make-directory dir t)
-    (unless (drgnx-trust--read) (rename-file file (concat file ".bak") t))
-    (let ((tmp (make-temp-file (expand-file-name ".trusted-folders-" dir))))
-      (with-temp-file tmp
-        (insert ";; drgnx: the folders you trusted (Trust This Folder; docs/guide/security.md)\n")
-        (let ((print-length nil) (print-level nil)) (pp (list :version 1 :folders folders) (current-buffer))))
-      (rename-file tmp file t))))
+(defun drgnx-trust--known ()
+  "The folders Untrust This Folder can take back: trusted-folders.eld's and those trusted this session."
+  (seq-union (drgnx-trust-folders) drgnx-trust--added))
+
+(defun drgnx-trust--write (fn)
+  "Change trusted-folders.eld under its lock: FN gets the folders in it now and returns the new list, so two
+changes at once both stay.  Only :folders changes; other keys are kept.  A file that cannot be read or holds a
+mistake is copied aside (NAME.bak-…) and FN gets nil; a newer drgnx's file is a `user-error', left as it is."
+  (let ((file (drgnx-trust-folders-file)))
+    (drgnx-file-update
+     file
+     (lambda (data)
+       (let ((old (drgnx-trust--folders-of data)))
+         (pcase old
+           ('newer (user-error "%s was written by a newer drgnx, which this one never changes: trust folders there"
+                               (abbreviate-file-name file)))
+           ('bad (drgnx-file-backup file) (setq data nil old nil)))
+         (let ((new (funcall fn old)))
+           (if (and data (equal new old)) data
+             (plist-put (or data (list :version 1 :folders nil)) :folders new)))))
+     :on-unreadable 'backup :pretty t :header drgnx-trust--header)))
 
 (defun drgnx-trust--add (entries)
   "Append ENTRIES to `trusted-content' (never when it is :all, which trusts everything already)."
@@ -223,17 +266,31 @@ file or directory name is quoted, so that visiting the message opens nothing rem
   (require 'project)
   (let ((pr (project-current nil))) (if pr (project-root pr) default-directory)))
 
+(defconst drgnx-trust--shared-dirs '("/tmp/" "/var/tmp/" "/dev/shm/")
+  "Folders anyone may write to, whatever the temp dir is.")
+
 (defun drgnx-trust--broad-p (entry)
-  "Is ENTRY (as `drgnx-trust--entry' gives it) `/', home or one of its ancestors, or the temp dir?"
+  "Is ENTRY (as `drgnx-trust--entry' gives it) `/', home, the temp dir or a folder of `drgnx-trust--shared-dirs', or
+one of their ancestors?"
   (let ((dir (file-truename (expand-file-name entry))))
-    (or (string-prefix-p dir (file-name-as-directory (file-truename "~")))
-        (equal dir (file-name-as-directory (file-truename temporary-file-directory))))))
+    (seq-some (lambda (d) (string-prefix-p dir (file-name-as-directory (file-truename d))))
+              (cons "~" (cons temporary-file-directory drgnx-trust--shared-dirs)))))
+
+(defun drgnx-trust--read-entry-p (entry)
+  "Is ENTRY, read from trusted-folders.eld, one to trust?  Not a remote name (`file-remote-p' only parses it: it
+never connects, also for an unknown method), and not one Trust This Folder refuses, its truenames taken with no
+file name handlers.  An entry that signals is not trusted.  Called at startup and from the palette: nothing here
+connects or prompts."
+  (condition-case nil
+      (and (not (file-remote-p entry))
+           (let ((file-name-handler-alist nil)) (not (drgnx-trust--broad-p entry))))
+    (error nil)))
 
 (defun drgnx-trust--user-entry ()
   "The user-trusted folder holding this buffer's file, or nil."
   (when buffer-file-truename
     (let ((name (abbreviate-file-name buffer-file-truename)))
-      (seq-find (lambda (f) (string-prefix-p f name)) (drgnx-trust-folders)))))
+      (seq-find (lambda (f) (string-prefix-p f name)) (drgnx-trust--known)))))
 
 (defun drgnx-trust--refresh ()
   "After trust changed: every file buffer's mark, held shorthands and Flymake follow it."
@@ -256,27 +313,40 @@ file or directory name is quoted, so that visiting the message opens nothing rem
 
 (defun drgnx-trust-folder (&optional dir)
   "Trust DIR (default: this buffer's project, else its folder): Flymake checkers and symbol shorthands work in
-its files.  Kept in drgnx's state (trusted-folders.eld)."
+its files.  Kept in drgnx's state (trusted-folders.eld).  A remote folder is refused: its entry would never be
+read back (`drgnx-trust--read-entry-p')."
   (interactive)
-  (let* ((e (drgnx-trust--entry (or dir (drgnx-trust--folder)))) (folders (drgnx-trust-folders)))
+  (let* ((folder (or dir (drgnx-trust--folder)))
+         (e (if (file-remote-p folder)
+                (user-error "%s is remote: Trust This Folder trusts local folders (remote files are never marked)" folder)
+              (drgnx-trust--entry folder))))
     (when (drgnx-trust--broad-p e)
       (user-error "%s holds far more than one project: open a file in a project folder below it and trust that" e))
-    (unless (member e folders) (drgnx-trust--write (append folders (list e))))
+    (drgnx-trust--write (lambda (folders) (if (member e folders) folders (append folders (list e)))))
     (drgnx-trust--add (list e))
+    (unless (member e drgnx-trust--added) (push e drgnx-trust--added))
     (drgnx-trust--refresh)
     (message "Trusted %s" e)
     e))
 
 (defun drgnx-trust-untrust-folder (&optional dir)
-  "Stop trusting DIR (default: the folder you trusted that holds this buffer's file)."
+  "Stop trusting DIR (default: the folder you trusted that holds this buffer's file).  It takes effect at once,
+also when trusted-folders.eld cannot be changed (unusable, or a newer drgnx's): then the message says the folder
+is untrusted for this session only, and why."
   (interactive)
-  (let ((e (if dir (drgnx-trust--entry dir) (drgnx-trust--user-entry))) (folders (drgnx-trust-folders)))
-    (unless (and e (member e folders)) (user-error "Not a folder you trusted (drgnx's own folders stay trusted)"))
-    (drgnx-trust--write (delete e folders))
+  (let ((e (if dir (drgnx-trust--entry dir) (drgnx-trust--user-entry))) (r (drgnx-trust--read)))
+    (unless (and e (member e (drgnx-trust--known)))
+      (user-error "Not a folder you trusted (drgnx's own folders stay trusted)"))
+    (setq drgnx-trust--added (delete e drgnx-trust--added))
     (unless (or (eq trusted-content :all) (member e (drgnx-trust--builtin)))
       (setq trusted-content (delete e (copy-sequence trusted-content))))
     (drgnx-trust--refresh)
-    (message "No longer trusted: %s" e)
+    (let ((not-saved (cond ((not (car r)) (cdr r))
+                           ((member e (cdr r))
+                            (condition-case err (ignore (drgnx-trust--write (lambda (folders) (remove e folders))))
+                              ((user-error file-error) (error-message-string err)))))))
+      (if not-saved (message "No longer trusted, for this session only: %s (not saved: %s)" e not-saved)
+        (message "No longer trusted: %s" e)))
     e))
 
 ;;;; ffap: never ping a host name taken from text
@@ -313,7 +383,12 @@ its files.  Kept in drgnx's state (trusted-folders.eld)."
   :global t :group 'drgnx
   (if drgnx-trust-mode
       (progn
-        (drgnx-trust--add (append (drgnx-trust--builtin) (drgnx-trust-folders)))
+        ;; a state file never stops the guards: whatever its read signals, the user's folders are none
+        (let ((user (condition-case err (drgnx-trust-folders)
+                      (error (message "drgnx: no folder you trusted is trusted: %s" (error-message-string err))
+                             nil))))
+          (drgnx-trust--add (append (drgnx-trust--builtin) user))
+          (setq drgnx-trust--added (seq-union drgnx-trust--added user)))
         (drgnx-trust--tramp-guard t)
         (drgnx-trust--ffap-guard t)
         (drgnx-trust--auto-save-guard t)

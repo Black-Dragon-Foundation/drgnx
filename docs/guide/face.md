@@ -54,6 +54,10 @@ What happens depends on where drgnx runs:
   by itself: write it again with `drgnx service-unit DIR` and reload systemd. The desktop entry runs `emacsclient`
   against the running daemon, so it follows the daemon. Changing the setting or the theme to the other variant shows
   after the next start of the daemon (`systemctl --user restart drgnx`).
+- **The file:** `face.eld` is a config file ([reference](../reference/config.md#faceeld)) that drgnx keeps for you; you
+  need not edit it. It is one line, and a key drgnx does not know stays when drgnx writes. If it ever cannot be read
+  (cut off, or not a list of keys), drgnx copies it to `face.eld.bak-<time>` beside it and starts a new one; a file
+  from an earlier drgnx works as it is.
 - **The systemd unit:** when the daemon starts through the unit, only a unit written after `face.eld` exists carries
   `GTK_THEME` (write it again after drgnx has run once with a window). A drop-in override
   (`systemctl --user edit drgnx`) can replace or remove that line.

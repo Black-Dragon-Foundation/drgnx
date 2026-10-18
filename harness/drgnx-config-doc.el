@@ -34,6 +34,8 @@
     (require drgnx-pkg)
     (require drgnx-session)
     (require drgnx-search-chunk)
+    (require drgnx-onboard)
+    (require drgnx-face-state)
     )
   "What defines the config files of the reference: entries `(require FEATURE)' and `(setup MODULE)'.
 `(require FEATURE)' loads a core feature that defines files at load.  `(setup MODULE)' runs the setup of the module

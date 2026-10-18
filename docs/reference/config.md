@@ -50,6 +50,18 @@ A project's roles, among the providers you have: never a provider or a key of it
 | --- | --- | --- | --- |
 | `:roles` | alist of symbol to alist of symbol to string or null | no | The project's roles (a remote provider in a chain is asked about once) |
 
+## face.eld
+
+Folder: state. Format: 1. Read: when it changes. On a mistake: its last good copy, else the defaults.
+
+What the face remembers between runs: the title bar's variant, its GTK theme (read by bin/drgnx) and the start page's dismissal.
+
+| Key | Type | Required | What |
+| --- | --- | --- | --- |
+| `:variant` | symbol or null | no | The title bar's variant: dark, light or nil |
+| `:gtk-theme` | string or null | no | The GTK theme the launchers start GTK with |
+| `:start-dismissed` | boolean or null | no | t once "Don't show this again" was chosen |
+
 ## keys.eld
 
 Folder: config. Format: 1. Read: at start. On a mistake: its last good copy, else the defaults.
@@ -107,6 +119,18 @@ Which modules run, their flags, external modules.
 | `:flags` | alist of symbol to list of symbol | no | Module flags |
 | `:external` | list of any | no | External modules (each is checked when it loads) |
 | `:theme` | symbol | no | The colour theme onboarding chose |
+
+## onboarding.eld
+
+Folder: state. Format: 1. Read: when it changes. On a mistake: its last good copy, else the defaults.
+
+Which onboarding steps ran and how they ended, so a run resumes where it stopped.
+
+| Key | Type | Required | What |
+| --- | --- | --- | --- |
+| `* :status` | symbol | no | How the step ended: ok, info, warn or fail |
+| `* :message` | string or null | no | What it said |
+| `* :time` | string or null | no | When it ended |
 
 ## packages.eld
 

@@ -27,6 +27,7 @@
 (require 'url-util)
 (require 'drgnx-agent-config)
 (require 'drgnx-paths)
+(require 'drgnx-file)
 (require 'drgnx-jobs)
 
 (defvar drgnx-agent-check-timeout 20
@@ -273,11 +274,9 @@ character for bytes that are not valid UTF-8."
 
 (defun drgnx-agent-check--read-all ()
   "The remembered results: an alist (KEY . RESULT)."
-  (let ((file (drgnx-agent-check--file)))
-    (or (and (file-readable-p file)
-             (let ((data (ignore-errors (with-temp-buffer (insert-file-contents file) (read (current-buffer))))))
-               (and (listp data) (cl-every #'consp data) data)))
-        nil)))
+  (let* ((r (drgnx-file-read (drgnx-agent-check--file)))
+         (data (plist-get r :data)))
+    (and (eq (plist-get r :status) 'ok) (listp data) (cl-every #'consp data) data)))
 
 (defun drgnx-agent-check-results ()
   "Every remembered result, masked, read once: an alist ((KIND SECTION NAME FILE) . RESULT)."
@@ -299,29 +298,35 @@ most `drgnx-agent-check--kept' of them, the newest by `:at'.  The first entry (t
     (setq rest (sort rest (lambda (a b) (> (or (plist-get (cdr a) :at) 0) (or (plist-get (cdr b) :at) 0)))))
     (cons (car entries) (take (1- drgnx-agent-check--kept) rest))))
 
+(defun drgnx-agent-check--fit (entries)
+  "ENTRIES (the newest first) without the oldest ones that would take the printed file over `drgnx-file-max-bytes',
+the reader's cap: a file over it would read as nothing, and no later result could be kept.  The first entry always
+stays (its outputs are cut to the limits above).  Sizes are printed as `drgnx-file-write' prints, UTF-8."
+  (let ((print-length nil) (print-level nil) (print-circle nil) (print-integers-as-characters nil)
+        (float-output-format nil) (total 3) (kept nil))             ; "(", ")" and the newline
+    (catch 'full
+      (dolist (e entries)
+        (let ((n (1+ (length (encode-coding-string (prin1-to-string e) 'utf-8-unix)))))   ; and a space
+          (when (and kept (> (+ total n) drgnx-file-max-bytes)) (throw 'full nil))
+          (setq total (+ total n))
+          (push e kept))))
+    (nreverse kept)))
+
 (defun drgnx-agent-check-remember (item result)
   "Keep RESULT as the last result of checking ITEM, masked, with the time (`:at').  The file keeps the newest
-`drgnx-agent-check--kept' results and drops those of settings files that are gone (`drgnx-agent-check--prune')."
+`drgnx-agent-check--kept' results and drops those of settings files that are gone (`drgnx-agent-check--prune'),
+then the oldest while it would not fit under the reader's cap (`drgnx-agent-check--fit')."
   (let* ((sets (drgnx-agent-check--secret-sets item))
          (masked (drgnx-agent-check--mask-result result (car sets) (cdr sets)))
          (masked (if (plist-member masked :at) masked (append masked (list :at (float-time)))))
          (key (drgnx-agent-check--key item))
-         (all (drgnx-agent-check--prune (cons (cons key masked) (assoc-delete-all key (drgnx-agent-check--read-all)))))
+         (all (drgnx-agent-check--fit
+               (drgnx-agent-check--prune (cons (cons key masked) (assoc-delete-all key (drgnx-agent-check--read-all))))))
          (file (drgnx-agent-check--file))
-         (dir (file-name-directory file))
-         (temp nil))
+         (dir (file-name-directory file)))
     (make-directory dir t)
     (set-file-modes dir #o700)
-    (unwind-protect
-        (progn
-          (setq temp (make-temp-file (expand-file-name ".agent-checks-" dir)))
-          (with-temp-file temp
-            (let ((print-length nil) (print-level nil) (print-circle nil) (print-escape-newlines t))
-              (prin1 (reverse all) (current-buffer))))
-          (set-file-modes temp #o600)
-          (rename-file temp file t)
-          (setq temp nil))
-      (when (and temp (file-exists-p temp)) (delete-file temp)))
+    (drgnx-file-write file (reverse all) :private t :fsync nil)
     masked))
 
 ;;;; The child Emacs's side: one MCP server, tested

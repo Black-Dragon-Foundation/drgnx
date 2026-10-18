@@ -251,8 +251,11 @@ when they changed.  The variant is that of a graphical frame; with none, or a ba
     (let ((variant (drgnx-face-title-variant frame)) (state (drgnx-face-state-read)))
       (when (or variant (eq drgnx-face-title-bar 'system))
         (unless (and (eq (plist-get state :variant) variant) (equal (plist-get state :gtk-theme) drgnx-face-gtk-theme))
-          (drgnx-face-state-write (plist-put (plist-put (copy-sequence state) :variant variant)
-                                             :gtk-theme drgnx-face-gtk-theme)))))))
+          ;; an automatic path: no wait for the lock; when another drgnx holds it, the next theme change writes
+          (condition-case err
+              (drgnx-face-state-put (list :variant variant :gtk-theme drgnx-face-gtk-theme) 0)
+            (drgnx-file-busy nil)
+            (error (message "drgnx: face.eld not written: %s" (error-message-string err)))))))))
 
 (defun drgnx-face--apply-title-all ()
   "The title bar on every open frame, and the state the launchers read."
