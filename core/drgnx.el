@@ -19,6 +19,8 @@
 (require 'drgnx-pkg-activate)
 (require 'drgnx-onboard)
 (autoload 'drgnx-ai--on-first-window "drgnx-ai-probe")
+(autoload 'drgnx-secrets-export-keys "drgnx-secrets" nil t)
+(autoload 'drgnx-secrets-import-keys "drgnx-secrets" nil t)
 (require 'drgnx-gc)
 (require 'drgnx-session)
 (require 'drgnx-shell-env)
@@ -72,7 +74,13 @@
                         :doc "Turn the module on this row off at the next start, or back on")
   (drgnx-command-define 'keyboard-profile :category "Preferences" :title "Keyboard Profile…"
                         :command #'drgnx-keys-choose-profile :menu '("Options")
-                        :doc "VS Code, Emacs or Vim keys, or Emacs/Vim editing with VS Code app keys"))
+                        :doc "VS Code, Emacs or Vim keys, or Emacs/Vim editing with VS Code app keys")
+  (drgnx-command-define 'portability-export-keys :category "Portability" :title "Export Keys"
+                        :command #'drgnx-secrets-export-keys
+                        :doc "Your provider keys into secrets.age (age, a passphrase), for a second machine")
+  (drgnx-command-define 'portability-import-keys :category "Portability" :title "Import Keys"
+                        :command #'drgnx-secrets-import-keys
+                        :doc "The provider keys of secrets.age into this machine's keyring"))
 
 (defun drgnx-init ()
   "Boot drgnx: guard, staged hooks, core commands, modules, keys, then the generated surfaces.

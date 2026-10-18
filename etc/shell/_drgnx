@@ -30,6 +30,7 @@ commands=(
   'safe:Emacs with drgnx'"'"'s core only'
   'help:usage'
   'shell:add the drgnx line to your shell rc file'
+  'secrets:provider keys to a second machine'
 )
 
 if (( CURRENT == 2 )); then
@@ -151,6 +152,18 @@ case $cmd in
       case $sub in
         install) _arguments '--shell[shell]:shell:(zsh bash fish)' '--yes[print the line, write nothing]' ;;
         line) _arguments '--shell[shell]:shell:(zsh bash fish)' ;;
+      esac
+    fi ;;
+  secrets)
+    if (( CURRENT == 2 )); then
+      _values 'secrets command' 'export[keys into secrets.age]' 'import[the keys of secrets.age into the keyring]' \
+        'ls[the hosts in secrets.age]'
+    else
+      shift words; (( CURRENT-- ))
+      case $sub in
+        export) _arguments '*--recipient[age recipient]:recipient:' ;;
+        import) _arguments '--identity[age identity file]:file:_files' '--replace[overwrite a different key in the keyring]' ;;
+        ls) _arguments '--identity[age identity file]:file:_files' ;;
       esac
     fi ;;
   *)

@@ -532,7 +532,17 @@ is still loading) reads \"not tested\" and counts as neither asked nor failed."
                               :page "https://nodejs.org/en/download"))
     (claude-agent-acp :name "the Claude Code adapter" :check (:program "claude-agent-acp" :dirs ("~/.local/bin"))
                       :macos (:job ("npm" "install" "-g" ,drgnx-onboard-claude-package))
-                      :linux (:job ("npm" "install" "-g" "--prefix" "~/.local" ,drgnx-onboard-claude-package))))
+                      :linux (:job ("npm" "install" "-g" "--prefix" "~/.local" ,drgnx-onboard-claude-package)))
+    (age :name "age" :check (:program "age")
+         :macos (:install ("brew" "install" "age"))
+         :linux (:by-program (("dnf" . "sudo dnf install -y age") ("apt-get" . "sudo apt-get install -y age")
+                              ("pacman" . "sudo pacman -S --noconfirm age"))))
+    (chezmoi :name "chezmoi" :check (:program "chezmoi" :dirs ("~/.local/bin"))
+             :macos (:install ("brew" "install" "chezmoi"))
+             ;; Debian and Ubuntu do not package chezmoi: its own installer, into ~/.local/bin (no sudo)
+             :linux (:by-program (("dnf" . "sudo dnf install -y chezmoi")
+                                  ("apt-get" . "sh -c \"$(curl -fsLS https://get.chezmoi.io)\" -- -b ~/.local/bin")
+                                  ("pacman" . "sudo pacman -S --noconfirm chezmoi")))))
   "How onboarding sets up a local model runner: ID → plist.  :check — it is there when its :program is found (lms
 also in ~/.lmstudio/bin, where LM Studio puts it; :dirs: more directories) or its :provider's address answers.
 :macos :install — the Homebrew command, a drgnx job; :launch — LM Studio's first start, which puts lms in place.
@@ -540,7 +550,8 @@ also in ~/.lmstudio/bin, where LM Studio puts it; :dirs: more directories) or it
 terminal to ask your password in); :by-program — the same for the first package manager found; :page — LM Studio's
 download page.  :job (either platform) — a command that needs no sudo, a drgnx job.  :start — the server, a drgnx
 job (never at login); :pull — the download, the model's name after it.  claude, node and claude-agent-acp are
-Claude Code's parts (`drgnx-onboard--agents-step').")
+Claude Code's parts (`drgnx-onboard--agents-step'); age and chezmoi carry keys and the config to a second machine
+\(docs/guide/second-machine.md).")
 
 (defconst drgnx-onboard-embed-model "nomic-embed-text"
   "The embedding model a local runner set up here downloads (Ollama's name; LM Studio's: `drgnx-ai-lmstudio-models').")
@@ -729,7 +740,11 @@ job on either platform.  Every run starts from the top: nothing is resumed from 
              (open (if (eq tool 'lmstudio) " and open it" "")))
         (if shell
             (progn (kill-new shell)
-                   (drgnx-onboard--say (format "Run in a terminal (copied): %s — it asks for your password (sudo); waiting for %s…" shell name)))
+                   (drgnx-onboard--say (format "Run in a terminal (copied): %s%s; waiting for %s…" shell
+                                               ;; Ollama's installer runs sudo itself (:sudo); chezmoi's never does
+                                               (if (or (plist-get l :sudo) (string-match-p "\\_<sudo\\_>" shell))
+                                                   " — it asks for your password (sudo)" "")
+                                               name)))
           (browse-url (plist-get l :page))
           (drgnx-onboard--say (format "Install %s from %s%s%s; waiting for it…" name (plist-get l :page) open
                                       (if (eq tool 'lmstudio) " (Developer → Start Server)" ""))))
