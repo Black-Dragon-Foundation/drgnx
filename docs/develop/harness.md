@@ -446,3 +446,27 @@ Helpers (`harness/drgnx-scenario.el`): `drgnx-scenario-check OK EXPLANATION REPO
 git repo, removed afterwards with its file and dired buffers and the Explorer roots in it; fixtures of yours older than a
 day — a run killed at its timeout — are deleted when the next is made), `drgnx-scenario-load-driver`. The results file adds `tests` (every test with its
 result) and `known_red` (name, summary, trace) — see [scenarios.md](scenarios.md) for the scenarios themselves.
+
+## Modal tests
+
+The tests of modal editing run against the real evil. They load it from a package directory named by
+`DRGNX_MODAL_ELPA` (`test/fixtures/modal-elpa.el`): evil, goto-chg and evil-collection (and annalist, for an
+evil-collection that needs it) as the directories `drgnx sync` makes. The fixture only reads that directory.
+`drgnx-modal-test-with-evil` puts those packages on `load-path` for its body; without the variable (or with a
+directory lacking one of them) the test is skipped with the message "evil is not available: set DRGNX_MODAL_ELPA to a
+package directory with evil, goto-chg and evil-collection", so a checkout without evil still passes.
+
+Build the directory once, in temporary directories (never your own configuration):
+
+```sh
+S=.claude/tmp/modal-sync; mkdir -p $S/config $S/data $S/state $S/cache
+echo '(:packages (evil evil-collection))' > $S/config/packages.eld
+DRGNX_CONFIG_DIR=$S/config DRGNX_DATA_DIR=$S/data XDG_STATE_HOME=$S/state XDG_CACHE_HOME=$S/cache \
+  systemd-run --user --scope -q -p MemoryMax=3G -p MemorySwapMax=0 bin/drgnx sync
+ln -sfn "$PWD/$S/data/elpa" .claude/tmp/modal-elpa
+DRGNX_MODAL_ELPA="$PWD/.claude/tmp/modal-elpa" bin/drgnx test
+```
+
+The first sync installs the known-good lock (every locked package), so it takes a few minutes and about 1 GB of
+disk; the versions are the ones in `etc/drgnx.lock.eld`. In a container you run by hand, mount the directory read-only and set
+the variable inside (`-v …/data/elpa:/elpa:ro -e DRGNX_MODAL_ELPA=/elpa`).

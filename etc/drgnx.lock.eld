@@ -59,6 +59,19 @@
 		    "36f061fd9718e29a97ab8f85a94677fb2258e7ed6fcbbf661e087947561edc40"
 		    :size 143360 :requires nil :summary
 		    "High-level SQL database front-end")
+	   (evil :version "20260728.1438" :archive "melpa" :kind tar
+		 :file "evil-20260728.1438.tar" :sha256
+		 "9c81c4ce6b0efa336728e7eeb2408da30678fe22679af643d53acc7a11db6e91"
+		 :size 931840 :requires
+		 ((cl-lib "0.5") (goto-chg "1.6") (nadvice "0.3"))
+		 :summary "Extensible vi layer")
+	   (evil-collection :version "20261014.225" :archive "melpa"
+			    :kind tar :file
+			    "evil-collection-20261014.225.tar" :sha256
+			    "fab3c297864dfdefc83d804753366550bfd34e65f987271d9aa707acd84e1bca"
+			    :size 1638400 :requires ((evil "1.2.13"))
+			    :summary
+			    "A set of keybindings for Evil mode")
 	   (forge :version "20261006.1249" :archive "melpa" :kind tar
 		  :file "forge-20261006.1249.tar" :sha256
 		  "6238ba6c067a0be2656ba7aabb582a8d830d9fa2e4de0b041d501e6a23c99c55"
@@ -75,6 +88,11 @@
 		 ((compat "31.1") (cond-let "1.1") (llama "1.0")
 		  (treepy "0.1.3"))
 		 :summary "Client libraries for Git forge APIs")
+	   (goto-chg :version "20240407.1110" :archive "melpa" :kind
+		     tar :file "goto-chg-20240407.1110.tar" :sha256
+		     "e140e45a795cf4706cd500ecc120f6cca8f170b614fd8ba52d0e275009a83034"
+		     :size 20480 :requires nil :summary
+		     "Go to last change")
 	   (gptel :version "0.9.9.6" :archive "nongnu" :kind tar :file
 		  "gptel-0.9.9.6.tar" :sha256
 		  "0aa684b3e273ef6788756cffa4d018fe0bed0ecc853640fb82abaacd9d7ca5dd"
