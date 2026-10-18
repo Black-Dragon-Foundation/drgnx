@@ -51,7 +51,9 @@ with `:fsync nil`. Text files drgnx writes (unit files, desktop entries, exports
 A state file whose content grants something falls back to granting nothing: trusted-folders.eld
 (`core/drgnx-trust.el`) trusts no folder when it is unreadable, has a mistake or has a newer `:version`, and its
 writer (`drgnx-trust--write`) backs up the first two and refuses the third (`user-error`), since `:on-unreadable
-'backup` covers only a file that does not read.
+'backup` covers only a file that does not read. Its reader also drops entries Trust This Folder refuses
+(`drgnx-trust--broad-p`) and messages once per change of an unusable file; Untrust This Folder takes effect in the
+session (`drgnx-trust--added`) even when the file cannot be changed.
 
 **Reading.** `(drgnx-file-read-bounded FILE &key max-bytes)` gives the file's text decoded as UTF-8, or nil when it
 does not exist. It refuses, in this order:

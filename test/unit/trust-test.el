@@ -26,7 +26,8 @@ nobody trusted.  Buffers BODY opens are killed after it."
                   (,dir (file-name-as-directory (make-temp-file "drgnx-trust-proj" t)))
                   (process-environment (cons (concat "XDG_STATE_HOME=" state) process-environment)))
              (unwind-protect
-                 (let ((trusted-content nil) (tramp-ignored-file-name-regexp nil)
+                 (let ((trusted-content nil) (drgnx-trust--added nil) (drgnx-trust--told nil)
+                       (tramp-ignored-file-name-regexp nil)
                        (ffap-machine-p-known 'ping) (remote-file-name-inhibit-auto-save-visited nil))
                    (drgnx-trust-mode 1)
                    (unwind-protect (progn ,@body) (drgnx-trust-mode -1)))
@@ -251,6 +252,56 @@ nobody trusted.  Buffers BODY opens are killed after it."
       (let ((data (car (read-from-string (drgnx-trust-test--bytes file)))))
         (should (equal (plist-get data :note) "mine"))
         (should (equal (plist-get data :folders) (list e)))))))
+
+(ert-deftest drgnx-trust/untrust-takes-effect-when-the-file-became-unusable ()
+  (drgnx-trust-test--with (dir)
+    (let* ((inhibit-message t) (a (concat dir "a/")) (b (concat dir "b/")) (ea (drgnx-trust--entry a))
+           (eb (drgnx-trust--entry b)))
+      (make-directory a) (make-directory b)
+      (drgnx-trust-test--put (format "(:version 1 :folders (%S %S))" ea eb))
+      (setq trusted-content nil)
+      (drgnx-trust-mode 1)                                       ; the start: both trusted
+      (should (member ea trusted-content))
+      ;; then another drgnx writes a newer file: Untrust A still takes effect; the file is left as it is
+      (let ((file (drgnx-trust-test--put "(:version 2 :folders ())")))
+        (drgnx-trust-untrust-folder a)
+        (should-not (member ea trusted-content))
+        (should (equal (drgnx-trust-test--bytes file) "(:version 2 :folders ())")))
+      ;; a mistake: Untrust This Folder in a file of B (no argument) finds B among the folders trusted at the start
+      (let ((file (drgnx-trust-test--put "(:version 1 :folders (x))")))
+        (with-current-buffer (find-file-noselect (drgnx-trust-test--file b "x.txt" "x\n"))
+          (drgnx-trust-untrust-folder)
+          (should (eq drgnx-trust--state 'restricted)))
+        (should-not (member eb trusted-content))
+        (should (equal (drgnx-trust-test--bytes file) "(:version 1 :folders (x))"))))))
+
+(ert-deftest drgnx-trust/broad-entries-in-the-file-are-not-trusted ()
+  (drgnx-trust-test--with (dir)
+    (let ((e (drgnx-trust--entry dir)) (up (file-name-directory (directory-file-name (expand-file-name "~")))))
+      (drgnx-trust-test--put (format "(:version 1 :folders (\"~/\" \"/\" %S %S %S))"
+                                     up (drgnx-trust--entry temporary-file-directory) e))
+      (should (equal (drgnx-trust-folders) (list e)))
+      (should (drgnx-trust-test--trusts-from-file-p e))
+      (dolist (d (list "~/" "/" up (drgnx-trust--entry temporary-file-directory)))
+        (should-not (member d trusted-content))))))
+
+(ert-deftest drgnx-trust/an-unusable-file-is-told-once-per-change ()
+  (drgnx-trust-test--with (_dir)
+    (let* ((told nil) (file (drgnx-trust-folders-file)) (name (file-name-nondirectory file)))
+      (cl-letf (((symbol-function 'message)
+                 (lambda (fmt &rest args) (when fmt (push (apply #'format-message fmt args) told)))))
+        (drgnx-trust-test--put "(:version 1 :folders (\"/x/\"")
+        (dotimes (_ 3) (should-not (drgnx-trust-folders)))
+        (should (= (length told) 1))
+        (should (string-search name (car told)))
+        (should (string-search "cannot be read" (car told)))
+        (drgnx-trust-test--put "(:version 2 :folders (\"/x/\"))")  ; another problem
+        (dotimes (_ 3) (should-not (drgnx-trust-folders)))
+        (should (= (length told) 2))
+        (should (string-search "newer" (car told)))
+        (drgnx-trust-test--put "(:version 1 :folders (\"/x/\"))")  ; fixed: nothing to tell
+        (should (equal (drgnx-trust-folders) '("/x/")))
+        (should (= (length told) 2))))))
 
 (defun drgnx-trust-test--children (forms)
   "Run each of FORMS (strings) in a child `emacs --batch' with this run's environment and load path, started
