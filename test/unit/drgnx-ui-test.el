@@ -2,6 +2,7 @@
 (require 'ert)
 (require 'drgnx-ui)
 (require 'drgnx-uitest)
+(require 'drgnx-check)
 
 (defmacro drgnx-ui-test--with-state (&rest body)
   "Run BODY with `root' bound to a fresh DRGNX_UI_STATE directory.  No systemd unit counts as active:
