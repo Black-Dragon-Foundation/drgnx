@@ -51,7 +51,7 @@ byte-compiles, compiles to native code ahead of time (when your Emacs has native
 at startup. A download or an install that fails stops the sync with nothing changed, and a file that did not
 install is removed from the cache. A download or a lock write that stops half way (an error, `C-g`) leaves no
 partial file; what a killed sync left (`*.part` in the cache, `.drgnx.lock.eld.tmp-*`) the next sync removes. A file that does not compile (byte or native) is not a failure: the package is
-installed, runs that file less compiled, and the sync prints a `WARNING` line naming the package and the file. Sync never removes a package: one installed by hand stays and is locked too.
+installed, runs that file less compiled, and the sync prints a `WARNING` line naming the package and the file (compat's per-version files, `compat-29.el` and the like, load only on an older Emacs and are not compiled to native code, so they never warn). Sync never removes a package: one installed by hand stays and is locked too.
 
 ### Packages from Git
 

@@ -492,7 +492,8 @@ in the packages directory itself: an .eln's name hashes its source's path."
     (dolist (dir dirs)
       (drgnx-pkg--progress "compiling %s to native code" (file-name-nondirectory (directory-file-name dir)))
       (dolist (f (directory-files dir t "\\`[^.].*\\.el\\'"))
-        (unless (string-match-p "-\\(pkg\\|autoloads\\)\\.el\\'" f)
+        ;; compat-NN.el need their siblings at compile time and load only on an old Emacs
+        (unless (string-match-p "\\(-\\(pkg\\|autoloads\\)\\|/compat-[0-9]+\\)\\.el\\'" f)
           (condition-case err (let ((native-comp-eln-load-path (cons (drgnx-pkg-eln-dir) native-comp-eln-load-path)))
                                 (native-compile f))
             (error (drgnx-pkg--warn "%s: %s does not compile to native code (%s; it runs byte-compiled)"

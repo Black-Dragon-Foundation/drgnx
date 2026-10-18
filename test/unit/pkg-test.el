@@ -899,4 +899,21 @@ fy with a newer fa 2.0.  Returns (FX FY FA-1.0-ENTRY)."
         (should-not (string-match-p "\\bfz\\b" (cadr err))))
       (should-not (file-exists-p (drgnx-pkg-shipped-lock-file))))))
 
+;;;; Deferred pass B: packages
+
+(ert-deftest drgnx-pkg/compat-version-files-are-not-native-compiled ()
+  ;; M10-13: compat-29.el etc. need their siblings at compile time and load only on an old Emacs: skipped
+  ;; like -pkg/-autoloads, so a sync does not warn about them.
+  (drgnx-pkg-test--with root
+    (let ((dir (concat root "compat-1.0/")) (compiled nil) (drgnx-pkg-native-compile t) (drgnx-pkg--warnings nil))
+      (make-directory dir t)
+      (dolist (f '("compat.el" "compat-29.el" "compat-macs.el")) (write-region "" nil (concat dir f) nil 'silent))
+      (cl-letf (((symbol-function 'native-compile)
+                 (lambda (f &rest _)
+                   (push (file-name-nondirectory f) compiled)
+                   (when (string-match-p "compat-29" f) (error "needs its siblings")))))
+        (drgnx-pkg--native-compile (list dir)))
+      (should (equal (sort compiled #'string<) '("compat-macs.el" "compat.el")))
+      (should-not drgnx-pkg--warnings))))
+
 ;;; pkg-test.el ends here
