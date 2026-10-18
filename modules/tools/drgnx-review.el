@@ -211,6 +211,8 @@ that changes whether HEAD has moved.  One check at a time; the summary never run
   (let ((f (get-text-property (point) 'drgnx-review-finding)) (run (drgnx-review--run)))
     (unless (and f run) (user-error "No finding here"))
     (let ((file (expand-file-name (plist-get f :path) (plist-get run :root))))
+      (unless (file-in-directory-p file (plist-get run :root))   ; the path is the model's
+        (user-error "%s is outside the repository" (plist-get f :path)))
       (unless (file-exists-p file) (user-error "%s is not in the working tree" (plist-get f :path)))
       (let ((w (and (fboundp 'drgnx-wb-editor-window) (drgnx-wb-editor-window)))) (when (window-live-p w) (select-window w)))
       (find-file file)

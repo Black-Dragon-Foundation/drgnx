@@ -179,4 +179,24 @@
     (drgnx-review-test--wait-head)
     (should-not (string-search "HEAD has moved" (drgnx-review-test--tab)))))
 
+(ert-deftest drgnx-review/visit-refuses-outside-root ()
+  ;; M11b-6: a finding's path is the model's: it never opens a file outside the repository
+  (drgnx-review-test--branch
+    (drgnx-review-branch)
+    (drgnx-review--changed s)
+    (let ((outside (make-temp-file "drgnx-outside")))
+      (unwind-protect
+          (progn
+            (drgnx-review-test--answer
+             s (format "FINDING: ../%s:1: minor: up\nFINDING: %s:1: minor: absolute\nVERDICT: fail"
+                       (file-relative-name outside (concat (directory-file-name repo) "/..")) outside))
+            (with-current-buffer "*drgnx review*"
+              (goto-char (point-min))
+              (dolist (what '("up" "absolute"))
+                (goto-char (point-min))
+                (search-forward what)
+                (should (string-match-p "outside" (cadr (should-error (drgnx-review-visit) :type 'user-error))))
+                (should-not (find-buffer-visiting outside)))))
+        (delete-file outside)))))
+
 ;;; mod-review-test.el ends here
