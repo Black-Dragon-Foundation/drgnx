@@ -25,12 +25,18 @@
   (interactive)
   (indent-bars-mode (if (bound-and-true-p indent-bars-mode) -1 1)))
 
+(defun drgnx-guides--teardown ()
+  "The guides go off in the buffers that have them."
+  (dolist (b (buffer-list))
+    (with-current-buffer b (when (bound-and-true-p indent-bars-mode) (indent-bars-mode -1)))))
+
 (drgnx-module-define 'extra/guides
                      :doc "Indent guides in code and YAML on graphical frames (indent-bars; the theme's colours)."
                      :stage 'first-frame :packages '(indent-bars)
+                     :teardown #'drgnx-guides--teardown
                      :setup (lambda ()
                               (require 'indent-bars)
-                              (setq indent-bars-treesit-support (and (fboundp 'treesit-available-p) (treesit-available-p)))
+                              (drgnx-module-set 'indent-bars-treesit-support (and (fboundp 'treesit-available-p) (treesit-available-p)))
                               (dolist (h drgnx-guides-modes) (add-hook h #'drgnx-guides--maybe))
                               (drgnx-command-define 'toggle-indent-guides :category "View" :title "Toggle Indent Guides"
                                                     :command #'drgnx-guides-toggle :doc "Indent guides off or on in this buffer")))
