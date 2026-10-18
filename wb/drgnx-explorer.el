@@ -147,8 +147,13 @@ buffer, and they keep both in step.")
 (defun drgnx-explorer--path (v)
   (if (aref v 3) (drgnx-explorer--join (aref v 3) (aref v 0)) (aref v 0)))
 
-(defun drgnx-explorer-node-at (pos) "Path of the row at POS."
-       (when-let* ((v (drgnx-explorer--row-data pos))) (drgnx-explorer--path v)))
+(defun drgnx-explorer--placeholder-p (v)
+  "Is the row data V the \"(not listed — Refresh)\" row of a remote folder (not a file)?"
+  (and v (not (aref v 2)) (aref v 3) (equal (aref v 0) drgnx-explorer--not-listed)))
+
+(defun drgnx-explorer-node-at (pos) "Path of the row at POS (nil for the \"(not listed — Refresh)\" row: no file operation acts on it)."
+       (when-let* ((v (drgnx-explorer--row-data pos)) ((not (drgnx-explorer--placeholder-p v))))
+         (drgnx-explorer--path v)))
 (defun drgnx-explorer-depth-at (pos) "Depth of the row at POS (0 for a root)."
        (when-let* ((v (drgnx-explorer--row-data pos))) (aref v 1)))
 (defun drgnx-explorer-dir-at (pos) "Non-nil if the row at POS is a folder."
@@ -255,7 +260,10 @@ faces come later, from jit-lock, for the rows on screen."
 (defun drgnx-explorer--default-root ()
   "The project of the editor's buffer, else its directory."
   (let ((default-directory (with-current-buffer (window-buffer (drgnx-wb-editor-window)) default-directory)))
-    (file-name-as-directory (expand-file-name (if-let* ((p (project-current))) (project-root p) default-directory)))))
+    (file-name-as-directory (expand-file-name (if-let* (((not (file-remote-p default-directory))) ; no project lookup on a host
+                                                        (p (project-current)))
+                                                  (project-root p)
+                                                default-directory)))))
 
 (defun drgnx-explorer--render ()
   "Render every root from scratch, keeping the row at point by its path."
@@ -548,13 +556,13 @@ A remote file is never revealed: this runs from the change bus, where remote I/O
 
 (defun drgnx-explorer-activate (pos &optional keep-focus)
   "A folder toggles; a file opens in the editor (KEEP-FOCUS keeps the Explorer selected)."
-  (when-let* ((path (drgnx-explorer-node-at pos)))
+  (when-let* ((v (drgnx-explorer--row-data pos)))
     (cond
-     ((equal (file-name-nondirectory path) drgnx-explorer--not-listed) (drgnx-explorer-refresh))   ; the row says so
+     ((drgnx-explorer--placeholder-p v) (drgnx-explorer-refresh))   ; the row says so
      ((drgnx-explorer-dir-at pos)
       (let ((drgnx-explorer--remote-reads t)) (drgnx-explorer-toggle-at pos)))   ; a click or Open: the user's command
      (t
-      (drgnx-wb-show-in-editor (find-file-noselect path) (not keep-focus))))))
+      (drgnx-wb-show-in-editor (find-file-noselect (drgnx-explorer--path v)) (not keep-focus))))))
 
 (defun drgnx-explorer-next () "Next row (ends a multi-select)."
        (interactive) (drgnx-explorer--clear-selection) (forward-line 1) (when (eobp) (forward-line -1)))

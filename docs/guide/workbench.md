@@ -368,9 +368,9 @@ appearing during a held click; a folder appearing while browsing), are green on 
 
 ## Remote folders in the Explorer
 
-A remote folder (a TRAMP name) is listed only by a command of yours: opening it (Open Remote…), Refresh, and expanding
-or opening a folder row. A redraw that nothing of yours started, such as the one after a git status or a window change,
+A remote folder (a TRAMP name) is listed only by a command of yours: opening it (Open Remote…), Refresh, expanding or
+opening a folder row, New File, Rename, Delete and Paste, and leaving Find. A redraw that nothing of yours started, such as the one after a git status or a window change,
 shows the listing it already has and asks the host nothing; a remote folder that was never listed shows one row,
 `(not listed — Refresh)`, and Enter or a click on that row refreshes. A checkout in a local folder forgets only the
-local listings. Git decorations, inline blame, the Outline, sticky scroll and the change gutter skip remote files; see
-[remote.md](remote.md).
+local listings. Git decorations, inline blame, the Outline and the change gutter skip remote files, and sticky scroll
+works from the buffer's text alone; see [remote.md](remote.md).

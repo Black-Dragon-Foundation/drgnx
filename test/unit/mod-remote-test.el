@@ -48,9 +48,11 @@ choice of two nobody has."
      (copy-file (expand-file-name "test/fixtures/lsp-stub.sh" drgnx-dir) (expand-file-name "drgnx-lsp" bin))
      (set-file-modes (expand-file-name "drgnx-lsp" bin) #o755)
      (drgnx-tramp-mock-setup)
+     (drgnx-lang--install-eglot-guards)                           ; the production guards, as the lang module's setup puts them
      (cl-letf (((symbol-function 'drgnx-explorer-roots) (lambda () explorer-roots))
                ((symbol-function 'message) (lambda (fmt &rest args) (when fmt (push (apply #'format fmt args) messages)) nil)))
        (unwind-protect (progn ,@body)
+         (drgnx-lang--teardown-eglot-guards)
          (when (boundp 'eglot--servers-by-project)
            (maphash (lambda (_ servers) (dolist (s servers) (ignore-errors (eglot-shutdown s nil 1 t))))
                     eglot--servers-by-project))
@@ -527,6 +529,50 @@ choice of two nobody has."
               (should eglot--managed-mode)))
         (advice-remove 'eglot--connect 'drgnx-remote-test)))))
 
+(defun drgnx-remote-test--managed-p (buffer) (buffer-local-value 'eglot--managed-mode buffer))
+
+(defun drgnx-remote-test--wait-for-server (buffer)
+  "Wait until a server has answered for BUFFER's project, then let the attaching finish."
+  (with-timeout (15 (error "no server: %S" messages))
+    (while (not (with-current-buffer buffer (eglot-current-server))) (accept-process-output nil 0.1)))
+  (accept-process-output nil 0.5))
+
+(ert-deftest drgnx-remote/the-starting-buffer-and-the-project-are-managed ()
+  "Eglot attaches buffers to a new server in a process filter; the guard skips remote buffers there, so the lang
+module attaches the project's buffers from `eglot-connect-hook'.  A buffer whose mode changed outside a command
+is attached by the next start (a Reconnect) and one of another host never is."
+  (drgnx-remote-test--with
+    (let* ((root (drgnx-remote-test--root dir)) (prog-mode-hook (list #'drgnx-lang--maybe-eglot))
+           (eglot-sync-connect nil) (python-mode-hook nil) a b other)
+      (dolist (n '("a.py" "b.py")) (with-temp-file (expand-file-name n (concat dir "src")) (insert "x = 1\n")))
+      (drgnx-lang-probe-remote root)
+      (let ((drgnx-lang--user-command t))                          ; the user's command visits the file
+        (setq a (find-file-noselect (concat root "a.py"))))
+      (setq b (find-file-noselect (concat root "b.py")))           ; opened by a timer: skipped, a server runs already
+      (setq other (generate-new-buffer " *drgnx-other-host*"))
+      (with-current-buffer other                                   ; looks like a file on another host; nothing is read
+        (setq buffer-file-name "/ssh:elsewhere:/srv/p/c.py" default-directory "/ssh:elsewhere:/srv/p/" major-mode 'python-mode))
+      (drgnx-remote-test--wait-for-server a)
+      (should (drgnx-remote-test--managed-p a))                    ; the buffer whose visit started the server
+      (should (drgnx-remote-test--managed-p b))                    ; the project's other buffer, from the connect hook
+      (should-not (drgnx-remote-test--managed-p other))
+      (with-current-buffer b (eglot--managed-mode -1))
+      (should-not (drgnx-remote-test--managed-p b))
+      (let ((drgnx-lang--user-command t)) (drgnx-lang-start-remote-server b))   ; Reconnect repairs it
+      (should (drgnx-remote-test--managed-p b)))))
+
+(ert-deftest drgnx-remote/open-remote-manages-the-buffers-it-started-servers-for ()
+  (drgnx-remote-test--with
+    (let* ((root (drgnx-remote-test--root dir)) (prog-mode-hook nil) (eglot-sync-connect nil) (python-mode-hook nil) a b)
+      (dolist (n '("a.py" "b.py")) (with-temp-file (expand-file-name n (concat dir "src")) (insert "x = 1\n")))
+      (setq a (find-file-noselect (concat root "a.py")) b (find-file-noselect (concat root "b.py")))
+      (should-not (drgnx-remote-test--managed-p a))
+      (cl-letf (((symbol-function 'drgnx-session-open-folder) (lambda (d) (setq explorer-roots (list d)))))
+        (drgnx-remote-open-folder root))
+      (drgnx-remote-test--wait-for-server a)
+      (should (drgnx-remote-test--managed-p a))
+      (should (drgnx-remote-test--managed-p b)))))
+
 (ert-deftest drgnx-remote/opening-forgets-only-its-own-hosts-starts ()
   (drgnx-remote-test--with
     (let ((root (drgnx-remote-test--root dir)) (other (cons (cons "/ssh:other:/srv/p/" '("x")) 1.0e+INF)))
@@ -570,6 +616,23 @@ choice of two nobody has."
       (unless was (advice-remove 'eglot-reconnect #'drgnx-lang--guard-reconnect))
       (advice-remove 'eglot--maybe-activate-editing-mode #'drgnx-lang--guard-eglot-activation)
       (remove-hook 'eglot-connect-hook #'drgnx-lang--no-remote-autoreconnect))))
+
+(ert-deftest drgnx-remote/an-eglot-without-the-activation-function-is-reported-once ()
+  (let ((warned nil) (drgnx-lang--eglot-warned nil) (orig (symbol-function 'fboundp)))
+    (unwind-protect
+        (cl-letf (((symbol-function 'fboundp)
+                   (lambda (s) (and (not (eq s 'eglot--maybe-activate-editing-mode)) (funcall orig s))))
+                  ((symbol-function 'display-warning)
+                   (lambda (type msg &rest _) (push (list type warning-minimum-level msg) warned))))
+          (drgnx-lang--teardown-eglot-guards)
+          (drgnx-lang--install-eglot-guards)
+          (drgnx-lang--install-eglot-guards)                         ; twice: still one report
+          (should (= (length warned) 1))
+          (should (eq (car (car warned)) 'drgnx-lang))
+          (should (eq (nth 1 (car warned)) :error))                  ; logged, no window pops up
+          (should (string-match-p "eglot--maybe-activate-editing-mode" (nth 2 (car warned))))
+          (should-not (advice-member-p #'drgnx-lang--guard-eglot-activation 'eglot--maybe-activate-editing-mode)))
+      (drgnx-lang--teardown-eglot-guards))))
 
 ;;;; The fixture
 

@@ -32,6 +32,7 @@
 (declare-function drgnx-lang-start-remote-server "drgnx-lang")
 (defvar drgnx-lang--user-command)
 (defvar drgnx-lang--remote-pending)
+(defvar drgnx-explorer--remote-reads)
 (declare-function tramp-dissect-file-name "tramp")
 (declare-function tramp-cleanup-connection "tramp-cmds")
 (declare-function eglot-shutdown "eglot")
@@ -272,8 +273,9 @@ for (a timer, a sentinel, a language server) fails with an error instead of free
 
 (defun drgnx-remote--timer-without-command (run timer)
   "Around advice of `timer-event-handler': a timer is never part of the command that happens to wait while it
-fires, whatever its body does with `inhibit-quit' (`with-local-quit')."
-  (let ((drgnx-lang--user-command nil) (drgnx-remote-may-prompt nil))
+fires, whatever its body does with `inhibit-quit' (`with-local-quit').  Nor does it list a remote folder in the
+Explorer, if it fires while the user's listing waits for the host (Find's own timer binds the variable again)."
+  (let ((drgnx-lang--user-command nil) (drgnx-remote-may-prompt nil) (drgnx-explorer--remote-reads nil))
     (funcall run timer)))
 
 (defun drgnx-remote--command-start ()

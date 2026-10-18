@@ -65,9 +65,9 @@
      (drgnx-remote-auto--write (expand-file-name "l.py" ldir) "def g():\n    return 2\n")
      (drgnx-tramp-mock-setup)
      (setq root (file-name-as-directory (expand-file-name (drgnx-tramp-mock-name rdir))))
-     (advice-add 'eglot--maybe-activate-editing-mode :around #'drgnx-lang--guard-eglot-activation) ; the lang module's setup does it
+     (drgnx-lang--install-eglot-guards)                           ; the production guards, as the lang module's setup puts them
      (unwind-protect (progn ,@body)
-       (advice-remove 'eglot--maybe-activate-editing-mode #'drgnx-lang--guard-eglot-activation)
+       (drgnx-lang--teardown-eglot-guards)
        (remove-hook 'prog-mode-hook #'drgnx-lang--maybe-eglot)
        (remove-hook 'prog-mode-hook #'drgnx-sticky--maybe)
        (unless signal-was-on (drgnx-signal-mode -1))
@@ -101,8 +101,8 @@
       (goto-char (point-min))
       (let (rows)
         (while (not (eobp))
-          (when-let* ((node (drgnx-explorer-node-at (point))))
-            (push (list (drgnx-explorer-depth-at (point)) (file-name-nondirectory (directory-file-name node))) rows))
+          (when-let* ((v (drgnx-explorer--row-data (point))))   ; the data, not the node: the placeholder has no node
+            (push (list (aref v 1) (file-name-nondirectory (directory-file-name (aref v 0)))) rows))
           (forward-line 1))
         (nreverse rows)))))
 
@@ -300,9 +300,41 @@ buffer is not affected."
       (drgnx-explorer--render)                                      ; a timer-driven render
       (should (member "(not listed — Refresh)" (drgnx-remote-auto--row-names)))
       (should-not (member "x.txt" (drgnx-remote-auto--row-names)))
+      (with-current-buffer drgnx-explorer-buffer-name
+        (goto-char (point-min)) (re-search-forward "not listed") (beginning-of-line)
+        (should-not (drgnx-explorer-node-at (point)))               ; no file operation can act on the row
+        (should-error (drgnx-explorer--targets) :type 'user-error)
+        (should-error (drgnx-explorer--folder-here) :type 'user-error))
       (drgnx-explorer-refresh)
       (should (member "x.txt" (drgnx-remote-auto--row-names)))
+      (should-not (member "(not listed — Refresh)" (drgnx-remote-auto--row-names)))
+      ;; Enter or a click on the row lists the folder, too
+      (remhash (file-name-as-directory sub) drgnx-explorer--cache)  ; forgotten again
+      (drgnx-explorer--render)
+      (should (member "(not listed — Refresh)" (drgnx-remote-auto--row-names)))
+      (with-current-buffer drgnx-explorer-buffer-name
+        (goto-char (point-min)) (re-search-forward "not listed") (beginning-of-line)
+        (drgnx-explorer-open))
       (should-not (member "(not listed — Refresh)" (drgnx-remote-auto--row-names))))))
+
+(ert-deftest drgnx-remote/a-timer-inside-a-listing-lists-nothing ()
+  (drgnx-remote-auto--with
+    (let ((drgnx-explorer--remote-reads t) seen)                    ; the user's listing waits for the host; a timer fires
+      (drgnx-remote--timer-without-command
+       (lambda (_) (setq seen (drgnx-explorer-children root))) nil)
+      (should (equal seen '(("(not listed — Refresh)" . nil))))
+      (should (drgnx-explorer-children root))                       ; the listing itself still lists
+      (should (assoc "app.py" (drgnx-explorer-children root))))))
+
+(ert-deftest drgnx-remote/the-default-root-asks-no-project-of-a-remote-buffer ()
+  (drgnx-remote-auto--with
+    (delete-other-windows)
+    (drgnx-explorer-setup)
+    (with-current-buffer (window-buffer (drgnx-wb-editor-window))
+      (let ((default-directory root))
+        (setq remote-file-name-inhibit-cache t drgnx-tramp-mock-sends 0)
+        (should (equal (drgnx-explorer--default-root) (file-name-as-directory root)))
+        (should (= drgnx-tramp-mock-sends 0))))))
 
 (ert-deftest drgnx-remote/checkout-keeps-remote-listings ()
   (drgnx-remote-auto--with
@@ -340,7 +372,7 @@ buffer is not affected."
                 (should (eq (plist-get (alist-get 'extra/hunks (drgnx-modules-report)) :status) 'ok))
                 (should (eq diff-hl-disable-on-remote t))
                 (drgnx-remote-auto--with
-                  (let ((b (generate-new-buffer " *drgnx-remote-hl*")) (l (generate-new-buffer " *drgnx-local-hl*")))
+                  (let ((b (generate-new-buffer " *drgnx-remote-hl*")))
                     (unwind-protect
                         (progn
                           (with-current-buffer b                    ; looks like the remote file; nothing is read
@@ -349,7 +381,7 @@ buffer is not affected."
                             (turn-on-diff-hl-mode)
                             (should-not (bound-and-true-p diff-hl-mode)))
                           (should (= drgnx-tramp-mock-sends 0)))
-                      (kill-buffer b) (kill-buffer l)))))
+                      (kill-buffer b)))))
             (when (and (boundp 'global-diff-hl-mode) global-diff-hl-mode) (global-diff-hl-mode -1))
             (setq-default diff-hl-disable-on-remote default)))
       (delete-directory cfg t))))

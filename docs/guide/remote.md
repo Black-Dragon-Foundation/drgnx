@@ -65,19 +65,24 @@ to look again. A server whose connection drops is not restarted by eglot (eglot 
 TRAMP stays on for what you start: Open Remote…, Reconnect and ssh paths you type or open. Nothing runs by itself on a
 remote name: no timer, hook or background check, no file watching, no Git or diff decorations, no Flymake, no link or
 compile-output path, no semantic-search indexing of a remote folder, and the Explorer lists a remote folder only when
-you open, expand or refresh it (until then it shows the listing it has, or `(not listed — Refresh)`). The change gutter
-(diff-hl) is off for remote files, and the Explorer's Git letters, inline blame, the Outline and sticky scroll skip them. Nothing remote asks a question from an automatic path; every ssh question comes from a command
-you ran. As a second guard, while the module is on, TRAMP's login, password, yes/no, one-time-code and confirm questions fail
-with an error unless the code asking is part of a command of yours (a key you press, `M-x`, a click) or Open Remote…
-or Reconnect asked for it. A timer, a process filter or a sentinel is never part of your command, even when it fires
+you open, expand or refresh it, or create, rename, delete or paste in it (until then it shows the listing it has, or
+`(not listed — Refresh)`). The one intended exception is Find in the Explorer: you are typing in the minibuffer and its
+live filter runs from an idle timer, as part of your command. The change gutter (diff-hl) is off for remote files; the
+Explorer's Git letters, inline blame and the Outline skip them, and sticky scroll works from the buffer's text alone.
+Nothing remote asks a question from an automatic path; every ssh question comes from a command you ran. As a second
+guard, while the module is on, TRAMP's login, password, yes/no, one-time-code and confirm questions fail with an error
+unless the code asking is part of a command of yours (a key you press, `M-x`, a click) or Open Remote… or Reconnect
+asked for it. A timer, a process filter or a sentinel is never part of your command, even when it fires
 while the command waits: its login gets an error message, never a hidden question.
 
 ## Limits
 
 - Eglot's own hook, which runs when a buffer's major mode changes, asks the project of the buffer and so would reach the
   host (about forty TRAMP calls). For a remote buffer drgnx lets it run only inside a command of yours (the visit of
-  the file); a mode change from a timer or a restored session skips it, and the buffer is attached at your next visit.
-
+  the file), or when a server you started has answered (then the open files of that server's project are attached).
+  A remote buffer whose mode changes outside a command, from a timer or a revert, say, stays unattached to its language
+  server until you reopen it, revert it in a command, or run Reconnect. Remote files are never restored at the next
+  start, so nothing is waiting to be attached then.
 - Shell integration in a remote terminal (eat or zsh integration over TRAMP) is not built.
 - Remote folders are not restored at the next start (see the Explorer's rules in [workbench.md](workbench.md)); open
   them again with Open Remote….
