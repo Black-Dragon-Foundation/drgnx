@@ -98,17 +98,21 @@
   (dolist (l (mapcar #'car drgnx-grammars-modes))
     (should (assq l drgnx-grammars-sources))))
 
-(ert-deftest drgnx-grammars/the-pin-holds-for-abi-14-and-the-default-branch-for-abi-15 ()
-  (cl-letf (((symbol-function 'drgnx-grammars--abi) (lambda () 14)))
-    (should (equal (drgnx-grammars-recipe 'python) '(python "https://github.com/tree-sitter/tree-sitter-python" "v0.23.6")))
-    (should (equal (drgnx-grammars-recipe 'tsx) '(tsx "https://github.com/tree-sitter/tree-sitter-typescript" "v0.23.2" "tsx/src")))
-    (should (string-search "v0.23.6" (format "%S" (drgnx-grammars--job-command '(python))))))
-  (cl-letf (((symbol-function 'drgnx-grammars--abi) (lambda () 15)))
-    (should (equal (drgnx-grammars-recipe 'python) '(python "https://github.com/tree-sitter/tree-sitter-python" nil)))
-    (should (equal (drgnx-grammars-recipe 'tsx) '(tsx "https://github.com/tree-sitter/tree-sitter-typescript" nil "tsx/src")))
-    (should-not (string-search "v0.23.6" (format "%S" (drgnx-grammars--job-command '(python))))))
-  (cl-letf (((symbol-function 'drgnx-grammars--abi) (lambda () nil)))   ; unknown: the pin, which loads on both
-    (should (equal (nth 2 (drgnx-grammars-recipe 'python)) "v0.23.6")))
+(ert-deftest drgnx-grammars/emacs-30-always-pins-and-emacs-31-takes-the-default-branch-with-abi-15 ()
+  (let ((emacs-major-version 30))
+    (dolist (abi '(14 15 nil))                                   ; Emacs 30: the pin, whatever the library
+      (cl-letf (((symbol-function 'drgnx-grammars--abi) (lambda () abi)))
+        (should (equal (drgnx-grammars-recipe 'python) '(python "https://github.com/tree-sitter/tree-sitter-python" "v0.23.6")))
+        (should (equal (drgnx-grammars-recipe 'tsx) '(tsx "https://github.com/tree-sitter/tree-sitter-typescript" "v0.23.2" "tsx/src")))
+        (should (string-search "v0.23.6" (format "%S" (drgnx-grammars--job-command '(python))))))))
+  (let ((emacs-major-version 31))
+    (dolist (abi '(14 nil))                                      ; Emacs 31 with a library that may be ABI 14: the pin loads
+      (cl-letf (((symbol-function 'drgnx-grammars--abi) (lambda () abi)))
+        (should (equal (nth 2 (drgnx-grammars-recipe 'python)) "v0.23.6"))))
+    (cl-letf (((symbol-function 'drgnx-grammars--abi) (lambda () 15)))
+      (should (equal (drgnx-grammars-recipe 'python) '(python "https://github.com/tree-sitter/tree-sitter-python" nil)))
+      (should (equal (drgnx-grammars-recipe 'tsx) '(tsx "https://github.com/tree-sitter/tree-sitter-typescript" nil "tsx/src")))
+      (should-not (string-search "v0.23.6" (format "%S" (drgnx-grammars--job-command '(python)))))))
   (should-not (drgnx-grammars-recipe 'cobol)))
 
 ;;; mod-grammars-test.el ends here
