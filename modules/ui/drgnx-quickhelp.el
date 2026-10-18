@@ -58,20 +58,36 @@
 
 ;;;; Placement (pure)
 
-(defun drgnx-quickhelp-placement (win-edges line-top line-bottom symbol-x card-w card-h)
+(defun drgnx-quickhelp-placement (win-edges bands symbol-x card-w card-h)
   "Where the card goes: (X . Y) in frame pixels.
-WIN-EDGES (LEFT TOP RIGHT BOTTOM) is the window's text area, LINE-TOP..LINE-BOTTOM the rows of the symbol's line,
-SYMBOL-X where the symbol starts, CARD-W × CARD-H the card.  Below the line when the card fits under it in the
-window, else above it; when it fits on neither side, on the side with more room (the caller shortens it).  The
-card never covers the rows LINE-TOP..LINE-BOTTOM; X is clamped so the card stays inside the window."
+WIN-EDGES (LEFT TOP RIGHT BOTTOM) is the window's text area; BANDS ((TOP . BOTTOM)…) are rows the card must never
+cover — the first is the symbol's whole line (all its screen rows), the others such as the line point is on.
+SYMBOL-X is where the symbol starts, CARD-W × CARD-H the card.  The card goes below the symbol's line when it fits
+there inside the window, else above it, else just beside another band (the nearest first); when it fits nowhere
+in the window, beside the symbol's line on the side with more room if that covers no band (the caller shortens the
+card), else below every band.  It never covers a band; X is clamped so the card stays inside the window."
   (pcase-let* ((`(,left ,top ,right ,bottom) win-edges)
-               (below (- bottom line-bottom)) (above (- line-top top))
-               (y (cond ((<= card-h below) line-bottom)
-                        ((<= card-h above) (- line-top card-h))
-                        ((>= below above) line-bottom)
-                        (t (- line-top card-h))))
+               (sym (car bands))
+               (free (lambda (y) (not (seq-some (lambda (b) (and (< y (cdr b)) (> (+ y card-h) (car b)))) bands))))
+               (inside (lambda (y) (and (>= y top) (<= (+ y card-h) bottom))))
+               (near (sort (seq-mapcat (lambda (b) (list (cdr b) (- (car b) card-h))) (cdr bands))
+                           (lambda (a b) (< (abs (- a (car sym))) (abs (- b (car sym)))))))
+               (beside (if (>= (- bottom (cdr sym)) (- (car sym) top))
+                           (list (cdr sym) (- (car sym) card-h))
+                         (list (- (car sym) card-h) (cdr sym))))
+               (y (or (seq-find (lambda (y) (and (funcall free y) (funcall inside y)))
+                                (append (list (cdr sym) (- (car sym) card-h)) near))
+                      (seq-find free beside)
+                      (apply #'max (mapcar #'cdr bands))))
                (x (max left (min symbol-x (- right card-w)))))
     (cons x y)))
+
+(defun drgnx-quickhelp--room (win-edges bands)
+  "The tallest run of rows in WIN-EDGES's height that no band of BANDS covers, in pixels."
+  (let ((y (nth 1 win-edges)) (room 0))
+    (dolist (b (sort (copy-sequence bands) (lambda (a b) (< (car a) (car b)))))
+      (setq room (max room (- (car b) y)) y (max y (cdr b))))
+    (max room (- (nth 3 win-edges) y))))
 
 ;;;; Collecting docs: eldoc's functions, asynchronously
 
@@ -121,7 +137,11 @@ is first; a newer request drops this one (CALLBACK is then never called).  Retur
                (let* ((fuller (and (symbolp f) (alist-get f drgnx-quickhelp--fuller)))
                       (f (if (and fuller (fboundp fuller)) fuller f))
                       (cb (answer-fn (prog1 n (cl-incf n))))
-                      (res (progn (cl-incf pending) (condition-case nil (funcall f cb) (error nil)))))
+                      ;; a backend that prints a value (a variable's, with its docstring) prints a short one:
+                      ;; a 2M-element list took 1.5 s, from the hover timer
+                      (res (progn (cl-incf pending)
+                                  (let ((print-length 20) (print-level 3))
+                                    (condition-case nil (funcall f cb) (error nil))))))
                  (when (or (null res) (stringp res)) (funcall cb res))
                  nil))))))
       (if (zerop (cl-decf pending))
@@ -189,7 +209,9 @@ Close Quick Help).")
 (defun drgnx-quickhelp--render (docs width max strip)
   "Fill the card's buffer: DOCS in WIDTH columns, at most MAX lines; STRIP: the buttons on top (a terminal)."
   (let ((buf (get-buffer-create drgnx-quickhelp--buffer-name))
-        (lines (if docs (drgnx-quickhelp--doc-lines docs width max) (list "No documentation here."))))
+        (lines (cond ((eq docs :pending) (list "…"))         ; asked, not answered yet
+                     (docs (drgnx-quickhelp--doc-lines docs width max))
+                     (t (list "No documentation here.")))))
     (with-current-buffer buf
       (buffer-disable-undo)                             ; redrawn on every card
       (let ((inhibit-read-only t))
@@ -247,8 +269,24 @@ Close Quick Help).")
   (cond ((window-live-p drgnx-quickhelp--strip) drgnx-quickhelp--strip)
         ((frame-live-p drgnx-quickhelp--frame) (frame-root-window drgnx-quickhelp--frame))))
 
+(defvar drgnx-quickhelp--rest nil "(KEY . SINCE): the symbol the mouse is on and since when; KEY is (WINDOW . START).")
+
+(defvar drgnx-quickhelp--still nil
+  "`mouse-pixel-position' at the last command or when the card was put away: hover waits until the pointer moves
+from there (else a card would come back at every pause in your typing, the mouse resting on the text).  nil: it
+moved, hover is armed.")
+
+(defun drgnx-quickhelp--note-pointer ()
+  "On `pre-command-hook' (while hover is on) and when the card goes: hover waits for the pointer to move."
+  (setq drgnx-quickhelp--still (mouse-pixel-position) drgnx-quickhelp--rest nil))
+
 (defun drgnx-quickhelp-hide ()
-  "Put the card away (and drop a request still waiting for docs)."
+  "Put the card away (and drop a request still waiting for docs); hover waits for the pointer to move."
+  (drgnx-quickhelp--teardown)
+  (drgnx-quickhelp--note-pointer))
+
+(defun drgnx-quickhelp--teardown ()
+  "Put the card away and drop a request still waiting for docs."
   (drgnx-quickhelp--cancel)
   (setq drgnx-quickhelp--origin nil)
   (remove-hook 'pre-command-hook #'drgnx-quickhelp--pre-command)
@@ -301,7 +339,12 @@ header lines included), so each is added to its own origin."
       (list (+ top y) (+ top y height) (+ left x)))))
 
 (defun drgnx-quickhelp--make-frame (parent)
-  "The card's child frame of PARENT (made once; moved to another parent when needed)."
+  "The card's child frame of PARENT (made once; moved to another parent when needed, made again for a parent on
+another display)."
+  (when (and (frame-live-p drgnx-quickhelp--frame)
+             (not (eq (frame-terminal drgnx-quickhelp--frame) (frame-terminal parent))))
+    (delete-frame drgnx-quickhelp--frame)
+    (setq drgnx-quickhelp--frame nil drgnx-quickhelp--card-up nil))
   (if (frame-live-p drgnx-quickhelp--frame)
       (unless (eq (frame-parent drgnx-quickhelp--frame) parent)
         (set-frame-parameter drgnx-quickhelp--frame 'parent-frame parent))
@@ -340,18 +383,41 @@ header lines included), so each is added to its own origin."
             (when gap (put-text-property gap (1+ gap) 'display drgnx-quickhelp--gap))))
         (cons (+ w border) (+ h border))))))
 
+(defun drgnx-quickhelp--text-edges (win)
+  "WIN's text area (LEFT TOP RIGHT BOTTOM) in frame pixels: below its tab and header lines (Emacs 30's
+`window-body-pixel-edges' counts a tab line as body)."
+  (let ((body (window-body-pixel-edges win)))
+    (list (nth 0 body)
+          (+ (nth 1 (window-pixel-edges win)) (window-tab-line-height win) (window-header-line-height win))
+          (nth 2 body) (nth 3 body))))
+
+(defun drgnx-quickhelp--line-band (win pos edges)
+  "(TOP . BOTTOM): the rows of POS's whole line in WIN (every screen row of a wrapped line), clamped to EDGES."
+  (with-current-buffer (window-buffer win)
+    (save-excursion
+      (goto-char pos)
+      (let* ((bol (line-beginning-position)) (eol (line-end-position))
+             (first (and (>= bol (window-start win)) (drgnx-quickhelp--line-geometry win bol)))
+             (last (drgnx-quickhelp--line-geometry win eol)))
+        (cons (if first (max (nth 1 edges) (car first)) (nth 1 edges))
+              (if last (min (nth 3 edges) (nth 1 last)) (nth 3 edges)))))))
+
 (defun drgnx-quickhelp--show-card (docs)
-  "Show DOCS in the child frame beside the origin's symbol, below its line (above when no room)."
+  "Show DOCS in the child frame beside the origin's symbol, below its line (above when no room); never over the
+symbol's whole line or the line point is on."
   (let* ((o drgnx-quickhelp--origin) (win (plist-get o :window)) (pos (plist-get o :pos))
          (geo (and (window-live-p win) (drgnx-quickhelp--line-geometry win pos))))
     (when geo
-      (pcase-let* ((`(,line-top ,line-bottom ,sym-x) geo)
-                   (edges (window-inside-pixel-edges win))
-                   (`(,left ,top ,right ,bottom) edges)
+      (pcase-let* ((`(,_ ,_ ,sym-x) geo)
+                   (edges (drgnx-quickhelp--text-edges win))
+                   (`(,left ,_ ,right ,_) edges)
+                   (bands (cons (drgnx-quickhelp--line-band win pos edges)
+                                (and (eq win (selected-window))
+                                     (list (drgnx-quickhelp--line-band win (window-point win) edges)))))
                    (parent (window-frame win))
                    (cw (frame-char-width parent))
                    (max-w (min (* 80 cw) (- right left (* 2 cw))))
-                   (room (max (- bottom line-bottom) (- line-top top)))
+                   (room (drgnx-quickhelp--room edges bands))
                    (frame (drgnx-quickhelp--make-frame parent))
                    (cols (max 20 (/ max-w cw)))
                    (lines drgnx-quickhelp-max-lines)
@@ -363,10 +429,12 @@ header lines included), so each is added to its own origin."
           (setq lines (max 1 (min (1- lines) (floor (* lines (/ (float room) (cdr size)))))))
           (drgnx-quickhelp--render docs cols lines nil)
           (setq size (drgnx-quickhelp--fit frame max-w)))
-        (pcase-let ((`(,x . ,y) (drgnx-quickhelp-placement edges line-top line-bottom sym-x (car size) (cdr size))))
+        (pcase-let ((`(,x . ,y) (drgnx-quickhelp-placement edges bands sym-x (car size) (cdr size))))
           (set-frame-position frame x y))
         (unless (frame-visible-p frame) (make-frame-visible frame))
-        (setq drgnx-quickhelp--card-up t)
+        (setq drgnx-quickhelp--card-up t
+              ;; what it was placed against: the hover look puts it away when the window scrolls or moves
+              drgnx-quickhelp--origin (plist-put (plist-put o :start (window-start win)) :edges (window-pixel-edges win)))
         t))))
 
 (defun drgnx-quickhelp--open-strip (win)
@@ -377,7 +445,7 @@ WIN is too small.  Point stays visible."
       (let* ((window-combination-limit t)              ; WIN and the strip in a parent of their own
              (strip (ignore-errors (split-window win (- lines) 'below))))
         (when strip
-          (set-window-buffer strip (drgnx-quickhelp--render nil (window-body-width win) 0 t))
+          (set-window-buffer strip (drgnx-quickhelp--render :pending (window-body-width win) 0 t))
           (set-window-dedicated-p strip t)
           (dolist (p '((drgnx-role . quickhelp) (no-other-window . t) (mode-line-format . none)
                        (header-line-format . none) (tab-line-format . none)))
@@ -402,7 +470,7 @@ WIN is too small.  Point stays visible."
 
 (defun drgnx-quickhelp--request (win pos key)
   "Ask for the docs of POS in WIN and show them; KEY: asked with the key (else a hover).  Returns at once."
-  (drgnx-quickhelp-hide)
+  (drgnx-quickhelp--teardown)                           ; (not `hide': hover stays armed for this card's mouse)
   (setq drgnx-quickhelp--origin (list :window win :buffer (window-buffer win) :pos pos :selected (selected-window) :key key))
   (add-hook 'pre-command-hook #'drgnx-quickhelp--pre-command)
   (add-hook 'post-command-hook #'drgnx-quickhelp--post-command)
@@ -415,11 +483,15 @@ WIN is too small.  Point stays visible."
 ;;;; Commands and buttons
 
 (defun drgnx-quickhelp-show ()
-  "Show quick help for the symbol at point: its docs, signature and links, beside it.  Again while it shows: Open Help."
+  "Show quick help for the symbol at point: its docs, signature and links, beside it.
+Again while its card shows (same window, point not moved): Open Help.  A card from hovering is replaced by the
+one at point."
   (interactive)
-  (if (drgnx-quickhelp-shown-p)
-      (drgnx-quickhelp--act #'drgnx-quickhelp--open-help)
-    (drgnx-quickhelp--request (selected-window) (point) t)))
+  (let ((o drgnx-quickhelp--origin))
+    (if (and (drgnx-quickhelp-shown-p) (plist-get o :key)
+             (eq (plist-get o :window) (selected-window)) (eql (plist-get o :pos) (point)))
+        (drgnx-quickhelp--act #'drgnx-quickhelp--open-help)
+      (drgnx-quickhelp--request (selected-window) (point) t))))
 
 (defun drgnx-quickhelp-close ()
   "Put the quick help card away.
@@ -429,11 +501,10 @@ card you did not ask for never eats a key."
   (let ((hover (and drgnx-quickhelp--origin (not (plist-get drgnx-quickhelp--origin :key))))
         (keys (this-command-keys-vector)))
     (drgnx-quickhelp-hide)                                ; the showing map is off from here
+    ;; the key again, read as if the card had not been there (not recorded twice in macros or the lossage)
     (when (and hover (> (length keys) 0))
-      (let ((cmd (key-binding keys t)))
-        (when (and (commandp cmd) (not (eq cmd #'drgnx-quickhelp-close)))
-          (setq this-command cmd)
-          (call-interactively cmd nil keys))))))
+      (setq unread-command-events
+            (append (mapcar (lambda (e) (cons 'no-record e)) keys) unread-command-events)))))
 
 (defun drgnx-quickhelp--click (event)
   "Run the card's button under the mouse EVENT (the ✕ closes the card)."
@@ -449,7 +520,9 @@ card you did not ask for never eats a key."
     (drgnx-quickhelp-hide)
     (when (and o (window-live-p (plist-get o :window)) (eq (window-buffer (plist-get o :window)) (plist-get o :buffer)))
       (select-window (plist-get o :window))
-      (goto-char (plist-get o :pos))
+      (unless (eql (point) (plist-get o :pos))
+        (push-mark nil t)                               ; a hovered spot: C-u C-SPC goes back
+        (goto-char (plist-get o :pos)))
       (funcall fn o))))
 
 (defun drgnx-quickhelp--symbol (o)
@@ -473,7 +546,6 @@ card you did not ask for never eats a key."
 
 (defvar drgnx-quickhelp--hover-timer nil "The idle timer that starts watching the mouse.")
 (defvar drgnx-quickhelp--poll nil "The timer of the next look at the mouse while Emacs is idle.")
-(defvar drgnx-quickhelp--rest nil "(KEY . SINCE): the symbol the mouse is on and since when; KEY is (WINDOW . START).")
 (defconst drgnx-quickhelp--poll-interval 0.2 "Seconds between looks at the mouse while idle.")
 
 (defun drgnx-quickhelp--mouse-symbol ()
@@ -491,22 +563,40 @@ card you did not ask for never eats a key."
 (defun drgnx-quickhelp--mouse-on-card-p ()
   (eq (car (mouse-pixel-position)) drgnx-quickhelp--frame))
 
+(defun drgnx-quickhelp--focused-p ()
+  "Non-nil when a graphical frame (not a child frame) has the focus (or Emacs cannot tell)."
+  (seq-some (lambda (f) (and (display-graphic-p f) (not (frame-parent f)) (frame-focus-state f))) (frame-list)))
+
+(defun drgnx-quickhelp--card-moved-p (o)
+  "Non-nil when the window the card O was placed against has scrolled, moved or changed size since."
+  (let ((w (plist-get o :window)))
+    (and (plist-get o :start)
+         (or (not (window-live-p w)) (/= (window-start w) (plist-get o :start))
+             (not (equal (window-pixel-edges w) (plist-get o :edges)))))))
+
 (defun drgnx-quickhelp--hover-look ()
-  "One look at the mouse (idle only): a symbol rested on for `drgnx-quickhelp-delay' gets its card; a hover card
-goes when the mouse leaves its symbol and the card."
+  "One look at the mouse (idle only, a graphical frame focused): once the pointer has moved since the last command,
+a symbol rested on for `drgnx-quickhelp-delay' gets its card; a hover card goes when the mouse leaves its symbol
+and the card.  A card whose window scrolled or moved goes too."
   (setq drgnx-quickhelp--poll nil)
   (let ((idle (current-idle-time)))
     (when (and idle (>= (float-time idle) (* 0.75 drgnx-quickhelp--poll-interval))
-               drgnx-quickhelp-hover (not (active-minibuffer-window)))
-      (let ((key (drgnx-quickhelp--mouse-symbol)) (o drgnx-quickhelp--origin) (now (float-time)))
-        (unless (equal key (car drgnx-quickhelp--rest)) (setq drgnx-quickhelp--rest (cons key now)))
-        (cond ((and o (plist-get o :key)))                                ; a card you asked for stays
-              ((drgnx-quickhelp--mouse-on-card-p))                       ; on the card: it stays
-              ((null key) (when o (drgnx-quickhelp-hide)))
-              ((and o (eq (car key) (plist-get o :window)) (= (cdr key) (plist-get o :pos))))
-              ((>= (- now (cdr drgnx-quickhelp--rest)) drgnx-quickhelp-delay)
-               (drgnx-quickhelp--request (car key) (cdr key) nil))
-              (o (drgnx-quickhelp-hide))))
+               drgnx-quickhelp-hover (not (active-minibuffer-window)) (drgnx-quickhelp--focused-p))
+      (let ((o drgnx-quickhelp--origin))
+        (when (and drgnx-quickhelp--still (not (equal (mouse-pixel-position) drgnx-quickhelp--still)))
+          (setq drgnx-quickhelp--still nil))            ; the pointer moved: hover is armed
+        (cond ((and o drgnx-quickhelp--card-up (drgnx-quickhelp--card-moved-p o)) (drgnx-quickhelp-hide))
+              (drgnx-quickhelp--still)                  ; resting where it was when you last typed: nothing
+              (t
+               (let ((key (drgnx-quickhelp--mouse-symbol)) (now (float-time)))
+                 (unless (equal key (car drgnx-quickhelp--rest)) (setq drgnx-quickhelp--rest (cons key now)))
+                 (cond ((and o (plist-get o :key)))                          ; a card you asked for stays
+                       ((drgnx-quickhelp--mouse-on-card-p))                 ; on the card: it stays
+                       ((null key) (when o (drgnx-quickhelp-hide)))
+                       ((and o (eq (car key) (plist-get o :window)) (= (cdr key) (plist-get o :pos))))
+                       ((>= (- now (cdr drgnx-quickhelp--rest)) drgnx-quickhelp-delay)
+                        (drgnx-quickhelp--request (car key) (cdr key) nil))
+                       (o (drgnx-quickhelp-hide)))))))
       (setq drgnx-quickhelp--poll (run-with-timer drgnx-quickhelp--poll-interval nil #'drgnx-quickhelp--hover-look)))))
 
 (defun drgnx-quickhelp--hover-start ()
@@ -518,7 +608,9 @@ goes when the mouse leaves its symbol and the card."
   (when (timerp drgnx-quickhelp--hover-timer) (cancel-timer drgnx-quickhelp--hover-timer))
   (when (timerp drgnx-quickhelp--poll) (cancel-timer drgnx-quickhelp--poll))
   (setq drgnx-quickhelp--hover-timer nil drgnx-quickhelp--poll nil drgnx-quickhelp--rest nil)
+  (remove-hook 'pre-command-hook #'drgnx-quickhelp--note-pointer)
   (when (and drgnx-quickhelp--active drgnx-quickhelp-hover)
+    (add-hook 'pre-command-hook #'drgnx-quickhelp--note-pointer)
     (setq drgnx-quickhelp--hover-timer
           (run-with-idle-timer drgnx-quickhelp--poll-interval t #'drgnx-quickhelp--hover-start))))
 

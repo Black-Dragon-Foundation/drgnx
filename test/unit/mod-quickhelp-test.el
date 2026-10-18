@@ -44,41 +44,66 @@
 
 ;;;; Placement (pure)
 
+(defun drgnx-quickhelp-test--clear-p (y h bands)
+  "Non-nil when the rows Y..Y+H cover no band of BANDS."
+  (not (seq-some (lambda (b) (drgnx-quickhelp-test--overlaps-p y h (car b) (cdr b))) bands)))
+
 (ert-deftest drgnx-quickhelp/placement-below-else-above ()
   (let ((win '(0 0 800 600)))
     ;; room below: under the line, at the symbol
-    (should (equal (drgnx-quickhelp-placement win 100 120 50 300 200) '(50 . 120)))
+    (should (equal (drgnx-quickhelp-placement win '((100 . 120)) 50 300 200) '(50 . 120)))
     ;; no room below: above the line
-    (should (equal (drgnx-quickhelp-placement win 500 520 50 300 200) '(50 . 300)))
+    (should (equal (drgnx-quickhelp-placement win '((500 . 520)) 50 300 200) '(50 . 300)))
     ;; exactly fits below
-    (should (equal (drgnx-quickhelp-placement win 380 400 0 100 200) '(0 . 400)))
+    (should (equal (drgnx-quickhelp-placement win '((380 . 400)) 0 100 200) '(0 . 400)))
     ;; neither side has room: the bigger side, still beside the line
-    (should (equal (drgnx-quickhelp-placement win 100 120 0 100 550) '(0 . 120)))
-    (should (equal (drgnx-quickhelp-placement win 480 500 0 100 550) '(0 . -70)))))
+    (should (equal (drgnx-quickhelp-placement win '((100 . 120)) 0 100 550) '(0 . 120)))
+    (should (equal (drgnx-quickhelp-placement win '((480 . 500)) 0 100 550) '(0 . -70)))))
 
 (ert-deftest drgnx-quickhelp/placement-never-covers-the-line ()
+  ;; property: over a grid of symbol lines (one to three screen rows), point's line (none, the symbol's, the one
+  ;; below, a row further down, above), card heights and positions, no row of the card is on either line
   (let ((win '(10 30 810 630)) (checked 0))
     (cl-loop for top from 30 below 630 by 20 do
-             (cl-loop for h in '(20 60 140 300 580 620 900) do
-                      (cl-loop for x in '(10 400 790) do
-                               (let ((p (drgnx-quickhelp-placement win top (+ top 20) x 320 h)))
-                                 (cl-incf checked)
-                                 (should-not (drgnx-quickhelp-test--overlaps-p (cdr p) h top (+ top 20)))))))
-    (should (> checked 500))))
+             (cl-loop for rows in '(1 3) do
+                      (let ((sym (cons top (min 630 (+ top (* 20 rows))))))
+                        (cl-loop for point in (list nil sym (cons (cdr sym) (+ (cdr sym) 20))
+                                                    (cons (+ (cdr sym) 60) (+ (cdr sym) 80)) (cons (- top 40) (- top 20)))
+                                 do (cl-loop for h in '(20 60 140 300 580 620 900) do
+                                             (cl-loop for x in '(10 400 790) do
+                                                      (let* ((bands (if point (list sym point) (list sym)))
+                                                             (p (drgnx-quickhelp-placement win bands x 320 h)))
+                                                        (cl-incf checked)
+                                                        (should (drgnx-quickhelp-test--clear-p (cdr p) h bands)))))))))
+    (should (> checked 5000))))
+
+(ert-deftest drgnx-quickhelp/placement-wrapped-line-and-point-below ()
+  (let ((win '(0 0 800 600)))
+    ;; the symbol on the middle row of a line wrapped over three rows: the card is under the whole line
+    (should (equal (drgnx-quickhelp-placement win '((100 . 160)) 50 300 200) '(50 . 160)))
+    ;; … above it when there is no room below
+    (should (equal (drgnx-quickhelp-placement win '((400 . 460)) 50 300 200) '(50 . 200)))
+    ;; hovering a symbol with point on the line below: under that line too, not between them
+    (should (equal (drgnx-quickhelp-placement win '((100 . 120) (120 . 140)) 50 300 200) '(50 . 140)))
+    ;; point on the line below and no room under it: above the symbol's line
+    (should (equal (drgnx-quickhelp-placement win '((400 . 420) (420 . 440)) 50 300 200) '(50 . 200)))
+    ;; the room the caller shortens the card to: the tallest gap between the bands
+    (should (= (drgnx-quickhelp--room win '((100 . 120) (420 . 440))) 300))
+    (should (= (drgnx-quickhelp--room win '((0 . 580))) 20))))
 
 (ert-deftest drgnx-quickhelp/placement-stays-in-the-window ()
   (let ((win '(10 30 810 630)))
     (cl-loop for top from 30 below 630 by 20 do
              (cl-loop for x in '(10 300 700 790 809) do
                       (cl-loop for (w . h) in '((320 . 100) (790 . 200) (200 . 280)) do
-                               (let* ((p (drgnx-quickhelp-placement win top (+ top 20) x w h)))
+                               (let* ((p (drgnx-quickhelp-placement win (list (cons top (+ top 20))) x w h)))
                                  (should (>= (car p) 10))
                                  (should (<= (+ (car p) w) 810))
                                  ;; the card fits on one side here (280 + 20 <= 600 / 2 + 20), so it is in the window
                                  (should (>= (cdr p) 30))
                                  (should (<= (+ (cdr p) h) 630))))))
     ;; a card wider than the window starts at its left edge
-    (should (= (car (drgnx-quickhelp-placement win 100 120 500 2000 50)) 10))))
+    (should (= (car (drgnx-quickhelp-placement win '((100 . 120)) 500 2000 50)) 10))))
 
 ;;;; Collecting docs (eldoc's functions)
 
@@ -190,14 +215,95 @@
         (should-not (drgnx-quickhelp-shown-p))
         (should-not drgnx-quickhelp--showing)
         (should (equal (buffer-string) "(car x)\n"))
-        ;; a card from hovering: q closes it and types q
+        (should-not unread-command-events)
+        ;; a card from hovering: q closes it and goes back to be read again (no record), so it types q
         ;; (hover cards are graphical only: its state stands in for one here)
         (setq drgnx-quickhelp--origin (list :window (selected-window) :buffer (current-buffer) :pos 2 :key nil)
               drgnx-quickhelp--showing t)
-        (let ((last-command-event ?q)) (call-interactively #'drgnx-quickhelp-close))
-        (should-not drgnx-quickhelp--origin)
-        (should-not drgnx-quickhelp--showing)
-        (should (equal (buffer-string) "(qcar x)\n"))))))
+        (let ((unread-command-events nil))
+          (call-interactively #'drgnx-quickhelp-close)
+          (should-not drgnx-quickhelp--origin)
+          (should-not drgnx-quickhelp--showing)
+          (should (equal unread-command-events '((no-record . ?q))))
+          ;; read again with the card gone, the key is the buffer's own
+          (should (eq (key-binding (vector (cdar unread-command-events))) #'self-insert-command)))))))
+
+(ert-deftest drgnx-quickhelp/again-replaces-a-hover-card-with-the-one-at-point ()
+  (drgnx-quickhelp-test--with
+    (drgnx-quickhelp-test--elisp "(car x)\n(cdr y)\n"
+      (goto-char 10)                            ; on `cdr'
+      (let ((described nil) (asked nil))
+        (setq-local eldoc-documentation-functions
+                    (list (lambda (cb) (push (point) asked) (funcall cb "(LIST)" :thing (symbol-at-point)))))
+        (cl-letf (((symbol-function 'describe-symbol) (lambda (s &rest _) (push s described))))
+          ;; a hover card on `car' (its state stands in for one: hover cards are graphical only)
+          (drgnx-quickhelp-test--show '(("(LIST)" :thing car)))
+          (setq drgnx-quickhelp--origin (plist-put (plist-put drgnx-quickhelp--origin :key nil) :pos 2))
+          (setq-local eldoc-documentation-functions
+                      (list (lambda (cb) (push (point) asked) (funcall cb "(LIST)" :thing (symbol-at-point)))))
+          (call-interactively #'drgnx-quickhelp-show)
+          (should-not described)                ; not Open Help for the hovered symbol
+          (should (equal asked '(10)))          ; quick help at point instead
+          (should (= (point) 10))               ; point never went to the mouse
+          (should (eq (plist-get drgnx-quickhelp--origin :key) t))
+          ;; a key card, point moved since: a new card, not Open Help
+          (goto-char 11)
+          (call-interactively #'drgnx-quickhelp-show)
+          (should-not described)
+          (should (equal asked '(11 10))))))))
+
+(ert-deftest drgnx-quickhelp/a-big-value-never-blocks ()
+  (drgnx-quickhelp-test--with
+    (drgnx-quickhelp-test--elisp "drgnx-quickhelp-test--big\n"
+      (defvar drgnx-quickhelp-test--big nil "A variable with a big value.")
+      (let ((drgnx-quickhelp-test--big (make-list 2000000 '(a (b (c (d)))))) (got nil) (t0 (float-time)))
+        (setq-local eldoc-documentation-functions (list #'elisp-eldoc-var-docstring))
+        (drgnx-quickhelp-collect 3 (selected-window) (lambda (docs) (setq got docs)))
+        (should (< (- (float-time) t0) 0.2))     ; printed short: 1.5 s whole
+        (should (string-search "A variable with a big value." (caar got)))
+        (when (fboundp 'elisp-eldoc-var-docstring-with-value)   ; the value, cut
+          (should (string-search "..." (caar got))))))))
+
+(defmacro drgnx-quickhelp-test--pointer (&rest body)
+  "BODY with a stubbed pointer (the variable `pointer', a `mouse-pixel-position' value) over symbol (W . 2),
+idle for a while, a focused frame, and `drgnx-quickhelp--request' recording its calls in `requests'."
+  (declare (indent 0))
+  `(let* ((pointer (cons (selected-frame) (cons 100 100))) (requests nil)
+          (drgnx-quickhelp-hover t) (drgnx-quickhelp-delay 0) (drgnx-quickhelp--still nil))
+     (cl-letf (((symbol-function 'mouse-pixel-position) (lambda () pointer))
+               ((symbol-function 'drgnx-quickhelp--mouse-symbol) (lambda () (cons (selected-window) 2)))
+               ((symbol-function 'drgnx-quickhelp--focused-p) (lambda () t))
+               ((symbol-function 'current-idle-time) (lambda () (seconds-to-time 5)))
+               ((symbol-function 'drgnx-quickhelp--request) (lambda (&rest args) (push args requests))))
+       ,@body
+       (when (timerp drgnx-quickhelp--poll) (cancel-timer drgnx-quickhelp--poll)))))
+
+(ert-deftest drgnx-quickhelp/hover-waits-for-the-pointer-to-move-after-typing ()
+  (drgnx-quickhelp-test--with
+    (drgnx-quickhelp-test--elisp "(car x)\n"
+      (drgnx-quickhelp-test--pointer
+        (setq drgnx-quickhelp--active t)
+        (drgnx-quickhelp--apply-hover)
+        (should (memq #'drgnx-quickhelp--note-pointer (default-value 'pre-command-hook)))
+        ;; the pointer came to rest on a symbol: its card is asked for
+        (drgnx-quickhelp--hover-look)
+        (should (= (length requests) 1))
+        ;; you type (a command, the card goes), then pause: the pointer has not moved, so no card
+        (run-hooks 'pre-command-hook)
+        (drgnx-quickhelp-hide)
+        (dotimes (_ 5) (drgnx-quickhelp--hover-look))     ; 0.2 s apart in life
+        (should (= (length requests) 1))
+        ;; the pointer moves (still on the symbol): hover is armed again
+        (setq pointer (cons (selected-frame) (cons 104 100)))
+        (drgnx-quickhelp--hover-look)
+        (should (= (length requests) 2))
+        ;; no graphical frame has the focus: no look, nothing re-armed
+        (cl-letf (((symbol-function 'drgnx-quickhelp--focused-p) (lambda () nil)))
+          (when (timerp drgnx-quickhelp--poll) (cancel-timer drgnx-quickhelp--poll))
+          (setq pointer (cons (selected-frame) (cons 120 100)) drgnx-quickhelp--rest nil)
+          (drgnx-quickhelp--hover-look)
+          (should (= (length requests) 2))
+          (should-not drgnx-quickhelp--poll))))))
 
 (ert-deftest drgnx-quickhelp/again-while-shown-opens-help ()
   (drgnx-quickhelp-test--with
@@ -241,6 +347,19 @@
           (let ((this-command 'self-insert-command)) (run-hooks 'pre-command-hook))
           (should-not (window-live-p strip))
           (should (equal (mapcar #'window-pixel-edges (list editor other)) before)))))))
+
+(ert-deftest drgnx-quickhelp/the-strip-shows-it-is-waiting ()
+  (drgnx-quickhelp-test--with
+    (drgnx-quickhelp-test--elisp (mapconcat (lambda (i) (format "(car x%d)" i)) (number-sequence 1 30) "\n")
+      (goto-char 2)
+      (let (late)
+        (setq-local eldoc-documentation-functions (list (lambda (cb) (setq late cb) t)))
+        (call-interactively #'drgnx-quickhelp-show)
+        (let ((text (lambda () (with-current-buffer (window-buffer drgnx-quickhelp--strip) (buffer-string)))))
+          (should (string-search "…" (funcall text)))
+          (should-not (string-search "No documentation" (funcall text)))
+          (funcall late "(LIST)" :thing 'car)
+          (should (string-search "car: (LIST)" (funcall text))))))))
 
 (ert-deftest drgnx-quickhelp/no-strip-in-a-window-too-small ()
   (drgnx-quickhelp-test--with

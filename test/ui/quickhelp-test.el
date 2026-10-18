@@ -73,4 +73,46 @@
       (when (buffer-live-p buf) (with-current-buffer buf (set-buffer-modified-p nil)) (kill-buffer buf))
       (delete-directory dir t))))
 
+(ert-deftest drgnx-ui-quickhelp/a-wrapped-line-stays-clear-and-the-close-mark-closes ()
+  (let* ((root (drgnx-uitest-root-frame)) (buf (generate-new-buffer "quickhelp-wrapped.el")))
+    (unwind-protect
+        (with-selected-frame root
+          (delete-other-windows)
+          (switch-to-buffer buf)
+          (dotimes (i 10) (insert (format "(defun fixture-%d (x) (car x))\n" i)))
+          ;; one logical line wrapped over several screen rows, `car' on its first row
+          (insert "(car (list \"" (mapconcat #'number-to-string (number-sequence 1 150) " ") "\"))\n")
+          (dotimes (i 30) (insert (format "(defun more-%d (x) (cdr x))\n" i)))
+          (emacs-lisp-mode)
+          (setq truncate-lines nil)
+          (goto-char (point-min))
+          (forward-line 10)
+          (forward-char 1)                        ; on `car'
+          (recenter 3)
+          (redisplay t)
+          (let ((editor (selected-window)) (line (line-number-at-pos)))
+            (should (> (count-screen-lines (line-beginning-position) (line-end-position)) 1))
+            (call-interactively #'drgnx-quickhelp-show)
+            (let ((deadline (+ (float-time) 3)))
+              (while (and (not (drgnx-quickhelp-shown-p)) (< (float-time) deadline)) (sit-for 0.05)))
+            (redisplay t) (sit-for 0.3)
+            (should (drgnx-quickhelp-shown-p))
+            (let* ((card drgnx-quickhelp--frame) (e (frame-edges card 'outer-edges)) (x (+ (nth 0 e) 4)))
+              ;; no row of the card is on any screen row of point's (wrapped) line
+              (cl-loop for y from (nth 1 e) below (nth 3 e)
+                       do (should-not (equal (drgnx-quickhelp-ui-test--line-at x y root) (cons editor line))))
+              ;; a click on its ✕ closes it; the editor keeps the focus and point
+              (let* ((cw (frame-root-window card))
+                     (p (with-current-buffer (window-buffer cw)
+                          (text-property-any (point-min) (point-max) 'drgnx-quickhelp-action #'ignore)))
+                     (pt (point)))
+                (should p)
+                (drgnx-uitest-run (drgnx-uitest-click-events (posn-at-point p cw)))
+                (should-not (drgnx-quickhelp-shown-p))
+                (should (eq (selected-window) editor))
+                (should (= (point) pt))))))
+      (drgnx-quickhelp-hide)
+      (drgnx-quickhelp--unmap)
+      (when (buffer-live-p buf) (with-current-buffer buf (set-buffer-modified-p nil)) (kill-buffer buf)))))
+
 ;;; quickhelp-test.el ends here
