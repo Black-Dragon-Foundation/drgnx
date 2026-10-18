@@ -146,6 +146,32 @@ Emacs' default bindings (`C-s` isearch, `C-o` open-line, `C-k` kill-line, …), 
 normal-mode keys (`C-o` jump back, `C-w` window commands, `C-v` visual block, …). When a later layer binds a claimed
 key, it wins — and the clash is reported.
 
+## In the terminal
+
+A terminal (New Terminal, `tools/terminal-eat`) is a program that wants most keys itself, so the active profile
+decides which keys it gets, the way VS Code's terminal does:
+
+- **App and window keys reach drgnx** when they are not control or Alt characters: the palette, panel and terminal
+  keys of the VS Code profile (`Ctrl+Shift+P`, `F1`, ``Ctrl+` ``), function keys, `C-c` keys, whatever the profile uses.
+- **Editing keys go to the shell**: a control or Alt key (`C-a`, `C-e`, `C-w`, `C-k`, `M-f`) means what readline or
+  zle make of it, even when the profile gives it to a drgnx command outside the terminal (VS Code's `C-b` Toggle
+  Sidebar, `C-w` Close Tab, `C-s` Save, the `C-k` chords).
+  Eat's own reserved keys (`C-x`, `C-c`, `C-g`, `C-h`, `C-u`, `C-q`, `M-x`, `M-:`, `M-!`, `M-&`) stay with Emacs. On a
+  Mac the profile's keys are `Cmd` keys, which no shell uses, so they all reach drgnx.
+- **`C-p` follows the profile**: in the VS Code profile it is Quick Open (Go to File), as in VS Code's own terminal; in
+  the Emacs and Vim profiles nothing takes it and it reaches the shell (previous history entry). The list of commands
+  that keep a readline key is `drgnx-terminal-skip-shell-commands` (just Quick Open).
+
+The split is computed from the active stack of the registry, so it follows a profile switch at once. The key sheet
+(**Keyboard Shortcuts**) ends with an **In the terminal** section: one line "Reach drgnx: …" and one line for every
+key that goes to the shell instead, such as "C-b goes to the shell (Toggle Sidebar: outside the terminal, or the
+palette)".
+
+**Copy and paste**: `Ctrl+Shift+C` copies the selected text of the terminal (nothing selected, nothing happens) and
+`Ctrl+Shift+V` pastes, on a Mac `Cmd+C` / `Cmd+V`. They are the commands *Terminal: Copy* and *Terminal: Paste* and
+work in terminal buffers only. The Emacs profile leaves eat's own keys: `C-y` pastes, and copying is `C-c C-e`
+(Emacs mode) then `M-w`.
+
 ## Conflicts are reported, never hidden
 
 A conflict is one of:

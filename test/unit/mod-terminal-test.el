@@ -108,6 +108,34 @@
     (let ((system-type 'windows-nt))
       (should-not (drgnx-terminal-eat-usable-p "/tmp/")))))
 
+(ert-deftest drgnx-terminal/remote-folder-and-windows-open-eshell-without-a-notice ()
+  (unless (drgnx-terminal-test--eat-dir) (ert-skip drgnx-terminal-test--skip))
+  (drgnx-terminal-test--fresh t
+    (let ((msgs nil) (opened nil))
+      (cl-letf (((symbol-function 'message) (lambda (fmt &rest args) (push (apply #'format fmt args) msgs)))
+                ((symbol-function 'drgnx-terminal-new-eshell) (lambda (&optional dir) (push (cons 'eshell dir) opened) nil))
+                ((symbol-function 'drgnx-terminal-eat-start) (lambda (dir) (push (cons 'eat dir) opened) nil))
+                ((symbol-function 'file-remote-p) (lambda (f &rest _) (and (string-prefix-p "/ssh:" f) "/ssh:h:"))))
+        (drgnx-terminal-new "/ssh:h:/tmp/")
+        (let ((system-type 'windows-nt)) (drgnx-terminal-new "/tmp/"))
+        (should (equal (reverse opened) '((eshell . "/ssh:h:/tmp/") (eshell . "/tmp/"))))
+        (should-not msgs)
+        (should-not drgnx-terminal--notice-shown)))))
+
+(ert-deftest drgnx-terminal/the-shell-starts-in-the-folder ()
+  (unless (drgnx-terminal-test--eat-dir) (ert-skip drgnx-terminal-test--skip))
+  (let* ((dir (make-temp-file "drgnx-term" t)) (sub (file-name-as-directory (expand-file-name "work dir" dir)))
+         (out (expand-file-name "pwd.txt" dir)))
+    (make-directory sub)
+    (let* ((script (drgnx-terminal-test--script dir (format "pwd -P > %s\nexec sleep 30" (shell-quote-argument out))))
+           (process-environment (cons (concat "SHELL=" script) process-environment)))
+      (unwind-protect
+          (drgnx-terminal-test--fresh t
+            (drgnx-terminal-new sub)
+            (should (equal (string-trim (or (drgnx-terminal-test--wait-for-file out) ""))
+                           (directory-file-name (file-truename sub)))))
+        (delete-directory dir t)))))
+
 (ert-deftest drgnx-terminal/the-environment-names-this-server ()
   (let* ((dir (make-temp-file "drgnx-srv" t)) (server-socket-dir dir) (server-name "drgnx-term-test")
          (server-use-tcp nil) (server-process nil) (server-clients nil))

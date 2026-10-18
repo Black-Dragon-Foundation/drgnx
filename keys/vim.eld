@@ -172,6 +172,8 @@
         (terminal-new "SPC t n")
         (explorer-terminal-here :none "the Explorer's right-click menu")
         (terminal-new-eshell :none "in the palette")
+        (terminal-copy "C-S-c" :map (eat . eat-mode-map) :mac "s-c")
+        (terminal-paste "C-S-v" :map (eat . eat-mode-map) :mac "s-v")
         (go-quick-open "SPC f p")
         (search-project "SPC s p")
         (search-semantic "SPC s i")
