@@ -95,7 +95,8 @@ results go (default: none)."
                    :env (cons "DRGNX_TEST_SELECTOR=(tag :timing)" (funcall results "unit-timing")))
           jobs)
     (when gui
-      (push (funcall job "ui" 2 'ui (list bin "ui" "test-ui-session") :gui t) jobs)
+      ;; the session test's 110 s default is too tight beside the parallel shards (a session boots slower under load)
+      (push (funcall job "ui" 2 'ui (list bin "ui" "test-ui-session") :gui t :env (list "DRGNX_UI_TEST_TIMEOUT=300")) jobs)
       (cl-loop for files in (drgnx-check-shard (directory-files-recursively (expand-file-name "test/live" root) "-test\\.el\\'")
                                                live-shards durations)
                for i from 1

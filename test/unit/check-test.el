@@ -119,6 +119,11 @@
     (should (member "DRGNX_TEST_SELECTOR=(tag :timing)" (plist-get (seq-find (lambda (j) (equal (plist-get j :name) "unit-timing")) jobs) :env)))
     (should-not (member "perf" (mapcar (lambda (j) (plist-get j :name)) (drgnx-check-plan :root drgnx-dir :unit-shards 1 :live-shards 1))))))
 
+(ert-deftest drgnx-check/the-ui-job-gets-a-longer-timeout-under-parallel-load ()
+  ;; CHK-4: the session test's own 110 s default is too tight next to the parallel shards
+  (let ((ui (seq-find (lambda (j) (equal (plist-get j :name) "ui")) (drgnx-check-plan :root drgnx-dir))))
+    (should (member "DRGNX_UI_TEST_TIMEOUT=300" (plist-get ui :env)))))
+
 ;;; check-test.el ends here
 
 ;;;; Final review fixes

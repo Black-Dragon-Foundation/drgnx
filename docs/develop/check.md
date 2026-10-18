@@ -46,7 +46,10 @@ the wall time against the time the same jobs take one after another. The exit st
 Shards are balanced by how long each test file took last time (`check/durations.eld`, kept from the shards'
 results). Sessions started at the same moment never share a name:
 - within one state root, a name is claimed by creating its run directory;
-- across roots, a unit name another session holds (systemd: "already loaded") is passed over for the next one.
+- across roots, a unit name another session holds (systemd: "already loaded", "has a fragment file" or "already exists") is passed over for the next one.
+
+The `ui` job runs with `DRGNX_UI_TEST_TIMEOUT=300` (the session test's own default is 110 s): next to the parallel
+shards a session boots slower, and the test's own settle waits are not cut short by the shorter limit.
 
 Tests that run in parallel must not depend on machine-wide state another test may share:
 - A check of "no process like this one is left" uses a marker only this test's process has, such as a random sleep

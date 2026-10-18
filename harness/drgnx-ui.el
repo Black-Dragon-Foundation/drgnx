@@ -304,7 +304,7 @@ and the next name tried."
               (let ((r (apply #'drgnx-ui--run (drgnx-ui-launch-argv s))))
                 (cond ((eq (car r) 0) (setq sess s))
                       ;; kept claimed while we look further, so the next choice is another name
-                      ((and (string-match-p "already loaded\\|has a fragment" (cdr r)) (< (length refused) 20))
+                      ((and (string-match-p "already loaded\\|has a fragment\\|already exists" (cdr r)) (< (length refused) 20))
                        (push (plist-get s :name) refused))
                       (t (drgnx-ui-stop (plist-get s :name))
                          (drgnx-ui--fail "systemd-run failed: %s" (string-trim (cdr r)))))))))

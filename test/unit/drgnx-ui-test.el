@@ -404,6 +404,24 @@ the real ones belong to sessions running next to the tests (bin/drgnx check's li
           (should (equal (plist-get s :name) "drgnx-ui-2"))
           (should (equal stopped '("drgnx-ui-1"))))))))
 
+(ert-deftest drgnx-ui/a-unit-that-already-exists-moves-on-too ()
+  ;; CHK-4: systemd also refuses a taken name as "Unit … already exists" (UnitExists); parallel shards hit either wording
+  (drgnx-ui-test--with-state
+    (let ((tries nil) (stopped nil))
+      (cl-letf (((symbol-function 'drgnx-ui-launcher) (lambda () "systemd"))
+                ((symbol-function 'drgnx-ui-unit-active-p) (lambda (_n) nil))
+                ((symbol-function 'drgnx-ui-stop) (lambda (n) (push n stopped) (delete-directory (expand-file-name n root) t)))
+                ((symbol-function 'drgnx-ui--run)
+                 (lambda (&rest args)
+                   (let ((unit (cadr (member "--unit" args))))
+                     (push unit tries)
+                     (if (equal unit "drgnx-ui-1")
+                         (cons 1 "Failed to start transient service unit: Unit drgnx-ui-1.service already exists.")
+                       (cons 0 ""))))))
+        (let ((s (drgnx-ui--claim-and-launch nil "1600x900" root)))
+          (should (equal (plist-get s :name) "drgnx-ui-2"))
+          (should (equal stopped '("drgnx-ui-1"))))))))
+
 (ert-deftest drgnx-ui/a-test-process-ending-stops-the-sessions-it-started ()
   ;; bin/drgnx check (and the test-* tiers) set DRGNX_UI_STOP_ON_EXIT: a test process that is ended — a
   ;; timeout, C-c — stops its own sessions on the way out; `drgnx ui start' sessions are meant to outlive it
