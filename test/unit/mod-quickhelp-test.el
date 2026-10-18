@@ -8,12 +8,12 @@
 (defmacro drgnx-quickhelp-test--with (&rest body)
   "BODY with the quick help's state, hooks and commands kept away from the rest of the test process; one window."
   (declare (indent 0))
-  `(let ((drgnx-quickhelp--request 0) (drgnx-quickhelp--timer nil) (drgnx-quickhelp--origin nil)
+  `(let ((drgnx-quickhelp--request 0) (drgnx-quickhelp--origin nil)
          (drgnx-quickhelp--strip nil) (drgnx-quickhelp--showing nil) (emulation-mode-map-alists emulation-mode-map-alists)
          (drgnx-modal-front-alists drgnx-modal-front-alists)
-         (drgnx-quickhelp--card-up nil) (drgnx-quickhelp--unmap-timer nil)
+         (drgnx-quickhelp--card-up nil)
          (drgnx-quickhelp--active nil) (drgnx-quickhelp-hover nil)
-         (drgnx-quickhelp--hover-timer nil) (drgnx-quickhelp--poll nil) (drgnx-quickhelp--rest nil)
+         (drgnx-quickhelp--rest nil)
          (pre-command-hook nil) (post-command-hook nil)
          (drgnx-modules--runs (list (list 'ui/face 'ui/face)))   ; ui/face is on: its timers start
          (drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil))

@@ -605,8 +605,8 @@ on and a graphical frame focused, `drgnx-quickhelp--hover-step'.  Looks go on wh
       (setq o nil))
     (when hovering (drgnx-quickhelp--hover-step o))
     (when (or hovering drgnx-quickhelp--card-up)
-      (drgnx-timer-start 'quickhelp-look drgnx-quickhelp--poll-interval #'drgnx-quickhelp--hover-look
-                         :owner drgnx-quickhelp--owner))))
+      (drgnx-timer-soon 'quickhelp-look drgnx-quickhelp--poll-interval #'drgnx-quickhelp--hover-look
+                        :owner drgnx-quickhelp--owner))))
 
 (defun drgnx-quickhelp--watch-card ()
   "A card is up: make sure a look comes (with hover off the idle timer is not running)."

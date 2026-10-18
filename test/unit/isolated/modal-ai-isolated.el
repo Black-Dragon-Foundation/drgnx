@@ -13,12 +13,12 @@
 (defvar evil-state)
 (defvar drgnx-ai-detected)
 (defvar drgnx-ai-ghost--request)
-(defvar drgnx-ai-ghost--timer)
 (declare-function evil-insert-state "evil-states")
 (declare-function drgnx-evil-stop "drgnx-evil")
 (declare-function drgnx-ai-ghost-text "drgnx-ai-ui")
 (declare-function drgnx-ai-ghost-text-shown "drgnx-ai-ui")
 (declare-function drgnx-ai-ghost--post-command "drgnx-ai-ui")
+(declare-function drgnx-ai-ghost--pause "drgnx-ai-ui")
 
 (defconst drgnx-modal-ai-test--answer "(message name)" "What the mock `complete' provider suggests.")
 
@@ -70,7 +70,6 @@ is a mock LLM (found running) answering `drgnx-modal-ai-test--answer'."
              (advice-add 'drgnx-ai-request :before #'drgnx-modal-ai-test--count)
              ,@body)
          (advice-remove 'drgnx-ai-request #'drgnx-modal-ai-test--count)
-         (when (timerp drgnx-ai-ghost--timer) (cancel-timer drgnx-ai-ghost--timer))
          (when (fboundp 'drgnx-evil-stop) (drgnx-evil-stop))
          (drgnx-keys--restore)
          (setq-default mode-line-format mode-line-saved)
@@ -101,10 +100,12 @@ so what clears a suggestion is the keys pressed."
     (execute-kbd-macro (kbd keys))))
 
 (defun drgnx-modal-ai-test--pause ()
-  "The pause after the last command: the idle timer the ghost's post-command set, run now as Emacs runs a due timer
-\(`timer-event-handler', which also takes it off the idle list)."
-  (when (timerp drgnx-ai-ghost--timer)
-    (timer-event-handler drgnx-ai-ghost--timer)))
+  "The pause after the last command: the idle debounce `(ai-ghost . BUFFER)' the ghost's post-command armed, run now
+\(its function, `drgnx-ai-ghost--pause') and taken off the layer."
+  (let ((key (cons 'ai-ghost (current-buffer))))
+    (when (drgnx-timer-active-p key)
+      (drgnx-timer-cancel key)
+      (drgnx-ai-ghost--pause (current-buffer)))))
 
 (defun drgnx-modal-ai-test--wait (pred &optional secs)
   (let ((deadline (+ (float-time) (or secs 5)))) (while (and (not (funcall pred)) (< (float-time) deadline)) (accept-process-output nil 0.02)))
