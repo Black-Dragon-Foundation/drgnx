@@ -92,6 +92,18 @@ the real ones belong to sessions running next to the tests (bin/drgnx check's li
       (should (member (concat "EMACS_SOCKET_NAME=" (plist-get s :socket)) env))
       (should (equal (drgnx-ui-env-argv '("A=1")) '("env" "-i" "A=1"))))))
 
+(ert-deftest drgnx-ui/a-session-never-gets-the-provider-keys ()
+  ;; the session's processes start under `env -i' with the allowlist: no key of the starting process reaches them
+  (drgnx-ui-test--with-state
+    (let* ((keys '("OPENROUTER_API_KEY" "ANTHROPIC_API_KEY" "ANTHROPIC_AUTH_TOKEN" "OPENAI_API_KEY"))
+           (process-environment (append (mapcar (lambda (k) (concat k "=x")) keys) process-environment))
+           (s (drgnx-ui-prepare-run "drgnx-ui-5" nil "1600x900" root))
+           (argv (drgnx-ui-launch-argv s)))
+      (should (equal (seq-take (member "env" argv) 2) '("env" "-i")))
+      (dolist (k keys)
+        (should-not (seq-find (lambda (a) (string-prefix-p (concat k "=") a)) argv)))
+      (drgnx-ui-stop "drgnx-ui-5"))))
+
 (ert-deftest drgnx-ui/compositor-argv ()
   (drgnx-ui-test--with-state
     (let* ((s (drgnx-ui-prepare-run "drgnx-ui-6" nil "1024x768" root))

@@ -218,6 +218,17 @@ no remote files, only safe local variables, no large-file question; nil if it ca
           (drgnx-chrome-apply (window-frame w))))
       t))))
 
+(defvar drgnx-persist--step-timer nil "The one-shot idle timer that visits the next tab later in the same pause.")
+
+(defun drgnx-persist--idle-step ()
+  "Visit the next restored tab and, while some are left, the next one 0.2 s later in the same pause.  A repeating
+idle timer runs once per pause (`drgnx-persist--timer' starts each pause's run), so each step arms a one-shot at
+the current idle time plus 0.2 s.  Typing ends the pause and with it the run; the next pause starts it again."
+  (when (timerp drgnx-persist--step-timer) (cancel-timer drgnx-persist--step-timer))
+  (setq drgnx-persist--step-timer
+        (and (drgnx-persist--visit-pending) drgnx-persist--pending (current-idle-time)
+             (run-with-idle-timer (time-add (current-idle-time) 0.2) nil #'drgnx-persist--idle-step))))
+
 (defun drgnx-persist--main-state (frames)
   "The state of FRAMES that goes into the selected frame: the one saved with `:role main', else the first that
 is a workbench (not a window that rebuilds itself); nil when there are only such windows."
@@ -315,7 +326,7 @@ input focus back after the other windows are made, unless KEEP-FOCUS (a restore 
                                            (drgnx-persist--set-tabs g files)
                                            (list g (seq-remove (lambda (f) (equal f (plist-get spec :shown))) files) files)))))
           (when (and drgnx-persist--pending (not (timerp drgnx-persist--timer)))
-            (setq drgnx-persist--timer (run-with-idle-timer 0.2 t #'drgnx-persist--visit-pending)))))
+            (setq drgnx-persist--timer (run-with-idle-timer 0.2 t #'drgnx-persist--idle-step)))))
     ;; Docks and panel come back whatever happened above: sizes first (clamped), then shown.
     (let ((left (plist-get state :left)) (panel (plist-get state :panel)) (right (plist-get state :right)))
       (set-frame-parameter nil 'drgnx-persist-extra (plist-get state :extra))

@@ -30,9 +30,10 @@
   "Your own Emacs Lisp, loaded at the end of every start: config.el in `drgnx-user-dir'."
   (expand-file-name "config.el" (drgnx-user-dir)))
 
-(defun drgnx--load-user-config ()
-  "Load `drgnx-user-config-file' when it exists; an error in it is said in *Messages*, never stops the start."
-  (let ((file (drgnx-user-config-file)))
+(defun drgnx--load-user-config (&optional file)
+  "Load FILE (default `drgnx-user-config-file') when it exists; an error in it is said in *Messages*, never stops
+the start."
+  (let ((file (or file (drgnx-user-config-file))))
     (when (file-exists-p file)
       (condition-case err (load file nil 'nomessage 'nosuffix)
         (error (message "drgnx: %s: %s (the rest of it did not run)" (abbreviate-file-name file) (error-message-string err)))))))
@@ -97,7 +98,8 @@ The steady GC threshold is set at the end, also when a step fails (early-init de
           (unless safe
             (condition-case err (drgnx-pkg-activate)
               (error (message "drgnx: packages not activated: %s" (error-message-string err))))
-            (drgnx-pkg-guard-mode 1))
+            (drgnx-pkg-guard-mode 1)
+            (when custom-file (drgnx--load-user-config custom-file)))  ; what Customize saved: packages active, guarded
           (drgnx--core-commands)
           ;; Modules that run later (idle, first frame, …) register commands after the keys were applied.
           (add-hook 'drgnx-modules-after-stage-functions

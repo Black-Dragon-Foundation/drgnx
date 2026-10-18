@@ -300,6 +300,15 @@
           (should (equal (plist-get (plist-get (cl-letf (((symbol-function 'drgnx-doctor--search) #'ignore)) (drgnx-doctor-facts)) :keys-report) :conflicts) '("x"))))
       (delete-directory state t))))
 
+(ert-deftest drgnx-doctor/a-relative-xdg-state-home-counts-as-unset ()
+  ;; the state files the doctor reads are drgnx-paths' state dir: never under the current directory
+  (let ((process-environment (append (list "XDG_STATE_HOME=rel" "HOME=/tmp/drgnx-home") process-environment)))
+    (should (equal (drgnx-doctor--state-path "x.eld") "/tmp/drgnx-home/.local/state/drgnx/x.eld"))
+    (let (read)
+      (cl-letf (((symbol-function 'file-readable-p) (lambda (f) (push f read) nil)))
+        (drgnx-doctor--keys-report))
+      (should (equal read '("/tmp/drgnx-home/.local/state/drgnx/keys-report.eld"))))))
+
 ;;;; search
 
 (defun drgnx-doctor-test--search (&rest kv)

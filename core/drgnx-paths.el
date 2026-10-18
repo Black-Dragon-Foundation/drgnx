@@ -19,19 +19,25 @@
   "The user's drgnx configuration: $DRGNX_CONFIG_DIR, else ~/.config/drgnx/."
   (file-name-as-directory (expand-file-name (or (getenv "DRGNX_CONFIG_DIR") "~/.config/drgnx"))))
 
+(defun drgnx-paths--xdg (var default)
+  "The XDG base directory in the environment variable VAR, else DEFAULT.  Only an absolute path counts: the XDG spec
+says an empty or relative value is to be ignored (else it would mean the current directory), as bin/drgnx's xdg_dir."
+  (let ((dir (getenv var)))
+    (if (and dir (file-name-absolute-p dir) (not (string-prefix-p "~" dir))) dir default)))
+
 (defun drgnx-state-dir ()
   "drgnx state: $XDG_STATE_HOME/drgnx/ (default ~/.local/state/drgnx/)."
-  (file-name-as-directory (expand-file-name "drgnx" (or (getenv "XDG_STATE_HOME") "~/.local/state"))))
+  (file-name-as-directory (expand-file-name "drgnx" (drgnx-paths--xdg "XDG_STATE_HOME" "~/.local/state"))))
 
 (defun drgnx-cache-dir ()
   "drgnx caches: $XDG_CACHE_HOME/drgnx/ (default ~/.cache/drgnx/)."
-  (file-name-as-directory (expand-file-name "drgnx" (or (getenv "XDG_CACHE_HOME") "~/.cache"))))
+  (file-name-as-directory (expand-file-name "drgnx" (drgnx-paths--xdg "XDG_CACHE_HOME" "~/.cache"))))
 
 (defun drgnx-data-dir ()
   "drgnx data: $DRGNX_DATA_DIR, else $XDG_DATA_HOME/drgnx/ (default ~/.local/share/drgnx/)."
   (file-name-as-directory
    (expand-file-name (or (getenv "DRGNX_DATA_DIR")
-                         (expand-file-name "drgnx" (or (getenv "XDG_DATA_HOME") "~/.local/share"))))))
+                         (expand-file-name "drgnx" (drgnx-paths--xdg "XDG_DATA_HOME" "~/.local/share"))))))
 
 (defun drgnx-elpa-dir ()
   "The packages every session uses — a fixed real path (generations are copied into it)."

@@ -264,7 +264,7 @@ the clash is moot by then). Prompts of sessions that ended before they were free
 | Hook | drgnx-job |
 |---|---|
 | `drgnx-agents-changed-functions` | `drgnx-job--session-changed`: prompts out, a reviewer's verdict in (the last non-empty line of its last answer, starting `VERDICT:`, Markdown emphasis round it ignored), a step after a session ends or a finished task's agent's turn is over |
-| `drgnx-agents-request-functions` | `drgnx-job--request`: permissions by `drgnx-job-policy` (allowed but with no `allow_once` option: a card), writes inside the worktree (missing directories are made), else a card |
+| `drgnx-agents-request-functions` | `drgnx-job--request`: permissions by `drgnx-job-policy` (allowed but with no `allow_once` option: a card), writes inside the worktree (missing directories are made; `drgnx-job--write-inside` resolves the path itself — refused when a link leads it out — and renames a temp file over the target — its modes kept, a new file 0666 less the umask, a file that is not writable refused — then checks again; a remote path is never resolved: a card), else a card |
 | `drgnx-agents-error-functions` | `drgnx-job--agent-error`: a provider at its limit → `drgnx-job--fall-back` to the next profile; a task's reviewer → `drgnx-job--review-fall-back`: the review starts again on the next profile of the `review` route (a `review` card when none is left); a clash reviewer is left alone |
 | `drgnx-gateway-event-functions` | `drgnx-job--gateway-event`: `budget` → the job pauses, its agents stop |
 

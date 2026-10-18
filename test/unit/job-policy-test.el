@@ -153,4 +153,77 @@
       (should (equal (drgnx-job--request s "fs/write_text_file" (list :path path :content "x\n") 1) '(:result nil)))
       (should (equal (with-temp-buffer (insert-file-contents path) (buffer-string)) "x\n")))))
 
+(defun drgnx-job-policy-test--swap (dir outside)
+  "Put a symlink to OUTSIDE where the directory DIR was (moved beside it), with the real `rename-file'."
+  (funcall (get 'drgnx-job-policy-test--swap 'rename) (directory-file-name dir) (concat (directory-file-name dir) "-was"))
+  (make-symbolic-link outside (directory-file-name dir)))
+(put 'drgnx-job-policy-test--swap 'rename (symbol-function 'rename-file))
+
+(ert-deftest drgnx-job/a-link-swapped-in-after-the-check-is-never-written-through ()
+  ;; Check, then write: the policy found the path inside the worktree; a directory on its way swapped for a symlink
+  ;; before the write led it out.  The write resolves the path itself: refused (an error the agent gets).
+  (drgnx-job-policy-test--with
+    (let* ((s (drgnx-agents--make :id "s-w" :name "w" :profile "mock" :cwd wt :task (concat job "#1") :job job))
+           (outside (concat root "outside/")) (real (symbol-function 'drgnx-job--inside-p)) (swapped nil))
+      (make-directory (concat wt "sub")) (make-directory outside)
+      (cl-letf (((symbol-function 'drgnx-job--inside-p)
+                 (lambda (p tree) (prog1 (funcall real p tree)
+                                    (unless swapped (setq swapped t) (drgnx-job-policy-test--swap (concat wt "sub") outside))))))
+        (should-error (drgnx-job--request s "fs/write_text_file" (list :path (concat wt "sub/f.txt") :content "x\n") 1)))
+      (should swapped)
+      (should-not (file-exists-p (concat outside "f.txt"))))))
+
+(ert-deftest drgnx-job/a-directory-swapped-during-the-rename-is-an-error ()
+  ;; The window Emacs cannot close (it has no openat): a directory swapped right at the rename is found by the check
+  ;; after it, and said.
+  (drgnx-job-policy-test--with
+    (let* ((s (drgnx-agents--make :id "s-w" :name "w" :profile "mock" :cwd wt :task (concat job "#1") :job job))
+           (outside (concat root "outside/")) (real (symbol-function 'rename-file)) (swapped nil))
+      (make-directory (concat wt "sub")) (make-directory outside)
+      (cl-letf (((symbol-function 'rename-file)
+                 (lambda (from to &optional ok)
+                   (prog1 (funcall real from to ok)
+                     (unless swapped (setq swapped t) (drgnx-job-policy-test--swap (concat wt "sub") outside))))))
+        (should-error (drgnx-job--request s "fs/write_text_file" (list :path (concat wt "sub/f.txt") :content "x\n") 1)))
+      (should (equal (with-temp-buffer (insert-file-contents (concat wt "sub-was/f.txt")) (buffer-string)) "x\n"))
+      (should-not (file-exists-p (concat outside "f.txt"))))))
+
+(ert-deftest drgnx-job/a-write-is-a-temp-file-renamed-over-the-target ()
+  ;; written whole: the file keeps its modes, a link inside the worktree is written through and stays a link, and
+  ;; no temp file is left beside it
+  (drgnx-job-policy-test--with
+    (let ((s (drgnx-agents--make :id "s-w" :name "w" :profile "mock" :cwd wt :task (concat job "#1") :job job)))
+      (write-region "old\n" nil (concat wt "run.sh") nil 'silent)
+      (set-file-modes (concat wt "run.sh") #o755)
+      (make-symbolic-link "run.sh" (concat wt "link.sh"))
+      (should (equal (drgnx-job--request s "fs/write_text_file" (list :path (concat wt "link.sh") :content "new\n") 1) '(:result nil)))
+      (should (file-symlink-p (concat wt "link.sh")))
+      (should (equal (with-temp-buffer (insert-file-contents (concat wt "run.sh")) (buffer-string)) "new\n"))
+      (should (= (file-modes (concat wt "run.sh")) #o755))
+      (should (equal (directory-files wt nil "\\`[^.]\\|\\.drgnx") '("link.sh" "run.sh"))))))
+
+(ert-deftest drgnx-job/a-new-file-gets-the-usual-modes-and-a-read-only-one-is-refused ()
+  ;; the temp file is made 0600: a new file gets what `write-region' would give (0666 less the umask); a file the
+  ;; agent could not write before (0444) is not replaced by the rename
+  (drgnx-job-policy-test--with
+    (let ((s (drgnx-agents--make :id "s-w" :name "w" :profile "mock" :cwd wt :task (concat job "#1") :job job)))
+      (should (equal (drgnx-job--request s "fs/write_text_file" (list :path (concat wt "new.txt") :content "x\n") 1) '(:result nil)))
+      (should (= (file-modes (concat wt "new.txt")) (logand #o666 (default-file-modes))))
+      (write-region "keep\n" nil (concat wt "ro.txt") nil 'silent)
+      (set-file-modes (concat wt "ro.txt") #o444)
+      (should-error (drgnx-job--request s "fs/write_text_file" (list :path (concat wt "ro.txt") :content "x\n") 2))
+      (should (equal (with-temp-buffer (insert-file-contents (concat wt "ro.txt")) (buffer-string)) "keep\n"))
+      (should (equal (directory-files wt nil "\\.drgnx") nil)))))
+
+(ert-deftest drgnx-job/a-remote-write-path-never-reaches-tramp ()
+  ;; the policy's check resolved the path with file name handlers on: /ssh:… made the hub connect
+  (drgnx-job-policy-test--with
+    (let ((s (drgnx-agents--make :id "s-w" :name "w" :profile "mock" :cwd wt :task (concat job "#1") :job job))
+          (real (symbol-function 'tramp-file-name-handler)))
+      (cl-letf (((symbol-function 'tramp-file-name-handler)
+                 (lambda (op &rest args) (if (eq op 'file-remote-p) (apply real op args) (error "Touched a remote file: %s" op)))))
+        (should-not (drgnx-job--request s "fs/write_text_file" (list :path "/ssh:nobody@example.invalid:/x" :content "x\n") 1))
+        (should (eq (drgnx-job-policy "implement" (list :kind "edit" :locations (vector '(:path "/ssh:nobody@example.invalid:/x"))) wt)
+                    'ask))))))
+
 ;;; job-policy-test.el ends here

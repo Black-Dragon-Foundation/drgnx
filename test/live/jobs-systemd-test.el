@@ -1,7 +1,7 @@
 ;;; jobs-systemd-test.el --- live tests: durable jobs under a real systemd user manager -*- lexical-binding: t -*-
 ;; These need the user's systemd and its session bus, which the unit tier hides from its tests (it starts Emacs with
-;; a dead bus and its own XDG_RUNTIME_DIR, see docs/develop/harness.md): so they live here, where `drgnx check' runs
-;; them unscrubbed.  Without a systemd user manager they skip.
+;; a dead bus and its own XDG_RUNTIME_DIR, see docs/develop/harness.md): so they live here, for `drgnx test --ui'
+;; (`drgnx check''s live shards are sandboxed too).  Without a systemd user manager they skip.
 (require 'ert)
 (require 'drgnx-jobs)
 

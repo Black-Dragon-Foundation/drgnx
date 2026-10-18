@@ -247,7 +247,7 @@ off), or inside a session, the mode is read as it is and never switched: an off 
 
 (defun drgnx-doctor--state-path (name)
   "The file NAME in the state dir."
-  (expand-file-name (concat "drgnx/" name) (or (getenv "XDG_STATE_HOME") "~/.local/state")))
+  (expand-file-name name (drgnx-state-dir)))
 
 (defun drgnx-doctor--state-file (name)
   "The .eld file NAME the last drgnx session wrote in the state dir, read, or nil."
@@ -269,7 +269,7 @@ off), or inside a session, the mode is read as it is and never switched: an off 
 
 (defun drgnx-doctor--keys-report ()
   "The key report the last drgnx session wrote (keys-report.eld in the state dir), or nil."
-  (let ((file (expand-file-name "drgnx/keys-report.eld" (or (getenv "XDG_STATE_HOME") "~/.local/state"))))
+  (let ((file (expand-file-name "keys-report.eld" (drgnx-state-dir))))
     (when (file-readable-p file)
       (ignore-errors (with-temp-buffer (insert-file-contents file) (read (current-buffer)))))))
 
