@@ -67,7 +67,7 @@ Finder and Spotlight find it, and you can keep it in the Dock. The installer put
 - **Open it** (Finder, Spotlight, the Dock): the same as `drgnx open` — drgnx with your windows, started in the
   background if it is not running. The very first time, the Welcome opens ([onboarding.md](onboarding.md)).
 - **Open folders and files with it:** drop them on its Dock icon, or choose drgnx in Finder's **Open With** (right-click
-  a folder or a file). Open With offers drgnx for folders and for almost every file, as it does code editors. They
+  a folder or a file). Open With offers drgnx for folders, text and code files, as VS Code does (not for images, PDFs and the like; Open With → **Other…** reaches any file). They
   open as `drgnx PATH` would open them — a folder in the Explorer, a file in an editor. drgnx is offered there, never
   made the default app for anything (set that yourself with Get Info → Open with → Change All, if you like).
 - **Its windows are Emacs's.** drgnx runs in Emacs: while it runs, the Dock and ⌘Tab show it as **Emacs**, with the
@@ -83,7 +83,7 @@ It runs `<checkout>/bin/drgnx open -- PATH…`, each path passed through `quoted
 quotes stay one argument, with Homebrew's `/opt/homebrew/bin` and `/usr/local/bin` first on PATH (an app gets only
 `/usr/bin:/bin:/usr/sbin:/sbin`; drgnx itself runs the Emacs the installer recorded). Its Info.plist names it `drgnx`
 (`org.drgnx.app`), lists folders (`public.folder`) and text and source files (`public.text`, `public.source-code`,
-`public.script`, `public.data`) as documents it can edit, as an alternate, and it carries Emacs's icon (from the
+`public.script`; JSON and YAML conform to `public.text`) as documents it can edit, as an alternate, and it carries Emacs's icon (from the
 Emacs.app drgnx runs in, else `/Applications/Emacs.app`). `drgnx macos-app` builds it with `osacompile`, edits the
 Info.plist with `plutil`, signs it again (ad hoc, `codesign --sign -`: the edits break osacompile's signature, and
 Apple silicon runs no app with a broken one), replaces the drgnx.app that was there (no other app is touched), and

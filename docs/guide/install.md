@@ -129,7 +129,7 @@ The details:
 - **Your Emacs configuration is never touched.** `~/.emacs.d` and `~/.config/emacs` are neither read nor written;
   drgnx starts with its own `--init-directory`.
 - **The drgnx app.** Before the doctor it installs `~/Applications/drgnx.app` — drgnx in Finder, Spotlight and the
-  Dock, and in Open With for folders and almost any file ([opening.md](opening.md#on-macos-the-drgnx-app)). A failure
+  Dock, and in Open With for folders, text and code files ([opening.md](opening.md#on-macos-the-drgnx-app)). A failure
   only warns (run `drgnx macos-app` later). It is never put in `/Applications` and never starts at login.
 - The last lines are "Done." and how to open drgnx next time — Spotlight (⌘Space, type "drgnx") or Launchpad, or
   `drgnx .` in a project — and that to keep it in the Dock you drag `~/Applications/drgnx.app` there, not the Emacs
