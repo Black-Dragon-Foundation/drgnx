@@ -241,3 +241,31 @@
           (should (= 2 (length (plist-get json :files)))))
         (should-not (member "DRGNX_TEST_ONE_PROCESS=1" (plist-get unit :env)))
         (should (member "DRGNX_TEST_ONE_PROCESS=1" (plist-get timing :env)))))))
+
+(ert-deftest drgnx-check/the-durations-file-is-written-atomically ()
+  ;; a rename that fails keeps the old file as it was and leaves no temp file; the new one is data read back
+  (drgnx-check-test--with dir
+    (let* ((process-environment (cons (concat "XDG_STATE_HOME=" dir "state") process-environment))
+           (file (drgnx-check-durations-file)) old)
+      (make-directory (file-name-directory file) t)
+      (with-temp-file file (insert "((\"a.el\" . 1.5))\n"))
+      (setq old (with-temp-buffer (insert-file-contents file) (buffer-string)))
+      (with-temp-file (concat dir "unit-1.json")
+        (insert "{\"tests\":[{\"file\":\"b.el\",\"seconds\":2.0},{\"file\":\"b.el\",\"seconds\":1.0}]}"))
+      (cl-letf (((symbol-function 'rename-file) (lambda (&rest _) (signal 'file-error '("Renaming" "no")))))
+        (should-error (drgnx-check--save-durations dir) :type 'file-error))
+      (should (equal (with-temp-buffer (insert-file-contents file) (buffer-string)) old))
+      (should (equal (directory-files (file-name-directory file)) '("." ".." "durations.eld")))
+      (drgnx-check--save-durations dir)
+      (should (equal (drgnx-check-durations) '(("b.el" . 3.0) ("a.el" . 1.5))))
+      (should (equal (directory-files (file-name-directory file)) '("." ".." "durations.eld"))))))
+
+(ert-deftest drgnx-check/a-durations-file-with-a-mistake-reads-as-no-times ()
+  (drgnx-check-test--with dir
+    (let* ((process-environment (cons (concat "XDG_STATE_HOME=" dir "state") process-environment))
+           (file (drgnx-check-durations-file)))
+      (make-directory (file-name-directory file) t)
+      (with-temp-file file (insert "((\"a.el\" . 1.5)"))
+      (should-not (drgnx-check-durations))
+      (with-temp-file file (insert "((\"a.el\" . 1.5)) extra"))
+      (should-not (drgnx-check-durations)))))

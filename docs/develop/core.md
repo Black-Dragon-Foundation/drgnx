@@ -49,6 +49,14 @@ nothing here reaches Tramp, and nothing prompts or visits a buffer. Errors: `drg
 `drgnx-file-update` with `:on-unreadable 'backup`. Reports and other files rewritten whole use `drgnx-file-write`
 with `:fsync nil`. Text files drgnx writes (unit files, desktop entries, exports) use `drgnx-file-write-text`.
 
+The report files in the state folder go this way: `wb-report.eld` (`drgnx-rules--write-report`, a startup hook: an
+error becomes one `message`), `agent-checks.eld` (`drgnx-agent-check-remember`, `:private t`) and `check/durations.eld`
+(`drgnx-check--save-durations`) are written with `drgnx-file-write ... :fsync nil`, so a failed write keeps the old
+report. They are read with `drgnx-file-read`: `drgnx-tty--read-report`, `drgnx-agent-check-results`,
+`drgnx-check-durations` and the doctor's `drgnx-doctor--state-file` / `drgnx-doctor--keys-report` give the data of an
+`ok` file, else nil (missing, over 1 MiB, a mistake, text after the form, not plain data). A report is rebuilt by its
+next run, so a report with a mistake is not kept aside.
+
 **Reading.** `(drgnx-file-read-bounded FILE &key max-bytes)` gives the file's text decoded as UTF-8, or nil when it
 does not exist. It refuses, in this order:
 - a remote name (`/method:host:…`): "a remote file";
