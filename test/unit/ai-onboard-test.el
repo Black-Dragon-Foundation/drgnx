@@ -309,6 +309,32 @@ with BODY."
                 (should-not (string-search "sk-or-test-123" (drgnx-ai-onboard-test--slurp (concat root "config/ai.eld")))))))
         (delete-process mock)))))
 
+(defvar drgnx-ai-onboard-test--job-what nil "The job `drgnx-onboard--job' is waiting on (the test's view).")
+
+(ert-deftest drgnx-ai-onboard/pull-has-no-hour-limit ()
+  ;; A model download (and the full-ai package sync) waits without the one-hour cap: C-g stops it, the progress shows.
+  (drgnx-ai-onboard-test--with-mac drgnx-ai-onboard-test--ollama-answers
+    (let ((waits nil) (job (symbol-function 'drgnx-onboard--job)) (until (symbol-function 'drgnx-onboard--until)))
+      (cl-letf (((symbol-function 'completing-read) (drgnx-ai-onboard-test--answer '(("Set up AI with" . "ollama"))))
+                ((symbol-function 'y-or-n-p) (lambda (&rest _) t))
+                ((symbol-function 'drgnx-onboard--job)
+                 (lambda (what &rest args)
+                   (let ((drgnx-ai-onboard-test--job-what what)) (apply job what args))))
+                ((symbol-function 'drgnx-onboard--until)
+                 (lambda (pred secs)
+                   (push (cons drgnx-ai-onboard-test--job-what secs) waits)
+                   (funcall until pred secs))))
+        (drgnx-onboard--ai-step '(:interactive t)))
+      (let ((pulls (seq-filter (lambda (w) (string-prefix-p "Downloading" (or (car w) ""))) waits)))
+        (should (= (length pulls) 3))
+        (dolist (w pulls) (should (or (null (cdr w)) (>= (cdr w) (* 6 3600)))))))))
+
+(ert-deftest drgnx-ai-onboard/the-package-sync-has-no-hour-limit ()
+  (let ((seen nil))
+    (cl-letf (((symbol-function 'drgnx-onboard--job) (lambda (_what _command &optional secs) (setq seen (list secs)) 'ok)))
+      (drgnx-onboard--sync-job))
+    (should (equal seen '(:none)))))
+
 (ert-deftest drgnx-ai-onboard/estimate-skips-models-present ()
   ;; A re-run's "about N GB to download" counts only the models the provider does not list yet.
   (drgnx-ai-onboard-test--with-mac drgnx-ai-onboard-test--ollama-answers

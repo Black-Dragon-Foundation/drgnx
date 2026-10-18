@@ -225,7 +225,8 @@ the Finish step offers the restart.")
   "`drgnx sync' as a drgnx job (\"Installing the packages\"), in this Emacs: `ok' or (fail REASON LOG)."
   (drgnx-onboard--job "Installing the packages"
                       (list "env" (concat "DRGNX_EMACS=" (expand-file-name invocation-name invocation-directory))
-                            (expand-file-name "bin/drgnx" drgnx-dir) "sync")))
+                            (expand-file-name "bin/drgnx" drgnx-dir) "sync")
+                      :none))
 
 (defun drgnx-onboard--installed-p (name)
   "Is package NAME in drgnx's packages directory (what drgnx sync installs)?  Not the load path: a package
@@ -583,9 +584,10 @@ Claude Code's parts (`drgnx-onboard--agents-step').")
     (plist-get (alist-get provider drgnx-ai-detected) :up)))
 
 (defun drgnx-onboard--until (pred secs)
-  "Wait until PRED, asked four times a second, at most SECS: its last value.  For the step (a command): C-g quits."
-  (let ((deadline (+ (float-time) secs)) (v nil))
-    (while (and (not (setq v (funcall pred))) (< (float-time) deadline))
+  "Wait until PRED, asked four times a second, at most SECS (nil: as long as it takes): its last value.  For the
+step (a command): C-g quits."
+  (let ((deadline (and secs (+ (float-time) secs))) (v nil))
+    (while (and (not (setq v (funcall pred))) (or (null deadline) (< (float-time) deadline)))
       (unless noninteractive (redisplay))
       (accept-process-output nil 0.25))
     v))
@@ -618,8 +620,9 @@ area.  Never asks anything (the progress timer calls it too)."
   (drgnx-onboard--say (string-trim-right (format "%s… %s" what (or (drgnx-onboard--last-line id) ""))) step))
 
 (defun drgnx-onboard--job (what command &optional secs)
-  "Run COMMAND (a list) as a drgnx job for WHAT and wait for it to end, at most SECS (default an hour); meanwhile the
-Welcome shows its last log line.  `ok', or (fail REASON LOG): REASON ends with the log's last line.  C-g stops the
+  "Run COMMAND (a list) as a drgnx job for WHAT and wait for it to end, at most SECS (default an hour; `:none': as
+long as it takes — a model download or a package sync, which C-g still stops); meanwhile the Welcome shows its last
+log line.  `ok', or (fail REASON LOG): REASON ends with the log's last line.  C-g stops the
 job, then quits."
   (require 'drgnx-jobs)
   (make-directory (drgnx-state-dir) t)
@@ -634,7 +637,7 @@ job, then quits."
                                       (setq job (drgnx-jobs-get id))
                                       ;; gone: it ended without writing its exit (killed); not while it starts
                                       (or (plist-get job :exit) (and (eq (plist-get job :status) 'gone) (> (- (float-time) t0) 3))))
-                                    (or secs 3600))
+                                    (if (eq secs :none) nil (or secs 3600)))
               (if (eql (plist-get job :exit) 0) 'ok
                 (when (eq (plist-get job :status) 'running) (drgnx-jobs-stop id))
                 (list 'fail (format "%s failed (%s)%s" what
@@ -879,7 +882,8 @@ interactive): only says what it would run."
           (dolist (m pulls)
             (must (drgnx-onboard--job (format "Downloading %s" m)
                                       (append (list (drgnx-onboard--program tool)) (cdr (plist-get r :pull))
-                                              (list (drgnx-onboard--pull-name tool m))))))
+                                              (list (drgnx-onboard--pull-name tool m)))
+                                      :none)))
           (drgnx-onboard--up-p provider)                ; what it lists now: the names it serves them by
           (let ((steps (mapcar (lambda (rm) (cons (car rm) (cons provider (drgnx-onboard--served-name tool (cdr rm))))) models))
                 (v (drgnx-ai-vram)))
