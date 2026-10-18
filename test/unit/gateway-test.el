@@ -275,4 +275,16 @@ the gateway told."
       (drgnx-gw-test--request port :token token :wait 1)
       (should (string-match-p "^suppress-connect-headers$" (drgnx-gw-test--config root))))))
 
+(ert-deftest drgnx-gateway/header-control-chars-stripped ()
+  ;; a CR or other control character in a forwarded header must not reach curl's config (its \r escape would end
+  ;; the header line upstream and let the agent add headers)
+  (drgnx-gw-test--with '() '()
+    (let ((exec-path (cons (drgnx-gw-test--fake-curl root) exec-path))
+          (token (drgnx-gateway-register '(:chain ((openrouter . nil))))))
+      (drgnx-gw-test--request port :token token :wait 1
+                              :extra "Accept: a\rX-Evil: 1\001b\177c\td\r\n")
+      (let ((config (drgnx-gw-test--config root)))
+        (should (string-match-p "^header = \"accept: aX-Evil: 1bcd\"$" config))
+        (should-not (string-match-p "[\000-\011\013-\037\177]" config))))))
+
 ;;; gateway-test.el ends here

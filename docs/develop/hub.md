@@ -93,7 +93,7 @@ a query, never `..` — and the URL built must keep the provider's host: a path 
 otherwise). A provider can be carried when it has `:messages t` (it serves Anthropic's Messages API at its URL without `/v1`
 plus the agent's path): the `openrouter`, `ollama` and `anthropic` presets. Its key goes as `Authorization: Bearer`,
 or `x-api-key` with `:auth x-api-key`. The request's `content-type`, `accept`, `anthropic-version` and
-`anthropic-beta` headers pass; the body's top-level `model` is replaced when the chain step names one. The body goes to curl as a file
+`anthropic-beta` headers pass, with control characters (CR, NUL, …) stripped from names and values: curl's config would turn a CR into a header break; the body's top-level `model` is replaced when the chain step names one. The body goes to curl as a file
 (`<state>/hub/bodies/`, 0700, each 0600, deleted when the request ends): curl takes no config line over about 10 MB.
 Any error on the way answers the agent 500 `api_error` and closes the connection; one before curl starts (no curl, a
 file that cannot be written) moves to the next provider. Nothing goes

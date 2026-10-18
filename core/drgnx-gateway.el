@@ -233,7 +233,8 @@ it, through its sentinel, the request upstream), never an error in a filter."
               (error "the request would leave %s" (plist-get p :url))))
          (body (drgnx-gateway--body req model))
          (body-file (and (not (string-empty-p body)) (drgnx-gateway--write-body body)))
-         (header (lambda (name value) (concat "header = " (drgnx-gateway--quote (concat name ": " value)) "\n")))
+         (header (lambda (name value)
+                   (concat "header = " (drgnx-gateway--quote (concat (drgnx-gateway--clean name) ": " (drgnx-gateway--clean value))) "\n")))
          (config (concat "url = " (drgnx-gateway--quote url) "\n"
                          "request = " (drgnx-gateway--quote (plist-get req :method)) "\n"
                          "no-buffer\ninclude\nsilent\nshow-error\nsuppress-connect-headers\nconnect-timeout = 10\n"
