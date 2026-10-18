@@ -136,8 +136,8 @@ Fixed rules, in the hub (its tick, and after `coord/notify`); a model's judgment
 
 | Rule | When | Result |
 |---|---|---|
-| `contradiction` | a `build` and a `wont-build` of one subject (lower case, spaces collapsed) among a job's current or proposed decisions | the user's side, if one is, wins at once (a user `replaces` of the other — no card); agents' → a `clash` card |
-| `proposed` | an agent's decision outside its own task | a `clash` card: record it, or leave it out |
+| `contradiction` | a `build` and a `wont-build` of one subject (lower case, spaces collapsed) among a job's current or proposed decisions | the user's side, if one is, wins at once (one user `replaces` of the other, however many of the user's decisions it contradicts — no card); agents' → a `clash` card |
+| `proposed` | an agent's decision outside its own task (one in a contradiction has that card only) | a `clash` card: record it, or leave it out |
 | `against-decision` | a task in review whose branch (`git diff job/ID...job/ID-N`) changes what a current won't-build's `paths` cover (a directory, a file, a `*` glob) | a `clash` card about the task; its review waits (`drgnx-job-before-review-functions`) |
 | `stale` | an agent whose last two coordination writes were held (`held:AGENT` in `meta`, kept by the MCP server) | a `stalled` card |
 | `overlap` | a task in review that changes files another open task changes | an `overlap` card, advisory (dismiss): the review goes on |

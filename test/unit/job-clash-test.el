@@ -55,6 +55,25 @@
       (should card)
       (should (equal (plist-get (plist-get card :data) :rule) "proposed")))))
 
+(ert-deftest drgnx-job-clash/two-user-decisions-replace-an-agent-s-once ()
+  (drgnx-job-clash-test--running drgnx-job-clash-test--two
+    (drgnx-job-clash-test--decide id "wont-build" "x" "user")
+    (drgnx-job-clash-test--decide id "wont-build" "X" "user")
+    (let ((n (plist-get (drgnx-job-clash-test--decide id "build" "x" "s-a" :task (concat id "#1")) :n)))
+      (drgnx-job-clash-scan id)
+      (should (= 1 (length (seq-filter (lambda (d) (and (equal (plist-get d :kind) "replaces") (eql (plist-get d :replaces) n)))
+                                       (drgnx-coord-decisions-since 0 id))))))))
+
+(ert-deftest drgnx-job-clash/a-proposed-contradiction-gets-one-card ()
+  (drgnx-job-clash-test--running drgnx-job-clash-test--two
+    ;; s-a decides about task 2, which it does not hold: proposed; and it contradicts what task 2's agent decided
+    (drgnx-job-clash-test--decide id "wont-build" "the importer" "s-b" :task (concat id "#2"))
+    (should (equal (plist-get (drgnx-job-clash-test--decide id "build" "The importer" "s-a" :task (concat id "#2")) :status) "proposed"))
+    (drgnx-job-clash-scan id)
+    (drgnx-job-clash-scan id)
+    (should (equal (mapcar (lambda (c) (plist-get (plist-get c :data) :rule)) (drgnx-job-clash-test--cards id "clash"))
+                   '("contradiction")))))
+
 (ert-deftest drgnx-job-clash/a-task-that-touches-what-will-not-be-built-waits ()
   (drgnx-job-run-test--with "# One\n\n### Task 1: one\n\nTouch the legacy code.\n"
     (let* ((id (drgnx-job-propose plan)))

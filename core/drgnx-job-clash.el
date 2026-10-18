@@ -76,24 +76,35 @@ else `short'."
   (seq-filter (lambda (d) (member (plist-get d :status) '("current" "proposed"))) (drgnx-coord-decisions-since 0 job)))
 
 (defun drgnx-job-clash--contradictions (job)
-  (let ((ds (drgnx-job-clash--decisions job)))
+  "A build and a won't-build of one subject among JOB's decisions.  The user's side stands at once — the other is
+replaced, once, however many of the user's decisions it contradicts; two agents' are a clash card, once.  The numbers
+of the decisions in a card's contradiction (`drgnx-job-clash--proposed' leaves them to it)."
+  (let* ((ds (drgnx-job-clash--decisions job)) (wont (make-hash-table :test #'equal)) replaced carded)
+    (dolist (w (seq-filter (lambda (d) (equal (plist-get d :kind) "wont-build")) ds))
+      (let ((key (drgnx-job-clash--subject (plist-get w :subject))))
+        (puthash key (append (gethash key wont) (list w)) wont)))
     (dolist (b (seq-filter (lambda (d) (equal (plist-get d :kind) "build")) ds))
-      (dolist (w (seq-filter (lambda (d) (equal (plist-get d :kind) "wont-build")) ds))
-        (when (equal (drgnx-job-clash--subject (plist-get b :subject)) (drgnx-job-clash--subject (plist-get w :subject)))
-          (let ((bu (equal (plist-get b :author) "user")) (wu (equal (plist-get w :author) "user")))
-            (cond
-             ((and bu wu))                           ; the user's own two: theirs to sort out
-             ((or bu wu)                             ; the user's decision stands
-              (let ((other (if bu w b)))
+      (dolist (w (gethash (drgnx-job-clash--subject (plist-get b :subject)) wont))
+        (let ((bu (equal (plist-get b :author) "user")) (wu (equal (plist-get w :author) "user")))
+          (cond
+           ((and bu wu))                           ; the user's own two: theirs to sort out
+           ((or bu wu)                             ; the user's decision stands
+            (let ((other (if bu w b)))
+              (unless (memq (plist-get other :n) replaced)
+                (push (plist-get other :n) replaced)
                 (drgnx-coord-decide :kind "replaces" :subject (plist-get other :subject) :replaces (plist-get other :n)
-                                    :author "user" :reason "the user's decision stands" :job job :seen (drgnx-coord-version))))
-             (t (drgnx-job-clash--card job (format "contradiction:%s:%s" (min (plist-get b :n) (plist-get w :n)) (max (plist-get b :n) (plist-get w :n)))
-                                       "contradiction" (plist-get b :subject) (format "build or not: %s" (plist-get b :subject))
-                                       (list (drgnx-job-clash--side "A" b) (drgnx-job-clash--side "B" w)))))))))))
+                                    :author "user" :reason "the user's decision stands" :job job :seen (drgnx-coord-version)))))
+           ((or (memq (plist-get b :n) replaced) (memq (plist-get w :n) replaced)))
+           (t (push (plist-get b :n) carded) (push (plist-get w :n) carded)
+              (drgnx-job-clash--card job (format "contradiction:%s:%s" (min (plist-get b :n) (plist-get w :n)) (max (plist-get b :n) (plist-get w :n)))
+                                     "contradiction" (plist-get b :subject) (format "build or not: %s" (plist-get b :subject))
+                                     (list (drgnx-job-clash--side "A" b) (drgnx-job-clash--side "B" w))))))))
+    carded))
 
-(defun drgnx-job-clash--proposed (job)
+(defun drgnx-job-clash--proposed (job &optional skip)
+  "An agent's decision outside its own task is a card — unless its number is in SKIP (it has a card already)."
   (dolist (d (drgnx-job-clash--decisions job))
-    (when (equal (plist-get d :status) "proposed")
+    (when (and (equal (plist-get d :status) "proposed") (not (memq (plist-get d :n) skip)))
       (drgnx-job-clash--card job (format "proposed:%s" (plist-get d :n)) "proposed" (plist-get d :subject)
                              (format "%s proposes: %s %s" (plist-get d :author) (plist-get d :kind) (plist-get d :subject))
                              (list (drgnx-job-clash--side "A" d (format "record it: #%s %s: %s" (plist-get d :n) (plist-get d :kind) (plist-get d :subject)))
@@ -110,8 +121,7 @@ else `short'."
 (defun drgnx-job-clash-scan (job)
   "Look for clashes in JOB (the hub's tick, and after an agent wrote)."
   (when (member (plist-get (drgnx-coord-job job) :status) '("running" "paused"))
-    (drgnx-job-clash--contradictions job)
-    (drgnx-job-clash--proposed job)
+    (drgnx-job-clash--proposed job (drgnx-job-clash--contradictions job))
     (drgnx-job-clash--stale job)
     (drgnx-job-clash--ensure-reviewers job)))
 
