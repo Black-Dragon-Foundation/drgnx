@@ -69,3 +69,7 @@ the browser pane (module `tools/browser`) adds `editor+browser`. A shape that is
 switches the selected window's layout. To keep your own data in the saved workbench, add a function to
 `drgnx-persist-state-functions` (no argument, returns a plist for the selected frame) and read it back in a
 `drgnx-persist-after-restore-functions` function from the frame parameter `drgnx-persist-extra`.
+
+## Tests
+
+`test/unit/mod-layouts-test.el` and `test/unit/mod-layouts-persist-test.el`; `test/ui/editor-m11c1-test.el` (`drgnx test --ui`) walks the Search view with results, the find bar, the Agent and Zen layouts, the Browser layout without WebKit, the Live view on a mock browser and the Keyboard Shortcuts editor recording a chord on a graphical frame, with a screenshot of each.

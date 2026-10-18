@@ -98,3 +98,4 @@ page and never written.
 `modules/tools/drgnx-shortcuts.el` reads the last key resolution (`drgnx-keys-last`: bindings, conflicts, layers),
 the registry and `keys.eld`, and writes only through `core/drgnx-keys-edit.el`. Tests:
 `test/unit/mod-shortcuts-test.el`.
+The GUI test `test/ui/editor-m11c1-test.el` records a chord on a graphical frame, with screenshots.

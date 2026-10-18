@@ -73,3 +73,9 @@ Except where marked, the keys work in the Search view and the find bar, their fi
 is its next match (in Replace: replace it). Next and Previous Match show the match in the editor. In the VS Code
 profile `C-h` replaces Emacs' help prefix (the conflict is listed in Keyboard Shortcuts). Every command is in the
 palette, category Search.
+
+## Tests
+
+`test/unit/mod-replace-engine-test.el` (the engine: ripgrep, git grep and grep, stale matches, symbol edits, undo) and
+`test/unit/mod-replace-view-test.el` (the view, the find bar, 10k matches streaming); `test/ui/editor-m11c1-test.el` (`drgnx test --ui`) walks the Search view with results, the find bar, the Agent and Zen layouts, the Browser layout without WebKit, the Live view on a mock browser and the Keyboard Shortcuts editor recording a chord on a graphical frame, with a screenshot of each. The perf workload
+`replace-typing` types in a file while the Search view lists 10k matches ([perf.md](../develop/perf.md)).
