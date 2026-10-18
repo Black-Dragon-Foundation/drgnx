@@ -40,7 +40,7 @@ and no frame opens.
 
 Without a job filter, What needs you lists every proposed, running or paused job that waits on you, each under its
 name; a click on the name filters the cockpit to that job. **Show What Needs You** (also a click on the status bar's
-jobs count) drops the job filter; **Filter Graph…** keeps it. The graph's first line says which job it shows, and
+jobs count) drops the job filter; **Filter Graph…** (`f` in the graph) asks for the job too, and an empty answer is every job. The graph's first line says which job it shows, and
 the filter is saved with the workbench.
 
 The panes follow the hub's events and redraw only what changed, at most twice a second, and only while one shows (a

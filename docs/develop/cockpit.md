@@ -504,7 +504,7 @@ side is in [jobs.md](../guide/jobs.md#a-job-in-the-work-cockpit).
     runs, and `drgnx-cockpit-show-job` then only sets the filter: no layout, no pane shown, no focus, so the restored
     main frame keeps its windows (Review Focus 2).
   - `drgnx-cockpit-show-jobs` (the status bar's `jobs` click) drops `:job` and keeps the other keys.
-  - `drgnx-cockpit-graph-filter` keeps `:job`.
+  - `drgnx-cockpit-graph-filter` (`f`) asks for the job too (its prompt names the current one; empty: every job).
   - The graph narrows through `drgnx-cockpit-filter-functions` (`drgnx-cockpit-cards--job-node-p`): a node of
     another job is dropped, and ancestors stay.
 - **Persistence.** `drgnx-persist-state-functions` saves `:cockpit-filter`. `drgnx-persist-after-restore-functions`

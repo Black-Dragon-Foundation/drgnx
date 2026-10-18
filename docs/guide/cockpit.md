@@ -63,7 +63,7 @@ you always get the outline.
 | `TAB`, `S-TAB` (Vim also `n`, `p`) | Select Next / Previous Node (`cockpit-next`, `cockpit-previous`) | selects the next node and says what it is. In the drawing that is the next box in column order: it gets a focus stroke and scrolls into view. In the outline it is the next node's line. |
 | `RET` | Open Node (`cockpit-open`) | opens the node on this line, or the selected one (with nothing selected in the drawing, you pick one by name) |
 | `o` | Open in Plan (`cockpit-open-in-plan`) | the plan at this task's heading (an agent: its task's) |
-| `f` | Filter Graph… (`cockpit-filter`) | a milestone (completion offers the specs' and plans' titles; any text in a title or path works), an agent, states; empty: all. A job filter (Show Job in Work…) stays |
+| `f` | Filter Graph… (`cockpit-filter`) | a milestone (completion offers the specs' and plans' titles; any text in a title or path works), an agent, states, a job (it names the one shown now); empty: all |
 | `g` | Draw Graph Again (`cockpit-refresh`) | reads the store again and draws now |
 | `A` | Answer Question… (`cockpit-answer`) | answers the question about the node on this line or selected; also in What happened and the timeline (see below) |
 

@@ -710,9 +710,10 @@ plan (read-only when no job runs it), an agent's transcript, a job in the cockpi
   (drgnx-cockpit-graph-buffer)
   (drgnx-cockpit-graph-redraw t))
 
-(defun drgnx-cockpit-graph-filter (milestone agent states)
-  "Show only the nodes of MILESTONE (a text in their title or path, or an ancestor's), of AGENT, in STATES, with
-their ancestors; each empty: any.  A job the cockpit is filtered to (`:job') stays."
+(defun drgnx-cockpit-graph-filter (milestone agent states &optional job)
+  "Show only the nodes of MILESTONE (a text in their title or path, or an ancestor's), of AGENT, in STATES, of JOB
+(the cockpit's job filter, which What needs you and the decision log follow too), with their ancestors; each empty
+or nil: any."
   (interactive
    (let* ((m (drgnx-cockpit-model :sessions (drgnx-cockpit-sessions) :silent drgnx-cockpit--silent))
           (f drgnx-cockpit-graph-current-filter)
@@ -723,18 +724,23 @@ their ancestors; each empty: any.  A job the cockpit is filtered to (`:job') sta
      (list (completing-read "Milestone — a text in a title or path (empty: all): " titles nil nil nil nil (plist-get f :milestone))
            (cdr (assoc (completing-read "Agent (empty: all): " agents nil t) agents))
            (completing-read-multiple "States (comma between; empty: all): "
-                                     (delete-dups (delq nil (mapcar (lambda (n) (plist-get n :state)) (plist-get m :nodes))))))))
+                                     (delete-dups (delq nil (mapcar (lambda (n) (plist-get n :state)) (plist-get m :nodes)))))
+           (completing-read (if (plist-get f :job) (format "Job (now %s; empty: all): " (plist-get f :job)) "Job (empty: all): ")
+                            (delete-dups (delq nil (mapcar (lambda (n) (and (eq (plist-get n :kind) 'job) (plist-get n :job)))
+                                                           (plist-get m :nodes))))))))
   (setq drgnx-cockpit-graph-current-filter
         (list :milestone (and (stringp milestone) (not (string-empty-p milestone)) milestone)
               :agent (and (stringp agent) (not (string-empty-p agent)) agent)
               :states (seq-remove #'string-empty-p states)
-              :job (plist-get drgnx-cockpit-graph-current-filter :job)))
+              :job (and (stringp job) (not (string-empty-p job)) job)))
+  (drgnx-cockpit-cards--schedule 0)     ; What needs you and the decisions follow the job
   (drgnx-cockpit-graph-refresh))
 
 ;; what happened, questions everywhere, the timeline (drgnx-cockpit-feed.el, beside this file)
 (unless (featurep 'drgnx-cockpit-feed)
   (load (expand-file-name "drgnx-cockpit-feed" (file-name-directory (or load-file-name buffer-file-name))) nil t))
 (declare-function drgnx-cockpit-feed--setup "drgnx-cockpit-feed")
+(declare-function drgnx-cockpit-cards--schedule "drgnx-cockpit-cards")
 (declare-function drgnx-cockpit-feed-tell-statusbar "drgnx-cockpit-feed")
 ;; what needs you and the decision log, the job window's parts (drgnx-cockpit-cards.el, beside this file)
 (unless (featurep 'drgnx-cockpit-cards)

@@ -275,6 +275,35 @@ after — they owned their hooks and timers."
         (should (equal drgnx-cockpit-graph-current-filter '(:states ("running"))))
         (should (eq (window-buffer (selected-window)) (drgnx-cockpit-cards-buffer)))))))
 
+(ert-deftest drgnx-cockpit-cards/f-changes-or-clears-the-job ()
+  ;; a job filter set from the graph (opening a job node) is left from the graph: f asks for the job too, and an
+  ;; empty answer is every job; the filter line says what holds
+  (drgnx-cockpit-cards-test--with
+    (let ((answers nil) (asked nil)
+          (model '(:nodes ((:id "jx" :kind job :title "Feature" :job "j1") (:id "jy" :kind job :title "Docs" :job "j2")))))
+      (cl-letf (((symbol-function 'drgnx-cockpit-model) (lambda (&rest _) model))
+                ((symbol-function 'drgnx-cockpit-graph-refresh) #'ignore)
+                ((symbol-function 'completing-read)
+                 (lambda (prompt coll &rest _) (push (cons prompt (all-completions "" coll)) asked) (pop answers)))
+                ((symbol-function 'completing-read-multiple) (lambda (&rest _) nil)))
+        (setq drgnx-cockpit-graph-current-filter '(:job "j1"))
+        (should (string-search "job j1" (drgnx-cockpit--filter-line)))
+        ;; milestone, agent, job — an empty job: every job
+        (setq answers (list "" "" ""))
+        (call-interactively #'drgnx-cockpit-graph-filter)
+        (let ((q (seq-find (lambda (a) (string-prefix-p "Job" (car a))) asked)))
+          (should q)
+          (should (string-search "j1" (car q)))                       ; the prompt names the job it holds now
+          (should (equal (sort (cdr q) #'string<) '("j1" "j2"))))
+        (should-not (plist-get drgnx-cockpit-graph-current-filter :job))
+        (should-not (drgnx-cockpit--filtering-p))
+        (should-not (drgnx-cockpit--filter-line))
+        ;; a job: that job
+        (setq answers (list "" "" "j2"))
+        (call-interactively #'drgnx-cockpit-graph-filter)
+        (should (equal (plist-get drgnx-cockpit-graph-current-filter :job) "j2"))
+        (should (string-search "job j2" (drgnx-cockpit--filter-line)))))))
+
 ;;;; A workbench saved before M12f
 
 (ert-deftest drgnx-cockpit-cards/an-old-job-window-state-opens-the-cockpit ()
