@@ -355,17 +355,27 @@ output, gathered in a string (never a buffer); its standard error is discarded."
 (defun drgnx-ai--keychain-verify (host key env)
   "Read drgnx's Keychain item for HOST back with the same `security' program and compare it with KEY, showing
 neither: `security -i''s exit status does not say how it parsed the line.  On anything but KEY itself (another
-value, no item, an error, no answer) the item is deleted and a `user-error' names ENV as the way around."
+value, no item, an error, no answer, \\[keyboard-quit]) the item is deleted and a `user-error' names ENV as the way
+around (a quit is signalled again after the delete).  No message holds the key or what came back."
   (let* ((item (list "-a" "drgnx" "-s" host "-r" "htps"))
-         (back (cdr (drgnx-ai--security-call (append '("find-internet-password") item '("-w")))))
-         (n (length key)))
+         (delete (lambda () (eql 0 (car (ignore-errors (drgnx-ai--security-call (cons "delete-internet-password" item)))))))
+         (read (condition-case nil (drgnx-ai--security-call (append '("find-internet-password") item '("-w")))
+                 (quit (funcall delete) (signal 'quit nil))))
+         (status (car read)) (back (cdr read)) (n (length key)))
     (unwind-protect
-        (unless (and back (= (length back) (1+ n)) (eq (aref back n) ?\n) (eq t (compare-strings back 0 n key 0 n)))
-          (user-error "The Keychain did not give the key back as it was given, so %s. Store it again, or set %s instead"
-                      (if (eql 0 (car (drgnx-ai--security-call (cons "delete-internet-password" item))))
-                          "drgnx removed it"
-                        (format "remove the drgnx item for %s in Keychain Access" host))
-                      env))
+        (unless (and (eql status 0) back (= (length back) (1+ n)) (eq (aref back n) ?\n)
+                     (eq t (compare-strings back 0 n key 0 n)))
+          (let ((removed (funcall delete)))
+            (user-error "%s, so %s. Store it again, or set %s instead"
+                        (pcase status
+                          ('timeout (format "The Keychain did not answer within %s seconds when drgnx read the key back"
+                                            drgnx-ai--store-timeout))
+                          (44 (format "The Keychain holds no drgnx item for %s after storing the key" host))
+                          (_ "The Keychain did not give the key back as it was given"))
+                        (cond (removed "drgnx removed it")
+                              ((eql status 44) "no key was kept")
+                              (t (format "remove the drgnx item for %s in Keychain Access" host)))
+                        env)))
       (when back (clear-string back)))))
 
 (defun drgnx-ai-store-key (id key)
