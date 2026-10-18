@@ -616,6 +616,94 @@ after each round and fails when a cache's SIZE passes its CAP. Tests: `test/unit
 `drgnx-memo/`; the 0-allocation tests byte-compile the library's functions in place first, because the tests run on
 source and an interpreted call conses).
 
+## Views (`wb/drgnx-view.el`)
+
+A view draws a buffer as keyed rows: one row per KEY, from START (the view's only marker) to the end of the buffer.
+**Never erase, mark:** code that changes the model only marks the view (a hash put or a queue push, cheap enough
+for a process filter), and the draw applies the marks in place. A dirty row is deleted and inserted again at its
+integer start, a growing row gets only its new characters, removed rows are deleted one by one. Row starts are
+integers relative to START, shifted in one pass; no row has a marker. Undo is off.
+
+### Declaring a type
+
+```elisp
+(drgnx-view-define 'my-list
+  :render #'my-list--row          ; KEY → "text\n", or (BODY . SUFFIX)
+  :grow #'my-list--grow           ; KEY BODY-LENGTH → the new characters, or nil to render again
+  :sync #'my-list--sync           ; VIEW → marks (usually `drgnx-view-sync-rows')
+  :key-test 'eq)                  ; or `equal' (the default)
+```
+
+`drgnx-view-define` returns NAME and stores a `drgnx-view-type` in `drgnx-view--types` (the fingerprint reads its
+names). SLICE is nil or at most `drgnx-view-slice` (0.004 s); DELAY is the throttle (nil: `drgnx-view-delay`, 0.1 s);
+FOLLOW-TAIL keeps a window at the end; PATCHED (VIEW KEYS) runs after a draw with the keys it drew or grew, to put
+the view's own overlays back. A definition made in a module's setup pushes the undo `"view type NAME"`. A view
+keeps the type object it was attached with.
+
+**RENDER** returns a string ending in a newline, or `(BODY . SUFFIX)` whose concatenation does: growth goes between
+BODY and SUFFIX, and the view remembers BODY's length (`drgnx-view-body-length`). A row may span several lines.
+**GROW** (KEY BODY-LENGTH) returns the characters to add at the end of BODY ("" adds nothing), or nil to render the
+row again; a row rendered as a plain string, or a type without GROW, is rendered again.
+
+### Attaching
+
+`(drgnx-view-attach NAME &key buffer start)` sets the buffer-local `drgnx-view`, `buffer-undo-list` to t, and makes
+START a marker (insertion type nil; default `point-min`). When START is `point-min` the buffer becomes read-only;
+otherwise each drawn row gets `read-only` with `rear-nonsticky`, so text above START (replace's widgets) and after the
+last row stays editable. Attaching again removes the old view's rows first and releases its marker.
+
+### Marks
+
+| Call | Meaning |
+|---|---|
+| `(drgnx-view-reset VIEW KEYS)` | a new row set: every row goes, KEYS are appended (earlier pending changes are dropped) |
+| `(drgnx-view-append VIEW KEYS)` | new rows at the end |
+| `(drgnx-view-insert VIEW KEYS &key after)` | new rows right after AFTER, a drawn or pending key; nil: at the start; any other key: at the end |
+| `(drgnx-view-remove VIEW KEYS)` | rows go (a pending row's followers take its place) |
+| `(drgnx-view-dirty VIEW KEYS)` | rows to render again; KEYS t: every row, patched, never erased |
+| `(drgnx-view-grow VIEW KEY)` | the row only grew at the end of its BODY (a pending `dirty` wins) |
+| `(drgnx-view-touch VIEW)` | the model changed: SYNC runs at the next draw |
+
+A key already shown or pending is left where it is by `append` and `insert`. Structural marks queue as
+`(OP KEYS AFTER)` and are worked out in order at draw time, so a burst of marks costs one pass.
+
+`(drgnx-view-sync-rows VIEW KEYS SIG)` is the SYNC helper: it diffs the ordered KEYS against the drawn and pending
+rows. A row whose `(funcall SIG KEY)` is not `eq` to the signature stored at the last sync is dirty (a vector is
+compared element by element, with `eq`, so a fresh vector of the same values is unchanged). New keys are inserted,
+missing ones removed; a row that moved (outside a longest run kept in order) is removed and inserted, and when more
+than half the rows moved the view is reset instead.
+
+### Drawing
+
+`(drgnx-view-draw-now VIEW)` runs SYNC when touched, then applies every mark in buffer order with one running
+position: removals, patches (`delete-region` of the row, `insert` at its integer start), growth (an `insert` before
+SUFFIX), inserts and appends. It returns the number of rows drawn, grown or removed, clears the modified flag and
+calls PATCHED. It binds `inhibit-read-only` and `inhibit-interaction`. A RENDER or GROW that signals draws the row
+`⚠ KEY: MESSAGE` in the `error` face; the first error of a view (also from SYNC or PATCHED) is pushed onto
+`drgnx-signal-errors` as `"view NAME: MESSAGE"` (kept to 20), later ones are not recorded again. Errors are never
+raised.
+
+**Self-check:** before a pass, when the region (START to the end of the buffer) is not as long as the rows, a
+foreign edit moved them: the view deletes the region, draws every row again before the pending changes, and counts
+a `:full-draws`.
+
+### Reads
+
+`(drgnx-view-key-at &optional POS)` (the current buffer's view; a binary search on the starts that allocates
+nothing), `(drgnx-view-row-start VIEW KEY)`, `(drgnx-view-row-count VIEW)`, `(drgnx-view-pending-p VIEW)`,
+`(drgnx-view-body-length VIEW KEY)`, and `(drgnx-view-stats &optional VIEW)` → `(:rows-drawn :rows-grown :appended
+:removed :slices :max-slice-rows :full-draws :stale-skips)`. `:rows-drawn` counts every row rendered (patched,
+inserted or appended, an error row too); `:rows-grown` the rows that took GROW's text; `:appended` the rows added;
+`:removed` the rows deleted. Without VIEW it sums every live view (`:max-slice-rows`: the largest).
+
+### The invariant
+
+`(drgnx-view--check VIEW)` is nil when the starts are the rows' actual extents: row 0 starts at 0, every row is
+non-empty and ends with a newline just before the next start, the index points at each row, and the last start is
+the end of the buffer. Otherwise it names the first fault. Tests: `test/unit/wb-view-test.el` (prefix `drgnx-view/`,
+including 200 seeded random marks checked against a plain list), helpers in `test/fixtures/view-fixture.el`
+(`drgnx-view-test-with-type`, `drgnx-view-test--text`, `drgnx-view-test--expected`, `drgnx-view-test--alloc`).
+
 ## Modal core (`drgnx-modal.el`)
 
 The engine-neutral half of modal editing; evil plugs into it (the `editor/evil` module, below), another engine could.
