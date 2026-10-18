@@ -54,6 +54,40 @@
      (ignore-errors (drgnx-coord-note-held (drgnx-coord-mcp--me) (and (consp r) (plist-get r :held))))   ; stale twice: a card
      (prog1 (drgnx-coord-mcp--answer r) (drgnx-coord-mcp--notify-hub))))
 
+(declare-function drgnx-hub-running-p "drgnx-hub")
+(declare-function drgnx-hub-call-sync "drgnx-hub")
+
+(defun drgnx-coord-mcp--hub-agents ()
+  "The sessions the hub runs, ((:id :name :job :task …)…) — or `none' when no hub answers."
+  (condition-case nil
+      (progn
+        (require 'drgnx-hub)
+        (if (not (drgnx-hub-running-p)) 'none
+          (let ((read-eval nil))
+            (mapcar (lambda (lisp) (car (read-from-string lisp)))
+                    (plist-get (drgnx-hub-call-sync "agents/list" nil 2) :sessions)))))
+    (error 'none)))
+
+(defun drgnx-coord-mcp--agents ()
+  "The agents of this job (every agent when the caller has no job), ((:agent ID :task TASK :name NAME)…): the hub's
+sessions when it runs, else the job's tasks that have an agent."
+  (let ((job (getenv "DRGNX_JOB")) (sessions (drgnx-coord-mcp--hub-agents)))
+    (if (listp sessions)
+        (delq nil (mapcar (lambda (s) (and (or (null job) (equal (plist-get s :job) job))
+                                           (list :agent (plist-get s :id) :task (plist-get s :task) :name (plist-get s :name))))
+                          sessions))
+      (delq nil (mapcar (lambda (task) (and (plist-get task :agent) (list :agent (plist-get task :agent) :task (plist-get task :id))))
+                        (drgnx-coord-tasks job))))))
+
+(defun drgnx-coord-mcp--check-recipient (to)
+  "TO is \"user\", an agent of this job's tasks, or a session the hub runs (by id or name): else an error, nothing is
+sent."
+  (let ((sessions (drgnx-coord-mcp--hub-agents)))
+    (unless (or (equal to "user")
+                (and (listp sessions) (seq-some (lambda (s) (member to (list (plist-get s :id) (plist-get s :name)))) sessions))
+                (seq-some (lambda (task) (equal to (plist-get task :agent))) (drgnx-coord-tasks (getenv "DRGNX_JOB"))))
+      (error "No agent \"%s\" (list_agents names them; \"user\" is the user)" to))))
+
 (defun drgnx-coord-mcp--seen (args)
   (or (plist-get args :seen_version) (error "seen_version is required: call read_decisions first")))
 
@@ -62,16 +96,13 @@
   (let ((s #'drgnx-mcp-schema) (seen '("seen_version" "integer" "The decision-log version you last read (read_decisions)")))
     `(("list_agents" :description "The agents working on this job, with their tasks"
        :schema ,(funcall s nil)
-       :call ,(lambda (_a)
-                (drgnx-coord-mcp--jsonable
-                 (delq nil (mapcar (lambda (task) (and (plist-get task :agent)
-                                                       (list :agent (plist-get task :agent) :task (plist-get task :id))))
-                                   (drgnx-coord-tasks (getenv "DRGNX_JOB")))))))
+       :call ,(lambda (_a) (drgnx-coord-mcp--jsonable (drgnx-coord-mcp--agents))))
       ("send_message" :description "Send a message to another agent (or \"user\"); it is queued and never interrupts them"
        :schema ,(funcall s `(("to" "string" "The recipient") ("text" "string" "The message") ,seen) '("to" "text" "seen_version"))
-       :call ,(lambda (a) (drgnx-coord-mcp--write
-                           (drgnx-coord-send :job (getenv "DRGNX_JOB") :sender (drgnx-coord-mcp--me) :recipient (plist-get a :to)
-                                             :text (plist-get a :text) :seen (drgnx-coord-mcp--seen a)))))
+       :call ,(lambda (a) (drgnx-coord-mcp--check-recipient (plist-get a :to))
+                (drgnx-coord-mcp--write
+                 (drgnx-coord-send :job (getenv "DRGNX_JOB") :sender (drgnx-coord-mcp--me) :recipient (plist-get a :to)
+                                   :text (plist-get a :text) :seen (drgnx-coord-mcp--seen a)))))
       ("read_inbox" :description "Messages to you not read yet (they become read)"
        :schema ,(funcall s nil)
        :call ,(lambda (_a) (let ((msgs (drgnx-coord-inbox (drgnx-coord-mcp--me) '("queued" "delivered"))))

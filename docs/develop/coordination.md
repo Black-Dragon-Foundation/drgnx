@@ -55,8 +55,8 @@ and drgnx's data and state dirs). Without `DRGNX_AGENT` it only reads. Messages 
 
 | Tool | Does |
 |---|---|
-| `list_agents` | the job's agents and their tasks |
-| `send_message {to, text, seen_version}` | queue a message (never interrupts) |
+| `list_agents` | the job's agents and their tasks: the hub's sessions of the job (`agents/list`, when a hub runs), else the job's tasks that have an agent |
+| `send_message {to, text, seen_version}` | queue a message (never interrupts); `to` must be `user`, an agent of the job's tasks or a session the hub runs (id or name), else the tool errors and nothing is written |
 | `read_inbox` | unread messages (they become read) |
 | `ack {id}` | acted on (only a message addressed to the caller) |
 | `read_decisions {since}` | the log since a version, and the current version (recorded as the agent's `seen`) |

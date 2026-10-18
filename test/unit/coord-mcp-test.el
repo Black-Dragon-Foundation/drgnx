@@ -80,6 +80,7 @@
 (ert-deftest drgnx-coord-mcp/inbox-read-and-ack-move-the-states ()
   (drgnx-coord-mcp-test--with '("DRGNX_AGENT=a" "DRGNX_JOB=j")
     (let ((id (plist-get (drgnx-coord-send :job "j" :sender "b" :recipient "a" :text "the schema changed" :seen 0) :id)))
+      (drgnx-coord-claim "j#2" "b" 0)                    ; b works on the job: a known recipient
       (drgnx-work-db-close-all)
       (should (string-search "the schema changed" (car (drgnx-coord-mcp-test--tool proc "read_inbox" nil))))
       (should (equal (plist-get (drgnx-coord-message id) :state) "read"))
@@ -90,6 +91,65 @@
       (drgnx-coord-mcp-test--tool proc "send_message" (list :to "b" :text "thanks" :seen_version (drgnx-coord-version)))
       (drgnx-work-db-close-all)
       (should (equal (plist-get (car (drgnx-coord-inbox "b")) :sender) "a")))))
+
+(ert-deftest drgnx-coord-mcp/send-to-unknown-agent-refused ()
+  (drgnx-coord-mcp-test--with '("DRGNX_AGENT=a" "DRGNX_JOB=j")
+    (drgnx-coord-claim "j#2" "b" 0)
+    (drgnx-work-db-close-all)
+    (let ((r (drgnx-coord-mcp-test--tool proc "send_message" (list :to "nobody" :text "x" :seen_version 0))))
+      (should (cdr r))
+      (should (string-search "nobody" (car r))))
+    (should-not (drgnx-coord-inbox "nobody"))
+    (should-not (cdr (drgnx-coord-mcp-test--tool proc "send_message" (list :to "b" :text "x" :seen_version 0))))
+    (should-not (cdr (drgnx-coord-mcp-test--tool proc "send_message" (list :to "user" :text "x" :seen_version 0))))
+    (should-not (cdr (drgnx-coord-mcp-test--tool proc "escalate" (list :subject "s" :text "x" :seen_version 0))))
+    (drgnx-work-db-close-all)
+    (should (= (length (drgnx-coord-inbox "b")) 1))
+    (should (= (length (drgnx-coord-inbox "user")) 2))))
+
+(defun drgnx-coord-mcp-test--tool-fn (name)
+  (plist-get (cdr (assoc name (drgnx-coord-mcp-tools))) :call))
+
+(defmacro drgnx-coord-mcp-test--with-hub (sessions &rest body)
+  "BODY, in this Emacs as agent a of job j, with a hub that answers `agents/list' with SESSIONS (plists), or errors
+(SESSIONS `error') — or none runs (SESSIONS `none')."
+  (declare (indent 1))
+  `(let* ((dir (file-name-as-directory (make-temp-file "drgnx-coord-mcp" t)))
+          (process-environment (append (list (concat "DRGNX_DATA_DIR=" dir) (concat "XDG_STATE_HOME=" dir "state")
+                                             "DRGNX_AGENT=a" "DRGNX_JOB=j")
+                                       process-environment))
+          (drgnx-work-db--handles nil) (calls nil))
+     (require 'drgnx-hub)
+     (unwind-protect
+         (cl-letf (((symbol-function 'drgnx-hub-running-p) (lambda () (not (eq ,sessions 'none))))
+                   ((symbol-function 'drgnx-hub-call-sync)
+                    (lambda (method &rest _) (push method calls)
+                      (if (eq ,sessions 'error) (error "drgnx hub: broken")
+                        (list :sessions (vconcat (mapcar #'prin1-to-string ,sessions)))))))
+           (drgnx-coord-job-create :id "j" :tasks '((:n 1 :title "one") (:n 2 :title "two")))
+           (drgnx-coord-claim "j#1" "t1" 0)
+           ,@body)
+       (drgnx-work-db-close-all)
+       (delete-directory dir t))))
+
+(ert-deftest drgnx-coord-mcp/list-agents-asks-the-hub-and-falls-back-to-the-tasks ()
+  (let ((sessions '((:id "s-1" :name "claude · x" :job "j" :task "j#1") (:id "s-2" :name "codex · y" :job "k" :task "k#1")
+                    (:id "s-3" :name "reviewer" :job "j" :task nil))))
+    (drgnx-coord-mcp-test--with-hub sessions
+      (let ((agents (funcall (drgnx-coord-mcp-test--tool-fn "list_agents") nil)))
+        (should (equal calls '("agents/list")))
+        (should (equal (mapcar (lambda (a) (plist-get a :agent)) (append agents nil)) '("s-1" "s-3")))   ; the job's, not job k's
+        (should (equal (plist-get (aref agents 0) :task) "j#1"))))
+    (dolist (broken '(none error))
+      (drgnx-coord-mcp-test--with-hub broken
+        (should (equal (funcall (drgnx-coord-mcp-test--tool-fn "list_agents") nil) [(:agent "t1" :task "j#1")]))))))
+
+(ert-deftest drgnx-coord-mcp/a-hub-agent-is-a-known-recipient ()
+  (drgnx-coord-mcp-test--with-hub '((:id "s-1" :name "claude · x" :job "k" :task nil))
+    (let ((send (drgnx-coord-mcp-test--tool-fn "send_message")))
+      (should (string-search "\"ok\":true" (funcall send (list :to "s-1" :text "hi" :seen_version 0))))        ; by id
+      (should (string-search "\"ok\":true" (funcall send (list :to "claude · x" :text "hi" :seen_version 0))))  ; by name
+      (should-error (funcall send (list :to "s-9" :text "hi" :seen_version 0))))))
 
 (ert-deftest drgnx-coord-mcp/update-task-outside-a-job-takes-only-known-statuses ()
   (drgnx-coord-mcp-test--with '("DRGNX_AGENT=a")           ; no DRGNX_JOB: a lone agent
