@@ -16,6 +16,7 @@ stopped (`drgnx-agents-stop' fails the test).  The feed's buffers are killed aft
   `(drgnx-cockpit-fixture-with
      (let* ((drgnx-cockpit-feed--buffers nil) (drgnx-cockpit-feed--timer nil) (drgnx-cockpit-feed--check-timer nil)
             (drgnx-cockpit-feed--waiting nil) (drgnx-cockpit-feed-test--hub nil)
+            (drgnx-cockpit-feed--told nil) (drgnx-cockpit-feed--in-flight nil)
             (drgnx-cockpit-graph-current-filter nil) (drgnx-cockpit--timer nil) (drgnx-cockpit--check-timer nil)
             (drgnx-cockpit--silent nil) (drgnx-cockpit--silent-at (float-time))
             (m1 (drgnx-agents--make :id "m-1" :remote "s-1" :name "claude · jx#2" :status 'idle :job "jx" :task "jx#2"))
@@ -40,6 +41,7 @@ stopped (`drgnx-agents-stop' fails the test).  The feed's buffers are killed aft
            (should-not (timerp drgnx-cockpit-feed--timer))
            (should-not (timerp drgnx-cockpit-feed--check-timer))
            (should-not (memq #'drgnx-cockpit-feed--hub-event drgnx-hub-event-functions))
+           (should-not (memq #'drgnx-cockpit-feed--agent-changed drgnx-agents-changed-functions))
            (set-window-configuration config))))))
 
 (defun drgnx-cockpit-feed-test--tick ()
@@ -190,28 +192,94 @@ stopped (`drgnx-agents-stop' fails the test).  The feed's buffers are killed aft
 
 (ert-deftest drgnx-cockpit-feed/answers-never-interrupt ()
   (drgnx-cockpit-feed-test--with
-    (cl-letf (((symbol-function 'drgnx-agents--prompt) (lambda (&rest _) (ert-fail "an answer started a turn")))
-              ((symbol-function 'drgnx-agents-steer) (lambda (&rest _) (ert-fail "a queued answer steered"))))
-      ;; a session whose mode interrupts: the answer waits in the store, the hub delivers it when the agent is free
-      (setf (drgnx-agent-session-mode m2) 'interrupt)
-      (drgnx-coord-send :sender "s-2" :recipient "user" :text "[escalation] which file?" :question t)
-      (let ((q (drgnx-cockpit-feed-test--question (lambda (q) (equal (plist-get q :agent) "s-2")))))
-        (should (eq (drgnx-cockpit-answer q "a.el") 'message))
-        (should (equal (mapcar (lambda (m) (plist-get m :text)) (drgnx-coord-inbox "s-2" '("queued"))) '("a.el")))
-        (should-not (drgnx-cockpit-feed-test--open-p (plist-get q :id))))
-      ;; a session of this Emacs, busy, in the default mode: queued in it
-      (let ((local (drgnx-agents--make :id "s-3" :name "local" :status 'busy :mode 'queue)))
-        (push local mirrors)
-        (drgnx-coord-send :sender "s-3" :recipient "user" :text "[escalation] go on?" :question t)
-        (drgnx-cockpit-answer (drgnx-cockpit-feed-test--question (lambda (q) (equal (plist-get q :agent) "s-3"))) "yes")
-        (should (equal (drgnx-agent-session-queue local) '("yes")))
-        ;; a reply to an agent with no question: queued too
-        (drgnx-cockpit-feed-reply "s-3" "and then stop")
-        (should (equal (drgnx-agent-session-queue local) '("yes" "and then stop"))))
-      ;; the hub was never asked to stop, kill or cancel anything
-      (dolist (c drgnx-cockpit-feed-test--hub)
-        (should-not (member (car c) '("agents/stop" "agents/kill")))
-        (should-not (equal (plist-get (cadr c) :op) "cancel"))))))
+    (let ((prompts nil))
+      (cl-letf (((symbol-function 'drgnx-agents--prompt) (lambda (s text) (push (list s text) prompts)))
+                ((symbol-function 'drgnx-agents-steer) (lambda (&rest _) (ert-fail "a queued answer steered"))))
+        ;; a session of this Emacs whose mode interrupts, busy: the answer waits in its queue, nothing is stopped
+        (let ((busy (drgnx-agents--make :id "s-4" :name "busy" :status 'busy :mode 'interrupt))
+              (idle (drgnx-agents--make :id "s-5" :name "idle" :status 'idle :mode 'interrupt :acp-id "acp-5")))
+          (setq mirrors (append (list busy idle) mirrors))
+          (drgnx-coord-send :sender "s-4" :recipient "user" :text "[escalation] keep going?" :question t)
+          (should (eq (drgnx-cockpit-answer (drgnx-cockpit-feed-test--question (lambda (q) (equal (plist-get q :agent) "s-4"))) "yes")
+                      'session))
+          (should (equal (drgnx-agent-session-queue busy) '("yes")))
+          (should (eq (drgnx-agent-session-mode busy) 'interrupt))          ; its mode is its own again
+          (should-not prompts)
+          (should-not (drgnx-coord-inbox "s-4" '("queued")))
+          ;; …idle: the answer starts its turn
+          (drgnx-coord-send :sender "s-5" :recipient "user" :text "[escalation] start?" :question t)
+          (should (eq (drgnx-cockpit-answer (drgnx-cockpit-feed-test--question (lambda (q) (equal (plist-get q :agent) "s-5"))) "go")
+                      'session))
+          (should (equal prompts (list (list idle "go"))))
+          (should (eq (drgnx-agent-session-mode idle) 'interrupt))
+          (setq prompts nil))
+        ;; a hub session's mirror whose mode interrupts: the answer waits in the store, the hub gives it when it is free
+        (setf (drgnx-agent-session-mode m2) 'interrupt)
+        (drgnx-coord-send :sender "s-2" :recipient "user" :text "[escalation] which file?" :question t)
+        (let ((q (drgnx-cockpit-feed-test--question (lambda (q) (equal (plist-get q :agent) "s-2")))))
+          (should (eq (drgnx-cockpit-answer q "a.el") 'message))
+          (should (equal (mapcar (lambda (m) (plist-get m :text)) (drgnx-coord-inbox "s-2" '("queued"))) '("a.el")))
+          (should-not (drgnx-cockpit-feed-test--open-p (plist-get q :id))))
+        ;; a session of this Emacs, busy, in the default mode: queued in it
+        (let ((local (drgnx-agents--make :id "s-3" :name "local" :status 'busy :mode 'queue)))
+          (push local mirrors)
+          (drgnx-coord-send :sender "s-3" :recipient "user" :text "[escalation] go on?" :question t)
+          (drgnx-cockpit-answer (drgnx-cockpit-feed-test--question (lambda (q) (equal (plist-get q :agent) "s-3"))) "yes")
+          (should (equal (drgnx-agent-session-queue local) '("yes")))
+          ;; a reply to an agent with no question: queued too
+          (drgnx-cockpit-feed-reply "s-3" "and then stop")
+          (should (equal (drgnx-agent-session-queue local) '("yes" "and then stop"))))
+        (should-not prompts)                                              ; busy sessions: no turn started
+        ;; the hub was never asked to stop, kill or cancel anything
+        (dolist (c drgnx-cockpit-feed-test--hub)
+          (should-not (member (car c) '("agents/stop" "agents/kill")))
+          (should-not (equal (plist-get (cadr c) :op) "cancel")))))))
+
+(ert-deftest drgnx-cockpit-feed/a-second-answer-waits-for-the-first ()
+  (drgnx-cockpit-feed-test--with
+    (let ((pending nil))
+      ;; a hub that has not answered yet
+      (cl-letf (((symbol-function 'drgnx-hub-call) (lambda (method params cb) (push (list method params cb) pending) 1)))
+        (let ((q (drgnx-cockpit-feed-test--question (lambda (q) (equal (plist-get q :agent) "s-1")))))
+          (should (eq (drgnx-cockpit-answer q "this way") 'job))
+          (should (drgnx-cockpit-feed-test--open-p (plist-get q :id)))   ; open until the hub answers
+          (should-error (drgnx-cockpit-answer q "that way") :type 'user-error)
+          (should (= 1 (length pending)))
+          ;; the hub answers: the question closes, and a later answer would go again
+          (funcall (nth 2 (car pending)) t nil)
+          (should-not (drgnx-cockpit-feed-test--open-p (plist-get q :id)))
+          (should-not drgnx-cockpit-feed--in-flight)
+          ;; a refused call lands too, and closes nothing
+          (drgnx-coord-send :sender "s-2" :recipient "user" :text "[escalation] tabs?" :question t)
+          (let ((q2 (drgnx-cockpit-feed-test--question (lambda (q) (equal (plist-get q :agent) "s-2")))))
+            (drgnx-cockpit-answer q2 "spaces")
+            (funcall (nth 2 (car pending)) nil "no such session")
+            (should-not drgnx-cockpit-feed--in-flight)
+            (should (drgnx-cockpit-feed-test--open-p (plist-get q2 :id)))))))))
+
+(ert-deftest drgnx-cockpit-feed/the-status-bar-hears-of-a-new-count ()
+  (drgnx-cockpit-feed-test--with
+    (let ((refreshes 0))
+      (cl-letf (((symbol-function 'drgnx-statusbar-refresh) (lambda (&rest _) (cl-incf refreshes))))
+        (drgnx-cockpit-feed-tell-statusbar)
+        (should (= refreshes 1))                    ; first told
+        (drgnx-cockpit-feed-tell-statusbar)
+        (should (= refreshes 1))                    ; the same count: nothing
+        ;; another process asks (no hub event): the feed's check tells the bar
+        (drgnx-coord-send :sender "ext:claude-code:42" :recipient "user" :text "[escalation] ok?" :question t)
+        (drgnx-cockpit-timeline-buffer)             ; a feed buffer lives: its check runs
+        (drgnx-cockpit-feed--check)
+        (should (= refreshes 2))
+        (drgnx-cockpit-feed--check)
+        (should (= refreshes 2))
+        ;; and so does the graph's
+        (drgnx-coord-send :sender "s-2" :recipient "user" :text "[escalation] tabs?" :question t)
+        (drgnx-cockpit--check)
+        (should (= refreshes 3))
+        ;; a store write that changes no count tells nothing
+        (drgnx-coord-event-add :agent "s-1" :kind "edit" :data '(:paths ("x.el")))
+        (drgnx-cockpit-feed--check)
+        (should (= refreshes 3))))))
 
 (ert-deftest drgnx-cockpit-feed/timeline-chips-in-time-order ()
   (drgnx-cockpit-feed-test--with
@@ -219,10 +287,11 @@ stopped (`drgnx-agents-stop' fails the test).  The feed's buffers are killed aft
           (mark (alist-get 'waiting (drgnx-cockpit-graph--glyph-table))))
       (set-window-buffer (selected-window) b)
       (with-current-buffer b
-        ;; one row per agent, in the order they first did something; chips left to right by time
+        ;; one row per agent, in the order they first did something; its question first (pinned), then the other
+        ;; chips left to right by time
         (let ((s1 (drgnx-cockpit-feed-test--line "claude · jx#2")))
           (let ((at (mapcar (lambda (s) (or (string-search s s1) (ert-fail (list "missing" s s1))))
-                            (list "decision #1" "2 files" "12/12 ✓" (concat mark " s-1 asks you")))))
+                            (list (concat mark " s-1 asks you") "decision #1" "2 files" "12/12 ✓"))))
             (should (equal at (sort (copy-sequence at) #'<))))
           (should (eq (get-text-property (string-search "s-1 asks you" s1) 'face s1) 'drgnx-cockpit-waiting)))
         (should (string-search "2 files" (drgnx-cockpit-feed-test--line "Claude Code")))
@@ -252,13 +321,62 @@ stopped (`drgnx-agents-stop' fails the test).  The feed's buffers are killed aft
           (should (string-suffix-p "3/4 ⚠" row))
           (should (string-match-p "‹ [0-9]+" row))
           (should-not (string-search "decision #1" row))
-          (goto-char (point-min)) (search-forward "‹")
+          (goto-char (point-min)) (search-forward "claude · jx#2") (search-forward "‹")
           (push-button (point))))
       (let ((earlier (get-buffer "*timeline: claude · jx#2*")))
         (should earlier)
         (with-current-buffer earlier
           (should (string-search "decision #1" (buffer-string)))
           (should (< (string-search "decision #1" (buffer-string)) (string-search "3/4 ⚠" (buffer-string)))))))))
+
+(ert-deftest drgnx-cockpit-feed/a-held-answer-is-not-said-to-be-queued ()
+  (drgnx-cockpit-feed-test--with
+    (drgnx-coord-send :sender "ext:claude-code:42" :recipient "user" :text "[escalation] rename it?" :question t)
+    (let ((q (drgnx-cockpit-feed-test--question (lambda (q) (equal (plist-get q :agent) "ext:claude-code:42"))))
+          (said nil) (drgnx-coord-queue-limit 0))   ; its queue is full: the store holds the message
+      (cl-letf (((symbol-function 'message) (lambda (fmt &rest args) (when fmt (push (apply #'format fmt args) said)))))
+        (should-not (drgnx-cockpit-answer q "yes")))
+      (should (equal said '("Work cockpit: held, not sent — queue full")))
+      (should (drgnx-cockpit-feed-test--open-p (plist-get q :id))))))
+
+(ert-deftest drgnx-cockpit-feed/waiting-chips-stay-in-their-row ()
+  (drgnx-cockpit-feed-test--with
+    (let ((b (drgnx-cockpit-timeline-buffer))
+          (mark (alist-get 'waiting (drgnx-cockpit-graph--glyph-table))))
+      (set-window-buffer (selected-window) b)
+      ;; 80 newer chips in s-1's row and in the jobs row
+      (dotimes (i 80)
+        (drgnx-coord-event-add :agent "s-1" :job "jx" :task "jx#2" :kind "edit" :data (list :paths (list (format "f%d.el" i))))
+        (drgnx-coord-event-add :job "jx" :kind "job" :data '(:status "running")))
+      (drgnx-cockpit-feed-schedule)
+      (drgnx-cockpit-feed-test--tick)
+      (with-current-buffer b
+        (let ((s1 (drgnx-cockpit-feed-test--line "claude · jx#2"))
+              (jobs (drgnx-cockpit-feed-test--line "jobs ")))
+          ;; s-1's question, right after `‹ N', in the waiting face; newer chips made room for it
+          (should (string-match (format "‹ [0-9]+ %s s-1 asks you" mark) s1))
+          (should (eq (get-text-property (string-search "s-1 asks you" s1) 'face s1) 'drgnx-cockpit-waiting))
+          (should (< (string-width s1) (window-body-width)))
+          ;; the reopened ask card (no open question names it) is pinned in the jobs row
+          (should (string-search (format "%s T3 asks you: Pick a name" mark) jobs))
+          (should (eq (get-text-property (string-search "T3 asks you" jobs) 'face jobs) 'drgnx-cockpit-waiting))))
+      ;; A on the card's chip settles the card; the chip goes
+      (with-current-buffer b
+        (goto-char (point-min)) (search-forward "T3 asks you") (goto-char (match-beginning 0))
+        (cl-letf (((symbol-function 'read-string) (lambda (&rest _) "bar")))
+          (should (eq (call-interactively #'drgnx-cockpit-answer) 'card))))
+      (drgnx-cockpit-feed-test--tick)
+      (with-current-buffer b (should-not (string-search "T3 asks you" (buffer-string))))
+      ;; two questions, room for one: `‹ N ◐' says a hidden chip waits
+      (with-current-buffer b
+        (should-not (string-match-p (format "‹ [0-9]+ %s %s" mark mark) (drgnx-cockpit-feed-test--line "claude · jx#2"))))
+      (drgnx-coord-send :sender "s-1" :recipient "user" :text "[escalation] and the tests?" :question t :job "jx")
+      (let ((drgnx-cockpit-timeline-name-width 60))
+        (with-current-buffer b
+          (drgnx-cockpit-feed--timeline-build)
+          (let ((s1 (drgnx-cockpit-feed-test--line "claude · jx#2")))
+            (should (string-match (format "‹ [0-9]+ %s %s s-1 asks you" mark mark) s1))
+            (should (eq (get-text-property (match-beginning 0) 'face s1) 'drgnx-cockpit-waiting))))))))
 
 (ert-deftest drgnx-cockpit-feed/a-question-shows-in-all-three-places ()
   (drgnx-cockpit-feed-test--with

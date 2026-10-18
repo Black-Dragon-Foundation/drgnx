@@ -104,21 +104,28 @@ shows one agent in the right pane, `happened`, in a buffer `*happened: AGENT*`:
 
 ```
 Timeline · oldest left, newest right · ◐ 2 waiting on you
-claude · jx#2  ‹ 1 T2 running · decision #1 · 2 files · 12/12 ✓ · ◐ s-1 asks you
+claude · jx#2  ‹ 1 ◐ s-1 asks you · T2 running · decision #1 · 2 files · 12/12 ✓
 Claude Code    started · 2 files
+jobs           job running · ◐ T3 asks you: Pick a name
 you            answered
 ```
 
 - The chips run left to right by time. A row shows as many of its newest chips as fit in its window.
-- `‹ N` says how many older chips there are. Click it to list them with their times.
+- A chip that waits on you is drawn first, right after the name (or `‹ N`), however old it is: newer chips make
+  room for it. An open ask card shows in the `jobs` row the same way.
+- `‹ N` says how many chips are not drawn; `‹ N ◐` means one of them waits on you (a row too narrow for all its
+  questions). Click it to list them with their times.
 - A chip opens what it is about, as a line of What happened does. The agent's name opens its What happened.
 - `you` holds your answers. `jobs` holds a job's events that have no agent.
 
 **Questions everywhere.** A question waiting on you shows in the graph (`◐` and a red dot) and in the timeline (a
 `◐` chip in the waiting face, red). What happened marks its line the same way, and its first line names the agent's
 oldest open question, so it stays in view after its line scrolls away. An answered question loses the mark.
-`drgnx-cockpit-waiting-count` gives how many wait, for the status bar's "waiting on you" count. Escalations,
-`ask_user` questions and ask cards count. Permissions show in the graph, and their own count is the status bar's.
+`drgnx-cockpit-waiting-count` gives how many wait, for the status bar's "waiting on you" count (the status bar does
+not count them yet). Escalations, `ask_user` questions and ask cards count. Permissions show in the graph, and their
+own count is the status bar's. While the graph or a feed pane is open, its check (every
+`drgnx-cockpit-check-interval`) tells the status bar when the number changed, so it moves even when another process
+asked.
 
 **Answer Question…** (`cockpit-answer`, `A` in the graph, What happened and the timeline) answers the question
 under point: a line or a chip, or the graph node on this line or selected. Otherwise it answers the agent of What
@@ -127,12 +134,16 @@ happened, or you pick one. It asks for the text. An answer never interrupts anyo
 | What asked | Where the answer goes |
 |---|---|
 | A job's agent | the hub's `job/reply`: a message it gets when it is free |
-| A session in this Emacs or the hub's | queued in the session (`agents/send`), or steering its turn when its mode is `steer`. A session whose mode is `interrupt` gets a message in the store instead, which it gets when it is free |
+| A session in this Emacs | queued in it: it starts a turn when the session is free, else waits for the turn to end (steering the turn when its mode is `steer`). A session whose mode is `interrupt` is never interrupted here: the answer waits in its queue |
+| A session of the hub | queued through the hub (`agents/send`). One whose mode is `interrupt` gets a message in the store instead, which the hub gives it when it is free |
+| An exited session | a message in the store |
 | An agent outside drgnx | a message in the store, which it reads with `read_inbox` |
 | An ask card | the card is settled with your text |
 | A permission | its transcript opens, where you answer it |
 
-Then an `answer` event closes the question everywhere.
+Then an `answer` event closes the question everywhere. When the store holds the message back (the agent's queue is
+full, or too many messages between you two), the echo area says "held, not sent" and the question stays open. While
+an answer is on its way to the hub, a second answer to the same question is refused.
 
 Both are plain text, so terminals get the same lines and chips. A terminal that does not write UTF-8 gets ASCII
 marks: `?` for `◐`, `+` for `✓`, `!` for `⚠`, `<` for `‹`, `>` for `▸`, `...` for `…`.

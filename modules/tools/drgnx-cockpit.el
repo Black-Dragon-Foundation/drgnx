@@ -252,12 +252,19 @@ chunk changes none of it."
   "(DATA-VERSION TOTAL-CHANGES SESSIONS SCAN-N SILENT-N CLOSED): it changes when what the model reads does.  One
 query: the data version moves when another connection commits, the change count when this Emacs writes; SESSIONS is
 `drgnx-cockpit--sessions-key'; CLOSED is `drgnx-cockpit-include-closed-jobs'."
-  (append (car (sqlite-select (drgnx-work-db) "select (select data_version from pragma_data_version()), total_changes()"))
+  (append (drgnx-cockpit--db-key)
           (list (drgnx-cockpit--sessions-key) drgnx-cockpit--scan-n drgnx-cockpit--silent-n drgnx-cockpit-include-closed-jobs)))
+
+(defun drgnx-cockpit--db-key ()
+  "(DATA-VERSION TOTAL-CHANGES) of the store, in one query: the data version moves when another connection commits,
+the change count when this Emacs writes.  The graph's, the feed's and the waiting count's keys start with it."
+  (car (sqlite-select (drgnx-work-db) "select (select data_version from pragma_data_version()), total_changes()")))
 
 (defun drgnx-cockpit--check ()
   "Every `drgnx-cockpit-check-interval' s while the graph lives (a timer): when it shows, ask for a redraw if the
-store changed since the last one (another process wrote it), and look for silent worktrees when that is due."
+store changed since the last one (another process wrote it), and look for silent worktrees when that is due.  The
+status bar hears of a new waiting count (`drgnx-cockpit-feed-tell-statusbar'), shown or not."
+  (drgnx-cockpit--call #'drgnx-cockpit-feed-tell-statusbar)
   (when-let* ((b (get-buffer drgnx-cockpit-graph-buffer-name)) ((drgnx-cockpit--visible-p b)))
     (drgnx-cockpit--call
      (lambda ()
@@ -730,6 +737,7 @@ their ancestors; each empty: any."
 (unless (featurep 'drgnx-cockpit-feed)
   (load (expand-file-name "drgnx-cockpit-feed" (file-name-directory (or load-file-name buffer-file-name))) nil t))
 (declare-function drgnx-cockpit-feed--setup "drgnx-cockpit-feed")
+(declare-function drgnx-cockpit-feed-tell-statusbar "drgnx-cockpit-feed")
 
 ;;;; The module
 
