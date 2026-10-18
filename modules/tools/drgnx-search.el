@@ -297,8 +297,13 @@ the project has no index or anything goes wrong.  Never asks anything."
 
 (defun drgnx-search--register-retriever ()
   "Add the semantic retriever to `drgnx-ai-retrievers' (once; the grep retriever stays)."
+  ;; Not `add-to-list': the bare `defvar' above makes the compiler turn it into a `setq' the recorder cannot see.
   (eval-after-load 'drgnx-ai-ui
-    (drgnx-modules-with-owner (add-to-list 'drgnx-ai-retrievers #'drgnx-search--retriever t))))
+    (drgnx-modules-with-owner
+      (unless (memq #'drgnx-search--retriever drgnx-ai-retrievers)
+        (setq drgnx-ai-retrievers (append drgnx-ai-retrievers (list #'drgnx-search--retriever)))
+        (drgnx-modules-push-undo "retriever drgnx-search--retriever"
+                                 (lambda () (setq drgnx-ai-retrievers (remq #'drgnx-search--retriever drgnx-ai-retrievers))))))))
 
 (defun drgnx-search--teardown ()
   "Cancel the re-indexes waiting after saves (a timer made by `after-save-hook' belongs to no setup)."

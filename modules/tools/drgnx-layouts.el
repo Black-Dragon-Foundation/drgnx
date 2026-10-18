@@ -559,9 +559,20 @@ before this ran (the module sets up at idle) is adopted now."
   (add-hook 'drgnx-persist-after-restore-functions #'drgnx-layouts--adopt)
   (mapc #'drgnx-layouts--adopt (frame-list)))
 
+(defun drgnx-layouts--teardown ()
+  "Forget the layouts in every frame: Zen's margins and its resize hook go, and the frame parameters of the
+current layout, the remembered arrangements, the previous layout and Zen's way back."
+  (dolist (f (frame-list))
+    (when (eq (frame-parameter f 'drgnx-layouts-current) 'zen)
+      (with-selected-frame f (drgnx-layouts--zen-margins 'zen nil)))
+    (dolist (p '(drgnx-layouts-current drgnx-layouts-state drgnx-layouts-previous drgnx-layouts-zen-return))
+      (set-frame-parameter f p nil)))
+  (remove-hook 'window-size-change-functions #'drgnx-layouts--zen-resize))
+
 (drgnx-module-define 'tools/layouts
                      :doc "Layouts: Agent, Editor, Zen, Browser and your own; one key cycles."
                      :stage 'idle :requires '(core/workbench)
+                     :teardown #'drgnx-layouts--teardown
                      :setup
                      (lambda ()
                        (require 'drgnx-area)

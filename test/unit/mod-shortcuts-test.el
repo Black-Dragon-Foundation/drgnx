@@ -505,10 +505,20 @@ table is the terminal's, as the layer would have put it there for a legacy termi
     (should (equal (drgnx-shortcuts-test--keys 'sc-g) '("C-c w")))
     (should (string-match-p "Eta +C-c w +keys\\.eld" (drgnx-shortcuts-test--line 'sc-g)))))
 
-;;; mod-shortcuts-test.el ends here
+(ert-deftest drgnx-shortcuts/the-vim-profile-state-and-the-view-go-with-the-module ()
+  ;; evil had loaded (the Vim profile): the initial state is set at once and put back by the module's undo; the
+  ;; open view is killed by its :teardown.
+  (let ((states (list (cons 'drgnx-shortcuts-mode 'normal))))
+    (unwind-protect
+        (cl-letf (((symbol-function 'evil-initial-state) (lambda (m &rest _) (alist-get m states)))
+                  ((symbol-function 'evil-set-initial-state) (lambda (m s) (setf (alist-get m states) s))))
+          (provide 'evil)
+          (drgnx-test-with-modules '(tools/shortcuts) :strict t
+                                   (should (eq (alist-get 'drgnx-shortcuts-mode states) 'emacs))
+                                   (get-buffer-create drgnx-shortcuts--buffer))
+          (should (eq (alist-get 'drgnx-shortcuts-mode states) 'normal))
+          (should-not (get-buffer drgnx-shortcuts--buffer)))
+      (setq features (delq 'evil features)))))
 
-(ert-deftest drgnx-shortcuts/the-vim-profile-hook-is-the-modules-and-goes-with-it ()
-  (let ((evil (length (cdr (assoc 'evil after-load-alist)))))
-    (drgnx-test-with-modules '(tools/shortcuts) :strict t
-                             (should (= (length (cdr (assoc 'evil after-load-alist))) (1+ evil))))
-    (should (= (length (cdr (assoc 'evil after-load-alist))) evil))))
+
+;;; mod-shortcuts-test.el ends here

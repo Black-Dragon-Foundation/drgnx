@@ -268,9 +268,17 @@ conflict of the resolution."
   (setq-local revert-buffer-function (lambda (&rest _) (drgnx-shortcuts--draw))))
 
 (declare-function evil-set-initial-state "evil-core")
+(declare-function evil-initial-state "evil-core")
 (defun drgnx-shortcuts--evil-state ()
-  "The view's own letters, also in the Vim profile: it starts in Emacs state (the setup runs this once evil loads)."
-  (when (fboundp 'evil-set-initial-state) (evil-set-initial-state 'drgnx-shortcuts-mode 'emacs)))
+  "The view's own letters, also in the Vim profile: it starts in Emacs state (the setup runs this once evil loads).
+The undo puts the earlier state back, only while it is still Emacs state."
+  (when (fboundp 'evil-set-initial-state)
+    (let ((old (evil-initial-state 'drgnx-shortcuts-mode)))
+      (evil-set-initial-state 'drgnx-shortcuts-mode 'emacs)
+      (drgnx-modules-push-undo "evil state drgnx-shortcuts-mode"
+                               (lambda ()
+                                 (when (eq (evil-initial-state 'drgnx-shortcuts-mode) 'emacs)
+                                   (evil-set-initial-state 'drgnx-shortcuts-mode old)))))))
 
 ;;;; Recording
 
@@ -514,9 +522,15 @@ has several), or gives them to a command without keys; `add' adds them to its ke
     (drgnx-command-define id :category "Keyboard Shortcuts" :title title :command fn :doc doc
                           :when (lambda () (derived-mode-p 'drgnx-shortcuts-mode)))))
 
+(defun drgnx-shortcuts--teardown ()
+  "Kill the Keyboard Shortcuts view (it holds a recording's hook); never asks."
+  (when-let* ((b (get-buffer drgnx-shortcuts--buffer)))
+    (let ((kill-buffer-query-functions nil)) (kill-buffer b))))
+
 (drgnx-module-define 'tools/shortcuts
                      :doc "Preferences: Keyboard Shortcuts — record chords, source and where, conflicts, filters, suggestions."
                      :stage 'idle
+                     :teardown #'drgnx-shortcuts--teardown
                      :setup (lambda ()
                               (drgnx-shortcuts--define-commands)
                               (eval-after-load 'evil (drgnx-modules-with-owner (drgnx-shortcuts--evil-state)))))
