@@ -31,6 +31,48 @@
 (declare-function eat-yank "eat")
 (declare-function eat-update-semi-char-mode-map "eat")
 
+;;;; Is a program running in the terminal?  (the quit and close-buffer questions)
+;; Emacs asks before it stops a process whose query flag is set.  Eat sets it at every command (its shell
+;; integration, etc/shell/drgnx.*) and clears it at every prompt; but it starts set, and without the integration
+;; (declined) nothing ever clears it, so an idle shell would count as a running program.  So: the flag starts off,
+;; and for a terminal whose shell has not sent a prompt mark the flag is "the shell has a child process".
+
+(defvar-local drgnx-terminal-eat--shell nil "Non-nil in a terminal drgnx started for the user's shell.")
+(defvar-local drgnx-terminal-eat--integrated nil "Non-nil once the shell in this terminal sent eat a prompt mark.")
+
+(defun drgnx-terminal-eat--note-integration (&rest _)
+  "After advice of `eat--pre-prompt' (it runs in the terminal buffer at every prompt mark): the shell reports."
+  (setq drgnx-terminal-eat--integrated t))
+
+(defun drgnx-terminal-eat--children-p (pid)
+  "Non-nil when process PID has a child process."
+  (let ((file (format "/proc/%d/task/%d/children" pid pid)))
+    (if (file-readable-p file)
+        (with-temp-buffer
+          (insert-file-contents file)
+          (string-match-p "[0-9]" (buffer-string)))
+      (seq-some (lambda (p) (eql (alist-get 'ppid (process-attributes p)) pid)) (list-system-processes)))))
+
+(defun drgnx-terminal-eat--refresh (buffer)
+  "Set the query flag of BUFFER's shell from its children, when eat's shell integration is not reporting."
+  (when (and (buffer-live-p buffer) (buffer-local-value 'drgnx-terminal-eat--shell buffer)
+             (eq (buffer-local-value 'eat-query-before-killing-running-terminal buffer) 'auto)
+             (not (buffer-local-value 'drgnx-terminal-eat--integrated buffer)))
+    (when-let* ((proc (get-buffer-process buffer))
+                ((process-live-p proc)))
+      (set-process-query-on-exit-flag proc (and (drgnx-terminal-eat--children-p (process-id proc)) t)))))
+
+(defun drgnx-terminal-eat-refresh-query-flags ()
+  "Bring the \"a program is running\" flag of every terminal shell up to date; no prompt, no waiting.
+A shell whose integration reports (eat marked a prompt) keeps eat's own flag; any other is running when it has a
+child process.  The quit question calls this before it collects the running programs."
+  (dolist (b (buffer-list)) (drgnx-terminal-eat--refresh b)))
+
+(defun drgnx-terminal-eat--refresh-before-kill ()
+  "`kill-buffer-query-functions': refresh this terminal's flag before Emacs reads it; never vetoes."
+  (drgnx-terminal-eat--refresh (current-buffer))
+  t)
+
 (defun drgnx-terminal-eat-start (dir)
   "A new eat terminal in DIR running the user's shell, shown by `pop-to-buffer' (the rules put it in the
 panel); returns its buffer.  Its environment starts with `drgnx-terminal-environment'."
@@ -41,8 +83,10 @@ panel); returns its buffer.  Its environment starts with `drgnx-terminal-environ
          (ok nil))
     (unwind-protect
         (progn
-          (with-current-buffer buffer (eat-mode))
+          (with-current-buffer buffer (eat-mode) (setq drgnx-terminal-eat--shell t))
           (eat-exec buffer "eat" (drgnx-terminal-shell) nil nil)
+          (when (eq eat-query-before-killing-running-terminal 'auto)
+            (set-process-query-on-exit-flag (get-buffer-process buffer) nil))   ; idle until a command or a child says not
           (setq ok t))
       (unless ok (kill-buffer buffer)))
     (pop-to-buffer buffer)
@@ -204,6 +248,8 @@ put into `minor-mode-map-alist' (the alist keeps the old map).  Runs when eat lo
                        (setq-default eat-eshell-fallback-if-stty-not-available nil
                                      eat-query-before-killing-running-terminal 'auto
                                      eat-kill-buffer-on-exit t)
+                       (add-hook 'kill-buffer-query-functions #'drgnx-terminal-eat--refresh-before-kill -90)
+                       (advice-add 'eat--pre-prompt :after #'drgnx-terminal-eat--note-integration)
                        ;; which keys reach drgnx and which the shell: now if eat is loaded, else when it loads
                        (with-eval-after-load 'eat (drgnx-terminal-apply-keys))
                        (advice-add 'drgnx-keys-apply :after #'drgnx-terminal-apply-keys)

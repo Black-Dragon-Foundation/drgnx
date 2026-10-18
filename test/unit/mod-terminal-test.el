@@ -194,11 +194,12 @@
   (skip-unless (or (fboundp 'drgnx-session-quit-confirm)
                    (ert-skip "drgnx-session-quit-confirm arrives with pass B (deferred-b); the quit half runs after it merges")))
   (let* ((dir (make-temp-file "drgnx-term" t))
-         (script (drgnx-terminal-test--script dir "exec sleep 30"))
+         (script (drgnx-terminal-test--script dir "read x"))
          (process-environment (cons (concat "SHELL=" script) process-environment)))
     (unwind-protect
         (drgnx-terminal-test--fresh t
-          (drgnx-terminal-new dir)
+          ;; a command is running, as eat's shell integration reports it (an idle shell asks nothing)
+          (set-process-query-on-exit-flag (get-buffer-process (drgnx-terminal-new dir)) t)
           (let ((state (expand-file-name "state.eld" dir)) (asked nil) (killed 0))
             ;; saving the workbench asks nothing, eat running or not
             (let ((inhibit-interaction t)) (should (drgnx-persist-save state)))
@@ -226,6 +227,110 @@
                         (funcall doctor))))
       (let ((eat-term-terminfo-directory "/nonexistent/drgnx-terminfo"))
         (should (member "eat's terminfo is missing: drgnx sync" (funcall doctor)))))))
+
+;;;; An idle shell is never a running program; a busy one is (the quit and close-buffer questions)
+
+(defun drgnx-terminal-test--running ()
+  "Live processes that make drgnx's quit ask (what `drgnx-session--running-programs' collects)."
+  (seq-filter (lambda (p) (and (process-live-p p) (process-query-on-exit-flag p))) (process-list)))
+
+(defun drgnx-terminal-test--wait-until (pred)
+  "Non-nil once PRED is (waits up to 5 s)."
+  (let ((until (+ (float-time) 5)))
+    (while (and (< (float-time) until) (not (funcall pred))) (accept-process-output nil 0.1))
+    (funcall pred)))
+
+(defmacro drgnx-terminal-test--shell (body &rest forms)
+  "Run FORMS with `buf' and `proc' bound to a new eat terminal whose \"shell\" is a script running BODY."
+  (declare (indent 1))
+  `(progn
+     (unless (drgnx-terminal-test--eat-dir) (ert-skip drgnx-terminal-test--skip))
+     (let* ((dir (make-temp-file "drgnx-term" t))
+            (script (drgnx-terminal-test--script dir ,body))
+            (process-environment (cons (concat "SHELL=" script) process-environment)))
+       (unwind-protect
+           (drgnx-terminal-test--fresh t
+             (let* ((buf (drgnx-terminal-new dir)) (proc (get-buffer-process buf)))
+               ,@forms))
+         (delete-directory dir t)))))
+
+(defun drgnx-terminal-test--children (proc)
+  "The pids of PROC's children."
+  (seq-filter (lambda (p) (eql (alist-get 'ppid (process-attributes p)) (process-id proc))) (list-system-processes)))
+
+(ert-deftest drgnx-terminal/an-idle-shell-is-not-a-running-program ()
+  ;; with eat's integration the prompt clears the flag; without it (declined) nothing ever does: so drgnx starts it off
+  (drgnx-terminal-test--shell "read x"
+    (should (process-live-p proc))
+    (should-not (process-query-on-exit-flag proc))
+    (should-not (memq proc (drgnx-terminal-test--running)))
+    (drgnx-terminal-eat-refresh-query-flags)
+    (should-not (memq proc (drgnx-terminal-test--running)))))
+
+(ert-deftest drgnx-terminal/without-integration-a-child-process-makes-it-running ()
+  (drgnx-terminal-test--shell "sleep 30 &\nread x"
+    (should (drgnx-terminal-test--wait-until (lambda () (drgnx-terminal-test--children proc))))
+    (should-not (memq proc (drgnx-terminal-test--running)))          ; nothing refreshed it yet
+    (drgnx-terminal-eat-refresh-query-flags)
+    (should (memq proc (drgnx-terminal-test--running)))
+    (dolist (child (drgnx-terminal-test--children proc)) (signal-process child 'TERM))
+    (should (drgnx-terminal-test--wait-until (lambda () (not (drgnx-terminal-test--children proc)))))
+    (drgnx-terminal-eat-refresh-query-flags)
+    (should-not (memq proc (drgnx-terminal-test--running)))))
+
+(ert-deftest drgnx-terminal/with-integration-the-flag-is-eats-own ()
+  (drgnx-terminal-test--shell "sleep 30 &\nread x"
+    (should (drgnx-terminal-test--wait-until (lambda () (drgnx-terminal-test--children proc))))
+    ;; eat's integration has sent its prompt mark: the flag is what eat says (idle), whatever the children
+    (with-current-buffer buf (drgnx-terminal-eat--note-integration))
+    (drgnx-terminal-eat-refresh-query-flags)
+    (should-not (memq proc (drgnx-terminal-test--running)))
+    ;; and a command eat reports as running stays running, with no child at all
+    (set-process-query-on-exit-flag proc t)
+    (dolist (child (drgnx-terminal-test--children proc)) (signal-process child 'TERM))
+    (should (drgnx-terminal-test--wait-until (lambda () (not (drgnx-terminal-test--children proc)))))
+    (drgnx-terminal-eat-refresh-query-flags)
+    (should (memq proc (drgnx-terminal-test--running)))))
+
+(ert-deftest drgnx-terminal/closing-a-terminal-asks-only-when-something-runs ()
+  (let ((asked nil))
+    (cl-letf (((symbol-function 'yes-or-no-p) (lambda (p) (push p asked) t)))
+      (drgnx-terminal-test--shell "read x"
+        (kill-buffer buf)
+        (should-not asked))
+      (drgnx-terminal-test--shell "sleep 30 &\nread x"
+        (should (drgnx-terminal-test--wait-until (lambda () (drgnx-terminal-test--children proc))))
+        (kill-buffer buf)
+        (should (= 1 (length asked)))))))
+
+(ert-deftest drgnx-terminal/with-drgnx-shell-files-the-prompt-clears-and-a-command-sets-the-flag ()
+  ;; the real thing: zsh and bash with only the drgnx line in their rc, in eat (its integration comes on by itself)
+  (dolist (shell '("zsh" "bash"))
+    (when (executable-find shell)
+      (let* ((home (make-temp-file "drgnx-term" t))
+             (file (expand-file-name (concat "etc/shell/drgnx." shell) drgnx-dir))
+             (rc (expand-file-name (if (equal shell "zsh") ".zshrc" "bashrc") home))
+             (wrapper (drgnx-terminal-test--script
+                       home (if (equal shell "zsh") (format "exec %s -d -i" (executable-find shell))
+                              (format "exec %s --noprofile --rcfile %s -i" (executable-find shell) rc))))
+             (process-environment (append (list (concat "SHELL=" wrapper) (concat "HOME=" home) (concat "ZDOTDIR=" home)
+                                                "PS1=$ " "PROMPT=$ ")
+                                          process-environment)))
+        (with-temp-file rc (insert (format "PS1='$ '\nsource '%s'\n" file)))
+        (unwind-protect
+            (drgnx-terminal-test--fresh t
+              (let* ((buf (drgnx-terminal-new home)) (proc (get-buffer-process buf)))
+                ;; the first prompt: eat marked it, the shell is idle
+                (should (drgnx-terminal-test--wait-until (lambda () (buffer-local-value 'drgnx-terminal-eat--integrated buf))))
+                (should-not (process-query-on-exit-flag proc))
+                ;; a builtin that waits has no child process: the flag is eat's, so a refresh leaves it set
+                (process-send-string proc "read -t 2 x\n")
+                (should (drgnx-terminal-test--wait-until (lambda () (process-query-on-exit-flag proc))))
+                (drgnx-terminal-eat-refresh-query-flags)
+                (should (process-query-on-exit-flag proc))
+                ;; the prompt after it clears the flag again
+                (should (drgnx-terminal-test--wait-until (lambda () (not (process-query-on-exit-flag proc)))))))
+          (delete-directory home t))))))
 
 (provide 'mod-terminal-test)
 ;;; mod-terminal-test.el ends here
