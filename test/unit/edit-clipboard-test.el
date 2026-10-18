@@ -14,7 +14,7 @@
           (drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
           (drgnx-keys--applied nil) (drgnx-keys--session-layers ,layers) (drgnx-keys-profiles nil)
           (drgnx-keys-problems nil) (drgnx-keys-last nil)
-          (emulation-mode-map-alists emulation-mode-map-alists)
+          (emulation-mode-map-alists emulation-mode-map-alists) (drgnx-editing-prefix-delay 0.05)
           (kill-ring nil) (kill-ring-yank-pointer nil) (interprogram-cut-function nil) (interprogram-paste-function nil))
      (unwind-protect
          (progn (funcall (plist-get (alist-get 'editor/editing drgnx-modules--table) :setup))
@@ -213,6 +213,91 @@
       (drgnx-edit-clip-test--select 1 6)
       (should (keymapp (key-binding (kbd "C-c"))))
       (should (keymapp (key-binding (kbd "C-x")))))))
+
+;;;; The prefix delay: a prefix key typed with a selection is still a prefix
+
+(ert-deftest drgnx-editing/vscode-c-x-b-within-the-delay-keeps-the-text ()
+  (drgnx-edit-clip-test--keys '((vscode app editing window))
+    (drgnx-edit-clip-test--buffer "hello drgnx"
+      (setq drgnx-edit-clip-test--ran nil)
+      (drgnx-edit-clip-test--select 1 6)
+      (cl-letf (((symbol-function 'switch-to-buffer)
+                 (lambda (&rest _) (interactive) (setq drgnx-edit-clip-test--ran 'switched))))
+        (drgnx-edit-clip-test--press "C-x b"))
+      (should (eq drgnx-edit-clip-test--ran 'switched))
+      (should (equal (buffer-string) "hello drgnx"))
+      (should-not kill-ring)
+      (should-not (region-active-p)))))
+
+(ert-deftest drgnx-editing/vscode-c-x-c-s-within-the-delay-saves-the-whole-text ()
+  (drgnx-edit-clip-test--keys '((vscode app editing window))
+    (drgnx-edit-clip-test--buffer "hello drgnx"
+      (setq drgnx-edit-clip-test--ran nil)
+      (drgnx-edit-clip-test--select 1 6)
+      (cl-letf (((symbol-function 'save-buffer)
+                 (lambda (&rest _) (interactive) (setq drgnx-edit-clip-test--ran (buffer-string)))))
+        (drgnx-edit-clip-test--press "C-x C-s"))
+      (should (equal drgnx-edit-clip-test--ran "hello drgnx"))
+      (should-not kill-ring))))
+
+(ert-deftest drgnx-editing/vscode-c-c-c-c-with-a-selection-reaches-the-mode ()
+  (drgnx-edit-clip-test--keys '((vscode app editing window))
+    (drgnx-edit-clip-test--buffer "hello drgnx"
+      (drgnx-edit-clip-test--mode-keys)
+      (setq drgnx-edit-clip-test--ran nil)
+      (drgnx-edit-clip-test--select 1 6)
+      (drgnx-edit-clip-test--press "C-c C-c")
+      (should drgnx-edit-clip-test--ran)
+      (should-not kill-ring)
+      (should (equal (buffer-string) "hello drgnx")))))
+
+(ert-deftest drgnx-editing/vscode-c-x-alone-cuts-after-the-delay ()
+  (drgnx-edit-clip-test--keys '((vscode app editing window))
+    (drgnx-edit-clip-test--buffer "hello drgnx"
+      (drgnx-edit-clip-test--select 1 6)
+      (drgnx-edit-clip-test--press "C-x")
+      (should (equal (car kill-ring) "hello"))
+      (should (equal (buffer-string) " drgnx")))))
+
+(ert-deftest drgnx-editing/a-nil-delay-acts-at-once ()
+  (drgnx-edit-clip-test--keys '((vscode app editing window))
+    (setq drgnx-editing-prefix-delay nil)
+    (drgnx-edit-clip-test--buffer "hello drgnx"
+      (drgnx-edit-clip-test--select 1 6)
+      (drgnx-edit-clip-test--press "C-x b")           ; cuts, then b is typed
+      (should (equal (car kill-ring) "hello"))
+      (should (equal (buffer-string) "b drgnx")))))
+
+(ert-deftest drgnx-editing/the-delay-waits-only-for-a-prefix-key ()
+  (should (drgnx-editing--prefix-key-p [?\C-c]))
+  (should (drgnx-editing--prefix-key-p [?\C-x]))
+  (should-not (drgnx-editing--prefix-key-p [?\s-c]))
+  (should-not (drgnx-editing--prefix-key-p [])))
+
+(ert-deftest drgnx-editing/handed-back-keys-are-not-recorded-twice ()
+  ;; (t . EVENT) is an event a keyboard macro already recorded.
+  (drgnx-edit-clip-test--keys '((vscode app editing window))
+    (drgnx-edit-clip-test--buffer "hello drgnx"
+      (drgnx-edit-clip-test--select 1 6)
+      (let ((unread-command-events nil) (this-command 'drgnx-editing-cut))
+        (cl-letf (((symbol-function 'this-command-keys-vector) (lambda () [24]))
+                  ((symbol-function 'read-key) (lambda (&rest _) ?b)))
+          (drgnx-editing-cut))
+        (should (equal unread-command-events '((t . 24) (t . 98))))
+        (should-not (region-active-p)))
+      ;; and the empty selection's way back to the prefix
+      (drgnx-edit-clip-test--select 3 3)
+      (let ((unread-command-events nil) (this-command 'drgnx-editing-copy))
+        (cl-letf (((symbol-function 'this-command-keys-vector) (lambda () [3])))
+          (drgnx-editing-copy))
+        (should (equal unread-command-events '((t . 3))))))))
+
+(ert-deftest drgnx-editing/paste-with-an-empty-kill-ring-changes-nothing ()
+  (drgnx-edit-clip-test--keys '((vscode app editing window))
+    (drgnx-edit-clip-test--buffer "hello world"
+      (drgnx-edit-clip-test--select 1 6)
+      (should-error (drgnx-editing-paste))
+      (should (equal (buffer-string) "hello world")))))
 
 ;;;; The profiles
 

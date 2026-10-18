@@ -210,31 +210,67 @@ Without a selection they stay Emacs' prefixes.")
   (let ((keys (this-command-keys-vector)))
     (and (> (length keys) 0) (eq (lookup-key drgnx-editing-region-map keys) this-command))))
 
+(defcustom drgnx-editing-prefix-delay 0.3
+  "Seconds C-c or C-x wait with a selection for a key that makes it Emacs' prefix; nil: act at once.
+In the VS Code profile C-c copies and C-x cuts the selection.  Typed as the start of `C-x b', `C-x C-s' or a
+mode's `C-c C-c', they would cut or copy the text first.  So they wait this long for the next key: one that
+arrives in time drops the selection and goes on as the prefix; none, and they copy or cut.  Like CUA mode's
+prefix delay.  Keys that are no prefix (Cmd+C on a Mac) act at once."
+  :type '(choice (const :tag "Act at once" nil) (number :tag "Seconds"))
+  :group 'drgnx)
+
+(defun drgnx-editing--prefix-key-p (keys)
+  "Non-nil if KEYS (a vector) start a prefix sequence without the selection-only map."
+  (and (> (length keys) 0)
+       (let ((emulation-mode-map-alists (remq 'drgnx-editing--region-alist emulation-mode-map-alists)))
+         (keymapp (key-binding keys)))))
+
+(defun drgnx-editing--hand-back (events)
+  "Drop the selection and give EVENTS to Emacs as typed.
+They are `(t . EVENT)': a keyboard macro that is recording has them already."
+  (deactivate-mark)
+  (setq prefix-arg current-prefix-arg
+        unread-command-events (append (mapcar (lambda (e) (cons t e)) events) unread-command-events)))
+
 (defun drgnx-editing--no-selection (what)
   "Called by a region command without a selection.  Typed as its key, give the key back to Emacs
 (an empty selection, the mark set and not moved, is not one); from the palette, say what is missing."
   (if (not (drgnx-editing--region-key-p))
       (user-error "Select something to %s first" what)
-    (deactivate-mark)
-    (setq prefix-arg current-prefix-arg
-          unread-command-events (append (listify-key-sequence (this-command-keys-vector))
-                                        unread-command-events))))
+    (drgnx-editing--hand-back (listify-key-sequence (this-command-keys-vector)))))
+
+(defun drgnx-editing--with-selection (action)
+  "Run ACTION on the selection.  Typed as a prefix key (C-c, C-x), first wait
+`drgnx-editing-prefix-delay' for a next key: if one comes, it is the prefix after all and the selection stays
+untouched.  Only runs as a typed command, and the wait ends at the delay."
+  (let ((keys (this-command-keys-vector)))
+    (if (and drgnx-editing-prefix-delay (drgnx-editing--region-key-p) (drgnx-editing--prefix-key-p keys))
+        (if-let* ((event (condition-case nil        ; a keyboard macro that ends here has no next key
+                             (with-timeout (drgnx-editing-prefix-delay nil) (read-key))
+                           (error nil))))
+            (drgnx-editing--hand-back (append (listify-key-sequence keys) (list event)))
+          (funcall action))
+      (funcall action))))
 
 (defun drgnx-editing-copy ()
   "Copy the selection."
   (interactive)
-  (if (use-region-p) (call-interactively #'kill-ring-save) (drgnx-editing--no-selection "copy")))
+  (if (use-region-p)
+      (drgnx-editing--with-selection (lambda () (call-interactively #'kill-ring-save)))
+    (drgnx-editing--no-selection "copy")))
 
 (defun drgnx-editing-cut ()
   "Cut the selection (in a read-only buffer, copy it)."
   (interactive)
   (if (use-region-p)
-      (let ((kill-read-only-ok t)) (call-interactively #'kill-region))
+      (drgnx-editing--with-selection (lambda () (let ((kill-read-only-ok t)) (call-interactively #'kill-region))))
     (drgnx-editing--no-selection "cut")))
 
 (defun drgnx-editing-paste (&optional arg)
-  "Paste the last copy, replacing the selection.  ARG as for `yank'."
+  "Paste the last copy, replacing the selection.  ARG as for `yank'.
+With nothing to paste, nothing changes."
   (interactive "*P")
+  (current-kill 0)                      ; signals an empty kill ring before the selection goes
   (when (use-region-p) (delete-region (region-beginning) (region-end)))
   (deactivate-mark)
   (yank arg))

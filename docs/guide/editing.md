@@ -89,14 +89,14 @@ cannot draw (a typo) stays code, said once, until its text changes. Module `lang
 **Copy**, **Cut** and **Paste** work on the selection. In the VS Code profile they are `C-c`, `C-x` and `C-v`
 (`s-c`, `s-x`, `s-v` on a Mac): `C-c` and `C-x` act only while text is selected, so without a selection they stay
 Emacs's prefixes (`C-x C-s`, `C-c C-c` in a mode). Paste replaces the selection, in one undo step. The Emacs profile
-keeps `M-w`, `C-w` and `C-y`; the Vim profile `y`, `d` and `p`. Details, and the one edge (`C-x C-s` with a selection
-cuts first), are in [keys.md](keys.md#copy-cut-and-paste). In a terminal window the copy also reaches the terminal's
+keeps `M-w`, `C-w` and `C-y`; the Vim profile `y`, `d` and `p`. A prefix key typed with a selection (`C-x C-s`, `C-x b`) still works: they wait 0.3 seconds
+(`drgnx-editing-prefix-delay`) for the next key before they cut. Details are in [keys.md](keys.md#copy-cut-and-paste). In a terminal window the copy also reaches the terminal's
 clipboard ([terminal.md](terminal.md#clipboard)). Module `editor/editing`.
 
 ## Tests
 
 `test/unit/edit-clipboard-test.el` (the keys pressed through the command loop in each profile; the prefixes
-without a selection; the Explorer's own keys); `test/unit/mod-grammars-test.el` (the language of a buffer, the hint once and never a prompt, the install as a job
+with and without a selection and the delay; the Explorer's own keys); `test/unit/mod-grammars-test.el` (the language of a buffer, the hint once and never a prompt, the install as a job
 and its command, buffers switching after it); `test/unit/mod-amenities-test.el` (the modules wait without their
 package and run with it; the booster only with its program; a missing formatter still saves); `mod-sticky-test.el` (the scopes, outermost first, at most three, one line, the
 cost of a scroll step); `mod-markdown-test.el` (GFM for READMEs, the preview through pandoc or without a program,

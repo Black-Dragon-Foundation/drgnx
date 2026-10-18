@@ -71,6 +71,34 @@
     (should (equal (drgnx-tty-session-eval s '(with-current-buffer "*copy*" (buffer-string))) "hello drgnx"))
     (should-not (drgnx-tty-session-eval s '(with-current-buffer "*copy*" (use-region-p))))))
 
+(defun drgnx-tty-clip-test--select-five (sess)
+  "In SESS, a buffer *sel* with `hello drgnx', its first five characters selected with Shift+Right."
+  (drgnx-tty-session-eval sess '(progn (switch-to-buffer (get-buffer-create "*sel*"))
+                                       (insert "hello drgnx")
+                                       (goto-char (point-min))
+                                       t))
+  (dotimes (_ 5) (drgnx-tty-session-send sess "\e[1;2C"))
+  (drgnx-tty-session-wait sess '(with-current-buffer "*sel*" (and (use-region-p) (= (- (region-end) (region-beginning)) 5)))))
+
+(ert-deftest drgnx-tty-clip/c-x-alone-cuts-after-the-delay ()
+  (drgnx-tty-session-with (s :keys "vscode")
+    (drgnx-tty-clip-test--ready s)
+    (drgnx-tty-clip-test--select-five s)
+    (drgnx-tty-session-send s "\C-x")
+    (drgnx-tty-session-wait s '(equal (car kill-ring) "hello"))
+    (should (equal (drgnx-tty-session-eval s '(with-current-buffer "*sel*" (buffer-string))) " drgnx"))))
+
+(ert-deftest drgnx-tty-clip/c-x-then-a-key-is-the-prefix-and-the-text-stays ()
+  ;; C-x h (mark the whole buffer) typed at once: nothing is cut.
+  (drgnx-tty-session-with (s :keys "vscode")
+    (drgnx-tty-clip-test--ready s)
+    (drgnx-tty-clip-test--select-five s)
+    (drgnx-tty-session-send s "\C-xh")
+    (drgnx-tty-session-wait s '(with-current-buffer "*sel*" (and (use-region-p) (= (- (region-end) (region-beginning)) 11))))
+    (sleep-for 0.6)                                          ; past the delay: still no cut
+    (should (equal (drgnx-tty-session-eval s '(with-current-buffer "*sel*" (buffer-string))) "hello drgnx"))
+    (should-not (drgnx-tty-session-eval s '(car kill-ring)))))
+
 (ert-deftest drgnx-tty-clip/bracketed-paste-arrives-as-text ()
   (drgnx-tty-session-with (s :keys "vscode")
     (drgnx-tty-clip-test--ready s)

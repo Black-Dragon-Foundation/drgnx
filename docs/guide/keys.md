@@ -84,8 +84,14 @@ they are in its own keymap, which beats the global `C-v`, and the Explorer never
 `C-c` / `C-x` stay out of its way. On a Mac they are `s-c`, `s-x` and `s-v`.
 
 The Emacs and Vim profiles keep their own keys, and so does "Emacs editing + VS Code app keys": only the VS Code
-editing layer takes `C-c`, `C-x` and `C-v`. One edge, as in CUA mode without its delay: with a selection, `C-x C-s`
-cuts the selection first and then saves; press `C-g` (or move) to drop the selection before a prefix key.
+editing layer takes `C-c`, `C-x` and `C-v`.
+
+**Prefix habits with a selection.** `C-c` and `C-x` are also the start of Emacs's own keys (`C-x b`, `C-x C-s`, a
+mode's `C-c C-c`, the agent and comint buffers' `C-c C-c`). With a selection they wait `drgnx-editing-prefix-delay`
+(0.3 seconds; `M-x customize-variable`; `nil` acts at once) for the next key, as CUA mode does: a key that arrives in
+time drops the selection and goes on as the prefix, so nothing is cut or lost; none, and `C-c` copies and `C-x`
+cuts. So `C-x C-s`, `C-x b` and `C-c C-c` work with a selection when typed at your normal speed, and a lone `C-c`
+or `C-x` acts after a short pause. Cmd+C and Cmd+X on a Mac are no prefix and act at once.
 
 ## On a Mac
 
