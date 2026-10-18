@@ -163,3 +163,23 @@
         (cl-letf (((symbol-function 'drgnx-uitest-root-frame) (lambda () (error "Not the measured frame"))))
           (should (assoc "mini" (drgnx-uitest-record--signatures)))))
     (drgnx-uitest-measure-end)))
+
+(ert-deftest drgnx-uitest/measure-begin-takes-the-frame ()
+  ;; A test that made a second frame measures the first one: the targets and the snapshots are FRAME's.
+  (cl-letf (((symbol-function 'drgnx-uitest-root-frame) (lambda () (error "Not the given frame"))))
+    (drgnx-uitest-measure-begin (selected-frame))
+    (unwind-protect
+        (should (eq drgnx-uitest-record--frame (selected-frame)))
+      (should (plist-member (drgnx-uitest-measure-end) :wm_resizes))))
+  (should-not drgnx-uitest-record--frame)
+  (should-not drgnx-uitest-record--size))
+
+(ert-deftest drgnx-uitest/a-dead-measured-frame-books-nothing ()
+  ;; The measured frame was deleted: no later change is recorded (another frame's windows are not its windows,
+  ;; and that frame's other size is no WM resize).
+  (let* ((orig (symbol-function 'frame-live-p))
+         (drgnx-uitest-record--frame 'drgnx-test-dead-frame) (drgnx-uitest-record--size '(1 . 1))
+         (drgnx-uitest-record--sigs nil) (drgnx-uitest-record--log nil) (drgnx-uitest-record--last-change 0.0))
+    (cl-letf (((symbol-function 'frame-live-p) (lambda (f) (and (not (eq f 'drgnx-test-dead-frame)) (funcall orig f)))))
+      (drgnx-uitest-record--snapshot "other"))
+    (should-not drgnx-uitest-record--log)))

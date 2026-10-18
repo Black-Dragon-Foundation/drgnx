@@ -190,7 +190,8 @@ that runs inside another timer's or a command's `sit-for` keeps its own changes)
 (process output — filters and sentinels are called from C and cannot be intercepted — or redisplay). An `other`
 change seen while the frame's pixel size changed is `wm:resize`: the window manager resized the frame; a resize
 during a command or timer keeps that command's or timer's name. The recorder stays on the frame it began with,
-even if a frame made during the measurement comes first in `frame-list`. A scroll
+even if a frame made during the measurement comes first in `frame-list` (`(drgnx-uitest-measure-begin FRAME)`
+measures another frame than the root one); once that frame is deleted, nothing more is recorded. A scroll
 counts only when a window's start really changes. A timer that moves point with `goto-char` inside
 `with-selected-window` (no window function called) is still caught and named.
 The report:

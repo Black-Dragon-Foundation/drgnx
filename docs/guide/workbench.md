@@ -382,7 +382,8 @@ its buffer's rule names.
 
 I11 holds while the docks fit: if the window manager makes the frame narrower than the docks' widths plus the
 smallest editor, Emacs shrinks everything in proportion (by default the left dock is 32 columns, the right dock 50
-and an editor at least 10 — with both docks shown, a frame needs about 92 columns).
+and an editor at least 10 — with both docks shown, a frame needs about 92 columns). One limit remains: after you drag
+a dock's or the panel's edge, the next resize by the window manager scales that dock again.
 
 ## Tests
 

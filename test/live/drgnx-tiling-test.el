@@ -39,7 +39,8 @@ Emacs has to shrink them."
 
 (defun drgnx-tiling--measure (sess thunk)
   "The jank report of what happens in SESS while THUNK runs here and the session settles."
-  (drgnx-ui-call sess "(drgnx-uitest-api-measure-begin)")
+  ;; The first frame's report: after `make-frame' the new frame comes first in `frame-list'.
+  (drgnx-ui-call sess "(progn (drgnx-uitest-measure-begin drgnx-tiling--f1) (drgnx-uitest--json (list :ok t)))")
   (let ((ended nil))
     (unwind-protect
         (progn
@@ -65,7 +66,11 @@ Emacs has to shrink them."
   (skip-unless (equal (drgnx-ui-default-compositor) "sway"))
   (drgnx-tiling--with sess
     (drgnx-ui-measure sess (list (list :keys "C-b") (list :keys "C-`") (list :keys "C-M-b")))
-    (drgnx-ui-call sess "(progn (set-frame-parameter drgnx-tiling--f1 'name \"drgnx-i11-first\")
+    ;; Tab switches first: Emacs preserves a size only for the buffer it was set with.
+    (drgnx-ui-measure sess (list (list :keys "C-h f") (list :type "car") (list :keys "RET")))   ; the panel's Help tab
+    (drgnx-ui-call sess "(progn (drgnx-wb-define-tab 'right 'notes :title \"Notes\")
+                                (drgnx-wb-area-show 'right 'notes (get-buffer-create \"*notes*\"))
+                                (set-frame-parameter drgnx-tiling--f1 'name \"drgnx-i11-first\")
                                 (drgnx-uitest--json (list :ok t)))")
     (drgnx-ui-measure sess nil)
     (let ((first (drgnx-ui-call sess drgnx-tiling--probe)) (bad nil))

@@ -230,3 +230,21 @@
        (should (eq (selected-window) editor))
        (should (eq (drgnx-wb-area-tab 'panel) 'help))        ; the tab is kept
        (should (window-live-p editor))))))
+
+(ert-deftest drgnx-area/a-tab-switch-keeps-the-preserved-size ()
+  ;; Emacs preserves a size only for the buffer it was set with: a tab switch must set it again, or a frame
+  ;; resize (a tiling WM's) shares the change out to the area too (I11).
+  (drgnx-area-test--with
+   (drgnx-wb-define-tab 'right 'notes :title "Notes")
+   (let ((p (drgnx-wb-area-show 'panel 'results (drgnx-area-test--results)))
+         (r (drgnx-wb-area-show 'right 'notes (get-buffer-create "*notes*"))))
+     (should (window--preserve-size p nil))
+     (should (window--preserve-size r t))
+     (describe-function 'car)                                   ; the panel's Help tab
+     (should (eq (window-buffer p) (get-buffer "*Help*")))
+     (should (window--preserve-size p nil))
+     (drgnx-wb-area-show 'right 'notes (get-buffer-create "*drgnx-results*"))
+     (should (window--preserve-size r t))
+     (kill-buffer "*drgnx-results*")                            ; the tab's placeholder, not through a tab switch
+     (should-not (eq (window-buffer r) (get-buffer "*drgnx-results*")))
+     (should (window--preserve-size r t)))))

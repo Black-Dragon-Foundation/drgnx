@@ -195,8 +195,8 @@ first in `frame-list' and would otherwise become the root frame.")
 (defvar drgnx-uitest-record--size nil "The measured frame's pixel size (W . H) at the last snapshot.")
 
 (defun drgnx-uitest-record--root ()
-  "The frame the recorder watches: the measurement's, while it is live; else the root frame."
-  (if (frame-live-p drgnx-uitest-record--frame) drgnx-uitest-record--frame (drgnx-uitest-root-frame)))
+  "The frame the recorder watches: the measurement's (even once deleted), else the root frame."
+  (or drgnx-uitest-record--frame (drgnx-uitest-root-frame)))
 
 (defun drgnx-uitest-record--frame-size (frame)
   "FRAME's pixel size as (WIDTH . HEIGHT)."
@@ -223,9 +223,13 @@ first in `frame-list' and would otherwise become the root frame.")
 (defun drgnx-uitest-record--snapshot (cause)
   "Record every window whose signature changed since the last snapshot, as caused by CAUSE.
 When CAUSE is `other' (no command or timer ran) and the frame's pixel size changed since the last
-snapshot, the window manager resized it (a tiling WM halving it for a new window, say): `wm:resize'."
-  (let ((now (drgnx-uitest-record--signatures))
-        (size (drgnx-uitest-record--frame-size (drgnx-uitest-record--root))))
+snapshot, the window manager resized it (a tiling WM halving it for a new window, say): `wm:resize'.
+Once the measured frame is deleted nothing more is recorded: another frame's windows are not its windows,
+and that frame's other size is no WM resize."
+  (when-let* ((frame (drgnx-uitest-record--root))
+              ((frame-live-p frame))
+              (now (drgnx-uitest-record--signatures))
+              (size (drgnx-uitest-record--frame-size frame)))
     (when (and (equal cause "other") drgnx-uitest-record--size (not (equal size drgnx-uitest-record--size)))
       (setq cause "wm:resize"))
     (setq drgnx-uitest-record--size size)
@@ -372,8 +376,9 @@ collateral or a snap-back."
   (when (windowp window)
     (cl-pushnew (drgnx-uitest-window-id window) drgnx-uitest--targets :test #'equal)))
 
-(defun drgnx-uitest-measure-begin ()
-  "Start recording visible changes for a jank report."
+(defun drgnx-uitest-measure-begin (&optional frame)
+  "Start recording visible changes of FRAME (default: the root frame) for a jank report."
+  (setq frame (or frame (drgnx-uitest-root-frame)))
   (setq drgnx-uitest--targets nil
         drgnx-uitest-record--log nil
         drgnx-uitest-record--scroll-starts      ; the starts now: a redraw that keeps them is no scroll
@@ -384,11 +389,11 @@ collateral or a snap-back."
         drgnx-uitest-record--redisplays 0
         drgnx-uitest-record--gc0 (cons gcs-done gc-elapsed)
         drgnx-uitest-record--guard0 (length drgnx-jank-guard-log)
-        drgnx-uitest-record--frame (drgnx-uitest-root-frame)
-        drgnx-uitest-record--size (drgnx-uitest-record--frame-size drgnx-uitest-record--frame)
+        drgnx-uitest-record--frame frame
+        drgnx-uitest-record--size (drgnx-uitest-record--frame-size frame)
         drgnx-uitest-record--sigs (copy-tree (drgnx-uitest-record--signatures))
         drgnx-uitest-record--initial (copy-tree drgnx-uitest-record--sigs))
-  (drgnx-uitest--note-target (frame-selected-window (drgnx-uitest-root-frame)))
+  (drgnx-uitest--note-target (frame-selected-window frame))
   (drgnx-uitest--note-target (selected-window))      ; the window with focus (a second frame's too)
   (add-hook 'window-scroll-functions #'drgnx-uitest-record--on-scroll)
   (add-hook 'pre-redisplay-functions #'drgnx-uitest-record--on-redisplay)
@@ -409,7 +414,7 @@ collateral or a snap-back."
   (remove-hook 'pre-redisplay-functions #'drgnx-uitest-record--on-redisplay)
   (remove-hook 'pre-command-hook #'drgnx-uitest-record--before-command)
   (remove-hook 'post-command-hook #'drgnx-uitest-record--after-command)
-  (setq drgnx-uitest-record--command nil drgnx-uitest-record--frame nil)
+  (setq drgnx-uitest-record--command nil drgnx-uitest-record--frame nil drgnx-uitest-record--size nil)
   (advice-remove 'timer-event-handler #'drgnx-uitest-record--after-timer)
   ;; No target is added here: a window a timer focused after the input is collateral.  Targets are
   ;; the start's windows, the windows of mouse events and those focus moved to after a command.
