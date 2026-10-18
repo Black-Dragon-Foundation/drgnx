@@ -28,8 +28,8 @@
 (require 'drgnx-registry)
 (declare-function drgnx-face-glyph "drgnx-face")
 (declare-function drgnx-face-drawn-title-p "drgnx-face")
-(declare-function drgnx-surfaces-key "drgnx-surfaces")
-(declare-function drgnx-tty-sendable-key "drgnx-tty-fallback")
+(declare-function drgnx-surfaces-key-label "drgnx-surfaces")
+(defvar drgnx-surfaces-starter-commands)
 (declare-function drgnx-signal-editor-window "drgnx-signal")
 (declare-function drgnx-chrome--project-root "drgnx-chrome")
 (declare-function drgnx-signal-subscribe "drgnx-signal")
@@ -73,10 +73,8 @@ A tab-bar format you set yourself is never replaced: then the line stays off."
 ;;;; What the line shows
 
 (defconst drgnx-topline--hint-commands
-  '((go-quick-open "files" "Open a file of the project by name")
-    (palette "commands" "Run any command by name")
-    (keys-sheet "all keys" "Every key of the active profile"))
-  "The hint: registry command ID, the label shown after its key, and the help text.")
+  '((go-quick-open . "files") (palette . "commands") (keys-sheet . "all keys"))
+  "The hint: the registry command IDs of `drgnx-surfaces-starter-commands' and the short label shown after each key.")
 
 (defun drgnx-topline--glyph (name ascii)
   "The glyph NAME for the selected frame (see `drgnx-face-glyph'); ASCII when it is not known."
@@ -119,21 +117,6 @@ when the cache changed."
             (drgnx-chrome--project-root (or (buffer-file-name) default-directory))
             (unless (equal before drgnx-chrome--root) (force-mode-line-update t))))))))
 
-(defun drgnx-topline--key (cmd)
-  "The key that runs registry command CMD as the active profile has it, else the key Emacs gives its command, else nil.
-On a terminal, a chord it cannot send is shown the way it can (`drgnx-tty-sendable-key', when M12b is there)."
-  (let* ((s (drgnx-surfaces-key cmd))
-         (suffix (string-search " (in " s))
-         (key (if (string-empty-p s)
-                  (let ((c (drgnx-cmd-command cmd)))
-                    (when-let* ((k (and (symbolp c) (where-is-internal c nil t)))) (key-description k)))
-                (substring s 0 suffix))))
-    (when key
-      (concat (if (and (not (display-graphic-p)) (fboundp 'drgnx-tty-sendable-key))
-                  (or (ignore-errors (drgnx-tty-sendable-key (selected-frame) key)) key)
-                key)
-              (and suffix (substring s suffix))))))
-
 (defun drgnx-topline--drawn-title-p (frame)
   "Non-nil when drgnx draws FRAME's title itself (A2's `drgnx-face-drawn-title-p'; until it exists, never)."
   (and (fboundp 'drgnx-face-drawn-title-p) (drgnx-face-drawn-title-p frame)))
@@ -168,9 +151,10 @@ and `equal' ignores text properties, so a new width would have left the old gap 
   "The hint's items: the search glyph, then each of the three keys with its label (a command without a key is
 left out), each one running its command.  nil when none has a key."
   (let ((i 0) (items nil))
-    (pcase-dolist (`(,id ,label ,help) drgnx-topline--hint-commands)
+    (pcase-dolist (`(,id ,help) drgnx-surfaces-starter-commands)
       (when-let* ((cmd (drgnx-commands-get id))
-                  (key (drgnx-topline--key cmd)))
+                  (key (drgnx-surfaces-key-label cmd :any t))
+                  (label (cdr (assq id drgnx-topline--hint-commands))))
         (when items
           (push (drgnx-topline--item (intern (format "drgnx-topline-sep-%d" (setq i (1+ i))))
                                      (drgnx-topline--text (drgnx-topline--glyph 'sep " | ") 'drgnx-topline))

@@ -23,9 +23,9 @@
 (require 'drgnx-registry)
 (require 'drgnx-face-state)
 (declare-function drgnx-face-glyph "drgnx-face")
-(declare-function drgnx-surfaces-key "drgnx-surfaces")
+(declare-function drgnx-surfaces-key-label "drgnx-surfaces")
+(defvar drgnx-surfaces-starter-commands)
 (declare-function drgnx-surfaces-run "drgnx-surfaces")
-(declare-function drgnx-tty-sendable-key "drgnx-tty-fallback")
 (declare-function drgnx-signal-editor-window "drgnx-signal")
 (declare-function drgnx-signal-editor-window-p "drgnx-signal")
 (declare-function drgnx-signal-subscribe "drgnx-signal")
@@ -53,12 +53,6 @@
 
 (defconst drgnx-start-buffer-name "*drgnx start*" "The name of the start page's buffer.")
 
-(defconst drgnx-start--keys
-  '((go-quick-open "Open a file of the project by name")
-    (palette "Run any command by name")
-    (keys-sheet "See every key of this profile"))
-  "The three keys the page shows: registry command ID and what it does.")
-
 (defconst drgnx-start--buttons
   '((open-folder "Open a Folder…" "Choose a folder to work in; it opens in the Explorer")
     (work-graph "Open the Work Graph" "Specs, plans and branches as a graph")
@@ -73,20 +67,6 @@
 boolean, not the buffer).")
 
 ;;;; The page
-
-(defun drgnx-start--key (id)
-  "The key that runs registry command ID as the active profile has it, else the key Emacs gives its command, else nil.
-On a terminal a chord it cannot send is shown the way it can (`drgnx-tty-sendable-key', when M12b is there)."
-  (when-let* ((cmd (drgnx-commands-get id)))
-    (let* ((s (drgnx-surfaces-key cmd))
-           (key (if (string-empty-p s)
-                    (let ((c (drgnx-cmd-command cmd)))
-                      (when-let* ((k (and (symbolp c) (where-is-internal c nil t)))) (key-description k)))
-                  (car (split-string s " (in " t)))))
-      (when key
-        (if (and (not (display-graphic-p)) (fboundp 'drgnx-tty-sendable-key))
-            (or (ignore-errors (drgnx-tty-sendable-key (selected-frame) key)) key)
-          key)))))
 
 (defun drgnx-start--glyph ()
   "The search glyph for the selected frame (`drgnx-face-glyph'), an ASCII slash when it is not known."
@@ -116,8 +96,8 @@ The keys are read from the registry now, so a changed profile shows when the pag
     (insert "\n  " (propertize "drgnx" 'face 'drgnx-start-title) "\n\n")
     (insert "  " (propertize "A workbench for Emacs: your files, your agents and your work, side by side." 'face 'drgnx-start-quiet) "\n")
     (insert "  " (propertize "Everything it does is a command, and the keys below find all of them." 'face 'drgnx-start-quiet) "\n\n")
-    (pcase-dolist (`(,id ,what) drgnx-start--keys)
-      (when-let* ((key (drgnx-start--key id)))
+    (pcase-dolist (`(,id ,what) drgnx-surfaces-starter-commands)
+      (when-let* ((key (drgnx-surfaces-key-label id :any t :short t)))
         (insert "  " (propertize search 'face 'drgnx-start-quiet) " "
                 (propertize (format "%-10s" key) 'face 'drgnx-start-key)
                 (propertize what 'face 'drgnx-start-quiet) "\n")))

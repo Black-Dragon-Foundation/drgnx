@@ -528,3 +528,15 @@ buffer of the selected window (a temp buffer in project `proj', no git).  Faces 
             (should (= 2 builds))))))))
 
 ;;; mod-topline-test.el ends here
+
+(ert-deftest drgnx-topline/keys-come-from-the-label ()
+  ;; the hint's keys are `drgnx-surfaces-key-label' of the starter list's ids (any key, the keymap kept)
+  (drgnx-topline-test--with 'vscode
+    (let (asked)
+      (cl-letf (((symbol-function 'drgnx-surfaces-key-label)
+                 (lambda (cmd &rest args) (push (cons (drgnx-cmd-id cmd) args) asked) (format "K-%s" (drgnx-cmd-id cmd)))))
+        (let ((text (drgnx-topline-test--text)))
+          (should (string-match-p "K-go-quick-open files · K-palette commands · K-keys-sheet all keys" text))))
+      (should (equal (reverse asked)
+                     (mapcar (lambda (row) (list (car row) :any t)) drgnx-surfaces-starter-commands))))
+    (should-not (fboundp 'drgnx-topline--key))))
