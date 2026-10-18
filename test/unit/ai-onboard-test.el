@@ -309,6 +309,26 @@ with BODY."
                 (should-not (string-search "sk-or-test-123" (drgnx-ai-onboard-test--slurp (concat root "config/ai.eld")))))))
         (delete-process mock)))))
 
+(ert-deftest drgnx-ai-onboard/last-line-has-no-escapes ()
+  ;; A progress bar's last state, without ANSI escapes or the carriage-return redraws before it; only the end of a
+  ;; big log is read.
+  (let* ((dir (file-name-as-directory (make-temp-file "drgnx-lastline" t)))
+         (log (concat dir "log")))
+    (unwind-protect
+        (cl-letf (((symbol-function 'drgnx-jobs--dir) (lambda (_id) dir)))
+          (write-region "pulling manifest\n\e[?25l\e[2K\rpulling 10%\r\e[2K\rpulling 40%\n" nil log nil 'silent)
+          (should (equal (drgnx-onboard--last-line "x") "pulling 40%"))
+          (write-region "\e[1m\e[32mdone\e[0m\n" nil log nil 'silent)
+          (should (equal (drgnx-onboard--last-line "x") "done"))
+          ;; a log of megabytes: the end is read, not the whole file
+          (write-region (concat (make-string 3000000 ?x) "\nlast words\n") nil log nil 'silent)
+          (let ((read 0))
+            (advice-add 'insert-file-contents :filter-return (lambda (r) (cl-incf read (cadr r)) r) '((name . lastline-count)))
+            (unwind-protect (should (equal (drgnx-onboard--last-line "x") "last words"))
+              (advice-remove 'insert-file-contents 'lastline-count))
+            (should (<= read 8192))))
+      (delete-directory dir t))))
+
 (ert-deftest drgnx-ai-onboard/typed-key-cleared-and-env-noted ()
   ;; The string `read-passwd' returned is zeroed once the key is stored (the in-memory key is a copy); with
   ;; OPENROUTER_API_KEY set the environment's key wins over the stored one, and the result says so.

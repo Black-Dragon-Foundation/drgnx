@@ -594,8 +594,15 @@ Claude Code's parts (`drgnx-onboard--agents-step').")
   (when-let* ((b (get-buffer "*drgnx Welcome*"))) (with-current-buffer b (tabulated-list-print t))))
 
 (defun drgnx-onboard--last-line (id)
-  "The last line job ID wrote (a progress bar's last state), or nil."
-  (car (last (split-string (drgnx-jobs-log id 2000) "[\r\n]+" t "[ \t]+"))))
+  "The last line job ID wrote (a progress bar's last state, without ANSI escapes), or nil.  Reads only the end of
+the log (4 KB): it is called twice a second."
+  (let* ((file (expand-file-name "log" (drgnx-jobs--dir id)))
+         (size (file-attribute-size (file-attributes file)))
+         (tail (if (not size) ""
+                 (with-temp-buffer
+                   (insert-file-contents file nil (max 0 (- size 4096)) size)
+                   (buffer-string)))))
+    (car (last (split-string (replace-regexp-in-string "\e\\[[0-9;?]*[ -/]*[@-~]" "" tail) "[\r\n]+" t "[ \t]+")))))
 
 (defun drgnx-onboard--say (text &optional step)
   "TEXT, with \" — C-g stops\", as what STEP (default: the running step) is doing now: its Welcome row and the echo
