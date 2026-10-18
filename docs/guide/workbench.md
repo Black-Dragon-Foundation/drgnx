@@ -18,8 +18,8 @@ treemacs; see
 | | VS Code keys | Emacs keys | Vim keys |
 |---|---|---|---|
 | Show / hide the sidebar | `C-b` | `<f8>` | `SPC e` |
-| Focus the Explorer | `C-S-e` | `C-x M-e` | `SPC E` |
-| View: Explorer / View: Search (swap the sidebar's view) | palette | palette | palette / `SPC /` |
+| Focus the Explorer | palette | `C-x M-e` | `SPC E` |
+| View: Explorer / View: Search (swap the sidebar's view) | `C-S-e` / `C-S-f` | palette | palette / `SPC /` |
 | Focus the Buffers panel | `C-k e` | `C-x C-b` | `SPC ,` |
 | Back to the editor (in the sidebar) | `Escape` | `q` | `Escape` |
 | Focus the editor (group 1) | `C-1` | `C-x o` | `C-w` |

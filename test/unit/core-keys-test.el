@@ -10,7 +10,8 @@
   "Emacs' own bindings, as `drgnx-keys' snapshots them.")
 
 (defmacro drgnx-keys-test--with-core-commands (&rest body)
-  "BODY with a registry holding the core commands (core + core/basics), nothing else."
+  "BODY with a registry holding the core commands (core + core/basics) and the two replace commands
+that took VS Code's C-S-h and F2 (the rest of the replace module is not modelled here), nothing else."
   `(let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
          (drgnx-commands-problems nil) (drgnx-modules--table nil) (drgnx-modules--report nil)
          (ring-bell-function ring-bell-function) (use-dialog-box use-dialog-box)
@@ -18,6 +19,8 @@
      (drgnx--core-commands)
      (drgnx-modules-load-directory (expand-file-name "modules" drgnx-dir))
      (drgnx-modules-run 'startup)
+     (drgnx-command-define 'replace-in-files :category "Search" :title "Replace in Files" :command #'ignore :doc "test")
+     (drgnx-command-define 'rename-symbol :category "Search" :title "Rename Symbol" :command #'ignore :doc "test")
      ,@body))
 
 (defun drgnx-keys-test--resolve (layers &rest args)
@@ -551,7 +554,7 @@
   ;; GNU Emacs on macOS sends Cmd+Shift+P as s-P, never S-s-p (which no key press would reach: s-P unbound
   ;; is read as s-p, Quick Open).  Shift stays on named keys.
   (let ((r (drgnx-keys-test--resolve '((vscode app editing window)) :platform 'macos)))
-    (pcase-dolist (`(,id ,key) '((palette "s-P") (edit-redo "s-Z") (search-replace "s-H") (file-close-window "s-W")
+    (pcase-dolist (`(,id ,key) '((palette "s-P") (edit-redo "s-Z") (replace-in-files "s-H") (file-close-window "s-W")
                                  (explorer-copy-relative-path "M-s-C") (file-save-as "s-S")
                                  (edit-expand "C-S-s-<right>") (edit-line-above "S-s-<return>")))
       (should (equal (list id key t) (list id key (and (member key (drgnx-keys-test--keys r id)) t)))))
@@ -606,7 +609,7 @@
     (focus-group-3 "C-3" nil) (focus-group-3 "M-3" nil) (move-editor-to-next-group "C-M-<right>" nil)
     (open-editor-in-new-window "C-k o" nil) (view-panel-next "M-`" nil) (help-mode-menu "C-'" nil)
     (close-tab "C-w" nil) (close-tab "C-<f4>" nil) (next-tab "C-<next>" nil) (previous-tab "C-<prior>" nil)
-    (toggle-sidebar "C-b" nil) (dock-back "<escape>" drgnx-wb-dock-map) (focus-explorer "C-S-e" nil)
+    (toggle-sidebar "C-b" nil) (dock-back "<escape>" drgnx-wb-dock-map)
     (explorer-next "<down>" drgnx-explorer-mode-map) (explorer-previous "<up>" drgnx-explorer-mode-map)
     (explorer-expand "<right>" drgnx-explorer-mode-map) (explorer-collapse "<left>" drgnx-explorer-mode-map)
     (explorer-open "RET" drgnx-explorer-mode-map) (explorer-preview "SPC" drgnx-explorer-mode-map)
@@ -628,10 +631,10 @@
     (edit-move-up "M-<up>" nil) (edit-move-down "M-<down>" nil) (edit-duplicate "M-S-<down>" nil)
     (edit-line-below "C-<return>" nil) (edit-line-above "C-S-<return>" nil) (go-back "M-<left>" nil)
     (go-forward "M-<right>" nil) (code-definition "<f12>" nil) (code-references "S-<f12>" nil)
-    (code-rename "<f2>" nil) (code-hover "C-S-SPC" nil) (code-quick-fix "C-." nil) (code-problems "C-S-m" nil)
-    (org-capture "C-c c" nil) (org-agenda "C-c a" nil) (go-quick-open "C-p" nil) (search-project "C-S-f" nil)
+    (code-hover "C-S-SPC" nil) (code-quick-fix "C-." nil) (code-problems "C-S-m" nil)
+    (org-capture "C-c c" nil) (org-agenda "C-c a" nil) (go-quick-open "C-p" nil)
     (go-symbol "C-S-o" nil) (go-symbol-project "C-t" nil) (go-recent "C-<tab>" nil) (search-file "C-f" nil)
-    (search-replace "C-S-h" nil) (search-semantic "C-k C-f" nil) (terminal-new "C-S-`" nil) (scm-view "C-S-g" nil)
+    (search-semantic "C-k C-f" nil) (terminal-new "C-S-`" nil) (scm-view "C-S-g" nil)
     (view-zen "C-k z" nil)
     (view-zen "<f11>" nil) (view-zoom-in "C-=" nil) (view-zoom-in "C-+" nil) (view-zoom-out "C--" nil)
     (view-zoom-reset "C-0" nil) (agents-view "C-k a" nil) (agents-stop "C-c C-c" drgnx-agents-transcript-mode-map)
@@ -649,9 +652,11 @@
   "The VS Code profile's resolved keys on Linux before M12a gave it its macOS keys: (ID KEY MAP).")
 
 (ert-deftest drgnx-keys/linux-is-unchanged ()
-  ;; The macOS work changes nothing on Linux but the keys of the commands it added.
-  (let* ((new '(quit preferences edit-line-start edit-line-end edit-buffer-start edit-buffer-end edit-word-left
-                     edit-word-right edit-delete-word-back edit-delete-line-back))
+  ;; The macOS work changes nothing on Linux but the keys of the commands it added — and the views
+  ;; that took C-S-e, C-S-f, C-S-h and F2 (see `drgnx-keys/views-took-their-keys').
+  (let* ((new '(view-explorer view-search replace-in-files rename-symbol   ; M12a's views took four of the keys
+                              quit preferences edit-line-start edit-line-end edit-buffer-start edit-buffer-end edit-word-left
+                              edit-word-right edit-delete-word-back edit-delete-line-back))
          (r (drgnx-keys-test--resolve '((vscode app editing window)) :platform 'linux)))
     (should (equal (mapcar (lambda (b) (list (plist-get b :id) (plist-get b :key) (plist-get b :map)))
                            (seq-remove (lambda (b) (memq (plist-get b :id) new)) (plist-get r :bindings)))
@@ -660,6 +665,19 @@
     (should (equal (drgnx-keys-test--keys r 'edit-word-left) '("C-<left>")))
     (should-not (drgnx-keys-test--keys r 'quit))
     (should-not (drgnx-keys-test--keys r 'preferences))))
+
+(ert-deftest drgnx-keys/views-took-their-keys ()
+  ;; After M12a: VS Code's C-S-e / C-S-f / C-S-h / F2 and Vim's SPC s r / SPC c R belong to the new views.
+  (let ((vscode (drgnx-keys-test--resolve '((vscode app editing window)) :platform 'linux))
+        (vim (drgnx-keys-test--resolve '((vim app editing window)) :platform 'linux)))
+    (pcase-dolist (`(,id . ,key) '((view-explorer . "C-S-e") (view-search . "C-S-f")
+                                   (replace-in-files . "C-S-h") (rename-symbol . "<f2>")))
+      (should (equal (drgnx-keys-test--keys vscode id) (list key))))
+    (dolist (id '(focus-explorer search-project search-replace code-rename))
+      (should-not (drgnx-keys-test--keys vscode id)))
+    (should (equal (drgnx-keys-test--keys vim 'replace-in-files) '("SPC s r")))
+    (should (equal (drgnx-keys-test--keys vim 'rename-symbol) '("SPC c R")))
+    (dolist (id '(search-replace code-rename)) (should-not (drgnx-keys-test--keys vim id)))))
 
 (defvar drgnx-keys-test--cmd-mod 'meta)
 (defvar drgnx-keys-test--alt-mod 'alt)

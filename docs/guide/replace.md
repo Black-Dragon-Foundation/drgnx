@@ -59,8 +59,8 @@ view, scope This file.
 
 | Command | VS Code | Emacs | Vim |
 |---|---|---|---|
-| Replace in Files | palette (`C-S-h` is still Replace in Project) | `C-c s r` | palette (`SPC s r` is still Replace in Project) |
-| Rename Symbol | palette (`<f2>` is still the language server's rename) | palette | palette |
+| Replace in Files | `C-S-h` | `C-c s r` | `SPC s r` |
+| Rename Symbol | `<f2>` | palette | `SPC c R` |
 | Replace in File (the find bar) | `C-h` | palette (`M-%` stays query-replace) | palette |
 | Replace All | `C-M-<return>`, `C-<return>` | `C-c C-c`, `C-<return>` | `C-c C-c`, `C-<return>` |
 | Replace This Match (on a row) | `C-!` | `C-c C-r` | `C-c C-r` |

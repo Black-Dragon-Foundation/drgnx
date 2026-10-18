@@ -33,7 +33,9 @@ The onboarding flow will ask which one you want (VS Code preselected).
 | Toggle Line Numbers | — | — | `SPC u l` |
 | Module Report | — | — | `SPC h m` |
 | Toggle Sidebar | `C-b` | `<f8>` | `SPC e` |
-| Focus Explorer / Buffers | `C-S-e` / `C-k e` | `C-x M-e` / `C-x C-b` | `SPC E` / `SPC ,` |
+| Focus Explorer / Buffers | palette / `C-k e` | `C-x M-e` / `C-x C-b` | `SPC E` / `SPC ,` |
+| View: Explorer / View: Search | `C-S-e` / `C-S-f` | palette / palette | palette / `SPC /` |
+| Replace in Files | `C-S-h` | `C-c s r` | `SPC s r` |
 | Toggle Panel / Right Dock | ``C-` `` / `C-M-b` | — / — | `SPC j` / `SPC R` |
 | Close Tab / Next / Previous | `C-<f4>` / `C-<next>` / `C-<prior>` | — / Emacs' `C-x <right>` / `C-x <left>` | `SPC b d` / `SPC b n` / `SPC b p` |
 | Split Editor Right / Down | ``C-\`` / ``C-k C-\`` | Emacs' `C-x 3` / `C-x 2` | `SPC w v` / `SPC w s` |
@@ -44,10 +46,10 @@ The onboarding flow will ask which one you want (VS Code preselected).
 | Zen Mode | `C-k z` | — | `SPC u z` |
 | Next Layout / Layout… | `C-k C-l` / — | — / — | `SPC l n` / `SPC l l` |
 | Go to Line | Emacs' `M-g g` | `M-g g` | `SPC g l` |
-| Go to Definition / References / Rename Symbol / Hover | `F12` / `S-F12` / `F2` / `C-S-SPC` | Emacs' `M-.` / `M-?` / — / `C-h .` | `SPC c d` / `SPC c r` / `SPC c R` / `SPC c h` |
+| Go to Definition / References / Rename Symbol / Hover | `F12` / `S-F12` / `F2` / `C-S-SPC` | Emacs' `M-.` / `M-?` / palette / `C-h .` | `SPC c d` / `SPC c r` / `SPC c R` / `SPC c h` |
 | Source Control / Blame | `C-S-g` / — | Emacs' `C-x v d` / `C-x v g` | `SPC g s` / `SPC g b` |
 | New Terminal | ``C-S-` `` | — | `SPC t n` |
-| Quick Open / Search in Project / Go to Symbol | `C-p` / `C-S-f` / `C-S-o` | Emacs' `C-x p f` / `C-x p g` / `M-g i` | `SPC f p` / `SPC s p` / `SPC s s` |
+| Quick Open / Search in Project / Go to Symbol | `C-p` / palette / `C-S-o` | Emacs' `C-x p f` / `C-x p g` / `M-g i` | `SPC f p` / `SPC s p` / `SPC s s` |
 | Org Capture / Agenda | `C-c c` / `C-c a` | `C-c c` / `C-c a` | `SPC n c` / `SPC n a` |
 
 The Explorer's and the Buffers panel's own keys (rows, expand, open, close) are in [workbench.md](workbench.md).
@@ -65,9 +67,9 @@ everyday keys of the VS Code profile on a Mac, as in VS Code:
 | Command | Mac |
 |---|---|
 | Command Palette / Quick Open (files) | ⌘⇧P (or F1) / ⌘P |
-| Search in Project / Replace in Project / Find in File | ⌘⇧F / ⌘⇧H / ⌘F |
+| View: Search / Replace in Files / Find in File | ⌘⇧F / ⌘⇧H / ⌘F |
 | Save / Save All / New Untitled / Close Tab / Reopen Closed Tab | ⌘S / ⌥⌘S / ⌘N / ⌘W / ⌘⇧T |
-| Toggle Sidebar / Explorer / Toggle Panel / New Terminal | ⌘B / ⌘⇧E / ⌃\` / ⌃⇧\` |
+| Toggle Sidebar / View: Explorer / Toggle Panel / New Terminal | ⌘B / ⌘⇧E / ⌃\` / ⌃⇧\` |
 | Source Control | ⌃⇧G |
 | Go to Definition / References / Rename Symbol / Quick Fix | F12 / ⇧F12 / F2 / ⌘. |
 | Toggle Comment / Select Line / Delete Line / Undo / Redo | ⌘/ / ⌘L / ⌘⇧K / ⌘Z / ⌘⇧Z |
