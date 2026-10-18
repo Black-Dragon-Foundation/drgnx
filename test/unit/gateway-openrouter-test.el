@@ -233,6 +233,37 @@ answered is in `drgnx-gateway-openrouter-test--answer')."
           (should (seq-find (lambda (e) (string-prefix-p "ANTHROPIC_BASE_URL=" e)) (drgnx-agents--env s)))
           (should (eq (drgnx-agent-session-via s) 'direct)))))))
 
+(ert-deftest drgnx-gateway-openrouter/gateway-off-with-restrictions-refuses ()
+  ;; restrictions are never dropped silently: with the gateway turned off, an OpenRouter agent with restrictions does
+  ;; not start either, and says how to fix it; without restrictions, or without an OpenRouter step, it goes direct
+  (drgnx-gateway-openrouter-test--with
+    (let ((drgnx-agents-profiles nil) (drgnx-agents--sessions nil) (drgnx-agents-use-gateway nil) (started nil)
+          (hub-asked nil))
+      (drgnx-agents-set-setting :openrouter drgnx-gateway-openrouter-test--restrictions)
+      (cl-letf (((symbol-function 'drgnx-hub-ensure) (lambda () (setq hub-asked t)))
+                ((symbol-function 'drgnx-acp-start) (lambda (&rest args) (push args started) nil)))
+        (let* ((s (drgnx-gateway-openrouter-test--session))
+               (err (should-error (drgnx-agents--env s) :type 'user-error)))
+          (should (string-search "OpenRouter restrictions" (error-message-string err)))
+          (should (string-search "turned off" (error-message-string err)))
+          (should (string-search "drgnx-agents-use-gateway" (error-message-string err)))
+          (should (string-search "remove :openrouter" (error-message-string err))))
+        (let ((s (drgnx-agents-start "claude (OpenRouter)" temporary-file-directory)))
+          (should-not started)
+          (should (eq (drgnx-agent-session-status s) 'exited))
+          (should (seq-find (lambda (e) (string-search "turned off" (or (plist-get e :text) "")))
+                            (drgnx-agent-session-entries s))))
+        ;; a value that does not read refuses too
+        (drgnx-agents-set-setting :openrouter '(:zdr yes))
+        (should-error (drgnx-agents--env (drgnx-gateway-openrouter-test--session)) :type 'user-error)
+        ;; no OpenRouter step: not held up
+        (should (drgnx-agents--env (drgnx-gateway-openrouter-test--session "claude (Ollama)")))
+        ;; no restrictions: direct, as before
+        (drgnx-agents-set-setting :openrouter nil)
+        (should (seq-find (lambda (e) (string-prefix-p "ANTHROPIC_BASE_URL=" e))
+                          (drgnx-agents--env (drgnx-gateway-openrouter-test--session))))
+        (should-not hub-asked)))))
+
 (ert-deftest drgnx-gateway-openrouter/restrictions-that-cannot-be-read-refuse-the-start ()
   ;; a typo never turns a restriction off: an agents.eld that does not read, or an :openrouter value that is not one,
   ;; refuses the OpenRouter agent's start, naming the problem; the hub refuses such a registration itself
@@ -370,11 +401,18 @@ answered is in `drgnx-gateway-openrouter-test--answer')."
     (let ((process-environment (cons (concat "DRGNX_CONFIG_DIR=" home "cfg") process-environment))
           (drgnx-agents-profiles nil))
       (drgnx-agents-set-setting :openrouter drgnx-gateway-openrouter-test--restrictions)
-      ;; no gateway: the page says the setting does not apply, and where the account's settings are
+      ;; gateway off with restrictions: the page says the agents do not start, and how to fix it
+      (let ((text (drgnx-gateway-openrouter-test--page-text nil root)))
+        (should (string-search "OpenRouter restrictions: only anthropic, google-vertex" text))
+        (should (string-search "the gateway is turned off, so OpenRouter agents do not start" text))
+        (should (string-search "turn it on (drgnx-agents-use-gateway) or remove the restrictions" text))
+        (should (string-search "[Change…]" text)))
+      ;; gateway off without restrictions: the setting does not apply, and where the account's settings are
+      (drgnx-agents-set-setting :openrouter nil)
       (let ((text (drgnx-gateway-openrouter-test--page-text nil root)))
         (should (string-search "applies through drgnx's gateway only; without it, your OpenRouter account settings apply" text))
-        (should (string-search "https://openrouter.ai/settings/privacy" text))
-        (should-not (string-search "google-vertex" text)))
+        (should (string-search "https://openrouter.ai/settings/privacy" text)))
+      (drgnx-agents-set-setting :openrouter drgnx-gateway-openrouter-test--restrictions)
       ;; through the gateway: the restrictions are shown, with a Change button
       (let ((text (drgnx-gateway-openrouter-test--page-text t root)))
         (should (string-search "OpenRouter restrictions" text))

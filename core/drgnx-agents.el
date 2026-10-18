@@ -361,6 +361,14 @@ not read, no hub, or a hub that did not keep them all is a `user-error' — neve
                     (drgnx-agent-session-name s)))
       r)))
 
+(defun drgnx-agents--refuse-direct-restrictions (s kind &optional model)
+  "With the gateway turned off, S's agent (profile KIND, MODEL) would reach OpenRouter directly: a `user-error' when
+its chain has an OpenRouter step and restrictions are set (or do not read) — they are never dropped silently."
+  (when (and (memq kind drgnx-ai-gateway-kinds) (assq 'openrouter (drgnx-ai-agent-gateway-chain kind model))
+             (drgnx-agents-openrouter-restrictions))
+    (user-error "OpenRouter restrictions are set in agents.eld and apply through drgnx's gateway only, which is turned off (drgnx-agents-use-gateway): %s is not started without them; turn the gateway on, or remove :openrouter from agents.eld"
+                (drgnx-agent-session-name s))))
+
 (declare-function drgnx-hub-call "drgnx-hub")
 
 (defun drgnx-agents--release-gateway (s)
@@ -422,6 +430,7 @@ can carry it, else the provider's (keys resolved now, never kept) — DRGNX_TASK
                        (kind (plist-get profile :ai)))
              (require 'drgnx-ai)
              (drgnx-ai-check-agent-model kind (plist-get profile :model))   ; before a gateway token is made
+             (unless drgnx-agents-use-gateway (drgnx-agents--refuse-direct-restrictions s kind (plist-get profile :model)))
              (drgnx-ai-agent-env (list :kind kind :model (plist-get profile :model) :small-model (plist-get profile :small-model))
                                  (not (drgnx-agents--in-hub-p))
                                  (and drgnx-agents-use-gateway (memq kind drgnx-ai-gateway-kinds)

@@ -310,8 +310,10 @@ socket refuses), an agent with an OpenRouter route does not start: it would reac
 session says why; start the hub, or remove `:openrouter` from `agents.eld` to go direct. The hub's answer to a
 registration lists the restrictions it kept. A hub started before drgnx had restrictions keeps none, so the agent does
 not start and the session says to restart the hub (`drgnx hub stop`, then start an agent). Without restrictions, an
-agent without a hub goes direct as before. With `drgnx-agents-use-gateway` off, a route is bound by your OpenRouter
-account settings alone ([openrouter.ai/settings/privacy](https://openrouter.ai/settings/privacy)). A model
+agent without a hub goes direct as before. With `drgnx-agents-use-gateway` off, an agent with an OpenRouter route and
+restrictions does not start either (restrictions are never dropped silently); its session says to turn the gateway on
+or remove `:openrouter` from `agents.eld`. Without restrictions, such a route is bound by your OpenRouter account
+settings alone ([openrouter.ai/settings/privacy](https://openrouter.ai/settings/privacy)). A model
 that no allowed provider serves fails with OpenRouter's own error, which the agent shows.
 Set it from Agent Settings (`r`, **OpenRouter Restrictions…**, [agent-settings.md](agent-settings.md#routes)); comments
 and the other settings in `agents.eld` stay.

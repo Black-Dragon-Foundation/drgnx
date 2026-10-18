@@ -320,26 +320,34 @@
   (and (plist-get route :kind) drgnx-agents-use-gateway (memq (plist-get route :kind) drgnx-ai-gateway-kinds) t))
 
 (defun drgnx-agent-settings--insert-openrouter (route)
-  "Under an OpenRouter ROUTE: the restrictions with a Change button, or why they do not apply to it."
-  (if (drgnx-agent-settings--via-gateway-p route)
-      (progn
-        (insert (condition-case err
-                    (propertize (concat "      OpenRouter restrictions: "
-                                        (drgnx-agent-settings--restrictions-text (drgnx-agents-openrouter-restrictions)) "  ")
-                                'face 'drgnx-agent-settings-dim)
-                  (user-error
-                   (propertize (format "      OpenRouter restrictions: unreadable (%s); OpenRouter agents do not start until they are fixed  "
-                                       (error-message-string err))
-                               'face 'drgnx-agent-settings-problem))))
-        (drgnx-agent-settings--button "[Change…]" #'drgnx-agent-settings-openrouter
-                                      "Which providers OpenRouter may use, and whether they may keep data")
-        (insert "\n"))
-    (insert (propertize "      This route is direct: the restriction setting applies through drgnx's gateway only; without it, your OpenRouter account settings apply: "
-                        'face 'drgnx-agent-settings-dim))
-    (drgnx-agent-settings--action-button drgnx-agent-settings--openrouter-privacy-url
-                                         (lambda () (browse-url drgnx-agent-settings--openrouter-privacy-url))
-                                         "Open OpenRouter's privacy settings in your browser")
-    (insert "\n")))
+  "Under an OpenRouter ROUTE: the restrictions with a Change button, or why they do not apply to it.  A drgnx agent
+route with the gateway turned off and restrictions set says that its agents do not start, and how to fix it."
+  (let* ((via (drgnx-agent-settings--via-gateway-p route))
+         (off (and (not via) (memq (plist-get route :kind) drgnx-ai-gateway-kinds)))
+         (restrictions (and (or via off)
+                            (condition-case err (list 'ok (drgnx-agents-openrouter-restrictions))
+                              (user-error (list 'unreadable (error-message-string err)))))))
+    (if (not (or via (and off (cadr restrictions))))
+        (progn
+          (insert (propertize "      This route is direct: the restriction setting applies through drgnx's gateway only; without it, your OpenRouter account settings apply: "
+                              'face 'drgnx-agent-settings-dim))
+          (drgnx-agent-settings--action-button drgnx-agent-settings--openrouter-privacy-url
+                                               (lambda () (browse-url drgnx-agent-settings--openrouter-privacy-url))
+                                               "Open OpenRouter's privacy settings in your browser")
+          (insert "\n"))
+      (insert (if (eq (car restrictions) 'unreadable)
+                  (propertize (format "      OpenRouter restrictions: unreadable (%s); OpenRouter agents do not start until they are fixed  "
+                                      (cadr restrictions))
+                              'face 'drgnx-agent-settings-problem)
+                (propertize (concat "      OpenRouter restrictions: "
+                                    (drgnx-agent-settings--restrictions-text (cadr restrictions)) "  ")
+                            'face 'drgnx-agent-settings-dim)))
+      (when (and off (eq (car restrictions) 'ok))
+        (insert (propertize "(the gateway is turned off, so OpenRouter agents do not start: turn it on (drgnx-agents-use-gateway) or remove the restrictions)  "
+                            'face 'drgnx-agent-settings-problem)))
+      (drgnx-agent-settings--button "[Change…]" #'drgnx-agent-settings-openrouter
+                                    "Which providers OpenRouter may use, and whether they may keep data")
+      (insert "\n"))))
 
 (defun drgnx-agent-settings--insert-routes ()
   "One line per route: name, URL and model, where the key is, billing; notes about overrides."
