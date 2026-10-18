@@ -56,6 +56,8 @@
                        (require 'drgnx-wb)
                        (drgnx-state-mode 1)    ; the state store first: the bus follows its window events
                        (drgnx-signal-mode 1)
+                       ;; A size you set by hand is intent; the docks keep it when the frame resizes.
+                       (drgnx-state-subscribe 'pane-resized #'drgnx-state-intent--user-resized)
                        ;; Where buffers go.
                        (require 'drgnx-rules)
                        (drgnx-rules-mode 1)
