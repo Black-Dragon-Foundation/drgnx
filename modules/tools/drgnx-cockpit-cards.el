@@ -34,6 +34,7 @@
 (defvar drgnx-cockpit-graph-current-filter)
 (defvar drgnx-hub-event-functions)
 (defvar drgnx-hub-disconnect-functions)
+(defvar drgnx-persist-restoring)
 
 (defconst drgnx-cockpit-cards-buffer-name "*Needs You*")
 (defconst drgnx-cockpit-decisions-buffer-name "*Decisions*")
@@ -435,12 +436,14 @@ follow."
 
 (defun drgnx-cockpit-show-job (id)
   "Show the Work cockpit filtered to job ID: the Work layout when there is one, else the Work graph, and what needs
-you, focused.  No frame is made: nil."
+you, focused.  No frame is made: nil.  While a saved workbench is restored (`drgnx-persist-restoring': a job window
+saved before M12f) only the filter is set — the restored panes, sizes and focus stay."
   (drgnx-cockpit-cards--set-job id)
-  (if (and (fboundp 'drgnx-layouts-names) (memq 'work (drgnx-layouts-names)))
-      (drgnx-layouts-apply 'work)
-    (when (drgnx-pane-kind 'work-graph) (drgnx-pane-show 'work-graph)))
-  (drgnx-cockpit-cards--focus)
+  (unless (bound-and-true-p drgnx-persist-restoring)
+    (if (and (fboundp 'drgnx-layouts-names) (memq 'work (drgnx-layouts-names)))
+        (drgnx-layouts-apply 'work)
+      (when (drgnx-pane-kind 'work-graph) (drgnx-pane-show 'work-graph)))
+    (drgnx-cockpit-cards--focus))
   nil)
 
 (defun drgnx-cockpit-show-jobs ()

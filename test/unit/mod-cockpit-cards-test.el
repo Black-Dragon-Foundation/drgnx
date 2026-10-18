@@ -282,9 +282,14 @@ after — they owned their hooks and timers."
     (let* ((dir (make-temp-file "drgnx-cards-persist" t))
            (drgnx-persist-file (expand-file-name "workbench.eld" dir))
            (drgnx-persist-state-functions nil) (drgnx-persist-after-restore-functions nil)
-           (pos (frame-position)) (placed nil) (restored 0))
+           (pos (frame-position)) (placed nil) (restored 0)
+           (windows nil) (selected nil)
+           (edges (lambda () (mapcar (lambda (w) (cons w (window-edges w nil nil t))) (window-list nil 'never)))))
       (unwind-protect
           (progn
+            ;; the main frame as the restore leaves it: two windows, the editor on the right selected
+            (select-window (split-window nil nil 'right))
+            (setq windows (funcall edges) selected (selected-window))
             ;; format 2, as M9b.4's job window saved itself: a frame of its own that rebuilds itself
             (with-temp-file drgnx-persist-file
               (prin1 '(:version 2 :frames ((:role main :left (:shown nil) :extra (:layout nil))
@@ -299,7 +304,11 @@ after — they owned their hooks and timers."
               (should-not placed)                                        ; no frame to put anywhere
               (should (equal (frame-position) pos))
               (should (equal drgnx-cockpit-graph-current-filter '(:job "j1")))
-              (should (get-buffer-window (drgnx-cockpit-cards-buffer)))
+              ;; only the filter: the restored windows stay as they are, the editor keeps the focus (Review Focus 2)
+              (should (equal (funcall edges) windows))
+              (should (eq (selected-window) selected))
+              (should-not (get-buffer-window drgnx-cockpit-cards-buffer-name))
+              (should-not (bound-and-true-p drgnx-persist-restoring))
               ;; the restored workbench had no filter of its own: the job's stays
               (drgnx-cockpit-cards--adopt (selected-frame))
               (should (equal drgnx-cockpit-graph-current-filter '(:job "j1")))))

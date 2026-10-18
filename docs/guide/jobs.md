@@ -26,7 +26,8 @@ Jobs**, **Stop Plan Job…** — in the palette (no keys by default; module `too
 **Show Job in Work…** (`job-show`) filters the [Work cockpit](cockpit.md) to a job: the Work graph shows that job's
 tasks, agents and reviews (with their plan and spec), and two panes of the right dock, stacked with What happened,
 show the rest. No window of its own opens. Until M12f a job had a frame of its own, the job window; a workbench saved
-with one comes back as the cockpit filtered to that job, in the window you start in.
+with one comes back as the cockpit's filter on that job: the restored workbench keeps its panes, sizes and focus,
+and no frame opens.
 
 - **What needs you** (pane `needs-you`; **Show What Needs You**, `cockpit-needs-you`): the cards, each with its
   actions as buttons (a clash shows both sides and the reviewer's recommendation; **Accept the reviewer** is there

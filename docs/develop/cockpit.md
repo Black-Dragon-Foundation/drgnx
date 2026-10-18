@@ -499,8 +499,10 @@ side is in [jobs.md](../guide/jobs.md#a-job-in-the-work-cockpit).
 - **The filter** is the graph's, `drgnx-cockpit-graph-current-filter`, with a `:job` key.
   - `drgnx-cockpit-show-job ID` sets it to `(:job ID)`. It applies the `work` layout when one exists (C10), else it
     shows the `work-graph` pane, then focuses `needs-you` and returns nil. `drgnx-job-ui-show` calls it, so a
-    format-2 workbench whose custom frame state is `(drgnx-job-ui-show ID)` restores into the main frame:
-    `drgnx-persist-restore` places no frame, because the call returns none.
+    format-2 workbench whose custom frame state is `(drgnx-job-ui-show ID)` restores with no frame:
+    `drgnx-persist-restore` places none, because the call returns none. It binds `drgnx-persist-restoring` while it
+    runs, and `drgnx-cockpit-show-job` then only sets the filter: no layout, no pane shown, no focus, so the restored
+    main frame keeps its windows (Review Focus 2).
   - `drgnx-cockpit-show-jobs` (the status bar's `jobs` click) drops `:job` and keeps the other keys.
   - `drgnx-cockpit-graph-filter` keeps `:job`.
   - The graph narrows through `drgnx-cockpit-filter-functions` (`drgnx-cockpit-cards--job-node-p`): a node of
