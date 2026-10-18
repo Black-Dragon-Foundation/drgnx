@@ -100,19 +100,17 @@ registered as test commands of scope `window'.")
       (should (string-search "[claim, in drgnx-explorer-mode-map]" (drgnx-keys-conflict-text c))))))
 
 (ert-deftest drgnx-keys-claims/c-w-in-panels-over-close-tab ()
-  ;; A window command on the C-w leader (Vim's C-w h), a window-scope command: in the mixed stack an extra key.
-  (let ((drgnx-keys-claims-test--more '((vim (test-left "C-w h")) (vscode (test-left :none "test"))
-                                        (emacs (test-left :none "test")))))
-    (drgnx-keys-claims-test--with r drgnx-keys-claims-test--mixed
-      (should (member '("C-w" . global-map) (drgnx-keys-claims-test--binds r 'close-tab)))
-      (should (equal (drgnx-keys-claims-test--binds r 'test-left) '(("C-w h" . drgnx-modal-leader-map))))
-      (let* ((cs (drgnx-keys-claims-test--conflicts r "C-w" 'global-map)) (c (car cs)))
-        (should (= (length cs) 1))
-        (should (eq (plist-get c :kind) 'claim))
-        (should (equal (plist-get c :states) '(normal visual motion panels)))
-        (should (eq (plist-get (plist-get c :winner) :layer) 'vim))
-        (should (equal (mapcar (lambda (p) (plist-get p :id)) (plist-get c :losers)) '(close-tab)))
-        (should (string-suffix-p "; Close Tab in insert state" (drgnx-keys-conflict-text c)))))))
+  ;; A window command on the C-w leader (Vim's C-w h, Focus Left), a window-scope command: in the mixed stack an extra key.
+  (drgnx-keys-claims-test--with r drgnx-keys-claims-test--mixed
+    (should (member '("C-w" . global-map) (drgnx-keys-claims-test--binds r 'close-tab)))
+    (should (equal (drgnx-keys-claims-test--binds r 'focus-left) '(("C-w h" . drgnx-modal-leader-map))))
+    (let* ((cs (drgnx-keys-claims-test--conflicts r "C-w" 'global-map)) (c (car cs)))
+      (should (= (length cs) 1))
+      (should (eq (plist-get c :kind) 'claim))
+      (should (equal (plist-get c :states) '(normal visual motion panels)))
+      (should (eq (plist-get (plist-get c :winner) :layer) 'vim))
+      (should (equal (mapcar (lambda (p) (plist-get p :id)) (plist-get c :losers)) '(close-tab)))
+      (should (string-suffix-p "; Close Tab in insert state" (drgnx-keys-conflict-text c))))))
 
 (ert-deftest drgnx-keys-claims/no-modal-layer-no-state-claims ()
   (dolist (layers '(((vscode app editing window)) ((emacs app editing window)) ((emacs editing) (vscode app window))))

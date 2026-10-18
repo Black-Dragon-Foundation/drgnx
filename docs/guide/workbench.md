@@ -187,7 +187,9 @@ Down (``C-\`` / ``C-k C-\`` · Emacs' own `C-x 3` / `C-x 2` · `SPC w v` / `SPC 
 Close Editor Group (palette · `C-x 0` · `SPC w c`; the last group stays), Close All Editors in Group (`C-k w`; the
 palette in the Emacs and Vim profiles; its tabs go, the files stay open; the group closes, or, the last one, shows
 `*scratch*`), Focus Group 1–3 (`C-1`–`C-3` · `C-x o` · `SPC 1`–`SPC 3`; one past the last makes a group to the right),
-Move Editor into Next Group (`C-M-<right>` · palette · `SPC w m`; a group left without tabs closes, as in VS Code).
+Move Editor into Next Group (`C-M-<right>` · palette · `SPC w m`; a group left without tabs closes, as in VS Code),
+Focus Left / Right / Above / Below (palette · palette · `C-w h` / `l` / `k` / `j`: the group or dock next to this window
+in that direction, docks included; at an edge nothing happens).
 Groups are numbered left to right, top to bottom. Diffs and logs (`diff-mode`, `log-view-mode`, magit's diff and log)
 open in the **other group** — the one you used last besides this one — never in a new split.
 

@@ -6,7 +6,8 @@
 ;; What you do with a row: in the Buffers panel save it, copy its path, reveal it in the Explorer;
 ;; in the Explorer reveal the file in the Buffers panel, open the folder in dired, open the file in
 ;; the other editor group.  Next Panel Tab cycles the panel's tabs; Menu for This Mode pops up the
-;; major mode's menu at point (no mouse needed).  See docs/guide/workbench.md.
+;; major mode's menu at point (no mouse needed).  Focus Left/Right/Above/Below move between editor groups
+;; and docks.  See docs/guide/workbench.md.
 
 ;;; Code:
 (require 'drgnx-explorer)
@@ -58,6 +59,21 @@
        (let* ((tabs (mapcar #'car (plist-get (alist-get 'panel drgnx-wb--areas) :tabs)))
               (i (or (seq-position tabs (drgnx-wb-area-tab 'panel)) -1)))
          (drgnx-wb-area-show 'panel (nth (mod (1+ i) (length tabs)) tabs))))
+
+;;;; Focus by direction
+
+(defun drgnx-wb-focus-direction (dir)
+  "Select the window next to this one in DIR (`left', `right', `up' or `down'), among the editor groups and
+the docks (their `no-other-window' does not hide them here).  At an edge nothing changes."
+  (let ((w (window-in-direction (or (alist-get dir '((left . left) (right . right) (up . above) (down . below)))
+                                    (error "No such direction: %S" dir))
+                                nil t)))
+    (when w (select-window w))))
+
+(defun drgnx-wb-focus-left () "Move focus to the group or dock on the left." (interactive) (drgnx-wb-focus-direction 'left))
+(defun drgnx-wb-focus-right () "Move focus to the group or dock on the right." (interactive) (drgnx-wb-focus-direction 'right))
+(defun drgnx-wb-focus-up () "Move focus to the group or dock above." (interactive) (drgnx-wb-focus-direction 'up))
+(defun drgnx-wb-focus-down () "Move focus to the group or dock below." (interactive) (drgnx-wb-focus-direction 'down))
 
 (defun drgnx-actions--mode-menu ()
   "The major mode's menu (what a right-click on the mode line shows)."

@@ -857,7 +857,8 @@ The commands of modules that need no installed package are in it, the later stag
                               shortcuts-record-filter shortcuts-conflicts shortcuts-no-key shortcuts-changed
                               shortcuts-undo shortcuts-reset shortcuts-reset-all shortcuts-profile
                               quit preferences edit-line-start edit-line-end edit-buffer-start edit-buffer-end edit-word-left
-                              edit-word-right edit-delete-word-back edit-delete-line-back))
+                              edit-word-right edit-delete-word-back edit-delete-line-back
+                              code-next-problem code-previous-problem))   ; M12d: F8 / S-F8
          (drgnx-keys-test--later-stages t)
          (r (drgnx-keys-test--resolve '((vscode app editing window)) :platform 'linux)))
     (should (equal (mapcar (lambda (b) (list (plist-get b :id) (plist-get b :key) (plist-get b :map)))

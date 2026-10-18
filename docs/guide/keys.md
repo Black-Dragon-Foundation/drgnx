@@ -44,7 +44,7 @@ The onboarding flow will ask which one you want (VS Code preselected).
 | View: Explorer / View: Search | `C-S-e` / `C-S-f` | palette / palette | palette / `SPC /` |
 | Replace in Files | `C-S-h` | `C-c s r` | `SPC s r` |
 | Toggle Panel / Right Dock | ``C-` ``, `C-j` / `C-M-b` | — / — | `SPC j` / `SPC R` |
-| Close Tab / Next / Previous | `C-<f4>` / `C-<next>` / `C-<prior>` | — / Emacs' `C-x <right>` / `C-x <left>` | `SPC b d` / `SPC b n` / `SPC b p` |
+| Close Tab / Next / Previous | `C-<f4>` / `C-<next>` / `C-<prior>` | — / Emacs' `C-x <right>` / `C-x <left>` | `SPC b d` / `SPC b n` or `g t` / `SPC b p` or `g T` |
 | Split Editor Right / Down | ``C-\`` / ``C-k C-\`` | Emacs' `C-x 3` / `C-x 2` | `SPC w v` / `SPC w s` |
 | Focus Group 1–3 / Move Editor to Next Group | `C-1`–`C-3` / `C-M-<right>` | `C-x o` / — | `SPC 1`–`SPC 3` / `SPC w m` |
 | Open Editor in New Window | `C-k o` | Emacs' `C-x 5 2` | `SPC w o` |
@@ -53,7 +53,9 @@ The onboarding flow will ask which one you want (VS Code preselected).
 | Zen Mode | `C-k z` | — | `SPC u z` |
 | Next Layout / Layout… | `C-k C-l` / — | — / — | `SPC l n` / `SPC l l` |
 | Go to Line | Emacs' `M-g g` | `M-g g` | `SPC g l` |
-| Go to Definition / References / Rename Symbol / Hover | `F12` / `S-F12` / `F2` / `C-S-SPC` | Emacs' `M-.` / `M-?` / palette / `C-h .` | `SPC c d` / `SPC c r` / `SPC c R` / `SPC c h` |
+| Go to Definition / References / Rename Symbol / Hover | `F12` / `S-F12` / `F2` / `C-S-SPC` | Emacs' `M-.` / `M-?` / palette / `C-h .` | `SPC c d` or `g d` / `SPC c r` or `g r` / `SPC c R` / `SPC c h` or `K` |
+| Next / Previous Problem | `F8` / `S-F8` | palette / palette | `] d` / `[ d` |
+| Focus Left / Right / Above / Below | palette | palette | `C-w h` / `C-w l` / `C-w k` / `C-w j` |
 | Source Control / Blame | `C-S-g` / — | Emacs' `C-x v d` / `C-x v g` | `SPC g s` / `SPC g b` |
 | New Terminal | ``C-S-` `` | — | `SPC t n` |
 | Quick Open / Search in Project / Go to Symbol | `C-p` / palette / `C-S-o` | Emacs' `C-x p f` / `C-x p g` / `M-g i` | `SPC f p` / `SPC s p` / `SPC s s` |
@@ -116,14 +118,19 @@ VS Code or Emacs keys). It runs [evil](https://github.com/emacs-evil/evil) as th
 The Vim profile's commands are on the leader keys `SPC …` (and `C-w …` for windows). They live in drgnx's own
 `drgnx-modal-leader-map`, not in evil's maps, so they are known to the key sheet, the palette and the conflict report
 before evil is installed, and the engine only has to plug the map into its states. `C-w` is a leader prefix like `SPC`:
-a `keys.eld` key starting with `C-w ` goes in the leader map, next to evil's own `C-w` window keys (`C-w v`, `C-w s` …,
-which stay evil's); the shipped profile has no `C-w` rows yet, so the table below has none. The palette is reachable
-in every state and panel: `SPC SPC` from normal, visual and motion state and panels, `C-S-p` and `F1` (Cmd+Shift+P and
-`F1` on a Mac) everywhere, so insert state is never without a way in. As in the VS Code profile, that `F1` replaces
-Emacs' `F1` help prefix (`C-h` still works). The leader keys of the shipped profile:
+a `keys.eld` key starting with `C-w ` goes in the leader map, next to evil's own `C-w` window keys (`C-w v`, `C-w s`,
+`C-w c` run drgnx's commands, see [Ex commands and Vim habits](#ex-commands-and-vim-habits); the other `C-w` keys stay
+evil's). The palette is reachable in every state and panel: `SPC SPC` from normal, visual and motion state and
+panels, `C-S-p` and `F1` (Cmd+Shift+P and `F1` on a Mac) everywhere, so insert state is never without a way in. As in
+the VS Code profile, that `F1` replaces Emacs' `F1` help prefix (`C-h` still works). The leader keys of the shipped
+profile:
 
 | Key | Command |
 |---|---|
+| `C-w h` | Focus Left |
+| `C-w j` | Focus Below |
+| `C-w k` | Focus Above |
+| `C-w l` | Focus Right |
 | `SPC ,` | Focus Buffers |
 | `SPC /` | View: Search |
 | `SPC 1` | Focus First Editor Group |
@@ -224,6 +231,34 @@ Leader keys cannot clash with VS Code's because they exist only in the leader ma
 **Your own leader keys.** A `keys.eld` key that starts with the leader (`(save-file "SPC x")`) goes in the leader map
 in a Vim or mixed stack, never the global keymap (else `SPC` would stop typing a space in insert state); in a VS Code or
 Emacs stack it is an ordinary global key. Any other `keys.eld` key keeps the keymap it had.
+
+### Ex commands and Vim habits
+
+While Vim editing runs, the ex commands and Vim's window keys that touch files, windows and groups run drgnx's
+commands, so the workbench keeps its editor groups, tabs and layout (the key tip shows the command's own key):
+
+| Vim | Runs |
+|---|---|
+| `:w` / `:w FILE` | Save / Save As… `FILE` (with a range, evil's own `:w`) |
+| `:wa` | Save All |
+| `:e FILE` | Open File… `FILE` (`:e` alone re-reads the file, evil's own) |
+| `:sp`, `C-w s` | Split Editor Down |
+| `:vs`, `C-w v` | Split Editor Right |
+| `C-w c`, `:clo` | Close Editor Group |
+| `:q`, `ZQ` | Close Tab when the group has other tabs, else Close Editor Group when there is another group, else Close Window |
+| `:wq`, `:x`, `ZZ` | Save when the buffer changed, then what `:q` does |
+| `:qa` | Close Window |
+| `C-w h` `j` `k` `l` | Focus Left / Below / Above / Right (editor groups and the sidebar and panel docks) |
+| `g d`, `g r`, `K` | Go to Definition, Find References, Show Hover |
+| `g t`, `g T` | Next Tab, Previous Tab |
+| `] d`, `[ d` | Next Problem, Previous Problem (the next error or warning in this file) |
+
+`:q` never quits drgnx's Emacs by itself. In the last tab of the last group it is Close Window, which closes the
+window and keeps a background drgnx running (`drgnx-keep-running`), and otherwise asks, after offering to save, before
+quitting. The ex commands are the data `drgnx-evil-ex-routes`; evil's `:q`, `:wq`, `:x`, `:qa`, `C-w s/v/c` are advised
+while the engine runs and are evil's own again when Vim editing stops. Vim's other ex commands are untouched. In a
+VS Code or Emacs stack Focus Left/Right/Above/Below and the problem commands have no keys (VS Code's `F8` /
+`Shift+F8` go to the next / previous problem); they are in the palette.
 
 ## On a Mac
 

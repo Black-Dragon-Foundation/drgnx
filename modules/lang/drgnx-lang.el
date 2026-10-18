@@ -106,6 +106,8 @@ is set non-empty (headless test sessions)."
                                         (code-hover "Show Hover" drgnx-lang-hover "The symbol's documentation, in the panel")
                                         (code-quick-fix "Quick Fix" drgnx-lang-quick-fix "The language server's fixes and actions here")
                                         (code-problems "Problems" flymake-show-project-diagnostics "Errors and warnings of the project (in the panel)")
+                                        (code-next-problem "Next Problem" flymake-goto-next-error "Jump to the next error or warning in this file")
+                                        (code-previous-problem "Previous Problem" flymake-goto-prev-error "Jump to the previous error or warning in this file")
                                         (code-format "Format Document" drgnx-lang-format "Format with the language server (else re-indent)")))
                          (drgnx-command-define id :category "Code" :title title :command fn :scope 'editing :doc doc))))
 
