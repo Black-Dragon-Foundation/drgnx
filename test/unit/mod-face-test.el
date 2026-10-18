@@ -244,7 +244,7 @@ setup changes neither the dividers nor the faces of the test process."
       (should (equal (drgnx-face-glyph 'close tty) "✕")))))
 
 (ert-deftest drgnx-face/every-glyph-has-both-forms ()
-  (dolist (n '(handle close branch warning ok busy waiting paused ahead behind dot circle))
+  (dolist (n '(handle close branch warning ok busy waiting paused ahead behind dot circle sep))
     (let ((g (alist-get n drgnx-face-glyphs)))
       (should (and (stringp (car g)) (stringp (cdr g))))
       (should (string-match-p "\\`[[:ascii:]]+\\'" (cdr g)))))

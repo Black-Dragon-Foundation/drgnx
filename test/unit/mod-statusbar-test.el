@@ -119,7 +119,7 @@ Segments a, b, c are defined: their text is A, B, C."
     (dotimes (_ 100) (drgnx-statusbar-render 60))
     (should (= (length drgnx-statusbar--errors) 1))
     (should (eq (car (car drgnx-statusbar--errors)) 'b))
-    (should (string-match-p "boom" (cdr (car drgnx-statusbar--errors))))))
+    (should (string-match-p "boom" (cadr (car drgnx-statusbar--errors))))))
 
 (ert-deftest drgnx-statusbar/click-runs-the-segments-command ()
   (drgnx-statusbar-test--with
@@ -286,8 +286,9 @@ Segments a, b, c are defined: their text is A, B, C."
           (should (string-match-p "A · B" (drgnx-statusbar-mode-line))))))))
 
 (ert-deftest drgnx-statusbar/the-bar-asks-for-a-redraw-when-point-moves-or-the-text-changes ()
-  (let ((calls 0) (drgnx-statusbar--last (make-vector 4 nil)))
-    (cl-letf (((symbol-function 'force-mode-line-update) (lambda (&optional all) (should-not all) (cl-incf calls))))
+  (let ((calls 0) (posted nil) (drgnx-statusbar--last (make-vector 4 nil)))
+    (cl-letf (((symbol-function 'force-mode-line-update) (lambda (&optional all) (should-not all) (cl-incf calls)))
+              ((symbol-function 'drgnx-signal-post) (lambda (e) (push e posted))))
       (with-temp-buffer
         (insert "one\ntwo\nthree\n")
         (goto-char (point-min))
@@ -305,20 +306,34 @@ Segments a, b, c are defined: their text is A, B, C."
         (insert "x")                                   ; the text changed
         (drgnx-statusbar--post-command)
         (should (= calls 3))
+        (setq posted nil)
         (let ((other (split-window-right)))            ; another window selected
           (unwind-protect
               (with-selected-window other
                 (drgnx-statusbar--post-command)
-                (should (= calls 4)))
+                (should (= calls 4))
+                ;; the bus is asked to say when the most recently used editor window is settled
+                (should (equal posted '(statusbar-window-changed))))
             (delete-window other)))))
-    ;; the hook is there while the mode is on, and gone when it is off
+    ;; the hook and the bus subscriptions are there while the mode is on, and gone when it is off
     (cl-letf (((symbol-function 'drgnx-chrome-apply) #'ignore) ((symbol-function 'force-mode-line-update) #'ignore))
-      (unwind-protect
-          (progn (drgnx-statusbar-mode 1)
-                 (should (memq #'drgnx-statusbar--post-command post-command-hook))
-                 (drgnx-statusbar-mode -1)
-                 (should-not (memq #'drgnx-statusbar--post-command post-command-hook)))
-        (drgnx-statusbar-mode -1)))))
+      (let ((drgnx-signal--subscribers nil))
+        (unwind-protect
+            (progn (drgnx-statusbar-mode 1)
+                   (should (memq #'drgnx-statusbar--post-command post-command-hook))
+                   (should (memq #'drgnx-statusbar--editor-changed (alist-get 'editor-changed drgnx-signal--subscribers)))
+                   (should (memq #'drgnx-statusbar--editor-changed
+                                 (alist-get 'statusbar-window-changed drgnx-signal--subscribers)))
+                   (drgnx-statusbar-mode -1)
+                   (should-not (memq #'drgnx-statusbar--post-command post-command-hook))
+                   (should-not (alist-get 'editor-changed drgnx-signal--subscribers))
+                   (should-not (alist-get 'statusbar-window-changed drgnx-signal--subscribers)))
+          (drgnx-statusbar-mode -1))))
+    ;; the bus edge redraws every bar
+    (let (all)
+      (cl-letf (((symbol-function 'force-mode-line-update) (lambda (&optional a) (setq all a))))
+        (drgnx-statusbar--editor-changed (current-buffer))
+        (should all)))))
 
 (ert-deftest drgnx-statusbar/the-line-number-follows-point-and-edits ()
   (with-temp-buffer
@@ -399,16 +414,35 @@ Segments a, b, c are defined: their text is A, B, C."
     (let ((g (alist-get 'sep drgnx-face-glyphs)))
       (should (equal (cons " · " " | ") g)))))
 
-(ert-deftest drgnx-statusbar/a-failed-segment-stays-skipped-until-it-is-defined-again ()
+(ert-deftest drgnx-statusbar/a-failed-segment-is-skipped-for-ten-seconds-then-tried-again ()
   (drgnx-statusbar-test--with
-    (let ((calls 0))
-      (drgnx-statusbar-define-segment 'b :fn (lambda () (cl-incf calls) (error "boom")))
-      (dotimes (_ 50) (drgnx-statusbar-render 60))
-      (should (= calls 1))
-      (drgnx-statusbar-define-segment 'b :fn (lambda () (cl-incf calls) "B"))
-      (should (string-match-p "A · B" (substring-no-properties (drgnx-statusbar-render 60))))
-      (should (= calls 2))
-      (should-not drgnx-statusbar--errors))))
+    (let ((calls 0) (now 100.0) (ok nil))
+      (cl-letf (((symbol-function 'drgnx-statusbar--now) (lambda () now)))
+        (drgnx-statusbar-define-segment 'b :fn (lambda () (cl-incf calls) (if ok "B" (error "boom"))))
+        (dotimes (_ 50) (drgnx-statusbar-render 60))
+        (should (= calls 1))                             ; skipped while the failure is young
+        (should (= (length drgnx-statusbar--errors) 1))
+        (setq now 109.0)
+        (drgnx-statusbar-render 60)
+        (should (= calls 1))
+        (setq now 111.0)                                 ; ten seconds later: tried again, fails again, recorded anew
+        (drgnx-statusbar-render 60)
+        (should (= calls 2))
+        (should (= (length drgnx-statusbar--errors) 1))
+        (should (= (cddr (car drgnx-statusbar--errors)) 111.0))
+        (setq now 115.0)
+        (drgnx-statusbar-render 60)
+        (should (= calls 2))
+        (setq ok t now 125.0)                            ; it works again: shown, and the entry is gone
+        (should (string-match-p "A · B" (substring-no-properties (drgnx-statusbar-render 60))))
+        (should (= calls 3))
+        (should-not drgnx-statusbar--errors)
+        ;; defining it again also gives it a new chance at once
+        (setq ok nil now 130.0)
+        (drgnx-statusbar-render 60)
+        (should drgnx-statusbar--errors)
+        (drgnx-statusbar-define-segment 'b :fn (lambda () "B2"))
+        (should (string-match-p "B2" (substring-no-properties (drgnx-statusbar-render 60))))))))
 
 (ert-deftest drgnx-statusbar/a-failing-bar-is-recorded-once-and-shows-nothing ()
   (drgnx-statusbar-test--with

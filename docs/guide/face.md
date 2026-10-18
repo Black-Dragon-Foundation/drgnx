@@ -97,8 +97,9 @@ own `mode-line-format` is nil keeps none. In a narrow window the bar never wraps
 `drgnx-statusbar-drop-order` (line endings first), and the branch is cut with an ellipsis, never dropped. The glyphs
 come from `drgnx-face-glyphs`, so a terminal that is not UTF-8 shows ASCII (` | ` between segments instead of ` · `).
 
-The bar is redrawn after every command that moved point, changed the text or selected another window, and when the
-agents' counts change; nothing else redraws it, so it costs nothing while you do not type.
+The bar is redrawn after every command that moved point, changed the text or selected another window (both windows
+trade the full and the compact bar a moment later, when the most recently used editor window is settled), and when
+the agents' counts change; nothing else redraws it, so it costs nothing while you do not type.
 
 | Setting | Default | What it does |
 |---|---|---|
@@ -125,8 +126,9 @@ Reorder or drop with `setopt`, and add your own in `config.el`:
 A segment function runs on every redisplay of its window, so it must only read what is already known (a variable,
 a buffer-local value): never call git, start a process, read a file or ask a language server. Its text is plain text
 with faces: a `%` is a percent sign (not a mode-line construct) and `display` properties are removed, so the bar can
-count its columns. One that signals an error shows nothing, is skipped from then on until you define it again, and the
-message is kept once in `drgnx-statusbar--errors` (no message per redisplay).
+count its columns. One that signals an error shows nothing, is skipped for 10 seconds and then tried again (when it
+works, it comes back; when it fails again, it is skipped for another 10 seconds), and the message is kept in
+`drgnx-statusbar--errors` (no message per redisplay). Defining it again gives it a new chance at once.
 
 ## Faces
 

@@ -23,6 +23,9 @@
 (require 'drgnx-chrome)
 (declare-function drgnx-face-glyph "drgnx-face")
 (declare-function drgnx-wb-editor-window "drgnx-wb")
+(declare-function drgnx-signal-post "drgnx-signal")
+(declare-function drgnx-signal-subscribe "drgnx-signal")
+(declare-function drgnx-signal-unsubscribe "drgnx-signal")
 (declare-function drgnx-signal-editor-window-p "drgnx-signal")
 (declare-function drgnx-modal-indicator-on "ext:drgnx-modal")
 (declare-function drgnx-modal-indicator-off "ext:drgnx-modal")
@@ -89,8 +92,14 @@ The branch is cut with an ellipsis instead, and only after these are gone."
   "Segment ID → plist (:fn :click :help).")
 
 (defvar drgnx-statusbar--errors nil
-  "Alist ID → message of the error a segment function (or the bar itself, ID `host') signalled.
-Recorded once, never as a message; a segment that failed is skipped until it is defined again.")
+  "Alist ID → (MESSAGE . TIME) of the error a segment function (or the bar itself, ID `host') signalled.
+Recorded, never shown as a message; a segment that failed is skipped for `drgnx-statusbar-retry-seconds', then tried
+again: success clears the entry, failure records it anew.")
+
+(defvar drgnx-statusbar-retry-seconds 10
+  "Seconds a segment that signalled an error is skipped before it is tried again.")
+
+(defun drgnx-statusbar--now () (float-time))
 
 (defvar drgnx-statusbar--window nil
   "The window a bar is being drawn for (bound while it renders); nil: the most recently used editor window.")
@@ -134,16 +143,28 @@ used editor window."
               (t (message "%s is not available" click)))))))
 
 (defun drgnx-statusbar--note-error (id err)
-  "Record ERR as the error of segment ID, once (the record never grows, and a redisplay never formats a message)."
-  (unless (assq id drgnx-statusbar--errors)
-    (push (cons id (error-message-string err)) drgnx-statusbar--errors)))
+  "Record ERR as the error of segment ID with the time, replacing its entry (the record never grows).
+Within `drgnx-statusbar-retry-seconds' of the last record nothing is formatted: a redisplay costs no more for it."
+  (unless (drgnx-statusbar--failed-p id)
+    (setq drgnx-statusbar--errors
+          (cons (cons id (cons (error-message-string err) (drgnx-statusbar--now)))
+                (assq-delete-all id drgnx-statusbar--errors)))))
+
+(defun drgnx-statusbar--failed-p (id)
+  "Non-nil when segment ID signalled an error less than `drgnx-statusbar-retry-seconds' ago."
+  (when-let* ((e (assq id drgnx-statusbar--errors)))
+    (< (- (drgnx-statusbar--now) (cddr e)) drgnx-statusbar-retry-seconds)))
 
 (defun drgnx-statusbar--text (id)
   "The text of segment ID with its properties, or nil when it has nothing to say (or failed)."
   (when-let* ((seg (gethash id drgnx-statusbar--segments))
               (fn (plist-get seg :fn))
-              ((not (assq id drgnx-statusbar--errors)))
-              (s (condition-case err (funcall fn) (error (drgnx-statusbar--note-error id err) nil)))
+              ((not (drgnx-statusbar--failed-p id)))
+              (s (condition-case err
+                     (prog1 (funcall fn)
+                       (when (assq id drgnx-statusbar--errors)      ; it works again
+                         (setq drgnx-statusbar--errors (assq-delete-all id drgnx-statusbar--errors))))
+                   (error (drgnx-statusbar--note-error id err) nil)))
               ((stringp s)) ((not (string-empty-p s))))
     (let ((s (copy-sequence s)))
       ;; the bar counts columns of characters: a `display' property could show something of another width
@@ -287,8 +308,16 @@ In any other buffer: the stock mode line.  An error shows nothing and is recorde
   (let ((l drgnx-statusbar--last) (b (current-buffer)) (w (selected-window)))
     (let ((pt (window-point w)) (tick (buffer-chars-modified-tick)))
       (unless (and (eq (aref l 0) b) (eq (aref l 1) w) (eql (aref l 2) pt) (eql (aref l 3) tick))
+        ;; the most recently used editor window is only known after the bus's idle flush: redraw both bars then
+        ;; (`editor-changed' covers another buffer; this covers the same buffer in two windows)
+        (unless (eq (aref l 1) w) (drgnx-signal-post 'statusbar-window-changed))
         (aset l 0 b) (aset l 1 w) (aset l 2 pt) (aset l 3 tick)
         (force-mode-line-update)))))             ; this buffer's mode line only
+
+(defun drgnx-statusbar--editor-changed (&rest _)
+  "On the bus's `editor-changed' and `statusbar-window-changed': the most recently used editor window is another
+one now, so the full bar and the compact one trade places in every window."
+  (force-mode-line-update t))
 
 (defvar drgnx-statusbar--agents-seen nil "(BUSY . WAITING) as of the last agent change.")
 (defvar drgnx-agents-changed-functions)
@@ -310,9 +339,13 @@ In any other buffer: the stock mode line.  An error shows nothing and is recorde
       (progn
         (add-hook 'post-command-hook #'drgnx-statusbar--post-command)
         (add-hook 'drgnx-agents-changed-functions #'drgnx-statusbar--agents-changed)
+        (dolist (e '(editor-changed statusbar-window-changed))
+          (drgnx-signal-subscribe e #'drgnx-statusbar--editor-changed))
         (when (fboundp 'drgnx-modal-indicator-off) (drgnx-modal-indicator-off)))   ; the bar shows the modal state
     (remove-hook 'post-command-hook #'drgnx-statusbar--post-command)
     (remove-hook 'drgnx-agents-changed-functions #'drgnx-statusbar--agents-changed)
+    (dolist (e '(editor-changed statusbar-window-changed))
+      (drgnx-signal-unsubscribe e #'drgnx-statusbar--editor-changed))
     (when (fboundp 'drgnx-modal-indicator-on) (drgnx-modal-indicator-on)))
   (dolist (f (frame-list)) (drgnx-chrome-apply f))
   (force-mode-line-update t))
@@ -397,9 +430,10 @@ a keyboard macro being recorded, narrowing, and a remote directory."
                       (list (and defining-kbd-macro
                                  (propertize (format "%s Rec" (drgnx-statusbar--glyph 'dot)) 'face 'error))
                             (and (buffer-narrowed-p) "Narrowed")
-                            (and (stringp default-directory)
-                                 (string-match "\\`/[^/:]+:\\(?:[^/:@]*@\\)?\\([^/:]*\\):" default-directory)
-                                 (format "Remote: %s" (match-string 1 default-directory)))
+                            (when-let* (((stringp default-directory))
+                                        (host (file-remote-p default-directory 'host))   ; parses the name, no connection
+                                        ((not (string-empty-p host))))
+                              (format "Remote: %s" host))
                             (drgnx-statusbar--construct-text mode-line-process)
                             (drgnx-statusbar--construct-text global)))))
     (let ((text (string-join (seq-remove #'string-empty-p (mapcar #'string-trim parts)) " ")))
