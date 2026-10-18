@@ -102,8 +102,6 @@
  (:file "wb/drgnx-explorer.el" :fn drgnx-explorer-new-file :what write-region :why "a user's file: the Explorer" :until never)
  (:file "wb/drgnx-explorer.el" :fn drgnx-explorer-rename :what rename-file :why "a user's file: the Explorer" :until never)
  (:file "wb/drgnx-explorer.el" :fn drgnx-explorer-paste :what rename-file :why "a user's file: the Explorer" :until never)
- (:file "wb/drgnx-persist.el" :fn drgnx-persist-save :what with-temp-file :why "workbench.eld" :until 16)
- (:file "wb/drgnx-persist.el" :fn drgnx-persist--read :what read-site :why "workbench.eld" :until 16)
  (:file "wb/drgnx-rules.el" :fn drgnx-rules--write-report :what with-temp-file :why "wb-report.eld" :until 23)
  (:file "wb/drgnx-rules.el" :fn drgnx-rules--write-report :what rename-file :why "wb-report.eld" :until 23)
  (:file "modules/lang/drgnx-markdown.el" :fn drgnx-markdown--draw :what write-region :why "a temporary file: a diagram's source for the renderer" :until never)

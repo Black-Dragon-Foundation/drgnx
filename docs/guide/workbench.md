@@ -238,14 +238,21 @@ restore failed is not tried again). A file that client asked for is shown in fro
 it after the restore); add a function to `drgnx-persist-after-restore-functions` (called with the restored frame, after
 every restore, never prompting; the other windows of a saved workbench are not passed to it) to do something of your
 own at that moment. To keep data of your own in the saved state, add a function to `drgnx-persist-state-functions`
-that returns a plist of namespaced keys (`:mymodule-thing`) with readable values only; one that returns anything else
-is left out (said once) without costing the other functions' keys.
+that returns a plist of namespaced keys (`:mymodule-thing`) with plain values only (symbols, numbers, strings, lists, vectors; text properties of strings are dropped); one that
+returns anything else (a buffer, a hash table, a record) is left out (said once) without costing the other functions'
+keys or the save.
 
 Each group's shown file opens at once and its other tabs open while you are idle, all within the first pause (typing
 stops them until your next pause, which carries on with the rest); nothing asks anything at start (no
 remote files are touched, only safe local variables, no large-file question). Files that no longer exist are skipped,
 sizes are clamped to the frame, window parameters in the file are ignored (drgnx saves none), and a state in another
-format is ignored. Save / Restore Workbench Layout are in the palette. Only graphical windows save and restore — a
+format is ignored. The file is written whole and atomically (a crash or a full disk leaves the last saved layout), and
+read with limits (4 MiB, no deep nesting, plain data only). A file written by a **newer drgnx** is never overwritten:
+the save says "workbench.eld was written by a newer drgnx: not saved" and stops, and the restore ignores it. A file
+that cannot be read (a typing mistake, a crafted file) is not restored, one message says so, and the next save keeps a
+copy of it beside the file (`workbench.eld.bak-…`, the newest three) before writing the new layout. A save that fails
+at exit (another Emacs holds the file for more than a second, the disk is full) is one message, never an error.
+Save / Restore Workbench Layout are in the palette. Only graphical windows save and restore — a
 batch run never writes your state.
 
 **Terminal windows** (`emacs -nw`, `emacsclient -t`) open with the default layout for their size
