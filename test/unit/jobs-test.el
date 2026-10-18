@@ -1,6 +1,8 @@
 ;;; jobs-test.el --- batch tests: durable jobs (detached launcher; no systemd units created) -*- lexical-binding: t -*-
 (require 'ert)
 (require 'drgnx-jobs)
+(require 'drgnx-timer)
+(load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
 
 (defmacro drgnx-jobs-test--with (&rest body)
   `(let* ((root (make-temp-file "drgnx-jobs" t))
@@ -258,18 +260,51 @@ killing the starter's whole process group does not take the job along."
      (should-not ran)
      (should-not (drgnx-jobs-list)))))
 
-(ert-deftest drgnx-jobs/no-wait-stamps-before-exit ()
-  ;; M12a-44: Emacs exiting before the stamping timer fires still leaves :boot and :start (the hook runs once)
-  (skip-unless (executable-find "setsid"))
-  (drgnx-jobs-test--with
-   (let ((kill-emacs-hook nil) id dir hooks)
-     (cl-letf (((symbol-function 'run-at-time) (lambda (&rest _) (timer-create))))   ; a timer that never fires
-       (setq id (drgnx-jobs-start "short-lived" '("sleep" "3") :no-wait t)))
-     (setq dir (drgnx-jobs--dir id) hooks kill-emacs-hook)
+;; The no-wait stamp on the clock fixture: a job that is this Emacs (its pid file holds our pid), never started for real.
+(defmacro drgnx-jobs-test--no-wait (&rest body)
+  "BODY on the virtual clock with a launcher that starts nothing; `id' and `dir' are the :no-wait job's."
+  `(drgnx-jobs-test--with
+    (drgnx-test-with-clock ()
+      (cl-letf (((symbol-function 'drgnx-jobs--detach) #'ignore))
+        (let* ((kill-emacs-hook nil) (id (drgnx-jobs-start "stamp" '("true") :no-wait t))
+               (dir (drgnx-jobs--dir id)) (key (cons 'jobs-stamp id)))
+          (unwind-protect (progn ,@body)
+            (drgnx-timer-cancel key)
+            (delete-directory dir t)))))))
+
+(defun drgnx-jobs-test--stamped-p (dir)
+  (plist-get (drgnx-jobs--read (expand-file-name "job.eld" dir)) :start))
+
+(ert-deftest drgnx-jobs/no-wait-stamps-when-the-pid-appears ()
+  (drgnx-jobs-test--no-wait
+   (should (drgnx-timer-active-p key))
+   (drgnx-test-advance 0.5)                                       ; no pid yet: polling, not stamped
+   (should (drgnx-timer-active-p key))
+   (should-not (drgnx-jobs-test--stamped-p dir))
+   (write-region (number-to-string (emacs-pid)) nil (expand-file-name "pid" dir) nil 'silent)
+   (drgnx-test-advance 0.05)
+   (should (drgnx-jobs-test--stamped-p dir))
+   (should (equal (plist-get (drgnx-jobs--read (expand-file-name "job.eld" dir)) :boot) (drgnx-jobs--boot-id)))
+   (should-not (drgnx-timer-active-p key))))                      ; the poll ended
+
+(ert-deftest drgnx-jobs/no-wait-gives-up-after-2s ()
+  (drgnx-jobs-test--no-wait
+   (drgnx-test-advance 1.9)
+   (should (drgnx-timer-active-p key))
+   (drgnx-test-advance 0.2)
+   (should-not (drgnx-timer-active-p key))
+   (should-not (drgnx-jobs-test--stamped-p dir))
+   (should-not drgnx-timer-errors)))                              ; the job never started: gave up quietly
+
+(ert-deftest drgnx-jobs/no-wait-stamps-at-exit ()
+  ;; M12a-44: Emacs exiting before the poll fires still leaves :boot and :start (the hook runs once)
+  (drgnx-jobs-test--no-wait
+   (let ((hooks kill-emacs-hook))
      (should (= (length hooks) 1))
-     (should (drgnx-jobs-test--wait (lambda () (file-exists-p (expand-file-name "pid" dir)))))
-     (should-not (plist-get (drgnx-jobs--read (expand-file-name "job.eld" dir)) :start))
+     (write-region (number-to-string (emacs-pid)) nil (expand-file-name "pid" dir) nil 'silent)
+     (should-not (drgnx-jobs-test--stamped-p dir))
      (mapc #'funcall hooks)
      (should-not kill-emacs-hook)                                 ; once: the hook removed itself
-     (should (plist-get (drgnx-jobs--read (expand-file-name "job.eld" dir)) :start))
+     (should-not (drgnx-timer-active-p key))                      ; … and the poll with it
+     (should (drgnx-jobs-test--stamped-p dir))
      (should (equal (plist-get (drgnx-jobs--read (expand-file-name "job.eld" dir)) :boot) (drgnx-jobs--boot-id))))))

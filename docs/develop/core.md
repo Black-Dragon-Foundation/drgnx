@@ -105,7 +105,8 @@ command as "Category: Title" with its key and description beside it, through the
 **Run hook and usage counter.** `drgnx-surfaces-run` (what the palette and the menus call) runs
 `drgnx-surfaces-run-functions` with the command id after the command ran; an error in a member is swallowed. The
 first member counts the run: in memory only, so a run costs nothing noticeable. The counts are written at idle, at
-most once a minute and at exit, never prompting, to `command-usage.eld` in the state dir
+most once a minute and at exit, never prompting (one idle timer under the key `surfaces-usage`, `drgnx-timer-soon`
+with `:idle t`: a burst of runs makes one write per pause; the exit hook cancels it and writes), to `command-usage.eld` in the state dir
 (`drgnx-shortcuts-usage-file`): `((ID COUNT (DAY . N)…)…)`, with the per-day counts (`time-to-days`) of the last 7
 days. The file stays on your machine; it feeds the suggestions of the Keyboard Shortcuts editor ("you ran X 12
 times this week; give it a key?"). Read it with `drgnx-surfaces-usage-count` and `drgnx-surfaces-usage-week`.
@@ -407,7 +408,8 @@ timer and non-nil for an idle one (once per pause), as in `run-at-time` and `run
   until it is killed: its first timer adds `drgnx-timer--buffer-killed` to the buffer's own `kill-buffer-hook`
   (permanent-local, as is its key list `drgnx-timer--buffer-keys`; no global hook). A process owns them while it
   lives; its sentinel (or the job runner) must call `(drgnx-timer-cancel-owner PROCESS)` when it dies, which also
-  forgets the last runs of its `:min-interval` keys. `:core` lives as long as Emacs (the hub tick, the GC).
+  forgets the last runs of its `:min-interval` keys. `:core` lives as long as Emacs (the hub tick, the idle GC under
+  the key `gc-idle`, the job stamp poll `(jobs-stamp . ID)`, the usage write `surfaces-usage`).
   Module repeats are keyed this way: `tools/agents` owns `agents-ui-mirror` (idle, every 30 s) and `tools/jobs` owns
   `job-ui-recount-idle` (idle, every 60 s), so a second setup replaces the timer instead of stacking another, and
   turning the module off ends it.
