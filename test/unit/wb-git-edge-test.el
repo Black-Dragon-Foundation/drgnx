@@ -96,5 +96,21 @@
     (should (eq (drgnx-git-status (expand-file-name "src" dir)) 'added))
     (should (eq (drgnx-git-status (expand-file-name "fresh" dir)) 'untracked))))   ; a new folder: U
 
+(ert-deftest drgnx-git/fifty-waited-refreshes-each-read-their-files ()
+  ;; DEFERRED M3b-19: `drgnx-git-refresh' with WAIT returned before the status was read, once.  50 in a row,
+  ;; each with a change only that run can know about: all of them read :files, and none leaves a process.
+  (skip-unless (executable-find "git"))
+  (drgnx-git-edge--with dir
+    (drgnx-git-edge--commit dir "a.txt")
+    (dotimes (i 50)
+      (let ((new (expand-file-name (format "new-%02d.txt" i) dir)))
+        (write-region "x\n" nil new nil 'silent)
+        (drgnx-git-refresh dir t)
+        (should (plist-get (gethash dir drgnx-git--repos) :files))
+        (should (eq (drgnx-git-status new) 'untracked))
+        (should-not (process-live-p (plist-get (gethash dir drgnx-git--repos) :proc)))))
+    (drgnx-git-edge--drain)
+    (should-not (seq-filter (lambda (p) (string-prefix-p "drgnx-git" (process-name p))) (process-list)))))
+
 (provide 'wb-git-edge-test)
 ;;; wb-git-edge-test.el ends here
