@@ -1328,13 +1328,15 @@ keep running.  Saved (session.eld); returns the sentence for the step's result."
 (declare-function drgnx-jobs--detach "drgnx-jobs")
 
 (defun drgnx-onboard--restart ()
-  "Restart drgnx: `drgnx open' detached — once this Emacs has ended (a minute at most: kept running, it opens
-nothing) — then quit (`drgnx-session-quit' offers to save first).  The layout comes back with drgnx open."
+  "Restart drgnx: ask the quit questions first (`drgnx-session-quit-confirm': save, lose changes?), then — only
+on a yes — run `drgnx open' detached once this Emacs has ended (a minute at most: kept running, it opens
+nothing), and quit.  A no or C-g leaves drgnx running and nothing waiting.  The layout comes back with drgnx open."
   (require 'drgnx-jobs)
-  (drgnx-jobs--detach
-   (format "sleep 1; i=0; while kill -0 %d 2>/dev/null && [ $i -lt 300 ]; do sleep 0.2; i=$((i+1)); done; kill -0 %d 2>/dev/null || exec %s open"
-           (emacs-pid) (emacs-pid) (shell-quote-argument (expand-file-name "bin/drgnx" drgnx-dir))))
-  (drgnx-session-quit))
+  (when (drgnx-session-quit-confirm)
+    (drgnx-jobs--detach
+     (format "sleep 1; i=0; while kill -0 %d 2>/dev/null && [ $i -lt 300 ]; do sleep 0.2; i=$((i+1)); done; kill -0 %d 2>/dev/null || exec %s open"
+             (emacs-pid) (emacs-pid) (shell-quote-argument (expand-file-name "bin/drgnx" drgnx-dir))))
+    (kill-emacs)))
 
 (defun drgnx-onboard--finish-step (ctx)
   "The doctor's results; on macOS with the drgnx app installed, how to open drgnx next time.  When a step turned modules on or installed packages

@@ -987,6 +987,21 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
           (should (string-search "loads at drgnx's next start" (cdr r)))
           (should-not (string-search "Finish" (cdr r))))))))
 
+;; M12a-74: the restart asks its save questions first, detaches the waiter only after they are answered, then quits.
+(ert-deftest drgnx-onboard/restart-detaches-after-the-questions ()
+  (let ((events nil))
+    (cl-letf (((symbol-function 'drgnx-jobs--detach) (lambda (_line) (push 'detach events)))
+              ((symbol-function 'kill-emacs) (lambda (&rest _) (push 'kill events))))
+      ;; a "no" (or C-g's nil): nothing detached, nothing killed
+      (cl-letf (((symbol-function 'drgnx-session-quit-confirm) (lambda () (push 'confirm events) nil)))
+        (drgnx-onboard--restart)
+        (should (equal (reverse events) '(confirm))))
+      ;; a "yes": confirm, then detach, then kill-emacs
+      (setq events nil)
+      (cl-letf (((symbol-function 'drgnx-session-quit-confirm) (lambda () (push 'confirm events) t)))
+        (drgnx-onboard--restart)
+        (should (equal (reverse events) '(confirm detach kill)))))))
+
 (ert-deftest drgnx-onboard/new-modules-need-a-restart-and-finish-offers-it ()
   ;; Packages installed into a running drgnx load at its next start: Look and Keys says so, and Finish (in the
   ;; app) offers the restart — drgnx open, detached, then quit — or says how to do it yourself.
@@ -998,7 +1013,8 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
                 ((symbol-function 'drgnx-doctor-run) (lambda (&rest _) nil))
                 ((symbol-function 'drgnx-doctor-facts) #'ignore)
                 ((symbol-function 'drgnx-jobs--detach) (lambda (line) (push line lines)))
-                ((symbol-function 'drgnx-session-quit) (lambda () (cl-incf quit))))
+                ((symbol-function 'drgnx-session-quit-confirm) (lambda () t))
+                ((symbol-function 'kill-emacs) (lambda (&rest _) (cl-incf quit))))
         (let ((r (drgnx-onboard--look-step '(:interactive t :options (:preset full-ai :keys "Emacs" :theme modus-vivendi)))))
           (should (string-match-p "restart drgnx to load the new modules" (cadr r))))
         (should drgnx-onboard--restart-needed)

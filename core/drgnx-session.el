@@ -109,16 +109,22 @@ As File → Open Folder… it asks for DIR; bin/drgnx's call never asks."
   (seq-filter (lambda (b) (and (buffer-modified-p b) (or (buffer-file-name b) (buffer-local-value 'buffer-offer-save b))))
               (buffer-list)))
 
-(defun drgnx-session-quit ()
-  "Quit drgnx — the daemon too: offer to save each changed file and New Untitled buffer, then stop.  C-g, an
-error while saving, or keeping a change unsaved and then saying no leaves drgnx running with everything open."
-  (interactive)
+(defun drgnx-session-quit-confirm ()
+  "Ask what quitting needs: offer to save each changed file and New Untitled buffer, then confirm losing what
+stays unsaved.  t when drgnx may quit; nil when it keeps running (the answer was no).  C-g or an error while
+saving leaves through the signal, so a caller that quits afterwards never gets there."
   (save-some-buffers nil t)          ; t: buffers with `buffer-offer-save' too, as `save-buffers-kill-emacs' does
   (let ((unsaved (drgnx-session--unsaved-buffers)))
     (if (and unsaved (not (yes-or-no-p (format "%d buffer%s not saved; quit and lose the changes? "
                                                (length unsaved) (if (cdr unsaved) "s are" " is")))))
-        (message "drgnx keeps running; nothing was lost")
-      (kill-emacs))))
+        (progn (message "drgnx keeps running; nothing was lost") nil)
+      t)))
+
+(defun drgnx-session-quit ()
+  "Quit drgnx — the daemon too: offer to save each changed file and New Untitled buffer, then stop.  C-g, an
+error while saving, or keeping a change unsaved and then saying no leaves drgnx running with everything open."
+  (interactive)
+  (when (drgnx-session-quit-confirm) (kill-emacs)))
 
 (defun drgnx-session-close-frame (&optional event)
   "Close this window — or the one whose close button sent EVENT (a `delete-frame' event).  Closing the last
