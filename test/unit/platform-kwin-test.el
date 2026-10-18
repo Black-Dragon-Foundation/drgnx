@@ -54,8 +54,11 @@ temporary directory is private to the test."
                    ((symbol-function 'dbus-call-method-asynchronously)
                     (lambda (bus service path interface method handler &rest args)
                       (should (eq bus :session))
-                      (should (memq :timeout args))
-                      (setq args (cl-loop for (a . _rest) on args until (eq a :timeout) collect a))
+                      ;; dbus.el takes `:timeout' only right after the handler: anywhere else it is marshalled as a
+                      ;; method argument and the call fails ("Wrong type argument: D-Bus, :timeout", seen on KWin)
+                      (should (eq (car args) :timeout))
+                      (should (natnump (cadr args)))
+                      (setq args (cddr args))
                       (setq serial (1+ serial))
                       (setq drgnx-platform-kwin-test--calls
                             (append drgnx-platform-kwin-test--calls (list (list service path method args serial))))
@@ -339,15 +342,30 @@ temporary directory is private to the test."
                                         ((symbol-function 'dbus-get-unique-name) (lambda (&rest _) ":1.99")))
                                 (should (eq t (drgnx-platform-kwin--can-move (drgnx-platform-ctx nil))))))
 
-(drgnx-platform-test--deftest drgnx-platform-kwin/the-adapter-is-declared-reported ()
+(drgnx-platform-test--deftest drgnx-platform-kwin/the-adapter-is-declared-verified ()
                               (let ((spec (drgnx-platform-adapter 'kwin)))
-                                (should (eq 'reported (plist-get spec :status)))
+                                ;; run headless in the window managers' container tier (test/live/drgnx-wm-other-test.el)
+                                (should (eq 'verified (plist-get spec :status)))
+                                (should (eq (plist-get spec :frame-monitor) #'drgnx-platform--emacs-frame-monitor))
                                 (should-not (plist-get spec :tool))
                                 (should (functionp (plist-get spec :monitors)))
                                 (should (functionp (plist-get spec :move)))
                                 (should (functionp (plist-get spec :place)))
                                 ;; detection survived the merge
                                 (should (drgnx-platform-detect (drgnx-platform-test--env '(("WAYLAND_DISPLAY" . "w") ("XDG_CURRENT_DESKTOP" . "KDE"))) 'pgtk))))
+
+(drgnx-platform-test--deftest drgnx-platform-kwin/it-says-which-monitor-from-emacs-own-geometry ()
+                              ;; Next and Previous need the monitor the window is on: Emacs' own answer, no script
+                              (drgnx-platform-test--with-frame 'pgtk '("XDG_CURRENT_DESKTOP=KDE" "WAYLAND_DISPLAY=w")
+                                (cl-letf (((symbol-function 'frame-monitor-attributes)
+                                           (lambda (&optional _) '((name . "") (geometry 1280 0 1280 800) (workarea 1280 0 1280 800))))
+                                          ((symbol-function 'dbus-call-method-asynchronously)
+                                           (lambda (&rest _) (error "no D-Bus call expected"))))
+                                  (let (fm)
+                                    (should (eq 'kwin (drgnx-platform-wm frame)))
+                                    (drgnx-platform-frame-monitor frame (lambda (m) (setq fm (or m 'none))))
+                                    (should (drgnx-platform-test--await (lambda () fm)))
+                                    (should (equal (plist-get fm :geometry) '(1280 0 1280 800)))))))
 
 (provide 'platform-kwin-test)
 ;;; platform-kwin-test.el ends here

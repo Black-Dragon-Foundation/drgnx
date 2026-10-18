@@ -1150,6 +1150,8 @@ cursor to the target output when a window is moved with `--id', and this cannot 
  :move #'drgnx-platform-wm--hypr-move :place #'drgnx-platform-wm--hypr-place)
 (drgnx-platform-define-adapter
  'niri :monitors #'drgnx-platform-wm--niri-monitors-fn
+ ;; Emacs' own answer (its geometry matches an output's): Next and Previous need the current monitor
+ :frame-monitor #'drgnx-platform--emacs-frame-monitor
  :move #'drgnx-platform-wm--niri-move :place #'drgnx-platform-wm--niri-place)
 
 ;;;; KWin (KDE Plasma 6): its scripting API over D-Bus
@@ -1165,8 +1167,9 @@ cursor to the target output when a window is moved with `--id', and this cannot 
 ;; Everything a call made (script, object, file) is undone on success, error and deadline alike.
 ;;
 ;; Facts: KWin 6.7.5 ran headless (`kwin_wayland --virtual') in podman and the scripts' replies are recorded
-;; in test/fixtures/wm/kwin/.  Not run on a real Plasma session, nor with a unique name as the reply's
-;; destination: status `reported'.  KWin 5 (another scripting API) is not supported.
+;; in test/fixtures/wm/kwin/.  The adapter itself (listing, a command's move, Next, a restore's placement) runs
+;; against that KWin with two outputs in the window managers' container tier (test/live/drgnx-wm-other-test.el):
+;; status `verified'.  Not run on a full Plasma session.  KWin 5 (another scripting API) is not supported.
 
 (require 'json)
 (declare-function dbus-get-unique-name "dbusbind.c" (bus))
@@ -1281,7 +1284,7 @@ ends with an error.  Script, reply object and temporary file are gone by the tim
                   (when sent
                     (ignore-errors
                       (dbus-call-method-asynchronously :session "org.kde.KWin" "/Scripting" "org.kde.kwin.Scripting"
-                                                       "unloadScript" nil name :timeout ms)))
+                                                       "unloadScript" nil :timeout ms name)))
                   (when file (ignore-errors (delete-file file)))
                   (drgnx-platform--later (lambda () (funcall cb result)))))))
         ;; A D-Bus error reply (KWin is not running, no such method) does not reach the handler of an
@@ -1308,6 +1311,7 @@ ends with an error.  Script, reply object and temporary file are gone by the tim
               (setq sent t)
               (push (nth 2 (dbus-call-method-asynchronously
                             :session "org.kde.KWin" "/Scripting" "org.kde.kwin.Scripting" "loadScript"
+                            ;; `:timeout' right after the handler: anywhere else dbus.el sends it as an argument
                             (lambda (id)
                               (unless done
                                 (if (not (and (integerp id) (>= id 0)))
@@ -1316,7 +1320,7 @@ ends with an error.  Script, reply object and temporary file are gone by the tim
                                                 :session "org.kde.KWin" (format "/Scripting/Script%d" id)
                                                 "org.kde.kwin.Script" "run" nil :timeout ms))
                                         serials))))
-                            file name :timeout ms))
+                            :timeout ms file name))
                     serials))
           (error (funcall finish (list :error (error-message-string err)))))))
     nil))
@@ -1364,8 +1368,10 @@ ends with an error.  Script, reply object and temporary file are gone by the tim
    ctx monitor (list :caption (frame-parameter (plist-get ctx :frame) 'name)) callback))
 
 (drgnx-platform-define-adapter
- 'kwin :status 'reported :tool nil
+ 'kwin :status 'verified :tool nil
  :monitors #'drgnx-platform-kwin--monitors
+ ;; Emacs' own answer (its geometry matches a screen's; no script): Next and Previous need the current monitor
+ :frame-monitor #'drgnx-platform--emacs-frame-monitor
  :move #'drgnx-platform-kwin--move :place #'drgnx-platform-kwin--place
  :can-move #'drgnx-platform-kwin--can-move)
 

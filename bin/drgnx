@@ -144,6 +144,8 @@ test_container() { # [--ui [--compositor C]] — the batch (or GUI) tier inside 
   if [ "${1:-}" = --ui ]; then
     image=drgnx-test-gui:f45; file=Containerfile.gui; cmd=(bin/drgnx test --ui); prebuilt="${DRGNX_TEST_GUI_IMAGE:-}"
     if [ "${2:-}" = --compositor ]; then ui_compositor_ok "${3:-}" || return 2; cmd+=(--compositor "$3"); fi
+    # KWin and niri are in an image of their own (Containerfile.wm); DRGNX_TEST_WM_IMAGE: a prebuilt one
+    case "${3:-}" in kwin|niri) image=drgnx-test-wm:f45; file=Containerfile.wm; prebuilt="${DRGNX_TEST_WM_IMAGE:-}" ;; esac
     # --memory: a GUI run (sessions, compositors, the X11 Emacs) must never push the host into the OOM killer;
     # --memory-swap the same: no swap on top.  DRGNX_TEST_GUI_MEMORY (default 3g) for a bigger run
     local mem="${DRGNX_TEST_GUI_MEMORY:-3g}"
@@ -210,8 +212,8 @@ test_install() { # [NAME…] — install.sh end to end in fresh containers (slow
 
 ui_compositor_ok() { # C — is C a compositor a GUI session can run under (harness/drgnx-ui.el)?
   case "$1" in
-    mutter|sway|x11|i3) return 0 ;;
-    *) echo "drgnx: --compositor takes mutter, sway, x11 or i3, not '$1'" >&2; return 1 ;;
+    mutter|sway|x11|i3|kwin|niri) return 0 ;;
+    *) echo "drgnx: --compositor takes mutter, sway, x11, i3, kwin or niri, not '$1'" >&2; return 1 ;;
   esac
 }
 
@@ -400,8 +402,8 @@ usage: drgnx PATH…             open folders and files in drgnx, like code . (d
        drgnx test [--one-process]
                                batch tests, each test file in an Emacs of its own
                                (--one-process: all in one Emacs, to find a leak across files)
-       drgnx test --ui [--compositor mutter|sway|x11|i3]
-                               GUI tests in a headless session (mutter; or sway, Xvfb, Xvfb with i3)
+       drgnx test --ui [--compositor mutter|sway|x11|i3|kwin|niri]
+                               GUI tests in a headless session (mutter; or sway, Xvfb, Xvfb with i3, KWin, niri)
        drgnx test --bench      the workbench vs treemacs and ibuffer, timed in a GUI session
        drgnx test --perf [--audit]
                                input latency, redisplay, frames, GC, startup, memory against budgets
