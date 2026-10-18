@@ -18,6 +18,7 @@
 (require 'drgnx-coord)
 (require 'drgnx-agents)
 (require 'drgnx-gateway)
+(require 'drgnx-cockpit-model)                  ; the merge gate reads a task's edits as the Work cockpit shows them
 
 (defvar drgnx-job-routes nil
   "Alist ROLE (a symbol: implement, test, review, docs) → agent profile name (or a list: fallbacks in order).  Read
@@ -27,6 +28,22 @@ from agents.eld's :routes when nil.")
 (defvar drgnx-job-task-tokens '(150000 . 15000) "The estimate's tokens per task: (INPUT . OUTPUT).")
 (defvar drgnx-job-auto-start nil "Non-nil: a proposed job starts at once, without waiting for approval.")
 (defvar drgnx-job-max-agents 3 "Agents of one job working at once.")
+
+(defcustom drgnx-job-merge-gate 'review
+  "What a finished task of a job needs before it is merged into the job's branch.
+`review': its reviewer's pass (as before).  `review+accept': the pass, then every file its agent changed accepted in
+its edits (the Work cockpit's Accept: a review mark with the hash of the file's diff); until then a `review' card
+says how many are, with Open its edits.  Accepting never merges by itself, and the card's Merge as it is stays
+yours.  A job keeps the gate it was proposed with (the hub runs it): this option counts in the Emacs that proposes."
+  :type '(choice (const :tag "The reviewer's pass" review) (const :tag "The pass, then every file accepted" review+accept))
+  :group 'drgnx-cockpit)
+
+(defun drgnx-job--gate-value (gate)
+  "GATE (a symbol, or a string from JSON; nil: `drgnx-job-merge-gate') as a merge gate, or an error."
+  (let ((g (cond ((stringp gate) (seq-find (lambda (s) (equal (symbol-name s) gate)) '(review review+accept)))   ; never interned
+                 (gate) (t drgnx-job-merge-gate))))
+    (unless (memq g '(review review+accept)) (user-error "No merge gate %s: review or review+accept" (or gate g)))
+    g))
 
 ;;;; Reading a plan
 
@@ -136,11 +153,26 @@ what they spend is not counted, so a budget cannot stop them."
     (while (drgnx-coord-job id) (setq n (1+ n) id (format "%s-%d" base n)))
     id))
 
-(cl-defun drgnx-job-propose (file &key repo budget)
-  "Propose a job from the plan FILE (snapshotted now), in REPO (the plan's **Repo:** line, else REPO, else the plan's
-own repository).  Returns its id; nothing starts (unless `drgnx-job-auto-start')."
+(defun drgnx-job--needs (tasks n)
+  "Task N of TASKS and every task it depends on, directly or not, in the plan's order (Start as Job)."
+  (let ((want nil) (todo (list n)))
+    (while todo
+      (let* ((k (pop todo)) (task (seq-find (lambda (x) (= (plist-get x :n) k)) tasks)))
+        (unless task (user-error (if (= k n) "The plan has no Task %d" "A task depends on Task %d, which the plan does not have") k))
+        (unless (memq k want)
+          (push k want)
+          (setq todo (append (plist-get task :deps) todo)))))
+    (seq-filter (lambda (x) (memq (plist-get x :n) want)) tasks)))
+
+(cl-defun drgnx-job-propose (file &key repo budget only gate)
+  "Propose a job from the plan FILE (snapshotted now; the file is only read), in REPO (the plan's **Repo:** line, else
+REPO, else the plan's own repository).  ONLY: a task's number — the job is that task and the tasks it needs (Start as
+Job).  GATE: its merge gate (`drgnx-job-merge-gate' when nil).  Returns its id; nothing starts (unless
+`drgnx-job-auto-start')."
   (let* ((plan (drgnx-job-read-plan file))
-         (tasks (plist-get plan :tasks))
+         (gate (drgnx-job--gate-value gate))
+         (tasks (if only (drgnx-job--needs (plist-get plan :tasks) only) (plist-get plan :tasks)))
+         (plan (if only (plist-put plan :title (format "%s — Task %d" (plist-get plan :title) only)) plan))
          (_ (progn (unless tasks (user-error "%s has no `### Task N:' headings" file)) (drgnx-job--check tasks)))
          (repo (or (plist-get plan :repo) (and repo (file-name-as-directory (expand-file-name repo)))
                    (locate-dominating-file file ".git")
@@ -149,7 +181,7 @@ own repository).  Returns its id; nothing starts (unless `drgnx-job-auto-start')
          (roles (delete-dups (mapcar (lambda (task) (intern (plist-get task :role))) tasks)))
          (proposal (list :plan (expand-file-name file) :sha (plist-get plan :sha) :repo repo :title (plist-get plan :title)
                          :tasks tasks :routes (mapcar (lambda (r) (cons r (car (drgnx-job-route r)))) roles)
-                         :estimate (drgnx-job--estimate tasks) :budget budget
+                         :estimate (drgnx-job--estimate tasks) :budget budget :gate gate
                          :unpriced-budget (and budget   ; every profile a role may fall back to, the reviewers' too
                                                (drgnx-job--unpriced-chain
                                                 (delete-dups (apply #'append (mapcar #'drgnx-job-route
@@ -324,6 +356,22 @@ and `commondir', loose refs and `packed-refs' are followed."
 
 (defun drgnx-job--session (sid) (and sid (drgnx-agents-get sid)))
 
+(defun drgnx-job--data-of (id key task)
+  "What job ID's data KEY (an alist by task id: :blocked, :profiles) says of TASK (its id), or nil."
+  (alist-get task (plist-get (plist-get (drgnx-coord-job id) :data) key) nil nil #'equal))
+
+(defun drgnx-job--profile (id task)
+  "The profile TASK (a store plist) of job ID gets an agent of: the one it was reassigned to, else its role's first."
+  (or (drgnx-job--data-of id :profiles (plist-get task :id))
+      (car (drgnx-job-route (intern (or (plist-get task :role) "implement"))))))
+
+(defun drgnx-job--ordered (id tasks)
+  "TASKS of job ID in its run order: the task ids of its data's :order first, in that order, then the rest by number."
+  (let ((order (plist-get (plist-get (drgnx-coord-job id) :data) :order)))
+    (if (null order) tasks
+      (let ((rank (lambda (task) (or (cl-position (plist-get task :id) order :test #'equal) (length order)))))
+        (sort (copy-sequence tasks) (lambda (a b) (< (funcall rank a) (funcall rank b))))))))   ; stable: by number after
+
 (defun drgnx-job--start-task (id task &optional profile handover)
   "Give TASK (a store plist) of job ID an agent (PROFILE, default its role's first) in its own worktree; HANDOVER:
 what the agent before it left (`drgnx-job--fall-back').  The worktree, when it has to be made, is made by a git
@@ -354,14 +402,15 @@ process of its own: the agent starts when it is there."
   (remhash (plist-get task :id) drgnx-job--busy)
   (cond (failure (drgnx-job--card id (plist-get task :id) "agent" (format "no worktree for it: %s" failure)))
         ((and (equal (plist-get (drgnx-coord-job id) :status) "running")
-              (equal (plist-get (drgnx-coord-task (plist-get task :id)) :status) "ready"))
+              (equal (plist-get (drgnx-coord-task (plist-get task :id)) :status) "ready")
+              (not (drgnx-job--data-of id :blocked (plist-get task :id))))   ; blocked meanwhile: not now
          (drgnx-job--launch-task id task profile handover)))
   (drgnx-job--changed id))
 
 (defun drgnx-job--launch-task (id task &optional profile handover)
   "The agent of TASK of job ID, in its worktree (made)."
   (let* ((n (plist-get task :n)) (tree (drgnx-job--task-tree id n))
-         (profile (or profile (car (drgnx-job-route (intern (or (plist-get task :role) "implement"))))))
+         (profile (or profile (drgnx-job--profile id task)))
          (s (drgnx-agents-start profile tree (plist-get task :id) id))
          ;; its edits are against where its worktree starts (the cockpit's diffs), not where the job's branch is later
          (_ (with-demoted-errors "drgnx job: agent not registered: %S"
@@ -422,9 +471,11 @@ process of its own: the agent starts when it is there."
            ;; finished, but its agent's turn goes on: the review waits for it — not for ever
            ((equal status "in-review") (drgnx-job--review-wait id task)))))
       (let ((count (+ (length (drgnx-job--live id))        ; the agents to be count too: their worktrees are being made
-                      (seq-count (lambda (task) (equal (gethash (plist-get task :id) drgnx-job--busy) "starting")) (drgnx-coord-tasks id)))))
-        (dolist (task (drgnx-coord-tasks id))
-          (when (and (equal (plist-get task :status) "ready") (not (gethash (plist-get task :id) drgnx-job--busy)) (< count drgnx-job-max-agents))
+                      (seq-count (lambda (task) (equal (gethash (plist-get task :id) drgnx-job--busy) "starting")) (drgnx-coord-tasks id))))
+            (blocked (plist-get (plist-get (drgnx-coord-job id) :data) :blocked)))   ; Mark Blocked (the Work graph)
+        (dolist (task (drgnx-job--ordered id (drgnx-coord-tasks id)))   ; in the run order; a blocked task waits
+          (when (and (equal (plist-get task :status) "ready") (not (gethash (plist-get task :id) drgnx-job--busy)) (< count drgnx-job-max-agents)
+                     (not (assoc (plist-get task :id) blocked)))
             (drgnx-job--start-task id task)
             (setq count (1+ count)))))
       (let ((finished (mapcar (lambda (task) (plist-get task :id))
@@ -487,6 +538,7 @@ about it is open: drgnx-job-clash.el).")
   "Move every running job on (the hub's tick)."
   (dolist (id (drgnx-coord-jobs "running"))
     (with-demoted-errors "drgnx job: %S" (drgnx-job-step id))
+    (with-demoted-errors "drgnx job: %S" (drgnx-job--gate-tick id))
     (with-demoted-errors "drgnx job: %S" (run-hook-with-args 'drgnx-job-tick-functions id))))
 
 (defun drgnx-job--session-changed (s)
@@ -570,7 +622,7 @@ data without a verdict)."
    :data (pcase verdict ('pass (list :verdict 'pass)) (`(fail . ,_) (list :verdict 'fail))))
   (let* ((job (drgnx-coord-job id)) (data (plist-get job :data)) (task (drgnx-coord-task task-id)))
     (pcase verdict
-      ('pass (drgnx-job--merge id task))
+      ('pass (if (eq (plist-get data :gate) 'review+accept) (drgnx-job--accept-gate id task) (drgnx-job--merge id task)))
       (`(fail . ,reasons)
        (let ((fails (1+ (alist-get task-id (plist-get data :fails) 0 nil #'equal))))
          (setf (alist-get task-id (plist-get data :fails) nil nil #'equal) fails)
@@ -643,6 +695,97 @@ two at once fail on its HEAD (\"cannot lock ref\").")
     (drgnx-job--merge-next id)
     (drgnx-job--step-later id)
     (drgnx-job--changed id)))
+
+;;;; The merge gate: every file accepted (`drgnx-job-merge-gate' review+accept)
+
+(defvar drgnx-job--gate-checks (make-hash-table :test #'equal)
+  "Gate card id → t while git is asked about its task's files: one look at a time.  The look ends (its callback)
+however git ends, `drgnx-cockpit-git-timeout' at the latest.")
+
+(defun drgnx-job--accept-gate (id task)
+  "TASK of job ID passed review under the gate review+accept: a `review' card says it waits on you (it does until
+every file its agent changed is accepted, `drgnx-job--gate-check'), with Open its edits; Merge as it is stays yours."
+  (let ((cid (drgnx-job--card id (plist-get task :id) "review" "waiting on your review: looking at its files"
+                              nil (list :gate t :agent (plist-get task :agent)))))
+    (drgnx-job--gate-check id cid)))
+
+(defun drgnx-job--gate-source (id task agent)
+  "Where TASK of job ID has its edits, as the Work cockpit's edits of its AGENT show them
+\(`drgnx-cockpit-edit-source'): its worktree, against the base the agent was registered with, else where it forked
+from the job's branch."
+  (let ((base (and agent (plist-get (drgnx-coord-agent agent) :base))))
+    (list :dir (drgnx-job--task-tree id (plist-get task :n)) :base (or base (concat "job/" id)) :merge-base (not base) :paths nil)))
+
+(defun drgnx-job--gate-key (id task agent)
+  "What the gate's answer for TASK of job ID depends on — AGENT's review marks and the commit its worktree is at — as a
+hash (it is kept in the card's data)."
+  (secure-hash 'sha1 (prin1-to-string (list (and agent (drgnx-coord-review-marks agent))
+                                            (drgnx-job-git-head (drgnx-job--task-tree id (plist-get task :n)))))))
+
+(defun drgnx-job--gate-check (id cid &optional again)
+  "Look (git, asynchronously) at whether every file of gate card CID's task is accepted, unless a look runs or —
+AGAIN, the hub's tick — nothing it depends on changed since the last (`drgnx-job--gate-key').  Every file: its card
+is settled and the task merged.  Else its title says how many are."
+  (when-let* ((card (drgnx-coord-card cid)) ((equal (plist-get card :state) "open")) ((not (gethash cid drgnx-job--gate-checks)))
+              (task (drgnx-coord-task (plist-get card :task))))
+    (let* ((data (plist-get card :data)) (agent (plist-get data :agent)) (key (drgnx-job--gate-key id task agent)))
+      (unless (and again (equal key (plist-get data :gate-key)))
+        (drgnx-coord-card-set cid :data (plist-put (copy-sequence data) :gate-key key))
+        (puthash cid t drgnx-job--gate-checks)
+        (condition-case err
+            (drgnx-job--accepted (drgnx-job--gate-source id task agent) agent
+                                 (lambda (r) (remhash cid drgnx-job--gate-checks)
+                                   (with-demoted-errors "drgnx job: %S" (drgnx-job--gate-answer id cid r))))
+          (error (remhash cid drgnx-job--gate-checks) (drgnx-job--gate-answer id cid (list :error (error-message-string err)))))))))
+
+(defun drgnx-job--accepted (source agent done)
+  "How many of the files SOURCE changed (`drgnx-cockpit-changed-files') AGENT's review marks accept — a mark
+\"accepted\" whose hash is that of the file's diff now, as the cockpit's edits hash it (`drgnx-cockpit-file-diff') —
+asked of git asynchronously.  DONE gets (:accepted N :files M), or (:error MESSAGE)."
+  (let ((marks (and agent (drgnx-coord-review-marks agent))))
+    (drgnx-cockpit-changed-files
+     source
+     (lambda (files)
+       (if (keywordp (car files))
+           (funcall done (list :error (if (plist-get files :too-large) "too many changed files to list" (plist-get files :error))))
+         (let* ((more (apply #'+ (mapcar (lambda (f) (or (plist-get f :more) 0)) files)))   ; past the cap: never accepted
+                (names (delq nil (mapcar (lambda (f) (plist-get f :file)) files)))
+                (marked (seq-filter (lambda (f) (equal (plist-get (cdr (assoc f marks)) :state) "accepted")) names))
+                (total (+ more (length names))) (accepted 0) (next nil))
+           ;; only a marked file's diff is asked for, one at a time
+           (setq next (lambda ()
+                        (if (null marked) (funcall done (list :accepted accepted :files total))
+                          (let ((f (pop marked)))
+                            (drgnx-cockpit-file-diff source f
+                                                     (lambda (r)
+                                                       (cond ((equal r "") (setq total (1- total)))   ; no change after all
+                                                             ((and (stringp r) (equal (secure-hash 'sha1 r) (plist-get (cdr (assoc f marks)) :hash)))
+                                                              (setq accepted (1+ accepted))))
+                                                       (funcall next)))))))
+           (funcall next)))))))
+
+(defun drgnx-job--gate-answer (id cid r)
+  "The look at gate card CID's task came back (R: `drgnx-job--accepted''s answer): every file accepted — the card is
+settled and the task merged; else the card says how many are.  A card settled meanwhile (Merge as it is, Back to an
+agent, Drop) or a job no longer running: nothing."
+  (when-let* ((card (drgnx-coord-card cid)) ((equal (plist-get card :state) "open"))
+              ((equal (plist-get (drgnx-coord-job id) :status) "running"))
+              (task (drgnx-coord-task (plist-get card :task))))
+    (let ((title (cond ((plist-get r :error) (format "waiting on your review: its files cannot be listed (%s)" (plist-get r :error)))
+                       (t (format "waiting on your review: %d of %d files accepted" (plist-get r :accepted) (plist-get r :files))))))
+      (if (and (not (plist-get r :error)) (>= (plist-get r :accepted) (plist-get r :files)))
+          (when (drgnx-coord-card-settle cid "accepted")
+            (when-let* ((m (plist-get (plist-get card :data) :message))) (drgnx-coord-mark m "acted"))
+            (drgnx-job--merge id task))
+        (unless (equal title (plist-get card :title))
+          (drgnx-coord-card-set cid :title title)
+          (drgnx-job--broadcast 'card (list :id cid :job id :task (plist-get task :id) :kind "review" :title title))))
+      (drgnx-job--changed id))))
+
+(defun drgnx-job--gate-tick (id)
+  "On the hub's tick (`drgnx-job-tick'): job ID's open gate cards look again when their task's marks or commit changed."
+  (dolist (c (drgnx-coord-cards id "open"))
+    (when (plist-get (plist-get c :data) :gate) (drgnx-job--gate-check id (plist-get c :id) t))))
 
 ;;;; The budget, a failing provider
 
@@ -900,11 +1043,14 @@ hold for every agent that works in TREE after it."
 (defvar drgnx-job--signatures (make-hash-table :test #'equal) "Job → what its last `job' event showed.")
 
 (defun drgnx-job--changed (id)
-  "Tell the hub's subscribers (a `job' event) when job ID's status, its tasks or its open cards changed."
-  (let ((sig (list (plist-get (drgnx-coord-job id) :status)
-                   (mapcar (lambda (task) (list (plist-get task :status) (plist-get task :agent) (gethash (plist-get task :id) drgnx-job--busy)))
-                           (drgnx-coord-tasks id))
-                   (mapcar (lambda (c) (list (plist-get c :id) (plist-get c :title) (plist-get c :data))) (drgnx-coord-cards id "open")))))
+  "Tell the hub's subscribers (a `job' event) when job ID's status, its tasks (what is blocked, the run order, the
+profiles they were reassigned to too) or its open cards changed."
+  (let* ((job (drgnx-coord-job id))
+         (sig (list (plist-get job :status)
+                    (mapcar (lambda (k) (plist-get (plist-get job :data) k)) '(:blocked :order :profiles))
+                    (mapcar (lambda (task) (list (plist-get task :status) (plist-get task :agent) (gethash (plist-get task :id) drgnx-job--busy)))
+                            (drgnx-coord-tasks id))
+                    (mapcar (lambda (c) (list (plist-get c :id) (plist-get c :title) (plist-get c :data))) (drgnx-coord-cards id "open")))))
     (unless (equal sig (gethash id drgnx-job--signatures))
       (puthash id sig drgnx-job--signatures)
       (drgnx-job--broadcast 'job (list :id id)))))
@@ -943,7 +1089,8 @@ S: the session whose request waits (it goes back to work once answered, or, gone
 (defvar drgnx-job-card-action-functions nil
   "Called with (CARD ACTION ARG) for actions drgnx-job.el does not know (a clash's): the first non-nil did it.")
 
-(defconst drgnx-job--showing-actions '("open" "discuss") "Actions that leave their card open.")
+(defconst drgnx-job--showing-actions '("open" "discuss" "edits")
+  "Actions that leave their card open (Open, Open its edits: the editor shows something).")
 
 (defun drgnx-job-card-actions (card)
   "CARD's actions: ((ACTION LABEL)…)."
@@ -954,7 +1101,8 @@ S: the session whose request waits (it goes back to work once answered, or, gone
     ("merge-conflict" '(("retry" "Let the agent resolve it") ("merge" "Merge again (I resolved it)") ("drop" "Drop the task")
                         ("open" "Open the job's worktree")))
     ("merge-failed" '(("merge" "Merge again") ("drop" "Drop the task") ("open" "Open the job's worktree")))   ; no conflict
-    ("review" '(("accept" "Merge as it is") ("retry" "Back to an agent") ("drop" "Drop the task")))
+    ("review" (append (and (plist-get (plist-get card :data) :gate) '(("edits" "Open its edits")))   ; the merge gate's
+                      '(("accept" "Merge as it is") ("retry" "Back to an agent") ("drop" "Drop the task"))))
     ((or "fallback" "agent" "stalled") (append (and (plist-get (plist-get card :data) :review) '(("review" "Review now")))   ; a finished task
                                                '(("retry" "Retry") ("drop" "Drop the task"))))
     ("budget" '(("resume" "Resume with a budget…") ("stop" "Stop the job")))
@@ -975,6 +1123,71 @@ S: the session whose request waits (it goes back to work once answered, or, gone
     (unless (eq (drgnx-agent-session-status s) 'exited) (drgnx-agents-kill s)))
   (drgnx-job--set-waiting job task nil)
   (drgnx-coord-force-status task "ready" nil))
+
+;;;; Writing back from the Work graph: reassign, block, the run order (the user's, through the hub)
+
+(defun drgnx-job--open-task (tid)
+  "Task TID (a store plist) when it is not done or dropped, else a `user-error'."
+  (let ((task (or (drgnx-coord-task tid) (user-error "No task %s" tid))))
+    (when (member (plist-get task :status) '("done" "dropped")) (user-error "Task %s is %s already" tid (plist-get task :status)))
+    task))
+
+(defun drgnx-job--job-of (task) "The job of TASK (a store plist)." (drgnx-coord--task-job (drgnx-work-db) (plist-get task :id)))
+
+(defun drgnx-job--set-data (job key task value)
+  "Job JOB's data KEY (an alist by task id) says VALUE of TASK (its id; nil: nothing); its subscribers hear of it."
+  (let ((data (plist-get (drgnx-coord-job job) :data)))
+    (setf (alist-get task (plist-get data key) nil 'remove #'equal) value)
+    (drgnx-coord-job-set job :data data)
+    (drgnx-job--changed job)))
+
+(defun drgnx-job-reassign (tid profile)
+  "Task TID goes to an agent of PROFILE: from now on its agents are of PROFILE.  One working on it now (or a card it
+waits on) ends: the task is ready for a new agent, as a card's Retry does.  The job's summary."
+  (let* ((task (drgnx-job--open-task tid)) (job (drgnx-job--job-of task)))
+    (drgnx-agents-profile profile)                        ; a profile the hub does not know: an error now, not at start
+    (when (gethash tid drgnx-job--busy) (user-error "Task %s is %s: try again in a moment" tid (gethash tid drgnx-job--busy)))
+    (drgnx-job--set-data job :profiles tid profile)
+    (unless (member (plist-get task :status) '("pending" "ready"))   ; it had an agent: a new one
+      (dolist (c (drgnx-coord-cards job "open"))
+        (when (and (equal (plist-get c :task) tid) (not (member (plist-get c :kind) drgnx-job--advisory-kinds))
+                   (drgnx-coord-card-settle (plist-get c :id) "reassign"))
+          (when-let* ((m (plist-get (plist-get c :data) :message))) (drgnx-coord-mark m "acted"))))
+      (drgnx-job--retry job tid)
+      (drgnx-job--step-later job))
+    (drgnx-job--changed job)
+    (drgnx-job-summary job)))
+
+(defun drgnx-job-block (tid reason)
+  "Mark task TID blocked for REASON (a text): no agent starts on it (one working on it goes on) until it is unblocked.
+The job's summary."
+  (let ((job (drgnx-job--job-of (drgnx-job--open-task tid))))
+    (drgnx-job--set-data job :blocked tid (if (and (stringp reason) (not (string-blank-p reason))) reason "blocked"))
+    (drgnx-job-summary job)))
+
+(defun drgnx-job-unblock (tid)
+  "Task TID is no longer blocked: its job may start it.  The job's summary."
+  (let ((job (drgnx-job--job-of (or (drgnx-coord-task tid) (user-error "No task %s" tid)))))
+    (drgnx-job--set-data job :blocked tid nil)
+    (drgnx-job--step-later job)
+    (drgnx-job-summary job)))
+
+(defun drgnx-job-order (tid delta)
+  "Move task TID DELTA places in its job's run order (negative: earlier), among the tasks not done or dropped: the
+order ready tasks get agents in (`drgnx-job--ordered').  The job's summary."
+  (let* ((job (drgnx-job--job-of (drgnx-job--open-task tid)))
+         (all (mapcar (lambda (task) (plist-get task :id)) (drgnx-job--ordered job (drgnx-coord-tasks job))))
+         (open (mapcar (lambda (task) (plist-get task :id))
+                       (seq-remove (lambda (task) (member (plist-get task :status) '("done" "dropped")))
+                                   (drgnx-job--ordered job (drgnx-coord-tasks job)))))
+         (to (max 0 (min (1- (length open)) (+ (cl-position tid open :test #'equal) (if (integerp delta) delta 0)))))
+         (moved (let ((rest (remove tid open))) (append (seq-take rest to) (list tid) (seq-drop rest to))))
+         (data (plist-get (drgnx-coord-job job) :data)))
+    ;; the open tasks take their new order in the places open tasks had; finished ones keep theirs
+    (setq data (plist-put data :order (mapcar (lambda (id) (if (member id open) (pop moved) id)) all)))
+    (drgnx-coord-job-set job :data data)
+    (drgnx-job--changed job)
+    (drgnx-job-summary job)))
 
 (defun drgnx-job--answer-request (card allow)
   "Answer the pending request CARD is about: ALLOW (its allow_once option) or reject."
@@ -1165,10 +1378,12 @@ permissions — and, with DECISIONS, its decision log (newest first)."
                              (list :n (plist-get task :n) :title (plist-get task :title) :role (plist-get task :role)
                                    :profile (if-let* ((s (drgnx-job--session (plist-get task :agent))))   ; after a fall-back: its agent's
                                                 (drgnx-agent-session-profile s)
-                                              (car (drgnx-job-route (intern (or (plist-get task :role) "implement")))))
+                                              (drgnx-job--profile id task))   ; else the one it was reassigned to, its route's
+                                   :blocked (alist-get (plist-get task :id) (plist-get data :blocked) nil nil #'equal)
                                    :status (or (gethash (plist-get task :id) drgnx-job--busy) (plist-get task :status))   ; starting, merging
                                    :agent (plist-get task :agent) :deps (plist-get task :deps)))
                            (drgnx-coord-tasks id))
+            :order (mapcar (lambda (task) (plist-get task :n)) (drgnx-job--ordered id (drgnx-coord-tasks id)))   ; the run order
             :agents (mapcar (lambda (s) (list :id (drgnx-agent-session-id s) :profile (drgnx-agent-session-profile s)
                                               :task (drgnx-agent-session-task s) :status (drgnx-agent-session-status s)
                                               :review (and (gethash (drgnx-agent-session-id s) drgnx-job--reviewers) t)))
@@ -1221,7 +1436,7 @@ permissions — and, with DECISIONS, its decision log (newest first)."
 (declare-function drgnx-hub-call-sync "drgnx-hub")
 (declare-function drgnx-hub--jsonable "drgnx-hub")
 
-(defconst drgnx-job--json-lists '(:tasks :agents :cards :messages :permissions :decisions :deps :jobs :unpriced :warnings)
+(defconst drgnx-job--json-lists '(:tasks :agents :cards :messages :permissions :decisions :deps :jobs :unpriced :warnings :order)
   "Keys of a job's JSON that are lists: with nothing in them they are `[]', not null.")
 
 (defun drgnx-job--json (v)

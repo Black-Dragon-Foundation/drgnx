@@ -122,7 +122,7 @@ place (ID X Y W H).  The same again: a redraw changes only band images (`drgnx-c
 
 (defvar drgnx-cockpit-graph-mode-map
   (let ((m (make-sparse-keymap))) (set-keymap-parent m special-mode-map) m)
-  "The Work graph's keys (they come from the key profiles: f, RET, o, g, TAB, S-TAB).")
+  "The Work graph's keys (they come from the key profiles: f, RET, o, g, TAB, S-TAB; R, b, M-<up>, M-<down>, s).")
 
 (defvar drgnx-cockpit--line-map
   (let ((m (make-sparse-keymap))) (define-key m [mouse-1] #'drgnx-cockpit-graph-click) m)
@@ -626,12 +626,12 @@ say what it is; with N, N nodes on (back when negative).  RET opens it."
 
 (defun drgnx-cockpit--open-task (node)
   "Open task NODE: its plan at its heading, else its job (a task an agent works on opens its edits first:
-`drgnx-cockpit-edits-open-task').  A plan task no job runs is read-only here: it opens in its plan, and Start Job from
-Plan is named, never run."
+`drgnx-cockpit-edits-open-task').  A plan task no job runs is read-only here: it opens in its plan, and Start as Job
+is named, never run."
   (cond ((plist-get node :path)
          (prog1 (drgnx-cockpit--open-file node)
            (when (plist-get node :readonly)
-             (message "%s is read-only here: no job runs it.  Start Job from Plan… (job-start) starts one"
+             (message "%s is read-only here: no job runs it.  Start as Job (cockpit-start-as-job) proposes one"
                       (or (plist-get node :title) (plist-get node :id))))))
         (t (drgnx-cockpit--open-job node))))
 
@@ -761,7 +761,14 @@ or nil: any."
                    (cockpit-open-in-plan "Open in Plan" drgnx-cockpit-graph-open-in-plan "The plan at this task's heading")
                    (cockpit-refresh "Draw Graph Again" drgnx-cockpit-graph-refresh "Read the store again and draw the Work graph")
                    (cockpit-next "Select Next Node" drgnx-cockpit-graph-select-next "The next node, in column order; RET opens it")
-                   (cockpit-previous "Select Previous Node" drgnx-cockpit-graph-select-previous "The previous node; RET opens it")))
+                   (cockpit-previous "Select Previous Node" drgnx-cockpit-graph-select-previous "The previous node; RET opens it")
+                   ;; writing back to jobs (drgnx-cockpit-graph.el): through the hub, never into a plan file
+                   (cockpit-reassign "Reassign Task…" drgnx-cockpit-graph-reassign "A job's task to an agent of another profile")
+                   (cockpit-block "Mark Blocked / Unblock" drgnx-cockpit-graph-block "No agent starts on a job's task until it is unblocked")
+                   (cockpit-run-earlier "Run Earlier" drgnx-cockpit-graph-run-earlier "A job's task earlier in the order ready tasks start in")
+                   (cockpit-run-later "Run Later" drgnx-cockpit-graph-run-later "A job's task later in the order ready tasks start in")
+                   (cockpit-start-as-job "Start as Job" drgnx-cockpit-graph-start-as-job
+                                         "Propose a job of a plan's task and the tasks it needs (approve it to start)")))
     (drgnx-command-define id :category "Work" :title title :command fn :doc doc :map 'drgnx-cockpit-graph-mode-map))
   ;; an agent's edits (drgnx-cockpit-edits.el): a task or an agent of the graph opens them
   (drgnx-pane-define-kind 'agent-edits :title " EDITS" :home 'editor :buffer #'drgnx-cockpit-edits-pane-buffer)

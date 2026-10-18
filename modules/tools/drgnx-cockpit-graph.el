@@ -8,7 +8,9 @@
 ;; `drgnx-cockpit-graph-svg' draws them (SVG text; every colour from a face), and `drgnx-cockpit-graph-outline' gives
 ;; the same nodes as a tree of text lines, for terminal frames and windows too narrow for the drawing.  These are
 ;; functions of the model: no file is read, nothing prompts.  The pane, the redraws and the commands are in
-;; drgnx-cockpit.el.  See docs/guide/cockpit.md.
+;; drgnx-cockpit.el — except the graph's actions that write back to jobs (Reassign, Mark Blocked / Unblock, Run
+;; Earlier / Later, Start as Job), at the end of this file: commands the user runs (they may ask), each one call to
+;; the hub, which changes the store; a plan file is never written.  See docs/guide/cockpit.md.
 
 ;;; Code:
 (require 'cl-lib)
@@ -58,7 +60,8 @@ only the bands it reaches, so shorter bands cost less per change; Emacs refuses 
     ("busy" drgnx-cockpit-running dot) ("starting" drgnx-cockpit-running dot) ("reporting" drgnx-cockpit-running dot)
     ("pending" drgnx-cockpit-blocked circle) ("needs-input" drgnx-cockpit-blocked warning)
     ("failed" drgnx-cockpit-blocked warning) ("fail" drgnx-cockpit-blocked warning)
-    ("paused" drgnx-cockpit-blocked paused) ("not reporting" drgnx-cockpit-blocked circle))
+    ("paused" drgnx-cockpit-blocked paused) ("not reporting" drgnx-cockpit-blocked circle)
+    ("blocked" drgnx-cockpit-blocked paused))
   "How a node's state looks: STATE → (FACE GLYPH).  GLYPH names a glyph (ok, dot, circle, warning, paused, …).
 A state not listed has no face and the glyph `circle'; a node waiting on you always has `drgnx-cockpit-waiting' and
 the glyph `waiting'."
@@ -542,6 +545,110 @@ cross from one band into the next."
   (let ((elements (or elements (drgnx-cockpit-graph--elements layout))))
     (mapcar (lambda (r) (list (car r) (cadr r) (drgnx-cockpit-graph--print layout elements (car r) (cadr r))))
             (drgnx-cockpit-graph-band-ranges layout))))
+
+;;;; Writing back: the graph's actions on jobs (commands the user runs: they may ask; the hub changes the store)
+
+(declare-function drgnx-cockpit--node-here "drgnx-cockpit")
+(declare-function drgnx-cockpit--shown-node "drgnx-cockpit")
+(declare-function drgnx-cockpit-cards--hub "drgnx-cockpit-cards")
+(declare-function drgnx-hub-call "drgnx-hub")
+(declare-function drgnx-hub-ensure "drgnx-hub")
+(declare-function drgnx-agents-profile-names "drgnx-agents")
+(declare-function drgnx-job-ui-show "drgnx-job-ui")
+(defvar drgnx-job-merge-gate)
+(defvar drgnx-job-auto-start)
+
+(defun drgnx-cockpit-graph--job-task-p (node)
+  "Whether NODE is a task a job runs (it has the job's task id)."
+  (and (eq (plist-get node :kind) 'task) (plist-get node :jtask) t))
+
+(defun drgnx-cockpit-graph--task-number (node)
+  "N of a plan's task NODE (its id ends in #N), or nil."
+  (let ((id (plist-get node :id)))
+    (and (stringp id) (string-match "#\\([0-9]+\\)\\'" id) (string-to-number (match-string 1 id)))))
+
+(defun drgnx-cockpit-graph--plan-task-p (node)
+  "Whether NODE is a plan's task no job runs (read-only in the graph): Start as Job's."
+  (and (eq (plist-get node :kind) 'task) (plist-get node :readonly) (stringp (plist-get node :path))
+       (drgnx-cockpit-graph--task-number node) t))
+
+(defun drgnx-cockpit-graph--target (prompt pred what)
+  "The node to act on (`drgnx-cockpit--node-here', read with PROMPT among those PRED accepts) — a `user-error' naming
+WHAT when it is not one PRED accepts."
+  (let ((node (drgnx-cockpit--shown-node (drgnx-cockpit--node-here prompt pred))))
+    (unless (and node (funcall pred node))
+      (user-error "Not %s: TAB selects a node, or put point on its line" what))
+    node))
+
+(defun drgnx-cockpit-graph--write (method params done)
+  "Ask the hub METHOD with PARAMS — the user's change to a job; DONE, called with the job's summary the hub answers,
+says what happened.  Never waits: the graph and the cockpit's parts redraw when the hub tells of the change."
+  (drgnx-cockpit-cards--hub)
+  (drgnx-hub-call method params
+                  (lambda (r err)
+                    (if err (message "drgnx: %s" err) (message "%s" (funcall done r)))
+                    (when (fboundp 'drgnx-cockpit-schedule) (drgnx-cockpit-schedule 0)))))
+
+(defun drgnx-cockpit-graph-reassign (task profile)
+  "Give job task TASK (its id, `JOB#N') to an agent of PROFILE from now on: one working on it now ends and the task is
+ready for a new one, as a card's Retry does."
+  (interactive
+   (let ((node (drgnx-cockpit-graph--target "Reassign task: " #'drgnx-cockpit-graph--job-task-p "a task a job runs")))
+     (list (plist-get node :jtask)
+           (completing-read (format "Give %s to an agent of profile: " (drgnx-cockpit-graph--name node))
+                            (and (fboundp 'drgnx-agents-profile-names) (drgnx-agents-profile-names)) nil t))))
+  (when (string-empty-p (or profile "")) (user-error "No profile: nothing reassigned"))
+  (drgnx-cockpit-graph--write "job/reassign" (list :task task :profile profile)
+                              (lambda (_) (format "%s goes to an agent of %s" task profile))))
+
+(defun drgnx-cockpit-graph-block (task reason)
+  "Mark job task TASK blocked for REASON: no agent starts on it (one working on it goes on).  REASON nil: unblock it.
+Interactively it toggles: a blocked task is unblocked, any other is asked why."
+  (interactive
+   (let ((node (drgnx-cockpit-graph--target "Mark blocked / unblock: " #'drgnx-cockpit-graph--job-task-p "a task a job runs")))
+     (list (plist-get node :jtask)
+           (unless (plist-get node :blocked) (read-string (format "Why is %s blocked? " (drgnx-cockpit-graph--name node)))))))
+  (if reason
+      (drgnx-cockpit-graph--write "job/block" (list :task task :reason reason)
+                                  (lambda (_) (format "%s is blocked: no agent starts on it" task)))
+    (drgnx-cockpit-graph--write "job/unblock" (list :task task) (lambda (_) (format "%s is no longer blocked" task)))))
+
+(defun drgnx-cockpit-graph--order (task delta)
+  (drgnx-cockpit-graph--write "job/order" (list :task task :delta delta)
+                              (lambda (r)
+                                (let* ((order (append (plist-get r :order) nil))
+                                       (n (and (string-match "#\\([0-9]+\\)\\'" task) (string-to-number (match-string 1 task))))
+                                       (pos (cl-position n order)))
+                                  (if pos (format "%s now runs %d of %d in its job (ready tasks get agents in this order)" task (1+ pos) (length order))
+                                    (format "%s moved" task))))))
+
+(defun drgnx-cockpit-graph-run-earlier (task &optional n)
+  "Move job task TASK N places (1) earlier in its job's run order — the order ready tasks get agents in."
+  (interactive (list (plist-get (drgnx-cockpit-graph--target "Run earlier: " #'drgnx-cockpit-graph--job-task-p "a task a job runs") :jtask)
+                     (prefix-numeric-value current-prefix-arg)))
+  (drgnx-cockpit-graph--order task (- (or n 1))))
+
+(defun drgnx-cockpit-graph-run-later (task &optional n)
+  "Move job task TASK N places (1) later in its job's run order."
+  (interactive (list (plist-get (drgnx-cockpit-graph--target "Run later: " #'drgnx-cockpit-graph--job-task-p "a task a job runs") :jtask)
+                     (prefix-numeric-value current-prefix-arg)))
+  (drgnx-cockpit-graph--order task (or n 1)))
+
+(defun drgnx-cockpit-graph-start-as-job (plan n)
+  "Propose a job of task N of the plan file PLAN and the tasks it needs (only a plan's task no job runs): the cockpit
+shows its proposal, to approve; nothing starts before (unless `drgnx-job-auto-start').  The plan is only read."
+  (interactive
+   (let ((node (drgnx-cockpit-graph--target "Start as Job: " #'drgnx-cockpit-graph--plan-task-p "a plan's task no job runs")))
+     (list (plist-get node :path) (drgnx-cockpit-graph--task-number node))))
+  (drgnx-cockpit-cards--hub)
+  (drgnx-hub-ensure)                                     ; the user asked: it may start the hub (as Start Job from Plan)
+  (drgnx-cockpit-graph--write "job/start-task"
+                              (list :plan plan :n n :auto (and (bound-and-true-p drgnx-job-auto-start) t)
+                                    :gate (and (boundp 'drgnx-job-merge-gate) (symbol-name drgnx-job-merge-gate)))
+                              (lambda (r)
+                                (when (fboundp 'drgnx-job-ui-show) (drgnx-job-ui-show (plist-get r :id)))
+                                (format "Job %s proposed: Task %d and the tasks it needs%s" (plist-get r :id) n
+                                        (if (equal (plist-get r :status) "proposed") " — approve it to start" "")))))
 
 (provide 'drgnx-cockpit-graph)
 ;;; drgnx-cockpit-graph.el ends here

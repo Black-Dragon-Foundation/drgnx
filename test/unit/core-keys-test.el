@@ -831,6 +831,10 @@ keys); every binding is undone after."
     (cockpit-filter "f" drgnx-cockpit-graph-mode-map) (cockpit-open "RET" drgnx-cockpit-graph-mode-map)
     (cockpit-open-in-plan "o" drgnx-cockpit-graph-mode-map) (cockpit-refresh "g" drgnx-cockpit-graph-mode-map)
     (cockpit-next "TAB" drgnx-cockpit-graph-mode-map) (cockpit-previous "<backtab>" drgnx-cockpit-graph-mode-map)
+    ;; M12f C9: writing back to jobs from the Work graph
+    (cockpit-reassign "R" drgnx-cockpit-graph-mode-map) (cockpit-block "b" drgnx-cockpit-graph-mode-map)
+    (cockpit-run-earlier "M-<up>" drgnx-cockpit-graph-mode-map) (cockpit-run-later "M-<down>" drgnx-cockpit-graph-mode-map)
+    (cockpit-start-as-job "s" drgnx-cockpit-graph-mode-map)
     ;; M12f: an agent's edits
     (cockpit-accept-file "a" drgnx-cockpit-edits-mode-map) (cockpit-revert-file "r" drgnx-cockpit-edits-mode-map)
     (cockpit-comment "c" drgnx-cockpit-edits-mode-map) (cockpit-edits-next-file "n" drgnx-cockpit-edits-mode-map)
