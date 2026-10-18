@@ -1,7 +1,8 @@
-;;; job-snapshot-test.el --- batch tests: a task's snapshot — the copy of .git and its preparation -*- lexical-binding: t -*-
+;;; job-snapshot-test.el --- batch tests: a task's snapshot — the job's clean store and the task's copy of it -*- lexical-binding: t -*-
 ;; Fixture repositories live in the test's temporary directory.  Where its filesystem refuses reflink (tmpfs), the
 ;; copy-on-write test skips with the reason, and the snapshot path is still covered: `drgnx-job-snapshot--copy-argv'
-;; is bound to a plain `cp -a' (the copy is then a full one, the preparation the same).
+;; is bound to a plain `cp -a' (the copy is then a full one; what it holds is the same).
+;; The git these tests run in a task folder is the agent's or the sandbox's part, played by the test.
 (require 'ert)
 (require 'cl-lib)
 (require 'drgnx-paths)
@@ -15,9 +16,20 @@
         (error "git %S: %s" args (buffer-string)))
       (string-trim (buffer-string)))))
 
+(defun drgnx-job-snapshot-test--repo (repo &optional ref-format)
+  "Make REPO: two commits on main, the branch job/7 at the second.  REF-FORMAT: files (default) or reftable."
+  (make-directory repo t)
+  (drgnx-job-snapshot-test--git repo "init" "-q" "-b" "main" (format "--ref-format=%s" (or ref-format "files")))
+  (write-region "one\n" nil (concat repo "README") nil 'silent)
+  (drgnx-job-snapshot-test--git repo "add" "-A")
+  (drgnx-job-snapshot-test--git repo "commit" "-q" "-m" "one")
+  (write-region "two\n" nil (concat repo "README") nil 'silent)
+  (drgnx-job-snapshot-test--git repo "commit" "-q" "-am" "two")
+  (drgnx-job-snapshot-test--git repo "branch" "job/7"))
+
 (defmacro drgnx-job-snapshot-test--with (&rest body)
-  "BODY with ROOT (a temporary directory), REPO in it (two commits on main, the branch job/7 at the second) and
-FOLDER, the task folder REPO/.claude/worktrees/7-1/ (not made).  The copy-on-write cache is this test's."
+  "BODY with ROOT (a temporary directory), REPO in it (`drgnx-job-snapshot-test--repo') and FOLDER, the task folder
+REPO/.claude/worktrees/7-1/ (not made).  The copy-on-write cache is this test's."
   (declare (indent 0))
   `(let* ((root (file-name-as-directory (file-truename (make-temp-file "drgnx-snapshot" t))))
           (repo (concat root "repo/")) (folder (concat repo ".claude/worktrees/7-1/"))
@@ -27,18 +39,12 @@ FOLDER, the task folder REPO/.claude/worktrees/7-1/ (not made).  The copy-on-wri
      (clrhash drgnx-job-snapshot--cow)
      (unwind-protect
          (progn
-           (make-directory repo t)
-           (drgnx-job-snapshot-test--git repo "init" "-q" "-b" "main")
-           (write-region "one\n" nil (concat repo "README") nil 'silent)
-           (drgnx-job-snapshot-test--git repo "add" "-A")
-           (drgnx-job-snapshot-test--git repo "commit" "-q" "-m" "one")
-           (write-region "two\n" nil (concat repo "README") nil 'silent)
-           (drgnx-job-snapshot-test--git repo "commit" "-q" "-am" "two")
-           (drgnx-job-snapshot-test--git repo "branch" "job/7")
+           (drgnx-job-snapshot-test--repo repo)
            ,@body)
        (dolist (p (process-list))
          (when (string-prefix-p "drgnx-snapshot" (process-name p)) (set-process-sentinel p #'ignore) (delete-process p)))
        (clrhash drgnx-job-snapshot--cow)
+       (when (boundp 'drgnx-job-snapshot--busy) (clrhash drgnx-job-snapshot--busy))
        (delete-directory root t))))
 
 (defmacro drgnx-job-snapshot-test--snapshot-anyway (&rest body)
@@ -49,6 +55,15 @@ FOLDER, the task folder REPO/.claude/worktrees/7-1/ (not made).  The copy-on-wri
                 (if (drgnx-job-snapshot-cow-p repo) real (lambda (from to) (list "cp" "-a" from to)))))
        (clrhash drgnx-job-snapshot--cow)
        ,@body)))
+
+(defmacro drgnx-job-snapshot-test--both-modes (&rest body)
+  "BODY twice: as a snapshot (`drgnx-job-snapshot-test--snapshot-anyway'), then as a shared clone; MODE is bound to
+the mode expected, and FOLDER is removed after each."
+  (declare (indent 0))
+  `(dolist (mode '(snapshot clone))
+     (let ((drgnx-job-snapshot-copy-on-write (eq mode 'snapshot)))
+       (drgnx-job-snapshot-test--snapshot-anyway ,@body)
+       (delete-directory folder t))))
 
 (defun drgnx-job-snapshot-test--make (repo folder base &optional secs)
   "Make FOLDER's snapshot of REPO at BASE and wait for it: what DONE got (`:timeout' when it never came)."
@@ -67,18 +82,19 @@ FOLDER, the task folder REPO/.claude/worktrees/7-1/ (not made).  The copy-on-wri
   "What the sandbox does first: check BRANCH out at BASE in FOLDER."
   (drgnx-job-snapshot-test--git folder "checkout" "-q" "-f" "-B" branch base))
 
-(defun drgnx-job-snapshot-test--texts (dir)
-  "Every file under DIR except loose and packed objects, with its contents: ((FILE . TEXT) …)."
-  (mapcar (lambda (f) (cons f (with-temp-buffer (insert-file-contents-literally f) (buffer-string))))
-          (seq-remove (lambda (f) (string-match-p "/objects/" f)) (directory-files-recursively dir "" nil))))
-
-(defun drgnx-job-snapshot-test--leaks (dir needle)
-  "The files under DIR (objects apart) that hold NEEDLE."
-  (mapcar #'car (seq-filter (lambda (ft) (string-search needle (cdr ft))) (drgnx-job-snapshot-test--texts dir))))
+(defun drgnx-job-snapshot-test--seen (folder)
+  "All an agent in FOLDER can read of its repository: every file's bytes, and every object's contents (its own and
+its alternates', `cat-file --batch-all-objects --batch')."
+  (concat (mapconcat (lambda (f) (with-temp-buffer (insert-file-contents-literally f) (buffer-string)))
+                     (directory-files-recursively folder "" nil) "\n")
+          (drgnx-job-snapshot-test--git folder "cat-file" "--batch-all-objects" "--batch")))
 
 (defun drgnx-job-snapshot-test--config (folder)
   "FOLDER's repository config, as `git config --list' prints it from the file (lower-case names)."
   (drgnx-job-snapshot-test--git folder "config" "--file" ".git/config" "--list"))
+
+(defun drgnx-job-snapshot-test--store (repo)
+  (concat repo ".claude/worktrees/job~7.base.git/"))
 
 ;;;; The copy
 
@@ -109,10 +125,12 @@ FOLDER, the task folder REPO/.claude/worktrees/7-1/ (not made).  The copy-on-wri
 
 (ert-deftest drgnx-job-snapshot/fallback-is-a-shared-clone ()
   (drgnx-job-snapshot-test--with
-    (let ((drgnx-job-snapshot-copy-on-write nil)
-          (objects (directory-file-name (file-truename (concat repo ".git/objects")))))
+    (let* ((drgnx-job-snapshot-copy-on-write nil)
+           (objects (directory-file-name (concat (drgnx-job-snapshot-test--store repo) "objects"))))
+      ;; it borrows from the job's clean store, never from the user's .git
       (should (equal (drgnx-job-snapshot-test--make repo folder "job/7") (list :mode 'clone :read (list objects))))
-      (should (equal (drgnx-job-snapshot-alternates folder) (list objects)))
+      (should (equal (drgnx-job-snapshot-read-dirs repo "job/7") (list objects)))
+      (should (equal (drgnx-job-snapshot--alternates folder) (list objects)))
       (should (equal (drgnx-job-snapshot-test--git folder "rev-parse" "job/7") (drgnx-job-snapshot-test--git repo "rev-parse" "job/7")))
       ;; no checkout: the sandbox makes it
       (should-not (file-exists-p (concat folder "README")))
@@ -127,148 +145,213 @@ FOLDER, the task folder REPO/.claude/worktrees/7-1/ (not made).  The copy-on-wri
                      (directory-file-name (drgnx-job-snapshot-test--git wt "rev-parse" "--path-format=absolute" "--git-common-dir"))))
       (should (equal (drgnx-job-snapshot-common-dir repo) (directory-file-name (concat repo ".git"))))
       (should-not (drgnx-job-snapshot-common-dir root))
+      (drgnx-job-snapshot-test--git repo "config" "core.hooksPath" ".githooks")       ; the common dir's config is read
       (let ((folder (concat wt ".claude/worktrees/7-1/")))
         (drgnx-job-snapshot-test--snapshot-anyway
           (should (eq (plist-get (drgnx-job-snapshot-test--make wt folder "job/7") :mode) 'snapshot)))
-        (should (file-directory-p (concat folder ".git/objects")))
-        (should (equal (drgnx-job-snapshot-test--git folder "rev-parse" "job/7") (drgnx-job-snapshot-test--git repo "rev-parse" "job/7")))))))
+        (should (equal (drgnx-job-snapshot-test--git folder "rev-parse" "job/7") (drgnx-job-snapshot-test--git repo "rev-parse" "job/7")))
+        (should (string-match-p "^core\\.hookspath=\\.githooks$" (drgnx-job-snapshot-test--config folder)))))))
 
-;;;; The preparation
+;;;; What the agent can see: BASE's history, nothing else
 
-(ert-deftest drgnx-job-snapshot/prepare-argvs ()
-  (let ((argvs (drgnx-job-snapshot--prepare-argvs
-                "/r/.claude/worktrees/7-1/" "job/7"
-                '("core.bare" "core.fsmonitor" "core.worktree" "remote.origin.url" "remote.origin.fetch" "remote.a.b.url"
-                  "remote.pushdefault" "credential.helper" "credential.https://h.invalid.username" "url.https://t@h/.insteadof"
-                  "http.https://h/.extraheader" "github.token" "sendemail.smtppass" "include.path" "gc.auto" "user.name"))))
-    (should (equal (car argvs) '("cat-file" "-e" "job/7^{commit}")))
-    (should (member '("remote" "remove" "--" "origin") argvs))
-    (should (member '("remote" "remove" "--" "a.b") argvs))
-    (should (equal (seq-filter (lambda (a) (equal (car a) "remote")) argvs)
-                   '(("remote" "remove" "--" "origin") ("remote" "remove" "--" "a.b"))))
-    (should (equal (sort (mapcar (lambda (a) (nth 4 a)) (seq-filter (lambda (a) (member "--unset-all" a)) argvs)) #'string<)
-                   (sort (list "core.fsmonitor" "core.worktree" "remote.pushdefault" "credential.helper"
-                               "credential.https://h.invalid.username" "url.https://t@h/.insteadof" "http.https://h/.extraheader"
-                               "github.token" "sendemail.smtppass" "include.path")
-                         #'string<)))
-    (should (member '("config" "--file" "/r/.claude/worktrees/7-1/.git/config" "gc.auto" "0") argvs))
-    (should (equal (car (last argvs)) '("worktree" "prune")))
-    ;; every git on the copy runs with the user's hooks and fsmonitor off
-    (should (equal (drgnx-job-snapshot--git '("worktree" "prune"))
-                   '("git" "-c" "core.hooksPath=/dev/null" "-c" "core.fsmonitor=false" "worktree" "prune")))))
+(ert-deftest drgnx-job-snapshot/unreachable-objects-and-other-branches-not-copied ()
+  ;; K4b through the object store: a .env staged then unstaged, a dropped stash, a commit amended away, another
+  ;; branch — none is in what the task folder can read, in either mode, with either ref backend; and no reflog
+  (dolist (format '("files" "reftable"))
+    (drgnx-job-snapshot-test--with
+      (delete-directory repo t)
+      (drgnx-job-snapshot-test--repo repo format)
+      (write-region "KEY=env-SECRET\n" nil (concat repo ".env") nil 'silent)
+      (drgnx-job-snapshot-test--git repo "add" ".env")
+      (drgnx-job-snapshot-test--git repo "rm" "-q" "--cached" ".env")
+      (write-region "stashed-SECRET\n" nil (concat repo "README") nil 'silent)
+      (drgnx-job-snapshot-test--git repo "stash" "-q")
+      (drgnx-job-snapshot-test--git repo "stash" "drop" "-q")
+      (write-region "amended-SECRET\n" nil (concat repo "notes") nil 'silent)
+      (drgnx-job-snapshot-test--git repo "add" "notes")
+      (drgnx-job-snapshot-test--git repo "commit" "-q" "-m" "draft")
+      (let ((amended (drgnx-job-snapshot-test--git repo "rev-parse" "HEAD")))
+        (write-region "clean\n" nil (concat repo "notes") nil 'silent)
+        (drgnx-job-snapshot-test--git repo "commit" "-q" "--amend" "-am" "notes")
+        (drgnx-job-snapshot-test--git repo "branch" "-f" "job/7" "HEAD")
+        (drgnx-job-snapshot-test--git repo "checkout" "-q" "-b" "wip")
+        (write-region "wip-SECRET\n" nil (concat repo "wip") nil 'silent)
+        (drgnx-job-snapshot-test--git repo "add" "wip")
+        (drgnx-job-snapshot-test--git repo "commit" "-q" "-m" "wip")
+        (drgnx-job-snapshot-test--git repo "checkout" "-q" "main")
+        ;; the user's store does hold them: the fixture is real
+        (should (string-search "amended-SECRET" (drgnx-job-snapshot-test--git repo "cat-file" "--batch-all-objects" "--batch")))
+        (drgnx-job-snapshot-test--both-modes
+          (should (eq (plist-get (drgnx-job-snapshot-test--make repo folder "job/7") :mode) mode))
+          (let ((seen (drgnx-job-snapshot-test--seen folder)))
+            (dolist (s '("env-SECRET" "stashed-SECRET" "amended-SECRET" "wip-SECRET"))
+              (should-not (string-search s seen)))
+            (should-not (string-search amended seen)))
+          (should (equal (drgnx-job-snapshot-test--git folder "for-each-ref" "--format=%(refname)" "refs/heads" "refs/tags" "refs/stash")
+                         "refs/heads/job/7"))
+          (should-not (string-search amended (drgnx-job-snapshot-test--git folder "reflog" "--all" "--format=%H %gs")))
+          (drgnx-job-snapshot-test--checkout folder "job/7-1" "job/7")
+          (should (equal (with-temp-buffer (insert-file-contents (concat folder "notes")) (buffer-string)) "clean\n")))))))
+
+(ert-deftest drgnx-job-snapshot/untracked-and-uncommitted-files-not-copied ()
+  (drgnx-job-snapshot-test--with
+    ;; the user's main checkout: a staged file, a dirty file, an untracked .env
+    (write-region "staged-SECRET\n" nil (concat repo "staged.txt") nil 'silent)
+    (drgnx-job-snapshot-test--git repo "add" "staged.txt")
+    (write-region "dirty-SECRET\n" nil (concat repo "README") nil 'silent)
+    (write-region "KEY=env-SECRET\n" nil (concat repo ".env") nil 'silent)
+    (drgnx-job-snapshot-test--both-modes
+      (drgnx-job-snapshot-test--make repo folder "job/7")
+      (should-not (file-exists-p (concat folder ".git/index")))
+      (drgnx-job-snapshot-test--checkout folder "job/7-1" "job/7")
+      (should (equal (directory-files folder nil directory-files-no-dot-files-regexp) '(".git" "README")))
+      (should (equal (with-temp-buffer (insert-file-contents (concat folder "README")) (buffer-string)) "two\n"))
+      (let ((seen (drgnx-job-snapshot-test--seen folder)))
+        (dolist (s '("staged-SECRET" "dirty-SECRET" "env-SECRET"))
+          (should-not (string-search s seen)))))))
+
+(ert-deftest drgnx-job-snapshot/config-is-a-whitelist ()
+  (let ((text (drgnx-job-snapshot--config-text
+               '(("core.repositoryformatversion" . "1") ("core.filemode" . "true") ("core.bare" . "true")
+                 ("extensions.objectformat" . "sha256") ("remote.origin.url" . "/r"))
+               '(("core.hookspath" . ".githooks") ("core.autocrlf" . "input") ("filter.lfs.smudge" . "git-lfs smudge -- %f")
+                 ("filter.lfs.required" . "true") ("core.fsmonitor" . "/x") ("core.worktree" . "/r")
+                 ("submodule.lib.url" . "https://u:S@h/l") ("lfs.url" . "https://u:S@h/") ("credential.helper" . "store")
+                 ("filter.lfs.process" . "https://u:S@h/x") ("filter.other.smudge" . "evil"))
+               nil)))
+    (should (equal text (concat "[core]\n\trepositoryformatversion = \"1\"\n\tfilemode = \"true\"\n"
+                                "\tbare = \"false\"\n\thookspath = \".githooks\"\n\tautocrlf = \"input\"\n"
+                                "[extensions]\n\tobjectformat = \"sha256\"\n"
+                                "[filter \"lfs\"]\n\tsmudge = \"git-lfs smudge -- %f\"\n\trequired = \"true\"\n"
+                                "[gc]\n\tauto = \"0\"\n"))))
+  ;; a hooks path outside the checkout is not carried; quotes and backslashes are escaped
+  (should-not (string-search "hookspath" (drgnx-job-snapshot--config-text nil '(("core.hookspath" . "/etc/hooks")) t)))
+  (should-not (string-search "hookspath" (drgnx-job-snapshot--config-text nil '(("core.hookspath" . "../up")) t)))
+  (should (string-search "smudge = \"a \\\"b\\\" \\\\c\""
+                         (drgnx-job-snapshot--config-text nil '(("filter.lfs.smudge" . "a \"b\" \\c")) t))))
 
 (ert-deftest drgnx-job-snapshot/prepared-copy-has-no-remotes-or-credentials ()
   (drgnx-job-snapshot-test--with
     (let ((secret "tok-SECRET-41a7"))
-      (drgnx-job-snapshot-test--git repo "remote" "add" "origin" (format "https://u:%s@example.invalid/r.git" secret))
+      (dolist (kv `(("remote.origin.url" ,(format "https://u:%s@example.invalid/r.git" secret))
+                    ("credential.helper" "store")
+                    ("credential.https://example.invalid.username" ,secret)
+                    (,(format "url.https://%s@x.invalid/.insteadOf" secret) "https://x.invalid/")
+                    ("http.https://example.invalid/.extraheader" ,(concat "AUTHORIZATION: basic " secret))
+                    ("submodule.lib.url" ,(format "https://u:%s@example.invalid/lib" secret))
+                    ("branch.main.pushremote" ,(format "https://u:%s@example.invalid/r" secret))
+                    (,(format "http.https://u:%s@h.invalid/.sslverify" secret) "false")
+                    ("lfs.url" ,(format "https://u:%s@example.invalid/lfs" secret))
+                    ("core.hooksPath" ".githooks")))
+        (drgnx-job-snapshot-test--git repo "config" (car kv) (cadr kv)))
       (drgnx-job-snapshot-test--git repo "update-ref" "refs/remotes/origin/main" "main")
-      (drgnx-job-snapshot-test--git repo "config" "credential.helper" "store")
-      (drgnx-job-snapshot-test--git repo "config" "credential.https://example.invalid.username" secret)
-      (drgnx-job-snapshot-test--git repo "config" (format "url.https://%s@x.invalid/.insteadOf" secret) "https://x.invalid/")
-      (drgnx-job-snapshot-test--git repo "config" "http.https://example.invalid/.extraheader" (concat "AUTHORIZATION: basic " secret))
       (write-region (format "abc\t\tbranch 'main' of https://u:%s@example.invalid/r\n" secret) nil
                     (concat repo ".git/FETCH_HEAD") nil 'silent)
-      (dolist (cow '(t nil))
-        (let ((drgnx-job-snapshot-copy-on-write cow))
-          (drgnx-job-snapshot-test--snapshot-anyway
-            (should (eq (plist-get (drgnx-job-snapshot-test--make repo folder "job/7") :mode) (if cow 'snapshot 'clone))))
-          (should-not (drgnx-job-snapshot-test--leaks (concat folder ".git") secret))
-          (should (equal (drgnx-job-snapshot-test--git folder "remote") ""))
-          (should-not (string-match-p "^\\(remote\\|credential\\|url\\)\\.\\|extraheader"
-                                      (drgnx-job-snapshot-test--config folder)))
-          (should-not (file-exists-p (concat folder ".git/refs/remotes/origin/main")))
-          (delete-directory folder t))))))
+      (drgnx-job-snapshot-test--both-modes
+        (should (eq (plist-get (drgnx-job-snapshot-test--make repo folder "job/7") :mode) mode))
+        (should-not (string-search secret (drgnx-job-snapshot-test--seen folder)))
+        (should (equal (drgnx-job-snapshot-test--git folder "remote") ""))
+        (should-not (string-match-p "^\\(remote\\|credential\\|url\\|submodule\\|lfs\\|http\\)\\."
+                                    (drgnx-job-snapshot-test--config folder)))
+        ;; the project's own hooks path is kept in both modes: its pre-commit runs inside the sandbox
+        (should (string-match-p "^core\\.hookspath=\\.githooks$" (drgnx-job-snapshot-test--config folder)))
+        (should-not (file-exists-p (concat folder ".git/refs/remotes/origin/main")))))))
 
 (ert-deftest drgnx-job-snapshot/prepared-copy-has-gc-off ()
   (drgnx-job-snapshot-test--with
-    (dolist (cow '(t nil))
-      (let ((drgnx-job-snapshot-copy-on-write cow))
-        (drgnx-job-snapshot-test--snapshot-anyway (drgnx-job-snapshot-test--make repo folder "job/7"))
-        (should (equal (drgnx-job-snapshot-test--git folder "config" "--file" ".git/config" "gc.auto") "0"))
-        (delete-directory folder t)))))
+    (drgnx-job-snapshot-test--both-modes
+      (drgnx-job-snapshot-test--make repo folder "job/7")
+      (should (equal (drgnx-job-snapshot-test--git folder "config" "--file" ".git/config" "gc.auto") "0"))
+      (should (equal (drgnx-job-snapshot-test--git folder "config" "--file" ".git/config" "core.bare") "false")))))
 
 (ert-deftest drgnx-job-snapshot/prepare-runs-none-of-the-user-s-programs ()
-  ;; a reference-transaction hook (run by `remote remove') and core.fsmonitor in the user's repo touch a canary when
-  ;; run: the preparation runs neither, and the copy keeps no fsmonitor and no core.worktree
+  ;; a reference-transaction hook and core.fsmonitor in the user's repo touch a canary when run: making the store and
+  ;; the copy runs neither, and the copy has no fsmonitor, no core.worktree and no hooks of the user's
   (drgnx-job-snapshot-test--with
     (let ((canary (concat root "canary")) (hook (concat repo ".git/hooks/reference-transaction")))
       (write-region (format "#!/bin/sh\ntouch %s\n" canary) nil hook nil 'silent)
       (set-file-modes hook #o755)
       (drgnx-job-snapshot-test--git repo "config" "core.fsmonitor" hook)
       (drgnx-job-snapshot-test--git repo "config" "core.worktree" repo)
-      (drgnx-job-snapshot-test--git repo "remote" "add" "origin" "https://example.invalid/r.git")
-      (drgnx-job-snapshot-test--git repo "update-ref" "refs/remotes/origin/main" "main")
       (when (file-exists-p canary) (delete-file canary))
-      (drgnx-job-snapshot-test--snapshot-anyway
-        (should (eq (plist-get (drgnx-job-snapshot-test--make repo folder "job/7") :mode) 'snapshot)))
-      (should-not (file-exists-p canary))
-      (should-not (string-match-p "core\\.\\(fsmonitor\\|worktree\\)" (drgnx-job-snapshot-test--config folder))))))
+      (drgnx-job-snapshot-test--both-modes
+        (should (eq (plist-get (drgnx-job-snapshot-test--make repo folder "job/7") :mode) mode))
+        (should-not (file-exists-p canary))
+        (should-not (file-exists-p (concat folder ".git/hooks/reference-transaction")))
+        (should-not (string-match-p "core\\.\\(fsmonitor\\|worktree\\)" (drgnx-job-snapshot-test--config folder)))))))
 
 (ert-deftest drgnx-job-snapshot/user-worktrees-pruned ()
   (drgnx-job-snapshot-test--with
     (drgnx-job-snapshot-test--git repo "worktree" "add" "-q" "-b" "side" (concat root "wt"))   ; still on disk
-    (dolist (cow '(t nil))
-      (let ((drgnx-job-snapshot-copy-on-write cow))
-        (drgnx-job-snapshot-test--snapshot-anyway (drgnx-job-snapshot-test--make repo folder "job/7"))
-        (should-not (file-exists-p (concat folder ".git/worktrees")))
-        (should (= 1 (length (seq-filter (lambda (l) (string-prefix-p "worktree " l))
-                                         (split-string (drgnx-job-snapshot-test--git folder "worktree" "list" "--porcelain") "\n")))))
-        (delete-directory folder t)))))
-
-(ert-deftest drgnx-job-snapshot/untracked-and-uncommitted-files-not-copied ()
-  (drgnx-job-snapshot-test--with
-    ;; the user's main checkout: a stash, a staged file, a dirty file, an untracked .env
-    (write-region "stashed-SECRET\n" nil (concat repo "README") nil 'silent)
-    (drgnx-job-snapshot-test--git repo "stash" "-q")
-    (write-region "staged-SECRET\n" nil (concat repo "staged.txt") nil 'silent)
-    (drgnx-job-snapshot-test--git repo "add" "staged.txt")
-    (write-region "dirty-SECRET\n" nil (concat repo "README") nil 'silent)
-    (write-region "KEY=env-SECRET\n" nil (concat repo ".env") nil 'silent)
-    (dolist (cow '(t nil))
-      (let ((drgnx-job-snapshot-copy-on-write cow))
-        (drgnx-job-snapshot-test--snapshot-anyway (drgnx-job-snapshot-test--make repo folder "job/7"))
-        (should-not (file-exists-p (concat folder ".git/index")))            ; the user's staging area
-        (should-not (file-exists-p (concat folder ".git/refs/stash")))
-        (drgnx-job-snapshot-test--checkout folder "job/7-1" "job/7")
-        (should (equal (directory-files folder nil directory-files-no-dot-files-regexp) '(".git" "README")))
-        (should (equal (with-temp-buffer (insert-file-contents (concat folder "README")) (buffer-string)) "two\n"))
-        (should (equal (drgnx-job-snapshot-test--git folder "stash" "list") ""))
-        (dolist (s '("stashed-SECRET" "staged-SECRET" "dirty-SECRET" "env-SECRET"))
-          (should-not (drgnx-job-snapshot-test--leaks folder s)))
-        (delete-directory folder t)))))
+    (drgnx-job-snapshot-test--both-modes
+      (drgnx-job-snapshot-test--make repo folder "job/7")
+      (should-not (file-exists-p (concat folder ".git/worktrees")))
+      (should (= 1 (length (seq-filter (lambda (l) (string-prefix-p "worktree " l))
+                                       (split-string (drgnx-job-snapshot-test--git folder "worktree" "list" "--porcelain") "\n"))))))))
 
 (ert-deftest drgnx-job-snapshot/stale-lock-files-removed ()
   (drgnx-job-snapshot-test--with
-    ;; a git of the user's in the middle of its work: its locks are copied with the rest
+    ;; a git of the user's in the middle of its work: none of its locks reaches the copy, and none is touched
     (let ((locks '("index.lock" "HEAD.lock" "config.lock" "packed-refs.lock" "refs/heads/main.lock")))
       (dolist (l locks) (write-region "" nil (concat repo ".git/" l) nil 'silent))
+      (drgnx-job-snapshot-test--both-modes
+        (should (eq (plist-get (drgnx-job-snapshot-test--make repo folder "job/7") :mode) mode))
+        (should-not (directory-files-recursively (concat folder ".git") "\\.lock\\'"))
+        (dolist (l locks) (should (file-exists-p (concat repo ".git/" l))))))))
+
+;;;; The job's store
+
+(ert-deftest drgnx-job-snapshot/store-made-once-per-job-and-refreshed ()
+  (drgnx-job-snapshot-test--with
+    (let ((store (drgnx-job-snapshot-test--store repo)) (other (concat repo ".claude/worktrees/7-2/")))
       (drgnx-job-snapshot-test--snapshot-anyway
-        (should (eq (plist-get (drgnx-job-snapshot-test--make repo folder "job/7") :mode) 'snapshot)))
-      (should-not (directory-files-recursively (concat folder ".git") "\\.lock\\'"))
-      (dolist (l locks) (should (file-exists-p (concat repo ".git/" l)))))))       ; the user's are not touched
+        (drgnx-job-snapshot-test--make repo folder "job/7")
+        (should (equal (drgnx-job-snapshot-store-dir repo "job/7") store))
+        (should (file-regular-p (concat store "HEAD")))
+        (should-not (file-exists-p (concat store "hooks")))
+        (let ((inode (file-attribute-inode-number (file-attributes (concat store "config")))))
+          ;; job/7 moves on (a task merged): the next task sees it; the store is the same one, fetched into
+          (write-region "three\n" nil (concat repo "README") nil 'silent)
+          (drgnx-job-snapshot-test--git repo "commit" "-q" "-am" "three")
+          (drgnx-job-snapshot-test--git repo "branch" "-f" "job/7" "main")
+          (should (eq (plist-get (drgnx-job-snapshot-test--make repo other "job/7") :mode) 'snapshot))
+          (should (equal (drgnx-job-snapshot-test--git other "log" "--format=%s" "job/7") "three\ntwo\none"))
+          (should (equal (file-attribute-inode-number (file-attributes (concat store "config"))) inode))
+          (should-not (file-exists-p (concat store "FETCH_HEAD"))))
+        ;; two tasks at once: the store's steps run one after the other, both get their copy
+        (delete-directory folder t) (delete-directory other t)
+        (let (a b)
+          (drgnx-job-snapshot-make repo folder "job/7" (lambda (r) (setq a r)))
+          (drgnx-job-snapshot-make repo other "job/7" (lambda (r) (setq b r)))
+          (should (drgnx-job-snapshot-test--wait-for (lambda () (and a b)) 30))
+          (should (eq (plist-get a :mode) 'snapshot))
+          (should (eq (plist-get b :mode) 'snapshot))
+          (should (= 0 (hash-table-count drgnx-job-snapshot--busy))))))))
 
 (ert-deftest drgnx-job-snapshot/missing-base-retries-once ()
   (drgnx-job-snapshot-test--with
     (drgnx-job-snapshot-test--snapshot-anyway
-      (let* ((copies 0) (appears t) (argv (symbol-function 'drgnx-job-snapshot--copy-argv)))
-        ;; the base appears only after the first copy: a git of the user's was writing it
-        (cl-letf (((symbol-function 'drgnx-job-snapshot--copy-argv)
-                   (lambda (from to)
-                     (when (and (= (cl-incf copies) 2) appears) (drgnx-job-snapshot-test--git repo "branch" "job/9"))
-                     (funcall argv from to))))
+      (let* ((tries 0) (appears t) (real (symbol-function 'drgnx-job-snapshot--refresh-store)))
+        ;; the base appears only after the first try: a git of the user's was writing it
+        (cl-letf (((symbol-function 'drgnx-job-snapshot--refresh-store)
+                   (lambda (&rest args)
+                     (when (and (= (cl-incf tries) 2) appears) (drgnx-job-snapshot-test--git repo "branch" "job/9"))
+                     (apply real args))))
           (should (eq (plist-get (drgnx-job-snapshot-test--make repo folder "job/9") :mode) 'snapshot))
-          (should (= copies 2))
+          (should (= tries 2))
           (delete-directory folder t)
-          ;; never there: an error after the second try, and the folder gone
-          (setq copies 0 appears nil)
+          ;; never there: an error after the second try, and nothing left
+          (setq tries 0 appears nil)
           (let ((r (drgnx-job-snapshot-test--make repo folder "job/nope")))
             (should (string-match-p "job/nope" (plist-get r :error)))
-            (should (= copies 2))
-            (should-not (file-exists-p folder))))))))
+            (should (= tries 2))
+            (should-not (file-exists-p folder))
+            (should-not (file-exists-p (drgnx-job-snapshot-store-dir repo "job/nope")))))))))
 
 (ert-deftest drgnx-job-snapshot/refusals ()
   (drgnx-job-snapshot-test--with
     (should (plist-get (drgnx-job-snapshot-test--make repo folder "-oops") :error))
+    (should (plist-get (drgnx-job-snapshot-test--make repo folder "job~7") :error))
     (should (plist-get (drgnx-job-snapshot-test--make root folder "job/7") :error))            ; not a repository
     (make-directory folder t)
     (write-region "x" nil (concat folder "keep") nil 'silent)
@@ -307,11 +390,20 @@ FOLDER, the task folder REPO/.claude/worktrees/7-1/ (not made).  The copy-on-wri
       (should-not (file-exists-p folder))
       (should (file-exists-p (concat outside "canary")))
       (should (file-directory-p (concat repo ".git/objects")))
-      ;; only task folders
-      (let ((r nil))
-        (drgnx-job-snapshot-remove repo (lambda (x) (setq r x)))
-        (should (drgnx-job-snapshot-test--wait-for (lambda () r)))
-        (should (plist-get r :error))
-        (should (file-directory-p repo))))))
+      ;; the job's store goes the same way
+      (setq removed nil)
+      (drgnx-job-snapshot-remove (drgnx-job-snapshot-test--store repo) (lambda (r) (setq removed r)))
+      (should (eq (drgnx-job-snapshot-test--wait-for (lambda () removed)) t))
+      (should-not (file-exists-p (drgnx-job-snapshot-test--store repo)))
+      ;; only its own folders: not the repository, not a session worktree, not a job tree (a .git file)
+      (let ((session (concat repo ".claude/worktrees/sb-t6/")) (tree (concat repo ".claude/worktrees/job-1-2/")))
+        (make-directory (concat session ".git") t)
+        (make-directory tree t)
+        (write-region "gitdir: x\n" nil (concat tree ".git") nil 'silent)
+        (dolist (dir (list repo session tree))
+          (let ((r nil))
+            (drgnx-job-snapshot-remove dir (lambda (x) (setq r x)))
+            (should (plist-get (drgnx-job-snapshot-test--wait-for (lambda () r)) :error))
+            (should (file-directory-p dir))))))))
 
 ;;; job-snapshot-test.el ends here

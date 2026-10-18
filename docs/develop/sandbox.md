@@ -3,119 +3,160 @@
 ## Git: snapshot mode
 
 In snapshot mode, the default, each task of a job gets a `.git` of its own in its folder
-`<repo>/.claude/worktrees/ID-N/`. The agent owns that copy entirely and never touches the user's `.git`. Only `.git`
-is copied, so **the agent never sees the user's uncommitted changes or untracked files** (`.env`, local keys).
-`core/drgnx-job-snapshot.el` makes and prepares the copy. Git's own security guidance sets the rule: a `.git` an
-agent can write is untrusted, and running git in it runs that agent's config and hooks. So the hub runs git in a copy
-only **before** any agent has it. From then on, git runs there only inside the sandbox.
+`<repo>/.claude/worktrees/ID-N/`. `core/drgnx-job-snapshot.el` makes it. It is **never a copy of the user's
+`.git`**. The user's `.git` holds what an agent must not read, and `git cat-file --batch-all-objects` or
+`fsck --lost-found` lists all of it without knowing any object id:
+- unreachable objects: a file staged and then unstaged, a dropped stash, a commit amended away;
+- the other branches, tags, reflogs and the index;
+- config that may carry tokens.
 
-### The copy
+Git's own security guidance sets the second rule: a `.git` an agent can write is untrusted, and running git in it runs
+that agent's config and hooks. So the hub runs git in a task's `.git` only **before** any agent has it. From then
+on, git runs there only inside the sandbox.
 
-`drgnx-job-snapshot-make REPO FOLDER BASE DONE` makes the copy. It is asynchronous, like every step here (separate
-processes, so the hub never waits). DONE gets one of:
+### What the agent can see
 
-- `(:mode snapshot :read DIRS)`: a copy-on-write copy of REPO's common git directory (`drgnx-job-snapshot-common-dir`,
-  so a linked worktree or a submodule is copied from its common dir). On Linux it uses `cp -a --reflink=always`
-  (btrfs, XFS). On macOS it uses `cp -c -a` (clonefile, APFS). The folder is inside the repository, so the copy is
-  on the same filesystem, and blocks are shared until one side rewrites them.
-- `(:mode clone :read DIRS)`: the fallback where there is no copy-on-write (tmpfs, ext4, network filesystems,
-  HFS+). It runs `git clone -q --shared --no-checkout --branch BASE REPO FOLDER`, so objects come through
-  alternates and nothing is copied.
-- `(:error MSG)`: BASE is not a branch name, REPO is not a repository, FOLDER exists and is not empty, or the copy
+In a task's `.git`, and nothing more:
+- **The branch BASE** (`refs/heads/job/ID`) and every object reachable from it: the whole history of that branch,
+  including anything ever committed to it. `HEAD` names BASE.
+- **The objects of earlier BASE tips.** The job's store keeps them: BASE moves forward as tasks merge, and a
+  force-moved BASE leaves its old tip's objects, which were the job's own.
+- **A whitelist config** that the hub wrote (below).
+- **A shared clone** (no copy-on-write) also has:
+  - `refs/remotes/origin/job/ID`, at the same commit;
+  - the clone's own reflog entry, which names the store's path;
+  - read access to the store's objects, the same set as above.
+
+Everything else stays out:
+- the user's other branches, tags, stash, reflogs and index;
+- unreachable objects;
+- uncommitted changes and untracked files (`.env`, local keys);
+- the user's hooks, remotes, credentials and other config;
+- the user's linked worktrees.
+
+The user's `.git` is never copied or mounted.
+
+### The job's store
+
+Once per job, the hub makes a **clean store** at `<repo>/.claude/worktrees/<BASE>.base.git`, where the `/` of BASE
+becomes `~` (`job~ID.base.git`; `~` never appears in a branch name). It is made with:
+
+```
+git -c core.hooksPath=/dev/null -c core.fsmonitor=false clone -q --no-local --bare --single-branch --no-tags \
+    --template= --branch BASE -- REPO STORE
+```
+
+- `--no-local` makes git transfer a pack through upload-pack, as from a server. Only objects reachable from BASE come
+  through, so none of the user's unreachable objects, other branches or tags.
+- `--template=` installs no hooks.
+- The clone's config is then **replaced** with the whitelist.
+- A bare clone writes no reflog.
+
+The store is hub-only. No agent mounts it writable, and nothing of an agent's reaches it. When BASE moves (a task
+merged), the next task's snapshot first runs `fetch -q --no-tags --no-write-fetch-head REPO +refs/heads/BASE:refs/heads/BASE`
+in the store. The store's steps run one at a time: a fetch while a copy reads the store could give the copy a ref
+without its objects.
+
+### The task's copy
+
+`drgnx-job-snapshot-make REPO FOLDER BASE DONE` makes the store, or fetches into it, and then the task's `.git`. It is
+asynchronous, like every step here (separate processes with a deadline, so the hub never waits). DONE gets one of:
+
+- `(:mode snapshot :read nil)`: a copy-on-write copy of the store. On Linux it uses `cp -a --reflink=always` (btrfs,
+  XFS). On macOS it uses `cp -c -a` (clonefile, APFS). The store is inside the repository, so the copy is on the same
+  filesystem.
+- `(:mode clone :read DIRS)`: the fallback without copy-on-write (tmpfs, ext4, network filesystems, HFS+). It runs
+  `git clone -q --shared --no-checkout --single-branch --no-tags --template= --branch BASE STORE FOLDER`. DIRS is the
+  store's `objects`, which the sandbox mounts read-only. Never the user's.
+- `(:error MSG)`: BASE is not a branch name, REPO is not a repository, FOLDER exists and is not empty, or the store
   failed twice.
 
-DIRS are the object directories the sandbox must mount read-only. For a clone, that is the main repository's
-`objects`. For a copy, it is nil, unless the repository itself borrows objects (its alternates are written into the
-copy as absolute paths). The caller keeps DIRS with the task. `drgnx-job-snapshot-alternates FOLDER` reads the same
-thing from the folder, but once an agent has had the folder, its alternates file is the agent's. Read from then on,
-an agent could name any directory there and get it mounted, so later callers use DIRS.
+In both modes, the task's config is the store's whitelist again, with `core.bare false`. Then
+`cat-file -e refs/heads/BASE^{commit}` checks the copy. Nothing is checked out: the sandbox's first step checks out
+`job/ID-N` at BASE in the empty folder.
 
-Nothing is checked out. The sandbox's first step checks out `job/ID-N` at BASE in the empty folder.
+The caller keeps DIRS with the task, in the hub's state, never in the folder. At bind time it checks them against
+`drgnx-job-snapshot-read-dirs REPO BASE`, which is derived from the repository. Once an agent has had a folder, its
+alternates file is the agent's, so nothing is ever derived from it.
 
 **Copy-on-write is probed, not assumed.** `drgnx-job-snapshot-cow-p REPO` copies one small file under
 `<repo>/.claude/worktrees/` (never in `.git`) with the copy command, and caches the answer per filesystem (the
-device number). In the hub, the first probe on a filesystem is a process of its own. `drgnx-job-snapshot-copy-on-write`
-set to nil always makes the clone.
+device number). In the hub, the first probe on a filesystem is a process of its own. Setting
+`drgnx-job-snapshot-copy-on-write` to nil always makes the clone.
 
-**A `.git` the user's git is writing.** A copy taken while the user commits or fetches can hold that git's lock files
-and miss a ref. The locks are removed (below). The base commit is then checked, and when it is missing, the copy is
-removed and made once more.
+**A `.git` the user's git is writing.** The store comes from git's own transfer, which reads refs and objects
+consistently and ignores the user's lock files. When the clone or fetch fails, for example because BASE is not there
+yet, a store made by that try is removed and the step runs once more.
 
-### The preparation (trusted steps only)
+### The config: a whitelist the hub writes
 
-The copy still holds only the user's content, so the hub prepares it outside the sandbox:
+The hub writes the store's config itself, and each task's config is the same list. A key no one has thought of yet
+stays out.
 
-1. **Per-checkout state removed** (plain file operations, no git). Only `HEAD`, `config`, `description`, `hooks`,
-   `info`, `objects`, `refs`, `packed-refs`, `shallow`, `reftable` and `lfs` stay. Everything else is the user's
-   checkout's state, and removing it keeps the user's work in progress out:
-   - `index` holds staged changes;
-   - `logs/` is the reflogs, including the stash's list;
-   - `worktrees/` holds the user's linked worktrees. They are still on disk, so `git worktree prune` alone would keep
-     them;
-   - `FETCH_HEAD`, `remotes/` and `branches/` hold remote URLs;
-   - `MERGE_*`, `rebase-*`, `sequencer/`, `ORIG_HEAD` and `AUTO_MERGE` are merge, rebase and sequencer state;
-   - `modules/` and `config.worktree`.
+| From | Keys | Why |
+|---|---|---|
+| the store's fresh clone | `core.repositoryformatversion`, `core.filemode`, `core.ignorecase`, `core.symlinks`, `core.precomposeunicode`, `extensions.*` | What git needs to read the repository (the object format). |
+| the user's repository (`--no-includes`) | `core.autocrlf`, `core.eol`, `core.safecrlf` | Line endings, as the user checks out. |
+| the user's repository | `core.hooksPath`, only if relative and without `..` | The project's own hooks (drgnx's `.githooks`) run inside the sandbox, from the checkout. |
+| the user's repository | `filter.lfs.clean`, `smudge`, `process`, `required` | Git LFS checkouts. |
+| the hub | `core.bare` (true in the store, false in a task), `gc.auto 0` | A repack would un-share copied blocks, or drop objects a clone borrows. |
 
-   Every `*.lock` left in the kept part is removed too (the loose object directories are not walked).
-2. **Git steps**, each with `-c core.hooksPath=/dev/null -c core.fsmonitor=false`:
-   - `cat-file -e BASE^{commit}`: the base is there.
-   - `update-ref -d refs/stash`: the user's stashed changes.
-   - `config --file .git/config --unset-all KEY` for each key below.
-   - `remote remove -- NAME` for every remote. This removes its URL (which may hold a token) and its
-     remote-tracking refs.
-   - `config --file .git/config gc.auto 0`: a repack inside would un-share the copied blocks.
-   - `worktree prune`.
+A carried value that holds a URL with credentials (`://user:secret@`) is dropped too.
 
-The steps first list the copy's config names with `config --file … --no-includes --name-only --list --null`, so no
-include is followed. The config edits use `--file`, so git does not even open the repository for them.
+Nothing else is carried:
+- remotes, `credential.*`, `url.*`, `http.*` (including `http.<url>.*` subsections with credentials in the URL);
+- `submodule.*.url`, `branch.*.remote` and `pushRemote`;
+- `lfs.url` and `lfs.pushurl`;
+- `include*`;
+- `core.fsmonitor`, `core.worktree`, `core.sshCommand` and the other program keys.
 
-**Overridden for every git the hub runs on a copy, and why:**
+**Overrides on every git the hub runs here:**
 
 | Override | Why |
 |---|---|
-| `core.hooksPath=/dev/null` | `remote remove` and `update-ref` delete refs, which runs the `reference-transaction` hook. No hook of the copy runs in the hub. |
-| `core.fsmonitor=false` | An fsmonitor is a program git runs whenever it reads the index. None of these steps should, but none can start one. |
-| env: `GIT_TERMINAL_PROMPT=0`; `GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`, `GIT_COMMON_DIR`, `GIT_OBJECT_DIRECTORY` and `GIT_ALTERNATE_OBJECT_DIRECTORIES` unset | Never a prompt. No inherited variable points git at another repository. |
+| `core.hooksPath=/dev/null`, `--template=` | No hook runs in the hub, and none is installed in the store or a clone. |
+| `core.fsmonitor=false` | An fsmonitor is a program git runs whenever it reads the index. |
+| env: `GIT_TERMINAL_PROMPT=0` | Never a prompt. |
+| env: `GIT_ALLOW_PROTOCOL=file` | Only local transfers. |
+| env: `GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`, `GIT_COMMON_DIR`, `GIT_OBJECT_DIRECTORY` and `GIT_ALTERNATE_OBJECT_DIRECTORIES` unset | No inherited variable points git at another repository. |
 
-**Unset in the copy's config (`drgnx-job-snapshot--strip`), and why:**
+The clone's local upload-pack reads the user's own repository config, which is trusted.
 
-| Keys | Why |
-|---|---|
-| `remote.*` (by `remote remove`), `remote.pushDefault` | URLs may hold a token. `uploadpack` and `receivepack` are commands. |
-| `credential.*` | Helpers are programs. Usernames name accounts. |
-| `url.*` | `insteadOf` rewrites may hold a token. |
-| any `*.extraHeader`, `http.proxy`, `http.<url>.proxy` | `Authorization:` headers (CI checkouts write them). A proxy URL may hold a password. |
-| any key ending in `token`, `pass`, `password` or `secret` (`sendemail.smtpPass`, `github.token`, …) | Named like a secret. |
-| `include.*`, `includeIf.*` | Files outside the copy, which the sandbox does not mount. |
-| `core.fsmonitor`, `core.sshCommand`, `core.askPass`, `core.gitProxy`, `core.alternateRefsCommand` | Programs on the user's machine. The copy starts with none, so any later one is the agent's. |
-| `core.worktree` | It points to the user's checkout (submodules, separate git dirs). The agent's checkout is its folder. |
+**Inside the sandbox**, git runs what the task's config and checkout name:
+- checkout runs `filter.lfs.*` and the hooks under a relative `core.hooksPath` (`post-checkout`);
+- `bundle create` runs none.
 
-**Kept, on purpose:** the copy's `hooks/` and a relative `core.hooksPath` (a project's own pre-commit check still
-runs, inside the sandbox), and `filter.*`, `diff.*` and `merge.*` drivers (Git LFS checkouts need them). They run only
-inside the sandbox.
+drgnx's own sandboxed steps should still pass `-c core.hooksPath=/dev/null -c core.fsmonitor=false -c core.pager=cat
+-c core.editor=false`, with `GIT_CONFIG_GLOBAL=/dev/null` and `GIT_CONFIG_NOSYSTEM=1`. Then an agent's config only
+ever runs with the agent's own power.
 
 After DONE, nothing outside the sandbox runs git in the folder again (the VC guard enforces it).
 
 **Limits:**
-- Objects are copied whole. A blob the user staged, or a dropped stash, stays in the copy's object store as an
-  unreachable object. It can be read by its id, but no ref, index or reflog names it. The shared clone reads the
-  same store through alternates.
-- Submodules' git directories (`modules/`) are not copied.
+- Git LFS content (`.git/lfs/objects`) is not in the store. An LFS checkout fetches it, which needs the network.
+- Submodules' git directories are not copied. A task gets empty submodule directories.
 - On macOS, `cp -c` may fall back to a full copy without failing on a filesystem without clonefile. The probe then
-  answers yes, and the copy costs the whole `.git`.
+  answers yes. For a store this costs little (it holds BASE alone).
+- The store's time and disk grow with BASE's reachable history. A very large repository pays seconds once per job,
+  not per task.
 
 ### Bounded
 
-The copy lives in the task folder and nowhere else. `drgnx-job-snapshot-remove FOLDER DONE` removes the folder with
-`rm -rf`, which never follows a link the agent left. It refuses anything that is not `.claude/worktrees/NAME/`.
-`drgnx-job-snapshot-disk-usage FOLDER DONE` reports `(:bytes N :exclusive M)`:
+The store and each copy live under `.claude/worktrees/` and nowhere else. `drgnx-job-snapshot-remove DIR DONE`
+removes them with `rm -rf`, which never follows a link an agent left. It takes only its own folders:
+- a task folder `ID-N` (or `ID-N-review`) with a `.git` directory;
+- a store `NAME.base.git`.
+
+It refuses anything that is a link. Remove a store only after the last task that borrows from it (shared clones).
+`drgnx-job-snapshot-disk-usage DIR DONE` reports `(:bytes N :exclusive M)`:
 - N comes from `du`, which counts shared blocks in full;
 - M is what is not shared, from `btrfs filesystem du` on btrfs, and nil elsewhere.
 
-Measured on drgnx's own `.git` on btrfs (38 MB, 4605 loose objects, three runs each, end to end through
-`drgnx-job-snapshot-make`):
+Measured on drgnx's own repository on btrfs (base `main`, 7572 objects reachable; three runs each):
 
 | What | Time | Disk |
 |---|---|---|
-| copy-on-write copy and preparation | 0.49–0.52 s (the `cp` alone: 0.37–0.41 s) | `du` 35 MB, exclusive 0 |
-| shared clone and preparation | 42–43 ms | 92 KB |
+| the job's store, made | 0.16–0.18 s | 2.4 MB |
+| the job's store, fetched (BASE unchanged) | 11–12 ms | |
+| a task's copy-on-write copy | 11 ms | 2.4 MB by `du`, exclusive 0 |
+| a task's shared clone | 21–22 ms | 28 KB |

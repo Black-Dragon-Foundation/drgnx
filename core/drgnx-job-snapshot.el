@@ -1,66 +1,66 @@
-;;; drgnx-job-snapshot.el --- Jobs: a task's snapshot — a copy of .git, prepared while it is still trusted -*- lexical-binding: t -*-
+;;; drgnx-job-snapshot.el --- Jobs: a task's snapshot — a copy of the job's clean store, made while trusted -*- lexical-binding: t -*-
 
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 
 ;;; Commentary:
-;; In snapshot mode each task of a job gets a `.git' of its own in its folder `<repo>/.claude/worktrees/ID-N/': a
-;; copy-on-write copy of the repository's `.git' (reflink on btrfs and XFS, clonefile on APFS), or, where the
-;; filesystem has no copy-on-write, a shared clone (objects through alternates, the main objects read-only).  Only
-;; `.git' is copied: the agent never sees the user's uncommitted changes or untracked files (`.env', keys).
+;; In snapshot mode each task of a job gets a `.git' of its own in its folder `<repo>/.claude/worktrees/ID-N/'.  It
+;; is never a copy of the user's `.git': that holds what the agent must not see (unreachable objects from staged then
+;; unstaged files, dropped stashes, amended commits; other branches; reflogs; the index; config with tokens).
 ;;
-;; The copy is prepared before any agent sees it, while it holds only the user's content: the user's per-checkout
-;; state (index, stash, reflogs, linked worktrees, FETCH_HEAD, merge and rebase state) and stale locks are removed, the
-;; base commit is checked, the remotes and every credential-bearing key are dropped, `gc.auto' is 0.  Every git run
-;; here has the user's hooks and fsmonitor off.  After DONE is called, nothing outside the sandbox runs git in the
-;; folder again: its `.git' is the agent's.  Everything runs as asynchronous processes: the hub never waits.
-;; See docs/develop/sandbox.md ("Git: snapshot mode").
+;; Instead, each job has a clean store, `<repo>/.claude/worktrees/<BASE>.base.git' (BASE's `/' as `~'): a bare
+;; clone of BASE alone (`clone --no-local --bare --single-branch --no-tags', so only objects reachable from BASE come
+;; through git's own pack transfer) whose config the hub writes from a whitelist.  It is hub-only: no agent mounts
+;; it writable, and nothing of the agent's ever reaches it.  When BASE moves (a task merged), BASE is fetched into it.
+;; Each task then gets a copy-on-write copy of the store (reflink, clonefile) or, without copy-on-write, a shared
+;; clone that borrows from the store alone.  Nothing is checked out: the sandbox does it.
+;;
+;; Every step is an asynchronous process with a deadline: the hub never waits.  Every git here runs with no hooks
+;; and no fsmonitor, no templates and only the file protocol.  After DONE is called, nothing outside the sandbox runs
+;; git in the folder again: its `.git' is the agent's.  See docs/develop/sandbox.md ("Git: snapshot mode").
 
 ;;; Code:
 (require 'subr-x)
 
 (defcustom drgnx-job-snapshot-timeout 300
-  "Seconds one step of a task's snapshot (the copy, the clone, a git of the preparation) may take; then it fails."
+  "Seconds one step of a task's snapshot (the store's clone or fetch, the copy, the clone) may take; then it fails."
   :type 'number :group 'drgnx)
 
 (defvar drgnx-job-snapshot-copy-on-write 'auto
-  "Non-nil: a task's snapshot is a copy-on-write copy of `.git' where the repository's filesystem has it
-(`drgnx-job-snapshot-cow-p'), else a shared clone.  nil: always the shared clone.")
+  "Non-nil: a task's snapshot is a copy-on-write copy of its job's store where the repository's filesystem has it
+(`drgnx-job-snapshot-cow-p'), else a shared clone of the store.  nil: always the shared clone.")
 
 (defvar drgnx-job-snapshot--cow (make-hash-table :test #'equal)
   "Filesystem (the device number of a repository's .claude/worktrees/) → `yes' or `no', its copy-on-write probe's
 answer.  Bounded by the filesystems mounted; never evicted.")
 
+(defvar drgnx-job-snapshot--busy (make-hash-table :test #'equal)
+  "Store directory → (t . WAITING): its steps run one at a time (a fetch into it while a copy reads it would give the
+copy a ref without its objects); WAITING are the functions queued.  An entry lives only while its store is in use.")
+
 (defconst drgnx-job-snapshot--overrides '("-c" "core.hooksPath=/dev/null" "-c" "core.fsmonitor=false")
-  "Given to every git run on a copy: none of the user's hooks (`remote remove' and `update-ref' would run
-reference-transaction) and no fsmonitor program runs in the hub.")
+  "Given to every git the hub runs here: no hook and no fsmonitor program runs in the hub.")
 
 (defconst drgnx-job-snapshot--env
-  '("GIT_TERMINAL_PROMPT=0" "GIT_DIR" "GIT_WORK_TREE" "GIT_INDEX_FILE" "GIT_COMMON_DIR" "GIT_OBJECT_DIRECTORY"
-    "GIT_ALTERNATE_OBJECT_DIRECTORIES")
-  "Prepended to `process-environment' for the steps: never a prompt; no variable sends git to another repository.")
+  '("GIT_TERMINAL_PROMPT=0" "GIT_ALLOW_PROTOCOL=file" "GIT_DIR" "GIT_WORK_TREE" "GIT_INDEX_FILE" "GIT_COMMON_DIR"
+    "GIT_OBJECT_DIRECTORY" "GIT_ALTERNATE_OBJECT_DIRECTORIES")
+  "Prepended to `process-environment' for the steps: never a prompt, only the file protocol, and no variable sends
+git to another repository.")
 
-(defconst drgnx-job-snapshot--keep
-  '("HEAD" "config" "description" "hooks" "info" "objects" "refs" "packed-refs" "shallow" "reftable" "lfs")
-  "The entries of a copied `.git' that stay.  Everything else is the user's checkout's state: the index (staged
-changes), reflogs (`logs/', the stash's list), linked worktrees, `modules/', FETCH_HEAD (remote URLs), merge, rebase
-and sequencer state, `config.worktree', legacy `remotes/' and `branches/' (URLs).")
+(defconst drgnx-job-snapshot--from-clone
+  "\\`\\(?:core\\.\\(?:repositoryformatversion\\|filemode\\|ignorecase\\|symlinks\\|precomposeunicode\\)\\|extensions\\.[^.]+\\)\\'"
+  "Config names kept from the store's own fresh clone: what git needs to read the repository.")
 
-(defconst drgnx-job-snapshot--strip
-  (concat "\\`\\(?:credential\\.\\|url\\.\\|include\\.\\|includeif\\.\\|remote\\.[^.]+\\'"
-          "\\|core\\.\\(?:fsmonitor\\|worktree\\|sshcommand\\|askpass\\|gitproxy\\|alternaterefscommand\\)\\'"
-          "\\|http\\..*\\.?proxy\\'\\)"
-          "\\|\\.\\(?:extraheader\\|[a-z]*\\(?:token\\|pass\\|password\\|secret\\)\\)\\'")
-  "Config names (as `git config --name-only --list' prints them) unset in a copy: credentials and what may carry
-one (URL rewrites, extra HTTP headers, proxies, keys named like a token or password), includes of files outside, and
-the core keys that name a program on the user's machine or the user's checkout (`core.worktree').  Remotes go with
-`remote remove'.")
+(defconst drgnx-job-snapshot--from-user
+  "\\`\\(?:core\\.\\(?:hookspath\\|autocrlf\\|eol\\|safecrlf\\)\\|filter\\.lfs\\.\\(?:clean\\|smudge\\|process\\|required\\)\\)\\'"
+  "Config names carried from the user's repository: line endings, the project's own (relative) hooks path, Git LFS's
+filter.  Nothing else of the user's config reaches a task.")
 
-;;;; Where the copy comes from
+;;;; Where things are
 
 (defun drgnx-job-snapshot-common-dir (repo)
-  "REPO's common git directory (what `git rev-parse --git-common-dir' prints), absolute and resolved, or nil.  A
-`.git' file (a linked worktree, a submodule) is followed to its git directory and its `commondir'.  Read from the
-files, as git itself does: no process."
+  "REPO's common git directory (what `git rev-parse --git-common-dir' prints), absolute and resolved, or nil.  REPO
+is the top level of a checkout.  A `.git' file (a linked worktree, a submodule) is followed to its git directory and
+its `commondir'.  Read from the files, as git itself does: no process."
   (let ((dotgit (expand-file-name ".git" repo)))
     (cond ((file-directory-p dotgit) (directory-file-name (file-truename dotgit)))
           ((file-regular-p dotgit)
@@ -76,6 +76,17 @@ files, as git itself does: no process."
                                        gitdir)
                    gitdir)))))))))
 
+(defun drgnx-job-snapshot-store-dir (repo base)
+  "The clean store of REPO's job whose base branch is BASE: `<repo>/.claude/worktrees/<BASE, / as ~>.base.git/'
+\(`~' is never in a branch name, so two bases never share one)."
+  (file-name-as-directory
+   (expand-file-name (concat ".claude/worktrees/" (string-replace "/" "~" base) ".base.git") (file-truename repo))))
+
+(defun drgnx-job-snapshot-read-dirs (repo base)
+  "The directories a task of REPO at BASE may have mounted read-only for its objects: its job's store's objects.
+Derived from REPO and BASE, never from a task folder: check the `:read' a task keeps against it."
+  (list (directory-file-name (expand-file-name "objects" (drgnx-job-snapshot-store-dir repo base)))))
+
 (defun drgnx-job-snapshot--alternates-of (objects &optional depth)
   "The object directories OBJECTS borrows from (its `info/alternates', followed as git does, 5 deep): resolved."
   (let ((file (expand-file-name "info/alternates" objects)) out)
@@ -87,12 +98,50 @@ files, as git itself does: no process."
               (unless (member d out) (push d out)))))))
     (nreverse out)))
 
-(defun drgnx-job-snapshot-alternates (folder)
-  "The object directories FOLDER's repository reads through alternates, which the sandbox must mount read-only:
-the main repository's for a shared clone, nil for a copy-on-write copy (unless the repository itself borrows).
-`drgnx-job-snapshot-make' gives this as `:read' before any agent starts.  Once an agent has had FOLDER, its alternates
-file is the agent's: use the value `drgnx-job-snapshot-make' gave, never this."
+(defun drgnx-job-snapshot--alternates (folder)
+  "The object directories FOLDER's repository borrows from.  Only for tests: once an agent has had FOLDER, its
+alternates file is the agent's, so the hub never derives anything from it (`drgnx-job-snapshot-read-dirs')."
   (drgnx-job-snapshot--alternates-of (expand-file-name ".git/objects" folder)))
+
+;;;; The config: a whitelist the hub writes
+
+(defun drgnx-job-snapshot--entries (text)
+  "Config entries ((NAME . VALUE) …) from TEXT, the stdout of `git config --list --null'."
+  (mapcar (lambda (rec)
+            (let ((nl (string-search "\n" rec)))
+              (if nl (cons (substring rec 0 nl) (substring rec (1+ nl))) (cons rec nil))))
+          (split-string text "\0" t)))
+
+(defun drgnx-job-snapshot--carried-p (entry)
+  "Is the user's config ENTRY carried: whitelisted, its value no URL with credentials, a hooks path inside the checkout?"
+  (let ((name (car entry)) (value (or (cdr entry) "")))
+    (and (string-match-p drgnx-job-snapshot--from-user name)
+         (not (string-match-p "://[^/@[:space:]]*@" value))
+         (or (not (equal name "core.hookspath"))
+             (not (or (string-empty-p value) (file-name-absolute-p value) (member ".." (split-string value "[/\\]"))))))))
+
+(defun drgnx-job-snapshot--quote (s)
+  (replace-regexp-in-string "[\\\"\n\t]" (lambda (c) (pcase c ("\\" "\\\\") ("\"" "\\\"") ("\n" "\\n") (_ "\\t"))) s t t))
+
+(defun drgnx-job-snapshot--config-text (clone user bare)
+  "A config file's text: the entries of CLONE (a fresh clone's config) `drgnx-job-snapshot--from-clone' keeps,
+`core.bare' BARE, the entries of USER (the user's config) `drgnx-job-snapshot--carried-p' accepts, `gc.auto' 0 (a
+repack would un-share copied blocks, or drop objects a clone borrows)."
+  (let ((entries (append (seq-filter (lambda (e) (string-match-p drgnx-job-snapshot--from-clone (car e))) clone)
+                         (list (cons "core.bare" (if bare "true" "false")))
+                         (seq-filter #'drgnx-job-snapshot--carried-p user)
+                         (list (cons "gc.auto" "0"))))
+        sections)
+    (dolist (e entries)
+      (let* ((name (car e)) (first (string-search "." name)) (last (string-match "\\.[^.]*\\'" name))
+             (head (cons (substring name 0 first) (and (< first last) (substring name (1+ first) last))))
+             (line (cons (substring name (1+ last)) (or (cdr e) "true")))
+             (cell (assoc head sections)))
+        (if cell (setcdr cell (append (cdr cell) (list line))) (setq sections (append sections (list (list head line)))))))
+    (mapconcat (lambda (s)
+                 (concat (if (cdar s) (format "[%s \"%s\"]\n" (caar s) (drgnx-job-snapshot--quote (cdar s))) (format "[%s]\n" (caar s)))
+                         (mapconcat (lambda (kv) (format "\t%s = \"%s\"\n" (car kv) (drgnx-job-snapshot--quote (cdr kv)))) (cdr s) "")))
+               sections "")))
 
 ;;;; Copy-on-write: probed once per filesystem
 
@@ -137,22 +186,29 @@ uses the asynchronous probe of `drgnx-job-snapshot-make'."
 ;;;; Steps: asynchronous processes
 
 (defun drgnx-job-snapshot--run (dir argv job done)
-  "Run ARGV in DIR in a process of its own; DONE gets (EXIT . OUTPUT) once it ended (stderr in OUTPUT; EXIT
-`:timeout' after `drgnx-job-snapshot-timeout').  JOB: stopping that job ends it, and DONE is not called."
+  "Run ARGV in DIR in a process of its own; DONE gets (EXIT STDOUT . STDERR) once it ended.  EXIT is its status,
+`:timeout' after `drgnx-job-snapshot-timeout', or `:stopped' when stopping JOB ended it."
   (let* ((out (generate-new-buffer " *drgnx-snapshot*" t))
+         (err (generate-new-buffer " *drgnx-snapshot-err*" t))
          (default-directory (file-name-as-directory dir))
          (process-environment (append drgnx-job-snapshot--env process-environment))
+         (errp (make-pipe-process :name "drgnx-snapshot-err" :buffer err :noquery t :sentinel #'ignore))
          (timer nil)
          (p (make-process
-             :name "drgnx-snapshot" :buffer out :noquery t :connection-type 'pipe :command argv
+             :name "drgnx-snapshot" :buffer out :stderr errp :noquery t :connection-type 'pipe :command argv
              :sentinel (lambda (p _event)
                          (unless (process-live-p p)
                            (when timer (cancel-timer timer))
-                           (let ((text (string-trim (with-current-buffer out (buffer-string)))))
+                           (let ((stdout (with-current-buffer out (buffer-string)))
+                                 (stderr (string-trim (with-current-buffer err (buffer-string)))))
+                             (delete-process errp)
                              (kill-buffer out)
-                             (unless (process-get p :stopped)
-                               (with-demoted-errors "drgnx snapshot: %S"
-                                 (funcall done (cons (if (process-get p :timed-out) :timeout (process-exit-status p)) text))))))))))
+                             (kill-buffer err)
+                             (with-demoted-errors "drgnx snapshot: %S"
+                               (funcall done (cons (cond ((process-get p :stopped) :stopped)
+                                                         ((process-get p :timed-out) :timeout)
+                                                         (t (process-exit-status p)))
+                                                   (cons stdout stderr))))))))))
     (when job (process-put p :job job))
     (setq timer (run-at-time drgnx-job-snapshot-timeout nil
                              (lambda () (when (process-live-p p) (process-put p :timed-out t) (delete-process p)))))
@@ -160,71 +216,123 @@ uses the asynchronous probe of `drgnx-job-snapshot-make'."
     p))
 
 (defun drgnx-job-snapshot--git (argv)
-  "The command line of git ARGV on a copy: with `drgnx-job-snapshot--overrides'."
+  "The command line of git ARGV run by the hub: with `drgnx-job-snapshot--overrides'."
   (append '("git") drgnx-job-snapshot--overrides argv))
 
-(defun drgnx-job-snapshot--git-all (folder argvs job done)
-  "Run the git ARGVS in FOLDER one after another; DONE gets nil when all succeeded, else (ARGV EXIT . OUTPUT) of the
-first that failed."
-  (if (null argvs)
-      (funcall done nil)
-    (drgnx-job-snapshot--run folder (drgnx-job-snapshot--git (car argvs)) job
-                             (lambda (r)
-                               (if (eql 0 (car r))
-                                   (drgnx-job-snapshot--git-all folder (cdr argvs) job done)
-                                 (funcall done (cons (car argvs) r)))))))
+(defun drgnx-job-snapshot--then (fail ok)
+  "A DONE for `drgnx-job-snapshot--run': exit 0 calls OK with STDOUT; anything else FAIL with `:stopped' or why."
+  (lambda (r)
+    (cond ((eq (car r) :stopped) (funcall fail :stopped))
+          ((eql 0 (car r)) (funcall ok (cadr r)))
+          ((eq (car r) :timeout) (funcall fail (format "timed out after %s s" drgnx-job-snapshot-timeout)))
+          (t (funcall fail (let ((e (cddr r))) (if (string-empty-p e) (format "exit %s" (car r)) e)))))))
 
-;;;; Preparation
+(defun drgnx-job-snapshot--rm (dir job then)
+  "Remove DIR (`rm -rf', in a process), then call THEN."
+  (drgnx-job-snapshot--run (file-name-directory (directory-file-name dir)) (list "rm" "-rf" "--" (directory-file-name dir)) job
+                           (lambda (_) (funcall then))))
 
-(defun drgnx-job-snapshot--prepare-argvs (folder base &optional keys)
-  "The git argvs that prepare FOLDER's copy, whose config holds the names KEYS (`git config --name-only --list'):
-check BASE is there, drop the stash, unset each key `drgnx-job-snapshot--strip' matches, remove every remote, set
-`gc.auto' 0 (a repack would un-share the copied blocks), prune worktrees.  Run with `drgnx-job-snapshot--git'."
-  (let ((config (expand-file-name ".git/config" folder)) remotes strip)
-    (dolist (k keys)
-      (cond ((string-match "\\`remote\\.\\(.+\\)\\.[^.]+\\'" k)
-             (unless (member (match-string 1 k) remotes) (push (match-string 1 k) remotes)))
-            ((string-match-p drgnx-job-snapshot--strip k)
-             (unless (member k strip) (push k strip)))))
-    (append `(("cat-file" "-e" ,(concat base "^{commit}"))
-              ("update-ref" "-d" "refs/stash"))
-            (mapcar (lambda (k) (list "config" "--file" config "--unset-all" k)) (nreverse strip))
-            (mapcar (lambda (r) (list "remote" "remove" "--" r)) (nreverse remotes))
-            `(("config" "--file" ,config "gc.auto" "0")
-              ("worktree" "prune")))))
+(defun drgnx-job-snapshot--with-store (store fn)
+  "Call FN with a function that ends its turn, once no other step uses STORE: one at a time, in order."
+  (let ((turn (lambda () (funcall fn (lambda () (drgnx-job-snapshot--next store))))))
+    (if (gethash store drgnx-job-snapshot--busy)
+        (puthash store (append (gethash store drgnx-job-snapshot--busy) (list turn)) drgnx-job-snapshot--busy)
+      (puthash store (list t) drgnx-job-snapshot--busy)
+      (funcall turn))))
 
-(defun drgnx-job-snapshot--tidy (git)
-  "Remove from the copied GIT directory what is the user's checkout's state (`drgnx-job-snapshot--keep') and every
-lock a concurrent git of the user's left (`*.lock'), loose objects apart.  Plain file operations: no git runs."
-  (dolist (f (directory-files git nil directory-files-no-dot-files-regexp t))
-    (unless (member f drgnx-job-snapshot--keep)
-      (let ((p (expand-file-name f git)))
-        (if (and (file-directory-p p) (not (file-symlink-p p))) (delete-directory p t) (delete-file p)))))
-  (dolist (lock (directory-files-recursively
-                 git "\\.lock\\'" nil (lambda (d) (not (string-match-p "/objects/[0-9a-f][0-9a-f]\\'\\|/lfs/objects\\'" d)))))
-    (delete-file lock)))
+(defun drgnx-job-snapshot--next (store)
+  (let ((waiting (cdr (gethash store drgnx-job-snapshot--busy))))
+    (if (null waiting)
+        (remhash store drgnx-job-snapshot--busy)
+      (puthash store (cons t (cdr waiting)) drgnx-job-snapshot--busy)
+      (funcall (car waiting)))))
 
-(defun drgnx-job-snapshot--carry-alternates (common git)
-  "When the repository at COMMON borrows objects, write the directories absolute into the copy at GIT (a relative
-entry would point elsewhere from the copy)."
-  (when-let* ((alternates (drgnx-job-snapshot--alternates-of (expand-file-name "objects" common))))
-    (write-region (concat (string-join alternates "\n") "\n") nil (expand-file-name "objects/info/alternates" git) nil 'silent)))
+;;;; The job's store
 
-(defun drgnx-job-snapshot--prepare (folder base job done)
-  "Prepare FOLDER's copy (its `.git' tidied already): DONE gets nil, or why it failed (`:base' when BASE is missing)."
-  (drgnx-job-snapshot--run
-   folder (drgnx-job-snapshot--git (list "config" "--file" (expand-file-name ".git/config" folder) "--no-includes"
-                                         "--name-only" "--list" "--null"))
-   job
-   (lambda (r)
-     (if (not (eql 0 (car r)))
-         (funcall done (format "reading the copy's config failed: %s" (cdr r)))
-       (drgnx-job-snapshot--git-all
-        folder (drgnx-job-snapshot--prepare-argvs folder base (split-string (cdr r) "\0" t "[\n]+")) job
-        (lambda (failed)
-          (funcall done (cond ((null failed) nil)
-                              ((equal (caar failed) "cat-file") :base)
-                              (t (format "git %s: %s" (string-join (car failed) " ") (cddr failed)))))))))))
+(defun drgnx-job-snapshot--refresh-store (repo base store job done)
+  "Make STORE, the clean store of REPO at BASE, or fetch BASE into it when it is there.  DONE gets nil, `:stopped',
+or why it failed (a store made here and not finished is removed first)."
+  (let* ((store (directory-file-name store))
+         (source (directory-file-name (file-truename repo)))
+         (common (drgnx-job-snapshot-common-dir repo)))
+    (if (file-regular-p (expand-file-name "HEAD" store))
+        (drgnx-job-snapshot--run
+         store (drgnx-job-snapshot--git (list "fetch" "-q" "--no-tags" "--no-write-fetch-head" source
+                                              (format "+refs/heads/%s:refs/heads/%s" base base)))
+         job (drgnx-job-snapshot--then done (lambda (_) (funcall done nil))))
+      (let ((fail (lambda (why)
+                    (if (eq why :stopped)
+                        (funcall done :stopped)
+                      (drgnx-job-snapshot--rm store job (lambda () (funcall done why)))))))
+        (make-directory (file-name-directory store) t)
+        (drgnx-job-snapshot--run
+         (file-name-directory store)
+         (drgnx-job-snapshot--git (list "clone" "-q" "--no-local" "--bare" "--single-branch" "--no-tags" "--template="
+                                        "--branch" base "--" source store))
+         job
+         (drgnx-job-snapshot--then
+          fail
+          (lambda (_)
+            (drgnx-job-snapshot--run
+             store (drgnx-job-snapshot--git (list "config" "--file" "config" "--list" "--null")) job
+             (drgnx-job-snapshot--then
+              fail
+              (lambda (clone)
+                (drgnx-job-snapshot--run
+                 store (drgnx-job-snapshot--git (list "config" "--file" (expand-file-name "config" common) "--no-includes" "--list" "--null"))
+                 job
+                 (drgnx-job-snapshot--then
+                  fail
+                  (lambda (user)
+                    (condition-case e
+                        (progn
+                          (write-region (drgnx-job-snapshot--config-text (drgnx-job-snapshot--entries clone)
+                                                                         (drgnx-job-snapshot--entries user) t)
+                                        nil (expand-file-name "config" store) nil 'silent)
+                          (funcall done nil))
+                      (error (funcall fail (error-message-string e)))))))))))))))))
+
+;;;; The task's copy
+
+(defun drgnx-job-snapshot--task-copy (store folder base cow job done)
+  "Give FOLDER a `.git' from STORE: a copy-on-write copy (COW), else a shared clone borrowing from STORE alone; its
+config the store's whitelist, not bare; BASE checked.  DONE gets the result plist, `:stopped', or (:error MSG)."
+  (let* ((git (expand-file-name ".git" folder))
+         (store (directory-file-name store))
+         (fail (lambda (why)
+                 (drgnx-job-snapshot--rm folder job (lambda () (funcall done (if (eq why :stopped) :stopped (list :error why))))))))
+    (condition-case e
+        (progn
+          (make-directory (if cow folder (file-name-directory (directory-file-name folder))) t)
+          (drgnx-job-snapshot--run
+           (file-name-directory store)
+           (if cow
+               (drgnx-job-snapshot--copy-argv store git)
+             (drgnx-job-snapshot--git (list "clone" "-q" "--shared" "--no-checkout" "--single-branch" "--no-tags" "--template="
+                                            "--branch" base "--" store (directory-file-name folder))))
+           job
+           (drgnx-job-snapshot--then
+            fail
+            (lambda (_)
+              (drgnx-job-snapshot--run
+               store (drgnx-job-snapshot--git (list "config" "--file" "config" "--list" "--null")) job
+               (drgnx-job-snapshot--then
+                fail
+                (lambda (text)
+                  (condition-case e
+                      (let ((entries (drgnx-job-snapshot--entries text)))
+                        ;; the store's config is the hub's own whitelist: both halves pass through it again
+                        (write-region (drgnx-job-snapshot--config-text entries entries nil) nil
+                                      (expand-file-name "config" git) nil 'silent)
+                        (drgnx-job-snapshot--run
+                         folder (drgnx-job-snapshot--git (list "cat-file" "-e" (format "refs/heads/%s^{commit}" base))) job
+                         (drgnx-job-snapshot--then
+                          (lambda (why) (funcall fail (if (eq why :stopped) why (format "the base %s is not in the copy" base))))
+                          (lambda (_)
+                            (funcall done (list :mode (if cow 'snapshot 'clone)
+                                                :read (and (not cow) (list (expand-file-name "objects" store)))))))))
+                    (error (funcall fail (error-message-string e)))))))))))
+      (error (funcall fail (error-message-string e))))))
 
 ;;;; Making a task's snapshot
 
@@ -234,11 +342,11 @@ entry would point elsewhere from the copy)."
 
 (defun drgnx-job-snapshot--base-ok-p (base)
   (and (stringp base) (< 0 (length base) 256) (not (string-prefix-p "-" base))
-       (not (string-match-p "[[:space:][:cntrl:]~^:?*\\[\\\\]\\|\\.\\." base))))
+       (not (string-match-p "[[:space:][:cntrl:]~^:?*\\[\\\\]\\|\\.\\.\\|//\\|/\\'\\|\\.lock\\'" base))))
 
 (defun drgnx-job-snapshot--choose (repo job done)
-  "DONE gets t when REPO's snapshot is a copy-on-write copy, nil when a shared clone; the first time on a filesystem
-it is probed by a process of its own."
+  "DONE gets t when REPO's snapshots are copy-on-write copies, nil when shared clones, `:stopped' when JOB was
+stopped; the first time on a filesystem it is probed by a process of its own."
   (let ((known (and drgnx-job-snapshot-copy-on-write (gethash (drgnx-job-snapshot--fs repo) drgnx-job-snapshot--cow))))
     (cond ((not drgnx-job-snapshot-copy-on-write) (funcall done nil))
           (known (funcall done (eq known 'yes)))
@@ -246,93 +354,93 @@ it is probed by a process of its own."
                (drgnx-job-snapshot--run repo (drgnx-job-snapshot--copy-argv (car files) (cdr files)) job
                                         (lambda (r)
                                           (drgnx-job-snapshot--probe-clean files)
-                                          (funcall done (drgnx-job-snapshot--remember repo (eql 0 (car r)))))))))))
-
-(defun drgnx-job-snapshot--attempt (repo common folder base cow job tries done)
-  "Make FOLDER's snapshot (COW: a copy of COMMON, else a shared clone of REPO) and prepare it; on a failure remove it
-and, while TRIES is above 1, make it again."
-  (let ((git (expand-file-name ".git" folder))
-        (fail (lambda (why)
-                (drgnx-job-snapshot--run
-                 repo (list "rm" "-rf" "--" (directory-file-name folder)) job
-                 (lambda (_)
-                   (if (> tries 1)
-                       (drgnx-job-snapshot--attempt repo common folder base cow job (1- tries) done)
-                     (funcall done (list :error (if (eq why :base) (format "the base %s is not in the repository" base) why)))))))))
-    (condition-case err
-        (progn
-          (make-directory (if cow folder (file-name-directory (directory-file-name folder))) t)
-          (drgnx-job-snapshot--run
-           repo (if cow
-                    (drgnx-job-snapshot--copy-argv common git)
-                  (drgnx-job-snapshot--git (list "clone" "-q" "--shared" "--no-checkout" "--branch" base "--"
-                                                 (directory-file-name (expand-file-name repo)) (directory-file-name folder))))
-           job
-           (lambda (r)
-             (if (not (eql 0 (car r)))
-                 (funcall fail (format "%s failed: %s" (if cow "the copy" "the clone") (cdr r)))
-               (condition-case err
-                   (progn
-                     (when cow (drgnx-job-snapshot--carry-alternates common git))
-                     (drgnx-job-snapshot--tidy git)
-                     (drgnx-job-snapshot--prepare
-                      folder base job
-                      (lambda (why)
-                        (if why
-                            (funcall fail why)
-                          (funcall done (list :mode (if cow 'snapshot 'clone) :read (drgnx-job-snapshot-alternates folder)))))))
-                 (error (funcall fail (error-message-string err))))))))
-      (error (funcall fail (error-message-string err))))))
+                                          (funcall done (if (eq (car r) :stopped)
+                                                            :stopped
+                                                          (drgnx-job-snapshot--remember repo (eql 0 (car r))))))))))))
 
 (defun drgnx-job-snapshot-make (repo folder base done &optional job)
-  "Give the task folder FOLDER (empty or missing) a `.git' of its own from REPO, prepared, with BASE (a branch) in it.
-Asynchronous: DONE is called later with (:mode snapshot :read DIRS) — a copy-on-write copy of REPO's common dir —,
-\(:mode clone :read DIRS) — a shared clone, without copy-on-write —, or (:error MSG).  DIRS: the object directories
-the sandbox must mount read-only (`drgnx-job-snapshot-alternates'), to keep with the task.  A copy without BASE (a git
-of the user's was writing) is removed and made once more.  JOB: stopping it ends the steps (DONE is not called).
-Nothing is checked out: the sandbox does it.  From DONE on, run no git in FOLDER outside the sandbox."
-  (let ((folder (file-name-as-directory (expand-file-name folder)))
-        (common (drgnx-job-snapshot-common-dir repo)))
+  "Give the task folder FOLDER (empty or missing) a `.git' of its own, holding BASE (a branch of REPO) and what it
+reaches, nothing else.  Asynchronous: DONE is called later with
+  (:mode snapshot :read nil)   a copy-on-write copy of the job's store (`drgnx-job-snapshot-store-dir'),
+  (:mode clone :read DIRS)     a shared clone of the store, without copy-on-write; DIRS (the store's objects) must be
+                               mounted read-only,
+  (:error MSG).
+The store is made, or BASE fetched into it, first; a failure there is tried once more (a git of the user's may have
+been writing BASE).  Keep the result with the task, and check DIRS against `drgnx-job-snapshot-read-dirs'.  JOB:
+stopping it ends the steps, and DONE is not called.  Nothing is checked out: the sandbox does it.  From DONE on, run
+no git in FOLDER outside the sandbox."
+  (let ((folder (file-name-as-directory (expand-file-name folder))))
     (cond ((not (drgnx-job-snapshot--base-ok-p base))
            (drgnx-job-snapshot--later done (list :error (format "not a branch name: %S" base))))
-          ((not common)
+          ((not (drgnx-job-snapshot-common-dir repo))
            (drgnx-job-snapshot--later done (list :error (format "%s is not a git repository" repo))))
           ((and (file-exists-p folder) (not (and (file-directory-p folder) (directory-empty-p folder))))
            (drgnx-job-snapshot--later done (list :error (format "%s exists and is not empty" folder))))
-          (t (drgnx-job-snapshot--choose
-              repo job (lambda (cow) (drgnx-job-snapshot--attempt repo common folder base cow job 2 done)))))))
+          (t
+           (let ((store (drgnx-job-snapshot-store-dir repo base)))
+             (drgnx-job-snapshot--with-store
+              store
+              (lambda (release)
+                (let ((finish (lambda (result) (funcall release) (unless (eq result :stopped) (funcall done result)))))
+                  (drgnx-job-snapshot--choose
+                   repo job
+                   (lambda (cow)
+                     (if (eq cow :stopped)
+                         (funcall finish :stopped)
+                       (let ((attempt nil))
+                         (setq attempt
+                               (lambda (tries)
+                                 (drgnx-job-snapshot--refresh-store
+                                  repo base store job
+                                  (lambda (why)
+                                    (cond ((eq why :stopped) (funcall finish :stopped))
+                                          ((and why (> tries 1)) (funcall attempt (1- tries)))
+                                          (why (funcall finish (list :error (format "the store of %s: %s" base why))))
+                                          (t (drgnx-job-snapshot--task-copy store folder base cow job finish)))))))
+                         (funcall attempt 2)))))))))))))
 
 ;;;; Bounded: what a snapshot takes, and its removal
 
 (defun drgnx-job-snapshot-disk-usage (folder done)
-  "What task folder FOLDER takes on disk, asynchronously: DONE gets (:bytes N :exclusive M) — N from `du', which
-counts blocks shared with the repository in full; M the data not shared with anything (btrfs only, nil elsewhere) —
-or (:error MSG)."
+  "What FOLDER (a task folder or a store) takes on disk, asynchronously: DONE gets (:bytes N :exclusive M) — N from
+`du', which counts blocks shared with the store in full; M the data not shared with anything (btrfs only, nil
+elsewhere) — or (:error MSG)."
   (let* ((dir (directory-file-name (expand-file-name folder)))
          (parent (file-name-directory dir)))
     (drgnx-job-snapshot--run
      parent (list "du" "-sk" dir) nil
      (lambda (r)
-       (if (not (and (eql 0 (car r)) (string-match "\\`\\([0-9]+\\)" (cdr r))))
-           (funcall done (list :error (cdr r)))
-         (let ((bytes (* 1024 (string-to-number (match-string 1 (cdr r))))))
+       (if (not (and (eql 0 (car r)) (string-match "\\`\\([0-9]+\\)" (cadr r))))
+           (funcall done (list :error (cddr r)))
+         (let ((bytes (* 1024 (string-to-number (match-string 1 (cadr r))))))
            (if (not (and (eq system-type 'gnu/linux) (executable-find "btrfs")))
                (funcall done (list :bytes bytes :exclusive nil))
              (drgnx-job-snapshot--run
               parent (list "btrfs" "filesystem" "du" "-s" "--raw" dir) nil
               (lambda (b)
                 (funcall done (list :bytes bytes
-                                    :exclusive (and (eql 0 (car b)) (string-match "^ *[0-9]+ +\\([0-9]+\\) +[0-9]+ +/" (cdr b))
-                                                    (string-to-number (match-string 1 (cdr b)))))))))))))))
+                                    :exclusive (and (eql 0 (car b)) (string-match "^ *[0-9]+ +\\([0-9]+\\) +[0-9]+ +/" (cadr b))
+                                                    (string-to-number (match-string 1 (cadr b)))))))))))))))
+
+(defun drgnx-job-snapshot--own-p (dir)
+  "Is DIR one of this file's folders: a task folder `.claude/worktrees/ID-N' (or `ID-N-review') with a `.git'
+directory, or a store `.claude/worktrees/NAME.base.git'?  Neither may be a link."
+  (and (string-match-p "/\\.claude/worktrees/[^/]+\\'" dir)
+       (not (file-symlink-p dir))
+       (let ((name (file-name-nondirectory dir)) (git (expand-file-name ".git" dir)))
+         (if (string-suffix-p ".base.git" name)
+             (and (file-regular-p (expand-file-name "HEAD" dir)) (file-directory-p (expand-file-name "objects" dir)))
+           (and (string-match-p "-[0-9]+\\(?:-review\\)?\\'" name) (file-directory-p git) (not (file-symlink-p git)))))))
 
 (defun drgnx-job-snapshot-remove (folder done &optional job)
-  "Remove task folder FOLDER, its snapshot with it, asynchronously (`rm -rf': links are removed, never followed).
-Only a folder `.claude/worktrees/NAME/' that is not itself a link.  DONE gets t or (:error MSG)."
+  "Remove FOLDER — a task folder with its snapshot, or a job's store once no task borrows from it — asynchronously
+\(`rm -rf': links are removed, never followed).  Only this file's own folders (`drgnx-job-snapshot--own-p').  DONE
+gets t or (:error MSG)."
   (let ((dir (directory-file-name (expand-file-name folder))))
-    (if (or (not (string-match-p "/\\.claude/worktrees/[^/]+\\'" dir)) (file-symlink-p dir))
-        (drgnx-job-snapshot--later done (list :error (format "not a task folder: %s" dir)))
+    (if (not (drgnx-job-snapshot--own-p dir))
+        (drgnx-job-snapshot--later done (list :error (format "not a task folder or a job's store: %s" dir)))
       (drgnx-job-snapshot--run (file-name-directory dir) (list "rm" "-rf" "--" dir) job
-                               (lambda (r) (funcall done (if (eql 0 (car r)) t (list :error (cdr r)))))))))
+                               (lambda (r) (funcall done (if (eql 0 (car r)) t (list :error (cddr r)))))))))
 
 (provide 'drgnx-job-snapshot)
 ;;; drgnx-job-snapshot.el ends here
