@@ -113,4 +113,13 @@
         (should (seq-some (lambda (m) (string-search "could not read Username" m)) messages))
         (should-not (buffer-live-p err))))))
 
+(ert-deftest drgnx-prs/wrong-slot-shows-placeholder ()
+  ;; M11b-8: a forge whose classes differ from what we read is a message and the placeholder, not an error
+  (let ((messages nil))
+    (drgnx-prs-test--with (error "Invalid slot name: draft-p")
+      (cl-letf (((symbol-function 'message) (lambda (fmt &rest a) (push (apply #'format fmt a) messages))))
+        (drgnx-prs-view))
+      (should (string-search "No pull requests here yet" (with-current-buffer "*drgnx pull requests*" (buffer-string))))
+      (should (seq-some (lambda (m) (string-search "Invalid slot name" m)) messages)))))
+
 ;;; mod-prs-test.el ends here

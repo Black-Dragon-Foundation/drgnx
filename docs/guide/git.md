@@ -89,4 +89,4 @@ Merged and closed ones are hidden until **Pull Requests: Show Closed**.
   Codeberg/Forgejo works as far as forge supports it.
 - In a commit message, `#` completes pull request and issue numbers (forge).
 
-Until forge knows the repository, the tab says so and names Pull Requests: Fetch.
+Until forge knows the repository, the tab says so and names Pull Requests: Fetch. It does the same when forge's data is not what drgnx expects (a forge version it does not know); the echo area gives the reason.

@@ -64,6 +64,11 @@
                         :cross (ignore-errors (drgnx-prs--slot pr 'cross-repo-p))))
                 (drgnx-prs--slot repo 'pullreqs))))))
 
+(defun drgnx-prs--read (root)
+  "`drgnx-prs--pullreqs' for ROOT; a forge whose classes are not what we read is a message and :untracked."
+  (condition-case err (drgnx-prs--pullreqs root)
+    (error (message "drgnx: could not read forge's pull requests: %s" (error-message-string err)) :untracked)))
+
 (defun drgnx-prs--remote (root)
   "The remote forge uses for ROOT, else origin."
   (or (and (featurep 'forge) (let ((default-directory root)) (ignore-errors (forge--get-remote)))) "origin"))
@@ -131,7 +136,7 @@ newest first at each level.  Every PR appears once, a cycle cut where it is foun
   (let ((root (drgnx-prs--toplevel default-directory)) (b (get-buffer-create "*drgnx pull requests*")))
     (with-current-buffer b
       (unless (derived-mode-p 'drgnx-prs-mode) (drgnx-prs-mode))
-      (setq default-directory root drgnx-prs--root root drgnx-prs--all (drgnx-prs--pullreqs root))
+      (setq default-directory root drgnx-prs--root root drgnx-prs--all (drgnx-prs--read root))
       (drgnx-prs--draw))
     (if (fboundp 'drgnx-wb-area-show) (drgnx-wb-area-show 'right 'prs b) (display-buffer b))
     b))
