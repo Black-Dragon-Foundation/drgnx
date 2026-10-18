@@ -90,7 +90,9 @@ other object); otherwise that function is skipped and said once, and the others'
      'drgnx-persist-state-functions
      (lambda (fn)
        (let ((r (condition-case err (funcall fn) (error (cons 'drgnx-persist-error (error-message-string err))))))
-         (cond ((and (proper-list-p r) (cl-evenp (length r)) (readablep r)) (setq extra (append extra r)))
+         (cond ((and (proper-list-p r) (cl-evenp (length r))
+                     (let ((print-length nil) (print-level nil) (print-circle nil)) (readablep r))) ; the user's print settings cut a list short
+                (setq extra (append extra r)))
                ((memq fn drgnx-persist--extra-reported))
                (t (push fn drgnx-persist--extra-reported)
                   (message "drgnx: state function %S left out of the saved workbench: %s" fn

@@ -305,3 +305,15 @@
         (should (equal extra '(:a 1 :b 2))))
       (should (= 4 (length told)))                      ; each bad function once, not once per save
       (should (string-match-p "state function" (car told))))))
+
+(ert-deftest drgnx-persist/extras-a-users-print-length-does-not-let-a-buffer-pass ()
+  ;; With `print-length' set, a buffer inside a list would print as "(… …)" and look readable; the file would then hold it.
+  (drgnx-persist-test--with dir
+    (let ((drgnx-persist--extra-reported nil) (print-length 1) (print-level 1)
+          (drgnx-persist-state-functions
+           (list (lambda () (list :a 1))
+                 (lambda () (list :buf (list 1 2 (current-buffer))))
+                 (lambda () (list :b 2)))))
+      (cl-letf (((symbol-function 'message) #'ignore))
+        (drgnx-persist-save))
+      (should (equal (plist-get (car (plist-get (drgnx-persist--read drgnx-persist-file) :frames)) :extra) '(:a 1 :b 2))))))
