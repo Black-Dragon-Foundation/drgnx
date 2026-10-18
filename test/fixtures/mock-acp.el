@@ -193,23 +193,28 @@ the cap file MOCK_PROBE_HUB_CAP names can be read.  t when the hub answers with 
                   (t t))))
       (delete-process proc))))
 
+(defconst mock-probe--forged-inbox "probe-forged-inbox-for-OTHER"
+  "The text the fixture leaves in the inbox of the agent `coord-forged' claims to be.")
+
 (defun mock-probe--forged (sid)
-  "Start the first of SID's MCP servers as another agent (DRGNX_AGENT=MOCK_PROBE_OTHER_AGENT) and send \"user\" a message
-with it.  t when the server took its identity from that variable; a signal when it did not (a bridge to the hub's
-server names the session itself, whatever the environment says) or did not answer."
+  "Start the first of SID's MCP servers as another agent (DRGNX_AGENT=MOCK_PROBE_OTHER_AGENT), send \"user\" a message
+with it and read its inbox.  t when the server answered as that agent, i.e. its inbox, which the fixture left a message in,
+came back; a signal naming what happened otherwise (the call failed, or the server speaks as the session, whatever
+the environment says: a bridge to the hub's server).  The verdict is the effect, never the spec's shape."
   (let* ((other (or (mock-probe--env "MOCK_PROBE_OTHER_AGENT") "OTHER"))
          (spec (car (alist-get sid mock--mcp nil nil #'equal)))
          (_ (unless spec (error "no mcpServers")))
          (env (append (plist-get spec :env) nil))
-         (from-env (seq-some (lambda (e) (equal (plist-get e :name) "DRGNX_AGENT")) env))
          (forged (plist-put (copy-sequence spec) :env
                             (vconcat (cons (list :name "DRGNX_AGENT" :value other)
                                            (seq-remove (lambda (e) (equal (plist-get e :name) "DRGNX_AGENT")) env)))))
          (mock--mcp (list (cons sid (list forged))))
-         (sent (mock--mcp-call sid "send_message" (format "{\"to\":\"user\",\"text\":\"probe %d\",\"seen_version\":0}" (random 1000000)))))
+         (sent (mock--mcp-call sid "send_message" (format "{\"to\":\"user\",\"text\":\"probe %d\",\"seen_version\":0}" (random 1000000))))
+         (inbox (and sent (mock--mcp-call sid "read_inbox" "{}"))))
     (cond ((null sent) (error "the server gave no answer"))
           ((not (string-match-p "\"ok\" *: *true" sent)) (error "%s" (string-trim sent)))
-          ((not from-env) (error "the server takes no identity from its environment"))
+          ((null inbox) (error "the server gave no inbox"))
+          ((not (string-search mock-probe--forged-inbox inbox)) (error "the server did not speak as %s" other))
           (t t))))
 
 (defun mock-probe--nested (var)

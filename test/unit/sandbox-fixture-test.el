@@ -98,9 +98,12 @@
   (file-name-as-directory (expand-file-name (concat "~" (user-login-name)) "/")))
 
 (defun drgnx-sandbox-fixture-test--listing (dir)
-  "DIR's entries with their sizes and modification times, one level: what a stray write there would change."
-  (mapcar (lambda (f) (list (car f) (file-attribute-size (cdr f)) (file-attribute-modification-time (cdr f))))
-          (directory-files-and-attributes dir nil nil t)))
+  "Size and modification time (nil: absent) of the exact names under DIR that the fixture creates or uses: what a
+stray write there would change.  Nothing else of the real home is looked at."
+  (mapcar (lambda (name)
+            (let ((attrs (file-attributes (concat dir name))))
+              (list name (and attrs (file-attribute-size attrs)) (and attrs (file-attribute-modification-time attrs)))))
+          '(".ssh/id_canary" "other-repo" "other-repo/secret" "repo" ".config/drgnx/agents.eld")))
 
 (ert-deftest drgnx-sandbox-fixture/nothing-under-the-real-home ()
   (let* ((real (drgnx-sandbox-fixture-test--real-home))

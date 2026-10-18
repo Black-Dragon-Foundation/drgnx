@@ -909,7 +909,7 @@ read. Where it writes, it opens the file for appending nothing, so a file that e
 | `hub-socket` | connect to the hub's socket |
 | `hub-card`, `hub-card-no-hello` | `job/card` (dismiss) for its own pending card, with and without a `hello {cap}` (the cap is read from the file `MOCK_PROBE_HUB_CAP` names, when there is one) |
 | `work-db` | open `work.db` for writing |
-| `coord-forged` | start its first MCP server with `DRGNX_AGENT=OTHER` and send a message; reached only when the server takes its identity from its environment (a bridge does not) |
+| `coord-forged` | start its first MCP server with `DRGNX_AGENT=OTHER`, send a message and read OTHER's inbox, where the fixture left a message; reached only when that inbox comes back, i.e. the forged identity was accepted (through a bridge it is the session's own inbox, so: blocked) |
 | `git-config`, `git-hooks`, `git-ref-main`, `git-ref-job`, `git-pointer` | open the repository's config, a hook, two refs and the task's `.git` pointer for writing |
 | `git-objects-delete` | delete an object file |
 | `dot-env`, `dirty-file` | read the untracked `.env` and the uncommitted file |

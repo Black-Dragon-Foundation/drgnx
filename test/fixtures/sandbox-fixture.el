@@ -135,7 +135,7 @@
                         (concat "SSH_AUTH_SOCK=" run "/ssh-agent.sock")
                         (concat "DBUS_SESSION_BUS_ADDRESS=unix:path=" run "/bus")
                         (concat "OPENROUTER_API_KEY=" api-key) (format "DRGNX_HUB_PARENT_PID=%d" (emacs-pid))
-                        "DRGNX_NO_HUB_START=1" "GIT_CONFIG_GLOBAL=/dev/null" "GIT_CONFIG_NOSYSTEM=1"
+                        "DRGNX_NO_HUB_START=1" "HTTPS_PROXY=" "https_proxy=" "HTTP_PROXY=" "http_proxy=" "GIT_CONFIG_GLOBAL=/dev/null" "GIT_CONFIG_NOSYSTEM=1"
                         "GIT_AUTHOR_NAME=fixture" "GIT_AUTHOR_EMAIL=fixture@example.invalid"
                         "GIT_COMMITTER_NAME=fixture" "GIT_COMMITTER_EMAIL=fixture@example.invalid")
                   process-environment))
@@ -159,6 +159,7 @@
             (let ((tcp (drgnx-sandbox-fixture--listen "loopback" :family 'ipv4 :host "127.0.0.1" :service t)))
               (setq drgnx-sandbox-fixture-loopback (format "127.0.0.1:%d" (aref (process-contact tcp :local) 4))))
             (drgnx-hub-serve (drgnx-hub-socket))
+            (drgnx-coord-send :job "fixture" :sender nil :recipient "OTHER" :text "probe-forged-inbox-for-OTHER" :seen 0)
             (setq drgnx-sandbox-fixture-cards
                   (cons (drgnx-coord-card-create :job "fixture" :kind "probe" :title "A card the agent must not answer")
                         (drgnx-coord-card-create :job "fixture" :kind "probe" :title "A second one, for the call without hello")))
