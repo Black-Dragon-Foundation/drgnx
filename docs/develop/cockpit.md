@@ -141,6 +141,74 @@ fixture is a temp project with:
 - two worktrees: one with an outside agent registered in it, one silent;
 - events.
 
+## What happened, the timeline, answers (module `tools/cockpit`)
+
+`modules/tools/drgnx-cockpit-feed.el`, loaded by `drgnx-cockpit.el`. The user's side is in
+[cockpit.md](../guide/cockpit.md#what-happened-the-timeline-questions).
+
+- **Panes:** kinds `happened` (home `right`; a placeholder until an agent is picked) and `timeline` (home
+  `bottom`). Their modes, `drgnx-cockpit-happened-mode` and `drgnx-cockpit-timeline-mode`, and the graph's share
+  `drgnx-cockpit-map`, where `cockpit-answer` (`A`) is bound.
+- **Updates:** the feed's buffers own their hooks: `drgnx-hub-event-functions` (named), a repeating check every
+  `drgnx-cockpit-check-interval` and one one-shot timer. The last buffer killed removes them and releases What
+  happened's end marker. `drgnx-cockpit-feed-schedule` works like the graph's: one update per
+  `drgnx-cockpit-redraw-delay`, only while a feed buffer shows, a hidden one marked stale and caught up by its
+  `:on-show`. An update first compares `(data_version total_changes())` with the buffer's.
+  - **Point stays on the head line** of both, which every change is below. So an update never moves a window's
+    point or start: typing elsewhere sees no window move (the jank report's collateral stays 0).
+  - **What happened** appends the lines of events newer than its last one, before a marker that ends them. It
+    rewrites only the lines of questions answered since (the mark goes), and its last lines when the transcript
+    appears or goes. It holds as many lines as its tallest window shows (less its head and last lines; at most
+    `drgnx-cockpit-happened-limit`), so the newest is in view without scrolling. Past that, its oldest lines go.
+    A window of another height that would show other lines, or more new events than the limit, draws it anew.
+    Its head line carries the agent's oldest open question (`drgnx-coord-open-questions AGENT`), patched like a
+    row.
+  - **The timeline** reads `drgnx-cockpit-timeline :since` its last chip. It rewrites only the lines of the rows
+    those reach, the rows that marked a question answered since, and its head. A new agent is a new line at the end.
+    A row shows its newest chips that fit its window (its widest, else 80 columns, less one). Chip widths are
+    measured then, never on redisplay. A width change refits every row. Windows on a rewritten line keep their
+    column.
+- **`(drgnx-cockpit-waiting-count)`**: the open questions (escalations, `ask_user`) and the open ask cards not asked
+  again, the model's `:questions` without permissions. Cached as `(STORE-KEY . N)`: one query when nothing changed.
+  It is meant for the status bar's `drgnx-statusbar-waiting-functions`.
+- **`(drgnx-cockpit-answer QUESTION TEXT)`**: QUESTION is one of `drgnx-cockpit-feed--questions` (the model's
+  `:questions`, then each session's permissions as `(:kind "permission" :agent :permission :summary :node)`).
+  - An ask card: `drgnx-coord-card-settle`, which writes the `answer` event.
+  - A message of a job (`:data (:message M)`, the message's job): the hub's `job/reply`.
+  - Otherwise `drgnx-cockpit-feed--queue`: a session here (not exited or failed, mode not `interrupt`) takes it,
+    a mirror through the hub's `agents/send`, a session of this Emacs through `drgnx-agents-send`. Anything else
+    gets `drgnx-coord-send` to the agent, and the hub is told (`coord/notify`).
+  - Then `drgnx-coord-event-add` of an `answer` `(:question ID)` by `user`, and the message is marked `acted`.
+    When the hub answers asynchronously, this happens in its callback, so a refused reply leaves the question open.
+  - A permission opens the transcript, and nothing is written.
+  - Nothing here calls `agents/stop`, `agents/kill` or a cancel.
+
+### Cost
+
+Batch, drgnx's steady GC settings, on the fixture plus 2,000 events, What happened and the timeline both shown, p50
+of 100 runs:
+
+| | Time |
+|---|---|
+| An update when nothing changed | 0.022 ms |
+| An update after one new event (both panes: a line appended, a row rewritten) | 1.7 ms, about 6,700 conses |
+| `drgnx-cockpit-waiting-count`, the store changed | 0.12 ms |
+| `drgnx-cockpit-waiting-count`, cached | 0.018 ms |
+
+### Tests
+
+`test/unit/mod-cockpit-feed-test.el` (prefix `drgnx-cockpit-feed/`) runs on the cockpit fixture, with the hub
+stubbed. It covers:
+- What happened's lines and their targets, the transcript link, the reply, and appends that change nothing above;
+- the five ways an answer goes, by what asked;
+- that an answer never stops, kills, cancels, prompts or steers;
+- the timeline's rows and chips in time order, a new chip changing only its row, rows that fit with the older
+  chips one click away;
+- a question in the graph, `drgnx-cockpit-waiting-count` and the timeline, then calm once answered;
+- `A` from a chip and from the graph;
+- the ASCII form, hidden panes catching up, the buffers owning their hooks and markers;
+- the commands and keys in every profile.
+
 ## The Work graph (module `tools/cockpit`)
 
 `modules/tools/drgnx-cockpit-graph.el` holds the layout, the drawing (SVG text, every colour from a face) and the

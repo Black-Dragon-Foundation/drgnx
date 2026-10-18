@@ -65,6 +65,7 @@ you always get the outline.
 | `o` | Open in Plan (`cockpit-open-in-plan`) | the plan at this task's heading (an agent: its task's) |
 | `f` | Filter Graph… (`cockpit-filter`) | a milestone (completion offers the specs' and plans' titles; any text in a title or path works), an agent, states; empty: all |
 | `g` | Draw Graph Again (`cockpit-refresh`) | reads the store again and draws now |
+| `A` | Answer Question… (`cockpit-answer`) | answers the question about the node on this line or selected; also in What happened and the timeline (see below) |
 
 The keys are the same in the VS Code, Emacs and Vim profiles: the graph's buffer starts in Emacs state under evil.
 A click on a node (a box or an outline line) opens it too.
@@ -80,6 +81,61 @@ What a node opens:
 
 The filter keeps the nodes it matches and their ancestors (a task keeps its plan and spec). The first line says
 what it keeps.
+
+## What happened, the timeline, questions
+
+Long transcripts lose things. The cockpit shows the same work as short lines.
+
+**What happened** (**Show What Happened…**, `cockpit-happened`, in the palette; or an agent's name in the timeline)
+shows one agent in the right pane, `happened`, in a buffer `*happened: AGENT*`:
+
+- one line per event, newest at the bottom, each with its time: `decided #3 …`, `edited 2 files: a.el, b.el`,
+  `tests 12/12 ✓ (make test)`, `asks: …`, `answered: …`, `review: …`. It covers the agent's own events and the
+  cards, questions and answers about the job tasks it holds. It shows as many of the newest as fit its window, at
+  most `drgnx-cockpit-happened-limit` (50), so the newest is always in view;
+- each line opens what it is about (RET or a click): the task's plan at its heading, the agent, the job;
+- **Open the full transcript ▸**, when the agent's session is in this Emacs. An agent outside drgnx says "no
+  transcript: an outside agent";
+- **Reply… (queues, never interrupts)**: it answers the agent's open question, or else sends a message the agent
+  gets when its turn ends.
+
+**The timeline** (**Show Timeline**, `cockpit-timeline`, in the palette) shows every agent in the bottom pane,
+`timeline`, one row per agent:
+
+```
+Timeline · oldest left, newest right · ◐ 2 waiting on you
+claude · jx#2  ‹ 1 T2 running · decision #1 · 2 files · 12/12 ✓ · ◐ s-1 asks you
+Claude Code    started · 2 files
+you            answered
+```
+
+- The chips run left to right by time. A row shows as many of its newest chips as fit in its window.
+- `‹ N` says how many older chips there are. Click it to list them with their times.
+- A chip opens what it is about, as a line of What happened does. The agent's name opens its What happened.
+- `you` holds your answers. `jobs` holds a job's events that have no agent.
+
+**Questions everywhere.** A question waiting on you shows in the graph (`◐` and a red dot) and in the timeline (a
+`◐` chip in the waiting face, red). What happened marks its line the same way, and its first line names the agent's
+oldest open question, so it stays in view after its line scrolls away. An answered question loses the mark.
+`drgnx-cockpit-waiting-count` gives how many wait, for the status bar's "waiting on you" count. Escalations,
+`ask_user` questions and ask cards count. Permissions show in the graph, and their own count is the status bar's.
+
+**Answer Question…** (`cockpit-answer`, `A` in the graph, What happened and the timeline) answers the question
+under point: a line or a chip, or the graph node on this line or selected. Otherwise it answers the agent of What
+happened, or you pick one. It asks for the text. An answer never interrupts anyone:
+
+| What asked | Where the answer goes |
+|---|---|
+| A job's agent | the hub's `job/reply`: a message it gets when it is free |
+| A session in this Emacs or the hub's | queued in the session (`agents/send`), or steering its turn when its mode is `steer`. A session whose mode is `interrupt` gets a message in the store instead, which it gets when it is free |
+| An agent outside drgnx | a message in the store, which it reads with `read_inbox` |
+| An ask card | the card is settled with your text |
+| A permission | its transcript opens, where you answer it |
+
+Then an `answer` event closes the question everywhere.
+
+Both are plain text, so terminals get the same lines and chips. A terminal that does not write UTF-8 gets ASCII
+marks: `?` for `◐`, `+` for `✓`, `!` for `⚠`, `<` for `‹`, `>` for `▸`, `...` for `…`.
 
 ## When it redraws
 
@@ -106,6 +162,12 @@ Otherwise it reads the store, and it draws only what changed:
 A hidden graph does nothing: it remembers that something changed and catches up when it shows. Remote (TRAMP)
 folders are never touched.
 
+What happened and the timeline follow the same events, the same check and the same delay, only while one shows.
+When the store did not change, an update ends after one query. Otherwise they only add: new lines go under What
+happened's last line, and new chips go into their rows. Only the rows that changed are written again, and only when
+a window's width changes is every row fitted again. `drgnx-cockpit-waiting-count` returns a cached number, counted
+again only when the store changed.
+
 ## Customizing
 
 Customize group `drgnx-cockpit`, or `setopt` in `config.el`.
@@ -124,12 +186,15 @@ The options:
 - `drgnx-cockpit-graph-states`: each state's face and mark.
 - `drgnx-cockpit-open-functions`: what opening a node of each kind does.
 - `drgnx-cockpit-redraw-delay` (0.5 s), `drgnx-cockpit-check-interval` (3 s), `drgnx-cockpit-silent-interval` (45 s).
+- `drgnx-cockpit-happened-limit` (50): the most lines in What happened. `drgnx-cockpit-timeline-limit` (300): chips the
+  timeline reads at once and keeps per row. `drgnx-cockpit-timeline-name-width` (14): the agents' names' column.
 
 Faces, all inheriting your theme's:
 
 | Face | Inherits | Used for |
 |---|---|---|
-| `drgnx-cockpit-waiting` | `error` | the waiting mark |
+| `drgnx-cockpit-waiting` | `error` | the waiting mark, in the graph, What happened and the timeline |
+| `drgnx-cockpit-chip` | nothing (set it to make chips stand apart) | the timeline's chips |
 | `drgnx-cockpit-done` | `shadow` | done work |
 | `drgnx-cockpit-running` | `success` | work going on |
 | `drgnx-cockpit-blocked` | `warning` | pending and failed work, blocks lines |

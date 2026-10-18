@@ -726,6 +726,11 @@ their ancestors; each empty: any."
               :states (seq-remove #'string-empty-p states)))
   (drgnx-cockpit-graph-refresh))
 
+;; what happened, questions everywhere, the timeline (drgnx-cockpit-feed.el, beside this file)
+(unless (featurep 'drgnx-cockpit-feed)
+  (load (expand-file-name "drgnx-cockpit-feed" (file-name-directory (or load-file-name buffer-file-name))) nil t))
+(declare-function drgnx-cockpit-feed--setup "drgnx-cockpit-feed")
+
 ;;;; The module
 
 (defun drgnx-cockpit--setup ()
@@ -739,7 +744,8 @@ their ancestors; each empty: any."
                    (cockpit-refresh "Draw Graph Again" drgnx-cockpit-graph-refresh "Read the store again and draw the Work graph")
                    (cockpit-next "Select Next Node" drgnx-cockpit-graph-select-next "The next node, in column order; RET opens it")
                    (cockpit-previous "Select Previous Node" drgnx-cockpit-graph-select-previous "The previous node; RET opens it")))
-    (drgnx-command-define id :category "Work" :title title :command fn :doc doc :map 'drgnx-cockpit-graph-mode-map)))
+    (drgnx-command-define id :category "Work" :title title :command fn :doc doc :map 'drgnx-cockpit-graph-mode-map))
+  (drgnx-cockpit-feed--setup))           ; kinds `happened' (right) and `timeline' (bottom), A everywhere
 
 (drgnx-module-define 'tools/cockpit
                      :doc "The Work cockpit: the Work graph — specs, plans, tasks, agents, jobs and reviews; drawn in windows, an outline in terminals."
