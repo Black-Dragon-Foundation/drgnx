@@ -139,7 +139,7 @@ with are an :error.  A project that is no git project, has search off, or whose 
                   (let* ((known (progn (setq db (drgnx-search-store-open root)) (drgnx-search-store-files db)))
                          (fresh (or rebuild (zerop (hash-table-count known))))
                          (wanted (make-hash-table :test #'equal))
-                         todo (buf nil) (retried-halving nil) (strikes 0))
+                         todo (buf nil) (retried-halving nil) (strikes 0) (dropped nil))
                     (when fresh                 ; nothing indexed to stay comparable with
                       (maphash (lambda (path _) (drgnx-search-store-delete-file db path)) known)
                       (clrhash known)
@@ -192,29 +192,48 @@ with are an :error.  A project that is no git project, has search off, or whose 
                          (skip (file)
                            ;; a chunk the provider refuses even alone: its file is skipped, and tried again by the
                            ;; next run (a changed file keeps its old rows meanwhile)
+                           (push file dropped)
                            (setq buf (cl-remove file buf :key #'car))
                            (setf (drgnx-search-index--file-done file) nil)
                            (cl-incf skipped)
                            (tick))
+                         (refused (entry err)
+                           ;; ENTRY, one chunk alone, was refused: skip its file; two in a row mean the provider
+                           ;; is down, not the text, and stop the run
+                           (if (< (cl-incf strikes) 2)
+                               (skip (car entry))
+                             (signal (car err) (cdr err)))
+                           nil)
+                         (isolate (entries)
+                           ;; a refused batch, one request per chunk: ((ENTRY . VECTOR-OR-NIL)…)
+                           (let (out)
+                             (dolist (e entries)
+                               (push (cons e (unless (memq (car e) dropped)
+                                               (condition-case err
+                                                   (prog1 (aref (request (list (plist-get (cdr e) :text))) 0)
+                                                     (setq strikes 0))
+                                                 (drgnx-ai-embed-error (refused e err)))))
+                                     out))
+                             (nreverse out)))
                          (flush ()
-                           (let* ((now (seq-take buf batch))
-                                  (vectors (condition-case err
-                                               (embed-texts (mapcar (lambda (e) (plist-get (cdr e) :text)) now))
-                                             (drgnx-ai-embed-error
-                                              ;; two single chunks in a row refused: the provider is down, not the text
-                                              (if (and (= (length now) 1) (< (cl-incf strikes) 2))
-                                                  (progn (skip (car (car now))) nil)
-                                                (signal (car err) (cdr err)))))))
-                             (when vectors
-                               (setq strikes 0)
-                               (unless (= (length vectors) (length now))
-                                 (error "the provider answered %d vectors for %d texts" (length vectors) (length now)))
-                               (check-meta vectors)
-                               (setq buf (nthcdr (length now) buf))
-                               (cl-loop for (file . chunk) in now for vector across vectors
-                                        do (push (append (list :vector vector) chunk) (drgnx-search-index--file-done file))
-                                        (when (zerop (cl-decf (drgnx-search-index--file-left file)))
-                                          (finish file))))))
+                           (let* ((now (seq-take buf batch)) (pairs nil))
+                             (setq buf (nthcdr (length now) buf))
+                             (setq pairs
+                                   (condition-case err
+                                       (let ((vectors (embed-texts (mapcar (lambda (e) (plist-get (cdr e) :text)) now))))
+                                         (unless (= (length vectors) (length now))
+                                           (error "the provider answered %d vectors for %d texts" (length vectors) (length now)))
+                                         (setq strikes 0)
+                                         (cl-mapcar #'cons now (append vectors nil)))
+                                     (drgnx-ai-embed-error
+                                      (if (cdr now) (isolate now) (refused (car now) err)))))
+                             (setq pairs (cl-remove-if (lambda (p) (or (null (cdr p)) (memq (car (car p)) dropped))) pairs))
+                             (when pairs
+                               (check-meta (vconcat (mapcar #'cdr pairs)))
+                               (pcase-dolist (`((,file . ,chunk) . ,vector) pairs)
+                                 (push (append (list :vector vector) chunk) (drgnx-search-index--file-done file))
+                                 (when (zerop (cl-decf (drgnx-search-index--file-left file)))
+                                   (finish file))))))
                          (finish (file)
                            (let ((chunk-list (nreverse (drgnx-search-index--file-done file))))
                              (drgnx-search-store-put-file db (drgnx-search-index--file-path file) (drgnx-search-index--file-hash file) chunk-list)
