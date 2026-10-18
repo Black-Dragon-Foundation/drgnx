@@ -893,12 +893,20 @@ feature tested.  The embed role stays: OpenRouter has no embedding model here."
      ((and (not key) (not new))
       (list 'info "no OpenRouter key given — run this step again with one (openrouter.ai/keys)"))
      (t
-      (let ((stored (and new (condition-case err (drgnx-ai-store-key 'openrouter new) (user-error (cadr err))))))
+      (let ((stored (and new (unwind-protect
+                                 ;; a copy goes in (drgnx keeps it in memory); the typed string is zeroed either way
+                                 (condition-case err (drgnx-ai-store-key 'openrouter (copy-sequence new)) (user-error (cadr err)))
+                               (clear-string new))))
+            (env (plist-get (drgnx-ai-provider 'openrouter) :key-env)))
         (if (stringp stored) (list 'fail (concat "OpenRouter: " stored))
           (let ((steps (mapcar (lambda (rm) (cons (car rm) (cons 'openrouter (cdr rm)))) drgnx-onboard-openrouter-models)))
             (pcase-dolist (`(,role . ,step) steps) (drgnx-onboard--put-first role step))
             (drgnx-onboard--ai-verify
-             (format "OpenRouter set up (key %s)" (pcase stored ('keychain "in your Keychain") ('keyring "in your keyring") (_ "found")))
+             (format "OpenRouter set up (key %s%s)"
+                     (pcase stored ('keychain "in your Keychain") ('keyring "in your keyring") (_ "found"))
+                     (if (and stored (getenv env) (not (string-empty-p (getenv env))))
+                         (format "; %s is set in the environment, which wins over the stored key" env)
+                       ""))
              steps ctx
              "semantic search needs a local model or TEI: the next step, Semantic Search, says how"))))))))
 

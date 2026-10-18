@@ -102,7 +102,9 @@ reported with "run drgnx sync"; with `--non-interactive` an off module is report
 (Preferences: Modules)" and the step warns.
 
 **OpenRouter (cloud key).** In the drgnx app it asks for your key (`read-passwd`: never shown, never written to a file
-or log) and keeps it in the macOS Keychain or your Linux keyring ([ai.md](ai.md#keys)); then Inline Completion gets
+or log, and wiped from memory once stored) and keeps it in the macOS Keychain or your Linux keyring
+([ai.md](ai.md#keys)); when `OPENROUTER_API_KEY` is set in the environment, that key wins over the stored one, and the
+result says so; then Inline Completion gets
 `qwen/qwen-2.5-coder-32b-instruct` and Edit and Chat `openrouter/auto`. OpenRouter has no embeddings here: semantic
 search needs a local model or TEI, and the Semantic Search step says how. `drgnx onboard` runs in batch Emacs and
 never reads the Keychain or keyring, so there it asks for no key: set `OPENROUTER_API_KEY` for the CLI, or run the

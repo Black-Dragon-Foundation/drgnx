@@ -309,6 +309,26 @@ with BODY."
                 (should-not (string-search "sk-or-test-123" (drgnx-ai-onboard-test--slurp (concat root "config/ai.eld")))))))
         (delete-process mock)))))
 
+(ert-deftest drgnx-ai-onboard/typed-key-cleared-and-env-noted ()
+  ;; The string `read-passwd' returned is zeroed once the key is stored (the in-memory key is a copy); with
+  ;; OPENROUTER_API_KEY set the environment's key wins over the stored one, and the result says so.
+  (drgnx-ai-onboard-test--with-mac drgnx-ai-onboard-test--openai-answers
+    (let ((mock (drgnx-ai-test-mock-llm port script llm-log)) (typed nil))
+      (unwind-protect
+          (let ((system-type 'darwin) (noninteractive nil)
+                (process-environment (cons "OPENROUTER_API_KEY=sk-env-456" process-environment)))
+            (cl-letf (((symbol-function 'read-passwd) (lambda (&rest _) (setq typed (copy-sequence "sk-or-test-123"))))
+                      ((symbol-function 'auth-source-search)
+                       (lambda (&rest _) (and (file-exists-p (concat root "security.stdin"))
+                                              (list (list :secret "sk-or-test-123"))))))
+              (let ((r (drgnx-onboard--ai-setup 'openrouter '(:interactive t))))
+                (should (string-search "sk-or-test-123" (drgnx-ai-onboard-test--slurp (concat root "security.stdin"))))
+                (should (equal typed (make-string (length typed) 0)))      ; cleared, not just dropped
+                (should (equal (drgnx-ai-key 'openrouter) "sk-env-456"))
+                (should (string-match-p "OPENROUTER_API_KEY is set in the environment, which wins over the stored key" (cadr r)))
+                (should-not (string-search "sk-env-456" (cadr r))))))
+        (delete-process mock)))))
+
 (ert-deftest drgnx-onboard/openrouter-from-the-cli-asks-for-no-key ()
   (drgnx-ai-onboard-test--with-mac drgnx-ai-onboard-test--openai-answers
     (cl-letf (((symbol-function 'read-passwd) (lambda (&rest _) (error "Asked for a key in batch"))))
