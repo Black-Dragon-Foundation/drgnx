@@ -1,0 +1,215 @@
+;;; mod-face-test.el --- batch tests: the ui/face module — the frame and the buffers -*- lexical-binding: t -*-
+(require 'ert)
+(require 'drgnx)
+(load (expand-file-name "modules/ui/drgnx-face" drgnx-dir) nil t)
+
+(defmacro drgnx-face-test--with (&rest body)
+  "BODY with the module's hooks, frame defaults and settings kept away from the rest of the test process."
+  (declare (indent 0))
+  `(let ((default-frame-alist (copy-alist default-frame-alist))
+         (after-make-frame-functions nil)
+         (after-change-major-mode-hook nil)
+         (drgnx-face--active nil)
+         (drgnx-face-menu-bar drgnx-face-menu-bar) (drgnx-face-scroll-bars drgnx-face-scroll-bars)
+         (drgnx-face-line-spacing drgnx-face-line-spacing)
+         (drgnx-face-line-numbers-modes drgnx-face-line-numbers-modes)
+         (drgnx-face-inline-problems drgnx-face-inline-problems)
+         (line-spacing line-spacing)
+         (drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil))
+     (unwind-protect (progn ,@body)
+       (setq drgnx-face--active nil))))
+
+(defun drgnx-face-test--setup ()
+  (funcall (plist-get (alist-get 'ui/face drgnx-modules--table) :setup)))
+
+(defmacro drgnx-face-test--file-buffer (file &rest body)
+  "BODY in a buffer visiting FILE's name (nothing on disk), its major mode chosen by `set-auto-mode'."
+  (declare (indent 1))
+  `(with-temp-buffer
+     (setq buffer-file-name (expand-file-name ,file temporary-file-directory))
+     (set-auto-mode)
+     ,@body))
+
+(ert-deftest drgnx-face/no-menu-bar-and-no-scroll-bars-by-default ()
+  (drgnx-face-test--with
+    (should-not drgnx-face-menu-bar)
+    (should (eq drgnx-face-scroll-bars 'none))
+    (drgnx-face-test--setup)
+    ;; new frames: the alist (early-init.el also has them before the first frame exists)
+    (should (eql (alist-get 'menu-bar-lines default-frame-alist) 0))
+    (should (assq 'vertical-scroll-bars default-frame-alist))
+    (should-not (alist-get 'vertical-scroll-bars default-frame-alist))
+    ;; live frames and later ones: the parameters
+    (let (seen)
+      (cl-letf (((symbol-function 'modify-frame-parameters) (lambda (_f params) (setq seen params))))
+        (drgnx-face-apply-frame (selected-frame)))
+      (should (eql (alist-get 'menu-bar-lines seen) 0))
+      (should (assq 'vertical-scroll-bars seen))
+      (should-not (alist-get 'vertical-scroll-bars seen)))
+    (should (memq #'drgnx-face-apply-frame after-make-frame-functions))))
+
+(ert-deftest drgnx-face/native-scroll-bars-are-on-the-right ()
+  (drgnx-face-test--with
+    (let (seen)
+      (cl-letf (((symbol-function 'modify-frame-parameters) (lambda (_f params) (setq seen params))))
+        (drgnx-face-test--setup)
+        (setopt drgnx-face-scroll-bars 'native)
+        (drgnx-face-apply-frame (selected-frame)))
+      (should (eq (alist-get 'vertical-scroll-bars seen) 'right))
+      (should (eq (alist-get 'vertical-scroll-bars default-frame-alist) 'right)))))
+
+(ert-deftest drgnx-face/setopt-brings-the-menu-bar-back ()
+  (drgnx-face-test--with
+    (drgnx-face-test--setup)
+    (let ((frames (list 'a 'b)) (calls nil))
+      (cl-letf (((symbol-function 'frame-list) (lambda () frames))
+                ((symbol-function 'frame-parent) (lambda (_f) nil))
+                ((symbol-function 'frame-live-p) (lambda (_f) t))
+                ((symbol-function 'modify-frame-parameters)
+                 (lambda (f params) (push (cons f (alist-get 'menu-bar-lines params)) calls))))
+        (setq calls nil)
+        (setopt drgnx-face-menu-bar t)
+        (should (equal (sort (mapcar (lambda (c) (format "%s%s" (car c) (cdr c))) calls) #'string<) '("a1" "b1")))
+        (should (eql (alist-get 'menu-bar-lines default-frame-alist) 1))
+        (setq calls nil)
+        (setopt drgnx-face-menu-bar nil)
+        (should (equal (sort (mapcar (lambda (c) (format "%s%s" (car c) (cdr c))) calls) #'string<) '("a0" "b0")))))))
+
+(ert-deftest drgnx-face/line-numbers-in-code-not-in-prose ()
+  (drgnx-face-test--with
+    (drgnx-face-test--setup)
+    (drgnx-face-test--file-buffer "x.el"
+      (should (bound-and-true-p display-line-numbers-mode))
+      (should (eq display-line-numbers-width-start t))      ; the number column never grows while typing
+      (should (eq display-line-numbers-grow-only t)))
+    (drgnx-face-test--file-buffer "x.conf"
+      (should (bound-and-true-p display-line-numbers-mode)))
+    (drgnx-face-test--file-buffer "x.txt"
+      (should-not (bound-and-true-p display-line-numbers-mode)))
+    (with-temp-buffer                                      ; code that visits no file (*scratch*)
+      (emacs-lisp-mode)
+      (should-not (bound-and-true-p display-line-numbers-mode)))
+    (with-current-buffer (get-buffer-create "*scratch*")
+      (lisp-interaction-mode)
+      (should-not (bound-and-true-p display-line-numbers-mode)))))
+
+(ert-deftest drgnx-face/line-numbers-in-yaml ()
+  (skip-unless (and (fboundp 'yaml-ts-mode) (fboundp 'treesit-language-available-p) (treesit-language-available-p 'yaml)))
+  (drgnx-face-test--with
+    (drgnx-face-test--setup)
+    (with-temp-buffer                                      ; (-Q has no auto-mode entry for yaml-ts-mode)
+      (setq buffer-file-name (expand-file-name "x.yml" temporary-file-directory))
+      (yaml-ts-mode)
+      (should (bound-and-true-p display-line-numbers-mode)))))
+
+(ert-deftest drgnx-face/line-numbers-modes-is-a-setting ()
+  (drgnx-face-test--with
+    (drgnx-face-test--setup)
+    (let ((drgnx-face-line-numbers-modes '(text-mode)))
+      (drgnx-face-test--file-buffer "x.txt"
+        (should (bound-and-true-p display-line-numbers-mode)))
+      (drgnx-face-test--file-buffer "x.el"
+        (should-not (bound-and-true-p display-line-numbers-mode))))))
+
+(ert-deftest drgnx-face/changing-the-modes-reaches-open-buffers ()
+  (drgnx-face-test--with
+    (drgnx-face-test--setup)
+    (drgnx-face-test--file-buffer "x.el"
+      (should (bound-and-true-p display-line-numbers-mode))
+      (setopt drgnx-face-line-numbers-modes '(conf-mode))
+      (should-not (bound-and-true-p display-line-numbers-mode))
+      (setopt drgnx-face-line-numbers-modes '(prog-mode conf-mode))
+      (should (bound-and-true-p display-line-numbers-mode)))))
+
+(ert-deftest drgnx-face/inline-problems-follow-the-setting ()
+  (skip-unless (progn (require 'flymake) (boundp 'flymake-show-diagnostics-at-end-of-line)))
+  (drgnx-face-test--with
+    (let ((flymake-show-diagnostics-at-end-of-line flymake-show-diagnostics-at-end-of-line))
+      (drgnx-face-test--setup)
+      (should (eq flymake-show-diagnostics-at-end-of-line 'short))
+      (setopt drgnx-face-inline-problems nil)
+      (should-not flymake-show-diagnostics-at-end-of-line)
+      (setopt drgnx-face-inline-problems t)
+      (should (eq flymake-show-diagnostics-at-end-of-line t)))))
+
+(ert-deftest drgnx-face/line-spacing-follows-the-setting ()
+  (drgnx-face-test--with
+    (drgnx-face-test--setup)
+    (should-not (default-value 'line-spacing))
+    (setopt drgnx-face-line-spacing 2)
+    (should (eql (default-value 'line-spacing) 2))
+    (setopt drgnx-face-line-spacing nil)
+    (should-not (default-value 'line-spacing))))
+
+(ert-deftest drgnx-face/glyphs-fall-back-to-ascii ()
+  (let ((tty (make-symbol "tty")))
+    (cl-letf (((symbol-function 'display-graphic-p) (lambda (&optional f) (not (eq f tty))))
+              ((symbol-function 'frame-terminal) (lambda (&optional _f) 'term))
+              ((symbol-function 'terminal-coding-system) (lambda (&optional _t) 'iso-latin-1)))
+      (should (equal (drgnx-face-glyph 'close tty) "x"))
+      (should (equal (drgnx-face-glyph 'close) "✕"))
+      (should (equal (drgnx-face-glyph 'close 'gui) "✕")))
+    (cl-letf (((symbol-function 'display-graphic-p) (lambda (&optional _f) nil))
+              ((symbol-function 'frame-terminal) (lambda (&optional _f) 'term))
+              ((symbol-function 'terminal-coding-system) (lambda (&optional _t) 'utf-8-unix)))
+      (should (equal (drgnx-face-glyph 'close tty) "✕")))))
+
+(ert-deftest drgnx-face/every-glyph-has-both-forms ()
+  (dolist (n '(handle close branch warning ok busy waiting paused ahead behind dot circle))
+    (let ((g (alist-get n drgnx-face-glyphs)))
+      (should (and (stringp (car g)) (stringp (cdr g))))
+      (should (string-match-p "\\`[[:ascii:]]+\\'" (cdr g)))))
+  (should-not (drgnx-face-glyph 'no-such-glyph)))
+
+(ert-deftest drgnx-face/a-glyph-the-user-changed-wins ()
+  (let ((drgnx-face-glyphs (cons '(close "X" . "#") drgnx-face-glyphs)))
+    (cl-letf (((symbol-function 'display-graphic-p) (lambda (&optional _f) t)))
+      (should (equal (drgnx-face-glyph 'close) "X")))))
+
+(ert-deftest drgnx-face/no-colour-literals ()
+  ;; faces only inherit theme faces: a defface has no colour attribute, and no file of the module writes a colour
+  (dolist (file (directory-files (expand-file-name "modules/ui" drgnx-dir) t "\\`drgnx-face.*\\.el\\'"))
+    (with-temp-buffer
+      (insert-file-contents file)
+      (goto-char (point-min))
+      (let (form)
+        (condition-case nil
+            (while (setq form (read (current-buffer)))
+              (when (eq (car-safe form) 'defface)
+                (let ((spec (nth 2 form)) (bad nil))
+                  (dolist (clause spec)
+                    (let ((plist (cdr clause)))
+                      (while plist
+                        (unless (eq (car plist) :inherit) (setq bad (car plist)))
+                        (setq plist (cddr plist)))))
+                  (should-not bad))))
+          (end-of-file nil)))
+      (goto-char (point-min))
+      (should-not (re-search-forward "\"#[0-9a-fA-F]\\{3,\\}\"" nil t))
+      (goto-char (point-min))
+      (should-not (re-search-forward ":\\(foreground\\|background\\)[ \n]+\"" nil t)))))
+
+(ert-deftest drgnx-face/menu-bar-toggle-is-in-every-profile ()
+  (dolist (p '("vscode" "emacs" "vim"))
+    (with-temp-buffer
+      (insert-file-contents (expand-file-name (format "keys/%s.eld" p) drgnx-dir))
+      (should (search-forward "(face-toggle-menu-bar " nil t)))))
+
+(ert-deftest drgnx-face/the-toggle-command-flips-the-menu-bar ()
+  (drgnx-face-test--with
+    (cl-letf (((symbol-function 'frame-list) (lambda () nil)))
+      (drgnx-face-test--setup)
+      (should (drgnx-commands-get 'face-toggle-menu-bar))
+      (should-not drgnx-face-menu-bar)
+      (call-interactively (drgnx-cmd-command (drgnx-commands-get 'face-toggle-menu-bar)))
+      (should drgnx-face-menu-bar)
+      (call-interactively (drgnx-cmd-command (drgnx-commands-get 'face-toggle-menu-bar)))
+      (should-not drgnx-face-menu-bar))))
+
+(ert-deftest drgnx-face/early-init-starts-without-a-menu-bar-or-scroll-bar ()
+  (with-temp-buffer
+    (insert-file-contents (expand-file-name "init/early-init.el" drgnx-dir))
+    (should (search-forward "(push '(menu-bar-lines . 0) default-frame-alist)" nil t))
+    (should (search-forward "(push '(vertical-scroll-bars . nil) default-frame-alist)" nil t))))
+
+;;; mod-face-test.el ends here
