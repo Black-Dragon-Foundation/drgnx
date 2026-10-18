@@ -5,6 +5,7 @@
 (require 'drgnx-wb)
 (require 'drgnx-area)
 (require 'drgnx-groups)
+(require 'drgnx-jobs)
 (load (expand-file-name "modules/tools/drgnx-agents-ui" drgnx-dir) nil t)
 (load (expand-file-name "modules/tools/drgnx-layouts" drgnx-dir) nil t)
 (load (expand-file-name "modules/tools/drgnx-browser" drgnx-dir) nil t)
@@ -132,7 +133,7 @@
                     ((symbol-function 'drgnx-jobs-get) (lambda (&rest _) (list :status 'running)))
                     ((symbol-function 'run-with-timer) (lambda (_s _r fn &rest _) (push fn polls) 'timer))
                     ((symbol-function 'cancel-timer) #'ignore)
-                    ((symbol-function 'drgnx-browser-open) (lambda (url) (push url msgs))))
+                    ((symbol-function 'drgnx-browser-open) (lambda (url &optional keep) (push (if keep url (list :steals-focus url)) msgs))))
             (let ((default-directory root))
               (drgnx-browser-test-report))
             (should (equal (cadr (car jobs))
@@ -173,7 +174,7 @@
 
 (defun drgnx-browser-test--nav (id url &optional title)
   (list :type 'tool :id id :title (or title "mcp__playwright__browser_navigate") :status "completed"
-        :rawInput (list :url url)))
+        :url url))
 
 (defun drgnx-browser-test--shot (id)
   (list :type 'tool :id id :title "mcp__playwright__browser_take_screenshot" :status "completed"
@@ -225,15 +226,126 @@
       (should-not opened)
       (should-not (get-buffer "*drgnx: agent screenshot*")))))
 
-(ert-deftest drgnx-browser/tool-calls-keep-their-raw-input ()
+(ert-deftest drgnx-browser/tool-calls-keep-only-the-url ()
   (let ((s (drgnx-agents--make :name "x" :status 'busy)))
     (drgnx-agents--update s '(:sessionUpdate "tool_call" :toolCallId "t1" :title "mcp__playwright__browser_navigate" :status "pending"))
     (drgnx-agents--update s '(:sessionUpdate "tool_call_update" :toolCallId "t1" :status "in_progress"
                                              :rawInput (:url "http://localhost:3000/")))
-    (drgnx-agents--update s '(:sessionUpdate "tool_call" :toolCallId "t2" :title "Read" :rawInput (:path "/a")))
-    (should (equal (plist-get (nth 0 (drgnx-agent-session-entries s)) :rawInput) '(:url "http://localhost:3000/")))
-    (should (equal (plist-get (nth 1 (drgnx-agent-session-entries s)) :rawInput) '(:path "/a")))
-    (should (equal (drgnx-browser-agent-url s) "http://localhost:3000/"))))
+    (drgnx-agents--update s '(:sessionUpdate "tool_call" :toolCallId "t2" :title "Write" :rawInput (:file_path "/a" :content "a whole file")))
+    (should (equal (plist-get (nth 0 (drgnx-agent-session-entries s)) :url) "http://localhost:3000/"))
+    ;; the raw input itself is not kept (a Write's is the whole file)
+    (dolist (e (drgnx-agent-session-entries s)) (should-not (plist-get e :rawInput)))
+    (should-not (plist-get (nth 1 (drgnx-agent-session-entries s)) :url))
+    (should (equal (drgnx-browser-agent-url s) "http://localhost:3000/"))
+    ;; an entry that still has the raw input (the Live module's tests build them so) reads the same
+    (should (equal (drgnx-browser-agent-url
+                    (drgnx-agents--make :entries (list '(:type tool :title "browser_navigate" :rawInput (:url "http://a.test/")))))
+                   "http://a.test/"))))
+
+(ert-deftest drgnx-browser/the-header-escapes-percent-signs ()
+  (cl-letf (((symbol-function 'xwidget-webkit-current-session) (lambda () 'session))
+            ((symbol-function 'xwidget-webkit-uri) (lambda (&rest _) "https://duckduckgo.com/?q=emacs%20xwidgets")))
+    (let ((h (substring-no-properties (drgnx-browser--header))))
+      (should (string-search "q=emacs%%20xwidgets" h)))
+    ;; the address the prompt starts from stays as it is
+    (should (equal (drgnx-browser--url) "https://duckduckgo.com/?q=emacs%20xwidgets"))))
+
+(ert-deftest drgnx-browser/local-addresses-open-as-pages ()
+  (dolist (c '(("192.168.1.5:8080" . "http://192.168.1.5:8080") ("0.0.0.0:3000/x" . "http://0.0.0.0:3000/x")
+               ("10.0.2.2" . "http://10.0.2.2") ("myhost:3000/app" . "http://myhost:3000/app")
+               ("example.org" . "https://example.org")))
+    (should (equal (drgnx-browser--normalise (car c)) (cdr c))))
+  (should (string-prefix-p "https://duckduckgo.com/?q=" (drgnx-browser--normalise "my host:3000"))))
+
+(ert-deftest drgnx-browser/the-server-address-is-read-from-its-own-line ()
+  (should (equal (drgnx-browser--log-url "\e[32mServing HTML report at http://localhost:9323\e[0m. Press Ctrl+C to quit.\r\n")
+                 "http://localhost:9323"))
+  (should (equal (drgnx-browser--log-url "npm warn see https://npm.example/x\nListening on http://127.0.0.1:5555\n")
+                 "http://127.0.0.1:5555"))
+  (should (equal (drgnx-browser--log-url "see https://npm.example/x\nopening http://localhost:7000/trace\n")
+                 "http://localhost:7000/trace"))
+  (should-not (drgnx-browser--log-url "npm warn see https://npm.example/x\n"))
+  (should-not (drgnx-browser--log-url "")))
+
+(defun drgnx-browser-test--jobs ()
+  (let ((cwd "/tmp/drgnx-pw"))
+    (list (list :id "old" :name "playwright" :cwd cwd :status 'running :unit "drgnx-job-old" :command '("npx" "x"))
+          (list :id "lost" :name "playwright" :cwd (concat cwd "/") :status 'gone :unit "drgnx-job-lost")
+          (list :id "elsewhere" :name "playwright" :cwd "/tmp/other/" :status 'running :unit "drgnx-job-elsewhere")
+          (list :id "done" :name "playwright" :cwd cwd :status 'exited :unit "drgnx-job-done")
+          (list :id "mermaid" :name "mermaid" :cwd cwd :status 'running :unit "drgnx-job-mermaid"))))
+
+(defmacro drgnx-browser-test--with-jobs (&rest body)
+  "BODY with the jobs of `drgnx-browser-test--jobs'; `stopped' collects the ids and `units' the systemd units stopped."
+  (declare (indent 0))
+  `(let (stopped units)
+     (cl-letf (((symbol-function 'drgnx-jobs-list) #'drgnx-browser-test--jobs)
+               ((symbol-function 'drgnx-jobs-get)
+                (lambda (id) (seq-find (lambda (j) (equal (plist-get j :id) id)) (drgnx-browser-test--jobs))))
+               ((symbol-function 'drgnx-jobs-stop) (lambda (id) (push id stopped)))
+               ((symbol-function 'call-process) (lambda (_p &rest args) (push (car (last args)) units) 0)))
+       ,@body)))
+
+(ert-deftest drgnx-browser/test-report-stops-the-servers-it-replaces ()
+  (let ((root (make-temp-file "drgnx-browser" t)) started)
+    (unwind-protect
+        (progn
+          (drgnx-browser-test--touch (expand-file-name "playwright-report/index.html" root) 10)
+          (drgnx-browser-test--with-jobs
+            (cl-letf (((symbol-function 'executable-find) (lambda (&rest _) "/usr/bin/npx"))
+                      ((symbol-function 'drgnx-jobs-start) (lambda (&rest _) (setq started t) "new"))
+                      ((symbol-function 'run-with-timer) (lambda (&rest _) 'timer))
+                      ((symbol-function 'drgnx-browser--root) (lambda () "/tmp/drgnx-pw/"))
+                      ((symbol-function 'drgnx-browser-newest)
+                       (lambda (_) (list :kind 'report :path (file-name-as-directory root)))))
+              (drgnx-browser-test-report)
+              (should started)
+              ;; the running and the lost ones of this project, nothing else (a lost one may still run: its unit is stopped too)
+              (should (equal (sort stopped #'string<) '("lost" "old")))
+              (should (equal (sort units #'string<) '("drgnx-job-lost" "drgnx-job-old"))))))
+      (delete-directory root t))))
+
+(ert-deftest drgnx-browser/the-watcher-gives-up-and-stops-the-server ()
+  (let (fns cancelled)
+    (drgnx-browser-test--with-jobs
+      (cl-letf (((symbol-function 'drgnx-jobs-log) (lambda (&rest _) ""))
+                ((symbol-function 'run-with-timer) (lambda (_s _r fn &rest _) (push fn fns) (intern (format "timer-%d" (length fns)))))
+                ((symbol-function 'cancel-timer) (lambda (tm) (push tm cancelled))))
+        ;; a second Test Report on the same job does not stack a second watcher
+        (drgnx-browser--watch-job "old")
+        (drgnx-browser--watch-job "old")
+        (should (equal cancelled '(timer-1)))
+        (let ((fn (car fns)))
+          (dotimes (_ 120) (funcall fn))
+          (should-not stopped)
+          (let ((m (drgnx-browser-test--messages fn)))
+            (should (string-match-p "did not print an address" (car m))))
+          (should (equal stopped '("old")))
+          (should (equal units '("drgnx-job-old")))
+          (should (memq 'timer-2 cancelled)))))))
+
+(ert-deftest drgnx-browser/a-lost-job-is-waited-for-and-an-ended-one-is-not ()
+  (let (fn cancelled (status 'gone))
+    (drgnx-browser-test--with-jobs
+      (cl-letf (((symbol-function 'drgnx-jobs-log) (lambda (&rest _) ""))
+                ((symbol-function 'drgnx-jobs-get) (lambda (&rest _) (list :id "j" :status status)))
+                ((symbol-function 'run-with-timer) (lambda (_s _r f &rest _) (setq fn f) 'timer))
+                ((symbol-function 'cancel-timer) (lambda (tm) (push tm cancelled))))
+        (drgnx-browser--watch-job "j")
+        (funcall fn) (funcall fn)                 ; `gone' can be a job systemd runs: no giving up yet
+        (should-not cancelled)
+        (setq status 'exited)
+        (drgnx-browser-test--messages fn)
+        (should cancelled)))))
+
+(ert-deftest drgnx-browser/a-timer-open-keeps-the-focus ()
+  (drgnx-browser-test--with
+    (let ((code (selected-window)))
+      (cl-letf (((symbol-function 'drgnx-browser-webkit-p) (lambda () t))
+                ((symbol-function 'xwidget-webkit-browse-url) #'drgnx-browser-test--webkit))
+        (drgnx-browser-open "localhost:3000" t)
+        (should (eq (selected-window) code))
+        (should (window-live-p (window-in-direction 'right code)))))))
 
 (provide 'mod-browser-test)
 ;;; mod-browser-test.el ends here

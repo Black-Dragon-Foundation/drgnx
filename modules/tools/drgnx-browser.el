@@ -26,6 +26,7 @@
 (declare-function xwidget-webkit-reload "xwidget")
 (declare-function drgnx-wb-editor-window "drgnx-wb")
 (declare-function drgnx-groups--split "drgnx-groups")
+(declare-function drgnx-jobs-stop "drgnx-jobs")
 (declare-function drgnx-jobs-start "drgnx-jobs")
 (declare-function drgnx-jobs-get "drgnx-jobs")
 (declare-function drgnx-jobs-list "drgnx-jobs")
@@ -54,6 +55,9 @@ shown again by the Browser layout.")
   (let ((text (string-trim text)))
     (cond ((string-match-p "\\`[a-z][a-z0-9+.-]*://" text) text)
           ((string-match-p "\\`\\(?:localhost\\|127\\.0\\.0\\.1\\|\\[::1\\]\\)\\(?:[:/]\\|\\'\\)" text) (concat "http://" text))
+          ;; a dev server on the network: an IPv4 address, or host:port
+          ((string-match-p "\\`\\(?:[0-9]\\{1,3\\}\\.\\)\\{3\\}[0-9]\\{1,3\\}\\(?:[:/?#].*\\)?\\'" text) (concat "http://" text))
+          ((string-match-p "\\`[a-z0-9_-]+:[0-9]+\\(?:[/?#].*\\)?\\'" text) (concat "http://" text))
           ((string-match-p "\\`[^ \t/]+\\.[a-z]\\{2,\\}\\(?:[:/?#].*\\)?\\'" text) (concat "https://" text))
           (t (concat "https://duckduckgo.com/?q=" (url-hexify-string text))))))
 
@@ -82,7 +86,7 @@ shown again by the Browser layout.")
           (drgnx-browser--button "◀" "Back" #'xwidget-webkit-back) " "
           (drgnx-browser--button "▶" "Forward" #'xwidget-webkit-forward) " "
           (drgnx-browser--button "⟳" "Reload" #'xwidget-webkit-reload) "  "
-          (drgnx-browser--button (drgnx-browser--url) "Go to another address (RET)" #'drgnx-browser--go-command)))
+          (drgnx-browser--button (string-replace "%" "%%" (drgnx-browser--url)) "Go to another address (RET)" #'drgnx-browser--go-command)))
 
 (define-minor-mode drgnx-browser-mode
   "The pane's header line (address, back, forward, reload) and RET to go to another address."
@@ -102,10 +106,11 @@ shown again by the Browser layout.")
     (if select (select-window pane) (when (window-live-p editor) (select-window editor)))
     pane))
 
-(defun drgnx-browser-open (url)
-  "Show URL in the browser pane beside the editor (WebKit), else in the system browser, saying why once."
+(defun drgnx-browser-open (url &optional keep-focus)
+  "Show URL in the browser pane beside the editor (WebKit), else in the system browser, saying why once.
+The pane takes the focus, unless KEEP-FOCUS (a timer opening a page must not move it)."
   (interactive (list (read-string "URL or search: ")))
-  (let ((url (drgnx-browser--normalise url)))
+  (let ((url (drgnx-browser--normalise url)) (origin (selected-window)))
     (if (not (drgnx-browser-webkit-p))
         (progn
           (unless drgnx-browser--told
@@ -124,7 +129,8 @@ shown again by the Browser layout.")
                      (window-buffer pane))))
           (unless (eq (window-buffer pane) buf) (set-window-buffer pane buf))
           (with-current-buffer buf (drgnx-browser-mode 1))
-          (setq drgnx-browser--buffer buf))))))
+          (setq drgnx-browser--buffer buf))
+        (when (and keep-focus (window-live-p origin)) (select-window origin))))))
 
 (defun drgnx-browser-go (url)
   "Go to another address (or search) in this page."
@@ -185,23 +191,51 @@ Not into node_modules or dot-directories."
     (list :kind (nth 1 best) :path (nth 2 best))))
 
 (defun drgnx-browser--log-url (text)
-  "The first http URL in TEXT (what the Playwright server printed), or nil."
-  (when (string-match "https?://[^ \t\n]+" text)
-    (string-trim-right (match-string 0 text) "[.,]+")))
+  "The address in TEXT, what the Playwright server printed: the URL on its own \"Serving\" or \"Listening\" line, else a
+localhost URL; nil when there is none.  Colour codes and carriage returns are ignored."
+  (let ((clean (replace-regexp-in-string "\e\\[[0-9;?]*[A-Za-z]\\|\r" "" text)))
+    (when (or (string-match "\\(?:Serving\\|Listening\\)[^\n]*?\\(https?://[^ \t\n\e]+\\)" clean)
+              (string-match "\\(https?://\\(?:localhost\\|127\\.0\\.0\\.1\\|0\\.0\\.0\\.0\\|\\[::1\\]\\)[^ \t\n\e]*\\)" clean))
+      (string-trim-right (match-string 1 clean) "[.,]+"))))
+
+(defun drgnx-browser--stop-job (id)
+  "Stop job ID: through the jobs, and its systemd unit too (which the jobs may not see running)."
+  (let ((job (drgnx-jobs-get id)))
+    (drgnx-jobs-stop id)
+    (when-let* ((unit (plist-get job :unit))
+                ((not (memq (plist-get job :status) '(exited stopped)))))
+      (call-process "systemctl" nil nil nil "--user" "stop" unit))))
+
+(defvar drgnx-browser--watchers nil "Alist job id → the timer waiting for that job's address.")
 
 (defun drgnx-browser--watch-job (id)
   "Open the server URL of job ID in the pane once the job's log has it.
 Looked at every half second, 60 s at most; never waits."
   (let ((timer nil) (tries 0))
+    (when-let* ((old (assoc id drgnx-browser--watchers))) (cancel-timer (cdr old)))
     (setq timer
           (run-with-timer
            0.5 0.5
            (lambda ()
-             (let ((url (ignore-errors (drgnx-browser--log-url (drgnx-jobs-log id 4000)))))
-               (cond (url (cancel-timer timer) (drgnx-browser-open url))
-                     ((or (> (cl-incf tries) 120) (not (eq (plist-get (drgnx-jobs-get id) :status) 'running)))
+             (let ((url (ignore-errors (drgnx-browser--log-url (drgnx-jobs-log id 4000))))
+                   (status (plist-get (drgnx-jobs-get id) :status)))
+               (cond (url (cancel-timer timer) (drgnx-browser-open url t))
+                     ;; `gone' can be a job systemd runs, so only the clock or an ended job ends the wait
+                     ((or (> (cl-incf tries) 120) (memq status '(exited stopped)))
                       (cancel-timer timer)
-                      (message "drgnx: the Playwright server did not print an address (Show Job Log: playwright)")))))))))
+                      (when (> tries 120) (drgnx-browser--stop-job id))
+                      (message "drgnx: the Playwright server did not print an address (Show Job Log: playwright)")))))))
+    (setf (alist-get id drgnx-browser--watchers nil nil #'equal) timer)))
+
+(defun drgnx-browser--stop-others (keep root)
+  "Stop the Playwright servers of ROOT other than job KEEP (a new report replaces the older servers)."
+  (let ((dir (file-name-as-directory (expand-file-name root))))
+    (dolist (j (drgnx-jobs-list))
+      (when (and (equal (plist-get j :name) "playwright") (not (equal (plist-get j :id) keep))
+                 (equal (file-name-as-directory (expand-file-name (or (plist-get j :cwd) ""))) dir)
+                 (not (memq (plist-get j :status) '(exited stopped))))
+        (when-let* ((w (assoc (plist-get j :id) drgnx-browser--watchers))) (cancel-timer (cdr w)))
+        (drgnx-browser--stop-job (plist-get j :id))))))
 
 (defun drgnx-browser-test-report ()
   "Open the newest Playwright HTML report (or trace) of this project in the browser pane."
@@ -221,6 +255,7 @@ Looked at every half second, 60 s at most; never waits."
                                      (drgnx-jobs-list)))
                   (id (if running (plist-get running :id)
                         (drgnx-jobs-start "playwright" command :cwd root :memory-max "1G" :no-wait t))))
+             (drgnx-browser--stop-others id root)
              (message "Test Report: serving %s…" (abbreviate-file-name (plist-get found :path)))
              (drgnx-browser--watch-job id))))))
 
@@ -236,10 +271,10 @@ Looked at every half second, 60 s at most; never waits."
     (nreverse out)))
 
 (defun drgnx-browser-agent-url (session)
-  "The last URL in SESSION's Playwright tool calls (a :rawInput with a url), or nil."
+  "The last URL in SESSION's Playwright tool calls (their :url, taken from the raw input), or nil."
   (let (url)
     (dolist (e (drgnx-browser--tools (drgnx-agent-session-entries session)))
-      (when-let* ((u (plist-get (plist-get e :rawInput) :url))
+      (when-let* ((u (or (plist-get e :url) (plist-get (plist-get e :rawInput) :url)))
                   ((stringp u))
                   ((string-match-p "playwright\\|browser_\\|navigate" (downcase (or (plist-get e :title) "")))))
         (setq url u)))
@@ -299,7 +334,7 @@ Looked at every half second, 60 s at most; never waits."
 
 (drgnx-module-define 'tools/browser
                      :doc "A web page pane beside the editor (WebKit), Test Report and Agent's Page."
-                     :stage 'idle :requires '(core/workbench tools/layouts)
+                     :stage 'idle :requires '(core/workbench tools/layouts tools/agents)
                      :setup
                      (lambda ()
                        (require 'drgnx-groups)
