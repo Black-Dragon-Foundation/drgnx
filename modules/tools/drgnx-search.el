@@ -297,12 +297,44 @@ the project has no index or anything goes wrong.  Never asks anything."
 
 (defun drgnx-search--register-retriever ()
   "Add the semantic retriever to `drgnx-ai-retrievers' (once; the grep retriever stays)."
-  (with-eval-after-load 'drgnx-ai-ui
-    (add-to-list 'drgnx-ai-retrievers #'drgnx-search--retriever t)))
+  ;; Not `add-to-list': the bare `defvar' above makes the compiler turn it into a `setq' the recorder cannot see.
+  (eval-after-load 'drgnx-ai-ui
+    (drgnx-modules-with-owner
+      (unless (memq #'drgnx-search--retriever drgnx-ai-retrievers)
+        (setq drgnx-ai-retrievers (append drgnx-ai-retrievers (list #'drgnx-search--retriever)))
+        (drgnx-modules-push-undo "retriever drgnx-search--retriever"
+                                 (lambda () (setq drgnx-ai-retrievers (remq #'drgnx-search--retriever drgnx-ai-retrievers))))))))
+
+(declare-function drgnx-jobs-list "drgnx-jobs")
+(declare-function drgnx-search-index--lock-file "drgnx-search-index")
+
+(defun drgnx-search--stop-indexers ()
+  "Ask every running index job to stop, without waiting, and remove the lock each held.
+A systemd unit gets `systemctl --user stop --no-block', another job SIGTERM to its group.  A killed indexer leaves
+no partial index (every write of the index is one SQLite transaction) and its lock would only be stale, so the lock
+file goes with it.  Only when the indexer library is loaded: otherwise nothing ever ran."
+  (when (and (featurep 'drgnx-search-index) (featurep 'drgnx-jobs))
+    (dolist (job (ignore-errors (drgnx-jobs-list)))
+      (when (and (eq (plist-get job :status) 'running) (string-prefix-p "search-index:" (or (plist-get job :name) "")))
+        (if-let* ((unit (plist-get job :unit)))
+            (ignore-errors
+              (make-process :name "drgnx-stop-indexer" :noquery t :connection-type 'pipe
+                            :command (list "systemctl" "--user" "stop" "--no-block" unit)))
+          (when-let* ((pid (plist-get job :pid))) (ignore-errors (signal-process (- pid) 'SIGTERM))))
+        (when-let* ((root (cadr (member "drgnx-search-index-cli" (plist-get job :command)))))
+          (ignore-errors (delete-file (drgnx-search-index--lock-file root))))))))
+
+(defun drgnx-search--teardown ()
+  "Cancel the re-indexes waiting after saves (a timer made by `after-save-hook' belongs to no setup) and stop the
+indexers running."
+  (maphash (lambda (_root timer) (when (timerp timer) (cancel-timer timer))) drgnx-search--timers)
+  (clrhash drgnx-search--timers)
+  (drgnx-search--stop-indexers))
 
 (drgnx-module-define 'tools/search
                      :doc "Quick Open, Search in Project, Go to Symbol, Semantic Search."
                      :stage 'startup
+                     :teardown #'drgnx-search--teardown
                      :setup
                      (lambda ()
                        (pcase-dolist (`(,id ,title ,fn ,doc)

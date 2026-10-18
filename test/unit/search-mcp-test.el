@@ -7,6 +7,7 @@
 (require 'drgnx-search-query)
 (require 'drgnx-search-mcp)
 (load (expand-file-name "modules/tools/drgnx-search" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
 
 (defconst drgnx-search-mcp-test--dims 32)
 
@@ -296,10 +297,21 @@
 (ert-deftest drgnx-search/retriever-is-registered-and-keeps-grep ()
   (unless (featurep 'drgnx-ai-ui)                ; a module file, not on the load path: load it as ai-ask-test does
     (load (expand-file-name "modules/tools/drgnx-ai-ui" drgnx-dir) nil t))
-  (let ((drgnx-ai-retrievers (list #'drgnx-ai--grep-retriever)))
-    (drgnx-search--register-retriever)
-    (drgnx-search--register-retriever)
-    (should (equal drgnx-ai-retrievers (list #'drgnx-ai--grep-retriever #'drgnx-search--retriever)))))
+  (let ((before (copy-sequence drgnx-ai-retrievers)))
+    (drgnx-test-with-modules '(tools/search) :strict t
+                             (should (equal (seq-difference drgnx-ai-retrievers before) (list #'drgnx-search--retriever)))
+                             (should (memq #'drgnx-ai--grep-retriever drgnx-ai-retrievers)))
+    (should (equal drgnx-ai-retrievers before))))   ; off: the grep retriever stays, the index's goes
+
+(ert-deftest drgnx-search/off-cancels-the-reindex-waiting-after-a-save ()
+  ;; The timer is made by `after-save-hook', long after the setup: the module's :teardown cancels it.
+  (let ((timer nil))
+    (drgnx-test-with-modules '(tools/search) :strict t
+                             (setq timer (run-with-timer 3600 nil #'ignore))
+                             (puthash "/x/" timer drgnx-search--timers)
+                             (should (memq timer timer-list)))
+    (should-not (memq timer timer-list))
+    (should (zerop (hash-table-count drgnx-search--timers)))))
 
 (ert-deftest drgnx-search/retriever-without-an-index-answers-nil-once ()
   (drgnx-search-mcp-test--project

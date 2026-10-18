@@ -560,10 +560,16 @@ next match, or replace it in the Replace field.")
   (setq-local truncate-lines t mode-line-format nil header-line-format nil tab-line-format nil))
 
 (declare-function evil-set-initial-state "evil-core")
-(with-eval-after-load 'evil                ; the fields take typing in the Vim profile too
+(declare-function evil-initial-state "evil-core")
+(defun drgnx-replace--evil-states ()
+  "The fields take typing in the Vim profile too: both modes start in Emacs state (the module's setup runs
+this once evil is loaded).  The undo puts each mode's earlier state back, only while it is still Emacs state."
   (when (fboundp 'evil-set-initial-state)
-    (evil-set-initial-state 'drgnx-replace-mode 'emacs)
-    (evil-set-initial-state 'drgnx-replace-bar-mode 'emacs)))
+    (dolist (mode '(drgnx-replace-mode drgnx-replace-bar-mode))
+      (let ((old (evil-initial-state mode)))
+        (evil-set-initial-state mode 'emacs)
+        (drgnx-modules-push-undo (format "evil state %s" mode)
+                                 (lambda () (when (eq (evil-initial-state mode) 'emacs) (evil-set-initial-state mode old))))))))
 
 (define-button-type 'drgnx-replace-box 'action #'drgnx-replace--box-pressed 'follow-link t 'face nil
   'help-echo "Tick or untick: Replace All writes the ticked matches")
@@ -688,14 +694,6 @@ next match, or replace it in the Replace field.")
   (drgnx-wb-define-section 'search :view 'search :slot 0 :title " SEARCH" :buffer #'drgnx-replace--view-buffer
                            :on-show (lambda (_w) (drgnx-replace--on-show))
                            :on-focus #'drgnx-replace--focus-find))
-
-(defun drgnx-replace--provide-view ()
-  "View: Search before the module set up (it does at idle): set it up now, unless the module is off."
-  (unless (drgnx-module-disabled-p 'tools/replace)
-    (drgnx-replace--define-section)
-    (drgnx-replace--define-commands)))
-
-(setf (alist-get 'search drgnx-wb-view-providers) #'drgnx-replace--provide-view)
 
 (defun drgnx-replace--focus-find (window)
   "The Search view focused in WINDOW by its key (VS Code's Ctrl+Shift+F): point in the find field."
@@ -1551,9 +1549,6 @@ An error here is ignored: it must never make the save fail."
       (dolist (w (get-buffer-window-list bar nil t))
         (when (window-live-p w) (ignore-errors (delete-window w)))))))
 
-;; wb/drgnx-persist.el saves the main area with `window-state-get': the bar's window would be in it.
-(advice-add 'drgnx-persist-save :before #'drgnx-replace--close-bars)
-
 (defun drgnx-replace-bar-show-all ()
   "Move the find bar's search to the Search view, scope This file.
 The find bar's button; not a command of its own (it needs the bar)."
@@ -1586,10 +1581,33 @@ The find bar's button; not a command of its own (it needs the bar)."
                         :doc "Replace the match on this row of the Search view"
                         :when (lambda () (derived-mode-p 'drgnx-replace-mode))))
 
+(defun drgnx-replace--teardown ()
+  "Turn the Search view and the find bar off: close the bar, stop what the view runs (search, drawing, file
+watches), kill both buffers.  Never asks."
+  (drgnx-replace-bar-close)
+  (let ((kill-buffer-query-functions nil))
+    (dolist (name (list drgnx-replace-buffer-name drgnx-replace-bar-buffer-name))
+      (when-let* ((buf (get-buffer name)))
+        (with-current-buffer buf
+          (dolist (timer (list drgnx-replace--search-timer drgnx-replace--draw-timer))
+            (when (timerp timer) (cancel-timer timer)))
+          (setq drgnx-replace--search-timer nil drgnx-replace--draw-timer nil)
+          (drgnx-replace-cancel drgnx-replace--handle)
+          (setq drgnx-replace--handle nil)
+          (drgnx-replace--unwatch))
+        (kill-buffer buf)))))
+
+;; Startup, not idle: `View: Search' (C-S-f) works from the first second, as the Explorer's key does.
 (drgnx-module-define 'tools/replace
                      :doc "Search and replace across files: text through ripgrep or git grep, symbols through the language server."
-                     :stage 'idle
-                     :setup (lambda () (drgnx-replace--define-section) (drgnx-replace--define-commands)))
+                     :stage 'startup
+                     :teardown #'drgnx-replace--teardown
+                     :setup (lambda ()
+                              (drgnx-replace--define-section)
+                              (drgnx-replace--define-commands)
+                              (eval-after-load 'evil (drgnx-modules-with-owner (drgnx-replace--evil-states)))
+                              ;; wb/drgnx-persist.el saves the main area with `window-state-get': the bar's window would be in it.
+                              (advice-add 'drgnx-persist-save :before #'drgnx-replace--close-bars)))
 
 (provide 'drgnx-replace)
 ;;; drgnx-replace.el ends here

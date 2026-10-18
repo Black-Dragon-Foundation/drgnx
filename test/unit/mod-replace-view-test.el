@@ -6,6 +6,7 @@
 (load (expand-file-name "test/fixtures/git-fixture" drgnx-dir) nil t)
 (load (expand-file-name "modules/tools/drgnx-replace" drgnx-dir) nil t)
 (require 'drgnx-run-ert "run-ert")                     ; `drgnx-run-ert-time-factor'
+(load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
 
 (defun drgnx-replace-view-test--bind-keys ()
   "Bind the shipped VS Code profile's keys of the replace commands that live in the view's and the bar's keymaps."
@@ -23,12 +24,14 @@ bar's keymaps), one editor window, no view or bar left over."
   (declare (indent 0))
   `(let ((drgnx-wb--sections nil) (drgnx-signal--editor-window nil)
          (drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil))
+     (advice-add 'drgnx-persist-save :before #'drgnx-replace--close-bars)
      (delete-other-windows)
      (set-frame-parameter nil 'drgnx-wb-view nil)
      (drgnx-replace--define-section)
      (drgnx-replace--define-commands)
      (drgnx-replace-view-test--bind-keys)
      (unwind-protect (progn ,@body)
+       (advice-remove 'drgnx-persist-save #'drgnx-replace--close-bars)
        (drgnx-replace-bar-close)
        (drgnx-wb-hide-sidebar)
        (delete-other-windows)
@@ -179,20 +182,26 @@ count says which rows."
       (with-current-buffer (drgnx-replace-view-test--view)
         (should (eq (widget-field-at (window-point w)) (drgnx-replace--widget 'find)))))))
 
-(ert-deftest drgnx-replace/view-search-before-the-module-set-up ()
-  ;; C-S-f in the first second (the module sets up at idle): the view is set up then, not "No search view".
-  (drgnx-replace-view-test--with
-    (setq drgnx-wb--sections nil)
-    (cl-letf (((symbol-function 'drgnx-module-disabled-p) (lambda (_) nil)))
-      (call-interactively #'drgnx-wb-view-search))
-    (should (eq (selected-window) (drgnx-wb-section-window 'search)))
-    (with-current-buffer (drgnx-replace-view-test--view)
-      (should (eq (widget-field-at (point)) (drgnx-replace--widget 'find)))))
-  ;; the module turned off: no view
-  (drgnx-replace-view-test--with
-    (setq drgnx-wb--sections nil)
-    (cl-letf (((symbol-function 'drgnx-module-disabled-p) (lambda (m) (eq m 'tools/replace))))
-      (should-error (call-interactively #'drgnx-wb-view-search) :type 'user-error))))
+(ert-deftest drgnx-replace/view-search-works-as-soon-as-the-startup-stage-ran ()
+  ;; C-S-f in the first second: the module sets up in the startup stage, so the view exists (no provider, no
+  ;; "No search view").  Strict: the opened view and the bar are the module's :teardown's to take away.
+  (delete-other-windows)
+  (set-frame-parameter nil 'drgnx-wb-view nil)
+  (drgnx-test-with-modules '(tools/replace) :strict t
+                           (should (eq (plist-get (cdr (assq 'tools/replace drgnx-modules--table)) :stage) 'startup))
+                           (call-interactively #'drgnx-wb-view-search)
+                           (should (eq (selected-window) (drgnx-wb-section-window 'search)))
+                           (with-current-buffer (drgnx-replace-view-test--view)
+                             (should (eq (widget-field-at (point)) (drgnx-replace--widget 'find))))
+                           (drgnx-git-test-with-repo
+                             (drgnx-git-test-write repo "f.txt" "foo\n")
+                             (drgnx-replace-view-test--visit repo "f.txt" 1)
+                             (drgnx-replace-in-file)
+                             (should (get-buffer-window (drgnx-replace-view-test--bar)))))
+  (should-not (get-buffer drgnx-replace-buffer-name))
+  (should-not (get-buffer drgnx-replace-bar-buffer-name))
+  (set-frame-parameter nil 'drgnx-wb-view nil)
+  (delete-other-windows))
 
 (ert-deftest drgnx-replace/ticks-choose-what-is-written ()
   (drgnx-replace-view-test--with
@@ -659,5 +668,22 @@ count says which rows."
 (ert-deftest drgnx-replace/show-all-is-the-bars-button-not-a-command ()
   ;; It needs the find bar and is reached by its button: not an interactive command outside the registry.
   (should-not (commandp 'drgnx-replace-bar-show-all)))
+
+(ert-deftest drgnx-replace/setup-registers-and-off-takes-it-all-back ()
+  ;; The persist advice and the Vim-profile initial states were top-level forms; now the module's own, and
+  ;; the states go back also when evil had loaded (the Vim profile).
+  (let ((states (list (cons 'drgnx-replace-mode 'normal))))
+    (unwind-protect
+        (cl-letf (((symbol-function 'evil-initial-state) (lambda (m &rest _) (alist-get m states)))
+                  ((symbol-function 'evil-set-initial-state) (lambda (m s) (setf (alist-get m states) s))))
+          (provide 'evil)
+          (drgnx-test-with-modules '(tools/replace) :strict t
+                                   (should (advice-member-p #'drgnx-replace--close-bars 'drgnx-persist-save))
+                                   (should (eq (alist-get 'drgnx-replace-mode states) 'emacs))
+                                   (should (eq (alist-get 'drgnx-replace-bar-mode states) 'emacs)))
+          (should-not (advice-member-p #'drgnx-replace--close-bars 'drgnx-persist-save))
+          (should (eq (alist-get 'drgnx-replace-mode states) 'normal))
+          (should-not (alist-get 'drgnx-replace-bar-mode states)))
+      (setq features (delq 'evil features)))))
 
 ;;; mod-replace-view-test.el ends here
