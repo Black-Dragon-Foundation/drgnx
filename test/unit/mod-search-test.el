@@ -407,3 +407,24 @@
 
 (provide 'mod-search-test)
 ;;; mod-search-test.el ends here
+
+(ert-deftest drgnx-search-ui/commands-ask-about-a-projects-remote-route-first ()
+  ;; The project's .drgnx/ai.eld may route the embed role to a remote provider; the user is asked once, in the
+  ;; command they ran, with the project as the current directory (never later, from the job or a timer).
+  (skip-unless (executable-find "git"))
+  (drgnx-search-ui-test--project
+    (let (asked (outside (make-temp-file "drgnx-elsewhere" t)))
+      (unwind-protect
+          (cl-letf (((symbol-function 'drgnx-ai-confirm-project-route)
+                     (lambda () (push (file-truename default-directory) asked) t))
+                    ((symbol-function 'drgnx-search-async) (drgnx-search-ui-test--stub-search nil "no index"))
+                    ((symbol-function 'drgnx-search-setup) (lambda (&rest _) (list 'ok "fine")))
+                    ((symbol-function 'drgnx-search-index-start) (lambda (&rest _) t))
+                    ((symbol-function 'message) #'ignore))
+            (let ((default-directory (file-name-as-directory (expand-file-name "sub" root))))
+              (make-directory default-directory t)
+              (dolist (cmd '(drgnx-search-semantic drgnx-search-index-project drgnx-search-set-up))
+                (setq asked nil)
+                (if (eq cmd 'drgnx-search-semantic) (funcall cmd "alpha") (funcall cmd))
+                (should (equal asked (list (file-truename root)))))))     ; once, with the project root
+        (delete-directory outside t)))))

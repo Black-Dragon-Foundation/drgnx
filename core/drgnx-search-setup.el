@@ -263,7 +263,7 @@ the probe (two seconds) and the test embedding (five).  For a command the user r
   "Put STEP first in the `embed' role, in the user's ai.eld: t, or a message when that could not be written
 \(`drgnx-ai-set-role' writes nothing then)."
   (condition-case err
-      (progn (drgnx-ai-set-role 'embed (cons step (drgnx-ai-role 'embed))) t)
+      (progn (drgnx-ai-set-role 'embed (cons step (drgnx-ai-user-role 'embed))) t)
     (error (format "%s works, but it could not be put first in the embed role (%s) — AI: Choose Provider/Model, then Set Up Semantic Search again"
                    (drgnx-search-setup--label (list :provider (car step) :model (cdr step))) (error-message-string err)))))
 
