@@ -199,8 +199,9 @@ move their windows", fix "press Super+Shift+→ or Super+Shift+←".
 plain negative integer counts from the right or bottom edge. macOS native fullscreen, a Space of its own, is for the
 macOS tier to check), `gnome` (explains; the doctor asks Mutter's
 `DisplayConfig` for the monitors, within 1 s), `other-wayland` (names the compositor, tells the user to use its
-own key), `tty` and `none`. `sway`, `hyprland`, `niri`, `kwin` and `i3` are declared (detection, title, tool,
-version command); their monitor and move functions arrive with their milestone tasks.
+own key), `tty` and `none`. `sway`, `i3`, `hyprland`, `niri` and `kwin` are declared (detection, title, tool,
+version command) and have monitor and move functions, described below; `hyprland`, `niri` and `kwin` are marked
+`reported`, because they are tested on recorded or documented replies and not yet run on the real compositor.
 
 **sway and i3** share one implementation over `swaymsg` / `i3-msg` (section "sway and i3" of
 `drgnx-platform.el`). Monitors come from `-t get_outputs` (active outputs only; the output `name` is what the move
