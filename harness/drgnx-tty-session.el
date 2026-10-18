@@ -67,30 +67,126 @@ directories in the run directory, TERM, a UTF-8 locale unless one is set; then E
   "ARGV as one shell command run with exactly ENV."
   (mapconcat #'shell-quote-argument (append '("env" "-i") env argv) " "))
 
-(defun drgnx-tty-session--tmux (sess &rest args)
-  "Run tmux ARGS on SESS's own server; return (EXIT . OUTPUT)."
-  (let ((r (apply #'drgnx-ui--run-with-timeout 10 "env"
-                  (append '("-i") (plist-get sess :tmux-env)
-                          (list "tmux" "-L" (plist-get sess :name) "-f" "/dev/null")
-                          args))))
+(defun drgnx-tty-session--tmux-argv (sess &rest args)
+  "The argv running tmux ARGS on SESS's own server: `-L' its name, `-f /dev/null', SESS's environment."
+  (append (list "env" "-i") (plist-get sess :tmux-env)
+          (list "tmux" "-L" (plist-get sess :name) "-f" "/dev/null")
+          args))
+
+(defun drgnx-tty-session-tmux (sess &rest args)
+  "Run tmux ARGS (any tmux command) on SESS's own server; return (EXIT . OUTPUT)."
+  (let ((r (apply #'drgnx-ui--run-with-timeout 10 (apply #'drgnx-tty-session--tmux-argv sess args))))
     (cons (if (eq (car r) 'timeout) 124 (car r)) (cadr r))))
 
 (defun drgnx-tty-session--tmux-ok (sess &rest args)
   "Run tmux ARGS on SESS's server; its output, or signal with tmux's message."
-  (let ((r (apply #'drgnx-tty-session--tmux sess args)))
+  (let ((r (apply #'drgnx-tty-session-tmux sess args)))
     (unless (eq (car r) 0)
       (drgnx-ui--fail "%s: tmux %s: %s" (plist-get sess :name) (string-join args " ") (string-trim (cdr r))))
     (cdr r)))
 
 ;;;; Starting and stopping
 
+(defvar drgnx-tty-session--owner nil
+  "The PID new sessions are named after (drgnx-tty-PID-N): nil for this Emacs.  Tests set it to a dead one.")
+
+(defconst drgnx-tty-session-name-regexp "drgnx-tty-\\([0-9]+\\)-[0-9]+"
+  "A session's name; the number after drgnx-tty- is the PID of the Emacs that owns it.")
+
 (defun drgnx-tty-session--next-name (root)
   (let (name)
     (while (file-exists-p
             (expand-file-name
-             (setq name (format "drgnx-tty-%d-%d" (emacs-pid) (cl-incf drgnx-tty-session--count)))
+             (setq name (format "drgnx-tty-%d-%d" (or drgnx-tty-session--owner (emacs-pid))
+                                (cl-incf drgnx-tty-session--count)))
              root)))
     name))
+
+(defun drgnx-tty-session--owner-alive-p (pid)
+  "Non-nil while PID is a running Emacs (a reused PID of another program does not count)."
+  (let ((comm (alist-get 'comm (process-attributes pid))))
+    (and comm (string-match-p "emacs" comm))))
+
+(defun drgnx-tty-session--pattern (name run)
+  "A `pgrep -f' pattern for the processes of session NAME: its tmux server, and anything naming RUN."
+  (format "(%s/|-L %s )" (regexp-quote run) (regexp-quote name)))
+
+(defun drgnx-tty-session--kill-pattern (pattern)
+  "KILL the processes matching PATTERN (`pgrep -f'), for up to 2 s."
+  (let ((deadline (+ (float-time) 2)))
+    (while (and (eq 0 (car (drgnx-ui--run "pgrep" "-u" (number-to-string (user-uid)) "-f" "--" pattern)))
+                (< (float-time) deadline))
+      (drgnx-ui--run "pkill" "-KILL" "-u" (number-to-string (user-uid)) "-f" "--" pattern)
+      (sleep-for 0.05))))
+
+(defun drgnx-tty-session--run-of (pid)
+  "The run directory process PID belongs to (its DRGNX_UI_RUN), or nil where /proc cannot tell."
+  (let ((file (format "/proc/%d/environ" pid)))
+    (when (file-readable-p file)
+      (with-temp-buffer
+        (set-buffer-multibyte nil)
+        (ignore-errors (insert-file-contents-literally file))
+        (seq-some (lambda (kv) (and (string-prefix-p "DRGNX_UI_RUN=" kv) (substring kv 13)))
+                  (split-string (buffer-string) "\0" t))))))
+
+(defun drgnx-tty-session--remove-stale (name run)
+  "End what session NAME (run directory RUN, or nil) left running, then remove its run and socket directories."
+  (drgnx-tty-session--kill-pattern (drgnx-tty-session--pattern name (or run (concat "/" name))))
+  (when (and run (equal (file-name-nondirectory (directory-file-name run)) name) (file-directory-p run))
+    (let ((sock (drgnx-ui-socket-dir name (file-name-directory (directory-file-name run)))))
+      (delete-directory run t)
+      (when (file-directory-p sock) (delete-directory sock t))
+      (ignore-errors (delete-directory (file-name-directory (directory-file-name sock)))))))
+
+(defun drgnx-tty-session--sweep (root)
+  "Remove the sessions whose owning Emacs is dead (a runner SIGKILLed mid-test runs no exit hook): the
+processes of any state root, found by name, and the run directories in ROOT."
+  (let (stale)
+    (dolist (line (split-string (cdr (drgnx-ui--run "pgrep" "-u" (number-to-string (user-uid)) "-af" "--"
+                                                    "drgnx-tty-[0-9]+-[0-9]+")) "\n" t))
+      (let ((pid (string-to-number line)))
+        (when (string-match (concat "\\(" drgnx-tty-session-name-regexp "\\)\\([/ ]\\|\\'\\)") line)
+          (let ((name (match-string 1 line)))
+            (unless (or (drgnx-tty-session--owner-alive-p (string-to-number (match-string 2 line)))
+                        (assoc name stale))
+              (push (cons name (drgnx-tty-session--run-of pid)) stale))))))
+    (dolist (name (and (file-directory-p root)
+                       (directory-files root nil (concat "\\`" drgnx-tty-session-name-regexp "\\'"))))
+      (when (and (string-match drgnx-tty-session-name-regexp name)
+                 (not (drgnx-tty-session--owner-alive-p (string-to-number (match-string 1 name))))
+                 (not (cdr (assoc name stale))))
+        (push (cons name (expand-file-name name root)) stale)))
+    (pcase-dolist (`(,name . ,run) stale) (drgnx-tty-session--remove-stale name run))))
+
+(defun drgnx-tty-session--start-server (sess)
+  "Start SESS's tmux server in the foreground of its own session (`setsid'), bounded by `timeout': it
+ends after $DRGNX_TTY_MAX_RUNTIME seconds (default 1800) even if no one stops it.  Waits for its socket."
+  (let ((log (expand-file-name "tmux.log" (plist-get sess :run)))
+        (deadline (+ (float-time) 10)))
+    (apply #'call-process "setsid" nil (list :file log) nil "-f"
+           (drgnx-tty-session--server-argv sess))
+    (while (not (file-exists-p (plist-get sess :tmux)))
+      (when (> (float-time) deadline)
+        (drgnx-ui--fail "%s: the tmux server did not start: %s" (plist-get sess :name)
+                        (if (file-exists-p log) (with-temp-buffer (insert-file-contents log) (buffer-string)) "")))
+      (sleep-for 0.02))))
+
+(defun drgnx-tty-session--server-argv (sess)
+  (let ((budget (or (getenv "DRGNX_TTY_MAX_RUNTIME") "1800")))
+    (append (list "env" "-i") (plist-get sess :tmux-env)
+            (list "timeout" "-s" "TERM" "-k" "10" budget
+                  "tmux" "-L" (plist-get sess :name) "-f" "/dev/null" "-D"))))
+
+(defconst drgnx-tty-session-key-profiles '(vscode emacs vim) "Profiles `:keys' selects.")
+
+(defun drgnx-tty-session--write-keys (dir profile)
+  "Write DIR/keys.eld selecting key PROFILE (a symbol or string of `drgnx-tty-session-key-profiles')."
+  (let ((p (if (stringp profile) (intern profile) profile)))
+    (unless (memq p drgnx-tty-session-key-profiles)
+      (drgnx-ui--fail "key profile %S: one of %s" profile drgnx-tty-session-key-profiles))
+    (make-directory dir t)
+    (drgnx-ui--write (expand-file-name "keys.eld" dir)
+                     (format "%S\n" (list :layers (list (list p 'app 'editing 'window)))))))
 
 (defun drgnx-tty-session--emacs-argv (sess daemon)
   (list (drgnx-ui-emacs-bin) "--init-directory" (expand-file-name "init" (plist-get sess :run))
@@ -110,7 +206,7 @@ directories in the run directory, TERM, a UTF-8 locale unless one is set; then E
   (drgnx-tty-session-eval sess '(seq-count (lambda (f) (frame-parameter f 'client)) (frame-list)) 5))
 
 (defun drgnx-tty-session--pane-alive-p (sess)
-  (eq 0 (car (drgnx-tty-session--tmux sess "has-session"))))
+  (eq 0 (car (drgnx-tty-session-tmux sess "has-session"))))
 
 (defun drgnx-tty-session--wait-ready (sess timeout)
   "Wait until SESS's Emacs wrote ready.json and answers on its socket; signal with the screen after TIMEOUT s."
@@ -124,18 +220,21 @@ directories in the run directory, TERM, a UTF-8 locale unless one is set; then E
       (setq ok (and (file-exists-p ready) (ignore-errors (drgnx-tty-session-eval sess t 5))))
       (unless ok (sleep-for 0.1)))))
 
-(cl-defun drgnx-tty-session-start (&key size config daemon term env options command)
+(cl-defun drgnx-tty-session-start (&key size config daemon term env keys options command)
   "Start a tty session; return its plist once the inner Emacs answers on its socket (30 s).
 SIZE \"120x40\" (default) or any WxH; CONFIG \"drgnx\" (default), \"minimal\" or a directory; TERM the
-pane's terminal type (default tmux-256color); ENV extra \"K=V\" strings for Emacs; OPTIONS extra
-tmux commands (lists of strings, e.g. (\"set\" \"-s\" \"extended-keys\" \"off\")) after the defaults.
+pane's terminal type (default tmux-256color); ENV extra \"K=V\" strings for Emacs; KEYS a key profile
+(vscode, emacs or vim) written to the session's keys.eld; OPTIONS extra tmux commands (lists of
+strings, e.g. (\"set\" \"-s\" \"extended-keys\" \"off\")) after the defaults.
 Not DAEMON: the pane runs `emacs -nw'.  DAEMON: window 0 runs `emacs --fg-daemon', window 1
 `emacsclient -t' once the daemon answers; :target is the client's pane.  COMMAND (a shell
 command, run in the run directory) replaces Emacs; start then returns once the pane exists.
+Sessions whose owning Emacs died are removed first (`drgnx-tty-session--sweep').
 The plist has the `drgnx-ui' keys plus :tmux (the server's socket), :target (the pane) and :term."
   (let* ((size (or size "120x40"))
          (root (drgnx-ui-state-root))
          (_ (make-directory root t))
+         (_ (drgnx-tty-session--sweep root))
          (name (drgnx-tty-session--next-name root))
          (sess (drgnx-ui-prepare-run name (if command "minimal" (or config "drgnx")) size root (and daemon t)))
          (run (plist-get sess :run))
@@ -150,6 +249,8 @@ The plist has the `drgnx-ui' keys plus :tmux (the server's socket), :target (the
     (condition-case err
         (pcase-let ((`(,w ,h) (split-string size "x")))
           (dolist (d '("home" "xdg/config" "xdg/data" "xdg/cache")) (make-directory (expand-file-name d run) t))
+          (when keys (drgnx-tty-session--write-keys (expand-file-name "drgnx-config" run) keys))
+          (drgnx-tty-session--start-server sess)
           (let* ((env (drgnx-tty-session--env sess env))
                  (first (drgnx-tty-session--argv
                          env (if command (list "sh" "-c" command) (drgnx-tty-session--emacs-argv sess daemon))))
@@ -158,8 +259,8 @@ The plist has the `drgnx-ui' keys plus :tmux (the server's socket), :target (the
                                       (list "set" "-g" "default-size" size))
                                 options))
                  (pane (string-trim
-                        (apply #'drgnx-tty-session--tmux-ok sess "start-server"
-                               (append (apply #'append (mapcar (lambda (o) (cons ";" o)) setup))
+                        (apply #'drgnx-tty-session--tmux-ok sess
+                               (append (cdr (apply #'append (mapcar (lambda (o) (cons ";" o)) setup)))
                                        (list ";" "new-session" "-d" "-s" "main" "-x" w "-y" h "-c" run
                                              "-P" "-F" "#{pane_id}" first))))))
             (plist-put sess :target pane)
@@ -172,14 +273,11 @@ The plist has the `drgnx-ui' keys plus :tmux (the server's socket), :target (the
       (error (drgnx-tty-session-stop sess)
              (signal (car err) (cdr err))))))
 
-(defun drgnx-tty-session-client (sess &rest args)
-  "Open another client of SESS's Emacs: a new tmux window running `emacsclient -t' with ARGS.
-`:env LIST' among ARGS gives that client extra \"K=V\" variables (TERM=…, say).  Returns SESS
-with :target that window's pane, once the new terminal frame exists (30 s)."
-  (let* ((env (plist-get (member :env args) :env))
-         (args (let (out) (while args (if (eq (car args) :env) (setq args (cddr args)) (push (pop args) out)))
-                    (nreverse out)))
-         (before (drgnx-tty-session--client-frames sess))
+(cl-defun drgnx-tty-session-client (sess &key env args)
+  "Open another client of SESS's Emacs: a new tmux window running `emacsclient -t' with ARGS (a list of
+emacsclient arguments: files, -e FORM, …) and ENV (extra \"K=V\" variables: TERM=…, say).  Returns
+SESS with :target that window's pane, once the new terminal frame exists (30 s)."
+  (let* ((before (drgnx-tty-session--client-frames sess))
          (pane (string-trim
                 (drgnx-tty-session--tmux-ok sess "new-window" "-d" "-c" (plist-get sess :run) "-P" "-F" "#{pane_id}"
                                             (drgnx-tty-session--client-command
@@ -208,14 +306,6 @@ sets it; the pty is 120x40.  Returns the process; `drgnx-tty-session-stop' delet
     (plist-put daemon-sess :ptys (cons proc (plist-get daemon-sess :ptys)))
     proc))
 
-(defun drgnx-tty-session--kill-leftovers (sess)
-  "KILL what still runs from SESS: processes naming its run directory, or its tmux server."
-  (let ((pattern (format "(%s/|-L %s )" (regexp-quote (plist-get sess :run)) (regexp-quote (plist-get sess :name))))
-        (deadline (+ (float-time) 2)))
-    (while (and (eq 0 (car (drgnx-ui--run "pgrep" "-f" "--" pattern))) (< (float-time) deadline))
-      (drgnx-ui--run "pkill" "-KILL" "-f" "--" pattern)
-      (sleep-for 0.05))))
-
 (defun drgnx-tty-session-stop (sess)
   "Stop SESS: its Emacs asked to exit, its tmux server killed with everything in it, its pty clients
 deleted; then its run and socket directories removed."
@@ -224,8 +314,8 @@ deleted; then its run and socket directories removed."
     (setq drgnx-tty-session--live (seq-remove (lambda (s) (equal (plist-get s :run) run)) drgnx-tty-session--live))
     (dolist (p (plist-get sess :ptys)) (ignore-errors (delete-process p)))
     (when (and socket (file-exists-p socket)) (drgnx-ui--ask-to-exit socket 3))
-    (ignore-errors (drgnx-tty-session--tmux sess "kill-server"))
-    (drgnx-tty-session--kill-leftovers sess)
+    (ignore-errors (drgnx-tty-session-tmux sess "kill-server"))
+    (drgnx-tty-session--kill-pattern (drgnx-tty-session--pattern (plist-get sess :name) run))
     (when (file-directory-p run) (delete-directory run t))
     (let ((sock-dir (and socket (file-name-directory socket))))
       (when (and sock-dir (file-directory-p sock-dir))
@@ -311,7 +401,7 @@ else signal with the last screen."
 
 (defun drgnx-tty-session-clipboard (sess)
   "The text of SESS's tmux paste buffer (what an OSC 52 copy put there), or nil."
-  (let ((r (drgnx-tty-session--tmux sess "show-buffer")))
+  (let ((r (drgnx-tty-session-tmux sess "show-buffer")))
     (and (eq (car r) 0) (cdr r))))
 
 (defun drgnx-tty-session-pane-flags (sess)
@@ -320,7 +410,8 @@ else signal with the last screen."
                                                       "#{mouse_sgr_flag}|#{mouse_any_flag}|#{pane_key_mode}"))))
     (pcase-let ((`(,sgr ,any ,mode) (split-string out "|")))
       ;; the key mode is text with spaces ("VT10x", "Ext 1", "Ext 2")
-      (list :mouse-sgr (string-to-number (or sgr "")) :mouse-any (string-to-number (or any "")) :key-mode (or mode "")))))
+      (list :mouse-sgr (string-to-number (or sgr "")) :mouse-any (string-to-number (or any ""))
+            :key-mode (or mode "")))))
 
 (defun drgnx-tty-session-resize (sess size)
   "Resize SESS's window to SIZE (\"WxH\"); the pane's application gets SIGWINCH."
@@ -331,8 +422,8 @@ else signal with the last screen."
 ;;;; Input: raw bytes
 
 (defun drgnx-tty-session-send (sess bytes)
-  "Deliver BYTES (a unibyte string; ASCII text will do) unchanged to SESS's pane."
-  (let ((bytes (if (multibyte-string-p bytes) (string-to-unibyte bytes) bytes)))
+  "Deliver BYTES unchanged to SESS's pane: a unibyte string as it is, text (multibyte) as UTF-8."
+  (let ((bytes (if (multibyte-string-p bytes) (encode-coding-string bytes 'utf-8-unix) bytes)))
     (when (> (length bytes) 0)
       (apply #'drgnx-tty-session--tmux-ok sess "send-keys" "-t" (plist-get sess :target) "-H"
              (mapcar (lambda (b) (format "%02x" b)) bytes)))
@@ -340,6 +431,27 @@ else signal with the last screen."
 
 (defconst drgnx-tty-session--named '((return . 13) (tab . 9) (escape . 27) (backspace . 127))
   "Function keys the encoder knows, with their code points.")
+
+(defconst drgnx-tty-session--xterm-keys
+  '((up "[" "A") (down "[" "B") (right "[" "C") (left "[" "D") (home "[" "H") (end "[" "F")
+    (f1 "O" "P") (f2 "O" "Q") (f3 "O" "R") (f4 "O" "S")
+    (prior "[" "5~") (next "[" "6~") (f5 "[" "15~") (f6 "[" "17~") (f7 "[" "18~") (f8 "[" "19~")
+    (f9 "[" "20~") (f10 "[" "21~") (f11 "[" "23~") (f12 "[" "24~"))
+  "Keys every terminal sends as xterm does: (KEY INTRODUCER FINAL).  Unmodified: ESC INTRODUCER FINAL;
+modified: CSI 1;M FINAL, or CSI N;M ~ for FINAL N~ — M is 1 + shift 1, meta 2, control 4 (kkp adds super 8,
+hyper 16).")
+
+(defun drgnx-tty-session--xterm-key (spec mods caps key)
+  (pcase-let ((`(,_ ,intro ,final) spec))
+    (if (null mods)
+        (concat "\e" intro final)
+      (let ((m (1+ (drgnx-tty-session--bits
+                    mods (append '((shift . 1) (meta . 2) (control . 4))
+                                 (and (eq caps 'kkp) '((super . 8) (hyper . 16))))
+                    key))))
+        (if (string-suffix-p "~" final)
+            (format "\e[%s;%d~" (substring final 0 -1) m)
+          (format "\e[1;%d%s" m final))))))
 
 (defun drgnx-tty-session--utf8 (char)
   (encode-coding-string (string char) 'utf-8))
@@ -371,9 +483,13 @@ else signal with the last screen."
          (mods (if raw nil (event-modifiers ev)))
          (type (event-basic-type ev))
          (named (or (and raw ev) (and (symbolp type) (alist-get type drgnx-tty-session--named))))
-         (base (or named type)))
-    (unless (integerp base) (signal 'drgnx-ui-error (list (format "%s: no encoding for %s" key type))))
+         (base (or named type))
+         (xterm (and (symbolp type) (assq type drgnx-tty-session--xterm-keys))))
+    (unless (memq caps '(legacy mok kkp))
+      (signal 'drgnx-ui-error (list (format "unknown terminal capability %S (kkp, mok or legacy)" caps))))
+    (unless (or xterm (integerp base)) (signal 'drgnx-ui-error (list (format "%s: no encoding for %s" key type))))
     (pcase caps
+      ((guard xterm) (drgnx-tty-session--xterm-key xterm mods caps key))
       ('legacy (drgnx-tty-session--legacy base named mods key))
       ('mok
        (or (ignore-errors (drgnx-tty-session--legacy base named mods key))
@@ -387,8 +503,7 @@ else signal with the last screen."
               (drgnx-tty-session--utf8 (upcase base)))
              (t (format "\e[%d;%du" base
                         (1+ (drgnx-tty-session--bits
-                             mods '((shift . 1) (meta . 2) (control . 4) (super . 8) (hyper . 16)) key))))))
-      (_ (signal 'drgnx-ui-error (list (format "unknown terminal capability %S (kkp, mok or legacy)" caps)))))))
+                             mods '((shift . 1) (meta . 2) (control . 4) (super . 8) (hyper . 16)) key)))))))))
 
 (defun drgnx-tty-session-encode (key caps)
   "The bytes a terminal with CAPS (`kkp', `mok' or `legacy') sends for KEY (`kbd' syntax).

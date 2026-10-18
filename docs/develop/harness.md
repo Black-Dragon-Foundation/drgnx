@@ -456,19 +456,30 @@ dirs) and drive the session through `harness/drgnx-tty-session.el`:
   socket), named `drgnx-tty-PID-N`. Its Emacs runs in a pane of a **private tmux server**, `tmux -L drgnx-tty-PID-N
   -f /dev/null`, with `TMUX_TMPDIR` in the run directory, so the socket is under it too. Without `:daemon` the pane
   runs `emacs -nw`. With `:daemon`, window 0 runs `emacs --fg-daemon` and window 1 runs `emacsclient -t`.
-  `drgnx-tty-session-client` opens more clients, each in its own window. `drgnx-tty-session-pty-start` opens a client
-  under Emacs's own pty that never answers a query: a silent terminal.
+  `drgnx-tty-session-client SESS :env ENV :args ARGS` opens more clients, each in its own window, with extra
+  variables (`TERM=…`) and emacsclient arguments (files, `-e FORM`). `drgnx-tty-session-pty-start` opens a client
+  under Emacs's own pty that never answers a query: a silent terminal. `:keys PROFILE` (`vscode`, `emacs` or `vim`)
+  writes the session's `keys.eld` with that profile. `drgnx-tty-session-tmux SESS ARGS…` runs any tmux command on the
+  session's server.
 - **Isolation:** every program runs under `env -i` with the GUI harness's allowlist. HOME, `XDG_CONFIG_HOME`,
-  `XDG_DATA_HOME`, `XDG_CACHE_HOME` and `XDG_STATE_HOME` are in the run directory, and `TMUX` is unset. The user's tmux
-  server and `~/.tmux.conf` are never used. The server gets `set-clipboard on`, `extended-keys on`, `window-size
+  `XDG_DATA_HOME`, `XDG_CACHE_HOME` and `XDG_STATE_HOME` are in the run directory, and `TMUX` is unset. Every tmux
+  call names the server (`-L`) and passes `-f /dev/null`, so neither `~/.tmux.conf` nor `/etc/tmux.conf` is read and
+  the user's tmux server is never used (a test checks every call). The server gets `set-clipboard on`, `extended-keys on`, `window-size
   manual`, `status off`, `mouse off` (the application gets the mouse bytes) and `default-shell /bin/sh`. `:options`
   adds more tmux commands for one test.
 - **Cleanup:** `drgnx-tty-session-stop` asks Emacs to exit, kills the tmux server and anything still running from the
   run directory, then removes the run and socket directories. `drgnx-tty-session-with` stops the session even when
-  the test fails, and `kill-emacs-hook` stops any session a test left running.
+  the test fails, and `kill-emacs-hook` stops any session a test left running. A runner killed with SIGKILL runs
+  no hook, so two more things cover it. The server runs as `setsid timeout -s TERM -k 10 BUDGET tmux … -D` and ends
+  after `$DRGNX_TTY_MAX_RUNTIME` seconds (default 1800) with everything in it. Each start also sweeps the sessions
+  whose owner is dead: the PID in `drgnx-tty-PID-N` is no running Emacs. It kills their processes, found by name in
+  any state root, and removes their run and socket directories (the run directory from the process's
+  `DRGNX_UI_RUN`, or the current state root).
 - **Input is raw bytes:** `drgnx-tty-session-send` uses `tmux send-keys -H`, one argument per byte. A test proved
   this delivers every byte unchanged; `paste-buffer -r -d` showed ESC as `^[`. Keys are encoded the way a kitty
-  keyboard protocol, modifyOtherKeys or legacy terminal sends them (`drgnx-tty-session-key`). Mouse input uses
+  keyboard protocol, modifyOtherKeys or legacy terminal sends them (`drgnx-tty-session-key`): characters, RET, TAB,
+  ESC, DEL, and the arrows, Home, End, PgUp, PgDn and F1–F12 with modifiers as xterm sends them. Text given as a
+  multibyte string goes as UTF-8. Mouse input uses
   SGR reports on 1-based cells (`-click`, `-wheel`, `-drag`).
 - **Output:** the screen comes from `capture-pane` (`-screen`, `-find`, `-wait-screen`, `-quiet`). The paste buffer
   shows what OSC 52 copied (`-clipboard`), and `-pane-flags` reports the pane's mouse and key modes. The inner Emacs's
