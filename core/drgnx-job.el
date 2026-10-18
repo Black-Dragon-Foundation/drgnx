@@ -101,24 +101,18 @@ from agents.eld's :routes when nil.")
     (cond ((null r) (list drgnx-job-default-profile)) ((listp r) r) (t (list r)))))
 
 (defun drgnx-job-safe-p (profile)
-  "May a job run an agent of PROFILE (a name)?  When its options say `:job-safe' (drgnx's built-ins do) and it runs
-Claude Code (`drgnx-agents--runs-claude-p'), whose job sessions ignore a repository's own settings
-\(`drgnx-agents--session-meta'); other agents have no such switch yet.  On macOS not a profile without `:ai': its
-Claude logs in with the subscription, whose token is in the Keychain (jobs there use the gateway profiles).  Nil for
-a profile there is none of."
-  (let ((p (cdr (ignore-errors (drgnx-agents-profile profile)))))
-    (and (plist-get p :job-safe)
-         (drgnx-agents--runs-claude-p (plist-get p :command))
-         (not (and (eq system-type 'darwin) (not (plist-get p :ai))))
-         t)))
+  "May a job run an agent of PROFILE (a name)?  `drgnx-agents-job-safe-p', which `drgnx-agents-start' checks too;
+the job checks first, so that it raises a card (`drgnx-job--refuse-unsafe') rather than start a session that ends."
+  (drgnx-agents-job-safe-p profile))
 
 (defun drgnx-job--refuse-unsafe (id task profile &optional data)
   "Non-nil when PROFILE is not job-safe (`drgnx-job-safe-p'): then TASK (an id) of job ID gets an `agent' card (with
-DATA) that says why and which profiles may run it, and no agent starts."
+DATA) that says why and which profiles may run it, and no agent starts.  Without TASK (a clash's reviewer) the card
+is the job's, of kind `profile', which the user dismisses."
   (unless (drgnx-job-safe-p profile)
     (let ((p (cdr (ignore-errors (drgnx-agents-profile profile)))))
       (drgnx-job--card
-       id task "agent"
+       id task (if task "agent" "profile")
        (format "%s cannot run a job's agent: %s; use %s (agents.eld's :routes)" profile
                (cond ((null p) "there is no such profile")
                      ((and (eq system-type 'darwin) (plist-get p :job-safe) (not (plist-get p :ai)))

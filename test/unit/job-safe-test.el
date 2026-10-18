@@ -14,6 +14,19 @@
           (drgnx-agents-profiles nil) (system-type 'gnu/linux))
      (unwind-protect (progn ,@body) (delete-directory root t))))
 
+(defun drgnx-job-safe-test--adapter (root)
+  "A fake global npm prefix in ROOT with Claude Code's adapter package (its program never runs): its bin directory."
+  (let* ((pkg (expand-file-name "prefix/lib/node_modules/@agentclientprotocol/claude-agent-acp/" root))
+         (bin (expand-file-name "prefix/bin/" root)) (js (expand-file-name "dist/index.js" pkg)))
+    (make-directory (file-name-directory js) t)
+    (make-directory bin t)
+    (write-region "{\"name\": \"@agentclientprotocol/claude-agent-acp\", \"version\": \"0.93.0\"}" nil
+                  (expand-file-name "package.json" pkg) nil 'silent)
+    (write-region "#!/bin/sh\n" nil js nil 'silent)
+    (set-file-modes js #o755)
+    (make-symbolic-link js (expand-file-name "claude-agent-acp" bin))
+    bin))
+
 (ert-deftest drgnx-job-safe/builtins-are-job-safe ()
   (drgnx-job-safe-test--with
     (dolist (p drgnx-agents-builtin-profiles)
@@ -32,9 +45,19 @@
       (should-not (drgnx-job-safe-p "wrapped"))
       (should-not (drgnx-job-safe-p "no such profile"))
       (should (drgnx-job-safe-p "claude (OpenRouter)")))
-    ;; a profile of the user's that runs Claude Code and says so gets the lock, so it may
-    (let ((drgnx-agents-profiles '(("mine" :command ("claude-agent-acp") :job-safe t))))
-      (should (drgnx-job-safe-p "mine")))))
+    ;; a profile of the user's may say so only when it runs Claude Code's adapter, told by its package: a wrapper
+    ;; whose name says claude gets the lock (fail closed) but not a job
+    (let* ((wrapper (expand-file-name "my-claude-wrapper" root))
+           (exec-path (cons (drgnx-job-safe-test--adapter root) exec-path))
+           (drgnx-agents-profiles `(("mine" :command ("claude-agent-acp") :job-safe t)
+                                    ("wrapper" :command (,wrapper) :job-safe t))))
+      (write-region "#!/bin/sh\nexec gemini \"$@\"\n" nil wrapper nil 'silent)
+      (set-file-modes wrapper #o755)
+      (should (drgnx-job-safe-p "mine"))
+      (should (drgnx-agents--runs-claude-p (list wrapper)))
+      (should-not (drgnx-job-safe-p "wrapper")))
+    (let ((exec-path (list root)) (drgnx-agents-profiles '(("mine" :command ("claude-agent-acp") :job-safe t))))   ; no adapter
+      (should-not (drgnx-job-safe-p "mine")))))
 
 (ert-deftest drgnx-job-safe/subscription-profile-refused-on-macos ()
   (drgnx-job-safe-test--with
@@ -66,6 +89,34 @@
         ;; a reviewer too
         (drgnx-job--start-review-agent id task)
         (should-not (seq-find (lambda (s) (equal (drgnx-agent-session-job s) id)) drgnx-agents--sessions))))))
+
+(ert-deftest drgnx-job-safe/a-job-session-on-an-unsafe-profile-never-starts ()
+  ;; the backstop where a session gets its job: a direct start and the hub's agents/start alike
+  (drgnx-job-run-test--with "# One\n\n### Task 1: one\n"
+    (let* ((drgnx-job-run-test--safe nil) (id (drgnx-job-propose plan))
+           (said (lambda (s) (string-search "not job-safe" (format "%S" (drgnx-agent-session-entries s))))))
+      (let ((s (drgnx-agents-start "mock" repo nil id)))
+        (should (eq (drgnx-agent-session-status s) 'exited))
+        (should (funcall said s))
+        (should-not (drgnx-agent-session-conn s)))
+      (drgnx-hub-connect)
+      (let ((s (drgnx-agents-get (plist-get (drgnx-hub-call-sync "agents/start" (list :profile "mock" :cwd repo :job id)) :id))))
+        (should (eq (drgnx-agent-session-status s) 'exited))
+        (should (funcall said s)))
+      (let ((plain (drgnx-agents-start "mock" repo)))                  ; no job: any profile
+        (should (drgnx-job-run-test--wait (lambda () (eq (drgnx-agent-session-status plain) 'idle))))))))
+
+(ert-deftest drgnx-job-safe/clash-reviewer-refused-with-a-card ()
+  (drgnx-job-run-test--with "# One\n\n### Task 1: one\n"
+    (require 'drgnx-job-clash)
+    (let* ((drgnx-job-run-test--safe nil) (id (drgnx-job-propose plan))
+           (card (drgnx-coord-card-create :job id :kind "clash" :title "a clash" :data '(:rule "r" :size "short"))))
+      (should-not (drgnx-job-clash--start-reviewer id card))
+      (should-not (seq-find (lambda (s) (equal (drgnx-agent-session-job s) id)) drgnx-agents--sessions))
+      (let ((c (car (drgnx-job-safe-test--cards id "profile"))))
+        (should c)
+        (should (string-search "mock cannot run a job's agent" (plist-get c :title)))
+        (should (equal (mapcar #'car (drgnx-job-card-actions c)) '("dismiss")))))))
 
 (defun drgnx-job-safe-test--resource (name server &optional title)
   "An ACP call of Claude Code's tool NAME (ReadMcpResourceTool, ListMcpResourcesTool) with SERVER as its input."

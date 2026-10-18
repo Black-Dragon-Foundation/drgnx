@@ -12,7 +12,7 @@
 
 (defvar drgnx-job-run-test--safe t
   "Non-nil: in `drgnx-job-run-test--with', every profile runs job agents (the mock agents are not Claude Code, so none
-is job-safe); nil: `drgnx-job-safe-p' decides (job-safe-test.el).")
+is job-safe); nil: `drgnx-agents-job-safe-p' decides (job-safe-test.el).")
 
 (defmacro drgnx-job-run-test--with (plan-text &rest body)
   "BODY with drgnx's dirs in ROOT, a git repo REPO (one commit), PLAN-TEXT as PLAN in it, the hub served here and the
@@ -32,8 +32,8 @@ profile \"mock\" on every route, taken for job-safe (`drgnx-job-run-test--safe')
                                              "-l" (expand-file-name "test/fixtures/mock-acp.el" drgnx-dir)))))
           (drgnx-job-routes '((implement . "mock") (test . "mock") (docs . "mock") (review . "mock")))
           (drgnx-job-auto-start nil) (drgnx-job-max-agents 3)
-          (drgnx-job-run-test--real-safe-p (symbol-function 'drgnx-job-safe-p)))
-     (cl-letf (((symbol-function 'drgnx-job-safe-p)
+          (drgnx-job-run-test--real-safe-p (symbol-function 'drgnx-agents-job-safe-p)))
+     (cl-letf (((symbol-function 'drgnx-agents-job-safe-p)
                 (lambda (profile) (or drgnx-job-run-test--safe (funcall drgnx-job-run-test--real-safe-p profile)))))
        (unwind-protect
            (progn

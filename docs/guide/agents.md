@@ -244,10 +244,12 @@ load (which settings files Claude reads is left as it is: they are content, and 
 can make the agent do). Claude Code's own sandbox is off in a job: drgnx's is the boundary.
 
 Your own sessions (New Agent Session…, Take Over) and agents other than Claude get none of this. Other agents
-(Gemini CLI, Codex) have no such switch yet, so a job runs only **job-safe** profiles (`drgnx-job-safe-p`): those
-whose options say `:job-safe t` and that run Claude Code's adapter (the same test as above, so a job-safe profile
-always gets these options). drgnx's built-in profiles say so; a profile of yours that runs the adapter may say so
-too, and one that runs any other agent is never job-safe, whatever it says. On macOS a profile without `:ai` (the
+(Gemini CLI, Codex) have no such switch yet, so a job runs only **job-safe** profiles (`drgnx-agents-job-safe-p`):
+those whose options say `:job-safe t` and that run Claude Code's adapter, so a job-safe profile always gets these
+options. drgnx's built-in profiles say so (their bare `claude-agent-acp` is the adapter drgnx chooses, a shim
+included). A profile of yours may say so too, but it counts only when the program it starts belongs to the
+adapter's npm package (read from its `package.json`): a wrapper whose name says claude gets the options above, not a
+job, and a profile that runs any other agent is never job-safe, whatever it says. On macOS a profile without `:ai` (the
 plain `claude`, which logs in with your subscription, its token in the Keychain) is not job-safe: jobs there use the
 gateway profiles. A job routed to a profile that is not job-safe starts no agent: the task gets an **agent** card
 that says why and names the profiles that may run it ([jobs.md](jobs.md#routes-and-the-estimate)). Since a job's

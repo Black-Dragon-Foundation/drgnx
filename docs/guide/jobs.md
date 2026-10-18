@@ -83,8 +83,10 @@ without asking. drgnx can switch them off only for Claude Code, so a job runs on
 and run Claude Code's adapter: drgnx's built-in ones (on macOS not the plain `claude`, whose subscription token is in
 the Keychain: use a gateway profile there). A task or review routed to any other profile (a Gemini CLI or Codex
 profile, one of yours without `:job-safe`, a profile that does not exist) starts no agent; it gets an **agent** card
-that says why and names the profiles to route it to. Change `:routes`, then Retry (or Review now). Details in
-[agents.md](agents.md#jobs-and-your-claude-settings).
+that says why and names the profiles to route it to. Change `:routes`, then Retry (or Review now). A clash's reviewer
+on such a profile gives the job a **profile** card (Dismiss) instead, and the clash card is yours to decide. Any
+other start of a session for a job (the hub's `agents/start` with a `job`) on such a profile ends at once and says
+why. Details in [agents.md](agents.md#jobs-and-your-claude-settings).
 
 ## While it runs
 
@@ -204,6 +206,8 @@ the perf workload `job-window` ([perf.md](../develop/perf.md)). Developer detail
 
 Tests: `test/unit/job-mcp-policy-test.el` (drgnx's servers allowed, a user's server asks, a denial blocks, an agent
 cannot approve its own request, the agents' configuration in the worktree, the limit in an error's data);
-`test/unit/job-safe-test.el` (built-ins job-safe, a user's profile not unless it runs Claude and says so, the plain
-`claude` refused on macOS, a refused profile gives a card and no agent, another server's resources ask, a profile's
-MCP servers after drgnx's and never under drgnx's names).
+`test/unit/job-safe-test.el` (built-ins job-safe, a user's profile not unless it says so and runs the adapter's
+package, a wrapper named claude refused, the plain `claude` refused on macOS, a refused profile gives a card and no
+agent for a task, a reviewer and a clash's reviewer, a job session on it never starts — directly or through the hub's
+`agents/start` —, another server's resources ask, a profile's MCP servers after drgnx's and never under drgnx's
+names); `test/unit/job-cli-test.el` (the CLI's job on a mock profile is refused with a card).

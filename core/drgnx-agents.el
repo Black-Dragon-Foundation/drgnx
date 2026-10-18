@@ -603,6 +603,22 @@ When either its program's package (`drgnx-agents--claude-adapter-p') or a file n
 worst refuses the `default' mode, which ends its session."
   (or (drgnx-agents--claude-adapter-p command) (eq (drgnx-agents--command-agent command) 'claude)))
 
+(defun drgnx-agents-job-safe-p (profile)
+  "May a job's session run on PROFILE (a name)?  When its options say `:job-safe' and it runs Claude Code, whose job
+sessions ignore a repository's own settings (`drgnx-agents--session-meta'); other agents have no such switch yet.  A
+built-in profile (they all say `:job-safe') runs Claude when `drgnx-agents--runs-claude-p' says so, as its bare
+`claude-agent-acp' is the adapter drgnx chooses; a profile of the user's only when the package of the program it
+starts is the adapter's (`drgnx-agents--claude-adapter-p'): a wrapper whose name says claude gets the lock, not a
+job.  On macOS not a profile without `:ai': its Claude logs in with the subscription, whose token is in the
+Keychain (jobs there use the gateway profiles).  Nil for a profile there is none of."
+  (let* ((cell (ignore-errors (drgnx-agents-profile profile))) (p (cdr cell)))
+    (and (plist-get p :job-safe)
+         (if (memq cell drgnx-agents-builtin-profiles)
+             (drgnx-agents--runs-claude-p (plist-get p :command))
+           (drgnx-agents--claude-adapter-p (plist-get p :command)))
+         (not (and (eq system-type 'darwin) (not (plist-get p :ai))))
+         t)))
+
 (defun drgnx-agents--env-object (env)
   "ENV (\"NAME=value\" strings, and bare names that unset) as the agent's process sees it, a plist (:NAME VALUE…):
 the first entry of a name decides, so a bare name before a value leaves it out."
@@ -736,10 +752,13 @@ agents.eld asks for it (`drgnx-agents-mcp-names'), then the servers of S's profi
 (defun drgnx-agents-start (profile cwd &optional task job)
   "Start a session of PROFILE in CWD; it is idle once the agent made it.  Returns the session.
 TASK (a work-tracker node id) is what the session works on: the agent gets it as DRGNX_TASK, and
-the commits each turn makes are recorded for it.  JOB: the coordination job it belongs to."
+the commits each turn makes are recorded for it.  JOB: the coordination job it belongs to; with one, a PROFILE that
+is not job-safe (`drgnx-agents-job-safe-p') starts nothing: the session has exited and says why."
   (let ((s (drgnx-agents--new profile cwd task job)))
     (drgnx-agents--start-safely
      s (lambda ()
+         (when (and job (not (drgnx-agents-job-safe-p profile)))
+           (error "%s is not job-safe: a job's agent runs on a profile of Claude Code (docs/guide/jobs.md)" profile))
          (drgnx-agents--connect
           s (lambda (meta)
               (let ((pin (and meta t)))

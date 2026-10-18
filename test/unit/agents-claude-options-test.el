@@ -52,7 +52,8 @@ environment functions; every session is killed after."
           (drgnx-agents--sessions nil)
           (drgnx-agents-env-functions nil))
      (make-directory config t)
-     (unwind-protect (progn ,@body)
+     ;; what a job session sends, whatever its profile: which profiles may run one is job-safe-test.el's
+     (unwind-protect (cl-letf (((symbol-function 'drgnx-agents-job-safe-p) #'always)) ,@body)
        (dolist (x drgnx-agents--sessions) (drgnx-agents-kill x))
        (delete-directory state t)
        (delete-directory root t))))
