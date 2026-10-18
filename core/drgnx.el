@@ -11,6 +11,7 @@
 (require 'drgnx-paths)
 (require 'drgnx-hooks)
 (require 'drgnx-guard)
+(require 'drgnx-sandbox-vc)
 (require 'drgnx-registry)
 (require 'drgnx-surfaces)
 (require 'drgnx-palette)
@@ -86,6 +87,7 @@ The steady GC threshold is set at the end, also when a step fails (early-init de
   (unwind-protect
       (progn
         (drgnx-guard-mode 1)
+        (drgnx-sandbox-vc-mode 1)                      ; no git in a job's folder outside its sandbox
         (drgnx-hooks-install)
         (drgnx-session-setup)                          ; keep running or quit; the close button
         (add-hook 'drgnx-first-gui-frame-hook #'drgnx-onboard--on-first-window)   ; a first start: the Welcome

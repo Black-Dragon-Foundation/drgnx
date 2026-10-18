@@ -895,3 +895,52 @@ Snapshot mode against worktree mode (spec §4b):
 | `git worktree list` shows the task | no | yes |
 | Disk and time to start | ≈ 0 extra disk with copy-on-write | ≈ 0: today's `worktree add` |
 | Works on | btrfs, XFS, APFS (a shared clone elsewhere) | any filesystem; not reftable repositories |
+
+## The VC guard
+
+`core/drgnx-sandbox-vc.el`. The `.git` of a job's task folder is the agent's. Its config can name a program
+(`core.fsmonitor`, `core.pager`, `core.sshCommand`, a hook) that git runs the moment any git of the user's runs there:
+visiting a file under VC is enough. So while a task's sandbox lives, nothing of drgnx's or the user's runs git in its
+folder.
+
+- **The list.** `(drgnx-sandbox-vc-register FOLDER)` and `(drgnx-sandbox-vc-unregister FOLDER)` keep the registered
+  folders (true names, trailing slash) in `<state>/sandbox/folders.eld` (0600, written beside it and renamed over it).
+  `(drgnx-sandbox-vc-folders)` re-reads the file when its stamp (time, size, inode) changes, so the editor sees what
+  the hub registered. Only absolute strings count; a damaged file guards nothing and breaks nothing. The hub
+  registers a snapshot folder once its copy is prepared; a worktree-mode folder at the task's start, and
+  unregisters it after the exit scrub (spec §4b). The agent cannot write the file (Task 3's validation keeps the
+  state directory out of its reach).
+- **`drgnx-sandbox-vc-guarded-p DIR`** compares true names on directory boundaries: `7-1/` never matches `7-10/`, and
+  a link into a folder is the folder.
+- **`drgnx-sandbox-vc-mode`** (core, on in the editor and in the hub) does two things:
+  - `vc-ignore-dir-regexp` is extended with the registered folders, so VC does not look there. It is refreshed
+    before each `find-file`.
+  - An `:around` advice on `call-process`, `process-file`, `make-process` (`drgnx-sandbox-vc--refuse-git`) and
+    `call-process-region` (`drgnx-sandbox-vc--refuse-git-region`: its program is the third argument; blame, the
+    indexer and magit's hunk staging run git through it) signals `drgnx-sandbox-guarded` when the program is `git` (by name or any path ending in `/git`) and
+    `default-directory` is guarded. Global options count: `-C DIR` (cumulative, relative to the directory so far),
+    `--git-dir` and `--work-tree`, as `=` or a separate argument. Everything else costs one `string=` on the
+    program's name, and a stat of the list file when the name is `git`. Measured: 1.2 µs per non-git `call-process`
+    for the advice function; the whole call is lost in the noise of the fork (about 0.8 ms).
+  - magit, project.el (`project-try-vc` ignores errors), VC and drgnx's own callers go through these primitives.
+    Also covered because they end in these: `process-lines` (`call-process`), `vc-git--call` and `start-file-process`
+    (`process-file`, `start-process` then `make-process`). `shell-command-to-string` runs `sh`, outside the reach.
+    The work tracker's `drgnx-work--git` answers nil in a guarded folder instead of failing.
+- **The hub's own trusted steps.** A step the hub runs outside the sandbox with git in a task folder (its own
+  commands, an environment it built) binds `drgnx-sandbox-vc-trusted` to non-nil around that one call; the guard lets
+  it through. It is a Lisp variable of the hub's process: an agent cannot reach it, since it only talks to the hub
+  through the MCP socket and the files the hub validates. Bind it nowhere else, and never around a user-driven call.
+- **What it does not cover.** A `git` started through a shell (`shell-command`, a terminal buffer, `sh -c`) or a
+  wrapper program is outside its reach, and so is a `GIT_DIR` set in the environment. A call from natively compiled
+  code reaches the advice only through Emacs's trampolines, which need a working native compiler.
+- **Nested `.git`.** `(drgnx-sandbox-vc-nested-git FOLDER)` lists the `.git` entries under FOLDER other than
+  `FOLDER/.git`: a directory, a gitfile or a link named `.git`. It never follows a link and never enters a `.git`
+  directory. The job code of the hub is to call it after each turn.
+- **The work tracker reads the main repository.** `drgnx-work-source-functions` (abnormal hook): each function gets
+  an agent session and returns `(:repo REPO :ref REF)` or nil. When one answers, the session's folder is not read:
+  `turn-end` and the session's exit collect nothing, and the job collects with `(drgnx-work-collect-now SESSION)`,
+  which records the commits of REF in REPO since the task began. At the session's start REF is the commit the task
+  forks from; when `drgnx-work-collect-now` runs, the function answers with the ref that holds the result (the
+  task's branch in the main repository, after the bundle fetch).
+- Tests: `test/unit/sandbox-vc-test.el` (prefix `drgnx-sandbox-vc/`, including a `core.fsmonitor` canary through
+  `find-file`, `project-current`, `vc-dir` and magit), `work-record-test.el` (`drgnx-work/source-function-…`).
