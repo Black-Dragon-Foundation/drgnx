@@ -94,6 +94,28 @@ summary to `DRGNX_UI_RESULTS` and exits. mutter turns any nonzero Emacs exit cod
 trusts the summary, not the code. The run is killed (whole process group) after `DRGNX_UI_TEST_TIMEOUT`
 seconds (default 110; `bin/drgnx check` gives its `ui` job 300) and never leaves mutter, dbus or Emacs processes behind.
 
+### The fingerprint
+
+`core/drgnx-modules-fingerprint.el` is what the leak census and the module test helper read global state with.
+`(drgnx-modules-fingerprint)` returns a plist of the state a test or a module can leave behind: timers (with their
+repeat), processes, buffers, `features`, the default values of the hooks in `drgnx-modules-fingerprint-hooks` (the
+hooks drgnx adds to, plus `unload-feature-special-hooks`), the `add-function` advice on
+`drgnx-modules-fingerprint-function-variables`, `global-mode-string`, `auto-mode-alist`, `major-mode-remap-alist`,
+`after-load-alist`, `emulation-mode-map-alists`, `default-frame-alist`, `global-minor-modes`, the length of
+`drgnx-keys--applied`, and the keys of every registry in `drgnx-modules-fingerprint-registries` (data: a branch that
+adds a registry or a hook adds one symbol). With a non-nil argument it adds a `mapatoms` scan of every bound `*-hook`,
+`*-hooks`, `*-functions` and `*-function` variable and every advised function (`advice-mapc`), which finds what the
+fixed lists miss. `(drgnx-modules-fingerprint-diff BEFORE AFTER)` returns one plist per difference, `(:what "hook
+find-file-hook +drgnx-blame--maybe" :source "modules/tools/drgnx-blame.el")`: `+` appeared, `-` is gone, and `:source`
+is `symbol-file` of the hook function, advice or timer function (nil for a lambda, which is also why global hooks
+take named functions). Fields only one of two fingerprints has are skipped, so a full one compares with a cheap one.
+
+The cheap fingerprint is meant for around every test: about 0.3 ms with drgnx, org, dired and eshell loaded (27,000
+symbols), nothing that grows with the number of symbols. The full scan costs about 11 ms; run from an uncompiled
+checkout it compiles its scanner once first (interpreted, the scan takes ~110 ms; a built drgnx skips that). Both only
+read: no prompt, no display. The `drgnx-fingerprint/cheap-costs-under-2-ms` and `…/full-costs-under-50-ms` tests
+(tag `:timing`) hold the costs.
+
 ## Sessions
 
 A session is GUI Emacs (pgtk) under `mutter --headless` inside its own `dbus-run-session`, with a virtual
