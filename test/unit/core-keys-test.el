@@ -1,7 +1,7 @@
 ;;; core-keys-test.el --- batch tests: key profiles, layers and conflicts -*- lexical-binding: t -*-
 (require 'ert)
-(defvar features)                                      ; bound dynamically below
 (require 'drgnx)
+(load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
 
 (defconst drgnx-keys-test--profiles
   (drgnx-keys-load-profiles (expand-file-name "keys" drgnx-dir))
@@ -13,9 +13,6 @@
 (defvar drgnx-keys-test--later-stages nil
   "Non-nil: `drgnx-keys-test--with-core-commands' also sets up the idle, first-frame, first-file and first-input modules.")
 
-(defvar drgnx-agents-request-functions)
-(defvar drgnx-agents-changed-functions)
-(defvar drgnx-wb--areas)
 (defvar drgnx-layouts-pane-fillers)
 (defvar drgnx-layouts-shapes)
 (defvar drgnx-persist-state-functions)
@@ -25,35 +22,26 @@
   "BODY with a registry holding the core commands (core + core/basics) and the two replace commands
 that took VS Code's C-S-h and F2 (the rest of the replace module is not modelled here), nothing else — and with
 `drgnx-keys-test--later-stages', the commands of the later stages' modules whose packages need nothing installed.
-What those modules hook into (find-file, the agents, the panel tabs, the layouts' pane fillers, the persist hooks)
-is undone after BODY."
+The modules are set up by `drgnx-test-with-modules' and torn down after BODY, what they hooked into with them."
   `(let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
-         (drgnx-commands-problems nil) (drgnx-modules--table nil) (drgnx-modules--report nil)
-         (find-file-hook find-file-hook)
-         (drgnx-agents-request-functions (bound-and-true-p drgnx-agents-request-functions))
-         (drgnx-agents-changed-functions (bound-and-true-p drgnx-agents-changed-functions))
-         (drgnx-wb--areas (copy-tree (bound-and-true-p drgnx-wb--areas)))
-         (drgnx-layouts-pane-fillers (copy-tree (bound-and-true-p drgnx-layouts-pane-fillers)))
-         (drgnx-layouts-shapes (copy-tree (bound-and-true-p drgnx-layouts-shapes)))
-         (drgnx-persist-state-functions (bound-and-true-p drgnx-persist-state-functions))
-         (drgnx-persist-after-restore-functions (bound-and-true-p drgnx-persist-after-restore-functions))
+         (drgnx-commands-problems nil)
+         ;; the product re-applies the keys after a teardown (`drgnx--after-teardown'); here that would bind this
+         ;; fresh registry's keys in the process's global map
+         (drgnx-modules-after-teardown-functions nil)
+         ;; core/basics is not converted yet: put its plain `setq's and the trust guards back by hand
          (ring-bell-function ring-bell-function) (use-dialog-box use-dialog-box)
          (use-short-answers use-short-answers) (inhibit-startup-screen inhibit-startup-screen)
-         ;; core/basics turns the trust guards on: put them back as they were, the trusted set untouched
          (trust-was (bound-and-true-p drgnx-trust-mode)) (trusted-content trusted-content))
      (unwind-protect
          (progn
            (drgnx--core-commands)
-           (drgnx-modules-load-directory (expand-file-name "modules" drgnx-dir))
-           (drgnx-modules-run 'startup)
            (drgnx-command-define 'replace-in-files :category "Search" :title "Replace in Files" :command #'ignore :doc "test")
            (drgnx-command-define 'rename-symbol :category "Search" :title "Rename Symbol" :command #'ignore :doc "test")
-           (when drgnx-keys-test--later-stages
-             ;; A module that needs a package (magit, avy, websocket, …) stays out whatever this machine has installed.
-             ;; (Another test file's packages cannot be loaded here: each file runs in an Emacs of its own.)
-             (cl-letf (((symbol-function 'locate-library) (lambda (&rest _) nil)))
-               (dolist (stage (cdr drgnx-modules-stages)) (drgnx-modules-run stage))))
-           ,@body)
+           ;; A module that needs a package (magit, avy, websocket, …) stays out whatever this machine has installed.
+           (drgnx-test-with-modules nil
+             :stages (if drgnx-keys-test--later-stages drgnx-modules-stages '(startup))
+             :packages (if drgnx-keys-test--later-stages 'hidden nil)
+             ,@body))
        (when (fboundp 'drgnx-trust-mode) (drgnx-trust-mode (if trust-was 1 -1))))))
 
 (defun drgnx-keys-test--resolve (layers &rest args)
