@@ -16,7 +16,7 @@ Put your choices in `config.el` ([modules.md](modules.md#your-own-code-configel)
 
 | Setting | Default | What it does |
 |---|---|---|
-| `drgnx-face-menu-bar` | `nil` | Show Emacs's menu bar. Hidden, the commands are in the palette, and `M-x tmm-menubar` opens the whole menu in the minibuffer (`F10` does not help: on a toolkit window with the bar hidden it has no menu to open, and can freeze the window). **Toggle Menu Bar** (palette, View menu) flips it for this session only. |
+| `drgnx-face-menu-bar` | `nil` | Show Emacs's menu bar. Hidden, the commands are in the palette, and `F10` opens the whole menu as text in the minibuffer (**Open the Menu**, `tmm-menubar`; the toolkit's own `F10` has no menu to open while the bar is hidden, and can freeze the window). With the bar shown, `F10` opens it as usual. **Toggle Menu Bar** (palette, View menu) flips it for this session only. |
 | `drgnx-face-scroll-bars` | `none` | `none`, or `native` for the toolkit's scroll bar on the right. The position is in the status bar. |
 | `drgnx-face-dividers` | `t` | A thin line between windows, in the theme's colours. In a terminal the border is the terminal's own, drawn in the same colour. Turning it off turns `window-divider-mode` off only if drgnx turned it on; yours stays. |
 | `drgnx-face-divider-width` | `1` | The line's width in pixels (graphical frames). |

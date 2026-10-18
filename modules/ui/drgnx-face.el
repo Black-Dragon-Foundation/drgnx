@@ -46,7 +46,7 @@
 
 (defcustom drgnx-face-menu-bar nil
   "Non-nil: show Emacs's menu bar (hidden, the commands are in the palette,
-or `M-x tmm-menubar' opens the menu in the minibuffer).
+and F10 opens the menu as text in the minibuffer).
 Toggle for this session with the command Toggle Menu Bar."
   :type 'boolean :set #'drgnx-face--set :group 'drgnx-face)
 
@@ -205,10 +205,21 @@ On `after-change-major-mode-hook'."
   (customize-set-variable 'drgnx-face-menu-bar (not drgnx-face-menu-bar))
   (message "Menu bar %s" (if drgnx-face-menu-bar "shown" "hidden")))
 
+(defun drgnx-face-menu ()
+  "Open the menu: Emacs's menu bar when it is shown, else the same menu as text in the minibuffer (`tmm-menubar').
+F10's `menu-bar-open' has no menu to open on a toolkit frame whose bar is hidden, and can freeze the window."
+  (interactive)
+  (if (zerop (or (frame-parameter nil 'menu-bar-lines) 0))
+      (tmm-menubar)
+    (call-interactively #'menu-bar-open)))
+
 (defun drgnx-face--setup ()
   (drgnx-command-define 'face-toggle-menu-bar :category "View" :title "Toggle Menu Bar" :menu '("View")
                         :command #'drgnx-face-toggle-menu-bar
-                        :doc "Show or hide Emacs's menu bar for this session (hidden, the palette or M-x tmm-menubar reach the menu)")
+                        :doc "Show or hide Emacs's menu bar for this session (hidden, F10 opens the menu as text)")
+  (drgnx-command-define 'face-menu :category "View" :title "Open the Menu" :command #'drgnx-face-menu
+                        :doc "Open the menu: the menu bar when it is shown, else the same menu as text in the minibuffer (F10)")
+  (define-key global-map [remap menu-bar-open] #'drgnx-face-menu)   ; F10 opens the menu as text while the bar is hidden
   (when (fboundp 'drgnx-statusbar-setup) (drgnx-statusbar-setup))   ; the status bar (drgnx-statusbar.el)
   (add-hook 'after-make-frame-functions #'drgnx-face-apply-frame)
   (add-hook 'after-change-major-mode-hook #'drgnx-face-line-numbers-maybe)

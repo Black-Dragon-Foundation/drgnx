@@ -34,6 +34,7 @@ setup changes neither the dividers nor the faces of the test process."
                ((symbol-function 'face-spec-set)
                 (lambda (face spec &optional type) (push (list face spec type) drgnx-face-test--spec-calls))))
        (unwind-protect (progn ,@body)
+         (define-key global-map [remap menu-bar-open] nil)
          (setq drgnx-face--active nil)))))
 
 (defun drgnx-face-test--setup ()
@@ -295,6 +296,27 @@ setup changes neither the dividers nor the faces of the test process."
     (with-temp-buffer
       (insert-file-contents (expand-file-name (format "keys/%s.eld" p) drgnx-dir))
       (should (search-forward "(face-toggle-menu-bar " nil t)))))
+
+(ert-deftest drgnx-face/f10-opens-the-menu-as-text-while-the-bar-is-hidden ()
+  (drgnx-face-test--with
+    (drgnx-face-test--setup)
+    (should (drgnx-commands-get 'face-menu))
+    (should (eq (key-binding (kbd "<f10>")) 'drgnx-face-menu))   ; the remap of `menu-bar-open'
+    (let ((lines 0) (calls nil))
+      (cl-letf (((symbol-function 'frame-parameter) (lambda (_f p) (and (eq p 'menu-bar-lines) lines)))
+                ((symbol-function 'tmm-menubar) (lambda (&rest _) (interactive) (push 'tmm calls)))
+                ((symbol-function 'menu-bar-open) (lambda (&rest _) (interactive) (push 'open calls))))
+        (call-interactively (key-binding (kbd "<f10>")))
+        (should (equal calls '(tmm)))
+        (setq lines 1 calls nil)
+        (call-interactively (key-binding (kbd "<f10>")))
+        (should (equal calls '(open)))))))
+
+(ert-deftest drgnx-face/the-menu-command-is-in-every-profile ()
+  (dolist (p '("vscode" "emacs" "vim"))
+    (with-temp-buffer
+      (insert-file-contents (expand-file-name (format "keys/%s.eld" p) drgnx-dir))
+      (should (search-forward "(face-menu :none \"F10 (remap of menu-bar-open)\")" nil t)))))
 
 (ert-deftest drgnx-face/the-toggle-command-flips-the-menu-bar ()
   (drgnx-face-test--with
