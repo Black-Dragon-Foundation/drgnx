@@ -51,7 +51,8 @@ esac"
 
 (defconst tty-bin-test--defaults
   '(("DISPLAY" . ":99") ("WAYLAND_DISPLAY") ("SSH_CONNECTION") ("SSH_TTY") ("VTE_VERSION") ("TERM_PROGRAM")
-    ("TERM" . "xterm-256color") ("DRGNX_EMACS") ("DRGNX_OPEN_WAIT" . "5"))
+    ("TERM" . "xterm-256color") ("DRGNX_EMACS") ("DRGNX_OPEN_WAIT" . "5")
+    ("DRGNX_MODAL_ELPA"))   ; a machine that runs the modal tests has it set; `test --container' would mount it
   "What a test starts from: a graphical, local terminal; a cons without a value unsets the variable.")
 
 (defmacro tty-bin-test--with (&rest body)
