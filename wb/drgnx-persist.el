@@ -204,15 +204,21 @@ is a workbench (not a window that rebuilds itself); nil when there are only such
   (or (seq-find (lambda (st) (eq (plist-get st :role) 'main)) frames)
       (seq-find (lambda (st) (not (eq (plist-get st :role) 'custom))) frames)))
 
+(defvar drgnx-persist-restoring nil
+  "Non-nil while `drgnx-persist-restore' runs.  A window's function that rebuilds it (`:restore') then takes back
+only its state and arranges nothing: the restored workbench keeps its panes, sizes and focus (a job window saved
+before M12f only filters the Work cockpit to its job).")
+
 (defun drgnx-persist-restore (&optional file)
   "Bring back the workbench saved in FILE — the selected frame gets the main window's layout (the state
 saved with `:role main', wherever it stands in the file), every other window is made again; non-nil if a
-state was restored.  A window that rebuilds itself (a job window) is rebuilt by its function and, when the
-display still has room, put back at its saved pixel position and size (a terminal start does not treat it
-differently yet).  Each group's shown file is visited now, its other tabs at
+state was restored.  A window that rebuilds itself is rebuilt by its function (with `drgnx-persist-restoring'
+non-nil) and, when it returns a frame and the display still has room, put back at its saved pixel position and size
+\(a terminal start does not treat it differently yet).  Each group's shown file is visited now, its other tabs at
 idle (never a question at start)."
   (interactive)
-  (let* ((file (or file (drgnx-persist--file))) (state (drgnx-persist--read file))
+  (let* ((drgnx-persist-restoring t)
+         (file (or file (drgnx-persist--file))) (state (drgnx-persist--read file))
          (frames (pcase (plist-get state :version)
                    (1 (list state))
                    (2 (plist-get state :frames)))))

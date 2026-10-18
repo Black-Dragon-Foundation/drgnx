@@ -39,6 +39,7 @@
 (declare-function drgnx-cockpit-graph--ascii-p "drgnx-cockpit-graph")
 (declare-function drgnx-cockpit-edits--setup "drgnx-cockpit-edits")
 (declare-function drgnx-cockpit-edits-pane-buffer "drgnx-cockpit-edits")
+(declare-function drgnx-cockpit-edits--teardown "drgnx-cockpit-edits")
 (declare-function drgnx-work-ui--metrics "drgnx-work-ui")
 (declare-function drgnx-work-ui--colour "drgnx-work-ui")
 (declare-function drgnx-work-nodes "drgnx-work-db")
@@ -82,8 +83,9 @@ its file, when it has one."
 (defconst drgnx-cockpit-graph-buffer-name "*Work Graph*")
 
 (defvar drgnx-cockpit-graph-current-filter nil
-  "What the Work graph shows: (:milestone TEXT :agent ID :states (STATE…)), each optional (`drgnx-cockpit-filter'); nil
-shows everything.  Set by `drgnx-cockpit-graph-filter'.")
+  "What the Work graph shows: (:milestone TEXT :agent ID :states (STATE…) :job ID), each optional
+\(`drgnx-cockpit-filter'); nil shows everything.  Set by `drgnx-cockpit-graph-filter'; `:job' by Show Job in Work
+\(`drgnx-cockpit-show-job'), which What needs you and the decision log follow too (drgnx-cockpit-cards.el).")
 
 (defvar drgnx-cockpit--timer nil "The redraw on its way: one at a time.")
 (defvar drgnx-cockpit--check-timer nil "The repeating look at the store (`drgnx-cockpit--check'), while the graph lives.")
@@ -322,7 +324,7 @@ An exited session is left out (it no longer works on anything)."
 
 (defun drgnx-cockpit--filtering-p ()
   (let ((f drgnx-cockpit-graph-current-filter))
-    (or (plist-get f :milestone) (plist-get f :agent) (plist-get f :states))))
+    (or (plist-get f :milestone) (plist-get f :agent) (plist-get f :states) (plist-get f :job))))
 
 (defun drgnx-cockpit--current-model ()
   "The model the graph shows: the store's (with the silent worktrees found last), filtered by
@@ -340,7 +342,8 @@ An exited session is left out (it no longer works on anything)."
   (when (drgnx-cockpit--filtering-p)
     (let ((f drgnx-cockpit-graph-current-filter))
       (propertize (concat "Filter: "
-                          (string-join (delq nil (list (plist-get f :milestone)
+                          (string-join (delq nil (list (and (plist-get f :job) (format "job %s" (plist-get f :job)))
+                                                       (plist-get f :milestone)
                                                        (and (plist-get f :agent) (format "agent %s" (plist-get f :agent)))
                                                        (and (plist-get f :states) (string-join (plist-get f :states) ", "))))
                                        " · ")
@@ -633,7 +636,7 @@ Plan is named, never run."
         (t (drgnx-cockpit--open-job node))))
 
 (defun drgnx-cockpit--open-job (node)
-  "Open NODE's job: its window (tasks, what needs you, decisions)."
+  "Open NODE's job: the cockpit filtered to it (what needs you, its tasks, its decisions)."
   (if (and (plist-get node :job) (fboundp 'drgnx-job-ui-show)) (drgnx-job-ui-show (plist-get node :job))
     (message "%s has no job" (or (plist-get node :title) (plist-get node :id)))))
 
@@ -682,7 +685,7 @@ else one read with PROMPT among the nodes PRED accepts."
 
 (defun drgnx-cockpit-graph-open (id)
   "Open the tab of node ID (the node on this line, else the selected one): a spec or plan at its line, a task in its
-plan (read-only when no job runs it), an agent's transcript, a job's window."
+plan (read-only when no job runs it), an agent's transcript, a job in the cockpit."
   (interactive (list (drgnx-cockpit--node-here)))
   (drgnx-cockpit-graph-open-node id))
 
@@ -708,9 +711,10 @@ plan (read-only when no job runs it), an agent's transcript, a job's window."
   (drgnx-cockpit-graph-buffer)
   (drgnx-cockpit-graph-redraw t))
 
-(defun drgnx-cockpit-graph-filter (milestone agent states)
-  "Show only the nodes of MILESTONE (a text in their title or path, or an ancestor's), of AGENT, in STATES, with
-their ancestors; each empty: any."
+(defun drgnx-cockpit-graph-filter (milestone agent states &optional job)
+  "Show only the nodes of MILESTONE (a text in their title or path, or an ancestor's), of AGENT, in STATES, of JOB
+(the cockpit's job filter, which What needs you and the decision log follow too), with their ancestors; each empty
+or nil: any."
   (interactive
    (let* ((m (drgnx-cockpit-model :sessions (drgnx-cockpit-sessions) :silent drgnx-cockpit--silent))
           (f drgnx-cockpit-graph-current-filter)
@@ -721,18 +725,29 @@ their ancestors; each empty: any."
      (list (completing-read "Milestone — a text in a title or path (empty: all): " titles nil nil nil nil (plist-get f :milestone))
            (cdr (assoc (completing-read "Agent (empty: all): " agents nil t) agents))
            (completing-read-multiple "States (comma between; empty: all): "
-                                     (delete-dups (delq nil (mapcar (lambda (n) (plist-get n :state)) (plist-get m :nodes))))))))
+                                     (delete-dups (delq nil (mapcar (lambda (n) (plist-get n :state)) (plist-get m :nodes)))))
+           (completing-read (if (plist-get f :job) (format "Job (now %s; empty: all): " (plist-get f :job)) "Job (empty: all): ")
+                            (delete-dups (delq nil (mapcar (lambda (n) (and (eq (plist-get n :kind) 'job) (plist-get n :job)))
+                                                           (plist-get m :nodes))))))))
   (setq drgnx-cockpit-graph-current-filter
         (list :milestone (and (stringp milestone) (not (string-empty-p milestone)) milestone)
               :agent (and (stringp agent) (not (string-empty-p agent)) agent)
-              :states (seq-remove #'string-empty-p states)))
+              :states (seq-remove #'string-empty-p states)
+              :job (and (stringp job) (not (string-empty-p job)) job)))
+  (drgnx-cockpit-cards--schedule 0)     ; What needs you and the decisions follow the job
   (drgnx-cockpit-graph-refresh))
 
 ;; what happened, questions everywhere, the timeline (drgnx-cockpit-feed.el, beside this file)
 (unless (featurep 'drgnx-cockpit-feed)
   (load (expand-file-name "drgnx-cockpit-feed" (file-name-directory (or load-file-name buffer-file-name))) nil t))
 (declare-function drgnx-cockpit-feed--setup "drgnx-cockpit-feed")
+(declare-function drgnx-cockpit-cards--schedule "drgnx-cockpit-cards")
 (declare-function drgnx-cockpit-feed-tell-statusbar "drgnx-cockpit-feed")
+;; what needs you and the decision log, the job window's parts (drgnx-cockpit-cards.el, beside this file)
+(unless (featurep 'drgnx-cockpit-cards)
+  (load (expand-file-name "drgnx-cockpit-cards" (file-name-directory (or load-file-name buffer-file-name))) nil t))
+(declare-function drgnx-cockpit-cards--setup "drgnx-cockpit-cards")
+(declare-function drgnx-cockpit-cards--teardown "drgnx-cockpit-cards")
 
 ;;;; The module
 
@@ -742,7 +757,7 @@ their ancestors; each empty: any."
                           :buffer #'drgnx-cockpit-graph-buffer :on-show #'drgnx-cockpit--on-show)
   (pcase-dolist (`(,id ,title ,fn ,doc)
                  '((cockpit-filter "Filter Graph…" drgnx-cockpit-graph-filter "Only a milestone's, an agent's or some states' nodes")
-                   (cockpit-open "Open Node" drgnx-cockpit-graph-open "Its tab: a file at its line, a transcript, a job's window")
+                   (cockpit-open "Open Node" drgnx-cockpit-graph-open "Its tab: a file at its line, a transcript, a job in the cockpit")
                    (cockpit-open-in-plan "Open in Plan" drgnx-cockpit-graph-open-in-plan "The plan at this task's heading")
                    (cockpit-refresh "Draw Graph Again" drgnx-cockpit-graph-refresh "Read the store again and draw the Work graph")
                    (cockpit-next "Select Next Node" drgnx-cockpit-graph-select-next "The next node, in column order; RET opens it")
@@ -751,10 +766,18 @@ their ancestors; each empty: any."
   ;; an agent's edits (drgnx-cockpit-edits.el): a task or an agent of the graph opens them
   (drgnx-pane-define-kind 'agent-edits :title " EDITS" :home 'editor :buffer #'drgnx-cockpit-edits-pane-buffer)
   (drgnx-cockpit-edits--setup)
-  (drgnx-cockpit-feed--setup))           ; kinds `happened' (right) and `timeline' (bottom), A everywhere
+  (drgnx-cockpit-feed--setup)            ; kinds `happened' (right) and `timeline' (bottom), A everywhere
+  (drgnx-cockpit-cards--setup))          ; kinds `needs-you' and `decisions' (right, stacked with `happened')
+
+(defun drgnx-cockpit--teardown ()
+  "tools/cockpit's off path: undo what its parts' setups left global — agents' edits panes, What needs you and the
+decision log with their three global hook functions.  drgnx's modules have no runtime off yet (a module turned off
+stops at the next start): module teardown calls this."
+  (drgnx-cockpit-edits--teardown)
+  (drgnx-cockpit-cards--teardown))
 
 (drgnx-module-define 'tools/cockpit
-                     :doc "The Work cockpit: the Work graph — specs, plans, tasks, agents, jobs and reviews; drawn in windows, an outline in terminals."
+                     :doc "The Work cockpit: the Work graph — specs, plans, tasks, agents, jobs and reviews; drawn in windows, an outline in terminals; what jobs need of you and their decisions."
                      :stage 'startup :requires '(tools/work tools/jobs)
                      :setup #'drgnx-cockpit--setup)
 

@@ -488,3 +488,82 @@ nothing reads, and no process sentinel runs while it waits. It covers:
 - comments queued, the line a diff line stands for, the hub routes (an exited mirror gets a message in the store);
 - the graph opening an agent's edits from a task or an agent;
 - the keys in every profile.
+
+## What needs you and the decisions (`drgnx-cockpit-cards.el`)
+
+`modules/tools/drgnx-cockpit-cards.el` holds the job window's parts since M12f; the job's own frame is gone. The user's
+side is in [jobs.md](../guide/jobs.md#a-job-in-the-work-cockpit).
+
+- **Pane kinds** `needs-you` (buffer `*Needs You*`, `drgnx-cockpit-cards-mode`) and `decisions` (`*Decisions*`,
+  `drgnx-cockpit-decisions-mode`), home `right`, `:stack 'happened`. Before the grid they are tabs of the right dock.
+- **The filter** is the graph's, `drgnx-cockpit-graph-current-filter`, with a `:job` key.
+  - `drgnx-cockpit-show-job ID` sets it to `(:job ID)`. It applies the `work` layout when one exists (C10), else it
+    shows the `work-graph` pane, then focuses `needs-you` and returns nil. `drgnx-job-ui-show` calls it, so a
+    format-2 workbench whose custom frame state is `(drgnx-job-ui-show ID)` restores with no frame:
+    `drgnx-persist-restore` places none, because the call returns none. It binds `drgnx-persist-restoring` while it
+    runs, and `drgnx-cockpit-show-job` then only sets the filter: no layout, no pane shown, no focus, so the restored
+    main frame keeps its windows (Review Focus 2).
+  - `drgnx-cockpit-show-jobs` (the status bar's `jobs` click) drops `:job` and keeps the other keys.
+  - `drgnx-cockpit-graph-filter` (`f`) asks for the job too (its prompt names the current one; empty: every job).
+  - The graph narrows through `drgnx-cockpit-filter-functions` (`drgnx-cockpit-cards--job-node-p`): a node of
+    another job is dropped, and ancestors stay.
+- **Persistence.** `drgnx-persist-state-functions` saves `:cockpit-filter`. `drgnx-persist-after-restore-functions`
+  (`drgnx-cockpit-cards--adopt`) takes it back only when the key is present and the value is a filter: strings, and
+  a list of strings for `:states`. A workbench saved before M12f has no such key, so the filter its job window just
+  set stays.
+- **Drawing.** The job window's functions moved here, renamed `drgnx-cockpit-cards--insert-{tasks,card,cards,log}`.
+  `drgnx-cockpit-cards--put` erases and draws a part only when its key changed, and only when its buffer lives (a part nobody opened is never made). For one job, What needs you's key is
+  `(JOB CARDS-PART TASKS-PART)` and the log's is `(JOB LOG-PART)`. For every job, the key is the open jobs' ids,
+  titles, repos and cards parts. Windows keep their start and point, clamped.
+- **The hub.** One `job/status` per refresh: `(:id JOB :decisions t)` for a job, no parameters for every job (the
+  log then says it is per job). An answer for a filter that changed meanwhile is dropped. `No job …` drops the job
+  filter. Any other error draws "No drgnx hub" and looks again 10 s later.
+- **Refreshes.** Hub events `job`, `card` and `lease-released` of the shown job (any job's when none is shown), and
+  `agent` and `fallback`, schedule one refresh per 0.5 s, only while a part shows. A hidden part only sets
+  `drgnx-cockpit-cards--stale`, and the kinds' `:on-show` catches up.
+- **Ownership.** The hooks (`drgnx-hub-event-functions`, `drgnx-hub-disconnect-functions`) and both timers belong to
+  the parts' buffers: the last one killed removes them. The setup adds three global hook functions (the filter, the
+  saved state, the restore); `drgnx-cockpit-cards--teardown` takes them out, kills both parts and cancels both timers
+  (idempotent). `drgnx-cockpit--teardown` runs it and the edits' teardown: the module's off path, which module
+  teardown calls (drgnx's modules have no runtime off yet). The visibility check and the stale flag are what
+  C5 and C7 use, for the workbench state store to replace.
+- **Kept in `drgnx-job-ui.el`:** the Plan Job commands (`job-show` is now "Show Job in Work…"), the ⚑ badge mode for
+  those without the status bar (a click: `drgnx-job-ui-show` of the newest card's job, else
+  `drgnx-cockpit-show-jobs`), and notifications.
+- **What reaches an agent.** Reply… is the hub's `job/reply` (`drgnx-job-reply`: `drgnx-coord-send` from the user,
+  `:answers` the agent's message); Message… is `drgnx-coord-send` from the user to the agent, then `coord/notify`.
+  Neither is a raw prompt (`agents/send`): the hub gives both under the user's header (`drgnx-hub--message-prompt`),
+  and the agent's own words (the question answered) only on a quoted line. Discuss is the clash code's
+  (`drgnx-job-card-act`), which quotes the user's text to the reviewer.
+- **One count of what needs you,** in `drgnx-job-ui.el`: `drgnx-job-ui-needs-you-count JOBS` gives `(N . NEWEST-JOB)`
+  (open cards and messages not acted on, of proposed, running and paused jobs), and `drgnx-job-ui-waiting-p JOB` says
+  whether a job counts. `drgnx-job-ui-note-jobs JOBS` keeps the count and the badge; the badge's own `job/status` and
+  the every-job pane's both call it, so a refresh of that pane counts for the badge too and an action asks the hub
+  once. `drgnx-job-ui-needs-you` returns the cached count, or nil when it is not known: the status bar's jobs segment
+  reads it (part A), never the badge string. Both heads show the count: `What needs you: N`,
+  `What needs you — every job: N`.
+
+### Cost
+
+The perf workload `cockpit-cards` (the old `job-window`) types while the cockpit is filtered to a job with four
+cards, three tasks and twenty decisions, as three mock agents stream. The first run was on a busy machine (load 6):
+input p50 2.3 ms, p95 10.4 ms, max 13.5 ms (the job window's last runs: p95 8.5–9.5 ms at load 3.4). The budget rows
+are PROVISIONAL until C12. In a harness session, typing with an `agent` event every 0.1 s gave `guard_violations` 0,
+no collateral moves and no layout changes.
+
+### Tests
+
+`test/unit/mod-cockpit-cards-test.el` covers:
+- the job window's cases (cards, clash texts, buttons, Discuss, Dismiss, acted messages, the log's faces), with
+  redraws only on change;
+- one refresh for 50 events, and none while hidden;
+- no hub, and a deleted job;
+- one pane for every job or one, and the graph filtered by job;
+- an old job window's state restoring with no frame, the filter set and the frame not moved;
+- the filter kept with the workbench, and a bad saved value refused;
+- the badge;
+- the kinds, commands and key rows.
+
+`test/ui/job-window-test.el` (GUI) checks that the right dock shows the job and that a click on `[Retry]` acts, and
+that a hidden pane asks nothing and catches up when it shows. `job-ui-test.el` keeps the badge and notification
+tests.

@@ -76,7 +76,7 @@ Emacs) is dropped (logged) when its queue passes `drgnx-hub-client-max-queued` (
 than `drgnx-hub-client-stuck-after` (10 s; checked also on the hub's tick, when nothing more comes for it). Only
 the innermost write in progress is judged (`drgnx-hub--writing`): one beneath it cannot go on meanwhile, so it gets
 back the time each write above it took (only that: a stopped client beneath writes to others is still dropped); its Emacs
-connects again (the Agents module's idle timer, the job window's refresh) — meanwhile it shows the hub's sessions as
+connects again (the Agents module's idle timer, the Work cockpit's What needs you refresh) — meanwhile it shows the hub's sessions as
 ended.
 Snapshots and transcript entries travel as **printed Lisp** (`lisp`,
 `entries`): JSON would lose the difference between a symbol and a string in an entry; both ends are Emacs. Events: from the gateway `request` (job, task, agent, provider, model, status, input, output, cost), `fallback`
