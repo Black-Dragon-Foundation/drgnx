@@ -394,9 +394,11 @@ buffer of the selected window (a temp buffer in project `proj', no git).  Faces 
   (drgnx-topline-test--with 'vscode
     (setq-local vc-mode " Git-main")
     (setq drgnx-signal--editor-window (selected-window))     ; as in a session: else the window is searched for
-    ;; interpreted code conses for its own bookkeeping (the test runner may load the source): measure the compiled line
+    ;; interpreted code conses for its own bookkeeping, and the runner loads a file's source when it is newer than its
+    ;; .elc: measure the line and everything it calls on a hit compiled
     (dolist (fn '(drgnx-topline--line drgnx-topline--same-p drgnx-topline--failing-p drgnx-topline--drawn-title-p
-                                      drgnx-face-drawn-title-p))
+                                      drgnx-face-drawn-title-p drgnx-signal-editor-window drgnx-signal-editor-window-p
+                                      drgnx-commands-get drgnx-cmd-command drgnx-cmd-bound))
       (unless (byte-code-function-p (symbol-function fn)) (byte-compile fn)))
     (let ((first (drgnx-topline--line))
           (loop (byte-compile (lambda () (dotimes (_ 1000) (drgnx-topline--line))))))   ; a compiled loop
