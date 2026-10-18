@@ -331,6 +331,27 @@ about) and keeps the tests within their time limits."
         (when stopped-proc (ignore-errors (signal-process stopped-proc 'SIGCONT)) (delete-process stopped-proc))
         (delete-process live-proc)))))
 
+(ert-deftest drgnx-hub/a-queue-past-its-limit-is-dropped-beneath-other-writes ()
+  ;; a stopped client X whose write waits beneath a live, slow client Y's (which can go on for long: it makes
+  ;; progress) is not judged by time, but its queue is held to `drgnx-hub-client-max-queued' wherever it is; Y's
+  ;; old write, innermost, is judged by time
+  (let* ((x (make-pipe-process :name "hub-x" :noquery t)) (y (make-pipe-process :name "hub-y" :noquery t))
+         (drgnx-hub-client-max-queued 1000) (drgnx-hub-client-stuck-after 10) (inhibit-message t))
+    (unwind-protect
+        (let ((drgnx-hub--writing (list y x)))
+          (process-put x :sending (- (float-time) 60))                          ; beneath: its time is not judged
+          (process-put y :sending (float-time))
+          (drgnx-hub--enqueue x (make-string 600 ?a))
+          (should (process-live-p x))
+          (drgnx-hub--enqueue x (make-string 600 ?a))                              ; 1200 bytes: past the limit
+          (should-not (process-live-p x))
+          (should (process-live-p y))
+          (process-put y :sending (- (float-time) 11))                          ; innermost: judged by time
+          (drgnx-hub--enqueue y "z")
+          (should-not (process-live-p y)))
+      (delete-process x)
+      (delete-process y))))
+
 (ert-deftest drgnx-hub/a-live-reader-is-kept-through-a-long-line ()
   ;; One line can take long to go out to a client that reads, slowly: on macOS a local socket holds 8 KB and Emacs
   ;; waits 20 ms each time a write fills it, so a snapshot of a few MB takes seconds there.  Only a write that makes

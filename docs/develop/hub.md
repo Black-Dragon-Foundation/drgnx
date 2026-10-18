@@ -72,12 +72,12 @@ socket's buffer is full, `process-send-string` waits and runs timers and filters
 client then is queued and written in order after the write (`drgnx-hub--enqueue`, `drgnx-hub--drain`; a broadcast
 queues its event for every subscriber before it writes to any, so a newer event never reaches one before an older; never a write one level deeper, which
 would nest until `excessive-lisp-nesting` lands anywhere in the hub). A client that stopped reading (a suspended
-Emacs) is dropped (logged) when its queue passes `drgnx-hub-client-max-queued` (16 MiB) or a write to it makes no
-progress for longer than `drgnx-hub-client-stuck-after` (10 s; checked also on the hub's tick, when nothing more comes
-for it). A line goes out 8 KB at a time (`drgnx-hub--piece`), each piece progress: a write that fills the client's
+Emacs) is dropped (logged) when its queue passes `drgnx-hub-client-max-queued` (16 MiB), wherever its write is, or a
+write to it makes no progress for longer than `drgnx-hub-client-stuck-after` (10 s; checked also on the hub's tick,
+when nothing more comes for it). A line goes out 8 KB at a time (`drgnx-hub--piece`), each piece progress: a write that fills the client's
 socket waits 20 ms before Emacs tries again, and macOS's local sockets hold 8 KB (Linux's ~200 KB), so a snapshot of a
 few MB takes seconds there (the hub writes ~400 KB/s to a client on macOS) and must not count as a stopped client. Only
-the innermost write in progress is judged (`drgnx-hub--writing`): one beneath it cannot go on meanwhile, so it gets
+the innermost write in progress is judged by time (`drgnx-hub--writing`): one beneath it cannot go on meanwhile, so it gets
 back the time each write above it took (only that: a stopped client beneath writes to others is still dropped); its Emacs
 connects again (the Agents module's idle timer, the job window's refresh) — meanwhile it shows the hub's sessions as
 ended.

@@ -751,7 +751,7 @@ macOS (no /proc there)."
          (emacs (drgnx-bin-test--fake-emacs
                  (expand-file-name "fake-check" dir)
                  ;; a session of its own: setsid(1), else perl's (macOS has no setsid command), as bin/drgnx does
-                 (format "newsession() { if command -v setsid >/dev/null 2>&1; then setsid \"$@\"; else perl -MPOSIX -e 'POSIX::setsid(); exec @ARGV' \"$@\"; fi; }
+                 (format "newsession() { if command -v setsid >/dev/null 2>&1; then setsid \"$@\"; else perl -MPOSIX -e 'POSIX::setsid() or die \"setsid: $!\"; exec @ARGV or die \"exec: $!\"' \"$@\"; fi; }
 newsession sh -c 'trap \"\" TERM; echo $$ > %s.tmp && mv %s.tmp %s; exec sleep 300' &
 trap 'kill -TERM $(cat %s); sleep 7; kill -KILL $(cat %s); exit 0' TERM
 while :; do wait; done" job job job job job)))

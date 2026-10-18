@@ -152,11 +152,12 @@ connection is closed (its Emacs connects again).  One snapshot can carry whole f
 
 (defcustom drgnx-hub-client-stuck-after 10
   "Seconds a write to a hub client may make no progress before the client counts as stopped (a suspended Emacs)
-and its connection is closed.  A line goes out `drgnx-hub--piece' characters at a time, each one progress."
+and its connection is closed.  A line goes out `drgnx-hub--piece' bytes at a time, each one progress."
   :type 'number :group 'drgnx)
 
 (defconst drgnx-hub--piece 8192
-  "Characters of a line the hub writes to a client at a time: a long line to a client that reads, slowly, is
+  "Bytes of a line (unibyte, as `json-serialize' makes it) the hub writes to a client at a time: a piece may end
+inside a UTF-8 sequence, which the client's decoder carries over.  A long line to a client that reads, slowly, is
 progress, never a stopped client.  A write that fills the client's socket waits 20 ms before it tries again, and
 macOS's local sockets hold 8 KB: a snapshot of a few MB takes seconds there.")
 
@@ -165,13 +166,15 @@ macOS's local sockets hold 8 KB: a snapshot of a few MB takes seconds there.")
 another client on top of it — the ones beneath cannot go on meanwhile.")
 
 (defun drgnx-hub--client-stuck-p (conn &optional more)
-  "Has CONN stopped reading: its write the innermost one in progress (one beneath it cannot go on, so it is not
-judged) and older than `drgnx-hub-client-stuck-after', or its queue (with MORE bytes) past
-`drgnx-hub-client-max-queued'?"
+  "Has CONN stopped reading, while a write to it is in progress: its queue (with MORE bytes) past
+`drgnx-hub-client-max-queued', wherever its write is (beneath a live client's that goes on for long, it would grow
+without end), or its write the innermost one in progress and without progress for `drgnx-hub-client-stuck-after'
+\(one beneath cannot go on, so its time is not judged)?"
   (let ((since (process-get conn :sending)))
-    (and since (eq conn (car drgnx-hub--writing))
-         (or (> (- (float-time) since) drgnx-hub-client-stuck-after)
-             (> (+ (or (process-get conn :queued-bytes) 0) (or more 0)) drgnx-hub-client-max-queued)))))
+    (and since
+         (or (> (+ (or (process-get conn :queued-bytes) 0) (or more 0)) drgnx-hub-client-max-queued)
+             (and (eq conn (car drgnx-hub--writing))
+                  (> (- (float-time) since) drgnx-hub-client-stuck-after))))))
 
 (defun drgnx-hub--drop (conn)
   (message "drgnx hub: a client stopped reading; its connection is closed")

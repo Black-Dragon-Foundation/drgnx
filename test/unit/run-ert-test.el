@@ -422,6 +422,15 @@ runner gave it: DRGNX_TEST_ELN_DIR and the first effective directory of `native-
     (make-directory dir t)
     dir))
 
+(ert-deftest drgnx-run-ert/the-time-factor-is-a-number-of-at-least-one ()
+  ;; DRGNX_TEST_TIME_FACTOR scales :timing budgets on a slower machine: never below 1 (a budget is never tightened),
+  ;; and anything that is not a plain number is 1
+  (pcase-dolist (`(,value . ,factor) '((nil . 1) ("" . 1) ("2" . 2) ("1.5" . 1.5) ("1" . 1) ("0.5" . 1) ("0" . 1)
+                                       ("-2" . 1) ("2x" . 1) ("x" . 1) (" 2" . 1) ("1e3" . 1)))
+    (let ((process-environment (cons (if value (concat "DRGNX_TEST_TIME_FACTOR=" value) "DRGNX_TEST_TIME_FACTOR")
+                                     process-environment)))
+      (should (equal (cons value (drgnx-run-ert-time-factor)) (cons value factor))))))
+
 (ert-deftest drgnx-run-ert/a-files-temp-dir-is-short-whatever-the-tmpdir ()
   ;; A Unix socket's path has at most 103 bytes on macOS (107 on Linux), and the hub's tests make one three levels
   ;; below a file's temp dir: a file's Emacs gets a directory of its own in a short root of the run's, right in
