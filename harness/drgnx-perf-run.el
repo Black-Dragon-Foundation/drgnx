@@ -311,7 +311,93 @@ error if it does not hold)."
       (frames :measure "(list :frame (drgnx-perf-frame-ms 5))")
       (redisplay :each ,(drgnx-perf-run--visit-fixture-form) :measure "(list :redisplay (drgnx-perf-redisplay-ms 30))" :teardown ,kill-fixture)
       (startup :daemon t)
-      (memory :measure "(progn (garbage-collect) (list :rss_kb (drgnx-perf-rss-kb)))"))))
+      (memory :measure "(progn (garbage-collect) (list :rss_kb (drgnx-perf-rss-kb)))")
+      ;; last: evil cannot be unloaded from the session, so the workloads above stay as they were without it
+      ,@(drgnx-perf-run--modal-workloads))))
+
+;;;; Typing, motions and the Explorer with evil (Vim keys)
+
+(defconst drgnx-perf-run-modal-skipped
+  "perf: evil workloads skipped — set DRGNX_MODAL_ELPA (docs/develop/perf.md)"
+  "The line printed when the evil workloads are left out.")
+
+(defconst drgnx-perf-run--vim-keys '((vim app editing window)) "The key stack the evil workloads run with.")
+(defconst drgnx-perf-run--vscode-keys '((vscode app editing window)) "The key stack they put back.")
+
+(defun drgnx-perf-run--modal-elpa ()
+  "The package directory $DRGNX_MODAL_ELPA names (evil and what it needs, as `drgnx sync' makes it), or nil."
+  (let ((dir (getenv "DRGNX_MODAL_ELPA")))
+    (and dir (not (string-empty-p dir)) (expand-file-name dir))))
+
+(defun drgnx-perf-run--modal-setup-form (elpa)
+  "The setup of an evil workload: evil's directories on `load-path' in the session, the engine started, Vim keys on."
+  (prin1-to-string
+   `(progn
+      (dolist (d (directory-files ,elpa t "\\`\\(evil\\|goto-chg\\|evil-collection\\|annalist\\)-[0-9]"))
+        (add-to-list 'load-path d))
+      (drgnx-modules-set-enabled 'editor/evil t)
+      (unless (drgnx-modal-engine-start-now 'evil) (error "evil did not start (DRGNX_MODAL_ELPA %s)" ,elpa))
+      (drgnx-keys-use ',drgnx-perf-run--vim-keys)
+      t)))
+
+(defun drgnx-perf-run--modal-teardown-form (&rest more)
+  "The teardown of an evil workload: the VS Code keys back, then MORE (forms as strings)."
+  (format "(progn (drgnx-keys-use '%S) %s t)" drgnx-perf-run--vscode-keys (string-join more " ")))
+
+(defun drgnx-perf-run--modal-workloads ()
+  "The workloads with evil, or nil without $DRGNX_MODAL_ELPA (`drgnx-perf-run-modal-skipped' says so)."
+  (when-let* ((elpa (drgnx-perf-run--modal-elpa)))
+    (let* ((setup (drgnx-perf-run--modal-setup-form elpa))
+           (keys (lambda (k n) (make-list n (list :keys k))))
+           (kill-fixture (format "(when-let* ((b (find-buffer-visiting %S))) (with-current-buffer b (set-buffer-modified-p nil)) (kill-buffer b))"
+                                 (or drgnx-perf-run--fixture "")))
+           (kill-motions "(when-let* ((b (find-buffer-visiting drgnx-perf--motions-file))) (with-current-buffer b (set-buffer-modified-p nil)) (kill-buffer b)) (delete-file drgnx-perf--motions-file)"))
+      `((typing-evil :setup ,setup
+                     :each ,(concat "(progn " (drgnx-perf-run--visit-fixture-form) " (evil-normal-state) t)")
+                     :actions ,(append (list (list :keys "i"))
+                                       (make-list 6 (list :type "(let ((x 1)) (message \"%s\" x)) "))
+                                       (list (list :keys "<escape>")))
+                     :check "(with-current-buffer (window-buffer (selected-window)) (and (buffer-modified-p) (eq evil-state 'normal)))" ; typed, back in normal
+                     :teardown ,(drgnx-perf-run--modal-teardown-form kill-fixture))
+        ;; 5000 lines of the fixture, from the middle: down, by words, by paragraphs, by half pages and back
+        (motions-evil :setup ,(format "(progn %s (defvar drgnx-perf--motions-file nil) (defvar drgnx-perf--motions-start nil)
+                                       (setq drgnx-perf--motions-file (make-temp-file \"drgnx-perf-motions\" nil \".el\"))
+                                       (with-temp-file drgnx-perf--motions-file
+                                         (insert-file-contents %S) (goto-char (point-min)) (forward-line 5000) (delete-region (point) (point-max)))
+                                       t)"
+                                      setup (or drgnx-perf-run--fixture ""))
+                      :each "(progn (let ((f drgnx-perf--motions-file))
+                                      (when-let* ((b (find-buffer-visiting f))) (with-current-buffer b (set-buffer-modified-p nil)) (kill-buffer b))
+                                      (find-file f) (goto-char (/ (point-max) 2)) (forward-line 0)
+                                      (setq drgnx-perf--motions-start (point)) (evil-normal-state))
+                                    t)"
+                      :actions ,(append (funcall keys "j" 20) (funcall keys "w" 20) (funcall keys "}" 10)
+                                        (funcall keys "C-d" 5) (funcall keys "C-u" 5))
+                      :check "(with-current-buffer (window-buffer (selected-window)) (and (eq evil-state 'normal) (/= (point) drgnx-perf--motions-start)))" ; moved
+                      :teardown ,(drgnx-perf-run--modal-teardown-form kill-motions))
+        (explorer-evil :setup ,(format "(progn %s (drgnx-explorer-set-roots (list %S)) (drgnx-wb-show-sidebar) t)" setup drgnx-ui-repo-dir)
+                       :each "(progn (drgnx-explorer-focus) (goto-char (point-min)) (drgnx-wb-focus-editor) t)"
+                       :actions ,(append (list (list :keys "SPC E")) (funcall keys "j" 10) (list (list :keys "<escape>")))
+                       :check "(with-current-buffer \" *drgnx explorer*\" (= (line-number-at-pos) 11))" ; ten rows down, in the Explorer
+                       :teardown ,(drgnx-perf-run--modal-teardown-form))))))
+
+(defun drgnx-perf-run--relative-fails (results)
+  "Failure lines: `typing-evil' input p95 more than 1 ms over `typing' in the same RESULTS (both measured)."
+  (let ((plain (drgnx-perf--get results 'typing '(:input :p95)))
+        (evil (drgnx-perf--get results 'typing-evil '(:input :p95))))
+    (when (and (numberp plain) (numberp evil) (> (- evil plain) 1.0))
+      (list (format "typing-evil input p95 %s ms is %s ms over typing's %s ms (evil may add at most 1 ms)"
+                    (drgnx-perf--round evil) (drgnx-perf--round (- evil plain)) (drgnx-perf--round plain))))))
+
+(defun drgnx-perf-run--only-regexp ()
+  "The regexp $DRGNX_PERF_ONLY (workload names to run), or nil when it is unset or empty."
+  (let ((re (getenv "DRGNX_PERF_ONLY"))) (and re (not (string-empty-p re)) re)))
+
+(defun drgnx-perf-run--only (workloads)
+  "WORKLOADS whose name matches $DRGNX_PERF_ONLY (all of them when it is unset)."
+  (if-let* ((re (drgnx-perf-run--only-regexp)))
+      (seq-filter (lambda (w) (string-match-p re (symbol-name (car w)))) workloads)
+    workloads))
 
 (defun drgnx-perf-run--daemon-env (tmp)
   "The environment of a measured daemon: the harness's allowlist (never tokens, never a trace or safe
@@ -453,12 +539,15 @@ history), keep the history.  An exit code: 0 all hold, 1 a failure, 3 not judged
 passed `drgnx-perf-max-load' before or during the run (other processes took the CPU, so the timings
 say nothing about drgnx; the history is not written).  AUDIT (`--audit'): the hook audit on — judged on
 the hook budget only (the audit adds its own cost to the other numbers)."
-  (let* ((limit (drgnx-perf-max-load)) (start (drgnx-perf-run--wait-for-quiet limit)))
-    (if (drgnx-perf-busy (list start) limit)
-        (progn (princ (format "perf: not run — the machine stayed busy (load %.1f > %.1f); rerun when it is quiet (no other test runs or agents), or set DRGNX_PERF_MAX_LOAD.\n"
-                              start limit))
-               3)
-      (drgnx-perf-run--judged audit limit start))))
+  (unless (drgnx-perf-run--modal-elpa) (princ (concat drgnx-perf-run-modal-skipped "\n")))
+  (if (null (drgnx-perf-run--only (drgnx-perf-run--workloads)))
+      (progn (princ (format "perf: DRGNX_PERF_ONLY %S matches no workload\n" (drgnx-perf-run--only-regexp))) 1)
+    (let* ((limit (drgnx-perf-max-load)) (start (drgnx-perf-run--wait-for-quiet limit)))
+      (if (drgnx-perf-busy (list start) limit)
+          (progn (princ (format "perf: not run — the machine stayed busy (load %.1f > %.1f); rerun when it is quiet (no other test runs or agents), or set DRGNX_PERF_MAX_LOAD.\n"
+                                start limit))
+                 3)
+        (drgnx-perf-run--judged audit limit start)))))
 
 (defun drgnx-perf-run--judged (audit limit start)
   "The run of `drgnx-perf-run' on a quiet machine: LIMIT the load allowed, START the load before it."
@@ -466,7 +555,7 @@ the hook budget only (the audit adds its own cost to the other numbers)."
          (drgnx-perf-run--fixture (drgnx-perf-run--make-fixture))
          (s (drgnx-ui-start "drgnx" "1400x800" 60)) (sess (drgnx-ui-own-session (plist-get s :name))) results)
     (unwind-protect
-        (dolist (w (drgnx-perf-run--workloads))
+        (dolist (w (drgnx-perf-run--only (drgnx-perf-run--workloads)))
           (message "perf: %s…" (car w))
           (push (cons (car w) (condition-case err (drgnx-perf-run-workload sess (cdr w) audit)
                                 (error (list :error (error-message-string err)))))
@@ -494,12 +583,17 @@ the hook budget only (the audit adds its own cost to the other numbers)."
             (if (or fails errors) 1 (princ "perf audit: every hook function within its budget\n") 0))))
        (t
         (let* ((history (expand-file-name "perf-history.jsonl" (drgnx-ui-state-root)))
-               (fails (drgnx-perf-verdict results (drgnx-perf-run--budgets)))
+               (only (drgnx-perf-run--only-regexp))
+               ;; judged: the budgets of the workloads that ran (a filtered run, or no evil workloads, leaves the rest out)
+               (fails (append (drgnx-perf-verdict results (seq-filter (lambda (b) (assq (car b) results)) (drgnx-perf-run--budgets)))
+                              (drgnx-perf-run--relative-fails results)))
                (worse (drgnx-perf-regressions history results)))
           (dolist (f fails) (princ (format "FAIL %s\n" f)))
           (dolist (r worse) (princ (format "FAIL regression: %s\n" r)))
-          (unless errors (drgnx-perf-history-append history (drgnx-perf-run--commit) results (seq-max (cons 0 (delq nil loads)))))
-          (princ (format "history: %s%s\n" history (if errors " (not written: a workload failed)" "")))
+          (unless (or errors only) (drgnx-perf-history-append history (drgnx-perf-run--commit) results (seq-max (cons 0 (delq nil loads)))))
+          (princ (format "history: %s%s\n" history (cond (errors " (not written: a workload failed)")
+                                                         (only " (not written: DRGNX_PERF_ONLY ran some of the workloads)")
+                                                         (t ""))))
           (if (or fails worse errors) 1
             (princ "perf: every budget holds\n") 0)))))))
 

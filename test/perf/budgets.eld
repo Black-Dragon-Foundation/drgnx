@@ -18,4 +18,11 @@
  (diff-scrolling (:input :p95) 16) (diff-scrolling (:input :max) 50)
  (replace-typing (:input :p95) 16) (replace-typing (:input :max) 50)
  (live-view (:input :p95) 16) (live-view (:input :max) 50)
- (redisplay (:redisplay :p95) 16))
+ (redisplay (:redisplay :p95) 16)
+ ;; evil (Vim keys), M12d Task 13: the same budgets as the stack without it; the Explorer's keys within the bench's 8 ms.
+ ;; PROVISIONAL: measured on a busy machine (load 3-5), worst of 5 runs: typing-evil p95 13.0 / max 19.9, motions-evil
+ ;; 9.6 / 11.5, explorer-evil 6.4 / 6.4 ms; a quiet-machine run pins them (docs/develop/perf.md).
+ ;; typing-evil p95 may also exceed typing p95 by at most 1 ms in the same run (`drgnx-perf-run--relative-fails').
+ (typing-evil (:input :p95) 16) (typing-evil (:input :max) 50)
+ (motions-evil (:input :p95) 16) (motions-evil (:input :max) 50)
+ (explorer-evil (:input :p95) 8) (explorer-evil (:input :max) 50))
