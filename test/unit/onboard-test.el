@@ -923,6 +923,43 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
         (drgnx-onboard--look-step `(:interactive t :options ,opts))
         (should-not asked)))))
 
+(ert-deftest drgnx-onboard/chat-check-in-batch-offers-no-restart ()
+  ;; gptel installed, module extra/llm on, gptel not loaded yet: in batch the Finish step never offers a restart, so
+  ;; the result says it loads at the next start; a restart is needed only when this run turned the module on or
+  ;; installed the package.
+  (drgnx-onboard-test--with root
+    (let ((drgnx-onboard--restart-needed nil))
+      (should-not (featurep 'gptel))
+      (make-directory (expand-file-name "gptel-0.9.9" (drgnx-elpa-dir)) t)
+      (drgnx-modules-write-state (list :disabled nil))
+      ;; batch, module already on
+      (should noninteractive)
+      (let ((r (drgnx-onboard--chat-module '(:interactive nil))))
+        (should (car r))
+        (should (string-search "loads at drgnx's next start" (cdr r)))
+        (should-not (string-search "Finish" (cdr r)))
+        (should-not drgnx-onboard--restart-needed))
+      ;; the app, module already on: nothing changed by this run, nothing to restart for
+      (let ((noninteractive nil) (r nil))
+        (setq r (drgnx-onboard--chat-module '(:interactive t)))
+        (should (string-search "loads at drgnx's next start" (cdr r)))
+        (should-not (string-search "Finish" (cdr r)))
+        (should-not drgnx-onboard--restart-needed))
+      ;; the app, this run turns the module on: the restart is offered
+      (drgnx-modules-write-state (list :disabled '(extra/llm)))
+      (cl-letf (((symbol-function 'y-or-n-p) (lambda (_) t)))
+        (let ((noninteractive nil) (r nil))
+          (setq r (drgnx-onboard--chat-module '(:interactive t)))
+          (should (string-search "the Finish step offers it" (cdr r)))
+          (should drgnx-onboard--restart-needed)))
+      ;; batch, this run turns it on: no Finish offer is promised
+      (setq drgnx-onboard--restart-needed nil)
+      (drgnx-modules-write-state (list :disabled '(extra/llm)))
+      (cl-letf (((symbol-function 'y-or-n-p) (lambda (_) t)))
+        (let ((r (drgnx-onboard--chat-module '(:interactive t))))
+          (should (string-search "loads at drgnx's next start" (cdr r)))
+          (should-not (string-search "Finish" (cdr r))))))))
+
 (ert-deftest drgnx-onboard/new-modules-need-a-restart-and-finish-offers-it ()
   ;; Packages installed into a running drgnx load at its next start: Look and Keys says so, and Finish (in the
   ;; app) offers the restart — drgnx open, detached, then quit — or says how to do it yourself.

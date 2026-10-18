@@ -98,8 +98,10 @@ daemon starts — only once you open a window — and nothing is ever asked.
 **Chat needs its module.** Chat is gptel, module `extra/llm`, which the `minimal` and `ide` presets leave off. The
 step checks it: run interactively it asks "Turn on Chat (module extra/llm)?", turns it on and, when gptel is not in
 drgnx's packages yet, installs it (`drgnx sync` as a job, as Look and Keys does); Chat then works from the next start
-(the result says so, and the Finish step offers the restart). A module that is on with gptel not installed yet is
-reported with "run drgnx sync"; with `--non-interactive` an off module is reported as "Chat needs module extra/llm
+(the result says so, and in the app the Finish step offers the restart; in `drgnx onboard` it says "loads at drgnx's
+next start", since Finish offers nothing there). A module that is already on with gptel installed but not loaded yet
+says the same, and asks for no restart. A module that is on with gptel not installed yet is reported with "run drgnx
+sync"; with `--non-interactive` an off module is reported as "Chat needs module extra/llm
 (Preferences: Modules)" and the step warns.
 
 **OpenRouter (cloud key).** In the drgnx app it asks for your key (`read-passwd`: never shown, never written to a file

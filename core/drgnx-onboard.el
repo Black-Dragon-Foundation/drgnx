@@ -826,20 +826,22 @@ came for the snippets found."
   "Chat (gptel) is module extra/llm, off in the minimal and ide presets: (ON . TEXT), ON nil also when installing its
 package failed.  Whether gptel is installed: drgnx's packages.  Interactive, when it is off: asked whether to turn it
 on, and gptel installed (drgnx sync, as Look and Keys does) when it is missing.  Either loads at the next start: the
-text says so."
-  (let ((next "from the next start: restart drgnx to load it (the Finish step offers it)"))
+text says so — with the Finish step's restart offer only when this run changed something and drgnx runs with windows
+\(Finish never offers it in batch); a restart is needed (`drgnx-onboard--restart-needed') only then."
+  (let ((next (if noninteractive "; it loads at drgnx's next start"
+                " from the next start: restart drgnx to load it (the Finish step offers it)"))
+        (later "; it loads at drgnx's next start"))
     (cond ((not (drgnx-module-disabled-p 'extra/llm))
            (cond ((featurep 'gptel) (cons t "Chat (module extra/llm) is on"))
                  ((drgnx-onboard--installed-p 'gptel)
-                  (setq drgnx-onboard--restart-needed t)
-                  (cons t (concat "Chat (module extra/llm) is on " next)))
+                  (cons t (concat "Chat (module extra/llm) is on" later)))
                  (t (cons t "Chat (module extra/llm) is on; its package is not installed yet: run drgnx sync (or the Look and Keys step)"))))
           ((and (plist-get ctx :interactive) (y-or-n-p "Turn on Chat (module extra/llm)? "))
            (drgnx-modules-toggle 'extra/llm)
            (setq drgnx-onboard--restart-needed t)
            (let ((done (if (drgnx-onboard--installed-p 'gptel) 'ok (drgnx-onboard--sync-job))))
              (if (eq done 'ok)
-                 (cons t (concat "Chat (module extra/llm) turned on " next))
+                 (cons t (concat "Chat (module extra/llm) turned on" next))
                (pcase-let ((`(,_ ,why ,log) done))
                  (cons nil (format "Chat (module extra/llm) turned on, but its package was not installed: %s — run drgnx sync in a terminal to retry%s"
                                    why (if log (format " (log: %s)" log) "")))))))

@@ -493,7 +493,7 @@ with BODY."
             (should-not (drgnx-module-disabled-p 'extra/llm))
             (should (equal (caar jobs) "Installing the packages"))
             (should (equal (last (cdar jobs) 2) (list (expand-file-name "bin/drgnx" drgnx-dir) "sync")))
-            (should (string-match-p "restart drgnx" (cdr r))))
+            (should (string-match-p "loads at drgnx's next start" (cdr r))))      ; batch: no Finish offer promised
           (should drgnx-onboard--restart-needed)
           ;; on, not installed, without interaction: says how; nothing runs
           (setq jobs nil)
@@ -505,7 +505,7 @@ with BODY."
           (let ((r (drgnx-onboard--chat-module '(:interactive t))))
             (should (car r))
             (should-not jobs)
-            (should (string-match-p "from the next start" (cdr r))))
+            (should (string-match-p "loads at drgnx's next start" (cdr r))))
           (drgnx-modules-write-state (list :disabled '(extra/llm)))
           (drgnx-onboard--chat-module '(:interactive t))
           (should-not jobs)
