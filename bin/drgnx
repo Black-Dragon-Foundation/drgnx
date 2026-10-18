@@ -261,8 +261,15 @@ cmd_test() {
 
 ## drgnx open / drgnx PATH — one drgnx, a daemon started on the first open (core/drgnx-session.el)
 
+emacsclient_cmd() { # EC: the emacsclient command; on macOS without XDG_RUNTIME_DIR (a shell exports it, Finder does not:
+  # the daemon's socket is in Emacs' non-XDG directory under $TMPDIR either way, core/drgnx-session.el)
+  EC=("$(emacsclient_bin)")
+  if [[ "$(uname -s)" == Darwin ]]; then EC=(env -u XDG_RUNTIME_DIR "${EC[@]}"); fi
+}
+
 client() { # emacsclient to drgnx's server ($DRGNX_SERVER_NAME, default drgnx); -a false: never starts an Emacs itself
-  "$(emacsclient_bin)" -a false -s "${DRGNX_SERVER_NAME:-drgnx}" "$@"
+  local EC; emacsclient_cmd
+  "${EC[@]}" -a false -s "${DRGNX_SERVER_NAME:-drgnx}" "$@"
 }
 
 open_wait_init() { # OPEN_WAIT: seconds to wait for a starting daemon, $DRGNX_OPEN_WAIT, default 30 (a cold start natively compiles)
@@ -416,7 +423,7 @@ detach() { # CMD… — start CMD in a session of its own, outliving this shell 
 
 open_terminal() { # FORM — a terminal frame of the daemon here; in the terminal that Task 5c's opt-in names, when this one is limited
   local form="$1" server="${DRGNX_SERVER_NAME:-drgnx}" capable
-  local ec=("$(emacsclient_bin)" -t -s "$server") eform=()
+  local EC ec eform=(); emacsclient_cmd; ec=("${EC[@]}" -t -s "$server")
   [[ -z "$form" ]] || eform=(-e "$form")
   # off by default: the daemon answers nil unless the user chose a terminal (drgnx-tty-open-in).  Never over SSH or
   # without a display, as this caller sees it: the daemon's own environment is the desktop's

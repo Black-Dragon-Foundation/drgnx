@@ -172,6 +172,7 @@ client.log, one line per call, every argument followed by \\037; emacs and syste
   (let ((f (lambda (name) (shell-quote-argument (expand-file-name name dir)))))
     (dolist (spec `(("emacsclient"
                      ,(format "printf '%%s\\037' \"$@\" >> %s; echo >> %s
+echo \"${XDG_RUNTIME_DIR-unset}\" >> \"${0%%/*}/../xdg.log\"
 for a in \"$@\"; do last=\"$a\"; [ \"$a\" = -c ] && c=1; done
 [ \"$last\" = t ] && [ -f \"${0%%/*}/../slow-probe\" ] && sleep 0.3
 if [ -n \"$c\" ]; then
@@ -282,6 +283,21 @@ with a display: `drgnx open' stays graphical (the unit tier has no DISPLAY, and 
                            (drgnx-bin-test--p "-e" "(drgnx-session-gui-frame-p)")   ; it waits for the window
                            (drgnx-bin-test--c "-n" "-e" "(drgnx-session-raise)")
                            (drgnx-bin-test--c "-n" "-e" drgnx-bin-test--load-keys)))))))
+
+;; M12a-31: on macOS emacsclient runs without XDG_RUNTIME_DIR, so Terminal and Finder reach one socket.
+(ert-deftest drgnx-bin/emacsclient-ignores-xdg-runtime-dir-on-darwin ()
+  (drgnx-bin-test--with-open
+    (drgnx-bin-test--touch dir "running" "gui")
+    (let ((env (cons "XDG_RUNTIME_DIR=/xdg/run" env)) (xdg (expand-file-name "xdg.log" dir)))
+      ;; Linux: the variable reaches emacsclient
+      (drgnx-bin-test--call drgnx-bin-test--bin env "open")
+      (should (equal (delete-dups (split-string (drgnx-bin-test--slurp xdg) "\n" t)) '("/xdg/run")))
+      ;; Darwin (a fake uname): it does not
+      (delete-file xdg)
+      (write-region "#!/bin/sh\necho Darwin\n" nil (expand-file-name "uname" pathdir))
+      (set-file-modes (expand-file-name "uname" pathdir) #o755)
+      (drgnx-bin-test--call drgnx-bin-test--bin env "open")
+      (should (equal (delete-dups (split-string (drgnx-bin-test--slurp xdg) "\n" t)) '("unset"))))))
 
 (ert-deftest drgnx-bin/open-waits-for-a-slow-daemon ()
   ;; DRGNX_OPEN_WAIT seconds (30 by default) for the daemon; it says so a third of the way in (10 s of 30).
