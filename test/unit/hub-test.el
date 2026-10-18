@@ -754,6 +754,16 @@ OUT and exits."
           (drgnx-hub--private-dir fresh)))
       (should (= (file-modes (directory-file-name fresh)) #o700)))))
 
+(ert-deftest drgnx-hub/a-directory-vanishing-mid-check-is-no-error ()
+  ;; the check reads the directory once: one that goes between two reads (its mode then nil) is not an error, and
+  ;; whatever the check meets, asking whether a hub runs answers, never signals
+  (drgnx-hub-test--with
+    (drgnx-hub-serve (drgnx-hub-socket))
+    (cl-letf (((symbol-function 'file-modes) (lambda (&rest _) nil)))       ; gone by the second read
+      (should-not (drgnx-hub--untrusted (drgnx-hub-socket))))
+    (cl-letf (((symbol-function 'drgnx-hub--untrusted) (lambda (_) (error "Vanished"))))
+      (should-not (condition-case nil (progn (drgnx-hub-running-p) nil) (error t))))))
+
 (ert-deftest drgnx-hub/without-a-runtime-dir-the-socket-is-short-and-private ()
   (drgnx-hub-test--with
     (let ((process-environment (cons "XDG_RUNTIME_DIR" process-environment)))

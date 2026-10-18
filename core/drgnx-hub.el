@@ -79,12 +79,14 @@ be a directory (not a link) of this user's with no access for others (0700), and
 user's.  Nothing else can then have made it.  A directory that is not there is a reason too: what is checked is
 then connected to by path, and a missing one could be another user's by then (one swapped in and out of /tmp)."
   (let* ((dir (directory-file-name (file-name-directory socket)))
-         (d (file-attributes dir)) (s (file-attributes socket)))
+         (d (file-attributes dir)) (s (file-attributes socket))
+         ;; its mode from what was read once ("drwx------"): a directory gone since is no error
+         (mode (and d (cl-loop with m = (file-attribute-modes d) for i from 1 to 9
+                               unless (memq (aref m i) '(?- ?S ?T)) sum (ash 1 (- 9 i))))))
     (cond ((null d) (format "%s does not exist (no hub)" dir))
           ((not (eq (file-attribute-type d) t)) (format "%s is not a directory" dir))
           ((not (eql (file-attribute-user-id d) (user-uid))) (format "%s belongs to another user" dir))
-          ((/= 0 (logand (file-modes dir 'nofollow) #o077))
-           (format "%s is open to other users (mode %o; it must be 700)" dir (file-modes dir 'nofollow)))
+          ((/= 0 (logand mode #o077)) (format "%s is open to other users (mode %o; it must be 700)" dir mode))
           ((and s (not (eql (file-attribute-user-id s) (user-uid)))) (format "%s belongs to another user" socket)))))
 
 (defun drgnx-hub--lock (socket) (concat socket ".lock"))
@@ -560,9 +562,10 @@ reader), a newer event never reaches another before this one."
     (dolist (c subscribers) (drgnx-hub--drain c))))
 
 (defun drgnx-hub--ping-socket (socket)
-  "Does a hub answer on SOCKET?  (At most a second.)  One where it is not private to this user is never asked."
-  (when (and (file-exists-p socket) (not (drgnx-hub--untrusted socket)))
-    (condition-case nil
+  "Does a hub answer on SOCKET?  (At most a second; never an error.)  One where it is not private to this user is
+never asked."
+  (condition-case nil
+      (when (and (file-exists-p socket) (not (drgnx-hub--untrusted socket)))
         (let* ((got nil)
                (c (make-network-process :name "drgnx-hub-probe" :family 'local :service socket :noquery t
                                         :coding 'utf-8-unix :filter (lambda (_p s) (setq got (concat got s))))))
@@ -572,8 +575,8 @@ reader), a newer event never reaches another before this one."
                        (while (and (not (and got (string-search "\n" got))) (< (float-time) deadline))
                          (accept-process-output nil 0.02)))
                      (and got (string-search "\"pid\"" got) t))
-            (delete-process c)))
-      (error nil))))
+            (delete-process c))))
+    (error nil)))
 
 (defun drgnx-hub-serve (socket)
   "Be the hub on SOCKET: the gateway started, the registrations a previous hub kept taken back.  Returns the server.
