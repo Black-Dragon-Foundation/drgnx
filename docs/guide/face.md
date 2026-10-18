@@ -60,7 +60,7 @@ as a box. Change one for your font:
 | `warning` | ⚠ | `!` | `dot` | ● | `*` |
 | `ok` | ✓ | `+` | `circle` | ○ | `o` |
 | `busy` | ◎ | `@` | `waiting` | ◐ | `?` |
-| `sep` | ` · ` | ` \| ` | | | |
+| `sep` | ` · ` | ` \| ` | `flag` | ⚑ | `!` |
 
 For code: `(drgnx-face-glyph 'close)` is the string for the selected frame, `(drgnx-face-glyph 'close FRAME)` for another.
 
@@ -74,11 +74,11 @@ Status Bar** (View menu, palette); `drgnx-statusbar-mode` is the switch.
 |---|---|---|
 | `branch` | `⑂ main` (the branch, from the buffer's version control) | the repository status |
 | `problems` | `✓` when flymake finds none, `◐` while a checker has not reported yet, else `⚠ 1` (errors) and `⚠ 2` (warnings) | the problems list |
-| `tests` | test results (arrives with the work tracker; nothing yet) | |
-| `jobs` | the job badge when a job needs you | job status |
-| `agents` | `◎ 1 busy`, and `◐ 1 waiting on you` when an agent needs an answer | the Agents tab |
-| `modal` | the modal-editing state, when that module is loaded | |
-| `misc` | what stock Emacs shows beside the file: the buffer's process (`:run`), a keyboard macro being recorded (`● Rec`), `Narrowed`, `Remote: host`, and the entries of `global-mode-string` (the clock, a battery) without the job badge | |
+| `tests` | `✓ tests 41/41` or `✕ tests 2 failed`: the last test run | its output |
+| `jobs` | `◎ 2 jobs` while jobs run, and `⚑1` when cards of jobs wait on you | job status |
+| `agents` | `◎ 1 busy`, and `◐ 1 waiting on you` (in the error colour) when something waits for your answer | the Agents tab |
+| `modal` | the modal-editing state (`NORMAL`, `INSERT` …), when that module is loaded | |
+| `misc` | what stock Emacs shows beside the file: the buffer's process (`:run`), a keyboard macro being recorded (`● Rec`), `Narrowed`, `Remote: host`, and the entries of `global-mode-string` (the clock, a battery, other modules' marks) without the job badge | |
 
 | Right | Shows | Click |
 |---|---|---|
@@ -97,9 +97,29 @@ own `mode-line-format` is nil keeps none. In a narrow window the bar never wraps
 `drgnx-statusbar-drop-order` (line endings first), and the branch is cut with an ellipsis, never dropped. The glyphs
 come from `drgnx-face-glyphs`, so a terminal that is not UTF-8 shows ASCII (` | ` between segments instead of ` · `).
 
+**Tests.** A compilation (`M-x compile`, `project-compile`) whose command matches
+`drgnx-statusbar-test-command-regexp` (the word `test`: `bin/drgnx test`, `make test`, `cargo test`) is a test run.
+When it finishes, the bar reads its last summary line once — ERT's `Ran 41 tests, 41 results as expected, 0
+unexpected`, or `bin/drgnx test --ui`'s `ui ERT: 27/27 passed` (`drgnx-statusbar-test-count-regexps`) — and shows
+`✓ tests 41/41`, or `✕ tests 2 failed`; a click shows that compilation. Other code reports a run with
+`(drgnx-statusbar-note-tests PASSED FAILED SOURCE)`.
+
+**Jobs.** `◎ 2 jobs` counts the jobs the hub says are running (asked when a job or a card changes, never on
+redisplay; nothing while there is no hub). `⚑1` is the job badge's count of cards and messages waiting on you.
+
+**Waiting on you.** The number in `◐ 1 waiting on you` is the sum of `drgnx-statusbar-waiting-functions`: each
+returns how many things wait for you. drgnx counts the agents' permission requests and edits to review; a module of
+your own can add a function and call `drgnx-statusbar-refresh` when its count changes.
+
+**Other modules' marks.** Anything a package puts on `global-mode-string` shows in `misc`, with no change to the bar.
+
 The bar is redrawn after every command that moved point, changed the text or selected another window (both windows
 trade the full and the compact bar a moment later, when the most recently used editor window is settled), and when
-the agents' counts change; nothing else redraws it, so it costs nothing while you do not type.
+agents, the hub or git report a change (`drgnx-statusbar-refresh`: at most one redraw every 0.2 seconds, however many
+changes come in, and only when a count changed). Each window keeps the bar it last drew, with what it was drawn from
+(the buffer, point, the text's change count, the width, full or compact, the counts above and the buffer's
+version-control, encoding, indentation, mode, narrowing and checker state): a redisplay that changes none of these
+reuses it, so a window you do not type in costs almost nothing however often Emacs redraws the screen.
 
 | Setting | Default | What it does |
 |---|---|---|
@@ -111,6 +131,9 @@ the agents' counts change; nothing else redraws it, so it costs nothing while yo
 | `drgnx-statusbar-indent-vars` | the common indent offsets | the variables `indent` reads, first bound one wins |
 | `drgnx-statusbar-modes` | `(prog-mode text-mode conf-mode)` | the modes (besides file buffers) that get the bar |
 | `drgnx-statusbar-misc-exclude` | the job badge | entries of `global-mode-string` that `misc` leaves out |
+| `drgnx-statusbar-test-command-regexp` | `\_<test\_>` | a compilation whose command matches is a test run |
+| `drgnx-statusbar-test-count-regexps` | ERT's and `bin/drgnx test --ui`'s summary lines | where the counts come from |
+| `drgnx-statusbar-waiting` (face) | inherits `error` | the colour of the waiting count |
 
 Reorder or drop with `setopt`, and add your own in `config.el`:
 
@@ -123,8 +146,10 @@ Reorder or drop with `setopt`, and add your own in `config.el`:
 (setopt drgnx-statusbar-right (cons 'clock drgnx-statusbar-right))
 ```
 
-A segment function runs on every redisplay of its window, so it must only read what is already known (a variable,
-a buffer-local value): never call git, start a process, read a file or ask a language server. Its text is plain text
+A segment function runs whenever its window's bar is drawn again, so it must only read what is already known (a
+variable, a buffer-local value): never call git, start a process, read a file or ask a language server. A segment
+that shows something point, the text and the settings above do not cover is drawn again when you next move or type,
+or within 0.2 seconds when your code calls `(drgnx-statusbar-refresh t)` after the change. Its text is plain text
 with faces: a `%` is a percent sign (not a mode-line construct) and `display` properties are removed, so the bar can
 count its columns. One that signals an error shows nothing, is skipped for 10 seconds and then tried again (when it
 works, it comes back; when it fails again, it is skipped for another 10 seconds), and the message is kept in

@@ -5,6 +5,8 @@
 (require 'drgnx-chrome)
 (load (expand-file-name "modules/ui/drgnx-face" drgnx-dir) nil t)
 (load (expand-file-name "modules/ui/drgnx-statusbar" drgnx-dir) nil t)
+(defvar drgnx-job-ui--badge)
+(defvar compilation-arguments)
 
 (defmacro drgnx-statusbar-test--with (&rest body)
   "BODY with the status bar's segments, lists and error record kept away from the rest of the test process.
@@ -223,8 +225,9 @@ Segments a, b, c are defined: their text is A, B, C."
         (should (string-match-p "feature/x" (text 'branch)))
         (setq-local vc-mode nil)
         (should-not (text 'branch)))
-      ;; tests has nothing cached yet; misc has nothing to say in a plain buffer
-      (should-not (text 'tests))
+      ;; no test run yet; misc has nothing to say in a plain buffer
+      (let ((drgnx-statusbar-tests-state nil) (drgnx-statusbar--tick (1+ drgnx-statusbar--tick)))
+        (should-not (text 'tests)))
       (with-temp-buffer
         (let ((global-mode-string nil) (mode-line-process nil) (defining-kbd-macro nil))
           (should-not (text 'misc)))))))
@@ -452,23 +455,332 @@ Segments a, b, c are defined: their text is A, B, C."
         (should (= (length drgnx-statusbar--errors) 1))
         (should (eq (car (car drgnx-statusbar--errors)) 'host))))))
 
+(defmacro drgnx-statusbar-test--state (&rest body)
+  "BODY with the drgnx side's state (ticks, tests, jobs, agents, the refresh timer, the memo) kept to this test."
+  (declare (indent 0))
+  `(let ((drgnx-statusbar--tick 0) (drgnx-statusbar-tests-state nil) (drgnx-statusbar--jobs-state nil)
+         (drgnx-statusbar--agents-state nil) (drgnx-statusbar--refresh-timer nil)
+         (drgnx-statusbar--redraw-wanted nil) (drgnx-statusbar--jobs-wanted nil)
+         (drgnx-statusbar--state-texts (make-hash-table :test #'eq))
+         (drgnx-statusbar--memo (make-hash-table :test #'eq :weakness 'key))
+         (drgnx-statusbar-waiting-functions (list #'drgnx-statusbar-agents-waiting)))
+     (unwind-protect (progn ,@body)
+       (when (timerp drgnx-statusbar--refresh-timer) (cancel-timer drgnx-statusbar--refresh-timer)))))
+
+(defun drgnx-statusbar-test--seg (id)
+  "The plain text segment ID says now (nil when it says nothing)."
+  (when-let* ((s (funcall (plist-get (gethash id drgnx-statusbar--segments) :fn)))) (substring-no-properties s)))
+
 (ert-deftest drgnx-statusbar/agent-changes-redraw-only-when-the-counts-change ()
   (require 'drgnx-agents)
   (drgnx-statusbar-test--with
-    (drgnx-statusbar--define-defaults)
-    (let ((calls 0) (drgnx-statusbar--agents-seen nil)
-          (drgnx-agents--sessions (list (drgnx-agents--make :name "a" :status 'busy)
-                                        (drgnx-agents--make :name "b" :status 'idle))))
-      (cl-letf (((symbol-function 'force-mode-line-update) (lambda (&optional all) (should all) (cl-incf calls))))
-        (drgnx-statusbar--agents-changed (car drgnx-agents--sessions))
-        (should (= calls 1))
-        (drgnx-statusbar--agents-changed (car drgnx-agents--sessions))   ; the same counts: nothing to redraw
-        (should (= calls 1))
-        (should (equal (substring-no-properties (drgnx-statusbar--seg-agents)) "◎ 1 busy"))
-        (setf (drgnx-agent-session-permissions (cadr drgnx-agents--sessions)) '(ask))
-        (drgnx-statusbar--agents-changed (cadr drgnx-agents--sessions))
-        (should (= calls 2))
-        (should (equal (substring-no-properties (drgnx-statusbar--seg-agents)) "◎ 1 busy ◐ 1 waiting on you"))))))
+    (drgnx-statusbar-test--state
+      (drgnx-statusbar--define-defaults)
+      (let ((calls 0)
+            (drgnx-agents--sessions (list (drgnx-agents--make :name "a" :status 'busy)
+                                          (drgnx-agents--make :name "b" :status 'idle))))
+        (cl-letf (((symbol-function 'force-mode-line-update) (lambda (&optional all) (should all) (cl-incf calls))))
+          (drgnx-statusbar--refresh-now)
+          (should (= calls 1))
+          (drgnx-statusbar--refresh-now)                 ; the same counts: nothing to redraw
+          (should (= calls 1))
+          (should (equal (drgnx-statusbar-test--seg 'agents) "◎ 1 busy"))
+          (setf (drgnx-agent-session-permissions (cadr drgnx-agents--sessions)) '(ask))
+          (drgnx-statusbar--refresh-now)
+          (should (= calls 2))
+          (should (equal (drgnx-statusbar-test--seg 'agents) "◎ 1 busy ◐ 1 waiting on you")))))))
+
+;;;; The drgnx side (A5): tests, jobs, agents, other modules' marks
+
+(defun drgnx-statusbar-test--compilation (command &rest lines)
+  "A buffer as a finished compilation of COMMAND leaves it, with LINES of output."
+  (let ((b (generate-new-buffer " *sb-compilation*")))
+    (with-current-buffer b
+      (setq-local compilation-arguments (list command nil nil nil))
+      (insert (format "-*- mode: compilation -*-\n%s\n" command))
+      (dolist (l lines) (insert l "\n"))
+      (insert "\nCompilation finished at Sun Oct 18 12:00:00\n"))
+    b))
+
+(ert-deftest drgnx-statusbar/tests-from-an-ert-summary ()
+  (drgnx-statusbar-test--with
+    (drgnx-statusbar-test--state
+      (drgnx-statusbar--define-defaults)
+      (cl-letf (((symbol-function 'force-mode-line-update) #'ignore))
+        (should-not (drgnx-statusbar-test--seg 'tests))  ; no run yet: nothing
+        ;; ERT's summary (the last one counts)
+        (let ((b (drgnx-statusbar-test--compilation
+                  "bin/drgnx test"
+                  "Ran 3 tests, 1 results as expected, 2 unexpected (2026-10-18 12:00:00+0000, 0.1 sec)"
+                  "   passed  41/41  drgnx-x/y (0.001 sec)"
+                  "Ran 41 tests, 41 results as expected, 0 unexpected (2026-10-18 12:00:01+0000, 2.3 sec)")))
+          (unwind-protect
+              (let ((tick drgnx-statusbar--tick))
+                (drgnx-statusbar--compilation-finished b "finished\n")
+                (should (equal (drgnx-statusbar-test--seg 'tests) "✓ tests 41/41"))
+                (should (equal (plist-get drgnx-statusbar-tests-state :passed) 41))
+                (should (equal (plist-get drgnx-statusbar-tests-state :failed) 0))
+                (should (eq (plist-get drgnx-statusbar-tests-state :source) b))
+                (should (numberp (plist-get drgnx-statusbar-tests-state :at)))
+                (should (> drgnx-statusbar--tick tick))) ; the bars' memo knows it changed
+            (kill-buffer b)))
+        ;; failures
+        (let ((b (drgnx-statusbar-test--compilation
+                  "make test" "Ran 43 tests, 41 results as expected, 2 unexpected (2026-10-18, 2.3 sec)")))
+          (unwind-protect
+              (progn (drgnx-statusbar--compilation-finished b "exited abnormally with code 1\n")
+                     (should (equal (drgnx-statusbar-test--seg 'tests) "✕ tests 2 failed"))
+                     (let ((s (funcall (plist-get (gethash 'tests drgnx-statusbar--segments) :fn))))
+                       (should (eq (get-text-property 0 'face s) 'error))))
+            (kill-buffer b)))
+        ;; bin/drgnx test --ui's line
+        (let ((b (drgnx-statusbar-test--compilation "bin/drgnx test --ui" "ui ERT: 25/27 passed")))
+          (unwind-protect
+              (progn (drgnx-statusbar--compilation-finished b "finished\n")
+                     (should (equal (drgnx-statusbar-test--seg 'tests) "✕ tests 2 failed"))
+                     (drgnx-statusbar-note-tests 27 0 'timeline)          ; C3's events call this directly
+                     (should (equal (drgnx-statusbar-test--seg 'tests) "✓ tests 27/27")))
+            (kill-buffer b)))))))
+
+(ert-deftest drgnx-statusbar/a-non-test-compilation-is-ignored ()
+  (drgnx-statusbar-test--with
+    (drgnx-statusbar-test--state
+      (drgnx-statusbar--define-defaults)
+      (cl-letf (((symbol-function 'force-mode-line-update) #'ignore))
+        (dolist (cmd '("make all" "cargo build --features testing" "DRGNX_TEST_SELECTOR=x make"))
+          (let ((b (drgnx-statusbar-test--compilation cmd "Ran 2 tests, 2 results as expected, 0 unexpected")))
+            (unwind-protect (drgnx-statusbar--compilation-finished b "finished\n")
+              (kill-buffer b))))
+        (should-not drgnx-statusbar-tests-state)
+        ;; a test command with no summary (killed early) changes nothing either
+        (let ((b (drgnx-statusbar-test--compilation "bin/drgnx test" "Loading...")))
+          (unwind-protect (drgnx-statusbar--compilation-finished b "killed\n")
+            (kill-buffer b)))
+        (should-not drgnx-statusbar-tests-state)
+        (should-not (drgnx-statusbar-test--seg 'tests))))))
+
+(ert-deftest drgnx-statusbar/jobs-and-cards ()
+  (drgnx-statusbar-test--with
+    (drgnx-statusbar-test--state
+      (drgnx-statusbar--define-defaults)
+      (let ((drgnx-job-ui--badge "") (asked 0)
+            (answer '(:jobs [(:id "a" :status "running") (:id "b" :status "running") (:id "c" :status "done")])))
+        (cl-letf (((symbol-function 'force-mode-line-update) #'ignore)
+                  ((symbol-function 'drgnx-hub-call)
+                   (lambda (method params cb) (should (equal method "job/status")) (should-not params)
+                     (cl-incf asked) (funcall cb answer nil))))
+          (should-not (drgnx-statusbar-test--seg 'jobs))
+          ;; a job event: the hub is asked once (on the refresh), and the count is cached
+          (drgnx-statusbar--hub-event "job" '(:id "a"))
+          (drgnx-statusbar--hub-event "agent-entries" '(:id "x"))
+          (should (= asked 0))
+          (drgnx-statusbar--refresh-now)
+          (should (= asked 1))
+          (should (equal (drgnx-statusbar-test--seg 'jobs) "◎ 2 jobs"))
+          (dotimes (_ 10) (drgnx-statusbar-test--seg 'jobs))
+          (should (= asked 1))                            ; redisplay never asks
+          ;; cards waiting (the job badge's count) come after
+          (setq drgnx-job-ui--badge " ⚑3")
+          (should (equal (drgnx-statusbar-test--seg 'jobs) "◎ 2 jobs ⚑3"))
+          (setq answer '(:jobs [(:id "a" :status "running") (:id "c" :status "done")]))
+          (drgnx-statusbar--hub-event "card" '(:id 1 :job "a"))
+          (drgnx-statusbar--refresh-now)
+          (should (equal (drgnx-statusbar-test--seg 'jobs) "◎ 1 job ⚑3"))
+          (setq answer '(:jobs []))
+          (drgnx-statusbar--hub-event "job" '(:id "a"))
+          (drgnx-statusbar--refresh-now)
+          (should (equal (drgnx-statusbar-test--seg 'jobs) "⚑3"))
+          ;; the hub went away: a count that cannot be read again is not shown
+          (setq answer '(:jobs [(:id "a" :status "running")]))
+          (drgnx-statusbar--hub-event "job" '(:id "a"))
+          (drgnx-statusbar--refresh-now)
+          (should (equal (drgnx-statusbar-test--seg 'jobs) "◎ 1 job ⚑3"))
+          (setq drgnx-job-ui--badge "")
+          (drgnx-statusbar--hub-gone)
+          (should-not (drgnx-statusbar-test--seg 'jobs)))))))
+
+(ert-deftest drgnx-statusbar/agents-busy-and-waiting ()
+  (require 'drgnx-agents)
+  (drgnx-statusbar-test--with
+    (drgnx-statusbar-test--state
+      (drgnx-statusbar--define-defaults)
+      (let ((drgnx-agents--sessions (list (drgnx-agents--make :name "a" :status 'busy)
+                                          (drgnx-agents--make :name "b" :status 'idle :permissions '((:id 1))))))
+        (cl-letf (((symbol-function 'force-mode-line-update) #'ignore))
+          (drgnx-statusbar--refresh-now)
+          (let ((s (funcall (plist-get (gethash 'agents drgnx-statusbar--segments) :fn))))
+            (should (equal (substring-no-properties s) "◎ 1 busy ◐ 1 waiting on you"))
+            (should (eq (get-text-property (string-search "◐" s) 'face s) 'drgnx-statusbar-waiting))
+            (should (eq (get-text-property (string-search "waiting" s) 'face s) 'drgnx-statusbar-waiting))
+            (should-not (get-text-property 0 'face s)))
+          (should (equal (face-attribute 'drgnx-statusbar-waiting :inherit) 'error))
+          ;; nobody busy, nothing waiting: nothing to say
+          (setf (drgnx-agent-session-status (car drgnx-agents--sessions)) 'idle
+                (drgnx-agent-session-permissions (cadr drgnx-agents--sessions)) nil)
+          (drgnx-statusbar--refresh-now)
+          (should-not (drgnx-statusbar-test--seg 'agents))
+          ;; an edit to review waits on you too
+          (setf (drgnx-agent-session-reviews (car drgnx-agents--sessions)) '((:id 2) (:id 3)))
+          (drgnx-statusbar--refresh-now)
+          (should (equal (drgnx-statusbar-test--seg 'agents) "◐ 2 waiting on you"))
+          ;; ASCII on a terminal that is not UTF-8
+          (cl-letf (((symbol-function 'drgnx-face--ascii-frame-p) (lambda (_frame) t)))
+            (should (equal (drgnx-statusbar-test--seg 'agents) "? 2 waiting on you"))))))))
+
+(ert-deftest drgnx-statusbar/waiting-functions-add-up ()
+  (require 'drgnx-agents)
+  (drgnx-statusbar-test--with
+    (drgnx-statusbar-test--state
+      (drgnx-statusbar--define-defaults)
+      (let ((drgnx-agents--sessions (list (drgnx-agents--make :name "b" :status 'idle :permissions '((:id 1)))))
+            (open-questions 2))
+        (cl-letf (((symbol-function 'force-mode-line-update) #'ignore)
+                  ((symbol-function 'drgnx-statusbar-test--questions) (lambda () open-questions))
+                  ((symbol-function 'drgnx-statusbar-test--broken) (lambda () (error "boom")))
+                  ((symbol-function 'drgnx-statusbar-test--not-a-number) (lambda () "three")))
+          (add-hook 'drgnx-statusbar-waiting-functions #'drgnx-statusbar-test--questions)
+          (add-hook 'drgnx-statusbar-waiting-functions #'drgnx-statusbar-test--broken)
+          (add-hook 'drgnx-statusbar-waiting-functions #'drgnx-statusbar-test--not-a-number)
+          (drgnx-statusbar--refresh-now)
+          ;; 1 permission + 2 open questions; one that fails or says no number counts nothing and is recorded
+          (should (equal (drgnx-statusbar-test--seg 'agents) "◐ 3 waiting on you"))
+          (should (assq 'waiting drgnx-statusbar--errors))
+          ;; a module whose count changes asks for a refresh
+          (setq open-questions 0)
+          (drgnx-statusbar--refresh-now)
+          (should (equal (drgnx-statusbar-test--seg 'agents) "◐ 1 waiting on you")))))))
+
+(ert-deftest drgnx-statusbar/misc-shows-other-modules-segments ()
+  (drgnx-statusbar-test--with
+    (drgnx-statusbar-test--state
+      (drgnx-statusbar--define-defaults)
+      (let ((drgnx-statusbar-left '(misc)) (drgnx-statusbar-right nil)
+            (drgnx-job-ui--badge " ⚑2") (mode-line-process nil) (defining-kbd-macro nil)
+            (global-mode-string (list "" '(:eval (drgnx-job-ui--badge-segment)))))
+        (cl-letf (((symbol-function 'drgnx-job-ui--badge-segment) (lambda () drgnx-job-ui--badge))
+                  ;; a batch Emacs formats every mode-line construct as "": strings and :eval forms, as a frame would
+                  ((symbol-function 'format-mode-line)
+                   (lambda (c &rest _)
+                     (mapconcat (lambda (e) (cond ((stringp e) e) ((eq (car-safe e) :eval) (eval (cadr e) t)) (t "")))
+                                c ""))))
+          (drgnx-statusbar-test--in-buffer #'emacs-lisp-mode
+            (should-not (string-match-p "⚑" (drgnx-statusbar-mode-line)))   ; the jobs segment shows the badge
+            ;; another module (the remote mark, the trust mark) pushes an entry: it appears, no coupling
+            (push '(:eval (propertize "TRUST" 'face 'warning)) global-mode-string)
+            (should (string-match-p "TRUST" (drgnx-statusbar-mode-line)))
+            (should-not (string-match-p "⚑" (drgnx-statusbar-mode-line)))
+            ;; …and goes when it is taken out
+            (pop global-mode-string)
+            (should-not (string-match-p "TRUST" (drgnx-statusbar-mode-line)))
+            ;; a plain string is shown as it is
+            (let ((global-mode-string " 12:30")) (should (string-match-p "12:30" (drgnx-statusbar-mode-line))))))))))
+
+(defvar drgnx-statusbar-test--refreshing nil "Non-nil inside the status bar's refresh (other timers may redraw too).")
+(defvar drgnx-statusbar-test--refreshes 0 "How many refreshes ran.")
+
+(defun drgnx-statusbar-test--mark-refresh (fn &rest args)
+  (setq drgnx-statusbar-test--refreshes (1+ drgnx-statusbar-test--refreshes))
+  (let ((drgnx-statusbar-test--refreshing t)) (apply fn args)))
+
+(ert-deftest drgnx-statusbar/refresh-is-debounced ()
+  (require 'drgnx-agents)
+  (drgnx-statusbar-test--with
+    (drgnx-statusbar-test--state
+      (drgnx-statusbar--define-defaults)
+      (let ((calls 0) (drgnx-statusbar-test--refreshes 0)
+            (drgnx-agents--sessions (list (drgnx-agents--make :name "a" :status 'busy))))
+        (advice-add 'drgnx-statusbar--refresh-now :around #'drgnx-statusbar-test--mark-refresh)
+        (unwind-protect
+            (cl-letf (((symbol-function 'force-mode-line-update)
+                       (lambda (&optional all) (when drgnx-statusbar-test--refreshing (should all) (cl-incf calls)))))
+              ;; 20 agent changes in 0.1 s: one refresh, one redraw of every bar
+              (dotimes (_ 20)
+                (drgnx-statusbar--agents-changed (car drgnx-agents--sessions))
+                (sleep-for 0.005))
+              (should (= calls 0))
+              (should (= drgnx-statusbar-test--refreshes 0))
+              (sleep-for 0.4)
+              (should (= drgnx-statusbar-test--refreshes 1))
+              (should (= calls 1))
+              (should (equal (drgnx-statusbar-test--seg 'agents) "◎ 1 busy"))
+              ;; the hub's and git's change hooks go through the same debounce
+              (drgnx-statusbar--hub-event "agent-entries" nil)
+              (drgnx-statusbar--git-changed "/repo/")
+              (drgnx-statusbar--git-changed "/repo/")
+              (sleep-for 0.4)
+              (should (= drgnx-statusbar-test--refreshes 2))
+              (should (= calls 2))                             ; git: one redraw, the agents' counts did not change
+              (should-not drgnx-statusbar--refresh-timer))
+          (advice-remove 'drgnx-statusbar--refresh-now #'drgnx-statusbar-test--mark-refresh))))))
+
+(ert-deftest drgnx-statusbar/a-redisplay-that-changes-nothing-reuses-the-bar ()
+  (drgnx-statusbar-test--with
+    (drgnx-statusbar-test--state
+      (let ((calls 0) (global-mode-string nil))
+        (drgnx-statusbar-define-segment 'a :fn (lambda () (cl-incf calls) "A"))
+        (cl-letf (((symbol-function 'force-mode-line-update) #'ignore))
+          (drgnx-statusbar-test--in-buffer #'emacs-lisp-mode
+            (insert "one\ntwo\nthree\n")
+            (let ((first (drgnx-statusbar-mode-line)))
+              (dotimes (_ 50) (should (eq (drgnx-statusbar-mode-line) first)))
+              (should (= calls 1))
+              (cl-flet ((rebuilt-p () (let ((c calls)) (drgnx-statusbar-mode-line) (/= calls c))))
+                (goto-char (point-min))                         ; point moved
+                (should (rebuilt-p)) (should-not (rebuilt-p))
+                (insert "x")                                    ; the text changed (and point)
+                (should (rebuilt-p)) (should-not (rebuilt-p))
+                (delete-char 1)                                 ; the text changed, point did not
+                (should (rebuilt-p)) (should-not (rebuilt-p))
+                (drgnx-statusbar-note-tests 1 0)                ; a hook-driven segment's state
+                (should (rebuilt-p)) (should-not (rebuilt-p))
+                (setq-local vc-mode " Git-other")               ; a buffer-local the segments read
+                (should (rebuilt-p)) (should-not (rebuilt-p))
+                (narrow-to-region 1 4)
+                (should (rebuilt-p)) (should-not (rebuilt-p))
+                (widen)
+                (should (rebuilt-p))
+                (setq global-mode-string '("MARK"))             ; another module's mark
+                (should (rebuilt-p)) (should-not (rebuilt-p))
+                (drgnx-statusbar-define-segment 'b :fn (lambda () "B2"))   ; a segment redefined
+                (should (rebuilt-p))
+                (should (string-match-p "B2" (drgnx-statusbar-mode-line)))
+                (should-not (rebuilt-p))
+                (drgnx-statusbar-refresh t)                    ; a segment of your own says its state changed
+                (should (rebuilt-p))
+                ;; the compact bar in another window is its own entry
+                (let ((other (split-window-right)))
+                  (unwind-protect
+                      (progn (set-window-buffer other (current-buffer))
+                             (with-selected-window other (should (rebuilt-p)) (should-not (rebuilt-p))))
+                    (delete-window other)))))))))))
+
+(ert-deftest drgnx-statusbar/hooks-and-timers-are-owned-by-the-mode ()
+  (let ((drgnx-chrome-editor-mode-line drgnx-chrome-editor-mode-line)
+        (drgnx-signal--subscribers nil)
+        (hooks '((post-command-hook . drgnx-statusbar--post-command)
+                 (drgnx-agents-changed-functions . drgnx-statusbar--agents-changed)
+                 (drgnx-hub-event-functions . drgnx-statusbar--hub-event)
+                 (drgnx-hub-disconnect-functions . drgnx-statusbar--hub-gone)
+                 (drgnx-git-changed-functions . drgnx-statusbar--git-changed)
+                 (compilation-finish-functions . drgnx-statusbar--compilation-finished))))
+    (drgnx-statusbar-test--state
+      (cl-letf (((symbol-function 'drgnx-chrome-apply) #'ignore) ((symbol-function 'force-mode-line-update) #'ignore))
+        (unwind-protect
+            (progn
+              (drgnx-statusbar-mode 1)
+              (drgnx-statusbar-mode 1)                       ; idempotent
+              (dolist (h hooks)
+                (should (= 1 (seq-count (lambda (f) (eq f (cdr h))) (default-value (car h))))))
+              (drgnx-statusbar-refresh)
+              (should (timerp drgnx-statusbar--refresh-timer))
+              (puthash (selected-window) [x] drgnx-statusbar--memo)
+              (let ((timer drgnx-statusbar--refresh-timer))
+                (drgnx-statusbar-mode -1)
+                (should-not (memq timer timer-list)))
+              (dolist (h hooks) (should-not (memq (cdr h) (default-value (car h)))))
+              (should-not drgnx-statusbar--refresh-timer)
+              (should (= 0 (hash-table-count drgnx-statusbar--memo))))
+          (drgnx-statusbar-mode -1))))))
 
 (ert-deftest drgnx-statusbar/the-modal-indicator-moves-into-the-bar ()
   (let (calls (drgnx-chrome-editor-mode-line drgnx-chrome-editor-mode-line))
