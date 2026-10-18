@@ -109,6 +109,8 @@
         (file-reopen-tab "SPC f r")
         (file-new-window :none "in the palette")
         (file-close-window :none ":q in the last editor; the palette")
+        (trust-folder :none "the palette; click \"restricted\" in the mode line")
+        (untrust-folder :none "the palette")
         (go-recent "SPC b b")
         (go-symbol-project "SPC s y")
         (go-back :none "C-o (Vim's jump back)")

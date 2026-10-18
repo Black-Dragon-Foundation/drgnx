@@ -108,6 +108,8 @@
         (file-reopen-tab "C-S-t")
         (file-new-window "C-S-n")
         (file-close-window "C-q" :mac "s-W")
+        (trust-folder :none "the palette; click \"restricted\" in the mode line")
+        (untrust-folder :none "the palette")
         (go-recent "C-<tab>" :mac "C-<tab>")
         (go-symbol-project "C-t")
         (go-back "M-<left>" :mac "C--")
