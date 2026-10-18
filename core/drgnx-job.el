@@ -750,25 +750,38 @@ none, only the tool); `user' otherwise, for the user's servers and anything that
           (t 'user))))
 
 (defun drgnx-job--agent-config-p (path tree)
-  "Does PATH, inside TREE, configure the agents that work in TREE — TREE's `.claude' or anything in it (settings: a
-permission mode, allow rules, hooks), or a `.mcp.json' anywhere in TREE?  Once `..' and symlinks are resolved; case
-ignored, for a file system that ignores it."
-  (let ((rel (file-relative-name (file-truename (expand-file-name path tree)) (file-truename tree)))
-        (case-fold-search t))
-    (string-match-p "\\`\\.claude\\(?:/\\|\\'\\)\\|\\(?:\\`\\|/\\)\\.mcp\\.json\\'" rel)))
+  "Does PATH, inside TREE, configure the agents that work in TREE — a `.claude' directory or anything in it, at any
+depth (settings: a permission mode, allow rules, hooks; skills), or a `.mcp.json' anywhere in TREE?  Once `//', `..'
+and symlinks are resolved; case ignored, for a file system that ignores it.  A PATH that cannot be placed inside TREE
+counts as one (fail closed)."
+  (let* ((true (file-truename (replace-regexp-in-string "\\`//+" "/" (expand-file-name path tree))))
+         (rel (file-relative-name true (file-truename tree)))
+         (case-fold-search t))
+    (or (file-name-absolute-p rel) (string-match-p "\\`\\.\\.\\(?:/\\|\\'\\)" rel)
+        (string-match-p "\\(?:\\`\\|/\\)\\.claude\\(?:/\\|\\'\\)\\|\\(?:\\`\\|/\\)\\.mcp\\.json\\'" rel))))
 
-(defun drgnx-job--names-agent-config-p (line)
+(defun drgnx-job--names-agent-config-p (line tree)
   "Does command LINE name the agents' configuration: a `.mcp.json', or a `.claude' (`.claude/', `.claude.json'…) that
-is not just the way into a job's worktree (`.claude/worktrees/NAME…' with no `..' and no other `.claude' after it)?
-Case ignored.  Best effort, like `drgnx-job--outward-commands': a shell can build a name unseen."
-  (let ((case-fold-search t) (start 0) (found nil))
+is not just part of the path of TREE itself (the worktree, `…/.claude/worktrees/NAME', with no `..' and no other
+`.claude' after it)?  Case ignored.  Best effort, like `drgnx-job--outward-commands': a shell can build a name unseen."
+  (let ((case-fold-search t) (start 0) (found nil)
+        (own (delete-dups (list (directory-file-name (expand-file-name tree)) (directory-file-name (file-truename tree))))))
     (if (string-match-p "\\.mcp\\.json" line) t
       (while (and (not found) (string-match "\\.claude\\(?:[^[:alnum:]_-]\\|\\'\\)" line start))
         (let ((b (match-beginning 0)))
           (setq start (1+ b))
-          (unless (and (eq (string-match "\\.claude/worktrees/[[:alnum:]_][^[:space:];&|()<>`'\"]*" line b) b)
-                       (not (string-search ".." (match-string 0 line)))
-                       (not (string-match-p "\\.claude" (substring (match-string 0 line) (length ".claude/worktrees/")))))
+          (unless (seq-some
+                   (lambda (o)                      ; B is in an occurrence of TREE's path that ends there
+                     (let ((p (string-search o line (max 0 (- b (length o))))))
+                       (and p (<= p b) (< b (+ p (length o)))
+                            ;; the path goes on (group 1) to where the word ends
+                            (eq (string-match (concat (regexp-quote o) "\\(/[^[:space:];&|()<>`'\"]*\\)?"
+                                                      "\\(?:[[:space:];&|()<>`'\"]\\|\\'\\)")
+                                              line p)
+                                p)
+                            (let ((rest (or (match-string 1 line) "")))
+                              (not (or (string-search ".." rest) (string-match-p "\\.claude" rest)))))))
+                   own)
             (setq found t))))
       found)))
 
@@ -797,7 +810,7 @@ hold for every agent that works in TREE after it."
       'ask)
      ((and (eq kind 'execute)
            (let ((line (concat (or (plist-get tool :title) "") "\n" (drgnx-job--command tool))))
-             (or (string-match-p drgnx-job--outward-commands line) (drgnx-job--names-agent-config-p line))))
+             (or (string-match-p drgnx-job--outward-commands line) (drgnx-job--names-agent-config-p line tree))))
       'ask)
      ((memq kind allowed) 'allow)
      ;; a reviewer reads the diff

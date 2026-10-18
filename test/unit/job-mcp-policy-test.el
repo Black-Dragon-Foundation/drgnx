@@ -170,6 +170,26 @@ when given) and as the title (TITLE instead, when given)."
     ;; reading it is no change
     (should (eq (drgnx-job-policy "implement" (drgnx-job-mcp-test--edit (concat tree ".claude/settings.json") "read") tree) 'allow))))
 
+(ert-deftest drgnx-job-mcp/a-path-with-a-double-slash-root-asks ()
+  ;; `//' before an absolute path: the same file, but `file-relative-name' takes it for another root
+  (drgnx-job-mcp-test--tree
+    (dolist (p (list (concat "/" tree ".claude/settings.local.json") (concat "//" tree ".mcp.json")))
+      (should (eq (drgnx-job-policy "implement" (drgnx-job-mcp-test--edit p) tree) 'ask)))
+    ;; whatever cannot be placed inside the tree is taken for the agents' configuration
+    (should (drgnx-job--agent-config-p "/" tree))))
+
+(ert-deftest drgnx-job-mcp/a-claude-directory-at-any-depth-asks ()
+  ;; the CLI loads nested skill directories
+  (drgnx-job-mcp-test--tree
+    (dolist (p '("src/.claude/skills/x/SKILL.md" "src/.claude" "a/b/.claude/settings.json" "src/.CLAUDE/agents/a.md"))
+      (should (eq (drgnx-job-policy "implement" (drgnx-job-mcp-test--edit (concat tree p)) tree) 'ask)))
+    (should (eq (drgnx-job-policy "implement" (drgnx-job-mcp-test--edit (concat tree "src/my.claude.md")) tree) 'allow)))
+  (let ((tree "/r/.claude/worktrees/j-1/"))
+    (dolist (cmd '("echo x > src/.claude/skills/a/SKILL.md"
+                   ;; a `.claude/worktrees/NAME' that is not the worktree's own path: nested in it
+                   "mkdir -p .claude/worktrees/j-1/x" "cp x src/.claude/worktrees/j-1/a" "cd /r/.claude/worktrees/j-2 && make"))
+      (should (eq (drgnx-job-policy "implement" (list :kind "execute" :title cmd) tree) 'ask)))))
+
 (ert-deftest drgnx-job-mcp/a-symlink-to-the-agents-configuration-asks ()
   (drgnx-job-mcp-test--tree
     (make-directory (concat tree ".claude") t)
@@ -202,6 +222,8 @@ when given) and as the title (TITLE instead, when given)."
       (dolist (p '(".claude/settings.local.json" ".mcp.json" "conf/settings.json"))
         (should-not (drgnx-job--request s "fs/write_text_file" (list :path (concat tree p) :content "{}") 1))
         (should-not (file-exists-p (concat tree p))))
+      (should-not (drgnx-job--request s "fs/write_text_file" (list :path (concat "/" tree ".claude/settings.local.json") :content "{}") 1))
+      (should-not (file-exists-p (concat tree ".claude/settings.local.json")))
       (should (seq-find (lambda (c) (equal (plist-get c :kind) "write")) (drgnx-coord-cards id "open")))
       (should (equal (drgnx-job--request s "fs/write_text_file" (list :path (concat tree "src/x.el") :content "x") 2) '(:result nil))))))
 

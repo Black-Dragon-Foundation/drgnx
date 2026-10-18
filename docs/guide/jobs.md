@@ -168,11 +168,13 @@ the perf workload `job-window` ([perf.md](../develop/perf.md)). Developer detail
   or whose kind is not a string, asks. Other calls of the kind `other` (loading a skill, a to-do list) are allowed
   as before. A tool that Claude Code itself allows from your settings (`permissions.allow`) never asks anyone,
   drgnx included.
-- **The agents' configuration asks.** A change to the worktree's `.claude/` (its settings can set a permission mode
-  such as `bypassPermissions`, allow rules or hooks, and hold for the reviewer and every agent that works in the
-  worktree after it) or to a `.mcp.json` anywhere in the worktree is a card: an edit, a delete, a move, a direct
-  write, symlinks and `..` resolved. A command that names `.claude` or `.mcp.json` asks too (the worktree's own path,
-  `.claude/worktrees/ID-N`, does not count); like the rest of the command check, this is best effort.
+- **The agents' configuration asks.** A change to a `.claude/` directory at any depth of the worktree (its settings
+  can set a permission mode such as `bypassPermissions`, allow rules or hooks, and hold for the reviewer and every
+  agent that works in the worktree after it; nested ones hold skills) or to a `.mcp.json` anywhere in the worktree
+  is a card: an edit, a delete, a move, a direct write, with `//`, `..` and symlinks resolved; a path that cannot be
+  placed inside the worktree asks too. A command that names `.claude` or `.mcp.json` asks as well (the worktree's
+  own absolute path, `…/.claude/worktrees/ID-N`, does not count); like the rest of the command check, this is best
+  effort.
 - **What the cards do not hold.** Until job agents run in a sandbox, they run as your user. The command check above
   is not a sandbox: a command an agent may run in its worktree can also reach drgnx's hub and answer a card itself,
   start an MCP server's program directly, or write files the checks do not see. The cards keep an agent's tool
