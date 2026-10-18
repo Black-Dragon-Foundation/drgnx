@@ -22,6 +22,13 @@
 ;;               says "coord: TEXT" (the tool's answer)
 ;;   meta        says "meta: JSON", the _meta its session/new or session/load got ("meta: none" without one)
 ;;   mode        says "mode: MODE", the mode session/set_mode last set ("mode: unset" before one)
+;;   probe NAME…  tries each named escape and says "probe NAME: reached" or "probe NAME: blocked (WHY)", one line per
+;;               name (a sandbox's tests: docs/develop/sandbox.md).  hub-socket hub-card hub-card-no-hello work-db
+;;               coord-forged git-config git-hooks git-ref-main git-ref-job git-pointer git-objects-delete dot-env
+;;               dirty-file emacs-server bus ssh-agent abstract-socket host-loopback ssh-key other-repo other-task env
+;;               nested-git fsmonitor-plant, and connect HOST:PORT (through HTTPS_PROXY when set).  The paths are in
+;;               MOCK_PROBE_* variables of its environment, which name paths and ids and never contents; a probe
+;;               never says what it read (env says which variables are set, "reached (NAME,…)").  Writes open the file for appending nothing, so a file that exists is kept.
 ;;   anything else: "You said: …" in two chunks
 ;; Usage comes as a usage_update (:used :size 1000) at the end of each turn (claude-agent-acp's shape).
 ;; MOCK_ACP_NO_LOAD / MOCK_ACP_NO_STEER turn off session/load and steering; MOCK_ACP_STEER_FAILS
@@ -113,6 +120,186 @@ decision log, complete the task; say what happened."
       (delete-process p)
       (mock--steps sid (list (cons 0 (lambda () (mock--say sid (concat "coord: " (or done "no answer"))))))))))
 
+;;;; Probes: `probe NAME…' tries each escape the sandbox must close and says "probe NAME: reached" or "probe NAME:
+;;;; blocked (WHY)" per name.  The paths come from MOCK_PROBE_* variables; they name paths and ids, never contents, and a
+;;;; probe never prints what it read.
+
+(defun mock-probe--why (err)
+  "The reason ERR (a signal) gives, as the system worded it (\"No such file or directory\")."
+  (if (and (memq (car err) '(file-error file-missing permission-denied file-already-exists file-date-error))
+           (stringp (nth 2 err)))
+      (nth 2 err)
+    (error-message-string err)))
+
+(defun mock-probe--env (name) (let ((v (getenv name))) (and v (not (string-empty-p v)) v)))
+
+(defun mock-probe--need (name)
+  "The path in MOCK_PROBE_NAME, or a signal that the test did not give one."
+  (or (mock-probe--env name) (error "%s is not set" name)))
+
+(defun mock-probe--read (var)
+  "Read one byte of the file VAR names."
+  (with-temp-buffer (insert-file-contents-literally (mock-probe--need var) nil 0 1))
+  t)
+
+(defun mock-probe--open-for-write (var)
+  "Open the file VAR names for writing, appending nothing (a file that exists is not changed)."
+  (write-region "" nil (mock-probe--need var) t 'silent)
+  t)
+
+(defun mock-probe--connect-local (var)
+  "Connect to the Unix socket VAR names (an abstract one starts with @)."
+  (let* ((path (mock-probe--need var))
+         (path (if (string-prefix-p "@" path) (concat "\0" (substring path 1)) path)))
+    (delete-process (make-network-process :name "mock-probe" :family 'local :service path :noquery t))
+    t))
+
+(defun mock-probe--connect-tcp (host port)
+  (delete-process (make-network-process :name "mock-probe" :host host :service port :noquery t))
+  t)
+
+(defun mock-probe--exchange (proc send done)
+  "Send SEND to PROC and collect what comes back until DONE (a function of the text so far) holds, 5 s at most."
+  (let ((out ""))
+    (set-process-filter proc (lambda (_p s) (setq out (concat out s))))
+    (process-send-string proc send)
+    (let ((deadline (+ (float-time) 5)))
+      (while (and (not (funcall done out)) (process-live-p proc) (< (float-time) deadline))
+        (accept-process-output proc 0.05)))
+    (accept-process-output proc 0)
+    out))
+
+(defun mock-probe--hub (card hello)
+  "Send the hub `job/card' dismiss for CARD (an id in an environment variable), after a `hello {cap}' when HELLO and
+the cap file MOCK_PROBE_HUB_CAP names can be read.  t when the hub answers with a result; else a signal with its error."
+  (let* ((proc (make-network-process :name "mock-probe" :family 'local :service (mock-probe--need "MOCK_PROBE_HUB_SOCKET")
+                                     :noquery t :coding 'utf-8-unix))
+         (cap (and hello (mock-probe--env "MOCK_PROBE_HUB_CAP") (file-readable-p (getenv "MOCK_PROBE_HUB_CAP"))
+                   (with-temp-buffer (insert-file-contents (getenv "MOCK_PROBE_HUB_CAP")) (string-trim (buffer-string)))))
+         (id (string-to-number (mock-probe--need card))))
+    (unwind-protect
+        (progn
+          (when cap
+            (mock-probe--exchange proc (concat (json-serialize (list :id 1 :method "hello" :params (list :cap cap))) "\n")
+                                  (lambda (s) (string-match-p "\n" s))))
+          (let* ((out (mock-probe--exchange proc (concat (json-serialize (list :id 2 :method "job/card"
+                                                                               :params (list :card id :action "dismiss")))
+                                                         "\n")
+                                            (lambda (s) (string-match-p "\"id\":2" s))))
+                 (line (seq-find (lambda (l) (string-match-p "\"id\":2" l)) (split-string out "\n" t)))
+                 (reply (and line (json-parse-string line :object-type 'plist :null-object nil :false-object nil))))
+            (cond ((null reply) (error "the hub did not answer"))
+                  ((plist-get reply :error) (error "%s" (or (plist-get (plist-get reply :error) :message) "refused")))
+                  (t t))))
+      (delete-process proc))))
+
+(defun mock-probe--forged (sid)
+  "Start the first of SID's MCP servers as another agent (DRGNX_AGENT=MOCK_PROBE_OTHER_AGENT) and send \"user\" a message
+with it.  t when the server took its identity from that variable; a signal when it did not (a bridge to the hub's
+server names the session itself, whatever the environment says) or did not answer."
+  (let* ((other (or (mock-probe--env "MOCK_PROBE_OTHER_AGENT") "OTHER"))
+         (spec (car (alist-get sid mock--mcp nil nil #'equal)))
+         (_ (unless spec (error "no mcpServers")))
+         (env (append (plist-get spec :env) nil))
+         (from-env (seq-some (lambda (e) (equal (plist-get e :name) "DRGNX_AGENT")) env))
+         (forged (plist-put (copy-sequence spec) :env
+                            (vconcat (cons (list :name "DRGNX_AGENT" :value other)
+                                           (seq-remove (lambda (e) (equal (plist-get e :name) "DRGNX_AGENT")) env)))))
+         (mock--mcp (list (cons sid (list forged))))
+         (sent (mock--mcp-call sid "send_message" (format "{\"to\":\"user\",\"text\":\"probe %d\",\"seen_version\":0}" (random 1000000)))))
+    (cond ((null sent) (error "the server gave no answer"))
+          ((not (string-match-p "\"ok\" *: *true" sent)) (error "%s" (string-trim sent)))
+          ((not from-env) (error "the server takes no identity from its environment"))
+          (t t))))
+
+(defun mock-probe--nested (var)
+  "Plant a repository whose config runs a command of its own (touching MOCK_PROBE_FSMONITOR_CANARY) under the directory VAR names."
+  (let ((git (expand-file-name ".git" (mock-probe--need var))))
+    (make-directory git t)
+    (write-region "ref: refs/heads/main\n" nil (expand-file-name "HEAD" git) nil 'silent)
+    (write-region (format "[core]\n\tfsmonitor = touch %s\n" (shell-quote-argument (mock-probe--need "MOCK_PROBE_FSMONITOR_CANARY")))
+                  nil (expand-file-name "config" git) nil 'silent)
+    t))
+
+(defun mock-probe--plant ()
+  "Plant a `core.fsmonitor' and a post-merge hook that touch MOCK_PROBE_FSMONITOR_CANARY in the copy of .git MOCK_PROBE_OWN_GIT names."
+  (let* ((git (mock-probe--need "MOCK_PROBE_OWN_GIT")) (canary (mock-probe--need "MOCK_PROBE_FSMONITOR_CANARY"))
+         (hook (expand-file-name "hooks/post-merge" git)))
+    (write-region (format "[core]\n\tfsmonitor = touch %s\n" (shell-quote-argument canary)) nil (expand-file-name "config" git) t 'silent)
+    (make-directory (file-name-directory hook) t)
+    (write-region (format "#!/bin/sh\ntouch %s\n" (shell-quote-argument canary)) nil hook nil 'silent)
+    (set-file-modes hook #o755)
+    t))
+
+(defun mock-probe--env-names ()
+  "The names of the variables a sandboxed agent must not have that are set here (a string), else a signal."
+  (let ((found (seq-filter #'mock-probe--env
+                           (append '("SSH_AUTH_SOCK" "DBUS_SESSION_BUS_ADDRESS" "XDG_RUNTIME_DIR" "DRGNX_DATA_DIR" "DISPLAY"
+                                     "WAYLAND_DISPLAY" "OPENROUTER_API_KEY" "ANTHROPIC_API_KEY")
+                                   (split-string (or (getenv "MOCK_PROBE_ENV_FORBIDDEN") "") "," t)))))
+    (if found (string-join found ",") (error "none of them is set"))))
+
+(defun mock-probe--connect (target)
+  "Connect to TARGET (HOST:PORT) through HTTPS_PROXY when it is set (a CONNECT), else directly; t on success."
+  (unless (string-match "\\`\\(.+\\):\\([0-9]+\\)\\'" target) (error "connect wants HOST:PORT"))
+  (let ((host (match-string 1 target)) (port (string-to-number (match-string 2 target)))
+        (proxy (or (mock-probe--env "HTTPS_PROXY") (mock-probe--env "https_proxy"))))
+    (if (not proxy) (mock-probe--connect-tcp host port)
+      (unless (string-match "\\`\\(?:[a-z]+://\\)?\\([^:/]+\\):\\([0-9]+\\)" proxy) (error "HTTPS_PROXY is not host:port"))
+      (let* ((proc (make-network-process :name "mock-probe" :host (match-string 1 proxy) :service (string-to-number (match-string 2 proxy))
+                                         :noquery t :coding 'utf-8-unix))
+             (out (unwind-protect
+                      (mock-probe--exchange proc (format "CONNECT %s:%d HTTP/1.1\r\nHost: %s:%d\r\n\r\n" host port host port)
+                                            (lambda (s) (string-match-p "\r?\n" s)))
+                    (delete-process proc))))
+        (if (string-match "\\`HTTP/[0-9.]+ \\(2[0-9][0-9]\\)" out) t
+          (error "proxy said %s" (or (car (split-string out "\r?\n" t)) "nothing")))))))
+
+(defun mock-probe--run (sid name arg)
+  "Try the probe NAME (with ARG for connect); the line that reports it."
+  (condition-case err
+      (let ((done nil))
+        (setq done
+              (pcase name
+                ("hub-socket" (mock-probe--connect-local "MOCK_PROBE_HUB_SOCKET"))
+                ("hub-card" (mock-probe--hub "MOCK_PROBE_CARD" t))
+                ("hub-card-no-hello" (mock-probe--hub "MOCK_PROBE_CARD_NO_HELLO" nil))
+                ("work-db" (mock-probe--open-for-write "MOCK_PROBE_WORK_DB"))
+                ("coord-forged" (mock-probe--forged sid))
+                ("git-config" (mock-probe--open-for-write "MOCK_PROBE_GIT_CONFIG"))
+                ("git-hooks" (mock-probe--open-for-write "MOCK_PROBE_GIT_HOOKS"))
+                ("git-ref-main" (mock-probe--open-for-write "MOCK_PROBE_GIT_REF_MAIN"))
+                ("git-ref-job" (mock-probe--open-for-write "MOCK_PROBE_GIT_REF_JOB"))
+                ("git-pointer" (mock-probe--open-for-write "MOCK_PROBE_GIT_POINTER"))
+                ("git-objects-delete" (delete-file (mock-probe--need "MOCK_PROBE_GIT_OBJECT")) t)
+                ("dot-env" (mock-probe--read "MOCK_PROBE_DOT_ENV"))
+                ("dirty-file" (mock-probe--read "MOCK_PROBE_DIRTY_FILE"))
+                ("emacs-server" (mock-probe--connect-local "MOCK_PROBE_EMACS_SERVER"))
+                ("bus" (mock-probe--connect-local "MOCK_PROBE_BUS"))
+                ("ssh-agent" (mock-probe--connect-local "MOCK_PROBE_SSH_AGENT"))
+                ("abstract-socket" (mock-probe--connect-local "MOCK_PROBE_ABSTRACT"))
+                ("host-loopback" (let ((target (mock-probe--need "MOCK_PROBE_LOOPBACK")))
+                                   (string-match "\\`\\(.+\\):\\([0-9]+\\)\\'" target)
+                                   (mock-probe--connect-tcp (match-string 1 target) (string-to-number (match-string 2 target)))))
+                ("ssh-key" (mock-probe--read "MOCK_PROBE_SSH_KEY"))
+                ("other-repo" (mock-probe--read "MOCK_PROBE_OTHER_REPO"))
+                ("other-task" (mock-probe--read "MOCK_PROBE_OTHER_TASK"))
+                ("env" (mock-probe--env-names))
+                ("nested-git" (mock-probe--nested "MOCK_PROBE_NESTED"))
+                ("fsmonitor-plant" (mock-probe--plant))
+                ("connect" (mock-probe--connect (or arg "")))
+                (_ (error "no such probe"))))
+        (format "probe %s: reached%s" name (if (stringp done) (format " (%s)" done) "")))
+    (error (format "probe %s: blocked (%s)" name (mock-probe--why err)))))
+
+(defun mock-probe--report (sid text)
+  "The report for the prompt TEXT (`probe NAME…'): one line per name."
+  (let ((words (cdr (split-string text "[ \t\n]+" t))) lines)
+    (while words
+      (let ((name (pop words)))
+        (push (mock-probe--run sid name (and (equal name "connect") (pop words))) lines)))
+    (string-join (nreverse lines) "\n")))
+
 (defun mock--send (obj) (send-string-to-terminal (concat (json-serialize obj) "\n")))   ; flushed (princ is buffered)
 (defun mock--respond (id result) (mock--send (list :jsonrpc "2.0" :id id :result (or result :null))))
 (defun mock--error (id code msg) (mock--send (list :jsonrpc "2.0" :id id :error (list :code code :message msg))))
@@ -183,6 +370,8 @@ decision log, complete the task; say what happened."
                                                                      (or (getenv "MOCK_ACP_RECOMMEND") "A"))))))))
      ((string-match "\\[drgnx task \\([^] ]+\\)" text)
       (mock--task sid (match-string 1 text) text))
+     ((string-match-p "\\`probe\\b" text)
+      (mock--steps sid (list (cons 0 (lambda () (mock--say sid (mock-probe--report sid text)))))))
      ((string-match "\\`coord \\([a-z_]+\\) ?\\(.*\\)\\'" text)
       (mock--coord sid (match-string 1 text) (match-string 2 text)))
      ((string-match-p "\\`meta\\'" text)

@@ -895,3 +895,40 @@ Snapshot mode against worktree mode (spec §4b):
 | `git worktree list` shows the task | no | yes |
 | Disk and time to start | ≈ 0 extra disk with copy-on-write | ≈ 0: today's `worktree add` |
 | Works on | btrfs, XFS, APFS (a shared clone elsewhere) | any filesystem; not reftable repositories |
+
+## Testing: the mock's probes and the fixture
+
+The escape tests need no model. The mock ACP agent (`test/fixtures/mock-acp.el`) has a prompt word,
+`probe NAME…`, that tries each named escape and says one line per name in its turn: `probe NAME: reached`, or `probe
+NAME: blocked (WHY)` with the system's own wording (`No such file or directory`, `Read-only file system`). `probe env`
+says `reached (NAME,…)` with the names of the variables that are set, never their values. A probe never says what it
+read. Where it writes, it opens the file for appending nothing, so a file that exists is kept.
+
+| Probe | What it tries |
+|---|---|
+| `hub-socket` | connect to the hub's socket |
+| `hub-card`, `hub-card-no-hello` | `job/card` (dismiss) for its own pending card, with and without a `hello {cap}` (the cap is read from the file `MOCK_PROBE_HUB_CAP` names, when there is one) |
+| `work-db` | open `work.db` for writing |
+| `coord-forged` | start its first MCP server with `DRGNX_AGENT=OTHER` and send a message; reached only when the server takes its identity from its environment (a bridge does not) |
+| `git-config`, `git-hooks`, `git-ref-main`, `git-ref-job`, `git-pointer` | open the repository's config, a hook, two refs and the task's `.git` pointer for writing |
+| `git-objects-delete` | delete an object file |
+| `dot-env`, `dirty-file` | read the untracked `.env` and the uncommitted file |
+| `emacs-server`, `bus`, `ssh-agent`, `abstract-socket`, `host-loopback` | connect to a user's socket, an abstract socket, a TCP port on 127.0.0.1 |
+| `ssh-key`, `other-repo`, `other-task` | read a key, a file of another repository, a file of another task's folder |
+| `env` | look for `SSH_AUTH_SOCK`, `DBUS_SESSION_BUS_ADDRESS`, `XDG_RUNTIME_DIR`, `DRGNX_DATA_DIR`, `DISPLAY`, `WAYLAND_DISPLAY` and provider keys |
+| `nested-git` | plant a repository with a `core.fsmonitor` in a subdirectory of the folder |
+| `fsmonitor-plant` | set `core.fsmonitor` and a `post-merge` hook in its own copy of a `.git` |
+| `connect HOST:PORT` | connect, through `HTTPS_PROXY` (a `CONNECT`) when it is set |
+
+The paths come from `MOCK_PROBE_*` variables in the profile's `:env` (paths and ids only, never contents).
+`test/fixtures/sandbox-fixture.el` makes them: `(drgnx-sandbox-fixture-with BODY…)` builds, under the test's temporary
+directory, a HOME with canaries of random text (`~/.ssh/id_canary`, `~/other-repo/secret`), a runtime directory with
+an Emacs server, a `bus` and an ssh-agent socket (listeners that count their connections:
+`drgnx-sandbox-fixture-connections`), an abstract socket and a TCP listener on 127.0.0.1, a repository with an
+untracked `.env`, an uncommitted change and a remote URL holding a token, a linked worktree for the task, the hub served
+in the test's Emacs (`DRGNX_HUB_PARENT_PID`) and two open cards. `drgnx-sandbox-fixture-canaries` lists every random
+string for the "never in a transcript" check, `drgnx-sandbox-fixture-probe-env` is the environment, and
+`drgnx-sandbox-fixture-mock-profile` is a profile of the mock that carries it. The macro skips with
+`drgnx-sandbox-check`'s reason where the sandbox cannot run; `:unsandboxed` as its first form skips that check (the
+probes' own test runs the mock with no sandbox and wants every probe reached, which shows the probes are real).
+The real HOME, the user's runtime directory, bus and Emacs are never touched.
