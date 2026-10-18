@@ -27,8 +27,21 @@
 link inside where the host's PATH is a link (/bin → usr/bin on a merged /usr), else bound read-only where it exists.")
 
 (defconst drgnx-sandbox-env-deny
-  '("SSH_AUTH_SOCK" "DBUS_SESSION_BUS_ADDRESS" "XDG_RUNTIME_DIR" "DISPLAY" "WAYLAND_DISPLAY" "DRGNX_DATA_DIR")
-  "Variables a spec's `:env' may never hold: they name the user's sockets, display or drgnx's store.")
+  '("SSH_AUTH_SOCK" "DBUS_SESSION_BUS_ADDRESS" "XDG_RUNTIME_DIR" "DISPLAY" "WAYLAND_DISPLAY" "XAUTHORITY"
+    "GPG_AGENT_INFO" "DRGNX_DATA_DIR" "DRGNX_AGENT")
+  "Variables a spec's `:env' may never hold: they name the user's sockets, display or drgnx's store, or the agent
+\(its identity comes from the socket it connects on, never from anything inside).")
+
+(defconst drgnx-sandbox-trusted-programs '(("bwrap" . "/usr/bin/bwrap") ("sandbox-exec" . "/usr/bin/sandbox-exec"))
+  "Where each sandbox program is looked for first, before `exec-path'.")
+
+(defvar drgnx-sandbox--programs nil
+  "Program name → its checked absolute path, or nil when there is none (`drgnx-sandbox-program'), cached until
+`drgnx-sandbox-program-reset'.")
+
+(defvar drgnx-sandbox-resolv-conf "/etc/resolv.conf"
+  "The resolver's configuration.  Where it is a link to a file under /run (systemd-resolved's stub), that file is
+bound read-only inside, so names resolve under the empty /run.")
 
 (defconst drgnx-sandbox--keys
   '(:backend :read :write :hide :binds :home :run :sockets :env :chdir :net :proxy :gateway :tmp :profile-file
@@ -43,11 +56,20 @@ link inside where the host's PATH is a link (/bin → usr/bin on a merged /usr),
         ((string-match-p "[\0\n]" path) (format "%S holds a NUL or a newline" path))
         ((not (file-name-absolute-p path)) (format "%s is a relative file name" path))))
 
+(defun drgnx-sandbox--canonical-p (path)
+  "Is PATH in canonical form: no `//' (a leading one too: Emacs keeps it, the kernel reads it as `/'), no `.' or
+`..' component, no trailing slash (but `/' itself)?"
+  (or (string= path "/") (not (string-match-p "//\\|/\\.\\.?\\(?:/\\|\\'\\)\\|/\\'" path))))
+
 (defun drgnx-sandbox--truename (path)
-  "PATH's true name — every link resolved, no trailing slash — or nil when it cannot be resolved (a cycle of links).
-No file name handler takes part: a remote-looking name is a local path like any other."
+  "PATH's true name — every link resolved, no trailing slash, a leading `//' as `/' — or nil when it cannot be
+resolved (a cycle of links).  No file name handler takes part: a remote-looking name is a local path like any
+other."
   (let ((file-name-handler-alist nil))
-    (condition-case nil (directory-file-name (file-truename (expand-file-name path))) (error nil))))
+    (condition-case nil
+        (let ((true (directory-file-name (file-truename (expand-file-name path)))))
+          (if (string-match "\\`//+" true) (replace-match "/" t t true) true))
+      (error nil))))
 
 (defun drgnx-sandbox--resolve (path)
   "PATH's true name; PATH itself when it is no usable absolute name (`drgnx-sandbox-validate' refuses it)."
@@ -120,48 +142,87 @@ the hub's socket (its fallback place when there is no runtime dir).  True names.
                                    (list (and run (file-name-absolute-p run) (expand-file-name "drgnx/s" run))
                                          (expand-file-name "s" (file-name-directory (drgnx-hub-socket)))))))))
 
+(defun drgnx-sandbox--bus-socket (address)
+  "The file of a `unix:path=' D-Bus ADDRESS, or nil."
+  (and address (string-match "unix:path=\\([^,;]+\\)" address) (match-string 1 address)))
+
 (defun drgnx-sandbox--context ()
-  "What validation compares paths with, as true names: (:never ((DIR . WHAT)…) :sockets (DIR…) :sessions (DIR…)).
-:never — no bind may be one of these or hold one; :sockets — no bind may be inside these but in :sessions."
-  (let* ((run (getenv "XDG_RUNTIME_DIR"))
-         (run (and run (file-name-absolute-p run) run))
-         (home (getenv "HOME"))
-         (hubs (drgnx-sandbox--hub-dirs))
-         (sockets (delq nil (append (list "/run/user" run) hubs)))
-         (never (append (list (cons (if (and home (file-name-absolute-p home)) home "~") "your home directory"))
-                        (mapcar (lambda (d) (cons d "a directory of the user's sockets")) sockets)
-                        (list (cons (drgnx-data-dir) "drgnx's data directory")
-                              (cons (drgnx-state-dir) "drgnx's state directory")
-                              (cons (drgnx-user-dir) "drgnx's configuration")
-                              (cons drgnx-dir "the drgnx checkout")
-                              (cons "/tmp/.X11-unix" "the X11 sockets")))))
-    (list :never (cl-loop for (d . what) in never for true = (and d (drgnx-sandbox--truename d))
-                          when true collect (cons true what))
-          :sockets (delete-dups (delq nil (mapcar (lambda (d) (and d (drgnx-sandbox--truename d))) sockets)))
-          :sessions (drgnx-sandbox-sessions-dirs))))
+  "What validation compares paths with, as true names:
+  :never ((PATH . WHAT)…)   no bind may be one of these or hold one;
+  :closed ((DIR . WHAT)…)   …nor be inside one of these, unless strictly inside an :open dir;
+  :open (DIR…)              the private homes' dir in the state dir;
+  :sessions (DIR…)          `drgnx-sandbox-sessions-dirs': `:run' alone may be a dir directly in one;
+  :path (DIR…)              `exec-path': no read-write bind may be one of these or hold one."
+  (let* ((uid (user-uid))
+         (abs (lambda (d) (and (stringp d) (file-name-absolute-p d) d)))
+         (true (lambda (pairs) (cl-loop for (d . what) in pairs for tn = (and d (drgnx-sandbox--truename d))
+                                        when tn collect (cons tn what))))
+         (run (funcall abs (getenv "XDG_RUNTIME_DIR")))
+         (closed (funcall true
+                          `(("/run/user" . "the users' runtime directories") (,run . "your runtime directory")
+                            ,@(mapcar (lambda (d) (cons d "the hub's socket directory")) (drgnx-sandbox--hub-dirs))
+                            (,(drgnx-data-dir) . "drgnx's data directory")
+                            (,(drgnx-user-dir) . "drgnx's configuration")
+                            (,(drgnx-state-dir) . "drgnx's state directory")
+                            ("/proc" . "the host's processes") ("/sys" . "the host's /sys")
+                            ("/dev" . "the host's devices")
+                            ("/tmp/.X11-unix" . "the X11 sockets") ("/tmp/.ICE-unix" . "the ICE sockets")
+                            (,(format "/tmp/emacs%d" uid) . "the Emacs server's sockets")
+                            (,(expand-file-name (format "emacs%d" uid) (or (funcall abs (getenv "TMPDIR")) "/tmp"))
+                             . "the Emacs server's sockets"))))
+         ;; sockets that may sit in a shared directory (/tmp/ssh-XXXX/agent.N): the socket and what holds it
+         (never (funcall true
+                         `((,(or (funcall abs (getenv "HOME")) "~") . "your home directory")
+                           (,drgnx-dir . "the drgnx checkout")
+                           (,(funcall abs (getenv "SSH_AUTH_SOCK")) . "the ssh agent's socket")
+                           (,(funcall abs (drgnx-sandbox--bus-socket (getenv "DBUS_SESSION_BUS_ADDRESS")))
+                            . "the D-Bus socket")))))
+    (list :never (append never closed) :closed closed
+          :open (delq nil (list (drgnx-sandbox--truename (expand-file-name "sandbox" (drgnx-state-dir)))))
+          :sessions (drgnx-sandbox-sessions-dirs)
+          :path (delete-dups (delq nil (mapcar (lambda (d) (and (funcall abs d) (drgnx-sandbox--truename d)))
+                                               exec-path))))))
+
+(defun drgnx-sandbox--session-dir-p (ctx path)
+  "Is PATH one session's dir: directly in one of CTX's :sessions dirs?"
+  (let ((parent (directory-file-name (file-name-directory path))))
+    (and (not (string= parent path))
+         (cl-some (lambda (s) (eq t (compare-strings parent nil nil s nil nil (eq system-type 'darwin))))
+                  (plist-get ctx :sessions)))))
 
 (defun drgnx-sandbox--refuse (fmt &rest args)
   "End `drgnx-sandbox-validate' with the reason (`format' FMT ARGS)."
   (throw 'drgnx-sandbox--refused (apply #'format fmt args)))
 
 (defun drgnx-sandbox--check-path (key path)
-  "Refuse PATH (of spec KEY) unless it is an absolute name, without NUL or newline, that is its own true name."
+  "Refuse PATH (of spec KEY) unless it is an absolute name in canonical form, without NUL or newline, that is its
+own true name."
   (when-let* ((why (drgnx-sandbox--bad-name path))) (drgnx-sandbox--refuse "%s: %s" key why))
+  (unless (drgnx-sandbox--canonical-p path)
+    (drgnx-sandbox--refuse "%s: %s is not in canonical form (a `//', `.' or `..', or a trailing slash)" key path))
   (let ((true (drgnx-sandbox--truename path)))
     (unless true (drgnx-sandbox--refuse "%s: %s does not resolve (a cycle of links?)" key path))
     (unless (string= true path)
       (drgnx-sandbox--refuse "%s: %s is %s once resolved (a link, or changed since the spec was made)" key path true))))
 
-(defun drgnx-sandbox--check-source (ctx key path &optional must-exist)
-  "Refuse binding PATH (of spec KEY) from outside: never one of CTX's :never dirs nor a parent of one; inside a
-socket dir only within a session's dir.  MUST-EXIST: refuse it when it is not there."
+(defun drgnx-sandbox--check-source (ctx key path &optional must-exist writable)
+  "Refuse binding PATH (of spec KEY) from outside: never one of CTX's :never paths nor a parent of one; nothing
+inside a :closed dir but inside an :open one — except that `:run' is a session's own dir.  MUST-EXIST: refuse it
+when it is not there.  WRITABLE (a read-write bind): refuse it when it is or holds a dir of `exec-path'."
   (drgnx-sandbox--check-path key path)
   (pcase-dolist (`(,dir . ,what) (plist-get ctx :never))
     (when (drgnx-sandbox--within-p dir path)
       (drgnx-sandbox--refuse "%s: %s would expose %s (%s)" key path what dir)))
-  (when (and (cl-some (lambda (d) (drgnx-sandbox--within-p path d)) (plist-get ctx :sockets))
-             (not (cl-some (lambda (s) (drgnx-sandbox--under-p path s)) (plist-get ctx :sessions))))
-    (drgnx-sandbox--refuse "%s: %s is among the user's sockets (only a session's own dir may be bound)" key path))
+  (unless (and (eq key :run) (drgnx-sandbox--session-dir-p ctx path))
+    (pcase-dolist (`(,dir . ,what) (plist-get ctx :closed))
+      (when (and (drgnx-sandbox--within-p path dir)
+                 (not (cl-some (lambda (o) (drgnx-sandbox--under-p path o)) (plist-get ctx :open))))
+        (drgnx-sandbox--refuse "%s: %s is inside %s (%s)" key path what dir))))
+  (when writable
+    (dolist (dir (plist-get ctx :path))
+      (when (drgnx-sandbox--within-p dir path)
+        (drgnx-sandbox--refuse "%s: %s would let the sandbox change %s, where the hub finds its programs" key path
+                               dir))))
   (when (and must-exist (not (file-exists-p path)))
     (drgnx-sandbox--refuse "%s: %s does not exist" key path)))
 
@@ -197,32 +258,36 @@ socket dir only within a session's dir.  MUST-EXIST: refuse it when it is not th
   "Why SPEC must not be used, or nil.  Refused:
 - a spec that is not a plist of `drgnx-sandbox--keys' with values of their shape; an `:env' name in
   `drgnx-sandbox-env-deny';
-- a path that is relative, holds a NUL or a newline, or is not its own true name (a link, or one swapped in since
-  `drgnx-sandbox-spec' resolved it);
-- binding from outside (`:read', `:write', `:binds', `:home', `:run', `:tmp') $HOME, /run/user, $XDG_RUNTIME_DIR,
-  the hub's socket dir, drgnx's data, state and config dirs, the checkout, /tmp/.X11-unix, or any parent of them;
-  anything else inside a socket dir but a session's own dir (`drgnx-sandbox-sessions-dirs');
+- a path that is relative, holds a NUL or a newline, is not in canonical form (`//', `.', `..', a trailing slash),
+  or is not its own true name (a link, or one swapped in since `drgnx-sandbox-spec' resolved it);
+- binding from outside (`:read', `:write', `:binds', `:home', `:run', `:tmp') $HOME, the checkout, the ssh agent's
+  or the D-Bus socket, or any parent of them; and anything in or above /run/user, $XDG_RUNTIME_DIR, the hub's socket
+  dirs, drgnx's data, config and state dirs (but the private homes, <state>/sandbox/…), /proc, /sys, /dev, the X11
+  and ICE socket dirs or the Emacs server's /tmp/emacsUID — but `:run', one session's own dir;
+- a read-write bind (`:write', `:binds' rw, `:home', `:tmp') of a dir of `exec-path' or a parent of one: the hub
+  would run what the sandbox put there;
 - a `:write', `:binds' or `:home' source, or `:run', that does not exist;
-- a `:run' that is not inside a sessions dir; a `:sockets' entry outside `:run'; a `:profile-file' outside a
-  sessions dir."
+- a `:run' that is not one session's dir, directly in a dir of `drgnx-sandbox-sessions-dirs' (another session's
+  dir is refused everywhere else); a `:sockets' entry outside `:run'; a `:profile-file' outside a sessions dir."
   (catch 'drgnx-sandbox--refused
     (drgnx-sandbox--check-shape spec)
     (let ((ctx (drgnx-sandbox--context)) (home (plist-get spec :home)) (run (plist-get spec :run))
           (file-name-handler-alist nil))                ; a remote-looking name is a local path, never TRAMP
       (dolist (p (plist-get spec :read)) (drgnx-sandbox--check-source ctx :read p))
-      (dolist (p (plist-get spec :write)) (drgnx-sandbox--check-source ctx :write p t))
-      (pcase-dolist (`(,_ ,outside ,inside) (plist-get spec :binds))
-        (drgnx-sandbox--check-source ctx :binds outside t)
+      (dolist (p (plist-get spec :write)) (drgnx-sandbox--check-source ctx :write p t t))
+      (pcase-dolist (`(,mode ,outside ,inside) (plist-get spec :binds))
+        (drgnx-sandbox--check-source ctx :binds outside t (eq mode 'rw))
         (drgnx-sandbox--check-path :binds inside))
       (when home
-        (drgnx-sandbox--check-source ctx :home (car home) t)
+        (drgnx-sandbox--check-source ctx :home (car home) t t)
         (drgnx-sandbox--check-path :home (cdr home)))
       (when run
-        (drgnx-sandbox--check-source ctx :run run t)
-        (unless (cl-some (lambda (s) (drgnx-sandbox--under-p run s)) (plist-get ctx :sessions))
-          (drgnx-sandbox--refuse ":run: %s is not a session's dir in %s" run
-                                 (string-join (plist-get ctx :sessions) " or "))))
-      (when (plist-get spec :tmp) (drgnx-sandbox--check-source ctx :tmp (plist-get spec :tmp)))
+        (drgnx-sandbox--check-path :run run)
+        (unless (drgnx-sandbox--session-dir-p ctx run)
+          (drgnx-sandbox--refuse ":run: %s is not a session's dir directly in %s" run
+                                 (string-join (plist-get ctx :sessions) " or ")))
+        (drgnx-sandbox--check-source ctx :run run t))
+      (when (plist-get spec :tmp) (drgnx-sandbox--check-source ctx :tmp (plist-get spec :tmp) nil t))
       (dolist (s (plist-get spec :sockets))
         (drgnx-sandbox--check-path :sockets s)
         (unless (and run (drgnx-sandbox--under-p s run))
@@ -255,26 +320,40 @@ socket dir only within a session's dir.  MUST-EXIST: refuse it when it is not th
                               (cond (target (list "--symlink" target path))
                                     ((file-directory-p path) (list "--ro-bind-try" path path)))))))))
 
+(defun drgnx-sandbox--resolv-argv ()
+  "The bwrap arguments that keep name resolution working under the empty /run: where `drgnx-sandbox-resolv-conf'
+leads to a file under /run (systemd-resolved's stub-resolv.conf, NetworkManager's), that file read-only.  Only the
+file: never its directory, which may hold sockets."
+  (let ((true (drgnx-sandbox--truename drgnx-sandbox-resolv-conf)))
+    (and true (string-prefix-p "/run/" true) (not (string-prefix-p "/run/user/" true))
+         (list "--ro-bind-try" true true))))
+
 (defun drgnx-sandbox-bwrap-argv (spec command)
   "The bwrap command line that runs COMMAND (a list) inside SPEC, every path its own element.  In order:
-the namespaces and `--clearenv'; `--setenv' for each `:env' entry; the system's reads, then a fresh /dev, /proc and
-empty /tmp, /run and /var/tmp; `:home', `:read' (where they exist), `:write'; `:run' at /run/drgnx; `:binds' in
-order; `:hide' (where they exist); `--chdir'; `--' and COMMAND.  Signals `drgnx-sandbox-refused' with
-`drgnx-sandbox-validate''s reason."
+the trusted bwrap (`drgnx-sandbox-program'), the namespaces and `--clearenv'; `--setenv' for each `:env' entry; the
+system's reads, then a fresh /dev, /proc and empty /tmp, /run and /var/tmp, and the resolver's file; `:home', `:read'
+\(where they exist), `:write'; `:run' read-only at /run/drgnx; `:binds' in order; `:hide' (where they exist);
+`--chdir'; `--' and COMMAND.  Signals `drgnx-sandbox-refused' with `drgnx-sandbox-validate''s reason, or when there
+is no trusted bwrap."
   (drgnx-sandbox--assert spec command)
-  (let ((file-name-handler-alist nil)
+  (let ((file-name-handler-alist nil) (bwrap (drgnx-sandbox-program "bwrap"))
         (home (plist-get spec :home)) (run (plist-get spec :run)) (chdir (plist-get spec :chdir)))
+    (unless bwrap
+      (signal 'drgnx-sandbox-refused (list "no bwrap that only root can change (install bubblewrap)")))
     (append
-     (list "bwrap" "--unshare-all")
+     ;; --unshare-all unshares the user namespace only if it can (--unshare-user-try); --disable-userns needs it
+     (list bwrap "--unshare-all" "--unshare-user")
      (and (eq (plist-get spec :net) 'shared) (list "--share-net"))
      (list "--disable-userns" "--die-with-parent" "--new-session" "--clearenv")
      (cl-loop for (name . value) in (plist-get spec :env) nconc (list "--setenv" name value))
      (drgnx-sandbox--system-argv)
      (list "--dev" "/dev" "--proc" "/proc" "--tmpfs" "/tmp" "--tmpfs" "/run" "--tmpfs" "/var/tmp")
+     (drgnx-sandbox--resolv-argv)
      (and home (list "--bind" (car home) (cdr home)))
      (cl-loop for p in (plist-get spec :read) when (file-exists-p p) nconc (list "--ro-bind-try" p p))
      (cl-loop for p in (plist-get spec :write) nconc (list "--bind" p p))
-     (and run (list "--bind" run "/run/drgnx"))
+     ;; read-only: the agent connects to the hub's sockets there, but can plant nothing the hub reads later
+     (and run (list "--ro-bind" run "/run/drgnx"))
      (cl-loop for (mode outside inside) in (plist-get spec :binds)
               nconc (list (if (eq mode 'rw) "--bind" "--ro-bind") outside inside))
      (cl-loop for p in (plist-get spec :hide)
@@ -285,11 +364,39 @@ order; `:hide' (where they exist); `--chdir'; `--' and COMMAND.  Signals `drgnx-
 
 ;;;; The back ends
 
+(defun drgnx-sandbox--root-only-p (file)
+  "Can only root change FILE (a true name) and its directory: both root's, neither writable by group or others?"
+  (cl-every (lambda (f)
+              (let ((a (file-attributes f 'integer)))
+                (and a (eql (file-attribute-user-id a) 0)
+                     (eq (file-attribute-type a) (if (equal f file) nil t))
+                     (not (eq (aref (file-attribute-modes a) 5) ?w))
+                     (not (eq (aref (file-attribute-modes a) 8) ?w)))))
+            (list file (directory-file-name (file-name-directory file)))))
+
+(defun drgnx-sandbox-program (name)
+  "NAME's absolute true name, when it is a program only root can change (`drgnx-sandbox--root-only-p'), looked for
+in `drgnx-sandbox-trusted-programs' first, then on `exec-path'; else nil.  Resolved once and cached (nil too), so a
+program planted later on the hub's PATH is never picked up; `drgnx-sandbox-program-reset' looks again."
+  (let ((hit (assoc name drgnx-sandbox--programs)))
+    (if hit (cdr hit)
+      (let* ((file-name-handler-alist nil)
+             (found (cl-loop for f in (list (cdr (assoc name drgnx-sandbox-trusted-programs)) (executable-find name))
+                             for true = (and f (file-executable-p f) (drgnx-sandbox--truename f))
+                             when (and true (drgnx-sandbox--root-only-p true)) return true)))
+        (push (cons name found) drgnx-sandbox--programs)
+        found))))
+
+(defun drgnx-sandbox-program-reset ()
+  "Forget the programs `drgnx-sandbox-program' found."
+  (setq drgnx-sandbox--programs nil))
+
 (defun drgnx-sandbox-backend ()
-  "The sandbox this system has: `bwrap' (Linux, bubblewrap on `exec-path'), `seatbelt' (macOS, sandbox-exec), or nil."
+  "The sandbox this system has: `bwrap' (Linux, bubblewrap), `seatbelt' (macOS, sandbox-exec), or nil — each only
+as a program only root can change (`drgnx-sandbox-program')."
   (pcase system-type
-    ('gnu/linux (and (executable-find "bwrap") 'bwrap))
-    ('darwin (and (executable-find "sandbox-exec") 'seatbelt))))
+    ('gnu/linux (and (drgnx-sandbox-program "bwrap") 'bwrap))
+    ('darwin (and (drgnx-sandbox-program "sandbox-exec") 'seatbelt))))
 
 (defun drgnx-sandbox--write-private (file text)
   "Write TEXT to FILE, mode 0600, as a new file: whatever was at FILE (a link too) is removed first, never followed."
@@ -306,11 +413,12 @@ as it was."
     ('bwrap (drgnx-sandbox-bwrap-argv spec command))
     ('seatbelt
      (drgnx-sandbox--assert spec command)
-     (let ((file (plist-get spec :profile-file)))
+     (let ((file (plist-get spec :profile-file)) (exe (drgnx-sandbox-program "sandbox-exec")))
        (unless file (signal 'drgnx-sandbox-refused (list "no :profile-file for the Seatbelt profile")))
+       (unless exe (signal 'drgnx-sandbox-refused (list "no sandbox-exec that only root can change")))
        (unless (fboundp 'drgnx-sandbox-sbpl) (require 'drgnx-sandbox-macos))
        (drgnx-sandbox--write-private file (drgnx-sandbox-sbpl spec))
-       (append (list "sandbox-exec" "-f" file) command)))
+       (append (list exe "-f" file) command)))
     (_ (signal 'drgnx-sandbox-refused
                (list "no sandbox on this system (Linux: install bubblewrap; macOS: sandbox-exec)")))))
 
