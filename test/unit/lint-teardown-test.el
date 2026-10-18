@@ -25,8 +25,6 @@
     (extra/keycast :until 18) (extra/llm :until 18) (extra/magit :until 18) (extra/mc :until 18)
     (extra/undo :until 18) (extra/wgrep :until 18) (extra/windows :until 18)
     (tools/agents :until 19) (tools/ai :until 19) (tools/jobs :until 19) (tools/live :until 19) (tools/work :until 19)
-    (tools/layouts :until 20) (tools/browser :until 20) (tools/replace :until 20) (tools/search :until 20)
-    (tools/shortcuts :until 20)
     (tools/diff :until 21) (tools/review :until 21) (tools/prs :until 21) (tools/vc :until 21)
     (tools/commit-message :until 21) (tools/terminal :until 21)
     (editor/clipboard :until 22) (tools/agent-settings :until 22) (tools/remote :until 22) (ui/terminal :until 22)
@@ -35,10 +33,7 @@
 migration batch that converts it and takes it off.  The dynamic check and the raw-forms lint skip them.")
 
 (defconst drgnx-teardown--load-registrations
-  '(("modules/tools/drgnx-replace.el" advice-add :until 20)
-    ("modules/tools/drgnx-replace.el" with-eval-after-load :until 20)
-    ("modules/tools/drgnx-shortcuts.el" with-eval-after-load :until 20)
-    ("modules/tools/drgnx-ai-ui.el" add-to-list :until 19))
+  '(("modules/tools/drgnx-ai-ui.el" add-to-list :until 19))
   "Registrations at the top level of a module file that are known and wait for their batch: (FILE CALL :until
 BATCH).  One that is gone fails the lint too, so the entry goes with it.")
 

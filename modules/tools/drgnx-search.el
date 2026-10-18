@@ -297,12 +297,18 @@ the project has no index or anything goes wrong.  Never asks anything."
 
 (defun drgnx-search--register-retriever ()
   "Add the semantic retriever to `drgnx-ai-retrievers' (once; the grep retriever stays)."
-  (with-eval-after-load 'drgnx-ai-ui
-    (add-to-list 'drgnx-ai-retrievers #'drgnx-search--retriever t)))
+  (eval-after-load 'drgnx-ai-ui
+    (drgnx-modules-with-owner (add-to-list 'drgnx-ai-retrievers #'drgnx-search--retriever t))))
+
+(defun drgnx-search--teardown ()
+  "Cancel the re-indexes waiting after saves (a timer made by `after-save-hook' belongs to no setup)."
+  (maphash (lambda (_root timer) (when (timerp timer) (cancel-timer timer))) drgnx-search--timers)
+  (clrhash drgnx-search--timers))
 
 (drgnx-module-define 'tools/search
                      :doc "Quick Open, Search in Project, Go to Symbol, Semantic Search."
                      :stage 'startup
+                     :teardown #'drgnx-search--teardown
                      :setup
                      (lambda ()
                        (pcase-dolist (`(,id ,title ,fn ,doc)

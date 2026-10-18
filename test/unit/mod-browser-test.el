@@ -9,6 +9,7 @@
 (load (expand-file-name "modules/tools/drgnx-agents-ui" drgnx-dir) nil t)
 (load (expand-file-name "modules/tools/drgnx-layouts" drgnx-dir) nil t)
 (load (expand-file-name "modules/tools/drgnx-browser" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
 
 (defvar drgnx-browser-test--urls nil "URLs the stubbed WebKit was asked for.")
 
@@ -381,6 +382,16 @@
         (drgnx-browser-open "localhost:3000" t)
         (should (eq (selected-window) code))
         (should (window-live-p (window-in-direction 'right code)))))))
+
+(ert-deftest drgnx-browser/off-cancels-the-timer-waiting-for-a-server ()
+  ;; Test Report's wait is a timer made long after the setup: the module's :teardown cancels it.
+  (let ((timer nil) (drgnx-browser--watchers nil))
+    (drgnx-test-with-modules '(tools/browser) :strict t
+                             (setq timer (run-with-timer 3600 0.5 #'ignore))
+                             (setf (alist-get "j1" drgnx-browser--watchers nil nil #'equal) timer)
+                             (should (memq timer timer-list)))
+    (should-not (memq timer timer-list))
+    (should-not drgnx-browser--watchers)))
 
 (provide 'mod-browser-test)
 ;;; mod-browser-test.el ends here

@@ -361,9 +361,15 @@ Looked at every half second, 60 s at most; never waits."
                           :map (and (eq id 'browser-go) '(drgnx-browser . drgnx-browser-mode-map))
                           :when (and (eq id 'browser-go) (lambda () (bound-and-true-p drgnx-browser-mode))))))
 
+(defun drgnx-browser--teardown ()
+  "Cancel the timers waiting for a Playwright server's address (a timer of Test Report belongs to no setup)."
+  (dolist (w drgnx-browser--watchers) (when (timerp (cdr w)) (cancel-timer (cdr w))))
+  (setq drgnx-browser--watchers nil))
+
 (drgnx-module-define 'tools/browser
                      :doc "A web page pane beside the editor (WebKit), Test Report and Agent's Page."
                      :stage 'idle :requires '(core/workbench tools/layouts tools/agents)
+                     :teardown #'drgnx-browser--teardown
                      :setup
                      (lambda ()
                        (require 'drgnx-groups)

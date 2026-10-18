@@ -268,7 +268,8 @@ conflict of the resolution."
   (setq-local revert-buffer-function (lambda (&rest _) (drgnx-shortcuts--draw))))
 
 (declare-function evil-set-initial-state "evil-core")
-(with-eval-after-load 'evil                ; the view's own letters, also in the Vim profile
+(defun drgnx-shortcuts--evil-state ()
+  "The view's own letters, also in the Vim profile: it starts in Emacs state (the setup runs this once evil loads)."
   (when (fboundp 'evil-set-initial-state) (evil-set-initial-state 'drgnx-shortcuts-mode 'emacs)))
 
 ;;;; Recording
@@ -516,7 +517,9 @@ has several), or gives them to a command without keys; `add' adds them to its ke
 (drgnx-module-define 'tools/shortcuts
                      :doc "Preferences: Keyboard Shortcuts — record chords, source and where, conflicts, filters, suggestions."
                      :stage 'idle
-                     :setup #'drgnx-shortcuts--define-commands)
+                     :setup (lambda ()
+                              (drgnx-shortcuts--define-commands)
+                              (eval-after-load 'evil (drgnx-modules-with-owner (drgnx-shortcuts--evil-state)))))
 
 (provide 'drgnx-shortcuts)
 ;;; drgnx-shortcuts.el ends here

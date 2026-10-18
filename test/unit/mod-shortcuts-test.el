@@ -3,6 +3,7 @@
 (require 'drgnx)
 (require 'drgnx-keys-edit)
 (load (expand-file-name "modules/tools/drgnx-shortcuts" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
 
 (defvar drgnx-shortcuts-test-mode-map (make-sparse-keymap) "A view's keymap for the tests.")
 
@@ -505,3 +506,9 @@ table is the terminal's, as the layer would have put it there for a legacy termi
     (should (string-match-p "Eta +C-c w +keys\\.eld" (drgnx-shortcuts-test--line 'sc-g)))))
 
 ;;; mod-shortcuts-test.el ends here
+
+(ert-deftest drgnx-shortcuts/the-vim-profile-hook-is-the-modules-and-goes-with-it ()
+  (let ((evil (length (cdr (assoc 'evil after-load-alist)))))
+    (drgnx-test-with-modules '(tools/shortcuts) :strict t
+                             (should (= (length (cdr (assoc 'evil after-load-alist))) (1+ evil))))
+    (should (= (length (cdr (assoc 'evil after-load-alist))) evil))))

@@ -6,6 +6,7 @@
 (load (expand-file-name "test/fixtures/git-fixture" drgnx-dir) nil t)
 (load (expand-file-name "modules/tools/drgnx-replace" drgnx-dir) nil t)
 (require 'drgnx-run-ert "run-ert")                     ; `drgnx-run-ert-time-factor'
+(load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
 
 (defun drgnx-replace-view-test--bind-keys ()
   "Bind the shipped VS Code profile's keys of the replace commands that live in the view's and the bar's keymaps."
@@ -22,13 +23,16 @@
 bar's keymaps), one editor window, no view or bar left over."
   (declare (indent 0))
   `(let ((drgnx-wb--sections nil) (drgnx-signal--editor-window nil)
-         (drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil))
+         (drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
+         (drgnx-wb-view-providers (list (cons 'search #'drgnx-replace--provide-view))))   ; what the module's setup registers
+     (advice-add 'drgnx-persist-save :before #'drgnx-replace--close-bars)
      (delete-other-windows)
      (set-frame-parameter nil 'drgnx-wb-view nil)
      (drgnx-replace--define-section)
      (drgnx-replace--define-commands)
      (drgnx-replace-view-test--bind-keys)
      (unwind-protect (progn ,@body)
+       (advice-remove 'drgnx-persist-save #'drgnx-replace--close-bars)
        (drgnx-replace-bar-close)
        (drgnx-wb-hide-sidebar)
        (delete-other-windows)
@@ -661,3 +665,14 @@ count says which rows."
   (should-not (commandp 'drgnx-replace-bar-show-all)))
 
 ;;; mod-replace-view-test.el ends here
+
+(ert-deftest drgnx-replace/setup-registers-and-off-takes-it-all-back ()
+  ;; The view provider, the persist advice and the Vim-profile hook were top-level forms; now the module's own.
+  (let ((evil (length (cdr (assoc 'evil after-load-alist)))))
+    (drgnx-test-with-modules '(tools/replace) :strict t
+                             (should (eq (alist-get 'search drgnx-wb-view-providers) #'drgnx-replace--provide-view))
+                             (should (advice-member-p #'drgnx-replace--close-bars 'drgnx-persist-save))
+                             (should (= (length (cdr (assoc 'evil after-load-alist))) (1+ evil))))
+    (should-not (alist-get 'search drgnx-wb-view-providers))
+    (should-not (advice-member-p #'drgnx-replace--close-bars 'drgnx-persist-save))
+    (should (= (length (cdr (assoc 'evil after-load-alist))) evil))))
